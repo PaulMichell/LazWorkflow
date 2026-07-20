@@ -21,6 +21,7 @@ Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
   Private
     FToolBar: TToolBar;
+    FMainPanel: TPanel; { between toolbar and status – owns graph, splitter, details }
     FGraphHost: TPanel;
     FPaintBox: TPaintBox;
     FScrollBar: TScrollBar;
@@ -286,16 +287,35 @@ Begin
       Style := tbsButton;
     End;
 
+  { Fixed status strip on the form bottom – never a splitter target. }
   FStatusFooter := TStatusFooterFrame.Create(Self);
-  FStatusFooter.Parent := Self;
-  FStatusFooter.Align := alBottom;
-
-  FDetailPanel := TPanel.Create(Self);
-  With FDetailPanel Do
+  With FStatusFooter Do
     Begin
       Parent := Self;
       Align := alBottom;
+      Height := 22;
+      Constraints.MinHeight := 22;
+      Constraints.MaxHeight := 22;
+    End;
+
+  { Middle band: graph + splitter + details. Splitter only sees these siblings. }
+  FMainPanel := TPanel.Create(Self);
+  With FMainPanel Do
+    Begin
+      Parent := Self;
+      Align := alClient;
+      BevelOuter := bvNone;
+      Caption := '';
+    End;
+
+  { Creation order for alBottom: edge control, then splitter, then alClient. }
+  FDetailPanel := TPanel.Create(Self);
+  With FDetailPanel Do
+    Begin
+      Parent := FMainPanel;
+      Align := alBottom;
       Height := 140;
+      Constraints.MinHeight := 48;
       BevelOuter := bvNone;
       Caption := '';
     End;
@@ -314,15 +334,18 @@ Begin
   FSplitter := TSplitter.Create(Self);
   With FSplitter Do
     Begin
-      Parent := Self;
+      Parent := FMainPanel;
       Align := alBottom;
       Height := 5;
+      AutoSnap := False;
+      ResizeControl := FDetailPanel;
+      MinSize := 48;
     End;
 
   FGraphHost := TPanel.Create(Self);
   With FGraphHost Do
     Begin
-      Parent := Self;
+      Parent := FMainPanel;
       Align := alClient;
       BevelOuter := bvNone;
       Caption := '';
@@ -338,7 +361,7 @@ Begin
       Width := 16;
       Min := 0;
       Max := 0;
-      PageSize := 1;
+      PageSize := 0;
       OnChange := @ScrollBarChange;
     End;
 
