@@ -28,8 +28,10 @@ Type
     Function GetHeadSha(Out Sha: String): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
-    { Fast bounded log for the graph. Safe to call from a worker thread (uses WorkDir, not shared state). }
-    Function FetchLogText(Const WorkDir: String; MaxCount: Integer; Out LogText: String): Boolean;
+    { Full history index (SHA + parents only). Safe from worker threads. }
+    Function FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
+    { Detail lines for specific SHAs (subject/author/time/refs). Batched, worker-safe. }
+    Function FetchCommitDetails(Const WorkDir: String; Shas: TStrings; Out DetailsText: String): Boolean;
     Function CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;
     Function Fetch(Const Remote: String = 'origin'): Boolean;
     Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
@@ -130,21 +132,37 @@ Begin
   Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
 End;
 
-Function TGitService.FetchLogText(Const WorkDir: String; MaxCount: Integer; Out LogText: String): Boolean;
+Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
 Var
   ExitCode: Integer;
-  Limit: String;
 Begin
-  LogText := '';
-  If MaxCount < 1 Then
-    MaxCount := 400;
-  Limit := IntToStr(MaxCount);
-  { Single pretty format: fixed fields, SOH separators, unix time – cheap to parse.
-    --all --topo-order gives a stable graph; -n bounds cost for large repos. }
-  Result := RunGitEx(WorkDir,
-    ['-c', 'core.quotePath=false', 'log', '--all', '--topo-order', '-n', Limit,
-     '--pretty=format:%H' + #1 + '%P' + #1 + '%s' + #1 + '%an' + #1 + '%ct' + #1 + '%D'],
-    LogText, ExitCode);
+  { Compact full-history index: one line per commit "sha [parent…]".
+    Enough for lanes/edges without loading subjects for every commit. }
+  RevListText := '';
+  Result := RunGitEx(WorkDir, ['rev-list', '--all', '--topo-order', '--parents'], RevListText, ExitCode);
+End;
+
+Function TGitService.FetchCommitDetails(Const WorkDir: String; Shas: TStrings; Out DetailsText: String): Boolean;
+Var
+  ExitCode, I: Integer;
+  Args: Array Of String;
+Begin
+  DetailsText := '';
+  Result := False;
+  If (Shas = Nil) Or (Shas.Count = 0) Then
+    Exit;
+
+  { --no-walk: resolve only listed SHAs (O(batch), not O(history)). }
+  SetLength(Args, 5 + Shas.Count);
+  Args[0] := '-c';
+  Args[1] := 'core.quotePath=false';
+  Args[2] := 'log';
+  Args[3] := '--no-walk=unsorted';
+  Args[4] := '--pretty=format:%H' + #1 + '%s' + #1 + '%an' + #1 + '%ct' + #1 + '%D';
+  For I := 0 To Shas.Count - 1 Do
+    Args[5 + I] := Shas[I];
+
+  Result := RunGitEx(WorkDir, Args, DetailsText, ExitCode);
 End;
 
 Function TGitService.CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;

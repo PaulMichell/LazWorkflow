@@ -1,9 +1,9 @@
 Unit GitGraphForm;
 
-{ High-quality commit history graph window (c) 2026 Michell Computing.
+{ Virtual commit history graph window (c) 2026 Michell Computing.
 
-  Performance: git log runs on a worker thread; only the visible row range is
-  painted; load is bounded (chunk growth) so large repos stay responsive. }
+  Full history is indexed via rev-list (SHA/parents/lanes). Row labels and
+  dates load on demand for the visible scroll window, like a virtual list. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -21,27 +21,32 @@ Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
   Private
     FToolBar: TToolBar;
-    FGraphPanel: TScrollBox;
+    FGraphHost: TPanel;
     FPaintBox: TPaintBox;
+    FScrollBar: TScrollBar;
     FStatusFooter: TStatusFooterFrame;
     FSplitter: TSplitter;
     FDetailPanel: TPanel;
     FDetailMemo: TMemo;
     FActionList: TActionList;
     FRefreshAction: TAction;
-    FLoadMoreAction: TAction;
+    FDetailTimer: TTimer;
     FRepoPath: String;
     FBranch: String;
     FHeadSha: String;
     FClean: Boolean;
     FModel: TGitGraphModel;
     FSelectedIndex: Integer;
-    FLoadLimit: Integer;
-    FTotalCommits: Integer;
-    FLoading: Boolean;
-    FLoadThread: TThread;
-    FPendingLogText: String;
-    FPendingOk: Boolean;
+    FIndexing: Boolean;
+    FDetailLoading: Boolean;
+    FIndexThread: TThread;
+    FDetailThread: TThread;
+    FPendingIndexText: String;
+    FPendingIndexOk: Boolean;
+    FPendingDetailsText: String;
+    FPendingDetailsOk: Boolean;
+    FVisibleFirst: Integer;
+    FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
     Procedure CreateUI;
     Procedure InitLaneColors;
@@ -51,19 +56,29 @@ Type
     Procedure PaintBoxPaint(Sender: TObject);
     Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
-    Procedure GraphPanelResize(Sender: TObject);
+    Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
+      WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
+    Procedure ScrollBarChange(Sender: TObject);
+    Procedure GraphHostResize(Sender: TObject);
+    Procedure DetailTimerTimer(Sender: TObject);
     Procedure RefreshActionExecute(Sender: TObject);
-    Procedure LoadMoreActionExecute(Sender: TObject);
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
-    Procedure ApplyLoadedLog;
-    Procedure StartLogLoad(NewLimit: Integer);
-    Procedure StopLoadThread;
-    Procedure UpdatePaintBoxSize;
+    Procedure ApplyIndexLoaded;
+    Procedure ApplyDetailsLoaded;
+    Procedure StartIndexLoad;
+    Procedure ScheduleVisibleDetails;
+    Procedure StartDetailLoadIfNeeded;
+    Procedure StopIndexThread;
+    Procedure StopDetailThread;
+    Procedure UpdateScrollRange;
+    Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
     Procedure ShowCommitDetails(Index: Integer);
+    Function ScrollOffset: Integer;
     Function RowAtY(Y: Integer): Integer;
     Function LaneX(Lane: Integer): Integer;
     Function RowMidY(Row: Integer): Integer;
+    Function FormatCommitDate(Const CommitTime: Int64): String;
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
     Procedure WorkingTreeChanged(Const RepoPath: String);
@@ -84,48 +99,92 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, LazIDEIntf, ProjectIntf, DateUtils;
+  WorkflowLog, GitService, LazIDEIntf, ProjectIntf, DateUtils, Math;
 
 Type
-  TGitLogLoadThread = Class(TThread)
+  TGitIndexThread = Class(TThread)
   Private
     FForm: TGitGraphForm;
     FRepoPath: String;
-    FMaxCount: Integer;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TGitGraphForm; Const ARepoPath: String; AMaxCount: Integer);
+    Constructor Create(AForm: TGitGraphForm; Const ARepoPath: String);
   End;
 
-Constructor TGitLogLoadThread.Create(AForm: TGitGraphForm; Const ARepoPath: String;
-  AMaxCount: Integer);
+  TGitDetailThread = Class(TThread)
+  Private
+    FForm: TGitGraphForm;
+    FRepoPath: String;
+    FShas: TStringList;
+  Protected
+    Procedure Execute; Override;
+  Public
+    Constructor Create(AForm: TGitGraphForm; Const ARepoPath: String; AShas: TStringList);
+    Destructor Destroy; Override;
+  End;
+
+Constructor TGitIndexThread.Create(AForm: TGitGraphForm; Const ARepoPath: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   FForm := AForm;
   FRepoPath := ARepoPath;
-  FMaxCount := AMaxCount;
 End;
 
-Procedure TGitLogLoadThread.Execute;
+Procedure TGitIndexThread.Execute;
 Var
-  LogText: String;
+  Text: String;
   Ok: Boolean;
-  LocalClient: TGitService;
+  Client: TGitService;
 Begin
-  { Dedicated client instance – no shared mutable path state with the UI thread. }
-  LocalClient := TGitService.Create;
+  Client := TGitService.Create;
   Try
-    Ok := LocalClient.FetchLogText(FRepoPath, FMaxCount, LogText);
+    Ok := Client.FetchRevListParents(FRepoPath, Text);
     If Terminated Then
       Exit;
-    FForm.FPendingOk := Ok;
-    FForm.FPendingLogText := LogText;
+    FForm.FPendingIndexOk := Ok;
+    FForm.FPendingIndexText := Text;
     If Not Terminated Then
-      Synchronize(@FForm.ApplyLoadedLog);
+      Synchronize(@FForm.ApplyIndexLoaded);
   Finally
-    LocalClient.Free;
+    Client.Free;
+  End;
+End;
+
+Constructor TGitDetailThread.Create(AForm: TGitGraphForm; Const ARepoPath: String;
+  AShas: TStringList);
+Begin
+  Inherited Create(True);
+  FreeOnTerminate := False;
+  FForm := AForm;
+  FRepoPath := ARepoPath;
+  FShas := AShas; { takes ownership }
+End;
+
+Destructor TGitDetailThread.Destroy;
+Begin
+  FreeAndNil(FShas);
+  Inherited Destroy;
+End;
+
+Procedure TGitDetailThread.Execute;
+Var
+  Text: String;
+  Ok: Boolean;
+  Client: TGitService;
+Begin
+  Client := TGitService.Create;
+  Try
+    Ok := Client.FetchCommitDetails(FRepoPath, FShas, Text);
+    If Terminated Then
+      Exit;
+    FForm.FPendingDetailsOk := Ok;
+    FForm.FPendingDetailsText := Text;
+    If Not Terminated Then
+      Synchronize(@FForm.ApplyDetailsLoaded);
+  Finally
+    Client.Free;
   End;
 End;
 
@@ -159,10 +218,12 @@ Begin
   Inherited Create(TheOwner);
   FClean := True;
   FSelectedIndex := -1;
-  FLoadLimit := GitGraphDefaultChunk;
-  FTotalCommits := -1;
-  FLoading := False;
-  FLoadThread := Nil;
+  FIndexing := False;
+  FDetailLoading := False;
+  FIndexThread := Nil;
+  FDetailThread := Nil;
+  FVisibleFirst := 0;
+  FVisibleLast := 0;
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   CreateUI;
@@ -171,7 +232,10 @@ End;
 
 Destructor TGitGraphForm.Destroy;
 Begin
-  StopLoadThread;
+  If Assigned(FDetailTimer) Then
+    FDetailTimer.Enabled := False;
+  StopDetailThread;
+  StopIndexThread;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FModel);
   Inherited Destroy;
@@ -205,12 +269,6 @@ Begin
   FRefreshAction.OnExecute := @RefreshActionExecute;
   FRefreshAction.ActionList := FActionList;
 
-  FLoadMoreAction := TAction.Create(Self);
-  FLoadMoreAction.Caption := 'Load more';
-  FLoadMoreAction.OnExecute := @LoadMoreActionExecute;
-  FLoadMoreAction.ActionList := FActionList;
-  FLoadMoreAction.Enabled := False;
-
   FToolBar := TToolBar.Create(Self);
   With FToolBar Do
     Begin
@@ -225,12 +283,6 @@ Begin
     Begin
       Parent := FToolBar;
       Action := FRefreshAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FLoadMoreAction;
       Style := tbsButton;
     End;
 
@@ -267,28 +319,43 @@ Begin
       Height := 5;
     End;
 
-  FGraphPanel := TScrollBox.Create(Self);
-  With FGraphPanel Do
+  FGraphHost := TPanel.Create(Self);
+  With FGraphHost Do
     Begin
       Parent := Self;
       Align := alClient;
-      BorderStyle := bsNone;
-      HorzScrollBar.Tracking := True;
-      VertScrollBar.Tracking := True;
-      OnResize := @GraphPanelResize;
+      BevelOuter := bvNone;
+      Caption := '';
+      OnResize := @GraphHostResize;
+    End;
+
+  FScrollBar := TScrollBar.Create(Self);
+  With FScrollBar Do
+    Begin
+      Parent := FGraphHost;
+      Kind := sbVertical;
+      Align := alRight;
+      Width := 16;
+      Min := 0;
+      Max := 0;
+      PageSize := 1;
+      OnChange := @ScrollBarChange;
     End;
 
   FPaintBox := TPaintBox.Create(Self);
   With FPaintBox Do
     Begin
-      Parent := FGraphPanel;
-      Left := 0;
-      Top := 0;
-      Width := 800;
-      Height := GitGraphRowHeight;
+      Parent := FGraphHost;
+      Align := alClient;
       OnPaint := @PaintBoxPaint;
       OnMouseDown := @PaintBoxMouseDown;
+      OnMouseWheel := @PaintBoxMouseWheel;
     End;
+
+  FDetailTimer := TTimer.Create(Self);
+  FDetailTimer.Enabled := False;
+  FDetailTimer.Interval := 40;
+  FDetailTimer.OnTimer := @DetailTimerTimer;
 
   OnCreate := @FormCreate;
   OnDestroy := @FormDestroy;
@@ -310,90 +377,198 @@ Begin
   BindRepository;
 End;
 
-Procedure TGitGraphForm.StopLoadThread;
+Function TGitGraphForm.ScrollOffset: Integer;
 Begin
-  If Assigned(FLoadThread) Then
-    Begin
-      FLoadThread.Terminate;
-      FLoadThread.WaitFor;
-      FreeAndNil(FLoadThread);
-    End;
-  FLoading := False;
+  Result := FScrollBar.Position;
 End;
 
-Procedure TGitGraphForm.StartLogLoad(NewLimit: Integer);
+Procedure TGitGraphForm.StopIndexThread;
+Begin
+  If Assigned(FIndexThread) Then
+    Begin
+      FIndexThread.Terminate;
+      FIndexThread.WaitFor;
+      FreeAndNil(FIndexThread);
+    End;
+  FIndexing := False;
+End;
+
+Procedure TGitGraphForm.StopDetailThread;
+Begin
+  If Assigned(FDetailThread) Then
+    Begin
+      FDetailThread.Terminate;
+      FDetailThread.WaitFor;
+      FreeAndNil(FDetailThread);
+    End;
+  FDetailLoading := False;
+End;
+
+Procedure TGitGraphForm.StartIndexLoad;
 Begin
   If FRepoPath = '' Then
     Exit;
-  StopLoadThread;
-  FLoadLimit := NewLimit;
-  If FLoadLimit < GitGraphDefaultChunk Then
-    FLoadLimit := GitGraphDefaultChunk;
-  If FLoadLimit > GitGraphMaxAutoLoad Then
-    FLoadLimit := GitGraphMaxAutoLoad;
-  FLoading := True;
-  FLoadMoreAction.Enabled := False;
-  FStatusFooter.SetRightText('Loading…');
-  FLoadThread := TGitLogLoadThread.Create(Self, FRepoPath, FLoadLimit);
-  FLoadThread.Start;
+  StopDetailThread;
+  StopIndexThread;
+  FIndexing := True;
+  FStatusFooter.SetRightText('Indexing…');
+  FIndexThread := TGitIndexThread.Create(Self, FRepoPath);
+  FIndexThread.Start;
 End;
 
-Procedure TGitGraphForm.ApplyLoadedLog;
+Procedure TGitGraphForm.ApplyIndexLoaded;
 Var
   Parsed: Integer;
-  ElapsedHint: String;
 Begin
-  { Called via Synchronize from the worker – do not free FLoadThread here. }
-  FLoading := False;
-  If Not FPendingOk Then
+  FIndexing := False;
+  If Not FPendingIndexOk Then
     Begin
-      FStatusFooter.SetRightText('Log failed');
-      WorkflowLogger.Warning('GitGraph', 'git log failed for ' + FRepoPath);
+      FStatusFooter.SetRightText('Index failed');
+      WorkflowLogger.Warning('GitGraph', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
 
-  Parsed := FModel.ParseLogText(FPendingLogText);
-  FPendingLogText := '';
+  Parsed := FModel.ParseRevListParents(FPendingIndexText);
+  FPendingIndexText := '';
   FSelectedIndex := -1;
   If Parsed > 0 Then
     FSelectedIndex := 0;
 
-  UpdatePaintBoxSize;
+  UpdateScrollRange;
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex)
   Else
     FDetailMemo.Clear;
 
-  FLoadMoreAction.Enabled := (FModel.Count >= FLoadLimit) And (FLoadLimit < GitGraphMaxAutoLoad);
-  If FTotalCommits > 0 Then
-    ElapsedHint := Format('%d / %d commits', [FModel.Count, FTotalCommits])
-  Else
-    ElapsedHint := Format('%d commits', [FModel.Count]);
-  If FClean Then
-    FStatusFooter.SetRightText(ElapsedHint + ' · Clean')
-  Else
-    FStatusFooter.SetRightText(ElapsedHint + ' · Dirty');
-
+  UpdateStatus;
   FPaintBox.Invalidate;
-  WorkflowLogger.Info('GitGraph', Format('Loaded %d commits (limit %d)', [Parsed, FLoadLimit]));
+  ScheduleVisibleDetails;
+  WorkflowLogger.Info('GitGraph', Format('Indexed %d commits', [Parsed]));
 End;
 
-Procedure TGitGraphForm.UpdatePaintBoxSize;
+Procedure TGitGraphForm.ApplyDetailsLoaded;
+Begin
+  FDetailLoading := False;
+  If FPendingDetailsOk Then
+    FModel.ApplyDetailsText(FPendingDetailsText);
+  FPendingDetailsText := '';
+  If (FSelectedIndex >= 0) And FModel.Commit(FSelectedIndex).DetailsLoaded Then
+    ShowCommitDetails(FSelectedIndex);
+  FPaintBox.Invalidate;
+  { More rows may still be missing after scrolling. }
+  ScheduleVisibleDetails;
+End;
+
+Procedure TGitGraphForm.GetVisibleRange(Out FirstRow, LastRow: Integer);
 Var
-  NeedW, NeedH: Integer;
+  ViewH: Integer;
 Begin
-  NeedH := FModel.TotalHeight;
-  NeedW := FModel.GraphWidth + 640;
-  If NeedW < FGraphPanel.ClientWidth Then
-    NeedW := FGraphPanel.ClientWidth;
-  If NeedH < FGraphPanel.ClientHeight Then
-    NeedH := FGraphPanel.ClientHeight;
-  FPaintBox.SetBounds(0, 0, NeedW, NeedH);
+  FirstRow := 0;
+  LastRow := -1;
+  If FModel.Count = 0 Then
+    Exit;
+  ViewH := FPaintBox.ClientHeight;
+  If ViewH < 1 Then
+    ViewH := 1;
+  FirstRow := ScrollOffset Div GitGraphRowHeight;
+  LastRow := (ScrollOffset + ViewH) Div GitGraphRowHeight;
+  If FirstRow < 0 Then
+    FirstRow := 0;
+  If LastRow >= FModel.Count Then
+    LastRow := FModel.Count - 1;
 End;
 
-Procedure TGitGraphForm.GraphPanelResize(Sender: TObject);
+Procedure TGitGraphForm.ScheduleVisibleDetails;
 Begin
-  UpdatePaintBoxSize;
+  If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
+    Exit;
+  GetVisibleRange(FVisibleFirst, FVisibleLast);
+  FDetailTimer.Enabled := False;
+  FDetailTimer.Enabled := True;
+End;
+
+Procedure TGitGraphForm.DetailTimerTimer(Sender: TObject);
+Begin
+  FDetailTimer.Enabled := False;
+  StartDetailLoadIfNeeded;
+End;
+
+Procedure TGitGraphForm.StartDetailLoadIfNeeded;
+Var
+  First, Last: Integer;
+  Shas: TStringList;
+  Missing: Integer;
+Begin
+  If FDetailLoading Or FIndexing Or (FRepoPath = '') Then
+    Exit;
+
+  GetVisibleRange(First, Last);
+  First := Max(0, First - GitGraphPrefetchRows);
+  Last := Min(FModel.Count - 1, Last + GitGraphPrefetchRows);
+  Missing := FModel.CollectMissingShas(First, Last, Shas);
+  If Missing = 0 Then
+    Begin
+      Shas.Free;
+      Exit;
+    End;
+
+  FDetailLoading := True;
+  FDetailThread := TGitDetailThread.Create(Self, FRepoPath, Shas);
+  FDetailThread.Start;
+End;
+
+Procedure TGitGraphForm.UpdateScrollRange;
+Var
+  ViewH, ContentH, MaxPos: Integer;
+Begin
+  ViewH := FPaintBox.ClientHeight;
+  If ViewH < 1 Then
+    ViewH := 1;
+  ContentH := FModel.TotalHeight;
+  MaxPos := ContentH - ViewH;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  FScrollBar.Min := 0;
+  FScrollBar.SmallChange := GitGraphRowHeight;
+  FScrollBar.LargeChange := ViewH;
+  { Position runs 0..Max; PageSize 0 avoids platform-specific range quirks. }
+  FScrollBar.PageSize := 0;
+  FScrollBar.Max := MaxPos;
+  If FScrollBar.Position > MaxPos Then
+    FScrollBar.Position := MaxPos;
+  FScrollBar.Enabled := MaxPos > 0;
+End;
+
+Procedure TGitGraphForm.GraphHostResize(Sender: TObject);
+Begin
+  UpdateScrollRange;
+  ScheduleVisibleDetails;
+  FPaintBox.Invalidate;
+End;
+
+Procedure TGitGraphForm.ScrollBarChange(Sender: TObject);
+Begin
+  ScheduleVisibleDetails;
+  FPaintBox.Invalidate;
+End;
+
+Procedure TGitGraphForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
+  WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
+Var
+  NewPos, MaxPos, ViewH: Integer;
+Begin
+  ViewH := FPaintBox.ClientHeight;
+  MaxPos := FModel.TotalHeight - ViewH;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  NewPos := FScrollBar.Position - (WheelDelta Div 120) * GitGraphRowHeight * 3;
+  If NewPos < 0 Then
+    NewPos := 0;
+  If NewPos > MaxPos Then
+    NewPos := MaxPos;
+  If NewPos <> FScrollBar.Position Then
+    FScrollBar.Position := NewPos;
+  Handled := True;
 End;
 
 Function TGitGraphForm.LaneX(Lane: Integer): Integer;
@@ -403,41 +578,48 @@ End;
 
 Function TGitGraphForm.RowMidY(Row: Integer): Integer;
 Begin
-  Result := Row * GitGraphRowHeight + GitGraphRowHeight Div 2;
+  Result := Row * GitGraphRowHeight + GitGraphRowHeight Div 2 - ScrollOffset;
 End;
 
 Function TGitGraphForm.RowAtY(Y: Integer): Integer;
 Begin
-  If (Y < 0) Or (FModel.Count = 0) Then
+  If FModel.Count = 0 Then
     Result := -1
   Else
     Begin
-      Result := Y Div GitGraphRowHeight;
-      If Result >= FModel.Count Then
+      Result := (Y + ScrollOffset) Div GitGraphRowHeight;
+      If (Result < 0) Or (Result >= FModel.Count) Then
         Result := -1;
     End;
 End;
 
+Function TGitGraphForm.FormatCommitDate(Const CommitTime: Int64): String;
+Begin
+  If CommitTime <= 0 Then
+    Result := '…'
+  Else
+    Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(CommitTime));
+End;
+
 Procedure TGitGraphForm.PaintBoxPaint(Sender: TObject);
 Var
-  Clip: TRect;
-  FirstRow, LastRow, I, TextX, Y, X: Integer;
+  FirstRow, LastRow, I, TextX, Y, X, Off: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Col: TColor;
-  LabelText: String;
+  LabelText, DateText: String;
 Begin
-  Clip := FPaintBox.Canvas.ClipRect;
+  Off := ScrollOffset;
   With FPaintBox.Canvas Do
     Begin
       Brush.Color := clWindow;
-      FillRect(Clip);
+      FillRect(FPaintBox.ClientRect);
 
-      If FLoading And (FModel.Count = 0) Then
+      If FIndexing And (FModel.Count = 0) Then
         Begin
           Font.Color := clGrayText;
           Font.Size := 11;
-          TextOut(16, 16, 'Loading commit history…');
+          TextOut(16, 16, 'Indexing commit history…');
           Exit;
         End;
 
@@ -452,14 +634,10 @@ Begin
           Exit;
         End;
 
-      FirstRow := Clip.Top Div GitGraphRowHeight;
-      LastRow := Clip.Bottom Div GitGraphRowHeight + 1;
-      If FirstRow < 0 Then
-        FirstRow := 0;
-      If LastRow >= FModel.Count Then
-        LastRow := FModel.Count - 1;
+      GetVisibleRange(FirstRow, LastRow);
+      If LastRow < FirstRow Then
+        Exit;
 
-      { Edges first (under nodes). Only those intersecting the visible band. }
       Pen.Width := 2;
       For I := 0 To FModel.EdgeCount - 1 Do
         Begin
@@ -469,23 +647,20 @@ Begin
           Col := FLaneColors[FModel.LaneColorIndex(E.ChildLane)];
           Pen.Color := Col;
           X := LaneX(E.ChildLane);
-          Y := RowMidY(E.ChildIndex);
           If E.ChildLane = E.ParentLane Then
-            Line(X, Y, LaneX(E.ParentLane), RowMidY(E.ParentIndex))
+            Line(X, RowMidY(E.ChildIndex), LaneX(E.ParentLane), RowMidY(E.ParentIndex))
           Else
             Begin
-              { Elbow: vertical then horizontal into parent lane. }
-              Line(X, Y, X, RowMidY(E.ParentIndex));
+              Line(X, RowMidY(E.ChildIndex), X, RowMidY(E.ParentIndex));
               Line(X, RowMidY(E.ParentIndex), LaneX(E.ParentLane), RowMidY(E.ParentIndex));
             End;
         End;
 
-      { Rows: selection, node, labels – visible only. }
       Font.Size := 9;
       For I := FirstRow To LastRow Do
         Begin
           C := FModel.Commit(I);
-          Y := I * GitGraphRowHeight;
+          Y := I * GitGraphRowHeight - Off;
 
           If I = FSelectedIndex Then
             Begin
@@ -503,12 +678,18 @@ Begin
           TextX := FModel.GraphWidth + GitGraphTextGap;
           Brush.Style := bsClear;
           Font.Color := clGrayText;
-          TextOut(TextX, Y + 3, C.ShortSha);
+          DateText := FormatCommitDate(C.CommitTime);
+          TextOut(TextX, Y + 3, DateText);
           Font.Color := clWindowText;
-          LabelText := C.Subject;
-          If C.Refs <> '' Then
-            LabelText := LabelText + '  (' + C.Refs + ')';
-          TextOut(TextX + 70, Y + 3, LabelText);
+          If C.DetailsLoaded Then
+            Begin
+              LabelText := C.Subject;
+              If C.Refs <> '' Then
+                LabelText := LabelText + '  (' + C.Refs + ')';
+            End
+          Else
+            LabelText := '…';
+          TextOut(TextX + 130, Y + 3, LabelText);
           Brush.Style := bsSolid;
         End;
     End;
@@ -527,6 +708,8 @@ Begin
   FSelectedIndex := Row;
   ShowCommitDetails(Row);
   FPaintBox.Invalidate;
+  If Not FModel.Commit(Row).DetailsLoaded Then
+    ScheduleVisibleDetails;
 End;
 
 Procedure TGitGraphForm.ShowCommitDetails(Index: Integer);
@@ -542,13 +725,21 @@ Begin
       Exit;
     End;
   C := FModel.Commit(Index);
-  When := UnixToDateTime(C.CommitTime);
   FDetailMemo.Lines.BeginUpdate;
   Try
     FDetailMemo.Lines.Clear;
     FDetailMemo.Lines.Add('Commit:  ' + C.Sha);
-    FDetailMemo.Lines.Add('Author:  ' + C.Author);
-    FDetailMemo.Lines.Add('Date:    ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', When));
+    If C.DetailsLoaded Then
+      Begin
+        FDetailMemo.Lines.Add('Author:  ' + C.Author);
+        If C.CommitTime > 0 Then
+          Begin
+            When := UnixToDateTime(C.CommitTime);
+            FDetailMemo.Lines.Add('Date:    ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', When));
+          End;
+      End
+    Else
+      FDetailMemo.Lines.Add('(loading details…)');
     If C.ParentCount > 0 Then
       Begin
         ParentLine := C.Parents[0];
@@ -556,10 +747,13 @@ Begin
           ParentLine := ParentLine + ' ' + C.Parents[I];
         FDetailMemo.Lines.Add('Parents: ' + ParentLine);
       End;
-    If C.Refs <> '' Then
+    If C.DetailsLoaded And (C.Refs <> '') Then
       FDetailMemo.Lines.Add('Refs:    ' + C.Refs);
-    FDetailMemo.Lines.Add('');
-    FDetailMemo.Lines.Add(C.Subject);
+    If C.DetailsLoaded Then
+      Begin
+        FDetailMemo.Lines.Add('');
+        FDetailMemo.Lines.Add(C.Subject);
+      End;
   Finally
     FDetailMemo.Lines.EndUpdate;
   End;
@@ -569,20 +763,6 @@ Procedure TGitGraphForm.RefreshActionExecute(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitGraph', 'Manual refresh requested');
   BindRepository;
-End;
-
-Procedure TGitGraphForm.LoadMoreActionExecute(Sender: TObject);
-Var
-  NextLimit: Integer;
-Begin
-  If FLoading Or (FRepoPath = '') Then
-    Exit;
-  NextLimit := FLoadLimit + GitGraphDefaultChunk;
-  If NextLimit > GitGraphMaxAutoLoad Then
-    NextLimit := GitGraphMaxAutoLoad;
-  If NextLimit = FLoadLimit Then
-    Exit;
-  StartLogLoad(NextLimit);
 End;
 
 Procedure TGitGraphForm.UpdateStatus;
@@ -609,14 +789,11 @@ Begin
   Else
     CentreText := FRepoPath;
 
-  If FLoading Then
-    RightText := 'Loading…'
+  If FIndexing Then
+    RightText := 'Indexing…'
   Else If FModel.Count > 0 Then
     Begin
-      If FTotalCommits > 0 Then
-        RightText := Format('%d / %d', [FModel.Count, FTotalCommits])
-      Else
-        RightText := Format('%d commits', [FModel.Count]);
+      RightText := Format('%d commits', [FModel.Count]);
       If FClean Then
         RightText := RightText + ' · Clean'
       Else
@@ -634,12 +811,10 @@ Procedure TGitGraphForm.RefreshRepositoryInfo;
 Var
   Branch, Sha, Porcelain: String;
   Clean: Boolean;
-  Total: Integer;
 Begin
   FBranch := '';
   FHeadSha := '';
   FClean := True;
-  FTotalCommits := -1;
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
 
@@ -650,9 +825,6 @@ Begin
     FHeadSha := Sha;
   If GitClient.GetStatus(Clean, Porcelain) Then
     FClean := Clean;
-  { Cheap count for footer; ignore failure. }
-  If GitClient.CountCommits(FRepoPath, Total) Then
-    FTotalCommits := Total;
 End;
 
 Procedure TGitGraphForm.BindRepository(Const StartPath: String);
@@ -679,24 +851,22 @@ End;
 
 Procedure TGitGraphForm.SetRepository(Const ARepoPath: String);
 Begin
-  StopLoadThread;
+  StopDetailThread;
+  StopIndexThread;
   FRepoPath := ARepoPath;
   FSelectedIndex := -1;
   FModel.Clear;
-  FLoadLimit := GitGraphDefaultChunk;
+  FScrollBar.Position := 0;
   If Assigned(GitClient) Then
     GitClient.RepoPath := ARepoPath;
   RefreshRepositoryInfo;
+  UpdateScrollRange;
   UpdateStatus;
-  UpdatePaintBoxSize;
   FPaintBox.Invalidate;
   If FRepoPath <> '' Then
-    StartLogLoad(FLoadLimit)
+    StartIndexLoad
   Else
-    Begin
-      FDetailMemo.Clear;
-      FLoadMoreAction.Enabled := False;
-    End;
+    FDetailMemo.Clear;
 End;
 
 Procedure TGitGraphForm.RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);

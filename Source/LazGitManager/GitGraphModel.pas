@@ -1,11 +1,10 @@
 Unit GitGraphModel;
 
-{ Commit graph data, fast log parsing and lane layout (c) 2026 Michell Computing.
+{ Virtual commit graph model (c) 2026 Michell Computing.
 
-  Performance notes:
-  - Parsing uses a single scan with SOH field separators (no regex, no TStringList per line).
-  - SHA lookup is a hash table; lane layout is O(n * lanes).
-  - Layout runs on the worker thread before the UI is notified. }
+  Index phase: rev-list --parents builds SHA/parent skeleton + lane layout for the
+  entire history (compact). Detail phase: subject/author/time/refs filled on demand
+  for visible rows only. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -19,18 +18,17 @@ Uses
 
 Const
   GitGraphFieldSep = #1;
-  GitGraphDefaultChunk = 400;
-  GitGraphMaxAutoLoad = 5000;
   GitGraphRowHeight = 22;
   GitGraphLaneWidth = 16;
   GitGraphLeftMargin = 12;
   GitGraphNodeRadius = 4;
   GitGraphTextGap = 10;
+  GitGraphDetailBatch = 80;
+  GitGraphPrefetchRows = 30;
 
 Type
   TGitCommitRec = Record
     Sha: String;
-    ShortSha: String;
     ParentCount: Integer;
     Parents: Array[0..3] Of String;
     Subject: String;
@@ -38,6 +36,7 @@ Type
     CommitTime: Int64;
     Refs: String;
     Lane: Integer;
+    DetailsLoaded: Boolean;
   End;
 
   TGitGraphEdge = Record
@@ -66,8 +65,12 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Procedure Clear;
-    { Parse SOH-delimited git log text from GitService.FetchLogText. }
-    Function ParseLogText(Const LogText: String): Integer;
+    { Parse `git rev-list --topo-order --parents` output (full history index). }
+    Function ParseRevListParents(Const RevListText: String): Integer;
+    { Merge SOH-delimited detail lines from FetchCommitDetails into matching rows. }
+    Function ApplyDetailsText(Const DetailsText: String): Integer;
+    { Collect SHAs in [First..Last] that still need details (inclusive). }
+    Function CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
     Procedure RebuildLayout;
     Function Commit(Index: Integer): TGitCommitRec;
     Function Edge(Index: Integer): TGitGraphEdge;
@@ -84,7 +87,7 @@ Implementation
 Constructor TGitGraphModel.Create;
 Begin
   Inherited Create;
-  FShaIndex := TFPDataHashTable.CreateWith(2048, @RSHash);
+  FShaIndex := TFPDataHashTable.CreateWith(4096, @RSHash);
   FCount := 0;
   FEdgeCount := 0;
   FLaneCount := 0;
@@ -121,7 +124,7 @@ Begin
   If Cap >= MinCount Then
     Exit;
   If Cap = 0 Then
-    Cap := 256;
+    Cap := 512;
   While Cap < MinCount Do
     Cap := Cap * 2;
   SetLength(FCommits, Cap);
@@ -135,7 +138,7 @@ Begin
   If Cap >= MinCount Then
     Exit;
   If Cap = 0 Then
-    Cap := 256;
+    Cap := 512;
   While Cap < MinCount Do
     Cap := Cap * 2;
   SetLength(FEdges, Cap);
@@ -150,7 +153,7 @@ Begin
     Exit;
   P := FShaIndex.Items[Sha];
   If P <> Nil Then
-    Result := NativeInt(P) - 1; { stored as Index+1 so Nil means missing }
+    Result := NativeInt(P) - 1;
 End;
 
 Procedure TGitGraphModel.BuildShaIndex;
@@ -160,6 +163,91 @@ Begin
   ClearIndex;
   For I := 0 To FCount - 1 Do
     FShaIndex.Add(FCommits[I].Sha, Pointer(NativeUInt(I + 1)));
+End;
+
+Procedure SkipLineEnd(Const S: String; Var Pos: Integer);
+Var
+  L: Integer;
+Begin
+  L := Length(S);
+  If (Pos <= L) And (S[Pos] = #13) Then
+    Inc(Pos);
+  If (Pos <= L) And (S[Pos] = #10) Then
+    Inc(Pos);
+End;
+
+Function NextToken(Const S: String; Var Pos: Integer): String;
+Var
+  StartPos, L: Integer;
+Begin
+  L := Length(S);
+  While (Pos <= L) And ((S[Pos] = ' ') Or (S[Pos] = #9)) Do
+    Inc(Pos);
+  StartPos := Pos;
+  While (Pos <= L) And (S[Pos] <> ' ') And (S[Pos] <> #9) And (S[Pos] <> #10) And (S[Pos] <> #13) Do
+    Inc(Pos);
+  Result := Copy(S, StartPos, Pos - StartPos);
+End;
+
+Function TGitGraphModel.ParseRevListParents(Const RevListText: String): Integer;
+Var
+  Pos, L, PCount, K: Integer;
+  Sha, Tok: String;
+  ParentBuf: Array[0..3] Of String;
+Begin
+  Clear;
+  Result := 0;
+  L := Length(RevListText);
+  Pos := 1;
+  While Pos <= L Do
+    Begin
+      If (RevListText[Pos] = #10) Or (RevListText[Pos] = #13) Then
+        Begin
+          SkipLineEnd(RevListText, Pos);
+          Continue;
+        End;
+
+      Sha := NextToken(RevListText, Pos);
+      If Length(Sha) < 7 Then
+        Begin
+          While (Pos <= L) And (RevListText[Pos] <> #10) And (RevListText[Pos] <> #13) Do
+            Inc(Pos);
+          SkipLineEnd(RevListText, Pos);
+          Continue;
+        End;
+
+      PCount := 0;
+      For K := 0 To 3 Do
+        ParentBuf[K] := '';
+      While (Pos <= L) And (RevListText[Pos] <> #10) And (RevListText[Pos] <> #13) Do
+        Begin
+          Tok := NextToken(RevListText, Pos);
+          If Tok = '' Then
+            Break;
+          If PCount <= 3 Then
+            Begin
+              ParentBuf[PCount] := Tok;
+              Inc(PCount);
+            End;
+        End;
+      SkipLineEnd(RevListText, Pos);
+
+      EnsureCapacity(FCount + 1);
+      FCommits[FCount].Sha := Sha;
+      FCommits[FCount].ParentCount := PCount;
+      For K := 0 To 3 Do
+        FCommits[FCount].Parents[K] := ParentBuf[K];
+      FCommits[FCount].Subject := '';
+      FCommits[FCount].Author := '';
+      FCommits[FCount].CommitTime := 0;
+      FCommits[FCount].Refs := '';
+      FCommits[FCount].Lane := 0;
+      FCommits[FCount].DetailsLoaded := False;
+      Inc(FCount);
+    End;
+
+  RebuildLayout;
+  Result := FCount;
 End;
 
 Function NextField(Const S: String; Var Pos: Integer; Sep: Char): String;
@@ -175,85 +263,68 @@ Begin
     Inc(Pos);
 End;
 
-Procedure SkipLineEnd(Const S: String; Var Pos: Integer);
+Function TGitGraphModel.ApplyDetailsText(Const DetailsText: String): Integer;
 Var
-  L: Integer;
-Begin
-  L := Length(S);
-  If (Pos <= L) And (S[Pos] = #13) Then
-    Inc(Pos);
-  If (Pos <= L) And (S[Pos] = #10) Then
-    Inc(Pos);
-End;
-
-Function TGitGraphModel.ParseLogText(Const LogText: String): Integer;
-Var
-  Pos, L, PCount, K: Integer;
-  LineSha, ParentField, Subject, Author, TimeField, Refs, ParentPart: String;
-  ParentBuf: Array[0..3] Of String;
-  PStart, PPos, PL: Integer;
+  Pos, L, Idx: Integer;
+  LineSha, Subject, Author, TimeField, Refs: String;
   TimeVal: Int64;
 Begin
-  Clear;
   Result := 0;
-  L := Length(LogText);
+  L := Length(DetailsText);
   Pos := 1;
   While Pos <= L Do
     Begin
-      If (LogText[Pos] = #10) Or (LogText[Pos] = #13) Then
+      If (DetailsText[Pos] = #10) Or (DetailsText[Pos] = #13) Then
         Begin
-          SkipLineEnd(LogText, Pos);
+          SkipLineEnd(DetailsText, Pos);
           Continue;
         End;
 
-      LineSha := NextField(LogText, Pos, GitGraphFieldSep);
-      ParentField := NextField(LogText, Pos, GitGraphFieldSep);
-      Subject := NextField(LogText, Pos, GitGraphFieldSep);
-      Author := NextField(LogText, Pos, GitGraphFieldSep);
-      TimeField := NextField(LogText, Pos, GitGraphFieldSep);
-      Refs := NextField(LogText, Pos, GitGraphFieldSep);
-      SkipLineEnd(LogText, Pos);
+      LineSha := NextField(DetailsText, Pos, GitGraphFieldSep);
+      Subject := NextField(DetailsText, Pos, GitGraphFieldSep);
+      Author := NextField(DetailsText, Pos, GitGraphFieldSep);
+      TimeField := NextField(DetailsText, Pos, GitGraphFieldSep);
+      Refs := NextField(DetailsText, Pos, GitGraphFieldSep);
+      SkipLineEnd(DetailsText, Pos);
 
-      If Length(LineSha) < 7 Then
+      Idx := IndexOfSha(LineSha);
+      If Idx < 0 Then
         Continue;
 
-      PCount := 0;
-      For K := 0 To 3 Do
-        ParentBuf[K] := '';
-      PPos := 1;
-      PL := Length(ParentField);
-      While (PPos <= PL) And (PCount <= 3) Do
-        Begin
-          While (PPos <= PL) And (ParentField[PPos] = ' ') Do
-            Inc(PPos);
-          PStart := PPos;
-          While (PPos <= PL) And (ParentField[PPos] <> ' ') Do
-            Inc(PPos);
-          If PPos > PStart Then
-            Begin
-              ParentPart := Copy(ParentField, PStart, PPos - PStart);
-              ParentBuf[PCount] := ParentPart;
-              Inc(PCount);
-            End;
-        End;
-
       TimeVal := StrToInt64Def(TimeField, 0);
-      EnsureCapacity(FCount + 1);
-      FCommits[FCount].Sha := LineSha;
-      FCommits[FCount].ShortSha := Copy(LineSha, 1, 7);
-      FCommits[FCount].ParentCount := PCount;
-      For K := 0 To 3 Do
-        FCommits[FCount].Parents[K] := ParentBuf[K];
-      FCommits[FCount].Subject := Subject;
-      FCommits[FCount].Author := Author;
-      FCommits[FCount].CommitTime := TimeVal;
-      FCommits[FCount].Refs := Refs;
-      FCommits[FCount].Lane := 0;
-      Inc(FCount);
+      FCommits[Idx].Subject := Subject;
+      FCommits[Idx].Author := Author;
+      FCommits[Idx].CommitTime := TimeVal;
+      FCommits[Idx].Refs := Refs;
+      FCommits[Idx].DetailsLoaded := True;
+      Inc(Result);
     End;
+End;
 
-  RebuildLayout;
-  Result := FCount;
+Function TGitGraphModel.CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
+Var
+  I: Integer;
+Begin
+  Shas := TStringList.Create;
+  Shas.Capacity := GitGraphDetailBatch;
+  Result := 0;
+  If FCount = 0 Then
+    Exit;
+  If FirstIndex < 0 Then
+    FirstIndex := 0;
+  If LastIndex >= FCount Then
+    LastIndex := FCount - 1;
+  If FirstIndex > LastIndex Then
+    Exit;
+
+  For I := FirstIndex To LastIndex Do
+    If Not FCommits[I].DetailsLoaded Then
+      Begin
+        Shas.Add(FCommits[I].Sha);
+        Inc(Result);
+        If Result >= GitGraphDetailBatch Then
+          Break;
+      End;
 End;
 
 Procedure TGitGraphModel.LayoutLanes;
@@ -381,7 +452,6 @@ Begin
   If (Index < 0) Or (Index >= FCount) Then
     Begin
       Result.Sha := '';
-      Result.ShortSha := '';
       Result.ParentCount := 0;
       Result.Parents[0] := '';
       Result.Parents[1] := '';
@@ -392,6 +462,7 @@ Begin
       Result.CommitTime := 0;
       Result.Refs := '';
       Result.Lane := 0;
+      Result.DetailsLoaded := False;
       Exit;
     End;
   Result := FCommits[Index];
