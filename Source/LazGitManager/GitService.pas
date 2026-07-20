@@ -45,6 +45,8 @@ Type
     Function UnstageAll: Boolean;
     Function Commit(Const Message: String; Out NewSha: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
+    { Apply a unified diff to the index (partial stage/unstage). Reverse undoes it. }
+    Function ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean = False): Boolean;
     { Full history index (SHA + parents only). Safe from worker threads. }
     Function FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
     { Detail lines for specific SHAs (subject/author/time/refs). Batched, worker-safe. }
@@ -489,6 +491,59 @@ Begin
   { Untracked files have no diff – show empty success. }
   If (Not Result) And (ExitCode = 0) Then
     Result := True;
+End;
+
+Function TGitService.ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean): Boolean;
+Var
+  TempName: String;
+  List: TStringList;
+  Args: Array Of String;
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If Trim(PatchText) = '' Then
+    Begin
+      FLastError := 'Empty patch';
+      Exit;
+    End;
+  TempName := GetTempFileName(GetTempDir, 'lazgit-partial-');
+  If TempName = '' Then
+    Begin
+      FLastError := 'Could not create temporary patch file';
+      Exit;
+    End;
+  List := TStringList.Create;
+  Try
+    List.Text := PatchText;
+    { Ensure trailing newline – git apply is strict. }
+    If (List.Count > 0) And (List[List.Count - 1] <> '') Then
+      List.Add('');
+    Try
+      List.SaveToFile(TempName);
+    Except
+      On E: Exception Do
+        Begin
+          FLastError := 'Could not write patch: ' + E.Message;
+          Exit;
+        End;
+    End;
+
+    If Reverse Then
+      Args := ['apply', '--cached', '--reverse', '--whitespace=nowarn', TempName]
+    Else
+      Args := ['apply', '--cached', '--whitespace=nowarn', TempName];
+
+    Result := RunGit(Args, OutputText, ExitCode);
+    If Result Then
+      WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath)
+    Else If Trim(OutputText) <> '' Then
+      FLastError := Trim(OutputText);
+  Finally
+    List.Free;
+    If FileExists(TempName) Then
+      DeleteFile(TempName);
+  End;
 End;
 
 Function TGitService.Fetch(Const Remote: String): Boolean;

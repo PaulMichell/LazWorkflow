@@ -55,6 +55,7 @@ Type
     Procedure ListSelectionChange(Sender: TObject; User: Boolean);
     Procedure ListDblClick(Sender: TObject);
     Procedure MessageChange(Sender: TObject);
+    Procedure DiffStatusChanged(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
   Public
     Constructor Create(TheOwner: TComponent); Override;
@@ -205,8 +206,9 @@ Begin
     Begin
       Parent := FListsPanel;
       Align := alBottom;
-      Height := 220;
+      Height := 240;
       BorderSpacing.Around := 4;
+      OnStatusChanged := @DiffStatusChanged;
     End;
 
   FMidPanel := TPanel.Create(Self);
@@ -419,6 +421,7 @@ Var
   DiffText, Path, Title: String;
 Begin
   FDiffView.Clear;
+  FDiffView.SetStagingContext(FRepoPath, Staged);
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
   For I := 0 To List.Count - 1 Do
@@ -441,6 +444,12 @@ Begin
           FDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
         Exit; { show first selected only }
       End;
+End;
+
+Procedure TGitCommitForm.DiffStatusChanged(Sender: TObject);
+Begin
+  { Partial stage/unstage changed the index – refresh file lists and current diff. }
+  ReloadStatus;
 End;
 
 Procedure TGitCommitForm.UpdateCommitEnabled;

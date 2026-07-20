@@ -1,6 +1,7 @@
 Unit GitDiffView;
 
-{ SynEdit-based unified-diff viewer with file/hunk/line navigation (c) 2026 Michell Computing. }
+{ SynEdit-based unified-diff viewer with file/hunk/line selection and partial
+  stage/unstage (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -11,7 +12,7 @@ Interface
 
 Uses
   Classes, SysUtils, Types, Controls, Graphics, ExtCtrls, ComCtrls, StdCtrls, Forms,
-  SynEdit, SynEditTypes, SynHighlighterDiff;
+  Menus, SynEdit, SynEditTypes, SynHighlighterDiff;
 
 Type
   TGitDiffRange = Record
@@ -30,7 +31,14 @@ Type
     FTreePanel: TPanel;
     FEditPanel: TPanel;
     FCaption: TLabel;
+    FToolBar: TPanel;
+    FBtnStageSel: TButton;
+    FBtnUnstageSel: TButton;
     FDiffText: String;
+    FRepoPath: String;
+    FStagedSide: Boolean;
+    FOnStatusChanged: TNotifyEvent;
+    FPopup: TPopupMenu;
     Procedure BuildUI;
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
@@ -38,20 +46,34 @@ Type
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
     Function NodeRange(Node: TTreeNode): TGitDiffRange;
+    Procedure GetSelectionLines(Out FirstLine, LastLine: Integer);
+    Function BuildPartialPatch(FirstLine, LastLine: Integer): String;
+    Procedure BtnStageSelClick(Sender: TObject);
+    Procedure BtnUnstageSelClick(Sender: TObject);
+    Procedure PopupStageClick(Sender: TObject);
+    Procedure PopupUnstageClick(Sender: TObject);
+    Procedure UpdateActionEnabled;
+    Procedure DoStatusChanged;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Procedure Clear;
     Procedure LoadDiff(Const Title, DiffText: String);
     Procedure LoadPlainText(Const Title, Content: String);
+    { RepoPath + StagedSide control partial stage/unstage against the index. }
+    Procedure SetStagingContext(Const ARepoPath: String; StagedSide: Boolean);
     Function SelectedPath: String;
+    Function StageSelection: Boolean;
+    Function UnstageSelection: Boolean;
     Property Tree: TTreeView Read FTree;
     Property Editor: TSynEdit Read FEdit;
+    Property StagedSide: Boolean Read FStagedSide;
+    Property OnStatusChanged: TNotifyEvent Read FOnStatusChanged Write FOnStatusChanged;
   End;
 
 Implementation
 
 Uses
-  EditorOptionsIntf;
+  EditorOptionsIntf, GitService, Dialogs, WorkflowLog;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -61,12 +83,13 @@ Begin
   Inherited Create(TheOwner);
   BevelOuter := bvNone;
   Caption := '';
+  FRepoPath := '';
+  FStagedSide := False;
   BuildUI;
 End;
 
 Procedure TGitDiffView.ConfigureDiffColors;
 Begin
-  { Soft green/red line marks; keep IDE font/size from GetSynEditorSettings. }
   FHigh.LineAddedAttri.Foreground := RGBToColor(27, 94, 32);
   FHigh.LineAddedAttri.Background := RGBToColor(232, 245, 233);
   FHigh.LineRemovedAttri.Foreground := RGBToColor(183, 28, 28);
@@ -87,7 +110,6 @@ End;
 
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
 Begin
-  { Match main Lazarus source editors: font, size, quality, spacing, gutter. }
   If Assigned(IDEEditorOptions) Then
     Begin
       IDEEditorOptions.GetSynEditorSettings(FEdit);
@@ -96,7 +118,6 @@ Begin
     End
   Else
     Begin
-      { Fallback when IDE options are not yet available. }
       FEdit.Font.Size := 10;
       FEdit.Font.Name := 'Courier New';
       FEdit.Font.Pitch := fpFixed;
@@ -106,7 +127,6 @@ Begin
   FEdit.ReadOnly := True;
   FEdit.WantTabs := True;
   FEdit.RightGutter.Visible := False;
-  { Special-char glyphs make mono text look broken; keep plain source style. }
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
   If Assigned(FHigh) Then
     Begin
@@ -116,6 +136,8 @@ Begin
 End;
 
 Procedure TGitDiffView.BuildUI;
+Var
+  Item: TMenuItem;
 Begin
   FCaption := TLabel.Create(Self);
   With FCaption Do
@@ -126,6 +148,42 @@ Begin
       BorderSpacing.Top := 4;
       BorderSpacing.Bottom := 2;
       Caption := 'Diff';
+    End;
+
+  FToolBar := TPanel.Create(Self);
+  With FToolBar Do
+    Begin
+      Parent := Self;
+      Align := alTop;
+      Height := 32;
+      BevelOuter := bvNone;
+      Caption := '';
+    End;
+
+  FBtnStageSel := TButton.Create(Self);
+  With FBtnStageSel Do
+    Begin
+      Parent := FToolBar;
+      Left := 6;
+      Top := 2;
+      Width := 130;
+      Height := 26;
+      Caption := 'Stage selection';
+      OnClick := @BtnStageSelClick;
+      Enabled := False;
+    End;
+
+  FBtnUnstageSel := TButton.Create(Self);
+  With FBtnUnstageSel Do
+    Begin
+      Parent := FToolBar;
+      Left := 142;
+      Top := 2;
+      Width := 140;
+      Height := 26;
+      Caption := 'Unstage selection';
+      OnClick := @BtnUnstageSelClick;
+      Enabled := False;
     End;
 
   FTreePanel := TPanel.Create(Self);
@@ -180,7 +238,48 @@ Begin
       Highlighter := FHigh;
     End;
 
+  FPopup := TPopupMenu.Create(Self);
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Stage selection';
+  Item.OnClick := @PopupStageClick;
+  FPopup.Items.Add(Item);
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Unstage selection';
+  Item.OnClick := @PopupUnstageClick;
+  FPopup.Items.Add(Item);
+  FEdit.PopupMenu := FPopup;
+  FTree.PopupMenu := FPopup;
+
   ApplyIDEEditorAppearance;
+  UpdateActionEnabled;
+End;
+
+Procedure TGitDiffView.SetStagingContext(Const ARepoPath: String; StagedSide: Boolean);
+Begin
+  FRepoPath := ARepoPath;
+  FStagedSide := StagedSide;
+  UpdateActionEnabled;
+End;
+
+Procedure TGitDiffView.UpdateActionEnabled;
+Var
+  HasRepo, HasDiff: Boolean;
+Begin
+  HasRepo := FRepoPath <> '';
+  HasDiff := Trim(FDiffText) <> '';
+  FBtnStageSel.Enabled := HasRepo And HasDiff And (Not FStagedSide);
+  FBtnUnstageSel.Enabled := HasRepo And HasDiff And FStagedSide;
+  If Assigned(FPopup) And (FPopup.Items.Count >= 2) Then
+    Begin
+      FPopup.Items[0].Enabled := FBtnStageSel.Enabled;
+      FPopup.Items[1].Enabled := FBtnUnstageSel.Enabled;
+    End;
+End;
+
+Procedure TGitDiffView.DoStatusChanged;
+Begin
+  If Assigned(FOnStatusChanged) Then
+    FOnStatusChanged(Self);
 End;
 
 Procedure TGitDiffView.Clear;
@@ -204,6 +303,7 @@ Begin
       Node := Node.GetNext;
     End;
   FTree.Items.Clear;
+  UpdateActionEnabled;
 End;
 
 Function TGitDiffView.NodeRange(Node: TTreeNode): TGitDiffRange;
@@ -231,7 +331,6 @@ Begin
 
   FEdit.CaretY := StartLine;
   FEdit.TopLine := StartLine;
-  { Select whole lines StartLine..EndLine }
   Y1 := StartLine;
   Y2 := EndLine;
   FEdit.BlockBegin := Point(1, Y1);
@@ -239,7 +338,311 @@ Begin
     FEdit.BlockEnd := Point(Length(FEdit.Lines[Y2 - 1]) + 1, Y2)
   Else
     FEdit.BlockEnd := Point(1, Y2 + 1);
-  FEdit.SetFocus;
+  Try
+    FEdit.SetFocus;
+  Except
+  End;
+  UpdateActionEnabled;
+End;
+
+Procedure TGitDiffView.GetSelectionLines(Out FirstLine, LastLine: Integer);
+Var
+  B, E: TPoint;
+  R: TGitDiffRange;
+Begin
+  FirstLine := 0;
+  LastLine := 0;
+  If FEdit.SelAvail Then
+    Begin
+      B := FEdit.BlockBegin;
+      E := FEdit.BlockEnd;
+      FirstLine := B.Y;
+      LastLine := E.Y;
+      { BlockEnd at col 1 of next line means exclusive end. }
+      If (E.X <= 1) And (E.Y > B.Y) Then
+        Dec(LastLine);
+      If FirstLine > LastLine Then
+        Begin
+          FirstLine := E.Y;
+          LastLine := B.Y;
+        End;
+    End
+  Else If Assigned(FTree.Selected) Then
+    Begin
+      R := NodeRange(FTree.Selected);
+      FirstLine := R.StartLine;
+      LastLine := R.EndLine;
+    End
+  Else
+    Begin
+      FirstLine := FEdit.CaretY;
+      LastLine := FEdit.CaretY;
+    End;
+  If FirstLine < 1 Then
+    FirstLine := 1;
+  If LastLine > FEdit.Lines.Count Then
+    LastLine := FEdit.Lines.Count;
+End;
+
+Function TGitDiffView.BuildPartialPatch(FirstLine, LastLine: Integer): String;
+Var
+  Lines, OutLines, FileHeader, HunkBody: TStringList;
+  I, LineNo, OldCount, NewCount, OldStart, NewStart: Integer;
+  Line, HeaderRest, FilePath: String;
+  InHunk, HunkHasChange, FileHasChange: Boolean;
+  Selected: Boolean;
+  SpacePos: Integer;
+
+  Function LineSelected(ALineNo: Integer): Boolean;
+  Begin
+    Result := (ALineNo >= FirstLine) And (ALineNo <= LastLine);
+  End;
+
+  Procedure FlushHunk;
+  Var
+    J: Integer;
+    NewHeader: String;
+  Begin
+    If Not InHunk Then
+      Exit;
+    InHunk := False;
+    If Not HunkHasChange Or (HunkBody.Count = 0) Then
+      Begin
+        HunkBody.Clear;
+        Exit;
+      End;
+    NewHeader := Format('@@ -%d,%d +%d,%d @@', [OldStart, OldCount, NewStart, NewCount]);
+    If HeaderRest <> '' Then
+      NewHeader := NewHeader + HeaderRest;
+    If Not FileHasChange Then
+      Begin
+        For J := 0 To FileHeader.Count - 1 Do
+          OutLines.Add(FileHeader[J]);
+        FileHasChange := True;
+      End;
+    OutLines.Add(NewHeader);
+    For J := 0 To HunkBody.Count - 1 Do
+      OutLines.Add(HunkBody[J]);
+    HunkBody.Clear;
+  End;
+
+  Procedure StartHunk(Const HeaderLine: String);
+  Var
+    S, Part: String;
+    C: Integer;
+  Begin
+    FlushHunk;
+    InHunk := True;
+    HunkHasChange := False;
+    HunkBody.Clear;
+    OldCount := 0;
+    NewCount := 0;
+    OldStart := 1;
+    NewStart := 1;
+    HeaderRest := '';
+    { @@ -oldStart,oldCount +newStart,newCount @@ optional }
+    S := HeaderLine;
+    If Copy(S, 1, 3) = '@@ ' Then
+      Delete(S, 1, 3);
+    SpacePos := Pos('@@', S);
+    If SpacePos > 0 Then
+      Begin
+        HeaderRest := Copy(S, SpacePos + 2, MaxInt);
+        S := Trim(Copy(S, 1, SpacePos - 1));
+      End;
+    { S like "-12,3 +14,5" or "-12 +14" }
+    C := Pos('+', S);
+    If C > 0 Then
+      Begin
+        Part := Trim(Copy(S, 1, C - 1)); { -12,3 }
+        If (Length(Part) > 0) And (Part[1] = '-') Then
+          Delete(Part, 1, 1);
+        SpacePos := Pos(',', Part);
+        If SpacePos > 0 Then
+          OldStart := StrToIntDef(Copy(Part, 1, SpacePos - 1), 1)
+        Else
+          OldStart := StrToIntDef(Part, 1);
+        Part := Trim(Copy(S, C + 1, MaxInt));
+        SpacePos := Pos(',', Part);
+        If SpacePos > 0 Then
+          NewStart := StrToIntDef(Copy(Part, 1, SpacePos - 1), 1)
+        Else
+          NewStart := StrToIntDef(Part, 1);
+      End;
+  End;
+
+Begin
+  Result := '';
+  If (FirstLine < 1) Or (LastLine < FirstLine) Or (FEdit.Lines.Count = 0) Then
+    Exit;
+
+  Lines := TStringList.Create;
+  OutLines := TStringList.Create;
+  FileHeader := TStringList.Create;
+  HunkBody := TStringList.Create;
+  Try
+    Lines.Assign(FEdit.Lines);
+    InHunk := False;
+    HunkHasChange := False;
+    FileHasChange := False;
+    FilePath := '';
+
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        LineNo := I + 1;
+        Line := Lines[I];
+
+        If Copy(Line, 1, 11) = 'diff --git ' Then
+          Begin
+            FlushHunk;
+            FileHeader.Clear;
+            FileHeader.Add(Line);
+            FileHasChange := False;
+            FilePath := Trim(Copy(Line, 12, MaxInt));
+            If Pos(' b/', FilePath) > 0 Then
+              FilePath := Copy(FilePath, Pos(' b/', FilePath) + 3, MaxInt);
+          End
+        Else If (Copy(Line, 1, 6) = 'index ') Or (Copy(Line, 1, 4) = '--- ') Or
+                (Copy(Line, 1, 4) = '+++ ') Or (Copy(Line, 1, 8) = 'new file') Or
+                (Copy(Line, 1, 12) = 'deleted file') Or (Copy(Line, 1, 8) = 'old mode') Or
+                (Copy(Line, 1, 8) = 'new mode') Or (Copy(Line, 1, 10) = 'similarity') Or
+                (Copy(Line, 1, 7) = 'rename ') Then
+          Begin
+            FlushHunk;
+            FileHeader.Add(Line);
+          End
+        Else If Copy(Line, 1, 2) = '@@' Then
+          StartHunk(Line)
+        Else If InHunk Then
+          Begin
+            Selected := LineSelected(LineNo);
+            If (Length(Line) = 0) Or (Line[1] = ' ') Then
+              Begin
+                HunkBody.Add(Line);
+                Inc(OldCount);
+                Inc(NewCount);
+              End
+            Else If (Line[1] = '-') And (Copy(Line, 1, 3) <> '---') Then
+              Begin
+                If Selected Then
+                  Begin
+                    HunkBody.Add(Line);
+                    Inc(OldCount);
+                    HunkHasChange := True;
+                  End
+                Else
+                  Begin
+                    { Unselected deletion stays in both sides as context. }
+                    HunkBody.Add(' ' + Copy(Line, 2, MaxInt));
+                    Inc(OldCount);
+                    Inc(NewCount);
+                  End;
+              End
+            Else If (Line[1] = '+') And (Copy(Line, 1, 3) <> '+++') Then
+              Begin
+                If Selected Then
+                  Begin
+                    HunkBody.Add(Line);
+                    Inc(NewCount);
+                    HunkHasChange := True;
+                  End;
+                { Unselected addition omitted from index-side patch. }
+              End
+            Else If Line[1] = '\' Then
+              HunkBody.Add(Line) { \ No newline at end of file }
+            Else
+              Begin
+                HunkBody.Add(Line);
+                Inc(OldCount);
+                Inc(NewCount);
+              End;
+          End;
+      End;
+    FlushHunk;
+
+    If OutLines.Count = 0 Then
+      Exit;
+    Result := OutLines.Text;
+  Finally
+    HunkBody.Free;
+    FileHeader.Free;
+    OutLines.Free;
+    Lines.Free;
+  End;
+End;
+
+Function TGitDiffView.StageSelection: Boolean;
+Var
+  FirstLine, LastLine: Integer;
+  Patch: String;
+Begin
+  Result := False;
+  If FStagedSide Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GetSelectionLines(FirstLine, LastLine);
+  Patch := BuildPartialPatch(FirstLine, LastLine);
+  If Trim(Patch) = '' Then
+    Begin
+      MessageDlg('Nothing to stage in the current selection. Select added/removed lines or a hunk.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+  Result := GitClient.ApplyPatchToIndex(Patch, False);
+  If Result Then
+    Begin
+      WorkflowLogger.Info('GitDiff', 'Staged selection in ' + FRepoPath);
+      DoStatusChanged;
+    End
+  Else
+    MessageDlg('Stage selection failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+End;
+
+Function TGitDiffView.UnstageSelection: Boolean;
+Var
+  FirstLine, LastLine: Integer;
+  Patch: String;
+Begin
+  Result := False;
+  If (Not FStagedSide) Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GetSelectionLines(FirstLine, LastLine);
+  Patch := BuildPartialPatch(FirstLine, LastLine);
+  If Trim(Patch) = '' Then
+    Begin
+      MessageDlg('Nothing to unstage in the current selection. Select added/removed lines or a hunk.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+  Result := GitClient.ApplyPatchToIndex(Patch, True);
+  If Result Then
+    Begin
+      WorkflowLogger.Info('GitDiff', 'Unstaged selection in ' + FRepoPath);
+      DoStatusChanged;
+    End
+  Else
+    MessageDlg('Unstage selection failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.BtnStageSelClick(Sender: TObject);
+Begin
+  StageSelection;
+End;
+
+Procedure TGitDiffView.BtnUnstageSelClick(Sender: TObject);
+Begin
+  UnstageSelection;
+End;
+
+Procedure TGitDiffView.PopupStageClick(Sender: TObject);
+Begin
+  StageSelection;
+End;
+
+Procedure TGitDiffView.PopupUnstageClick(Sender: TObject);
+Begin
+  UnstageSelection;
 End;
 
 Procedure TGitDiffView.ParseDiffIntoTree(Const DiffText: String);
@@ -306,7 +709,6 @@ Begin
               If Copy(Line, 1, 11) = 'diff --git ' Then
                 Begin
                   CloseFile;
-                  { diff --git a/path b/path }
                   Path := Trim(Copy(Line, 12, MaxInt));
                   If Pos(' b/', Path) > 0 Then
                     Path := Copy(Path, Pos(' b/', Path) + 3, MaxInt)
@@ -376,6 +778,7 @@ Begin
   Finally
     FTree.Items.EndUpdate;
   End;
+  UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.TreeChange(Sender: TObject; Node: TTreeNode);
@@ -400,11 +803,13 @@ Begin
     Begin
       Clear;
       FEdit.Lines.Text := '(no textual diff)';
+      UpdateActionEnabled;
       Exit;
     End;
   ParseDiffIntoTree(DiffText);
   FEdit.Highlighter := FHigh;
   ConfigureDiffColors;
+  UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.LoadPlainText(Const Title, Content: String);
@@ -415,6 +820,7 @@ Begin
   ApplyIDEEditorAppearance;
   FEdit.Highlighter := Nil;
   FEdit.Lines.Text := Content;
+  UpdateActionEnabled;
 End;
 
 Function TGitDiffView.SelectedPath: String;
