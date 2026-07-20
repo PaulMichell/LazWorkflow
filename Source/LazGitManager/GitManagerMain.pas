@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, LCLType, MenuIntf, IDECommands, IDEWindowIntf,
-  SrcEditorIntf, ProjectIntf, LazIDEIntf;
+  LazIDEIntf;
 
 Procedure RegisterGitManager;
 
@@ -51,45 +51,40 @@ End;
 Procedure DoGitPush(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Push requested');
-  { TODO: push via GitService }
+  { TODO: push via GitClient }
 End;
 
 Procedure DoGitPull(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Pull requested');
-  { TODO: pull via GitService }
+  { TODO: pull via GitClient }
 End;
 
 Procedure DoGitFetch(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Fetch requested');
-  { TODO: fetch via GitService }
+  { TODO: fetch via GitClient }
 End;
 
 Procedure CreateGitGraphForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  If DoDisableAutoSizing Then
-    Begin
-      AForm := TGitGraphForm.Create(Nil);
-      AForm.DisableAutoSizing;
-    End
-  Else
-    AForm := TGitGraphForm.Create(Nil);
+  IDEWindowCreators.CreateForm(AForm, TGitGraphForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
+  AForm.Name := AFormName;
 End;
 
 Procedure RegisterGitManager;
 Var
-  Parent, Item: TIDEMenuSection;
+  Parent: TIDEMenuSection;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
   WorkflowLogger.Info('GitManager', 'Registering LazGitManager');
 
-  { Command category }
-  Cat := IDECommandList.CreateCategory(Nil, 'Git', 'Git', IDEListEditorCategory);
+  Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
+  If Cat = Nil Then
+    Cat := IDECommandList.CreateCategory(Nil, 'Git', 'Git');
 
-  { Commands }
   Key := IDEShortCut(VK_UNKNOWN, []);
   CmdGitGraph := RegisterIDECommand(Cat, 'GitGraph', 'Show Git Graph', Key, Nil, @ShowGitGraphWindow);
   CmdGitStatus := RegisterIDECommand(Cat, 'GitStatus', 'Git Status', Key, Nil, @DoGitStatus);
@@ -98,27 +93,20 @@ Begin
   CmdGitPull := RegisterIDECommand(Cat, 'GitPull', 'Git Pull', Key, Nil, @DoGitPull);
   CmdGitFetch := RegisterIDECommand(Cat, 'GitFetch', 'Git Fetch', Key, Nil, @DoGitFetch);
 
-  { Main menu – attach under Tools for maximum compatibility }
-  Parent := RegisterIDEMenuSection(itmTools, 'GitSection');
+  Parent := RegisterIDEMenuSection(itmSecondaryTools, 'GitSection');
   Parent.Caption := 'Git';
-  Item := RegisterIDEMenuCommand(Parent, 'GitGraph', 'Git Graph', Nil, Nil, CmdGitGraph);
-  Item := RegisterIDEMenuCommand(Parent, 'GitStatus', 'Status', Nil, Nil, CmdGitStatus);
-  Item := RegisterIDEMenuCommand(Parent, 'GitCommit', 'Commit...', Nil, Nil, CmdGitCommit);
+  RegisterIDEMenuCommand(Parent, 'GitGraph', 'Git Graph', Nil, Nil, CmdGitGraph);
+  RegisterIDEMenuCommand(Parent, 'GitStatus', 'Status', Nil, Nil, CmdGitStatus);
+  RegisterIDEMenuCommand(Parent, 'GitCommit', 'Commit...', Nil, Nil, CmdGitCommit);
   RegisterIDEMenuSection(Parent, 'GitSep1');
-  Item := RegisterIDEMenuCommand(Parent, 'GitFetch', 'Fetch', Nil, Nil, CmdGitFetch);
-  Item := RegisterIDEMenuCommand(Parent, 'GitPull', 'Pull', Nil, Nil, CmdGitPull);
-  Item := RegisterIDEMenuCommand(Parent, 'GitPush', 'Push', Nil, Nil, CmdGitPush);
+  RegisterIDEMenuCommand(Parent, 'GitFetch', 'Fetch', Nil, Nil, CmdGitFetch);
+  RegisterIDEMenuCommand(Parent, 'GitPull', 'Pull', Nil, Nil, CmdGitPull);
+  RegisterIDEMenuCommand(Parent, 'GitPush', 'Push', Nil, Nil, CmdGitPush);
 
-  { Dockable window }
   GitGraphWindowCreator := IDEWindowCreators.Add('GitGraph', @CreateGitGraphForm, Nil,
     '100', '100', '900', '600');
-  GitGraphWindowCreator.CreateLayout := True;
 
   WorkflowLogger.Info('GitManager', 'LazGitManager registered successfully');
 End;
-
-Initialization
-
-Finalization
 
 End.

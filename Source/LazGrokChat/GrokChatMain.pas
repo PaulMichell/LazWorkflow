@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, LCLType, MenuIntf, IDECommands, IDEWindowIntf,
-  SrcEditorIntf, ProjectIntf, LazIDEIntf;
+  LazIDEIntf, CompOptsIntf;
 
 Procedure RegisterGrokChat;
 
@@ -21,7 +21,7 @@ Var
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, ProjectIntf;
+  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService;
 
 Var
   CmdGrokChat: TIDECommand;
@@ -57,24 +57,21 @@ End;
 Procedure CreateGrokChatForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  If DoDisableAutoSizing Then
-    Begin
-      AForm := TGrokChatForm.Create(Nil);
-      AForm.DisableAutoSizing;
-    End
-  Else
-    AForm := TGrokChatForm.Create(Nil);
+  IDEWindowCreators.CreateForm(AForm, TGrokChatForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
+  AForm.Name := AFormName;
 End;
 
 Procedure RegisterGrokChat;
 Var
-  Parent, Item: TIDEMenuSection;
+  Parent: TIDEMenuSection;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
   WorkflowLogger.Info('GrokChat', 'Registering LazGrokChat');
 
-  Cat := IDECommandList.CreateCategory(Nil, 'Grok', 'Grok', IDEListEditorCategory);
+  Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
+  If Cat = Nil Then
+    Cat := IDECommandList.CreateCategory(Nil, 'Grok', 'Grok');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
   CmdGrokChat := RegisterIDECommand(Cat, 'GrokChat', 'Show Grok Chat', Key, Nil, @ShowGrokChatWindow);
@@ -82,17 +79,16 @@ Begin
   CmdGrokOpenMarkdown := RegisterIDECommand(Cat, 'GrokOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoGrokOpenMarkdown);
   CmdGrokBuild := RegisterIDECommand(Cat, 'GrokBuild', 'Build Project (Grok)', Key, Nil, @DoGrokBuild);
 
-  Parent := RegisterIDEMenuSection(itmTools, 'GrokSection');
+  Parent := RegisterIDEMenuSection(itmSecondaryTools, 'GrokSection');
   Parent.Caption := 'Grok';
-  Item := RegisterIDEMenuCommand(Parent, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
-  Item := RegisterIDEMenuCommand(Parent, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
-  Item := RegisterIDEMenuCommand(Parent, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
+  RegisterIDEMenuCommand(Parent, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
+  RegisterIDEMenuCommand(Parent, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
+  RegisterIDEMenuCommand(Parent, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
   RegisterIDEMenuSection(Parent, 'GrokSep1');
-  Item := RegisterIDEMenuCommand(Parent, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
+  RegisterIDEMenuCommand(Parent, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
 
   GrokChatWindowCreator := IDEWindowCreators.Add('GrokChat', @CreateGrokChatForm, Nil,
     '120', '80', '800', '650');
-  GrokChatWindowCreator.CreateLayout := True;
 
   WorkflowLogger.Info('GrokChat', 'LazGrokChat registered successfully');
 End;

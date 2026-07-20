@@ -18,7 +18,7 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  GrokChatMain, GrokChatForm;
+  GrokChatMain;
 
 Procedure Register;
 Begin

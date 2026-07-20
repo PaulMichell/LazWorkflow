@@ -53,7 +53,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, LazIDEIntf, ProjectIntf;
+  WorkflowLog, GrokService, LazIDEIntf, CompOptsIntf;
 
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
