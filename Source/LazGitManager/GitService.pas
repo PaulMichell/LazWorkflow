@@ -24,6 +24,7 @@ Type
     Function DetectRepository(Const StartPath: String): String;
     Function IsRepository(Const Path: String): Boolean;
     Function GetHeadSha(Out Sha: String): Boolean;
+    Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
     Function Fetch(Const Remote: String = 'origin'): Boolean;
     Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
@@ -128,6 +129,17 @@ Begin
   Result := RunGit(['rev-parse', 'HEAD'], OutputText, ExitCode);
   If Result Then
     Sha := Trim(OutputText);
+End;
+
+Function TGitService.GetCurrentBranch(Out Branch: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Branch := '';
+  Result := RunGit(['rev-parse', '--abbrev-ref', 'HEAD'], OutputText, ExitCode);
+  If Result Then
+    Branch := Trim(OutputText);
 End;
 
 Function TGitService.GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;

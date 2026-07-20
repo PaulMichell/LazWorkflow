@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, LCLType, MenuIntf, IDECommands, IDEWindowIntf,
-  LazIDEIntf;
+  LazIDEIntf, ProjectIntf;
 
 Procedure RegisterGitManager;
 
@@ -23,6 +23,14 @@ Implementation
 Uses
   WorkflowLog, WorkflowEvents, GitGraphForm, GitService;
 
+Type
+  { Holds IDE project handlers (must be methods of a class for TLazProjectChangedFunction). }
+  TGitManagerIDEHooks = Class
+  Public
+    Function ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
+    Function ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+  End;
+
 Var
   CmdGitGraph: TIDECommand;
   CmdGitStatus: TIDECommand;
@@ -30,6 +38,43 @@ Var
   CmdGitPush: TIDECommand;
   CmdGitPull: TIDECommand;
   CmdGitFetch: TIDECommand;
+  GitManagerIDEHooks: TGitManagerIDEHooks;
+
+Function TGitManagerIDEHooks.ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
+Var
+  StartPath, RepoPath: String;
+Begin
+  Result := mrOk;
+  If Not Assigned(AProject) Or AProject.IsVirtual Then
+    Exit;
+  If AProject.ProjectInfoFile <> '' Then
+    StartPath := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
+  Else If Assigned(AProject.MainFile) Then
+    StartPath := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename))
+  Else
+    Exit;
+  If Assigned(GitClient) Then
+    Begin
+      RepoPath := GitClient.DetectRepository(StartPath);
+      If RepoPath <> '' Then
+        Begin
+          GitClient.RepoPath := RepoPath;
+          WorkflowLogger.Info('GitManager', 'Project opened – repository: ' + RepoPath);
+          WorkflowEventBus.NotifyRepositoryStateChanged(RepoPath, grsUnknown);
+        End
+      Else
+        WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
+    End;
+  RefreshOpenGitGraphForms;
+End;
+
+Function TGitManagerIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+Begin
+  Result := mrOk;
+  If Assigned(GitClient) Then
+    GitClient.RepoPath := '';
+  RefreshOpenGitGraphForms;
+End;
 
 Procedure ShowGitGraphWindow(Sender: TObject);
 Begin
@@ -39,7 +84,8 @@ End;
 Procedure DoGitStatus(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Status requested');
-  { TODO: open status window or refresh graph }
+  ShowGitGraphWindow(Sender);
+  RefreshOpenGitGraphForms;
 End;
 
 Procedure DoGitCommit(Sender: TObject);
@@ -51,19 +97,28 @@ End;
 Procedure DoGitPush(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Push requested');
-  { TODO: push via GitClient }
+  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+    GitClient.Push
+  Else
+    WorkflowLogger.Warning('GitManager', 'Push skipped – no repository');
 End;
 
 Procedure DoGitPull(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Pull requested');
-  { TODO: pull via GitClient }
+  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+    GitClient.Pull
+  Else
+    WorkflowLogger.Warning('GitManager', 'Pull skipped – no repository');
 End;
 
 Procedure DoGitFetch(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitManager', 'Git Fetch requested');
-  { TODO: fetch via GitClient }
+  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+    GitClient.Fetch
+  Else
+    WorkflowLogger.Warning('GitManager', 'Fetch skipped – no repository');
 End;
 
 Procedure CreateGitGraphForm(Sender: TObject; AFormName: String;
@@ -71,6 +126,8 @@ Procedure CreateGitGraphForm(Sender: TObject; AFormName: String;
 Begin
   IDEWindowCreators.CreateForm(AForm, TGitGraphForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
   AForm.Name := AFormName;
+  If AForm Is TGitGraphForm Then
+    TGitGraphForm(AForm).BindRepository;
 End;
 
 Procedure RegisterGitManager;
@@ -80,6 +137,9 @@ Var
   Cat: TIDECommandCategory;
 Begin
   WorkflowLogger.Info('GitManager', 'Registering LazGitManager');
+
+  If GitManagerIDEHooks = Nil Then
+    GitManagerIDEHooks := TGitManagerIDEHooks.Create;
 
   Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
   If Cat = Nil Then
@@ -106,7 +166,26 @@ Begin
   GitGraphWindowCreator := IDEWindowCreators.Add('GitGraph', @CreateGitGraphForm, Nil,
     '100', '100', '900', '600');
 
+  If Assigned(LazarusIDE) Then
+    Begin
+      LazarusIDE.AddHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
+      LazarusIDE.AddHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
+    End;
+
   WorkflowLogger.Info('GitManager', 'LazGitManager registered successfully');
 End;
+
+Initialization
+
+GitManagerIDEHooks := Nil;
+
+Finalization
+
+If Assigned(LazarusIDE) And Assigned(GitManagerIDEHooks) Then
+  Begin
+    LazarusIDE.RemoveHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
+    LazarusIDE.RemoveHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
+  End;
+FreeAndNil(GitManagerIDEHooks);
 
 End.

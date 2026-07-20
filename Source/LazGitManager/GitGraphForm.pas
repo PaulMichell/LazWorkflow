@@ -26,12 +26,17 @@ Type
     FActionList: TActionList;
     FRefreshAction: TAction;
     FRepoPath: String;
+    FBranch: String;
+    FHeadSha: String;
+    FClean: Boolean;
     Procedure CreateUI;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
+    Procedure FormShow(Sender: TObject);
     Procedure PaintBoxPaint(Sender: TObject);
     Procedure RefreshActionExecute(Sender: TObject);
     Procedure UpdateStatus;
+    Procedure RefreshRepositoryInfo;
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
     Procedure WorkingTreeChanged(Const RepoPath: String);
@@ -40,19 +45,51 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
+    /// Detect Git root from the active Lazarus project (or StartPath) and bind the window.
+    Procedure BindRepository(Const StartPath: String = '');
     Procedure SetRepository(Const ARepoPath: String);
+    Property RepoPath: String Read FRepoPath;
   End;
+
+/// Walk open forms and re-bind any Git Graph windows to the active project.
+Procedure RefreshOpenGitGraphForms;
 
 Implementation
 
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService;
+  WorkflowLog, GitService, LazIDEIntf, ProjectIntf;
+
+Function DetectStartPathFromIDE: String;
+Var
+  Project: TLazProject;
+Begin
+  Result := '';
+  If Not Assigned(LazarusIDE) Then
+    Exit;
+  Project := LazarusIDE.ActiveProject;
+  If Not Assigned(Project) Or Project.IsVirtual Then
+    Exit;
+  If Project.ProjectInfoFile <> '' Then
+    Result := ExtractFilePath(ExpandFileName(Project.ProjectInfoFile));
+  If (Result = '') And Assigned(Project.MainFile) And (Project.MainFile.Filename <> '') Then
+    Result := ExtractFilePath(ExpandFileName(Project.MainFile.Filename));
+End;
+
+Procedure RefreshOpenGitGraphForms;
+Var
+  I: Integer;
+Begin
+  For I := 0 To Screen.CustomFormCount - 1 Do
+    If Screen.CustomForms[I] Is TGitGraphForm Then
+      TGitGraphForm(Screen.CustomForms[I]).BindRepository;
+End;
 
 Constructor TGitGraphForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
+  FClean := True;
   CreateUI;
   WorkflowEventBus.AddListener(Self);
 End;
@@ -147,11 +184,11 @@ Begin
 
   OnCreate := @FormCreate;
   OnDestroy := @FormDestroy;
+  OnShow := @FormShow;
 End;
 
 Procedure TGitGraphForm.FormCreate(Sender: TObject);
 Begin
-  UpdateStatus;
   WorkflowLogger.Info('GitGraph', 'Git Graph window created');
 End;
 
@@ -160,11 +197,17 @@ Begin
   WorkflowLogger.Info('GitGraph', 'Git Graph window destroyed');
 End;
 
+Procedure TGitGraphForm.FormShow(Sender: TObject);
+Begin
+  { Project may not be fully available during Create; bind when shown. }
+  BindRepository;
+End;
+
 Procedure TGitGraphForm.PaintBoxPaint(Sender: TObject);
 Var
   R: TRect;
+  CaptionText: String;
 Begin
-  { Placeholder graph rendering – Phase 1 will implement full lane-based drawing. }
   With FPaintBox.Canvas Do
     Begin
       Brush.Color := clWindow;
@@ -172,33 +215,126 @@ Begin
       Font.Color := clGrayText;
       Font.Size := 12;
       R := FPaintBox.ClientRect;
-      DrawText(Handle, PChar('Git Graph – commit history tree will be rendered here'),
-        -1, R, DT_CENTER Or DT_VCENTER Or DT_SINGLELINE);
+      If FRepoPath = '' Then
+        CaptionText := 'No Git repository detected for the active project'
+      Else
+        CaptionText := Format('Repository: %s  ·  commit graph rendering – Phase 1',
+          [ExtractFileName(ExcludeTrailingPathDelimiter(FRepoPath))]);
+      DrawText(Handle, PChar(CaptionText), -1, R, DT_CENTER Or DT_VCENTER Or DT_SINGLELINE);
     End;
 End;
 
 Procedure TGitGraphForm.RefreshActionExecute(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitGraph', 'Manual refresh requested');
-  If FRepoPath <> '' Then
-    Begin
-      { TODO: call GitClient.Refresh }
-      FPaintBox.Invalidate;
-    End;
-  UpdateStatus;
+  BindRepository;
 End;
 
 Procedure TGitGraphForm.UpdateStatus;
+Var
+  LeftText, CentreText, RightText: String;
+  ShortSha: String;
 Begin
   If FRepoPath = '' Then
-    FStatusFooter.SetAll('No repository', '', 'Ready')
+    Begin
+      FStatusFooter.SetAll('No repository', '', 'Ready');
+      Exit;
+    End;
+
+  If FBranch <> '' Then
+    LeftText := FBranch
   Else
-    FStatusFooter.SetAll(ExtractFileName(FRepoPath), FRepoPath, 'Ready');
+    LeftText := ExtractFileName(ExcludeTrailingPathDelimiter(FRepoPath));
+
+  ShortSha := FHeadSha;
+  If Length(ShortSha) > 7 Then
+    ShortSha := Copy(ShortSha, 1, 7);
+  If ShortSha <> '' Then
+    CentreText := ShortSha + '  ·  ' + FRepoPath
+  Else
+    CentreText := FRepoPath;
+
+  If FClean Then
+    RightText := 'Clean'
+  Else
+    RightText := 'Dirty';
+
+  FStatusFooter.SetAll(LeftText, CentreText, RightText);
+End;
+
+Procedure TGitGraphForm.RefreshRepositoryInfo;
+Var
+  Branch, Sha, Porcelain: String;
+  Clean: Boolean;
+Begin
+  FBranch := '';
+  FHeadSha := '';
+  FClean := True;
+  If FRepoPath = '' Then
+    Exit;
+  If Not Assigned(GitClient) Then
+    Exit;
+
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.GetCurrentBranch(Branch) Then
+    FBranch := Branch;
+  If GitClient.GetHeadSha(Sha) Then
+    FHeadSha := Sha;
+  If GitClient.GetStatus(Clean, Porcelain) Then
+    FClean := Clean;
+
+  FDetailMemo.Lines.BeginUpdate;
+  Try
+    FDetailMemo.Lines.Clear;
+    FDetailMemo.Lines.Add('Repository: ' + FRepoPath);
+    If FBranch <> '' Then
+      FDetailMemo.Lines.Add('Branch:     ' + FBranch);
+    If FHeadSha <> '' Then
+      FDetailMemo.Lines.Add('HEAD:       ' + FHeadSha);
+    If FClean Then
+      FDetailMemo.Lines.Add('Status:     clean')
+    Else
+      Begin
+        FDetailMemo.Lines.Add('Status:     dirty');
+        If Trim(Porcelain) <> '' Then
+          Begin
+            FDetailMemo.Lines.Add('');
+            FDetailMemo.Lines.Add(Porcelain);
+          End;
+      End;
+  Finally
+    FDetailMemo.Lines.EndUpdate;
+  End;
+End;
+
+Procedure TGitGraphForm.BindRepository(Const StartPath: String);
+Var
+  SearchPath, Found: String;
+Begin
+  SearchPath := StartPath;
+  If SearchPath = '' Then
+    SearchPath := DetectStartPathFromIDE;
+  If SearchPath = '' Then
+    SearchPath := GetCurrentDir;
+
+  Found := '';
+  If Assigned(GitClient) And (SearchPath <> '') Then
+    Found := GitClient.DetectRepository(SearchPath);
+
+  If Found <> '' Then
+    WorkflowLogger.Info('GitGraph', 'Bound repository: ' + Found)
+  Else
+    WorkflowLogger.Warning('GitGraph', 'No repository found from: ' + SearchPath);
+
+  SetRepository(Found);
 End;
 
 Procedure TGitGraphForm.SetRepository(Const ARepoPath: String);
 Begin
   FRepoPath := ARepoPath;
+  If Assigned(GitClient) Then
+    GitClient.RepoPath := ARepoPath;
+  RefreshRepositoryInfo;
   UpdateStatus;
   FPaintBox.Invalidate;
 End;
@@ -207,6 +343,7 @@ Procedure TGitGraphForm.RepositoryStateChanged(Const RepoPath: String; NewState:
 Begin
   If SameText(RepoPath, FRepoPath) Then
     Begin
+      RefreshRepositoryInfo;
       UpdateStatus;
       FPaintBox.Invalidate;
     End;
@@ -215,14 +352,20 @@ End;
 Procedure TGitGraphForm.WorkingTreeChanged(Const RepoPath: String);
 Begin
   If SameText(RepoPath, FRepoPath) Then
-    FPaintBox.Invalidate;
+    Begin
+      RefreshRepositoryInfo;
+      UpdateStatus;
+      FPaintBox.Invalidate;
+    End;
 End;
 
 Procedure TGitGraphForm.HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
 Begin
   If SameText(RepoPath, FRepoPath) Then
     Begin
-      FDetailMemo.Lines.Text := 'HEAD now at ' + NewHeadSha;
+      FHeadSha := NewHeadSha;
+      RefreshRepositoryInfo;
+      UpdateStatus;
       FPaintBox.Invalidate;
     End;
 End;
