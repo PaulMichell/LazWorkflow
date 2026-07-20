@@ -164,8 +164,13 @@ Begin
     IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
   CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
-  { Top-level Repository menu on the IDE main menu bar. }
+  { Top-level Repository menu, placed immediately after Run. }
   RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
+  If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
+    Begin
+      mnuMain.Remove(RepoMenu);
+      mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
+    End;
   RegisterIDEMenuCommand(RepoMenu, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
   RegisterIDEMenuCommand(RepoMenu, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
   RegisterIDEMenuSection(RepoMenu, 'RepoSep1');
