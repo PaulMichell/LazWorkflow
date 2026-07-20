@@ -32,7 +32,8 @@ Type
     FCaption: TLabel;
     FDiffText: String;
     Procedure BuildUI;
-    Procedure ConfigureHighlighter;
+    Procedure ApplyIDEEditorAppearance;
+    Procedure ConfigureDiffColors;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
@@ -49,6 +50,9 @@ Type
 
 Implementation
 
+Uses
+  EditorOptionsIntf;
+
 Type
   PGitDiffRange = ^TGitDiffRange;
 
@@ -60,9 +64,9 @@ Begin
   BuildUI;
 End;
 
-Procedure TGitDiffView.ConfigureHighlighter;
+Procedure TGitDiffView.ConfigureDiffColors;
 Begin
-  { Soft Grok-style backgrounds for added/removed lines. }
+  { Soft green/red line marks; keep IDE font/size from GetSynEditorSettings. }
   FHigh.LineAddedAttri.Foreground := RGBToColor(27, 94, 32);
   FHigh.LineAddedAttri.Background := RGBToColor(232, 245, 233);
   FHigh.LineRemovedAttri.Foreground := RGBToColor(183, 28, 28);
@@ -76,6 +80,39 @@ Begin
   FHigh.OrigFileAttri.Foreground := RGBToColor(183, 28, 28);
   FHigh.OrigFileAttri.Background := clNone;
   FHigh.LineContextAttri.Foreground := clWindowText;
+  FHigh.LineContextAttri.Background := clNone;
+  FHigh.SpaceAttri.Background := clNone;
+  FHigh.UnknownAttri.Background := clNone;
+End;
+
+Procedure TGitDiffView.ApplyIDEEditorAppearance;
+Begin
+  { Match main Lazarus source editors: font, size, quality, spacing, gutter. }
+  If Assigned(IDEEditorOptions) Then
+    Begin
+      IDEEditorOptions.GetSynEditorSettings(FEdit);
+      If Assigned(FHigh) Then
+        IDEEditorOptions.GetHighlighterSettings(FHigh);
+    End
+  Else
+    Begin
+      { Fallback when IDE options are not yet available. }
+      FEdit.Font.Size := 10;
+      FEdit.Font.Name := 'Courier New';
+      FEdit.Font.Pitch := fpFixed;
+      FEdit.Font.Quality := fqCleartypeNatural;
+    End;
+
+  FEdit.ReadOnly := True;
+  FEdit.WantTabs := True;
+  FEdit.RightGutter.Visible := False;
+  { Special-char glyphs make mono text look broken; keep plain source style. }
+  FEdit.Options := FEdit.Options - [eoShowSpecialChars];
+  If Assigned(FHigh) Then
+    Begin
+      FEdit.Highlighter := FHigh;
+      ConfigureDiffColors;
+    End;
 End;
 
 Procedure TGitDiffView.BuildUI;
@@ -133,7 +170,6 @@ Begin
     End;
 
   FHigh := TSynDiffSyn.Create(Self);
-  ConfigureHighlighter;
 
   FEdit := TSynEdit.Create(Self);
   With FEdit Do
@@ -142,15 +178,9 @@ Begin
       Align := alClient;
       BorderSpacing.Around := 4;
       Highlighter := FHigh;
-      ReadOnly := True;
-      Font.Name := 'Monospace';
-      Font.Size := 9;
-      Options := Options + [eoShowSpecialChars, eoBracketHighlight];
-      Options := Options - [eoScrollPastEol];
-      Gutter.Visible := True;
-      RightGutter.Visible := False;
-      WantTabs := True;
     End;
+
+  ApplyIDEEditorAppearance;
 End;
 
 Procedure TGitDiffView.Clear;
@@ -365,6 +395,7 @@ Begin
     FCaption.Caption := Title
   Else
     FCaption.Caption := 'Diff';
+  ApplyIDEEditorAppearance;
   If Trim(DiffText) = '' Then
     Begin
       Clear;
@@ -373,6 +404,7 @@ Begin
     End;
   ParseDiffIntoTree(DiffText);
   FEdit.Highlighter := FHigh;
+  ConfigureDiffColors;
 End;
 
 Procedure TGitDiffView.LoadPlainText(Const Title, Content: String);
@@ -380,6 +412,7 @@ Begin
   Clear;
   If Title <> '' Then
     FCaption.Caption := Title;
+  ApplyIDEEditorAppearance;
   FEdit.Highlighter := Nil;
   FEdit.Lines.Text := Content;
 End;
