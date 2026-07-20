@@ -96,6 +96,7 @@ Type
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
     Procedure QuietRefreshIfChanged;
+    Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
     Procedure WorkingTreeChanged(Const RepoPath: String);
@@ -841,9 +842,130 @@ Begin
     Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(CommitTime));
 End;
 
+Procedure TGitGraphForm.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
+Type
+  TRefKind = (rkLocal, rkRemote, rkTag, rkOther);
+Var
+  Parts: TStringList;
+  I, ArrowPos, CardW, CardH, CardY, PadX: Integer;
+  Token, Name: String;
+  Kind: TRefKind;
+  Bg, Fg, Border: TColor;
+Begin
+  If Trim(Refs) = '' Then
+    Exit;
+
+  Parts := TStringList.Create;
+  Try
+    { Manual split – DelimitedText mishandles spaces around commas. }
+    Token := Refs;
+    While Token <> '' Do
+      Begin
+        I := Pos(',', Token);
+        If I = 0 Then
+          Begin
+            Parts.Add(Trim(Token));
+            Break;
+          End;
+        Parts.Add(Trim(Copy(Token, 1, I - 1)));
+        Token := Copy(Token, I + 1, MaxInt);
+      End;
+
+    CardH := 16;
+    PadX := 6;
+    CardY := RowTop + (GitGraphRowHeight - CardH) Div 2;
+
+    For I := 0 To Parts.Count - 1 Do
+      Begin
+        Token := Trim(Parts[I]);
+        If Token = '' Then
+          Continue;
+
+        { HEAD -> main  →  show "main" as local branch }
+        ArrowPos := Pos(' -> ', Token);
+        If ArrowPos > 0 Then
+          Begin
+            Name := Trim(Copy(Token, ArrowPos + 4, MaxInt));
+            Kind := rkLocal;
+          End
+        Else If SameText(Copy(Token, 1, 5), 'tag: ') Then
+          Begin
+            Name := Trim(Copy(Token, 6, MaxInt));
+            Kind := rkTag;
+          End
+        Else If SameText(Token, 'HEAD') Then
+          Continue { HEAD alone is implied by the tip branch card }
+        Else
+          Begin
+            Name := Token;
+            If Pos('/', Name) > 0 Then
+              Kind := rkRemote
+            Else
+              Kind := rkLocal;
+          End;
+
+        If Name = '' Then
+          Continue;
+
+        Case Kind Of
+          rkLocal:
+            Begin
+              { Gitg-like cool blue local branch chip }
+              Bg := RGBToColor(227, 242, 253);
+              Fg := RGBToColor(13, 71, 161);
+              Border := RGBToColor(66, 165, 245);
+            End;
+          rkRemote:
+            Begin
+              { Warm amber remote chip }
+              Bg := RGBToColor(255, 243, 224);
+              Fg := RGBToColor(230, 81, 0);
+              Border := RGBToColor(255, 167, 38);
+            End;
+          rkTag:
+            Begin
+              Bg := RGBToColor(243, 229, 245);
+              Fg := RGBToColor(106, 27, 154);
+              Border := RGBToColor(186, 104, 200);
+            End;
+        Else
+          Begin
+            Bg := RGBToColor(245, 245, 245);
+            Fg := RGBToColor(66, 66, 66);
+            Border := RGBToColor(189, 189, 189);
+          End;
+        End;
+
+        With FPaintBox.Canvas Do
+          Begin
+            Font.Size := 8;
+            Font.Style := [];
+            Font.Color := Fg;
+            CardW := TextWidth(Name) + PadX * 2;
+            If CardW < 28 Then
+              CardW := 28;
+
+            Brush.Style := bsSolid;
+            Brush.Color := Bg;
+            Pen.Color := Border;
+            Pen.Width := 1;
+            RoundRect(TextX, CardY, TextX + CardW, CardY + CardH, 10, 10);
+
+            Brush.Style := bsClear;
+            TextOut(TextX + PadX, CardY + (CardH - TextHeight(Name)) Div 2, Name);
+            Brush.Style := bsSolid;
+          End;
+
+        TextX := TextX + CardW + 5;
+      End;
+  Finally
+    Parts.Free;
+  End;
+End;
+
 Procedure TGitGraphForm.PaintBoxPaint(Sender: TObject);
 Var
-  FirstRow, LastRow, I, TextX, Y, X, Off: Integer;
+  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Col: TColor;
@@ -896,7 +1018,6 @@ Begin
             End;
         End;
 
-      Font.Size := 9;
       For I := FirstRow To LastRow Do
         Begin
           C := FModel.Commit(I);
@@ -912,25 +1033,32 @@ Begin
           X := LaneX(C.Lane);
           Brush.Color := Col;
           Pen.Color := Col;
+          Pen.Width := 1;
           Ellipse(X - GitGraphNodeRadius, RowMidY(I) - GitGraphNodeRadius,
             X + GitGraphNodeRadius, RowMidY(I) + GitGraphNodeRadius);
 
           TextX := FModel.GraphWidth + GitGraphTextGap;
           Brush.Style := bsClear;
+          Font.Size := 9;
+          Font.Style := [];
           Font.Color := clGrayText;
           DateText := FormatCommitDate(C.CommitTime);
           TextOut(TextX, Y + 3, DateText);
+
+          TextX := TextX + 130;
           Font.Color := clWindowText;
           If C.DetailsLoaded Then
-            Begin
-              LabelText := C.Subject;
-              If C.Refs <> '' Then
-                LabelText := LabelText + '  (' + C.Refs + ')';
-            End
+            LabelText := C.Subject
           Else
             LabelText := '…';
-          TextOut(TextX + 130, Y + 3, LabelText);
+          TextOut(TextX, Y + 3, LabelText);
+          SubjectW := TextWidth(LabelText);
+          TextX := TextX + SubjectW + 8;
           Brush.Style := bsSolid;
+
+          { Branch/tag cards after the subject (Gitg-style chips). }
+          If C.DetailsLoaded And (C.Refs <> '') Then
+            DrawRefCards(C.Refs, TextX, Y);
         End;
     End;
 End;
