@@ -1,0 +1,11 @@
+object GrokChatForm: TGrokChatForm
+  Left = 0
+  Height = 650
+  Top = 0
+  Width = 800
+  Caption = 'Grok Chat'
+  ClientHeight = 650
+  ClientWidth = 800
+  Position = poDefaultPosOnly
+  LCLVersion = '3.0'
+end

@@ -1,0 +1,27 @@
+# Lazarus / FPC
+*.o
+*.ppu
+*.compiled
+*.rst
+*.rsj
+*.lps
+lib/
+backup/
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+
+# Build output
+Lib/
+**/Lib/
+
+# IDE
+*.lps
+.lazarus/
+
+# OS
+.DS_Store
+Thumbs.db
+*~
