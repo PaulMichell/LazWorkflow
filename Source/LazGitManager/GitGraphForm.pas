@@ -27,6 +27,7 @@ Type
     FDetailPanel: TPanel;
     FDetailMemo: TMemo;
     FActionList: TActionList;
+    FCommitAction: TAction;
     FFetchAction: TAction;
     FPullAction: TAction;
     FPushAction: TAction;
@@ -66,6 +67,7 @@ Type
     Procedure GraphHostResize(Sender: TObject);
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
+    Procedure CommitActionExecute(Sender: TObject);
     Procedure FetchActionExecute(Sender: TObject);
     Procedure PullActionExecute(Sender: TObject);
     Procedure PushActionExecute(Sender: TObject);
@@ -117,7 +119,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, LazIDEIntf, ProjectIntf, DateUtils, Math;
+  WorkflowLog, GitService, GitConfig, GitCommitForm, LazIDEIntf, ProjectIntf, DateUtils, Math;
 
 Type
   TGitIndexThread = Class(TThread)
@@ -327,6 +329,12 @@ Begin
 
   FActionList := TActionList.Create(Self);
 
+  FCommitAction := TAction.Create(Self);
+  FCommitAction.Caption := 'Commit…';
+  FCommitAction.OnExecute := @CommitActionExecute;
+  FCommitAction.ActionList := FActionList;
+  FCommitAction.ShortCut := ShortCut(VK_C, [ssCtrl, ssShift]);
+
   FFetchAction := TAction.Create(Self);
   FFetchAction.Caption := 'Fetch';
   FFetchAction.OnExecute := @FetchActionExecute;
@@ -352,6 +360,12 @@ Begin
       ShowCaptions := True;
     End;
 
+  With TToolButton.Create(FToolBar) Do
+    Begin
+      Parent := FToolBar;
+      Action := FCommitAction;
+      Style := tbsButton;
+    End;
   With TToolButton.Create(FToolBar) Do
     Begin
       Parent := FToolBar;
@@ -515,6 +529,13 @@ Begin
         ManualRefresh;
         Key := 0;
       End;
+    Ord('C'), Ord('c'):
+      If ssCtrl In Shift Then
+        If ssShift In Shift Then
+          Begin
+            CommitActionExecute(Nil);
+            Key := 0;
+          End;
     VK_UP:
       Begin
         MoveSelection(-1);
@@ -984,6 +1005,19 @@ Begin
   Finally
     FDetailMemo.Lines.EndUpdate;
   End;
+End;
+
+Procedure TGitGraphForm.CommitActionExecute(Sender: TObject);
+Var
+  DidPush: Boolean;
+Begin
+  If FRepoPath = '' Then
+    Begin
+      MessageDlg('No repository is bound to this window.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If ShowGitCommitForm(FRepoPath, DidPush) Then
+    ManualRefresh;
 End;
 
 Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);

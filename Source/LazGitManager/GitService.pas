@@ -13,13 +13,23 @@ Uses
   Classes, SysUtils, Process, WorkflowEvents, WorkflowLog;
 
 Type
+  TGitStatusEntry = Record
+    Path: String;
+    OldPath: String; { rename/copy source }
+    IndexStatus: Char; { staged column of porcelain XY }
+    WorkTreeStatus: Char; { unstaged column }
+  End;
+  TGitStatusEntryArray = Array Of TGitStatusEntry;
+
   TGitService = Class
   Private
     FRepoPath: String;
+    FLastError: String;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
       Out OutputText: String; Out ExitCode: Integer): Boolean;
+    Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -28,6 +38,13 @@ Type
     Function GetHeadSha(Out Sha: String): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
+    Function ListStatus(Out Entries: TGitStatusEntryArray): Boolean;
+    Function StagePaths(Paths: TStrings): Boolean;
+    Function UnstagePaths(Paths: TStrings): Boolean;
+    Function StageAll: Boolean;
+    Function UnstageAll: Boolean;
+    Function Commit(Const Message: String; Out NewSha: String): Boolean;
+    Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { Full history index (SHA + parents only). Safe from worker threads. }
     Function FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
     { Detail lines for specific SHAs (subject/author/time/refs). Batched, worker-safe. }
@@ -41,17 +58,62 @@ Type
     Function Checkout(Const RefName: String): Boolean;
     Function CreateBranch(Const BranchName, StartPoint: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
+    Property LastError: String Read FLastError;
   End;
+
+Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
+Function GitStatusEntryIsUnstaged(Const Entry: TGitStatusEntry): Boolean;
+Function GitStatusEntryLabel(Const Entry: TGitStatusEntry; StagedSide: Boolean): String;
 
 Var
   GitClient: TGitService;
 
 Implementation
 
+Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
+Begin
+  Result := (Entry.IndexStatus <> ' ') And (Entry.IndexStatus <> '?') And (Entry.IndexStatus <> '!');
+End;
+
+Function GitStatusEntryIsUnstaged(Const Entry: TGitStatusEntry): Boolean;
+Begin
+  Result := (Entry.WorkTreeStatus <> ' ') Or (Entry.IndexStatus = '?') Or (Entry.IndexStatus = '!');
+End;
+
+Function GitStatusEntryLabel(Const Entry: TGitStatusEntry; StagedSide: Boolean): String;
+Var
+  Code: Char;
+Begin
+  If StagedSide Then
+    Code := Entry.IndexStatus
+  Else If Entry.IndexStatus = '?' Then
+    Code := '?'
+  Else
+    Code := Entry.WorkTreeStatus;
+  Case Code Of
+    'M': Result := 'modified:  ';
+    'A': Result := 'new file:  ';
+    'D': Result := 'deleted:   ';
+    'R': Result := 'renamed:   ';
+    'C': Result := 'copied:    ';
+    'U': Result := 'unmerged:  ';
+    'T': Result := 'typechange:';
+    '?': Result := 'untracked: ';
+    '!': Result := 'ignored:   ';
+  Else
+    Result := Code + ':         ';
+  End;
+  If (Entry.OldPath <> '') And ((Code = 'R') Or (Code = 'C')) Then
+    Result := Result + Entry.OldPath + ' -> ' + Entry.Path
+  Else
+    Result := Result + Entry.Path;
+End;
+
 Constructor TGitService.Create;
 Begin
   Inherited Create;
   FRepoPath := '';
+  FLastError := '';
 End;
 
 Destructor TGitService.Destroy;
@@ -70,10 +132,12 @@ Begin
   Result := False;
   OutputText := '';
   ExitCode := -1;
+  FLastError := '';
   FillChar(Buf, SizeOf(Buf), 0);
   If WorkDir = '' Then
     Begin
-      WorkflowLogger.Error('GitService', 'No repository path set');
+      FLastError := 'No repository path set';
+      WorkflowLogger.Error('GitService', FLastError);
       Exit;
     End;
 
@@ -116,11 +180,17 @@ Begin
         Move(Mem.Memory^, OutputText[1], Mem.Size);
       Result := ExitCode = 0;
       If Not Result Then
-        WorkflowLogger.Warning('GitService', Format('git %s exited %d', [Args[0], ExitCode]));
+        Begin
+          FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+          If Trim(OutputText) <> '' Then
+            FLastError := FLastError + ': ' + Trim(OutputText);
+          WorkflowLogger.Warning('GitService', FLastError);
+        End;
     Except
       On E: Exception Do
         Begin
-          WorkflowLogger.Error('GitService', 'Failed to run git: ' + E.Message);
+          FLastError := 'Failed to run git: ' + E.Message;
+          WorkflowLogger.Error('GitService', FLastError);
           Result := False;
         End;
     End;
@@ -240,6 +310,185 @@ Begin
       Porcelain := OutputText;
       Clean := Trim(OutputText) = '';
     End;
+End;
+
+Function TGitService.ListStatus(Out Entries: TGitStatusEntryArray): Boolean;
+Var
+  Raw, Line, Rest: String;
+  ExitCode, I, ArrowPos, Count: Integer;
+  Lines: TStringList;
+  X, Y: Char;
+  Path, OldPath: String;
+Begin
+  SetLength(Entries, 0);
+  Result := RunGit(['status', '--porcelain', '--untracked-files=all'], Raw, ExitCode);
+  If Not Result Then
+    Exit;
+
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Raw;
+    Count := 0;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Lines[I];
+        If Length(Line) < 4 Then
+          Continue;
+        X := Line[1];
+        Y := Line[2];
+        Rest := Copy(Line, 4, MaxInt);
+        { Strip optional quotes git uses for awkward paths. }
+        If (Length(Rest) >= 2) And (Rest[1] = '"') And (Rest[Length(Rest)] = '"') Then
+          Rest := Copy(Rest, 2, Length(Rest) - 2);
+        OldPath := '';
+        Path := Rest;
+        ArrowPos := Pos(' -> ', Rest);
+        If ArrowPos > 0 Then
+          Begin
+            OldPath := Copy(Rest, 1, ArrowPos - 1);
+            Path := Copy(Rest, ArrowPos + 4, MaxInt);
+          End;
+        If Path = '' Then
+          Continue;
+        Inc(Count);
+        SetLength(Entries, Count);
+        Entries[Count - 1].Path := Path;
+        Entries[Count - 1].OldPath := OldPath;
+        Entries[Count - 1].IndexStatus := X;
+        Entries[Count - 1].WorkTreeStatus := Y;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function TGitService.RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
+Var
+  Args: Array Of String;
+  I: Integer;
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Paths = Nil) Or (Paths.Count = 0) Then
+    Exit;
+  { git <cmd> -- path1 path2 ... }
+  SetLength(Args, 2 + Paths.Count);
+  Args[0] := SubCommand;
+  Args[1] := '--';
+  For I := 0 To Paths.Count - 1 Do
+    Args[2 + I] := Paths[I];
+  Result := RunGit(Args, OutputText, ExitCode);
+End;
+
+Function TGitService.StagePaths(Paths: TStrings): Boolean;
+Begin
+  Result := RunGitPaths('add', Paths);
+  If Result Then
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.UnstagePaths(Paths: TStrings): Boolean;
+Var
+  Args: Array Of String;
+  I: Integer;
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Paths = Nil) Or (Paths.Count = 0) Then
+    Exit;
+  { git restore --staged -- paths  (modern); fall back handled by git version }
+  SetLength(Args, 3 + Paths.Count);
+  Args[0] := 'restore';
+  Args[1] := '--staged';
+  Args[2] := '--';
+  For I := 0 To Paths.Count - 1 Do
+    Args[3 + I] := Paths[I];
+  Result := RunGit(Args, OutputText, ExitCode);
+  If Not Result Then
+    Begin
+      { Older git: git reset HEAD -- paths }
+      SetLength(Args, 3 + Paths.Count);
+      Args[0] := 'reset';
+      Args[1] := 'HEAD';
+      Args[2] := '--';
+      For I := 0 To Paths.Count - 1 Do
+        Args[3 + I] := Paths[I];
+      Result := RunGit(Args, OutputText, ExitCode);
+    End;
+  If Result Then
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.StageAll: Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := RunGit(['add', '-A'], OutputText, ExitCode);
+  If Result Then
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.UnstageAll: Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := RunGit(['restore', '--staged', '.'], OutputText, ExitCode);
+  If Not Result Then
+    Result := RunGit(['reset', 'HEAD'], OutputText, ExitCode);
+  If Result Then
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.Commit(Const Message: String; Out NewSha: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Info: TGitCommitInfo;
+Begin
+  NewSha := '';
+  Result := False;
+  If Trim(Message) = '' Then
+    Begin
+      FLastError := 'Commit message is empty';
+      Exit;
+    End;
+  Result := RunGit(['commit', '-m', Message], OutputText, ExitCode);
+  If Not Result Then
+    Exit;
+  If GetHeadSha(NewSha) Then
+    Begin
+      Info.Sha := NewSha;
+      Info.ShortSha := Copy(NewSha, 1, 7);
+      Info.Summary := Trim(Message);
+      Info.AuthorName := '';
+      Info.AuthorEmail := '';
+      Info.CommitDate := Now;
+      Info.ParentCount := 1;
+      WorkflowEventBus.NotifyCommitCreated(FRepoPath, Info);
+      WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+      WorkflowEventBus.NotifyHeadChanged(FRepoPath, NewSha);
+    End;
+End;
+
+Function TGitService.DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
+Var
+  ExitCode: Integer;
+Begin
+  DiffText := '';
+  Result := False;
+  If Path = '' Then
+    Exit;
+  If Staged Then
+    Result := RunGit(['diff', '--cached', '--', Path], DiffText, ExitCode)
+  Else
+    Result := RunGit(['diff', '--', Path], DiffText, ExitCode);
+  { Untracked files have no diff – show empty success. }
+  If (Not Result) And (ExitCode = 0) Then
+    Result := True;
 End;
 
 Function TGitService.Fetch(Const Remote: String): Boolean;
