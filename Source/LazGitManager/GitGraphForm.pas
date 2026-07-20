@@ -848,7 +848,7 @@ Type
 Var
   Parts: TStringList;
   I, ArrowPos, CardW, CardH, CardY, PadX: Integer;
-  Token, Name: String;
+  Token, RefName: String;
   Kind: TRefKind;
   Bg, Fg, Border: TColor;
 Begin
@@ -885,26 +885,26 @@ Begin
         ArrowPos := Pos(' -> ', Token);
         If ArrowPos > 0 Then
           Begin
-            Name := Trim(Copy(Token, ArrowPos + 4, MaxInt));
+            RefName := Trim(Copy(Token, ArrowPos + 4, MaxInt));
             Kind := rkLocal;
           End
         Else If SameText(Copy(Token, 1, 5), 'tag: ') Then
           Begin
-            Name := Trim(Copy(Token, 6, MaxInt));
+            RefName := Trim(Copy(Token, 6, MaxInt));
             Kind := rkTag;
           End
         Else If SameText(Token, 'HEAD') Then
           Continue { HEAD alone is implied by the tip branch card }
         Else
           Begin
-            Name := Token;
-            If Pos('/', Name) > 0 Then
+            RefName := Token;
+            If Pos('/', RefName) > 0 Then
               Kind := rkRemote
             Else
               Kind := rkLocal;
           End;
 
-        If Name = '' Then
+        If RefName = '' Then
           Continue;
 
         Case Kind Of
@@ -941,7 +941,7 @@ Begin
             Font.Size := 8;
             Font.Style := [];
             Font.Color := Fg;
-            CardW := TextWidth(Name) + PadX * 2;
+            CardW := TextWidth(RefName) + PadX * 2;
             If CardW < 28 Then
               CardW := 28;
 
@@ -952,7 +952,7 @@ Begin
             RoundRect(TextX, CardY, TextX + CardW, CardY + CardH, 10, 10);
 
             Brush.Style := bsClear;
-            TextOut(TextX + PadX, CardY + (CardH - TextHeight(Name)) Div 2, Name);
+            TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
             Brush.Style := bsSolid;
           End;
 
