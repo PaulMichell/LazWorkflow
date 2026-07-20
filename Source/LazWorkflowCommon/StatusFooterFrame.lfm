@@ -1,0 +1,11 @@
+object StatusFooterFrame: TStatusFooterFrame
+  Left = 0
+  Height = 22
+  Top = 0
+  Width = 320
+  ClientHeight = 22
+  ClientWidth = 320
+  TabOrder = 0
+  DesignLeft = 0
+  DesignTop = 0
+end

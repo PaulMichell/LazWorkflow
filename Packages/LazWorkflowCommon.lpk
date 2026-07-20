@@ -18,7 +18,7 @@
     <Description Value="Shared foundation (event bus, logging, UI helpers) for LazGitManager and LazGrokChat"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="3">
+    <Files Count="4">
       <Item1>
         <Filename Value="../Source/LazWorkflowCommon/WorkflowEvents.pas"/>
         <UnitName Value="WorkflowEvents"/>
@@ -29,8 +29,13 @@
       </Item2>
       <Item3>
         <Filename Value="../Source/LazWorkflowCommon/StatusFooterFrame.pas"/>
+        <FileType Value="MainUnit"/>
         <UnitName Value="StatusFooterFrame"/>
       </Item3>
+      <Item4>
+        <Filename Value="../Source/LazWorkflowCommon/StatusFooterFrame.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item4>
     </Files>
     <RequiredPkgs Count="2">
       <Item1>

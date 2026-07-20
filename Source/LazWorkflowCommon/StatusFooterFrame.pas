@@ -34,6 +34,8 @@ Type
 
 Implementation
 
+{$R *.lfm}
+
 Constructor TStatusFooterFrame.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
