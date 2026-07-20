@@ -1,9 +1,6 @@
 Unit GitGraphForm;
 
-{ Virtual commit history graph window (c) 2026 Michell Computing.
-
-  Full history is indexed via rev-list (SHA/parents/lanes). Row labels and
-  dates load on demand for the visible scroll window, like a virtual list. }
+{ Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -14,14 +11,14 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, LCLIntf, LCLType, WorkflowEvents, StatusFooterFrame,
+  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, WorkflowEvents, StatusFooterFrame,
   GitGraphModel;
 
 Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
   Private
     FToolBar: TToolBar;
-    FMainPanel: TPanel; { between toolbar and status – owns graph, splitter, details }
+    FMainPanel: TPanel;
     FGraphHost: TPanel;
     FPaintBox: TPaintBox;
     FScrollBar: TScrollBar;
@@ -30,8 +27,12 @@ Type
     FDetailPanel: TPanel;
     FDetailMemo: TMemo;
     FActionList: TActionList;
-    FRefreshAction: TAction;
+    FFetchAction: TAction;
+    FPullAction: TAction;
+    FPushAction: TAction;
+    FPopup: TPopupMenu;
     FDetailTimer: TTimer;
+    FAutoRefreshTimer: TTimer;
     FRepoPath: String;
     FBranch: String;
     FHeadSha: String;
@@ -50,10 +51,12 @@ Type
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
     Procedure CreateUI;
+    Procedure BuildPopupMenu;
     Procedure InitLaneColors;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure FormShow(Sender: TObject);
+    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure PaintBoxPaint(Sender: TObject);
     Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
@@ -62,7 +65,14 @@ Type
     Procedure ScrollBarChange(Sender: TObject);
     Procedure GraphHostResize(Sender: TObject);
     Procedure DetailTimerTimer(Sender: TObject);
-    Procedure RefreshActionExecute(Sender: TObject);
+    Procedure AutoRefreshTimerTimer(Sender: TObject);
+    Procedure FetchActionExecute(Sender: TObject);
+    Procedure PullActionExecute(Sender: TObject);
+    Procedure PushActionExecute(Sender: TObject);
+    Procedure PopupCopySha(Sender: TObject);
+    Procedure PopupCheckout(Sender: TObject);
+    Procedure PopupCreateBranch(Sender: TObject);
+    Procedure PopupShowCommit(Sender: TObject);
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure ApplyIndexLoaded;
@@ -75,11 +85,15 @@ Type
     Procedure UpdateScrollRange;
     Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
     Procedure ShowCommitDetails(Index: Integer);
+    Procedure SelectRow(Index: Integer; ScrollIntoView: Boolean);
+    Procedure MoveSelection(Delta: Integer);
+    Function SelectedSha: String;
     Function ScrollOffset: Integer;
     Function RowAtY(Y: Integer): Integer;
     Function LaneX(Lane: Integer): Integer;
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
+    Procedure QuietRefreshIfChanged;
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
     Procedure WorkingTreeChanged(Const RepoPath: String);
@@ -90,17 +104,20 @@ Type
     Destructor Destroy; Override;
     Procedure BindRepository(Const StartPath: String = '');
     Procedure SetRepository(Const ARepoPath: String);
+    Procedure ApplyConfig;
+    Procedure ManualRefresh;
     Property RepoPath: String Read FRepoPath;
   End;
 
 Procedure RefreshOpenGitGraphForms;
+Procedure ApplyGitConfigToOpenForms;
 
 Implementation
 
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, LazIDEIntf, ProjectIntf, DateUtils, Math;
+  WorkflowLog, GitService, GitConfig, LazIDEIntf, ProjectIntf, DateUtils, Math;
 
 Type
   TGitIndexThread = Class(TThread)
@@ -214,6 +231,15 @@ Begin
       TGitGraphForm(Screen.CustomForms[I]).BindRepository;
 End;
 
+Procedure ApplyGitConfigToOpenForms;
+Var
+  I: Integer;
+Begin
+  For I := 0 To Screen.CustomFormCount - 1 Do
+    If Screen.CustomForms[I] Is TGitGraphForm Then
+      TGitGraphForm(Screen.CustomForms[I]).ApplyConfig;
+End;
+
 Constructor TGitGraphForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
@@ -228,6 +254,7 @@ Begin
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   CreateUI;
+  ApplyConfig;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -235,6 +262,8 @@ Destructor TGitGraphForm.Destroy;
 Begin
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
+  If Assigned(FAutoRefreshTimer) Then
+    FAutoRefreshTimer.Enabled := False;
   StopDetailThread;
   StopIndexThread;
   WorkflowEventBus.RemoveListener(Self);
@@ -256,19 +285,62 @@ Begin
   FLaneColors[9] := RGBToColor(96, 125, 139);
 End;
 
+Procedure TGitGraphForm.BuildPopupMenu;
+Var
+  Item: TMenuItem;
+Begin
+  FPopup := TPopupMenu.Create(Self);
+
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Show commit';
+  Item.OnClick := @PopupShowCommit;
+  FPopup.Items.Add(Item);
+
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Copy SHA';
+  Item.OnClick := @PopupCopySha;
+  FPopup.Items.Add(Item);
+
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := '-';
+  FPopup.Items.Add(Item);
+
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Checkout…';
+  Item.OnClick := @PopupCheckout;
+  FPopup.Items.Add(Item);
+
+  Item := TMenuItem.Create(FPopup);
+  Item.Caption := 'Create branch here…';
+  Item.OnClick := @PopupCreateBranch;
+  FPopup.Items.Add(Item);
+End;
+
 Procedure TGitGraphForm.CreateUI;
 Begin
-  Caption := 'Git Graph';
+  Caption := 'Manage Repository';
   Width := 900;
   Height := 600;
   Position := poDefaultPosOnly;
+  KeyPreview := True;
+  OnKeyDown := @FormKeyDown;
 
   FActionList := TActionList.Create(Self);
 
-  FRefreshAction := TAction.Create(Self);
-  FRefreshAction.Caption := 'Refresh';
-  FRefreshAction.OnExecute := @RefreshActionExecute;
-  FRefreshAction.ActionList := FActionList;
+  FFetchAction := TAction.Create(Self);
+  FFetchAction.Caption := 'Fetch';
+  FFetchAction.OnExecute := @FetchActionExecute;
+  FFetchAction.ActionList := FActionList;
+
+  FPullAction := TAction.Create(Self);
+  FPullAction.Caption := 'Pull';
+  FPullAction.OnExecute := @PullActionExecute;
+  FPullAction.ActionList := FActionList;
+
+  FPushAction := TAction.Create(Self);
+  FPushAction.Caption := 'Push';
+  FPushAction.OnExecute := @PushActionExecute;
+  FPushAction.ActionList := FActionList;
 
   FToolBar := TToolBar.Create(Self);
   With FToolBar Do
@@ -283,9 +355,23 @@ Begin
   With TToolButton.Create(FToolBar) Do
     Begin
       Parent := FToolBar;
-      Action := FRefreshAction;
+      Action := FFetchAction;
       Style := tbsButton;
     End;
+  With TToolButton.Create(FToolBar) Do
+    Begin
+      Parent := FToolBar;
+      Action := FPullAction;
+      Style := tbsButton;
+    End;
+  With TToolButton.Create(FToolBar) Do
+    Begin
+      Parent := FToolBar;
+      Action := FPushAction;
+      Style := tbsButton;
+    End;
+
+  BuildPopupMenu;
 
   { Fixed status strip on the form bottom – never a splitter target. }
   FStatusFooter := TStatusFooterFrame.Create(Self);
@@ -373,12 +459,17 @@ Begin
       OnPaint := @PaintBoxPaint;
       OnMouseDown := @PaintBoxMouseDown;
       OnMouseWheel := @PaintBoxMouseWheel;
+      PopupMenu := FPopup;
     End;
 
   FDetailTimer := TTimer.Create(Self);
   FDetailTimer.Enabled := False;
   FDetailTimer.Interval := 40;
   FDetailTimer.OnTimer := @DetailTimerTimer;
+
+  FAutoRefreshTimer := TTimer.Create(Self);
+  FAutoRefreshTimer.Enabled := False;
+  FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
 
   OnCreate := @FormCreate;
   OnDestroy := @FormDestroy;
@@ -387,17 +478,122 @@ End;
 
 Procedure TGitGraphForm.FormCreate(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GitGraph', 'Git Graph window created');
+  WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
 End;
 
 Procedure TGitGraphForm.FormDestroy(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GitGraph', 'Git Graph window destroyed');
+  WorkflowLogger.Info('GitGraph', 'Manage Repository window destroyed');
 End;
 
 Procedure TGitGraphForm.FormShow(Sender: TObject);
 Begin
   BindRepository;
+  ApplyConfig;
+End;
+
+Procedure TGitGraphForm.ApplyConfig;
+Begin
+  If Not Assigned(GitManagerConfig) Or Not Assigned(FAutoRefreshTimer) Then
+    Exit;
+  FAutoRefreshTimer.Enabled := False;
+  FAutoRefreshTimer.Interval := GitManagerConfig.AutoRefreshSeconds * 1000;
+  FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
+End;
+
+Procedure TGitGraphForm.ManualRefresh;
+Begin
+  WorkflowLogger.Info('GitGraph', 'Manual refresh (F5)');
+  BindRepository;
+End;
+
+Procedure TGitGraphForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Begin
+  Case Key Of
+    VK_F5:
+      Begin
+        ManualRefresh;
+        Key := 0;
+      End;
+    VK_UP:
+      Begin
+        MoveSelection(-1);
+        Key := 0;
+      End;
+    VK_DOWN:
+      Begin
+        MoveSelection(1);
+        Key := 0;
+      End;
+    VK_RETURN:
+      Begin
+        If FSelectedIndex >= 0 Then
+          ShowCommitDetails(FSelectedIndex);
+        Key := 0;
+      End;
+    VK_PRIOR:
+      Begin
+        MoveSelection(-(FPaintBox.ClientHeight Div GitGraphRowHeight));
+        Key := 0;
+      End;
+    VK_NEXT:
+      Begin
+        MoveSelection(FPaintBox.ClientHeight Div GitGraphRowHeight);
+        Key := 0;
+      End;
+  End;
+End;
+
+Procedure TGitGraphForm.MoveSelection(Delta: Integer);
+Var
+  NewIndex: Integer;
+Begin
+  If FModel.Count = 0 Then
+    Exit;
+  If FSelectedIndex < 0 Then
+    NewIndex := 0
+  Else
+    NewIndex := FSelectedIndex + Delta;
+  If NewIndex < 0 Then
+    NewIndex := 0;
+  If NewIndex >= FModel.Count Then
+    NewIndex := FModel.Count - 1;
+  SelectRow(NewIndex, True);
+End;
+
+Procedure TGitGraphForm.SelectRow(Index: Integer; ScrollIntoView: Boolean);
+Var
+  RowTop, RowBottom, ViewH, NewPos: Integer;
+Begin
+  If (Index < 0) Or (Index >= FModel.Count) Then
+    Exit;
+  FSelectedIndex := Index;
+  If ScrollIntoView Then
+    Begin
+      ViewH := FPaintBox.ClientHeight;
+      RowTop := Index * GitGraphRowHeight;
+      RowBottom := RowTop + GitGraphRowHeight;
+      If RowTop < ScrollOffset Then
+        FScrollBar.Position := RowTop
+      Else If RowBottom > ScrollOffset + ViewH Then
+        Begin
+          NewPos := RowBottom - ViewH;
+          If NewPos < 0 Then
+            NewPos := 0;
+          FScrollBar.Position := NewPos;
+        End;
+    End;
+  ShowCommitDetails(Index);
+  FPaintBox.Invalidate;
+  If Not FModel.Commit(Index).DetailsLoaded Then
+    ScheduleVisibleDetails;
+End;
+
+Function TGitGraphForm.SelectedSha: String;
+Begin
+  Result := '';
+  If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) Then
+    Result := FModel.Commit(FSelectedIndex).Sha;
 End;
 
 Function TGitGraphForm.ScrollOffset: Integer;
@@ -723,16 +919,12 @@ Procedure TGitGraphForm.PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
 Var
   Row: Integer;
 Begin
-  If Button <> mbLeft Then
-    Exit;
   Row := RowAtY(Y);
   If Row < 0 Then
     Exit;
-  FSelectedIndex := Row;
-  ShowCommitDetails(Row);
-  FPaintBox.Invalidate;
-  If Not FModel.Commit(Row).DetailsLoaded Then
-    ScheduleVisibleDetails;
+  SelectRow(Row, False);
+  If Button = mbRight Then
+    { PopupMenu on the paintbox will show automatically when assigned. };
 End;
 
 Procedure TGitGraphForm.ShowCommitDetails(Index: Integer);
@@ -740,7 +932,7 @@ Var
   C: TGitCommitRec;
   When: TDateTime;
   I: Integer;
-  ParentLine: String;
+  ParentLine, ShowText: String;
 Begin
   If (Index < 0) Or (Index >= FModel.Count) Then
     Begin
@@ -748,6 +940,18 @@ Begin
       Exit;
     End;
   C := FModel.Commit(Index);
+
+  { Prefer full `git show` when we have a repo; fall back to summary fields. }
+  If Assigned(GitClient) And (FRepoPath <> '') And (C.Sha <> '') Then
+    Begin
+      GitClient.RepoPath := FRepoPath;
+      If GitClient.ShowCommit(C.Sha, ShowText) And (Trim(ShowText) <> '') Then
+        Begin
+          FDetailMemo.Lines.Text := ShowText;
+          Exit;
+        End;
+    End;
+
   FDetailMemo.Lines.BeginUpdate;
   Try
     FDetailMemo.Lines.Clear;
@@ -782,10 +986,132 @@ Begin
   End;
 End;
 
-Procedure TGitGraphForm.RefreshActionExecute(Sender: TObject);
+Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GitGraph', 'Manual refresh requested');
-  BindRepository;
+  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.Fetch Then
+    ManualRefresh
+  Else
+    MessageDlg('Fetch failed. See the log for details.', mtError, [mbOK], 0);
+End;
+
+Procedure TGitGraphForm.PullActionExecute(Sender: TObject);
+Begin
+  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.Pull Then
+    ManualRefresh
+  Else
+    MessageDlg('Pull failed. See the log for details.', mtError, [mbOK], 0);
+End;
+
+Procedure TGitGraphForm.PushActionExecute(Sender: TObject);
+Begin
+  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.Push Then
+    FStatusFooter.SetRightText('Push complete')
+  Else
+    MessageDlg('Push failed. See the log for details.', mtError, [mbOK], 0);
+End;
+
+Procedure TGitGraphForm.PopupCopySha(Sender: TObject);
+Var
+  Sha: String;
+Begin
+  Sha := SelectedSha;
+  If Sha <> '' Then
+    Clipboard.AsText := Sha;
+End;
+
+Procedure TGitGraphForm.PopupShowCommit(Sender: TObject);
+Begin
+  If FSelectedIndex >= 0 Then
+    ShowCommitDetails(FSelectedIndex);
+End;
+
+Procedure TGitGraphForm.PopupCheckout(Sender: TObject);
+Var
+  Sha: String;
+Begin
+  Sha := SelectedSha;
+  If (Sha = '') Or Not Assigned(GitClient) Then
+    Exit;
+  If MessageDlg('Check out commit ' + Copy(Sha, 1, 7) + '?' + LineEnding +
+    'This may detach HEAD.', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.Checkout(Sha) Then
+    ManualRefresh
+  Else
+    MessageDlg('Checkout failed. See the log for details.', mtError, [mbOK], 0);
+End;
+
+Procedure TGitGraphForm.PopupCreateBranch(Sender: TObject);
+Var
+  Sha, BranchName: String;
+Begin
+  Sha := SelectedSha;
+  If (Sha = '') Or Not Assigned(GitClient) Then
+    Exit;
+  BranchName := '';
+  If Not InputQuery('Create branch', 'Branch name:', BranchName) Then
+    Exit;
+  BranchName := Trim(BranchName);
+  If BranchName = '' Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If GitClient.CreateBranch(BranchName, Sha) Then
+    Begin
+      MessageDlg('Created branch "' + BranchName + '" at ' + Copy(Sha, 1, 7), mtInformation, [mbOK], 0);
+      ManualRefresh;
+    End
+  Else
+    MessageDlg('Create branch failed. See the log for details.', mtError, [mbOK], 0);
+End;
+
+Procedure TGitGraphForm.AutoRefreshTimerTimer(Sender: TObject);
+Begin
+  If FIndexing Or FDetailLoading Or Not Visible Then
+    Exit;
+  QuietRefreshIfChanged;
+End;
+
+Procedure TGitGraphForm.QuietRefreshIfChanged;
+Var
+  Branch, Sha, Porcelain: String;
+  Clean: Boolean;
+  NeedReload: Boolean;
+Begin
+  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  NeedReload := False;
+  If GitClient.GetHeadSha(Sha) Then
+    If Sha <> FHeadSha Then
+      NeedReload := True;
+  If GitClient.GetCurrentBranch(Branch) Then
+    If Branch <> FBranch Then
+      NeedReload := True;
+  If GitClient.GetStatus(Clean, Porcelain) Then
+    If Clean <> FClean Then
+      NeedReload := True;
+
+  If NeedReload Then
+    Begin
+      WorkflowLogger.Debug('GitGraph', 'Auto-refresh: repository changed');
+      ManualRefresh;
+    End
+  Else
+    Begin
+      { Keep dirty flag in sync even when HEAD unchanged. }
+      RefreshRepositoryInfo;
+      UpdateStatus;
+    End;
 End;
 
 Procedure TGitGraphForm.UpdateStatus;
@@ -890,6 +1216,7 @@ Begin
     StartIndexLoad
   Else
     FDetailMemo.Clear;
+  ApplyConfig;
 End;
 
 Procedure TGitGraphForm.RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);

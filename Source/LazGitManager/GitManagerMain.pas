@@ -16,15 +16,14 @@ Uses
 Procedure RegisterGitManager;
 
 Var
-  GitGraphWindowCreator: TIDEWindowCreator;
+  ManageRepositoryWindowCreator: TIDEWindowCreator;
 
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GitGraphForm, GitService;
+  Dialogs, WorkflowLog, WorkflowEvents, GitGraphForm, GitService, GitConfig, GitSettingsForm;
 
 Type
-  { Holds IDE project handlers (must be methods of a class for TLazProjectChangedFunction). }
   TGitManagerIDEHooks = Class
   Public
     Function ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
@@ -32,26 +31,29 @@ Type
   End;
 
 Var
-  CmdGitGraph: TIDECommand;
-  CmdGitStatus: TIDECommand;
-  CmdGitCommit: TIDECommand;
-  CmdGitPush: TIDECommand;
-  CmdGitPull: TIDECommand;
-  CmdGitFetch: TIDECommand;
+  CmdRepoInit: TIDECommand;
+  CmdRepoManage: TIDECommand;
+  CmdRepoSettings: TIDECommand;
   GitManagerIDEHooks: TGitManagerIDEHooks;
+
+Function ProjectStartPath(AProject: TLazProject): String;
+Begin
+  Result := '';
+  If Not Assigned(AProject) Or AProject.IsVirtual Then
+    Exit;
+  If AProject.ProjectInfoFile <> '' Then
+    Result := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
+  Else If Assigned(AProject.MainFile) And (AProject.MainFile.Filename <> '') Then
+    Result := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename));
+End;
 
 Function TGitManagerIDEHooks.ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
 Var
   StartPath, RepoPath: String;
 Begin
   Result := mrOk;
-  If Not Assigned(AProject) Or AProject.IsVirtual Then
-    Exit;
-  If AProject.ProjectInfoFile <> '' Then
-    StartPath := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
-  Else If Assigned(AProject.MainFile) Then
-    StartPath := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename))
-  Else
+  StartPath := ProjectStartPath(AProject);
+  If StartPath = '' Then
     Exit;
   If Assigned(GitClient) Then
     Begin
@@ -76,63 +78,71 @@ Begin
   RefreshOpenGitGraphForms;
 End;
 
-Procedure ShowGitGraphWindow(Sender: TObject);
+Procedure ShowManageRepository(Sender: TObject);
 Begin
-  IDEWindowCreators.ShowForm(GitGraphWindowCreator.FormName, True);
+  IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
 End;
 
-Procedure DoGitStatus(Sender: TObject);
+Procedure DoInitialiseRepository(Sender: TObject);
+Var
+  StartPath, RepoPath: String;
+  Project: TLazProject;
 Begin
-  WorkflowLogger.Info('GitManager', 'Git Status requested');
-  ShowGitGraphWindow(Sender);
-  RefreshOpenGitGraphForms;
-End;
+  If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
+    Exit;
+  Project := LazarusIDE.ActiveProject;
+  StartPath := ProjectStartPath(Project);
+  If StartPath = '' Then
+    Begin
+      MessageDlg('Open a saved project before initialising a repository.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
 
-Procedure DoGitCommit(Sender: TObject);
-Begin
-  WorkflowLogger.Info('GitManager', 'Git Commit requested');
-  { TODO: show commit dialog }
-End;
+  RepoPath := GitClient.DetectRepository(StartPath);
+  If RepoPath <> '' Then
+    Begin
+      MessageDlg('This project is already inside a Git repository:' + LineEnding + RepoPath,
+        mtInformation, [mbOK], 0);
+      GitClient.RepoPath := RepoPath;
+      ShowManageRepository(Sender);
+      Exit;
+    End;
 
-Procedure DoGitPush(Sender: TObject);
-Begin
-  WorkflowLogger.Info('GitManager', 'Git Push requested');
-  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
-    GitClient.Push
+  If MessageDlg('Initialise a new Git repository in:' + LineEnding + StartPath + LineEnding + LineEnding +
+    'Continue?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+    Exit;
+
+  If GitClient.InitRepository(StartPath) Then
+    Begin
+      MessageDlg('Repository initialised at:' + LineEnding + StartPath, mtInformation, [mbOK], 0);
+      ShowManageRepository(Sender);
+      RefreshOpenGitGraphForms;
+    End
   Else
-    WorkflowLogger.Warning('GitManager', 'Push skipped – no repository');
+    MessageDlg('Failed to initialise repository. See the log for details.', mtError, [mbOK], 0);
 End;
 
-Procedure DoGitPull(Sender: TObject);
+Procedure DoRepositorySettings(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GitManager', 'Git Pull requested');
-  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
-    GitClient.Pull
-  Else
-    WorkflowLogger.Warning('GitManager', 'Pull skipped – no repository');
+  ShowGitSettingsForm;
+  ApplyGitConfigToOpenForms;
 End;
 
-Procedure DoGitFetch(Sender: TObject);
-Begin
-  WorkflowLogger.Info('GitManager', 'Git Fetch requested');
-  If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
-    GitClient.Fetch
-  Else
-    WorkflowLogger.Warning('GitManager', 'Fetch skipped – no repository');
-End;
-
-Procedure CreateGitGraphForm(Sender: TObject; AFormName: String;
+Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
   IDEWindowCreators.CreateForm(AForm, TGitGraphForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
   AForm.Name := AFormName;
   If AForm Is TGitGraphForm Then
-    TGitGraphForm(AForm).BindRepository;
+    Begin
+      TGitGraphForm(AForm).BindRepository;
+      TGitGraphForm(AForm).ApplyConfig;
+    End;
 End;
 
 Procedure RegisterGitManager;
 Var
-  Parent: TIDEMenuSection;
+  RepoMenu: TIDEMenuSection;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
@@ -141,29 +151,27 @@ Begin
   If GitManagerIDEHooks = Nil Then
     GitManagerIDEHooks := TGitManagerIDEHooks.Create;
 
+  If Assigned(GitManagerConfig) Then
+    GitManagerConfig.Load;
+
   Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
   If Cat = Nil Then
-    Cat := IDECommandList.CreateCategory(Nil, 'Git', 'Git');
+    Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdGitGraph := RegisterIDECommand(Cat, 'GitGraph', 'Show Git Graph', Key, Nil, @ShowGitGraphWindow);
-  CmdGitStatus := RegisterIDECommand(Cat, 'GitStatus', 'Git Status', Key, Nil, @DoGitStatus);
-  CmdGitCommit := RegisterIDECommand(Cat, 'GitCommit', 'Git Commit', Key, Nil, @DoGitCommit);
-  CmdGitPush := RegisterIDECommand(Cat, 'GitPush', 'Git Push', Key, Nil, @DoGitPush);
-  CmdGitPull := RegisterIDECommand(Cat, 'GitPull', 'Git Pull', Key, Nil, @DoGitPull);
-  CmdGitFetch := RegisterIDECommand(Cat, 'GitFetch', 'Git Fetch', Key, Nil, @DoGitFetch);
+  CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository', Key, Nil, @DoInitialiseRepository);
+  CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
+    IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
+  CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
-  Parent := RegisterIDEMenuSection(itmSecondaryTools, 'GitSection');
-  Parent.Caption := 'Git';
-  RegisterIDEMenuCommand(Parent, 'GitGraph', 'Git Graph', Nil, Nil, CmdGitGraph);
-  RegisterIDEMenuCommand(Parent, 'GitStatus', 'Status', Nil, Nil, CmdGitStatus);
-  RegisterIDEMenuCommand(Parent, 'GitCommit', 'Commit...', Nil, Nil, CmdGitCommit);
-  RegisterIDEMenuSection(Parent, 'GitSep1');
-  RegisterIDEMenuCommand(Parent, 'GitFetch', 'Fetch', Nil, Nil, CmdGitFetch);
-  RegisterIDEMenuCommand(Parent, 'GitPull', 'Pull', Nil, Nil, CmdGitPull);
-  RegisterIDEMenuCommand(Parent, 'GitPush', 'Push', Nil, Nil, CmdGitPush);
+  { Top-level Repository menu on the IDE main menu bar. }
+  RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
+  RegisterIDEMenuCommand(RepoMenu, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
+  RegisterIDEMenuCommand(RepoMenu, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+  RegisterIDEMenuSection(RepoMenu, 'RepoSep1');
+  RegisterIDEMenuCommand(RepoMenu, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
 
-  GitGraphWindowCreator := IDEWindowCreators.Add('GitGraph', @CreateGitGraphForm, Nil,
+  ManageRepositoryWindowCreator := IDEWindowCreators.Add('ManageRepository', @CreateManageRepositoryForm, Nil,
     '100', '100', '900', '600');
 
   If Assigned(LazarusIDE) Then

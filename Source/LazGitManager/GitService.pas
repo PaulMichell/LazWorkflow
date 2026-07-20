@@ -36,6 +36,10 @@ Type
     Function Fetch(Const Remote: String = 'origin'): Boolean;
     Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
     Function Push(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
+    Function InitRepository(Const Path: String): Boolean;
+    Function ShowCommit(Const Sha: String; Out Text: String): Boolean;
+    Function Checkout(Const RefName: String): Boolean;
+    Function CreateBranch(Const BranchName, StartPoint: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
   End;
 
@@ -274,6 +278,75 @@ Begin
   Else
     Args := ['push', Remote, Branch];
   Result := RunGit(Args, OutputText, ExitCode);
+End;
+
+Function TGitService.InitRepository(Const Path: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Dir: String;
+Begin
+  Result := False;
+  Dir := ExpandFileName(Path);
+  If Dir = '' Then
+    Exit;
+  If Not DirectoryExists(Dir) Then
+    Begin
+      WorkflowLogger.Error('GitService', 'Init path does not exist: ' + Dir);
+      Exit;
+    End;
+  If IsRepository(Dir) Then
+    Begin
+      WorkflowLogger.Warning('GitService', 'Already a Git repository: ' + Dir);
+      FRepoPath := DetectRepository(Dir);
+      Result := True;
+      Exit;
+    End;
+  Result := RunGitEx(Dir, ['init'], OutputText, ExitCode);
+  If Result Then
+    Begin
+      FRepoPath := Dir;
+      WorkflowLogger.Info('GitService', 'Initialised repository at ' + Dir);
+      WorkflowEventBus.NotifyRepositoryStateChanged(Dir, grsClean);
+    End;
+End;
+
+Function TGitService.ShowCommit(Const Sha: String; Out Text: String): Boolean;
+Var
+  ExitCode: Integer;
+Begin
+  Text := '';
+  Result := False;
+  If Sha = '' Then
+    Exit;
+  Result := RunGit(['show', '--stat', '--format=fuller', Sha], Text, ExitCode);
+End;
+
+Function TGitService.Checkout(Const RefName: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If RefName = '' Then
+    Exit;
+  Result := RunGit(['checkout', RefName], OutputText, ExitCode);
+  If Result Then
+    WorkflowEventBus.NotifyHeadChanged(FRepoPath, RefName);
+End;
+
+Function TGitService.CreateBranch(Const BranchName, StartPoint: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If BranchName = '' Then
+    Exit;
+  If StartPoint = '' Then
+    Result := RunGit(['branch', BranchName], OutputText, ExitCode)
+  Else
+    Result := RunGit(['branch', BranchName, StartPoint], OutputText, ExitCode);
 End;
 
 Initialization
