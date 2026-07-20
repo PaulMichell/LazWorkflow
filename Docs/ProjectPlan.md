@@ -310,14 +310,14 @@ Contains:
   - `WorkflowEvents.pas` – full observer bus with Git, Compiler, Markdown and ToolCall interfaces + thread-safe `TWorkflowEventBus`.
   - `WorkflowLog.pas` – simple levelled logger.
   - `StatusFooterFrame.pas` – reusable three-part status bar.
-  - Package `.lpk` ready.
+  - Package `.lpk` ready (no `HasRegisterProc` unit; shared library only).
 - **LazGitManager**:
-  - Registration unit + menus/commands under Tools → Git.
+  - Registration unit `RegLazGitManager` (name must differ from package) + menus/commands under Tools → Git.
   - Dockable `TGitGraphForm` with toolbar, paintbox placeholder for graph, detail pane, status footer.
   - `GitService.pas` – CLI-based Git operations (detect repo, status, fetch/pull/push) + event notifications.
   - Listens to repository events.
 - **LazGrokChat**:
-  - Registration + menus under Tools → Grok.
+  - Registration unit `RegLazGrokChat` (name must differ from package) + menus under Tools → Grok.
   - Dockable `TGrokChatForm` with chat memo, input area, Send/New/Build actions, live status footer (model + context %).
   - Implements `ICompilerFinished` and `IMarkdownDocumentChanged`.
   - `GrokService.pas` – credential + history stub (streaming HTTP SSE in Phase 2).

@@ -1,6 +1,6 @@
-Unit LazGitManager;
+Unit RegLazGrokChat;
 
-{ Lazarus IDE Git Manager package – registration and IDE integration (c) 2026 Michell Computing. }
+{ Lazarus IDE Grok Chat package – registration and IDE integration (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,11 +18,11 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  GitManagerMain, GitGraphForm;
+  GrokChatMain, GrokChatForm;
 
 Procedure Register;
 Begin
-  RegisterGitManager;
+  RegisterGrokChat;
 End;
 
 End.

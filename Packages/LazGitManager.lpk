@@ -20,9 +20,9 @@
     <Version Major="0" Minor="1" Release="0" Build="0"/>
     <Files Count="5">
       <Item1>
-        <Filename Value="../Source/LazGitManager/LazGitManager.pas"/>
+        <Filename Value="../Source/LazGitManager/RegLazGitManager.pas"/>
         <HasRegisterProc Value="True"/>
-        <UnitName Value="LazGitManager"/>
+        <UnitName Value="RegLazGitManager"/>
       </Item1>
       <Item2>
         <Filename Value="../Source/LazGitManager/GitManagerMain.pas"/>
