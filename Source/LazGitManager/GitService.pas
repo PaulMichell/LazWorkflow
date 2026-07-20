@@ -18,6 +18,8 @@ Type
     FRepoPath: String;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
+    Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
+      Out OutputText: String; Out ExitCode: Integer): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -26,6 +28,9 @@ Type
     Function GetHeadSha(Out Sha: String): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
+    { Fast bounded log for the graph. Safe to call from a worker thread (uses WorkDir, not shared state). }
+    Function FetchLogText(Const WorkDir: String; MaxCount: Integer; Out LogText: String): Boolean;
+    Function CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;
     Function Fetch(Const Remote: String = 'origin'): Boolean;
     Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
     Function Push(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
@@ -48,37 +53,61 @@ Begin
   Inherited Destroy;
 End;
 
-Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
-  Out ExitCode: Integer): Boolean;
+Function TGitService.RunGitEx(Const WorkDir: String; Const Args: Array Of String;
+  Out OutputText: String; Out ExitCode: Integer): Boolean;
 Var
   Proc: TProcess;
-  I: Integer;
-  OutputLines: TStringList;
+  I, BytesRead: Integer;
+  Mem: TMemoryStream;
+  Buf: Array[0..8191] Of Byte;
 Begin
   Result := False;
   OutputText := '';
   ExitCode := -1;
-  If FRepoPath = '' Then
+  FillChar(Buf, SizeOf(Buf), 0);
+  If WorkDir = '' Then
     Begin
       WorkflowLogger.Error('GitService', 'No repository path set');
       Exit;
     End;
 
   Proc := TProcess.Create(Nil);
-  OutputLines := TStringList.Create;
+  Mem := TMemoryStream.Create;
   Try
     Proc.Executable := 'git';
-    Proc.CurrentDirectory := FRepoPath;
-    Proc.Options := [poUsePipes, poNoConsole, poWaitOnExit];
+    Proc.CurrentDirectory := WorkDir;
+    { No poWaitOnExit before draining pipes – avoid deadlock on large output. }
+    Proc.Options := [poUsePipes, poNoConsole];
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
 
     Try
       Proc.Execute;
-      OutputLines.LoadFromStream(Proc.Output);
-      OutputText := OutputLines.Text;
+      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
+        Begin
+          If Proc.Output.NumBytesAvailable > 0 Then
+            Begin
+              BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+              If BytesRead > 0 Then
+                Mem.WriteBuffer(Buf[0], BytesRead);
+            End
+          Else If Proc.Running Then
+            Sleep(1);
+        End;
+      { Drain any remainder after exit. }
+      While Proc.Output.NumBytesAvailable > 0 Do
+        Begin
+          BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+          If BytesRead > 0 Then
+            Mem.WriteBuffer(Buf[0], BytesRead)
+          Else
+            Break;
+        End;
       ExitCode := Proc.ExitStatus;
+      SetLength(OutputText, Mem.Size);
+      If Mem.Size > 0 Then
+        Move(Mem.Memory^, OutputText[1], Mem.Size);
       Result := ExitCode = 0;
       If Not Result Then
         WorkflowLogger.Warning('GitService', Format('git %s exited %d', [Args[0], ExitCode]));
@@ -90,9 +119,43 @@ Begin
         End;
     End;
   Finally
-    OutputLines.Free;
+    Mem.Free;
     Proc.Free;
   End;
+End;
+
+Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
+  Out ExitCode: Integer): Boolean;
+Begin
+  Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
+End;
+
+Function TGitService.FetchLogText(Const WorkDir: String; MaxCount: Integer; Out LogText: String): Boolean;
+Var
+  ExitCode: Integer;
+  Limit: String;
+Begin
+  LogText := '';
+  If MaxCount < 1 Then
+    MaxCount := 400;
+  Limit := IntToStr(MaxCount);
+  { Single pretty format: fixed fields, SOH separators, unix time – cheap to parse.
+    --all --topo-order gives a stable graph; -n bounds cost for large repos. }
+  Result := RunGitEx(WorkDir,
+    ['-c', 'core.quotePath=false', 'log', '--all', '--topo-order', '-n', Limit,
+     '--pretty=format:%H' + #1 + '%P' + #1 + '%s' + #1 + '%an' + #1 + '%ct' + #1 + '%D'],
+    LogText, ExitCode);
+End;
+
+Function TGitService.CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Total := 0;
+  Result := RunGitEx(WorkDir, ['rev-list', '--all', '--count'], OutputText, ExitCode);
+  If Result Then
+    Total := StrToIntDef(Trim(OutputText), 0);
 End;
 
 Function TGitService.DetectRepository(Const StartPath: String): String;
