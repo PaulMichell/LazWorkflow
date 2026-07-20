@@ -12,7 +12,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel;
+  GitGraphModel, GitDiffView;
 
 Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
@@ -25,7 +25,7 @@ Type
     FStatusFooter: TStatusFooterFrame;
     FSplitter: TSplitter;
     FDetailPanel: TPanel;
-    FDetailMemo: TMemo;
+    FDiffView: TGitDiffView;
     FActionList: TActionList;
     FCommitAction: TAction;
     FFetchAction: TAction;
@@ -415,21 +415,18 @@ Begin
     Begin
       Parent := FMainPanel;
       Align := alBottom;
-      Height := 140;
-      Constraints.MinHeight := 48;
+      Height := 220;
+      Constraints.MinHeight := 100;
       BevelOuter := bvNone;
       Caption := '';
     End;
 
-  FDetailMemo := TMemo.Create(Self);
-  With FDetailMemo Do
+  FDiffView := TGitDiffView.Create(Self);
+  With FDiffView Do
     Begin
       Parent := FDetailPanel;
       Align := alClient;
-      ReadOnly := True;
-      ScrollBars := ssAutoBoth;
-      BorderSpacing.Around := 4;
-      Font.Name := 'Monospace';
+      BorderSpacing.Around := 2;
     End;
 
   FSplitter := TSplitter.Create(Self);
@@ -679,7 +676,7 @@ Begin
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex)
   Else
-    FDetailMemo.Clear;
+    FDiffView.Clear;
 
   UpdateStatus;
   FPaintBox.Invalidate;
@@ -949,7 +946,8 @@ Begin
             Brush.Color := Bg;
             Pen.Color := Border;
             Pen.Width := 1;
-            RoundRect(TextX, CardY, TextX + CardW, CardY + CardH, 10, 10);
+            { Clean bordered rectangles – RoundRect is jagged on many widgetsets. }
+            Rectangle(TextX, CardY, TextX + CardW, CardY + CardH);
 
             Brush.Style := bsClear;
             TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
@@ -1081,58 +1079,50 @@ Var
   C: TGitCommitRec;
   When: TDateTime;
   I: Integer;
-  ParentLine, ShowText: String;
+  ParentLine, ShowText, Header: String;
 Begin
   If (Index < 0) Or (Index >= FModel.Count) Then
     Begin
-      FDetailMemo.Clear;
+      FDiffView.Clear;
       Exit;
     End;
   C := FModel.Commit(Index);
 
-  { Prefer full `git show` when we have a repo; fall back to summary fields. }
+  { Prefer full `git show` (message + unified diff) in SynEdit with structure tree. }
   If Assigned(GitClient) And (FRepoPath <> '') And (C.Sha <> '') Then
     Begin
       GitClient.RepoPath := FRepoPath;
       If GitClient.ShowCommit(C.Sha, ShowText) And (Trim(ShowText) <> '') Then
         Begin
-          FDetailMemo.Lines.Text := ShowText;
+          FDiffView.LoadDiff(Copy(C.Sha, 1, 7) + '  ' + C.Subject, ShowText);
           Exit;
         End;
     End;
 
-  FDetailMemo.Lines.BeginUpdate;
-  Try
-    FDetailMemo.Lines.Clear;
-    FDetailMemo.Lines.Add('Commit:  ' + C.Sha);
-    If C.DetailsLoaded Then
-      Begin
-        FDetailMemo.Lines.Add('Author:  ' + C.Author);
-        If C.CommitTime > 0 Then
-          Begin
-            When := UnixToDateTime(C.CommitTime);
-            FDetailMemo.Lines.Add('Date:    ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', When));
-          End;
-      End
-    Else
-      FDetailMemo.Lines.Add('(loading details…)');
-    If C.ParentCount > 0 Then
-      Begin
-        ParentLine := C.Parents[0];
-        For I := 1 To C.ParentCount - 1 Do
-          ParentLine := ParentLine + ' ' + C.Parents[I];
-        FDetailMemo.Lines.Add('Parents: ' + ParentLine);
-      End;
-    If C.DetailsLoaded And (C.Refs <> '') Then
-      FDetailMemo.Lines.Add('Refs:    ' + C.Refs);
-    If C.DetailsLoaded Then
-      Begin
-        FDetailMemo.Lines.Add('');
-        FDetailMemo.Lines.Add(C.Subject);
-      End;
-  Finally
-    FDetailMemo.Lines.EndUpdate;
-  End;
+  Header := 'Commit:  ' + C.Sha + LineEnding;
+  If C.DetailsLoaded Then
+    Begin
+      Header := Header + 'Author:  ' + C.Author + LineEnding;
+      If C.CommitTime > 0 Then
+        Begin
+          When := UnixToDateTime(C.CommitTime);
+          Header := Header + 'Date:    ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', When) + LineEnding;
+        End;
+    End
+  Else
+    Header := Header + '(loading details…)' + LineEnding;
+  If C.ParentCount > 0 Then
+    Begin
+      ParentLine := C.Parents[0];
+      For I := 1 To C.ParentCount - 1 Do
+        ParentLine := ParentLine + ' ' + C.Parents[I];
+      Header := Header + 'Parents: ' + ParentLine + LineEnding;
+    End;
+  If C.DetailsLoaded And (C.Refs <> '') Then
+    Header := Header + 'Refs:    ' + C.Refs + LineEnding;
+  If C.DetailsLoaded Then
+    Header := Header + LineEnding + C.Subject;
+  FDiffView.LoadPlainText(Copy(C.Sha, 1, 7), Header);
 End;
 
 Procedure TGitGraphForm.CommitActionExecute(Sender: TObject);
@@ -1377,7 +1367,7 @@ Begin
   If FRepoPath <> '' Then
     StartIndexLoad
   Else
-    FDetailMemo.Clear;
+    FDiffView.Clear;
   ApplyConfig;
 End;
 

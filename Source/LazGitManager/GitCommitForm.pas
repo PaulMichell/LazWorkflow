@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel;
+  ButtonPanel, GitDiffView;
 
 Type
   TGitCommitForm = Class(TForm)
@@ -22,14 +22,13 @@ Type
     FUnstagedPaths: TStringList;
     FStagedPaths: TStringList;
     FMessageMemo: TMemo;
-    FDiffMemo: TMemo;
+    FDiffView: TGitDiffView;
     FPushCheck: TCheckBox;
     FStatusLabel: TLabel;
     FButtonPanel: TButtonPanel;
     FUnstagedLabel: TLabel;
     FStagedLabel: TLabel;
     FMessageLabel: TLabel;
-    FDiffLabel: TLabel;
     FBtnStage: TButton;
     FBtnUnstage: TButton;
     FBtnStageAll: TButton;
@@ -201,25 +200,13 @@ Begin
       Caption := '';
     End;
 
-  FDiffMemo := TMemo.Create(Self);
-  With FDiffMemo Do
+  FDiffView := TGitDiffView.Create(Self);
+  With FDiffView Do
     Begin
       Parent := FListsPanel;
       Align := alBottom;
-      Height := 140;
-      ReadOnly := True;
-      ScrollBars := ssAutoBoth;
-      Font.Name := 'Monospace';
-      BorderSpacing.Around := 8;
-    End;
-
-  FDiffLabel := TLabel.Create(Self);
-  With FDiffLabel Do
-    Begin
-      Parent := FListsPanel;
-      Align := alBottom;
-      Caption := 'Diff';
-      BorderSpacing.Left := 8;
+      Height := 220;
+      BorderSpacing.Around := 4;
     End;
 
   FMidPanel := TPanel.Create(Self);
@@ -360,7 +347,7 @@ Procedure TGitCommitForm.ReloadStatus;
 Begin
   FillLists;
   UpdateCommitEnabled;
-  FDiffMemo.Clear;
+  FDiffView.Clear;
   If FRepoPath = '' Then
     FStatusLabel.Caption := 'No repository'
   Else
@@ -429,25 +416,29 @@ End;
 Procedure TGitCommitForm.ShowDiffForList(List: TListBox; Paths: TStringList; Staged: Boolean);
 Var
   I: Integer;
-  DiffText, Path: String;
+  DiffText, Path, Title: String;
 Begin
-  FDiffMemo.Clear;
+  FDiffView.Clear;
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
   For I := 0 To List.Count - 1 Do
     If List.Selected[I] And (I < Paths.Count) Then
       Begin
         Path := Paths[I];
+        If Staged Then
+          Title := 'Staged: ' + Path
+        Else
+          Title := 'Working tree: ' + Path;
         GitClient.RepoPath := FRepoPath;
         If GitClient.DiffPath(Path, Staged, DiffText) Then
           Begin
             If Trim(DiffText) = '' Then
-              FDiffMemo.Lines.Text := '(no textual diff for ' + Path + ')'
+              FDiffView.LoadPlainText(Title, '(no textual diff for ' + Path + ')')
             Else
-              FDiffMemo.Lines.Text := DiffText;
+              FDiffView.LoadDiff(Title, DiffText);
           End
         Else
-          FDiffMemo.Lines.Text := 'Diff failed: ' + GitClient.LastError;
+          FDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
         Exit; { show first selected only }
       End;
 End;
