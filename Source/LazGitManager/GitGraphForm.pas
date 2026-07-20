@@ -155,12 +155,12 @@ End;
 Procedure TGitGraphForm.FormCreate(Sender: TObject);
 Begin
   UpdateStatus;
-  WorkflowLog.Info('GitGraph', 'Git Graph window created');
+  WorkflowLogger.Info('GitGraph', 'Git Graph window created');
 End;
 
 Procedure TGitGraphForm.FormDestroy(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitGraph', 'Git Graph window destroyed');
+  WorkflowLogger.Info('GitGraph', 'Git Graph window destroyed');
 End;
 
 Procedure TGitGraphForm.PaintBoxPaint(Sender: TObject);
@@ -182,7 +182,7 @@ End;
 
 Procedure TGitGraphForm.RefreshActionExecute(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitGraph', 'Manual refresh requested');
+  WorkflowLogger.Info('GitGraph', 'Manual refresh requested');
   If FRepoPath <> '' Then
     Begin
       { TODO: call GitService.Refresh }

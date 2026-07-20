@@ -69,7 +69,7 @@ Begin
   FApiKey := ApiKey;
   If Model <> '' Then
     FModel := Model;
-  WorkflowLog.Info('GrokService', 'Credentials updated – model=' + FModel);
+  WorkflowLogger.Info('GrokService', 'Credentials updated – model=' + FModel);
 End;
 
 Procedure TGrokService.ClearHistory;
@@ -92,7 +92,7 @@ Function TGrokService.SendAndStream(OnToken: TGrokStreamEvent): Boolean;
 Begin
   { Placeholder – Phase 2 will implement HTTP SSE streaming with fphttpclient. }
   Result := False;
-  WorkflowLog.Warning('GrokService', 'SendAndStream not yet implemented');
+  WorkflowLogger.Warning('GrokService', 'SendAndStream not yet implemented');
   If Assigned(OnToken) Then
     Begin
       OnToken('(GrokService streaming not yet implemented – Phase 2)', False);

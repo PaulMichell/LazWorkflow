@@ -179,12 +179,12 @@ Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
   UpdateStatusFooter;
   AppendMessage('system', 'Grok Chat ready. Type a message and press Send.');
-  WorkflowLog.Info('GrokChat', 'Grok Chat window created');
+  WorkflowLogger.Info('GrokChat', 'Grok Chat window created');
 End;
 
 Procedure TGrokChatForm.FormDestroy(Sender: TObject);
 Begin
-  WorkflowLog.Info('GrokChat', 'Grok Chat window destroyed');
+  WorkflowLogger.Info('GrokChat', 'Grok Chat window destroyed');
 End;
 
 Procedure TGrokChatForm.UpdateStatusFooter;
@@ -272,12 +272,12 @@ End;
 Procedure TGrokChatForm.DocumentChanged(Const FileName: String; Const NewContent: String);
 Begin
   { Future: if this document is open in a Markdown window, refresh it. }
-  WorkflowLog.Debug('GrokChat', 'Document changed: ' + FileName);
+  WorkflowLogger.Debug('GrokChat', 'Document changed: ' + FileName);
 End;
 
 Procedure TGrokChatForm.DocumentSaved(Const FileName: String);
 Begin
-  WorkflowLog.Debug('GrokChat', 'Document saved: ' + FileName);
+  WorkflowLogger.Debug('GrokChat', 'Document saved: ' + FileName);
 End;
 
 End.

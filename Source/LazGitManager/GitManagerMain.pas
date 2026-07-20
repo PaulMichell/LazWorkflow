@@ -38,31 +38,31 @@ End;
 
 Procedure DoGitStatus(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitManager', 'Git Status requested');
+  WorkflowLogger.Info('GitManager', 'Git Status requested');
   { TODO: open status window or refresh graph }
 End;
 
 Procedure DoGitCommit(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitManager', 'Git Commit requested');
+  WorkflowLogger.Info('GitManager', 'Git Commit requested');
   { TODO: show commit dialog }
 End;
 
 Procedure DoGitPush(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitManager', 'Git Push requested');
+  WorkflowLogger.Info('GitManager', 'Git Push requested');
   { TODO: push via GitService }
 End;
 
 Procedure DoGitPull(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitManager', 'Git Pull requested');
+  WorkflowLogger.Info('GitManager', 'Git Pull requested');
   { TODO: pull via GitService }
 End;
 
 Procedure DoGitFetch(Sender: TObject);
 Begin
-  WorkflowLog.Info('GitManager', 'Git Fetch requested');
+  WorkflowLogger.Info('GitManager', 'Git Fetch requested');
   { TODO: fetch via GitService }
 End;
 
@@ -84,7 +84,7 @@ Var
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
-  WorkflowLog.Info('GitManager', 'Registering LazGitManager');
+  WorkflowLogger.Info('GitManager', 'Registering LazGitManager');
 
   { Command category }
   Cat := IDECommandList.CreateCategory(Nil, 'Git', 'Git', IDEListEditorCategory);
@@ -114,7 +114,7 @@ Begin
     '100', '100', '900', '600');
   GitGraphWindowCreator.CreateLayout := True;
 
-  WorkflowLog.Info('GitManager', 'LazGitManager registered successfully');
+  WorkflowLogger.Info('GitManager', 'LazGitManager registered successfully');
 End;
 
 Initialization

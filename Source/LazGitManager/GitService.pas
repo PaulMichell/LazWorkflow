@@ -59,7 +59,7 @@ Begin
   ExitCode := -1;
   If FRepoPath = '' Then
     Begin
-      WorkflowLog.Error('GitService', 'No repository path set');
+      WorkflowLogger.Error('GitService', 'No repository path set');
       Exit;
     End;
 
@@ -80,11 +80,11 @@ Begin
       ExitCode := Proc.ExitStatus;
       Result := ExitCode = 0;
       If Not Result Then
-        WorkflowLog.Warning('GitService', Format('git %s exited %d', [Args[0], ExitCode]));
+        WorkflowLogger.Warning('GitService', Format('git %s exited %d', [Args[0], ExitCode]));
     Except
       On E: Exception Do
         Begin
-          WorkflowLog.Error('GitService', 'Failed to run git: ' + E.Message);
+          WorkflowLogger.Error('GitService', 'Failed to run git: ' + E.Message);
           Result := False;
         End;
     End;

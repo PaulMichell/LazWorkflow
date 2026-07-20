@@ -33,7 +33,7 @@ Type
   End;
 
 Var
-  WorkflowLog: TWorkflowLogger;
+  WorkflowLogger: TWorkflowLogger;
 
 Implementation
 
@@ -76,10 +76,10 @@ End;
 
 Initialization
 
-WorkflowLog := TWorkflowLogger.Create;
+WorkflowLogger := TWorkflowLogger.Create;
 
 Finalization
 
-FreeAndNil(WorkflowLog);
+FreeAndNil(WorkflowLogger);
 
 End.

@@ -36,20 +36,20 @@ End;
 
 Procedure DoGrokNewChat(Sender: TObject);
 Begin
-  WorkflowLog.Info('GrokChat', 'New chat requested');
+  WorkflowLogger.Info('GrokChat', 'New chat requested');
   ShowGrokChatWindow(Sender);
   { TODO: tell form to start new conversation }
 End;
 
 Procedure DoGrokOpenMarkdown(Sender: TObject);
 Begin
-  WorkflowLog.Info('GrokChat', 'Open Markdown document requested');
+  WorkflowLogger.Info('GrokChat', 'Open Markdown document requested');
   { TODO: show open dialog and create Markdown window }
 End;
 
 Procedure DoGrokBuild(Sender: TObject);
 Begin
-  WorkflowLog.Info('GrokChat', 'Build project requested from Grok');
+  WorkflowLogger.Info('GrokChat', 'Build project requested from Grok');
   If Assigned(LazarusIDE) Then
     LazarusIDE.DoBuildProject(crCompile, []);
 End;
@@ -72,7 +72,7 @@ Var
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
-  WorkflowLog.Info('GrokChat', 'Registering LazGrokChat');
+  WorkflowLogger.Info('GrokChat', 'Registering LazGrokChat');
 
   Cat := IDECommandList.CreateCategory(Nil, 'Grok', 'Grok', IDEListEditorCategory);
 
@@ -94,7 +94,7 @@ Begin
     '120', '80', '800', '650');
   GrokChatWindowCreator.CreateLayout := True;
 
-  WorkflowLog.Info('GrokChat', 'LazGrokChat registered successfully');
+  WorkflowLogger.Info('GrokChat', 'LazGrokChat registered successfully');
 End;
 
 End.
