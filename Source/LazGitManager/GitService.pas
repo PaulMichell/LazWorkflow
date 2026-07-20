@@ -32,7 +32,7 @@ Type
   End;
 
 Var
-  GitService: TGitService;
+  GitClient: TGitService;
 
 Implementation
 
@@ -185,10 +185,10 @@ End;
 
 Initialization
 
-GitService := TGitService.Create;
+GitClient := TGitService.Create;
 
 Finalization
 
-FreeAndNil(GitService);
+FreeAndNil(GitClient);
 
 End.

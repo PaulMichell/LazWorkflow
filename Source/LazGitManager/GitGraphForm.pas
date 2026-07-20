@@ -43,9 +43,6 @@ Type
     Procedure SetRepository(Const ARepoPath: String);
   End;
 
-Var
-  GitGraphForm: TGitGraphForm;
-
 Implementation
 
 {$R *.lfm}
@@ -185,7 +182,7 @@ Begin
   WorkflowLogger.Info('GitGraph', 'Manual refresh requested');
   If FRepoPath <> '' Then
     Begin
-      { TODO: call GitService.Refresh }
+      { TODO: call GitClient.Refresh }
       FPaintBox.Invalidate;
     End;
   UpdateStatus;

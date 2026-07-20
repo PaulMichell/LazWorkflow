@@ -42,7 +42,7 @@ Type
   End;
 
 Var
-  GrokService: TGrokService;
+  GrokClient: TGrokService;
 
 Implementation
 
@@ -102,10 +102,10 @@ End;
 
 Initialization
 
-GrokService := TGrokService.Create;
+GrokClient := TGrokService.Create;
 
 Finalization
 
-FreeAndNil(GrokService);
+FreeAndNil(GrokClient);
 
 End.

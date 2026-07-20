@@ -219,7 +219,7 @@ Begin
   AppendMessage('user', UserText);
   FInputEdit.Clear;
   FStatusFooter.SetRightText('Thinking...');
-  { TODO: call GrokService.SendMessage asynchronously and stream reply }
+  { TODO: call GrokClient.SendAndStream asynchronously and stream reply }
   AppendMessage('assistant', '(Streaming reply will appear here – Phase 2)');
   FContextUsed := FContextUsed + Length(UserText) Div 4 + 50; { rough token estimate }
   UpdateStatusFooter;
