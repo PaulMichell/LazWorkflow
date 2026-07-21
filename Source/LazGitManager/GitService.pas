@@ -56,6 +56,11 @@ Type
     Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
     Function Push(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
     Function InitRepository(Const Path: String): Boolean;
+    Function CloneRepository(Const RemoteUrl, TargetDir: String): Boolean;
+    Function ListRemotes(Out Names, Urls: TStringList): Boolean;
+    Function AddRemote(Const Name, Url: String): Boolean;
+    Function SetRemoteUrl(Const Name, Url: String): Boolean;
+    Function RemoveRemote(Const Name: String): Boolean;
     Function ShowCommit(Const Sha: String; Out Text: String): Boolean;
     Function Checkout(Const RefName: String): Boolean;
     Function CreateBranch(Const BranchName, StartPoint: String): Boolean;
@@ -596,7 +601,8 @@ Begin
     Exit;
   If Not DirectoryExists(Dir) Then
     Begin
-      WorkflowLogger.Error('GitService', 'Init path does not exist: ' + Dir);
+      FLastError := 'Init path does not exist: ' + Dir;
+      WorkflowLogger.Error('GitService', FLastError);
       Exit;
     End;
   If IsRepository(Dir) Then
@@ -613,6 +619,134 @@ Begin
       WorkflowLogger.Info('GitService', 'Initialised repository at ' + Dir);
       WorkflowEventBus.NotifyRepositoryStateChanged(Dir, grsClean);
     End;
+End;
+
+Function TGitService.CloneRepository(Const RemoteUrl, TargetDir: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  ParentDir, Url, Dest: String;
+Begin
+  Result := False;
+  Url := Trim(RemoteUrl);
+  Dest := ExpandFileName(TargetDir);
+  If Url = '' Then
+    Begin
+      FLastError := 'Remote URL is empty';
+      Exit;
+    End;
+  If Dest = '' Then
+    Begin
+      FLastError := 'Target directory is empty';
+      Exit;
+    End;
+  ParentDir := ExtractFileDir(ExcludeTrailingPathDelimiter(Dest));
+  If (ParentDir <> '') And (Not DirectoryExists(ParentDir)) Then
+    Begin
+      FLastError := 'Parent folder does not exist: ' + ParentDir;
+      Exit;
+    End;
+  If DirectoryExists(Dest) Then
+    Begin
+      FLastError := 'Target folder already exists: ' + Dest;
+      Exit;
+    End;
+  { git clone runs with cwd = parent; last arg is target folder name/path. }
+  If ParentDir = '' Then
+    ParentDir := GetCurrentDir;
+  Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
+  If Result Then
+    Begin
+      FRepoPath := Dest;
+      WorkflowLogger.Info('GitService', 'Cloned ' + Url + ' into ' + Dest);
+      WorkflowEventBus.NotifyRepositoryStateChanged(Dest, grsClean);
+    End
+  Else If Trim(OutputText) <> '' Then
+    FLastError := Trim(OutputText);
+End;
+
+Function TGitService.ListRemotes(Out Names, Urls: TStringList): Boolean;
+Var
+  OutputText, Line, Name, Url: String;
+  ExitCode, I, TabPos: Integer;
+  Lines: TStringList;
+Begin
+  Result := False;
+  Names := TStringList.Create;
+  Urls := TStringList.Create;
+
+  If Not RunGit(['remote', '-v'], OutputText, ExitCode) Then
+    Exit;
+
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := OutputText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        If Line = '' Then
+          Continue;
+        { name\turl (fetch|push) – keep one row per remote (fetch). }
+        If Pos('(push)', Line) > 0 Then
+          Continue;
+        TabPos := Pos(#9, Line);
+        If TabPos = 0 Then
+          TabPos := Pos(' ', Line);
+        If TabPos = 0 Then
+          Continue;
+        Name := Copy(Line, 1, TabPos - 1);
+        Url := Trim(Copy(Line, TabPos + 1, MaxInt));
+        If Pos(' (', Url) > 0 Then
+          Url := Trim(Copy(Url, 1, Pos(' (', Url) - 1));
+        If Names.IndexOf(Name) < 0 Then
+          Begin
+            Names.Add(Name);
+            Urls.Add(Url);
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+  Result := True;
+End;
+
+Function TGitService.AddRemote(Const Name, Url: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Trim(Name) = '') Or (Trim(Url) = '') Then
+    Begin
+      FLastError := 'Remote name and URL are required';
+      Exit;
+    End;
+  Result := RunGit(['remote', 'add', Trim(Name), Trim(Url)], OutputText, ExitCode);
+End;
+
+Function TGitService.SetRemoteUrl(Const Name, Url: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Trim(Name) = '') Or (Trim(Url) = '') Then
+    Begin
+      FLastError := 'Remote name and URL are required';
+      Exit;
+    End;
+  Result := RunGit(['remote', 'set-url', Trim(Name), Trim(Url)], OutputText, ExitCode);
+End;
+
+Function TGitService.RemoveRemote(Const Name: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If Trim(Name) = '' Then
+    Exit;
+  Result := RunGit(['remote', 'remove', Trim(Name)], OutputText, ExitCode);
 End;
 
 Function TGitService.ShowCommit(Const Sha: String; Out Text: String): Boolean;

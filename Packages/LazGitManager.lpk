@@ -18,7 +18,7 @@
     <Description Value="Git lifecycle UI and high-quality commit history graph for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="10">
+    <Files Count="13">
       <Item1>
         <Filename Value="../Source/LazGitManager/RegLazGitManager.pas"/>
         <HasRegisterProc Value="True"/>
@@ -61,6 +61,18 @@
         <Filename Value="../Source/LazGitManager/GitDiffView.pas"/>
         <UnitName Value="GitDiffView"/>
       </Item10>
+      <Item11>
+        <Filename Value="../Source/LazGitManager/GitInitForm.pas"/>
+        <UnitName Value="GitInitForm"/>
+      </Item11>
+      <Item12>
+        <Filename Value="../Source/LazGitManager/GitCloneForm.pas"/>
+        <UnitName Value="GitCloneForm"/>
+      </Item12>
+      <Item13>
+        <Filename Value="../Source/LazGitManager/GitRemotesForm.pas"/>
+        <UnitName Value="GitRemotesForm"/>
+      </Item13>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>

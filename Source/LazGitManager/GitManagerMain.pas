@@ -14,6 +14,7 @@ Uses
   LazIDEIntf, ProjectIntf;
 
 Procedure RegisterGitManager;
+Procedure UpdateRepositoryMenuState;
 
 Var
   ManageRepositoryWindowCreator: TIDEWindowCreator;
@@ -21,7 +22,8 @@ Var
 Implementation
 
 Uses
-  Dialogs, WorkflowLog, WorkflowEvents, GitGraphForm, GitService, GitConfig, GitSettingsForm;
+  Dialogs, WorkflowLog, WorkflowEvents, GitGraphForm, GitService, GitConfig,
+  GitSettingsForm, GitInitForm, GitCloneForm;
 
 Type
   TGitManagerIDEHooks = Class
@@ -33,6 +35,7 @@ Type
 Var
   CmdRepoInit: TIDECommand;
   CmdRepoManage: TIDECommand;
+  CmdRepoClone: TIDECommand;
   CmdRepoSettings: TIDECommand;
   GitManagerIDEHooks: TGitManagerIDEHooks;
 
@@ -47,6 +50,28 @@ Begin
     Result := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename));
 End;
 
+Function CurrentProjectHasRepository: Boolean;
+Var
+  StartPath: String;
+Begin
+  Result := False;
+  If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
+    Exit;
+  StartPath := ProjectStartPath(LazarusIDE.ActiveProject);
+  If StartPath = '' Then
+    Exit;
+  Result := GitClient.DetectRepository(StartPath) <> '';
+End;
+
+Procedure UpdateRepositoryMenuState;
+Var
+  HasRepo: Boolean;
+Begin
+  HasRepo := CurrentProjectHasRepository;
+  If Assigned(CmdRepoManage) Then
+    CmdRepoManage.Enabled := HasRepo;
+End;
+
 Function TGitManagerIDEHooks.ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
 Var
   StartPath, RepoPath: String;
@@ -54,7 +79,10 @@ Begin
   Result := mrOk;
   StartPath := ProjectStartPath(AProject);
   If StartPath = '' Then
-    Exit;
+    Begin
+      UpdateRepositoryMenuState;
+      Exit;
+    End;
   If Assigned(GitClient) Then
     Begin
       RepoPath := GitClient.DetectRepository(StartPath);
@@ -65,9 +93,13 @@ Begin
           WorkflowEventBus.NotifyRepositoryStateChanged(RepoPath, grsUnknown);
         End
       Else
-        WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
+        Begin
+          GitClient.RepoPath := '';
+          WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
+        End;
     End;
   RefreshOpenGitGraphForms;
+  UpdateRepositoryMenuState;
 End;
 
 Function TGitManagerIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
@@ -76,50 +108,89 @@ Begin
   If Assigned(GitClient) Then
     GitClient.RepoPath := '';
   RefreshOpenGitGraphForms;
+  UpdateRepositoryMenuState;
 End;
 
 Procedure ShowManageRepository(Sender: TObject);
 Begin
+  If Not CurrentProjectHasRepository Then
+    Begin
+      MessageDlg('No Git repository found for the current project.' + LineEnding +
+        'Use Initialise Repository or Clone Repository first.', mtInformation, [mbOK], 0);
+      UpdateRepositoryMenuState;
+      Exit;
+    End;
   IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
 End;
 
 Procedure DoInitialiseRepository(Sender: TObject);
 Var
-  StartPath, RepoPath: String;
+  DefaultPath, ChosenPath, RepoPath: String;
   Project: TLazProject;
 Begin
   If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
     Exit;
   Project := LazarusIDE.ActiveProject;
-  StartPath := ProjectStartPath(Project);
-  If StartPath = '' Then
-    Begin
-      MessageDlg('Open a saved project before initialising a repository.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
+  DefaultPath := ProjectStartPath(Project);
+  If DefaultPath = '' Then
+    DefaultPath := GetCurrentDir;
 
-  RepoPath := GitClient.DetectRepository(StartPath);
+  If Not ShowGitInitForm(DefaultPath, ChosenPath) Then
+    Exit;
+
+  RepoPath := GitClient.DetectRepository(ChosenPath);
   If RepoPath <> '' Then
     Begin
-      MessageDlg('This project is already inside a Git repository:' + LineEnding + RepoPath,
+      MessageDlg('This folder is already inside a Git repository:' + LineEnding + RepoPath,
         mtInformation, [mbOK], 0);
       GitClient.RepoPath := RepoPath;
+      UpdateRepositoryMenuState;
       ShowManageRepository(Sender);
       Exit;
     End;
 
-  If MessageDlg('Initialise a new Git repository in:' + LineEnding + StartPath + LineEnding + LineEnding +
-    'Continue?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
-    Exit;
-
-  If GitClient.InitRepository(StartPath) Then
+  If GitClient.InitRepository(ChosenPath) Then
     Begin
-      MessageDlg('Repository initialised at:' + LineEnding + StartPath, mtInformation, [mbOK], 0);
+      MessageDlg('Repository initialised at:' + LineEnding + ChosenPath, mtInformation, [mbOK], 0);
+      UpdateRepositoryMenuState;
       ShowManageRepository(Sender);
       RefreshOpenGitGraphForms;
     End
   Else
-    MessageDlg('Failed to initialise repository. See the log for details.', mtError, [mbOK], 0);
+    MessageDlg('Failed to initialise repository: ' + GitClient.LastError, mtError, [mbOK], 0);
+End;
+
+Procedure DoCloneRepository(Sender: TObject);
+Var
+  DefaultPath, Url, Target: String;
+Begin
+  If Not Assigned(GitClient) Then
+    Exit;
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+    DefaultPath := ProjectStartPath(LazarusIDE.ActiveProject)
+  Else
+    DefaultPath := GetCurrentDir;
+  If DefaultPath = '' Then
+    DefaultPath := GetCurrentDir;
+
+  If Not ShowGitCloneForm(DefaultPath, Url, Target) Then
+    Exit;
+
+  Screen.Cursor := crHourGlass;
+  Try
+    If GitClient.CloneRepository(Url, Target) Then
+      Begin
+        MessageDlg('Cloned successfully into:' + LineEnding + Target, mtInformation, [mbOK], 0);
+        UpdateRepositoryMenuState;
+        { Open manage if the active project is under the clone; otherwise just notify. }
+        If CurrentProjectHasRepository Then
+          ShowManageRepository(Sender);
+      End
+    Else
+      MessageDlg('Clone failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  Finally
+    Screen.Cursor := crDefault;
+  End;
 End;
 
 Procedure DoRepositorySettings(Sender: TObject);
@@ -159,9 +230,12 @@ Begin
     Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository', Key, Nil, @DoInitialiseRepository);
+  CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
+    IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
   CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
     IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
+  CmdRepoClone := RegisterIDECommand(Cat, 'RepoClone', 'Clone Repository',
+    IDEShortCut(VK_C, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoCloneRepository);
   CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
   { Top-level Repository menu, placed immediately after Run. }
@@ -173,6 +247,7 @@ Begin
     End;
   RegisterIDEMenuCommand(RepoMenu, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
   RegisterIDEMenuCommand(RepoMenu, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+  RegisterIDEMenuCommand(RepoMenu, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
   RegisterIDEMenuSection(RepoMenu, 'RepoSep1');
   RegisterIDEMenuCommand(RepoMenu, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
 
@@ -185,6 +260,7 @@ Begin
       LazarusIDE.AddHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
     End;
 
+  UpdateRepositoryMenuState;
   WorkflowLogger.Info('GitManager', 'LazGitManager registered successfully');
 End;
 

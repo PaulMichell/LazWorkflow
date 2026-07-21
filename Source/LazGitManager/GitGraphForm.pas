@@ -28,6 +28,7 @@ Type
     FDiffView: TGitDiffView;
     FActionList: TActionList;
     FCommitAction: TAction;
+    FRemotesAction: TAction;
     FFetchAction: TAction;
     FPullAction: TAction;
     FPushAction: TAction;
@@ -68,6 +69,7 @@ Type
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
     Procedure CommitActionExecute(Sender: TObject);
+    Procedure RemotesActionExecute(Sender: TObject);
     Procedure FetchActionExecute(Sender: TObject);
     Procedure PullActionExecute(Sender: TObject);
     Procedure PushActionExecute(Sender: TObject);
@@ -120,7 +122,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, GitCommitForm, LazIDEIntf, ProjectIntf, DateUtils, Math;
+  WorkflowLog, GitService, GitConfig, GitCommitForm, GitRemotesForm, LazIDEIntf, ProjectIntf,
+  DateUtils, Math;
 
 Type
   TGitIndexThread = Class(TThread)
@@ -334,7 +337,11 @@ Begin
   FCommitAction.Caption := 'Commit…';
   FCommitAction.OnExecute := @CommitActionExecute;
   FCommitAction.ActionList := FActionList;
-  FCommitAction.ShortCut := ShortCut(VK_C, [ssCtrl, ssShift]);
+
+  FRemotesAction := TAction.Create(Self);
+  FRemotesAction.Caption := 'Remotes…';
+  FRemotesAction.OnExecute := @RemotesActionExecute;
+  FRemotesAction.ActionList := FActionList;
 
   FFetchAction := TAction.Create(Self);
   FFetchAction.Caption := 'Fetch';
@@ -365,6 +372,12 @@ Begin
     Begin
       Parent := FToolBar;
       Action := FCommitAction;
+      Style := tbsButton;
+    End;
+  With TToolButton.Create(FToolBar) Do
+    Begin
+      Parent := FToolBar;
+      Action := FRemotesAction;
       Style := tbsButton;
     End;
   With TToolButton.Create(FToolBar) Do
@@ -527,13 +540,6 @@ Begin
         ManualRefresh;
         Key := 0;
       End;
-    Ord('C'), Ord('c'):
-      If ssCtrl In Shift Then
-        If ssShift In Shift Then
-          Begin
-            CommitActionExecute(Nil);
-            Key := 0;
-          End;
     VK_UP:
       Begin
         MoveSelection(-1);
@@ -1136,6 +1142,17 @@ Begin
     End;
   If ShowGitCommitForm(FRepoPath, DidPush) Then
     ManualRefresh;
+End;
+
+Procedure TGitGraphForm.RemotesActionExecute(Sender: TObject);
+Begin
+  If FRepoPath = '' Then
+    Begin
+      MessageDlg('No repository is bound to this window.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  ShowGitRemotesForm(FRepoPath);
+  ManualRefresh;
 End;
 
 Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);
