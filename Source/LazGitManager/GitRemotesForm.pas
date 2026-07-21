@@ -21,6 +21,7 @@ Type
     FOriginalNames: TStringList;
     FOriginalUrls: TStringList;
     FBottomBar: TPanel;
+    FLeftButtons: TPanel;
     FSeparator: TBevel;
     FBtnAdd: TButton;
     FBtnRemove: TButton;
@@ -113,7 +114,7 @@ Begin
       Shape := bsTopLine;
     End;
 
-  { Align order: alRight first (rightmost), then alLeft in left-to-right order. }
+  { Right cluster: create rightmost first so alRight stacks as OK then Cancel. }
   FBtnCancel := TButton.Create(Self);
   With FBtnCancel Do
     Begin
@@ -141,14 +142,32 @@ Begin
       Default := True;
     End;
 
-  FBtnEdit := TButton.Create(Self);
-  With FBtnEdit Do
+  { Left cluster: ChildSizing flows Edit → Add → Remove left-to-right. }
+  FLeftButtons := TPanel.Create(Self);
+  With FLeftButtons Do
     Begin
       Parent := FBottomBar;
       Align := alLeft;
+      BevelOuter := bvNone;
+      Caption := '';
+      Width := 300;
+      ChildSizing.Layout := cclLeftToRightThenTopToBottom;
+      ChildSizing.ControlsPerLine := 4;
+      ChildSizing.LeftRightSpacing := 8;
+      ChildSizing.TopBottomSpacing := 8;
+      ChildSizing.HorizontalSpacing := 8;
+      ChildSizing.EnlargeHorizontal := crsAnchorAligning;
+      ChildSizing.EnlargeVertical := crsAnchorAligning;
+    End;
+
+  FBtnEdit := TButton.Create(Self);
+  With FBtnEdit Do
+    Begin
+      Parent := FLeftButtons;
+      Align := alNone;
       Width := 90;
+      Height := 28;
       AutoSize := False;
-      BorderSpacing.Around := 8;
       Caption := 'Edit';
       OnClick := @BtnEditClick;
     End;
@@ -156,12 +175,11 @@ Begin
   FBtnAdd := TButton.Create(Self);
   With FBtnAdd Do
     Begin
-      Parent := FBottomBar;
-      Align := alLeft;
+      Parent := FLeftButtons;
+      Align := alNone;
       Width := 90;
+      Height := 28;
       AutoSize := False;
-      BorderSpacing.Around := 8;
-      BorderSpacing.Left := 0;
       Caption := 'Add';
       OnClick := @BtnAddClick;
     End;
@@ -169,12 +187,11 @@ Begin
   FBtnRemove := TButton.Create(Self);
   With FBtnRemove Do
     Begin
-      Parent := FBottomBar;
-      Align := alLeft;
+      Parent := FLeftButtons;
+      Align := alNone;
       Width := 90;
+      Height := 28;
       AutoSize := False;
-      BorderSpacing.Around := 8;
-      BorderSpacing.Left := 0;
       Caption := 'Remove';
       OnClick := @BtnRemoveClick;
     End;

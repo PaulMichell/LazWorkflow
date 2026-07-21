@@ -369,22 +369,17 @@ End;
 
 Procedure TGitGraphForm.CreateUI;
 
-  Function MakeHistoryButton(Const ACaption: String; AAction: TAction; First: Boolean): TButton;
+  Function MakeHistoryButton(Const ACaption: String; AAction: TAction; AWidth: Integer): TButton;
   Begin
     Result := TButton.Create(Self);
     With Result Do
       Begin
         Parent := FHistoryButtons;
-        Align := alLeft;
-        Width := 90;
+        { alNone + ChildSizing.Layout = cclLeftToRight… so listed order is LTR. }
+        Align := alNone;
         AutoSize := False;
-        If First Then
-          BorderSpacing.Around := 4
-        Else
-          Begin
-            BorderSpacing.Around := 4;
-            BorderSpacing.Left := 0;
-          End;
+        Width := AWidth;
+        Height := 28;
         Action := AAction;
         Caption := ACaption;
       End;
@@ -479,14 +474,24 @@ Begin
       Height := 36;
       BevelOuter := bvNone;
       Caption := '';
+      { Flow children left-to-right in creation order (do not use alLeft stacking). }
+      ChildSizing.Layout := cclLeftToRightThenTopToBottom;
+      ChildSizing.ControlsPerLine := 8;
+      ChildSizing.LeftRightSpacing := 4;
+      ChildSizing.TopBottomSpacing := 4;
+      ChildSizing.HorizontalSpacing := 4;
+      ChildSizing.VerticalSpacing := 4;
+      ChildSizing.EnlargeHorizontal := crsAnchorAligning;
+      ChildSizing.EnlargeVertical := crsAnchorAligning;
+      ChildSizing.ShrinkHorizontal := crsScaleChilds;
+      ChildSizing.ShrinkVertical := crsScaleChilds;
     End;
 
-  { Align alLeft creation order = left-to-right: Push, Pull, Fetch, Remotes. }
-  FBtnPush := MakeHistoryButton('Push', FPushAction, True);
-  FBtnPull := MakeHistoryButton('Pull', FPullAction, False);
-  FBtnFetch := MakeHistoryButton('Fetch', FFetchAction, False);
-  FBtnRemotes := MakeHistoryButton('Remotes…', FRemotesAction, False);
-  FBtnRemotes.Width := 100;
+  { Visual LTR order: Push, Pull, Fetch, Remotes… }
+  FBtnPush := MakeHistoryButton('Push', FPushAction, 90);
+  FBtnPull := MakeHistoryButton('Pull', FPullAction, 90);
+  FBtnFetch := MakeHistoryButton('Fetch', FFetchAction, 90);
+  FBtnRemotes := MakeHistoryButton('Remotes…', FRemotesAction, 100);
 
   FDiffView := TGitDiffView.Create(Self);
   With FDiffView Do
