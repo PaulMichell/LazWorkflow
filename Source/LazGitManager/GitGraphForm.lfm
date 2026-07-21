@@ -222,17 +222,263 @@ object GitGraphForm: TGitGraphForm
       Caption = 'Files'
       ClientHeight = 550
       ClientWidth = 892
-      object FFilesList: TListBox
-        Left = 6
-        Height = 538
-        Top = 6
-        Width = 880
-        Align = alClient
-        BorderSpacing.Around = 6
-        ItemHeight = 0
-        Sorted = False
+      object FFilesLeftPanel: TPanel
+        Left = 0
+        Height = 550
+        Top = 0
+        Width = 380
+        Align = alLeft
+        BevelOuter = bvNone
+        ClientHeight = 550
+        ClientWidth = 380
         TabOrder = 0
+        object FFilesList: TListBox
+          Left = 4
+          Height = 470
+          Top = 4
+          Width = 372
+          Align = alClient
+          BorderSpacing.Around = 4
+          ItemHeight = 0
+          MultiSelect = True
+          Sorted = False
+          TabOrder = 0
+          OnDblClick = FilesListDblClick
+          OnSelectionChange = FilesListSelectionChange
+        end
+        object FFilesBottomBar: TPanel
+          Left = 0
+          Height = 72
+          Top = 478
+          Width = 380
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 72
+          ClientWidth = 380
+          TabOrder = 1
+          object FExcludeUntrackedCheck: TCheckBox
+            Left = 8
+            Height = 23
+            Top = 8
+            Width = 364
+            Align = alTop
+            BorderSpacing.Around = 8
+            Caption = 'Exclude Untracked'
+            Checked = True
+            State = cbChecked
+            TabOrder = 0
+            OnChange = ExcludeUntrackedChange
+          end
+          object FBtnIgnoreFiles: TButton
+            Left = 8
+            Height = 28
+            Top = 39
+            Width = 140
+            BorderSpacing.Left = 8
+            Caption = 'Ignore Files…'
+            OnClick = BtnIgnoreFilesClick
+            TabOrder = 1
+          end
+        end
+      end
+      object FFilesSplitter: TSplitter
+        Left = 380
+        Height = 550
+        Top = 0
+        Width = 5
+      end
+      object FFilesRightPanel: TPanel
+        Left = 385
+        Height = 550
+        Top = 0
+        Width = 507
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 550
+        ClientWidth = 507
+        TabOrder = 1
+        object FCommitPanel: TPanel
+          Left = 0
+          Height = 150
+          Top = 400
+          Width = 507
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 150
+          ClientWidth = 507
+          TabOrder = 2
+          object FMessageLabel: TLabel
+            Left = 8
+            Height = 17
+            Top = 4
+            Width = 491
+            Align = alTop
+            BorderSpacing.Left = 8
+            BorderSpacing.Top = 4
+            Caption = 'Commit message'
+            ParentColor = False
+          end
+          object FMessageMemo: TMemo
+            Left = 8
+            Height = 60
+            Top = 21
+            Width = 491
+            Align = alClient
+            BorderSpacing.Around = 8
+            OnChange = MessageChange
+            ScrollBars = ssAutoBoth
+            TabOrder = 0
+            WantTabs = False
+          end
+          object FCommitActions: TPanel
+            Left = 0
+            Height = 36
+            Top = 114
+            Width = 507
+            Align = alBottom
+            BevelOuter = bvNone
+            ClientHeight = 36
+            ClientWidth = 507
+            TabOrder = 1
+            ChildSizing.LeftRightSpacing = 8
+            ChildSizing.TopBottomSpacing = 4
+            ChildSizing.HorizontalSpacing = 8
+            ChildSizing.Layout = cclLeftToRightThenTopToBottom
+            ChildSizing.ControlsPerLine = 6
+            object FPushCheck: TCheckBox
+              Left = 8
+              Height = 23
+              Top = 6
+              Width = 220
+              Caption = 'Push after successful commit'
+              TabOrder = 0
+            end
+            object FBtnCommit: TButton
+              Left = 236
+              Height = 28
+              Top = 4
+              Width = 90
+              Caption = 'Commit'
+              Enabled = False
+              OnClick = BtnCommitClick
+              TabOrder = 1
+            end
+            object FBtnRefreshFiles: TButton
+              Left = 334
+              Height = 28
+              Top = 4
+              Width = 90
+              Caption = 'Refresh'
+              OnClick = BtnRefreshFilesClick
+              TabOrder = 2
+            end
+          end
+        end
+        inline FFilesDiffView: TGitDiffView
+          Height = 180
+          Top = 216
+          Width = 499
+          Align = alBottom
+          BorderSpacing.Around = 4
+          ClientHeight = 180
+          ClientWidth = 499
+          TabOrder = 1
+        end
+        object FStagedRow: TPanel
+          Left = 0
+          Height = 212
+          Top = 0
+          Width = 507
+          Align = alClient
+          BevelOuter = bvNone
+          ClientHeight = 212
+          ClientWidth = 507
+          TabOrder = 0
+          object FStageButtons: TPanel
+            Left = 0
+            Height = 212
+            Top = 0
+            Width = 110
+            Align = alLeft
+            BevelOuter = bvNone
+            ClientHeight = 212
+            ClientWidth = 110
+            TabOrder = 0
+            object FBtnStage: TButton
+              Left = 10
+              Height = 28
+              Top = 28
+              Width = 90
+              Caption = 'Stage >'
+              OnClick = BtnStageClick
+              TabOrder = 0
+            end
+            object FBtnUnstage: TButton
+              Left = 10
+              Height = 28
+              Top = 64
+              Width = 90
+              Caption = '< Unstage'
+              OnClick = BtnUnstageClick
+              TabOrder = 1
+            end
+            object FBtnStageAll: TButton
+              Left = 10
+              Height = 28
+              Top = 108
+              Width = 90
+              Caption = 'Stage all'
+              OnClick = BtnStageAllClick
+              TabOrder = 2
+            end
+            object FBtnUnstageAll: TButton
+              Left = 10
+              Height = 28
+              Top = 144
+              Width = 90
+              Caption = 'Unstage all'
+              OnClick = BtnUnstageAllClick
+              TabOrder = 3
+            end
+          end
+          object FStagedPanel: TPanel
+            Left = 110
+            Height = 212
+            Top = 0
+            Width = 397
+            Align = alClient
+            BevelOuter = bvNone
+            ClientHeight = 212
+            ClientWidth = 397
+            TabOrder = 1
+            object FStagedLabel: TLabel
+              Left = 8
+              Height = 17
+              Top = 4
+              Width = 381
+              Align = alTop
+              BorderSpacing.Left = 8
+              BorderSpacing.Top = 4
+              Caption = 'Staged for commit'
+              ParentColor = False
+            end
+            object FStagedList: TListBox
+              Left = 4
+              Height = 183
+              Top = 21
+              Width = 389
+              Align = alClient
+              BorderSpacing.Around = 4
+              ItemHeight = 0
+              MultiSelect = True
+              OnDblClick = StagedListDblClick
+              OnSelectionChange = StagedListSelectionChange
+              TabOrder = 0
+            end
+          end
+        end
       end
     end
   end
 end
+

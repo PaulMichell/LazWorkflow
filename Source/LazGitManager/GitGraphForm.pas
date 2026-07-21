@@ -28,7 +28,30 @@ Type
     FDetailPanel: TPanel;
     FHistoryButtons: TPanel;
     FDiffView: TGitDiffView;
+    FFilesLeftPanel: TPanel;
     FFilesList: TListBox;
+    FFilesBottomBar: TPanel;
+    FExcludeUntrackedCheck: TCheckBox;
+    FBtnIgnoreFiles: TButton;
+    FFilesSplitter: TSplitter;
+    FFilesRightPanel: TPanel;
+    FStagedRow: TPanel;
+    FStageButtons: TPanel;
+    FBtnStage: TButton;
+    FBtnUnstage: TButton;
+    FBtnStageAll: TButton;
+    FBtnUnstageAll: TButton;
+    FStagedPanel: TPanel;
+    FStagedLabel: TLabel;
+    FStagedList: TListBox;
+    FFilesDiffView: TGitDiffView;
+    FCommitPanel: TPanel;
+    FMessageLabel: TLabel;
+    FMessageMemo: TMemo;
+    FCommitActions: TPanel;
+    FPushCheck: TCheckBox;
+    FBtnCommit: TButton;
+    FBtnRefreshFiles: TButton;
     FActionList: TActionList;
     FRemotesAction: TAction;
     FFetchAction: TAction;
@@ -64,6 +87,20 @@ Type
     Procedure PopupCheckout(Sender: TObject);
     Procedure PopupCreateBranch(Sender: TObject);
     Procedure PopupShowCommit(Sender: TObject);
+    Procedure FilesListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure FilesListDblClick(Sender: TObject);
+    Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure StagedListDblClick(Sender: TObject);
+    Procedure ExcludeUntrackedChange(Sender: TObject);
+    Procedure BtnIgnoreFilesClick(Sender: TObject);
+    Procedure BtnStageClick(Sender: TObject);
+    Procedure BtnUnstageClick(Sender: TObject);
+    Procedure BtnStageAllClick(Sender: TObject);
+    Procedure BtnUnstageAllClick(Sender: TObject);
+    Procedure BtnRefreshFilesClick(Sender: TObject);
+    Procedure BtnCommitClick(Sender: TObject);
+    Procedure MessageChange(Sender: TObject);
+    Procedure FilesDiffStatusChanged(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -84,12 +121,17 @@ Type
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
+    FFilesPaths: TStringList;
+    FStagedPaths: TStringList;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFilesList;
+    Procedure UpdateCommitEnabled;
+    Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
+    Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexLoaded;
     Procedure ApplyDetailsLoaded;
     Procedure StartIndexLoad;
@@ -135,7 +177,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, GitRemotesForm, LazIDEIntf, ProjectIntf,
+  WorkflowLog, GitService, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
   DateUtils, Math, FileUtil, LazFileUtils, StrUtils;
 
 Type
@@ -302,6 +344,8 @@ Begin
   FDetailThread := Nil;
   FVisibleFirst := 0;
   FVisibleLast := 0;
+  FFilesPaths := TStringList.Create;
+  FStagedPaths := TStringList.Create;
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   ApplyConfig;
@@ -319,7 +363,11 @@ Begin
   StopIndexThread;
   If Assigned(FDiffView) Then
     FDiffView.Clear;
+  If Assigned(FFilesDiffView) Then
+    FFilesDiffView.Clear;
   WorkflowEventBus.RemoveListener(Self);
+  FreeAndNil(FFilesPaths);
+  FreeAndNil(FStagedPaths);
   FreeAndNil(FModel);
   Inherited Destroy;
 End;
@@ -356,6 +404,14 @@ Begin
 
   If Assigned(FDiffView) Then
     FDiffView.SetViewMode(dvmBrowse);
+  If Assigned(FFilesDiffView) Then
+    Begin
+      FFilesDiffView.SetViewMode(dvmStaging);
+      FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
+    End;
+  If Assigned(FExcludeUntrackedCheck) Then
+    FExcludeUntrackedCheck.Checked := True;
+  UpdateCommitEnabled;
 
   WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
 End;
@@ -1034,15 +1090,25 @@ Var
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
   Idx: Integer;
+  ExcludeUntracked: Boolean;
+  EntryStatus: String;
 Begin
-  If Not Assigned(FFilesList) Then
+  If Not Assigned(FFilesList) Or Not Assigned(FStagedList) Then
     Exit;
+  ExcludeUntracked := Assigned(FExcludeUntrackedCheck) And FExcludeUntrackedCheck.Checked;
+
   FFilesList.Items.BeginUpdate;
+  FStagedList.Items.BeginUpdate;
   Try
     FFilesList.Items.Clear;
+    FStagedList.Items.Clear;
+    FFilesPaths.Clear;
+    FStagedPaths.Clear;
+
     If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
       Begin
         FFilesList.Items.Add('(no repository)');
+        UpdateCommitEnabled;
         Exit;
       End;
 
@@ -1061,7 +1127,13 @@ Begin
             For I := 0 To High(Entries) Do
               Begin
                 Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
-                StatusMap.Values[Rel] := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
+                EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
+                StatusMap.Values[Rel] := EntryStatus;
+                If GitStatusEntryIsStaged(Entries[I]) Then
+                  Begin
+                    FStagedList.Items.Add(GitStatusEntryLabel(Entries[I], True) + Rel);
+                    FStagedPaths.Add(Rel);
+                  End;
               End;
         End;
 
@@ -1086,21 +1158,28 @@ Begin
             StatusText := StatusMap.ValueFromIndex[Idx]
           Else
             StatusText := 'clean';
+          If ExcludeUntracked And (StatusText = 'untracked') Then
+            Continue;
           FFilesList.Items.Add(Rel + '  ' + StatusText);
+          FFilesPaths.Add(Rel);
         End;
 
-      { Include deleted paths from status that no longer exist on disk. }
       For I := 0 To StatusMap.Count - 1 Do
         Begin
           Rel := StatusMap.Names[I];
           If Rel = '' Then
             Continue;
+          StatusText := StatusMap.ValueFromIndex[I];
+          If ExcludeUntracked And (StatusText = 'untracked') Then
+            Continue;
           FullPath := Root + StringReplace(Rel, '/', DirectorySeparator, [rfReplaceAll]);
           If FileExists(FullPath) Then
             Continue;
-          StatusText := StatusMap.ValueFromIndex[I];
-          If FFilesList.Items.IndexOf(Rel + '  ' + StatusText) < 0 Then
-            FFilesList.Items.Add(Rel + '  ' + StatusText);
+          If FFilesPaths.IndexOf(Rel) < 0 Then
+            Begin
+              FFilesList.Items.Add(Rel + '  ' + StatusText);
+              FFilesPaths.Add(Rel);
+            End;
         End;
 
       If FFilesList.Items.Count = 0 Then
@@ -1111,7 +1190,248 @@ Begin
     End;
   Finally
     FFilesList.Items.EndUpdate;
+    FStagedList.Items.EndUpdate;
   End;
+
+  If Assigned(FStagedLabel) Then
+    FStagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
+  If Assigned(FFilesDiffView) Then
+    FFilesDiffView.Clear;
+  UpdateCommitEnabled;
+End;
+
+Procedure TGitGraphForm.UpdateCommitEnabled;
+Var
+  CanCommit: Boolean;
+Begin
+  CanCommit := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
+    Assigned(FMessageMemo) And (Trim(FMessageMemo.Text) <> '');
+  If Assigned(FBtnCommit) Then
+    FBtnCommit.Enabled := CanCommit;
+End;
+
+Function TGitGraphForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
+Var
+  I: Integer;
+Begin
+  Result := TStringList.Create;
+  Result.Duplicates := dupIgnore;
+  Result.Sorted := False;
+  If (List = Nil) Or (Paths = Nil) Then
+    Exit;
+  For I := 0 To List.Count - 1 Do
+    If List.Selected[I] And (I < Paths.Count) Then
+      Result.Add(Paths[I]);
+End;
+
+Procedure TGitGraphForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
+Var
+  I: Integer;
+  DiffText, Path, Title: String;
+Begin
+  If Not Assigned(FFilesDiffView) Then
+    Exit;
+  FFilesDiffView.Clear;
+  FFilesDiffView.SetStagingContext(FRepoPath, StagedSide);
+  If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
+    Exit;
+  For I := 0 To List.Count - 1 Do
+    If List.Selected[I] And (I < Paths.Count) Then
+      Begin
+        Path := Paths[I];
+        If StagedSide Then
+          Title := 'Staged: ' + Path
+        Else
+          Title := 'Working tree: ' + Path;
+        GitClient.RepoPath := FRepoPath;
+        If GitClient.DiffPath(Path, StagedSide, DiffText) Then
+          Begin
+            If Trim(DiffText) = '' Then
+              FFilesDiffView.LoadPlainText(Title, '(no textual diff for ' + Path + ')')
+            Else
+              FFilesDiffView.LoadDiff(Title, DiffText);
+          End
+        Else
+          FFilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
+        Exit;
+      End;
+End;
+
+Procedure TGitGraphForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
+Begin
+  If Assigned(FStagedList) Then
+    FStagedList.ClearSelection;
+  ShowFilesDiff(FFilesList, FFilesPaths, False);
+End;
+
+Procedure TGitGraphForm.FilesListDblClick(Sender: TObject);
+Begin
+  BtnStageClick(Sender);
+End;
+
+Procedure TGitGraphForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
+Begin
+  If Assigned(FFilesList) Then
+    FFilesList.ClearSelection;
+  ShowFilesDiff(FStagedList, FStagedPaths, True);
+End;
+
+Procedure TGitGraphForm.StagedListDblClick(Sender: TObject);
+Begin
+  BtnUnstageClick(Sender);
+End;
+
+Procedure TGitGraphForm.ExcludeUntrackedChange(Sender: TObject);
+Begin
+  RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.BtnIgnoreFilesClick(Sender: TObject);
+Begin
+  If FRepoPath = '' Then
+    Begin
+      MessageDlg('No repository is bound to this window.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If ShowGitIgnoreForm(FRepoPath) Then
+    RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.BtnStageClick(Sender: TObject);
+Var
+  Paths: TStringList;
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  Paths := CollectSelectedPaths(FFilesList, FFilesPaths);
+  Try
+    If Paths.Count = 0 Then
+      Exit;
+    GitClient.RepoPath := FRepoPath;
+    If Not GitClient.StagePaths(Paths) Then
+      MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+    RefreshFilesList;
+  Finally
+    Paths.Free;
+  End;
+End;
+
+Procedure TGitGraphForm.BtnUnstageClick(Sender: TObject);
+Var
+  Paths: TStringList;
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  Paths := CollectSelectedPaths(FStagedList, FStagedPaths);
+  Try
+    If Paths.Count = 0 Then
+      Exit;
+    GitClient.RepoPath := FRepoPath;
+    If Not GitClient.UnstagePaths(Paths) Then
+      MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+    RefreshFilesList;
+  Finally
+    Paths.Free;
+  End;
+End;
+
+Procedure TGitGraphForm.BtnStageAllClick(Sender: TObject);
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If Not GitClient.StageAll Then
+    MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.BtnUnstageAllClick(Sender: TObject);
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If Not GitClient.UnstageAll Then
+    MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.BtnRefreshFilesClick(Sender: TObject);
+Begin
+  RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.MessageChange(Sender: TObject);
+Begin
+  UpdateCommitEnabled;
+End;
+
+Procedure TGitGraphForm.FilesDiffStatusChanged(Sender: TObject);
+Begin
+  RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.BtnCommitClick(Sender: TObject);
+Var
+  NewSha, Msg: String;
+  Summary: TGitTransferSummary;
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  Msg := '';
+  If Assigned(FMessageMemo) Then
+    Msg := Trim(FMessageMemo.Text);
+  If Msg = '' Then
+    Begin
+      MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
+      Exit;
+    End;
+  If FStagedPaths.Count = 0 Then
+    Begin
+      MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
+      Exit;
+    End;
+
+  GitClient.RepoPath := FRepoPath;
+  Screen.Cursor := crHourGlass;
+  Try
+    If Not GitClient.Commit(Msg, NewSha) Then
+      Begin
+        Screen.Cursor := crDefault;
+        MessageDlg('Commit failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+        RefreshFilesList;
+        Exit;
+      End;
+  Finally
+    Screen.Cursor := crDefault;
+  End;
+
+  WorkflowLogger.Info('GitGraph', 'Created commit ' + NewSha);
+  If Assigned(FMessageMemo) Then
+    FMessageMemo.Clear;
+  MessageDlg('Committed ' + Copy(NewSha, 1, 7) + '.', mtInformation, [mbOK], 0);
+
+  If Assigned(FPushCheck) And FPushCheck.Checked Then
+    Begin
+      Screen.Cursor := crHourGlass;
+      Try
+        If GitClient.Push(Summary) Then
+          Begin
+            Screen.Cursor := crDefault;
+            MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+          End
+        Else
+          Begin
+            Screen.Cursor := crDefault;
+            MessageDlg('Commit succeeded, but push failed:' + LineEnding + Summary.Message,
+              mtWarning, [mbOK], 0);
+          End;
+      Finally
+        Screen.Cursor := crDefault;
+      End;
+    End;
+
+  RefreshFilesList;
+  ManualRefresh;
 End;
 
 Procedure TGitGraphForm.RemotesActionExecute(Sender: TObject);
