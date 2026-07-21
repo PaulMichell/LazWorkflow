@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel, Grids;
+  Grids;
 
 Type
   TGitRemotesForm = Class(TForm)
@@ -20,9 +20,12 @@ Type
     FGrid: TStringGrid;
     FOriginalNames: TStringList;
     FOriginalUrls: TStringList;
+    FBottomBar: TPanel;
+    FSeparator: TBevel;
     FBtnAdd: TButton;
     FBtnRemove: TButton;
-    FButtonPanel: TButtonPanel;
+    FBtnOK: TButton;
+    FBtnCancel: TButton;
     Procedure CreateUI;
     Procedure LoadFromGit;
     Procedure BtnAddClick(Sender: TObject);
@@ -81,26 +84,62 @@ Begin
   BorderStyle := bsSizeable;
   OnCloseQuery := @FormCloseQuery;
 
-  FButtonPanel := TButtonPanel.Create(Self);
-  With FButtonPanel Do
+  { Bottom bar: separator on top, Add/Remove left, OK/Cancel right. }
+  FBottomBar := TPanel.Create(Self);
+  With FBottomBar Do
     Begin
       Parent := Self;
       Align := alBottom;
-      ShowButtons := [pbOK, pbCancel];
-      OKButton.Caption := 'OK';
-      CancelButton.Caption := 'Cancel';
+      Height := 48;
+      BevelOuter := bvNone;
+      Caption := '';
     End;
 
-  { Left-aligned on the bottom button bar (same row as OK/Cancel). }
+  FSeparator := TBevel.Create(Self);
+  With FSeparator Do
+    Begin
+      Parent := FBottomBar;
+      Align := alTop;
+      Height := 2;
+      Shape := bsTopLine;
+    End;
+
+  { Align order: alRight first (rightmost), then next alRight, then alLeft. }
+  FBtnCancel := TButton.Create(Self);
+  With FBtnCancel Do
+    Begin
+      Parent := FBottomBar;
+      Align := alRight;
+      Width := 90;
+      AutoSize := False;
+      BorderSpacing.Around := 8;
+      Caption := 'Cancel';
+      ModalResult := mrCancel;
+      Cancel := True;
+    End;
+
+  FBtnOK := TButton.Create(Self);
+  With FBtnOK Do
+    Begin
+      Parent := FBottomBar;
+      Align := alRight;
+      Width := 90;
+      AutoSize := False;
+      BorderSpacing.Around := 8;
+      BorderSpacing.Right := 0;
+      Caption := 'OK';
+      ModalResult := mrOk;
+      Default := True;
+    End;
+
   FBtnAdd := TButton.Create(Self);
   With FBtnAdd Do
     Begin
-      Parent := FButtonPanel;
+      Parent := FBottomBar;
       Align := alLeft;
       Width := 90;
       AutoSize := False;
-      BorderSpacing.Around := 6;
-      BorderSpacing.Left := 8;
+      BorderSpacing.Around := 8;
       Caption := 'Add';
       OnClick := @BtnAddClick;
     End;
@@ -108,11 +147,12 @@ Begin
   FBtnRemove := TButton.Create(Self);
   With FBtnRemove Do
     Begin
-      Parent := FButtonPanel;
+      Parent := FBottomBar;
       Align := alLeft;
       Width := 90;
       AutoSize := False;
-      BorderSpacing.Around := 6;
+      BorderSpacing.Around := 8;
+      BorderSpacing.Left := 0;
       Caption := 'Remove';
       OnClick := @BtnRemoveClick;
     End;
