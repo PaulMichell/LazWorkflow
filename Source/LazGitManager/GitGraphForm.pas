@@ -1341,7 +1341,7 @@ Begin
                   FFilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
               End
             Else
-              FFilesDiffView.LoadEmbeddedDiff(Title, DiffText);
+              FFilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
           End
         Else
           FFilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);

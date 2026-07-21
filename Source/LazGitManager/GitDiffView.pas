@@ -69,12 +69,15 @@ Type
     FOnSelectionChanged: TNotifyEvent;
     FOverviewGutter: TSynGutterLineOverview;
     FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
+    FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned }
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
     Procedure SetupDiffOverviewGutter;
     Procedure ApplyViewMode;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
     Procedure ApplyDiffHighlighter;
+    Procedure ApplyMixedDiffHighlighter(Const SourceFileName: String);
+    Function ResolveLanguageHighlighter(Const SourceFileName: String): TObject;
     Procedure CancelPendingScroll;
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
@@ -104,8 +107,8 @@ Type
     Procedure LoadDiff(Const Title, DiffText: String);
     { SourceFileName selects an IDE language highlighter when known (e.g. .pas). }
     Procedure LoadPlainText(Const Title, Content: String; Const SourceFileName: String = '');
-    { Full-file embedded red/green diff (History / Files tab style). }
-    Procedure LoadEmbeddedDiff(Const Title, DiffText: String);
+    { Full-file embedded red/green diff; SourceFileName enables language HL on context lines. }
+    Procedure LoadEmbeddedDiff(Const Title, DiffText: String; Const SourceFileName: String = '');
     { Manage form: list files in the commit; editor shows full-file embedded diff. }
     Procedure LoadCommit(Const ARepoPath, Sha, Title: String);
     { RepoPath + StagedSide control partial stage/unstage against the index. }
@@ -129,10 +132,35 @@ Implementation
 
 Uses
   Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
-  GitService, Dialogs, WorkflowLog;
+  LazEditTextAttributes, GitService, Dialogs, WorkflowLog;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
+
+  TGitMixedLineKind = (glmMeta, glmContext, glmAdded, glmRemoved);
+
+  { Diff tokens for +/- / headers; language highlighter for context lines (no +/-). }
+  TGitMixedDiffHighlighter = Class(TLazEditEmptyHighlighter)
+  Private
+    FLang: TLazEditCustomHighlighter; { not owned - IDE shared instance }
+    FDiff: TSynDiffSyn; { not owned - parent FHigh }
+    FLineKind: TGitMixedLineKind;
+    FPrefixDone: Boolean;
+    FAtEol: Boolean;
+    FPrefixLen: Integer;
+    FPrefixStr: String;
+  Protected
+    Procedure InitForScanningLine; Override;
+  Public
+    Procedure SetBackends(ADiff: TSynDiffSyn; ALang: TLazEditCustomHighlighter);
+    Procedure Next; Override;
+    Function GetEol: Boolean; Override;
+    Function GetToken: String; Override;
+    Function GetTokenPos: Integer; Override;
+    Function GetTokenKind: Integer; Override;
+    Procedure GetTokenEx(Out TokenStart: PChar; Out TokenLength: Integer); Override;
+    Function GetTokenAttribute: TLazEditTextAttribute; Override;
+  End;
 
   { Right-gutter overview markers: green for added lines, red for removed. }
   TGitDiffOverviewProvider = Class(TSynGutterLineOverviewProvider)
@@ -159,6 +187,182 @@ End;
 Function LineIsDiffRemoved(Const Line: String): Boolean;
 Begin
   Result := (Length(Line) > 0) And (Line[1] = '-') And (Copy(Line, 1, 3) <> '---');
+End;
+
+Function LineIsDiffContext(Const Line: String): Boolean;
+Begin
+  { Unified context lines start with a space; empty lines are treated as context too. }
+  Result := (Line = '') Or ((Length(Line) > 0) And (Line[1] = ' '));
+End;
+
+Procedure TGitMixedDiffHighlighter.SetBackends(ADiff: TSynDiffSyn; ALang: TLazEditCustomHighlighter);
+Begin
+  FDiff := ADiff;
+  FLang := ALang;
+End;
+
+Procedure TGitMixedDiffHighlighter.InitForScanningLine;
+Var
+  LineText, Body: String;
+Begin
+  Inherited;
+  FAtEol := False;
+  FPrefixDone := True;
+  FPrefixLen := 0;
+  FPrefixStr := '';
+  LineText := CurrentLineText;
+
+  If LineIsDiffAdded(LineText) Then
+    FLineKind := glmAdded
+  Else If LineIsDiffRemoved(LineText) Then
+    FLineKind := glmRemoved
+  Else If LineIsDiffContext(LineText) And Assigned(FLang) Then
+    FLineKind := glmContext
+  Else
+    FLineKind := glmMeta;
+
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      { Unified context: leading space is the marker; body is real source text. }
+      If (Length(LineText) > 0) And (LineText[1] = ' ') Then
+        Begin
+          FPrefixLen := 1;
+          FPrefixStr := ' ';
+          FPrefixDone := False;
+          Body := Copy(LineText, 2, MaxInt);
+        End
+      Else
+        Body := LineText;
+      FLang.SetAlternativeLineTextForGetTokens(Body, LineIndex);
+      If FPrefixDone And FLang.GetEol Then
+        FAtEol := True;
+    End
+  Else If Assigned(FDiff) Then
+    Begin
+      FDiff.SetAlternativeLineTextForGetTokens(LineText, LineIndex);
+      If FDiff.GetEol Then
+        FAtEol := True;
+    End
+  Else
+    FAtEol := True;
+End;
+
+Procedure TGitMixedDiffHighlighter.Next;
+Begin
+  If FAtEol Then
+    Exit;
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Begin
+          FPrefixDone := True;
+          If FLang.GetEol Then
+            FAtEol := True;
+          Exit;
+        End;
+      FLang.Next;
+      If FLang.GetEol Then
+        FAtEol := True;
+    End
+  Else If Assigned(FDiff) Then
+    Begin
+      FDiff.Next;
+      If FDiff.GetEol Then
+        FAtEol := True;
+    End
+  Else
+    FAtEol := True;
+End;
+
+Function TGitMixedDiffHighlighter.GetEol: Boolean;
+Begin
+  Result := FAtEol;
+End;
+
+Function TGitMixedDiffHighlighter.GetToken: String;
+Begin
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Result := FPrefixStr
+      Else
+        Result := FLang.GetToken;
+    End
+  Else If Assigned(FDiff) Then
+    Result := FDiff.GetToken
+  Else
+    Result := '';
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenPos: Integer;
+Begin
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Result := 0
+      Else
+        Result := FLang.GetTokenPos + FPrefixLen;
+    End
+  Else If Assigned(FDiff) Then
+    Result := FDiff.GetTokenPos
+  Else
+    Result := 0;
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenKind: Integer;
+Begin
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Result := 0
+      Else
+        Result := FLang.GetTokenKind;
+    End
+  Else If Assigned(FDiff) Then
+    Result := FDiff.GetTokenKind
+  Else
+    Result := 0;
+End;
+
+Procedure TGitMixedDiffHighlighter.GetTokenEx(Out TokenStart: PChar; Out TokenLength: Integer);
+Begin
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Begin
+          TokenStart := PChar(FPrefixStr);
+          TokenLength := FPrefixLen;
+        End
+      Else
+        FLang.GetTokenEx(TokenStart, TokenLength);
+    End
+  Else If Assigned(FDiff) Then
+    FDiff.GetTokenEx(TokenStart, TokenLength)
+  Else
+    Begin
+      TokenStart := Nil;
+      TokenLength := 0;
+    End;
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenAttribute: TLazEditTextAttribute;
+Begin
+  If (FLineKind = glmContext) And Assigned(FLang) Then
+    Begin
+      If Not FPrefixDone Then
+        Begin
+          If Assigned(FDiff) Then
+            Result := FDiff.LineContextAttri
+          Else
+            Result := Nil;
+        End
+      Else
+        Result := FLang.GetTokenAttribute;
+    End
+  Else If Assigned(FDiff) Then
+    Result := FDiff.GetTokenAttribute
+  Else
+    Result := Nil;
 End;
 
 Constructor TGitDiffOverviewProvider.Create(AOwner: TComponent);
@@ -245,6 +449,7 @@ Begin
   FScrollGeneration := 0;
   FOverviewGutter := Nil;
   FDiffOverviewProvider := Nil;
+  FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
   ApplyViewMode;
   UpdateActionEnabled;
@@ -253,6 +458,7 @@ End;
 Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
+  FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
 
@@ -363,15 +569,13 @@ Begin
     FEdit.Highlighter := Nil;
 End;
 
-Procedure TGitDiffView.ApplyLanguageHighlighter(Const SourceFileName: String);
+Function TGitDiffView.ResolveLanguageHighlighter(Const SourceFileName: String): TObject;
 Var
   Ext: String;
   Id: TIdeSyntaxHighlighterID;
   HL: TLazEditCustomHighlighter;
 Begin
-  If Not Assigned(FEdit) Then
-    Exit;
-  FEdit.Highlighter := Nil;
+  Result := Nil;
   Ext := ExtractFileExt(SourceFileName);
   If (Ext = '') Or (IdeSyntaxHighlighters = Nil) Then
     Exit;
@@ -381,10 +585,40 @@ Begin
   HL := IdeSyntaxHighlighters.SharedInstances[Id];
   If Not Assigned(HL) Then
     Exit;
-  { Shared IDE instance – apply current colour scheme, do not free. }
   If Assigned(IDEEditorOptions) Then
     IDEEditorOptions.GetHighlighterSettings(HL);
+  Result := HL;
+End;
+
+Procedure TGitDiffView.ApplyLanguageHighlighter(Const SourceFileName: String);
+Var
+  HL: TLazEditCustomHighlighter;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  HL := TLazEditCustomHighlighter(ResolveLanguageHighlighter(SourceFileName));
   FEdit.Highlighter := HL;
+End;
+
+Procedure TGitDiffView.ApplyMixedDiffHighlighter(Const SourceFileName: String);
+Var
+  Lang: TLazEditCustomHighlighter;
+  Mixed: TGitMixedDiffHighlighter;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  ConfigureDiffColors;
+  If Assigned(IDEEditorOptions) And Assigned(FHigh) Then
+    IDEEditorOptions.GetHighlighterSettings(FHigh);
+  Lang := TLazEditCustomHighlighter(ResolveLanguageHighlighter(SourceFileName));
+  If Assigned(Lang) And Assigned(FMixedHigh) And Assigned(FHigh) Then
+    Begin
+      Mixed := TGitMixedDiffHighlighter(FMixedHigh);
+      Mixed.SetBackends(FHigh, Lang);
+      FEdit.Highlighter := Mixed;
+    End
+  Else
+    ApplyDiffHighlighter;
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -1241,10 +1475,8 @@ Begin
     End
   Else
     Begin
-      FEdit.Highlighter := FHigh;
-      ConfigureDiffColors;
+      ApplyMixedDiffHighlighter(Path);
       FEdit.Lines.Text := DiffText;
-      { Defer centre scroll until layout knows LinesInWindow. }
       Inc(FScrollGeneration);
       Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
     End;
@@ -1258,7 +1490,7 @@ Begin
   ShowSelectedBrowseFile;
 End;
 
-Procedure TGitDiffView.LoadEmbeddedDiff(Const Title, DiffText: String);
+Procedure TGitDiffView.LoadEmbeddedDiff(Const Title, DiffText: String; Const SourceFileName: String);
 Begin
   If Not IsAlive Then
     Exit;
@@ -1267,7 +1499,6 @@ Begin
   If Title <> '' Then
     FCaption.Caption := Title;
   ApplyIDEEditorAppearance;
-  ApplyDiffHighlighter;
   FDiffText := DiffText;
   If Trim(DiffText) = '' Then
     Begin
@@ -1276,6 +1507,7 @@ Begin
       UpdateActionEnabled;
       Exit;
     End;
+  ApplyMixedDiffHighlighter(SourceFileName);
   FEdit.Lines.Text := DiffText;
   Inc(FScrollGeneration);
   Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
