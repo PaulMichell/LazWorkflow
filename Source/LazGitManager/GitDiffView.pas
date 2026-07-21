@@ -13,7 +13,8 @@ Interface
 
 Uses
   Classes, SysUtils, Types, Controls, Graphics, ExtCtrls, ComCtrls, StdCtrls, Forms,
-  Menus, SynEdit, SynEditTypes, SynHighlighterDiff;
+  Menus, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
+  SynGutterLineOverview;
 
 Type
   TGitDiffViewMode = (dvmStaging, dvmBrowse);
@@ -55,8 +56,11 @@ Type
     FUpdatingList: Boolean;
     FScrollGeneration: PtrInt;
     FOnStatusChanged: TNotifyEvent;
+    FOverviewGutter: TSynGutterLineOverview;
+    FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
+    Procedure SetupDiffOverviewGutter;
     Procedure ApplyViewMode;
     Procedure CancelPendingScroll;
     Procedure ParseDiffIntoTree(Const DiffText: String);
@@ -104,6 +108,106 @@ Uses
 Type
   PGitDiffRange = ^TGitDiffRange;
 
+  { Right-gutter overview markers: green for added lines, red for removed. }
+  TGitDiffOverviewProvider = Class(TSynGutterLineOverviewProvider)
+  Private
+    FColorAdded: TColor;
+    FColorRemoved: TColor;
+    FRGBAdded: TColor;
+    FRGBRemoved: TColor;
+    Procedure SetColorAdded(Const NewColor: TColor);
+    Procedure SetColorRemoved(Const NewColor: TColor);
+  Protected
+    Procedure Paint(Canvas: TCanvas; AClip: TRect; TopOffset: Integer); Override;
+  Public
+    Constructor Create(AOwner: TComponent); Override;
+    Property ColorAdded: TColor Read FColorAdded Write SetColorAdded;
+    Property ColorRemoved: TColor Read FColorRemoved Write SetColorRemoved;
+  End;
+
+Function LineIsDiffAdded(Const Line: String): Boolean;
+Begin
+  Result := (Length(Line) > 0) And (Line[1] = '+') And (Copy(Line, 1, 3) <> '+++');
+End;
+
+Function LineIsDiffRemoved(Const Line: String): Boolean;
+Begin
+  Result := (Length(Line) > 0) And (Line[1] = '-') And (Copy(Line, 1, 3) <> '---');
+End;
+
+Constructor TGitDiffOverviewProvider.Create(AOwner: TComponent);
+Begin
+  Inherited Create(AOwner);
+  ColorAdded := RGBToColor(76, 175, 80);
+  ColorRemoved := RGBToColor(229, 57, 53);
+  Priority := 10;
+End;
+
+Procedure TGitDiffOverviewProvider.SetColorAdded(Const NewColor: TColor);
+Begin
+  If FColorAdded = NewColor Then
+    Exit;
+  FColorAdded := NewColor;
+  FRGBAdded := TColor(ColorToRGB(NewColor));
+  DoChange(Self);
+End;
+
+Procedure TGitDiffOverviewProvider.SetColorRemoved(Const NewColor: TColor);
+Begin
+  If FColorRemoved = NewColor Then
+    Exit;
+  FColorRemoved := NewColor;
+  FRGBRemoved := TColor(ColorToRGB(NewColor));
+  DoChange(Self);
+End;
+
+Procedure TGitDiffOverviewProvider.Paint(Canvas: TCanvas; AClip: TRect; TopOffset: Integer);
+Var
+  LineNo, Y1, Y2, Count, ClipTop, ClipBottom: Integer;
+  LineText: String;
+  R: TRect;
+  IsAdd, IsDel: Boolean;
+Begin
+  If (SynEdit = Nil) Or (SynEdit.Lines = Nil) Then
+    Exit;
+  Count := SynEdit.Lines.Count;
+  If Count < 1 Then
+    Exit;
+
+  ClipTop := AClip.Top - TopOffset;
+  ClipBottom := AClip.Bottom - TopOffset;
+  { Use the middle third of the overview strip for change markers (IDE-like). }
+  R := AClip;
+  R.Left := AClip.Left + Max(1, (AClip.Right - AClip.Left) Div 4);
+  R.Right := AClip.Right - Max(1, (AClip.Right - AClip.Left) Div 4);
+
+  For LineNo := 1 To Count Do
+    Begin
+      LineText := SynEdit.Lines[LineNo - 1];
+      IsAdd := LineIsDiffAdded(LineText);
+      IsDel := LineIsDiffRemoved(LineText);
+      If Not (IsAdd Or IsDel) Then
+        Continue;
+
+      Y1 := TextLineToPixel(LineNo);
+      Y2 := TextLineToPixelEnd(LineNo);
+      If Y2 < Y1 Then
+        Y2 := Y1;
+      If (Y2 < ClipTop) Or (Y1 > ClipBottom) Then
+        Continue;
+
+      R.Top := Y1 + TopOffset;
+      R.Bottom := Max(Y1 + 1, Y2) + TopOffset + 1;
+      If IsAdd And IsDel Then
+        Canvas.Brush.Color := FRGBAdded
+      Else If IsAdd Then
+        Canvas.Brush.Color := FRGBAdded
+      Else
+        Canvas.Brush.Color := FRGBRemoved;
+      Canvas.FillRect(R);
+    End;
+End;
+
 Constructor TGitDiffView.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
@@ -113,6 +217,8 @@ Begin
   FMode := dvmStaging;
   FUpdatingList := False;
   FScrollGeneration := 0;
+  FOverviewGutter := Nil;
+  FDiffOverviewProvider := Nil;
   ApplyIDEEditorAppearance;
   ApplyViewMode;
   UpdateActionEnabled;
@@ -155,6 +261,39 @@ Begin
   FHigh.UnknownAttri.Background := clNone;
 End;
 
+Procedure TGitDiffView.SetupDiffOverviewGutter;
+Var
+  I: Integer;
+  PageProvider: TSynGutterLOvProviderCurrentPage;
+  DiffProvider: TGitDiffOverviewProvider;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+
+  FEdit.RightGutter.Visible := True;
+  FOverviewGutter := Nil;
+  FDiffOverviewProvider := Nil;
+  { Drop any IDE-installed right-gutter parts so we own the overview. }
+  For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
+    FEdit.RightGutter.Parts[I].Free;
+
+  FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
+  FOverviewGutter.AutoSize := False;
+  FOverviewGutter.Width := 12;
+  FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
+
+  { Viewport band (grey); change markers paint above it. }
+  PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
+  PageProvider.Color := RGBToColor(176, 190, 197);
+  PageProvider.Priority := 1;
+
+  DiffProvider := TGitDiffOverviewProvider.Create(FOverviewGutter.Providers);
+  DiffProvider.ColorAdded := RGBToColor(76, 175, 80);
+  DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
+  DiffProvider.Priority := 20;
+  FDiffOverviewProvider := DiffProvider;
+End;
+
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
 Begin
   If Assigned(IDEEditorOptions) Then
@@ -173,8 +312,9 @@ Begin
 
   FEdit.ReadOnly := True;
   FEdit.WantTabs := True;
-  FEdit.RightGutter.Visible := False;
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
+  { Overview gutter with red/green change markers (VS Code-style scroll map). }
+  SetupDiffOverviewGutter;
   If Assigned(FHigh) Then
     Begin
       FEdit.Highlighter := FHigh;
@@ -323,14 +463,7 @@ End;
 
 Function TGitDiffView.IsDiffChangeLine(Const Line: String): Boolean;
 Begin
-  Result := False;
-  If Length(Line) = 0 Then
-    Exit;
-  If (Line[1] <> '+') And (Line[1] <> '-') Then
-    Exit;
-  If (Copy(Line, 1, 3) = '+++') Or (Copy(Line, 1, 3) = '---') Then
-    Exit;
-  Result := True;
+  Result := LineIsDiffAdded(Line) Or LineIsDiffRemoved(Line);
 End;
 
 Procedure TGitDiffView.ScrollToFirstChangeCentered;
