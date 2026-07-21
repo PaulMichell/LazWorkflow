@@ -135,12 +135,27 @@ object GitDiffView: TGitDiffView
     Left = 360
     Top = 120
     object FMiStage: TMenuItem
-      Caption = 'Stage selection'
+      Caption = 'Stage selected lines'
       OnClick = PopupStageClick
     end
+    object FMiStageHunk: TMenuItem
+      Caption = 'Stage this hunk'
+      OnClick = PopupStageHunkClick
+    end
     object FMiUnstage: TMenuItem
-      Caption = 'Unstage selection'
+      Caption = 'Unstage selected lines'
       OnClick = PopupUnstageClick
+    end
+    object FMiUnstageHunk: TMenuItem
+      Caption = 'Unstage this hunk'
+      OnClick = PopupUnstageHunkClick
+    end
+    object FMiSep: TMenuItem
+      Caption = '-'
+    end
+    object FMiSelectHunk: TMenuItem
+      Caption = 'Select hunk under cursor'
+      OnClick = PopupSelectHunkClick
     end
   end
 end

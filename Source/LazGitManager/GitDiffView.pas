@@ -41,13 +41,22 @@ Type
     FHigh: TSynDiffSyn;
     FPopup: TPopupMenu;
     FMiStage: TMenuItem;
+    FMiStageHunk: TMenuItem;
     FMiUnstage: TMenuItem;
+    FMiUnstageHunk: TMenuItem;
+    FMiSep: TMenuItem;
+    FMiSelectHunk: TMenuItem;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
     Procedure BtnStageSelClick(Sender: TObject);
     Procedure BtnUnstageSelClick(Sender: TObject);
     Procedure PopupStageClick(Sender: TObject);
     Procedure PopupUnstageClick(Sender: TObject);
+    Procedure PopupStageHunkClick(Sender: TObject);
+    Procedure PopupUnstageHunkClick(Sender: TObject);
+    Procedure PopupSelectHunkClick(Sender: TObject);
+    Procedure EditDblClick(Sender: TObject);
+    Procedure EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
   Private
     FDiffText: String;
     FRepoPath: String;
@@ -69,6 +78,10 @@ Type
     Function NodeRange(Node: TTreeNode): TGitDiffRange;
     Procedure GetSelectionLines(Out FirstLine, LastLine: Integer);
     Function BuildPartialPatch(FirstLine, LastLine: Integer): String;
+    Function FindHunkBounds(AtLine: Integer; Out FirstLine, LastLine: Integer): Boolean;
+    Function SelectHunkAtLine(AtLine: Integer): Boolean;
+    Function CanStageFromPreview: Boolean;
+    Function CanUnstageFromPreview: Boolean;
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
     Procedure ClearTreeData;
@@ -316,6 +329,9 @@ Begin
   FEdit.ReadOnly := True;
   FEdit.WantTabs := True;
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
+  FEdit.OnDblClick := @EditDblClick;
+  FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
+  FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
   { Overview gutter with red/green change markers (VS Code-style scroll map). }
   SetupDiffOverviewGutter;
   If Assigned(FHigh) Then
@@ -327,10 +343,10 @@ End;
 
 Procedure TGitDiffView.ApplyViewMode;
 Begin
-  FToolBar.Visible := FMode = dvmStaging;
+  { Staging toolbar also shown on Files-tab editor for line/hunk stage. }
+  FToolBar.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
   FTree.Visible := FMode = dvmStaging;
   FFileList.Visible := FMode = dvmBrowse;
-  { Manage form puts its own action bar where the title was. }
   FCaption.Visible := FMode = dvmStaging;
   FTreePanel.Visible := FMode <> dvmEditorOnly;
   FSplitter.Visible := FMode <> dvmEditorOnly;
@@ -338,6 +354,11 @@ Begin
     FTreePanel.Width := 240
   Else If FMode = dvmStaging Then
     FTreePanel.Width := 220;
+  If FMode = dvmEditorOnly Then
+    Begin
+      FBtnStageSel.Caption := 'Stage selection';
+      FBtnUnstageSel.Caption := 'Unstage selection';
+    End;
   UpdateActionEnabled;
 End;
 
@@ -360,25 +381,56 @@ Begin
   UpdateActionEnabled;
 End;
 
+Function TGitDiffView.CanStageFromPreview: Boolean;
+Begin
+  Result := (FRepoPath <> '') And (Trim(FDiffText) <> '') And (Not FStagedSide) And
+    ((FMode = dvmStaging) Or (FMode = dvmEditorOnly));
+End;
+
+Function TGitDiffView.CanUnstageFromPreview: Boolean;
+Begin
+  Result := (FRepoPath <> '') And (Trim(FDiffText) <> '') And FStagedSide And
+    ((FMode = dvmStaging) Or (FMode = dvmEditorOnly));
+End;
+
 Procedure TGitDiffView.UpdateActionEnabled;
 Var
-  HasRepo, HasDiff, Staging: Boolean;
+  CanStage, CanUnstage: Boolean;
 Begin
-  Staging := FMode = dvmStaging;
-  HasRepo := FRepoPath <> '';
-  HasDiff := Trim(FDiffText) <> '';
-  FBtnStageSel.Enabled := Staging And HasRepo And HasDiff And (Not FStagedSide);
-  FBtnUnstageSel.Enabled := Staging And HasRepo And HasDiff And FStagedSide;
+  CanStage := CanStageFromPreview;
+  CanUnstage := CanUnstageFromPreview;
+  FBtnStageSel.Enabled := CanStage;
+  FBtnStageSel.Visible := CanStage Or (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
+  FBtnUnstageSel.Enabled := CanUnstage;
+  FBtnUnstageSel.Visible := CanUnstage Or (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
+  { Prefer the action that matches current side. }
+  If FMode = dvmEditorOnly Then
+    Begin
+      FBtnStageSel.Visible := Not FStagedSide;
+      FBtnUnstageSel.Visible := FStagedSide;
+    End;
   If Assigned(FMiStage) Then
     Begin
-      FMiStage.Enabled := FBtnStageSel.Enabled;
-      FMiStage.Visible := Staging;
+      FMiStage.Enabled := CanStage;
+      FMiStage.Visible := CanStage Or (FMode = dvmEditorOnly);
+    End;
+  If Assigned(FMiStageHunk) Then
+    Begin
+      FMiStageHunk.Enabled := CanStage;
+      FMiStageHunk.Visible := CanStage Or (FMode = dvmEditorOnly);
     End;
   If Assigned(FMiUnstage) Then
     Begin
-      FMiUnstage.Enabled := FBtnUnstageSel.Enabled;
-      FMiUnstage.Visible := Staging;
+      FMiUnstage.Enabled := CanUnstage;
+      FMiUnstage.Visible := CanUnstage Or (FMode = dvmEditorOnly);
     End;
+  If Assigned(FMiUnstageHunk) Then
+    Begin
+      FMiUnstageHunk.Enabled := CanUnstage;
+      FMiUnstageHunk.Visible := CanUnstage Or (FMode = dvmEditorOnly);
+    End;
+  If Assigned(FMiSelectHunk) Then
+    FMiSelectHunk.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
 End;
 
 Procedure TGitDiffView.DoStatusChanged;
@@ -730,19 +782,82 @@ Begin
   End;
 End;
 
+Function TGitDiffView.FindHunkBounds(AtLine: Integer; Out FirstLine, LastLine: Integer): Boolean;
+Var
+  I, Count: Integer;
+  Line: String;
+Begin
+  Result := False;
+  FirstLine := 0;
+  LastLine := 0;
+  If Not Assigned(FEdit) Then
+    Exit;
+  Count := FEdit.Lines.Count;
+  If (AtLine < 1) Or (AtLine > Count) Then
+    Exit;
+  { Walk up to the hunk header (@@). }
+  I := AtLine;
+  While I >= 1 Do
+    Begin
+      Line := FEdit.Lines[I - 1];
+      If Copy(Line, 1, 2) = '@@' Then
+        Begin
+          FirstLine := I;
+          Break;
+        End;
+      If Copy(Line, 1, 11) = 'diff --git ' Then
+        Exit; { left the current file section without a hunk }
+      Dec(I);
+    End;
+  If FirstLine < 1 Then
+    Exit;
+  { Walk down to the next hunk or file header. }
+  LastLine := Count;
+  For I := FirstLine + 1 To Count Do
+    Begin
+      Line := FEdit.Lines[I - 1];
+      If (Copy(Line, 1, 2) = '@@') Or (Copy(Line, 1, 11) = 'diff --git ') Then
+        Begin
+          LastLine := I - 1;
+          Break;
+        End;
+    End;
+  Result := LastLine >= FirstLine;
+End;
+
+Function TGitDiffView.SelectHunkAtLine(AtLine: Integer): Boolean;
+Var
+  FirstLine, LastLine: Integer;
+Begin
+  Result := FindHunkBounds(AtLine, FirstLine, LastLine);
+  If Result Then
+    SelectLineRange(FirstLine, LastLine);
+End;
+
 Function TGitDiffView.StageSelection: Boolean;
 Var
   FirstLine, LastLine: Integer;
   Patch: String;
 Begin
   Result := False;
-  If (FMode <> dvmStaging) Or FStagedSide Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+  If Not CanStageFromPreview Or Not Assigned(GitClient) Then
     Exit;
   GetSelectionLines(FirstLine, LastLine);
+  If FirstLine < 1 Then
+    Begin
+      { No selection – stage the hunk under the caret. }
+      If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+        Begin
+          MessageDlg('Select lines to stage, or place the caret in a change hunk.',
+            mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      SelectLineRange(FirstLine, LastLine);
+    End;
   Patch := BuildPartialPatch(FirstLine, LastLine);
   If Trim(Patch) = '' Then
     Begin
-      MessageDlg('Nothing to stage in the current selection. Select added/removed lines or a hunk.',
+      MessageDlg('Nothing to stage in the current selection. Select added/removed lines (red/green), or a whole hunk.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -763,13 +878,23 @@ Var
   Patch: String;
 Begin
   Result := False;
-  If (FMode <> dvmStaging) Or (Not FStagedSide) Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+  If Not CanUnstageFromPreview Or Not Assigned(GitClient) Then
     Exit;
   GetSelectionLines(FirstLine, LastLine);
+  If FirstLine < 1 Then
+    Begin
+      If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+        Begin
+          MessageDlg('Select lines to unstage, or place the caret in a change hunk.',
+            mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      SelectLineRange(FirstLine, LastLine);
+    End;
   Patch := BuildPartialPatch(FirstLine, LastLine);
   If Trim(Patch) = '' Then
     Begin
-      MessageDlg('Nothing to unstage in the current selection. Select added/removed lines or a hunk.',
+      MessageDlg('Nothing to unstage in the current selection. Select added/removed lines (red/green), or a whole hunk.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -802,6 +927,41 @@ End;
 Procedure TGitDiffView.PopupUnstageClick(Sender: TObject);
 Begin
   UnstageSelection;
+End;
+
+Procedure TGitDiffView.PopupStageHunkClick(Sender: TObject);
+Begin
+  If SelectHunkAtLine(FEdit.CaretY) Then
+    StageSelection
+  Else
+    MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.PopupUnstageHunkClick(Sender: TObject);
+Begin
+  If SelectHunkAtLine(FEdit.CaretY) Then
+    UnstageSelection
+  Else
+    MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.PopupSelectHunkClick(Sender: TObject);
+Begin
+  If Not SelectHunkAtLine(FEdit.CaretY) Then
+    MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.EditDblClick(Sender: TObject);
+Begin
+  { Double-click a change line to select its whole hunk for stage/unstage. }
+  If (FMode = dvmEditorOnly) Or (FMode = dvmStaging) Then
+    SelectHunkAtLine(FEdit.CaretY);
+End;
+
+Procedure TGitDiffView.EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
+Begin
+  If (scSelection in Changes) Or (scCaretY in Changes) Then
+    UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.ParseDiffIntoTree(Const DiffText: String);
