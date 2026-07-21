@@ -1,0 +1,146 @@
+object GitDiffView: TGitDiffView
+  Left = 0
+  Height = 320
+  Top = 0
+  Width = 640
+  ClientHeight = 320
+  ClientWidth = 640
+  TabOrder = 0
+  DesignLeft = 300
+  DesignTop = 200
+  object FCaption: TLabel
+    Left = 6
+    Height = 17
+    Top = 4
+    Width = 628
+    Align = alTop
+    BorderSpacing.Left = 6
+    BorderSpacing.Top = 4
+    BorderSpacing.Bottom = 2
+    Caption = 'Diff'
+    ParentColor = False
+  end
+  object FToolBar: TPanel
+    Left = 0
+    Height = 32
+    Top = 23
+    Width = 640
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 32
+    ClientWidth = 640
+    TabOrder = 0
+    object FBtnStageSel: TButton
+      Left = 6
+      Height = 26
+      Top = 2
+      Width = 130
+      Caption = 'Stage selection'
+      Enabled = False
+      OnClick = BtnStageSelClick
+      TabOrder = 0
+    end
+    object FBtnUnstageSel: TButton
+      Left = 142
+      Height = 26
+      Top = 2
+      Width = 140
+      Caption = 'Unstage selection'
+      Enabled = False
+      OnClick = BtnUnstageSelClick
+      TabOrder = 1
+    end
+  end
+  object FTreePanel: TPanel
+    Left = 0
+    Height = 265
+    Top = 55
+    Width = 220
+    Align = alLeft
+    BevelOuter = bvNone
+    ClientHeight = 265
+    ClientWidth = 220
+    TabOrder = 1
+    object FTree: TTreeView
+      Left = 4
+      Height = 257
+      Top = 4
+      Width = 212
+      Align = alClient
+      BorderSpacing.Around = 4
+      PopupMenu = FPopup
+      ReadOnly = True
+      ScrollBars = ssAutoBoth
+      TabOrder = 0
+      Options = [tvoShowButtons, tvoShowRoot, tvoShowLines, tvoRowSelect, tvoReadOnly, tvoToolTips]
+      OnChange = TreeChange
+    end
+    object FFileList: TListBox
+      Left = 4
+      Height = 257
+      Top = 4
+      Width = 212
+      Align = alClient
+      BorderSpacing.Around = 4
+      ItemHeight = 0
+      TabOrder = 1
+      Visible = False
+      OnSelectionChange = FileListSelectionChange
+    end
+  end
+  object FSplitter: TSplitter
+    Left = 220
+    Height = 265
+    Top = 55
+    Width = 5
+    Align = alLeft
+    ResizeAnchor = akLeft
+  end
+  object FEditPanel: TPanel
+    Left = 225
+    Height = 265
+    Top = 55
+    Width = 415
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 265
+    ClientWidth = 415
+    TabOrder = 2
+    object FEdit: TSynEdit
+      Left = 4
+      Height = 257
+      Top = 4
+      Width = 407
+      Align = alClient
+      BorderSpacing.Around = 4
+      Font.Height = -13
+      Font.Name = 'Courier New'
+      Font.Pitch = fpFixed
+      Font.Quality = fqCleartypeNatural
+      PopupMenu = FPopup
+      TabOrder = 0
+      Gutter.Width = 57
+      RightGutter.Width = 0
+      RightGutter.Visible = False
+      Highlighter = FHigh
+      Keystrokes = <>
+    end
+  end
+  object FHigh: TSynDiffSyn
+    DefaultFilter = 'Diff Files (*.diff,*.patch)|*.diff;*.patch'
+    Left = 280
+    Top = 120
+  end
+  object FPopup: TPopupMenu
+    Left = 360
+    Top = 120
+    object FMiStage: TMenuItem
+      Caption = 'Stage selection'
+      OnClick = PopupStageClick
+    end
+    object FMiUnstage: TMenuItem
+      Caption = 'Unstage selection'
+      OnClick = PopupUnstageClick
+    end
+  end
+end

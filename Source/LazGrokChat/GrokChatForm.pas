@@ -15,26 +15,28 @@ Uses
 
 Type
   TGrokChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
-  Private
-    FToolBar: TToolBar;
-    FChatMemo: TMemo;
-    FInputPanel: TPanel;
-    FInputEdit: TMemo;
-    FSendButton: TButton;
-    FStatusFooter: TStatusFooterFrame;
     FActionList: TActionList;
     FNewChatAction: TAction;
     FSendAction: TAction;
     FBuildAction: TAction;
-    FModelName: String;
-    FContextUsed: Integer;
-    FContextLimit: Integer;
-    Procedure CreateUI;
+    FToolBar: TToolBar;
+    ToolButtonNewChat: TToolButton;
+    ToolButtonSep: TToolButton;
+    ToolButtonBuild: TToolButton;
+    FStatusFooter: TStatusFooterFrame;
+    FInputPanel: TPanel;
+    FSendButton: TButton;
+    FInputEdit: TMemo;
+    FChatMemo: TMemo;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure BuildActionExecute(Sender: TObject);
+  Private
+    FModelName: String;
+    FContextUsed: Integer;
+    FContextLimit: Integer;
     Procedure UpdateStatusFooter;
     Procedure AppendMessage(Const Role, Content: String);
     { ICompilerFinished }
@@ -61,7 +63,6 @@ Begin
   FModelName := 'grok-4';
   FContextUsed := 0;
   FContextLimit := 128000;
-  CreateUI;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -69,110 +70,6 @@ Destructor TGrokChatForm.Destroy;
 Begin
   WorkflowEventBus.RemoveListener(Self);
   Inherited Destroy;
-End;
-
-Procedure TGrokChatForm.CreateUI;
-Begin
-  Caption := 'Grok Chat';
-  Width := 800;
-  Height := 650;
-  Position := poDefaultPosOnly;
-
-  FActionList := TActionList.Create(Self);
-
-  FNewChatAction := TAction.Create(Self);
-  FNewChatAction.Caption := 'New Chat';
-  FNewChatAction.OnExecute := @NewChatActionExecute;
-  FNewChatAction.ActionList := FActionList;
-
-  FSendAction := TAction.Create(Self);
-  FSendAction.Caption := 'Send';
-  FSendAction.OnExecute := @SendActionExecute;
-  FSendAction.ActionList := FActionList;
-
-  FBuildAction := TAction.Create(Self);
-  FBuildAction.Caption := 'Build';
-  FBuildAction.OnExecute := @BuildActionExecute;
-  FBuildAction.ActionList := FActionList;
-
-  FToolBar := TToolBar.Create(Self);
-  With FToolBar Do
-    Begin
-      Parent := Self;
-      Align := alTop;
-      Height := 28;
-      EdgeBorders := [];
-      ShowCaptions := True;
-    End;
-
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FNewChatAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Style := tbsSeparator;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FBuildAction;
-      Style := tbsButton;
-    End;
-
-  FStatusFooter := TStatusFooterFrame.Create(Self);
-  FStatusFooter.Parent := Self;
-  FStatusFooter.Align := alBottom;
-
-  FInputPanel := TPanel.Create(Self);
-  With FInputPanel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      Height := 90;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FSendButton := TButton.Create(Self);
-  With FSendButton Do
-    Begin
-      Parent := FInputPanel;
-      Align := alRight;
-      Width := 80;
-      Caption := 'Send';
-      BorderSpacing.Around := 6;
-      Action := FSendAction;
-    End;
-
-  FInputEdit := TMemo.Create(Self);
-  With FInputEdit Do
-    Begin
-      Parent := FInputPanel;
-      Align := alClient;
-      BorderSpacing.Around := 6;
-      ScrollBars := ssAutoVertical;
-      WantTabs := False;
-      OnKeyDown := Nil; { TODO: Ctrl+Enter to send }
-    End;
-
-  FChatMemo := TMemo.Create(Self);
-  With FChatMemo Do
-    Begin
-      Parent := Self;
-      Align := alClient;
-      ReadOnly := True;
-      ScrollBars := ssAutoBoth;
-      BorderSpacing.Around := 4;
-      Font.Name := 'Monospace';
-      Font.Size := 10;
-    End;
-
-  OnCreate := @FormCreate;
-  OnDestroy := @FormDestroy;
 End;
 
 Procedure TGrokChatForm.FormCreate(Sender: TObject);
@@ -221,7 +118,7 @@ Begin
   FStatusFooter.SetRightText('Thinking...');
   { TODO: call GrokClient.SendAndStream asynchronously and stream reply }
   AppendMessage('assistant', '(Streaming reply will appear here – Phase 2)');
-  FContextUsed := FContextUsed + Length(UserText) Div 4 + 50; { rough token estimate }
+  FContextUsed := FContextUsed + Length(UserText) Div 4 + 50;
   UpdateStatusFooter;
 End;
 
@@ -265,13 +162,14 @@ Begin
         AppendMessage('system', 'Build cancelled.');
         FStatusFooter.SetRightText('Cancelled');
       End;
+  Else
+    { }
   End;
   UpdateStatusFooter;
 End;
 
 Procedure TGrokChatForm.DocumentChanged(Const FileName: String; Const NewContent: String);
 Begin
-  { Future: if this document is open in a Markdown window, refresh it. }
   WorkflowLogger.Debug('GrokChat', 'Document changed: ' + FileName);
 End;
 

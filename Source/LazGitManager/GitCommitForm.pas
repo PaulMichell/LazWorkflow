@@ -15,12 +15,8 @@ Uses
 
 Type
   TGitCommitForm = Class(TForm)
-  Private
-    FRepoPath: String;
     FUnstagedList: TListBox;
     FStagedList: TListBox;
-    FUnstagedPaths: TStringList;
-    FStagedPaths: TStringList;
     FMessageMemo: TMemo;
     FDiffView: TGitDiffView;
     FPushCheck: TCheckBox;
@@ -41,12 +37,7 @@ Type
     FStagedPanel: TPanel;
     FMessagePanel: TPanel;
     FButtonColumn: TPanel;
-    Procedure CreateUI;
-    Procedure ReloadStatus;
-    Procedure FillLists;
-    Procedure UpdateCommitEnabled;
-    Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
-    Procedure ShowDiffForList(List: TListBox; Paths: TStringList; Staged: Boolean);
+    Procedure FormCreate(Sender: TObject);
     Procedure BtnStageClick(Sender: TObject);
     Procedure BtnUnstageClick(Sender: TObject);
     Procedure BtnStageAllClick(Sender: TObject);
@@ -57,6 +48,15 @@ Type
     Procedure MessageChange(Sender: TObject);
     Procedure DiffStatusChanged(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+  Private
+    FRepoPath: String;
+    FUnstagedPaths: TStringList;
+    FStagedPaths: TStringList;
+    Procedure ReloadStatus;
+    Procedure FillLists;
+    Procedure UpdateCommitEnabled;
+    Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
+    Procedure ShowDiffForList(List: TListBox; Paths: TStringList; Staged: Boolean);
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -67,6 +67,8 @@ Type
 Function ShowGitCommitForm(Const RepoPath: String; Out DidPush: Boolean): Boolean;
 
 Implementation
+
+{$R *.lfm}
 
 Uses
   GitService, WorkflowLog;
@@ -92,10 +94,9 @@ End;
 
 Constructor TGitCommitForm.Create(TheOwner: TComponent);
 Begin
-  Inherited CreateNew(TheOwner);
+  Inherited Create(TheOwner);
   FUnstagedPaths := TStringList.Create;
   FStagedPaths := TStringList.Create;
-  CreateUI;
 End;
 
 Destructor TGitCommitForm.Destroy;
@@ -105,236 +106,18 @@ Begin
   Inherited Destroy;
 End;
 
+Procedure TGitCommitForm.FormCreate(Sender: TObject);
+Begin
+  FButtonPanel.OKButton.Caption := 'Commit';
+  FButtonPanel.CancelButton.Caption := 'Cancel';
+  FButtonPanel.OKButton.Enabled := False;
+  If Assigned(FDiffView) Then
+    FDiffView.OnStatusChanged := @DiffStatusChanged;
+End;
+
 Function TGitCommitForm.PushAfterCommit: Boolean;
 Begin
   Result := FPushCheck.Checked;
-End;
-
-Procedure TGitCommitForm.CreateUI;
-Begin
-  Caption := 'Commit';
-  Position := poScreenCenter;
-  Width := 820;
-  Height := 580;
-  BorderStyle := bsSizeable;
-  Constraints.MinWidth := 600;
-  Constraints.MinHeight := 440;
-  OnCloseQuery := @FormCloseQuery;
-
-  FButtonPanel := TButtonPanel.Create(Self);
-  With FButtonPanel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      ShowButtons := [pbOK, pbCancel];
-      OKButton.Caption := 'Commit';
-      CancelButton.Caption := 'Cancel';
-      OKButton.Enabled := False;
-    End;
-
-  FPushCheck := TCheckBox.Create(Self);
-  With FPushCheck Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      BorderSpacing.Around := 8;
-      Caption := 'Push to remote after successful commit';
-    End;
-
-  FStatusLabel := TLabel.Create(Self);
-  With FStatusLabel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      BorderSpacing.Left := 8;
-      BorderSpacing.Right := 8;
-      BorderSpacing.Bottom := 4;
-      Caption := '';
-    End;
-
-  FTopPanel := TPanel.Create(Self);
-  With FTopPanel Do
-    Begin
-      Parent := Self;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FMessagePanel := TPanel.Create(Self);
-  With FMessagePanel Do
-    Begin
-      Parent := FTopPanel;
-      Align := alBottom;
-      Height := 120;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FMessageLabel := TLabel.Create(Self);
-  With FMessageLabel Do
-    Begin
-      Parent := FMessagePanel;
-      Align := alTop;
-      Caption := 'Commit message';
-      BorderSpacing.Left := 8;
-      BorderSpacing.Top := 4;
-    End;
-
-  FMessageMemo := TMemo.Create(Self);
-  With FMessageMemo Do
-    Begin
-      Parent := FMessagePanel;
-      Align := alClient;
-      BorderSpacing.Around := 8;
-      ScrollBars := ssAutoBoth;
-      WantTabs := False;
-      OnChange := @MessageChange;
-    End;
-
-  FListsPanel := TPanel.Create(Self);
-  With FListsPanel Do
-    Begin
-      Parent := FTopPanel;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FDiffView := TGitDiffView.Create(Self);
-  With FDiffView Do
-    Begin
-      Parent := FListsPanel;
-      Align := alBottom;
-      Height := 240;
-      BorderSpacing.Around := 4;
-      OnStatusChanged := @DiffStatusChanged;
-    End;
-
-  FMidPanel := TPanel.Create(Self);
-  With FMidPanel Do
-    Begin
-      Parent := FListsPanel;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FUnstagedPanel := TPanel.Create(Self);
-  With FUnstagedPanel Do
-    Begin
-      Parent := FMidPanel;
-      Align := alLeft;
-      Width := 320;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FUnstagedLabel := TLabel.Create(Self);
-  With FUnstagedLabel Do
-    Begin
-      Parent := FUnstagedPanel;
-      Align := alTop;
-      Caption := 'Changes';
-      BorderSpacing.Left := 8;
-      BorderSpacing.Top := 4;
-    End;
-
-  FUnstagedList := TListBox.Create(Self);
-  With FUnstagedList Do
-    Begin
-      Parent := FUnstagedPanel;
-      Align := alClient;
-      BorderSpacing.Around := 8;
-      MultiSelect := True;
-      OnSelectionChange := @ListSelectionChange;
-      OnDblClick := @ListDblClick;
-    End;
-
-  FButtonColumn := TPanel.Create(Self);
-  With FButtonColumn Do
-    Begin
-      Parent := FMidPanel;
-      Align := alLeft;
-      Width := 110;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FBtnStage := TButton.Create(Self);
-  With FBtnStage Do
-    Begin
-      Parent := FButtonColumn;
-      SetBounds(10, 36, 90, 28);
-      Caption := 'Stage >';
-      OnClick := @BtnStageClick;
-    End;
-
-  FBtnUnstage := TButton.Create(Self);
-  With FBtnUnstage Do
-    Begin
-      Parent := FButtonColumn;
-      SetBounds(10, 72, 90, 28);
-      Caption := '< Unstage';
-      OnClick := @BtnUnstageClick;
-    End;
-
-  FBtnStageAll := TButton.Create(Self);
-  With FBtnStageAll Do
-    Begin
-      Parent := FButtonColumn;
-      SetBounds(10, 116, 90, 28);
-      Caption := 'Stage all';
-      OnClick := @BtnStageAllClick;
-    End;
-
-  FBtnUnstageAll := TButton.Create(Self);
-  With FBtnUnstageAll Do
-    Begin
-      Parent := FButtonColumn;
-      SetBounds(10, 152, 90, 28);
-      Caption := 'Unstage all';
-      OnClick := @BtnUnstageAllClick;
-    End;
-
-  FBtnRefresh := TButton.Create(Self);
-  With FBtnRefresh Do
-    Begin
-      Parent := FButtonColumn;
-      SetBounds(10, 196, 90, 28);
-      Caption := 'Refresh';
-      OnClick := @BtnRefreshClick;
-    End;
-
-  FStagedPanel := TPanel.Create(Self);
-  With FStagedPanel Do
-    Begin
-      Parent := FMidPanel;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FStagedLabel := TLabel.Create(Self);
-  With FStagedLabel Do
-    Begin
-      Parent := FStagedPanel;
-      Align := alTop;
-      Caption := 'Staged for commit';
-      BorderSpacing.Left := 8;
-      BorderSpacing.Top := 4;
-    End;
-
-  FStagedList := TListBox.Create(Self);
-  With FStagedList Do
-    Begin
-      Parent := FStagedPanel;
-      Align := alClient;
-      BorderSpacing.Around := 8;
-      MultiSelect := True;
-      OnSelectionChange := @ListSelectionChange;
-      OnDblClick := @ListDblClick;
-    End;
 End;
 
 Procedure TGitCommitForm.SetRepository(Const ARepoPath: String);

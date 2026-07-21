@@ -15,11 +15,7 @@ Uses
 
 Type
   TGitRemotesForm = Class(TForm)
-  Private
-    FRepoPath: String;
     FGrid: TStringGrid;
-    FOriginalNames: TStringList;
-    FOriginalUrls: TStringList;
     FBottomBar: TPanel;
     FLeftButtons: TPanel;
     FSeparator: TBevel;
@@ -28,17 +24,21 @@ Type
     FBtnEdit: TButton;
     FBtnOK: TButton;
     FBtnCancel: TButton;
-    FEditing: Boolean;
-    FEditRow: Integer;
-    Procedure CreateUI;
-    Procedure LoadFromGit;
-    Procedure SetGridEditable(Editable: Boolean);
     Procedure BtnAddClick(Sender: TObject);
     Procedure BtnRemoveClick(Sender: TObject);
     Procedure BtnEditClick(Sender: TObject);
     Procedure GridSelectCell(Sender: TObject; aCol, aRow: Integer; Var CanSelect: Boolean);
     Procedure GridMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+    Procedure FormCreate(Sender: TObject);
+  Private
+    FRepoPath: String;
+    FOriginalNames: TStringList;
+    FOriginalUrls: TStringList;
+    FEditing: Boolean;
+    FEditRow: Integer;
+    Procedure LoadFromGit;
+    Procedure SetGridEditable(Editable: Boolean);
     Function ValidateGrid(Out ErrorMessage: String): Boolean;
     Function SaveToGit(Out ErrorMessage: String): Boolean;
     Function DataRowCount: Integer;
@@ -51,6 +51,8 @@ Type
 Procedure ShowGitRemotesForm(Const RepoPath: String);
 
 Implementation
+
+{$R *.lfm}
 
 Uses
   GitService, WorkflowLog;
@@ -70,12 +72,11 @@ End;
 
 Constructor TGitRemotesForm.Create(TheOwner: TComponent);
 Begin
-  Inherited CreateNew(TheOwner);
+  Inherited Create(TheOwner);
   FOriginalNames := TStringList.Create;
   FOriginalUrls := TStringList.Create;
   FEditing := False;
   FEditRow := -1;
-  CreateUI;
 End;
 
 Destructor TGitRemotesForm.Destroy;
@@ -85,137 +86,13 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TGitRemotesForm.CreateUI;
+Procedure TGitRemotesForm.FormCreate(Sender: TObject);
 Begin
-  Caption := 'Remotes';
-  Position := poScreenCenter;
-  Width := 640;
-  Height := 360;
-  BorderStyle := bsSizeable;
-  OnCloseQuery := @FormCloseQuery;
-
-  { Bottom bar: separator on top, Edit/Add/Remove left, OK/Cancel right. }
-  FBottomBar := TPanel.Create(Self);
-  With FBottomBar Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      Height := 48;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FSeparator := TBevel.Create(Self);
-  With FSeparator Do
-    Begin
-      Parent := FBottomBar;
-      Align := alTop;
-      Height := 2;
-      Shape := bsTopLine;
-    End;
-
-  { Right cluster: create rightmost first so alRight stacks as OK then Cancel. }
-  FBtnCancel := TButton.Create(Self);
-  With FBtnCancel Do
-    Begin
-      Parent := FBottomBar;
-      Align := alRight;
-      Width := 90;
-      AutoSize := False;
-      BorderSpacing.Around := 8;
-      Caption := 'Cancel';
-      ModalResult := mrCancel;
-      Cancel := True;
-    End;
-
-  FBtnOK := TButton.Create(Self);
-  With FBtnOK Do
-    Begin
-      Parent := FBottomBar;
-      Align := alRight;
-      Width := 90;
-      AutoSize := False;
-      BorderSpacing.Around := 8;
-      BorderSpacing.Right := 0;
-      Caption := 'OK';
-      ModalResult := mrOk;
-      Default := True;
-    End;
-
-  { Left cluster: ChildSizing flows Edit → Add → Remove left-to-right. }
-  FLeftButtons := TPanel.Create(Self);
-  With FLeftButtons Do
-    Begin
-      Parent := FBottomBar;
-      Align := alLeft;
-      BevelOuter := bvNone;
-      Caption := '';
-      Width := 300;
-      ChildSizing.Layout := cclLeftToRightThenTopToBottom;
-      ChildSizing.ControlsPerLine := 4;
-      ChildSizing.LeftRightSpacing := 8;
-      ChildSizing.TopBottomSpacing := 8;
-      ChildSizing.HorizontalSpacing := 8;
-      ChildSizing.EnlargeHorizontal := crsAnchorAligning;
-      ChildSizing.EnlargeVertical := crsAnchorAligning;
-    End;
-
-  FBtnEdit := TButton.Create(Self);
-  With FBtnEdit Do
-    Begin
-      Parent := FLeftButtons;
-      Align := alNone;
-      Width := 90;
-      Height := 28;
-      AutoSize := False;
-      Caption := 'Edit';
-      OnClick := @BtnEditClick;
-    End;
-
-  FBtnAdd := TButton.Create(Self);
-  With FBtnAdd Do
-    Begin
-      Parent := FLeftButtons;
-      Align := alNone;
-      Width := 90;
-      Height := 28;
-      AutoSize := False;
-      Caption := 'Add';
-      OnClick := @BtnAddClick;
-    End;
-
-  FBtnRemove := TButton.Create(Self);
-  With FBtnRemove Do
-    Begin
-      Parent := FLeftButtons;
-      Align := alNone;
-      Width := 90;
-      Height := 28;
-      AutoSize := False;
-      Caption := 'Remove';
-      OnClick := @BtnRemoveClick;
-    End;
-
-  FGrid := TStringGrid.Create(Self);
-  With FGrid Do
-    Begin
-      Parent := Self;
-      Align := alClient;
-      BorderSpacing.Around := 8;
-      ColCount := 2;
-      RowCount := 1;
-      FixedRows := 1;
-      FixedCols := 0;
-      { Start read-only with row selection for easy remote pick. }
-      Options := Options + [goRowSelect, goThumbTracking, goColSizing, goTabs];
-      Options := Options - [goEditing, goAlwaysShowEditor, goRangeSelect];
-      Cells[0, 0] := 'Name';
-      Cells[1, 0] := 'URL';
-      ColWidths[0] := 120;
-      ColWidths[1] := 460;
-      OnSelectCell := @GridSelectCell;
-      OnMouseDown := @GridMouseDown;
-    End;
+  FGrid.Cells[0, 0] := 'Name';
+  FGrid.Cells[1, 0] := 'URL';
+  FGrid.ColWidths[0] := 120;
+  FGrid.ColWidths[1] := 460;
+  SetGridEditable(False);
 End;
 
 Procedure TGitRemotesForm.SetGridEditable(Editable: Boolean);
@@ -302,7 +179,6 @@ End;
 Procedure TGitRemotesForm.GridSelectCell(Sender: TObject; aCol, aRow: Integer; Var CanSelect: Boolean);
 Begin
   CanSelect := True;
-  { Leaving the row being edited returns to read-only selection mode. }
   If FEditing And (aRow <> FEditRow) Then
     SetGridEditable(False);
 End;
@@ -315,7 +191,6 @@ Begin
   If Not FEditing Then
     Exit;
   FGrid.MouseToCell(X, Y, ACol, ARow);
-  { Empty client area, header, or invalid cell leaves edit mode. }
   If (ACol < 0) Or (ARow < FGrid.FixedRows) Or (ARow >= FGrid.RowCount) Then
     Begin
       SetGridEditable(False);
@@ -398,7 +273,7 @@ Begin
       RemoteName := Trim(FGrid.Cells[0, I]);
       Url := Trim(FGrid.Cells[1, I]);
       If (RemoteName = '') And (Url = '') Then
-        Continue; { ignore fully blank rows }
+        Continue;
       If RemoteName = '' Then
         Begin
           ErrorMessage := Format('Row %d: remote name is required.', [I]);
@@ -448,7 +323,6 @@ Begin
         DesiredUrls.Add(Url);
       End;
 
-    { Remove remotes that no longer appear in the grid. }
     For I := 0 To FOriginalNames.Count - 1 Do
       Begin
         Keep := DesiredNames.IndexOf(FOriginalNames[I]) >= 0;
@@ -460,7 +334,6 @@ Begin
             End;
       End;
 
-    { Add new remotes or update URLs. }
     For I := 0 To DesiredNames.Count - 1 Do
       Begin
         RemoteName := DesiredNames[I];
@@ -498,7 +371,7 @@ Var
 Begin
   CanClose := True;
   If ModalResult <> mrOk Then
-    Exit; { Cancel – abandon grid edits }
+    Exit;
 
   SetGridEditable(False);
   If Not ValidateGrid(ErrorMessage) Then

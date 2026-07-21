@@ -15,14 +15,12 @@ Uses
 
 Type
   TGitInitForm = Class(TForm)
-  Private
-    FFolderEdit: TDirectoryEdit;
     FLabel: TLabel;
+    FFolderEdit: TDirectoryEdit;
     FButtonPanel: TButtonPanel;
-    Procedure CreateUI;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+    Procedure FormCreate(Sender: TObject);
   Public
-    Constructor Create(TheOwner: TComponent); Override;
     Procedure SetDefaultFolder(Const Folder: String);
     Function SelectedFolder: String;
   End;
@@ -30,6 +28,8 @@ Type
 Function ShowGitInitForm(Const DefaultFolder: String; Out ChosenFolder: String): Boolean;
 
 Implementation
+
+{$R *.lfm}
 
 Function ShowGitInitForm(Const DefaultFolder: String; Out ChosenFolder: String): Boolean;
 Var
@@ -50,50 +50,10 @@ Begin
   End;
 End;
 
-Constructor TGitInitForm.Create(TheOwner: TComponent);
+Procedure TGitInitForm.FormCreate(Sender: TObject);
 Begin
-  Inherited CreateNew(TheOwner);
-  CreateUI;
-End;
-
-Procedure TGitInitForm.CreateUI;
-Begin
-  Caption := 'Initialise Repository';
-  Position := poScreenCenter;
-  BorderStyle := bsDialog;
-  Width := 520;
-  Height := 140;
-  OnCloseQuery := @FormCloseQuery;
-
-  FButtonPanel := TButtonPanel.Create(Self);
-  With FButtonPanel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      ShowButtons := [pbOK, pbCancel];
-      OKButton.Caption := 'Initialise';
-      CancelButton.Caption := 'Cancel';
-    End;
-
-  FLabel := TLabel.Create(Self);
-  With FLabel Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 16;
-      Caption := 'Project folder (Git root):';
-    End;
-
-  FFolderEdit := TDirectoryEdit.Create(Self);
-  With FFolderEdit Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 40;
-      Width := 480;
-      DialogTitle := 'Select folder for the new Git repository';
-      ShowHidden := False;
-    End;
+  FButtonPanel.OKButton.Caption := 'Initialise';
+  FButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitInitForm.SetDefaultFolder(Const Folder: String);

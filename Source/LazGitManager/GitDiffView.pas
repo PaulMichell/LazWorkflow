@@ -25,19 +25,28 @@ Type
     Caption: String;
   End;
 
-  TGitDiffView = Class(TPanel)
-  Private
-    FTree: TTreeView;
-    FFileList: TListBox;
-    FEdit: TSynEdit;
-    FHigh: TSynDiffSyn;
-    FSplitter: TSplitter;
-    FTreePanel: TPanel;
-    FEditPanel: TPanel;
+  TGitDiffView = Class(TFrame)
     FCaption: TLabel;
     FToolBar: TPanel;
     FBtnStageSel: TButton;
     FBtnUnstageSel: TButton;
+    FTreePanel: TPanel;
+    FTree: TTreeView;
+    FFileList: TListBox;
+    FSplitter: TSplitter;
+    FEditPanel: TPanel;
+    FEdit: TSynEdit;
+    FHigh: TSynDiffSyn;
+    FPopup: TPopupMenu;
+    FMiStage: TMenuItem;
+    FMiUnstage: TMenuItem;
+    Procedure TreeChange(Sender: TObject; Node: TTreeNode);
+    Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure BtnStageSelClick(Sender: TObject);
+    Procedure BtnUnstageSelClick(Sender: TObject);
+    Procedure PopupStageClick(Sender: TObject);
+    Procedure PopupUnstageClick(Sender: TObject);
+  Private
     FDiffText: String;
     FRepoPath: String;
     FStagedSide: Boolean;
@@ -46,23 +55,15 @@ Type
     FUpdatingList: Boolean;
     FScrollGeneration: PtrInt;
     FOnStatusChanged: TNotifyEvent;
-    FPopup: TPopupMenu;
-    Procedure BuildUI;
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
     Procedure ApplyViewMode;
     Procedure CancelPendingScroll;
-    Procedure TreeChange(Sender: TObject; Node: TTreeNode);
-    Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
     Function NodeRange(Node: TTreeNode): TGitDiffRange;
     Procedure GetSelectionLines(Out FirstLine, LastLine: Integer);
     Function BuildPartialPatch(FirstLine, LastLine: Integer): String;
-    Procedure BtnStageSelClick(Sender: TObject);
-    Procedure BtnUnstageSelClick(Sender: TObject);
-    Procedure PopupStageClick(Sender: TObject);
-    Procedure PopupUnstageClick(Sender: TObject);
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
     Procedure ClearTreeData;
@@ -95,6 +96,8 @@ Type
 
 Implementation
 
+{$R *.lfm}
+
 Uses
   Math, EditorOptionsIntf, GitService, Dialogs, WorkflowLog;
 
@@ -104,15 +107,15 @@ Type
 Constructor TGitDiffView.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
-  BevelOuter := bvNone;
-  Caption := '';
   FRepoPath := '';
   FBrowseSha := '';
   FStagedSide := False;
   FMode := dvmStaging;
   FUpdatingList := False;
   FScrollGeneration := 0;
-  BuildUI;
+  ApplyIDEEditorAppearance;
+  ApplyViewMode;
+  UpdateActionEnabled;
 End;
 
 Destructor TGitDiffView.Destroy;
@@ -204,136 +207,6 @@ Begin
   ApplyViewMode;
 End;
 
-Procedure TGitDiffView.BuildUI;
-Var
-  Item: TMenuItem;
-Begin
-  FCaption := TLabel.Create(Self);
-  With FCaption Do
-    Begin
-      Parent := Self;
-      Align := alTop;
-      BorderSpacing.Left := 6;
-      BorderSpacing.Top := 4;
-      BorderSpacing.Bottom := 2;
-      Caption := 'Diff';
-    End;
-
-  FToolBar := TPanel.Create(Self);
-  With FToolBar Do
-    Begin
-      Parent := Self;
-      Align := alTop;
-      Height := 32;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FBtnStageSel := TButton.Create(Self);
-  With FBtnStageSel Do
-    Begin
-      Parent := FToolBar;
-      Left := 6;
-      Top := 2;
-      Width := 130;
-      Height := 26;
-      Caption := 'Stage selection';
-      OnClick := @BtnStageSelClick;
-      Enabled := False;
-    End;
-
-  FBtnUnstageSel := TButton.Create(Self);
-  With FBtnUnstageSel Do
-    Begin
-      Parent := FToolBar;
-      Left := 142;
-      Top := 2;
-      Width := 140;
-      Height := 26;
-      Caption := 'Unstage selection';
-      OnClick := @BtnUnstageSelClick;
-      Enabled := False;
-    End;
-
-  FTreePanel := TPanel.Create(Self);
-  With FTreePanel Do
-    Begin
-      Parent := Self;
-      Align := alLeft;
-      Width := 220;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FTree := TTreeView.Create(Self);
-  With FTree Do
-    Begin
-      Parent := FTreePanel;
-      Align := alClient;
-      BorderSpacing.Around := 4;
-      ReadOnly := True;
-      ScrollBars := ssAutoBoth;
-      ShowLines := True;
-      Options := Options + [tvoShowButtons, tvoShowRoot, tvoShowLines, tvoRowSelect, tvoReadOnly, tvoToolTips];
-      OnChange := @TreeChange;
-    End;
-
-  FFileList := TListBox.Create(Self);
-  With FFileList Do
-    Begin
-      Parent := FTreePanel;
-      Align := alClient;
-      BorderSpacing.Around := 4;
-      Visible := False;
-      OnSelectionChange := @FileListSelectionChange;
-    End;
-
-  FSplitter := TSplitter.Create(Self);
-  With FSplitter Do
-    Begin
-      Parent := Self;
-      Align := alLeft;
-      Width := 5;
-      Left := FTreePanel.Width;
-    End;
-
-  FEditPanel := TPanel.Create(Self);
-  With FEditPanel Do
-    Begin
-      Parent := Self;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FHigh := TSynDiffSyn.Create(Self);
-
-  FEdit := TSynEdit.Create(Self);
-  With FEdit Do
-    Begin
-      Parent := FEditPanel;
-      Align := alClient;
-      BorderSpacing.Around := 4;
-      Highlighter := FHigh;
-    End;
-
-  FPopup := TPopupMenu.Create(Self);
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Stage selection';
-  Item.OnClick := @PopupStageClick;
-  FPopup.Items.Add(Item);
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Unstage selection';
-  Item.OnClick := @PopupUnstageClick;
-  FPopup.Items.Add(Item);
-  FEdit.PopupMenu := FPopup;
-  FTree.PopupMenu := FPopup;
-
-  ApplyIDEEditorAppearance;
-  ApplyViewMode;
-  UpdateActionEnabled;
-End;
-
 Procedure TGitDiffView.SetStagingContext(Const ARepoPath: String; StagedSide: Boolean);
 Begin
   FRepoPath := ARepoPath;
@@ -351,12 +224,15 @@ Begin
   HasDiff := Trim(FDiffText) <> '';
   FBtnStageSel.Enabled := Staging And HasRepo And HasDiff And (Not FStagedSide);
   FBtnUnstageSel.Enabled := Staging And HasRepo And HasDiff And FStagedSide;
-  If Assigned(FPopup) And (FPopup.Items.Count >= 2) Then
+  If Assigned(FMiStage) Then
     Begin
-      FPopup.Items[0].Enabled := FBtnStageSel.Enabled;
-      FPopup.Items[1].Enabled := FBtnUnstageSel.Enabled;
-      FPopup.Items[0].Visible := Staging;
-      FPopup.Items[1].Visible := Staging;
+      FMiStage.Enabled := FBtnStageSel.Enabled;
+      FMiStage.Visible := Staging;
+    End;
+  If Assigned(FMiUnstage) Then
+    Begin
+      FMiUnstage.Enabled := FBtnUnstageSel.Enabled;
+      FMiUnstage.Visible := Staging;
     End;
 End;
 
@@ -1128,5 +1004,8 @@ Begin
       Node := Node.Parent;
     End;
 End;
+
+Initialization
+  RegisterClass(TGitDiffView);
 
 End.

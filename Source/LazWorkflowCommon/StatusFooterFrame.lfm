@@ -2,10 +2,55 @@ object StatusFooterFrame: TStatusFooterFrame
   Left = 0
   Height = 22
   Top = 0
-  Width = 320
+  Width = 640
   ClientHeight = 22
-  ClientWidth = 320
+  ClientWidth = 640
   TabOrder = 0
-  DesignLeft = 0
-  DesignTop = 0
+  DesignLeft = 300
+  DesignTop = 200
+  object FPanel: TPanel
+    Left = 0
+    Height = 22
+    Top = 0
+    Width = 640
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 22
+    ClientWidth = 640
+    Color = clForm
+    ParentColor = False
+    TabOrder = 0
+    object FLeftLabel: TLabel
+      Left = 6
+      Height = 22
+      Top = 0
+      Width = 1
+      Align = alLeft
+      BorderSpacing.Left = 6
+      BorderSpacing.Right = 12
+      Layout = tlCenter
+      ParentColor = False
+    end
+    object FRightLabel: TLabel
+      Left = 633
+      Height = 22
+      Top = 0
+      Width = 1
+      Align = alRight
+      BorderSpacing.Left = 12
+      BorderSpacing.Right = 6
+      Layout = tlCenter
+      ParentColor = False
+    end
+    object FCentreLabel: TLabel
+      Left = 19
+      Height = 22
+      Top = 0
+      Width = 602
+      Align = alClient
+      Alignment = taCenter
+      Layout = tlCenter
+      ParentColor = False
+    end
+  end
 end

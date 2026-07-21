@@ -15,16 +15,14 @@ Uses
 
 Type
   TGitCloneForm = Class(TForm)
-  Private
     FUrlEdit: TEdit;
     FFolderEdit: TDirectoryEdit;
     FUrlLabel: TLabel;
     FFolderLabel: TLabel;
     FButtonPanel: TButtonPanel;
-    Procedure CreateUI;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+    Procedure FormCreate(Sender: TObject);
   Public
-    Constructor Create(TheOwner: TComponent); Override;
     Procedure SetDefaultFolder(Const Folder: String);
     Function RemoteUrl: String;
     Function TargetFolder: String;
@@ -33,6 +31,8 @@ Type
 Function ShowGitCloneForm(Const DefaultFolder: String; Out RemoteUrl, TargetFolder: String): Boolean;
 
 Implementation
+
+{$R *.lfm}
 
 Function ShowGitCloneForm(Const DefaultFolder: String; Out RemoteUrl, TargetFolder: String): Boolean;
 Var
@@ -55,68 +55,10 @@ Begin
   End;
 End;
 
-Constructor TGitCloneForm.Create(TheOwner: TComponent);
+Procedure TGitCloneForm.FormCreate(Sender: TObject);
 Begin
-  Inherited CreateNew(TheOwner);
-  CreateUI;
-End;
-
-Procedure TGitCloneForm.CreateUI;
-Begin
-  Caption := 'Clone Repository';
-  Position := poScreenCenter;
-  BorderStyle := bsDialog;
-  Width := 560;
-  Height := 180;
-  OnCloseQuery := @FormCloseQuery;
-
-  FButtonPanel := TButtonPanel.Create(Self);
-  With FButtonPanel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      ShowButtons := [pbOK, pbCancel];
-      OKButton.Caption := 'Clone';
-      CancelButton.Caption := 'Cancel';
-    End;
-
-  FUrlLabel := TLabel.Create(Self);
-  With FUrlLabel Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 16;
-      Caption := 'Remote URL:';
-    End;
-
-  FUrlEdit := TEdit.Create(Self);
-  With FUrlEdit Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 36;
-      Width := 520;
-      Text := '';
-    End;
-
-  FFolderLabel := TLabel.Create(Self);
-  With FFolderLabel Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 76;
-      Caption := 'Target folder:';
-    End;
-
-  FFolderEdit := TDirectoryEdit.Create(Self);
-  With FFolderEdit Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 96;
-      Width := 520;
-      DialogTitle := 'Select target folder for the clone';
-    End;
+  FButtonPanel.OKButton.Caption := 'Clone';
+  FButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitCloneForm.SetDefaultFolder(Const Folder: String);

@@ -15,17 +15,15 @@ Uses
 
 Type
   TGitSettingsForm = Class(TForm)
-  Private
     FAutoRefreshCheck: TCheckBox;
     FIntervalLabel: TLabel;
     FIntervalSpin: TSpinEdit;
     FButtonPanel: TButtonPanel;
     FSecondsLabel: TLabel;
-    Procedure CreateUI;
     Procedure AutoRefreshCheckChange(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+    Procedure FormCreate(Sender: TObject);
   Public
-    Constructor Create(TheOwner: TComponent); Override;
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
   End;
@@ -33,6 +31,8 @@ Type
 Procedure ShowGitSettingsForm;
 
 Implementation
+
+{$R *.lfm}
 
 Uses
   GitConfig, WorkflowLog;
@@ -55,71 +55,12 @@ Begin
   End;
 End;
 
-Constructor TGitSettingsForm.Create(TheOwner: TComponent);
+Procedure TGitSettingsForm.FormCreate(Sender: TObject);
 Begin
-  Inherited CreateNew(TheOwner);
-  CreateUI;
-End;
-
-Procedure TGitSettingsForm.CreateUI;
-Begin
-  Caption := 'Repository Settings';
-  Position := poScreenCenter;
-  BorderStyle := bsDialog;
-  Width := 420;
-  Height := 180;
-  OnCloseQuery := @FormCloseQuery;
-
-  FAutoRefreshCheck := TCheckBox.Create(Self);
-  With FAutoRefreshCheck Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 20;
-      Width := 380;
-      Caption := 'Automatically refresh repository state';
-      OnChange := @AutoRefreshCheckChange;
-    End;
-
-  FIntervalLabel := TLabel.Create(Self);
-  With FIntervalLabel Do
-    Begin
-      Parent := Self;
-      Left := 36;
-      Top := 56;
-      Caption := 'Refresh interval:';
-    End;
-
-  FIntervalSpin := TSpinEdit.Create(Self);
-  With FIntervalSpin Do
-    Begin
-      Parent := Self;
-      Left := 160;
-      Top := 52;
-      Width := 80;
-      MinValue := GitConfigMinIntervalSec;
-      MaxValue := GitConfigMaxIntervalSec;
-      Value := GitConfigDefaultIntervalSec;
-    End;
-
-  FSecondsLabel := TLabel.Create(Self);
-  With FSecondsLabel Do
-    Begin
-      Parent := Self;
-      Left := 250;
-      Top := 56;
-      Caption := 'seconds';
-    End;
-
-  FButtonPanel := TButtonPanel.Create(Self);
-  With FButtonPanel Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      ShowButtons := [pbOK, pbCancel];
-      OKButton.Caption := 'OK';
-      CancelButton.Caption := 'Cancel';
-    End;
+  FIntervalSpin.MinValue := GitConfigMinIntervalSec;
+  FIntervalSpin.MaxValue := GitConfigMaxIntervalSec;
+  FButtonPanel.OKButton.Caption := 'OK';
+  FButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitSettingsForm.AutoRefreshCheckChange(Sender: TObject);

@@ -1,11 +1,111 @@
 object GrokChatForm: TGrokChatForm
-  Left = 0
+  Left = 200
   Height = 650
-  Top = 0
+  Top = 100
   Width = 800
   Caption = 'Grok Chat'
   ClientHeight = 650
   ClientWidth = 800
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
   Position = poDefaultPosOnly
   LCLVersion = '3.0'
+  object FActionList: TActionList
+    Left = 48
+    Top = 48
+    object FNewChatAction: TAction
+      Caption = 'New Chat'
+      OnExecute = NewChatActionExecute
+    end
+    object FSendAction: TAction
+      Caption = 'Send'
+      OnExecute = SendActionExecute
+    end
+    object FBuildAction: TAction
+      Caption = 'Build'
+      OnExecute = BuildActionExecute
+    end
+  end
+  object FToolBar: TToolBar
+    Left = 0
+    Height = 28
+    Top = 0
+    Width = 800
+    Caption = 'FToolBar'
+    EdgeBorders = []
+    ShowCaptions = True
+    TabOrder = 0
+    object ToolButtonNewChat: TToolButton
+      Left = 1
+      Top = 2
+      Action = FNewChatAction
+    end
+    object ToolButtonSep: TToolButton
+      Left = 76
+      Height = 22
+      Top = 2
+      Caption = 'ToolButtonSep'
+      Style = tbsSeparator
+    end
+    object ToolButtonBuild: TToolButton
+      Left = 84
+      Top = 2
+      Action = FBuildAction
+    end
+  end
+  inline FStatusFooter: TStatusFooterFrame
+    Height = 22
+    Top = 628
+    Width = 800
+    Align = alBottom
+    ClientHeight = 22
+    ClientWidth = 800
+    TabOrder = 3
+  end
+  object FInputPanel: TPanel
+    Left = 0
+    Height = 90
+    Top = 538
+    Width = 800
+    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 90
+    ClientWidth = 800
+    TabOrder = 2
+    object FSendButton: TButton
+      Left = 714
+      Height = 78
+      Top = 6
+      Width = 80
+      Align = alRight
+      BorderSpacing.Around = 6
+      Action = FSendAction
+      Caption = 'Send'
+      TabOrder = 0
+    end
+    object FInputEdit: TMemo
+      Left = 6
+      Height = 78
+      Top = 6
+      Width = 702
+      Align = alClient
+      BorderSpacing.Around = 6
+      ScrollBars = ssAutoVertical
+      TabOrder = 1
+    end
+  end
+  object FChatMemo: TMemo
+    Left = 4
+    Height = 506
+    Top = 32
+    Width = 792
+    Align = alClient
+    BorderSpacing.Around = 4
+    Font.Height = -13
+    Font.Name = 'Monospace'
+    ParentFont = False
+    ReadOnly = True
+    ScrollBars = ssAutoBoth
+    TabOrder = 1
+  end
 end

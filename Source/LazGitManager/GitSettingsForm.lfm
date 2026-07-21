@@ -1,0 +1,65 @@
+object GitSettingsForm: TGitSettingsForm
+  Left = 300
+  Height = 180
+  Top = 200
+  Width = 420
+  BorderStyle = bsDialog
+  Caption = 'Repository Settings'
+  ClientHeight = 180
+  ClientWidth = 420
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  Position = poScreenCenter
+  LCLVersion = '3.0'
+  object FAutoRefreshCheck: TCheckBox
+    Left = 16
+    Height = 23
+    Top = 20
+    Width = 380
+    Caption = 'Automatically refresh repository state'
+    TabOrder = 0
+    OnChange = AutoRefreshCheckChange
+  end
+  object FIntervalLabel: TLabel
+    Left = 36
+    Height = 17
+    Top = 56
+    Width = 97
+    Caption = 'Refresh interval:'
+    ParentColor = False
+  end
+  object FIntervalSpin: TSpinEdit
+    Left = 160
+    Height = 28
+    Top = 52
+    Width = 80
+    MaxValue = 3600
+    MinValue = 5
+    TabOrder = 1
+    Value = 30
+  end
+  object FSecondsLabel: TLabel
+    Left = 250
+    Height = 17
+    Top = 56
+    Width = 48
+    Caption = 'seconds'
+    ParentColor = False
+  end
+  object FButtonPanel: TButtonPanel
+    Left = 6
+    Height = 34
+    Top = 140
+    Width = 408
+    OKButton.Name = 'OKButton'
+    OKButton.DefaultCaption = True
+    HelpButton.Name = 'HelpButton'
+    HelpButton.DefaultCaption = True
+    CloseButton.Name = 'CloseButton'
+    CloseButton.DefaultCaption = True
+    CancelButton.Name = 'CancelButton'
+    CancelButton.DefaultCaption = True
+    TabOrder = 2
+    ShowButtons = [pbOK, pbCancel]
+  end
+end

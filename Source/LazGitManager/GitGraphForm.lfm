@@ -1,11 +1,239 @@
 object GitGraphForm: TGitGraphForm
-  Left = 0
+  Left = 200
   Height = 600
-  Top = 0
+  Top = 100
   Width = 900
-  Caption = 'Git Graph'
+  Caption = 'Manage Repository'
   ClientHeight = 600
   ClientWidth = 900
+  KeyPreview = True
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnKeyDown = FormKeyDown
+  OnShow = FormShow
   Position = poDefaultPosOnly
   LCLVersion = '3.0'
+  object FActionList: TActionList
+    Left = 40
+    Top = 40
+    object FPushAction: TAction
+      Caption = 'Push'
+      OnExecute = PushActionExecute
+    end
+    object FPullAction: TAction
+      Caption = 'Pull'
+      OnExecute = PullActionExecute
+    end
+    object FFetchAction: TAction
+      Caption = 'Fetch'
+      OnExecute = FetchActionExecute
+    end
+    object FRemotesAction: TAction
+      Caption = 'Remotes…'
+      OnExecute = RemotesActionExecute
+    end
+  end
+  object FPopup: TPopupMenu
+    Left = 100
+    Top = 40
+    object FMiShowCommit: TMenuItem
+      Caption = 'Show commit'
+      OnClick = PopupShowCommit
+    end
+    object FMiCopySha: TMenuItem
+      Caption = 'Copy SHA'
+      OnClick = PopupCopySha
+    end
+    object FMiSep: TMenuItem
+      Caption = '-'
+    end
+    object FMiCheckout: TMenuItem
+      Caption = 'Checkout…'
+      OnClick = PopupCheckout
+    end
+    object FMiCreateBranch: TMenuItem
+      Caption = 'Create branch here…'
+      OnClick = PopupCreateBranch
+    end
+  end
+  inline FStatusFooter: TStatusFooterFrame
+    Height = 22
+    Top = 578
+    Width = 900
+    Align = alBottom
+    ClientHeight = 22
+    ClientWidth = 900
+    Constraints.MinHeight = 22
+    Constraints.MaxHeight = 22
+    TabOrder = 1
+  end
+  object FPages: TPageControl
+    Left = 0
+    Height = 578
+    Top = 0
+    Width = 900
+    ActivePage = FTabHistory
+    Align = alClient
+    TabIndex = 0
+    TabOrder = 0
+    OnChange = PagesChange
+    object FTabHistory: TTabSheet
+      Caption = 'History'
+      ClientHeight = 550
+      ClientWidth = 892
+      object FMainPanel: TPanel
+        Left = 0
+        Height = 550
+        Top = 0
+        Width = 892
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 550
+        ClientWidth = 892
+        TabOrder = 0
+        object FDetailPanel: TPanel
+          Left = 0
+          Height = 240
+          Top = 310
+          Width = 892
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 240
+          ClientWidth = 892
+          Constraints.MinHeight = 120
+          TabOrder = 1
+          object FHistoryButtons: TPanel
+            Left = 0
+            Height = 36
+            Top = 0
+            Width = 892
+            Align = alTop
+            BevelOuter = bvNone
+            ChildSizing.LeftRightSpacing = 4
+            ChildSizing.TopBottomSpacing = 4
+            ChildSizing.HorizontalSpacing = 4
+            ChildSizing.VerticalSpacing = 4
+            ChildSizing.EnlargeHorizontal = crsAnchorAligning
+            ChildSizing.EnlargeVertical = crsAnchorAligning
+            ChildSizing.ShrinkHorizontal = crsScaleChilds
+            ChildSizing.ShrinkVertical = crsScaleChilds
+            ChildSizing.Layout = cclLeftToRightThenTopToBottom
+            ChildSizing.ControlsPerLine = 8
+            ClientHeight = 36
+            ClientWidth = 892
+            TabOrder = 0
+            object FBtnPush: TButton
+              Left = 4
+              Height = 28
+              Top = 4
+              Width = 90
+              Action = FPushAction
+              Caption = 'Push'
+              TabOrder = 0
+            end
+            object FBtnPull: TButton
+              Left = 98
+              Height = 28
+              Top = 4
+              Width = 90
+              Action = FPullAction
+              Caption = 'Pull'
+              TabOrder = 1
+            end
+            object FBtnFetch: TButton
+              Left = 192
+              Height = 28
+              Top = 4
+              Width = 90
+              Action = FFetchAction
+              Caption = 'Fetch'
+              TabOrder = 2
+            end
+            object FBtnRemotes: TButton
+              Left = 286
+              Height = 28
+              Top = 4
+              Width = 100
+              Action = FRemotesAction
+              Caption = 'Remotes…'
+              TabOrder = 3
+            end
+          end
+          inline FDiffView: TGitDiffView
+            Left = 2
+            Height = 200
+            Top = 38
+            Width = 888
+            Align = alClient
+            BorderSpacing.Around = 2
+            ClientHeight = 200
+            ClientWidth = 888
+            TabOrder = 1
+          end
+        end
+        object FSplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 305
+          Width = 892
+          Align = alBottom
+          AutoSnap = False
+          MinSize = 48
+          ResizeAnchor = akBottom
+          ResizeControl = FDetailPanel
+        end
+        object FGraphHost: TPanel
+          Left = 0
+          Height = 305
+          Top = 0
+          Width = 892
+          Align = alClient
+          BevelOuter = bvNone
+          ClientHeight = 305
+          ClientWidth = 892
+          TabOrder = 0
+          OnResize = GraphHostResize
+          object FScrollBar: TScrollBar
+            Left = 876
+            Height = 305
+            Top = 0
+            Width = 16
+            Align = alRight
+            Kind = sbVertical
+            PageSize = 0
+            TabOrder = 0
+            OnChange = ScrollBarChange
+          end
+          object FPaintBox: TPaintBox
+            Left = 0
+            Height = 305
+            Top = 0
+            Width = 876
+            Align = alClient
+            PopupMenu = FPopup
+            OnMouseDown = PaintBoxMouseDown
+            OnMouseWheel = PaintBoxMouseWheel
+            OnPaint = PaintBoxPaint
+          end
+        end
+      end
+    end
+    object FTabFiles: TTabSheet
+      Caption = 'Files'
+      ClientHeight = 550
+      ClientWidth = 892
+      object FFilesList: TListBox
+        Left = 6
+        Height = 538
+        Top = 6
+        Width = 880
+        Align = alClient
+        BorderSpacing.Around = 6
+        ItemHeight = 0
+        Sorted = False
+        TabOrder = 0
+      end
+    end
+  end
 end

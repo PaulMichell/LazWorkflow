@@ -18,7 +18,7 @@
     <Description Value="Git lifecycle UI and high-quality commit history graph for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="13">
+    <Files Count="19">
       <Item1>
         <Filename Value="../Source/LazGitManager/RegLazGitManager.pas"/>
         <HasRegisterProc Value="True"/>
@@ -54,25 +54,49 @@
         <UnitName Value="GitSettingsForm"/>
       </Item8>
       <Item9>
-        <Filename Value="../Source/LazGitManager/GitCommitForm.pas"/>
-        <UnitName Value="GitCommitForm"/>
+        <Filename Value="../Source/LazGitManager/GitSettingsForm.lfm"/>
+        <FileType Value="FormResource"/>
       </Item9>
       <Item10>
-        <Filename Value="../Source/LazGitManager/GitDiffView.pas"/>
-        <UnitName Value="GitDiffView"/>
+        <Filename Value="../Source/LazGitManager/GitCommitForm.pas"/>
+        <UnitName Value="GitCommitForm"/>
       </Item10>
       <Item11>
-        <Filename Value="../Source/LazGitManager/GitInitForm.pas"/>
-        <UnitName Value="GitInitForm"/>
+        <Filename Value="../Source/LazGitManager/GitCommitForm.lfm"/>
+        <FileType Value="FormResource"/>
       </Item11>
       <Item12>
-        <Filename Value="../Source/LazGitManager/GitCloneForm.pas"/>
-        <UnitName Value="GitCloneForm"/>
+        <Filename Value="../Source/LazGitManager/GitDiffView.pas"/>
+        <UnitName Value="GitDiffView"/>
       </Item12>
       <Item13>
+        <Filename Value="../Source/LazGitManager/GitDiffView.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item13>
+      <Item14>
+        <Filename Value="../Source/LazGitManager/GitInitForm.pas"/>
+        <UnitName Value="GitInitForm"/>
+      </Item14>
+      <Item15>
+        <Filename Value="../Source/LazGitManager/GitInitForm.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item15>
+      <Item16>
+        <Filename Value="../Source/LazGitManager/GitCloneForm.pas"/>
+        <UnitName Value="GitCloneForm"/>
+      </Item16>
+      <Item17>
+        <Filename Value="../Source/LazGitManager/GitCloneForm.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item17>
+      <Item18>
         <Filename Value="../Source/LazGitManager/GitRemotesForm.pas"/>
         <UnitName Value="GitRemotesForm"/>
-      </Item13>
+      </Item18>
+      <Item19>
+        <Filename Value="../Source/LazGitManager/GitRemotesForm.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item19>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>

@@ -16,7 +16,6 @@ Uses
 
 Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
-  Private
     FPages: TPageControl;
     FTabHistory: TTabSheet;
     FTabFiles: TTabSheet;
@@ -40,6 +39,32 @@ Type
     FBtnFetch: TButton;
     FBtnRemotes: TButton;
     FPopup: TPopupMenu;
+    FMiShowCommit: TMenuItem;
+    FMiCopySha: TMenuItem;
+    FMiSep: TMenuItem;
+    FMiCheckout: TMenuItem;
+    FMiCreateBranch: TMenuItem;
+    Procedure FormCreate(Sender: TObject);
+    Procedure FormDestroy(Sender: TObject);
+    Procedure FormShow(Sender: TObject);
+    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure PaintBoxPaint(Sender: TObject);
+    Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Integer);
+    Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
+      WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
+    Procedure ScrollBarChange(Sender: TObject);
+    Procedure GraphHostResize(Sender: TObject);
+    Procedure PagesChange(Sender: TObject);
+    Procedure RemotesActionExecute(Sender: TObject);
+    Procedure FetchActionExecute(Sender: TObject);
+    Procedure PullActionExecute(Sender: TObject);
+    Procedure PushActionExecute(Sender: TObject);
+    Procedure PopupCopySha(Sender: TObject);
+    Procedure PopupCheckout(Sender: TObject);
+    Procedure PopupCreateBranch(Sender: TObject);
+    Procedure PopupShowCommit(Sender: TObject);
+  Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
     FRepoPath: String;
@@ -59,31 +84,9 @@ Type
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
-    Procedure CreateUI;
-    Procedure BuildPopupMenu;
     Procedure InitLaneColors;
-    Procedure FormCreate(Sender: TObject);
-    Procedure FormDestroy(Sender: TObject);
-    Procedure FormShow(Sender: TObject);
-    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
-    Procedure PaintBoxPaint(Sender: TObject);
-    Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
-      Shift: TShiftState; X, Y: Integer);
-    Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
-      WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
-    Procedure ScrollBarChange(Sender: TObject);
-    Procedure GraphHostResize(Sender: TObject);
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
-    Procedure PagesChange(Sender: TObject);
-    Procedure RemotesActionExecute(Sender: TObject);
-    Procedure FetchActionExecute(Sender: TObject);
-    Procedure PullActionExecute(Sender: TObject);
-    Procedure PushActionExecute(Sender: TObject);
-    Procedure PopupCopySha(Sender: TObject);
-    Procedure PopupCheckout(Sender: TObject);
-    Procedure PopupCreateBranch(Sender: TObject);
-    Procedure PopupShowCommit(Sender: TObject);
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFilesList;
@@ -301,7 +304,6 @@ Begin
   FVisibleLast := 0;
   FModel := TGitGraphModel.Create;
   InitLaneColors;
-  CreateUI;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
 End;
@@ -336,227 +338,9 @@ Begin
   FLaneColors[9] := RGBToColor(96, 125, 139);
 End;
 
-Procedure TGitGraphForm.BuildPopupMenu;
-Var
-  Item: TMenuItem;
+Procedure TGitGraphForm.FormCreate(Sender: TObject);
 Begin
-  FPopup := TPopupMenu.Create(Self);
-
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Show commit';
-  Item.OnClick := @PopupShowCommit;
-  FPopup.Items.Add(Item);
-
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Copy SHA';
-  Item.OnClick := @PopupCopySha;
-  FPopup.Items.Add(Item);
-
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := '-';
-  FPopup.Items.Add(Item);
-
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Checkout…';
-  Item.OnClick := @PopupCheckout;
-  FPopup.Items.Add(Item);
-
-  Item := TMenuItem.Create(FPopup);
-  Item.Caption := 'Create branch here…';
-  Item.OnClick := @PopupCreateBranch;
-  FPopup.Items.Add(Item);
-End;
-
-Procedure TGitGraphForm.CreateUI;
-
-  Function MakeHistoryButton(Const ACaption: String; AAction: TAction; AWidth: Integer): TButton;
-  Begin
-    Result := TButton.Create(Self);
-    With Result Do
-      Begin
-        Parent := FHistoryButtons;
-        { alNone + ChildSizing.Layout = cclLeftToRight… so listed order is LTR. }
-        Align := alNone;
-        AutoSize := False;
-        Width := AWidth;
-        Height := 28;
-        Action := AAction;
-        Caption := ACaption;
-      End;
-  End;
-
-Begin
-  Caption := 'Manage Repository';
-  Width := 900;
-  Height := 600;
-  Position := poDefaultPosOnly;
-  KeyPreview := True;
-  OnKeyDown := @FormKeyDown;
-
-  FActionList := TActionList.Create(Self);
-
-  FPushAction := TAction.Create(Self);
-  FPushAction.Caption := 'Push';
-  FPushAction.OnExecute := @PushActionExecute;
-  FPushAction.ActionList := FActionList;
-
-  FPullAction := TAction.Create(Self);
-  FPullAction.Caption := 'Pull';
-  FPullAction.OnExecute := @PullActionExecute;
-  FPullAction.ActionList := FActionList;
-
-  FFetchAction := TAction.Create(Self);
-  FFetchAction.Caption := 'Fetch';
-  FFetchAction.OnExecute := @FetchActionExecute;
-  FFetchAction.ActionList := FActionList;
-
-  FRemotesAction := TAction.Create(Self);
-  FRemotesAction.Caption := 'Remotes…';
-  FRemotesAction.OnExecute := @RemotesActionExecute;
-  FRemotesAction.ActionList := FActionList;
-
-  BuildPopupMenu;
-
-  { Fixed status strip on the form bottom – never a splitter target. }
-  FStatusFooter := TStatusFooterFrame.Create(Self);
-  With FStatusFooter Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      Height := 22;
-      Constraints.MinHeight := 22;
-      Constraints.MaxHeight := 22;
-    End;
-
-  FPages := TPageControl.Create(Self);
-  With FPages Do
-    Begin
-      Parent := Self;
-      Align := alClient;
-      OnChange := @PagesChange;
-    End;
-
-  FTabHistory := TTabSheet.Create(Self);
-  FTabHistory.PageControl := FPages;
-  FTabHistory.Caption := 'History';
-
-  FTabFiles := TTabSheet.Create(Self);
-  FTabFiles.PageControl := FPages;
-  FTabFiles.Caption := 'Files';
-
-  { History: graph + splitter + detail (buttons under graph, then file diff). }
-  FMainPanel := TPanel.Create(Self);
-  With FMainPanel Do
-    Begin
-      Parent := FTabHistory;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  { Creation order for alBottom: edge control, then splitter, then alClient. }
-  FDetailPanel := TPanel.Create(Self);
-  With FDetailPanel Do
-    Begin
-      Parent := FMainPanel;
-      Align := alBottom;
-      Height := 240;
-      Constraints.MinHeight := 120;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
-  FHistoryButtons := TPanel.Create(Self);
-  With FHistoryButtons Do
-    Begin
-      Parent := FDetailPanel;
-      Align := alTop;
-      Height := 36;
-      BevelOuter := bvNone;
-      Caption := '';
-      { Flow children left-to-right in creation order (do not use alLeft stacking). }
-      ChildSizing.Layout := cclLeftToRightThenTopToBottom;
-      ChildSizing.ControlsPerLine := 8;
-      ChildSizing.LeftRightSpacing := 4;
-      ChildSizing.TopBottomSpacing := 4;
-      ChildSizing.HorizontalSpacing := 4;
-      ChildSizing.VerticalSpacing := 4;
-      ChildSizing.EnlargeHorizontal := crsAnchorAligning;
-      ChildSizing.EnlargeVertical := crsAnchorAligning;
-      ChildSizing.ShrinkHorizontal := crsScaleChilds;
-      ChildSizing.ShrinkVertical := crsScaleChilds;
-    End;
-
-  { Visual LTR order: Push, Pull, Fetch, Remotes… }
-  FBtnPush := MakeHistoryButton('Push', FPushAction, 90);
-  FBtnPull := MakeHistoryButton('Pull', FPullAction, 90);
-  FBtnFetch := MakeHistoryButton('Fetch', FFetchAction, 90);
-  FBtnRemotes := MakeHistoryButton('Remotes…', FRemotesAction, 100);
-
-  FDiffView := TGitDiffView.Create(Self);
-  With FDiffView Do
-    Begin
-      Parent := FDetailPanel;
-      Align := alClient;
-      BorderSpacing.Around := 2;
-      SetViewMode(dvmBrowse);
-    End;
-
-  FSplitter := TSplitter.Create(Self);
-  With FSplitter Do
-    Begin
-      Parent := FMainPanel;
-      Align := alBottom;
-      Height := 5;
-      AutoSnap := False;
-      ResizeControl := FDetailPanel;
-      MinSize := 48;
-    End;
-
-  FGraphHost := TPanel.Create(Self);
-  With FGraphHost Do
-    Begin
-      Parent := FMainPanel;
-      Align := alClient;
-      BevelOuter := bvNone;
-      Caption := '';
-      OnResize := @GraphHostResize;
-    End;
-
-  FScrollBar := TScrollBar.Create(Self);
-  With FScrollBar Do
-    Begin
-      Parent := FGraphHost;
-      Kind := sbVertical;
-      Align := alRight;
-      Width := 16;
-      Min := 0;
-      Max := 0;
-      PageSize := 0;
-      OnChange := @ScrollBarChange;
-    End;
-
-  FPaintBox := TPaintBox.Create(Self);
-  With FPaintBox Do
-    Begin
-      Parent := FGraphHost;
-      Align := alClient;
-      OnPaint := @PaintBoxPaint;
-      OnMouseDown := @PaintBoxMouseDown;
-      OnMouseWheel := @PaintBoxMouseWheel;
-      PopupMenu := FPopup;
-    End;
-
-  { Files tab: working-tree inventory with status (commit UI later). }
-  FFilesList := TListBox.Create(Self);
-  With FFilesList Do
-    Begin
-      Parent := FTabFiles;
-      Align := alClient;
-      BorderSpacing.Around := 6;
-      Sorted := False;
-    End;
-
+  { Timers stay runtime-created (not useful in the designer). }
   FDetailTimer := TTimer.Create(Self);
   FDetailTimer.Enabled := False;
   FDetailTimer.Interval := 40;
@@ -566,13 +350,9 @@ Begin
   FAutoRefreshTimer.Enabled := False;
   FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
 
-  OnCreate := @FormCreate;
-  OnDestroy := @FormDestroy;
-  OnShow := @FormShow;
-End;
+  If Assigned(FDiffView) Then
+    FDiffView.SetViewMode(dvmBrowse);
 
-Procedure TGitGraphForm.FormCreate(Sender: TObject);
-Begin
   WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
 End;
 
