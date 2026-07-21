@@ -1,6 +1,6 @@
 Unit GitRemotesForm;
 
-{ Manage Git remotes via an editable grid (c) 2026 Michell Computing. }
+{ Manage Git remotes via a select-then-edit grid (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -24,12 +24,18 @@ Type
     FSeparator: TBevel;
     FBtnAdd: TButton;
     FBtnRemove: TButton;
+    FBtnEdit: TButton;
     FBtnOK: TButton;
     FBtnCancel: TButton;
+    FEditing: Boolean;
+    FEditRow: Integer;
     Procedure CreateUI;
     Procedure LoadFromGit;
+    Procedure SetGridEditable(Editable: Boolean);
     Procedure BtnAddClick(Sender: TObject);
     Procedure BtnRemoveClick(Sender: TObject);
+    Procedure BtnEditClick(Sender: TObject);
+    Procedure GridSelectCell(Sender: TObject; aCol, aRow: Integer; Var CanSelect: Boolean);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Function ValidateGrid(Out ErrorMessage: String): Boolean;
     Function SaveToGit(Out ErrorMessage: String): Boolean;
@@ -65,6 +71,8 @@ Begin
   Inherited CreateNew(TheOwner);
   FOriginalNames := TStringList.Create;
   FOriginalUrls := TStringList.Create;
+  FEditing := False;
+  FEditRow := -1;
   CreateUI;
 End;
 
@@ -84,7 +92,7 @@ Begin
   BorderStyle := bsSizeable;
   OnCloseQuery := @FormCloseQuery;
 
-  { Bottom bar: separator on top, Add/Remove left, OK/Cancel right. }
+  { Bottom bar: separator on top, Add/Remove/Edit left, OK/Cancel right. }
   FBottomBar := TPanel.Create(Self);
   With FBottomBar Do
     Begin
@@ -157,6 +165,19 @@ Begin
       OnClick := @BtnRemoveClick;
     End;
 
+  FBtnEdit := TButton.Create(Self);
+  With FBtnEdit Do
+    Begin
+      Parent := FBottomBar;
+      Align := alLeft;
+      Width := 90;
+      AutoSize := False;
+      BorderSpacing.Around := 8;
+      BorderSpacing.Left := 0;
+      Caption := 'Edit';
+      OnClick := @BtnEditClick;
+    End;
+
   FGrid := TStringGrid.Create(Self);
   With FGrid Do
     Begin
@@ -167,12 +188,37 @@ Begin
       RowCount := 1;
       FixedRows := 1;
       FixedCols := 0;
-      Options := Options + [goEditing, goThumbTracking, goColSizing, goAlwaysShowEditor, goTabs];
-      Options := Options - [goRowSelect];
+      { Start read-only with row selection for easy remote pick. }
+      Options := Options + [goRowSelect, goThumbTracking, goColSizing, goTabs];
+      Options := Options - [goEditing, goAlwaysShowEditor, goRangeSelect];
       Cells[0, 0] := 'Name';
       Cells[1, 0] := 'URL';
       ColWidths[0] := 120;
       ColWidths[1] := 460;
+      OnSelectCell := @GridSelectCell;
+    End;
+End;
+
+Procedure TGitRemotesForm.SetGridEditable(Editable: Boolean);
+Begin
+  If Editable = FEditing Then
+    Begin
+      If Editable Then
+        FEditRow := FGrid.Row;
+      Exit;
+    End;
+
+  FGrid.EditorMode := False;
+  FEditing := Editable;
+  If Editable Then
+    Begin
+      FEditRow := FGrid.Row;
+      FGrid.Options := FGrid.Options - [goRowSelect] + [goEditing, goAlwaysShowEditor];
+    End
+  Else
+    Begin
+      FEditRow := -1;
+      FGrid.Options := FGrid.Options + [goRowSelect] - [goEditing, goAlwaysShowEditor];
     End;
 End;
 
@@ -197,6 +243,7 @@ Var
   Names, Urls: TStringList;
   I: Integer;
 Begin
+  SetGridEditable(False);
   FGrid.RowCount := 1;
   FOriginalNames.Clear;
   FOriginalUrls.Clear;
@@ -233,6 +280,14 @@ Begin
   End;
 End;
 
+Procedure TGitRemotesForm.GridSelectCell(Sender: TObject; aCol, aRow: Integer; Var CanSelect: Boolean);
+Begin
+  CanSelect := True;
+  { Leaving the row being edited returns to read-only selection mode. }
+  If FEditing And (aRow <> FEditRow) Then
+    SetGridEditable(False);
+End;
+
 Procedure TGitRemotesForm.BtnAddClick(Sender: TObject);
 Var
   NewRow: Integer;
@@ -243,6 +298,28 @@ Begin
   FGrid.Cells[1, NewRow] := '';
   FGrid.Row := NewRow;
   FGrid.Col := 0;
+  SetGridEditable(True);
+  If FGrid.CanFocus Then
+    FGrid.SetFocus;
+  FGrid.EditorMode := True;
+End;
+
+Procedure TGitRemotesForm.BtnEditClick(Sender: TObject);
+Begin
+  If FGrid.Row < FGrid.FixedRows Then
+    Begin
+      MessageDlg('Select a remote row to edit.', mtWarning, [mbOK], 0);
+      Exit;
+    End;
+  If DataRowCount = 0 Then
+    Begin
+      MessageDlg('No remotes to edit. Use Add to create one.', mtWarning, [mbOK], 0);
+      Exit;
+    End;
+  SetGridEditable(True);
+  FGrid.Col := 0;
+  If FGrid.CanFocus Then
+    FGrid.SetFocus;
   FGrid.EditorMode := True;
 End;
 
@@ -262,9 +339,10 @@ Begin
     RemoteName := 'this empty row';
   If MessageDlg('Remove remote "' + RemoteName + '" from the list?', mtWarning, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
+  SetGridEditable(False);
   FGrid.DeleteColRow(False, Row);
   If FGrid.RowCount <= FGrid.FixedRows Then
-    FGrid.RowCount := FGrid.FixedRows + 0;
+    FGrid.RowCount := FGrid.FixedRows;
 End;
 
 Function TGitRemotesForm.ValidateGrid(Out ErrorMessage: String): Boolean;
@@ -381,7 +459,7 @@ Begin
   If ModalResult <> mrOk Then
     Exit; { Cancel – abandon grid edits }
 
-  FGrid.EditorMode := False;
+  SetGridEditable(False);
   If Not ValidateGrid(ErrorMessage) Then
     Begin
       MessageDlg(ErrorMessage, mtWarning, [mbOK], 0);
