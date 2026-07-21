@@ -1334,11 +1334,11 @@ Begin
               Begin
                 { Clean tracked file (or no staged delta): show plain content, not a green "new file" diff. }
                 If (Not StagedSide) And GitClient.ReadWorkingTreeFile(Path, Content) Then
-                  FFilesDiffView.LoadPlainText(Title + ' (clean)', Content)
+                  FFilesDiffView.LoadPlainText(Title + ' (clean)', Content, Path)
                 Else If StagedSide Then
-                  FFilesDiffView.LoadPlainText(Title, '(no staged changes for this file)')
+                  FFilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
                 Else
-                  FFilesDiffView.LoadPlainText(Title, '(no textual content)');
+                  FFilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
               End
             Else
               FFilesDiffView.LoadEmbeddedDiff(Title, DiffText);

@@ -73,6 +73,8 @@ Type
     Procedure ConfigureDiffColors;
     Procedure SetupDiffOverviewGutter;
     Procedure ApplyViewMode;
+    Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
+    Procedure ApplyDiffHighlighter;
     Procedure CancelPendingScroll;
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
@@ -100,7 +102,8 @@ Type
     Procedure Clear;
     Procedure SetViewMode(Mode: TGitDiffViewMode);
     Procedure LoadDiff(Const Title, DiffText: String);
-    Procedure LoadPlainText(Const Title, Content: String);
+    { SourceFileName selects an IDE language highlighter when known (e.g. .pas). }
+    Procedure LoadPlainText(Const Title, Content: String; Const SourceFileName: String = '');
     { Full-file embedded red/green diff (History / Files tab style). }
     Procedure LoadEmbeddedDiff(Const Title, DiffText: String);
     { Manage form: list files in the commit; editor shows full-file embedded diff. }
@@ -125,7 +128,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Math, EditorOptionsIntf, GitService, Dialogs, WorkflowLog;
+  Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
+  GitService, Dialogs, WorkflowLog;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -342,11 +346,45 @@ Begin
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
   { Overview gutter with red/green change markers (VS Code-style scroll map). }
   SetupDiffOverviewGutter;
+End;
+
+Procedure TGitDiffView.ApplyDiffHighlighter;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
   If Assigned(FHigh) Then
     Begin
+      If Assigned(IDEEditorOptions) Then
+        IDEEditorOptions.GetHighlighterSettings(FHigh);
       FEdit.Highlighter := FHigh;
       ConfigureDiffColors;
-    End;
+    End
+  Else
+    FEdit.Highlighter := Nil;
+End;
+
+Procedure TGitDiffView.ApplyLanguageHighlighter(Const SourceFileName: String);
+Var
+  Ext: String;
+  Id: TIdeSyntaxHighlighterID;
+  HL: TLazEditCustomHighlighter;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  FEdit.Highlighter := Nil;
+  Ext := ExtractFileExt(SourceFileName);
+  If (Ext = '') Or (IdeSyntaxHighlighters = Nil) Then
+    Exit;
+  Id := IdeSyntaxHighlighters.GetIdForFileExtension(Ext);
+  If (Id < IdeHighlighterStartId) Or (Id = IdeHighlighterUnknownId) Then
+    Exit;
+  HL := IdeSyntaxHighlighters.SharedInstances[Id];
+  If Not Assigned(HL) Then
+    Exit;
+  { Shared IDE instance – apply current colour scheme, do not free. }
+  If Assigned(IDEEditorOptions) Then
+    IDEEditorOptions.GetHighlighterSettings(HL);
+  FEdit.Highlighter := HL;
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -1229,6 +1267,7 @@ Begin
   If Title <> '' Then
     FCaption.Caption := Title;
   ApplyIDEEditorAppearance;
+  ApplyDiffHighlighter;
   FDiffText := DiffText;
   If Trim(DiffText) = '' Then
     Begin
@@ -1237,8 +1276,6 @@ Begin
       UpdateActionEnabled;
       Exit;
     End;
-  FEdit.Highlighter := FHigh;
-  ConfigureDiffColors;
   FEdit.Lines.Text := DiffText;
   Inc(FScrollGeneration);
   Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
@@ -1261,12 +1298,11 @@ Begin
       Exit;
     End;
   ParseDiffIntoTree(DiffText);
-  FEdit.Highlighter := FHigh;
-  ConfigureDiffColors;
+  ApplyDiffHighlighter;
   UpdateActionEnabled;
 End;
 
-Procedure TGitDiffView.LoadPlainText(Const Title, Content: String);
+Procedure TGitDiffView.LoadPlainText(Const Title, Content: String; Const SourceFileName: String);
 Begin
   Clear;
   If Title <> '' Then
@@ -1275,7 +1311,12 @@ Begin
   If FMode = dvmEditorOnly Then
     ApplyViewMode;
   ApplyIDEEditorAppearance;
-  FEdit.Highlighter := Nil;
+  FDiffText := '';
+  { Prefer IDE language highlighter for known types (e.g. FreePascal for .pas). }
+  If SourceFileName <> '' Then
+    ApplyLanguageHighlighter(SourceFileName)
+  Else
+    FEdit.Highlighter := Nil;
   FEdit.Lines.Text := Content;
   UpdateActionEnabled;
 End;
