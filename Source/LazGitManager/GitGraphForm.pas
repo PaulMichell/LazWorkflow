@@ -31,7 +31,10 @@ Type
     FFilesLeftPanel: TPanel;
     FFilesList: TListBox;
     FFilesBottomBar: TPanel;
-    FExcludeUntrackedCheck: TCheckBox;
+    FFilterGroup: TGroupBox;
+    FShowUntrackedCheck: TCheckBox;
+    FShowCleanCheck: TCheckBox;
+    FShowIgnoredCheck: TCheckBox;
     FBtnIgnoreFiles: TButton;
     FFilesSplitter: TSplitter;
     FFilesRightPanel: TPanel;
@@ -91,7 +94,7 @@ Type
     Procedure FilesListDblClick(Sender: TObject);
     Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
     Procedure StagedListDblClick(Sender: TObject);
-    Procedure ExcludeUntrackedChange(Sender: TObject);
+    Procedure FileFilterChange(Sender: TObject);
     Procedure BtnIgnoreFilesClick(Sender: TObject);
     Procedure BtnStageClick(Sender: TObject);
     Procedure BtnUnstageClick(Sender: TObject);
@@ -151,6 +154,7 @@ Type
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
     Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
+    Function FileStatusPassesFilter(Const StatusText: String): Boolean;
     Procedure QuietRefreshIfChanged;
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
     { IGitRepositoryChanged }
@@ -409,8 +413,12 @@ Begin
       FFilesDiffView.SetViewMode(dvmStaging);
       FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
     End;
-  If Assigned(FExcludeUntrackedCheck) Then
-    FExcludeUntrackedCheck.Checked := True;
+  If Assigned(FShowUntrackedCheck) Then
+    FShowUntrackedCheck.Checked := False;
+  If Assigned(FShowCleanCheck) Then
+    FShowCleanCheck.Checked := False;
+  If Assigned(FShowIgnoredCheck) Then
+    FShowIgnoredCheck.Checked := False;
   UpdateCommitEnabled;
 
   WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
@@ -1083,6 +1091,19 @@ Begin
     Result := 'clean';
 End;
 
+Function TGitGraphForm.FileStatusPassesFilter(Const StatusText: String): Boolean;
+Begin
+  { Optional categories are hidden unless their filter checkbox is checked. }
+  If StatusText = 'untracked' Then
+    Result := Assigned(FShowUntrackedCheck) And FShowUntrackedCheck.Checked
+  Else If StatusText = 'clean' Then
+    Result := Assigned(FShowCleanCheck) And FShowCleanCheck.Checked
+  Else If StatusText = 'ignored' Then
+    Result := Assigned(FShowIgnoredCheck) And FShowIgnoredCheck.Checked
+  Else
+    Result := True;
+End;
+
 Procedure TGitGraphForm.RefreshFilesList;
 Var
   AllFiles, StatusMap: TStringList;
@@ -1090,12 +1111,10 @@ Var
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
   Idx: Integer;
-  ExcludeUntracked: Boolean;
   EntryStatus: String;
 Begin
   If Not Assigned(FFilesList) Or Not Assigned(FStagedList) Then
     Exit;
-  ExcludeUntracked := Assigned(FExcludeUntrackedCheck) And FExcludeUntrackedCheck.Checked;
 
   FFilesList.Items.BeginUpdate;
   FStagedList.Items.BeginUpdate;
@@ -1123,6 +1142,7 @@ Begin
       If Assigned(GitClient) Then
         Begin
           GitClient.RepoPath := FRepoPath;
+          { Include ignored paths so the Ignored filter can show them. }
           If GitClient.ListStatus(Entries) Then
             For I := 0 To High(Entries) Do
               Begin
@@ -1158,7 +1178,7 @@ Begin
             StatusText := StatusMap.ValueFromIndex[Idx]
           Else
             StatusText := 'clean';
-          If ExcludeUntracked And (StatusText = 'untracked') Then
+          If Not FileStatusPassesFilter(StatusText) Then
             Continue;
           FFilesList.Items.Add(Rel + '  ' + StatusText);
           FFilesPaths.Add(Rel);
@@ -1170,7 +1190,7 @@ Begin
           If Rel = '' Then
             Continue;
           StatusText := StatusMap.ValueFromIndex[I];
-          If ExcludeUntracked And (StatusText = 'untracked') Then
+          If Not FileStatusPassesFilter(StatusText) Then
             Continue;
           FullPath := Root + StringReplace(Rel, '/', DirectorySeparator, [rfReplaceAll]);
           If FileExists(FullPath) Then
@@ -1281,7 +1301,7 @@ Begin
   BtnUnstageClick(Sender);
 End;
 
-Procedure TGitGraphForm.ExcludeUntrackedChange(Sender: TObject);
+Procedure TGitGraphForm.FileFilterChange(Sender: TObject);
 Begin
   RefreshFilesList;
 End;

@@ -346,7 +346,8 @@ Var
   Path, OldPath: String;
 Begin
   SetLength(Entries, 0);
-  Result := RunGit(['status', '--porcelain', '--untracked-files=all'], Raw, ExitCode);
+  { --ignored so callers can filter/show ignored paths (porcelain !!). }
+  Result := RunGit(['status', '--porcelain', '--untracked-files=all', '--ignored'], Raw, ExitCode);
   If Not Result Then
     Exit;
 
