@@ -181,7 +181,6 @@ object GitGraphForm: TGitGraphForm
           AutoSnap = False
           MinSize = 48
           ResizeAnchor = akBottom
-          ResizeControl = FDetailPanel
         end
         object FGraphHost: TPanel
           Left = 0

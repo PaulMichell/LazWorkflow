@@ -350,6 +350,10 @@ Begin
   FAutoRefreshTimer.Enabled := False;
   FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
 
+  { ResizeControl is public but not published – cannot stream from the .lfm. }
+  If Assigned(FSplitter) And Assigned(FDetailPanel) Then
+    FSplitter.ResizeControl := FDetailPanel;
+
   If Assigned(FDiffView) Then
     FDiffView.SetViewMode(dvmBrowse);
 
