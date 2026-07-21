@@ -57,6 +57,10 @@ Type
     Function UnstageAll: Boolean;
     Function Commit(Const Message: String; Out NewSha: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
+    { True when Path is tracked in the index (not untracked). }
+    Function IsPathTracked(Const Path: String): Boolean;
+    { Working-tree file contents (for clean tracked files with no diff). }
+    Function ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
     { Apply a unified diff to the index (partial stage/unstage). Reverse undoes it. }
     Function ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean = False): Boolean;
     { Full history index (SHA + parents only). Safe from worker threads. }
@@ -500,6 +504,49 @@ Begin
     End;
 End;
 
+Function TGitService.IsPathTracked(Const Path: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If Path = '' Then
+    Exit;
+  { Exit 0 only when the path is in the index. }
+  Result := RunGit(['ls-files', '--error-unmatch', '--', Path], OutputText, ExitCode);
+End;
+
+Function TGitService.ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
+Var
+  FullPath: String;
+  List: TStringList;
+Begin
+  Result := False;
+  Content := '';
+  If (Path = '') Or (FRepoPath = '') Then
+    Exit;
+  FullPath := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) +
+    StringReplace(Path, '/', DirectorySeparator, [rfReplaceAll]);
+  If Not FileExists(FullPath) Then
+    Begin
+      FLastError := 'File not found: ' + FullPath;
+      Exit;
+    End;
+  List := TStringList.Create;
+  Try
+    Try
+      List.LoadFromFile(FullPath);
+      Content := List.Text;
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := 'Could not read file: ' + E.Message;
+    End;
+  Finally
+    List.Free;
+  End;
+End;
+
 Function TGitService.DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
 Var
   ExitCode: Integer;
@@ -514,8 +561,9 @@ Begin
   Else
     Begin
       Result := RunGit(['diff', '-U100000', '--', Path], DiffText, ExitCode);
-      { Untracked / new files: synthesise a full-file added diff. }
-      If Result And (Trim(DiffText) = '') Then
+      { Empty worktree diff: only synthesise "new file" for untracked paths.
+        Clean tracked files must stay empty so the UI can show plain content. }
+      If Result And (Trim(DiffText) = '') And (Not IsPathTracked(Path)) Then
         Begin
           Result := RunGit(['diff', '--no-index', '-U100000', '--', '/dev/null', Path], DiffText, ExitCode);
           { git --no-index returns 1 when files differ; treat non-empty output as success. }

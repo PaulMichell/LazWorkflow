@@ -1309,14 +1309,13 @@ End;
 Procedure TGitGraphForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
 Var
   I: Integer;
-  DiffText, Path, Title: String;
+  DiffText, Path, Title, Content: String;
 Begin
   If Not Assigned(FFilesDiffView) Then
     Exit;
   FFilesDiffView.Clear;
   FFilesDiffView.SetViewMode(dvmEditorOnly);
   FFilesDiffView.SetStagingContext(FRepoPath, StagedSide);
-  { Keep editor-only layout after SetStagingContext (which selects staging mode). }
   FFilesDiffView.SetViewMode(dvmEditorOnly);
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
@@ -1332,7 +1331,15 @@ Begin
         If GitClient.DiffPath(Path, StagedSide, DiffText) Then
           Begin
             If Trim(DiffText) = '' Then
-              FFilesDiffView.LoadPlainText(Title, '(no textual diff for ' + Path + ')')
+              Begin
+                { Clean tracked file (or no staged delta): show plain content, not a green "new file" diff. }
+                If (Not StagedSide) And GitClient.ReadWorkingTreeFile(Path, Content) Then
+                  FFilesDiffView.LoadPlainText(Title + ' (clean)', Content)
+                Else If StagedSide Then
+                  FFilesDiffView.LoadPlainText(Title, '(no staged changes for this file)')
+                Else
+                  FFilesDiffView.LoadPlainText(Title, '(no textual content)');
+              End
             Else
               FFilesDiffView.LoadEmbeddedDiff(Title, DiffText);
           End
