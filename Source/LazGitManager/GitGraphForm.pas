@@ -131,6 +131,8 @@ Type
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFilesList;
     Procedure UpdateCommitEnabled;
+    Procedure UpdateStageButtonsEnabled;
+    Function ListHasSelection(List: TListBox): Boolean;
     Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
     Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexLoaded;
@@ -417,7 +419,12 @@ Begin
     FShowCleanCheck.Checked := False;
   If Assigned(FShowIgnoredCheck) Then
     FShowIgnoredCheck.Checked := False;
+  If Assigned(FFilesList) Then
+    FFilesList.MultiSelect := True;
+  If Assigned(FStagedList) Then
+    FStagedList.MultiSelect := True;
   UpdateCommitEnabled;
+  UpdateStageButtonsEnabled;
 
   WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
 End;
@@ -1104,7 +1111,7 @@ End;
 
 Procedure TGitGraphForm.RefreshFilesList;
 Var
-  AllFiles, StatusMap: TStringList;
+  AllFiles, StatusMap, FullyStaged: TStringList;
   Entries: TGitStatusEntryArray;
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
@@ -1126,16 +1133,21 @@ Begin
       Begin
         FFilesList.Items.Add('(no repository)');
         UpdateCommitEnabled;
+        UpdateStageButtonsEnabled;
         Exit;
       End;
 
     Root := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath));
     StatusMap := TStringList.Create;
+    FullyStaged := TStringList.Create;
     AllFiles := TStringList.Create;
     Try
       StatusMap.Sorted := True;
       StatusMap.Duplicates := dupIgnore;
       StatusMap.CaseSensitive := FileNameCaseSensitive;
+      FullyStaged.Sorted := True;
+      FullyStaged.Duplicates := dupIgnore;
+      FullyStaged.CaseSensitive := FileNameCaseSensitive;
 
       If Assigned(GitClient) Then
         Begin
@@ -1151,6 +1163,9 @@ Begin
                   Begin
                     FStagedList.Items.Add(GitStatusEntryLabel(Entries[I], True) + Rel);
                     FStagedPaths.Add(Rel);
+                    { Fully staged (no remaining worktree change) leave the left list. }
+                    If Not GitStatusEntryIsUnstaged(Entries[I]) Then
+                      FullyStaged.Add(Rel);
                   End;
               End;
         End;
@@ -1171,6 +1186,8 @@ Begin
           Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
           If Rel = '' Then
             Continue;
+          If FullyStaged.IndexOf(Rel) >= 0 Then
+            Continue;
           Idx := StatusMap.IndexOfName(Rel);
           If Idx >= 0 Then
             StatusText := StatusMap.ValueFromIndex[Idx]
@@ -1186,6 +1203,8 @@ Begin
         Begin
           Rel := StatusMap.Names[I];
           If Rel = '' Then
+            Continue;
+          If FullyStaged.IndexOf(Rel) >= 0 Then
             Continue;
           StatusText := StatusMap.ValueFromIndex[I];
           If Not FileStatusPassesFilter(StatusText) Then
@@ -1204,6 +1223,7 @@ Begin
         FFilesList.Items.Add('(no files)');
     Finally
       AllFiles.Free;
+      FullyStaged.Free;
       StatusMap.Free;
     End;
   Finally
@@ -1216,6 +1236,30 @@ Begin
   If Assigned(FFilesDiffView) Then
     FFilesDiffView.Clear;
   UpdateCommitEnabled;
+  UpdateStageButtonsEnabled;
+End;
+
+Function TGitGraphForm.ListHasSelection(List: TListBox): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  If List = Nil Then
+    Exit;
+  For I := 0 To List.Count - 1 Do
+    If List.Selected[I] Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+End;
+
+Procedure TGitGraphForm.UpdateStageButtonsEnabled;
+Begin
+  If Assigned(FBtnStage) Then
+    FBtnStage.Enabled := ListHasSelection(FFilesList) And (FFilesPaths.Count > 0);
+  If Assigned(FBtnUnstage) Then
+    FBtnUnstage.Enabled := ListHasSelection(FStagedList) And (FStagedPaths.Count > 0);
 End;
 
 Procedure TGitGraphForm.UpdateCommitEnabled;
@@ -1280,9 +1324,11 @@ End;
 
 Procedure TGitGraphForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(FStagedList) Then
+  { Keep multi-select on this list; only clear the other list's selection. }
+  If Assigned(FStagedList) And ListHasSelection(FStagedList) Then
     FStagedList.ClearSelection;
   ShowFilesDiff(FFilesList, FFilesPaths, False);
+  UpdateStageButtonsEnabled;
 End;
 
 Procedure TGitGraphForm.FilesListDblClick(Sender: TObject);
@@ -1292,9 +1338,10 @@ End;
 
 Procedure TGitGraphForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(FFilesList) Then
+  If Assigned(FFilesList) And ListHasSelection(FFilesList) Then
     FFilesList.ClearSelection;
   ShowFilesDiff(FStagedList, FStagedPaths, True);
+  UpdateStageButtonsEnabled;
 End;
 
 Procedure TGitGraphForm.StagedListDblClick(Sender: TObject);
@@ -1327,7 +1374,10 @@ Begin
   Paths := CollectSelectedPaths(FFilesList, FFilesPaths);
   Try
     If Paths.Count = 0 Then
-      Exit;
+      Begin
+        MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
+        Exit;
+      End;
     GitClient.RepoPath := FRepoPath;
     If Not GitClient.StagePaths(Paths) Then
       MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
@@ -1346,7 +1396,10 @@ Begin
   Paths := CollectSelectedPaths(FStagedList, FStagedPaths);
   Try
     If Paths.Count = 0 Then
-      Exit;
+      Begin
+        MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
+        Exit;
+      End;
     GitClient.RepoPath := FRepoPath;
     If Not GitClient.UnstagePaths(Paths) Then
       MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
