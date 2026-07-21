@@ -1085,7 +1085,7 @@ Var
   C: TGitCommitRec;
   When: TDateTime;
   I: Integer;
-  ParentLine, ShowText, Header: String;
+  ParentLine, Header: String;
 Begin
   If (Index < 0) Or (Index >= FModel.Count) Then
     Begin
@@ -1094,15 +1094,11 @@ Begin
     End;
   C := FModel.Commit(Index);
 
-  { Prefer full `git show` (message + unified diff) in SynEdit with structure tree. }
+  { File list + full-file embedded red/green diff for the selected path. }
   If Assigned(GitClient) And (FRepoPath <> '') And (C.Sha <> '') Then
     Begin
-      GitClient.RepoPath := FRepoPath;
-      If GitClient.ShowCommit(C.Sha, ShowText) And (Trim(ShowText) <> '') Then
-        Begin
-          FDiffView.LoadDiff(Copy(C.Sha, 1, 7) + '  ' + C.Subject, ShowText);
-          Exit;
-        End;
+      FDiffView.LoadCommit(FRepoPath, C.Sha, Copy(C.Sha, 1, 7) + '  ' + C.Subject);
+      Exit;
     End;
 
   Header := 'Commit:  ' + C.Sha + LineEnding;

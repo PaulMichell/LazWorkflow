@@ -1,7 +1,8 @@
 Unit GitDiffView;
 
-{ SynEdit-based unified-diff viewer with file/hunk/line selection and partial
-  stage/unstage (c) 2026 Michell Computing. }
+{ SynEdit-based diff viewer: staging tree mode (commit dialog) and commit browse
+  mode (manage form file list + full-file embedded red/green diffs)
+  (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,6 +16,8 @@ Uses
   Menus, SynEdit, SynEditTypes, SynHighlighterDiff;
 
 Type
+  TGitDiffViewMode = (dvmStaging, dvmBrowse);
+
   TGitDiffRange = Record
     StartLine: Integer; { 1-based inclusive }
     EndLine: Integer;
@@ -25,6 +28,7 @@ Type
   TGitDiffView = Class(TPanel)
   Private
     FTree: TTreeView;
+    FFileList: TListBox;
     FEdit: TSynEdit;
     FHigh: TSynDiffSyn;
     FSplitter: TSplitter;
@@ -37,12 +41,17 @@ Type
     FDiffText: String;
     FRepoPath: String;
     FStagedSide: Boolean;
+    FMode: TGitDiffViewMode;
+    FBrowseSha: String;
+    FUpdatingList: Boolean;
     FOnStatusChanged: TNotifyEvent;
     FPopup: TPopupMenu;
     Procedure BuildUI;
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
+    Procedure ApplyViewMode;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
+    Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
     Function NodeRange(Node: TTreeNode): TGitDiffRange;
@@ -54,18 +63,28 @@ Type
     Procedure PopupUnstageClick(Sender: TObject);
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
+    Procedure ClearTreeData;
+    Procedure ShowSelectedBrowseFile;
+    Procedure ScrollToFirstChangeCentered;
+    Procedure DoScrollToFirstChangeAsync(Data: PtrInt);
+    Function IsDiffChangeLine(Const Line: String): Boolean;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Procedure Clear;
+    Procedure SetViewMode(Mode: TGitDiffViewMode);
     Procedure LoadDiff(Const Title, DiffText: String);
     Procedure LoadPlainText(Const Title, Content: String);
+    { Manage form: list files in the commit; editor shows full-file embedded diff. }
+    Procedure LoadCommit(Const ARepoPath, Sha, Title: String);
     { RepoPath + StagedSide control partial stage/unstage against the index. }
     Procedure SetStagingContext(Const ARepoPath: String; StagedSide: Boolean);
     Function SelectedPath: String;
     Function StageSelection: Boolean;
     Function UnstageSelection: Boolean;
     Property Tree: TTreeView Read FTree;
+    Property FileList: TListBox Read FFileList;
     Property Editor: TSynEdit Read FEdit;
+    Property Mode: TGitDiffViewMode Read FMode;
     Property StagedSide: Boolean Read FStagedSide;
     Property OnStatusChanged: TNotifyEvent Read FOnStatusChanged Write FOnStatusChanged;
   End;
@@ -73,7 +92,7 @@ Type
 Implementation
 
 Uses
-  EditorOptionsIntf, GitService, Dialogs, WorkflowLog;
+  Math, EditorOptionsIntf, GitService, Dialogs, WorkflowLog;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -84,7 +103,10 @@ Begin
   BevelOuter := bvNone;
   Caption := '';
   FRepoPath := '';
+  FBrowseSha := '';
   FStagedSide := False;
+  FMode := dvmStaging;
+  FUpdatingList := False;
   BuildUI;
 End;
 
@@ -133,6 +155,29 @@ Begin
       FEdit.Highlighter := FHigh;
       ConfigureDiffColors;
     End;
+End;
+
+Procedure TGitDiffView.ApplyViewMode;
+Begin
+  FToolBar.Visible := FMode = dvmStaging;
+  FTree.Visible := FMode = dvmStaging;
+  FFileList.Visible := FMode = dvmBrowse;
+  If FMode = dvmBrowse Then
+    FTreePanel.Width := 240
+  Else
+    FTreePanel.Width := 220;
+  UpdateActionEnabled;
+End;
+
+Procedure TGitDiffView.SetViewMode(Mode: TGitDiffViewMode);
+Begin
+  If FMode = Mode Then
+    Begin
+      ApplyViewMode;
+      Exit;
+    End;
+  FMode := Mode;
+  ApplyViewMode;
 End;
 
 Procedure TGitDiffView.BuildUI;
@@ -209,6 +254,16 @@ Begin
       OnChange := @TreeChange;
     End;
 
+  FFileList := TListBox.Create(Self);
+  With FFileList Do
+    Begin
+      Parent := FTreePanel;
+      Align := alClient;
+      BorderSpacing.Around := 4;
+      Visible := False;
+      OnSelectionChange := @FileListSelectionChange;
+    End;
+
   FSplitter := TSplitter.Create(Self);
   With FSplitter Do
     Begin
@@ -251,6 +306,7 @@ Begin
   FTree.PopupMenu := FPopup;
 
   ApplyIDEEditorAppearance;
+  ApplyViewMode;
   UpdateActionEnabled;
 End;
 
@@ -258,21 +314,25 @@ Procedure TGitDiffView.SetStagingContext(Const ARepoPath: String; StagedSide: Bo
 Begin
   FRepoPath := ARepoPath;
   FStagedSide := StagedSide;
+  SetViewMode(dvmStaging);
   UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.UpdateActionEnabled;
 Var
-  HasRepo, HasDiff: Boolean;
+  HasRepo, HasDiff, Staging: Boolean;
 Begin
+  Staging := FMode = dvmStaging;
   HasRepo := FRepoPath <> '';
   HasDiff := Trim(FDiffText) <> '';
-  FBtnStageSel.Enabled := HasRepo And HasDiff And (Not FStagedSide);
-  FBtnUnstageSel.Enabled := HasRepo And HasDiff And FStagedSide;
+  FBtnStageSel.Enabled := Staging And HasRepo And HasDiff And (Not FStagedSide);
+  FBtnUnstageSel.Enabled := Staging And HasRepo And HasDiff And FStagedSide;
   If Assigned(FPopup) And (FPopup.Items.Count >= 2) Then
     Begin
       FPopup.Items[0].Enabled := FBtnStageSel.Enabled;
       FPopup.Items[1].Enabled := FBtnUnstageSel.Enabled;
+      FPopup.Items[0].Visible := Staging;
+      FPopup.Items[1].Visible := Staging;
     End;
 End;
 
@@ -282,15 +342,11 @@ Begin
     FOnStatusChanged(Self);
 End;
 
-Procedure TGitDiffView.Clear;
+Procedure TGitDiffView.ClearTreeData;
 Var
   Node: TTreeNode;
   Data: PGitDiffRange;
 Begin
-  FDiffText := '';
-  FEdit.Lines.Clear;
-  FCaption.Caption := 'Diff';
-
   Node := FTree.Items.GetFirstNode;
   While Assigned(Node) Do
     Begin
@@ -303,6 +359,21 @@ Begin
       Node := Node.GetNext;
     End;
   FTree.Items.Clear;
+End;
+
+Procedure TGitDiffView.Clear;
+Begin
+  FDiffText := '';
+  FBrowseSha := '';
+  FEdit.Lines.Clear;
+  FCaption.Caption := 'Diff';
+  ClearTreeData;
+  FUpdatingList := True;
+  Try
+    FFileList.Items.Clear;
+  Finally
+    FUpdatingList := False;
+  End;
   UpdateActionEnabled;
 End;
 
@@ -345,6 +416,46 @@ Begin
   UpdateActionEnabled;
 End;
 
+Function TGitDiffView.IsDiffChangeLine(Const Line: String): Boolean;
+Begin
+  Result := False;
+  If Length(Line) = 0 Then
+    Exit;
+  If (Line[1] <> '+') And (Line[1] <> '-') Then
+    Exit;
+  If (Copy(Line, 1, 3) = '+++') Or (Copy(Line, 1, 3) = '---') Then
+    Exit;
+  Result := True;
+End;
+
+Procedure TGitDiffView.ScrollToFirstChangeCentered;
+Var
+  I, Line, Half: Integer;
+Begin
+  Line := 0;
+  For I := 0 To FEdit.Lines.Count - 1 Do
+    If IsDiffChangeLine(FEdit.Lines[I]) Then
+      Begin
+        Line := I + 1;
+        Break;
+      End;
+  If Line < 1 Then
+    Begin
+      FEdit.TopLine := 1;
+      Exit;
+    End;
+  Half := FEdit.LinesInWindow Div 2;
+  If Half < 1 Then
+    Half := 12;
+  FEdit.CaretY := Line;
+  FEdit.TopLine := Max(1, Line - Half);
+End;
+
+Procedure TGitDiffView.DoScrollToFirstChangeAsync(Data: PtrInt);
+Begin
+  ScrollToFirstChangeCentered;
+End;
+
 Procedure TGitDiffView.GetSelectionLines(Out FirstLine, LastLine: Integer);
 Var
   B, E: TPoint;
@@ -367,7 +478,7 @@ Begin
           LastLine := B.Y;
         End;
     End
-  Else If Assigned(FTree.Selected) Then
+  Else If (FMode = dvmStaging) And Assigned(FTree.Selected) Then
     Begin
       R := NodeRange(FTree.Selected);
       FirstLine := R.StartLine;
@@ -577,7 +688,7 @@ Var
   Patch: String;
 Begin
   Result := False;
-  If FStagedSide Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+  If (FMode <> dvmStaging) Or FStagedSide Or (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GetSelectionLines(FirstLine, LastLine);
   Patch := BuildPartialPatch(FirstLine, LastLine);
@@ -604,7 +715,7 @@ Var
   Patch: String;
 Begin
   Result := False;
-  If (Not FStagedSide) Or (FRepoPath = '') Or Not Assigned(GitClient) Then
+  If (FMode <> dvmStaging) Or (Not FStagedSide) Or (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GetSelectionLines(FirstLine, LastLine);
   Patch := BuildPartialPatch(FirstLine, LastLine);
@@ -681,7 +792,7 @@ Var
 Begin
   FTree.Items.BeginUpdate;
   Try
-    Clear;
+    ClearTreeData;
     FDiffText := DiffText;
     FEdit.Lines.Text := DiffText;
 
@@ -792,8 +903,65 @@ Begin
     SelectLineRange(R.StartLine, R.EndLine);
 End;
 
+Procedure TGitDiffView.ShowSelectedBrowseFile;
+Var
+  Path, DiffText: String;
+Begin
+  If FMode <> dvmBrowse Then
+    Exit;
+  FEdit.Lines.Clear;
+  FDiffText := '';
+  If (FFileList.ItemIndex < 0) Or (FFileList.ItemIndex >= FFileList.Items.Count) Then
+    Begin
+      FEdit.Lines.Text := '(select a file)';
+      UpdateActionEnabled;
+      Exit;
+    End;
+  Path := FFileList.Items[FFileList.ItemIndex];
+  If (FRepoPath = '') Or (FBrowseSha = '') Or Not Assigned(GitClient) Then
+    Begin
+      FEdit.Lines.Text := '(no repository)';
+      UpdateActionEnabled;
+      Exit;
+    End;
+
+  GitClient.RepoPath := FRepoPath;
+  If Not GitClient.ShowCommitPathDiff(FBrowseSha, Path, DiffText) Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
+      UpdateActionEnabled;
+      Exit;
+    End;
+
+  ApplyIDEEditorAppearance;
+  FDiffText := DiffText;
+  If Trim(DiffText) = '' Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := '(no textual diff for ' + Path + ')';
+    End
+  Else
+    Begin
+      FEdit.Highlighter := FHigh;
+      ConfigureDiffColors;
+      FEdit.Lines.Text := DiffText;
+      { Defer centre scroll until layout knows LinesInWindow. }
+      Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, 0);
+    End;
+  UpdateActionEnabled;
+End;
+
+Procedure TGitDiffView.FileListSelectionChange(Sender: TObject; User: Boolean);
+Begin
+  If FUpdatingList Then
+    Exit;
+  ShowSelectedBrowseFile;
+End;
+
 Procedure TGitDiffView.LoadDiff(Const Title, DiffText: String);
 Begin
+  SetViewMode(dvmStaging);
   If Title <> '' Then
     FCaption.Caption := Title
   Else
@@ -823,12 +991,71 @@ Begin
   UpdateActionEnabled;
 End;
 
+Procedure TGitDiffView.LoadCommit(Const ARepoPath, Sha, Title: String);
+Var
+  Paths: TStringList;
+  I: Integer;
+Begin
+  SetViewMode(dvmBrowse);
+  Clear;
+  FRepoPath := ARepoPath;
+  FBrowseSha := Sha;
+  If Title <> '' Then
+    FCaption.Caption := Title
+  Else
+    FCaption.Caption := 'Commit ' + Copy(Sha, 1, 7);
+  ApplyIDEEditorAppearance;
+
+  If (ARepoPath = '') Or (Sha = '') Or Not Assigned(GitClient) Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := '(no commit selected)';
+      Exit;
+    End;
+
+  GitClient.RepoPath := ARepoPath;
+  Paths := Nil;
+  If Not GitClient.ListCommitPaths(Sha, Paths) Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
+      Paths.Free;
+      Exit;
+    End;
+
+  FUpdatingList := True;
+  Try
+    For I := 0 To Paths.Count - 1 Do
+      FFileList.Items.Add(Paths[I]);
+    If FFileList.Items.Count > 0 Then
+      FFileList.ItemIndex := 0;
+  Finally
+    FUpdatingList := False;
+    Paths.Free;
+  End;
+
+  If FFileList.Items.Count = 0 Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := '(no files changed in this commit)';
+      Exit;
+    End;
+
+  ShowSelectedBrowseFile;
+End;
+
 Function TGitDiffView.SelectedPath: String;
 Var
   Node: TTreeNode;
   R: TGitDiffRange;
 Begin
   Result := '';
+  If FMode = dvmBrowse Then
+    Begin
+      If (FFileList.ItemIndex >= 0) And (FFileList.ItemIndex < FFileList.Items.Count) Then
+        Result := FFileList.Items[FFileList.ItemIndex];
+      Exit;
+    End;
   Node := FTree.Selected;
   While Assigned(Node) Do
     Begin

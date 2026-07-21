@@ -62,6 +62,10 @@ Type
     Function SetRemoteUrl(Const Name, Url: String): Boolean;
     Function RemoveRemote(Const Name: String): Boolean;
     Function ShowCommit(Const Sha: String; Out Text: String): Boolean;
+    { Paths changed in a commit (name-only, no renames rewritten). Caller frees Paths. }
+    Function ListCommitPaths(Const Sha: String; Out Paths: TStringList): Boolean;
+    { Full-file unified diff for one path in a commit (large context for embedded view). }
+    Function ShowCommitPathDiff(Const Sha, Path: String; Out DiffText: String): Boolean;
     Function Checkout(Const RefName: String): Boolean;
     Function CreateBranch(Const BranchName, StartPoint: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
@@ -758,6 +762,49 @@ Begin
   If Sha = '' Then
     Exit;
   Result := RunGit(['show', '--stat', '--format=fuller', Sha], Text, ExitCode);
+End;
+
+Function TGitService.ListCommitPaths(Const Sha: String; Out Paths: TStringList): Boolean;
+Var
+  Text: String;
+  ExitCode, I: Integer;
+  Lines: TStringList;
+  Line: String;
+Begin
+  Paths := TStringList.Create;
+  Paths.Duplicates := dupIgnore;
+  Paths.Sorted := False;
+  Result := False;
+  Text := '';
+  If Sha = '' Then
+    Exit;
+  If Not RunGit(['show', '--name-only', '--pretty=format:', Sha], Text, ExitCode) Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Text;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        If Line <> '' Then
+          Paths.Add(Line);
+      End;
+    Result := True;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function TGitService.ShowCommitPathDiff(Const Sha, Path: String; Out DiffText: String): Boolean;
+Var
+  ExitCode: Integer;
+Begin
+  DiffText := '';
+  Result := False;
+  If (Sha = '') Or (Path = '') Then
+    Exit;
+  { Large unified context embeds the whole file with +/- change markers. }
+  Result := RunGit(['show', '-U100000', '--format=format:', '--find-renames', Sha, '--', Path], DiffText, ExitCode);
 End;
 
 Function TGitService.Checkout(Const RefName: String): Boolean;

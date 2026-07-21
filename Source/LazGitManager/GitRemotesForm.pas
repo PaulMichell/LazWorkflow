@@ -36,6 +36,7 @@ Type
     Procedure BtnRemoveClick(Sender: TObject);
     Procedure BtnEditClick(Sender: TObject);
     Procedure GridSelectCell(Sender: TObject; aCol, aRow: Integer; Var CanSelect: Boolean);
+    Procedure GridMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Function ValidateGrid(Out ErrorMessage: String): Boolean;
     Function SaveToGit(Out ErrorMessage: String): Boolean;
@@ -92,7 +93,7 @@ Begin
   BorderStyle := bsSizeable;
   OnCloseQuery := @FormCloseQuery;
 
-  { Bottom bar: separator on top, Add/Remove/Edit left, OK/Cancel right. }
+  { Bottom bar: separator on top, Edit/Add/Remove left, OK/Cancel right. }
   FBottomBar := TPanel.Create(Self);
   With FBottomBar Do
     Begin
@@ -112,7 +113,7 @@ Begin
       Shape := bsTopLine;
     End;
 
-  { Align order: alRight first (rightmost), then next alRight, then alLeft. }
+  { Align order: alRight first (rightmost), then alLeft in left-to-right order. }
   FBtnCancel := TButton.Create(Self);
   With FBtnCancel Do
     Begin
@@ -140,6 +141,18 @@ Begin
       Default := True;
     End;
 
+  FBtnEdit := TButton.Create(Self);
+  With FBtnEdit Do
+    Begin
+      Parent := FBottomBar;
+      Align := alLeft;
+      Width := 90;
+      AutoSize := False;
+      BorderSpacing.Around := 8;
+      Caption := 'Edit';
+      OnClick := @BtnEditClick;
+    End;
+
   FBtnAdd := TButton.Create(Self);
   With FBtnAdd Do
     Begin
@@ -148,6 +161,7 @@ Begin
       Width := 90;
       AutoSize := False;
       BorderSpacing.Around := 8;
+      BorderSpacing.Left := 0;
       Caption := 'Add';
       OnClick := @BtnAddClick;
     End;
@@ -163,19 +177,6 @@ Begin
       BorderSpacing.Left := 0;
       Caption := 'Remove';
       OnClick := @BtnRemoveClick;
-    End;
-
-  FBtnEdit := TButton.Create(Self);
-  With FBtnEdit Do
-    Begin
-      Parent := FBottomBar;
-      Align := alLeft;
-      Width := 90;
-      AutoSize := False;
-      BorderSpacing.Around := 8;
-      BorderSpacing.Left := 0;
-      Caption := 'Edit';
-      OnClick := @BtnEditClick;
     End;
 
   FGrid := TStringGrid.Create(Self);
@@ -196,6 +197,7 @@ Begin
       ColWidths[0] := 120;
       ColWidths[1] := 460;
       OnSelectCell := @GridSelectCell;
+      OnMouseDown := @GridMouseDown;
     End;
 End;
 
@@ -286,6 +288,28 @@ Begin
   { Leaving the row being edited returns to read-only selection mode. }
   If FEditing And (aRow <> FEditRow) Then
     SetGridEditable(False);
+End;
+
+Procedure TGitRemotesForm.GridMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Var
+  ACol, ARow: Integer;
+  LastCell: TRect;
+Begin
+  If Not FEditing Then
+    Exit;
+  FGrid.MouseToCell(X, Y, ACol, ARow);
+  { Empty client area, header, or invalid cell leaves edit mode. }
+  If (ACol < 0) Or (ARow < FGrid.FixedRows) Or (ARow >= FGrid.RowCount) Then
+    Begin
+      SetGridEditable(False);
+      Exit;
+    End;
+  If FGrid.RowCount > FGrid.FixedRows Then
+    Begin
+      LastCell := FGrid.CellRect(0, FGrid.RowCount - 1);
+      If (LastCell.Bottom > 0) And (Y > LastCell.Bottom) Then
+        SetGridEditable(False);
+    End;
 End;
 
 Procedure TGitRemotesForm.BtnAddClick(Sender: TObject);
