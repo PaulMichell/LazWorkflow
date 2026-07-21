@@ -66,6 +66,7 @@ Type
     FUpdatingList: Boolean;
     FScrollGeneration: PtrInt;
     FOnStatusChanged: TNotifyEvent;
+    FOnSelectionChanged: TNotifyEvent;
     FOverviewGutter: TSynGutterLineOverview;
     FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
     Procedure ApplyIDEEditorAppearance;
@@ -84,6 +85,9 @@ Type
     Function CanUnstageFromPreview: Boolean;
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
+    Procedure DoSelectionChanged;
+    Procedure EditSpecialLineColors(Sender: TObject; Line: Integer; Var Special: Boolean;
+      Var FG, BG: TColor);
     Procedure ClearTreeData;
     Procedure ShowSelectedBrowseFile;
     Procedure ScrollToFirstChangeCentered;
@@ -106,12 +110,14 @@ Type
     Function SelectedPath: String;
     Function StageSelection: Boolean;
     Function UnstageSelection: Boolean;
+    Function HasActiveSelection: Boolean;
     Property Tree: TTreeView Read FTree;
     Property FileList: TListBox Read FFileList;
     Property Editor: TSynEdit Read FEdit;
     Property Mode: TGitDiffViewMode Read FMode;
     Property StagedSide: Boolean Read FStagedSide;
     Property OnStatusChanged: TNotifyEvent Read FOnStatusChanged Write FOnStatusChanged;
+    Property OnSelectionChanged: TNotifyEvent Read FOnSelectionChanged Write FOnSelectionChanged;
   End;
 
 Implementation
@@ -260,9 +266,10 @@ End;
 Procedure TGitDiffView.ConfigureDiffColors;
 Begin
   FHigh.LineAddedAttri.Foreground := RGBToColor(27, 94, 32);
-  FHigh.LineAddedAttri.Background := RGBToColor(232, 245, 233);
+  { Token backgrounds kept none so SpecialLineColors can paint full row width. }
+  FHigh.LineAddedAttri.Background := clNone;
   FHigh.LineRemovedAttri.Foreground := RGBToColor(183, 28, 28);
-  FHigh.LineRemovedAttri.Background := RGBToColor(255, 235, 238);
+  FHigh.LineRemovedAttri.Background := clNone;
   FHigh.ChunkMarkerAttri.Foreground := RGBToColor(69, 90, 100);
   FHigh.ChunkMarkerAttri.Background := RGBToColor(236, 239, 241);
   FHigh.ChunkNewAttri.Foreground := RGBToColor(46, 125, 50);
@@ -330,6 +337,7 @@ Begin
   FEdit.WantTabs := True;
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
   FEdit.OnDblClick := @EditDblClick;
+  FEdit.OnSpecialLineColors := @EditSpecialLineColors;
   FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
   { Overview gutter with red/green change markers (VS Code-style scroll map). }
@@ -343,8 +351,8 @@ End;
 
 Procedure TGitDiffView.ApplyViewMode;
 Begin
-  { Staging toolbar also shown on Files-tab editor for line/hunk stage. }
-  FToolBar.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
+  { Files tab hosts Stage Selection on its own button bar below the editor. }
+  FToolBar.Visible := FMode = dvmStaging;
   FTree.Visible := FMode = dvmStaging;
   FFileList.Visible := FMode = dvmBrowse;
   FCaption.Visible := FMode = dvmStaging;
@@ -354,11 +362,6 @@ Begin
     FTreePanel.Width := 240
   Else If FMode = dvmStaging Then
     FTreePanel.Width := 220;
-  If FMode = dvmEditorOnly Then
-    Begin
-      FBtnStageSel.Caption := 'Stage selection';
-      FBtnUnstageSel.Caption := 'Unstage selection';
-    End;
   UpdateActionEnabled;
 End;
 
@@ -395,23 +398,19 @@ End;
 
 Procedure TGitDiffView.UpdateActionEnabled;
 Var
-  CanStage, CanUnstage: Boolean;
+  CanStage, CanUnstage, HasSel: Boolean;
 Begin
   CanStage := CanStageFromPreview;
   CanUnstage := CanUnstageFromPreview;
-  FBtnStageSel.Enabled := CanStage;
-  FBtnStageSel.Visible := CanStage Or (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
-  FBtnUnstageSel.Enabled := CanUnstage;
-  FBtnUnstageSel.Visible := CanUnstage Or (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
-  { Prefer the action that matches current side. }
-  If FMode = dvmEditorOnly Then
-    Begin
-      FBtnStageSel.Visible := Not FStagedSide;
-      FBtnUnstageSel.Visible := FStagedSide;
-    End;
+  HasSel := HasActiveSelection;
+  { Internal toolbar only for classic staging tree mode. }
+  FBtnStageSel.Enabled := CanStage And HasSel;
+  FBtnUnstageSel.Enabled := CanUnstage And HasSel;
+  FBtnStageSel.Visible := FMode = dvmStaging;
+  FBtnUnstageSel.Visible := FMode = dvmStaging;
   If Assigned(FMiStage) Then
     Begin
-      FMiStage.Enabled := CanStage;
+      FMiStage.Enabled := CanStage And HasSel;
       FMiStage.Visible := CanStage Or (FMode = dvmEditorOnly);
     End;
   If Assigned(FMiStageHunk) Then
@@ -421,7 +420,7 @@ Begin
     End;
   If Assigned(FMiUnstage) Then
     Begin
-      FMiUnstage.Enabled := CanUnstage;
+      FMiUnstage.Enabled := CanUnstage And HasSel;
       FMiUnstage.Visible := CanUnstage Or (FMode = dvmEditorOnly);
     End;
   If Assigned(FMiUnstageHunk) Then
@@ -437,6 +436,46 @@ Procedure TGitDiffView.DoStatusChanged;
 Begin
   If Assigned(FOnStatusChanged) Then
     FOnStatusChanged(Self);
+End;
+
+Procedure TGitDiffView.DoSelectionChanged;
+Begin
+  If Assigned(FOnSelectionChanged) Then
+    FOnSelectionChanged(Self);
+End;
+
+Function TGitDiffView.HasActiveSelection: Boolean;
+Begin
+  Result := Assigned(FEdit) And FEdit.SelAvail;
+End;
+
+Procedure TGitDiffView.EditSpecialLineColors(Sender: TObject; Line: Integer;
+  Var Special: Boolean; Var FG, BG: TColor);
+Var
+  LineText: String;
+Begin
+  Special := False;
+  If (Not Assigned(FEdit)) Or (Line < 1) Or (Line > FEdit.Lines.Count) Then
+    Exit;
+  LineText := FEdit.Lines[Line - 1];
+  If LineIsDiffAdded(LineText) Then
+    Begin
+      Special := True;
+      FG := RGBToColor(27, 94, 32);
+      BG := RGBToColor(232, 245, 233);
+    End
+  Else If LineIsDiffRemoved(LineText) Then
+    Begin
+      Special := True;
+      FG := RGBToColor(183, 28, 28);
+      BG := RGBToColor(255, 235, 238);
+    End
+  Else If Copy(LineText, 1, 2) = '@@' Then
+    Begin
+      Special := True;
+      FG := RGBToColor(69, 90, 100);
+      BG := RGBToColor(236, 239, 241);
+    End;
 End;
 
 Procedure TGitDiffView.ClearTreeData;
@@ -961,7 +1000,11 @@ End;
 Procedure TGitDiffView.EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
 Begin
   If (scSelection in Changes) Or (scCaretY in Changes) Then
-    UpdateActionEnabled;
+    Begin
+      UpdateActionEnabled;
+      If scSelection in Changes Then
+        DoSelectionChanged;
+    End;
 End;
 
 Procedure TGitDiffView.ParseDiffIntoTree(Const DiffText: String);

@@ -42,6 +42,7 @@ Type
     FBtnStage: TButton;
     FBtnUnstage: TButton;
     FBtnStageAll: TButton;
+    FBtnStageSelection: TButton;
     FStagedSplitter: TSplitter;
     FStagedPanel: TPanel;
     FStagedLabel: TLabel;
@@ -98,10 +99,12 @@ Type
     Procedure BtnStageClick(Sender: TObject);
     Procedure BtnUnstageClick(Sender: TObject);
     Procedure BtnStageAllClick(Sender: TObject);
+    Procedure BtnStageSelectionClick(Sender: TObject);
     Procedure BtnRefreshFilesClick(Sender: TObject);
     Procedure BtnCommitClick(Sender: TObject);
     Procedure MessageChange(Sender: TObject);
     Procedure FilesDiffStatusChanged(Sender: TObject);
+    Procedure FilesDiffSelectionChanged(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -412,6 +415,7 @@ Begin
     Begin
       FFilesDiffView.SetViewMode(dvmEditorOnly);
       FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
+      FFilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
     End;
   If Assigned(FShowUntrackedCheck) Then
     FShowUntrackedCheck.Checked := False;
@@ -1255,11 +1259,27 @@ Begin
 End;
 
 Procedure TGitGraphForm.UpdateStageButtonsEnabled;
+Var
+  CanPreviewAction: Boolean;
 Begin
   If Assigned(FBtnStage) Then
     FBtnStage.Enabled := ListHasSelection(FFilesList) And (FFilesPaths.Count > 0);
   If Assigned(FBtnUnstage) Then
     FBtnUnstage.Enabled := ListHasSelection(FStagedList) And (FStagedPaths.Count > 0);
+  If Assigned(FBtnStageSelection) And Assigned(FFilesDiffView) Then
+    Begin
+      CanPreviewAction := FFilesDiffView.HasActiveSelection And (FRepoPath <> '');
+      If FFilesDiffView.StagedSide Then
+        Begin
+          FBtnStageSelection.Caption := 'Unstage Selection';
+          FBtnStageSelection.Enabled := CanPreviewAction;
+        End
+      Else
+        Begin
+          FBtnStageSelection.Caption := 'Stage Selection';
+          FBtnStageSelection.Enabled := CanPreviewAction;
+        End;
+    End;
 End;
 
 Procedure TGitGraphForm.UpdateCommitEnabled;
@@ -1419,6 +1439,21 @@ Begin
   RefreshFilesList;
 End;
 
+Procedure TGitGraphForm.BtnStageSelectionClick(Sender: TObject);
+Begin
+  If Not Assigned(FFilesDiffView) Then
+    Exit;
+  If Not FFilesDiffView.HasActiveSelection Then
+    Begin
+      MessageDlg('Select lines in the file preview first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If FFilesDiffView.StagedSide Then
+    FFilesDiffView.UnstageSelection
+  Else
+    FFilesDiffView.StageSelection;
+End;
+
 Procedure TGitGraphForm.BtnRefreshFilesClick(Sender: TObject);
 Begin
   RefreshFilesList;
@@ -1432,6 +1467,11 @@ End;
 Procedure TGitGraphForm.FilesDiffStatusChanged(Sender: TObject);
 Begin
   RefreshFilesList;
+End;
+
+Procedure TGitGraphForm.FilesDiffSelectionChanged(Sender: TObject);
+Begin
+  UpdateStageButtonsEnabled;
 End;
 
 Procedure TGitGraphForm.BtnCommitClick(Sender: TObject);

@@ -486,6 +486,16 @@ object GitGraphForm: TGitGraphForm
             OnClick = BtnUnstageClick
             TabOrder = 2
           end
+          object FBtnStageSelection: TButton
+            Left = 302
+            Height = 28
+            Top = 6
+            Width = 120
+            Caption = 'Stage Selection'
+            Enabled = False
+            OnClick = BtnStageSelectionClick
+            TabOrder = 3
+          end
         end
         inline FFilesDiffView: TGitDiffView
           Left = 4
