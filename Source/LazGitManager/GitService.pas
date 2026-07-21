@@ -21,6 +21,15 @@ Type
   End;
   TGitStatusEntryArray = Array Of TGitStatusEntry;
 
+  { Result of fetch / pull / push for user-facing summaries. }
+  TGitTransferSummary = Record
+    Remote: String;
+    CommitCount: Integer;
+    NewRefs: Integer;
+    UpToDate: Boolean;
+    Message: String;
+  End;
+
   TGitService = Class
   Private
     FRepoPath: String;
@@ -30,6 +39,9 @@ Type
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
       Out OutputText: String; Out ExitCode: Integer): Boolean;
     Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
+    Function CountRangeCommits(Const RangeSpec: String): Integer;
+    Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
+      Var Summary: TGitTransferSummary);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -52,9 +64,11 @@ Type
     { Detail lines for specific SHAs (subject/author/time/refs). Batched, worker-safe. }
     Function FetchCommitDetails(Const WorkDir: String; Shas: TStrings; Out DetailsText: String): Boolean;
     Function CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;
-    Function Fetch(Const Remote: String = 'origin'): Boolean;
-    Function Pull(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
-    Function Push(Const Remote: String = 'origin'; Const Branch: String = ''): Boolean;
+    Function Fetch(Out Summary: TGitTransferSummary; Const Remote: String = 'origin'): Boolean;
+    Function Pull(Out Summary: TGitTransferSummary; Const Remote: String = 'origin';
+      Const Branch: String = ''): Boolean;
+    Function Push(Out Summary: TGitTransferSummary; Const Remote: String = 'origin';
+      Const Branch: String = ''): Boolean;
     Function InitRepository(Const Path: String): Boolean;
     Function CloneRepository(Const RemoteUrl, TargetDir: String): Boolean;
     Function ListRemotes(Out Names, Urls: TStringList): Boolean;
@@ -157,8 +171,8 @@ Begin
   Try
     Proc.Executable := 'git';
     Proc.CurrentDirectory := WorkDir;
-    { No poWaitOnExit before draining pipes – avoid deadlock on large output. }
-    Proc.Options := [poUsePipes, poNoConsole];
+    { Merge stderr so fetch/push progress lines are captured. Drain pipes without poWaitOnExit. }
+    Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
@@ -555,42 +569,221 @@ Begin
   End;
 End;
 
-Function TGitService.Fetch(Const Remote: String): Boolean;
+Function TGitService.CountRangeCommits(Const RangeSpec: String): Integer;
+Var
+  Text: String;
+  ExitCode: Integer;
+Begin
+  Result := 0;
+  If Trim(RangeSpec) = '' Then
+    Exit;
+  If Not RunGit(['rev-list', '--count', RangeSpec], Text, ExitCode) Then
+    Exit;
+  Result := StrToIntDef(Trim(Text), 0);
+  If Result < 0 Then
+    Result := 0;
+End;
+
+Procedure TGitService.BuildTransferSummary(Const Operation, Remote, OutputText: String;
+  Var Summary: TGitTransferSummary);
+Var
+  Lines: TStringList;
+  I, P, A, B: Integer;
+  Line, OldSha, NewSha, AfterArrow, RangeSpec: String;
+  Total, NewRefs: Integer;
+  UpToDate: Boolean;
+
+  Function IsHexChar(C: Char): Boolean;
+  Begin
+    Result := (C In ['0'..'9', 'a'..'f', 'A'..'F']);
+  End;
+
+  Function ExtractShaRange(Const S: String; Out LeftSha, RightSha: String): Boolean;
+  Var
+    DotPos, L, R: Integer;
+  Begin
+    Result := False;
+    LeftSha := '';
+    RightSha := '';
+    DotPos := Pos('..', S);
+    If DotPos < 2 Then
+      Exit;
+    L := DotPos - 1;
+    While (L >= 1) And IsHexChar(S[L]) Do
+      Dec(L);
+    Inc(L);
+    R := DotPos + 2;
+    While (R <= Length(S)) And IsHexChar(S[R]) Do
+      Inc(R);
+    LeftSha := Copy(S, L, DotPos - L);
+    RightSha := Copy(S, DotPos + 2, R - (DotPos + 2));
+    { Reject tiny fragments that are not object ids. }
+    Result := (Length(LeftSha) >= 7) And (Length(RightSha) >= 7);
+  End;
+
+Begin
+  Summary.Remote := Remote;
+  Summary.CommitCount := 0;
+  Summary.NewRefs := 0;
+  Summary.UpToDate := False;
+  Summary.Message := '';
+  Total := 0;
+  NewRefs := 0;
+  UpToDate := False;
+
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := OutputText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        If Line = '' Then
+          Continue;
+
+        If (Pos('Already up to date', Line) > 0) Or
+           (Pos('Already up-to-date', Line) > 0) Or
+           (Pos('Everything up-to-date', Line) > 0) Then
+          Begin
+            UpToDate := True;
+            Continue;
+          End;
+
+        If (Pos('[new branch]', Line) > 0) Or (Pos('[new tag]', Line) > 0) Or
+           (Pos('[new ref]', Line) > 0) Then
+          Begin
+            Inc(NewRefs);
+            P := Pos('->', Line);
+            If P > 0 Then
+              Begin
+                AfterArrow := Trim(Copy(Line, P + 2, MaxInt));
+                If AfterArrow <> '' Then
+                  Begin
+                    A := CountRangeCommits(AfterArrow);
+                    If A > 0 Then
+                      Inc(Total, A);
+                  End;
+              End;
+            Continue;
+          End;
+
+        If ExtractShaRange(Line, OldSha, NewSha) Then
+          Begin
+            { Fetch/pull: old..new is commits gained. Push uses the same form. }
+            RangeSpec := OldSha + '..' + NewSha;
+            B := CountRangeCommits(RangeSpec);
+            If B > 0 Then
+              Inc(Total, B)
+            Else
+              Inc(Total); { at least one update even if count fails }
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+
+  Summary.CommitCount := Total;
+  Summary.NewRefs := NewRefs;
+  Summary.UpToDate := UpToDate Or ((Total = 0) And (NewRefs = 0));
+
+  If Summary.UpToDate And (Total = 0) And (NewRefs = 0) Then
+    Summary.Message := Format('%s from %s complete.' + LineEnding + 'Already up to date.',
+      [Operation, Remote])
+  Else
+    Begin
+      Summary.Message := Format('%s from %s complete.' + LineEnding + '%d commit(s) transferred.',
+        [Operation, Remote, Total]);
+      If NewRefs > 0 Then
+        Summary.Message := Summary.Message + LineEnding +
+          Format('%d new branch/tag reference(s).', [NewRefs]);
+    End;
+
+  { Push wording: "to" rather than "from". }
+  If SameText(Operation, 'Push') Then
+    Begin
+      If Summary.UpToDate And (Total = 0) And (NewRefs = 0) Then
+        Summary.Message := Format('Push to %s complete.' + LineEnding + 'Everything up to date.', [Remote])
+      Else
+        Begin
+          Summary.Message := Format('Push to %s complete.' + LineEnding + '%d commit(s) transferred.',
+            [Remote, Total]);
+          If NewRefs > 0 Then
+            Summary.Message := Summary.Message + LineEnding +
+              Format('%d new branch/tag reference(s).', [NewRefs]);
+        End;
+    End;
+End;
+
+Procedure ClearTransferSummary(Var Summary: TGitTransferSummary);
+Begin
+  Summary.Remote := '';
+  Summary.CommitCount := 0;
+  Summary.NewRefs := 0;
+  Summary.UpToDate := False;
+  Summary.Message := '';
+End;
+
+Function TGitService.Fetch(Out Summary: TGitTransferSummary; Const Remote: String): Boolean;
 Var
   OutputText: String;
   ExitCode: Integer;
+  RemoteName: String;
 Begin
-  Result := RunGit(['fetch', Remote], OutputText, ExitCode);
+  ClearTransferSummary(Summary);
+  RemoteName := Remote;
+  If RemoteName = '' Then
+    RemoteName := 'origin';
+  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
+  BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
   If Result Then
-    WorkflowEventBus.NotifyRemoteUpdated(FRepoPath, Remote);
+    WorkflowEventBus.NotifyRemoteUpdated(FRepoPath, RemoteName)
+  Else
+    Summary.Message := 'Fetch failed: ' + FLastError;
 End;
 
-Function TGitService.Pull(Const Remote: String; Const Branch: String): Boolean;
+Function TGitService.Pull(Out Summary: TGitTransferSummary; Const Remote: String;
+  Const Branch: String): Boolean;
 Var
   OutputText: String;
   ExitCode: Integer;
   Args: Array Of String;
+  RemoteName: String;
 Begin
+  ClearTransferSummary(Summary);
+  RemoteName := Remote;
+  If RemoteName = '' Then
+    RemoteName := 'origin';
   If Branch = '' Then
-    Args := ['pull', Remote]
+    Args := ['pull', RemoteName]
   Else
-    Args := ['pull', Remote, Branch];
+    Args := ['pull', RemoteName, Branch];
   Result := RunGit(Args, OutputText, ExitCode);
+  BuildTransferSummary('Pull', RemoteName, OutputText, Summary);
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath)
+  Else
+    Summary.Message := 'Pull failed: ' + FLastError;
 End;
 
-Function TGitService.Push(Const Remote: String; Const Branch: String): Boolean;
+Function TGitService.Push(Out Summary: TGitTransferSummary; Const Remote: String;
+  Const Branch: String): Boolean;
 Var
   OutputText: String;
   ExitCode: Integer;
   Args: Array Of String;
+  RemoteName: String;
 Begin
+  ClearTransferSummary(Summary);
+  RemoteName := Remote;
+  If RemoteName = '' Then
+    RemoteName := 'origin';
   If Branch = '' Then
-    Args := ['push', Remote]
+    Args := ['push', RemoteName]
   Else
-    Args := ['push', Remote, Branch];
+    Args := ['push', RemoteName, Branch];
   Result := RunGit(Args, OutputText, ExitCode);
+  BuildTransferSummary('Push', RemoteName, OutputText, Summary);
+  If Not Result Then
+    Summary.Message := 'Push failed: ' + FLastError;
 End;
 
 Function TGitService.InitRepository(Const Path: String): Boolean;

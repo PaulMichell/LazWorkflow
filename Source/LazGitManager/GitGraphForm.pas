@@ -1126,36 +1126,66 @@ Begin
 End;
 
 Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);
+Var
+  Summary: TGitTransferSummary;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
-  If GitClient.Fetch Then
-    ManualRefresh
-  Else
-    MessageDlg('Fetch failed. See the log for details.', mtError, [mbOK], 0);
+  Screen.Cursor := crHourGlass;
+  Try
+    If GitClient.Fetch(Summary) Then
+      Begin
+        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+        ManualRefresh;
+      End
+    Else
+      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+  Finally
+    Screen.Cursor := crDefault;
+  End;
 End;
 
 Procedure TGitGraphForm.PullActionExecute(Sender: TObject);
+Var
+  Summary: TGitTransferSummary;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
-  If GitClient.Pull Then
-    ManualRefresh
-  Else
-    MessageDlg('Pull failed. See the log for details.', mtError, [mbOK], 0);
+  Screen.Cursor := crHourGlass;
+  Try
+    If GitClient.Pull(Summary) Then
+      Begin
+        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+        ManualRefresh;
+      End
+    Else
+      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+  Finally
+    Screen.Cursor := crDefault;
+  End;
 End;
 
 Procedure TGitGraphForm.PushActionExecute(Sender: TObject);
+Var
+  Summary: TGitTransferSummary;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
-  If GitClient.Push Then
-    FStatusFooter.SetRightText('Push complete')
-  Else
-    MessageDlg('Push failed. See the log for details.', mtError, [mbOK], 0);
+  Screen.Cursor := crHourGlass;
+  Try
+    If GitClient.Push(Summary) Then
+      Begin
+        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+        FStatusFooter.SetRightText('Push complete');
+      End
+    Else
+      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+  Finally
+    Screen.Cursor := crDefault;
+  End;
 End;
 
 Procedure TGitGraphForm.PopupCopySha(Sender: TObject);

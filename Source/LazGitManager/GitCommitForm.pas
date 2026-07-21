@@ -329,6 +329,7 @@ Procedure TGitCommitForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
 Var
   NewSha: String;
   Msg: String;
+  Summary: TGitTransferSummary;
 Begin
   CanClose := True;
   If ModalResult <> mrOk Then
@@ -362,10 +363,13 @@ Begin
 
   If FPushCheck.Checked Then
     Begin
-      If GitClient.Push Then
-        WorkflowLogger.Info('GitCommit', 'Pushed after commit')
+      If GitClient.Push(Summary) Then
+        Begin
+          WorkflowLogger.Info('GitCommit', 'Pushed after commit');
+          MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+        End
       Else
-        MessageDlg('Commit succeeded, but push failed: ' + GitClient.LastError,
+        MessageDlg('Commit succeeded, but push failed:' + LineEnding + Summary.Message,
           mtWarning, [mbOK], 0);
     End;
 End;
