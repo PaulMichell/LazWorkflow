@@ -18,7 +18,6 @@ Type
   Private
     FFolderEdit: TDirectoryEdit;
     FLabel: TLabel;
-    FHintLabel: TLabel;
     FButtonPanel: TButtonPanel;
     Procedure CreateUI;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
@@ -28,7 +27,6 @@ Type
     Function SelectedFolder: String;
   End;
 
-{ Returns True if the user confirmed a folder. }
 Function ShowGitInitForm(Const DefaultFolder: String; Out ChosenFolder: String): Boolean;
 
 Implementation
@@ -64,7 +62,7 @@ Begin
   Position := poScreenCenter;
   BorderStyle := bsDialog;
   Width := 520;
-  Height := 180;
+  Height := 140;
   OnCloseQuery := @FormCloseQuery;
 
   FButtonPanel := TButtonPanel.Create(Self);
@@ -96,19 +94,6 @@ Begin
       DialogTitle := 'Select folder for the new Git repository';
       ShowHidden := False;
     End;
-
-  FHintLabel := TLabel.Create(Self);
-  With FHintLabel Do
-    Begin
-      Parent := Self;
-      Left := 16;
-      Top := 76;
-      Width := 480;
-      WordWrap := True;
-      Caption := 'Defaults to the folder containing the open project file. ' +
-        'Choose the parent folder if that is your usual monorepo root.';
-      Font.Color := clGrayText;
-    End;
 End;
 
 Procedure TGitInitForm.SetDefaultFolder(Const Folder: String);
@@ -136,13 +121,13 @@ Begin
   Dir := SelectedFolder;
   If Dir = '' Then
     Begin
-      MessageDlg('Choose a project folder.', mtError, [mbOK], 0);
+      MessageDlg('Choose a project folder.', mtWarning, [mbOK], 0);
       CanClose := False;
       Exit;
     End;
   If Not DirectoryExists(Dir) Then
     Begin
-      MessageDlg('Folder does not exist:' + LineEnding + Dir, mtError, [mbOK], 0);
+      MessageDlg('Folder does not exist:' + LineEnding + Dir, mtWarning, [mbOK], 0);
       CanClose := False;
     End;
 End;

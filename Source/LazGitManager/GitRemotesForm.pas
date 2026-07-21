@@ -1,6 +1,6 @@
 Unit GitRemotesForm;
 
-{ Manage Git remotes (name + URL) for the current repository (c) 2026 Michell Computing. }
+{ Manage Git remotes via an editable grid (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,26 +18,23 @@ Type
   Private
     FRepoPath: String;
     FGrid: TStringGrid;
-    FNameEdit: TEdit;
-    FUrlEdit: TEdit;
-    FNameLabel: TLabel;
-    FUrlLabel: TLabel;
+    FOriginalNames: TStringList;
+    FOriginalUrls: TStringList;
     FBtnAdd: TButton;
-    FBtnUpdate: TButton;
     FBtnRemove: TButton;
-    FBtnRefresh: TButton;
     FButtonPanel: TButtonPanel;
-    FBottomPanel: TPanel;
+    FButtonBar: TPanel;
     Procedure CreateUI;
-    Procedure ReloadRemotes;
-    Procedure GridSelectCell(Sender: TObject; ACol, ARow: Integer; Var CanSelect: Boolean);
+    Procedure LoadFromGit;
     Procedure BtnAddClick(Sender: TObject);
-    Procedure BtnUpdateClick(Sender: TObject);
     Procedure BtnRemoveClick(Sender: TObject);
-    Procedure BtnRefreshClick(Sender: TObject);
-    Function SelectedRemoteName: String;
+    Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+    Function ValidateGrid(Out ErrorMessage: String): Boolean;
+    Function SaveToGit(Out ErrorMessage: String): Boolean;
+    Function DataRowCount: Integer;
   Public
     Constructor Create(TheOwner: TComponent); Override;
+    Destructor Destroy; Override;
     Procedure SetRepository(Const ARepoPath: String);
   End;
 
@@ -64,7 +61,16 @@ End;
 Constructor TGitRemotesForm.Create(TheOwner: TComponent);
 Begin
   Inherited CreateNew(TheOwner);
+  FOriginalNames := TStringList.Create;
+  FOriginalUrls := TStringList.Create;
   CreateUI;
+End;
+
+Destructor TGitRemotesForm.Destroy;
+Begin
+  FreeAndNil(FOriginalNames);
+  FreeAndNil(FOriginalUrls);
+  Inherited Destroy;
 End;
 
 Procedure TGitRemotesForm.CreateUI;
@@ -74,106 +80,50 @@ Begin
   Width := 640;
   Height := 360;
   BorderStyle := bsSizeable;
+  OnCloseQuery := @FormCloseQuery;
 
   FButtonPanel := TButtonPanel.Create(Self);
   With FButtonPanel Do
     Begin
       Parent := Self;
       Align := alBottom;
-      ShowButtons := [pbClose];
-      CloseButton.Caption := 'Close';
+      ShowButtons := [pbOK, pbCancel];
+      OKButton.Caption := 'OK';
+      CancelButton.Caption := 'Cancel';
     End;
 
-  FBottomPanel := TPanel.Create(Self);
-  With FBottomPanel Do
+  FButtonBar := TPanel.Create(Self);
+  With FButtonBar Do
     Begin
       Parent := Self;
       Align := alBottom;
-      Height := 110;
+      Height := 40;
       BevelOuter := bvNone;
       Caption := '';
-    End;
-
-  FNameLabel := TLabel.Create(Self);
-  With FNameLabel Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 12;
-      Top := 12;
-      Caption := 'Name:';
-    End;
-
-  FNameEdit := TEdit.Create(Self);
-  With FNameEdit Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 70;
-      Top := 8;
-      Width := 140;
-      Text := 'origin';
-    End;
-
-  FUrlLabel := TLabel.Create(Self);
-  With FUrlLabel Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 12;
-      Top := 48;
-      Caption := 'URL:';
-    End;
-
-  FUrlEdit := TEdit.Create(Self);
-  With FUrlEdit Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 70;
-      Top := 44;
-      Width := 420;
-      Text := '';
     End;
 
   FBtnAdd := TButton.Create(Self);
   With FBtnAdd Do
     Begin
-      Parent := FBottomPanel;
-      Left := 500;
-      Top := 8;
-      Width := 110;
+      Parent := FButtonBar;
+      Left := 12;
+      Top := 6;
+      Width := 90;
+      Height := 28;
       Caption := 'Add';
       OnClick := @BtnAddClick;
-    End;
-
-  FBtnUpdate := TButton.Create(Self);
-  With FBtnUpdate Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 500;
-      Top := 40;
-      Width := 110;
-      Caption := 'Update URL';
-      OnClick := @BtnUpdateClick;
     End;
 
   FBtnRemove := TButton.Create(Self);
   With FBtnRemove Do
     Begin
-      Parent := FBottomPanel;
-      Left := 500;
-      Top := 72;
-      Width := 110;
+      Parent := FButtonBar;
+      Left := 112;
+      Top := 6;
+      Width := 90;
+      Height := 28;
       Caption := 'Remove';
       OnClick := @BtnRemoveClick;
-    End;
-
-  FBtnRefresh := TButton.Create(Self);
-  With FBtnRefresh Do
-    Begin
-      Parent := FBottomPanel;
-      Left := 70;
-      Top := 76;
-      Width := 100;
-      Caption := 'Refresh';
-      OnClick := @BtnRefreshClick;
     End;
 
   FGrid := TStringGrid.Create(Self);
@@ -186,13 +136,20 @@ Begin
       RowCount := 1;
       FixedRows := 1;
       FixedCols := 0;
-      Options := Options + [goRowSelect, goThumbTracking, goColSizing];
+      Options := Options + [goEditing, goThumbTracking, goColSizing, goAlwaysShowEditor, goTabs];
+      Options := Options - [goRowSelect];
       Cells[0, 0] := 'Name';
       Cells[1, 0] := 'URL';
-      ColWidths[0] := 100;
-      ColWidths[1] := 480;
-      OnSelectCell := @GridSelectCell;
+      ColWidths[0] := 120;
+      ColWidths[1] := 460;
     End;
+End;
+
+Function TGitRemotesForm.DataRowCount: Integer;
+Begin
+  Result := FGrid.RowCount - FGrid.FixedRows;
+  If Result < 0 Then
+    Result := 0;
 End;
 
 Procedure TGitRemotesForm.SetRepository(Const ARepoPath: String);
@@ -201,15 +158,17 @@ Begin
   Caption := 'Remotes – ' + ARepoPath;
   If Assigned(GitClient) Then
     GitClient.RepoPath := ARepoPath;
-  ReloadRemotes;
+  LoadFromGit;
 End;
 
-Procedure TGitRemotesForm.ReloadRemotes;
+Procedure TGitRemotesForm.LoadFromGit;
 Var
   Names, Urls: TStringList;
   I: Integer;
 Begin
   FGrid.RowCount := 1;
+  FOriginalNames.Clear;
+  FOriginalUrls.Clear;
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
@@ -218,7 +177,7 @@ Begin
   Try
     If Not GitClient.ListRemotes(Names, Urls) Then
       Begin
-        MessageDlg('Could not list remotes: ' + GitClient.LastError, mtError, [mbOK], 0);
+        MessageDlg('Could not list remotes: ' + GitClient.LastError, mtWarning, [mbOK], 0);
         Exit;
       End;
     FGrid.RowCount := Names.Count + 1;
@@ -229,87 +188,180 @@ Begin
           FGrid.Cells[1, I + 1] := Urls[I]
         Else
           FGrid.Cells[1, I + 1] := '';
+        FOriginalNames.Add(Names[I]);
+        If I < Urls.Count Then
+          FOriginalUrls.Add(Urls[I])
+        Else
+          FOriginalUrls.Add('');
       End;
     If Names.Count > 0 Then
-      Begin
-        FGrid.Row := 1;
-        FNameEdit.Text := FGrid.Cells[0, 1];
-        FUrlEdit.Text := FGrid.Cells[1, 1];
-      End;
+      FGrid.Row := 1;
   Finally
     Names.Free;
     Urls.Free;
   End;
 End;
 
-Function TGitRemotesForm.SelectedRemoteName: String;
-Begin
-  Result := '';
-  If FGrid.Row >= 1 Then
-    Result := Trim(FGrid.Cells[0, FGrid.Row]);
-End;
-
-Procedure TGitRemotesForm.GridSelectCell(Sender: TObject; ACol, ARow: Integer; Var CanSelect: Boolean);
-Begin
-  CanSelect := True;
-  If ARow >= 1 Then
-    Begin
-      FNameEdit.Text := FGrid.Cells[0, ARow];
-      FUrlEdit.Text := FGrid.Cells[1, ARow];
-    End;
-End;
-
 Procedure TGitRemotesForm.BtnAddClick(Sender: TObject);
-Begin
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.AddRemote(FNameEdit.Text, FUrlEdit.Text) Then
-    MessageDlg('Add remote failed: ' + GitClient.LastError, mtError, [mbOK], 0)
-  Else
-    Begin
-      WorkflowLogger.Info('GitRemotes', 'Added remote ' + Trim(FNameEdit.Text));
-      ReloadRemotes;
-    End;
-End;
-
-Procedure TGitRemotesForm.BtnUpdateClick(Sender: TObject);
 Var
-  RemoteName: String;
+  NewRow: Integer;
 Begin
-  RemoteName := SelectedRemoteName;
-  If RemoteName = '' Then
-    RemoteName := Trim(FNameEdit.Text);
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.SetRemoteUrl(RemoteName, FUrlEdit.Text) Then
-    MessageDlg('Update remote failed: ' + GitClient.LastError, mtError, [mbOK], 0)
-  Else
-    Begin
-      WorkflowLogger.Info('GitRemotes', 'Updated remote ' + RemoteName);
-      ReloadRemotes;
-    End;
+  NewRow := FGrid.RowCount;
+  FGrid.RowCount := NewRow + 1;
+  FGrid.Cells[0, NewRow] := '';
+  FGrid.Cells[1, NewRow] := '';
+  FGrid.Row := NewRow;
+  FGrid.Col := 0;
+  FGrid.EditorMode := True;
 End;
 
 Procedure TGitRemotesForm.BtnRemoveClick(Sender: TObject);
 Var
+  Row: Integer;
   RemoteName: String;
 Begin
-  RemoteName := SelectedRemoteName;
-  If RemoteName = '' Then
-    Exit;
-  If MessageDlg('Remove remote "' + RemoteName + '"?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
-    Exit;
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.RemoveRemote(RemoteName) Then
-    MessageDlg('Remove remote failed: ' + GitClient.LastError, mtError, [mbOK], 0)
-  Else
+  Row := FGrid.Row;
+  If Row < FGrid.FixedRows Then
     Begin
-      WorkflowLogger.Info('GitRemotes', 'Removed remote ' + RemoteName);
-      ReloadRemotes;
+      MessageDlg('Select a remote row to remove.', mtWarning, [mbOK], 0);
+      Exit;
     End;
+  RemoteName := Trim(FGrid.Cells[0, Row]);
+  If RemoteName = '' Then
+    RemoteName := 'this empty row';
+  If MessageDlg('Remove remote "' + RemoteName + '" from the list?', mtWarning, [mbYes, mbNo], 0) <> mrYes Then
+    Exit;
+  FGrid.DeleteColRow(False, Row);
+  If FGrid.RowCount <= FGrid.FixedRows Then
+    FGrid.RowCount := FGrid.FixedRows + 0;
 End;
 
-Procedure TGitRemotesForm.BtnRefreshClick(Sender: TObject);
+Function TGitRemotesForm.ValidateGrid(Out ErrorMessage: String): Boolean;
+Var
+  I, J: Integer;
+  RemoteName, Url: String;
 Begin
-  ReloadRemotes;
+  Result := False;
+  ErrorMessage := '';
+  For I := FGrid.FixedRows To FGrid.RowCount - 1 Do
+    Begin
+      RemoteName := Trim(FGrid.Cells[0, I]);
+      Url := Trim(FGrid.Cells[1, I]);
+      If (RemoteName = '') And (Url = '') Then
+        Continue; { ignore fully blank rows }
+      If RemoteName = '' Then
+        Begin
+          ErrorMessage := Format('Row %d: remote name is required.', [I]);
+          Exit;
+        End;
+      If Url = '' Then
+        Begin
+          ErrorMessage := Format('Row %d (%s): URL is required.', [I, RemoteName]);
+          Exit;
+        End;
+      For J := FGrid.FixedRows To I - 1 Do
+        If SameText(Trim(FGrid.Cells[0, J]), RemoteName) Then
+          Begin
+            ErrorMessage := Format('Duplicate remote name "%s".', [RemoteName]);
+            Exit;
+          End;
+    End;
+  Result := True;
+End;
+
+Function TGitRemotesForm.SaveToGit(Out ErrorMessage: String): Boolean;
+Var
+  I, Idx: Integer;
+  RemoteName, Url: String;
+  DesiredNames, DesiredUrls: TStringList;
+  Keep: Boolean;
+Begin
+  Result := False;
+  ErrorMessage := '';
+  If Not Assigned(GitClient) Then
+    Begin
+      ErrorMessage := 'Git client is not available.';
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+
+  DesiredNames := TStringList.Create;
+  DesiredUrls := TStringList.Create;
+  Try
+    For I := FGrid.FixedRows To FGrid.RowCount - 1 Do
+      Begin
+        RemoteName := Trim(FGrid.Cells[0, I]);
+        Url := Trim(FGrid.Cells[1, I]);
+        If (RemoteName = '') And (Url = '') Then
+          Continue;
+        DesiredNames.Add(RemoteName);
+        DesiredUrls.Add(Url);
+      End;
+
+    { Remove remotes that no longer appear in the grid. }
+    For I := 0 To FOriginalNames.Count - 1 Do
+      Begin
+        Keep := DesiredNames.IndexOf(FOriginalNames[I]) >= 0;
+        If Not Keep Then
+          If Not GitClient.RemoveRemote(FOriginalNames[I]) Then
+            Begin
+              ErrorMessage := 'Failed to remove remote "' + FOriginalNames[I] + '": ' + GitClient.LastError;
+              Exit;
+            End;
+      End;
+
+    { Add new remotes or update URLs. }
+    For I := 0 To DesiredNames.Count - 1 Do
+      Begin
+        RemoteName := DesiredNames[I];
+        Url := DesiredUrls[I];
+        Idx := FOriginalNames.IndexOf(RemoteName);
+        If Idx < 0 Then
+          Begin
+            If Not GitClient.AddRemote(RemoteName, Url) Then
+              Begin
+                ErrorMessage := 'Failed to add remote "' + RemoteName + '": ' + GitClient.LastError;
+                Exit;
+              End;
+          End
+        Else If FOriginalUrls[Idx] <> Url Then
+          Begin
+            If Not GitClient.SetRemoteUrl(RemoteName, Url) Then
+              Begin
+                ErrorMessage := 'Failed to update remote "' + RemoteName + '": ' + GitClient.LastError;
+                Exit;
+              End;
+          End;
+      End;
+
+    WorkflowLogger.Info('GitRemotes', 'Saved remotes for ' + FRepoPath);
+    Result := True;
+  Finally
+    DesiredNames.Free;
+    DesiredUrls.Free;
+  End;
+End;
+
+Procedure TGitRemotesForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+Var
+  ErrorMessage: String;
+Begin
+  CanClose := True;
+  If ModalResult <> mrOk Then
+    Exit; { Cancel – abandon grid edits }
+
+  FGrid.EditorMode := False;
+  If Not ValidateGrid(ErrorMessage) Then
+    Begin
+      MessageDlg(ErrorMessage, mtWarning, [mbOK], 0);
+      CanClose := False;
+      Exit;
+    End;
+  If Not SaveToGit(ErrorMessage) Then
+    Begin
+      MessageDlg(ErrorMessage, mtWarning, [mbOK], 0);
+      CanClose := False;
+    End;
 End;
 
 End.

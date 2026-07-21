@@ -213,7 +213,7 @@ End;
 
 Procedure RegisterGitManager;
 Var
-  RepoMenu: TIDEMenuSection;
+  RepoMenu, MainSec, SetSec: TIDEMenuSection;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
@@ -238,18 +238,20 @@ Begin
     IDEShortCut(VK_C, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoCloneRepository);
   CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
-  { Top-level Repository menu, placed immediately after Run. }
+  { Top-level Repository menu, placed immediately after Run.
+    Two logical sections so Lazarus draws a separator before Settings. }
   RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
   If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
     Begin
       mnuMain.Remove(RepoMenu);
       mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
     End;
-  RegisterIDEMenuCommand(RepoMenu, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
-  RegisterIDEMenuCommand(RepoMenu, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
-  RegisterIDEMenuCommand(RepoMenu, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
-  RegisterIDEMenuSection(RepoMenu, 'RepoSep1');
-  RegisterIDEMenuCommand(RepoMenu, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
+  MainSec := RegisterIDEMenuSection(RepoMenu, 'RepoMainCmds');
+  RegisterIDEMenuCommand(MainSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
+  RegisterIDEMenuCommand(MainSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+  RegisterIDEMenuCommand(MainSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
+  SetSec := RegisterIDEMenuSection(RepoMenu, 'RepoSettingsCmds');
+  RegisterIDEMenuCommand(SetSec, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
 
   ManageRepositoryWindowCreator := IDEWindowCreators.Add('ManageRepository', @CreateManageRepositoryForm, Nil,
     '100', '100', '900', '600');
