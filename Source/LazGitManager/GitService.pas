@@ -508,11 +508,21 @@ Begin
   Result := False;
   If Path = '' Then
     Exit;
+  { Large unified context embeds the whole file with +/- markers (History-style). }
   If Staged Then
-    Result := RunGit(['diff', '--cached', '--', Path], DiffText, ExitCode)
+    Result := RunGit(['diff', '--cached', '-U100000', '--', Path], DiffText, ExitCode)
   Else
-    Result := RunGit(['diff', '--', Path], DiffText, ExitCode);
-  { Untracked files have no diff – show empty success. }
+    Begin
+      Result := RunGit(['diff', '-U100000', '--', Path], DiffText, ExitCode);
+      { Untracked / new files: synthesise a full-file added diff. }
+      If Result And (Trim(DiffText) = '') Then
+        Begin
+          Result := RunGit(['diff', '--no-index', '-U100000', '--', '/dev/null', Path], DiffText, ExitCode);
+          { git --no-index returns 1 when files differ; treat non-empty output as success. }
+          If (Not Result) And (Trim(DiffText) <> '') Then
+            Result := True;
+        End;
+    End;
   If (Not Result) And (ExitCode = 0) Then
     Result := True;
 End;

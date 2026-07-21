@@ -38,12 +38,11 @@ Type
     FBtnIgnoreFiles: TButton;
     FFilesSplitter: TSplitter;
     FFilesRightPanel: TPanel;
-    FStagedRow: TPanel;
-    FStageButtons: TPanel;
+    FStageButtonsBar: TPanel;
     FBtnStage: TButton;
     FBtnUnstage: TButton;
     FBtnStageAll: TButton;
-    FBtnUnstageAll: TButton;
+    FStagedSplitter: TSplitter;
     FStagedPanel: TPanel;
     FStagedLabel: TLabel;
     FStagedList: TListBox;
@@ -99,7 +98,6 @@ Type
     Procedure BtnStageClick(Sender: TObject);
     Procedure BtnUnstageClick(Sender: TObject);
     Procedure BtnStageAllClick(Sender: TObject);
-    Procedure BtnUnstageAllClick(Sender: TObject);
     Procedure BtnRefreshFilesClick(Sender: TObject);
     Procedure BtnCommitClick(Sender: TObject);
     Procedure MessageChange(Sender: TObject);
@@ -410,7 +408,7 @@ Begin
     FDiffView.SetViewMode(dvmBrowse);
   If Assigned(FFilesDiffView) Then
     Begin
-      FFilesDiffView.SetViewMode(dvmStaging);
+      FFilesDiffView.SetViewMode(dvmEditorOnly);
       FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
     End;
   If Assigned(FShowUntrackedCheck) Then
@@ -1252,7 +1250,10 @@ Begin
   If Not Assigned(FFilesDiffView) Then
     Exit;
   FFilesDiffView.Clear;
+  FFilesDiffView.SetViewMode(dvmEditorOnly);
   FFilesDiffView.SetStagingContext(FRepoPath, StagedSide);
+  { Keep editor-only layout after SetStagingContext (which selects staging mode). }
+  FFilesDiffView.SetViewMode(dvmEditorOnly);
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
   For I := 0 To List.Count - 1 Do
@@ -1269,7 +1270,7 @@ Begin
             If Trim(DiffText) = '' Then
               FFilesDiffView.LoadPlainText(Title, '(no textual diff for ' + Path + ')')
             Else
-              FFilesDiffView.LoadDiff(Title, DiffText);
+              FFilesDiffView.LoadEmbeddedDiff(Title, DiffText);
           End
         Else
           FFilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
@@ -1362,16 +1363,6 @@ Begin
   GitClient.RepoPath := FRepoPath;
   If Not GitClient.StageAll Then
     MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-  RefreshFilesList;
-End;
-
-Procedure TGitGraphForm.BtnUnstageAllClick(Sender: TObject);
-Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
-    Exit;
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.UnstageAll Then
-    MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
   RefreshFilesList;
 End;
 

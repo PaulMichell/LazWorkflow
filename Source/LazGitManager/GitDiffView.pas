@@ -17,7 +17,8 @@ Uses
   SynGutterLineOverview;
 
 Type
-  TGitDiffViewMode = (dvmStaging, dvmBrowse);
+  { dvmEditorOnly: full-file red/green SynEdit only (Files tab). }
+  TGitDiffViewMode = (dvmStaging, dvmBrowse, dvmEditorOnly);
 
   TGitDiffRange = Record
     StartLine: Integer; { 1-based inclusive }
@@ -83,6 +84,8 @@ Type
     Procedure SetViewMode(Mode: TGitDiffViewMode);
     Procedure LoadDiff(Const Title, DiffText: String);
     Procedure LoadPlainText(Const Title, Content: String);
+    { Full-file embedded red/green diff (History / Files tab style). }
+    Procedure LoadEmbeddedDiff(Const Title, DiffText: String);
     { Manage form: list files in the commit; editor shows full-file embedded diff. }
     Procedure LoadCommit(Const ARepoPath, Sha, Title: String);
     { RepoPath + StagedSide control partial stage/unstage against the index. }
@@ -329,9 +332,11 @@ Begin
   FFileList.Visible := FMode = dvmBrowse;
   { Manage form puts its own action bar where the title was. }
   FCaption.Visible := FMode = dvmStaging;
+  FTreePanel.Visible := FMode <> dvmEditorOnly;
+  FSplitter.Visible := FMode <> dvmEditorOnly;
   If FMode = dvmBrowse Then
     FTreePanel.Width := 240
-  Else
+  Else If FMode = dvmStaging Then
     FTreePanel.Width := 220;
   UpdateActionEnabled;
 End;
@@ -351,7 +356,7 @@ Procedure TGitDiffView.SetStagingContext(Const ARepoPath: String; StagedSide: Bo
 Begin
   FRepoPath := ARepoPath;
   FStagedSide := StagedSide;
-  SetViewMode(dvmStaging);
+  { Do not force dvmStaging – Files tab uses dvmEditorOnly with the same context. }
   UpdateActionEnabled;
 End;
 
@@ -1012,6 +1017,31 @@ Begin
   ShowSelectedBrowseFile;
 End;
 
+Procedure TGitDiffView.LoadEmbeddedDiff(Const Title, DiffText: String);
+Begin
+  If Not IsAlive Then
+    Exit;
+  SetViewMode(dvmEditorOnly);
+  CancelPendingScroll;
+  If Title <> '' Then
+    FCaption.Caption := Title;
+  ApplyIDEEditorAppearance;
+  FDiffText := DiffText;
+  If Trim(DiffText) = '' Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Text := '(no textual diff)';
+      UpdateActionEnabled;
+      Exit;
+    End;
+  FEdit.Highlighter := FHigh;
+  ConfigureDiffColors;
+  FEdit.Lines.Text := DiffText;
+  Inc(FScrollGeneration);
+  Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
+  UpdateActionEnabled;
+End;
+
 Procedure TGitDiffView.LoadDiff(Const Title, DiffText: String);
 Begin
   SetViewMode(dvmStaging);
@@ -1038,6 +1068,9 @@ Begin
   Clear;
   If Title <> '' Then
     FCaption.Caption := Title;
+  { Preserve editor-only mode when used from the Files tab. }
+  If FMode = dvmEditorOnly Then
+    ApplyViewMode;
   ApplyIDEEditorAppearance;
   FEdit.Highlighter := Nil;
   FEdit.Lines.Text := Content;

@@ -325,14 +325,14 @@ object GitGraphForm: TGitGraphForm
         TabOrder = 1
         object FCommitPanel: TPanel
           Left = 0
-          Height = 150
-          Top = 400
+          Height = 140
+          Top = 410
           Width = 507
           Align = alBottom
           BevelOuter = bvNone
-          ClientHeight = 150
+          ClientHeight = 140
           ClientWidth = 507
-          TabOrder = 2
+          TabOrder = 3
           object FMessageLabel: TLabel
             Left = 8
             Height = 17
@@ -346,7 +346,7 @@ object GitGraphForm: TGitGraphForm
           end
           object FMessageMemo: TMemo
             Left = 8
-            Height = 60
+            Height = 55
             Top = 21
             Width = 491
             Align = alClient
@@ -359,7 +359,7 @@ object GitGraphForm: TGitGraphForm
           object FCommitActions: TPanel
             Left = 0
             Height = 36
-            Top = 114
+            Top = 104
             Width = 507
             Align = alBottom
             BevelOuter = bvNone
@@ -400,108 +400,103 @@ object GitGraphForm: TGitGraphForm
             end
           end
         end
-        inline FFilesDiffView: TGitDiffView
-          Height = 180
-          Top = 216
-          Width = 499
-          Align = alBottom
-          BorderSpacing.Around = 4
-          ClientHeight = 180
-          ClientWidth = 499
-          TabOrder = 1
-        end
-        object FStagedRow: TPanel
+        object FStagedPanel: TPanel
           Left = 0
-          Height = 212
-          Top = 0
+          Height = 120
+          Top = 290
           Width = 507
-          Align = alClient
+          Align = alBottom
           BevelOuter = bvNone
-          ClientHeight = 212
+          ClientHeight = 120
           ClientWidth = 507
-          TabOrder = 0
-          object FStageButtons: TPanel
-            Left = 0
-            Height = 212
-            Top = 0
-            Width = 110
-            Align = alLeft
-            BevelOuter = bvNone
-            ClientHeight = 212
-            ClientWidth = 110
-            TabOrder = 0
-            object FBtnStage: TButton
-              Left = 10
-              Height = 28
-              Top = 28
-              Width = 90
-              Caption = 'Stage >'
-              OnClick = BtnStageClick
-              TabOrder = 0
-            end
-            object FBtnUnstage: TButton
-              Left = 10
-              Height = 28
-              Top = 64
-              Width = 90
-              Caption = '< Unstage'
-              OnClick = BtnUnstageClick
-              TabOrder = 1
-            end
-            object FBtnStageAll: TButton
-              Left = 10
-              Height = 28
-              Top = 108
-              Width = 90
-              Caption = 'Stage all'
-              OnClick = BtnStageAllClick
-              TabOrder = 2
-            end
-            object FBtnUnstageAll: TButton
-              Left = 10
-              Height = 28
-              Top = 144
-              Width = 90
-              Caption = 'Unstage all'
-              OnClick = BtnUnstageAllClick
-              TabOrder = 3
-            end
+          TabOrder = 2
+          object FStagedLabel: TLabel
+            Left = 8
+            Height = 17
+            Top = 4
+            Width = 491
+            Align = alTop
+            BorderSpacing.Left = 8
+            BorderSpacing.Top = 4
+            Caption = 'Staged for commit'
+            ParentColor = False
           end
-          object FStagedPanel: TPanel
-            Left = 110
-            Height = 212
-            Top = 0
-            Width = 397
+          object FStagedList: TListBox
+            Left = 4
+            Height = 91
+            Top = 21
+            Width = 499
             Align = alClient
-            BevelOuter = bvNone
-            ClientHeight = 212
-            ClientWidth = 397
-            TabOrder = 1
-            object FStagedLabel: TLabel
-              Left = 8
-              Height = 17
-              Top = 4
-              Width = 381
-              Align = alTop
-              BorderSpacing.Left = 8
-              BorderSpacing.Top = 4
-              Caption = 'Staged for commit'
-              ParentColor = False
-            end
-            object FStagedList: TListBox
-              Left = 4
-              Height = 183
-              Top = 21
-              Width = 389
-              Align = alClient
-              BorderSpacing.Around = 4
-              ItemHeight = 0
-              MultiSelect = True
-              OnDblClick = StagedListDblClick
-              OnSelectionChange = StagedListSelectionChange
-              TabOrder = 0
-            end
+            BorderSpacing.Around = 4
+            ItemHeight = 0
+            MultiSelect = True
+            OnDblClick = StagedListDblClick
+            OnSelectionChange = StagedListSelectionChange
+            TabOrder = 0
           end
+        end
+        object FStagedSplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 285
+          Width = 507
+          Align = alBottom
+          ResizeAnchor = akBottom
+        end
+        object FStageButtonsBar: TPanel
+          Left = 0
+          Height = 40
+          Top = 245
+          Width = 507
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 40
+          ClientWidth = 507
+          TabOrder = 1
+          ChildSizing.LeftRightSpacing = 8
+          ChildSizing.TopBottomSpacing = 6
+          ChildSizing.HorizontalSpacing = 8
+          ChildSizing.Layout = cclLeftToRightThenTopToBottom
+          ChildSizing.ControlsPerLine = 6
+          object FBtnStageAll: TButton
+            Left = 8
+            Height = 28
+            Top = 6
+            Width = 90
+            Caption = 'Stage All'
+            OnClick = BtnStageAllClick
+            TabOrder = 0
+          end
+          object FBtnStage: TButton
+            Left = 106
+            Height = 28
+            Top = 6
+            Width = 90
+            Caption = 'Stage'
+            OnClick = BtnStageClick
+            TabOrder = 1
+          end
+          object FBtnUnstage: TButton
+            Left = 204
+            Height = 28
+            Top = 6
+            Width = 90
+            Caption = 'Unstage'
+            OnClick = BtnUnstageClick
+            TabOrder = 2
+          end
+        end
+        inline FFilesDiffView: TGitDiffView
+          Left = 4
+          Height = 241
+          Top = 0
+          Width = 499
+          Align = alClient
+          BorderSpacing.Around = 4
+          ClientHeight = 241
+          ClientWidth = 499
+          TabOrder = 0
         end
       end
     end
