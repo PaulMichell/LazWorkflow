@@ -23,7 +23,6 @@ Type
     FBtnAdd: TButton;
     FBtnRemove: TButton;
     FButtonPanel: TButtonPanel;
-    FButtonBar: TPanel;
     Procedure CreateUI;
     Procedure LoadFromGit;
     Procedure BtnAddClick(Sender: TObject);
@@ -92,24 +91,16 @@ Begin
       CancelButton.Caption := 'Cancel';
     End;
 
-  FButtonBar := TPanel.Create(Self);
-  With FButtonBar Do
-    Begin
-      Parent := Self;
-      Align := alBottom;
-      Height := 40;
-      BevelOuter := bvNone;
-      Caption := '';
-    End;
-
+  { Left-aligned on the bottom button bar (same row as OK/Cancel). }
   FBtnAdd := TButton.Create(Self);
   With FBtnAdd Do
     Begin
-      Parent := FButtonBar;
-      Left := 12;
-      Top := 6;
+      Parent := FButtonPanel;
+      Align := alLeft;
       Width := 90;
-      Height := 28;
+      AutoSize := False;
+      BorderSpacing.Around := 6;
+      BorderSpacing.Left := 8;
       Caption := 'Add';
       OnClick := @BtnAddClick;
     End;
@@ -117,11 +108,11 @@ Begin
   FBtnRemove := TButton.Create(Self);
   With FBtnRemove Do
     Begin
-      Parent := FButtonBar;
-      Left := 112;
-      Top := 6;
+      Parent := FButtonPanel;
+      Align := alLeft;
       Width := 90;
-      Height := 28;
+      AutoSize := False;
+      BorderSpacing.Around := 6;
       Caption := 'Remove';
       OnClick := @BtnRemoveClick;
     End;
