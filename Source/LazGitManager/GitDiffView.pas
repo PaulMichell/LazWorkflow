@@ -184,6 +184,8 @@ Begin
   FToolBar.Visible := FMode = dvmStaging;
   FTree.Visible := FMode = dvmStaging;
   FFileList.Visible := FMode = dvmBrowse;
+  { Manage form puts its own action bar where the title was. }
+  FCaption.Visible := FMode = dvmStaging;
   If FMode = dvmBrowse Then
     FTreePanel.Width := 240
   Else

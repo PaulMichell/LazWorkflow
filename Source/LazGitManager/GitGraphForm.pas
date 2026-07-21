@@ -17,7 +17,9 @@ Uses
 Type
   TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
   Private
-    FToolBar: TToolBar;
+    FPages: TPageControl;
+    FTabHistory: TTabSheet;
+    FTabFiles: TTabSheet;
     FMainPanel: TPanel;
     FGraphHost: TPanel;
     FPaintBox: TPaintBox;
@@ -25,13 +27,18 @@ Type
     FStatusFooter: TStatusFooterFrame;
     FSplitter: TSplitter;
     FDetailPanel: TPanel;
+    FHistoryButtons: TPanel;
     FDiffView: TGitDiffView;
+    FFilesList: TListBox;
     FActionList: TActionList;
-    FCommitAction: TAction;
     FRemotesAction: TAction;
     FFetchAction: TAction;
     FPullAction: TAction;
     FPushAction: TAction;
+    FBtnPush: TButton;
+    FBtnPull: TButton;
+    FBtnFetch: TButton;
+    FBtnRemotes: TButton;
     FPopup: TPopupMenu;
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -68,7 +75,7 @@ Type
     Procedure GraphHostResize(Sender: TObject);
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
-    Procedure CommitActionExecute(Sender: TObject);
+    Procedure PagesChange(Sender: TObject);
     Procedure RemotesActionExecute(Sender: TObject);
     Procedure FetchActionExecute(Sender: TObject);
     Procedure PullActionExecute(Sender: TObject);
@@ -79,6 +86,7 @@ Type
     Procedure PopupShowCommit(Sender: TObject);
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
+    Procedure RefreshFilesList;
     Procedure ApplyIndexLoaded;
     Procedure ApplyDetailsLoaded;
     Procedure StartIndexLoad;
@@ -97,6 +105,7 @@ Type
     Function LaneX(Lane: Integer): Integer;
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
+    Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
     Procedure QuietRefreshIfChanged;
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
     { IGitRepositoryChanged }
@@ -123,8 +132,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, GitCommitForm, GitRemotesForm, LazIDEIntf, ProjectIntf,
-  DateUtils, Math;
+  WorkflowLog, GitService, GitConfig, GitRemotesForm, LazIDEIntf, ProjectIntf,
+  DateUtils, Math, FileUtil, LazFileUtils, StrUtils;
 
 Type
   TGitIndexThread = Class(TThread)
@@ -359,6 +368,28 @@ Begin
 End;
 
 Procedure TGitGraphForm.CreateUI;
+
+  Function MakeHistoryButton(Const ACaption: String; AAction: TAction; First: Boolean): TButton;
+  Begin
+    Result := TButton.Create(Self);
+    With Result Do
+      Begin
+        Parent := FHistoryButtons;
+        Align := alLeft;
+        Width := 90;
+        AutoSize := False;
+        If First Then
+          BorderSpacing.Around := 4
+        Else
+          Begin
+            BorderSpacing.Around := 4;
+            BorderSpacing.Left := 0;
+          End;
+        Action := AAction;
+        Caption := ACaption;
+      End;
+  End;
+
 Begin
   Caption := 'Manage Repository';
   Width := 900;
@@ -369,71 +400,25 @@ Begin
 
   FActionList := TActionList.Create(Self);
 
-  FCommitAction := TAction.Create(Self);
-  FCommitAction.Caption := 'Commit…';
-  FCommitAction.OnExecute := @CommitActionExecute;
-  FCommitAction.ActionList := FActionList;
-
-  FRemotesAction := TAction.Create(Self);
-  FRemotesAction.Caption := 'Remotes…';
-  FRemotesAction.OnExecute := @RemotesActionExecute;
-  FRemotesAction.ActionList := FActionList;
-
-  FFetchAction := TAction.Create(Self);
-  FFetchAction.Caption := 'Fetch';
-  FFetchAction.OnExecute := @FetchActionExecute;
-  FFetchAction.ActionList := FActionList;
+  FPushAction := TAction.Create(Self);
+  FPushAction.Caption := 'Push';
+  FPushAction.OnExecute := @PushActionExecute;
+  FPushAction.ActionList := FActionList;
 
   FPullAction := TAction.Create(Self);
   FPullAction.Caption := 'Pull';
   FPullAction.OnExecute := @PullActionExecute;
   FPullAction.ActionList := FActionList;
 
-  FPushAction := TAction.Create(Self);
-  FPushAction.Caption := 'Push';
-  FPushAction.OnExecute := @PushActionExecute;
-  FPushAction.ActionList := FActionList;
+  FFetchAction := TAction.Create(Self);
+  FFetchAction.Caption := 'Fetch';
+  FFetchAction.OnExecute := @FetchActionExecute;
+  FFetchAction.ActionList := FActionList;
 
-  FToolBar := TToolBar.Create(Self);
-  With FToolBar Do
-    Begin
-      Parent := Self;
-      Align := alTop;
-      Height := 28;
-      EdgeBorders := [];
-      ShowCaptions := True;
-    End;
-
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FCommitAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FRemotesAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FFetchAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FPullAction;
-      Style := tbsButton;
-    End;
-  With TToolButton.Create(FToolBar) Do
-    Begin
-      Parent := FToolBar;
-      Action := FPushAction;
-      Style := tbsButton;
-    End;
+  FRemotesAction := TAction.Create(Self);
+  FRemotesAction.Caption := 'Remotes…';
+  FRemotesAction.OnExecute := @RemotesActionExecute;
+  FRemotesAction.ActionList := FActionList;
 
   BuildPopupMenu;
 
@@ -448,11 +433,27 @@ Begin
       Constraints.MaxHeight := 22;
     End;
 
-  { Middle band: graph + splitter + details. Splitter only sees these siblings. }
+  FPages := TPageControl.Create(Self);
+  With FPages Do
+    Begin
+      Parent := Self;
+      Align := alClient;
+      OnChange := @PagesChange;
+    End;
+
+  FTabHistory := TTabSheet.Create(Self);
+  FTabHistory.PageControl := FPages;
+  FTabHistory.Caption := 'History';
+
+  FTabFiles := TTabSheet.Create(Self);
+  FTabFiles.PageControl := FPages;
+  FTabFiles.Caption := 'Files';
+
+  { History: graph + splitter + detail (buttons under graph, then file diff). }
   FMainPanel := TPanel.Create(Self);
   With FMainPanel Do
     Begin
-      Parent := Self;
+      Parent := FTabHistory;
       Align := alClient;
       BevelOuter := bvNone;
       Caption := '';
@@ -464,11 +465,28 @@ Begin
     Begin
       Parent := FMainPanel;
       Align := alBottom;
-      Height := 220;
-      Constraints.MinHeight := 100;
+      Height := 240;
+      Constraints.MinHeight := 120;
       BevelOuter := bvNone;
       Caption := '';
     End;
+
+  FHistoryButtons := TPanel.Create(Self);
+  With FHistoryButtons Do
+    Begin
+      Parent := FDetailPanel;
+      Align := alTop;
+      Height := 36;
+      BevelOuter := bvNone;
+      Caption := '';
+    End;
+
+  { Align alLeft creation order = left-to-right: Push, Pull, Fetch, Remotes. }
+  FBtnPush := MakeHistoryButton('Push', FPushAction, True);
+  FBtnPull := MakeHistoryButton('Pull', FPullAction, False);
+  FBtnFetch := MakeHistoryButton('Fetch', FFetchAction, False);
+  FBtnRemotes := MakeHistoryButton('Remotes…', FRemotesAction, False);
+  FBtnRemotes.Width := 100;
 
   FDiffView := TGitDiffView.Create(Self);
   With FDiffView Do
@@ -476,6 +494,7 @@ Begin
       Parent := FDetailPanel;
       Align := alClient;
       BorderSpacing.Around := 2;
+      SetViewMode(dvmBrowse);
     End;
 
   FSplitter := TSplitter.Create(Self);
@@ -523,6 +542,16 @@ Begin
       PopupMenu := FPopup;
     End;
 
+  { Files tab: working-tree inventory with status (commit UI later). }
+  FFilesList := TListBox.Create(Self);
+  With FFilesList Do
+    Begin
+      Parent := FTabFiles;
+      Align := alClient;
+      BorderSpacing.Around := 6;
+      Sorted := False;
+    End;
+
   FDetailTimer := TTimer.Create(Self);
   FDetailTimer.Enabled := False;
   FDetailTimer.Interval := 40;
@@ -566,6 +595,8 @@ Procedure TGitGraphForm.ManualRefresh;
 Begin
   WorkflowLogger.Info('GitGraph', 'Manual refresh (F5)');
   BindRepository;
+  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+    RefreshFilesList;
 End;
 
 Procedure TGitGraphForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -1173,17 +1204,125 @@ Begin
   FDiffView.LoadPlainText(Copy(C.Sha, 1, 7), Header);
 End;
 
-Procedure TGitGraphForm.CommitActionExecute(Sender: TObject);
-Var
-  DidPush: Boolean;
+Procedure TGitGraphForm.PagesChange(Sender: TObject);
 Begin
-  If FRepoPath = '' Then
-    Begin
-      MessageDlg('No repository is bound to this window.', mtInformation, [mbOK], 0);
-      Exit;
+  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+    RefreshFilesList;
+End;
+
+Function TGitGraphForm.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
+Var
+  X, Y: Char;
+Begin
+  X := IndexStatus;
+  Y := WorkTreeStatus;
+  If (X = '?') And (Y = '?') Then
+    Result := 'untracked'
+  Else If (X = '!') Or (Y = '!') Then
+    Result := 'ignored'
+  Else If (X = 'A') Or (Y = 'A') Then
+    Result := 'added'
+  Else If (X = 'D') Or (Y = 'D') Then
+    Result := 'deleted'
+  Else If (X = 'R') Or (Y = 'R') Then
+    Result := 'renamed'
+  Else If (X = 'C') Or (Y = 'C') Then
+    Result := 'copied'
+  Else If (X = 'U') Or (Y = 'U') Then
+    Result := 'unmerged'
+  Else If (X = 'M') Or (Y = 'M') Then
+    Result := 'modified'
+  Else If (X <> ' ') Or (Y <> ' ') Then
+    Result := Trim(X + Y)
+  Else
+    Result := 'clean';
+End;
+
+Procedure TGitGraphForm.RefreshFilesList;
+Var
+  AllFiles, StatusMap: TStringList;
+  Entries: TGitStatusEntryArray;
+  I: Integer;
+  FullPath, Rel, Root, StatusText: String;
+  Idx: Integer;
+Begin
+  If Not Assigned(FFilesList) Then
+    Exit;
+  FFilesList.Items.BeginUpdate;
+  Try
+    FFilesList.Items.Clear;
+    If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
+      Begin
+        FFilesList.Items.Add('(no repository)');
+        Exit;
+      End;
+
+    Root := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath));
+    StatusMap := TStringList.Create;
+    AllFiles := TStringList.Create;
+    Try
+      StatusMap.Sorted := True;
+      StatusMap.Duplicates := dupIgnore;
+      StatusMap.CaseSensitive := FileNameCaseSensitive;
+
+      If Assigned(GitClient) Then
+        Begin
+          GitClient.RepoPath := FRepoPath;
+          If GitClient.ListStatus(Entries) Then
+            For I := 0 To High(Entries) Do
+              Begin
+                Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
+                StatusMap.Values[Rel] := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
+              End;
+        End;
+
+      AllFiles.Sorted := True;
+      AllFiles.Duplicates := dupIgnore;
+      FindAllFiles(AllFiles, FRepoPath, '*', True);
+      For I := 0 To AllFiles.Count - 1 Do
+        Begin
+          FullPath := ExpandFileName(AllFiles[I]);
+          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
+          If Pos('/.git/', Rel + '/') > 0 Then
+            Continue;
+          If CompareFilenames(Copy(FullPath, 1, Length(Root)), Root) = 0 Then
+            Delete(FullPath, 1, Length(Root))
+          Else
+            Continue;
+          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
+          If Rel = '' Then
+            Continue;
+          Idx := StatusMap.IndexOfName(Rel);
+          If Idx >= 0 Then
+            StatusText := StatusMap.ValueFromIndex[Idx]
+          Else
+            StatusText := 'clean';
+          FFilesList.Items.Add(Rel + '  ' + StatusText);
+        End;
+
+      { Include deleted paths from status that no longer exist on disk. }
+      For I := 0 To StatusMap.Count - 1 Do
+        Begin
+          Rel := StatusMap.Names[I];
+          If Rel = '' Then
+            Continue;
+          FullPath := Root + StringReplace(Rel, '/', DirectorySeparator, [rfReplaceAll]);
+          If FileExists(FullPath) Then
+            Continue;
+          StatusText := StatusMap.ValueFromIndex[I];
+          If FFilesList.Items.IndexOf(Rel + '  ' + StatusText) < 0 Then
+            FFilesList.Items.Add(Rel + '  ' + StatusText);
+        End;
+
+      If FFilesList.Items.Count = 0 Then
+        FFilesList.Items.Add('(no files)');
+    Finally
+      AllFiles.Free;
+      StatusMap.Free;
     End;
-  If ShowGitCommitForm(FRepoPath, DidPush) Then
-    ManualRefresh;
+  Finally
+    FFilesList.Items.EndUpdate;
+  End;
 End;
 
 Procedure TGitGraphForm.RemotesActionExecute(Sender: TObject);
@@ -1434,7 +1573,11 @@ Begin
   If Assigned(FPaintBox) Then
     FPaintBox.Invalidate;
   If FRepoPath <> '' Then
-    StartIndexLoad;
+    StartIndexLoad
+  Else If Assigned(FFilesList) Then
+    FFilesList.Items.Clear;
+  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+    RefreshFilesList;
   ApplyConfig;
 End;
 
@@ -1450,6 +1593,8 @@ Begin
     Begin
       RefreshRepositoryInfo;
       UpdateStatus;
+      If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+        RefreshFilesList;
     End;
 End;
 
