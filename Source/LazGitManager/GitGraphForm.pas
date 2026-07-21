@@ -1128,64 +1128,70 @@ End;
 Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
+  Ok: Boolean;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
   Screen.Cursor := crHourGlass;
   Try
-    If GitClient.Fetch(Summary) Then
-      Begin
-        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
-        ManualRefresh;
-      End
-    Else
-      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+    Ok := GitClient.Fetch(Summary);
   Finally
     Screen.Cursor := crDefault;
   End;
+  If Ok Then
+    Begin
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+      ManualRefresh;
+    End
+  Else
+    MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
 Procedure TGitGraphForm.PullActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
+  Ok: Boolean;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
   Screen.Cursor := crHourGlass;
   Try
-    If GitClient.Pull(Summary) Then
-      Begin
-        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
-        ManualRefresh;
-      End
-    Else
-      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+    Ok := GitClient.Pull(Summary);
   Finally
     Screen.Cursor := crDefault;
   End;
+  If Ok Then
+    Begin
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+      ManualRefresh;
+    End
+  Else
+    MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
 Procedure TGitGraphForm.PushActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
+  Ok: Boolean;
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
   GitClient.RepoPath := FRepoPath;
   Screen.Cursor := crHourGlass;
   Try
-    If GitClient.Push(Summary) Then
-      Begin
-        MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
-        FStatusFooter.SetRightText('Push complete');
-      End
-    Else
-      MessageDlg(Summary.Message, mtError, [mbOK], 0);
+    Ok := GitClient.Push(Summary);
   Finally
     Screen.Cursor := crDefault;
   End;
+  If Ok Then
+    Begin
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+      FStatusFooter.SetRightText('Push complete');
+    End
+  Else
+    MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
 Procedure TGitGraphForm.PopupCopySha(Sender: TObject);
