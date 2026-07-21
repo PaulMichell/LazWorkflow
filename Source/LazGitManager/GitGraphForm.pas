@@ -115,6 +115,7 @@ Type
   End;
 
 Procedure RefreshOpenGitGraphForms;
+Procedure ClearOpenGitGraphForms;
 Procedure ApplyGitConfigToOpenForms;
 
 Implementation
@@ -165,12 +166,15 @@ Begin
   Client := TGitService.Create;
   Try
     Ok := Client.FetchRevListParents(FRepoPath, Text);
-    If Terminated Then
+    If Terminated Or Not Assigned(FForm) Then
       Exit;
     FForm.FPendingIndexOk := Ok;
     FForm.FPendingIndexText := Text;
-    If Not Terminated Then
-      Synchronize(@FForm.ApplyIndexLoaded);
+    If Terminated Or Not Assigned(FForm) Then
+      Exit;
+    If csDestroying in FForm.ComponentState Then
+      Exit;
+    Synchronize(@FForm.ApplyIndexLoaded);
   Finally
     Client.Free;
   End;
@@ -201,12 +205,15 @@ Begin
   Client := TGitService.Create;
   Try
     Ok := Client.FetchCommitDetails(FRepoPath, FShas, Text);
-    If Terminated Then
+    If Terminated Or Not Assigned(FForm) Then
       Exit;
     FForm.FPendingDetailsOk := Ok;
     FForm.FPendingDetailsText := Text;
-    If Not Terminated Then
-      Synchronize(@FForm.ApplyDetailsLoaded);
+    If Terminated Or Not Assigned(FForm) Then
+      Exit;
+    If csDestroying in FForm.ComponentState Then
+      Exit;
+    Synchronize(@FForm.ApplyDetailsLoaded);
   Finally
     Client.Free;
   End;
@@ -217,33 +224,59 @@ Var
   Project: TLazProject;
 Begin
   Result := '';
-  If Not Assigned(LazarusIDE) Then
-    Exit;
-  Project := LazarusIDE.ActiveProject;
-  If Not Assigned(Project) Or Project.IsVirtual Then
-    Exit;
-  If Project.ProjectInfoFile <> '' Then
-    Result := ExtractFilePath(ExpandFileName(Project.ProjectInfoFile));
-  If (Result = '') And Assigned(Project.MainFile) And (Project.MainFile.Filename <> '') Then
-    Result := ExtractFilePath(ExpandFileName(Project.MainFile.Filename));
+  Try
+    If Not Assigned(LazarusIDE) Then
+      Exit;
+    Project := LazarusIDE.ActiveProject;
+    If Not Assigned(Project) Or Project.IsVirtual Then
+      Exit;
+    If Project.ProjectInfoFile <> '' Then
+      Result := ExtractFilePath(ExpandFileName(Project.ProjectInfoFile));
+    If (Result = '') And Assigned(Project.MainFile) And (Project.MainFile.Filename <> '') Then
+      Result := ExtractFilePath(ExpandFileName(Project.MainFile.Filename));
+  Except
+    { Active project can be half-destroyed during IDE project switch. }
+    Result := '';
+  End;
 End;
 
 Procedure RefreshOpenGitGraphForms;
 Var
   I: Integer;
+  Form: TCustomForm;
 Begin
-  For I := 0 To Screen.CustomFormCount - 1 Do
-    If Screen.CustomForms[I] Is TGitGraphForm Then
-      TGitGraphForm(Screen.CustomForms[I]).BindRepository;
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
+        TGitGraphForm(Form).BindRepository;
+    End;
+End;
+
+Procedure ClearOpenGitGraphForms;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
+        TGitGraphForm(Form).SetRepository('');
+    End;
 End;
 
 Procedure ApplyGitConfigToOpenForms;
 Var
   I: Integer;
+  Form: TCustomForm;
 Begin
-  For I := 0 To Screen.CustomFormCount - 1 Do
-    If Screen.CustomForms[I] Is TGitGraphForm Then
-      TGitGraphForm(Screen.CustomForms[I]).ApplyConfig;
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
+        TGitGraphForm(Form).ApplyConfig;
+    End;
 End;
 
 Constructor TGitGraphForm.Create(TheOwner: TComponent);
@@ -270,8 +303,11 @@ Begin
     FDetailTimer.Enabled := False;
   If Assigned(FAutoRefreshTimer) Then
     FAutoRefreshTimer.Enabled := False;
+  { Stop workers before children (diff view async callbacks) are freed. }
   StopDetailThread;
   StopIndexThread;
+  If Assigned(FDiffView) Then
+    FDiffView.Clear;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FModel);
   Inherited Destroy;
@@ -665,9 +701,12 @@ Var
   Parsed: Integer;
 Begin
   FIndexing := False;
+  If (csDestroying in ComponentState) Or Not Assigned(FModel) Or Not Assigned(FDiffView) Then
+    Exit;
   If Not FPendingIndexOk Then
     Begin
-      FStatusFooter.SetRightText('Index failed');
+      If Assigned(FStatusFooter) Then
+        FStatusFooter.SetRightText('Index failed');
       WorkflowLogger.Warning('GitGraph', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
@@ -685,7 +724,8 @@ Begin
     FDiffView.Clear;
 
   UpdateStatus;
-  FPaintBox.Invalidate;
+  If Assigned(FPaintBox) Then
+    FPaintBox.Invalidate;
   ScheduleVisibleDetails;
   WorkflowLogger.Info('GitGraph', Format('Indexed %d commits', [Parsed]));
 End;
@@ -693,12 +733,16 @@ End;
 Procedure TGitGraphForm.ApplyDetailsLoaded;
 Begin
   FDetailLoading := False;
+  If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
+    Exit;
   If FPendingDetailsOk Then
     FModel.ApplyDetailsText(FPendingDetailsText);
   FPendingDetailsText := '';
-  If (FSelectedIndex >= 0) And FModel.Commit(FSelectedIndex).DetailsLoaded Then
+  If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) And
+     FModel.Commit(FSelectedIndex).DetailsLoaded Then
     ShowCommitDetails(FSelectedIndex);
-  FPaintBox.Invalidate;
+  If Assigned(FPaintBox) Then
+    FPaintBox.Invalidate;
   { More rows may still be missing after scrolling. }
   ScheduleVisibleDetails;
 End;
@@ -1087,7 +1131,9 @@ Var
   I: Integer;
   ParentLine, Header: String;
 Begin
-  If (Index < 0) Or (Index >= FModel.Count) Then
+  If Not Assigned(FDiffView) Or (csDestroying in ComponentState) Then
+    Exit;
+  If (Index < 0) Or Not Assigned(FModel) Or (Index >= FModel.Count) Then
     Begin
       FDiffView.Clear;
       Exit;
@@ -1241,7 +1287,7 @@ End;
 
 Procedure TGitGraphForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
-  If FIndexing Or FDetailLoading Or Not Visible Then
+  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or Not Visible Then
     Exit;
   QuietRefreshIfChanged;
 End;
@@ -1365,22 +1411,30 @@ End;
 
 Procedure TGitGraphForm.SetRepository(Const ARepoPath: String);
 Begin
+  If csDestroying in ComponentState Then
+    Exit;
+  { Tear down workers and pending UI work before swapping repo identity. }
+  If Assigned(FDetailTimer) Then
+    FDetailTimer.Enabled := False;
   StopDetailThread;
   StopIndexThread;
+  If Assigned(FDiffView) Then
+    FDiffView.Clear;
   FRepoPath := ARepoPath;
   FSelectedIndex := -1;
-  FModel.Clear;
-  FScrollBar.Position := 0;
+  If Assigned(FModel) Then
+    FModel.Clear;
+  If Assigned(FScrollBar) Then
+    FScrollBar.Position := 0;
   If Assigned(GitClient) Then
     GitClient.RepoPath := ARepoPath;
   RefreshRepositoryInfo;
   UpdateScrollRange;
   UpdateStatus;
-  FPaintBox.Invalidate;
+  If Assigned(FPaintBox) Then
+    FPaintBox.Invalidate;
   If FRepoPath <> '' Then
-    StartIndexLoad
-  Else
-    FDiffView.Clear;
+    StartIndexLoad;
   ApplyConfig;
 End;
 

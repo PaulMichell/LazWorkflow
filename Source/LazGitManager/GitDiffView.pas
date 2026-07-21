@@ -44,12 +44,14 @@ Type
     FMode: TGitDiffViewMode;
     FBrowseSha: String;
     FUpdatingList: Boolean;
+    FScrollGeneration: PtrInt;
     FOnStatusChanged: TNotifyEvent;
     FPopup: TPopupMenu;
     Procedure BuildUI;
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
     Procedure ApplyViewMode;
+    Procedure CancelPendingScroll;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
     Procedure ParseDiffIntoTree(Const DiffText: String);
@@ -68,8 +70,10 @@ Type
     Procedure ScrollToFirstChangeCentered;
     Procedure DoScrollToFirstChangeAsync(Data: PtrInt);
     Function IsDiffChangeLine(Const Line: String): Boolean;
+    Function IsAlive: Boolean;
   Public
     Constructor Create(TheOwner: TComponent); Override;
+    Destructor Destroy; Override;
     Procedure Clear;
     Procedure SetViewMode(Mode: TGitDiffViewMode);
     Procedure LoadDiff(Const Title, DiffText: String);
@@ -107,7 +111,25 @@ Begin
   FStagedSide := False;
   FMode := dvmStaging;
   FUpdatingList := False;
+  FScrollGeneration := 0;
   BuildUI;
+End;
+
+Destructor TGitDiffView.Destroy;
+Begin
+  CancelPendingScroll;
+  Inherited Destroy;
+End;
+
+Function TGitDiffView.IsAlive: Boolean;
+Begin
+  Result := Not (csDestroying in ComponentState) And Assigned(FEdit) And Assigned(FFileList);
+End;
+
+Procedure TGitDiffView.CancelPendingScroll;
+Begin
+  Inc(FScrollGeneration);
+  Application.RemoveAsyncCalls(Self);
 End;
 
 Procedure TGitDiffView.ConfigureDiffColors;
@@ -363,18 +385,23 @@ End;
 
 Procedure TGitDiffView.Clear;
 Begin
+  CancelPendingScroll;
   FDiffText := '';
   FBrowseSha := '';
-  FEdit.Lines.Clear;
-  FCaption.Caption := 'Diff';
+  If Assigned(FEdit) Then
+    FEdit.Lines.Clear;
+  If Assigned(FCaption) Then
+    FCaption.Caption := 'Diff';
   ClearTreeData;
   FUpdatingList := True;
   Try
-    FFileList.Items.Clear;
+    If Assigned(FFileList) Then
+      FFileList.Items.Clear;
   Finally
     FUpdatingList := False;
   End;
-  UpdateActionEnabled;
+  If IsAlive Then
+    UpdateActionEnabled;
 End;
 
 Function TGitDiffView.NodeRange(Node: TTreeNode): TGitDiffRange;
@@ -432,6 +459,8 @@ Procedure TGitDiffView.ScrollToFirstChangeCentered;
 Var
   I, Line, Half: Integer;
 Begin
+  If Not IsAlive Then
+    Exit;
   Line := 0;
   For I := 0 To FEdit.Lines.Count - 1 Do
     If IsDiffChangeLine(FEdit.Lines[I]) Then
@@ -453,6 +482,9 @@ End;
 
 Procedure TGitDiffView.DoScrollToFirstChangeAsync(Data: PtrInt);
 Begin
+  { Ignore stale or post-destroy callbacks (project switch / form free). }
+  If (Data <> FScrollGeneration) Or Not IsAlive Then
+    Exit;
   ScrollToFirstChangeCentered;
 End;
 
@@ -906,9 +938,11 @@ End;
 Procedure TGitDiffView.ShowSelectedBrowseFile;
 Var
   Path, DiffText: String;
+  ExpectedSha: String;
 Begin
-  If FMode <> dvmBrowse Then
+  If (FMode <> dvmBrowse) Or Not IsAlive Then
     Exit;
+  CancelPendingScroll;
   FEdit.Lines.Clear;
   FDiffText := '';
   If (FFileList.ItemIndex < 0) Or (FFileList.ItemIndex >= FFileList.Items.Count) Then
@@ -925,14 +959,21 @@ Begin
       Exit;
     End;
 
+  ExpectedSha := FBrowseSha;
   GitClient.RepoPath := FRepoPath;
   If Not GitClient.ShowCommitPathDiff(FBrowseSha, Path, DiffText) Then
     Begin
+      If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
+        Exit;
       FEdit.Highlighter := Nil;
       FEdit.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
       UpdateActionEnabled;
       Exit;
     End;
+
+  { Repo/form may have been rebound while git ran (project switch). }
+  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Or (FMode <> dvmBrowse) Then
+    Exit;
 
   ApplyIDEEditorAppearance;
   FDiffText := DiffText;
@@ -947,14 +988,15 @@ Begin
       ConfigureDiffColors;
       FEdit.Lines.Text := DiffText;
       { Defer centre scroll until layout knows LinesInWindow. }
-      Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, 0);
+      Inc(FScrollGeneration);
+      Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
     End;
   UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.FileListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If FUpdatingList Then
+  If FUpdatingList Or Not IsAlive Then
     Exit;
   ShowSelectedBrowseFile;
 End;
@@ -995,11 +1037,15 @@ Procedure TGitDiffView.LoadCommit(Const ARepoPath, Sha, Title: String);
 Var
   Paths: TStringList;
   I: Integer;
+  ExpectedSha: String;
 Begin
+  If Not IsAlive Then
+    Exit;
   SetViewMode(dvmBrowse);
   Clear;
   FRepoPath := ARepoPath;
   FBrowseSha := Sha;
+  ExpectedSha := Sha;
   If Title <> '' Then
     FCaption.Caption := Title
   Else
@@ -1017,8 +1063,17 @@ Begin
   Paths := Nil;
   If Not GitClient.ListCommitPaths(Sha, Paths) Then
     Begin
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
+      If IsAlive And (FBrowseSha = ExpectedSha) Then
+        Begin
+          FEdit.Highlighter := Nil;
+          FEdit.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
+        End;
+      Paths.Free;
+      Exit;
+    End;
+
+  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
+    Begin
       Paths.Free;
       Exit;
     End;
@@ -1033,6 +1088,9 @@ Begin
     FUpdatingList := False;
     Paths.Free;
   End;
+
+  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
+    Exit;
 
   If FFileList.Items.Count = 0 Then
     Begin

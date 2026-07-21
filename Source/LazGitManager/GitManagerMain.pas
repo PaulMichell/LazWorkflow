@@ -42,12 +42,16 @@ Var
 Function ProjectStartPath(AProject: TLazProject): String;
 Begin
   Result := '';
-  If Not Assigned(AProject) Or AProject.IsVirtual Then
-    Exit;
-  If AProject.ProjectInfoFile <> '' Then
-    Result := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
-  Else If Assigned(AProject.MainFile) And (AProject.MainFile.Filename <> '') Then
-    Result := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename));
+  Try
+    If Not Assigned(AProject) Or AProject.IsVirtual Then
+      Exit;
+    If AProject.ProjectInfoFile <> '' Then
+      Result := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
+    Else If Assigned(AProject.MainFile) And (AProject.MainFile.Filename <> '') Then
+      Result := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename));
+  Except
+    Result := '';
+  End;
 End;
 
 Function CurrentProjectHasRepository: Boolean;
@@ -55,12 +59,16 @@ Var
   StartPath: String;
 Begin
   Result := False;
-  If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
-    Exit;
-  StartPath := ProjectStartPath(LazarusIDE.ActiveProject);
-  If StartPath = '' Then
-    Exit;
-  Result := GitClient.DetectRepository(StartPath) <> '';
+  Try
+    If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
+      Exit;
+    StartPath := ProjectStartPath(LazarusIDE.ActiveProject);
+    If StartPath = '' Then
+      Exit;
+    Result := GitClient.DetectRepository(StartPath) <> '';
+  Except
+    Result := False;
+  End;
 End;
 
 Procedure UpdateRepositoryMenuState;
@@ -105,9 +113,11 @@ End;
 Function TGitManagerIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
+  { Do not rebind from ActiveProject here – it is half-torn-down during close and
+    was a source of access violations after browsing the Manage window. }
   If Assigned(GitClient) Then
     GitClient.RepoPath := '';
-  RefreshOpenGitGraphForms;
+  ClearOpenGitGraphForms;
   UpdateRepositoryMenuState;
 End;
 
