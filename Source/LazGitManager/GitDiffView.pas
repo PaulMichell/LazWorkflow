@@ -69,15 +69,17 @@ Type
     FOnSelectionChanged: TNotifyEvent;
     FOverviewGutter: TSynGutterLineOverview;
     FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
-    FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned }
+    FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
+    FOwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors;
     Procedure SetupDiffOverviewGutter;
     Procedure ApplyViewMode;
+    Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
     Procedure ApplyDiffHighlighter;
     Procedure ApplyMixedDiffHighlighter(Const SourceFileName: String);
-    Function ResolveLanguageHighlighter(Const SourceFileName: String): TObject;
+    Function CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
     Procedure CancelPendingScroll;
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
@@ -233,13 +235,15 @@ Begin
         End
       Else
         Body := LineText;
-      FLang.SetAlternativeLineTextForGetTokens(Body, LineIndex);
+      { Line index 0 forces ResetRange only — backends are not attached to these lines
+        and must not read CurrentRanges[LineIndex-1] (access violation). }
+      FLang.SetAlternativeLineTextForGetTokens(Body, 0);
       If FPrefixDone And FLang.GetEol Then
         FAtEol := True;
     End
   Else If Assigned(FDiff) Then
     Begin
-      FDiff.SetAlternativeLineTextForGetTokens(LineText, LineIndex);
+      FDiff.SetAlternativeLineTextForGetTokens(LineText, 0);
       If FDiff.GetEol Then
         FAtEol := True;
     End
@@ -449,6 +453,7 @@ Begin
   FScrollGeneration := 0;
   FOverviewGutter := Nil;
   FDiffOverviewProvider := Nil;
+  FOwnedLangHigh := Nil;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
   ApplyViewMode;
@@ -458,6 +463,7 @@ End;
 Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
+  FreeOwnedLanguageHighlighter;
   FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
@@ -554,10 +560,20 @@ Begin
   SetupDiffOverviewGutter;
 End;
 
+Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
+Begin
+  If Assigned(FEdit) And Assigned(FOwnedLangHigh) And (FEdit.Highlighter = FOwnedLangHigh) Then
+    FEdit.Highlighter := Nil;
+  If Assigned(FMixedHigh) Then
+    TGitMixedDiffHighlighter(FMixedHigh).SetBackends(FHigh, Nil);
+  FreeAndNil(FOwnedLangHigh);
+End;
+
 Procedure TGitDiffView.ApplyDiffHighlighter;
 Begin
   If Not Assigned(FEdit) Then
     Exit;
+  FreeOwnedLanguageHighlighter;
   If Assigned(FHigh) Then
     Begin
       If Assigned(IDEEditorOptions) Then
@@ -569,12 +585,14 @@ Begin
     FEdit.Highlighter := Nil;
 End;
 
-Function TGitDiffView.ResolveLanguageHighlighter(Const SourceFileName: String): TObject;
+Function TGitDiffView.CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
 Var
   Ext: String;
   Id: TIdeSyntaxHighlighterID;
+  Cls: TLazEditCustomHighlighterClass;
   HL: TLazEditCustomHighlighter;
 Begin
+  { Private instance — never use SharedInstances (mutating range/line state would corrupt IDE editors). }
   Result := Nil;
   Ext := ExtractFileExt(SourceFileName);
   If (Ext = '') Or (IdeSyntaxHighlighters = Nil) Then
@@ -582,9 +600,10 @@ Begin
   Id := IdeSyntaxHighlighters.GetIdForFileExtension(Ext);
   If (Id < IdeHighlighterStartId) Or (Id = IdeHighlighterUnknownId) Then
     Exit;
-  HL := IdeSyntaxHighlighters.SharedInstances[Id];
-  If Not Assigned(HL) Then
+  Cls := IdeSyntaxHighlighters.SynHlClasses[Id];
+  If Cls = Nil Then
     Exit;
+  HL := Cls.Create(Nil);
   If Assigned(IDEEditorOptions) Then
     IDEEditorOptions.GetHighlighterSettings(HL);
   Result := HL;
@@ -596,8 +615,15 @@ Var
 Begin
   If Not Assigned(FEdit) Then
     Exit;
-  HL := TLazEditCustomHighlighter(ResolveLanguageHighlighter(SourceFileName));
-  FEdit.Highlighter := HL;
+  FreeOwnedLanguageHighlighter;
+  HL := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
+  If Assigned(HL) Then
+    Begin
+      FOwnedLangHigh := HL;
+      FEdit.Highlighter := HL;
+    End
+  Else
+    FEdit.Highlighter := Nil;
 End;
 
 Procedure TGitDiffView.ApplyMixedDiffHighlighter(Const SourceFileName: String);
@@ -610,15 +636,20 @@ Begin
   ConfigureDiffColors;
   If Assigned(IDEEditorOptions) And Assigned(FHigh) Then
     IDEEditorOptions.GetHighlighterSettings(FHigh);
-  Lang := TLazEditCustomHighlighter(ResolveLanguageHighlighter(SourceFileName));
+  FreeOwnedLanguageHighlighter;
+  Lang := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
   If Assigned(Lang) And Assigned(FMixedHigh) And Assigned(FHigh) Then
     Begin
+      FOwnedLangHigh := Lang;
       Mixed := TGitMixedDiffHighlighter(FMixedHigh);
       Mixed.SetBackends(FHigh, Lang);
       FEdit.Highlighter := Mixed;
     End
   Else
-    ApplyDiffHighlighter;
+    Begin
+      Lang.Free;
+      ApplyDiffHighlighter;
+    End;
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
