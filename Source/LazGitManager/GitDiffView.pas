@@ -81,13 +81,15 @@ Type
     FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
-    FSelectedLines: TFPList; { 1-based line numbers (PtrInt) for Files multi-select }
+    FSelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
     FLineDragCtrl: Boolean;
     FLineDragAnchor: Integer; { 1-based }
     FLineDragWasSelected: Boolean;
     FLineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
+    FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta headers }
+    FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyEditorSelectionPolicy;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
@@ -135,6 +137,15 @@ Type
     Procedure EditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
     Procedure EditMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
       X, Y: Integer);
+    Procedure EditPaintEvent(Sender: TObject; EventType: TSynPaintEvent; Const rcClip: TRect);
+    Procedure ClearDisplayMap;
+    Procedure SetEditorDiffText(Const DiffText: String; HideFileHeaders: Boolean);
+    Function FullLineIsSelected(FullLineNo: Integer): Boolean;
+    Function IsHunkHeaderLine(Const Line: String): Boolean;
+    Function IsDiffFileMetaLine(Const Line: String): Boolean;
+    Function HunkMarkerRect(LineNo: Integer): TRect;
+    Function PointInHunkMarker(X, Y, LineNo: Integer): Boolean;
+    Procedure PaintHunkDecorations(PaintCanvas: TCanvas);
     Procedure ClearTreeData;
     Procedure ShowSelectedBrowseFile;
     Procedure ScrollToFirstChangeCentered;
@@ -236,6 +247,24 @@ End;
 Function LineIsDiffContext(Const Line: String): Boolean;
 Begin
   Result := (Line = '') Or ((Length(Line) > 0) And (Line[1] = ' '));
+End;
+
+Function LineIsHunkHeader(Const Line: String): Boolean;
+Begin
+  Result := Copy(Line, 1, 2) = '@@';
+End;
+
+Function LineIsDiffFileMeta(Const Line: String): Boolean;
+Begin
+  { Unified-diff file headers / metadata — not hunk body. }
+  Result := (Copy(Line, 1, 11) = 'diff --git ') Or (Copy(Line, 1, 6) = 'index ') Or
+    (Copy(Line, 1, 4) = '--- ') Or (Copy(Line, 1, 4) = '+++ ') Or
+    (Copy(Line, 1, 9) = 'new file ') Or (Copy(Line, 1, 13) = 'deleted file ') Or
+    (Copy(Line, 1, 9) = 'old mode ') Or (Copy(Line, 1, 9) = 'new mode ') Or
+    (Copy(Line, 1, 11) = 'similarity ') Or (Copy(Line, 1, 14) = 'dissimilarity ') Or
+    (Copy(Line, 1, 12) = 'rename from ') Or (Copy(Line, 1, 10) = 'rename to ') Or
+    (Copy(Line, 1, 10) = 'copy from ') Or (Copy(Line, 1, 8) = 'copy to ') Or
+    (Copy(Line, 1, 13) = 'Binary files ') Or (Copy(Line, 1, 7) = 'GIT binary');
 End;
 
 Function NormalizeExt(Const Ext: String): String;
@@ -547,6 +576,8 @@ Begin
   FLineDragCtrl := False;
   FLineDragAnchor := 0;
   FLineDragWasSelected := False;
+  FUseDisplayMap := False;
+  SetLength(FDisplayToFull, 0);
   FPreviewPicture := TPicture.Create;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
@@ -558,6 +589,8 @@ End;
 Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
+  If Assigned(FEdit) Then
+    FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
   FreeOwnedLanguageHighlighter;
   FreeAndNil(FPreviewPicture);
   FreeAndNil(FLineDragSnapshot);
@@ -754,9 +787,181 @@ Begin
   FEdit.OnSpecialLineColors := @EditSpecialLineColors;
   FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
+  FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
+  FEdit.RegisterPaintEventHandler(@EditPaintEvent, [peAfterPaint]);
   ApplyEditorSelectionPolicy;
   { Keep overview visible even if earlier setup ran while the Files tab was hidden. }
   EnsureDiffOverviewGutter;
+End;
+
+Procedure TGitDiffView.ClearDisplayMap;
+Begin
+  FUseDisplayMap := False;
+  SetLength(FDisplayToFull, 0);
+End;
+
+Procedure TGitDiffView.SetEditorDiffText(Const DiffText: String; HideFileHeaders: Boolean);
+Var
+  Full, Display: TStringList;
+  I, FullLineNo: Integer;
+  Line: String;
+Begin
+  ClearDisplayMap;
+  If Not Assigned(FEdit) Then
+    Exit;
+  If Not HideFileHeaders Then
+    Begin
+      FEdit.Lines.Text := DiffText;
+      Exit;
+    End;
+
+  Full := TStringList.Create;
+  Display := TStringList.Create;
+  Try
+    Full.Text := DiffText;
+    SetLength(FDisplayToFull, Full.Count);
+    For I := 0 To Full.Count - 1 Do
+      Begin
+        Line := Full[I];
+        FullLineNo := I + 1;
+        If LineIsDiffFileMeta(Line) Then
+          Continue;
+        Display.Add(Line);
+        FDisplayToFull[Display.Count - 1] := FullLineNo;
+      End;
+    SetLength(FDisplayToFull, Display.Count);
+    FUseDisplayMap := True;
+    FEdit.Lines.Assign(Display);
+  Finally
+    Display.Free;
+    Full.Free;
+  End;
+End;
+
+Function TGitDiffView.FullLineIsSelected(FullLineNo: Integer): Boolean;
+Var
+  I, Disp: Integer;
+Begin
+  Result := False;
+  If Not FUseDisplayMap Then
+    Exit(IsLineSelected(FullLineNo));
+  For I := 0 To FSelectedLines.Count - 1 Do
+    Begin
+      Disp := Integer(PtrInt(FSelectedLines[I]));
+      If (Disp >= 1) And (Disp <= Length(FDisplayToFull)) And
+         (FDisplayToFull[Disp - 1] = FullLineNo) Then
+        Exit(True);
+    End;
+End;
+
+Function TGitDiffView.IsHunkHeaderLine(Const Line: String): Boolean;
+Begin
+  Result := LineIsHunkHeader(Line);
+End;
+
+Function TGitDiffView.IsDiffFileMetaLine(Const Line: String): Boolean;
+Begin
+  Result := LineIsDiffFileMeta(Line);
+End;
+
+Function TGitDiffView.HunkMarkerRect(LineNo: Integer): TRect;
+Var
+  ScreenPt: TPoint;
+  Scr: TPoint;
+  GutterW, MidY, Size: Integer;
+Begin
+  Result := Rect(0, 0, 0, 0);
+  If (Not Assigned(FEdit)) Or (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+    Exit;
+  Scr := FEdit.TextXYToScreenXY(Point(1, LineNo));
+  If Scr.Y < 1 Then
+    Exit; { above / not on screen }
+  ScreenPt := FEdit.ScreenXYToPixels(Scr);
+  If (ScreenPt.Y + FEdit.LineHeight < 0) Or (ScreenPt.Y > FEdit.ClientHeight) Then
+    Exit;
+  GutterW := FEdit.Gutter.Width;
+  If Not FEdit.Gutter.Visible Then
+    GutterW := 0;
+  If GutterW < 10 Then
+    Exit;
+  Size := Max(8, FEdit.LineHeight - 4);
+  If Size > 12 Then
+    Size := 12;
+  MidY := ScreenPt.Y + (FEdit.LineHeight Div 2);
+  { Triangle sits in the right edge of the left gutter. }
+  Result.Right := GutterW - 2;
+  Result.Left := Result.Right - Size;
+  Result.Top := MidY - (Size Div 2);
+  Result.Bottom := Result.Top + Size;
+End;
+
+Function TGitDiffView.PointInHunkMarker(X, Y, LineNo: Integer): Boolean;
+Var
+  R: TRect;
+Begin
+  R := HunkMarkerRect(LineNo);
+  Result := (R.Right > R.Left) And (X >= R.Left) And (X < R.Right) And
+    (Y >= R.Top) And (Y < R.Bottom);
+End;
+
+Procedure TGitDiffView.PaintHunkDecorations(PaintCanvas: TCanvas);
+Var
+  LineNo, Y, X1, X2, GutterW: Integer;
+  R: TRect;
+  MidX: Integer;
+  Scr: TPoint;
+  Pts: Array[0..2] Of TPoint;
+Begin
+  If (FMode <> dvmEditorOnly) Or (Not Assigned(FEdit)) Then
+    Exit;
+  GutterW := 0;
+  If FEdit.Gutter.Visible Then
+    GutterW := FEdit.Gutter.Width;
+  X1 := 0;
+  X2 := FEdit.ClientWidth;
+  If FEdit.RightGutter.Visible Then
+    X2 := X2 - FEdit.RightGutter.Width;
+
+  PaintCanvas.Pen.Mode := pmCopy;
+  PaintCanvas.Pen.Width := 1;
+  PaintCanvas.Pen.Style := psSolid;
+
+  For LineNo := 1 To FEdit.Lines.Count Do
+    Begin
+      If Not IsHunkHeaderLine(FEdit.Lines[LineNo - 1]) Then
+        Continue;
+      R := HunkMarkerRect(LineNo);
+      If R.Right <= R.Left Then
+        Continue; { not visible }
+
+      Scr := FEdit.TextXYToScreenXY(Point(1, LineNo));
+      Y := FEdit.ScreenXYToPixels(Scr).Y;
+      { 1px black rule across gutter + text area at hunk start. }
+      PaintCanvas.Pen.Color := clBlack;
+      PaintCanvas.MoveTo(X1, Y);
+      PaintCanvas.LineTo(X2, Y);
+
+      { Down-pointing triangle: dark blue outline, filled light blue. }
+      MidX := (R.Left + R.Right) Div 2;
+      Pts[0] := Point(R.Left, R.Top + 1);
+      Pts[1] := Point(R.Right - 1, R.Top + 1);
+      Pts[2] := Point(MidX, R.Bottom - 1);
+      PaintCanvas.Brush.Style := bsSolid;
+      PaintCanvas.Brush.Color := RGBToColor(100, 181, 246);
+      PaintCanvas.Pen.Color := RGBToColor(13, 71, 161);
+      PaintCanvas.Polygon(Pts);
+    End;
+End;
+
+Procedure TGitDiffView.EditPaintEvent(Sender: TObject; EventType: TSynPaintEvent;
+  Const rcClip: TRect);
+Begin
+  If EventType <> peAfterPaint Then
+    Exit;
+  If FMode <> dvmEditorOnly Then
+    Exit;
+  If Assigned(FEdit) Then
+    PaintHunkDecorations(FEdit.Canvas);
 End;
 
 Procedure TGitDiffView.ApplyEditorSelectionPolicy;
@@ -1435,6 +1640,14 @@ Begin
   FEdit.CaretY := LineNo;
   FEdit.CaretX := 1;
 
+  { Hunk marker (triangle) or click on @@ line selects all change lines in the hunk. }
+  If IsHunkHeaderLine(LineText) Or PointInHunkMarker(X, Y, LineNo) Then
+    Begin
+      FLineDragActive := False;
+      SelectHunkAtLine(LineNo);
+      Exit;
+    End;
+
   { Drag may start on a context line and still sweep change lines; only change
     lines become the anchor when the press lands on one. }
   FLineDragActive := True;
@@ -1571,6 +1784,7 @@ Begin
   CancelPendingScroll;
   FDiffText := '';
   FBrowseSha := '';
+  ClearDisplayMap;
   ClearLineSelection(False);
   ShowEditorPane;
   If Assigned(FEdit) Then
@@ -1726,8 +1940,14 @@ Var
 
   Function LineSelected(ALineNo: Integer): Boolean;
   Begin
+    { ALineNo is 1-based in the source list being walked (full diff when mapped). }
     If UseLineSet Then
-      Result := IsLineSelected(ALineNo)
+      Begin
+        If FUseDisplayMap Then
+          Result := FullLineIsSelected(ALineNo)
+        Else
+          Result := IsLineSelected(ALineNo);
+      End
     Else
       Result := (ALineNo >= FirstLine) And (ALineNo <= LastLine);
   End;
@@ -1813,9 +2033,11 @@ Begin
       If Not SelectedLineBounds(FirstLine, LastLine) Then
         Exit;
     End
-  Else If (FirstLine < 1) Or (LastLine < FirstLine) Or (FEdit.Lines.Count = 0) Then
+  Else If (FirstLine < 1) Or (LastLine < FirstLine) Then
     Exit;
-  If FEdit.Lines.Count = 0 Then
+  If (Not Assigned(FEdit)) Or ((Not FUseDisplayMap) And (FEdit.Lines.Count = 0)) Then
+    Exit;
+  If FUseDisplayMap And (Trim(FDiffText) = '') Then
     Exit;
 
   Lines := TStringList.Create;
@@ -1823,7 +2045,13 @@ Begin
   FileHeader := TStringList.Create;
   HunkBody := TStringList.Create;
   Try
-    Lines.Assign(FEdit.Lines);
+    { When file headers are hidden in the editor, rebuild patches from the full diff. }
+    If FUseDisplayMap Then
+      Lines.Text := FDiffText
+    Else
+      Lines.Assign(FEdit.Lines);
+    If Lines.Count = 0 Then
+      Exit;
     InHunk := False;
     HunkHasChange := False;
     FileHasChange := False;
@@ -2400,9 +2628,10 @@ Begin
     End;
   ClearLineSelection(False);
   ApplyEditorSelectionPolicy;
-  { Text under Diff first, then upgrade to mixed language highlighting. }
+  { Text under Diff first, then upgrade to mixed language highlighting.
+    Files tab omits file-level meta headers (diff --git / +++ / --- / index). }
   ApplyDiffHighlighter;
-  FEdit.Lines.Text := DiffText;
+  SetEditorDiffText(DiffText, True);
   ApplyMixedDiffHighlighter(SourceFileName);
   EnsureDiffOverviewGutter;
   ScheduleOverviewRefresh;
