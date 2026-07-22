@@ -1068,8 +1068,20 @@ End;
 
 Procedure TGitGraphForm.PagesChange(Sender: TObject);
 Begin
-  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
-    RefreshFilesList;
+  If Not Assigned(FPages) Then
+    Exit;
+  If FPages.ActivePage = FTabFiles Then
+    Begin
+      RefreshFilesList;
+      { Overview paints on a child window that only sizes after the page is shown. }
+      If Assigned(FFilesDiffView) Then
+        FFilesDiffView.RefreshOverviewGutter;
+    End
+  Else If FPages.ActivePage = FTabHistory Then
+    Begin
+      If Assigned(FDiffView) Then
+        FDiffView.RefreshOverviewGutter;
+    End;
 End;
 
 Function TGitGraphForm.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;

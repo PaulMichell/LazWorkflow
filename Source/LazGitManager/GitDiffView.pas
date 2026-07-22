@@ -85,6 +85,8 @@ Type
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure EnsureDiffOverviewGutter;
+    Procedure ScheduleOverviewRefresh;
+    Procedure DoRefreshOverviewAsync(Data: PtrInt);
     Procedure ApplyViewMode;
     Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
@@ -138,6 +140,8 @@ Type
     Function StageSelection: Boolean;
     Function UnstageSelection: Boolean;
     Function HasActiveSelection: Boolean;
+    { Reassert right overview gutter size/visibility (e.g. after notebook page show). }
+    Procedure RefreshOverviewGutter;
     Property Tree: TTreeView Read FTree;
     Property FileList: TListBox Read FFileList;
     Property Editor: TSynEdit Read FEdit;
@@ -579,13 +583,16 @@ Begin
   For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
     FEdit.RightGutter.Parts[I].Free;
 
+  { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
+    that first layout while their notebook page is hidden (Files tab). }
+  FEdit.RightGutter.AutoSize := False;
+  FEdit.RightGutter.Width := 16;
   FEdit.RightGutter.Visible := True;
-  FEdit.RightGutter.AutoSize := True;
 
   FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
-  FOverviewGutter.Visible := True;
   FOverviewGutter.AutoSize := False;
-  FOverviewGutter.Width := 14;
+  FOverviewGutter.Width := 16;
+  FOverviewGutter.Visible := True;
   FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
 
   PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
@@ -597,14 +604,6 @@ Begin
   DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
   DiffProvider.Priority := 20;
   FDiffOverviewProvider := DiffProvider;
-
-  { Force gutter metrics after create (important for frames on inactive notebook tabs). }
-  FEdit.RightGutter.Visible := True;
-  If FEdit.RightGutter.Width < 12 Then
-    Begin
-      FEdit.RightGutter.AutoSize := False;
-      FEdit.RightGutter.Width := 14;
-    End;
 End;
 
 Procedure TGitDiffView.EnsureDiffOverviewGutter;
@@ -612,6 +611,9 @@ Var
   I: Integer;
   StillInstalled: Boolean;
 Begin
+  { Overview paints on a child TWinControl (not Gutter.Paint). That child only
+    gets BoundsRect when the part is Visible and SynEdit has a handle — so we
+    reassert size/visibility after every load and after notebook tab shows. }
   If Not Assigned(FEdit) Then
     Exit;
 
@@ -625,25 +627,48 @@ Begin
         End;
 
   If Not StillInstalled Then
-    SetupDiffOverviewGutter
-  Else
+    SetupDiffOverviewGutter;
+
+  FEdit.RightGutter.AutoSize := False;
+  FEdit.RightGutter.Width := 16;
+  FEdit.RightGutter.Visible := True;
+  If Assigned(FOverviewGutter) Then
     Begin
-      FEdit.RightGutter.Visible := True;
-      FOverviewGutter.Visible := True;
       FOverviewGutter.AutoSize := False;
-      If FOverviewGutter.Width < 12 Then
-        FOverviewGutter.Width := 14;
-      FEdit.RightGutter.AutoSize := True;
-      FEdit.RightGutter.DoAutoSize;
-      If FEdit.RightGutter.Width < 12 Then
-        Begin
-          FEdit.RightGutter.AutoSize := False;
-          FEdit.RightGutter.Width := 14;
-        End;
+      FOverviewGutter.Width := 16;
+      { Toggle visibility so GutterVisibilityChanged / DoResize repositions FWinControl. }
+      FOverviewGutter.Visible := False;
+      FOverviewGutter.Visible := True;
     End;
 
   If FEdit.HandleAllocated Then
+    Begin
+      FEdit.RightGutter.RecalcBounds;
+      FEdit.Invalidate;
+    End;
+End;
+
+Procedure TGitDiffView.ScheduleOverviewRefresh;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  { Do not RemoveAsyncCalls — that would cancel scroll-to-change. }
+  Application.QueueAsyncCall(@DoRefreshOverviewAsync, 0);
+End;
+
+Procedure TGitDiffView.DoRefreshOverviewAsync(Data: PtrInt);
+Begin
+  If Not IsAlive Then
+    Exit;
+  EnsureDiffOverviewGutter;
+  If Assigned(FEdit) And FEdit.HandleAllocated Then
     FEdit.Invalidate;
+End;
+
+Procedure TGitDiffView.RefreshOverviewGutter;
+Begin
+  EnsureDiffOverviewGutter;
+  ScheduleOverviewRefresh;
 End;
 
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
@@ -1240,6 +1265,7 @@ Var
 Begin
   If Not IsAlive Then
     Exit;
+  EnsureDiffOverviewGutter;
   Line := 0;
   For I := 0 To FEdit.Lines.Count - 1 Do
     If IsDiffChangeLine(FEdit.Lines[I]) Then
@@ -1896,6 +1922,7 @@ Begin
       FEdit.Lines.Text := DiffText;
       ApplyMixedDiffHighlighter(Path);
       EnsureDiffOverviewGutter;
+      ScheduleOverviewRefresh;
       Inc(FScrollGeneration);
       Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
     End;
@@ -1940,6 +1967,7 @@ Begin
   FEdit.Lines.Text := DiffText;
   ApplyMixedDiffHighlighter(SourceFileName);
   EnsureDiffOverviewGutter;
+  ScheduleOverviewRefresh;
   Inc(FScrollGeneration);
   Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
   UpdateActionEnabled;
@@ -1964,6 +1992,7 @@ Begin
   ParseDiffIntoTree(DiffText);
   ApplyDiffHighlighter;
   EnsureDiffOverviewGutter;
+  ScheduleOverviewRefresh;
   UpdateActionEnabled;
 End;
 
