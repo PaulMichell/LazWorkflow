@@ -1,8 +1,12 @@
 Unit GitDiffView;
 
-{ SynEdit-based diff viewer: staging tree mode (commit dialog) and commit browse
-  mode (manage form file list + full-file embedded red/green diffs)
-  (c) 2026 Michell Computing. }
+{ SynEdit-based diff viewer: staging tree mode, commit browse, Files tab preview
+  with mixed Diff+language highlighting, and image/binary previews
+  (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Diff staging, browse, mixed
+  highlighter, overview gutter, and binary/image preview form one UI surface.
+  Reviewed 2026-07: no clean sibling-unit split without splitting the frame. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -38,6 +42,9 @@ Type
     FSplitter: TSplitter;
     FEditPanel: TPanel;
     FEdit: TSynEdit;
+    FPreviewPanel: TPanel;
+    FBinaryLabel: TLabel;
+    FImagePaintBox: TPaintBox;
     FHigh: TSynDiffSyn;
     FPopup: TPopupMenu;
     FMiStage: TMenuItem;
@@ -57,6 +64,7 @@ Type
     Procedure PopupSelectHunkClick(Sender: TObject);
     Procedure EditDblClick(Sender: TObject);
     Procedure EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
+    Procedure ImagePaintBoxPaint(Sender: TObject);
   Private
     FDiffText: String;
     FRepoPath: String;
@@ -70,15 +78,23 @@ Type
     FOverviewGutter: TSynGutterLineOverview;
     FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
     FOwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
+    FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
+    FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
     Procedure ApplyIDEEditorAppearance;
-    Procedure ConfigureDiffColors;
+    Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure ApplyViewMode;
     Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
     Procedure ApplyDiffHighlighter;
+    Procedure ApplyMixedDiffHighlighter(Const SourceFileName: String);
     Function CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
+    Procedure ShowEditorPane;
+    Procedure ShowBinaryMessage(Const TitleText: String);
+    Function TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
+    Function TryShowBinaryOrImage(Const TitleText, RelPath: String; Const Sha: String;
+      StagedSide: Boolean): Boolean;
     Procedure CancelPendingScroll;
     Procedure ParseDiffIntoTree(Const DiffText: String);
     Procedure SelectLineRange(StartLine, EndLine: Integer);
@@ -108,8 +124,11 @@ Type
     Procedure LoadDiff(Const Title, DiffText: String);
     { SourceFileName selects an IDE language highlighter when known (e.g. .pas). }
     Procedure LoadPlainText(Const Title, Content: String; Const SourceFileName: String = '');
-    { Full-file embedded red/green diff. SourceFileName reserved for future context HL. }
+    { Full-file embedded red/green diff; SourceFileName enables language HL on context lines. }
     Procedure LoadEmbeddedDiff(Const Title, DiffText: String; Const SourceFileName: String = '');
+    { Image preview or binary notice; returns True when handled (no text editor content). }
+    Function LoadBinaryOrImagePreview(Const Title, RelPath: String; Const Sha: String = '';
+      StagedSide: Boolean = False): Boolean;
     { Manage form: list files in the commit; editor shows full-file embedded diff. }
     Procedure LoadCommit(Const ARepoPath, Sha, Title: String);
     { RepoPath + StagedSide control partial stage/unstage against the index. }
@@ -133,10 +152,31 @@ Implementation
 
 Uses
   Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
-  GitService, Dialogs, WorkflowLog;
+  LazEditTextAttributes, GitService, Dialogs, WorkflowLog;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
+
+  { Real TSynDiffSyn so SynEdit fold/markup stay valid; language HL only on context lines. }
+  TGitMixedDiffHighlighter = Class(TSynDiffSyn)
+  Private
+    FLang: TLazEditCustomHighlighter; { not owned }
+    FContextMode: Boolean;
+    FPrefixDone: Boolean;
+    FAtEol: Boolean;
+    FPrefixLen: Integer;
+    FPrefixStr: String;
+  Public
+    Procedure SetLanguageBackend(ALang: TLazEditCustomHighlighter);
+    Procedure InitForScanningLine; Override;
+    Procedure Next; Override;
+    Function GetEol: Boolean; Override;
+    Function GetToken: String; Override;
+    Function GetTokenPos: Integer; Override;
+    Function GetTokenKind: Integer; Override;
+    Procedure GetTokenEx(Out TokenStart: PChar; Out TokenLength: Integer); Override;
+    Function GetTokenAttribute: TLazEditTextAttribute; Override;
+  End;
 
   { Right-gutter overview markers: green for added lines, red for removed. }
   TGitDiffOverviewProvider = Class(TSynGutterLineOverviewProvider)
@@ -163,6 +203,198 @@ End;
 Function LineIsDiffRemoved(Const Line: String): Boolean;
 Begin
   Result := (Length(Line) > 0) And (Line[1] = '-') And (Copy(Line, 1, 3) <> '---');
+End;
+
+Function LineIsDiffContext(Const Line: String): Boolean;
+Begin
+  Result := (Line = '') Or ((Length(Line) > 0) And (Line[1] = ' '));
+End;
+
+Function NormalizeExt(Const Ext: String): String;
+Begin
+  Result := LowerCase(Ext);
+  If (Result <> '') And (Result[1] <> '.') Then
+    Result := '.' + Result;
+End;
+
+Function FileExtensionIsImage(Const Ext: String): Boolean;
+Var
+  E: String;
+Begin
+  E := NormalizeExt(Ext);
+  Result := (E = '.png') Or (E = '.jpg') Or (E = '.jpeg') Or (E = '.gif') Or
+    (E = '.bmp') Or (E = '.ico') Or (E = '.xpm') Or (E = '.tif') Or (E = '.tiff') Or
+    (E = '.pbm') Or (E = '.pgm') Or (E = '.ppm');
+End;
+
+Function FileExtensionIsLikelyBinary(Const Ext: String): Boolean;
+Var
+  E: String;
+Begin
+  E := NormalizeExt(Ext);
+  If FileExtensionIsImage(E) Then
+    Exit(True);
+  Result := (E = '.exe') Or (E = '.dll') Or (E = '.so') Or (E = '.o') Or (E = '.a') Or
+    (E = '.obj') Or (E = '.lib') Or (E = '.zip') Or (E = '.gz') Or (E = '.7z') Or
+    (E = '.rar') Or (E = '.pdf') Or (E = '.woff') Or (E = '.woff2') Or (E = '.ttf') Or
+    (E = '.otf') Or (E = '.eot') Or (E = '.class') Or (E = '.pyc') Or (E = '.pyo') Or
+    (E = '.db') Or (E = '.sqlite') Or (E = '.bin') Or (E = '.dat') Or (E = '.wasm') Or
+    (E = '.res') Or (E = '.rsm') Or (E = '.ppu') Or (E = '.compiled');
+End;
+
+Function DiffTextLooksBinary(Const DiffText: String): Boolean;
+Var
+  S: String;
+Begin
+  S := LowerCase(DiffText);
+  Result := (Pos('binary files', S) > 0) And (Pos('differ', S) > 0);
+End;
+
+Procedure TGitMixedDiffHighlighter.SetLanguageBackend(ALang: TLazEditCustomHighlighter);
+Begin
+  FLang := ALang;
+End;
+
+Procedure TGitMixedDiffHighlighter.InitForScanningLine;
+Var
+  LineText, Body: String;
+Begin
+  FContextMode := False;
+  FPrefixDone := True;
+  FPrefixLen := 0;
+  FPrefixStr := '';
+  FAtEol := False;
+  LineText := CurrentLineText;
+
+  If Assigned(FLang) And LineIsDiffContext(LineText) Then
+    Begin
+      FContextMode := True;
+      If (Length(LineText) > 0) And (LineText[1] = ' ') Then
+        Begin
+          FPrefixLen := 1;
+          FPrefixStr := ' ';
+          FPrefixDone := False;
+          Body := Copy(LineText, 2, MaxInt);
+        End
+      Else
+        Body := LineText;
+      { Private language instance: line 0 only ResetRange (not attached to these lines). }
+      FLang.SetAlternativeLineTextForGetTokens(Body, 0);
+      If FPrefixDone And FLang.GetEol Then
+        FAtEol := True;
+    End
+  Else
+    Inherited;
+End;
+
+Procedure TGitMixedDiffHighlighter.Next;
+Begin
+  If Not FContextMode Then
+    Begin
+      Inherited;
+      Exit;
+    End;
+  If FAtEol Then
+    Exit;
+  If Not FPrefixDone Then
+    Begin
+      FPrefixDone := True;
+      If (Not Assigned(FLang)) Or FLang.GetEol Then
+        FAtEol := True;
+      Exit;
+    End;
+  FLang.Next;
+  If FLang.GetEol Then
+    FAtEol := True;
+End;
+
+Function TGitMixedDiffHighlighter.GetEol: Boolean;
+Begin
+  If FContextMode Then
+    Result := FAtEol
+  Else
+    Result := Inherited GetEol;
+End;
+
+Function TGitMixedDiffHighlighter.GetToken: String;
+Begin
+  If FContextMode Then
+    Begin
+      If Not FPrefixDone Then
+        Result := FPrefixStr
+      Else If Assigned(FLang) Then
+        Result := FLang.GetToken
+      Else
+        Result := '';
+    End
+  Else
+    Result := Inherited GetToken;
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenPos: Integer;
+Begin
+  If FContextMode Then
+    Begin
+      If Not FPrefixDone Then
+        Result := 0
+      Else If Assigned(FLang) Then
+        Result := FLang.GetTokenPos + FPrefixLen
+      Else
+        Result := 0;
+    End
+  Else
+    Result := Inherited GetTokenPos;
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenKind: Integer;
+Begin
+  If FContextMode Then
+    Begin
+      If Not FPrefixDone Then
+        Result := 0
+      Else If Assigned(FLang) Then
+        Result := FLang.GetTokenKind
+      Else
+        Result := 0;
+    End
+  Else
+    Result := Inherited GetTokenKind;
+End;
+
+Procedure TGitMixedDiffHighlighter.GetTokenEx(Out TokenStart: PChar; Out TokenLength: Integer);
+Begin
+  If FContextMode Then
+    Begin
+      If Not FPrefixDone Then
+        Begin
+          TokenStart := PChar(FPrefixStr);
+          TokenLength := FPrefixLen;
+        End
+      Else If Assigned(FLang) Then
+        FLang.GetTokenEx(TokenStart, TokenLength)
+      Else
+        Begin
+          TokenStart := Nil;
+          TokenLength := 0;
+        End;
+    End
+  Else
+    Inherited GetTokenEx(TokenStart, TokenLength);
+End;
+
+Function TGitMixedDiffHighlighter.GetTokenAttribute: TLazEditTextAttribute;
+Begin
+  If FContextMode Then
+    Begin
+      If Not FPrefixDone Then
+        Result := LineContextAttri
+      Else If Assigned(FLang) Then
+        Result := FLang.GetTokenAttribute
+      Else
+        Result := LineContextAttri;
+    End
+  Else
+    Result := Inherited GetTokenAttribute;
 End;
 
 Constructor TGitDiffOverviewProvider.Create(AOwner: TComponent);
@@ -251,8 +483,11 @@ Begin
   FDiffOverviewProvider := Nil;
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
+  FPreviewPicture := TPicture.Create;
+  FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
   ApplyViewMode;
+  ShowEditorPane;
   UpdateActionEnabled;
 End;
 
@@ -260,6 +495,8 @@ Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
   FreeOwnedLanguageHighlighter;
+  FreeAndNil(FPreviewPicture);
+  FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
 
@@ -274,25 +511,27 @@ Begin
   Application.RemoveAsyncCalls(Self);
 End;
 
-Procedure TGitDiffView.ConfigureDiffColors;
+Procedure TGitDiffView.ConfigureDiffColors(DiffHL: TSynDiffSyn);
 Begin
-  FHigh.LineAddedAttri.Foreground := RGBToColor(27, 94, 32);
+  If Not Assigned(DiffHL) Then
+    Exit;
+  DiffHL.LineAddedAttri.Foreground := RGBToColor(27, 94, 32);
   { Token backgrounds kept none so SpecialLineColors can paint full row width. }
-  FHigh.LineAddedAttri.Background := clNone;
-  FHigh.LineRemovedAttri.Foreground := RGBToColor(183, 28, 28);
-  FHigh.LineRemovedAttri.Background := clNone;
-  FHigh.ChunkMarkerAttri.Foreground := RGBToColor(69, 90, 100);
-  FHigh.ChunkMarkerAttri.Background := RGBToColor(236, 239, 241);
-  FHigh.ChunkNewAttri.Foreground := RGBToColor(46, 125, 50);
-  FHigh.ChunkOldAttri.Foreground := RGBToColor(198, 40, 40);
-  FHigh.NewFileAttri.Foreground := RGBToColor(27, 94, 32);
-  FHigh.NewFileAttri.Background := clNone;
-  FHigh.OrigFileAttri.Foreground := RGBToColor(183, 28, 28);
-  FHigh.OrigFileAttri.Background := clNone;
-  FHigh.LineContextAttri.Foreground := clWindowText;
-  FHigh.LineContextAttri.Background := clNone;
-  FHigh.SpaceAttri.Background := clNone;
-  FHigh.UnknownAttri.Background := clNone;
+  DiffHL.LineAddedAttri.Background := clNone;
+  DiffHL.LineRemovedAttri.Foreground := RGBToColor(183, 28, 28);
+  DiffHL.LineRemovedAttri.Background := clNone;
+  DiffHL.ChunkMarkerAttri.Foreground := RGBToColor(69, 90, 100);
+  DiffHL.ChunkMarkerAttri.Background := RGBToColor(236, 239, 241);
+  DiffHL.ChunkNewAttri.Foreground := RGBToColor(46, 125, 50);
+  DiffHL.ChunkOldAttri.Foreground := RGBToColor(198, 40, 40);
+  DiffHL.NewFileAttri.Foreground := RGBToColor(27, 94, 32);
+  DiffHL.NewFileAttri.Background := clNone;
+  DiffHL.OrigFileAttri.Foreground := RGBToColor(183, 28, 28);
+  DiffHL.OrigFileAttri.Background := clNone;
+  DiffHL.LineContextAttri.Foreground := clWindowText;
+  DiffHL.LineContextAttri.Background := clNone;
+  DiffHL.SpaceAttri.Background := clNone;
+  DiffHL.UnknownAttri.Background := clNone;
 End;
 
 Procedure TGitDiffView.SetupDiffOverviewGutter;
@@ -352,6 +591,11 @@ Begin
               On E: Exception Do
                 WorkflowLogger.Warning('GitDiffView', 'GetHighlighterSettings: ' + E.Message);
             End;
+          If Assigned(FMixedHigh) Then
+            Try
+              IDEEditorOptions.GetHighlighterSettings(TSynDiffSyn(FMixedHigh));
+            Except
+            End;
         End
       Else
         Begin
@@ -375,25 +619,36 @@ End;
 
 Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
 Begin
+  If Assigned(FMixedHigh) Then
+    TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
   If Assigned(FEdit) And Assigned(FOwnedLangHigh) And (FEdit.Highlighter = FOwnedLangHigh) Then
     FEdit.Highlighter := Nil;
   FreeAndNil(FOwnedLangHigh);
 End;
 
 Procedure TGitDiffView.ApplyDiffHighlighter;
+Var
+  DiffHL: TSynDiffSyn;
 Begin
   If Not Assigned(FEdit) Then
     Exit;
+  ShowEditorPane;
   FreeOwnedLanguageHighlighter;
-  If Assigned(FHigh) Then
+  DiffHL := FHigh;
+  If Assigned(FMixedHigh) Then
+    Begin
+      TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
+      DiffHL := TSynDiffSyn(FMixedHigh);
+    End;
+  If Assigned(DiffHL) Then
     Begin
       If Assigned(IDEEditorOptions) Then
         Try
-          IDEEditorOptions.GetHighlighterSettings(FHigh);
+          IDEEditorOptions.GetHighlighterSettings(DiffHL);
         Except
         End;
-      FEdit.Highlighter := FHigh;
-      ConfigureDiffColors;
+      FEdit.Highlighter := DiffHL;
+      ConfigureDiffColors(DiffHL);
     End
   Else
     FEdit.Highlighter := Nil;
@@ -436,6 +691,7 @@ Var
 Begin
   If Not Assigned(FEdit) Then
     Exit;
+  ShowEditorPane;
   FreeOwnedLanguageHighlighter;
   HL := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
   If Assigned(HL) Then
@@ -445,6 +701,208 @@ Begin
     End
   Else
     FEdit.Highlighter := Nil;
+End;
+
+Procedure TGitDiffView.ApplyMixedDiffHighlighter(Const SourceFileName: String);
+Var
+  Lang: TLazEditCustomHighlighter;
+  Mixed: TGitMixedDiffHighlighter;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  ShowEditorPane;
+  FreeOwnedLanguageHighlighter;
+  If Not Assigned(FMixedHigh) Then
+    Begin
+      ApplyDiffHighlighter;
+      Exit;
+    End;
+  Mixed := TGitMixedDiffHighlighter(FMixedHigh);
+  If Assigned(IDEEditorOptions) Then
+    Try
+      IDEEditorOptions.GetHighlighterSettings(Mixed);
+    Except
+    End;
+  ConfigureDiffColors(Mixed);
+  Lang := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
+  If Assigned(Lang) Then
+    Begin
+      FOwnedLangHigh := Lang;
+      Mixed.SetLanguageBackend(Lang);
+    End
+  Else
+    Mixed.SetLanguageBackend(Nil);
+  FEdit.Highlighter := Mixed;
+End;
+
+Procedure TGitDiffView.ShowEditorPane;
+Begin
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
+  If Assigned(FPreviewPanel) Then
+    FPreviewPanel.Visible := False;
+  If Assigned(FBinaryLabel) Then
+    FBinaryLabel.Visible := False;
+  If Assigned(FImagePaintBox) Then
+    FImagePaintBox.Visible := False;
+  If Assigned(FEdit) Then
+    FEdit.Visible := True;
+End;
+
+Procedure TGitDiffView.ShowBinaryMessage(Const TitleText: String);
+Begin
+  CancelPendingScroll;
+  FDiffText := '';
+  FreeOwnedLanguageHighlighter;
+  If Assigned(FEdit) Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Clear;
+      FEdit.Visible := False;
+    End;
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
+  If TitleText <> '' Then
+    FCaption.Caption := TitleText;
+  If Assigned(FImagePaintBox) Then
+    FImagePaintBox.Visible := False;
+  If Assigned(FBinaryLabel) Then
+    Begin
+      FBinaryLabel.Caption := 'Non-text binary file contents.';
+      FBinaryLabel.Visible := True;
+    End;
+  If Assigned(FPreviewPanel) Then
+    FPreviewPanel.Visible := True;
+  UpdateActionEnabled;
+End;
+
+Function TGitDiffView.TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
+Begin
+  Result := False;
+  If (Stream = Nil) Or (Stream.Size = 0) Or (Not Assigned(FPreviewPicture)) Then
+    Exit;
+  Stream.Position := 0;
+  Try
+    FPreviewPicture.LoadFromStream(Stream);
+  Except
+    FPreviewPicture.Clear;
+    Exit;
+  End;
+  If (FPreviewPicture.Width < 1) Or (FPreviewPicture.Height < 1) Then
+    Begin
+      FPreviewPicture.Clear;
+      Exit;
+    End;
+  CancelPendingScroll;
+  FDiffText := '';
+  FreeOwnedLanguageHighlighter;
+  If Assigned(FEdit) Then
+    Begin
+      FEdit.Highlighter := Nil;
+      FEdit.Lines.Clear;
+      FEdit.Visible := False;
+    End;
+  If TitleText <> '' Then
+    FCaption.Caption := TitleText;
+  If Assigned(FBinaryLabel) Then
+    FBinaryLabel.Visible := False;
+  If Assigned(FImagePaintBox) Then
+    Begin
+      FImagePaintBox.Visible := True;
+      FImagePaintBox.Invalidate;
+    End;
+  If Assigned(FPreviewPanel) Then
+    FPreviewPanel.Visible := True;
+  Result := True;
+  UpdateActionEnabled;
+End;
+
+Function TGitDiffView.TryShowBinaryOrImage(Const TitleText, RelPath: String; Const Sha: String;
+  StagedSide: Boolean): Boolean;
+Var
+  Mem: TMemoryStream;
+  Ext: String;
+Begin
+  Result := False;
+  Ext := ExtractFileExt(RelPath);
+  If Not (FileExtensionIsImage(Ext) Or FileExtensionIsLikelyBinary(Ext)) Then
+    Exit;
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Begin
+      ShowBinaryMessage(TitleText);
+      Result := True;
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+  If FileExtensionIsImage(Ext) Then
+    Begin
+      Mem := TMemoryStream.Create;
+      Try
+        If GitClient.ReadBlobBytes(Sha, RelPath, StagedSide, Mem) And
+           TryShowImageFromStream(TitleText, Mem) Then
+          Begin
+            Result := True;
+            Exit;
+          End;
+      Finally
+        Mem.Free;
+      End;
+    End;
+  { Binary extension, or image that LCL could not decode. }
+  ShowBinaryMessage(TitleText);
+  Result := True;
+End;
+
+Function TGitDiffView.LoadBinaryOrImagePreview(Const Title, RelPath: String; Const Sha: String;
+  StagedSide: Boolean): Boolean;
+Begin
+  Result := False;
+  If Not IsAlive Then
+    Exit;
+  If FMode = dvmEditorOnly Then
+    ApplyViewMode
+  Else If FMode = dvmBrowse Then
+    ApplyViewMode;
+  Result := TryShowBinaryOrImage(Title, RelPath, Sha, StagedSide);
+End;
+
+Procedure TGitDiffView.ImagePaintBoxPaint(Sender: TObject);
+Var
+  Dest: TRect;
+  BoxW, BoxH, ImgW, ImgH: Integer;
+  Scale, ScaleX, ScaleY: Double;
+  DrawW, DrawH: Integer;
+Begin
+  If Not Assigned(FImagePaintBox) Then
+    Exit;
+  With FImagePaintBox.Canvas Do
+    Begin
+      Brush.Color := clWindow;
+      FillRect(FImagePaintBox.ClientRect);
+    End;
+  If (Not Assigned(FPreviewPicture)) Or (FPreviewPicture.Width < 1) Or (FPreviewPicture.Height < 1) Then
+    Exit;
+  BoxW := FImagePaintBox.ClientWidth;
+  BoxH := FImagePaintBox.ClientHeight;
+  ImgW := FPreviewPicture.Width;
+  ImgH := FPreviewPicture.Height;
+  If (BoxW < 1) Or (BoxH < 1) Then
+    Exit;
+  ScaleX := BoxW / ImgW;
+  ScaleY := BoxH / ImgH;
+  If ScaleX < ScaleY Then
+    Scale := ScaleX
+  Else
+    Scale := ScaleY;
+  If Scale > 1 Then
+    Scale := 1; { do not upscale small images past 1:1 }
+  DrawW := Max(1, Round(ImgW * Scale));
+  DrawH := Max(1, Round(ImgH * Scale));
+  Dest.Left := (BoxW - DrawW) Div 2;
+  Dest.Top := (BoxH - DrawH) Div 2;
+  Dest.Right := Dest.Left + DrawW;
+  Dest.Bottom := Dest.Top + DrawH;
+  FImagePaintBox.Canvas.StretchDraw(Dest, FPreviewPicture.Graphic);
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -600,6 +1058,7 @@ Begin
   CancelPendingScroll;
   FDiffText := '';
   FBrowseSha := '';
+  ShowEditorPane;
   If Assigned(FEdit) Then
     FEdit.Lines.Clear;
   If Assigned(FCaption) Then
@@ -1260,6 +1719,7 @@ Begin
   If (FMode <> dvmBrowse) Or Not IsAlive Then
     Exit;
   CancelPendingScroll;
+  ShowEditorPane;
   FEdit.Lines.Clear;
   FDiffText := '';
   If (FFileList.ItemIndex < 0) Or (FFileList.ItemIndex >= FFileList.Items.Count) Then
@@ -1277,32 +1737,46 @@ Begin
     End;
 
   ExpectedSha := FBrowseSha;
+  If TryShowBinaryOrImage(Path, Path, FBrowseSha, False) Then
+    Exit;
+  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Or (FMode <> dvmBrowse) Then
+    Exit;
+
   GitClient.RepoPath := FRepoPath;
   If Not GitClient.ShowCommitPathDiff(FBrowseSha, Path, DiffText) Then
     Begin
       If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
         Exit;
+      ShowEditorPane;
       FEdit.Highlighter := Nil;
       FEdit.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
       UpdateActionEnabled;
       Exit;
     End;
 
-  { Repo/form may have been rebound while git ran (project switch). }
   If Not IsAlive Or (FBrowseSha <> ExpectedSha) Or (FMode <> dvmBrowse) Then
     Exit;
+
+  If DiffTextLooksBinary(DiffText) Then
+    Begin
+      If TryShowBinaryOrImage(Path, Path, FBrowseSha, False) Then
+        Exit;
+      ShowBinaryMessage(Path);
+      Exit;
+    End;
 
   ApplyIDEEditorAppearance;
   FDiffText := DiffText;
   If Trim(DiffText) = '' Then
     Begin
+      ShowEditorPane;
       FreeOwnedLanguageHighlighter;
       FEdit.Highlighter := Nil;
       FEdit.Lines.Text := '(no textual diff for ' + Path + ')';
     End
   Else
     Begin
-      ApplyDiffHighlighter;
+      ApplyMixedDiffHighlighter(Path);
       FEdit.Lines.Text := DiffText;
       Inc(FScrollGeneration);
       Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
@@ -1326,6 +1800,14 @@ Begin
   If Title <> '' Then
     FCaption.Caption := Title;
   ApplyIDEEditorAppearance;
+  If DiffTextLooksBinary(DiffText) And (SourceFileName <> '') Then
+    Begin
+      If TryShowBinaryOrImage(Title, SourceFileName, '', FStagedSide) Then
+        Exit;
+      ShowBinaryMessage(Title);
+      Exit;
+    End;
+  ShowEditorPane;
   FDiffText := DiffText;
   If Trim(DiffText) = '' Then
     Begin
@@ -1335,11 +1817,7 @@ Begin
       UpdateActionEnabled;
       Exit;
     End;
-  { Diff highlighter only. SourceFileName is reserved for future context-line language HL
-    (a TLazEditEmptyHighlighter must not be assigned as SynEdit.Highlighter). }
-  If Length(SourceFileName) < 0 Then
-    Exit; { keep parameter live for API; never taken }
-  ApplyDiffHighlighter;
+  ApplyMixedDiffHighlighter(SourceFileName);
   FEdit.Lines.Text := DiffText;
   Inc(FScrollGeneration);
   Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
@@ -1349,6 +1827,7 @@ End;
 Procedure TGitDiffView.LoadDiff(Const Title, DiffText: String);
 Begin
   SetViewMode(dvmStaging);
+  ShowEditorPane;
   If Title <> '' Then
     FCaption.Caption := Title
   Else
@@ -1375,7 +1854,15 @@ Begin
   If FMode = dvmEditorOnly Then
     ApplyViewMode;
   ApplyIDEEditorAppearance;
+  ShowEditorPane;
   FDiffText := '';
+  If (SourceFileName <> '') And FileExtensionIsLikelyBinary(ExtractFileExt(SourceFileName)) Then
+    Begin
+      If TryShowBinaryOrImage(Title, SourceFileName, '', FStagedSide) Then
+        Exit;
+      ShowBinaryMessage(Title);
+      Exit;
+    End;
   { Prefer IDE language highlighter for known types (e.g. FreePascal for .pas). }
   If SourceFileName <> '' Then
     ApplyLanguageHighlighter(SourceFileName)

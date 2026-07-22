@@ -38,6 +38,8 @@ Type
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
       Out OutputText: String; Out ExitCode: Integer): Boolean;
+    Function RunGitBinary(Const Args: Array Of String; Stream: TStream;
+      Out ExitCode: Integer): Boolean;
     Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
     Function CountRangeCommits(Const RangeSpec: String): Integer;
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
@@ -59,8 +61,14 @@ Type
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { True when Path is tracked in the index (not untracked). }
     Function IsPathTracked(Const Path: String): Boolean;
+    { Absolute path for a repo-relative working-tree path. }
+    Function WorkingTreeFullPath(Const Path: String): String;
     { Working-tree file contents (for clean tracked files with no diff). }
     Function ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
+    { Raw bytes from working tree into Stream (from start of Stream). }
+    Function ReadWorkingTreeBytes(Const Path: String; Stream: TStream): Boolean;
+    { Raw blob bytes: working tree (Sha=''), index (:path when Staged), or commit (Sha:path). }
+    Function ReadBlobBytes(Const Sha, Path: String; Staged: Boolean; Stream: TStream): Boolean;
     { Apply a unified diff to the index (partial stage/unstage). Reverse undoes it. }
     Function ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean = False): Boolean;
     { Full history index (SHA + parents only). Safe from worker threads. }
@@ -233,6 +241,69 @@ Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
   Out ExitCode: Integer): Boolean;
 Begin
   Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
+End;
+
+Function TGitService.RunGitBinary(Const Args: Array Of String; Stream: TStream;
+  Out ExitCode: Integer): Boolean;
+Var
+  Proc: TProcess;
+  I, BytesRead: Integer;
+  Buf: Array[0..8191] Of Byte;
+Begin
+  Result := False;
+  ExitCode := -1;
+  FLastError := '';
+  If (FRepoPath = '') Or (Stream = Nil) Then
+    Begin
+      FLastError := 'No repository path set';
+      Exit;
+    End;
+  Proc := TProcess.Create(Nil);
+  Try
+    Proc.Executable := 'git';
+    Proc.CurrentDirectory := FRepoPath;
+    Proc.Options := [poUsePipes, poNoConsole];
+    Proc.Parameters.Clear;
+    For I := 0 To High(Args) Do
+      Proc.Parameters.Add(Args[I]);
+    Try
+      Proc.Execute;
+      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
+        Begin
+          If Proc.Output.NumBytesAvailable > 0 Then
+            Begin
+              BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+              If BytesRead > 0 Then
+                Stream.WriteBuffer(Buf[0], BytesRead);
+            End
+          Else If Proc.Running Then
+            Sleep(1);
+        End;
+      While Proc.Output.NumBytesAvailable > 0 Do
+        Begin
+          BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+          If BytesRead > 0 Then
+            Stream.WriteBuffer(Buf[0], BytesRead)
+          Else
+            Break;
+        End;
+      { Drain stderr so the process cannot block on a full pipe. }
+      While Proc.Stderr.NumBytesAvailable > 0 Do
+        Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+      ExitCode := Proc.ExitStatus;
+      Result := ExitCode = 0;
+      If Not Result Then
+        FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+    Except
+      On E: Exception Do
+        Begin
+          FLastError := 'Failed to run git: ' + E.Message;
+          Result := False;
+        End;
+    End;
+  Finally
+    Proc.Free;
+  End;
 End;
 
 Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
@@ -516,6 +587,15 @@ Begin
   Result := RunGit(['ls-files', '--error-unmatch', '--', Path], OutputText, ExitCode);
 End;
 
+Function TGitService.WorkingTreeFullPath(Const Path: String): String;
+Begin
+  Result := '';
+  If (Path = '') Or (FRepoPath = '') Then
+    Exit;
+  Result := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) +
+    StringReplace(Path, '/', DirectorySeparator, [rfReplaceAll]);
+End;
+
 Function TGitService.ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
 Var
   FullPath: String;
@@ -523,10 +603,9 @@ Var
 Begin
   Result := False;
   Content := '';
-  If (Path = '') Or (FRepoPath = '') Then
+  FullPath := WorkingTreeFullPath(Path);
+  If FullPath = '' Then
     Exit;
-  FullPath := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) +
-    StringReplace(Path, '/', DirectorySeparator, [rfReplaceAll]);
   If Not FileExists(FullPath) Then
     Begin
       FLastError := 'File not found: ' + FullPath;
@@ -545,6 +624,60 @@ Begin
   Finally
     List.Free;
   End;
+End;
+
+Function TGitService.ReadWorkingTreeBytes(Const Path: String; Stream: TStream): Boolean;
+Var
+  FullPath: String;
+  FS: TFileStream;
+Begin
+  Result := False;
+  If Stream = Nil Then
+    Exit;
+  FullPath := WorkingTreeFullPath(Path);
+  If (FullPath = '') Or Not FileExists(FullPath) Then
+    Begin
+      FLastError := 'File not found: ' + FullPath;
+      Exit;
+    End;
+  Try
+    FS := TFileStream.Create(FullPath, fmOpenRead Or fmShareDenyNone);
+    Try
+      Stream.CopyFrom(FS, 0);
+      Result := True;
+    Finally
+      FS.Free;
+    End;
+  Except
+    On E: Exception Do
+      FLastError := 'Could not read file: ' + E.Message;
+  End;
+End;
+
+Function TGitService.ReadBlobBytes(Const Sha, Path: String; Staged: Boolean; Stream: TStream): Boolean;
+Var
+  ExitCode: Integer;
+  Spec: String;
+Begin
+  Result := False;
+  If (Path = '') Or (Stream = Nil) Then
+    Exit;
+  If Sha = '' Then
+    Begin
+      If Staged Then
+        Begin
+          { Indexed blob for path. }
+          Spec := ':' + StringReplace(Path, '\', '/', [rfReplaceAll]);
+          Result := RunGitBinary(['show', Spec], Stream, ExitCode);
+        End
+      Else
+        Result := ReadWorkingTreeBytes(Path, Stream);
+    End
+  Else
+    Begin
+      Spec := Sha + ':' + StringReplace(Path, '\', '/', [rfReplaceAll]);
+      Result := RunGitBinary(['show', Spec], Stream, ExitCode);
+    End;
 End;
 
 Function TGitService.DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;

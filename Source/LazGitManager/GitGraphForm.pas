@@ -1328,6 +1328,9 @@ Begin
         Else
           Title := 'Working tree: ' + Path;
         GitClient.RepoPath := FRepoPath;
+        { Images/binary: never dump bytes into SynEdit. }
+        If FFilesDiffView.LoadBinaryOrImagePreview(Title, Path, '', StagedSide) Then
+          Exit;
         If GitClient.DiffPath(Path, StagedSide, DiffText) Then
           Begin
             If Trim(DiffText) = '' Then

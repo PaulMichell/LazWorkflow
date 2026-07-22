@@ -125,6 +125,41 @@ object GitDiffView: TGitDiffView
       Highlighter = FHigh
       Keystrokes = <>
     end
+    object FPreviewPanel: TPanel
+      Left = 4
+      Height = 257
+      Top = 4
+      Width = 407
+      Align = alClient
+      BorderSpacing.Around = 4
+      BevelOuter = bvNone
+      Color = clWindow
+      ParentBackground = False
+      ParentColor = False
+      TabOrder = 1
+      Visible = False
+      object FBinaryLabel: TLabel
+        Left = 0
+        Height = 257
+        Top = 0
+        Width = 407
+        Align = alClient
+        Alignment = taCenter
+        Caption = 'Non-text binary file contents.'
+        Layout = tlCenter
+        ParentColor = False
+        Visible = False
+      end
+      object FImagePaintBox: TPaintBox
+        Left = 0
+        Height = 257
+        Top = 0
+        Width = 407
+        Align = alClient
+        OnPaint = ImagePaintBoxPaint
+        Visible = False
+      end
+    end
   end
   object FHigh: TSynDiffSyn
     DefaultFilter = 'Diff Files (*.diff,*.patch)|*.diff;*.patch'
