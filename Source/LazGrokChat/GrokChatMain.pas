@@ -21,13 +21,14 @@ Var
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService;
+  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, GrokSettingsForm;
 
 Var
   CmdGrokChat: TIDECommand;
   CmdGrokNewChat: TIDECommand;
   CmdGrokOpenMarkdown: TIDECommand;
   CmdGrokBuild: TIDECommand;
+  CmdGrokSettings: TIDECommand;
 
 Procedure ShowGrokChatWindow(Sender: TObject);
 Begin
@@ -35,10 +36,19 @@ Begin
 End;
 
 Procedure DoGrokNewChat(Sender: TObject);
+Var
+  Form: TCustomForm;
 Begin
   WorkflowLogger.Info('GrokChat', 'New chat requested');
   ShowGrokChatWindow(Sender);
-  { TODO: tell form to start new conversation }
+  Form := IDEWindowCreators.GetForm(GrokChatWindowCreator.FormName, True);
+  If Form Is TGrokChatForm Then
+    TGrokChatForm(Form).StartNewChat;
+End;
+
+Procedure DoGrokSettings(Sender: TObject);
+Begin
+  ShowGrokSettingsForm;
 End;
 
 Procedure DoGrokOpenMarkdown(Sender: TObject);
@@ -78,6 +88,7 @@ Begin
   CmdGrokNewChat := RegisterIDECommand(Cat, 'GrokNewChat', 'New Grok Chat', Key, Nil, @DoGrokNewChat);
   CmdGrokOpenMarkdown := RegisterIDECommand(Cat, 'GrokOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoGrokOpenMarkdown);
   CmdGrokBuild := RegisterIDECommand(Cat, 'GrokBuild', 'Build Project (Grok)', Key, Nil, @DoGrokBuild);
+  CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Grok Chat Settings', Key, Nil, @DoGrokSettings);
 
   Parent := RegisterIDEMenuSection(itmSecondaryTools, 'GrokSection');
   Parent.Caption := 'Grok';
@@ -86,6 +97,7 @@ Begin
   RegisterIDEMenuCommand(Parent, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
   RegisterIDEMenuSection(Parent, 'GrokSep1');
   RegisterIDEMenuCommand(Parent, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
+  RegisterIDEMenuCommand(Parent, 'GrokSettings', 'Settings…', Nil, Nil, CmdGrokSettings);
 
   GrokChatWindowCreator := IDEWindowCreators.Add('GrokChat', @CreateGrokChatForm, Nil,
     '120', '80', '800', '650');

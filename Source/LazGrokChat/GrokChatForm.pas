@@ -19,10 +19,13 @@ Type
     FNewChatAction: TAction;
     FSendAction: TAction;
     FBuildAction: TAction;
+    FSettingsAction: TAction;
     FToolBar: TToolBar;
     ToolButtonNewChat: TToolButton;
     ToolButtonSep: TToolButton;
     ToolButtonBuild: TToolButton;
+    ToolButtonSep2: TToolButton;
+    ToolButtonSettings: TToolButton;
     FStatusFooter: TStatusFooterFrame;
     FInputPanel: TPanel;
     FSendButton: TButton;
@@ -33,12 +36,22 @@ Type
     Procedure SendActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure BuildActionExecute(Sender: TObject);
+    Procedure SettingsActionExecute(Sender: TObject);
   Private
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
+    FSending: Boolean;
+    FStreamingLineIndex: Integer;
+    FAssistantAccum: String;
     Procedure UpdateStatusFooter;
+    Procedure SetSending(IsSending: Boolean);
     Procedure AppendMessage(Const Role, Content: String);
+    Procedure BeginAssistantReply;
+    Procedure AppendAssistantToken(Const Token: String);
+    Procedure FinishAssistantReply(Const ErrorText: String);
+    Procedure StreamToken(Const Token: String; IsFinished: Boolean; Const ErrorText: String);
+    Procedure RefreshFromConfig;
     { ICompilerFinished }
     Procedure CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
       Const OutputText: String; ErrorCount, WarningCount: Integer);
@@ -48,6 +61,7 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
+    Procedure StartNewChat;
   End;
 
 Implementation
@@ -55,7 +69,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, LazIDEIntf, CompOptsIntf;
+  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, LazIDEIntf, CompOptsIntf;
 
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
@@ -63,19 +77,25 @@ Begin
   FModelName := 'grok-4';
   FContextUsed := 0;
   FContextLimit := 128000;
+  FSending := False;
+  FStreamingLineIndex := -1;
+  FAssistantAccum := '';
   WorkflowEventBus.AddListener(Self);
 End;
 
 Destructor TGrokChatForm.Destroy;
 Begin
+  If Assigned(GrokClient) Then
+    GrokClient.CancelStream;
   WorkflowEventBus.RemoveListener(Self);
   Inherited Destroy;
 End;
 
 Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
+  RefreshFromConfig;
   UpdateStatusFooter;
-  AppendMessage('system', 'Grok Chat ready. Type a message and press Send.');
+  AppendMessage('system', 'Grok Chat ready. Configure your API key under Settings, then send a message.');
   WorkflowLogger.Info('GrokChat', 'Grok Chat window created');
 End;
 
@@ -84,18 +104,46 @@ Begin
   WorkflowLogger.Info('GrokChat', 'Grok Chat window destroyed');
 End;
 
+Procedure TGrokChatForm.RefreshFromConfig;
+Begin
+  If Assigned(GrokChatConfig) And Assigned(GrokClient) Then
+    Begin
+      GrokClient.ApplyConfig(GrokChatConfig);
+      FModelName := GrokChatConfig.Model;
+    End
+  Else If Assigned(GrokClient) Then
+    FModelName := GrokClient.Model;
+  UpdateStatusFooter;
+End;
+
 Procedure TGrokChatForm.UpdateStatusFooter;
 Var
   Pct: Integer;
+  StatusText: String;
 Begin
   If FContextLimit > 0 Then
     Pct := (FContextUsed * 100) Div FContextLimit
   Else
     Pct := 0;
+  If FSending Then
+    StatusText := 'Streaming…'
+  Else If Assigned(GrokChatConfig) And GrokChatConfig.HasApiKey Then
+    StatusText := 'Ready'
+  Else
+    StatusText := 'No API key';
   FStatusFooter.SetAll(
     Format('Model: %s', [FModelName]),
-    Format('Context: %d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
-    'Ready');
+    Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
+    StatusText);
+End;
+
+Procedure TGrokChatForm.SetSending(IsSending: Boolean);
+Begin
+  FSending := IsSending;
+  FSendAction.Enabled := Not IsSending;
+  FNewChatAction.Enabled := Not IsSending;
+  FInputEdit.ReadOnly := IsSending;
+  UpdateStatusFooter;
 End;
 
 Procedure TGrokChatForm.AppendMessage(Const Role, Content: String);
@@ -106,33 +154,144 @@ Begin
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
+Procedure TGrokChatForm.BeginAssistantReply;
+Begin
+  FAssistantAccum := '';
+  FChatMemo.Lines.Add('');
+  FChatMemo.Lines.Add('[ASSISTANT]');
+  FChatMemo.Lines.Add('');
+  FStreamingLineIndex := FChatMemo.Lines.Count - 1;
+  FChatMemo.SelStart := Length(FChatMemo.Text);
+End;
+
+Procedure TGrokChatForm.AppendAssistantToken(Const Token: String);
+Var
+  I: Integer;
+  Parts: TStringList;
+Begin
+  If FStreamingLineIndex < 0 Then
+    BeginAssistantReply;
+  If Pos(#10, Token) > 0 Then
+    Begin
+      Parts := TStringList.Create;
+      Try
+        Parts.Text := StringReplace(Token, #13#10, #10, [rfReplaceAll]);
+        If Parts.Count = 0 Then
+          Exit;
+        FChatMemo.Lines[FStreamingLineIndex] := FChatMemo.Lines[FStreamingLineIndex] + Parts[0];
+        For I := 1 To Parts.Count - 1 Do
+          Begin
+            FChatMemo.Lines.Add(Parts[I]);
+            FStreamingLineIndex := FChatMemo.Lines.Count - 1;
+          End;
+      Finally
+        Parts.Free;
+      End;
+    End
+  Else
+    FChatMemo.Lines[FStreamingLineIndex] := FChatMemo.Lines[FStreamingLineIndex] + Token;
+  FAssistantAccum := FAssistantAccum + Token;
+  FChatMemo.SelStart := Length(FChatMemo.Text);
+End;
+
+Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
+Begin
+  If ErrorText <> '' Then
+    Begin
+      If FAssistantAccum = '' Then
+        Begin
+          If FStreamingLineIndex >= 0 Then
+            FChatMemo.Lines[FStreamingLineIndex] := '(error)'
+          Else
+            AppendMessage('assistant', '(error)');
+        End;
+      AppendMessage('system', 'Error: ' + ErrorText);
+      FStatusFooter.SetRightText('Error');
+    End
+  Else
+    Begin
+      If Assigned(GrokClient) And (FAssistantAccum <> '') Then
+        GrokClient.AddMessage(gmrAssistant, FAssistantAccum);
+      FContextUsed := FContextUsed + Length(FAssistantAccum) Div 4 + 20;
+      FStatusFooter.SetRightText('Ready');
+    End;
+  FStreamingLineIndex := -1;
+  FAssistantAccum := '';
+  If Assigned(GrokClient) Then
+    GrokClient.MarkStreamComplete;
+  SetSending(False);
+End;
+
+Procedure TGrokChatForm.StreamToken(Const Token: String; IsFinished: Boolean;
+  Const ErrorText: String);
+Begin
+  { Invoked on the main thread via Synchronize from the stream worker. }
+  If Not IsFinished Then
+    Begin
+      If Token <> '' Then
+        AppendAssistantToken(Token);
+      Exit;
+    End;
+  FinishAssistantReply(ErrorText);
+End;
+
 Procedure TGrokChatForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
 Begin
+  If FSending Then
+    Exit;
   UserText := Trim(FInputEdit.Text);
   If UserText = '' Then
     Exit;
+  If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.HasApiKey) Then
+    Begin
+      MessageDlg('Set your Grok API key in Settings before sending.', mtInformation, [mbOK], 0);
+      SettingsActionExecute(Nil);
+      Exit;
+    End;
+  If Not Assigned(GrokClient) Then
+    Exit;
+
+  RefreshFromConfig;
   AppendMessage('user', UserText);
   FInputEdit.Clear;
-  FStatusFooter.SetRightText('Thinking...');
-  { TODO: call GrokClient.SendAndStream asynchronously and stream reply }
-  AppendMessage('assistant', '(Streaming reply will appear here – Phase 2)');
-  FContextUsed := FContextUsed + Length(UserText) Div 4 + 50;
+  GrokClient.AddMessage(gmrUser, UserText);
+  FContextUsed := FContextUsed + Length(UserText) Div 4 + 8;
+  BeginAssistantReply;
+  SetSending(True);
+  FStatusFooter.SetRightText('Streaming…');
+
+  If Not GrokClient.StartStream(@StreamToken) Then
+    Begin
+      FinishAssistantReply(GrokClient.LastError);
+      Exit;
+    End;
+End;
+
+Procedure TGrokChatForm.StartNewChat;
+Begin
+  If FSending And Assigned(GrokClient) Then
+    GrokClient.CancelStream;
+  SetSending(False);
+  FChatMemo.Clear;
+  FContextUsed := 0;
+  FStreamingLineIndex := -1;
+  FAssistantAccum := '';
+  If Assigned(GrokClient) Then
+    GrokClient.ClearHistory;
+  AppendMessage('system', 'New conversation started.');
   UpdateStatusFooter;
 End;
 
 Procedure TGrokChatForm.NewChatActionExecute(Sender: TObject);
 Begin
-  FChatMemo.Clear;
-  FContextUsed := 0;
-  AppendMessage('system', 'New conversation started.');
-  UpdateStatusFooter;
+  StartNewChat;
 End;
 
 Procedure TGrokChatForm.BuildActionExecute(Sender: TObject);
 Begin
-  FStatusFooter.SetRightText('Building...');
+  FStatusFooter.SetRightText('Building…');
   If Assigned(LazarusIDE) Then
     LazarusIDE.DoBuildProject(crCompile, [])
   Else
@@ -140,6 +299,12 @@ Begin
       AppendMessage('system', 'LazarusIDE not available – cannot build.');
       FStatusFooter.SetRightText('Ready');
     End;
+End;
+
+Procedure TGrokChatForm.SettingsActionExecute(Sender: TObject);
+Begin
+  ShowGrokSettingsForm;
+  RefreshFromConfig;
 End;
 
 Procedure TGrokChatForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;

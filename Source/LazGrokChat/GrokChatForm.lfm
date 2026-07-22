@@ -25,6 +25,10 @@ object GrokChatForm: TGrokChatForm
       Caption = 'Build'
       OnExecute = BuildActionExecute
     end
+    object FSettingsAction: TAction
+      Caption = 'Settings'
+      OnExecute = SettingsActionExecute
+    end
   end
   object FToolBar: TToolBar
     Left = 0
@@ -51,6 +55,18 @@ object GrokChatForm: TGrokChatForm
       Left = 84
       Top = 2
       Action = FBuildAction
+    end
+    object ToolButtonSep2: TToolButton
+      Left = 140
+      Height = 22
+      Top = 2
+      Caption = 'ToolButtonSep2'
+      Style = tbsSeparator
+    end
+    object ToolButtonSettings: TToolButton
+      Left = 148
+      Top = 2
+      Action = FSettingsAction
     end
   end
   inline FStatusFooter: TStatusFooterFrame
