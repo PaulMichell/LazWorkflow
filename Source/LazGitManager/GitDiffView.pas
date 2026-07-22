@@ -88,8 +88,9 @@ Type
     FLineDragAnchor: Integer; { 1-based }
     FLineDragWasSelected: Boolean;
     FLineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
-    FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta headers }
+    FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta / @@ headers }
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
+    FHunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyEditorSelectionPolicy;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
@@ -139,10 +140,13 @@ Type
       X, Y: Integer);
     Procedure EditPaintEvent(Sender: TObject; EventType: TSynPaintEvent; Const rcClip: TRect);
     Procedure ClearDisplayMap;
+    Procedure RebuildVisualHunkStarts;
+    Function IsVisualHunkStart(LineNo: Integer): Boolean;
     Procedure SetEditorDiffText(Const DiffText: String; HideFileHeaders: Boolean);
     Function FullLineIsSelected(FullLineNo: Integer): Boolean;
     Function IsHunkHeaderLine(Const Line: String): Boolean;
     Function IsDiffFileMetaLine(Const Line: String): Boolean;
+    Function LinePixelTop(LineNo: Integer; Out Y: Integer): Boolean;
     Function HunkMarkerRect(LineNo: Integer): TRect;
     Function PointInHunkMarker(X, Y, LineNo: Integer): Boolean;
     Procedure PaintHunkDecorations(PaintCanvas: TCanvas);
@@ -578,6 +582,7 @@ Begin
   FLineDragWasSelected := False;
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
+  FHunkStartLines := TFPList.Create;
   FPreviewPicture := TPicture.Create;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
@@ -595,6 +600,7 @@ Begin
   FreeAndNil(FPreviewPicture);
   FreeAndNil(FLineDragSnapshot);
   FreeAndNil(FSelectedLines);
+  FreeAndNil(FHunkStartLines);
   FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
@@ -798,6 +804,50 @@ Procedure TGitDiffView.ClearDisplayMap;
 Begin
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
+  If Assigned(FHunkStartLines) Then
+    FHunkStartLines.Clear;
+End;
+
+Procedure TGitDiffView.RebuildVisualHunkStarts;
+Const
+  HunkContextGap = 6; { unchanged context lines that separate visual hunks }
+Var
+  LineNo, ContextRun: Integer;
+  LineText: String;
+  NeedNewHunk: Boolean;
+Begin
+  If Assigned(FHunkStartLines) Then
+    FHunkStartLines.Clear;
+  If (Not Assigned(FEdit)) Or (Not Assigned(FHunkStartLines)) Or (FEdit.Lines.Count = 0) Then
+    Exit;
+
+  ContextRun := HunkContextGap; { first change always starts a hunk }
+  NeedNewHunk := True;
+  For LineNo := 1 To FEdit.Lines.Count Do
+    Begin
+      LineText := FEdit.Lines[LineNo - 1];
+      If IsDiffChangeLine(LineText) Then
+        Begin
+          If NeedNewHunk Or (ContextRun >= HunkContextGap) Then
+            FHunkStartLines.Add(Pointer(PtrInt(LineNo)));
+          ContextRun := 0;
+          NeedNewHunk := False;
+        End
+      Else
+        Inc(ContextRun);
+    End;
+End;
+
+Function TGitDiffView.IsVisualHunkStart(LineNo: Integer): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  If Not Assigned(FHunkStartLines) Then
+    Exit;
+  For I := 0 To FHunkStartLines.Count - 1 Do
+    If PtrInt(FHunkStartLines[I]) = LineNo Then
+      Exit(True);
 End;
 
 Procedure TGitDiffView.SetEditorDiffText(Const DiffText: String; HideFileHeaders: Boolean);
@@ -812,6 +862,7 @@ Begin
   If Not HideFileHeaders Then
     Begin
       FEdit.Lines.Text := DiffText;
+      RebuildVisualHunkStarts;
       Exit;
     End;
 
@@ -824,7 +875,8 @@ Begin
       Begin
         Line := Full[I];
         FullLineNo := I + 1;
-        If LineIsDiffFileMeta(Line) Then
+        { Drop file meta and git @@ headers — visual rules mark hunks instead. }
+        If LineIsDiffFileMeta(Line) Or LineIsHunkHeader(Line) Then
           Continue;
         Display.Add(Line);
         FDisplayToFull[Display.Count - 1] := FullLineNo;
@@ -832,6 +884,7 @@ Begin
     SetLength(FDisplayToFull, Display.Count);
     FUseDisplayMap := True;
     FEdit.Lines.Assign(Display);
+    RebuildVisualHunkStarts;
   Finally
     Display.Free;
     Full.Free;
@@ -864,35 +917,44 @@ Begin
   Result := LineIsDiffFileMeta(Line);
 End;
 
-Function TGitDiffView.HunkMarkerRect(LineNo: Integer): TRect;
+Function TGitDiffView.LinePixelTop(LineNo: Integer; Out Y: Integer): Boolean;
 Var
-  ScreenPt: TPoint;
   Scr: TPoint;
-  GutterW, MidY, Size: Integer;
 Begin
-  Result := Rect(0, 0, 0, 0);
+  Result := False;
+  Y := 0;
   If (Not Assigned(FEdit)) Or (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
     Exit;
   Scr := FEdit.TextXYToScreenXY(Point(1, LineNo));
   If Scr.Y < 1 Then
-    Exit; { above / not on screen }
-  ScreenPt := FEdit.ScreenXYToPixels(Scr);
-  If (ScreenPt.Y + FEdit.LineHeight < 0) Or (ScreenPt.Y > FEdit.ClientHeight) Then
     Exit;
-  GutterW := FEdit.Gutter.Width;
-  If Not FEdit.Gutter.Visible Then
-    GutterW := 0;
-  If GutterW < 10 Then
+  Y := FEdit.ScreenXYToPixels(Scr).Y;
+  If (Y + FEdit.LineHeight < 0) Or (Y > FEdit.ClientHeight) Then
     Exit;
-  Size := Max(8, FEdit.LineHeight - 4);
-  If Size > 12 Then
-    Size := 12;
-  MidY := ScreenPt.Y + (FEdit.LineHeight Div 2);
-  { Triangle sits in the right edge of the left gutter. }
-  Result.Right := GutterW - 2;
-  Result.Left := Result.Right - Size;
-  Result.Top := MidY - (Size Div 2);
-  Result.Bottom := Result.Top + Size;
+  Result := True;
+End;
+
+Function TGitDiffView.HunkMarkerRect(LineNo: Integer): TRect;
+Const
+  MarkerW = 14;
+  RectH = 6;
+  TriH = 10;
+Var
+  Y, GutterW: Integer;
+Begin
+  { Marker sits at the left of the gutter (before line numbers). Base on the rule line. }
+  Result := Rect(0, 0, 0, 0);
+  If Not LinePixelTop(LineNo, Y) Then
+    Exit;
+  GutterW := 0;
+  If Assigned(FEdit) And FEdit.Gutter.Visible Then
+    GutterW := FEdit.Gutter.Width;
+  If GutterW < MarkerW + 4 Then
+    Exit;
+  Result.Left := 2;
+  Result.Right := Result.Left + MarkerW;
+  Result.Top := Y; { base of silhouette on the ruled line }
+  Result.Bottom := Y + RectH + TriH;
 End;
 
 Function TGitDiffView.PointInHunkMarker(X, Y, LineNo: Integer): Boolean;
@@ -905,18 +967,17 @@ Begin
 End;
 
 Procedure TGitDiffView.PaintHunkDecorations(PaintCanvas: TCanvas);
+Const
+  MarkerW = 14;
+  RectH = 6;
+  TriH = 10;
 Var
-  LineNo, Y, X1, X2, GutterW: Integer;
-  R: TRect;
-  MidX: Integer;
-  Scr: TPoint;
-  Pts: Array[0..2] Of TPoint;
+  I, LineNo, Y, X1, X2, LeftX, RightX, MidX: Integer;
+  Pts: Array[0..4] Of TPoint;
 Begin
-  If (FMode <> dvmEditorOnly) Or (Not Assigned(FEdit)) Then
+  If (FMode <> dvmEditorOnly) Or (Not Assigned(FEdit)) Or (Not Assigned(FHunkStartLines)) Then
     Exit;
-  GutterW := 0;
-  If FEdit.Gutter.Visible Then
-    GutterW := FEdit.Gutter.Width;
+
   X1 := 0;
   X2 := FEdit.ClientWidth;
   If FEdit.RightGutter.Visible Then
@@ -926,28 +987,28 @@ Begin
   PaintCanvas.Pen.Width := 1;
   PaintCanvas.Pen.Style := psSolid;
 
-  For LineNo := 1 To FEdit.Lines.Count Do
+  For I := 0 To FHunkStartLines.Count - 1 Do
     Begin
-      If Not IsHunkHeaderLine(FEdit.Lines[LineNo - 1]) Then
+      LineNo := Integer(PtrInt(FHunkStartLines[I]));
+      If Not LinePixelTop(LineNo, Y) Then
         Continue;
-      R := HunkMarkerRect(LineNo);
-      If R.Right <= R.Left Then
-        Continue; { not visible }
 
-      Scr := FEdit.TextXYToScreenXY(Point(1, LineNo));
-      Y := FEdit.ScreenXYToPixels(Scr).Y;
-      { 1px black rule across gutter + text area at hunk start. }
+      { 1px black rule across gutter + text at the visual hunk start. }
       PaintCanvas.Pen.Color := clBlack;
       PaintCanvas.MoveTo(X1, Y);
       PaintCanvas.LineTo(X2, Y);
 
-      { Down-pointing triangle: dark blue outline, filled light blue. }
-      MidX := (R.Left + R.Right) Div 2;
-      Pts[0] := Point(R.Left, R.Top + 1);
-      Pts[1] := Point(R.Right - 1, R.Top + 1);
-      Pts[2] := Point(MidX, R.Bottom - 1);
+      { Silhouette: rectangular base on the rule, then downward triangle (before line numbers). }
+      LeftX := 2;
+      RightX := LeftX + MarkerW;
+      MidX := (LeftX + RightX) Div 2;
+      Pts[0] := Point(LeftX, Y);
+      Pts[1] := Point(RightX, Y);
+      Pts[2] := Point(RightX, Y + RectH);
+      Pts[3] := Point(MidX, Y + RectH + TriH);
+      Pts[4] := Point(LeftX, Y + RectH);
       PaintCanvas.Brush.Style := bsSolid;
-      PaintCanvas.Brush.Color := RGBToColor(100, 181, 246);
+      PaintCanvas.Brush.Color := RGBToColor(66, 165, 245);
       PaintCanvas.Pen.Color := RGBToColor(13, 71, 161);
       PaintCanvas.Polygon(Pts);
     End;
@@ -1640,12 +1701,23 @@ Begin
   FEdit.CaretY := LineNo;
   FEdit.CaretX := 1;
 
-  { Hunk marker (triangle) or click on @@ line selects all change lines in the hunk. }
-  If IsHunkHeaderLine(LineText) Or PointInHunkMarker(X, Y, LineNo) Then
+  { Hunk marker silhouette: select all change lines in that visual hunk. }
+  If FMode = dvmEditorOnly Then
     Begin
-      FLineDragActive := False;
-      SelectHunkAtLine(LineNo);
-      Exit;
+      If Assigned(FHunkStartLines) Then
+        For I := 0 To FHunkStartLines.Count - 1 Do
+          If PointInHunkMarker(X, Y, Integer(PtrInt(FHunkStartLines[I]))) Then
+            Begin
+              FLineDragActive := False;
+              SelectHunkAtLine(Integer(PtrInt(FHunkStartLines[I])));
+              Exit;
+            End;
+      If IsVisualHunkStart(LineNo) And (X < FEdit.Gutter.Width) Then
+        Begin
+          FLineDragActive := False;
+          SelectHunkAtLine(LineNo);
+          Exit;
+        End;
     End;
 
   { Drag may start on a context line and still sweep change lines; only change
@@ -2143,7 +2215,7 @@ End;
 
 Function TGitDiffView.FindHunkBounds(AtLine: Integer; Out FirstLine, LastLine: Integer): Boolean;
 Var
-  I, Count: Integer;
+  I, Count, StartLine, NextStart: Integer;
   Line: String;
 Begin
   Result := False;
@@ -2154,7 +2226,36 @@ Begin
   Count := FEdit.Lines.Count;
   If (AtLine < 1) Or (AtLine > Count) Then
     Exit;
-  { Walk up to the hunk header (@@). }
+
+  { Files tab: visual hunks = change groups separated by 6+ context lines. }
+  If (FMode = dvmEditorOnly) And Assigned(FHunkStartLines) And (FHunkStartLines.Count > 0) Then
+    Begin
+      FirstLine := 0;
+      For I := 0 To FHunkStartLines.Count - 1 Do
+        Begin
+          StartLine := Integer(PtrInt(FHunkStartLines[I]));
+          If StartLine <= AtLine Then
+            FirstLine := StartLine
+          Else
+            Break;
+        End;
+      If FirstLine < 1 Then
+        Exit;
+      LastLine := Count;
+      For I := 0 To FHunkStartLines.Count - 1 Do
+        Begin
+          NextStart := Integer(PtrInt(FHunkStartLines[I]));
+          If NextStart > FirstLine Then
+            Begin
+              LastLine := NextStart - 1;
+              Break;
+            End;
+        End;
+      Result := LastLine >= FirstLine;
+      Exit;
+    End;
+
+  { Staging / History-style: git @@ headers. }
   I := AtLine;
   While I >= 1 Do
     Begin
@@ -2165,12 +2266,11 @@ Begin
           Break;
         End;
       If Copy(Line, 1, 11) = 'diff --git ' Then
-        Exit; { left the current file section without a hunk }
+        Exit;
       Dec(I);
     End;
   If FirstLine < 1 Then
     Exit;
-  { Walk down to the next hunk or file header. }
   LastLine := Count;
   For I := FirstLine + 1 To Count Do
     Begin
