@@ -141,33 +141,30 @@ Function BuildChatRequestJson(Const Model, SystemPrompt: String;
   Const Messages: Array Of TGrokMessage): String;
 Var
   I: Integer;
-  Parts: TStringList;
-  RoleName, Content: String;
+  MsgJson, Joined: String;
   HasSystem: Boolean;
 Begin
-  Parts := TStringList.Create;
-  Try
-    Parts.StrictDelimiter := True;
-    Parts.Delimiter := ',';
-    HasSystem := False;
-    If Trim(SystemPrompt) <> '' Then
-      Begin
-        Parts.Add(Format('{"role":"system","content":"%s"}', [JsonEscape(SystemPrompt)]));
-        HasSystem := True;
-      End;
-    For I := 0 To High(Messages) Do
-      Begin
-        If (Messages[I].Role = gmrSystem) And HasSystem Then
-          Continue;
-        RoleName := RoleToJson(Messages[I].Role);
-        Content := JsonEscape(Messages[I].Content);
-        Parts.Add(Format('{"role":"%s","content":"%s"}', [RoleName, Content]));
-      End;
-    Result := Format('{"model":"%s","stream":true,"messages":[%s]}',
-      [JsonEscape(Model), Parts.DelimitedText]);
-  Finally
-    Parts.Free;
-  End;
+  { Do not use TStringList.DelimitedText — QuoteChar wraps each part in extra "…"
+    and produces invalid nested JSON (xAI returns HTTP 422). }
+  Joined := '';
+  HasSystem := False;
+  If Trim(SystemPrompt) <> '' Then
+    Begin
+      Joined := Format('{"role":"system","content":"%s"}', [JsonEscape(SystemPrompt)]);
+      HasSystem := True;
+    End;
+  For I := 0 To High(Messages) Do
+    Begin
+      If (Messages[I].Role = gmrSystem) And HasSystem Then
+        Continue;
+      MsgJson := Format('{"role":"%s","content":"%s"}',
+        [RoleToJson(Messages[I].Role), JsonEscape(Messages[I].Content)]);
+      If Joined <> '' Then
+        Joined := Joined + ',';
+      Joined := Joined + MsgJson;
+    End;
+  Result := Format('{"model":"%s","stream":true,"messages":[%s]}',
+    [JsonEscape(Model), Joined]);
 End;
 
 { TGrokSSEStream }
@@ -319,12 +316,17 @@ Begin
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');
       Client.RequestBody := Body;
-      Client.HTTPMethod('POST', Url, OutStream, [200, 201]);
+      { Empty allowed codes: accept any status so we can report the error body. }
+      Client.HTTPMethod('POST', Url, OutStream, []);
       Code := Client.ResponseStatusCode;
       If (Code < 200) Or (Code >= 300) Then
         Begin
-          ErrBody := Client.ResponseStatusText;
-          EmitToken('', True, Format('HTTP %d %s', [Code, ErrBody]));
+          ErrBody := Trim(FSseBuffer);
+          If ErrBody = '' Then
+            ErrBody := Client.ResponseStatusText;
+          If Length(ErrBody) > 400 Then
+            ErrBody := Copy(ErrBody, 1, 400) + '…';
+          EmitToken('', True, Format('HTTP %d: %s', [Code, ErrBody]));
           Exit;
         End;
       If FSseBuffer <> '' Then
