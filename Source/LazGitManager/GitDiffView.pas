@@ -82,6 +82,12 @@ Type
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
     FSelectedLines: TFPList; { 1-based line numbers (PtrInt) for Files multi-select }
+    FLineDragActive: Boolean;
+    FLineDragMoved: Boolean;
+    FLineDragCtrl: Boolean;
+    FLineDragAnchor: Integer; { 1-based }
+    FLineDragWasSelected: Boolean;
+    FLineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyEditorSelectionPolicy;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
@@ -94,8 +100,11 @@ Type
     Function IsLineSelected(LineNo: Integer): Boolean;
     Function SelectedLineCount: Integer;
     Function SelectedLineBounds(Out FirstLine, LastLine: Integer): Boolean;
+    Procedure AddLineToSelection(LineNo: Integer);
     Procedure ToggleLineSelection(LineNo: Integer);
-    Procedure SelectChangeLinesInRange(StartLine, EndLine: Integer);
+    Procedure SelectChangeLinesInRange(StartLine, EndLine: Integer; MergeWithSnapshot: Boolean = False);
+    Procedure ApplyDragLineRange(ToLine: Integer);
+    Function LineAtMouse(X, Y: Integer): Integer;
     Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
     Procedure ApplyDiffHighlighter;
@@ -122,6 +131,9 @@ Type
     Procedure EditSpecialLineColors(Sender: TObject; Line: Integer; Var Special: Boolean;
       Var FG, BG: TColor);
     Procedure EditMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
+      X, Y: Integer);
+    Procedure EditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
+    Procedure EditMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
       X, Y: Integer);
     Procedure ClearTreeData;
     Procedure ShowSelectedBrowseFile;
@@ -529,6 +541,12 @@ Begin
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
   FSelectedLines := TFPList.Create;
+  FLineDragSnapshot := TFPList.Create;
+  FLineDragActive := False;
+  FLineDragMoved := False;
+  FLineDragCtrl := False;
+  FLineDragAnchor := 0;
+  FLineDragWasSelected := False;
   FPreviewPicture := TPicture.Create;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
@@ -542,6 +560,7 @@ Begin
   CancelPendingScroll;
   FreeOwnedLanguageHighlighter;
   FreeAndNil(FPreviewPicture);
+  FreeAndNil(FLineDragSnapshot);
   FreeAndNil(FSelectedLines);
   FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
@@ -730,6 +749,8 @@ Begin
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
   FEdit.OnDblClick := @EditDblClick;
   FEdit.OnMouseDown := @EditMouseDown;
+  FEdit.OnMouseMove := @EditMouseMove;
+  FEdit.OnMouseUp := @EditMouseUp;
   FEdit.OnSpecialLineColors := @EditSpecialLineColors;
   FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
@@ -823,6 +844,15 @@ Begin
   Result := (FirstLine >= 1) And (LastLine >= FirstLine);
 End;
 
+Procedure TGitDiffView.AddLineToSelection(LineNo: Integer);
+Begin
+  If (Not Assigned(FSelectedLines)) Or (LineNo < 1) Then
+    Exit;
+  If IsLineSelected(LineNo) Then
+    Exit;
+  FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+End;
+
 Procedure TGitDiffView.ToggleLineSelection(LineNo: Integer);
 Var
   I: Integer;
@@ -846,27 +876,60 @@ Begin
   DoSelectionChanged;
 End;
 
-Procedure TGitDiffView.SelectChangeLinesInRange(StartLine, EndLine: Integer);
+Procedure TGitDiffView.SelectChangeLinesInRange(StartLine, EndLine: Integer;
+  MergeWithSnapshot: Boolean);
 Var
-  LineNo: Integer;
+  LineNo, Lo, Hi, I: Integer;
   LineText: String;
 Begin
-  ClearLineSelection(False);
   If (Not Assigned(FEdit)) Or (Not Assigned(FSelectedLines)) Then
     Exit;
-  If StartLine < 1 Then
-    StartLine := 1;
-  If EndLine > FEdit.Lines.Count Then
-    EndLine := FEdit.Lines.Count;
-  For LineNo := StartLine To EndLine Do
+  Lo := StartLine;
+  Hi := EndLine;
+  If Lo > Hi Then
+    Begin
+      Lo := EndLine;
+      Hi := StartLine;
+    End;
+  If Lo < 1 Then
+    Lo := 1;
+  If Hi > FEdit.Lines.Count Then
+    Hi := FEdit.Lines.Count;
+
+  FSelectedLines.Clear;
+  If MergeWithSnapshot And Assigned(FLineDragSnapshot) Then
+    For I := 0 To FLineDragSnapshot.Count - 1 Do
+      FSelectedLines.Add(FLineDragSnapshot[I]);
+
+  For LineNo := Lo To Hi Do
     Begin
       LineText := FEdit.Lines[LineNo - 1];
       If IsDiffChangeLine(LineText) Then
-        FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+        AddLineToSelection(LineNo);
     End;
   FEdit.Invalidate;
   UpdateActionEnabled;
   DoSelectionChanged;
+End;
+
+Function TGitDiffView.LineAtMouse(X, Y: Integer): Integer;
+Var
+  Pt: TPoint;
+Begin
+  Result := 0;
+  If Not Assigned(FEdit) Then
+    Exit;
+  Pt := FEdit.PixelsToRowColumn(Point(X, Y));
+  Result := Pt.Y;
+  If (Result < 1) Or (Result > FEdit.Lines.Count) Then
+    Result := 0;
+End;
+
+Procedure TGitDiffView.ApplyDragLineRange(ToLine: Integer);
+Begin
+  If (Not FLineDragActive) Or (FLineDragAnchor < 1) Or (ToLine < 1) Then
+    Exit;
+  SelectChangeLinesInRange(FLineDragAnchor, ToLine, FLineDragCtrl);
 End;
 
 Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
@@ -1310,45 +1373,41 @@ Begin
   LineText := FEdit.Lines[Line - 1];
   LineSelected := (FMode = dvmEditorOnly) And IsLineSelected(Line);
 
+  { Selected change lines: classic selection look (blue + white) so they read clearly. }
+  If LineSelected And IsDiffChangeLine(LineText) Then
+    Begin
+      Special := True;
+      FG := clWhite;
+      BG := RGBToColor(25, 118, 210);
+      Exit;
+    End;
+
   If LineIsDiffAdded(LineText) Then
     Begin
       Special := True;
       FG := RGBToColor(27, 94, 32);
-      If LineSelected Then
-        BG := RGBToColor(129, 199, 132) { stronger green when selected }
-      Else
-        BG := RGBToColor(232, 245, 233);
+      BG := RGBToColor(232, 245, 233);
     End
   Else If LineIsDiffRemoved(LineText) Then
     Begin
       Special := True;
       FG := RGBToColor(183, 28, 28);
-      If LineSelected Then
-        BG := RGBToColor(239, 154, 154)
-      Else
-        BG := RGBToColor(255, 235, 238);
+      BG := RGBToColor(255, 235, 238);
     End
   Else If Copy(LineText, 1, 2) = '@@' Then
     Begin
       Special := True;
       FG := RGBToColor(69, 90, 100);
       BG := RGBToColor(236, 239, 241);
-    End
-  Else If LineSelected Then
-    Begin
-      { Should not happen (only change lines are selectable) — keep visible. }
-      Special := True;
-      FG := clWindowText;
-      BG := RGBToColor(187, 222, 251);
     End;
 End;
 
 Procedure TGitDiffView.EditMouseDown(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 Var
-  Pt: TPoint;
   LineNo: Integer;
   LineText: String;
+  I: Integer;
 Begin
   If FMode = dvmBrowse Then
     Begin
@@ -1368,31 +1427,124 @@ Begin
   If Not Assigned(FEdit) Then
     Exit;
 
-  Pt := FEdit.PixelsToRowColumn(Point(X, Y));
-  LineNo := Pt.Y;
-  If (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+  LineNo := LineAtMouse(X, Y);
+  If LineNo < 1 Then
     Exit;
   LineText := FEdit.Lines[LineNo - 1];
-  If Not IsDiffChangeLine(LineText) Then
-    Exit; { ignore clicks on context / headers }
 
   FEdit.CaretY := LineNo;
   FEdit.CaretX := 1;
 
-  If ssCtrl in Shift Then
-    ToggleLineSelection(LineNo)
-  Else If IsLineSelected(LineNo) And (SelectedLineCount = 1) Then
-    ClearLineSelection(True) { second click on sole selection unselects }
-  Else If IsLineSelected(LineNo) Then
-    ToggleLineSelection(LineNo) { remove this line from a multi-selection }
+  { Drag may start on a context line and still sweep change lines; only change
+    lines become the anchor when the press lands on one. }
+  FLineDragActive := True;
+  FLineDragMoved := False;
+  FLineDragCtrl := ssCtrl in Shift;
+  FLineDragAnchor := LineNo;
+  FLineDragWasSelected := IsDiffChangeLine(LineText) And IsLineSelected(LineNo);
+  FLineDragSnapshot.Clear;
+  If FLineDragCtrl And Assigned(FSelectedLines) Then
+    For I := 0 To FSelectedLines.Count - 1 Do
+      FLineDragSnapshot.Add(FSelectedLines[I]);
+
+  If IsDiffChangeLine(LineText) Then
+    Begin
+      If Not FLineDragCtrl Then
+        Begin
+          { Provisional single-line selection; MouseUp may clear if it was a re-click. }
+          ClearLineSelection(False);
+          AddLineToSelection(LineNo);
+          FEdit.Invalidate;
+          UpdateActionEnabled;
+          DoSelectionChanged;
+        End;
+      { Ctrl: wait for move/up so a plain Ctrl+click can toggle. }
+    End
+  Else If Not FLineDragCtrl Then
+    Begin
+      { Press on non-change line without Ctrl: clear selection (drag may re-select). }
+      ClearLineSelection(True);
+    End;
+
+  If Assigned(FEdit) Then
+    TControl(FEdit).MouseCapture := True;
+End;
+
+Procedure TGitDiffView.EditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
+Var
+  LineNo: Integer;
+Begin
+  If (FMode <> dvmEditorOnly) Or (Not FLineDragActive) Then
+    Exit;
+  If Not (ssLeft in Shift) Then
+    Exit;
+  LineNo := LineAtMouse(X, Y);
+  If LineNo < 1 Then
+    Exit;
+  If LineNo <> FLineDragAnchor Then
+    FLineDragMoved := True;
+  If FLineDragMoved Then
+    Begin
+      FEdit.CaretY := LineNo;
+      ApplyDragLineRange(LineNo);
+    End;
+End;
+
+Procedure TGitDiffView.EditMouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Integer);
+Var
+  LineNo: Integer;
+  LineText: String;
+Begin
+  If Assigned(FEdit) Then
+    TControl(FEdit).MouseCapture := False;
+
+  If (FMode <> dvmEditorOnly) Or (Not FLineDragActive) Then
+    Begin
+      FLineDragActive := False;
+      Exit;
+    End;
+  If Button <> mbLeft Then
+    Exit;
+
+  LineNo := LineAtMouse(X, Y);
+  If LineNo < 1 Then
+    LineNo := FLineDragAnchor;
+
+  If FLineDragMoved Then
+    Begin
+      { Range of change lines already applied during move. }
+      ApplyDragLineRange(LineNo);
+    End
   Else
     Begin
-      ClearLineSelection(False);
-      FSelectedLines.Add(Pointer(PtrInt(LineNo)));
-      FEdit.Invalidate;
-      UpdateActionEnabled;
-      DoSelectionChanged;
+      { Click without drag. }
+      If (LineNo >= 1) And (LineNo <= FEdit.Lines.Count) Then
+        Begin
+          LineText := FEdit.Lines[LineNo - 1];
+          If IsDiffChangeLine(LineText) Then
+            Begin
+              If FLineDragCtrl Then
+                ToggleLineSelection(LineNo)
+              Else If FLineDragWasSelected And (SelectedLineCount <= 1) Then
+                ClearLineSelection(True) { second click unselects }
+              Else If FLineDragWasSelected Then
+                ToggleLineSelection(LineNo)
+              Else
+                Begin
+                  { Already selected provisionally on MouseDown. }
+                  UpdateActionEnabled;
+                  DoSelectionChanged;
+                End;
+            End;
+        End;
     End;
+
+  FLineDragActive := False;
+  FLineDragMoved := False;
+  FLineDragAnchor := 0;
+  If Assigned(FLineDragSnapshot) Then
+    FLineDragSnapshot.Clear;
 End;
 
 Procedure TGitDiffView.ClearTreeData;
