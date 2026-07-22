@@ -120,8 +120,8 @@ object GitDiffView: TGitDiffView
       PopupMenu = FPopup
       TabOrder = 0
       Gutter.Width = 57
-      RightGutter.Width = 0
-      RightGutter.Visible = False
+      RightGutter.Width = 14
+      RightGutter.Visible = True
       Highlighter = FHigh
       Keystrokes = <>
     end

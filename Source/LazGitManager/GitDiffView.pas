@@ -84,6 +84,7 @@ Type
     Procedure ApplyIDEEditorAppearance;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
+    Procedure EnsureDiffOverviewGutter;
     Procedure ApplyViewMode;
     Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
@@ -572,18 +573,19 @@ Var
 Begin
   If Not Assigned(FEdit) Then
     Exit;
-  { Install once — re-freeing right-gutter parts on every load corrupts paint state. }
-  If Assigned(FOverviewGutter) Then
-    Exit;
 
-  FEdit.RightGutter.Visible := True;
   FDiffOverviewProvider := Nil;
+  FOverviewGutter := Nil;
   For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
     FEdit.RightGutter.Parts[I].Free;
 
+  FEdit.RightGutter.Visible := True;
+  FEdit.RightGutter.AutoSize := True;
+
   FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
+  FOverviewGutter.Visible := True;
   FOverviewGutter.AutoSize := False;
-  FOverviewGutter.Width := 12;
+  FOverviewGutter.Width := 14;
   FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
 
   PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
@@ -595,6 +597,53 @@ Begin
   DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
   DiffProvider.Priority := 20;
   FDiffOverviewProvider := DiffProvider;
+
+  { Force gutter metrics after create (important for frames on inactive notebook tabs). }
+  FEdit.RightGutter.Visible := True;
+  If FEdit.RightGutter.Width < 12 Then
+    Begin
+      FEdit.RightGutter.AutoSize := False;
+      FEdit.RightGutter.Width := 14;
+    End;
+End;
+
+Procedure TGitDiffView.EnsureDiffOverviewGutter;
+Var
+  I: Integer;
+  StillInstalled: Boolean;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+
+  StillInstalled := False;
+  If Assigned(FOverviewGutter) Then
+    For I := 0 To FEdit.RightGutter.Parts.Count - 1 Do
+      If FEdit.RightGutter.Parts[I] = FOverviewGutter Then
+        Begin
+          StillInstalled := True;
+          Break;
+        End;
+
+  If Not StillInstalled Then
+    SetupDiffOverviewGutter
+  Else
+    Begin
+      FEdit.RightGutter.Visible := True;
+      FOverviewGutter.Visible := True;
+      FOverviewGutter.AutoSize := False;
+      If FOverviewGutter.Width < 12 Then
+        FOverviewGutter.Width := 14;
+      FEdit.RightGutter.AutoSize := True;
+      FEdit.RightGutter.DoAutoSize;
+      If FEdit.RightGutter.Width < 12 Then
+        Begin
+          FEdit.RightGutter.AutoSize := False;
+          FEdit.RightGutter.Width := 14;
+        End;
+    End;
+
+  If FEdit.HandleAllocated Then
+    FEdit.Invalidate;
 End;
 
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
@@ -634,6 +683,7 @@ Begin
           FEdit.Font.Pitch := fpFixed;
           FEdit.Font.Quality := fqCleartypeNatural;
         End;
+      { Install after IDE settings so ApplyTo cannot hide/replace our overview. }
       SetupDiffOverviewGutter;
       FAppearanceReady := True;
     End;
@@ -645,6 +695,8 @@ Begin
   FEdit.OnSpecialLineColors := @EditSpecialLineColors;
   FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
+  { Keep overview visible even if earlier setup ran while the Files tab was hidden. }
+  EnsureDiffOverviewGutter;
 End;
 
 Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
@@ -1843,6 +1895,7 @@ Begin
       ApplyDiffHighlighter;
       FEdit.Lines.Text := DiffText;
       ApplyMixedDiffHighlighter(Path);
+      EnsureDiffOverviewGutter;
       Inc(FScrollGeneration);
       Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
     End;
@@ -1886,6 +1939,7 @@ Begin
   ApplyDiffHighlighter;
   FEdit.Lines.Text := DiffText;
   ApplyMixedDiffHighlighter(SourceFileName);
+  EnsureDiffOverviewGutter;
   Inc(FScrollGeneration);
   Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
   UpdateActionEnabled;
@@ -1909,6 +1963,7 @@ Begin
     End;
   ParseDiffIntoTree(DiffText);
   ApplyDiffHighlighter;
+  EnsureDiffOverviewGutter;
   UpdateActionEnabled;
 End;
 
