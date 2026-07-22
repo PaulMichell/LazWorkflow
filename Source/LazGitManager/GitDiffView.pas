@@ -81,13 +81,21 @@ Type
     FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
+    FSelectedLines: TFPList; { 1-based line numbers (PtrInt) for Files multi-select }
     Procedure ApplyIDEEditorAppearance;
+    Procedure ApplyEditorSelectionPolicy;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure EnsureDiffOverviewGutter;
     Procedure ScheduleOverviewRefresh;
     Procedure DoRefreshOverviewAsync(Data: PtrInt);
     Procedure ApplyViewMode;
+    Procedure ClearLineSelection(NotifyChange: Boolean = True);
+    Function IsLineSelected(LineNo: Integer): Boolean;
+    Function SelectedLineCount: Integer;
+    Function SelectedLineBounds(Out FirstLine, LastLine: Integer): Boolean;
+    Procedure ToggleLineSelection(LineNo: Integer);
+    Procedure SelectChangeLinesInRange(StartLine, EndLine: Integer);
     Procedure FreeOwnedLanguageHighlighter;
     Procedure ApplyLanguageHighlighter(Const SourceFileName: String);
     Procedure ApplyDiffHighlighter;
@@ -113,6 +121,8 @@ Type
     Procedure DoSelectionChanged;
     Procedure EditSpecialLineColors(Sender: TObject; Line: Integer; Var Special: Boolean;
       Var FG, BG: TColor);
+    Procedure EditMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
+      X, Y: Integer);
     Procedure ClearTreeData;
     Procedure ShowSelectedBrowseFile;
     Procedure ScrollToFirstChangeCentered;
@@ -518,6 +528,7 @@ Begin
   FDiffOverviewProvider := Nil;
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
+  FSelectedLines := TFPList.Create;
   FPreviewPicture := TPicture.Create;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
   ApplyIDEEditorAppearance;
@@ -531,6 +542,7 @@ Begin
   CancelPendingScroll;
   FreeOwnedLanguageHighlighter;
   FreeAndNil(FPreviewPicture);
+  FreeAndNil(FSelectedLines);
   FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
@@ -717,11 +729,144 @@ Begin
   FEdit.WantTabs := True;
   FEdit.Options := FEdit.Options - [eoShowSpecialChars];
   FEdit.OnDblClick := @EditDblClick;
+  FEdit.OnMouseDown := @EditMouseDown;
   FEdit.OnSpecialLineColors := @EditSpecialLineColors;
   FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
   FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
+  ApplyEditorSelectionPolicy;
   { Keep overview visible even if earlier setup ran while the Files tab was hidden. }
   EnsureDiffOverviewGutter;
+End;
+
+Procedure TGitDiffView.ApplyEditorSelectionPolicy;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  Case FMode Of
+    dvmBrowse:
+      Begin
+        { History: scroll-only preview — no text selection. }
+        FEdit.Options := FEdit.Options + [eoNoSelection];
+        FEdit.BlockBegin := Point(1, 1);
+        FEdit.BlockEnd := Point(1, 1);
+        ClearLineSelection(False);
+      End;
+    dvmEditorOnly:
+      Begin
+        { Files: no free-range selection; whole change-lines only via click. }
+        FEdit.Options := FEdit.Options + [eoNoSelection];
+        FEdit.BlockBegin := Point(1, 1);
+        FEdit.BlockEnd := Point(1, 1);
+      End;
+  Else
+    { Staging tree mode: normal selection for hunk/line stage. }
+    FEdit.Options := FEdit.Options - [eoNoSelection];
+  End;
+End;
+
+Procedure TGitDiffView.ClearLineSelection(NotifyChange: Boolean);
+Begin
+  If Assigned(FSelectedLines) And (FSelectedLines.Count > 0) Then
+    Begin
+      FSelectedLines.Clear;
+      If Assigned(FEdit) Then
+        FEdit.Invalidate;
+      If NotifyChange Then
+        Begin
+          UpdateActionEnabled;
+          DoSelectionChanged;
+        End;
+    End
+  Else If Assigned(FSelectedLines) Then
+    FSelectedLines.Clear;
+End;
+
+Function TGitDiffView.IsLineSelected(LineNo: Integer): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  If Not Assigned(FSelectedLines) Then
+    Exit;
+  For I := 0 To FSelectedLines.Count - 1 Do
+    If PtrInt(FSelectedLines[I]) = LineNo Then
+      Exit(True);
+End;
+
+Function TGitDiffView.SelectedLineCount: Integer;
+Begin
+  If Assigned(FSelectedLines) Then
+    Result := FSelectedLines.Count
+  Else
+    Result := 0;
+End;
+
+Function TGitDiffView.SelectedLineBounds(Out FirstLine, LastLine: Integer): Boolean;
+Var
+  I, LineNo: Integer;
+Begin
+  Result := False;
+  FirstLine := 0;
+  LastLine := 0;
+  If SelectedLineCount < 1 Then
+    Exit;
+  FirstLine := MaxInt;
+  LastLine := 0;
+  For I := 0 To FSelectedLines.Count - 1 Do
+    Begin
+      LineNo := Integer(PtrInt(FSelectedLines[I]));
+      If LineNo < FirstLine Then
+        FirstLine := LineNo;
+      If LineNo > LastLine Then
+        LastLine := LineNo;
+    End;
+  Result := (FirstLine >= 1) And (LastLine >= FirstLine);
+End;
+
+Procedure TGitDiffView.ToggleLineSelection(LineNo: Integer);
+Var
+  I: Integer;
+Begin
+  If Not Assigned(FSelectedLines) Then
+    Exit;
+  For I := 0 To FSelectedLines.Count - 1 Do
+    If PtrInt(FSelectedLines[I]) = LineNo Then
+      Begin
+        FSelectedLines.Delete(I);
+        If Assigned(FEdit) Then
+          FEdit.Invalidate;
+        UpdateActionEnabled;
+        DoSelectionChanged;
+        Exit;
+      End;
+  FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+  If Assigned(FEdit) Then
+    FEdit.Invalidate;
+  UpdateActionEnabled;
+  DoSelectionChanged;
+End;
+
+Procedure TGitDiffView.SelectChangeLinesInRange(StartLine, EndLine: Integer);
+Var
+  LineNo: Integer;
+  LineText: String;
+Begin
+  ClearLineSelection(False);
+  If (Not Assigned(FEdit)) Or (Not Assigned(FSelectedLines)) Then
+    Exit;
+  If StartLine < 1 Then
+    StartLine := 1;
+  If EndLine > FEdit.Lines.Count Then
+    EndLine := FEdit.Lines.Count;
+  For LineNo := StartLine To EndLine Do
+    Begin
+      LineText := FEdit.Lines[LineNo - 1];
+      If IsDiffChangeLine(LineText) Then
+        FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+    End;
+  FEdit.Invalidate;
+  UpdateActionEnabled;
+  DoSelectionChanged;
 End;
 
 Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
@@ -1058,6 +1203,9 @@ Begin
     FTreePanel.Width := 240
   Else If FMode = dvmStaging Then
     FTreePanel.Width := 220;
+  ApplyEditorSelectionPolicy;
+  If FMode <> dvmEditorOnly Then
+    ClearLineSelection(False);
   UpdateActionEnabled;
 End;
 
@@ -1142,35 +1290,108 @@ End;
 
 Function TGitDiffView.HasActiveSelection: Boolean;
 Begin
-  Result := Assigned(FEdit) And FEdit.SelAvail;
+  If FMode = dvmBrowse Then
+    Result := False
+  Else If FMode = dvmEditorOnly Then
+    Result := SelectedLineCount > 0
+  Else
+    Result := Assigned(FEdit) And FEdit.SelAvail;
 End;
 
 Procedure TGitDiffView.EditSpecialLineColors(Sender: TObject; Line: Integer;
   Var Special: Boolean; Var FG, BG: TColor);
 Var
   LineText: String;
+  LineSelected: Boolean;
 Begin
   Special := False;
   If (Not Assigned(FEdit)) Or (Line < 1) Or (Line > FEdit.Lines.Count) Then
     Exit;
   LineText := FEdit.Lines[Line - 1];
+  LineSelected := (FMode = dvmEditorOnly) And IsLineSelected(Line);
+
   If LineIsDiffAdded(LineText) Then
     Begin
       Special := True;
       FG := RGBToColor(27, 94, 32);
-      BG := RGBToColor(232, 245, 233);
+      If LineSelected Then
+        BG := RGBToColor(129, 199, 132) { stronger green when selected }
+      Else
+        BG := RGBToColor(232, 245, 233);
     End
   Else If LineIsDiffRemoved(LineText) Then
     Begin
       Special := True;
       FG := RGBToColor(183, 28, 28);
-      BG := RGBToColor(255, 235, 238);
+      If LineSelected Then
+        BG := RGBToColor(239, 154, 154)
+      Else
+        BG := RGBToColor(255, 235, 238);
     End
   Else If Copy(LineText, 1, 2) = '@@' Then
     Begin
       Special := True;
       FG := RGBToColor(69, 90, 100);
       BG := RGBToColor(236, 239, 241);
+    End
+  Else If LineSelected Then
+    Begin
+      { Should not happen (only change lines are selectable) — keep visible. }
+      Special := True;
+      FG := clWindowText;
+      BG := RGBToColor(187, 222, 251);
+    End;
+End;
+
+Procedure TGitDiffView.EditMouseDown(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Integer);
+Var
+  Pt: TPoint;
+  LineNo: Integer;
+  LineText: String;
+Begin
+  If FMode = dvmBrowse Then
+    Begin
+      { Keep caret free for scrolling; never create a selection. }
+      If Assigned(FEdit) Then
+        Begin
+          FEdit.BlockBegin := Point(1, FEdit.CaretY);
+          FEdit.BlockEnd := Point(1, FEdit.CaretY);
+        End;
+      Exit;
+    End;
+
+  If FMode <> dvmEditorOnly Then
+    Exit;
+  If Button <> mbLeft Then
+    Exit;
+  If Not Assigned(FEdit) Then
+    Exit;
+
+  Pt := FEdit.PixelsToRowColumn(Point(X, Y));
+  LineNo := Pt.Y;
+  If (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+    Exit;
+  LineText := FEdit.Lines[LineNo - 1];
+  If Not IsDiffChangeLine(LineText) Then
+    Exit; { ignore clicks on context / headers }
+
+  FEdit.CaretY := LineNo;
+  FEdit.CaretX := 1;
+
+  If ssCtrl in Shift Then
+    ToggleLineSelection(LineNo)
+  Else If IsLineSelected(LineNo) And (SelectedLineCount = 1) Then
+    ClearLineSelection(True) { second click on sole selection unselects }
+  Else If IsLineSelected(LineNo) Then
+    ToggleLineSelection(LineNo) { remove this line from a multi-selection }
+  Else
+    Begin
+      ClearLineSelection(False);
+      FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+      FEdit.Invalidate;
+      UpdateActionEnabled;
+      DoSelectionChanged;
     End;
 End;
 
@@ -1198,6 +1419,7 @@ Begin
   CancelPendingScroll;
   FDiffText := '';
   FBrowseSha := '';
+  ClearLineSelection(False);
   ShowEditorPane;
   If Assigned(FEdit) Then
     FEdit.Lines.Clear;
@@ -1300,6 +1522,14 @@ Var
 Begin
   FirstLine := 0;
   LastLine := 0;
+  If FMode = dvmEditorOnly Then
+    Begin
+      If SelectedLineBounds(FirstLine, LastLine) Then
+        Exit;
+      FirstLine := 0;
+      LastLine := 0;
+      Exit;
+    End;
   If FEdit.SelAvail Then
     Begin
       B := FEdit.BlockBegin;
@@ -1340,10 +1570,14 @@ Var
   InHunk, HunkHasChange, FileHasChange: Boolean;
   Selected: Boolean;
   SpacePos: Integer;
+  UseLineSet: Boolean;
 
   Function LineSelected(ALineNo: Integer): Boolean;
   Begin
-    Result := (ALineNo >= FirstLine) And (ALineNo <= LastLine);
+    If UseLineSet Then
+      Result := IsLineSelected(ALineNo)
+    Else
+      Result := (ALineNo >= FirstLine) And (ALineNo <= LastLine);
   End;
 
   Procedure FlushHunk;
@@ -1421,7 +1655,15 @@ Var
 
 Begin
   Result := '';
-  If (FirstLine < 1) Or (LastLine < FirstLine) Or (FEdit.Lines.Count = 0) Then
+  UseLineSet := (FMode = dvmEditorOnly) And (SelectedLineCount > 0);
+  If UseLineSet Then
+    Begin
+      If Not SelectedLineBounds(FirstLine, LastLine) Then
+        Exit;
+    End
+  Else If (FirstLine < 1) Or (LastLine < FirstLine) Or (FEdit.Lines.Count = 0) Then
+    Exit;
+  If FEdit.Lines.Count = 0 Then
     Exit;
 
   Lines := TStringList.Create;
@@ -1567,7 +1809,11 @@ Var
   FirstLine, LastLine: Integer;
 Begin
   Result := FindHunkBounds(AtLine, FirstLine, LastLine);
-  If Result Then
+  If Not Result Then
+    Exit;
+  If FMode = dvmEditorOnly Then
+    SelectChangeLinesInRange(FirstLine, LastLine)
+  Else
     SelectLineRange(FirstLine, LastLine);
 End;
 
@@ -1579,17 +1825,30 @@ Begin
   Result := False;
   If Not CanStageFromPreview Or Not Assigned(GitClient) Then
     Exit;
-  GetSelectionLines(FirstLine, LastLine);
-  If FirstLine < 1 Then
+  If FMode = dvmEditorOnly Then
     Begin
-      { No selection – stage the hunk under the caret. }
-      If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+      If SelectedLineCount < 1 Then
         Begin
-          MessageDlg('Select lines to stage, or place the caret in a change hunk.',
+          MessageDlg('Click changed (red/green) lines to select them for staging. Ctrl+click adds more; click again to unselect.',
             mtInformation, [mbOK], 0);
           Exit;
         End;
-      SelectLineRange(FirstLine, LastLine);
+      If Not SelectedLineBounds(FirstLine, LastLine) Then
+        Exit;
+    End
+  Else
+    Begin
+      GetSelectionLines(FirstLine, LastLine);
+      If FirstLine < 1 Then
+        Begin
+          If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+            Begin
+              MessageDlg('Select lines to stage, or place the caret in a change hunk.',
+                mtInformation, [mbOK], 0);
+              Exit;
+            End;
+          SelectLineRange(FirstLine, LastLine);
+        End;
     End;
   Patch := BuildPartialPatch(FirstLine, LastLine);
   If Trim(Patch) = '' Then
@@ -1603,6 +1862,7 @@ Begin
   If Result Then
     Begin
       WorkflowLogger.Info('GitDiff', 'Staged selection in ' + FRepoPath);
+      ClearLineSelection(False);
       DoStatusChanged;
     End
   Else
@@ -1617,16 +1877,30 @@ Begin
   Result := False;
   If Not CanUnstageFromPreview Or Not Assigned(GitClient) Then
     Exit;
-  GetSelectionLines(FirstLine, LastLine);
-  If FirstLine < 1 Then
+  If FMode = dvmEditorOnly Then
     Begin
-      If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+      If SelectedLineCount < 1 Then
         Begin
-          MessageDlg('Select lines to unstage, or place the caret in a change hunk.',
+          MessageDlg('Click changed (red/green) lines to select them for unstaging. Ctrl+click adds more; click again to unselect.',
             mtInformation, [mbOK], 0);
           Exit;
         End;
-      SelectLineRange(FirstLine, LastLine);
+      If Not SelectedLineBounds(FirstLine, LastLine) Then
+        Exit;
+    End
+  Else
+    Begin
+      GetSelectionLines(FirstLine, LastLine);
+      If FirstLine < 1 Then
+        Begin
+          If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+            Begin
+              MessageDlg('Select lines to unstage, or place the caret in a change hunk.',
+                mtInformation, [mbOK], 0);
+              Exit;
+            End;
+          SelectLineRange(FirstLine, LastLine);
+        End;
     End;
   Patch := BuildPartialPatch(FirstLine, LastLine);
   If Trim(Patch) = '' Then
@@ -1640,6 +1914,7 @@ Begin
   If Result Then
     Begin
       WorkflowLogger.Info('GitDiff', 'Unstaged selection in ' + FRepoPath);
+      ClearLineSelection(False);
       DoStatusChanged;
     End
   Else
@@ -1690,13 +1965,22 @@ End;
 
 Procedure TGitDiffView.EditDblClick(Sender: TObject);
 Begin
-  { Double-click a change line to select its whole hunk for stage/unstage. }
+  { Double-click a change line to select all change lines in its hunk. }
   If (FMode = dvmEditorOnly) Or (FMode = dvmStaging) Then
     SelectHunkAtLine(FEdit.CaretY);
 End;
 
 Procedure TGitDiffView.EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
 Begin
+  If FMode = dvmBrowse Then
+    Exit;
+  If FMode = dvmEditorOnly Then
+    Begin
+      { Line multi-select is driven by mouse handlers, not SynEdit selection. }
+      If scCaretY in Changes Then
+        UpdateActionEnabled;
+      Exit;
+    End;
   If (scSelection in Changes) Or (scCaretY in Changes) Then
     Begin
       UpdateActionEnabled;
@@ -1962,6 +2246,8 @@ Begin
       UpdateActionEnabled;
       Exit;
     End;
+  ClearLineSelection(False);
+  ApplyEditorSelectionPolicy;
   { Text under Diff first, then upgrade to mixed language highlighting. }
   ApplyDiffHighlighter;
   FEdit.Lines.Text := DiffText;
