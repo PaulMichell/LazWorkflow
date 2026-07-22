@@ -126,6 +126,7 @@ Type
     Function BuildPartialPatch(FirstLine, LastLine: Integer): String;
     Function FindHunkBounds(AtLine: Integer; Out FirstLine, LastLine: Integer): Boolean;
     Function SelectHunkAtLine(AtLine: Integer): Boolean;
+    Function ToggleHunkSelectionAtLine(AtLine: Integer): Boolean;
     Function CanStageFromPreview: Boolean;
     Function CanUnstageFromPreview: Boolean;
     Procedure UpdateActionEnabled;
@@ -1701,7 +1702,7 @@ Begin
   FEdit.CaretY := LineNo;
   FEdit.CaretX := 1;
 
-  { Hunk marker silhouette: select all change lines in that visual hunk. }
+  { Hunk marker: click selects hunk; Ctrl+click toggles hunk selection. }
   If FMode = dvmEditorOnly Then
     Begin
       If Assigned(FHunkStartLines) Then
@@ -1709,13 +1710,19 @@ Begin
           If PointInHunkMarker(X, Y, Integer(PtrInt(FHunkStartLines[I]))) Then
             Begin
               FLineDragActive := False;
-              SelectHunkAtLine(Integer(PtrInt(FHunkStartLines[I])));
+              If ssCtrl in Shift Then
+                ToggleHunkSelectionAtLine(Integer(PtrInt(FHunkStartLines[I])))
+              Else
+                SelectHunkAtLine(Integer(PtrInt(FHunkStartLines[I])));
               Exit;
             End;
       If IsVisualHunkStart(LineNo) And (X < FEdit.Gutter.Width) Then
         Begin
           FLineDragActive := False;
-          SelectHunkAtLine(LineNo);
+          If ssCtrl in Shift Then
+            ToggleHunkSelectionAtLine(LineNo)
+          Else
+            SelectHunkAtLine(LineNo);
           Exit;
         End;
     End;
@@ -2295,6 +2302,73 @@ Begin
     SelectChangeLinesInRange(FirstLine, LastLine)
   Else
     SelectLineRange(FirstLine, LastLine);
+End;
+
+Function TGitDiffView.ToggleHunkSelectionAtLine(AtLine: Integer): Boolean;
+Var
+  FirstLine, LastLine, LineNo, I, J: Integer;
+  LineText: String;
+  AllSelected: Boolean;
+  ChangeLines: TFPList;
+Begin
+  { Ctrl+click on a hunk marker: if every change line in the hunk is selected,
+    remove them; otherwise add all of them without clearing other selection. }
+  Result := FindHunkBounds(AtLine, FirstLine, LastLine);
+  If Not Result Then
+    Exit;
+  If FMode <> dvmEditorOnly Then
+    Begin
+      SelectHunkAtLine(AtLine);
+      Exit;
+    End;
+  If (Not Assigned(FEdit)) Or (Not Assigned(FSelectedLines)) Then
+    Exit(False);
+
+  ChangeLines := TFPList.Create;
+  Try
+    For LineNo := FirstLine To LastLine Do
+      Begin
+        If (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+          Continue;
+        LineText := FEdit.Lines[LineNo - 1];
+        If IsDiffChangeLine(LineText) Then
+          ChangeLines.Add(Pointer(PtrInt(LineNo)));
+      End;
+    If ChangeLines.Count = 0 Then
+      Exit(False);
+
+    AllSelected := True;
+    For I := 0 To ChangeLines.Count - 1 Do
+      If Not IsLineSelected(Integer(PtrInt(ChangeLines[I]))) Then
+        Begin
+          AllSelected := False;
+          Break;
+        End;
+
+    If AllSelected Then
+      Begin
+        For I := 0 To ChangeLines.Count - 1 Do
+          Begin
+            LineNo := Integer(PtrInt(ChangeLines[I]));
+            For J := FSelectedLines.Count - 1 DownTo 0 Do
+              If PtrInt(FSelectedLines[J]) = LineNo Then
+                Begin
+                  FSelectedLines.Delete(J);
+                  Break;
+                End;
+          End;
+      End
+    Else
+      For I := 0 To ChangeLines.Count - 1 Do
+        AddLineToSelection(Integer(PtrInt(ChangeLines[I])));
+
+    FEdit.Invalidate;
+    UpdateActionEnabled;
+    DoSelectionChanged;
+    Result := True;
+  Finally
+    ChangeLines.Free;
+  End;
 End;
 
 Function TGitDiffView.StageSelection: Boolean;
