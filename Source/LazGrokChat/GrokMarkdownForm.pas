@@ -86,11 +86,21 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LCLIntf, FileUtil, LazFileUtils, MarkDown.Control, WorkflowLog, WorkflowEvents, LazIDEIntf,
-  ProjectIntf;
+  LCLIntf, FileUtil, LazFileUtils, MarkDown.Control, MarkDown.CanvasRender, MarkDown.Elements,
+  MarkDown.Render, WorkflowLog, WorkflowEvents, LazIDEIntf, ProjectIntf;
 
 Const
   PreviewContentMargin = 4;
+
+Type
+  { Canvas renderer omits frontmatter (HTML/LaTeX register a no-op; canvas does not).
+    Docs with YAML/TOML/JSON --- frontmatter otherwise raise "No renderer for block class". }
+  TCanvasMarkDownFrontmatterBlockRenderer = Class(TCanvasMarkDownBlockRenderer)
+  Protected
+    Procedure DoRender(aBlock: TMarkDownBlock); Override;
+  Public
+    Class Function BlockClass: TMarkDownBlockClass; Override;
+  End;
 
 Var
   MarkdownForms: TList;
@@ -319,6 +329,18 @@ Begin
   End;
 End;
 
+Procedure TCanvasMarkDownFrontmatterBlockRenderer.DoRender(aBlock: TMarkDownBlock);
+Begin
+  { Metadata only — no visible canvas output. }
+  If aBlock = Nil Then
+    Exit;
+End;
+
+Class Function TCanvasMarkDownFrontmatterBlockRenderer.BlockClass: TMarkDownBlockClass;
+Begin
+  Result := TMarkdownFrontmatterBlock;
+End;
+
 Procedure TGrokMarkdownForm.ApplyPreviewText(Const Body: String);
 Var
   Preview: TMarkDownControl;
@@ -351,7 +373,17 @@ Begin
       SL.LoadFromFile(FFileName);
       Body := SL.Text;
       FSourceMemo.Lines.Assign(SL);
-      ApplyPreviewText(Body);
+      Try
+        ApplyPreviewText(Body);
+      Except
+        On E: Exception Do
+          Begin
+            { Keep source text so Source view still works; preview may stay empty. }
+            WorkflowLogger.Warning('GrokMarkdown', 'Preview failed for ' + FFileName + ': ' + E.Message);
+            MessageDlg('Failed to render Markdown preview: ' + E.Message + LineEnding + LineEnding +
+              'The source text is still available under the Source tab.', mtError, [mbOK], 0);
+          End;
+      End;
       FDiskAge := FileAge(FFileName);
       FPendingDiskReload := False;
       SetDirty(False);
@@ -555,6 +587,7 @@ End;
 Initialization
 
 MarkdownForms := TList.Create;
+TCanvasMarkDownFrontmatterBlockRenderer.RegisterRenderer(TMarkDownCanvasRenderer);
 
 Finalization
 
