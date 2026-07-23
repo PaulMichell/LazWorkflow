@@ -45,13 +45,14 @@ Type
     FContextUsed: Integer;
     FContextLimit: Integer;
     FSending: Boolean;
-    FStreamingLineIndex: Integer;
+    FStreamingHeaderIndex: Integer; { Line index of [ASSISTANT]; content follows. }
     FAssistantAccum: String;
     FReviewInProgress: Boolean;
     Procedure UpdateStatusFooter;
     Procedure SetSending(IsSending: Boolean);
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
+    Procedure RefreshAssistantStreamingDisplay;
     Procedure AppendAssistantToken(Const Token: String);
     Procedure FinishAssistantReply(Const ErrorText: String);
     Procedure StreamToken(Const Token: String; IsFinished: Boolean; Const ErrorText: String);
@@ -90,7 +91,7 @@ Begin
   FContextUsed := 0;
   FContextLimit := 128000;
   FSending := False;
-  FStreamingLineIndex := -1;
+  FStreamingHeaderIndex := -1;
   FAssistantAccum := '';
   FReviewInProgress := False;
   WorkflowEventBus.AddListener(Self);
@@ -185,49 +186,77 @@ Begin
   FAssistantAccum := '';
   FChatMemo.Lines.Add('');
   FChatMemo.Lines.Add('[ASSISTANT]');
+  FStreamingHeaderIndex := FChatMemo.Lines.Count - 1;
   FChatMemo.Lines.Add('');
-  FStreamingLineIndex := FChatMemo.Lines.Count - 1;
+  FChatMemo.SelStart := Length(FChatMemo.Text);
+End;
+
+Procedure TGrokChatForm.RefreshAssistantStreamingDisplay;
+Var
+  Content, Line: String;
+  StartIdx, I, P: Integer;
+Begin
+  { Rebuild the assistant body from FAssistantAccum. Incremental Lines[i] += token
+    mishandles newlines (TStringList.Text drops trailing breaks) and can leave a
+    trail of partial rewrites when multi-line deltas arrive. }
+  If FStreamingHeaderIndex < 0 Then
+    Exit;
+  StartIdx := FStreamingHeaderIndex + 1;
+  While FChatMemo.Lines.Count > StartIdx Do
+    FChatMemo.Lines.Delete(FChatMemo.Lines.Count - 1);
+
+  Content := StringReplace(FAssistantAccum, #13#10, #10, [rfReplaceAll]);
+  Content := StringReplace(Content, #13, #10, [rfReplaceAll]);
+  If Content = '' Then
+    Begin
+      FChatMemo.Lines.Add('');
+      Exit;
+    End;
+
+  I := 1;
+  While I <= Length(Content) Do
+    Begin
+      P := Pos(#10, Copy(Content, I, MaxInt));
+      If P = 0 Then
+        Begin
+          Line := Copy(Content, I, MaxInt);
+          FChatMemo.Lines.Add(Line);
+          Break;
+        End;
+      Line := Copy(Content, I, P - 1);
+      FChatMemo.Lines.Add(Line);
+      I := I + P;
+      { Preserve a trailing newline as an extra empty line. }
+      If I > Length(Content) Then
+        FChatMemo.Lines.Add('');
+    End;
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
 Procedure TGrokChatForm.AppendAssistantToken(Const Token: String);
-Var
-  I: Integer;
-  Parts: TStringList;
 Begin
-  If FStreamingLineIndex < 0 Then
+  If Token = '' Then
+    Exit;
+  If FStreamingHeaderIndex < 0 Then
     BeginAssistantReply;
-  If Pos(#10, Token) > 0 Then
-    Begin
-      Parts := TStringList.Create;
-      Try
-        Parts.Text := StringReplace(Token, #13#10, #10, [rfReplaceAll]);
-        If Parts.Count = 0 Then
-          Exit;
-        FChatMemo.Lines[FStreamingLineIndex] := FChatMemo.Lines[FStreamingLineIndex] + Parts[0];
-        For I := 1 To Parts.Count - 1 Do
-          Begin
-            FChatMemo.Lines.Add(Parts[I]);
-            FStreamingLineIndex := FChatMemo.Lines.Count - 1;
-          End;
-      Finally
-        Parts.Free;
-      End;
-    End
-  Else
-    FChatMemo.Lines[FStreamingLineIndex] := FChatMemo.Lines[FStreamingLineIndex] + Token;
   FAssistantAccum := FAssistantAccum + Token;
-  FChatMemo.SelStart := Length(FChatMemo.Text);
+  RefreshAssistantStreamingDisplay;
 End;
 
 Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
 Begin
+  If FStreamingHeaderIndex >= 0 Then
+    RefreshAssistantStreamingDisplay;
   If ErrorText <> '' Then
     Begin
       If FAssistantAccum = '' Then
         Begin
-          If FStreamingLineIndex >= 0 Then
-            FChatMemo.Lines[FStreamingLineIndex] := '(error)'
+          If FStreamingHeaderIndex >= 0 Then
+            Begin
+              While FChatMemo.Lines.Count > FStreamingHeaderIndex + 1 Do
+                FChatMemo.Lines.Delete(FChatMemo.Lines.Count - 1);
+              FChatMemo.Lines.Add('(error)');
+            End
           Else
             AppendMessage('assistant', '(error)');
         End;
@@ -241,7 +270,7 @@ Begin
       FContextUsed := FContextUsed + Length(FAssistantAccum) Div 4 + 20;
       FStatusFooter.SetRightText('Ready');
     End;
-  FStreamingLineIndex := -1;
+  FStreamingHeaderIndex := -1;
   FAssistantAccum := '';
   If Assigned(GrokClient) Then
     GrokClient.MarkStreamComplete;
@@ -512,7 +541,7 @@ Begin
   SetSending(False);
   FChatMemo.Clear;
   FContextUsed := 0;
-  FStreamingLineIndex := -1;
+  FStreamingHeaderIndex := -1;
   FAssistantAccum := '';
   If Assigned(GrokClient) Then
     GrokClient.ClearHistory;

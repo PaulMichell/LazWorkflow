@@ -227,12 +227,31 @@ Begin
   Synchronize(@NotifyMain);
 End;
 
+Function JsonStringField(Obj: TJSONObject; Const FieldName: String): String;
+Var
+  Node: TJSONData;
+Begin
+  Result := '';
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(FieldName);
+  If Not Assigned(Node) Then
+    Exit;
+  If Node.JSONType = jtNull Then
+    Exit;
+  If Node.JSONType = jtString Then
+    Result := Node.AsString
+  Else
+    Result := Node.AsString;
+End;
+
 Function TGrokStreamThread.ExtractDeltaContent(Const JsonText: String): String;
 Var
   Data: TJSONData;
-  Obj, Choice, Delta: TJSONObject;
+  Obj, Choice, Delta, MessageObj: TJSONObject;
   Arr: TJSONArray;
 Begin
+  { OpenAI-compatible stream: choices[0].delta.content (incremental only). }
   Result := '';
   Data := Nil;
   Try
@@ -247,8 +266,20 @@ Begin
       Exit;
     Choice := TJSONObject(Arr.Items[0]);
     Delta := Choice.FindPath('delta') As TJSONObject;
-    If Assigned(Delta) And (Delta.Find('content') <> Nil) Then
-      Result := Delta.Get('content', '');
+    If Assigned(Delta) Then
+      Begin
+        Result := JsonStringField(Delta, 'content');
+        If Result <> '' Then
+          Exit;
+        { Some gateways put text under delta.text. }
+        Result := JsonStringField(Delta, 'text');
+        If Result <> '' Then
+          Exit;
+      End;
+    { Non-stream fallback shape (should be rare with stream:true). }
+    MessageObj := Choice.FindPath('message') As TJSONObject;
+    If Assigned(MessageObj) Then
+      Result := JsonStringField(MessageObj, 'content');
   Except
     Result := '';
   End;
@@ -257,15 +288,17 @@ End;
 
 Procedure TGrokStreamThread.ProcessSseLine(Const Line: String);
 Var
-  Payload, Delta: String;
+  Payload, Delta, Trimmed: String;
 Begin
   If Terminated Then
     Exit;
-  If Trim(Line) = '' Then
+  Trimmed := Trim(Line);
+  If Trimmed = '' Then
     Exit;
-  If Copy(Line, 1, 6) <> 'data: ' Then
+  { Accept "data: ..." and "data:..." }
+  If Copy(Trimmed, 1, 5) <> 'data:' Then
     Exit;
-  Payload := Trim(Copy(Line, 7, MaxInt));
+  Payload := Trim(Copy(Trimmed, 6, MaxInt));
   If Payload = '' Then
     Exit;
   If Payload = '[DONE]' Then
