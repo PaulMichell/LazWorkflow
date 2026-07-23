@@ -45,7 +45,7 @@ Type
     FContextUsed: Integer;
     FContextLimit: Integer;
     FSending: Boolean;
-    FStreamingHeaderIndex: Integer; { Line index of [ASSISTANT]; content follows. }
+    FStreamingActive: Boolean; { True while assistant reply is streaming. }
     FChatPreamble: String; { Frozen chat text through [ASSISTANT] header. }
     FAssistantAccum: String;
     FReviewInProgress: Boolean;
@@ -92,7 +92,8 @@ Begin
   FContextUsed := 0;
   FContextLimit := 128000;
   FSending := False;
-  FStreamingHeaderIndex := -1;
+  FStreamingActive := False;
+  FChatPreamble := '';
   FAssistantAccum := '';
   FReviewInProgress := False;
   WorkflowEventBus.AddListener(Self);
@@ -188,153 +189,36 @@ End;
 Procedure TGrokChatForm.BeginAssistantReply;
 Begin
   FAssistantAccum := '';
-  { Capture everything currently in the memo as the frozen preamble.
-    Streaming updates replace only the assistant tail via Text rewrite. }
+  { Freeze everything up to and including the [ASSISTANT] header. Streaming
+    updates replace the whole memo as preamble + body — no Lines[] surgery. }
   FChatMemo.Lines.Add('');
   FChatMemo.Lines.Add('[ASSISTANT]');
-  FChatMemo.Lines.Add('');
   FChatPreamble := FChatMemo.Text;
-  FStreamingHeaderIndex := FChatMemo.Lines.Count - 1;
-  FChatMemo.Lines[FChatMemo.Lines.Count - 1] := '(waiting for model…)';
+  If (FChatPreamble <> '') And
+    (FChatPreamble[Length(FChatPreamble)] <> #10) And
+    (FChatPreamble[Length(FChatPreamble)] <> #13) Then
+    FChatPreamble := FChatPreamble + LineEnding;
+  FStreamingActive := True;
+  FChatMemo.Text := FChatPreamble + '(waiting for model…)';
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
-Procedure CollapsePrefixDuplicateLines(Lines: TStrings);
-Var
-  I, J: Integer;
-  Drop: Boolean;
-  Cur: String;
-Begin
-  { Drop any line that is a strict prefix of a later line (not only adjacent).
-    Handles rewrite trails even when blank lines sit between snapshots. }
-  I := 0;
-  While I < Lines.Count Do
-    Begin
-      Cur := Lines[I];
-      Drop := False;
-      If Cur <> '' Then
-        For J := I + 1 To Lines.Count - 1 Do
-          If (Length(Lines[J]) >= Length(Cur)) And
-            (Copy(Lines[J], 1, Length(Cur)) = Cur) Then
-            Begin
-              Drop := True;
-              Break;
-            End;
-      If Drop Then
-        Lines.Delete(I)
-      Else
-        Inc(I);
-    End;
-End;
-
-Function DeduplicateInlineRestarts(Const TextValue: String): String;
-Var
-  K: Integer;
-  First, Rest: String;
-Begin
-  { Handle "partialrestart" glued without newline: "see seLooking at...several".
-    Find longest K where S[1..K] is a prefix of S[K+1..]. }
-  Result := TextValue;
-  For K := Length(TextValue) Div 2 DownTo 8 Do
-    Begin
-      First := Copy(TextValue, 1, K);
-      Rest := Copy(TextValue, K + 1, MaxInt);
-      If (Length(Rest) >= K) And (Copy(Rest, 1, K) = First) Then
-        Begin
-          Result := Rest;
-          Exit;
-        End;
-    End;
-End;
-
-Function CollapsePrefixDuplicateText(Const TextValue: String): String;
-Var
-  Content: String;
-  Built: TStringList;
-  I, P: Integer;
-Begin
-  Content := StringReplace(TextValue, #13#10, #10, [rfReplaceAll]);
-  Content := StringReplace(Content, #13, #10, [rfReplaceAll]);
-  Content := DeduplicateInlineRestarts(Content);
-  Built := TStringList.Create;
-  Try
-    I := 1;
-    While I <= Length(Content) Do
-      Begin
-        P := Pos(#10, Copy(Content, I, MaxInt));
-        If P = 0 Then
-          Begin
-            Built.Add(Copy(Content, I, MaxInt));
-            Break;
-          End;
-        Built.Add(Copy(Content, I, P - 1));
-        I := I + P;
-        If I > Length(Content) Then
-          Built.Add('');
-      End;
-    CollapsePrefixDuplicateLines(Built);
-    Result := '';
-    For I := 0 To Built.Count - 1 Do
-      Begin
-        If I > 0 Then
-          Result := Result + #10;
-        Result := Result + Built[I];
-      End;
-  Finally
-    Built.Free;
-  End;
-End;
-
 Procedure TGrokChatForm.RefreshAssistantStreamingDisplay;
-Var
-  Content: String;
-  StartIdx, I, P: Integer;
-  Built: TStringList;
 Begin
-  { Rebuild the assistant body from FAssistantAccum. }
-  If FStreamingHeaderIndex < 0 Then
+  { Atomic rewrite: frozen preamble + full assistant body so far. }
+  If Not FStreamingActive Then
     Exit;
-  StartIdx := FStreamingHeaderIndex + 1;
-  While FChatMemo.Lines.Count > StartIdx Do
-    FChatMemo.Lines.Delete(FChatMemo.Lines.Count - 1);
-
-  Content := StringReplace(FAssistantAccum, #13#10, #10, [rfReplaceAll]);
-  Content := StringReplace(Content, #13, #10, [rfReplaceAll]);
-  If Content = '' Then
-    Begin
-      FChatMemo.Lines.Add('');
-      Exit;
-    End;
-
-  Built := TStringList.Create;
-  Try
-    I := 1;
-    While I <= Length(Content) Do
-      Begin
-        P := Pos(#10, Copy(Content, I, MaxInt));
-        If P = 0 Then
-          Begin
-            Built.Add(Copy(Content, I, MaxInt));
-            Break;
-          End;
-        Built.Add(Copy(Content, I, P - 1));
-        I := I + P;
-        If I > Length(Content) Then
-          Built.Add('');
-      End;
-    CollapsePrefixDuplicateLines(Built);
-    For I := 0 To Built.Count - 1 Do
-      FChatMemo.Lines.Add(Built[I]);
-  Finally
-    Built.Free;
-  End;
+  If FAssistantAccum = '' Then
+    FChatMemo.Text := FChatPreamble + '(waiting for model…)'
+  Else
+    FChatMemo.Text := FChatPreamble + FAssistantAccum;
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
 Procedure TGrokChatForm.AppendAssistantToken(Const Token: String);
 Begin
   { Token is the full assistant text so far (stream snapshot), not a raw delta. }
-  If FStreamingHeaderIndex < 0 Then
+  If Not FStreamingActive Then
     BeginAssistantReply;
   FAssistantAccum := Token;
   RefreshAssistantStreamingDisplay;
@@ -342,23 +226,18 @@ End;
 
 Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
 Begin
-  If FAssistantAccum <> '' Then
-    FAssistantAccum := CollapsePrefixDuplicateText(FAssistantAccum);
-  If FStreamingHeaderIndex >= 0 Then
-    RefreshAssistantStreamingDisplay;
+  If FStreamingActive Then
+    Begin
+      If (ErrorText <> '') And (FAssistantAccum = '') Then
+        FChatMemo.Text := FChatPreamble + '(error)'
+      Else
+        RefreshAssistantStreamingDisplay;
+    End
+  Else If (ErrorText <> '') And (FAssistantAccum = '') Then
+    AppendMessage('assistant', '(error)');
+
   If ErrorText <> '' Then
     Begin
-      If FAssistantAccum = '' Then
-        Begin
-          If FStreamingHeaderIndex >= 0 Then
-            Begin
-              While FChatMemo.Lines.Count > FStreamingHeaderIndex + 1 Do
-                FChatMemo.Lines.Delete(FChatMemo.Lines.Count - 1);
-              FChatMemo.Lines.Add('(error)');
-            End
-          Else
-            AppendMessage('assistant', '(error)');
-        End;
       AppendMessage('system', 'Error: ' + ErrorText);
       FStatusFooter.SetRightText('Error');
     End
@@ -369,7 +248,8 @@ Begin
       FContextUsed := FContextUsed + Length(FAssistantAccum) Div 4 + 20;
       FStatusFooter.SetRightText('Ready');
     End;
-  FStreamingHeaderIndex := -1;
+  FStreamingActive := False;
+  FChatPreamble := '';
   FAssistantAccum := '';
   If Assigned(GrokClient) Then
     GrokClient.MarkStreamComplete;
@@ -657,7 +537,8 @@ Begin
   SetSending(False);
   FChatMemo.Clear;
   FContextUsed := 0;
-  FStreamingHeaderIndex := -1;
+  FStreamingActive := False;
+  FChatPreamble := '';
   FAssistantAccum := '';
   If Assigned(GrokClient) Then
     GrokClient.ClearHistory;

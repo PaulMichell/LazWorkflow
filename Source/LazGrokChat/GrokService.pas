@@ -83,6 +83,7 @@ Type
     FPendingFinished: Boolean;
     FSseBuffer: String;
     FAccumulated: String;
+    FMergeLogCount: Integer;
     Procedure NotifyMain;
     Procedure EmitToken(Const Token: String; IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
@@ -211,6 +212,7 @@ Begin
   FOnToken := OnToken;
   FSseBuffer := '';
   FAccumulated := '';
+  FMergeLogCount := 0;
 End;
 
 Procedure TGrokStreamThread.NotifyMain;
@@ -256,41 +258,43 @@ Begin
   Result := '';
   Data := Nil;
   Try
-    Data := GetJSON(JsonText);
-    If Not (Data Is TJSONObject) Then
-      Exit;
-    Obj := TJSONObject(Data);
-    Arr := Obj.FindPath('choices') As TJSONArray;
-    If (Arr = Nil) Or (Arr.Count < 1) Then
-      Exit;
-    If Not (Arr.Items[0] Is TJSONObject) Then
-      Exit;
-    Choice := TJSONObject(Arr.Items[0]);
-    Delta := Choice.FindPath('delta') As TJSONObject;
-    If Assigned(Delta) Then
-      Begin
-        Result := JsonStringField(Delta, 'content');
-        If Result <> '' Then
-          Exit;
-        { Some gateways put text under delta.text. }
-        Result := JsonStringField(Delta, 'text');
-        If Result <> '' Then
-          Exit;
-      End;
-    { Non-stream fallback shape (should be rare with stream:true). }
-    MessageObj := Choice.FindPath('message') As TJSONObject;
-    If Assigned(MessageObj) Then
-      Result := JsonStringField(MessageObj, 'content');
-  Except
-    Result := '';
+    Try
+      Data := GetJSON(JsonText);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      Arr := Obj.FindPath('choices') As TJSONArray;
+      If (Arr = Nil) Or (Arr.Count < 1) Then
+        Exit;
+      If Not (Arr.Items[0] Is TJSONObject) Then
+        Exit;
+      Choice := TJSONObject(Arr.Items[0]);
+      Delta := Choice.FindPath('delta') As TJSONObject;
+      If Assigned(Delta) Then
+        Begin
+          Result := JsonStringField(Delta, 'content');
+          If Result <> '' Then
+            Exit;
+          { Some gateways put text under delta.text. }
+          Result := JsonStringField(Delta, 'text');
+          If Result <> '' Then
+            Exit;
+        End;
+      { Non-stream fallback shape (should be rare with stream:true). }
+      MessageObj := Choice.FindPath('message') As TJSONObject;
+      If Assigned(MessageObj) Then
+        Result := JsonStringField(MessageObj, 'content');
+    Except
+      Result := '';
+    End;
+  Finally
+    Data.Free;
   End;
-  Data.Free;
 End;
 
 Procedure TGrokStreamThread.ProcessSseLine(Const Line: String);
 Var
-  Payload, Delta, Trimmed, LastLine, Prefix: String;
-  NL, I: Integer;
+  Payload, Delta, Trimmed, Mode: String;
 Begin
   If Terminated Then
     Exit;
@@ -308,40 +312,42 @@ Begin
   Delta := ExtractDeltaContent(Payload);
   If Delta = '' Then
     Exit;
-  { Merge into FAccumulated, then always push a full-text snapshot to the UI.
-    This avoids partial-line trails when the server mixes pure deltas with
-    rewritten line snapshots. }
+  { Merge rules (no last-line rewrite — that duplicated growing first-line prefixes):
+      1. Empty buffer → take delta.
+      2. Delta already contains full buffer as prefix → snapshot replace.
+      3. Delta is a shorter prefix of buffer → stale snapshot, ignore.
+      4. Otherwise → pure OpenAI-style delta, append. }
   If FAccumulated = '' Then
-    FAccumulated := Delta
+    Begin
+      FAccumulated := Delta;
+      Mode := 'init';
+    End
   Else If (Length(Delta) >= Length(FAccumulated)) And
     (Copy(Delta, 1, Length(FAccumulated)) = FAccumulated) Then
-    FAccumulated := Delta
+    Begin
+      If Delta = FAccumulated Then
+        Exit;
+      FAccumulated := Delta;
+      Mode := 'snapshot';
+    End
+  Else If (Length(Delta) < Length(FAccumulated)) And
+    (Copy(FAccumulated, 1, Length(Delta)) = Delta) Then
+    Begin
+      { Stale / rewound snapshot — keep what we have. }
+      Exit;
+    End
   Else
     Begin
-      NL := 0;
-      For I := Length(FAccumulated) DownTo 1 Do
-        If FAccumulated[I] = #10 Then
-          Begin
-            NL := I;
-            Break;
-          End;
-      If NL > 0 Then
-        Begin
-          Prefix := Copy(FAccumulated, 1, NL);
-          LastLine := Copy(FAccumulated, NL + 1, MaxInt);
-        End
-      Else
-        Begin
-          Prefix := '';
-          LastLine := FAccumulated;
-        End;
-      If (LastLine <> '') And (Pos(#10, Delta) = 0) And
-        (Length(Delta) >= Length(LastLine)) And
-        (Copy(Delta, 1, Length(LastLine)) = LastLine) Then
-        FAccumulated := Prefix + Delta
-      Else
-        FAccumulated := FAccumulated + Delta;
+      FAccumulated := FAccumulated + Delta;
+      Mode := 'append';
     End;
+  Inc(FMergeLogCount);
+  If FMergeLogCount <= 12 Then
+    WorkflowLogger.Info('GrokStream',
+      Format('merge #%d %s deltaLen=%d accumLen=%d head=%s',
+        [FMergeLogCount, Mode, Length(Delta), Length(FAccumulated),
+         StringReplace(Copy(FAccumulated, 1, 80), #10, '\n', [rfReplaceAll])]));
+  { Always push the full assistant text so far; UI replaces, never appends. }
   EmitToken(FAccumulated, False, '');
 End;
 
