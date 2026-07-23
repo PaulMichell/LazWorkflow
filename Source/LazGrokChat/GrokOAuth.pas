@@ -46,12 +46,14 @@ Type
     FPendingNonce: String;
     FPendingVerifier: String;
     FPendingChallenge: String;
+    FLoginBusy: Boolean;
     Procedure ClearPending;
     Function HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String;
       Out StatusCode: Integer): Boolean;
     Function ParseTokenResponse(Const ResponseBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
     Function TokenRequest(Const FormBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
     Function ExchangeAuthorizationCode(Const AuthCode: String): Boolean;
+    Function IsAlreadyUsedError(Const MessageText: String): Boolean;
   Public
     Constructor Create;
     Function DiscoverEndpoints: Boolean;
@@ -66,11 +68,13 @@ Type
     Procedure ClearTokens;
     Procedure SetTokens(Const NewTokens: TGrokOAuthTokens);
     Function IsAuthenticated: Boolean;
+    Function HasPendingLogin: Boolean;
     Function StatusText: String;
     Property Tokens: TGrokOAuthTokens Read FTokens;
     Property AuthEndpoint: String Read FAuthEndpoint;
     Property TokenEndpoint: String Read FTokenEndpoint;
     Property LastError: String Read FLastError;
+    Property LoginBusy: Boolean Read FLoginBusy;
   End;
 
 Var
@@ -348,6 +352,17 @@ Begin
   ClearTokens;
   ClearPending;
   FLastError := '';
+  FLoginBusy := False;
+End;
+
+Function TGrokOAuthClient.HasPendingLogin: Boolean;
+Begin
+  Result := FPendingVerifier <> '';
+End;
+
+Function TGrokOAuthClient.IsAlreadyUsedError(Const MessageText: String): Boolean;
+Begin
+  Result := Pos('already been used', LowerCase(MessageText)) > 0;
 End;
 
 Procedure TGrokOAuthClient.ClearPending;
@@ -584,6 +599,11 @@ Begin
   Result := False;
   AuthUrl := '';
   FLastError := '';
+  If FLoginBusy Then
+    Begin
+      FLastError := 'A sign-in is already in progress. Finish or cancel it first.';
+      Exit;
+    End;
   If Not DiscoverEndpoints Then
     Exit;
   FPendingState := RandomBase64Url(16);
@@ -602,9 +622,15 @@ Var
 Begin
   Result := False;
   FLastError := '';
+  If FLoginBusy Then
+    Begin
+      FLastError := 'A sign-in is already in progress.';
+      Exit;
+    End;
   If Not BeginManualLogin(AuthUrl) Then
     Exit;
 
+  FLoginBusy := True;
   Thread := TGrokOAuthCallbackThread.Create(FPendingState, TimeoutMs);
   Try
     Thread.Start;
@@ -616,6 +642,7 @@ Begin
     While (Not Thread.Finished) And (Integer(GetTickCount64 - StartTick) < TimeoutMs + 5000) Do
       Begin
         Sleep(50);
+        { Process paints/timers only — avoid re-entering Sign in / paste handlers. }
         Application.ProcessMessages;
       End;
 
@@ -627,24 +654,43 @@ Begin
     Else
       Thread.WaitFor;
 
+    { Manual paste may have completed login while we waited (ProcessMessages). }
+    If IsAuthenticated And (Not HasPendingLogin) Then
+      Begin
+        Result := True;
+        WorkflowLogger.Info('GrokOAuth', 'Login completed during browser wait');
+        Exit;
+      End;
+
     If Not Thread.GotCode Then
       Begin
         If Thread.ErrorText <> '' Then
           FLastError := Thread.ErrorText
         Else
           FLastError := 'OAuth browser login did not complete.';
-        ClearPending;
+        { Keep pending so the user can paste a code if the callback never arrived. }
         Exit;
       End;
 
     If Not ExchangeAuthorizationCode(Thread.Code) Then
       Begin
-        ClearPending;
+        { Code is single-use: callback may have raced with a paste, or user re-pasted. }
+        If IsAuthenticated And IsAlreadyUsedError(FLastError) Then
+          Begin
+            ClearPending;
+            Result := True;
+            FLastError := '';
+            WorkflowLogger.Info('GrokOAuth', 'Browser code already used; existing session kept');
+            Exit;
+          End;
+        If IsAlreadyUsedError(FLastError) Then
+          FLastError := 'Authorization code was already used. Click Sign in again for a fresh login.';
         Exit;
       End;
     Result := True;
     WorkflowLogger.Info('GrokOAuth', 'Browser OAuth login succeeded');
   Finally
+    FLoginBusy := False;
     Thread.Free;
   End;
 End;
@@ -656,9 +702,17 @@ Var
 Begin
   Result := False;
   FLastError := '';
+  If FLoginBusy And (Not HasPendingLogin) Then
+    Begin
+      FLastError := 'A sign-in is already in progress.';
+      Exit;
+    End;
   If FPendingVerifier = '' Then
     Begin
-      FLastError := 'No pending login. Click Sign in first, then paste the code.';
+      If IsAuthenticated Then
+        FLastError := 'Already signed in. The browser code is single-use and does not need to be pasted again.'
+      Else
+        FLastError := 'No pending login. Click Sign in first, then paste the code only if the browser did not redirect.';
       Exit;
     End;
   Raw := Trim(CodeOrCallbackUrl);
@@ -704,7 +758,23 @@ Begin
     FTokenEndpoint := GrokOAuthDefaultTokenEndpoint;
 
   If Not ExchangeAuthorizationCode(AuthCode) Then
-    Exit;
+    Begin
+      If IsAuthenticated And IsAlreadyUsedError(FLastError) Then
+        Begin
+          ClearPending;
+          Result := True;
+          FLastError := '';
+          WorkflowLogger.Info('GrokOAuth', 'Pasted code already used; existing session kept');
+          Exit;
+        End;
+      If IsAlreadyUsedError(FLastError) Then
+        Begin
+          ClearPending;
+          FLastError := 'Authorization code was already used (codes work only once). ' +
+            'If you are not signed in, click Sign in again and complete the browser flow once.';
+        End;
+      Exit;
+    End;
   Result := True;
   WorkflowLogger.Info('GrokOAuth', 'Manual OAuth code exchange succeeded');
 End;

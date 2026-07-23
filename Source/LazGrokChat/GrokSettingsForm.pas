@@ -75,13 +75,32 @@ Begin
 End;
 
 Procedure TGrokSettingsForm.RefreshAuthStatus;
+Var
+  Busy, Pending, SignedIn: Boolean;
 Begin
+  Busy := False;
+  Pending := False;
+  SignedIn := False;
   If Assigned(GrokOAuthClient) Then
-    FStatusValue.Caption := GrokOAuthClient.StatusText
+    Begin
+      FStatusValue.Caption := GrokOAuthClient.StatusText;
+      Busy := GrokOAuthClient.LoginBusy;
+      Pending := GrokOAuthClient.HasPendingLogin;
+      SignedIn := GrokOAuthClient.IsAuthenticated;
+    End
   Else
     FStatusValue.Caption := 'OAuth unavailable';
-  FSignOutButton.Enabled := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated;
-  FPasteCodeButton.Enabled := Assigned(GrokOAuthClient);
+  FSignInButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  FSignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
+  { Paste is only needed when a login is pending and the browser did not redirect. }
+  FPasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  FManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  If SignedIn And (Not Pending) Then
+    FManualLabel.Caption := 'Already signed in — paste is only for a failed browser redirect:'
+  Else If Pending Then
+    FManualLabel.Caption := 'Browser open — paste code or callback URL only if it did not redirect:'
+  Else
+    FManualLabel.Caption := 'If browser cannot redirect, paste code or callback URL:';
 End;
 
 Procedure TGrokSettingsForm.LoadFromConfig;
@@ -114,8 +133,12 @@ Procedure TGrokSettingsForm.SignInButtonClick(Sender: TObject);
 Begin
   If Not Assigned(GrokOAuthClient) Then
     Exit;
-  FSignInButton.Enabled := False;
+  FManualEdit.Clear;
   FStatusValue.Caption := 'Waiting for browser sign-in…';
+  FSignInButton.Enabled := False;
+  FPasteCodeButton.Enabled := False;
+  FManualEdit.Enabled := False;
+  FSignOutButton.Enabled := False;
   Try
     Application.ProcessMessages;
     If GrokOAuthClient.LoginWithBrowser Then
@@ -125,14 +148,25 @@ Begin
             GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
             GrokChatConfig.Save;
           End;
-        MessageDlg('Signed in with SuperGrok / X Premium.', mtInformation, [mbOK], 0);
+        If Assigned(GrokClient) Then
+          GrokClient.ApplyConfig(GrokChatConfig);
+        FManualEdit.Clear;
+        MessageDlg('Signed in with SuperGrok / X Premium.' + LineEnding + LineEnding +
+          'You do not need to paste the browser code — it is single-use and was already consumed.',
+          mtInformation, [mbOK], 0);
       End
     Else
-      MessageDlg('Sign-in failed: ' + GrokOAuthClient.LastError + LineEnding + LineEnding +
-        'If the browser showed a code instead of redirecting, paste it below and click "Use pasted code".',
-        mtWarning, [mbOK], 0);
+      Begin
+        { Callback failed but pending PKCE may still be valid for a one-shot paste. }
+        If GrokOAuthClient.HasPendingLogin Then
+          MessageDlg('Browser callback did not finish: ' + GrokOAuthClient.LastError + LineEnding +
+            LineEnding +
+            'If the browser showed a code (or a localhost URL with ?code=…), paste it below once and click "Use pasted code".',
+            mtWarning, [mbOK], 0)
+        Else
+          MessageDlg('Sign-in failed: ' + GrokOAuthClient.LastError, mtWarning, [mbOK], 0);
+      End;
   Finally
-    FSignInButton.Enabled := True;
     RefreshAuthStatus;
   End;
 End;
@@ -159,17 +193,29 @@ Var
 Begin
   If Not Assigned(GrokOAuthClient) Then
     Exit;
+  If GrokOAuthClient.LoginBusy Then
+    Begin
+      MessageDlg('Sign-in is already in progress. Wait for the browser flow to finish.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If Trim(FManualEdit.Text) = '' Then
     Begin
+      If GrokOAuthClient.IsAuthenticated And (Not GrokOAuthClient.HasPendingLogin) Then
+        Begin
+          MessageDlg('You are already signed in. Paste is only needed when the browser cannot redirect back to Lazarus.',
+            mtInformation, [mbOK], 0);
+          Exit;
+        End;
       { Start a pending login and open the browser if none is active. }
       If GrokOAuthClient.BeginManualLogin(AuthUrl) Then
         Begin
           OpenURL(AuthUrl);
-          MessageDlg('Browser opened. After signing in, paste the callback URL or code into the box, then click "Use pasted code" again.',
+          MessageDlg('Browser opened. After signing in, paste the callback URL or code into the box once, then click "Use pasted code".',
             mtInformation, [mbOK], 0);
         End
       Else
         MessageDlg(GrokOAuthClient.LastError, mtError, [mbOK], 0);
+      RefreshAuthStatus;
       Exit;
     End;
   If GrokOAuthClient.LoginWithManualCode(FManualEdit.Text) Then
@@ -179,11 +225,13 @@ Begin
           GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
           GrokChatConfig.Save;
         End;
+      If Assigned(GrokClient) Then
+        GrokClient.ApplyConfig(GrokChatConfig);
       FManualEdit.Clear;
       MessageDlg('Signed in with SuperGrok / X Premium.', mtInformation, [mbOK], 0);
     End
   Else
-    MessageDlg('Code exchange failed: ' + GrokOAuthClient.LastError, mtError, [mbOK], 0);
+    MessageDlg(GrokOAuthClient.LastError, mtWarning, [mbOK], 0);
   RefreshAuthStatus;
 End;
 
