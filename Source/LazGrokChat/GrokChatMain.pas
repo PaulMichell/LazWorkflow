@@ -21,7 +21,7 @@ Var
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, GrokSettingsForm;
+  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, GrokSettingsForm, GrokMarkdownForm;
 
 Var
   CmdGrokChat: TIDECommand;
@@ -55,7 +55,7 @@ End;
 Procedure DoGrokOpenMarkdown(Sender: TObject);
 Begin
   WorkflowLogger.Info('GrokChat', 'Open Markdown document requested');
-  { TODO: show open dialog and create Markdown window }
+  OpenMarkdownDocument('');
 End;
 
 Procedure DoGrokReviewCompile(Sender: TObject);
