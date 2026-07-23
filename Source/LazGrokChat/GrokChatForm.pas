@@ -47,16 +47,19 @@ Type
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
     FChatPreamble: String; { Frozen chat text through [ASSISTANT] header. }
-    FAssistantAccum: String;
+    FAssistantContent: String; { Final answer channel (history). }
+    FAssistantThinking: String; { Reasoning stream (display only). }
     FReviewInProgress: Boolean;
     Procedure UpdateStatusFooter;
     Procedure SetSending(IsSending: Boolean);
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
+    Function FormatAssistantBody(Const Thinking, Content: String): String;
     Procedure RefreshAssistantStreamingDisplay;
-    Procedure AppendAssistantToken(Const Token: String);
+    Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
     Procedure FinishAssistantReply(Const ErrorText: String);
-    Procedure StreamToken(Const Token: String; IsFinished: Boolean; Const ErrorText: String);
+    Procedure StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
+      IsFinished: Boolean; Const ErrorText: String);
     Procedure RefreshFromConfig;
     Function CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
     Procedure ReviewProject(Reason: TCompileReason; Const KindLabel: String);
@@ -94,7 +97,8 @@ Begin
   FSending := False;
   FStreamingActive := False;
   FChatPreamble := '';
-  FAssistantAccum := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
   FReviewInProgress := False;
   WorkflowEventBus.AddListener(Self);
 End;
@@ -188,7 +192,8 @@ End;
 
 Procedure TGrokChatForm.BeginAssistantReply;
 Begin
-  FAssistantAccum := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
   { Freeze everything up to and including the [ASSISTANT] header. Streaming
     updates replace the whole memo as preamble + body — no Lines[] surgery. }
   FChatMemo.Lines.Add('');
@@ -203,24 +208,48 @@ Begin
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
+Function TGrokChatForm.FormatAssistantBody(Const Thinking, Content: String): String;
+Begin
+  { Thinking is shown above the answer while (and after) streaming. Only Content
+    is stored in conversation history for follow-up turns. }
+  If (Thinking = '') And (Content = '') Then
+    Begin
+      Result := '(waiting for model…)';
+      Exit;
+    End;
+  If Thinking <> '' Then
+    Begin
+      Result := '[thinking]' + LineEnding + Thinking;
+      If Content <> '' Then
+        Result := Result + LineEnding + LineEnding + Content
+      Else
+        Result := Result + LineEnding + LineEnding + '(waiting for answer…)';
+    End
+  Else
+    Result := Content;
+End;
+
 Procedure TGrokChatForm.RefreshAssistantStreamingDisplay;
 Begin
   { Atomic rewrite: frozen preamble + full assistant body so far. }
   If Not FStreamingActive Then
     Exit;
-  If FAssistantAccum = '' Then
-    FChatMemo.Text := FChatPreamble + '(waiting for model…)'
-  Else
-    FChatMemo.Text := FChatPreamble + FAssistantAccum;
+  FChatMemo.Text := FChatPreamble + FormatAssistantBody(FAssistantThinking, FAssistantContent);
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
-Procedure TGrokChatForm.AppendAssistantToken(Const Token: String);
+Procedure TGrokChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
-  { Token is the full assistant text so far (stream snapshot), not a raw delta. }
   If Not FStreamingActive Then
     BeginAssistantReply;
-  FAssistantAccum := Token;
+  FAssistantContent := ContentSnapshot;
+  FAssistantThinking := ThinkingSnapshot;
+  If FAssistantContent <> '' Then
+    FStatusFooter.SetRightText('Streaming…')
+  Else If FAssistantThinking <> '' Then
+    FStatusFooter.SetRightText('Thinking…')
+  Else
+    FStatusFooter.SetRightText('Waiting for first token…');
   RefreshAssistantStreamingDisplay;
 End;
 
@@ -228,12 +257,12 @@ Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
 Begin
   If FStreamingActive Then
     Begin
-      If (ErrorText <> '') And (FAssistantAccum = '') Then
+      If (ErrorText <> '') And (FAssistantContent = '') And (FAssistantThinking = '') Then
         FChatMemo.Text := FChatPreamble + '(error)'
       Else
         RefreshAssistantStreamingDisplay;
     End
-  Else If (ErrorText <> '') And (FAssistantAccum = '') Then
+  Else If (ErrorText <> '') And (FAssistantContent = '') Then
     AppendMessage('assistant', '(error)');
 
   If ErrorText <> '' Then
@@ -243,32 +272,36 @@ Begin
     End
   Else
     Begin
-      If Assigned(GrokClient) And (FAssistantAccum <> '') Then
-        GrokClient.AddMessage(gmrAssistant, FAssistantAccum);
-      FContextUsed := FContextUsed + Length(FAssistantAccum) Div 4 + 20;
+      { History stores the final answer only — not the thinking trace. }
+      If Assigned(GrokClient) And (FAssistantContent <> '') Then
+        GrokClient.AddMessage(gmrAssistant, FAssistantContent);
+      FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
+      If FAssistantThinking <> '' Then
+        FContextUsed := FContextUsed + Length(FAssistantThinking) Div 4;
       FStatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
   FChatPreamble := '';
-  FAssistantAccum := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
   If Assigned(GrokClient) Then
     GrokClient.MarkStreamComplete;
   SetSending(False);
 End;
 
-Procedure TGrokChatForm.StreamToken(Const Token: String; IsFinished: Boolean;
-  Const ErrorText: String);
+Procedure TGrokChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
+  IsFinished: Boolean; Const ErrorText: String);
 Begin
   { Invoked on the main thread via Synchronize from the stream worker.
-    While streaming, Token is the full visible assistant text so far.
-    Only content is shown — not server-side reasoning/thinking tokens. }
+    Thinking streams first on reasoning models; content is the final answer. }
   If Not IsFinished Then
     Begin
-      If FAssistantAccum = '' Then
-        FStatusFooter.SetRightText('Streaming…');
-      AppendAssistantToken(Token);
+      ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
       Exit;
     End;
+  { Final empty emit may still carry last snapshots already applied. }
+  If (ContentSnapshot <> '') Or (ThinkingSnapshot <> '') Then
+    ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(ErrorText);
 End;
 
@@ -539,7 +572,8 @@ Begin
   FContextUsed := 0;
   FStreamingActive := False;
   FChatPreamble := '';
-  FAssistantAccum := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
   If Assigned(GrokClient) Then
     GrokClient.ClearHistory;
   AppendMessage('system', 'New conversation started.');

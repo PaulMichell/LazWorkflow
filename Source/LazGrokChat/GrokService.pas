@@ -21,10 +21,11 @@ Type
     ToolCallId: String;
   End;
 
-  { Called on the main thread. While streaming, Token is the full assistant text so
-    far (snapshot), not a raw delta. IsFinished ends the stream. }
-  TGrokStreamEvent = Procedure(Const Token: String; IsFinished: Boolean;
-    Const ErrorText: String) Of Object;
+  { Called on the main thread. ContentSnapshot / ThinkingSnapshot are full text so
+    far (not raw deltas). IsFinished ends the stream. Thinking is reasoning_content
+    when the model streams it; Content is the final answer channel only. }
+  TGrokStreamEvent = Procedure(Const ContentSnapshot, ThinkingSnapshot: String;
+    IsFinished: Boolean; Const ErrorText: String) Of Object;
 
   TGrokService = Class
   Private
@@ -78,17 +79,20 @@ Type
     FModel: String;
     FRequestJson: String;
     FOnToken: TGrokStreamEvent;
-    FPendingToken: String;
+    FPendingContent: String;
+    FPendingThinking: String;
     FPendingError: String;
     FPendingFinished: Boolean;
     FSseBuffer: String;
-    FAccumulated: String;
+    FContentAccum: String;
+    FThinkingAccum: String;
     FMergeLogCount: Integer;
     Procedure NotifyMain;
-    Procedure EmitToken(Const Token: String; IsDone: Boolean; Const ErrorText: String);
+    Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
     Procedure ProcessSseLine(Const Line: String);
-    Function ExtractDeltaContent(Const JsonText: String): String;
+    Procedure ExtractDeltaParts(Const JsonText: String; Out ContentDelta, ThinkingDelta: String);
+    Function MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
   Protected
     Procedure Execute; Override;
   Public
@@ -211,20 +215,21 @@ Begin
   FRequestJson := RequestJson;
   FOnToken := OnToken;
   FSseBuffer := '';
-  FAccumulated := '';
+  FContentAccum := '';
+  FThinkingAccum := '';
   FMergeLogCount := 0;
 End;
 
 Procedure TGrokStreamThread.NotifyMain;
 Begin
   If Assigned(FOnToken) Then
-    FOnToken(FPendingToken, FPendingFinished, FPendingError);
+    FOnToken(FPendingContent, FPendingThinking, FPendingFinished, FPendingError);
 End;
 
-Procedure TGrokStreamThread.EmitToken(Const Token: String; IsDone: Boolean;
-  Const ErrorText: String);
+Procedure TGrokStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
 Begin
-  FPendingToken := Token;
+  FPendingContent := FContentAccum;
+  FPendingThinking := FThinkingAccum;
   FPendingFinished := IsDone;
   FPendingError := ErrorText;
   Synchronize(@NotifyMain);
@@ -248,14 +253,43 @@ Begin
     Result := Node.AsString;
 End;
 
-Function TGrokStreamThread.ExtractDeltaContent(Const JsonText: String): String;
+Function TGrokStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
+Begin
+  { Same rules as content merge: init / cumulative snapshot / stale ignore / append. }
+  Result := False;
+  If Delta = '' Then
+    Exit;
+  If Accum = '' Then
+    Begin
+      Accum := Delta;
+      Result := True;
+      Exit;
+    End;
+  If (Length(Delta) >= Length(Accum)) And (Copy(Delta, 1, Length(Accum)) = Accum) Then
+    Begin
+      If Delta = Accum Then
+        Exit;
+      Accum := Delta;
+      Result := True;
+      Exit;
+    End;
+  If (Length(Delta) < Length(Accum)) And (Copy(Accum, 1, Length(Delta)) = Delta) Then
+    Exit;
+  Accum := Accum + Delta;
+  Result := True;
+End;
+
+Procedure TGrokStreamThread.ExtractDeltaParts(Const JsonText: String;
+  Out ContentDelta, ThinkingDelta: String);
 Var
   Data: TJSONData;
   Obj, Choice, Delta, MessageObj: TJSONObject;
   Arr: TJSONArray;
 Begin
-  { OpenAI-compatible stream: choices[0].delta.content (incremental only). }
-  Result := '';
+  { OpenAI-compatible stream: delta.content for answer, delta.reasoning_content
+    (or delta.reasoning) for thinking summaries on reasoning models. }
+  ContentDelta := '';
+  ThinkingDelta := '';
   Data := Nil;
   Try
     Try
@@ -272,20 +306,27 @@ Begin
       Delta := Choice.FindPath('delta') As TJSONObject;
       If Assigned(Delta) Then
         Begin
-          Result := JsonStringField(Delta, 'content');
-          If Result <> '' Then
-            Exit;
-          { Some gateways put text under delta.text. }
-          Result := JsonStringField(Delta, 'text');
-          If Result <> '' Then
-            Exit;
+          ContentDelta := JsonStringField(Delta, 'content');
+          If ContentDelta = '' Then
+            ContentDelta := JsonStringField(Delta, 'text');
+          ThinkingDelta := JsonStringField(Delta, 'reasoning_content');
+          If ThinkingDelta = '' Then
+            ThinkingDelta := JsonStringField(Delta, 'reasoning');
         End;
-      { Non-stream fallback shape (should be rare with stream:true). }
-      MessageObj := Choice.FindPath('message') As TJSONObject;
-      If Assigned(MessageObj) Then
-        Result := JsonStringField(MessageObj, 'content');
+      If (ContentDelta = '') And (ThinkingDelta = '') Then
+        Begin
+          MessageObj := Choice.FindPath('message') As TJSONObject;
+          If Assigned(MessageObj) Then
+            Begin
+              ContentDelta := JsonStringField(MessageObj, 'content');
+              ThinkingDelta := JsonStringField(MessageObj, 'reasoning_content');
+              If ThinkingDelta = '' Then
+                ThinkingDelta := JsonStringField(MessageObj, 'reasoning');
+            End;
+        End;
     Except
-      Result := '';
+      ContentDelta := '';
+      ThinkingDelta := '';
     End;
   Finally
     Data.Free;
@@ -294,7 +335,8 @@ End;
 
 Procedure TGrokStreamThread.ProcessSseLine(Const Line: String);
 Var
-  Payload, Delta, Trimmed, Mode: String;
+  Payload, ContentDelta, ThinkingDelta, Trimmed: String;
+  Changed: Boolean;
 Begin
   If Terminated Then
     Exit;
@@ -309,46 +351,25 @@ Begin
     Exit;
   If Payload = '[DONE]' Then
     Exit;
-  Delta := ExtractDeltaContent(Payload);
-  If Delta = '' Then
+  ExtractDeltaParts(Payload, ContentDelta, ThinkingDelta);
+  If (ContentDelta = '') And (ThinkingDelta = '') Then
     Exit;
-  { Merge rules (no last-line rewrite — that duplicated growing first-line prefixes):
-      1. Empty buffer → take delta.
-      2. Delta already contains full buffer as prefix → snapshot replace.
-      3. Delta is a shorter prefix of buffer → stale snapshot, ignore.
-      4. Otherwise → pure OpenAI-style delta, append. }
-  If FAccumulated = '' Then
-    Begin
-      FAccumulated := Delta;
-      Mode := 'init';
-    End
-  Else If (Length(Delta) >= Length(FAccumulated)) And
-    (Copy(Delta, 1, Length(FAccumulated)) = FAccumulated) Then
-    Begin
-      If Delta = FAccumulated Then
-        Exit;
-      FAccumulated := Delta;
-      Mode := 'snapshot';
-    End
-  Else If (Length(Delta) < Length(FAccumulated)) And
-    (Copy(FAccumulated, 1, Length(Delta)) = Delta) Then
-    Begin
-      { Stale / rewound snapshot — keep what we have. }
-      Exit;
-    End
-  Else
-    Begin
-      FAccumulated := FAccumulated + Delta;
-      Mode := 'append';
-    End;
+  Changed := False;
+  If ThinkingDelta <> '' Then
+    If MergeStreamText(FThinkingAccum, ThinkingDelta) Then
+      Changed := True;
+  If ContentDelta <> '' Then
+    If MergeStreamText(FContentAccum, ContentDelta) Then
+      Changed := True;
+  If Not Changed Then
+    Exit;
   Inc(FMergeLogCount);
   If FMergeLogCount <= 12 Then
     WorkflowLogger.Info('GrokStream',
-      Format('merge #%d %s deltaLen=%d accumLen=%d head=%s',
-        [FMergeLogCount, Mode, Length(Delta), Length(FAccumulated),
-         StringReplace(Copy(FAccumulated, 1, 80), #10, '\n', [rfReplaceAll])]));
-  { Always push the full assistant text so far; UI replaces, never appends. }
-  EmitToken(FAccumulated, False, '');
+      Format('merge #%d thinkLen=%d contentLen=%d dThink=%d dContent=%d',
+        [FMergeLogCount, Length(FThinkingAccum), Length(FContentAccum),
+         Length(ThinkingDelta), Length(ContentDelta)]));
+  EmitSnapshots(False, '');
 End;
 
 Procedure TGrokStreamThread.ProcessSseChunk(Const Chunk: String);
@@ -402,15 +423,15 @@ Begin
             ErrBody := Client.ResponseStatusText;
           If Length(ErrBody) > 400 Then
             ErrBody := Copy(ErrBody, 1, 400) + '…';
-          EmitToken('', True, Format('HTTP %d: %s', [Code, ErrBody]));
+          EmitSnapshots(True, Format('HTTP %d: %s', [Code, ErrBody]));
           Exit;
         End;
       If FSseBuffer <> '' Then
         ProcessSseLine(FSseBuffer);
-      EmitToken('', True, '');
+      EmitSnapshots(True, '');
     Except
       On E: Exception Do
-        EmitToken('', True, E.Message);
+        EmitSnapshots(True, E.Message);
     End;
   Finally
     Client.RequestBody := Nil;
