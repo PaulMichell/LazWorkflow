@@ -193,18 +193,26 @@ End;
 
 Procedure CollapsePrefixDuplicateLines(Lines: TStrings);
 Var
-  I: Integer;
-  Prev, NextLine: String;
+  I, J: Integer;
+  Drop: Boolean;
+  Cur: String;
 Begin
-  { Drop a line when the next line is the same text extended (partial rewrite
-    left behind by snapshot-style SSE chunks separated by newlines). }
+  { Drop any line that is a strict prefix of a later line (not only adjacent).
+    Handles rewrite trails even when blank lines sit between snapshots. }
   I := 0;
-  While I < Lines.Count - 1 Do
+  While I < Lines.Count Do
     Begin
-      Prev := Lines[I];
-      NextLine := Lines[I + 1];
-      If (Prev <> '') And (Length(NextLine) >= Length(Prev)) And
-        (Copy(NextLine, 1, Length(Prev)) = Prev) Then
+      Cur := Lines[I];
+      Drop := False;
+      If Cur <> '' Then
+        For J := I + 1 To Lines.Count - 1 Do
+          If (Length(Lines[J]) >= Length(Cur)) And
+            (Copy(Lines[J], 1, Length(Cur)) = Cur) Then
+            Begin
+              Drop := True;
+              Break;
+            End;
+      If Drop Then
         Lines.Delete(I)
       Else
         Inc(I);
@@ -296,11 +304,10 @@ End;
 
 Procedure TGrokChatForm.AppendAssistantToken(Const Token: String);
 Begin
-  If Token = '' Then
-    Exit;
+  { Token is the full assistant text so far (stream snapshot), not a raw delta. }
   If FStreamingHeaderIndex < 0 Then
     BeginAssistantReply;
-  FAssistantAccum := FAssistantAccum + Token;
+  FAssistantAccum := CollapsePrefixDuplicateText(Token);
   RefreshAssistantStreamingDisplay;
 End;
 
@@ -344,15 +351,13 @@ Procedure TGrokChatForm.StreamToken(Const Token: String; IsFinished: Boolean;
   Const ErrorText: String);
 Begin
   { Invoked on the main thread via Synchronize from the stream worker.
-    Only delta.content is shown — not server-side reasoning/thinking tokens. }
+    While streaming, Token is the full visible assistant text so far.
+    Only content is shown — not server-side reasoning/thinking tokens. }
   If Not IsFinished Then
     Begin
-      If Token <> '' Then
-        Begin
-          If FAssistantAccum = '' Then
-            FStatusFooter.SetRightText('Streaming…');
-          AppendAssistantToken(Token);
-        End;
+      If FAssistantAccum = '' Then
+        FStatusFooter.SetRightText('Streaming…');
+      AppendAssistantToken(Token);
       Exit;
     End;
   FinishAssistantReply(ErrorText);

@@ -21,7 +21,8 @@ Type
     ToolCallId: String;
   End;
 
-  { Called on the main thread for each content fragment; IsFinished ends the stream. }
+  { Called on the main thread. While streaming, Token is the full assistant text so
+    far (snapshot), not a raw delta. IsFinished ends the stream. }
   TGrokStreamEvent = Procedure(Const Token: String; IsFinished: Boolean;
     Const ErrorText: String) Of Object;
 
@@ -307,53 +308,41 @@ Begin
   Delta := ExtractDeltaContent(Payload);
   If Delta = '' Then
     Exit;
-  { Snapshot / rewrite handling:
-    1) Whole buffer is a growing prefix snapshot.
-    2) Current (last) line is rewritten as a longer snapshot without a newline. }
+  { Merge into FAccumulated, then always push a full-text snapshot to the UI.
+    This avoids partial-line trails when the server mixes pure deltas with
+    rewritten line snapshots. }
   If FAccumulated = '' Then
-    Begin
-      FAccumulated := Delta;
-      EmitToken(Delta, False, '');
-      Exit;
-    End;
-  If (Length(Delta) >= Length(FAccumulated)) And
+    FAccumulated := Delta
+  Else If (Length(Delta) >= Length(FAccumulated)) And
     (Copy(Delta, 1, Length(FAccumulated)) = FAccumulated) Then
-    Begin
-      Delta := Copy(Delta, Length(FAccumulated) + 1, MaxInt);
-      FAccumulated := FAccumulated + Delta;
-      If Delta <> '' Then
-        EmitToken(Delta, False, '');
-      Exit;
-    End;
-  NL := 0;
-  For I := Length(FAccumulated) DownTo 1 Do
-    If FAccumulated[I] = #10 Then
-      Begin
-        NL := I;
-        Break;
-      End;
-  If NL > 0 Then
-    Begin
-      Prefix := Copy(FAccumulated, 1, NL);
-      LastLine := Copy(FAccumulated, NL + 1, MaxInt);
-    End
+    FAccumulated := Delta
   Else
     Begin
-      Prefix := '';
-      LastLine := FAccumulated;
+      NL := 0;
+      For I := Length(FAccumulated) DownTo 1 Do
+        If FAccumulated[I] = #10 Then
+          Begin
+            NL := I;
+            Break;
+          End;
+      If NL > 0 Then
+        Begin
+          Prefix := Copy(FAccumulated, 1, NL);
+          LastLine := Copy(FAccumulated, NL + 1, MaxInt);
+        End
+      Else
+        Begin
+          Prefix := '';
+          LastLine := FAccumulated;
+        End;
+      If (LastLine <> '') And (Pos(#10, Delta) = 0) And
+        (Length(Delta) >= Length(LastLine)) And
+        (Copy(Delta, 1, Length(LastLine)) = LastLine) Then
+        FAccumulated := Prefix + Delta
+      Else
+        FAccumulated := FAccumulated + Delta;
     End;
-  If (LastLine <> '') And (Pos(#10, Delta) = 0) And
-    (Length(Delta) >= Length(LastLine)) And
-    (Copy(Delta, 1, Length(LastLine)) = LastLine) Then
-    Begin
-      Delta := Copy(Delta, Length(LastLine) + 1, MaxInt);
-      FAccumulated := Prefix + LastLine + Delta;
-      If Delta <> '' Then
-        EmitToken(Delta, False, '');
-      Exit;
-    End;
-  FAccumulated := FAccumulated + Delta;
-  EmitToken(Delta, False, '');
+  EmitToken(FAccumulated, False, '');
 End;
 
 Procedure TGrokStreamThread.ProcessSseChunk(Const Chunk: String);
