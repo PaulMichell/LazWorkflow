@@ -46,6 +46,7 @@ Type
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingHeaderIndex: Integer; { Line index of [ASSISTANT]; content follows. }
+    FChatPreamble: String; { Frozen chat text through [ASSISTANT] header. }
     FAssistantAccum: String;
     FReviewInProgress: Boolean;
     Procedure UpdateStatusFooter;
@@ -107,6 +108,9 @@ End;
 
 Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
+  { WordWrap + Lines[] is a classic corruption source while streaming. }
+  FChatMemo.WordWrap := False;
+  FChatMemo.ScrollBars := ssAutoBoth;
   RefreshFromConfig;
   UpdateStatusFooter;
   If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
@@ -184,10 +188,14 @@ End;
 Procedure TGrokChatForm.BeginAssistantReply;
 Begin
   FAssistantAccum := '';
+  { Capture everything currently in the memo as the frozen preamble.
+    Streaming updates replace only the assistant tail via Text rewrite. }
   FChatMemo.Lines.Add('');
   FChatMemo.Lines.Add('[ASSISTANT]');
+  FChatMemo.Lines.Add('');
+  FChatPreamble := FChatMemo.Text;
   FStreamingHeaderIndex := FChatMemo.Lines.Count - 1;
-  FChatMemo.Lines.Add('(waiting for model…)');
+  FChatMemo.Lines[FChatMemo.Lines.Count - 1] := '(waiting for model…)';
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
@@ -219,6 +227,26 @@ Begin
     End;
 End;
 
+Function DeduplicateInlineRestarts(Const TextValue: String): String;
+Var
+  K: Integer;
+  First, Rest: String;
+Begin
+  { Handle "partialrestart" glued without newline: "see seLooking at...several".
+    Find longest K where S[1..K] is a prefix of S[K+1..]. }
+  Result := TextValue;
+  For K := Length(TextValue) Div 2 DownTo 8 Do
+    Begin
+      First := Copy(TextValue, 1, K);
+      Rest := Copy(TextValue, K + 1, MaxInt);
+      If (Length(Rest) >= K) And (Copy(Rest, 1, K) = First) Then
+        Begin
+          Result := Rest;
+          Exit;
+        End;
+    End;
+End;
+
 Function CollapsePrefixDuplicateText(Const TextValue: String): String;
 Var
   Content: String;
@@ -227,6 +255,7 @@ Var
 Begin
   Content := StringReplace(TextValue, #13#10, #10, [rfReplaceAll]);
   Content := StringReplace(Content, #13, #10, [rfReplaceAll]);
+  Content := DeduplicateInlineRestarts(Content);
   Built := TStringList.Create;
   Try
     I := 1;
@@ -307,7 +336,7 @@ Begin
   { Token is the full assistant text so far (stream snapshot), not a raw delta. }
   If FStreamingHeaderIndex < 0 Then
     BeginAssistantReply;
-  FAssistantAccum := CollapsePrefixDuplicateText(Token);
+  FAssistantAccum := Token;
   RefreshAssistantStreamingDisplay;
 End;
 
