@@ -19,10 +19,6 @@ object GrokMarkdownForm: TGrokMarkdownForm
       Caption = 'Open…'
       OnExecute = OpenActionExecute
     end
-    object FReloadAction: TAction
-      Caption = 'Reload'
-      OnExecute = ReloadActionExecute
-    end
     object FSaveAction: TAction
       Caption = 'Save'
       OnExecute = SaveActionExecute
@@ -34,14 +30,6 @@ object GrokMarkdownForm: TGrokMarkdownForm
     object FSourceModeAction: TAction
       Caption = 'Source'
       OnExecute = SourceModeActionExecute
-    end
-    object FSplitModeAction: TAction
-      Caption = 'Split'
-      OnExecute = SplitModeActionExecute
-    end
-    object FRevealAction: TAction
-      Caption = 'Reveal'
-      OnExecute = RevealActionExecute
     end
   end
   object FOpenDialog: TOpenDialog
@@ -65,49 +53,27 @@ object GrokMarkdownForm: TGrokMarkdownForm
       Top = 2
       Action = FOpenAction
     end
-    object ToolButtonReload: TToolButton
-      Left = 62
-      Top = 2
-      Action = FReloadAction
-    end
     object ToolButtonSave: TToolButton
-      Left = 124
+      Left = 62
       Top = 2
       Action = FSaveAction
     end
     object ToolButtonSep1: TToolButton
-      Left = 174
+      Left = 112
       Height = 22
       Top = 2
       Caption = 'ToolButtonSep1'
       Style = tbsSeparator
     end
     object ToolButtonPreview: TToolButton
-      Left = 182
+      Left = 120
       Top = 2
       Action = FPreviewModeAction
     end
     object ToolButtonSource: TToolButton
-      Left = 250
+      Left = 188
       Top = 2
       Action = FSourceModeAction
-    end
-    object ToolButtonSplit: TToolButton
-      Left = 312
-      Top = 2
-      Action = FSplitModeAction
-    end
-    object ToolButtonSep2: TToolButton
-      Left = 362
-      Height = 22
-      Top = 2
-      Caption = 'ToolButtonSep2'
-      Style = tbsSeparator
-    end
-    object ToolButtonReveal: TToolButton
-      Left = 370
-      Top = 2
-      Action = FRevealAction
     end
   end
   inline FStatusFooter: TStatusFooterFrame
@@ -129,34 +95,31 @@ object GrokMarkdownForm: TGrokMarkdownForm
     ClientHeight = 570
     ClientWidth = 860
     TabOrder = 1
-    object FSplitter: TSplitter
-      Left = 360
-      Height = 570
-      Top = 0
-      Width = 5
-      Align = alLeft
-    end
     object FSourceMemo: TMemo
       Left = 0
       Height = 570
       Top = 0
-      Width = 360
-      Align = alLeft
+      Width = 860
+      Align = alClient
       Font.Height = -13
       Font.Name = 'Monospace'
       ParentFont = False
       ScrollBars = ssAutoBoth
       TabOrder = 0
+      Visible = False
       WordWrap = False
       OnChange = SourceMemoChange
     end
     object FPreviewHost: TPanel
-      Left = 365
+      Left = 0
       Height = 570
       Top = 0
-      Width = 495
+      Width = 860
       Align = alClient
       BevelOuter = bvNone
+      Color = clWhite
+      ParentBackground = False
+      ParentColor = False
       TabOrder = 1
     end
   end

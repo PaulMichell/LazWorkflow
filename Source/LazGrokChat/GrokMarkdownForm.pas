@@ -14,32 +14,24 @@ Uses
   ComCtrls, ActnList, StatusFooterFrame;
 
 Type
-  TMarkdownViewMode = (mvmPreview, mvmSource, mvmSplit);
+  TMarkdownViewMode = (mvmPreview, mvmSource);
 
   TGrokMarkdownForm = Class(TForm)
     FActionList: TActionList;
     FOpenAction: TAction;
-    FReloadAction: TAction;
     FSaveAction: TAction;
     FPreviewModeAction: TAction;
     FSourceModeAction: TAction;
-    FSplitModeAction: TAction;
-    FRevealAction: TAction;
     FOpenDialog: TOpenDialog;
     FToolBar: TToolBar;
     ToolButtonOpen: TToolButton;
-    ToolButtonReload: TToolButton;
     ToolButtonSave: TToolButton;
     ToolButtonSep1: TToolButton;
     ToolButtonPreview: TToolButton;
     ToolButtonSource: TToolButton;
-    ToolButtonSplit: TToolButton;
-    ToolButtonSep2: TToolButton;
-    ToolButtonReveal: TToolButton;
     FStatusFooter: TStatusFooterFrame;
     FContentPanel: TPanel;
     FSourceMemo: TMemo;
-    FSplitter: TSplitter;
     FPreviewHost: TPanel;
     FWatchTimer: TTimer;
     FDebounceTimer: TTimer;
@@ -48,12 +40,9 @@ Type
     Procedure FormClose(Sender: TObject; Var CloseAction: TCloseAction);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure OpenActionExecute(Sender: TObject);
-    Procedure ReloadActionExecute(Sender: TObject);
     Procedure SaveActionExecute(Sender: TObject);
     Procedure PreviewModeActionExecute(Sender: TObject);
     Procedure SourceModeActionExecute(Sender: TObject);
-    Procedure SplitModeActionExecute(Sender: TObject);
-    Procedure RevealActionExecute(Sender: TObject);
     Procedure SourceMemoChange(Sender: TObject);
     Procedure WatchTimerTimer(Sender: TObject);
     Procedure DebounceTimerTimer(Sender: TObject);
@@ -99,6 +88,9 @@ Implementation
 Uses
   LCLIntf, FileUtil, LazFileUtils, MarkDown.Control, WorkflowLog, WorkflowEvents, LazIDEIntf,
   ProjectIntf;
+
+Const
+  PreviewContentMargin = 4;
 
 Var
   MarkdownForms: TList;
@@ -174,7 +166,7 @@ Begin
   FFileName := '';
   FDirty := False;
   FLoading := False;
-  FViewMode := mvmSplit;
+  FViewMode := mvmPreview;
   FDiskAge := -1;
   FPendingDiskReload := False;
   FPreview := Nil;
@@ -223,9 +215,16 @@ Var
 Begin
   If Assigned(FPreview) Then
     Exit;
+  FPreviewHost.Color := clWhite;
+  FPreviewHost.ParentColor := False;
+  FPreviewHost.ParentBackground := False;
   Preview := TMarkDownControl.Create(Self);
   Preview.Parent := FPreviewHost;
   Preview.Align := alClient;
+  Preview.BorderSpacing.Around := PreviewContentMargin;
+  Preview.Color := clWhite;
+  Preview.ParentColor := False;
+  Preview.ParentBackground := False;
   Preview.ScrollBars := ssAutoBoth;
   Preview.MonoFontName := 'Monospace';
   Preview.FontName := 'default';
@@ -237,37 +236,21 @@ End;
 
 Procedure TGrokMarkdownForm.ApplyViewMode;
 Begin
-  Case FViewMode Of
-    mvmPreview:
-      Begin
-        FSourceMemo.Visible := False;
-        FSplitter.Visible := False;
-        FPreviewHost.Visible := True;
-        FPreviewHost.Align := alClient;
-      End;
-    mvmSource:
-      Begin
-        FPreviewHost.Visible := False;
-        FSplitter.Visible := False;
-        FSourceMemo.Visible := True;
-        FSourceMemo.Align := alClient;
-      End;
+  If FViewMode = mvmPreview Then
+    Begin
+      FSourceMemo.Visible := False;
+      FPreviewHost.Visible := True;
+      FPreviewHost.Align := alClient;
+      { Keep preview content in sync when returning from source edits. }
+      If Not FLoading Then
+        ApplyPreviewText(FSourceMemo.Text);
+    End
   Else
-    { Split: source left, preview right. }
-    FSourceMemo.Visible := True;
-    FSplitter.Visible := True;
-    FPreviewHost.Visible := True;
-    FSourceMemo.Align := alLeft;
-    If FSourceMemo.Width < 120 Then
-      Begin
-        If FContentPanel.ClientWidth Div 2 > 200 Then
-          FSourceMemo.Width := FContentPanel.ClientWidth Div 2
-        Else
-          FSourceMemo.Width := 200;
-      End;
-    FSplitter.Align := alLeft;
-    FPreviewHost.Align := alClient;
-  End;
+    Begin
+      FPreviewHost.Visible := False;
+      FSourceMemo.Visible := True;
+      FSourceMemo.Align := alClient;
+    End;
 End;
 
 Procedure TGrokMarkdownForm.UpdateCaption;
@@ -291,12 +274,10 @@ Begin
     LeftText := 'No file'
   Else
     LeftText := FFileName;
-  Case FViewMode Of
-    mvmPreview: CentreText := 'Preview';
-    mvmSource: CentreText := 'Source';
+  If FViewMode = mvmPreview Then
+    CentreText := 'Preview'
   Else
-    CentreText := 'Split';
-  End;
+    CentreText := 'Source';
   If FDirty Then
     RightText := 'Modified'
   Else If FPendingDiskReload Then
@@ -309,13 +290,8 @@ Begin
 End;
 
 Procedure TGrokMarkdownForm.RefreshActionState;
-Var
-  HasFile: Boolean;
 Begin
-  HasFile := FFileName <> '';
-  FReloadAction.Enabled := HasFile;
-  FSaveAction.Enabled := HasFile And FDirty;
-  FRevealAction.Enabled := HasFile;
+  FSaveAction.Enabled := (FFileName <> '') And FDirty;
 End;
 
 Procedure TGrokMarkdownForm.SetDirty(IsDirty: Boolean);
@@ -515,15 +491,6 @@ Begin
   PromptOpen;
 End;
 
-Procedure TGrokMarkdownForm.ReloadActionExecute(Sender: TObject);
-Begin
-  If FFileName = '' Then
-    Exit;
-  If FDirty And (Not ConfirmDiscardEdits) Then
-    Exit;
-  LoadFromDisk;
-End;
-
 Procedure TGrokMarkdownForm.SaveActionExecute(Sender: TObject);
 Begin
   SaveToDisk;
@@ -543,34 +510,11 @@ Begin
   UpdateStatus;
 End;
 
-Procedure TGrokMarkdownForm.SplitModeActionExecute(Sender: TObject);
-Begin
-  FViewMode := mvmSplit;
-  ApplyViewMode;
-  UpdateStatus;
-End;
-
-Procedure TGrokMarkdownForm.RevealActionExecute(Sender: TObject);
-Var
-  Dir: String;
-Begin
-  If FFileName = '' Then
-    Exit;
-  Dir := ExtractFilePath(FFileName);
-  If DirectoryExists(Dir) Then
-    OpenDocument(Dir)
-  Else
-    OpenDocument(FFileName);
-End;
-
 Procedure TGrokMarkdownForm.SourceMemoChange(Sender: TObject);
 Begin
   If FLoading Then
     Exit;
   SetDirty(True);
-  { Live-update preview while typing in source/split modes. }
-  If FViewMode <> mvmSource Then
-    ApplyPreviewText(FSourceMemo.Text);
 End;
 
 Procedure TGrokMarkdownForm.WatchTimerTimer(Sender: TObject);
