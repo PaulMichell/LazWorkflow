@@ -29,17 +29,21 @@ Type
   Private
     FApiBase: String;
     FModel: String;
+    FBaseSystemPrompt: String;
     FSystemPrompt: String;
+    FActiveSkill: String;
     FMessages: Array Of TGrokMessage;
     FLastError: String;
     FStreamThread: TThread;
     FBusy: Boolean;
     Procedure ClearStreamThread;
+    Procedure RebuildSystemPrompt;
   Public
     Constructor Create;
     Destructor Destroy; Override;
     Procedure ApplyConfig(Config: TGrokConfig);
     Procedure SetEndpoint(Const ApiBase, Model: String);
+    Procedure SetActiveSkill(Const SkillName: String);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TGrokMessageRole; Const Content: String);
     Function MessageCount: Integer;
@@ -52,6 +56,7 @@ Type
     Procedure MarkStreamComplete;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
+    Property ActiveSkill: String Read FActiveSkill;
     Property SystemPrompt: String Read FSystemPrompt Write FSystemPrompt;
     Property LastError: String Read FLastError;
   End;
@@ -62,7 +67,7 @@ Var
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth;
+  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, GrokSkills;
 
 Type
   TGrokStreamThread = Class(TThread)
@@ -349,11 +354,18 @@ Begin
   Inherited Create;
   FApiBase := GrokConfigDefaultApiBase;
   FModel := GrokConfigDefaultModel;
-  FSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
+  FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
+  FActiveSkill := '';
+  FSystemPrompt := FBaseSystemPrompt;
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
   FLastError := '';
+End;
+
+Procedure TGrokService.RebuildSystemPrompt;
+Begin
+  FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
 End;
 
 Destructor TGrokService.Destroy;
@@ -379,6 +391,7 @@ Begin
   If Not Assigned(Config) Then
     Exit;
   SetEndpoint(Config.ApiBase, Config.Model);
+  SetActiveSkill(Config.ActiveSkill);
   If Assigned(GrokOAuthClient) Then
     GrokOAuthClient.SetTokens(Config.ToOAuthTokens);
 End;
@@ -390,6 +403,16 @@ Begin
   If Model <> '' Then
     FModel := Model;
   WorkflowLogger.Info('GrokService', 'Endpoint updated – model=' + FModel);
+End;
+
+Procedure TGrokService.SetActiveSkill(Const SkillName: String);
+Begin
+  FActiveSkill := Trim(SkillName);
+  RebuildSystemPrompt;
+  If FActiveSkill <> '' Then
+    WorkflowLogger.Info('GrokService', 'Active skill set to ' + FActiveSkill)
+  Else
+    WorkflowLogger.Info('GrokService', 'Active skill cleared');
 End;
 
 Procedure TGrokService.ClearHistory;

@@ -1,11 +1,11 @@
 object GrokSettingsForm: TGrokSettingsForm
   Left = 300
-  Height = 360
+  Height = 430
   Top = 200
   Width = 520
   BorderStyle = bsDialog
   Caption = 'Grok Chat Settings'
-  ClientHeight = 360
+  ClientHeight = 430
   ClientWidth = 520
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
@@ -63,10 +63,29 @@ object GrokSettingsForm: TGrokSettingsForm
     TabOrder = 2
     Text = 'grok-4'
   end
-  object FApiBaseLabel: TLabel
+  object FSkillLabel: TLabel
     Left = 16
     Height = 17
     Top = 148
+    Width = 220
+    Caption = 'User skill (explicit session include):'
+    ParentColor = False
+  end
+  object FSkillCombo: TComboBox
+    Left = 16
+    Height = 28
+    Top = 168
+    Width = 488
+    Anchors = [akTop, akLeft, akRight]
+    ItemHeight = 0
+    Style = csDropDownList
+    TabOrder = 3
+    Text = '(None)'
+  end
+  object FApiBaseLabel: TLabel
+    Left = 16
+    Height = 17
+    Top = 206
     Width = 90
     Caption = 'API base URL:'
     ParentColor = False
@@ -74,16 +93,16 @@ object GrokSettingsForm: TGrokSettingsForm
   object FApiBaseEdit: TEdit
     Left = 16
     Height = 28
-    Top = 168
+    Top = 226
     Width = 488
     Anchors = [akTop, akLeft, akRight]
-    TabOrder = 3
+    TabOrder = 4
     Text = 'https://api.x.ai/v1'
   end
   object FManualLabel: TLabel
     Left = 16
     Height = 17
-    Top = 208
+    Top = 266
     Width = 360
     Caption = 'If browser cannot redirect, paste code or callback URL:'
     ParentColor = False
@@ -91,29 +110,29 @@ object GrokSettingsForm: TGrokSettingsForm
   object FManualEdit: TEdit
     Left = 16
     Height = 28
-    Top = 228
+    Top = 286
     Width = 368
     Anchors = [akTop, akLeft, akRight]
-    TabOrder = 4
+    TabOrder = 5
   end
   object FPasteCodeButton: TButton
     Left = 392
     Height = 28
-    Top = 228
+    Top = 286
     Width = 112
     Anchors = [akTop, akRight]
     Caption = 'Use pasted code'
     OnClick = PasteCodeButtonClick
-    TabOrder = 5
+    TabOrder = 6
   end
   object FHintLabel: TLabel
     Left = 16
     Height = 48
-    Top = 268
+    Top = 326
     Width = 488
     Anchors = [akTop, akLeft, akRight]
     AutoSize = False
-    Caption = 'Uses xAI OAuth (SuperGrok or X Premium subscription). No console API key or pay-as-you-go credits required. Tokens are stored in the IDE config directory (LazGrokChat.xml).'
+    Caption = 'User skills are loaded from ~/.grok/skills/<name>/SKILL.md and appended to the system prompt for every message in this session. Choose (None) to disable.'
     Font.Color = clGrayText
     ParentColor = False
     ParentFont = False
@@ -122,7 +141,7 @@ object GrokSettingsForm: TGrokSettingsForm
   object FButtonPanel: TButtonPanel
     Left = 6
     Height = 34
-    Top = 320
+    Top = 390
     Width = 508
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
@@ -132,7 +151,7 @@ object GrokSettingsForm: TGrokSettingsForm
     CloseButton.DefaultCaption = True
     CancelButton.Name = 'CancelButton'
     CancelButton.DefaultCaption = True
-    TabOrder = 6
+    TabOrder = 7
     ShowButtons = [pbOK, pbCancel]
   end
 end

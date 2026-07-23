@@ -149,10 +149,16 @@ Begin
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
-  FStatusFooter.SetAll(
-    Format('Model: %s', [FModelName]),
-    Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
-    StatusText);
+  If Assigned(GrokChatConfig) And (GrokChatConfig.ActiveSkill <> '') Then
+    FStatusFooter.SetAll(
+      Format('Model: %s | Skill: %s', [FModelName, GrokChatConfig.ActiveSkill]),
+      Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
+      StatusText)
+  Else
+    FStatusFooter.SetAll(
+      Format('Model: %s', [FModelName]),
+      Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
+      StatusText);
 End;
 
 Procedure TGrokChatForm.SetSending(IsSending: Boolean);

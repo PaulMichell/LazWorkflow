@@ -22,6 +22,7 @@ Type
   Private
     FApiBase: String;
     FModel: String;
+    FActiveSkill: String;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -38,6 +39,8 @@ Type
     Function IsSignedIn: Boolean;
     Property ApiBase: String Read FApiBase Write FApiBase;
     Property Model: String Read FModel Write FModel;
+    { Directory name under ~/.grok/skills, or empty for no skill. }
+    Property ActiveSkill: String Read FActiveSkill Write FActiveSkill;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -91,6 +94,7 @@ Begin
   Inherited Create;
   FApiBase := GrokConfigDefaultApiBase;
   FModel := GrokConfigDefaultModel;
+  FActiveSkill := '';
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -109,6 +113,7 @@ Begin
     Exit;
   FApiBase := Source.ApiBase;
   FModel := Source.Model;
+  FActiveSkill := Source.ActiveSkill;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -154,6 +159,7 @@ Begin
   Try
     FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
     FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
+    FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
     FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
     FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
     FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
@@ -188,6 +194,7 @@ Begin
   Try
     Cfg.SetValue('API/Base', FApiBase);
     Cfg.SetValue('API/Model', FModel);
+    Cfg.SetValue('Chat/ActiveSkill', FActiveSkill);
     { Clear legacy API key slot so settings cannot silently re-use console keys. }
     Cfg.SetValue('API/Key', '');
     Cfg.SetValue('OAuth/AccessToken', FAccessToken);

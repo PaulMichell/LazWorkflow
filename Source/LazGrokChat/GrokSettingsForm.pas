@@ -1,6 +1,6 @@
 Unit GrokSettingsForm;
 
-{ LazGrokChat OAuth sign-in and model settings dialog (c) 2026 Michell Computing. }
+{ LazGrokChat OAuth sign-in, model and skill settings dialog (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -19,6 +19,8 @@ Type
     FStatusValue: TLabel;
     FModelLabel: TLabel;
     FModelEdit: TEdit;
+    FSkillLabel: TLabel;
+    FSkillCombo: TComboBox;
     FApiBaseLabel: TLabel;
     FApiBaseEdit: TEdit;
     FHintLabel: TLabel;
@@ -37,6 +39,7 @@ Type
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
     Procedure RefreshAuthStatus;
+    Procedure PopulateSkills;
   End;
 
 Procedure ShowGrokSettingsForm;
@@ -46,7 +49,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  GrokConfig, GrokService, GrokOAuth, WorkflowLog, LCLIntf;
+  GrokConfig, GrokService, GrokOAuth, GrokSkills, WorkflowLog, LCLIntf;
 
 Procedure ShowGrokSettingsForm;
 Var
@@ -60,7 +63,8 @@ Begin
         Form.SaveToConfig;
         If Assigned(GrokClient) And Assigned(GrokChatConfig) Then
           GrokClient.ApplyConfig(GrokChatConfig);
-        WorkflowLogger.Info('GrokSettings', 'Saved – model=' + GrokChatConfig.Model);
+        WorkflowLogger.Info('GrokSettings',
+          'Saved – model=' + GrokChatConfig.Model + ' skill=' + GrokChatConfig.ActiveSkill);
       End;
   Finally
     Form.Free;
@@ -71,7 +75,36 @@ Procedure TGrokSettingsForm.FormCreate(Sender: TObject);
 Begin
   FButtonPanel.OKButton.Caption := 'OK';
   FButtonPanel.CancelButton.Caption := 'Cancel';
+  PopulateSkills;
   RefreshAuthStatus;
+End;
+
+Procedure TGrokSettingsForm.PopulateSkills;
+Var
+  Skills: TGrokSkillList;
+  I, SelectIdx: Integer;
+  ActiveName: String;
+Begin
+  ActiveName := '';
+  If Assigned(GrokChatConfig) Then
+    ActiveName := GrokChatConfig.ActiveSkill;
+  FSkillCombo.Style := csDropDownList;
+  FSkillCombo.Items.BeginUpdate;
+  Try
+    FSkillCombo.Items.Clear;
+    FSkillCombo.Items.Add(GrokSkillNoneCaption);
+    SelectIdx := 0;
+    Skills := ListUserSkills;
+    For I := 0 To High(Skills) Do
+      Begin
+        FSkillCombo.Items.Add(Skills[I].Name);
+        If SameText(Skills[I].Name, ActiveName) Then
+          SelectIdx := FSkillCombo.Items.Count - 1;
+      End;
+  Finally
+    FSkillCombo.Items.EndUpdate;
+  End;
+  FSkillCombo.ItemIndex := SelectIdx;
 End;
 
 Procedure TGrokSettingsForm.RefreshAuthStatus;
@@ -92,7 +125,6 @@ Begin
     FStatusValue.Caption := 'OAuth unavailable';
   FSignInButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
   FSignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
-  { Paste is only needed when a login is pending and the browser did not redirect. }
   FPasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
   FManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
   If SignedIn And (Not Pending) Then
@@ -104,17 +136,36 @@ Begin
 End;
 
 Procedure TGrokSettingsForm.LoadFromConfig;
+Var
+  I: Integer;
 Begin
   If Not Assigned(GrokChatConfig) Then
     Exit;
   FApiBaseEdit.Text := GrokChatConfig.ApiBase;
   FModelEdit.Text := GrokChatConfig.Model;
+  PopulateSkills;
+  If GrokChatConfig.ActiveSkill = '' Then
+    FSkillCombo.ItemIndex := 0
+  Else
+    Begin
+      I := FSkillCombo.Items.IndexOf(GrokChatConfig.ActiveSkill);
+      If I >= 0 Then
+        FSkillCombo.ItemIndex := I
+      Else
+        Begin
+          { Skill was removed from disk; keep name visible until user clears it. }
+          FSkillCombo.Items.Add(GrokChatConfig.ActiveSkill + ' (missing)');
+          FSkillCombo.ItemIndex := FSkillCombo.Items.Count - 1;
+        End;
+    End;
   If Assigned(GrokOAuthClient) And GrokChatConfig.IsSignedIn Then
     GrokOAuthClient.SetTokens(GrokChatConfig.ToOAuthTokens);
   RefreshAuthStatus;
 End;
 
 Procedure TGrokSettingsForm.SaveToConfig;
+Var
+  SkillName: String;
 Begin
   If Not Assigned(GrokChatConfig) Then
     Exit;
@@ -124,6 +175,14 @@ Begin
     GrokChatConfig.ApiBase := GrokConfigDefaultApiBase;
   If GrokChatConfig.Model = '' Then
     GrokChatConfig.Model := GrokConfigDefaultModel;
+  SkillName := '';
+  If (FSkillCombo.ItemIndex > 0) And (FSkillCombo.ItemIndex < FSkillCombo.Items.Count) Then
+    Begin
+      SkillName := FSkillCombo.Items[FSkillCombo.ItemIndex];
+      If Pos(' (missing)', SkillName) > 0 Then
+        SkillName := Copy(SkillName, 1, Pos(' (missing)', SkillName) - 1);
+    End;
+  GrokChatConfig.ActiveSkill := SkillName;
   If Assigned(GrokOAuthClient) Then
     GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   GrokChatConfig.Save;
@@ -157,7 +216,6 @@ Begin
       End
     Else
       Begin
-        { Callback failed but pending PKCE may still be valid for a one-shot paste. }
         If GrokOAuthClient.HasPendingLogin Then
           MessageDlg('Browser callback did not finish: ' + GrokOAuthClient.LastError + LineEnding +
             LineEnding +
@@ -206,7 +264,6 @@ Begin
             mtInformation, [mbOK], 0);
           Exit;
         End;
-      { Start a pending login and open the browser if none is active. }
       If GrokOAuthClient.BeginManualLogin(AuthUrl) Then
         Begin
           OpenURL(AuthUrl);
