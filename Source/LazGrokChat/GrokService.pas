@@ -288,7 +288,8 @@ End;
 
 Procedure TGrokStreamThread.ProcessSseLine(Const Line: String);
 Var
-  Payload, Delta, Trimmed: String;
+  Payload, Delta, Trimmed, LastLine, Prefix: String;
+  NL, I: Integer;
 Begin
   If Terminated Then
     Exit;
@@ -306,26 +307,53 @@ Begin
   Delta := ExtractDeltaContent(Payload);
   If Delta = '' Then
     Exit;
-  { Some gateways re-send a growing snapshot instead of a pure delta. If the new
-    payload already starts with what we have, only emit the unseen suffix. }
+  { Snapshot / rewrite handling:
+    1) Whole buffer is a growing prefix snapshot.
+    2) Current (last) line is rewritten as a longer snapshot without a newline. }
   If FAccumulated = '' Then
     Begin
       FAccumulated := Delta;
       EmitToken(Delta, False, '');
-    End
-  Else If (Length(Delta) >= Length(FAccumulated)) And
+      Exit;
+    End;
+  If (Length(Delta) >= Length(FAccumulated)) And
     (Copy(Delta, 1, Length(FAccumulated)) = FAccumulated) Then
     Begin
       Delta := Copy(Delta, Length(FAccumulated) + 1, MaxInt);
       FAccumulated := FAccumulated + Delta;
       If Delta <> '' Then
         EmitToken(Delta, False, '');
+      Exit;
+    End;
+  NL := 0;
+  For I := Length(FAccumulated) DownTo 1 Do
+    If FAccumulated[I] = #10 Then
+      Begin
+        NL := I;
+        Break;
+      End;
+  If NL > 0 Then
+    Begin
+      Prefix := Copy(FAccumulated, 1, NL);
+      LastLine := Copy(FAccumulated, NL + 1, MaxInt);
     End
   Else
     Begin
-      FAccumulated := FAccumulated + Delta;
-      EmitToken(Delta, False, '');
+      Prefix := '';
+      LastLine := FAccumulated;
     End;
+  If (LastLine <> '') And (Pos(#10, Delta) = 0) And
+    (Length(Delta) >= Length(LastLine)) And
+    (Copy(Delta, 1, Length(LastLine)) = LastLine) Then
+    Begin
+      Delta := Copy(Delta, Length(LastLine) + 1, MaxInt);
+      FAccumulated := Prefix + LastLine + Delta;
+      If Delta <> '' Then
+        EmitToken(Delta, False, '');
+      Exit;
+    End;
+  FAccumulated := FAccumulated + Delta;
+  EmitToken(Delta, False, '');
 End;
 
 Procedure TGrokStreamThread.ProcessSseChunk(Const Chunk: String);

@@ -187,18 +187,74 @@ Begin
   FChatMemo.Lines.Add('');
   FChatMemo.Lines.Add('[ASSISTANT]');
   FStreamingHeaderIndex := FChatMemo.Lines.Count - 1;
-  FChatMemo.Lines.Add('');
+  FChatMemo.Lines.Add('(waiting for model…)');
   FChatMemo.SelStart := Length(FChatMemo.Text);
+End;
+
+Procedure CollapsePrefixDuplicateLines(Lines: TStrings);
+Var
+  I: Integer;
+  Prev, NextLine: String;
+Begin
+  { Drop a line when the next line is the same text extended (partial rewrite
+    left behind by snapshot-style SSE chunks separated by newlines). }
+  I := 0;
+  While I < Lines.Count - 1 Do
+    Begin
+      Prev := Lines[I];
+      NextLine := Lines[I + 1];
+      If (Prev <> '') And (Length(NextLine) >= Length(Prev)) And
+        (Copy(NextLine, 1, Length(Prev)) = Prev) Then
+        Lines.Delete(I)
+      Else
+        Inc(I);
+    End;
+End;
+
+Function CollapsePrefixDuplicateText(Const TextValue: String): String;
+Var
+  Content: String;
+  Built: TStringList;
+  I, P: Integer;
+Begin
+  Content := StringReplace(TextValue, #13#10, #10, [rfReplaceAll]);
+  Content := StringReplace(Content, #13, #10, [rfReplaceAll]);
+  Built := TStringList.Create;
+  Try
+    I := 1;
+    While I <= Length(Content) Do
+      Begin
+        P := Pos(#10, Copy(Content, I, MaxInt));
+        If P = 0 Then
+          Begin
+            Built.Add(Copy(Content, I, MaxInt));
+            Break;
+          End;
+        Built.Add(Copy(Content, I, P - 1));
+        I := I + P;
+        If I > Length(Content) Then
+          Built.Add('');
+      End;
+    CollapsePrefixDuplicateLines(Built);
+    Result := '';
+    For I := 0 To Built.Count - 1 Do
+      Begin
+        If I > 0 Then
+          Result := Result + #10;
+        Result := Result + Built[I];
+      End;
+  Finally
+    Built.Free;
+  End;
 End;
 
 Procedure TGrokChatForm.RefreshAssistantStreamingDisplay;
 Var
-  Content, Line: String;
+  Content: String;
   StartIdx, I, P: Integer;
+  Built: TStringList;
 Begin
-  { Rebuild the assistant body from FAssistantAccum. Incremental Lines[i] += token
-    mishandles newlines (TStringList.Text drops trailing breaks) and can leave a
-    trail of partial rewrites when multi-line deltas arrive. }
+  { Rebuild the assistant body from FAssistantAccum. }
   If FStreamingHeaderIndex < 0 Then
     Exit;
   StartIdx := FStreamingHeaderIndex + 1;
@@ -213,23 +269,28 @@ Begin
       Exit;
     End;
 
-  I := 1;
-  While I <= Length(Content) Do
-    Begin
-      P := Pos(#10, Copy(Content, I, MaxInt));
-      If P = 0 Then
-        Begin
-          Line := Copy(Content, I, MaxInt);
-          FChatMemo.Lines.Add(Line);
-          Break;
-        End;
-      Line := Copy(Content, I, P - 1);
-      FChatMemo.Lines.Add(Line);
-      I := I + P;
-      { Preserve a trailing newline as an extra empty line. }
-      If I > Length(Content) Then
-        FChatMemo.Lines.Add('');
-    End;
+  Built := TStringList.Create;
+  Try
+    I := 1;
+    While I <= Length(Content) Do
+      Begin
+        P := Pos(#10, Copy(Content, I, MaxInt));
+        If P = 0 Then
+          Begin
+            Built.Add(Copy(Content, I, MaxInt));
+            Break;
+          End;
+        Built.Add(Copy(Content, I, P - 1));
+        I := I + P;
+        If I > Length(Content) Then
+          Built.Add('');
+      End;
+    CollapsePrefixDuplicateLines(Built);
+    For I := 0 To Built.Count - 1 Do
+      FChatMemo.Lines.Add(Built[I]);
+  Finally
+    Built.Free;
+  End;
   FChatMemo.SelStart := Length(FChatMemo.Text);
 End;
 
@@ -245,6 +306,8 @@ End;
 
 Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
 Begin
+  If FAssistantAccum <> '' Then
+    FAssistantAccum := CollapsePrefixDuplicateText(FAssistantAccum);
   If FStreamingHeaderIndex >= 0 Then
     RefreshAssistantStreamingDisplay;
   If ErrorText <> '' Then
@@ -280,11 +343,16 @@ End;
 Procedure TGrokChatForm.StreamToken(Const Token: String; IsFinished: Boolean;
   Const ErrorText: String);
 Begin
-  { Invoked on the main thread via Synchronize from the stream worker. }
+  { Invoked on the main thread via Synchronize from the stream worker.
+    Only delta.content is shown — not server-side reasoning/thinking tokens. }
   If Not IsFinished Then
     Begin
       If Token <> '' Then
-        AppendAssistantToken(Token);
+        Begin
+          If FAssistantAccum = '' Then
+            FStatusFooter.SetRightText('Streaming…');
+          AppendAssistantToken(Token);
+        End;
       Exit;
     End;
   FinishAssistantReply(ErrorText);
@@ -324,7 +392,9 @@ Begin
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       BeginAssistantReply;
       SetSending(True);
-      FStatusFooter.SetRightText('Streaming…');
+      { Large skill + IDE context means a noticeable wait before the first token.
+        That gap is model/server time-to-first-token, not local UI hang. }
+      FStatusFooter.SetRightText('Waiting for first token…');
       If Not GrokClient.StartStream(@StreamToken) Then
         FinishAssistantReply(GrokClient.LastError);
     End

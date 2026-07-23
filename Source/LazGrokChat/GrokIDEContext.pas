@@ -13,8 +13,10 @@ Uses
   Classes, SysUtils;
 
 Const
-  GrokContextMaxActiveChars = 100000;
-  GrokContextMaxProjectFiles = 400;
+  { Keep the default context modest so first-token latency stays reasonable.
+    Selection is preferred; full-file attach is capped. }
+  GrokContextMaxActiveChars = 48000;
+  GrokContextMaxProjectFiles = 250;
 
 Function BuildIDEContextBlock: String;
 
