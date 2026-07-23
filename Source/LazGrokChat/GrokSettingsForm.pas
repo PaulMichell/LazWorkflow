@@ -18,7 +18,9 @@ Type
     FStatusLabel: TLabel;
     FStatusValue: TLabel;
     FModelLabel: TLabel;
-    FModelEdit: TEdit;
+    FModelList: TListBox;
+    FModelHintLabel: TLabel;
+    FRefreshModelsButton: TButton;
     FSkillLabel: TLabel;
     FSkillCombo: TComboBox;
     FIncludeContextCheck: TCheckBox;
@@ -36,11 +38,13 @@ Type
     Procedure SignInButtonClick(Sender: TObject);
     Procedure SignOutButtonClick(Sender: TObject);
     Procedure PasteCodeButtonClick(Sender: TObject);
+    Procedure RefreshModelsButtonClick(Sender: TObject);
   Public
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
     Procedure RefreshAuthStatus;
     Procedure PopulateSkills;
+    Procedure PopulateModels(ForceRefresh: Boolean);
   End;
 
 Procedure ShowGrokSettingsForm;
@@ -51,6 +55,32 @@ Implementation
 
 Uses
   GrokConfig, GrokService, GrokOAuth, GrokSkills, WorkflowLog, LCLIntf;
+
+Procedure AddFallbackModels(List: TStrings);
+Begin
+  If List.IndexOf(GrokConfigDefaultModel) < 0 Then
+    List.Add(GrokConfigDefaultModel);
+  If List.IndexOf('grok-4') < 0 Then
+    List.Add('grok-4');
+  If List.IndexOf('grok-3') < 0 Then
+    List.Add('grok-3');
+End;
+
+Procedure SelectModelInList(List: TListBox; Const ModelName: String);
+Var
+  I: Integer;
+Begin
+  If ModelName = '' Then
+    Exit;
+  I := List.Items.IndexOf(ModelName);
+  If I >= 0 Then
+    List.ItemIndex := I
+  Else
+    Begin
+      List.Items.Insert(0, ModelName);
+      List.ItemIndex := 0;
+    End;
+End;
 
 Procedure ShowGrokSettingsForm;
 Var
@@ -74,6 +104,7 @@ End;
 
 Procedure TGrokSettingsForm.FormCreate(Sender: TObject);
 Begin
+  Caption := 'Project Chat Settings';
   FButtonPanel.OKButton.Caption := 'OK';
   FButtonPanel.CancelButton.Caption := 'Cancel';
   PopulateSkills;
@@ -108,6 +139,48 @@ Begin
   FSkillCombo.ItemIndex := SelectIdx;
 End;
 
+Procedure TGrokSettingsForm.PopulateModels(ForceRefresh: Boolean);
+Var
+  ErrorText, CurrentModel: String;
+  Ok: Boolean;
+Begin
+  CurrentModel := GrokConfigDefaultModel;
+  If Assigned(GrokChatConfig) And (Trim(GrokChatConfig.Model) <> '') Then
+    CurrentModel := GrokChatConfig.Model;
+
+  FModelList.Items.BeginUpdate;
+  Try
+    FModelList.Items.Clear;
+    Ok := False;
+    ErrorText := '';
+    If Assigned(GrokClient) And GrokClient.IsSignedIn And
+      (ForceRefresh Or Assigned(GrokOAuthClient)) Then
+      Begin
+        FModelHintLabel.Caption := 'Loading models…';
+        Application.ProcessMessages;
+        Ok := GrokClient.ListAvailableModels(FModelList.Items, ErrorText);
+      End
+    Else
+      ErrorText := 'Sign in to load the live model list.';
+
+    If Not Ok Then
+      Begin
+        AddFallbackModels(FModelList.Items);
+        If ErrorText <> '' Then
+          FModelHintLabel.Caption := ErrorText + ' Showing fallback list.'
+        Else
+          FModelHintLabel.Caption := 'Showing fallback list.';
+      End
+    Else
+      FModelHintLabel.Caption := Format('%d models available. Select one, then OK.',
+        [FModelList.Items.Count]);
+
+    SelectModelInList(FModelList, CurrentModel);
+  Finally
+    FModelList.Items.EndUpdate;
+  End;
+End;
+
 Procedure TGrokSettingsForm.RefreshAuthStatus;
 Var
   Busy, Pending, SignedIn: Boolean;
@@ -128,6 +201,7 @@ Begin
   FSignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
   FPasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
   FManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  FRefreshModelsButton.Enabled := Assigned(GrokClient) And SignedIn And (Not Busy);
   If SignedIn And (Not Pending) Then
     FManualLabel.Caption := 'Already signed in — paste is only for a failed browser redirect:'
   Else If Pending Then
@@ -143,7 +217,6 @@ Begin
   If Not Assigned(GrokChatConfig) Then
     Exit;
   FApiBaseEdit.Text := GrokChatConfig.ApiBase;
-  FModelEdit.Text := GrokChatConfig.Model;
   FIncludeContextCheck.Checked := GrokChatConfig.IncludeIDEContext;
   PopulateSkills;
   If GrokChatConfig.ActiveSkill = '' Then
@@ -162,21 +235,29 @@ Begin
     End;
   If Assigned(GrokOAuthClient) And GrokChatConfig.IsSignedIn Then
     GrokOAuthClient.SetTokens(GrokChatConfig.ToOAuthTokens);
+  If Assigned(GrokClient) Then
+    GrokClient.ApplyConfig(GrokChatConfig);
   RefreshAuthStatus;
+  PopulateModels(True);
 End;
 
 Procedure TGrokSettingsForm.SaveToConfig;
 Var
-  SkillName: String;
+  SkillName, ModelName: String;
 Begin
   If Not Assigned(GrokChatConfig) Then
     Exit;
   GrokChatConfig.ApiBase := Trim(FApiBaseEdit.Text);
-  GrokChatConfig.Model := Trim(FModelEdit.Text);
   If GrokChatConfig.ApiBase = '' Then
     GrokChatConfig.ApiBase := GrokConfigDefaultApiBase;
-  If GrokChatConfig.Model = '' Then
-    GrokChatConfig.Model := GrokConfigDefaultModel;
+
+  ModelName := '';
+  If (FModelList.ItemIndex >= 0) And (FModelList.ItemIndex < FModelList.Items.Count) Then
+    ModelName := Trim(FModelList.Items[FModelList.ItemIndex]);
+  If ModelName = '' Then
+    ModelName := GrokConfigDefaultModel;
+  GrokChatConfig.Model := ModelName;
+
   SkillName := '';
   If (FSkillCombo.ItemIndex > 0) And (FSkillCombo.ItemIndex < FSkillCombo.Items.Count) Then
     Begin
@@ -189,6 +270,13 @@ Begin
   If Assigned(GrokOAuthClient) Then
     GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   GrokChatConfig.Save;
+End;
+
+Procedure TGrokSettingsForm.RefreshModelsButtonClick(Sender: TObject);
+Begin
+  If Assigned(GrokClient) Then
+    GrokClient.SetEndpoint(Trim(FApiBaseEdit.Text), GrokClient.Model);
+  PopulateModels(True);
 End;
 
 Procedure TGrokSettingsForm.SignInButtonClick(Sender: TObject);
@@ -216,6 +304,7 @@ Begin
         MessageDlg('Signed in with SuperGrok / X Premium.' + LineEnding + LineEnding +
           'You do not need to paste the browser code — it is single-use and was already consumed.',
           mtInformation, [mbOK], 0);
+        PopulateModels(True);
       End
     Else
       Begin
@@ -245,6 +334,7 @@ Begin
       GrokChatConfig.Save;
     End;
   RefreshAuthStatus;
+  PopulateModels(False);
   WorkflowLogger.Info('GrokSettings', 'Signed out');
 End;
 
@@ -289,6 +379,7 @@ Begin
         GrokClient.ApplyConfig(GrokChatConfig);
       FManualEdit.Clear;
       MessageDlg('Signed in with SuperGrok / X Premium.', mtInformation, [mbOK], 0);
+      PopulateModels(True);
     End
   Else
     MessageDlg(GrokOAuthClient.LastError, mtWarning, [mbOK], 0);
@@ -306,9 +397,10 @@ Begin
       CanClose := False;
       Exit;
     End;
-  If Trim(FModelEdit.Text) = '' Then
+  If (FModelList.ItemIndex < 0) Or (FModelList.ItemIndex >= FModelList.Items.Count) Or
+    (Trim(FModelList.Items[FModelList.ItemIndex]) = '') Then
     Begin
-      MessageDlg('Model name is required (e.g. grok-4).', mtError, [mbOK], 0);
+      MessageDlg('Select a model from the list (e.g. grok-4.5).', mtError, [mbOK], 0);
       CanClose := False;
     End;
 End;

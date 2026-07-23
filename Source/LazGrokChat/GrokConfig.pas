@@ -15,7 +15,7 @@ Uses
 Const
   GrokConfigFileName = 'LazGrokChat.xml';
   GrokConfigDefaultApiBase = 'https://api.x.ai/v1';
-  GrokConfigDefaultModel = 'grok-4';
+  GrokConfigDefaultModel = 'grok-4.5';
 
 Type
   TGrokConfig = Class
@@ -184,6 +184,9 @@ Begin
     If Trim(FApiBase) = '' Then
       FApiBase := GrokConfigDefaultApiBase;
     If Trim(FModel) = '' Then
+      FModel := GrokConfigDefaultModel
+    Else If SameText(FModel, 'grok-4') Or SameText(FModel, 'grok-4-latest') Then
+      { Upgrade legacy default to current flagship. }
       FModel := GrokConfigDefaultModel;
     If Trim(FTokenType) = '' Then
       FTokenType := 'Bearer';

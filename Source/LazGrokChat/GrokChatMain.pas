@@ -25,7 +25,6 @@ Uses
 
 Var
   CmdGrokChat: TIDECommand;
-  CmdGrokNewChat: TIDECommand;
   CmdGrokOpenMarkdown: TIDECommand;
   CmdGrokReviewCompile: TIDECommand;
   CmdGrokReviewBuild: TIDECommand;
@@ -46,16 +45,6 @@ Begin
   Form := IDEWindowCreators.GetForm(GrokChatWindowCreator.FormName, True);
   If Form Is TGrokChatForm Then
     Result := TGrokChatForm(Form);
-End;
-
-Procedure DoGrokNewChat(Sender: TObject);
-Var
-  Form: TGrokChatForm;
-Begin
-  WorkflowLogger.Info('GrokChat', 'New chat requested');
-  Form := GetGrokChatForm(True);
-  If Assigned(Form) Then
-    Form.StartNewChat;
 End;
 
 Procedure DoGrokSettings(Sender: TObject);
@@ -109,14 +98,13 @@ Begin
     Cat := IDECommandList.CreateCategory(Nil, 'Grok', 'Grok');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdGrokChat := RegisterIDECommand(Cat, 'GrokChat', 'Show Grok Chat', Key, Nil, @ShowGrokChatWindow);
-  CmdGrokNewChat := RegisterIDECommand(Cat, 'GrokNewChat', 'New Grok Chat', Key, Nil, @DoGrokNewChat);
+  CmdGrokChat := RegisterIDECommand(Cat, 'GrokChat', 'Project Chat', Key, Nil, @ShowGrokChatWindow);
   CmdGrokOpenMarkdown := RegisterIDECommand(Cat, 'GrokOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoGrokOpenMarkdown);
   CmdGrokReviewCompile := RegisterIDECommand(Cat, 'GrokReviewCompile', 'Review Compile',
     Key, Nil, @DoGrokReviewCompile);
   CmdGrokReviewBuild := RegisterIDECommand(Cat, 'GrokReviewBuild', 'Review Build',
     Key, Nil, @DoGrokReviewBuild);
-  CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Grok Chat Settings', Key, Nil, @DoGrokSettings);
+  CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Project Chat Settings', Key, Nil, @DoGrokSettings);
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
     Two logical sections so Lazarus draws a separator before Settings, matching Repository. }
@@ -136,8 +124,7 @@ Begin
       mnuMain.Insert(InsertAt, AssistantMenu);
     End;
   MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
-  RegisterIDEMenuCommand(MainSec, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
-  RegisterIDEMenuCommand(MainSec, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
+  RegisterIDEMenuCommand(MainSec, 'GrokChat', 'Project Chat', Nil, Nil, CmdGrokChat);
   RegisterIDEMenuCommand(MainSec, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'GrokReviewCompile', 'Review Compile', Nil, Nil, CmdGrokReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'GrokReviewBuild', 'Review Build', Nil, Nil, CmdGrokReviewBuild);

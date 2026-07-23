@@ -3,7 +3,7 @@ object GrokChatForm: TGrokChatForm
   Height = 650
   Top = 100
   Width = 900
-  Caption = 'Grok Chat'
+  Caption = 'Project Chat'
   ClientHeight = 650
   ClientWidth = 900
   OnCreate = FormCreate

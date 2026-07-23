@@ -56,6 +56,8 @@ Type
     Procedure CancelStream;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
+    { GET /v1/language-models (fallback /v1/models). Fills ModelIds sorted, chat-oriented. }
+    Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
@@ -538,6 +540,131 @@ End;
 Function TGrokService.IsSignedIn: Boolean;
 Begin
   Result := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated;
+End;
+
+Function LooksLikeChatModelId(Const ModelId: String): Boolean;
+Var
+  LowerId: String;
+Begin
+  LowerId := LowerCase(Trim(ModelId));
+  Result := LowerId <> '';
+  If Not Result Then
+    Exit;
+  { Drop generation / media endpoints from the chat picker. }
+  If (Pos('imagine', LowerId) > 0) Or (Pos('video', LowerId) > 0) Or
+    (Pos('voice', LowerId) > 0) Or (Pos('tts', LowerId) > 0) Or
+    (Pos('embedding', LowerId) > 0) Or (Pos('whisper', LowerId) > 0) Or
+    (Pos('image-gen', LowerId) > 0) Then
+    Result := False;
+End;
+
+Function TGrokService.ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
+Var
+  Client: TFPHTTPClient;
+  AccessToken, BaseUrl, Body: String;
+  Data, Item: TJSONData;
+  Root, Obj: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+  ModelId: String;
+  Paths: Array[0..1] Of String;
+  PathIdx: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not Assigned(ModelIds) Then
+    Begin
+      ErrorText := 'Model list is nil.';
+      Exit;
+    End;
+  ModelIds.Clear;
+  If Not Assigned(GrokOAuthClient) Then
+    Begin
+      ErrorText := 'OAuth client is not available.';
+      Exit;
+    End;
+  AccessToken := GrokOAuthClient.GetValidAccessToken;
+  If AccessToken = '' Then
+    Begin
+      ErrorText := GrokOAuthClient.LastError;
+      If ErrorText = '' Then
+        ErrorText := 'Not signed in.';
+      Exit;
+    End;
+  If Assigned(GrokChatConfig) Then
+    Begin
+      GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      GrokChatConfig.Save;
+    End;
+
+  BaseUrl := Trim(FApiBase);
+  While (Length(BaseUrl) > 0) And (BaseUrl[Length(BaseUrl)] = '/') Do
+    SetLength(BaseUrl, Length(BaseUrl) - 1);
+  Paths[0] := '/language-models';
+  Paths[1] := '/models';
+
+  Client := TFPHTTPClient.Create(Nil);
+  Try
+    Client.AllowRedirect := True;
+    Client.AddHeader('Authorization', 'Bearer ' + AccessToken);
+    Client.AddHeader('Accept', 'application/json');
+    For PathIdx := 0 To High(Paths) Do
+      Begin
+        Body := '';
+        Data := Nil;
+        Try
+          Try
+            Body := Client.Get(BaseUrl + Paths[PathIdx]);
+            Data := GetJSON(Body);
+            If Not (Data Is TJSONObject) Then
+              Continue;
+            Root := TJSONObject(Data);
+            Arr := Root.FindPath('models') As TJSONArray;
+            If Arr = Nil Then
+              Arr := Root.FindPath('data') As TJSONArray;
+            If (Arr = Nil) Or (Arr.Count < 1) Then
+              Continue;
+            For I := 0 To Arr.Count - 1 Do
+              Begin
+                Item := Arr.Items[I];
+                ModelId := '';
+                If Item Is TJSONObject Then
+                  Begin
+                    Obj := TJSONObject(Item);
+                    ModelId := JsonStringField(Obj, 'id');
+                    { Skip pure image-generation entries when /models is used. }
+                    If (Obj.Find('image_price') <> Nil) And
+                      (Obj.Find('completion_text_token_price') = Nil) And
+                      (Obj.Find('prompt_text_token_price') = Nil) Then
+                      Continue;
+                  End
+                Else If Item.JSONType = jtString Then
+                  ModelId := Item.AsString;
+                If LooksLikeChatModelId(ModelId) And (ModelIds.IndexOf(ModelId) < 0) Then
+                  ModelIds.Add(ModelId);
+              End;
+            If ModelIds.Count > 0 Then
+              Begin
+                If ModelIds Is TStringList Then
+                  TStringList(ModelIds).Sort;
+                Result := True;
+                WorkflowLogger.Info('GrokService',
+                  Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
+                Exit;
+              End;
+          Except
+            On E: Exception Do
+              ErrorText := E.Message;
+          End;
+        Finally
+          Data.Free;
+        End;
+      End;
+    If ErrorText = '' Then
+      ErrorText := 'No chat models returned by the API.';
+  Finally
+    Client.Free;
+  End;
 End;
 
 Function TGrokService.StartStream(OnToken: TGrokStreamEvent): Boolean;

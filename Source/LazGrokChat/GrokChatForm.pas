@@ -41,6 +41,7 @@ Type
     Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
   Private
+    FElapsedTimer: TTimer;
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
@@ -50,8 +51,13 @@ Type
     FAssistantContent: String; { Final answer channel (history). }
     FAssistantThinking: String; { Reasoning stream (display only). }
     FReviewInProgress: Boolean;
+    FStreamStart: TDateTime;
+    FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     Procedure UpdateStatusFooter;
+    Function FormatElapsedStatus(Const Phase: String): String;
+    Procedure SetStreamPhase(Const Phase: String);
     Procedure SetSending(IsSending: Boolean);
+    Procedure ElapsedTimerTimer(Sender: TObject);
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
     Function FormatAssistantBody(Const Thinking, Content: String): String;
@@ -91,7 +97,7 @@ Uses
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
-  FModelName := 'grok-4';
+  FModelName := GrokConfigDefaultModel;
   FContextUsed := 0;
   FContextLimit := 128000;
   FSending := False;
@@ -100,6 +106,8 @@ Begin
   FAssistantContent := '';
   FAssistantThinking := '';
   FReviewInProgress := False;
+  FStreamStart := 0;
+  FStatusPhase := '';
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -113,21 +121,60 @@ End;
 
 Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
+  Caption := 'Project Chat';
   { WordWrap + Lines[] is a classic corruption source while streaming. }
   FChatMemo.WordWrap := False;
   FChatMemo.ScrollBars := ssAutoBoth;
+  If Not Assigned(FElapsedTimer) Then
+    Begin
+      FElapsedTimer := TTimer.Create(Self);
+      FElapsedTimer.Enabled := False;
+      FElapsedTimer.Interval := 250;
+      FElapsedTimer.OnTimer := @ElapsedTimerTimer;
+    End;
   RefreshFromConfig;
   UpdateStatusFooter;
   If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
-    AppendMessage('system', 'Grok Chat ready. Signed in with SuperGrok / X Premium — send a message.')
+    AppendMessage('system', 'Project Chat ready. Signed in with SuperGrok / X Premium — send a message.')
   Else
-    AppendMessage('system', 'Grok Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
-  WorkflowLogger.Info('GrokChat', 'Grok Chat window created');
+    AppendMessage('system', 'Project Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
+  WorkflowLogger.Info('GrokChat', 'Project Chat window created');
 End;
 
 Procedure TGrokChatForm.FormDestroy(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GrokChat', 'Grok Chat window destroyed');
+  If Assigned(FElapsedTimer) Then
+    FElapsedTimer.Enabled := False;
+  WorkflowLogger.Info('GrokChat', 'Project Chat window destroyed');
+End;
+
+Function TGrokChatForm.FormatElapsedStatus(Const Phase: String): String;
+Var
+  Secs, Mins, Rem: Integer;
+Begin
+  If FStreamStart <= 0 Then
+    Begin
+      Result := Phase;
+      Exit;
+    End;
+  Secs := Round((Now - FStreamStart) * 24 * 60 * 60);
+  If Secs < 0 Then
+    Secs := 0;
+  Mins := Secs Div 60;
+  Rem := Secs Mod 60;
+  Result := Format('%s %d:%2.2d', [Phase, Mins, Rem]);
+End;
+
+Procedure TGrokChatForm.SetStreamPhase(Const Phase: String);
+Begin
+  FStatusPhase := Phase;
+  FStatusFooter.SetRightText(FormatElapsedStatus(Phase));
+End;
+
+Procedure TGrokChatForm.ElapsedTimerTimer(Sender: TObject);
+Begin
+  If FSending And (FStatusPhase <> '') Then
+    FStatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
 End;
 
 Procedure TGrokChatForm.RefreshFromConfig;
@@ -152,7 +199,11 @@ Begin
   Else
     Pct := 0;
   If FSending Then
-    StatusText := 'Streaming…'
+    Begin
+      If FStatusPhase = '' Then
+        FStatusPhase := 'Waiting for first token…';
+      StatusText := FormatElapsedStatus(FStatusPhase);
+    End
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
   Else If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
@@ -179,6 +230,21 @@ Begin
   FReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FInputEdit.ReadOnly := IsSending;
+  If IsSending Then
+    Begin
+      FStreamStart := Now;
+      If FStatusPhase = '' Then
+        FStatusPhase := 'Waiting for first token…';
+      If Assigned(FElapsedTimer) Then
+        FElapsedTimer.Enabled := True;
+    End
+  Else
+    Begin
+      If Assigned(FElapsedTimer) Then
+        FElapsedTimer.Enabled := False;
+      FStatusPhase := '';
+      FStreamStart := 0;
+    End;
   UpdateStatusFooter;
 End;
 
@@ -245,11 +311,11 @@ Begin
   FAssistantContent := ContentSnapshot;
   FAssistantThinking := ThinkingSnapshot;
   If FAssistantContent <> '' Then
-    FStatusFooter.SetRightText('Streaming…')
+    SetStreamPhase('Streaming…')
   Else If FAssistantThinking <> '' Then
-    FStatusFooter.SetRightText('Thinking…')
+    SetStreamPhase('Thinking…')
   Else
-    FStatusFooter.SetRightText('Waiting for first token…');
+    SetStreamPhase('Waiting for first token…');
   RefreshAssistantStreamingDisplay;
 End;
 
@@ -338,10 +404,10 @@ Begin
       GrokClient.AddMessage(gmrUser, ApiText);
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       BeginAssistantReply;
+      FStatusPhase := 'Waiting for first token…';
       SetSending(True);
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
-      FStatusFooter.SetRightText('Waiting for first token…');
       If Not GrokClient.StartStream(@StreamToken) Then
         FinishAssistantReply(GrokClient.LastError);
     End
