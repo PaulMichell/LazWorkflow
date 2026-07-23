@@ -1,11 +1,11 @@
 object GrokSettingsForm: TGrokSettingsForm
   Left = 300
-  Height = 430
+  Height = 470
   Top = 200
   Width = 520
   BorderStyle = bsDialog
   Caption = 'Grok Chat Settings'
-  ClientHeight = 430
+  ClientHeight = 470
   ClientWidth = 520
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
@@ -82,10 +82,21 @@ object GrokSettingsForm: TGrokSettingsForm
     TabOrder = 3
     Text = '(None)'
   end
+  object FIncludeContextCheck: TCheckBox
+    Left = 16
+    Height = 23
+    Top = 204
+    Width = 488
+    Anchors = [akTop, akLeft, akRight]
+    Caption = 'Include IDE context (active editor + project file list) with each message'
+    Checked = True
+    State = cbChecked
+    TabOrder = 4
+  end
   object FApiBaseLabel: TLabel
     Left = 16
     Height = 17
-    Top = 206
+    Top = 238
     Width = 90
     Caption = 'API base URL:'
     ParentColor = False
@@ -93,16 +104,16 @@ object GrokSettingsForm: TGrokSettingsForm
   object FApiBaseEdit: TEdit
     Left = 16
     Height = 28
-    Top = 226
+    Top = 258
     Width = 488
     Anchors = [akTop, akLeft, akRight]
-    TabOrder = 4
+    TabOrder = 5
     Text = 'https://api.x.ai/v1'
   end
   object FManualLabel: TLabel
     Left = 16
     Height = 17
-    Top = 266
+    Top = 298
     Width = 360
     Caption = 'If browser cannot redirect, paste code or callback URL:'
     ParentColor = False
@@ -110,29 +121,29 @@ object GrokSettingsForm: TGrokSettingsForm
   object FManualEdit: TEdit
     Left = 16
     Height = 28
-    Top = 286
+    Top = 318
     Width = 368
     Anchors = [akTop, akLeft, akRight]
-    TabOrder = 5
+    TabOrder = 6
   end
   object FPasteCodeButton: TButton
     Left = 392
     Height = 28
-    Top = 286
+    Top = 318
     Width = 112
     Anchors = [akTop, akRight]
     Caption = 'Use pasted code'
     OnClick = PasteCodeButtonClick
-    TabOrder = 6
+    TabOrder = 7
   end
   object FHintLabel: TLabel
     Left = 16
     Height = 48
-    Top = 326
+    Top = 358
     Width = 488
     Anchors = [akTop, akLeft, akRight]
     AutoSize = False
-    Caption = 'User skills are loaded from ~/.grok/skills/<name>/SKILL.md and appended to the system prompt for every message in this session. Choose (None) to disable.'
+    Caption = 'User skills load from ~/.grok/skills/<name>/SKILL.md into the system prompt. IDE context attaches the active source unit (or selection) and the project file list so the model can answer about code you have open.'
     Font.Color = clGrayText
     ParentColor = False
     ParentFont = False
@@ -141,7 +152,7 @@ object GrokSettingsForm: TGrokSettingsForm
   object FButtonPanel: TButtonPanel
     Left = 6
     Height = 34
-    Top = 390
+    Top = 430
     Width = 508
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
@@ -151,7 +162,8 @@ object GrokSettingsForm: TGrokSettingsForm
     CloseButton.DefaultCaption = True
     CancelButton.Name = 'CancelButton'
     CancelButton.DefaultCaption = True
-    TabOrder = 7
+    TabOrder = 8
     ShowButtons = [pbOK, pbCancel]
   end
 end
+

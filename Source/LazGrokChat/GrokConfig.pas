@@ -23,6 +23,7 @@ Type
     FApiBase: String;
     FModel: String;
     FActiveSkill: String;
+    FIncludeIDEContext: Boolean;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -41,6 +42,8 @@ Type
     Property Model: String Read FModel Write FModel;
     { Directory name under ~/.grok/skills, or empty for no skill. }
     Property ActiveSkill: String Read FActiveSkill Write FActiveSkill;
+    { Attach active editor + project file list to each outgoing user message. }
+    Property IncludeIDEContext: Boolean Read FIncludeIDEContext Write FIncludeIDEContext;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -95,6 +98,7 @@ Begin
   FApiBase := GrokConfigDefaultApiBase;
   FModel := GrokConfigDefaultModel;
   FActiveSkill := '';
+  FIncludeIDEContext := True;
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -114,6 +118,7 @@ Begin
   FApiBase := Source.ApiBase;
   FModel := Source.Model;
   FActiveSkill := Source.ActiveSkill;
+  FIncludeIDEContext := Source.IncludeIDEContext;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -160,6 +165,7 @@ Begin
     FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
     FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
     FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
+    FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
     FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
     FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
     FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
@@ -195,6 +201,7 @@ Begin
     Cfg.SetValue('API/Base', FApiBase);
     Cfg.SetValue('API/Model', FModel);
     Cfg.SetValue('Chat/ActiveSkill', FActiveSkill);
+    Cfg.SetValue('Chat/IncludeIDEContext', FIncludeIDEContext);
     { Clear legacy API key slot so settings cannot silently re-use console keys. }
     Cfg.SetValue('API/Key', '');
     Cfg.SetValue('OAuth/AccessToken', FAccessToken);

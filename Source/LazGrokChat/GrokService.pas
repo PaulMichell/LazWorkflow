@@ -304,7 +304,24 @@ Begin
   If Payload = '[DONE]' Then
     Exit;
   Delta := ExtractDeltaContent(Payload);
-  If Delta <> '' Then
+  If Delta = '' Then
+    Exit;
+  { Some gateways re-send a growing snapshot instead of a pure delta. If the new
+    payload already starts with what we have, only emit the unseen suffix. }
+  If FAccumulated = '' Then
+    Begin
+      FAccumulated := Delta;
+      EmitToken(Delta, False, '');
+    End
+  Else If (Length(Delta) >= Length(FAccumulated)) And
+    (Copy(Delta, 1, Length(FAccumulated)) = FAccumulated) Then
+    Begin
+      Delta := Copy(Delta, Length(FAccumulated) + 1, MaxInt);
+      FAccumulated := FAccumulated + Delta;
+      If Delta <> '' Then
+        EmitToken(Delta, False, '');
+    End
+  Else
     Begin
       FAccumulated := FAccumulated + Delta;
       EmitToken(Delta, False, '');

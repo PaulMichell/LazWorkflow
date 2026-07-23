@@ -81,8 +81,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, LazIDEIntf, IDEMsgIntf,
-  IDEExternToolIntf;
+  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, GrokIDEContext, LazIDEIntf,
+  IDEMsgIntf, IDEExternToolIntf;
 
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
@@ -291,6 +291,9 @@ Begin
 End;
 
 Procedure TGrokChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Var
+  ApiText, ContextBlock: String;
+  WithContext: Boolean;
 Begin
   If Trim(UserText) = '' Then
     Exit;
@@ -307,9 +310,18 @@ Begin
       If Not Assigned(GrokClient) Then
         Exit;
       RefreshFromConfig;
-      AppendMessage('user', UserText);
-      GrokClient.AddMessage(gmrUser, UserText);
-      FContextUsed := FContextUsed + Length(UserText) Div 4 + 8;
+      ApiText := UserText;
+      WithContext := Assigned(GrokChatConfig) And GrokChatConfig.IncludeIDEContext;
+      If WithContext Then
+        Begin
+          ContextBlock := BuildIDEContextBlock;
+          ApiText := UserText + LineEnding + LineEnding + ContextBlock;
+          AppendMessage('user', UserText + LineEnding + '(IDE context attached: active editor + project files)');
+        End
+      Else
+        AppendMessage('user', UserText);
+      GrokClient.AddMessage(gmrUser, ApiText);
+      FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       BeginAssistantReply;
       SetSending(True);
       FStatusFooter.SetRightText('Streaming…');

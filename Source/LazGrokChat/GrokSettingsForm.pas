@@ -21,6 +21,7 @@ Type
     FModelEdit: TEdit;
     FSkillLabel: TLabel;
     FSkillCombo: TComboBox;
+    FIncludeContextCheck: TCheckBox;
     FApiBaseLabel: TLabel;
     FApiBaseEdit: TEdit;
     FHintLabel: TLabel;
@@ -143,6 +144,7 @@ Begin
     Exit;
   FApiBaseEdit.Text := GrokChatConfig.ApiBase;
   FModelEdit.Text := GrokChatConfig.Model;
+  FIncludeContextCheck.Checked := GrokChatConfig.IncludeIDEContext;
   PopulateSkills;
   If GrokChatConfig.ActiveSkill = '' Then
     FSkillCombo.ItemIndex := 0
@@ -183,6 +185,7 @@ Begin
         SkillName := Copy(SkillName, 1, Pos(' (missing)', SkillName) - 1);
     End;
   GrokChatConfig.ActiveSkill := SkillName;
+  GrokChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
   If Assigned(GrokOAuthClient) Then
     GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   GrokChatConfig.Save;
