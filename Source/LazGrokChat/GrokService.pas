@@ -1,6 +1,6 @@
 Unit GrokService;
 
-{ Grok / OpenAI-compatible LLM service with SSE streaming (c) 2026 Michell Computing. }
+{ Grok LLM service with OAuth Bearer auth and SSE streaming (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -28,7 +28,6 @@ Type
   TGrokService = Class
   Private
     FApiBase: String;
-    FApiKey: String;
     FModel: String;
     FSystemPrompt: String;
     FMessages: Array Of TGrokMessage;
@@ -40,11 +39,12 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Procedure ApplyConfig(Config: TGrokConfig);
-    Procedure SetCredentials(Const ApiBase, ApiKey, Model: String);
+    Procedure SetEndpoint(Const ApiBase, Model: String);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TGrokMessageRole; Const Content: String);
     Function MessageCount: Integer;
     Function IsBusy: Boolean;
+    Function IsSignedIn: Boolean;
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
     Function StartStream(OnToken: TGrokStreamEvent): Boolean;
     Procedure CancelStream;
@@ -62,13 +62,13 @@ Var
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser;
+  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth;
 
 Type
   TGrokStreamThread = Class(TThread)
   Private
     FApiBase: String;
-    FApiKey: String;
+    FAccessToken: String;
     FModel: String;
     FRequestJson: String;
     FOnToken: TGrokStreamEvent;
@@ -85,7 +85,7 @@ Type
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(Const ApiBase, ApiKey, Model, RequestJson: String;
+    Constructor Create(Const ApiBase, AccessToken, Model, RequestJson: String;
       OnToken: TGrokStreamEvent);
   End;
 
@@ -193,13 +193,13 @@ End;
 
 { TGrokStreamThread }
 
-Constructor TGrokStreamThread.Create(Const ApiBase, ApiKey, Model, RequestJson: String;
+Constructor TGrokStreamThread.Create(Const ApiBase, AccessToken, Model, RequestJson: String;
   OnToken: TGrokStreamEvent);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   FApiBase := ApiBase;
-  FApiKey := ApiKey;
+  FAccessToken := AccessToken;
   FModel := Model;
   FRequestJson := RequestJson;
   FOnToken := OnToken;
@@ -279,7 +279,6 @@ Var
   Line: String;
 Begin
   FSseBuffer := FSseBuffer + Chunk;
-  { Normalize CRLF. }
   FSseBuffer := StringReplace(FSseBuffer, #13#10, #10, [rfReplaceAll]);
   FSseBuffer := StringReplace(FSseBuffer, #13, #10, [rfReplaceAll]);
   Repeat
@@ -312,11 +311,10 @@ Begin
   Try
     Try
       Client.AllowRedirect := True;
-      Client.AddHeader('Authorization', 'Bearer ' + FApiKey);
+      Client.AddHeader('Authorization', 'Bearer ' + FAccessToken);
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');
       Client.RequestBody := Body;
-      { Empty allowed codes: accept any status so we can report the error body. }
       Client.HTTPMethod('POST', Url, OutStream, []);
       Code := Client.ResponseStatusCode;
       If (Code < 200) Or (Code >= 300) Then
@@ -350,7 +348,6 @@ Constructor TGrokService.Create;
 Begin
   Inherited Create;
   FApiBase := GrokConfigDefaultApiBase;
-  FApiKey := '';
   FModel := GrokConfigDefaultModel;
   FSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
   SetLength(FMessages, 0);
@@ -381,17 +378,18 @@ Procedure TGrokService.ApplyConfig(Config: TGrokConfig);
 Begin
   If Not Assigned(Config) Then
     Exit;
-  SetCredentials(Config.ApiBase, Config.ApiKey, Config.Model);
+  SetEndpoint(Config.ApiBase, Config.Model);
+  If Assigned(GrokOAuthClient) Then
+    GrokOAuthClient.SetTokens(Config.ToOAuthTokens);
 End;
 
-Procedure TGrokService.SetCredentials(Const ApiBase, ApiKey, Model: String);
+Procedure TGrokService.SetEndpoint(Const ApiBase, Model: String);
 Begin
   If ApiBase <> '' Then
     FApiBase := ApiBase;
-  FApiKey := ApiKey;
   If Model <> '' Then
     FModel := Model;
-  WorkflowLogger.Info('GrokService', 'Credentials updated – model=' + FModel);
+  WorkflowLogger.Info('GrokService', 'Endpoint updated – model=' + FModel);
 End;
 
 Procedure TGrokService.ClearHistory;
@@ -420,9 +418,14 @@ Begin
   Result := FBusy;
 End;
 
+Function TGrokService.IsSignedIn: Boolean;
+Begin
+  Result := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated;
+End;
+
 Function TGrokService.StartStream(OnToken: TGrokStreamEvent): Boolean;
 Var
-  RequestJson: String;
+  RequestJson, AccessToken: String;
 Begin
   Result := False;
   FLastError := '';
@@ -431,10 +434,24 @@ Begin
       FLastError := 'A request is already in progress.';
       Exit;
     End;
-  If Trim(FApiKey) = '' Then
+  If Not Assigned(GrokOAuthClient) Then
     Begin
-      FLastError := 'API key is not set. Open Grok Settings and enter your key.';
+      FLastError := 'OAuth client is not available.';
       Exit;
+    End;
+  AccessToken := GrokOAuthClient.GetValidAccessToken;
+  If AccessToken = '' Then
+    Begin
+      FLastError := GrokOAuthClient.LastError;
+      If FLastError = '' Then
+        FLastError := 'Not signed in. Open Grok Settings and sign in with SuperGrok / X Premium.';
+      Exit;
+    End;
+  { Persist refreshed tokens so the next IDE session keeps working. }
+  If Assigned(GrokChatConfig) Then
+    Begin
+      GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      GrokChatConfig.Save;
     End;
   If Not Assigned(OnToken) Then
     Begin
@@ -444,7 +461,7 @@ Begin
 
   ClearStreamThread;
   RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages);
-  FStreamThread := TGrokStreamThread.Create(FApiBase, FApiKey, FModel, RequestJson, OnToken);
+  FStreamThread := TGrokStreamThread.Create(FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;
   FStreamThread.Start;
   Result := True;

@@ -95,7 +95,10 @@ Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
   RefreshFromConfig;
   UpdateStatusFooter;
-  AppendMessage('system', 'Grok Chat ready. Configure your API key under Settings, then send a message.');
+  If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
+    AppendMessage('system', 'Grok Chat ready. Signed in with SuperGrok / X Premium — send a message.')
+  Else
+    AppendMessage('system', 'Grok Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
   WorkflowLogger.Info('GrokChat', 'Grok Chat window created');
 End;
 
@@ -127,10 +130,10 @@ Begin
     Pct := 0;
   If FSending Then
     StatusText := 'Streaming…'
-  Else If Assigned(GrokChatConfig) And GrokChatConfig.HasApiKey Then
+  Else If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
     StatusText := 'Ready'
   Else
-    StatusText := 'No API key';
+    StatusText := 'Not signed in';
   FStatusFooter.SetAll(
     Format('Model: %s', [FModelName]),
     Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
@@ -244,9 +247,9 @@ Begin
   UserText := Trim(FInputEdit.Text);
   If UserText = '' Then
     Exit;
-  If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.HasApiKey) Then
+  If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.IsSignedIn) Then
     Begin
-      MessageDlg('Set your Grok API key in Settings before sending.', mtInformation, [mbOK], 0);
+      MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
       SettingsActionExecute(Nil);
       Exit;
     End;

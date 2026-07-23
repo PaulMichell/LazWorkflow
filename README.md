@@ -23,6 +23,7 @@ Michell Computing style packages that provide a seamless, native Git management 
 
 ### LazGrokChat
 - Persistent multi-conversation chat with streaming
+- **xAI OAuth sign-in** (SuperGrok / X Premium) — no console API key required
 - Status footer (context usage, model, tokens, connection)
 - Live Markdown document windows (auto-reload on disk change) — ideal for `plan.md` / TODOs
 - Direct compiler invocation via IDEIntf
@@ -34,6 +35,7 @@ Michell Computing style packages that provide a seamless, native Git management 
 - Lazarus 3.x / 4.x (or trunk)
 - Free Pascal 3.2.2+ (tested with custom 3.3.1 builds)
 - Cross-platform: Linux, Windows, macOS
+- For LazGrokChat: SuperGrok or X Premium subscription (OAuth via `accounts.x.ai` / `auth.x.ai`)
 
 ## Installation
 

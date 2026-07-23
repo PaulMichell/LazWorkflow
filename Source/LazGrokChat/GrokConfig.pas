@@ -1,6 +1,6 @@
 Unit GrokConfig;
 
-{ Persistent LazGrokChat settings (API base, key, model) (c) 2026 Michell Computing. }
+{ Persistent LazGrokChat settings (OAuth tokens, model) (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,7 +10,7 @@ Unit GrokConfig;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, GrokOAuth;
 
 Const
   GrokConfigFileName = 'LazGrokChat.xml';
@@ -21,17 +21,28 @@ Type
   TGrokConfig = Class
   Private
     FApiBase: String;
-    FApiKey: String;
     FModel: String;
+    FAccessToken: String;
+    FRefreshToken: String;
+    FTokenType: String;
+    FScope: String;
+    FExpiresAt: TDateTime;
   Public
     Constructor Create;
     Procedure Load;
     Procedure Save;
     Procedure Assign(Source: TGrokConfig);
-    Function HasApiKey: Boolean;
+    Procedure ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
+    Procedure ClearOAuthTokens;
+    Function ToOAuthTokens: TGrokOAuthTokens;
+    Function IsSignedIn: Boolean;
     Property ApiBase: String Read FApiBase Write FApiBase;
-    Property ApiKey: String Read FApiKey Write FApiKey;
     Property Model: String Read FModel Write FModel;
+    Property AccessToken: String Read FAccessToken Write FAccessToken;
+    Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
+    Property TokenType: String Read FTokenType Write FTokenType;
+    Property Scope: String Read FScope Write FScope;
+    Property ExpiresAt: TDateTime Read FExpiresAt Write FExpiresAt;
   End;
 
 Var
@@ -42,17 +53,54 @@ Implementation
 Uses
   BaseIDEIntf, LazConfigStorage;
 
+Function DateTimeToConfig(Value: TDateTime): String;
+Begin
+  If Value <= 0 Then
+    Result := ''
+  Else
+    Result := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', Value);
+End;
+
+Function ConfigToDateTime(Const Value: String): TDateTime;
+Var
+  Y, M, D, H, N, S: Integer;
+Begin
+  Result := 0;
+  If Trim(Value) = '' Then
+    Exit;
+  { yyyy-mm-ddThh:nn:ss }
+  If Length(Value) < 19 Then
+    Exit;
+  Y := StrToIntDef(Copy(Value, 1, 4), 0);
+  M := StrToIntDef(Copy(Value, 6, 2), 0);
+  D := StrToIntDef(Copy(Value, 9, 2), 0);
+  H := StrToIntDef(Copy(Value, 12, 2), 0);
+  N := StrToIntDef(Copy(Value, 15, 2), 0);
+  S := StrToIntDef(Copy(Value, 18, 2), 0);
+  If (Y < 2000) Or (M < 1) Or (D < 1) Then
+    Exit;
+  Try
+    Result := EncodeDate(Y, M, D) + EncodeTime(H, N, S, 0);
+  Except
+    Result := 0;
+  End;
+End;
+
 Constructor TGrokConfig.Create;
 Begin
   Inherited Create;
   FApiBase := GrokConfigDefaultApiBase;
-  FApiKey := '';
   FModel := GrokConfigDefaultModel;
+  FAccessToken := '';
+  FRefreshToken := '';
+  FTokenType := 'Bearer';
+  FScope := '';
+  FExpiresAt := 0;
 End;
 
-Function TGrokConfig.HasApiKey: Boolean;
+Function TGrokConfig.IsSignedIn: Boolean;
 Begin
-  Result := Trim(FApiKey) <> '';
+  Result := (Trim(FAccessToken) <> '') Or (Trim(FRefreshToken) <> '');
 End;
 
 Procedure TGrokConfig.Assign(Source: TGrokConfig);
@@ -60,23 +108,73 @@ Begin
   If Not Assigned(Source) Then
     Exit;
   FApiBase := Source.ApiBase;
-  FApiKey := Source.ApiKey;
   FModel := Source.Model;
+  FAccessToken := Source.AccessToken;
+  FRefreshToken := Source.RefreshToken;
+  FTokenType := Source.TokenType;
+  FScope := Source.Scope;
+  FExpiresAt := Source.ExpiresAt;
+End;
+
+Procedure TGrokConfig.ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
+Begin
+  FAccessToken := Tokens.AccessToken;
+  FRefreshToken := Tokens.RefreshToken;
+  FTokenType := Tokens.TokenType;
+  If FTokenType = '' Then
+    FTokenType := 'Bearer';
+  FScope := Tokens.Scope;
+  FExpiresAt := Tokens.ExpiresAt;
+End;
+
+Procedure TGrokConfig.ClearOAuthTokens;
+Begin
+  FAccessToken := '';
+  FRefreshToken := '';
+  FTokenType := 'Bearer';
+  FScope := '';
+  FExpiresAt := 0;
+End;
+
+Function TGrokConfig.ToOAuthTokens: TGrokOAuthTokens;
+Begin
+  Result.AccessToken := FAccessToken;
+  Result.RefreshToken := FRefreshToken;
+  Result.TokenType := FTokenType;
+  Result.Scope := FScope;
+  Result.ExpiresAt := FExpiresAt;
 End;
 
 Procedure TGrokConfig.Load;
 Var
   Cfg: TConfigStorage;
+  LegacyKey: String;
 Begin
   Cfg := GetIDEConfigStorage(GrokConfigFileName, True);
   Try
     FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
-    FApiKey := Cfg.GetValue('API/Key', '');
     FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
+    FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
+    FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
+    FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
+    FScope := Cfg.GetValue('OAuth/Scope', '');
+    FExpiresAt := ConfigToDateTime(Cfg.GetValue('OAuth/ExpiresAt', ''));
+    { One-time migration: older builds stored a console API key. Prefer OAuth. }
+    If (FAccessToken = '') And (FRefreshToken = '') Then
+      Begin
+        LegacyKey := Cfg.GetValue('API/Key', '');
+        If LegacyKey <> '' Then
+          Begin
+            { Leave legacy key unused for chat; OAuth is the supported path. }
+            FAccessToken := '';
+          End;
+      End;
     If Trim(FApiBase) = '' Then
       FApiBase := GrokConfigDefaultApiBase;
     If Trim(FModel) = '' Then
       FModel := GrokConfigDefaultModel;
+    If Trim(FTokenType) = '' Then
+      FTokenType := 'Bearer';
   Finally
     Cfg.Free;
   End;
@@ -89,8 +187,14 @@ Begin
   Cfg := GetIDEConfigStorage(GrokConfigFileName, False);
   Try
     Cfg.SetValue('API/Base', FApiBase);
-    Cfg.SetValue('API/Key', FApiKey);
     Cfg.SetValue('API/Model', FModel);
+    { Clear legacy API key slot so settings cannot silently re-use console keys. }
+    Cfg.SetValue('API/Key', '');
+    Cfg.SetValue('OAuth/AccessToken', FAccessToken);
+    Cfg.SetValue('OAuth/RefreshToken', FRefreshToken);
+    Cfg.SetValue('OAuth/TokenType', FTokenType);
+    Cfg.SetValue('OAuth/Scope', FScope);
+    Cfg.SetValue('OAuth/ExpiresAt', DateTimeToConfig(FExpiresAt));
     Cfg.WriteToDisk;
   Finally
     Cfg.Free;
@@ -101,6 +205,8 @@ Initialization
 
 GrokChatConfig := TGrokConfig.Create;
 GrokChatConfig.Load;
+If Assigned(GrokOAuthClient) And GrokChatConfig.IsSignedIn Then
+  GrokOAuthClient.SetTokens(GrokChatConfig.ToOAuthTokens);
 
 Finalization
 
