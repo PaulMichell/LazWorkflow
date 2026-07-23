@@ -73,9 +73,11 @@ End;
 
 Procedure RegisterGrokChat;
 Var
-  Parent: TIDEMenuSection;
+  AssistantMenu, MainSec, SetSec: TIDEMenuSection;
+  AfterItem: TIDEMenuItem;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
+  InsertAt: Integer;
 Begin
   WorkflowLogger.Info('GrokChat', 'Registering LazGrokChat');
 
@@ -90,14 +92,30 @@ Begin
   CmdGrokBuild := RegisterIDECommand(Cat, 'GrokBuild', 'Build Project (Grok)', Key, Nil, @DoGrokBuild);
   CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Grok Chat Settings', Key, Nil, @DoGrokSettings);
 
-  Parent := RegisterIDEMenuSection(itmSecondaryTools, 'GrokSection');
-  Parent.Caption := 'Grok';
-  RegisterIDEMenuCommand(Parent, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
-  RegisterIDEMenuCommand(Parent, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
-  RegisterIDEMenuCommand(Parent, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
-  RegisterIDEMenuSection(Parent, 'GrokSep1');
-  RegisterIDEMenuCommand(Parent, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
-  RegisterIDEMenuCommand(Parent, 'GrokSettings', 'Settings…', Nil, Nil, CmdGrokSettings);
+  { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
+    Two logical sections so Lazarus draws a separator before Settings, matching Repository. }
+  AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', 'Assistant');
+  If Assigned(mnuMain) And Assigned(AssistantMenu) Then
+    Begin
+      mnuMain.Remove(AssistantMenu);
+      AfterItem := mnuMain.FindByName('Repository');
+      If Not Assigned(AfterItem) Then
+        AfterItem := mnuRun;
+      If Assigned(AfterItem) And (AfterItem.SectionIndex >= 0) Then
+        InsertAt := AfterItem.SectionIndex + 1
+      Else
+        InsertAt := mnuMain.Count;
+      If InsertAt > mnuMain.Count Then
+        InsertAt := mnuMain.Count;
+      mnuMain.Insert(InsertAt, AssistantMenu);
+    End;
+  MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
+  RegisterIDEMenuCommand(MainSec, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
+  RegisterIDEMenuCommand(MainSec, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
+  RegisterIDEMenuCommand(MainSec, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
+  RegisterIDEMenuCommand(MainSec, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
+  SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
+  RegisterIDEMenuCommand(SetSec, 'GrokSettings', 'Settings…', Nil, Nil, CmdGrokSettings);
 
   GrokChatWindowCreator := IDEWindowCreators.Add('GrokChat', @CreateGrokChatForm, Nil,
     '120', '80', '800', '650');
