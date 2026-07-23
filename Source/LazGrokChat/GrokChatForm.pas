@@ -32,7 +32,7 @@ Type
     FInputPanel: TPanel;
     FSendButton: TButton;
     FInputEdit: TMemo;
-    FChatMemo: TMemo;
+    FChatHost: TPanel;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
@@ -42,26 +42,32 @@ Type
     Procedure SettingsActionExecute(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
+    FChatView: TControl; { TMarkDownControl created at runtime. }
+    FTranscript: TStringList; { Finished messages as Markdown source. }
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
-    FChatPreamble: String; { Frozen chat text through [ASSISTANT] header. }
     FAssistantContent: String; { Final answer channel (history). }
     FAssistantThinking: String; { Reasoning stream (display only). }
     FReviewInProgress: Boolean;
     FStreamStart: TDateTime;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
+    FLastChatPaintTick: QWord;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
+    Procedure EnsureChatView;
+    Procedure ScrollChatToEnd;
+    Procedure RefreshChatDisplay(Force: Boolean);
+    Function RoleHeading(Const Role: String): String;
+    Function QuoteMarkdownLines(Const TextValue: String): String;
+    Function FormatAssistantMarkdown(Const Thinking, Content: String): String;
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
-    Function FormatAssistantBody(Const Thinking, Content: String): String;
-    Procedure RefreshAssistantStreamingDisplay;
     Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
     Procedure FinishAssistantReply(Const ErrorText: String);
     Procedure StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
@@ -92,7 +98,11 @@ Implementation
 
 Uses
   WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, GrokIDEContext, LazIDEIntf,
-  IDEMsgIntf, IDEExternToolIntf;
+  IDEMsgIntf, IDEExternToolIntf, MarkDown.Control;
+
+Const
+  ChatViewMargin = 4;
+  ChatPaintMinIntervalMs = 80;
 
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
@@ -102,12 +112,14 @@ Begin
   FContextLimit := 128000;
   FSending := False;
   FStreamingActive := False;
-  FChatPreamble := '';
   FAssistantContent := '';
   FAssistantThinking := '';
   FReviewInProgress := False;
   FStreamStart := 0;
   FStatusPhase := '';
+  FLastChatPaintTick := 0;
+  FChatView := Nil;
+  FTranscript := TStringList.Create;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -116,15 +128,14 @@ Begin
   If Assigned(GrokClient) Then
     GrokClient.CancelStream;
   WorkflowEventBus.RemoveListener(Self);
+  FreeAndNil(FTranscript);
   Inherited Destroy;
 End;
 
 Procedure TGrokChatForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Chat';
-  { WordWrap + Lines[] is a classic corruption source while streaming. }
-  FChatMemo.WordWrap := False;
-  FChatMemo.ScrollBars := ssAutoBoth;
+  EnsureChatView;
   If Not Assigned(FElapsedTimer) Then
     Begin
       FElapsedTimer := TTimer.Create(Self);
@@ -248,60 +259,163 @@ Begin
   UpdateStatusFooter;
 End;
 
+Procedure TGrokChatForm.EnsureChatView;
+Var
+  View: TMarkDownControl;
+Begin
+  If Assigned(FChatView) Then
+    Exit;
+  FChatHost.Color := clWhite;
+  FChatHost.ParentColor := False;
+  FChatHost.ParentBackground := False;
+  View := TMarkDownControl.Create(Self);
+  View.Parent := FChatHost;
+  View.Align := alClient;
+  View.BorderSpacing.Around := ChatViewMargin;
+  View.Color := clWhite;
+  View.ParentColor := False;
+  View.ParentBackground := False;
+  View.ScrollBars := ssAutoBoth;
+  View.MonoFontName := 'Monospace';
+  View.FontName := 'default';
+  View.Visible := True;
+  FChatView := View;
+End;
+
+Procedure TGrokChatForm.ScrollChatToEnd;
+Var
+  View: TMarkDownControl;
+Begin
+  If Not Assigned(FChatView) Then
+    Exit;
+  View := TMarkDownControl(FChatView);
+  { Setter clamps to max scroll. }
+  View.ScrolledTop := High(Integer) Div 4;
+End;
+
+Procedure TGrokChatForm.RefreshChatDisplay(Force: Boolean);
+Var
+  View: TMarkDownControl;
+  Body: String;
+  NowTick: QWord;
+Begin
+  EnsureChatView;
+  NowTick := GetTickCount64;
+  If (Not Force) And FStreamingActive And (FLastChatPaintTick > 0) And
+    (NowTick - FLastChatPaintTick < ChatPaintMinIntervalMs) Then
+    Exit;
+  FLastChatPaintTick := NowTick;
+
+  Body := FTranscript.Text;
+  If FStreamingActive Then
+    Begin
+      If Body <> '' Then
+        Body := Body + LineEnding + LineEnding;
+      Body := Body + '### Assistant' + LineEnding + LineEnding +
+        FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
+    End;
+
+  View := TMarkDownControl(FChatView);
+  Try
+    View.MarkDown.BeginUpdate;
+    Try
+      View.MarkDown.Text := Body;
+    Finally
+      View.MarkDown.EndUpdate;
+    End;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GrokChat', 'Chat Markdown render failed: ' + E.Message);
+  End;
+  ScrollChatToEnd;
+End;
+
+Function TGrokChatForm.RoleHeading(Const Role: String): String;
+Var
+  R: String;
+Begin
+  R := LowerCase(Trim(Role));
+  If R = 'user' Then
+    Result := 'User'
+  Else If R = 'assistant' Then
+    Result := 'Assistant'
+  Else If R = 'system' Then
+    Result := 'System'
+  Else If R = 'tool' Then
+    Result := 'Tool'
+  Else
+    Result := Role;
+End;
+
+Function TGrokChatForm.QuoteMarkdownLines(Const TextValue: String): String;
+Var
+  SL: TStringList;
+  I: Integer;
+  Line: String;
+Begin
+  { Blockquote each line so thinking reads as a secondary section. }
+  SL := TStringList.Create;
+  Try
+    SL.Text := StringReplace(TextValue, #13#10, #10, [rfReplaceAll]);
+    SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
+    Result := '';
+    For I := 0 To SL.Count - 1 Do
+      Begin
+        Line := SL[I];
+        If Result <> '' Then
+          Result := Result + LineEnding;
+        If Line = '' Then
+          Result := Result + '>'
+        Else
+          Result := Result + '> ' + Line;
+      End;
+    If Result = '' Then
+      Result := '>';
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function TGrokChatForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
+Begin
+  { Thinking is display-only; Content is the final answer (API history). }
+  If (Thinking = '') And (Content = '') Then
+    Begin
+      Result := '*Waiting for model…*';
+      Exit;
+    End;
+  If Thinking <> '' Then
+    Begin
+      Result := '> **Thinking**' + LineEnding + '>' + LineEnding + QuoteMarkdownLines(Thinking);
+      If Content <> '' Then
+        Result := Result + LineEnding + LineEnding + Content
+      Else
+        Result := Result + LineEnding + LineEnding + '*Waiting for answer…*';
+    End
+  Else
+    Result := Content;
+End;
+
 Procedure TGrokChatForm.AppendMessage(Const Role, Content: String);
 Begin
-  FChatMemo.Lines.Add('');
-  FChatMemo.Lines.Add('[' + UpperCase(Role) + ']');
-  FChatMemo.Lines.Add(Content);
-  FChatMemo.SelStart := Length(FChatMemo.Text);
+  If FTranscript.Count > 0 Then
+    FTranscript.Add('');
+  FTranscript.Add('### ' + RoleHeading(Role));
+  FTranscript.Add('');
+  If Content <> '' Then
+    FTranscript.Add(Content)
+  Else
+    FTranscript.Add('');
+  RefreshChatDisplay(True);
 End;
 
 Procedure TGrokChatForm.BeginAssistantReply;
 Begin
   FAssistantContent := '';
   FAssistantThinking := '';
-  { Freeze everything up to and including the [ASSISTANT] header. Streaming
-    updates replace the whole memo as preamble + body — no Lines[] surgery. }
-  FChatMemo.Lines.Add('');
-  FChatMemo.Lines.Add('[ASSISTANT]');
-  FChatPreamble := FChatMemo.Text;
-  If (FChatPreamble <> '') And
-    (FChatPreamble[Length(FChatPreamble)] <> #10) And
-    (FChatPreamble[Length(FChatPreamble)] <> #13) Then
-    FChatPreamble := FChatPreamble + LineEnding;
   FStreamingActive := True;
-  FChatMemo.Text := FChatPreamble + '(waiting for model…)';
-  FChatMemo.SelStart := Length(FChatMemo.Text);
-End;
-
-Function TGrokChatForm.FormatAssistantBody(Const Thinking, Content: String): String;
-Begin
-  { Thinking is shown above the answer while (and after) streaming. Only Content
-    is stored in conversation history for follow-up turns. }
-  If (Thinking = '') And (Content = '') Then
-    Begin
-      Result := '(waiting for model…)';
-      Exit;
-    End;
-  If Thinking <> '' Then
-    Begin
-      Result := '[thinking]' + LineEnding + Thinking;
-      If Content <> '' Then
-        Result := Result + LineEnding + LineEnding + Content
-      Else
-        Result := Result + LineEnding + LineEnding + '(waiting for answer…)';
-    End
-  Else
-    Result := Content;
-End;
-
-Procedure TGrokChatForm.RefreshAssistantStreamingDisplay;
-Begin
-  { Atomic rewrite: frozen preamble + full assistant body so far. }
-  If Not FStreamingActive Then
-    Exit;
-  FChatMemo.Text := FChatPreamble + FormatAssistantBody(FAssistantThinking, FAssistantContent);
-  FChatMemo.SelStart := Length(FChatMemo.Text);
+  FLastChatPaintTick := 0;
+  RefreshChatDisplay(True);
 End;
 
 Procedure TGrokChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
@@ -316,24 +430,31 @@ Begin
     SetStreamPhase('Thinking…')
   Else
     SetStreamPhase('Waiting for first token…');
-  RefreshAssistantStreamingDisplay;
+  RefreshChatDisplay(False);
 End;
 
 Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
+Var
+  DisplayBody: String;
 Begin
   If FStreamingActive Then
     Begin
       If (ErrorText <> '') And (FAssistantContent = '') And (FAssistantThinking = '') Then
-        FChatMemo.Text := FChatPreamble + '(error)'
+        DisplayBody := '*(error)*'
       Else
-        RefreshAssistantStreamingDisplay;
+        DisplayBody := FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
+      If FTranscript.Count > 0 Then
+        FTranscript.Add('');
+      FTranscript.Add('### Assistant');
+      FTranscript.Add('');
+      FTranscript.Add(DisplayBody);
     End
   Else If (ErrorText <> '') And (FAssistantContent = '') Then
-    AppendMessage('assistant', '(error)');
+    AppendMessage('assistant', '*(error)*');
 
   If ErrorText <> '' Then
     Begin
-      AppendMessage('system', 'Error: ' + ErrorText);
+      AppendMessage('system', '**Error:** ' + ErrorText);
       FStatusFooter.SetRightText('Error');
     End
   Else
@@ -347,9 +468,9 @@ Begin
       FStatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
-  FChatPreamble := '';
   FAssistantContent := '';
   FAssistantThinking := '';
+  RefreshChatDisplay(True);
   If Assigned(GrokClient) Then
     GrokClient.MarkStreamComplete;
   SetSending(False);
@@ -634,12 +755,12 @@ Begin
   If FSending And Assigned(GrokClient) Then
     GrokClient.CancelStream;
   SetSending(False);
-  FChatMemo.Clear;
+  FTranscript.Clear;
   FContextUsed := 0;
   FStreamingActive := False;
-  FChatPreamble := '';
   FAssistantContent := '';
   FAssistantThinking := '';
+  FLastChatPaintTick := 0;
   If Assigned(GrokClient) Then
     GrokClient.ClearHistory;
   AppendMessage('system', 'New conversation started.');
