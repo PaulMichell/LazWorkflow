@@ -11,34 +11,41 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf;
+  ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
+  IDEExternToolIntf;
 
 Type
   TGrokChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
     FActionList: TActionList;
     FNewChatAction: TAction;
     FSendAction: TAction;
+    FStopAction: TAction;
     FReviewCompileAction: TAction;
     FReviewBuildAction: TAction;
+    FFixErrorAction: TAction;
     FSettingsAction: TAction;
     FToolBar: TToolBar;
     ToolButtonNewChat: TToolButton;
     ToolButtonSep: TToolButton;
     ToolButtonReviewCompile: TToolButton;
     ToolButtonReviewBuild: TToolButton;
+    ToolButtonFixError: TToolButton;
     ToolButtonSep2: TToolButton;
     ToolButtonSettings: TToolButton;
     FStatusFooter: TStatusFooterFrame;
     FInputPanel: TPanel;
     FSendButton: TButton;
+    FStopButton: TButton;
     FInputEdit: TMemo;
     FChatHost: TPanel;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
+    Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure ReviewCompileActionExecute(Sender: TObject);
     Procedure ReviewBuildActionExecute(Sender: TObject);
+    Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
@@ -49,12 +56,14 @@ Type
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
+    FUserCancelled: Boolean;
     FAssistantContent: String; { Final answer channel (history). }
     FAssistantThinking: String; { Reasoning stream (display only). }
     FReviewInProgress: Boolean;
     FStreamStart: TDateTime;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
+    FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
@@ -73,10 +82,13 @@ Type
     Procedure StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
       IsFinished: Boolean; Const ErrorText: String);
     Procedure RefreshFromConfig;
+    Procedure PersistSession;
+    Procedure RestoreSessionIfNeeded;
     Function CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
     Procedure ReviewProject(Reason: TCompileReason; Const KindLabel: String);
     Function BuildReviewPrompt(Const KindLabel, OutputText: String;
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
+    Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
     Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
     { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
     Procedure CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
@@ -90,6 +102,8 @@ Type
     Procedure StartNewChat;
     Procedure ReviewCompile;
     Procedure ReviewBuild;
+    Procedure FixSelectedError;
+    Procedure StopStream;
   End;
 
 Implementation
@@ -97,8 +111,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, GrokIDEContext, LazIDEIntf,
-  IDEMsgIntf, IDEExternToolIntf, MarkDown.Control;
+  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, GrokIDEContext, GrokSession,
+  LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
 
 Const
   ChatViewMargin = 4;
@@ -112,12 +126,14 @@ Begin
   FContextLimit := 128000;
   FSending := False;
   FStreamingActive := False;
+  FUserCancelled := False;
   FAssistantContent := '';
   FAssistantThinking := '';
   FReviewInProgress := False;
   FStreamStart := 0;
   FStatusPhase := '';
   FLastChatPaintTick := 0;
+  FSessionProjectKey := '';
   FChatView := Nil;
   FTranscript := TStringList.Create;
   WorkflowEventBus.AddListener(Self);
@@ -127,6 +143,7 @@ Destructor TGrokChatForm.Destroy;
 Begin
   If Assigned(GrokClient) Then
     GrokClient.CancelStream;
+  PersistSession;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FTranscript);
   Inherited Destroy;
@@ -145,10 +162,16 @@ Begin
     End;
   RefreshFromConfig;
   UpdateStatusFooter;
-  If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
-    AppendMessage('system', 'Project Chat ready. Signed in with SuperGrok / X Premium — send a message.')
+  RestoreSessionIfNeeded;
+  If FTranscript.Count = 0 Then
+    Begin
+      If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
+        AppendMessage('system', 'Project Chat ready. Signed in with SuperGrok / X Premium — send a message.')
+      Else
+        AppendMessage('system', 'Project Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
+    End
   Else
-    AppendMessage('system', 'Project Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
+    RefreshChatDisplay(True);
   WorkflowLogger.Info('GrokChat', 'Project Chat window created');
 End;
 
@@ -237,9 +260,11 @@ Procedure TGrokChatForm.SetSending(IsSending: Boolean);
 Begin
   FSending := IsSending;
   FSendAction.Enabled := Not IsSending;
+  FStopAction.Enabled := IsSending;
   FNewChatAction.Enabled := Not IsSending;
   FReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
+  FFixErrorAction.Enabled := Not IsSending;
   FInputEdit.ReadOnly := IsSending;
   If IsSending Then
     Begin
@@ -257,6 +282,42 @@ Begin
       FStreamStart := 0;
     End;
   UpdateStatusFooter;
+End;
+
+Procedure TGrokChatForm.PersistSession;
+Var
+  Key: String;
+Begin
+  If FSending Then
+    Exit;
+  Key := '';
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+    Key := LazarusIDE.ActiveProject.ProjectInfoFile;
+  If Key = '' Then
+    Exit;
+  FSessionProjectKey := Key;
+  SaveProjectChatSession(FTranscript, FContextUsed);
+End;
+
+Procedure TGrokChatForm.RestoreSessionIfNeeded;
+Var
+  Key: String;
+  LoadedContext: Integer;
+Begin
+  Key := '';
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+    Key := LazarusIDE.ActiveProject.ProjectInfoFile;
+  If Key = '' Then
+    Exit;
+  If SameText(Key, FSessionProjectKey) And (FTranscript.Count > 0) Then
+    Exit;
+  FSessionProjectKey := Key;
+  If LoadProjectChatSession(FTranscript, LoadedContext) Then
+    Begin
+      FContextUsed := LoadedContext;
+      RefreshChatDisplay(True);
+      UpdateStatusFooter;
+    End;
 End;
 
 Procedure TGrokChatForm.EnsureChatView;
@@ -413,6 +474,7 @@ Procedure TGrokChatForm.BeginAssistantReply;
 Begin
   FAssistantContent := '';
   FAssistantThinking := '';
+  FUserCancelled := False;
   FStreamingActive := True;
   FLastChatPaintTick := 0;
   RefreshChatDisplay(True);
@@ -437,6 +499,15 @@ Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
 Var
   DisplayBody: String;
 Begin
+  If FUserCancelled Then
+    Begin
+      { StopStream already cleaned UI and cancelled the worker. }
+      FUserCancelled := False;
+      If Assigned(GrokClient) Then
+        GrokClient.MarkStreamComplete;
+      SetSending(False);
+      Exit;
+    End;
   If FStreamingActive Then
     Begin
       If (ErrorText <> '') And (FAssistantContent = '') And (FAssistantThinking = '') Then
@@ -474,6 +545,7 @@ Begin
   If Assigned(GrokClient) Then
     GrokClient.MarkStreamComplete;
   SetSending(False);
+  PersistSession;
 End;
 
 Procedure TGrokChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
@@ -481,6 +553,17 @@ Procedure TGrokChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: Str
 Begin
   { Invoked on the main thread via Synchronize from the stream worker.
     Thinking streams first on reasoning models; content is the final answer. }
+  If FUserCancelled Then
+    Begin
+      If IsFinished Then
+        Begin
+          FUserCancelled := False;
+          If Assigned(GrokClient) Then
+            GrokClient.MarkStreamComplete;
+          SetSending(False);
+        End;
+      Exit;
+    End;
   If Not IsFinished Then
     Begin
       ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
@@ -490,6 +573,45 @@ Begin
   If (ContentSnapshot <> '') Or (ThinkingSnapshot <> '') Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(ErrorText);
+End;
+
+Procedure TGrokChatForm.StopStream;
+Var
+  DisplayBody: String;
+Begin
+  If Not FSending Then
+    Exit;
+  FUserCancelled := True;
+  If Assigned(GrokClient) Then
+    GrokClient.CancelStream;
+  If FStreamingActive Then
+    Begin
+      If (FAssistantContent <> '') Or (FAssistantThinking <> '') Then
+        Begin
+          DisplayBody := FormatAssistantMarkdown(FAssistantThinking, FAssistantContent) +
+            LineEnding + LineEnding + '*[stream cancelled]*';
+          If FTranscript.Count > 0 Then
+            FTranscript.Add('');
+          FTranscript.Add('### Assistant');
+          FTranscript.Add('');
+          FTranscript.Add(DisplayBody);
+          If Assigned(GrokClient) And (FAssistantContent <> '') Then
+            GrokClient.AddMessage(gmrAssistant, FAssistantContent);
+          FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
+        End
+      Else
+        AppendMessage('system', '*Stream cancelled before the first token.*');
+    End
+  Else
+    AppendMessage('system', '*Stream cancelled.*');
+  FStreamingActive := False;
+  FAssistantContent := '';
+  FAssistantThinking := '';
+  RefreshChatDisplay(True);
+  SetSending(False);
+  FStatusFooter.SetRightText('Cancelled');
+  PersistSession;
+  WorkflowLogger.Info('GrokChat', 'Stream cancelled by user');
 End;
 
 Procedure TGrokChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
@@ -553,6 +675,11 @@ Begin
     End;
   FInputEdit.Clear;
   SubmitUserText(UserText, True);
+End;
+
+Procedure TGrokChatForm.StopActionExecute(Sender: TObject);
+Begin
+  StopStream;
 End;
 
 Function FormatMessageLine(Line: TMessageLine): String;
@@ -752,19 +879,134 @@ End;
 
 Procedure TGrokChatForm.StartNewChat;
 Begin
-  If FSending And Assigned(GrokClient) Then
-    GrokClient.CancelStream;
+  If FSending Then
+    StopStream;
   SetSending(False);
   FTranscript.Clear;
   FContextUsed := 0;
   FStreamingActive := False;
+  FUserCancelled := False;
   FAssistantContent := '';
   FAssistantThinking := '';
   FLastChatPaintTick := 0;
   If Assigned(GrokClient) Then
     GrokClient.ClearHistory;
+  ClearProjectChatSession;
   AppendMessage('system', 'New conversation started.');
+  PersistSession;
   UpdateStatusFooter;
+End;
+
+Function ExtractSourceSnippet(Const FileName: String; LineNo, Radius: Integer): String;
+Var
+  SL: TStringList;
+  First, Last, I: Integer;
+  Path: String;
+Begin
+  Result := '';
+  Path := Trim(FileName);
+  If (Path = '') Or (Not FileExists(Path)) Then
+    Exit;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(Path);
+    Except
+      Exit;
+    End;
+    If SL.Count = 0 Then
+      Exit;
+    If LineNo < 1 Then
+      LineNo := 1;
+    First := LineNo - Radius;
+    If First < 1 Then
+      First := 1;
+    Last := LineNo + Radius;
+    If Last > SL.Count Then
+      Last := SL.Count;
+    Result := Format('Source context (%s lines %d–%d):', [ExtractFileName(Path), First, Last]) +
+      LineEnding + '```pascal' + LineEnding;
+    For I := First To Last Do
+      Begin
+        If I = LineNo Then
+          Result := Result + Format('%5d > %s', [I, SL[I - 1]]) + LineEnding
+        Else
+          Result := Result + Format('%5d | %s', [I, SL[I - 1]]) + LineEnding;
+      End;
+    Result := Result + '```';
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function TGrokChatForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
+Var
+  MsgText, FileName, Snippet: String;
+  LineNo, Col: Integer;
+Begin
+  Result := '';
+  If Not Assigned(Line) Then
+    Exit;
+  MsgText := FormatMessageLine(Line);
+  FileName := '';
+  LineNo := Line.Line;
+  Col := Line.Column;
+  If Line.Filename <> '' Then
+    FileName := Line.GetFullFilename;
+  Snippet := '';
+  If (FileName <> '') And (LineNo > 0) Then
+    Snippet := ExtractSourceSnippet(FileName, LineNo, 18);
+  Result :=
+    'Please fix this Free Pascal / Lazarus compiler message.' + LineEnding +
+    LineEnding +
+    'Message: ' + MsgText + LineEnding;
+  If FileName <> '' Then
+    Result := Result + 'File: ' + FileName + LineEnding;
+  If LineNo > 0 Then
+    Result := Result + Format('Location: line %d, column %d', [LineNo, Col]) + LineEnding;
+  Result := Result + LineEnding;
+  If Snippet <> '' Then
+    Result := Result + Snippet + LineEnding + LineEnding;
+  Result := Result +
+    'Explain the error briefly, then propose a concrete fix (show the corrected code snippet).' + LineEnding +
+    'Prefer the smallest change that resolves the issue.';
+End;
+
+Procedure TGrokChatForm.FixSelectedError;
+Var
+  Line: TMessageLine;
+  Prompt: String;
+  Col, TopLine: Integer;
+Begin
+  If FSending Then
+    Exit;
+  If Not Assigned(IDEMessagesWindow) Then
+    Begin
+      MessageDlg('The IDE Messages window is not available.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Line := IDEMessagesWindow.GetSelectedLine;
+  If Not Assigned(Line) Then
+    Begin
+      MessageDlg('Select a compiler message in the Messages window first, then choose Fix Error.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Prompt := BuildFixErrorPromptForLine(Line);
+  If Prompt = '' Then
+    Exit;
+  If (Line.Filename <> '') And (Line.Line > 0) And Assigned(LazarusIDE) Then
+    Begin
+      Col := Line.Column;
+      If Col < 1 Then
+        Col := 1;
+      TopLine := Line.Line - 8;
+      If TopLine < 1 Then
+        TopLine := 1;
+      LazarusIDE.DoOpenFileAndJumpToPos(Line.GetFullFilename,
+        Point(Col, Line.Line), TopLine, -1, -1, [ofOnlyIfExists, ofRegularFile]);
+    End;
+  SubmitUserText(Prompt, True);
 End;
 
 Procedure TGrokChatForm.NewChatActionExecute(Sender: TObject);
@@ -780,6 +1022,11 @@ End;
 Procedure TGrokChatForm.ReviewBuildActionExecute(Sender: TObject);
 Begin
   ReviewBuild;
+End;
+
+Procedure TGrokChatForm.FixErrorActionExecute(Sender: TObject);
+Begin
+  FixSelectedError;
 End;
 
 Procedure TGrokChatForm.SettingsActionExecute(Sender: TObject);

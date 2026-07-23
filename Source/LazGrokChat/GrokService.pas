@@ -49,6 +49,7 @@ Type
     Procedure ClearHistory;
     Procedure AddMessage(Role: TGrokMessageRole; Const Content: String);
     Function MessageCount: Integer;
+    Function GetMessage(Index: Integer; Out Role: TGrokMessageRole; Out Content: String): Boolean;
     Function IsBusy: Boolean;
     Function IsSignedIn: Boolean;
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
@@ -530,6 +531,18 @@ End;
 Function TGrokService.MessageCount: Integer;
 Begin
   Result := Length(FMessages);
+End;
+
+Function TGrokService.GetMessage(Index: Integer; Out Role: TGrokMessageRole; Out Content: String): Boolean;
+Begin
+  Result := False;
+  Role := gmrUser;
+  Content := '';
+  If (Index < 0) Or (Index >= Length(FMessages)) Then
+    Exit;
+  Role := FMessages[Index].Role;
+  Content := FMessages[Index].Content;
+  Result := True;
 End;
 
 Function TGrokService.IsBusy: Boolean;

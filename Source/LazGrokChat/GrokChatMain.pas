@@ -21,14 +21,25 @@ Var
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, GrokSettingsForm, GrokMarkdownForm;
+  WorkflowLog, WorkflowEvents, GrokChatForm, GrokService, GrokSettingsForm, GrokMarkdownForm,
+  IDEMsgIntf, IDEExternToolIntf;
+
+Type
+  { Context menu on IDE Messages: Ask Grok to fix the selected line. }
+  TGrokFixMessageQuickFix = Class(TMsgQuickFix)
+  Public
+    Procedure CreateMenuItems(Fixes: TMsgQuickFixes); Override;
+    Procedure QuickFix(Fixes: TMsgQuickFixes; Msg: TMessageLine); Override;
+  End;
 
 Var
   CmdGrokChat: TIDECommand;
   CmdGrokOpenMarkdown: TIDECommand;
   CmdGrokReviewCompile: TIDECommand;
   CmdGrokReviewBuild: TIDECommand;
+  CmdGrokFixError: TIDECommand;
   CmdGrokSettings: TIDECommand;
+  GrokFixQuickFix: TGrokFixMessageQuickFix;
 
 Procedure ShowGrokChatWindow(Sender: TObject);
 Begin
@@ -76,6 +87,43 @@ Begin
     Form.ReviewBuild;
 End;
 
+Procedure DoGrokFixError(Sender: TObject);
+Var
+  Form: TGrokChatForm;
+Begin
+  Form := GetGrokChatForm(True);
+  If Assigned(Form) Then
+    Form.FixSelectedError;
+End;
+
+Procedure TGrokFixMessageQuickFix.CreateMenuItems(Fixes: TMsgQuickFixes);
+Var
+  I: Integer;
+  Msg: TMessageLine;
+Begin
+  For I := 0 To Fixes.LineCount - 1 Do
+    Begin
+      Msg := Fixes.Lines[I];
+      If Not Assigned(Msg) Then
+        Continue;
+      If Msg.Urgency < mluHint Then
+        Continue;
+      Fixes.AddMenuItem(Self, Msg, 'Ask Grok to fix…');
+      Exit;
+    End;
+End;
+
+Procedure TGrokFixMessageQuickFix.QuickFix(Fixes: TMsgQuickFixes; Msg: TMessageLine);
+Var
+  Form: TGrokChatForm;
+Begin
+  If Assigned(Msg) And Assigned(IDEMessagesWindow) Then
+    IDEMessagesWindow.SelectMsgLine(Msg);
+  Form := GetGrokChatForm(True);
+  If Assigned(Form) Then
+    Form.FixSelectedError;
+End;
+
 Procedure CreateGrokChatForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
@@ -104,6 +152,8 @@ Begin
     Key, Nil, @DoGrokReviewCompile);
   CmdGrokReviewBuild := RegisterIDECommand(Cat, 'GrokReviewBuild', 'Review Build',
     Key, Nil, @DoGrokReviewBuild);
+  CmdGrokFixError := RegisterIDECommand(Cat, 'GrokFixError', 'Fix Selected Message with Grok',
+    Key, Nil, @DoGrokFixError);
   CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Project Chat Settings', Key, Nil, @DoGrokSettings);
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
@@ -128,13 +178,26 @@ Begin
   RegisterIDEMenuCommand(MainSec, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'GrokReviewCompile', 'Review Compile', Nil, Nil, CmdGrokReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'GrokReviewBuild', 'Review Build', Nil, Nil, CmdGrokReviewBuild);
+  RegisterIDEMenuCommand(MainSec, 'GrokFixError', 'Fix Selected Message…', Nil, Nil, CmdGrokFixError);
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'GrokSettings', 'Settings…', Nil, Nil, CmdGrokSettings);
 
   GrokChatWindowCreator := IDEWindowCreators.Add('GrokChat', @CreateGrokChatForm, Nil,
     '120', '80', '800', '650');
 
+  If Not Assigned(GrokFixQuickFix) Then
+    Begin
+      GrokFixQuickFix := TGrokFixMessageQuickFix.Create;
+      RegisterIDEMsgQuickFix(GrokFixQuickFix);
+    End;
+
   WorkflowLogger.Info('GrokChat', 'LazGrokChat registered successfully');
 End;
+
+Finalization
+
+If Assigned(GrokFixQuickFix) And Assigned(MsgQuickFixes) Then
+  MsgQuickFixes.UnregisterQuickFix(GrokFixQuickFix);
+FreeAndNil(GrokFixQuickFix);
 
 End.

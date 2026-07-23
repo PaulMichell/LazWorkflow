@@ -18,7 +18,7 @@
     <Description Value="Grok / LLM chat UI with live Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="13">
+    <Files Count="14">
       <Item1>
         <Filename Value="../Source/LazGrokChat/RegLazGrokChat.pas"/>
         <HasRegisterProc Value="True"/>
@@ -73,6 +73,10 @@
         <Filename Value="../Source/LazGrokChat/GrokMarkdownForm.lfm"/>
         <FileType Value="FormResource"/>
       </Item13>
+      <Item14>
+        <Filename Value="../Source/LazGrokChat/GrokSession.pas"/>
+        <UnitName Value="GrokSession"/>
+      </Item14>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>

@@ -21,6 +21,11 @@ object GrokChatForm: TGrokChatForm
       Caption = 'Send'
       OnExecute = SendActionExecute
     end
+    object FStopAction: TAction
+      Caption = 'Stop'
+      Enabled = False
+      OnExecute = StopActionExecute
+    end
     object FReviewCompileAction: TAction
       Caption = 'Review Compile'
       OnExecute = ReviewCompileActionExecute
@@ -28,6 +33,10 @@ object GrokChatForm: TGrokChatForm
     object FReviewBuildAction: TAction
       Caption = 'Review Build'
       OnExecute = ReviewBuildActionExecute
+    end
+    object FFixErrorAction: TAction
+      Caption = 'Fix Error'
+      OnExecute = FixErrorActionExecute
     end
     object FSettingsAction: TAction
       Caption = 'Settings'
@@ -65,15 +74,20 @@ object GrokChatForm: TGrokChatForm
       Top = 2
       Action = FReviewBuildAction
     end
-    object ToolButtonSep2: TToolButton
+    object ToolButtonFixError: TToolButton
       Left = 292
+      Top = 2
+      Action = FFixErrorAction
+    end
+    object ToolButtonSep2: TToolButton
+      Left = 368
       Height = 22
       Top = 2
       Caption = 'ToolButtonSep2'
       Style = tbsSeparator
     end
     object ToolButtonSettings: TToolButton
-      Left = 300
+      Left = 376
       Top = 2
       Action = FSettingsAction
     end
@@ -98,7 +112,7 @@ object GrokChatForm: TGrokChatForm
     ClientWidth = 900
     TabOrder = 2
     object FSendButton: TButton
-      Left = 814
+      Left = 728
       Height = 78
       Top = 6
       Width = 80
@@ -106,17 +120,28 @@ object GrokChatForm: TGrokChatForm
       BorderSpacing.Around = 6
       Action = FSendAction
       Caption = 'Send'
+      TabOrder = 1
+    end
+    object FStopButton: TButton
+      Left = 814
+      Height = 78
+      Top = 6
+      Width = 80
+      Align = alRight
+      BorderSpacing.Around = 6
+      Action = FStopAction
+      Caption = 'Stop'
       TabOrder = 0
     end
     object FInputEdit: TMemo
       Left = 6
       Height = 78
       Top = 6
-      Width = 802
+      Width = 716
       Align = alClient
       BorderSpacing.Around = 6
       ScrollBars = ssAutoVertical
-      TabOrder = 1
+      TabOrder = 2
     end
   end
   object FChatHost: TPanel
