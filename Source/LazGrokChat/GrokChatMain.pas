@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, LCLType, MenuIntf, IDECommands, IDEWindowIntf,
-  LazIDEIntf, CompOptsIntf;
+  LazIDEIntf;
 
 Procedure RegisterGrokChat;
 
@@ -27,7 +27,8 @@ Var
   CmdGrokChat: TIDECommand;
   CmdGrokNewChat: TIDECommand;
   CmdGrokOpenMarkdown: TIDECommand;
-  CmdGrokBuild: TIDECommand;
+  CmdGrokReviewCompile: TIDECommand;
+  CmdGrokReviewBuild: TIDECommand;
   CmdGrokSettings: TIDECommand;
 
 Procedure ShowGrokChatWindow(Sender: TObject);
@@ -35,15 +36,26 @@ Begin
   IDEWindowCreators.ShowForm(GrokChatWindowCreator.FormName, True);
 End;
 
-Procedure DoGrokNewChat(Sender: TObject);
+Function GetGrokChatForm(ShowWindow: Boolean = True): TGrokChatForm;
 Var
   Form: TCustomForm;
 Begin
-  WorkflowLogger.Info('GrokChat', 'New chat requested');
-  ShowGrokChatWindow(Sender);
+  Result := Nil;
+  If ShowWindow Then
+    ShowGrokChatWindow(Nil);
   Form := IDEWindowCreators.GetForm(GrokChatWindowCreator.FormName, True);
   If Form Is TGrokChatForm Then
-    TGrokChatForm(Form).StartNewChat;
+    Result := TGrokChatForm(Form);
+End;
+
+Procedure DoGrokNewChat(Sender: TObject);
+Var
+  Form: TGrokChatForm;
+Begin
+  WorkflowLogger.Info('GrokChat', 'New chat requested');
+  Form := GetGrokChatForm(True);
+  If Assigned(Form) Then
+    Form.StartNewChat;
 End;
 
 Procedure DoGrokSettings(Sender: TObject);
@@ -57,11 +69,22 @@ Begin
   { TODO: show open dialog and create Markdown window }
 End;
 
-Procedure DoGrokBuild(Sender: TObject);
+Procedure DoGrokReviewCompile(Sender: TObject);
+Var
+  Form: TGrokChatForm;
 Begin
-  WorkflowLogger.Info('GrokChat', 'Build project requested from Grok');
-  If Assigned(LazarusIDE) Then
-    LazarusIDE.DoBuildProject(crCompile, []);
+  Form := GetGrokChatForm(True);
+  If Assigned(Form) Then
+    Form.ReviewCompile;
+End;
+
+Procedure DoGrokReviewBuild(Sender: TObject);
+Var
+  Form: TGrokChatForm;
+Begin
+  Form := GetGrokChatForm(True);
+  If Assigned(Form) Then
+    Form.ReviewBuild;
 End;
 
 Procedure CreateGrokChatForm(Sender: TObject; AFormName: String;
@@ -89,7 +112,10 @@ Begin
   CmdGrokChat := RegisterIDECommand(Cat, 'GrokChat', 'Show Grok Chat', Key, Nil, @ShowGrokChatWindow);
   CmdGrokNewChat := RegisterIDECommand(Cat, 'GrokNewChat', 'New Grok Chat', Key, Nil, @DoGrokNewChat);
   CmdGrokOpenMarkdown := RegisterIDECommand(Cat, 'GrokOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoGrokOpenMarkdown);
-  CmdGrokBuild := RegisterIDECommand(Cat, 'GrokBuild', 'Build Project (Grok)', Key, Nil, @DoGrokBuild);
+  CmdGrokReviewCompile := RegisterIDECommand(Cat, 'GrokReviewCompile', 'Review Compile',
+    Key, Nil, @DoGrokReviewCompile);
+  CmdGrokReviewBuild := RegisterIDECommand(Cat, 'GrokReviewBuild', 'Review Build',
+    Key, Nil, @DoGrokReviewBuild);
   CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Grok Chat Settings', Key, Nil, @DoGrokSettings);
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
@@ -113,7 +139,8 @@ Begin
   RegisterIDEMenuCommand(MainSec, 'GrokChat', 'Grok Chat', Nil, Nil, CmdGrokChat);
   RegisterIDEMenuCommand(MainSec, 'GrokNewChat', 'New Chat', Nil, Nil, CmdGrokNewChat);
   RegisterIDEMenuCommand(MainSec, 'GrokOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdGrokOpenMarkdown);
-  RegisterIDEMenuCommand(MainSec, 'GrokBuild', 'Build Project', Nil, Nil, CmdGrokBuild);
+  RegisterIDEMenuCommand(MainSec, 'GrokReviewCompile', 'Review Compile', Nil, Nil, CmdGrokReviewCompile);
+  RegisterIDEMenuCommand(MainSec, 'GrokReviewBuild', 'Review Build', Nil, Nil, CmdGrokReviewBuild);
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'GrokSettings', 'Settings…', Nil, Nil, CmdGrokSettings);
 

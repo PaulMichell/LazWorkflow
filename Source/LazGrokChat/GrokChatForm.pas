@@ -11,19 +11,21 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame;
+  ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf;
 
 Type
   TGrokChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
     FActionList: TActionList;
     FNewChatAction: TAction;
     FSendAction: TAction;
-    FBuildAction: TAction;
+    FReviewCompileAction: TAction;
+    FReviewBuildAction: TAction;
     FSettingsAction: TAction;
     FToolBar: TToolBar;
     ToolButtonNewChat: TToolButton;
     ToolButtonSep: TToolButton;
-    ToolButtonBuild: TToolButton;
+    ToolButtonReviewCompile: TToolButton;
+    ToolButtonReviewBuild: TToolButton;
     ToolButtonSep2: TToolButton;
     ToolButtonSettings: TToolButton;
     FStatusFooter: TStatusFooterFrame;
@@ -35,7 +37,8 @@ Type
     Procedure FormDestroy(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
-    Procedure BuildActionExecute(Sender: TObject);
+    Procedure ReviewCompileActionExecute(Sender: TObject);
+    Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
   Private
     FModelName: String;
@@ -44,6 +47,7 @@ Type
     FSending: Boolean;
     FStreamingLineIndex: Integer;
     FAssistantAccum: String;
+    FReviewInProgress: Boolean;
     Procedure UpdateStatusFooter;
     Procedure SetSending(IsSending: Boolean);
     Procedure AppendMessage(Const Role, Content: String);
@@ -52,7 +56,12 @@ Type
     Procedure FinishAssistantReply(Const ErrorText: String);
     Procedure StreamToken(Const Token: String; IsFinished: Boolean; Const ErrorText: String);
     Procedure RefreshFromConfig;
-    { ICompilerFinished }
+    Function CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
+    Procedure ReviewProject(Reason: TCompileReason; Const KindLabel: String);
+    Function BuildReviewPrompt(Const KindLabel, OutputText: String;
+      ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
+    Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
+    { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
     Procedure CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
       Const OutputText: String; ErrorCount, WarningCount: Integer);
     { IMarkdownDocumentChanged }
@@ -62,6 +71,8 @@ Type
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
     Procedure StartNewChat;
+    Procedure ReviewCompile;
+    Procedure ReviewBuild;
   End;
 
 Implementation
@@ -69,7 +80,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, LazIDEIntf, CompOptsIntf;
+  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, LazIDEIntf, IDEMsgIntf,
+  IDEExternToolIntf;
 
 Constructor TGrokChatForm.Create(TheOwner: TComponent);
 Begin
@@ -80,6 +92,7 @@ Begin
   FSending := False;
   FStreamingLineIndex := -1;
   FAssistantAccum := '';
+  FReviewInProgress := False;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -130,6 +143,8 @@ Begin
     Pct := 0;
   If FSending Then
     StatusText := 'Streaming…'
+  Else If FReviewInProgress Then
+    StatusText := 'Reviewing…'
   Else If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
     StatusText := 'Ready'
   Else
@@ -145,6 +160,8 @@ Begin
   FSending := IsSending;
   FSendAction.Enabled := Not IsSending;
   FNewChatAction.Enabled := Not IsSending;
+  FReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
+  FReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FInputEdit.ReadOnly := IsSending;
   UpdateStatusFooter;
 End;
@@ -238,6 +255,36 @@ Begin
   FinishAssistantReply(ErrorText);
 End;
 
+Procedure TGrokChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Begin
+  If Trim(UserText) = '' Then
+    Exit;
+  If FSending Then
+    Exit;
+  If AutoSend Then
+    Begin
+      If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.IsSignedIn) Then
+        Begin
+          AppendMessage('user', UserText);
+          AppendMessage('system', 'Sign in under Settings to send this review to Grok.');
+          Exit;
+        End;
+      If Not Assigned(GrokClient) Then
+        Exit;
+      RefreshFromConfig;
+      AppendMessage('user', UserText);
+      GrokClient.AddMessage(gmrUser, UserText);
+      FContextUsed := FContextUsed + Length(UserText) Div 4 + 8;
+      BeginAssistantReply;
+      SetSending(True);
+      FStatusFooter.SetRightText('Streaming…');
+      If Not GrokClient.StartStream(@StreamToken) Then
+        FinishAssistantReply(GrokClient.LastError);
+    End
+  Else
+    AppendMessage('user', UserText);
+End;
+
 Procedure TGrokChatForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
@@ -253,23 +300,203 @@ Begin
       SettingsActionExecute(Nil);
       Exit;
     End;
-  If Not Assigned(GrokClient) Then
-    Exit;
-
-  RefreshFromConfig;
-  AppendMessage('user', UserText);
   FInputEdit.Clear;
-  GrokClient.AddMessage(gmrUser, UserText);
-  FContextUsed := FContextUsed + Length(UserText) Div 4 + 8;
-  BeginAssistantReply;
-  SetSending(True);
-  FStatusFooter.SetRightText('Streaming…');
+  SubmitUserText(UserText, True);
+End;
 
-  If Not GrokClient.StartStream(@StreamToken) Then
+Function FormatMessageLine(Line: TMessageLine): String;
+Var
+  Loc: String;
+Begin
+  Result := '';
+  If Not Assigned(Line) Then
+    Exit;
+  If Trim(Line.OriginalLine) <> '' Then
     Begin
-      FinishAssistantReply(GrokClient.LastError);
+      Result := Line.OriginalLine;
       Exit;
     End;
+  Loc := '';
+  If Line.Filename <> '' Then
+    Begin
+      Loc := Line.GetFullFilename;
+      If Line.Line > 0 Then
+        Begin
+          Loc := Loc + '(' + IntToStr(Line.Line);
+          If Line.Column > 0 Then
+            Loc := Loc + ',' + IntToStr(Line.Column);
+          Loc := Loc + ')';
+        End;
+    End;
+  If Loc <> '' Then
+    Result := Loc + ' '
+  Else
+    Result := '';
+  If Line.Urgency In [mluHint..mluPanic] Then
+    Result := Result + MessageLineUrgencyNames[Line.Urgency] + ': ';
+  If Line.TranslatedMsg <> '' Then
+    Result := Result + Line.TranslatedMsg
+  Else
+    Result := Result + Line.Msg;
+  Result := Trim(Result);
+End;
+
+Function TGrokChatForm.CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
+Var
+  ViewIndex, LineIndex: Integer;
+  View: TExtToolView;
+  Line: TMessageLine;
+  Parts: TStringList;
+  Formatted: String;
+Begin
+  Result := '';
+  ErrorCount := 0;
+  WarningCount := 0;
+  HintCount := 0;
+  If Not Assigned(IDEMessagesWindow) Then
+    Begin
+      Result := '(IDE Messages window is not available.)';
+      Exit;
+    End;
+  Parts := TStringList.Create;
+  Try
+    For ViewIndex := 0 To IDEMessagesWindow.ViewCount - 1 Do
+      Begin
+        View := IDEMessagesWindow.Views[ViewIndex];
+        If Not Assigned(View) Then
+          Continue;
+        If View.Caption <> '' Then
+          Parts.Add('--- ' + View.Caption + ' ---');
+        View.Lines.EnterCriticalSection;
+        Try
+          For LineIndex := 0 To View.Lines.Count - 1 Do
+            Begin
+              Line := View.Lines.Items[LineIndex];
+              If Not Assigned(Line) Then
+                Continue;
+              Case Line.Urgency Of
+                mluError, mluFatal, mluPanic: Inc(ErrorCount);
+                mluWarning: Inc(WarningCount);
+                mluHint, mluNote: Inc(HintCount);
+              Else
+                { }
+              End;
+              Formatted := FormatMessageLine(Line);
+              If Formatted <> '' Then
+                Parts.Add(Formatted);
+            End;
+        Finally
+          View.Lines.LeaveCriticalSection;
+        End;
+        If View.SummaryMsg <> '' Then
+          Parts.Add(View.SummaryMsg);
+      End;
+    If Parts.Count = 0 Then
+      Parts.Add('(No messages were recorded in the IDE Messages window.)');
+    Result := TrimRight(Parts.Text);
+  Finally
+    Parts.Free;
+  End;
+End;
+
+Function TGrokChatForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
+  ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
+Var
+  Outcome, ProjectName: String;
+Begin
+  If BuildOk And (ErrorCount = 0) Then
+    Outcome := 'clean (no errors)'
+  Else If ErrorCount > 0 Then
+    Outcome := Format('failed with %d error(s)', [ErrorCount])
+  Else
+    Outcome := 'completed with warnings/notes';
+  ProjectName := '(unknown)';
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+    Begin
+      If Assigned(LazarusIDE.ActiveProject.MainFile) Then
+        ProjectName := LazarusIDE.ActiveProject.MainFile.Filename
+      Else
+        ProjectName := LazarusIDE.ActiveProject.ProjectInfoFile;
+    End;
+  Result :=
+    KindLabel + ' output for review:' + LineEnding +
+    LineEnding +
+    'Project: ' + ProjectName + LineEnding +
+    'Outcome: ' + Outcome +
+      Format(' — errors=%d, warnings=%d, hints/notes=%d', [ErrorCount, WarningCount, HintCount]) +
+      LineEnding +
+    LineEnding +
+    '----- begin compiler/messages output -----' + LineEnding +
+    OutputText + LineEnding +
+    '----- end compiler/messages output -----' + LineEnding +
+    LineEnding +
+    'You are reviewing Free Pascal / Lazarus IDE ' + LowerCase(KindLabel) +
+    ' output from my local machine (same text as the Messages window).' + LineEnding +
+    'If there are errors: explain them briefly and propose concrete fixes (file, location, and change).' + LineEnding +
+    'If there are warnings or hints: address only those that are practical and useful; ignore pure noise.' + LineEnding +
+    'If the ' + LowerCase(KindLabel) + ' is clean (no errors and no actionable warnings), say so briefly — no further action is required.';
+End;
+
+Procedure TGrokChatForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
+Var
+  BuildResult: TModalResult;
+  OutputText, PromptText: String;
+  ErrorCount, WarningCount, HintCount: Integer;
+  BuildOk: Boolean;
+Begin
+  If FSending Or FReviewInProgress Then
+    Exit;
+  If Not Assigned(LazarusIDE) Then
+    Begin
+      AppendMessage('system', 'LazarusIDE not available – cannot run ' + KindLabel + '.');
+      Exit;
+    End;
+  If Not Assigned(LazarusIDE.ActiveProject) Then
+    Begin
+      MessageDlg('Open a project before using Review ' + KindLabel + '.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+
+  FReviewInProgress := True;
+  FReviewCompileAction.Enabled := False;
+  FReviewBuildAction.Enabled := False;
+  FStatusFooter.SetRightText(KindLabel + '…');
+  Application.ProcessMessages;
+  WorkflowLogger.Info('GrokChat', 'Review ' + KindLabel + ' started');
+
+  Try
+    BuildResult := LazarusIDE.DoBuildProject(Reason, []);
+    BuildOk := BuildResult = mrOk;
+    OutputText := CollectIDEMessagesText(ErrorCount, WarningCount, HintCount);
+    PromptText := BuildReviewPrompt(KindLabel, OutputText, ErrorCount, WarningCount, HintCount, BuildOk);
+
+    If BuildOk And (ErrorCount = 0) Then
+      FStatusFooter.SetRightText(KindLabel + ' OK')
+    Else If ErrorCount > 0 Then
+      FStatusFooter.SetRightText(KindLabel + ' failed')
+    Else
+      FStatusFooter.SetRightText(KindLabel + ' done');
+
+    SubmitUserText(PromptText, True);
+  Finally
+    FReviewInProgress := False;
+    If Not FSending Then
+      Begin
+        FReviewCompileAction.Enabled := True;
+        FReviewBuildAction.Enabled := True;
+        UpdateStatusFooter;
+      End;
+  End;
+End;
+
+Procedure TGrokChatForm.ReviewCompile;
+Begin
+  ReviewProject(crCompile, 'Compile');
+End;
+
+Procedure TGrokChatForm.ReviewBuild;
+Begin
+  ReviewProject(crBuild, 'Build');
 End;
 
 Procedure TGrokChatForm.StartNewChat;
@@ -292,16 +519,14 @@ Begin
   StartNewChat;
 End;
 
-Procedure TGrokChatForm.BuildActionExecute(Sender: TObject);
+Procedure TGrokChatForm.ReviewCompileActionExecute(Sender: TObject);
 Begin
-  FStatusFooter.SetRightText('Building…');
-  If Assigned(LazarusIDE) Then
-    LazarusIDE.DoBuildProject(crCompile, [])
-  Else
-    Begin
-      AppendMessage('system', 'LazarusIDE not available – cannot build.');
-      FStatusFooter.SetRightText('Ready');
-    End;
+  ReviewCompile;
+End;
+
+Procedure TGrokChatForm.ReviewBuildActionExecute(Sender: TObject);
+Begin
+  ReviewBuild;
 End;
 
 Procedure TGrokChatForm.SettingsActionExecute(Sender: TObject);
@@ -313,26 +538,22 @@ End;
 Procedure TGrokChatForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
   Const OutputText: String; ErrorCount, WarningCount: Integer);
 Begin
+  { Review Compile/Build captures Messages via the IDE API after DoBuildProject.
+    This bus hook remains for future external publishers. }
+  If FReviewInProgress Then
+    Exit;
   Case Result Of
     crSuccess:
-      Begin
-        AppendMessage('system', Format('Build succeeded (%d warnings).', [WarningCount]));
-        FStatusFooter.SetRightText('Build OK');
-      End;
+      FStatusFooter.SetRightText(Format('Compile OK (%d warn)', [WarningCount]));
     crFailed:
-      Begin
-        AppendMessage('system', Format('Build failed – %d errors, %d warnings.', [ErrorCount, WarningCount]));
-        AppendMessage('compiler', OutputText);
-        FStatusFooter.SetRightText('Build failed');
-      End;
+      FStatusFooter.SetRightText(Format('Compile failed (%d err)', [ErrorCount]));
     crCancelled:
-      Begin
-        AppendMessage('system', 'Build cancelled.');
-        FStatusFooter.SetRightText('Cancelled');
-      End;
+      FStatusFooter.SetRightText('Cancelled');
   Else
     { }
   End;
+  If OutputText <> '' Then
+    WorkflowLogger.Debug('GrokChat', 'CompilerFinished for ' + ProjectFile);
   UpdateStatusFooter;
 End;
 

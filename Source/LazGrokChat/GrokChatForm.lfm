@@ -2,10 +2,10 @@ object GrokChatForm: TGrokChatForm
   Left = 200
   Height = 650
   Top = 100
-  Width = 800
+  Width = 900
   Caption = 'Grok Chat'
   ClientHeight = 650
-  ClientWidth = 800
+  ClientWidth = 900
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   Position = poDefaultPosOnly
@@ -21,9 +21,13 @@ object GrokChatForm: TGrokChatForm
       Caption = 'Send'
       OnExecute = SendActionExecute
     end
-    object FBuildAction: TAction
-      Caption = 'Build'
-      OnExecute = BuildActionExecute
+    object FReviewCompileAction: TAction
+      Caption = 'Review Compile'
+      OnExecute = ReviewCompileActionExecute
+    end
+    object FReviewBuildAction: TAction
+      Caption = 'Review Build'
+      OnExecute = ReviewBuildActionExecute
     end
     object FSettingsAction: TAction
       Caption = 'Settings'
@@ -34,7 +38,7 @@ object GrokChatForm: TGrokChatForm
     Left = 0
     Height = 28
     Top = 0
-    Width = 800
+    Width = 900
     Caption = 'FToolBar'
     EdgeBorders = []
     ShowCaptions = True
@@ -51,20 +55,25 @@ object GrokChatForm: TGrokChatForm
       Caption = 'ToolButtonSep'
       Style = tbsSeparator
     end
-    object ToolButtonBuild: TToolButton
+    object ToolButtonReviewCompile: TToolButton
       Left = 84
       Top = 2
-      Action = FBuildAction
+      Action = FReviewCompileAction
+    end
+    object ToolButtonReviewBuild: TToolButton
+      Left = 188
+      Top = 2
+      Action = FReviewBuildAction
     end
     object ToolButtonSep2: TToolButton
-      Left = 140
+      Left = 292
       Height = 22
       Top = 2
       Caption = 'ToolButtonSep2'
       Style = tbsSeparator
     end
     object ToolButtonSettings: TToolButton
-      Left = 148
+      Left = 300
       Top = 2
       Action = FSettingsAction
     end
@@ -72,24 +81,24 @@ object GrokChatForm: TGrokChatForm
   inline FStatusFooter: TStatusFooterFrame
     Height = 22
     Top = 628
-    Width = 800
+    Width = 900
     Align = alBottom
     ClientHeight = 22
-    ClientWidth = 800
+    ClientWidth = 900
     TabOrder = 3
   end
   object FInputPanel: TPanel
     Left = 0
     Height = 90
     Top = 538
-    Width = 800
+    Width = 900
     Align = alBottom
     BevelOuter = bvNone
     ClientHeight = 90
-    ClientWidth = 800
+    ClientWidth = 900
     TabOrder = 2
     object FSendButton: TButton
-      Left = 714
+      Left = 814
       Height = 78
       Top = 6
       Width = 80
@@ -103,7 +112,7 @@ object GrokChatForm: TGrokChatForm
       Left = 6
       Height = 78
       Top = 6
-      Width = 702
+      Width = 802
       Align = alClient
       BorderSpacing.Around = 6
       ScrollBars = ssAutoVertical
@@ -114,7 +123,7 @@ object GrokChatForm: TGrokChatForm
     Left = 4
     Height = 506
     Top = 32
-    Width = 792
+    Width = 892
     Align = alClient
     BorderSpacing.Around = 4
     Font.Height = -13
