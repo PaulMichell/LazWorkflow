@@ -1,6 +1,6 @@
 Unit GrokMarkdownForm;
 
-{ Live Markdown document loader/viewer windows for LazGrokChat (c) 2026 Michell Computing. }
+{ Live Markdown document loader/viewer windows for LazAssistantTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

@@ -1,6 +1,6 @@
 Unit GrokConfig;
 
-{ Persistent LazGrokChat settings (OAuth tokens, model) (c) 2026 Michell Computing. }
+{ Persistent LazAssistantTools settings (OAuth tokens, model) (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,7 +13,8 @@ Uses
   Classes, SysUtils, GrokOAuth;
 
 Const
-  GrokConfigFileName = 'LazGrokChat.xml';
+  GrokConfigFileName = 'LazAssistantTools.xml';
+  GrokConfigLegacyFileName = 'LazGrokChat.xml';
   GrokConfigDefaultApiBase = 'https://api.x.ai/v1';
   GrokConfigDefaultModel = 'grok-4.5';
 
@@ -155,41 +156,52 @@ Begin
   Result.ExpiresAt := FExpiresAt;
 End;
 
+Procedure ApplyConfigStorage(Cfg: TConfigStorage; Config: TGrokConfig);
+Var
+  LegacyKey: String;
+Begin
+  If (Not Assigned(Cfg)) Or (Not Assigned(Config)) Then
+    Exit;
+  Config.FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
+  Config.FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
+  Config.FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
+  Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
+  Config.FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
+  Config.FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
+  Config.FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
+  Config.FScope := Cfg.GetValue('OAuth/Scope', '');
+  Config.FExpiresAt := ConfigToDateTime(Cfg.GetValue('OAuth/ExpiresAt', ''));
+  If (Config.FAccessToken = '') And (Config.FRefreshToken = '') Then
+    Begin
+      LegacyKey := Cfg.GetValue('API/Key', '');
+      If LegacyKey <> '' Then
+        Config.FAccessToken := '';
+    End;
+  If Trim(Config.FApiBase) = '' Then
+    Config.FApiBase := GrokConfigDefaultApiBase;
+  If Trim(Config.FModel) = '' Then
+    Config.FModel := GrokConfigDefaultModel
+  Else If SameText(Config.FModel, 'grok-4') Or SameText(Config.FModel, 'grok-4-latest') Then
+    Config.FModel := GrokConfigDefaultModel;
+  If Trim(Config.FTokenType) = '' Then
+    Config.FTokenType := 'Bearer';
+End;
+
 Procedure TGrokConfig.Load;
 Var
   Cfg: TConfigStorage;
-  LegacyKey: String;
 Begin
   Cfg := GetIDEConfigStorage(GrokConfigFileName, True);
   Try
-    FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
-    FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
-    FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
-    FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
-    FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
-    FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
-    FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
-    FScope := Cfg.GetValue('OAuth/Scope', '');
-    FExpiresAt := ConfigToDateTime(Cfg.GetValue('OAuth/ExpiresAt', ''));
-    { One-time migration: older builds stored a console API key. Prefer OAuth. }
+    ApplyConfigStorage(Cfg, Self);
+    { Migrate settings from the previous package name when the new store is empty. }
     If (FAccessToken = '') And (FRefreshToken = '') Then
       Begin
-        LegacyKey := Cfg.GetValue('API/Key', '');
-        If LegacyKey <> '' Then
-          Begin
-            { Leave legacy key unused for chat; OAuth is the supported path. }
-            FAccessToken := '';
-          End;
+        Cfg.Free;
+        Cfg := Nil;
+        Cfg := GetIDEConfigStorage(GrokConfigLegacyFileName, True);
+        ApplyConfigStorage(Cfg, Self);
       End;
-    If Trim(FApiBase) = '' Then
-      FApiBase := GrokConfigDefaultApiBase;
-    If Trim(FModel) = '' Then
-      FModel := GrokConfigDefaultModel
-    Else If SameText(FModel, 'grok-4') Or SameText(FModel, 'grok-4-latest') Then
-      { Upgrade legacy default to current flagship. }
-      FModel := GrokConfigDefaultModel;
-    If Trim(FTokenType) = '' Then
-      FTokenType := 'Bearer';
   Finally
     Cfg.Free;
   End;

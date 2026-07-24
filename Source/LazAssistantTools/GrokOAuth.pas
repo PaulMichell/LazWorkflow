@@ -1,6 +1,6 @@
 Unit GrokOAuth;
 
-{ xAI SuperGrok / X Premium OAuth (PKCE) client for LazGrokChat (c) 2026 Michell Computing. }
+{ xAI SuperGrok / X Premium OAuth (PKCE) client for LazAssistantTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -290,7 +290,7 @@ Begin
     If (AuthCode = '') Or (State <> FExpectedState) Then
       Begin
         SendResponse(Data, 'HTTP/1.1 400 Bad Request',
-          'Invalid OAuth callback. If xAI showed a code, paste it in LazGrokChat Settings.');
+          'Invalid OAuth callback. If xAI showed a code, paste it in Assistant Settings.');
         Exit;
       End;
 

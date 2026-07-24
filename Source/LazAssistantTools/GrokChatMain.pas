@@ -1,6 +1,6 @@
 Unit GrokChatMain;
 
-{ Core registration, menus, commands and window creation for LazGrokChat (c) 2026 Michell Computing. }
+{ Core registration, menus, commands and window creation for LazAssistantTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -25,7 +25,7 @@ Uses
   IDEMsgIntf, IDEExternToolIntf;
 
 Type
-  { Context menu on IDE Messages: Ask Grok to fix the selected line. }
+  { Context menu on IDE Messages: Ask Assistant to fix the selected line. }
   TGrokFixMessageQuickFix = Class(TMsgQuickFix)
   Public
     Procedure CreateMenuItems(Fixes: TMsgQuickFixes); Override;
@@ -108,7 +108,7 @@ Begin
         Continue;
       If Msg.Urgency < mluHint Then
         Continue;
-      Fixes.AddMenuItem(Self, Msg, 'Ask Grok to fix…');
+      Fixes.AddMenuItem(Self, Msg, 'Ask Assistant to Fix...');
       Exit;
     End;
 End;
@@ -139,7 +139,7 @@ Var
   Cat: TIDECommandCategory;
   InsertAt: Integer;
 Begin
-  WorkflowLogger.Info('GrokChat', 'Registering LazGrokChat');
+  WorkflowLogger.Info('GrokChat', 'Registering LazAssistantTools');
 
   Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
   If Cat = Nil Then
@@ -152,7 +152,7 @@ Begin
     Key, Nil, @DoGrokReviewCompile);
   CmdGrokReviewBuild := RegisterIDECommand(Cat, 'GrokReviewBuild', 'Review Build',
     Key, Nil, @DoGrokReviewBuild);
-  CmdGrokFixError := RegisterIDECommand(Cat, 'GrokFixError', 'Fix Selected Message with Grok',
+  CmdGrokFixError := RegisterIDECommand(Cat, 'GrokFixError', 'Fix Selected Message with Assistant',
     Key, Nil, @DoGrokFixError);
   CmdGrokSettings := RegisterIDECommand(Cat, 'GrokSettings', 'Project Chat Settings', Key, Nil, @DoGrokSettings);
 
@@ -191,7 +191,7 @@ Begin
       RegisterIDEMsgQuickFix(GrokFixQuickFix);
     End;
 
-  WorkflowLogger.Info('GrokChat', 'LazGrokChat registered successfully');
+  WorkflowLogger.Info('GrokChat', 'LazAssistantTools registered successfully');
 End;
 
 Finalization

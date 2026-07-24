@@ -1,6 +1,6 @@
 Unit GitConfig;
 
-{ Persistent LazGitManager settings (c) 2026 Michell Computing. }
+{ Persistent LazRepositoryTools settings (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,7 +13,8 @@ Uses
   Classes, SysUtils;
 
 Const
-  GitConfigFileName = 'LazGitManager.xml';
+  GitConfigFileName = 'LazRepositoryTools.xml';
+  GitConfigLegacyFileName = 'LazGitManager.xml';
   GitConfigDefaultAutoRefresh = True;
   GitConfigDefaultIntervalSec = 5;
   GitConfigMinIntervalSec = 2;
@@ -69,11 +70,23 @@ End;
 Procedure TGitConfig.Load;
 Var
   Cfg: TConfigStorage;
+  LoadedInterval: Integer;
 Begin
   Cfg := GetIDEConfigStorage(GitConfigFileName, True);
   Try
     FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
-    AutoRefreshSeconds := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
+    LoadedInterval := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
+    AutoRefreshSeconds := LoadedInterval;
+    { Migrate from LazGitManager.xml when the new store still looks empty/default. }
+    If (FAutoRefresh = GitConfigDefaultAutoRefresh) And
+      (LoadedInterval = GitConfigDefaultIntervalSec) Then
+      Begin
+        Cfg.Free;
+        Cfg := Nil;
+        Cfg := GetIDEConfigStorage(GitConfigLegacyFileName, True);
+        FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
+        AutoRefreshSeconds := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
+      End;
   Finally
     Cfg.Free;
   End;

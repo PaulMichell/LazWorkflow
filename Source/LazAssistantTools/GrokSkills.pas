@@ -1,6 +1,6 @@
 Unit GrokSkills;
 
-{ Discover and load Grok user skills (~/.grok/skills) for LazGrokChat (c) 2026 Michell Computing. }
+{ Discover and load Grok user skills (~/.grok/skills) for LazAssistantTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

@@ -1,6 +1,6 @@
 Unit GitManagerMain;
 
-{ Core registration, menus, commands and window creation for LazGitManager (c) 2026 Michell Computing. }
+{ Core registration, menus, commands and window creation for LazRepositoryTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -227,7 +227,7 @@ Var
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
-  WorkflowLogger.Info('GitManager', 'Registering LazGitManager');
+  WorkflowLogger.Info('GitManager', 'Registering LazRepositoryTools');
 
   If GitManagerIDEHooks = Nil Then
     GitManagerIDEHooks := TGitManagerIDEHooks.Create;
@@ -273,7 +273,7 @@ Begin
     End;
 
   UpdateRepositoryMenuState;
-  WorkflowLogger.Info('GitManager', 'LazGitManager registered successfully');
+  WorkflowLogger.Info('GitManager', 'LazRepositoryTools registered successfully');
 End;
 
 Initialization

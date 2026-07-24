@@ -1,6 +1,6 @@
 Unit GitSettingsForm;
 
-{ LazGitManager settings dialog (c) 2026 Michell Computing. }
+{ LazRepositoryTools settings dialog (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

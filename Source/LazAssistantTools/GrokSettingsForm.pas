@@ -1,6 +1,6 @@
 Unit GrokSettingsForm;
 
-{ LazGrokChat OAuth sign-in, model and skill settings dialog (c) 2026 Michell Computing. }
+{ LazAssistantTools OAuth sign-in, model and skill settings dialog (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

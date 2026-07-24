@@ -1,6 +1,6 @@
 Unit GrokIDEContext;
 
-{ Collect active editor and project context for LazGrokChat prompts (c) 2026 Michell Computing. }
+{ Collect active editor and project context for LazAssistantTools prompts (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

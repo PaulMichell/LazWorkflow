@@ -88,7 +88,7 @@ Begin
     Exit;
   OutList := TStringList.Create;
   Try
-    OutList.Add('LazGrokChat-Session');
+    OutList.Add('LazAssistantTools-Session');
     OutList.Add('Version=' + IntToStr(GrokSessionFormatVersion));
     OutList.Add('ContextUsed=' + IntToStr(ContextUsed));
     OutList.Add('---TRANSCRIPT---');
@@ -143,7 +143,9 @@ Begin
           Exit;
         End;
     End;
-    If (Lines.Count < 1) Or (Pos('LazGrokChat-Session', Lines[0]) <> 1) Then
+    If (Lines.Count < 1) Or
+      ((Pos('LazAssistantTools-Session', Lines[0]) <> 1) And
+       (Pos('LazGrokChat-Session', Lines[0]) <> 1)) Then
       Exit;
 
     Transcript.Clear;

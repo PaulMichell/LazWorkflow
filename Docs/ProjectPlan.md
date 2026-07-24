@@ -13,8 +13,8 @@
 
 Create two tightly integrated, first-class Lazarus IDE packages that feel native:
 
-1. **LazGitManager** — A modern, high-quality Git life-cycle UI with a VS Code Git Graph-style commit history tree, live monitoring, and seamless push/pull.
-2. **LazGrokChat** — A rich UI replacement for the Grok command-line tool, featuring persistent chat history, live Markdown document windows (auto-updating for plans/TODOs), compiler integration, and bidirectional hooks into LazGitManager.
+1. **LazRepositoryTools** — A modern, high-quality Git life-cycle UI with a VS Code Git Graph-style commit history tree, live monitoring, and seamless push/pull.
+2. **LazAssistantTools** — A rich UI replacement for the Grok command-line tool, featuring persistent chat history, live Markdown document windows (auto-updating for plans/TODOs), compiler integration, and bidirectional hooks into LazRepositoryTools.
 
 **Core principles**
 - Seamless IDE integration (dockable windows, IDE menus/actions, project-aware, options pages).
@@ -32,7 +32,7 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Lazarus IDE (LCL + IDEIntf)                 │
 ├──────────────────────────────┬──────────────────────────────────┤
-│      LazGitManager.lpk       │         LazGrokChat.lpk          │
+│      LazRepositoryTools.lpk       │         LazAssistantTools.lpk          │
 │  ┌────────────────────────┐  │  ┌────────────────────────────┐  │
 │  │ GitService (core)      │  │  │ GrokService (core)         │  │
 │  │  - libgit2 or CLI      │◄─┼──┤  - xAI / OpenAI-compatible │  │
@@ -64,7 +64,7 @@ Contains:
 
 ## 3. Package Breakdown
 
-### 3.1 LazGitManager (Primary Git UI)
+### 3.1 LazRepositoryTools (Primary Git UI)
 
 **Responsibilities**
 - Detect project Git root (via IDE project or manual open).
@@ -98,7 +98,7 @@ Contains:
 - Toolbar buttons (optional, user-configurable).
 - Keyboard shortcuts (configurable via IDE).
 
-### 3.2 LazGrokChat (Grok / LLM UI)
+### 3.2 LazAssistantTools (Grok / LLM UI)
 
 **Responsibilities**
 - Full replacement UI for the Grok CLI (or any OpenAI-compatible / xAI API endpoint).
@@ -113,11 +113,11 @@ Contains:
 - **Compiler Integration**:
   - “Build Project” / “Compile Current Unit” buttons that invoke the Lazarus/FPC compiler via IDEIntf (`TLazCompilerOptions`, `LazarusIDE.DoBuildProject`, etc.).
   - Capture compiler output → feed back into chat context or a dedicated “Build Results” pane.
-  - On successful build, automatically notify LazGitManager (e.g. “suggest commit” or refresh status).
+  - On successful build, automatically notify LazRepositoryTools (e.g. “suggest commit” or refresh status).
 - Tool / Function calling support so the model can:
   - Read/write project files (with user confirmation for writes).
   - Run compiler / tests.
-  - Trigger Git operations via LazGitManager API.
+  - Trigger Git operations via LazRepositoryTools API.
   - Update Markdown plan documents.
 
 **Key UI**
@@ -140,8 +140,8 @@ Contains:
   - `ICompilerFinished`
   - `IMarkdownDocumentChanged`
   - `IGrokToolCallRequested` (Git actions, file ops, etc.)
-- LazGrokChat can call `LazGitManager.Commit(...)`, `Push`, etc. with confirmation dialogs.
-- After a successful Grok-driven edit + compile cycle, LazGitManager can auto-stage or offer “Commit with AI message”.
+- LazAssistantTools can call `LazRepositoryTools.Commit(...)`, `Push`, etc. with confirmation dialogs.
+- After a successful Grok-driven edit + compile cycle, LazRepositoryTools can auto-stage or offer “Commit with AI message”.
 - Both packages register IDE options frames under **Environment** or a dedicated **Workflow** node.
 - Both appear in **View** menu as dockable windows.
 - Project session state saved/restored with Lazarus desktop layout.
@@ -151,7 +151,7 @@ Contains:
 ## 4. Suggested Ease-of-Use & Capability Enhancements
 
 ### High-Value Additions
-1. **AI-Powered Commit Messages** — LazGrokChat can generate conventional-commit messages from staged diff (one-click from Git Graph or Status window).
+1. **AI-Powered Commit Messages** — LazAssistantTools can generate conventional-commit messages from staged diff (one-click from Git Graph or Status window).
 2. **Visual Diff + AI Explain** — Select a commit or hunk → “Explain this change” sends to Grok.
 3. **Plan-Driven Development Mode** — User drops a `plan.md`; Grok maintains it, marks todos complete, and the Markdown window shows live progress checkboxes.
 4. **One-Click “Grok Fix Compiler Error”** — Click an error in the Messages window → auto-open chat with context + error + surrounding code.
@@ -183,8 +183,8 @@ Contains:
   LazWorkflow/
   ├── Source/
   │   ├── LazWorkflowCommon/
-  │   ├── LazGitManager/
-  │   ├── LazGrokChat/
+  │   ├── LazRepositoryTools/
+  │   ├── LazAssistantTools/
   │   └── Tests/
   ├── Packages/          (.lpk files)
   ├── Docs/
@@ -195,7 +195,7 @@ Contains:
 - Decide & vendor/bind libgit2 (or pure CLI fallback).
 - Basic IDE registration: menus, dockable windows, options frames.
 
-### Phase 1 – LazGitManager MVP (3–5 weeks)
+### Phase 1 – LazRepositoryTools MVP (3–5 weeks)
 1. Git repository detection & basic status.
 2. Full action set via CLI (later migrate hot paths to libgit2).
 3. Commit Graph window (virtualised custom draw, coloured lanes, basic interactions).
@@ -204,7 +204,7 @@ Contains:
 6. Remote polling timer.
 7. Integration tests on Linux/Windows/macOS.
 
-### Phase 2 – LazGrokChat MVP (3–5 weeks)
+### Phase 2 – LazAssistantTools MVP (3–5 weeks)
 1. Chat UI + streaming.
 2. Footer status bar (tokens, model, etc.).
 3. Conversation persistence.
@@ -311,13 +311,13 @@ Contains:
   - `WorkflowLog.pas` – simple levelled logger.
   - `StatusFooterFrame.pas` – reusable three-part status bar.
   - Package `.lpk` ready (no `HasRegisterProc` unit; shared library only).
-- **LazGitManager**:
-  - Registration unit `RegLazGitManager` (name must differ from package) + menus/commands under Tools → Git.
+- **LazRepositoryTools**:
+  - Registration unit `RegLazRepositoryTools` (name must differ from package) + menus/commands under Tools → Git.
   - Dockable `TGitGraphForm` with toolbar, paintbox placeholder for graph, detail pane, status footer.
   - `GitService.pas` – CLI-based Git operations (detect repo, status, fetch/pull/push) + event notifications.
   - Listens to repository events.
-- **LazGrokChat**:
-  - Registration unit `RegLazGrokChat` (name must differ from package) + menus under Tools → Grok.
+- **LazAssistantTools**:
+  - Registration unit `RegLazAssistantTools` (name must differ from package) + menus under Tools → Grok.
   - Dockable `TGrokChatForm` with chat memo, input area, Send/New/Build actions, live status footer (model + context %).
   - Implements `ICompilerFinished` and `IMarkdownDocumentChanged`.
   - `GrokService.pas` – credential + history stub (streaming HTTP SSE in Phase 2).
