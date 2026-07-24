@@ -1,4 +1,4 @@
-object GrokMarkdownForm: TGrokMarkdownForm
+object AssistantMarkdownForm: TAssistantMarkdownForm
   Left = 250
   Height = 620
   Top = 120

@@ -1,9 +1,9 @@
-# Project Plan: Lazarus Git Manager + Grok Chat Add-ins
+# Project Plan: Lazarus Git Manager + Assistant Chat Add-ins
 
 **Michell Computing Style Lazarus Package Suite**  
 **Version:** 0.1 (Planning)  
 **Date:** 2026-07-20  
-**Author:** FreePascal Engineer (Grok)  
+**Author:** FreePascal Engineer  
 **Target Platforms:** Linux (GTK2/GTK3/Qt5/Qt6), Windows (Win32/Win64), macOS (Cocoa)  
 **Lazarus / FPC Baseline:** Lazarus 3.x / 4.x + FPC 3.2.2+ (ObjFPC mode)
 
@@ -14,7 +14,7 @@
 Create two tightly integrated, first-class Lazarus IDE packages that feel native:
 
 1. **LazRepositoryTools** — A modern, high-quality Git life-cycle UI with a VS Code Git Graph-style commit history tree, live monitoring, and seamless push/pull.
-2. **LazAssistantTools** — A rich UI replacement for the Grok command-line tool, featuring persistent chat history, live Markdown document windows (auto-updating for plans/TODOs), compiler integration, and bidirectional hooks into LazRepositoryTools.
+2. **LazAssistantTools** — A rich UI replacement for the Assistant command-line tool, featuring persistent chat history, live Markdown document windows (auto-updating for plans/TODOs), compiler integration, and bidirectional hooks into LazRepositoryTools.
 
 **Core principles**
 - Seamless IDE integration (dockable windows, IDE menus/actions, project-aware, options pages).
@@ -34,7 +34,7 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
 ├──────────────────────────────┬──────────────────────────────────┤
 │      LazRepositoryTools.lpk       │         LazAssistantTools.lpk          │
 │  ┌────────────────────────┐  │  ┌────────────────────────────┐  │
-│  │ GitService (core)      │  │  │ GrokService (core)         │  │
+│  │ GitService (core)      │  │  │ AssistantService (core)         │  │
 │  │  - libgit2 or CLI      │◄─┼──┤  - xAI / OpenAI-compatible │  │
 │  │  - watcher threads     │  │  │  - streaming chat          │  │
 │  └──────────┬─────────────┘  │  └──────────┬─────────────────┘  │
@@ -49,7 +49,7 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
 └─────────────┼────────────────┴─────────────┼────────────────────┘
               │                              │
               └────────── Shared Bus ────────┘
-                 (ILazGitEvents / ILazGrokEvents
+                 (ILazGitEvents / IAssistantToolCallRequested
                   via IDEIntf or simple observer)
 ```
 
@@ -98,10 +98,10 @@ Contains:
 - Toolbar buttons (optional, user-configurable).
 - Keyboard shortcuts (configurable via IDE).
 
-### 3.2 LazAssistantTools (Grok / LLM UI)
+### 3.2 LazAssistantTools (Assistant / LLM UI)
 
 **Responsibilities**
-- Full replacement UI for the Grok CLI (or any OpenAI-compatible / xAI API endpoint).
+- Full replacement UI for the Assistant CLI (or any OpenAI-compatible / xAI API endpoint).
 - Persistent multi-conversation chat history (SQLite or JSON + markdown files).
 - Rich chat view with streaming responses, tool-call visualisation, code blocks with “Insert into editor” / “Apply patch”.
 - Status footer bar: context window usage (tokens / %), current model, rate-limit / usage stats, connection status, last error.
@@ -139,9 +139,9 @@ Contains:
   - `IGitCommitCreated`
   - `ICompilerFinished`
   - `IMarkdownDocumentChanged`
-  - `IGrokToolCallRequested` (Git actions, file ops, etc.)
+  - `IAssistantToolCallRequested` (Git actions, file ops, etc.)
 - LazAssistantTools can call `LazRepositoryTools.Commit(...)`, `Push`, etc. with confirmation dialogs.
-- After a successful Grok-driven edit + compile cycle, LazRepositoryTools can auto-stage or offer “Commit with AI message”.
+- After a successful Assistant-driven edit + compile cycle, LazRepositoryTools can auto-stage or offer “Commit with AI message”.
 - Both packages register IDE options frames under **Environment** or a dedicated **Workflow** node.
 - Both appear in **View** menu as dockable windows.
 - Project session state saved/restored with Lazarus desktop layout.
@@ -152,12 +152,12 @@ Contains:
 
 ### High-Value Additions
 1. **AI-Powered Commit Messages** — LazAssistantTools can generate conventional-commit messages from staged diff (one-click from Git Graph or Status window).
-2. **Visual Diff + AI Explain** — Select a commit or hunk → “Explain this change” sends to Grok.
-3. **Plan-Driven Development Mode** — User drops a `plan.md`; Grok maintains it, marks todos complete, and the Markdown window shows live progress checkboxes.
-4. **One-Click “Grok Fix Compiler Error”** — Click an error in the Messages window → auto-open chat with context + error + surrounding code.
+2. **Visual Diff + AI Explain** — Select a commit or hunk → “Explain this change” sends to the Assistant.
+3. **Plan-Driven Development Mode** — User drops a `plan.md`; the Assistant maintains it, marks todos complete, and the Markdown window shows live progress checkboxes.
+4. **One-Click “Assistant Fix Compiler Error”** — Click an error in the Messages window → auto-open chat with context + error + surrounding code.
 5. **Branch Protection / Pre-commit Hooks UI** — Simple GUI for common hooks.
 6. **Multi-repo Support** — If a project has submodules or is a monorepo, show a repo switcher.
-7. **Keyboard-first Workflow** — Command Palette-style “Git: …” and “Grok: …” actions (leverage existing IDE command system).
+7. **Keyboard-first Workflow** — Command Palette-style “Git: …” and “Assistant: …” actions (leverage existing IDE command system).
 8. **Session Persistence** — Chat history, open Markdown windows, Git Graph filters restored per project.
 9. **Offline / Local Model First-class** — Full support for Ollama / LM Studio so the workflow works without internet.
 10. **Audit Log** — All AI file writes and Git operations logged with timestamps for review.
@@ -214,7 +214,7 @@ Contains:
 7. Settings page (API key secure storage via IDE or OS keyring).
 
 ### Phase 3 – Deep Integration & Polish (2–4 weeks)
-- Bidirectional events (Git ↔ Grok).
+- Bidirectional events (Git ↔ Assistant).
 - AI commit message generation.
 - “Fix this error” from Messages window.
 - Plan.md live TODO tracking.
@@ -273,7 +273,7 @@ Contains:
 3. User guide (Markdown + optional PDF).
 4. Developer documentation (architecture, extension points).
 5. Unit / integration test suite (where feasible with IDEIntf mocking).
-6. Example project demonstrating the full Grok → edit → compile → commit loop.
+6. Example project demonstrating the full Assistant → edit → compile → commit loop.
 7. GitHub repository with CI (at least Linux + Windows builds).
 
 ---
@@ -282,7 +282,7 @@ Contains:
 
 - Feels completely native inside Lazarus (no “foreign” look-and-feel).
 - Git Graph is competitive with VS Code Git Graph in clarity and speed.
-- A developer can go from “write plan.md” → Grok implements → compile → commit without leaving the IDE.
+- A developer can go from “write plan.md” → the Assistant implements → compile → commit without leaving the IDE.
 - Zero platform-specific bugs in core paths after Phase 3.
 - Positive feedback from Lazarus community / forum.
 
@@ -317,11 +317,11 @@ Contains:
   - `GitService.pas` – CLI-based Git operations (detect repo, status, fetch/pull/push) + event notifications.
   - Listens to repository events.
 - **LazAssistantTools**:
-  - Registration unit `RegLazAssistantTools` (name must differ from package) + menus under Tools → Grok.
-  - Dockable `TGrokChatForm` with chat memo, input area, Send/New/Build actions, live status footer (model + context %).
+  - Registration unit `RegLazAssistantTools` (name must differ from package) + menus under Tools → Assistant.
+  - Dockable `TAssistantChatForm` with chat memo, input area, Send/New/Build actions, live status footer (model + context %).
   - Implements `ICompilerFinished` and `IMarkdownDocumentChanged`.
-  - `GrokService.pas` – credential + history stub (streaming HTTP SSE in Phase 2).
+  - `AssistantService.pas` – credential + history stub (streaming HTTP SSE in Phase 2).
 - All units follow Michell Computing conventions (ObjFPC, PascalCase keywords, 2-space, proper Create/Destroy, FreeAndNil, Assigned checks, Result assignment).
 - `.gitignore` and top-level README added.
 
-**Next:** Compile-check the packages inside Lazarus, then implement real commit graph rendering and basic Grok HTTP streaming.
+**Next:** Compile-check the packages inside Lazarus, then implement real commit graph rendering and basic Assistant HTTP streaming.

@@ -1,4 +1,4 @@
-Unit GrokSettingsForm;
+Unit AssistantSettingsForm;
 
 { LazAssistantTools OAuth sign-in, model and skill settings dialog (c) 2026 Michell Computing. }
 
@@ -14,7 +14,7 @@ Uses
   ButtonPanel;
 
 Type
-  TGrokSettingsForm = Class(TForm)
+  TAssistantSettingsForm = Class(TForm)
     FStatusLabel: TLabel;
     FStatusValue: TLabel;
     FModelLabel: TLabel;
@@ -47,19 +47,19 @@ Type
     Procedure PopulateModels(ForceRefresh: Boolean);
   End;
 
-Procedure ShowGrokSettingsForm;
+Procedure ShowAssistantSettingsForm;
 
 Implementation
 
 {$R *.lfm}
 
 Uses
-  GrokConfig, GrokService, GrokOAuth, GrokSkills, WorkflowLog, LCLIntf;
+  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, WorkflowLog, LCLIntf;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
-  If List.IndexOf(GrokConfigDefaultModel) < 0 Then
-    List.Add(GrokConfigDefaultModel);
+  If List.IndexOf(AssistantConfigDefaultModel) < 0 Then
+    List.Add(AssistantConfigDefaultModel);
   If List.IndexOf('grok-4') < 0 Then
     List.Add('grok-4');
   If List.IndexOf('grok-3') < 0 Then
@@ -82,27 +82,27 @@ Begin
     End;
 End;
 
-Procedure ShowGrokSettingsForm;
+Procedure ShowAssistantSettingsForm;
 Var
-  Form: TGrokSettingsForm;
+  Form: TAssistantSettingsForm;
 Begin
-  Form := TGrokSettingsForm.Create(Application.MainForm);
+  Form := TAssistantSettingsForm.Create(Application.MainForm);
   Try
     Form.LoadFromConfig;
     If Form.ShowModal = mrOk Then
       Begin
         Form.SaveToConfig;
-        If Assigned(GrokClient) And Assigned(GrokChatConfig) Then
-          GrokClient.ApplyConfig(GrokChatConfig);
-        WorkflowLogger.Info('GrokSettings',
-          'Saved – model=' + GrokChatConfig.Model + ' skill=' + GrokChatConfig.ActiveSkill);
+        If Assigned(AssistantClient) And Assigned(AssistantChatConfig) Then
+          AssistantClient.ApplyConfig(AssistantChatConfig);
+        WorkflowLogger.Info('AssistantSettings',
+          'Saved – model=' + AssistantChatConfig.Model + ' skill=' + AssistantChatConfig.ActiveSkill);
       End;
   Finally
     Form.Free;
   End;
 End;
 
-Procedure TGrokSettingsForm.FormCreate(Sender: TObject);
+Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Chat Settings';
   FButtonPanel.OKButton.Caption := 'OK';
@@ -111,20 +111,20 @@ Begin
   RefreshAuthStatus;
 End;
 
-Procedure TGrokSettingsForm.PopulateSkills;
+Procedure TAssistantSettingsForm.PopulateSkills;
 Var
-  Skills: TGrokSkillList;
+  Skills: TAssistantSkillList;
   I, SelectIdx: Integer;
   ActiveName: String;
 Begin
   ActiveName := '';
-  If Assigned(GrokChatConfig) Then
-    ActiveName := GrokChatConfig.ActiveSkill;
+  If Assigned(AssistantChatConfig) Then
+    ActiveName := AssistantChatConfig.ActiveSkill;
   FSkillCombo.Style := csDropDownList;
   FSkillCombo.Items.BeginUpdate;
   Try
     FSkillCombo.Items.Clear;
-    FSkillCombo.Items.Add(GrokSkillNoneCaption);
+    FSkillCombo.Items.Add(AssistantSkillNoneCaption);
     SelectIdx := 0;
     Skills := ListUserSkills;
     For I := 0 To High(Skills) Do
@@ -139,26 +139,26 @@ Begin
   FSkillCombo.ItemIndex := SelectIdx;
 End;
 
-Procedure TGrokSettingsForm.PopulateModels(ForceRefresh: Boolean);
+Procedure TAssistantSettingsForm.PopulateModels(ForceRefresh: Boolean);
 Var
   ErrorText, CurrentModel: String;
   Ok: Boolean;
 Begin
-  CurrentModel := GrokConfigDefaultModel;
-  If Assigned(GrokChatConfig) And (Trim(GrokChatConfig.Model) <> '') Then
-    CurrentModel := GrokChatConfig.Model;
+  CurrentModel := AssistantConfigDefaultModel;
+  If Assigned(AssistantChatConfig) And (Trim(AssistantChatConfig.Model) <> '') Then
+    CurrentModel := AssistantChatConfig.Model;
 
   FModelList.Items.BeginUpdate;
   Try
     FModelList.Items.Clear;
     Ok := False;
     ErrorText := '';
-    If Assigned(GrokClient) And GrokClient.IsSignedIn And
+    If Assigned(AssistantClient) And AssistantClient.IsSignedIn And
       (ForceRefresh Or Assigned(GrokOAuthClient)) Then
       Begin
         FModelHintLabel.Caption := 'Loading models…';
         Application.ProcessMessages;
-        Ok := GrokClient.ListAvailableModels(FModelList.Items, ErrorText);
+        Ok := AssistantClient.ListAvailableModels(FModelList.Items, ErrorText);
       End
     Else
       ErrorText := 'Sign in to load the live model list.';
@@ -181,7 +181,7 @@ Begin
   End;
 End;
 
-Procedure TGrokSettingsForm.RefreshAuthStatus;
+Procedure TAssistantSettingsForm.RefreshAuthStatus;
 Var
   Busy, Pending, SignedIn: Boolean;
 Begin
@@ -201,7 +201,7 @@ Begin
   FSignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
   FPasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
   FManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
-  FRefreshModelsButton.Enabled := Assigned(GrokClient) And SignedIn And (Not Busy);
+  FRefreshModelsButton.Enabled := Assigned(AssistantClient) And SignedIn And (Not Busy);
   If SignedIn And (Not Pending) Then
     FManualLabel.Caption := 'Already signed in — paste is only for a failed browser redirect:'
   Else If Pending Then
@@ -210,53 +210,53 @@ Begin
     FManualLabel.Caption := 'If browser cannot redirect, paste code or callback URL:';
 End;
 
-Procedure TGrokSettingsForm.LoadFromConfig;
+Procedure TAssistantSettingsForm.LoadFromConfig;
 Var
   I: Integer;
 Begin
-  If Not Assigned(GrokChatConfig) Then
+  If Not Assigned(AssistantChatConfig) Then
     Exit;
-  FApiBaseEdit.Text := GrokChatConfig.ApiBase;
-  FIncludeContextCheck.Checked := GrokChatConfig.IncludeIDEContext;
+  FApiBaseEdit.Text := AssistantChatConfig.ApiBase;
+  FIncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
   PopulateSkills;
-  If GrokChatConfig.ActiveSkill = '' Then
+  If AssistantChatConfig.ActiveSkill = '' Then
     FSkillCombo.ItemIndex := 0
   Else
     Begin
-      I := FSkillCombo.Items.IndexOf(GrokChatConfig.ActiveSkill);
+      I := FSkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill);
       If I >= 0 Then
         FSkillCombo.ItemIndex := I
       Else
         Begin
           { Skill was removed from disk; keep name visible until user clears it. }
-          FSkillCombo.Items.Add(GrokChatConfig.ActiveSkill + ' (missing)');
+          FSkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
           FSkillCombo.ItemIndex := FSkillCombo.Items.Count - 1;
         End;
     End;
-  If Assigned(GrokOAuthClient) And GrokChatConfig.IsSignedIn Then
-    GrokOAuthClient.SetTokens(GrokChatConfig.ToOAuthTokens);
-  If Assigned(GrokClient) Then
-    GrokClient.ApplyConfig(GrokChatConfig);
+  If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
+    GrokOAuthClient.SetTokens(AssistantChatConfig.ToOAuthTokens);
+  If Assigned(AssistantClient) Then
+    AssistantClient.ApplyConfig(AssistantChatConfig);
   RefreshAuthStatus;
   PopulateModels(True);
 End;
 
-Procedure TGrokSettingsForm.SaveToConfig;
+Procedure TAssistantSettingsForm.SaveToConfig;
 Var
   SkillName, ModelName: String;
 Begin
-  If Not Assigned(GrokChatConfig) Then
+  If Not Assigned(AssistantChatConfig) Then
     Exit;
-  GrokChatConfig.ApiBase := Trim(FApiBaseEdit.Text);
-  If GrokChatConfig.ApiBase = '' Then
-    GrokChatConfig.ApiBase := GrokConfigDefaultApiBase;
+  AssistantChatConfig.ApiBase := Trim(FApiBaseEdit.Text);
+  If AssistantChatConfig.ApiBase = '' Then
+    AssistantChatConfig.ApiBase := AssistantConfigDefaultApiBase;
 
   ModelName := '';
   If (FModelList.ItemIndex >= 0) And (FModelList.ItemIndex < FModelList.Items.Count) Then
     ModelName := Trim(FModelList.Items[FModelList.ItemIndex]);
   If ModelName = '' Then
-    ModelName := GrokConfigDefaultModel;
-  GrokChatConfig.Model := ModelName;
+    ModelName := AssistantConfigDefaultModel;
+  AssistantChatConfig.Model := ModelName;
 
   SkillName := '';
   If (FSkillCombo.ItemIndex > 0) And (FSkillCombo.ItemIndex < FSkillCombo.Items.Count) Then
@@ -265,21 +265,21 @@ Begin
       If Pos(' (missing)', SkillName) > 0 Then
         SkillName := Copy(SkillName, 1, Pos(' (missing)', SkillName) - 1);
     End;
-  GrokChatConfig.ActiveSkill := SkillName;
-  GrokChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
+  AssistantChatConfig.ActiveSkill := SkillName;
+  AssistantChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
   If Assigned(GrokOAuthClient) Then
-    GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-  GrokChatConfig.Save;
+    AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+  AssistantChatConfig.Save;
 End;
 
-Procedure TGrokSettingsForm.RefreshModelsButtonClick(Sender: TObject);
+Procedure TAssistantSettingsForm.RefreshModelsButtonClick(Sender: TObject);
 Begin
-  If Assigned(GrokClient) Then
-    GrokClient.SetEndpoint(Trim(FApiBaseEdit.Text), GrokClient.Model);
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetEndpoint(Trim(FApiBaseEdit.Text), AssistantClient.Model);
   PopulateModels(True);
 End;
 
-Procedure TGrokSettingsForm.SignInButtonClick(Sender: TObject);
+Procedure TAssistantSettingsForm.SignInButtonClick(Sender: TObject);
 Begin
   If Not Assigned(GrokOAuthClient) Then
     Exit;
@@ -293,13 +293,13 @@ Begin
     Application.ProcessMessages;
     If GrokOAuthClient.LoginWithBrowser Then
       Begin
-        If Assigned(GrokChatConfig) Then
+        If Assigned(AssistantChatConfig) Then
           Begin
-            GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-            GrokChatConfig.Save;
+            AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+            AssistantChatConfig.Save;
           End;
-        If Assigned(GrokClient) Then
-          GrokClient.ApplyConfig(GrokChatConfig);
+        If Assigned(AssistantClient) Then
+          AssistantClient.ApplyConfig(AssistantChatConfig);
         FManualEdit.Clear;
         MessageDlg('Signed in with SuperGrok / X Premium.' + LineEnding + LineEnding +
           'You do not need to paste the browser code — it is single-use and was already consumed.',
@@ -321,24 +321,24 @@ Begin
   End;
 End;
 
-Procedure TGrokSettingsForm.SignOutButtonClick(Sender: TObject);
+Procedure TAssistantSettingsForm.SignOutButtonClick(Sender: TObject);
 Begin
   If Not Assigned(GrokOAuthClient) Then
     Exit;
-  If MessageDlg('Sign out of xAI Grok on this machine?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+  If MessageDlg('Sign out of SuperGrok / X Premium on this machine?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
   GrokOAuthClient.ClearTokens;
-  If Assigned(GrokChatConfig) Then
+  If Assigned(AssistantChatConfig) Then
     Begin
-      GrokChatConfig.ClearOAuthTokens;
-      GrokChatConfig.Save;
+      AssistantChatConfig.ClearOAuthTokens;
+      AssistantChatConfig.Save;
     End;
   RefreshAuthStatus;
   PopulateModels(False);
-  WorkflowLogger.Info('GrokSettings', 'Signed out');
+  WorkflowLogger.Info('AssistantSettings', 'Signed out');
 End;
 
-Procedure TGrokSettingsForm.PasteCodeButtonClick(Sender: TObject);
+Procedure TAssistantSettingsForm.PasteCodeButtonClick(Sender: TObject);
 Var
   AuthUrl: String;
 Begin
@@ -370,13 +370,13 @@ Begin
     End;
   If GrokOAuthClient.LoginWithManualCode(FManualEdit.Text) Then
     Begin
-      If Assigned(GrokChatConfig) Then
+      If Assigned(AssistantChatConfig) Then
         Begin
-          GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-          GrokChatConfig.Save;
+          AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+          AssistantChatConfig.Save;
         End;
-      If Assigned(GrokClient) Then
-        GrokClient.ApplyConfig(GrokChatConfig);
+      If Assigned(AssistantClient) Then
+        AssistantClient.ApplyConfig(AssistantChatConfig);
       FManualEdit.Clear;
       MessageDlg('Signed in with SuperGrok / X Premium.', mtInformation, [mbOK], 0);
       PopulateModels(True);
@@ -386,7 +386,7 @@ Begin
   RefreshAuthStatus;
 End;
 
-Procedure TGrokSettingsForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+Procedure TAssistantSettingsForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
 Begin
   CanClose := True;
   If ModalResult <> mrOk Then

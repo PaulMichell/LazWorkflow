@@ -1,4 +1,4 @@
-Unit GrokMarkdownForm;
+Unit AssistantMarkdownForm;
 
 { Live Markdown document loader/viewer windows for LazAssistantTools (c) 2026 Michell Computing. }
 
@@ -16,7 +16,7 @@ Uses
 Type
   TMarkdownViewMode = (mvmPreview, mvmSource);
 
-  TGrokMarkdownForm = Class(TForm)
+  TAssistantMarkdownForm = Class(TForm)
     FActionList: TActionList;
     FOpenAction: TAction;
     FSaveAction: TAction;
@@ -78,8 +78,8 @@ Type
   End;
 
 { Opens an existing viewer for FileName, or creates one. Empty FileName shows the open dialog. }
-Function OpenMarkdownDocument(Const FileName: String = ''): TGrokMarkdownForm;
-Function FindMarkdownDocument(Const FileName: String): TGrokMarkdownForm;
+Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
+Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 
 Implementation
 
@@ -110,17 +110,17 @@ Begin
   Result := SameFileName(ExpandFileName(A), ExpandFileName(B));
 End;
 
-Function FindMarkdownDocument(Const FileName: String): TGrokMarkdownForm;
+Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 Var
   I: Integer;
-  Form: TGrokMarkdownForm;
+  Form: TAssistantMarkdownForm;
 Begin
   Result := Nil;
   If (FileName = '') Or (Not Assigned(MarkdownForms)) Then
     Exit;
   For I := 0 To MarkdownForms.Count - 1 Do
     Begin
-      Form := TGrokMarkdownForm(MarkdownForms[I]);
+      Form := TAssistantMarkdownForm(MarkdownForms[I]);
       If Assigned(Form) And SameFilePath(Form.FileName, FileName) Then
         Begin
           Result := Form;
@@ -129,7 +129,7 @@ Begin
     End;
 End;
 
-Function OpenMarkdownDocument(Const FileName: String): TGrokMarkdownForm;
+Function OpenMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 Var
   OwnerComp: TComponent;
   Target: String;
@@ -151,7 +151,7 @@ Begin
   If Assigned(LazarusIDE) And Assigned(LazarusIDE.OwningComponent) Then
     OwnerComp := LazarusIDE.OwningComponent;
 
-  Result := TGrokMarkdownForm.Create(OwnerComp);
+  Result := TAssistantMarkdownForm.Create(OwnerComp);
   If Target = '' Then
     Begin
       If Not Result.PromptOpen Then
@@ -170,7 +170,7 @@ Begin
   Result.Show;
 End;
 
-Constructor TGrokMarkdownForm.Create(TheOwner: TComponent);
+Constructor TAssistantMarkdownForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FFileName := '';
@@ -182,7 +182,7 @@ Begin
   FPreview := Nil;
 End;
 
-Procedure TGrokMarkdownForm.FormCreate(Sender: TObject);
+Procedure TAssistantMarkdownForm.FormCreate(Sender: TObject);
 Begin
   EnsurePreview;
   ApplyViewMode;
@@ -191,10 +191,10 @@ Begin
   RefreshActionState;
   If Assigned(MarkdownForms) Then
     MarkdownForms.Add(Self);
-  WorkflowLogger.Info('GrokMarkdown', 'Markdown window created');
+  WorkflowLogger.Info('AssistantMarkdown', 'Markdown window created');
 End;
 
-Procedure TGrokMarkdownForm.FormDestroy(Sender: TObject);
+Procedure TAssistantMarkdownForm.FormDestroy(Sender: TObject);
 Var
   I: Integer;
 Begin
@@ -206,20 +206,20 @@ Begin
       If I >= 0 Then
         MarkdownForms.Delete(I);
     End;
-  WorkflowLogger.Info('GrokMarkdown', 'Markdown window destroyed');
+  WorkflowLogger.Info('AssistantMarkdown', 'Markdown window destroyed');
 End;
 
-Procedure TGrokMarkdownForm.FormClose(Sender: TObject; Var CloseAction: TCloseAction);
+Procedure TAssistantMarkdownForm.FormClose(Sender: TObject; Var CloseAction: TCloseAction);
 Begin
   CloseAction := caFree;
 End;
 
-Procedure TGrokMarkdownForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+Procedure TAssistantMarkdownForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
 Begin
   CanClose := ConfirmDiscardEdits;
 End;
 
-Procedure TGrokMarkdownForm.EnsurePreview;
+Procedure TAssistantMarkdownForm.EnsurePreview;
 Var
   Preview: TMarkDownControl;
 Begin
@@ -244,7 +244,7 @@ Begin
   FPreview := Preview;
 End;
 
-Procedure TGrokMarkdownForm.ApplyViewMode;
+Procedure TAssistantMarkdownForm.ApplyViewMode;
 Begin
   If FViewMode = mvmPreview Then
     Begin
@@ -263,7 +263,7 @@ Begin
     End;
 End;
 
-Procedure TGrokMarkdownForm.UpdateCaption;
+Procedure TAssistantMarkdownForm.UpdateCaption;
 Var
   Title: String;
 Begin
@@ -276,7 +276,7 @@ Begin
   Caption := Title;
 End;
 
-Procedure TGrokMarkdownForm.UpdateStatus;
+Procedure TAssistantMarkdownForm.UpdateStatus;
 Var
   LeftText, CentreText, RightText: String;
 Begin
@@ -299,12 +299,12 @@ Begin
   FStatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
-Procedure TGrokMarkdownForm.RefreshActionState;
+Procedure TAssistantMarkdownForm.RefreshActionState;
 Begin
   FSaveAction.Enabled := (FFileName <> '') And FDirty;
 End;
 
-Procedure TGrokMarkdownForm.SetDirty(IsDirty: Boolean);
+Procedure TAssistantMarkdownForm.SetDirty(IsDirty: Boolean);
 Begin
   If FDirty = IsDirty Then
     Exit;
@@ -314,7 +314,7 @@ Begin
   RefreshActionState;
 End;
 
-Function TGrokMarkdownForm.ConfirmDiscardEdits: Boolean;
+Function TAssistantMarkdownForm.ConfirmDiscardEdits: Boolean;
 Begin
   Result := True;
   If Not FDirty Then
@@ -341,7 +341,7 @@ Begin
   Result := TMarkdownFrontmatterBlock;
 End;
 
-Procedure TGrokMarkdownForm.ApplyPreviewText(Const Body: String);
+Procedure TAssistantMarkdownForm.ApplyPreviewText(Const Body: String);
 Var
   Preview: TMarkDownControl;
 Begin
@@ -355,7 +355,7 @@ Begin
   End;
 End;
 
-Function TGrokMarkdownForm.LoadFromDisk: Boolean;
+Function TAssistantMarkdownForm.LoadFromDisk: Boolean;
 Var
   Body: String;
   SL: TStringList;
@@ -379,7 +379,7 @@ Begin
         On E: Exception Do
           Begin
             { Keep source text so Source view still works; preview may stay empty. }
-            WorkflowLogger.Warning('GrokMarkdown', 'Preview failed for ' + FFileName + ': ' + E.Message);
+            WorkflowLogger.Warning('AssistantMarkdown', 'Preview failed for ' + FFileName + ': ' + E.Message);
             MessageDlg('Failed to render Markdown preview: ' + E.Message + LineEnding + LineEnding +
               'The source text is still available under the Source tab.', mtError, [mbOK], 0);
           End;
@@ -393,7 +393,7 @@ Begin
       UpdateStatus;
       RefreshActionState;
       NotifyDocumentChanged;
-      WorkflowLogger.Info('GrokMarkdown', 'Loaded ' + FFileName);
+      WorkflowLogger.Info('AssistantMarkdown', 'Loaded ' + FFileName);
     Except
       On E: Exception Do
         MessageDlg('Failed to load Markdown: ' + E.Message, mtError, [mbOK], 0);
@@ -404,7 +404,7 @@ Begin
   End;
 End;
 
-Function TGrokMarkdownForm.SaveToDisk: Boolean;
+Function TAssistantMarkdownForm.SaveToDisk: Boolean;
 Begin
   Result := False;
   If FFileName = '' Then
@@ -419,14 +419,14 @@ Begin
     NotifyDocumentChanged;
     Result := True;
     UpdateStatus;
-    WorkflowLogger.Info('GrokMarkdown', 'Saved ' + FFileName);
+    WorkflowLogger.Info('AssistantMarkdown', 'Saved ' + FFileName);
   Except
     On E: Exception Do
       MessageDlg('Failed to save Markdown: ' + E.Message, mtError, [mbOK], 0);
   End;
 End;
 
-Function TGrokMarkdownForm.OpenFile(Const FileName: String): Boolean;
+Function TAssistantMarkdownForm.OpenFile(Const FileName: String): Boolean;
 Var
   Expanded: String;
 Begin
@@ -445,7 +445,7 @@ Begin
     End;
 End;
 
-Function TGrokMarkdownForm.PromptOpen: Boolean;
+Function TAssistantMarkdownForm.PromptOpen: Boolean;
 Var
   InitialDir: String;
 Begin
@@ -463,19 +463,19 @@ Begin
   Result := OpenFile(FOpenDialog.FileName);
 End;
 
-Procedure TGrokMarkdownForm.NotifyDocumentChanged;
+Procedure TAssistantMarkdownForm.NotifyDocumentChanged;
 Begin
   If Assigned(WorkflowEventBus) And (FFileName <> '') Then
     WorkflowEventBus.NotifyDocumentChanged(FFileName, FSourceMemo.Text);
 End;
 
-Procedure TGrokMarkdownForm.NotifyDocumentSaved;
+Procedure TAssistantMarkdownForm.NotifyDocumentSaved;
 Begin
   If Assigned(WorkflowEventBus) And (FFileName <> '') Then
     WorkflowEventBus.NotifyDocumentSaved(FFileName);
 End;
 
-Procedure TGrokMarkdownForm.HandlePreviewOpenURL(Sender: TObject; AUrl: String);
+Procedure TAssistantMarkdownForm.HandlePreviewOpenURL(Sender: TObject; AUrl: String);
 Var
   Target: String;
 Begin
@@ -497,7 +497,7 @@ Begin
     OpenURL(AUrl);
 End;
 
-Procedure TGrokMarkdownForm.HandlePreviewGetImage(Sender: TObject; Const AUrl: String;
+Procedure TAssistantMarkdownForm.HandlePreviewGetImage(Sender: TObject; Const AUrl: String;
   Var AImage: TPicture);
 Var
   Path: String;
@@ -518,38 +518,38 @@ Begin
     End;
 End;
 
-Procedure TGrokMarkdownForm.OpenActionExecute(Sender: TObject);
+Procedure TAssistantMarkdownForm.OpenActionExecute(Sender: TObject);
 Begin
   PromptOpen;
 End;
 
-Procedure TGrokMarkdownForm.SaveActionExecute(Sender: TObject);
+Procedure TAssistantMarkdownForm.SaveActionExecute(Sender: TObject);
 Begin
   SaveToDisk;
 End;
 
-Procedure TGrokMarkdownForm.PreviewModeActionExecute(Sender: TObject);
+Procedure TAssistantMarkdownForm.PreviewModeActionExecute(Sender: TObject);
 Begin
   FViewMode := mvmPreview;
   ApplyViewMode;
   UpdateStatus;
 End;
 
-Procedure TGrokMarkdownForm.SourceModeActionExecute(Sender: TObject);
+Procedure TAssistantMarkdownForm.SourceModeActionExecute(Sender: TObject);
 Begin
   FViewMode := mvmSource;
   ApplyViewMode;
   UpdateStatus;
 End;
 
-Procedure TGrokMarkdownForm.SourceMemoChange(Sender: TObject);
+Procedure TAssistantMarkdownForm.SourceMemoChange(Sender: TObject);
 Begin
   If FLoading Then
     Exit;
   SetDirty(True);
 End;
 
-Procedure TGrokMarkdownForm.WatchTimerTimer(Sender: TObject);
+Procedure TAssistantMarkdownForm.WatchTimerTimer(Sender: TObject);
 Var
   Age: LongInt;
 Begin
@@ -569,7 +569,7 @@ Begin
   FDebounceTimer.Enabled := True;
 End;
 
-Procedure TGrokMarkdownForm.DebounceTimerTimer(Sender: TObject);
+Procedure TAssistantMarkdownForm.DebounceTimerTimer(Sender: TObject);
 Begin
   FDebounceTimer.Enabled := False;
   If FDirty Then

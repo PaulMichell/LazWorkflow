@@ -1,4 +1,4 @@
-object GrokSettingsForm: TGrokSettingsForm
+object AssistantSettingsForm: TAssistantSettingsForm
   Left = 300
   Height = 560
   Top = 200

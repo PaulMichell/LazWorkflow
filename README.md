@@ -1,8 +1,8 @@
 # LazWorkflow
 
-**Lazarus IDE Add-in Suite for Git + Grok LLM Workflow**
+**Lazarus IDE Add-in Suite for Git + Assistant LLM Workflow**
 
-Michell Computing style packages that provide a seamless, native Git management UI and a rich Grok (xAI / OpenAI-compatible) chat interface inside the Lazarus IDE.
+Michell Computing style packages that provide a seamless, native Git management UI and a rich Assistant (xAI / OpenAI-compatible) chat interface inside the Lazarus IDE.
 
 ## Packages
 
@@ -10,7 +10,7 @@ Michell Computing style packages that provide a seamless, native Git management 
 |----------------------|-----------------------------------------------------------------------------|---------------------|
 | **LazWorkflowCommon** | Shared event bus, interfaces, logging, common UI helpers                   | LCL, IDEIntf       |
 | **LazRepositoryTools**    | Full Git lifecycle UI + high-quality commit history graph (VS Code style)  | LazWorkflowCommon  |
-| **LazAssistantTools**      | Grok chat UI, live Markdown document windows, compiler integration         | LazWorkflowCommon  |
+| **LazAssistantTools**      | Assistant chat UI, live Markdown document windows, compiler integration         | LazWorkflowCommon  |
 
 ## Features (Target)
 
@@ -53,7 +53,7 @@ LazWorkflow/
 ├── Source/
 │   ├── LazWorkflowCommon/     # Shared foundation
 │   ├── LazRepositoryTools/         # Git UI package
-│   ├── LazAssistantTools/           # Grok chat package
+│   ├── LazAssistantTools/           # Assistant chat package
 │   └── Tests/
 ├── Packages/                  # .lpk files
 ├── Docs/

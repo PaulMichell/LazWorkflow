@@ -1,4 +1,4 @@
-Unit GrokConfig;
+Unit AssistantConfig;
 
 { Persistent LazAssistantTools settings (OAuth tokens, model) (c) 2026 Michell Computing. }
 
@@ -13,13 +13,13 @@ Uses
   Classes, SysUtils, GrokOAuth;
 
 Const
-  GrokConfigFileName = 'LazAssistantTools.xml';
-  GrokConfigLegacyFileName = 'LazGrokChat.xml';
-  GrokConfigDefaultApiBase = 'https://api.x.ai/v1';
-  GrokConfigDefaultModel = 'grok-4.5';
+  AssistantConfigFileName = 'LazAssistantTools.xml';
+  AssistantConfigLegacyFileName = 'LazGrokChat.xml';
+  AssistantConfigDefaultApiBase = 'https://api.x.ai/v1';
+  AssistantConfigDefaultModel = 'grok-4.5';
 
 Type
-  TGrokConfig = Class
+  TAssistantConfig = Class
   Private
     FApiBase: String;
     FModel: String;
@@ -34,7 +34,7 @@ Type
     Constructor Create;
     Procedure Load;
     Procedure Save;
-    Procedure Assign(Source: TGrokConfig);
+    Procedure Assign(Source: TAssistantConfig);
     Procedure ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
     Procedure ClearOAuthTokens;
     Function ToOAuthTokens: TGrokOAuthTokens;
@@ -53,7 +53,7 @@ Type
   End;
 
 Var
-  GrokChatConfig: TGrokConfig;
+  AssistantChatConfig: TAssistantConfig;
 
 Implementation
 
@@ -93,11 +93,11 @@ Begin
   End;
 End;
 
-Constructor TGrokConfig.Create;
+Constructor TAssistantConfig.Create;
 Begin
   Inherited Create;
-  FApiBase := GrokConfigDefaultApiBase;
-  FModel := GrokConfigDefaultModel;
+  FApiBase := AssistantConfigDefaultApiBase;
+  FModel := AssistantConfigDefaultModel;
   FActiveSkill := '';
   FIncludeIDEContext := True;
   FAccessToken := '';
@@ -107,12 +107,12 @@ Begin
   FExpiresAt := 0;
 End;
 
-Function TGrokConfig.IsSignedIn: Boolean;
+Function TAssistantConfig.IsSignedIn: Boolean;
 Begin
   Result := (Trim(FAccessToken) <> '') Or (Trim(FRefreshToken) <> '');
 End;
 
-Procedure TGrokConfig.Assign(Source: TGrokConfig);
+Procedure TAssistantConfig.Assign(Source: TAssistantConfig);
 Begin
   If Not Assigned(Source) Then
     Exit;
@@ -127,7 +127,7 @@ Begin
   FExpiresAt := Source.ExpiresAt;
 End;
 
-Procedure TGrokConfig.ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
+Procedure TAssistantConfig.ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
 Begin
   FAccessToken := Tokens.AccessToken;
   FRefreshToken := Tokens.RefreshToken;
@@ -138,7 +138,7 @@ Begin
   FExpiresAt := Tokens.ExpiresAt;
 End;
 
-Procedure TGrokConfig.ClearOAuthTokens;
+Procedure TAssistantConfig.ClearOAuthTokens;
 Begin
   FAccessToken := '';
   FRefreshToken := '';
@@ -147,7 +147,7 @@ Begin
   FExpiresAt := 0;
 End;
 
-Function TGrokConfig.ToOAuthTokens: TGrokOAuthTokens;
+Function TAssistantConfig.ToOAuthTokens: TGrokOAuthTokens;
 Begin
   Result.AccessToken := FAccessToken;
   Result.RefreshToken := FRefreshToken;
@@ -156,14 +156,14 @@ Begin
   Result.ExpiresAt := FExpiresAt;
 End;
 
-Procedure ApplyConfigStorage(Cfg: TConfigStorage; Config: TGrokConfig);
+Procedure ApplyConfigStorage(Cfg: TConfigStorage; Config: TAssistantConfig);
 Var
   LegacyKey: String;
 Begin
   If (Not Assigned(Cfg)) Or (Not Assigned(Config)) Then
     Exit;
-  Config.FApiBase := Cfg.GetValue('API/Base', GrokConfigDefaultApiBase);
-  Config.FModel := Cfg.GetValue('API/Model', GrokConfigDefaultModel);
+  Config.FApiBase := Cfg.GetValue('API/Base', AssistantConfigDefaultApiBase);
+  Config.FModel := Cfg.GetValue('API/Model', AssistantConfigDefaultModel);
   Config.FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
   Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
   Config.FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
@@ -178,20 +178,20 @@ Begin
         Config.FAccessToken := '';
     End;
   If Trim(Config.FApiBase) = '' Then
-    Config.FApiBase := GrokConfigDefaultApiBase;
+    Config.FApiBase := AssistantConfigDefaultApiBase;
   If Trim(Config.FModel) = '' Then
-    Config.FModel := GrokConfigDefaultModel
+    Config.FModel := AssistantConfigDefaultModel
   Else If SameText(Config.FModel, 'grok-4') Or SameText(Config.FModel, 'grok-4-latest') Then
-    Config.FModel := GrokConfigDefaultModel;
+    Config.FModel := AssistantConfigDefaultModel;
   If Trim(Config.FTokenType) = '' Then
     Config.FTokenType := 'Bearer';
 End;
 
-Procedure TGrokConfig.Load;
+Procedure TAssistantConfig.Load;
 Var
   Cfg: TConfigStorage;
 Begin
-  Cfg := GetIDEConfigStorage(GrokConfigFileName, True);
+  Cfg := GetIDEConfigStorage(AssistantConfigFileName, True);
   Try
     ApplyConfigStorage(Cfg, Self);
     { Migrate settings from the previous package name when the new store is empty. }
@@ -199,7 +199,7 @@ Begin
       Begin
         Cfg.Free;
         Cfg := Nil;
-        Cfg := GetIDEConfigStorage(GrokConfigLegacyFileName, True);
+        Cfg := GetIDEConfigStorage(AssistantConfigLegacyFileName, True);
         ApplyConfigStorage(Cfg, Self);
       End;
   Finally
@@ -207,11 +207,11 @@ Begin
   End;
 End;
 
-Procedure TGrokConfig.Save;
+Procedure TAssistantConfig.Save;
 Var
   Cfg: TConfigStorage;
 Begin
-  Cfg := GetIDEConfigStorage(GrokConfigFileName, False);
+  Cfg := GetIDEConfigStorage(AssistantConfigFileName, False);
   Try
     Cfg.SetValue('API/Base', FApiBase);
     Cfg.SetValue('API/Model', FModel);
@@ -232,13 +232,13 @@ End;
 
 Initialization
 
-GrokChatConfig := TGrokConfig.Create;
-GrokChatConfig.Load;
-If Assigned(GrokOAuthClient) And GrokChatConfig.IsSignedIn Then
-  GrokOAuthClient.SetTokens(GrokChatConfig.ToOAuthTokens);
+AssistantChatConfig := TAssistantConfig.Create;
+AssistantChatConfig.Load;
+If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
+  GrokOAuthClient.SetTokens(AssistantChatConfig.ToOAuthTokens);
 
 Finalization
 
-FreeAndNil(GrokChatConfig);
+FreeAndNil(AssistantChatConfig);
 
 End.

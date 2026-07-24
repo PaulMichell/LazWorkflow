@@ -1,6 +1,6 @@
-Unit GrokChatForm;
+Unit AssistantChatForm;
 
-{ Main Grok chat window with history, input and status footer (c) 2026 Michell Computing. }
+{ Main Assistant chat window with history, input and status footer (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,7 +15,7 @@ Uses
   IDEExternToolIntf;
 
 Type
-  TGrokChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
+  TAssistantChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
     FActionList: TActionList;
     FNewChatAction: TAction;
     FSendAction: TAction;
@@ -111,17 +111,17 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GrokService, GrokConfig, GrokSettingsForm, GrokIDEContext, GrokSession,
+  WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext, AssistantSession,
   LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
 
 Const
   ChatViewMargin = 4;
   ChatPaintMinIntervalMs = 80;
 
-Constructor TGrokChatForm.Create(TheOwner: TComponent);
+Constructor TAssistantChatForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
-  FModelName := GrokConfigDefaultModel;
+  FModelName := AssistantConfigDefaultModel;
   FContextUsed := 0;
   FContextLimit := 128000;
   FSending := False;
@@ -139,17 +139,17 @@ Begin
   WorkflowEventBus.AddListener(Self);
 End;
 
-Destructor TGrokChatForm.Destroy;
+Destructor TAssistantChatForm.Destroy;
 Begin
-  If Assigned(GrokClient) Then
-    GrokClient.CancelStream;
+  If Assigned(AssistantClient) Then
+    AssistantClient.CancelStream;
   PersistSession;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FTranscript);
   Inherited Destroy;
 End;
 
-Procedure TGrokChatForm.FormCreate(Sender: TObject);
+Procedure TAssistantChatForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Chat';
   EnsureChatView;
@@ -165,24 +165,24 @@ Begin
   RestoreSessionIfNeeded;
   If FTranscript.Count = 0 Then
     Begin
-      If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
+      If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
         AppendMessage('system', 'Project Chat ready. Signed in with SuperGrok / X Premium — send a message.')
       Else
         AppendMessage('system', 'Project Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
     End
   Else
     RefreshChatDisplay(True);
-  WorkflowLogger.Info('GrokChat', 'Project Chat window created');
+  WorkflowLogger.Info('AssistantChat', 'Project Chat window created');
 End;
 
-Procedure TGrokChatForm.FormDestroy(Sender: TObject);
+Procedure TAssistantChatForm.FormDestroy(Sender: TObject);
 Begin
   If Assigned(FElapsedTimer) Then
     FElapsedTimer.Enabled := False;
-  WorkflowLogger.Info('GrokChat', 'Project Chat window destroyed');
+  WorkflowLogger.Info('AssistantChat', 'Project Chat window destroyed');
 End;
 
-Function TGrokChatForm.FormatElapsedStatus(Const Phase: String): String;
+Function TAssistantChatForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
 Begin
@@ -199,31 +199,31 @@ Begin
   Result := Format('%s %d:%2.2d', [Phase, Mins, Rem]);
 End;
 
-Procedure TGrokChatForm.SetStreamPhase(Const Phase: String);
+Procedure TAssistantChatForm.SetStreamPhase(Const Phase: String);
 Begin
   FStatusPhase := Phase;
   FStatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
 
-Procedure TGrokChatForm.ElapsedTimerTimer(Sender: TObject);
+Procedure TAssistantChatForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   If FSending And (FStatusPhase <> '') Then
     FStatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
 End;
 
-Procedure TGrokChatForm.RefreshFromConfig;
+Procedure TAssistantChatForm.RefreshFromConfig;
 Begin
-  If Assigned(GrokChatConfig) And Assigned(GrokClient) Then
+  If Assigned(AssistantChatConfig) And Assigned(AssistantClient) Then
     Begin
-      GrokClient.ApplyConfig(GrokChatConfig);
-      FModelName := GrokChatConfig.Model;
+      AssistantClient.ApplyConfig(AssistantChatConfig);
+      FModelName := AssistantChatConfig.Model;
     End
-  Else If Assigned(GrokClient) Then
-    FModelName := GrokClient.Model;
+  Else If Assigned(AssistantClient) Then
+    FModelName := AssistantClient.Model;
   UpdateStatusFooter;
 End;
 
-Procedure TGrokChatForm.UpdateStatusFooter;
+Procedure TAssistantChatForm.UpdateStatusFooter;
 Var
   Pct: Integer;
   StatusText: String;
@@ -240,13 +240,13 @@ Begin
     End
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
-  Else If Assigned(GrokChatConfig) And GrokChatConfig.IsSignedIn Then
+  Else If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
-  If Assigned(GrokChatConfig) And (GrokChatConfig.ActiveSkill <> '') Then
+  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
     FStatusFooter.SetAll(
-      Format('Model: %s | Skill: %s', [FModelName, GrokChatConfig.ActiveSkill]),
+      Format('Model: %s | Skill: %s', [FModelName, AssistantChatConfig.ActiveSkill]),
       Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
       StatusText)
   Else
@@ -256,7 +256,7 @@ Begin
       StatusText);
 End;
 
-Procedure TGrokChatForm.SetSending(IsSending: Boolean);
+Procedure TAssistantChatForm.SetSending(IsSending: Boolean);
 Begin
   FSending := IsSending;
   FSendAction.Enabled := Not IsSending;
@@ -284,7 +284,7 @@ Begin
   UpdateStatusFooter;
 End;
 
-Procedure TGrokChatForm.PersistSession;
+Procedure TAssistantChatForm.PersistSession;
 Var
   Key: String;
 Begin
@@ -299,7 +299,7 @@ Begin
   SaveProjectChatSession(FTranscript, FContextUsed);
 End;
 
-Procedure TGrokChatForm.RestoreSessionIfNeeded;
+Procedure TAssistantChatForm.RestoreSessionIfNeeded;
 Var
   Key: String;
   LoadedContext: Integer;
@@ -320,7 +320,7 @@ Begin
     End;
 End;
 
-Procedure TGrokChatForm.EnsureChatView;
+Procedure TAssistantChatForm.EnsureChatView;
 Var
   View: TMarkDownControl;
 Begin
@@ -343,7 +343,7 @@ Begin
   FChatView := View;
 End;
 
-Procedure TGrokChatForm.ScrollChatToEnd;
+Procedure TAssistantChatForm.ScrollChatToEnd;
 Var
   View: TMarkDownControl;
 Begin
@@ -354,7 +354,7 @@ Begin
   View.ScrolledTop := High(Integer) Div 4;
 End;
 
-Procedure TGrokChatForm.RefreshChatDisplay(Force: Boolean);
+Procedure TAssistantChatForm.RefreshChatDisplay(Force: Boolean);
 Var
   View: TMarkDownControl;
   Body: String;
@@ -386,12 +386,12 @@ Begin
     End;
   Except
     On E: Exception Do
-      WorkflowLogger.Warning('GrokChat', 'Chat Markdown render failed: ' + E.Message);
+      WorkflowLogger.Warning('AssistantChat', 'Chat Markdown render failed: ' + E.Message);
   End;
   ScrollChatToEnd;
 End;
 
-Function TGrokChatForm.RoleHeading(Const Role: String): String;
+Function TAssistantChatForm.RoleHeading(Const Role: String): String;
 Var
   R: String;
 Begin
@@ -408,7 +408,7 @@ Begin
     Result := Role;
 End;
 
-Function TGrokChatForm.QuoteMarkdownLines(Const TextValue: String): String;
+Function TAssistantChatForm.QuoteMarkdownLines(Const TextValue: String): String;
 Var
   SL: TStringList;
   I: Integer;
@@ -437,7 +437,7 @@ Begin
   End;
 End;
 
-Function TGrokChatForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
+Function TAssistantChatForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
 Begin
   { Thinking is display-only; Content is the final answer (API history). }
   If (Thinking = '') And (Content = '') Then
@@ -457,7 +457,7 @@ Begin
     Result := Content;
 End;
 
-Procedure TGrokChatForm.AppendMessage(Const Role, Content: String);
+Procedure TAssistantChatForm.AppendMessage(Const Role, Content: String);
 Begin
   If FTranscript.Count > 0 Then
     FTranscript.Add('');
@@ -470,7 +470,7 @@ Begin
   RefreshChatDisplay(True);
 End;
 
-Procedure TGrokChatForm.BeginAssistantReply;
+Procedure TAssistantChatForm.BeginAssistantReply;
 Begin
   FAssistantContent := '';
   FAssistantThinking := '';
@@ -480,7 +480,7 @@ Begin
   RefreshChatDisplay(True);
 End;
 
-Procedure TGrokChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
+Procedure TAssistantChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
   If Not FStreamingActive Then
     BeginAssistantReply;
@@ -495,7 +495,7 @@ Begin
   RefreshChatDisplay(False);
 End;
 
-Procedure TGrokChatForm.FinishAssistantReply(Const ErrorText: String);
+Procedure TAssistantChatForm.FinishAssistantReply(Const ErrorText: String);
 Var
   DisplayBody: String;
 Begin
@@ -503,8 +503,8 @@ Begin
     Begin
       { StopStream already cleaned UI and cancelled the worker. }
       FUserCancelled := False;
-      If Assigned(GrokClient) Then
-        GrokClient.MarkStreamComplete;
+      If Assigned(AssistantClient) Then
+        AssistantClient.MarkStreamComplete;
       SetSending(False);
       Exit;
     End;
@@ -531,8 +531,8 @@ Begin
   Else
     Begin
       { History stores the final answer only — not the thinking trace. }
-      If Assigned(GrokClient) And (FAssistantContent <> '') Then
-        GrokClient.AddMessage(gmrAssistant, FAssistantContent);
+      If Assigned(AssistantClient) And (FAssistantContent <> '') Then
+        AssistantClient.AddMessage(amrAssistant, FAssistantContent);
       FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
       If FAssistantThinking <> '' Then
         FContextUsed := FContextUsed + Length(FAssistantThinking) Div 4;
@@ -542,13 +542,13 @@ Begin
   FAssistantContent := '';
   FAssistantThinking := '';
   RefreshChatDisplay(True);
-  If Assigned(GrokClient) Then
-    GrokClient.MarkStreamComplete;
+  If Assigned(AssistantClient) Then
+    AssistantClient.MarkStreamComplete;
   SetSending(False);
   PersistSession;
 End;
 
-Procedure TGrokChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
+Procedure TAssistantChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
   IsFinished: Boolean; Const ErrorText: String);
 Begin
   { Invoked on the main thread via Synchronize from the stream worker.
@@ -558,8 +558,8 @@ Begin
       If IsFinished Then
         Begin
           FUserCancelled := False;
-          If Assigned(GrokClient) Then
-            GrokClient.MarkStreamComplete;
+          If Assigned(AssistantClient) Then
+            AssistantClient.MarkStreamComplete;
           SetSending(False);
         End;
       Exit;
@@ -575,15 +575,15 @@ Begin
   FinishAssistantReply(ErrorText);
 End;
 
-Procedure TGrokChatForm.StopStream;
+Procedure TAssistantChatForm.StopStream;
 Var
   DisplayBody: String;
 Begin
   If Not FSending Then
     Exit;
   FUserCancelled := True;
-  If Assigned(GrokClient) Then
-    GrokClient.CancelStream;
+  If Assigned(AssistantClient) Then
+    AssistantClient.CancelStream;
   If FStreamingActive Then
     Begin
       If (FAssistantContent <> '') Or (FAssistantThinking <> '') Then
@@ -595,8 +595,8 @@ Begin
           FTranscript.Add('### Assistant');
           FTranscript.Add('');
           FTranscript.Add(DisplayBody);
-          If Assigned(GrokClient) And (FAssistantContent <> '') Then
-            GrokClient.AddMessage(gmrAssistant, FAssistantContent);
+          If Assigned(AssistantClient) And (FAssistantContent <> '') Then
+            AssistantClient.AddMessage(amrAssistant, FAssistantContent);
           FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
         End
       Else
@@ -611,10 +611,10 @@ Begin
   SetSending(False);
   FStatusFooter.SetRightText('Cancelled');
   PersistSession;
-  WorkflowLogger.Info('GrokChat', 'Stream cancelled by user');
+  WorkflowLogger.Info('AssistantChat', 'Stream cancelled by user');
 End;
 
-Procedure TGrokChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Procedure TAssistantChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
 Var
   ApiText, ContextBlock: String;
   WithContext: Boolean;
@@ -625,17 +625,17 @@ Begin
     Exit;
   If AutoSend Then
     Begin
-      If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.IsSignedIn) Then
+      If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
         Begin
           AppendMessage('user', UserText);
-          AppendMessage('system', 'Sign in under Settings to send this review to Grok.');
+          AppendMessage('system', 'Sign in under Settings to send this review to the Assistant.');
           Exit;
         End;
-      If Not Assigned(GrokClient) Then
+      If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
       ApiText := UserText;
-      WithContext := Assigned(GrokChatConfig) And GrokChatConfig.IncludeIDEContext;
+      WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       If WithContext Then
         Begin
           ContextBlock := BuildIDEContextBlock;
@@ -644,21 +644,21 @@ Begin
         End
       Else
         AppendMessage('user', UserText);
-      GrokClient.AddMessage(gmrUser, ApiText);
+      AssistantClient.AddMessage(amrUser, ApiText);
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       BeginAssistantReply;
       FStatusPhase := 'Waiting for first token…';
       SetSending(True);
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
-      If Not GrokClient.StartStream(@StreamToken) Then
-        FinishAssistantReply(GrokClient.LastError);
+      If Not AssistantClient.StartStream(@StreamToken) Then
+        FinishAssistantReply(AssistantClient.LastError);
     End
   Else
     AppendMessage('user', UserText);
 End;
 
-Procedure TGrokChatForm.SendActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
 Begin
@@ -667,7 +667,7 @@ Begin
   UserText := Trim(FInputEdit.Text);
   If UserText = '' Then
     Exit;
-  If (Not Assigned(GrokChatConfig)) Or (Not GrokChatConfig.IsSignedIn) Then
+  If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
     Begin
       MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
       SettingsActionExecute(Nil);
@@ -677,7 +677,7 @@ Begin
   SubmitUserText(UserText, True);
 End;
 
-Procedure TGrokChatForm.StopActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.StopActionExecute(Sender: TObject);
 Begin
   StopStream;
 End;
@@ -719,7 +719,7 @@ Begin
   Result := Trim(Result);
 End;
 
-Function TGrokChatForm.CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
+Function TAssistantChatForm.CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
 Var
   ViewIndex, LineIndex: Integer;
   View: TExtToolView;
@@ -777,7 +777,7 @@ Begin
   End;
 End;
 
-Function TGrokChatForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
+Function TAssistantChatForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
   ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
 Var
   Outcome, ProjectName: String;
@@ -815,7 +815,7 @@ Begin
     'If the ' + LowerCase(KindLabel) + ' is clean (no errors and no actionable warnings), say so briefly — no further action is required.';
 End;
 
-Procedure TGrokChatForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
+Procedure TAssistantChatForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
 Var
   BuildResult: TModalResult;
   OutputText, PromptText: String;
@@ -840,7 +840,7 @@ Begin
   FReviewBuildAction.Enabled := False;
   FStatusFooter.SetRightText(KindLabel + '…');
   Application.ProcessMessages;
-  WorkflowLogger.Info('GrokChat', 'Review ' + KindLabel + ' started');
+  WorkflowLogger.Info('AssistantChat', 'Review ' + KindLabel + ' started');
 
   Try
     BuildResult := LazarusIDE.DoBuildProject(Reason, []);
@@ -867,17 +867,17 @@ Begin
   End;
 End;
 
-Procedure TGrokChatForm.ReviewCompile;
+Procedure TAssistantChatForm.ReviewCompile;
 Begin
   ReviewProject(crCompile, 'Compile');
 End;
 
-Procedure TGrokChatForm.ReviewBuild;
+Procedure TAssistantChatForm.ReviewBuild;
 Begin
   ReviewProject(crBuild, 'Build');
 End;
 
-Procedure TGrokChatForm.StartNewChat;
+Procedure TAssistantChatForm.StartNewChat;
 Begin
   If FSending Then
     StopStream;
@@ -889,8 +889,8 @@ Begin
   FAssistantContent := '';
   FAssistantThinking := '';
   FLastChatPaintTick := 0;
-  If Assigned(GrokClient) Then
-    GrokClient.ClearHistory;
+  If Assigned(AssistantClient) Then
+    AssistantClient.ClearHistory;
   ClearProjectChatSession;
   AppendMessage('system', 'New conversation started.');
   PersistSession;
@@ -939,7 +939,7 @@ Begin
   End;
 End;
 
-Function TGrokChatForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
+Function TAssistantChatForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
 Var
   MsgText, FileName, Snippet: String;
   LineNo, Col: Integer;
@@ -972,7 +972,7 @@ Begin
     'Prefer the smallest change that resolves the issue.';
 End;
 
-Procedure TGrokChatForm.FixSelectedError;
+Procedure TAssistantChatForm.FixSelectedError;
 Var
   Line: TMessageLine;
   Prompt: String;
@@ -1009,33 +1009,33 @@ Begin
   SubmitUserText(Prompt, True);
 End;
 
-Procedure TGrokChatForm.NewChatActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.NewChatActionExecute(Sender: TObject);
 Begin
   StartNewChat;
 End;
 
-Procedure TGrokChatForm.ReviewCompileActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.ReviewCompileActionExecute(Sender: TObject);
 Begin
   ReviewCompile;
 End;
 
-Procedure TGrokChatForm.ReviewBuildActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.ReviewBuildActionExecute(Sender: TObject);
 Begin
   ReviewBuild;
 End;
 
-Procedure TGrokChatForm.FixErrorActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.FixErrorActionExecute(Sender: TObject);
 Begin
   FixSelectedError;
 End;
 
-Procedure TGrokChatForm.SettingsActionExecute(Sender: TObject);
+Procedure TAssistantChatForm.SettingsActionExecute(Sender: TObject);
 Begin
-  ShowGrokSettingsForm;
+  ShowAssistantSettingsForm;
   RefreshFromConfig;
 End;
 
-Procedure TGrokChatForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
+Procedure TAssistantChatForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
   Const OutputText: String; ErrorCount, WarningCount: Integer);
 Begin
   { Review Compile/Build captures Messages via the IDE API after DoBuildProject.
@@ -1053,18 +1053,18 @@ Begin
     { }
   End;
   If OutputText <> '' Then
-    WorkflowLogger.Debug('GrokChat', 'CompilerFinished for ' + ProjectFile);
+    WorkflowLogger.Debug('AssistantChat', 'CompilerFinished for ' + ProjectFile);
   UpdateStatusFooter;
 End;
 
-Procedure TGrokChatForm.DocumentChanged(Const FileName: String; Const NewContent: String);
+Procedure TAssistantChatForm.DocumentChanged(Const FileName: String; Const NewContent: String);
 Begin
-  WorkflowLogger.Debug('GrokChat', 'Document changed: ' + FileName);
+  WorkflowLogger.Debug('AssistantChat', 'Document changed: ' + FileName);
 End;
 
-Procedure TGrokChatForm.DocumentSaved(Const FileName: String);
+Procedure TAssistantChatForm.DocumentSaved(Const FileName: String);
 Begin
-  WorkflowLogger.Debug('GrokChat', 'Document saved: ' + FileName);
+  WorkflowLogger.Debug('AssistantChat', 'Document saved: ' + FileName);
 End;
 
 End.

@@ -1,4 +1,4 @@
-Unit GrokIDEContext;
+Unit AssistantIDEContext;
 
 { Collect active editor and project context for LazAssistantTools prompts (c) 2026 Michell Computing. }
 
@@ -15,8 +15,8 @@ Uses
 Const
   { Keep the default context modest so first-token latency stays reasonable.
     Selection is preferred; full-file attach is capped. }
-  GrokContextMaxActiveChars = 48000;
-  GrokContextMaxProjectFiles = 250;
+  AssistantContextMaxActiveChars = 48000;
+  AssistantContextMaxProjectFiles = 250;
 
 Function BuildIDEContextBlock: String;
 
@@ -61,7 +61,7 @@ Begin
   If Trim(Sel) <> '' Then
     Result := Result + LineEnding + LineEnding +
       'Selected text:' + LineEnding +
-      CapText(Sel, GrokContextMaxActiveChars)
+      CapText(Sel, AssistantContextMaxActiveChars)
   Else
     Begin
       Src := Ed.SourceText;
@@ -69,7 +69,7 @@ Begin
         Src := Ed.Lines.Text;
       Result := Result + LineEnding + LineEnding +
         'Full source of active editor:' + LineEnding +
-        CapText(Src, GrokContextMaxActiveChars);
+        CapText(Src, AssistantContextMaxActiveChars);
     End;
 End;
 
@@ -109,12 +109,12 @@ Begin
         If Fn = '' Then
           Continue;
         Inc(Listed);
-        If Listed <= GrokContextMaxProjectFiles Then
+        If Listed <= AssistantContextMaxProjectFiles Then
           Lines.Add('  ' + Fn);
       End;
-    If Listed > GrokContextMaxProjectFiles Then
+    If Listed > AssistantContextMaxProjectFiles Then
       Lines.Add(Format('  … and %d more files (list capped at %d)',
-        [Listed - GrokContextMaxProjectFiles, GrokContextMaxProjectFiles]));
+        [Listed - AssistantContextMaxProjectFiles, AssistantContextMaxProjectFiles]));
     If Listed = 0 Then
       Lines.Add('  (no files listed)');
     Result := Lines.Text;
@@ -133,7 +133,7 @@ Begin
     LineEnding +
     TrimRight(BuildProjectFilesSection) + LineEnding +
     '----- end IDE context -----';
-  WorkflowLogger.Debug('GrokIDEContext', 'Built IDE context block (' + IntToStr(Length(Result)) + ' chars)');
+  WorkflowLogger.Debug('AssistantIDEContext', 'Built IDE context block (' + IntToStr(Length(Result)) + ' chars)');
 End;
 
 End.

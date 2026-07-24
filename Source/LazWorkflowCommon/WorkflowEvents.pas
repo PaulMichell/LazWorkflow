@@ -58,8 +58,8 @@ Type
     Procedure DocumentSaved(Const FileName: String);
   End;
 
-  { Grok / LLM tool call bridge }
-  IGrokToolCallRequested = Interface
+  { Assistant / LLM tool call bridge }
+  IAssistantToolCallRequested = Interface
     ['{E5F6A7B8-C9D0-1234-EF01-345678901234}']
     Function HandleToolCall(Const ToolName: String; Const ArgumentsJson: String;
       Out ResultJson: String; Out ErrorMessage: String): Boolean;
@@ -275,7 +275,7 @@ Function TWorkflowEventBus.RequestToolCall(Const ToolName: String; Const Argumen
   Out ResultJson: String; Out ErrorMessage: String): Boolean;
 Var
   I: Integer;
-  Listener: IGrokToolCallRequested;
+  Listener: IAssistantToolCallRequested;
 Begin
   Result := False;
   ResultJson := '';
@@ -283,7 +283,7 @@ Begin
   EnterCriticalSection(FLock);
   Try
     For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGrokToolCallRequested, Listener) Then
+      If Supports(FListeners[I], IAssistantToolCallRequested, Listener) Then
         Begin
           If Listener.HandleToolCall(ToolName, ArgumentsJson, ResultJson, ErrorMessage) Then
             Begin

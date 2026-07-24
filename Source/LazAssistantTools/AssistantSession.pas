@@ -1,4 +1,4 @@
-Unit GrokSession;
+Unit AssistantSession;
 
 { Per-project Project Chat session persistence (c) 2026 Michell Computing. }
 
@@ -10,11 +10,11 @@ Unit GrokSession;
 Interface
 
 Uses
-  Classes, SysUtils, GrokService;
+  Classes, SysUtils, AssistantService;
 
 Const
-  GrokSessionFileName = '.lazgrokchat-session';
-  GrokSessionFormatVersion = 1;
+  AssistantSessionFileName = '.lazgrokchat-session';
+  AssistantSessionFormatVersion = 1;
 
 Function ActiveProjectSessionPath: String;
 Function SaveProjectChatSession(Transcript: TStrings; ContextUsed: Integer): Boolean;
@@ -44,34 +44,34 @@ Begin
     Dir := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
   If Dir = '' Then
     Exit;
-  Result := IncludeTrailingPathDelimiter(Dir) + GrokSessionFileName;
+  Result := IncludeTrailingPathDelimiter(Dir) + AssistantSessionFileName;
 End;
 
-Function RoleToTag(Role: TGrokMessageRole): String;
+Function RoleToTag(Role: TAssistantMessageRole): String;
 Begin
   Case Role Of
-    gmrSystem: Result := 'system';
-    gmrUser: Result := 'user';
-    gmrAssistant: Result := 'assistant';
-    gmrTool: Result := 'tool';
+    amrSystem: Result := 'system';
+    amrUser: Result := 'user';
+    amrAssistant: Result := 'assistant';
+    amrTool: Result := 'tool';
   Else
     Result := 'user';
   End;
 End;
 
-Function TagToRole(Const Tag: String): TGrokMessageRole;
+Function TagToRole(Const Tag: String): TAssistantMessageRole;
 Var
   T: String;
 Begin
   T := LowerCase(Trim(Tag));
   If T = 'system' Then
-    Result := gmrSystem
+    Result := amrSystem
   Else If T = 'assistant' Then
-    Result := gmrAssistant
+    Result := amrAssistant
   Else If T = 'tool' Then
-    Result := gmrTool
+    Result := amrTool
   Else
-    Result := gmrUser;
+    Result := amrUser;
 End;
 
 Function SaveProjectChatSession(Transcript: TStrings; ContextUsed: Integer): Boolean;
@@ -79,7 +79,7 @@ Var
   Path: String;
   OutList: TStringList;
   I: Integer;
-  Role: TGrokMessageRole;
+  Role: TAssistantMessageRole;
   Content: String;
 Begin
   Result := False;
@@ -89,16 +89,16 @@ Begin
   OutList := TStringList.Create;
   Try
     OutList.Add('LazAssistantTools-Session');
-    OutList.Add('Version=' + IntToStr(GrokSessionFormatVersion));
+    OutList.Add('Version=' + IntToStr(AssistantSessionFormatVersion));
     OutList.Add('ContextUsed=' + IntToStr(ContextUsed));
     OutList.Add('---TRANSCRIPT---');
     If Assigned(Transcript) Then
       For I := 0 To Transcript.Count - 1 Do
         OutList.Add(Transcript[I]);
     OutList.Add('---MESSAGES---');
-    If Assigned(GrokClient) Then
-      For I := 0 To GrokClient.MessageCount - 1 Do
-        If GrokClient.GetMessage(I, Role, Content) Then
+    If Assigned(AssistantClient) Then
+      For I := 0 To AssistantClient.MessageCount - 1 Do
+        If AssistantClient.GetMessage(I, Role, Content) Then
           Begin
             OutList.Add('---MSG ' + RoleToTag(Role) + '---');
             OutList.Add(Content);
@@ -107,10 +107,10 @@ Begin
     Try
       OutList.SaveToFile(Path);
       Result := True;
-      WorkflowLogger.Info('GrokSession', 'Saved session to ' + Path);
+      WorkflowLogger.Info('AssistantSession', 'Saved session to ' + Path);
     Except
       On E: Exception Do
-        WorkflowLogger.Warning('GrokSession', 'Save failed: ' + E.Message);
+        WorkflowLogger.Warning('AssistantSession', 'Save failed: ' + E.Message);
     End;
   Finally
     OutList.Free;
@@ -139,7 +139,7 @@ Begin
     Except
       On E: Exception Do
         Begin
-          WorkflowLogger.Warning('GrokSession', 'Load failed: ' + E.Message);
+          WorkflowLogger.Warning('AssistantSession', 'Load failed: ' + E.Message);
           Exit;
         End;
     End;
@@ -149,8 +149,8 @@ Begin
       Exit;
 
     Transcript.Clear;
-    If Assigned(GrokClient) Then
-      GrokClient.ClearHistory;
+    If Assigned(AssistantClient) Then
+      AssistantClient.ClearHistory;
 
     Section := 'header';
     RoleTag := '';
@@ -172,8 +172,8 @@ Begin
           Break;
         If Copy(Line, 1, 7) = '---MSG ' Then
           Begin
-            If (Section = 'msgbody') And (RoleTag <> '') And Assigned(GrokClient) Then
-              GrokClient.AddMessage(TagToRole(RoleTag), Content);
+            If (Section = 'msgbody') And (RoleTag <> '') And Assigned(AssistantClient) Then
+              AssistantClient.AddMessage(TagToRole(RoleTag), Content);
             Section := 'msgbody';
             { Line format: ---MSG user--- }
             RoleTag := Copy(Line, 8, MaxInt);
@@ -197,13 +197,13 @@ Begin
             Content := Content + Line;
           End;
       End;
-    If (Section = 'msgbody') And (RoleTag <> '') And Assigned(GrokClient) Then
-      GrokClient.AddMessage(TagToRole(RoleTag), Content);
+    If (Section = 'msgbody') And (RoleTag <> '') And Assigned(AssistantClient) Then
+      AssistantClient.AddMessage(TagToRole(RoleTag), Content);
 
     Result := True;
-    WorkflowLogger.Info('GrokSession',
+    WorkflowLogger.Info('AssistantSession',
       Format('Loaded session from %s (transcript lines=%d messages=%d)',
-        [Path, Transcript.Count, GrokClient.MessageCount]));
+        [Path, Transcript.Count, AssistantClient.MessageCount]));
   Finally
     Lines.Free;
   End;
@@ -218,10 +218,10 @@ Begin
     Begin
       Try
         DeleteFileUTF8(Path);
-        WorkflowLogger.Info('GrokSession', 'Cleared session file ' + Path);
+        WorkflowLogger.Info('AssistantSession', 'Cleared session file ' + Path);
       Except
         On E: Exception Do
-          WorkflowLogger.Warning('GrokSession', 'Clear failed: ' + E.Message);
+          WorkflowLogger.Warning('AssistantSession', 'Clear failed: ' + E.Message);
       End;
     End;
 End;

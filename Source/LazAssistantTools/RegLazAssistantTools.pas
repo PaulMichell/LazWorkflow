@@ -18,11 +18,11 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  GrokChatMain;
+  AssistantMain;
 
 Procedure Register;
 Begin
-  RegisterGrokChat;
+  RegisterAssistantTools;
 End;
 
 End.

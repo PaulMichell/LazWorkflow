@@ -1,6 +1,6 @@
-Unit GrokSkills;
+Unit AssistantSkills;
 
-{ Discover and load Grok user skills (~/.grok/skills) for LazAssistantTools (c) 2026 Michell Computing. }
+{ Discover and load user skills (~/.grok/skills) for LazAssistantTools (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,21 +13,21 @@ Uses
   Classes, SysUtils;
 
 Const
-  GrokSkillNoneCaption = '(None)';
+  AssistantSkillNoneCaption = '(None)';
   { Soft cap so a huge skill cannot blow the entire context window alone. }
-  GrokSkillMaxChars = 120000;
+  AssistantSkillMaxChars = 120000;
 
 Type
-  TGrokSkillInfo = Record
+  TAssistantSkillInfo = Record
     Name: String;
     Description: String;
     SkillFile: String;
   End;
 
-  TGrokSkillList = Array Of TGrokSkillInfo;
+  TAssistantSkillList = Array Of TAssistantSkillInfo;
 
-Function GrokUserSkillsRoot: String;
-Function ListUserSkills: TGrokSkillList;
+Function AssistantUserSkillsRoot: String;
+Function ListUserSkills: TAssistantSkillList;
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Function BuildSystemPromptWithSkill(Const BasePrompt, SkillName: String): String;
 
@@ -36,7 +36,7 @@ Implementation
 Uses
   FileUtil, LazFileUtils, WorkflowLog;
 
-Function GrokUserSkillsRoot: String;
+Function AssistantUserSkillsRoot: String;
 Begin
   Result := IncludeTrailingPathDelimiter(GetUserDir) + '.grok' + PathDelim + 'skills';
 End;
@@ -102,16 +102,16 @@ Begin
   End;
 End;
 
-Function ListUserSkills: TGrokSkillList;
+Function ListUserSkills: TAssistantSkillList;
 Var
   Root, SkillDir, SkillFile, Raw: String;
   Dirs: TStringList;
   I: Integer;
-  Info: TGrokSkillInfo;
+  Info: TAssistantSkillInfo;
   SL: TStringList;
 Begin
   SetLength(Result, 0);
-  Root := GrokUserSkillsRoot;
+  Root := AssistantUserSkillsRoot;
   If Not DirectoryExists(Root) Then
     Exit;
   Dirs := FindAllDirectories(Root, False);
@@ -136,7 +136,7 @@ Begin
               Info.Description := ExtractFrontMatterField(Raw, 'name');
           Except
             On E: Exception Do
-              WorkflowLogger.Warning('GrokSkills', 'Failed to read ' + SkillFile + ': ' + E.Message);
+              WorkflowLogger.Warning('AssistantSkills', 'Failed to read ' + SkillFile + ': ' + E.Message);
           End;
         Finally
           SL.Free;
@@ -162,7 +162,7 @@ Begin
       ErrorText := 'No skill selected.';
       Exit;
     End;
-  SkillFile := IncludeTrailingPathDelimiter(GrokUserSkillsRoot) + SkillName + PathDelim + 'SKILL.md';
+  SkillFile := IncludeTrailingPathDelimiter(AssistantUserSkillsRoot) + SkillName + PathDelim + 'SKILL.md';
   If Not FileExists(SkillFile) Then
     Begin
       ErrorText := 'Skill not found: ' + SkillName;
@@ -186,11 +186,11 @@ Begin
   BodyText := StripYamlFrontMatter(Raw);
   If BodyText = '' Then
     BodyText := Trim(Raw);
-  If Length(BodyText) > GrokSkillMaxChars Then
+  If Length(BodyText) > AssistantSkillMaxChars Then
     Begin
-      BodyText := Copy(BodyText, 1, GrokSkillMaxChars) + LineEnding + LineEnding +
-        '[Skill truncated at ' + IntToStr(GrokSkillMaxChars) + ' characters for context size.]';
-      WorkflowLogger.Warning('GrokSkills', 'Skill ' + SkillName + ' truncated for system prompt');
+      BodyText := Copy(BodyText, 1, AssistantSkillMaxChars) + LineEnding + LineEnding +
+        '[Skill truncated at ' + IntToStr(AssistantSkillMaxChars) + ' characters for context size.]';
+      WorkflowLogger.Warning('AssistantSkills', 'Skill ' + SkillName + ' truncated for system prompt');
     End;
   Result := BodyText <> '';
   If Not Result Then
@@ -208,7 +208,7 @@ Begin
     Exit;
   If Not LoadUserSkillBody(SkillName, Body, Err) Then
     Begin
-      WorkflowLogger.Warning('GrokSkills', 'Could not load skill "' + SkillName + '": ' + Err);
+      WorkflowLogger.Warning('AssistantSkills', 'Could not load skill "' + SkillName + '": ' + Err);
       Result := Result + LineEnding + LineEnding +
         '(Requested user skill "' + SkillName + '" could not be loaded: ' + Err + ')';
       Exit;

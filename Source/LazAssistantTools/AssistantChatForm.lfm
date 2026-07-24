@@ -1,4 +1,4 @@
-object GrokChatForm: TGrokChatForm
+object AssistantChatForm: TAssistantChatForm
   Left = 200
   Height = 650
   Top = 100

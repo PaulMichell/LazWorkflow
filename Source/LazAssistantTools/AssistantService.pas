@@ -1,6 +1,6 @@
-Unit GrokService;
+Unit AssistantService;
 
-{ Grok LLM service with OAuth Bearer auth and SSE streaming (c) 2026 Michell Computing. }
+{ Assistant LLM service with OAuth Bearer auth and SSE streaming (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,13 +10,13 @@ Unit GrokService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, GrokConfig;
+  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig;
 
 Type
-  TGrokMessageRole = (gmrSystem, gmrUser, gmrAssistant, gmrTool);
+  TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
 
-  TGrokMessage = Record
-    Role: TGrokMessageRole;
+  TAssistantMessage = Record
+    Role: TAssistantMessageRole;
     Content: String;
     ToolCallId: String;
   End;
@@ -24,17 +24,17 @@ Type
   { Called on the main thread. ContentSnapshot / ThinkingSnapshot are full text so
     far (not raw deltas). IsFinished ends the stream. Thinking is reasoning_content
     when the model streams it; Content is the final answer channel only. }
-  TGrokStreamEvent = Procedure(Const ContentSnapshot, ThinkingSnapshot: String;
+  TAssistantStreamEvent = Procedure(Const ContentSnapshot, ThinkingSnapshot: String;
     IsFinished: Boolean; Const ErrorText: String) Of Object;
 
-  TGrokService = Class
+  TAssistantService = Class
   Private
     FApiBase: String;
     FModel: String;
     FBaseSystemPrompt: String;
     FSystemPrompt: String;
     FActiveSkill: String;
-    FMessages: Array Of TGrokMessage;
+    FMessages: Array Of TAssistantMessage;
     FLastError: String;
     FStreamThread: TThread;
     FBusy: Boolean;
@@ -43,17 +43,17 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure ApplyConfig(Config: TGrokConfig);
+    Procedure ApplyConfig(Config: TAssistantConfig);
     Procedure SetEndpoint(Const ApiBase, Model: String);
     Procedure SetActiveSkill(Const SkillName: String);
     Procedure ClearHistory;
-    Procedure AddMessage(Role: TGrokMessageRole; Const Content: String);
+    Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
     Function MessageCount: Integer;
-    Function GetMessage(Index: Integer; Out Role: TGrokMessageRole; Out Content: String): Boolean;
+    Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
     Function IsBusy: Boolean;
     Function IsSignedIn: Boolean;
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
-    Function StartStream(OnToken: TGrokStreamEvent): Boolean;
+    Function StartStream(OnToken: TAssistantStreamEvent): Boolean;
     Procedure CancelStream;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
@@ -67,21 +67,21 @@ Type
   End;
 
 Var
-  GrokClient: TGrokService;
+  AssistantClient: TAssistantService;
 
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, GrokSkills;
+  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills;
 
 Type
-  TGrokStreamThread = Class(TThread)
+  TAssistantStreamThread = Class(TThread)
   Private
     FApiBase: String;
     FAccessToken: String;
     FModel: String;
     FRequestJson: String;
-    FOnToken: TGrokStreamEvent;
+    FOnToken: TAssistantStreamEvent;
     FPendingContent: String;
     FPendingThinking: String;
     FPendingError: String;
@@ -100,26 +100,26 @@ Type
     Procedure Execute; Override;
   Public
     Constructor Create(Const ApiBase, AccessToken, Model, RequestJson: String;
-      OnToken: TGrokStreamEvent);
+      OnToken: TAssistantStreamEvent);
   End;
 
   { Feeds TFPHTTPClient response bytes into SSE line parsing as they arrive. }
-  TGrokSSEStream = Class(TStream)
+  TAssistantSSEStream = Class(TStream)
   Private
-    FOwner: TGrokStreamThread;
+    FOwner: TAssistantStreamThread;
   Public
-    Constructor Create(AOwner: TGrokStreamThread);
+    Constructor Create(AOwner: TAssistantStreamThread);
     Function Write(Const Buffer; Count: LongInt): LongInt; Override;
     Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
   End;
 
-Function RoleToJson(Role: TGrokMessageRole): String;
+Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
   Case Role Of
-    gmrSystem: Result := 'system';
-    gmrUser: Result := 'user';
-    gmrAssistant: Result := 'assistant';
-    gmrTool: Result := 'tool';
+    amrSystem: Result := 'system';
+    amrUser: Result := 'user';
+    amrAssistant: Result := 'assistant';
+    amrTool: Result := 'tool';
   Else
     Result := 'user';
   End;
@@ -152,7 +152,7 @@ Begin
 End;
 
 Function BuildChatRequestJson(Const Model, SystemPrompt: String;
-  Const Messages: Array Of TGrokMessage): String;
+  Const Messages: Array Of TAssistantMessage): String;
 Var
   I: Integer;
   MsgJson, Joined: String;
@@ -169,7 +169,7 @@ Begin
     End;
   For I := 0 To High(Messages) Do
     Begin
-      If (Messages[I].Role = gmrSystem) And HasSystem Then
+      If (Messages[I].Role = amrSystem) And HasSystem Then
         Continue;
       MsgJson := Format('{"role":"%s","content":"%s"}',
         [RoleToJson(Messages[I].Role), JsonEscape(Messages[I].Content)]);
@@ -181,20 +181,20 @@ Begin
     [JsonEscape(Model), Joined]);
 End;
 
-{ TGrokSSEStream }
+{ TAssistantSSEStream }
 
-Constructor TGrokSSEStream.Create(AOwner: TGrokStreamThread);
+Constructor TAssistantSSEStream.Create(AOwner: TAssistantStreamThread);
 Begin
   Inherited Create;
   FOwner := AOwner;
 End;
 
-Function TGrokSSEStream.Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64;
+Function TAssistantSSEStream.Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64;
 Begin
   Result := 0;
 End;
 
-Function TGrokSSEStream.Write(Const Buffer; Count: LongInt): LongInt;
+Function TAssistantSSEStream.Write(Const Buffer; Count: LongInt): LongInt;
 Var
   Chunk: String;
 Begin
@@ -205,10 +205,10 @@ Begin
   FOwner.ProcessSseChunk(Chunk);
 End;
 
-{ TGrokStreamThread }
+{ TAssistantStreamThread }
 
-Constructor TGrokStreamThread.Create(Const ApiBase, AccessToken, Model, RequestJson: String;
-  OnToken: TGrokStreamEvent);
+Constructor TAssistantStreamThread.Create(Const ApiBase, AccessToken, Model, RequestJson: String;
+  OnToken: TAssistantStreamEvent);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
@@ -223,13 +223,13 @@ Begin
   FMergeLogCount := 0;
 End;
 
-Procedure TGrokStreamThread.NotifyMain;
+Procedure TAssistantStreamThread.NotifyMain;
 Begin
   If Assigned(FOnToken) Then
     FOnToken(FPendingContent, FPendingThinking, FPendingFinished, FPendingError);
 End;
 
-Procedure TGrokStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
+Procedure TAssistantStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
 Begin
   FPendingContent := FContentAccum;
   FPendingThinking := FThinkingAccum;
@@ -256,7 +256,7 @@ Begin
     Result := Node.AsString;
 End;
 
-Function TGrokStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
+Function TAssistantStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
 Begin
   { Same rules as content merge: init / cumulative snapshot / stale ignore / append. }
   Result := False;
@@ -282,7 +282,7 @@ Begin
   Result := True;
 End;
 
-Procedure TGrokStreamThread.ExtractDeltaParts(Const JsonText: String;
+Procedure TAssistantStreamThread.ExtractDeltaParts(Const JsonText: String;
   Out ContentDelta, ThinkingDelta: String);
 Var
   Data: TJSONData;
@@ -336,7 +336,7 @@ Begin
   End;
 End;
 
-Procedure TGrokStreamThread.ProcessSseLine(Const Line: String);
+Procedure TAssistantStreamThread.ProcessSseLine(Const Line: String);
 Var
   Payload, ContentDelta, ThinkingDelta, Trimmed: String;
   Changed: Boolean;
@@ -368,14 +368,14 @@ Begin
     Exit;
   Inc(FMergeLogCount);
   If FMergeLogCount <= 12 Then
-    WorkflowLogger.Info('GrokStream',
+    WorkflowLogger.Info('AssistantStream',
       Format('merge #%d thinkLen=%d contentLen=%d dThink=%d dContent=%d',
         [FMergeLogCount, Length(FThinkingAccum), Length(FContentAccum),
          Length(ThinkingDelta), Length(ContentDelta)]));
   EmitSnapshots(False, '');
 End;
 
-Procedure TGrokStreamThread.ProcessSseChunk(Const Chunk: String);
+Procedure TAssistantStreamThread.ProcessSseChunk(Const Chunk: String);
 Var
   P: Integer;
   Line: String;
@@ -393,11 +393,11 @@ Begin
   Until Terminated;
 End;
 
-Procedure TGrokStreamThread.Execute;
+Procedure TAssistantStreamThread.Execute;
 Var
   Client: TFPHTTPClient;
   Body: TStringStream;
-  OutStream: TGrokSSEStream;
+  OutStream: TAssistantSSEStream;
   Url: String;
   Code: Integer;
   ErrBody: String;
@@ -409,7 +409,7 @@ Begin
 
   Client := TFPHTTPClient.Create(Nil);
   Body := TStringStream.Create(FRequestJson);
-  OutStream := TGrokSSEStream.Create(Self);
+  OutStream := TAssistantSSEStream.Create(Self);
   Try
     Try
       Client.AllowRedirect := True;
@@ -444,13 +444,13 @@ Begin
   End;
 End;
 
-{ TGrokService }
+{ TAssistantService }
 
-Constructor TGrokService.Create;
+Constructor TAssistantService.Create;
 Begin
   Inherited Create;
-  FApiBase := GrokConfigDefaultApiBase;
-  FModel := GrokConfigDefaultModel;
+  FApiBase := AssistantConfigDefaultApiBase;
+  FModel := AssistantConfigDefaultModel;
   FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
   FActiveSkill := '';
   FSystemPrompt := FBaseSystemPrompt;
@@ -460,19 +460,19 @@ Begin
   FLastError := '';
 End;
 
-Procedure TGrokService.RebuildSystemPrompt;
+Procedure TAssistantService.RebuildSystemPrompt;
 Begin
   FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
 End;
 
-Destructor TGrokService.Destroy;
+Destructor TAssistantService.Destroy;
 Begin
   CancelStream;
   SetLength(FMessages, 0);
   Inherited Destroy;
 End;
 
-Procedure TGrokService.ClearStreamThread;
+Procedure TAssistantService.ClearStreamThread;
 Begin
   If Assigned(FStreamThread) Then
     Begin
@@ -483,7 +483,7 @@ Begin
   FBusy := False;
 End;
 
-Procedure TGrokService.ApplyConfig(Config: TGrokConfig);
+Procedure TAssistantService.ApplyConfig(Config: TAssistantConfig);
 Begin
   If Not Assigned(Config) Then
     Exit;
@@ -493,31 +493,31 @@ Begin
     GrokOAuthClient.SetTokens(Config.ToOAuthTokens);
 End;
 
-Procedure TGrokService.SetEndpoint(Const ApiBase, Model: String);
+Procedure TAssistantService.SetEndpoint(Const ApiBase, Model: String);
 Begin
   If ApiBase <> '' Then
     FApiBase := ApiBase;
   If Model <> '' Then
     FModel := Model;
-  WorkflowLogger.Info('GrokService', 'Endpoint updated – model=' + FModel);
+  WorkflowLogger.Info('AssistantService', 'Endpoint updated – model=' + FModel);
 End;
 
-Procedure TGrokService.SetActiveSkill(Const SkillName: String);
+Procedure TAssistantService.SetActiveSkill(Const SkillName: String);
 Begin
   FActiveSkill := Trim(SkillName);
   RebuildSystemPrompt;
   If FActiveSkill <> '' Then
-    WorkflowLogger.Info('GrokService', 'Active skill set to ' + FActiveSkill)
+    WorkflowLogger.Info('AssistantService', 'Active skill set to ' + FActiveSkill)
   Else
-    WorkflowLogger.Info('GrokService', 'Active skill cleared');
+    WorkflowLogger.Info('AssistantService', 'Active skill cleared');
 End;
 
-Procedure TGrokService.ClearHistory;
+Procedure TAssistantService.ClearHistory;
 Begin
   SetLength(FMessages, 0);
 End;
 
-Procedure TGrokService.AddMessage(Role: TGrokMessageRole; Const Content: String);
+Procedure TAssistantService.AddMessage(Role: TAssistantMessageRole; Const Content: String);
 Var
   Idx: Integer;
 Begin
@@ -528,15 +528,15 @@ Begin
   FMessages[Idx].ToolCallId := '';
 End;
 
-Function TGrokService.MessageCount: Integer;
+Function TAssistantService.MessageCount: Integer;
 Begin
   Result := Length(FMessages);
 End;
 
-Function TGrokService.GetMessage(Index: Integer; Out Role: TGrokMessageRole; Out Content: String): Boolean;
+Function TAssistantService.GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
 Begin
   Result := False;
-  Role := gmrUser;
+  Role := amrUser;
   Content := '';
   If (Index < 0) Or (Index >= Length(FMessages)) Then
     Exit;
@@ -545,12 +545,12 @@ Begin
   Result := True;
 End;
 
-Function TGrokService.IsBusy: Boolean;
+Function TAssistantService.IsBusy: Boolean;
 Begin
   Result := FBusy;
 End;
 
-Function TGrokService.IsSignedIn: Boolean;
+Function TAssistantService.IsSignedIn: Boolean;
 Begin
   Result := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated;
 End;
@@ -571,7 +571,7 @@ Begin
     Result := False;
 End;
 
-Function TGrokService.ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
+Function TAssistantService.ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
 Var
   Client: TFPHTTPClient;
   AccessToken, BaseUrl, Body: String;
@@ -604,10 +604,10 @@ Begin
         ErrorText := 'Not signed in.';
       Exit;
     End;
-  If Assigned(GrokChatConfig) Then
+  If Assigned(AssistantChatConfig) Then
     Begin
-      GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-      GrokChatConfig.Save;
+      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      AssistantChatConfig.Save;
     End;
 
   BaseUrl := Trim(FApiBase);
@@ -661,7 +661,7 @@ Begin
                 If ModelIds Is TStringList Then
                   TStringList(ModelIds).Sort;
                 Result := True;
-                WorkflowLogger.Info('GrokService',
+                WorkflowLogger.Info('AssistantService',
                   Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
                 Exit;
               End;
@@ -680,7 +680,7 @@ Begin
   End;
 End;
 
-Function TGrokService.StartStream(OnToken: TGrokStreamEvent): Boolean;
+Function TAssistantService.StartStream(OnToken: TAssistantStreamEvent): Boolean;
 Var
   RequestJson, AccessToken: String;
 Begin
@@ -701,14 +701,14 @@ Begin
     Begin
       FLastError := GrokOAuthClient.LastError;
       If FLastError = '' Then
-        FLastError := 'Not signed in. Open Grok Settings and sign in with SuperGrok / X Premium.';
+        FLastError := 'Not signed in. Open Assistant Settings and sign in with SuperGrok / X Premium.';
       Exit;
     End;
   { Persist refreshed tokens so the next IDE session keeps working. }
-  If Assigned(GrokChatConfig) Then
+  If Assigned(AssistantChatConfig) Then
     Begin
-      GrokChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-      GrokChatConfig.Save;
+      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      AssistantChatConfig.Save;
     End;
   If Not Assigned(OnToken) Then
     Begin
@@ -718,37 +718,37 @@ Begin
 
   ClearStreamThread;
   RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages);
-  FStreamThread := TGrokStreamThread.Create(FApiBase, AccessToken, FModel, RequestJson, OnToken);
+  FStreamThread := TAssistantStreamThread.Create(FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;
   FStreamThread.Start;
   Result := True;
-  WorkflowLogger.Info('GrokService', 'Stream started – model=' + FModel);
+  WorkflowLogger.Info('AssistantService', 'Stream started – model=' + FModel);
 End;
 
-Procedure TGrokService.CancelStream;
+Procedure TAssistantService.CancelStream;
 Begin
   If Assigned(FStreamThread) Then
     Begin
-      WorkflowLogger.Info('GrokService', 'Stream cancel requested');
+      WorkflowLogger.Info('AssistantService', 'Stream cancel requested');
       ClearStreamThread;
     End
   Else
     FBusy := False;
 End;
 
-Procedure TGrokService.MarkStreamComplete;
+Procedure TAssistantService.MarkStreamComplete;
 Begin
   FBusy := False;
 End;
 
 Initialization
 
-GrokClient := TGrokService.Create;
-If Assigned(GrokChatConfig) Then
-  GrokClient.ApplyConfig(GrokChatConfig);
+AssistantClient := TAssistantService.Create;
+If Assigned(AssistantChatConfig) Then
+  AssistantClient.ApplyConfig(AssistantChatConfig);
 
 Finalization
 
-FreeAndNil(GrokClient);
+FreeAndNil(AssistantClient);
 
 End.
