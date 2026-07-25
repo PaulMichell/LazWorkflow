@@ -567,6 +567,9 @@ Begin
   If Not IsFinished Then
     Begin
       ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
+      { Non-empty ErrorText while still streaming is a status phase (e.g. tool round). }
+      If ErrorText <> '' Then
+        SetStreamPhase(ErrorText);
       Exit;
     End;
   { Final empty emit may still carry last snapshots already applied. }

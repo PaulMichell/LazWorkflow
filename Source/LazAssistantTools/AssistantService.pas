@@ -19,7 +19,16 @@ Type
     Role: TAssistantMessageRole;
     Content: String;
     ToolCallId: String;
+    { When set on an assistant message, raw OpenAI tool_calls JSON array. }
+    ToolCallsJson: String;
   End;
+
+  TAssistantToolCall = Record
+    Id: String;
+    Name: String;
+    Arguments: String;
+  End;
+  TAssistantToolCallArray = Array Of TAssistantToolCall;
 
   { Called on the main thread. ContentSnapshot / ThinkingSnapshot are full text so
     far (not raw deltas). IsFinished ends the stream. Thinking is reasoning_content
@@ -48,6 +57,8 @@ Type
     Procedure SetActiveSkill(Const SkillName: String);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
+    Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String);
+    Procedure AddToolResult(Const ToolCallId, Content: String);
     Function MessageCount: Integer;
     Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
     Function IsBusy: Boolean;
@@ -59,6 +70,8 @@ Type
     Procedure MarkStreamComplete;
     { GET /v1/language-models (fallback /v1/models). Fills ModelIds sorted, chat-oriented. }
     Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
+    { Rebuilds the next chat/completions body (used after a tool round). }
+    Function BuildNextRequestJson: String;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
@@ -72,11 +85,12 @@ Var
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills;
+  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools;
 
 Type
   TAssistantStreamThread = Class(TThread)
   Private
+    FService: TAssistantService;
     FApiBase: String;
     FAccessToken: String;
     FModel: String;
@@ -90,16 +104,22 @@ Type
     FContentAccum: String;
     FThinkingAccum: String;
     FMergeLogCount: Integer;
+    FToolCalls: TAssistantToolCallArray;
+    FToolRound: Integer;
     Procedure NotifyMain;
     Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
     Procedure ProcessSseLine(Const Line: String);
     Procedure ExtractDeltaParts(Const JsonText: String; Out ContentDelta, ThinkingDelta: String);
+    Procedure ExtractToolCallDeltas(Const JsonText: String);
     Function MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
+    Function HasToolCalls: Boolean;
+    Procedure RunToolRoundOnMain;
+    Function DoOneHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(Const ApiBase, AccessToken, Model, RequestJson: String;
+    Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model, RequestJson: String;
       OnToken: TAssistantStreamEvent);
   End;
 
@@ -152,11 +172,12 @@ Begin
 End;
 
 Function BuildChatRequestJson(Const Model, SystemPrompt: String;
-  Const Messages: Array Of TAssistantMessage): String;
+  Const Messages: Array Of TAssistantMessage; Const ToolsJson: String): String;
 Var
   I: Integer;
   MsgJson, Joined: String;
   HasSystem: Boolean;
+  ContentField: String;
 Begin
   { Do not use TStringList.DelimitedText — QuoteChar wraps each part in extra "…"
     and produces invalid nested JSON (xAI returns HTTP 422). }
@@ -171,14 +192,28 @@ Begin
     Begin
       If (Messages[I].Role = amrSystem) And HasSystem Then
         Continue;
-      MsgJson := Format('{"role":"%s","content":"%s"}',
-        [RoleToJson(Messages[I].Role), JsonEscape(Messages[I].Content)]);
+      If Messages[I].Role = amrTool Then
+        MsgJson := Format('{"role":"tool","tool_call_id":"%s","content":"%s"}',
+          [JsonEscape(Messages[I].ToolCallId), JsonEscape(Messages[I].Content)])
+      Else If Messages[I].ToolCallsJson <> '' Then
+        Begin
+          ContentField := Messages[I].Content;
+          MsgJson := Format('{"role":"assistant","content":"%s","tool_calls":%s}',
+            [JsonEscape(ContentField), Messages[I].ToolCallsJson]);
+        End
+      Else
+        MsgJson := Format('{"role":"%s","content":"%s"}',
+          [RoleToJson(Messages[I].Role), JsonEscape(Messages[I].Content)]);
       If Joined <> '' Then
         Joined := Joined + ',';
       Joined := Joined + MsgJson;
     End;
-  Result := Format('{"model":"%s","stream":true,"messages":[%s]}',
-    [JsonEscape(Model), Joined]);
+  If Trim(ToolsJson) <> '' Then
+    Result := Format('{"model":"%s","stream":true,"messages":[%s],"tools":%s}',
+      [JsonEscape(Model), Joined, ToolsJson])
+  Else
+    Result := Format('{"model":"%s","stream":true,"messages":[%s]}',
+      [JsonEscape(Model), Joined]);
 End;
 
 { TAssistantSSEStream }
@@ -207,11 +242,12 @@ End;
 
 { TAssistantStreamThread }
 
-Constructor TAssistantStreamThread.Create(Const ApiBase, AccessToken, Model, RequestJson: String;
-  OnToken: TAssistantStreamEvent);
+Constructor TAssistantStreamThread.Create(Service: TAssistantService;
+  Const ApiBase, AccessToken, Model, RequestJson: String; OnToken: TAssistantStreamEvent);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
+  FService := Service;
   FApiBase := ApiBase;
   FAccessToken := AccessToken;
   FModel := Model;
@@ -221,6 +257,8 @@ Begin
   FContentAccum := '';
   FThinkingAccum := '';
   FMergeLogCount := 0;
+  SetLength(FToolCalls, 0);
+  FToolRound := 0;
 End;
 
 Procedure TAssistantStreamThread.NotifyMain;
@@ -336,6 +374,119 @@ Begin
   End;
 End;
 
+Procedure TAssistantStreamThread.ExtractToolCallDeltas(Const JsonText: String);
+Var
+  Data: TJSONData;
+  Obj, Choice, Delta, Item, Func: TJSONObject;
+  Arr, ToolArr: TJSONArray;
+  I, Idx: Integer;
+  Id, Name, Args: String;
+Begin
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(JsonText);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      Arr := Obj.FindPath('choices') As TJSONArray;
+      If (Arr = Nil) Or (Arr.Count < 1) Or Not (Arr.Items[0] Is TJSONObject) Then
+        Exit;
+      Choice := TJSONObject(Arr.Items[0]);
+      Delta := Choice.FindPath('delta') As TJSONObject;
+      If Not Assigned(Delta) Then
+        Exit;
+      ToolArr := Delta.FindPath('tool_calls') As TJSONArray;
+      If (ToolArr = Nil) Or (ToolArr.Count < 1) Then
+        Exit;
+      For I := 0 To ToolArr.Count - 1 Do
+        Begin
+          If Not (ToolArr.Items[I] Is TJSONObject) Then
+            Continue;
+          Item := TJSONObject(ToolArr.Items[I]);
+          Idx := Item.Get('index', I);
+          If Idx < 0 Then
+            Continue;
+          If Idx >= Length(FToolCalls) Then
+            SetLength(FToolCalls, Idx + 1);
+          Id := JsonStringField(Item, 'id');
+          If Id <> '' Then
+            FToolCalls[Idx].Id := Id;
+          Func := Item.FindPath('function') As TJSONObject;
+          If Assigned(Func) Then
+            Begin
+              Name := JsonStringField(Func, 'name');
+              If Name <> '' Then
+                FToolCalls[Idx].Name := Name;
+              Args := JsonStringField(Func, 'arguments');
+              If Args <> '' Then
+                FToolCalls[Idx].Arguments := FToolCalls[Idx].Arguments + Args;
+            End;
+        End;
+    Except
+      { ignore malformed tool deltas }
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function TAssistantStreamThread.HasToolCalls: Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  For I := 0 To High(FToolCalls) Do
+    If (FToolCalls[I].Name <> '') Or (FToolCalls[I].Arguments <> '') Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+End;
+
+Procedure TAssistantStreamThread.RunToolRoundOnMain;
+Var
+  I: Integer;
+  ToolCallsJson, ResultText, ErrorText, Content: String;
+  Ok: Boolean;
+Begin
+  If Not Assigned(FService) Then
+    Exit;
+  { Build tool_calls JSON array for the assistant history message. }
+  ToolCallsJson := '[';
+  For I := 0 To High(FToolCalls) Do
+    Begin
+      If FToolCalls[I].Name = '' Then
+        Continue;
+      If Length(ToolCallsJson) > 1 Then
+        ToolCallsJson := ToolCallsJson + ',';
+      If FToolCalls[I].Id = '' Then
+        FToolCalls[I].Id := Format('call_%d_%d', [FToolRound, I]);
+      ToolCallsJson := ToolCallsJson + Format(
+        '{"id":"%s","type":"function","function":{"name":"%s","arguments":"%s"}}',
+        [JsonEscape(FToolCalls[I].Id), JsonEscape(FToolCalls[I].Name),
+         JsonEscape(FToolCalls[I].Arguments)]);
+    End;
+  ToolCallsJson := ToolCallsJson + ']';
+  FService.AddAssistantToolCalls(FContentAccum, ToolCallsJson);
+
+  For I := 0 To High(FToolCalls) Do
+    Begin
+      If FToolCalls[I].Name = '' Then
+        Continue;
+      ResultText := '';
+      ErrorText := '';
+      Ok := ExecuteAssistantTool(FToolCalls[I].Name, FToolCalls[I].Arguments, ResultText, ErrorText);
+      If Ok Then
+        Content := ResultText
+      Else
+        Content := 'Error: ' + ErrorText;
+      FService.AddToolResult(FToolCalls[I].Id, Content);
+      WorkflowLogger.Info('AssistantStream',
+        Format('tool %s ok=%s len=%d', [FToolCalls[I].Name, BoolToStr(Ok, True), Length(Content)]));
+    End;
+End;
+
 Procedure TAssistantStreamThread.ProcessSseLine(Const Line: String);
 Var
   Payload, ContentDelta, ThinkingDelta, Trimmed: String;
@@ -354,6 +505,7 @@ Begin
     Exit;
   If Payload = '[DONE]' Then
     Exit;
+  ExtractToolCallDeltas(Payload);
   ExtractDeltaParts(Payload, ContentDelta, ThinkingDelta);
   If (ContentDelta = '') And (ThinkingDelta = '') Then
     Exit;
@@ -393,22 +545,21 @@ Begin
   Until Terminated;
 End;
 
-Procedure TAssistantStreamThread.Execute;
+Function TAssistantStreamThread.DoOneHttpRound(Const Url, RequestJson: String;
+  Out ErrorText: String): Boolean;
 Var
   Client: TFPHTTPClient;
   Body: TStringStream;
   OutStream: TAssistantSSEStream;
-  Url: String;
   Code: Integer;
   ErrBody: String;
 Begin
-  Url := Trim(FApiBase);
-  While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
-    SetLength(Url, Length(Url) - 1);
-  Url := Url + '/chat/completions';
-
+  Result := False;
+  ErrorText := '';
+  FSseBuffer := '';
+  SetLength(FToolCalls, 0);
   Client := TFPHTTPClient.Create(Nil);
-  Body := TStringStream.Create(FRequestJson);
+  Body := TStringStream.Create(RequestJson);
   OutStream := TAssistantSSEStream.Create(Self);
   Try
     Try
@@ -426,15 +577,15 @@ Begin
             ErrBody := Client.ResponseStatusText;
           If Length(ErrBody) > 400 Then
             ErrBody := Copy(ErrBody, 1, 400) + '…';
-          EmitSnapshots(True, Format('HTTP %d: %s', [Code, ErrBody]));
+          ErrorText := Format('HTTP %d: %s', [Code, ErrBody]);
           Exit;
         End;
       If FSseBuffer <> '' Then
         ProcessSseLine(FSseBuffer);
-      EmitSnapshots(True, '');
+      Result := True;
     Except
       On E: Exception Do
-        EmitSnapshots(True, E.Message);
+        ErrorText := E.Message;
     End;
   Finally
     Client.RequestBody := Nil;
@@ -444,6 +595,52 @@ Begin
   End;
 End;
 
+Procedure TAssistantStreamThread.Execute;
+Const
+  MaxToolRounds = 4;
+Var
+  Url, ErrorText, RequestJson: String;
+  RoundNo: Integer;
+Begin
+  Url := Trim(FApiBase);
+  While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
+    SetLength(Url, Length(Url) - 1);
+  Url := Url + '/chat/completions';
+
+  RequestJson := FRequestJson;
+  For RoundNo := 0 To MaxToolRounds Do
+    Begin
+      If Terminated Then
+        Break;
+      FContentAccum := '';
+      FThinkingAccum := '';
+      FMergeLogCount := 0;
+      If Not DoOneHttpRound(Url, RequestJson, ErrorText) Then
+        Begin
+          EmitSnapshots(True, ErrorText);
+          Exit;
+        End;
+      If Terminated Then
+        Break;
+      If Not HasToolCalls Then
+        Begin
+          EmitSnapshots(True, '');
+          Exit;
+        End;
+      { Tool round: run tools on the main thread, then continue the conversation. }
+      Inc(FToolRound);
+      WorkflowLogger.Info('AssistantStream', Format('tool round %d (%d calls)',
+        [FToolRound, Length(FToolCalls)]));
+      { ErrorText while not finished is treated as a status phase by the chat UI. }
+      EmitSnapshots(False, 'Running tools…');
+      Synchronize(@RunToolRoundOnMain);
+      If Terminated Or Not Assigned(FService) Then
+        Break;
+      RequestJson := FService.BuildNextRequestJson;
+    End;
+  EmitSnapshots(True, 'Tool-call round limit reached.');
+End;
+
 { TAssistantService }
 
 Constructor TAssistantService.Create;
@@ -451,7 +648,8 @@ Begin
   Inherited Create;
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
-  FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
+  FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE. ' +
+    'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown.';
   FActiveSkill := '';
   FSystemPrompt := FBaseSystemPrompt;
   SetLength(FMessages, 0);
@@ -526,6 +724,36 @@ Begin
   FMessages[Idx].Role := Role;
   FMessages[Idx].Content := Content;
   FMessages[Idx].ToolCallId := '';
+  FMessages[Idx].ToolCallsJson := '';
+End;
+
+Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String);
+Var
+  Idx: Integer;
+Begin
+  Idx := Length(FMessages);
+  SetLength(FMessages, Idx + 1);
+  FMessages[Idx].Role := amrAssistant;
+  FMessages[Idx].Content := Content;
+  FMessages[Idx].ToolCallId := '';
+  FMessages[Idx].ToolCallsJson := ToolCallsJson;
+End;
+
+Procedure TAssistantService.AddToolResult(Const ToolCallId, Content: String);
+Var
+  Idx: Integer;
+Begin
+  Idx := Length(FMessages);
+  SetLength(FMessages, Idx + 1);
+  FMessages[Idx].Role := amrTool;
+  FMessages[Idx].Content := Content;
+  FMessages[Idx].ToolCallId := ToolCallId;
+  FMessages[Idx].ToolCallsJson := '';
+End;
+
+Function TAssistantService.BuildNextRequestJson: String;
+Begin
+  Result := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJson);
 End;
 
 Function TAssistantService.MessageCount: Integer;
@@ -717,8 +945,8 @@ Begin
     End;
 
   ClearStreamThread;
-  RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages);
-  FStreamThread := TAssistantStreamThread.Create(FApiBase, AccessToken, FModel, RequestJson, OnToken);
+  RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJson);
+  FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;
   FStreamThread.Start;
   Result := True;
