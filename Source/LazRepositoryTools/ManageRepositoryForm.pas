@@ -455,8 +455,13 @@ End;
 
 Procedure TManageRepositoryForm.ManualRefresh;
 Begin
-  WorkflowLogger.Info('GitGraph', 'Manual refresh (F5)');
-  BindRepository;
+  { Prefer the path already bound to this window so Fetch/Pull/Push always
+    re-index the same repository instead of rediscovering from the IDE. }
+  WorkflowLogger.Info('GitGraph', 'Manual refresh');
+  If FRepoPath <> '' Then
+    SetRepository(FRepoPath)
+  Else
+    BindRepository;
   If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
     RefreshFilesList;
 End;
@@ -1587,8 +1592,9 @@ Begin
   End;
   If Ok Then
     Begin
-      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+      { Remote-tracking branches can change without moving HEAD — always rebuild the graph. }
       ManualRefresh;
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
     End
   Else
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
@@ -1610,8 +1616,8 @@ Begin
   End;
   If Ok Then
     Begin
-      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
       ManualRefresh;
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
     End
   Else
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
@@ -1633,8 +1639,10 @@ Begin
   End;
   If Ok Then
     Begin
-      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
+      { Refresh so remote-tracking / ahead-behind state and any rewritten refs show. }
+      ManualRefresh;
       FStatusFooter.SetRightText('Push complete');
+      MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
     End
   Else
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
