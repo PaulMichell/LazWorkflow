@@ -1,4 +1,4 @@
-Unit GitManagerMain;
+Unit RepositoryManagerMain;
 
 { Core registration, menus, commands and window creation for LazRepositoryTools (c) 2026 Michell Computing. }
 
@@ -22,7 +22,7 @@ Var
 Implementation
 
 Uses
-  Dialogs, WorkflowLog, WorkflowEvents, GitGraphForm, GitService, GitConfig,
+  Dialogs, WorkflowLog, WorkflowEvents, ManageRepositoryForm, GitService, GitConfig,
   GitSettingsForm, GitInitForm, GitCloneForm;
 
 Type
@@ -212,12 +212,12 @@ End;
 Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  IDEWindowCreators.CreateForm(AForm, TGitGraphForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
+  IDEWindowCreators.CreateForm(AForm, TManageRepositoryForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
   AForm.Name := AFormName;
-  If AForm Is TGitGraphForm Then
+  If AForm Is TManageRepositoryForm Then
     Begin
-      TGitGraphForm(AForm).BindRepository;
-      TGitGraphForm(AForm).ApplyConfig;
+      TManageRepositoryForm(AForm).BindRepository;
+      TManageRepositoryForm(AForm).ApplyConfig;
     End;
 End;
 

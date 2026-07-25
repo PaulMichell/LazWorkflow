@@ -1,4 +1,4 @@
-Unit GitGraphForm;
+Unit ManageRepositoryForm;
 
 { Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing. }
 
@@ -11,11 +11,11 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, WorkflowEvents, StatusFooterFrame,
+  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, WorkflowEvents, StatusFooterFrame,
   GitGraphModel, GitDiffView;
 
 Type
-  TGitGraphForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
+  TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
     FPages: TPageControl;
     FTabHistory: TTabSheet;
     FTabFiles: TTabSheet;
@@ -190,27 +190,27 @@ Uses
 Type
   TGitIndexThread = Class(TThread)
   Private
-    FForm: TGitGraphForm;
+    FForm: TManageRepositoryForm;
     FRepoPath: String;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TGitGraphForm; Const ARepoPath: String);
+    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String);
   End;
 
   TGitDetailThread = Class(TThread)
   Private
-    FForm: TGitGraphForm;
+    FForm: TManageRepositoryForm;
     FRepoPath: String;
     FShas: TStringList;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TGitGraphForm; Const ARepoPath: String; AShas: TStringList);
+    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AShas: TStringList);
     Destructor Destroy; Override;
   End;
 
-Constructor TGitIndexThread.Create(AForm: TGitGraphForm; Const ARepoPath: String);
+Constructor TGitIndexThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
@@ -241,7 +241,7 @@ Begin
   End;
 End;
 
-Constructor TGitDetailThread.Create(AForm: TGitGraphForm; Const ARepoPath: String;
+Constructor TGitDetailThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
   AShas: TStringList);
 Begin
   Inherited Create(True);
@@ -309,8 +309,8 @@ Begin
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
-        TGitGraphForm(Form).BindRepository;
+      If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
+        TManageRepositoryForm(Form).BindRepository;
     End;
 End;
 
@@ -322,8 +322,8 @@ Begin
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
-        TGitGraphForm(Form).SetRepository('');
+      If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
+        TManageRepositoryForm(Form).SetRepository('');
     End;
 End;
 
@@ -335,12 +335,12 @@ Begin
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TGitGraphForm) And Not (csDestroying in Form.ComponentState) Then
-        TGitGraphForm(Form).ApplyConfig;
+      If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
+        TManageRepositoryForm(Form).ApplyConfig;
     End;
 End;
 
-Constructor TGitGraphForm.Create(TheOwner: TComponent);
+Constructor TManageRepositoryForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FClean := True;
@@ -359,7 +359,7 @@ Begin
   WorkflowEventBus.AddListener(Self);
 End;
 
-Destructor TGitGraphForm.Destroy;
+Destructor TManageRepositoryForm.Destroy;
 Begin
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
@@ -379,7 +379,7 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TGitGraphForm.InitLaneColors;
+Procedure TManageRepositoryForm.InitLaneColors;
 Begin
   FLaneColors[0] := RGBToColor(33, 150, 243);
   FLaneColors[1] := RGBToColor(76, 175, 80);
@@ -393,7 +393,7 @@ Begin
   FLaneColors[9] := RGBToColor(96, 125, 139);
 End;
 
-Procedure TGitGraphForm.FormCreate(Sender: TObject);
+Procedure TManageRepositoryForm.FormCreate(Sender: TObject);
 Begin
   { Timers stay runtime-created (not useful in the designer). }
   FDetailTimer := TTimer.Create(Self);
@@ -433,18 +433,18 @@ Begin
   WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
 End;
 
-Procedure TGitGraphForm.FormDestroy(Sender: TObject);
+Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
 Begin
   WorkflowLogger.Info('GitGraph', 'Manage Repository window destroyed');
 End;
 
-Procedure TGitGraphForm.FormShow(Sender: TObject);
+Procedure TManageRepositoryForm.FormShow(Sender: TObject);
 Begin
   BindRepository;
   ApplyConfig;
 End;
 
-Procedure TGitGraphForm.ApplyConfig;
+Procedure TManageRepositoryForm.ApplyConfig;
 Begin
   If Not Assigned(GitManagerConfig) Or Not Assigned(FAutoRefreshTimer) Then
     Exit;
@@ -453,7 +453,7 @@ Begin
   FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
 End;
 
-Procedure TGitGraphForm.ManualRefresh;
+Procedure TManageRepositoryForm.ManualRefresh;
 Begin
   WorkflowLogger.Info('GitGraph', 'Manual refresh (F5)');
   BindRepository;
@@ -461,7 +461,7 @@ Begin
     RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Procedure TManageRepositoryForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
 Begin
   Case Key Of
     VK_F5:
@@ -498,7 +498,7 @@ Begin
   End;
 End;
 
-Procedure TGitGraphForm.MoveSelection(Delta: Integer);
+Procedure TManageRepositoryForm.MoveSelection(Delta: Integer);
 Var
   NewIndex: Integer;
 Begin
@@ -515,7 +515,7 @@ Begin
   SelectRow(NewIndex, True);
 End;
 
-Procedure TGitGraphForm.SelectRow(Index: Integer; ScrollIntoView: Boolean);
+Procedure TManageRepositoryForm.SelectRow(Index: Integer; ScrollIntoView: Boolean);
 Var
   RowTop, RowBottom, ViewH, NewPos: Integer;
 Begin
@@ -543,19 +543,19 @@ Begin
     ScheduleVisibleDetails;
 End;
 
-Function TGitGraphForm.SelectedSha: String;
+Function TManageRepositoryForm.SelectedSha: String;
 Begin
   Result := '';
   If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) Then
     Result := FModel.Commit(FSelectedIndex).Sha;
 End;
 
-Function TGitGraphForm.ScrollOffset: Integer;
+Function TManageRepositoryForm.ScrollOffset: Integer;
 Begin
   Result := FScrollBar.Position;
 End;
 
-Procedure TGitGraphForm.StopIndexThread;
+Procedure TManageRepositoryForm.StopIndexThread;
 Begin
   If Assigned(FIndexThread) Then
     Begin
@@ -566,7 +566,7 @@ Begin
   FIndexing := False;
 End;
 
-Procedure TGitGraphForm.StopDetailThread;
+Procedure TManageRepositoryForm.StopDetailThread;
 Begin
   If Assigned(FDetailThread) Then
     Begin
@@ -577,7 +577,7 @@ Begin
   FDetailLoading := False;
 End;
 
-Procedure TGitGraphForm.StartIndexLoad;
+Procedure TManageRepositoryForm.StartIndexLoad;
 Begin
   If FRepoPath = '' Then
     Exit;
@@ -589,7 +589,7 @@ Begin
   FIndexThread.Start;
 End;
 
-Procedure TGitGraphForm.ApplyIndexLoaded;
+Procedure TManageRepositoryForm.ApplyIndexLoaded;
 Var
   Parsed: Integer;
 Begin
@@ -623,7 +623,7 @@ Begin
   WorkflowLogger.Info('GitGraph', Format('Indexed %d commits', [Parsed]));
 End;
 
-Procedure TGitGraphForm.ApplyDetailsLoaded;
+Procedure TManageRepositoryForm.ApplyDetailsLoaded;
 Begin
   FDetailLoading := False;
   If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
@@ -640,7 +640,7 @@ Begin
   ScheduleVisibleDetails;
 End;
 
-Procedure TGitGraphForm.GetVisibleRange(Out FirstRow, LastRow: Integer);
+Procedure TManageRepositoryForm.GetVisibleRange(Out FirstRow, LastRow: Integer);
 Var
   ViewH: Integer;
 Begin
@@ -659,7 +659,7 @@ Begin
     LastRow := FModel.Count - 1;
 End;
 
-Procedure TGitGraphForm.ScheduleVisibleDetails;
+Procedure TManageRepositoryForm.ScheduleVisibleDetails;
 Begin
   If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
     Exit;
@@ -668,13 +668,13 @@ Begin
   FDetailTimer.Enabled := True;
 End;
 
-Procedure TGitGraphForm.DetailTimerTimer(Sender: TObject);
+Procedure TManageRepositoryForm.DetailTimerTimer(Sender: TObject);
 Begin
   FDetailTimer.Enabled := False;
   StartDetailLoadIfNeeded;
 End;
 
-Procedure TGitGraphForm.StartDetailLoadIfNeeded;
+Procedure TManageRepositoryForm.StartDetailLoadIfNeeded;
 Var
   First, Last: Integer;
   Shas: TStringList;
@@ -698,7 +698,7 @@ Begin
   FDetailThread.Start;
 End;
 
-Procedure TGitGraphForm.UpdateScrollRange;
+Procedure TManageRepositoryForm.UpdateScrollRange;
 Var
   ViewH, ContentH, MaxPos: Integer;
 Begin
@@ -720,20 +720,20 @@ Begin
   FScrollBar.Enabled := MaxPos > 0;
 End;
 
-Procedure TGitGraphForm.GraphHostResize(Sender: TObject);
+Procedure TManageRepositoryForm.GraphHostResize(Sender: TObject);
 Begin
   UpdateScrollRange;
   ScheduleVisibleDetails;
   FPaintBox.Invalidate;
 End;
 
-Procedure TGitGraphForm.ScrollBarChange(Sender: TObject);
+Procedure TManageRepositoryForm.ScrollBarChange(Sender: TObject);
 Begin
   ScheduleVisibleDetails;
   FPaintBox.Invalidate;
 End;
 
-Procedure TGitGraphForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
+Procedure TManageRepositoryForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
   WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
 Var
   NewPos, MaxPos, ViewH: Integer;
@@ -752,17 +752,17 @@ Begin
   Handled := True;
 End;
 
-Function TGitGraphForm.LaneX(Lane: Integer): Integer;
+Function TManageRepositoryForm.LaneX(Lane: Integer): Integer;
 Begin
   Result := GitGraphLeftMargin + Lane * GitGraphLaneWidth + GitGraphLaneWidth Div 2;
 End;
 
-Function TGitGraphForm.RowMidY(Row: Integer): Integer;
+Function TManageRepositoryForm.RowMidY(Row: Integer): Integer;
 Begin
   Result := Row * GitGraphRowHeight + GitGraphRowHeight Div 2 - ScrollOffset;
 End;
 
-Function TGitGraphForm.RowAtY(Y: Integer): Integer;
+Function TManageRepositoryForm.RowAtY(Y: Integer): Integer;
 Begin
   If FModel.Count = 0 Then
     Result := -1
@@ -774,7 +774,7 @@ Begin
     End;
 End;
 
-Function TGitGraphForm.FormatCommitDate(Const CommitTime: Int64): String;
+Function TManageRepositoryForm.FormatCommitDate(Const CommitTime: Int64): String;
 Begin
   If CommitTime <= 0 Then
     Result := '…'
@@ -782,7 +782,7 @@ Begin
     Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(CommitTime));
 End;
 
-Procedure TGitGraphForm.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
+Procedure TManageRepositoryForm.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
 Type
   TRefKind = (rkLocal, rkRemote, rkTag, rkOther);
 Var
@@ -904,7 +904,7 @@ Begin
   End;
 End;
 
-Procedure TGitGraphForm.PaintBoxPaint(Sender: TObject);
+Procedure TManageRepositoryForm.PaintBoxPaint(Sender: TObject);
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW: Integer;
   C: TGitCommitRec;
@@ -1004,7 +1004,7 @@ Begin
     End;
 End;
 
-Procedure TGitGraphForm.PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
+Procedure TManageRepositoryForm.PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 Var
   Row: Integer;
@@ -1017,7 +1017,7 @@ Begin
     { PopupMenu on the paintbox will show automatically when assigned. };
 End;
 
-Procedure TGitGraphForm.ShowCommitDetails(Index: Integer);
+Procedure TManageRepositoryForm.ShowCommitDetails(Index: Integer);
 Var
   C: TGitCommitRec;
   When: TDateTime;
@@ -1066,7 +1066,7 @@ Begin
   FDiffView.LoadPlainText(Copy(C.Sha, 1, 7), Header);
 End;
 
-Procedure TGitGraphForm.PagesChange(Sender: TObject);
+Procedure TManageRepositoryForm.PagesChange(Sender: TObject);
 Begin
   If Not Assigned(FPages) Then
     Exit;
@@ -1084,7 +1084,7 @@ Begin
     End;
 End;
 
-Function TGitGraphForm.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
+Function TManageRepositoryForm.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
 Var
   X, Y: Char;
 Begin
@@ -1112,7 +1112,7 @@ Begin
     Result := 'clean';
 End;
 
-Function TGitGraphForm.FileStatusPassesFilter(Const StatusText: String): Boolean;
+Function TManageRepositoryForm.FileStatusPassesFilter(Const StatusText: String): Boolean;
 Begin
   { Optional categories are hidden unless their filter checkbox is checked. }
   If StatusText = 'untracked' Then
@@ -1125,7 +1125,7 @@ Begin
     Result := True;
 End;
 
-Procedure TGitGraphForm.RefreshFilesList;
+Procedure TManageRepositoryForm.RefreshFilesList;
 Var
   AllFiles, StatusMap, FullyStaged: TStringList;
   Entries: TGitStatusEntryArray;
@@ -1255,7 +1255,7 @@ Begin
   UpdateStageButtonsEnabled;
 End;
 
-Function TGitGraphForm.ListHasSelection(List: TListBox): Boolean;
+Function TManageRepositoryForm.ListHasSelection(List: TListBox): Boolean;
 Var
   I: Integer;
 Begin
@@ -1270,7 +1270,7 @@ Begin
       End;
 End;
 
-Procedure TGitGraphForm.UpdateStageButtonsEnabled;
+Procedure TManageRepositoryForm.UpdateStageButtonsEnabled;
 Var
   CanPreviewAction: Boolean;
 Begin
@@ -1294,7 +1294,7 @@ Begin
     End;
 End;
 
-Procedure TGitGraphForm.UpdateCommitEnabled;
+Procedure TManageRepositoryForm.UpdateCommitEnabled;
 Var
   CanCommit: Boolean;
 Begin
@@ -1304,7 +1304,7 @@ Begin
     FBtnCommit.Enabled := CanCommit;
 End;
 
-Function TGitGraphForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
+Function TManageRepositoryForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
 Var
   I: Integer;
 Begin
@@ -1318,7 +1318,7 @@ Begin
       Result.Add(Paths[I]);
 End;
 
-Procedure TGitGraphForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
+Procedure TManageRepositoryForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
 Var
   I: Integer;
   DiffText, Path, Title, Content: String;
@@ -1364,7 +1364,7 @@ Begin
       End;
 End;
 
-Procedure TGitGraphForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
   { Keep multi-select on this list; only clear the other list's selection. }
   If Assigned(FStagedList) And ListHasSelection(FStagedList) Then
@@ -1373,12 +1373,12 @@ Begin
   UpdateStageButtonsEnabled;
 End;
 
-Procedure TGitGraphForm.FilesListDblClick(Sender: TObject);
+Procedure TManageRepositoryForm.FilesListDblClick(Sender: TObject);
 Begin
   BtnStageClick(Sender);
 End;
 
-Procedure TGitGraphForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TManageRepositoryForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
   If Assigned(FFilesList) And ListHasSelection(FFilesList) Then
     FFilesList.ClearSelection;
@@ -1386,17 +1386,17 @@ Begin
   UpdateStageButtonsEnabled;
 End;
 
-Procedure TGitGraphForm.StagedListDblClick(Sender: TObject);
+Procedure TManageRepositoryForm.StagedListDblClick(Sender: TObject);
 Begin
   BtnUnstageClick(Sender);
 End;
 
-Procedure TGitGraphForm.FileFilterChange(Sender: TObject);
+Procedure TManageRepositoryForm.FileFilterChange(Sender: TObject);
 Begin
   RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.BtnIgnoreFilesClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnIgnoreFilesClick(Sender: TObject);
 Begin
   If FRepoPath = '' Then
     Begin
@@ -1407,7 +1407,7 @@ Begin
     RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.BtnStageClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnStageClick(Sender: TObject);
 Var
   Paths: TStringList;
 Begin
@@ -1429,7 +1429,7 @@ Begin
   End;
 End;
 
-Procedure TGitGraphForm.BtnUnstageClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnUnstageClick(Sender: TObject);
 Var
   Paths: TStringList;
 Begin
@@ -1451,7 +1451,7 @@ Begin
   End;
 End;
 
-Procedure TGitGraphForm.BtnStageAllClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnStageAllClick(Sender: TObject);
 Begin
   If Not Assigned(GitClient) Or (FRepoPath = '') Then
     Exit;
@@ -1461,7 +1461,7 @@ Begin
   RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.BtnStageSelectionClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnStageSelectionClick(Sender: TObject);
 Begin
   If Not Assigned(FFilesDiffView) Then
     Exit;
@@ -1476,27 +1476,27 @@ Begin
     FFilesDiffView.StageSelection;
 End;
 
-Procedure TGitGraphForm.BtnRefreshFilesClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnRefreshFilesClick(Sender: TObject);
 Begin
   RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.MessageChange(Sender: TObject);
+Procedure TManageRepositoryForm.MessageChange(Sender: TObject);
 Begin
   UpdateCommitEnabled;
 End;
 
-Procedure TGitGraphForm.FilesDiffStatusChanged(Sender: TObject);
+Procedure TManageRepositoryForm.FilesDiffStatusChanged(Sender: TObject);
 Begin
   RefreshFilesList;
 End;
 
-Procedure TGitGraphForm.FilesDiffSelectionChanged(Sender: TObject);
+Procedure TManageRepositoryForm.FilesDiffSelectionChanged(Sender: TObject);
 Begin
   UpdateStageButtonsEnabled;
 End;
 
-Procedure TGitGraphForm.BtnCommitClick(Sender: TObject);
+Procedure TManageRepositoryForm.BtnCommitClick(Sender: TObject);
 Var
   NewSha, Msg: String;
   Summary: TGitTransferSummary;
@@ -1560,7 +1560,7 @@ Begin
   ManualRefresh;
 End;
 
-Procedure TGitGraphForm.RemotesActionExecute(Sender: TObject);
+Procedure TManageRepositoryForm.RemotesActionExecute(Sender: TObject);
 Begin
   If FRepoPath = '' Then
     Begin
@@ -1571,7 +1571,7 @@ Begin
   ManualRefresh;
 End;
 
-Procedure TGitGraphForm.FetchActionExecute(Sender: TObject);
+Procedure TManageRepositoryForm.FetchActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
   Ok: Boolean;
@@ -1594,7 +1594,7 @@ Begin
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
-Procedure TGitGraphForm.PullActionExecute(Sender: TObject);
+Procedure TManageRepositoryForm.PullActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
   Ok: Boolean;
@@ -1617,7 +1617,7 @@ Begin
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
-Procedure TGitGraphForm.PushActionExecute(Sender: TObject);
+Procedure TManageRepositoryForm.PushActionExecute(Sender: TObject);
 Var
   Summary: TGitTransferSummary;
   Ok: Boolean;
@@ -1640,7 +1640,7 @@ Begin
     MessageDlg(Summary.Message, mtError, [mbOK], 0);
 End;
 
-Procedure TGitGraphForm.PopupCopySha(Sender: TObject);
+Procedure TManageRepositoryForm.PopupCopySha(Sender: TObject);
 Var
   Sha: String;
 Begin
@@ -1649,13 +1649,13 @@ Begin
     Clipboard.AsText := Sha;
 End;
 
-Procedure TGitGraphForm.PopupShowCommit(Sender: TObject);
+Procedure TManageRepositoryForm.PopupShowCommit(Sender: TObject);
 Begin
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex);
 End;
 
-Procedure TGitGraphForm.PopupCheckout(Sender: TObject);
+Procedure TManageRepositoryForm.PopupCheckout(Sender: TObject);
 Var
   Sha: String;
 Begin
@@ -1672,7 +1672,7 @@ Begin
     MessageDlg('Checkout failed. See the log for details.', mtError, [mbOK], 0);
 End;
 
-Procedure TGitGraphForm.PopupCreateBranch(Sender: TObject);
+Procedure TManageRepositoryForm.PopupCreateBranch(Sender: TObject);
 Var
   Sha, BranchName: String;
 Begin
@@ -1695,14 +1695,14 @@ Begin
     MessageDlg('Create branch failed. See the log for details.', mtError, [mbOK], 0);
 End;
 
-Procedure TGitGraphForm.AutoRefreshTimerTimer(Sender: TObject);
+Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
   If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or Not Visible Then
     Exit;
   QuietRefreshIfChanged;
 End;
 
-Procedure TGitGraphForm.QuietRefreshIfChanged;
+Procedure TManageRepositoryForm.QuietRefreshIfChanged;
 Var
   Branch, Sha, Porcelain: String;
   Clean: Boolean;
@@ -1735,7 +1735,7 @@ Begin
     End;
 End;
 
-Procedure TGitGraphForm.UpdateStatus;
+Procedure TManageRepositoryForm.UpdateStatus;
 Var
   LeftText, CentreText, RightText: String;
   ShortSha: String;
@@ -1777,7 +1777,7 @@ Begin
   FStatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
-Procedure TGitGraphForm.RefreshRepositoryInfo;
+Procedure TManageRepositoryForm.RefreshRepositoryInfo;
 Var
   Branch, Sha, Porcelain: String;
   Clean: Boolean;
@@ -1797,7 +1797,7 @@ Begin
     FClean := Clean;
 End;
 
-Procedure TGitGraphForm.BindRepository(Const StartPath: String);
+Procedure TManageRepositoryForm.BindRepository(Const StartPath: String);
 Var
   SearchPath, Found: String;
 Begin
@@ -1819,7 +1819,7 @@ Begin
   SetRepository(Found);
 End;
 
-Procedure TGitGraphForm.SetRepository(Const ARepoPath: String);
+Procedure TManageRepositoryForm.SetRepository(Const ARepoPath: String);
 Begin
   If csDestroying in ComponentState Then
     Exit;
@@ -1852,13 +1852,13 @@ Begin
   ApplyConfig;
 End;
 
-Procedure TGitGraphForm.RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
+Procedure TManageRepositoryForm.RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
 Begin
   If SameText(RepoPath, FRepoPath) Then
     BindRepository(FRepoPath);
 End;
 
-Procedure TGitGraphForm.WorkingTreeChanged(Const RepoPath: String);
+Procedure TManageRepositoryForm.WorkingTreeChanged(Const RepoPath: String);
 Begin
   If SameText(RepoPath, FRepoPath) Then
     Begin
@@ -1869,13 +1869,13 @@ Begin
     End;
 End;
 
-Procedure TGitGraphForm.HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
+Procedure TManageRepositoryForm.HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
 Begin
   If SameText(RepoPath, FRepoPath) Then
     BindRepository(FRepoPath);
 End;
 
-Procedure TGitGraphForm.RemoteUpdated(Const RepoPath: String; Const RemoteName: String);
+Procedure TManageRepositoryForm.RemoteUpdated(Const RepoPath: String; Const RemoteName: String);
 Begin
   If SameText(RepoPath, FRepoPath) Then
     FStatusFooter.SetRightText('Remote ' + RemoteName + ' updated');

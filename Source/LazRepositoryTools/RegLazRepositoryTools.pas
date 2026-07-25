@@ -18,7 +18,7 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  GitManagerMain;
+  RepositoryManagerMain;
 
 Procedure Register;
 Begin
