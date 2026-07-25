@@ -106,7 +106,7 @@ Begin
           WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
         End;
     End;
-  RefreshOpenGitGraphForms;
+  RefreshOpenManageRepositoryForms;
   UpdateRepositoryMenuState;
 End;
 
@@ -117,7 +117,7 @@ Begin
     was a source of access violations after browsing the Manage window. }
   If Assigned(GitClient) Then
     GitClient.RepoPath := '';
-  ClearOpenGitGraphForms;
+  ClearOpenManageRepositoryForms;
   UpdateRepositoryMenuState;
 End;
 
@@ -164,7 +164,7 @@ Begin
       MessageDlg('Repository initialised at:' + LineEnding + ChosenPath, mtInformation, [mbOK], 0);
       UpdateRepositoryMenuState;
       ShowManageRepository(Sender);
-      RefreshOpenGitGraphForms;
+      RefreshOpenManageRepositoryForms;
     End
   Else
     MessageDlg('Failed to initialise repository: ' + GitClient.LastError, mtError, [mbOK], 0);
@@ -206,7 +206,7 @@ End;
 Procedure DoRepositorySettings(Sender: TObject);
 Begin
   ShowGitSettingsForm;
-  ApplyGitConfigToOpenForms;
+  ApplyRepositoryConfigToOpenForms;
 End;
 
 Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;

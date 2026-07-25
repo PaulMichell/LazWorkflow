@@ -175,9 +175,9 @@ Type
     Property RepoPath: String Read FRepoPath;
   End;
 
-Procedure RefreshOpenGitGraphForms;
-Procedure ClearOpenGitGraphForms;
-Procedure ApplyGitConfigToOpenForms;
+Procedure RefreshOpenManageRepositoryForms;
+Procedure ClearOpenManageRepositoryForms;
+Procedure ApplyRepositoryConfigToOpenForms;
 
 Implementation
 
@@ -301,7 +301,7 @@ Begin
   End;
 End;
 
-Procedure RefreshOpenGitGraphForms;
+Procedure RefreshOpenManageRepositoryForms;
 Var
   I: Integer;
   Form: TCustomForm;
@@ -314,7 +314,7 @@ Begin
     End;
 End;
 
-Procedure ClearOpenGitGraphForms;
+Procedure ClearOpenManageRepositoryForms;
 Var
   I: Integer;
   Form: TCustomForm;
@@ -327,7 +327,7 @@ Begin
     End;
 End;
 
-Procedure ApplyGitConfigToOpenForms;
+Procedure ApplyRepositoryConfigToOpenForms;
 Var
   I: Integer;
   Form: TCustomForm;
@@ -430,12 +430,12 @@ Begin
   UpdateCommitEnabled;
   UpdateStageButtonsEnabled;
 
-  WorkflowLogger.Info('GitGraph', 'Manage Repository window created');
+  WorkflowLogger.Info('ManageRepository', 'Manage Repository window created');
 End;
 
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
 Begin
-  WorkflowLogger.Info('GitGraph', 'Manage Repository window destroyed');
+  WorkflowLogger.Info('ManageRepository', 'Manage Repository window destroyed');
 End;
 
 Procedure TManageRepositoryForm.FormShow(Sender: TObject);
@@ -457,7 +457,7 @@ Procedure TManageRepositoryForm.ManualRefresh;
 Begin
   { Prefer the path already bound to this window so Fetch/Pull/Push always
     re-index the same repository instead of rediscovering from the IDE. }
-  WorkflowLogger.Info('GitGraph', 'Manual refresh');
+  WorkflowLogger.Info('ManageRepository', 'Manual refresh');
   If FRepoPath <> '' Then
     SetRepository(FRepoPath)
   Else
@@ -605,7 +605,7 @@ Begin
     Begin
       If Assigned(FStatusFooter) Then
         FStatusFooter.SetRightText('Index failed');
-      WorkflowLogger.Warning('GitGraph', 'rev-list failed for ' + FRepoPath);
+      WorkflowLogger.Warning('ManageRepository', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
 
@@ -625,7 +625,7 @@ Begin
   If Assigned(FPaintBox) Then
     FPaintBox.Invalidate;
   ScheduleVisibleDetails;
-  WorkflowLogger.Info('GitGraph', Format('Indexed %d commits', [Parsed]));
+  WorkflowLogger.Info('ManageRepository', Format('Indexed %d commits', [Parsed]));
 End;
 
 Procedure TManageRepositoryForm.ApplyDetailsLoaded;
@@ -1536,7 +1536,7 @@ Begin
     Screen.Cursor := crDefault;
   End;
 
-  WorkflowLogger.Info('GitGraph', 'Created commit ' + NewSha);
+  WorkflowLogger.Info('ManageRepository', 'Created commit ' + NewSha);
   If Assigned(FMessageMemo) Then
     FMessageMemo.Clear;
   MessageDlg('Committed ' + Copy(NewSha, 1, 7) + '.', mtInformation, [mbOK], 0);
@@ -1732,7 +1732,7 @@ Begin
 
   If NeedReload Then
     Begin
-      WorkflowLogger.Debug('GitGraph', 'Auto-refresh: repository changed');
+      WorkflowLogger.Debug('ManageRepository', 'Auto-refresh: repository changed');
       ManualRefresh;
     End
   Else
@@ -1820,9 +1820,9 @@ Begin
     Found := GitClient.DetectRepository(SearchPath);
 
   If Found <> '' Then
-    WorkflowLogger.Info('GitGraph', 'Bound repository: ' + Found)
+    WorkflowLogger.Info('ManageRepository', 'Bound repository: ' + Found)
   Else
-    WorkflowLogger.Warning('GitGraph', 'No repository found from: ' + SearchPath);
+    WorkflowLogger.Warning('ManageRepository', 'No repository found from: ' + SearchPath);
 
   SetRepository(Found);
 End;
