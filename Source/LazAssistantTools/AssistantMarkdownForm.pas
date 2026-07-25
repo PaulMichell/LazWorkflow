@@ -349,7 +349,13 @@ Begin
   Preview := TMarkDownControl(FPreview);
   Preview.MarkDown.BeginUpdate;
   Try
-    Preview.MarkDown.Text := Body;
+    Try
+      Preview.MarkDown.Text := Body;
+    Except
+      { Leave an empty preview rather than a half-laid-out control. }
+      Preview.MarkDown.Text := '';
+      Raise;
+    End;
   Finally
     Preview.MarkDown.EndUpdate;
   End;
