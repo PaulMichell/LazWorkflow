@@ -62,10 +62,12 @@ Begin
     '[' +
     '{"type":"function","function":{' +
       '"name":"read_file",' +
-      '"description":"Read a text file from the active Lazarus project (or an absolute path under the project root).",' +
+      '"description":"Read a text file under the active Lazarus project. Use start_line/end_line to page large files; do not re-read from line 1 after a truncation notice.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative or absolute file path"},' +
-        '"max_chars":{"type":"integer","description":"Optional max characters to return"}' +
+        '"start_line":{"type":"integer","description":"1-based first line to include (default 1)"},' +
+        '"end_line":{"type":"integer","description":"1-based last line to include (default end of file or max_chars)"},' +
+        '"max_chars":{"type":"integer","description":"Optional max characters to return from the selected range"}' +
       '},"required":["path"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -206,9 +208,10 @@ End;
 
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Resolved: String;
-  MaxChars: Integer;
+  Path, Resolved, Chunk, LineText: String;
+  MaxChars, StartLine, EndLine, LastLine, I, FirstOut, LastOut: Integer;
   SL: TStringList;
+  Truncated: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -231,14 +234,67 @@ Begin
     MaxChars := AssistantToolMaxReadChars;
   If MaxChars > AssistantToolMaxReadChars Then
     MaxChars := AssistantToolMaxReadChars;
+  StartLine := JsonArgInt(ArgumentsJson, 'start_line', 1);
+  EndLine := JsonArgInt(ArgumentsJson, 'end_line', 0);
+  If StartLine < 1 Then
+    StartLine := 1;
   SL := TStringList.Create;
   Try
     Try
       SL.LoadFromFile(Resolved);
-      ResultText := SL.Text;
-      If Length(ResultText) > MaxChars Then
-        ResultText := Copy(ResultText, 1, MaxChars) + LineEnding +
-          Format('[… truncated at %d characters …]', [MaxChars]);
+      LastLine := SL.Count;
+      If LastLine < 1 Then
+        Begin
+          ResultText := Format('File: %s (empty, 0 lines)', [Resolved]);
+          Result := True;
+          Exit;
+        End;
+      If StartLine > LastLine Then
+        Begin
+          ErrorText := Format('start_line %d is past end of file (%d lines): %s',
+            [StartLine, LastLine, Resolved]);
+          Exit;
+        End;
+      If EndLine < 1 Then
+        EndLine := LastLine
+      Else If EndLine > LastLine Then
+        EndLine := LastLine;
+      If EndLine < StartLine Then
+        Begin
+          ErrorText := Format('end_line %d is before start_line %d.', [EndLine, StartLine]);
+          Exit;
+        End;
+      Chunk := '';
+      Truncated := False;
+      FirstOut := StartLine;
+      LastOut := StartLine - 1;
+      For I := StartLine To EndLine Do
+        Begin
+          LineText := SL[I - 1];
+          { +1 for the line ending we will append. }
+          If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
+            Begin
+              Truncated := True;
+              Break;
+            End;
+          If Length(Chunk) > 0 Then
+            Chunk := Chunk + LineEnding;
+          Chunk := Chunk + LineText;
+          LastOut := I;
+          If Length(Chunk) >= MaxChars Then
+            Begin
+              Truncated := True;
+              Break;
+            End;
+        End;
+      ResultText :=
+        Format('File: %s (%d lines total); lines %d–%d of requested %d–%d',
+          [Resolved, LastLine, FirstOut, LastOut, StartLine, EndLine]) + LineEnding +
+        Chunk;
+      If Truncated Or (LastOut < EndLine) Then
+        ResultText := ResultText + LineEnding + Format(
+          '[… truncated. Continue with start_line=%d (same path). Do not re-read from line 1. …]',
+          [LastOut + 1]);
       Result := True;
     Except
       On E: Exception Do

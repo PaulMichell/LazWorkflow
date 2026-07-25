@@ -597,7 +597,9 @@ End;
 
 Procedure TAssistantStreamThread.Execute;
 Const
-  MaxToolRounds = 4;
+  { One HTTP stream that ends with tool_calls counts as a round; allow multi-file
+    exploration without failing mid-answer on large units. }
+  MaxToolRounds = 12;
 Var
   Url, ErrorText, RequestJson: String;
   RoundNo: Integer;
@@ -638,7 +640,9 @@ Begin
         Break;
       RequestJson := FService.BuildNextRequestJson;
     End;
-  EmitSnapshots(True, 'Tool-call round limit reached.');
+  EmitSnapshots(True, Format(
+    'Tool-call round limit reached after %d rounds. Ask a more focused question or use start_line on read_file to page large files.',
+    [FToolRound]));
 End;
 
 { TAssistantService }
@@ -649,7 +653,9 @@ Begin
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
   FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE. ' +
-    'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown.';
+    'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown. ' +
+    'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
+    'Prefer the active editor context already in the user message when it includes the code under discussion.';
   FActiveSkill := '';
   FSystemPrompt := FBaseSystemPrompt;
   SetLength(FMessages, 0);
