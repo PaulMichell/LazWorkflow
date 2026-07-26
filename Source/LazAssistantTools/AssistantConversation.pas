@@ -1,6 +1,6 @@
-Unit AssistantHistory;
+Unit AssistantConversation;
 
-{ Project-local .assistant history: JSONL on disk, full turns cached in memory (c) 2026 Michell Computing. }
+{ Project-local .assistant conversation turns: JSONL on disk, full turns cached in memory (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,8 +15,8 @@ Uses
 Type
   TAssistantMode = (amChat, amPlan, amCode);
 
-  { Lightweight row for the history list (also lives in FIndex). }
-  THistoryIndexEntry = Class
+  { Lightweight row for the conversation turn list (also lives in FIndex). }
+  TConversationIndexEntry = Class
   Public
     Id: String;
     Mode: String;
@@ -30,8 +30,8 @@ Type
     TurnIndex: Integer; { index into the in-memory FTurns array }
   End;
 
-  { Display payload for a turn — only these fields are needed when stepping history. }
-  THistoryTurn = Record
+  { Display payload for a turn — only these fields are needed when stepping the conversation list. }
+  TConversationTurn = Record
     Id: String;
     Mode: String;
     Prompt: String;
@@ -49,25 +49,25 @@ Type
     TodoId: String;
   End;
 
-  TAssistantHistoryStore = Class
+  TAssistantConversationStore = Class
   Private
     FProjectRoot: String;
-    FIndex: TObjectList; { of THistoryIndexEntry }
-    FTurns: Array Of THistoryTurn; { full prompt/thinking/response cache }
+    FIndex: TObjectList; { of TConversationIndexEntry }
+    FTurns: Array Of TConversationTurn; { full prompt/thinking/response cache }
     FLastError: String;
     FLoaded: Boolean;
     Function AssistantDir: String;
-    Function HistoryPath: String;
+    Function ConversationPath: String;
     Function IndexPath: String;
     Function ConfigPath: String;
     Function EnsureDir: Boolean;
     Procedure ClearAll;
-    Function ParseTurnLine(Const Line: String; Out Turn: THistoryTurn): Boolean;
-    Function BuildTurnJson(Const Turn: THistoryTurn): String;
-    Function BuildIndexLine(Const Entry: THistoryIndexEntry; TurnIndex: Integer): String;
+    Function ParseTurnLine(Const Line: String; Out Turn: TConversationTurn): Boolean;
+    Function BuildTurnJson(Const Turn: TConversationTurn): String;
+    Function BuildIndexLine(Const Entry: TConversationIndexEntry; TurnIndex: Integer): String;
     Function PreviewOf(Const TextValue: String; MaxLen: Integer): String;
-    Function EntryFromTurn(Const Turn: THistoryTurn; FileOffset: Int64; TurnIndex: Integer): THistoryIndexEntry;
-    Function LoadHistoryFileIntoMemory: Boolean;
+    Function EntryFromTurn(Const Turn: TConversationTurn; FileOffset: Int64; TurnIndex: Integer): TConversationIndexEntry;
+    Function LoadConversationFileIntoMemory: Boolean;
     Procedure RewriteIndexFile;
   Public
     Constructor Create;
@@ -75,13 +75,13 @@ Type
     Procedure SetProjectRoot(Const RootPath: String);
     { Load index + full turns into memory once (disk I/O only here / on append). }
     Function Load: Boolean;
-    Function AppendTurn(Const Turn: THistoryTurn; Out Entry: THistoryIndexEntry): Boolean;
+    Function AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
     { O(1) memory access — no disk, no JSON parse. }
-    Function GetTurn(TurnIndex: Integer; Out Turn: THistoryTurn): Boolean;
+    Function GetTurn(TurnIndex: Integer; Out Turn: TConversationTurn): Boolean;
     Function GetTurnDisplay(TurnIndex: Integer; Out Prompt, Response, Thinking, ErrorText: String): Boolean;
     Function TurnCount: Integer;
     Function IndexCount: Integer;
-    Function IndexEntry(Index: Integer): THistoryIndexEntry;
+    Function IndexEntry(Index: Integer): TConversationIndexEntry;
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
     Property ProjectRoot: String Read FProjectRoot;
@@ -91,12 +91,12 @@ Type
 
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Function StrToAssistantMode(Const S: String): TAssistantMode;
-Function NewHistoryTurnId: String;
+Function NewConversationTurnId: String;
 Function IsoNowUtc: String;
 Function ProjectAssistantRoot: String;
 
 Var
-  ProjectAssistantHistory: TAssistantHistoryStore;
+  ProjectAssistantConversation: TAssistantConversationStore;
 
 Implementation
 
@@ -106,8 +106,8 @@ Uses
 Const
   PreviewMaxChars = 160;
   AssistantDirName = '.assistant';
-  HistoryFileName = 'history.jsonl';
-  IndexFileName = 'history.index.jsonl';
+  ConversationFileName = 'conversation.jsonl';
+  IndexFileName = 'conversation.index.jsonl';
   ConfigFileName = 'config.json';
 
 Function JsonEscape(Const S: String): String;
@@ -159,7 +159,7 @@ Begin
     Result := amChat;
 End;
 
-Function NewHistoryTurnId: String;
+Function NewConversationTurnId: String;
 Begin
   Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now) + '-' +
     IntToHex(Random($FFFF), 4) + IntToHex(Random($FFFF), 4);
@@ -206,7 +206,7 @@ Begin
   Result := NormalizeAssistantProjectRoot(Dir);
 End;
 
-Constructor TAssistantHistoryStore.Create;
+Constructor TAssistantConversationStore.Create;
 Begin
   Inherited Create;
   FProjectRoot := '';
@@ -216,21 +216,21 @@ Begin
   SetLength(FTurns, 0);
 End;
 
-Destructor TAssistantHistoryStore.Destroy;
+Destructor TAssistantConversationStore.Destroy;
 Begin
   FreeAndNil(FIndex);
   SetLength(FTurns, 0);
   Inherited Destroy;
 End;
 
-Procedure TAssistantHistoryStore.SetProjectRoot(Const RootPath: String);
+Procedure TAssistantConversationStore.SetProjectRoot(Const RootPath: String);
 Begin
   FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
   ClearAll;
   FLoaded := False;
 End;
 
-Function TAssistantHistoryStore.AssistantDir: String;
+Function TAssistantConversationStore.AssistantDir: String;
 Begin
   If FProjectRoot = '' Then
     Result := ''
@@ -238,22 +238,22 @@ Begin
     Result := FProjectRoot + AssistantDirName + PathDelim;
 End;
 
-Function TAssistantHistoryStore.HistoryPath: String;
+Function TAssistantConversationStore.ConversationPath: String;
 Begin
-  Result := AssistantDir + HistoryFileName;
+  Result := AssistantDir + ConversationFileName;
 End;
 
-Function TAssistantHistoryStore.IndexPath: String;
+Function TAssistantConversationStore.IndexPath: String;
 Begin
   Result := AssistantDir + IndexFileName;
 End;
 
-Function TAssistantHistoryStore.ConfigPath: String;
+Function TAssistantConversationStore.ConfigPath: String;
 Begin
   Result := AssistantDir + ConfigFileName;
 End;
 
-Function TAssistantHistoryStore.EnsureDir: Boolean;
+Function TAssistantConversationStore.EnsureDir: Boolean;
 Var
   Dir, Readme: String;
   SL: TStringList;
@@ -262,7 +262,7 @@ Begin
   FLastError := '';
   If FProjectRoot = '' Then
     Begin
-      FLastError := 'No project root for assistant history.';
+      FLastError := 'No project root for assistant conversation store.';
       Exit;
     End;
   Dir := ExcludeTrailingPathDelimiter(AssistantDir);
@@ -290,13 +290,13 @@ Begin
   Result := True;
 End;
 
-Procedure TAssistantHistoryStore.ClearAll;
+Procedure TAssistantConversationStore.ClearAll;
 Begin
   FIndex.Clear;
   SetLength(FTurns, 0);
 End;
 
-Function TAssistantHistoryStore.PreviewOf(Const TextValue: String; MaxLen: Integer): String;
+Function TAssistantConversationStore.PreviewOf(Const TextValue: String; MaxLen: Integer): String;
 Var
   S: String;
 Begin
@@ -310,7 +310,7 @@ Begin
     Result := Copy(S, 1, MaxLen - 1) + '…';
 End;
 
-Function TAssistantHistoryStore.BuildTurnJson(Const Turn: THistoryTurn): String;
+Function TAssistantConversationStore.BuildTurnJson(Const Turn: TConversationTurn): String;
 Begin
   Result := '{' +
     '"id":"' + JsonEscape(Turn.Id) + '",' +
@@ -331,7 +331,7 @@ Begin
     '}';
 End;
 
-Function TAssistantHistoryStore.BuildIndexLine(Const Entry: THistoryIndexEntry; TurnIndex: Integer): String;
+Function TAssistantConversationStore.BuildIndexLine(Const Entry: TConversationIndexEntry; TurnIndex: Integer): String;
 Begin
   Result := '{' +
     '"id":"' + JsonEscape(Entry.Id) + '",' +
@@ -347,10 +347,10 @@ Begin
     '}';
 End;
 
-Function TAssistantHistoryStore.EntryFromTurn(Const Turn: THistoryTurn; FileOffset: Int64;
-  TurnIndex: Integer): THistoryIndexEntry;
+Function TAssistantConversationStore.EntryFromTurn(Const Turn: TConversationTurn; FileOffset: Int64;
+  TurnIndex: Integer): TConversationIndexEntry;
 Begin
-  Result := THistoryIndexEntry.Create;
+  Result := TConversationIndexEntry.Create;
   Result.Id := Turn.Id;
   Result.Mode := Turn.Mode;
   Result.CreatedAt := Turn.CreatedAt;
@@ -363,7 +363,7 @@ Begin
   Result.TurnIndex := TurnIndex;
 End;
 
-Function TAssistantHistoryStore.ParseTurnLine(Const Line: String; Out Turn: THistoryTurn): Boolean;
+Function TAssistantConversationStore.ParseTurnLine(Const Line: String; Out Turn: TConversationTurn): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -418,18 +418,22 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.LoadHistoryFileIntoMemory: Boolean;
+Function TAssistantConversationStore.LoadConversationFileIntoMemory: Boolean;
 Var
   SL: TStringList;
   I, N: Integer;
-  Turn: THistoryTurn;
+  Turn: TConversationTurn;
   Offset: Int64;
-  Line: String;
-  Entry: THistoryIndexEntry;
+  Line, DataFile: String;
+  Entry: TConversationIndexEntry;
 Begin
   Result := False;
   ClearAll;
-  If Not FileExistsUTF8(HistoryPath) Then
+  DataFile := ConversationPath;
+  { Migrate early name history.jsonl → conversation.jsonl. }
+  If Not FileExistsUTF8(DataFile) And FileExistsUTF8(AssistantDir + 'history.jsonl') Then
+    DataFile := AssistantDir + 'history.jsonl';
+  If Not FileExistsUTF8(DataFile) Then
     Begin
       Result := True;
       Exit;
@@ -438,7 +442,7 @@ Begin
   Try
     Try
       { One bulk read + line split — far faster than per-byte seek. }
-      SL.LoadFromFile(HistoryPath);
+      SL.LoadFromFile(DataFile);
       Offset := 0;
       N := 0;
       SetLength(FTurns, SL.Count); { upper bound; trim later }
@@ -457,7 +461,7 @@ Begin
         End;
       SetLength(FTurns, N);
       Result := True;
-      WorkflowLogger.Info('AssistantHistory', Format('Cached %d turns in memory for %s',
+      WorkflowLogger.Info('AssistantConversation', Format('Cached %d turns in memory for %s',
         [N, FProjectRoot]));
     Except
       On E: Exception Do
@@ -471,11 +475,11 @@ Begin
   End;
 End;
 
-Procedure TAssistantHistoryStore.RewriteIndexFile;
+Procedure TAssistantConversationStore.RewriteIndexFile;
 Var
   SL: TStringList;
   I: Integer;
-  Entry: THistoryIndexEntry;
+  Entry: TConversationIndexEntry;
 Begin
   If Not EnsureDir Then
     Exit;
@@ -483,7 +487,7 @@ Begin
   Try
     For I := 0 To FIndex.Count - 1 Do
       Begin
-        Entry := THistoryIndexEntry(FIndex[I]);
+        Entry := TConversationIndexEntry(FIndex[I]);
         SL.Add(BuildIndexLine(Entry, Entry.TurnIndex));
       End;
     Try
@@ -497,7 +501,7 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.Load: Boolean;
+Function TAssistantConversationStore.Load: Boolean;
 Begin
   Result := False;
   FLastError := '';
@@ -506,7 +510,7 @@ Begin
     Exit;
   If Not EnsureDir Then
     Exit;
-  Result := LoadHistoryFileIntoMemory;
+  Result := LoadConversationFileIntoMemory;
   If Result Then
     Begin
       RewriteIndexFile;
@@ -514,7 +518,7 @@ Begin
     End;
 End;
 
-Function TAssistantHistoryStore.AppendTurn(Const Turn: THistoryTurn; Out Entry: THistoryIndexEntry): Boolean;
+Function TAssistantConversationStore.AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
 Var
   FS: TFileStream;
   Line: String;
@@ -532,10 +536,10 @@ Begin
   FS := Nil;
   Try
     Try
-      If FileExistsUTF8(HistoryPath) Then
-        FS := TFileStream.Create(HistoryPath, fmOpenReadWrite Or fmShareDenyWrite)
+      If FileExistsUTF8(ConversationPath) Then
+        FS := TFileStream.Create(ConversationPath, fmOpenReadWrite Or fmShareDenyWrite)
       Else
-        FS := TFileStream.Create(HistoryPath, fmCreate);
+        FS := TFileStream.Create(ConversationPath, fmCreate);
       FS.Seek(0, soEnd);
       Offset := FS.Position;
       If Length(Line) > 0 Then
@@ -577,7 +581,7 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.GetTurn(TurnIndex: Integer; Out Turn: THistoryTurn): Boolean;
+Function TAssistantConversationStore.GetTurn(TurnIndex: Integer; Out Turn: TConversationTurn): Boolean;
 Begin
   Result := False;
   Turn.Id := '';
@@ -604,10 +608,10 @@ Begin
   Result := True;
 End;
 
-Function TAssistantHistoryStore.GetTurnDisplay(TurnIndex: Integer;
+Function TAssistantConversationStore.GetTurnDisplay(TurnIndex: Integer;
   Out Prompt, Response, Thinking, ErrorText: String): Boolean;
 Var
-  Turn: THistoryTurn;
+  Turn: TConversationTurn;
 Begin
   Result := GetTurn(TurnIndex, Turn);
   If Not Result Then
@@ -624,25 +628,25 @@ Begin
   ErrorText := Turn.ErrorText;
 End;
 
-Function TAssistantHistoryStore.TurnCount: Integer;
+Function TAssistantConversationStore.TurnCount: Integer;
 Begin
   Result := Length(FTurns);
 End;
 
-Function TAssistantHistoryStore.IndexCount: Integer;
+Function TAssistantConversationStore.IndexCount: Integer;
 Begin
   Result := FIndex.Count;
 End;
 
-Function TAssistantHistoryStore.IndexEntry(Index: Integer): THistoryIndexEntry;
+Function TAssistantConversationStore.IndexEntry(Index: Integer): TConversationIndexEntry;
 Begin
   If (Index < 0) Or (Index >= FIndex.Count) Then
     Result := Nil
   Else
-    Result := THistoryIndexEntry(FIndex[Index]);
+    Result := TConversationIndexEntry(FIndex[Index]);
 End;
 
-Function TAssistantHistoryStore.SaveShowThinking(ShowThinking: Boolean): Boolean;
+Function TAssistantConversationStore.SaveShowThinking(ShowThinking: Boolean): Boolean;
 Var
   SL: TStringList;
 Begin
@@ -666,7 +670,7 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
+Function TAssistantConversationStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -700,10 +704,10 @@ End;
 Initialization
 
 Randomize;
-ProjectAssistantHistory := TAssistantHistoryStore.Create;
+ProjectAssistantConversation := TAssistantConversationStore.Create;
 
 Finalization
 
-FreeAndNil(ProjectAssistantHistory);
+FreeAndNil(ProjectAssistantConversation);
 
 End.

@@ -10,7 +10,7 @@ Unit AssistantTools;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantHistory;
+  Classes, SysUtils, AssistantConversation;
 
 Const
   AssistantToolMaxReadChars = 48000;

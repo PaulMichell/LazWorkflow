@@ -12,7 +12,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
-  IDEExternToolIntf, AssistantHistory;
+  IDEExternToolIntf, AssistantConversation;
 
 Type
   TAssistantChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
@@ -29,10 +29,10 @@ Type
     FTabChat: TTabSheet;
     FTabPlan: TTabSheet;
     FTabCode: TTabSheet;
-    FHistoryPanel: TPanel;
-    FHistoryLabel: TLabel;
-    FHistorySearch: TEdit;
-    FHistoryList: TListBox;
+    FConversationPanel: TPanel;
+    FConversationLabel: TLabel;
+    FConversationSearch: TEdit;
+    FConversationList: TListBox;
     FChatSplitter: TSplitter;
     FChatHost: TPanel;
     FPlanPlaceholder: TLabel;
@@ -52,9 +52,9 @@ Type
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure PagesChange(Sender: TObject);
-    Procedure HistorySearchChange(Sender: TObject);
-    Procedure HistoryListClick(Sender: TObject);
-    Procedure HistoryListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure ConversationSearchChange(Sender: TObject);
+    Procedure ConversationListClick(Sender: TObject);
+    Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
@@ -89,14 +89,14 @@ Type
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
     Procedure SetCurrentSystemNote(Const NoteText: String);
-    Procedure EnsureHistoryStore;
-    Procedure RefreshHistoryList;
-    Procedure ShowHistoryTurn(TurnIndex: Integer);
-    Procedure ShowLastHistoryTurn;
+    Procedure EnsureConversationStore;
+    Procedure RefreshConversationList;
+    Procedure ShowConversationTurn(TurnIndex: Integer);
+    Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
     Function CurrentModeFromTabs: TAssistantMode;
     Procedure ApplyActiveMode;
-    Function HistoryListTurnIndex(ListIndex: Integer): Integer;
+    Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
@@ -201,15 +201,15 @@ Begin
       FElapsedTimer.Interval := 250;
       FElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
-  EnsureHistoryStore;
+  EnsureConversationStore;
   RefreshFromConfig;
   UpdateStatusFooter;
   ApplyActiveMode;
   { Restore API conversation context without painting a "session loaded" banner. }
   RestoreSessionIfNeeded;
-  RefreshHistoryList;
-  { Always open on the latest history turn when present. }
-  ShowLastHistoryTurn;
+  RefreshConversationList;
+  { Always open on the latest conversation turn when present. }
+  ShowLastConversationTurn;
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
 End;
 
@@ -321,57 +321,57 @@ Begin
   ApplyActiveMode;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
     WorkflowLogger.Info('AssistantChat', 'Mode tab: ' + FPages.ActivePage.Caption);
-  RefreshHistoryList;
+  RefreshConversationList;
 End;
 
-Procedure TAssistantChatForm.EnsureHistoryStore;
+Procedure TAssistantChatForm.EnsureConversationStore;
 Var
   Root: String;
   ShowThinking: Boolean;
 Begin
-  If Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   Root := ProjectAssistantRoot;
   If Root = '' Then
     Exit;
-  If Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantHistory.ProjectRoot),
+  If Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot),
     ExcludeTrailingPathDelimiter(Root)) Then
     Begin
-      ProjectAssistantHistory.SetProjectRoot(Root);
-      ProjectAssistantHistory.Load; { one bulk parse into memory }
-      If ProjectAssistantHistory.LoadShowThinking(ShowThinking) Then
+      ProjectAssistantConversation.SetProjectRoot(Root);
+      ProjectAssistantConversation.Load; { one bulk parse into memory }
+      If ProjectAssistantConversation.LoadShowThinking(ShowThinking) Then
         Begin
           FShowThinking := ShowThinking;
           UpdateThinkingActionCaption;
         End;
     End
-  Else If Not ProjectAssistantHistory.Loaded Then
-    ProjectAssistantHistory.Load;
+  Else If Not ProjectAssistantConversation.Loaded Then
+    ProjectAssistantConversation.Load;
 End;
 
-Function TAssistantChatForm.HistoryListTurnIndex(ListIndex: Integer): Integer;
+Function TAssistantChatForm.ConversationListTurnIndex(ListIndex: Integer): Integer;
 Begin
   { Objects store TurnIndex+1 so index 0 is never stored as Nil. }
   Result := -1;
-  If Not Assigned(FHistoryList) Or (ListIndex < 0) Or (ListIndex >= FHistoryList.Items.Count) Then
+  If Not Assigned(FConversationList) Or (ListIndex < 0) Or (ListIndex >= FConversationList.Items.Count) Then
     Exit;
-  Result := Integer(PtrUInt(FHistoryList.Items.Objects[ListIndex]));
+  Result := Integer(PtrUInt(FConversationList.Items.Objects[ListIndex]));
   If Result > 0 Then
     Dec(Result)
   Else
     Result := -1;
 End;
 
-Procedure TAssistantChatForm.ShowHistoryTurn(TurnIndex: Integer);
+Procedure TAssistantChatForm.ShowConversationTurn(TurnIndex: Integer);
 Var
   Prompt, Response, Thinking, ErrorText: String;
 Begin
-  If Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  If Not ProjectAssistantHistory.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
+  If Not ProjectAssistantConversation.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
     Begin
-      WorkflowLogger.Warning('AssistantChat', 'ShowHistoryTurn failed idx=' + IntToStr(TurnIndex) +
-        ' ' + ProjectAssistantHistory.LastError);
+      WorkflowLogger.Warning('AssistantChat', 'ShowConversationTurn failed idx=' + IntToStr(TurnIndex) +
+        ' ' + ProjectAssistantConversation.LastError);
       Exit;
     End;
   FDisplayUser := Prompt;
@@ -385,18 +385,18 @@ Begin
   RefreshChatDisplay(True, False);
 End;
 
-Procedure TAssistantChatForm.ShowLastHistoryTurn;
+Procedure TAssistantChatForm.ShowLastConversationTurn;
 Var
   N: Integer;
 Begin
-  If Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(ProjectAssistantConversation) Then
     Begin
       RefreshChatDisplay(True, False);
       Exit;
     End;
-  N := ProjectAssistantHistory.TurnCount;
+  N := ProjectAssistantConversation.TurnCount;
   If N > 0 Then
-    ShowHistoryTurn(N - 1)
+    ShowConversationTurn(N - 1)
   Else
     Begin
       ClearCurrentTurnDisplay;
@@ -404,30 +404,30 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.RefreshHistoryList;
+Procedure TAssistantChatForm.RefreshConversationList;
 Var
   I, SeqNo, KeepTurnIndex: Integer;
-  Entry: THistoryIndexEntry;
+  Entry: TConversationIndexEntry;
   Filter, Line: String;
   ShowItem: Boolean;
   SelectIdx: Integer;
 Begin
-  If Not Assigned(FHistoryList) Or Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(FConversationList) Or Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  EnsureHistoryStore;
+  EnsureConversationStore;
   Filter := '';
-  If Assigned(FHistorySearch) Then
-    Filter := LowerCase(Trim(FHistorySearch.Text));
-  KeepTurnIndex := HistoryListTurnIndex(FHistoryList.ItemIndex);
+  If Assigned(FConversationSearch) Then
+    Filter := LowerCase(Trim(FConversationSearch.Text));
+  KeepTurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
   SelectIdx := -1;
-  FHistoryList.Items.BeginUpdate;
+  FConversationList.Items.BeginUpdate;
   Try
-    FHistoryList.Clear;
+    FConversationList.Clear;
     { Oldest first so new turns append at the bottom (grow down).
       Objects store TurnIndex+1 (never 0/Nil) for O(1) memory retrieval. }
-    For I := 0 To ProjectAssistantHistory.IndexCount - 1 Do
+    For I := 0 To ProjectAssistantConversation.IndexCount - 1 Do
       Begin
-        Entry := ProjectAssistantHistory.IndexEntry(I);
+        Entry := ProjectAssistantConversation.IndexEntry(I);
         If Not Assigned(Entry) Then
           Continue;
         SeqNo := I + 1;
@@ -441,64 +441,64 @@ Begin
             (Pos(Filter, LowerCase(Entry.Mode)) > 0);
         If ShowItem Then
           Begin
-            FHistoryList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
+            FConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
             If Entry.TurnIndex = KeepTurnIndex Then
-              SelectIdx := FHistoryList.Items.Count - 1;
+              SelectIdx := FConversationList.Items.Count - 1;
           End;
       End;
   Finally
-    FHistoryList.Items.EndUpdate;
+    FConversationList.Items.EndUpdate;
   End;
-  If FHistoryList.Items.Count > 0 Then
+  If FConversationList.Items.Count > 0 Then
     Begin
       If SelectIdx < 0 Then
-        SelectIdx := FHistoryList.Items.Count - 1;
-      FHistoryList.ItemIndex := SelectIdx;
-      FHistoryList.TopIndex := SelectIdx;
+        SelectIdx := FConversationList.Items.Count - 1;
+      FConversationList.ItemIndex := SelectIdx;
+      FConversationList.TopIndex := SelectIdx;
     End;
 End;
 
-Procedure TAssistantChatForm.HistorySearchChange(Sender: TObject);
+Procedure TAssistantChatForm.ConversationSearchChange(Sender: TObject);
 Begin
-  RefreshHistoryList;
+  RefreshConversationList;
 End;
 
-Procedure TAssistantChatForm.HistoryListClick(Sender: TObject);
+Procedure TAssistantChatForm.ConversationListClick(Sender: TObject);
 Begin
-  HistoryListSelectionChange(Sender, True);
+  ConversationListSelectionChange(Sender, True);
 End;
 
-Procedure TAssistantChatForm.HistoryListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TAssistantChatForm.ConversationListSelectionChange(Sender: TObject; User: Boolean);
 Var
   TurnIndex: Integer;
 Begin
   If FSending Then
     Exit;
-  If Not Assigned(FHistoryList) Or (FHistoryList.ItemIndex < 0) Then
+  If Not Assigned(FConversationList) Or (FConversationList.ItemIndex < 0) Then
     Exit;
-  TurnIndex := HistoryListTurnIndex(FHistoryList.ItemIndex);
+  TurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
   If TurnIndex < 0 Then
     Exit;
-  ShowHistoryTurn(TurnIndex);
+  ShowConversationTurn(TurnIndex);
 End;
 
 Procedure TAssistantChatForm.RecordCurrentTurn(Const ErrorText: String);
 Var
-  Turn: THistoryTurn;
-  Entry: THistoryIndexEntry;
+  Turn: TConversationTurn;
+  Entry: TConversationIndexEntry;
   DurationMs: Integer;
 Begin
-  If Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  EnsureHistoryStore;
-  If ProjectAssistantHistory.ProjectRoot = '' Then
+  EnsureConversationStore;
+  If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
   If (Trim(FDisplayUser) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
     Exit;
   DurationMs := 0;
   If FStreamStart > 0 Then
     DurationMs := Round((Now - FStreamStart) * 24 * 60 * 60 * 1000);
-  Turn.Id := NewHistoryTurnId;
+  Turn.Id := NewConversationTurnId;
   Turn.Mode := AssistantModeToStr(FActiveMode);
   Turn.Prompt := FDisplayUser;
   Turn.Thinking := FAssistantThinking;
@@ -518,18 +518,18 @@ Begin
   Turn.ErrorText := ErrorText;
   Turn.PlanFile := '';
   Turn.TodoId := '';
-  If ProjectAssistantHistory.AppendTurn(Turn, Entry) Then
-    RefreshHistoryList
+  If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
+    RefreshConversationList
   Else
-    WorkflowLogger.Warning('AssistantChat', 'History append failed: ' + ProjectAssistantHistory.LastError);
+    WorkflowLogger.Warning('AssistantChat', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
 End;
 
 Procedure TAssistantChatForm.ToggleThinkingActionExecute(Sender: TObject);
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
-  If Assigned(ProjectAssistantHistory) And (ProjectAssistantHistory.ProjectRoot <> '') Then
-    ProjectAssistantHistory.SaveShowThinking(FShowThinking);
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    ProjectAssistantConversation.SaveShowThinking(FShowThinking);
   RefreshChatDisplay(True);
 End;
 
@@ -667,7 +667,7 @@ Begin
     Exit;
   FSessionProjectKey := Key;
   { Load messages for the model only — do not replace the chat pane with a banner.
-    The visible turn comes from history (ShowLastHistoryTurn). }
+    The visible turn comes from conversation (ShowLastConversationTurn). }
   If LoadProjectChatSession(FTranscript, LoadedContext) Then
     Begin
       FContextUsed := LoadedContext;
@@ -757,7 +757,7 @@ Begin
   Try
     View.MarkDown.BeginUpdate;
     Try
-      { Force a content change so the control always re-parses when stepping history. }
+      { Force a content change so the control always re-parses when stepping conversation. }
       If View.MarkDown.Text = Body Then
         View.MarkDown.Text := Body + ' '
       Else
@@ -766,6 +766,17 @@ Begin
     Finally
       View.MarkDown.EndUpdate;
     End;
+    { TMarkDownControl can leave a stale paint until mouse-move; force layout + full repaint. }
+    View.CalcLayout;
+    View.Invalidate;
+    View.Repaint;
+    View.Update;
+    If Assigned(FChatHost) Then
+      Begin
+        FChatHost.Invalidate;
+        FChatHost.Repaint;
+        FChatHost.Update;
+      End;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('AssistantChat', 'Chat Markdown render failed: ' + E.Message);
@@ -774,6 +785,13 @@ Begin
     ScrollChatToEnd
   Else
     ScrollChatToTop;
+  { Second pass after scroll so the exposed region is painted immediately. }
+  If Assigned(View) Then
+    Begin
+      View.Invalidate;
+      View.Repaint;
+      View.Update;
+    End;
 End;
 
 Function TAssistantChatForm.RoleHeading(Const Role: String): String;

@@ -10,7 +10,7 @@ Unit AssistantService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantHistory;
+  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);

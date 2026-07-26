@@ -82,8 +82,8 @@
         <UnitName Value="AssistantTools"/>
       </Item15>
       <Item16>
-        <Filename Value="../Source/LazAssistantTools/AssistantHistory.pas"/>
-        <UnitName Value="AssistantHistory"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantConversation.pas"/>
+        <UnitName Value="AssistantConversation"/>
       </Item16>
     </Files>
     <RequiredPkgs Count="4">
