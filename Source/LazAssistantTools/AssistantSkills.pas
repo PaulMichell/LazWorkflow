@@ -149,10 +149,18 @@ Begin
   End;
 End;
 
+Var
+  { In-process skill body cache — avoids disk on every prompt. }
+  SkillCacheName: String;
+  SkillCacheFile: String;
+  SkillCacheAge: LongInt;
+  SkillCacheBody: String;
+
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Var
   SkillFile, Raw: String;
   SL: TStringList;
+  Age: LongInt;
 Begin
   Result := False;
   BodyText := '';
@@ -166,6 +174,14 @@ Begin
   If Not FileExists(SkillFile) Then
     Begin
       ErrorText := 'Skill not found: ' + SkillName;
+      Exit;
+    End;
+  Age := FileAge(SkillFile);
+  If SameText(SkillCacheName, SkillName) And SameFileName(SkillCacheFile, SkillFile) And
+    (SkillCacheAge = Age) And (SkillCacheBody <> '') Then
+    Begin
+      BodyText := SkillCacheBody;
+      Result := True;
       Exit;
     End;
   SL := TStringList.Create;
@@ -194,7 +210,14 @@ Begin
     End;
   Result := BodyText <> '';
   If Not Result Then
-    ErrorText := 'Skill file is empty: ' + SkillName;
+    ErrorText := 'Skill file is empty: ' + SkillName
+  Else
+    Begin
+      SkillCacheName := SkillName;
+      SkillCacheFile := SkillFile;
+      SkillCacheAge := Age;
+      SkillCacheBody := BodyText;
+    End;
 End;
 
 Function BuildSystemPromptWithSkill(Const BasePrompt, SkillName: String): String;
@@ -221,5 +244,12 @@ Begin
     Body + LineEnding +
     '----- end user skill: ' + SkillName + ' -----';
 End;
+
+Initialization
+
+SkillCacheName := '';
+SkillCacheFile := '';
+SkillCacheAge := -1;
+SkillCacheBody := '';
 
 End.

@@ -21,6 +21,9 @@ Type
     ToolCallId: String;
     { When set on an assistant message, raw OpenAI tool_calls JSON array. }
     ToolCallsJson: String;
+    { Cached JSON-escaped fields so request rebuild is not O(n) re-escape every send. }
+    ContentEscaped: String;
+    ToolCallIdEscaped: String;
   End;
 
   TAssistantToolCall = Record
@@ -48,8 +51,16 @@ Type
     FStreamThread: TThread;
     FBusy: Boolean;
     FActiveMode: TAssistantMode;
+    FSystemPromptEscaped: String;
+    FToolsJsonCache: String;
+    FToolsJsonMode: TAssistantMode;
+    FToolsJsonValid: Boolean;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
+    Function EscapedContent(Var Msg: TAssistantMessage): String;
+    Function EscapedToolCallId(Var Msg: TAssistantMessage): String;
+    Function ToolsJsonCached: String;
+    Function BuildRequestJson: String;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -172,51 +183,6 @@ Begin
           Result := Result + C;
       End;
     End;
-End;
-
-Function BuildChatRequestJson(Const Model, SystemPrompt: String;
-  Const Messages: Array Of TAssistantMessage; Const ToolsJson: String): String;
-Var
-  I: Integer;
-  MsgJson, Joined: String;
-  HasSystem: Boolean;
-  ContentField: String;
-Begin
-  { Do not use TStringList.DelimitedText — QuoteChar wraps each part in extra "…"
-    and produces invalid nested JSON (xAI returns HTTP 422). }
-  Joined := '';
-  HasSystem := False;
-  If Trim(SystemPrompt) <> '' Then
-    Begin
-      Joined := Format('{"role":"system","content":"%s"}', [JsonEscape(SystemPrompt)]);
-      HasSystem := True;
-    End;
-  For I := 0 To High(Messages) Do
-    Begin
-      If (Messages[I].Role = amrSystem) And HasSystem Then
-        Continue;
-      If Messages[I].Role = amrTool Then
-        MsgJson := Format('{"role":"tool","tool_call_id":"%s","content":"%s"}',
-          [JsonEscape(Messages[I].ToolCallId), JsonEscape(Messages[I].Content)])
-      Else If Messages[I].ToolCallsJson <> '' Then
-        Begin
-          ContentField := Messages[I].Content;
-          MsgJson := Format('{"role":"assistant","content":"%s","tool_calls":%s}',
-            [JsonEscape(ContentField), Messages[I].ToolCallsJson]);
-        End
-      Else
-        MsgJson := Format('{"role":"%s","content":"%s"}',
-          [RoleToJson(Messages[I].Role), JsonEscape(Messages[I].Content)]);
-      If Joined <> '' Then
-        Joined := Joined + ',';
-      Joined := Joined + MsgJson;
-    End;
-  If Trim(ToolsJson) <> '' Then
-    Result := Format('{"model":"%s","stream":true,"messages":[%s],"tools":%s}',
-      [JsonEscape(Model), Joined, ToolsJson])
-  Else
-    Result := Format('{"model":"%s","stream":true,"messages":[%s]}',
-      [JsonEscape(Model), Joined]);
 End;
 
 { TAssistantSSEStream }
@@ -663,6 +629,10 @@ Begin
   FActiveSkill := '';
   FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
+  FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+  FToolsJsonCache := '';
+  FToolsJsonMode := amChat;
+  FToolsJsonValid := False;
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
@@ -671,12 +641,104 @@ End;
 
 Procedure TAssistantService.SetActiveMode(Mode: TAssistantMode);
 Begin
+  If FActiveMode <> Mode Then
+    FToolsJsonValid := False;
   FActiveMode := Mode;
 End;
 
 Procedure TAssistantService.RebuildSystemPrompt;
 Begin
   FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
+  FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+End;
+
+Function TAssistantService.EscapedContent(Var Msg: TAssistantMessage): String;
+Begin
+  If Msg.ContentEscaped = '' Then
+    Msg.ContentEscaped := JsonEscape(Msg.Content);
+  Result := Msg.ContentEscaped;
+End;
+
+Function TAssistantService.EscapedToolCallId(Var Msg: TAssistantMessage): String;
+Begin
+  If Msg.ToolCallIdEscaped = '' Then
+    Msg.ToolCallIdEscaped := JsonEscape(Msg.ToolCallId);
+  Result := Msg.ToolCallIdEscaped;
+End;
+
+Function TAssistantService.ToolsJsonCached: String;
+Begin
+  If (Not FToolsJsonValid) Or (FToolsJsonMode <> FActiveMode) Then
+    Begin
+      FToolsJsonCache := BuildAssistantToolsJsonForMode(FActiveMode);
+      FToolsJsonMode := FActiveMode;
+      FToolsJsonValid := True;
+    End;
+  Result := FToolsJsonCache;
+End;
+
+Function TAssistantService.BuildRequestJson: String;
+Var
+  I, PartCount, TotalLen, P, J, L: Integer;
+  Parts: Array Of String;
+  HasSystem: Boolean;
+  MsgJson, Joined: String;
+Begin
+  { Pre-size and single-copy join — avoids quadratic string growth on long chats.
+    Message bodies use cached JSON escapes filled on first use. }
+  SetLength(Parts, Length(FMessages) + 2);
+  PartCount := 0;
+  HasSystem := False;
+  If Trim(FSystemPrompt) <> '' Then
+    Begin
+      If FSystemPromptEscaped = '' Then
+        FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+      Parts[PartCount] := '{"role":"system","content":"' + FSystemPromptEscaped + '"}';
+      Inc(PartCount);
+      HasSystem := True;
+    End;
+  For I := 0 To High(FMessages) Do
+    Begin
+      If (FMessages[I].Role = amrSystem) And HasSystem Then
+        Continue;
+      If FMessages[I].Role = amrTool Then
+        MsgJson := '{"role":"tool","tool_call_id":"' + EscapedToolCallId(FMessages[I]) +
+          '","content":"' + EscapedContent(FMessages[I]) + '"}'
+      Else If FMessages[I].ToolCallsJson <> '' Then
+        MsgJson := '{"role":"assistant","content":"' + EscapedContent(FMessages[I]) +
+          '","tool_calls":' + FMessages[I].ToolCallsJson + '}'
+      Else
+        MsgJson := '{"role":"' + RoleToJson(FMessages[I].Role) + '","content":"' +
+          EscapedContent(FMessages[I]) + '"}';
+      Parts[PartCount] := MsgJson;
+      Inc(PartCount);
+    End;
+  TotalLen := 0;
+  For J := 0 To PartCount - 1 Do
+    Begin
+      Inc(TotalLen, Length(Parts[J]));
+      If J > 0 Then
+        Inc(TotalLen);
+    End;
+  SetLength(Joined, TotalLen);
+  P := 1;
+  For J := 0 To PartCount - 1 Do
+    Begin
+      If J > 0 Then
+        Begin
+          Joined[P] := ',';
+          Inc(P);
+        End;
+      L := Length(Parts[J]);
+      If L > 0 Then
+        Move(Parts[J][1], Joined[P], L);
+      Inc(P, L);
+    End;
+  If Trim(ToolsJsonCached) <> '' Then
+    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
+      '],"tools":' + ToolsJsonCached + '}'
+  Else
+    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']}';
 End;
 
 Destructor TAssistantService.Destroy;
@@ -717,8 +779,17 @@ Begin
 End;
 
 Procedure TAssistantService.SetActiveSkill(Const SkillName: String);
+Var
+  NewName: String;
 Begin
-  FActiveSkill := Trim(SkillName);
+  NewName := Trim(SkillName);
+  If SameText(FActiveSkill, NewName) And (FSystemPrompt <> '') Then
+    Begin
+      { Rebuild only if skill file may have changed (cache checks mtime). }
+      RebuildSystemPrompt;
+      Exit;
+    End;
+  FActiveSkill := NewName;
   RebuildSystemPrompt;
   If FActiveSkill <> '' Then
     WorkflowLogger.Info('AssistantService', 'Active skill set to ' + FActiveSkill)
@@ -741,6 +812,8 @@ Begin
   FMessages[Idx].Content := Content;
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := '';
+  FMessages[Idx].ContentEscaped := '';
+  FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
 Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String);
@@ -753,6 +826,8 @@ Begin
   FMessages[Idx].Content := Content;
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := ToolCallsJson;
+  FMessages[Idx].ContentEscaped := '';
+  FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
 Procedure TAssistantService.AddToolResult(Const ToolCallId, Content: String);
@@ -765,11 +840,13 @@ Begin
   FMessages[Idx].Content := Content;
   FMessages[Idx].ToolCallId := ToolCallId;
   FMessages[Idx].ToolCallsJson := '';
+  FMessages[Idx].ContentEscaped := '';
+  FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
 Function TAssistantService.BuildNextRequestJson: String;
 Begin
-  Result := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJsonForMode(FActiveMode));
+  Result := BuildRequestJson;
 End;
 
 Function TAssistantService.MessageCount: Integer;
@@ -948,12 +1025,10 @@ Begin
         FLastError := 'Not signed in. Open Assistant Settings and sign in with SuperGrok / X Premium.';
       Exit;
     End;
-  { Persist refreshed tokens so the next IDE session keeps working. }
+  { Keep tokens in memory for this session; persist on Settings save / form close paths
+    rather than blocking every prompt with a config write. }
   If Assigned(AssistantChatConfig) Then
-    Begin
-      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-      AssistantChatConfig.Save;
-    End;
+    AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   If Not Assigned(OnToken) Then
     Begin
       FLastError := 'No stream callback.';
@@ -961,7 +1036,7 @@ Begin
     End;
 
   ClearStreamThread;
-  RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJsonForMode(FActiveMode));
+  RequestJson := BuildRequestJson;
   FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;
   FStreamThread.Start;

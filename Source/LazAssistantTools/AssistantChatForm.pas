@@ -147,7 +147,7 @@ Implementation
 
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext, AssistantSession,
-  LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
+  GrokOAuth, LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
 
 Const
   ChatViewMargin = 4;
@@ -218,6 +218,12 @@ Begin
   If Assigned(FElapsedTimer) Then
     FElapsedTimer.Enabled := False;
   SetBusyCursor(False);
+  { Persist OAuth tokens once on close (not on every prompt). }
+  If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
+    Begin
+      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      AssistantChatConfig.Save;
+    End;
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window destroyed');
 End;
 
