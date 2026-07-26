@@ -124,6 +124,7 @@ Type
     FToolCalls: TAssistantToolCallArray;
     FToolRound: Integer;
     FHttpClient: TFPHTTPClient;
+    FFinishEmitted: Boolean;
     Procedure NotifyMain;
     Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
@@ -227,6 +228,7 @@ Begin
   FAccessToken := AccessToken;
   FModel := Model;
   FRequestJson := RequestJson;
+  FFinishEmitted := False;
   FOnToken := OnToken;
   FSseBuffer := '';
   FContentAccum := '';
@@ -265,16 +267,20 @@ Procedure TAssistantStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText:
 Begin
   If Terminated And (Not IsDone) Then
     Exit;
+  { At most one finished callback per stream (guards Break-then-fallthrough and double Exit paths). }
+  If IsDone Then
+    Begin
+      If FFinishEmitted Then
+        Exit;
+      FFinishEmitted := True;
+    End;
   FPendingContent := FContentAccum;
   FPendingThinking := FThinkingAccum;
   FPendingFinished := IsDone;
   FPendingError := ErrorText;
   { Queue avoids deadlock: main thread can CancelStream/WaitFor while we notify.
     Tool rounds still use Synchronize so tools run on the main thread. }
-  If IsDone Then
-    Queue(@NotifyMain)
-  Else
-    Queue(@NotifyMain);
+  Queue(@NotifyMain);
 End;
 
 Function JsonStringField(Obj: TJSONObject; Const FieldName: String): String;
@@ -659,9 +665,15 @@ Begin
         Break;
       RequestJson := FService.BuildNextRequestJson;
     End;
-  EmitSnapshots(True, Format(
-    'Tool-call round limit reached after %d rounds. Ask a more focused question or use start_line on read_file to page large files.',
-    [FToolRound]));
+  If Terminated Then
+    Begin
+      If Not FFinishEmitted Then
+        EmitSnapshots(True, 'Cancelled.');
+    End
+  Else
+    EmitSnapshots(True, Format(
+      'Tool-call round limit reached after %d rounds. Ask a more focused question or use start_line on read_file to page large files.',
+      [FToolRound]));
 End;
 
 { TAssistantService }

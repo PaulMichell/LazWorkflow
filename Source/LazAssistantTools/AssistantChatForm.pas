@@ -76,6 +76,7 @@ Type
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
+    FTurnRecorded: Boolean; { True after this in-flight turn is written to conversation.jsonl. }
     FUserCancelled: Boolean;
     FAssistantContent: String; { Content shown in the chat pane (may be a past turn). }
     FAssistantThinking: String;
@@ -179,6 +180,7 @@ Begin
   FContextLimit := 128000;
   FSending := False;
   FStreamingActive := False;
+  FTurnRecorded := False;
   FUserCancelled := False;
   FAssistantContent := '';
   FAssistantThinking := '';
@@ -553,6 +555,9 @@ Var
   Entry: TConversationIndexEntry;
   DurationMs: Integer;
 Begin
+  { One stream → one conversation row (guard against double IsFinished / Stop+Finish). }
+  If FTurnRecorded Then
+    Exit;
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   EnsureConversationStore;
@@ -594,7 +599,10 @@ Begin
   Turn.PlanFile := '';
   Turn.TodoId := '';
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
-    RefreshConversationList
+    Begin
+      FTurnRecorded := True;
+      RefreshConversationList;
+    End
   Else
     WorkflowLogger.Warning('AssistantChat', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
 End;
@@ -685,6 +693,8 @@ End;
 Procedure TAssistantChatForm.SetSending(IsSending: Boolean);
 Begin
   FSending := IsSending;
+  If Not IsSending Then
+    FReviewInProgress := False;
   FSendAction.Enabled := Not IsSending;
   FStopAction.Enabled := IsSending;
   FNewChatAction.Enabled := Not IsSending;
@@ -973,6 +983,7 @@ Begin
   FLiveContent := '';
   FLiveThinking := '';
   FUserCancelled := False;
+  FTurnRecorded := False;
   FStreamingActive := True;
   FViewingLive := True;
   FSelectedTurnIndex := LiveConversationMarker;
@@ -988,6 +999,9 @@ End;
 
 Procedure TAssistantChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
+  { Ignore late Queue packets after the turn has finished (prevents a second Begin/Finish cycle). }
+  If Not FSending Then
+    Exit;
   If Not FStreamingActive Then
     BeginAssistantReply;
   { Always keep live buffers for the background stream. }
@@ -1015,9 +1029,17 @@ Var
 Begin
   If Assigned(AssistantClient) Then
     AssistantClient.ToolsEnabled := True;
+  { Second IsFinished (or Stop after finish) must not append another conversation row. }
+  If Not FSending Then
+    Begin
+      If Assigned(AssistantClient) Then
+        AssistantClient.MarkStreamComplete;
+      Exit;
+    End;
   If FUserCancelled Then
     Begin
       FUserCancelled := False;
+      FStreamingActive := False;
       If Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       SetSending(False);
@@ -1085,6 +1107,7 @@ Begin
       If IsFinished Then
         Begin
           FUserCancelled := False;
+          FStreamingActive := False;
           If Assigned(AssistantClient) Then
             AssistantClient.MarkStreamComplete;
           SetSending(False);
@@ -1098,7 +1121,8 @@ Begin
         SetStreamPhase(ErrorText);
       Exit;
     End;
-  If (ContentSnapshot <> '') Or (ThinkingSnapshot <> '') Then
+  { Apply final snapshot only while still the active send (not a duplicate finish). }
+  If FSending And ((ContentSnapshot <> '') Or (ThinkingSnapshot <> '')) Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(ErrorText);
 End;
@@ -1463,9 +1487,11 @@ Begin
 
     SubmitReviewRequest(DisplayLabel, PromptText);
   Finally
-    FReviewInProgress := False;
+    { Keep FReviewInProgress True while the review stream runs so a second click
+      cannot start a duplicate review with the same Messages dump. }
     If Not FSending Then
       Begin
+        FReviewInProgress := False;
         FReviewCompileAction.Enabled := True;
         FReviewBuildAction.Enabled := True;
         UpdateStatusFooter;
