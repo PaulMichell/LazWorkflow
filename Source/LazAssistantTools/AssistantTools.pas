@@ -10,15 +10,19 @@ Unit AssistantTools;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, AssistantHistory;
 
 Const
   AssistantToolMaxReadChars = 48000;
   AssistantToolMaxListEntries = 400;
 
 Function BuildAssistantToolsJson: String;
+Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
+Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String): Boolean;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String): Boolean;
 Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
@@ -53,6 +57,32 @@ Begin
           Result := Result + C;
       End;
     End;
+End;
+
+Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
+Var
+  Name: String;
+Begin
+  Name := LowerCase(Trim(ToolName));
+  { Chat / Plan / Code all share read tools today. Write tools will be Plan/Code only. }
+  Result := (Name = 'read_file') Or (Name = 'list_directory') Or
+    (Name = 'open_markdown') Or (Name = 'get_project_info');
+  If Not Result Then
+    Exit;
+  Case Mode Of
+    amChat, amPlan, amCode: Result := True;
+  Else
+    Result := False;
+  End;
+End;
+
+Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
+Begin
+  { Same read-only set for all modes until Plan/Code write tools land. }
+  If Mode In [amChat, amPlan, amCode] Then
+    Result := BuildAssistantToolsJson
+  Else
+    Result := '[]';
 End;
 
 Function BuildAssistantToolsJson: String;
@@ -406,6 +436,24 @@ Begin
     ResultText := ResultText + 'Main file: ' + Proj.MainFile.Filename + LineEnding;
   ResultText := ResultText + 'Title: ' + Proj.GetTitle;
   Result := True;
+End;
+
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String): Boolean;
+Var
+  Name: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Name := LowerCase(Trim(ToolName));
+  If Not ToolAllowedInMode(Name, Mode) Then
+    Begin
+      ErrorText := Format('Tool "%s" is not available in %s mode.',
+        [ToolName, AssistantModeToStr(Mode)]);
+      Exit;
+    End;
+  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText);
 End;
 
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;

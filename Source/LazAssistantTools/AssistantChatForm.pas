@@ -12,7 +12,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
-  IDEExternToolIntf;
+  IDEExternToolIntf, AssistantHistory;
 
 Type
   TAssistantChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
@@ -29,6 +29,11 @@ Type
     FTabChat: TTabSheet;
     FTabPlan: TTabSheet;
     FTabCode: TTabSheet;
+    FHistoryPanel: TPanel;
+    FHistoryLabel: TLabel;
+    FHistorySearch: TEdit;
+    FHistoryList: TListBox;
+    FChatSplitter: TSplitter;
     FChatHost: TPanel;
     FPlanPlaceholder: TLabel;
     FCodePlaceholder: TLabel;
@@ -47,6 +52,8 @@ Type
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure PagesChange(Sender: TObject);
+    Procedure HistorySearchChange(Sender: TObject);
+    Procedure HistoryListClick(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
@@ -62,6 +69,7 @@ Type
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FShowThinking: Boolean;
+    FActiveMode: TAssistantMode;
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
@@ -72,6 +80,7 @@ Type
     FAssistantThinking: String; { Reasoning stream (display optional). }
     FReviewInProgress: Boolean;
     FStreamStart: TDateTime;
+    FTurnStartedAt: String;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
@@ -79,6 +88,11 @@ Type
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
     Procedure SetCurrentSystemNote(Const NoteText: String);
+    Procedure EnsureHistoryStore;
+    Procedure RefreshHistoryList;
+    Procedure RecordCurrentTurn(Const ErrorText: String);
+    Function CurrentModeFromTabs: TAssistantMode;
+    Procedure ApplyActiveMode;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
@@ -127,7 +141,7 @@ Implementation
 
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext, AssistantSession,
-  LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
+  LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
 
 Const
   ChatViewMargin = 4;
@@ -147,8 +161,10 @@ Begin
   FDisplayUser := '';
   FDisplaySystemNote := '';
   FShowThinking := True;
+  FActiveMode := amChat;
   FReviewInProgress := False;
   FStreamStart := 0;
+  FTurnStartedAt := '';
   FStatusPhase := '';
   FLastChatPaintTick := 0;
   FSessionProjectKey := '';
@@ -179,8 +195,11 @@ Begin
       FElapsedTimer.Interval := 250;
       FElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
+  EnsureHistoryStore;
   RefreshFromConfig;
   UpdateStatusFooter;
+  ApplyActiveMode;
+  RefreshHistoryList;
   RestoreSessionIfNeeded;
   If (FDisplayUser = '') And (FAssistantContent = '') And (FDisplaySystemNote = '') Then
     Begin
@@ -239,16 +258,213 @@ Begin
   RefreshChatDisplay(True);
 End;
 
+Function TAssistantChatForm.CurrentModeFromTabs: TAssistantMode;
+Begin
+  Result := amChat;
+  If Not Assigned(FPages) Or Not Assigned(FPages.ActivePage) Then
+    Exit;
+  If FPages.ActivePage = FTabPlan Then
+    Result := amPlan
+  Else If FPages.ActivePage = FTabCode Then
+    Result := amCode
+  Else
+    Result := amChat;
+End;
+
+Procedure TAssistantChatForm.ApplyActiveMode;
+Begin
+  FActiveMode := CurrentModeFromTabs;
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(FActiveMode);
+  Case FActiveMode Of
+    amPlan:
+      Begin
+        FReviewCompileAction.Enabled := False;
+        FReviewBuildAction.Enabled := False;
+        FFixErrorAction.Enabled := False;
+      End;
+    amCode:
+      Begin
+        FReviewCompileAction.Enabled := Not FSending;
+        FReviewBuildAction.Enabled := Not FSending;
+        FFixErrorAction.Enabled := Not FSending;
+      End;
+  Else
+    Begin
+      FReviewCompileAction.Enabled := Not FSending;
+      FReviewBuildAction.Enabled := Not FSending;
+      FFixErrorAction.Enabled := Not FSending;
+    End;
+  End;
+End;
+
 Procedure TAssistantChatForm.PagesChange(Sender: TObject);
 Begin
+  If FSending Then
+    Begin
+      { Keep mode stable while a stream is in flight. }
+      Case FActiveMode Of
+        amPlan: FPages.ActivePage := FTabPlan;
+        amCode: FPages.ActivePage := FTabCode;
+      Else
+        FPages.ActivePage := FTabChat;
+      End;
+      Exit;
+    End;
+  ApplyActiveMode;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
     WorkflowLogger.Info('AssistantChat', 'Mode tab: ' + FPages.ActivePage.Caption);
+  RefreshHistoryList;
+End;
+
+Procedure TAssistantChatForm.EnsureHistoryStore;
+Var
+  Root: String;
+  ShowThinking: Boolean;
+Begin
+  If Not Assigned(ProjectAssistantHistory) Then
+    Exit;
+  Root := ProjectAssistantRoot;
+  If Root = '' Then
+    Exit;
+  If Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantHistory.ProjectRoot),
+    ExcludeTrailingPathDelimiter(Root)) Then
+    Begin
+      ProjectAssistantHistory.SetProjectRoot(Root);
+      ProjectAssistantHistory.LoadIndex;
+      If ProjectAssistantHistory.LoadShowThinking(ShowThinking) Then
+        Begin
+          FShowThinking := ShowThinking;
+          UpdateThinkingActionCaption;
+        End;
+    End
+  Else If ProjectAssistantHistory.IndexCount = 0 Then
+    ProjectAssistantHistory.LoadIndex;
+End;
+
+Procedure TAssistantChatForm.RefreshHistoryList;
+Var
+  I: Integer;
+  Entry: THistoryIndexEntry;
+  Filter, Line, ModeFilter: String;
+  ShowItem: Boolean;
+Begin
+  If Not Assigned(FHistoryList) Or Not Assigned(ProjectAssistantHistory) Then
+    Exit;
+  EnsureHistoryStore;
+  Filter := '';
+  If Assigned(FHistorySearch) Then
+    Filter := LowerCase(Trim(FHistorySearch.Text));
+  ModeFilter := AssistantModeToStr(FActiveMode);
+  FHistoryList.Items.BeginUpdate;
+  Try
+    FHistoryList.Clear;
+    For I := ProjectAssistantHistory.IndexCount - 1 DownTo 0 Do
+      Begin
+        Entry := ProjectAssistantHistory.IndexEntry(I);
+        If Not Assigned(Entry) Then
+          Continue;
+        { Show all modes in list; prefix with mode tag. }
+        Line := UpperCase(Copy(Entry.Mode, 1, 1)) + ' · ' + Entry.PromptPreview;
+        If Entry.ErrorText <> '' Then
+          Line := Line + ' [err]';
+        ShowItem := True;
+        If Filter <> '' Then
+          ShowItem := (Pos(Filter, LowerCase(Entry.PromptPreview)) > 0) Or
+            (Pos(Filter, LowerCase(Entry.ResponsePreview)) > 0) Or
+            (Pos(Filter, LowerCase(Entry.Mode)) > 0);
+        If ShowItem Then
+          FHistoryList.Items.AddObject(Line, Entry);
+      End;
+  Finally
+    FHistoryList.Items.EndUpdate;
+  End;
+  { ModeFilter kept for future per-mode filter toggle. }
+  If ModeFilter = '' Then
+    ;
+End;
+
+Procedure TAssistantChatForm.HistorySearchChange(Sender: TObject);
+Begin
+  RefreshHistoryList;
+End;
+
+Procedure TAssistantChatForm.HistoryListClick(Sender: TObject);
+Var
+  Entry: THistoryIndexEntry;
+  Turn: THistoryTurn;
+Begin
+  If Not Assigned(FHistoryList) Or (FHistoryList.ItemIndex < 0) Then
+    Exit;
+  If FSending Then
+    Exit;
+  Entry := THistoryIndexEntry(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
+  If Not Assigned(Entry) Or Not Assigned(ProjectAssistantHistory) Then
+    Exit;
+  If Not ProjectAssistantHistory.LoadTurnByOffset(Entry.FileOffset, Turn) Then
+    Begin
+      SetCurrentSystemNote('Could not load history turn: ' + ProjectAssistantHistory.LastError);
+      Exit;
+    End;
+  FDisplayUser := Turn.Prompt;
+  FAssistantThinking := Turn.Thinking;
+  FAssistantContent := Turn.Response;
+  If Turn.ErrorText <> '' Then
+    FDisplaySystemNote := '**Error (historical):** ' + Turn.ErrorText
+  Else
+    FDisplaySystemNote := Format('*(history · %s · %s)*', [Turn.Mode, Turn.CreatedAt]);
+  FStreamingActive := False;
+  RefreshChatDisplay(True);
+End;
+
+Procedure TAssistantChatForm.RecordCurrentTurn(Const ErrorText: String);
+Var
+  Turn: THistoryTurn;
+  Entry: THistoryIndexEntry;
+  DurationMs: Integer;
+Begin
+  If Not Assigned(ProjectAssistantHistory) Then
+    Exit;
+  EnsureHistoryStore;
+  If ProjectAssistantHistory.ProjectRoot = '' Then
+    Exit;
+  If (Trim(FDisplayUser) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
+    Exit;
+  DurationMs := 0;
+  If FStreamStart > 0 Then
+    DurationMs := Round((Now - FStreamStart) * 24 * 60 * 60 * 1000);
+  Turn.Id := NewHistoryTurnId;
+  Turn.Mode := AssistantModeToStr(FActiveMode);
+  Turn.Prompt := FDisplayUser;
+  Turn.Thinking := FAssistantThinking;
+  Turn.Response := FAssistantContent;
+  Turn.CreatedAt := IsoNowUtc;
+  Turn.StartedAt := FTurnStartedAt;
+  If Turn.StartedAt = '' Then
+    Turn.StartedAt := Turn.CreatedAt;
+  Turn.FinishedAt := IsoNowUtc;
+  Turn.DurationMs := DurationMs;
+  Turn.Model := FModelName;
+  If Assigned(AssistantClient) Then
+    Turn.Skill := AssistantClient.ActiveSkill
+  Else
+    Turn.Skill := '';
+  Turn.TokenEstimate := Length(Turn.Prompt + Turn.Response + Turn.Thinking) Div 4;
+  Turn.ErrorText := ErrorText;
+  Turn.PlanFile := '';
+  Turn.TodoId := '';
+  If ProjectAssistantHistory.AppendTurn(Turn, Entry) Then
+    RefreshHistoryList
+  Else
+    WorkflowLogger.Warning('AssistantChat', 'History append failed: ' + ProjectAssistantHistory.LastError);
 End;
 
 Procedure TAssistantChatForm.ToggleThinkingActionExecute(Sender: TObject);
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
+  If Assigned(ProjectAssistantHistory) And (ProjectAssistantHistory.ProjectRoot <> '') Then
+    ProjectAssistantHistory.SaveShowThinking(FShowThinking);
   RefreshChatDisplay(True);
 End;
 
@@ -351,6 +567,7 @@ Begin
       FStatusPhase := '';
       FStreamStart := 0;
     End;
+  ApplyActiveMode;
   UpdateStatusFooter;
 End;
 
@@ -588,6 +805,7 @@ Begin
   FUserCancelled := False;
   FStreamingActive := True;
   FLastChatPaintTick := 0;
+  FTurnStartedAt := IsoNowUtc;
   RefreshChatDisplay(True);
 End;
 
@@ -649,6 +867,7 @@ Begin
     End;
   FStreamingActive := False;
   { Keep FAssistantContent / thinking on the current-turn surface until the next send. }
+  RecordCurrentTurn(ErrorText);
   RefreshChatDisplay(True);
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
@@ -717,6 +936,7 @@ Begin
   Else
     FDisplaySystemNote := '*Stream cancelled.*';
   FStreamingActive := False;
+  RecordCurrentTurn('cancelled');
   RefreshChatDisplay(True);
   SetSending(False);
   FStatusFooter.SetRightText('Cancelled');
@@ -744,6 +964,7 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
+      ApplyActiveMode;
       ApiText := UserText;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(UserText, WithContext);

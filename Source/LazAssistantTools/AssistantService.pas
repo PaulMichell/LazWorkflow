@@ -10,7 +10,7 @@ Unit AssistantService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig;
+  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantHistory;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
@@ -47,6 +47,7 @@ Type
     FLastError: String;
     FStreamThread: TThread;
     FBusy: Boolean;
+    FActiveMode: TAssistantMode;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
   Public
@@ -55,6 +56,7 @@ Type
     Procedure ApplyConfig(Config: TAssistantConfig);
     Procedure SetEndpoint(Const ApiBase, Model: String);
     Procedure SetActiveSkill(Const SkillName: String);
+    Procedure SetActiveMode(Mode: TAssistantMode);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
     Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String);
@@ -75,6 +77,7 @@ Type
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
+    Property ActiveMode: TAssistantMode Read FActiveMode;
     Property SystemPrompt: String Read FSystemPrompt Write FSystemPrompt;
     Property LastError: String Read FLastError;
   End;
@@ -476,7 +479,8 @@ Begin
         Continue;
       ResultText := '';
       ErrorText := '';
-      Ok := ExecuteAssistantTool(FToolCalls[I].Name, FToolCalls[I].Arguments, ResultText, ErrorText);
+      Ok := ExecuteAssistantToolForMode(FToolCalls[I].Name, FToolCalls[I].Arguments,
+        FService.ActiveMode, ResultText, ErrorText);
       If Ok Then
         Content := ResultText
       Else
@@ -657,11 +661,17 @@ Begin
     'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
     'Prefer the active editor context already in the user message when it includes the code under discussion.';
   FActiveSkill := '';
+  FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
   FLastError := '';
+End;
+
+Procedure TAssistantService.SetActiveMode(Mode: TAssistantMode);
+Begin
+  FActiveMode := Mode;
 End;
 
 Procedure TAssistantService.RebuildSystemPrompt;
@@ -759,7 +769,7 @@ End;
 
 Function TAssistantService.BuildNextRequestJson: String;
 Begin
-  Result := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJson);
+  Result := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJsonForMode(FActiveMode));
 End;
 
 Function TAssistantService.MessageCount: Integer;
@@ -951,7 +961,7 @@ Begin
     End;
 
   ClearStreamThread;
-  RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJson);
+  RequestJson := BuildChatRequestJson(FModel, FSystemPrompt, FMessages, BuildAssistantToolsJsonForMode(FActiveMode));
   FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;
   FStreamThread.Start;

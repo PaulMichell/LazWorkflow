@@ -406,7 +406,7 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Project Chat streaming + thinking + OAuth | Done (to be reshaped into Project Assistant) |
 | Read-only tools + multi-round tool calls | Done |
 | Markdown live windows | Done (entity/`&` and table fixes in lazmarkdown tree) |
-| Mode tabs / bottom bar / JSONL history | **Not started** |
+| Mode tabs / bottom bar / JSONL history | **Shell + history store landed** |
 | Plan write tools / Code write tools | **Not started** |
 | Plan section scan → TODO tiles | **Not started** |
 
