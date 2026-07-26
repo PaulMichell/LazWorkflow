@@ -94,6 +94,15 @@ Type
     Function ShowCommitPathDiff(Const Sha, Path: String; Out DiffText: String): Boolean;
     Function Checkout(Const RefName: String): Boolean;
     Function CreateBranch(Const BranchName, StartPoint: String): Boolean;
+    { Local/global config helpers. Unset keys return True with Value=''. }
+    Function GetConfigValue(Const Key: String; LocalOnly: Boolean; Out Value: String): Boolean;
+    Function SetConfigValue(Const Key, Value: String; LocalOnly: Boolean): Boolean;
+    Function UnsetConfigValue(Const Key: String; LocalOnly: Boolean): Boolean;
+    { Absolute path to the git directory (.git or bare root). }
+    Function GetGitDir(Out GitDir: String): Boolean;
+    { Contents of .git/description (repository short description). }
+    Function GetDescription(Out Description: String): Boolean;
+    Function SetDescription(Const Description: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property LastError: String Read FLastError;
   End;
@@ -106,6 +115,9 @@ Var
   GitClient: TGitService;
 
 Implementation
+
+Uses
+  LazFileUtils;
 
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
 Begin
@@ -1217,6 +1229,176 @@ Begin
     Result := RunGit(['branch', BranchName], OutputText, ExitCode)
   Else
     Result := RunGit(['branch', BranchName, StartPoint], OutputText, ExitCode);
+End;
+
+Function TGitService.GetConfigValue(Const Key: String; LocalOnly: Boolean; Out Value: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Args: Array Of String;
+Begin
+  Result := False;
+  Value := '';
+  If Trim(Key) = '' Then
+    Begin
+      FLastError := 'Config key is empty.';
+      Exit;
+    End;
+  If LocalOnly Then
+    Args := ['config', '--local', '--get', Key]
+  Else
+    Args := ['config', '--get', Key];
+  { Exit code 1 = key not set; treat as success with empty value. }
+  If RunGit(Args, OutputText, ExitCode) Then
+    Begin
+      Value := Trim(OutputText);
+      Result := True;
+    End
+  Else If ExitCode = 1 Then
+    Begin
+      Value := '';
+      FLastError := '';
+      Result := True;
+    End;
+End;
+
+Function TGitService.UnsetConfigValue(Const Key: String; LocalOnly: Boolean): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Args: Array Of String;
+Begin
+  Result := False;
+  If Trim(Key) = '' Then
+    Begin
+      FLastError := 'Config key is empty.';
+      Exit;
+    End;
+  If LocalOnly Then
+    Args := ['config', '--local', '--unset', Key]
+  Else
+    Args := ['config', '--global', '--unset', Key];
+  If RunGit(Args, OutputText, ExitCode) Then
+    Result := True
+  Else If (ExitCode = 5) Or (ExitCode = 1) Then
+    Begin
+      { Key was not set — already unset. }
+      FLastError := '';
+      Result := True;
+    End;
+End;
+
+Function TGitService.SetConfigValue(Const Key, Value: String; LocalOnly: Boolean): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Args: Array Of String;
+  Trimmed: String;
+Begin
+  Result := False;
+  If Trim(Key) = '' Then
+    Begin
+      FLastError := 'Config key is empty.';
+      Exit;
+    End;
+  Trimmed := Trim(Value);
+  If Trimmed = '' Then
+    Begin
+      Result := UnsetConfigValue(Key, LocalOnly);
+      Exit;
+    End;
+  If LocalOnly Then
+    Args := ['config', '--local', Key, Trimmed]
+  Else
+    Args := ['config', '--global', Key, Trimmed];
+  Result := RunGit(Args, OutputText, ExitCode);
+End;
+
+Function TGitService.GetGitDir(Out GitDir: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Dir: String;
+Begin
+  Result := False;
+  GitDir := '';
+  If Not RunGit(['rev-parse', '--git-dir'], OutputText, ExitCode) Then
+    Exit;
+  Dir := Trim(OutputText);
+  If Dir = '' Then
+    Exit;
+  If FilenameIsAbsolute(Dir) Then
+    GitDir := ExpandFileName(Dir)
+  Else
+    GitDir := ExpandFileName(IncludeTrailingPathDelimiter(FRepoPath) + Dir);
+  Result := DirectoryExists(GitDir) Or FileExists(GitDir);
+  If Not Result Then
+    FLastError := 'Git directory not found: ' + GitDir;
+End;
+
+Function TGitService.GetDescription(Out Description: String): Boolean;
+Var
+  GitDir, Path: String;
+  SL: TStringList;
+Begin
+  Result := False;
+  Description := '';
+  If Not GetGitDir(GitDir) Then
+    Exit;
+  Path := IncludeTrailingPathDelimiter(GitDir) + 'description';
+  If Not FileExists(Path) Then
+    Begin
+      Description := '';
+      Result := True;
+      Exit;
+    End;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(Path);
+      Description := SL.Text;
+      { Trim one trailing line ending for editor comfort. }
+      While (Length(Description) > 0) And
+        ((Description[Length(Description)] = #10) Or (Description[Length(Description)] = #13)) Do
+        SetLength(Description, Length(Description) - 1);
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := 'Failed to read description: ' + E.Message;
+    End;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function TGitService.SetDescription(Const Description: String): Boolean;
+Var
+  GitDir, Path: String;
+  SL: TStringList;
+  Body: String;
+Begin
+  Result := False;
+  If Not GetGitDir(GitDir) Then
+    Exit;
+  Path := IncludeTrailingPathDelimiter(GitDir) + 'description';
+  Body := Description;
+  { Ensure a trailing newline like stock git description files. }
+  If (Body <> '') And (Body[Length(Body)] <> #10) Then
+    Body := Body + LineEnding;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.Text := Body;
+      SL.SaveToFile(Path);
+      Result := True;
+      FLastError := '';
+    Except
+      On E: Exception Do
+        FLastError := 'Failed to write description: ' + E.Message;
+    End;
+  Finally
+    SL.Free;
+  End;
 End;
 
 Initialization
