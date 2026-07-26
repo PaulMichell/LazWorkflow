@@ -55,6 +55,7 @@ Type
     FToolsJsonCache: String;
     FToolsJsonMode: TAssistantMode;
     FToolsJsonValid: Boolean;
+    FToolsEnabled: Boolean;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
@@ -91,6 +92,8 @@ Type
     Property ActiveMode: TAssistantMode Read FActiveMode;
     Property SystemPrompt: String Read FSystemPrompt Write FSystemPrompt;
     Property LastError: String Read FLastError;
+    { When False, chat/completions is sent without tools (single-shot answer). }
+    Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
   End;
 
 Var
@@ -679,6 +682,7 @@ Begin
   FToolsJsonCache := '';
   FToolsJsonMode := amChat;
   FToolsJsonValid := False;
+  FToolsEnabled := True;
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
@@ -780,7 +784,7 @@ Begin
         Move(Parts[J][1], Joined[P], L);
       Inc(P, L);
     End;
-  If Trim(ToolsJsonCached) <> '' Then
+  If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
     Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
       '],"tools":' + ToolsJsonCached + '}'
   Else

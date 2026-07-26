@@ -128,8 +128,12 @@ Type
     Procedure ReviewProject(Reason: TCompileReason; Const KindLabel: String);
     Function BuildReviewPrompt(Const KindLabel, OutputText: String;
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
+    Function BuildReviewDisplayLabel(Const KindLabel: String;
+      ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
     Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
     Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
+    { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
+    Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
     { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
     Procedure CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
       Const OutputText: String; ErrorCount, WarningCount: Integer);
@@ -1009,6 +1013,8 @@ Procedure TAssistantChatForm.FinishAssistantReply(Const ErrorText: String);
 Var
   DisplayBody: String;
 Begin
+  If Assigned(AssistantClient) Then
+    AssistantClient.ToolsEnabled := True;
   If FUserCancelled Then
     Begin
       FUserCancelled := False;
@@ -1104,7 +1110,10 @@ Begin
   FUserCancelled := True;
   { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
   If Assigned(AssistantClient) Then
-    AssistantClient.CancelStream;
+    Begin
+      AssistantClient.CancelStream;
+      AssistantClient.ToolsEnabled := True;
+    End;
   If FStreamingActive Or (FLiveUser <> '') Then
     Begin
       If (FLiveContent <> '') Or (FLiveThinking <> '') Then
@@ -1178,6 +1187,7 @@ Begin
       AssistantClient.AddMessage(amrUser, ApiText);
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       FStatusPhase := 'Waiting for first token…';
+      AssistantClient.ToolsEnabled := True;
       SetSending(True);
       BeginAssistantReply;
       { Large skill + IDE context means a noticeable wait before the first token.
@@ -1308,6 +1318,19 @@ Begin
   End;
 End;
 
+Function TAssistantChatForm.BuildReviewDisplayLabel(Const KindLabel: String;
+  ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
+Begin
+  If BuildOk And (ErrorCount = 0) And (WarningCount = 0) And (HintCount = 0) Then
+    Result := Format('Review %s — clean', [KindLabel])
+  Else If ErrorCount > 0 Then
+    Result := Format('Review %s — %d error(s), %d warning(s), %d hint(s)',
+      [KindLabel, ErrorCount, WarningCount, HintCount])
+  Else
+    Result := Format('Review %s — %d warning(s), %d hint(s)',
+      [KindLabel, WarningCount, HintCount]);
+End;
+
 Function TAssistantChatForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
   ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
 Var
@@ -1328,28 +1351,79 @@ Begin
         ProjectName := LazarusIDE.ActiveProject.ProjectInfoFile;
     End;
   Result :=
-    KindLabel + ' output for review:' + LineEnding +
+    'Task: review Free Pascal / Lazarus IDE ' + LowerCase(KindLabel) +
+    ' messages from my local machine (same text as the Messages window).' + LineEnding +
     LineEnding +
     'Project: ' + ProjectName + LineEnding +
     'Outcome: ' + Outcome +
       Format(' — errors=%d, warnings=%d, hints/notes=%d', [ErrorCount, WarningCount, HintCount]) +
       LineEnding +
     LineEnding +
+    '## Response format (mandatory — one reply only)' + LineEnding +
+    LineEnding +
+    '1. Put ALL detailed analysis in your thinking/reasoning channel: group related diagnostics, ' +
+    'explain causes, note risks, and keep any longer discussion there.' + LineEnding +
+    '2. The visible answer (content) must be ONLY:' + LineEnding +
+    '   - One short status line (e.g. "Clean compile" or "9 warnings, 15 hints — no errors")' + LineEnding +
+    '   - Then a prioritized action list (highest priority first)' + LineEnding +
+    '   - Nothing else in content: no per-message essays, no full code dumps, no long preamble' + LineEnding +
+    LineEnding +
+    '### Action list rules' + LineEnding +
+    '- Priority order: (1) errors that block the build, (2) actionable warnings that indicate real bugs ' +
+    'or API misuse, (3) deprecations worth fixing soon, (4) optional cleanup (unused params, notes).' + LineEnding +
+    '- Merge related messages into one action when they share a root cause.' + LineEnding +
+    '- Each action: one short bullet — file, location if known, what to change.' + LineEnding +
+    '- Skip pure noise (orphan/duplicate PPU notes that are environmental, pure informational notes with no code change).' + LineEnding +
+    '- If nothing actionable: content is a single line confirming clean / no action required.' + LineEnding +
+    LineEnding +
+    'Do not call tools. Do not ask follow-up questions. Work only from the output below and answer once.' + LineEnding +
+    LineEnding +
     '----- begin compiler/messages output -----' + LineEnding +
     OutputText + LineEnding +
-    '----- end compiler/messages output -----' + LineEnding +
-    LineEnding +
-    'You are reviewing Free Pascal / Lazarus IDE ' + LowerCase(KindLabel) +
-    ' output from my local machine (same text as the Messages window).' + LineEnding +
-    'If there are errors: explain them briefly and propose concrete fixes (file, location, and change).' + LineEnding +
-    'If there are warnings or hints: address only those that are practical and useful; ignore pure noise.' + LineEnding +
-    'If the ' + LowerCase(KindLabel) + ' is clean (no errors and no actionable warnings), say so briefly — no further action is required.';
+    '----- end compiler/messages output -----';
+End;
+
+Procedure TAssistantChatForm.SubmitReviewRequest(Const DisplayLabel, ApiText: String);
+Begin
+  If Trim(ApiText) = '' Then
+    Exit;
+  If FSending Then
+    Exit;
+  If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
+    Begin
+      AppendMessage('user', DisplayLabel);
+      AppendMessage('system', 'Sign in under Settings to send this review to the Assistant.');
+      Exit;
+    End;
+  If Not Assigned(AssistantClient) Then
+    Exit;
+  RefreshFromConfig;
+  ApplyActiveMode;
+  { Reviews: short list label, full messages only in the API body, no IDE file dump, no tools. }
+  SetCurrentUserDisplay(DisplayLabel, False);
+  FLiveUser := FDisplayUser;
+  FLiveContent := '';
+  FLiveThinking := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
+  AppendMessage('user', FDisplayUser);
+  AssistantClient.AddMessage(amrUser, ApiText);
+  FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
+  FStatusPhase := 'Waiting for first token…';
+  AssistantClient.ToolsEnabled := False;
+  SetSending(True);
+  BeginAssistantReply;
+  If Not AssistantClient.StartStream(@StreamToken) Then
+    Begin
+      AssistantClient.ToolsEnabled := True;
+      FinishAssistantReply(AssistantClient.LastError);
+    End;
 End;
 
 Procedure TAssistantChatForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
 Var
   BuildResult: TModalResult;
-  OutputText, PromptText: String;
+  OutputText, PromptText, DisplayLabel: String;
   ErrorCount, WarningCount, HintCount: Integer;
   BuildOk: Boolean;
 Begin
@@ -1377,6 +1451,7 @@ Begin
     BuildResult := LazarusIDE.DoBuildProject(Reason, []);
     BuildOk := BuildResult = mrOk;
     OutputText := CollectIDEMessagesText(ErrorCount, WarningCount, HintCount);
+    DisplayLabel := BuildReviewDisplayLabel(KindLabel, ErrorCount, WarningCount, HintCount, BuildOk);
     PromptText := BuildReviewPrompt(KindLabel, OutputText, ErrorCount, WarningCount, HintCount, BuildOk);
 
     If BuildOk And (ErrorCount = 0) Then
@@ -1386,7 +1461,7 @@ Begin
     Else
       FStatusFooter.SetRightText(KindLabel + ' done');
 
-    SubmitUserText(PromptText, True);
+    SubmitReviewRequest(DisplayLabel, PromptText);
   Finally
     FReviewInProgress := False;
     If Not FSending Then
