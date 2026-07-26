@@ -54,7 +54,8 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
                     ▼
          Project root/
            .assistant/          ← project-private assistant state
-             history.db         ← SQLite conversation log
+             history.jsonl      ← append-only conversation log
+             history.index.json ← compact index for fast list/open
              config.json        ← optional per-project options
              plans/             ← optional mirror/index of active plan
            Documents/           ← default Plan-mode MD location (user-visible)
@@ -84,7 +85,7 @@ Event bus, logging, status footer, shared messaging.
 | Actions | **Bottom** action bar (Send, Stop, Settings, mode-specific actions) — not a top toolbar fighting the tabs |
 | Status | Existing three-part footer (model, context, status / elapsed) |
 | Working surface | **Current turn only**: prompt · thinking (optional) · response |
-| History | Separate **browser / list** backed by SQLite — not an infinite scroll transcript |
+| History | Separate **browser / list** backed by JSONL + index — not an infinite scroll transcript |
 
 **Rationale:** Long Markdown transcripts are hard to revisit. The working surface should stay focused; retrieval and analytics live in a structured store.
 
@@ -118,7 +119,7 @@ Modes are not mere labels. Switching mode changes:
 - Current streaming behaviour (content + `reasoning_content` / thinking).
 - IDE context attach (active editor / selection) remains useful.
 - **Thinking** region is **easily toggled** (toolbar button, checkbox, or split header) — default can be “show while streaming, collapse when finished” or user preference in `.assistant/config.json`.
-- Transcript scrollback of dozens of turns is **removed** from the main surface; completed turns are committed to `history.db` and drop off the working view (with optional “keep last N turns on screen” = 1 by default).
+- Transcript scrollback of dozens of turns is **removed** from the main surface; completed turns are appended to `history.jsonl` (and the index) and drop off the working view (with optional “keep last N turns on screen” = 1 by default).
 
 #### 3.2.4 Plan mode
 
@@ -278,7 +279,7 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 2. **AI commit messages** from LazRepositoryTools using Assistant in Chat mode (read-only diff).
 3. **Fix Error** remains a Code-mode entry point (pre-fill prompt + jump to Code tab).
 4. **Plan-driven Code loop** with Next / Done TODO actions.
-5. **History search** (SQLite / FTS) replacing scroll archaeology.
+5. **History search** (index previews + optional deep JSONL scan) replacing scroll archaeology.
 6. **Thinking toggle** + “copy thinking” for debugging model behaviour.
 7. **Audit trail** of writes (plan + code) as rows or a separate `actions` table.
 8. Keyboard-first: IDE commands “Project Assistant: Chat|Plan|Code”.
@@ -301,7 +302,7 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Project Chat streaming + thinking + OAuth | Done (to be reshaped into Project Assistant) |
 | Read-only tools + multi-round tool calls | Done |
 | Markdown live windows | Done (entity/`&` and table fixes in lazmarkdown tree) |
-| Mode tabs / bottom bar / SQLite history | **Not started** |
+| Mode tabs / bottom bar / JSONL history | **Not started** |
 | Plan write tools / Code write tools | **Not started** |
 | Plan TODO sync | **Not started** |
 
@@ -339,7 +340,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ### Phase 5 – Deep integration & polish
 - Git ↔ Assistant events; AI commit message; Fix Error → Code mode.
-- Theming, high-DPI, performance (large history.db).
+- Theming, high-DPI, performance (large history.jsonl + index).
 - Docs, example workflow, package release.
 
 ### Phase 6 – Advanced (ongoing)
@@ -417,9 +418,9 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. **Agree refinements** in this document (especially: history panel placement, whether Code edits auto-apply, VCS ignore for `.assistant/`, SQLite dependency).
+1. **Agree refinements** in this document (especially: history panel placement, whether Code edits auto-apply, VCS ignore for `.assistant/`).
 2. Implement **Phase 2.5 shell**: rename, tabs, bottom bar, current-turn view, thinking toggle.
-3. Implement **history.db** + browser; migrate off primary transcript scrollback.
+3. Implement **history.jsonl + index** + browser; migrate off primary transcript scrollback.
 4. Wire **mode tool allow-lists** (Chat stays read-only).
 5. Phase 3 Plan writes → Phase 4 Code edits + TODO panel.
 
