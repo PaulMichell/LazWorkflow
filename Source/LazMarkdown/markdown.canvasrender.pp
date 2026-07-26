@@ -278,6 +278,9 @@ type
     procedure ClearSelection;
     function GetSelectedText: String;
     function HitTestText(const aX, aY: LongInt): TSelectionPoint;
+    function SelectWordAt(const aX, aY: LongInt): Boolean;
+    function SelectLineAt(const aX, aY: LongInt): Boolean;
+    function HasSelection: Boolean;
 
     // Properties
     property CalculatedWidth: LongInt read FCalculatedWidth;
@@ -799,6 +802,126 @@ end;
 procedure TMarkDownCanvasRenderer.ClearSelection;
 begin
   ClearAllSelections;
+end;
+
+function UTF8IsWordChar(const TextValue: String; CharIndex: Integer): Boolean;
+var
+  Ch: String;
+  C: Char;
+begin
+  Result := False;
+  if (CharIndex < 1) or (CharIndex > UTF8Length(TextValue)) then
+    Exit;
+  Ch := UTF8Copy(TextValue, CharIndex, 1);
+  if Ch = '' then
+    Exit;
+  if Length(Ch) = 1 then
+  begin
+    C := Ch[1];
+    Result := C in ['A'..'Z', 'a'..'z', '0'..'9', '_'];
+  end
+  else
+    { Multi-byte UTF-8: treat as a word character (letters outside ASCII). }
+    Result := True;
+end;
+
+function TMarkDownCanvasRenderer.SelectWordAt(const aX, aY: LongInt): Boolean;
+var
+  Hit, P1, P2: TSelectionPoint;
+  Item: TLayoutItem;
+  Len, StartIdx, EndIdx: Integer;
+begin
+  Result := False;
+  Hit := HitTestText(aX, aY);
+  if (Hit.LayoutItemIndex < 0) or (Hit.LayoutItemIndex >= FLists.Items.Count) then
+    Exit;
+  Item := FLists.Items[Hit.LayoutItemIndex];
+  if Item.Kind <> likText then
+    Exit;
+  Len := UTF8Length(Item.Text);
+  if Len = 0 then
+    Exit;
+  StartIdx := Hit.CharOffset + 1; { 1-based UTF8 index }
+  if StartIdx < 1 then
+    StartIdx := 1;
+  if StartIdx > Len then
+    StartIdx := Len;
+  if not UTF8IsWordChar(Item.Text, StartIdx) then
+  begin
+    { Clicked whitespace/punctuation: select that single character if present. }
+    if StartIdx <= Len then
+    begin
+      P1.LayoutItemIndex := Hit.LayoutItemIndex;
+      P1.CharOffset := StartIdx - 1;
+      P2.LayoutItemIndex := Hit.LayoutItemIndex;
+      P2.CharOffset := StartIdx;
+      SetSelection(P1, P2);
+      Result := True;
+    end;
+    Exit;
+  end;
+  EndIdx := StartIdx;
+  while (StartIdx > 1) and UTF8IsWordChar(Item.Text, StartIdx - 1) do
+    Dec(StartIdx);
+  while (EndIdx < Len) and UTF8IsWordChar(Item.Text, EndIdx + 1) do
+    Inc(EndIdx);
+  P1.LayoutItemIndex := Hit.LayoutItemIndex;
+  P1.CharOffset := StartIdx - 1;
+  P2.LayoutItemIndex := Hit.LayoutItemIndex;
+  P2.CharOffset := EndIdx;
+  SetSelection(P1, P2);
+  Result := True;
+end;
+
+function TMarkDownCanvasRenderer.SelectLineAt(const aX, aY: LongInt): Boolean;
+var
+  Hit, P1, P2: TSelectionPoint;
+  Item: TLayoutItem;
+  LineY, I, FirstIdx, LastIdx: Integer;
+begin
+  Result := False;
+  Hit := HitTestText(aX, aY);
+  if (Hit.LayoutItemIndex < 0) or (Hit.LayoutItemIndex >= FLists.Items.Count) then
+    Exit;
+  Item := FLists.Items[Hit.LayoutItemIndex];
+  if Item.Kind <> likText then
+    Exit;
+  LineY := Item.Y;
+  FirstIdx := -1;
+  LastIdx := -1;
+  for I := 0 to FLists.Items.Count - 1 do
+  begin
+    Item := FLists.Items[I];
+    if (Item.Kind = likText) and (Item.Y = LineY) and (UTF8Length(Item.Text) > 0) then
+    begin
+      if FirstIdx < 0 then
+        FirstIdx := I;
+      LastIdx := I;
+    end;
+  end;
+  if (FirstIdx < 0) or (LastIdx < 0) then
+    Exit;
+  P1.LayoutItemIndex := FirstIdx;
+  P1.CharOffset := 0;
+  P2.LayoutItemIndex := LastIdx;
+  P2.CharOffset := UTF8Length(FLists.Items[LastIdx].Text);
+  SetSelection(P1, P2);
+  Result := True;
+end;
+
+function TMarkDownCanvasRenderer.HasSelection: Boolean;
+var
+  I: Integer;
+  Item: TLayoutItem;
+begin
+  Result := False;
+  for I := 0 to FLists.Items.Count - 1 do
+  begin
+    Item := FLists.Items[I];
+    if Item.IsSelected and (Item.Kind = likText) and
+      (Item.SelectionEndChar > Item.SelectionStartChar) then
+      Exit(True);
+  end;
 end;
 
 function TMarkDownCanvasRenderer.GetSelectedText: String;

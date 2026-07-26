@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
+  ComCtrls, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation;
 
 Type
@@ -55,6 +55,11 @@ Type
     FSendButton: TButton;
     FStopButton: TButton;
     FInputEdit: TMemo;
+    FInputPopup: TPopupMenu;
+    FInputCutItem: TMenuItem;
+    FInputCopyItem: TMenuItem;
+    FInputPasteItem: TMenuItem;
+    FInputSelectAllItem: TMenuItem;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure PagesChange(Sender: TObject);
@@ -72,6 +77,11 @@ Type
     Procedure ToggleThinkingActionExecute(Sender: TObject);
     Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
+    Procedure InputPopupPopup(Sender: TObject);
+    Procedure InputCutClick(Sender: TObject);
+    Procedure InputCopyClick(Sender: TObject);
+    Procedure InputPasteClick(Sender: TObject);
+    Procedure InputSelectAllClick(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
     FChatView: TControl; { TMarkDownControl created at runtime. }
@@ -125,6 +135,7 @@ Type
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
     Procedure EnsureChatView;
+    Procedure EnsureInputPopup;
     Procedure ScrollChatToEnd;
     Procedure ScrollChatToTop;
     Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
@@ -238,6 +249,7 @@ Procedure TAssistantChatForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Assistant';
   EnsureChatView;
+  EnsureInputPopup;
   UpdateThinkingActionCaption;
   If Not Assigned(FElapsedTimer) Then
     Begin
@@ -1013,8 +1025,85 @@ Begin
   View.ScrollBars := ssAutoBoth;
   View.MonoFontName := 'Monospace';
   View.FontName := 'default';
+  View.TabStop := True;
   View.Visible := True;
   FChatView := View;
+End;
+
+Procedure TAssistantChatForm.EnsureInputPopup;
+Var
+  Sep: TMenuItem;
+Begin
+  If Assigned(FInputPopup) Or (Not Assigned(FInputEdit)) Then
+    Exit;
+  FInputPopup := TPopupMenu.Create(Self);
+  FInputPopup.OnPopup := @InputPopupPopup;
+  FInputCutItem := TMenuItem.Create(FInputPopup);
+  FInputCutItem.Caption := 'Cut';
+  FInputCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
+  FInputCutItem.OnClick := @InputCutClick;
+  FInputPopup.Items.Add(FInputCutItem);
+  FInputCopyItem := TMenuItem.Create(FInputPopup);
+  FInputCopyItem.Caption := 'Copy';
+  FInputCopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  FInputCopyItem.OnClick := @InputCopyClick;
+  FInputPopup.Items.Add(FInputCopyItem);
+  FInputPasteItem := TMenuItem.Create(FInputPopup);
+  FInputPasteItem.Caption := 'Paste';
+  FInputPasteItem.ShortCut := ShortCut(Ord('V'), [ssCtrl]);
+  FInputPasteItem.OnClick := @InputPasteClick;
+  FInputPopup.Items.Add(FInputPasteItem);
+  Sep := TMenuItem.Create(FInputPopup);
+  Sep.Caption := '-';
+  FInputPopup.Items.Add(Sep);
+  FInputSelectAllItem := TMenuItem.Create(FInputPopup);
+  FInputSelectAllItem.Caption := 'Select All';
+  FInputSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
+  FInputSelectAllItem.OnClick := @InputSelectAllClick;
+  FInputPopup.Items.Add(FInputSelectAllItem);
+  FInputEdit.PopupMenu := FInputPopup;
+  FInputEdit.WantTabs := False;
+End;
+
+Procedure TAssistantChatForm.InputPopupPopup(Sender: TObject);
+Var
+  HasSel: Boolean;
+  CanEdit: Boolean;
+Begin
+  HasSel := Assigned(FInputEdit) And (FInputEdit.SelLength > 0);
+  CanEdit := Assigned(FInputEdit) And (Not FInputEdit.ReadOnly);
+  If Assigned(FInputCutItem) Then
+    FInputCutItem.Enabled := HasSel And CanEdit;
+  If Assigned(FInputCopyItem) Then
+    FInputCopyItem.Enabled := HasSel;
+  If Assigned(FInputPasteItem) Then
+    FInputPasteItem.Enabled := CanEdit And Clipboard.HasFormat(CF_TEXT);
+  If Assigned(FInputSelectAllItem) Then
+    FInputSelectAllItem.Enabled := Assigned(FInputEdit) And (FInputEdit.GetTextLen > 0);
+End;
+
+Procedure TAssistantChatForm.InputCutClick(Sender: TObject);
+Begin
+  If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
+    FInputEdit.CutToClipboard;
+End;
+
+Procedure TAssistantChatForm.InputCopyClick(Sender: TObject);
+Begin
+  If Assigned(FInputEdit) Then
+    FInputEdit.CopyToClipboard;
+End;
+
+Procedure TAssistantChatForm.InputPasteClick(Sender: TObject);
+Begin
+  If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
+    FInputEdit.PasteFromClipboard;
+End;
+
+Procedure TAssistantChatForm.InputSelectAllClick(Sender: TObject);
+Begin
+  If Assigned(FInputEdit) Then
+    FInputEdit.SelectAll;
 End;
 
 Procedure TAssistantChatForm.ScrollChatToEnd;

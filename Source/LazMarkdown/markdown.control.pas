@@ -21,7 +21,7 @@ unit MarkDown.Control;
 interface
 
 uses
-  Classes, SysUtils, Math, Graphics, Controls, StdCtrls, LCLIntf, LCLType, LMessages,
+  Classes, SysUtils, Math, Graphics, Controls, StdCtrls, Menus, LCLIntf, LCLType, LMessages,
   MarkDown.Elements, MarkDown.CanvasRender, MarkDown.Parser;
 
 Type
@@ -50,6 +50,13 @@ Type
     FScrolledLeft: integer; // horizontal scrolled pixels (hidden pixels at left)
     FScrolledTop: integer;  // vertical scrolled pixels (hidden pixels at top)
     FSelectionStart: TSelectionPoint;
+    FContextPopup: TPopupMenu;
+    FOwnsContextPopup: Boolean;
+    FLastContextX: Integer;
+    FLastContextY: Integer;
+    FMISelectWord: TMenuItem;
+    FMISelectLine: TMenuItem;
+    FMICopy: TMenuItem;
     function GetColor(AIndex: Integer): TColor;
     function GetDocument: TMarkDownDocument;
     function GetInteger(AIndex: Integer): Integer;
@@ -65,11 +72,18 @@ Type
     procedure SetScrolledTop(AValue: integer);
     procedure SetSelectionColor(AValue: TColor);
     procedure SetString(AIndex: Integer; AValue: string);
+    function ClientToContent(X, Y: Integer): TPoint;
+    procedure EnsureDefaultPopup;
+    procedure ContextPopupPopup(Sender: TObject);
+    procedure ContextSelectWordClick(Sender: TObject);
+    procedure ContextSelectLineClick(Sender: TObject);
+    procedure ContextCopyClick(Sender: TObject);
   protected
     procedure Click; override;
     procedure CreateWnd; override;
     procedure DestroyWnd; override;
     procedure DoMarkdownChanged(Sender : TObject); virtual;
+    procedure DblClick; override;
     function GetMaxScrollLeft: integer;
     function GetMaxScrollTop: integer;
     procedure KeyDown(var Key: Word; Shift: TShiftState); override;
@@ -94,7 +108,10 @@ Type
     procedure CalcLayout; virtual;
     procedure ClearSelection;
     function GetSelectionText: String;
+    function HasSelection: Boolean;
     procedure CopySelectionToClipBoard;
+    function SelectWordAt(X, Y: Integer): Boolean;
+    function SelectLineAt(X, Y: Integer): Boolean;
     property MarkDown : TStrings Read FMarkDown Write SetMarkDown;
     property BaseFontSize: Integer index 0 read GetInteger Write SetInteger;
     property FontName: string index 0 read GetString write SetString;
@@ -328,6 +345,66 @@ begin
   if Result<0 then Result:=0;
 end;
 
+function TCustomMarkDownControl.ClientToContent(X, Y: Integer): TPoint;
+begin
+  Result.X := X + FScrolledLeft;
+  Result.Y := Y + FScrolledTop;
+end;
+
+procedure TCustomMarkDownControl.EnsureDefaultPopup;
+var
+  Sep: TMenuItem;
+begin
+  if Assigned(PopupMenu) then
+    Exit;
+  if Assigned(FContextPopup) then
+  begin
+    PopupMenu := FContextPopup;
+    Exit;
+  end;
+  FContextPopup := TPopupMenu.Create(Self);
+  FOwnsContextPopup := True;
+  FContextPopup.OnPopup := @ContextPopupPopup;
+  FMISelectWord := TMenuItem.Create(FContextPopup);
+  FMISelectWord.Caption := 'Select Word';
+  FMISelectWord.OnClick := @ContextSelectWordClick;
+  FContextPopup.Items.Add(FMISelectWord);
+  FMISelectLine := TMenuItem.Create(FContextPopup);
+  FMISelectLine.Caption := 'Select Line';
+  FMISelectLine.OnClick := @ContextSelectLineClick;
+  FContextPopup.Items.Add(FMISelectLine);
+  Sep := TMenuItem.Create(FContextPopup);
+  Sep.Caption := '-';
+  FContextPopup.Items.Add(Sep);
+  FMICopy := TMenuItem.Create(FContextPopup);
+  FMICopy.Caption := 'Copy';
+  FMICopy.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  FMICopy.OnClick := @ContextCopyClick;
+  FContextPopup.Items.Add(FMICopy);
+  PopupMenu := FContextPopup;
+end;
+
+procedure TCustomMarkDownControl.ContextPopupPopup(Sender: TObject);
+begin
+  if Assigned(FMICopy) then
+    FMICopy.Enabled := HasSelection;
+end;
+
+procedure TCustomMarkDownControl.ContextSelectWordClick(Sender: TObject);
+begin
+  SelectWordAt(FLastContextX, FLastContextY);
+end;
+
+procedure TCustomMarkDownControl.ContextSelectLineClick(Sender: TObject);
+begin
+  SelectLineAt(FLastContextX, FLastContextY);
+end;
+
+procedure TCustomMarkDownControl.ContextCopyClick(Sender: TObject);
+begin
+  CopySelectionToClipBoard;
+end;
+
 constructor TCustomMarkDownControl.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -341,10 +418,14 @@ begin
   FSelectionStart.CharOffset := 0;
   FSBVertShowing:=-1;
   FSBHorzShowing:=-1;
+  FOwnsContextPopup := False;
+  FLastContextX := 0;
+  FLastContextY := 0;
   TabStop := True;
   BorderStyle := bsSingle;
   BorderWidth := 0;
   AutoSize := True;
+  EnsureDefaultPopup;
 end;
 
 procedure TCustomMarkDownControl.CalculatePreferredSize(
@@ -394,14 +475,15 @@ end;
 
 procedure TCustomMarkDownControl.Click;
 var
-  P : TPoint;
+  P, Content: TPoint;
   URL : UTF8String;
 begin
   inherited Click;
   if assigned(FOnOpenURL) then
     begin
     P:=ScreenToControl(Mouse.CursorPos);
-    if FRenderer.HitTestLink(P.X,P.Y,URL) then
+    Content:=ClientToContent(P.X, P.Y);
+    if FRenderer.HitTestLink(Content.X, Content.Y, URL) then
       FOnOpenURL(Self,URL);
     end;
 end;
@@ -425,7 +507,33 @@ end;
 procedure TCustomMarkDownControl.CopySelectionToClipBoard;
 
 begin
-  Clipboard.AsText:=GetSelectionText;
+  if HasSelection then
+    Clipboard.AsText:=GetSelectionText;
+end;
+
+function TCustomMarkDownControl.HasSelection: Boolean;
+begin
+  Result := Assigned(FRenderer) and FRenderer.HasSelection;
+end;
+
+function TCustomMarkDownControl.SelectWordAt(X, Y: Integer): Boolean;
+var
+  Content: TPoint;
+begin
+  Content := ClientToContent(X, Y);
+  Result := Assigned(FRenderer) and FRenderer.SelectWordAt(Content.X, Content.Y);
+  if Result then
+    Invalidate;
+end;
+
+function TCustomMarkDownControl.SelectLineAt(X, Y: Integer): Boolean;
+var
+  Content: TPoint;
+begin
+  Content := ClientToContent(X, Y);
+  Result := Assigned(FRenderer) and FRenderer.SelectLineAt(Content.X, Content.Y);
+  if Result then
+    Invalidate;
 end;
 
 procedure TCustomMarkDownControl.KeyDown(var Key: Word; Shift: TShiftState);
@@ -443,16 +551,38 @@ procedure TCustomMarkDownControl.Loaded;
 begin
   inherited Loaded;
   ParseMarkDown;
+  EnsureDefaultPopup;
+end;
+
+procedure TCustomMarkDownControl.DblClick;
+var
+  P: TPoint;
+  Shift: TShiftState;
+begin
+  inherited DblClick;
+  P := ScreenToClient(Mouse.CursorPos);
+  Shift := GetKeyShiftState;
+  if ssCtrl in Shift then
+    SelectLineAt(P.X, P.Y)
+  else
+    SelectWordAt(P.X, P.Y);
 end;
 
 procedure TCustomMarkDownControl.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+var
+  Content: TPoint;
 begin
   inherited MouseDown(Button, Shift, X, Y);
+  if CanFocus and not Focused then
+    SetFocus;
+  FLastContextX := X;
+  FLastContextY := Y;
+  Content := ClientToContent(X, Y);
 
   if Button = mbLeft then
   begin
-    // Start text selection
-    FSelectionStart := FRenderer.HitTestText(X, Y);
+    // Start text selection (content coords for layout hit-test)
+    FSelectionStart := FRenderer.HitTestText(Content.X, Content.Y);
     if FSelectionStart.LayoutItemIndex <> -1 then
     begin
       FIsSelecting := True;
@@ -481,13 +611,15 @@ procedure TCustomMarkDownControl.MouseMove(Shift: TShiftState; X, Y: Integer);
 var
   CurrentPoint: TSelectionPoint;
   P1,P2 : TSelectionPoint;
+  Content: TPoint;
 
 begin
   inherited MouseMove(Shift, X, Y);
 
   if FIsSelecting and (ssLeft in Shift) then
   begin
-    CurrentPoint := FRenderer.HitTestText(X, Y);
+    Content := ClientToContent(X, Y);
+    CurrentPoint := FRenderer.HitTestText(Content.X, Content.Y);
     if CurrentPoint.LayoutItemIndex <> -1 then
     begin
       NormalizeSelection(FSelectionStart, CurrentPoint, P1, P2);
@@ -713,6 +845,12 @@ end;
 
 destructor TCustomMarkDownControl.Destroy;
 begin
+  if FOwnsContextPopup and (PopupMenu = FContextPopup) then
+    PopupMenu := Nil;
+  if FOwnsContextPopup then
+    FreeAndNil(FContextPopup)
+  else
+    FContextPopup := Nil;
   FreeAndNil(FRenderer);
   FreeAndNil(FMarkDown);
   inherited destroy;
