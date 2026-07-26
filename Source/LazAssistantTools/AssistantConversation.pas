@@ -424,7 +424,7 @@ Var
   I, N: Integer;
   Turn: TConversationTurn;
   Offset: Int64;
-  Line, DataFile: String;
+  Line: String;
   Entry: TConversationIndexEntry;
 Begin
   Result := False;
