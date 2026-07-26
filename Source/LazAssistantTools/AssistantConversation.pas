@@ -225,7 +225,10 @@ End;
 
 Procedure TAssistantConversationStore.SetProjectRoot(Const RootPath: String);
 Begin
-  FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
+  If Trim(RootPath) = '' Then
+    FProjectRoot := ''
+  Else
+    FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
   ClearAll;
   FLoaded := False;
 End;

@@ -144,7 +144,14 @@ Type
     Procedure ReviewBuild;
     Procedure FixSelectedError;
     Procedure StopStream;
+    { Rebind conversation store, session and UI to LazarusIDE.ActiveProject. }
+    Procedure BindToActiveProject;
+    { Drop project binding without reading ActiveProject (safe during project close). }
+    Procedure UnbindFromProject;
   End;
+
+Procedure NotifyOpenAssistantFormsProjectChanged;
+Procedure NotifyOpenAssistantFormsProjectCleared;
 
 Implementation
 
@@ -213,15 +220,7 @@ Begin
       FElapsedTimer.Interval := 250;
       FElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
-  EnsureConversationStore;
-  RefreshFromConfig;
-  UpdateStatusFooter;
-  ApplyActiveMode;
-  { Restore API conversation context without painting a "session loaded" banner. }
-  RestoreSessionIfNeeded;
-  RefreshConversationList;
-  { Always open on the latest conversation turn when present. }
-  ShowLastConversationTurn;
+  BindToActiveProject;
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
 End;
 
@@ -1425,6 +1424,129 @@ Begin
   SetCurrentSystemNote('New conversation started. Model context cleared.');
   PersistSession;
   UpdateStatusFooter;
+End;
+
+Procedure TAssistantChatForm.UnbindFromProject;
+Begin
+  { Do not call PersistSession here: ActiveProject is half-torn during close.
+    Conversation turns are already on disk via AppendTurn. }
+  If FSending Then
+    StopStream;
+  Caption := 'Project Assistant';
+  FSessionProjectKey := '';
+  ClearCurrentTurnDisplay;
+  FTranscript.Clear;
+  FContextUsed := 0;
+  FUserCancelled := False;
+  FLastChatPaintTick := 0;
+  FSelectedTurnIndex := -1;
+  If Assigned(AssistantClient) Then
+    AssistantClient.ClearHistory;
+  If Assigned(ProjectAssistantConversation) Then
+    ProjectAssistantConversation.SetProjectRoot('');
+  RefreshConversationList;
+  ClearCurrentTurnDisplay;
+  RefreshChatDisplay(True, False);
+  UpdateStatusFooter;
+  WorkflowLogger.Info('AssistantChat', 'Unbound from project');
+End;
+
+Procedure TAssistantChatForm.BindToActiveProject;
+Var
+  Key, Title, Root: String;
+  Proj: TLazProject;
+Begin
+  { Cancel any in-flight stream for the previous project before rebinding.
+    Do not PersistSession first: when ProjectOpened fires, ActiveProject is already
+    the new project, so a save would write the old transcript under the new path.
+    Turns for the previous project were already flushed by AppendTurn. }
+  If FSending Then
+    StopStream;
+
+  Key := '';
+  Root := '';
+  Title := 'Project Assistant';
+  Proj := Nil;
+  If Assigned(LazarusIDE) Then
+    Proj := LazarusIDE.ActiveProject;
+  If Assigned(Proj) And (Not Proj.IsVirtual) Then
+    Begin
+      Key := Proj.ProjectInfoFile;
+      Root := ProjectAssistantRoot;
+      If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
+        Title := 'Project Assistant — ' + ExtractFileName(Proj.MainFile.Filename)
+      Else If Key <> '' Then
+        Title := 'Project Assistant — ' + ExtractFileName(Key);
+    End
+  Else If Assigned(Proj) And Proj.IsVirtual Then
+    Title := 'Project Assistant — (unsaved project)';
+
+  Caption := Title;
+  FSessionProjectKey := '';
+  ClearCurrentTurnDisplay;
+  FTranscript.Clear;
+  FContextUsed := 0;
+  FUserCancelled := False;
+  FLastChatPaintTick := 0;
+  FSelectedTurnIndex := -1;
+  If Assigned(AssistantClient) Then
+    AssistantClient.ClearHistory;
+
+  If Assigned(ProjectAssistantConversation) Then
+    Begin
+      If Root = '' Then
+        ProjectAssistantConversation.SetProjectRoot('')
+      Else
+        Begin
+          ProjectAssistantConversation.SetProjectRoot(Root);
+          ProjectAssistantConversation.Load;
+        End;
+    End;
+
+  RefreshFromConfig;
+  ApplyActiveMode;
+  If Root <> '' Then
+    Begin
+      FSessionProjectKey := Key;
+      RestoreSessionIfNeeded;
+      RefreshConversationList;
+      ShowLastConversationTurn;
+    End
+  Else
+    Begin
+      RefreshConversationList;
+      ClearCurrentTurnDisplay;
+      RefreshChatDisplay(True, False);
+    End;
+  UpdateStatusFooter;
+  WorkflowLogger.Info('AssistantChat', 'Bound to project: ' + Title);
+End;
+
+Procedure NotifyOpenAssistantFormsProjectChanged;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  { Do not auto-create the window — only refresh forms that already exist. }
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TAssistantChatForm) And Not (csDestroying In Form.ComponentState) Then
+        TAssistantChatForm(Form).BindToActiveProject;
+    End;
+End;
+
+Procedure NotifyOpenAssistantFormsProjectCleared;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TAssistantChatForm) And Not (csDestroying In Form.ComponentState) Then
+        TAssistantChatForm(Form).UnbindFromProject;
+    End;
 End;
 
 Function ExtractSourceSnippet(Const FileName: String; LineNo, Radius: Integer): String;

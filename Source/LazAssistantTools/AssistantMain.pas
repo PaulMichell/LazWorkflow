@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, LCLType, MenuIntf, IDECommands, IDEWindowIntf,
-  LazIDEIntf;
+  LazIDEIntf, ProjectIntf;
 
 Procedure RegisterAssistantTools;
 
@@ -32,6 +32,12 @@ Type
     Procedure QuickFix(Fixes: TMsgQuickFixes; Msg: TMessageLine); Override;
   End;
 
+  TAssistantIDEHooks = Class
+  Public
+    Function ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
+    Function ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+  End;
+
 Var
   CmdAssistantChat: TIDECommand;
   CmdAssistantOpenMarkdown: TIDECommand;
@@ -40,6 +46,7 @@ Var
   CmdAssistantFixError: TIDECommand;
   CmdAssistantSettings: TIDECommand;
   AssistantFixQuickFix: TAssistantFixMessageQuickFix;
+  AssistantIDEHooks: TAssistantIDEHooks;
 
 Procedure ShowAssistantChatWindow(Sender: TObject);
 Begin
@@ -131,6 +138,26 @@ Begin
   AForm.Name := AFormName;
 End;
 
+Function TAssistantIDEHooks.ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
+Begin
+  Result := mrOk;
+  If Assigned(AProject) Then
+    WorkflowLogger.Info('AssistantChat', 'Project opened: ' + AProject.ProjectInfoFile)
+  Else
+    WorkflowLogger.Info('AssistantChat', 'Project opened (nil)');
+  { New project create and load both fire this; rebind open Project Assistant windows. }
+  NotifyOpenAssistantFormsProjectChanged;
+End;
+
+Function TAssistantIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+Begin
+  Result := mrOk;
+  { Do not rebind from ActiveProject here – it is half-torn-down during close.
+    Clear open forms; ProjectOpened rebinds when the next project is ready. }
+  WorkflowLogger.Info('AssistantChat', 'Project closing');
+  NotifyOpenAssistantFormsProjectCleared;
+End;
+
 Procedure RegisterAssistantTools;
 Var
   AssistantMenu, MainSec, SetSec: TIDEMenuSection;
@@ -140,6 +167,9 @@ Var
   InsertAt: Integer;
 Begin
   WorkflowLogger.Info('AssistantChat', 'Registering LazAssistantTools');
+
+  If AssistantIDEHooks = Nil Then
+    AssistantIDEHooks := TAssistantIDEHooks.Create;
 
   Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
   If Cat = Nil Then
@@ -191,11 +221,27 @@ Begin
       RegisterIDEMsgQuickFix(AssistantFixQuickFix);
     End;
 
+  If Assigned(LazarusIDE) Then
+    Begin
+      LazarusIDE.AddHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
+      LazarusIDE.AddHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
+    End;
+
   WorkflowLogger.Info('AssistantChat', 'LazAssistantTools registered successfully');
 End;
 
+Initialization
+
+AssistantIDEHooks := Nil;
+
 Finalization
 
+If Assigned(LazarusIDE) And Assigned(AssistantIDEHooks) Then
+  Begin
+    LazarusIDE.RemoveHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
+    LazarusIDE.RemoveHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
+  End;
+FreeAndNil(AssistantIDEHooks);
 If Assigned(AssistantFixQuickFix) And Assigned(MsgQuickFixes) Then
   MsgQuickFixes.UnregisterQuickFix(AssistantFixQuickFix);
 FreeAndNil(AssistantFixQuickFix);
