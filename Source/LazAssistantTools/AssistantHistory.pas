@@ -161,9 +161,25 @@ Begin
   Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss', LocalTimeToUniversal(Now)) + 'Z';
 End;
 
+Function NormalizeAssistantProjectRoot(Const Dir: String): String;
+Var
+  Base, ParentDir: String;
+Begin
+  { Prefer repository/project root, not a nested Source/ (or src/) folder. }
+  Result := IncludeTrailingPathDelimiter(ExpandFileName(Dir));
+  Base := ExtractFileName(ExcludeTrailingPathDelimiter(Result));
+  If SameText(Base, 'Source') Or SameText(Base, 'src') Or SameText(Base, 'Units') Then
+    Begin
+      ParentDir := ExpandFileName(Result + '..');
+      If (ParentDir <> '') And DirectoryExistsUTF8(ParentDir) Then
+        Result := IncludeTrailingPathDelimiter(ParentDir);
+    End;
+End;
+
 Function ProjectAssistantRoot: String;
 Var
   Proj: TLazProject;
+  Dir: String;
 Begin
   Result := '';
   If Not Assigned(LazarusIDE) Then
@@ -171,11 +187,16 @@ Begin
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
-  If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-    Result := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
-  If Result = '' Then
-    Result := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
-  Result := IncludeTrailingPathDelimiter(Result);
+  { Prefer .lpi directory, then main file directory; then lift out of Source/. }
+  Dir := '';
+  If Proj.ProjectInfoFile <> '' Then
+    Dir := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
+  If Dir = '' Then
+    If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
+      Dir := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
+  If Dir = '' Then
+    Exit;
+  Result := NormalizeAssistantProjectRoot(Dir);
 End;
 
 Constructor TAssistantHistoryStore.Create;

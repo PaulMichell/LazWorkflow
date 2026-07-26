@@ -177,53 +177,8 @@ object AssistantChatForm: TAssistantChatForm
       Caption = 'Chat'
       ClientHeight = 513
       ClientWidth = 954
-      object FHistoryPanel: TPanel
-        Left = 0
-        Height = 513
-        Top = 0
-        Width = 240
-        Align = alLeft
-        BevelOuter = bvNone
-        ClientHeight = 513
-        ClientWidth = 240
-        TabOrder = 0
-        object FHistoryLabel: TLabel
-          Left = 8
-          Height = 17
-          Top = 8
-          Width = 48
-          Caption = 'History'
-          ParentColor = False
-        end
-        object FHistorySearch: TEdit
-          Left = 8
-          Height = 28
-          Top = 28
-          Width = 224
-          Anchors = [akTop, akLeft, akRight]
-          TabOrder = 0
-          OnChange = HistorySearchChange
-        end
-        object FHistoryList: TListBox
-          Left = 8
-          Height = 440
-          Top = 64
-          Width = 224
-          Anchors = [akTop, akLeft, akRight, akBottom]
-          ItemHeight = 0
-          TabOrder = 1
-          OnClick = HistoryListClick
-          OnDblClick = HistoryListClick
-        end
-      end
-      object FChatSplitter: TSplitter
-        Left = 240
-        Height = 513
-        Top = 0
-        Width = 5
-      end
       object FChatHost: TPanel
-        Left = 245
+        Left = 0
         Height = 513
         Top = 0
         Width = 709
@@ -233,7 +188,54 @@ object AssistantChatForm: TAssistantChatForm
         Color = clWhite
         ParentBackground = False
         ParentColor = False
+        TabOrder = 0
+      end
+      object FChatSplitter: TSplitter
+        Left = 709
+        Height = 513
+        Top = 0
+        Width = 5
+        Align = alRight
+      end
+      object FHistoryPanel: TPanel
+        Left = 714
+        Height = 513
+        Top = 0
+        Width = 240
+        Align = alRight
+        BevelOuter = bvNone
+        ClientHeight = 513
+        ClientWidth = 240
         TabOrder = 2
+        object FHistoryLabel: TLabel
+          Left = 8
+          Height = 17
+          Top = 8
+          Width = 224
+          Anchors = [akTop, akLeft, akRight]
+          Caption = 'History'
+          ParentColor = False
+        end
+        object FHistoryList: TListBox
+          Left = 8
+          Height = 440
+          Top = 32
+          Width = 224
+          Anchors = [akTop, akLeft, akRight, akBottom]
+          ItemHeight = 0
+          TabOrder = 0
+          OnClick = HistoryListClick
+          OnDblClick = HistoryListClick
+        end
+        object FHistorySearch: TEdit
+          Left = 8
+          Height = 28
+          Top = 480
+          Width = 224
+          Anchors = [akLeft, akRight, akBottom]
+          TabOrder = 1
+          OnChange = HistorySearchChange
+        end
       end
     end
     object FTabPlan: TTabSheet

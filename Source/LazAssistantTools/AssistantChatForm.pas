@@ -100,7 +100,9 @@ Type
     Procedure ElapsedTimerTimer(Sender: TObject);
     Procedure EnsureChatView;
     Procedure ScrollChatToEnd;
-    Procedure RefreshChatDisplay(Force: Boolean);
+    Procedure ScrollChatToTop;
+    Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
+    Procedure SetBusyCursor(IsBusy: Boolean);
     Function RoleHeading(Const Role: String): String;
     Function QuoteMarkdownLines(Const TextValue: String): String;
     Function FormatAssistantMarkdown(Const Thinking, Content: String): String;
@@ -201,18 +203,11 @@ Begin
   ApplyActiveMode;
   RefreshHistoryList;
   RestoreSessionIfNeeded;
+  { Empty current-turn surface — no System banner on open. }
   If (FDisplayUser = '') And (FAssistantContent = '') And (FDisplaySystemNote = '') Then
-    Begin
-      If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
-        SetCurrentSystemNote(
-          'Project Assistant ready. Signed in with SuperGrok / X Premium — send a message. ' +
-          'Full conversation history is kept for the model; this pane shows the current turn only.')
-      Else
-        SetCurrentSystemNote(
-          'Project Assistant ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
-    End
+    RefreshChatDisplay(True, False)
   Else
-    RefreshChatDisplay(True);
+    RefreshChatDisplay(True, False);
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
 End;
 
@@ -220,6 +215,7 @@ Procedure TAssistantChatForm.FormDestroy(Sender: TObject);
 Begin
   If Assigned(FElapsedTimer) Then
     FElapsedTimer.Enabled := False;
+  SetBusyCursor(False);
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window destroyed');
 End;
 
@@ -255,7 +251,16 @@ End;
 Procedure TAssistantChatForm.SetCurrentSystemNote(Const NoteText: String);
 Begin
   FDisplaySystemNote := NoteText;
-  RefreshChatDisplay(True);
+  RefreshChatDisplay(True, False);
+End;
+
+Procedure TAssistantChatForm.SetBusyCursor(IsBusy: Boolean);
+Begin
+  { crAppStart is the classic pointer+hourglass "busy but usable" cursor. }
+  If IsBusy Then
+    Screen.Cursor := crAppStart
+  Else
+    Screen.Cursor := crDefault;
 End;
 
 Function TAssistantChatForm.CurrentModeFromTabs: TAssistantMode;
@@ -344,9 +349,9 @@ End;
 
 Procedure TAssistantChatForm.RefreshHistoryList;
 Var
-  I: Integer;
+  I, SeqNo: Integer;
   Entry: THistoryIndexEntry;
-  Filter, Line, ModeFilter: String;
+  Filter, Line: String;
   ShowItem: Boolean;
 Begin
   If Not Assigned(FHistoryList) Or Not Assigned(ProjectAssistantHistory) Then
@@ -355,17 +360,17 @@ Begin
   Filter := '';
   If Assigned(FHistorySearch) Then
     Filter := LowerCase(Trim(FHistorySearch.Text));
-  ModeFilter := AssistantModeToStr(FActiveMode);
   FHistoryList.Items.BeginUpdate;
   Try
     FHistoryList.Clear;
-    For I := ProjectAssistantHistory.IndexCount - 1 DownTo 0 Do
+    { Oldest first so new turns append at the bottom (grow down). }
+    For I := 0 To ProjectAssistantHistory.IndexCount - 1 Do
       Begin
         Entry := ProjectAssistantHistory.IndexEntry(I);
         If Not Assigned(Entry) Then
           Continue;
-        { Show all modes in list; prefix with mode tag. }
-        Line := UpperCase(Copy(Entry.Mode, 1, 1)) + ' · ' + Entry.PromptPreview;
+        SeqNo := I + 1;
+        Line := IntToStr(SeqNo) + ' - ' + Entry.PromptPreview;
         If Entry.ErrorText <> '' Then
           Line := Line + ' [err]';
         ShowItem := True;
@@ -379,9 +384,11 @@ Begin
   Finally
     FHistoryList.Items.EndUpdate;
   End;
-  { ModeFilter kept for future per-mode filter toggle. }
-  If ModeFilter = '' Then
-    ;
+  If FHistoryList.Items.Count > 0 Then
+    Begin
+      FHistoryList.ItemIndex := FHistoryList.Items.Count - 1;
+      FHistoryList.TopIndex := FHistoryList.Items.Count - 1;
+    End;
 End;
 
 Procedure TAssistantChatForm.HistorySearchChange(Sender: TObject);
@@ -410,11 +417,12 @@ Begin
   FAssistantThinking := Turn.Thinking;
   FAssistantContent := Turn.Response;
   If Turn.ErrorText <> '' Then
-    FDisplaySystemNote := '**Error (historical):** ' + Turn.ErrorText
+    FDisplaySystemNote := '**Error:** ' + Turn.ErrorText
   Else
-    FDisplaySystemNote := Format('*(history · %s · %s)*', [Turn.Mode, Turn.CreatedAt]);
+    FDisplaySystemNote := '';
   FStreamingActive := False;
-  RefreshChatDisplay(True);
+  { Show the start of the turn, not the end. }
+  RefreshChatDisplay(True, False);
 End;
 
 Procedure TAssistantChatForm.RecordCurrentTurn(Const ErrorText: String);
@@ -552,6 +560,7 @@ Begin
   FReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FFixErrorAction.Enabled := Not IsSending;
   FInputEdit.ReadOnly := IsSending;
+  SetBusyCursor(IsSending);
   If IsSending Then
     Begin
       FStreamStart := Now;
@@ -650,7 +659,17 @@ Begin
   View.ScrolledTop := High(Integer) Div 4;
 End;
 
-Procedure TAssistantChatForm.RefreshChatDisplay(Force: Boolean);
+Procedure TAssistantChatForm.ScrollChatToTop;
+Var
+  View: TMarkDownControl;
+Begin
+  If Not Assigned(FChatView) Then
+    Exit;
+  View := TMarkDownControl(FChatView);
+  View.ScrolledTop := 0;
+End;
+
+Procedure TAssistantChatForm.RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean);
 Var
   View: TMarkDownControl;
   Body: String;
@@ -663,16 +682,10 @@ Begin
     Exit;
   FLastChatPaintTick := NowTick;
 
-  { Current-turn surface only. Full chat remains in AssistantClient for the API. }
+  { Current-turn surface: User first, then Assistant; optional note last. }
   Body := '';
-  If FDisplaySystemNote <> '' Then
-    Body := '### System' + LineEnding + LineEnding + FDisplaySystemNote;
   If FDisplayUser <> '' Then
-    Begin
-      If Body <> '' Then
-        Body := Body + LineEnding + LineEnding;
-      Body := Body + '### User' + LineEnding + LineEnding + FDisplayUser;
-    End;
+    Body := '### User' + LineEnding + LineEnding + FDisplayUser;
   If FStreamingActive Or (FAssistantContent <> '') Or
     (FShowThinking And (FAssistantThinking <> '')) Then
     Begin
@@ -681,8 +694,14 @@ Begin
       Body := Body + '### Assistant' + LineEnding + LineEnding +
         FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
     End;
+  If FDisplaySystemNote <> '' Then
+    Begin
+      If Body <> '' Then
+        Body := Body + LineEnding + LineEnding;
+      Body := Body + FDisplaySystemNote;
+    End;
   If Body = '' Then
-    Body := '*No current turn. Type a message below.*';
+    Body := '*Type a message below to start.*';
 
   View := TMarkDownControl(FChatView);
   Try
@@ -696,7 +715,10 @@ Begin
     On E: Exception Do
       WorkflowLogger.Warning('AssistantChat', 'Chat Markdown render failed: ' + E.Message);
   End;
-  ScrollChatToEnd;
+  If ScrollToBottom Then
+    ScrollChatToEnd
+  Else
+    ScrollChatToTop;
 End;
 
 Function TAssistantChatForm.RoleHeading(Const Role: String): String;
