@@ -25,6 +25,7 @@ Type
     FFixErrorAction: TAction;
     FSettingsAction: TAction;
     FToggleThinkingAction: TAction;
+    FExportHistoryAction: TAction;
     FDeleteHistoryAction: TAction;
     FPages: TPageControl;
     FTabChat: TTabSheet;
@@ -33,6 +34,7 @@ Type
     FConversationPanel: TPanel;
     FHistoryLabel: TLabel;
     FHistoryCombo: TComboBox;
+    FBtnExportHistory: TButton;
     FBtnDeleteHistory: TButton;
     FConversationLabel: TLabel;
     FConversationSearch: TEdit;
@@ -68,6 +70,7 @@ Type
     Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure ToggleThinkingActionExecute(Sender: TObject);
+    Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
@@ -108,6 +111,8 @@ Type
     Procedure RefreshHistoryCombo;
     Procedure RebuildClientFromConversation;
     Procedure ApplyLoadedConversationToUi(Const StatusNote: String);
+    Function BuildConversationMarkdownExport: String;
+    Function DefaultExportFileName: String;
     Procedure ShowConversationTurn(TurnIndex: Integer);
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
@@ -594,8 +599,119 @@ Begin
     Items.Free;
     FHistoryUpdating := False;
   End;
+  If Assigned(FExportHistoryAction) Then
+    FExportHistoryAction.Enabled := (Not FSending) And Assigned(ProjectAssistantConversation) And
+      ProjectAssistantConversation.HasTurns;
   If Assigned(FDeleteHistoryAction) Then
     FDeleteHistoryAction.Enabled := Not FSending;
+End;
+
+Function TAssistantChatForm.DefaultExportFileName: String;
+Var
+  Stamp, Title: String;
+  I: Integer;
+Begin
+  Stamp := FormatDateTime('yyyymmdd"-"hhnnss', Now);
+  Title := 'conversation';
+  If Assigned(FHistoryCombo) And (FHistoryCombo.ItemIndex >= 0) Then
+    Title := FHistoryCombo.Items[FHistoryCombo.ItemIndex];
+  If SameText(Copy(Title, 1, 7), 'Current') Then
+    Begin
+      Title := Trim(Copy(Title, 8, MaxInt));
+      If (Title <> '') And (Title[1] = '—') Then
+        Title := Trim(Copy(Title, 2, MaxInt));
+      If (Title = '') Or SameText(Title, '(empty)') Then
+        Title := 'conversation';
+    End;
+  For I := 1 To Length(Title) Do
+    If Title[I] In ['/', '\', ':', '*', '?', '"', '<', '>', '|'] Then
+      Title[I] := '-';
+  If Length(Title) > 48 Then
+    Title := Copy(Title, 1, 48);
+  Result := Title + '-' + Stamp + '.md';
+End;
+
+Function TAssistantChatForm.BuildConversationMarkdownExport: String;
+Var
+  SL: TStringList;
+  I: Integer;
+  Turn: TConversationTurn;
+  ProjectName, MetaLine: String;
+Begin
+  SL := TStringList.Create;
+  Try
+    ProjectName := '(unknown project)';
+    If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+      Begin
+        If Assigned(LazarusIDE.ActiveProject.MainFile) And
+          (LazarusIDE.ActiveProject.MainFile.Filename <> '') Then
+          ProjectName := LazarusIDE.ActiveProject.MainFile.Filename
+        Else
+          ProjectName := LazarusIDE.ActiveProject.ProjectInfoFile;
+      End;
+    SL.Add('# Project Assistant conversation');
+    SL.Add('');
+    SL.Add('- **Exported:** ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', Now));
+    SL.Add('- **Project:** ' + ProjectName);
+    If Assigned(AssistantChatConfig) Then
+      SL.Add('- **Model:** ' + AssistantChatConfig.Model)
+    Else
+      SL.Add('- **Model:** ' + FModelName);
+    SL.Add('- **Turns:** ' + IntToStr(ProjectAssistantConversation.TurnCount));
+    SL.Add('');
+    SL.Add('---');
+    SL.Add('');
+    For I := 0 To ProjectAssistantConversation.TurnCount - 1 Do
+      Begin
+        If Not ProjectAssistantConversation.GetTurn(I, Turn) Then
+          Continue;
+        SL.Add('## Turn ' + IntToStr(I + 1));
+        If Turn.CreatedAt <> '' Then
+          Begin
+            SL.Add('');
+            MetaLine := '*' + Turn.CreatedAt;
+            If Turn.Mode <> '' Then
+              MetaLine := MetaLine + ' · mode ' + Turn.Mode;
+            If Turn.Model <> '' Then
+              MetaLine := MetaLine + ' · ' + Turn.Model;
+            SL.Add(MetaLine + '*');
+          End;
+        SL.Add('');
+        SL.Add('### User');
+        SL.Add('');
+        If Trim(Turn.Prompt) <> '' Then
+          SL.Add(Turn.Prompt)
+        Else
+          SL.Add('*(empty)*');
+        SL.Add('');
+        If Trim(Turn.Thinking) <> '' Then
+          Begin
+            SL.Add('### Thinking');
+            SL.Add('');
+            SL.Add(Turn.Thinking);
+            SL.Add('');
+          End;
+        SL.Add('### Assistant');
+        SL.Add('');
+        If Trim(Turn.Response) <> '' Then
+          SL.Add(Turn.Response)
+        Else If Trim(Turn.ErrorText) <> '' Then
+          SL.Add('*(no response)*')
+        Else
+          SL.Add('*(empty)*');
+        If Trim(Turn.ErrorText) <> '' Then
+          Begin
+            SL.Add('');
+            SL.Add('**Error:** ' + Turn.ErrorText);
+          End;
+        SL.Add('');
+        SL.Add('---');
+        SL.Add('');
+      End;
+    Result := SL.Text;
+  Finally
+    SL.Free;
+  End;
 End;
 
 Procedure TAssistantChatForm.RebuildClientFromConversation;
@@ -1948,6 +2064,59 @@ Begin
   ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
   PersistSession;
   WorkflowLogger.Info('AssistantChat', 'History activated: ' + ArchiveId);
+End;
+
+Procedure TAssistantChatForm.ExportHistoryActionExecute(Sender: TObject);
+Var
+  Dlg: TSaveDialog;
+  Path, Body: String;
+  SL: TStringList;
+Begin
+  If FSending Then
+    Begin
+      MessageDlg('Stop the current reply before exporting.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  EnsureConversationStore;
+  If (Not Assigned(ProjectAssistantConversation)) Or (Not ProjectAssistantConversation.HasTurns) Then
+    Begin
+      MessageDlg('There is nothing to export in the current conversation.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Body := BuildConversationMarkdownExport;
+  Dlg := TSaveDialog.Create(Nil);
+  Try
+    Dlg.Title := 'Export conversation';
+    Dlg.Filter := 'Markdown (*.md)|*.md|All files (*.*)|*.*';
+    Dlg.DefaultExt := 'md';
+    Dlg.FileName := DefaultExportFileName;
+    Dlg.Options := Dlg.Options + [ofOverwritePrompt, ofPathMustExist];
+    If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And
+      (Not LazarusIDE.ActiveProject.IsVirtual) Then
+      Begin
+        If LazarusIDE.ActiveProject.ProjectInfoFile <> '' Then
+          Dlg.InitialDir := ExtractFilePath(ExpandFileName(LazarusIDE.ActiveProject.ProjectInfoFile));
+      End;
+    If Not Dlg.Execute Then
+      Exit;
+    Path := Dlg.FileName;
+  Finally
+    Dlg.Free;
+  End;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.Text := Body;
+      SL.SaveToFile(Path);
+      SetCurrentSystemNote('Exported conversation to `' + Path + '`.');
+      WorkflowLogger.Info('AssistantChat', 'Exported conversation to ' + Path);
+    Except
+      On E: Exception Do
+        MessageDlg('Could not write export file:' + LineEnding + E.Message, mtError, [mbOK], 0);
+    End;
+  Finally
+    SL.Free;
+  End;
 End;
 
 Procedure TAssistantChatForm.DeleteHistoryActionExecute(Sender: TObject);

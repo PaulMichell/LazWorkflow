@@ -46,8 +46,12 @@ object AssistantChatForm: TAssistantChatForm
       Caption = 'Show Thinking'
       OnExecute = ToggleThinkingActionExecute
     end
+    object FExportHistoryAction: TAction
+      Caption = 'Export…'
+      OnExecute = ExportHistoryActionExecute
+    end
     object FDeleteHistoryAction: TAction
-      Caption = 'Delete Conversation…'
+      Caption = 'Delete…'
       OnExecute = DeleteHistoryActionExecute
     end
   end
@@ -231,14 +235,23 @@ object AssistantChatForm: TAssistantChatForm
           TabOrder = 0
           OnChange = HistoryComboChange
         end
-        object FBtnDeleteHistory: TButton
+        object FBtnExportHistory: TButton
           Left = 8
           Height = 28
           Top = 60
-          Width = 224
-          Anchors = [akTop, akLeft, akRight]
-          Action = FDeleteHistoryAction
+          Width = 108
+          Anchors = [akTop, akLeft]
+          Action = FExportHistoryAction
           TabOrder = 1
+        end
+        object FBtnDeleteHistory: TButton
+          Left = 124
+          Height = 28
+          Top = 60
+          Width = 108
+          Anchors = [akTop, akRight]
+          Action = FDeleteHistoryAction
+          TabOrder = 2
         end
         object FConversationLabel: TLabel
           Left = 8
@@ -256,7 +269,7 @@ object AssistantChatForm: TAssistantChatForm
           Width = 224
           Anchors = [akTop, akLeft, akRight, akBottom]
           ItemHeight = 0
-          TabOrder = 2
+          TabOrder = 3
           OnClick = ConversationListClick
           OnDblClick = ConversationListClick
           OnSelectionChange = ConversationListSelectionChange
@@ -267,7 +280,7 @@ object AssistantChatForm: TAssistantChatForm
           Top = 480
           Width = 224
           Anchors = [akLeft, akRight, akBottom]
-          TabOrder = 3
+          TabOrder = 4
           OnChange = ConversationSearchChange
         end
       end
