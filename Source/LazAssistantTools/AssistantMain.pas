@@ -146,7 +146,7 @@ Begin
     Cat := IDECommandList.CreateCategory(Nil, 'Assistant', 'Assistant');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdAssistantChat := RegisterIDECommand(Cat, 'AssistantChat', 'Project Chat', Key, Nil, @ShowAssistantChatWindow);
+  CmdAssistantChat := RegisterIDECommand(Cat, 'AssistantChat', 'Project Assistant', Key, Nil, @ShowAssistantChatWindow);
   CmdAssistantOpenMarkdown := RegisterIDECommand(Cat, 'AssistantOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoAssistantOpenMarkdown);
   CmdAssistantReviewCompile := RegisterIDECommand(Cat, 'AssistantReviewCompile', 'Review Compile',
     Key, Nil, @DoAssistantReviewCompile);
@@ -154,7 +154,7 @@ Begin
     Key, Nil, @DoAssistantReviewBuild);
   CmdAssistantFixError := RegisterIDECommand(Cat, 'AssistantFixError', 'Fix Selected Message with Assistant',
     Key, Nil, @DoAssistantFixError);
-  CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Chat Settings', Key, Nil, @DoAssistantSettings);
+  CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Assistant Settings', Key, Nil, @DoAssistantSettings);
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
     Two logical sections so Lazarus draws a separator before Settings, matching Repository. }
@@ -174,7 +174,7 @@ Begin
       mnuMain.Insert(InsertAt, AssistantMenu);
     End;
   MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
-  RegisterIDEMenuCommand(MainSec, 'AssistantChat', 'Project Chat', Nil, Nil, CmdAssistantChat);
+  RegisterIDEMenuCommand(MainSec, 'AssistantChat', 'Project Assistant', Nil, Nil, CmdAssistantChat);
   RegisterIDEMenuCommand(MainSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);

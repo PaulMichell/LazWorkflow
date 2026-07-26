@@ -1,6 +1,6 @@
 Unit AssistantChatForm;
 
-{ Main Assistant chat window with history, input and status footer (c) 2026 Michell Computing. }
+{ Project Assistant main window — mode tabs, current-turn view, status footer (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -24,22 +24,29 @@ Type
     FReviewBuildAction: TAction;
     FFixErrorAction: TAction;
     FSettingsAction: TAction;
-    FToolBar: TToolBar;
-    ToolButtonNewChat: TToolButton;
-    ToolButtonSep: TToolButton;
-    ToolButtonReviewCompile: TToolButton;
-    ToolButtonReviewBuild: TToolButton;
-    ToolButtonFixError: TToolButton;
-    ToolButtonSep2: TToolButton;
-    ToolButtonSettings: TToolButton;
+    FToggleThinkingAction: TAction;
+    FPages: TPageControl;
+    FTabChat: TTabSheet;
+    FTabPlan: TTabSheet;
+    FTabCode: TTabSheet;
+    FChatHost: TPanel;
+    FPlanPlaceholder: TLabel;
+    FCodePlaceholder: TLabel;
+    FBottomBar: TPanel;
+    FBtnNewChat: TButton;
+    FBtnToggleThinking: TButton;
+    FBtnReviewCompile: TButton;
+    FBtnReviewBuild: TButton;
+    FBtnFixError: TButton;
+    FBtnSettings: TButton;
     FStatusFooter: TStatusFooterFrame;
     FInputPanel: TPanel;
     FSendButton: TButton;
     FStopButton: TButton;
     FInputEdit: TMemo;
-    FChatHost: TPanel;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
+    Procedure PagesChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
@@ -47,23 +54,31 @@ Type
     Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
+    Procedure ToggleThinkingActionExecute(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
     FChatView: TControl; { TMarkDownControl created at runtime. }
-    FTranscript: TStringList; { Finished messages as Markdown source. }
+    FTranscript: TStringList; { Session export / legacy; not the main UI surface. }
+    FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
+    FDisplaySystemNote: String; { Optional system/error note for the current surface. }
+    FShowThinking: Boolean;
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
     FUserCancelled: Boolean;
-    FAssistantContent: String; { Final answer channel (history). }
-    FAssistantThinking: String; { Reasoning stream (display only). }
+    FAssistantContent: String; { Final answer channel (API history). }
+    FAssistantThinking: String; { Reasoning stream (display optional). }
     FReviewInProgress: Boolean;
     FStreamStart: TDateTime;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
+    Procedure UpdateThinkingActionCaption;
+    Procedure ClearCurrentTurnDisplay;
+    Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
+    Procedure SetCurrentSystemNote(Const NoteText: String);
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
@@ -129,6 +144,9 @@ Begin
   FUserCancelled := False;
   FAssistantContent := '';
   FAssistantThinking := '';
+  FDisplayUser := '';
+  FDisplaySystemNote := '';
+  FShowThinking := True;
   FReviewInProgress := False;
   FStreamStart := 0;
   FStatusPhase := '';
@@ -151,8 +169,9 @@ End;
 
 Procedure TAssistantChatForm.FormCreate(Sender: TObject);
 Begin
-  Caption := 'Project Chat';
+  Caption := 'Project Assistant';
   EnsureChatView;
+  UpdateThinkingActionCaption;
   If Not Assigned(FElapsedTimer) Then
     Begin
       FElapsedTimer := TTimer.Create(Self);
@@ -163,23 +182,74 @@ Begin
   RefreshFromConfig;
   UpdateStatusFooter;
   RestoreSessionIfNeeded;
-  If FTranscript.Count = 0 Then
+  If (FDisplayUser = '') And (FAssistantContent = '') And (FDisplaySystemNote = '') Then
     Begin
       If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
-        AppendMessage('system', 'Project Chat ready. Signed in with SuperGrok / X Premium — send a message.')
+        SetCurrentSystemNote(
+          'Project Assistant ready. Signed in with SuperGrok / X Premium — send a message. ' +
+          'Full conversation history is kept for the model; this pane shows the current turn only.')
       Else
-        AppendMessage('system', 'Project Chat ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
+        SetCurrentSystemNote(
+          'Project Assistant ready. Open Settings and sign in with SuperGrok / X Premium, then send a message.');
     End
   Else
     RefreshChatDisplay(True);
-  WorkflowLogger.Info('AssistantChat', 'Project Chat window created');
+  WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
 End;
 
 Procedure TAssistantChatForm.FormDestroy(Sender: TObject);
 Begin
   If Assigned(FElapsedTimer) Then
     FElapsedTimer.Enabled := False;
-  WorkflowLogger.Info('AssistantChat', 'Project Chat window destroyed');
+  WorkflowLogger.Info('AssistantChat', 'Project Assistant window destroyed');
+End;
+
+Procedure TAssistantChatForm.UpdateThinkingActionCaption;
+Begin
+  If Not Assigned(FToggleThinkingAction) Then
+    Exit;
+  If FShowThinking Then
+    FToggleThinkingAction.Caption := 'Hide Thinking'
+  Else
+    FToggleThinkingAction.Caption := 'Show Thinking';
+End;
+
+Procedure TAssistantChatForm.ClearCurrentTurnDisplay;
+Begin
+  FDisplayUser := '';
+  FDisplaySystemNote := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
+  FStreamingActive := False;
+End;
+
+Procedure TAssistantChatForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
+Begin
+  FDisplaySystemNote := '';
+  If WithIdeContext Then
+    FDisplayUser := UserText + LineEnding + LineEnding +
+      '*(IDE context attached for the model: active editor + project files.)*'
+  Else
+    FDisplayUser := UserText;
+End;
+
+Procedure TAssistantChatForm.SetCurrentSystemNote(Const NoteText: String);
+Begin
+  FDisplaySystemNote := NoteText;
+  RefreshChatDisplay(True);
+End;
+
+Procedure TAssistantChatForm.PagesChange(Sender: TObject);
+Begin
+  If Assigned(FPages) And Assigned(FPages.ActivePage) Then
+    WorkflowLogger.Info('AssistantChat', 'Mode tab: ' + FPages.ActivePage.Caption);
+End;
+
+Procedure TAssistantChatForm.ToggleThinkingActionExecute(Sender: TObject);
+Begin
+  FShowThinking := Not FShowThinking;
+  UpdateThinkingActionCaption;
+  RefreshChatDisplay(True);
 End;
 
 Function TAssistantChatForm.FormatElapsedStatus(Const Phase: String): String;
@@ -309,13 +379,22 @@ Begin
     Key := LazarusIDE.ActiveProject.ProjectInfoFile;
   If Key = '' Then
     Exit;
-  If SameText(Key, FSessionProjectKey) And (FTranscript.Count > 0) Then
+  If SameText(Key, FSessionProjectKey) And Assigned(AssistantClient) And
+    (AssistantClient.MessageCount > 0) Then
     Exit;
   FSessionProjectKey := Key;
   If LoadProjectChatSession(FTranscript, LoadedContext) Then
     Begin
       FContextUsed := LoadedContext;
-      RefreshChatDisplay(True);
+      { Full prior turns remain in AssistantClient for API context; UI stays lean. }
+      ClearCurrentTurnDisplay;
+      If Assigned(AssistantClient) And (AssistantClient.MessageCount > 0) Then
+        SetCurrentSystemNote(Format(
+          'Session restored — %d message(s) are available as model context. ' +
+          'The pane shows the current turn only; send a message to continue.',
+          [AssistantClient.MessageCount]))
+      Else
+        RefreshChatDisplay(True);
       UpdateStatusFooter;
     End;
 End;
@@ -367,14 +446,26 @@ Begin
     Exit;
   FLastChatPaintTick := NowTick;
 
-  Body := FTranscript.Text;
-  If FStreamingActive Then
+  { Current-turn surface only. Full chat remains in AssistantClient for the API. }
+  Body := '';
+  If FDisplaySystemNote <> '' Then
+    Body := '### System' + LineEnding + LineEnding + FDisplaySystemNote;
+  If FDisplayUser <> '' Then
+    Begin
+      If Body <> '' Then
+        Body := Body + LineEnding + LineEnding;
+      Body := Body + '### User' + LineEnding + LineEnding + FDisplayUser;
+    End;
+  If FStreamingActive Or (FAssistantContent <> '') Or
+    (FShowThinking And (FAssistantThinking <> '')) Then
     Begin
       If Body <> '' Then
         Body := Body + LineEnding + LineEnding;
       Body := Body + '### Assistant' + LineEnding + LineEnding +
         FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
     End;
+  If Body = '' Then
+    Body := '*No current turn. Type a message below.*';
 
   View := TMarkDownControl(FChatView);
   Try
@@ -445,7 +536,7 @@ Begin
       Result := '*Waiting for model…*';
       Exit;
     End;
-  If Thinking <> '' Then
+  If FShowThinking And (Thinking <> '') Then
     Begin
       Result := '> **Thinking**' + LineEnding + '>' + LineEnding + QuoteMarkdownLines(Thinking);
       If Content <> '' Then
@@ -453,12 +544,19 @@ Begin
       Else
         Result := Result + LineEnding + LineEnding + '*Waiting for answer…*';
     End
+  Else If Content <> '' Then
+    Result := Content
+  Else If FStreamingActive Then
+    Result := '*Waiting for answer…*'
   Else
-    Result := Content;
+    Result := '';
 End;
 
 Procedure TAssistantChatForm.AppendMessage(Const Role, Content: String);
+Var
+  R: String;
 Begin
+  { Keep a thin legacy transcript for session export; UI uses current-turn fields. }
   If FTranscript.Count > 0 Then
     FTranscript.Add('');
   FTranscript.Add('### ' + RoleHeading(Role));
@@ -467,7 +565,20 @@ Begin
     FTranscript.Add(Content)
   Else
     FTranscript.Add('');
-  RefreshChatDisplay(True);
+  R := LowerCase(Trim(Role));
+  If R = 'user' Then
+    SetCurrentUserDisplay(Content, False)
+  Else If R = 'system' Then
+    SetCurrentSystemNote(Content)
+  Else If R = 'assistant' Then
+    Begin
+      FAssistantContent := Content;
+      FAssistantThinking := '';
+      FDisplaySystemNote := '';
+      RefreshChatDisplay(True);
+    End
+  Else
+    RefreshChatDisplay(True);
 End;
 
 Procedure TAssistantChatForm.BeginAssistantReply;
@@ -519,18 +630,16 @@ Begin
       FTranscript.Add('### Assistant');
       FTranscript.Add('');
       FTranscript.Add(DisplayBody);
-    End
-  Else If (ErrorText <> '') And (FAssistantContent = '') Then
-    AppendMessage('assistant', '*(error)*');
+    End;
 
   If ErrorText <> '' Then
     Begin
-      AppendMessage('system', '**Error:** ' + ErrorText);
+      FDisplaySystemNote := '**Error:** ' + ErrorText;
       FStatusFooter.SetRightText('Error');
     End
   Else
     Begin
-      { History stores the final answer only — not the thinking trace. }
+      { Full conversation for the API lives on AssistantClient (all prior turns). }
       If Assigned(AssistantClient) And (FAssistantContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FAssistantContent);
       FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
@@ -539,8 +648,7 @@ Begin
       FStatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
-  FAssistantContent := '';
-  FAssistantThinking := '';
+  { Keep FAssistantContent / thinking on the current-turn surface until the next send. }
   RefreshChatDisplay(True);
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
@@ -601,15 +709,14 @@ Begin
           If Assigned(AssistantClient) And (FAssistantContent <> '') Then
             AssistantClient.AddMessage(amrAssistant, FAssistantContent);
           FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
+          FDisplaySystemNote := '*Stream cancelled.*';
         End
       Else
-        AppendMessage('system', '*Stream cancelled before the first token.*');
+        FDisplaySystemNote := '*Stream cancelled before the first token.*';
     End
   Else
-    AppendMessage('system', '*Stream cancelled.*');
+    FDisplaySystemNote := '*Stream cancelled.*';
   FStreamingActive := False;
-  FAssistantContent := '';
-  FAssistantThinking := '';
   RefreshChatDisplay(True);
   SetSending(False);
   FStatusFooter.SetRightText('Cancelled');
@@ -639,14 +746,16 @@ Begin
       RefreshFromConfig;
       ApiText := UserText;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
+      SetCurrentUserDisplay(UserText, WithContext);
+      FAssistantContent := '';
+      FAssistantThinking := '';
       If WithContext Then
         Begin
           ContextBlock := BuildIDEContextBlock;
           ApiText := UserText + LineEnding + LineEnding + ContextBlock;
-          AppendMessage('user', UserText + LineEnding + '(IDE context attached: active editor + project files)');
-        End
-      Else
-        AppendMessage('user', UserText);
+        End;
+      AppendMessage('user', FDisplayUser);
+      { Prior turns already on AssistantClient are sent with this request (full context). }
       AssistantClient.AddMessage(amrUser, ApiText);
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
       BeginAssistantReply;
@@ -887,15 +996,13 @@ Begin
   SetSending(False);
   FTranscript.Clear;
   FContextUsed := 0;
-  FStreamingActive := False;
   FUserCancelled := False;
-  FAssistantContent := '';
-  FAssistantThinking := '';
   FLastChatPaintTick := 0;
+  ClearCurrentTurnDisplay;
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
   ClearProjectChatSession;
-  AppendMessage('system', 'New conversation started.');
+  SetCurrentSystemNote('New conversation started. Model context cleared.');
   PersistSession;
   UpdateStatusFooter;
 End;

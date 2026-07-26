@@ -136,7 +136,7 @@ Modes are not mere labels. Switching mode changes:
   - `run_compile` / `run_build` via `LazarusIDE.DoBuildProject` (or existing Review Compile/Build paths).
   - `get_compiler_messages` / feed last build output into the next turn.
 - **Plan TODO panel** visible when a plan is associated with the project (see below).
-- Primary loop: *select or “next” TODO → implement → compile → fix → mark TODO done → update plan MD*.
+- Primary loop: *select or “next” plan section (from scan) → implement → compile → fix → set section Status: complete in the plan → rescan*.
 
 #### 3.2.6 Plan → TODO (dynamically generated from the plan)
 
@@ -382,7 +382,7 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 1. **Mode-appropriate tool cards** in the current turn (read / wrote plan / applied edit / compile result) without flooding history.
 2. **AI commit messages** from LazRepositoryTools using Assistant in Chat mode (read-only diff).
 3. **Fix Error** remains a Code-mode entry point (pre-fill prompt + jump to Code tab).
-4. **Plan-driven Code loop** with Next / Done TODO actions.
+4. **Plan-driven Code loop** — TODO tiles scanned from plan sections; Next / Done update `Status:` lines in the plan.
 5. **History search** (index previews + optional deep JSONL scan) replacing scroll archaeology.
 6. **Thinking toggle** + “copy thinking” for debugging model behaviour.
 7. **Audit trail** of writes (plan + code) as rows or a separate `actions` table.
@@ -408,7 +408,7 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Markdown live windows | Done (entity/`&` and table fixes in lazmarkdown tree) |
 | Mode tabs / bottom bar / JSONL history | **Not started** |
 | Plan write tools / Code write tools | **Not started** |
-| Plan TODO sync | **Not started** |
+| Plan section scan → TODO tiles | **Not started** |
 
 ### Phase 0 – Foundations — **done**
 Monorepo, three packages, event bus, logging, status footer.
@@ -419,14 +419,18 @@ Graph, status, fetch/pull/push refresh, Manage Repository form shell.
 ### Phase 2 – LazAssistantTools MVP — **largely done** (pre-mode redesign)
 Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
-### Phase 2.5 – Project Assistant shell & history (next major UX)
-1. Rename UI to **Project Assistant**.
-2. Top **Chat | Plan | Code** tabs; **bottom** action bar (mirror Manage Repository interaction model).
-3. Current-turn-only working surface; **thinking toggle**.
-4. Create `.assistant/` on first use; **`history.jsonl` + `history.index.json`** with schema above.
-5. History browser (list + search + open turn).
-6. Persist mode + options in `.assistant/config.json`.
-7. Mode-scoped tool allow-lists (Chat = read-only tools only).
+### Phase 2.5 – Project Assistant shell & history
+
+**Order:** (1) shell rewrite + vendored LazMarkdown, (2) history JSONL, (3) mode tool gates.
+
+1. Rename UI to **Project Assistant** — **in progress / shell landed**.
+2. Top **Chat | Plan | Code** tabs; **bottom** action bar — **shell landed** (Plan/Code placeholders).
+3. Current-turn-only working surface; **thinking toggle** — **shell landed**. Full message list still sent to the API.
+4. Vendored **LazMarkdown** package — **done**.
+5. Create `.assistant/` on first use; **`history.jsonl` + `history.index.json`**.
+6. History browser (list + search + open turn).
+7. Persist mode + options in `.assistant/config.json`.
+8. Mode-scoped tool allow-lists (Chat = read-only tools only).
 
 ### Phase 3 – Plan mode
 1. Default `Documents/` directory; create on demand.
@@ -462,7 +466,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 | History store | JSONL + sidecar index in `.assistant/` | Zero native dep; fast list/open via offsets |
 | Working surface | Current turn only | Reduces scroll fatigue |
 | Plan artefacts | `Documents/` default + live MD windows | Visible to user; assistant state stays hidden |
-| Plan tasks | Checkbox MD ↔ structured todos | Flexible + formal enough |
+| Plan → TODO | Scan plan sections (heading + Status footer); plan MD is sole source of truth |
 | Code edits | IDE buffers, not silent overwrite | Undo + no “file changed on disk” fights |
 | Git backend | CLI now; libgit2 later | Already working |
 | Markdown preview | Lazarus `TMarkDownControl` | Upstream bugs (`&`, tables) fixed in local Lazarus tree |
@@ -474,11 +478,11 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 2. **Mode confusion** — Users may stay in Chat and expect edits. Mitigate with clear empty-state copy (“Switch to Code to edit sources”) and Fix Error auto-switching to Code.
 3. **Plan structure drift** — LLM drops `Status:` lines or uses free prose only. Mitigate with Plan/Code system prompts, a “normalise section statuses” command, and empty-state guidance when the scan finds no sections.
 4. **Large thinking blobs** — JSONL size growth. Mitigate with optional “store thinking” preference, retention limits, or compact-old-turns.
-5. **Context vs history** — Current-turn UI must still build **API context** from selected prior turns / summary. Roadblock if we only send the last user message: model forgets the plan. Mitigate with explicit “include last K turns” + “pin plan summary” in Code/Plan modes.
+5. **Context vs history (resolved)** — Submit the **full conversation** on every request via `AssistantClient` messages. The UI current-turn surface and future history browser are for humans only; they do not truncate the model context.
 6. **Concurrent editors** — Plan MD open in Markdown window and updated by tools; need debounced reload (already partially present).
 7. **Security** — Code mode is powerful; path sandbox + no shell tool in v1.
-8. **lazmarkdown AVs** — Bare `&` and table `ChildCount` bugs fixed in local Lazarus sources; IDE must reinstall `lazmarkdown` or AVs return on plan docs.
-9. **Form migration cost** — Toolbar-to-tabs/bottom-bar is a non-trivial LFM rewrite; do shell first with Chat-only content, then Plan/Code panels.
+8. **Markdown control** — **Vendored** as package `LazMarkdown` under `Source/LazMarkdown` (local copy of Lazarus lazmarkdown + entity/table fixes). LazAssistantTools depends on `LazMarkdown`, not the IDE’s `lazmarkdown` install.
+9. **Form migration** — Shell rewrite first (tabs + bottom bar + current-turn view); Plan/Code panels and history JSONL follow.
 10. **Analytics scope creep** — Ship index fields with timestamps/duration first; defer charts. Deep SQL-like queries are out of scope until/unless SQLite is revisited.
 
 ---
@@ -504,7 +508,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 1. Packages: LazWorkflowCommon, LazRepositoryTools, LazAssistantTools.
 2. **Project Assistant** with Chat / Plan / Code modes and mode-gated tools.
 3. `.assistant/history.jsonl` (+ index) history browser + current-turn UI.
-4. Plan mode Markdown workflow + Code mode TODO panel.
+4. Plan mode Markdown workflow + Code mode TODO tiles (live plan scan).
 5. README / user guide: modes, permissions, `.assistant` VCS guidance.
 6. Example: plan → code → compile → commit loop.
 7. Tests where feasible (history DB, path sandbox, mode allow-list).
@@ -516,7 +520,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Native feel inside Lazarus; Manage Repository and Project Assistant share interaction patterns (top tabs, calm chrome).
 - User can revisit any past turn in seconds via history search (not scroll).
 - Chat cannot modify sources; Plan can only touch intended docs; Code can implement with compile feedback.
-- Plan TODOs stay understandable at a glance in Code mode after plan edits.
+- After the assistant updates plan sections/status, Code mode TODO tiles refresh from the same file without a separate todo store.
 - Full loop without leaving the IDE: plan → implement → build → fix → commit (with Repository tools).
 
 ---
@@ -538,9 +542,9 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 | Permission model | Tab = mode = hard tool gate; lock mode while busy |
 | History store | JSONL append + `history.index.json` with file offsets; no SQLite for v1 |
 | History UX | Side list + search on index; seek-load full turn; optional “continue from turn” |
-| API context | Do not send only the visible turn — include plan summary / last K turns / pinned TODO |
+| API context | Full chat history always submitted via AssistantClient; UI is current-turn only |
 | Plan default path | `Documents/` for new plans; allow linking existing `Docs/ProjectPlan.md` |
-| TODO sync | Checkboxes + optional HTML comment IDs; archive removed tasks |
+| Plan → TODO | Dynamic section scan (title tile + status footer); Done writes Status back into plan MD |
 | Code apply | IDE buffer edits; start with auto-apply in Code mode + undo; add confirm later if needed |
 | Thinking | Toggle + still store in DB when present |
 | Secrets | Keep OAuth out of `.assistant/`; gitignore `.assistant/` by default |

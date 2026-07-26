@@ -84,7 +84,7 @@
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
-        <PackageName Value="lazmarkdown"/>
+        <PackageName Value="LazMarkdown"/>
       </Item1>
       <Item2>
         <PackageName Value="LazWorkflowCommon"/>
