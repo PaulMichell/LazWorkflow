@@ -16,12 +16,12 @@ Uses
 Procedure RegisterAssistantTools;
 
 Var
-  AssistantChatWindowCreator: TIDEWindowCreator;
+  ProjectAssistantWindowCreator: TIDEWindowCreator;
 
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, AssistantChatForm, AssistantService, AssistantSettingsForm, AssistantMarkdownForm,
+  WorkflowLog, WorkflowEvents, ProjectAssistantForm, AssistantService, AssistantSettingsForm, AssistantMarkdownForm,
   IDEMsgIntf, IDEExternToolIntf;
 
 Type
@@ -34,8 +34,8 @@ Type
 
   TAssistantIDEHooks = Class
   Public
-    Function ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
-    Function ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+    Function ProjectOpened(Sender: TObject; LazProject: TLazProject): TModalResult;
+    Function ProjectClose(Sender: TObject; LazProject: TLazProject): TModalResult;
   End;
 
 Var
@@ -48,21 +48,21 @@ Var
   AssistantFixQuickFix: TAssistantFixMessageQuickFix;
   AssistantIDEHooks: TAssistantIDEHooks;
 
-Procedure ShowAssistantChatWindow(Sender: TObject);
+Procedure ShowProjectAssistantWindow(Sender: TObject);
 Begin
-  IDEWindowCreators.ShowForm(AssistantChatWindowCreator.FormName, True);
+  IDEWindowCreators.ShowForm(ProjectAssistantWindowCreator.FormName, True);
 End;
 
-Function GetAssistantChatForm(ShowWindow: Boolean = True): TAssistantChatForm;
+Function GetProjectAssistantForm(ShowWindow: Boolean = True): TProjectAssistantForm;
 Var
   Form: TCustomForm;
 Begin
   Result := Nil;
   If ShowWindow Then
-    ShowAssistantChatWindow(Nil);
-  Form := IDEWindowCreators.GetForm(AssistantChatWindowCreator.FormName, True);
-  If Form Is TAssistantChatForm Then
-    Result := TAssistantChatForm(Form);
+    ShowProjectAssistantWindow(Nil);
+  Form := IDEWindowCreators.GetForm(ProjectAssistantWindowCreator.FormName, True);
+  If Form Is TProjectAssistantForm Then
+    Result := TProjectAssistantForm(Form);
 End;
 
 Procedure DoAssistantSettings(Sender: TObject);
@@ -72,33 +72,33 @@ End;
 
 Procedure DoAssistantOpenMarkdown(Sender: TObject);
 Begin
-  WorkflowLogger.Info('AssistantChat', 'Open Markdown document requested');
+  WorkflowLogger.Info('ProjectAssistant', 'Open Markdown document requested');
   OpenMarkdownDocument('');
 End;
 
 Procedure DoAssistantReviewCompile(Sender: TObject);
 Var
-  Form: TAssistantChatForm;
+  Form: TProjectAssistantForm;
 Begin
-  Form := GetAssistantChatForm(True);
+  Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
     Form.ReviewCompile;
 End;
 
 Procedure DoAssistantReviewBuild(Sender: TObject);
 Var
-  Form: TAssistantChatForm;
+  Form: TProjectAssistantForm;
 Begin
-  Form := GetAssistantChatForm(True);
+  Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
     Form.ReviewBuild;
 End;
 
 Procedure DoAssistantFixError(Sender: TObject);
 Var
-  Form: TAssistantChatForm;
+  Form: TProjectAssistantForm;
 Begin
-  Form := GetAssistantChatForm(True);
+  Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
     Form.FixSelectedError;
 End;
@@ -122,40 +122,40 @@ End;
 
 Procedure TAssistantFixMessageQuickFix.QuickFix(Fixes: TMsgQuickFixes; Msg: TMessageLine);
 Var
-  Form: TAssistantChatForm;
+  Form: TProjectAssistantForm;
 Begin
   If Assigned(Msg) And Assigned(IDEMessagesWindow) Then
     IDEMessagesWindow.SelectMsgLine(Msg);
-  Form := GetAssistantChatForm(True);
+  Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
     Form.FixSelectedError;
 End;
 
-Procedure CreateAssistantChatForm(Sender: TObject; AFormName: String;
-  Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
+Procedure CreateProjectAssistantForm(Sender: TObject; FormName: String;
+  Var Form: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  IDEWindowCreators.CreateForm(AForm, TAssistantChatForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
-  AForm.Name := AFormName;
+  IDEWindowCreators.CreateForm(Form, TProjectAssistantForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
+  Form.Name := FormName;
 End;
 
-Function TAssistantIDEHooks.ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
+Function TAssistantIDEHooks.ProjectOpened(Sender: TObject; LazProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
-  If Assigned(AProject) Then
-    WorkflowLogger.Info('AssistantChat', 'Project opened: ' + AProject.ProjectInfoFile)
+  If Assigned(LazProject) Then
+    WorkflowLogger.Info('ProjectAssistant', 'Project opened: ' + LazProject.ProjectInfoFile)
   Else
-    WorkflowLogger.Info('AssistantChat', 'Project opened (nil)');
+    WorkflowLogger.Info('ProjectAssistant', 'Project opened (nil)');
   { New project create and load both fire this; rebind open Project Assistant windows. }
-  NotifyOpenAssistantFormsProjectChanged;
+  NotifyOpenProjectAssistantFormsProjectChanged;
 End;
 
-Function TAssistantIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+Function TAssistantIDEHooks.ProjectClose(Sender: TObject; LazProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
   { Do not rebind from ActiveProject here – it is half-torn-down during close.
     Clear open forms; ProjectOpened rebinds when the next project is ready. }
-  WorkflowLogger.Info('AssistantChat', 'Project closing');
-  NotifyOpenAssistantFormsProjectCleared;
+  WorkflowLogger.Info('ProjectAssistant', 'Project closing');
+  NotifyOpenProjectAssistantFormsProjectCleared;
 End;
 
 Procedure RegisterAssistantTools;
@@ -166,7 +166,7 @@ Var
   Cat: TIDECommandCategory;
   InsertAt: Integer;
 Begin
-  WorkflowLogger.Info('AssistantChat', 'Registering LazAssistantTools');
+  WorkflowLogger.Info('ProjectAssistant', 'Registering LazAssistantTools');
 
   If AssistantIDEHooks = Nil Then
     AssistantIDEHooks := TAssistantIDEHooks.Create;
@@ -176,7 +176,7 @@ Begin
     Cat := IDECommandList.CreateCategory(Nil, 'Assistant', 'Assistant');
 
   Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdAssistantChat := RegisterIDECommand(Cat, 'AssistantChat', 'Project Assistant', Key, Nil, @ShowAssistantChatWindow);
+  CmdAssistantChat := RegisterIDECommand(Cat, 'ProjectAssistant', 'Project Assistant', Key, Nil, @ShowProjectAssistantWindow);
   CmdAssistantOpenMarkdown := RegisterIDECommand(Cat, 'AssistantOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoAssistantOpenMarkdown);
   CmdAssistantReviewCompile := RegisterIDECommand(Cat, 'AssistantReviewCompile', 'Review Compile',
     Key, Nil, @DoAssistantReviewCompile);
@@ -204,7 +204,7 @@ Begin
       mnuMain.Insert(InsertAt, AssistantMenu);
     End;
   MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
-  RegisterIDEMenuCommand(MainSec, 'AssistantChat', 'Project Assistant', Nil, Nil, CmdAssistantChat);
+  RegisterIDEMenuCommand(MainSec, 'ProjectAssistant', 'Project Assistant', Nil, Nil, CmdAssistantChat);
   RegisterIDEMenuCommand(MainSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
@@ -212,7 +212,7 @@ Begin
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 
-  AssistantChatWindowCreator := IDEWindowCreators.Add('AssistantChat', @CreateAssistantChatForm, Nil,
+  ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
     '120', '80', '800', '650');
 
   If Not Assigned(AssistantFixQuickFix) Then
@@ -227,7 +227,7 @@ Begin
       LazarusIDE.AddHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
     End;
 
-  WorkflowLogger.Info('AssistantChat', 'LazAssistantTools registered successfully');
+  WorkflowLogger.Info('ProjectAssistant', 'LazAssistantTools registered successfully');
 End;
 
 Initialization

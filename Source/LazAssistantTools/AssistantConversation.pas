@@ -111,7 +111,7 @@ Type
   End;
 
 Function AssistantModeToStr(Mode: TAssistantMode): String;
-Function StrToAssistantMode(Const S: String): TAssistantMode;
+Function StrToAssistantMode(Const ModeText: String): TAssistantMode;
 Function NewConversationTurnId: String;
 Function IsoNowUtc: String;
 Function ProjectAssistantRoot: String;
@@ -134,15 +134,15 @@ Const
   ConversationArchiveSuffix = '.jsonl';
   ConversationArchiveIndexSuffix = '.index.jsonl';
 
-Function JsonEscape(Const S: String): String;
+Function JsonEscape(Const SourceText: String): String;
 Var
   I: Integer;
   C: Char;
 Begin
   Result := '';
-  For I := 1 To Length(S) Do
+  For I := 1 To Length(SourceText) Do
     Begin
-      C := S[I];
+      C := SourceText[I];
       Case C Of
         '"': Result := Result + '\"';
         '\': Result := Result + '\\';
@@ -170,11 +170,11 @@ Begin
   End;
 End;
 
-Function StrToAssistantMode(Const S: String): TAssistantMode;
+Function StrToAssistantMode(Const ModeText: String): TAssistantMode;
 Var
   T: String;
 Begin
-  T := LowerCase(Trim(S));
+  T := LowerCase(Trim(ModeText));
   If T = 'plan' Then
     Result := amPlan
   Else If T = 'code' Then

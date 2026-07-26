@@ -1,4 +1,4 @@
-Unit AssistantChatForm;
+Unit ProjectAssistantForm;
 
 { Project Assistant main window — mode tabs, current-turn view, status footer (c) 2026 Michell Computing. }
 
@@ -15,7 +15,7 @@ Uses
   IDEExternToolIntf, AssistantConversation;
 
 Type
-  TAssistantChatForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
+  TProjectAssistantForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
     FActionList: TActionList;
     FNewChatAction: TAction;
     FSendAction: TAction;
@@ -183,8 +183,8 @@ Type
     Procedure UnbindFromProject;
   End;
 
-Procedure NotifyOpenAssistantFormsProjectChanged;
-Procedure NotifyOpenAssistantFormsProjectCleared;
+Procedure NotifyOpenProjectAssistantFormsProjectChanged;
+Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 
 Implementation
 
@@ -201,7 +201,7 @@ Const
   { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
   LiveConversationMarker = -2;
 
-Constructor TAssistantChatForm.Create(TheOwner: TComponent);
+Constructor TProjectAssistantForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FModelName := AssistantConfigDefaultModel;
@@ -235,7 +235,7 @@ Begin
   WorkflowEventBus.AddListener(Self);
 End;
 
-Destructor TAssistantChatForm.Destroy;
+Destructor TProjectAssistantForm.Destroy;
 Begin
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
@@ -246,7 +246,7 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TAssistantChatForm.FormCreate(Sender: TObject);
+Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Assistant';
   EnsureChatView;
@@ -260,10 +260,10 @@ Begin
       FElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
   BindToActiveProject;
-  WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
+  WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
-Procedure TAssistantChatForm.FormDestroy(Sender: TObject);
+Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   If Assigned(FElapsedTimer) Then
     FElapsedTimer.Enabled := False;
@@ -274,10 +274,10 @@ Begin
       AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
       AssistantChatConfig.Save;
     End;
-  WorkflowLogger.Info('AssistantChat', 'Project Assistant window destroyed');
+  WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window destroyed');
 End;
 
-Procedure TAssistantChatForm.UpdateThinkingActionCaption;
+Procedure TProjectAssistantForm.UpdateThinkingActionCaption;
 Begin
   If Not Assigned(FToggleThinkingAction) Then
     Exit;
@@ -287,7 +287,7 @@ Begin
     FToggleThinkingAction.Caption := 'Show Thinking';
 End;
 
-Procedure TAssistantChatForm.ClearCurrentTurnDisplay;
+Procedure TProjectAssistantForm.ClearCurrentTurnDisplay;
 Begin
   FDisplayUser := '';
   FDisplaySystemNote := '';
@@ -301,7 +301,7 @@ Begin
   FSelectedTurnIndex := -1;
 End;
 
-Procedure TAssistantChatForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
+Procedure TProjectAssistantForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
 Begin
   FDisplaySystemNote := '';
   If WithIdeContext Then
@@ -311,13 +311,13 @@ Begin
     FDisplayUser := UserText;
 End;
 
-Procedure TAssistantChatForm.SetCurrentSystemNote(Const NoteText: String);
+Procedure TProjectAssistantForm.SetCurrentSystemNote(Const NoteText: String);
 Begin
   FDisplaySystemNote := NoteText;
   RefreshChatDisplay(True, False);
 End;
 
-Procedure TAssistantChatForm.SetBusyCursor(IsBusy: Boolean);
+Procedure TProjectAssistantForm.SetBusyCursor(IsBusy: Boolean);
 Begin
   { crAppStart is the classic pointer+hourglass "busy but usable" cursor. }
   If IsBusy Then
@@ -326,7 +326,7 @@ Begin
     Screen.Cursor := crDefault;
 End;
 
-Function TAssistantChatForm.CurrentModeFromTabs: TAssistantMode;
+Function TProjectAssistantForm.CurrentModeFromTabs: TAssistantMode;
 Begin
   Result := amChat;
   If Not Assigned(FPages) Or Not Assigned(FPages.ActivePage) Then
@@ -339,7 +339,7 @@ Begin
     Result := amChat;
 End;
 
-Procedure TAssistantChatForm.ApplyActiveMode;
+Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
   FActiveMode := CurrentModeFromTabs;
   If Assigned(AssistantClient) Then
@@ -366,7 +366,7 @@ Begin
   End;
 End;
 
-Procedure TAssistantChatForm.PagesChange(Sender: TObject);
+Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
 Begin
   If FSending Then
     Begin
@@ -381,11 +381,11 @@ Begin
     End;
   ApplyActiveMode;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
-    WorkflowLogger.Info('AssistantChat', 'Mode tab: ' + FPages.ActivePage.Caption);
+    WorkflowLogger.Info('ProjectAssistant', 'Mode tab: ' + FPages.ActivePage.Caption);
   RefreshConversationList;
 End;
 
-Procedure TAssistantChatForm.EnsureConversationStore;
+Procedure TProjectAssistantForm.EnsureConversationStore;
 Var
   Root: String;
   ShowThinking: Boolean;
@@ -410,7 +410,7 @@ Begin
     ProjectAssistantConversation.Load;
 End;
 
-Function TAssistantChatForm.ConversationListTurnIndex(ListIndex: Integer): Integer;
+Function TProjectAssistantForm.ConversationListTurnIndex(ListIndex: Integer): Integer;
 Var
   Encoded: Integer;
 Begin
@@ -425,7 +425,7 @@ Begin
   Result := Encoded - 1; { may be LiveConversationMarker (-2) }
 End;
 
-Procedure TAssistantChatForm.ShowConversationTurn(TurnIndex: Integer);
+Procedure TProjectAssistantForm.ShowConversationTurn(TurnIndex: Integer);
 Var
   Prompt, Response, Thinking, ErrorText: String;
 Begin
@@ -446,7 +446,7 @@ Begin
     Exit;
   If Not ProjectAssistantConversation.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
     Begin
-      WorkflowLogger.Warning('AssistantChat', 'ShowConversationTurn failed idx=' + IntToStr(TurnIndex) +
+      WorkflowLogger.Warning('ProjectAssistant', 'ShowConversationTurn failed idx=' + IntToStr(TurnIndex) +
         ' ' + ProjectAssistantConversation.LastError);
       Exit;
     End;
@@ -460,7 +460,7 @@ Begin
   RefreshChatDisplay(True, False);
 End;
 
-Procedure TAssistantChatForm.ShowLastConversationTurn;
+Procedure TProjectAssistantForm.ShowLastConversationTurn;
 Var
   N: Integer;
 Begin
@@ -479,7 +479,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.RefreshConversationList;
+Procedure TProjectAssistantForm.RefreshConversationList;
 Var
   I, SeqNo, KeepTurnIndex: Integer;
   Entry: TConversationIndexEntry;
@@ -557,12 +557,12 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.ConversationSearchChange(Sender: TObject);
+Procedure TProjectAssistantForm.ConversationSearchChange(Sender: TObject);
 Begin
   RefreshConversationList;
 End;
 
-Procedure TAssistantChatForm.RefreshHistoryCombo;
+Procedure TProjectAssistantForm.RefreshHistoryCombo;
 Var
   Items: TObjectList;
   I, SelectIdx: Integer;
@@ -619,7 +619,7 @@ Begin
     FDeleteHistoryAction.Enabled := Not FSending;
 End;
 
-Function TAssistantChatForm.DefaultExportFileName: String;
+Function TProjectAssistantForm.DefaultExportFileName: String;
 Var
   Stamp, Title: String;
   I: Integer;
@@ -644,7 +644,7 @@ Begin
   Result := Title + '-' + Stamp + '.md';
 End;
 
-Function TAssistantChatForm.BuildConversationMarkdownExport: String;
+Function TProjectAssistantForm.BuildConversationMarkdownExport: String;
 Var
   SL: TStringList;
   I: Integer;
@@ -727,7 +727,7 @@ Begin
   End;
 End;
 
-Procedure TAssistantChatForm.RebuildClientFromConversation;
+Procedure TProjectAssistantForm.RebuildClientFromConversation;
 Var
   I: Integer;
   Prompt, Response, Thinking, Err: String;
@@ -759,7 +759,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.ApplyLoadedConversationToUi(Const StatusNote: String);
+Procedure TProjectAssistantForm.ApplyLoadedConversationToUi(Const StatusNote: String);
 Begin
   FTranscript.Clear;
   FUserCancelled := False;
@@ -775,12 +775,12 @@ Begin
   UpdateStatusFooter;
 End;
 
-Procedure TAssistantChatForm.ConversationListClick(Sender: TObject);
+Procedure TProjectAssistantForm.ConversationListClick(Sender: TObject);
 Begin
   ConversationListSelectionChange(Sender, True);
 End;
 
-Procedure TAssistantChatForm.ConversationListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TProjectAssistantForm.ConversationListSelectionChange(Sender: TObject; User: Boolean);
 Var
   TurnIndex: Integer;
 Begin
@@ -796,7 +796,7 @@ Begin
   ShowConversationTurn(TurnIndex);
 End;
 
-Procedure TAssistantChatForm.RecordCurrentTurn(Const ErrorText: String);
+Procedure TProjectAssistantForm.RecordCurrentTurn(Const ErrorText: String);
 Var
   Turn: TConversationTurn;
   Entry: TConversationIndexEntry;
@@ -851,10 +851,10 @@ Begin
       RefreshHistoryCombo;
     End
   Else
-    WorkflowLogger.Warning('AssistantChat', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
+    WorkflowLogger.Warning('ProjectAssistant', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
 End;
 
-Procedure TAssistantChatForm.ToggleThinkingActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
@@ -863,7 +863,7 @@ Begin
   RefreshChatDisplay(True);
 End;
 
-Function TAssistantChatForm.FormatElapsedStatus(Const Phase: String): String;
+Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
 Begin
@@ -880,19 +880,19 @@ Begin
   Result := Format('%s %d:%2.2d', [Phase, Mins, Rem]);
 End;
 
-Procedure TAssistantChatForm.SetStreamPhase(Const Phase: String);
+Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
 Begin
   FStatusPhase := Phase;
   FStatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
 
-Procedure TAssistantChatForm.ElapsedTimerTimer(Sender: TObject);
+Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   If FSending And (FStatusPhase <> '') Then
     FStatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
 End;
 
-Procedure TAssistantChatForm.RefreshFromConfig;
+Procedure TProjectAssistantForm.RefreshFromConfig;
 Begin
   If Assigned(AssistantChatConfig) And Assigned(AssistantClient) Then
     Begin
@@ -904,7 +904,7 @@ Begin
   UpdateStatusFooter;
 End;
 
-Procedure TAssistantChatForm.UpdateStatusFooter;
+Procedure TProjectAssistantForm.UpdateStatusFooter;
 Var
   Pct: Integer;
   StatusText: String;
@@ -937,7 +937,7 @@ Begin
       StatusText);
 End;
 
-Procedure TAssistantChatForm.SetSending(IsSending: Boolean);
+Procedure TProjectAssistantForm.SetSending(IsSending: Boolean);
 Begin
   FSending := IsSending;
   If Not IsSending Then
@@ -969,7 +969,7 @@ Begin
   UpdateStatusFooter;
 End;
 
-Procedure TAssistantChatForm.PersistSession;
+Procedure TProjectAssistantForm.PersistSession;
 Var
   Key: String;
 Begin
@@ -984,7 +984,7 @@ Begin
   SaveProjectChatSession(FTranscript, FContextUsed);
 End;
 
-Procedure TAssistantChatForm.RestoreSessionIfNeeded;
+Procedure TProjectAssistantForm.RestoreSessionIfNeeded;
 Var
   Key: String;
   LoadedContext: Integer;
@@ -1007,7 +1007,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.EnsureChatView;
+Procedure TProjectAssistantForm.EnsureChatView;
 Var
   View: TMarkDownControl;
 Begin
@@ -1031,7 +1031,7 @@ Begin
   FChatView := View;
 End;
 
-Procedure TAssistantChatForm.EnsureInputPopup;
+Procedure TProjectAssistantForm.EnsureInputPopup;
 Var
   Sep: TMenuItem;
 Begin
@@ -1066,7 +1066,7 @@ Begin
   FInputEdit.WantTabs := False;
 End;
 
-Procedure TAssistantChatForm.InputPopupPopup(Sender: TObject);
+Procedure TProjectAssistantForm.InputPopupPopup(Sender: TObject);
 Var
   HasSel: Boolean;
   CanEdit: Boolean;
@@ -1083,31 +1083,31 @@ Begin
     FInputSelectAllItem.Enabled := Assigned(FInputEdit) And (FInputEdit.GetTextLen > 0);
 End;
 
-Procedure TAssistantChatForm.InputCutClick(Sender: TObject);
+Procedure TProjectAssistantForm.InputCutClick(Sender: TObject);
 Begin
   If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
     FInputEdit.CutToClipboard;
 End;
 
-Procedure TAssistantChatForm.InputCopyClick(Sender: TObject);
+Procedure TProjectAssistantForm.InputCopyClick(Sender: TObject);
 Begin
   If Assigned(FInputEdit) Then
     FInputEdit.CopyToClipboard;
 End;
 
-Procedure TAssistantChatForm.InputPasteClick(Sender: TObject);
+Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);
 Begin
   If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
     FInputEdit.PasteFromClipboard;
 End;
 
-Procedure TAssistantChatForm.InputSelectAllClick(Sender: TObject);
+Procedure TProjectAssistantForm.InputSelectAllClick(Sender: TObject);
 Begin
   If Assigned(FInputEdit) Then
     FInputEdit.SelectAll;
 End;
 
-Procedure TAssistantChatForm.ScrollChatToEnd;
+Procedure TProjectAssistantForm.ScrollChatToEnd;
 Var
   View: TMarkDownControl;
 Begin
@@ -1118,7 +1118,7 @@ Begin
   View.ScrolledTop := High(Integer) Div 4;
 End;
 
-Procedure TAssistantChatForm.ScrollChatToTop;
+Procedure TProjectAssistantForm.ScrollChatToTop;
 Var
   View: TMarkDownControl;
 Begin
@@ -1128,7 +1128,7 @@ Begin
   View.ScrolledTop := 0;
 End;
 
-Procedure TAssistantChatForm.RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean);
+Procedure TProjectAssistantForm.RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean);
 Var
   View: TMarkDownControl;
   Body: String;
@@ -1188,7 +1188,7 @@ Begin
       End;
   Except
     On E: Exception Do
-      WorkflowLogger.Warning('AssistantChat', 'Chat Markdown render failed: ' + E.Message);
+      WorkflowLogger.Warning('ProjectAssistant', 'Chat Markdown render failed: ' + E.Message);
   End;
   If ScrollToBottom Then
     ScrollChatToEnd
@@ -1203,7 +1203,7 @@ Begin
     End;
 End;
 
-Function TAssistantChatForm.RoleHeading(Const Role: String): String;
+Function TProjectAssistantForm.RoleHeading(Const Role: String): String;
 Var
   R: String;
 Begin
@@ -1220,7 +1220,7 @@ Begin
     Result := Role;
 End;
 
-Function TAssistantChatForm.QuoteMarkdownLines(Const TextValue: String): String;
+Function TProjectAssistantForm.QuoteMarkdownLines(Const TextValue: String): String;
 Var
   SL: TStringList;
   I: Integer;
@@ -1249,7 +1249,7 @@ Begin
   End;
 End;
 
-Function TAssistantChatForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
+Function TProjectAssistantForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
 Begin
   { Thinking is display-only; Content is the final answer (API history). }
   If (Thinking = '') And (Content = '') Then
@@ -1273,7 +1273,7 @@ Begin
     Result := '';
 End;
 
-Procedure TAssistantChatForm.AppendMessage(Const Role, Content: String);
+Procedure TProjectAssistantForm.AppendMessage(Const Role, Content: String);
 Var
   R: String;
 Begin
@@ -1302,7 +1302,7 @@ Begin
     RefreshChatDisplay(True);
 End;
 
-Procedure TAssistantChatForm.BeginAssistantReply;
+Procedure TProjectAssistantForm.BeginAssistantReply;
 Begin
   FLiveContent := '';
   FLiveThinking := '';
@@ -1321,7 +1321,7 @@ Begin
   RefreshChatDisplay(True, True);
 End;
 
-Procedure TAssistantChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
+Procedure TProjectAssistantForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
   { Ignore late Queue packets after the turn has finished (prevents a second Begin/Finish cycle). }
   If Not FSending Then
@@ -1347,7 +1347,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.FinishAssistantReply(Const ErrorText: String);
+Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
   DisplayBody: String;
 Begin
@@ -1423,7 +1423,7 @@ Begin
   PersistSession;
 End;
 
-Procedure TAssistantChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
+Procedure TProjectAssistantForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
   IsFinished: Boolean; Const ErrorText: String);
 Begin
   { Invoked on the main thread (Queue) from the stream worker. }
@@ -1452,7 +1452,7 @@ Begin
   FinishAssistantReply(ErrorText);
 End;
 
-Procedure TAssistantChatForm.StopStream;
+Procedure TProjectAssistantForm.StopStream;
 Begin
   If Not FSending Then
     Exit;
@@ -1493,10 +1493,10 @@ Begin
   RefreshChatDisplay(True, True);
   FStatusFooter.SetRightText('Cancelled');
   PersistSession;
-  WorkflowLogger.Info('AssistantChat', 'Stream cancelled by user');
+  WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
-Procedure TAssistantChatForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Procedure TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
 Var
   ApiText, ContextBlock: String;
   WithContext: Boolean;
@@ -1547,7 +1547,7 @@ Begin
     AppendMessage('user', UserText);
 End;
 
-Procedure TAssistantChatForm.SendActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
 Begin
@@ -1566,7 +1566,7 @@ Begin
   SubmitUserText(UserText, True);
 End;
 
-Procedure TAssistantChatForm.StopActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.StopActionExecute(Sender: TObject);
 Begin
   StopStream;
 End;
@@ -1608,7 +1608,7 @@ Begin
   Result := Trim(Result);
 End;
 
-Function TAssistantChatForm.CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
+Function TProjectAssistantForm.CollectIDEMessagesText(Out ErrorCount, WarningCount, HintCount: Integer): String;
 Var
   ViewIndex, LineIndex: Integer;
   View: TExtToolView;
@@ -1666,7 +1666,7 @@ Begin
   End;
 End;
 
-Function TAssistantChatForm.BuildReviewDisplayLabel(Const KindLabel: String;
+Function TProjectAssistantForm.BuildReviewDisplayLabel(Const KindLabel: String;
   ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
 Begin
   If BuildOk And (ErrorCount = 0) And (WarningCount = 0) And (HintCount = 0) Then
@@ -1679,7 +1679,7 @@ Begin
       [KindLabel, WarningCount, HintCount]);
 End;
 
-Function TAssistantChatForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
+Function TProjectAssistantForm.BuildReviewPrompt(Const KindLabel, OutputText: String;
   ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
 Var
   Outcome, ProjectName: String;
@@ -1731,7 +1731,7 @@ Begin
     '----- end compiler/messages output -----';
 End;
 
-Procedure TAssistantChatForm.SubmitReviewRequest(Const DisplayLabel, ApiText: String);
+Procedure TProjectAssistantForm.SubmitReviewRequest(Const DisplayLabel, ApiText: String);
 Begin
   If Trim(ApiText) = '' Then
     Exit;
@@ -1768,7 +1768,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantChatForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
+Procedure TProjectAssistantForm.ReviewProject(Reason: TCompileReason; Const KindLabel: String);
 Var
   BuildResult: TModalResult;
   OutputText, PromptText, DisplayLabel: String;
@@ -1793,7 +1793,7 @@ Begin
   FReviewBuildAction.Enabled := False;
   FStatusFooter.SetRightText(KindLabel + '…');
   Application.ProcessMessages;
-  WorkflowLogger.Info('AssistantChat', 'Review ' + KindLabel + ' started');
+  WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
 
   Try
     BuildResult := LazarusIDE.DoBuildProject(Reason, []);
@@ -1813,7 +1813,7 @@ Begin
     If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
       Begin
         If Not ProjectAssistantConversation.StartNewConversation Then
-          WorkflowLogger.Warning('AssistantChat', 'Review archive: ' + ProjectAssistantConversation.LastError);
+          WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError);
       End;
     FTranscript.Clear;
     FContextUsed := 0;
@@ -1839,17 +1839,17 @@ Begin
   End;
 End;
 
-Procedure TAssistantChatForm.ReviewCompile;
+Procedure TProjectAssistantForm.ReviewCompile;
 Begin
   ReviewProject(crCompile, 'Compile');
 End;
 
-Procedure TAssistantChatForm.ReviewBuild;
+Procedure TProjectAssistantForm.ReviewBuild;
 Begin
   ReviewProject(crBuild, 'Build');
 End;
 
-Procedure TAssistantChatForm.StartNewChat;
+Procedure TProjectAssistantForm.StartNewChat;
 Begin
   If FSending Then
     StopStream;
@@ -1858,7 +1858,7 @@ Begin
   If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
     Begin
       If Not ProjectAssistantConversation.StartNewConversation Then
-        WorkflowLogger.Warning('AssistantChat', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
+        WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
     End;
   FTranscript.Clear;
   FContextUsed := 0;
@@ -1878,7 +1878,7 @@ Begin
   UpdateStatusFooter;
 End;
 
-Procedure TAssistantChatForm.UnbindFromProject;
+Procedure TProjectAssistantForm.UnbindFromProject;
 Begin
   { Do not call PersistSession here: ActiveProject is half-torn during close.
     Conversation turns are already on disk via AppendTurn. }
@@ -1901,10 +1901,10 @@ Begin
   ClearCurrentTurnDisplay;
   RefreshChatDisplay(True, False);
   UpdateStatusFooter;
-  WorkflowLogger.Info('AssistantChat', 'Unbound from project');
+  WorkflowLogger.Info('ProjectAssistant', 'Unbound from project');
 End;
 
-Procedure TAssistantChatForm.BindToActiveProject;
+Procedure TProjectAssistantForm.BindToActiveProject;
 Var
   Key, Title, Root: String;
   Proj: TLazProject;
@@ -1974,10 +1974,10 @@ Begin
       RefreshChatDisplay(True, False);
     End;
   UpdateStatusFooter;
-  WorkflowLogger.Info('AssistantChat', 'Bound to project: ' + Title);
+  WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title);
 End;
 
-Procedure NotifyOpenAssistantFormsProjectChanged;
+Procedure NotifyOpenProjectAssistantFormsProjectChanged;
 Var
   I: Integer;
   Form: TCustomForm;
@@ -1986,12 +1986,12 @@ Begin
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TAssistantChatForm) And Not (csDestroying In Form.ComponentState) Then
-        TAssistantChatForm(Form).BindToActiveProject;
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        TProjectAssistantForm(Form).BindToActiveProject;
     End;
 End;
 
-Procedure NotifyOpenAssistantFormsProjectCleared;
+Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 Var
   I: Integer;
   Form: TCustomForm;
@@ -1999,8 +1999,8 @@ Begin
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TAssistantChatForm) And Not (csDestroying In Form.ComponentState) Then
-        TAssistantChatForm(Form).UnbindFromProject;
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        TProjectAssistantForm(Form).UnbindFromProject;
     End;
 End;
 
@@ -2046,7 +2046,7 @@ Begin
   End;
 End;
 
-Function TAssistantChatForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
+Function TProjectAssistantForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
 Var
   MsgText, FileName, Snippet: String;
   LineNo, Col: Integer;
@@ -2079,7 +2079,7 @@ Begin
     'Prefer the smallest change that resolves the issue.';
 End;
 
-Procedure TAssistantChatForm.FixSelectedError;
+Procedure TProjectAssistantForm.FixSelectedError;
 Var
   Line: TMessageLine;
   Prompt: String;
@@ -2116,12 +2116,12 @@ Begin
   SubmitUserText(Prompt, True);
 End;
 
-Procedure TAssistantChatForm.NewChatActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);
 Begin
   StartNewChat;
 End;
 
-Procedure TAssistantChatForm.HistoryComboChange(Sender: TObject);
+Procedure TProjectAssistantForm.HistoryComboChange(Sender: TObject);
 Var
   ArchiveId: String;
 Begin
@@ -2153,10 +2153,10 @@ Begin
   ClearProjectChatSession;
   ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
   PersistSession;
-  WorkflowLogger.Info('AssistantChat', 'History activated: ' + ArchiveId);
+  WorkflowLogger.Info('ProjectAssistant', 'History activated: ' + ArchiveId);
 End;
 
-Procedure TAssistantChatForm.ExportHistoryActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.ExportHistoryActionExecute(Sender: TObject);
 Var
   Dlg: TSaveDialog;
   Path, Body: String;
@@ -2199,7 +2199,7 @@ Begin
       SL.Text := Body;
       SL.SaveToFile(Path);
       SetCurrentSystemNote('Exported conversation to `' + Path + '`.');
-      WorkflowLogger.Info('AssistantChat', 'Exported conversation to ' + Path);
+      WorkflowLogger.Info('ProjectAssistant', 'Exported conversation to ' + Path);
     Except
       On E: Exception Do
         MessageDlg('Could not write export file:' + LineEnding + E.Message, mtError, [mbOK], 0);
@@ -2209,7 +2209,7 @@ Begin
   End;
 End;
 
-Procedure TAssistantChatForm.DeleteHistoryActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.DeleteHistoryActionExecute(Sender: TObject);
 Var
   ArchiveId, LabelText: String;
   IsCurrent: Boolean;
@@ -2260,31 +2260,31 @@ Begin
     End
   Else
     RefreshHistoryCombo;
-  WorkflowLogger.Info('AssistantChat', 'Deleted conversation id=' + ArchiveId);
+  WorkflowLogger.Info('ProjectAssistant', 'Deleted conversation id=' + ArchiveId);
 End;
 
-Procedure TAssistantChatForm.ReviewCompileActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.ReviewCompileActionExecute(Sender: TObject);
 Begin
   ReviewCompile;
 End;
 
-Procedure TAssistantChatForm.ReviewBuildActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.ReviewBuildActionExecute(Sender: TObject);
 Begin
   ReviewBuild;
 End;
 
-Procedure TAssistantChatForm.FixErrorActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.FixErrorActionExecute(Sender: TObject);
 Begin
   FixSelectedError;
 End;
 
-Procedure TAssistantChatForm.SettingsActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.SettingsActionExecute(Sender: TObject);
 Begin
   ShowAssistantSettingsForm;
   RefreshFromConfig;
 End;
 
-Procedure TAssistantChatForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
+Procedure TProjectAssistantForm.CompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
   Const OutputText: String; ErrorCount, WarningCount: Integer);
 Begin
   { Review Compile/Build captures Messages via the IDE API after DoBuildProject.
@@ -2302,18 +2302,18 @@ Begin
     { }
   End;
   If OutputText <> '' Then
-    WorkflowLogger.Debug('AssistantChat', 'CompilerFinished for ' + ProjectFile);
+    WorkflowLogger.Debug('ProjectAssistant', 'CompilerFinished for ' + ProjectFile);
   UpdateStatusFooter;
 End;
 
-Procedure TAssistantChatForm.DocumentChanged(Const FileName: String; Const NewContent: String);
+Procedure TProjectAssistantForm.DocumentChanged(Const FileName: String; Const NewContent: String);
 Begin
-  WorkflowLogger.Debug('AssistantChat', 'Document changed: ' + FileName);
+  WorkflowLogger.Debug('ProjectAssistant', 'Document changed: ' + FileName);
 End;
 
-Procedure TAssistantChatForm.DocumentSaved(Const FileName: String);
+Procedure TProjectAssistantForm.DocumentSaved(Const FileName: String);
 Begin
-  WorkflowLogger.Debug('AssistantChat', 'Document saved: ' + FileName);
+  WorkflowLogger.Debug('ProjectAssistant', 'Document saved: ' + FileName);
 End;
 
 End.

@@ -64,8 +64,8 @@ Type
     Function LoadFromDisk: Boolean;
     Function SaveToDisk: Boolean;
     Procedure ApplyPreviewText(Const Body: String);
-    Procedure HandlePreviewOpenURL(Sender: TObject; AUrl: String);
-    Procedure HandlePreviewGetImage(Sender: TObject; Const AUrl: String; Var AImage: TPicture);
+    Procedure HandlePreviewOpenURL(Sender: TObject; LinkUrl: String);
+    Procedure HandlePreviewGetImage(Sender: TObject; Const ImageUrl: String; Var Image: TPicture);
     Procedure NotifyDocumentChanged;
     Procedure NotifyDocumentSaved;
   Public
@@ -97,7 +97,7 @@ Type
     Docs with YAML/TOML/JSON --- frontmatter otherwise raise "No renderer for block class". }
   TCanvasMarkDownFrontmatterBlockRenderer = Class(TCanvasMarkDownBlockRenderer)
   Protected
-    Procedure DoRender(aBlock: TMarkDownBlock); Override;
+    Procedure DoRender(Block: TMarkDownBlock); Override;
   Public
     Class Function BlockClass: TMarkDownBlockClass; Override;
   End;
@@ -105,9 +105,9 @@ Type
 Var
   MarkdownForms: TList;
 
-Function SameFilePath(Const A, B: String): Boolean;
+Function SameFilePath(Const PathA, PathB: String): Boolean;
 Begin
-  Result := SameFileName(ExpandFileName(A), ExpandFileName(B));
+  Result := SameFileName(ExpandFileName(PathA), ExpandFileName(PathB));
 End;
 
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
@@ -329,10 +329,10 @@ Begin
   End;
 End;
 
-Procedure TCanvasMarkDownFrontmatterBlockRenderer.DoRender(aBlock: TMarkDownBlock);
+Procedure TCanvasMarkDownFrontmatterBlockRenderer.DoRender(Block: TMarkDownBlock);
 Begin
   { Metadata only — no visible canvas output. }
-  If aBlock = Nil Then
+  If Block = Nil Then
     Exit;
 End;
 
@@ -481,11 +481,11 @@ Begin
     WorkflowEventBus.NotifyDocumentSaved(FFileName);
 End;
 
-Procedure TAssistantMarkdownForm.HandlePreviewOpenURL(Sender: TObject; AUrl: String);
+Procedure TAssistantMarkdownForm.HandlePreviewOpenURL(Sender: TObject; LinkUrl: String);
 Var
   Target: String;
 Begin
-  Target := Trim(AUrl);
+  Target := Trim(LinkUrl);
   If Target = '' Then
     Exit;
   { Relative links resolve against the document directory. }
@@ -500,26 +500,26 @@ Begin
      (CompareText(ExtractFileExt(Target), '.mdown') = 0)) Then
     OpenMarkdownDocument(Target)
   Else
-    OpenURL(AUrl);
+    OpenURL(LinkUrl);
 End;
 
-Procedure TAssistantMarkdownForm.HandlePreviewGetImage(Sender: TObject; Const AUrl: String;
-  Var AImage: TPicture);
+Procedure TAssistantMarkdownForm.HandlePreviewGetImage(Sender: TObject; Const ImageUrl: String;
+  Var Image: TPicture);
 Var
   Path: String;
 Begin
-  Path := Trim(AUrl);
+  Path := Trim(ImageUrl);
   If Path = '' Then
     Exit;
   If (Pos('://', Path) = 0) And (FFileName <> '') Then
     Path := ExpandFileName(ExtractFilePath(FFileName) + Path);
   If FileExists(Path) Then
     Begin
-      AImage := TPicture.Create;
+      Image := TPicture.Create;
       Try
-        AImage.LoadFromFile(Path);
+        Image.LoadFromFile(Path);
       Except
-        FreeAndNil(AImage);
+        FreeAndNil(Image);
       End;
     End;
 End;

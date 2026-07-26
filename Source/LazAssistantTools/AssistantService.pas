@@ -149,7 +149,7 @@ Type
   Private
     FOwner: TAssistantStreamThread;
   Public
-    Constructor Create(AOwner: TAssistantStreamThread);
+    Constructor Create(StreamOwner: TAssistantStreamThread);
     Function Write(Const Buffer; Count: LongInt): LongInt; Override;
     Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
   End;
@@ -166,15 +166,15 @@ Begin
   End;
 End;
 
-Function JsonEscape(Const S: String): String;
+Function JsonEscape(Const SourceText: String): String;
 Var
   I: Integer;
   C: Char;
 Begin
   Result := '';
-  For I := 1 To Length(S) Do
+  For I := 1 To Length(SourceText) Do
     Begin
-      C := S[I];
+      C := SourceText[I];
       Case C Of
         '"': Result := Result + '\"';
         '\': Result := Result + '\\';
@@ -194,10 +194,10 @@ End;
 
 { TAssistantSSEStream }
 
-Constructor TAssistantSSEStream.Create(AOwner: TAssistantStreamThread);
+Constructor TAssistantSSEStream.Create(StreamOwner: TAssistantStreamThread);
 Begin
   Inherited Create;
-  FOwner := AOwner;
+  FOwner := StreamOwner;
 End;
 
 Function TAssistantSSEStream.Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64;

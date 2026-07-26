@@ -1,4 +1,4 @@
-object AssistantChatForm: TAssistantChatForm
+object ProjectAssistantForm: TProjectAssistantForm
   Left = 200
   Height = 700
   Top = 100

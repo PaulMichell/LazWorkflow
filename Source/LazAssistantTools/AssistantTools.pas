@@ -33,15 +33,15 @@ Uses
   LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, WorkflowLog, AssistantMarkdownForm,
   fpjson, jsonparser;
 
-Function JsonEscapeLocal(Const S: String): String;
+Function JsonEscapeLocal(Const SourceText: String): String;
 Var
   I: Integer;
   C: Char;
 Begin
   Result := '';
-  For I := 1 To Length(S) Do
+  For I := 1 To Length(SourceText) Do
     Begin
-      C := S[I];
+      C := SourceText[I];
       Case C Of
         '"': Result := Result + '\"';
         '\': Result := Result + '\\';

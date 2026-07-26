@@ -29,12 +29,12 @@
         <UnitName Value="AssistantMain"/>
       </Item2>
       <Item3>
-        <Filename Value="../Source/LazAssistantTools/AssistantChatForm.pas"/>
+        <Filename Value="../Source/LazAssistantTools/ProjectAssistantForm.pas"/>
         <FileType Value="MainUnit"/>
-        <UnitName Value="AssistantChatForm"/>
+        <UnitName Value="ProjectAssistantForm"/>
       </Item3>
       <Item4>
-        <Filename Value="../Source/LazAssistantTools/AssistantChatForm.lfm"/>
+        <Filename Value="../Source/LazAssistantTools/ProjectAssistantForm.lfm"/>
         <FileType Value="FormResource"/>
       </Item4>
       <Item5>
