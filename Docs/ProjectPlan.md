@@ -126,7 +126,7 @@ Modes are not mere labels. Switching mode changes:
 - Tools: create / open / update Markdown; default directory **`{ProjectRoot}/Documents/`** (create if missing when first Plan write occurs).
 - Existing **live Markdown windows** remain the viewer/editor (watch + debounce reload).
 - Plan mode can maintain a **canonical plan file** (user-chosen or default e.g. `Documents/Plan.md` or continue using `Docs/ProjectPlan.md` when already present).
-- Structured **TODO extraction** (see §3.2.6) so Code mode has a task list without re-parsing free prose every time.
+- Plan sections stay scannable (see §3.2.6) so Code mode can build a live TODO tile list from headings + status footers.
 
 #### 3.2.5 Code mode
 
@@ -138,24 +138,128 @@ Modes are not mere labels. Switching mode changes:
 - **Plan TODO panel** visible when a plan is associated with the project (see below).
 - Primary loop: *select or “next” TODO → implement → compile → fix → mark TODO done → update plan MD*.
 
-#### 3.2.6 Plan ↔ TODO linkage (flexible, formal enough)
+#### 3.2.6 Plan → TODO (dynamically generated from the plan)
 
-**Goal:** Code mode can move through work formally (“next part of the plan”) without locking the user into a rigid Gantt format.
+**Goal:** Code mode shows a formal “where we are” list without a second source of truth. The **plan Markdown is the only durable state**; the TODO UI is a **live view computed by scanning** that file.
 
-**Recommended model (refinement):**
+**Decision:** no separate `todos.json` (or SQLite todo table) as master. If the assistant rewrites plan sections, the list **changes shape** on the next scan. If status footers change, list badges update.
 
-1. **Source of truth for narrative:** the plan Markdown file(s) the user cares about.
-2. **Source of truth for task state:** a small structured store under `.assistant/` (e.g. `todos.json`), **derived from** and **written back to** the plan MD.
-3. **Supported MD conventions** (documented, not exclusive):
-   - GitHub-style checkboxes: `- [ ]` / `- [x]`
-   - Optional stable IDs: `- [ ] <!-- id:auth-form --> Implement auth form`
-4. **Sync rules:**
-   - Opening Plan/Code mode or detecting plan file change → re-parse checkboxes → upsert TODO rows (preserve `status`, `updated_at` when IDs match).
-   - Completing a TODO in Code mode → update MD checkbox + DB row + history event.
-   - User/LLM edits plan MD → re-parse; new items appear; removed items are archived (not hard-deleted immediately) to avoid losing stats.
-5. **Code mode UI:** compact list (status, title, plan section, “Current”, “Mark done”, “Skip”, “Open in plan”). “Next” = first open item in document order unless user pins another.
+##### Section model (plan structure)
 
-**Roadblock if skipped:** free-form “update the plan” without checkbox conventions makes TODO sync unreliable. Mitigation: Plan-mode system prompt + a “normalise plan tasks” tool that rewrites only the task list section.
+Work items are **plan sections**, not a parallel task database. A scannable section looks like:
+
+```markdown
+## 3. Auth form                          ← title (heading = tile title)
+
+Status: in progress                     ← footer / status line (machine-readable)
+
+Brief description of the work…
+- details, acceptance notes, links…
+```
+
+**Status values (normalised):** `not started` | `in progress` | `complete`  
+(Accept synonyms when parsing: `todo`, `done`, `finished`, `wip`, case-insensitive.)
+
+**Heading levels:** treat `##` / `###` under a configured root as work units (default: all `##` in the active plan file, or only under a “Implementation” / “Work items” parent — configurable in `.assistant/config.json`).
+
+**Status line placement (flexible parse, documented convention):**
+
+| Preference | Pattern |
+|------------|---------|
+| 1 (preferred) | First non-empty line after the heading: `Status: in progress` |
+| 2 | HTML comment on next line: `<!-- status: complete -->` |
+| 3 | Fallback: no status line → **not started** |
+| Optional | Infer `complete` if section body is only `- [x]` checkboxes and none open (secondary heuristic, not required) |
+
+**Tile metaphor (Code mode UI):** each list row is a **tile**:
+
+- **Title** — section heading text (e.g. “3. Auth form”)
+- **Footer / badge** — status (Not started / In progress / Complete)
+- Optional subtitle — first sentence of body, or checkbox progress `2/5` if the section contains task lists
+
+Selecting a tile: “Current”, jump to plan heading in the Markdown window, or seed the next Code prompt with that section’s body.
+
+**“Next”:** first section in document order whose status is not `complete` (prefer `in progress` if any, else first `not started`).
+
+##### Computational scan (no dual write of task identity)
+
+```
+On plan file open / disk change (debounced) / after Plan or Code tool write:
+  1. Read plan Markdown (or use already-loaded buffer)
+  2. Parse headings → sections (title, line range, body)
+  3. Read status from footer convention
+  4. Rebuild in-memory TODO list model
+  5. Refresh Code mode panel (and optional Plan overview)
+```
+
+- **Add/remove/reorder sections in the plan** → list items appear/disappear/reorder automatically.
+- **Assistant updates Status lines** → badges update; no separate sync job.
+- **Mark done from Code UI** → write back into the plan (update/insert the status line under that heading), then rescan — plan remains canonical.
+
+##### What the assistant is instructed to do (Plan + Code prompts)
+
+- Prefer **one section per work package** with a clear `##` title.
+- Always maintain a **`Status:`** line immediately under the heading when changing progress.
+- When finishing work: set `Status: complete` (and optionally tick any checkboxes inside).
+- When starting work: set `Status: in progress` on that section and leave others unchanged unless the user asks to replan.
+- Structural replans (merge/split/rename sections) are allowed; the TODO list simply rescans.
+
+##### Example plan fragment
+
+```markdown
+## 1. Project shell
+Status: complete
+
+Tabs, bottom bar, current-turn view.
+
+## 2. History JSONL
+Status: in progress
+
+Append-only log + sidecar index; history browser.
+
+## 3. Plan mode Markdown tools
+Status: not started
+
+Create/update Documents/*.md; live preview windows.
+```
+
+Code mode TODO list (computed):
+
+| Tile title | Status |
+|------------|--------|
+| 1. Project shell | Complete |
+| 2. History JSONL | In progress ← current / Next |
+| 3. Plan mode Markdown tools | Not started |
+
+##### Optional: nested detail inside a section
+
+Checkboxes **inside** a section are **detail**, not separate top-level todos, unless we later add a “expand section” view:
+
+```markdown
+## 2. History JSONL
+Status: in progress
+
+- [x] history.jsonl append
+- [ ] history.index.json rebuild
+- [ ] history browser UI
+```
+
+Tile footer can show `In progress · 1/3`. Completing all checkboxes can prompt the model (or a one-click action) to set `Status: complete`.
+
+##### Refinements
+
+- **Single active plan path** in `.assistant/config.json` (`plan_file`: e.g. `Documents/Plan.md` or `Docs/ProjectPlan.md`).
+- **Watch the plan file** with the same debounce as Markdown live windows so external/assistant edits refresh the list.
+- **Stable selection:** while editing, remember current section by heading text + line; if the heading is renamed, drop selection rather than binding to a stale id file.
+- **Optional ephemeral UI state only** in memory or `.assistant/config.json`: `current_section` heading text — never a second task list.
+- **Stats:** count sections by status from the last scan (no todo DB).
+
+##### Roadblocks / edge cases
+
+1. **Unstructured plans** (walls of prose, no sections) → empty or single synthetic tile; Plan mode prompt + “Structure plan for Code mode” action to wrap work in `##` + `Status:` lines.
+2. **Ambiguous headings** (every `##` in a long design doc) → restrict scan to a heading range or a tagged region (`<!-- assistant-work-start -->` … `<!-- assistant-work-end -->`).
+3. **Concurrent edit** of plan in Markdown window while Code marks status → debounce + reload; last writer wins on disk (same as any MD file).
+4. **Non-English status** — stick to the three English tokens in the convention; display labels can be localised later.
 
 #### 3.2.7 Project-local storage: `.assistant/`
 
@@ -165,8 +269,8 @@ Hidden folder at **project root** (alongside sources), not in the global IDE con
 {ProjectRoot}/.assistant/
   history.jsonl       # append-only full turns (one JSON object per line)
   history.index.json  # compact index for fast list/filter/search (rebuilt if missing)
-  todos.json          # plan task state (optional; derived from plan MD)
-  config.json         # per-project options (mode defaults, plan path, thinking visible, …)
+  config.json         # plan_file path, mode defaults, thinking visible, current_section, …
+
   README.txt          # managed by LazAssistantTools; safe to exclude from VCS if desired
 ```
 
@@ -328,13 +432,14 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 1. Default `Documents/` directory; create on demand.
 2. Tools: `write_markdown`, `update_markdown` / `replace_in_file` limited to MD (+ path policy).
 3. Open live Markdown window after create/update.
-4. Canonical plan path in config; checkbox parse → `plan_todos`.
-5. Plan-mode system prompt: keep tasks checkbox-shaped for Code sync.
+4. Canonical plan path in config; section + `Status:` convention documented.
+5. Plan-mode system prompt: one work package per `##` section with a status footer line.
+6. Code mode: scan plan → tile list; mark done writes status back into the plan MD.
 
 ### Phase 4 – Code mode
 1. IDE-mediated source edit tools (sandbox, exact match, undoable).
 2. Compile/build tools + message capture (wire existing Review Compile/Build).
-3. TODO panel + Next/Done/Skip; write-back to plan MD.
+3. TODO panel as **live scan of plan sections** (title tile + status footer); Next/Done/Skip update plan `Status:` lines then rescan.
 4. Optional edit confirmation policy for first release.
 5. End-to-end loop: plan task → edit → build → fix → mark done.
 
@@ -367,7 +472,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 1. **JSONL index integrity** — Crash mid-append can leave a partial last line. Mitigate: write record then flush; on open, ignore corrupt last line and rebuild index; atomic index rewrite (temp + rename).
 2. **Mode confusion** — Users may stay in Chat and expect edits. Mitigate with clear empty-state copy (“Switch to Code to edit sources”) and Fix Error auto-switching to Code.
-3. **Plan/TODO drift** — LLM rewrites plan structure and breaks checkboxes. Mitigate with ID comments, archive-on-delete, and a “reconcile todos” command.
+3. **Plan structure drift** — LLM drops `Status:` lines or uses free prose only. Mitigate with Plan/Code system prompts, a “normalise section statuses” command, and empty-state guidance when the scan finds no sections.
 4. **Large thinking blobs** — JSONL size growth. Mitigate with optional “store thinking” preference, retention limits, or compact-old-turns.
 5. **Context vs history** — Current-turn UI must still build **API context** from selected prior turns / summary. Roadblock if we only send the last user message: model forgets the plan. Mitigate with explicit “include last K turns” + “pin plan summary” in Code/Plan modes.
 6. **Concurrent editors** — Plan MD open in Markdown window and updated by tools; need debounced reload (already partially present).
@@ -460,7 +565,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Product direction: **Project Assistant** with **Chat / Plan / Code** modes.
 - UI: top tabs, bottom actions, current-turn focus, thinking toggle.
 - Storage: project `.assistant/` with **JSONL history + sidecar index** (no SQLite dependency for v1).
-- Plan mode MD workflow (`Documents/`); Code mode edits + compile + plan TODO panel.
+- Plan mode MD workflow (`Documents/`); Code mode edits + compile + **TODO tiles scanned from plan sections**.
 - Explicit phase 2.5–4 sequencing and roadblocks documented.
 
 **Next:** implement Phase 2.5 shell and history store once this plan revision is accepted.
