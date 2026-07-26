@@ -423,14 +423,14 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 **Order:** (1) shell rewrite + vendored LazMarkdown, (2) history JSONL, (3) mode tool gates.
 
-1. Rename UI to **Project Assistant** — **in progress / shell landed**.
-2. Top **Chat | Plan | Code** tabs; **bottom** action bar — **shell landed** (Plan/Code placeholders).
-3. Current-turn-only working surface; **thinking toggle** — **shell landed**. Full message list still sent to the API.
+1. Rename UI to **Project Assistant** — **done**.
+2. Top **Chat | Plan | Code** tabs; **bottom** action bar — **done** (Plan/Code placeholders).
+3. Current-turn-only working surface; **thinking toggle** — **done**. Full message list still sent to the API.
 4. Vendored **LazMarkdown** package — **done**.
-5. Create `.assistant/` on first use; **`history.jsonl` + `history.index.json`**.
-6. History browser (list + search + open turn).
-7. Persist mode + options in `.assistant/config.json`.
-8. Mode-scoped tool allow-lists (Chat = read-only tools only).
+5. Create `.assistant/` on first use; **`history.jsonl` + `history.index.jsonl`** — **done**.
+6. History browser (list + search + open turn) — **done** (Chat tab side list).
+7. Persist mode + options in `.assistant/config.json` — **partial** (`show_thinking`).
+8. Mode-scoped tool allow-lists — **done** (shared read tools; write tools later per Plan/Code).
 
 ### Phase 3 – Plan mode
 1. Default `Documents/` directory; create on demand.
