@@ -490,8 +490,9 @@ Begin
               SelectIdx := FConversationList.Items.Count - 1;
           End;
       End;
-    { In-flight prompt appears immediately at the bottom while the model runs. }
-    If FSending And (FLiveUser <> '') Then
+    { In-flight prompt at the bottom while the model runs — omit once the turn
+      is recorded so the list never shows live + completed duplicates. }
+    If FSending And (Not FTurnRecorded) And (FLiveUser <> '') Then
       Begin
         Preview := FLiveUser;
         Preview := StringReplace(Preview, #13#10, ' ', [rfReplaceAll]);
@@ -599,10 +600,7 @@ Begin
   Turn.PlanFile := '';
   Turn.TodoId := '';
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
-    Begin
-      FTurnRecorded := True;
-      RefreshConversationList;
-    End
+    FTurnRecorded := True
   Else
     WorkflowLogger.Warning('AssistantChat', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
 End;
@@ -1078,6 +1076,10 @@ Begin
   FStreamingActive := False;
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ErrorText);
+  If Assigned(AssistantClient) Then
+    AssistantClient.MarkStreamComplete;
+  { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
+  SetSending(False);
   If FViewingLive Then
     FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
@@ -1092,9 +1094,6 @@ Begin
         FDisplaySystemNote := '';
       RefreshChatDisplay(True, True);
     End;
-  If Assigned(AssistantClient) Then
-    AssistantClient.MarkStreamComplete;
-  SetSending(False);
   PersistSession;
 End;
 
@@ -1161,12 +1160,11 @@ Begin
     FDisplaySystemNote := '*Stream cancelled.*';
   FStreamingActive := False;
   RecordCurrentTurn('cancelled');
-  FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   FViewingLive := True;
-  RefreshConversationList;
-  If FViewingLive Then
-    RefreshChatDisplay(True, True);
   SetSending(False);
+  FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
+  RefreshConversationList;
+  RefreshChatDisplay(True, True);
   FStatusFooter.SetRightText('Cancelled');
   PersistSession;
   WorkflowLogger.Info('AssistantChat', 'Stream cancelled by user');
