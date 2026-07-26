@@ -336,23 +336,24 @@ Begin
     ExcludeTrailingPathDelimiter(Root)) Then
     Begin
       ProjectAssistantHistory.SetProjectRoot(Root);
-      ProjectAssistantHistory.LoadIndex;
+      ProjectAssistantHistory.Load; { one bulk parse into memory }
       If ProjectAssistantHistory.LoadShowThinking(ShowThinking) Then
         Begin
           FShowThinking := ShowThinking;
           UpdateThinkingActionCaption;
         End;
     End
-  Else If ProjectAssistantHistory.IndexCount = 0 Then
-    ProjectAssistantHistory.LoadIndex;
+  Else If Not ProjectAssistantHistory.Loaded Then
+    ProjectAssistantHistory.Load;
 End;
 
 Procedure TAssistantChatForm.RefreshHistoryList;
 Var
-  I, SeqNo: Integer;
+  I, SeqNo, KeepTurnIndex: Integer;
   Entry: THistoryIndexEntry;
   Filter, Line: String;
   ShowItem: Boolean;
+  SelectIdx: Integer;
 Begin
   If Not Assigned(FHistoryList) Or Not Assigned(ProjectAssistantHistory) Then
     Exit;
@@ -360,10 +361,15 @@ Begin
   Filter := '';
   If Assigned(FHistorySearch) Then
     Filter := LowerCase(Trim(FHistorySearch.Text));
+  KeepTurnIndex := -1;
+  If (FHistoryList.ItemIndex >= 0) And (FHistoryList.ItemIndex < FHistoryList.Items.Count) Then
+    KeepTurnIndex := PtrInt(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
+  SelectIdx := -1;
   FHistoryList.Items.BeginUpdate;
   Try
     FHistoryList.Clear;
-    { Oldest first so new turns append at the bottom (grow down). }
+    { Oldest first so new turns append at the bottom (grow down).
+      Objects store TurnIndex (integer) for O(1) memory retrieval — never re-read JSONL on click. }
     For I := 0 To ProjectAssistantHistory.IndexCount - 1 Do
       Begin
         Entry := ProjectAssistantHistory.IndexEntry(I);
@@ -379,15 +385,21 @@ Begin
             (Pos(Filter, LowerCase(Entry.ResponsePreview)) > 0) Or
             (Pos(Filter, LowerCase(Entry.Mode)) > 0);
         If ShowItem Then
-          FHistoryList.Items.AddObject(Line, Entry);
+          Begin
+            FHistoryList.Items.AddObject(Line, TObject(PtrInt(Entry.TurnIndex)));
+            If Entry.TurnIndex = KeepTurnIndex Then
+              SelectIdx := FHistoryList.Items.Count - 1;
+          End;
       End;
   Finally
     FHistoryList.Items.EndUpdate;
   End;
   If FHistoryList.Items.Count > 0 Then
     Begin
-      FHistoryList.ItemIndex := FHistoryList.Items.Count - 1;
-      FHistoryList.TopIndex := FHistoryList.Items.Count - 1;
+      If SelectIdx < 0 Then
+        SelectIdx := FHistoryList.Items.Count - 1;
+      FHistoryList.ItemIndex := SelectIdx;
+      FHistoryList.TopIndex := SelectIdx;
     End;
 End;
 
@@ -398,30 +410,30 @@ End;
 
 Procedure TAssistantChatForm.HistoryListClick(Sender: TObject);
 Var
-  Entry: THistoryIndexEntry;
-  Turn: THistoryTurn;
+  TurnIndex: Integer;
+  Prompt, Response, Thinking, ErrorText: String;
 Begin
   If Not Assigned(FHistoryList) Or (FHistoryList.ItemIndex < 0) Then
     Exit;
   If FSending Then
     Exit;
-  Entry := THistoryIndexEntry(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
-  If Not Assigned(Entry) Or Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(ProjectAssistantHistory) Then
     Exit;
-  If Not ProjectAssistantHistory.LoadTurnByOffset(Entry.FileOffset, Turn) Then
+  TurnIndex := PtrInt(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
+  { Pure memory path: prompt / response / thinking only — no disk, no JSON parse. }
+  If Not ProjectAssistantHistory.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
     Begin
       SetCurrentSystemNote('Could not load history turn: ' + ProjectAssistantHistory.LastError);
       Exit;
     End;
-  FDisplayUser := Turn.Prompt;
-  FAssistantThinking := Turn.Thinking;
-  FAssistantContent := Turn.Response;
-  If Turn.ErrorText <> '' Then
-    FDisplaySystemNote := '**Error:** ' + Turn.ErrorText
+  FDisplayUser := Prompt;
+  FAssistantContent := Response;
+  FAssistantThinking := Thinking;
+  If ErrorText <> '' Then
+    FDisplaySystemNote := '**Error:** ' + ErrorText
   Else
     FDisplaySystemNote := '';
   FStreamingActive := False;
-  { Show the start of the turn, not the end. }
   RefreshChatDisplay(True, False);
 End;
 

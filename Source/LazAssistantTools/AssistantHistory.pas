@@ -1,6 +1,6 @@
 Unit AssistantHistory;
 
-{ Project-local .assistant history: JSONL turns + sidecar index (c) 2026 Michell Computing. }
+{ Project-local .assistant history: JSONL on disk, full turns cached in memory (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,6 +15,7 @@ Uses
 Type
   TAssistantMode = (amChat, amPlan, amCode);
 
+  { Lightweight row for the history list (also lives in FIndex). }
   THistoryIndexEntry = Class
   Public
     Id: String;
@@ -26,8 +27,10 @@ Type
     HasThinking: Boolean;
     ErrorText: String;
     FileOffset: Int64;
+    TurnIndex: Integer; { index into the in-memory FTurns array }
   End;
 
+  { Display payload for a turn — only these fields are needed when stepping history. }
   THistoryTurn = Record
     Id: String;
     Mode: String;
@@ -50,33 +53,40 @@ Type
   Private
     FProjectRoot: String;
     FIndex: TObjectList; { of THistoryIndexEntry }
+    FTurns: Array Of THistoryTurn; { full prompt/thinking/response cache }
     FLastError: String;
+    FLoaded: Boolean;
     Function AssistantDir: String;
     Function HistoryPath: String;
     Function IndexPath: String;
     Function ConfigPath: String;
     Function EnsureDir: Boolean;
-    Procedure ClearIndex;
-    Function ParseIndexLine(Const Line: String; Out Entry: THistoryIndexEntry): Boolean;
+    Procedure ClearAll;
     Function ParseTurnLine(Const Line: String; Out Turn: THistoryTurn): Boolean;
     Function BuildTurnJson(Const Turn: THistoryTurn): String;
-    Function BuildIndexLine(Const Entry: THistoryIndexEntry): String;
+    Function BuildIndexLine(Const Entry: THistoryIndexEntry; TurnIndex: Integer): String;
     Function PreviewOf(Const TextValue: String; MaxLen: Integer): String;
+    Function EntryFromTurn(Const Turn: THistoryTurn; FileOffset: Int64; TurnIndex: Integer): THistoryIndexEntry;
+    Function LoadHistoryFileIntoMemory: Boolean;
+    Procedure RewriteIndexFile;
   Public
     Constructor Create;
     Destructor Destroy; Override;
     Procedure SetProjectRoot(Const RootPath: String);
-    Function LoadIndex: Boolean;
-    Function RebuildIndexFromHistory: Boolean;
+    { Load index + full turns into memory once (disk I/O only here / on append). }
+    Function Load: Boolean;
     Function AppendTurn(Const Turn: THistoryTurn; Out Entry: THistoryIndexEntry): Boolean;
-    Function LoadTurnByOffset(FileOffset: Int64; Out Turn: THistoryTurn): Boolean;
-    Function LoadTurnById(Const TurnId: String; Out Turn: THistoryTurn): Boolean;
+    { O(1) memory access — no disk, no JSON parse. }
+    Function GetTurn(TurnIndex: Integer; Out Turn: THistoryTurn): Boolean;
+    Function GetTurnDisplay(TurnIndex: Integer; Out Prompt, Response, Thinking, ErrorText: String): Boolean;
+    Function TurnCount: Integer;
     Function IndexCount: Integer;
     Function IndexEntry(Index: Integer): THistoryIndexEntry;
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
     Property ProjectRoot: String Read FProjectRoot;
     Property LastError: String Read FLastError;
+    Property Loaded: Boolean Read FLoaded;
   End;
 
 Function AssistantModeToStr(Mode: TAssistantMode): String;
@@ -151,7 +161,6 @@ End;
 
 Function NewHistoryTurnId: String;
 Begin
-  { Compact unique-enough id without external UUID units. }
   Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now) + '-' +
     IntToHex(Random($FFFF), 4) + IntToHex(Random($FFFF), 4);
 End;
@@ -165,7 +174,6 @@ Function NormalizeAssistantProjectRoot(Const Dir: String): String;
 Var
   Base, ParentDir: String;
 Begin
-  { Prefer repository/project root, not a nested Source/ (or src/) folder. }
   Result := IncludeTrailingPathDelimiter(ExpandFileName(Dir));
   Base := ExtractFileName(ExcludeTrailingPathDelimiter(Result));
   If SameText(Base, 'Source') Or SameText(Base, 'src') Or SameText(Base, 'Units') Then
@@ -187,7 +195,6 @@ Begin
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
-  { Prefer .lpi directory, then main file directory; then lift out of Source/. }
   Dir := '';
   If Proj.ProjectInfoFile <> '' Then
     Dir := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
@@ -204,19 +211,23 @@ Begin
   Inherited Create;
   FProjectRoot := '';
   FLastError := '';
+  FLoaded := False;
   FIndex := TObjectList.Create(True);
+  SetLength(FTurns, 0);
 End;
 
 Destructor TAssistantHistoryStore.Destroy;
 Begin
   FreeAndNil(FIndex);
+  SetLength(FTurns, 0);
   Inherited Destroy;
 End;
 
 Procedure TAssistantHistoryStore.SetProjectRoot(Const RootPath: String);
 Begin
   FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
-  ClearIndex;
+  ClearAll;
+  FLoaded := False;
 End;
 
 Function TAssistantHistoryStore.AssistantDir: String;
@@ -271,7 +282,6 @@ Begin
         Try
           SL.SaveToFile(Readme);
         Except
-          { non-fatal }
         End;
       Finally
         SL.Free;
@@ -280,9 +290,10 @@ Begin
   Result := True;
 End;
 
-Procedure TAssistantHistoryStore.ClearIndex;
+Procedure TAssistantHistoryStore.ClearAll;
 Begin
   FIndex.Clear;
+  SetLength(FTurns, 0);
 End;
 
 Function TAssistantHistoryStore.PreviewOf(Const TextValue: String; MaxLen: Integer): String;
@@ -320,7 +331,7 @@ Begin
     '}';
 End;
 
-Function TAssistantHistoryStore.BuildIndexLine(Const Entry: THistoryIndexEntry): String;
+Function TAssistantHistoryStore.BuildIndexLine(Const Entry: THistoryIndexEntry; TurnIndex: Integer): String;
 Begin
   Result := '{' +
     '"id":"' + JsonEscape(Entry.Id) + '",' +
@@ -331,46 +342,25 @@ Begin
     '"response_preview":"' + JsonEscape(Entry.ResponsePreview) + '",' +
     '"has_thinking":' + LowerCase(BoolToStr(Entry.HasThinking, True)) + ',' +
     '"error":"' + JsonEscape(Entry.ErrorText) + '",' +
-    '"file_offset":' + IntToStr(Entry.FileOffset) +
+    '"file_offset":' + IntToStr(Entry.FileOffset) + ',' +
+    '"turn_index":' + IntToStr(TurnIndex) +
     '}';
 End;
 
-Function TAssistantHistoryStore.ParseIndexLine(Const Line: String; Out Entry: THistoryIndexEntry): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
+Function TAssistantHistoryStore.EntryFromTurn(Const Turn: THistoryTurn; FileOffset: Int64;
+  TurnIndex: Integer): THistoryIndexEntry;
 Begin
-  Result := False;
-  Entry := Nil;
-  If Trim(Line) = '' Then
-    Exit;
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(Line);
-      If Not (Data Is TJSONObject) Then
-        Exit;
-      Obj := TJSONObject(Data);
-      Entry := THistoryIndexEntry.Create;
-      Entry.Id := Obj.Get('id', '');
-      Entry.Mode := Obj.Get('mode', 'chat');
-      Entry.CreatedAt := Obj.Get('created_at', '');
-      Entry.DurationMs := Obj.Get('duration_ms', 0);
-      Entry.PromptPreview := Obj.Get('prompt_preview', '');
-      Entry.ResponsePreview := Obj.Get('response_preview', '');
-      Entry.HasThinking := Obj.Get('has_thinking', False);
-      Entry.ErrorText := Obj.Get('error', '');
-      Entry.FileOffset := Obj.Get('file_offset', Int64(0));
-      Result := Entry.Id <> '';
-      If Not Result Then
-        FreeAndNil(Entry);
-    Except
-      FreeAndNil(Entry);
-      Result := False;
-    End;
-  Finally
-    Data.Free;
-  End;
+  Result := THistoryIndexEntry.Create;
+  Result.Id := Turn.Id;
+  Result.Mode := Turn.Mode;
+  Result.CreatedAt := Turn.CreatedAt;
+  Result.DurationMs := Turn.DurationMs;
+  Result.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars);
+  Result.ResponsePreview := PreviewOf(Turn.Response, PreviewMaxChars);
+  Result.HasThinking := Turn.Thinking <> '';
+  Result.ErrorText := PreviewOf(Turn.ErrorText, 80);
+  Result.FileOffset := FileOffset;
+  Result.TurnIndex := TurnIndex;
 End;
 
 Function TAssistantHistoryStore.ParseTurnLine(Const Line: String; Out Turn: THistoryTurn): Boolean;
@@ -403,6 +393,7 @@ Begin
       If Not (Data Is TJSONObject) Then
         Exit;
       Obj := TJSONObject(Data);
+      { Only fields needed for UI stepping + minimal metadata. }
       Turn.Id := Obj.Get('id', '');
       Turn.Mode := Obj.Get('mode', 'chat');
       Turn.Prompt := Obj.Get('prompt', '');
@@ -427,38 +418,52 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.LoadIndex: Boolean;
+Function TAssistantHistoryStore.LoadHistoryFileIntoMemory: Boolean;
 Var
   SL: TStringList;
-  I: Integer;
+  I, N: Integer;
+  Turn: THistoryTurn;
+  Offset: Int64;
+  Line: String;
   Entry: THistoryIndexEntry;
 Begin
   Result := False;
-  FLastError := '';
-  ClearIndex;
-  If FProjectRoot = '' Then
-    Exit;
-  If Not FileExistsUTF8(IndexPath) Then
+  ClearAll;
+  If Not FileExistsUTF8(HistoryPath) Then
     Begin
-      If FileExistsUTF8(HistoryPath) Then
-        Result := RebuildIndexFromHistory
-      Else
-        Result := True;
+      Result := True;
       Exit;
     End;
   SL := TStringList.Create;
   Try
     Try
-      SL.LoadFromFile(IndexPath);
+      { One bulk read + line split — far faster than per-byte seek. }
+      SL.LoadFromFile(HistoryPath);
+      Offset := 0;
+      N := 0;
+      SetLength(FTurns, SL.Count); { upper bound; trim later }
       For I := 0 To SL.Count - 1 Do
-        If ParseIndexLine(SL[I], Entry) Then
-          FIndex.Add(Entry);
+        Begin
+          Line := SL[I];
+          If ParseTurnLine(Line, Turn) Then
+            Begin
+              FTurns[N] := Turn;
+              Entry := EntryFromTurn(Turn, Offset, N);
+              FIndex.Add(Entry);
+              Inc(N);
+            End;
+          { Byte length of line + LF (TStringList drops terminators; file uses #10). }
+          Inc(Offset, Length(Line) + 1);
+        End;
+      SetLength(FTurns, N);
       Result := True;
+      WorkflowLogger.Info('AssistantHistory', Format('Cached %d turns in memory for %s',
+        [N, FProjectRoot]));
     Except
       On E: Exception Do
         Begin
           FLastError := E.Message;
-          Result := RebuildIndexFromHistory;
+          ClearAll;
         End;
     End;
   Finally
@@ -466,105 +471,63 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.RebuildIndexFromHistory: Boolean;
+Procedure TAssistantHistoryStore.RewriteIndexFile;
 Var
-  FS: TFileStream;
-  IndexSL: TStringList;
-  Line: String;
-  Offset: Int64;
-  Ch: Byte;
-  Turn: THistoryTurn;
+  SL: TStringList;
+  I: Integer;
   Entry: THistoryIndexEntry;
-  LineStart: Int64;
 Begin
-  Result := False;
-  FLastError := '';
-  ClearIndex;
   If Not EnsureDir Then
     Exit;
-  If Not FileExistsUTF8(HistoryPath) Then
-    Begin
-      Result := True;
-      Exit;
-    End;
-  IndexSL := TStringList.Create;
-  FS := Nil;
+  SL := TStringList.Create;
   Try
+    For I := 0 To FIndex.Count - 1 Do
+      Begin
+        Entry := THistoryIndexEntry(FIndex[I]);
+        SL.Add(BuildIndexLine(Entry, Entry.TurnIndex));
+      End;
     Try
-      FS := TFileStream.Create(HistoryPath, fmOpenRead Or fmShareDenyNone);
-      Offset := 0;
-      LineStart := 0;
-      Line := '';
-      While Offset < FS.Size Do
-        Begin
-          FS.ReadBuffer(Ch, 1);
-          Inc(Offset);
-          If Ch = 10 Then
-            Begin
-              If (Line <> '') And (Line[Length(Line)] = #13) Then
-                SetLength(Line, Length(Line) - 1);
-              If ParseTurnLine(Line, Turn) Then
-                Begin
-                  Entry := THistoryIndexEntry.Create;
-                  Entry.Id := Turn.Id;
-                  Entry.Mode := Turn.Mode;
-                  Entry.CreatedAt := Turn.CreatedAt;
-                  Entry.DurationMs := Turn.DurationMs;
-                  Entry.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars);
-                  Entry.ResponsePreview := PreviewOf(Turn.Response, PreviewMaxChars);
-                  Entry.HasThinking := Turn.Thinking <> '';
-                  Entry.ErrorText := PreviewOf(Turn.ErrorText, 80);
-                  Entry.FileOffset := LineStart;
-                  FIndex.Add(Entry);
-                  IndexSL.Add(BuildIndexLine(Entry));
-                End;
-              Line := '';
-              LineStart := Offset;
-            End
-          Else
-            Line := Line + Char(Ch);
-        End;
-      If Trim(Line) <> '' Then
-        If ParseTurnLine(Line, Turn) Then
-          Begin
-            Entry := THistoryIndexEntry.Create;
-            Entry.Id := Turn.Id;
-            Entry.Mode := Turn.Mode;
-            Entry.CreatedAt := Turn.CreatedAt;
-            Entry.DurationMs := Turn.DurationMs;
-            Entry.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars);
-            Entry.ResponsePreview := PreviewOf(Turn.Response, PreviewMaxChars);
-            Entry.HasThinking := Turn.Thinking <> '';
-            Entry.ErrorText := PreviewOf(Turn.ErrorText, 80);
-            Entry.FileOffset := LineStart;
-            FIndex.Add(Entry);
-            IndexSL.Add(BuildIndexLine(Entry));
-          End;
-      IndexSL.SaveToFile(IndexPath);
-      Result := True;
-      WorkflowLogger.Info('AssistantHistory', Format('Rebuilt index (%d turns) for %s',
-        [FIndex.Count, FProjectRoot]));
+      SL.SaveToFile(IndexPath);
     Except
       On E: Exception Do
         FLastError := E.Message;
     End;
   Finally
-    FS.Free;
-    IndexSL.Free;
+    SL.Free;
   End;
+End;
+
+Function TAssistantHistoryStore.Load: Boolean;
+Begin
+  Result := False;
+  FLastError := '';
+  FLoaded := False;
+  If FProjectRoot = '' Then
+    Exit;
+  If Not EnsureDir Then
+    Exit;
+  Result := LoadHistoryFileIntoMemory;
+  If Result Then
+    Begin
+      RewriteIndexFile;
+      FLoaded := True;
+    End;
 End;
 
 Function TAssistantHistoryStore.AppendTurn(Const Turn: THistoryTurn; Out Entry: THistoryIndexEntry): Boolean;
 Var
   FS: TFileStream;
-  Line, IndexLine: String;
+  Line: String;
   Offset: Int64;
+  Idx: Integer;
 Begin
   Result := False;
   Entry := Nil;
   FLastError := '';
   If Not EnsureDir Then
     Exit;
+  If Not FLoaded Then
+    Load;
   Line := BuildTurnJson(Turn) + #10;
   FS := Nil;
   Try
@@ -577,35 +540,36 @@ Begin
       Offset := FS.Position;
       If Length(Line) > 0 Then
         FS.WriteBuffer(Line[1], Length(Line));
-      Entry := THistoryIndexEntry.Create;
-      Entry.Id := Turn.Id;
-      Entry.Mode := Turn.Mode;
-      Entry.CreatedAt := Turn.CreatedAt;
-      Entry.DurationMs := Turn.DurationMs;
-      Entry.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars);
-      Entry.ResponsePreview := PreviewOf(Turn.Response, PreviewMaxChars);
-      Entry.HasThinking := Turn.Thinking <> '';
-      Entry.ErrorText := PreviewOf(Turn.ErrorText, 80);
-      Entry.FileOffset := Offset;
+      Idx := Length(FTurns);
+      SetLength(FTurns, Idx + 1);
+      FTurns[Idx] := Turn;
+      Entry := EntryFromTurn(Turn, Offset, Idx);
       FIndex.Add(Entry);
-      IndexLine := BuildIndexLine(Entry) + #10;
+      { Append one index line (previews only) — list UI uses memory. }
       FreeAndNil(FS);
+      Line := BuildIndexLine(Entry, Idx) + #10;
       If FileExistsUTF8(IndexPath) Then
         FS := TFileStream.Create(IndexPath, fmOpenReadWrite Or fmShareDenyWrite)
       Else
         FS := TFileStream.Create(IndexPath, fmCreate);
       FS.Seek(0, soEnd);
-      If Length(IndexLine) > 0 Then
-        FS.WriteBuffer(IndexLine[1], Length(IndexLine));
+      If Length(Line) > 0 Then
+        FS.WriteBuffer(Line[1], Length(Line));
+      FLoaded := True;
       Result := True;
     Except
       On E: Exception Do
         Begin
           FLastError := E.Message;
           If Assigned(Entry) And (FIndex.IndexOf(Entry) >= 0) Then
-            FIndex.Remove(Entry)
+            Begin
+              FIndex.Remove(Entry);
+              Entry := Nil;
+            End
           Else
             FreeAndNil(Entry);
+          If Length(FTurns) > 0 Then
+            SetLength(FTurns, Length(FTurns) - 1);
         End;
     End;
   Finally
@@ -613,11 +577,7 @@ Begin
   End;
 End;
 
-Function TAssistantHistoryStore.LoadTurnByOffset(FileOffset: Int64; Out Turn: THistoryTurn): Boolean;
-Var
-  FS: TFileStream;
-  Line: String;
-  Ch: Byte;
+Function TAssistantHistoryStore.GetTurn(TurnIndex: Integer; Out Turn: THistoryTurn): Boolean;
 Begin
   Result := False;
   Turn.Id := '';
@@ -635,57 +595,38 @@ Begin
   Turn.ErrorText := '';
   Turn.PlanFile := '';
   Turn.TodoId := '';
-  If Not FileExistsUTF8(HistoryPath) Then
+  If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
-      FLastError := 'History file missing.';
+      FLastError := 'Turn index out of range.';
       Exit;
     End;
-  FS := TFileStream.Create(HistoryPath, fmOpenRead Or fmShareDenyNone);
-  Try
-    Try
-      If FileOffset >= FS.Size Then
-        Begin
-          FLastError := 'Invalid history offset.';
-          Exit;
-        End;
-      FS.Position := FileOffset;
-      Line := '';
-      While FS.Position < FS.Size Do
-        Begin
-          FS.ReadBuffer(Ch, 1);
-          If Ch = 10 Then
-            Break;
-          If Ch <> 13 Then
-            Line := Line + Char(Ch);
-        End;
-      Result := ParseTurnLine(Line, Turn);
-      If Not Result Then
-        FLastError := 'Could not parse history record.';
-    Except
-      On E: Exception Do
-        FLastError := E.Message;
-    End;
-  Finally
-    FS.Free;
-  End;
+  Turn := FTurns[TurnIndex];
+  Result := True;
 End;
 
-Function TAssistantHistoryStore.LoadTurnById(Const TurnId: String; Out Turn: THistoryTurn): Boolean;
+Function TAssistantHistoryStore.GetTurnDisplay(TurnIndex: Integer;
+  Out Prompt, Response, Thinking, ErrorText: String): Boolean;
 Var
-  I: Integer;
-  E: THistoryIndexEntry;
+  Turn: THistoryTurn;
 Begin
-  Result := False;
-  For I := 0 To FIndex.Count - 1 Do
+  Result := GetTurn(TurnIndex, Turn);
+  If Not Result Then
     Begin
-      E := THistoryIndexEntry(FIndex[I]);
-      If SameText(E.Id, TurnId) Then
-        Begin
-          Result := LoadTurnByOffset(E.FileOffset, Turn);
-          Exit;
-        End;
+      Prompt := '';
+      Response := '';
+      Thinking := '';
+      ErrorText := '';
+      Exit;
     End;
-  FLastError := 'Turn not found: ' + TurnId;
+  Prompt := Turn.Prompt;
+  Response := Turn.Response;
+  Thinking := Turn.Thinking;
+  ErrorText := Turn.ErrorText;
+End;
+
+Function TAssistantHistoryStore.TurnCount: Integer;
+Begin
+  Result := Length(FTurns);
 End;
 
 Function TAssistantHistoryStore.IndexCount: Integer;
