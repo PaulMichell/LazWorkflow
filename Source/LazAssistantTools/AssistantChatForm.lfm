@@ -46,6 +46,10 @@ object AssistantChatForm: TAssistantChatForm
       Caption = 'Show Thinking'
       OnExecute = ToggleThinkingActionExecute
     end
+    object FDeleteHistoryAction: TAction
+      Caption = 'Delete Conversation…'
+      OnExecute = DeleteHistoryActionExecute
+    end
   end
   inline FStatusFooter: TStatusFooterFrame
     Height = 22
@@ -207,10 +211,39 @@ object AssistantChatForm: TAssistantChatForm
         ClientHeight = 513
         ClientWidth = 240
         TabOrder = 2
-        object FConversationLabel: TLabel
+        object FHistoryLabel: TLabel
           Left = 8
           Height = 17
           Top = 8
+          Width = 224
+          Anchors = [akTop, akLeft, akRight]
+          Caption = 'History'
+          ParentColor = False
+        end
+        object FHistoryCombo: TComboBox
+          Left = 8
+          Height = 28
+          Top = 28
+          Width = 224
+          Anchors = [akTop, akLeft, akRight]
+          ItemHeight = 0
+          Style = csDropDownList
+          TabOrder = 0
+          OnChange = HistoryComboChange
+        end
+        object FBtnDeleteHistory: TButton
+          Left = 8
+          Height = 28
+          Top = 60
+          Width = 224
+          Anchors = [akTop, akLeft, akRight]
+          Action = FDeleteHistoryAction
+          TabOrder = 1
+        end
+        object FConversationLabel: TLabel
+          Left = 8
+          Height = 17
+          Top = 96
           Width = 224
           Anchors = [akTop, akLeft, akRight]
           Caption = 'Conversation'
@@ -218,12 +251,12 @@ object AssistantChatForm: TAssistantChatForm
         end
         object FConversationList: TListBox
           Left = 8
-          Height = 440
-          Top = 32
+          Height = 348
+          Top = 116
           Width = 224
           Anchors = [akTop, akLeft, akRight, akBottom]
           ItemHeight = 0
-          TabOrder = 0
+          TabOrder = 2
           OnClick = ConversationListClick
           OnDblClick = ConversationListClick
           OnSelectionChange = ConversationListSelectionChange
@@ -234,7 +267,7 @@ object AssistantChatForm: TAssistantChatForm
           Top = 480
           Width = 224
           Anchors = [akLeft, akRight, akBottom]
-          TabOrder = 1
+          TabOrder = 3
           OnChange = ConversationSearchChange
         end
       end

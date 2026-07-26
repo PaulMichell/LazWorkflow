@@ -30,6 +30,16 @@ Type
     TurnIndex: Integer; { index into the in-memory FTurns array }
   End;
 
+  { One archived (or current) conversation for the History combobox. }
+  TConversationHistoryItem = Class
+  Public
+    ArchiveId: String; { '' = current conversation.jsonl; else conversation-YYYYMMDD... stem }
+    Title: String;
+    CreatedAt: String;
+    TurnCount: Integer;
+    IsCurrent: Boolean;
+  End;
+
   { Display payload for a turn — only these fields are needed when stepping the conversation list. }
   TConversationTurn = Record
     Id: String;
@@ -69,6 +79,8 @@ Type
     Function EntryFromTurn(Const Turn: TConversationTurn; FileOffset: Int64; TurnIndex: Integer): TConversationIndexEntry;
     Function LoadConversationFileIntoMemory: Boolean;
     Procedure RewriteIndexFile;
+    Function ArchivePathsForId(Const ArchiveId: String; Out ConvPath, IdxPath: String): Boolean;
+    Function TitleFromIndexFile(Const IdxFile: String): String;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -84,6 +96,15 @@ Type
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
+    { Multi-conversation: current files are conversation.jsonl + conversation.index.jsonl;
+      archives are conversation-YYYYMMDDTHHMMSSMMM.jsonl (+ matching .index.jsonl). }
+    Function HasTurns: Boolean;
+    Function ArchiveCurrent(Out ArchiveId: String): Boolean;
+    Function StartNewConversation: Boolean;
+    Function ListHistory(Items: TObjectList): Boolean; { of TConversationHistoryItem; caller owns }
+    Function ActivateArchive(Const ArchiveId: String): Boolean;
+    Function DeleteConversation(Const ArchiveId: String): Boolean; { '' deletes current }
+    Function HistoryTitleForCurrent: String;
     Property ProjectRoot: String Read FProjectRoot;
     Property LastError: String Read FLastError;
     Property Loaded: Boolean Read FLoaded;
@@ -109,6 +130,9 @@ Const
   ConversationFileName = 'conversation.jsonl';
   IndexFileName = 'conversation.index.jsonl';
   ConfigFileName = 'config.json';
+  ConversationArchivePrefix = 'conversation-';
+  ConversationArchiveSuffix = '.jsonl';
+  ConversationArchiveIndexSuffix = '.index.jsonl';
 
 Function JsonEscape(Const S: String): String;
 Var
@@ -698,6 +722,372 @@ Begin
     Data.Free;
     SL.Free;
   End;
+End;
+
+Function NewArchiveId: String;
+Begin
+  { Filesystem-safe timestamp id (no colons). }
+  Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now);
+End;
+
+Function TAssistantConversationStore.ArchivePathsForId(Const ArchiveId: String;
+  Out ConvPath, IdxPath: String): Boolean;
+Begin
+  Result := False;
+  ConvPath := '';
+  IdxPath := '';
+  If (FProjectRoot = '') Or (Trim(ArchiveId) = '') Then
+    Exit;
+  ConvPath := AssistantDir + ConversationArchivePrefix + ArchiveId + ConversationArchiveSuffix;
+  IdxPath := AssistantDir + ConversationArchivePrefix + ArchiveId + ConversationArchiveIndexSuffix;
+  Result := True;
+End;
+
+Function TAssistantConversationStore.TitleFromIndexFile(Const IdxFile: String): String;
+Var
+  SL: TStringList;
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Preview, Created: String;
+Begin
+  Result := '';
+  If (IdxFile = '') Or (Not FileExistsUTF8(IdxFile)) Then
+    Exit;
+  SL := TStringList.Create;
+  Data := Nil;
+  Try
+    Try
+      SL.LoadFromFile(IdxFile);
+      If SL.Count < 1 Then
+        Exit;
+      Data := GetJSON(SL[0]);
+      If Data Is TJSONObject Then
+        Begin
+          Obj := TJSONObject(Data);
+          Preview := Trim(Obj.Get('prompt_preview', ''));
+          Created := Trim(Obj.Get('created_at', ''));
+          If Preview <> '' Then
+            Result := Preview
+          Else If Created <> '' Then
+            Result := Created
+          Else
+            Result := ExtractFileName(IdxFile);
+        End;
+    Except
+      Result := '';
+    End;
+  Finally
+    Data.Free;
+    SL.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.HasTurns: Boolean;
+Begin
+  If Not FLoaded Then
+    If FProjectRoot <> '' Then
+      Load;
+  Result := TurnCount > 0;
+End;
+
+Function TAssistantConversationStore.HistoryTitleForCurrent: String;
+Var
+  Entry: TConversationIndexEntry;
+Begin
+  Result := 'Current';
+  If Not FLoaded Then
+    Load;
+  If IndexCount < 1 Then
+    Begin
+      Result := 'Current (empty)';
+      Exit;
+    End;
+  Entry := IndexEntry(0);
+  If Assigned(Entry) And (Entry.PromptPreview <> '') Then
+    Result := 'Current — ' + Entry.PromptPreview
+  Else
+    Result := Format('Current — %d turn(s)', [TurnCount]);
+End;
+
+Function TAssistantConversationStore.ArchiveCurrent(Out ArchiveId: String): Boolean;
+Var
+  ConvPath, IdxPath, ArchConv, ArchIdx: String;
+Begin
+  Result := False;
+  ArchiveId := '';
+  FLastError := '';
+  If FProjectRoot = '' Then
+    Begin
+      FLastError := 'No project root.';
+      Exit;
+    End;
+  If Not EnsureDir Then
+    Exit;
+  If Not HasTurns Then
+    Begin
+      { Nothing to archive — treat as success so StartNew can proceed. }
+      Result := True;
+      Exit;
+    End;
+  { Ensure index is on disk for History titles before rename. }
+  If Not FLoaded Then
+    Load;
+  RewriteIndexFile;
+  ArchiveId := NewArchiveId;
+  If Not ArchivePathsForId(ArchiveId, ArchConv, ArchIdx) Then
+    Exit;
+  ConvPath := ConversationPath;
+  IdxPath := IndexPath;
+  If FileExistsUTF8(ConvPath) Then
+    Begin
+      If Not RenameFileUTF8(ConvPath, ArchConv) Then
+        Begin
+          FLastError := 'Could not archive ' + ConvPath;
+          ArchiveId := '';
+          Exit;
+        End;
+    End;
+  If FileExistsUTF8(IdxPath) Then
+    Begin
+      If Not RenameFileUTF8(IdxPath, ArchIdx) Then
+        WorkflowLogger.Warning('AssistantConversation', 'Could not archive index for ' + ArchiveId);
+    End;
+  ClearAll;
+  FLoaded := False;
+  Result := True;
+  WorkflowLogger.Info('AssistantConversation', 'Archived conversation as ' + ArchiveId);
+End;
+
+Function TAssistantConversationStore.StartNewConversation: Boolean;
+Var
+  ArchiveId: String;
+Begin
+  Result := False;
+  FLastError := '';
+  If FProjectRoot = '' Then
+    Begin
+      FLastError := 'No project root.';
+      Exit;
+    End;
+  If Not ArchiveCurrent(ArchiveId) Then
+    Exit;
+  ClearAll;
+  FLoaded := True;
+  If FileExistsUTF8(ConversationPath) Then
+    DeleteFileUTF8(ConversationPath);
+  If FileExistsUTF8(IndexPath) Then
+    DeleteFileUTF8(IndexPath);
+  Result := True;
+End;
+
+Function TAssistantConversationStore.ListHistory(Items: TObjectList): Boolean;
+Var
+  Rec: TSearchRec;
+  Code: LongInt;
+  Name, Stem, ArchId, ConvPath, IdxPath, Title: String;
+  Item: TConversationHistoryItem;
+  I: Integer;
+  Sorted: TStringList;
+  Lines: TStringList;
+Begin
+  Result := False;
+  FLastError := '';
+  If Not Assigned(Items) Then
+    Exit;
+  Items.Clear;
+  If FProjectRoot = '' Then
+    Exit;
+  If Not EnsureDir Then
+    Exit;
+
+  If Not FLoaded Then
+    Load;
+
+  Item := TConversationHistoryItem.Create;
+  Item.ArchiveId := '';
+  Item.IsCurrent := True;
+  Item.TurnCount := TurnCount;
+  Item.Title := HistoryTitleForCurrent;
+  If IndexCount > 0 Then
+    Item.CreatedAt := IndexEntry(0).CreatedAt
+  Else
+    Item.CreatedAt := '';
+  Items.Add(Item);
+
+  Sorted := TStringList.Create;
+  Try
+    Sorted.Sorted := True;
+    Sorted.Duplicates := dupIgnore;
+    Code := FindFirstUTF8(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix,
+      faAnyFile, Rec);
+    Try
+      While Code = 0 Do
+        Begin
+          Name := Rec.Name;
+          If Pos('.index.', LowerCase(Name)) > 0 Then
+            Begin
+              Code := FindNextUTF8(Rec);
+              Continue;
+            End;
+          If (Rec.Attr And faDirectory) <> 0 Then
+            Begin
+              Code := FindNextUTF8(Rec);
+              Continue;
+            End;
+          Stem := ChangeFileExt(Name, '');
+          If SameText(Copy(Stem, 1, Length(ConversationArchivePrefix)), ConversationArchivePrefix) Then
+            ArchId := Copy(Stem, Length(ConversationArchivePrefix) + 1, MaxInt)
+          Else
+            ArchId := Stem;
+          If ArchId <> '' Then
+            Sorted.Add(ArchId);
+          Code := FindNextUTF8(Rec);
+        End;
+    Finally
+      FindCloseUTF8(Rec);
+    End;
+
+    For I := Sorted.Count - 1 DownTo 0 Do
+      Begin
+        ArchId := Sorted[I];
+        If Not ArchivePathsForId(ArchId, ConvPath, IdxPath) Then
+          Continue;
+        Item := TConversationHistoryItem.Create;
+        Item.ArchiveId := ArchId;
+        Item.IsCurrent := False;
+        Title := TitleFromIndexFile(IdxPath);
+        If Title = '' Then
+          Title := ArchId;
+        Item.Title := Title;
+        Item.CreatedAt := ArchId;
+        Item.TurnCount := 0;
+        If FileExistsUTF8(IdxPath) Then
+          Begin
+            Lines := TStringList.Create;
+            Try
+              Try
+                Lines.LoadFromFile(IdxPath);
+                Item.TurnCount := Lines.Count;
+              Except
+                Item.TurnCount := 0;
+              End;
+            Finally
+              Lines.Free;
+            End;
+          End;
+        If Item.TurnCount > 0 Then
+          Item.Title := Format('%s (%d)', [Item.Title, Item.TurnCount]);
+        Items.Add(Item);
+      End;
+  Finally
+    Sorted.Free;
+  End;
+  Result := True;
+End;
+
+Function TAssistantConversationStore.ActivateArchive(Const ArchiveId: String): Boolean;
+Var
+  ArchConv, ArchIdx, CurConv, CurIdx, TmpId, TmpConv, TmpIdx: String;
+Begin
+  Result := False;
+  FLastError := '';
+  If FProjectRoot = '' Then
+    Begin
+      FLastError := 'No project root.';
+      Exit;
+    End;
+  If Trim(ArchiveId) = '' Then
+    Begin
+      If Not FLoaded Then
+        Load;
+      Result := True;
+      Exit;
+    End;
+  If Not ArchivePathsForId(ArchiveId, ArchConv, ArchIdx) Then
+    Exit;
+  If Not FileExistsUTF8(ArchConv) Then
+    Begin
+      FLastError := 'Archive not found: ' + ArchiveId;
+      Exit;
+    End;
+  If Not EnsureDir Then
+    Exit;
+
+  CurConv := ConversationPath;
+  CurIdx := IndexPath;
+
+  If HasTurns Or FileExistsUTF8(CurConv) Then
+    Begin
+      If Not FLoaded Then
+        Load;
+      If HasTurns Then
+        RewriteIndexFile;
+      TmpId := NewArchiveId;
+      While SameText(TmpId, ArchiveId) Do
+        TmpId := NewArchiveId + 'x';
+      If Not ArchivePathsForId(TmpId, TmpConv, TmpIdx) Then
+        Exit;
+      If FileExistsUTF8(CurConv) Then
+        If Not RenameFileUTF8(CurConv, TmpConv) Then
+          Begin
+            FLastError := 'Could not park current conversation.';
+            Exit;
+          End;
+      If FileExistsUTF8(CurIdx) Then
+        RenameFileUTF8(CurIdx, TmpIdx);
+    End;
+
+  If Not RenameFileUTF8(ArchConv, CurConv) Then
+    Begin
+      FLastError := 'Could not activate archive ' + ArchiveId;
+      Exit;
+    End;
+  If FileExistsUTF8(ArchIdx) Then
+    RenameFileUTF8(ArchIdx, CurIdx);
+
+  ClearAll;
+  FLoaded := False;
+  Result := Load;
+  WorkflowLogger.Info('AssistantConversation', 'Activated archive ' + ArchiveId);
+End;
+
+Function TAssistantConversationStore.DeleteConversation(Const ArchiveId: String): Boolean;
+Var
+  ConvPath, IdxPath: String;
+Begin
+  Result := False;
+  FLastError := '';
+  If FProjectRoot = '' Then
+    Begin
+      FLastError := 'No project root.';
+      Exit;
+    End;
+  If Trim(ArchiveId) = '' Then
+    Begin
+      If FileExistsUTF8(ConversationPath) Then
+        DeleteFileUTF8(ConversationPath);
+      If FileExistsUTF8(IndexPath) Then
+        DeleteFileUTF8(IndexPath);
+      ClearAll;
+      FLoaded := True;
+      Result := True;
+      WorkflowLogger.Info('AssistantConversation', 'Deleted current conversation');
+      Exit;
+    End;
+  If Not ArchivePathsForId(ArchiveId, ConvPath, IdxPath) Then
+    Exit;
+  If FileExistsUTF8(ConvPath) Then
+    Begin
+      If Not DeleteFileUTF8(ConvPath) Then
+        Begin
+          FLastError := 'Could not delete ' + ConvPath;
+          Exit;
+        End;
+    End;
+  If FileExistsUTF8(IdxPath) Then
+    DeleteFileUTF8(IdxPath);
+  Result := True;
+  WorkflowLogger.Info('AssistantConversation', 'Deleted archive ' + ArchiveId);
 End;
 
 Initialization

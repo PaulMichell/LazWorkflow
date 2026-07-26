@@ -25,11 +25,15 @@ Type
     FFixErrorAction: TAction;
     FSettingsAction: TAction;
     FToggleThinkingAction: TAction;
+    FDeleteHistoryAction: TAction;
     FPages: TPageControl;
     FTabChat: TTabSheet;
     FTabPlan: TTabSheet;
     FTabCode: TTabSheet;
     FConversationPanel: TPanel;
+    FHistoryLabel: TLabel;
+    FHistoryCombo: TComboBox;
+    FBtnDeleteHistory: TButton;
     FConversationLabel: TLabel;
     FConversationSearch: TEdit;
     FConversationList: TListBox;
@@ -55,6 +59,7 @@ Type
     Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure HistoryComboChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
@@ -63,6 +68,7 @@ Type
     Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure ToggleThinkingActionExecute(Sender: TObject);
+    Procedure DeleteHistoryActionExecute(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
     FChatView: TControl; { TMarkDownControl created at runtime. }
@@ -91,12 +97,17 @@ Type
     FLastChatPaintTick: QWord;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
+    FHistoryIds: TStringList; { Parallel to FHistoryCombo; '' = current conversation. }
+    FHistoryUpdating: Boolean;
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
     Procedure SetCurrentSystemNote(Const NoteText: String);
     Procedure EnsureConversationStore;
     Procedure RefreshConversationList;
+    Procedure RefreshHistoryCombo;
+    Procedure RebuildClientFromConversation;
+    Procedure ApplyLoadedConversationToUi(Const StatusNote: String);
     Procedure ShowConversationTurn(TurnIndex: Integer);
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
@@ -163,8 +174,9 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext, AssistantSession,
-  GrokOAuth, LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf, ProjectIntf;
+  Contnrs, WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
+  AssistantSession, GrokOAuth, LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf,
+  ProjectIntf;
 
 Const
   ChatViewMargin = 4;
@@ -200,6 +212,8 @@ Begin
   FLastChatPaintTick := 0;
   FSessionProjectKey := '';
   FChatView := Nil;
+  FHistoryUpdating := False;
+  FHistoryIds := TStringList.Create;
   FTranscript := TStringList.Create;
   WorkflowEventBus.AddListener(Self);
 End;
@@ -211,6 +225,7 @@ Begin
   PersistSession;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FTranscript);
+  FreeAndNil(FHistoryIds);
   Inherited Destroy;
 End;
 
@@ -529,6 +544,108 @@ Begin
   RefreshConversationList;
 End;
 
+Procedure TAssistantChatForm.RefreshHistoryCombo;
+Var
+  Items: TObjectList;
+  I, SelectIdx: Integer;
+  Hist: TConversationHistoryItem;
+  PrevId: String;
+Begin
+  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+    Exit;
+  PrevId := '';
+  If (FHistoryCombo.ItemIndex >= 0) And (FHistoryCombo.ItemIndex < FHistoryIds.Count) Then
+    PrevId := FHistoryIds[FHistoryCombo.ItemIndex];
+  FHistoryUpdating := True;
+  Items := TObjectList.Create(True);
+  Try
+    FHistoryCombo.Items.BeginUpdate;
+    Try
+      FHistoryCombo.Items.Clear;
+      FHistoryIds.Clear;
+      If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+        ProjectAssistantConversation.ListHistory(Items);
+      SelectIdx := 0;
+      For I := 0 To Items.Count - 1 Do
+        Begin
+          Hist := TConversationHistoryItem(Items[I]);
+          If Not Assigned(Hist) Then
+            Continue;
+          FHistoryCombo.Items.Add(Hist.Title);
+          FHistoryIds.Add(Hist.ArchiveId);
+          If SameText(Hist.ArchiveId, PrevId) Then
+            SelectIdx := FHistoryCombo.Items.Count - 1;
+          If Hist.IsCurrent Then
+            SelectIdx := FHistoryCombo.Items.Count - 1;
+        End;
+      If FHistoryCombo.Items.Count = 0 Then
+        Begin
+          FHistoryCombo.Items.Add('Current (empty)');
+          FHistoryIds.Add('');
+          SelectIdx := 0;
+        End;
+      If SelectIdx >= FHistoryCombo.Items.Count Then
+        SelectIdx := 0;
+      FHistoryCombo.ItemIndex := SelectIdx;
+    Finally
+      FHistoryCombo.Items.EndUpdate;
+    End;
+  Finally
+    Items.Free;
+    FHistoryUpdating := False;
+  End;
+  If Assigned(FDeleteHistoryAction) Then
+    FDeleteHistoryAction.Enabled := Not FSending;
+End;
+
+Procedure TAssistantChatForm.RebuildClientFromConversation;
+Var
+  I: Integer;
+  Prompt, Response, Thinking, Err: String;
+Begin
+  If Assigned(AssistantClient) Then
+    AssistantClient.ClearHistory;
+  FContextUsed := 0;
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  For I := 0 To ProjectAssistantConversation.TurnCount - 1 Do
+    Begin
+      If Not ProjectAssistantConversation.GetTurnDisplay(I, Prompt, Response, Thinking, Err) Then
+        Continue;
+      If Assigned(AssistantClient) Then
+        Begin
+          If Trim(Prompt) <> '' Then
+            Begin
+              AssistantClient.AddMessage(amrUser, Prompt);
+              FContextUsed := FContextUsed + Length(Prompt) Div 4 + 8;
+            End;
+          If Trim(Response) <> '' Then
+            Begin
+              AssistantClient.AddMessage(amrAssistant, Response);
+              FContextUsed := FContextUsed + Length(Response) Div 4 + 20;
+            End;
+          If Trim(Thinking) <> '' Then
+            FContextUsed := FContextUsed + Length(Thinking) Div 4;
+        End;
+    End;
+End;
+
+Procedure TAssistantChatForm.ApplyLoadedConversationToUi(Const StatusNote: String);
+Begin
+  FTranscript.Clear;
+  FUserCancelled := False;
+  FTurnRecorded := False;
+  FLastChatPaintTick := 0;
+  ClearCurrentTurnDisplay;
+  RebuildClientFromConversation;
+  RefreshHistoryCombo;
+  RefreshConversationList;
+  ShowLastConversationTurn;
+  If StatusNote <> '' Then
+    SetCurrentSystemNote(StatusNote);
+  UpdateStatusFooter;
+End;
+
 Procedure TAssistantChatForm.ConversationListClick(Sender: TObject);
 Begin
   ConversationListSelectionChange(Sender, True);
@@ -600,7 +717,10 @@ Begin
   Turn.PlanFile := '';
   Turn.TodoId := '';
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
-    FTurnRecorded := True
+    Begin
+      FTurnRecorded := True;
+      RefreshHistoryCombo;
+    End
   Else
     WorkflowLogger.Warning('AssistantChat', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
 End;
@@ -1483,6 +1603,22 @@ Begin
     Else
       FStatusFooter.SetRightText(KindLabel + ' done');
 
+    { Reviews start a fresh conversation (own model context); prior chat is archived. }
+    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+      Begin
+        If Not ProjectAssistantConversation.StartNewConversation Then
+          WorkflowLogger.Warning('AssistantChat', 'Review archive: ' + ProjectAssistantConversation.LastError);
+      End;
+    FTranscript.Clear;
+    FContextUsed := 0;
+    FTurnRecorded := False;
+    FSelectedTurnIndex := -1;
+    If Assigned(AssistantClient) Then
+      AssistantClient.ClearHistory;
+    ClearProjectChatSession;
+    RefreshHistoryCombo;
+    RefreshConversationList;
+
     SubmitReviewRequest(DisplayLabel, PromptText);
   Finally
     { Keep FReviewInProgress True while the review stream runs so a second click
@@ -1512,15 +1648,26 @@ Begin
   If FSending Then
     StopStream;
   SetSending(False);
+  EnsureConversationStore;
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    Begin
+      If Not ProjectAssistantConversation.StartNewConversation Then
+        WorkflowLogger.Warning('AssistantChat', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
+    End;
   FTranscript.Clear;
   FContextUsed := 0;
   FUserCancelled := False;
+  FTurnRecorded := False;
   FLastChatPaintTick := 0;
+  FSelectedTurnIndex := -1;
   ClearCurrentTurnDisplay;
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
   ClearProjectChatSession;
-  SetCurrentSystemNote('New conversation started. Model context cleared.');
+  RefreshHistoryCombo;
+  RefreshConversationList;
+  RefreshChatDisplay(True, False);
+  SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
   PersistSession;
   UpdateStatusFooter;
 End;
@@ -1543,6 +1690,7 @@ Begin
     AssistantClient.ClearHistory;
   If Assigned(ProjectAssistantConversation) Then
     ProjectAssistantConversation.SetProjectRoot('');
+  RefreshHistoryCombo;
   RefreshConversationList;
   ClearCurrentTurnDisplay;
   RefreshChatDisplay(True, False);
@@ -1608,11 +1756,13 @@ Begin
     Begin
       FSessionProjectKey := Key;
       RestoreSessionIfNeeded;
+      RefreshHistoryCombo;
       RefreshConversationList;
       ShowLastConversationTurn;
     End
   Else
     Begin
+      RefreshHistoryCombo;
       RefreshConversationList;
       ClearCurrentTurnDisplay;
       RefreshChatDisplay(True, False);
@@ -1763,6 +1913,95 @@ End;
 Procedure TAssistantChatForm.NewChatActionExecute(Sender: TObject);
 Begin
   StartNewChat;
+End;
+
+Procedure TAssistantChatForm.HistoryComboChange(Sender: TObject);
+Var
+  ArchiveId: String;
+Begin
+  If FHistoryUpdating Then
+    Exit;
+  If FSending Then
+    Begin
+      MessageDlg('Stop the current reply before switching History.', mtInformation, [mbOK], 0);
+      RefreshHistoryCombo;
+      Exit;
+    End;
+  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+    Exit;
+  If (FHistoryCombo.ItemIndex < 0) Or (FHistoryCombo.ItemIndex >= FHistoryIds.Count) Then
+    Exit;
+  ArchiveId := FHistoryIds[FHistoryCombo.ItemIndex];
+  If ArchiveId = '' Then
+    Exit; { already current }
+  EnsureConversationStore;
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  If Not ProjectAssistantConversation.ActivateArchive(ArchiveId) Then
+    Begin
+      MessageDlg('Could not open conversation:' + LineEnding + ProjectAssistantConversation.LastError,
+        mtError, [mbOK], 0);
+      RefreshHistoryCombo;
+      Exit;
+    End;
+  ClearProjectChatSession;
+  ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
+  PersistSession;
+  WorkflowLogger.Info('AssistantChat', 'History activated: ' + ArchiveId);
+End;
+
+Procedure TAssistantChatForm.DeleteHistoryActionExecute(Sender: TObject);
+Var
+  ArchiveId, LabelText: String;
+  IsCurrent: Boolean;
+Begin
+  If FSending Then
+    Begin
+      MessageDlg('Stop the current reply before deleting a conversation.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+    Exit;
+  If (FHistoryCombo.ItemIndex < 0) Or (FHistoryCombo.ItemIndex >= FHistoryIds.Count) Then
+    Exit;
+  ArchiveId := FHistoryIds[FHistoryCombo.ItemIndex];
+  LabelText := FHistoryCombo.Items[FHistoryCombo.ItemIndex];
+  IsCurrent := ArchiveId = '';
+  If MessageDlg(
+    'Delete this conversation permanently?' + LineEnding + LineEnding +
+    LabelText + LineEnding + LineEnding +
+    'This cannot be undone.',
+    mtWarning, [mbYes, mbNo], 0) <> mrYes Then
+    Exit;
+  EnsureConversationStore;
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  If Not ProjectAssistantConversation.DeleteConversation(ArchiveId) Then
+    Begin
+      MessageDlg('Could not delete conversation:' + LineEnding + ProjectAssistantConversation.LastError,
+        mtError, [mbOK], 0);
+      Exit;
+    End;
+  If IsCurrent Then
+    Begin
+      FTranscript.Clear;
+      FContextUsed := 0;
+      FTurnRecorded := False;
+      FSelectedTurnIndex := -1;
+      ClearCurrentTurnDisplay;
+      If Assigned(AssistantClient) Then
+        AssistantClient.ClearHistory;
+      ClearProjectChatSession;
+      RefreshHistoryCombo;
+      RefreshConversationList;
+      RefreshChatDisplay(True, False);
+      SetCurrentSystemNote('Conversation deleted.');
+      PersistSession;
+      UpdateStatusFooter;
+    End
+  Else
+    RefreshHistoryCombo;
+  WorkflowLogger.Info('AssistantChat', 'Deleted conversation id=' + ArchiveId);
 End;
 
 Procedure TAssistantChatForm.ReviewCompileActionExecute(Sender: TObject);
