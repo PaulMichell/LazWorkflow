@@ -77,14 +77,19 @@ Type
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
     FUserCancelled: Boolean;
-    FAssistantContent: String; { Final answer channel (API history). }
-    FAssistantThinking: String; { Reasoning stream (display optional). }
+    FAssistantContent: String; { Content shown in the chat pane (may be a past turn). }
+    FAssistantThinking: String;
+    FLiveUser: String; { In-flight turn buffers (updated even when browsing past turns). }
+    FLiveContent: String;
+    FLiveThinking: String;
+    FViewingLive: Boolean; { True when chat pane follows the in-flight turn. }
     FReviewInProgress: Boolean;
     FStreamStart: TDateTime;
     FTurnStartedAt: String;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
+    FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -152,6 +157,8 @@ Uses
 Const
   ChatViewMargin = 4;
   ChatPaintMinIntervalMs = 80;
+  { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
+  LiveConversationMarker = -2;
 
 Constructor TAssistantChatForm.Create(TheOwner: TComponent);
 Begin
@@ -164,6 +171,11 @@ Begin
   FUserCancelled := False;
   FAssistantContent := '';
   FAssistantThinking := '';
+  FLiveUser := '';
+  FLiveContent := '';
+  FLiveThinking := '';
+  FViewingLive := True;
+  FSelectedTurnIndex := -1;
   FDisplayUser := '';
   FDisplaySystemNote := '';
   FShowThinking := True;
@@ -243,7 +255,12 @@ Begin
   FDisplaySystemNote := '';
   FAssistantContent := '';
   FAssistantThinking := '';
+  FLiveUser := '';
+  FLiveContent := '';
+  FLiveThinking := '';
   FStreamingActive := False;
+  FViewingLive := True;
+  FSelectedTurnIndex := -1;
 End;
 
 Procedure TAssistantChatForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -356,22 +373,37 @@ Begin
 End;
 
 Function TAssistantChatForm.ConversationListTurnIndex(ListIndex: Integer): Integer;
+Var
+  Encoded: Integer;
 Begin
-  { Objects store TurnIndex+1 so index 0 is never stored as Nil. }
+  { Objects store TurnIndex+1 so index 0 is never stored as Nil.
+    Live in-flight row uses LiveConversationMarker+1. }
   Result := -1;
   If Not Assigned(FConversationList) Or (ListIndex < 0) Or (ListIndex >= FConversationList.Items.Count) Then
     Exit;
-  Result := Integer(PtrUInt(FConversationList.Items.Objects[ListIndex]));
-  If Result > 0 Then
-    Dec(Result)
-  Else
-    Result := -1;
+  Encoded := Integer(PtrUInt(FConversationList.Items.Objects[ListIndex]));
+  If Encoded = 0 Then
+    Exit;
+  Result := Encoded - 1; { may be LiveConversationMarker (-2) }
 End;
 
 Procedure TAssistantChatForm.ShowConversationTurn(TurnIndex: Integer);
 Var
   Prompt, Response, Thinking, ErrorText: String;
 Begin
+  FSelectedTurnIndex := TurnIndex;
+  If TurnIndex = LiveConversationMarker Then
+    Begin
+      { Follow the in-flight turn (background stream may still be running). }
+      FViewingLive := True;
+      FDisplayUser := FLiveUser;
+      FAssistantContent := FLiveContent;
+      FAssistantThinking := FLiveThinking;
+      FDisplaySystemNote := '';
+      RefreshChatDisplay(True, FSending);
+      Exit;
+    End;
+  FViewingLive := False;
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   If Not ProjectAssistantConversation.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
@@ -387,7 +419,6 @@ Begin
     FDisplaySystemNote := '**Error:** ' + ErrorText
   Else
     FDisplaySystemNote := '';
-  FStreamingActive := False;
   RefreshChatDisplay(True, False);
 End;
 
@@ -414,7 +445,7 @@ Procedure TAssistantChatForm.RefreshConversationList;
 Var
   I, SeqNo, KeepTurnIndex: Integer;
   Entry: TConversationIndexEntry;
-  Filter, Line: String;
+  Filter, Line, Preview: String;
   ShowItem: Boolean;
   SelectIdx: Integer;
 Begin
@@ -424,7 +455,9 @@ Begin
   Filter := '';
   If Assigned(FConversationSearch) Then
     Filter := LowerCase(Trim(FConversationSearch.Text));
-  KeepTurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
+  KeepTurnIndex := FSelectedTurnIndex;
+  If KeepTurnIndex < 0 Then
+    KeepTurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
   SelectIdx := -1;
   FConversationList.Items.BeginUpdate;
   Try
@@ -452,6 +485,26 @@ Begin
               SelectIdx := FConversationList.Items.Count - 1;
           End;
       End;
+    { In-flight prompt appears immediately at the bottom while the model runs. }
+    If FSending And (FLiveUser <> '') Then
+      Begin
+        Preview := FLiveUser;
+        Preview := StringReplace(Preview, #13#10, ' ', [rfReplaceAll]);
+        Preview := StringReplace(Preview, #10, ' ', [rfReplaceAll]);
+        If Length(Preview) > 120 Then
+          Preview := Copy(Preview, 1, 119) + '…';
+        SeqNo := ProjectAssistantConversation.IndexCount + 1;
+        Line := IntToStr(SeqNo) + ' - ' + Preview + ' …';
+        ShowItem := True;
+        If Filter <> '' Then
+          ShowItem := Pos(Filter, LowerCase(Preview)) > 0;
+        If ShowItem Then
+          Begin
+            FConversationList.Items.AddObject(Line, TObject(PtrUInt(LiveConversationMarker + 1)));
+            If (KeepTurnIndex = LiveConversationMarker) Or FViewingLive Then
+              SelectIdx := FConversationList.Items.Count - 1;
+          End;
+      End;
   Finally
     FConversationList.Items.EndUpdate;
   End;
@@ -461,6 +514,7 @@ Begin
         SelectIdx := FConversationList.Items.Count - 1;
       FConversationList.ItemIndex := SelectIdx;
       FConversationList.TopIndex := SelectIdx;
+      FSelectedTurnIndex := ConversationListTurnIndex(SelectIdx);
     End;
 End;
 
@@ -478,12 +532,14 @@ Procedure TAssistantChatForm.ConversationListSelectionChange(Sender: TObject; Us
 Var
   TurnIndex: Integer;
 Begin
-  If FSending Then
-    Exit;
+  { Allow browsing past turns while a stream continues in the background. }
   If Not Assigned(FConversationList) Or (FConversationList.ItemIndex < 0) Then
     Exit;
   TurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
-  If TurnIndex < 0 Then
+  If TurnIndex < LiveConversationMarker Then
+    Exit;
+  { Marker is -2; completed turns are >= 0. Decode already applied +1 offset. }
+  If (TurnIndex < 0) And (TurnIndex <> LiveConversationMarker) Then
     Exit;
   ShowConversationTurn(TurnIndex);
 End;
@@ -499,16 +555,26 @@ Begin
   EnsureConversationStore;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
-  If (Trim(FDisplayUser) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
+  If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
+    (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
     Exit;
   DurationMs := 0;
   If FStreamStart > 0 Then
     DurationMs := Round((Now - FStreamStart) * 24 * 60 * 60 * 1000);
   Turn.Id := NewConversationTurnId;
   Turn.Mode := AssistantModeToStr(FActiveMode);
-  Turn.Prompt := FDisplayUser;
-  Turn.Thinking := FAssistantThinking;
-  Turn.Response := FAssistantContent;
+  If FLiveUser <> '' Then
+    Turn.Prompt := FLiveUser
+  Else
+    Turn.Prompt := FDisplayUser;
+  If FLiveThinking <> '' Then
+    Turn.Thinking := FLiveThinking
+  Else
+    Turn.Thinking := FAssistantThinking;
+  If FLiveContent <> '' Then
+    Turn.Response := FLiveContent
+  Else
+    Turn.Response := FAssistantContent;
   Turn.CreatedAt := IsoNowUtc;
   Turn.StartedAt := FTurnStartedAt;
   If Turn.StartedAt = '' Then
@@ -901,28 +967,43 @@ End;
 
 Procedure TAssistantChatForm.BeginAssistantReply;
 Begin
-  FAssistantContent := '';
-  FAssistantThinking := '';
+  FLiveContent := '';
+  FLiveThinking := '';
   FUserCancelled := False;
   FStreamingActive := True;
+  FViewingLive := True;
+  FSelectedTurnIndex := LiveConversationMarker;
   FLastChatPaintTick := 0;
   FTurnStartedAt := IsoNowUtc;
-  RefreshChatDisplay(True);
+  FDisplayUser := FLiveUser;
+  FAssistantContent := '';
+  FAssistantThinking := '';
+  FDisplaySystemNote := '';
+  RefreshConversationList;
+  RefreshChatDisplay(True, True);
 End;
 
 Procedure TAssistantChatForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
   If Not FStreamingActive Then
     BeginAssistantReply;
-  FAssistantContent := ContentSnapshot;
-  FAssistantThinking := ThinkingSnapshot;
-  If FAssistantContent <> '' Then
+  { Always keep live buffers for the background stream. }
+  FLiveContent := ContentSnapshot;
+  FLiveThinking := ThinkingSnapshot;
+  If FLiveContent <> '' Then
     SetStreamPhase('Streaming…')
-  Else If FAssistantThinking <> '' Then
+  Else If FLiveThinking <> '' Then
     SetStreamPhase('Thinking…')
   Else
     SetStreamPhase('Waiting for first token…');
-  RefreshChatDisplay(False);
+  { Only repaint the chat pane when the user is watching the live turn. }
+  If FViewingLive Then
+    Begin
+      FDisplayUser := FLiveUser;
+      FAssistantContent := FLiveContent;
+      FAssistantThinking := FLiveThinking;
+      RefreshChatDisplay(False, True);
+    End;
 End;
 
 Procedure TAssistantChatForm.FinishAssistantReply(Const ErrorText: String);
@@ -931,19 +1012,19 @@ Var
 Begin
   If FUserCancelled Then
     Begin
-      { StopStream already cleaned UI and cancelled the worker. }
       FUserCancelled := False;
       If Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       SetSending(False);
       Exit;
     End;
+  { FLive* are authoritative for the completed stream (pane may be browsing elsewhere). }
   If FStreamingActive Then
     Begin
-      If (ErrorText <> '') And (FAssistantContent = '') And (FAssistantThinking = '') Then
+      If (ErrorText <> '') And (FLiveContent = '') And (FLiveThinking = '') Then
         DisplayBody := '*(error)*'
       Else
-        DisplayBody := FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
+        DisplayBody := FormatAssistantMarkdown(FLiveThinking, FLiveContent);
       If FTranscript.Count > 0 Then
         FTranscript.Add('');
       FTranscript.Add('### Assistant');
@@ -953,23 +1034,37 @@ Begin
 
   If ErrorText <> '' Then
     Begin
-      FDisplaySystemNote := '**Error:** ' + ErrorText;
+      If FViewingLive Then
+        FDisplaySystemNote := '**Error:** ' + ErrorText;
       FStatusFooter.SetRightText('Error');
     End
   Else
     Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
-      If Assigned(AssistantClient) And (FAssistantContent <> '') Then
-        AssistantClient.AddMessage(amrAssistant, FAssistantContent);
-      FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
-      If FAssistantThinking <> '' Then
-        FContextUsed := FContextUsed + Length(FAssistantThinking) Div 4;
+      If Assigned(AssistantClient) And (FLiveContent <> '') Then
+        AssistantClient.AddMessage(amrAssistant, FLiveContent);
+      FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
+      If FLiveThinking <> '' Then
+        FContextUsed := FContextUsed + Length(FLiveThinking) Div 4;
       FStatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
-  { Keep FAssistantContent / thinking on the current-turn surface until the next send. }
+  { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ErrorText);
-  RefreshChatDisplay(True);
+  If FViewingLive Then
+    FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
+  RefreshConversationList;
+  If FViewingLive Then
+    Begin
+      FDisplayUser := FLiveUser;
+      FAssistantContent := FLiveContent;
+      FAssistantThinking := FLiveThinking;
+      If ErrorText <> '' Then
+        FDisplaySystemNote := '**Error:** ' + ErrorText
+      Else
+        FDisplaySystemNote := '';
+      RefreshChatDisplay(True, True);
+    End;
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   SetSending(False);
@@ -979,8 +1074,7 @@ End;
 Procedure TAssistantChatForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
   IsFinished: Boolean; Const ErrorText: String);
 Begin
-  { Invoked on the main thread via Synchronize from the stream worker.
-    Thinking streams first on reasoning models; content is the final answer. }
+  { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
     Begin
       If IsFinished Then
@@ -995,50 +1089,51 @@ Begin
   If Not IsFinished Then
     Begin
       ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
-      { Non-empty ErrorText while still streaming is a status phase (e.g. tool round). }
       If ErrorText <> '' Then
         SetStreamPhase(ErrorText);
       Exit;
     End;
-  { Final empty emit may still carry last snapshots already applied. }
   If (ContentSnapshot <> '') Or (ThinkingSnapshot <> '') Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(ErrorText);
 End;
 
 Procedure TAssistantChatForm.StopStream;
-Var
-  DisplayBody: String;
 Begin
   If Not FSending Then
     Exit;
   FUserCancelled := True;
+  { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
-  If FStreamingActive Then
+  If FStreamingActive Or (FLiveUser <> '') Then
     Begin
-      If (FAssistantContent <> '') Or (FAssistantThinking <> '') Then
+      If (FLiveContent <> '') Or (FLiveThinking <> '') Then
         Begin
-          DisplayBody := FormatAssistantMarkdown(FAssistantThinking, FAssistantContent) +
-            LineEnding + LineEnding + '*[stream cancelled]*';
-          If FTranscript.Count > 0 Then
-            FTranscript.Add('');
-          FTranscript.Add('### Assistant');
-          FTranscript.Add('');
-          FTranscript.Add(DisplayBody);
-          If Assigned(AssistantClient) And (FAssistantContent <> '') Then
-            AssistantClient.AddMessage(amrAssistant, FAssistantContent);
-          FContextUsed := FContextUsed + Length(FAssistantContent) Div 4 + 20;
-          FDisplaySystemNote := '*Stream cancelled.*';
-        End
-      Else
-        FDisplaySystemNote := '*Stream cancelled before the first token.*';
+          If Assigned(AssistantClient) And (FLiveContent <> '') Then
+            AssistantClient.AddMessage(amrAssistant, FLiveContent);
+          FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
+        End;
+      FDisplayUser := FLiveUser;
+      FAssistantContent := FLiveContent;
+      FAssistantThinking := FLiveThinking;
+      If FViewingLive Then
+        Begin
+          If (FLiveContent = '') And (FLiveThinking = '') Then
+            FDisplaySystemNote := '*Stream cancelled before the first token.*'
+          Else
+            FDisplaySystemNote := '*Stream cancelled.*';
+        End;
     End
-  Else
+  Else If FViewingLive Then
     FDisplaySystemNote := '*Stream cancelled.*';
   FStreamingActive := False;
   RecordCurrentTurn('cancelled');
-  RefreshChatDisplay(True);
+  FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
+  FViewingLive := True;
+  RefreshConversationList;
+  If FViewingLive Then
+    RefreshChatDisplay(True, True);
   SetSending(False);
   FStatusFooter.SetRightText('Cancelled');
   PersistSession;
@@ -1069,6 +1164,9 @@ Begin
       ApiText := UserText;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(UserText, WithContext);
+      FLiveUser := FDisplayUser;
+      FLiveContent := '';
+      FLiveThinking := '';
       FAssistantContent := '';
       FAssistantThinking := '';
       If WithContext Then
@@ -1080,9 +1178,9 @@ Begin
       { Prior turns already on AssistantClient are sent with this request (full context). }
       AssistantClient.AddMessage(amrUser, ApiText);
       FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
-      BeginAssistantReply;
       FStatusPhase := 'Waiting for first token…';
       SetSending(True);
+      BeginAssistantReply;
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
       If Not AssistantClient.StartStream(@StreamToken) Then

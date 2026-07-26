@@ -120,6 +120,7 @@ Type
     FMergeLogCount: Integer;
     FToolCalls: TAssistantToolCallArray;
     FToolRound: Integer;
+    FHttpClient: TFPHTTPClient;
     Procedure NotifyMain;
     Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
@@ -135,6 +136,8 @@ Type
   Public
     Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model, RequestJson: String;
       OnToken: TAssistantStreamEvent);
+    Procedure AbortHttp;
+    Procedure Detach;
   End;
 
   { Feeds TFPHTTPClient response bytes into SSE line parsing as they arrive. }
@@ -228,6 +231,25 @@ Begin
   FMergeLogCount := 0;
   SetLength(FToolCalls, 0);
   FToolRound := 0;
+  FHttpClient := Nil;
+End;
+
+Procedure TAssistantStreamThread.AbortHttp;
+Begin
+  { Unblock a stuck HTTPMethod so Terminate can finish without hanging the IDE. }
+  If Assigned(FHttpClient) Then
+    Try
+      FHttpClient.Terminate;
+    Except
+      { ignore }
+    End;
+End;
+
+Procedure TAssistantStreamThread.Detach;
+Begin
+  FOnToken := Nil;
+  FService := Nil;
+  AbortHttp;
 End;
 
 Procedure TAssistantStreamThread.NotifyMain;
@@ -238,11 +260,18 @@ End;
 
 Procedure TAssistantStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
 Begin
+  If Terminated And (Not IsDone) Then
+    Exit;
   FPendingContent := FContentAccum;
   FPendingThinking := FThinkingAccum;
   FPendingFinished := IsDone;
   FPendingError := ErrorText;
-  Synchronize(@NotifyMain);
+  { Queue avoids deadlock: main thread can CancelStream/WaitFor while we notify.
+    Tool rounds still use Synchronize so tools run on the main thread. }
+  If IsDone Then
+    Queue(@NotifyMain)
+  Else
+    Queue(@NotifyMain);
 End;
 
 Function JsonStringField(Obj: TJSONObject; Const FieldName: String): String;
@@ -502,6 +531,8 @@ Var
   P: Integer;
   Line: String;
 Begin
+  If Terminated Then
+    Exit;
   FSseBuffer := FSseBuffer + Chunk;
   FSseBuffer := StringReplace(FSseBuffer, #13#10, #10, [rfReplaceAll]);
   FSseBuffer := StringReplace(FSseBuffer, #13, #10, [rfReplaceAll]);
@@ -529,16 +560,27 @@ Begin
   FSseBuffer := '';
   SetLength(FToolCalls, 0);
   Client := TFPHTTPClient.Create(Nil);
+  FHttpClient := Client;
   Body := TStringStream.Create(RequestJson);
   OutStream := TAssistantSSEStream.Create(Self);
   Try
     Try
+      If Terminated Then
+        Begin
+          ErrorText := 'Cancelled.';
+          Exit;
+        End;
       Client.AllowRedirect := True;
       Client.AddHeader('Authorization', 'Bearer ' + FAccessToken);
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');
       Client.RequestBody := Body;
       Client.HTTPMethod('POST', Url, OutStream, []);
+      If Terminated Then
+        Begin
+          ErrorText := 'Cancelled.';
+          Exit;
+        End;
       Code := Client.ResponseStatusCode;
       If (Code < 200) Or (Code >= 300) Then
         Begin
@@ -555,12 +597,16 @@ Begin
       Result := True;
     Except
       On E: Exception Do
-        ErrorText := E.Message;
+        If Terminated Then
+          ErrorText := 'Cancelled.'
+        Else
+          ErrorText := E.Message;
     End;
   Finally
     Client.RequestBody := Nil;
     OutStream.Free;
     Body.Free;
+    FHttpClient := Nil;
     Client.Free;
   End;
 End;
@@ -749,13 +795,48 @@ Begin
 End;
 
 Procedure TAssistantService.ClearStreamThread;
+Var
+  StartTick: QWord;
+  Stream: TAssistantStreamThread;
 Begin
-  If Assigned(FStreamThread) Then
+  If Not Assigned(FStreamThread) Then
     Begin
-      FStreamThread.Terminate;
-      FStreamThread.WaitFor;
-      FreeAndNil(FStreamThread);
+      FBusy := False;
+      Exit;
     End;
+  Stream := TAssistantStreamThread(FStreamThread);
+  Stream.Terminate;
+  Stream.AbortHttp;
+  { Pump Synchronize/Queue so a blocked EmitSnapshots can finish; never
+    WaitFor alone on the main thread (classic deadlock with Synchronize). }
+  StartTick := GetTickCount64;
+  While (Not Stream.Finished) And (GetTickCount64 - StartTick < 8000) Do
+    Begin
+      CheckSynchronize(20);
+      Sleep(5);
+    End;
+  If Not Stream.Finished Then
+    WorkflowLogger.Warning('AssistantService', 'Stream thread did not finish within timeout; detaching');
+  Try
+    If Stream.Finished Then
+      Begin
+        Stream.WaitFor;
+        FreeAndNil(FStreamThread);
+      End
+    Else
+      Begin
+        { Last resort: abandon the reference; thread free-on-terminate is false so
+          it may leak if stuck in kernel I/O, but the IDE stays responsive. }
+        Stream.Detach;
+        FStreamThread := Nil;
+      End;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Warning('AssistantService', 'ClearStreamThread: ' + E.Message);
+        FStreamThread := Nil;
+      End;
+  End;
   FBusy := False;
 End;
 
