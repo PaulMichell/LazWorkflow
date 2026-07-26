@@ -45,7 +45,7 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
 │  │ Manage Repository       │  │  │ Project Assistant (main form)      │  │
 │  │  tabs: History | Files… │  │  │  tabs: Chat | Plan | Code          │  │
 │  │  actions bottom/edge    │  │  │  current turn view + bottom bar    │  │
-│  └─────────────────────────┘  │  │  history browser (SQLite)          │  │
+│  └─────────────────────────┘  │  │  history browser (JSONL + index)   │  │
 │                               │  │  plan TODO panel (Code mode)       │  │
 │                               │  └────────────────────────────────────┘  │
 │                               │  Markdown live windows (Plan artifacts)  │
@@ -144,7 +144,7 @@ Modes are not mere labels. Switching mode changes:
 **Recommended model (refinement):**
 
 1. **Source of truth for narrative:** the plan Markdown file(s) the user cares about.
-2. **Source of truth for task state:** a small structured store under `.assistant/` (SQLite table `plan_todos` **or** a generated `.assistant/todos.json`), **derived from** and **written back to** the plan MD.
+2. **Source of truth for task state:** a small structured store under `.assistant/` (e.g. `todos.json`), **derived from** and **written back to** the plan MD.
 3. **Supported MD conventions** (documented, not exclusive):
    - GitHub-style checkboxes: `- [ ]` / `- [x]`
    - Optional stable IDs: `- [ ] <!-- id:auth-form --> Implement auth form`
@@ -162,52 +162,90 @@ Hidden folder at **project root** (alongside sources), not in the global IDE con
 
 ```
 {ProjectRoot}/.assistant/
-  history.db          # SQLite
-  config.json         # optional per-project options (mode defaults, plan path, thinking visible, …)
-  README.txt          # one-line “managed by LazAssistantTools; safe to exclude from VCS if desired”
+  history.jsonl       # append-only full turns (one JSON object per line)
+  history.index.json  # compact index for fast list/filter/search (rebuilt if missing)
+  todos.json          # plan task state (optional; derived from plan MD)
+  config.json         # per-project options (mode defaults, plan path, thinking visible, …)
+  README.txt          # managed by LazAssistantTools; safe to exclude from VCS if desired
 ```
 
 **VCS policy (refinement):** default recommend **ignoring** `.assistant/` in project `.gitignore` templates (local conversation may contain secrets / noise). Optional “share plan todos” later via committing `Documents/` only. Document both choices.
 
-##### `history.db` — conversation table (minimum)
+##### History format: JSONL (chosen — zero native dependency)
 
-| Column | Type | Notes |
-|--------|------|--------|
-| `id` | INTEGER PK | |
-| `mode` | TEXT | `chat` / `plan` / `code` |
-| `prompt` | TEXT | user turn as sent (or display form) |
-| `thinking` | TEXT | reasoning channel; may be large / empty |
-| `response` | TEXT | final assistant answer |
-| `created_at` | TEXT/REAL | UTC ISO or unix |
-| `started_at` | TEXT/REAL | stream start |
-| `finished_at` | TEXT/REAL | stream end |
-| `duration_ms` | INTEGER | wall processing time |
-| `model` | TEXT | optional but cheap and useful |
-| `skill` | TEXT | optional active skill name |
-| `token_estimate` | INTEGER | optional |
-| `error` | TEXT | nullable; failed turns still stored |
-| `plan_file` | TEXT | nullable; relative path when relevant |
-| `todo_id` | TEXT | nullable; Code mode linkage |
+**Decision (2026-07-26):** use **JSONL + a sidecar index**, not SQLite. Avoids libsqlite3 packaging across Linux/Windows/macOS IDE installs while still supporting fast retrieval for large histories.
 
-**Indexes:** `(created_at DESC)`, `(mode, created_at DESC)`, full-text optional later (FTS5 on prompt/response).
+**Why this is fast enough**
 
-**UI for history (refinement):**
+| Operation | Strategy | Cost |
+|-----------|----------|------|
+| Append completed turn | Write one JSON line + update index entry | O(1) |
+| Open Project Assistant | Load **index only** into memory (not full bodies) | O(N) on small index rows; N = turn count |
+| History list / filter by mode / date | Scan in-memory index | O(N), fine for 10⁴–10⁵ turns |
+| Text prompt/response text | Prefer index **preview** fields; optional full-body scan only when needed | Preview search O(N); deep search streams JSONL once |
+| Open one turn | Use index `file_offset` → seek + read one line | O(1) disk |
+| Stats (counts, duration averages by mode) | Aggregate from index | O(N) in memory |
 
-- Side panel or bottom/history tab: filter by mode, search text, date range.
-- Click row → load **that turn** into the current-turn view (read-only) or “Continue from here” (new prompt with prior turn as context).
-- Export selected turns to Markdown for sharing.
+Typical project history is hundreds to a few thousand turns. Even 50k turns with ~200-byte index rows is ~10 MB of index — trivial. Bodies (thinking + long answers) stay on disk until a row is opened.
+
+**Do not** load entire `history.jsonl` into a `TStringList` on every paint. That is the slow path; the index exists to prevent it.
+
+##### One JSONL record (fields)
+
+Same logical fields as the earlier SQL sketch, one object per line:
+
+```json
+{"id":"01J…","mode":"code","prompt":"…","thinking":"…","response":"…",
+ "created_at":"2026-07-26T12:04:00Z","started_at":"…","finished_at":"…",
+ "duration_ms":12345,"model":"grok-4.5","skill":"free-pascal-engineer",
+ "token_estimate":800,"error":"","plan_file":"Documents/Plan.md","todo_id":"auth-form"}
+```
+
+- UTF-8, one record per line, **append-only** for the common case.
+- Escape newlines inside strings as JSON `\n` (standard JSON).
+- `id`: ULID or UUID string (stable for index and “continue from here”).
+
+##### Sidecar `history.index.json`
+
+Array (or NDJSON) of **lightweight** rows only — no full thinking/response:
+
+| Field | Notes |
+|-------|--------|
+| `id` | Matches JSONL record |
+| `mode` | chat / plan / code |
+| `created_at` | For sort/filter |
+| `duration_ms` | Stats |
+| `model` / `skill` | Optional filters |
+| `prompt_preview` | First ~120–200 chars |
+| `response_preview` | First ~120–200 chars |
+| `has_thinking` | Boolean |
+| `error` | Short or empty |
+| `plan_file` / `todo_id` | Optional linkage |
+| `file_offset` | Byte offset into `history.jsonl` for seek |
+| `byte_length` | Optional; line length for validation |
+
+**Rebuild:** if index missing or `history.jsonl` mtime/size disagrees with index header, stream JSONL once and rewrite index (background or on open with progress for huge files).
+
+**Concurrency:** single IDE writer assumed; append with flush; rewrite index atomically (write temp + rename).
+
+##### Search & “large chats”
+
+- **Default search:** case-insensitive match on `prompt_preview` + `response_preview` + mode — instant from memory.
+- **Deep search:** stream `history.jsonl` for substring in full prompt/thinking/response (cancellable); acceptable occasionally, not on every keystroke.
+- **Optional later:** maintain a simple inverted token map in `history.tokens.json` if deep search becomes common — still no SQLite.
+- **Retention:** settings to drop thinking bodies after N days, or compact old turns to “prompt + response only,” to keep files lean.
+
+**UI for history:**
+
+- Side panel: filter by mode, search, date range (from index).
+- Click row → seek-load full turn into current-turn view; or “Continue from here.”
+- Export selected turns to Markdown.
 
 **What this replaces:** session `.lazgrokchat-session` / giant in-memory transcript as the primary UX. Migration: one-shot import of old session files if present.
 
-##### SQLite dependency (roadblock / choice)
+##### SQLite (deferred, not required)
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **FPC `SQLite3` + system libsqlite3** | Fast, real SQL, analytics-ready | Deploy dependency on macOS/Windows packaging |
-| **Embedded amalgamation** | Fewer install issues | Build complexity |
-| **JSONL fallback** | Zero dep | Weak for search/stats |
-
-**Recommendation:** SQLite3 via FPC packages (`sqlite3conn` / `SQLDB`) with clear “libsqlite3 required” note; feature-detect and degrade to JSONL only if open fails (dev machines without the lib).
+SQLite remains a **possible future** backend if analytics/query complexity outgrows JSONL. It is **not** required for v1. No libsqlite3 dependency for Project Assistant history.
 
 #### 3.2.8 UI layout sketch (Project Assistant)
 
@@ -280,7 +318,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 1. Rename UI to **Project Assistant**.
 2. Top **Chat | Plan | Code** tabs; **bottom** action bar (mirror Manage Repository interaction model).
 3. Current-turn-only working surface; **thinking toggle**.
-4. Create `.assistant/` on first use; **`history.db`** with conversation schema above.
+4. Create `.assistant/` on first use; **`history.jsonl` + `history.index.json`** with schema above.
 5. History browser (list + search + open turn).
 6. Persist mode + options in `.assistant/config.json`.
 7. Mode-scoped tool allow-lists (Chat = read-only tools only).
@@ -315,7 +353,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 |----------|--------|------------------------|
 | Assistant UX unit | Modes with hard tool gates | Prevents permission escalation |
 | Main form name | Project Assistant | Matches product role |
-| History store | SQLite in `.assistant/history.db` | Fast filter/search/stats |
+| History store | JSONL + sidecar index in `.assistant/` | Zero native dep; fast list/open via offsets |
 | Working surface | Current turn only | Reduces scroll fatigue |
 | Plan artefacts | `Documents/` default + live MD windows | Visible to user; assistant state stays hidden |
 | Plan tasks | Checkbox MD ↔ structured todos | Flexible + formal enough |
@@ -326,16 +364,16 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 **Risks & roadblocks**
 
-1. **SQLite deployment** — Windows/macOS users need `sqlite3` available to the IDE process. Mitigate with documented dependency + graceful error; optional JSONL fallback.
+1. **JSONL index integrity** — Crash mid-append can leave a partial last line. Mitigate: write record then flush; on open, ignore corrupt last line and rebuild index; atomic index rewrite (temp + rename).
 2. **Mode confusion** — Users may stay in Chat and expect edits. Mitigate with clear empty-state copy (“Switch to Code to edit sources”) and Fix Error auto-switching to Code.
 3. **Plan/TODO drift** — LLM rewrites plan structure and breaks checkboxes. Mitigate with ID comments, archive-on-delete, and a “reconcile todos” command.
-4. **Large thinking blobs** — DB size growth. Mitigate with optional “store thinking” preference, compression, or retention limits.
+4. **Large thinking blobs** — JSONL size growth. Mitigate with optional “store thinking” preference, retention limits, or compact-old-turns.
 5. **Context vs history** — Current-turn UI must still build **API context** from selected prior turns / summary. Roadblock if we only send the last user message: model forgets the plan. Mitigate with explicit “include last K turns” + “pin plan summary” in Code/Plan modes.
 6. **Concurrent editors** — Plan MD open in Markdown window and updated by tools; need debounced reload (already partially present).
 7. **Security** — Code mode is powerful; path sandbox + no shell tool in v1.
 8. **lazmarkdown AVs** — Bare `&` and table `ChildCount` bugs fixed in local Lazarus sources; IDE must reinstall `lazmarkdown` or AVs return on plan docs.
 9. **Form migration cost** — Toolbar-to-tabs/bottom-bar is a non-trivial LFM rewrite; do shell first with Chat-only content, then Plan/Code panels.
-10. **Analytics scope creep** — Ship schema with timestamps/duration first; defer charts.
+10. **Analytics scope creep** — Ship index fields with timestamps/duration first; defer charts. Deep SQL-like queries are out of scope until/unless SQLite is revisited.
 
 ---
 
@@ -351,7 +389,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 **New conventions for this feature set**
 - Mode permission checks live in **one unit** (e.g. `AssistantModeTools.pas`) — UI does not assemble allow-lists ad hoc.
 - All project-local paths resolve via helpers that create `.assistant/` and `Documents/` safely.
-- DB access on a dedicated small helper (`AssistantHistory.pas`); never open SQLite on the streaming thread without a clear ownership model (prefer write history on main thread at turn end).
+- History I/O in a dedicated helper (`AssistantHistory.pas`): append JSONL + update index on the **main thread at turn end** (or a single writer queue); never parse full JSONL on the UI paint path.
 
 ---
 
@@ -359,7 +397,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 1. Packages: LazWorkflowCommon, LazRepositoryTools, LazAssistantTools.
 2. **Project Assistant** with Chat / Plan / Code modes and mode-gated tools.
-3. `.assistant/history.db` history browser + current-turn UI.
+3. `.assistant/history.jsonl` (+ index) history browser + current-turn UI.
 4. Plan mode Markdown workflow + Code mode TODO panel.
 5. README / user guide: modes, permissions, `.assistant` VCS guidance.
 6. Example: plan → code → compile → commit loop.
@@ -392,15 +430,16 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 | Topic | Recommendation |
 |-------|------------------|
 | Permission model | Tab = mode = hard tool gate; lock mode while busy |
-| History UX | Side list + search; main view = current turn; optional “continue from turn” |
+| History store | JSONL append + `history.index.json` with file offsets; no SQLite for v1 |
+| History UX | Side list + search on index; seek-load full turn; optional “continue from turn” |
 | API context | Do not send only the visible turn — include plan summary / last K turns / pinned TODO |
 | Plan default path | `Documents/` for new plans; allow linking existing `Docs/ProjectPlan.md` |
 | TODO sync | Checkboxes + optional HTML comment IDs; archive removed tasks |
 | Code apply | IDE buffer edits; start with auto-apply in Code mode + undo; add confirm later if needed |
 | Thinking | Toggle + still store in DB when present |
 | Secrets | Keep OAuth out of `.assistant/`; gitignore `.assistant/` by default |
-| SQLite | Primary store; fail loud with install hint |
-| Stats | Schema ready now; UI later |
+| Stats | Index fields ready now; charts later |
+| SQLite | Deferred only if query needs outgrow JSONL |
 
 ---
 
@@ -419,7 +458,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 ### 2026-07-26 – Plan revision 0.2
 - Product direction: **Project Assistant** with **Chat / Plan / Code** modes.
 - UI: top tabs, bottom actions, current-turn focus, thinking toggle.
-- Storage: project `.assistant/history.db` (SQLite) for retrieval and analysis.
+- Storage: project `.assistant/` with **JSONL history + sidecar index** (no SQLite dependency for v1).
 - Plan mode MD workflow (`Documents/`); Code mode edits + compile + plan TODO panel.
 - Explicit phase 2.5–4 sequencing and roadblocks documented.
 
