@@ -429,11 +429,7 @@ Var
 Begin
   Result := False;
   ClearAll;
-  DataFile := ConversationPath;
-  { Migrate early name history.jsonl → conversation.jsonl. }
-  If Not FileExistsUTF8(DataFile) And FileExistsUTF8(AssistantDir + 'history.jsonl') Then
-    DataFile := AssistantDir + 'history.jsonl';
-  If Not FileExistsUTF8(DataFile) Then
+  If Not FileExistsUTF8(ConversationPath) Then
     Begin
       Result := True;
       Exit;
@@ -442,7 +438,7 @@ Begin
   Try
     Try
       { One bulk read + line split — far faster than per-byte seek. }
-      SL.LoadFromFile(DataFile);
+      SL.LoadFromFile(ConversationPath);
       Offset := 0;
       N := 0;
       SetLength(FTurns, SL.Count); { upper bound; trim later }
