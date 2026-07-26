@@ -226,6 +226,7 @@ object AssistantChatForm: TAssistantChatForm
           TabOrder = 0
           OnClick = HistoryListClick
           OnDblClick = HistoryListClick
+          OnSelectionChange = HistoryListSelectionChange
         end
         object FHistorySearch: TEdit
           Left = 8

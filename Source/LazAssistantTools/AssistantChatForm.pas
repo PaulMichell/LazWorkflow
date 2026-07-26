@@ -54,6 +54,7 @@ Type
     Procedure PagesChange(Sender: TObject);
     Procedure HistorySearchChange(Sender: TObject);
     Procedure HistoryListClick(Sender: TObject);
+    Procedure HistoryListSelectionChange(Sender: TObject; User: Boolean);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
@@ -90,9 +91,12 @@ Type
     Procedure SetCurrentSystemNote(Const NoteText: String);
     Procedure EnsureHistoryStore;
     Procedure RefreshHistoryList;
+    Procedure ShowHistoryTurn(TurnIndex: Integer);
+    Procedure ShowLastHistoryTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
     Function CurrentModeFromTabs: TAssistantMode;
     Procedure ApplyActiveMode;
+    Function HistoryListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
@@ -201,13 +205,11 @@ Begin
   RefreshFromConfig;
   UpdateStatusFooter;
   ApplyActiveMode;
-  RefreshHistoryList;
+  { Restore API conversation context without painting a "session loaded" banner. }
   RestoreSessionIfNeeded;
-  { Empty current-turn surface — no System banner on open. }
-  If (FDisplayUser = '') And (FAssistantContent = '') And (FDisplaySystemNote = '') Then
-    RefreshChatDisplay(True, False)
-  Else
-    RefreshChatDisplay(True, False);
+  RefreshHistoryList;
+  { Always open on the latest history turn when present. }
+  ShowLastHistoryTurn;
   WorkflowLogger.Info('AssistantChat', 'Project Assistant window created');
 End;
 
@@ -347,6 +349,61 @@ Begin
     ProjectAssistantHistory.Load;
 End;
 
+Function TAssistantChatForm.HistoryListTurnIndex(ListIndex: Integer): Integer;
+Begin
+  { Objects store TurnIndex+1 so index 0 is never stored as Nil. }
+  Result := -1;
+  If Not Assigned(FHistoryList) Or (ListIndex < 0) Or (ListIndex >= FHistoryList.Items.Count) Then
+    Exit;
+  Result := Integer(PtrUInt(FHistoryList.Items.Objects[ListIndex]));
+  If Result > 0 Then
+    Dec(Result)
+  Else
+    Result := -1;
+End;
+
+Procedure TAssistantChatForm.ShowHistoryTurn(TurnIndex: Integer);
+Var
+  Prompt, Response, Thinking, ErrorText: String;
+Begin
+  If Not Assigned(ProjectAssistantHistory) Then
+    Exit;
+  If Not ProjectAssistantHistory.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
+    Begin
+      WorkflowLogger.Warning('AssistantChat', 'ShowHistoryTurn failed idx=' + IntToStr(TurnIndex) +
+        ' ' + ProjectAssistantHistory.LastError);
+      Exit;
+    End;
+  FDisplayUser := Prompt;
+  FAssistantContent := Response;
+  FAssistantThinking := Thinking;
+  If ErrorText <> '' Then
+    FDisplaySystemNote := '**Error:** ' + ErrorText
+  Else
+    FDisplaySystemNote := '';
+  FStreamingActive := False;
+  RefreshChatDisplay(True, False);
+End;
+
+Procedure TAssistantChatForm.ShowLastHistoryTurn;
+Var
+  N: Integer;
+Begin
+  If Not Assigned(ProjectAssistantHistory) Then
+    Begin
+      RefreshChatDisplay(True, False);
+      Exit;
+    End;
+  N := ProjectAssistantHistory.TurnCount;
+  If N > 0 Then
+    ShowHistoryTurn(N - 1)
+  Else
+    Begin
+      ClearCurrentTurnDisplay;
+      RefreshChatDisplay(True, False);
+    End;
+End;
+
 Procedure TAssistantChatForm.RefreshHistoryList;
 Var
   I, SeqNo, KeepTurnIndex: Integer;
@@ -361,15 +418,13 @@ Begin
   Filter := '';
   If Assigned(FHistorySearch) Then
     Filter := LowerCase(Trim(FHistorySearch.Text));
-  KeepTurnIndex := -1;
-  If (FHistoryList.ItemIndex >= 0) And (FHistoryList.ItemIndex < FHistoryList.Items.Count) Then
-    KeepTurnIndex := PtrInt(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
+  KeepTurnIndex := HistoryListTurnIndex(FHistoryList.ItemIndex);
   SelectIdx := -1;
   FHistoryList.Items.BeginUpdate;
   Try
     FHistoryList.Clear;
     { Oldest first so new turns append at the bottom (grow down).
-      Objects store TurnIndex (integer) for O(1) memory retrieval — never re-read JSONL on click. }
+      Objects store TurnIndex+1 (never 0/Nil) for O(1) memory retrieval. }
     For I := 0 To ProjectAssistantHistory.IndexCount - 1 Do
       Begin
         Entry := ProjectAssistantHistory.IndexEntry(I);
@@ -386,7 +441,7 @@ Begin
             (Pos(Filter, LowerCase(Entry.Mode)) > 0);
         If ShowItem Then
           Begin
-            FHistoryList.Items.AddObject(Line, TObject(PtrInt(Entry.TurnIndex)));
+            FHistoryList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
             If Entry.TurnIndex = KeepTurnIndex Then
               SelectIdx := FHistoryList.Items.Count - 1;
           End;
@@ -409,32 +464,22 @@ Begin
 End;
 
 Procedure TAssistantChatForm.HistoryListClick(Sender: TObject);
+Begin
+  HistoryListSelectionChange(Sender, True);
+End;
+
+Procedure TAssistantChatForm.HistoryListSelectionChange(Sender: TObject; User: Boolean);
 Var
   TurnIndex: Integer;
-  Prompt, Response, Thinking, ErrorText: String;
 Begin
-  If Not Assigned(FHistoryList) Or (FHistoryList.ItemIndex < 0) Then
-    Exit;
   If FSending Then
     Exit;
-  If Not Assigned(ProjectAssistantHistory) Then
+  If Not Assigned(FHistoryList) Or (FHistoryList.ItemIndex < 0) Then
     Exit;
-  TurnIndex := PtrInt(FHistoryList.Items.Objects[FHistoryList.ItemIndex]);
-  { Pure memory path: prompt / response / thinking only — no disk, no JSON parse. }
-  If Not ProjectAssistantHistory.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
-    Begin
-      SetCurrentSystemNote('Could not load history turn: ' + ProjectAssistantHistory.LastError);
-      Exit;
-    End;
-  FDisplayUser := Prompt;
-  FAssistantContent := Response;
-  FAssistantThinking := Thinking;
-  If ErrorText <> '' Then
-    FDisplaySystemNote := '**Error:** ' + ErrorText
-  Else
-    FDisplaySystemNote := '';
-  FStreamingActive := False;
-  RefreshChatDisplay(True, False);
+  TurnIndex := HistoryListTurnIndex(FHistoryList.ItemIndex);
+  If TurnIndex < 0 Then
+    Exit;
+  ShowHistoryTurn(TurnIndex);
 End;
 
 Procedure TAssistantChatForm.RecordCurrentTurn(Const ErrorText: String);
@@ -621,18 +666,11 @@ Begin
     (AssistantClient.MessageCount > 0) Then
     Exit;
   FSessionProjectKey := Key;
+  { Load messages for the model only — do not replace the chat pane with a banner.
+    The visible turn comes from history (ShowLastHistoryTurn). }
   If LoadProjectChatSession(FTranscript, LoadedContext) Then
     Begin
       FContextUsed := LoadedContext;
-      { Full prior turns remain in AssistantClient for API context; UI stays lean. }
-      ClearCurrentTurnDisplay;
-      If Assigned(AssistantClient) And (AssistantClient.MessageCount > 0) Then
-        SetCurrentSystemNote(Format(
-          'Session restored — %d message(s) are available as model context. ' +
-          'The pane shows the current turn only; send a message to continue.',
-          [AssistantClient.MessageCount]))
-      Else
-        RefreshChatDisplay(True);
       UpdateStatusFooter;
     End;
 End;
@@ -719,6 +757,11 @@ Begin
   Try
     View.MarkDown.BeginUpdate;
     Try
+      { Force a content change so the control always re-parses when stepping history. }
+      If View.MarkDown.Text = Body Then
+        View.MarkDown.Text := Body + ' '
+      Else
+        View.MarkDown.Text := '';
       View.MarkDown.Text := Body;
     Finally
       View.MarkDown.EndUpdate;
