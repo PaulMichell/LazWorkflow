@@ -16,20 +16,19 @@ Uses
 Type
   TGitSettingsForm = Class(TForm)
     FScrollBox: TScrollBox;
-    FAppGroup: TGroupBox;
-    FAutoRefreshCheck: TCheckBox;
-    FIntervalLabel: TLabel;
-    FIntervalSpin: TSpinEdit;
-    FSecondsLabel: TLabel;
     FIdentityGroup: TGroupBox;
     FRepoPathLabel: TLabel;
     FUserNameLabel: TLabel;
     FUserNameEdit: TEdit;
     FUserEmailLabel: TLabel;
     FUserEmailEdit: TEdit;
-    FGlobalHintLabel: TLabel;
     FDescriptionGroup: TGroupBox;
     FDescriptionMemo: TMemo;
+    FAppGroup: TGroupBox;
+    FAutoRefreshCheck: TCheckBox;
+    FIntervalLabel: TLabel;
+    FIntervalSpin: TSpinEdit;
+    FSecondsLabel: TLabel;
     FButtonPanel: TButtonPanel;
     Procedure AutoRefreshCheckChange(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
@@ -50,7 +49,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  GitConfig, GitService, WorkflowLog, LazIDEIntf, ProjectIntf, LazFileUtils;
+  GitConfig, GitService, WorkflowLog, LazIDEIntf, ProjectIntf;
 
 Function ResolveSettingsRepoPath: String;
 Var
@@ -117,8 +116,6 @@ Begin
   FDescriptionMemo.Enabled := ControlsEnabled;
   FUserNameLabel.Enabled := ControlsEnabled;
   FUserEmailLabel.Enabled := ControlsEnabled;
-  FIdentityGroup.Enabled := True;
-  FDescriptionGroup.Enabled := True;
 End;
 
 Procedure TGitSettingsForm.AutoRefreshCheckChange(Sender: TObject);
@@ -130,7 +127,7 @@ End;
 
 Procedure TGitSettingsForm.LoadFromConfig;
 Var
-  LocalName, LocalEmail, GlobalName, GlobalEmail, Description, HintText: String;
+  LocalName, LocalEmail, Description: String;
 Begin
   If Assigned(GitManagerConfig) Then
     Begin
@@ -147,8 +144,6 @@ Begin
       FUserNameEdit.Text := '';
       FUserEmailEdit.Text := '';
       FDescriptionMemo.Text := '';
-      FGlobalHintLabel.Caption :=
-        'Open a project inside a repository to edit local user.name, user.email, and .git/description.';
       SetIdentityControlsEnabled(False);
       Exit;
     End;
@@ -161,30 +156,14 @@ Begin
   GitClient.RepoPath := FRepoPath;
   LocalName := '';
   LocalEmail := '';
-  GlobalName := '';
-  GlobalEmail := '';
   Description := '';
   GitClient.GetConfigValue('user.name', True, LocalName);
   GitClient.GetConfigValue('user.email', True, LocalEmail);
-  GitClient.GetConfigValue('user.name', False, GlobalName);
-  GitClient.GetConfigValue('user.email', False, GlobalEmail);
   GitClient.GetDescription(Description);
 
   FUserNameEdit.Text := LocalName;
   FUserEmailEdit.Text := LocalEmail;
   FDescriptionMemo.Text := Description;
-
-  HintText := 'Saved to this repository only (git config --local). Leave blank to remove the local override.';
-  If (GlobalName <> '') Or (GlobalEmail <> '') Then
-    Begin
-      If GlobalName = '' Then
-        GlobalName := '(unset)';
-      If GlobalEmail = '' Then
-        GlobalEmail := '(unset)';
-      HintText := HintText + LineEnding +
-        Format('Global fallback — name: %s  email: %s', [GlobalName, GlobalEmail]);
-    End;
-  FGlobalHintLabel.Caption := HintText;
 End;
 
 Function TGitSettingsForm.SaveToConfig: Boolean;

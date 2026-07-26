@@ -1,11 +1,11 @@
 object GitSettingsForm: TGitSettingsForm
   Left = 280
-  Height = 520
+  Height = 440
   Top = 160
   Width = 520
   BorderStyle = bsDialog
   Caption = 'Repository Settings'
-  ClientHeight = 520
+  ClientHeight = 440
   ClientWidth = 520
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
@@ -13,73 +13,26 @@ object GitSettingsForm: TGitSettingsForm
   LCLVersion = '3.0'
   object FScrollBox: TScrollBox
     Left = 0
-    Height = 472
+    Height = 392
     Top = 0
     Width = 520
     HorzScrollBar.Page = 1
     VertScrollBar.Page = 1
     Align = alClient
     BorderStyle = bsNone
-    ClientHeight = 472
+    ClientHeight = 392
     ClientWidth = 520
     TabOrder = 0
-    object FAppGroup: TGroupBox
+    object FIdentityGroup: TGroupBox
       Left = 12
-      Height = 100
+      Height = 148
       Top = 12
       Width = 496
       Anchors = [akTop, akLeft, akRight]
-      Caption = 'Manage Repository window'
-      ClientHeight = 76
+      Caption = 'Repository identity (local .git/config)'
+      ClientHeight = 124
       ClientWidth = 492
       TabOrder = 0
-      object FAutoRefreshCheck: TCheckBox
-        Left = 12
-        Height = 23
-        Top = 8
-        Width = 460
-        Anchors = [akTop, akLeft, akRight]
-        Caption = 'Automatically refresh repository state'
-        TabOrder = 0
-        OnChange = AutoRefreshCheckChange
-      end
-      object FIntervalLabel: TLabel
-        Left = 32
-        Height = 17
-        Top = 42
-        Width = 97
-        Caption = 'Refresh interval:'
-        ParentColor = False
-      end
-      object FIntervalSpin: TSpinEdit
-        Left = 140
-        Height = 28
-        Top = 38
-        Width = 80
-        MaxValue = 3600
-        MinValue = 2
-        TabOrder = 1
-        Value = 5
-      end
-      object FSecondsLabel: TLabel
-        Left = 230
-        Height = 17
-        Top = 42
-        Width = 48
-        Caption = 'seconds'
-        ParentColor = False
-      end
-    end
-    object FIdentityGroup: TGroupBox
-      Left = 12
-      Height = 200
-      Top = 124
-      Width = 496
-      Anchors = [akTop, akLeft, akRight]
-      Caption = 'Repository identity (local .git/config)'
-      ClientHeight = 176
-      ClientWidth = 492
-      TabOrder = 1
       object FRepoPathLabel: TLabel
         Left = 12
         Height = 34
@@ -122,29 +75,17 @@ object GitSettingsForm: TGitSettingsForm
         Anchors = [akTop, akLeft, akRight]
         TabOrder = 1
       end
-      object FGlobalHintLabel: TLabel
-        Left = 12
-        Height = 40
-        Top = 128
-        Width = 468
-        Anchors = [akTop, akLeft, akRight]
-        Caption = 'Saved to this repository only (git config --local). Leave blank to remove the local override.'
-        Font.Color = clGrayText
-        ParentColor = False
-        ParentFont = False
-        WordWrap = True
-      end
     end
     object FDescriptionGroup: TGroupBox
       Left = 12
       Height = 120
-      Top = 336
+      Top = 172
       Width = 496
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Repository description (.git/description)'
       ClientHeight = 96
       ClientWidth = 492
-      TabOrder = 2
+      TabOrder = 1
       object FDescriptionMemo: TMemo
         Left = 12
         Height = 72
@@ -155,11 +96,58 @@ object GitSettingsForm: TGitSettingsForm
         TabOrder = 0
       end
     end
+    object FAppGroup: TGroupBox
+      Left = 12
+      Height = 100
+      Top = 304
+      Width = 496
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'Manage Repository window'
+      ClientHeight = 76
+      ClientWidth = 492
+      TabOrder = 2
+      object FAutoRefreshCheck: TCheckBox
+        Left = 12
+        Height = 23
+        Top = 8
+        Width = 460
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Automatically refresh repository state'
+        TabOrder = 0
+        OnChange = AutoRefreshCheckChange
+      end
+      object FIntervalLabel: TLabel
+        Left = 32
+        Height = 17
+        Top = 42
+        Width = 97
+        Caption = 'Refresh interval:'
+        ParentColor = False
+      end
+      object FIntervalSpin: TSpinEdit
+        Left = 140
+        Height = 28
+        Top = 38
+        Width = 80
+        MaxValue = 3600
+        MinValue = 2
+        TabOrder = 1
+        Value = 5
+      end
+      object FSecondsLabel: TLabel
+        Left = 230
+        Height = 17
+        Top = 42
+        Width = 48
+        Caption = 'seconds'
+        ParentColor = False
+      end
+    end
   end
   object FButtonPanel: TButtonPanel
     Left = 6
     Height = 34
-    Top = 480
+    Top = 400
     Width = 508
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
