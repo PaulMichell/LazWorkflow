@@ -102,7 +102,8 @@ Var
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools;
+  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools,
+  AssistantHttps;
 
 Type
   TAssistantStreamThread = Class(TThread)
@@ -562,12 +563,18 @@ Var
   Body: TStringStream;
   OutStream: TAssistantSSEStream;
   Code: Integer;
-  ErrBody: String;
+  ErrBody, SslErr: String;
 Begin
   Result := False;
   ErrorText := '';
   FSseBuffer := '';
   SetLength(FToolCalls, 0);
+  { Streaming SSE still uses TFPHTTPClient + OpenSSL; bootstrap DLLs first. }
+  If SameText(Copy(Url, 1, 8), 'https://') And (Not EnsureOpenSSLReady(SslErr)) Then
+    Begin
+      ErrorText := SslErr;
+      Exit;
+    End;
   Client := TFPHTTPClient.Create(Nil);
   FHttpClient := Client;
   Body := TStringStream.Create(RequestJson);
@@ -609,7 +616,11 @@ Begin
         If Terminated Then
           ErrorText := 'Cancelled.'
         Else
-          ErrorText := E.Message;
+          Begin
+            ErrorText := E.Message;
+            If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
+              ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
+          End;
     End;
   Finally
     Client.RequestBody := Nil;
@@ -991,8 +1002,8 @@ End;
 
 Function TAssistantService.ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
 Var
-  Client: TFPHTTPClient;
-  AccessToken, BaseUrl, Body: String;
+  AccessToken, BaseUrl, Body, AuthHdr, HttpErr: String;
+  StatusCode: Integer;
   Data, Item: TJSONData;
   Root, Obj: TJSONObject;
   Arr: TJSONArray;
@@ -1033,69 +1044,71 @@ Begin
     SetLength(BaseUrl, Length(BaseUrl) - 1);
   Paths[0] := '/language-models';
   Paths[1] := '/models';
+  AuthHdr := 'Authorization: Bearer ' + AccessToken;
 
-  Client := TFPHTTPClient.Create(Nil);
-  Try
-    Client.AllowRedirect := True;
-    Client.AddHeader('Authorization', 'Bearer ' + AccessToken);
-    Client.AddHeader('Accept', 'application/json');
-    For PathIdx := 0 To High(Paths) Do
-      Begin
-        Body := '';
-        Data := Nil;
+  For PathIdx := 0 To High(Paths) Do
+    Begin
+      Body := '';
+      Data := Nil;
+      Try
         Try
-          Try
-            Body := Client.Get(BaseUrl + Paths[PathIdx]);
-            Data := GetJSON(Body);
-            If Not (Data Is TJSONObject) Then
+          If Not HttpsGet(BaseUrl + Paths[PathIdx], Body, StatusCode, HttpErr, AuthHdr) Then
+            Begin
+              ErrorText := HttpErr;
               Continue;
-            Root := TJSONObject(Data);
-            Arr := Root.FindPath('models') As TJSONArray;
-            If Arr = Nil Then
-              Arr := Root.FindPath('data') As TJSONArray;
-            If (Arr = Nil) Or (Arr.Count < 1) Then
+            End;
+          If (StatusCode < 200) Or (StatusCode >= 300) Then
+            Begin
+              ErrorText := Format('HTTP %d listing models via %s', [StatusCode, Paths[PathIdx]]);
               Continue;
-            For I := 0 To Arr.Count - 1 Do
-              Begin
-                Item := Arr.Items[I];
-                ModelId := '';
-                If Item Is TJSONObject Then
-                  Begin
-                    Obj := TJSONObject(Item);
-                    ModelId := JsonStringField(Obj, 'id');
-                    { Skip pure image-generation entries when /models is used. }
-                    If (Obj.Find('image_price') <> Nil) And
-                      (Obj.Find('completion_text_token_price') = Nil) And
-                      (Obj.Find('prompt_text_token_price') = Nil) Then
-                      Continue;
-                  End
-                Else If Item.JSONType = jtString Then
-                  ModelId := Item.AsString;
-                If LooksLikeChatModelId(ModelId) And (ModelIds.IndexOf(ModelId) < 0) Then
-                  ModelIds.Add(ModelId);
-              End;
-            If ModelIds.Count > 0 Then
-              Begin
-                If ModelIds Is TStringList Then
-                  TStringList(ModelIds).Sort;
-                Result := True;
-                WorkflowLogger.Info('AssistantService',
-                  Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
-                Exit;
-              End;
-          Except
-            On E: Exception Do
-              ErrorText := E.Message;
-          End;
-        Finally
-          Data.Free;
+            End;
+          Data := GetJSON(Body);
+          If Not (Data Is TJSONObject) Then
+            Continue;
+          Root := TJSONObject(Data);
+          Arr := Root.FindPath('models') As TJSONArray;
+          If Arr = Nil Then
+            Arr := Root.FindPath('data') As TJSONArray;
+          If (Arr = Nil) Or (Arr.Count < 1) Then
+            Continue;
+          For I := 0 To Arr.Count - 1 Do
+            Begin
+              Item := Arr.Items[I];
+              ModelId := '';
+              If Item Is TJSONObject Then
+                Begin
+                  Obj := TJSONObject(Item);
+                  ModelId := JsonStringField(Obj, 'id');
+                  { Skip pure image-generation entries when /models is used. }
+                  If (Obj.Find('image_price') <> Nil) And
+                    (Obj.Find('completion_text_token_price') = Nil) And
+                    (Obj.Find('prompt_text_token_price') = Nil) Then
+                    Continue;
+                End
+              Else If Item.JSONType = jtString Then
+                ModelId := Item.AsString;
+              If LooksLikeChatModelId(ModelId) And (ModelIds.IndexOf(ModelId) < 0) Then
+                ModelIds.Add(ModelId);
+            End;
+          If ModelIds.Count > 0 Then
+            Begin
+              If ModelIds Is TStringList Then
+                TStringList(ModelIds).Sort;
+              Result := True;
+              WorkflowLogger.Info('AssistantService',
+                Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
+              Exit;
+            End;
+        Except
+          On E: Exception Do
+            ErrorText := E.Message;
         End;
+      Finally
+        Data.Free;
       End;
-    If ErrorText = '' Then
-      ErrorText := 'No chat models returned by the API.';
-  Finally
-    Client.Free;
-  End;
+    End;
+  If ErrorText = '' Then
+    ErrorText := 'No chat models returned by the API.';
 End;
 
 Function TAssistantService.StartStream(OnToken: TAssistantStreamEvent): Boolean;

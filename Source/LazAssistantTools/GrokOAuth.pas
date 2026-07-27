@@ -83,8 +83,8 @@ Var
 Implementation
 
 Uses
-  Forms, LCLIntf, dateutils, fphttpclient, opensslsockets, fpjson, jsonparser,
-  httpprotocol, fpsha256, fphashutils, ssockets, WorkflowLog;
+  Forms, LCLIntf, dateutils, fpjson, jsonparser,
+  httpprotocol, fpsha256, fphashutils, ssockets, WorkflowLog, AssistantHttps;
 
 Type
   TGrokOAuthCallbackThread = Class(TThread)
@@ -415,35 +415,11 @@ End;
 Function TGrokOAuthClient.HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String;
   Out StatusCode: Integer): Boolean;
 Var
-  Client: TFPHTTPClient;
-  Body: TStringStream;
+  Err: String;
 Begin
-  Result := False;
-  ResponseBody := '';
-  StatusCode := 0;
-  Client := TFPHTTPClient.Create(Nil);
-  Body := TStringStream.Create(FormBody);
-  Try
-    Try
-      Client.AllowRedirect := True;
-      Client.AddHeader('Content-Type', 'application/x-www-form-urlencoded');
-      Client.AddHeader('Accept', 'application/json');
-      Client.RequestBody := Body;
-      ResponseBody := Client.Post(Url);
-      StatusCode := Client.ResponseStatusCode;
-      Result := True;
-    Except
-      On E: Exception Do
-        Begin
-          FLastError := E.Message;
-          Result := False;
-        End;
-    End;
-  Finally
-    Client.RequestBody := Nil;
-    Body.Free;
-    Client.Free;
-  End;
+  Result := HttpsPostForm(Url, FormBody, ResponseBody, StatusCode, Err);
+  If Not Result Then
+    FLastError := Err;
 End;
 
 Function TGrokOAuthClient.ParseTokenResponse(Const ResponseBody: String;
@@ -535,23 +511,37 @@ End;
 
 Function TGrokOAuthClient.DiscoverEndpoints: Boolean;
 Var
-  Client: TFPHTTPClient;
-  Body: String;
+  Body, Err: String;
+  StatusCode: Integer;
   Data: TJSONData;
   Obj: TJSONObject;
 Begin
   Result := False;
   FLastError := '';
-  Client := TFPHTTPClient.Create(Nil);
+  { Defaults always usable if discovery HTTPS fails (e.g. missing OpenSSL). }
+  FAuthEndpoint := GrokOAuthDefaultAuthEndpoint;
+  FTokenEndpoint := GrokOAuthDefaultTokenEndpoint;
   Data := Nil;
   Try
+    If Not HttpsGet(GrokOAuthDiscoveryUrl, Body, StatusCode, Err) Then
+      Begin
+        WorkflowLogger.Warning('GrokOAuth', 'Discovery failed, using defaults: ' + Err);
+        Result := True;
+        Exit;
+      End;
+    If (StatusCode < 200) Or (StatusCode >= 300) Then
+      Begin
+        WorkflowLogger.Warning('GrokOAuth',
+          Format('Discovery HTTP %d, using defaults', [StatusCode]));
+        Result := True;
+        Exit;
+      End;
     Try
-      Client.AllowRedirect := True;
-      Body := Client.Get(GrokOAuthDiscoveryUrl);
       Data := GetJSON(Body);
       If Not (Data Is TJSONObject) Then
         Begin
-          FLastError := 'OAuth discovery response was not JSON.';
+          WorkflowLogger.Warning('GrokOAuth', 'Discovery was not JSON; using defaults');
+          Result := True;
           Exit;
         End;
       Obj := TJSONObject(Data);
@@ -559,22 +549,19 @@ Begin
       FTokenEndpoint := Obj.Get('token_endpoint', GrokOAuthDefaultTokenEndpoint);
       If (FAuthEndpoint = '') Or (FTokenEndpoint = '') Then
         Begin
-          FLastError := 'OAuth discovery missing authorization_endpoint or token_endpoint.';
-          Exit;
+          FAuthEndpoint := GrokOAuthDefaultAuthEndpoint;
+          FTokenEndpoint := GrokOAuthDefaultTokenEndpoint;
         End;
       Result := True;
     Except
       On E: Exception Do
         Begin
-          FAuthEndpoint := GrokOAuthDefaultAuthEndpoint;
-          FTokenEndpoint := GrokOAuthDefaultTokenEndpoint;
-          WorkflowLogger.Warning('GrokOAuth', 'Discovery failed, using defaults: ' + E.Message);
+          WorkflowLogger.Warning('GrokOAuth', 'Discovery parse failed, using defaults: ' + E.Message);
           Result := True;
         End;
     End;
   Finally
     Data.Free;
-    Client.Free;
   End;
 End;
 

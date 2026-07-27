@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="16">
+    <Files Count="17">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -50,41 +50,45 @@
         <UnitName Value="GrokOAuth"/>
       </Item7>
       <Item8>
-        <Filename Value="../Source/LazAssistantTools/AssistantSkills.pas"/>
-        <UnitName Value="AssistantSkills"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantHttps.pas"/>
+        <UnitName Value="AssistantHttps"/>
       </Item8>
       <Item9>
-        <Filename Value="../Source/LazAssistantTools/AssistantIDEContext.pas"/>
-        <UnitName Value="AssistantIDEContext"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantSkills.pas"/>
+        <UnitName Value="AssistantSkills"/>
       </Item9>
       <Item10>
-        <Filename Value="../Source/LazAssistantTools/AssistantSettingsForm.pas"/>
-        <UnitName Value="AssistantSettingsForm"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantIDEContext.pas"/>
+        <UnitName Value="AssistantIDEContext"/>
       </Item10>
       <Item11>
-        <Filename Value="../Source/LazAssistantTools/AssistantSettingsForm.lfm"/>
-        <FileType Value="FormResource"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantSettingsForm.pas"/>
+        <UnitName Value="AssistantSettingsForm"/>
       </Item11>
       <Item12>
-        <Filename Value="../Source/LazAssistantTools/AssistantMarkdownForm.pas"/>
-        <UnitName Value="AssistantMarkdownForm"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantSettingsForm.lfm"/>
+        <FileType Value="FormResource"/>
       </Item12>
       <Item13>
-        <Filename Value="../Source/LazAssistantTools/AssistantMarkdownForm.lfm"/>
-        <FileType Value="FormResource"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantMarkdownForm.pas"/>
+        <UnitName Value="AssistantMarkdownForm"/>
       </Item13>
       <Item14>
-        <Filename Value="../Source/LazAssistantTools/AssistantSession.pas"/>
-        <UnitName Value="AssistantSession"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantMarkdownForm.lfm"/>
+        <FileType Value="FormResource"/>
       </Item14>
       <Item15>
-        <Filename Value="../Source/LazAssistantTools/AssistantTools.pas"/>
-        <UnitName Value="AssistantTools"/>
+        <Filename Value="../Source/LazAssistantTools/AssistantSession.pas"/>
+        <UnitName Value="AssistantSession"/>
       </Item15>
       <Item16>
+        <Filename Value="../Source/LazAssistantTools/AssistantTools.pas"/>
+        <UnitName Value="AssistantTools"/>
+      </Item16>
+      <Item17>
         <Filename Value="../Source/LazAssistantTools/AssistantConversation.pas"/>
         <UnitName Value="AssistantConversation"/>
-      </Item16>
+      </Item17>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
