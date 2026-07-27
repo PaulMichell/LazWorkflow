@@ -113,7 +113,6 @@ object GitDiffView: TGitDiffView
       Width = 407
       Align = alClient
       BorderSpacing.Around = 4
-      Font.Height = 0
       Font.Name = 'Courier New'
       Font.Pitch = fpFixed
       Font.Quality = fqCleartypeNatural

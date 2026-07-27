@@ -153,6 +153,7 @@ Type
     Function SelectedSha: String;
     Function ScrollOffset: Integer;
     Function GraphScale(DesignPx: Integer): Integer;
+    Function GraphCanMeasureFont: Boolean;
     Function GraphRowHeight: Integer;
     Function GraphLaneWidth: Integer;
     Function GraphLeftMargin: Integer;
@@ -450,12 +451,17 @@ End;
 
 Procedure TManageRepositoryForm.FormShow(Sender: TObject);
 Begin
-  BindRepository;
-  ApplyConfig;
-  { Remeasure scroll range once the paintbox handle exists (font metrics available). }
-  UpdateScrollRange;
-  If Assigned(FPaintBox) Then
-    FPaintBox.Invalidate;
+  Try
+    BindRepository;
+    ApplyConfig;
+    { Remeasure scroll range once the paintbox parent has a handle. }
+    UpdateScrollRange;
+    If Assigned(FPaintBox) Then
+      FPaintBox.Invalidate;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Error('ManageRepository', 'FormShow: ' + E.Message);
+  End;
 End;
 
 Procedure TManageRepositoryForm.ApplyConfig;
@@ -779,15 +785,28 @@ Begin
 End;
 
 Function TManageRepositoryForm.GraphScale(DesignPx: Integer): Integer;
+Var
+  PPI: Integer;
 Begin
-  { Scale design (96 DPI) pixels to the form's current PPI. Works on Windows 4K
-    and Linux HiDPI without hard-coding monitor DPI. }
-  If Assigned(FPaintBox) Then
-    Result := FPaintBox.Scale96ToForm(DesignPx)
-  Else
-    Result := Scale96ToForm(DesignPx);
+  { Scale design (96 DPI) pixels via form/screen PPI.
+    Do NOT use Scale96ToForm here: it calls NeedParentDesignControl and raises
+    EInvalidOperation when the control chain is not yet parented (IDE desktop
+    restore / early BindRepository during package load). }
+  PPI := PixelsPerInch;
+  If PPI <= 0 Then
+    PPI := Screen.PixelsPerInch;
+  If PPI <= 0 Then
+    PPI := 96;
+  Result := MulDiv(DesignPx, PPI, 96);
   If (DesignPx > 0) And (Result < 1) Then
     Result := 1;
+End;
+
+Function TManageRepositoryForm.GraphCanMeasureFont: Boolean;
+Begin
+  { TPaintBox has no handle; its Canvas needs a parent TWinControl with a DC. }
+  Result := Assigned(FPaintBox) And Assigned(FPaintBox.Parent) And
+    FPaintBox.Parent.HandleAllocated;
 End;
 
 Function TManageRepositoryForm.GraphRowHeight: Integer;
@@ -797,13 +816,16 @@ Begin
   Base := GraphScale(GitGraphRowHeight);
   Pad := GraphScale(6);
   Result := Base;
-  { Prefer live font metrics so row height tracks painted text on HiDPI.
-    TPaintBox is a TGraphicControl (no handle); Canvas is valid without HandleAllocated. }
-  If Assigned(FPaintBox) Then
+  { Prefer live font metrics so row height tracks painted text on HiDPI. }
+  If GraphCanMeasureFont Then
     Begin
-      PrepareGraphTextFont(FPaintBox.Canvas, False);
-      TextH := FPaintBox.Canvas.TextHeight('Ag');
-      Result := Max(Base, TextH + Pad);
+      Try
+        PrepareGraphTextFont(FPaintBox.Canvas, False);
+        TextH := FPaintBox.Canvas.TextHeight('Ag');
+        Result := Max(Base, TextH + Pad);
+      Except
+        Result := Base;
+      End;
     End;
 End;
 
@@ -831,15 +853,17 @@ Function TManageRepositoryForm.GraphDateColumnWidth: Integer;
 Var
   SampleW: Integer;
 Begin
-  { Measure the fixed date format so the subject never underlaps the date.
-    TPaintBox has no window handle; use Canvas metrics directly. }
-  If Assigned(FPaintBox) Then
+  { Measure the fixed date format so the subject never underlaps the date. }
+  SampleW := GraphScale(110);
+  If GraphCanMeasureFont Then
     Begin
-      PrepareGraphTextFont(FPaintBox.Canvas, True);
-      SampleW := FPaintBox.Canvas.TextWidth('0000-00-00 00:00');
-    End
-  Else
-    SampleW := GraphScale(110);
+      Try
+        PrepareGraphTextFont(FPaintBox.Canvas, True);
+        SampleW := FPaintBox.Canvas.TextWidth('0000-00-00 00:00');
+      Except
+        SampleW := GraphScale(110);
+      End;
+    End;
   Result := SampleW + GraphScale(GitGraphDateGap);
 End;
 
@@ -857,21 +881,15 @@ Procedure TManageRepositoryForm.PrepareGraphTextFont(ACanvas: TCanvas; IsDate: B
 Begin
   If Not Assigned(ACanvas) Then
     Exit;
-  { Point sizes, not Font.Height: Height is device pixels and double-scales under LCL DPI. }
+  { Point sizes only — never assign Font.Height := 0 (forces Size 0 intermediate). }
   ACanvas.Font.Name := Font.Name;
-  ACanvas.Font.Height := 0;
   ACanvas.Font.Style := [];
   ACanvas.Font.Quality := fqCleartypeNatural;
+  ACanvas.Font.Size := 9;
   If IsDate Then
-    Begin
-      ACanvas.Font.Size := 9;
-      ACanvas.Font.Color := clGrayText;
-    End
+    ACanvas.Font.Color := clGrayText
   Else
-    Begin
-      ACanvas.Font.Size := 9;
-      ACanvas.Font.Color := clWindowText;
-    End;
+    ACanvas.Font.Color := clWindowText;
 End;
 
 Function TManageRepositoryForm.LaneX(Lane: Integer): Integer;
@@ -953,7 +971,6 @@ Begin
     With FPaintBox.Canvas Do
       Begin
         Font.Name := Self.Font.Name;
-        Font.Height := 0;
         Font.Size := 8;
         Font.Style := [];
         Font.Quality := fqCleartypeNatural;
@@ -1029,7 +1046,6 @@ Begin
         With FPaintBox.Canvas Do
           Begin
             Font.Name := Self.Font.Name;
-            Font.Height := 0;
             Font.Size := 8;
             Font.Style := [];
             Font.Quality := fqCleartypeNatural;

@@ -108,8 +108,9 @@ End;
 
 Initialization
 
+{ Create only — Load is deferred to RegisterGitManager so GetIDEConfigStorage
+  is not called during unit initialization while the IDE is still starting. }
 GitManagerConfig := TGitConfig.Create;
-GitManagerConfig.Load;
 
 Finalization
 

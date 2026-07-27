@@ -197,7 +197,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
+  Math, LCLIntf, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
   LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
   GitService, Dialogs, WorkflowLog;
 
@@ -746,11 +746,17 @@ Begin
 End;
 
 Function TGitDiffView.ScaleDesign(DesignPx: Integer): Integer;
+Var
+  PPI: Integer;
 Begin
-  If Assigned(FEdit) Then
-    Result := FEdit.Scale96ToForm(DesignPx)
-  Else
-    Result := Scale96ToForm(DesignPx);
+  { Use frame/screen PPI — avoid Scale96ToForm (NeedParentDesignControl can raise
+    during frame construction when the IDE restores docked windows at startup). }
+  PPI := PixelsPerInch;
+  If PPI <= 0 Then
+    PPI := Screen.PixelsPerInch;
+  If PPI <= 0 Then
+    PPI := 96;
+  Result := MulDiv(DesignPx, PPI, 96);
   If (DesignPx > 0) And (Result < 1) Then
     Result := 1;
 End;
@@ -764,26 +770,22 @@ Procedure TGitDiffView.ApplyCompactEditorFont;
 Begin
   If Not Assigned(FEdit) Then
     Exit;
-  { Prefer Font.Size (points) over Font.Height (device px). Design-time Height values
-    in the .lfm are scaled again by LCL on HiDPI Windows and look oversized. }
-  FEdit.Font.Height := 0;
-  FEdit.Font.Size := 9;
-  FEdit.Font.Pitch := fpFixed;
-  FEdit.Font.Quality := fqCleartypeNatural;
-  {$IFDEF Windows}
-  If Screen.Fonts.IndexOf('Consolas') >= 0 Then
-    FEdit.Font.Name := 'Consolas'
-  Else
+  { Prefer Font.Size (points) over Font.Height (device px). Never assign Height := 0
+    (TFont.SetHeight(0) forces Size 0 and can break SynEdit line metrics). }
+  Try
+    FEdit.Font.Size := 9;
+    FEdit.Font.Pitch := fpFixed;
+    FEdit.Font.Quality := fqCleartypeNatural;
+    {$IFDEF Windows}
+    FEdit.Font.Name := 'Consolas';
+    {$ELSE}
     FEdit.Font.Name := 'Courier New';
-  {$ELSE}
-  If Screen.Fonts.IndexOf('DejaVu Sans Mono') >= 0 Then
-    FEdit.Font.Name := 'DejaVu Sans Mono'
-  Else If Screen.Fonts.IndexOf('Liberation Mono') >= 0 Then
-    FEdit.Font.Name := 'Liberation Mono'
-  Else
-    FEdit.Font.Name := 'Courier New';
-  {$ENDIF}
-  FEdit.ExtraLineSpacing := 0;
+    {$ENDIF}
+    FEdit.ExtraLineSpacing := 0;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'ApplyCompactEditorFont: ' + E.Message);
+  End;
 End;
 
 Procedure TGitDiffView.ApplyIDEEditorAppearance;

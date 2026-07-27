@@ -214,10 +214,14 @@ Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
 Begin
   IDEWindowCreators.CreateForm(AForm, TManageRepositoryForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
   AForm.Name := AFormName;
+  { Never let restore/bind failures kill the IDE process. }
   If AForm Is TManageRepositoryForm Then
-    Begin
+    Try
       TManageRepositoryForm(AForm).BindRepository;
       TManageRepositoryForm(AForm).ApplyConfig;
+    Except
+      On E: Exception Do
+        WorkflowLogger.Error('GitManager', 'CreateManageRepositoryForm bind: ' + E.Message);
     End;
 End;
 
@@ -227,53 +231,71 @@ Var
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
-  WorkflowLogger.Info('GitManager', 'Registering LazRepositoryTools');
+  Try
+    WorkflowLogger.Info('GitManager', 'Registering LazRepositoryTools');
 
-  If GitManagerIDEHooks = Nil Then
-    GitManagerIDEHooks := TGitManagerIDEHooks.Create;
+    If GitManagerIDEHooks = Nil Then
+      GitManagerIDEHooks := TGitManagerIDEHooks.Create;
 
-  If Assigned(GitManagerConfig) Then
-    GitManagerConfig.Load;
+    If Assigned(GitManagerConfig) Then
+      Try
+        GitManagerConfig.Load;
+      Except
+        On E: Exception Do
+          WorkflowLogger.Warning('GitManager', 'Config load failed: ' + E.Message);
+      End;
 
-  Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
-  If Cat = Nil Then
-    Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
+    Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
+    If Cat = Nil Then
+      Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
 
-  Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
-    IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
-  CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
-    IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
-  CmdRepoClone := RegisterIDECommand(Cat, 'RepoClone', 'Clone Repository',
-    IDEShortCut(VK_C, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoCloneRepository);
-  CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
+    Key := IDEShortCut(VK_UNKNOWN, []);
+    CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
+      IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
+    CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
+      IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
+    CmdRepoClone := RegisterIDECommand(Cat, 'RepoClone', 'Clone Repository',
+      IDEShortCut(VK_C, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoCloneRepository);
+    CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
-  { Top-level Repository menu, placed immediately after Run.
-    Two logical sections so Lazarus draws a separator before Settings. }
-  RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
-  If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
-    Begin
-      mnuMain.Remove(RepoMenu);
-      mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
+    { Top-level Repository menu, placed immediately after Run.
+      Two logical sections so Lazarus draws a separator before Settings. }
+    RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
+    If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
+      Begin
+        mnuMain.Remove(RepoMenu);
+        mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
+      End;
+    MainSec := RegisterIDEMenuSection(RepoMenu, 'RepoMainCmds');
+    RegisterIDEMenuCommand(MainSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
+    RegisterIDEMenuCommand(MainSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+    RegisterIDEMenuCommand(MainSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
+    SetSec := RegisterIDEMenuSection(RepoMenu, 'RepoSettingsCmds');
+    RegisterIDEMenuCommand(SetSec, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
+
+    ManageRepositoryWindowCreator := IDEWindowCreators.Add('ManageRepository', @CreateManageRepositoryForm, Nil,
+      '100', '100', '900', '600');
+
+    If Assigned(LazarusIDE) Then
+      Begin
+        LazarusIDE.AddHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
+        LazarusIDE.AddHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
+      End;
+
+    Try
+      UpdateRepositoryMenuState;
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('GitManager', 'UpdateRepositoryMenuState: ' + E.Message);
     End;
-  MainSec := RegisterIDEMenuSection(RepoMenu, 'RepoMainCmds');
-  RegisterIDEMenuCommand(MainSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
-  RegisterIDEMenuCommand(MainSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
-  RegisterIDEMenuCommand(MainSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
-  SetSec := RegisterIDEMenuSection(RepoMenu, 'RepoSettingsCmds');
-  RegisterIDEMenuCommand(SetSec, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
-
-  ManageRepositoryWindowCreator := IDEWindowCreators.Add('ManageRepository', @CreateManageRepositoryForm, Nil,
-    '100', '100', '900', '600');
-
-  If Assigned(LazarusIDE) Then
-    Begin
-      LazarusIDE.AddHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
-      LazarusIDE.AddHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
-    End;
-
-  UpdateRepositoryMenuState;
-  WorkflowLogger.Info('GitManager', 'LazRepositoryTools registered successfully');
+    WorkflowLogger.Info('GitManager', 'LazRepositoryTools registered successfully');
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('GitManager', 'RegisterGitManager failed: ' + E.Message);
+        { Swallow so a registration fault does not prevent the IDE from starting. }
+      End;
+  End;
 End;
 
 Initialization
