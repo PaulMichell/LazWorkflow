@@ -307,9 +307,9 @@ Begin
         Exit;
       End;
 
+    FillChar(StatusBuf, SizeOf(StatusBuf), 0);
     StatusSize := SizeOf(StatusBuf);
     Index := 0;
-    FillChar(StatusBuf, SizeOf(StatusBuf), 0);
     If HttpQueryInfo(Request, HTTP_QUERY_STATUS_CODE, @StatusBuf[0], StatusSize, Index) Then
       StatusCode := StrToIntDef(string(StatusBuf), 0);
 
