@@ -442,7 +442,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 6. Plan tab: list / New / Open / Set active / Refresh / Open Documents/ — **done**.
 
 ### Phase 4 – Code mode — **in progress**
-1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset update plan `Status:` lines then rescan — **in progress**.
+1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset update plan `Status:` lines then rescan — **done**.
 2. IDE-mediated source edit tools (sandbox, exact match, undoable) — **not started**.
 3. Compile/build as mode tools (Review Compile/Build already on the bottom bar) — **partial**.
 4. Optional edit confirmation policy for first release — **deferred**.
@@ -528,8 +528,8 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. **Code mode TODO panel** — scan active plan sections; Start / Done / Reset write `Status:` back into the plan MD (**current**).
-2. **Code mode source edit tools** — IDE-buffer edits under project sandbox.
+1. **Code mode source edit tools** — IDE-buffer edits under project sandbox (**current**).
+2. Tighten Fix Error / Review Compile into Code mode workflow.
 3. Wire Review Compile/Build more tightly into Code mode workflow (Fix Error → Code).
 4. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
 5. Package docs / example plan → code → compile loop.
@@ -577,9 +577,9 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Phase 2.5 shell, multi-conversation History, Plan mode tools/UI: **landed**.
 - Form renamed to `ProjectAssistantForm`; Michell naming cleanup on assistant package.
 - Chat selection/clipboard and prompt Cut/Copy/Paste menus.
-- Phase 4 started: plan section scan + Code TODO panel (status write-back).
+- Phase 4: plan section scan + Code TODO panel with Start / Done / Reset status write-back.
 
-**Next:** finish Code TODO tiles; then source edit tools and tighter compile loop.
+**Next:** Code mode source edit tools; tighter compile / Fix Error loop.
 
 ---
 
