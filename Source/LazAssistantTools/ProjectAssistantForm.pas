@@ -63,6 +63,7 @@ Type
     FCodeBtnStart: TButton;
     FCodeBtnDone: TButton;
     FCodeBtnReset: TButton;
+    FCodeBtnWork: TButton;
     FCodeStatusLabel: TLabel;
     FBottomBar: TPanel;
     FBtnNewChat: TButton;
@@ -179,6 +180,9 @@ Type
     Procedure CodeBtnStartClick(Sender: TObject);
     Procedure CodeBtnDoneClick(Sender: TObject);
     Procedure CodeBtnResetClick(Sender: TObject);
+    Procedure CodeBtnWorkClick(Sender: TObject);
+    Procedure CodeWorkOnSelectedPackage;
+    Function BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
     Procedure CodeTodoListDblClick(Sender: TObject);
     Procedure CodeTodoListClick(Sender: TObject);
     Procedure CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
@@ -879,6 +883,12 @@ Begin
   FCodeBtnReset.AutoSize := True;
   FCodeBtnReset.OnClick := @CodeBtnResetClick;
 
+  FCodeBtnWork := TButton.Create(Self);
+  FCodeBtnWork.Parent := Bar;
+  FCodeBtnWork.Caption := 'Work on this';
+  FCodeBtnWork.AutoSize := True;
+  FCodeBtnWork.OnClick := @CodeBtnWorkClick;
+
   FCodeStatusLabel := TLabel.Create(Self);
   FCodeStatusLabel.Parent := FCodePanel;
   FCodeStatusLabel.Align := alBottom;
@@ -1091,6 +1101,106 @@ Begin
   SetSelectedCodeSectionStatus(pssNotStarted);
 End;
 
+Function TProjectAssistantForm.BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText,
+  SectionBody: String): String;
+Const
+  MaxBodyChars = 6000;
+Var
+  Body: String;
+Begin
+  Body := Trim(SectionBody);
+  If Length(Body) > MaxBodyChars Then
+    Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
+      '… *(section truncated for the prompt; open the plan file for the full text.)*';
+  Result :=
+    'Work on this plan package in **Code mode**.' + LineEnding +
+    LineEnding +
+    '**Active plan:** `' + PlanRel + '`' + LineEnding +
+    '**Package:** ' + SectionTitle + LineEnding +
+    '**Status:** ' + StatusText + LineEnding +
+    LineEnding +
+    'Instructions:' + LineEnding +
+    '1. Focus only on this work package unless you need a tiny amount of neighbouring context.' + LineEnding +
+    '2. Use project tools (read_file, list_directory, get_project_info) as needed.' + LineEnding +
+    '3. Prefer concrete Free Pascal / Lazarus changes with file paths and clear steps.' + LineEnding +
+    '4. When this package is finished, say so clearly so I can mark it **Done** on the Code tab ' +
+    '(or update `Status: complete` in the plan via tools).' + LineEnding +
+    '5. Do not expand scope into other work packages unless blocked.' + LineEnding +
+    LineEnding +
+    '----- begin plan section -----' + LineEnding +
+    Body + LineEnding +
+    '----- end plan section -----';
+End;
+
+Procedure TProjectAssistantForm.CodeWorkOnSelectedPackage;
+Var
+  PlanRel, Err, Body, Prompt, Title, StatusText: String;
+  Idx: Integer;
+  Section: TPlanSection;
+Begin
+  If FSending Then
+    Begin
+      MessageDlg('Wait for the current reply to finish (or Stop) before starting work.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Idx := SelectedCodeSectionIndex;
+  If Idx < 0 Then
+    Begin
+      MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Section := TPlanSection(FCodeSections[Idx]);
+  Title := Section.Title;
+  StatusText := PlanSectionStatusToStr(Section.Status);
+  If Section.Status = pssUnknown Then
+    StatusText := 'unknown';
+  { Mark in progress when starting work from a not-started package. }
+  If Section.Status In [pssNotStarted, pssUnknown] Then
+    Begin
+      If Not SetPlanSectionStatus(PlanRel, Idx, pssInProgress, Err) Then
+        Begin
+          MessageDlg('Could not set status to in progress:' + LineEnding + Err, mtWarning, [mbOK], 0);
+          { Continue with the prompt anyway. }
+        End
+      Else
+        Begin
+          StatusText := PlanSectionStatusToStr(pssInProgress);
+          FCodeSelectedIndex := Idx;
+          RefreshCodeTodos;
+          If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
+            FCodeTodoList.ItemIndex := Idx;
+        End;
+    End;
+  If Not GetPlanSectionBody(PlanRel, Idx, Body, Err) Then
+    Begin
+      MessageDlg('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  Prompt := BuildCodeWorkPrompt(PlanRel, Title, StatusText, Body);
+  { Stay in Code mode (tools + prompt) while showing the Chat turn surface. }
+  FActiveMode := amCode;
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(amCode);
+  LockModeForSend;
+  ShowChatSurfaceKeepMode;
+  SetCodeStatusFeedback('Working on: ' + Title);
+  SubmitUserText(Prompt, True);
+  If Not FSending Then
+    UnlockModeAfterSend;
+End;
+
+Procedure TProjectAssistantForm.CodeBtnWorkClick(Sender: TObject);
+Begin
+  CodeWorkOnSelectedPackage;
+End;
+
 Procedure TProjectAssistantForm.CodeTodoListClick(Sender: TObject);
 Begin
   If Assigned(FCodeTodoList) And Assigned(FCodeSections) And
@@ -1109,8 +1219,9 @@ End;
 
 Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
 Begin
+  { Double-click = work on this package (not only mark in progress). }
   CodeTodoListClick(Sender);
-  SetSelectedCodeSectionStatus(pssInProgress);
+  CodeWorkOnSelectedPackage;
 End;
 
 Procedure TProjectAssistantForm.PagesChange(Sender: TObject);

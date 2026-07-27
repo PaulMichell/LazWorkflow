@@ -56,6 +56,9 @@ Function ScanPlanSections(Const RelativeOrAbsolute: String; Sections: TObjectLis
 { Rewrite Status: line for Sections[SectionIndex]; rescans not performed. }
 Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   NewStatus: TPlanSectionStatus; Out ErrorText: String): Boolean;
+{ Body of one section (heading through line before next ##/###), for Code "Work on this". }
+Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  Out BodyText: String; Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -650,6 +653,74 @@ Begin
             [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
         { Reload open viewer only — do not re-enter full OpenMarkdownDocument create path. }
         ReloadMarkdownDocument(Resolved, True);
+      Except
+        On E: Exception Do
+          ErrorText := E.Message;
+      End;
+    Finally
+      SL.Free;
+    End;
+  Finally
+    Sections.Free;
+  End;
+End;
+
+Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  Out BodyText: String; Out ErrorText: String): Boolean;
+Var
+  Resolved: String;
+  Sections: TObjectList;
+  Section, NextSection: TPlanSection;
+  SL: TStringList;
+  FirstLine, LastLine, I: Integer;
+Begin
+  Result := False;
+  BodyText := '';
+  ErrorText := '';
+  If Not ResolvePlanPath(RelativeOrAbsolute, Resolved, ErrorText) Then
+    Exit;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(Resolved, Sections, ErrorText) Then
+      Exit;
+    If (SectionIndex < 0) Or (SectionIndex >= Sections.Count) Then
+      Begin
+        ErrorText := 'Section index out of range.';
+        Exit;
+      End;
+    Section := TPlanSection(Sections[SectionIndex]);
+    FirstLine := Section.HeadingLineIndex;
+    If SectionIndex + 1 < Sections.Count Then
+      Begin
+        NextSection := TPlanSection(Sections[SectionIndex + 1]);
+        LastLine := NextSection.HeadingLineIndex - 1;
+      End
+    Else
+      LastLine := High(Integer);
+    SL := TStringList.Create;
+    Try
+      Try
+        SL.LoadFromFile(Resolved);
+        If FirstLine >= SL.Count Then
+          Begin
+            ErrorText := 'Heading line out of range.';
+            Exit;
+          End;
+        If LastLine >= SL.Count Then
+          LastLine := SL.Count - 1;
+        BodyText := '';
+        For I := FirstLine To LastLine Do
+          Begin
+            If BodyText <> '' Then
+              BodyText := BodyText + LineEnding;
+            BodyText := BodyText + SL[I];
+          End;
+        While (Length(BodyText) > 0) And
+          ((BodyText[Length(BodyText)] = #10) Or (BodyText[Length(BodyText)] = #13)) Do
+          SetLength(BodyText, Length(BodyText) - 1);
+        Result := Trim(BodyText) <> '';
+        If Not Result Then
+          ErrorText := 'Section body is empty.';
       Except
         On E: Exception Do
           ErrorText := E.Message;
