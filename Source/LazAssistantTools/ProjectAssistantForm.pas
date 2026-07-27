@@ -10,9 +10,9 @@ Unit ProjectAssistantForm;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
+  Classes, SysUtils, Contnrs, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
-  IDEExternToolIntf, AssistantConversation;
+  IDEExternToolIntf, AssistantConversation, AssistantPlan;
 
 Type
   TProjectAssistantForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
@@ -54,6 +54,15 @@ Type
     FPlanBtnSetActive: TButton;
     FPlanBtnRefresh: TButton;
     FPlanBtnOpenDocs: TButton;
+    { Code tab TODO panel (runtime). }
+    FCodePanel: TPanel;
+    FCodeActiveLabel: TLabel;
+    FCodeTodoList: TListBox;
+    FCodeBtnRefresh: TButton;
+    FCodeBtnOpenPlan: TButton;
+    FCodeBtnStart: TButton;
+    FCodeBtnDone: TButton;
+    FCodeBtnReset: TButton;
     FBottomBar: TPanel;
     FBtnNewChat: TButton;
     FBtnToggleThinking: TButton;
@@ -124,6 +133,7 @@ Type
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send uses Chat surface but keeps Plan/Code tools. }
+    FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -157,6 +167,16 @@ Type
     Procedure PlanBtnOpenDocsClick(Sender: TObject);
     Procedure PlanListDblClick(Sender: TObject);
     Function SelectedPlanRelativePath: String;
+    Procedure EnsureCodeTabUi;
+    Procedure RefreshCodeTodos;
+    Function SelectedCodeSectionIndex: Integer;
+    Procedure SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
+    Procedure CodeBtnRefreshClick(Sender: TObject);
+    Procedure CodeBtnOpenPlanClick(Sender: TObject);
+    Procedure CodeBtnStartClick(Sender: TObject);
+    Procedure CodeBtnDoneClick(Sender: TObject);
+    Procedure CodeBtnResetClick(Sender: TObject);
+    Procedure CodeTodoListDblClick(Sender: TObject);
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -219,8 +239,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Contnrs, WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
-  AssistantSession, AssistantPlan, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
+  WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
+  AssistantSession, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf,
   ProjectIntf;
 
@@ -263,6 +283,8 @@ Begin
   FHistoryUpdating := False;
   FHistoryIds := TStringList.Create;
   FTranscript := TStringList.Create;
+  FCodeSections := TObjectList.Create(True);
+  FCodePanel := Nil;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -274,6 +296,7 @@ Begin
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FTranscript);
   FreeAndNil(FHistoryIds);
+  FreeAndNil(FCodeSections);
   Inherited Destroy;
 End;
 
@@ -283,6 +306,7 @@ Begin
   EnsureChatView;
   EnsureInputPopup;
   EnsurePlanTabUi;
+  EnsureCodeTabUi;
   UpdateThinkingActionCaption;
   If Not Assigned(FElapsedTimer) Then
     Begin
@@ -488,6 +512,8 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshPlanList;
+  If Assigned(FCodePanel) Then
+    RefreshCodeTodos;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
       '` (auto-saved because the model did not call write_markdown).';
@@ -514,6 +540,8 @@ Begin
         FReviewCompileAction.Enabled := Not FSending;
         FReviewBuildAction.Enabled := Not FSending;
         FFixErrorAction.Enabled := Not FSending;
+        EnsureCodeTabUi;
+        RefreshCodeTodos;
       End;
   Else
     Begin
@@ -522,6 +550,11 @@ Begin
       FFixErrorAction.Enabled := Not FSending;
     End;
   End;
+  If FActiveMode = amPlan Then
+    Begin
+      EnsurePlanTabUi;
+      RefreshPlanList;
+    End;
 End;
 
 Procedure TProjectAssistantForm.PersistShellConfig;
@@ -774,6 +807,247 @@ End;
 Procedure TProjectAssistantForm.PlanListDblClick(Sender: TObject);
 Begin
   PlanBtnOpenClick(Sender);
+End;
+
+Procedure TProjectAssistantForm.EnsureCodeTabUi;
+Var
+  Bar: TPanel;
+Begin
+  If Assigned(FCodePanel) Or (Not Assigned(FTabCode)) Then
+    Exit;
+  If Assigned(FCodePlaceholder) Then
+    FCodePlaceholder.Visible := False;
+
+  FCodePanel := TPanel.Create(Self);
+  FCodePanel.Parent := FTabCode;
+  FCodePanel.Align := alClient;
+  FCodePanel.BevelOuter := bvNone;
+  FCodePanel.BorderSpacing.Around := 8;
+
+  FCodeActiveLabel := TLabel.Create(Self);
+  FCodeActiveLabel.Parent := FCodePanel;
+  FCodeActiveLabel.Align := alTop;
+  FCodeActiveLabel.Caption := 'Active plan: (none)';
+  FCodeActiveLabel.WordWrap := True;
+  FCodeActiveLabel.BorderSpacing.Bottom := 6;
+
+  Bar := TPanel.Create(Self);
+  Bar.Parent := FCodePanel;
+  Bar.Align := alTop;
+  Bar.Height := 36;
+  Bar.BevelOuter := bvNone;
+  Bar.ChildSizing.Layout := cclLeftToRightThenTopToBottom;
+  Bar.ChildSizing.ControlsPerLine := 10;
+  Bar.ChildSizing.HorizontalSpacing := 6;
+  Bar.ChildSizing.LeftRightSpacing := 0;
+  Bar.ChildSizing.TopBottomSpacing := 2;
+  Bar.BorderSpacing.Bottom := 6;
+
+  FCodeBtnRefresh := TButton.Create(Self);
+  FCodeBtnRefresh.Parent := Bar;
+  FCodeBtnRefresh.Caption := 'Refresh';
+  FCodeBtnRefresh.AutoSize := True;
+  FCodeBtnRefresh.OnClick := @CodeBtnRefreshClick;
+
+  FCodeBtnOpenPlan := TButton.Create(Self);
+  FCodeBtnOpenPlan.Parent := Bar;
+  FCodeBtnOpenPlan.Caption := 'Open plan';
+  FCodeBtnOpenPlan.AutoSize := True;
+  FCodeBtnOpenPlan.OnClick := @CodeBtnOpenPlanClick;
+
+  FCodeBtnStart := TButton.Create(Self);
+  FCodeBtnStart.Parent := Bar;
+  FCodeBtnStart.Caption := 'Start';
+  FCodeBtnStart.AutoSize := True;
+  FCodeBtnStart.OnClick := @CodeBtnStartClick;
+
+  FCodeBtnDone := TButton.Create(Self);
+  FCodeBtnDone.Parent := Bar;
+  FCodeBtnDone.Caption := 'Done';
+  FCodeBtnDone.AutoSize := True;
+  FCodeBtnDone.OnClick := @CodeBtnDoneClick;
+
+  FCodeBtnReset := TButton.Create(Self);
+  FCodeBtnReset.Parent := Bar;
+  FCodeBtnReset.Caption := 'Reset';
+  FCodeBtnReset.AutoSize := True;
+  FCodeBtnReset.OnClick := @CodeBtnResetClick;
+
+  FCodeTodoList := TListBox.Create(Self);
+  FCodeTodoList.Parent := FCodePanel;
+  FCodeTodoList.Align := alClient;
+  FCodeTodoList.OnDblClick := @CodeTodoListDblClick;
+End;
+
+Procedure TProjectAssistantForm.RefreshCodeTodos;
+Var
+  PlanRel, Err: String;
+  I, Keep: Integer;
+  Section: TPlanSection;
+  NotStarted, InProgress, Complete: Integer;
+Begin
+  If Not Assigned(FCodeTodoList) Then
+    Exit;
+  PlanRel := GetActivePlanRelativePath;
+  If Assigned(FCodeActiveLabel) Then
+    If PlanRel = '' Then
+      FCodeActiveLabel.Caption :=
+        'Active plan: (none) — set one on the Plan tab, then Refresh.'
+    Else
+      FCodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
+        '  ·  TODO tiles are scanned from ## headings + Status: lines.';
+
+  Keep := SelectedCodeSectionIndex;
+  FCodeTodoList.Items.BeginUpdate;
+  Try
+    FCodeTodoList.Items.Clear;
+    If Assigned(FCodeSections) Then
+      FCodeSections.Clear;
+    If PlanRel = '' Then
+      Begin
+        FCodeTodoList.Items.Add('(No active plan — open the Plan tab and Set active.)');
+        Exit;
+      End;
+    If Not ScanPlanSections(PlanRel, FCodeSections, Err) Then
+      Begin
+        FCodeTodoList.Items.Add('(' + Err + ')');
+        Exit;
+      End;
+    If FCodeSections.Count = 0 Then
+      Begin
+        FCodeTodoList.Items.Add(
+          '(No ## sections found. Add work packages with Status: not started | in progress | complete.)');
+        Exit;
+      End;
+    NotStarted := 0;
+    InProgress := 0;
+    Complete := 0;
+    For I := 0 To FCodeSections.Count - 1 Do
+      Begin
+        Section := TPlanSection(FCodeSections[I]);
+        FCodeTodoList.Items.Add(FormatPlanSectionTile(Section, I));
+        Case Section.Status Of
+          pssNotStarted: Inc(NotStarted);
+          pssInProgress: Inc(InProgress);
+          pssComplete: Inc(Complete);
+        Else
+          { }
+        End;
+      End;
+    If Assigned(FCodeActiveLabel) And (PlanRel <> '') Then
+      FCodeActiveLabel.Caption := Format(
+        'Active plan: %s  ·  %d not started · %d in progress · %d complete',
+        [PlanRel, NotStarted, InProgress, Complete]);
+    If (Keep >= 0) And (Keep < FCodeTodoList.Items.Count) Then
+      FCodeTodoList.ItemIndex := Keep
+    Else
+      Begin
+        { Prefer first in-progress, else first not-started. }
+        FCodeTodoList.ItemIndex := 0;
+        For I := 0 To FCodeSections.Count - 1 Do
+          If TPlanSection(FCodeSections[I]).Status = pssInProgress Then
+            Begin
+              FCodeTodoList.ItemIndex := I;
+              Break;
+            End;
+        If (FCodeTodoList.ItemIndex = 0) And (FCodeSections.Count > 0) And
+          (TPlanSection(FCodeSections[0]).Status <> pssInProgress) Then
+          For I := 0 To FCodeSections.Count - 1 Do
+            If TPlanSection(FCodeSections[I]).Status = pssNotStarted Then
+              Begin
+                FCodeTodoList.ItemIndex := I;
+                Break;
+              End;
+      End;
+  Finally
+    FCodeTodoList.Items.EndUpdate;
+  End;
+End;
+
+Function TProjectAssistantForm.SelectedCodeSectionIndex: Integer;
+Begin
+  Result := -1;
+  If Not Assigned(FCodeTodoList) Or Not Assigned(FCodeSections) Then
+    Exit;
+  If (FCodeTodoList.ItemIndex < 0) Or
+    (FCodeTodoList.ItemIndex >= FCodeSections.Count) Then
+    Exit;
+  Result := FCodeTodoList.ItemIndex;
+End;
+
+Procedure TProjectAssistantForm.SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
+Var
+  PlanRel, Err: String;
+  Idx: Integer;
+  Section: TPlanSection;
+Begin
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Idx := SelectedCodeSectionIndex;
+  If Idx < 0 Then
+    Begin
+      MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Section := TPlanSection(FCodeSections[Idx]);
+  If Not SetPlanSectionStatus(PlanRel, Idx, NewStatus, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  RefreshCodeTodos;
+  If Idx < FCodeTodoList.Items.Count Then
+    FCodeTodoList.ItemIndex := Idx;
+  SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
+    [Section.Title, PlanSectionStatusToStr(NewStatus)]));
+End;
+
+Procedure TProjectAssistantForm.CodeBtnRefreshClick(Sender: TObject);
+Begin
+  RefreshCodeTodos;
+End;
+
+Procedure TProjectAssistantForm.CodeBtnOpenPlanClick(Sender: TObject);
+Var
+  PlanRel, Resolved, Err: String;
+Begin
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      MessageDlg('No active plan. Use the Plan tab to create or set one.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  OpenMarkdownDocument(Resolved);
+End;
+
+Procedure TProjectAssistantForm.CodeBtnStartClick(Sender: TObject);
+Begin
+  SetSelectedCodeSectionStatus(pssInProgress);
+End;
+
+Procedure TProjectAssistantForm.CodeBtnDoneClick(Sender: TObject);
+Begin
+  SetSelectedCodeSectionStatus(pssComplete);
+End;
+
+Procedure TProjectAssistantForm.CodeBtnResetClick(Sender: TObject);
+Begin
+  SetSelectedCodeSectionStatus(pssNotStarted);
+End;
+
+Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
+Begin
+  { Double-click marks the package in progress (start work). }
+  SetSelectedCodeSectionStatus(pssInProgress);
 End;
 
 Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
@@ -2753,13 +3027,35 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.DocumentChanged(Const FileName: String; Const NewContent: String);
+Var
+  PlanRel, Resolved, Err: String;
 Begin
   WorkflowLogger.Debug('ProjectAssistant', 'Document changed: ' + FileName);
+  PlanRel := GetActivePlanRelativePath;
+  If (PlanRel = '') Or (Not Assigned(FCodePanel)) Then
+    Exit;
+  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
+    Exit;
+  If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
+    RefreshCodeTodos;
 End;
 
 Procedure TProjectAssistantForm.DocumentSaved(Const FileName: String);
+Var
+  PlanRel, Resolved, Err: String;
 Begin
   WorkflowLogger.Debug('ProjectAssistant', 'Document saved: ' + FileName);
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Exit;
+  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
+    Exit;
+  If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
+    Begin
+      RefreshPlanList;
+      If Assigned(FCodePanel) Then
+        RefreshCodeTodos;
+    End;
 End;
 
 End.

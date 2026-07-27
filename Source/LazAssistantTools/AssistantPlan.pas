@@ -10,7 +10,7 @@ Unit AssistantPlan;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, Contnrs;
 
 Const
   AssistantDocumentsDirName = 'Documents';
@@ -18,6 +18,19 @@ Const
   AssistantPlanStatusNotStarted = 'not started';
   AssistantPlanStatusInProgress = 'in progress';
   AssistantPlanStatusComplete = 'complete';
+
+Type
+  TPlanSectionStatus = (pssUnknown, pssNotStarted, pssInProgress, pssComplete);
+
+  { One ## work package from a plan Markdown file (Code mode TODO tile). }
+  TPlanSection = Class
+  Public
+    Title: String;
+    Status: TPlanSectionStatus;
+    StatusText: String;
+    HeadingLineIndex: Integer; { 0-based line of ## heading }
+    StatusLineIndex: Integer; { 0-based line of Status:; -1 if missing }
+  End;
 
 Function ProjectDocumentsDir: String;
 Function EnsureProjectDocumentsDir(Out ErrorText: String): Boolean;
@@ -33,6 +46,16 @@ Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter:
 Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: String;
   ReplaceAll, OpenAfter: Boolean; Out Resolved: String; Out ErrorText: String;
   Out ReplaceCount: Integer): Boolean;
+
+Function PlanSectionStatusToStr(Status: TPlanSectionStatus): String;
+Function StrToPlanSectionStatus(Const StatusText: String): TPlanSectionStatus;
+Function FormatPlanSectionTile(Section: TPlanSection; Index: Integer): String;
+{ Scan AbsolutePath (or resolved relative) into Sections (of TPlanSection; caller owns list). }
+Function ScanPlanSections(Const RelativeOrAbsolute: String; Sections: TObjectList;
+  Out ErrorText: String): Boolean;
+{ Rewrite Status: line for Sections[SectionIndex]; rescans not performed. }
+Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  NewStatus: TPlanSectionStatus; Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -386,6 +409,258 @@ Begin
     End;
   Finally
     SL.Free;
+  End;
+End;
+
+Function PlanSectionStatusToStr(Status: TPlanSectionStatus): String;
+Begin
+  Case Status Of
+    pssNotStarted: Result := AssistantPlanStatusNotStarted;
+    pssInProgress: Result := AssistantPlanStatusInProgress;
+    pssComplete: Result := AssistantPlanStatusComplete;
+  Else
+    Result := 'unknown';
+  End;
+End;
+
+Function StrToPlanSectionStatus(Const StatusText: String): TPlanSectionStatus;
+Var
+  T: String;
+Begin
+  T := LowerCase(Trim(StatusText));
+  T := StringReplace(T, '*', '', [rfReplaceAll]);
+  T := Trim(T);
+  If (T = AssistantPlanStatusNotStarted) Or (T = 'todo') Or (T = 'pending') Then
+    Result := pssNotStarted
+  Else If (T = AssistantPlanStatusInProgress) Or (T = 'wip') Or (T = 'doing') Then
+    Result := pssInProgress
+  Else If (T = AssistantPlanStatusComplete) Or (T = 'done') Or (T = 'finished') Then
+    Result := pssComplete
+  Else
+    Result := pssUnknown;
+End;
+
+Function FormatPlanSectionTile(Section: TPlanSection; Index: Integer): String;
+Var
+  StatusLabel: String;
+Begin
+  If Not Assigned(Section) Then
+    Begin
+      Result := '';
+      Exit;
+    End;
+  Case Section.Status Of
+    pssNotStarted: StatusLabel := 'Not started';
+    pssInProgress: StatusLabel := 'In progress';
+    pssComplete: StatusLabel := 'Complete';
+  Else
+    StatusLabel := 'No status';
+  End;
+  Result := Format('%d. %s — %s', [Index + 1, Section.Title, StatusLabel]);
+End;
+
+Function IsMarkdownHeadingLine(Const Line: String; Out Title: String): Boolean;
+Var
+  S: String;
+  Level: Integer;
+Begin
+  Result := False;
+  Title := '';
+  S := Trim(Line);
+  If Length(S) < 3 Then
+    Exit;
+  If S[1] <> '#' Then
+    Exit;
+  Level := 0;
+  While (Level < Length(S)) And (S[Level + 1] = '#') Do
+    Inc(Level);
+  { Work packages: ## or ### (not # document title alone). }
+  If (Level < 2) Or (Level > 3) Then
+    Exit;
+  Title := Trim(Copy(S, Level + 1, MaxInt));
+  While (Title <> '') And (Title[1] = ' ') Do
+    Delete(Title, 1, 1);
+  If Title = '' Then
+    Exit;
+  Result := True;
+End;
+
+Function ParseStatusLine(Const Line: String; Out StatusText: String): Boolean;
+Var
+  S, Lower: String;
+  P: Integer;
+Begin
+  Result := False;
+  StatusText := '';
+  S := Trim(Line);
+  S := StringReplace(S, '**', '', [rfReplaceAll]);
+  S := StringReplace(S, '*', '', [rfReplaceAll]);
+  S := Trim(S);
+  Lower := LowerCase(S);
+  If Pos('status:', Lower) <> 1 Then
+    Exit;
+  P := Pos(':', S);
+  If P < 1 Then
+    Exit;
+  StatusText := Trim(Copy(S, P + 1, MaxInt));
+  Result := StatusText <> '';
+End;
+
+Function ScanPlanSections(Const RelativeOrAbsolute: String; Sections: TObjectList;
+  Out ErrorText: String): Boolean;
+Var
+  Resolved: String;
+  SL: TStringList;
+  I: Integer;
+  Title, StatusText: String;
+  Section: TPlanSection;
+  J: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not Assigned(Sections) Then
+    Begin
+      ErrorText := 'Sections list is nil.';
+      Exit;
+    End;
+  Sections.Clear;
+  If Not ResolvePlanPath(RelativeOrAbsolute, Resolved, ErrorText) Then
+    Exit;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'Plan file not found: ' + Resolved;
+      Exit;
+    End;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(Resolved);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := E.Message;
+          Exit;
+        End;
+    End;
+    I := 0;
+    While I < SL.Count Do
+      Begin
+        If IsMarkdownHeadingLine(SL[I], Title) Then
+          Begin
+            Section := TPlanSection.Create;
+            Section.Title := Title;
+            Section.HeadingLineIndex := I;
+            Section.StatusLineIndex := -1;
+            Section.Status := pssUnknown;
+            Section.StatusText := '';
+            { First non-empty line under heading may be Status:. }
+            J := I + 1;
+            While J < SL.Count Do
+              Begin
+                If IsMarkdownHeadingLine(SL[J], Title) Then
+                  Break;
+                If Trim(SL[J]) = '' Then
+                  Begin
+                    Inc(J);
+                    Continue;
+                  End;
+                If ParseStatusLine(SL[J], StatusText) Then
+                  Begin
+                    Section.StatusLineIndex := J;
+                    Section.StatusText := StatusText;
+                    Section.Status := StrToPlanSectionStatus(StatusText);
+                  End;
+                Break;
+              End;
+            Sections.Add(Section);
+          End;
+        Inc(I);
+      End;
+    Result := True;
+    WorkflowLogger.Info('AssistantPlan',
+      Format('Scanned %d plan section(s) from %s', [Sections.Count, Resolved]));
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  NewStatus: TPlanSectionStatus; Out ErrorText: String): Boolean;
+Var
+  Resolved: String;
+  Sections: TObjectList;
+  Section: TPlanSection;
+  SL: TStringList;
+  StatusLine: String;
+  OpenAfter: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If NewStatus = pssUnknown Then
+    Begin
+      ErrorText := 'Cannot set status to unknown.';
+      Exit;
+    End;
+  If Not ResolvePlanPath(RelativeOrAbsolute, Resolved, ErrorText) Then
+    Exit;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(Resolved, Sections, ErrorText) Then
+      Exit;
+    If (SectionIndex < 0) Or (SectionIndex >= Sections.Count) Then
+      Begin
+        ErrorText := 'Section index out of range.';
+        Exit;
+      End;
+    Section := TPlanSection(Sections[SectionIndex]);
+    StatusLine := 'Status: ' + PlanSectionStatusToStr(NewStatus);
+    SL := TStringList.Create;
+    Try
+      Try
+        SL.LoadFromFile(Resolved);
+        If Section.StatusLineIndex >= 0 Then
+          Begin
+            If Section.StatusLineIndex >= SL.Count Then
+              Begin
+                ErrorText := 'Status line index invalid after load.';
+                Exit;
+              End;
+            SL[Section.StatusLineIndex] := StatusLine;
+          End
+        Else
+          Begin
+            { Insert blank line + Status: immediately under the heading. }
+            If Section.HeadingLineIndex >= SL.Count Then
+              Begin
+                ErrorText := 'Heading line index invalid after load.';
+                Exit;
+              End;
+            If (Section.HeadingLineIndex + 1 < SL.Count) And
+              (Trim(SL[Section.HeadingLineIndex + 1]) = '') Then
+              SL.Insert(Section.HeadingLineIndex + 2, StatusLine)
+            Else
+              Begin
+                SL.Insert(Section.HeadingLineIndex + 1, '');
+                SL.Insert(Section.HeadingLineIndex + 2, StatusLine);
+              End;
+          End;
+        SL.SaveToFile(Resolved);
+        Result := True;
+        WorkflowLogger.Info('AssistantPlan',
+          Format('Set section "%s" to %s in %s',
+            [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
+        OpenAfter := Assigned(FindMarkdownDocument(Resolved));
+        If OpenAfter Then
+          OpenMarkdownDocument(Resolved);
+      Except
+        On E: Exception Do
+          ErrorText := E.Message;
+      End;
+    Finally
+      SL.Free;
+    End;
+  Finally
+    Sections.Free;
   End;
 End;
 

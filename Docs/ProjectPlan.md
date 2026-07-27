@@ -402,13 +402,16 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 
 | Area | Status |
 |------|--------|
-| Packages / rename Assistant + Repository | Done |
-| Project Chat streaming + thinking + OAuth | Done (to be reshaped into Project Assistant) |
-| Read-only tools + multi-round tool calls | Done |
-| Markdown live windows | Done (entity/`&` and table fixes in lazmarkdown tree) |
-| Mode tabs / bottom bar / JSONL history | **Shell + history store landed** |
-| Plan write tools / Code write tools | **Not started** |
-| Plan section scan → TODO tiles | **Not started** |
+| Packages / rename Assistant + Repository | **Done** |
+| Project Assistant shell (tabs, bottom bar, current-turn) | **Done** |
+| Streaming chat + thinking + OAuth | **Done** |
+| Read-only tools + multi-round tool calls | **Done** |
+| Markdown live windows (LazMarkdown) | **Done** |
+| Multi-conversation History (archive / switch / delete / export) | **Done** |
+| Plan mode (Documents/, write tools, active plan, Plan tab) | **Done** |
+| Code mode TODO tiles (scan plan `##` + Status) | **Done** (Start / Done / Reset write-back) |
+| Code mode source edit tools | **Not started** |
+| Code mode compile/build tools (beyond Review Compile/Build UI) | **Partial** (Review buttons exist; not mode tools yet) |
 
 ### Phase 0 – Foundations — **done**
 Monorepo, three packages, event bus, logging, status footer.
@@ -416,36 +419,34 @@ Monorepo, three packages, event bus, logging, status footer.
 ### Phase 1 – LazRepositoryTools MVP — **largely done**
 Graph, status, fetch/pull/push refresh, Manage Repository form shell.
 
-### Phase 2 – LazAssistantTools MVP — **largely done** (pre-mode redesign)
+### Phase 2 – LazAssistantTools MVP — **done**
 Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
-### Phase 2.5 – Project Assistant shell & history
+### Phase 2.5 – Project Assistant shell & history — **done**
 
-**Order:** (1) shell rewrite + vendored LazMarkdown, (2) history JSONL, (3) mode tool gates.
-
-1. Rename UI to **Project Assistant** — **done**.
-2. Top **Chat | Plan | Code** tabs; **bottom** action bar — **done** (Plan/Code placeholders).
-3. Current-turn-only working surface; **thinking toggle** — **done**. Full message list still sent to the API.
+1. Rename UI to **Project Assistant** — **done** (`ProjectAssistantForm`).
+2. Top **Chat | Plan | Code** tabs; **bottom** action bar — **done**.
+3. Current-turn-only working surface; **thinking toggle** — **done**.
 4. Vendored **LazMarkdown** package — **done**.
-5. Create `.assistant/` on first use; **`history.jsonl` + `history.index.jsonl`** — **done**.
-6. History browser (list + search + open turn) — **done** (Chat tab side list).
-7. Persist mode + options in `.assistant/config.json` — **done** (`show_thinking`, `active_mode`).
-8. Mode-scoped tool allow-lists — **done** (shared read tools; write tools later per Plan/Code).
+5. `.assistant/` with **`conversation.jsonl` + index** (multi-conversation archives) — **done**.
+6. History browser + export/delete — **done**.
+7. Persist shell options in `.assistant/config.json` — **done** (`show_thinking`, `active_mode`, `plan_file`).
+8. Mode-scoped tool allow-lists — **done** (Chat read-only; Plan/Code Markdown tools).
 
-### Phase 3 – Plan mode
+### Phase 3 – Plan mode — **done**
 1. Default `Documents/` directory; create on demand — **done**.
-2. Tools: `write_markdown`, `update_markdown` limited to MD (+ path policy); also `list_plans`, `get/set_active_plan` — **done**.
+2. Tools: `write_markdown`, `update_markdown`, `list_plans`, `get/set_active_plan` — **done**.
 3. Open live Markdown window after create/update — **done**.
-4. Canonical plan path in config (`plan_file`); section + `Status:` convention in default template — **done**.
-5. Plan-mode system prompt: one work package per `##` section with a status footer line — **done**.
-6. Code mode: scan plan → tile list; mark done writes status back into the plan MD — **Phase 4**.
+4. Canonical plan path in config (`plan_file`); section + `Status:` convention — **done**.
+5. Plan-mode system prompt (write to disk, not only chat) + auto-save fallback — **done**.
+6. Plan tab: list / New / Open / Set active / Refresh / Open Documents/ — **done**.
 
-### Phase 4 – Code mode
-1. IDE-mediated source edit tools (sandbox, exact match, undoable).
-2. Compile/build tools + message capture (wire existing Review Compile/Build).
-3. TODO panel as **live scan of plan sections** (title tile + status footer); Next/Done/Skip update plan `Status:` lines then rescan.
-4. Optional edit confirmation policy for first release.
-5. End-to-end loop: plan task → edit → build → fix → mark done.
+### Phase 4 – Code mode — **in progress**
+1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset update plan `Status:` lines then rescan — **in progress**.
+2. IDE-mediated source edit tools (sandbox, exact match, undoable) — **not started**.
+3. Compile/build as mode tools (Review Compile/Build already on the bottom bar) — **partial**.
+4. Optional edit confirmation policy for first release — **deferred**.
+5. End-to-end loop: plan task → edit → build → fix → mark done — **blocked on source edits**.
 
 ### Phase 5 – Deep integration & polish
 - Git ↔ Assistant events; AI commit message; Fix Error → Code mode.
@@ -527,11 +528,11 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. **Agree refinements** in this document (especially: history panel placement, whether Code edits auto-apply, VCS ignore for `.assistant/`).
-2. Implement **Phase 2.5 shell**: rename, tabs, bottom bar, current-turn view, thinking toggle.
-3. Implement **history.jsonl + index** + browser; migrate off primary transcript scrollback.
-4. Wire **mode tool allow-lists** (Chat stays read-only).
-5. Phase 3 Plan writes → Phase 4 Code edits + TODO panel.
+1. **Code mode TODO panel** — scan active plan sections; Start / Done / Reset write `Status:` back into the plan MD (**current**).
+2. **Code mode source edit tools** — IDE-buffer edits under project sandbox.
+3. Wire Review Compile/Build more tightly into Code mode workflow (Fix Error → Code).
+4. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
+5. Package docs / example plan → code → compile loop.
 
 ---
 
@@ -572,8 +573,14 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Plan mode MD workflow (`Documents/`); Code mode edits + compile + **TODO tiles scanned from plan sections**.
 - Explicit phase 2.5–4 sequencing and roadblocks documented.
 
-**Next:** implement Phase 2.5 shell and history store once this plan revision is accepted.
+### 2026-07-26 – Status catch-up (implementation)
+- Phase 2.5 shell, multi-conversation History, Plan mode tools/UI: **landed**.
+- Form renamed to `ProjectAssistantForm`; Michell naming cleanup on assistant package.
+- Chat selection/clipboard and prompt Cut/Copy/Paste menus.
+- Phase 4 started: plan section scan + Code TODO panel (status write-back).
+
+**Next:** finish Code TODO tiles; then source edit tools and tighter compile loop.
 
 ---
 
-**This plan is living.** Mode details and schema may tighten when the first shell lands in the IDE.
+**This plan is living.** Update this status table when major mode work lands.
