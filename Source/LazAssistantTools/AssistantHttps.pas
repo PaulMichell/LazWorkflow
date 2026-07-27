@@ -561,9 +561,11 @@ Var
   BodyAnsi: RawByteString;
   BodyPtr: Pointer;
   BodyLen: DWORD;
-  ChunkRaw: RawByteString;
+  ChunkRaw, Utf8Carry: RawByteString;
   ChunkText: String;
   Stopped: Boolean;
+  CompleteLen, I, Need: Integer;
+  B0: Byte;
 Begin
   Result := False;
   StatusCode := 0;
@@ -571,6 +573,7 @@ Begin
   Session := Nil;
   Connect := Nil;
   Request := Nil;
+  Utf8Carry := '';
   If Not CrackUrlParts(Url, Host, Path, Port, UseHttps) Then
     Begin
       ErrorText := 'Invalid URL: ' + Url;
@@ -657,8 +660,43 @@ Begin
         Break;
       If BytesRead = 0 Then
         Break;
-      SetLength(ChunkRaw, BytesRead);
-      Move(Buf[0], ChunkRaw[1], BytesRead);
+      { Append to any incomplete UTF-8 sequence from the previous read. }
+      SetLength(ChunkRaw, Length(Utf8Carry) + Integer(BytesRead));
+      If Length(Utf8Carry) > 0 Then
+        Move(Utf8Carry[1], ChunkRaw[1], Length(Utf8Carry));
+      Move(Buf[0], ChunkRaw[Length(Utf8Carry) + 1], BytesRead);
+      Utf8Carry := '';
+      { Keep trailing incomplete multi-byte sequence for the next chunk. }
+      CompleteLen := Length(ChunkRaw);
+      I := CompleteLen;
+      While I >= 1 Do
+        Begin
+          B0 := Byte(ChunkRaw[I]);
+          If B0 < $80 Then
+            Break; { ASCII — sequence complete through I }
+          If (B0 And $C0) <> $80 Then
+            Begin
+              { Lead byte of a multi-byte sequence at I }
+              If (B0 And $E0) = $C0 Then
+                Need := 2
+              Else If (B0 And $F0) = $E0 Then
+                Need := 3
+              Else If (B0 And $F8) = $F0 Then
+                Need := 4
+              Else
+                Need := 1;
+              If I + Need - 1 > CompleteLen Then
+                Begin
+                  Utf8Carry := Copy(ChunkRaw, I, CompleteLen - I + 1);
+                  CompleteLen := I - 1;
+                End;
+              Break;
+            End;
+          Dec(I); { continuation byte — look for lead }
+        End;
+      If CompleteLen < 1 Then
+        Continue;
+      SetLength(ChunkRaw, CompleteLen);
       {$IF SIZEOF(CHAR) = 2}
       ChunkText := UTF8ToString(ChunkRaw);
       {$ELSE}

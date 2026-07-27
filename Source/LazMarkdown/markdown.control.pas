@@ -440,6 +440,11 @@ end;
 procedure TCustomMarkDownControl.ParseMarkDown;
 
 begin
+  { Drop selection before layout rebuild — indices become invalid and Copy AVs. }
+  try
+    ClearSelection;
+  except
+  end;
   FRenderer.ParseMarkdown(FMarkDown);
   CalcLayout;
 end;
@@ -505,15 +510,33 @@ begin
 end;
 
 procedure TCustomMarkDownControl.CopySelectionToClipBoard;
-
+var
+  TextValue: String;
 begin
-  if HasSelection then
-    Clipboard.AsText:=GetSelectionText;
+  { Selection can be stale after a re-parse during live streaming — never AV. }
+  if not HasSelection then
+    Exit;
+  try
+    TextValue := GetSelectionText;
+    if TextValue <> '' then
+      Clipboard.AsText := TextValue;
+  except
+    on E: Exception do
+      { ignore copy failures from half-rebuilt layout }
+      ;
+  end;
 end;
 
 function TCustomMarkDownControl.HasSelection: Boolean;
 begin
-  Result := Assigned(FRenderer) and FRenderer.HasSelection;
+  Result := False;
+  if not Assigned(FRenderer) then
+    Exit;
+  try
+    Result := FRenderer.HasSelection;
+  except
+    Result := False;
+  end;
 end;
 
 function TCustomMarkDownControl.SelectWordAt(X, Y: Integer): Boolean;
@@ -830,7 +853,14 @@ end;
 
 function TCustomMarkDownControl.GetSelectionText: String;
 begin
-  Result := FRenderer.GetSelectedText;
+  Result := '';
+  if not Assigned(FRenderer) then
+    Exit;
+  try
+    Result := FRenderer.GetSelectedText;
+  except
+    Result := '';
+  end;
 end;
 
 function TCustomMarkDownControl.GetSelectionColor: TColor;

@@ -926,30 +926,42 @@ end;
 
 function TMarkDownCanvasRenderer.GetSelectedText: String;
 var
-  I: Integer;
+  I, StartC, EndC, CharLen: Integer;
   Item,PrevItem: TLayoutItem;
   ItemText: String;
 begin
   Result:='';
   PrevItem:=Nil;
+  if not Assigned(FLists) then
+    Exit;
   for I:=0 to FLists.Items.Count - 1 do
     begin
     Item:=FLists.Items[I];
+    if not Assigned(Item) then
+      Continue;
     if Item.IsSelected and (Item.Kind=likText) then
       begin
-      ItemText:=UTF8Copy(Item.Text, Item.SelectionStartChar + 1,
-                          Item.SelectionEndChar - Item.SelectionStartChar);
+      CharLen:=UTF8Length(Item.Text);
+      StartC:=Item.SelectionStartChar;
+      EndC:=Item.SelectionEndChar;
+      if StartC < 0 then
+        StartC:=0;
+      if EndC > CharLen then
+        EndC:=CharLen;
+      if EndC <= StartC then
+        Continue;
+      ItemText:=UTF8Copy(Item.Text, StartC + 1, EndC - StartC);
       if Result<>'' then
         begin
         // Add spacing between items
-        if (I>0) and (PrevItem.Y<>Item.Y) then
+        if Assigned(PrevItem) and (PrevItem.Y<>Item.Y) then
           Result:=Result + LineEnding
         else
           Result:=Result + ' ';
         end;
       Result:=Result + ItemText;
+      PrevItem:=Item;
       end;
-    PrevItem:=Item;
     end;
 end;
 

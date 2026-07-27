@@ -127,6 +127,7 @@ Type
     FHttpClient: TFPHTTPClient;
     FStreamControl: THttpsStreamControl;
     FFinishEmitted: Boolean;
+    FWrotePlanFile: Boolean; { True after a successful write_markdown this stream. }
     Procedure NotifyMain;
     Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
     Procedure ProcessSseChunk(Const Chunk: String);
@@ -233,6 +234,7 @@ Begin
   FModel := Model;
   FRequestJson := RequestJson;
   FFinishEmitted := False;
+  FWrotePlanFile := False;
   FOnToken := OnToken;
   FSseBuffer := '';
   FContentAccum := '';
@@ -322,6 +324,23 @@ Begin
     Result := Node.AsString;
 End;
 
+Function SanitizeStreamText(Const SourceText: String): String;
+Var
+  I: Integer;
+  C: Char;
+Begin
+  { Drop C0 controls except tab/LF/CR — incomplete UTF-8 / binary noise. }
+  Result := '';
+  SetLength(Result, Length(SourceText));
+  Result := '';
+  For I := 1 To Length(SourceText) Do
+    Begin
+      C := SourceText[I];
+      If (C = #9) Or (C = #10) Or (C = #13) Or (Ord(C) >= 32) Then
+        Result := Result + C;
+    End;
+End;
+
 Function CollapseTrailingPhraseRepeats(Const SourceText: String): String;
 Var
   PhraseLen, MaxLen, Count, PosEnd: Integer;
@@ -374,7 +393,7 @@ Begin
     Exit;
   If Accum = '' Then
     Begin
-      Accum := CollapseTrailingPhraseRepeats(Delta);
+      Accum := CollapseTrailingPhraseRepeats(SanitizeStreamText(Delta));
       Result := True;
       Exit;
     End;
@@ -384,7 +403,7 @@ Begin
   { Cumulative snapshot (grows by replacing the whole string). }
   If (Length(Delta) >= Length(Accum)) And (Copy(Delta, 1, Length(Accum)) = Accum) Then
     Begin
-      Candidate := CollapseTrailingPhraseRepeats(Delta);
+      Candidate := CollapseTrailingPhraseRepeats(SanitizeStreamText(Delta));
       If Candidate = Accum Then
         Exit;
       Accum := Candidate;
@@ -398,9 +417,18 @@ Begin
   If (Length(Accum) >= Length(Delta)) And
     (Copy(Accum, Length(Accum) - Length(Delta) + 1, Length(Delta)) = Delta) Then
     Exit;
-  Candidate := CollapseTrailingPhraseRepeats(Accum + Delta);
+  Candidate := CollapseTrailingPhraseRepeats(SanitizeStreamText(Accum + SanitizeStreamText(Delta)));
   If Candidate = Accum Then
     Exit;
+  { Hard cap — runaway streams must not grow forever or block Ready. }
+  If Length(Candidate) > 400000 Then
+    Begin
+      If Length(Accum) >= 400000 Then
+        Exit;
+      Accum := Copy(Candidate, 1, 400000);
+      Result := True;
+      Exit;
+    End;
   Accum := Candidate;
   Result := True;
 End;
@@ -520,9 +548,10 @@ Function TAssistantStreamThread.HasToolCalls: Boolean;
 Var
   I: Integer;
 Begin
+  { Require a tool name — partial argument-only stubs must not start a tool round. }
   Result := False;
   For I := 0 To High(FToolCalls) Do
-    If (FToolCalls[I].Name <> '') Or (FToolCalls[I].Arguments <> '') Then
+    If Trim(FToolCalls[I].Name) <> '' Then
       Begin
         Result := True;
         Exit;
@@ -570,6 +599,8 @@ Begin
       FService.AddToolResult(FToolCalls[I].Id, Content);
       WorkflowLogger.Info('AssistantStream',
         Format('tool %s ok=%s len=%d', [FToolCalls[I].Name, BoolToStr(Ok, True), Length(Content)]));
+      If Ok And SameText(FToolCalls[I].Name, 'write_markdown') Then
+        FWrotePlanFile := True;
     End;
 End;
 
@@ -701,10 +732,11 @@ Procedure TAssistantStreamThread.Execute;
 Const
   { One HTTP stream that ends with tool_calls counts as a round; allow multi-file
     exploration without failing mid-answer on large units. }
-  MaxToolRounds = 12;
+  MaxToolRounds = 6;
 Var
   Url, ErrorText, RequestJson: String;
   RoundNo: Integer;
+  WroteBefore: Boolean;
 Begin
   Url := Trim(FApiBase);
   While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
@@ -712,6 +744,7 @@ Begin
   Url := Url + '/chat/completions';
 
   RequestJson := FRequestJson;
+  FWrotePlanFile := False;
   For RoundNo := 0 To MaxToolRounds Do
     Begin
       If Terminated Then
@@ -731,15 +764,20 @@ Begin
           EmitSnapshots(True, '');
           Exit;
         End;
-      { Tool round: run tools on the main thread, then continue the conversation. }
       Inc(FToolRound);
       WorkflowLogger.Info('AssistantStream', Format('tool round %d (%d calls)',
         [FToolRound, Length(FToolCalls)]));
-      { ErrorText while not finished is treated as a status phase by the chat UI. }
       EmitSnapshots(False, 'Running tools…');
+      WroteBefore := FWrotePlanFile;
       Synchronize(@RunToolRoundOnMain);
       If Terminated Or Not Assigned(FService) Then
         Break;
+      { Avoid endless write_markdown / plan-tool ping-pong. }
+      If FWrotePlanFile And WroteBefore Then
+        Begin
+          EmitSnapshots(True, '');
+          Exit;
+        End;
       RequestJson := FService.BuildNextRequestJson;
     End;
   If Terminated Then
@@ -747,9 +785,11 @@ Begin
       If Not FFinishEmitted Then
         EmitSnapshots(True, 'Cancelled.');
     End
+  Else If FWrotePlanFile Or (FContentAccum <> '') Then
+    EmitSnapshots(True, '') { Prefer Ready over a hard error after useful work. }
   Else
     EmitSnapshots(True, Format(
-      'Tool-call round limit reached after %d rounds. Ask a more focused question or use start_line on read_file to page large files.',
+      'Stopped after %d tool rounds. Try a more focused request.',
       [FToolRound]));
 End;
 
@@ -926,15 +966,8 @@ Begin
       Inc(P, L);
     End;
   If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
-    Begin
-      Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
-        '],"tools":' + ToolsJsonCached;
-      { Plan mode: nudge the model to call tools (write_markdown) rather than
-        dump the plan only into the assistant message. }
-      If FActiveMode = amPlan Then
-        Result := Result + ',"tool_choice":"required"';
-      Result := Result + '}'
-    End
+    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
+      '],"tools":' + ToolsJsonCached + '}'
   Else
     Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']}';
 End;

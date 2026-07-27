@@ -1582,6 +1582,8 @@ Begin
 
   View := TMarkDownControl(FChatView);
   Try
+    { Clear selection before replacing live stream text (avoids copy AVs). }
+    View.ClearSelection;
     View.MarkDown.BeginUpdate;
     Try
       { Force a content change so the control always re-parses when stepping conversation. }
