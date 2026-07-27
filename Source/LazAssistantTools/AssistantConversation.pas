@@ -94,6 +94,10 @@ Type
     Function TurnCount: Integer;
     Function IndexCount: Integer;
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
+    { Project shell prefs in .assistant/config.json (mode tab, thinking visibility, …). }
+    Function LoadShellConfig(Out ShowThinking: Boolean; Out ActiveMode: TAssistantMode): Boolean;
+    Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode): Boolean;
+    { Compatibility wrappers — prefer LoadShellConfig / SaveShellConfig. }
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
     { Multi-conversation: current files are conversation.jsonl + conversation.index.jsonl;
@@ -669,38 +673,17 @@ Begin
     Result := TConversationIndexEntry(FIndex[Index]);
 End;
 
-Function TAssistantConversationStore.SaveShowThinking(ShowThinking: Boolean): Boolean;
-Var
-  SL: TStringList;
-Begin
-  Result := False;
-  If Not EnsureDir Then
-    Exit;
-  SL := TStringList.Create;
-  Try
-    SL.Add('{');
-    SL.Add('  "show_thinking": ' + LowerCase(BoolToStr(ShowThinking, True)));
-    SL.Add('}');
-    Try
-      SL.SaveToFile(ConfigPath);
-      Result := True;
-    Except
-      On E: Exception Do
-        FLastError := E.Message;
-    End;
-  Finally
-    SL.Free;
-  End;
-End;
-
-Function TAssistantConversationStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
+Function TAssistantConversationStore.LoadShellConfig(Out ShowThinking: Boolean;
+  Out ActiveMode: TAssistantMode): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
   SL: TStringList;
+  ModeText: String;
 Begin
   Result := False;
   ShowThinking := True;
+  ActiveMode := amChat;
   If Not FileExistsUTF8(ConfigPath) Then
     Exit;
   SL := TStringList.Create;
@@ -709,19 +692,97 @@ Begin
     Try
       SL.LoadFromFile(ConfigPath);
       Data := GetJSON(SL.Text);
-      If Data Is TJSONObject Then
-        Begin
-          Obj := TJSONObject(Data);
-          ShowThinking := Obj.Get('show_thinking', True);
-          Result := True;
-        End;
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      ShowThinking := Obj.Get('show_thinking', True);
+      ModeText := Obj.Get('active_mode', 'chat');
+      ActiveMode := StrToAssistantMode(ModeText);
+      Result := True;
     Except
-      Result := False;
+      On E: Exception Do
+        Begin
+          FLastError := E.Message;
+          Result := False;
+        End;
     End;
   Finally
     Data.Free;
     SL.Free;
   End;
+End;
+
+Function TAssistantConversationStore.SaveShellConfig(ShowThinking: Boolean;
+  ActiveMode: TAssistantMode): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  SL: TStringList;
+  OwnsObj: Boolean;
+Begin
+  Result := False;
+  If Not EnsureDir Then
+    Exit;
+  Data := Nil;
+  Obj := Nil;
+  OwnsObj := False;
+  SL := TStringList.Create;
+  Try
+    { Merge into existing config.json so future keys survive. }
+    If FileExistsUTF8(ConfigPath) Then
+      Begin
+        Try
+          SL.LoadFromFile(ConfigPath);
+          Data := GetJSON(SL.Text);
+          If Data Is TJSONObject Then
+            Obj := TJSONObject(Data)
+          Else
+            FreeAndNil(Data);
+        Except
+          FreeAndNil(Data);
+          Obj := Nil;
+        End;
+      End;
+    If Obj = Nil Then
+      Begin
+        Obj := TJSONObject.Create;
+        OwnsObj := True;
+      End;
+    Obj.Booleans['show_thinking'] := ShowThinking;
+    Obj.Strings['active_mode'] := AssistantModeToStr(ActiveMode);
+    Try
+      SL.Text := Obj.FormatJSON;
+      SL.SaveToFile(ConfigPath);
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := E.Message;
+    End;
+  Finally
+    If OwnsObj Then
+      Obj.Free
+    Else
+      Data.Free;
+    SL.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.SaveShowThinking(ShowThinking: Boolean): Boolean;
+Var
+  Mode: TAssistantMode;
+  IgnoredThinking: Boolean;
+Begin
+  Mode := amChat;
+  If Not LoadShellConfig(IgnoredThinking, Mode) Then
+    Mode := amChat;
+  Result := SaveShellConfig(ShowThinking, Mode);
+End;
+
+Function TAssistantConversationStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
+Var
+  Mode: TAssistantMode;
+Begin
+  Result := LoadShellConfig(ShowThinking, Mode);
 End;
 
 Function NewArchiveId: String;

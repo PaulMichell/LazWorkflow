@@ -429,7 +429,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 4. Vendored **LazMarkdown** package — **done**.
 5. Create `.assistant/` on first use; **`history.jsonl` + `history.index.jsonl`** — **done**.
 6. History browser (list + search + open turn) — **done** (Chat tab side list).
-7. Persist mode + options in `.assistant/config.json` — **partial** (`show_thinking`).
+7. Persist mode + options in `.assistant/config.json` — **done** (`show_thinking`, `active_mode`).
 8. Mode-scoped tool allow-lists — **done** (shared read tools; write tools later per Plan/Code).
 
 ### Phase 3 – Plan mode

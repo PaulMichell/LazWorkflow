@@ -113,6 +113,7 @@ Type
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
     FHistoryIds: TStringList; { Parallel to FHistoryCombo; '' = current conversation. }
     FHistoryUpdating: Boolean;
+    FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -128,7 +129,10 @@ Type
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
     Function CurrentModeFromTabs: TAssistantMode;
+    Procedure SelectModeTab(Mode: TAssistantMode);
     Procedure ApplyActiveMode;
+    Procedure PersistShellConfig;
+    Procedure ApplyShellConfigFromStore;
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -222,6 +226,7 @@ Begin
   FDisplaySystemNote := '';
   FShowThinking := True;
   FActiveMode := amChat;
+  FApplyingShellConfig := False;
   FReviewInProgress := False;
   FStreamStart := 0;
   FTurnStartedAt := '';
@@ -339,6 +344,29 @@ Begin
     Result := amChat;
 End;
 
+Procedure TProjectAssistantForm.SelectModeTab(Mode: TAssistantMode);
+Begin
+  If Not Assigned(FPages) Then
+    Exit;
+  FApplyingShellConfig := True;
+  Try
+    Case Mode Of
+      amPlan:
+        If Assigned(FTabPlan) Then
+          FPages.ActivePage := FTabPlan;
+      amCode:
+        If Assigned(FTabCode) Then
+          FPages.ActivePage := FTabCode;
+    Else
+      If Assigned(FTabChat) Then
+        FPages.ActivePage := FTabChat;
+    End;
+  Finally
+    FApplyingShellConfig := False;
+  End;
+  ApplyActiveMode;
+End;
+
 Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
   FActiveMode := CurrentModeFromTabs;
@@ -366,20 +394,53 @@ Begin
   End;
 End;
 
+Procedure TProjectAssistantForm.PersistShellConfig;
+Begin
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  If ProjectAssistantConversation.ProjectRoot = '' Then
+    Exit;
+  If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, FActiveMode) Then
+    WorkflowLogger.Warning('ProjectAssistant',
+      'config.json save failed: ' + ProjectAssistantConversation.LastError);
+End;
+
+Procedure TProjectAssistantForm.ApplyShellConfigFromStore;
+Var
+  ShowThinking: Boolean;
+  Mode: TAssistantMode;
+Begin
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode) Then
+    Exit;
+  FShowThinking := ShowThinking;
+  UpdateThinkingActionCaption;
+  SelectModeTab(Mode);
+End;
+
 Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
 Begin
+  If FApplyingShellConfig Then
+    Exit;
   If FSending Then
     Begin
       { Keep mode stable while a stream is in flight. }
-      Case FActiveMode Of
-        amPlan: FPages.ActivePage := FTabPlan;
-        amCode: FPages.ActivePage := FTabCode;
-      Else
-        FPages.ActivePage := FTabChat;
+      FApplyingShellConfig := True;
+      Try
+        Case FActiveMode Of
+          amPlan: FPages.ActivePage := FTabPlan;
+          amCode: FPages.ActivePage := FTabCode;
+        Else
+          FPages.ActivePage := FTabChat;
+        End;
+      Finally
+        FApplyingShellConfig := False;
       End;
       Exit;
     End;
   ApplyActiveMode;
+  PersistShellConfig;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
     WorkflowLogger.Info('ProjectAssistant', 'Mode tab: ' + FPages.ActivePage.Caption);
   RefreshConversationList;
@@ -388,26 +449,26 @@ End;
 Procedure TProjectAssistantForm.EnsureConversationStore;
 Var
   Root: String;
-  ShowThinking: Boolean;
+  RootChanged: Boolean;
 Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   Root := ProjectAssistantRoot;
   If Root = '' Then
     Exit;
-  If Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot),
-    ExcludeTrailingPathDelimiter(Root)) Then
+  RootChanged := Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot),
+    ExcludeTrailingPathDelimiter(Root));
+  If RootChanged Then
     Begin
       ProjectAssistantConversation.SetProjectRoot(Root);
       ProjectAssistantConversation.Load; { one bulk parse into memory }
-      If ProjectAssistantConversation.LoadShowThinking(ShowThinking) Then
-        Begin
-          FShowThinking := ShowThinking;
-          UpdateThinkingActionCaption;
-        End;
+      ApplyShellConfigFromStore;
     End
   Else If Not ProjectAssistantConversation.Loaded Then
-    ProjectAssistantConversation.Load;
+    Begin
+      ProjectAssistantConversation.Load;
+      ApplyShellConfigFromStore;
+    End;
 End;
 
 Function TProjectAssistantForm.ConversationListTurnIndex(ListIndex: Integer): Integer;
@@ -858,8 +919,7 @@ Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
-    ProjectAssistantConversation.SaveShowThinking(FShowThinking);
+  PersistShellConfig;
   RefreshChatDisplay(True);
 End;
 
