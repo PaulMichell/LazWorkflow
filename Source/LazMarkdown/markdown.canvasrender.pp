@@ -932,7 +932,7 @@ var
 begin
   Result:='';
   PrevItem:=Nil;
-  if not Assigned(FLists) then
+  if not Assigned(FLists.Items) then
     Exit;
   for I:=0 to FLists.Items.Count - 1 do
     begin
