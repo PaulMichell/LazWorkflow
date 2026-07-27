@@ -869,8 +869,15 @@ Begin
       Inc(P, L);
     End;
   If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
-    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
-      '],"tools":' + ToolsJsonCached + '}'
+    Begin
+      Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
+        '],"tools":' + ToolsJsonCached;
+      { Plan mode: nudge the model to call tools (write_markdown) rather than
+        dump the plan only into the assistant message. }
+      If FActiveMode = amPlan Then
+        Result := Result + ',"tool_choice":"required"';
+      Result := Result + '}'
+    End
   Else
     Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']}';
 End;

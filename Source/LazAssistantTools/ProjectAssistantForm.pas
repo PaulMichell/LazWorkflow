@@ -123,6 +123,7 @@ Type
     FHistoryIds: TStringList; { Parallel to FHistoryCombo; '' = current conversation. }
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
+    FModeLocked: Boolean; { True while a send uses Chat surface but keeps Plan/Code tools. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -141,6 +142,10 @@ Type
     Procedure SelectModeTab(Mode: TAssistantMode);
     Procedure ApplyActiveMode;
     Procedure ShowChatSurfaceKeepMode;
+    Procedure LockModeForSend;
+    Procedure UnlockModeAfterSend;
+    Procedure PersistPlanReplyIfNeeded(Const ErrorText: String);
+    Function LooksLikePlanMarkdown(Const Body: String): Boolean;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
     Procedure EnsurePlanTabUi;
@@ -247,6 +252,7 @@ Begin
   FShowThinking := True;
   FActiveMode := amChat;
   FApplyingShellConfig := False;
+  FModeLocked := False;
   FReviewInProgress := False;
   FStreamStart := 0;
   FTurnStartedAt := '';
@@ -406,9 +412,94 @@ Begin
     AssistantClient.SetActiveMode(FActiveMode);
 End;
 
+Procedure TProjectAssistantForm.LockModeForSend;
+Begin
+  { Capture mode from the tab the user is on, then freeze it for the turn.
+    SetSending(True) used to call ApplyActiveMode after the UI switched to Chat,
+    which reclassified the turn as Chat and stripped Plan write tools. }
+  FActiveMode := CurrentModeFromTabs;
+  FModeLocked := True;
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(FActiveMode);
+  WorkflowLogger.Info('ProjectAssistant',
+    'Mode locked for send: ' + AssistantModeToStr(FActiveMode));
+End;
+
+Procedure TProjectAssistantForm.UnlockModeAfterSend;
+Begin
+  FModeLocked := False;
+End;
+
+Function TProjectAssistantForm.LooksLikePlanMarkdown(Const Body: String): Boolean;
+Var
+  T: String;
+Begin
+  T := Trim(Body);
+  Result := (Length(T) >= 120) And
+    ((Pos('##', T) > 0) Or (Pos('# ', T) = 1) Or (Pos('# ', T) > 0)) And
+    ((Pos('Status:', T) > 0) Or (Pos('status:', LowerCase(T)) > 0) Or
+     (Pos('Implementation', T) > 0) Or (Pos('work package', LowerCase(T)) > 0));
+End;
+
+Procedure TProjectAssistantForm.PersistPlanReplyIfNeeded(Const ErrorText: String);
+Var
+  PlanRel, Resolved, Err, Body: String;
+  Existing: TStringList;
+  NeedWrite: Boolean;
+Begin
+  { Safety net: if Plan mode completed without write_markdown, save chat plan body. }
+  If FActiveMode <> amPlan Then
+    Exit;
+  If ErrorText <> '' Then
+    Exit;
+  Body := Trim(FLiveContent);
+  If Not LooksLikePlanMarkdown(Body) Then
+    Exit;
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    PlanRel := DefaultPlanRelativePath;
+  NeedWrite := True;
+  Existing := TStringList.Create;
+  Try
+    If ResolvePlanPath(PlanRel, Resolved, Err) And FileExistsUTF8(Resolved) Then
+      Begin
+        Try
+          Existing.LoadFromFile(Resolved);
+          { Skip if disk already holds this content (tool wrote successfully). }
+          If Trim(Existing.Text) = Body Then
+            NeedWrite := False
+          Else If Length(Trim(Existing.Text)) >= Length(Body) Then
+            { Disk already as long as the reply — assume tools wrote it. }
+            NeedWrite := False;
+        Except
+          NeedWrite := True;
+        End;
+      End;
+  Finally
+    Existing.Free;
+  End;
+  If Not NeedWrite Then
+    Exit;
+  If Not WriteMarkdownFile(PlanRel, Body + LineEnding, True, Resolved, Err) Then
+    Begin
+      WorkflowLogger.Warning('ProjectAssistant', 'Auto-save plan failed: ' + Err);
+      Exit;
+    End;
+  SetActivePlanRelativePath(ProjectRelativePath(Resolved));
+  PersistShellConfig;
+  RefreshPlanList;
+  If FViewingLive Then
+    FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
+      '` (auto-saved because the model did not call write_markdown).';
+  WorkflowLogger.Info('ProjectAssistant', 'Auto-saved plan reply to ' + GetActivePlanRelativePath);
+End;
+
 Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
-  FActiveMode := CurrentModeFromTabs;
+  { When mode is locked for a send, keep FActiveMode (Plan/Code) even if the
+    notebook shows Chat for the turn surface. }
+  If Not FModeLocked Then
+    FActiveMode := CurrentModeFromTabs;
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
   Case FActiveMode Of
@@ -689,20 +780,19 @@ Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
 Begin
   If FApplyingShellConfig Then
     Exit;
-  If FSending Then
+  If FSending Or FModeLocked Then
     Begin
-      { Keep mode stable while a stream is in flight. }
-      FApplyingShellConfig := True;
-      Try
-        Case FActiveMode Of
-          amPlan: FPages.ActivePage := FTabPlan;
-          amCode: FPages.ActivePage := FTabCode;
-        Else
-          FPages.ActivePage := FTabChat;
+      { During a send the notebook may show Chat while mode stays Plan/Code.
+        Do not re-derive mode from the visible tab; keep the user on Chat surface. }
+      If FModeLocked And Assigned(FTabChat) And (FPages.ActivePage <> FTabChat) Then
+        Begin
+          FApplyingShellConfig := True;
+          Try
+            FPages.ActivePage := FTabChat;
+          Finally
+            FApplyingShellConfig := False;
+          End;
         End;
-      Finally
-        FApplyingShellConfig := False;
-      End;
       Exit;
     End;
   ApplyActiveMode;
@@ -1694,6 +1784,7 @@ Begin
       FStreamingActive := False;
       If Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
+      UnlockModeAfterSend;
       SetSending(False);
       Exit;
     End;
@@ -1732,6 +1823,8 @@ Begin
   RecordCurrentTurn(ErrorText);
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
+  PersistPlanReplyIfNeeded(ErrorText);
+  UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
   If FViewingLive Then
@@ -1743,9 +1836,8 @@ Begin
       FAssistantContent := FLiveContent;
       FAssistantThinking := FLiveThinking;
       If ErrorText <> '' Then
-        FDisplaySystemNote := '**Error:** ' + ErrorText
-      Else
-        FDisplaySystemNote := '';
+        FDisplaySystemNote := '**Error:** ' + ErrorText;
+      { PersistPlanReplyIfNeeded may set a success note when ErrorText is empty. }
       RefreshChatDisplay(True, True);
     End;
   PersistSession;
@@ -1763,6 +1855,7 @@ Begin
           FStreamingActive := False;
           If Assigned(AssistantClient) Then
             AssistantClient.MarkStreamComplete;
+          UnlockModeAfterSend;
           SetSending(False);
         End;
       Exit;
@@ -1815,6 +1908,7 @@ Begin
   FStreamingActive := False;
   RecordCurrentTurn('cancelled');
   FViewingLive := True;
+  UnlockModeAfterSend;
   SetSending(False);
   FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
@@ -1826,7 +1920,7 @@ End;
 
 Procedure TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
 Var
-  ApiText, ContextBlock: String;
+  ApiText, ContextBlock, PlanRel: String;
   WithContext: Boolean;
 Begin
   If Trim(UserText) = '' Then
@@ -1844,9 +1938,20 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
-      ApplyActiveMode; { capture Plan/Code/Chat from the tab the user is on }
-      ShowChatSurfaceKeepMode; { show the turn surface; keep FActiveMode }
+      LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
+      ShowChatSurfaceKeepMode; { turn UI on Chat tab; tools stay mode-locked }
       ApiText := UserText;
+      If FActiveMode = amPlan Then
+        Begin
+          PlanRel := GetActivePlanRelativePath;
+          If PlanRel = '' Then
+            PlanRel := DefaultPlanRelativePath;
+          ApiText :=
+            '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
+            'using the write_markdown tool (path: "' + PlanRel +
+            '"). Chat reply must be a short summary only, not the full plan body.' +
+            LineEnding + LineEnding + UserText;
+        End;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(UserText, WithContext);
       FLiveUser := FDisplayUser;
@@ -1857,7 +1962,7 @@ Begin
       If WithContext Then
         Begin
           ContextBlock := BuildIDEContextBlock;
-          ApiText := UserText + LineEnding + LineEnding + ContextBlock;
+          ApiText := ApiText + LineEnding + LineEnding + ContextBlock;
         End;
       AppendMessage('user', FDisplayUser);
       { Prior turns already on AssistantClient are sent with this request (full context). }
