@@ -2013,10 +2013,15 @@ Begin
         Begin
           ProjectAssistantConversation.SetProjectRoot(Root);
           ProjectAssistantConversation.Load;
+          { Must run after Load: restore mode tab + thinking from config.json.
+            EnsureConversationStore alone is not enough — Bind always reloads
+            the store and used to skip ApplyShellConfigFromStore. }
+          ApplyShellConfigFromStore;
         End;
     End;
 
   RefreshFromConfig;
+  { Re-sync client tools/mode after shell prefs (and after default tab if no config). }
   ApplyActiveMode;
   If Root <> '' Then
     Begin
