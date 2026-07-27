@@ -125,6 +125,7 @@ Type
     FToolCalls: TAssistantToolCallArray;
     FToolRound: Integer;
     FHttpClient: TFPHTTPClient;
+    FStreamControl: THttpsStreamControl;
     FFinishEmitted: Boolean;
     Procedure NotifyMain;
     Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
@@ -136,6 +137,8 @@ Type
     Function HasToolCalls: Boolean;
     Procedure RunToolRoundOnMain;
     Function DoOneHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
+    Procedure HttpsChunk(Const Chunk: String);
+    Function HttpsShouldStop: Boolean;
   Protected
     Procedure Execute; Override;
   Public
@@ -238,11 +241,28 @@ Begin
   SetLength(FToolCalls, 0);
   FToolRound := 0;
   FHttpClient := Nil;
+  FStreamControl := Nil;
+End;
+
+Procedure TAssistantStreamThread.HttpsChunk(Const Chunk: String);
+Begin
+  If Not Terminated Then
+    ProcessSseChunk(Chunk);
+End;
+
+Function TAssistantStreamThread.HttpsShouldStop: Boolean;
+Begin
+  Result := Terminated;
 End;
 
 Procedure TAssistantStreamThread.AbortHttp;
 Begin
-  { Unblock a stuck HTTPMethod so Terminate can finish without hanging the IDE. }
+  { Unblock WinINet / TFPHTTPClient so Terminate can finish without hanging the IDE. }
+  If Assigned(FStreamControl) Then
+    Try
+      FStreamControl.Abort;
+    Except
+    End;
   If Assigned(FHttpClient) Then
     Try
       FHttpClient.Terminate;
@@ -559,50 +579,42 @@ End;
 Function TAssistantStreamThread.DoOneHttpRound(Const Url, RequestJson: String;
   Out ErrorText: String): Boolean;
 Var
-  Client: TFPHTTPClient;
-  Body: TStringStream;
-  OutStream: TAssistantSSEStream;
   Code: Integer;
-  ErrBody, SslErr: String;
+  ErrBody, Headers: String;
+  Control: THttpsStreamControl;
 Begin
   Result := False;
   ErrorText := '';
   FSseBuffer := '';
   SetLength(FToolCalls, 0);
-  { Streaming SSE still uses TFPHTTPClient + OpenSSL; bootstrap DLLs first. }
-  If SameText(Copy(Url, 1, 8), 'https://') And (Not EnsureOpenSSLReady(SslErr)) Then
+  If Terminated Then
     Begin
-      ErrorText := SslErr;
+      ErrorText := 'Cancelled.';
       Exit;
     End;
-  Client := TFPHTTPClient.Create(Nil);
-  FHttpClient := Client;
-  Body := TStringStream.Create(RequestJson);
-  OutStream := TAssistantSSEStream.Create(Self);
+
+  Headers := 'Authorization: Bearer ' + FAccessToken;
+  Control := THttpsStreamControl.Create;
+  FStreamControl := Control;
   Try
     Try
+      If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
+        Control, Code, ErrorText) Then
+        Begin
+          If Terminated And (ErrorText = '') Then
+            ErrorText := 'Cancelled.';
+          Exit;
+        End;
       If Terminated Then
         Begin
           ErrorText := 'Cancelled.';
           Exit;
         End;
-      Client.AllowRedirect := True;
-      Client.AddHeader('Authorization', 'Bearer ' + FAccessToken);
-      Client.AddHeader('Content-Type', 'application/json');
-      Client.AddHeader('Accept', 'text/event-stream');
-      Client.RequestBody := Body;
-      Client.HTTPMethod('POST', Url, OutStream, []);
-      If Terminated Then
-        Begin
-          ErrorText := 'Cancelled.';
-          Exit;
-        End;
-      Code := Client.ResponseStatusCode;
       If (Code < 200) Or (Code >= 300) Then
         Begin
           ErrBody := Trim(FSseBuffer);
           If ErrBody = '' Then
-            ErrBody := Client.ResponseStatusText;
+            ErrBody := Format('HTTP %d', [Code]);
           If Length(ErrBody) > 400 Then
             ErrBody := Copy(ErrBody, 1, 400) + '…';
           ErrorText := Format('HTTP %d: %s', [Code, ErrBody]);
@@ -623,11 +635,8 @@ Begin
           End;
     End;
   Finally
-    Client.RequestBody := Nil;
-    OutStream.Free;
-    Body.Free;
-    FHttpClient := Nil;
-    Client.Free;
+    FStreamControl := Nil;
+    Control.Free;
   End;
 End;
 

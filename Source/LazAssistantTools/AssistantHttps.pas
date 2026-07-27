@@ -31,6 +31,34 @@ Function HttpsPostForm(Const Url, FormBody: String; Out ResponseBody: String;
 Function HttpsPostJson(Const Url, JsonBody, ExtraHeaders: String;
   Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
 
+Type
+  { Streaming POST (SSE). OnChunk receives decoded UTF-8 text chunks as they arrive. }
+  THttpsChunkEvent = Procedure(Const Chunk: String) Of Object;
+  THttpsStopCheck = Function: Boolean Of Object;
+
+  { Opaque cancel handle for in-flight WinINet streams. }
+  THttpsStreamControl = Class
+  Private
+    FLock: TRTLCriticalSection;
+    FSession: Pointer;
+    FConnect: Pointer;
+    FRequest: Pointer;
+    FClosedByAbort: Boolean;
+  Public
+    Constructor Create;
+    Destructor Destroy; Override;
+    Procedure AssignHandles(Session, Connect, Request: Pointer);
+    Procedure ClearHandles;
+    Procedure Abort;
+    { True after Abort closed native handles — caller must not close them again. }
+    Property ClosedByAbort: Boolean Read FClosedByAbort;
+  End;
+
+{ Streaming JSON POST. On Windows uses WinINet (no OpenSSL). Elsewhere OpenSSL/TFPHTTPClient. }
+Function HttpsPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
+  OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck; Control: THttpsStreamControl;
+  Out StatusCode: Integer; Out ErrorText: String): Boolean;
+
 { User-facing hint when OpenSSL is missing (Windows). }
 Function OpenSSLMissingHint: String;
 
@@ -42,18 +70,85 @@ Uses
   {$ENDIF}
   Forms, fphttpclient, opensslsockets, openssl, WorkflowLog;
 
+Constructor THttpsStreamControl.Create;
+Begin
+  Inherited Create;
+  InitCriticalSection(FLock);
+  FSession := Nil;
+  FConnect := Nil;
+  FRequest := Nil;
+  FClosedByAbort := False;
+End;
+
+Destructor THttpsStreamControl.Destroy;
+Begin
+  Abort;
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure THttpsStreamControl.AssignHandles(Session, Connect, Request: Pointer);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FSession := Session;
+    FConnect := Connect;
+    FRequest := Request;
+    FClosedByAbort := False;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure THttpsStreamControl.ClearHandles;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FSession := Nil;
+    FConnect := Nil;
+    FRequest := Nil;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure THttpsStreamControl.Abort;
+Var
+  S, C, R: Pointer;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    R := FRequest;
+    C := FConnect;
+    S := FSession;
+    FRequest := Nil;
+    FConnect := Nil;
+    FSession := Nil;
+    If (R <> Nil) Or (C <> Nil) Or (S <> Nil) Then
+      FClosedByAbort := True;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+  {$IFDEF WINDOWS}
+  If R <> Nil Then
+    InternetCloseHandle(HINTERNET(R));
+  If C <> Nil Then
+    InternetCloseHandle(HINTERNET(C));
+  If S <> Nil Then
+    InternetCloseHandle(HINTERNET(S));
+  {$ELSE}
+  S := S; C := C; R := R;
+  {$ENDIF}
+End;
+
 Function OpenSSLMissingHint: String;
 Begin
   {$IFDEF WINDOWS}
   Result :=
-    'Could not load OpenSSL (needed for streamed HTTPS to x.ai).' + LineEnding +
-    'Install OpenSSL for Windows (Win64) and copy these next to lazarus.exe,' + LineEnding +
-    'or into a folder on PATH:' + LineEnding +
-    '  libssl-1_1-x64.dll  and  libcrypto-1_1-x64.dll' + LineEnding +
-    '(or libssl-3-x64.dll and libcrypto-3-x64.dll if your FPC build supports them).' + LineEnding +
-    'Download: https://slproweb.com/products/Win32OpenSSL.html' + LineEnding +
-    '(Light package is enough.)' + LineEnding +
-    'Note: Sign-in uses Windows WinINet and does not require OpenSSL.';
+    'Could not load OpenSSL for HTTPS streaming.' + LineEnding +
+    'WinINet streaming should be used on Windows; if you still see this message, ' +
+    'rebuild LazAssistantTools. Optional: install OpenSSL Light and copy ' +
+    'libssl-1_1-x64.dll + libcrypto-1_1-x64.dll next to lazarus.exe.';
   {$ELSE}
   Result :=
     'Could not initialize OpenSSL. Install libssl development packages ' +
@@ -449,6 +544,233 @@ Begin
   {$ENDIF}
   Result := HttpsViaFpHttp('POST', Url, 'application/json', JsonBody, ExtraHeaders,
     ResponseBody, StatusCode, ErrorText);
+End;
+
+{$IFDEF WINDOWS}
+Function WinINetPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
+  OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck; Control: THttpsStreamControl;
+  Out StatusCode: Integer; Out ErrorText: String): Boolean;
+Var
+  Session, Connect, Request: HINTERNET;
+  Host, Path, Headers: String;
+  Port: INTERNET_PORT;
+  UseHttps: Boolean;
+  Flags, BytesRead, StatusSize, Index: DWORD;
+  StatusBuf: Array[0..31] Of Char;
+  Buf: Array[0..8191] Of Byte;
+  BodyAnsi: RawByteString;
+  BodyPtr: Pointer;
+  BodyLen: DWORD;
+  ChunkRaw: RawByteString;
+  ChunkText: String;
+  Stopped: Boolean;
+Begin
+  Result := False;
+  StatusCode := 0;
+  ErrorText := '';
+  Session := Nil;
+  Connect := Nil;
+  Request := Nil;
+  If Not CrackUrlParts(Url, Host, Path, Port, UseHttps) Then
+    Begin
+      ErrorText := 'Invalid URL: ' + Url;
+      Exit;
+    End;
+  If Assigned(ShouldStop) And ShouldStop() Then
+    Begin
+      ErrorText := 'Cancelled.';
+      Exit;
+    End;
+
+  Session := InternetOpen(PChar('LazAssistantTools/1.0'), INTERNET_OPEN_TYPE_PRECONFIG, Nil, Nil, 0);
+  If Session = Nil Then
+    Begin
+      ErrorText := 'WinINet InternetOpen failed (' + IntToStr(GetLastError) + ')';
+      Exit;
+    End;
+  Try
+    Connect := InternetConnect(Session, PChar(Host), Port, Nil, Nil, INTERNET_SERVICE_HTTP, 0, 0);
+    If Connect = Nil Then
+      Begin
+        ErrorText := 'WinINet InternetConnect failed (' + IntToStr(GetLastError) + ')';
+        Exit;
+      End;
+
+    Flags := INTERNET_FLAG_RELOAD Or INTERNET_FLAG_NO_CACHE_WRITE Or INTERNET_FLAG_KEEP_CONNECTION Or
+      INTERNET_FLAG_NO_UI;
+    If UseHttps Then
+      Flags := Flags Or INTERNET_FLAG_SECURE;
+
+    Request := HttpOpenRequest(Connect, PChar('POST'), PChar(Path), Nil, Nil, Nil, Flags, 0);
+    If Request = Nil Then
+      Begin
+        ErrorText := 'WinINet HttpOpenRequest failed (' + IntToStr(GetLastError) + ')';
+        Exit;
+      End;
+
+    If Assigned(Control) Then
+      Control.AssignHandles(Pointer(Session), Pointer(Connect), Pointer(Request));
+
+    Headers := 'Accept: text/event-stream'#13#10 +
+      'Content-Type: application/json'#13#10;
+    If Trim(ExtraHeaders) <> '' Then
+      Begin
+        Headers := Headers + ExtraHeaders;
+        If (Length(Headers) < 2) Or (Copy(Headers, Length(Headers) - 1, 2) <> #13#10) Then
+          Headers := Headers + #13#10;
+      End;
+
+    {$IF SIZEOF(CHAR) = 2}
+    BodyAnsi := UTF8Encode(JsonBody);
+    {$ELSE}
+    BodyAnsi := RawByteString(JsonBody);
+    {$ENDIF}
+    BodyPtr := Nil;
+    BodyLen := 0;
+    If Length(BodyAnsi) > 0 Then
+      Begin
+        BodyPtr := @BodyAnsi[1];
+        BodyLen := Length(BodyAnsi);
+      End;
+
+    If Not HttpSendRequest(Request, PChar(Headers), Length(Headers), BodyPtr, BodyLen) Then
+      Begin
+        ErrorText := 'WinINet HttpSendRequest failed (' + IntToStr(GetLastError) + ')';
+        Exit;
+      End;
+
+    FillChar(StatusBuf, SizeOf(StatusBuf), 0);
+    StatusSize := SizeOf(StatusBuf);
+    Index := 0;
+    If HttpQueryInfo(Request, HTTP_QUERY_STATUS_CODE, @StatusBuf[0], StatusSize, Index) Then
+      StatusCode := StrToIntDef(string(StatusBuf), 0);
+
+    Stopped := False;
+    Repeat
+      If Assigned(ShouldStop) And ShouldStop() Then
+        Begin
+          Stopped := True;
+          Break;
+        End;
+      BytesRead := 0;
+      If Not InternetReadFile(Request, @Buf[0], SizeOf(Buf), BytesRead) Then
+        Break;
+      If BytesRead = 0 Then
+        Break;
+      SetLength(ChunkRaw, BytesRead);
+      Move(Buf[0], ChunkRaw[1], BytesRead);
+      {$IF SIZEOF(CHAR) = 2}
+      ChunkText := UTF8ToString(ChunkRaw);
+      {$ELSE}
+      ChunkText := string(ChunkRaw);
+      {$ENDIF}
+      If Assigned(OnChunk) And (ChunkText <> '') Then
+        OnChunk(ChunkText);
+    Until False;
+
+    If Stopped Then
+      Begin
+        ErrorText := 'Cancelled.';
+        Result := False;
+      End
+    Else
+      Result := True;
+  Finally
+    If Assigned(Control) And Control.ClosedByAbort Then
+      Control.ClearHandles
+    Else
+      Begin
+        If Assigned(Control) Then
+          Control.ClearHandles;
+        If Request <> Nil Then
+          InternetCloseHandle(Request);
+        If Connect <> Nil Then
+          InternetCloseHandle(Connect);
+        If Session <> Nil Then
+          InternetCloseHandle(Session);
+      End;
+  End;
+End;
+{$ENDIF}
+
+Function HttpsPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
+  OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck; Control: THttpsStreamControl;
+  Out StatusCode: Integer; Out ErrorText: String): Boolean;
+Var
+  Client: TFPHTTPClient;
+  BodyStream: TStringStream;
+  OutStream: TMemoryStream;
+  SslErr, Auth: String;
+  Chunk: String;
+  N, ColonPos: Integer;
+  Buf: Array[0..8191] Of Byte;
+Begin
+  Result := False;
+  StatusCode := 0;
+  ErrorText := '';
+  {$IFDEF WINDOWS}
+  { Prefer WinINet so streamed chat works without OpenSSL DLLs. }
+  Result := WinINetPostJsonStream(Url, JsonBody, ExtraHeaders, OnChunk, ShouldStop, Control,
+    StatusCode, ErrorText);
+  Exit;
+  {$ENDIF}
+
+  If SameText(Copy(Url, 1, 8), 'https://') And (Not EnsureOpenSSLReady(SslErr)) Then
+    Begin
+      ErrorText := SslErr;
+      Exit;
+    End;
+
+  Client := TFPHTTPClient.Create(Nil);
+  BodyStream := TStringStream.Create(JsonBody);
+  OutStream := TMemoryStream.Create;
+  Try
+    Try
+      Client.AllowRedirect := True;
+      Client.AddHeader('Content-Type', 'application/json');
+      Client.AddHeader('Accept', 'text/event-stream');
+      Auth := Trim(ExtraHeaders);
+      If Auth <> '' Then
+        Begin
+          ColonPos := Pos(':', Auth);
+          If ColonPos > 1 Then
+            Client.AddHeader(Trim(Copy(Auth, 1, ColonPos - 1)),
+              Trim(Copy(Auth, ColonPos + 1, MaxInt)));
+        End;
+      Client.RequestBody := BodyStream;
+      Client.HTTPMethod('POST', Url, OutStream, []);
+      StatusCode := Client.ResponseStatusCode;
+      OutStream.Position := 0;
+      While OutStream.Position < OutStream.Size Do
+        Begin
+          If Assigned(ShouldStop) And ShouldStop() Then
+            Begin
+              ErrorText := 'Cancelled.';
+              Exit;
+            End;
+          N := OutStream.Read(Buf[0], SizeOf(Buf));
+          If N <= 0 Then
+            Break;
+          SetLength(Chunk, N);
+          Move(Buf[0], Chunk[1], N);
+          If Assigned(OnChunk) Then
+            OnChunk(Chunk);
+        End;
+      Result := True;
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := E.Message;
+          If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
+            ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
+        End;
+    End;
+  Finally
+    Client.RequestBody := Nil;
+    OutStream.Free;
+    BodyStream.Free;
+    Client.Free;
+  End;
 End;
 
 End.

@@ -140,6 +140,7 @@ Type
     Function CurrentModeFromTabs: TAssistantMode;
     Procedure SelectModeTab(Mode: TAssistantMode);
     Procedure ApplyActiveMode;
+    Procedure ShowChatSurfaceKeepMode;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
     Procedure EnsurePlanTabUi;
@@ -385,6 +386,24 @@ Begin
     FApplyingShellConfig := False;
   End;
   ApplyActiveMode;
+End;
+
+Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
+Begin
+  { Plan/Code workspace tabs do not host the turn view. Switch the notebook to
+    Chat for the reply without changing FActiveMode (Plan tools stay armed). }
+  If Not Assigned(FPages) Or Not Assigned(FTabChat) Then
+    Exit;
+  If FPages.ActivePage = FTabChat Then
+    Exit;
+  FApplyingShellConfig := True;
+  Try
+    FPages.ActivePage := FTabChat;
+  Finally
+    FApplyingShellConfig := False;
+  End;
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(FActiveMode);
 End;
 
 Procedure TProjectAssistantForm.ApplyActiveMode;
@@ -1825,7 +1844,8 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
-      ApplyActiveMode;
+      ApplyActiveMode; { capture Plan/Code/Chat from the tab the user is on }
+      ShowChatSurfaceKeepMode; { show the turn surface; keep FActiveMode }
       ApiText := UserText;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(UserText, WithContext);
