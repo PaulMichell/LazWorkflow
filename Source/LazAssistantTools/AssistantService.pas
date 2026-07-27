@@ -322,29 +322,86 @@ Begin
     Result := Node.AsString;
 End;
 
-Function TAssistantStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
+Function CollapseTrailingPhraseRepeats(Const SourceText: String): String;
+Var
+  PhraseLen, MaxLen, Count, PosEnd: Integer;
+  Phrase: String;
 Begin
-  { Same rules as content merge: init / cumulative snapshot / stale ignore / append. }
+  { Collapse "… phrase phrase phrase" (same unit 3+ times) to a single trailing phrase.
+    Guards model/API loops such as repeating "0 of 6 work packages…". }
+  Result := SourceText;
+  If Length(Result) < 40 Then
+    Exit;
+  MaxLen := Length(Result) Div 3;
+  If MaxLen > 240 Then
+    MaxLen := 240;
+  PhraseLen := 12;
+  While PhraseLen <= MaxLen Do
+    Begin
+      Phrase := Copy(Result, Length(Result) - PhraseLen + 1, PhraseLen);
+      If Trim(Phrase) = '' Then
+        Begin
+          Inc(PhraseLen);
+          Continue;
+        End;
+      Count := 1;
+      PosEnd := Length(Result) - PhraseLen;
+      While (PosEnd >= PhraseLen) And
+        (Copy(Result, PosEnd - PhraseLen + 1, PhraseLen) = Phrase) Do
+        Begin
+          Inc(Count);
+          Dec(PosEnd, PhraseLen);
+        End;
+      If Count >= 3 Then
+        Begin
+          { Keep one copy of the repeated unit. }
+          SetLength(Result, Length(Result) - (Count - 1) * PhraseLen);
+          Exit;
+        End;
+      Inc(PhraseLen);
+    End;
+End;
+
+Function TAssistantStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
+Var
+  Candidate: String;
+Begin
+  { OpenAI-style streams usually send token deltas (append). Some providers send
+    cumulative snapshots (replace when Delta starts with Accum). Also ignore
+    exact re-sends of the last chunk and collapse runaway trailing repeats. }
   Result := False;
   If Delta = '' Then
     Exit;
   If Accum = '' Then
     Begin
-      Accum := Delta;
+      Accum := CollapseTrailingPhraseRepeats(Delta);
       Result := True;
       Exit;
     End;
+  { Exact duplicate of full buffer. }
+  If Delta = Accum Then
+    Exit;
+  { Cumulative snapshot (grows by replacing the whole string). }
   If (Length(Delta) >= Length(Accum)) And (Copy(Delta, 1, Length(Accum)) = Accum) Then
     Begin
-      If Delta = Accum Then
+      Candidate := CollapseTrailingPhraseRepeats(Delta);
+      If Candidate = Accum Then
         Exit;
-      Accum := Delta;
+      Accum := Candidate;
       Result := True;
       Exit;
     End;
+  { Stale shorter prefix of what we already have. }
   If (Length(Delta) < Length(Accum)) And (Copy(Accum, 1, Length(Delta)) = Delta) Then
     Exit;
-  Accum := Accum + Delta;
+  { Exact re-send of the last chunk (common when SSE frames are duplicated). }
+  If (Length(Accum) >= Length(Delta)) And
+    (Copy(Accum, Length(Accum) - Length(Delta) + 1, Length(Delta)) = Delta) Then
+    Exit;
+  Candidate := CollapseTrailingPhraseRepeats(Accum + Delta);
+  If Candidate = Accum Then
+    Exit;
+  Accum := Candidate;
   Result := True;
 End;
 
