@@ -115,11 +115,12 @@ Procedure TAssistantSettingsForm.PopulateSkills;
 Var
   Skills: TAssistantSkillList;
   I, SelectIdx: Integer;
-  ActiveName: String;
+  ActiveName, Root: String;
 Begin
   ActiveName := '';
   If Assigned(AssistantChatConfig) Then
     ActiveName := AssistantChatConfig.ActiveSkill;
+  Root := AssistantUserSkillsRoot;
   FSkillCombo.Style := csDropDownList;
   FSkillCombo.Items.BeginUpdate;
   Try
@@ -137,6 +138,22 @@ Begin
     FSkillCombo.Items.EndUpdate;
   End;
   FSkillCombo.ItemIndex := SelectIdx;
+  { Show the real scan path — ~/.grok is per OS user profile, not cloud-synced. }
+  If Assigned(FHintLabel) Then
+    Begin
+      If Length(Skills) = 0 Then
+        FHintLabel.Caption :=
+          'No skills found. Skills are local to this OS user (not shared across Windows/Linux).' +
+          LineEnding +
+          'Create folders as: ' + Root + PathDelim + '<name>' + PathDelim + 'SKILL.md' +
+          LineEnding +
+          'Copy from another machine''s ~/.grok/skills if needed. IDE context still attaches the active unit.'
+      Else
+        FHintLabel.Caption :=
+          Format('Loaded %d skill(s) from %s', [Length(Skills), Root]) + LineEnding +
+          'Each skill is a subfolder with SKILL.md. Skills are not auto-synced across platforms. ' +
+          'IDE context attaches the active source unit (or selection) and project file list.';
+    End;
 End;
 
 Procedure TAssistantSettingsForm.PopulateModels(ForceRefresh: Boolean);

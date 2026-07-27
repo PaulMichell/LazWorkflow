@@ -159,12 +159,12 @@ object AssistantSettingsForm: TAssistantSettingsForm
   end
   object FHintLabel: TLabel
     Left = 16
-    Height = 40
+    Height = 56
     Top = 468
     Width = 488
     Anchors = [akTop, akLeft, akRight]
     AutoSize = False
-    Caption = 'User skills load from ~/.grok/skills/<name>/SKILL.md into the system prompt. IDE context attaches the active source unit (or selection) and the project file list so the model can answer about code you have open.'
+    Caption = 'User skills load from ~/.grok/skills/<name>/SKILL.md (local per OS; not cloud-synced). IDE context attaches the active source unit (or selection) and the project file list so the model can answer about code you have open.'
     Font.Color = clGrayText
     ParentColor = False
     ParentFont = False
