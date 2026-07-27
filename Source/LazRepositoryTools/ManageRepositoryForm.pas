@@ -797,8 +797,9 @@ Begin
   Base := GraphScale(GitGraphRowHeight);
   Pad := GraphScale(6);
   Result := Base;
-  { Prefer live font metrics so row height tracks painted text on HiDPI. }
-  If Assigned(FPaintBox) And FPaintBox.HandleAllocated Then
+  { Prefer live font metrics so row height tracks painted text on HiDPI.
+    TPaintBox is a TGraphicControl (no handle); Canvas is valid without HandleAllocated. }
+  If Assigned(FPaintBox) Then
     Begin
       PrepareGraphTextFont(FPaintBox.Canvas, False);
       TextH := FPaintBox.Canvas.TextHeight('Ag');
@@ -830,8 +831,9 @@ Function TManageRepositoryForm.GraphDateColumnWidth: Integer;
 Var
   SampleW: Integer;
 Begin
-  { Measure the fixed date format so the subject never underlaps the date. }
-  If Assigned(FPaintBox) And FPaintBox.HandleAllocated Then
+  { Measure the fixed date format so the subject never underlaps the date.
+    TPaintBox has no window handle; use Canvas metrics directly. }
+  If Assigned(FPaintBox) Then
     Begin
       PrepareGraphTextFont(FPaintBox.Canvas, True);
       SampleW := FPaintBox.Canvas.TextWidth('0000-00-00 00:00');
