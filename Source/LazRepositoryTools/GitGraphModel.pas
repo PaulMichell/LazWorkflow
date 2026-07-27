@@ -18,11 +18,13 @@ Uses
 
 Const
   GitGraphFieldSep = #1;
+  { Design metrics at 96 DPI. Scale with TControl.Scale96ToForm before painting or hit-testing. }
   GitGraphRowHeight = 22;
   GitGraphLaneWidth = 16;
   GitGraphLeftMargin = 12;
   GitGraphNodeRadius = 4;
   GitGraphTextGap = 10;
+  GitGraphDateGap = 12; { padding after the measured date column }
   GitGraphDetailBatch = 80;
   GitGraphPrefetchRows = 30;
 
@@ -74,8 +76,9 @@ Type
     Procedure RebuildLayout;
     Function Commit(Index: Integer): TGitCommitRec;
     Function Edge(Index: Integer): TGitGraphEdge;
-    Function TotalHeight: Integer;
-    Function GraphWidth: Integer;
+    { RowHeight / LeftMargin / LaneWidth must already be DPI-scaled device pixels. }
+    Function TotalHeight(RowHeight: Integer): Integer;
+    Function GraphWidth(LeftMargin, LaneWidth: Integer): Integer;
     Function LaneColorIndex(Lane: Integer): Integer;
     Property Count: Integer Read FCount;
     Property EdgeCount: Integer Read FEdgeCount;
@@ -481,16 +484,32 @@ Begin
   Result := FEdges[Index];
 End;
 
-Function TGitGraphModel.TotalHeight: Integer;
+Function TGitGraphModel.TotalHeight(RowHeight: Integer): Integer;
+Var
+  RH: Integer;
 Begin
-  Result := FCount * GitGraphRowHeight;
-  If Result < GitGraphRowHeight Then
-    Result := GitGraphRowHeight;
+  If RowHeight > 0 Then
+    RH := RowHeight
+  Else
+    RH := GitGraphRowHeight;
+  Result := FCount * RH;
+  If Result < RH Then
+    Result := RH;
 End;
 
-Function TGitGraphModel.GraphWidth: Integer;
+Function TGitGraphModel.GraphWidth(LeftMargin, LaneWidth: Integer): Integer;
+Var
+  LM, LW: Integer;
 Begin
-  Result := GitGraphLeftMargin + FLaneCount * GitGraphLaneWidth + GitGraphLaneWidth;
+  If LeftMargin > 0 Then
+    LM := LeftMargin
+  Else
+    LM := GitGraphLeftMargin;
+  If LaneWidth > 0 Then
+    LW := LaneWidth
+  Else
+    LW := GitGraphLaneWidth;
+  Result := LM + FLaneCount * LW + LW;
 End;
 
 Function TGitGraphModel.LaneColorIndex(Lane: Integer): Integer;

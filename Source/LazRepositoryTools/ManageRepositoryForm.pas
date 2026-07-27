@@ -152,6 +152,16 @@ Type
     Procedure MoveSelection(Delta: Integer);
     Function SelectedSha: String;
     Function ScrollOffset: Integer;
+    Function GraphScale(DesignPx: Integer): Integer;
+    Function GraphRowHeight: Integer;
+    Function GraphLaneWidth: Integer;
+    Function GraphLeftMargin: Integer;
+    Function GraphNodeRadius: Integer;
+    Function GraphTextGap: Integer;
+    Function GraphDateColumnWidth: Integer;
+    Function GraphContentWidth: Integer;
+    Function GraphContentHeight: Integer;
+    Procedure PrepareGraphTextFont(ACanvas: TCanvas; IsDate: Boolean);
     Function RowAtY(Y: Integer): Integer;
     Function LaneX(Lane: Integer): Integer;
     Function RowMidY(Row: Integer): Integer;
@@ -442,6 +452,10 @@ Procedure TManageRepositoryForm.FormShow(Sender: TObject);
 Begin
   BindRepository;
   ApplyConfig;
+  { Remeasure scroll range once the paintbox handle exists (font metrics available). }
+  UpdateScrollRange;
+  If Assigned(FPaintBox) Then
+    FPaintBox.Invalidate;
 End;
 
 Procedure TManageRepositoryForm.ApplyConfig;
@@ -492,12 +506,12 @@ Begin
       End;
     VK_PRIOR:
       Begin
-        MoveSelection(-(FPaintBox.ClientHeight Div GitGraphRowHeight));
+        MoveSelection(-(FPaintBox.ClientHeight Div GraphRowHeight));
         Key := 0;
       End;
     VK_NEXT:
       Begin
-        MoveSelection(FPaintBox.ClientHeight Div GitGraphRowHeight);
+        MoveSelection(FPaintBox.ClientHeight Div GraphRowHeight);
         Key := 0;
       End;
   End;
@@ -522,16 +536,17 @@ End;
 
 Procedure TManageRepositoryForm.SelectRow(Index: Integer; ScrollIntoView: Boolean);
 Var
-  RowTop, RowBottom, ViewH, NewPos: Integer;
+  RowTop, RowBottom, ViewH, NewPos, RH: Integer;
 Begin
   If (Index < 0) Or (Index >= FModel.Count) Then
     Exit;
   FSelectedIndex := Index;
   If ScrollIntoView Then
     Begin
+      RH := GraphRowHeight;
       ViewH := FPaintBox.ClientHeight;
-      RowTop := Index * GitGraphRowHeight;
-      RowBottom := RowTop + GitGraphRowHeight;
+      RowTop := Index * RH;
+      RowBottom := RowTop + RH;
       If RowTop < ScrollOffset Then
         FScrollBar.Position := RowTop
       Else If RowBottom > ScrollOffset + ViewH Then
@@ -647,17 +662,20 @@ End;
 
 Procedure TManageRepositoryForm.GetVisibleRange(Out FirstRow, LastRow: Integer);
 Var
-  ViewH: Integer;
+  ViewH, RH: Integer;
 Begin
   FirstRow := 0;
   LastRow := -1;
   If FModel.Count = 0 Then
     Exit;
+  RH := GraphRowHeight;
+  If RH < 1 Then
+    RH := 1;
   ViewH := FPaintBox.ClientHeight;
   If ViewH < 1 Then
     ViewH := 1;
-  FirstRow := ScrollOffset Div GitGraphRowHeight;
-  LastRow := (ScrollOffset + ViewH) Div GitGraphRowHeight;
+  FirstRow := ScrollOffset Div RH;
+  LastRow := (ScrollOffset + ViewH) Div RH;
   If FirstRow < 0 Then
     FirstRow := 0;
   If LastRow >= FModel.Count Then
@@ -705,17 +723,20 @@ End;
 
 Procedure TManageRepositoryForm.UpdateScrollRange;
 Var
-  ViewH, ContentH, MaxPos: Integer;
+  ViewH, ContentH, MaxPos, RH: Integer;
 Begin
+  If (Not Assigned(FPaintBox)) Or (Not Assigned(FScrollBar)) Or (Not Assigned(FModel)) Then
+    Exit;
   ViewH := FPaintBox.ClientHeight;
   If ViewH < 1 Then
     ViewH := 1;
-  ContentH := FModel.TotalHeight;
+  RH := GraphRowHeight;
+  ContentH := GraphContentHeight;
   MaxPos := ContentH - ViewH;
   If MaxPos < 0 Then
     MaxPos := 0;
   FScrollBar.Min := 0;
-  FScrollBar.SmallChange := GitGraphRowHeight;
+  FScrollBar.SmallChange := RH;
   FScrollBar.LargeChange := ViewH;
   { Position runs 0..Max; PageSize 0 avoids platform-specific range quirks. }
   FScrollBar.PageSize := 0;
@@ -744,10 +765,10 @@ Var
   NewPos, MaxPos, ViewH: Integer;
 Begin
   ViewH := FPaintBox.ClientHeight;
-  MaxPos := FModel.TotalHeight - ViewH;
+  MaxPos := GraphContentHeight - ViewH;
   If MaxPos < 0 Then
     MaxPos := 0;
-  NewPos := FScrollBar.Position - (WheelDelta Div 120) * GitGraphRowHeight * 3;
+  NewPos := FScrollBar.Position - (WheelDelta Div 120) * GraphRowHeight * 3;
   If NewPos < 0 Then
     NewPos := 0;
   If NewPos > MaxPos Then
@@ -757,23 +778,128 @@ Begin
   Handled := True;
 End;
 
-Function TManageRepositoryForm.LaneX(Lane: Integer): Integer;
+Function TManageRepositoryForm.GraphScale(DesignPx: Integer): Integer;
 Begin
-  Result := GitGraphLeftMargin + Lane * GitGraphLaneWidth + GitGraphLaneWidth Div 2;
+  { Scale design (96 DPI) pixels to the form's current PPI. Works on Windows 4K
+    and Linux HiDPI without hard-coding monitor DPI. }
+  If Assigned(FPaintBox) Then
+    Result := FPaintBox.Scale96ToForm(DesignPx)
+  Else
+    Result := Scale96ToForm(DesignPx);
+  If (DesignPx > 0) And (Result < 1) Then
+    Result := 1;
+End;
+
+Function TManageRepositoryForm.GraphRowHeight: Integer;
+Var
+  TextH, Base, Pad: Integer;
+Begin
+  Base := GraphScale(GitGraphRowHeight);
+  Pad := GraphScale(6);
+  Result := Base;
+  { Prefer live font metrics so row height tracks painted text on HiDPI. }
+  If Assigned(FPaintBox) And FPaintBox.HandleAllocated Then
+    Begin
+      PrepareGraphTextFont(FPaintBox.Canvas, False);
+      TextH := FPaintBox.Canvas.TextHeight('Ag');
+      Result := Max(Base, TextH + Pad);
+    End;
+End;
+
+Function TManageRepositoryForm.GraphLaneWidth: Integer;
+Begin
+  Result := GraphScale(GitGraphLaneWidth);
+End;
+
+Function TManageRepositoryForm.GraphLeftMargin: Integer;
+Begin
+  Result := GraphScale(GitGraphLeftMargin);
+End;
+
+Function TManageRepositoryForm.GraphNodeRadius: Integer;
+Begin
+  Result := GraphScale(GitGraphNodeRadius);
+End;
+
+Function TManageRepositoryForm.GraphTextGap: Integer;
+Begin
+  Result := GraphScale(GitGraphTextGap);
+End;
+
+Function TManageRepositoryForm.GraphDateColumnWidth: Integer;
+Var
+  SampleW: Integer;
+Begin
+  { Measure the fixed date format so the subject never underlaps the date. }
+  If Assigned(FPaintBox) And FPaintBox.HandleAllocated Then
+    Begin
+      PrepareGraphTextFont(FPaintBox.Canvas, True);
+      SampleW := FPaintBox.Canvas.TextWidth('0000-00-00 00:00');
+    End
+  Else
+    SampleW := GraphScale(110);
+  Result := SampleW + GraphScale(GitGraphDateGap);
+End;
+
+Function TManageRepositoryForm.GraphContentWidth: Integer;
+Begin
+  Result := FModel.GraphWidth(GraphLeftMargin, GraphLaneWidth);
+End;
+
+Function TManageRepositoryForm.GraphContentHeight: Integer;
+Begin
+  Result := FModel.TotalHeight(GraphRowHeight);
+End;
+
+Procedure TManageRepositoryForm.PrepareGraphTextFont(ACanvas: TCanvas; IsDate: Boolean);
+Begin
+  If Not Assigned(ACanvas) Then
+    Exit;
+  { Point sizes, not Font.Height: Height is device pixels and double-scales under LCL DPI. }
+  ACanvas.Font.Name := Font.Name;
+  ACanvas.Font.Height := 0;
+  ACanvas.Font.Style := [];
+  ACanvas.Font.Quality := fqCleartypeNatural;
+  If IsDate Then
+    Begin
+      ACanvas.Font.Size := 9;
+      ACanvas.Font.Color := clGrayText;
+    End
+  Else
+    Begin
+      ACanvas.Font.Size := 9;
+      ACanvas.Font.Color := clWindowText;
+    End;
+End;
+
+Function TManageRepositoryForm.LaneX(Lane: Integer): Integer;
+Var
+  LW: Integer;
+Begin
+  LW := GraphLaneWidth;
+  Result := GraphLeftMargin + Lane * LW + LW Div 2;
 End;
 
 Function TManageRepositoryForm.RowMidY(Row: Integer): Integer;
+Var
+  RH: Integer;
 Begin
-  Result := Row * GitGraphRowHeight + GitGraphRowHeight Div 2 - ScrollOffset;
+  RH := GraphRowHeight;
+  Result := Row * RH + RH Div 2 - ScrollOffset;
 End;
 
 Function TManageRepositoryForm.RowAtY(Y: Integer): Integer;
+Var
+  RH: Integer;
 Begin
   If FModel.Count = 0 Then
     Result := -1
   Else
     Begin
-      Result := (Y + ScrollOffset) Div GitGraphRowHeight;
+      RH := GraphRowHeight;
+      If RH < 1 Then
+        RH := 1;
+      Result := (Y + ScrollOffset) Div RH;
       If (Result < 0) Or (Result >= FModel.Count) Then
         Result := -1;
     End;
@@ -792,7 +918,7 @@ Type
   TRefKind = (rkLocal, rkRemote, rkTag, rkOther);
 Var
   Parts: TStringList;
-  I, ArrowPos, CardW, CardH, CardY, PadX: Integer;
+  I, ArrowPos, CardW, CardH, CardY, PadX, Gap, MinW, RH, TextH: Integer;
   Token, RefName: String;
   Kind: TRefKind;
   Bg, Fg, Border: TColor;
@@ -816,9 +942,26 @@ Begin
         Token := Copy(Token, I + 1, MaxInt);
       End;
 
-    CardH := 16;
-    PadX := 6;
-    CardY := RowTop + (GitGraphRowHeight - CardH) Div 2;
+    RH := GraphRowHeight;
+    CardH := GraphScale(16);
+    PadX := GraphScale(6);
+    Gap := GraphScale(5);
+    MinW := GraphScale(28);
+    { Chip height tracks row metrics so text stays centered at high DPI. }
+    With FPaintBox.Canvas Do
+      Begin
+        Font.Name := Self.Font.Name;
+        Font.Height := 0;
+        Font.Size := 8;
+        Font.Style := [];
+        Font.Quality := fqCleartypeNatural;
+        TextH := TextHeight('Ag');
+      End;
+    If CardH < TextH + GraphScale(4) Then
+      CardH := TextH + GraphScale(4);
+    If CardH > RH - GraphScale(2) Then
+      CardH := Max(TextH, RH - GraphScale(2));
+    CardY := RowTop + (RH - CardH) Div 2;
 
     For I := 0 To Parts.Count - 1 Do
       Begin
@@ -883,17 +1026,20 @@ Begin
 
         With FPaintBox.Canvas Do
           Begin
+            Font.Name := Self.Font.Name;
+            Font.Height := 0;
             Font.Size := 8;
             Font.Style := [];
+            Font.Quality := fqCleartypeNatural;
             Font.Color := Fg;
             CardW := TextWidth(RefName) + PadX * 2;
-            If CardW < 28 Then
-              CardW := 28;
+            If CardW < MinW Then
+              CardW := MinW;
 
             Brush.Style := bsSolid;
             Brush.Color := Bg;
             Pen.Color := Border;
-            Pen.Width := 1;
+            Pen.Width := Max(1, GraphScale(1));
             { Clean bordered rectangles – RoundRect is jagged on many widgetsets. }
             Rectangle(TextX, CardY, TextX + CardW, CardY + CardH);
 
@@ -902,7 +1048,7 @@ Begin
             Brush.Style := bsSolid;
           End;
 
-        TextX := TextX + CardW + 5;
+        TextX := TextX + CardW + Gap;
       End;
   Finally
     Parts.Free;
@@ -911,13 +1057,19 @@ End;
 
 Procedure TManageRepositoryForm.PaintBoxPaint(Sender: TObject);
 Var
-  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW: Integer;
+  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR: Integer;
+  TextH, TextY, EdgePenW, MsgPad: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Col: TColor;
   LabelText, DateText: String;
 Begin
   Off := ScrollOffset;
+  RH := GraphRowHeight;
+  DateColW := GraphDateColumnWidth;
+  NodeR := GraphNodeRadius;
+  EdgePenW := Max(1, GraphScale(2));
+  MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
     Begin
       Brush.Color := clWindow;
@@ -925,20 +1077,22 @@ Begin
 
       If FIndexing And (FModel.Count = 0) Then
         Begin
+          PrepareGraphTextFont(FPaintBox.Canvas, False);
           Font.Color := clGrayText;
           Font.Size := 11;
-          TextOut(16, 16, 'Indexing commit history…');
+          TextOut(MsgPad, MsgPad, 'Indexing commit history…');
           Exit;
         End;
 
       If FModel.Count = 0 Then
         Begin
+          PrepareGraphTextFont(FPaintBox.Canvas, False);
           Font.Color := clGrayText;
           Font.Size := 11;
           If FRepoPath = '' Then
-            TextOut(16, 16, 'No Git repository detected for the active project')
+            TextOut(MsgPad, MsgPad, 'No Git repository detected for the active project')
           Else
-            TextOut(16, 16, 'No commits to display');
+            TextOut(MsgPad, MsgPad, 'No commits to display');
           Exit;
         End;
 
@@ -946,7 +1100,7 @@ Begin
       If LastRow < FirstRow Then
         Exit;
 
-      Pen.Width := 2;
+      Pen.Width := EdgePenW;
       For I := 0 To FModel.EdgeCount - 1 Do
         Begin
           E := FModel.Edge(I);
@@ -967,39 +1121,40 @@ Begin
       For I := FirstRow To LastRow Do
         Begin
           C := FModel.Commit(I);
-          Y := I * GitGraphRowHeight - Off;
+          Y := I * RH - Off;
 
           If I = FSelectedIndex Then
             Begin
               Brush.Color := RGBToColor(227, 242, 253);
-              FillRect(Bounds(0, Y, FPaintBox.Width, GitGraphRowHeight));
+              FillRect(Bounds(0, Y, FPaintBox.ClientWidth, RH));
             End;
 
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
           Brush.Color := Col;
           Pen.Color := Col;
-          Pen.Width := 1;
-          Ellipse(X - GitGraphNodeRadius, RowMidY(I) - GitGraphNodeRadius,
-            X + GitGraphNodeRadius, RowMidY(I) + GitGraphNodeRadius);
+          Pen.Width := Max(1, GraphScale(1));
+          Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
 
-          TextX := FModel.GraphWidth + GitGraphTextGap;
+          TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;
-          Font.Size := 9;
-          Font.Style := [];
-          Font.Color := clGrayText;
+          PrepareGraphTextFont(FPaintBox.Canvas, True);
           DateText := FormatCommitDate(C.CommitTime);
-          TextOut(TextX, Y + 3, DateText);
+          TextH := TextHeight(DateText);
+          TextY := Y + (RH - TextH) Div 2;
+          TextOut(TextX, TextY, DateText);
 
-          TextX := TextX + 130;
-          Font.Color := clWindowText;
+          TextX := TextX + DateColW;
+          PrepareGraphTextFont(FPaintBox.Canvas, False);
           If C.DetailsLoaded Then
             LabelText := C.Subject
           Else
             LabelText := '…';
-          TextOut(TextX, Y + 3, LabelText);
+          TextH := TextHeight(LabelText);
+          TextY := Y + (RH - TextH) Div 2;
+          TextOut(TextX, TextY, LabelText);
           SubjectW := TextWidth(LabelText);
-          TextX := TextX + SubjectW + 8;
+          TextX := TextX + SubjectW + GraphScale(8);
           Brush.Style := bsSolid;
 
           { Branch/tag cards after the subject (Gitg-style chips). }

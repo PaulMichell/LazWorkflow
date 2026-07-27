@@ -92,6 +92,9 @@ Type
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
     FHunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
+    Procedure ApplyCompactEditorFont;
+    Function ScaleDesign(DesignPx: Integer): Integer;
+    Function OverviewGutterWidth: Integer;
     Procedure ApplyEditorSelectionPolicy;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
@@ -657,12 +660,12 @@ Begin
   { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
     that first layout while their notebook page is hidden (Files tab). }
   FEdit.RightGutter.AutoSize := False;
-  FEdit.RightGutter.Width := 16;
+  FEdit.RightGutter.Width := OverviewGutterWidth;
   FEdit.RightGutter.Visible := True;
 
   FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
   FOverviewGutter.AutoSize := False;
-  FOverviewGutter.Width := 16;
+  FOverviewGutter.Width := OverviewGutterWidth;
   FOverviewGutter.Visible := True;
   FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
 
@@ -701,12 +704,12 @@ Begin
     SetupDiffOverviewGutter;
 
   FEdit.RightGutter.AutoSize := False;
-  FEdit.RightGutter.Width := 16;
+  FEdit.RightGutter.Width := OverviewGutterWidth;
   FEdit.RightGutter.Visible := True;
   If Assigned(FOverviewGutter) Then
     Begin
       FOverviewGutter.AutoSize := False;
-      FOverviewGutter.Width := 16;
+      FOverviewGutter.Width := OverviewGutterWidth;
       { Toggle visibility so GutterVisibilityChanged / DoResize repositions FWinControl. }
       FOverviewGutter.Visible := False;
       FOverviewGutter.Visible := True;
@@ -742,6 +745,47 @@ Begin
   ScheduleOverviewRefresh;
 End;
 
+Function TGitDiffView.ScaleDesign(DesignPx: Integer): Integer;
+Begin
+  If Assigned(FEdit) Then
+    Result := FEdit.Scale96ToForm(DesignPx)
+  Else
+    Result := Scale96ToForm(DesignPx);
+  If (DesignPx > 0) And (Result < 1) Then
+    Result := 1;
+End;
+
+Function TGitDiffView.OverviewGutterWidth: Integer;
+Begin
+  Result := ScaleDesign(16);
+End;
+
+Procedure TGitDiffView.ApplyCompactEditorFont;
+Begin
+  If Not Assigned(FEdit) Then
+    Exit;
+  { Prefer Font.Size (points) over Font.Height (device px). Design-time Height values
+    in the .lfm are scaled again by LCL on HiDPI Windows and look oversized. }
+  FEdit.Font.Height := 0;
+  FEdit.Font.Size := 9;
+  FEdit.Font.Pitch := fpFixed;
+  FEdit.Font.Quality := fqCleartypeNatural;
+  {$IFDEF Windows}
+  If Screen.Fonts.IndexOf('Consolas') >= 0 Then
+    FEdit.Font.Name := 'Consolas'
+  Else
+    FEdit.Font.Name := 'Courier New';
+  {$ELSE}
+  If Screen.Fonts.IndexOf('DejaVu Sans Mono') >= 0 Then
+    FEdit.Font.Name := 'DejaVu Sans Mono'
+  Else If Screen.Fonts.IndexOf('Liberation Mono') >= 0 Then
+    FEdit.Font.Name := 'Liberation Mono'
+  Else
+    FEdit.Font.Name := 'Courier New';
+  {$ENDIF}
+  FEdit.ExtraLineSpacing := 0;
+End;
+
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
 Begin
   If Not Assigned(FEdit) Then
@@ -771,14 +815,10 @@ Begin
               IDEEditorOptions.GetHighlighterSettings(TSynDiffSyn(FMixedHigh));
             Except
             End;
-        End
-      Else
-        Begin
-          FEdit.Font.Size := 10;
-          FEdit.Font.Name := 'Courier New';
-          FEdit.Font.Pitch := fpFixed;
-          FEdit.Font.Quality := fqCleartypeNatural;
         End;
+      { Always pin a compact monospaced face after IDE apply — full IDE editor
+        size is too large for these embedded preview panes, especially on 4K. }
+      ApplyCompactEditorFont;
       { Install after IDE settings so ApplyTo cannot hide/replace our overview. }
       SetupDiffOverviewGutter;
       FAppearanceReady := True;
@@ -936,23 +976,23 @@ Begin
 End;
 
 Function TGitDiffView.HunkMarkerRect(LineNo: Integer): TRect;
-Const
-  MarkerW = 14;
-  RectH = 6;
-  TriH = 10;
 Var
-  Y, GutterW: Integer;
+  Y, GutterW, MarkerW, RectH, TriH, LeftPad: Integer;
 Begin
   { Marker sits at the left of the gutter (before line numbers). Base on the rule line. }
   Result := Rect(0, 0, 0, 0);
+  MarkerW := ScaleDesign(14);
+  RectH := ScaleDesign(6);
+  TriH := ScaleDesign(10);
+  LeftPad := ScaleDesign(2);
   If Not LinePixelTop(LineNo, Y) Then
     Exit;
   GutterW := 0;
   If Assigned(FEdit) And FEdit.Gutter.Visible Then
     GutterW := FEdit.Gutter.Width;
-  If GutterW < MarkerW + 4 Then
+  If GutterW < MarkerW + ScaleDesign(4) Then
     Exit;
-  Result.Left := 2;
+  Result.Left := LeftPad;
   Result.Right := Result.Left + MarkerW;
   Result.Top := Y; { base of silhouette on the ruled line }
   Result.Bottom := Y + RectH + TriH;
@@ -968,24 +1008,24 @@ Begin
 End;
 
 Procedure TGitDiffView.PaintHunkDecorations(PaintCanvas: TCanvas);
-Const
-  MarkerW = 14;
-  RectH = 6;
-  TriH = 10;
 Var
   I, LineNo, Y, X1, X2, LeftX, RightX, MidX: Integer;
+  MarkerW, RectH, TriH: Integer;
   Pts: Array[0..4] Of TPoint;
 Begin
   If (FMode <> dvmEditorOnly) Or (Not Assigned(FEdit)) Or (Not Assigned(FHunkStartLines)) Then
     Exit;
 
+  MarkerW := ScaleDesign(14);
+  RectH := ScaleDesign(6);
+  TriH := ScaleDesign(10);
   X1 := 0;
   X2 := FEdit.ClientWidth;
   If FEdit.RightGutter.Visible Then
     X2 := X2 - FEdit.RightGutter.Width;
 
   PaintCanvas.Pen.Mode := pmCopy;
-  PaintCanvas.Pen.Width := 1;
+  PaintCanvas.Pen.Width := Max(1, ScaleDesign(1));
   PaintCanvas.Pen.Style := psSolid;
 
   For I := 0 To FHunkStartLines.Count - 1 Do
@@ -1000,7 +1040,7 @@ Begin
       PaintCanvas.LineTo(X2, Y);
 
       { Silhouette: rectangular base on the rule, then downward triangle (before line numbers). }
-      LeftX := 2;
+      LeftX := ScaleDesign(2);
       RightX := LeftX + MarkerW;
       MidX := (LeftX + RightX) Div 2;
       Pts[0] := Point(LeftX, Y);
@@ -1530,9 +1570,9 @@ Begin
   FTreePanel.Visible := FMode <> dvmEditorOnly;
   FSplitter.Visible := FMode <> dvmEditorOnly;
   If FMode = dvmBrowse Then
-    FTreePanel.Width := 240
+    FTreePanel.Width := ScaleDesign(240)
   Else If FMode = dvmStaging Then
-    FTreePanel.Width := 220;
+    FTreePanel.Width := ScaleDesign(220);
   ApplyEditorSelectionPolicy;
   If FMode <> dvmEditorOnly Then
     ClearLineSelection(False);
