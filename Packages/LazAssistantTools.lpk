@@ -8,7 +8,7 @@
     <CompilerOptions>
       <Version Value="11"/>
       <SearchPaths>
-        <OtherUnitFiles Value="../Source/LazAssistantTools;../Source/LazWorkflowCommon"/>
+        <OtherUnitFiles Value="../Source/LazAssistantTools"/>
         <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
       <CodeGeneration>

@@ -42,23 +42,18 @@ Uses
   {$ENDIF}
   Forms, fphttpclient, opensslsockets, openssl, WorkflowLog;
 
-Type
-  TOpenSslDllPair = Record
-    Ssl: String;
-    Crypto: String;
-  End;
-
 Function OpenSSLMissingHint: String;
 Begin
   {$IFDEF WINDOWS}
   Result :=
-    'Could not load OpenSSL (needed for HTTPS to x.ai).' + LineEnding +
+    'Could not load OpenSSL (needed for streamed HTTPS to x.ai).' + LineEnding +
     'Install OpenSSL for Windows (Win64) and copy these next to lazarus.exe,' + LineEnding +
     'or into a folder on PATH:' + LineEnding +
-    '  libssl-3-x64.dll  and  libcrypto-3-x64.dll' + LineEnding +
-    '(or libssl-1_1-x64.dll and libcrypto-1_1-x64.dll).' + LineEnding +
+    '  libssl-1_1-x64.dll  and  libcrypto-1_1-x64.dll' + LineEnding +
+    '(or libssl-3-x64.dll and libcrypto-3-x64.dll if your FPC build supports them).' + LineEnding +
     'Download: https://slproweb.com/products/Win32OpenSSL.html' + LineEnding +
-    '(Light package is enough.)';
+    '(Light package is enough.)' + LineEnding +
+    'Note: Sign-in uses Windows WinINet and does not require OpenSSL.';
   {$ELSE}
   Result :=
     'Could not initialize OpenSSL. Install libssl development packages ' +
@@ -81,126 +76,89 @@ Begin
     Dirs.Add(Clean);
 End;
 
-Function TryLoadPairFromDir(Const Dir, SslName, CryptoName: String): Boolean;
+{ Preload known OpenSSL DLL pairs so InitSSLInterface's short-name LoadLibrary
+  can resolve them. Do not assign openssl.DLLSSLName* — those vars are not
+  exported on all FPC/Lazarus builds (e.g. trunk used by Lazarus 4.99). }
+Procedure PreloadOpenSslFromDirs;
+Const
+  {$IFDEF WIN64}
+  PairCount = 4;
+  SslNames: Array[0..PairCount - 1] Of String = (
+    'libssl-1_1-x64.dll', 'libssl-3-x64.dll', 'libssl32.dll', 'ssleay32.dll');
+  CryptoNames: Array[0..PairCount - 1] Of String = (
+    'libcrypto-1_1-x64.dll', 'libcrypto-3-x64.dll', 'libeay32.dll', 'libeay32.dll');
+  {$ELSE}
+  PairCount = 4;
+  SslNames: Array[0..PairCount - 1] Of String = (
+    'libssl-1_1.dll', 'libssl-3.dll', 'libssl32.dll', 'ssleay32.dll');
+  CryptoNames: Array[0..PairCount - 1] Of String = (
+    'libcrypto-1_1.dll', 'libcrypto-3.dll', 'libeay32.dll', 'libeay32.dll');
+  {$ENDIF}
 Var
+  Dirs: TStringList;
+  D, I: Integer;
   SslPath, CryptoPath: String;
   HSsl, HCrypto: HMODULE;
 Begin
-  Result := False;
-  SslPath := IncludeTrailingPathDelimiter(Dir) + SslName;
-  CryptoPath := IncludeTrailingPathDelimiter(Dir) + CryptoName;
-  If (Not FileExistsNonEmpty(SslPath)) Or (Not FileExistsNonEmpty(CryptoPath)) Then
-    Exit;
-  { Preload so InitSSLInterface's LoadLibrary(name) resolves via already-mapped modules. }
-  HCrypto := LoadLibrary(PChar(CryptoPath));
-  HSsl := LoadLibrary(PChar(SslPath));
-  Result := (HSsl <> 0) And (HCrypto <> 0);
-  If Not Result Then
-    Begin
-      If HSsl <> 0 Then
-        FreeLibrary(HSsl);
-      If HCrypto <> 0 Then
-        FreeLibrary(HCrypto);
-    End;
-End;
-{$ENDIF}
-
-Function TryInitOpenSslPair(Const SslName, CryptoName: String): Boolean;
-Begin
-  Result := False;
-  If IsSSLloaded Then
-    Begin
-      Result := True;
-      Exit;
-    End;
-  DLLSSLName := SslName;
-  DLLUtilName := CryptoName;
-  DLLSSLName2 := SslName;
-  DLLUtilName2 := CryptoName;
-  DLLSSLName3 := SslName;
-  Result := InitSSLInterface;
-End;
-
-Function EnsureOpenSSLReady(Out ErrorText: String): Boolean;
-Var
-  Pairs: Array Of TOpenSslDllPair;
-  I: Integer;
-  {$IFDEF WINDOWS}
-  Dirs: TStringList;
-  D: Integer;
-  {$ENDIF}
-Begin
-  ErrorText := '';
-  Result := IsSSLloaded;
-  If Result Then
-    Exit;
-
-  SetLength(Pairs, 0);
-  {$IFDEF WINDOWS}
-    {$IFDEF WIN64}
-    SetLength(Pairs, 6);
-    Pairs[0].Ssl := 'libssl-3-x64.dll';   Pairs[0].Crypto := 'libcrypto-3-x64.dll';
-    Pairs[1].Ssl := 'libssl-1_1-x64.dll'; Pairs[1].Crypto := 'libcrypto-1_1-x64.dll';
-    Pairs[2].Ssl := 'libssl-3.dll';       Pairs[2].Crypto := 'libcrypto-3.dll';
-    Pairs[3].Ssl := 'libssl-1_1.dll';     Pairs[3].Crypto := 'libcrypto-1_1.dll';
-    Pairs[4].Ssl := 'libssl32.dll';      Pairs[4].Crypto := 'libeay32.dll';
-    Pairs[5].Ssl := 'ssleay32.dll';      Pairs[5].Crypto := 'libeay32.dll';
-    {$ELSE}
-    SetLength(Pairs, 5);
-    Pairs[0].Ssl := 'libssl-3.dll';       Pairs[0].Crypto := 'libcrypto-3.dll';
-    Pairs[1].Ssl := 'libssl-1_1.dll';     Pairs[1].Crypto := 'libcrypto-1_1.dll';
-    Pairs[2].Ssl := 'libssl32.dll';      Pairs[2].Crypto := 'libeay32.dll';
-    Pairs[3].Ssl := 'ssleay32.dll';      Pairs[3].Crypto := 'libeay32.dll';
-    Pairs[4].Ssl := 'libssl-3-x64.dll';   Pairs[4].Crypto := 'libcrypto-3-x64.dll';
-    {$ENDIF}
-
   Dirs := TStringList.Create;
   Try
     AddSearchDir(Dirs, ExtractFilePath(ParamStr(0)));
     If Assigned(Application) Then
       AddSearchDir(Dirs, ExtractFilePath(Application.ExeName));
     AddSearchDir(Dirs, GetCurrentDir);
-    { Optional: DLLs shipped under the package Lib tree. }
     AddSearchDir(Dirs, ExpandFileName(ExtractFilePath(ParamStr(0)) + 'openssl'));
     For D := 0 To Dirs.Count - 1 Do
-      Begin
-        For I := 0 To High(Pairs) Do
-          If TryLoadPairFromDir(Dirs[D], Pairs[I].Ssl, Pairs[I].Crypto) Then
-            If TryInitOpenSslPair(Pairs[I].Ssl, Pairs[I].Crypto) Then
-              Begin
-                Result := True;
-                WorkflowLogger.Info('AssistantHttps',
-                  'OpenSSL loaded from ' + Dirs[D] + ' (' + Pairs[I].Ssl + ')');
-                Exit;
-              End;
-      End;
+      For I := 0 To PairCount - 1 Do
+        Begin
+          SslPath := IncludeTrailingPathDelimiter(Dirs[D]) + SslNames[I];
+          CryptoPath := IncludeTrailingPathDelimiter(Dirs[D]) + CryptoNames[I];
+          If (Not FileExistsNonEmpty(SslPath)) Or (Not FileExistsNonEmpty(CryptoPath)) Then
+            Continue;
+          HCrypto := LoadLibrary(PChar(CryptoPath));
+          HSsl := LoadLibrary(PChar(SslPath));
+          If (HSsl <> 0) And (HCrypto <> 0) Then
+            Begin
+              WorkflowLogger.Info('AssistantHttps',
+                'Preloaded OpenSSL from ' + Dirs[D] + ' (' + SslNames[I] + ')');
+              Exit;
+            End;
+          If HSsl <> 0 Then
+            FreeLibrary(HSsl);
+          If HCrypto <> 0 Then
+            FreeLibrary(HCrypto);
+        End;
   Finally
     Dirs.Free;
   End;
-  {$ELSE}
-  SetLength(Pairs, 1);
-  Pairs[0].Ssl := 'libssl';
-  Pairs[0].Crypto := 'libcrypto';
-  {$ENDIF}
+End;
+{$ENDIF}
 
-  For I := 0 To High(Pairs) Do
-    If TryInitOpenSslPair(Pairs[I].Ssl, Pairs[I].Crypto) Then
+Function EnsureOpenSSLReady(Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Result := False;
+  Try
+    If IsSSLloaded Then
       Begin
         Result := True;
-        WorkflowLogger.Info('AssistantHttps', 'OpenSSL loaded (' + Pairs[I].Ssl + ')');
         Exit;
       End;
-
-  { Last resort: unit defaults. }
-  If InitSSLInterface Then
-    Begin
-      Result := True;
-      Exit;
-    End;
-
-  ErrorText := OpenSSLMissingHint;
+    {$IFDEF WINDOWS}
+    PreloadOpenSslFromDirs;
+    {$ENDIF}
+    Result := InitSSLInterface;
+  Except
+    On E: Exception Do
+      Begin
+        ErrorText := E.Message;
+        Result := False;
+      End;
+  End;
+  If Result Then
+    Exit;
+  If ErrorText = '' Then
+    ErrorText := OpenSSLMissingHint;
   WorkflowLogger.Warning('AssistantHttps', 'OpenSSL init failed');
-  Result := False;
 End;
 
 Function EnsureOpenSSLReady: Boolean;
