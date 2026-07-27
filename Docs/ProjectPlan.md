@@ -433,12 +433,12 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 8. Mode-scoped tool allow-lists — **done** (shared read tools; write tools later per Plan/Code).
 
 ### Phase 3 – Plan mode
-1. Default `Documents/` directory; create on demand.
-2. Tools: `write_markdown`, `update_markdown` / `replace_in_file` limited to MD (+ path policy).
-3. Open live Markdown window after create/update.
-4. Canonical plan path in config; section + `Status:` convention documented.
-5. Plan-mode system prompt: one work package per `##` section with a status footer line.
-6. Code mode: scan plan → tile list; mark done writes status back into the plan MD.
+1. Default `Documents/` directory; create on demand — **done**.
+2. Tools: `write_markdown`, `update_markdown` limited to MD (+ path policy); also `list_plans`, `get/set_active_plan` — **done**.
+3. Open live Markdown window after create/update — **done**.
+4. Canonical plan path in config (`plan_file`); section + `Status:` convention in default template — **done**.
+5. Plan-mode system prompt: one work package per `##` section with a status footer line — **done**.
+6. Code mode: scan plan → tile list; mark done writes status back into the plan MD — **Phase 4**.
 
 ### Phase 4 – Code mode
 1. IDE-mediated source edit tools (sandbox, exact match, undoable).

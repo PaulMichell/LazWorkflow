@@ -689,15 +689,43 @@ End;
 
 { TAssistantService }
 
+Function ModeSystemPromptBase(Mode: TAssistantMode): String;
+Begin
+  Case Mode Of
+    amPlan:
+      Result :=
+        'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus. ' +
+        'Author and maintain project plans as Markdown under the project, preferring Documents/. ' +
+        'Tools: read_file, list_directory, open_markdown, get_project_info, write_markdown, ' +
+        'update_markdown, list_plans, get_active_plan, set_active_plan. ' +
+        'Structure work packages as ## sections. Immediately under each ## heading put a line ' +
+        '`Status: not started` or `Status: in progress` or `Status: complete` so Code mode can ' +
+        'scan the plan for TODO tiles. Prefer update_markdown for surgical Status: or section ' +
+        'edits; write_markdown for new files or full rewrites. After creating a plan, set it ' +
+        'active with set_active_plan. Do not edit source (.pas/.lfm) in Plan mode.';
+    amCode:
+      Result :=
+        'You are the Project Assistant in **Code mode** for Free Pascal / Lazarus. ' +
+        'You may use read tools and plan Markdown tools (write_markdown, update_markdown, list_plans, ' +
+        'get/set_active_plan) to keep plan Status: lines current. Source edit and compile tools ' +
+        'land in a later phase — for now explain edits clearly and update the plan when a ' +
+        'work package finishes. Prefer the active editor context in the user message.';
+  Else
+    Result :=
+      'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Chat mode). ' +
+      'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown. ' +
+      'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
+      'Prefer the active editor context already in the user message when it includes the code under discussion. ' +
+      'You cannot write files or edit sources in Chat mode — ask the user to switch to Plan or Code for that.';
+  End;
+End;
+
 Constructor TAssistantService.Create;
 Begin
   Inherited Create;
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
-  FBaseSystemPrompt := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE. ' +
-    'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown. ' +
-    'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
-    'Prefer the active editor context already in the user message when it includes the code under discussion.';
+  FBaseSystemPrompt := ModeSystemPromptBase(amChat);
   FActiveSkill := '';
   FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
@@ -715,12 +743,20 @@ End;
 Procedure TAssistantService.SetActiveMode(Mode: TAssistantMode);
 Begin
   If FActiveMode <> Mode Then
-    FToolsJsonValid := False;
-  FActiveMode := Mode;
+    Begin
+      FToolsJsonValid := False;
+      FActiveMode := Mode;
+      FBaseSystemPrompt := ModeSystemPromptBase(Mode);
+      RebuildSystemPrompt;
+      WorkflowLogger.Info('AssistantService', 'Active mode set to ' + AssistantModeToStr(Mode));
+    End
+  Else
+    FActiveMode := Mode;
 End;
 
 Procedure TAssistantService.RebuildSystemPrompt;
 Begin
+  FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
   FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
 End;

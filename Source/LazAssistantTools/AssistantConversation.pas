@@ -94,9 +94,11 @@ Type
     Function TurnCount: Integer;
     Function IndexCount: Integer;
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
-    { Project shell prefs in .assistant/config.json (mode tab, thinking visibility, …). }
-    Function LoadShellConfig(Out ShowThinking: Boolean; Out ActiveMode: TAssistantMode): Boolean;
-    Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode): Boolean;
+    { Project shell prefs in .assistant/config.json (mode, thinking, active plan, …). }
+    Function LoadShellConfig(Out ShowThinking: Boolean; Out ActiveMode: TAssistantMode;
+      Out PlanFile: String): Boolean;
+    Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode;
+      Const PlanFile: String): Boolean;
     { Compatibility wrappers — prefer LoadShellConfig / SaveShellConfig. }
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
@@ -674,7 +676,7 @@ Begin
 End;
 
 Function TAssistantConversationStore.LoadShellConfig(Out ShowThinking: Boolean;
-  Out ActiveMode: TAssistantMode): Boolean;
+  Out ActiveMode: TAssistantMode; Out PlanFile: String): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -684,6 +686,7 @@ Begin
   Result := False;
   ShowThinking := True;
   ActiveMode := amChat;
+  PlanFile := '';
   If Not FileExistsUTF8(ConfigPath) Then
     Exit;
   SL := TStringList.Create;
@@ -698,6 +701,8 @@ Begin
       ShowThinking := Obj.Get('show_thinking', True);
       ModeText := Obj.Get('active_mode', 'chat');
       ActiveMode := StrToAssistantMode(ModeText);
+      PlanFile := Obj.Get('plan_file', '');
+      PlanFile := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
       Result := True;
     Except
       On E: Exception Do
@@ -713,12 +718,13 @@ Begin
 End;
 
 Function TAssistantConversationStore.SaveShellConfig(ShowThinking: Boolean;
-  ActiveMode: TAssistantMode): Boolean;
+  ActiveMode: TAssistantMode; Const PlanFile: String): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
   SL: TStringList;
   OwnsObj: Boolean;
+  PlanNorm: String;
 Begin
   Result := False;
   If Not EnsureDir Then
@@ -726,6 +732,7 @@ Begin
   Data := Nil;
   Obj := Nil;
   OwnsObj := False;
+  PlanNorm := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
   SL := TStringList.Create;
   Try
     { Merge into existing config.json so future keys survive. }
@@ -750,6 +757,7 @@ Begin
       End;
     Obj.Booleans['show_thinking'] := ShowThinking;
     Obj.Strings['active_mode'] := AssistantModeToStr(ActiveMode);
+    Obj.Strings['plan_file'] := PlanNorm;
     Try
       SL.Text := Obj.FormatJSON;
       SL.SaveToFile(ConfigPath);
@@ -771,18 +779,24 @@ Function TAssistantConversationStore.SaveShowThinking(ShowThinking: Boolean): Bo
 Var
   Mode: TAssistantMode;
   IgnoredThinking: Boolean;
+  PlanFile: String;
 Begin
   Mode := amChat;
-  If Not LoadShellConfig(IgnoredThinking, Mode) Then
-    Mode := amChat;
-  Result := SaveShellConfig(ShowThinking, Mode);
+  PlanFile := '';
+  If Not LoadShellConfig(IgnoredThinking, Mode, PlanFile) Then
+    Begin
+      Mode := amChat;
+      PlanFile := '';
+    End;
+  Result := SaveShellConfig(ShowThinking, Mode, PlanFile);
 End;
 
 Function TAssistantConversationStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
 Var
   Mode: TAssistantMode;
+  PlanFile: String;
 Begin
-  Result := LoadShellConfig(ShowThinking, Mode);
+  Result := LoadShellConfig(ShowThinking, Mode, PlanFile);
 End;
 
 Function NewArchiveId: String;

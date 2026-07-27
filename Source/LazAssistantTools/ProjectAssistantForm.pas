@@ -45,6 +45,15 @@ Type
     FChatHost: TPanel;
     FPlanPlaceholder: TLabel;
     FCodePlaceholder: TLabel;
+    { Plan tab (created at runtime if placeholder present). }
+    FPlanPanel: TPanel;
+    FPlanActiveLabel: TLabel;
+    FPlanList: TListBox;
+    FPlanBtnNew: TButton;
+    FPlanBtnOpen: TButton;
+    FPlanBtnSetActive: TButton;
+    FPlanBtnRefresh: TButton;
+    FPlanBtnOpenDocs: TButton;
     FBottomBar: TPanel;
     FBtnNewChat: TButton;
     FBtnToggleThinking: TButton;
@@ -133,6 +142,15 @@ Type
     Procedure ApplyActiveMode;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
+    Procedure EnsurePlanTabUi;
+    Procedure RefreshPlanList;
+    Procedure PlanBtnNewClick(Sender: TObject);
+    Procedure PlanBtnOpenClick(Sender: TObject);
+    Procedure PlanBtnSetActiveClick(Sender: TObject);
+    Procedure PlanBtnRefreshClick(Sender: TObject);
+    Procedure PlanBtnOpenDocsClick(Sender: TObject);
+    Procedure PlanListDblClick(Sender: TObject);
+    Function SelectedPlanRelativePath: String;
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -196,7 +214,8 @@ Implementation
 
 Uses
   Contnrs, WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
-  AssistantSession, GrokOAuth, LazFileUtils, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf,
+  AssistantSession, AssistantPlan, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
+  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf,
   ProjectIntf;
 
 Const
@@ -256,6 +275,7 @@ Begin
   Caption := 'Project Assistant';
   EnsureChatView;
   EnsureInputPopup;
+  EnsurePlanTabUi;
   UpdateThinkingActionCaption;
   If Not Assigned(FElapsedTimer) Then
     Begin
@@ -400,7 +420,8 @@ Begin
     Exit;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
-  If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, FActiveMode) Then
+  If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, FActiveMode,
+    GetActivePlanRelativePath) Then
     WorkflowLogger.Warning('ProjectAssistant',
       'config.json save failed: ' + ProjectAssistantConversation.LastError);
 End;
@@ -409,14 +430,240 @@ Procedure TProjectAssistantForm.ApplyShellConfigFromStore;
 Var
   ShowThinking: Boolean;
   Mode: TAssistantMode;
+  PlanFile: String;
 Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode) Then
+  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile) Then
     Exit;
   FShowThinking := ShowThinking;
   UpdateThinkingActionCaption;
+  SetActivePlanRelativePath(PlanFile);
   SelectModeTab(Mode);
+  RefreshPlanList;
+End;
+
+Procedure TProjectAssistantForm.EnsurePlanTabUi;
+Var
+  Bar: TPanel;
+Begin
+  If Assigned(FPlanPanel) Or (Not Assigned(FTabPlan)) Then
+    Exit;
+  If Assigned(FPlanPlaceholder) Then
+    FPlanPlaceholder.Visible := False;
+
+  FPlanPanel := TPanel.Create(Self);
+  FPlanPanel.Parent := FTabPlan;
+  FPlanPanel.Align := alClient;
+  FPlanPanel.BevelOuter := bvNone;
+  FPlanPanel.BorderSpacing.Around := 8;
+
+  FPlanActiveLabel := TLabel.Create(Self);
+  FPlanActiveLabel.Parent := FPlanPanel;
+  FPlanActiveLabel.Align := alTop;
+  FPlanActiveLabel.Caption := 'Active plan: (none)';
+  FPlanActiveLabel.BorderSpacing.Bottom := 6;
+
+  Bar := TPanel.Create(Self);
+  Bar.Parent := FPlanPanel;
+  Bar.Align := alTop;
+  Bar.Height := 36;
+  Bar.BevelOuter := bvNone;
+  Bar.ChildSizing.Layout := cclLeftToRightThenTopToBottom;
+  Bar.ChildSizing.ControlsPerLine := 8;
+  Bar.ChildSizing.HorizontalSpacing := 6;
+  Bar.ChildSizing.LeftRightSpacing := 0;
+  Bar.ChildSizing.TopBottomSpacing := 2;
+  Bar.BorderSpacing.Bottom := 6;
+
+  FPlanBtnNew := TButton.Create(Self);
+  FPlanBtnNew.Parent := Bar;
+  FPlanBtnNew.Caption := 'New plan…';
+  FPlanBtnNew.AutoSize := True;
+  FPlanBtnNew.OnClick := @PlanBtnNewClick;
+
+  FPlanBtnOpen := TButton.Create(Self);
+  FPlanBtnOpen.Parent := Bar;
+  FPlanBtnOpen.Caption := 'Open';
+  FPlanBtnOpen.AutoSize := True;
+  FPlanBtnOpen.OnClick := @PlanBtnOpenClick;
+
+  FPlanBtnSetActive := TButton.Create(Self);
+  FPlanBtnSetActive.Parent := Bar;
+  FPlanBtnSetActive.Caption := 'Set active';
+  FPlanBtnSetActive.AutoSize := True;
+  FPlanBtnSetActive.OnClick := @PlanBtnSetActiveClick;
+
+  FPlanBtnRefresh := TButton.Create(Self);
+  FPlanBtnRefresh.Parent := Bar;
+  FPlanBtnRefresh.Caption := 'Refresh';
+  FPlanBtnRefresh.AutoSize := True;
+  FPlanBtnRefresh.OnClick := @PlanBtnRefreshClick;
+
+  FPlanBtnOpenDocs := TButton.Create(Self);
+  FPlanBtnOpenDocs.Parent := Bar;
+  FPlanBtnOpenDocs.Caption := 'Open Documents/';
+  FPlanBtnOpenDocs.AutoSize := True;
+  FPlanBtnOpenDocs.OnClick := @PlanBtnOpenDocsClick;
+
+  FPlanList := TListBox.Create(Self);
+  FPlanList.Parent := FPlanPanel;
+  FPlanList.Align := alClient;
+  FPlanList.OnDblClick := @PlanListDblClick;
+End;
+
+Function TProjectAssistantForm.SelectedPlanRelativePath: String;
+Begin
+  Result := '';
+  If Not Assigned(FPlanList) Then
+    Exit;
+  If (FPlanList.ItemIndex < 0) Or (FPlanList.ItemIndex >= FPlanList.Items.Count) Then
+    Exit;
+  Result := FPlanList.Items[FPlanList.ItemIndex];
+End;
+
+Procedure TProjectAssistantForm.RefreshPlanList;
+Var
+  Paths: TStringList;
+  Err: String;
+  I, Sel: Integer;
+  Active: String;
+Begin
+  If Not Assigned(FPlanList) Then
+    Exit;
+  Active := GetActivePlanRelativePath;
+  If Assigned(FPlanActiveLabel) Then
+    If Active = '' Then
+      FPlanActiveLabel.Caption := 'Active plan: (none) — create one under Documents/ or Set active'
+    Else
+      FPlanActiveLabel.Caption := 'Active plan: ' + Active;
+
+  Paths := Nil;
+  Sel := -1;
+  FPlanList.Items.BeginUpdate;
+  Try
+    FPlanList.Items.Clear;
+    If Not ListProjectMarkdownPlans(Paths, Err) Then
+      Begin
+        If Err <> '' Then
+          FPlanList.Items.Add('(' + Err + ')');
+        Exit;
+      End;
+    For I := 0 To Paths.Count - 1 Do
+      Begin
+        FPlanList.Items.Add(Paths[I]);
+        If SameText(Paths[I], Active) Then
+          Sel := I;
+      End;
+    If Sel >= 0 Then
+      FPlanList.ItemIndex := Sel
+    Else If FPlanList.Items.Count > 0 Then
+      FPlanList.ItemIndex := 0;
+  Finally
+    FPlanList.Items.EndUpdate;
+    Paths.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.PlanBtnNewClick(Sender: TObject);
+Var
+  Title, Rel, Resolved, Err, Content: String;
+Begin
+  Title := 'Project Plan';
+  If Not InputQuery('New plan', 'Plan title:', Title) Then
+    Exit;
+  If Trim(Title) = '' Then
+    Title := 'Project Plan';
+  Rel := DefaultPlanRelativePath;
+  If FileExistsUTF8(ExpandFileName(ProjectRootPath + Rel)) Or
+    FileExistsUTF8(ExpandFileName(ProjectRootPath + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]))) Then
+    Rel := AssistantDocumentsDirName + PathDelim +
+      'Plan-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.md';
+  Content := DefaultNewPlanMarkdown(Title);
+  If Not WriteMarkdownFile(Rel, Content, True, Resolved, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  SetActivePlanRelativePath(ProjectRelativePath(Resolved));
+  PersistShellConfig;
+  RefreshPlanList;
+  SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
+    '**. Switch to Plan mode chat on the Chat tab to refine it with the model.');
+End;
+
+Procedure TProjectAssistantForm.PlanBtnOpenClick(Sender: TObject);
+Var
+  Rel, Resolved, Err: String;
+Begin
+  Rel := SelectedPlanRelativePath;
+  If Rel = '' Then
+    Rel := GetActivePlanRelativePath;
+  If Rel = '' Then
+    Begin
+      MessageDlg('Select a plan in the list, or create a new one.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not ResolvePlanPath(Rel, Resolved, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      MessageDlg('File not found: ' + Resolved, mtError, [mbOK], 0);
+      Exit;
+    End;
+  OpenMarkdownDocument(Resolved);
+End;
+
+Procedure TProjectAssistantForm.PlanBtnSetActiveClick(Sender: TObject);
+Var
+  Rel, Resolved, Err: String;
+Begin
+  Rel := SelectedPlanRelativePath;
+  If Rel = '' Then
+    Begin
+      MessageDlg('Select a Markdown file in the list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not ResolvePlanPath(Rel, Resolved, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      MessageDlg('File not found: ' + Resolved, mtError, [mbOK], 0);
+      Exit;
+    End;
+  SetActivePlanRelativePath(ProjectRelativePath(Resolved));
+  PersistShellConfig;
+  RefreshPlanList;
+End;
+
+Procedure TProjectAssistantForm.PlanBtnRefreshClick(Sender: TObject);
+Begin
+  RefreshPlanList;
+End;
+
+Procedure TProjectAssistantForm.PlanBtnOpenDocsClick(Sender: TObject);
+Var
+  Err, Dir: String;
+Begin
+  If Not EnsureProjectDocumentsDir(Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  Dir := ExcludeTrailingPathDelimiter(ProjectDocumentsDir);
+  If Not OpenDocument(Dir) Then
+    MessageDlg('Could not open folder: ' + Dir, mtWarning, [mbOK], 0);
+End;
+
+Procedure TProjectAssistantForm.PlanListDblClick(Sender: TObject);
+Begin
+  PlanBtnOpenClick(Sender);
 End;
 
 Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
@@ -443,6 +690,8 @@ Begin
   PersistShellConfig;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
     WorkflowLogger.Info('ProjectAssistant', 'Mode tab: ' + FPages.ActivePage.Caption);
+  If FActiveMode = amPlan Then
+    RefreshPlanList;
   RefreshConversationList;
 End;
 
@@ -904,7 +1153,7 @@ Begin
     Turn.Skill := '';
   Turn.TokenEstimate := Length(Turn.Prompt + Turn.Response + Turn.Thinking) Div 4;
   Turn.ErrorText := ErrorText;
-  Turn.PlanFile := '';
+  Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
@@ -1956,10 +2205,12 @@ Begin
     AssistantClient.ClearHistory;
   If Assigned(ProjectAssistantConversation) Then
     ProjectAssistantConversation.SetProjectRoot('');
+  SetActivePlanRelativePath('');
   RefreshHistoryCombo;
   RefreshConversationList;
   ClearCurrentTurnDisplay;
   RefreshChatDisplay(True, False);
+  RefreshPlanList;
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Unbound from project');
 End;
@@ -2030,13 +2281,16 @@ Begin
       RefreshHistoryCombo;
       RefreshConversationList;
       ShowLastConversationTurn;
+      RefreshPlanList;
     End
   Else
     Begin
+      SetActivePlanRelativePath('');
       RefreshHistoryCombo;
       RefreshConversationList;
       ClearCurrentTurnDisplay;
       RefreshChatDisplay(True, False);
+      RefreshPlanList;
     End;
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title);
