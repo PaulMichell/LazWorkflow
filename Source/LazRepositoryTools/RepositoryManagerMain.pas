@@ -212,7 +212,22 @@ End;
 Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  IDEWindowCreators.CreateForm(AForm, TManageRepositoryForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
+  AForm := Nil;
+  Try
+    IDEWindowCreators.CreateForm(AForm, TManageRepositoryForm, DoDisableAutoSizing,
+      LazarusIDE.OwningComponent);
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('GitManager', 'CreateManageRepositoryForm CreateForm: ' + E.Message);
+        { Fallback shell so IDE desktop restore does not leave a nil form. }
+        FreeAndNil(AForm);
+        AForm := TForm.Create(LazarusIDE.OwningComponent);
+        AForm.Caption := 'Manage Repository';
+      End;
+  End;
+  If Not Assigned(AForm) Then
+    Exit;
   AForm.Name := AFormName;
   { Never let restore/bind failures kill the IDE process. }
   If AForm Is TManageRepositoryForm Then
@@ -282,12 +297,7 @@ Begin
         LazarusIDE.AddHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
       End;
 
-    Try
-      UpdateRepositoryMenuState;
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('GitManager', 'UpdateRepositoryMenuState: ' + E.Message);
-    End;
+    { Do not probe git / ActiveProject during Register — IDE is still starting. }
     WorkflowLogger.Info('GitManager', 'LazRepositoryTools registered successfully');
   Except
     On E: Exception Do
@@ -304,11 +314,14 @@ GitManagerIDEHooks := Nil;
 
 Finalization
 
-If Assigned(LazarusIDE) And Assigned(GitManagerIDEHooks) Then
-  Begin
-    LazarusIDE.RemoveHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
-    LazarusIDE.RemoveHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
-  End;
+Try
+  If Assigned(LazarusIDE) And Assigned(GitManagerIDEHooks) Then
+    Begin
+      LazarusIDE.RemoveHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);
+      LazarusIDE.RemoveHandlerOnProjectClose(@GitManagerIDEHooks.ProjectClose);
+    End;
+Except
+End;
 FreeAndNil(GitManagerIDEHooks);
 
 End.

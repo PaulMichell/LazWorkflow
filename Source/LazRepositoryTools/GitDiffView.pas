@@ -93,6 +93,8 @@ Type
     FHunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyCompactEditorFont;
+    Procedure EnsureAppearanceReady;
+    Procedure DoDeferredInitAsync(Data: PtrInt);
     Function ScaleDesign(DesignPx: Integer): Integer;
     Function OverviewGutterWidth: Integer;
     Procedure ApplyEditorSelectionPolicy;
@@ -163,6 +165,7 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
+    Procedure Loaded; Override;
     Procedure Clear;
     Procedure SetViewMode(Mode: TGitDiffViewMode);
     Procedure LoadDiff(Const Title, DiffText: String);
@@ -589,17 +592,26 @@ Begin
   FHunkStartLines := TFPList.Create;
   FPreviewPicture := TPicture.Create;
   FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
-  ApplyIDEEditorAppearance;
-  ApplyViewMode;
-  ShowEditorPane;
-  UpdateActionEnabled;
+  { Do not touch SynEdit/IDE options here. Frame construction runs while the
+    Manage Repository window is restored at IDE startup; GetSynEditorSettings
+    and right-gutter surgery have taken Lazarus down hard. }
 End;
 
 Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
+  Application.RemoveAsyncCalls(Self);
   If Assigned(FEdit) Then
-    FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
+    Begin
+      Try
+        FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
+      Except
+      End;
+      Try
+        FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
+      Except
+      End;
+    End;
   FreeOwnedLanguageHighlighter;
   FreeAndNil(FPreviewPicture);
   FreeAndNil(FLineDragSnapshot);
@@ -607,6 +619,48 @@ Begin
   FreeAndNil(FHunkStartLines);
   FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
+End;
+
+Procedure TGitDiffView.DoDeferredInitAsync(Data: PtrInt);
+Begin
+  If Not IsAlive Then
+    Exit;
+  Try
+    EnsureAppearanceReady;
+    ApplyViewMode;
+    ShowEditorPane;
+    UpdateActionEnabled;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Error('GitDiffView', 'DoDeferredInitAsync: ' + E.Message);
+  End;
+End;
+
+Procedure TGitDiffView.Loaded;
+Begin
+  Inherited Loaded;
+  { After LFM children exist, schedule init on the next app idle — not during
+    the streaming stack that IDE desktop restore uses. }
+  If Assigned(Application) Then
+    Application.QueueAsyncCall(@DoDeferredInitAsync, 0)
+  Else
+    DoDeferredInitAsync(0);
+End;
+
+Procedure TGitDiffView.EnsureAppearanceReady;
+Begin
+  If FAppearanceReady Or (Not Assigned(FEdit)) Then
+    Exit;
+  If csLoading in ComponentState Then
+    Exit;
+  If csDestroying in ComponentState Then
+    Exit;
+  Try
+    ApplyIDEEditorAppearance;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'EnsureAppearanceReady: ' + E.Message);
+  End;
 End;
 
 Function TGitDiffView.IsAlive: Boolean;
@@ -651,33 +705,41 @@ Var
 Begin
   If Not Assigned(FEdit) Then
     Exit;
+  Try
+    FDiffOverviewProvider := Nil;
+    FOverviewGutter := Nil;
+    For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
+      FEdit.RightGutter.Parts[I].Free;
 
-  FDiffOverviewProvider := Nil;
-  FOverviewGutter := Nil;
-  For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
-    FEdit.RightGutter.Parts[I].Free;
+    { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
+      that first layout while their notebook page is hidden (Files tab). }
+    FEdit.RightGutter.AutoSize := False;
+    FEdit.RightGutter.Width := OverviewGutterWidth;
+    FEdit.RightGutter.Visible := True;
 
-  { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
-    that first layout while their notebook page is hidden (Files tab). }
-  FEdit.RightGutter.AutoSize := False;
-  FEdit.RightGutter.Width := OverviewGutterWidth;
-  FEdit.RightGutter.Visible := True;
+    FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
+    FOverviewGutter.AutoSize := False;
+    FOverviewGutter.Width := OverviewGutterWidth;
+    FOverviewGutter.Visible := True;
+    FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
 
-  FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
-  FOverviewGutter.AutoSize := False;
-  FOverviewGutter.Width := OverviewGutterWidth;
-  FOverviewGutter.Visible := True;
-  FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
+    PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
+    PageProvider.Color := RGBToColor(176, 190, 197);
+    PageProvider.Priority := 1;
 
-  PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
-  PageProvider.Color := RGBToColor(176, 190, 197);
-  PageProvider.Priority := 1;
-
-  DiffProvider := TGitDiffOverviewProvider.Create(FOverviewGutter.Providers);
-  DiffProvider.ColorAdded := RGBToColor(76, 175, 80);
-  DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
-  DiffProvider.Priority := 20;
-  FDiffOverviewProvider := DiffProvider;
+    DiffProvider := TGitDiffOverviewProvider.Create(FOverviewGutter.Providers);
+    DiffProvider.ColorAdded := RGBToColor(76, 175, 80);
+    DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
+    DiffProvider.Priority := 20;
+    FDiffOverviewProvider := DiffProvider;
+  Except
+    On E: Exception Do
+      Begin
+        FOverviewGutter := Nil;
+        FDiffOverviewProvider := Nil;
+        WorkflowLogger.Warning('GitDiffView', 'SetupDiffOverviewGutter: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TGitDiffView.EnsureDiffOverviewGutter;
@@ -793,54 +855,45 @@ Begin
   If Not Assigned(FEdit) Then
     Exit;
 
-  { Full IDE options only once: repeated GetSynEditorSettings can touch gutter parts
-    and beautifier state that are unsafe to re-apply while the editor is live. }
+  { Full IDE options only once. Skip GetSynEditorSettings entirely for this
+    embedded preview — it rewrites gutters/beautifier state and has crashed the
+    IDE during package desktop restore. Use compact fonts + our diff colours. }
   If Not FAppearanceReady Then
     Begin
-      If Assigned(IDEEditorOptions) Then
-        Begin
-          Try
-            IDEEditorOptions.GetSynEditorSettings(FEdit);
-          Except
-            On E: Exception Do
-              WorkflowLogger.Warning('GitDiffView', 'GetSynEditorSettings: ' + E.Message);
-          End;
-          If Assigned(FHigh) Then
-            Try
-              IDEEditorOptions.GetHighlighterSettings(FHigh);
-            Except
-              On E: Exception Do
-                WorkflowLogger.Warning('GitDiffView', 'GetHighlighterSettings: ' + E.Message);
-            End;
-          If Assigned(FMixedHigh) Then
-            Try
-              IDEEditorOptions.GetHighlighterSettings(TSynDiffSyn(FMixedHigh));
-            Except
-            End;
-        End;
-      { Always pin a compact monospaced face after IDE apply — full IDE editor
-        size is too large for these embedded preview panes, especially on 4K. }
       ApplyCompactEditorFont;
-      { Install after IDE settings so ApplyTo cannot hide/replace our overview. }
+      If Assigned(FHigh) Then
+        Try
+          ConfigureDiffColors(FHigh);
+        Except
+        End;
+      If Assigned(FMixedHigh) Then
+        Try
+          ConfigureDiffColors(TSynDiffSyn(FMixedHigh));
+        Except
+        End;
       SetupDiffOverviewGutter;
       FAppearanceReady := True;
     End;
 
-  FEdit.ReadOnly := True;
-  FEdit.WantTabs := True;
-  FEdit.Options := FEdit.Options - [eoShowSpecialChars];
-  FEdit.OnDblClick := @EditDblClick;
-  FEdit.OnMouseDown := @EditMouseDown;
-  FEdit.OnMouseMove := @EditMouseMove;
-  FEdit.OnMouseUp := @EditMouseUp;
-  FEdit.OnSpecialLineColors := @EditSpecialLineColors;
-  FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
-  FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
-  FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
-  FEdit.RegisterPaintEventHandler(@EditPaintEvent, [peAfterPaint]);
-  ApplyEditorSelectionPolicy;
-  { Keep overview visible even if earlier setup ran while the Files tab was hidden. }
-  EnsureDiffOverviewGutter;
+  Try
+    FEdit.ReadOnly := True;
+    FEdit.WantTabs := True;
+    FEdit.Options := FEdit.Options - [eoShowSpecialChars];
+    FEdit.OnDblClick := @EditDblClick;
+    FEdit.OnMouseDown := @EditMouseDown;
+    FEdit.OnMouseMove := @EditMouseMove;
+    FEdit.OnMouseUp := @EditMouseUp;
+    FEdit.OnSpecialLineColors := @EditSpecialLineColors;
+    FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
+    FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
+    FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
+    FEdit.RegisterPaintEventHandler(@EditPaintEvent, [peAfterPaint]);
+    ApplyEditorSelectionPolicy;
+    EnsureDiffOverviewGutter;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'ApplyIDEEditorAppearance wire: ' + E.Message);
+  End;
 End;
 
 Procedure TGitDiffView.ClearDisplayMap;
@@ -1564,25 +1617,42 @@ End;
 
 Procedure TGitDiffView.ApplyViewMode;
 Begin
-  { Files tab hosts Stage Selection on its own button bar below the editor. }
-  FToolBar.Visible := FMode = dvmStaging;
-  FTree.Visible := FMode = dvmStaging;
-  FFileList.Visible := FMode = dvmBrowse;
-  FCaption.Visible := FMode = dvmStaging;
-  FTreePanel.Visible := FMode <> dvmEditorOnly;
-  FSplitter.Visible := FMode <> dvmEditorOnly;
-  If FMode = dvmBrowse Then
-    FTreePanel.Width := ScaleDesign(240)
-  Else If FMode = dvmStaging Then
-    FTreePanel.Width := ScaleDesign(220);
-  ApplyEditorSelectionPolicy;
-  If FMode <> dvmEditorOnly Then
-    ClearLineSelection(False);
-  UpdateActionEnabled;
+  If (csLoading in ComponentState) Or (csDestroying in ComponentState) Then
+    Exit;
+  Try
+    { Files tab hosts Stage Selection on its own button bar below the editor. }
+    If Assigned(FToolBar) Then
+      FToolBar.Visible := FMode = dvmStaging;
+    If Assigned(FTree) Then
+      FTree.Visible := FMode = dvmStaging;
+    If Assigned(FFileList) Then
+      FFileList.Visible := FMode = dvmBrowse;
+    If Assigned(FCaption) Then
+      FCaption.Visible := FMode = dvmStaging;
+    If Assigned(FTreePanel) Then
+      FTreePanel.Visible := FMode <> dvmEditorOnly;
+    If Assigned(FSplitter) Then
+      FSplitter.Visible := FMode <> dvmEditorOnly;
+    If Assigned(FTreePanel) Then
+      Begin
+        If FMode = dvmBrowse Then
+          FTreePanel.Width := ScaleDesign(240)
+        Else If FMode = dvmStaging Then
+          FTreePanel.Width := ScaleDesign(220);
+      End;
+    ApplyEditorSelectionPolicy;
+    If FMode <> dvmEditorOnly Then
+      ClearLineSelection(False);
+    UpdateActionEnabled;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'ApplyViewMode: ' + E.Message);
+  End;
 End;
 
 Procedure TGitDiffView.SetViewMode(Mode: TGitDiffViewMode);
 Begin
+  { Mode/layout only — appearance is deferred via Loaded → DoDeferredInitAsync. }
   If FMode = Mode Then
     Begin
       ApplyViewMode;
@@ -2820,6 +2890,7 @@ Procedure TGitDiffView.LoadEmbeddedDiff(Const Title, DiffText: String; Const Sou
 Begin
   If Not IsAlive Then
     Exit;
+  EnsureAppearanceReady;
   SetViewMode(dvmEditorOnly);
   CancelPendingScroll;
   If Title <> '' Then
@@ -2858,6 +2929,7 @@ End;
 
 Procedure TGitDiffView.LoadDiff(Const Title, DiffText: String);
 Begin
+  EnsureAppearanceReady;
   SetViewMode(dvmStaging);
   ShowEditorPane;
   If Title <> '' Then
@@ -2881,6 +2953,7 @@ End;
 
 Procedure TGitDiffView.LoadPlainText(Const Title, Content: String; Const SourceFileName: String);
 Begin
+  EnsureAppearanceReady;
   Clear;
   If Title <> '' Then
     FCaption.Caption := Title;

@@ -48,10 +48,13 @@ Begin
   If Level < FMinLevel Then
     Exit;
   If Assigned(FOnLog) Then
-    FOnLog(Level, Area, Message)
-  Else
-    { Fallback to debug output when no sink is attached. }
-    WriteLn(Format('[%s] %s: %s', [GetEnumName(TypeInfo(TWorkflowLogLevel), Ord(Level)), Area, Message]));
+    Try
+      FOnLog(Level, Area, Message);
+    Except
+      { Never let logging take down the IDE. }
+    End;
+  { No WriteLn fallback: GUI Lazarus processes often have no console, and
+    WriteLn during package load/register has caused hard failures on Windows. }
 End;
 
 Procedure TWorkflowLogger.Debug(Const Area, Message: String);

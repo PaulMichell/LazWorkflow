@@ -406,42 +406,47 @@ End;
 
 Procedure TManageRepositoryForm.FormCreate(Sender: TObject);
 Begin
-  { Timers stay runtime-created (not useful in the designer). }
-  FDetailTimer := TTimer.Create(Self);
-  FDetailTimer.Enabled := False;
-  FDetailTimer.Interval := 40;
-  FDetailTimer.OnTimer := @DetailTimerTimer;
+  Try
+    { Timers stay runtime-created (not useful in the designer). }
+    FDetailTimer := TTimer.Create(Self);
+    FDetailTimer.Enabled := False;
+    FDetailTimer.Interval := 40;
+    FDetailTimer.OnTimer := @DetailTimerTimer;
 
-  FAutoRefreshTimer := TTimer.Create(Self);
-  FAutoRefreshTimer.Enabled := False;
-  FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
+    FAutoRefreshTimer := TTimer.Create(Self);
+    FAutoRefreshTimer.Enabled := False;
+    FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
 
-  { ResizeControl is public but not published – cannot stream from the .lfm. }
-  If Assigned(FSplitter) And Assigned(FDetailPanel) Then
-    FSplitter.ResizeControl := FDetailPanel;
+    { ResizeControl is public but not published – cannot stream from the .lfm. }
+    If Assigned(FSplitter) And Assigned(FDetailPanel) Then
+      FSplitter.ResizeControl := FDetailPanel;
 
-  If Assigned(FDiffView) Then
-    FDiffView.SetViewMode(dvmBrowse);
-  If Assigned(FFilesDiffView) Then
-    Begin
-      FFilesDiffView.SetViewMode(dvmEditorOnly);
-      FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
-      FFilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
-    End;
-  If Assigned(FShowUntrackedCheck) Then
-    FShowUntrackedCheck.Checked := False;
-  If Assigned(FShowCleanCheck) Then
-    FShowCleanCheck.Checked := False;
-  If Assigned(FShowIgnoredCheck) Then
-    FShowIgnoredCheck.Checked := False;
-  If Assigned(FFilesList) Then
-    FFilesList.MultiSelect := True;
-  If Assigned(FStagedList) Then
-    FStagedList.MultiSelect := True;
-  UpdateCommitEnabled;
-  UpdateStageButtonsEnabled;
+    If Assigned(FDiffView) Then
+      FDiffView.SetViewMode(dvmBrowse);
+    If Assigned(FFilesDiffView) Then
+      Begin
+        FFilesDiffView.SetViewMode(dvmEditorOnly);
+        FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
+        FFilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
+      End;
+    If Assigned(FShowUntrackedCheck) Then
+      FShowUntrackedCheck.Checked := False;
+    If Assigned(FShowCleanCheck) Then
+      FShowCleanCheck.Checked := False;
+    If Assigned(FShowIgnoredCheck) Then
+      FShowIgnoredCheck.Checked := False;
+    If Assigned(FFilesList) Then
+      FFilesList.MultiSelect := True;
+    If Assigned(FStagedList) Then
+      FStagedList.MultiSelect := True;
+    UpdateCommitEnabled;
+    UpdateStageButtonsEnabled;
 
-  WorkflowLogger.Info('ManageRepository', 'Manage Repository window created');
+    WorkflowLogger.Info('ManageRepository', 'Manage Repository window created');
+  Except
+    On E: Exception Do
+      WorkflowLogger.Error('ManageRepository', 'FormCreate: ' + E.Message);
+  End;
 End;
 
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
