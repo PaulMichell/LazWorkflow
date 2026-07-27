@@ -197,7 +197,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Math, LCLIntf, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
+  Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
   LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
   GitService, Dialogs, WorkflowLog;
 
@@ -756,7 +756,7 @@ Begin
     PPI := Screen.PixelsPerInch;
   If PPI <= 0 Then
     PPI := 96;
-  Result := MulDiv(DesignPx, PPI, 96);
+  Result := Integer((Int64(DesignPx) * PPI) Div 96);
   If (DesignPx > 0) And (Result < 1) Then
     Result := 1;
 End;
