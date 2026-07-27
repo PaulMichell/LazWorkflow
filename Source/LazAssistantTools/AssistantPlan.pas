@@ -302,7 +302,8 @@ Begin
       SL.SaveToFile(Resolved);
       Result := True;
       WorkflowLogger.Info('AssistantPlan', 'Wrote Markdown: ' + Resolved);
-      If OpenAfter Then
+      { Always refresh an open viewer; open a new one when requested. }
+      If OpenAfter Or Assigned(FindMarkdownDocument(Resolved)) Then
         OpenMarkdownDocument(Resolved);
     Except
       On E: Exception Do
@@ -377,7 +378,7 @@ Begin
       Result := True;
       WorkflowLogger.Info('AssistantPlan',
         Format('Updated Markdown %s (%d replacement(s))', [Resolved, ReplaceCount]));
-      If OpenAfter Then
+      If OpenAfter Or Assigned(FindMarkdownDocument(Resolved)) Then
         OpenMarkdownDocument(Resolved);
     Except
       On E: Exception Do

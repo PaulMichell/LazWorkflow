@@ -699,19 +699,34 @@ End;
 { TAssistantService }
 
 Function ModeSystemPromptBase(Mode: TAssistantMode): String;
+Var
+  PlanPath: String;
 Begin
   Case Mode Of
     amPlan:
-      Result :=
-        'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus. ' +
-        'Author and maintain project plans as Markdown under the project, preferring Documents/. ' +
-        'Tools: read_file, list_directory, open_markdown, get_project_info, write_markdown, ' +
-        'update_markdown, list_plans, get_active_plan, set_active_plan. ' +
-        'Structure work packages as ## sections. Immediately under each ## heading put a line ' +
-        '`Status: not started` or `Status: in progress` or `Status: complete` so Code mode can ' +
-        'scan the plan for TODO tiles. Prefer update_markdown for surgical Status: or section ' +
-        'edits; write_markdown for new files or full rewrites. After creating a plan, set it ' +
-        'active with set_active_plan. Do not edit source (.pas/.lfm) in Plan mode.';
+      Begin
+        PlanPath := GetActivePlanRelativePath;
+        If PlanPath = '' Then
+          PlanPath := 'Documents/Plan.md';
+        Result :=
+          'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus. ' +
+          'Your job is to write durable plan Markdown into project files via tools — NOT only into the chat. ' +
+          LineEnding +
+          '**Hard rules:**' + LineEnding +
+          '1. When the user asks for a plan or implementation plan, you MUST call `write_markdown` ' +
+          '(full rewrite) or `update_markdown` (surgical edit) so the plan file on disk is updated. ' +
+          '2. Do NOT put the full plan body only in the chat reply. Chat should be a short summary ' +
+          '(what changed, which file, next steps). The Markdown file is the source of truth. ' +
+          '3. Default / active plan path: **' + PlanPath + '**. Use that path unless the user names another. ' +
+          '4. Structure: `##` work packages; first non-empty line under each heading is ' +
+          '`Status: not started` | `Status: in progress` | `Status: complete`. ' +
+          '5. Prefer `update_markdown` for Status: lines or a single section; `write_markdown` for new files or full plans. ' +
+          '6. After writing, you may call `set_active_plan` and `open_markdown` if helpful. ' +
+          '7. Never edit source (.pas/.lfm) in Plan mode. ' +
+          LineEnding +
+          'Tools: read_file, list_directory, open_markdown, get_project_info, write_markdown, ' +
+          'update_markdown, list_plans, get_active_plan, set_active_plan.';
+      End;
     amCode:
       Result :=
         'You are the Project Assistant in **Code mode** for Free Pascal / Lazarus. ' +
@@ -765,6 +780,7 @@ End;
 
 Procedure TAssistantService.RebuildSystemPrompt;
 Begin
+  { Rebuild mode base each time so active plan path stays current. }
   FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
   FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
@@ -1191,6 +1207,9 @@ Begin
     End;
 
   ClearStreamThread;
+  { Refresh mode/plan-path wording and tool list before every request. }
+  RebuildSystemPrompt;
+  FToolsJsonValid := False;
   RequestJson := BuildRequestJson;
   FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;

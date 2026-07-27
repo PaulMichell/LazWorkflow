@@ -72,14 +72,19 @@ Type
     Constructor Create(TheOwner: TComponent); Override;
     Function OpenFile(Const FileName: String): Boolean;
     Function PromptOpen: Boolean;
+    { Re-read from disk (e.g. after LLM write_markdown). Skips if dirty unless Force. }
+    Function ReloadFromDisk(Force: Boolean = False): Boolean;
     Property FileName: String Read FFileName;
     Property Dirty: Boolean Read FDirty;
     Property ViewMode: TMarkdownViewMode Read FViewMode;
   End;
 
-{ Opens an existing viewer for FileName, or creates one. Empty FileName shows the open dialog. }
+{ Opens an existing viewer for FileName, or creates one. Empty FileName shows the open dialog.
+  When the viewer is already open, reloads content from disk. }
 Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
+{ Force-reload any open viewer for this path (no-op if none open). }
+Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True): Boolean;
 
 Implementation
 
@@ -129,6 +134,22 @@ Begin
     End;
 End;
 
+Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean): Boolean;
+Var
+  Form: TAssistantMarkdownForm;
+Begin
+  Result := False;
+  Form := FindMarkdownDocument(FileName);
+  If Not Assigned(Form) Then
+    Exit;
+  Result := Form.ReloadFromDisk(Force);
+  If Result Then
+    Begin
+      Form.Show;
+      Form.BringToFront;
+    End;
+End;
+
 Function OpenMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 Var
   OwnerComp: TComponent;
@@ -141,6 +162,8 @@ Begin
       Result := FindMarkdownDocument(Target);
       If Assigned(Result) Then
         Begin
+          { Always re-read after external writes (plan tools, other editors). }
+          Result.ReloadFromDisk(True);
           Result.Show;
           Result.BringToFront;
           Exit;
@@ -168,6 +191,24 @@ Begin
       Exit;
     End;
   Result.Show;
+End;
+
+Function TAssistantMarkdownForm.ReloadFromDisk(Force: Boolean): Boolean;
+Begin
+  Result := False;
+  If FFileName = '' Then
+    Exit;
+  If FDirty And (Not Force) Then
+    Begin
+      FPendingDiskReload := True;
+      UpdateStatus;
+      Exit;
+    End;
+  If Force Then
+    FDirty := False;
+  Result := LoadFromDisk;
+  If Result Then
+    FStatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
 End;
 
 Constructor TAssistantMarkdownForm.Create(TheOwner: TComponent);
