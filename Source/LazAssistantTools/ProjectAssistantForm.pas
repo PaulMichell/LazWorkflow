@@ -527,16 +527,16 @@ Var
   Paths: TStringList;
   Err: String;
   I, Sel: Integer;
-  Active: String;
+  ActivePlan: String;
 Begin
   If Not Assigned(FPlanList) Then
     Exit;
-  Active := GetActivePlanRelativePath;
+  ActivePlan := GetActivePlanRelativePath;
   If Assigned(FPlanActiveLabel) Then
-    If Active = '' Then
+    If ActivePlan = '' Then
       FPlanActiveLabel.Caption := 'Active plan: (none) — create one under Documents/ or Set active'
     Else
-      FPlanActiveLabel.Caption := 'Active plan: ' + Active;
+      FPlanActiveLabel.Caption := 'Active plan: ' + ActivePlan;
 
   Paths := Nil;
   Sel := -1;
@@ -552,7 +552,7 @@ Begin
     For I := 0 To Paths.Count - 1 Do
       Begin
         FPlanList.Items.Add(Paths[I]);
-        If SameText(Paths[I], Active) Then
+        If SameText(Paths[I], ActivePlan) Then
           Sel := I;
       End;
     If Sel >= 0 Then
