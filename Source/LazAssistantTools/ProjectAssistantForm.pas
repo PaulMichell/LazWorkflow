@@ -63,6 +63,7 @@ Type
     FCodeBtnStart: TButton;
     FCodeBtnDone: TButton;
     FCodeBtnReset: TButton;
+    FCodeStatusLabel: TLabel;
     FBottomBar: TPanel;
     FBtnNewChat: TButton;
     FBtnToggleThinking: TButton;
@@ -134,6 +135,7 @@ Type
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send uses Chat surface but keeps Plan/Code tools. }
     FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
+    FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -170,6 +172,7 @@ Type
     Procedure EnsureCodeTabUi;
     Procedure RefreshCodeTodos;
     Function SelectedCodeSectionIndex: Integer;
+    Procedure SetCodeStatusFeedback(Const MessageText: String);
     Procedure SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
     Procedure CodeBtnRefreshClick(Sender: TObject);
     Procedure CodeBtnOpenPlanClick(Sender: TObject);
@@ -177,6 +180,8 @@ Type
     Procedure CodeBtnDoneClick(Sender: TObject);
     Procedure CodeBtnResetClick(Sender: TObject);
     Procedure CodeTodoListDblClick(Sender: TObject);
+    Procedure CodeTodoListClick(Sender: TObject);
+    Procedure CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -285,6 +290,7 @@ Begin
   FTranscript := TStringList.Create;
   FCodeSections := TObjectList.Create(True);
   FCodePanel := Nil;
+  FCodeSelectedIndex := -1;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -873,10 +879,19 @@ Begin
   FCodeBtnReset.AutoSize := True;
   FCodeBtnReset.OnClick := @CodeBtnResetClick;
 
+  FCodeStatusLabel := TLabel.Create(Self);
+  FCodeStatusLabel.Parent := FCodePanel;
+  FCodeStatusLabel.Align := alBottom;
+  FCodeStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
+  FCodeStatusLabel.WordWrap := True;
+  FCodeStatusLabel.BorderSpacing.Top := 6;
+
   FCodeTodoList := TListBox.Create(Self);
   FCodeTodoList.Parent := FCodePanel;
   FCodeTodoList.Align := alClient;
+  FCodeTodoList.OnClick := @CodeTodoListClick;
   FCodeTodoList.OnDblClick := @CodeTodoListDblClick;
+  FCodeTodoList.OnSelectionChange := @CodeTodoListSelectionChange;
 End;
 
 Procedure TProjectAssistantForm.RefreshCodeTodos;
@@ -897,7 +912,9 @@ Begin
       FCodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
         '  ·  TODO tiles are scanned from ## headings + Status: lines.';
 
-  Keep := SelectedCodeSectionIndex;
+  Keep := FCodeSelectedIndex;
+  If (Keep < 0) And Assigned(FCodeTodoList) Then
+    Keep := FCodeTodoList.ItemIndex;
   FCodeTodoList.Items.BeginUpdate;
   Try
     FCodeTodoList.Items.Clear;
@@ -959,6 +976,7 @@ Begin
                 Break;
               End;
       End;
+    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
   Finally
     FCodeTodoList.Items.EndUpdate;
   End;
@@ -967,41 +985,69 @@ End;
 Function TProjectAssistantForm.SelectedCodeSectionIndex: Integer;
 Begin
   Result := -1;
-  If Not Assigned(FCodeTodoList) Or Not Assigned(FCodeSections) Then
+  If Not Assigned(FCodeSections) Or (FCodeSections.Count = 0) Then
     Exit;
-  If (FCodeTodoList.ItemIndex < 0) Or
-    (FCodeTodoList.ItemIndex >= FCodeSections.Count) Then
-    Exit;
-  Result := FCodeTodoList.ItemIndex;
+  { Prefer the remembered index: button clicks often clear ListBox.ItemIndex on GTK. }
+  If (FCodeSelectedIndex >= 0) And (FCodeSelectedIndex < FCodeSections.Count) Then
+    Result := FCodeSelectedIndex
+  Else If Assigned(FCodeTodoList) And (FCodeTodoList.ItemIndex >= 0) And
+    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
+    Result := FCodeTodoList.ItemIndex;
+End;
+
+Procedure TProjectAssistantForm.SetCodeStatusFeedback(Const MessageText: String);
+Begin
+  If Assigned(FCodeStatusLabel) Then
+    FCodeStatusLabel.Caption := MessageText;
+  FStatusFooter.SetRightText(MessageText);
+  WorkflowLogger.Info('ProjectAssistant', 'Code TODO: ' + MessageText);
 End;
 
 Procedure TProjectAssistantForm.SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
 Var
-  PlanRel, Err, SectionTitle: String;
+  PlanRel, Err, SectionTitle, Feedback: String;
   Idx: Integer;
+  OldStatus: TPlanSectionStatus;
 Begin
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
+      SetCodeStatusFeedback('Set an active plan on the Plan tab first.');
       MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Idx := SelectedCodeSectionIndex;
   If Idx < 0 Then
     Begin
+      SetCodeStatusFeedback('Select a work package in the list, then Start / Done / Reset.');
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  { Copy title before RefreshCodeTodos frees FCodeSections entries. }
+  { Copy title/status before RefreshCodeTodos frees FCodeSections entries. }
   SectionTitle := TPlanSection(FCodeSections[Idx]).Title;
+  OldStatus := TPlanSection(FCodeSections[Idx]).Status;
+  If OldStatus = NewStatus Then
+    Begin
+      Feedback := Format('"%s" is already %s.',
+        [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
+      SetCodeStatusFeedback(Feedback);
+      Exit;
+    End;
   If Not SetPlanSectionStatus(PlanRel, Idx, NewStatus, Err) Then
     Begin
+      SetCodeStatusFeedback('Failed: ' + Err);
       MessageDlg(Err, mtError, [mbOK], 0);
       Exit;
     End;
+  FCodeSelectedIndex := Idx;
   RefreshCodeTodos;
   If Assigned(FCodeTodoList) And (Idx >= 0) And (Idx < FCodeTodoList.Items.Count) Then
-    FCodeTodoList.ItemIndex := Idx;
+    Begin
+      FCodeTodoList.ItemIndex := Idx;
+      FCodeSelectedIndex := Idx;
+    End;
+  Feedback := Format('%s → %s', [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
+  SetCodeStatusFeedback(Feedback);
   SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
     [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
 End;
@@ -1009,6 +1055,7 @@ End;
 Procedure TProjectAssistantForm.CodeBtnRefreshClick(Sender: TObject);
 Begin
   RefreshCodeTodos;
+  SetCodeStatusFeedback('TODO list refreshed from plan file.');
 End;
 
 Procedure TProjectAssistantForm.CodeBtnOpenPlanClick(Sender: TObject);
@@ -1044,9 +1091,25 @@ Begin
   SetSelectedCodeSectionStatus(pssNotStarted);
 End;
 
+Procedure TProjectAssistantForm.CodeTodoListClick(Sender: TObject);
+Begin
+  If Assigned(FCodeTodoList) And Assigned(FCodeSections) And
+    (FCodeTodoList.ItemIndex >= 0) And
+    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
+    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
+End;
+
+Procedure TProjectAssistantForm.CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
+Begin
+  If Assigned(FCodeTodoList) And Assigned(FCodeSections) And
+    (FCodeTodoList.ItemIndex >= 0) And
+    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
+    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
+End;
+
 Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
 Begin
-  { Double-click marks the package in progress (start work). }
+  CodeTodoListClick(Sender);
   SetSelectedCodeSectionStatus(pssInProgress);
 End;
 
