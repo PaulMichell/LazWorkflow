@@ -977,9 +977,8 @@ End;
 
 Procedure TProjectAssistantForm.SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
 Var
-  PlanRel, Err: String;
+  PlanRel, Err, SectionTitle: String;
   Idx: Integer;
-  Section: TPlanSection;
 Begin
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
@@ -993,17 +992,18 @@ Begin
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Section := TPlanSection(FCodeSections[Idx]);
+  { Copy title before RefreshCodeTodos frees FCodeSections entries. }
+  SectionTitle := TPlanSection(FCodeSections[Idx]).Title;
   If Not SetPlanSectionStatus(PlanRel, Idx, NewStatus, Err) Then
     Begin
       MessageDlg(Err, mtError, [mbOK], 0);
       Exit;
     End;
   RefreshCodeTodos;
-  If Idx < FCodeTodoList.Items.Count Then
+  If Assigned(FCodeTodoList) And (Idx >= 0) And (Idx < FCodeTodoList.Items.Count) Then
     FCodeTodoList.ItemIndex := Idx;
   SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
-    [Section.Title, PlanSectionStatusToStr(NewStatus)]));
+    [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
 End;
 
 Procedure TProjectAssistantForm.CodeBtnRefreshClick(Sender: TObject);

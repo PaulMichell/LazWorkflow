@@ -592,7 +592,6 @@ Var
   Section: TPlanSection;
   SL: TStringList;
   StatusLine: String;
-  OpenAfter: Boolean;
 Begin
   Result := False;
   ErrorText := '';
@@ -649,9 +648,8 @@ Begin
         WorkflowLogger.Info('AssistantPlan',
           Format('Set section "%s" to %s in %s',
             [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
-        OpenAfter := Assigned(FindMarkdownDocument(Resolved));
-        If OpenAfter Then
-          OpenMarkdownDocument(Resolved);
+        { Reload open viewer only — do not re-enter full OpenMarkdownDocument create path. }
+        ReloadMarkdownDocument(Resolved, True);
       Except
         On E: Exception Do
           ErrorText := E.Message;
