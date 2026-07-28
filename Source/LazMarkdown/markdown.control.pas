@@ -56,6 +56,7 @@ Type
     FLastContextY: Integer;
     FMISelectWord: TMenuItem;
     FMISelectLine: TMenuItem;
+    FMISelectAll: TMenuItem;
     FMICopy: TMenuItem;
     function GetColor(AIndex: Integer): TColor;
     function GetDocument: TMarkDownDocument;
@@ -77,6 +78,7 @@ Type
     procedure ContextPopupPopup(Sender: TObject);
     procedure ContextSelectWordClick(Sender: TObject);
     procedure ContextSelectLineClick(Sender: TObject);
+    procedure ContextSelectAllClick(Sender: TObject);
     procedure ContextCopyClick(Sender: TObject);
   protected
     procedure Click; override;
@@ -112,6 +114,7 @@ Type
     procedure CopySelectionToClipBoard;
     function SelectWordAt(X, Y: Integer): Boolean;
     function SelectLineAt(X, Y: Integer): Boolean;
+    function SelectAll: Boolean;
     property MarkDown : TStrings Read FMarkDown Write SetMarkDown;
     property BaseFontSize: Integer index 0 read GetInteger Write SetInteger;
     property FontName: string index 0 read GetString write SetString;
@@ -373,6 +376,11 @@ begin
   FMISelectLine.Caption := 'Select Line';
   FMISelectLine.OnClick := @ContextSelectLineClick;
   FContextPopup.Items.Add(FMISelectLine);
+  FMISelectAll := TMenuItem.Create(FContextPopup);
+  FMISelectAll.Caption := 'Select All';
+  FMISelectAll.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
+  FMISelectAll.OnClick := @ContextSelectAllClick;
+  FContextPopup.Items.Add(FMISelectAll);
   Sep := TMenuItem.Create(FContextPopup);
   Sep.Caption := '-';
   FContextPopup.Items.Add(Sep);
@@ -386,6 +394,8 @@ end;
 
 procedure TCustomMarkDownControl.ContextPopupPopup(Sender: TObject);
 begin
+  if Assigned(FMISelectAll) then
+    FMISelectAll.Enabled := Assigned(FRenderer) and FRenderer.HasSelectableText;
   if Assigned(FMICopy) then
     FMICopy.Enabled := HasSelection;
 end;
@@ -398,6 +408,11 @@ end;
 procedure TCustomMarkDownControl.ContextSelectLineClick(Sender: TObject);
 begin
   SelectLineAt(FLastContextX, FLastContextY);
+end;
+
+procedure TCustomMarkDownControl.ContextSelectAllClick(Sender: TObject);
+begin
+  SelectAll;
 end;
 
 procedure TCustomMarkDownControl.ContextCopyClick(Sender: TObject);
@@ -559,12 +574,24 @@ begin
     Invalidate;
 end;
 
+function TCustomMarkDownControl.SelectAll: Boolean;
+begin
+  Result := Assigned(FRenderer) and FRenderer.SelectAll;
+  if Result then
+    Invalidate;
+end;
+
 procedure TCustomMarkDownControl.KeyDown(var Key: Word; Shift: TShiftState);
 begin
   if (Shift=[ssCtrl]) and ((Key=Ord('C')) or (Key=VK_INSERT)) then
     begin
     Key:=0;
     CopySelectionToClipBoard;
+    end
+  else if (Shift=[ssCtrl]) and (Key=Ord('A')) then
+    begin
+    Key:=0;
+    SelectAll;
     end
   else
     inherited KeyDown(Key, Shift);

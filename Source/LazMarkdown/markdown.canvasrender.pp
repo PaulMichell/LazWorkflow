@@ -280,7 +280,9 @@ type
     function HitTestText(const aX, aY: LongInt): TSelectionPoint;
     function SelectWordAt(const aX, aY: LongInt): Boolean;
     function SelectLineAt(const aX, aY: LongInt): Boolean;
+    function SelectAll: Boolean;
     function HasSelection: Boolean;
+    function HasSelectableText: Boolean;
 
     // Properties
     property CalculatedWidth: LongInt read FCalculatedWidth;
@@ -909,17 +911,66 @@ begin
   Result := True;
 end;
 
+function TMarkDownCanvasRenderer.SelectAll: Boolean;
+var
+  I, FirstIdx, LastIdx: Integer;
+  Item: TLayoutItem;
+  P1, P2: TSelectionPoint;
+begin
+  Result := False;
+  if not Assigned(FLists) or not Assigned(FLists.Items) then
+    Exit;
+  FirstIdx := -1;
+  LastIdx := -1;
+  for I := 0 to FLists.Items.Count - 1 do
+  begin
+    Item := FLists.Items[I];
+    if (Item.Kind = likText) and (UTF8Length(Item.Text) > 0) then
+    begin
+      if FirstIdx < 0 then
+        FirstIdx := I;
+      LastIdx := I;
+    end;
+  end;
+  if (FirstIdx < 0) or (LastIdx < 0) then
+    Exit;
+  P1.LayoutItemIndex := FirstIdx;
+  P1.CharOffset := 0;
+  P2.LayoutItemIndex := LastIdx;
+  P2.CharOffset := UTF8Length(FLists.Items[LastIdx].Text);
+  SetSelection(P1, P2);
+  Result := True;
+end;
+
 function TMarkDownCanvasRenderer.HasSelection: Boolean;
 var
   I: Integer;
   Item: TLayoutItem;
 begin
   Result := False;
+  if not Assigned(FLists) or not Assigned(FLists.Items) then
+    Exit;
   for I := 0 to FLists.Items.Count - 1 do
   begin
     Item := FLists.Items[I];
     if Item.IsSelected and (Item.Kind = likText) and
       (Item.SelectionEndChar > Item.SelectionStartChar) then
+      Exit(True);
+  end;
+end;
+
+function TMarkDownCanvasRenderer.HasSelectableText: Boolean;
+var
+  I: Integer;
+  Item: TLayoutItem;
+begin
+  Result := False;
+  if not Assigned(FLists) or not Assigned(FLists.Items) then
+    Exit;
+  for I := 0 to FLists.Items.Count - 1 do
+  begin
+    Item := FLists.Items[I];
+    if (Item.Kind = likText) and (UTF8Length(Item.Text) > 0) then
       Exit(True);
   end;
 end;
