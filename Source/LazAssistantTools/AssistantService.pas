@@ -106,6 +106,14 @@ Uses
   AssistantHttps;
 
 Type
+  { One UI snapshot for the main thread; queued under FSnapLock to avoid races. }
+  TStreamSnapshot = Record
+    Content: String;
+    Thinking: String;
+    ErrorText: String;
+    IsFinished: Boolean;
+  End;
+
   TAssistantStreamThread = Class(TThread)
   Private
     FService: TAssistantService;
@@ -114,10 +122,8 @@ Type
     FModel: String;
     FRequestJson: String;
     FOnToken: TAssistantStreamEvent;
-    FPendingContent: String;
-    FPendingThinking: String;
-    FPendingError: String;
-    FPendingFinished: Boolean;
+    FSnapLock: TRTLCriticalSection;
+    FSnapQueue: Array Of TStreamSnapshot;
     FSseBuffer: String;
     FContentAccum: String;
     FThinkingAccum: String;
@@ -145,6 +151,7 @@ Type
   Public
     Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model, RequestJson: String;
       OnToken: TAssistantStreamEvent);
+    Destructor Destroy; Override;
     Procedure AbortHttp;
     Procedure Detach;
   End;
@@ -228,6 +235,8 @@ Constructor TAssistantStreamThread.Create(Service: TAssistantService;
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
+  InitCriticalSection(FSnapLock);
+  SetLength(FSnapQueue, 0);
   FService := Service;
   FApiBase := ApiBase;
   FAccessToken := AccessToken;
@@ -244,6 +253,14 @@ Begin
   FToolRound := 0;
   FHttpClient := Nil;
   FStreamControl := Nil;
+End;
+
+Destructor TAssistantStreamThread.Destroy;
+Begin
+  AbortHttp;
+  SetLength(FSnapQueue, 0);
+  DoneCriticalSection(FSnapLock);
+  Inherited Destroy;
 End;
 
 Procedure TAssistantStreamThread.HttpsChunk(Const Chunk: String);
@@ -281,12 +298,42 @@ Begin
 End;
 
 Procedure TAssistantStreamThread.NotifyMain;
+Var
+  Snap: TStreamSnapshot;
+  HasItem: Boolean;
+  I: Integer;
 Begin
-  If Assigned(FOnToken) Then
-    FOnToken(FPendingContent, FPendingThinking, FPendingFinished, FPendingError);
+  { Drain all queued snapshots so rapid stream ticks do not drop finishes. }
+  Repeat
+    HasItem := False;
+    EnterCriticalSection(FSnapLock);
+    Try
+      If Length(FSnapQueue) > 0 Then
+        Begin
+          Snap := FSnapQueue[0];
+          For I := 1 To High(FSnapQueue) Do
+            FSnapQueue[I - 1] := FSnapQueue[I];
+          SetLength(FSnapQueue, Length(FSnapQueue) - 1);
+          HasItem := True;
+        End;
+    Finally
+      LeaveCriticalSection(FSnapLock);
+    End;
+    If Not HasItem Then
+      Break;
+    If Assigned(FOnToken) Then
+      Try
+        FOnToken(Snap.Content, Snap.Thinking, Snap.IsFinished, Snap.ErrorText);
+      Except
+        On E: Exception Do
+          WorkflowLogger.Warning('AssistantStream', 'UI snapshot failed: ' + E.Message);
+      End;
+  Until False;
 End;
 
 Procedure TAssistantStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
+Var
+  N: Integer;
 Begin
   If Terminated And (Not IsDone) Then
     Exit;
@@ -297,10 +344,19 @@ Begin
         Exit;
       FFinishEmitted := True;
     End;
-  FPendingContent := FContentAccum;
-  FPendingThinking := FThinkingAccum;
-  FPendingFinished := IsDone;
-  FPendingError := ErrorText;
+  { Queue a *copy* of the snapshot under lock so the worker can keep writing
+    accumulators without racing the main thread (was a source of AVs). }
+  EnterCriticalSection(FSnapLock);
+  Try
+    N := Length(FSnapQueue);
+    SetLength(FSnapQueue, N + 1);
+    FSnapQueue[N].Content := FContentAccum;
+    FSnapQueue[N].Thinking := FThinkingAccum;
+    FSnapQueue[N].ErrorText := ErrorText;
+    FSnapQueue[N].IsFinished := IsDone;
+  Finally
+    LeaveCriticalSection(FSnapLock);
+  End;
   { Queue avoids deadlock: main thread can CancelStream/WaitFor while we notify.
     Tool rounds still use Synchronize so tools run on the main thread. }
   Queue(@NotifyMain);
@@ -566,42 +622,66 @@ Var
 Begin
   If Not Assigned(FService) Then
     Exit;
-  { Build tool_calls JSON array for the assistant history message. }
-  ToolCallsJson := '[';
-  For I := 0 To High(FToolCalls) Do
-    Begin
-      If FToolCalls[I].Name = '' Then
-        Continue;
-      If Length(ToolCallsJson) > 1 Then
-        ToolCallsJson := ToolCallsJson + ',';
-      If FToolCalls[I].Id = '' Then
-        FToolCalls[I].Id := Format('call_%d_%d', [FToolRound, I]);
-      ToolCallsJson := ToolCallsJson + Format(
-        '{"id":"%s","type":"function","function":{"name":"%s","arguments":"%s"}}',
-        [JsonEscape(FToolCalls[I].Id), JsonEscape(FToolCalls[I].Name),
-         JsonEscape(FToolCalls[I].Arguments)]);
-    End;
-  ToolCallsJson := ToolCallsJson + ']';
-  FService.AddAssistantToolCalls(FContentAccum, ToolCallsJson);
+  Try
+    { Build tool_calls JSON array for the assistant history message. }
+    ToolCallsJson := '[';
+    For I := 0 To High(FToolCalls) Do
+      Begin
+        If FToolCalls[I].Name = '' Then
+          Continue;
+        If Length(ToolCallsJson) > 1 Then
+          ToolCallsJson := ToolCallsJson + ',';
+        If FToolCalls[I].Id = '' Then
+          FToolCalls[I].Id := Format('call_%d_%d', [FToolRound, I]);
+        ToolCallsJson := ToolCallsJson + Format(
+          '{"id":"%s","type":"function","function":{"name":"%s","arguments":"%s"}}',
+          [JsonEscape(FToolCalls[I].Id), JsonEscape(FToolCalls[I].Name),
+           JsonEscape(FToolCalls[I].Arguments)]);
+      End;
+    ToolCallsJson := ToolCallsJson + ']';
+    FService.AddAssistantToolCalls(FContentAccum, ToolCallsJson);
 
-  For I := 0 To High(FToolCalls) Do
-    Begin
-      If FToolCalls[I].Name = '' Then
-        Continue;
-      ResultText := '';
-      ErrorText := '';
-      Ok := ExecuteAssistantToolForMode(FToolCalls[I].Name, FToolCalls[I].Arguments,
-        FService.ActiveMode, ResultText, ErrorText);
-      If Ok Then
-        Content := ResultText
-      Else
-        Content := 'Error: ' + ErrorText;
-      FService.AddToolResult(FToolCalls[I].Id, Content);
-      WorkflowLogger.Info('AssistantStream',
-        Format('tool %s ok=%s len=%d', [FToolCalls[I].Name, BoolToStr(Ok, True), Length(Content)]));
-      If Ok And SameText(FToolCalls[I].Name, 'write_markdown') Then
-        FWrotePlanFile := True;
-    End;
+    For I := 0 To High(FToolCalls) Do
+      Begin
+        If FToolCalls[I].Name = '' Then
+          Continue;
+        ResultText := '';
+        ErrorText := '';
+        Try
+          Ok := ExecuteAssistantToolForMode(FToolCalls[I].Name, FToolCalls[I].Arguments,
+            FService.ActiveMode, ResultText, ErrorText);
+        Except
+          On E: Exception Do
+            Begin
+              Ok := False;
+              ErrorText := 'Tool raised: ' + E.Message;
+              ResultText := '';
+            End;
+        End;
+        If Ok Then
+          Content := ResultText
+        Else
+          Content := 'Error: ' + ErrorText;
+        FService.AddToolResult(FToolCalls[I].Id, Content);
+        WorkflowLogger.Info('AssistantStream',
+          Format('tool %s ok=%s len=%d', [FToolCalls[I].Name, BoolToStr(Ok, True), Length(Content)]));
+        If Ok And (SameText(FToolCalls[I].Name, 'write_markdown') Or
+          SameText(FToolCalls[I].Name, 'update_markdown')) Then
+          FWrotePlanFile := True;
+      End;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Warning('AssistantStream', 'Tool round failed: ' + E.Message);
+        { Ensure the model gets a tool error so the conversation can continue. }
+        For I := 0 To High(FToolCalls) Do
+          If (FToolCalls[I].Name <> '') And (FToolCalls[I].Id <> '') Then
+            Try
+              FService.AddToolResult(FToolCalls[I].Id, 'Error: tool round failed: ' + E.Message);
+            Except
+            End;
+      End;
+  End;
 End;
 
 Procedure TAssistantStreamThread.ProcessSseLine(Const Line: String);

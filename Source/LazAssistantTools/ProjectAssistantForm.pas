@@ -2200,25 +2200,30 @@ Begin
   { Ignore late Queue packets after the turn has finished (prevents a second Begin/Finish cycle). }
   If Not FSending Then
     Exit;
-  If Not FStreamingActive Then
-    BeginAssistantReply;
-  { Always keep live buffers for the background stream. }
-  FLiveContent := ContentSnapshot;
-  FLiveThinking := ThinkingSnapshot;
-  If FLiveContent <> '' Then
-    SetStreamPhase('Streaming…')
-  Else If FLiveThinking <> '' Then
-    SetStreamPhase('Thinking…')
-  Else
-    SetStreamPhase('Waiting for first token…');
-  { Only repaint the chat pane when the user is watching the live turn. }
-  If FViewingLive Then
-    Begin
-      FDisplayUser := FLiveUser;
-      FAssistantContent := FLiveContent;
-      FAssistantThinking := FLiveThinking;
-      RefreshChatDisplay(False, True);
-    End;
+  Try
+    If Not FStreamingActive Then
+      BeginAssistantReply;
+    { Always keep live buffers for the background stream. }
+    FLiveContent := ContentSnapshot;
+    FLiveThinking := ThinkingSnapshot;
+    If FLiveContent <> '' Then
+      SetStreamPhase('Streaming…')
+    Else If FLiveThinking <> '' Then
+      SetStreamPhase('Thinking…')
+    Else If FStatusPhase = '' Then
+      SetStreamPhase('Waiting for first token…');
+    { Only repaint the chat pane when the user is watching the live turn. }
+    If FViewingLive Then
+      Begin
+        FDisplayUser := FLiveUser;
+        FAssistantContent := FLiveContent;
+        FAssistantThinking := FLiveThinking;
+        RefreshChatDisplay(False, True);
+      End;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ProjectAssistant', 'ApplyAssistantSnapshots: ' + E.Message);
+  End;
 End;
 
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
