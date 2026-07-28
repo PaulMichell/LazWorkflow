@@ -918,7 +918,7 @@ var
   P1, P2: TSelectionPoint;
 begin
   Result := False;
-  if not Assigned(FLists) or not Assigned(FLists.Items) then
+  if not Assigned(FLists.Items) then
     Exit;
   FirstIdx := -1;
   LastIdx := -1;
@@ -948,14 +948,17 @@ var
   Item: TLayoutItem;
 begin
   Result := False;
-  if not Assigned(FLists) or not Assigned(FLists.Items) then
+  if not Assigned(FLists.Items) then
     Exit;
   for I := 0 to FLists.Items.Count - 1 do
   begin
     Item := FLists.Items[I];
     if Item.IsSelected and (Item.Kind = likText) and
       (Item.SelectionEndChar > Item.SelectionStartChar) then
-      Exit(True);
+    begin
+      Result := True;
+      Exit;
+    end;
   end;
 end;
 
@@ -965,13 +968,16 @@ var
   Item: TLayoutItem;
 begin
   Result := False;
-  if not Assigned(FLists) or not Assigned(FLists.Items) then
+  if not Assigned(FLists.Items) then
     Exit;
   for I := 0 to FLists.Items.Count - 1 do
   begin
     Item := FLists.Items[I];
     if (Item.Kind = likText) and (UTF8Length(Item.Text) > 0) then
-      Exit(True);
+    begin
+      Result := True;
+      Exit;
+    end;
   end;
 end;
 
