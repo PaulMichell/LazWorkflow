@@ -730,13 +730,14 @@ End;
 
 Procedure TAssistantStreamThread.Execute;
 Const
-  { One HTTP stream that ends with tool_calls counts as a round; allow multi-file
-    exploration without failing mid-answer on large units. }
-  MaxToolRounds = 6;
+  { One HTTP stream that ends with tool_calls counts as a round.
+    Code-mode inventory / multi-file reads need more headroom than a short chat answer. }
+  MaxToolRounds = 20;
 Var
   Url, ErrorText, RequestJson: String;
   RoundNo: Integer;
   WroteBefore: Boolean;
+  LastContent, LastThinking: String;
 Begin
   Url := Trim(FApiBase);
   While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
@@ -745,6 +746,8 @@ Begin
 
   RequestJson := FRequestJson;
   FWrotePlanFile := False;
+  LastContent := '';
+  LastThinking := '';
   For RoundNo := 0 To MaxToolRounds Do
     Begin
       If Terminated Then
@@ -765,6 +768,10 @@ Begin
           Exit;
         End;
       Inc(FToolRound);
+      If FContentAccum <> '' Then
+        LastContent := FContentAccum;
+      If FThinkingAccum <> '' Then
+        LastThinking := FThinkingAccum;
       WorkflowLogger.Info('AssistantStream', Format('tool round %d (%d calls)',
         [FToolRound, Length(FToolCalls)]));
       EmitSnapshots(False, 'Running tools…');
@@ -785,12 +792,27 @@ Begin
       If Not FFinishEmitted Then
         EmitSnapshots(True, 'Cancelled.');
     End
-  Else If FWrotePlanFile Or (FContentAccum <> '') Then
-    EmitSnapshots(True, '') { Prefer Ready over a hard error after useful work. }
   Else
-    EmitSnapshots(True, Format(
-      'Stopped after %d tool rounds. Try a more focused request.',
-      [FToolRound]));
+    Begin
+      { Restore last visible snapshots if the final tool-only round left them empty. }
+      If (FContentAccum = '') And (LastContent <> '') Then
+        FContentAccum := LastContent;
+      If (FThinkingAccum = '') And (LastThinking <> '') Then
+        FThinkingAccum := LastThinking;
+      If FWrotePlanFile Or (FContentAccum <> '') Or (FThinkingAccum <> '') Then
+        Begin
+          { Prefer Ready after partial progress; note the round cap in the thinking footer only. }
+          If FContentAccum = '' Then
+            FContentAccum :=
+              '*(Tool-round limit reached after ' + IntToStr(FToolRound) +
+              ' rounds. Partial progress above — send a follow-up to continue, or narrow the package.)*';
+          EmitSnapshots(True, '');
+        End
+      Else
+        EmitSnapshots(True, Format(
+          'Stopped after %d tool rounds with no answer. Try a more focused request or split the package.',
+          [FToolRound]));
+    End;
 End;
 
 { TAssistantService }

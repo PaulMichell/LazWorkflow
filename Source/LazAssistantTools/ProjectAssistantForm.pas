@@ -1121,11 +1121,17 @@ Begin
     LineEnding +
     'Instructions:' + LineEnding +
     '1. Focus only on this work package unless you need a tiny amount of neighbouring context.' + LineEnding +
-    '2. Use project tools (read_file, list_directory, get_project_info) as needed.' + LineEnding +
-    '3. Prefer concrete Free Pascal / Lazarus changes with file paths and clear steps.' + LineEnding +
-    '4. When this package is finished, say so clearly so I can mark it **Done** on the Code tab ' +
-    '(or update `Status: complete` in the plan via tools).' + LineEnding +
-    '5. Do not expand scope into other work packages unless blocked.' + LineEnding +
+    '2. Use tools sparingly and in batches: prefer `get_project_info` + `list_directory` first, ' +
+    'then a few targeted `read_file` calls. Avoid many tiny tool rounds.' + LineEnding +
+    '3. For inventory / review / baseline packages: deliver the result **in the chat reply** ' +
+    '(tables, findings, next steps). Do **not** create extra Markdown files (no Baseline.md) ' +
+    'unless I explicitly ask. Prefer one final answer over long write_markdown cycles.' + LineEnding +
+    '4. For implementation packages: prefer concrete Free Pascal / Lazarus changes with file paths ' +
+    'and clear steps (source-edit tools are limited — explain edits precisely when you cannot apply them).' + LineEnding +
+    '5. Only use `update_markdown` on the active plan to set `Status: complete` (or a short note) ' +
+    'when the package is truly finished — not for dumping the whole deliverable into the plan.' + LineEnding +
+    '6. When finished, state clearly that I can mark **Done** on the Code tab.' + LineEnding +
+    '7. Do not expand scope into other work packages unless blocked.' + LineEnding +
     LineEnding +
     '----- begin plan section -----' + LineEnding +
     Body + LineEnding +
