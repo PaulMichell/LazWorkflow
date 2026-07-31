@@ -342,6 +342,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           BevelOuter = bvNone
           ClientHeight = 140
           ClientWidth = 509
+          Constraints.MinHeight = 90
           TabOrder = 3
           object FMessageLabel: TLabel
             Left = 8
@@ -420,15 +421,25 @@ object ManageRepositoryForm: TManageRepositoryForm
             end
           end
         end
+        object FCommitSplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 398
+          Width = 509
+          Align = alBottom
+          ResizeAnchor = akBottom
+        end
         object FStagedPanel: TPanel
           Left = 0
           Height = 120
-          Top = 283
+          Top = 278
           Width = 509
           Align = alBottom
           BevelOuter = bvNone
           ClientHeight = 120
           ClientWidth = 509
+          Constraints.MinHeight = 60
           TabOrder = 2
           object FStagedLabel: TLabel
             Left = 8
@@ -460,7 +471,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Cursor = crVSplit
           Left = 0
           Height = 5
-          Top = 278
+          Top = 273
           Width = 509
           Align = alBottom
           ResizeAnchor = akBottom

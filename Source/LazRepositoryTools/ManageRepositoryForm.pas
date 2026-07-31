@@ -47,6 +47,7 @@ Type
     FStagedPanel: TPanel;
     FStagedLabel: TLabel;
     FStagedList: TListBox;
+    FCommitSplitter: TSplitter;
     FFilesDiffView: TGitDiffView;
     FCommitPanel: TPanel;
     FMessageLabel: TLabel;
@@ -422,6 +423,10 @@ Begin
     { ResizeControl is public but not published – cannot stream from the .lfm. }
     If Assigned(FSplitter) And Assigned(FDetailPanel) Then
       FSplitter.ResizeControl := FDetailPanel;
+    If Assigned(FCommitSplitter) And Assigned(FCommitPanel) Then
+      FCommitSplitter.ResizeControl := FCommitPanel;
+    If Assigned(FStagedSplitter) And Assigned(FStagedPanel) Then
+      FStagedSplitter.ResizeControl := FStagedPanel;
 
     If Assigned(FDiffView) Then
       FDiffView.SetViewMode(dvmBrowse);
