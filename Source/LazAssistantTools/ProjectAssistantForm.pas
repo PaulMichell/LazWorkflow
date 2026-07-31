@@ -1,6 +1,6 @@
 Unit ProjectAssistantForm;
 
-{ Project Assistant main window — mode tabs, current-turn view, status footer (c) 2026 Michell Computing. }
+{ Project Assistant main window — shared turn view, mode side panel, status footer (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
+  Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan;
 
 Type
@@ -29,10 +29,14 @@ Type
     FToggleThinkingAction: TAction;
     FExportHistoryAction: TAction;
     FDeleteHistoryAction: TAction;
-    FPages: TPageControl;
-    FTabChat: TTabSheet;
-    FTabPlan: TTabSheet;
-    FTabCode: TTabSheet;
+    FModeBar: TPanel;
+    FModeGroup: TRadioGroup;
+    FModeBadge: TLabel;
+    FClientPanel: TPanel;
+    FModeSidePanel: TPanel;
+    FModeSplitter: TSplitter;
+    FChatSidePanel: TPanel;
+    FChatSideLabel: TLabel;
     FConversationPanel: TPanel;
     FHistoryLabel: TLabel;
     FHistoryCombo: TComboBox;
@@ -43,9 +47,7 @@ Type
     FConversationList: TListBox;
     FChatSplitter: TSplitter;
     FChatHost: TPanel;
-    FPlanPlaceholder: TLabel;
-    FCodePlaceholder: TLabel;
-    { Plan tab (created at runtime if placeholder present). }
+    { Plan workspace (runtime, left mode panel). }
     FPlanPanel: TPanel;
     FPlanActiveLabel: TLabel;
     FPlanList: TListBox;
@@ -54,7 +56,7 @@ Type
     FPlanBtnSetActive: TButton;
     FPlanBtnRefresh: TButton;
     FPlanBtnOpenDocs: TButton;
-    { Code tab TODO panel (runtime). }
+    { Code TODO workspace (runtime, left mode panel). }
     FCodePanel: TPanel;
     FCodeActiveLabel: TLabel;
     FCodeTodoList: TListBox;
@@ -83,7 +85,7 @@ Type
     PromptSplitter: TSplitter;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
-    Procedure PagesChange(Sender: TObject);
+    Procedure ModeGroupClick(Sender: TObject);
     Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
@@ -134,8 +136,8 @@ Type
     FHistoryIds: TStringList; { Parallel to FHistoryCombo; '' = current conversation. }
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
-    FModeLocked: Boolean; { True while a send uses Chat surface but keeps Plan/Code tools. }
-    FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes tabs. }
+    FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
+    FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes mode. }
     FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
     FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FCodeWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
@@ -157,8 +159,11 @@ Type
     Procedure ShowConversationTurn(TurnIndex: Integer);
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
-    Function CurrentModeFromTabs: TAssistantMode;
-    Procedure SelectModeTab(Mode: TAssistantMode);
+    Function CurrentModeFromUi: TAssistantMode;
+    Procedure SelectMode(Mode: TAssistantMode);
+    Procedure SyncModeUi;
+    Procedure UpdateModeBadge;
+    Procedure UpdateModeSidePanels;
     Procedure ApplyActiveMode;
     Procedure ShowChatSurfaceKeepMode;
     Procedure LockModeForSend;
@@ -415,83 +420,114 @@ Begin
     Screen.Cursor := crDefault;
 End;
 
-Function TProjectAssistantForm.CurrentModeFromTabs: TAssistantMode;
+Function TProjectAssistantForm.CurrentModeFromUi: TAssistantMode;
 Begin
   Result := amChat;
-  If Not Assigned(FPages) Or Not Assigned(FPages.ActivePage) Then
+  If Not Assigned(FModeGroup) Then
     Exit;
-  If FPages.ActivePage = FTabPlan Then
-    Result := amPlan
-  Else If FPages.ActivePage = FTabCode Then
-    Result := amCode
+  Case FModeGroup.ItemIndex Of
+    1: Result := amPlan;
+    2: Result := amCode;
   Else
     Result := amChat;
+  End;
 End;
 
-Procedure TProjectAssistantForm.SelectModeTab(Mode: TAssistantMode);
+Procedure TProjectAssistantForm.SelectMode(Mode: TAssistantMode);
 Begin
-  If Not Assigned(FPages) Then
-    Exit;
+  FActiveMode := Mode;
+  FModeSticky := False;
+  SyncModeUi;
+  ApplyActiveMode;
+End;
+
+Procedure TProjectAssistantForm.SyncModeUi;
+Var
+  Wanted: Integer;
+Begin
   FApplyingShellConfig := True;
   Try
-    Case Mode Of
-      amPlan:
-        If Assigned(FTabPlan) Then
-          FPages.ActivePage := FTabPlan;
-      amCode:
-        If Assigned(FTabCode) Then
-          FPages.ActivePage := FTabCode;
+    Case FActiveMode Of
+      amPlan: Wanted := 1;
+      amCode: Wanted := 2;
     Else
-      If Assigned(FTabChat) Then
-        FPages.ActivePage := FTabChat;
+      Wanted := 0;
     End;
+    If Assigned(FModeGroup) And (FModeGroup.ItemIndex <> Wanted) Then
+      FModeGroup.ItemIndex := Wanted;
   Finally
     FApplyingShellConfig := False;
   End;
-  ApplyActiveMode;
+  UpdateModeSidePanels;
+  UpdateModeBadge;
+End;
+
+Procedure TProjectAssistantForm.UpdateModeBadge;
+Var
+  ToolsHint: String;
+Begin
+  Case FActiveMode Of
+    amPlan: ToolsHint := 'write plan Markdown';
+    amCode: ToolsHint := 'edit sources · compile';
+  Else
+    ToolsHint := 'read-only tools';
+  End;
+  If Assigned(FModeBadge) Then
+    Begin
+      If FModeLocked Or FSending Then
+        FModeBadge.Caption := Format('Mode: %s · %s · (reply in progress)',
+          [AssistantModeToStr(FActiveMode), ToolsHint])
+      Else If FModeSticky Then
+        FModeBadge.Caption := Format('Mode: %s · %s · (sticky until you change mode)',
+          [AssistantModeToStr(FActiveMode), ToolsHint])
+      Else
+        FModeBadge.Caption := Format('Mode: %s · %s',
+          [AssistantModeToStr(FActiveMode), ToolsHint]);
+    End;
+  If Assigned(FModeGroup) Then
+    FModeGroup.Enabled := Not (FSending Or FModeLocked);
+End;
+
+Procedure TProjectAssistantForm.UpdateModeSidePanels;
+Begin
+  If Assigned(FChatSidePanel) Then
+    FChatSidePanel.Visible := FActiveMode = amChat;
+  If Assigned(FPlanPanel) Then
+    FPlanPanel.Visible := FActiveMode = amPlan;
+  If Assigned(FCodePanel) Then
+    FCodePanel.Visible := FActiveMode = amCode;
 End;
 
 Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
 Begin
-  { Plan/Code workspace tabs do not host the turn view. Switch the notebook to
-    Chat for the reply without changing FActiveMode (Plan tools stay armed). }
-  If Not Assigned(FPages) Or Not Assigned(FTabChat) Then
-    Exit;
-  If FPages.ActivePage = FTabChat Then
-    Exit;
-  FApplyingShellConfig := True;
-  Try
-    FPages.ActivePage := FTabChat;
-  Finally
-    FApplyingShellConfig := False;
-  End;
+  { Shared turn view is always visible; keep mode UI in sync without tab swaps. }
+  SyncModeUi;
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
 End;
 
 Procedure TProjectAssistantForm.LockModeForSend;
 Begin
-  { Capture mode from the tab the user is on, then freeze it for the turn.
-    SetSending(True) used to call ApplyActiveMode after the UI switched to Chat,
-    which reclassified the turn as Chat and stripped Plan write tools. }
-  FActiveMode := CurrentModeFromTabs;
+  { Capture mode from the mode control, then freeze it for the turn. }
+  FActiveMode := CurrentModeFromUi;
   FModeLocked := True;
   FModeSticky := FActiveMode In [amPlan, amCode];
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
+  UpdateModeBadge;
   WorkflowLogger.Info('ProjectAssistant',
     'Mode locked for send: ' + AssistantModeToStr(FActiveMode));
 End;
 
 Procedure TProjectAssistantForm.ForceModeAndLock(Mode: TAssistantMode);
 Begin
-  { Enter a specific mode for this turn even if the notebook is on another tab
-    (e.g. Fix Error from Chat → Code tools; Work-on-this while browsing Chat). }
+  { Enter a specific mode for this turn (e.g. Fix Error / Work-on-this → Code). }
   FActiveMode := Mode;
   FModeLocked := True;
   FModeSticky := Mode In [amPlan, amCode];
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(Mode);
+  SyncModeUi;
   WorkflowLogger.Info('ProjectAssistant',
     'Mode forced for send: ' + AssistantModeToStr(Mode));
 End;
@@ -499,9 +535,10 @@ End;
 Procedure TProjectAssistantForm.UnlockModeAfterSend;
 Begin
   FModeLocked := False;
-  { FModeSticky keeps Plan/Code tools while the Chat surface still shows the turn. }
+  { FModeSticky keeps Plan/Code tools until the user picks another mode. }
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
+  UpdateModeBadge;
 End;
 
 Function TProjectAssistantForm.LooksLikePlanMarkdown(Const Body: String): Boolean;
@@ -572,11 +609,9 @@ End;
 
 Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
-  { When mode is locked or sticky, keep FActiveMode (Plan/Code) even if the
-    notebook shows Chat for the turn surface. Sticky clears when the user
-    explicitly changes tabs (PagesChange). }
+  { When mode is locked or sticky, keep FActiveMode; otherwise follow the mode control. }
   If (Not FModeLocked) And (Not FModeSticky) Then
-    FActiveMode := CurrentModeFromTabs;
+    FActiveMode := CurrentModeFromUi;
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
   { Fix Error always switches into Code tools, so keep it available in every mode. }
@@ -586,6 +621,8 @@ Begin
       Begin
         FReviewCompileAction.Enabled := False;
         FReviewBuildAction.Enabled := False;
+        EnsurePlanTabUi;
+        RefreshPlanList;
       End;
     amCode:
       Begin
@@ -600,11 +637,7 @@ Begin
       FReviewBuildAction.Enabled := Not FSending;
     End;
   End;
-  If FActiveMode = amPlan Then
-    Begin
-      EnsurePlanTabUi;
-      RefreshPlanList;
-    End;
+  SyncModeUi;
 End;
 
 Procedure TProjectAssistantForm.PersistShellConfig;
@@ -632,7 +665,7 @@ Begin
   FShowThinking := ShowThinking;
   UpdateThinkingActionCaption;
   SetActivePlanRelativePath(PlanFile);
-  SelectModeTab(Mode);
+  SelectMode(Mode);
   RefreshPlanList;
 End;
 
@@ -640,16 +673,15 @@ Procedure TProjectAssistantForm.EnsurePlanTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(FPlanPanel) Or (Not Assigned(FTabPlan)) Then
+  If Assigned(FPlanPanel) Or (Not Assigned(FModeSidePanel)) Then
     Exit;
-  If Assigned(FPlanPlaceholder) Then
-    FPlanPlaceholder.Visible := False;
 
   FPlanPanel := TPanel.Create(Self);
-  FPlanPanel.Parent := FTabPlan;
+  FPlanPanel.Parent := FModeSidePanel;
   FPlanPanel.Align := alClient;
   FPlanPanel.BevelOuter := bvNone;
   FPlanPanel.BorderSpacing.Around := 8;
+  FPlanPanel.Visible := FActiveMode = amPlan;
 
   FPlanActiveLabel := TLabel.Create(Self);
   FPlanActiveLabel.Parent := FPlanPanel;
@@ -782,7 +814,7 @@ Begin
   PersistShellConfig;
   RefreshPlanList;
   SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
-    '**. Switch to Plan mode chat on the Chat tab to refine it with the model.');
+    '**. Stay in **Plan** mode and send a message to refine it with the model.');
 End;
 
 Procedure TProjectAssistantForm.PlanBtnOpenClick(Sender: TObject);
@@ -863,16 +895,15 @@ Procedure TProjectAssistantForm.EnsureCodeTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(FCodePanel) Or (Not Assigned(FTabCode)) Then
+  If Assigned(FCodePanel) Or (Not Assigned(FModeSidePanel)) Then
     Exit;
-  If Assigned(FCodePlaceholder) Then
-    FCodePlaceholder.Visible := False;
 
   FCodePanel := TPanel.Create(Self);
-  FCodePanel.Parent := FTabCode;
+  FCodePanel.Parent := FModeSidePanel;
   FCodePanel.Align := alClient;
   FCodePanel.BevelOuter := bvNone;
   FCodePanel.BorderSpacing.Around := 8;
+  FCodePanel.Visible := FActiveMode = amCode;
 
   FCodeActiveLabel := TLabel.Create(Self);
   FCodeActiveLabel.Parent := FCodePanel;
@@ -1407,33 +1438,22 @@ Begin
   CodeWorkOnSelectedPackage;
 End;
 
-Procedure TProjectAssistantForm.PagesChange(Sender: TObject);
+Procedure TProjectAssistantForm.ModeGroupClick(Sender: TObject);
 Begin
   If FApplyingShellConfig Then
     Exit;
   If FSending Or FModeLocked Then
     Begin
-      { During a send the notebook may show Chat while mode stays Plan/Code.
-        Do not re-derive mode from the visible tab; keep the user on Chat surface. }
-      If FModeLocked And Assigned(FTabChat) And (FPages.ActivePage <> FTabChat) Then
-        Begin
-          FApplyingShellConfig := True;
-          Try
-            FPages.ActivePage := FTabChat;
-          Finally
-            FApplyingShellConfig := False;
-          End;
-        End;
+      { Freeze mode UI during a send; restore radio selection to FActiveMode. }
+      SyncModeUi;
       Exit;
     End;
-  { Explicit tab change ends sticky Plan/Code-after-Chat-surface behaviour. }
+  { Explicit mode change ends sticky Plan/Code behaviour. }
   FModeSticky := False;
+  FActiveMode := CurrentModeFromUi;
   ApplyActiveMode;
   PersistShellConfig;
-  If Assigned(FPages) And Assigned(FPages.ActivePage) Then
-    WorkflowLogger.Info('ProjectAssistant', 'Mode tab: ' + FPages.ActivePage.Caption);
-  If FActiveMode = amPlan Then
-    RefreshPlanList;
+  WorkflowLogger.Info('ProjectAssistant', 'Mode: ' + AssistantModeToStr(FActiveMode));
   RefreshConversationList;
 End;
 
@@ -2600,7 +2620,7 @@ Begin
       { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
       If Not FModeLocked Then
         LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
-      ShowChatSurfaceKeepMode; { turn UI on Chat tab; tools stay mode-locked }
+      ShowChatSurfaceKeepMode; { shared turn view already visible; sync mode chrome }
       { Detect run_compile during this turn for Code auto Status: complete. }
       FCompileSeqAtSendStart := AssistantLastCompileSeq;
       FinalApi := ApiText;

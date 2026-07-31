@@ -356,14 +356,13 @@ SQLite remains a **possible future** backend if analytics/query complexity outgr
 
 ```
 ┌─ Project Assistant ─────────────────────────────────────────┐
-│ [ Chat ] [ Plan ] [ Code ]                    (TPageControl) │
-├─────────────────────────────────────────────────────────────┤
-│  Optional: History list (filter)  │  Current turn            │
-│  • 12:01 Chat …                   │  User: …                 │
-│  • 12:04 Plan …                   │  [▼ Thinking] …          │
-│  • 12:10 Code …                   │  Assistant: …            │
-│                                   │  (Code: TODO panel)      │
-├─────────────────────────────────────────────────────────────┤
+│ Mode: ( Chat ●  Plan ○  Code ○ )   badge: tools / sticky    │
+├──────────────────┬──────────────────────┬───────────────────┤
+│ Mode side panel  │  Current turn        │  History          │
+│ Chat: help       │  (always visible)    │  conversations    │
+│ Plan: plan list  │  User / thinking /   │  turns            │
+│ Code: TODO tiles │  assistant           │                   │
+├──────────────────┴──────────────────────┴───────────────────┤
 │  Input multi-line                                           │
 ├─────────────────────────────────────────────────────────────┤
 │  [Send] [Stop] … mode actions … [Settings]     (bottom bar) │
@@ -372,7 +371,7 @@ SQLite remains a **possible future** backend if analytics/query complexity outgr
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Code mode adds a **TODO** strip or side panel when a plan is linked.
+Mode is a **permission control**, not a page swap. The turn surface never leaves the centre.
 
 ---
 
