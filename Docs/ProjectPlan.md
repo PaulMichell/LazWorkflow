@@ -441,12 +441,12 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 5. Plan-mode system prompt (write to disk, not only chat) + auto-save fallback — **done**.
 6. Plan tab: list / New / Open / Set active / Refresh / Open Documents/ — **done**.
 
-### Phase 4 – Code mode — **in progress**
-1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset update plan `Status:` lines then rescan — **done**.
-2. IDE-mediated source edit tools (sandbox, exact match, undoable) — **not started**.
-3. Compile/build as mode tools (Review Compile/Build already on the bottom bar) — **partial**.
-4. Optional edit confirmation policy for first release — **deferred**.
-5. End-to-end loop: plan task → edit → build → fix → mark done — **blocked on source edits**.
+### Phase 4 – Code mode — **usable MVP**
+1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset / Work on this — **done**.
+2. IDE-mediated source tools (`write_file`, `replace_in_file`, open buffer when possible) — **done**.
+3. `search_in_project`, `run_compile`, `add_unit_to_project`, `open_file` — **done**.
+4. Optional edit confirmation policy for first release — **deferred** (auto-apply in Code).
+5. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
 
 ### Phase 5 – Deep integration & polish
 - Git ↔ Assistant events; AI commit message; Fix Error → Code mode.
@@ -528,8 +528,8 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. **Code mode source edit tools** — IDE-buffer edits under project sandbox (**current**).
-2. Tighten Fix Error / Review Compile into Code mode workflow.
+1. Polish coding loop (confirm policy, better unit/form scaffolding, Fix Error → Code).
+2. Git ↔ Assistant integration (AI commit message).
 3. Wire Review Compile/Build more tightly into Code mode workflow (Fix Error → Code).
 4. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
 5. Package docs / example plan → code → compile loop.
