@@ -961,7 +961,8 @@ Begin
         '**Plan tools:** update_markdown / write_markdown only for plan Status: or short plan notes — ' +
         'not for dumping code deliverables into the plan.' + LineEnding +
         LineEnding +
-        '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean → say when Done. ' +
+        '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
+        'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete. ' +
         'Stay on the active work package. Prefer Michell Free Pascal conventions.';
   Else
     Result :=

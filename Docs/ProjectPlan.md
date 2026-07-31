@@ -413,7 +413,9 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Code mode source edit tools | **Done** (`write_file`, `replace_in_file`, `search_in_project`, `open_file`, `add_unit_to_project`) |
 | Code mode compile/build tools | **Done** (`run_compile` tool + Review Compile/Build UI) |
 | Form component tool (`.pas` + `.lfm`) | **Done** (`ensure_form_component`) |
-| Fix Error → Code mode | **Done** (tools apply the fix; Messages quick-fix) |
+| Fix Error → Code mode | **Done** (tools apply the fix; prefers top error) |
+| Review → Fix top error | **Done** (after Review with errors, top error selected + Fix Error offer) |
+| Auto Status: complete | **Done** (Work-on-this + clean `run_compile` this turn) |
 | AI commit message | **Done** (Manage Repository **Suggest** via staged diff) |
 
 ### Phase 0 – Foundations — **done**
@@ -450,11 +452,13 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 3. `search_in_project`, `run_compile`, `add_unit_to_project`, `open_file`, `ensure_form_component` — **done**.
 4. Optional edit confirmation policy for first release — **deferred** (auto-apply in Code).
 5. Fix Error → Code mode (tools + sticky mode until tab change) — **done**.
-6. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
+6. Auto Status: complete after Work-on-this + clean `run_compile` — **done**.
+7. Review → Fix top error offer — **done**.
+8. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
 
 ### Phase 5 – Deep integration & polish
 - Git ↔ Assistant: AI commit message (**Suggest** on Files tab) — **done**.
-- Further events / Fix Error polish as needed.
+- Coding-loop auto status / Review→Fix — **done**.
 - Theming, high-DPI, performance (large history.jsonl + index).
 - Docs, example workflow, package release.
 
@@ -533,11 +537,11 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. Polish coding loop (confirm policy, richer form scaffolding, auto Status: complete).
-2. Wire Review Compile/Build more tightly into Code mode (optional “Fix top error” after review).
-3. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
-4. Package docs / example plan → code → compile → commit loop.
-5. README status catch-up (still shows early phase wording).
+1. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
+2. Richer form scaffolding / optional edit confirmation policy.
+3. Package docs / example plan → code → compile → commit loop (when UI is stable).
+4. README status catch-up (still shows early phase wording).
+5. Theming, high-DPI, large-history performance.
 
 ---
 

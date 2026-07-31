@@ -32,6 +32,9 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
 Procedure SetActivePlanRelativePath(Const RelativePath: String);
+{ Last run_compile outcome for Code-mode auto Status: complete (seq bumps each run). }
+Function AssistantLastCompileSeq: Integer;
+Function AssistantLastCompileWasClean: Boolean;
 
 Implementation
 
@@ -42,6 +45,8 @@ Uses
 
 Var
   GActivePlanRelative: String;
+  GLastCompileSeq: Integer;
+  GLastCompileClean: Boolean;
 
 Function JsonEscapeLocal(Const SourceText: String): String;
 Var
@@ -78,6 +83,16 @@ Procedure SetActivePlanRelativePath(Const RelativePath: String);
 Begin
   GActivePlanRelative := Trim(RelativePath);
   GActivePlanRelative := StringReplace(GActivePlanRelative, '\', '/', [rfReplaceAll]);
+End;
+
+Function AssistantLastCompileSeq: Integer;
+Begin
+  Result := GLastCompileSeq;
+End;
+
+Function AssistantLastCompileWasClean: Boolean;
+Begin
+  Result := GLastCompileClean;
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -1336,10 +1351,18 @@ Begin
       End;
   End;
   MsgText := CollectIdeMessagesSummary(ErrorCount, WarningCount, HintCount);
+  Inc(GLastCompileSeq);
+  GLastCompileClean := BuildOk And (ErrorCount = 0);
   ResultText :=
     Format('%s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
-      [Kind, BoolToStr(BuildOk And (ErrorCount = 0), True), ErrorCount, WarningCount, HintCount]) +
+      [Kind, BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount, HintCount]) +
     LineEnding + LineEnding + MsgText;
+  If GLastCompileClean Then
+    ResultText := ResultText + LineEnding +
+      'COMPILE_CLEAN=1 (errors=0; Code mode may auto-mark the active plan package complete).'
+  Else
+    ResultText := ResultText + LineEnding +
+      'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
   Result := True;
 End;
 
@@ -1940,5 +1963,7 @@ End;
 Initialization
 
 GActivePlanRelative := '';
+GLastCompileSeq := 0;
+GLastCompileClean := False;
 
 End.

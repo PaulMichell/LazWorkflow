@@ -100,7 +100,7 @@ Var
 Begin
   Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
-    Form.FixSelectedError;
+    Form.FixTopError;
 End;
 
 Procedure TAssistantFixMessageQuickFix.CreateMenuItems(Fixes: TMsgQuickFixes);
@@ -128,7 +128,7 @@ Begin
     IDEMessagesWindow.SelectMsgLine(Msg);
   Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
-    Form.FixSelectedError;
+    Form.FixTopError;
 End;
 
 Procedure CreateProjectAssistantForm(Sender: TObject; FormName: String;

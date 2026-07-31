@@ -138,6 +138,11 @@ Type
     FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes tabs. }
     FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
     FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
+    FCodeWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
+    FCodeWorkSectionTitle: String;
+    FCompileSeqAtSendStart: Integer; { Snapshot of AssistantLastCompileSeq at turn start. }
+    FPendingReviewErrorOffer: Boolean; { After Review with errors, offer Fix Error. }
+    FReviewErrorCount: Integer;
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -159,7 +164,7 @@ Type
     Procedure LockModeForSend;
     Procedure ForceModeAndLock(Mode: TAssistantMode);
     Procedure UnlockModeAfterSend;
-    Function ResolveMessageLineForFix: TMessageLine;
+    Function ResolveMessageLineForFix(PreferTopError: Boolean = False): TMessageLine;
     Function CollectRelatedMessages(Primary: TMessageLine; MaxLines: Integer): String;
     Procedure PersistPlanReplyIfNeeded(Const ErrorText: String);
     Function LooksLikePlanMarkdown(Const Body: String): Boolean;
@@ -179,6 +184,11 @@ Type
     Function SelectedCodeSectionIndex: Integer;
     Procedure SetCodeStatusFeedback(Const MessageText: String);
     Procedure SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
+    Procedure ClearCodeWorkTracking;
+    Procedure BeginCodeWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
+    Procedure TryAutoCompleteCodeWork(Const StreamErrorText: String);
+    Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
+    Procedure OfferFixTopErrorAfterReview;
     Procedure CodeBtnRefreshClick(Sender: TObject);
     Procedure CodeBtnOpenPlanClick(Sender: TObject);
     Procedure CodeBtnStartClick(Sender: TObject);
@@ -239,6 +249,7 @@ Type
     Procedure ReviewCompile;
     Procedure ReviewBuild;
     Procedure FixSelectedError;
+    Procedure FixTopError;
     Procedure StopStream;
     { Rebind conversation store, session and UI to LazarusIDE.ActiveProject. }
     Procedure BindToActiveProject;
@@ -302,6 +313,11 @@ Begin
   FCodeSections := TObjectList.Create(True);
   FCodePanel := Nil;
   FCodeSelectedIndex := -1;
+  FCodeWorkSectionIndex := -1;
+  FCodeWorkSectionTitle := '';
+  FCompileSeqAtSendStart := 0;
+  FPendingReviewErrorOffer := False;
+  FReviewErrorCount := 0;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -1084,6 +1100,142 @@ Begin
   SetCodeStatusFeedback(Feedback);
   SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
     [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
+  If NewStatus = pssComplete Then
+    ClearCodeWorkTracking;
+End;
+
+Procedure TProjectAssistantForm.ClearCodeWorkTracking;
+Begin
+  FCodeWorkSectionIndex := -1;
+  FCodeWorkSectionTitle := '';
+End;
+
+Procedure TProjectAssistantForm.BeginCodeWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
+Begin
+  FCodeWorkSectionIndex := SectionIndex;
+  FCodeWorkSectionTitle := SectionTitle;
+  FCompileSeqAtSendStart := AssistantLastCompileSeq;
+End;
+
+Procedure TProjectAssistantForm.TryAutoCompleteCodeWork(Const StreamErrorText: String);
+Var
+  PlanRel, Err, Note: String;
+  Idx: Integer;
+  CompileThisTurn, CompileClean: Boolean;
+Begin
+  Idx := FCodeWorkSectionIndex;
+  If Idx < 0 Then
+    Exit;
+  If StreamErrorText <> '' Then
+    Begin
+      SetCodeStatusFeedback('Work interrupted — package still in progress.');
+      Exit;
+    End;
+  CompileThisTurn := AssistantLastCompileSeq > FCompileSeqAtSendStart;
+  CompileClean := CompileThisTurn And AssistantLastCompileWasClean;
+  If Not CompileThisTurn Then
+    Begin
+      SetCodeStatusFeedback(Format('"%s" work finished (no run_compile this turn) — use Done when ready.',
+        [FCodeWorkSectionTitle]));
+      Exit;
+    End;
+  If Not CompileClean Then
+    Begin
+      SetCodeStatusFeedback(Format('"%s" work finished but compile is not clean — fix errors, then Done.',
+        [FCodeWorkSectionTitle]));
+      Exit;
+    End;
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      ClearCodeWorkTracking;
+      Exit;
+    End;
+  { Ensure list still matches; refresh may reorder if plan changed. }
+  FCodeSelectedIndex := Idx;
+  If Not SetPlanSectionStatus(PlanRel, Idx, pssComplete, Err) Then
+    Begin
+      SetCodeStatusFeedback('Auto-complete failed: ' + Err);
+      WorkflowLogger.Warning('ProjectAssistant', 'Auto Status complete failed: ' + Err);
+      Exit;
+    End;
+  RefreshCodeTodos;
+  If Assigned(FCodeTodoList) And (Idx >= 0) And (Idx < FCodeTodoList.Items.Count) Then
+    Begin
+      FCodeTodoList.ItemIndex := Idx;
+      FCodeSelectedIndex := Idx;
+    End;
+  Note := Format('Auto-marked **%s** complete (Work-on-this + clean `run_compile`).',
+    [FCodeWorkSectionTitle]);
+  SetCodeStatusFeedback(Format('%s → complete (auto)', [FCodeWorkSectionTitle]));
+  If FViewingLive Then
+    Begin
+      If FDisplaySystemNote <> '' Then
+        FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Note
+      Else
+        FDisplaySystemNote := Note;
+    End
+  Else
+    SetCurrentSystemNote(Note);
+  WorkflowLogger.Info('ProjectAssistant', 'Auto Status complete: ' + FCodeWorkSectionTitle);
+  ClearCodeWorkTracking;
+End;
+
+Procedure TProjectAssistantForm.PrepareTopErrorAfterReview(ErrorCount: Integer);
+Var
+  Line: TMessageLine;
+Begin
+  FReviewErrorCount := ErrorCount;
+  FPendingReviewErrorOffer := ErrorCount > 0;
+  If Not FPendingReviewErrorOffer Then
+    Exit;
+  Line := ResolveMessageLineForFix(True);
+  If Assigned(Line) And Assigned(IDEMessagesWindow) Then
+    IDEMessagesWindow.SelectMsgLine(Line);
+End;
+
+Procedure TProjectAssistantForm.OfferFixTopErrorAfterReview;
+Var
+  Line: TMessageLine;
+  Note, MsgText: String;
+Begin
+  If Not FPendingReviewErrorOffer Then
+    Exit;
+  FPendingReviewErrorOffer := False;
+  Line := ResolveMessageLineForFix(True);
+  If Not Assigned(Line) Then
+    Begin
+      Note := Format('Review found **%d error(s)**. Open Messages, then click **Fix Error**.',
+        [FReviewErrorCount]);
+      If FViewingLive Then
+        FDisplaySystemNote := Note
+      Else
+        SetCurrentSystemNote(Note);
+      Exit;
+    End;
+  If Assigned(IDEMessagesWindow) Then
+    IDEMessagesWindow.SelectMsgLine(Line);
+  If Line.TranslatedMsg <> '' Then
+    MsgText := Line.TranslatedMsg
+  Else
+    MsgText := Line.Msg;
+  If Line.Filename <> '' Then
+    MsgText := ExtractFileName(Line.GetFullFilename) + ': ' + MsgText;
+  Note :=
+    Format('Review found **%d error(s)**. Top error is selected in Messages.', [FReviewErrorCount]) +
+    LineEnding + LineEnding +
+    '**' + Trim(MsgText) + '**' + LineEnding + LineEnding +
+    'Click **Fix Error** (or Assistant → Fix Error in Code mode) to apply a Code-mode fix with tools.';
+  If FViewingLive Then
+    Begin
+      If FDisplaySystemNote <> '' Then
+        FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Note
+      Else
+        FDisplaySystemNote := Note;
+    End
+  Else
+    SetCurrentSystemNote(Note);
+  FStatusFooter.SetRightText('Review: Fix Error ready');
 End;
 
 Procedure TProjectAssistantForm.CodeBtnRefreshClick(Sender: TObject);
@@ -1149,10 +1301,13 @@ Begin
     '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` for new ' +
     'or rewritten units, `ensure_form_component` when adding form components/events (updates .pas **and** .lfm), ' +
     '`add_unit_to_project` when creating Pascal units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
-    '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced.' + LineEnding +
-    '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files.' + LineEnding +
-    '6. Use plan `update_markdown` only to set `Status: complete` when truly finished — not to dump code.' + LineEnding +
-    '7. When finished, say clearly that I can mark **Done** on the Code tab.' + LineEnding +
+    '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced. ' +
+    'A clean compile (errors=0) lets the IDE auto-mark this package **complete**.' + LineEnding +
+    '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files. ' +
+    'If no code changes are required, still call `run_compile` once when the project should build clean, ' +
+    'or tell the user to mark Done manually.' + LineEnding +
+    '6. Prefer tools for Status updates; the IDE may also set `Status: complete` after a clean compile.' + LineEnding +
+    '7. When finished, say clearly what changed and whether compile is clean.' + LineEnding +
     LineEnding +
     '----- begin plan section -----' + LineEnding +
     Body + LineEnding +
@@ -1212,12 +1367,16 @@ Begin
     End;
   Prompt := BuildCodeWorkPrompt(PlanRel, Title, StatusText, Body);
   { Stay in Code mode (tools + prompt) while showing the Chat turn surface. }
+  BeginCodeWorkTracking(Idx, Title);
   ForceModeAndLock(amCode);
   ShowChatSurfaceKeepMode;
   SetCodeStatusFeedback('Working on: ' + Title);
   SubmitUserText(Prompt, True);
   If Not FSending Then
-    UnlockModeAfterSend;
+    Begin
+      UnlockModeAfterSend;
+      ClearCodeWorkTracking;
+    End;
 End;
 
 Procedure TProjectAssistantForm.CodeBtnWorkClick(Sender: TObject);
@@ -2265,6 +2424,10 @@ Begin
       FStreamingActive := False;
       If Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
+      If FCodeWorkSectionIndex >= 0 Then
+        SetCodeStatusFeedback(Format('"%s" cancelled — still in progress.',
+          [FCodeWorkSectionTitle]));
+      FPendingReviewErrorOffer := False;
       UnlockModeAfterSend;
       SetSending(False);
       Exit;
@@ -2305,6 +2468,16 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   PersistPlanReplyIfNeeded(ErrorText);
+  { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
+  If FActiveMode = amCode Then
+    TryAutoCompleteCodeWork(ErrorText)
+  Else If FCodeWorkSectionIndex >= 0 Then
+    ClearCodeWorkTracking;
+  { Review with errors: select top error and prompt Fix Error. }
+  If FPendingReviewErrorOffer And (ErrorText = '') Then
+    OfferFixTopErrorAfterReview
+  Else If ErrorText <> '' Then
+    FPendingReviewErrorOffer := False;
   UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
@@ -2318,7 +2491,7 @@ Begin
       FAssistantThinking := FLiveThinking;
       If ErrorText <> '' Then
         FDisplaySystemNote := '**Error:** ' + ErrorText;
-      { PersistPlanReplyIfNeeded may set a success note when ErrorText is empty. }
+      { PersistPlanReplyIfNeeded / auto-complete / review offer may set notes. }
       RefreshChatDisplay(True, True);
     End;
   PersistSession;
@@ -2428,6 +2601,8 @@ Begin
       If Not FModeLocked Then
         LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
       ShowChatSurfaceKeepMode; { turn UI on Chat tab; tools stay mode-locked }
+      { Detect run_compile during this turn for Code auto Status: complete. }
+      FCompileSeqAtSendStart := AssistantLastCompileSeq;
       FinalApi := ApiText;
       If FActiveMode = amPlan Then
         Begin
@@ -2646,6 +2821,8 @@ Begin
     '- Skip pure noise (orphan/duplicate PPU notes that are environmental, pure informational notes with no code change).' + LineEnding +
     '- If nothing actionable: content is a single line confirming clean / no action required.' + LineEnding +
     LineEnding +
+    'If there are errors, end with one short line: the user can click **Fix Error** to start Code mode on the top error.' + LineEnding +
+    LineEnding +
     'Do not call tools. Do not ask follow-up questions. Work only from the output below and answer once.' + LineEnding +
     LineEnding +
     '----- begin compiler/messages output -----' + LineEnding +
@@ -2725,11 +2902,22 @@ Begin
     PromptText := BuildReviewPrompt(KindLabel, OutputText, ErrorCount, WarningCount, HintCount, BuildOk);
 
     If BuildOk And (ErrorCount = 0) Then
-      FStatusFooter.SetRightText(KindLabel + ' OK')
+      Begin
+        FStatusFooter.SetRightText(KindLabel + ' OK');
+        FPendingReviewErrorOffer := False;
+        FReviewErrorCount := 0;
+      End
     Else If ErrorCount > 0 Then
-      FStatusFooter.SetRightText(KindLabel + ' failed')
+      Begin
+        FStatusFooter.SetRightText(KindLabel + ' failed');
+        PrepareTopErrorAfterReview(ErrorCount);
+      End
     Else
-      FStatusFooter.SetRightText(KindLabel + ' done');
+      Begin
+        FStatusFooter.SetRightText(KindLabel + ' done');
+        FPendingReviewErrorOffer := False;
+        FReviewErrorCount := 0;
+      End;
 
     { Reviews start a fresh conversation (own model context); prior chat is archived. }
     If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
@@ -2978,22 +3166,20 @@ Begin
   End;
 End;
 
-Function TProjectAssistantForm.ResolveMessageLineForFix: TMessageLine;
+Function TProjectAssistantForm.ResolveMessageLineForFix(PreferTopError: Boolean): TMessageLine;
 Var
   ViewIndex, LineIndex: Integer;
   View: TExtToolView;
-  Line, FirstError, FirstWarn, FirstAny: TMessageLine;
+  Line, FirstError, FirstWarn, FirstAny, Selected: TMessageLine;
 Begin
   Result := Nil;
   FirstError := Nil;
   FirstWarn := Nil;
   FirstAny := Nil;
+  Selected := Nil;
   If Not Assigned(IDEMessagesWindow) Then
     Exit;
-  Result := IDEMessagesWindow.GetSelectedLine;
-  If Assigned(Result) Then
-    Exit;
-  { No selection: pick the first error, else first warning, else first real message. }
+  Selected := IDEMessagesWindow.GetSelectedLine;
   For ViewIndex := 0 To IDEMessagesWindow.ViewCount - 1 Do
     Begin
       View := IDEMessagesWindow.Views[ViewIndex];
@@ -3019,8 +3205,20 @@ Begin
         View.Lines.LeaveCriticalSection;
       End;
     End;
-  If Assigned(FirstError) Then
-    Result := FirstError
+  { Prefer top error when requested, or whenever errors exist (selection is a hint only). }
+  If PreferTopError Or Assigned(FirstError) Then
+    Begin
+      If Assigned(FirstError) Then
+        Result := FirstError
+      Else If Assigned(Selected) Then
+        Result := Selected
+      Else If Assigned(FirstWarn) Then
+        Result := FirstWarn
+      Else
+        Result := FirstAny;
+    End
+  Else If Assigned(Selected) Then
+    Result := Selected
   Else If Assigned(FirstWarn) Then
     Result := FirstWarn
   Else
@@ -3139,6 +3337,12 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.FixSelectedError;
+Begin
+  { Prefer the top error when Messages has errors (e.g. after Review). }
+  FixTopError;
+End;
+
+Procedure TProjectAssistantForm.FixTopError;
 Var
   Line: TMessageLine;
   Prompt: String;
@@ -3155,7 +3359,8 @@ Begin
       MessageDlg('The IDE Messages window is not available.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Line := ResolveMessageLineForFix;
+  FPendingReviewErrorOffer := False;
+  Line := ResolveMessageLineForFix(True);
   If Not Assigned(Line) Then
     Begin
       MessageDlg('No compiler messages found. Run Compile/Build (or Review Compile) first, ' +
@@ -3177,7 +3382,8 @@ Begin
       LazarusIDE.DoOpenFileAndJumpToPos(Line.GetFullFilename,
         Point(Col, Line.Line), TopLine, -1, -1, [ofOnlyIfExists, ofRegularFile]);
     End;
-  { Always Code mode so write/replace/compile tools are available. }
+  { Snapshot compile seq so a clean run_compile this turn can auto-complete Work-on-this. }
+  FCompileSeqAtSendStart := AssistantLastCompileSeq;
   ForceModeAndLock(amCode);
   ShowChatSurfaceKeepMode;
   SubmitUserTextEx(
