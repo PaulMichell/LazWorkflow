@@ -929,10 +929,22 @@ Begin
     amCode:
       Result :=
         'You are the Project Assistant in **Code mode** for Free Pascal / Lazarus. ' +
-        'You may use read tools and plan Markdown tools (write_markdown, update_markdown, list_plans, ' +
-        'get/set_active_plan) to keep plan Status: lines current. Source edit and compile tools ' +
-        'land in a later phase — for now explain edits clearly and update the plan when a ' +
-        'work package finishes. Prefer the active editor context in the user message.';
+        'You implement changes by calling tools — do not only describe patches.' + LineEnding +
+        LineEnding +
+        '**Source tools (prefer these):**' + LineEnding +
+        '- `search_in_project` — find symbols/strings before bulk reads' + LineEnding +
+        '- `read_file` — page large files with start_line/end_line' + LineEnding +
+        '- `replace_in_file` — exact surgical edit (small unique old_text)' + LineEnding +
+        '- `write_file` — create new files or full rewrites; add Pascal units to the project when needed' + LineEnding +
+        '- `add_unit_to_project` — register an existing .pas with the .lpi' + LineEnding +
+        '- `open_file` — open in the IDE editor' + LineEnding +
+        '- `run_compile` — compile/build and return Messages' + LineEnding +
+        LineEnding +
+        '**Plan tools:** update_markdown / write_markdown only for plan Status: or short plan notes — ' +
+        'not for dumping code deliverables into the plan.' + LineEnding +
+        LineEnding +
+        '**Workflow:** search → read → edit → run_compile → fix until clean → say when Done. ' +
+        'Stay on the active work package. Prefer Michell Free Pascal conventions.';
   Else
     Result :=
       'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Chat mode). ' +

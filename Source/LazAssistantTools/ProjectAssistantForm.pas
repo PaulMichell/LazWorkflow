@@ -1120,18 +1120,14 @@ Begin
     '**Status:** ' + StatusText + LineEnding +
     LineEnding +
     'Instructions:' + LineEnding +
-    '1. Focus only on this work package unless you need a tiny amount of neighbouring context.' + LineEnding +
-    '2. Use tools sparingly and in batches: prefer `get_project_info` + `list_directory` first, ' +
-    'then a few targeted `read_file` calls. Avoid many tiny tool rounds.' + LineEnding +
-    '3. For inventory / review / baseline packages: deliver the result **in the chat reply** ' +
-    '(tables, findings, next steps). Do **not** create extra Markdown files (no Baseline.md) ' +
-    'unless I explicitly ask. Prefer one final answer over long write_markdown cycles.' + LineEnding +
-    '4. For implementation packages: prefer concrete Free Pascal / Lazarus changes with file paths ' +
-    'and clear steps (source-edit tools are limited — explain edits precisely when you cannot apply them).' + LineEnding +
-    '5. Only use `update_markdown` on the active plan to set `Status: complete` (or a short note) ' +
-    'when the package is truly finished — not for dumping the whole deliverable into the plan.' + LineEnding +
-    '6. When finished, state clearly that I can mark **Done** on the Code tab.' + LineEnding +
-    '7. Do not expand scope into other work packages unless blocked.' + LineEnding +
+    '1. Focus only on this work package unless blocked.' + LineEnding +
+    '2. Discover with `search_in_project` / `get_project_info` / `list_directory`, then `read_file`.' + LineEnding +
+    '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` for new ' +
+    'or rewritten units, `add_unit_to_project` when creating Pascal units. Do not only describe patches.' + LineEnding +
+    '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced.' + LineEnding +
+    '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files.' + LineEnding +
+    '6. Use plan `update_markdown` only to set `Status: complete` when truly finished — not to dump code.' + LineEnding +
+    '7. When finished, say clearly that I can mark **Done** on the Code tab.' + LineEnding +
     LineEnding +
     '----- begin plan section -----' + LineEnding +
     Body + LineEnding +

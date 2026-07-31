@@ -410,8 +410,8 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Multi-conversation History (archive / switch / delete / export) | **Done** |
 | Plan mode (Documents/, write tools, active plan, Plan tab) | **Done** |
 | Code mode TODO tiles (scan plan `##` + Status) | **Done** (Start / Done / Reset write-back) |
-| Code mode source edit tools | **Not started** |
-| Code mode compile/build tools (beyond Review Compile/Build UI) | **Partial** (Review buttons exist; not mode tools yet) |
+| Code mode source edit tools | **Done** (`write_file`, `replace_in_file`, `search_in_project`, `open_file`, `add_unit_to_project`) |
+| Code mode compile/build tools | **Done** (`run_compile` tool + Review Compile/Build UI) |
 
 ### Phase 0 – Foundations — **done**
 Monorepo, three packages, event bus, logging, status footer.
