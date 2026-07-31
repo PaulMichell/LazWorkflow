@@ -81,6 +81,7 @@ Type
     FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
+    FEditorOptsHooked: Boolean;
     FSelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
@@ -93,6 +94,10 @@ Type
     FHunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyCompactEditorFont;
+    Procedure ApplyIDEEditorFont;
+    Procedure HookEditorOptionsChanged;
+    Procedure UnhookEditorOptionsChanged;
+    Procedure EditorOptionsChanged(Sender: TObject);
     Procedure EnsureAppearanceReady;
     Procedure DoDeferredInitAsync(Data: PtrInt);
     Function ScaleDesign(DesignPx: Integer): Integer;
@@ -200,7 +205,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Math, EditorOptionsIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
+  Math, EditorOptionsIntf, SrcEditorIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
   LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
   GitService, Dialogs, WorkflowLog;
 
@@ -580,6 +585,7 @@ Begin
   FDiffOverviewProvider := Nil;
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
+  FEditorOptsHooked := False;
   FSelectedLines := TFPList.Create;
   FLineDragSnapshot := TFPList.Create;
   FLineDragActive := False;
@@ -601,6 +607,7 @@ Destructor TGitDiffView.Destroy;
 Begin
   CancelPendingScroll;
   Application.RemoveAsyncCalls(Self);
+  UnhookEditorOptionsChanged;
   If Assigned(FEdit) Then
     Begin
       Try
@@ -850,17 +857,164 @@ Begin
   End;
 End;
 
+Procedure TGitDiffView.ApplyIDEEditorFont;
+Var
+  SourceEdit: TSourceEditorInterface;
+  SrcCtl: TWinControl;
+  Probe: TSynEdit;
+  Applied: Boolean;
+  FontName: String;
+  FontSize: Integer;
+  FontQuality: TFontQuality;
+  FontColor, BgColor: TColor;
+  ExtraLine, ExtraChar, TabW: Integer;
+Begin
+  { Match Lazarus Source Editor font/spacing without calling GetSynEditorSettings
+    on our control (that rewires gutters, mouse actions, and beautifier). }
+  If Not Assigned(FEdit) Then
+    Exit;
+  Applied := False;
+  FontName := '';
+  FontSize := 0;
+  FontQuality := fqDefault;
+  FontColor := clWindowText;
+  BgColor := clWindow;
+  ExtraLine := 0;
+  ExtraChar := 0;
+  TabW := 4;
+
+  { 1) Live source editor — exact attributes the user currently sees. }
+  If Assigned(SourceEditorManagerIntf) Then
+    Begin
+      SourceEdit := SourceEditorManagerIntf.ActiveEditor;
+      If Not Assigned(SourceEdit) And (SourceEditorManagerIntf.SourceEditorCount > 0) Then
+        SourceEdit := SourceEditorManagerIntf.SourceEditors[0];
+      If Assigned(SourceEdit) Then
+        Begin
+          SrcCtl := SourceEdit.EditorControl;
+          If SrcCtl Is TSynEdit Then
+            Begin
+              FontName := TSynEdit(SrcCtl).Font.Name;
+              FontSize := TSynEdit(SrcCtl).Font.Size;
+              FontQuality := TSynEdit(SrcCtl).Font.Quality;
+              FontColor := TSynEdit(SrcCtl).Font.Color;
+              BgColor := TSynEdit(SrcCtl).Color;
+              ExtraLine := TSynEdit(SrcCtl).ExtraLineSpacing;
+              ExtraChar := TSynEdit(SrcCtl).ExtraCharSpacing;
+              TabW := TSynEdit(SrcCtl).TabWidth;
+              Applied := (Trim(FontName) <> '') And (FontSize <> 0);
+            End;
+        End;
+    End;
+
+  { 2) Probe IDE options on a throwaway SynEdit, then copy font metrics only. }
+  If (Not Applied) And Assigned(IDEEditorOptions) Then
+    Begin
+      Probe := TSynEdit.Create(Nil);
+      Try
+        Try
+          IDEEditorOptions.GetSynEditorSettings(Probe);
+          FontName := Probe.Font.Name;
+          FontSize := Probe.Font.Size;
+          FontQuality := Probe.Font.Quality;
+          FontColor := Probe.Font.Color;
+          BgColor := Probe.Color;
+          ExtraLine := Probe.ExtraLineSpacing;
+          ExtraChar := Probe.ExtraCharSpacing;
+          TabW := Probe.TabWidth;
+          Applied := (Trim(FontName) <> '') And (FontSize <> 0);
+        Except
+          On E: Exception Do
+            WorkflowLogger.Warning('GitDiffView', 'IDE font probe failed: ' + E.Message);
+        End;
+      Finally
+        Probe.Free;
+      End;
+    End;
+
+  If Not Applied Then
+    Begin
+      ApplyCompactEditorFont;
+      Exit;
+    End;
+
+  Try
+    FEdit.Font.BeginUpdate;
+    Try
+      { Size before Name — same order as TEditorOptions.ApplyFontSettingsTo. }
+      FEdit.Font.Size := FontSize;
+      FEdit.Font.Name := FontName;
+      FEdit.Font.Quality := FontQuality;
+      FEdit.Font.Color := FontColor;
+      FEdit.Font.Style := [];
+    Finally
+      FEdit.Font.EndUpdate;
+    End;
+    FEdit.Color := BgColor;
+    FEdit.ExtraLineSpacing := ExtraLine;
+    FEdit.ExtraCharSpacing := ExtraChar;
+    If TabW > 0 Then
+      FEdit.TabWidth := TabW;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'ApplyIDEEditorFont: ' + E.Message);
+  End;
+End;
+
+Procedure TGitDiffView.HookEditorOptionsChanged;
+Begin
+  If FEditorOptsHooked Then
+    Exit;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Try
+    SourceEditorManagerIntf.RegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
+    FEditorOptsHooked := True;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'HookEditorOptionsChanged: ' + E.Message);
+  End;
+End;
+
+Procedure TGitDiffView.UnhookEditorOptionsChanged;
+Begin
+  If Not FEditorOptsHooked Then
+    Exit;
+  FEditorOptsHooked := False;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Try
+    SourceEditorManagerIntf.UnRegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
+  Except
+  End;
+End;
+
+Procedure TGitDiffView.EditorOptionsChanged(Sender: TObject);
+Begin
+  If Not IsAlive Then
+    Exit;
+  Try
+    ApplyIDEEditorFont;
+    EnsureDiffOverviewGutter;
+    If Assigned(FEdit) And FEdit.HandleAllocated Then
+      FEdit.Invalidate;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'EditorOptionsChanged: ' + E.Message);
+  End;
+End;
+
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
 Begin
   If Not Assigned(FEdit) Then
     Exit;
 
-  { Full IDE options only once. Skip GetSynEditorSettings entirely for this
-    embedded preview — it rewrites gutters/beautifier state and has crashed the
-    IDE during package desktop restore. Use compact fonts + our diff colours. }
+  { Font/spacing from IDE (or live Source Editor). Do not call
+    GetSynEditorSettings on FEdit itself — it rewires gutters/mouse/beautifier
+    and has crashed IDE desktop restore when applied too early. }
+  ApplyIDEEditorFont;
   If Not FAppearanceReady Then
     Begin
-      ApplyCompactEditorFont;
       If Assigned(FHigh) Then
         Try
           ConfigureDiffColors(FHigh);
@@ -872,6 +1026,7 @@ Begin
         Except
         End;
       SetupDiffOverviewGutter;
+      HookEditorOptionsChanged;
       FAppearanceReady := True;
     End;
 
