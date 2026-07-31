@@ -363,6 +363,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object FFixErrorAction: TAction
       Caption = 'Fix Error'
+      Hint = 'Fix the selected Messages line in Code mode (tools apply the edit)'
       OnExecute = FixErrorActionExecute
     end
     object FSettingsAction: TAction

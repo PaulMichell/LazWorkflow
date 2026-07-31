@@ -135,6 +135,7 @@ Type
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send uses Chat surface but keeps Plan/Code tools. }
+    FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes tabs. }
     FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
     FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     Procedure UpdateThinkingActionCaption;
@@ -156,7 +157,10 @@ Type
     Procedure ApplyActiveMode;
     Procedure ShowChatSurfaceKeepMode;
     Procedure LockModeForSend;
+    Procedure ForceModeAndLock(Mode: TAssistantMode);
     Procedure UnlockModeAfterSend;
+    Function ResolveMessageLineForFix: TMessageLine;
+    Function CollectRelatedMessages(Primary: TMessageLine; MaxLines: Integer): String;
     Procedure PersistPlanReplyIfNeeded(Const ErrorText: String);
     Function LooksLikePlanMarkdown(Const Body: String): Boolean;
     Procedure PersistShellConfig;
@@ -218,6 +222,8 @@ Type
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
     Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
     Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
+    { DisplayText is shown/stored; ApiText is what the model receives (may include extra directives). }
+    Procedure SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
     { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
@@ -282,6 +288,7 @@ Begin
   FActiveMode := amChat;
   FApplyingShellConfig := False;
   FModeLocked := False;
+  FModeSticky := False;
   FReviewInProgress := False;
   FStreamStart := 0;
   FTurnStartedAt := '';
@@ -453,15 +460,32 @@ Begin
     which reclassified the turn as Chat and stripped Plan write tools. }
   FActiveMode := CurrentModeFromTabs;
   FModeLocked := True;
+  FModeSticky := FActiveMode In [amPlan, amCode];
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
   WorkflowLogger.Info('ProjectAssistant',
     'Mode locked for send: ' + AssistantModeToStr(FActiveMode));
 End;
 
+Procedure TProjectAssistantForm.ForceModeAndLock(Mode: TAssistantMode);
+Begin
+  { Enter a specific mode for this turn even if the notebook is on another tab
+    (e.g. Fix Error from Chat → Code tools; Work-on-this while browsing Chat). }
+  FActiveMode := Mode;
+  FModeLocked := True;
+  FModeSticky := Mode In [amPlan, amCode];
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(Mode);
+  WorkflowLogger.Info('ProjectAssistant',
+    'Mode forced for send: ' + AssistantModeToStr(Mode));
+End;
+
 Procedure TProjectAssistantForm.UnlockModeAfterSend;
 Begin
   FModeLocked := False;
+  { FModeSticky keeps Plan/Code tools while the Chat surface still shows the turn. }
+  If Assigned(AssistantClient) Then
+    AssistantClient.SetActiveMode(FActiveMode);
 End;
 
 Function TProjectAssistantForm.LooksLikePlanMarkdown(Const Body: String): Boolean;
@@ -532,24 +556,25 @@ End;
 
 Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
-  { When mode is locked for a send, keep FActiveMode (Plan/Code) even if the
-    notebook shows Chat for the turn surface. }
-  If Not FModeLocked Then
+  { When mode is locked or sticky, keep FActiveMode (Plan/Code) even if the
+    notebook shows Chat for the turn surface. Sticky clears when the user
+    explicitly changes tabs (PagesChange). }
+  If (Not FModeLocked) And (Not FModeSticky) Then
     FActiveMode := CurrentModeFromTabs;
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(FActiveMode);
+  { Fix Error always switches into Code tools, so keep it available in every mode. }
+  FFixErrorAction.Enabled := Not FSending;
   Case FActiveMode Of
     amPlan:
       Begin
         FReviewCompileAction.Enabled := False;
         FReviewBuildAction.Enabled := False;
-        FFixErrorAction.Enabled := False;
       End;
     amCode:
       Begin
         FReviewCompileAction.Enabled := Not FSending;
         FReviewBuildAction.Enabled := Not FSending;
-        FFixErrorAction.Enabled := Not FSending;
         EnsureCodeTabUi;
         RefreshCodeTodos;
       End;
@@ -557,7 +582,6 @@ Begin
     Begin
       FReviewCompileAction.Enabled := Not FSending;
       FReviewBuildAction.Enabled := Not FSending;
-      FFixErrorAction.Enabled := Not FSending;
     End;
   End;
   If FActiveMode = amPlan Then
@@ -1188,10 +1212,7 @@ Begin
     End;
   Prompt := BuildCodeWorkPrompt(PlanRel, Title, StatusText, Body);
   { Stay in Code mode (tools + prompt) while showing the Chat turn surface. }
-  FActiveMode := amCode;
-  If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(amCode);
-  LockModeForSend;
+  ForceModeAndLock(amCode);
   ShowChatSurfaceKeepMode;
   SetCodeStatusFeedback('Working on: ' + Title);
   SubmitUserText(Prompt, True);
@@ -1246,6 +1267,8 @@ Begin
         End;
       Exit;
     End;
+  { Explicit tab change ends sticky Plan/Code-after-Chat-surface behaviour. }
+  FModeSticky := False;
   ApplyActiveMode;
   PersistShellConfig;
   If Assigned(FPages) And Assigned(FPages.ActivePage) Then
@@ -2377,11 +2400,16 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Begin
+  SubmitUserTextEx(UserText, UserText, AutoSend);
+End;
+
+Procedure TProjectAssistantForm.SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
 Var
-  ApiText, ContextBlock, PlanRel: String;
+  FinalApi, ContextBlock, PlanRel: String;
   WithContext: Boolean;
 Begin
-  If Trim(UserText) = '' Then
+  If Trim(ApiText) = '' Then
     Exit;
   If FSending Then
     Exit;
@@ -2389,29 +2417,31 @@ Begin
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
         Begin
-          AppendMessage('user', UserText);
-          AppendMessage('system', 'Sign in under Settings to send this review to the Assistant.');
+          AppendMessage('user', DisplayText);
+          AppendMessage('system', 'Sign in under Settings to send this request to the Assistant.');
           Exit;
         End;
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
-      LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
+      { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
+      If Not FModeLocked Then
+        LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
       ShowChatSurfaceKeepMode; { turn UI on Chat tab; tools stay mode-locked }
-      ApiText := UserText;
+      FinalApi := ApiText;
       If FActiveMode = amPlan Then
         Begin
           PlanRel := GetActivePlanRelativePath;
           If PlanRel = '' Then
             PlanRel := DefaultPlanRelativePath;
-          ApiText :=
+          FinalApi :=
             '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
             'using the write_markdown tool (path: "' + PlanRel +
             '"). Chat reply must be a short summary only, not the full plan body.' +
-            LineEnding + LineEnding + UserText;
+            LineEnding + LineEnding + ApiText;
         End;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
-      SetCurrentUserDisplay(UserText, WithContext);
+      SetCurrentUserDisplay(DisplayText, WithContext);
       FLiveUser := FDisplayUser;
       FLiveContent := '';
       FLiveThinking := '';
@@ -2420,12 +2450,12 @@ Begin
       If WithContext Then
         Begin
           ContextBlock := BuildIDEContextBlock;
-          ApiText := ApiText + LineEnding + LineEnding + ContextBlock;
+          FinalApi := FinalApi + LineEnding + LineEnding + ContextBlock;
         End;
       AppendMessage('user', FDisplayUser);
       { Prior turns already on AssistantClient are sent with this request (full context). }
-      AssistantClient.AddMessage(amrUser, ApiText);
-      FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
+      AssistantClient.AddMessage(amrUser, FinalApi);
+      FContextUsed := FContextUsed + Length(FinalApi) Div 4 + 8;
       FStatusPhase := 'Waiting for first token…';
       AssistantClient.ToolsEnabled := True;
       SetSending(True);
@@ -2436,7 +2466,7 @@ Begin
         FinishAssistantReply(AssistantClient.LastError);
     End
   Else
-    AppendMessage('user', UserText);
+    AppendMessage('user', DisplayText);
 End;
 
 Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
@@ -2948,9 +2978,124 @@ Begin
   End;
 End;
 
+Function TProjectAssistantForm.ResolveMessageLineForFix: TMessageLine;
+Var
+  ViewIndex, LineIndex: Integer;
+  View: TExtToolView;
+  Line, FirstError, FirstWarn, FirstAny: TMessageLine;
+Begin
+  Result := Nil;
+  FirstError := Nil;
+  FirstWarn := Nil;
+  FirstAny := Nil;
+  If Not Assigned(IDEMessagesWindow) Then
+    Exit;
+  Result := IDEMessagesWindow.GetSelectedLine;
+  If Assigned(Result) Then
+    Exit;
+  { No selection: pick the first error, else first warning, else first real message. }
+  For ViewIndex := 0 To IDEMessagesWindow.ViewCount - 1 Do
+    Begin
+      View := IDEMessagesWindow.Views[ViewIndex];
+      If Not Assigned(View) Then
+        Continue;
+      View.Lines.EnterCriticalSection;
+      Try
+        For LineIndex := 0 To View.Lines.Count - 1 Do
+          Begin
+            Line := View.Lines.Items[LineIndex];
+            If Not Assigned(Line) Then
+              Continue;
+            If (Line.Msg = '') And (Line.TranslatedMsg = '') Then
+              Continue;
+            If FirstAny = Nil Then
+              FirstAny := Line;
+            If (FirstError = Nil) And (Line.Urgency In [mluError, mluFatal, mluPanic]) Then
+              FirstError := Line;
+            If (FirstWarn = Nil) And (Line.Urgency = mluWarning) Then
+              FirstWarn := Line;
+          End;
+      Finally
+        View.Lines.LeaveCriticalSection;
+      End;
+    End;
+  If Assigned(FirstError) Then
+    Result := FirstError
+  Else If Assigned(FirstWarn) Then
+    Result := FirstWarn
+  Else
+    Result := FirstAny;
+  If Assigned(Result) And Assigned(IDEMessagesWindow) Then
+    IDEMessagesWindow.SelectMsgLine(Result);
+End;
+
+Function TProjectAssistantForm.CollectRelatedMessages(Primary: TMessageLine; MaxLines: Integer): String;
+Var
+  ViewIndex, LineIndex, Taken: Integer;
+  View: TExtToolView;
+  Line: TMessageLine;
+  PrimaryFile, Formatted: String;
+  Parts: TStringList;
+Begin
+  Result := '';
+  If Not Assigned(Primary) Or Not Assigned(IDEMessagesWindow) Then
+    Exit;
+  If MaxLines < 1 Then
+    MaxLines := 8;
+  PrimaryFile := '';
+  If Primary.Filename <> '' Then
+    PrimaryFile := Primary.GetFullFilename;
+  Parts := TStringList.Create;
+  Try
+    Taken := 0;
+    For ViewIndex := 0 To IDEMessagesWindow.ViewCount - 1 Do
+      Begin
+        View := IDEMessagesWindow.Views[ViewIndex];
+        If Not Assigned(View) Then
+          Continue;
+        View.Lines.EnterCriticalSection;
+        Try
+          For LineIndex := 0 To View.Lines.Count - 1 Do
+            Begin
+              Line := View.Lines.Items[LineIndex];
+              If Not Assigned(Line) Then
+                Continue;
+              If Line = Primary Then
+                Continue;
+              If Not (Line.Urgency In [mluHint..mluPanic]) Then
+                Continue;
+              If PrimaryFile <> '' Then
+                Begin
+                  If Line.Filename = '' Then
+                    Continue;
+                  If Not SameText(Line.GetFullFilename, PrimaryFile) Then
+                    Continue;
+                End
+              Else If Not (Line.Urgency In [mluError, mluFatal, mluPanic, mluWarning]) Then
+                Continue;
+              Formatted := FormatMessageLine(Line);
+              If Formatted = '' Then
+                Continue;
+              Parts.Add(Formatted);
+              Inc(Taken);
+              If Taken >= MaxLines Then
+                Break;
+            End;
+        Finally
+          View.Lines.LeaveCriticalSection;
+        End;
+        If Taken >= MaxLines Then
+          Break;
+      End;
+    Result := TrimRight(Parts.Text);
+  Finally
+    Parts.Free;
+  End;
+End;
+
 Function TProjectAssistantForm.BuildFixErrorPromptForLine(Line: TMessageLine): String;
 Var
-  MsgText, FileName, Snippet: String;
+  MsgText, FileName, Snippet, Related: String;
   LineNo, Col: Integer;
 Begin
   Result := '';
@@ -2965,10 +3110,12 @@ Begin
   Snippet := '';
   If (FileName <> '') And (LineNo > 0) Then
     Snippet := ExtractSourceSnippet(FileName, LineNo, 18);
+  Related := CollectRelatedMessages(Line, 10);
   Result :=
-    'Please fix this Free Pascal / Lazarus compiler message.' + LineEnding +
-    LineEnding +
-    'Message: ' + MsgText + LineEnding;
+    'You are in **Code mode**. Fix this Free Pascal / Lazarus compiler message by **editing sources with tools**.' +
+    LineEnding + LineEnding +
+    '**Primary message:**' + LineEnding +
+    MsgText + LineEnding;
   If FileName <> '' Then
     Result := Result + 'File: ' + FileName + LineEnding;
   If LineNo > 0 Then
@@ -2976,9 +3123,19 @@ Begin
   Result := Result + LineEnding;
   If Snippet <> '' Then
     Result := Result + Snippet + LineEnding + LineEnding;
+  If Related <> '' Then
+    Result := Result +
+      '**Related messages (same file or nearby):**' + LineEnding +
+      Related + LineEnding + LineEnding;
   Result := Result +
-    'Explain the error briefly, then propose a concrete fix (show the corrected code snippet).' + LineEnding +
-    'Prefer the smallest change that resolves the issue.';
+    '**Instructions:**' + LineEnding +
+    '1. Prefer `read_file` / `search_in_project` only if the snippet is insufficient.' + LineEnding +
+    '2. Apply the fix with `replace_in_file` (or `write_file` / `ensure_form_component` when appropriate).' + LineEnding +
+    '3. Prefer the smallest correct change; do not rewrite unrelated code.' + LineEnding +
+    '4. If the unit is a form and the fix needs components/events, update the matching `.lfm` too.' + LineEnding +
+    '5. Call `run_compile` after edits and fix any new errors you introduced.' + LineEnding +
+    '6. Visible reply: short explanation of the cause + what you changed (no long patch dumps if tools already applied).' + LineEnding +
+    '7. Do not only describe the fix — **apply it with tools** in this turn.';
 End;
 
 Procedure TProjectAssistantForm.FixSelectedError;
@@ -2988,16 +3145,21 @@ Var
   Col, TopLine: Integer;
 Begin
   If FSending Then
-    Exit;
+    Begin
+      MessageDlg('Wait for the current reply to finish (or Stop) before Fix Error.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If Not Assigned(IDEMessagesWindow) Then
     Begin
       MessageDlg('The IDE Messages window is not available.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Line := IDEMessagesWindow.GetSelectedLine;
+  Line := ResolveMessageLineForFix;
   If Not Assigned(Line) Then
     Begin
-      MessageDlg('Select a compiler message in the Messages window first, then choose Fix Error.',
+      MessageDlg('No compiler messages found. Run Compile/Build (or Review Compile) first, ' +
+        'or select a message in the Messages window, then choose Fix Error.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -3015,7 +3177,15 @@ Begin
       LazarusIDE.DoOpenFileAndJumpToPos(Line.GetFullFilename,
         Point(Col, Line.Line), TopLine, -1, -1, [ofOnlyIfExists, ofRegularFile]);
     End;
-  SubmitUserText(Prompt, True);
+  { Always Code mode so write/replace/compile tools are available. }
+  ForceModeAndLock(amCode);
+  ShowChatSurfaceKeepMode;
+  SubmitUserTextEx(
+    'Fix Error: ' + FormatMessageLine(Line),
+    Prompt,
+    True);
+  If Not FSending Then
+    UnlockModeAfterSend;
 End;
 
 Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);

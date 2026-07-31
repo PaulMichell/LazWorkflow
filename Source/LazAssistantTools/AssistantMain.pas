@@ -22,7 +22,7 @@ Implementation
 
 Uses
   WorkflowLog, WorkflowEvents, ProjectAssistantForm, AssistantService, AssistantSettingsForm, AssistantMarkdownForm,
-  IDEMsgIntf, IDEExternToolIntf;
+  AssistantConfig, IDEMsgIntf, IDEExternToolIntf;
 
 Type
   { Context menu on IDE Messages: Ask Assistant to fix the selected line. }
@@ -158,6 +158,63 @@ Begin
   NotifyOpenProjectAssistantFormsProjectCleared;
 End;
 
+Function SuggestCommitMessageHandler(Const DiffText, StatusSummary: String;
+  Out MessageText, ErrorText: String): Boolean;
+Const
+  MaxDiffChars = 48000;
+Var
+  SystemPrompt, UserPrompt, DiffBody, Raw: String;
+  SL: TStringList;
+Begin
+  Result := False;
+  MessageText := '';
+  ErrorText := '';
+  If Not Assigned(AssistantClient) Then
+    Begin
+      ErrorText := 'Assistant service is not available.';
+      Exit;
+    End;
+  If Assigned(AssistantChatConfig) Then
+    AssistantClient.ApplyConfig(AssistantChatConfig);
+  DiffBody := DiffText;
+  If Length(DiffBody) > MaxDiffChars Then
+    DiffBody := Copy(DiffBody, 1, MaxDiffChars) + LineEnding +
+      LineEnding + '… [diff truncated for prompt size]';
+  SystemPrompt :=
+    'You write concise Git commit messages for Free Pascal / Lazarus projects. ' +
+    'Output ONLY the commit message text: a short subject line (imperative, ~50–72 chars), ' +
+    'optionally a blank line and a short body. No markdown fences, no quotes, no preamble.';
+  UserPrompt :=
+    'Write a commit message for the staged changes below.' + LineEnding + LineEnding;
+  If Trim(StatusSummary) <> '' Then
+    UserPrompt := UserPrompt + 'Status:' + LineEnding + StatusSummary + LineEnding + LineEnding;
+  UserPrompt := UserPrompt + 'Diff:' + LineEnding + DiffBody;
+  If Not AssistantClient.CompleteOnce(SystemPrompt, UserPrompt, Raw, ErrorText) Then
+    Exit;
+  { Strip accidental fences / surrounding quotes. }
+  Raw := Trim(Raw);
+  If Copy(Raw, 1, 3) = '```' Then
+    Begin
+      SL := TStringList.Create;
+      Try
+        SL.Text := Raw;
+        If SL.Count > 0 Then
+          SL.Delete(0);
+        If (SL.Count > 0) And (Copy(Trim(SL[SL.Count - 1]), 1, 3) = '```') Then
+          SL.Delete(SL.Count - 1);
+        Raw := Trim(SL.Text);
+      Finally
+        SL.Free;
+      End;
+    End;
+  If (Length(Raw) >= 2) And (Raw[1] = '"') And (Raw[Length(Raw)] = '"') Then
+    Raw := Copy(Raw, 2, Length(Raw) - 2);
+  MessageText := Trim(Raw);
+  Result := MessageText <> '';
+  If Not Result Then
+    ErrorText := 'Model returned an empty commit message.';
+End;
+
 Procedure RegisterAssistantTools;
 Var
   AssistantMenu, MainSec, SetSec: TIDEMenuSection;
@@ -170,6 +227,8 @@ Begin
 
   If AssistantIDEHooks = Nil Then
     AssistantIDEHooks := TAssistantIDEHooks.Create;
+
+  SuggestCommitMessageFunc := @SuggestCommitMessageHandler;
 
   Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
   If Cat = Nil Then
@@ -208,7 +267,7 @@ Begin
   RegisterIDEMenuCommand(MainSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
-  RegisterIDEMenuCommand(MainSec, 'AssistantFixError', 'Fix Selected Message…', Nil, Nil, CmdAssistantFixError);
+  RegisterIDEMenuCommand(MainSec, 'AssistantFixError', 'Fix Error in Code mode…', Nil, Nil, CmdAssistantFixError);
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 
@@ -241,6 +300,7 @@ If Assigned(LazarusIDE) And Assigned(AssistantIDEHooks) Then
     LazarusIDE.RemoveHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
     LazarusIDE.RemoveHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
   End;
+SuggestCommitMessageFunc := Nil;
 FreeAndNil(AssistantIDEHooks);
 If Assigned(AssistantFixQuickFix) And Assigned(MsgQuickFixes) Then
   MsgQuickFixes.UnregisterQuickFix(AssistantFixQuickFix);
