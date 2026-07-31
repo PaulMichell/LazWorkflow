@@ -82,6 +82,10 @@ Type
     Procedure CancelStream;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
+    { One-shot non-streaming completion; does not touch chat history or tools.
+      Intended for short side tasks (e.g. commit message suggestion). }
+    Function CompleteOnce(Const SystemPrompt, UserPrompt: String;
+      Out AnswerText, ErrorText: String): Boolean;
     { GET /v1/language-models (fallback /v1/models). Fills ModelIds sorted, chat-oriented. }
     Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
     { Rebuilds the next chat/completions body (used after a tool round). }
@@ -1452,6 +1456,119 @@ Begin
     End
   Else
     FBusy := False;
+End;
+
+Function TAssistantService.CompleteOnce(Const SystemPrompt, UserPrompt: String;
+  Out AnswerText, ErrorText: String): Boolean;
+Var
+  AccessToken, Url, Body, ResponseBody, Headers: String;
+  StatusCode: Integer;
+  Data: TJSONData;
+  Arr: TJSONArray;
+  Choice, MessageObj: TJSONObject;
+Begin
+  Result := False;
+  AnswerText := '';
+  ErrorText := '';
+  FLastError := '';
+  If FBusy Then
+    Begin
+      ErrorText := 'A request is already in progress.';
+      FLastError := ErrorText;
+      Exit;
+    End;
+  If Not Assigned(GrokOAuthClient) Then
+    Begin
+      ErrorText := 'OAuth client is not available.';
+      FLastError := ErrorText;
+      Exit;
+    End;
+  AccessToken := GrokOAuthClient.GetValidAccessToken;
+  If AccessToken = '' Then
+    Begin
+      ErrorText := GrokOAuthClient.LastError;
+      If ErrorText = '' Then
+        ErrorText := 'Not signed in. Open Project Assistant Settings and sign in.';
+      FLastError := ErrorText;
+      Exit;
+    End;
+  If Assigned(AssistantChatConfig) Then
+    AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+  If FModel = '' Then
+    Begin
+      ErrorText := 'No model configured.';
+      FLastError := ErrorText;
+      Exit;
+    End;
+  Url := Trim(FApiBase);
+  While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
+    SetLength(Url, Length(Url) - 1);
+  Url := Url + '/chat/completions';
+  Body :=
+    '{"model":"' + JsonEscape(FModel) + '","stream":false,"messages":[' +
+    '{"role":"system","content":"' + JsonEscape(SystemPrompt) + '"},' +
+    '{"role":"user","content":"' + JsonEscape(UserPrompt) + '"}' +
+    ']}';
+  Headers := 'Authorization: Bearer ' + AccessToken;
+  FBusy := True;
+  Try
+    If Not HttpsPostJson(Url, Body, Headers, ResponseBody, StatusCode, ErrorText) Then
+      Begin
+        If ErrorText = '' Then
+          ErrorText := 'HTTPS request failed.';
+        FLastError := ErrorText;
+        Exit;
+      End;
+    If (StatusCode < 200) Or (StatusCode >= 300) Then
+      Begin
+        ErrorText := Format('HTTP %d: %s', [StatusCode, Copy(ResponseBody, 1, 400)]);
+        FLastError := ErrorText;
+        Exit;
+      End;
+    Data := Nil;
+    Try
+      Try
+        Data := GetJSON(ResponseBody);
+        If Not (Data Is TJSONObject) Then
+          Begin
+            ErrorText := 'Unexpected completion response.';
+            FLastError := ErrorText;
+            Exit;
+          End;
+        Arr := TJSONObject(Data).FindPath('choices') As TJSONArray;
+        If (Arr = Nil) Or (Arr.Count < 1) Or Not (Arr.Items[0] Is TJSONObject) Then
+          Begin
+            ErrorText := 'No choices in completion response.';
+            FLastError := ErrorText;
+            Exit;
+          End;
+        Choice := TJSONObject(Arr.Items[0]);
+        MessageObj := Choice.FindPath('message') As TJSONObject;
+        If Assigned(MessageObj) Then
+          AnswerText := JsonStringField(MessageObj, 'content')
+        Else
+          AnswerText := '';
+        AnswerText := Trim(AnswerText);
+        If AnswerText = '' Then
+          Begin
+            ErrorText := 'Empty completion content.';
+            FLastError := ErrorText;
+            Exit;
+          End;
+        Result := True;
+      Except
+        On E: Exception Do
+          Begin
+            ErrorText := 'Parse error: ' + E.Message;
+            FLastError := ErrorText;
+          End;
+      End;
+    Finally
+      Data.Free;
+    End;
+  Finally
+    FBusy := False;
+  End;
 End;
 
 Procedure TAssistantService.MarkStreamComplete;

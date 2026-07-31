@@ -59,6 +59,10 @@ Type
     Function UnstageAll: Boolean;
     Function Commit(Const Message: String; Out NewSha: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
+    { Unified diff of the index vs HEAD (git diff --cached). Empty when nothing staged. }
+    Function DiffStaged(Out DiffText: String): Boolean;
+    { Short status for commit prompts (porcelain, truncated). }
+    Function StatusSummaryForCommit(Out SummaryText: String): Boolean;
     { True when Path is tracked in the index (not untracked). }
     Function IsPathTracked(Const Path: String): Boolean;
     { Absolute path for a repo-relative working-tree path. }
@@ -718,6 +722,52 @@ Begin
     End;
   If (Not Result) And (ExitCode = 0) Then
     Result := True;
+End;
+
+Function TGitService.DiffStaged(Out DiffText: String): Boolean;
+Var
+  ExitCode: Integer;
+Begin
+  DiffText := '';
+  { Exit 0 with empty body is a valid "nothing staged" result. }
+  Result := RunGit(['diff', '--cached', '--stat', '-p', '--no-color'], DiffText, ExitCode);
+  If (Not Result) And (ExitCode = 0) Then
+    Result := True;
+  If Result And (ExitCode <> 0) And (Trim(DiffText) = '') Then
+    Result := False;
+End;
+
+Function TGitService.StatusSummaryForCommit(Out SummaryText: String): Boolean;
+Var
+  ExitCode: Integer;
+  Raw: String;
+  Lines: TStringList;
+  I, Limit: Integer;
+Begin
+  SummaryText := '';
+  Result := RunGit(['status', '--short'], Raw, ExitCode);
+  If Not Result Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Raw;
+    Limit := Lines.Count;
+    If Limit > 40 Then
+      Limit := 40;
+    For I := 0 To Limit - 1 Do
+      If Trim(Lines[I]) <> '' Then
+        Begin
+          If SummaryText <> '' Then
+            SummaryText := SummaryText + LineEnding;
+          SummaryText := SummaryText + Lines[I];
+        End;
+    If Lines.Count > Limit Then
+      SummaryText := SummaryText + LineEnding +
+        Format('… and %d more path(s)', [Lines.Count - Limit]);
+  Finally
+    Lines.Free;
+  End;
+  Result := True;
 End;
 
 Function TGitService.ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean): Boolean;

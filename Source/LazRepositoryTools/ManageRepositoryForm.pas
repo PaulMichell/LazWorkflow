@@ -53,6 +53,7 @@ Type
     FMessageMemo: TMemo;
     FCommitActions: TPanel;
     FPushCheck: TCheckBox;
+    FBtnSuggestMessage: TButton;
     FBtnCommit: TButton;
     FBtnRefreshFiles: TButton;
     FActionList: TActionList;
@@ -101,6 +102,7 @@ Type
     Procedure BtnStageAllClick(Sender: TObject);
     Procedure BtnStageSelectionClick(Sender: TObject);
     Procedure BtnRefreshFilesClick(Sender: TObject);
+    Procedure BtnSuggestMessageClick(Sender: TObject);
     Procedure BtnCommitClick(Sender: TObject);
     Procedure MessageChange(Sender: TObject);
     Procedure FilesDiffStatusChanged(Sender: TObject);
@@ -1479,10 +1481,12 @@ End;
 
 Procedure TManageRepositoryForm.UpdateCommitEnabled;
 Var
-  CanCommit: Boolean;
+  HasStaged, CanCommit: Boolean;
 Begin
-  CanCommit := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
-    Assigned(FMessageMemo) And (Trim(FMessageMemo.Text) <> '');
+  HasStaged := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
+  CanCommit := HasStaged And Assigned(FMessageMemo) And (Trim(FMessageMemo.Text) <> '');
+  If Assigned(FBtnSuggestMessage) Then
+    FBtnSuggestMessage.Enabled := HasStaged;
   If Assigned(FBtnCommit) Then
     FBtnCommit.Enabled := CanCommit;
 End;
@@ -1662,6 +1666,61 @@ End;
 Procedure TManageRepositoryForm.BtnRefreshFilesClick(Sender: TObject);
 Begin
   RefreshFilesList;
+End;
+
+Procedure TManageRepositoryForm.BtnSuggestMessageClick(Sender: TObject);
+Var
+  DiffText, StatusText, MessageText, ErrorText: String;
+Begin
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  If Not Assigned(SuggestCommitMessageFunc) Then
+    Begin
+      MessageDlg(
+        'Project Assistant is not available for commit messages.' + LineEnding +
+        'Install and enable the LazAssistantTools package, sign in under Assistant Settings, then try again.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If FStagedPaths.Count = 0 Then
+    Begin
+      MessageDlg('Stage at least one change before suggesting a commit message.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+  Screen.Cursor := crHourGlass;
+  Try
+    If Not GitClient.DiffStaged(DiffText) Then
+      Begin
+        MessageDlg('Could not read staged diff: ' + GitClient.LastError, mtError, [mbOK], 0);
+        Exit;
+      End;
+    If Trim(DiffText) = '' Then
+      Begin
+        MessageDlg('Staged diff is empty. Stage file contents (not only renames without content) and try again.',
+          mtInformation, [mbOK], 0);
+        Exit;
+      End;
+    StatusText := '';
+    GitClient.StatusSummaryForCommit(StatusText);
+    If Not SuggestCommitMessageFunc(DiffText, StatusText, MessageText, ErrorText) Then
+      Begin
+        If ErrorText = '' Then
+          ErrorText := 'Could not generate a commit message.';
+        MessageDlg(ErrorText, mtWarning, [mbOK], 0);
+        Exit;
+      End;
+  Finally
+    Screen.Cursor := crDefault;
+  End;
+  If Assigned(FMessageMemo) Then
+    Begin
+      FMessageMemo.Text := MessageText;
+      UpdateCommitEnabled;
+    End;
+  WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
+    IntToStr(Length(MessageText)) + ' chars)');
 End;
 
 Procedure TManageRepositoryForm.MessageChange(Sender: TObject);

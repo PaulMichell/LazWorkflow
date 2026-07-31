@@ -65,6 +65,12 @@ Type
       Out ResultJson: String; Out ErrorMessage: String): Boolean;
   End;
 
+  { Optional one-shot completion for Git commit messages (registered by LazAssistantTools).
+    Returns True when MessageText is filled; ErrorText set on failure. Does not require
+    LazRepositoryTools to depend on the Assistant package. }
+  TSuggestCommitMessageFunc = Function(Const DiffText, StatusSummary: String;
+    Out MessageText, ErrorText: String): Boolean;
+
   { Generic listener that can implement any subset of the above }
   IWorkflowListener = Interface
     ['{F6A7B8C9-D0E1-2345-F012-456789012345}']
@@ -101,6 +107,8 @@ Type
 
 Var
   WorkflowEventBus: TWorkflowEventBus;
+  { Nil until LazAssistantTools registers a handler (signed-in OAuth complete-once). }
+  SuggestCommitMessageFunc: TSuggestCommitMessageFunc;
 
 Implementation
 
@@ -299,6 +307,7 @@ End;
 Initialization
 
 WorkflowEventBus := TWorkflowEventBus.Create;
+SuggestCommitMessageFunc := Nil;
 
 Finalization
 

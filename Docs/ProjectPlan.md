@@ -412,6 +412,9 @@ Code mode adds a **TODO** strip or side panel when a plan is linked.
 | Code mode TODO tiles (scan plan `##` + Status) | **Done** (Start / Done / Reset write-back) |
 | Code mode source edit tools | **Done** (`write_file`, `replace_in_file`, `search_in_project`, `open_file`, `add_unit_to_project`) |
 | Code mode compile/build tools | **Done** (`run_compile` tool + Review Compile/Build UI) |
+| Form component tool (`.pas` + `.lfm`) | **Done** (`ensure_form_component`) |
+| Fix Error → Code mode | **Done** (tools apply the fix; Messages quick-fix) |
+| AI commit message | **Done** (Manage Repository **Suggest** via staged diff) |
 
 ### Phase 0 – Foundations — **done**
 Monorepo, three packages, event bus, logging, status footer.
@@ -444,12 +447,14 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 ### Phase 4 – Code mode — **usable MVP**
 1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset / Work on this — **done**.
 2. IDE-mediated source tools (`write_file`, `replace_in_file`, open buffer when possible) — **done**.
-3. `search_in_project`, `run_compile`, `add_unit_to_project`, `open_file` — **done**.
+3. `search_in_project`, `run_compile`, `add_unit_to_project`, `open_file`, `ensure_form_component` — **done**.
 4. Optional edit confirmation policy for first release — **deferred** (auto-apply in Code).
-5. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
+5. Fix Error → Code mode (tools + sticky mode until tab change) — **done**.
+6. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
 
 ### Phase 5 – Deep integration & polish
-- Git ↔ Assistant events; AI commit message; Fix Error → Code mode.
+- Git ↔ Assistant: AI commit message (**Suggest** on Files tab) — **done**.
+- Further events / Fix Error polish as needed.
 - Theming, high-DPI, performance (large history.jsonl + index).
 - Docs, example workflow, package release.
 
@@ -528,11 +533,11 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 
 ## 10. Next Immediate Steps
 
-1. Polish coding loop (confirm policy, better unit/form scaffolding, Fix Error → Code).
-2. Git ↔ Assistant integration (AI commit message).
-3. Wire Review Compile/Build more tightly into Code mode workflow (Fix Error → Code).
-4. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
-5. Package docs / example plan → code → compile loop.
+1. Polish coding loop (confirm policy, richer form scaffolding, auto Status: complete).
+2. Wire Review Compile/Build more tightly into Code mode (optional “Fix top error” after review).
+3. Polish: structure/normalise plan statuses; debounced plan reload when MD window edits.
+4. Package docs / example plan → code → compile → commit loop.
+5. README status catch-up (still shows early phase wording).
 
 ---
 
@@ -579,7 +584,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Chat selection/clipboard and prompt Cut/Copy/Paste menus.
 - Phase 4: plan section scan + Code TODO panel with Start / Done / Reset status write-back.
 
-**Next:** Code mode source edit tools; tighter compile / Fix Error loop.
+**Next:** package docs / example loop; plan status normalise; optional Review→Fix top error.
 
 ---
 
