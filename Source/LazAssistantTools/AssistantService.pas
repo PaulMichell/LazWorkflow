@@ -936,14 +936,28 @@ Begin
         '- `read_file` — page large files with start_line/end_line' + LineEnding +
         '- `replace_in_file` — exact surgical edit (small unique old_text)' + LineEnding +
         '- `write_file` — create new files or full rewrites; add Pascal units to the project when needed' + LineEnding +
+        '- `replace_in_file` — exact surgical edit' + LineEnding +
+        '- `ensure_form_component` — add/update a component in BOTH .pas and .lfm (TTimer, TButton, events). ' +
+        'Required for form wiring; do not claim LFM changes without calling this or editing the .lfm.' + LineEnding +
         '- `add_unit_to_project` — register an existing .pas with the .lpi' + LineEnding +
         '- `open_file` — open in the IDE editor' + LineEnding +
         '- `run_compile` — compile/build and return Messages' + LineEnding +
         LineEnding +
+        '**Forms / LFM (critical — compile success is not enough):**' + LineEnding +
+        '- Declaring a field in .pas does **not** create or wire the component. Events fire only when the ' +
+        'matching .lfm has `object Name: TClass` and `OnEvent = MethodName`.' + LineEnding +
+        '- Prefer `ensure_form_component` for timers, buttons, actions, etc. It patches .pas **and** .lfm.' + LineEnding +
+        '- Example: ensure_form_component path=unit1.pas name=ColorTimer class_name=TTimer ' +
+        'properties={"Interval":1000,"Enabled":true,"OnTimer":"ColorTimerTimer"} ' +
+        'event_method=ColorTimerTimer uses_unit=ExtCtrls' + LineEnding +
+        '- Then `replace_in_file` the handler body (ColorTimerTimer) with real logic.' + LineEnding +
+        '- TTimer.Interval is **milliseconds** (1000 = once per second, not 100).' + LineEnding +
+        '- Never claim the form works until the .lfm was actually edited in this turn.' + LineEnding +
+        LineEnding +
         '**Plan tools:** update_markdown / write_markdown only for plan Status: or short plan notes — ' +
         'not for dumping code deliverables into the plan.' + LineEnding +
         LineEnding +
-        '**Workflow:** search → read → edit → run_compile → fix until clean → say when Done. ' +
+        '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean → say when Done. ' +
         'Stay on the active work package. Prefer Michell Free Pascal conventions.';
   Else
     Result :=

@@ -1123,7 +1123,8 @@ Begin
     '1. Focus only on this work package unless blocked.' + LineEnding +
     '2. Discover with `search_in_project` / `get_project_info` / `list_directory`, then `read_file`.' + LineEnding +
     '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` for new ' +
-    'or rewritten units, `add_unit_to_project` when creating Pascal units. Do not only describe patches.' + LineEnding +
+    'or rewritten units, `ensure_form_component` when adding form components/events (updates .pas **and** .lfm), ' +
+    '`add_unit_to_project` when creating Pascal units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
     '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced.' + LineEnding +
     '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files.' + LineEnding +
     '6. Use plan `update_markdown` only to set `Status: complete` when truly finished — not to dump code.' + LineEnding +

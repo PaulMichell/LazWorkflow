@@ -103,7 +103,8 @@ Begin
   { Code-mode source tools — never Chat or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'search_in_project') Or (Name = 'run_compile') Or
-    (Name = 'add_unit_to_project') Or (Name = 'open_file') Then
+    (Name = 'add_unit_to_project') Or (Name = 'open_file') Or
+    (Name = 'ensure_form_component') Then
     Begin
       Result := Mode = amCode;
       Exit;
@@ -241,6 +242,18 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative file path"}' +
       '},"required":["path"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"ensure_form_component",' +
+      '"description":"Add or update a published form component in BOTH the .pas unit and matching .lfm. Required when adding TTimer, TButton, etc. so events fire. Prefer this over hand-editing LFM alone.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Form unit path (.pas or .lfm), e.g. unit1.pas"},' +
+        '"name":{"type":"string","description":"Component name, e.g. ColorTimer"},' +
+        '"class_name":{"type":"string","description":"Component class, e.g. TTimer"},' +
+        '"properties":{"type":"string","description":"Optional JSON object of LFM properties, e.g. {\"Interval\":1000,\"OnTimer\":\"ColorTimerTimer\",\"Enabled\":true}. TTimer Interval is milliseconds (1000 = 1 second)."},' +
+        '"event_method":{"type":"string","description":"Optional event handler method name to declare/implement (e.g. ColorTimerTimer). Defaults from On* properties when omitted."},' +
+        '"uses_unit":{"type":"string","description":"Optional unit to add to interface Uses (e.g. ExtCtrls for TTimer)"}' +
+      '},"required":["path","name","class_name"]}' +
     '}}';
 End;
 
@@ -1136,6 +1149,38 @@ Begin
   End;
 End;
 
+{ Must appear before ToolWriteFile / ToolReplaceInFile. }
+Function FormLfmEditReminder(Const PasPath, PasBody: String): String;
+Var
+  LfmPath, RelPas: String;
+Begin
+  Result := '';
+  If (LowerCase(ExtractFileExt(PasPath)) <> '.pas') And
+    (LowerCase(ExtractFileExt(PasPath)) <> '.pp') Then
+    Exit;
+  LfmPath := ChangeFileExt(PasPath, '.lfm');
+  If Not FileExistsUTF8(LfmPath) Then
+    Exit;
+  If (Pos('TTimer', PasBody) > 0) Or (Pos('TButton', PasBody) > 0) Or
+    (Pos('TEdit', PasBody) > 0) Or (Pos('TLabel', PasBody) > 0) Or
+    (Pos('TMemo', PasBody) > 0) Or (Pos('TAction', PasBody) > 0) Or
+    (Pos('TImageList', PasBody) > 0) Or (Pos('TActionList', PasBody) > 0) Then
+    Begin
+      RelPas := ProjectRelativePath(PasPath);
+      If RelPas = '' Then
+        RelPas := ExtractFileName(PasPath);
+      Result := LineEnding +
+        'IMPORTANT: This form unit has a sibling ' + ExtractFileName(LfmPath) +
+        '. Published components and On* events only fire if that .lfm is updated too. ' +
+        'Do not claim the form works until you call ensure_form_component (preferred), e.g. ' +
+        'ensure_form_component path=' + RelPas +
+        ' name=ColorTimer class_name=TTimer ' +
+        'properties={"Interval":1000,"Enabled":true,"OnTimer":"ColorTimerTimer"} ' +
+        'event_method=ColorTimerTimer uses_unit=ExtCtrls — or replace_in_file on the .lfm. ' +
+        'TTimer.Interval is milliseconds (1000 = once per second).';
+    End;
+End;
+
 Function ToolWriteFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Resolved, Content, Note: String;
@@ -1183,6 +1228,7 @@ Begin
     End;
   If Created Then
     ResultText := ResultText + ' (new file)';
+  ResultText := ResultText + FormLfmEditReminder(Resolved, Content);
   Result := True;
   WorkflowLogger.Info('AssistantTools', 'write_file ' + Resolved);
 End;
@@ -1250,6 +1296,7 @@ Begin
     [Count, ProjectRelativePath(Resolved), Note]);
   If FromEditor Then
     ResultText := ResultText + ' (edited open buffer)';
+  ResultText := ResultText + FormLfmEditReminder(Resolved, Body);
   Result := True;
   WorkflowLogger.Info('AssistantTools', Format('replace_in_file %s n=%d', [Resolved, Count]));
 End;
@@ -1390,6 +1437,442 @@ Begin
   Result := True;
 End;
 
+Function SiblingFormPaths(Const AnyPath: String; Out PasPath, LfmPath: String): Boolean;
+Var
+  Base, Ext: String;
+Begin
+  Result := False;
+  PasPath := '';
+  LfmPath := '';
+  Ext := LowerCase(ExtractFileExt(AnyPath));
+  Base := ChangeFileExt(AnyPath, '');
+  If (Ext = '.pas') Or (Ext = '.pp') Then
+    Begin
+      PasPath := AnyPath;
+      LfmPath := Base + '.lfm';
+      Result := True;
+    End
+  Else If Ext = '.lfm' Then
+    Begin
+      LfmPath := AnyPath;
+      PasPath := Base + '.pas';
+      If Not FileExistsUTF8(PasPath) Then
+        PasPath := Base + '.pp';
+      Result := True;
+    End;
+End;
+
+Function EnsureUsesHasUnit(Var PasBody: String; Const UnitName: String): Boolean;
+Var
+  UsesPos, SemiPos: Integer;
+  Slice, LowerBody, Needle: String;
+Begin
+  Result := False;
+  If Trim(UnitName) = '' Then
+    Exit;
+  LowerBody := LowerCase(PasBody);
+  Needle := LowerCase(UnitName);
+  { Already present as a whole word-ish token. }
+  If Pos(',' + Needle + ',', StringReplace(StringReplace(LowerBody, ' ', '', [rfReplaceAll]),
+    LineEnding, '', [rfReplaceAll])) > 0 Then
+    Exit;
+  If Pos(' ' + Needle + ',', LowerBody) > 0 Then
+    Exit;
+  If Pos(',' + Needle + ' ', LowerBody) > 0 Then
+    Exit;
+  If Pos('uses' + Needle, StringReplace(LowerBody, ' ', '', [rfReplaceAll])) > 0 Then
+    Exit;
+  UsesPos := Pos('uses', LowerBody);
+  If UsesPos < 1 Then
+    Exit;
+  SemiPos := Pos(';', Copy(PasBody, UsesPos, MaxInt));
+  If SemiPos < 1 Then
+    Exit;
+  SemiPos := UsesPos + SemiPos - 1;
+  Slice := Copy(PasBody, UsesPos, SemiPos - UsesPos);
+  If Pos(LowerCase(UnitName), LowerCase(Slice)) > 0 Then
+    Exit;
+  Insert(', ' + UnitName, PasBody, SemiPos);
+  Result := True;
+End;
+
+Function EnsurePublishedField(Var PasBody: String; Const CompName, ClassName: String): Boolean;
+Var
+  FieldLine, Needle: String;
+  ClassPos, PubPos, InsertAt: Integer;
+Begin
+  Result := False;
+  FieldLine := '    ' + CompName + ': ' + ClassName + ';';
+  Needle := LowerCase(CompName + ':');
+  If Pos(Needle, LowerCase(PasBody)) > 0 Then
+    Exit;
+  ClassPos := Pos('= class(', LowerCase(PasBody));
+  If ClassPos < 1 Then
+    ClassPos := Pos('= class', LowerCase(PasBody));
+  If ClassPos < 1 Then
+    Exit;
+  PubPos := Pos('published', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
+  If PubPos > 0 Then
+    Begin
+      InsertAt := ClassPos + PubPos - 1 + Length('published');
+      While (InsertAt <= Length(PasBody)) And (PasBody[InsertAt] In [#10, #13, ' ']) Do
+        Inc(InsertAt);
+      Insert(LineEnding + FieldLine, PasBody, InsertAt);
+      Result := True;
+      Exit;
+    End;
+  { Fallback: insert before first private/public after class. }
+  PubPos := Pos('private', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
+  If PubPos < 1 Then
+    PubPos := Pos('public', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
+  If PubPos < 1 Then
+    Exit;
+  InsertAt := ClassPos + PubPos - 1;
+  Insert(LineEnding + '  published' + LineEnding + FieldLine + LineEnding, PasBody, InsertAt);
+  Result := True;
+End;
+
+Function EnsureEventMethodDecl(Var PasBody: String; Const MethodName: String): Boolean;
+Var
+  Decl, Needle: String;
+  ClassPos, PubPos, InsertAt: Integer;
+Begin
+  Result := False;
+  If Trim(MethodName) = '' Then
+    Exit;
+  Decl := '    Procedure ' + MethodName + '(Sender: TObject);';
+  Needle := LowerCase('procedure ' + MethodName + '(');
+  If Pos(Needle, LowerCase(PasBody)) > 0 Then
+    Exit;
+  ClassPos := Pos('= class(', LowerCase(PasBody));
+  If ClassPos < 1 Then
+    ClassPos := Pos('= class', LowerCase(PasBody));
+  If ClassPos < 1 Then
+    Exit;
+  PubPos := Pos('published', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
+  If PubPos < 1 Then
+    Exit;
+  InsertAt := ClassPos + PubPos - 1 + Length('published');
+  While (InsertAt <= Length(PasBody)) And (PasBody[InsertAt] In [#10, #13, ' ']) Do
+    Inc(InsertAt);
+  Insert(LineEnding + Decl, PasBody, InsertAt);
+  Result := True;
+End;
+
+Function EnsureEventMethodImpl(Var PasBody: String; Const FormClass, MethodName: String): Boolean;
+Var
+  Needle, Stub: String;
+  ImplPos: Integer;
+Begin
+  Result := False;
+  If (Trim(FormClass) = '') Or (Trim(MethodName) = '') Then
+    Exit;
+  Needle := LowerCase('procedure ' + FormClass + '.' + MethodName);
+  If Pos(Needle, LowerCase(PasBody)) > 0 Then
+    Exit;
+  Stub :=
+    LineEnding +
+    'Procedure ' + FormClass + '.' + MethodName + '(Sender: TObject);' + LineEnding +
+    'Begin' + LineEnding +
+    '  { TODO: implement }' + LineEnding +
+    'End;' + LineEnding;
+  ImplPos := Pos(LineEnding + 'implementation', LowerCase(PasBody));
+  If ImplPos < 1 Then
+    ImplPos := Pos('implementation', LowerCase(PasBody));
+  If ImplPos < 1 Then
+    Exit;
+  { Insert before finalization/end. of unit if present, else append before last End. }
+  If Pos(LineEnding + 'initialization', LowerCase(PasBody)) > 0 Then
+    Insert(Stub, PasBody, Pos(LineEnding + 'initialization', LowerCase(PasBody)))
+  Else If Pos(LineEnding + 'finalization', LowerCase(PasBody)) > 0 Then
+    Insert(Stub, PasBody, Pos(LineEnding + 'finalization', LowerCase(PasBody)))
+  Else
+    Begin
+      { Before last "End." }
+      ImplPos := Length(PasBody);
+      While (ImplPos > 1) And (PasBody[ImplPos] In [#10, #13, ' ']) Do
+        Dec(ImplPos);
+      If (ImplPos >= 4) And (LowerCase(Copy(PasBody, ImplPos - 3, 4)) = 'end.') Then
+        Insert(Stub, PasBody, ImplPos - 3)
+      Else
+        PasBody := PasBody + Stub;
+    End;
+  Result := True;
+End;
+
+Function DetectFormClassName(Const PasBody: String): String;
+Var
+  P, StartPos, I: Integer;
+  Slice: String;
+Begin
+  Result := '';
+  P := Pos('= class(', LowerCase(PasBody));
+  If P < 1 Then
+    P := Pos('= class', LowerCase(PasBody));
+  If P < 1 Then
+    Exit;
+  StartPos := P - 1;
+  While (StartPos > 1) And (PasBody[StartPos] In [' ', #9]) Do
+    Dec(StartPos);
+  I := StartPos;
+  While (I > 1) And (PasBody[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Do
+    Dec(I);
+  If Not (PasBody[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then
+    Inc(I);
+  Slice := Copy(PasBody, I, StartPos - I + 1);
+  Result := Trim(Slice);
+End;
+
+Function BuildLfmPropertyLines(Const PropsJson: String; Out Lines: String; Out EventMethod: String): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  I: Integer;
+  Key, Val: String;
+  Node: TJSONData;
+  IsEvent, IsIdent: Boolean;
+  Ch: Char;
+  J: Integer;
+Begin
+  Result := False;
+  Lines := '';
+  EventMethod := '';
+  If Trim(PropsJson) = '' Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(PropsJson);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      For I := 0 To Obj.Count - 1 Do
+        Begin
+          Key := Obj.Names[I];
+          Node := Obj.Items[I];
+          If Not Assigned(Node) Then
+            Continue;
+          If Node.JSONType = jtString Then
+            Begin
+              Val := Node.AsString;
+              IsEvent := (Length(Key) >= 2) And (LowerCase(Copy(Key, 1, 2)) = 'on');
+              If IsEvent And (EventMethod = '') Then
+                EventMethod := Val;
+              { Event method names and bare identifiers (clNone, etc.) stay unquoted; captions need quotes. }
+              IsIdent := Val <> '';
+              For J := 1 To Length(Val) Do
+                Begin
+                  Ch := Val[J];
+                  If Not (Ch In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then
+                    Begin
+                      IsIdent := False;
+                      Break;
+                    End;
+                End;
+              If IsEvent Or IsIdent Then
+                Lines := Lines + '    ' + Key + ' = ' + Val + LineEnding
+              Else
+                Lines := Lines + '    ' + Key + ' = ''' +
+                  StringReplace(Val, '''', '''''', [rfReplaceAll]) + '''' + LineEnding;
+            End
+          Else If Node.JSONType = jtBoolean Then
+            Lines := Lines + '    ' + Key + ' = ' + BoolToStr(Node.AsBoolean, True) + LineEnding
+          Else If Node.JSONType = jtNumber Then
+            Lines := Lines + '    ' + Key + ' = ' + Node.AsString + LineEnding
+          Else
+            Lines := Lines + '    ' + Key + ' = ' + Node.AsString + LineEnding;
+        End;
+      Result := True;
+    Except
+      Result := False;
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function UpsertLfmComponent(Var LfmBody: String; Const CompName, ClassName, PropLines: String): Boolean;
+Var
+  Lower, Marker, Block: String;
+  StartPos, EndPos, Depth, I, InsertAt: Integer;
+  LineStart: Integer;
+Begin
+  Result := False;
+  Lower := LowerCase(LfmBody);
+  Marker := 'object ' + LowerCase(CompName) + ':';
+  StartPos := Pos(Marker, Lower);
+  Block :=
+    '  object ' + CompName + ': ' + ClassName + LineEnding +
+    PropLines +
+    '    Left = 40' + LineEnding +
+    '    Top = 40' + LineEnding +
+    '  end' + LineEnding;
+  { If PropLines already has Left/Top, still OK to have defaults after — LFM last wins? Actually duplicate keys bad.
+    Prefer only add Left/Top if not in PropLines. }
+  If Pos('left =', LowerCase(PropLines)) > 0 Then
+    Block :=
+      '  object ' + CompName + ': ' + ClassName + LineEnding +
+      PropLines +
+      '  end' + LineEnding;
+  If StartPos > 0 Then
+    Begin
+      { Replace existing object block. }
+      Depth := 0;
+      I := StartPos;
+      EndPos := 0;
+      While I <= Length(LfmBody) Do
+        Begin
+          If (I = 1) Or (LfmBody[I - 1] In [#10, #13]) Then
+            Begin
+              LineStart := I;
+              If (LowerCase(Copy(LfmBody, LineStart, 6)) = 'object') Or
+                (LowerCase(Copy(LfmBody, LineStart, 8)) = 'inherited') Then
+                Inc(Depth)
+              Else If (LowerCase(Copy(LfmBody, LineStart, 3)) = 'end') And
+                ((LineStart + 3 > Length(LfmBody)) Or (LfmBody[LineStart + 3] In [#10, #13, ' ', #9])) Then
+                Begin
+                  Dec(Depth);
+                  If Depth = 0 Then
+                    Begin
+                      EndPos := LineStart;
+                      While (EndPos <= Length(LfmBody)) And (Not (LfmBody[EndPos] In [#10, #13])) Do
+                        Inc(EndPos);
+                      While (EndPos <= Length(LfmBody)) And (LfmBody[EndPos] In [#10, #13]) Do
+                        Inc(EndPos);
+                      Break;
+                    End;
+                End;
+            End;
+          Inc(I);
+        End;
+      If EndPos > StartPos Then
+        Begin
+          Delete(LfmBody, StartPos, EndPos - StartPos);
+          Insert(Block, LfmBody, StartPos);
+          Result := True;
+          Exit;
+        End;
+      { Fall through and insert if the existing block could not be bounded. }
+    End;
+  { Insert before final root "end". }
+  InsertAt := Length(LfmBody);
+  While (InsertAt > 1) And (LfmBody[InsertAt] In [#10, #13, ' ']) Do
+    Dec(InsertAt);
+  { Find last standalone end }
+  I := InsertAt;
+  While I > 1 Do
+    Begin
+      If (LowerCase(Copy(LfmBody, I, 3)) = 'end') And
+        ((I = 1) Or (LfmBody[I - 1] In [#10, #13, ' '])) Then
+        Begin
+          InsertAt := I;
+          Break;
+        End;
+      Dec(I);
+    End;
+  Insert(Block, LfmBody, InsertAt);
+  Result := True;
+End;
+
+Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Path, Resolved, PasPath, LfmPath, CompName, ClassName, PropsJson, UsesUnit: String;
+  EventMethod, PropLines, DetectedEvent, FormClass: String;
+  PasBody, LfmBody, Note: String;
+  FromEditor: Boolean;
+  ChangedPas, ChangedLfm: Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Path := JsonArgString(ArgumentsJson, 'path');
+  CompName := Trim(JsonArgString(ArgumentsJson, 'name'));
+  ClassName := Trim(JsonArgString(ArgumentsJson, 'class_name'));
+  PropsJson := JsonArgString(ArgumentsJson, 'properties');
+  EventMethod := Trim(JsonArgString(ArgumentsJson, 'event_method'));
+  UsesUnit := Trim(JsonArgString(ArgumentsJson, 'uses_unit'));
+  If (Path = '') Or (CompName = '') Or (ClassName = '') Then
+    Begin
+      ErrorText := 'ensure_form_component requires path, name, and class_name.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
+    Exit;
+  If Not SiblingFormPaths(Resolved, PasPath, LfmPath) Then
+    Begin
+      ErrorText := 'path must be a form .pas/.pp or .lfm file.';
+      Exit;
+    End;
+  If Not FileExistsUTF8(PasPath) Then
+    Begin
+      ErrorText := 'Form unit not found: ' + PasPath;
+      Exit;
+    End;
+  If Not FileExistsUTF8(LfmPath) Then
+    Begin
+      ErrorText := 'Matching .lfm not found: ' + LfmPath +
+        ' (create the form in Lazarus first, or write the .lfm with write_file).';
+      Exit;
+    End;
+  If ClassName[1] <> 'T' Then
+    ClassName := 'T' + ClassName;
+  If UsesUnit = '' Then
+    Begin
+      If SameText(ClassName, 'TTimer') Or SameText(ClassName, 'TImageList') Then
+        UsesUnit := 'ExtCtrls'
+      Else If SameText(ClassName, 'TAction') Or SameText(ClassName, 'TActionList') Then
+        UsesUnit := 'ActnList';
+    End;
+  If Not BuildLfmPropertyLines(PropsJson, PropLines, DetectedEvent) Then
+    Begin
+      ErrorText := 'properties must be a JSON object string when provided.';
+      Exit;
+    End;
+  If EventMethod = '' Then
+    EventMethod := DetectedEvent;
+  If Not LoadProjectFileText(PasPath, PasBody, FromEditor, ErrorText) Then
+    Exit;
+  If Not LoadProjectFileText(LfmPath, LfmBody, FromEditor, ErrorText) Then
+    Exit;
+  FormClass := DetectFormClassName(PasBody);
+  ChangedPas := False;
+  ChangedLfm := False;
+  If UsesUnit <> '' Then
+    If EnsureUsesHasUnit(PasBody, UsesUnit) Then
+      ChangedPas := True;
+  If EnsurePublishedField(PasBody, CompName, ClassName) Then
+    ChangedPas := True;
+  If EventMethod <> '' Then
+    Begin
+      If EnsureEventMethodDecl(PasBody, EventMethod) Then
+        ChangedPas := True;
+      If EnsureEventMethodImpl(PasBody, FormClass, EventMethod) Then
+        ChangedPas := True;
+    End;
+  If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
+    ChangedLfm := True;
+  If ChangedPas Then
+    If Not SaveProjectFileText(PasPath, PasBody, True, Note, ErrorText) Then
+      Exit;
+  If ChangedLfm Then
+    If Not SaveProjectFileText(LfmPath, LfmBody, True, Note, ErrorText) Then
+      Exit;
+  ResultText := Format(
+    'ensure_form_component %s: %s (%s). pas_changed=%s lfm_changed=%s form_class=%s event=%s',
+    [ProjectRelativePath(PasPath), CompName, ClassName,
+     BoolToStr(ChangedPas, True), BoolToStr(ChangedLfm, True), FormClass, EventMethod]);
+  If SameText(ClassName, 'TTimer') And (Pos('interval =', LowerCase(PropLines)) > 0) Then
+    ResultText := ResultText +
+      ' Note: TTimer.Interval is milliseconds (1000 = once per second).';
+  If Not ChangedPas And Not ChangedLfm Then
+    ResultText := ResultText + ' (already present; LFM block refreshed if found)';
+  Result := True;
+  WorkflowLogger.Info('AssistantTools', ResultText);
+End;
+
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Var
@@ -1448,6 +1931,8 @@ Begin
     Result := ToolAddUnitToProject(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'open_file' Then
     Result := ToolOpenFile(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'ensure_form_component' Then
+    Result := ToolEnsureFormComponent(ArgumentsJson, ResultText, ErrorText)
   Else
     ErrorText := 'Unknown tool: ' + ToolName;
 End;
