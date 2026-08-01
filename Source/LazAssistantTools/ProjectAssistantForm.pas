@@ -286,7 +286,8 @@ Begin
   Inherited Create(TheOwner);
   FModelName := AssistantConfigDefaultModel;
   FContextUsed := 0;
-  FContextLimit := 128000;
+  { Soft display budget; Grok/xAI models often allow ~500k tokens. }
+  FContextLimit := 500000;
   FSending := False;
   FStreamingActive := False;
   FTurnRecorded := False;
@@ -1980,10 +1981,18 @@ Var
   Pct: Integer;
   StatusText: String;
 Begin
+  If Assigned(AssistantClient) And (Not FSending) Then
+    Begin
+      FContextUsed := AssistantClient.EstimatedPromptTokens;
+      If AssistantClient.MaxPromptTokens > 0 Then
+        FContextLimit := AssistantClient.MaxPromptTokens;
+    End;
   If FContextLimit > 0 Then
     Pct := (FContextUsed * 100) Div FContextLimit
   Else
     Pct := 0;
+  If Pct > 999 Then
+    Pct := 999;
   If FSending Then
     Begin
       If FStatusPhase = '' Then
@@ -1999,12 +2008,12 @@ Begin
   If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
     FStatusFooter.SetAll(
       Format('Model: %s | Skill: %s', [FModelName, AssistantChatConfig.ActiveSkill]),
-      Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
+      Format('Context: ~%d / %d tok (%d%%)', [FContextUsed, FContextLimit, Pct]),
       StatusText)
   Else
     FStatusFooter.SetAll(
       Format('Model: %s', [FModelName]),
-      Format('Context: ~%d / %d (%d%%)', [FContextUsed, FContextLimit, Pct]),
+      Format('Context: ~%d / %d tok (%d%%)', [FContextUsed, FContextLimit, Pct]),
       StatusText);
 End;
 
@@ -2644,13 +2653,19 @@ Begin
       FAssistantThinking := '';
       If WithContext Then
         Begin
-          ContextBlock := BuildIDEContextBlock;
+          { After several turns, full editor dumps explode the prompt; use light context. }
+          If Assigned(AssistantClient) And (AssistantClient.MessageCount >= 8) Then
+            ContextBlock := BuildIDEContextBlockLight
+          Else
+            ContextBlock := BuildIDEContextBlock;
           FinalApi := FinalApi + LineEnding + LineEnding + ContextBlock;
         End;
       AppendMessage('user', FDisplayUser);
-      { Prior turns already on AssistantClient are sent with this request (full context). }
+      { Prior turns already on AssistantClient are sent with this request (trimmed if huge). }
       AssistantClient.AddMessage(amrUser, FinalApi);
-      FContextUsed := FContextUsed + Length(FinalApi) Div 4 + 8;
+      FContextUsed := AssistantClient.EstimatedPromptTokens;
+      If FContextUsed < Length(FinalApi) Div 4 Then
+        FContextUsed := Length(FinalApi) Div 4 + 8;
       FStatusPhase := 'Waiting for first token…';
       AssistantClient.ToolsEnabled := True;
       SetSending(True);

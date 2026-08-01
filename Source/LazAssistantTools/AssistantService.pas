@@ -56,11 +56,20 @@ Type
     FToolsJsonMode: TAssistantMode;
     FToolsJsonValid: Boolean;
     FToolsEnabled: Boolean;
+    FMaxPromptTokens: Integer;
+    FLastTrimNotice: String;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
     Function EscapedToolCallId(Var Msg: TAssistantMessage): String;
     Function ToolsJsonCached: String;
+    Function MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
+    Function EstimatePromptTokens: Integer;
+    Procedure InvalidateMessageEscape(Var Msg: TAssistantMessage);
+    Procedure TruncateMessageContent(Var Msg: TAssistantMessage; MaxChars: Integer; Const LabelText: String);
+    Procedure DropMessageRange(FromIndex, Count: Integer);
+    { Shrink/drop old messages so the next request fits the model limit. }
+    Procedure TrimMessagesForBudget;
     Function BuildRequestJson: String;
   Public
     Constructor Create;
@@ -77,6 +86,8 @@ Type
     Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
     Function IsBusy: Boolean;
     Function IsSignedIn: Boolean;
+    { Rough prompt size (messages + system + tools) for UI / guards. }
+    Function EstimatedPromptTokens: Integer;
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
     Function StartStream(OnToken: TAssistantStreamEvent): Boolean;
     Procedure CancelStream;
@@ -98,6 +109,8 @@ Type
     Property LastError: String Read FLastError;
     { When False, chat/completions is sent without tools (single-shot answer). }
     Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
+    { Soft cap for chat/completions prompt (default leaves headroom under 500k models). }
+    Property MaxPromptTokens: Integer Read FMaxPromptTokens Write FMaxPromptTokens;
   End;
 
 Var
@@ -988,6 +1001,9 @@ Begin
   FToolsJsonMode := amChat;
   FToolsJsonValid := False;
   FToolsEnabled := True;
+  { Grok / xAI chat models often hard-cap near 500k tokens; stay under with margin. }
+  FMaxPromptTokens := 420000;
+  FLastTrimNotice := '';
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
@@ -1199,16 +1215,243 @@ End;
 Procedure TAssistantService.ClearHistory;
 Begin
   SetLength(FMessages, 0);
+  FLastTrimNotice := '';
+End;
+
+Procedure TAssistantService.InvalidateMessageEscape(Var Msg: TAssistantMessage);
+Begin
+  Msg.ContentEscaped := '';
+  Msg.ToolCallIdEscaped := '';
+End;
+
+Procedure TAssistantService.TruncateMessageContent(Var Msg: TAssistantMessage; MaxChars: Integer;
+  Const LabelText: String);
+Var
+  KeepHead, KeepTail: Integer;
+  Body: String;
+Begin
+  If MaxChars < 64 Then
+    MaxChars := 64;
+  If Length(Msg.Content) <= MaxChars Then
+    Exit;
+  KeepHead := (MaxChars * 2) Div 3;
+  KeepTail := MaxChars - KeepHead - 80;
+  If KeepTail < 40 Then
+    KeepTail := 40;
+  Body := Copy(Msg.Content, 1, KeepHead) + LineEnding +
+    Format('[… %s truncated from %d chars for context budget …]',
+      [LabelText, Length(Msg.Content)]) + LineEnding +
+    Copy(Msg.Content, Length(Msg.Content) - KeepTail + 1, KeepTail);
+  Msg.Content := Body;
+  InvalidateMessageEscape(Msg);
+End;
+
+Function TAssistantService.MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
+Begin
+  Result := Length(Msg.Content) + Length(Msg.ToolCallsJson) + Length(Msg.ToolCallId);
+End;
+
+Function TAssistantService.EstimatePromptTokens: Integer;
+Var
+  I, Chars: Integer;
+Begin
+  Chars := Length(FSystemPrompt) + Length(ToolsJsonCached) + 256;
+  For I := 0 To High(FMessages) Do
+    Inc(Chars, MessagePayloadChars(FMessages[I]));
+  { ~4 characters per token is a common rough estimate for mixed code/text. }
+  Result := (Chars + 3) Div 4;
+  If Result < 1 Then
+    Result := 1;
+End;
+
+Function TAssistantService.EstimatedPromptTokens: Integer;
+Begin
+  Result := EstimatePromptTokens;
+End;
+
+Procedure TAssistantService.DropMessageRange(FromIndex, Count: Integer);
+Var
+  I, N: Integer;
+Begin
+  N := Length(FMessages);
+  If (Count < 1) Or (FromIndex < 0) Or (FromIndex >= N) Then
+    Exit;
+  If FromIndex + Count > N Then
+    Count := N - FromIndex;
+  For I := FromIndex To N - Count - 1 Do
+    FMessages[I] := FMessages[I + Count];
+  SetLength(FMessages, N - Count);
+End;
+
+Procedure TAssistantService.TrimMessagesForBudget;
+Const
+  MinMessagesToKeep = 6;
+  RecentProtectCount = 14;
+  OldToolMaxChars = 2500;
+  OldUserMaxChars = 12000;
+  RecentToolMaxChars = 48000;
+Var
+  Budget, Est, I, DropCount, ProtectFrom, UserTurns, StartDrop: Integer;
+  Notice: String;
+  Changed: Boolean;
+Begin
+  If FMaxPromptTokens < 50000 Then
+    FMaxPromptTokens := 50000;
+  Budget := FMaxPromptTokens;
+  Changed := False;
+  Est := EstimatePromptTokens;
+  If Est <= Budget Then
+    Exit;
+
+  { Phase 1: aggressively shrink older tool results and huge user/assistant blobs. }
+  ProtectFrom := Length(FMessages) - RecentProtectCount;
+  If ProtectFrom < 0 Then
+    ProtectFrom := 0;
+  For I := 0 To High(FMessages) Do
+    Begin
+      If I >= ProtectFrom Then
+        Begin
+          If (FMessages[I].Role = amrTool) And (Length(FMessages[I].Content) > RecentToolMaxChars) Then
+            Begin
+              TruncateMessageContent(FMessages[I], RecentToolMaxChars, 'tool result');
+              Changed := True;
+            End;
+          Continue;
+        End;
+      If FMessages[I].Role = amrTool Then
+        Begin
+          If Length(FMessages[I].Content) > OldToolMaxChars Then
+            Begin
+              TruncateMessageContent(FMessages[I], OldToolMaxChars, 'older tool result');
+              Changed := True;
+            End;
+        End
+      Else If Length(FMessages[I].Content) > OldUserMaxChars Then
+        Begin
+          TruncateMessageContent(FMessages[I], OldUserMaxChars, 'older message');
+          Changed := True;
+        End;
+      { ToolCallsJson arguments can also be large (write_file content).
+        Strip tool_calls entirely and drop following tool results so ids stay valid. }
+      If Length(FMessages[I].ToolCallsJson) > 12000 Then
+        Begin
+          FMessages[I].ToolCallsJson := '';
+          If Trim(FMessages[I].Content) = '' Then
+            FMessages[I].Content :=
+              '[Earlier assistant tool_calls were removed to fit the context window.]';
+          InvalidateMessageEscape(FMessages[I]);
+          While (I + 1 <= High(FMessages)) And (FMessages[I + 1].Role = amrTool) Do
+            DropMessageRange(I + 1, 1);
+          Changed := True;
+        End;
+    End;
+
+  Est := EstimatePromptTokens;
+  { Phase 2: drop oldest complete turns (from the start through a user boundary). }
+  While (Est > Budget) And (Length(FMessages) > MinMessagesToKeep) Do
+    Begin
+      { Prefer dropping from the start up to (not including) a later user message
+        so we keep recent user→assistant→tool chains intact. }
+      StartDrop := 0;
+      DropCount := 1;
+      UserTurns := 0;
+      For I := High(FMessages) DownTo 0 Do
+        If FMessages[I].Role = amrUser Then
+          Begin
+            Inc(UserTurns);
+            If UserTurns >= 3 Then
+              Begin
+                { Keep from this user message onward; drop [0 .. I-1]. }
+                DropCount := I;
+                Break;
+              End;
+          End;
+      If DropCount < 1 Then
+        DropCount := 1;
+      If DropCount >= Length(FMessages) - MinMessagesToKeep + 1 Then
+        DropCount := Length(FMessages) - MinMessagesToKeep;
+      If DropCount < 1 Then
+        Break;
+      DropMessageRange(StartDrop, DropCount);
+      Changed := True;
+      Est := EstimatePromptTokens;
+      { After one large drop, re-loop; if still over, drop more from start one-by-one. }
+      If (Est > Budget) And (Length(FMessages) > MinMessagesToKeep) Then
+        Begin
+          { Drop a leading assistant/tool orphan or single message. }
+          DropCount := 1;
+          If (Length(FMessages) > 1) And (FMessages[0].Role = amrAssistant) And
+            (FMessages[0].ToolCallsJson <> '') Then
+            Begin
+              DropCount := 1;
+              While (DropCount < Length(FMessages)) And (FMessages[DropCount].Role = amrTool) Do
+                Inc(DropCount);
+            End;
+          If DropCount > Length(FMessages) - MinMessagesToKeep Then
+            DropCount := Length(FMessages) - MinMessagesToKeep;
+          If DropCount > 0 Then
+            Begin
+              DropMessageRange(0, DropCount);
+              Est := EstimatePromptTokens;
+            End
+          Else
+            Break;
+        End;
+    End;
+
+  { Phase 3: last-resort truncate remaining tool results. }
+  If Est > Budget Then
+    For I := 0 To High(FMessages) Do
+      If (FMessages[I].Role = amrTool) And (Length(FMessages[I].Content) > 1200) Then
+        Begin
+          TruncateMessageContent(FMessages[I], 1200, 'tool result');
+          Changed := True;
+        End;
+
+  Est := EstimatePromptTokens;
+  If Changed Then
+    Begin
+      Notice := Format(
+        '[Context trimmed to fit the model limit: ~%d estimated tokens remain (budget %d). ' +
+        'Older tool results and turns may be shortened or dropped. Re-read files if needed.]',
+        [Est, Budget]);
+      FLastTrimNotice := Notice;
+      If (Length(FMessages) = 0) Or (Pos('[Context trimmed', FMessages[0].Content) < 1) Then
+        Begin
+          SetLength(FMessages, Length(FMessages) + 1);
+          For I := High(FMessages) DownTo 1 Do
+            FMessages[I] := FMessages[I - 1];
+          FMessages[0].Role := amrUser;
+          FMessages[0].Content := Notice;
+          FMessages[0].ToolCallId := '';
+          FMessages[0].ToolCallsJson := '';
+          InvalidateMessageEscape(FMessages[0]);
+        End
+      Else
+        Begin
+          FMessages[0].Content := Notice;
+          InvalidateMessageEscape(FMessages[0]);
+        End;
+      WorkflowLogger.Info('AssistantService',
+        Format('Trimmed chat context to ~%d tokens (budget %d, messages=%d)',
+          [EstimatePromptTokens, Budget, Length(FMessages)]));
+    End;
 End;
 
 Procedure TAssistantService.AddMessage(Role: TAssistantMessageRole; Const Content: String);
 Var
   Idx: Integer;
+  Body: String;
 Begin
+  Body := Content;
+  { Cap very large user payloads (e.g. repeated IDE dumps). }
+  If (Role = amrUser) And (Length(Body) > 100000) Then
+    Body := Copy(Body, 1, 90000) + LineEnding +
+      Format('[… user message truncated from %d chars …]', [Length(Content)]);
   Idx := Length(FMessages);
   SetLength(FMessages, Idx + 1);
   FMessages[Idx].Role := Role;
-  FMessages[Idx].Content := Content;
+  FMessages[Idx].Content := Body;
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := '';
   FMessages[Idx].ContentEscaped := '';
@@ -1218,25 +1461,42 @@ End;
 Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String);
 Var
   Idx: Integer;
+  Calls: String;
 Begin
+  Calls := ToolCallsJson;
+  { write_file / full rewrites in tool arguments can dominate the prompt. }
+  If Length(Calls) > 100000 Then
+    Calls :=
+      '[{"id":"trimmed_args","type":"function","function":{"name":"large_tool_call","arguments":"{}"}}]';
   Idx := Length(FMessages);
   SetLength(FMessages, Idx + 1);
   FMessages[Idx].Role := amrAssistant;
   FMessages[Idx].Content := Content;
+  If (FMessages[Idx].Content = '') And (Calls <> ToolCallsJson) Then
+    FMessages[Idx].Content :=
+      '[Assistant tool_calls arguments were truncated for context size.]';
   FMessages[Idx].ToolCallId := '';
-  FMessages[Idx].ToolCallsJson := ToolCallsJson;
+  FMessages[Idx].ToolCallsJson := Calls;
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
 Procedure TAssistantService.AddToolResult(Const ToolCallId, Content: String);
+Const
+  MaxToolChars = 40000;
 Var
   Idx: Integer;
+  Body: String;
 Begin
+  Body := Content;
+  If Length(Body) > MaxToolChars Then
+    Body := Copy(Body, 1, MaxToolChars - 120) + LineEnding +
+      Format('[… tool result truncated from %d chars at store time; re-read with start_line if needed …]',
+        [Length(Content)]);
   Idx := Length(FMessages);
   SetLength(FMessages, Idx + 1);
   FMessages[Idx].Role := amrTool;
-  FMessages[Idx].Content := Content;
+  FMessages[Idx].Content := Body;
   FMessages[Idx].ToolCallId := ToolCallId;
   FMessages[Idx].ToolCallsJson := '';
   FMessages[Idx].ContentEscaped := '';
@@ -1245,6 +1505,7 @@ End;
 
 Function TAssistantService.BuildNextRequestJson: String;
 Begin
+  TrimMessagesForBudget;
   Result := BuildRequestJson;
 End;
 
@@ -1440,6 +1701,7 @@ Begin
   { Refresh mode/plan-path wording and tool list before every request. }
   RebuildSystemPrompt;
   FToolsJsonValid := False;
+  TrimMessagesForBudget;
   RequestJson := BuildRequestJson;
   FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
   FBusy := True;

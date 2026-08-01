@@ -16,9 +16,14 @@ Const
   { Keep the default context modest so first-token latency stays reasonable.
     Selection is preferred; full-file attach is capped. }
   AssistantContextMaxActiveChars = 48000;
+  { After several turns, only attach a light summary so history stays under the
+    model token limit (full file can be re-read via tools). }
+  AssistantContextMaxActiveCharsLight = 8000;
   AssistantContextMaxProjectFiles = 250;
 
 Function BuildIDEContextBlock: String;
+{ Smaller attach for long conversations (cursor + selection or short head of file). }
+Function BuildIDEContextBlockLight: String;
 
 Implementation
 
@@ -134,6 +139,52 @@ Begin
     TrimRight(BuildProjectFilesSection) + LineEnding +
     '----- end IDE context -----';
   WorkflowLogger.Debug('AssistantIDEContext', 'Built IDE context block (' + IntToStr(Length(Result)) + ' chars)');
+End;
+
+Function BuildIDEContextBlockLight: String;
+Var
+  Ed: TSourceEditorInterface;
+  Sel: String;
+  CursorPos: TPoint;
+  Head: String;
+Begin
+  Result :=
+    '----- begin IDE context (light) -----' + LineEnding +
+    'Long conversation: only a short editor summary is attached. Use read_file for full sources.' +
+    LineEnding;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Begin
+      Result := Result + 'Active editor: (unavailable)' + LineEnding +
+        '----- end IDE context -----';
+      Exit;
+    End;
+  Ed := SourceEditorManagerIntf.ActiveEditor;
+  If Not Assigned(Ed) Then
+    Begin
+      Result := Result + 'Active editor: (none)' + LineEnding +
+        '----- end IDE context -----';
+      Exit;
+    End;
+  CursorPos := Ed.CursorTextXY;
+  Result := Result +
+    'Active editor: ' + Ed.FileName + LineEnding +
+    Format('Cursor: line %d, column %d', [CursorPos.Y, CursorPos.X]) + LineEnding +
+    'Modified: ' + BoolToStr(Ed.Modified, True) + LineEnding;
+  Sel := Ed.Selection;
+  If Trim(Sel) <> '' Then
+    Result := Result + LineEnding + 'Selected text:' + LineEnding +
+      CapText(Sel, AssistantContextMaxActiveCharsLight)
+  Else
+    Begin
+      Head := Ed.SourceText;
+      If Head = '' Then
+        Head := Ed.Lines.Text;
+      Result := Result + LineEnding + 'Start of active file (truncated):' + LineEnding +
+        CapText(Head, AssistantContextMaxActiveCharsLight);
+    End;
+  Result := Result + LineEnding + '----- end IDE context -----';
+  WorkflowLogger.Debug('AssistantIDEContext',
+    'Built light IDE context block (' + IntToStr(Length(Result)) + ' chars)');
 End;
 
 End.
