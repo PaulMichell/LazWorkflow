@@ -39,9 +39,9 @@ Function AssistantLastCompileWasClean: Boolean;
 Implementation
 
 Uses
-  Forms, Controls, Dialogs, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf,
-  IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, AssistantMarkdownForm,
-  AssistantPlan, AssistantConfig, fpjson, jsonparser;
+  Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
+  SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog,
+  AssistantMarkdownForm, AssistantPlan, AssistantConfig, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -288,9 +288,10 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"run_compile",' +
-      '"description":"Compile or build the active Lazarus project and return IDE Messages (errors/warnings). Use after edits to verify.",' +
+      '"description":"Compile the active project. Default is quiet non-visual lazbuild (no Messages UI, does not steal focus). Set ui=true only for a final IDE Messages build.",' +
       '"parameters":{"type":"object","properties":{' +
-        '"kind":{"type":"string","description":"compile (default) or build"}' +
+        '"kind":{"type":"string","description":"compile (default) or build (rebuild-all when quiet)"},' +
+        '"ui":{"type":"boolean","description":"If true, use IDE DoBuildProject and Messages window (default false = quiet lazbuild)"}' +
       '},"required":[]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -984,7 +985,7 @@ Begin
   Ed := FindOpenEditor(FullPath);
   If Assigned(Ed) Then
     Begin
-      Note := 'Already open in editor (reused existing tab).';
+      Note := 'Already open in editor (reused existing tab, focus not stolen).';
       Result := True;
       Exit;
     End;
@@ -993,14 +994,152 @@ Begin
       Note := 'LazarusIDE not available.';
       Exit;
     End;
+  { ofDoNotActivateSourceEditor keeps focus on the user's current window. }
   If LazarusIDE.DoOpenEditorFile(FullPath, -1, -1,
-    [ofOnlyIfExists, ofQuiet, ofDoNotLoadResource, ofRegularFile, ofAddToRecent]) = mrOk Then
+    [ofOnlyIfExists, ofQuiet, ofDoNotLoadResource, ofRegularFile,
+     ofDoNotActivateSourceEditor]) = mrOk Then
     Begin
-      Note := 'Opened in editor.';
+      Note := 'Opened in editor (background, no focus steal).';
       Result := True;
     End
   Else
     Note := 'Could not open editor.';
+End;
+
+Function FindLazbuildExecutable: String;
+Var
+  Cand: String;
+Begin
+  Result := FindDefaultExecutablePath('lazbuild');
+  If (Result <> '') And FileExistsUTF8(Result) Then
+    Exit;
+  Cand := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) +
+    'lazbuild'{$IFDEF WINDOWS}+'.exe'{$ENDIF};
+  If FileExistsUTF8(Cand) Then
+    Begin
+      Result := Cand;
+      Exit;
+    End;
+  Result := '';
+End;
+
+Function RunProcessCapture(Const Exe, WorkDir: String; Const Args: Array Of String;
+  Out OutputText: String; Out ExitCode: Integer; Out ErrorText: String): Boolean;
+Var
+  Proc: TProcess;
+  I, BytesRead: Integer;
+  Mem: TMemoryStream;
+  Buf: Array[0..8191] Of Byte;
+Begin
+  Result := False;
+  OutputText := '';
+  ExitCode := -1;
+  ErrorText := '';
+  FillChar(Buf, SizeOf(Buf), 0);
+  If (Exe = '') Or (Not FileExistsUTF8(Exe)) Then
+    Begin
+      ErrorText := 'Executable not found: ' + Exe;
+      Exit;
+    End;
+  Proc := TProcess.Create(Nil);
+  Mem := TMemoryStream.Create;
+  Try
+    Proc.Executable := Exe;
+    If WorkDir <> '' Then
+      Proc.CurrentDirectory := WorkDir;
+    Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
+    Proc.Parameters.Clear;
+    For I := 0 To High(Args) Do
+      Proc.Parameters.Add(Args[I]);
+    Try
+      Proc.Execute;
+      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
+        Begin
+          If Proc.Output.NumBytesAvailable > 0 Then
+            Begin
+              BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+              If BytesRead > 0 Then
+                Mem.WriteBuffer(Buf[0], BytesRead);
+            End
+          Else If Proc.Running Then
+            Sleep(5);
+        End;
+      While Proc.Output.NumBytesAvailable > 0 Do
+        Begin
+          BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
+          If BytesRead > 0 Then
+            Mem.WriteBuffer(Buf[0], BytesRead)
+          Else
+            Break;
+        End;
+      ExitCode := Proc.ExitStatus;
+      SetLength(OutputText, Mem.Size);
+      If Mem.Size > 0 Then
+        Move(Mem.Memory^, OutputText[1], Mem.Size);
+      Result := True;
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'Failed to run ' + ExtractFileName(Exe) + ': ' + E.Message;
+          Result := False;
+        End;
+    End;
+  Finally
+    Mem.Free;
+    Proc.Free;
+  End;
+End;
+
+Function CountCompilerDiagnostics(Const OutputText: String; Out ErrorCount, WarningCount, HintCount: Integer): String;
+Var
+  SL: TStringList;
+  I: Integer;
+  Line, LowLine: String;
+  Keep: TStringList;
+Begin
+  ErrorCount := 0;
+  WarningCount := 0;
+  HintCount := 0;
+  Keep := TStringList.Create;
+  SL := TStringList.Create;
+  Try
+    SL.Text := OutputText;
+    For I := 0 To SL.Count - 1 Do
+      Begin
+        Line := SL[I];
+        LowLine := LowerCase(Line);
+        If (Pos('fatal:', LowLine) > 0) Or (Pos('error:', LowLine) > 0) Then
+          Begin
+            Inc(ErrorCount);
+            Keep.Add(Line);
+          End
+        Else If Pos('warning:', LowLine) > 0 Then
+          Begin
+            Inc(WarningCount);
+            If Keep.Count < 80 Then
+              Keep.Add(Line);
+          End
+        Else If (Pos('hint:', LowLine) > 0) Or (Pos('note:', LowLine) > 0) Then
+          Begin
+            Inc(HintCount);
+            If Keep.Count < 80 Then
+              Keep.Add(Line);
+          End
+        Else If (Pos('compiling ', LowLine) > 0) Or (Pos('linking ', LowLine) > 0) Or
+          (Pos('error while', LowLine) > 0) Then
+          If Keep.Count < 80 Then
+            Keep.Add(Line);
+      End;
+    If Keep.Count = 0 Then
+      Result := TrimRight(OutputText)
+    Else
+      Result := TrimRight(Keep.Text);
+    If Length(Result) > 12000 Then
+      Result := Copy(Result, 1, 12000) + LineEnding + '[… compile output truncated …]';
+  Finally
+    Keep.Free;
+    SL.Free;
+  End;
 End;
 
 Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean;
@@ -1080,6 +1219,90 @@ Begin
       Else
         Note := Note + ' (' + OpenNote + ')';
     End;
+End;
+
+Procedure FlushOpenEditorsUnderProject;
+Var
+  I: Integer;
+  Ed: TSourceEditorInterface;
+  FullPath, Root, Note, Err: String;
+Begin
+  { Write modified open buffers to disk without activating source editor windows.
+    Quiet lazbuild needs on-disk content, not only editor RAM. }
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Root := ProjectRootPath;
+  If Root = '' Then
+    Exit;
+  For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+    Begin
+      Ed := SourceEditorManagerIntf.SourceEditors[I];
+      If Not Assigned(Ed) Or Not Ed.Modified Then
+        Continue;
+      FullPath := ExpandResolvedPath(Ed.FileName);
+      If FullPath = '' Then
+        Continue;
+      If Not IsPathUnderRoot(Root, FullPath) Then
+        Continue;
+      SaveProjectFileText(FullPath, Ed.SourceText, False, Note, Err);
+    End;
+End;
+
+Function RunQuietLazbuild(KindBuild: Boolean; Out ResultText, ErrorText: String;
+  Out ErrorCount, WarningCount, HintCount: Integer; Out BuildOk: Boolean): Boolean;
+Var
+  Lazbuild, Lpi, WorkDir, OutputText, Diag: String;
+  ExitCode: Integer;
+  Args: Array Of String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  ErrorCount := 0;
+  WarningCount := 0;
+  HintCount := 0;
+  BuildOk := False;
+  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+    Begin
+      ErrorText := 'No active Lazarus project.';
+      Exit;
+    End;
+  Lpi := LazarusIDE.ActiveProject.ProjectInfoFile;
+  If (Lpi = '') Or (Not FileExistsUTF8(Lpi)) Then
+    Begin
+      ErrorText := 'Project .lpi not found for quiet compile.';
+      Exit;
+    End;
+  Lazbuild := FindLazbuildExecutable;
+  If Lazbuild = '' Then
+    Begin
+      ErrorText := 'lazbuild not found on PATH or next to the IDE. Use ui=true for IDE compile.';
+      Exit;
+    End;
+  FlushOpenEditorsUnderProject;
+  WorkDir := ExtractFilePath(Lpi);
+  If KindBuild Then
+    Begin
+      SetLength(Args, 2);
+      Args[0] := '--build-all';
+      Args[1] := Lpi;
+    End
+  Else
+    Begin
+      SetLength(Args, 1);
+      Args[0] := Lpi;
+    End;
+  If Not RunProcessCapture(Lazbuild, WorkDir, Args, OutputText, ExitCode, ErrorText) Then
+    Exit;
+  Diag := CountCompilerDiagnostics(OutputText, ErrorCount, WarningCount, HintCount);
+  BuildOk := (ExitCode = 0) And (ErrorCount = 0);
+  ResultText :=
+    Format('quiet lazbuild finished: ok=%s exit=%d errors=%d warnings=%d hints/notes=%d',
+      [BoolToStr(BuildOk, True), ExitCode, ErrorCount, WarningCount, HintCount]) +
+    LineEnding +
+    '(non-visual compile — Messages window not updated; use ui=true for IDE Messages build)' +
+    LineEnding + LineEnding + Diag;
+  Result := True;
 End;
 
 Function FormatIdeMessageLine(Line: TMessageLine): String;
@@ -1445,7 +1668,7 @@ Var
   BuildResult: TModalResult;
   MsgText: String;
   ErrorCount, WarningCount, HintCount: Integer;
-  BuildOk: Boolean;
+  BuildOk, UseUi: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1458,11 +1681,48 @@ Begin
   Kind := LowerCase(Trim(JsonArgString(ArgumentsJson, 'kind')));
   If Kind = '' Then
     Kind := 'compile';
+  { Default quiet (lazbuild, no Messages UI). ui=true runs the full IDE compile
+    for a final visual check. }
+  UseUi := JsonArgBool(ArgumentsJson, 'ui', False);
+  If (Not UseUi) And (Kind = 'build') And (JsonArgString(ArgumentsJson, 'ui') = '') Then
+    UseUi := False; { still quiet unless ui=true }
+  If Not UseUi Then
+    Begin
+      If Not RunQuietLazbuild(Kind = 'build', ResultText, ErrorText,
+        ErrorCount, WarningCount, HintCount, BuildOk) Then
+        Begin
+          { Fall back to IDE compile if lazbuild missing. }
+          If Pos('lazbuild not found', ErrorText) = 0 Then
+            Exit;
+          WorkflowLogger.Warning('AssistantTools', ErrorText + ' — falling back to IDE compile.');
+          UseUi := True;
+          ErrorText := '';
+        End
+      Else
+        Begin
+          Inc(GLastCompileSeq);
+          GLastCompileClean := BuildOk And (ErrorCount = 0);
+          If GLastCompileClean Then
+            ResultText := ResultText + LineEnding +
+              'COMPILE_CLEAN=1 (errors=0; Code mode may auto-mark the active plan package complete).'
+          Else
+            ResultText := ResultText + LineEnding +
+              'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+          Result := True;
+          WorkflowLogger.Info('AssistantTools',
+            Format('run_compile quiet ok=%s e=%d w=%d',
+              [BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount]));
+          Exit;
+        End;
+    End;
+
   If Kind = 'build' Then
     Reason := crBuild
   Else
     Reason := crCompile;
   Try
+    { pbfDoNotSaveEditorFiles: we already flushed project buffers when quiet path ran;
+      for pure UI path, IDE still saves as usual. }
     BuildResult := LazarusIDE.DoBuildProject(Reason, []);
     BuildOk := BuildResult = mrOk;
   Except
@@ -1476,7 +1736,7 @@ Begin
   Inc(GLastCompileSeq);
   GLastCompileClean := BuildOk And (ErrorCount = 0);
   ResultText :=
-    Format('%s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
+    Format('IDE %s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
       [Kind, BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount, HintCount]) +
     LineEnding + LineEnding + MsgText;
   If GLastCompileClean Then
@@ -1486,6 +1746,9 @@ Begin
     ResultText := ResultText + LineEnding +
       'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
   Result := True;
+  WorkflowLogger.Info('AssistantTools',
+    Format('run_compile ui ok=%s e=%d w=%d',
+      [BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount]));
 End;
 
 Function ToolAddUnitToProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;

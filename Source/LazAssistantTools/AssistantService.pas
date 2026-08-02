@@ -1018,7 +1018,8 @@ Begin
         'Required for form wiring; do not claim LFM changes without calling this or editing the .lfm.' + LineEnding +
         '- `add_unit_to_project` — register an existing .pas with the .lpi' + LineEnding +
         '- `open_file` — open in the IDE editor' + LineEnding +
-        '- `run_compile` — compile/build and return Messages' + LineEnding +
+        '- `run_compile` — **prefer quiet** (default): non-visual lazbuild, no Messages UI. ' +
+        'Use `ui=true` only for a final IDE Messages check.' + LineEnding +
         LineEnding +
         '**Forms / LFM (critical — compile success is not enough):**' + LineEnding +
         '- Declaring a field in .pas does **not** create or wire the component. Events fire only when the ' +

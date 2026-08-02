@@ -1359,8 +1359,9 @@ Begin
     'non-empty project files (never ApiProbe/scratch/empty units), `ensure_form_component` for form components ' +
     '(updates .pas **and** .lfm), `add_unit_to_project` when needed. Discover APIs with search/read — do not ' +
     'create temporary probe units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
-    '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced. ' +
-    'A clean compile (errors=0) lets the IDE auto-mark this package **complete**.' + LineEnding +
+    '4. After edits call `run_compile` (default is quiet/non-visual lazbuild — do not set ui=true ' +
+    'for intermediate checks). Fix errors/warnings you introduced. A clean quiet compile (errors=0) ' +
+    'auto-marks complete. Optional final `run_compile` with ui=true only if you need IDE Messages.' + LineEnding +
     '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files. ' +
     'If no code changes are required, still call `run_compile` once when the project should build clean, ' +
     'or tell the user to mark Done manually.' + LineEnding +
