@@ -764,68 +764,125 @@ Begin
   Until Terminated;
 End;
 
+Function IsTransientNetworkError(Const ErrorText: String): Boolean;
+Var
+  E: String;
+Begin
+  E := LowerCase(ErrorText);
+  Result :=
+    (Pos('host name resolution', E) > 0) Or
+    (Pos('could not resolve', E) > 0) Or
+    (Pos('name or service not known', E) > 0) Or
+    (Pos('temporary failure in name resolution', E) > 0) Or
+    (Pos('network is unreachable', E) > 0) Or
+    (Pos('connection refused', E) > 0) Or
+    (Pos('connection reset', E) > 0) Or
+    (Pos('timed out', E) > 0) Or
+    (Pos('timeout', E) > 0) Or
+    (Pos('socket error', E) > 0) Or
+    (Pos('ssl', E) > 0) And (Pos('connect', E) > 0);
+End;
+
+Function FormatNetworkErrorHint(Const ErrorText: String): String;
+Begin
+  Result := ErrorText;
+  If IsTransientNetworkError(ErrorText) Then
+    Result := ErrorText + LineEnding + LineEnding +
+      'Network/DNS issue reaching the xAI API. Check connectivity, then retry ' +
+      '(Work on this / Work on plan). The package stays in progress.';
+End;
+
 Function TAssistantStreamThread.DoOneHttpRound(Const Url, RequestJson: String;
   Out ErrorText: String): Boolean;
+Const
+  MaxAttempts = 3;
 Var
-  Code: Integer;
-  ErrBody, Headers: String;
+  Code, Attempt: Integer;
+  ErrBody, Headers, LastErr: String;
   Control: THttpsStreamControl;
 Begin
   Result := False;
   ErrorText := '';
-  FSseBuffer := '';
-  SetLength(FToolCalls, 0);
-  If Terminated Then
-    Begin
-      ErrorText := 'Cancelled.';
-      Exit;
-    End;
-
+  LastErr := '';
   Headers := 'Authorization: Bearer ' + FAccessToken;
-  Control := THttpsStreamControl.Create;
-  FStreamControl := Control;
-  Try
-    Try
-      If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
-        Control, Code, ErrorText) Then
-        Begin
-          If Terminated And (ErrorText = '') Then
-            ErrorText := 'Cancelled.';
-          Exit;
-        End;
+
+  For Attempt := 1 To MaxAttempts Do
+    Begin
       If Terminated Then
         Begin
           ErrorText := 'Cancelled.';
           Exit;
         End;
-      If (Code < 200) Or (Code >= 300) Then
+      FSseBuffer := '';
+      SetLength(FToolCalls, 0);
+      ErrorText := '';
+      Control := THttpsStreamControl.Create;
+      FStreamControl := Control;
+      Try
+        Try
+          If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
+            Control, Code, ErrorText) Then
+            Begin
+              If Terminated And (ErrorText = '') Then
+                ErrorText := 'Cancelled.';
+            End
+          Else If Terminated Then
+            ErrorText := 'Cancelled.'
+          Else If (Code < 200) Or (Code >= 300) Then
+            Begin
+              ErrBody := Trim(FSseBuffer);
+              If ErrBody = '' Then
+                ErrBody := Format('HTTP %d', [Code]);
+              If Length(ErrBody) > 400 Then
+                ErrBody := Copy(ErrBody, 1, 400) + '…';
+              ErrorText := Format('HTTP %d: %s', [Code, ErrBody]);
+            End
+          Else
+            Begin
+              If FSseBuffer <> '' Then
+                ProcessSseLine(FSseBuffer);
+              Result := True;
+              Exit;
+            End;
+        Except
+          On E: Exception Do
+            If Terminated Then
+              ErrorText := 'Cancelled.'
+            Else
+              Begin
+                ErrorText := E.Message;
+                If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
+                  ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
+              End;
+        End;
+      Finally
+        FStreamControl := Nil;
+        Control.Free;
+      End;
+
+      LastErr := ErrorText;
+      If Terminated Or (ErrorText = 'Cancelled.') Then
+        Exit;
+      { Retry only transient network failures, not HTTP 4xx from the API. }
+      If (Not IsTransientNetworkError(ErrorText)) And (Pos('HTTP 4', ErrorText) = 1) Then
         Begin
-          ErrBody := Trim(FSseBuffer);
-          If ErrBody = '' Then
-            ErrBody := Format('HTTP %d', [Code]);
-          If Length(ErrBody) > 400 Then
-            ErrBody := Copy(ErrBody, 1, 400) + '…';
-          ErrorText := Format('HTTP %d: %s', [Code, ErrBody]);
+          ErrorText := FormatNetworkErrorHint(ErrorText);
           Exit;
         End;
-      If FSseBuffer <> '' Then
-        ProcessSseLine(FSseBuffer);
-      Result := True;
-    Except
-      On E: Exception Do
-        If Terminated Then
-          ErrorText := 'Cancelled.'
-        Else
-          Begin
-            ErrorText := E.Message;
-            If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
-              ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
-          End;
+      If Not IsTransientNetworkError(ErrorText) Then
+        Begin
+          ErrorText := FormatNetworkErrorHint(ErrorText);
+          Exit;
+        End;
+      If Attempt < MaxAttempts Then
+        Begin
+          WorkflowLogger.Warning('AssistantStream',
+            Format('Transient network error (attempt %d/%d): %s',
+              [Attempt, MaxAttempts, ErrorText]));
+          Sleep(400 * Attempt);
+        End;
     End;
-  Finally
-    FStreamControl := Nil;
-    Control.Free;
-  End;
+  ErrorText := FormatNetworkErrorHint(LastErr);
 End;
 
 Procedure TAssistantStreamThread.Execute;

@@ -2714,7 +2714,16 @@ Begin
   If FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then
-        StopWorkOnPlanAgent('error: ' + ErrorText)
+        Begin
+          If (Pos('host name resolution', LowerCase(ErrorText)) > 0) Or
+            (Pos('network', LowerCase(ErrorText)) > 0) Or
+            (Pos('timed out', LowerCase(ErrorText)) > 0) Then
+            StopWorkOnPlanAgent(
+              'network error talking to api.x.ai. Check connectivity, then click ' +
+              '**Work on plan** again to resume remaining packages. ' + ErrorText)
+          Else
+            StopWorkOnPlanAgent('error: ' + ErrorText);
+        End
       Else
         Begin
           Inc(FPlanAgentPackagesDone);
