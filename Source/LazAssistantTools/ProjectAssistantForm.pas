@@ -1355,9 +1355,10 @@ Begin
     'Instructions:' + LineEnding +
     '1. Focus only on this work package unless blocked.' + LineEnding +
     '2. Discover with `search_in_project` / `get_project_info` / `list_directory`, then `read_file`.' + LineEnding +
-    '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` for new ' +
-    'or rewritten units, `ensure_form_component` when adding form components/events (updates .pas **and** .lfm), ' +
-    '`add_unit_to_project` when creating Pascal units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
+    '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` only for real ' +
+    'non-empty project files (never ApiProbe/scratch/empty units), `ensure_form_component` for form components ' +
+    '(updates .pas **and** .lfm), `add_unit_to_project` when needed. Discover APIs with search/read — do not ' +
+    'create temporary probe units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
     '4. After edits call `run_compile` (kind=compile or build) and fix errors/warnings you introduced. ' +
     'A clean compile (errors=0) lets the IDE auto-mark this package **complete**.' + LineEnding +
     '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files. ' +

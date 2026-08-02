@@ -955,7 +955,7 @@ Begin
         '- `search_in_project` — find symbols/strings before bulk reads' + LineEnding +
         '- `read_file` — page large files with start_line/end_line' + LineEnding +
         '- `replace_in_file` — exact surgical edit (small unique old_text)' + LineEnding +
-        '- `write_file` — create new files or full rewrites; add Pascal units to the project when needed' + LineEnding +
+        '- `write_file` — real project files only (never empty, never ApiProbe/scratch/temp units)' + LineEnding +
         '- `replace_in_file` — exact surgical edit' + LineEnding +
         '- `ensure_form_component` — add/update a component in BOTH .pas and .lfm (TTimer, TButton, events). ' +
         'Required for form wiring; do not claim LFM changes without calling this or editing the .lfm.' + LineEnding +
@@ -976,6 +976,9 @@ Begin
         LineEnding +
         '**Plan tools:** update_markdown / write_markdown only for plan Status: or short plan notes — ' +
         'not for dumping code deliverables into the plan.' + LineEnding +
+        LineEnding +
+        '**Do not** create temporary probe units (ApiProbe.pas, _ApiProbe, Scratch*) or empty files to test compiles. ' +
+        'Discover symbols with `search_in_project` / `list_directory` / `read_file` only.' + LineEnding +
         LineEnding +
         '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
         'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete. ' +

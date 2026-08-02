@@ -268,12 +268,12 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"write_file",' +
-      '"description":"Create or overwrite a text/source file under the project root. Use for new units or full rewrites. Opens the file in the IDE editor when possible.",' +
+      '"description":"Create or overwrite a real project file. Never create empty files or ApiProbe/scratch/temp units — use search_in_project, list_directory, and read_file to discover APIs. Prefer replace_in_file for small edits.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path e.g. Source/Foo.pas"},' +
-        '"content":{"type":"string","description":"Full file contents"},' +
-        '"open":{"type":"boolean","description":"Open in IDE editor after write (default true)"},' +
-        '"add_to_project":{"type":"boolean","description":"Add .pas/.pp/.lpr unit to the active Lazarus project (default true for Pascal units)"}' +
+        '"content":{"type":"string","description":"Full non-empty contents (reject empty/probe files)"},' +
+        '"open":{"type":"boolean","description":"Open/reuse a single editor tab after write (default false)"},' +
+        '"add_to_project":{"type":"boolean","description":"Add Pascal unit to the active project (default true only for non-empty units)"}' +
       '},"required":["path","content"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -944,20 +944,79 @@ Begin
   End;
 End;
 
+Function ExpandResolvedPath(Const Path: String): String;
+Begin
+  Result := ExpandFileNameUTF8(Path);
+End;
+
+Function FindOpenEditor(Const Resolved: String): TSourceEditorInterface;
+Var
+  FullPath: String;
+Begin
+  Result := Nil;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  FullPath := ExpandResolvedPath(Resolved);
+  Result := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FullPath);
+  If Not Assigned(Result) And (FullPath <> Resolved) Then
+    Result := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
+End;
+
+Function LooksLikeScratchProbePath(Const Path: String): Boolean;
+Var
+  Base: String;
+Begin
+  Base := LowerCase(ChangeFileExt(ExtractFileName(Path), ''));
+  { Model-invented disposable units (ApiProbe, _ApiProbe, WP4ApiProbe, …). }
+  Result := (Pos('probe', Base) > 0) Or (Pos('scratch', Base) > 0) Or
+    (Pos('tmpunit', Base) > 0) Or (Pos('tempunit', Base) > 0) Or
+    (Copy(Base, 1, 1) = '_') And ((Pos('test', Base) > 0) Or (Pos('api', Base) > 0));
+End;
+
+Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
+Var
+  Ed: TSourceEditorInterface;
+  FullPath: String;
+Begin
+  Result := False;
+  Note := '';
+  FullPath := ExpandResolvedPath(Resolved);
+  Ed := FindOpenEditor(FullPath);
+  If Assigned(Ed) Then
+    Begin
+      Note := 'Already open in editor (reused existing tab).';
+      Result := True;
+      Exit;
+    End;
+  If Not Assigned(LazarusIDE) Then
+    Begin
+      Note := 'LazarusIDE not available.';
+      Exit;
+    End;
+  If LazarusIDE.DoOpenEditorFile(FullPath, -1, -1,
+    [ofOnlyIfExists, ofQuiet, ofDoNotLoadResource, ofRegularFile, ofAddToRecent]) = mrOk Then
+    Begin
+      Note := 'Opened in editor.';
+      Result := True;
+    End
+  Else
+    Note := 'Could not open editor.';
+End;
+
 Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean;
   Out Note: String; Out ErrorText: String): Boolean;
 Var
   Ed: TSourceEditorInterface;
   SL: TStringList;
-  Dir: String;
-  Opened: Boolean;
+  Dir, FullPath, OpenNote: String;
 Begin
   Result := False;
   Note := '';
   ErrorText := '';
-  If IsBlockedBinaryExtension(Resolved) Then
+  FullPath := ExpandResolvedPath(Resolved);
+  If IsBlockedBinaryExtension(FullPath) Then
     Begin
-      ErrorText := 'Refusing to write blocked/binary extension: ' + Resolved;
+      ErrorText := 'Refusing to write blocked/binary extension: ' + FullPath;
       Exit;
     End;
   If Length(Content) > AssistantToolMaxWriteChars Then
@@ -966,26 +1025,23 @@ Begin
         [Length(Content), AssistantToolMaxWriteChars]);
       Exit;
     End;
-  If Assigned(SourceEditorManagerIntf) Then
+  Ed := FindOpenEditor(FullPath);
+  If Assigned(Ed) Then
     Begin
-      Ed := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
-      If Assigned(Ed) Then
-        Begin
-          Try
-            Ed.SourceText := Content;
-            Note := 'Updated open editor buffer (IDE Undo available).';
-            Result := True;
+      Try
+        Ed.SourceText := Content;
+        Note := 'Updated open editor buffer (IDE Undo available).';
+        Result := True;
+        Exit;
+      Except
+        On E: Exception Do
+          Begin
+            ErrorText := 'Editor update failed: ' + E.Message;
             Exit;
-          Except
-            On E: Exception Do
-              Begin
-                ErrorText := 'Editor update failed: ' + E.Message;
-                Exit;
-              End;
           End;
-        End;
+      End;
     End;
-  Dir := ExtractFilePath(Resolved);
+  Dir := ExtractFilePath(FullPath);
   If (Dir <> '') And (Not DirectoryExistsUTF8(Dir)) Then
     If Not ForceDirectoriesUTF8(Dir) Then
       Begin
@@ -996,7 +1052,7 @@ Begin
   Try
     Try
       SL.Text := Content;
-      SL.SaveToFile(Resolved);
+      SL.SaveToFile(FullPath);
       Note := 'Wrote file on disk.';
       Result := True;
     Except
@@ -1009,26 +1065,20 @@ Begin
   Finally
     SL.Free;
   End;
-  If OpenAfter And Assigned(LazarusIDE) Then
+  If OpenAfter Then
     Begin
-      Opened := LazarusIDE.DoOpenEditorFile(Resolved, -1, -1,
-        [ofOnlyIfExists, ofQuiet, ofDoNotLoadResource, ofRegularFile]) = mrOk;
-      If Opened And Assigned(SourceEditorManagerIntf) Then
+      If OpenEditorReuse(FullPath, OpenNote) Then
         Begin
-          Ed := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
+          Ed := FindOpenEditor(FullPath);
           If Assigned(Ed) Then
             Try
               Ed.SourceText := Content;
-              Note := Note + ' Opened in editor.';
             Except
-            End
-          Else
-            Note := Note + ' Opened in IDE.';
+            End;
+          Note := Note + ' ' + OpenNote;
         End
-      Else If Opened Then
-        Note := Note + ' Opened in IDE.'
       Else
-        Note := Note + ' (could not open editor).';
+        Note := Note + ' (' + OpenNote + ')';
     End;
 End;
 
@@ -1252,6 +1302,7 @@ Var
   OpenAfter, AddToProject, Created: Boolean;
   Proj: TLazProject;
   PF: TLazProjectFile;
+  Meaningful: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1265,13 +1316,34 @@ Begin
     End;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
-  OpenAfter := JsonArgBool(ArgumentsJson, 'open', True);
+  Resolved := ExpandResolvedPath(Resolved);
+  Meaningful := Length(Trim(Content)) >= 20;
+  { Empty / near-empty files are never useful deliverables and pollute the project. }
+  If Not Meaningful Then
+    Begin
+      ErrorText :=
+        'Refusing empty or near-empty write_file for ' + ProjectRelativePath(Resolved) +
+        '. Do not create probe/scratch units. Use search_in_project, list_directory, and read_file ' +
+        'to discover APIs; write real unit content only.';
+      Exit;
+    End;
+  If LooksLikeScratchProbePath(Resolved) Then
+    Begin
+      ErrorText :=
+        'Refusing scratch/probe path "' + ProjectRelativePath(Resolved) +
+        '". Do not create ApiProbe/Temp/Scratch units. Discover existing units with search tools.';
+      Exit;
+    End;
+  { Default: do not open a new editor tab for every write (avoids tab storms). }
+  OpenAfter := JsonArgBool(ArgumentsJson, 'open', False);
   Created := Not FileExistsUTF8(Resolved);
   If Not SaveProjectFileText(Resolved, Content, OpenAfter, Note, ErrorText) Then
     Exit;
   ResultText := Format('Wrote %s (%d chars). %s',
     [ProjectRelativePath(Resolved), Length(Content), Note]);
-  AddToProject := JsonArgBool(ArgumentsJson, 'add_to_project', IsPascalUnitPath(Resolved));
+  { Only auto-add substantial Pascal units — never empty probes. }
+  AddToProject := JsonArgBool(ArgumentsJson, 'add_to_project',
+    IsPascalUnitPath(Resolved) And Meaningful);
   If AddToProject And IsPascalUnitPath(Resolved) And Assigned(LazarusIDE) And
     Assigned(LazarusIDE.ActiveProject) Then
     Begin
@@ -1477,7 +1549,7 @@ End;
 
 Function ToolOpenFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Resolved: String;
+  Path, Resolved, Note: String;
 Begin
   Result := False;
   ResultText := '';
@@ -1490,23 +1562,18 @@ Begin
     End;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
+  Resolved := ExpandResolvedPath(Resolved);
   If Not FileExistsUTF8(Resolved) Then
     Begin
       ErrorText := 'File not found: ' + Resolved;
       Exit;
     End;
-  If Not Assigned(LazarusIDE) Then
+  If Not OpenEditorReuse(Resolved, Note) Then
     Begin
-      ErrorText := 'LazarusIDE not available.';
+      ErrorText := 'Failed to open editor for ' + Resolved + ' (' + Note + ')';
       Exit;
     End;
-  If LazarusIDE.DoOpenEditorFile(Resolved, -1, -1,
-    [ofOnlyIfExists, ofQuiet, ofDoNotLoadResource, ofRegularFile]) <> mrOk Then
-    Begin
-      ErrorText := 'Failed to open editor for ' + Resolved;
-      Exit;
-    End;
-  ResultText := 'Opened ' + ProjectRelativePath(Resolved);
+  ResultText := Note + ' ' + ProjectRelativePath(Resolved);
   Result := True;
 End;
 
@@ -1927,12 +1994,15 @@ Begin
     End;
   If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
     ChangedLfm := True;
+  { Write without opening new tabs; reuse one editor for the form unit if needed. }
   If ChangedPas Then
-    If Not SaveProjectFileText(PasPath, PasBody, True, Note, ErrorText) Then
+    If Not SaveProjectFileText(PasPath, PasBody, False, Note, ErrorText) Then
       Exit;
   If ChangedLfm Then
-    If Not SaveProjectFileText(LfmPath, LfmBody, True, Note, ErrorText) Then
+    If Not SaveProjectFileText(LfmPath, LfmBody, False, Note, ErrorText) Then
       Exit;
+  If ChangedPas Or ChangedLfm Then
+    OpenEditorReuse(PasPath, Note);
   ResultText := Format(
     'ensure_form_component %s: %s (%s). pas_changed=%s lfm_changed=%s form_class=%s event=%s',
     [ProjectRelativePath(PasPath), CompName, ClassName,
