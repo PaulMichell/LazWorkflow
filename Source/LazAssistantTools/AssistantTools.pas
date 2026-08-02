@@ -35,6 +35,11 @@ Procedure SetActivePlanRelativePath(Const RelativePath: String);
 { Last run_compile outcome for Code-mode auto Status: complete (seq bumps each run). }
 Function AssistantLastCompileSeq: Integer;
 Function AssistantLastCompileWasClean: Boolean;
+{ After add_unit / project-structure tools: save .lpi so disk matches IDE memory. }
+Procedure AssistantFlushProjectIfDirty;
+{ Suppress "project changed on disk" / file-diff dialogs during a chat send. }
+Procedure AssistantBeginQuietIdeSession;
+Procedure AssistantEndQuietIdeSession;
 
 Implementation
 
@@ -47,6 +52,65 @@ Var
   GActivePlanRelative: String;
   GLastCompileSeq: Integer;
   GLastCompileClean: Boolean;
+  GProjectStructureDirty: Boolean;
+  GQuietIdeDepth: Integer;
+  GSavedCheckFilesOnDisk: Boolean;
+
+Procedure MarkProjectStructureDirty;
+Begin
+  GProjectStructureDirty := True;
+End;
+
+Procedure AssistantFlushProjectIfDirty;
+Begin
+  If Not GProjectStructureDirty Then
+    Exit;
+  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+    Begin
+      GProjectStructureDirty := False;
+      Exit;
+    End;
+  Try
+    { Write in-memory project (.lpi) so external tools and disk checks stay aligned. }
+    LazarusIDE.DoSaveProject([sfQuietUnitCheck]);
+    WorkflowLogger.Info('AssistantTools', 'Saved project after structure change');
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('AssistantTools', 'DoSaveProject after structure change: ' + E.Message);
+  End;
+  GProjectStructureDirty := False;
+End;
+
+Procedure AssistantBeginQuietIdeSession;
+Begin
+  If Not Assigned(LazarusIDE) Then
+    Exit;
+  If GQuietIdeDepth = 0 Then
+    Begin
+      GSavedCheckFilesOnDisk := LazarusIDE.CheckFilesOnDiskEnabled;
+      LazarusIDE.CheckFilesOnDiskEnabled := False;
+      WorkflowLogger.Info('AssistantTools', 'IDE disk checks disabled for assistant send');
+    End;
+  Inc(GQuietIdeDepth);
+End;
+
+Procedure AssistantEndQuietIdeSession;
+Begin
+  If Not Assigned(LazarusIDE) Then
+    Begin
+      GQuietIdeDepth := 0;
+      Exit;
+    End;
+  If GQuietIdeDepth <= 0 Then
+    Exit;
+  Dec(GQuietIdeDepth);
+  If GQuietIdeDepth = 0 Then
+    Begin
+      AssistantFlushProjectIfDirty;
+      LazarusIDE.CheckFilesOnDiskEnabled := GSavedCheckFilesOnDisk;
+      WorkflowLogger.Info('AssistantTools', 'IDE disk checks restored');
+    End;
+End;
 
 Function JsonEscapeLocal(Const SourceText: String): String;
 Var
@@ -883,6 +947,15 @@ Begin
     (Ext = '.bmp') Or (Ext = '.wasm') Or (Ext = '.dbg');
 End;
 
+Function IsLazarusProjectInfoPath(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  { The IDE owns .lpi/.lps — tool writes desync memory vs disk and raise reload dialogs. }
+  Result := (Ext = '.lpi') Or (Ext = '.lps');
+End;
+
 Function IsSearchableTextExtension(Const Path: String): Boolean;
 Var
   Ext: String;
@@ -1153,6 +1226,13 @@ Begin
   Note := '';
   ErrorText := '';
   FullPath := ExpandResolvedPath(Resolved);
+  If IsLazarusProjectInfoPath(FullPath) Then
+    Begin
+      ErrorText :=
+        'Refusing to write project info file (.lpi/.lps). The IDE owns the project file. ' +
+        'Use add_unit_to_project to register units; never rewrite the .lpi with write_file.';
+      Exit;
+    End;
   If IsBlockedBinaryExtension(FullPath) Then
     Begin
       ErrorText := 'Refusing to write blocked/binary extension: ' + FullPath;
@@ -1579,7 +1659,9 @@ Begin
           If Assigned(PF) Then
             Begin
               Proj.AddFile(PF, False);
-              ResultText := ResultText + ' Added to project.';
+              MarkProjectStructureDirty;
+              AssistantFlushProjectIfDirty;
+              ResultText := ResultText + ' Added to project (project file saved).';
             End;
         Except
           On E: Exception Do
@@ -1800,7 +1882,9 @@ Begin
         Exit;
       End;
     Proj.AddFile(PF, AddToUses);
-    ResultText := 'Added to project: ' + ProjectRelativePath(Resolved);
+    MarkProjectStructureDirty;
+    AssistantFlushProjectIfDirty;
+    ResultText := 'Added to project and saved: ' + ProjectRelativePath(Resolved);
     If AddToUses Then
       ResultText := ResultText + ' (requested add_to_uses=true)';
     Result := True;
@@ -2350,5 +2434,8 @@ Initialization
 GActivePlanRelative := '';
 GLastCompileSeq := 0;
 GLastCompileClean := False;
+GProjectStructureDirty := False;
+GQuietIdeDepth := 0;
+GSavedCheckFilesOnDisk := True;
 
 End.

@@ -39,6 +39,7 @@ Type
     FIncludeIDEContext: Boolean;
     FThinkingLevel: String;
     FApprovalMode: String;
+    FAutoNewChatAtContextLimit: Boolean;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -67,6 +68,9 @@ Type
     Property ThinkingLevel: String Read FThinkingLevel Write FThinkingLevel;
     { ask | auto | always — tool approval policy. }
     Property ApprovalMode: String Read FApprovalMode Write FApprovalMode;
+    { When context ≥ 95%, start a new conversation automatically. }
+    Property AutoNewChatAtContextLimit: Boolean Read FAutoNewChatAtContextLimit
+      Write FAutoNewChatAtContextLimit;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -196,6 +200,7 @@ Begin
   FIncludeIDEContext := True;
   FThinkingLevel := AssistantConfigDefaultThinking;
   FApprovalMode := AssistantConfigDefaultApproval;
+  FAutoNewChatAtContextLimit := False;
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -238,6 +243,7 @@ Begin
   FIncludeIDEContext := Source.IncludeIDEContext;
   FThinkingLevel := Source.ThinkingLevel;
   FApprovalMode := Source.ApprovalMode;
+  FAutoNewChatAtContextLimit := Source.AutoNewChatAtContextLimit;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -286,6 +292,7 @@ Begin
   Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
   Config.FThinkingLevel := Cfg.GetValue('Chat/ThinkingLevel', AssistantConfigDefaultThinking);
   Config.FApprovalMode := Cfg.GetValue('Chat/ApprovalMode', AssistantConfigDefaultApproval);
+  Config.FAutoNewChatAtContextLimit := Cfg.GetValue('Chat/AutoNewChatAtContextLimit', False);
   Config.FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
   Config.FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
   Config.FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
@@ -340,6 +347,7 @@ Begin
     Cfg.SetValue('Chat/IncludeIDEContext', FIncludeIDEContext);
     Cfg.SetValue('Chat/ThinkingLevel', ThinkingLevelToStr(GetThinkingLevel));
     Cfg.SetValue('Chat/ApprovalMode', ApprovalModeToStr(GetApprovalMode));
+    Cfg.SetValue('Chat/AutoNewChatAtContextLimit', FAutoNewChatAtContextLimit);
     Cfg.SetValue('API/Key', '');
     Cfg.SetValue('OAuth/AccessToken', FAccessToken);
     Cfg.SetValue('OAuth/RefreshToken', FRefreshToken);

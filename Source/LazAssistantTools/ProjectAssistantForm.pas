@@ -75,6 +75,7 @@ Type
     FBtnReviewBuild: TButton;
     FBtnFixError: TButton;
     FBtnSettings: TButton;
+    FAutoNewChatCheck: TCheckBox;
     FStatusFooter: TStatusFooterFrame;
     FInputPanel: TPanel;
     FInputEdit: TMemo;
@@ -106,6 +107,7 @@ Type
     Procedure InputCopyClick(Sender: TObject);
     Procedure InputPasteClick(Sender: TObject);
     Procedure InputSelectAllClick(Sender: TObject);
+    Procedure AutoNewChatCheckClick(Sender: TObject);
   Private
     FElapsedTimer: TTimer;
     FChatView: TControl; { TMarkDownControl created at runtime. }
@@ -146,7 +148,8 @@ Type
     FCompileSeqAtSendStart: Integer; { Snapshot of AssistantLastCompileSeq at turn start. }
     FPendingReviewErrorOffer: Boolean; { After Review with errors, offer Fix Error. }
     FReviewErrorCount: Integer;
-    FContextWarnShown: Boolean; { One-shot warning when context ≥ 95%. }
+    FContextWarnShown: Boolean; { One-shot warning / auto-rollover when context ≥ 95%. }
+    FAutoRolloverInProgress: Boolean; { Guard re-entry while starting a context New Chat. }
     FPlanAgentRunning: Boolean;
     FPlanAgentPackagesDone: Integer;
     FPlanAgentMaxPackages: Integer;
@@ -214,6 +217,8 @@ Type
     Function FindNextIncompleteCodeSection: Integer;
     Function BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
     Procedure MaybeWarnHighContextUsage;
+    Function AutoNewChatAtLimitEnabled: Boolean;
+    Procedure SyncAutoNewChatCheckFromConfig;
     Procedure CodeTodoListDblClick(Sender: TObject);
     Procedure CodeTodoListClick(Sender: TObject);
     Procedure CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
@@ -262,7 +267,7 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
-    Procedure StartNewChat;
+    Procedure StartNewChat(KeepPlanAgent: Boolean = False);
     Procedure ReviewCompile;
     Procedure ReviewBuild;
     Procedure FixSelectedError;
@@ -337,6 +342,7 @@ Begin
   FPendingReviewErrorOffer := False;
   FReviewErrorCount := 0;
   FContextWarnShown := False;
+  FAutoRolloverInProgress := False;
   FPlanAgentRunning := False;
   FPlanAgentPackagesDone := 0;
   FPlanAgentMaxPackages := 25;
@@ -364,6 +370,7 @@ Begin
   EnsurePlanTabUi;
   EnsureCodeTabUi;
   UpdateThinkingActionCaption;
+  SyncAutoNewChatCheckFromConfig;
   If Not Assigned(FElapsedTimer) Then
     Begin
       FElapsedTimer := TTimer.Create(Self);
@@ -1546,9 +1553,19 @@ Begin
       Pct := (FContextUsed * 100) Div FContextLimit;
       If Pct >= 95 Then
         Begin
-          MaybeWarnHighContextUsage;
-          StopWorkOnPlanAgent(Format('context usage %d%% — start a New Chat', [Pct]));
-          Exit;
+          If AutoNewChatAtLimitEnabled Then
+            Begin
+              { Rollover into a fresh conversation and keep walking packages. }
+              FContextWarnShown := False;
+              MaybeWarnHighContextUsage;
+              { Fall through to next package with cleared history. }
+            End
+          Else
+            Begin
+              MaybeWarnHighContextUsage;
+              StopWorkOnPlanAgent(Format('context usage %d%% — start a New Chat', [Pct]));
+              Exit;
+            End;
         End;
     End;
   If FPlanAgentPackagesDone >= FPlanAgentMaxPackages Then
@@ -2143,7 +2160,43 @@ Begin
     End
   Else If Assigned(AssistantClient) Then
     FModelName := AssistantClient.Model;
+  SyncAutoNewChatCheckFromConfig;
   UpdateStatusFooter;
+End;
+
+Function TProjectAssistantForm.AutoNewChatAtLimitEnabled: Boolean;
+Begin
+  If Assigned(FAutoNewChatCheck) Then
+    Result := FAutoNewChatCheck.Checked
+  Else If Assigned(AssistantChatConfig) Then
+    Result := AssistantChatConfig.AutoNewChatAtContextLimit
+  Else
+    Result := False;
+End;
+
+Procedure TProjectAssistantForm.SyncAutoNewChatCheckFromConfig;
+Begin
+  If Not Assigned(FAutoNewChatCheck) Then
+    Exit;
+  FAutoNewChatCheck.OnClick := Nil;
+  Try
+    If Assigned(AssistantChatConfig) Then
+      FAutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit
+    Else
+      FAutoNewChatCheck.Checked := False;
+  Finally
+    FAutoNewChatCheck.OnClick := @AutoNewChatCheckClick;
+  End;
+End;
+
+Procedure TProjectAssistantForm.AutoNewChatCheckClick(Sender: TObject);
+Begin
+  If Not Assigned(FAutoNewChatCheck) Or Not Assigned(AssistantChatConfig) Then
+    Exit;
+  AssistantChatConfig.AutoNewChatAtContextLimit := FAutoNewChatCheck.Checked;
+  AssistantChatConfig.Save;
+  WorkflowLogger.Info('ProjectAssistant',
+    'Auto New Chat at 95%: ' + BoolToStr(FAutoNewChatCheck.Checked, True));
 End;
 
 Procedure TProjectAssistantForm.UpdateStatusFooter;
@@ -2199,8 +2252,9 @@ End;
 Procedure TProjectAssistantForm.MaybeWarnHighContextUsage;
 Var
   Pct: Integer;
+  KeepAgent: Boolean;
 Begin
-  If FContextWarnShown Then
+  If FContextWarnShown Or FAutoRolloverInProgress Then
     Exit;
   If FContextLimit <= 0 Then
     Exit;
@@ -2208,18 +2262,44 @@ Begin
   If Pct < 95 Then
     Exit;
   FContextWarnShown := True;
+  If AutoNewChatAtLimitEnabled Then
+    Begin
+      KeepAgent := FPlanAgentRunning;
+      FAutoRolloverInProgress := True;
+      Try
+        SetCurrentSystemNote(
+          Format('**Context usage at %d%%** — automatically starting a **New Chat** to free the token budget.',
+            [Pct]));
+        StartNewChat(KeepAgent);
+        SetCurrentSystemNote(
+          Format('**New Chat** started automatically at %d%% context use. Previous conversation is in History.',
+            [Pct]));
+        WorkflowLogger.Info('ProjectAssistant',
+          Format('Auto New Chat at %d%% context (keep plan agent=%s)',
+            [Pct, BoolToStr(KeepAgent, True)]));
+      Finally
+        FAutoRolloverInProgress := False;
+      End;
+      Exit;
+    End;
   SetCurrentSystemNote(
     Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Code/Plan work ' +
-      'so the model stays within its token limit.', [Pct]));
+      'so the model stays within its token limit. Or enable **Auto New Chat at 95%%** on this form.',
+      [Pct]));
   MessageDlg(
     Format('Context usage is at about %d%% of the budget.%s%s' +
-      'Start a New Chat before continuing large Plan/Code sessions, or the next request may fail.',
+      'Start a New Chat before continuing large Plan/Code sessions, or enable "Auto New Chat at 95%%" ' +
+      'on the assistant form (default is set in Settings).',
       [Pct, LineEnding, LineEnding]),
     mtWarning, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.SetSending(IsSending: Boolean);
 Begin
+  If IsSending And (Not FSending) Then
+    AssistantBeginQuietIdeSession
+  Else If (Not IsSending) And FSending Then
+    AssistantEndQuietIdeSession;
   FSending := IsSending;
   If Not IsSending Then
     FReviewInProgress := False;
@@ -3218,9 +3298,9 @@ Begin
   ReviewProject(crBuild, 'Build');
 End;
 
-Procedure TProjectAssistantForm.StartNewChat;
+Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean);
 Begin
-  If FPlanAgentRunning Then
+  If FPlanAgentRunning And (Not KeepPlanAgent) Then
     StopWorkOnPlanAgent('new chat');
   If FSending Then
     StopStream;
@@ -3245,7 +3325,8 @@ Begin
   RefreshHistoryCombo;
   RefreshConversationList;
   RefreshChatDisplay(True, False);
-  SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
+  If Not FAutoRolloverInProgress Then
+    SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
   PersistSession;
   UpdateStatusFooter;
 End;

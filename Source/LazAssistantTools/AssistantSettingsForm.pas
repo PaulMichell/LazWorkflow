@@ -24,6 +24,7 @@ Type
     FSkillLabel: TLabel;
     FSkillCombo: TComboBox;
     FIncludeContextCheck: TCheckBox;
+    FAutoNewChatDefaultCheck: TCheckBox;
     FThinkingLabel: TLabel;
     FThinkingCombo: TComboBox;
     FApprovalLabel: TLabel;
@@ -113,21 +114,21 @@ Procedure TAssistantSettingsForm.EnsureExtraControls;
 Begin
   If Assigned(FThinkingCombo) Then
     Exit;
-  ClientHeight := ClientHeight + 90;
+  ClientHeight := ClientHeight + 120;
   If Assigned(FButtonPanel) Then
-    FButtonPanel.Top := FButtonPanel.Top + 90;
+    FButtonPanel.Top := FButtonPanel.Top + 120;
   If Assigned(FHintLabel) Then
-    FHintLabel.Top := FHintLabel.Top + 90;
+    FHintLabel.Top := FHintLabel.Top + 120;
   If Assigned(FManualLabel) Then
-    FManualLabel.Top := FManualLabel.Top + 90;
+    FManualLabel.Top := FManualLabel.Top + 120;
   If Assigned(FManualEdit) Then
-    FManualEdit.Top := FManualEdit.Top + 90;
+    FManualEdit.Top := FManualEdit.Top + 120;
   If Assigned(FPasteCodeButton) Then
-    FPasteCodeButton.Top := FPasteCodeButton.Top + 90;
+    FPasteCodeButton.Top := FPasteCodeButton.Top + 120;
   If Assigned(FApiBaseLabel) Then
-    FApiBaseLabel.Top := FApiBaseLabel.Top + 90;
+    FApiBaseLabel.Top := FApiBaseLabel.Top + 120;
   If Assigned(FApiBaseEdit) Then
-    FApiBaseEdit.Top := FApiBaseEdit.Top + 90;
+    FApiBaseEdit.Top := FApiBaseEdit.Top + 120;
 
   FThinkingLabel := TLabel.Create(Self);
   FThinkingLabel.Parent := Self;
@@ -162,6 +163,21 @@ Begin
   FApprovalCombo.Items.Add('Auto — allow project tools');
   FApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
   FApprovalCombo.ItemIndex := 2;
+
+  { Place below thinking/approval (may already exist from the .lfm). }
+  If Not Assigned(FAutoNewChatDefaultCheck) Then
+    Begin
+      FAutoNewChatDefaultCheck := TCheckBox.Create(Self);
+      FAutoNewChatDefaultCheck.Parent := Self;
+      FAutoNewChatDefaultCheck.Left := 16;
+      FAutoNewChatDefaultCheck.Width := 488;
+      FAutoNewChatDefaultCheck.Caption :=
+        'Default: automatically start a New Chat at 95% context use';
+    End;
+  FAutoNewChatDefaultCheck.Top := 404;
+  FAutoNewChatDefaultCheck.ShowHint := True;
+  FAutoNewChatDefaultCheck.Hint :=
+    'Default for the assistant form checkbox. Long Code/Plan runs can rollover into a fresh chat.';
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
@@ -299,6 +315,8 @@ Begin
   FApiBaseEdit.Text := AssistantChatConfig.ApiBase;
   FIncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
   EnsureExtraControls;
+  If Assigned(FAutoNewChatDefaultCheck) Then
+    FAutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
   Case AssistantChatConfig.GetThinkingLevel Of
     atlLow: FThinkingCombo.ItemIndex := 0;
     atlMedium: FThinkingCombo.ItemIndex := 1;
@@ -361,6 +379,8 @@ Begin
   AssistantChatConfig.ActiveSkill := SkillName;
   AssistantChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
   EnsureExtraControls;
+  If Assigned(FAutoNewChatDefaultCheck) Then
+    AssistantChatConfig.AutoNewChatAtContextLimit := FAutoNewChatDefaultCheck.Checked;
   Case FThinkingCombo.ItemIndex Of
     0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
     1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);

@@ -108,6 +108,15 @@ object ProjectAssistantForm: TProjectAssistantForm
       Action = FSettingsAction
       TabOrder = 6
     end
+    object FAutoNewChatCheck: TCheckBox
+      Left = 774
+      Height = 34
+      Top = 6
+      Width = 170
+      Caption = 'Auto New Chat at 95%'
+      TabOrder = 8
+      OnClick = AutoNewChatCheckClick
+    end
   end
   object FInputPanel: TPanel
     Left = 0
