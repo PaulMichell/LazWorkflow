@@ -58,6 +58,7 @@ Type
     FToolsEnabled: Boolean;
     FMaxPromptTokens: Integer;
     FLastTrimNotice: String;
+    FReasoningEffort: String;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
@@ -111,6 +112,8 @@ Type
     Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
     { Soft cap for chat/completions prompt (default leaves headroom under 500k models). }
     Property MaxPromptTokens: Integer Read FMaxPromptTokens Write FMaxPromptTokens;
+    { low | medium | high — sent as reasoning_effort when non-empty. }
+    Property ReasoningEffort: String Read FReasoningEffort Write FReasoningEffort;
   End;
 
 Var
@@ -1004,6 +1007,7 @@ Begin
   { Grok / xAI chat models often hard-cap near 500k tokens; stay under with margin. }
   FMaxPromptTokens := 420000;
   FLastTrimNotice := '';
+  FReasoningEffort := 'high';
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FBusy := False;
@@ -1116,9 +1120,13 @@ Begin
     End;
   If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
     Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
-      '],"tools":' + ToolsJsonCached + '}'
+      '],"tools":' + ToolsJsonCached
   Else
-    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']}';
+    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']';
+  { Grok-4.5 reasoning effort (thinking level). }
+  If Trim(FReasoningEffort) <> '' Then
+    Result := Result + ',"reasoning_effort":"' + JsonEscape(LowerCase(Trim(FReasoningEffort))) + '"';
+  Result := Result + '}';
 End;
 
 Destructor TAssistantService.Destroy;
@@ -1180,6 +1188,7 @@ Begin
     Exit;
   SetEndpoint(Config.ApiBase, Config.Model);
   SetActiveSkill(Config.ActiveSkill);
+  FReasoningEffort := ThinkingLevelToStr(Config.GetThinkingLevel);
   If Assigned(GrokOAuthClient) Then
     GrokOAuthClient.SetTokens(Config.ToOAuthTokens);
 End;

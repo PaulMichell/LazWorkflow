@@ -24,6 +24,10 @@ Type
     FSkillLabel: TLabel;
     FSkillCombo: TComboBox;
     FIncludeContextCheck: TCheckBox;
+    FThinkingLabel: TLabel;
+    FThinkingCombo: TComboBox;
+    FApprovalLabel: TLabel;
+    FApprovalCombo: TComboBox;
     FApiBaseLabel: TLabel;
     FApiBaseEdit: TEdit;
     FHintLabel: TLabel;
@@ -39,6 +43,7 @@ Type
     Procedure SignOutButtonClick(Sender: TObject);
     Procedure PasteCodeButtonClick(Sender: TObject);
     Procedure RefreshModelsButtonClick(Sender: TObject);
+    Procedure EnsureExtraControls;
   Public
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
@@ -95,18 +100,76 @@ Begin
         If Assigned(AssistantClient) And Assigned(AssistantChatConfig) Then
           AssistantClient.ApplyConfig(AssistantChatConfig);
         WorkflowLogger.Info('AssistantSettings',
-          'Saved – model=' + AssistantChatConfig.Model + ' skill=' + AssistantChatConfig.ActiveSkill);
+          Format('Saved – model=%s skill=%s thinking=%s approval=%s',
+            [AssistantChatConfig.Model, AssistantChatConfig.ActiveSkill,
+             AssistantChatConfig.ThinkingLevel, AssistantChatConfig.ApprovalMode]));
       End;
   Finally
     Form.Free;
   End;
 End;
 
+Procedure TAssistantSettingsForm.EnsureExtraControls;
+Begin
+  If Assigned(FThinkingCombo) Then
+    Exit;
+  ClientHeight := ClientHeight + 90;
+  If Assigned(FButtonPanel) Then
+    FButtonPanel.Top := FButtonPanel.Top + 90;
+  If Assigned(FHintLabel) Then
+    FHintLabel.Top := FHintLabel.Top + 90;
+  If Assigned(FManualLabel) Then
+    FManualLabel.Top := FManualLabel.Top + 90;
+  If Assigned(FManualEdit) Then
+    FManualEdit.Top := FManualEdit.Top + 90;
+  If Assigned(FPasteCodeButton) Then
+    FPasteCodeButton.Top := FPasteCodeButton.Top + 90;
+  If Assigned(FApiBaseLabel) Then
+    FApiBaseLabel.Top := FApiBaseLabel.Top + 90;
+  If Assigned(FApiBaseEdit) Then
+    FApiBaseEdit.Top := FApiBaseEdit.Top + 90;
+
+  FThinkingLabel := TLabel.Create(Self);
+  FThinkingLabel.Parent := Self;
+  FThinkingLabel.Left := 16;
+  FThinkingLabel.Top := 350;
+  FThinkingLabel.Caption := 'Thinking level (reasoning effort):';
+
+  FThinkingCombo := TComboBox.Create(Self);
+  FThinkingCombo.Parent := Self;
+  FThinkingCombo.Left := 16;
+  FThinkingCombo.Top := 370;
+  FThinkingCombo.Width := 220;
+  FThinkingCombo.Style := csDropDownList;
+  FThinkingCombo.Items.Add('Low');
+  FThinkingCombo.Items.Add('Medium');
+  FThinkingCombo.Items.Add('High');
+  FThinkingCombo.ItemIndex := 2;
+
+  FApprovalLabel := TLabel.Create(Self);
+  FApprovalLabel.Parent := Self;
+  FApprovalLabel.Left := 260;
+  FApprovalLabel.Top := 350;
+  FApprovalLabel.Caption := 'Approval level (tool writes):';
+
+  FApprovalCombo := TComboBox.Create(Self);
+  FApprovalCombo.Parent := Self;
+  FApprovalCombo.Left := 260;
+  FApprovalCombo.Top := 370;
+  FApprovalCombo.Width := 244;
+  FApprovalCombo.Style := csDropDownList;
+  FApprovalCombo.Items.Add('Ask — confirm each write/compile');
+  FApprovalCombo.Items.Add('Auto — allow project tools');
+  FApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
+  FApprovalCombo.ItemIndex := 2;
+End;
+
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
 Begin
-  Caption := 'Project Chat Settings';
+  Caption := 'Project Assistant Settings';
   FButtonPanel.OKButton.Caption := 'OK';
   FButtonPanel.CancelButton.Caption := 'Cancel';
+  EnsureExtraControls;
   PopulateSkills;
   RefreshAuthStatus;
 End;
@@ -235,6 +298,19 @@ Begin
     Exit;
   FApiBaseEdit.Text := AssistantChatConfig.ApiBase;
   FIncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
+  EnsureExtraControls;
+  Case AssistantChatConfig.GetThinkingLevel Of
+    atlLow: FThinkingCombo.ItemIndex := 0;
+    atlMedium: FThinkingCombo.ItemIndex := 1;
+  Else
+    FThinkingCombo.ItemIndex := 2;
+  End;
+  Case AssistantChatConfig.GetApprovalMode Of
+    aamAsk: FApprovalCombo.ItemIndex := 0;
+    aamAuto: FApprovalCombo.ItemIndex := 1;
+  Else
+    FApprovalCombo.ItemIndex := 2;
+  End;
   PopulateSkills;
   If AssistantChatConfig.ActiveSkill = '' Then
     FSkillCombo.ItemIndex := 0
@@ -284,6 +360,19 @@ Begin
     End;
   AssistantChatConfig.ActiveSkill := SkillName;
   AssistantChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
+  EnsureExtraControls;
+  Case FThinkingCombo.ItemIndex Of
+    0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
+    1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);
+  Else
+    AssistantChatConfig.SetThinkingLevelEnum(atlHigh);
+  End;
+  Case FApprovalCombo.ItemIndex Of
+    0: AssistantChatConfig.SetApprovalModeEnum(aamAsk);
+    1: AssistantChatConfig.SetApprovalModeEnum(aamAuto);
+  Else
+    AssistantChatConfig.SetApprovalModeEnum(aamAlways);
+  End;
   If Assigned(GrokOAuthClient) Then
     AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   AssistantChatConfig.Save;

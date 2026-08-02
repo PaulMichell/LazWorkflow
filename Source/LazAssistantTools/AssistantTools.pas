@@ -39,9 +39,9 @@ Function AssistantLastCompileWasClean: Boolean;
 Implementation
 
 Uses
-  Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf,
+  Forms, Controls, Dialogs, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf,
   IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, AssistantMarkdownForm,
-  AssistantPlan, fpjson, jsonparser;
+  AssistantPlan, AssistantConfig, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -93,6 +93,56 @@ End;
 Function AssistantLastCompileWasClean: Boolean;
 Begin
   Result := GLastCompileClean;
+End;
+
+Function ToolIsReadOnly(Const ToolName: String): Boolean;
+Var
+  Name: String;
+Begin
+  Name := LowerCase(Trim(ToolName));
+  Result := (Name = 'read_file') Or (Name = 'list_directory') Or
+    (Name = 'open_markdown') Or (Name = 'get_project_info') Or
+    (Name = 'list_plans') Or (Name = 'get_active_plan') Or
+    (Name = 'search_in_project') Or (Name = 'open_file');
+End;
+
+Function ToolRequiresApproval(Const ToolName: String): Boolean;
+Begin
+  Result := Not ToolIsReadOnly(ToolName);
+End;
+
+Function ApproveToolIfNeeded(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
+Var
+  Mode: TAssistantApprovalMode;
+  Summary, Name: String;
+Begin
+  Result := True;
+  ErrorText := '';
+  Name := LowerCase(Trim(ToolName));
+  If Not ToolRequiresApproval(Name) Then
+    Exit;
+  Mode := aamAlways;
+  If Assigned(AssistantChatConfig) Then
+    Mode := AssistantChatConfig.GetApprovalMode;
+  If Mode = aamAlways Then
+    Exit;
+  If Mode = aamAuto Then
+    { Auto: allow all project tools without a prompt (sandbox still applies). }
+    Exit;
+  { Ask: confirm mutating tools. }
+  Summary := Copy(Trim(ArgumentsJson), 1, 240);
+  If Length(Trim(ArgumentsJson)) > 240 Then
+    Summary := Summary + '…';
+  If MessageDlg(
+    'Project Assistant wants to run tool:' + LineEnding + LineEnding +
+    Name + LineEnding + LineEnding +
+    Summary + LineEnding + LineEnding +
+    'Allow this action? (Approval mode: Ask)',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+    Begin
+      Result := False;
+      ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
+    End;
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -1911,6 +1961,8 @@ Begin
         [ToolName, AssistantModeToStr(Mode)]);
       Exit;
     End;
+  If Not ApproveToolIfNeeded(Name, ArgumentsJson, ErrorText) Then
+    Exit;
   Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText);
 End;
 

@@ -66,6 +66,7 @@ Type
     FCodeBtnDone: TButton;
     FCodeBtnReset: TButton;
     FCodeBtnWork: TButton;
+    FCodeBtnWorkPlan: TButton;
     FCodeStatusLabel: TLabel;
     FBottomBar: TPanel;
     FBtnNewChat: TButton;
@@ -145,6 +146,11 @@ Type
     FCompileSeqAtSendStart: Integer; { Snapshot of AssistantLastCompileSeq at turn start. }
     FPendingReviewErrorOffer: Boolean; { After Review with errors, offer Fix Error. }
     FReviewErrorCount: Integer;
+    FContextWarnShown: Boolean; { One-shot warning when context ≥ 95%. }
+    FPlanAgentRunning: Boolean;
+    FPlanAgentPackagesDone: Integer;
+    FPlanAgentMaxPackages: Integer;
+    FLastTurnHadError: Boolean;
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -200,8 +206,14 @@ Type
     Procedure CodeBtnDoneClick(Sender: TObject);
     Procedure CodeBtnResetClick(Sender: TObject);
     Procedure CodeBtnWorkClick(Sender: TObject);
+    Procedure CodeBtnWorkPlanClick(Sender: TObject);
     Procedure CodeWorkOnSelectedPackage;
+    Procedure StartWorkOnPlanAgent;
+    Procedure StopWorkOnPlanAgent(Const Reason: String);
+    Procedure ContinueWorkOnPlanAgent(Data: PtrInt);
+    Function FindNextIncompleteCodeSection: Integer;
     Function BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
+    Procedure MaybeWarnHighContextUsage;
     Procedure CodeTodoListDblClick(Sender: TObject);
     Procedure CodeTodoListClick(Sender: TObject);
     Procedure CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
@@ -324,6 +336,11 @@ Begin
   FCompileSeqAtSendStart := 0;
   FPendingReviewErrorOffer := False;
   FReviewErrorCount := 0;
+  FContextWarnShown := False;
+  FPlanAgentRunning := False;
+  FPlanAgentPackagesDone := 0;
+  FPlanAgentMaxPackages := 25;
+  FLastTurnHadError := False;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -961,6 +978,14 @@ Begin
   FCodeBtnWork.AutoSize := True;
   FCodeBtnWork.OnClick := @CodeBtnWorkClick;
 
+  FCodeBtnWorkPlan := TButton.Create(Self);
+  FCodeBtnWorkPlan.Parent := Bar;
+  FCodeBtnWorkPlan.Caption := 'Work on plan';
+  FCodeBtnWorkPlan.AutoSize := True;
+  FCodeBtnWorkPlan.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
+  FCodeBtnWorkPlan.ShowHint := True;
+  FCodeBtnWorkPlan.OnClick := @CodeBtnWorkPlanClick;
+
   FCodeStatusLabel := TLabel.Create(Self);
   FCodeStatusLabel.Parent := FCodePanel;
   FCodeStatusLabel.Align := alBottom;
@@ -1413,7 +1438,150 @@ End;
 
 Procedure TProjectAssistantForm.CodeBtnWorkClick(Sender: TObject);
 Begin
+  If FPlanAgentRunning Then
+    Begin
+      MessageDlg('Plan agent is already running. Use Stop to cancel the current reply, then try again.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
   CodeWorkOnSelectedPackage;
+End;
+
+Function TProjectAssistantForm.FindNextIncompleteCodeSection: Integer;
+Var
+  I: Integer;
+  Section: TPlanSection;
+  FirstNotStarted: Integer;
+Begin
+  Result := -1;
+  FirstNotStarted := -1;
+  If Not Assigned(FCodeSections) Then
+    Exit;
+  For I := 0 To FCodeSections.Count - 1 Do
+    Begin
+      Section := TPlanSection(FCodeSections[I]);
+      If Section.Status = pssInProgress Then
+        Begin
+          Result := I;
+          Exit;
+        End;
+      If (FirstNotStarted < 0) And (Section.Status In [pssNotStarted, pssUnknown]) Then
+        FirstNotStarted := I;
+    End;
+  Result := FirstNotStarted;
+End;
+
+Procedure TProjectAssistantForm.StopWorkOnPlanAgent(Const Reason: String);
+Begin
+  If Not FPlanAgentRunning Then
+    Exit;
+  FPlanAgentRunning := False;
+  Application.RemoveAsyncCalls(Self);
+  SetCodeStatusFeedback('Plan agent stopped: ' + Reason);
+  SetCurrentSystemNote('**Plan agent stopped:** ' + Reason);
+  UpdateStatusFooter;
+  WorkflowLogger.Info('ProjectAssistant', 'Plan agent stopped: ' + Reason);
+End;
+
+Procedure TProjectAssistantForm.StartWorkOnPlanAgent;
+Var
+  Idx: Integer;
+Begin
+  If FSending Or FPlanAgentRunning Then
+    Begin
+      MessageDlg('Wait for the current reply to finish before starting Work on plan.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If GetActivePlanRelativePath = '' Then
+    Begin
+      MessageDlg('Set an active plan on the Plan mode panel first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  EnsureCodeTabUi;
+  RefreshCodeTodos;
+  Idx := FindNextIncompleteCodeSection;
+  If Idx < 0 Then
+    Begin
+      MessageDlg('All plan packages are already complete (or none found).', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  FPlanAgentRunning := True;
+  FPlanAgentPackagesDone := 0;
+  FLastTurnHadError := False;
+  FCodeSelectedIndex := Idx;
+  If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
+    FCodeTodoList.ItemIndex := Idx;
+  SetCodeStatusFeedback('Plan agent: starting…');
+  SetCurrentSystemNote(
+    '**Plan agent** started — will work through incomplete packages until complete, error, ' +
+    'context ≥ 95%, or max packages.');
+  SelectMode(amCode);
+  CodeWorkOnSelectedPackage;
+  If Not FSending Then
+    StopWorkOnPlanAgent('could not start first package');
+End;
+
+Procedure TProjectAssistantForm.ContinueWorkOnPlanAgent(Data: PtrInt);
+Var
+  Idx, Pct: Integer;
+Begin
+  If Not FPlanAgentRunning Then
+    Exit;
+  If FSending Then
+    Begin
+      Application.QueueAsyncCall(@ContinueWorkOnPlanAgent, 0);
+      Exit;
+    End;
+  If FLastTurnHadError Then
+    Begin
+      StopWorkOnPlanAgent('last package ended with an error');
+      Exit;
+    End;
+  If FContextLimit > 0 Then
+    Begin
+      FContextUsed := AssistantClient.EstimatedPromptTokens;
+      Pct := (FContextUsed * 100) Div FContextLimit;
+      If Pct >= 95 Then
+        Begin
+          MaybeWarnHighContextUsage;
+          StopWorkOnPlanAgent(Format('context usage %d%% — start a New Chat', [Pct]));
+          Exit;
+        End;
+    End;
+  If FPlanAgentPackagesDone >= FPlanAgentMaxPackages Then
+    Begin
+      StopWorkOnPlanAgent(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
+      Exit;
+    End;
+  EnsureCodeTabUi;
+  RefreshCodeTodos;
+  Idx := FindNextIncompleteCodeSection;
+  If Idx < 0 Then
+    Begin
+      StopWorkOnPlanAgent(Format('all packages complete (%d worked this run)',
+        [FPlanAgentPackagesDone]));
+      Exit;
+    End;
+  FCodeSelectedIndex := Idx;
+  If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
+    FCodeTodoList.ItemIndex := Idx;
+  SetCodeStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
+  CodeWorkOnSelectedPackage;
+  If Not FSending Then
+    StopWorkOnPlanAgent('failed to start next package');
+End;
+
+Procedure TProjectAssistantForm.CodeBtnWorkPlanClick(Sender: TObject);
+Begin
+  If FPlanAgentRunning Then
+    Begin
+      If MessageDlg('Stop the plan agent after the current reply finishes?',
+        mtConfirmation, [mbYes, mbNo], 0) = mrYes Then
+        StopWorkOnPlanAgent('stopped by user');
+      Exit;
+    End;
+  StartWorkOnPlanAgent;
 End;
 
 Procedure TProjectAssistantForm.CodeTodoListClick(Sender: TObject);
@@ -1979,7 +2147,7 @@ End;
 Procedure TProjectAssistantForm.UpdateStatusFooter;
 Var
   Pct: Integer;
-  StatusText: String;
+  StatusText, LeftText, CentreText, ThinkCap, ApprCap: String;
 Begin
   If Assigned(AssistantClient) And (Not FSending) Then
     Begin
@@ -1999,22 +2167,53 @@ Begin
         FStatusPhase := 'Waiting for first token…';
       StatusText := FormatElapsedStatus(FStatusPhase);
     End
+  Else If FPlanAgentRunning Then
+    StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
   Else If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
+  ThinkCap := 'High';
+  ApprCap := 'Always';
+  If Assigned(AssistantChatConfig) Then
+    Begin
+      ThinkCap := ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel);
+      ApprCap := ApprovalModeCaption(AssistantChatConfig.GetApprovalMode);
+    End;
+  LeftText := Format('Model: %s · Think: %s · Approve: %s',
+    [FModelName, ThinkCap, ApprCap]);
   If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
-    FStatusFooter.SetAll(
-      Format('Model: %s | Skill: %s', [FModelName, AssistantChatConfig.ActiveSkill]),
-      Format('Context: ~%d / %d tok (%d%%)', [FContextUsed, FContextLimit, Pct]),
-      StatusText)
-  Else
-    FStatusFooter.SetAll(
-      Format('Model: %s', [FModelName]),
-      Format('Context: ~%d / %d tok (%d%%)', [FContextUsed, FContextLimit, Pct]),
-      StatusText);
+    LeftText := LeftText + ' · Skill: ' + AssistantChatConfig.ActiveSkill;
+  CentreText := Format('Context %d%%  (~%d / %d tok)', [Pct, FContextUsed, FContextLimit]);
+  If Pct >= 95 Then
+    CentreText := CentreText + ' ⚠';
+  FStatusFooter.SetAll(LeftText, CentreText, StatusText);
+  If (Not FSending) And (Pct >= 95) Then
+    MaybeWarnHighContextUsage;
+End;
+
+Procedure TProjectAssistantForm.MaybeWarnHighContextUsage;
+Var
+  Pct: Integer;
+Begin
+  If FContextWarnShown Then
+    Exit;
+  If FContextLimit <= 0 Then
+    Exit;
+  Pct := (FContextUsed * 100) Div FContextLimit;
+  If Pct < 95 Then
+    Exit;
+  FContextWarnShown := True;
+  SetCurrentSystemNote(
+    Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Code/Plan work ' +
+      'so the model stays within its token limit.', [Pct]));
+  MessageDlg(
+    Format('Context usage is at about %d%% of the budget.%s%s' +
+      'Start a New Chat before continuing large Plan/Code sessions, or the next request may fail.',
+      [Pct, LineEnding, LineEnding]),
+    mtWarning, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.SetSending(IsSending: Boolean);
@@ -2492,6 +2691,7 @@ Begin
       FStatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
+  FLastTurnHadError := ErrorText <> '';
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ErrorText);
   If Assigned(AssistantClient) Then
@@ -2510,6 +2710,16 @@ Begin
   UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
+  If FPlanAgentRunning Then
+    Begin
+      If FLastTurnHadError Then
+        StopWorkOnPlanAgent('error: ' + ErrorText)
+      Else
+        Begin
+          Inc(FPlanAgentPackagesDone);
+          Application.QueueAsyncCall(@ContinueWorkOnPlanAgent, 0);
+        End;
+    End;
   If FViewingLive Then
     FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
@@ -2598,6 +2808,8 @@ Begin
   RefreshChatDisplay(True, True);
   FStatusFooter.SetRightText('Cancelled');
   PersistSession;
+  If FPlanAgentRunning Then
+    StopWorkOnPlanAgent('stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
@@ -2626,6 +2838,7 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
+      MaybeWarnHighContextUsage;
       { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
       If Not FModeLocked Then
         LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
@@ -2996,6 +3209,8 @@ End;
 
 Procedure TProjectAssistantForm.StartNewChat;
 Begin
+  If FPlanAgentRunning Then
+    StopWorkOnPlanAgent('new chat');
   If FSending Then
     StopStream;
   SetSending(False);
@@ -3007,6 +3222,7 @@ Begin
     End;
   FTranscript.Clear;
   FContextUsed := 0;
+  FContextWarnShown := False;
   FUserCancelled := False;
   FTurnRecorded := False;
   FLastChatPaintTick := 0;
