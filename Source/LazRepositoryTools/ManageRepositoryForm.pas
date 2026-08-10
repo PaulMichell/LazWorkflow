@@ -2243,14 +2243,16 @@ Begin
   GitClient.RepoPath := FRepoPath;
   If (Not StagedEmpty) And FilesEmpty Then
     Begin
-      If Not GitClient.UnstageAll Then
+      { Unstage only what is listed in the staged panel (all currently staged paths). }
+      If Not GitClient.UnstagePaths(FStagedPaths) Then
         MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
     End
   Else
     Begin
+      { Stage only paths visible in the filtered files list — not git add -A. }
       If FilesEmpty Then
         Exit;
-      If Not GitClient.StageAll Then
+      If Not GitClient.StagePaths(FFilesPaths) Then
         MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
     End;
   RefreshFilesList;
