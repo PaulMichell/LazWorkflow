@@ -157,8 +157,13 @@ Begin
   LocalName := '';
   LocalEmail := '';
   Description := '';
+  { Prefer repository-local identity; fall back to effective git config (global [user]). }
   GitClient.GetConfigValue('user.name', True, LocalName);
+  If Trim(LocalName) = '' Then
+    GitClient.GetConfigValue('user.name', False, LocalName);
   GitClient.GetConfigValue('user.email', True, LocalEmail);
+  If Trim(LocalEmail) = '' Then
+    GitClient.GetConfigValue('user.email', False, LocalEmail);
   GitClient.GetDescription(Description);
 
   UserNameEdit.Text := LocalName;
