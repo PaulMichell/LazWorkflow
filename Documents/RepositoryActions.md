@@ -34,12 +34,11 @@ Items are ordered by **importance for correctness, IDE safety, and user trust** 
 
 ---
 
-### 2. Free completed detail workers (no pointer overwrite leak) — **Open · Valid · Critical**
+### 2. Free completed detail workers (no pointer overwrite leak) — **Completed · Valid · Critical**
 
 **Review:** P1 detail-loading threads leak; `ApplyDetailsLoaded` does not free `FDetailThread`.  
-**Code:** `ApplyDetailsLoaded` clears `FDetailLoading` and applies text but does **not** free `FDetailThread`. The next `StartDetailLoadIfNeeded` can overwrite the pointer.  
 **Assessment:** Valid.  
-**Action:** Free or null the finished worker in the completion path before starting another; same pattern for index/remote workers.
+**Done (2026-08-10):** Fixed together with item 1. Each worker’s `Deliver` clears the form’s thread pointer when it matches `Self` and `Free`s the worker on the main thread. Soft cancel abandons the pointer so a newer worker can start without overwriting a live reference.
 
 ---
 
@@ -379,7 +378,7 @@ Treat those as **still Open** unless re-verified after a dedicated hardening PR.
 
 ## Suggested implementation order (repository manager only)
 
-1. **Thread safety:** #1, #2 (deadlock + leak) — stop bleeding.  
+1. **Thread safety:** #1, #2 (deadlock + leak) — **done** (Queue + generation + main-thread free).  
 2. **Git process protocol:** #4, #5, #10, #27 (drain, porcelain `-z`, patch bytes).  
 3. **UI freeze / jobs:** #3, #6, #7, #21, #30 (async runner, no full-tree scan, dirty digest, op panel).  
 4. **Patch correctness:** #8, #9, #25 (model extract, check, split unit).  
