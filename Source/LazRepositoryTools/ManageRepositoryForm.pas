@@ -19,6 +19,8 @@ Type
   TGitRemoteOpKind = (rokFetch, rokPull, rokPush);
 
   TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
+    PushCheckBox: TCheckBox;
+    SuggestButton: TButton;
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -170,8 +172,6 @@ Type
     MessageMemo: TMemo;
     CommitActionsPanel: TPanel;
     CommitButton: TButton;
-    SuggestButton: TButton;
-    PushCheckBox: TCheckBox;
     CommitSplitter: TSplitter;
     StagedPanel: TPanel;
     StagedLabel: TLabel;

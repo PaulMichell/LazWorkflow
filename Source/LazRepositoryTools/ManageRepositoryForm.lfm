@@ -6,11 +6,9 @@ object ManageRepositoryForm: TManageRepositoryForm
   Caption = 'Manage Repository'
   ClientHeight = 600
   ClientWidth = 1135
-  DesignTimePPI = 96
   KeyPreview = True
   Position = poDefaultPosOnly
   LCLVersion = '4.99.0.0'
-  Scaled = True
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnKeyDown = FormKeyDown
@@ -322,22 +320,22 @@ object ManageRepositoryForm: TManageRepositoryForm
             ClientHeight = 36
             ClientWidth = 744
             TabOrder = 1
-            object SuggestButton: TButton
+            object CommitButton: TButton
               Left = 4
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = CommitAction
+              TabOrder = 0
+            end
+            object SuggestButton: TButton
+              Left = 92
               Height = 28
               Top = 4
               Width = 84
               Action = SuggestMessageAction
               ParentShowHint = False
               ShowHint = True
-              TabOrder = 0
-            end
-            object CommitButton: TButton
-              Left = 92
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = CommitAction
               TabOrder = 1
             end
             object PushCheckBox: TCheckBox
