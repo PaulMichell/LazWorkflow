@@ -16,13 +16,13 @@ object ProjectAssistantForm: TProjectAssistantForm
     Align = alBottom
     ClientWidth = 960
     TabOrder = 3
-    inherited FPanel: TPanel
+    inherited Panel: TPanel
       Width = 960
       ClientWidth = 960
-      inherited FRightLabel: TLabel
+      inherited RightLabel: TLabel
         Left = 953
       end
-      inherited FCentreLabel: TLabel
+      inherited CentreLabel: TLabel
         Width = 922
       end
     end
