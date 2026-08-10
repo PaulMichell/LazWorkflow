@@ -38,7 +38,6 @@ Type
     FShowUntrackedCheck: TCheckBox;
     FShowCleanCheck: TCheckBox;
     FShowIgnoredCheck: TCheckBox;
-    FBtnIgnoreFiles: TButton;
     FFilesSplitter: TSplitter;
     FFilesRightPanel: TPanel;
     FStageButtonsBar: TPanel;
@@ -46,6 +45,7 @@ Type
     FBtnUnstage: TButton;
     FBtnStageAll: TButton;
     FBtnStageSelection: TButton;
+    FBtnIgnoreFiles: TButton;
     FStagedSplitter: TSplitter;
     FStagedPanel: TPanel;
     FStagedLabel: TLabel;

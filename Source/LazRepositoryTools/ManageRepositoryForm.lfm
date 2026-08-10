@@ -258,12 +258,12 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FFilesBottomBar: TPanel
           Left = 0
-          Height = 118
-          Top = 425
+          Height = 88
+          Top = 455
           Width = 380
           Align = alBottom
           BevelOuter = bvNone
-          ClientHeight = 118
+          ClientHeight = 88
           ClientWidth = 380
           TabOrder = 1
           object FFilterGroup: TGroupBox
@@ -304,16 +304,6 @@ object ManageRepositoryForm: TManageRepositoryForm
               TabOrder = 2
               OnChange = FileFilterChange
             end
-          end
-          object FBtnIgnoreFiles: TButton
-            Left = 8
-            Height = 28
-            Top = 84
-            Width = 140
-            BorderSpacing.Left = 8
-            Caption = 'Ignore Files…'
-            TabOrder = 1
-            OnClick = BtnIgnoreFilesClick
           end
         end
       end
@@ -527,6 +517,15 @@ object ManageRepositoryForm: TManageRepositoryForm
             Enabled = False
             TabOrder = 3
             OnClick = BtnStageSelectionClick
+          end
+          object FBtnIgnoreFiles: TButton
+            Left = 402
+            Height = 34
+            Top = 6
+            Width = 110
+            Caption = 'Ignore Files…'
+            TabOrder = 4
+            OnClick = BtnIgnoreFilesClick
           end
         end
         inline FFilesDiffView: TGitDiffView
