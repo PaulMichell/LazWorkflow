@@ -42,12 +42,12 @@ Items are ordered by **importance for correctness, IDE safety, and user trust** 
 
 ---
 
-### 3. Move long-running Git off the IDE thread (shared job runner) — **Partial · Valid · Critical**
+### 3. Move long-running Git off the IDE thread (shared job runner) — **Completed (core) · Valid · Critical**
 
 **Review:** P1 clone/fetch/pull/push/commit/checkout/diff/details/refresh block UI; no timeout/cancellation; `poNoConsole` hides credentials.  
-**Code:** Fetch/pull/push run on `TGitRemoteOpThread`. Index/details use workers. Commit, checkout, clone, many diffs/refreshes still run on the UI thread via `TGitService`.  
-**Assessment:** Valid and high value. Partial only because remote ops are already threaded.  
-**Action:** One cancellable job service per repository (queue, progress, timeout, cancel). Show an operation panel (command, repo, elapsed, Cancel, copyable error). Surface credential/auth failures explicitly.
+**Assessment:** Valid and high value.  
+**Done (2026-08-10):** Added `GitJobRunner` — global queue + worker thread, cooperative cancel (`TGitService.Cancel` kills active process), main-thread `OnFinished` via `Queue`, busy caption on status footer. Wired Manage Repository fetch/pull/push, commit (+ optional push), checkout, create branch, stage/unstage, and `ListStatus` files refresh. Wired IDE clone/init through the same runner.  
+**Still open (follow-ups):** dedicated Cancel button / elapsed timer panel (item 30), timeout per job defaults, credential prompts with `poNoConsole`, large commit diffs still load on demand on the UI path, graph index/detail workers remain separate (already non-blocking).
 
 ---
 
@@ -380,7 +380,7 @@ Treat those as **still Open** unless re-verified after a dedicated hardening PR.
 
 1. **Thread safety:** #1, #2 (deadlock + leak) — **done** (Queue + generation + main-thread free).  
 2. **Git process protocol:** #4, #5, #10, #27 (drain, porcelain `-z`, patch bytes).  
-3. **UI freeze / jobs:** #3, #6, #7, #21, #30 (async runner, no full-tree scan, dirty digest, op panel).  
+3. **UI freeze / jobs:** #3 **done (core runner)**; still open #6, #7, #21, #30 (no full-tree scan, dirty digest, richer op panel).  
 4. **Patch correctness:** #8, #9, #25 (model extract, check, split unit).  
 5. **Safety / remotes / config:** #11, #15–#18, #29.  
 6. **Graph / events / bounds:** #12–#14, #19–#20.  

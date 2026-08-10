@@ -12,7 +12,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView;
+  GitGraphModel, GitDiffView, GitJobRunner, GitService;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -32,6 +32,8 @@ Type
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
     FRemoteOpSuppressResult: Boolean;
+    FJobBusy: Boolean;
+    FPushAfterCommit: Boolean;
     { Generation tokens invalidate Queue callbacks after cancel; never Synchronize+WaitFor. }
     FIndexGen: Integer;
     FDetailGen: Integer;
@@ -66,6 +68,12 @@ Type
     Procedure StartIndexLoad;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetRemoteActionsEnabled(ActionsEnabled: Boolean);
+    Procedure SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
+    Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
+    Procedure GitJobFinished(Job: TGitJob);
+    Function SubmitGitJob(Job: TGitJob): Boolean;
+    Procedure ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
+    Procedure RefreshFilesListAsync;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
     { Soft cancel: Terminate + bump gen (no WaitFor). Hard dispose used on form Destroy only. }
@@ -230,7 +238,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
+  WorkflowLog, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
   DateUtils, Math, FileUtil, LazFileUtils, StrUtils, Process
   {$IFDEF WINDOWS}, ShellApi{$ENDIF};
 
@@ -631,6 +639,8 @@ Begin
   FDetailLoading := False;
   FRemoteOpBusy := False;
   FRemoteOpSuppressResult := False;
+  FJobBusy := False;
+  FPushAfterCommit := False;
   FIndexGen := 0;
   FDetailGen := 0;
   FRemoteGen := 0;
@@ -645,6 +655,8 @@ Begin
   InitLaneColors;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
+  If Assigned(GitJobs) Then
+    GitJobs.OnBusyChanged := @GitJobBusyChanged;
 End;
 
 Destructor TManageRepositoryForm.Destroy;
@@ -653,6 +665,11 @@ Begin
     FDetailTimer.Enabled := False;
   If Assigned(FAutoRefreshTimer) Then
     FAutoRefreshTimer.Enabled := False;
+  If Assigned(GitJobs) Then
+    Begin
+      GitJobs.OnBusyChanged := Nil;
+      GitJobs.CancelCurrent;
+    End;
   { Hard dispose: Queue (not Synchronize) so WaitFor cannot deadlock the UI thread. }
   DisposeWorker(FRemoteOpThread, FRemoteGen, True);
   DisposeWorker(FDetailThread, FDetailGen, True);
@@ -931,33 +948,201 @@ End;
 Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
 Begin
   If Assigned(FetchAction) Then
-    FetchAction.Enabled := ActionsEnabled;
+    FetchAction.Enabled := ActionsEnabled And Not FJobBusy;
   If Assigned(PullAction) Then
-    PullAction.Enabled := ActionsEnabled;
+    PullAction.Enabled := ActionsEnabled And Not FJobBusy;
   If Assigned(PushAction) Then
-    PushAction.Enabled := ActionsEnabled;
+    PushAction.Enabled := ActionsEnabled And Not FJobBusy;
   If Assigned(RemotesAction) Then
-    RemotesAction.Enabled := ActionsEnabled;
+    RemotesAction.Enabled := ActionsEnabled And Not FJobBusy;
+End;
+
+Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
+Begin
+  FJobBusy := IsBusy;
+  If IsBusy Then
+    Begin
+      Screen.Cursor := crHourGlass;
+      SetRemoteActionsEnabled(False);
+      If Assigned(StatusFooter) And (StatusCaption <> '') Then
+        StatusFooter.SetRightText(StatusCaption);
+    End
+  Else
+    Begin
+      Screen.Cursor := crDefault;
+      If Not FRemoteOpBusy Then
+        SetRemoteActionsEnabled(True);
+      UpdateStatus;
+    End;
+End;
+
+Procedure TManageRepositoryForm.GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
+Begin
+  If csDestroying in ComponentState Then
+    Exit;
+  SetJobUiBusy(IsBusy, StatusCaption);
+End;
+
+Function TManageRepositoryForm.SubmitGitJob(Job: TGitJob): Boolean;
+Begin
+  Result := False;
+  If Not Assigned(Job) Then
+    Exit;
+  If Not Assigned(GitJobs) Then
+    Begin
+      FreeAndNil(Job);
+      MessageDlg('Git job runner is not available.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  If (FRepoPath = '') And (Job.Kind <> gjkClone) And (Job.Kind <> gjkInit) Then
+    Begin
+      FreeAndNil(Job);
+      Exit;
+    End;
+  If Job.RepoPath = '' Then
+    Job.RepoPath := FRepoPath;
+  Job.OnFinished := @GitJobFinished;
+  Result := GitJobs.Submit(Job);
+  If Not Result Then
+    MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
+End;
+
+Procedure TManageRepositoryForm.GitJobFinished(Job: TGitJob);
+Var
+  Msg: String;
+Begin
+  If (csDestroying in ComponentState) Or Not Assigned(Job) Then
+    Exit;
+
+  Case Job.Kind Of
+    gjkFetch, gjkPull, gjkPush:
+      Begin
+        FRemoteOpBusy := False;
+        If Job.Cancelled Then
+          Begin
+            If Assigned(StatusFooter) Then
+              StatusFooter.SetRightText('Cancelled');
+            Exit;
+          End;
+        Msg := Job.ErrorText;
+        If Msg = '' Then
+          If Job.Ok Then
+            Msg := 'Done.'
+          Else
+            Msg := 'Operation failed.';
+        If Job.Ok Then
+          Begin
+            MessageDlg(Msg, mtInformation, [mbOK], 0);
+            ManualRefresh;
+            If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+              RefreshFilesListAsync;
+          End
+        Else
+          MessageDlg(Msg, mtError, [mbOK], 0);
+      End;
+    gjkCommit:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          Begin
+            MessageDlg('Commit failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+            RefreshFilesListAsync;
+            Exit;
+          End;
+        WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
+        If Assigned(MessageMemo) Then
+          MessageMemo.Clear;
+        MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
+        If FPushAfterCommit Then
+          Begin
+            FPushAfterCommit := False;
+            StartRemoteOp(rokPush);
+          End
+        Else
+          Begin
+            RefreshFilesListAsync;
+            ManualRefresh;
+          End;
+      End;
+    gjkCheckout:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          ManualRefresh
+        Else
+          MessageDlg('Checkout failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+      End;
+    gjkCreateBranch:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          Begin
+            MessageDlg('Created branch "' + Job.MessageText + '" at ' + Copy(Job.RefName, 1, 7),
+              mtInformation, [mbOK], 0);
+            ManualRefresh;
+          End
+        Else
+          MessageDlg('Create branch failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+      End;
+    gjkStagePaths, gjkUnstagePaths:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          MessageDlg(Job.Caption + ' failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+        RefreshFilesListAsync;
+      End;
+    gjkListStatus:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          ApplyFilesFromStatus(Job.StatusEntries)
+        Else
+          Begin
+            If Assigned(FilesList) Then
+              Begin
+                FilesList.Items.Clear;
+                FilesList.Items.Add('(status failed)');
+              End;
+            WorkflowLogger.Warning('ManageRepository', 'ListStatus: ' + Job.ErrorText);
+            UpdateCommitEnabled;
+            UpdateStageButtonsEnabled;
+          End;
+      End;
+  Else
+    { ignore }
+  End;
 End;
 
 Procedure TManageRepositoryForm.StartRemoteOp(Kind: TGitRemoteOpKind);
+Var
+  Job: TGitJob;
+  JobKind: TGitJobKind;
 Begin
-  If (FRepoPath = '') Or FRemoteOpBusy Then
+  If (FRepoPath = '') Or FRemoteOpBusy Or FJobBusy Then
     Exit;
-  { Soft-cancel graph workers (Queue + generation — no UI WaitFor deadlock). }
+  Case Kind Of
+    rokFetch: JobKind := gjkFetch;
+    rokPull: JobKind := gjkPull;
+    rokPush: JobKind := gjkPush;
+  Else
+    Exit;
+  End;
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
-  StopRemoteOpThread;
   StopDetailThread;
   StopIndexThread;
   FIndexing := False;
   FRemoteOpSuppressResult := False;
   FRemoteOpBusy := True;
-  Screen.Cursor := crHourGlass;
-  SetRemoteActionsEnabled(False);
-  { FRemoteGen already bumped by StopRemoteOpThread. }
-  FRemoteOpThread := TGitRemoteOpThread.Create(Self, FRepoPath, Kind, FRemoteGen);
-  FRemoteOpThread.Start;
+  Job := TGitJob.Create(JobKind);
+  Job.RepoPath := FRepoPath;
+  If Not SubmitGitJob(Job) Then
+    FRemoteOpBusy := False;
 End;
 
 Procedure TManageRepositoryForm.ApplyRemoteOpResult(Ok: Boolean; Const ResultMessage: String;
@@ -1736,13 +1921,48 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.RefreshFilesList;
+Begin
+  RefreshFilesListAsync;
+End;
+
+Procedure TManageRepositoryForm.RefreshFilesListAsync;
+Var
+  Job: TGitJob;
+Begin
+  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
+    Exit;
+  If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
+    Begin
+      FilesList.Items.BeginUpdate;
+      StagedList.Items.BeginUpdate;
+      Try
+        FilesList.Items.Clear;
+        StagedList.Items.Clear;
+        FFilesPaths.Clear;
+        FStagedPaths.Clear;
+        FilesList.Items.Add('(no repository)');
+      Finally
+        StagedList.Items.EndUpdate;
+        FilesList.Items.EndUpdate;
+      End;
+      UpdateCommitEnabled;
+      UpdateStageButtonsEnabled;
+      Exit;
+    End;
+  Job := TGitJob.Create(gjkListStatus);
+  Job.RepoPath := FRepoPath;
+  Job.Caption := 'Refreshing files…';
+  SubmitGitJob(Job);
+End;
+
+Procedure TManageRepositoryForm.ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
 Var
   AllFiles, StatusMap, FullyStaged: TStringList;
-  Entries: TGitStatusEntryArray;
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
   Idx: Integer;
   EntryStatus: String;
+  WantClean: Boolean;
 Begin
   If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
     Exit;
@@ -1775,31 +1995,30 @@ Begin
       FullyStaged.Duplicates := dupIgnore;
       FullyStaged.CaseSensitive := FileNameCaseSensitive;
 
-      If Assigned(GitClient) Then
+      For I := 0 To High(Entries) Do
         Begin
-          GitClient.RepoPath := FRepoPath;
-          { Include ignored paths so the Ignored filter can show them. }
-          If GitClient.ListStatus(Entries) Then
-            For I := 0 To High(Entries) Do
-              Begin
-                Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
-                EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
-                StatusMap.Values[Rel] := EntryStatus;
-                If GitStatusEntryIsStaged(Entries[I]) Then
-                  Begin
-                    { GitStatusEntryLabel already includes the path (and rename old->new). }
-                    StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
-                    FStagedPaths.Add(Rel);
-                    { Fully staged (no remaining worktree change) leave the left list. }
-                    If Not GitStatusEntryIsUnstaged(Entries[I]) Then
-                      FullyStaged.Add(Rel);
-                  End;
-              End;
+          Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
+          EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
+          StatusMap.Values[Rel] := EntryStatus;
+          If GitStatusEntryIsStaged(Entries[I]) Then
+            Begin
+              StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
+              FStagedPaths.Add(Rel);
+              If Not GitStatusEntryIsUnstaged(Entries[I]) Then
+                FullyStaged.Add(Rel);
+            End;
         End;
 
+      { Full-tree scan only when the user asked to show clean files (item 6 still open). }
+      WantClean := Assigned(CleanCheck) And CleanCheck.Checked;
       AllFiles.Sorted := True;
       AllFiles.Duplicates := dupIgnore;
-      FindAllFiles(AllFiles, FRepoPath, '*', True);
+      If WantClean Then
+        FindAllFiles(AllFiles, FRepoPath, '*', True)
+      Else
+        { Still walk status paths so deleted/untracked/modified appear without FindAllFiles. }
+        For I := 0 To StatusMap.Count - 1 Do
+          AllFiles.Add(Root + StringReplace(StatusMap.Names[I], '/', DirectorySeparator, [rfReplaceAll]));
       For I := 0 To AllFiles.Count - 1 Do
         Begin
           FullPath := ExpandFileName(AllFiles[I]);
@@ -2314,8 +2533,9 @@ Procedure TManageRepositoryForm.StageActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
   FilesEmpty, UnstageMode: Boolean;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   UnstageMode := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
@@ -2324,63 +2544,58 @@ Begin
   If UnstageMode Then
     Begin
       Paths := CollectSelectedPaths(StagedList, FStagedPaths);
-      Try
-        If Paths.Count = 0 Then
-          Begin
-            MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
-            Exit;
-          End;
-        GitClient.RepoPath := FRepoPath;
-        If Not GitClient.UnstagePaths(Paths) Then
-          MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-      Finally
-        Paths.Free;
-      End;
+      If Paths.Count = 0 Then
+        Begin
+          Paths.Free;
+          MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      Job := TGitJob.Create(gjkUnstagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.TakePaths(Paths);
+      SubmitGitJob(Job);
     End
   Else
     Begin
       Paths := CollectSelectedPaths(FilesList, FFilesPaths);
-      Try
-        If Paths.Count = 0 Then
-          Begin
-            MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
-            Exit;
-          End;
-        GitClient.RepoPath := FRepoPath;
-        If Not GitClient.StagePaths(Paths) Then
-          MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-      Finally
-        Paths.Free;
-      End;
+      If Paths.Count = 0 Then
+        Begin
+          Paths.Free;
+          MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      Job := TGitJob.Create(gjkStagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.TakePaths(Paths);
+      SubmitGitJob(Job);
     End;
 End;
 
 Procedure TManageRepositoryForm.StageAllActionExecute(Sender: TObject);
 Var
   FilesEmpty, StagedEmpty: Boolean;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
-  GitClient.RepoPath := FRepoPath;
   If (Not StagedEmpty) And FilesEmpty Then
     Begin
-      { Unstage only what is listed in the staged panel (all currently staged paths). }
-      If Not GitClient.UnstagePaths(FStagedPaths) Then
-        MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Job := TGitJob.Create(gjkUnstagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.CopyPathsFrom(FStagedPaths);
+      SubmitGitJob(Job);
     End
   Else
     Begin
-      { Stage only paths visible in the filtered files list — not git add -A. }
       If FilesEmpty Then
         Exit;
-      If Not GitClient.StagePaths(FFilesPaths) Then
-        MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Job := TGitJob.Create(gjkStagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.CopyPathsFrom(FFilesPaths);
+      SubmitGitJob(Job);
     End;
-  RefreshFilesList;
 End;
 
 Procedure TManageRepositoryForm.StageSelectionActionExecute(Sender: TObject);
@@ -2470,10 +2685,10 @@ End;
 
 Procedure TManageRepositoryForm.CommitActionExecute(Sender: TObject);
 Var
-  NewSha, Msg: String;
-  Summary: TGitTransferSummary;
+  Msg: String;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If FRepoPath = '' Then
     Exit;
   Msg := '';
   If Assigned(MessageMemo) Then
@@ -2488,48 +2703,14 @@ Begin
       MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
       Exit;
     End;
+  If FJobBusy Then
+    Exit;
 
-  GitClient.RepoPath := FRepoPath;
-  Screen.Cursor := crHourGlass;
-  Try
-    If Not GitClient.Commit(Msg, NewSha) Then
-      Begin
-        Screen.Cursor := crDefault;
-        MessageDlg('Commit failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-        Exit;
-      End;
-  Finally
-    Screen.Cursor := crDefault;
-  End;
-
-  WorkflowLogger.Info('ManageRepository', 'Created commit ' + NewSha);
-  If Assigned(MessageMemo) Then
-    MessageMemo.Clear;
-  MessageDlg('Committed ' + Copy(NewSha, 1, 7) + '.', mtInformation, [mbOK], 0);
-
-  If Assigned(PushCheckBox) And PushCheckBox.Checked Then
-    Begin
-      Screen.Cursor := crHourGlass;
-      Try
-        If GitClient.Push(Summary) Then
-          Begin
-            Screen.Cursor := crDefault;
-            MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
-          End
-        Else
-          Begin
-            Screen.Cursor := crDefault;
-            MessageDlg('Commit succeeded, but push failed:' + LineEnding + Summary.Message,
-              mtWarning, [mbOK], 0);
-          End;
-      Finally
-        Screen.Cursor := crDefault;
-      End;
-    End;
-
-  RefreshFilesList;
-  ManualRefresh;
+  FPushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
+  Job := TGitJob.Create(gjkCommit);
+  Job.RepoPath := FRepoPath;
+  Job.MessageText := Msg;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.RemotesActionExecute(Sender: TObject);
@@ -2582,26 +2763,27 @@ End;
 Procedure TManageRepositoryForm.CheckoutActionExecute(Sender: TObject);
 Var
   Sha: String;
+  Job: TGitJob;
 Begin
   Sha := SelectedSha;
-  If (Sha = '') Or Not Assigned(GitClient) Then
+  If (Sha = '') Or (FRepoPath = '') Or FJobBusy Then
     Exit;
   If MessageDlg('Check out commit ' + Copy(Sha, 1, 7) + '?' + LineEnding +
     'This may detach HEAD.', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  If GitClient.Checkout(Sha) Then
-    ManualRefresh
-  Else
-    MessageDlg('Checkout failed. See the log for details.', mtError, [mbOK], 0);
+  Job := TGitJob.Create(gjkCheckout);
+  Job.RepoPath := FRepoPath;
+  Job.RefName := Sha;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.CreateBranchActionExecute(Sender: TObject);
 Var
   Sha, BranchName: String;
+  Job: TGitJob;
 Begin
   Sha := SelectedSha;
-  If (Sha = '') Or Not Assigned(GitClient) Then
+  If (Sha = '') Or (FRepoPath = '') Or FJobBusy Then
     Exit;
   BranchName := '';
   If Not InputQuery('Create branch', 'Branch name:', BranchName) Then
@@ -2609,19 +2791,17 @@ Begin
   BranchName := Trim(BranchName);
   If BranchName = '' Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  If GitClient.CreateBranch(BranchName, Sha) Then
-    Begin
-      MessageDlg('Created branch "' + BranchName + '" at ' + Copy(Sha, 1, 7), mtInformation, [mbOK], 0);
-      ManualRefresh;
-    End
-  Else
-    MessageDlg('Create branch failed. See the log for details.', mtError, [mbOK], 0);
+  Job := TGitJob.Create(gjkCreateBranch);
+  Job.RepoPath := FRepoPath;
+  Job.MessageText := BranchName;
+  Job.RefName := Sha;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
-  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or Not Visible Then
+  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
+     Not Visible Then
     Exit;
   QuietRefreshIfChanged;
 End;
