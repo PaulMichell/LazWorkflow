@@ -16,74 +16,74 @@ Uses
 
 Type
   TProjectAssistantForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
-    FActionList: TActionList;
-    FNewChatAction: TAction;
-    FSendAction: TAction;
-    FSendButton: TButton;
-    FStopAction: TAction;
-    FReviewCompileAction: TAction;
-    FReviewBuildAction: TAction;
-    FFixErrorAction: TAction;
-    FSettingsAction: TAction;
-    FStopButton: TButton;
-    FToggleThinkingAction: TAction;
-    FExportHistoryAction: TAction;
-    FDeleteHistoryAction: TAction;
-    FModeBar: TPanel;
-    FModeGroup: TRadioGroup;
-    FModeBadge: TLabel;
-    FClientPanel: TPanel;
-    FModeSidePanel: TPanel;
-    FModeSplitter: TSplitter;
-    FChatSidePanel: TPanel;
-    FChatSideLabel: TLabel;
-    FConversationPanel: TPanel;
-    FHistoryLabel: TLabel;
-    FHistoryCombo: TComboBox;
-    FBtnExportHistory: TButton;
-    FBtnDeleteHistory: TButton;
-    FConversationLabel: TLabel;
-    FConversationSearch: TEdit;
-    FConversationList: TListBox;
-    FChatSplitter: TSplitter;
-    FChatHost: TPanel;
+    ActionList: TActionList;
+    NewChatAction: TAction;
+    SendAction: TAction;
+    SendButton: TButton;
+    StopAction: TAction;
+    ReviewCompileAction: TAction;
+    ReviewBuildAction: TAction;
+    FixErrorAction: TAction;
+    SettingsAction: TAction;
+    StopButton: TButton;
+    ToggleThinkingAction: TAction;
+    ExportHistoryAction: TAction;
+    DeleteHistoryAction: TAction;
+    ModeBar: TPanel;
+    ModeGroup: TRadioGroup;
+    ModeBadge: TLabel;
+    ClientPanel: TPanel;
+    ModeSidePanel: TPanel;
+    ModeSplitter: TSplitter;
+    ChatSidePanel: TPanel;
+    ChatSideLabel: TLabel;
+    ConversationPanel: TPanel;
+    HistoryLabel: TLabel;
+    HistoryCombo: TComboBox;
+    ExportHistoryButton: TButton;
+    DeleteHistoryButton: TButton;
+    ConversationLabel: TLabel;
+    ConversationSearch: TEdit;
+    ConversationList: TListBox;
+    ChatSplitter: TSplitter;
+    ChatHost: TPanel;
     { Plan workspace (runtime, left mode panel). }
-    FPlanPanel: TPanel;
-    FPlanActiveLabel: TLabel;
-    FPlanList: TListBox;
-    FPlanBtnNew: TButton;
-    FPlanBtnOpen: TButton;
-    FPlanBtnSetActive: TButton;
-    FPlanBtnRefresh: TButton;
-    FPlanBtnOpenDocs: TButton;
+    PlanPanel: TPanel;
+    PlanActiveLabel: TLabel;
+    PlanList: TListBox;
+    PlanNewButton: TButton;
+    PlanOpenButton: TButton;
+    PlanSetActiveButton: TButton;
+    PlanRefreshButton: TButton;
+    PlanOpenDocsButton: TButton;
     { Code TODO workspace (runtime, left mode panel). }
-    FCodePanel: TPanel;
-    FCodeActiveLabel: TLabel;
-    FCodeTodoList: TListBox;
-    FCodeBtnRefresh: TButton;
-    FCodeBtnOpenPlan: TButton;
-    FCodeBtnStart: TButton;
-    FCodeBtnDone: TButton;
-    FCodeBtnReset: TButton;
-    FCodeBtnWork: TButton;
-    FCodeBtnWorkPlan: TButton;
-    FCodeStatusLabel: TLabel;
-    FBottomBar: TPanel;
-    FBtnNewChat: TButton;
-    FBtnToggleThinking: TButton;
-    FBtnReviewCompile: TButton;
-    FBtnReviewBuild: TButton;
-    FBtnFixError: TButton;
-    FBtnSettings: TButton;
-    FAutoNewChatCheck: TCheckBox;
-    FStatusFooter: TStatusFooterFrame;
-    FInputPanel: TPanel;
-    FInputEdit: TMemo;
-    FInputPopup: TPopupMenu;
-    FInputCutItem: TMenuItem;
-    FInputCopyItem: TMenuItem;
-    FInputPasteItem: TMenuItem;
-    FInputSelectAllItem: TMenuItem;
+    CodePanel: TPanel;
+    CodeActiveLabel: TLabel;
+    CodeTodoList: TListBox;
+    CodeRefreshButton: TButton;
+    CodeOpenPlanButton: TButton;
+    CodeStartButton: TButton;
+    CodeDoneButton: TButton;
+    CodeResetButton: TButton;
+    CodeWorkButton: TButton;
+    CodeWorkPlanButton: TButton;
+    CodeStatusLabel: TLabel;
+    BottomBar: TPanel;
+    NewChatButton: TButton;
+    ToggleThinkingButton: TButton;
+    ReviewCompileButton: TButton;
+    ReviewBuildButton: TButton;
+    FixErrorButton: TButton;
+    SettingsButton: TButton;
+    AutoNewChatCheck: TCheckBox;
+    StatusFooter: TStatusFooterFrame;
+    InputPanel: TPanel;
+    InputMemo: TMemo;
+    InputPopup: TPopupMenu;
+    InputCutItem: TMenuItem;
+    InputCopyItem: TMenuItem;
+    InputPasteItem: TMenuItem;
+    InputSelectAllItem: TMenuItem;
     PromptSplitter: TSplitter;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
@@ -109,13 +109,13 @@ Type
     Procedure InputSelectAllClick(Sender: TObject);
     Procedure AutoNewChatCheckClick(Sender: TObject);
   Private
-    FElapsedTimer: TTimer;
-    FChatView: TControl; { TMarkDownControl created at runtime. }
-    FTranscript: TStringList; { Session export / legacy; not the main UI surface. }
+    ElapsedTimer: TTimer;
+    ChatView: TControl; { TMarkDownControl created at runtime. }
+    Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FShowThinking: Boolean;
-    FActiveMode: TAssistantMode;
+    ActiveMode: TAssistantMode;
     FModelName: String;
     FContextUsed: Integer;
     FContextLimit: Integer;
@@ -130,18 +130,18 @@ Type
     FLiveThinking: String;
     FViewingLive: Boolean; { True when chat pane follows the in-flight turn. }
     FReviewInProgress: Boolean;
-    FStreamStart: TDateTime;
+    StreamStart: TDateTime;
     FTurnStartedAt: String;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
-    FHistoryIds: TStringList; { Parallel to FHistoryCombo; '' = current conversation. }
+    HistoryIds: TStringList; { Parallel to HistoryCombo; '' = current conversation. }
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
     FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes mode. }
-    FCodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
+    CodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
     FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FCodeWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
     FCodeWorkSectionTitle: String;
@@ -186,11 +186,11 @@ Type
     Procedure ApplyShellConfigFromStore;
     Procedure EnsurePlanTabUi;
     Procedure RefreshPlanList;
-    Procedure PlanBtnNewClick(Sender: TObject);
-    Procedure PlanBtnOpenClick(Sender: TObject);
-    Procedure PlanBtnSetActiveClick(Sender: TObject);
-    Procedure PlanBtnRefreshClick(Sender: TObject);
-    Procedure PlanBtnOpenDocsClick(Sender: TObject);
+    Procedure PlanNewButtonClick(Sender: TObject);
+    Procedure PlanOpenButtonClick(Sender: TObject);
+    Procedure PlanSetActiveButtonClick(Sender: TObject);
+    Procedure PlanRefreshButtonClick(Sender: TObject);
+    Procedure PlanOpenDocsButtonClick(Sender: TObject);
     Procedure PlanListDblClick(Sender: TObject);
     Function SelectedPlanRelativePath: String;
     Procedure EnsureCodeTabUi;
@@ -203,13 +203,13 @@ Type
     Procedure TryAutoCompleteCodeWork(Const StreamErrorText: String);
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
-    Procedure CodeBtnRefreshClick(Sender: TObject);
-    Procedure CodeBtnOpenPlanClick(Sender: TObject);
-    Procedure CodeBtnStartClick(Sender: TObject);
-    Procedure CodeBtnDoneClick(Sender: TObject);
-    Procedure CodeBtnResetClick(Sender: TObject);
-    Procedure CodeBtnWorkClick(Sender: TObject);
-    Procedure CodeBtnWorkPlanClick(Sender: TObject);
+    Procedure CodeRefreshButtonClick(Sender: TObject);
+    Procedure CodeOpenPlanButtonClick(Sender: TObject);
+    Procedure CodeStartButtonClick(Sender: TObject);
+    Procedure CodeDoneButtonClick(Sender: TObject);
+    Procedure CodeResetButtonClick(Sender: TObject);
+    Procedure CodeWorkButtonClick(Sender: TObject);
+    Procedure CodeWorkPlanButtonClick(Sender: TObject);
     Procedure CodeWorkOnSelectedPackage;
     Procedure StartWorkOnPlanAgent;
     Procedure StopWorkOnPlanAgent(Const Reason: String);
@@ -319,22 +319,22 @@ Begin
   FDisplayUser := '';
   FDisplaySystemNote := '';
   FShowThinking := True;
-  FActiveMode := amChat;
+  ActiveMode := amChat;
   FApplyingShellConfig := False;
   FModeLocked := False;
   FModeSticky := False;
   FReviewInProgress := False;
-  FStreamStart := 0;
+  StreamStart := 0;
   FTurnStartedAt := '';
   FStatusPhase := '';
   FLastChatPaintTick := 0;
   FSessionProjectKey := '';
-  FChatView := Nil;
+  ChatView := Nil;
   FHistoryUpdating := False;
-  FHistoryIds := TStringList.Create;
-  FTranscript := TStringList.Create;
-  FCodeSections := TObjectList.Create(True);
-  FCodePanel := Nil;
+  HistoryIds := TStringList.Create;
+  Transcript := TStringList.Create;
+  CodeSections := TObjectList.Create(True);
+  CodePanel := Nil;
   FCodeSelectedIndex := -1;
   FCodeWorkSectionIndex := -1;
   FCodeWorkSectionTitle := '';
@@ -356,9 +356,9 @@ Begin
     AssistantClient.CancelStream;
   PersistSession;
   WorkflowEventBus.RemoveListener(Self);
-  FreeAndNil(FTranscript);
-  FreeAndNil(FHistoryIds);
-  FreeAndNil(FCodeSections);
+  FreeAndNil(Transcript);
+  FreeAndNil(HistoryIds);
+  FreeAndNil(CodeSections);
   Inherited Destroy;
 End;
 
@@ -371,12 +371,12 @@ Begin
   EnsureCodeTabUi;
   UpdateThinkingActionCaption;
   SyncAutoNewChatCheckFromConfig;
-  If Not Assigned(FElapsedTimer) Then
+  If Not Assigned(ElapsedTimer) Then
     Begin
-      FElapsedTimer := TTimer.Create(Self);
-      FElapsedTimer.Enabled := False;
-      FElapsedTimer.Interval := 250;
-      FElapsedTimer.OnTimer := @ElapsedTimerTimer;
+      ElapsedTimer := TTimer.Create(Self);
+      ElapsedTimer.Enabled := False;
+      ElapsedTimer.Interval := 250;
+      ElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
   BindToActiveProject;
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
@@ -384,8 +384,8 @@ End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
-  If Assigned(FElapsedTimer) Then
-    FElapsedTimer.Enabled := False;
+  If Assigned(ElapsedTimer) Then
+    ElapsedTimer.Enabled := False;
   SetBusyCursor(False);
   { Persist OAuth tokens once on close (not on every prompt). }
   If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
@@ -398,12 +398,12 @@ End;
 
 Procedure TProjectAssistantForm.UpdateThinkingActionCaption;
 Begin
-  If Not Assigned(FToggleThinkingAction) Then
+  If Not Assigned(ToggleThinkingAction) Then
     Exit;
   If FShowThinking Then
-    FToggleThinkingAction.Caption := 'Hide Thinking'
+    ToggleThinkingAction.Caption := 'Hide Thinking'
   Else
-    FToggleThinkingAction.Caption := 'Show Thinking';
+    ToggleThinkingAction.Caption := 'Show Thinking';
 End;
 
 Procedure TProjectAssistantForm.ClearCurrentTurnDisplay;
@@ -448,9 +448,9 @@ End;
 Function TProjectAssistantForm.CurrentModeFromUi: TAssistantMode;
 Begin
   Result := amChat;
-  If Not Assigned(FModeGroup) Then
+  If Not Assigned(ModeGroup) Then
     Exit;
-  Case FModeGroup.ItemIndex Of
+  Case ModeGroup.ItemIndex Of
     1: Result := amPlan;
     2: Result := amCode;
   Else
@@ -460,7 +460,7 @@ End;
 
 Procedure TProjectAssistantForm.SelectMode(Mode: TAssistantMode);
 Begin
-  FActiveMode := Mode;
+  ActiveMode := Mode;
   FModeSticky := False;
   SyncModeUi;
   ApplyActiveMode;
@@ -472,14 +472,14 @@ Var
 Begin
   FApplyingShellConfig := True;
   Try
-    Case FActiveMode Of
+    Case ActiveMode Of
       amPlan: Wanted := 1;
       amCode: Wanted := 2;
     Else
       Wanted := 0;
     End;
-    If Assigned(FModeGroup) And (FModeGroup.ItemIndex <> Wanted) Then
-      FModeGroup.ItemIndex := Wanted;
+    If Assigned(ModeGroup) And (ModeGroup.ItemIndex <> Wanted) Then
+      ModeGroup.ItemIndex := Wanted;
   Finally
     FApplyingShellConfig := False;
   End;
@@ -491,36 +491,36 @@ Procedure TProjectAssistantForm.UpdateModeBadge;
 Var
   ToolsHint: String;
 Begin
-  Case FActiveMode Of
+  Case ActiveMode Of
     amPlan: ToolsHint := 'write plan Markdown';
     amCode: ToolsHint := 'edit sources · compile';
   Else
     ToolsHint := 'read-only tools';
   End;
-  If Assigned(FModeBadge) Then
+  If Assigned(ModeBadge) Then
     Begin
       If FModeLocked Or FSending Then
-        FModeBadge.Caption := Format('Mode: %s · %s · (reply in progress)',
-          [AssistantModeToStr(FActiveMode), ToolsHint])
+        ModeBadge.Caption := Format('Mode: %s · %s · (reply in progress)',
+          [AssistantModeToStr(ActiveMode), ToolsHint])
       Else If FModeSticky Then
-        FModeBadge.Caption := Format('Mode: %s · %s · (sticky until you change mode)',
-          [AssistantModeToStr(FActiveMode), ToolsHint])
+        ModeBadge.Caption := Format('Mode: %s · %s · (sticky until you change mode)',
+          [AssistantModeToStr(ActiveMode), ToolsHint])
       Else
-        FModeBadge.Caption := Format('Mode: %s · %s',
-          [AssistantModeToStr(FActiveMode), ToolsHint]);
+        ModeBadge.Caption := Format('Mode: %s · %s',
+          [AssistantModeToStr(ActiveMode), ToolsHint]);
     End;
-  If Assigned(FModeGroup) Then
-    FModeGroup.Enabled := Not (FSending Or FModeLocked);
+  If Assigned(ModeGroup) Then
+    ModeGroup.Enabled := Not (FSending Or FModeLocked);
 End;
 
 Procedure TProjectAssistantForm.UpdateModeSidePanels;
 Begin
-  If Assigned(FChatSidePanel) Then
-    FChatSidePanel.Visible := FActiveMode = amChat;
-  If Assigned(FPlanPanel) Then
-    FPlanPanel.Visible := FActiveMode = amPlan;
-  If Assigned(FCodePanel) Then
-    FCodePanel.Visible := FActiveMode = amCode;
+  If Assigned(ChatSidePanel) Then
+    ChatSidePanel.Visible := ActiveMode = amChat;
+  If Assigned(PlanPanel) Then
+    PlanPanel.Visible := ActiveMode = amPlan;
+  If Assigned(CodePanel) Then
+    CodePanel.Visible := ActiveMode = amCode;
 End;
 
 Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
@@ -528,26 +528,26 @@ Begin
   { Shared turn view is always visible; keep mode UI in sync without tab swaps. }
   SyncModeUi;
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(FActiveMode);
+    AssistantClient.SetActiveMode(ActiveMode);
 End;
 
 Procedure TProjectAssistantForm.LockModeForSend;
 Begin
   { Capture mode from the mode control, then freeze it for the turn. }
-  FActiveMode := CurrentModeFromUi;
+  ActiveMode := CurrentModeFromUi;
   FModeLocked := True;
-  FModeSticky := FActiveMode In [amPlan, amCode];
+  FModeSticky := ActiveMode In [amPlan, amCode];
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(FActiveMode);
+    AssistantClient.SetActiveMode(ActiveMode);
   UpdateModeBadge;
   WorkflowLogger.Info('ProjectAssistant',
-    'Mode locked for send: ' + AssistantModeToStr(FActiveMode));
+    'Mode locked for send: ' + AssistantModeToStr(ActiveMode));
 End;
 
 Procedure TProjectAssistantForm.ForceModeAndLock(Mode: TAssistantMode);
 Begin
   { Enter a specific mode for this turn (e.g. Fix Error / Work-on-this → Code). }
-  FActiveMode := Mode;
+  ActiveMode := Mode;
   FModeLocked := True;
   FModeSticky := Mode In [amPlan, amCode];
   If Assigned(AssistantClient) Then
@@ -562,7 +562,7 @@ Begin
   FModeLocked := False;
   { FModeSticky keeps Plan/Code tools until the user picks another mode. }
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(FActiveMode);
+    AssistantClient.SetActiveMode(ActiveMode);
   UpdateModeBadge;
 End;
 
@@ -584,7 +584,7 @@ Var
   NeedWrite: Boolean;
 Begin
   { Safety net: if Plan mode completed without write_markdown, save chat plan body. }
-  If FActiveMode <> amPlan Then
+  If ActiveMode <> amPlan Then
     Exit;
   If ErrorText <> '' Then
     Exit;
@@ -624,7 +624,7 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshPlanList;
-  If Assigned(FCodePanel) Then
+  If Assigned(CodePanel) Then
     RefreshCodeTodos;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
@@ -634,32 +634,32 @@ End;
 
 Procedure TProjectAssistantForm.ApplyActiveMode;
 Begin
-  { When mode is locked or sticky, keep FActiveMode; otherwise follow the mode control. }
+  { When mode is locked or sticky, keep ActiveMode; otherwise follow the mode control. }
   If (Not FModeLocked) And (Not FModeSticky) Then
-    FActiveMode := CurrentModeFromUi;
+    ActiveMode := CurrentModeFromUi;
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(FActiveMode);
+    AssistantClient.SetActiveMode(ActiveMode);
   { Fix Error always switches into Code tools, so keep it available in every mode. }
-  FFixErrorAction.Enabled := Not FSending;
-  Case FActiveMode Of
+  FixErrorAction.Enabled := Not FSending;
+  Case ActiveMode Of
     amPlan:
       Begin
-        FReviewCompileAction.Enabled := False;
-        FReviewBuildAction.Enabled := False;
+        ReviewCompileAction.Enabled := False;
+        ReviewBuildAction.Enabled := False;
         EnsurePlanTabUi;
         RefreshPlanList;
       End;
     amCode:
       Begin
-        FReviewCompileAction.Enabled := Not FSending;
-        FReviewBuildAction.Enabled := Not FSending;
+        ReviewCompileAction.Enabled := Not FSending;
+        ReviewBuildAction.Enabled := Not FSending;
         EnsureCodeTabUi;
         RefreshCodeTodos;
       End;
   Else
     Begin
-      FReviewCompileAction.Enabled := Not FSending;
-      FReviewBuildAction.Enabled := Not FSending;
+      ReviewCompileAction.Enabled := Not FSending;
+      ReviewBuildAction.Enabled := Not FSending;
     End;
   End;
   SyncModeUi;
@@ -671,7 +671,7 @@ Begin
     Exit;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
-  If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, FActiveMode,
+  If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, ActiveMode,
     GetActivePlanRelativePath) Then
     WorkflowLogger.Warning('ProjectAssistant',
       'config.json save failed: ' + ProjectAssistantConversation.LastError);
@@ -698,24 +698,24 @@ Procedure TProjectAssistantForm.EnsurePlanTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(FPlanPanel) Or (Not Assigned(FModeSidePanel)) Then
+  If Assigned(PlanPanel) Or (Not Assigned(ModeSidePanel)) Then
     Exit;
 
-  FPlanPanel := TPanel.Create(Self);
-  FPlanPanel.Parent := FModeSidePanel;
-  FPlanPanel.Align := alClient;
-  FPlanPanel.BevelOuter := bvNone;
-  FPlanPanel.BorderSpacing.Around := 8;
-  FPlanPanel.Visible := FActiveMode = amPlan;
+  PlanPanel := TPanel.Create(Self);
+  PlanPanel.Parent := ModeSidePanel;
+  PlanPanel.Align := alClient;
+  PlanPanel.BevelOuter := bvNone;
+  PlanPanel.BorderSpacing.Around := 8;
+  PlanPanel.Visible := ActiveMode = amPlan;
 
-  FPlanActiveLabel := TLabel.Create(Self);
-  FPlanActiveLabel.Parent := FPlanPanel;
-  FPlanActiveLabel.Align := alTop;
-  FPlanActiveLabel.Caption := 'Active plan: (none)';
-  FPlanActiveLabel.BorderSpacing.Bottom := 6;
+  PlanActiveLabel := TLabel.Create(Self);
+  PlanActiveLabel.Parent := PlanPanel;
+  PlanActiveLabel.Align := alTop;
+  PlanActiveLabel.Caption := 'Active plan: (none)';
+  PlanActiveLabel.BorderSpacing.Bottom := 6;
 
   Bar := TPanel.Create(Self);
-  Bar.Parent := FPlanPanel;
+  Bar.Parent := PlanPanel;
   Bar.Align := alTop;
   Bar.Height := 36;
   Bar.BevelOuter := bvNone;
@@ -726,50 +726,50 @@ Begin
   Bar.ChildSizing.TopBottomSpacing := 2;
   Bar.BorderSpacing.Bottom := 6;
 
-  FPlanBtnNew := TButton.Create(Self);
-  FPlanBtnNew.Parent := Bar;
-  FPlanBtnNew.Caption := 'New plan…';
-  FPlanBtnNew.AutoSize := True;
-  FPlanBtnNew.OnClick := @PlanBtnNewClick;
+  PlanNewButton := TButton.Create(Self);
+  PlanNewButton.Parent := Bar;
+  PlanNewButton.Caption := 'New plan…';
+  PlanNewButton.AutoSize := True;
+  PlanNewButton.OnClick := @PlanNewButtonClick;
 
-  FPlanBtnOpen := TButton.Create(Self);
-  FPlanBtnOpen.Parent := Bar;
-  FPlanBtnOpen.Caption := 'Open';
-  FPlanBtnOpen.AutoSize := True;
-  FPlanBtnOpen.OnClick := @PlanBtnOpenClick;
+  PlanOpenButton := TButton.Create(Self);
+  PlanOpenButton.Parent := Bar;
+  PlanOpenButton.Caption := 'Open';
+  PlanOpenButton.AutoSize := True;
+  PlanOpenButton.OnClick := @PlanOpenButtonClick;
 
-  FPlanBtnSetActive := TButton.Create(Self);
-  FPlanBtnSetActive.Parent := Bar;
-  FPlanBtnSetActive.Caption := 'Set active';
-  FPlanBtnSetActive.AutoSize := True;
-  FPlanBtnSetActive.OnClick := @PlanBtnSetActiveClick;
+  PlanSetActiveButton := TButton.Create(Self);
+  PlanSetActiveButton.Parent := Bar;
+  PlanSetActiveButton.Caption := 'Set active';
+  PlanSetActiveButton.AutoSize := True;
+  PlanSetActiveButton.OnClick := @PlanSetActiveButtonClick;
 
-  FPlanBtnRefresh := TButton.Create(Self);
-  FPlanBtnRefresh.Parent := Bar;
-  FPlanBtnRefresh.Caption := 'Refresh';
-  FPlanBtnRefresh.AutoSize := True;
-  FPlanBtnRefresh.OnClick := @PlanBtnRefreshClick;
+  PlanRefreshButton := TButton.Create(Self);
+  PlanRefreshButton.Parent := Bar;
+  PlanRefreshButton.Caption := 'Refresh';
+  PlanRefreshButton.AutoSize := True;
+  PlanRefreshButton.OnClick := @PlanRefreshButtonClick;
 
-  FPlanBtnOpenDocs := TButton.Create(Self);
-  FPlanBtnOpenDocs.Parent := Bar;
-  FPlanBtnOpenDocs.Caption := 'Open Documents/';
-  FPlanBtnOpenDocs.AutoSize := True;
-  FPlanBtnOpenDocs.OnClick := @PlanBtnOpenDocsClick;
+  PlanOpenDocsButton := TButton.Create(Self);
+  PlanOpenDocsButton.Parent := Bar;
+  PlanOpenDocsButton.Caption := 'Open Documents/';
+  PlanOpenDocsButton.AutoSize := True;
+  PlanOpenDocsButton.OnClick := @PlanOpenDocsButtonClick;
 
-  FPlanList := TListBox.Create(Self);
-  FPlanList.Parent := FPlanPanel;
-  FPlanList.Align := alClient;
-  FPlanList.OnDblClick := @PlanListDblClick;
+  PlanList := TListBox.Create(Self);
+  PlanList.Parent := PlanPanel;
+  PlanList.Align := alClient;
+  PlanList.OnDblClick := @PlanListDblClick;
 End;
 
 Function TProjectAssistantForm.SelectedPlanRelativePath: String;
 Begin
   Result := '';
-  If Not Assigned(FPlanList) Then
+  If Not Assigned(PlanList) Then
     Exit;
-  If (FPlanList.ItemIndex < 0) Or (FPlanList.ItemIndex >= FPlanList.Items.Count) Then
+  If (PlanList.ItemIndex < 0) Or (PlanList.ItemIndex >= PlanList.Items.Count) Then
     Exit;
-  Result := FPlanList.Items[FPlanList.ItemIndex];
+  Result := PlanList.Items[PlanList.ItemIndex];
 End;
 
 Procedure TProjectAssistantForm.RefreshPlanList;
@@ -779,43 +779,43 @@ Var
   I, Sel: Integer;
   ActivePlan: String;
 Begin
-  If Not Assigned(FPlanList) Then
+  If Not Assigned(PlanList) Then
     Exit;
   ActivePlan := GetActivePlanRelativePath;
-  If Assigned(FPlanActiveLabel) Then
+  If Assigned(PlanActiveLabel) Then
     If ActivePlan = '' Then
-      FPlanActiveLabel.Caption := 'Active plan: (none) — create one under Documents/ or Set active'
+      PlanActiveLabel.Caption := 'Active plan: (none) — create one under Documents/ or Set active'
     Else
-      FPlanActiveLabel.Caption := 'Active plan: ' + ActivePlan;
+      PlanActiveLabel.Caption := 'Active plan: ' + ActivePlan;
 
   Paths := Nil;
   Sel := -1;
-  FPlanList.Items.BeginUpdate;
+  PlanList.Items.BeginUpdate;
   Try
-    FPlanList.Items.Clear;
+    PlanList.Items.Clear;
     If Not ListProjectMarkdownPlans(Paths, Err) Then
       Begin
         If Err <> '' Then
-          FPlanList.Items.Add('(' + Err + ')');
+          PlanList.Items.Add('(' + Err + ')');
         Exit;
       End;
     For I := 0 To Paths.Count - 1 Do
       Begin
-        FPlanList.Items.Add(Paths[I]);
+        PlanList.Items.Add(Paths[I]);
         If SameText(Paths[I], ActivePlan) Then
           Sel := I;
       End;
     If Sel >= 0 Then
-      FPlanList.ItemIndex := Sel
-    Else If FPlanList.Items.Count > 0 Then
-      FPlanList.ItemIndex := 0;
+      PlanList.ItemIndex := Sel
+    Else If PlanList.Items.Count > 0 Then
+      PlanList.ItemIndex := 0;
   Finally
-    FPlanList.Items.EndUpdate;
+    PlanList.Items.EndUpdate;
     Paths.Free;
   End;
 End;
 
-Procedure TProjectAssistantForm.PlanBtnNewClick(Sender: TObject);
+Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
 Var
   Title, Rel, Resolved, Err, Content: String;
 Begin
@@ -842,7 +842,7 @@ Begin
     '**. Stay in **Plan** mode and send a message to refine it with the model.');
 End;
 
-Procedure TProjectAssistantForm.PlanBtnOpenClick(Sender: TObject);
+Procedure TProjectAssistantForm.PlanOpenButtonClick(Sender: TObject);
 Var
   Rel, Resolved, Err: String;
 Begin
@@ -867,7 +867,7 @@ Begin
   OpenMarkdownDocument(Resolved);
 End;
 
-Procedure TProjectAssistantForm.PlanBtnSetActiveClick(Sender: TObject);
+Procedure TProjectAssistantForm.PlanSetActiveButtonClick(Sender: TObject);
 Var
   Rel, Resolved, Err: String;
 Begin
@@ -892,12 +892,12 @@ Begin
   RefreshPlanList;
 End;
 
-Procedure TProjectAssistantForm.PlanBtnRefreshClick(Sender: TObject);
+Procedure TProjectAssistantForm.PlanRefreshButtonClick(Sender: TObject);
 Begin
   RefreshPlanList;
 End;
 
-Procedure TProjectAssistantForm.PlanBtnOpenDocsClick(Sender: TObject);
+Procedure TProjectAssistantForm.PlanOpenDocsButtonClick(Sender: TObject);
 Var
   Err, Dir: String;
 Begin
@@ -913,32 +913,32 @@ End;
 
 Procedure TProjectAssistantForm.PlanListDblClick(Sender: TObject);
 Begin
-  PlanBtnOpenClick(Sender);
+  PlanOpenButtonClick(Sender);
 End;
 
 Procedure TProjectAssistantForm.EnsureCodeTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(FCodePanel) Or (Not Assigned(FModeSidePanel)) Then
+  If Assigned(CodePanel) Or (Not Assigned(ModeSidePanel)) Then
     Exit;
 
-  FCodePanel := TPanel.Create(Self);
-  FCodePanel.Parent := FModeSidePanel;
-  FCodePanel.Align := alClient;
-  FCodePanel.BevelOuter := bvNone;
-  FCodePanel.BorderSpacing.Around := 8;
-  FCodePanel.Visible := FActiveMode = amCode;
+  CodePanel := TPanel.Create(Self);
+  CodePanel.Parent := ModeSidePanel;
+  CodePanel.Align := alClient;
+  CodePanel.BevelOuter := bvNone;
+  CodePanel.BorderSpacing.Around := 8;
+  CodePanel.Visible := ActiveMode = amCode;
 
-  FCodeActiveLabel := TLabel.Create(Self);
-  FCodeActiveLabel.Parent := FCodePanel;
-  FCodeActiveLabel.Align := alTop;
-  FCodeActiveLabel.Caption := 'Active plan: (none)';
-  FCodeActiveLabel.WordWrap := True;
-  FCodeActiveLabel.BorderSpacing.Bottom := 6;
+  CodeActiveLabel := TLabel.Create(Self);
+  CodeActiveLabel.Parent := CodePanel;
+  CodeActiveLabel.Align := alTop;
+  CodeActiveLabel.Caption := 'Active plan: (none)';
+  CodeActiveLabel.WordWrap := True;
+  CodeActiveLabel.BorderSpacing.Bottom := 6;
 
   Bar := TPanel.Create(Self);
-  Bar.Parent := FCodePanel;
+  Bar.Parent := CodePanel;
   Bar.Align := alTop;
   Bar.Height := 36;
   Bar.BevelOuter := bvNone;
@@ -949,63 +949,63 @@ Begin
   Bar.ChildSizing.TopBottomSpacing := 2;
   Bar.BorderSpacing.Bottom := 6;
 
-  FCodeBtnRefresh := TButton.Create(Self);
-  FCodeBtnRefresh.Parent := Bar;
-  FCodeBtnRefresh.Caption := 'Refresh';
-  FCodeBtnRefresh.AutoSize := True;
-  FCodeBtnRefresh.OnClick := @CodeBtnRefreshClick;
+  CodeRefreshButton := TButton.Create(Self);
+  CodeRefreshButton.Parent := Bar;
+  CodeRefreshButton.Caption := 'Refresh';
+  CodeRefreshButton.AutoSize := True;
+  CodeRefreshButton.OnClick := @CodeRefreshButtonClick;
 
-  FCodeBtnOpenPlan := TButton.Create(Self);
-  FCodeBtnOpenPlan.Parent := Bar;
-  FCodeBtnOpenPlan.Caption := 'Open plan';
-  FCodeBtnOpenPlan.AutoSize := True;
-  FCodeBtnOpenPlan.OnClick := @CodeBtnOpenPlanClick;
+  CodeOpenPlanButton := TButton.Create(Self);
+  CodeOpenPlanButton.Parent := Bar;
+  CodeOpenPlanButton.Caption := 'Open plan';
+  CodeOpenPlanButton.AutoSize := True;
+  CodeOpenPlanButton.OnClick := @CodeOpenPlanButtonClick;
 
-  FCodeBtnStart := TButton.Create(Self);
-  FCodeBtnStart.Parent := Bar;
-  FCodeBtnStart.Caption := 'Start';
-  FCodeBtnStart.AutoSize := True;
-  FCodeBtnStart.OnClick := @CodeBtnStartClick;
+  CodeStartButton := TButton.Create(Self);
+  CodeStartButton.Parent := Bar;
+  CodeStartButton.Caption := 'Start';
+  CodeStartButton.AutoSize := True;
+  CodeStartButton.OnClick := @CodeStartButtonClick;
 
-  FCodeBtnDone := TButton.Create(Self);
-  FCodeBtnDone.Parent := Bar;
-  FCodeBtnDone.Caption := 'Done';
-  FCodeBtnDone.AutoSize := True;
-  FCodeBtnDone.OnClick := @CodeBtnDoneClick;
+  CodeDoneButton := TButton.Create(Self);
+  CodeDoneButton.Parent := Bar;
+  CodeDoneButton.Caption := 'Done';
+  CodeDoneButton.AutoSize := True;
+  CodeDoneButton.OnClick := @CodeDoneButtonClick;
 
-  FCodeBtnReset := TButton.Create(Self);
-  FCodeBtnReset.Parent := Bar;
-  FCodeBtnReset.Caption := 'Reset';
-  FCodeBtnReset.AutoSize := True;
-  FCodeBtnReset.OnClick := @CodeBtnResetClick;
+  CodeResetButton := TButton.Create(Self);
+  CodeResetButton.Parent := Bar;
+  CodeResetButton.Caption := 'Reset';
+  CodeResetButton.AutoSize := True;
+  CodeResetButton.OnClick := @CodeResetButtonClick;
 
-  FCodeBtnWork := TButton.Create(Self);
-  FCodeBtnWork.Parent := Bar;
-  FCodeBtnWork.Caption := 'Work on this';
-  FCodeBtnWork.AutoSize := True;
-  FCodeBtnWork.OnClick := @CodeBtnWorkClick;
+  CodeWorkButton := TButton.Create(Self);
+  CodeWorkButton.Parent := Bar;
+  CodeWorkButton.Caption := 'Work on this';
+  CodeWorkButton.AutoSize := True;
+  CodeWorkButton.OnClick := @CodeWorkButtonClick;
 
-  FCodeBtnWorkPlan := TButton.Create(Self);
-  FCodeBtnWorkPlan.Parent := Bar;
-  FCodeBtnWorkPlan.Caption := 'Work on plan';
-  FCodeBtnWorkPlan.AutoSize := True;
-  FCodeBtnWorkPlan.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
-  FCodeBtnWorkPlan.ShowHint := True;
-  FCodeBtnWorkPlan.OnClick := @CodeBtnWorkPlanClick;
+  CodeWorkPlanButton := TButton.Create(Self);
+  CodeWorkPlanButton.Parent := Bar;
+  CodeWorkPlanButton.Caption := 'Work on plan';
+  CodeWorkPlanButton.AutoSize := True;
+  CodeWorkPlanButton.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
+  CodeWorkPlanButton.ShowHint := True;
+  CodeWorkPlanButton.OnClick := @CodeWorkPlanButtonClick;
 
-  FCodeStatusLabel := TLabel.Create(Self);
-  FCodeStatusLabel.Parent := FCodePanel;
-  FCodeStatusLabel.Align := alBottom;
-  FCodeStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
-  FCodeStatusLabel.WordWrap := True;
-  FCodeStatusLabel.BorderSpacing.Top := 6;
+  CodeStatusLabel := TLabel.Create(Self);
+  CodeStatusLabel.Parent := CodePanel;
+  CodeStatusLabel.Align := alBottom;
+  CodeStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
+  CodeStatusLabel.WordWrap := True;
+  CodeStatusLabel.BorderSpacing.Top := 6;
 
-  FCodeTodoList := TListBox.Create(Self);
-  FCodeTodoList.Parent := FCodePanel;
-  FCodeTodoList.Align := alClient;
-  FCodeTodoList.OnClick := @CodeTodoListClick;
-  FCodeTodoList.OnDblClick := @CodeTodoListDblClick;
-  FCodeTodoList.OnSelectionChange := @CodeTodoListSelectionChange;
+  CodeTodoList := TListBox.Create(Self);
+  CodeTodoList.Parent := CodePanel;
+  CodeTodoList.Align := alClient;
+  CodeTodoList.OnClick := @CodeTodoListClick;
+  CodeTodoList.OnDblClick := @CodeTodoListDblClick;
+  CodeTodoList.OnSelectionChange := @CodeTodoListSelectionChange;
 End;
 
 Procedure TProjectAssistantForm.RefreshCodeTodos;
@@ -1015,48 +1015,48 @@ Var
   Section: TPlanSection;
   NotStarted, InProgress, Complete: Integer;
 Begin
-  If Not Assigned(FCodeTodoList) Then
+  If Not Assigned(CodeTodoList) Then
     Exit;
   PlanRel := GetActivePlanRelativePath;
-  If Assigned(FCodeActiveLabel) Then
+  If Assigned(CodeActiveLabel) Then
     If PlanRel = '' Then
-      FCodeActiveLabel.Caption :=
+      CodeActiveLabel.Caption :=
         'Active plan: (none) — set one on the Plan tab, then Refresh.'
     Else
-      FCodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
+      CodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
         '  ·  TODO tiles are scanned from ## headings + Status: lines.';
 
   Keep := FCodeSelectedIndex;
-  If (Keep < 0) And Assigned(FCodeTodoList) Then
-    Keep := FCodeTodoList.ItemIndex;
-  FCodeTodoList.Items.BeginUpdate;
+  If (Keep < 0) And Assigned(CodeTodoList) Then
+    Keep := CodeTodoList.ItemIndex;
+  CodeTodoList.Items.BeginUpdate;
   Try
-    FCodeTodoList.Items.Clear;
-    If Assigned(FCodeSections) Then
-      FCodeSections.Clear;
+    CodeTodoList.Items.Clear;
+    If Assigned(CodeSections) Then
+      CodeSections.Clear;
     If PlanRel = '' Then
       Begin
-        FCodeTodoList.Items.Add('(No active plan — open the Plan tab and Set active.)');
+        CodeTodoList.Items.Add('(No active plan — open the Plan tab and Set active.)');
         Exit;
       End;
-    If Not ScanPlanSections(PlanRel, FCodeSections, Err) Then
+    If Not ScanPlanSections(PlanRel, CodeSections, Err) Then
       Begin
-        FCodeTodoList.Items.Add('(' + Err + ')');
+        CodeTodoList.Items.Add('(' + Err + ')');
         Exit;
       End;
-    If FCodeSections.Count = 0 Then
+    If CodeSections.Count = 0 Then
       Begin
-        FCodeTodoList.Items.Add(
+        CodeTodoList.Items.Add(
           '(No ## sections found. Add work packages with Status: not started | in progress | complete.)');
         Exit;
       End;
     NotStarted := 0;
     InProgress := 0;
     Complete := 0;
-    For I := 0 To FCodeSections.Count - 1 Do
+    For I := 0 To CodeSections.Count - 1 Do
       Begin
-        Section := TPlanSection(FCodeSections[I]);
-        FCodeTodoList.Items.Add(FormatPlanSectionTile(Section, I));
+        Section := TPlanSection(CodeSections[I]);
+        CodeTodoList.Items.Add(FormatPlanSectionTile(Section, I));
         Case Section.Status Of
           pssNotStarted: Inc(NotStarted);
           pssInProgress: Inc(InProgress);
@@ -1065,55 +1065,55 @@ Begin
           { }
         End;
       End;
-    If Assigned(FCodeActiveLabel) And (PlanRel <> '') Then
-      FCodeActiveLabel.Caption := Format(
+    If Assigned(CodeActiveLabel) And (PlanRel <> '') Then
+      CodeActiveLabel.Caption := Format(
         'Active plan: %s  ·  %d not started · %d in progress · %d complete',
         [PlanRel, NotStarted, InProgress, Complete]);
-    If (Keep >= 0) And (Keep < FCodeTodoList.Items.Count) Then
-      FCodeTodoList.ItemIndex := Keep
+    If (Keep >= 0) And (Keep < CodeTodoList.Items.Count) Then
+      CodeTodoList.ItemIndex := Keep
     Else
       Begin
         { Prefer first in-progress, else first not-started. }
-        FCodeTodoList.ItemIndex := 0;
-        For I := 0 To FCodeSections.Count - 1 Do
-          If TPlanSection(FCodeSections[I]).Status = pssInProgress Then
+        CodeTodoList.ItemIndex := 0;
+        For I := 0 To CodeSections.Count - 1 Do
+          If TPlanSection(CodeSections[I]).Status = pssInProgress Then
             Begin
-              FCodeTodoList.ItemIndex := I;
+              CodeTodoList.ItemIndex := I;
               Break;
             End;
-        If (FCodeTodoList.ItemIndex = 0) And (FCodeSections.Count > 0) And
-          (TPlanSection(FCodeSections[0]).Status <> pssInProgress) Then
-          For I := 0 To FCodeSections.Count - 1 Do
-            If TPlanSection(FCodeSections[I]).Status = pssNotStarted Then
+        If (CodeTodoList.ItemIndex = 0) And (CodeSections.Count > 0) And
+          (TPlanSection(CodeSections[0]).Status <> pssInProgress) Then
+          For I := 0 To CodeSections.Count - 1 Do
+            If TPlanSection(CodeSections[I]).Status = pssNotStarted Then
               Begin
-                FCodeTodoList.ItemIndex := I;
+                CodeTodoList.ItemIndex := I;
                 Break;
               End;
       End;
-    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
+    FCodeSelectedIndex := CodeTodoList.ItemIndex;
   Finally
-    FCodeTodoList.Items.EndUpdate;
+    CodeTodoList.Items.EndUpdate;
   End;
 End;
 
 Function TProjectAssistantForm.SelectedCodeSectionIndex: Integer;
 Begin
   Result := -1;
-  If Not Assigned(FCodeSections) Or (FCodeSections.Count = 0) Then
+  If Not Assigned(CodeSections) Or (CodeSections.Count = 0) Then
     Exit;
   { Prefer the remembered index: button clicks often clear ListBox.ItemIndex on GTK. }
-  If (FCodeSelectedIndex >= 0) And (FCodeSelectedIndex < FCodeSections.Count) Then
+  If (FCodeSelectedIndex >= 0) And (FCodeSelectedIndex < CodeSections.Count) Then
     Result := FCodeSelectedIndex
-  Else If Assigned(FCodeTodoList) And (FCodeTodoList.ItemIndex >= 0) And
-    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
-    Result := FCodeTodoList.ItemIndex;
+  Else If Assigned(CodeTodoList) And (CodeTodoList.ItemIndex >= 0) And
+    (CodeTodoList.ItemIndex < CodeSections.Count) Then
+    Result := CodeTodoList.ItemIndex;
 End;
 
 Procedure TProjectAssistantForm.SetCodeStatusFeedback(Const MessageText: String);
 Begin
-  If Assigned(FCodeStatusLabel) Then
-    FCodeStatusLabel.Caption := MessageText;
-  FStatusFooter.SetRightText(MessageText);
+  If Assigned(CodeStatusLabel) Then
+    CodeStatusLabel.Caption := MessageText;
+  StatusFooter.SetRightText(MessageText);
   WorkflowLogger.Info('ProjectAssistant', 'Code TODO: ' + MessageText);
 End;
 
@@ -1137,9 +1137,9 @@ Begin
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  { Copy title/status before RefreshCodeTodos frees FCodeSections entries. }
-  SectionTitle := TPlanSection(FCodeSections[Idx]).Title;
-  OldStatus := TPlanSection(FCodeSections[Idx]).Status;
+  { Copy title/status before RefreshCodeTodos frees CodeSections entries. }
+  SectionTitle := TPlanSection(CodeSections[Idx]).Title;
+  OldStatus := TPlanSection(CodeSections[Idx]).Status;
   If OldStatus = NewStatus Then
     Begin
       Feedback := Format('"%s" is already %s.',
@@ -1155,9 +1155,9 @@ Begin
     End;
   FCodeSelectedIndex := Idx;
   RefreshCodeTodos;
-  If Assigned(FCodeTodoList) And (Idx >= 0) And (Idx < FCodeTodoList.Items.Count) Then
+  If Assigned(CodeTodoList) And (Idx >= 0) And (Idx < CodeTodoList.Items.Count) Then
     Begin
-      FCodeTodoList.ItemIndex := Idx;
+      CodeTodoList.ItemIndex := Idx;
       FCodeSelectedIndex := Idx;
     End;
   Feedback := Format('%s → %s', [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
@@ -1224,9 +1224,9 @@ Begin
       Exit;
     End;
   RefreshCodeTodos;
-  If Assigned(FCodeTodoList) And (Idx >= 0) And (Idx < FCodeTodoList.Items.Count) Then
+  If Assigned(CodeTodoList) And (Idx >= 0) And (Idx < CodeTodoList.Items.Count) Then
     Begin
-      FCodeTodoList.ItemIndex := Idx;
+      CodeTodoList.ItemIndex := Idx;
       FCodeSelectedIndex := Idx;
     End;
   Note := Format('Auto-marked **%s** complete (Work-on-this + clean `run_compile`).',
@@ -1299,16 +1299,16 @@ Begin
     End
   Else
     SetCurrentSystemNote(Note);
-  FStatusFooter.SetRightText('Review: Fix Error ready');
+  StatusFooter.SetRightText('Review: Fix Error ready');
 End;
 
-Procedure TProjectAssistantForm.CodeBtnRefreshClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeRefreshButtonClick(Sender: TObject);
 Begin
   RefreshCodeTodos;
   SetCodeStatusFeedback('TODO list refreshed from plan file.');
 End;
 
-Procedure TProjectAssistantForm.CodeBtnOpenPlanClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeOpenPlanButtonClick(Sender: TObject);
 Var
   PlanRel, Resolved, Err: String;
 Begin
@@ -1326,17 +1326,17 @@ Begin
   OpenMarkdownDocument(Resolved);
 End;
 
-Procedure TProjectAssistantForm.CodeBtnStartClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeStartButtonClick(Sender: TObject);
 Begin
   SetSelectedCodeSectionStatus(pssInProgress);
 End;
 
-Procedure TProjectAssistantForm.CodeBtnDoneClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeDoneButtonClick(Sender: TObject);
 Begin
   SetSelectedCodeSectionStatus(pssComplete);
 End;
 
-Procedure TProjectAssistantForm.CodeBtnResetClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeResetButtonClick(Sender: TObject);
 Begin
   SetSelectedCodeSectionStatus(pssNotStarted);
 End;
@@ -1404,7 +1404,7 @@ Begin
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Section := TPlanSection(FCodeSections[Idx]);
+  Section := TPlanSection(CodeSections[Idx]);
   Title := Section.Title;
   StatusText := PlanSectionStatusToStr(Section.Status);
   If Section.Status = pssUnknown Then
@@ -1422,8 +1422,8 @@ Begin
           StatusText := PlanSectionStatusToStr(pssInProgress);
           FCodeSelectedIndex := Idx;
           RefreshCodeTodos;
-          If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
-            FCodeTodoList.ItemIndex := Idx;
+          If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
+            CodeTodoList.ItemIndex := Idx;
         End;
     End;
   If Not GetPlanSectionBody(PlanRel, Idx, Body, Err) Then
@@ -1445,7 +1445,7 @@ Begin
     End;
 End;
 
-Procedure TProjectAssistantForm.CodeBtnWorkClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeWorkButtonClick(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
@@ -1464,11 +1464,11 @@ Var
 Begin
   Result := -1;
   FirstNotStarted := -1;
-  If Not Assigned(FCodeSections) Then
+  If Not Assigned(CodeSections) Then
     Exit;
-  For I := 0 To FCodeSections.Count - 1 Do
+  For I := 0 To CodeSections.Count - 1 Do
     Begin
-      Section := TPlanSection(FCodeSections[I]);
+      Section := TPlanSection(CodeSections[I]);
       If Section.Status = pssInProgress Then
         Begin
           Result := I;
@@ -1519,8 +1519,8 @@ Begin
   FPlanAgentPackagesDone := 0;
   FLastTurnHadError := False;
   FCodeSelectedIndex := Idx;
-  If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
-    FCodeTodoList.ItemIndex := Idx;
+  If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
+    CodeTodoList.ItemIndex := Idx;
   SetCodeStatusFeedback('Plan agent: starting…');
   SetCurrentSystemNote(
     '**Plan agent** started — will work through incomplete packages until complete, error, ' +
@@ -1583,15 +1583,15 @@ Begin
       Exit;
     End;
   FCodeSelectedIndex := Idx;
-  If Assigned(FCodeTodoList) And (Idx < FCodeTodoList.Items.Count) Then
-    FCodeTodoList.ItemIndex := Idx;
+  If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
+    CodeTodoList.ItemIndex := Idx;
   SetCodeStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
   CodeWorkOnSelectedPackage;
   If Not FSending Then
     StopWorkOnPlanAgent('failed to start next package');
 End;
 
-Procedure TProjectAssistantForm.CodeBtnWorkPlanClick(Sender: TObject);
+Procedure TProjectAssistantForm.CodeWorkPlanButtonClick(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
@@ -1605,18 +1605,18 @@ End;
 
 Procedure TProjectAssistantForm.CodeTodoListClick(Sender: TObject);
 Begin
-  If Assigned(FCodeTodoList) And Assigned(FCodeSections) And
-    (FCodeTodoList.ItemIndex >= 0) And
-    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
-    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
+  If Assigned(CodeTodoList) And Assigned(CodeSections) And
+    (CodeTodoList.ItemIndex >= 0) And
+    (CodeTodoList.ItemIndex < CodeSections.Count) Then
+    FCodeSelectedIndex := CodeTodoList.ItemIndex;
 End;
 
 Procedure TProjectAssistantForm.CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(FCodeTodoList) And Assigned(FCodeSections) And
-    (FCodeTodoList.ItemIndex >= 0) And
-    (FCodeTodoList.ItemIndex < FCodeSections.Count) Then
-    FCodeSelectedIndex := FCodeTodoList.ItemIndex;
+  If Assigned(CodeTodoList) And Assigned(CodeSections) And
+    (CodeTodoList.ItemIndex >= 0) And
+    (CodeTodoList.ItemIndex < CodeSections.Count) Then
+    FCodeSelectedIndex := CodeTodoList.ItemIndex;
 End;
 
 Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
@@ -1632,16 +1632,16 @@ Begin
     Exit;
   If FSending Or FModeLocked Then
     Begin
-      { Freeze mode UI during a send; restore radio selection to FActiveMode. }
+      { Freeze mode UI during a send; restore radio selection to ActiveMode. }
       SyncModeUi;
       Exit;
     End;
   { Explicit mode change ends sticky Plan/Code behaviour. }
   FModeSticky := False;
-  FActiveMode := CurrentModeFromUi;
+  ActiveMode := CurrentModeFromUi;
   ApplyActiveMode;
   PersistShellConfig;
-  WorkflowLogger.Info('ProjectAssistant', 'Mode: ' + AssistantModeToStr(FActiveMode));
+  WorkflowLogger.Info('ProjectAssistant', 'Mode: ' + AssistantModeToStr(ActiveMode));
   RefreshConversationList;
 End;
 
@@ -1677,9 +1677,9 @@ Begin
   { Objects store TurnIndex+1 so index 0 is never stored as Nil.
     Live in-flight row uses LiveConversationMarker+1. }
   Result := -1;
-  If Not Assigned(FConversationList) Or (ListIndex < 0) Or (ListIndex >= FConversationList.Items.Count) Then
+  If Not Assigned(ConversationList) Or (ListIndex < 0) Or (ListIndex >= ConversationList.Items.Count) Then
     Exit;
-  Encoded := Integer(PtrUInt(FConversationList.Items.Objects[ListIndex]));
+  Encoded := Integer(PtrUInt(ConversationList.Items.Objects[ListIndex]));
   If Encoded = 0 Then
     Exit;
   Result := Encoded - 1; { may be LiveConversationMarker (-2) }
@@ -1747,19 +1747,19 @@ Var
   ShowItem: Boolean;
   SelectIdx: Integer;
 Begin
-  If Not Assigned(FConversationList) Or Not Assigned(ProjectAssistantConversation) Then
+  If Not Assigned(ConversationList) Or Not Assigned(ProjectAssistantConversation) Then
     Exit;
   EnsureConversationStore;
   Filter := '';
-  If Assigned(FConversationSearch) Then
-    Filter := LowerCase(Trim(FConversationSearch.Text));
+  If Assigned(ConversationSearch) Then
+    Filter := LowerCase(Trim(ConversationSearch.Text));
   KeepTurnIndex := FSelectedTurnIndex;
   If KeepTurnIndex < 0 Then
-    KeepTurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
+    KeepTurnIndex := ConversationListTurnIndex(ConversationList.ItemIndex);
   SelectIdx := -1;
-  FConversationList.Items.BeginUpdate;
+  ConversationList.Items.BeginUpdate;
   Try
-    FConversationList.Clear;
+    ConversationList.Clear;
     { Oldest first so new turns append at the bottom (grow down).
       Objects store TurnIndex+1 (never 0/Nil) for O(1) memory retrieval. }
     For I := 0 To ProjectAssistantConversation.IndexCount - 1 Do
@@ -1778,9 +1778,9 @@ Begin
             (Pos(Filter, LowerCase(Entry.Mode)) > 0);
         If ShowItem Then
           Begin
-            FConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
+            ConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
             If Entry.TurnIndex = KeepTurnIndex Then
-              SelectIdx := FConversationList.Items.Count - 1;
+              SelectIdx := ConversationList.Items.Count - 1;
           End;
       End;
     { In-flight prompt at the bottom while the model runs — omit once the turn
@@ -1799,20 +1799,20 @@ Begin
           ShowItem := Pos(Filter, LowerCase(Preview)) > 0;
         If ShowItem Then
           Begin
-            FConversationList.Items.AddObject(Line, TObject(PtrUInt(LiveConversationMarker + 1)));
+            ConversationList.Items.AddObject(Line, TObject(PtrUInt(LiveConversationMarker + 1)));
             If (KeepTurnIndex = LiveConversationMarker) Or FViewingLive Then
-              SelectIdx := FConversationList.Items.Count - 1;
+              SelectIdx := ConversationList.Items.Count - 1;
           End;
       End;
   Finally
-    FConversationList.Items.EndUpdate;
+    ConversationList.Items.EndUpdate;
   End;
-  If FConversationList.Items.Count > 0 Then
+  If ConversationList.Items.Count > 0 Then
     Begin
       If SelectIdx < 0 Then
-        SelectIdx := FConversationList.Items.Count - 1;
-      FConversationList.ItemIndex := SelectIdx;
-      FConversationList.TopIndex := SelectIdx;
+        SelectIdx := ConversationList.Items.Count - 1;
+      ConversationList.ItemIndex := SelectIdx;
+      ConversationList.TopIndex := SelectIdx;
       FSelectedTurnIndex := ConversationListTurnIndex(SelectIdx);
     End;
 End;
@@ -1829,18 +1829,18 @@ Var
   Hist: TConversationHistoryItem;
   PrevId: String;
 Begin
-  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+  If Not Assigned(HistoryCombo) Or Not Assigned(HistoryIds) Then
     Exit;
   PrevId := '';
-  If (FHistoryCombo.ItemIndex >= 0) And (FHistoryCombo.ItemIndex < FHistoryIds.Count) Then
-    PrevId := FHistoryIds[FHistoryCombo.ItemIndex];
+  If (HistoryCombo.ItemIndex >= 0) And (HistoryCombo.ItemIndex < HistoryIds.Count) Then
+    PrevId := HistoryIds[HistoryCombo.ItemIndex];
   FHistoryUpdating := True;
   Items := TObjectList.Create(True);
   Try
-    FHistoryCombo.Items.BeginUpdate;
+    HistoryCombo.Items.BeginUpdate;
     Try
-      FHistoryCombo.Items.Clear;
-      FHistoryIds.Clear;
+      HistoryCombo.Items.Clear;
+      HistoryIds.Clear;
       If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
         ProjectAssistantConversation.ListHistory(Items);
       SelectIdx := 0;
@@ -1849,34 +1849,34 @@ Begin
           Hist := TConversationHistoryItem(Items[I]);
           If Not Assigned(Hist) Then
             Continue;
-          FHistoryCombo.Items.Add(Hist.Title);
-          FHistoryIds.Add(Hist.ArchiveId);
+          HistoryCombo.Items.Add(Hist.Title);
+          HistoryIds.Add(Hist.ArchiveId);
           If SameText(Hist.ArchiveId, PrevId) Then
-            SelectIdx := FHistoryCombo.Items.Count - 1;
+            SelectIdx := HistoryCombo.Items.Count - 1;
           If Hist.IsCurrent Then
-            SelectIdx := FHistoryCombo.Items.Count - 1;
+            SelectIdx := HistoryCombo.Items.Count - 1;
         End;
-      If FHistoryCombo.Items.Count = 0 Then
+      If HistoryCombo.Items.Count = 0 Then
         Begin
-          FHistoryCombo.Items.Add('Current (empty)');
-          FHistoryIds.Add('');
+          HistoryCombo.Items.Add('Current (empty)');
+          HistoryIds.Add('');
           SelectIdx := 0;
         End;
-      If SelectIdx >= FHistoryCombo.Items.Count Then
+      If SelectIdx >= HistoryCombo.Items.Count Then
         SelectIdx := 0;
-      FHistoryCombo.ItemIndex := SelectIdx;
+      HistoryCombo.ItemIndex := SelectIdx;
     Finally
-      FHistoryCombo.Items.EndUpdate;
+      HistoryCombo.Items.EndUpdate;
     End;
   Finally
     Items.Free;
     FHistoryUpdating := False;
   End;
-  If Assigned(FExportHistoryAction) Then
-    FExportHistoryAction.Enabled := (Not FSending) And Assigned(ProjectAssistantConversation) And
+  If Assigned(ExportHistoryAction) Then
+    ExportHistoryAction.Enabled := (Not FSending) And Assigned(ProjectAssistantConversation) And
       ProjectAssistantConversation.HasTurns;
-  If Assigned(FDeleteHistoryAction) Then
-    FDeleteHistoryAction.Enabled := Not FSending;
+  If Assigned(DeleteHistoryAction) Then
+    DeleteHistoryAction.Enabled := Not FSending;
 End;
 
 Function TProjectAssistantForm.DefaultExportFileName: String;
@@ -1886,8 +1886,8 @@ Var
 Begin
   Stamp := FormatDateTime('yyyymmdd"-"hhnnss', Now);
   Title := 'conversation';
-  If Assigned(FHistoryCombo) And (FHistoryCombo.ItemIndex >= 0) Then
-    Title := FHistoryCombo.Items[FHistoryCombo.ItemIndex];
+  If Assigned(HistoryCombo) And (HistoryCombo.ItemIndex >= 0) Then
+    Title := HistoryCombo.Items[HistoryCombo.ItemIndex];
   If SameText(Copy(Title, 1, 7), 'Current') Then
     Begin
       Title := Trim(Copy(Title, 8, MaxInt));
@@ -2021,7 +2021,7 @@ End;
 
 Procedure TProjectAssistantForm.ApplyLoadedConversationToUi(Const StatusNote: String);
 Begin
-  FTranscript.Clear;
+  Transcript.Clear;
   FUserCancelled := False;
   FTurnRecorded := False;
   FLastChatPaintTick := 0;
@@ -2045,9 +2045,9 @@ Var
   TurnIndex: Integer;
 Begin
   { Allow browsing past turns while a stream continues in the background. }
-  If Not Assigned(FConversationList) Or (FConversationList.ItemIndex < 0) Then
+  If Not Assigned(ConversationList) Or (ConversationList.ItemIndex < 0) Then
     Exit;
-  TurnIndex := ConversationListTurnIndex(FConversationList.ItemIndex);
+  TurnIndex := ConversationListTurnIndex(ConversationList.ItemIndex);
   If TurnIndex < LiveConversationMarker Then
     Exit;
   { Marker is -2; completed turns are >= 0. Decode already applied +1 offset. }
@@ -2074,10 +2074,10 @@ Begin
     (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
     Exit;
   DurationMs := 0;
-  If FStreamStart > 0 Then
-    DurationMs := Round((Now - FStreamStart) * 24 * 60 * 60 * 1000);
+  If StreamStart > 0 Then
+    DurationMs := Round((Now - StreamStart) * 24 * 60 * 60 * 1000);
   Turn.Id := NewConversationTurnId;
-  Turn.Mode := AssistantModeToStr(FActiveMode);
+  Turn.Mode := AssistantModeToStr(ActiveMode);
   If FLiveUser <> '' Then
     Turn.Prompt := FLiveUser
   Else
@@ -2126,12 +2126,12 @@ Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
 Begin
-  If FStreamStart <= 0 Then
+  If StreamStart <= 0 Then
     Begin
       Result := Phase;
       Exit;
     End;
-  Secs := Round((Now - FStreamStart) * 24 * 60 * 60);
+  Secs := Round((Now - StreamStart) * 24 * 60 * 60);
   If Secs < 0 Then
     Secs := 0;
   Mins := Secs Div 60;
@@ -2142,13 +2142,13 @@ End;
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
 Begin
   FStatusPhase := Phase;
-  FStatusFooter.SetRightText(FormatElapsedStatus(Phase));
+  StatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
 
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   If FSending And (FStatusPhase <> '') Then
-    FStatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
+    StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -2166,8 +2166,8 @@ End;
 
 Function TProjectAssistantForm.AutoNewChatAtLimitEnabled: Boolean;
 Begin
-  If Assigned(FAutoNewChatCheck) Then
-    Result := FAutoNewChatCheck.Checked
+  If Assigned(AutoNewChatCheck) Then
+    Result := AutoNewChatCheck.Checked
   Else If Assigned(AssistantChatConfig) Then
     Result := AssistantChatConfig.AutoNewChatAtContextLimit
   Else
@@ -2176,27 +2176,27 @@ End;
 
 Procedure TProjectAssistantForm.SyncAutoNewChatCheckFromConfig;
 Begin
-  If Not Assigned(FAutoNewChatCheck) Then
+  If Not Assigned(AutoNewChatCheck) Then
     Exit;
-  FAutoNewChatCheck.OnClick := Nil;
+  AutoNewChatCheck.OnClick := Nil;
   Try
     If Assigned(AssistantChatConfig) Then
-      FAutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit
+      AutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit
     Else
-      FAutoNewChatCheck.Checked := False;
+      AutoNewChatCheck.Checked := False;
   Finally
-    FAutoNewChatCheck.OnClick := @AutoNewChatCheckClick;
+    AutoNewChatCheck.OnClick := @AutoNewChatCheckClick;
   End;
 End;
 
 Procedure TProjectAssistantForm.AutoNewChatCheckClick(Sender: TObject);
 Begin
-  If Not Assigned(FAutoNewChatCheck) Or Not Assigned(AssistantChatConfig) Then
+  If Not Assigned(AutoNewChatCheck) Or Not Assigned(AssistantChatConfig) Then
     Exit;
-  AssistantChatConfig.AutoNewChatAtContextLimit := FAutoNewChatCheck.Checked;
+  AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatCheck.Checked;
   AssistantChatConfig.Save;
   WorkflowLogger.Info('ProjectAssistant',
-    'Auto New Chat at 95%: ' + BoolToStr(FAutoNewChatCheck.Checked, True));
+    'Auto New Chat at 95%: ' + BoolToStr(AutoNewChatCheck.Checked, True));
 End;
 
 Procedure TProjectAssistantForm.UpdateStatusFooter;
@@ -2244,7 +2244,7 @@ Begin
   CentreText := Format('Context %d%%  (~%d / %d tok)', [Pct, FContextUsed, FContextLimit]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
-  FStatusFooter.SetAll(LeftText, CentreText, StatusText);
+  StatusFooter.SetAll(LeftText, CentreText, StatusText);
   If (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
 End;
@@ -2303,28 +2303,28 @@ Begin
   FSending := IsSending;
   If Not IsSending Then
     FReviewInProgress := False;
-  FSendAction.Enabled := Not IsSending;
-  FStopAction.Enabled := IsSending;
-  FNewChatAction.Enabled := Not IsSending;
-  FReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
-  FReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
-  FFixErrorAction.Enabled := Not IsSending;
-  FInputEdit.ReadOnly := IsSending;
+  SendAction.Enabled := Not IsSending;
+  StopAction.Enabled := IsSending;
+  NewChatAction.Enabled := Not IsSending;
+  ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
+  ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
+  FixErrorAction.Enabled := Not IsSending;
+  InputMemo.ReadOnly := IsSending;
   SetBusyCursor(IsSending);
   If IsSending Then
     Begin
-      FStreamStart := Now;
+      StreamStart := Now;
       If FStatusPhase = '' Then
         FStatusPhase := 'Waiting for first token…';
-      If Assigned(FElapsedTimer) Then
-        FElapsedTimer.Enabled := True;
+      If Assigned(ElapsedTimer) Then
+        ElapsedTimer.Enabled := True;
     End
   Else
     Begin
-      If Assigned(FElapsedTimer) Then
-        FElapsedTimer.Enabled := False;
+      If Assigned(ElapsedTimer) Then
+        ElapsedTimer.Enabled := False;
       FStatusPhase := '';
-      FStreamStart := 0;
+      StreamStart := 0;
     End;
   ApplyActiveMode;
   UpdateStatusFooter;
@@ -2342,7 +2342,7 @@ Begin
   If Key = '' Then
     Exit;
   FSessionProjectKey := Key;
-  SaveProjectChatSession(FTranscript, FContextUsed);
+  SaveProjectChatSession(Transcript, FContextUsed);
 End;
 
 Procedure TProjectAssistantForm.RestoreSessionIfNeeded;
@@ -2361,7 +2361,7 @@ Begin
   FSessionProjectKey := Key;
   { Load messages for the model only — do not replace the chat pane with a banner.
     The visible turn comes from conversation (ShowLastConversationTurn). }
-  If LoadProjectChatSession(FTranscript, LoadedContext) Then
+  If LoadProjectChatSession(Transcript, LoadedContext) Then
     Begin
       FContextUsed := LoadedContext;
       UpdateStatusFooter;
@@ -2372,13 +2372,13 @@ Procedure TProjectAssistantForm.EnsureChatView;
 Var
   View: TMarkDownControl;
 Begin
-  If Assigned(FChatView) Then
+  If Assigned(ChatView) Then
     Exit;
-  FChatHost.Color := clWhite;
-  FChatHost.ParentColor := False;
-  FChatHost.ParentBackground := False;
+  ChatHost.Color := clWhite;
+  ChatHost.ParentColor := False;
+  ChatHost.ParentBackground := False;
   View := TMarkDownControl.Create(Self);
-  View.Parent := FChatHost;
+  View.Parent := ChatHost;
   View.Align := alClient;
   View.BorderSpacing.Around := ChatViewMargin;
   View.Color := clWhite;
@@ -2389,42 +2389,42 @@ Begin
   View.FontName := 'default';
   View.TabStop := True;
   View.Visible := True;
-  FChatView := View;
+  ChatView := View;
 End;
 
 Procedure TProjectAssistantForm.EnsureInputPopup;
 Var
   Sep: TMenuItem;
 Begin
-  If Assigned(FInputPopup) Or (Not Assigned(FInputEdit)) Then
+  If Assigned(InputPopup) Or (Not Assigned(InputMemo)) Then
     Exit;
-  FInputPopup := TPopupMenu.Create(Self);
-  FInputPopup.OnPopup := @InputPopupPopup;
-  FInputCutItem := TMenuItem.Create(FInputPopup);
-  FInputCutItem.Caption := 'Cut';
-  FInputCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
-  FInputCutItem.OnClick := @InputCutClick;
-  FInputPopup.Items.Add(FInputCutItem);
-  FInputCopyItem := TMenuItem.Create(FInputPopup);
-  FInputCopyItem.Caption := 'Copy';
-  FInputCopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
-  FInputCopyItem.OnClick := @InputCopyClick;
-  FInputPopup.Items.Add(FInputCopyItem);
-  FInputPasteItem := TMenuItem.Create(FInputPopup);
-  FInputPasteItem.Caption := 'Paste';
-  FInputPasteItem.ShortCut := ShortCut(Ord('V'), [ssCtrl]);
-  FInputPasteItem.OnClick := @InputPasteClick;
-  FInputPopup.Items.Add(FInputPasteItem);
-  Sep := TMenuItem.Create(FInputPopup);
+  InputPopup := TPopupMenu.Create(Self);
+  InputPopup.OnPopup := @InputPopupPopup;
+  InputCutItem := TMenuItem.Create(InputPopup);
+  InputCutItem.Caption := 'Cut';
+  InputCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
+  InputCutItem.OnClick := @InputCutClick;
+  InputPopup.Items.Add(InputCutItem);
+  InputCopyItem := TMenuItem.Create(InputPopup);
+  InputCopyItem.Caption := 'Copy';
+  InputCopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  InputCopyItem.OnClick := @InputCopyClick;
+  InputPopup.Items.Add(InputCopyItem);
+  InputPasteItem := TMenuItem.Create(InputPopup);
+  InputPasteItem.Caption := 'Paste';
+  InputPasteItem.ShortCut := ShortCut(Ord('V'), [ssCtrl]);
+  InputPasteItem.OnClick := @InputPasteClick;
+  InputPopup.Items.Add(InputPasteItem);
+  Sep := TMenuItem.Create(InputPopup);
   Sep.Caption := '-';
-  FInputPopup.Items.Add(Sep);
-  FInputSelectAllItem := TMenuItem.Create(FInputPopup);
-  FInputSelectAllItem.Caption := 'Select All';
-  FInputSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
-  FInputSelectAllItem.OnClick := @InputSelectAllClick;
-  FInputPopup.Items.Add(FInputSelectAllItem);
-  FInputEdit.PopupMenu := FInputPopup;
-  FInputEdit.WantTabs := False;
+  InputPopup.Items.Add(Sep);
+  InputSelectAllItem := TMenuItem.Create(InputPopup);
+  InputSelectAllItem.Caption := 'Select All';
+  InputSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
+  InputSelectAllItem.OnClick := @InputSelectAllClick;
+  InputPopup.Items.Add(InputSelectAllItem);
+  InputMemo.PopupMenu := InputPopup;
+  InputMemo.WantTabs := False;
 End;
 
 Procedure TProjectAssistantForm.InputPopupPopup(Sender: TObject);
@@ -2432,49 +2432,49 @@ Var
   HasSel: Boolean;
   CanEdit: Boolean;
 Begin
-  HasSel := Assigned(FInputEdit) And (FInputEdit.SelLength > 0);
-  CanEdit := Assigned(FInputEdit) And (Not FInputEdit.ReadOnly);
-  If Assigned(FInputCutItem) Then
-    FInputCutItem.Enabled := HasSel And CanEdit;
-  If Assigned(FInputCopyItem) Then
-    FInputCopyItem.Enabled := HasSel;
-  If Assigned(FInputPasteItem) Then
-    FInputPasteItem.Enabled := CanEdit And Clipboard.HasFormat(CF_TEXT);
-  If Assigned(FInputSelectAllItem) Then
-    FInputSelectAllItem.Enabled := Assigned(FInputEdit) And (FInputEdit.GetTextLen > 0);
+  HasSel := Assigned(InputMemo) And (InputMemo.SelLength > 0);
+  CanEdit := Assigned(InputMemo) And (Not InputMemo.ReadOnly);
+  If Assigned(InputCutItem) Then
+    InputCutItem.Enabled := HasSel And CanEdit;
+  If Assigned(InputCopyItem) Then
+    InputCopyItem.Enabled := HasSel;
+  If Assigned(InputPasteItem) Then
+    InputPasteItem.Enabled := CanEdit And Clipboard.HasFormat(CF_TEXT);
+  If Assigned(InputSelectAllItem) Then
+    InputSelectAllItem.Enabled := Assigned(InputMemo) And (InputMemo.GetTextLen > 0);
 End;
 
 Procedure TProjectAssistantForm.InputCutClick(Sender: TObject);
 Begin
-  If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
-    FInputEdit.CutToClipboard;
+  If Assigned(InputMemo) And (Not InputMemo.ReadOnly) Then
+    InputMemo.CutToClipboard;
 End;
 
 Procedure TProjectAssistantForm.InputCopyClick(Sender: TObject);
 Begin
-  If Assigned(FInputEdit) Then
-    FInputEdit.CopyToClipboard;
+  If Assigned(InputMemo) Then
+    InputMemo.CopyToClipboard;
 End;
 
 Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);
 Begin
-  If Assigned(FInputEdit) And (Not FInputEdit.ReadOnly) Then
-    FInputEdit.PasteFromClipboard;
+  If Assigned(InputMemo) And (Not InputMemo.ReadOnly) Then
+    InputMemo.PasteFromClipboard;
 End;
 
 Procedure TProjectAssistantForm.InputSelectAllClick(Sender: TObject);
 Begin
-  If Assigned(FInputEdit) Then
-    FInputEdit.SelectAll;
+  If Assigned(InputMemo) Then
+    InputMemo.SelectAll;
 End;
 
 Procedure TProjectAssistantForm.ScrollChatToEnd;
 Var
   View: TMarkDownControl;
 Begin
-  If Not Assigned(FChatView) Then
+  If Not Assigned(ChatView) Then
     Exit;
-  View := TMarkDownControl(FChatView);
+  View := TMarkDownControl(ChatView);
   { Setter clamps to max scroll. }
   View.ScrolledTop := High(Integer) Div 4;
 End;
@@ -2483,9 +2483,9 @@ Procedure TProjectAssistantForm.ScrollChatToTop;
 Var
   View: TMarkDownControl;
 Begin
-  If Not Assigned(FChatView) Then
+  If Not Assigned(ChatView) Then
     Exit;
-  View := TMarkDownControl(FChatView);
+  View := TMarkDownControl(ChatView);
   View.ScrolledTop := 0;
 End;
 
@@ -2523,7 +2523,7 @@ Begin
   If Body = '' Then
     Body := '*Type a message below to start.*';
 
-  View := TMarkDownControl(FChatView);
+  View := TMarkDownControl(ChatView);
   Try
     { Clear selection before replacing live stream text (avoids copy AVs). }
     View.ClearSelection;
@@ -2543,11 +2543,11 @@ Begin
     View.Invalidate;
     View.Repaint;
     View.Update;
-    If Assigned(FChatHost) Then
+    If Assigned(ChatHost) Then
       Begin
-        FChatHost.Invalidate;
-        FChatHost.Repaint;
-        FChatHost.Update;
+        ChatHost.Invalidate;
+        ChatHost.Repaint;
+        ChatHost.Update;
       End;
   Except
     On E: Exception Do
@@ -2641,14 +2641,14 @@ Var
   R: String;
 Begin
   { Keep a thin legacy transcript for session export; UI uses current-turn fields. }
-  If FTranscript.Count > 0 Then
-    FTranscript.Add('');
-  FTranscript.Add('### ' + RoleHeading(Role));
-  FTranscript.Add('');
+  If Transcript.Count > 0 Then
+    Transcript.Add('');
+  Transcript.Add('### ' + RoleHeading(Role));
+  Transcript.Add('');
   If Content <> '' Then
-    FTranscript.Add(Content)
+    Transcript.Add(Content)
   Else
-    FTranscript.Add('');
+    Transcript.Add('');
   R := LowerCase(Trim(Role));
   If R = 'user' Then
     SetCurrentUserDisplay(Content, False)
@@ -2749,18 +2749,18 @@ Begin
         DisplayBody := '*(error)*'
       Else
         DisplayBody := FormatAssistantMarkdown(FLiveThinking, FLiveContent);
-      If FTranscript.Count > 0 Then
-        FTranscript.Add('');
-      FTranscript.Add('### Assistant');
-      FTranscript.Add('');
-      FTranscript.Add(DisplayBody);
+      If Transcript.Count > 0 Then
+        Transcript.Add('');
+      Transcript.Add('### Assistant');
+      Transcript.Add('');
+      Transcript.Add(DisplayBody);
     End;
 
   If ErrorText <> '' Then
     Begin
       If FViewingLive Then
         FDisplaySystemNote := '**Error:** ' + ErrorText;
-      FStatusFooter.SetRightText('Error');
+      StatusFooter.SetRightText('Error');
     End
   Else
     Begin
@@ -2770,7 +2770,7 @@ Begin
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
         FContextUsed := FContextUsed + Length(FLiveThinking) Div 4;
-      FStatusFooter.SetRightText('Ready');
+      StatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
   FLastTurnHadError := ErrorText <> '';
@@ -2780,7 +2780,7 @@ Begin
     AssistantClient.MarkStreamComplete;
   PersistPlanReplyIfNeeded(ErrorText);
   { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
-  If FActiveMode = amCode Then
+  If ActiveMode = amCode Then
     TryAutoCompleteCodeWork(ErrorText)
   Else If FCodeWorkSectionIndex >= 0 Then
     ClearCodeWorkTracking;
@@ -2897,7 +2897,7 @@ Begin
   FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
   RefreshChatDisplay(True, True);
-  FStatusFooter.SetRightText('Cancelled');
+  StatusFooter.SetRightText('Cancelled');
   PersistSession;
   If FPlanAgentRunning Then
     StopWorkOnPlanAgent('stream cancelled by user');
@@ -2937,7 +2937,7 @@ Begin
       { Detect run_compile during this turn for Code auto Status: complete. }
       FCompileSeqAtSendStart := AssistantLastCompileSeq;
       FinalApi := ApiText;
-      If FActiveMode = amPlan Then
+      If ActiveMode = amPlan Then
         Begin
           PlanRel := GetActivePlanRelativePath;
           If PlanRel = '' Then
@@ -2989,7 +2989,7 @@ Var
 Begin
   If FSending Then
     Exit;
-  UserText := Trim(FInputEdit.Text);
+  UserText := Trim(InputMemo.Text);
   If UserText = '' Then
     Exit;
   If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
@@ -2998,7 +2998,7 @@ Begin
       SettingsActionExecute(Nil);
       Exit;
     End;
-  FInputEdit.Clear;
+  InputMemo.Clear;
   SubmitUserText(UserText, True);
 End;
 
@@ -3227,9 +3227,9 @@ Begin
     End;
 
   FReviewInProgress := True;
-  FReviewCompileAction.Enabled := False;
-  FReviewBuildAction.Enabled := False;
-  FStatusFooter.SetRightText(KindLabel + '…');
+  ReviewCompileAction.Enabled := False;
+  ReviewBuildAction.Enabled := False;
+  StatusFooter.SetRightText(KindLabel + '…');
   Application.ProcessMessages;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
 
@@ -3242,18 +3242,18 @@ Begin
 
     If BuildOk And (ErrorCount = 0) Then
       Begin
-        FStatusFooter.SetRightText(KindLabel + ' OK');
+        StatusFooter.SetRightText(KindLabel + ' OK');
         FPendingReviewErrorOffer := False;
         FReviewErrorCount := 0;
       End
     Else If ErrorCount > 0 Then
       Begin
-        FStatusFooter.SetRightText(KindLabel + ' failed');
+        StatusFooter.SetRightText(KindLabel + ' failed');
         PrepareTopErrorAfterReview(ErrorCount);
       End
     Else
       Begin
-        FStatusFooter.SetRightText(KindLabel + ' done');
+        StatusFooter.SetRightText(KindLabel + ' done');
         FPendingReviewErrorOffer := False;
         FReviewErrorCount := 0;
       End;
@@ -3264,7 +3264,7 @@ Begin
         If Not ProjectAssistantConversation.StartNewConversation Then
           WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError);
       End;
-    FTranscript.Clear;
+    Transcript.Clear;
     FContextUsed := 0;
     FTurnRecorded := False;
     FSelectedTurnIndex := -1;
@@ -3281,8 +3281,8 @@ Begin
     If Not FSending Then
       Begin
         FReviewInProgress := False;
-        FReviewCompileAction.Enabled := True;
-        FReviewBuildAction.Enabled := True;
+        ReviewCompileAction.Enabled := True;
+        ReviewBuildAction.Enabled := True;
         UpdateStatusFooter;
       End;
   End;
@@ -3311,7 +3311,7 @@ Begin
       If Not ProjectAssistantConversation.StartNewConversation Then
         WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
     End;
-  FTranscript.Clear;
+  Transcript.Clear;
   FContextUsed := 0;
   FContextWarnShown := False;
   FUserCancelled := False;
@@ -3340,7 +3340,7 @@ Begin
   Caption := 'Project Assistant';
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
-  FTranscript.Clear;
+  Transcript.Clear;
   FContextUsed := 0;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
@@ -3392,7 +3392,7 @@ Begin
   Caption := Title;
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
-  FTranscript.Clear;
+  Transcript.Clear;
   FContextUsed := 0;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
@@ -3754,11 +3754,11 @@ Begin
       RefreshHistoryCombo;
       Exit;
     End;
-  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+  If Not Assigned(HistoryCombo) Or Not Assigned(HistoryIds) Then
     Exit;
-  If (FHistoryCombo.ItemIndex < 0) Or (FHistoryCombo.ItemIndex >= FHistoryIds.Count) Then
+  If (HistoryCombo.ItemIndex < 0) Or (HistoryCombo.ItemIndex >= HistoryIds.Count) Then
     Exit;
-  ArchiveId := FHistoryIds[FHistoryCombo.ItemIndex];
+  ArchiveId := HistoryIds[HistoryCombo.ItemIndex];
   If ArchiveId = '' Then
     Exit; { already current }
   EnsureConversationStore;
@@ -3840,12 +3840,12 @@ Begin
       MessageDlg('Stop the current reply before deleting a conversation.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Not Assigned(FHistoryCombo) Or Not Assigned(FHistoryIds) Then
+  If Not Assigned(HistoryCombo) Or Not Assigned(HistoryIds) Then
     Exit;
-  If (FHistoryCombo.ItemIndex < 0) Or (FHistoryCombo.ItemIndex >= FHistoryIds.Count) Then
+  If (HistoryCombo.ItemIndex < 0) Or (HistoryCombo.ItemIndex >= HistoryIds.Count) Then
     Exit;
-  ArchiveId := FHistoryIds[FHistoryCombo.ItemIndex];
-  LabelText := FHistoryCombo.Items[FHistoryCombo.ItemIndex];
+  ArchiveId := HistoryIds[HistoryCombo.ItemIndex];
+  LabelText := HistoryCombo.Items[HistoryCombo.ItemIndex];
   IsCurrent := ArchiveId = '';
   If MessageDlg(
     'Delete this conversation permanently?' + LineEnding + LineEnding +
@@ -3864,7 +3864,7 @@ Begin
     End;
   If IsCurrent Then
     Begin
-      FTranscript.Clear;
+      Transcript.Clear;
       FContextUsed := 0;
       FTurnRecorded := False;
       FSelectedTurnIndex := -1;
@@ -3914,11 +3914,11 @@ Begin
     Exit;
   Case Result Of
     crSuccess:
-      FStatusFooter.SetRightText(Format('Compile OK (%d warn)', [WarningCount]));
+      StatusFooter.SetRightText(Format('Compile OK (%d warn)', [WarningCount]));
     crFailed:
-      FStatusFooter.SetRightText(Format('Compile failed (%d err)', [ErrorCount]));
+      StatusFooter.SetRightText(Format('Compile failed (%d err)', [ErrorCount]));
     crCancelled:
-      FStatusFooter.SetRightText('Cancelled');
+      StatusFooter.SetRightText('Cancelled');
   Else
     { }
   End;
@@ -3933,7 +3933,7 @@ Var
 Begin
   WorkflowLogger.Debug('ProjectAssistant', 'Document changed: ' + FileName);
   PlanRel := GetActivePlanRelativePath;
-  If (PlanRel = '') Or (Not Assigned(FCodePanel)) Then
+  If (PlanRel = '') Or (Not Assigned(CodePanel)) Then
     Exit;
   If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
     Exit;
@@ -3954,7 +3954,7 @@ Begin
   If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
     Begin
       RefreshPlanList;
-      If Assigned(FCodePanel) Then
+      If Assigned(CodePanel) Then
         RefreshCodeTodos;
     End;
 End;

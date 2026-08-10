@@ -15,11 +15,11 @@ Uses
 
 Type
   TGitCloneForm = Class(TForm)
-    FUrlEdit: TEdit;
-    FFolderEdit: TDirectoryEdit;
-    FUrlLabel: TLabel;
-    FFolderLabel: TLabel;
-    FButtonPanel: TButtonPanel;
+    UrlEdit: TEdit;
+    FolderEdit: TDirectoryEdit;
+    UrlLabel: TLabel;
+    FolderLabel: TLabel;
+    ButtonPanel: TButtonPanel;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
   Public
@@ -57,8 +57,8 @@ End;
 
 Procedure TGitCloneForm.FormCreate(Sender: TObject);
 Begin
-  FButtonPanel.OKButton.Caption := 'Clone';
-  FButtonPanel.CancelButton.Caption := 'Cancel';
+  ButtonPanel.OKButton.Caption := 'Clone';
+  ButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitCloneForm.SetDefaultFolder(Const Folder: String);
@@ -69,17 +69,17 @@ Begin
     Base := ExcludeTrailingPathDelimiter(ExpandFileName(Folder))
   Else
     Base := GetCurrentDir;
-  FFolderEdit.Directory := Base;
+  FolderEdit.Directory := Base;
 End;
 
 Function TGitCloneForm.RemoteUrl: String;
 Begin
-  Result := Trim(FUrlEdit.Text);
+  Result := Trim(UrlEdit.Text);
 End;
 
 Function TGitCloneForm.TargetFolder: String;
 Begin
-  Result := Trim(FFolderEdit.Directory);
+  Result := Trim(FolderEdit.Directory);
   If Result <> '' Then
     Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
 End;

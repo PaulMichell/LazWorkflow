@@ -17,24 +17,24 @@ Type
   TMarkdownViewMode = (mvmPreview, mvmSource);
 
   TAssistantMarkdownForm = Class(TForm)
-    FActionList: TActionList;
-    FOpenAction: TAction;
-    FSaveAction: TAction;
-    FPreviewModeAction: TAction;
-    FSourceModeAction: TAction;
-    FOpenDialog: TOpenDialog;
-    FToolBar: TToolBar;
+    ActionList: TActionList;
+    OpenAction: TAction;
+    SaveAction: TAction;
+    PreviewModeAction: TAction;
+    SourceModeAction: TAction;
+    OpenDialog: TOpenDialog;
+    ToolBar: TToolBar;
     ToolButtonOpen: TToolButton;
     ToolButtonSave: TToolButton;
     ToolButtonSep1: TToolButton;
     ToolButtonPreview: TToolButton;
     ToolButtonSource: TToolButton;
-    FStatusFooter: TStatusFooterFrame;
-    FContentPanel: TPanel;
-    FSourceMemo: TMemo;
-    FPreviewHost: TPanel;
-    FWatchTimer: TTimer;
-    FDebounceTimer: TTimer;
+    StatusFooter: TStatusFooterFrame;
+    ContentPanel: TPanel;
+    SourceMemo: TMemo;
+    PreviewHost: TPanel;
+    WatchTimer: TTimer;
+    DebounceTimer: TTimer;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure FormClose(Sender: TObject; Var CloseAction: TCloseAction);
@@ -53,7 +53,7 @@ Type
     FViewMode: TMarkdownViewMode;
     FDiskAge: LongInt;
     FPendingDiskReload: Boolean;
-    FPreview: TControl; { TMarkDownControl created at runtime. }
+    PreviewControl: TControl; { TMarkDownControl created at runtime. }
     Procedure EnsurePreview;
     Procedure ApplyViewMode;
     Procedure UpdateCaption;
@@ -208,7 +208,7 @@ Begin
     FDirty := False;
   Result := LoadFromDisk;
   If Result Then
-    FStatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
+    StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
 End;
 
 Constructor TAssistantMarkdownForm.Create(TheOwner: TComponent);
@@ -220,7 +220,7 @@ Begin
   FViewMode := mvmPreview;
   FDiskAge := -1;
   FPendingDiskReload := False;
-  FPreview := Nil;
+  PreviewControl := Nil;
 End;
 
 Procedure TAssistantMarkdownForm.FormCreate(Sender: TObject);
@@ -239,8 +239,8 @@ Procedure TAssistantMarkdownForm.FormDestroy(Sender: TObject);
 Var
   I: Integer;
 Begin
-  FWatchTimer.Enabled := False;
-  FDebounceTimer.Enabled := False;
+  WatchTimer.Enabled := False;
+  DebounceTimer.Enabled := False;
   If Assigned(MarkdownForms) Then
     Begin
       I := MarkdownForms.IndexOf(Self);
@@ -262,45 +262,45 @@ End;
 
 Procedure TAssistantMarkdownForm.EnsurePreview;
 Var
-  Preview: TMarkDownControl;
+  Control: TMarkDownControl;
 Begin
-  If Assigned(FPreview) Then
+  If Assigned(PreviewControl) Then
     Exit;
-  FPreviewHost.Color := clWhite;
-  FPreviewHost.ParentColor := False;
-  FPreviewHost.ParentBackground := False;
-  Preview := TMarkDownControl.Create(Self);
-  Preview.Parent := FPreviewHost;
-  Preview.Align := alClient;
-  Preview.BorderSpacing.Around := PreviewContentMargin;
-  Preview.Color := clWhite;
-  Preview.ParentColor := False;
-  Preview.ParentBackground := False;
-  Preview.ScrollBars := ssAutoBoth;
-  Preview.MonoFontName := 'Monospace';
-  Preview.FontName := 'default';
-  Preview.OnOpenURL := @HandlePreviewOpenURL;
-  Preview.OnGetImage := @HandlePreviewGetImage;
-  Preview.Visible := True;
-  FPreview := Preview;
+  PreviewHost.Color := clWhite;
+  PreviewHost.ParentColor := False;
+  PreviewHost.ParentBackground := False;
+  Control := TMarkDownControl.Create(Self);
+  Control.Parent := PreviewHost;
+  Control.Align := alClient;
+  Control.BorderSpacing.Around := PreviewContentMargin;
+  Control.Color := clWhite;
+  Control.ParentColor := False;
+  Control.ParentBackground := False;
+  Control.ScrollBars := ssAutoBoth;
+  Control.MonoFontName := 'Monospace';
+  Control.FontName := 'default';
+  Control.OnOpenURL := @HandlePreviewOpenURL;
+  Control.OnGetImage := @HandlePreviewGetImage;
+  Control.Visible := True;
+  PreviewControl := Control;
 End;
 
 Procedure TAssistantMarkdownForm.ApplyViewMode;
 Begin
   If FViewMode = mvmPreview Then
     Begin
-      FSourceMemo.Visible := False;
-      FPreviewHost.Visible := True;
-      FPreviewHost.Align := alClient;
+      SourceMemo.Visible := False;
+      PreviewHost.Visible := True;
+      PreviewHost.Align := alClient;
       { Keep preview content in sync when returning from source edits. }
       If Not FLoading Then
-        ApplyPreviewText(FSourceMemo.Text);
+        ApplyPreviewText(SourceMemo.Text);
     End
   Else
     Begin
-      FPreviewHost.Visible := False;
-      FSourceMemo.Visible := True;
-      FSourceMemo.Align := alClient;
+      PreviewHost.Visible := False;
+      SourceMemo.Visible := True;
+      SourceMemo.Align := alClient;
     End;
 End;
 
@@ -337,12 +337,12 @@ Begin
     RightText := 'Live'
   Else
     RightText := 'Ready';
-  FStatusFooter.SetAll(LeftText, CentreText, RightText);
+  StatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
 Procedure TAssistantMarkdownForm.RefreshActionState;
 Begin
-  FSaveAction.Enabled := (FFileName <> '') And FDirty;
+  SaveAction.Enabled := (FFileName <> '') And FDirty;
 End;
 
 Procedure TAssistantMarkdownForm.SetDirty(IsDirty: Boolean);
@@ -384,21 +384,21 @@ End;
 
 Procedure TAssistantMarkdownForm.ApplyPreviewText(Const Body: String);
 Var
-  Preview: TMarkDownControl;
+  Control: TMarkDownControl;
 Begin
   EnsurePreview;
-  Preview := TMarkDownControl(FPreview);
-  Preview.MarkDown.BeginUpdate;
+  Control := TMarkDownControl(PreviewControl);
+  Control.MarkDown.BeginUpdate;
   Try
     Try
-      Preview.MarkDown.Text := Body;
+      Control.MarkDown.Text := Body;
     Except
       { Leave an empty preview rather than a half-laid-out control. }
-      Preview.MarkDown.Text := '';
+      Control.MarkDown.Text := '';
       Raise;
     End;
   Finally
-    Preview.MarkDown.EndUpdate;
+    Control.MarkDown.EndUpdate;
   End;
 End;
 
@@ -419,7 +419,7 @@ Begin
     Try
       SL.LoadFromFile(FFileName);
       Body := SL.Text;
-      FSourceMemo.Lines.Assign(SL);
+      SourceMemo.Lines.Assign(SL);
       Try
         ApplyPreviewText(Body);
       Except
@@ -434,7 +434,7 @@ Begin
       FDiskAge := FileAge(FFileName);
       FPendingDiskReload := False;
       SetDirty(False);
-      FWatchTimer.Enabled := True;
+      WatchTimer.Enabled := True;
       Result := True;
       UpdateCaption;
       UpdateStatus;
@@ -457,11 +457,11 @@ Begin
   If FFileName = '' Then
     Exit;
   Try
-    FSourceMemo.Lines.SaveToFile(FFileName);
+    SourceMemo.Lines.SaveToFile(FFileName);
     FDiskAge := FileAge(FFileName);
     FPendingDiskReload := False;
     SetDirty(False);
-    ApplyPreviewText(FSourceMemo.Text);
+    ApplyPreviewText(SourceMemo.Text);
     NotifyDocumentSaved;
     NotifyDocumentChanged;
     Result := True;
@@ -504,16 +504,16 @@ Begin
   If (InitialDir = '') And (FFileName <> '') Then
     InitialDir := ExtractFilePath(FFileName);
   If InitialDir <> '' Then
-    FOpenDialog.InitialDir := InitialDir;
-  If Not FOpenDialog.Execute Then
+    OpenDialog.InitialDir := InitialDir;
+  If Not OpenDialog.Execute Then
     Exit;
-  Result := OpenFile(FOpenDialog.FileName);
+  Result := OpenFile(OpenDialog.FileName);
 End;
 
 Procedure TAssistantMarkdownForm.NotifyDocumentChanged;
 Begin
   If Assigned(WorkflowEventBus) And (FFileName <> '') Then
-    WorkflowEventBus.NotifyDocumentChanged(FFileName, FSourceMemo.Text);
+    WorkflowEventBus.NotifyDocumentChanged(FFileName, SourceMemo.Text);
 End;
 
 Procedure TAssistantMarkdownForm.NotifyDocumentSaved;
@@ -612,13 +612,13 @@ Begin
       Exit;
     End;
   { Debounce rapid successive writes (e.g. editor save + LLM rewrite). }
-  FDebounceTimer.Enabled := False;
-  FDebounceTimer.Enabled := True;
+  DebounceTimer.Enabled := False;
+  DebounceTimer.Enabled := True;
 End;
 
 Procedure TAssistantMarkdownForm.DebounceTimerTimer(Sender: TObject);
 Begin
-  FDebounceTimer.Enabled := False;
+  DebounceTimer.Enabled := False;
   If FDirty Then
     Begin
       FPendingDiskReload := True;
@@ -628,7 +628,7 @@ Begin
   If FFileName = '' Then
     Exit;
   LoadFromDisk;
-  FStatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
+  StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
 End;
 
 Initialization

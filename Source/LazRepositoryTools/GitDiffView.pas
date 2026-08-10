@@ -57,8 +57,8 @@ Type
     SelectHunkMenuItem: TMenuItem;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
-    Procedure BtnStageSelClick(Sender: TObject);
-    Procedure BtnUnstageSelClick(Sender: TObject);
+    Procedure StageSelectionButtonClick(Sender: TObject);
+    Procedure UnstageSelectionButtonClick(Sender: TObject);
     Procedure PopupStageClick(Sender: TObject);
     Procedure PopupUnstageClick(Sender: TObject);
     Procedure PopupStageHunkClick(Sender: TObject);
@@ -77,23 +77,23 @@ Type
     FScrollGeneration: PtrInt;
     FOnStatusChanged: TNotifyEvent;
     FOnSelectionChanged: TNotifyEvent;
-    FOverviewGutter: TSynGutterLineOverview;
-    FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
-    FOwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
-    FMixedHigh: TObject; { TGitMixedDiffHighlighter; Create(Nil) — never Self-owned (would stream into host LFM) }
-    FPreviewPicture: TPicture;
+    OverviewGutter: TSynGutterLineOverview;
+    DiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
+    OwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
+    MixedHigh: TObject; { TGitMixedDiffHighlighter; Create(Nil) — never Self-owned (would stream into host LFM) }
+    PreviewPicture: TPicture;
     FAppearanceReady: Boolean;
     FEditorOptsHooked: Boolean;
-    FSelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
+    SelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
     FLineDragCtrl: Boolean;
     FLineDragAnchor: Integer; { 1-based }
     FLineDragWasSelected: Boolean;
-    FLineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
+    LineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
     FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta / @@ headers }
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
-    FHunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
+    HunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyCompactEditorFont;
     Procedure ApplyIDEEditorFont;
@@ -214,7 +214,7 @@ Type
   { Real TSynDiffSyn so SynEdit fold/markup stay valid; language HL only on context lines. }
   TGitMixedDiffHighlighter = Class(TSynDiffSyn)
   Private
-    FLang: TLazEditCustomHighlighter; { not owned }
+    Lang: TLazEditCustomHighlighter; { not owned }
     FContextMode: Boolean;
     FPrefixDone: Boolean;
     FAtEol: Boolean;
@@ -237,8 +237,8 @@ Type
   Private
     FColorAdded: TColor;
     FColorRemoved: TColor;
-    FRGBAdded: TColor;
-    FRGBRemoved: TColor;
+    RGBAdded: TColor;
+    RGBRemoved: TColor;
     Procedure SetColorAdded(Const NewColor: TColor);
     Procedure SetColorRemoved(Const NewColor: TColor);
   Protected
@@ -324,7 +324,7 @@ End;
 
 Procedure TGitMixedDiffHighlighter.SetLanguageBackend(ALang: TLazEditCustomHighlighter);
 Begin
-  FLang := ALang;
+  Lang := ALang;
   FContextMode := False;
 End;
 
@@ -341,7 +341,7 @@ Begin
   FAtEol := False;
   Inherited;
 
-  If Not Assigned(FLang) Then
+  If Not Assigned(Lang) Then
     Exit;
   LineText := CurrentLineText;
   If Not LineIsDiffContext(LineText) Then
@@ -358,10 +358,10 @@ Begin
     Else
       Body := LineText;
     { Private language instance only: line index 0 => ResetRange, no CurrentRanges. }
-    FLang.SetAlternativeLineTextForGetTokens(Body, 0);
+    Lang.SetAlternativeLineTextForGetTokens(Body, 0);
     FContextMode := True;
     FAtEol := False;
-    If FPrefixDone And FLang.GetEol Then
+    If FPrefixDone And Lang.GetEol Then
       FAtEol := True;
   Except
     { Fall back to Diff tokens already set up by Inherited (this line only). }
@@ -382,17 +382,17 @@ Begin
     If Not FPrefixDone Then
       Begin
         FPrefixDone := True;
-        If (Not Assigned(FLang)) Or FLang.GetEol Then
+        If (Not Assigned(Lang)) Or Lang.GetEol Then
           FAtEol := True;
         Exit;
       End;
-    If Not Assigned(FLang) Then
+    If Not Assigned(Lang) Then
       Begin
         FAtEol := True;
         Exit;
       End;
-    FLang.Next;
-    If FLang.GetEol Then
+    Lang.Next;
+    If Lang.GetEol Then
       FAtEol := True;
   Except
     FAtEol := True;
@@ -415,8 +415,8 @@ Begin
   Try
     If Not FPrefixDone Then
       Result := FPrefixStr
-    Else If Assigned(FLang) Then
-      Result := FLang.GetToken
+    Else If Assigned(Lang) Then
+      Result := Lang.GetToken
     Else
       Result := Inherited GetToken;
   Except
@@ -431,8 +431,8 @@ Begin
   Try
     If Not FPrefixDone Then
       Result := 0
-    Else If Assigned(FLang) Then
-      Result := FLang.GetTokenPos + FPrefixLen
+    Else If Assigned(Lang) Then
+      Result := Lang.GetTokenPos + FPrefixLen
     Else
       Result := Inherited GetTokenPos;
   Except
@@ -447,8 +447,8 @@ Begin
   Try
     If Not FPrefixDone Then
       Result := 0
-    Else If Assigned(FLang) Then
-      Result := FLang.GetTokenKind
+    Else If Assigned(Lang) Then
+      Result := Lang.GetTokenKind
     Else
       Result := Inherited GetTokenKind;
   Except
@@ -469,8 +469,8 @@ Begin
         TokenStart := PChar(FPrefixStr);
         TokenLength := FPrefixLen;
       End
-    Else If Assigned(FLang) Then
-      FLang.GetTokenEx(TokenStart, TokenLength)
+    Else If Assigned(Lang) Then
+      Lang.GetTokenEx(TokenStart, TokenLength)
     Else
       Inherited GetTokenEx(TokenStart, TokenLength);
   Except
@@ -485,9 +485,9 @@ Begin
   Try
     If Not FPrefixDone Then
       Result := LineContextAttri
-    Else If Assigned(FLang) Then
+    Else If Assigned(Lang) Then
       Begin
-        Result := FLang.GetTokenAttribute;
+        Result := Lang.GetTokenAttribute;
         If Result = Nil Then
           Result := LineContextAttri;
       End
@@ -511,7 +511,7 @@ Begin
   If FColorAdded = NewColor Then
     Exit;
   FColorAdded := NewColor;
-  FRGBAdded := TColor(ColorToRGB(NewColor));
+  RGBAdded := TColor(ColorToRGB(NewColor));
   DoChange(Self);
 End;
 
@@ -520,7 +520,7 @@ Begin
   If FColorRemoved = NewColor Then
     Exit;
   FColorRemoved := NewColor;
-  FRGBRemoved := TColor(ColorToRGB(NewColor));
+  RGBRemoved := TColor(ColorToRGB(NewColor));
   DoChange(Self);
 End;
 
@@ -562,11 +562,11 @@ Begin
       R.Top := Y1 + TopOffset;
       R.Bottom := Max(Y1 + 1, Y2) + TopOffset + 1;
       If IsAdd And IsDel Then
-        Canvas.Brush.Color := FRGBAdded
+        Canvas.Brush.Color := RGBAdded
       Else If IsAdd Then
-        Canvas.Brush.Color := FRGBAdded
+        Canvas.Brush.Color := RGBAdded
       Else
-        Canvas.Brush.Color := FRGBRemoved;
+        Canvas.Brush.Color := RGBRemoved;
       Canvas.FillRect(R);
     End;
 End;
@@ -580,13 +580,13 @@ Begin
   FMode := dvmStaging;
   FUpdatingList := False;
   FScrollGeneration := 0;
-  FOverviewGutter := Nil;
-  FDiffOverviewProvider := Nil;
-  FOwnedLangHigh := Nil;
+  OverviewGutter := Nil;
+  DiffOverviewProvider := Nil;
+  OwnedLangHigh := Nil;
   FAppearanceReady := False;
   FEditorOptsHooked := False;
-  FSelectedLines := TFPList.Create;
-  FLineDragSnapshot := TFPList.Create;
+  SelectedLines := TFPList.Create;
+  LineDragSnapshot := TFPList.Create;
   FLineDragActive := False;
   FLineDragMoved := False;
   FLineDragCtrl := False;
@@ -594,13 +594,13 @@ Begin
   FLineDragWasSelected := False;
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
-  FHunkStartLines := TFPList.Create;
-  FPreviewPicture := TPicture.Create;
+  HunkStartLines := TFPList.Create;
+  PreviewPicture := TPicture.Create;
   { Owner must be Nil. Create(Self) puts the highlighter in the frame's
     Components list; when TGitDiffView is inlined on a host form the designer
     streams it into the host .lfm as a nameless object TGitMixedDiffHighlighter
     and opening the form AVs. Manual FreeAndNil in Destroy. }
-  FMixedHigh := TGitMixedDiffHighlighter.Create(Nil);
+  MixedHigh := TGitMixedDiffHighlighter.Create(Nil);
   { Do not touch SynEdit/IDE options here. Frame construction runs while the
     Manage Repository window is restored at IDE startup; GetSynEditorSettings
     and right-gutter surgery have taken Lazarus down hard. }
@@ -622,15 +622,15 @@ Begin
       Except
       End;
       { Detach before freeing private highlighters (not owned by Self). }
-      If Assigned(FMixedHigh) And (DiffEditor.Highlighter = FMixedHigh) Then
+      If Assigned(MixedHigh) And (DiffEditor.Highlighter = MixedHigh) Then
         DiffEditor.Highlighter := Nil;
     End;
   FreeOwnedLanguageHighlighter;
-  FreeAndNil(FMixedHigh);
-  FreeAndNil(FPreviewPicture);
-  FreeAndNil(FLineDragSnapshot);
-  FreeAndNil(FSelectedLines);
-  FreeAndNil(FHunkStartLines);
+  FreeAndNil(MixedHigh);
+  FreeAndNil(PreviewPicture);
+  FreeAndNil(LineDragSnapshot);
+  FreeAndNil(SelectedLines);
+  FreeAndNil(HunkStartLines);
   Inherited Destroy;
 End;
 
@@ -719,8 +719,8 @@ Begin
   If Not Assigned(DiffEditor) Then
     Exit;
   Try
-    FDiffOverviewProvider := Nil;
-    FOverviewGutter := Nil;
+    DiffOverviewProvider := Nil;
+    OverviewGutter := Nil;
     For I := DiffEditor.RightGutter.Parts.Count - 1 DownTo 0 Do
       DiffEditor.RightGutter.Parts[I].Free;
 
@@ -730,26 +730,26 @@ Begin
     DiffEditor.RightGutter.Width := OverviewGutterWidth;
     DiffEditor.RightGutter.Visible := True;
 
-    FOverviewGutter := TSynGutterLineOverview.Create(DiffEditor.RightGutter.Parts);
-    FOverviewGutter.AutoSize := False;
-    FOverviewGutter.Width := OverviewGutterWidth;
-    FOverviewGutter.Visible := True;
-    FOverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
+    OverviewGutter := TSynGutterLineOverview.Create(DiffEditor.RightGutter.Parts);
+    OverviewGutter.AutoSize := False;
+    OverviewGutter.Width := OverviewGutterWidth;
+    OverviewGutter.Visible := True;
+    OverviewGutter.MarkupInfo.Background := RGBToColor(236, 239, 241);
 
-    PageProvider := TSynGutterLOvProviderCurrentPage.Create(FOverviewGutter.Providers);
+    PageProvider := TSynGutterLOvProviderCurrentPage.Create(OverviewGutter.Providers);
     PageProvider.Color := RGBToColor(176, 190, 197);
     PageProvider.Priority := 1;
 
-    DiffProvider := TGitDiffOverviewProvider.Create(FOverviewGutter.Providers);
+    DiffProvider := TGitDiffOverviewProvider.Create(OverviewGutter.Providers);
     DiffProvider.ColorAdded := RGBToColor(76, 175, 80);
     DiffProvider.ColorRemoved := RGBToColor(229, 57, 53);
     DiffProvider.Priority := 20;
-    FDiffOverviewProvider := DiffProvider;
+    DiffOverviewProvider := DiffProvider;
   Except
     On E: Exception Do
       Begin
-        FOverviewGutter := Nil;
-        FDiffOverviewProvider := Nil;
+        OverviewGutter := Nil;
+        DiffOverviewProvider := Nil;
         WorkflowLogger.Warning('GitDiffView', 'SetupDiffOverviewGutter: ' + E.Message);
       End;
   End;
@@ -767,9 +767,9 @@ Begin
     Exit;
 
   StillInstalled := False;
-  If Assigned(FOverviewGutter) Then
+  If Assigned(OverviewGutter) Then
     For I := 0 To DiffEditor.RightGutter.Parts.Count - 1 Do
-      If DiffEditor.RightGutter.Parts[I] = FOverviewGutter Then
+      If DiffEditor.RightGutter.Parts[I] = OverviewGutter Then
         Begin
           StillInstalled := True;
           Break;
@@ -781,13 +781,13 @@ Begin
   DiffEditor.RightGutter.AutoSize := False;
   DiffEditor.RightGutter.Width := OverviewGutterWidth;
   DiffEditor.RightGutter.Visible := True;
-  If Assigned(FOverviewGutter) Then
+  If Assigned(OverviewGutter) Then
     Begin
-      FOverviewGutter.AutoSize := False;
-      FOverviewGutter.Width := OverviewGutterWidth;
+      OverviewGutter.AutoSize := False;
+      OverviewGutter.Width := OverviewGutterWidth;
       { Toggle visibility so GutterVisibilityChanged / DoResize repositions FWinControl. }
-      FOverviewGutter.Visible := False;
-      FOverviewGutter.Visible := True;
+      OverviewGutter.Visible := False;
+      OverviewGutter.Visible := True;
     End;
 
   If DiffEditor.HandleAllocated Then
@@ -1026,9 +1026,9 @@ Begin
           ConfigureDiffColors(DiffHighlighter);
         Except
         End;
-      If Assigned(FMixedHigh) Then
+      If Assigned(MixedHigh) Then
         Try
-          ConfigureDiffColors(TSynDiffSyn(FMixedHigh));
+          ConfigureDiffColors(TSynDiffSyn(MixedHigh));
         Except
         End;
       SetupDiffOverviewGutter;
@@ -1061,8 +1061,8 @@ Procedure TGitDiffView.ClearDisplayMap;
 Begin
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
-  If Assigned(FHunkStartLines) Then
-    FHunkStartLines.Clear;
+  If Assigned(HunkStartLines) Then
+    HunkStartLines.Clear;
 End;
 
 Procedure TGitDiffView.RebuildVisualHunkStarts;
@@ -1073,9 +1073,9 @@ Var
   LineText: String;
   NeedNewHunk: Boolean;
 Begin
-  If Assigned(FHunkStartLines) Then
-    FHunkStartLines.Clear;
-  If (Not Assigned(DiffEditor)) Or (Not Assigned(FHunkStartLines)) Or (DiffEditor.Lines.Count = 0) Then
+  If Assigned(HunkStartLines) Then
+    HunkStartLines.Clear;
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(HunkStartLines)) Or (DiffEditor.Lines.Count = 0) Then
     Exit;
 
   ContextRun := HunkContextGap; { first change always starts a hunk }
@@ -1086,7 +1086,7 @@ Begin
       If IsDiffChangeLine(LineText) Then
         Begin
           If NeedNewHunk Or (ContextRun >= HunkContextGap) Then
-            FHunkStartLines.Add(Pointer(PtrInt(LineNo)));
+            HunkStartLines.Add(Pointer(PtrInt(LineNo)));
           ContextRun := 0;
           NeedNewHunk := False;
         End
@@ -1100,10 +1100,10 @@ Var
   I: Integer;
 Begin
   Result := False;
-  If Not Assigned(FHunkStartLines) Then
+  If Not Assigned(HunkStartLines) Then
     Exit;
-  For I := 0 To FHunkStartLines.Count - 1 Do
-    If PtrInt(FHunkStartLines[I]) = LineNo Then
+  For I := 0 To HunkStartLines.Count - 1 Do
+    If PtrInt(HunkStartLines[I]) = LineNo Then
       Exit(True);
 End;
 
@@ -1155,9 +1155,9 @@ Begin
   Result := False;
   If Not FUseDisplayMap Then
     Exit(IsLineSelected(FullLineNo));
-  For I := 0 To FSelectedLines.Count - 1 Do
+  For I := 0 To SelectedLines.Count - 1 Do
     Begin
-      Disp := Integer(PtrInt(FSelectedLines[I]));
+      Disp := Integer(PtrInt(SelectedLines[I]));
       If (Disp >= 1) And (Disp <= Length(FDisplayToFull)) And
          (FDisplayToFull[Disp - 1] = FullLineNo) Then
         Exit(True);
@@ -1232,7 +1232,7 @@ Var
   MarkerW, RectH, TriH: Integer;
   FillCol, EdgeCol: TColor;
 Begin
-  If (FMode <> dvmEditorOnly) Or (Not Assigned(DiffEditor)) Or (Not Assigned(FHunkStartLines)) Then
+  If (FMode <> dvmEditorOnly) Or (Not Assigned(DiffEditor)) Or (Not Assigned(HunkStartLines)) Then
     Exit;
 
   MarkerW := ScaleDesign(12);
@@ -1252,9 +1252,9 @@ Begin
   PaintCanvas.Pen.Style := psSolid;
   PaintCanvas.Brush.Style := bsSolid;
 
-  For I := 0 To FHunkStartLines.Count - 1 Do
+  For I := 0 To HunkStartLines.Count - 1 Do
     Begin
-      LineNo := Integer(PtrInt(FHunkStartLines[I]));
+      LineNo := Integer(PtrInt(HunkStartLines[I]));
       If Not LinePixelTop(LineNo, Y) Then
         Continue;
 
@@ -1332,9 +1332,9 @@ End;
 
 Procedure TGitDiffView.ClearLineSelection(NotifyChange: Boolean);
 Begin
-  If Assigned(FSelectedLines) And (FSelectedLines.Count > 0) Then
+  If Assigned(SelectedLines) And (SelectedLines.Count > 0) Then
     Begin
-      FSelectedLines.Clear;
+      SelectedLines.Clear;
       If Assigned(DiffEditor) Then
         DiffEditor.Invalidate;
       If NotifyChange Then
@@ -1343,8 +1343,8 @@ Begin
           DoSelectionChanged;
         End;
     End
-  Else If Assigned(FSelectedLines) Then
-    FSelectedLines.Clear;
+  Else If Assigned(SelectedLines) Then
+    SelectedLines.Clear;
 End;
 
 Function TGitDiffView.IsLineSelected(LineNo: Integer): Boolean;
@@ -1352,17 +1352,17 @@ Var
   I: Integer;
 Begin
   Result := False;
-  If Not Assigned(FSelectedLines) Then
+  If Not Assigned(SelectedLines) Then
     Exit;
-  For I := 0 To FSelectedLines.Count - 1 Do
-    If PtrInt(FSelectedLines[I]) = LineNo Then
+  For I := 0 To SelectedLines.Count - 1 Do
+    If PtrInt(SelectedLines[I]) = LineNo Then
       Exit(True);
 End;
 
 Function TGitDiffView.SelectedLineCount: Integer;
 Begin
-  If Assigned(FSelectedLines) Then
-    Result := FSelectedLines.Count
+  If Assigned(SelectedLines) Then
+    Result := SelectedLines.Count
   Else
     Result := 0;
 End;
@@ -1378,9 +1378,9 @@ Begin
     Exit;
   FirstLine := MaxInt;
   LastLine := 0;
-  For I := 0 To FSelectedLines.Count - 1 Do
+  For I := 0 To SelectedLines.Count - 1 Do
     Begin
-      LineNo := Integer(PtrInt(FSelectedLines[I]));
+      LineNo := Integer(PtrInt(SelectedLines[I]));
       If LineNo < FirstLine Then
         FirstLine := LineNo;
       If LineNo > LastLine Then
@@ -1391,30 +1391,30 @@ End;
 
 Procedure TGitDiffView.AddLineToSelection(LineNo: Integer);
 Begin
-  If (Not Assigned(FSelectedLines)) Or (LineNo < 1) Then
+  If (Not Assigned(SelectedLines)) Or (LineNo < 1) Then
     Exit;
   If IsLineSelected(LineNo) Then
     Exit;
-  FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+  SelectedLines.Add(Pointer(PtrInt(LineNo)));
 End;
 
 Procedure TGitDiffView.ToggleLineSelection(LineNo: Integer);
 Var
   I: Integer;
 Begin
-  If Not Assigned(FSelectedLines) Then
+  If Not Assigned(SelectedLines) Then
     Exit;
-  For I := 0 To FSelectedLines.Count - 1 Do
-    If PtrInt(FSelectedLines[I]) = LineNo Then
+  For I := 0 To SelectedLines.Count - 1 Do
+    If PtrInt(SelectedLines[I]) = LineNo Then
       Begin
-        FSelectedLines.Delete(I);
+        SelectedLines.Delete(I);
         If Assigned(DiffEditor) Then
           DiffEditor.Invalidate;
         UpdateActionEnabled;
         DoSelectionChanged;
         Exit;
       End;
-  FSelectedLines.Add(Pointer(PtrInt(LineNo)));
+  SelectedLines.Add(Pointer(PtrInt(LineNo)));
   If Assigned(DiffEditor) Then
     DiffEditor.Invalidate;
   UpdateActionEnabled;
@@ -1427,7 +1427,7 @@ Var
   LineNo, Lo, Hi, I: Integer;
   LineText: String;
 Begin
-  If (Not Assigned(DiffEditor)) Or (Not Assigned(FSelectedLines)) Then
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(SelectedLines)) Then
     Exit;
   Lo := StartLine;
   Hi := EndLine;
@@ -1441,10 +1441,10 @@ Begin
   If Hi > DiffEditor.Lines.Count Then
     Hi := DiffEditor.Lines.Count;
 
-  FSelectedLines.Clear;
-  If MergeWithSnapshot And Assigned(FLineDragSnapshot) Then
-    For I := 0 To FLineDragSnapshot.Count - 1 Do
-      FSelectedLines.Add(FLineDragSnapshot[I]);
+  SelectedLines.Clear;
+  If MergeWithSnapshot And Assigned(LineDragSnapshot) Then
+    For I := 0 To LineDragSnapshot.Count - 1 Do
+      SelectedLines.Add(LineDragSnapshot[I]);
 
   For LineNo := Lo To Hi Do
     Begin
@@ -1479,11 +1479,11 @@ End;
 
 Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
 Begin
-  If Assigned(FMixedHigh) Then
-    TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
-  If Assigned(DiffEditor) And Assigned(FOwnedLangHigh) And (DiffEditor.Highlighter = FOwnedLangHigh) Then
+  If Assigned(MixedHigh) Then
+    TGitMixedDiffHighlighter(MixedHigh).SetLanguageBackend(Nil);
+  If Assigned(DiffEditor) And Assigned(OwnedLangHigh) And (DiffEditor.Highlighter = OwnedLangHigh) Then
     DiffEditor.Highlighter := Nil;
-  FreeAndNil(FOwnedLangHigh);
+  FreeAndNil(OwnedLangHigh);
 End;
 
 Procedure TGitDiffView.ApplyDiffHighlighter;
@@ -1495,10 +1495,10 @@ Begin
   ShowEditorPane;
   FreeOwnedLanguageHighlighter;
   DiffHL := DiffHighlighter;
-  If Assigned(FMixedHigh) Then
+  If Assigned(MixedHigh) Then
     Begin
-      TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
-      DiffHL := TSynDiffSyn(FMixedHigh);
+      TGitMixedDiffHighlighter(MixedHigh).SetLanguageBackend(Nil);
+      DiffHL := TSynDiffSyn(MixedHigh);
     End;
   If Assigned(DiffHL) Then
     Begin
@@ -1572,7 +1572,7 @@ Begin
   HL := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
   If Assigned(HL) Then
     Begin
-      FOwnedLangHigh := HL;
+      OwnedLangHigh := HL;
       DiffEditor.Highlighter := HL;
     End
   Else
@@ -1588,12 +1588,12 @@ Begin
     Exit;
   ShowEditorPane;
   FreeOwnedLanguageHighlighter;
-  If Not Assigned(FMixedHigh) Then
+  If Not Assigned(MixedHigh) Then
     Begin
       ApplyDiffHighlighter;
       Exit;
     End;
-  Mixed := TGitMixedDiffHighlighter(FMixedHigh);
+  Mixed := TGitMixedDiffHighlighter(MixedHigh);
   Mixed.SetLanguageBackend(Nil);
   If Assigned(IDEEditorOptions) Then
     Try
@@ -1606,7 +1606,7 @@ Begin
     Lang := TLazEditCustomHighlighter(CreateOwnedLanguageHighlighter(SourceFileName));
   If Assigned(Lang) Then
     Begin
-      FOwnedLangHigh := Lang;
+      OwnedLangHigh := Lang;
       Mixed.SetLanguageBackend(Lang);
     End;
   Try
@@ -1616,7 +1616,7 @@ Begin
       Begin
         WorkflowLogger.Warning('GitDiffView', 'Mixed highlighter failed: ' + E.Message);
         Mixed.SetLanguageBackend(Nil);
-        FreeAndNil(FOwnedLangHigh);
+        FreeAndNil(OwnedLangHigh);
         ApplyDiffHighlighter;
       End;
   End;
@@ -1624,8 +1624,8 @@ End;
 
 Procedure TGitDiffView.ShowEditorPane;
 Begin
-  If Assigned(FPreviewPicture) Then
-    FPreviewPicture.Clear;
+  If Assigned(PreviewPicture) Then
+    PreviewPicture.Clear;
   If Assigned(BinaryLabel) Then
     BinaryLabel.Visible := False;
   If Assigned(ImagePaintBox) Then
@@ -1653,8 +1653,8 @@ Begin
       DiffEditor.Lines.Clear;
       DiffEditor.Visible := False;
     End;
-  If Assigned(FPreviewPicture) Then
-    FPreviewPicture.Clear;
+  If Assigned(PreviewPicture) Then
+    PreviewPicture.Clear;
   If TitleText <> '' Then
     TitleLabel.Caption := TitleText;
   If Assigned(ImagePaintBox) Then
@@ -1672,18 +1672,18 @@ End;
 Function TGitDiffView.TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
 Begin
   Result := False;
-  If (Stream = Nil) Or (Stream.Size = 0) Or (Not Assigned(FPreviewPicture)) Then
+  If (Stream = Nil) Or (Stream.Size = 0) Or (Not Assigned(PreviewPicture)) Then
     Exit;
   Stream.Position := 0;
   Try
-    FPreviewPicture.LoadFromStream(Stream);
+    PreviewPicture.LoadFromStream(Stream);
   Except
-    FPreviewPicture.Clear;
+    PreviewPicture.Clear;
     Exit;
   End;
-  If (FPreviewPicture.Width < 1) Or (FPreviewPicture.Height < 1) Then
+  If (PreviewPicture.Width < 1) Or (PreviewPicture.Height < 1) Then
     Begin
-      FPreviewPicture.Clear;
+      PreviewPicture.Clear;
       Exit;
     End;
   CancelPendingScroll;
@@ -1773,12 +1773,12 @@ Begin
       Brush.Color := clWindow;
       FillRect(ImagePaintBox.ClientRect);
     End;
-  If (Not Assigned(FPreviewPicture)) Or (FPreviewPicture.Width < 1) Or (FPreviewPicture.Height < 1) Then
+  If (Not Assigned(PreviewPicture)) Or (PreviewPicture.Width < 1) Or (PreviewPicture.Height < 1) Then
     Exit;
   BoxW := ImagePaintBox.ClientWidth;
   BoxH := ImagePaintBox.ClientHeight;
-  ImgW := FPreviewPicture.Width;
-  ImgH := FPreviewPicture.Height;
+  ImgW := PreviewPicture.Width;
+  ImgH := PreviewPicture.Height;
   If (BoxW < 1) Or (BoxH < 1) Then
     Exit;
   ScaleX := BoxW / ImgW;
@@ -1795,7 +1795,7 @@ Begin
   Dest.Top := (BoxH - DrawH) Div 2;
   Dest.Right := Dest.Left + DrawW;
   Dest.Bottom := Dest.Top + DrawH;
-  ImagePaintBox.Canvas.StretchDraw(Dest, FPreviewPicture.Graphic);
+  ImagePaintBox.Canvas.StretchDraw(Dest, PreviewPicture.Graphic);
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -2018,15 +2018,15 @@ Begin
   { Hunk marker: click selects hunk; Ctrl+click toggles hunk selection. }
   If FMode = dvmEditorOnly Then
     Begin
-      If Assigned(FHunkStartLines) Then
-        For I := 0 To FHunkStartLines.Count - 1 Do
-          If PointInHunkMarker(X, Y, Integer(PtrInt(FHunkStartLines[I]))) Then
+      If Assigned(HunkStartLines) Then
+        For I := 0 To HunkStartLines.Count - 1 Do
+          If PointInHunkMarker(X, Y, Integer(PtrInt(HunkStartLines[I]))) Then
             Begin
               FLineDragActive := False;
               If ssCtrl in Shift Then
-                ToggleHunkSelectionAtLine(Integer(PtrInt(FHunkStartLines[I])))
+                ToggleHunkSelectionAtLine(Integer(PtrInt(HunkStartLines[I])))
               Else
-                SelectHunkAtLine(Integer(PtrInt(FHunkStartLines[I])));
+                SelectHunkAtLine(Integer(PtrInt(HunkStartLines[I])));
               Exit;
             End;
       If IsVisualHunkStart(LineNo) And (X < DiffEditor.Gutter.Width) Then
@@ -2047,10 +2047,10 @@ Begin
   FLineDragCtrl := ssCtrl in Shift;
   FLineDragAnchor := LineNo;
   FLineDragWasSelected := IsDiffChangeLine(LineText) And IsLineSelected(LineNo);
-  FLineDragSnapshot.Clear;
-  If FLineDragCtrl And Assigned(FSelectedLines) Then
-    For I := 0 To FSelectedLines.Count - 1 Do
-      FLineDragSnapshot.Add(FSelectedLines[I]);
+  LineDragSnapshot.Clear;
+  If FLineDragCtrl And Assigned(SelectedLines) Then
+    For I := 0 To SelectedLines.Count - 1 Do
+      LineDragSnapshot.Add(SelectedLines[I]);
 
   If IsDiffChangeLine(LineText) Then
     Begin
@@ -2147,8 +2147,8 @@ Begin
   FLineDragActive := False;
   FLineDragMoved := False;
   FLineDragAnchor := 0;
-  If Assigned(FLineDragSnapshot) Then
-    FLineDragSnapshot.Clear;
+  If Assigned(LineDragSnapshot) Then
+    LineDragSnapshot.Clear;
 End;
 
 Procedure TGitDiffView.ClearTreeData;
@@ -2547,12 +2547,12 @@ Begin
     Exit;
 
   { Files tab: visual hunks = change groups separated by 6+ context lines. }
-  If (FMode = dvmEditorOnly) And Assigned(FHunkStartLines) And (FHunkStartLines.Count > 0) Then
+  If (FMode = dvmEditorOnly) And Assigned(HunkStartLines) And (HunkStartLines.Count > 0) Then
     Begin
       FirstLine := 0;
-      For I := 0 To FHunkStartLines.Count - 1 Do
+      For I := 0 To HunkStartLines.Count - 1 Do
         Begin
-          StartLine := Integer(PtrInt(FHunkStartLines[I]));
+          StartLine := Integer(PtrInt(HunkStartLines[I]));
           If StartLine <= AtLine Then
             FirstLine := StartLine
           Else
@@ -2561,9 +2561,9 @@ Begin
       If FirstLine < 1 Then
         Exit;
       LastLine := Count;
-      For I := 0 To FHunkStartLines.Count - 1 Do
+      For I := 0 To HunkStartLines.Count - 1 Do
         Begin
-          NextStart := Integer(PtrInt(FHunkStartLines[I]));
+          NextStart := Integer(PtrInt(HunkStartLines[I]));
           If NextStart > FirstLine Then
             Begin
               LastLine := NextStart - 1;
@@ -2633,7 +2633,7 @@ Begin
       SelectHunkAtLine(AtLine);
       Exit;
     End;
-  If (Not Assigned(DiffEditor)) Or (Not Assigned(FSelectedLines)) Then
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(SelectedLines)) Then
     Exit(False);
 
   ChangeLines := TFPList.Create;
@@ -2662,10 +2662,10 @@ Begin
         For I := 0 To ChangeLines.Count - 1 Do
           Begin
             LineNo := Integer(PtrInt(ChangeLines[I]));
-            For J := FSelectedLines.Count - 1 DownTo 0 Do
-              If PtrInt(FSelectedLines[J]) = LineNo Then
+            For J := SelectedLines.Count - 1 DownTo 0 Do
+              If PtrInt(SelectedLines[J]) = LineNo Then
                 Begin
-                  FSelectedLines.Delete(J);
+                  SelectedLines.Delete(J);
                   Break;
                 End;
           End;
@@ -2787,12 +2787,12 @@ Begin
     MessageDlg('Unstage selection failed: ' + GitClient.LastError, mtError, [mbOK], 0);
 End;
 
-Procedure TGitDiffView.BtnStageSelClick(Sender: TObject);
+Procedure TGitDiffView.StageSelectionButtonClick(Sender: TObject);
 Begin
   StageSelection;
 End;
 
-Procedure TGitDiffView.BtnUnstageSelClick(Sender: TObject);
+Procedure TGitDiffView.UnstageSelectionButtonClick(Sender: TObject);
 Begin
   UnstageSelection;
 End;

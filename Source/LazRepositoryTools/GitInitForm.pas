@@ -15,9 +15,9 @@ Uses
 
 Type
   TGitInitForm = Class(TForm)
-    FLabel: TLabel;
-    FFolderEdit: TDirectoryEdit;
-    FButtonPanel: TButtonPanel;
+    FolderLabel: TLabel;
+    FolderEdit: TDirectoryEdit;
+    ButtonPanel: TButtonPanel;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
   Public
@@ -52,21 +52,21 @@ End;
 
 Procedure TGitInitForm.FormCreate(Sender: TObject);
 Begin
-  FButtonPanel.OKButton.Caption := 'Initialise';
-  FButtonPanel.CancelButton.Caption := 'Cancel';
+  ButtonPanel.OKButton.Caption := 'Initialise';
+  ButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitInitForm.SetDefaultFolder(Const Folder: String);
 Begin
   If Folder <> '' Then
-    FFolderEdit.Directory := ExcludeTrailingPathDelimiter(ExpandFileName(Folder))
+    FolderEdit.Directory := ExcludeTrailingPathDelimiter(ExpandFileName(Folder))
   Else
-    FFolderEdit.Directory := GetCurrentDir;
+    FolderEdit.Directory := GetCurrentDir;
 End;
 
 Function TGitInitForm.SelectedFolder: String;
 Begin
-  Result := Trim(FFolderEdit.Directory);
+  Result := Trim(FolderEdit.Directory);
   If Result <> '' Then
     Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
 End;

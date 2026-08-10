@@ -11,7 +11,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
   OnCreate = FormCreate
   Position = poScreenCenter
   LCLVersion = '3.0'
-  object FStatusLabel: TLabel
+  object StatusLabel: TLabel
     Left = 16
     Height = 17
     Top = 16
@@ -19,7 +19,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'Account status:'
     ParentColor = False
   end
-  object FStatusValue: TLabel
+  object StatusValueLabel: TLabel
     Left = 120
     Height = 17
     Top = 16
@@ -28,7 +28,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'Not signed in'
     ParentColor = False
   end
-  object FSignInButton: TButton
+  object SignInButton: TButton
     Left = 16
     Height = 30
     Top = 44
@@ -37,7 +37,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     OnClick = SignInButtonClick
     TabOrder = 0
   end
-  object FSignOutButton: TButton
+  object SignOutButton: TButton
     Left = 256
     Height = 30
     Top = 44
@@ -46,7 +46,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     OnClick = SignOutButtonClick
     TabOrder = 1
   end
-  object FModelLabel: TLabel
+  object ModelLabel: TLabel
     Left = 16
     Height = 17
     Top = 90
@@ -54,7 +54,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'Model (from account):'
     ParentColor = False
   end
-  object FRefreshModelsButton: TButton
+  object RefreshModelsButton: TButton
     Left = 392
     Height = 26
     Top = 86
@@ -64,7 +64,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     OnClick = RefreshModelsButtonClick
     TabOrder = 2
   end
-  object FModelList: TListBox
+  object ModelList: TListBox
     Left = 16
     Height = 120
     Top = 114
@@ -73,7 +73,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     ItemHeight = 0
     TabOrder = 3
   end
-  object FModelHintLabel: TLabel
+  object ModelHintLabel: TLabel
     Left = 16
     Height = 17
     Top = 238
@@ -84,7 +84,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     ParentColor = False
     ParentFont = False
   end
-  object FSkillLabel: TLabel
+  object SkillLabel: TLabel
     Left = 16
     Height = 17
     Top = 266
@@ -92,7 +92,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'User skill (explicit session include):'
     ParentColor = False
   end
-  object FSkillCombo: TComboBox
+  object SkillCombo: TComboBox
     Left = 16
     Height = 28
     Top = 286
@@ -103,7 +103,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     TabOrder = 4
     Text = '(None)'
   end
-  object FIncludeContextCheck: TCheckBox
+  object IncludeContextCheck: TCheckBox
     Left = 16
     Height = 23
     Top = 322
@@ -114,7 +114,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     State = cbChecked
     TabOrder = 5
   end
-  object FAutoNewChatDefaultCheck: TCheckBox
+  object AutoNewChatDefaultCheck: TCheckBox
     Left = 16
     Height = 23
     Top = 348
@@ -123,7 +123,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'Default: automatically start a New Chat at 95% context use'
     TabOrder = 6
   end
-  object FApiBaseLabel: TLabel
+  object ApiBaseLabel: TLabel
     Left = 16
     Height = 17
     Top = 380
@@ -131,7 +131,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'API base URL:'
     ParentColor = False
   end
-  object FApiBaseEdit: TEdit
+  object ApiBaseEdit: TEdit
     Left = 16
     Height = 28
     Top = 400
@@ -140,7 +140,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     TabOrder = 7
     Text = 'https://api.x.ai/v1'
   end
-  object FManualLabel: TLabel
+  object ManualLabel: TLabel
     Left = 16
     Height = 17
     Top = 438
@@ -148,7 +148,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Caption = 'If browser cannot redirect, paste code or callback URL:'
     ParentColor = False
   end
-  object FManualEdit: TEdit
+  object ManualEdit: TEdit
     Left = 16
     Height = 28
     Top = 458
@@ -156,7 +156,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Anchors = [akTop, akLeft, akRight]
     TabOrder = 8
   end
-  object FPasteCodeButton: TButton
+  object PasteCodeButton: TButton
     Left = 392
     Height = 28
     Top = 458
@@ -166,7 +166,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     OnClick = PasteCodeButtonClick
     TabOrder = 9
   end
-  object FHintLabel: TLabel
+  object HintLabel: TLabel
     Left = 16
     Height = 56
     Top = 494
@@ -179,7 +179,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
     ParentFont = False
     WordWrap = True
   end
-  object FButtonPanel: TButtonPanel
+  object ButtonPanel: TButtonPanel
     Left = 6
     Height = 34
     Top = 550

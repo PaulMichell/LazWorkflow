@@ -11,7 +11,7 @@ object GitInitForm: TGitInitForm
   OnCreate = FormCreate
   Position = poScreenCenter
   LCLVersion = '3.0'
-  object FLabel: TLabel
+  object FolderLabel: TLabel
     Left = 16
     Height = 17
     Top = 16
@@ -19,7 +19,7 @@ object GitInitForm: TGitInitForm
     Caption = 'Project folder (Git root):'
     ParentColor = False
   end
-  object FFolderEdit: TDirectoryEdit
+  object FolderEdit: TDirectoryEdit
     Left = 16
     Height = 28
     Top = 40
@@ -31,7 +31,7 @@ object GitInitForm: TGitInitForm
     MaxLength = 0
     TabOrder = 0
   end
-  object FButtonPanel: TButtonPanel
+  object ButtonPanel: TButtonPanel
     Left = 6
     Height = 34
     Top = 100

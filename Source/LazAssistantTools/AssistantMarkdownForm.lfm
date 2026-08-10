@@ -12,51 +12,51 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
   OnDestroy = FormDestroy
   Position = poDefaultPosOnly
   LCLVersion = '3.0'
-  object FActionList: TActionList
+  object ActionList: TActionList
     Left = 40
     Top = 48
-    object FOpenAction: TAction
+    object OpenAction: TAction
       Caption = 'Open…'
       OnExecute = OpenActionExecute
     end
-    object FSaveAction: TAction
+    object SaveAction: TAction
       Caption = 'Save'
       OnExecute = SaveActionExecute
     end
-    object FPreviewModeAction: TAction
+    object PreviewModeAction: TAction
       Caption = 'Preview'
       OnExecute = PreviewModeActionExecute
     end
-    object FSourceModeAction: TAction
+    object SourceModeAction: TAction
       Caption = 'Source'
       OnExecute = SourceModeActionExecute
     end
   end
-  object FOpenDialog: TOpenDialog
+  object OpenDialog: TOpenDialog
     Title = 'Open Markdown document'
     Filter = 'Markdown (*.md;*.markdown;*.mdown)|*.md;*.markdown;*.mdown|All files (*)|*'
     Options = [ofEnableSizing, ofViewDetail]
     Left = 120
     Top = 48
   end
-  object FToolBar: TToolBar
+  object ToolBar: TToolBar
     Left = 0
     Height = 28
     Top = 0
     Width = 860
-    Caption = 'FToolBar'
+    Caption = 'ToolBar'
     EdgeBorders = []
     ShowCaptions = True
     TabOrder = 0
     object ToolButtonOpen: TToolButton
       Left = 1
       Top = 2
-      Action = FOpenAction
+      Action = OpenAction
     end
     object ToolButtonSave: TToolButton
       Left = 62
       Top = 2
-      Action = FSaveAction
+      Action = SaveAction
     end
     object ToolButtonSep1: TToolButton
       Left = 112
@@ -68,15 +68,15 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     object ToolButtonPreview: TToolButton
       Left = 120
       Top = 2
-      Action = FPreviewModeAction
+      Action = PreviewModeAction
     end
     object ToolButtonSource: TToolButton
       Left = 188
       Top = 2
-      Action = FSourceModeAction
+      Action = SourceModeAction
     end
   end
-  inline FStatusFooter: TStatusFooterFrame
+  inline StatusFooter: TStatusFooterFrame
     Height = 22
     Top = 598
     Width = 860
@@ -85,7 +85,7 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     ClientWidth = 860
     TabOrder = 2
   end
-  object FContentPanel: TPanel
+  object ContentPanel: TPanel
     Left = 0
     Height = 570
     Top = 28
@@ -95,7 +95,7 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     ClientHeight = 570
     ClientWidth = 860
     TabOrder = 1
-    object FSourceMemo: TMemo
+    object SourceMemo: TMemo
       Left = 0
       Height = 570
       Top = 0
@@ -110,7 +110,7 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
       WordWrap = False
       OnChange = SourceMemoChange
     end
-    object FPreviewHost: TPanel
+    object PreviewHost: TPanel
       Left = 0
       Height = 570
       Top = 0
@@ -123,14 +123,14 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
       TabOrder = 1
     end
   end
-  object FWatchTimer: TTimer
+  object WatchTimer: TTimer
     Enabled = False
     Interval = 750
     OnTimer = WatchTimerTimer
     Left = 200
     Top = 48
   end
-  object FDebounceTimer: TTimer
+  object DebounceTimer: TTimer
     Enabled = False
     Interval = 400
     OnTimer = DebounceTimerTimer

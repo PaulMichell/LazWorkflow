@@ -15,9 +15,9 @@ Uses
 
 Type
   TGitIgnoreForm = Class(TForm)
-    FHintLabel: TLabel;
-    FMemo: TMemo;
-    FButtonPanel: TButtonPanel;
+    HintLabel: TLabel;
+    IgnoreMemo: TMemo;
+    ButtonPanel: TButtonPanel;
     Procedure FormCreate(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
   Private
@@ -53,8 +53,8 @@ End;
 
 Procedure TGitIgnoreForm.FormCreate(Sender: TObject);
 Begin
-  FButtonPanel.OKButton.Caption := 'Save';
-  FButtonPanel.CancelButton.Caption := 'Cancel';
+  ButtonPanel.OKButton.Caption := 'Save';
+  ButtonPanel.CancelButton.Caption := 'Cancel';
 End;
 
 Procedure TGitIgnoreForm.LoadFromRepository(Const RepoPath: String);
@@ -62,9 +62,9 @@ Begin
   FIgnorePath := IncludeTrailingPathDelimiter(ExpandFileName(RepoPath)) + '.gitignore';
   Caption := 'Ignore Files – ' + FIgnorePath;
   If FileExists(FIgnorePath) Then
-    FMemo.Lines.LoadFromFile(FIgnorePath)
+    IgnoreMemo.Lines.LoadFromFile(FIgnorePath)
   Else
-    FMemo.Clear;
+    IgnoreMemo.Clear;
 End;
 
 Procedure TGitIgnoreForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
@@ -73,7 +73,7 @@ Begin
   If ModalResult <> mrOk Then
     Exit;
   Try
-    FMemo.Lines.SaveToFile(FIgnorePath);
+    IgnoreMemo.Lines.SaveToFile(FIgnorePath);
   Except
     On E: Exception Do
       Begin

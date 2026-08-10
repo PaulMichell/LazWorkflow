@@ -11,7 +11,7 @@ object GitSettingsForm: TGitSettingsForm
   LCLVersion = '4.99.0.0'
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
-  object FScrollBox: TScrollBox
+  object ScrollBox: TScrollBox
     Left = 0
     Height = 398
     Top = 0
@@ -23,7 +23,7 @@ object GitSettingsForm: TGitSettingsForm
     ClientHeight = 398
     ClientWidth = 520
     TabOrder = 0
-    object FIdentityGroup: TGroupBox
+    object IdentityGroup: TGroupBox
       Left = 12
       Height = 143
       Top = 12
@@ -33,7 +33,7 @@ object GitSettingsForm: TGitSettingsForm
       ClientHeight = 116
       ClientWidth = 492
       TabOrder = 0
-      object FRepoPathLabel: TLabel
+      object RepoPathLabel: TLabel
         Left = 12
         Height = 18
         Top = 8
@@ -43,7 +43,7 @@ object GitSettingsForm: TGitSettingsForm
         ParentColor = False
         WordWrap = True
       end
-      object FUserNameLabel: TLabel
+      object UserNameLabel: TLabel
         Left = 15
         Height = 18
         Top = 42
@@ -51,7 +51,7 @@ object GitSettingsForm: TGitSettingsForm
         Caption = 'User name:'
         ParentColor = False
       end
-      object FUserNameEdit: TEdit
+      object UserNameEdit: TEdit
         Left = 120
         Height = 32
         Top = 35
@@ -59,7 +59,7 @@ object GitSettingsForm: TGitSettingsForm
         Anchors = [akTop, akLeft, akRight]
         TabOrder = 0
       end
-      object FUserEmailLabel: TLabel
+      object UserEmailLabel: TLabel
         Left = 12
         Height = 18
         Top = 79
@@ -67,7 +67,7 @@ object GitSettingsForm: TGitSettingsForm
         Caption = 'User email:'
         ParentColor = False
       end
-      object FUserEmailEdit: TEdit
+      object UserEmailEdit: TEdit
         Left = 120
         Height = 32
         Top = 75
@@ -76,7 +76,7 @@ object GitSettingsForm: TGitSettingsForm
         TabOrder = 1
       end
     end
-    object FDescriptionGroup: TGroupBox
+    object DescriptionGroup: TGroupBox
       Left = 12
       Height = 120
       Top = 165
@@ -86,7 +86,7 @@ object GitSettingsForm: TGitSettingsForm
       ClientHeight = 93
       ClientWidth = 492
       TabOrder = 1
-      object FDescriptionMemo: TMemo
+      object DescriptionMemo: TMemo
         Left = 12
         Height = 69
         Top = 8
@@ -96,7 +96,7 @@ object GitSettingsForm: TGitSettingsForm
         TabOrder = 0
       end
     end
-    object FAppGroup: TGroupBox
+    object AppGroup: TGroupBox
       Left = 12
       Height = 100
       Top = 295
@@ -106,7 +106,7 @@ object GitSettingsForm: TGitSettingsForm
       ClientHeight = 73
       ClientWidth = 492
       TabOrder = 2
-      object FAutoRefreshCheck: TCheckBox
+      object AutoRefreshCheck: TCheckBox
         Left = 12
         Height = 22
         Top = 8
@@ -116,7 +116,7 @@ object GitSettingsForm: TGitSettingsForm
         TabOrder = 0
         OnChange = AutoRefreshCheckChange
       end
-      object FIntervalLabel: TLabel
+      object IntervalLabel: TLabel
         Left = 32
         Height = 18
         Top = 42
@@ -124,7 +124,7 @@ object GitSettingsForm: TGitSettingsForm
         Caption = 'Refresh interval:'
         ParentColor = False
       end
-      object FIntervalSpin: TSpinEdit
+      object IntervalSpin: TSpinEdit
         Left = 140
         Height = 32
         Top = 38
@@ -134,7 +134,7 @@ object GitSettingsForm: TGitSettingsForm
         TabOrder = 1
         Value = 5
       end
-      object FSecondsLabel: TLabel
+      object SecondsLabel: TLabel
         Left = 230
         Height = 18
         Top = 42
@@ -144,7 +144,7 @@ object GitSettingsForm: TGitSettingsForm
       end
     end
   end
-  object FButtonPanel: TButtonPanel
+  object ButtonPanel: TButtonPanel
     Left = 6
     Height = 37
     Top = 404

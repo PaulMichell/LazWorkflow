@@ -37,7 +37,7 @@ object GitDiffView: TGitDiffView
       Width = 130
       Caption = 'Stage selection'
       Enabled = False
-      OnClick = BtnStageSelClick
+      OnClick = StageSelectionButtonClick
       TabOrder = 0
     end
     object UnstageSelectionButton: TButton
@@ -47,7 +47,7 @@ object GitDiffView: TGitDiffView
       Width = 140
       Caption = 'Unstage selection'
       Enabled = False
-      OnClick = BtnUnstageSelClick
+      OnClick = UnstageSelectionButtonClick
       TabOrder = 1
     end
   end

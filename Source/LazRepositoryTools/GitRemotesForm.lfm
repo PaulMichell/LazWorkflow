@@ -11,7 +11,7 @@ object GitRemotesForm: TGitRemotesForm
   OnCreate = FormCreate
   Position = poScreenCenter
   LCLVersion = '3.0'
-  object FGrid: TStringGrid
+  object RemotesGrid: TStringGrid
     Left = 8
     Height = 296
     Top = 8
@@ -32,7 +32,7 @@ object GitRemotesForm: TGitRemotesForm
       460
     )
   end
-  object FBottomBar: TPanel
+  object BottomBar: TPanel
     Left = 0
     Height = 48
     Top = 312
@@ -42,7 +42,7 @@ object GitRemotesForm: TGitRemotesForm
     ClientHeight = 48
     ClientWidth = 640
     TabOrder = 1
-    object FSeparator: TBevel
+    object SeparatorBevel: TBevel
       Left = 0
       Height = 2
       Top = 0
@@ -50,7 +50,7 @@ object GitRemotesForm: TGitRemotesForm
       Align = alTop
       Shape = bsTopLine
     end
-    object FLeftButtons: TPanel
+    object LeftButtonsPanel: TPanel
       Left = 0
       Height = 46
       Top = 2
@@ -67,35 +67,35 @@ object GitRemotesForm: TGitRemotesForm
       ClientHeight = 46
       ClientWidth = 300
       TabOrder = 0
-      object FBtnEdit: TButton
+      object EditButton: TButton
         Left = 8
         Height = 28
         Top = 8
         Width = 90
         Caption = 'Edit'
-        OnClick = BtnEditClick
+        OnClick = EditButtonClick
         TabOrder = 0
       end
-      object FBtnAdd: TButton
+      object AddButton: TButton
         Left = 106
         Height = 28
         Top = 8
         Width = 90
         Caption = 'Add'
-        OnClick = BtnAddClick
+        OnClick = AddButtonClick
         TabOrder = 1
       end
-      object FBtnRemove: TButton
+      object RemoveButton: TButton
         Left = 204
         Height = 28
         Top = 8
         Width = 90
         Caption = 'Remove'
-        OnClick = BtnRemoveClick
+        OnClick = RemoveButtonClick
         TabOrder = 2
       end
     end
-    object FBtnCancel: TButton
+    object CancelButton: TButton
       Left = 542
       Height = 30
       Top = 10
@@ -107,7 +107,7 @@ object GitRemotesForm: TGitRemotesForm
       ModalResult = 2
       TabOrder = 1
     end
-    object FBtnOK: TButton
+    object OKButton: TButton
       Left = 444
       Height = 30
       Top = 10

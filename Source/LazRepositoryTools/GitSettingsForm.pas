@@ -15,21 +15,21 @@ Uses
 
 Type
   TGitSettingsForm = Class(TForm)
-    FScrollBox: TScrollBox;
-    FIdentityGroup: TGroupBox;
-    FRepoPathLabel: TLabel;
-    FUserNameLabel: TLabel;
-    FUserNameEdit: TEdit;
-    FUserEmailLabel: TLabel;
-    FUserEmailEdit: TEdit;
-    FDescriptionGroup: TGroupBox;
-    FDescriptionMemo: TMemo;
-    FAppGroup: TGroupBox;
-    FAutoRefreshCheck: TCheckBox;
-    FIntervalLabel: TLabel;
-    FIntervalSpin: TSpinEdit;
-    FSecondsLabel: TLabel;
-    FButtonPanel: TButtonPanel;
+    ScrollBox: TScrollBox;
+    IdentityGroup: TGroupBox;
+    RepoPathLabel: TLabel;
+    UserNameLabel: TLabel;
+    UserNameEdit: TEdit;
+    UserEmailLabel: TLabel;
+    UserEmailEdit: TEdit;
+    DescriptionGroup: TGroupBox;
+    DescriptionMemo: TMemo;
+    AppGroup: TGroupBox;
+    AutoRefreshCheck: TCheckBox;
+    IntervalLabel: TLabel;
+    IntervalSpin: TSpinEdit;
+    SecondsLabel: TLabel;
+    ButtonPanel: TButtonPanel;
     Procedure AutoRefreshCheckChange(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
@@ -101,28 +101,28 @@ End;
 
 Procedure TGitSettingsForm.FormCreate(Sender: TObject);
 Begin
-  FIntervalSpin.MinValue := GitConfigMinIntervalSec;
-  FIntervalSpin.MaxValue := GitConfigMaxIntervalSec;
-  FButtonPanel.OKButton.Caption := 'OK';
-  FButtonPanel.CancelButton.Caption := 'Cancel';
+  IntervalSpin.MinValue := GitConfigMinIntervalSec;
+  IntervalSpin.MaxValue := GitConfigMaxIntervalSec;
+  ButtonPanel.OKButton.Caption := 'OK';
+  ButtonPanel.CancelButton.Caption := 'Cancel';
   FHasRepo := False;
   FRepoPath := '';
 End;
 
 Procedure TGitSettingsForm.SetIdentityControlsEnabled(ControlsEnabled: Boolean);
 Begin
-  FUserNameEdit.Enabled := ControlsEnabled;
-  FUserEmailEdit.Enabled := ControlsEnabled;
-  FDescriptionMemo.Enabled := ControlsEnabled;
-  FUserNameLabel.Enabled := ControlsEnabled;
-  FUserEmailLabel.Enabled := ControlsEnabled;
+  UserNameEdit.Enabled := ControlsEnabled;
+  UserEmailEdit.Enabled := ControlsEnabled;
+  DescriptionMemo.Enabled := ControlsEnabled;
+  UserNameLabel.Enabled := ControlsEnabled;
+  UserEmailLabel.Enabled := ControlsEnabled;
 End;
 
 Procedure TGitSettingsForm.AutoRefreshCheckChange(Sender: TObject);
 Begin
-  FIntervalSpin.Enabled := FAutoRefreshCheck.Checked;
-  FIntervalLabel.Enabled := FAutoRefreshCheck.Checked;
-  FSecondsLabel.Enabled := FAutoRefreshCheck.Checked;
+  IntervalSpin.Enabled := AutoRefreshCheck.Checked;
+  IntervalLabel.Enabled := AutoRefreshCheck.Checked;
+  SecondsLabel.Enabled := AutoRefreshCheck.Checked;
 End;
 
 Procedure TGitSettingsForm.LoadFromConfig;
@@ -131,8 +131,8 @@ Var
 Begin
   If Assigned(GitManagerConfig) Then
     Begin
-      FAutoRefreshCheck.Checked := GitManagerConfig.AutoRefresh;
-      FIntervalSpin.Value := GitManagerConfig.AutoRefreshSeconds;
+      AutoRefreshCheck.Checked := GitManagerConfig.AutoRefresh;
+      IntervalSpin.Value := GitManagerConfig.AutoRefreshSeconds;
     End;
   AutoRefreshCheckChange(Nil);
 
@@ -140,15 +140,15 @@ Begin
   FHasRepo := FRepoPath <> '';
   If Not FHasRepo Then
     Begin
-      FRepoPathLabel.Caption := 'No Git repository for the current project — identity fields are disabled.';
-      FUserNameEdit.Text := '';
-      FUserEmailEdit.Text := '';
-      FDescriptionMemo.Text := '';
+      RepoPathLabel.Caption := 'No Git repository for the current project — identity fields are disabled.';
+      UserNameEdit.Text := '';
+      UserEmailEdit.Text := '';
+      DescriptionMemo.Text := '';
       SetIdentityControlsEnabled(False);
       Exit;
     End;
 
-  FRepoPathLabel.Caption := 'Repository: ' + FRepoPath;
+  RepoPathLabel.Caption := 'Repository: ' + FRepoPath;
   SetIdentityControlsEnabled(True);
   If Not Assigned(GitClient) Then
     Exit;
@@ -161,9 +161,9 @@ Begin
   GitClient.GetConfigValue('user.email', True, LocalEmail);
   GitClient.GetDescription(Description);
 
-  FUserNameEdit.Text := LocalName;
-  FUserEmailEdit.Text := LocalEmail;
-  FDescriptionMemo.Text := Description;
+  UserNameEdit.Text := LocalName;
+  UserEmailEdit.Text := LocalEmail;
+  DescriptionMemo.Text := Description;
 End;
 
 Function TGitSettingsForm.SaveToConfig: Boolean;
@@ -173,8 +173,8 @@ Begin
   Result := True;
   If Assigned(GitManagerConfig) Then
     Begin
-      GitManagerConfig.AutoRefresh := FAutoRefreshCheck.Checked;
-      GitManagerConfig.AutoRefreshSeconds := FIntervalSpin.Value;
+      GitManagerConfig.AutoRefresh := AutoRefreshCheck.Checked;
+      GitManagerConfig.AutoRefreshSeconds := IntervalSpin.Value;
       GitManagerConfig.Save;
     End;
 
@@ -183,11 +183,11 @@ Begin
 
   GitClient.RepoPath := FRepoPath;
   Ok := True;
-  If Not GitClient.SetConfigValue('user.name', Trim(FUserNameEdit.Text), True) Then
+  If Not GitClient.SetConfigValue('user.name', Trim(UserNameEdit.Text), True) Then
     Ok := False;
-  If Not GitClient.SetConfigValue('user.email', Trim(FUserEmailEdit.Text), True) Then
+  If Not GitClient.SetConfigValue('user.email', Trim(UserEmailEdit.Text), True) Then
     Ok := False;
-  If Not GitClient.SetDescription(FDescriptionMemo.Text) Then
+  If Not GitClient.SetDescription(DescriptionMemo.Text) Then
     Ok := False;
   Result := Ok;
 End;
@@ -197,7 +197,7 @@ Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
-  If FAutoRefreshCheck.Checked And (FIntervalSpin.Value < GitConfigMinIntervalSec) Then
+  If AutoRefreshCheck.Checked And (IntervalSpin.Value < GitConfigMinIntervalSec) Then
     Begin
       MessageDlg(Format('Interval must be at least %d seconds.', [GitConfigMinIntervalSec]),
         mtError, [mbOK], 0);

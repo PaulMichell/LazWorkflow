@@ -15,29 +15,29 @@ Uses
 
 Type
   TAssistantSettingsForm = Class(TForm)
-    FStatusLabel: TLabel;
-    FStatusValue: TLabel;
-    FModelLabel: TLabel;
-    FModelList: TListBox;
-    FModelHintLabel: TLabel;
-    FRefreshModelsButton: TButton;
-    FSkillLabel: TLabel;
-    FSkillCombo: TComboBox;
-    FIncludeContextCheck: TCheckBox;
-    FAutoNewChatDefaultCheck: TCheckBox;
-    FThinkingLabel: TLabel;
-    FThinkingCombo: TComboBox;
-    FApprovalLabel: TLabel;
-    FApprovalCombo: TComboBox;
-    FApiBaseLabel: TLabel;
-    FApiBaseEdit: TEdit;
-    FHintLabel: TLabel;
-    FManualLabel: TLabel;
-    FManualEdit: TEdit;
-    FSignInButton: TButton;
-    FSignOutButton: TButton;
-    FPasteCodeButton: TButton;
-    FButtonPanel: TButtonPanel;
+    StatusLabel: TLabel;
+    StatusValueLabel: TLabel;
+    ModelLabel: TLabel;
+    ModelList: TListBox;
+    ModelHintLabel: TLabel;
+    RefreshModelsButton: TButton;
+    SkillLabel: TLabel;
+    SkillCombo: TComboBox;
+    IncludeContextCheck: TCheckBox;
+    AutoNewChatDefaultCheck: TCheckBox;
+    ThinkingLabel: TLabel;
+    ThinkingCombo: TComboBox;
+    ApprovalLabel: TLabel;
+    ApprovalCombo: TComboBox;
+    ApiBaseLabel: TLabel;
+    ApiBaseEdit: TEdit;
+    HintLabel: TLabel;
+    ManualLabel: TLabel;
+    ManualEdit: TEdit;
+    SignInButton: TButton;
+    SignOutButton: TButton;
+    PasteCodeButton: TButton;
+    ButtonPanel: TButtonPanel;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
     Procedure SignInButtonClick(Sender: TObject);
@@ -112,79 +112,79 @@ End;
 
 Procedure TAssistantSettingsForm.EnsureExtraControls;
 Begin
-  If Assigned(FThinkingCombo) Then
+  If Assigned(ThinkingCombo) Then
     Exit;
   ClientHeight := ClientHeight + 120;
-  If Assigned(FButtonPanel) Then
-    FButtonPanel.Top := FButtonPanel.Top + 120;
-  If Assigned(FHintLabel) Then
-    FHintLabel.Top := FHintLabel.Top + 120;
-  If Assigned(FManualLabel) Then
-    FManualLabel.Top := FManualLabel.Top + 120;
-  If Assigned(FManualEdit) Then
-    FManualEdit.Top := FManualEdit.Top + 120;
-  If Assigned(FPasteCodeButton) Then
-    FPasteCodeButton.Top := FPasteCodeButton.Top + 120;
-  If Assigned(FApiBaseLabel) Then
-    FApiBaseLabel.Top := FApiBaseLabel.Top + 120;
-  If Assigned(FApiBaseEdit) Then
-    FApiBaseEdit.Top := FApiBaseEdit.Top + 120;
+  If Assigned(ButtonPanel) Then
+    ButtonPanel.Top := ButtonPanel.Top + 120;
+  If Assigned(HintLabel) Then
+    HintLabel.Top := HintLabel.Top + 120;
+  If Assigned(ManualLabel) Then
+    ManualLabel.Top := ManualLabel.Top + 120;
+  If Assigned(ManualEdit) Then
+    ManualEdit.Top := ManualEdit.Top + 120;
+  If Assigned(PasteCodeButton) Then
+    PasteCodeButton.Top := PasteCodeButton.Top + 120;
+  If Assigned(ApiBaseLabel) Then
+    ApiBaseLabel.Top := ApiBaseLabel.Top + 120;
+  If Assigned(ApiBaseEdit) Then
+    ApiBaseEdit.Top := ApiBaseEdit.Top + 120;
 
-  FThinkingLabel := TLabel.Create(Self);
-  FThinkingLabel.Parent := Self;
-  FThinkingLabel.Left := 16;
-  FThinkingLabel.Top := 350;
-  FThinkingLabel.Caption := 'Thinking level (reasoning effort):';
+  ThinkingLabel := TLabel.Create(Self);
+  ThinkingLabel.Parent := Self;
+  ThinkingLabel.Left := 16;
+  ThinkingLabel.Top := 350;
+  ThinkingLabel.Caption := 'Thinking level (reasoning effort):';
 
-  FThinkingCombo := TComboBox.Create(Self);
-  FThinkingCombo.Parent := Self;
-  FThinkingCombo.Left := 16;
-  FThinkingCombo.Top := 370;
-  FThinkingCombo.Width := 220;
-  FThinkingCombo.Style := csDropDownList;
-  FThinkingCombo.Items.Add('Low');
-  FThinkingCombo.Items.Add('Medium');
-  FThinkingCombo.Items.Add('High');
-  FThinkingCombo.ItemIndex := 2;
+  ThinkingCombo := TComboBox.Create(Self);
+  ThinkingCombo.Parent := Self;
+  ThinkingCombo.Left := 16;
+  ThinkingCombo.Top := 370;
+  ThinkingCombo.Width := 220;
+  ThinkingCombo.Style := csDropDownList;
+  ThinkingCombo.Items.Add('Low');
+  ThinkingCombo.Items.Add('Medium');
+  ThinkingCombo.Items.Add('High');
+  ThinkingCombo.ItemIndex := 2;
 
-  FApprovalLabel := TLabel.Create(Self);
-  FApprovalLabel.Parent := Self;
-  FApprovalLabel.Left := 260;
-  FApprovalLabel.Top := 350;
-  FApprovalLabel.Caption := 'Approval level (tool writes):';
+  ApprovalLabel := TLabel.Create(Self);
+  ApprovalLabel.Parent := Self;
+  ApprovalLabel.Left := 260;
+  ApprovalLabel.Top := 350;
+  ApprovalLabel.Caption := 'Approval level (tool writes):';
 
-  FApprovalCombo := TComboBox.Create(Self);
-  FApprovalCombo.Parent := Self;
-  FApprovalCombo.Left := 260;
-  FApprovalCombo.Top := 370;
-  FApprovalCombo.Width := 244;
-  FApprovalCombo.Style := csDropDownList;
-  FApprovalCombo.Items.Add('Ask — confirm each write/compile');
-  FApprovalCombo.Items.Add('Auto — allow project tools');
-  FApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
-  FApprovalCombo.ItemIndex := 2;
+  ApprovalCombo := TComboBox.Create(Self);
+  ApprovalCombo.Parent := Self;
+  ApprovalCombo.Left := 260;
+  ApprovalCombo.Top := 370;
+  ApprovalCombo.Width := 244;
+  ApprovalCombo.Style := csDropDownList;
+  ApprovalCombo.Items.Add('Ask — confirm each write/compile');
+  ApprovalCombo.Items.Add('Auto — allow project tools');
+  ApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
+  ApprovalCombo.ItemIndex := 2;
 
   { Place below thinking/approval (may already exist from the .lfm). }
-  If Not Assigned(FAutoNewChatDefaultCheck) Then
+  If Not Assigned(AutoNewChatDefaultCheck) Then
     Begin
-      FAutoNewChatDefaultCheck := TCheckBox.Create(Self);
-      FAutoNewChatDefaultCheck.Parent := Self;
-      FAutoNewChatDefaultCheck.Left := 16;
-      FAutoNewChatDefaultCheck.Width := 488;
-      FAutoNewChatDefaultCheck.Caption :=
+      AutoNewChatDefaultCheck := TCheckBox.Create(Self);
+      AutoNewChatDefaultCheck.Parent := Self;
+      AutoNewChatDefaultCheck.Left := 16;
+      AutoNewChatDefaultCheck.Width := 488;
+      AutoNewChatDefaultCheck.Caption :=
         'Default: automatically start a New Chat at 95% context use';
     End;
-  FAutoNewChatDefaultCheck.Top := 404;
-  FAutoNewChatDefaultCheck.ShowHint := True;
-  FAutoNewChatDefaultCheck.Hint :=
+  AutoNewChatDefaultCheck.Top := 404;
+  AutoNewChatDefaultCheck.ShowHint := True;
+  AutoNewChatDefaultCheck.Hint :=
     'Default for the assistant form checkbox. Long Code/Plan runs can rollover into a fresh chat.';
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Assistant Settings';
-  FButtonPanel.OKButton.Caption := 'OK';
-  FButtonPanel.CancelButton.Caption := 'Cancel';
+  ButtonPanel.OKButton.Caption := 'OK';
+  ButtonPanel.CancelButton.Caption := 'Cancel';
   EnsureExtraControls;
   PopulateSkills;
   RefreshAuthStatus;
@@ -200,35 +200,35 @@ Begin
   If Assigned(AssistantChatConfig) Then
     ActiveName := AssistantChatConfig.ActiveSkill;
   Root := AssistantUserSkillsRoot;
-  FSkillCombo.Style := csDropDownList;
-  FSkillCombo.Items.BeginUpdate;
+  SkillCombo.Style := csDropDownList;
+  SkillCombo.Items.BeginUpdate;
   Try
-    FSkillCombo.Items.Clear;
-    FSkillCombo.Items.Add(AssistantSkillNoneCaption);
+    SkillCombo.Items.Clear;
+    SkillCombo.Items.Add(AssistantSkillNoneCaption);
     SelectIdx := 0;
     Skills := ListUserSkills;
     For I := 0 To High(Skills) Do
       Begin
-        FSkillCombo.Items.Add(Skills[I].Name);
+        SkillCombo.Items.Add(Skills[I].Name);
         If SameText(Skills[I].Name, ActiveName) Then
-          SelectIdx := FSkillCombo.Items.Count - 1;
+          SelectIdx := SkillCombo.Items.Count - 1;
       End;
   Finally
-    FSkillCombo.Items.EndUpdate;
+    SkillCombo.Items.EndUpdate;
   End;
-  FSkillCombo.ItemIndex := SelectIdx;
+  SkillCombo.ItemIndex := SelectIdx;
   { Show the real scan path — ~/.grok is per OS user profile, not cloud-synced. }
-  If Assigned(FHintLabel) Then
+  If Assigned(HintLabel) Then
     Begin
       If Length(Skills) = 0 Then
-        FHintLabel.Caption :=
+        HintLabel.Caption :=
           'No skills found. Skills are local to this OS user (not shared across Windows/Linux).' +
           LineEnding +
           'Create folders as: ' + Root + PathDelim + '<name>' + PathDelim + 'SKILL.md' +
           LineEnding +
           'Copy from another machine''s ~/.grok/skills if needed. IDE context still attaches the active unit.'
       Else
-        FHintLabel.Caption :=
+        HintLabel.Caption :=
           Format('Loaded %d skill(s) from %s', [Length(Skills), Root]) + LineEnding +
           'Each skill is a subfolder with SKILL.md. Skills are not auto-synced across platforms. ' +
           'IDE context attaches the active source unit (or selection) and project file list.';
@@ -244,36 +244,36 @@ Begin
   If Assigned(AssistantChatConfig) And (Trim(AssistantChatConfig.Model) <> '') Then
     CurrentModel := AssistantChatConfig.Model;
 
-  FModelList.Items.BeginUpdate;
+  ModelList.Items.BeginUpdate;
   Try
-    FModelList.Items.Clear;
+    ModelList.Items.Clear;
     Ok := False;
     ErrorText := '';
     If Assigned(AssistantClient) And AssistantClient.IsSignedIn And
       (ForceRefresh Or Assigned(GrokOAuthClient)) Then
       Begin
-        FModelHintLabel.Caption := 'Loading models…';
+        ModelHintLabel.Caption := 'Loading models…';
         Application.ProcessMessages;
-        Ok := AssistantClient.ListAvailableModels(FModelList.Items, ErrorText);
+        Ok := AssistantClient.ListAvailableModels(ModelList.Items, ErrorText);
       End
     Else
       ErrorText := 'Sign in to load the live model list.';
 
     If Not Ok Then
       Begin
-        AddFallbackModels(FModelList.Items);
+        AddFallbackModels(ModelList.Items);
         If ErrorText <> '' Then
-          FModelHintLabel.Caption := ErrorText + ' Showing fallback list.'
+          ModelHintLabel.Caption := ErrorText + ' Showing fallback list.'
         Else
-          FModelHintLabel.Caption := 'Showing fallback list.';
+          ModelHintLabel.Caption := 'Showing fallback list.';
       End
     Else
-      FModelHintLabel.Caption := Format('%d models available. Select one, then OK.',
-        [FModelList.Items.Count]);
+      ModelHintLabel.Caption := Format('%d models available. Select one, then OK.',
+        [ModelList.Items.Count]);
 
-    SelectModelInList(FModelList, CurrentModel);
+    SelectModelInList(ModelList, CurrentModel);
   Finally
-    FModelList.Items.EndUpdate;
+    ModelList.Items.EndUpdate;
   End;
 End;
 
@@ -286,24 +286,24 @@ Begin
   SignedIn := False;
   If Assigned(GrokOAuthClient) Then
     Begin
-      FStatusValue.Caption := GrokOAuthClient.StatusText;
+      StatusValueLabel.Caption := GrokOAuthClient.StatusText;
       Busy := GrokOAuthClient.LoginBusy;
       Pending := GrokOAuthClient.HasPendingLogin;
       SignedIn := GrokOAuthClient.IsAuthenticated;
     End
   Else
-    FStatusValue.Caption := 'OAuth unavailable';
-  FSignInButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
-  FSignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
-  FPasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
-  FManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
-  FRefreshModelsButton.Enabled := Assigned(AssistantClient) And SignedIn And (Not Busy);
+    StatusValueLabel.Caption := 'OAuth unavailable';
+  SignInButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  SignOutButton.Enabled := Assigned(GrokOAuthClient) And SignedIn And (Not Busy);
+  PasteCodeButton.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  ManualEdit.Enabled := Assigned(GrokOAuthClient) And (Not Busy);
+  RefreshModelsButton.Enabled := Assigned(AssistantClient) And SignedIn And (Not Busy);
   If SignedIn And (Not Pending) Then
-    FManualLabel.Caption := 'Already signed in — paste is only for a failed browser redirect:'
+    ManualLabel.Caption := 'Already signed in — paste is only for a failed browser redirect:'
   Else If Pending Then
-    FManualLabel.Caption := 'Browser open — paste code or callback URL only if it did not redirect:'
+    ManualLabel.Caption := 'Browser open — paste code or callback URL only if it did not redirect:'
   Else
-    FManualLabel.Caption := 'If browser cannot redirect, paste code or callback URL:';
+    ManualLabel.Caption := 'If browser cannot redirect, paste code or callback URL:';
 End;
 
 Procedure TAssistantSettingsForm.LoadFromConfig;
@@ -312,36 +312,36 @@ Var
 Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
-  FApiBaseEdit.Text := AssistantChatConfig.ApiBase;
-  FIncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
+  ApiBaseEdit.Text := AssistantChatConfig.ApiBase;
+  IncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
   EnsureExtraControls;
-  If Assigned(FAutoNewChatDefaultCheck) Then
-    FAutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
+  If Assigned(AutoNewChatDefaultCheck) Then
+    AutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
   Case AssistantChatConfig.GetThinkingLevel Of
-    atlLow: FThinkingCombo.ItemIndex := 0;
-    atlMedium: FThinkingCombo.ItemIndex := 1;
+    atlLow: ThinkingCombo.ItemIndex := 0;
+    atlMedium: ThinkingCombo.ItemIndex := 1;
   Else
-    FThinkingCombo.ItemIndex := 2;
+    ThinkingCombo.ItemIndex := 2;
   End;
   Case AssistantChatConfig.GetApprovalMode Of
-    aamAsk: FApprovalCombo.ItemIndex := 0;
-    aamAuto: FApprovalCombo.ItemIndex := 1;
+    aamAsk: ApprovalCombo.ItemIndex := 0;
+    aamAuto: ApprovalCombo.ItemIndex := 1;
   Else
-    FApprovalCombo.ItemIndex := 2;
+    ApprovalCombo.ItemIndex := 2;
   End;
   PopulateSkills;
   If AssistantChatConfig.ActiveSkill = '' Then
-    FSkillCombo.ItemIndex := 0
+    SkillCombo.ItemIndex := 0
   Else
     Begin
-      I := FSkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill);
+      I := SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill);
       If I >= 0 Then
-        FSkillCombo.ItemIndex := I
+        SkillCombo.ItemIndex := I
       Else
         Begin
           { Skill was removed from disk; keep name visible until user clears it. }
-          FSkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
-          FSkillCombo.ItemIndex := FSkillCombo.Items.Count - 1;
+          SkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
+          SkillCombo.ItemIndex := SkillCombo.Items.Count - 1;
         End;
     End;
   If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
@@ -358,36 +358,36 @@ Var
 Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
-  AssistantChatConfig.ApiBase := Trim(FApiBaseEdit.Text);
+  AssistantChatConfig.ApiBase := Trim(ApiBaseEdit.Text);
   If AssistantChatConfig.ApiBase = '' Then
     AssistantChatConfig.ApiBase := AssistantConfigDefaultApiBase;
 
   ModelName := '';
-  If (FModelList.ItemIndex >= 0) And (FModelList.ItemIndex < FModelList.Items.Count) Then
-    ModelName := Trim(FModelList.Items[FModelList.ItemIndex]);
+  If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
+    ModelName := Trim(ModelList.Items[ModelList.ItemIndex]);
   If ModelName = '' Then
     ModelName := AssistantConfigDefaultModel;
   AssistantChatConfig.Model := ModelName;
 
   SkillName := '';
-  If (FSkillCombo.ItemIndex > 0) And (FSkillCombo.ItemIndex < FSkillCombo.Items.Count) Then
+  If (SkillCombo.ItemIndex > 0) And (SkillCombo.ItemIndex < SkillCombo.Items.Count) Then
     Begin
-      SkillName := FSkillCombo.Items[FSkillCombo.ItemIndex];
+      SkillName := SkillCombo.Items[SkillCombo.ItemIndex];
       If Pos(' (missing)', SkillName) > 0 Then
         SkillName := Copy(SkillName, 1, Pos(' (missing)', SkillName) - 1);
     End;
   AssistantChatConfig.ActiveSkill := SkillName;
-  AssistantChatConfig.IncludeIDEContext := FIncludeContextCheck.Checked;
+  AssistantChatConfig.IncludeIDEContext := IncludeContextCheck.Checked;
   EnsureExtraControls;
-  If Assigned(FAutoNewChatDefaultCheck) Then
-    AssistantChatConfig.AutoNewChatAtContextLimit := FAutoNewChatDefaultCheck.Checked;
-  Case FThinkingCombo.ItemIndex Of
+  If Assigned(AutoNewChatDefaultCheck) Then
+    AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatDefaultCheck.Checked;
+  Case ThinkingCombo.ItemIndex Of
     0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
     1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);
   Else
     AssistantChatConfig.SetThinkingLevelEnum(atlHigh);
   End;
-  Case FApprovalCombo.ItemIndex Of
+  Case ApprovalCombo.ItemIndex Of
     0: AssistantChatConfig.SetApprovalModeEnum(aamAsk);
     1: AssistantChatConfig.SetApprovalModeEnum(aamAuto);
   Else
@@ -401,7 +401,7 @@ End;
 Procedure TAssistantSettingsForm.RefreshModelsButtonClick(Sender: TObject);
 Begin
   If Assigned(AssistantClient) Then
-    AssistantClient.SetEndpoint(Trim(FApiBaseEdit.Text), AssistantClient.Model);
+    AssistantClient.SetEndpoint(Trim(ApiBaseEdit.Text), AssistantClient.Model);
   PopulateModels(True);
 End;
 
@@ -409,12 +409,12 @@ Procedure TAssistantSettingsForm.SignInButtonClick(Sender: TObject);
 Begin
   If Not Assigned(GrokOAuthClient) Then
     Exit;
-  FManualEdit.Clear;
-  FStatusValue.Caption := 'Waiting for browser sign-in…';
-  FSignInButton.Enabled := False;
-  FPasteCodeButton.Enabled := False;
-  FManualEdit.Enabled := False;
-  FSignOutButton.Enabled := False;
+  ManualEdit.Clear;
+  StatusValueLabel.Caption := 'Waiting for browser sign-in…';
+  SignInButton.Enabled := False;
+  PasteCodeButton.Enabled := False;
+  ManualEdit.Enabled := False;
+  SignOutButton.Enabled := False;
   Try
     Application.ProcessMessages;
     If GrokOAuthClient.LoginWithBrowser Then
@@ -426,7 +426,7 @@ Begin
           End;
         If Assigned(AssistantClient) Then
           AssistantClient.ApplyConfig(AssistantChatConfig);
-        FManualEdit.Clear;
+        ManualEdit.Clear;
         MessageDlg('Signed in with SuperGrok / X Premium.' + LineEnding + LineEnding +
           'You do not need to paste the browser code — it is single-use and was already consumed.',
           mtInformation, [mbOK], 0);
@@ -475,7 +475,7 @@ Begin
       MessageDlg('Sign-in is already in progress. Wait for the browser flow to finish.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Trim(FManualEdit.Text) = '' Then
+  If Trim(ManualEdit.Text) = '' Then
     Begin
       If GrokOAuthClient.IsAuthenticated And (Not GrokOAuthClient.HasPendingLogin) Then
         Begin
@@ -494,7 +494,7 @@ Begin
       RefreshAuthStatus;
       Exit;
     End;
-  If GrokOAuthClient.LoginWithManualCode(FManualEdit.Text) Then
+  If GrokOAuthClient.LoginWithManualCode(ManualEdit.Text) Then
     Begin
       If Assigned(AssistantChatConfig) Then
         Begin
@@ -503,7 +503,7 @@ Begin
         End;
       If Assigned(AssistantClient) Then
         AssistantClient.ApplyConfig(AssistantChatConfig);
-      FManualEdit.Clear;
+      ManualEdit.Clear;
       MessageDlg('Signed in with SuperGrok / X Premium.', mtInformation, [mbOK], 0);
       PopulateModels(True);
     End
@@ -517,14 +517,14 @@ Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
-  If Trim(FApiBaseEdit.Text) = '' Then
+  If Trim(ApiBaseEdit.Text) = '' Then
     Begin
       MessageDlg('API base URL is required (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);
       CanClose := False;
       Exit;
     End;
-  If (FModelList.ItemIndex < 0) Or (FModelList.ItemIndex >= FModelList.Items.Count) Or
-    (Trim(FModelList.Items[FModelList.ItemIndex]) = '') Then
+  If (ModelList.ItemIndex < 0) Or (ModelList.ItemIndex >= ModelList.Items.Count) Or
+    (Trim(ModelList.Items[ModelList.ItemIndex]) = '') Then
     Begin
       MessageDlg('Select a model from the list (e.g. grok-4.5).', mtError, [mbOK], 0);
       CanClose := False;

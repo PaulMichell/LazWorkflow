@@ -3,19 +3,18 @@ object GitIgnoreForm: TGitIgnoreForm
   Height = 420
   Top = 200
   Width = 560
-  BorderStyle = bsSizeable
   Caption = 'Ignore Files'
   ClientHeight = 420
   ClientWidth = 560
   Constraints.MinHeight = 280
   Constraints.MinWidth = 400
+  Position = poScreenCenter
+  LCLVersion = '4.99.0.0'
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
-  Position = poScreenCenter
-  LCLVersion = '3.0'
-  object FHintLabel: TLabel
+  object HintLabel: TLabel
     Left = 8
-    Height = 17
+    Height = 18
     Top = 8
     Width = 544
     Align = alTop
@@ -23,21 +22,20 @@ object GitIgnoreForm: TGitIgnoreForm
     Caption = 'Edit .gitignore for this repository (one pattern per line):'
     ParentColor = False
   end
-  object FMemo: TMemo
+  object IgnoreMemo: TMemo
     Left = 8
-    Height = 337
-    Top = 33
+    Height = 335
+    Top = 34
     Width = 544
     Align = alClient
     BorderSpacing.Around = 8
     ScrollBars = ssAutoBoth
     TabOrder = 0
-    WantTabs = False
   end
-  object FButtonPanel: TButtonPanel
+  object ButtonPanel: TButtonPanel
     Left = 6
-    Height = 34
-    Top = 380
+    Height = 37
+    Top = 377
     Width = 548
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
