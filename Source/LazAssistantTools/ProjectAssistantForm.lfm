@@ -413,7 +413,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = FixErrorActionExecute
     end
     object SettingsAction: TAction
-      Caption = 'Settings'
+      Caption = 'Settings…'
       OnExecute = SettingsActionExecute
     end
     object ToggleThinkingAction: TAction

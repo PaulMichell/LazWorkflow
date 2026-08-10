@@ -25,6 +25,7 @@ Type
     PullAction: TAction;
     FetchAction: TAction;
     RemotesAction: TAction;
+    SettingsAction: TAction;
     StageAllAction: TAction;
     StageAction: TAction;
     StageSelectionAction: TAction;
@@ -49,6 +50,7 @@ Type
     PullButton: TButton;
     FetchButton: TButton;
     RemotesButton: TButton;
+    SettingsButton: TButton;
     DiffView: TGitDiffView;
     HistorySplitter: TSplitter;
     GraphHost: TPanel;
@@ -104,6 +106,7 @@ Type
     Procedure PullActionExecute(Sender: TObject);
     Procedure FetchActionExecute(Sender: TObject);
     Procedure RemotesActionExecute(Sender: TObject);
+    Procedure SettingsActionExecute(Sender: TObject);
     Procedure StageAllActionExecute(Sender: TObject);
     Procedure StageActionExecute(Sender: TObject);
     Procedure StageSelectionActionExecute(Sender: TObject);
@@ -237,7 +240,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
+  WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
   DateUtils, Math, FileUtil, LazFileUtils, StrUtils, Process
   {$IFDEF WINDOWS}, ShellApi{$ENDIF};
 
@@ -958,6 +961,9 @@ Begin
     PushAction.Enabled := Allow;
   If Assigned(RemotesAction) Then
     RemotesAction.Enabled := Allow;
+  { Settings is always available (local identity / refresh options). }
+  If Assigned(SettingsAction) Then
+    SettingsAction.Enabled := True;
 End;
 
 Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
@@ -2736,6 +2742,13 @@ Begin
     End;
   ShowGitRemotesForm(FRepoPath);
   ManualRefresh;
+End;
+
+Procedure TManageRepositoryForm.SettingsActionExecute(Sender: TObject);
+Begin
+  ShowGitSettingsForm;
+  ApplyConfig;
+  ApplyRepositoryConfigToOpenForms;
 End;
 
 Procedure TManageRepositoryForm.FetchActionExecute(Sender: TObject);

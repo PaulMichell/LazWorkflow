@@ -107,6 +107,14 @@ object ManageRepositoryForm: TManageRepositoryForm
               Action = RemotesAction
               TabOrder = 3
             end
+            object SettingsButton: TButton
+              Left = 356
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = SettingsAction
+              TabOrder = 4
+            end
           end
           inline DiffView: TGitDiffView
             Left = 4
@@ -510,6 +518,10 @@ object ManageRepositoryForm: TManageRepositoryForm
     object RemotesAction: TAction
       Caption = 'Remotes…'
       OnExecute = RemotesActionExecute
+    end
+    object SettingsAction: TAction
+      Caption = 'Settings…'
+      OnExecute = SettingsActionExecute
     end
     object StageAllAction: TAction
       Caption = 'Stage All'
