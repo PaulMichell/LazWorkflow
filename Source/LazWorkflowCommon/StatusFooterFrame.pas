@@ -64,4 +64,8 @@ Begin
   FRightLabel.Caption := RightText;
 End;
 
+Initialization
+
+RegisterClass(TStatusFooterFrame);
+
 End.

@@ -22,16 +22,6 @@ object ManageRepositoryForm: TManageRepositoryForm
     ClientWidth = 900
     Constraints.MinHeight = 22
     TabOrder = 1
-    inherited FPanel: TPanel
-      Width = 900
-      ClientWidth = 900
-      inherited FRightLabel: TLabel
-        Left = 893
-      end
-      inherited FCentreLabel: TLabel
-        Width = 862
-      end
-    end
   end
   object FPages: TPageControl
     Left = 0
@@ -129,56 +119,6 @@ object ManageRepositoryForm: TManageRepositoryForm
             ClientHeight = 200
             ClientWidth = 890
             TabOrder = 1
-            inherited FCaption: TLabel
-              Height = 18
-              Width = 884
-            end
-            inherited FToolBar: TPanel
-              Top = 24
-              Width = 890
-              ClientWidth = 890
-            end
-            inherited FTreePanel: TPanel
-              Height = 144
-              Top = 56
-              ClientHeight = 144
-              inherited FTree: TTreeView
-                Height = 136
-              end
-              inherited FFileList: TListBox
-                Height = 136
-                TopIndex = -1
-              end
-            end
-            inherited FSplitter: TSplitter
-              Height = 144
-              Top = 56
-            end
-            inherited FEditPanel: TPanel
-              Height = 144
-              Top = 56
-              Width = 665
-              ClientHeight = 144
-              ClientWidth = 665
-              inherited FEdit: TSynEdit
-                Height = 136
-                Width = 657
-              end
-              inherited FPreviewPanel: TPanel
-                Height = 136
-                Width = 657
-                ClientHeight = 136
-                ClientWidth = 657
-                inherited FBinaryLabel: TLabel
-                  Height = 136
-                  Width = 657
-                end
-                inherited FImagePaintBox: TPaintBox
-                  Height = 136
-                  Width = 657
-                end
-              end
-            end
           end
         end
         object FSplitter: TSplitter
@@ -555,56 +495,6 @@ object ManageRepositoryForm: TManageRepositoryForm
           BorderSpacing.Around = 0
           ClientHeight = 230
           ClientWidth = 509
-          inherited FCaption: TLabel
-            Height = 18
-            Width = 495
-          end
-          inherited FToolBar: TPanel
-            Top = 24
-            Width = 501
-            ClientWidth = 501
-          end
-          inherited FTreePanel: TPanel
-            Height = 174
-            Top = 56
-            ClientHeight = 174
-            inherited FTree: TTreeView
-              Height = 166
-            end
-            inherited FFileList: TListBox
-              Height = 166
-              TopIndex = -1
-            end
-          end
-          inherited FSplitter: TSplitter
-            Height = 174
-            Top = 56
-          end
-          inherited FEditPanel: TPanel
-            Height = 174
-            Top = 56
-            Width = 276
-            ClientHeight = 174
-            ClientWidth = 276
-            inherited FEdit: TSynEdit
-              Height = 166
-              Width = 268
-            end
-            inherited FPreviewPanel: TPanel
-              Height = 166
-              Width = 268
-              ClientHeight = 166
-              ClientWidth = 268
-              inherited FBinaryLabel: TLabel
-                Height = 166
-                Width = 268
-              end
-              inherited FImagePaintBox: TPaintBox
-                Height = 166
-                Width = 268
-              end
-            end
-          end
         end
       end
     end

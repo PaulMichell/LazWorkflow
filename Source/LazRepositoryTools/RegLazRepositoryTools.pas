@@ -18,10 +18,12 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  RepositoryManagerMain;
+  RepositoryManagerMain, StatusFooterFrame, GitDiffView;
 
 Procedure Register;
 Begin
+  { Frames used as inline children must be registered for the form designer. }
+  RegisterNoIcon([TStatusFooterFrame, TGitDiffView]);
   RegisterGitManager;
 End;
 
