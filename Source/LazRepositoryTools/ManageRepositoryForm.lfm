@@ -346,12 +346,12 @@ object ManageRepositoryForm: TManageRepositoryForm
             ParentColor = False
           end
           object FMessageMemo: TMemo
-            Left = 8
+            Left = 4
             Height = 66
             Top = 30
-            Width = 493
+            Width = 501
             Align = alClient
-            BorderSpacing.Around = 8
+            BorderSpacing.Around = 4
             ScrollBars = ssAutoBoth
             TabOrder = 0
             OnChange = MessageChange
@@ -547,14 +547,14 @@ object ManageRepositoryForm: TManageRepositoryForm
           end
         end
         inline FFilesDiffView: TGitDiffView
-          Left = 4
+          Left = 0
           Height = 230
-          Top = 4
-          Width = 501
+          Top = 0
+          Width = 509
           Align = alClient
-          BorderSpacing.Around = 4
+          BorderSpacing.Around = 0
           ClientHeight = 230
-          ClientWidth = 501
+          ClientWidth = 509
           inherited FCaption: TLabel
             Height = 18
             Width = 495
