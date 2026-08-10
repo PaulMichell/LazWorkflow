@@ -2179,12 +2179,21 @@ End;
 
 Procedure TManageRepositoryForm.UpdateCommitEnabled;
 Var
-  HasStaged, CanCommit: Boolean;
+  HasStaged, CanCommit, AssistantAvailable: Boolean;
 Begin
   HasStaged := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
   CanCommit := HasStaged And Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
+  { Suggest is permanently off unless LazAssistantTools registered the commit-message hook. }
+  AssistantAvailable := Assigned(SuggestCommitMessageFunc);
   If Assigned(SuggestMessageAction) Then
-    SuggestMessageAction.Enabled := HasStaged;
+    Begin
+      SuggestMessageAction.Enabled := HasStaged And AssistantAvailable;
+      If Not AssistantAvailable Then
+        SuggestMessageAction.Hint :=
+          'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
+      Else
+        SuggestMessageAction.Hint := 'Suggest a commit message from the staged diff';
+    End;
   If Assigned(CommitAction) Then
     CommitAction.Enabled := CanCommit;
 End;
@@ -2630,14 +2639,9 @@ Var
 Begin
   If Not Assigned(GitClient) Or (FRepoPath = '') Then
     Exit;
+  { Button stays disabled when the assistant package is not installed. }
   If Not Assigned(SuggestCommitMessageFunc) Then
-    Begin
-      MessageDlg(
-        'Project Assistant is not available for commit messages.' + LineEnding +
-        'Install and enable the LazAssistantTools package, sign in under Assistant Settings, then try again.',
-        mtInformation, [mbOK], 0);
-      Exit;
-    End;
+    Exit;
   If FStagedPaths.Count = 0 Then
     Begin
       MessageDlg('Stage at least one change before suggesting a commit message.',
