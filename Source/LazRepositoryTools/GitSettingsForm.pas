@@ -29,14 +29,22 @@ Type
     IntervalLabel: TLabel;
     IntervalSpin: TSpinEdit;
     SecondsLabel: TLabel;
+    GraphFontLabel: TLabel;
+    GraphFontNameEdit: TEdit;
+    GraphFontChooseButton: TButton;
+    GraphFontSizeLabel: TLabel;
+    GraphFontSizeSpin: TSpinEdit;
+    GraphFontPointsLabel: TLabel;
     ButtonPanel: TButtonPanel;
     Procedure AutoRefreshCheckChange(Sender: TObject);
+    Procedure GraphFontChooseClick(Sender: TObject);
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
   Private
     FRepoPath: String;
     FHasRepo: Boolean;
     Procedure SetIdentityControlsEnabled(ControlsEnabled: Boolean);
+    Procedure SyncGraphFontNameDisplay;
   Public
     Procedure LoadFromConfig;
     Function SaveToConfig: Boolean;
@@ -86,9 +94,11 @@ Begin
       Begin
         If Form.SaveToConfig Then
           WorkflowLogger.Info('GitSettings', Format(
-            'Saved – AutoRefresh=%s Interval=%ds Repo=%s',
+            'Saved – AutoRefresh=%s Interval=%ds GraphFont=%s %dpt Repo=%s',
             [BoolToStr(GitManagerConfig.AutoRefresh, True),
              GitManagerConfig.AutoRefreshSeconds,
+             GitManagerConfig.GraphFontName,
+             GitManagerConfig.GraphFontSize,
              Form.FRepoPath]))
         Else
           MessageDlg('Some repository settings could not be saved.' + LineEnding +
@@ -103,6 +113,8 @@ Procedure TGitSettingsForm.FormCreate(Sender: TObject);
 Begin
   IntervalSpin.MinValue := GitConfigMinIntervalSec;
   IntervalSpin.MaxValue := GitConfigMaxIntervalSec;
+  GraphFontSizeSpin.MinValue := GitConfigMinGraphFontSize;
+  GraphFontSizeSpin.MaxValue := GitConfigMaxGraphFontSize;
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
   FHasRepo := False;
@@ -118,11 +130,41 @@ Begin
   UserEmailLabel.Enabled := ControlsEnabled;
 End;
 
+Procedure TGitSettingsForm.SyncGraphFontNameDisplay;
+Begin
+  If Trim(GraphFontNameEdit.Text) = '' Then
+    GraphFontNameEdit.Text := '(use window font)';
+End;
+
 Procedure TGitSettingsForm.AutoRefreshCheckChange(Sender: TObject);
 Begin
   IntervalSpin.Enabled := AutoRefreshCheck.Checked;
   IntervalLabel.Enabled := AutoRefreshCheck.Checked;
   SecondsLabel.Enabled := AutoRefreshCheck.Checked;
+End;
+
+Procedure TGitSettingsForm.GraphFontChooseClick(Sender: TObject);
+Var
+  FontDialog: TFontDialog;
+  NameText: String;
+Begin
+  FontDialog := TFontDialog.Create(Nil);
+  Try
+    NameText := Trim(GraphFontNameEdit.Text);
+    If (NameText = '') Or (NameText = '(use window font)') Then
+      FontDialog.Font.Name := Font.Name
+    Else
+      FontDialog.Font.Name := NameText;
+    FontDialog.Font.Size := GraphFontSizeSpin.Value;
+    FontDialog.Options := FontDialog.Options + [fdNoStyleSel, fdForceFontExist];
+    If FontDialog.Execute Then
+      Begin
+        GraphFontNameEdit.Text := FontDialog.Font.Name;
+        GraphFontSizeSpin.Value := FontDialog.Font.Size;
+      End;
+  Finally
+    FontDialog.Free;
+  End;
 End;
 
 Procedure TGitSettingsForm.LoadFromConfig;
@@ -133,7 +175,15 @@ Begin
     Begin
       AutoRefreshCheck.Checked := GitManagerConfig.AutoRefresh;
       IntervalSpin.Value := GitManagerConfig.AutoRefreshSeconds;
+      GraphFontNameEdit.Text := GitManagerConfig.GraphFontName;
+      GraphFontSizeSpin.Value := GitManagerConfig.GraphFontSize;
+    End
+  Else
+    Begin
+      GraphFontNameEdit.Text := '';
+      GraphFontSizeSpin.Value := GitConfigDefaultGraphFontSize;
     End;
+  SyncGraphFontNameDisplay;
   AutoRefreshCheckChange(Nil);
 
   FRepoPath := ResolveSettingsRepoPath;
@@ -174,12 +224,18 @@ End;
 Function TGitSettingsForm.SaveToConfig: Boolean;
 Var
   Ok: Boolean;
+  FontName: String;
 Begin
   Result := True;
   If Assigned(GitManagerConfig) Then
     Begin
       GitManagerConfig.AutoRefresh := AutoRefreshCheck.Checked;
       GitManagerConfig.AutoRefreshSeconds := IntervalSpin.Value;
+      FontName := Trim(GraphFontNameEdit.Text);
+      If FontName = '(use window font)' Then
+        FontName := '';
+      GitManagerConfig.GraphFontName := FontName;
+      GitManagerConfig.GraphFontSize := GraphFontSizeSpin.Value;
       GitManagerConfig.Save;
     End;
 

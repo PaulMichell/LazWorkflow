@@ -19,13 +19,20 @@ Const
   GitConfigDefaultIntervalSec = 5;
   GitConfigMinIntervalSec = 2;
   GitConfigMaxIntervalSec = 3600;
+  GitConfigDefaultGraphFontSize = 9;
+  GitConfigMinGraphFontSize = 6;
+  GitConfigMaxGraphFontSize = 24;
 
 Type
   TGitConfig = Class
   Private
     FAutoRefresh: Boolean;
     FAutoRefreshSeconds: Integer;
+    FGraphFontName: String;
+    FGraphFontSize: Integer;
     Procedure SetAutoRefreshSeconds(Value: Integer);
+    Procedure SetGraphFontSize(Value: Integer);
+    Procedure SetGraphFontName(Const Value: String);
   Public
     Constructor Create;
     Procedure Load;
@@ -33,6 +40,9 @@ Type
     Procedure Assign(Source: TGitConfig);
     Property AutoRefresh: Boolean Read FAutoRefresh Write FAutoRefresh;
     Property AutoRefreshSeconds: Integer Read FAutoRefreshSeconds Write SetAutoRefreshSeconds;
+    { Empty GraphFontName means use the form font name at draw time. }
+    Property GraphFontName: String Read FGraphFontName Write SetGraphFontName;
+    Property GraphFontSize: Integer Read FGraphFontSize Write SetGraphFontSize;
   End;
 
 Var
@@ -48,6 +58,8 @@ Begin
   Inherited Create;
   FAutoRefresh := GitConfigDefaultAutoRefresh;
   FAutoRefreshSeconds := GitConfigDefaultIntervalSec;
+  FGraphFontName := '';
+  FGraphFontSize := GitConfigDefaultGraphFontSize;
 End;
 
 Procedure TGitConfig.SetAutoRefreshSeconds(Value: Integer);
@@ -59,12 +71,28 @@ Begin
   FAutoRefreshSeconds := Value;
 End;
 
+Procedure TGitConfig.SetGraphFontSize(Value: Integer);
+Begin
+  If Value < GitConfigMinGraphFontSize Then
+    Value := GitConfigMinGraphFontSize;
+  If Value > GitConfigMaxGraphFontSize Then
+    Value := GitConfigMaxGraphFontSize;
+  FGraphFontSize := Value;
+End;
+
+Procedure TGitConfig.SetGraphFontName(Const Value: String);
+Begin
+  FGraphFontName := Trim(Value);
+End;
+
 Procedure TGitConfig.Assign(Source: TGitConfig);
 Begin
   If Not Assigned(Source) Then
     Exit;
   FAutoRefresh := Source.AutoRefresh;
   AutoRefreshSeconds := Source.AutoRefreshSeconds;
+  GraphFontName := Source.GraphFontName;
+  GraphFontSize := Source.GraphFontSize;
 End;
 
 Procedure TGitConfig.Load;
@@ -77,9 +105,12 @@ Begin
     FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
     LoadedInterval := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
     AutoRefreshSeconds := LoadedInterval;
+    GraphFontName := Cfg.GetValue('Graph/FontName', '');
+    GraphFontSize := Cfg.GetValue('Graph/FontSize', GitConfigDefaultGraphFontSize);
     { Migrate from LazGitManager.xml when the new store still looks empty/default. }
     If (FAutoRefresh = GitConfigDefaultAutoRefresh) And
-      (LoadedInterval = GitConfigDefaultIntervalSec) Then
+      (LoadedInterval = GitConfigDefaultIntervalSec) And (FGraphFontName = '') And
+      (FGraphFontSize = GitConfigDefaultGraphFontSize) Then
       Begin
         Cfg.Free;
         Cfg := Nil;
@@ -100,6 +131,8 @@ Begin
   Try
     Cfg.SetValue('AutoRefresh/Enabled', FAutoRefresh);
     Cfg.SetValue('AutoRefresh/IntervalSec', FAutoRefreshSeconds);
+    Cfg.SetValue('Graph/FontName', FGraphFontName);
+    Cfg.SetValue('Graph/FontSize', FGraphFontSize);
     Cfg.WriteToDisk;
   Finally
     Cfg.Free;

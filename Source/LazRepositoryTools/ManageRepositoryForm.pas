@@ -775,11 +775,18 @@ End;
 
 Procedure TManageRepositoryForm.ApplyConfig;
 Begin
-  If Not Assigned(GitManagerConfig) Or Not Assigned(FAutoRefreshTimer) Then
+  If Not Assigned(GitManagerConfig) Then
     Exit;
-  FAutoRefreshTimer.Enabled := False;
-  FAutoRefreshTimer.Interval := GitManagerConfig.AutoRefreshSeconds * 1000;
-  FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
+  If Assigned(FAutoRefreshTimer) Then
+    Begin
+      FAutoRefreshTimer.Enabled := False;
+      FAutoRefreshTimer.Interval := GitManagerConfig.AutoRefreshSeconds * 1000;
+      FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
+    End;
+  { Graph font changes affect row metrics and painted text. }
+  UpdateScrollRange;
+  If Assigned(GraphPaintBox) Then
+    GraphPaintBox.Invalidate;
 End;
 
 Procedure TManageRepositoryForm.ManualRefresh;
@@ -1509,14 +1516,25 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.PrepareGraphTextFont(ACanvas: TCanvas; IsDate: Boolean);
+Var
+  FontName: String;
+  FontSize: Integer;
 Begin
   If Not Assigned(ACanvas) Then
     Exit;
+  FontName := Font.Name;
+  FontSize := GitConfigDefaultGraphFontSize;
+  If Assigned(GitManagerConfig) Then
+    Begin
+      If Trim(GitManagerConfig.GraphFontName) <> '' Then
+        FontName := GitManagerConfig.GraphFontName;
+      FontSize := GitManagerConfig.GraphFontSize;
+    End;
   { Point sizes only — never assign Font.Height := 0 (forces Size 0 intermediate). }
-  ACanvas.Font.Name := Font.Name;
+  ACanvas.Font.Name := FontName;
   ACanvas.Font.Style := [];
   ACanvas.Font.Quality := fqCleartypeNatural;
-  ACanvas.Font.Size := 9;
+  ACanvas.Font.Size := FontSize;
   If IsDate Then
     ACanvas.Font.Color := clGrayText
   Else

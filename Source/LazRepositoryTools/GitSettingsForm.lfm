@@ -1,11 +1,11 @@
 object GitSettingsForm: TGitSettingsForm
   Left = 280
-  Height = 447
+  Height = 520
   Top = 160
   Width = 520
   BorderStyle = bsDialog
   Caption = 'Repository Settings'
-  ClientHeight = 447
+  ClientHeight = 520
   ClientWidth = 520
   Position = poScreenCenter
   LCLVersion = '4.99.0.0'
@@ -13,14 +13,14 @@ object GitSettingsForm: TGitSettingsForm
   OnCreate = FormCreate
   object ScrollBox: TScrollBox
     Left = 0
-    Height = 398
+    Height = 471
     Top = 0
     Width = 520
     HorzScrollBar.Page = 284
-    VertScrollBar.Page = 395
+    VertScrollBar.Page = 468
     Align = alClient
     BorderStyle = bsNone
-    ClientHeight = 398
+    ClientHeight = 471
     ClientWidth = 520
     TabOrder = 0
     object IdentityGroup: TGroupBox
@@ -98,12 +98,12 @@ object GitSettingsForm: TGitSettingsForm
     end
     object AppGroup: TGroupBox
       Left = 12
-      Height = 100
+      Height = 168
       Top = 295
       Width = 496
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Manage Repository window'
-      ClientHeight = 73
+      ClientHeight = 141
       ClientWidth = 492
       TabOrder = 2
       object AutoRefreshCheck: TCheckBox
@@ -142,12 +142,65 @@ object GitSettingsForm: TGitSettingsForm
         Caption = 'seconds'
         ParentColor = False
       end
+      object GraphFontLabel: TLabel
+        Left = 12
+        Height = 18
+        Top = 82
+        Width = 110
+        Caption = 'History graph font:'
+        ParentColor = False
+      end
+      object GraphFontNameEdit: TEdit
+        Left = 130
+        Height = 32
+        Top = 76
+        Width = 250
+        Anchors = [akTop, akLeft, akRight]
+        ReadOnly = True
+        TabOrder = 2
+      end
+      object GraphFontChooseButton: TButton
+        Left = 390
+        Height = 32
+        Top = 76
+        Width = 90
+        Anchors = [akTop, akRight]
+        Caption = 'Choose…'
+        OnClick = GraphFontChooseClick
+        TabOrder = 3
+      end
+      object GraphFontSizeLabel: TLabel
+        Left = 32
+        Height = 18
+        Top = 118
+        Width = 60
+        Caption = 'Font size:'
+        ParentColor = False
+      end
+      object GraphFontSizeSpin: TSpinEdit
+        Left = 140
+        Height = 32
+        Top = 112
+        Width = 80
+        MaxValue = 24
+        MinValue = 6
+        TabOrder = 4
+        Value = 9
+      end
+      object GraphFontPointsLabel: TLabel
+        Left = 230
+        Height = 18
+        Top = 118
+        Width = 40
+        Caption = 'points'
+        ParentColor = False
+      end
     end
   end
   object ButtonPanel: TButtonPanel
     Left = 6
     Height = 37
-    Top = 404
+    Top = 477
     Width = 508
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
