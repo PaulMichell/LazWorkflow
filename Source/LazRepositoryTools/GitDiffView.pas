@@ -1188,11 +1188,14 @@ Function TGitDiffView.HunkMarkerRect(LineNo: Integer): TRect;
 Var
   Y, GutterW, MarkerW, RectH, TriH, LeftPad: Integer;
 Begin
-  { Marker sits at the left of the gutter (before line numbers). Base on the rule line. }
+  { Marker sits at the left of the gutter (before line numbers). Base on the rule line.
+    Triangle height = half width so the sides are true 45° (smooth staircase pixels). }
   Result := Rect(0, 0, 0, 0);
-  MarkerW := ScaleDesign(14);
-  RectH := ScaleDesign(6);
-  TriH := ScaleDesign(10);
+  MarkerW := ScaleDesign(12);
+  If (MarkerW And 1) <> 0 Then
+    Inc(MarkerW); { even width keeps a 1px tip on the centre }
+  RectH := ScaleDesign(5);
+  TriH := MarkerW Div 2;
   LeftPad := ScaleDesign(2);
   If Not LinePixelTop(LineNo, Y) Then
     Exit;
@@ -1218,24 +1221,29 @@ End;
 
 Procedure TGitDiffView.PaintHunkDecorations(PaintCanvas: TCanvas);
 Var
-  I, LineNo, Y, X1, X2, LeftX, RightX, MidX: Integer;
+  I, LineNo, Y, X1, X2, LeftX, RightX, Row, SpanL, SpanR: Integer;
   MarkerW, RectH, TriH: Integer;
-  Pts: Array[0..4] Of TPoint;
+  FillCol, EdgeCol: TColor;
 Begin
   If (FMode <> dvmEditorOnly) Or (Not Assigned(DiffEditor)) Or (Not Assigned(FHunkStartLines)) Then
     Exit;
 
-  MarkerW := ScaleDesign(14);
-  RectH := ScaleDesign(6);
-  TriH := ScaleDesign(10);
+  MarkerW := ScaleDesign(12);
+  If (MarkerW And 1) <> 0 Then
+    Inc(MarkerW);
+  RectH := ScaleDesign(5);
+  TriH := MarkerW Div 2; { 45° sides: one horizontal pixel in per vertical pixel }
   X1 := 0;
   X2 := DiffEditor.ClientWidth;
   If DiffEditor.RightGutter.Visible Then
     X2 := X2 - DiffEditor.RightGutter.Width;
 
+  FillCol := RGBToColor(66, 165, 245);
+  EdgeCol := RGBToColor(13, 71, 161);
   PaintCanvas.Pen.Mode := pmCopy;
-  PaintCanvas.Pen.Width := Max(1, ScaleDesign(1));
+  PaintCanvas.Pen.Width := 1;
   PaintCanvas.Pen.Style := psSolid;
+  PaintCanvas.Brush.Style := bsSolid;
 
   For I := 0 To FHunkStartLines.Count - 1 Do
     Begin
@@ -1248,19 +1256,33 @@ Begin
       PaintCanvas.MoveTo(X1, Y);
       PaintCanvas.LineTo(X2, Y);
 
-      { Silhouette: rectangular base on the rule, then downward triangle (before line numbers). }
+      { Silhouette drawn as horizontal spans: base rectangle + 45° staircase tip.
+        Equal in/out steps avoid the jagged anti-aliased Polygon edges. }
       LeftX := ScaleDesign(2);
       RightX := LeftX + MarkerW;
-      MidX := (LeftX + RightX) Div 2;
-      Pts[0] := Point(LeftX, Y);
-      Pts[1] := Point(RightX, Y);
-      Pts[2] := Point(RightX, Y + RectH);
-      Pts[3] := Point(MidX, Y + RectH + TriH);
-      Pts[4] := Point(LeftX, Y + RectH);
-      PaintCanvas.Brush.Style := bsSolid;
-      PaintCanvas.Brush.Color := RGBToColor(66, 165, 245);
-      PaintCanvas.Pen.Color := RGBToColor(13, 71, 161);
-      PaintCanvas.Polygon(Pts);
+      PaintCanvas.Brush.Color := FillCol;
+      PaintCanvas.Pen.Color := FillCol;
+      If RectH > 0 Then
+        PaintCanvas.FillRect(Rect(LeftX, Y, RightX, Y + RectH));
+      For Row := 0 To TriH - 1 Do
+        Begin
+          SpanL := LeftX + Row;
+          SpanR := RightX - Row;
+          If SpanR <= SpanL Then
+            Break;
+          PaintCanvas.FillRect(Rect(SpanL, Y + RectH + Row, SpanR, Y + RectH + Row + 1));
+        End;
+      { Crisp 1px outline along the stepped silhouette. }
+      PaintCanvas.Pen.Color := EdgeCol;
+      PaintCanvas.MoveTo(LeftX, Y);
+      PaintCanvas.LineTo(RightX - 1, Y);
+      PaintCanvas.LineTo(RightX - 1, Y + RectH - 1);
+      For Row := 0 To TriH - 1 Do
+        PaintCanvas.Pixels[RightX - 1 - Row, Y + RectH + Row] := EdgeCol;
+      For Row := TriH - 1 DownTo 0 Do
+        PaintCanvas.Pixels[LeftX + Row, Y + RectH + Row] := EdgeCol;
+      PaintCanvas.MoveTo(LeftX, Y + RectH - 1);
+      PaintCanvas.LineTo(LeftX, Y);
     End;
 End;
 
@@ -1974,6 +1996,18 @@ Begin
   DiffEditor.CaretY := LineNo;
   DiffEditor.CaretX := 1;
 
+  { Second click of a double-click: select the hunk now and skip drag/toggle
+    so MouseUp does not clear the line under the caret. }
+  If (ssDouble in Shift) And (FMode = dvmEditorOnly) Then
+    Begin
+      FLineDragActive := False;
+      If Not (ssCtrl in Shift) Then
+        SelectHunkAtLine(LineNo)
+      Else
+        ToggleHunkSelectionAtLine(LineNo);
+      Exit;
+    End;
+
   { Hunk marker: click selects hunk; Ctrl+click toggles hunk selection. }
   If FMode = dvmEditorOnly Then
     Begin
@@ -2091,12 +2125,11 @@ Begin
               If FLineDragCtrl Then
                 ToggleLineSelection(LineNo)
               Else If FLineDragWasSelected And (SelectedLineCount <= 1) Then
-                ClearLineSelection(True) { second click unselects }
-              Else If FLineDragWasSelected Then
-                ToggleLineSelection(LineNo)
+                ClearLineSelection(True) { plain re-click of a single selected line }
               Else
                 Begin
-                  { Already selected provisionally on MouseDown. }
+                  { Provisional MouseDown selection, or multi-line from double-click
+                    hunk select — leave the selection intact. }
                   UpdateActionEnabled;
                   DoSelectionChanged;
                 End;
@@ -2791,9 +2824,13 @@ End;
 
 Procedure TGitDiffView.EditDblClick(Sender: TObject);
 Begin
-  { Double-click a change line to select all change lines in its hunk. }
+  { Backup for hosts that do not set ssDouble on the second MouseDown.
+    Primary path is EditMouseDown with ssDouble so MouseUp cannot unselect. }
   If (FMode = dvmEditorOnly) Or (FMode = dvmStaging) Then
-    SelectHunkAtLine(DiffEditor.CaretY);
+    Begin
+      FLineDragActive := False;
+      SelectHunkAtLine(DiffEditor.CaretY);
+    End;
 End;
 
 Procedure TGitDiffView.EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);

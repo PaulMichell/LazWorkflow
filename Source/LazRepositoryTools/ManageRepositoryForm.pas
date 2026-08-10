@@ -1425,6 +1425,14 @@ Begin
       If LastRow < FirstRow Then
         Exit;
 
+      { Selection under graph geometry so lane edges still show on the active row. }
+      If (FSelectedIndex >= FirstRow) And (FSelectedIndex <= LastRow) Then
+        Begin
+          Y := FSelectedIndex * RH - Off;
+          Brush.Color := RGBToColor(227, 242, 253);
+          FillRect(Bounds(0, Y, GraphPaintBox.ClientWidth, RH));
+        End;
+
       Pen.Width := EdgePenW;
       For I := 0 To FModel.EdgeCount - 1 Do
         Begin
@@ -1447,12 +1455,6 @@ Begin
         Begin
           C := FModel.Commit(I);
           Y := I * RH - Off;
-
-          If I = FSelectedIndex Then
-            Begin
-              Brush.Color := RGBToColor(227, 242, 253);
-              FillRect(Bounds(0, Y, GraphPaintBox.ClientWidth, RH));
-            End;
 
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
