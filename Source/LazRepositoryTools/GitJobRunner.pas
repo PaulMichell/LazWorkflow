@@ -231,6 +231,8 @@ Var
   StillQueued: Boolean;
 Begin
   Git := TGitService.Create;
+  { Never publish WorkflowEventBus from a worker — listeners update LCL UI. }
+  Git.PublishEvents := False;
   Try
     While Not Terminated Do
       Begin

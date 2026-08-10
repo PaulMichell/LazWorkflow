@@ -2974,8 +2974,8 @@ End;
 
 Procedure TManageRepositoryForm.RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
 Begin
-  { Remote ops apply their own single-shot graph update; ignore bus noise mid-op. }
-  If FRemoteOpBusy Then
+  { Remote ops / jobs apply their own UI update; ignore bus noise mid-op. }
+  If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
     BindRepository(FRepoPath);
@@ -2983,7 +2983,8 @@ End;
 
 Procedure TManageRepositoryForm.WorkingTreeChanged(Const RepoPath: String);
 Begin
-  If FRemoteOpBusy Then
+  { Job completions refresh UI themselves; ignore bus noise mid-job. }
+  If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
     Begin
@@ -2996,7 +2997,7 @@ End;
 
 Procedure TManageRepositoryForm.HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
 Begin
-  If FRemoteOpBusy Then
+  If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
     BindRepository(FRepoPath);
@@ -3004,7 +3005,7 @@ End;
 
 Procedure TManageRepositoryForm.RemoteUpdated(Const RepoPath: String; Const RemoteName: String);
 Begin
-  If FRemoteOpBusy Then
+  If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
     If Assigned(StatusFooter) Then

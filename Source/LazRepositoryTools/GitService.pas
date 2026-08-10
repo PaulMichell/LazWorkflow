@@ -35,6 +35,7 @@ Type
     FRepoPath: String;
     FLastError: String;
     FCancelled: Boolean;
+    FPublishEvents: Boolean;
     FActiveProcess: TProcess;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
@@ -47,6 +48,11 @@ Type
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
       Var Summary: TGitTransferSummary);
     Function IsCancelled: Boolean;
+    Procedure EmitWorkingTreeChanged;
+    Procedure EmitHeadChanged(Const NewHeadSha: String);
+    Procedure EmitCommitCreated(Const Info: TGitCommitInfo);
+    Procedure EmitRepositoryStateChanged(Const Path: String; NewState: TGitRepositoryState);
+    Procedure EmitRemoteUpdated(Const RemoteName: String);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -120,6 +126,8 @@ Type
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property LastError: String Read FLastError;
     Property Cancelled: Boolean Read FCancelled;
+    { When False, skip WorkflowEventBus publishes (background job workers must not touch UI). }
+    Property PublishEvents: Boolean Read FPublishEvents Write FPublishEvents;
   End;
 
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
@@ -179,7 +187,38 @@ Begin
   FRepoPath := '';
   FLastError := '';
   FCancelled := False;
+  FPublishEvents := True;
   FActiveProcess := Nil;
+End;
+
+Procedure TGitService.EmitWorkingTreeChanged;
+Begin
+  If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
+    EmitWorkingTreeChanged;
+End;
+
+Procedure TGitService.EmitHeadChanged(Const NewHeadSha: String);
+Begin
+  If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
+    WorkflowEventBus.NotifyHeadChanged(FRepoPath, NewHeadSha);
+End;
+
+Procedure TGitService.EmitCommitCreated(Const Info: TGitCommitInfo);
+Begin
+  If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
+    EmitCommitCreated(Info);
+End;
+
+Procedure TGitService.EmitRepositoryStateChanged(Const Path: String; NewState: TGitRepositoryState);
+Begin
+  If FPublishEvents And Assigned(WorkflowEventBus) And (Path <> '') Then
+    WorkflowEventBus.NotifyRepositoryStateChanged(Path, NewState);
+End;
+
+Procedure TGitService.EmitRemoteUpdated(Const RemoteName: String);
+Begin
+  If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
+    EmitRemoteUpdated(RemoteName);
 End;
 
 Procedure TGitService.ResetCancel;
@@ -586,7 +625,7 @@ Function TGitService.StagePaths(Paths: TStrings): Boolean;
 Begin
   Result := RunGitPaths('add', Paths);
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    EmitWorkingTreeChanged;
 End;
 
 Function TGitService.UnstagePaths(Paths: TStrings): Boolean;
@@ -619,7 +658,7 @@ Begin
       Result := RunGit(Args, OutputText, ExitCode);
     End;
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    EmitWorkingTreeChanged;
 End;
 
 Function TGitService.StageAll: Boolean;
@@ -629,7 +668,7 @@ Var
 Begin
   Result := RunGit(['add', '-A'], OutputText, ExitCode);
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    EmitWorkingTreeChanged;
 End;
 
 Function TGitService.UnstageAll: Boolean;
@@ -641,7 +680,7 @@ Begin
   If Not Result Then
     Result := RunGit(['reset', 'HEAD'], OutputText, ExitCode);
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    EmitWorkingTreeChanged;
 End;
 
 Function TGitService.RevertPaths(Paths: TStrings): Boolean;
@@ -676,7 +715,7 @@ Begin
       Result := RunGit(Args, OutputText, ExitCode);
     End;
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    EmitWorkingTreeChanged;
 End;
 
 Function TGitService.AppendIgnorePatterns(Patterns: TStrings): Boolean;
@@ -719,7 +758,7 @@ Begin
         Lines.SaveToFile(IgnorePath);
       Result := True;
       If Changed Then
-        WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+        EmitWorkingTreeChanged;
     Except
       On E: Exception Do
         Begin
@@ -757,9 +796,9 @@ Begin
       Info.AuthorEmail := '';
       Info.CommitDate := Now;
       Info.ParentCount := 1;
-      WorkflowEventBus.NotifyCommitCreated(FRepoPath, Info);
-      WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
-      WorkflowEventBus.NotifyHeadChanged(FRepoPath, NewSha);
+      EmitCommitCreated(Info);
+      EmitWorkingTreeChanged;
+      EmitHeadChanged(NewSha);
     End;
 End;
 
@@ -985,7 +1024,7 @@ Begin
 
     Result := RunGit(Args, OutputText, ExitCode);
     If Result Then
-      WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath)
+      EmitWorkingTreeChanged
     Else If Trim(OutputText) <> '' Then
       FLastError := Trim(OutputText);
   Finally
@@ -1161,7 +1200,7 @@ Begin
   Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
   BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
   If Result Then
-    WorkflowEventBus.NotifyRemoteUpdated(FRepoPath, RemoteName)
+    EmitRemoteUpdated(RemoteName)
   Else
     Summary.Message := 'Fetch failed: ' + FLastError;
 End;
@@ -1185,7 +1224,7 @@ Begin
   Result := RunGit(Args, OutputText, ExitCode);
   BuildTransferSummary('Pull', RemoteName, OutputText, Summary);
   If Result Then
-    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath)
+    EmitWorkingTreeChanged
   Else
     Summary.Message := 'Pull failed: ' + FLastError;
 End;
@@ -1240,7 +1279,7 @@ Begin
     Begin
       FRepoPath := Dir;
       WorkflowLogger.Info('GitService', 'Initialised repository at ' + Dir);
-      WorkflowEventBus.NotifyRepositoryStateChanged(Dir, grsClean);
+      EmitRepositoryStateChanged(Dir, grsClean);
     End;
 End;
 
@@ -1282,7 +1321,7 @@ Begin
     Begin
       FRepoPath := Dest;
       WorkflowLogger.Info('GitService', 'Cloned ' + Url + ' into ' + Dest);
-      WorkflowEventBus.NotifyRepositoryStateChanged(Dest, grsClean);
+      EmitRepositoryStateChanged(Dest, grsClean);
     End
   Else If Trim(OutputText) <> '' Then
     FLastError := Trim(OutputText);
@@ -1436,7 +1475,7 @@ Begin
     Exit;
   Result := RunGit(['checkout', RefName], OutputText, ExitCode);
   If Result Then
-    WorkflowEventBus.NotifyHeadChanged(FRepoPath, RefName);
+    EmitHeadChanged(RefName);
 End;
 
 Function TGitService.CreateBranch(Const BranchName, StartPoint: String): Boolean;
