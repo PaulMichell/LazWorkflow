@@ -17,6 +17,9 @@ backup/
 Lib/
 **/Lib/
 
+# Backups
+**/Backup/
+
 # Auto-generated package registration stubs (created by Lazarus on compile/install)
 Packages/*.pas
 
