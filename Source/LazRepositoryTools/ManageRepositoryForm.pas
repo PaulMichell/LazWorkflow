@@ -12,7 +12,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView;
+  GitGraphModel, GitDiffView, GitJobRunner, GitService;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -32,16 +32,15 @@ Type
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
     FRemoteOpSuppressResult: Boolean;
+    FJobBusy: Boolean;
+    FPushAfterCommit: Boolean;
+    { Generation tokens invalidate Queue callbacks after cancel; never Synchronize+WaitFor. }
+    FIndexGen: Integer;
+    FDetailGen: Integer;
+    FRemoteGen: Integer;
     FIndexThread: TThread;
     FDetailThread: TThread;
     FRemoteOpThread: TThread;
-    FPendingIndexText: String;
-    FPendingIndexOk: Boolean;
-    FPendingDetailsText: String;
-    FPendingDetailsOk: Boolean;
-    FPendingRemoteOk: Boolean;
-    FPendingRemoteMessage: String;
-    FPendingRemoteKind: TGitRemoteOpKind;
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
@@ -62,17 +61,26 @@ Type
     Function ConfirmPathAction(Const ActionTitle, ActionVerb: String; Paths: TStrings): Boolean;
     Function MovePathToWasteBin(Const FullPath: String; Out ErrorText: String): Boolean;
     Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
-    Procedure ApplyIndexLoaded;
-    Procedure ApplyDetailsLoaded;
-    Procedure ApplyRemoteOpFinished;
+    Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
+    Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
+    Procedure ApplyRemoteOpResult(Ok: Boolean; Const ResultMessage: String; Kind: TGitRemoteOpKind;
+      IndexOk: Boolean; Const IndexPayload: String; DetailsOk: Boolean; Const DetailsPayload: String);
     Procedure StartIndexLoad;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetRemoteActionsEnabled(ActionsEnabled: Boolean);
+    Procedure SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
+    Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
+    Procedure GitJobFinished(Job: TGitJob);
+    Function SubmitGitJob(Job: TGitJob): Boolean;
+    Procedure ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
+    Procedure RefreshFilesListAsync;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
+    { Soft cancel: Terminate + bump gen (no WaitFor). Hard dispose used on form Destroy only. }
     Procedure StopIndexThread;
     Procedure StopDetailThread;
     Procedure StopRemoteOpThread;
+    Procedure DisposeWorker(Var Worker: TThread; Var Generation: Integer; HardWait: Boolean);
     Procedure UpdateScrollRange;
     Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
     Procedure ShowCommitDetails(Index: Integer);
@@ -230,44 +238,72 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitService, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
+  WorkflowLog, GitConfig, GitRemotesForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
   DateUtils, Math, FileUtil, LazFileUtils, StrUtils, Process
   {$IFDEF WINDOWS}, ShellApi{$ENDIF};
 
 Type
+  { Workers deliver via Queue (not Synchronize) so the form may Terminate+WaitFor on
+    the main thread without deadlock. Results live on the worker; generation tokens
+    drop stale Queue callbacks after cancel. }
+
   TGitIndexThread = Class(TThread)
   Private
     FForm: TManageRepositoryForm;
     FRepoPath: String;
+    FGeneration: Integer;
+    FResultOk: Boolean;
+    FResultText: String;
+    Procedure Deliver;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String);
+    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AGeneration: Integer);
+    Procedure DetachForm;
+    Property Generation: Integer Read FGeneration;
   End;
 
   TGitDetailThread = Class(TThread)
   Private
     FForm: TManageRepositoryForm;
     FRepoPath: String;
+    FGeneration: Integer;
     FShas: TStringList;
+    FResultOk: Boolean;
+    FResultText: String;
+    Procedure Deliver;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AShas: TStringList);
+    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AShas: TStringList;
+      AGeneration: Integer);
     Destructor Destroy; Override;
+    Procedure DetachForm;
+    Property Generation: Integer Read FGeneration;
   End;
 
-  { Runs Fetch/Pull/Push then loads the graph index + first detail batch off-thread.
-    The History tree is left unchanged until ApplyRemoteOpFinished swaps in complete data. }
+  { Fetch/Pull/Push then loads index + first detail batch off-thread.
+    History UI is updated only in ApplyRemoteOpResult after a successful transfer. }
   TGitRemoteOpThread = Class(TThread)
   Private
     FForm: TManageRepositoryForm;
     FRepoPath: String;
+    FGeneration: Integer;
     FKind: TGitRemoteOpKind;
+    FResultOk: Boolean;
+    FResultMessage: String;
+    FIndexOk: Boolean;
+    FIndexText: String;
+    FDetailsOk: Boolean;
+    FDetailsText: String;
+    Procedure Deliver;
   Protected
     Procedure Execute; Override;
   Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; Kind: TGitRemoteOpKind);
+    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; Kind: TGitRemoteOpKind;
+      AGeneration: Integer);
+    Procedure DetachForm;
+    Property Generation: Integer Read FGeneration;
   End;
 
 Procedure CollectLeadingShas(Const RevListText: String; MaxCount: Integer; Shas: TStrings);
@@ -301,45 +337,80 @@ Begin
   End;
 End;
 
-Constructor TGitIndexThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String);
+Constructor TGitIndexThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
+  AGeneration: Integer);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   FForm := AForm;
   FRepoPath := ARepoPath;
+  FGeneration := AGeneration;
+  FResultOk := False;
+  FResultText := '';
+End;
+
+Procedure TGitIndexThread.DetachForm;
+Begin
+  FForm := Nil;
+End;
+
+Procedure TGitIndexThread.Deliver;
+Var
+  Form: TManageRepositoryForm;
+  Gen: Integer;
+  Ok: Boolean;
+  Text: String;
+Begin
+  { Main thread after Execute. Free Self here on soft-cancel / success paths.
+    Hard dispose removes this Queue and frees the thread itself. }
+  Form := FForm;
+  Gen := FGeneration;
+  Ok := FResultOk;
+  Text := FResultText;
+  If Not Assigned(Form) Then
+    Begin
+      Free;
+      Exit;
+    End;
+  If Form.FIndexThread = Self Then
+    Form.FIndexThread := Nil;
+  If (Gen = Form.FIndexGen) And Not (csDestroying in Form.ComponentState) And
+     Not Application.Terminated Then
+    Form.ApplyIndexResult(Ok, Text)
+  Else If Not Assigned(Form.FIndexThread) Then
+    Form.FIndexing := False;
+  Free;
 End;
 
 Procedure TGitIndexThread.Execute;
 Var
-  Text: String;
-  Ok: Boolean;
   Client: TGitService;
 Begin
   Client := TGitService.Create;
   Try
-    Ok := Client.FetchRevListParents(FRepoPath, Text);
-    If Terminated Or Not Assigned(FForm) Then
-      Exit;
-    FForm.FPendingIndexOk := Ok;
-    FForm.FPendingIndexText := Text;
-    If Terminated Or Not Assigned(FForm) Then
-      Exit;
-    If csDestroying in FForm.ComponentState Then
-      Exit;
-    Synchronize(@FForm.ApplyIndexLoaded);
+    If Not Terminated Then
+      FResultOk := Client.FetchRevListParents(FRepoPath, FResultText);
   Finally
     Client.Free;
   End;
+  { Always Queue when a form is still attached so soft-cancel can Free on the main thread.
+    Hard dispose DetachForm's first, so we exit without Queue and the form WaitFor+Free's. }
+  If Not Assigned(FForm) Then
+    Exit;
+  Queue(@Deliver);
 End;
 
 Constructor TGitDetailThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
-  AShas: TStringList);
+  AShas: TStringList; AGeneration: Integer);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   FForm := AForm;
   FRepoPath := ARepoPath;
+  FGeneration := AGeneration;
   FShas := AShas; { takes ownership }
+  FResultOk := False;
+  FResultText := '';
 End;
 
 Destructor TGitDetailThread.Destroy;
@@ -348,105 +419,155 @@ Begin
   Inherited Destroy;
 End;
 
+Procedure TGitDetailThread.DetachForm;
+Begin
+  FForm := Nil;
+End;
+
+Procedure TGitDetailThread.Deliver;
+Var
+  Form: TManageRepositoryForm;
+  Gen: Integer;
+  Ok: Boolean;
+  Text: String;
+Begin
+  Form := FForm;
+  Gen := FGeneration;
+  Ok := FResultOk;
+  Text := FResultText;
+  If Not Assigned(Form) Then
+    Begin
+      Free;
+      Exit;
+    End;
+  If Form.FDetailThread = Self Then
+    Form.FDetailThread := Nil;
+  If (Gen = Form.FDetailGen) And Not (csDestroying in Form.ComponentState) And
+     Not Application.Terminated Then
+    Form.ApplyDetailsResult(Ok, Text)
+  Else If Not Assigned(Form.FDetailThread) Then
+    Form.FDetailLoading := False;
+  Free;
+End;
+
 Procedure TGitDetailThread.Execute;
 Var
-  Text: String;
-  Ok: Boolean;
   Client: TGitService;
 Begin
   Client := TGitService.Create;
   Try
-    Ok := Client.FetchCommitDetails(FRepoPath, FShas, Text);
-    If Terminated Or Not Assigned(FForm) Then
-      Exit;
-    FForm.FPendingDetailsOk := Ok;
-    FForm.FPendingDetailsText := Text;
-    If Terminated Or Not Assigned(FForm) Then
-      Exit;
-    If csDestroying in FForm.ComponentState Then
-      Exit;
-    Synchronize(@FForm.ApplyDetailsLoaded);
+    If Not Terminated Then
+      FResultOk := Client.FetchCommitDetails(FRepoPath, FShas, FResultText);
   Finally
     Client.Free;
   End;
+  If Not Assigned(FForm) Then
+    Exit;
+  Queue(@Deliver);
 End;
 
 Constructor TGitRemoteOpThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
-  Kind: TGitRemoteOpKind);
+  Kind: TGitRemoteOpKind; AGeneration: Integer);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   FForm := AForm;
   FRepoPath := ARepoPath;
+  FGeneration := AGeneration;
   FKind := Kind;
+  FResultOk := False;
+  FResultMessage := '';
+  FIndexOk := False;
+  FIndexText := '';
+  FDetailsOk := False;
+  FDetailsText := '';
+End;
+
+Procedure TGitRemoteOpThread.DetachForm;
+Begin
+  FForm := Nil;
+End;
+
+Procedure TGitRemoteOpThread.Deliver;
+Var
+  Form: TManageRepositoryForm;
+  Gen: Integer;
+  Ok, IndexOk, DetailsOk: Boolean;
+  ResultMessage, IndexText, DetailsText: String;
+  Kind: TGitRemoteOpKind;
+Begin
+  Form := FForm;
+  Gen := FGeneration;
+  Ok := FResultOk;
+  ResultMessage := FResultMessage;
+  Kind := FKind;
+  IndexOk := FIndexOk;
+  IndexText := FIndexText;
+  DetailsOk := FDetailsOk;
+  DetailsText := FDetailsText;
+  If Not Assigned(Form) Then
+    Begin
+      Free;
+      Exit;
+    End;
+  If Form.FRemoteOpThread = Self Then
+    Form.FRemoteOpThread := Nil;
+  If (Gen = Form.FRemoteGen) And Not Form.FRemoteOpSuppressResult And
+     Not (csDestroying in Form.ComponentState) And Not Application.Terminated Then
+    Form.ApplyRemoteOpResult(Ok, ResultMessage, Kind, IndexOk, IndexText, DetailsOk, DetailsText)
+  Else If Form.FRemoteOpBusy And Not Assigned(Form.FRemoteOpThread) Then
+    Begin
+      Form.FRemoteOpBusy := False;
+      Screen.Cursor := crDefault;
+      Form.SetRemoteActionsEnabled(True);
+    End;
+  Free;
 End;
 
 Procedure TGitRemoteOpThread.Execute;
 Var
   Client: TGitService;
   Summary: TGitTransferSummary;
-  Ok, IndexOk, DetailsOk: Boolean;
-  IndexText, DetailsText: String;
   Shas: TStringList;
 Begin
   Client := TGitService.Create;
   Try
     Client.RepoPath := FRepoPath;
-    Case FKind Of
-      rokFetch: Ok := Client.Fetch(Summary);
-      rokPull: Ok := Client.Pull(Summary);
-      rokPush: Ok := Client.Push(Summary);
-    Else
-      Ok := False;
-      Summary.Message := 'Unknown remote operation.';
-    End;
-
-    If Not Assigned(FForm) Or Terminated Then
-      Exit;
-
-    FForm.FPendingRemoteOk := Ok;
-    FForm.FPendingRemoteMessage := Summary.Message;
-    FForm.FPendingRemoteKind := FKind;
-    FForm.FPendingIndexOk := False;
-    FForm.FPendingIndexText := '';
-    FForm.FPendingDetailsOk := False;
-    FForm.FPendingDetailsText := '';
+    If Not Terminated Then
+      Begin
+        Case FKind Of
+          rokFetch: FResultOk := Client.Fetch(Summary);
+          rokPull: FResultOk := Client.Pull(Summary);
+          rokPush: FResultOk := Client.Push(Summary);
+        Else
+          FResultOk := False;
+          Summary.Message := 'Unknown remote operation.';
+        End;
+        FResultMessage := Summary.Message;
+      End;
 
     { After a successful transfer, load index + first detail batch before any UI update. }
-    If Ok And Not Terminated Then
+    If FResultOk And Assigned(FForm) And Not Terminated Then
       Begin
-        IndexOk := Client.FetchRevListParents(FRepoPath, IndexText);
-        If Not Assigned(FForm) Or Terminated Then
-          Exit;
-        FForm.FPendingIndexOk := IndexOk;
-        FForm.FPendingIndexText := IndexText;
-        If IndexOk Then
+        FIndexOk := Client.FetchRevListParents(FRepoPath, FIndexText);
+        If FIndexOk And Assigned(FForm) And Not Terminated Then
           Begin
             Shas := TStringList.Create;
             Try
-              CollectLeadingShas(IndexText, GitGraphDetailBatch, Shas);
-              If Shas.Count > 0 Then
-                Begin
-                  DetailsOk := Client.FetchCommitDetails(FRepoPath, Shas, DetailsText);
-                  If Not Assigned(FForm) Or Terminated Then
-                    Exit;
-                  FForm.FPendingDetailsOk := DetailsOk;
-                  FForm.FPendingDetailsText := DetailsText;
-                End;
+              CollectLeadingShas(FIndexText, GitGraphDetailBatch, Shas);
+              If (Shas.Count > 0) And Not Terminated Then
+                FDetailsOk := Client.FetchCommitDetails(FRepoPath, Shas, FDetailsText);
             Finally
               Shas.Free;
             End;
           End;
       End;
-
-    If Terminated Or Not Assigned(FForm) Then
-      Exit;
-    If csDestroying in FForm.ComponentState Then
-      Exit;
-    Synchronize(@FForm.ApplyRemoteOpFinished);
   Finally
     Client.Free;
   End;
+  If Not Assigned(FForm) Then
+    Exit;
+  Queue(@Deliver);
 End;
 
 Function DetectStartPathFromIDE: String;
@@ -518,6 +639,11 @@ Begin
   FDetailLoading := False;
   FRemoteOpBusy := False;
   FRemoteOpSuppressResult := False;
+  FJobBusy := False;
+  FPushAfterCommit := False;
+  FIndexGen := 0;
+  FDetailGen := 0;
+  FRemoteGen := 0;
   FIndexThread := Nil;
   FDetailThread := Nil;
   FRemoteOpThread := Nil;
@@ -529,6 +655,8 @@ Begin
   InitLaneColors;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
+  If Assigned(GitJobs) Then
+    GitJobs.OnBusyChanged := @GitJobBusyChanged;
 End;
 
 Destructor TManageRepositoryForm.Destroy;
@@ -537,10 +665,18 @@ Begin
     FDetailTimer.Enabled := False;
   If Assigned(FAutoRefreshTimer) Then
     FAutoRefreshTimer.Enabled := False;
-  { Stop workers before children (diff view async callbacks) are freed. }
-  StopRemoteOpThread;
-  StopDetailThread;
-  StopIndexThread;
+  If Assigned(GitJobs) Then
+    Begin
+      GitJobs.OnBusyChanged := Nil;
+      GitJobs.CancelCurrent;
+    End;
+  { Hard dispose: Queue (not Synchronize) so WaitFor cannot deadlock the UI thread. }
+  DisposeWorker(FRemoteOpThread, FRemoteGen, True);
+  DisposeWorker(FDetailThread, FDetailGen, True);
+  DisposeWorker(FIndexThread, FIndexGen, True);
+  FRemoteOpBusy := False;
+  FIndexing := False;
+  FDetailLoading := False;
   If Assigned(DiffView) Then
     DiffView.Clear;
   If Assigned(FilesDiffView) Then
@@ -754,37 +890,53 @@ Begin
   Result := GraphScrollBar.Position;
 End;
 
+Procedure TManageRepositoryForm.DisposeWorker(Var Worker: TThread; Var Generation: Integer;
+  HardWait: Boolean);
+Var
+  Pending: TThread;
+Begin
+  { Bump generation first so any already-queued Deliver is ignored. }
+  Inc(Generation);
+  If Not Assigned(Worker) Then
+    Exit;
+  Pending := Worker;
+  Worker := Nil;
+  Pending.Terminate;
+  If HardWait Then
+    Begin
+      { Detach so Execute will not Queue after WaitFor begins. }
+      If Pending Is TGitIndexThread Then
+        TGitIndexThread(Pending).DetachForm
+      Else If Pending Is TGitDetailThread Then
+        TGitDetailThread(Pending).DetachForm
+      Else If Pending Is TGitRemoteOpThread Then
+        TGitRemoteOpThread(Pending).DetachForm;
+      TThread.RemoveQueuedEvents(Pending);
+      Pending.WaitFor;
+      { Catch a Queue posted in the race between Detach and thread exit. }
+      TThread.RemoveQueuedEvents(Pending);
+      Pending.Free;
+    End;
+  { Soft cancel: abandon the pointer. Deliver still runs (form attached), sees a
+    generation mismatch, and Free's the worker on the main thread. }
+End;
+
 Procedure TManageRepositoryForm.StopIndexThread;
 Begin
-  If Assigned(FIndexThread) Then
-    Begin
-      FIndexThread.Terminate;
-      FIndexThread.WaitFor;
-      FreeAndNil(FIndexThread);
-    End;
+  DisposeWorker(FIndexThread, FIndexGen, False);
   FIndexing := False;
 End;
 
 Procedure TManageRepositoryForm.StopDetailThread;
 Begin
-  If Assigned(FDetailThread) Then
-    Begin
-      FDetailThread.Terminate;
-      FDetailThread.WaitFor;
-      FreeAndNil(FDetailThread);
-    End;
+  DisposeWorker(FDetailThread, FDetailGen, False);
   FDetailLoading := False;
 End;
 
 Procedure TManageRepositoryForm.StopRemoteOpThread;
 Begin
   FRemoteOpSuppressResult := True;
-  If Assigned(FRemoteOpThread) Then
-    Begin
-      FRemoteOpThread.Terminate;
-      FRemoteOpThread.WaitFor;
-      FreeAndNil(FRemoteOpThread);
-    End;
+  DisposeWorker(FRemoteOpThread, FRemoteGen, False);
   If FRemoteOpBusy Then
     Begin
       FRemoteOpBusy := False;
@@ -794,49 +946,223 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
+Var
+  Allow: Boolean;
 Begin
+  { Job busy and remote-op busy both gate History toolbar actions. }
+  Allow := ActionsEnabled And (Not FJobBusy) And (Not FRemoteOpBusy);
   If Assigned(FetchAction) Then
-    FetchAction.Enabled := ActionsEnabled;
+    FetchAction.Enabled := Allow;
   If Assigned(PullAction) Then
-    PullAction.Enabled := ActionsEnabled;
+    PullAction.Enabled := Allow;
   If Assigned(PushAction) Then
-    PushAction.Enabled := ActionsEnabled;
+    PushAction.Enabled := Allow;
   If Assigned(RemotesAction) Then
-    RemotesAction.Enabled := ActionsEnabled;
+    RemotesAction.Enabled := Allow;
+End;
+
+Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
+Begin
+  FJobBusy := IsBusy;
+  If IsBusy Then
+    Begin
+      Screen.Cursor := crHourGlass;
+      SetRemoteActionsEnabled(False);
+      If Assigned(StatusFooter) And (StatusCaption <> '') Then
+        StatusFooter.SetRightText(StatusCaption);
+    End
+  Else
+    Begin
+      Screen.Cursor := crDefault;
+      { Re-evaluate gates; FRemoteOpBusy may still be true until GitJobFinished. }
+      SetRemoteActionsEnabled(True);
+      UpdateStatus;
+    End;
+End;
+
+Procedure TManageRepositoryForm.GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
+Begin
+  If csDestroying in ComponentState Then
+    Exit;
+  SetJobUiBusy(IsBusy, StatusCaption);
+End;
+
+Function TManageRepositoryForm.SubmitGitJob(Job: TGitJob): Boolean;
+Begin
+  Result := False;
+  If Not Assigned(Job) Then
+    Exit;
+  If Not Assigned(GitJobs) Then
+    Begin
+      FreeAndNil(Job);
+      MessageDlg('Git job runner is not available.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  If (FRepoPath = '') And (Job.Kind <> gjkClone) And (Job.Kind <> gjkInit) Then
+    Begin
+      FreeAndNil(Job);
+      Exit;
+    End;
+  If Job.RepoPath = '' Then
+    Job.RepoPath := FRepoPath;
+  Job.OnFinished := @GitJobFinished;
+  Result := GitJobs.Submit(Job);
+  If Not Result Then
+    MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
+End;
+
+Procedure TManageRepositoryForm.GitJobFinished(Job: TGitJob);
+Var
+  Msg: String;
+Begin
+  If (csDestroying in ComponentState) Or Not Assigned(Job) Then
+    Exit;
+
+  Case Job.Kind Of
+    gjkFetch, gjkPull, gjkPush:
+      Begin
+        { Busy-notify often runs before this handler while FRemoteOpBusy is still True,
+          so re-enable must happen here after clearing the remote-op flag. }
+        FRemoteOpBusy := False;
+        FJobBusy := False;
+        Screen.Cursor := crDefault;
+        SetRemoteActionsEnabled(True);
+        If Job.Cancelled Then
+          Begin
+            If Assigned(StatusFooter) Then
+              StatusFooter.SetRightText('Cancelled');
+            UpdateStatus;
+            Exit;
+          End;
+        Msg := Job.ErrorText;
+        If Msg = '' Then
+          If Job.Ok Then
+            Msg := 'Done.'
+          Else
+            Msg := 'Operation failed.';
+        If Job.Ok Then
+          Begin
+            MessageDlg(Msg, mtInformation, [mbOK], 0);
+            ManualRefresh;
+            If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+              RefreshFilesListAsync;
+          End
+        Else
+          MessageDlg(Msg, mtError, [mbOK], 0);
+        UpdateStatus;
+      End;
+    gjkCommit:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          Begin
+            MessageDlg('Commit failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+            RefreshFilesListAsync;
+            Exit;
+          End;
+        WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
+        If Assigned(MessageMemo) Then
+          MessageMemo.Clear;
+        MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
+        If FPushAfterCommit Then
+          Begin
+            FPushAfterCommit := False;
+            StartRemoteOp(rokPush);
+          End
+        Else
+          Begin
+            RefreshFilesListAsync;
+            ManualRefresh;
+          End;
+      End;
+    gjkCheckout:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          ManualRefresh
+        Else
+          MessageDlg('Checkout failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+      End;
+    gjkCreateBranch:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          Begin
+            MessageDlg('Created branch "' + Job.MessageText + '" at ' + Copy(Job.RefName, 1, 7),
+              mtInformation, [mbOK], 0);
+            ManualRefresh;
+          End
+        Else
+          MessageDlg('Create branch failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+      End;
+    gjkStagePaths, gjkUnstagePaths:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          MessageDlg(Job.Caption + ' failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+        RefreshFilesListAsync;
+      End;
+    gjkListStatus:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Job.Ok Then
+          ApplyFilesFromStatus(Job.StatusEntries)
+        Else
+          Begin
+            If Assigned(FilesList) Then
+              Begin
+                FilesList.Items.Clear;
+                FilesList.Items.Add('(status failed)');
+              End;
+            WorkflowLogger.Warning('ManageRepository', 'ListStatus: ' + Job.ErrorText);
+            UpdateCommitEnabled;
+            UpdateStageButtonsEnabled;
+          End;
+      End;
+  Else
+    { ignore }
+  End;
 End;
 
 Procedure TManageRepositoryForm.StartRemoteOp(Kind: TGitRemoteOpKind);
+Var
+  Job: TGitJob;
+  JobKind: TGitJobKind;
 Begin
-  If (FRepoPath = '') Or FRemoteOpBusy Then
+  If (FRepoPath = '') Or FRemoteOpBusy Or FJobBusy Then
     Exit;
-  { Halt independent graph workers on the main thread before starting the remote
-    worker, so ApplyRemoteOpFinished need not WaitFor them inside Synchronize. }
+  Case Kind Of
+    rokFetch: JobKind := gjkFetch;
+    rokPull: JobKind := gjkPull;
+    rokPush: JobKind := gjkPush;
+  Else
+    Exit;
+  End;
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
-  StopRemoteOpThread;
   StopDetailThread;
   StopIndexThread;
   FIndexing := False;
   FRemoteOpSuppressResult := False;
   FRemoteOpBusy := True;
-  Screen.Cursor := crHourGlass;
-  SetRemoteActionsEnabled(False);
-  FRemoteOpThread := TGitRemoteOpThread.Create(Self, FRepoPath, Kind);
-  FRemoteOpThread.Start;
+  Job := TGitJob.Create(JobKind);
+  Job.RepoPath := FRepoPath;
+  If Not SubmitGitJob(Job) Then
+    FRemoteOpBusy := False;
 End;
 
-Procedure TManageRepositoryForm.ApplyRemoteOpFinished;
+Procedure TManageRepositoryForm.ApplyRemoteOpResult(Ok: Boolean; Const ResultMessage: String;
+  Kind: TGitRemoteOpKind; IndexOk: Boolean; Const IndexPayload: String; DetailsOk: Boolean;
+  Const DetailsPayload: String);
 Var
   Parsed: Integer;
-  Ok: Boolean;
-  ResultMessage: String;
-  Kind: TGitRemoteOpKind;
 Begin
-  Ok := FPendingRemoteOk;
-  ResultMessage := FPendingRemoteMessage;
-  Kind := FPendingRemoteKind;
-
-  If FRemoteOpSuppressResult Or (csDestroying in ComponentState) Or Application.Terminated Then
+  If (csDestroying in ComponentState) Or Application.Terminated Then
     Begin
       FRemoteOpBusy := False;
       Screen.Cursor := crDefault;
@@ -853,16 +1179,11 @@ Begin
       If Assigned(GraphScrollBar) Then
         GraphScrollBar.Position := 0;
 
-      If FPendingIndexOk And Assigned(FModel) Then
+      If IndexOk And Assigned(FModel) Then
         Begin
-          Parsed := FModel.ParseRevListParents(FPendingIndexText);
-          FPendingIndexText := '';
-          If FPendingDetailsOk And (FPendingDetailsText <> '') Then
-            Begin
-              FModel.ApplyDetailsText(FPendingDetailsText);
-              FPendingDetailsText := '';
-              FPendingDetailsOk := False;
-            End;
+          Parsed := FModel.ParseRevListParents(IndexPayload);
+          If DetailsOk And (DetailsPayload <> '') Then
+            FModel.ApplyDetailsText(DetailsPayload);
           If Parsed > 0 Then
             FSelectedIndex := 0;
           UpdateScrollRange;
@@ -913,32 +1234,30 @@ Begin
   If FRepoPath = '' Then
     Exit;
   StopDetailThread;
-  StopIndexThread;
+  StopIndexThread; { bumps FIndexGen and soft-cancels any prior worker }
   FIndexing := True;
   If Assigned(StatusFooter) Then
     StatusFooter.SetRightText('Indexing…');
-  FIndexThread := TGitIndexThread.Create(Self, FRepoPath);
+  FIndexThread := TGitIndexThread.Create(Self, FRepoPath, FIndexGen);
   FIndexThread.Start;
 End;
 
-Procedure TManageRepositoryForm.ApplyIndexLoaded;
+Procedure TManageRepositoryForm.ApplyIndexResult(Ok: Boolean; Const Payload: String);
 Var
   Parsed: Integer;
 Begin
   FIndexing := False;
   If (csDestroying in ComponentState) Or Not Assigned(FModel) Or Not Assigned(DiffView) Then
     Exit;
-  If Not FPendingIndexOk Then
+  If Not Ok Then
     Begin
       If Assigned(StatusFooter) Then
-        If Assigned(StatusFooter) Then
-          StatusFooter.SetRightText('Index failed');
+        StatusFooter.SetRightText('Index failed');
       WorkflowLogger.Warning('ManageRepository', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
 
-  Parsed := FModel.ParseRevListParents(FPendingIndexText);
-  FPendingIndexText := '';
+  Parsed := FModel.ParseRevListParents(Payload);
   FSelectedIndex := -1;
   If Parsed > 0 Then
     FSelectedIndex := 0;
@@ -956,14 +1275,13 @@ Begin
   WorkflowLogger.Info('ManageRepository', Format('Indexed %d commits', [Parsed]));
 End;
 
-Procedure TManageRepositoryForm.ApplyDetailsLoaded;
+Procedure TManageRepositoryForm.ApplyDetailsResult(Ok: Boolean; Const Payload: String);
 Begin
   FDetailLoading := False;
   If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
     Exit;
-  If FPendingDetailsOk Then
-    FModel.ApplyDetailsText(FPendingDetailsText);
-  FPendingDetailsText := '';
+  If Ok Then
+    FModel.ApplyDetailsText(Payload);
   If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) And
      FModel.Commit(FSelectedIndex).DetailsLoaded Then
     ShowCommitDetails(FSelectedIndex);
@@ -1030,7 +1348,8 @@ Begin
     End;
 
   FDetailLoading := True;
-  FDetailThread := TGitDetailThread.Create(Self, FRepoPath, Shas);
+  Inc(FDetailGen);
+  FDetailThread := TGitDetailThread.Create(Self, FRepoPath, Shas, FDetailGen);
   FDetailThread.Start;
 End;
 
@@ -1613,13 +1932,48 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.RefreshFilesList;
+Begin
+  RefreshFilesListAsync;
+End;
+
+Procedure TManageRepositoryForm.RefreshFilesListAsync;
+Var
+  Job: TGitJob;
+Begin
+  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
+    Exit;
+  If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
+    Begin
+      FilesList.Items.BeginUpdate;
+      StagedList.Items.BeginUpdate;
+      Try
+        FilesList.Items.Clear;
+        StagedList.Items.Clear;
+        FFilesPaths.Clear;
+        FStagedPaths.Clear;
+        FilesList.Items.Add('(no repository)');
+      Finally
+        StagedList.Items.EndUpdate;
+        FilesList.Items.EndUpdate;
+      End;
+      UpdateCommitEnabled;
+      UpdateStageButtonsEnabled;
+      Exit;
+    End;
+  Job := TGitJob.Create(gjkListStatus);
+  Job.RepoPath := FRepoPath;
+  Job.Caption := 'Refreshing files…';
+  SubmitGitJob(Job);
+End;
+
+Procedure TManageRepositoryForm.ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
 Var
   AllFiles, StatusMap, FullyStaged: TStringList;
-  Entries: TGitStatusEntryArray;
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
   Idx: Integer;
   EntryStatus: String;
+  WantClean: Boolean;
 Begin
   If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
     Exit;
@@ -1652,31 +2006,30 @@ Begin
       FullyStaged.Duplicates := dupIgnore;
       FullyStaged.CaseSensitive := FileNameCaseSensitive;
 
-      If Assigned(GitClient) Then
+      For I := 0 To High(Entries) Do
         Begin
-          GitClient.RepoPath := FRepoPath;
-          { Include ignored paths so the Ignored filter can show them. }
-          If GitClient.ListStatus(Entries) Then
-            For I := 0 To High(Entries) Do
-              Begin
-                Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
-                EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
-                StatusMap.Values[Rel] := EntryStatus;
-                If GitStatusEntryIsStaged(Entries[I]) Then
-                  Begin
-                    { GitStatusEntryLabel already includes the path (and rename old->new). }
-                    StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
-                    FStagedPaths.Add(Rel);
-                    { Fully staged (no remaining worktree change) leave the left list. }
-                    If Not GitStatusEntryIsUnstaged(Entries[I]) Then
-                      FullyStaged.Add(Rel);
-                  End;
-              End;
+          Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
+          EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
+          StatusMap.Values[Rel] := EntryStatus;
+          If GitStatusEntryIsStaged(Entries[I]) Then
+            Begin
+              StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
+              FStagedPaths.Add(Rel);
+              If Not GitStatusEntryIsUnstaged(Entries[I]) Then
+                FullyStaged.Add(Rel);
+            End;
         End;
 
+      { Full-tree scan only when the user asked to show clean files (item 6 still open). }
+      WantClean := Assigned(CleanCheck) And CleanCheck.Checked;
       AllFiles.Sorted := True;
       AllFiles.Duplicates := dupIgnore;
-      FindAllFiles(AllFiles, FRepoPath, '*', True);
+      If WantClean Then
+        FindAllFiles(AllFiles, FRepoPath, '*', True)
+      Else
+        { Still walk status paths so deleted/untracked/modified appear without FindAllFiles. }
+        For I := 0 To StatusMap.Count - 1 Do
+          AllFiles.Add(Root + StringReplace(StatusMap.Names[I], '/', DirectorySeparator, [rfReplaceAll]));
       For I := 0 To AllFiles.Count - 1 Do
         Begin
           FullPath := ExpandFileName(AllFiles[I]);
@@ -2191,8 +2544,9 @@ Procedure TManageRepositoryForm.StageActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
   FilesEmpty, UnstageMode: Boolean;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   UnstageMode := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
@@ -2201,63 +2555,58 @@ Begin
   If UnstageMode Then
     Begin
       Paths := CollectSelectedPaths(StagedList, FStagedPaths);
-      Try
-        If Paths.Count = 0 Then
-          Begin
-            MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
-            Exit;
-          End;
-        GitClient.RepoPath := FRepoPath;
-        If Not GitClient.UnstagePaths(Paths) Then
-          MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-      Finally
-        Paths.Free;
-      End;
+      If Paths.Count = 0 Then
+        Begin
+          Paths.Free;
+          MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      Job := TGitJob.Create(gjkUnstagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.TakePaths(Paths);
+      SubmitGitJob(Job);
     End
   Else
     Begin
       Paths := CollectSelectedPaths(FilesList, FFilesPaths);
-      Try
-        If Paths.Count = 0 Then
-          Begin
-            MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
-            Exit;
-          End;
-        GitClient.RepoPath := FRepoPath;
-        If Not GitClient.StagePaths(Paths) Then
-          MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-      Finally
-        Paths.Free;
-      End;
+      If Paths.Count = 0 Then
+        Begin
+          Paths.Free;
+          MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      Job := TGitJob.Create(gjkStagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.TakePaths(Paths);
+      SubmitGitJob(Job);
     End;
 End;
 
 Procedure TManageRepositoryForm.StageAllActionExecute(Sender: TObject);
 Var
   FilesEmpty, StagedEmpty: Boolean;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
-  GitClient.RepoPath := FRepoPath;
   If (Not StagedEmpty) And FilesEmpty Then
     Begin
-      { Unstage only what is listed in the staged panel (all currently staged paths). }
-      If Not GitClient.UnstagePaths(FStagedPaths) Then
-        MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Job := TGitJob.Create(gjkUnstagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.CopyPathsFrom(FStagedPaths);
+      SubmitGitJob(Job);
     End
   Else
     Begin
-      { Stage only paths visible in the filtered files list — not git add -A. }
       If FilesEmpty Then
         Exit;
-      If Not GitClient.StagePaths(FFilesPaths) Then
-        MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Job := TGitJob.Create(gjkStagePaths);
+      Job.RepoPath := FRepoPath;
+      Job.CopyPathsFrom(FFilesPaths);
+      SubmitGitJob(Job);
     End;
-  RefreshFilesList;
 End;
 
 Procedure TManageRepositoryForm.StageSelectionActionExecute(Sender: TObject);
@@ -2347,10 +2696,10 @@ End;
 
 Procedure TManageRepositoryForm.CommitActionExecute(Sender: TObject);
 Var
-  NewSha, Msg: String;
-  Summary: TGitTransferSummary;
+  Msg: String;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If FRepoPath = '' Then
     Exit;
   Msg := '';
   If Assigned(MessageMemo) Then
@@ -2365,48 +2714,14 @@ Begin
       MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
       Exit;
     End;
+  If FJobBusy Then
+    Exit;
 
-  GitClient.RepoPath := FRepoPath;
-  Screen.Cursor := crHourGlass;
-  Try
-    If Not GitClient.Commit(Msg, NewSha) Then
-      Begin
-        Screen.Cursor := crDefault;
-        MessageDlg('Commit failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-        RefreshFilesList;
-        Exit;
-      End;
-  Finally
-    Screen.Cursor := crDefault;
-  End;
-
-  WorkflowLogger.Info('ManageRepository', 'Created commit ' + NewSha);
-  If Assigned(MessageMemo) Then
-    MessageMemo.Clear;
-  MessageDlg('Committed ' + Copy(NewSha, 1, 7) + '.', mtInformation, [mbOK], 0);
-
-  If Assigned(PushCheckBox) And PushCheckBox.Checked Then
-    Begin
-      Screen.Cursor := crHourGlass;
-      Try
-        If GitClient.Push(Summary) Then
-          Begin
-            Screen.Cursor := crDefault;
-            MessageDlg(Summary.Message, mtInformation, [mbOK], 0);
-          End
-        Else
-          Begin
-            Screen.Cursor := crDefault;
-            MessageDlg('Commit succeeded, but push failed:' + LineEnding + Summary.Message,
-              mtWarning, [mbOK], 0);
-          End;
-      Finally
-        Screen.Cursor := crDefault;
-      End;
-    End;
-
-  RefreshFilesList;
-  ManualRefresh;
+  FPushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
+  Job := TGitJob.Create(gjkCommit);
+  Job.RepoPath := FRepoPath;
+  Job.MessageText := Msg;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.RemotesActionExecute(Sender: TObject);
@@ -2459,26 +2774,27 @@ End;
 Procedure TManageRepositoryForm.CheckoutActionExecute(Sender: TObject);
 Var
   Sha: String;
+  Job: TGitJob;
 Begin
   Sha := SelectedSha;
-  If (Sha = '') Or Not Assigned(GitClient) Then
+  If (Sha = '') Or (FRepoPath = '') Or FJobBusy Then
     Exit;
   If MessageDlg('Check out commit ' + Copy(Sha, 1, 7) + '?' + LineEnding +
     'This may detach HEAD.', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  If GitClient.Checkout(Sha) Then
-    ManualRefresh
-  Else
-    MessageDlg('Checkout failed. See the log for details.', mtError, [mbOK], 0);
+  Job := TGitJob.Create(gjkCheckout);
+  Job.RepoPath := FRepoPath;
+  Job.RefName := Sha;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.CreateBranchActionExecute(Sender: TObject);
 Var
   Sha, BranchName: String;
+  Job: TGitJob;
 Begin
   Sha := SelectedSha;
-  If (Sha = '') Or Not Assigned(GitClient) Then
+  If (Sha = '') Or (FRepoPath = '') Or FJobBusy Then
     Exit;
   BranchName := '';
   If Not InputQuery('Create branch', 'Branch name:', BranchName) Then
@@ -2486,19 +2802,17 @@ Begin
   BranchName := Trim(BranchName);
   If BranchName = '' Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  If GitClient.CreateBranch(BranchName, Sha) Then
-    Begin
-      MessageDlg('Created branch "' + BranchName + '" at ' + Copy(Sha, 1, 7), mtInformation, [mbOK], 0);
-      ManualRefresh;
-    End
-  Else
-    MessageDlg('Create branch failed. See the log for details.', mtError, [mbOK], 0);
+  Job := TGitJob.Create(gjkCreateBranch);
+  Job.RepoPath := FRepoPath;
+  Job.MessageText := BranchName;
+  Job.RefName := Sha;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
-  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or Not Visible Then
+  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
+     Not Visible Then
     Exit;
   QuietRefreshIfChanged;
 End;

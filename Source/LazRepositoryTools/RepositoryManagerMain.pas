@@ -23,7 +23,7 @@ Implementation
 
 Uses
   Dialogs, WorkflowLog, WorkflowEvents, ManageRepositoryForm, GitService, GitConfig,
-  GitSettingsForm, GitInitForm, GitCloneForm;
+  GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner;
 
 Type
   TGitManagerIDEHooks = Class
@@ -32,12 +32,19 @@ Type
     Function ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
   End;
 
+  { Hosts OnFinished for IDE-level clone/init jobs (no form required). }
+  TGitIdeJobHost = Class
+  Public
+    Procedure JobFinished(Job: TGitJob);
+  End;
+
 Var
   CmdRepoInit: TIDECommand;
   CmdRepoManage: TIDECommand;
   CmdRepoClone: TIDECommand;
   CmdRepoSettings: TIDECommand;
   GitManagerIDEHooks: TGitManagerIDEHooks;
+  GitIdeJobHost: TGitIdeJobHost;
 
 Function ProjectStartPath(AProject: TLazProject): String;
 Begin
@@ -137,6 +144,7 @@ Procedure DoInitialiseRepository(Sender: TObject);
 Var
   DefaultPath, ChosenPath, RepoPath: String;
   Project: TLazProject;
+  Job: TGitJob;
 Begin
   If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
     Exit;
@@ -159,20 +167,34 @@ Begin
       Exit;
     End;
 
-  If GitClient.InitRepository(ChosenPath) Then
+  If Not Assigned(GitJobs) Or Not Assigned(GitIdeJobHost) Then
     Begin
-      MessageDlg('Repository initialised at:' + LineEnding + ChosenPath, mtInformation, [mbOK], 0);
-      UpdateRepositoryMenuState;
-      ShowManageRepository(Sender);
-      RefreshOpenManageRepositoryForms;
-    End
-  Else
-    MessageDlg('Failed to initialise repository: ' + GitClient.LastError, mtError, [mbOK], 0);
+      If GitClient.InitRepository(ChosenPath) Then
+        Begin
+          MessageDlg('Repository initialised at:' + LineEnding + ChosenPath, mtInformation, [mbOK], 0);
+          UpdateRepositoryMenuState;
+          ShowManageRepository(Sender);
+          RefreshOpenManageRepositoryForms;
+        End
+      Else
+        MessageDlg('Failed to initialise repository: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Exit;
+    End;
+  Job := TGitJob.Create(gjkInit);
+  Job.TargetDir := ChosenPath;
+  Job.OnFinished := @GitIdeJobHost.JobFinished;
+  Screen.Cursor := crHourGlass;
+  If Not GitJobs.Submit(Job) Then
+    Begin
+      Screen.Cursor := crDefault;
+      MessageDlg('Could not queue initialise repository.', mtWarning, [mbOK], 0);
+    End;
 End;
 
 Procedure DoCloneRepository(Sender: TObject);
 Var
   DefaultPath, Url, Target: String;
+  Job: TGitJob;
 Begin
   If Not Assigned(GitClient) Then
     Exit;
@@ -186,20 +208,70 @@ Begin
   If Not ShowGitCloneForm(DefaultPath, Url, Target) Then
     Exit;
 
+  If Not Assigned(GitJobs) Or Not Assigned(GitIdeJobHost) Then
+    Begin
+      Screen.Cursor := crHourGlass;
+      Try
+        If GitClient.CloneRepository(Url, Target) Then
+          Begin
+            MessageDlg('Cloned successfully into:' + LineEnding + Target, mtInformation, [mbOK], 0);
+            UpdateRepositoryMenuState;
+            If CurrentProjectHasRepository Then
+              ShowManageRepository(Sender);
+          End
+        Else
+          MessageDlg('Clone failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+      Finally
+        Screen.Cursor := crDefault;
+      End;
+      Exit;
+    End;
+
+  Job := TGitJob.Create(gjkClone);
+  Job.Url := Url;
+  Job.TargetDir := Target;
+  Job.OnFinished := @GitIdeJobHost.JobFinished;
   Screen.Cursor := crHourGlass;
-  Try
-    If GitClient.CloneRepository(Url, Target) Then
-      Begin
-        MessageDlg('Cloned successfully into:' + LineEnding + Target, mtInformation, [mbOK], 0);
-        UpdateRepositoryMenuState;
-        { Open manage if the active project is under the clone; otherwise just notify. }
-        If CurrentProjectHasRepository Then
-          ShowManageRepository(Sender);
-      End
-    Else
-      MessageDlg('Clone failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-  Finally
-    Screen.Cursor := crDefault;
+  If Not GitJobs.Submit(Job) Then
+    Begin
+      Screen.Cursor := crDefault;
+      MessageDlg('Could not queue clone.', mtWarning, [mbOK], 0);
+    End;
+End;
+
+Procedure TGitIdeJobHost.JobFinished(Job: TGitJob);
+Begin
+  Screen.Cursor := crDefault;
+  If Not Assigned(Job) Then
+    Exit;
+  If Job.Cancelled Then
+    Begin
+      MessageDlg('Operation cancelled.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Case Job.Kind Of
+    gjkInit:
+      If Job.Ok Then
+        Begin
+          MessageDlg('Repository initialised at:' + LineEnding + Job.TargetDir, mtInformation, [mbOK], 0);
+          UpdateRepositoryMenuState;
+          ShowManageRepository(Nil);
+          RefreshOpenManageRepositoryForms;
+        End
+      Else
+        MessageDlg('Failed to initialise repository: ' + Job.ErrorText, mtError, [mbOK], 0);
+    gjkClone:
+      If Job.Ok Then
+        Begin
+          MessageDlg('Cloned successfully into:' + LineEnding + Job.TargetDir, mtInformation, [mbOK], 0);
+          UpdateRepositoryMenuState;
+          If CurrentProjectHasRepository Then
+            ShowManageRepository(Nil);
+        End
+      Else
+        MessageDlg('Clone failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+  Else
+    { ignore }
   End;
 End;
 
@@ -311,6 +383,7 @@ End;
 Initialization
 
 GitManagerIDEHooks := Nil;
+GitIdeJobHost := TGitIdeJobHost.Create;
 
 Finalization
 
@@ -323,5 +396,6 @@ Try
 Except
 End;
 FreeAndNil(GitManagerIDEHooks);
+FreeAndNil(GitIdeJobHost);
 
 End.

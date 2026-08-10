@@ -34,6 +34,8 @@ Type
   Private
     FRepoPath: String;
     FLastError: String;
+    FCancelled: Boolean;
+    FActiveProcess: TProcess;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
@@ -44,9 +46,13 @@ Type
     Function CountRangeCommits(Const RangeSpec: String): Integer;
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
       Var Summary: TGitTransferSummary);
+    Function IsCancelled: Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
+    { Cooperative cancel for background jobs: marks cancelled and kills the active git process. }
+    Procedure Cancel;
+    Procedure ResetCancel;
     Function DetectRepository(Const StartPath: String): String;
     Function IsRepository(Const Path: String): Boolean;
     Function GetHeadSha(Out Sha: String): Boolean;
@@ -113,6 +119,7 @@ Type
     Function SetDescription(Const Description: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property LastError: String Read FLastError;
+    Property Cancelled: Boolean Read FCancelled;
   End;
 
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
@@ -171,6 +178,31 @@ Begin
   Inherited Create;
   FRepoPath := '';
   FLastError := '';
+  FCancelled := False;
+  FActiveProcess := Nil;
+End;
+
+Procedure TGitService.ResetCancel;
+Begin
+  FCancelled := False;
+End;
+
+Function TGitService.IsCancelled: Boolean;
+Begin
+  Result := FCancelled;
+End;
+
+Procedure TGitService.Cancel;
+Var
+  Proc: TProcess;
+Begin
+  FCancelled := True;
+  Proc := FActiveProcess;
+  If Assigned(Proc) Then
+    Try
+      Proc.Terminate(1);
+    Except
+    End;
 End;
 
 Destructor TGitService.Destroy;
@@ -198,6 +230,12 @@ Begin
       Exit;
     End;
 
+  If IsCancelled Then
+    Begin
+      FLastError := 'Cancelled';
+      Exit;
+    End;
+
   Proc := TProcess.Create(Nil);
   Mem := TMemoryStream.Create;
   Try
@@ -210,9 +248,18 @@ Begin
       Proc.Parameters.Add(Args[I]);
 
     Try
+      FActiveProcess := Proc;
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
+          If IsCancelled Then
+            Begin
+              Try
+                Proc.Terminate(1);
+              Except
+              End;
+              Break;
+            End;
           If Proc.Output.NumBytesAvailable > 0 Then
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
@@ -235,13 +282,21 @@ Begin
       SetLength(OutputText, Mem.Size);
       If Mem.Size > 0 Then
         Move(Mem.Memory^, OutputText[1], Mem.Size);
-      Result := ExitCode = 0;
-      If Not Result Then
+      If IsCancelled Then
         Begin
-          FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
-          If Trim(OutputText) <> '' Then
-            FLastError := FLastError + ': ' + Trim(OutputText);
-          WorkflowLogger.Warning('GitService', FLastError);
+          FLastError := 'Cancelled';
+          Result := False;
+        End
+      Else
+        Begin
+          Result := ExitCode = 0;
+          If Not Result Then
+            Begin
+              FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+              If Trim(OutputText) <> '' Then
+                FLastError := FLastError + ': ' + Trim(OutputText);
+              WorkflowLogger.Warning('GitService', FLastError);
+            End;
         End;
     Except
       On E: Exception Do
@@ -252,6 +307,7 @@ Begin
         End;
     End;
   Finally
+    FActiveProcess := Nil;
     Mem.Free;
     Proc.Free;
   End;
@@ -278,6 +334,12 @@ Begin
       FLastError := 'No repository path set';
       Exit;
     End;
+  If IsCancelled Then
+    Begin
+      FLastError := 'Cancelled';
+      Exit;
+    End;
+
   Proc := TProcess.Create(Nil);
   Try
     Proc.Executable := 'git';
@@ -287,9 +349,18 @@ Begin
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
     Try
+      FActiveProcess := Proc;
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
+          If IsCancelled Then
+            Begin
+              Try
+                Proc.Terminate(1);
+              Except
+              End;
+              Break;
+            End;
           If Proc.Output.NumBytesAvailable > 0 Then
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
@@ -311,9 +382,17 @@ Begin
       While Proc.Stderr.NumBytesAvailable > 0 Do
         Proc.Stderr.Read(Buf[0], SizeOf(Buf));
       ExitCode := Proc.ExitStatus;
-      Result := ExitCode = 0;
-      If Not Result Then
-        FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+      If IsCancelled Then
+        Begin
+          FLastError := 'Cancelled';
+          Result := False;
+        End
+      Else
+        Begin
+          Result := ExitCode = 0;
+          If Not Result Then
+            FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+        End;
     Except
       On E: Exception Do
         Begin
@@ -322,6 +401,7 @@ Begin
         End;
     End;
   Finally
+    FActiveProcess := Nil;
     Proc.Free;
   End;
 End;
