@@ -363,17 +363,20 @@ object ManageRepositoryForm: TManageRepositoryForm
             Width = 509
             Align = alBottom
             BevelOuter = bvNone
-            ChildSizing.LeftRightSpacing = 8
+            ChildSizing.LeftRightSpacing = 4
             ChildSizing.TopBottomSpacing = 4
-            ChildSizing.HorizontalSpacing = 8
+            ChildSizing.HorizontalSpacing = 4
+            ChildSizing.VerticalSpacing = 4
+            ChildSizing.ShrinkHorizontal = crsScaleChilds
+            ChildSizing.ShrinkVertical = crsScaleChilds
             ChildSizing.Layout = cclLeftToRightThenTopToBottom
             ChildSizing.ControlsPerLine = 6
             ClientHeight = 36
             ClientWidth = 509
             TabOrder = 1
             object FBtnSuggestMessage: TButton
-              Left = 8
-              Height = 34
+              Left = 4
+              Height = 28
               Top = 4
               Width = 100
               Caption = 'Suggest'
@@ -383,8 +386,8 @@ object ManageRepositoryForm: TManageRepositoryForm
               OnClick = BtnSuggestMessageClick
             end
             object FBtnCommit: TButton
-              Left = 116
-              Height = 34
+              Left = 108
+              Height = 28
               Top = 4
               Width = 84
               Caption = 'Commit'
@@ -393,8 +396,8 @@ object ManageRepositoryForm: TManageRepositoryForm
               OnClick = BtnCommitClick
             end
             object FPushCheck: TCheckBox
-              Left = 208
-              Height = 34
+              Left = 196
+              Height = 28
               Top = 4
               Width = 203
               Caption = 'Push after successful commit'
@@ -459,41 +462,44 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FStageButtonsBar: TPanel
           Left = 0
-          Height = 80
-          Top = 198
+          Height = 68
+          Top = 210
           Width = 509
           Align = alBottom
           BevelOuter = bvNone
-          ChildSizing.LeftRightSpacing = 8
-          ChildSizing.TopBottomSpacing = 6
-          ChildSizing.HorizontalSpacing = 8
+          ChildSizing.LeftRightSpacing = 4
+          ChildSizing.TopBottomSpacing = 4
+          ChildSizing.HorizontalSpacing = 4
+          ChildSizing.VerticalSpacing = 4
+          ChildSizing.ShrinkHorizontal = crsScaleChilds
+          ChildSizing.ShrinkVertical = crsScaleChilds
           ChildSizing.Layout = cclLeftToRightThenTopToBottom
           ChildSizing.ControlsPerLine = 8
-          ClientHeight = 80
+          ClientHeight = 68
           ClientWidth = 509
           TabOrder = 1
           object FBtnStageAll: TButton
-            Left = 8
-            Height = 34
-            Top = 6
+            Left = 4
+            Height = 28
+            Top = 4
             Width = 100
             Caption = 'Stage All'
             TabOrder = 0
             OnClick = BtnStageAllClick
           end
           object FBtnStage: TButton
-            Left = 116
-            Height = 34
-            Top = 6
+            Left = 108
+            Height = 28
+            Top = 4
             Width = 84
             Caption = 'Stage'
             TabOrder = 1
             OnClick = BtnStageClick
           end
           object FBtnStageSelection: TButton
-            Left = 208
-            Height = 34
-            Top = 6
+            Left = 196
+            Height = 28
+            Top = 4
             Width = 110
             Caption = 'Stage Selection'
             Enabled = False
@@ -501,9 +507,9 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnClick = BtnStageSelectionClick
           end
           object FBtnRevert: TButton
-            Left = 326
-            Height = 34
-            Top = 6
+            Left = 310
+            Height = 28
+            Top = 4
             Width = 70
             Caption = 'Revert'
             Enabled = False
@@ -511,9 +517,9 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnClick = BtnRevertClick
           end
           object FBtnDelete: TButton
-            Left = 404
-            Height = 34
-            Top = 6
+            Left = 384
+            Height = 28
+            Top = 4
             Width = 70
             Caption = 'Delete'
             Enabled = False
@@ -521,9 +527,9 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnClick = BtnDeleteClick
           end
           object FBtnIgnore: TButton
-            Left = 8
-            Height = 34
-            Top = 40
+            Left = 458
+            Height = 28
+            Top = 4
             Width = 70
             Caption = 'Ignore'
             Enabled = False
@@ -531,9 +537,9 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnClick = BtnIgnoreClick
           end
           object FBtnIgnoreFiles: TButton
-            Left = 86
-            Height = 34
-            Top = 40
+            Left = 4
+            Height = 28
+            Top = 36
             Width = 120
             Caption = 'Ignored Files…'
             TabOrder = 6
