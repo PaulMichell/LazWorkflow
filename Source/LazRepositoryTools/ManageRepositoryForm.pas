@@ -192,6 +192,7 @@ Type
     Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
     Function FileStatusPassesFilter(Const StatusText: String): Boolean;
     Procedure QuietRefreshIfChanged;
+    Procedure ConfigureButtonStrip(Strip: TWinControl);
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
@@ -574,6 +575,12 @@ Begin
     If Assigned(FStagedSplitter) And Assigned(FStagedPanel) Then
       FStagedSplitter.ResizeControl := FStagedPanel;
 
+    { ChildSizing owns strip layout; clear per-child BorderSpacing which LCL
+      merges into the same gutters and otherwise doubles/skews the 4px grid. }
+    ConfigureButtonStrip(FHistoryButtons);
+    ConfigureButtonStrip(FStageButtonsBar);
+    ConfigureButtonStrip(FCommitActions);
+
     If Assigned(FDiffView) Then
       FDiffView.SetViewMode(dvmBrowse);
     If Assigned(FFilesDiffView) Then
@@ -605,6 +612,60 @@ End;
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
 Begin
   WorkflowLogger.Info('ManageRepository', 'Manage Repository window destroyed');
+End;
+
+Procedure TManageRepositoryForm.ConfigureButtonStrip(Strip: TWinControl);
+Var
+  I, Rows, PerLine, Pad, Gap, BtnH: Integer;
+  C: TControl;
+Begin
+  If Not Assigned(Strip) Then
+    Exit;
+  { Design 96dpi metrics — Scale96ToForm keeps them correct under form scaling. }
+  Pad := Scale96ToForm(4);
+  Gap := Scale96ToForm(4);
+  BtnH := Scale96ToForm(28);
+  Strip.DisableAutoSizing;
+  Try
+    With Strip.ChildSizing Do
+      Begin
+        Layout := cclLeftToRightThenTopToBottom;
+        LeftRightSpacing := Pad;
+        TopBottomSpacing := Pad;
+        HorizontalSpacing := Gap;
+        VerticalSpacing := Gap;
+        { Force every child to the same cell height (theme mins otherwise win). }
+        EnlargeVertical := crsHomogenousChildResize;
+        ShrinkVertical := crsHomogenousChildResize;
+        { Keep caption-sized widths; do not redistribute leftover strip width. }
+        EnlargeHorizontal := crsAnchorAligning;
+        ShrinkHorizontal := crsAnchorAligning;
+      End;
+    PerLine := Strip.ChildSizing.ControlsPerLine;
+    If PerLine < 1 Then
+      PerLine := 8;
+    For I := 0 To Strip.ControlCount - 1 Do
+      Begin
+        C := Strip.Controls[I];
+        C.Align := alNone;
+        C.Anchors := [akLeft, akTop];
+        C.BorderSpacing.Around := 0;
+        C.BorderSpacing.Left := 0;
+        C.BorderSpacing.Top := 0;
+        C.BorderSpacing.Right := 0;
+        C.BorderSpacing.Bottom := 0;
+        C.BorderSpacing.InnerBorder := 0;
+        C.BorderSpacing.CellAlignHorizontal := ccaLeftTop;
+        C.BorderSpacing.CellAlignVertical := ccaFill;
+      End;
+    Rows := (Strip.ControlCount + PerLine - 1) Div PerLine;
+    If Rows < 1 Then
+      Rows := 1;
+    { Outer pad + row heights + inter-row gaps. }
+    Strip.Height := Pad * 2 + BtnH * Rows + Gap * (Rows - 1);
+  Finally
+    Strip.EnableAutoSizing;
+  End;
 End;
 
 Procedure TManageRepositoryForm.FormShow(Sender: TObject);
