@@ -8,7 +8,7 @@ object StatusFooterFrame: TStatusFooterFrame
   TabOrder = 0
   DesignLeft = 300
   DesignTop = 200
-  object FPanel: TPanel
+  object Panel: TPanel
     Left = 0
     Height = 22
     Top = 0
@@ -20,7 +20,7 @@ object StatusFooterFrame: TStatusFooterFrame
     Color = clForm
     ParentColor = False
     TabOrder = 0
-    object FLeftLabel: TLabel
+    object LeftLabel: TLabel
       Left = 6
       Height = 22
       Top = 0
@@ -31,7 +31,7 @@ object StatusFooterFrame: TStatusFooterFrame
       Layout = tlCenter
       ParentColor = False
     end
-    object FRightLabel: TLabel
+    object RightLabel: TLabel
       Left = 633
       Height = 22
       Top = 0
@@ -42,7 +42,7 @@ object StatusFooterFrame: TStatusFooterFrame
       Layout = tlCenter
       ParentColor = False
     end
-    object FCentreLabel: TLabel
+    object CentreLabel: TLabel
       Left = 19
       Height = 22
       Top = 0

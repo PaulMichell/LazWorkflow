@@ -8,7 +8,7 @@ object GitDiffView: TGitDiffView
   TabOrder = 0
   DesignLeft = 300
   DesignTop = 200
-  object FCaption: TLabel
+  object TitleLabel: TLabel
     Left = 6
     Height = 17
     Top = 4
@@ -20,7 +20,7 @@ object GitDiffView: TGitDiffView
     Caption = 'Diff'
     ParentColor = False
   end
-  object FToolBar: TPanel
+  object ToolBar: TPanel
     Left = 0
     Height = 32
     Top = 23
@@ -30,7 +30,7 @@ object GitDiffView: TGitDiffView
     ClientHeight = 32
     ClientWidth = 640
     TabOrder = 0
-    object FBtnStageSel: TButton
+    object StageSelectionButton: TButton
       Left = 6
       Height = 26
       Top = 2
@@ -40,7 +40,7 @@ object GitDiffView: TGitDiffView
       OnClick = BtnStageSelClick
       TabOrder = 0
     end
-    object FBtnUnstageSel: TButton
+    object UnstageSelectionButton: TButton
       Left = 142
       Height = 26
       Top = 2
@@ -51,7 +51,7 @@ object GitDiffView: TGitDiffView
       TabOrder = 1
     end
   end
-  object FTreePanel: TPanel
+  object TreePanel: TPanel
     Left = 0
     Height = 265
     Top = 55
@@ -61,21 +61,21 @@ object GitDiffView: TGitDiffView
     ClientHeight = 265
     ClientWidth = 220
     TabOrder = 1
-    object FTree: TTreeView
+    object Tree: TTreeView
       Left = 4
       Height = 257
       Top = 4
       Width = 212
       Align = alClient
       BorderSpacing.Around = 4
-      PopupMenu = FPopup
+      PopupMenu = Popup
       ReadOnly = True
       ScrollBars = ssAutoBoth
       TabOrder = 0
       Options = [tvoShowButtons, tvoShowRoot, tvoShowLines, tvoRowSelect, tvoReadOnly, tvoToolTips]
       OnChange = TreeChange
     end
-    object FFileList: TListBox
+    object FileList: TListBox
       Left = 4
       Height = 257
       Top = 4
@@ -88,7 +88,7 @@ object GitDiffView: TGitDiffView
       OnSelectionChange = FileListSelectionChange
     end
   end
-  object FSplitter: TSplitter
+  object Splitter: TSplitter
     Left = 220
     Height = 265
     Top = 55
@@ -96,7 +96,7 @@ object GitDiffView: TGitDiffView
     Align = alLeft
     ResizeAnchor = akLeft
   end
-  object FEditPanel: TPanel
+  object EditPanel: TPanel
     Left = 225
     Height = 265
     Top = 55
@@ -106,7 +106,7 @@ object GitDiffView: TGitDiffView
     ClientHeight = 265
     ClientWidth = 415
     TabOrder = 2
-    object FEdit: TSynEdit
+    object DiffEditor: TSynEdit
       Left = 4
       Height = 257
       Top = 4
@@ -117,15 +117,15 @@ object GitDiffView: TGitDiffView
       Font.Pitch = fpFixed
       Font.Quality = fqCleartypeNatural
       Font.Size = 9
-      PopupMenu = FPopup
+      PopupMenu = Popup
       TabOrder = 0
       Gutter.Width = 57
       RightGutter.Width = 14
       RightGutter.Visible = True
-      Highlighter = FHigh
+      Highlighter = DiffHighlighter
       Keystrokes = <>
     end
-    object FPreviewPanel: TPanel
+    object PreviewPanel: TPanel
       Left = 4
       Height = 257
       Top = 4
@@ -138,7 +138,7 @@ object GitDiffView: TGitDiffView
       ParentColor = False
       TabOrder = 1
       Visible = False
-      object FBinaryLabel: TLabel
+      object BinaryLabel: TLabel
         Left = 0
         Height = 257
         Top = 0
@@ -150,7 +150,7 @@ object GitDiffView: TGitDiffView
         ParentColor = False
         Visible = False
       end
-      object FImagePaintBox: TPaintBox
+      object ImagePaintBox: TPaintBox
         Left = 0
         Height = 257
         Top = 0
@@ -161,34 +161,34 @@ object GitDiffView: TGitDiffView
       end
     end
   end
-  object FHigh: TSynDiffSyn
+  object DiffHighlighter: TSynDiffSyn
     DefaultFilter = 'Diff Files (*.diff,*.patch)|*.diff;*.patch'
     Left = 280
     Top = 120
   end
-  object FPopup: TPopupMenu
+  object Popup: TPopupMenu
     Left = 360
     Top = 120
-    object FMiStage: TMenuItem
+    object StageMenuItem: TMenuItem
       Caption = 'Stage selected lines'
       OnClick = PopupStageClick
     end
-    object FMiStageHunk: TMenuItem
+    object StageHunkMenuItem: TMenuItem
       Caption = 'Stage this hunk'
       OnClick = PopupStageHunkClick
     end
-    object FMiUnstage: TMenuItem
+    object UnstageMenuItem: TMenuItem
       Caption = 'Unstage selected lines'
       OnClick = PopupUnstageClick
     end
-    object FMiUnstageHunk: TMenuItem
+    object UnstageHunkMenuItem: TMenuItem
       Caption = 'Unstage this hunk'
       OnClick = PopupUnstageHunkClick
     end
-    object FMiSep: TMenuItem
+    object MenuSeparator: TMenuItem
       Caption = '-'
     end
-    object FMiSelectHunk: TMenuItem
+    object SelectHunkMenuItem: TMenuItem
       Caption = 'Select hunk under cursor'
       OnClick = PopupSelectHunkClick
     end

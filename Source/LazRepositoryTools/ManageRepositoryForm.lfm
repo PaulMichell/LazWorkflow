@@ -15,29 +15,130 @@ object ManageRepositoryForm: TManageRepositoryForm
   OnDestroy = FormDestroy
   OnKeyDown = FormKeyDown
   OnShow = FormShow
-  inline FStatusFooter: TStatusFooterFrame
+  object ActionList: TActionList
+    Left = 40
+    Top = 40
+    object PushAction: TAction
+      Caption = 'Push'
+      OnExecute = PushActionExecute
+    end
+    object PullAction: TAction
+      Caption = 'Pull'
+      OnExecute = PullActionExecute
+    end
+    object FetchAction: TAction
+      Caption = 'Fetch'
+      OnExecute = FetchActionExecute
+    end
+    object RemotesAction: TAction
+      Caption = 'Remotes…'
+      OnExecute = RemotesActionExecute
+    end
+    object StageAllAction: TAction
+      Caption = 'Stage All'
+      OnExecute = StageAllActionExecute
+    end
+    object StageAction: TAction
+      Caption = 'Stage'
+      OnExecute = StageActionExecute
+    end
+    object StageSelectionAction: TAction
+      Caption = 'Stage Selection'
+      Enabled = False
+      OnExecute = StageSelectionActionExecute
+    end
+    object RevertAction: TAction
+      Caption = 'Revert'
+      Enabled = False
+      OnExecute = RevertActionExecute
+    end
+    object DeleteAction: TAction
+      Caption = 'Delete'
+      Enabled = False
+      OnExecute = DeleteActionExecute
+    end
+    object IgnoreAction: TAction
+      Caption = 'Ignore'
+      Enabled = False
+      OnExecute = IgnoreActionExecute
+    end
+    object IgnoredFilesAction: TAction
+      Caption = 'Ignored Files…'
+      OnExecute = IgnoredFilesActionExecute
+    end
+    object SuggestMessageAction: TAction
+      Caption = 'Suggest'
+      Enabled = False
+      Hint = 'Generate a commit message with Project Assistant (staged diff)'
+      OnExecute = SuggestMessageActionExecute
+    end
+    object CommitAction: TAction
+      Caption = 'Commit'
+      Enabled = False
+      OnExecute = CommitActionExecute
+    end
+    object ShowCommitAction: TAction
+      Caption = 'Show commit'
+      OnExecute = ShowCommitActionExecute
+    end
+    object CopyShaAction: TAction
+      Caption = 'Copy SHA'
+      OnExecute = CopyShaActionExecute
+    end
+    object CheckoutAction: TAction
+      Caption = 'Checkout…'
+      OnExecute = CheckoutActionExecute
+    end
+    object CreateBranchAction: TAction
+      Caption = 'Create branch here…'
+      OnExecute = CreateBranchActionExecute
+    end
+  end
+  object Popup: TPopupMenu
+    Left = 100
+    Top = 40
+    object ShowCommitMenuItem: TMenuItem
+      Action = ShowCommitAction
+    end
+    object CopyShaMenuItem: TMenuItem
+      Action = CopyShaAction
+    end
+    object CopySeparator: TMenuItem
+      Caption = '-'
+    end
+    object CheckoutMenuItem: TMenuItem
+      Action = CheckoutAction
+    end
+    object CreateBranchMenuItem: TMenuItem
+      Action = CreateBranchAction
+    end
+  end
+  inline StatusFooter: TStatusFooterFrame
+    Left = 0
+    Height = 22
     Top = 578
     Width = 900
     Align = alBottom
+    ClientHeight = 22
     ClientWidth = 900
     Constraints.MinHeight = 22
     TabOrder = 1
   end
-  object FPages: TPageControl
+  object Pages: TPageControl
     Left = 0
     Height = 578
     Top = 0
     Width = 900
-    ActivePage = FTabHistory
+    ActivePage = HistoryTab
     Align = alClient
     TabIndex = 0
     TabOrder = 0
     OnChange = PagesChange
-    object FTabHistory: TTabSheet
+    object HistoryTab: TTabSheet
       Caption = 'History'
       ClientHeight = 543
       ClientWidth = 894
-      object FMainPanel: TPanel
+      object MainPanel: TPanel
         Left = 0
         Height = 543
         Top = 0
@@ -47,7 +148,7 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientHeight = 543
         ClientWidth = 894
         TabOrder = 0
-        object FDetailPanel: TPanel
+        object DetailPanel: TPanel
           Left = 0
           Height = 240
           Top = 303
@@ -58,7 +159,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           ClientWidth = 894
           Constraints.MinHeight = 120
           TabOrder = 1
-          object FHistoryButtons: TPanel
+          object HistoryButtons: TPanel
             Left = 0
             Height = 36
             Top = 0
@@ -76,52 +177,55 @@ object ManageRepositoryForm: TManageRepositoryForm
             ClientHeight = 36
             ClientWidth = 894
             TabOrder = 0
-            object FBtnPush: TButton
+            object PushButton: TButton
               Left = 4
               Height = 28
               Top = 4
               Width = 84
-              Action = FPushAction
+              Action = PushAction
               TabOrder = 0
             end
-            object FBtnPull: TButton
+            object PullButton: TButton
               Left = 92
               Height = 28
               Top = 4
               Width = 84
-              Action = FPullAction
+              Action = PullAction
               TabOrder = 1
             end
-            object FBtnFetch: TButton
+            object FetchButton: TButton
               Left = 180
               Height = 28
               Top = 4
               Width = 84
-              Action = FFetchAction
+              Action = FetchAction
               TabOrder = 2
             end
-            object FBtnRemotes: TButton
+            object RemotesButton: TButton
               Left = 268
               Height = 28
               Top = 4
               Width = 84
-              Action = FRemotesAction
+              Action = RemotesAction
               TabOrder = 3
             end
           end
-          inline FDiffView: TGitDiffView
-            Left = 2
+          inline DiffView: TGitDiffView
+            Left = 4
             Height = 200
-            Top = 38
-            Width = 890
+            Top = 36
+            Width = 886
             Align = alClient
-            BorderSpacing.Around = 2
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 0
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
             ClientHeight = 200
-            ClientWidth = 890
+            ClientWidth = 886
             TabOrder = 1
           end
         end
-        object FSplitter: TSplitter
+        object HistorySplitter: TSplitter
           Cursor = crVSplit
           Left = 0
           Height = 5
@@ -132,20 +236,21 @@ object ManageRepositoryForm: TManageRepositoryForm
           MinSize = 48
           ResizeAnchor = akBottom
         end
-        object FGraphHost: TPanel
-          Left = 0
-          Height = 298
-          Top = 0
-          Width = 894
+        object GraphHost: TPanel
+          Left = 4
+          Height = 294
+          Top = 4
+          Width = 886
           Align = alClient
+          BorderSpacing.Around = 4
           BevelOuter = bvNone
-          ClientHeight = 298
-          ClientWidth = 894
+          ClientHeight = 294
+          ClientWidth = 886
           TabOrder = 0
           OnResize = GraphHostResize
-          object FScrollBar: TScrollBar
-            Left = 878
-            Height = 298
+          object GraphScrollBar: TScrollBar
+            Left = 870
+            Height = 294
             Top = 0
             Width = 16
             Align = alRight
@@ -154,13 +259,13 @@ object ManageRepositoryForm: TManageRepositoryForm
             TabOrder = 0
             OnChange = ScrollBarChange
           end
-          object FPaintBox: TPaintBox
+          object GraphPaintBox: TPaintBox
             Left = 0
-            Height = 298
+            Height = 294
             Top = 0
-            Width = 878
+            Width = 870
             Align = alClient
-            PopupMenu = FPopup
+            PopupMenu = Popup
             OnMouseDown = PaintBoxMouseDown
             OnMouseWheel = PaintBoxMouseWheel
             OnPaint = PaintBoxPaint
@@ -168,11 +273,11 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
       end
     end
-    object FTabFiles: TTabSheet
+    object FilesTab: TTabSheet
       Caption = 'Files'
       ClientHeight = 543
       ClientWidth = 894
-      object FFilesLeftPanel: TPanel
+      object FilesLeftPanel: TPanel
         Left = 0
         Height = 543
         Top = 0
@@ -182,9 +287,9 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientHeight = 543
         ClientWidth = 380
         TabOrder = 0
-        object FFilesList: TListBox
+        object FilesList: TListBox
           Left = 4
-          Height = 417
+          Height = 447
           Top = 4
           Width = 372
           Align = alClient
@@ -196,7 +301,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           OnDblClick = FilesListDblClick
           OnSelectionChange = FilesListSelectionChange
         end
-        object FFilesBottomBar: TPanel
+        object FilesBottomPanel: TPanel
           Left = 0
           Height = 88
           Top = 455
@@ -206,18 +311,18 @@ object ManageRepositoryForm: TManageRepositoryForm
           ClientHeight = 88
           ClientWidth = 380
           TabOrder = 1
-          object FFilterGroup: TGroupBox
-            Left = 8
+          object FilterGroupBox: TGroupBox
+            Left = 4
             Height = 72
             Top = 8
-            Width = 364
+            Width = 372
             Align = alTop
             BorderSpacing.Around = 8
             Caption = 'Filter'
             ClientHeight = 45
-            ClientWidth = 360
+            ClientWidth = 368
             TabOrder = 0
-            object FShowUntrackedCheck: TCheckBox
+            object UntrackedCheck: TCheckBox
               Left = 12
               Height = 22
               Top = 4
@@ -226,7 +331,7 @@ object ManageRepositoryForm: TManageRepositoryForm
               TabOrder = 0
               OnChange = FileFilterChange
             end
-            object FShowCleanCheck: TCheckBox
+            object CleanCheck: TCheckBox
               Left = 120
               Height = 22
               Top = 4
@@ -235,7 +340,7 @@ object ManageRepositoryForm: TManageRepositoryForm
               TabOrder = 1
               OnChange = FileFilterChange
             end
-            object FShowIgnoredCheck: TCheckBox
+            object IgnoredCheck: TCheckBox
               Left = 208
               Height = 22
               Top = 4
@@ -247,13 +352,13 @@ object ManageRepositoryForm: TManageRepositoryForm
           end
         end
       end
-      object FFilesSplitter: TSplitter
+      object FilesSplitter: TSplitter
         Left = 380
         Height = 543
         Top = 0
         Width = 5
       end
-      object FFilesRightPanel: TPanel
+      object FilesRightPanel: TPanel
         Left = 385
         Height = 543
         Top = 0
@@ -263,7 +368,7 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientHeight = 543
         ClientWidth = 509
         TabOrder = 1
-        object FCommitPanel: TPanel
+        object CommitPanel: TPanel
           Left = 0
           Height = 140
           Top = 403
@@ -274,7 +379,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           ClientWidth = 509
           Constraints.MinHeight = 90
           TabOrder = 3
-          object FMessageLabel: TLabel
+          object MessageLabel: TLabel
             Left = 8
             Height = 18
             Top = 4
@@ -285,10 +390,10 @@ object ManageRepositoryForm: TManageRepositoryForm
             Caption = 'Commit message'
             ParentColor = False
           end
-          object FMessageMemo: TMemo
+          object MessageMemo: TMemo
             Left = 4
-            Height = 66
-            Top = 30
+            Height = 74
+            Top = 26
             Width = 501
             Align = alClient
             BorderSpacing.Around = 4
@@ -296,7 +401,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             TabOrder = 0
             OnChange = MessageChange
           end
-          object FCommitActions: TPanel
+          object CommitActionsPanel: TPanel
             Left = 0
             Height = 36
             Top = 104
@@ -314,28 +419,25 @@ object ManageRepositoryForm: TManageRepositoryForm
             ClientHeight = 36
             ClientWidth = 509
             TabOrder = 1
-            object FBtnSuggestMessage: TButton
+            object SuggestButton: TButton
               Left = 4
               Height = 28
               Top = 4
               Width = 100
-              Caption = 'Suggest'
-              Hint = 'Generate a commit message with Project Assistant (staged diff)'
+              Action = SuggestMessageAction
+              ParentShowHint = False
               ShowHint = True
               TabOrder = 0
-              OnClick = BtnSuggestMessageClick
             end
-            object FBtnCommit: TButton
+            object CommitButton: TButton
               Left = 108
               Height = 28
               Top = 4
               Width = 84
-              Caption = 'Commit'
-              Enabled = False
+              Action = CommitAction
               TabOrder = 1
-              OnClick = BtnCommitClick
             end
-            object FPushCheck: TCheckBox
+            object PushCheckBox: TCheckBox
               Left = 196
               Height = 28
               Top = 4
@@ -345,7 +447,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             end
           end
         end
-        object FCommitSplitter: TSplitter
+        object CommitSplitter: TSplitter
           Cursor = crVSplit
           Left = 0
           Height = 5
@@ -354,7 +456,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Align = alBottom
           ResizeAnchor = akBottom
         end
-        object FStagedPanel: TPanel
+        object StagedPanel: TPanel
           Left = 0
           Height = 120
           Top = 278
@@ -365,7 +467,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           ClientWidth = 509
           Constraints.MinHeight = 60
           TabOrder = 2
-          object FStagedLabel: TLabel
+          object StagedLabel: TLabel
             Left = 8
             Height = 18
             Top = 4
@@ -376,7 +478,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Caption = 'Staged for commit'
             ParentColor = False
           end
-          object FStagedList: TListBox
+          object StagedList: TListBox
             Left = 4
             Height = 90
             Top = 26
@@ -391,7 +493,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnSelectionChange = StagedListSelectionChange
           end
         end
-        object FStagedSplitter: TSplitter
+        object StagedSplitter: TSplitter
           Cursor = crVSplit
           Left = 0
           Height = 5
@@ -400,10 +502,10 @@ object ManageRepositoryForm: TManageRepositoryForm
           Align = alBottom
           ResizeAnchor = akBottom
         end
-        object FStageButtonsBar: TPanel
+        object StageButtonsPanel: TPanel
           Left = 0
           Height = 36
-          Top = 242
+          Top = 237
           Width = 509
           Align = alBottom
           BevelOuter = bvNone
@@ -418,128 +520,75 @@ object ManageRepositoryForm: TManageRepositoryForm
           ClientHeight = 36
           ClientWidth = 509
           TabOrder = 1
-          object FBtnStageAll: TButton
+          object StageAllButton: TButton
             Left = 4
             Height = 28
             Top = 4
             Width = 100
-            Caption = 'Stage All'
+            Action = StageAllAction
             TabOrder = 0
-            OnClick = BtnStageAllClick
           end
-          object FBtnStage: TButton
+          object StageButton: TButton
             Left = 108
             Height = 28
             Top = 4
             Width = 84
-            Caption = 'Stage'
+            Action = StageAction
             TabOrder = 1
-            OnClick = BtnStageClick
           end
-          object FBtnStageSelection: TButton
+          object StageSelectionButton: TButton
             Left = 196
             Height = 28
             Top = 4
             Width = 110
-            Caption = 'Stage Selection'
-            Enabled = False
+            Action = StageSelectionAction
             TabOrder = 2
-            OnClick = BtnStageSelectionClick
           end
-          object FBtnRevert: TButton
+          object RevertButton: TButton
             Left = 310
             Height = 28
             Top = 4
             Width = 70
-            Caption = 'Revert'
-            Enabled = False
+            Action = RevertAction
             TabOrder = 3
-            OnClick = BtnRevertClick
           end
-          object FBtnDelete: TButton
+          object DeleteButton: TButton
             Left = 384
             Height = 28
             Top = 4
             Width = 70
-            Caption = 'Delete'
-            Enabled = False
+            Action = DeleteAction
             TabOrder = 4
-            OnClick = BtnDeleteClick
           end
-          object FBtnIgnore: TButton
+          object IgnoreButton: TButton
             Left = 458
             Height = 28
             Top = 4
             Width = 70
-            Caption = 'Ignore'
-            Enabled = False
+            Action = IgnoreAction
             TabOrder = 5
-            OnClick = BtnIgnoreClick
           end
-          object FBtnIgnoreFiles: TButton
+          object IgnoredFilesButton: TButton
             Left = 532
             Height = 28
             Top = 4
             Width = 120
-            Caption = 'Ignored Files…'
+            Action = IgnoredFilesAction
             TabOrder = 6
-            OnClick = BtnIgnoreFilesClick
           end
         end
-        inline FFilesDiffView: TGitDiffView
+        inline FilesDiffView: TGitDiffView
           Left = 0
-          Height = 230
+          Height = 237
           Top = 0
           Width = 509
           Align = alClient
           BorderSpacing.Around = 0
-          ClientHeight = 230
+          ClientHeight = 237
           ClientWidth = 509
+          TabOrder = 0
         end
       end
-    end
-  end
-  object FActionList: TActionList
-    Left = 40
-    Top = 40
-    object FPushAction: TAction
-      Caption = 'Push'
-      OnExecute = PushActionExecute
-    end
-    object FPullAction: TAction
-      Caption = 'Pull'
-      OnExecute = PullActionExecute
-    end
-    object FFetchAction: TAction
-      Caption = 'Fetch'
-      OnExecute = FetchActionExecute
-    end
-    object FRemotesAction: TAction
-      Caption = 'Remotes…'
-      OnExecute = RemotesActionExecute
-    end
-  end
-  object FPopup: TPopupMenu
-    Left = 100
-    Top = 40
-    object FMiShowCommit: TMenuItem
-      Caption = 'Show commit'
-      OnClick = PopupShowCommit
-    end
-    object FMiCopySha: TMenuItem
-      Caption = 'Copy SHA'
-      OnClick = PopupCopySha
-    end
-    object FMiSep: TMenuItem
-      Caption = '-'
-    end
-    object FMiCheckout: TMenuItem
-      Caption = 'Checkout…'
-      OnClick = PopupCheckout
-    end
-    object FMiCreateBranch: TMenuItem
-      Caption = 'Create branch here…'
-      OnClick = PopupCreateBranch
     end
   end
 end

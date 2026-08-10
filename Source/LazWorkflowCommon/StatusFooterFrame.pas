@@ -16,10 +16,10 @@ Type
   TStatusFooterFrame = Class(TFrame)
   Published
     { Must be published for inline streaming in host forms (ObjFPC defaults to public). }
-    FPanel: TPanel;
-    FLeftLabel: TLabel;
-    FCentreLabel: TLabel;
-    FRightLabel: TLabel;
+    Panel: TPanel;
+    LeftLabel: TLabel;
+    CentreLabel: TLabel;
+    RightLabel: TLabel;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Procedure SetLeftText(Const Value: String);
@@ -44,24 +44,24 @@ End;
 
 Procedure TStatusFooterFrame.SetLeftText(Const Value: String);
 Begin
-  FLeftLabel.Caption := Value;
+  LeftLabel.Caption := Value;
 End;
 
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
-  FCentreLabel.Caption := Value;
+  CentreLabel.Caption := Value;
 End;
 
 Procedure TStatusFooterFrame.SetRightText(Const Value: String);
 Begin
-  FRightLabel.Caption := Value;
+  RightLabel.Caption := Value;
 End;
 
 Procedure TStatusFooterFrame.SetAll(Const LeftText, CentreText, RightText: String);
 Begin
-  FLeftLabel.Caption := LeftText;
-  FCentreLabel.Caption := CentreText;
-  FRightLabel.Caption := RightText;
+  LeftLabel.Caption := LeftText;
+  CentreLabel.Caption := CentreText;
+  RightLabel.Caption := RightText;
 End;
 
 Initialization

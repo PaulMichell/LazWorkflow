@@ -19,102 +19,6 @@ Type
   TGitRemoteOpKind = (rokFetch, rokPull, rokPush);
 
   TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
-  Published
-    { Streamed components/events must be published (ObjFPC default section is public). }
-    FPages: TPageControl;
-    FTabHistory: TTabSheet;
-    FTabFiles: TTabSheet;
-    FMainPanel: TPanel;
-    FGraphHost: TPanel;
-    FPaintBox: TPaintBox;
-    FScrollBar: TScrollBar;
-    FStatusFooter: TStatusFooterFrame;
-    FSplitter: TSplitter;
-    FDetailPanel: TPanel;
-    FHistoryButtons: TPanel;
-    FDiffView: TGitDiffView;
-    FFilesLeftPanel: TPanel;
-    FFilesList: TListBox;
-    FFilesBottomBar: TPanel;
-    FFilterGroup: TGroupBox;
-    FShowUntrackedCheck: TCheckBox;
-    FShowCleanCheck: TCheckBox;
-    FShowIgnoredCheck: TCheckBox;
-    FFilesSplitter: TSplitter;
-    FFilesRightPanel: TPanel;
-    FStageButtonsBar: TPanel;
-    FBtnStage: TButton;
-    FBtnStageAll: TButton;
-    FBtnStageSelection: TButton;
-    FBtnRevert: TButton;
-    FBtnDelete: TButton;
-    FBtnIgnore: TButton;
-    FBtnIgnoreFiles: TButton;
-    FStagedSplitter: TSplitter;
-    FStagedPanel: TPanel;
-    FStagedLabel: TLabel;
-    FStagedList: TListBox;
-    FCommitSplitter: TSplitter;
-    FFilesDiffView: TGitDiffView;
-    FCommitPanel: TPanel;
-    FMessageLabel: TLabel;
-    FMessageMemo: TMemo;
-    FCommitActions: TPanel;
-    FBtnSuggestMessage: TButton;
-    FBtnCommit: TButton;
-    FPushCheck: TCheckBox;
-    FActionList: TActionList;
-    FRemotesAction: TAction;
-    FFetchAction: TAction;
-    FPullAction: TAction;
-    FPushAction: TAction;
-    FBtnPush: TButton;
-    FBtnPull: TButton;
-    FBtnFetch: TButton;
-    FBtnRemotes: TButton;
-    FPopup: TPopupMenu;
-    FMiShowCommit: TMenuItem;
-    FMiCopySha: TMenuItem;
-    FMiSep: TMenuItem;
-    FMiCheckout: TMenuItem;
-    FMiCreateBranch: TMenuItem;
-    Procedure FormCreate(Sender: TObject);
-    Procedure FormDestroy(Sender: TObject);
-    Procedure FormShow(Sender: TObject);
-    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
-    Procedure PaintBoxPaint(Sender: TObject);
-    Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
-      Shift: TShiftState; X, Y: Integer);
-    Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
-      WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
-    Procedure ScrollBarChange(Sender: TObject);
-    Procedure GraphHostResize(Sender: TObject);
-    Procedure PagesChange(Sender: TObject);
-    Procedure RemotesActionExecute(Sender: TObject);
-    Procedure FetchActionExecute(Sender: TObject);
-    Procedure PullActionExecute(Sender: TObject);
-    Procedure PushActionExecute(Sender: TObject);
-    Procedure PopupCopySha(Sender: TObject);
-    Procedure PopupCheckout(Sender: TObject);
-    Procedure PopupCreateBranch(Sender: TObject);
-    Procedure PopupShowCommit(Sender: TObject);
-    Procedure FilesListSelectionChange(Sender: TObject; User: Boolean);
-    Procedure FilesListDblClick(Sender: TObject);
-    Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
-    Procedure StagedListDblClick(Sender: TObject);
-    Procedure FileFilterChange(Sender: TObject);
-    Procedure BtnIgnoreFilesClick(Sender: TObject);
-    Procedure BtnRevertClick(Sender: TObject);
-    Procedure BtnDeleteClick(Sender: TObject);
-    Procedure BtnIgnoreClick(Sender: TObject);
-    Procedure BtnStageClick(Sender: TObject);
-    Procedure BtnStageAllClick(Sender: TObject);
-    Procedure BtnStageSelectionClick(Sender: TObject);
-    Procedure BtnSuggestMessageClick(Sender: TObject);
-    Procedure BtnCommitClick(Sender: TObject);
-    Procedure MessageChange(Sender: TObject);
-    Procedure FilesDiffStatusChanged(Sender: TObject);
-    Procedure FilesDiffSelectionChanged(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -208,6 +112,113 @@ Type
     Procedure ApplyConfig;
     Procedure ManualRefresh;
     Property RepoPath: String Read FRepoPath;
+  Published
+    { Streamed components — no F prefix; private fields keep F. }
+    ActionList: TActionList;
+    PushAction: TAction;
+    PullAction: TAction;
+    FetchAction: TAction;
+    RemotesAction: TAction;
+    StageAllAction: TAction;
+    StageAction: TAction;
+    StageSelectionAction: TAction;
+    RevertAction: TAction;
+    DeleteAction: TAction;
+    IgnoreAction: TAction;
+    IgnoredFilesAction: TAction;
+    SuggestMessageAction: TAction;
+    CommitAction: TAction;
+    ShowCommitAction: TAction;
+    CopyShaAction: TAction;
+    CheckoutAction: TAction;
+    CreateBranchAction: TAction;
+    StatusFooter: TStatusFooterFrame;
+    Pages: TPageControl;
+    HistoryTab: TTabSheet;
+    FilesTab: TTabSheet;
+    MainPanel: TPanel;
+    DetailPanel: TPanel;
+    HistoryButtons: TPanel;
+    PushButton: TButton;
+    PullButton: TButton;
+    FetchButton: TButton;
+    RemotesButton: TButton;
+    DiffView: TGitDiffView;
+    HistorySplitter: TSplitter;
+    GraphHost: TPanel;
+    GraphScrollBar: TScrollBar;
+    GraphPaintBox: TPaintBox;
+    FilesLeftPanel: TPanel;
+    FilesList: TListBox;
+    FilesBottomPanel: TPanel;
+    FilterGroupBox: TGroupBox;
+    UntrackedCheck: TCheckBox;
+    CleanCheck: TCheckBox;
+    IgnoredCheck: TCheckBox;
+    FilesSplitter: TSplitter;
+    FilesRightPanel: TPanel;
+    CommitPanel: TPanel;
+    MessageLabel: TLabel;
+    MessageMemo: TMemo;
+    CommitActionsPanel: TPanel;
+    CommitButton: TButton;
+    SuggestButton: TButton;
+    PushCheckBox: TCheckBox;
+    CommitSplitter: TSplitter;
+    StagedPanel: TPanel;
+    StagedLabel: TLabel;
+    StagedList: TListBox;
+    StagedSplitter: TSplitter;
+    StageButtonsPanel: TPanel;
+    StageAllButton: TButton;
+    StageButton: TButton;
+    StageSelectionButton: TButton;
+    RevertButton: TButton;
+    DeleteButton: TButton;
+    IgnoreButton: TButton;
+    IgnoredFilesButton: TButton;
+    FilesDiffView: TGitDiffView;
+    Popup: TPopupMenu;
+    ShowCommitMenuItem: TMenuItem;
+    CopyShaMenuItem: TMenuItem;
+    CopySeparator: TMenuItem;
+    CheckoutMenuItem: TMenuItem;
+    CreateBranchMenuItem: TMenuItem;
+    Procedure FormCreate(Sender: TObject);
+    Procedure FormDestroy(Sender: TObject);
+    Procedure FormShow(Sender: TObject);
+    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure PaintBoxPaint(Sender: TObject);
+    Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
+    Procedure ScrollBarChange(Sender: TObject);
+    Procedure GraphHostResize(Sender: TObject);
+    Procedure PagesChange(Sender: TObject);
+    Procedure PushActionExecute(Sender: TObject);
+    Procedure PullActionExecute(Sender: TObject);
+    Procedure FetchActionExecute(Sender: TObject);
+    Procedure RemotesActionExecute(Sender: TObject);
+    Procedure StageAllActionExecute(Sender: TObject);
+    Procedure StageActionExecute(Sender: TObject);
+    Procedure StageSelectionActionExecute(Sender: TObject);
+    Procedure RevertActionExecute(Sender: TObject);
+    Procedure DeleteActionExecute(Sender: TObject);
+    Procedure IgnoreActionExecute(Sender: TObject);
+    Procedure IgnoredFilesActionExecute(Sender: TObject);
+    Procedure SuggestMessageActionExecute(Sender: TObject);
+    Procedure CommitActionExecute(Sender: TObject);
+    Procedure ShowCommitActionExecute(Sender: TObject);
+    Procedure CopyShaActionExecute(Sender: TObject);
+    Procedure CheckoutActionExecute(Sender: TObject);
+    Procedure CreateBranchActionExecute(Sender: TObject);
+    Procedure FilesListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure FilesListDblClick(Sender: TObject);
+    Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure StagedListDblClick(Sender: TObject);
+    Procedure FileFilterChange(Sender: TObject);
+    Procedure MessageChange(Sender: TObject);
+    Procedure FilesDiffStatusChanged(Sender: TObject);
+    Procedure FilesDiffSelectionChanged(Sender: TObject);
   End;
 
 Procedure RefreshOpenManageRepositoryForms;
@@ -530,10 +541,10 @@ Begin
   StopRemoteOpThread;
   StopDetailThread;
   StopIndexThread;
-  If Assigned(FDiffView) Then
-    FDiffView.Clear;
-  If Assigned(FFilesDiffView) Then
-    FFilesDiffView.Clear;
+  If Assigned(DiffView) Then
+    DiffView.Clear;
+  If Assigned(FilesDiffView) Then
+    FilesDiffView.Clear;
   WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FFilesPaths);
   FreeAndNil(FStagedPaths);
@@ -569,31 +580,31 @@ Begin
     FAutoRefreshTimer.OnTimer := @AutoRefreshTimerTimer;
 
     { ResizeControl is public but not published – cannot stream from the .lfm. }
-    If Assigned(FSplitter) And Assigned(FDetailPanel) Then
-      FSplitter.ResizeControl := FDetailPanel;
-    If Assigned(FCommitSplitter) And Assigned(FCommitPanel) Then
-      FCommitSplitter.ResizeControl := FCommitPanel;
-    If Assigned(FStagedSplitter) And Assigned(FStagedPanel) Then
-      FStagedSplitter.ResizeControl := FStagedPanel;
+    If Assigned(HistorySplitter) And Assigned(DetailPanel) Then
+      HistorySplitter.ResizeControl := DetailPanel;
+    If Assigned(CommitSplitter) And Assigned(CommitPanel) Then
+      CommitSplitter.ResizeControl := CommitPanel;
+    If Assigned(StagedSplitter) And Assigned(StagedPanel) Then
+      StagedSplitter.ResizeControl := StagedPanel;
 
-    If Assigned(FDiffView) Then
-      FDiffView.SetViewMode(dvmBrowse);
-    If Assigned(FFilesDiffView) Then
+    If Assigned(DiffView) Then
+      DiffView.SetViewMode(dvmBrowse);
+    If Assigned(FilesDiffView) Then
       Begin
-        FFilesDiffView.SetViewMode(dvmEditorOnly);
-        FFilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
-        FFilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
+        FilesDiffView.SetViewMode(dvmEditorOnly);
+        FilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
+        FilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
       End;
-    If Assigned(FShowUntrackedCheck) Then
-      FShowUntrackedCheck.Checked := False;
-    If Assigned(FShowCleanCheck) Then
-      FShowCleanCheck.Checked := False;
-    If Assigned(FShowIgnoredCheck) Then
-      FShowIgnoredCheck.Checked := False;
-    If Assigned(FFilesList) Then
-      FFilesList.MultiSelect := True;
-    If Assigned(FStagedList) Then
-      FStagedList.MultiSelect := True;
+    If Assigned(UntrackedCheck) Then
+      UntrackedCheck.Checked := False;
+    If Assigned(CleanCheck) Then
+      CleanCheck.Checked := False;
+    If Assigned(IgnoredCheck) Then
+      IgnoredCheck.Checked := False;
+    If Assigned(FilesList) Then
+      FilesList.MultiSelect := True;
+    If Assigned(StagedList) Then
+      StagedList.MultiSelect := True;
     UpdateCommitEnabled;
     UpdateStageButtonsEnabled;
 
@@ -616,8 +627,8 @@ Begin
     ApplyConfig;
     { Remeasure scroll range once the paintbox parent has a handle. }
     UpdateScrollRange;
-    If Assigned(FPaintBox) Then
-      FPaintBox.Invalidate;
+    If Assigned(GraphPaintBox) Then
+      GraphPaintBox.Invalidate;
   Except
     On E: Exception Do
       WorkflowLogger.Error('ManageRepository', 'FormShow: ' + E.Message);
@@ -644,7 +655,7 @@ Begin
     SetRepository(FRepoPath)
   Else
     BindRepository;
-  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+  If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
     RefreshFilesList;
 End;
 
@@ -674,12 +685,12 @@ Begin
       End;
     VK_PRIOR:
       Begin
-        MoveSelection(-(FPaintBox.ClientHeight Div GraphRowHeight));
+        MoveSelection(-(GraphPaintBox.ClientHeight Div GraphRowHeight));
         Key := 0;
       End;
     VK_NEXT:
       Begin
-        MoveSelection(FPaintBox.ClientHeight Div GraphRowHeight);
+        MoveSelection(GraphPaintBox.ClientHeight Div GraphRowHeight);
         Key := 0;
       End;
   End;
@@ -712,21 +723,21 @@ Begin
   If ScrollIntoView Then
     Begin
       RH := GraphRowHeight;
-      ViewH := FPaintBox.ClientHeight;
+      ViewH := GraphPaintBox.ClientHeight;
       RowTop := Index * RH;
       RowBottom := RowTop + RH;
       If RowTop < ScrollOffset Then
-        FScrollBar.Position := RowTop
+        GraphScrollBar.Position := RowTop
       Else If RowBottom > ScrollOffset + ViewH Then
         Begin
           NewPos := RowBottom - ViewH;
           If NewPos < 0 Then
             NewPos := 0;
-          FScrollBar.Position := NewPos;
+          GraphScrollBar.Position := NewPos;
         End;
     End;
   ShowCommitDetails(Index);
-  FPaintBox.Invalidate;
+  GraphPaintBox.Invalidate;
   If Not FModel.Commit(Index).DetailsLoaded Then
     ScheduleVisibleDetails;
 End;
@@ -740,7 +751,7 @@ End;
 
 Function TManageRepositoryForm.ScrollOffset: Integer;
 Begin
-  Result := FScrollBar.Position;
+  Result := GraphScrollBar.Position;
 End;
 
 Procedure TManageRepositoryForm.StopIndexThread;
@@ -784,14 +795,14 @@ End;
 
 Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
 Begin
-  If Assigned(FFetchAction) Then
-    FFetchAction.Enabled := ActionsEnabled;
-  If Assigned(FPullAction) Then
-    FPullAction.Enabled := ActionsEnabled;
-  If Assigned(FPushAction) Then
-    FPushAction.Enabled := ActionsEnabled;
-  If Assigned(FRemotesAction) Then
-    FRemotesAction.Enabled := ActionsEnabled;
+  If Assigned(FetchAction) Then
+    FetchAction.Enabled := ActionsEnabled;
+  If Assigned(PullAction) Then
+    PullAction.Enabled := ActionsEnabled;
+  If Assigned(PushAction) Then
+    PushAction.Enabled := ActionsEnabled;
+  If Assigned(RemotesAction) Then
+    RemotesAction.Enabled := ActionsEnabled;
 End;
 
 Procedure TManageRepositoryForm.StartRemoteOp(Kind: TGitRemoteOpKind);
@@ -836,11 +847,11 @@ Begin
     Begin
       { Single UI transition: previous graph stays visible until this apply runs. }
       FIndexing := False;
-      If Assigned(FDiffView) Then
-        FDiffView.Clear;
+      If Assigned(DiffView) Then
+        DiffView.Clear;
       FSelectedIndex := -1;
-      If Assigned(FScrollBar) Then
-        FScrollBar.Position := 0;
+      If Assigned(GraphScrollBar) Then
+        GraphScrollBar.Position := 0;
 
       If FPendingIndexOk And Assigned(FModel) Then
         Begin
@@ -857,12 +868,12 @@ Begin
           UpdateScrollRange;
           If FSelectedIndex >= 0 Then
             ShowCommitDetails(FSelectedIndex)
-          Else If Assigned(FDiffView) Then
-            FDiffView.Clear;
-          If Assigned(FPaintBox) Then
+          Else If Assigned(DiffView) Then
+            DiffView.Clear;
+          If Assigned(GraphPaintBox) Then
             Begin
-              FPaintBox.Invalidate;
-              FPaintBox.Update;
+              GraphPaintBox.Invalidate;
+              GraphPaintBox.Update;
             End;
           ScheduleVisibleDetails;
         End
@@ -881,8 +892,8 @@ Begin
       RefreshRepositoryInfo;
       UpdateStatus;
       If Kind = rokPush Then
-        FStatusFooter.SetRightText('Push complete');
-      If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+        StatusFooter.SetRightText('Push complete');
+      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
         RefreshFilesList;
     End;
 
@@ -903,7 +914,7 @@ Begin
   StopDetailThread;
   StopIndexThread;
   FIndexing := True;
-  FStatusFooter.SetRightText('Indexing…');
+  StatusFooter.SetRightText('Indexing…');
   FIndexThread := TGitIndexThread.Create(Self, FRepoPath);
   FIndexThread.Start;
 End;
@@ -913,12 +924,12 @@ Var
   Parsed: Integer;
 Begin
   FIndexing := False;
-  If (csDestroying in ComponentState) Or Not Assigned(FModel) Or Not Assigned(FDiffView) Then
+  If (csDestroying in ComponentState) Or Not Assigned(FModel) Or Not Assigned(DiffView) Then
     Exit;
   If Not FPendingIndexOk Then
     Begin
-      If Assigned(FStatusFooter) Then
-        FStatusFooter.SetRightText('Index failed');
+      If Assigned(StatusFooter) Then
+        StatusFooter.SetRightText('Index failed');
       WorkflowLogger.Warning('ManageRepository', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
@@ -933,11 +944,11 @@ Begin
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex)
   Else
-    FDiffView.Clear;
+    DiffView.Clear;
 
   UpdateStatus;
-  If Assigned(FPaintBox) Then
-    FPaintBox.Invalidate;
+  If Assigned(GraphPaintBox) Then
+    GraphPaintBox.Invalidate;
   ScheduleVisibleDetails;
   WorkflowLogger.Info('ManageRepository', Format('Indexed %d commits', [Parsed]));
 End;
@@ -953,8 +964,8 @@ Begin
   If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) And
      FModel.Commit(FSelectedIndex).DetailsLoaded Then
     ShowCommitDetails(FSelectedIndex);
-  If Assigned(FPaintBox) Then
-    FPaintBox.Invalidate;
+  If Assigned(GraphPaintBox) Then
+    GraphPaintBox.Invalidate;
   { More rows may still be missing after scrolling. }
   ScheduleVisibleDetails;
 End;
@@ -970,7 +981,7 @@ Begin
   RH := GraphRowHeight;
   If RH < 1 Then
     RH := 1;
-  ViewH := FPaintBox.ClientHeight;
+  ViewH := GraphPaintBox.ClientHeight;
   If ViewH < 1 Then
     ViewH := 1;
   FirstRow := ScrollOffset Div RH;
@@ -1024,9 +1035,9 @@ Procedure TManageRepositoryForm.UpdateScrollRange;
 Var
   ViewH, ContentH, MaxPos, RH: Integer;
 Begin
-  If (Not Assigned(FPaintBox)) Or (Not Assigned(FScrollBar)) Or (Not Assigned(FModel)) Then
+  If (Not Assigned(GraphPaintBox)) Or (Not Assigned(GraphScrollBar)) Or (Not Assigned(FModel)) Then
     Exit;
-  ViewH := FPaintBox.ClientHeight;
+  ViewH := GraphPaintBox.ClientHeight;
   If ViewH < 1 Then
     ViewH := 1;
   RH := GraphRowHeight;
@@ -1034,28 +1045,28 @@ Begin
   MaxPos := ContentH - ViewH;
   If MaxPos < 0 Then
     MaxPos := 0;
-  FScrollBar.Min := 0;
-  FScrollBar.SmallChange := RH;
-  FScrollBar.LargeChange := ViewH;
+  GraphScrollBar.Min := 0;
+  GraphScrollBar.SmallChange := RH;
+  GraphScrollBar.LargeChange := ViewH;
   { Position runs 0..Max; PageSize 0 avoids platform-specific range quirks. }
-  FScrollBar.PageSize := 0;
-  FScrollBar.Max := MaxPos;
-  If FScrollBar.Position > MaxPos Then
-    FScrollBar.Position := MaxPos;
-  FScrollBar.Enabled := MaxPos > 0;
+  GraphScrollBar.PageSize := 0;
+  GraphScrollBar.Max := MaxPos;
+  If GraphScrollBar.Position > MaxPos Then
+    GraphScrollBar.Position := MaxPos;
+  GraphScrollBar.Enabled := MaxPos > 0;
 End;
 
 Procedure TManageRepositoryForm.GraphHostResize(Sender: TObject);
 Begin
   UpdateScrollRange;
   ScheduleVisibleDetails;
-  FPaintBox.Invalidate;
+  GraphPaintBox.Invalidate;
 End;
 
 Procedure TManageRepositoryForm.ScrollBarChange(Sender: TObject);
 Begin
   ScheduleVisibleDetails;
-  FPaintBox.Invalidate;
+  GraphPaintBox.Invalidate;
 End;
 
 Procedure TManageRepositoryForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
@@ -1063,17 +1074,17 @@ Procedure TManageRepositoryForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShif
 Var
   NewPos, MaxPos, ViewH: Integer;
 Begin
-  ViewH := FPaintBox.ClientHeight;
+  ViewH := GraphPaintBox.ClientHeight;
   MaxPos := GraphContentHeight - ViewH;
   If MaxPos < 0 Then
     MaxPos := 0;
-  NewPos := FScrollBar.Position - (WheelDelta Div 120) * GraphRowHeight * 3;
+  NewPos := GraphScrollBar.Position - (WheelDelta Div 120) * GraphRowHeight * 3;
   If NewPos < 0 Then
     NewPos := 0;
   If NewPos > MaxPos Then
     NewPos := MaxPos;
-  If NewPos <> FScrollBar.Position Then
-    FScrollBar.Position := NewPos;
+  If NewPos <> GraphScrollBar.Position Then
+    GraphScrollBar.Position := NewPos;
   Handled := True;
 End;
 
@@ -1098,8 +1109,8 @@ End;
 Function TManageRepositoryForm.GraphCanMeasureFont: Boolean;
 Begin
   { TPaintBox has no handle; its Canvas needs a parent TWinControl with a DC. }
-  Result := Assigned(FPaintBox) And Assigned(FPaintBox.Parent) And
-    FPaintBox.Parent.HandleAllocated;
+  Result := Assigned(GraphPaintBox) And Assigned(GraphPaintBox.Parent) And
+    GraphPaintBox.Parent.HandleAllocated;
 End;
 
 Function TManageRepositoryForm.GraphRowHeight: Integer;
@@ -1113,8 +1124,8 @@ Begin
   If GraphCanMeasureFont Then
     Begin
       Try
-        PrepareGraphTextFont(FPaintBox.Canvas, False);
-        TextH := FPaintBox.Canvas.TextHeight('Ag');
+        PrepareGraphTextFont(GraphPaintBox.Canvas, False);
+        TextH := GraphPaintBox.Canvas.TextHeight('Ag');
         Result := Max(Base, TextH + Pad);
       Except
         Result := Base;
@@ -1151,8 +1162,8 @@ Begin
   If GraphCanMeasureFont Then
     Begin
       Try
-        PrepareGraphTextFont(FPaintBox.Canvas, True);
-        SampleW := FPaintBox.Canvas.TextWidth('0000-00-00 00:00');
+        PrepareGraphTextFont(GraphPaintBox.Canvas, True);
+        SampleW := GraphPaintBox.Canvas.TextWidth('0000-00-00 00:00');
       Except
         SampleW := GraphScale(110);
       End;
@@ -1261,7 +1272,7 @@ Begin
     Gap := GraphScale(5);
     MinW := GraphScale(28);
     { Chip height tracks row metrics so text stays centered at high DPI. }
-    With FPaintBox.Canvas Do
+    With GraphPaintBox.Canvas Do
       Begin
         Font.Name := Self.Font.Name;
         Font.Size := 8;
@@ -1336,7 +1347,7 @@ Begin
           End;
         End;
 
-        With FPaintBox.Canvas Do
+        With GraphPaintBox.Canvas Do
           Begin
             Font.Name := Self.Font.Name;
             Font.Size := 8;
@@ -1381,14 +1392,14 @@ Begin
   NodeR := GraphNodeRadius;
   EdgePenW := Max(1, GraphScale(2));
   MsgPad := GraphScale(16);
-  With FPaintBox.Canvas Do
+  With GraphPaintBox.Canvas Do
     Begin
       Brush.Color := clWindow;
-      FillRect(FPaintBox.ClientRect);
+      FillRect(GraphPaintBox.ClientRect);
 
       If FIndexing And (FModel.Count = 0) Then
         Begin
-          PrepareGraphTextFont(FPaintBox.Canvas, False);
+          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
           Font.Color := clGrayText;
           Font.Size := 11;
           TextOut(MsgPad, MsgPad, 'Indexing commit history…');
@@ -1397,7 +1408,7 @@ Begin
 
       If FModel.Count = 0 Then
         Begin
-          PrepareGraphTextFont(FPaintBox.Canvas, False);
+          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
           Font.Color := clGrayText;
           Font.Size := 11;
           If FRepoPath = '' Then
@@ -1437,7 +1448,7 @@ Begin
           If I = FSelectedIndex Then
             Begin
               Brush.Color := RGBToColor(227, 242, 253);
-              FillRect(Bounds(0, Y, FPaintBox.ClientWidth, RH));
+              FillRect(Bounds(0, Y, GraphPaintBox.ClientWidth, RH));
             End;
 
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
@@ -1449,14 +1460,14 @@ Begin
 
           TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;
-          PrepareGraphTextFont(FPaintBox.Canvas, True);
+          PrepareGraphTextFont(GraphPaintBox.Canvas, True);
           DateText := FormatCommitDate(C.CommitTime);
           TextH := TextHeight(DateText);
           TextY := Y + (RH - TextH) Div 2;
           TextOut(TextX, TextY, DateText);
 
           TextX := TextX + DateColW;
-          PrepareGraphTextFont(FPaintBox.Canvas, False);
+          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
           If C.DetailsLoaded Then
             LabelText := C.Subject
           Else
@@ -1495,11 +1506,11 @@ Var
   I: Integer;
   ParentLine, Header: String;
 Begin
-  If Not Assigned(FDiffView) Or (csDestroying in ComponentState) Then
+  If Not Assigned(DiffView) Or (csDestroying in ComponentState) Then
     Exit;
   If (Index < 0) Or Not Assigned(FModel) Or (Index >= FModel.Count) Then
     Begin
-      FDiffView.Clear;
+      DiffView.Clear;
       Exit;
     End;
   C := FModel.Commit(Index);
@@ -1507,7 +1518,7 @@ Begin
   { File list + full-file embedded red/green diff for the selected path. }
   If Assigned(GitClient) And (FRepoPath <> '') And (C.Sha <> '') Then
     Begin
-      FDiffView.LoadCommit(FRepoPath, C.Sha, Copy(C.Sha, 1, 7) + '  ' + C.Subject);
+      DiffView.LoadCommit(FRepoPath, C.Sha, Copy(C.Sha, 1, 7) + '  ' + C.Subject);
       Exit;
     End;
 
@@ -1534,24 +1545,24 @@ Begin
     Header := Header + 'Refs:    ' + C.Refs + LineEnding;
   If C.DetailsLoaded Then
     Header := Header + LineEnding + C.Subject;
-  FDiffView.LoadPlainText(Copy(C.Sha, 1, 7), Header);
+  DiffView.LoadPlainText(Copy(C.Sha, 1, 7), Header);
 End;
 
 Procedure TManageRepositoryForm.PagesChange(Sender: TObject);
 Begin
-  If Not Assigned(FPages) Then
+  If Not Assigned(Pages) Then
     Exit;
-  If FPages.ActivePage = FTabFiles Then
+  If Pages.ActivePage = FilesTab Then
     Begin
       RefreshFilesList;
       { Overview paints on a child window that only sizes after the page is shown. }
-      If Assigned(FFilesDiffView) Then
-        FFilesDiffView.RefreshOverviewGutter;
+      If Assigned(FilesDiffView) Then
+        FilesDiffView.RefreshOverviewGutter;
     End
-  Else If FPages.ActivePage = FTabHistory Then
+  Else If Pages.ActivePage = HistoryTab Then
     Begin
-      If Assigned(FDiffView) Then
-        FDiffView.RefreshOverviewGutter;
+      If Assigned(DiffView) Then
+        DiffView.RefreshOverviewGutter;
     End;
 End;
 
@@ -1587,11 +1598,11 @@ Function TManageRepositoryForm.FileStatusPassesFilter(Const StatusText: String):
 Begin
   { Optional categories are hidden unless their filter checkbox is checked. }
   If StatusText = 'untracked' Then
-    Result := Assigned(FShowUntrackedCheck) And FShowUntrackedCheck.Checked
+    Result := Assigned(UntrackedCheck) And UntrackedCheck.Checked
   Else If StatusText = 'clean' Then
-    Result := Assigned(FShowCleanCheck) And FShowCleanCheck.Checked
+    Result := Assigned(CleanCheck) And CleanCheck.Checked
   Else If StatusText = 'ignored' Then
-    Result := Assigned(FShowIgnoredCheck) And FShowIgnoredCheck.Checked
+    Result := Assigned(IgnoredCheck) And IgnoredCheck.Checked
   Else
     Result := True;
 End;
@@ -1605,20 +1616,20 @@ Var
   Idx: Integer;
   EntryStatus: String;
 Begin
-  If Not Assigned(FFilesList) Or Not Assigned(FStagedList) Then
+  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
     Exit;
 
-  FFilesList.Items.BeginUpdate;
-  FStagedList.Items.BeginUpdate;
+  FilesList.Items.BeginUpdate;
+  StagedList.Items.BeginUpdate;
   Try
-    FFilesList.Items.Clear;
-    FStagedList.Items.Clear;
+    FilesList.Items.Clear;
+    StagedList.Items.Clear;
     FFilesPaths.Clear;
     FStagedPaths.Clear;
 
     If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
       Begin
-        FFilesList.Items.Add('(no repository)');
+        FilesList.Items.Add('(no repository)');
         UpdateCommitEnabled;
         UpdateStageButtonsEnabled;
         Exit;
@@ -1649,7 +1660,7 @@ Begin
                 If GitStatusEntryIsStaged(Entries[I]) Then
                   Begin
                     { GitStatusEntryLabel already includes the path (and rename old->new). }
-                    FStagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
+                    StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
                     FStagedPaths.Add(Rel);
                     { Fully staged (no remaining worktree change) leave the left list. }
                     If Not GitStatusEntryIsUnstaged(Entries[I]) Then
@@ -1683,7 +1694,7 @@ Begin
             StatusText := 'clean';
           If Not FileStatusPassesFilter(StatusText) Then
             Continue;
-          FFilesList.Items.Add(Rel + '  ' + StatusText);
+          FilesList.Items.Add(Rel + '  ' + StatusText);
           FFilesPaths.Add(Rel);
         End;
 
@@ -1702,27 +1713,27 @@ Begin
             Continue;
           If FFilesPaths.IndexOf(Rel) < 0 Then
             Begin
-              FFilesList.Items.Add(Rel + '  ' + StatusText);
+              FilesList.Items.Add(Rel + '  ' + StatusText);
               FFilesPaths.Add(Rel);
             End;
         End;
 
-      If FFilesList.Items.Count = 0 Then
-        FFilesList.Items.Add('(no files)');
+      If FilesList.Items.Count = 0 Then
+        FilesList.Items.Add('(no files)');
     Finally
       AllFiles.Free;
       FullyStaged.Free;
       StatusMap.Free;
     End;
   Finally
-    FFilesList.Items.EndUpdate;
-    FStagedList.Items.EndUpdate;
+    FilesList.Items.EndUpdate;
+    StagedList.Items.EndUpdate;
   End;
 
-  If Assigned(FStagedLabel) Then
-    FStagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
-  If Assigned(FFilesDiffView) Then
-    FFilesDiffView.Clear;
+  If Assigned(StagedLabel) Then
+    StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
+  If Assigned(FilesDiffView) Then
+    FilesDiffView.Clear;
   UpdateCommitEnabled;
   UpdateStageButtonsEnabled;
 End;
@@ -1744,66 +1755,68 @@ End;
 
 Procedure TManageRepositoryForm.UpdateStageButtonsEnabled;
 Var
-  CanPreviewAction: Boolean;
+  CanPreview, CanPathAction: Boolean;
   FilesEmpty, StagedEmpty, UnstageMode: Boolean;
 Begin
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
   { Prefer unstage when the working-tree list is empty but staged entries remain,
     or when the staged list currently holds the selection. }
-  UnstageMode := (Not StagedEmpty) And (FilesEmpty Or ListHasSelection(FStagedList));
+  UnstageMode := (Not StagedEmpty) And (FilesEmpty Or ListHasSelection(StagedList));
 
-  If Assigned(FBtnStageAll) Then
+  If Assigned(StageAllAction) Then
     Begin
       If (Not StagedEmpty) And FilesEmpty Then
         Begin
-          FBtnStageAll.Caption := 'Unstage All';
-          FBtnStageAll.Enabled := FRepoPath <> '';
+          StageAllAction.Caption := 'Unstage All';
+          StageAllAction.Enabled := FRepoPath <> '';
         End
       Else
         Begin
-          FBtnStageAll.Caption := 'Stage All';
-          FBtnStageAll.Enabled := (Not FilesEmpty) And (FRepoPath <> '');
+          StageAllAction.Caption := 'Stage All';
+          StageAllAction.Enabled := (Not FilesEmpty) And (FRepoPath <> '');
         End;
     End;
 
-  If Assigned(FBtnStage) Then
+  If Assigned(StageAction) Then
     Begin
       If UnstageMode Then
         Begin
-          FBtnStage.Caption := 'Unstage';
-          FBtnStage.Enabled := ListHasSelection(FStagedList) And (FRepoPath <> '');
+          StageAction.Caption := 'Unstage';
+          StageAction.Enabled := ListHasSelection(StagedList) And (FRepoPath <> '');
         End
       Else
         Begin
-          FBtnStage.Caption := 'Stage';
-          FBtnStage.Enabled := ListHasSelection(FFilesList) And (Not FilesEmpty) And (FRepoPath <> '');
+          StageAction.Caption := 'Stage';
+          StageAction.Enabled := ListHasSelection(FilesList) And (Not FilesEmpty) And (FRepoPath <> '');
         End;
     End;
 
-  If Assigned(FBtnStageSelection) And Assigned(FFilesDiffView) Then
+  If Assigned(StageSelectionAction) And Assigned(FilesDiffView) Then
     Begin
-      CanPreviewAction := FFilesDiffView.HasActiveSelection And (FRepoPath <> '');
-      If FFilesDiffView.StagedSide Then
+      CanPreview := FilesDiffView.HasActiveSelection And (FRepoPath <> '');
+      If FilesDiffView.StagedSide Then
         Begin
-          FBtnStageSelection.Caption := 'Unstage Selection';
-          FBtnStageSelection.Enabled := CanPreviewAction;
+          StageSelectionAction.Caption := 'Unstage Selection';
+          StageSelectionAction.Enabled := CanPreview;
         End
       Else
         Begin
-          FBtnStageSelection.Caption := 'Stage Selection';
-          FBtnStageSelection.Enabled := CanPreviewAction;
+          StageSelectionAction.Caption := 'Stage Selection';
+          StageSelectionAction.Enabled := CanPreview;
         End;
     End;
 
-  CanPreviewAction := (FRepoPath <> '') And
-    (ListHasSelection(FFilesList) Or ListHasSelection(FStagedList));
-  If Assigned(FBtnRevert) Then
-    FBtnRevert.Enabled := CanPreviewAction;
-  If Assigned(FBtnDelete) Then
-    FBtnDelete.Enabled := CanPreviewAction;
-  If Assigned(FBtnIgnore) Then
-    FBtnIgnore.Enabled := CanPreviewAction;
+  CanPathAction := (FRepoPath <> '') And
+    (ListHasSelection(FilesList) Or ListHasSelection(StagedList));
+  If Assigned(RevertAction) Then
+    RevertAction.Enabled := CanPathAction;
+  If Assigned(DeleteAction) Then
+    DeleteAction.Enabled := CanPathAction;
+  If Assigned(IgnoreAction) Then
+    IgnoreAction.Enabled := CanPathAction;
+  If Assigned(IgnoredFilesAction) Then
+    IgnoredFilesAction.Enabled := FRepoPath <> '';
 End;
 
 Procedure TManageRepositoryForm.UpdateCommitEnabled;
@@ -1811,11 +1824,11 @@ Var
   HasStaged, CanCommit: Boolean;
 Begin
   HasStaged := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
-  CanCommit := HasStaged And Assigned(FMessageMemo) And (Trim(FMessageMemo.Text) <> '');
-  If Assigned(FBtnSuggestMessage) Then
-    FBtnSuggestMessage.Enabled := HasStaged;
-  If Assigned(FBtnCommit) Then
-    FBtnCommit.Enabled := CanCommit;
+  CanCommit := HasStaged And Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
+  If Assigned(SuggestMessageAction) Then
+    SuggestMessageAction.Enabled := HasStaged;
+  If Assigned(CommitAction) Then
+    CommitAction.Enabled := CanCommit;
 End;
 
 Function TManageRepositoryForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
@@ -1835,11 +1848,11 @@ End;
 Function TManageRepositoryForm.CollectActiveSelectedPaths: TStringList;
 Begin
   { Selections are mutually exclusive between the two lists. }
-  Result := CollectSelectedPaths(FFilesList, FFilesPaths);
+  Result := CollectSelectedPaths(FilesList, FFilesPaths);
   If Result.Count = 0 Then
     Begin
       Result.Free;
-      Result := CollectSelectedPaths(FStagedList, FStagedPaths);
+      Result := CollectSelectedPaths(StagedList, FStagedPaths);
     End;
 End;
 
@@ -1982,12 +1995,12 @@ Var
   I: Integer;
   DiffText, Path, Title, Content: String;
 Begin
-  If Not Assigned(FFilesDiffView) Then
+  If Not Assigned(FilesDiffView) Then
     Exit;
-  FFilesDiffView.Clear;
-  FFilesDiffView.SetViewMode(dvmEditorOnly);
-  FFilesDiffView.SetStagingContext(FRepoPath, StagedSide);
-  FFilesDiffView.SetViewMode(dvmEditorOnly);
+  FilesDiffView.Clear;
+  FilesDiffView.SetViewMode(dvmEditorOnly);
+  FilesDiffView.SetStagingContext(FRepoPath, StagedSide);
+  FilesDiffView.SetViewMode(dvmEditorOnly);
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
   For I := 0 To List.Count - 1 Do
@@ -2000,7 +2013,7 @@ Begin
           Title := 'Working tree: ' + Path;
         GitClient.RepoPath := FRepoPath;
         { Images/binary: never dump bytes into SynEdit. }
-        If FFilesDiffView.LoadBinaryOrImagePreview(Title, Path, '', StagedSide) Then
+        If FilesDiffView.LoadBinaryOrImagePreview(Title, Path, '', StagedSide) Then
           Exit;
         If GitClient.DiffPath(Path, StagedSide, DiffText) Then
           Begin
@@ -2008,17 +2021,17 @@ Begin
               Begin
                 { Clean tracked file (or no staged delta): show plain content, not a green "new file" diff. }
                 If (Not StagedSide) And GitClient.ReadWorkingTreeFile(Path, Content) Then
-                  FFilesDiffView.LoadPlainText(Title + ' (clean)', Content, Path)
+                  FilesDiffView.LoadPlainText(Title + ' (clean)', Content, Path)
                 Else If StagedSide Then
-                  FFilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
+                  FilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
                 Else
-                  FFilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
+                  FilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
               End
             Else
-              FFilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
+              FilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
           End
         Else
-          FFilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
+          FilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
         Exit;
       End;
 End;
@@ -2026,28 +2039,28 @@ End;
 Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
   { Keep multi-select on this list; only clear the other list's selection. }
-  If Assigned(FStagedList) And ListHasSelection(FStagedList) Then
-    FStagedList.ClearSelection;
-  ShowFilesDiff(FFilesList, FFilesPaths, False);
+  If Assigned(StagedList) And ListHasSelection(StagedList) Then
+    StagedList.ClearSelection;
+  ShowFilesDiff(FilesList, FFilesPaths, False);
   UpdateStageButtonsEnabled;
 End;
 
 Procedure TManageRepositoryForm.FilesListDblClick(Sender: TObject);
 Begin
-  BtnStageClick(Sender);
+  StageActionExecute(Sender);
 End;
 
 Procedure TManageRepositoryForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(FFilesList) And ListHasSelection(FFilesList) Then
-    FFilesList.ClearSelection;
-  ShowFilesDiff(FStagedList, FStagedPaths, True);
+  If Assigned(FilesList) And ListHasSelection(FilesList) Then
+    FilesList.ClearSelection;
+  ShowFilesDiff(StagedList, FStagedPaths, True);
   UpdateStageButtonsEnabled;
 End;
 
 Procedure TManageRepositoryForm.StagedListDblClick(Sender: TObject);
 Begin
-  BtnStageClick(Sender);
+  StageActionExecute(Sender);
 End;
 
 Procedure TManageRepositoryForm.FileFilterChange(Sender: TObject);
@@ -2055,7 +2068,7 @@ Begin
   RefreshFilesList;
 End;
 
-Procedure TManageRepositoryForm.BtnIgnoreFilesClick(Sender: TObject);
+Procedure TManageRepositoryForm.IgnoredFilesActionExecute(Sender: TObject);
 Begin
   If FRepoPath = '' Then
     Begin
@@ -2066,7 +2079,7 @@ Begin
     RefreshFilesList;
 End;
 
-Procedure TManageRepositoryForm.BtnRevertClick(Sender: TObject);
+Procedure TManageRepositoryForm.RevertActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
 Begin
@@ -2093,7 +2106,7 @@ Begin
   End;
 End;
 
-Procedure TManageRepositoryForm.BtnDeleteClick(Sender: TObject);
+Procedure TManageRepositoryForm.DeleteActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
   I: Integer;
@@ -2142,7 +2155,7 @@ Begin
   End;
 End;
 
-Procedure TManageRepositoryForm.BtnIgnoreClick(Sender: TObject);
+Procedure TManageRepositoryForm.IgnoreActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
 Begin
@@ -2169,7 +2182,7 @@ Begin
   End;
 End;
 
-Procedure TManageRepositoryForm.BtnStageClick(Sender: TObject);
+Procedure TManageRepositoryForm.StageActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
   FilesEmpty, UnstageMode: Boolean;
@@ -2178,11 +2191,11 @@ Begin
     Exit;
   FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
   UnstageMode := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
-    (FilesEmpty Or ListHasSelection(FStagedList));
+    (FilesEmpty Or ListHasSelection(StagedList));
 
   If UnstageMode Then
     Begin
-      Paths := CollectSelectedPaths(FStagedList, FStagedPaths);
+      Paths := CollectSelectedPaths(StagedList, FStagedPaths);
       Try
         If Paths.Count = 0 Then
           Begin
@@ -2199,7 +2212,7 @@ Begin
     End
   Else
     Begin
-      Paths := CollectSelectedPaths(FFilesList, FFilesPaths);
+      Paths := CollectSelectedPaths(FilesList, FFilesPaths);
       Try
         If Paths.Count = 0 Then
           Begin
@@ -2216,7 +2229,7 @@ Begin
     End;
 End;
 
-Procedure TManageRepositoryForm.BtnStageAllClick(Sender: TObject);
+Procedure TManageRepositoryForm.StageAllActionExecute(Sender: TObject);
 Var
   FilesEmpty, StagedEmpty: Boolean;
 Begin
@@ -2240,22 +2253,22 @@ Begin
   RefreshFilesList;
 End;
 
-Procedure TManageRepositoryForm.BtnStageSelectionClick(Sender: TObject);
+Procedure TManageRepositoryForm.StageSelectionActionExecute(Sender: TObject);
 Begin
-  If Not Assigned(FFilesDiffView) Then
+  If Not Assigned(FilesDiffView) Then
     Exit;
-  If Not FFilesDiffView.HasActiveSelection Then
+  If Not FilesDiffView.HasActiveSelection Then
     Begin
       MessageDlg('Select lines in the file preview first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If FFilesDiffView.StagedSide Then
-    FFilesDiffView.UnstageSelection
+  If FilesDiffView.StagedSide Then
+    FilesDiffView.UnstageSelection
   Else
-    FFilesDiffView.StageSelection;
+    FilesDiffView.StageSelection;
 End;
 
-Procedure TManageRepositoryForm.BtnSuggestMessageClick(Sender: TObject);
+Procedure TManageRepositoryForm.SuggestMessageActionExecute(Sender: TObject);
 Var
   DiffText, StatusText, MessageText, ErrorText: String;
 Begin
@@ -2301,9 +2314,9 @@ Begin
   Finally
     Screen.Cursor := crDefault;
   End;
-  If Assigned(FMessageMemo) Then
+  If Assigned(MessageMemo) Then
     Begin
-      FMessageMemo.Text := MessageText;
+      MessageMemo.Text := MessageText;
       UpdateCommitEnabled;
     End;
   WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
@@ -2325,7 +2338,7 @@ Begin
   UpdateStageButtonsEnabled;
 End;
 
-Procedure TManageRepositoryForm.BtnCommitClick(Sender: TObject);
+Procedure TManageRepositoryForm.CommitActionExecute(Sender: TObject);
 Var
   NewSha, Msg: String;
   Summary: TGitTransferSummary;
@@ -2333,8 +2346,8 @@ Begin
   If Not Assigned(GitClient) Or (FRepoPath = '') Then
     Exit;
   Msg := '';
-  If Assigned(FMessageMemo) Then
-    Msg := Trim(FMessageMemo.Text);
+  If Assigned(MessageMemo) Then
+    Msg := Trim(MessageMemo.Text);
   If Msg = '' Then
     Begin
       MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
@@ -2361,11 +2374,11 @@ Begin
   End;
 
   WorkflowLogger.Info('ManageRepository', 'Created commit ' + NewSha);
-  If Assigned(FMessageMemo) Then
-    FMessageMemo.Clear;
+  If Assigned(MessageMemo) Then
+    MessageMemo.Clear;
   MessageDlg('Committed ' + Copy(NewSha, 1, 7) + '.', mtInformation, [mbOK], 0);
 
-  If Assigned(FPushCheck) And FPushCheck.Checked Then
+  If Assigned(PushCheckBox) And PushCheckBox.Checked Then
     Begin
       Screen.Cursor := crHourGlass;
       Try
@@ -2421,7 +2434,7 @@ Begin
   StartRemoteOp(rokPush);
 End;
 
-Procedure TManageRepositoryForm.PopupCopySha(Sender: TObject);
+Procedure TManageRepositoryForm.CopyShaActionExecute(Sender: TObject);
 Var
   Sha: String;
 Begin
@@ -2430,13 +2443,13 @@ Begin
     Clipboard.AsText := Sha;
 End;
 
-Procedure TManageRepositoryForm.PopupShowCommit(Sender: TObject);
+Procedure TManageRepositoryForm.ShowCommitActionExecute(Sender: TObject);
 Begin
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex);
 End;
 
-Procedure TManageRepositoryForm.PopupCheckout(Sender: TObject);
+Procedure TManageRepositoryForm.CheckoutActionExecute(Sender: TObject);
 Var
   Sha: String;
 Begin
@@ -2453,7 +2466,7 @@ Begin
     MessageDlg('Checkout failed. See the log for details.', mtError, [mbOK], 0);
 End;
 
-Procedure TManageRepositoryForm.PopupCreateBranch(Sender: TObject);
+Procedure TManageRepositoryForm.CreateBranchActionExecute(Sender: TObject);
 Var
   Sha, BranchName: String;
 Begin
@@ -2523,7 +2536,7 @@ Var
 Begin
   If FRepoPath = '' Then
     Begin
-      FStatusFooter.SetAll('No repository', '', 'Ready');
+      StatusFooter.SetAll('No repository', '', 'Ready');
       Exit;
     End;
 
@@ -2555,7 +2568,7 @@ Begin
   Else
     RightText := 'Dirty';
 
-  FStatusFooter.SetAll(LeftText, CentreText, RightText);
+  StatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
 Procedure TManageRepositoryForm.RefreshRepositoryInfo;
@@ -2609,26 +2622,26 @@ Begin
     FDetailTimer.Enabled := False;
   StopDetailThread;
   StopIndexThread;
-  If Assigned(FDiffView) Then
-    FDiffView.Clear;
+  If Assigned(DiffView) Then
+    DiffView.Clear;
   FRepoPath := ARepoPath;
   FSelectedIndex := -1;
   If Assigned(FModel) Then
     FModel.Clear;
-  If Assigned(FScrollBar) Then
-    FScrollBar.Position := 0;
+  If Assigned(GraphScrollBar) Then
+    GraphScrollBar.Position := 0;
   If Assigned(GitClient) Then
     GitClient.RepoPath := ARepoPath;
   RefreshRepositoryInfo;
   UpdateScrollRange;
   UpdateStatus;
-  If Assigned(FPaintBox) Then
-    FPaintBox.Invalidate;
+  If Assigned(GraphPaintBox) Then
+    GraphPaintBox.Invalidate;
   If FRepoPath <> '' Then
     StartIndexLoad
-  Else If Assigned(FFilesList) Then
-    FFilesList.Items.Clear;
-  If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+  Else If Assigned(FilesList) Then
+    FilesList.Items.Clear;
+  If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
     RefreshFilesList;
   ApplyConfig;
 End;
@@ -2650,7 +2663,7 @@ Begin
     Begin
       RefreshRepositoryInfo;
       UpdateStatus;
-      If Assigned(FPages) And (FPages.ActivePage = FTabFiles) Then
+      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
         RefreshFilesList;
     End;
 End;
@@ -2668,7 +2681,7 @@ Begin
   If FRemoteOpBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
-    FStatusFooter.SetRightText('Remote ' + RemoteName + ' updated');
+    StatusFooter.SetRightText('Remote ' + RemoteName + ' updated');
 End;
 
 End.

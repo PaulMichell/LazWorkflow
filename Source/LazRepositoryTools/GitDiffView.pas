@@ -34,27 +34,27 @@ Type
   TGitDiffView = Class(TFrame)
   Published
     { Streamed frame children must be published (ObjFPC default section is public). }
-    FCaption: TLabel;
-    FToolBar: TPanel;
-    FBtnStageSel: TButton;
-    FBtnUnstageSel: TButton;
-    FTreePanel: TPanel;
-    FTree: TTreeView;
-    FFileList: TListBox;
-    FSplitter: TSplitter;
-    FEditPanel: TPanel;
-    FEdit: TSynEdit;
-    FPreviewPanel: TPanel;
-    FBinaryLabel: TLabel;
-    FImagePaintBox: TPaintBox;
-    FHigh: TSynDiffSyn;
-    FPopup: TPopupMenu;
-    FMiStage: TMenuItem;
-    FMiStageHunk: TMenuItem;
-    FMiUnstage: TMenuItem;
-    FMiUnstageHunk: TMenuItem;
-    FMiSep: TMenuItem;
-    FMiSelectHunk: TMenuItem;
+    TitleLabel: TLabel;
+    ToolBar: TPanel;
+    StageSelectionButton: TButton;
+    UnstageSelectionButton: TButton;
+    TreePanel: TPanel;
+    Tree: TTreeView;
+    FileList: TListBox;
+    Splitter: TSplitter;
+    EditPanel: TPanel;
+    DiffEditor: TSynEdit;
+    PreviewPanel: TPanel;
+    BinaryLabel: TLabel;
+    ImagePaintBox: TPaintBox;
+    DiffHighlighter: TSynDiffSyn;
+    Popup: TPopupMenu;
+    StageMenuItem: TMenuItem;
+    StageHunkMenuItem: TMenuItem;
+    UnstageMenuItem: TMenuItem;
+    UnstageHunkMenuItem: TMenuItem;
+    MenuSeparator: TMenuItem;
+    SelectHunkMenuItem: TMenuItem;
     Procedure TreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileListSelectionChange(Sender: TObject; User: Boolean);
     Procedure BtnStageSelClick(Sender: TObject);
@@ -83,7 +83,7 @@ Type
     FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
-    FEditorOptsHooked: Boolean;
+    DiffEditororOptsHooked: Boolean;
     FSelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
@@ -193,9 +193,6 @@ Type
     Function HasActiveSelection: Boolean;
     { Reassert right overview gutter size/visibility (e.g. after notebook page show). }
     Procedure RefreshOverviewGutter;
-    Property Tree: TTreeView Read FTree;
-    Property FileList: TListBox Read FFileList;
-    Property Editor: TSynEdit Read FEdit;
     Property Mode: TGitDiffViewMode Read FMode;
     Property StagedSide: Boolean Read FStagedSide;
     Property OnStatusChanged: TNotifyEvent Read FOnStatusChanged Write FOnStatusChanged;
@@ -587,7 +584,7 @@ Begin
   FDiffOverviewProvider := Nil;
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
-  FEditorOptsHooked := False;
+  DiffEditororOptsHooked := False;
   FSelectedLines := TFPList.Create;
   FLineDragSnapshot := TFPList.Create;
   FLineDragActive := False;
@@ -610,14 +607,14 @@ Begin
   CancelPendingScroll;
   Application.RemoveAsyncCalls(Self);
   UnhookEditorOptionsChanged;
-  If Assigned(FEdit) Then
+  If Assigned(DiffEditor) Then
     Begin
       Try
-        FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
+        DiffEditor.UnRegisterPaintEventHandler(@EditPaintEvent);
       Except
       End;
       Try
-        FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
+        DiffEditor.UnRegisterStatusChangedHandler(@EditStatusChange);
       Except
       End;
     End;
@@ -658,7 +655,7 @@ End;
 
 Procedure TGitDiffView.EnsureAppearanceReady;
 Begin
-  If FAppearanceReady Or (Not Assigned(FEdit)) Then
+  If FAppearanceReady Or (Not Assigned(DiffEditor)) Then
     Exit;
   If csLoading in ComponentState Then
     Exit;
@@ -674,7 +671,7 @@ End;
 
 Function TGitDiffView.IsAlive: Boolean;
 Begin
-  Result := Not (csDestroying in ComponentState) And Assigned(FEdit) And Assigned(FFileList);
+  Result := Not (csDestroying in ComponentState) And Assigned(DiffEditor) And Assigned(FileList);
 End;
 
 Procedure TGitDiffView.CancelPendingScroll;
@@ -712,21 +709,21 @@ Var
   PageProvider: TSynGutterLOvProviderCurrentPage;
   DiffProvider: TGitDiffOverviewProvider;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   Try
     FDiffOverviewProvider := Nil;
     FOverviewGutter := Nil;
-    For I := FEdit.RightGutter.Parts.Count - 1 DownTo 0 Do
-      FEdit.RightGutter.Parts[I].Free;
+    For I := DiffEditor.RightGutter.Parts.Count - 1 DownTo 0 Do
+      DiffEditor.RightGutter.Parts[I].Free;
 
     { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
       that first layout while their notebook page is hidden (Files tab). }
-    FEdit.RightGutter.AutoSize := False;
-    FEdit.RightGutter.Width := OverviewGutterWidth;
-    FEdit.RightGutter.Visible := True;
+    DiffEditor.RightGutter.AutoSize := False;
+    DiffEditor.RightGutter.Width := OverviewGutterWidth;
+    DiffEditor.RightGutter.Visible := True;
 
-    FOverviewGutter := TSynGutterLineOverview.Create(FEdit.RightGutter.Parts);
+    FOverviewGutter := TSynGutterLineOverview.Create(DiffEditor.RightGutter.Parts);
     FOverviewGutter.AutoSize := False;
     FOverviewGutter.Width := OverviewGutterWidth;
     FOverviewGutter.Visible := True;
@@ -759,13 +756,13 @@ Begin
   { Overview paints on a child TWinControl (not Gutter.Paint). That child only
     gets BoundsRect when the part is Visible and SynEdit has a handle — so we
     reassert size/visibility after every load and after notebook tab shows. }
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
 
   StillInstalled := False;
   If Assigned(FOverviewGutter) Then
-    For I := 0 To FEdit.RightGutter.Parts.Count - 1 Do
-      If FEdit.RightGutter.Parts[I] = FOverviewGutter Then
+    For I := 0 To DiffEditor.RightGutter.Parts.Count - 1 Do
+      If DiffEditor.RightGutter.Parts[I] = FOverviewGutter Then
         Begin
           StillInstalled := True;
           Break;
@@ -774,9 +771,9 @@ Begin
   If Not StillInstalled Then
     SetupDiffOverviewGutter;
 
-  FEdit.RightGutter.AutoSize := False;
-  FEdit.RightGutter.Width := OverviewGutterWidth;
-  FEdit.RightGutter.Visible := True;
+  DiffEditor.RightGutter.AutoSize := False;
+  DiffEditor.RightGutter.Width := OverviewGutterWidth;
+  DiffEditor.RightGutter.Visible := True;
   If Assigned(FOverviewGutter) Then
     Begin
       FOverviewGutter.AutoSize := False;
@@ -786,16 +783,16 @@ Begin
       FOverviewGutter.Visible := True;
     End;
 
-  If FEdit.HandleAllocated Then
+  If DiffEditor.HandleAllocated Then
     Begin
-      FEdit.RightGutter.RecalcBounds;
-      FEdit.Invalidate;
+      DiffEditor.RightGutter.RecalcBounds;
+      DiffEditor.Invalidate;
     End;
 End;
 
 Procedure TGitDiffView.ScheduleOverviewRefresh;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   { Do not RemoveAsyncCalls — that would cancel scroll-to-change. }
   Application.QueueAsyncCall(@DoRefreshOverviewAsync, 0);
@@ -806,8 +803,8 @@ Begin
   If Not IsAlive Then
     Exit;
   EnsureDiffOverviewGutter;
-  If Assigned(FEdit) And FEdit.HandleAllocated Then
-    FEdit.Invalidate;
+  If Assigned(DiffEditor) And DiffEditor.HandleAllocated Then
+    DiffEditor.Invalidate;
 End;
 
 Procedure TGitDiffView.RefreshOverviewGutter;
@@ -839,20 +836,20 @@ End;
 
 Procedure TGitDiffView.ApplyCompactEditorFont;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   { Prefer Font.Size (points) over Font.Height (device px). Never assign Height := 0
     (TFont.SetHeight(0) forces Size 0 and can break SynEdit line metrics). }
   Try
-    FEdit.Font.Size := 9;
-    FEdit.Font.Pitch := fpFixed;
-    FEdit.Font.Quality := fqCleartypeNatural;
+    DiffEditor.Font.Size := 9;
+    DiffEditor.Font.Pitch := fpFixed;
+    DiffEditor.Font.Quality := fqCleartypeNatural;
     {$IFDEF Windows}
-    FEdit.Font.Name := 'Consolas';
+    DiffEditor.Font.Name := 'Consolas';
     {$ELSE}
-    FEdit.Font.Name := 'Courier New';
+    DiffEditor.Font.Name := 'Courier New';
     {$ENDIF}
-    FEdit.ExtraLineSpacing := 0;
+    DiffEditor.ExtraLineSpacing := 0;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('GitDiffView', 'ApplyCompactEditorFont: ' + E.Message);
@@ -873,7 +870,7 @@ Var
 Begin
   { Match Lazarus Source Editor font/spacing without calling GetSynEditorSettings
     on our control (that rewires gutters, mouse actions, and beautifier). }
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   Applied := False;
   FontName := '';
@@ -941,22 +938,22 @@ Begin
     End;
 
   Try
-    FEdit.Font.BeginUpdate;
+    DiffEditor.Font.BeginUpdate;
     Try
       { Size before Name — same order as TEditorOptions.ApplyFontSettingsTo. }
-      FEdit.Font.Size := FontSize;
-      FEdit.Font.Name := FontName;
-      FEdit.Font.Quality := FontQuality;
-      FEdit.Font.Color := FontColor;
-      FEdit.Font.Style := [];
+      DiffEditor.Font.Size := FontSize;
+      DiffEditor.Font.Name := FontName;
+      DiffEditor.Font.Quality := FontQuality;
+      DiffEditor.Font.Color := FontColor;
+      DiffEditor.Font.Style := [];
     Finally
-      FEdit.Font.EndUpdate;
+      DiffEditor.Font.EndUpdate;
     End;
-    FEdit.Color := BgColor;
-    FEdit.ExtraLineSpacing := ExtraLine;
-    FEdit.ExtraCharSpacing := ExtraChar;
+    DiffEditor.Color := BgColor;
+    DiffEditor.ExtraLineSpacing := ExtraLine;
+    DiffEditor.ExtraCharSpacing := ExtraChar;
     If TabW > 0 Then
-      FEdit.TabWidth := TabW;
+      DiffEditor.TabWidth := TabW;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('GitDiffView', 'ApplyIDEEditorFont: ' + E.Message);
@@ -965,13 +962,13 @@ End;
 
 Procedure TGitDiffView.HookEditorOptionsChanged;
 Begin
-  If FEditorOptsHooked Then
+  If DiffEditororOptsHooked Then
     Exit;
   If Not Assigned(SourceEditorManagerIntf) Then
     Exit;
   Try
     SourceEditorManagerIntf.RegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
-    FEditorOptsHooked := True;
+    DiffEditororOptsHooked := True;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('GitDiffView', 'HookEditorOptionsChanged: ' + E.Message);
@@ -980,9 +977,9 @@ End;
 
 Procedure TGitDiffView.UnhookEditorOptionsChanged;
 Begin
-  If Not FEditorOptsHooked Then
+  If Not DiffEditororOptsHooked Then
     Exit;
-  FEditorOptsHooked := False;
+  DiffEditororOptsHooked := False;
   If Not Assigned(SourceEditorManagerIntf) Then
     Exit;
   Try
@@ -998,8 +995,8 @@ Begin
   Try
     ApplyIDEEditorFont;
     EnsureDiffOverviewGutter;
-    If Assigned(FEdit) And FEdit.HandleAllocated Then
-      FEdit.Invalidate;
+    If Assigned(DiffEditor) And DiffEditor.HandleAllocated Then
+      DiffEditor.Invalidate;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('GitDiffView', 'EditorOptionsChanged: ' + E.Message);
@@ -1008,18 +1005,18 @@ End;
 
 Procedure TGitDiffView.ApplyIDEEditorAppearance;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
 
   { Font/spacing from IDE (or live Source Editor). Do not call
-    GetSynEditorSettings on FEdit itself — it rewires gutters/mouse/beautifier
+    GetSynEditorSettings on DiffEditor itself — it rewires gutters/mouse/beautifier
     and has crashed IDE desktop restore when applied too early. }
   ApplyIDEEditorFont;
   If Not FAppearanceReady Then
     Begin
-      If Assigned(FHigh) Then
+      If Assigned(DiffHighlighter) Then
         Try
-          ConfigureDiffColors(FHigh);
+          ConfigureDiffColors(DiffHighlighter);
         Except
         End;
       If Assigned(FMixedHigh) Then
@@ -1033,18 +1030,18 @@ Begin
     End;
 
   Try
-    FEdit.ReadOnly := True;
-    FEdit.WantTabs := True;
-    FEdit.Options := FEdit.Options - [eoShowSpecialChars];
-    FEdit.OnDblClick := @EditDblClick;
-    FEdit.OnMouseDown := @EditMouseDown;
-    FEdit.OnMouseMove := @EditMouseMove;
-    FEdit.OnMouseUp := @EditMouseUp;
-    FEdit.OnSpecialLineColors := @EditSpecialLineColors;
-    FEdit.UnRegisterStatusChangedHandler(@EditStatusChange);
-    FEdit.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
-    FEdit.UnRegisterPaintEventHandler(@EditPaintEvent);
-    FEdit.RegisterPaintEventHandler(@EditPaintEvent, [peAfterPaint]);
+    DiffEditor.ReadOnly := True;
+    DiffEditor.WantTabs := True;
+    DiffEditor.Options := DiffEditor.Options - [eoShowSpecialChars];
+    DiffEditor.OnDblClick := @EditDblClick;
+    DiffEditor.OnMouseDown := @EditMouseDown;
+    DiffEditor.OnMouseMove := @EditMouseMove;
+    DiffEditor.OnMouseUp := @EditMouseUp;
+    DiffEditor.OnSpecialLineColors := @EditSpecialLineColors;
+    DiffEditor.UnRegisterStatusChangedHandler(@EditStatusChange);
+    DiffEditor.RegisterStatusChangedHandler(@EditStatusChange, [scSelection, scCaretX, scCaretY]);
+    DiffEditor.UnRegisterPaintEventHandler(@EditPaintEvent);
+    DiffEditor.RegisterPaintEventHandler(@EditPaintEvent, [peAfterPaint]);
     ApplyEditorSelectionPolicy;
     EnsureDiffOverviewGutter;
   Except
@@ -1071,14 +1068,14 @@ Var
 Begin
   If Assigned(FHunkStartLines) Then
     FHunkStartLines.Clear;
-  If (Not Assigned(FEdit)) Or (Not Assigned(FHunkStartLines)) Or (FEdit.Lines.Count = 0) Then
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(FHunkStartLines)) Or (DiffEditor.Lines.Count = 0) Then
     Exit;
 
   ContextRun := HunkContextGap; { first change always starts a hunk }
   NeedNewHunk := True;
-  For LineNo := 1 To FEdit.Lines.Count Do
+  For LineNo := 1 To DiffEditor.Lines.Count Do
     Begin
-      LineText := FEdit.Lines[LineNo - 1];
+      LineText := DiffEditor.Lines[LineNo - 1];
       If IsDiffChangeLine(LineText) Then
         Begin
           If NeedNewHunk Or (ContextRun >= HunkContextGap) Then
@@ -1110,11 +1107,11 @@ Var
   Line: String;
 Begin
   ClearDisplayMap;
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   If Not HideFileHeaders Then
     Begin
-      FEdit.Lines.Text := DiffText;
+      DiffEditor.Lines.Text := DiffText;
       RebuildVisualHunkStarts;
       Exit;
     End;
@@ -1136,7 +1133,7 @@ Begin
       End;
     SetLength(FDisplayToFull, Display.Count);
     FUseDisplayMap := True;
-    FEdit.Lines.Assign(Display);
+    DiffEditor.Lines.Assign(Display);
     RebuildVisualHunkStarts;
   Finally
     Display.Free;
@@ -1176,13 +1173,13 @@ Var
 Begin
   Result := False;
   Y := 0;
-  If (Not Assigned(FEdit)) Or (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+  If (Not Assigned(DiffEditor)) Or (LineNo < 1) Or (LineNo > DiffEditor.Lines.Count) Then
     Exit;
-  Scr := FEdit.TextXYToScreenXY(Point(1, LineNo));
+  Scr := DiffEditor.TextXYToScreenXY(Point(1, LineNo));
   If Scr.Y < 1 Then
     Exit;
-  Y := FEdit.ScreenXYToPixels(Scr).Y;
-  If (Y + FEdit.LineHeight < 0) Or (Y > FEdit.ClientHeight) Then
+  Y := DiffEditor.ScreenXYToPixels(Scr).Y;
+  If (Y + DiffEditor.LineHeight < 0) Or (Y > DiffEditor.ClientHeight) Then
     Exit;
   Result := True;
 End;
@@ -1200,8 +1197,8 @@ Begin
   If Not LinePixelTop(LineNo, Y) Then
     Exit;
   GutterW := 0;
-  If Assigned(FEdit) And FEdit.Gutter.Visible Then
-    GutterW := FEdit.Gutter.Width;
+  If Assigned(DiffEditor) And DiffEditor.Gutter.Visible Then
+    GutterW := DiffEditor.Gutter.Width;
   If GutterW < MarkerW + ScaleDesign(4) Then
     Exit;
   Result.Left := LeftPad;
@@ -1225,16 +1222,16 @@ Var
   MarkerW, RectH, TriH: Integer;
   Pts: Array[0..4] Of TPoint;
 Begin
-  If (FMode <> dvmEditorOnly) Or (Not Assigned(FEdit)) Or (Not Assigned(FHunkStartLines)) Then
+  If (FMode <> dvmEditorOnly) Or (Not Assigned(DiffEditor)) Or (Not Assigned(FHunkStartLines)) Then
     Exit;
 
   MarkerW := ScaleDesign(14);
   RectH := ScaleDesign(6);
   TriH := ScaleDesign(10);
   X1 := 0;
-  X2 := FEdit.ClientWidth;
-  If FEdit.RightGutter.Visible Then
-    X2 := X2 - FEdit.RightGutter.Width;
+  X2 := DiffEditor.ClientWidth;
+  If DiffEditor.RightGutter.Visible Then
+    X2 := X2 - DiffEditor.RightGutter.Width;
 
   PaintCanvas.Pen.Mode := pmCopy;
   PaintCanvas.Pen.Width := Max(1, ScaleDesign(1));
@@ -1274,33 +1271,33 @@ Begin
     Exit;
   If FMode <> dvmEditorOnly Then
     Exit;
-  If Assigned(FEdit) Then
-    PaintHunkDecorations(FEdit.Canvas);
+  If Assigned(DiffEditor) Then
+    PaintHunkDecorations(DiffEditor.Canvas);
 End;
 
 Procedure TGitDiffView.ApplyEditorSelectionPolicy;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   Case FMode Of
     dvmBrowse:
       Begin
         { History: scroll-only preview — no text selection. }
-        FEdit.Options := FEdit.Options + [eoNoSelection];
-        FEdit.BlockBegin := Point(1, 1);
-        FEdit.BlockEnd := Point(1, 1);
+        DiffEditor.Options := DiffEditor.Options + [eoNoSelection];
+        DiffEditor.BlockBegin := Point(1, 1);
+        DiffEditor.BlockEnd := Point(1, 1);
         ClearLineSelection(False);
       End;
     dvmEditorOnly:
       Begin
         { Files: no free-range selection; whole change-lines only via click. }
-        FEdit.Options := FEdit.Options + [eoNoSelection];
-        FEdit.BlockBegin := Point(1, 1);
-        FEdit.BlockEnd := Point(1, 1);
+        DiffEditor.Options := DiffEditor.Options + [eoNoSelection];
+        DiffEditor.BlockBegin := Point(1, 1);
+        DiffEditor.BlockEnd := Point(1, 1);
       End;
   Else
     { Staging tree mode: normal selection for hunk/line stage. }
-    FEdit.Options := FEdit.Options - [eoNoSelection];
+    DiffEditor.Options := DiffEditor.Options - [eoNoSelection];
   End;
 End;
 
@@ -1309,8 +1306,8 @@ Begin
   If Assigned(FSelectedLines) And (FSelectedLines.Count > 0) Then
     Begin
       FSelectedLines.Clear;
-      If Assigned(FEdit) Then
-        FEdit.Invalidate;
+      If Assigned(DiffEditor) Then
+        DiffEditor.Invalidate;
       If NotifyChange Then
         Begin
           UpdateActionEnabled;
@@ -1382,15 +1379,15 @@ Begin
     If PtrInt(FSelectedLines[I]) = LineNo Then
       Begin
         FSelectedLines.Delete(I);
-        If Assigned(FEdit) Then
-          FEdit.Invalidate;
+        If Assigned(DiffEditor) Then
+          DiffEditor.Invalidate;
         UpdateActionEnabled;
         DoSelectionChanged;
         Exit;
       End;
   FSelectedLines.Add(Pointer(PtrInt(LineNo)));
-  If Assigned(FEdit) Then
-    FEdit.Invalidate;
+  If Assigned(DiffEditor) Then
+    DiffEditor.Invalidate;
   UpdateActionEnabled;
   DoSelectionChanged;
 End;
@@ -1401,7 +1398,7 @@ Var
   LineNo, Lo, Hi, I: Integer;
   LineText: String;
 Begin
-  If (Not Assigned(FEdit)) Or (Not Assigned(FSelectedLines)) Then
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(FSelectedLines)) Then
     Exit;
   Lo := StartLine;
   Hi := EndLine;
@@ -1412,8 +1409,8 @@ Begin
     End;
   If Lo < 1 Then
     Lo := 1;
-  If Hi > FEdit.Lines.Count Then
-    Hi := FEdit.Lines.Count;
+  If Hi > DiffEditor.Lines.Count Then
+    Hi := DiffEditor.Lines.Count;
 
   FSelectedLines.Clear;
   If MergeWithSnapshot And Assigned(FLineDragSnapshot) Then
@@ -1422,11 +1419,11 @@ Begin
 
   For LineNo := Lo To Hi Do
     Begin
-      LineText := FEdit.Lines[LineNo - 1];
+      LineText := DiffEditor.Lines[LineNo - 1];
       If IsDiffChangeLine(LineText) Then
         AddLineToSelection(LineNo);
     End;
-  FEdit.Invalidate;
+  DiffEditor.Invalidate;
   UpdateActionEnabled;
   DoSelectionChanged;
 End;
@@ -1436,11 +1433,11 @@ Var
   Pt: TPoint;
 Begin
   Result := 0;
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
-  Pt := FEdit.PixelsToRowColumn(Point(X, Y));
+  Pt := DiffEditor.PixelsToRowColumn(Point(X, Y));
   Result := Pt.Y;
-  If (Result < 1) Or (Result > FEdit.Lines.Count) Then
+  If (Result < 1) Or (Result > DiffEditor.Lines.Count) Then
     Result := 0;
 End;
 
@@ -1455,8 +1452,8 @@ Procedure TGitDiffView.FreeOwnedLanguageHighlighter;
 Begin
   If Assigned(FMixedHigh) Then
     TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
-  If Assigned(FEdit) And Assigned(FOwnedLangHigh) And (FEdit.Highlighter = FOwnedLangHigh) Then
-    FEdit.Highlighter := Nil;
+  If Assigned(DiffEditor) And Assigned(FOwnedLangHigh) And (DiffEditor.Highlighter = FOwnedLangHigh) Then
+    DiffEditor.Highlighter := Nil;
   FreeAndNil(FOwnedLangHigh);
 End;
 
@@ -1464,11 +1461,11 @@ Procedure TGitDiffView.ApplyDiffHighlighter;
 Var
   DiffHL: TSynDiffSyn;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   ShowEditorPane;
   FreeOwnedLanguageHighlighter;
-  DiffHL := FHigh;
+  DiffHL := DiffHighlighter;
   If Assigned(FMixedHigh) Then
     Begin
       TGitMixedDiffHighlighter(FMixedHigh).SetLanguageBackend(Nil);
@@ -1481,11 +1478,11 @@ Begin
           IDEEditorOptions.GetHighlighterSettings(DiffHL);
         Except
         End;
-      FEdit.Highlighter := DiffHL;
+      DiffEditor.Highlighter := DiffHL;
       ConfigureDiffColors(DiffHL);
     End
   Else
-    FEdit.Highlighter := Nil;
+    DiffEditor.Highlighter := Nil;
 End;
 
 Function TGitDiffView.CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
@@ -1539,7 +1536,7 @@ Procedure TGitDiffView.ApplyLanguageHighlighter(Const SourceFileName: String);
 Var
   HL: TLazEditCustomHighlighter;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   ShowEditorPane;
   FreeOwnedLanguageHighlighter;
@@ -1547,10 +1544,10 @@ Begin
   If Assigned(HL) Then
     Begin
       FOwnedLangHigh := HL;
-      FEdit.Highlighter := HL;
+      DiffEditor.Highlighter := HL;
     End
   Else
-    FEdit.Highlighter := Nil;
+    DiffEditor.Highlighter := Nil;
 End;
 
 Procedure TGitDiffView.ApplyMixedDiffHighlighter(Const SourceFileName: String);
@@ -1558,7 +1555,7 @@ Var
   Lang: TLazEditCustomHighlighter;
   Mixed: TGitMixedDiffHighlighter;
 Begin
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
   ShowEditorPane;
   FreeOwnedLanguageHighlighter;
@@ -1584,7 +1581,7 @@ Begin
       Mixed.SetLanguageBackend(Lang);
     End;
   Try
-    FEdit.Highlighter := Mixed;
+    DiffEditor.Highlighter := Mixed;
   Except
     On E: Exception Do
       Begin
@@ -1600,19 +1597,19 @@ Procedure TGitDiffView.ShowEditorPane;
 Begin
   If Assigned(FPreviewPicture) Then
     FPreviewPicture.Clear;
-  If Assigned(FBinaryLabel) Then
-    FBinaryLabel.Visible := False;
-  If Assigned(FImagePaintBox) Then
-    FImagePaintBox.Visible := False;
-  If Assigned(FPreviewPanel) Then
+  If Assigned(BinaryLabel) Then
+    BinaryLabel.Visible := False;
+  If Assigned(ImagePaintBox) Then
+    ImagePaintBox.Visible := False;
+  If Assigned(PreviewPanel) Then
     Begin
-      FPreviewPanel.Visible := False;
-      FPreviewPanel.SendToBack;
+      PreviewPanel.Visible := False;
+      PreviewPanel.SendToBack;
     End;
-  If Assigned(FEdit) Then
+  If Assigned(DiffEditor) Then
     Begin
-      FEdit.Visible := True;
-      FEdit.BringToFront;
+      DiffEditor.Visible := True;
+      DiffEditor.BringToFront;
     End;
 End;
 
@@ -1621,25 +1618,25 @@ Begin
   CancelPendingScroll;
   FDiffText := '';
   FreeOwnedLanguageHighlighter;
-  If Assigned(FEdit) Then
+  If Assigned(DiffEditor) Then
     Begin
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Clear;
-      FEdit.Visible := False;
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Clear;
+      DiffEditor.Visible := False;
     End;
   If Assigned(FPreviewPicture) Then
     FPreviewPicture.Clear;
   If TitleText <> '' Then
-    FCaption.Caption := TitleText;
-  If Assigned(FImagePaintBox) Then
-    FImagePaintBox.Visible := False;
-  If Assigned(FBinaryLabel) Then
+    TitleLabel.Caption := TitleText;
+  If Assigned(ImagePaintBox) Then
+    ImagePaintBox.Visible := False;
+  If Assigned(BinaryLabel) Then
     Begin
-      FBinaryLabel.Caption := 'Non-text binary file contents.';
-      FBinaryLabel.Visible := True;
+      BinaryLabel.Caption := 'Non-text binary file contents.';
+      BinaryLabel.Visible := True;
     End;
-  If Assigned(FPreviewPanel) Then
-    FPreviewPanel.Visible := True;
+  If Assigned(PreviewPanel) Then
+    PreviewPanel.Visible := True;
   UpdateActionEnabled;
 End;
 
@@ -1663,23 +1660,23 @@ Begin
   CancelPendingScroll;
   FDiffText := '';
   FreeOwnedLanguageHighlighter;
-  If Assigned(FEdit) Then
+  If Assigned(DiffEditor) Then
     Begin
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Clear;
-      FEdit.Visible := False;
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Clear;
+      DiffEditor.Visible := False;
     End;
   If TitleText <> '' Then
-    FCaption.Caption := TitleText;
-  If Assigned(FBinaryLabel) Then
-    FBinaryLabel.Visible := False;
-  If Assigned(FImagePaintBox) Then
+    TitleLabel.Caption := TitleText;
+  If Assigned(BinaryLabel) Then
+    BinaryLabel.Visible := False;
+  If Assigned(ImagePaintBox) Then
     Begin
-      FImagePaintBox.Visible := True;
-      FImagePaintBox.Invalidate;
+      ImagePaintBox.Visible := True;
+      ImagePaintBox.Invalidate;
     End;
-  If Assigned(FPreviewPanel) Then
-    FPreviewPanel.Visible := True;
+  If Assigned(PreviewPanel) Then
+    PreviewPanel.Visible := True;
   Result := True;
   UpdateActionEnabled;
 End;
@@ -1740,17 +1737,17 @@ Var
   Scale, ScaleX, ScaleY: Double;
   DrawW, DrawH: Integer;
 Begin
-  If Not Assigned(FImagePaintBox) Then
+  If Not Assigned(ImagePaintBox) Then
     Exit;
-  With FImagePaintBox.Canvas Do
+  With ImagePaintBox.Canvas Do
     Begin
       Brush.Color := clWindow;
-      FillRect(FImagePaintBox.ClientRect);
+      FillRect(ImagePaintBox.ClientRect);
     End;
   If (Not Assigned(FPreviewPicture)) Or (FPreviewPicture.Width < 1) Or (FPreviewPicture.Height < 1) Then
     Exit;
-  BoxW := FImagePaintBox.ClientWidth;
-  BoxH := FImagePaintBox.ClientHeight;
+  BoxW := ImagePaintBox.ClientWidth;
+  BoxH := ImagePaintBox.ClientHeight;
   ImgW := FPreviewPicture.Width;
   ImgH := FPreviewPicture.Height;
   If (BoxW < 1) Or (BoxH < 1) Then
@@ -1769,7 +1766,7 @@ Begin
   Dest.Top := (BoxH - DrawH) Div 2;
   Dest.Right := Dest.Left + DrawW;
   Dest.Bottom := Dest.Top + DrawH;
-  FImagePaintBox.Canvas.StretchDraw(Dest, FPreviewPicture.Graphic);
+  ImagePaintBox.Canvas.StretchDraw(Dest, FPreviewPicture.Graphic);
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -1778,24 +1775,24 @@ Begin
     Exit;
   Try
     { Files tab hosts Stage Selection on its own button bar below the editor. }
-    If Assigned(FToolBar) Then
-      FToolBar.Visible := FMode = dvmStaging;
-    If Assigned(FTree) Then
-      FTree.Visible := FMode = dvmStaging;
-    If Assigned(FFileList) Then
-      FFileList.Visible := FMode = dvmBrowse;
-    If Assigned(FCaption) Then
-      FCaption.Visible := FMode = dvmStaging;
-    If Assigned(FTreePanel) Then
-      FTreePanel.Visible := FMode <> dvmEditorOnly;
-    If Assigned(FSplitter) Then
-      FSplitter.Visible := FMode <> dvmEditorOnly;
-    If Assigned(FTreePanel) Then
+    If Assigned(ToolBar) Then
+      ToolBar.Visible := FMode = dvmStaging;
+    If Assigned(Tree) Then
+      Tree.Visible := FMode = dvmStaging;
+    If Assigned(FileList) Then
+      FileList.Visible := FMode = dvmBrowse;
+    If Assigned(TitleLabel) Then
+      TitleLabel.Visible := FMode = dvmStaging;
+    If Assigned(TreePanel) Then
+      TreePanel.Visible := FMode <> dvmEditorOnly;
+    If Assigned(Splitter) Then
+      Splitter.Visible := FMode <> dvmEditorOnly;
+    If Assigned(TreePanel) Then
       Begin
         If FMode = dvmBrowse Then
-          FTreePanel.Width := ScaleDesign(240)
+          TreePanel.Width := ScaleDesign(240)
         Else If FMode = dvmStaging Then
-          FTreePanel.Width := ScaleDesign(220);
+          TreePanel.Width := ScaleDesign(220);
       End;
     ApplyEditorSelectionPolicy;
     If FMode <> dvmEditorOnly Then
@@ -1847,32 +1844,32 @@ Begin
   CanUnstage := CanUnstageFromPreview;
   HasSel := HasActiveSelection;
   { Internal toolbar only for classic staging tree mode. }
-  FBtnStageSel.Enabled := CanStage And HasSel;
-  FBtnUnstageSel.Enabled := CanUnstage And HasSel;
-  FBtnStageSel.Visible := FMode = dvmStaging;
-  FBtnUnstageSel.Visible := FMode = dvmStaging;
-  If Assigned(FMiStage) Then
+  StageSelectionButton.Enabled := CanStage And HasSel;
+  UnstageSelectionButton.Enabled := CanUnstage And HasSel;
+  StageSelectionButton.Visible := FMode = dvmStaging;
+  UnstageSelectionButton.Visible := FMode = dvmStaging;
+  If Assigned(StageMenuItem) Then
     Begin
-      FMiStage.Enabled := CanStage And HasSel;
-      FMiStage.Visible := CanStage Or (FMode = dvmEditorOnly);
+      StageMenuItem.Enabled := CanStage And HasSel;
+      StageMenuItem.Visible := CanStage Or (FMode = dvmEditorOnly);
     End;
-  If Assigned(FMiStageHunk) Then
+  If Assigned(StageHunkMenuItem) Then
     Begin
-      FMiStageHunk.Enabled := CanStage;
-      FMiStageHunk.Visible := CanStage Or (FMode = dvmEditorOnly);
+      StageHunkMenuItem.Enabled := CanStage;
+      StageHunkMenuItem.Visible := CanStage Or (FMode = dvmEditorOnly);
     End;
-  If Assigned(FMiUnstage) Then
+  If Assigned(UnstageMenuItem) Then
     Begin
-      FMiUnstage.Enabled := CanUnstage And HasSel;
-      FMiUnstage.Visible := CanUnstage Or (FMode = dvmEditorOnly);
+      UnstageMenuItem.Enabled := CanUnstage And HasSel;
+      UnstageMenuItem.Visible := CanUnstage Or (FMode = dvmEditorOnly);
     End;
-  If Assigned(FMiUnstageHunk) Then
+  If Assigned(UnstageHunkMenuItem) Then
     Begin
-      FMiUnstageHunk.Enabled := CanUnstage;
-      FMiUnstageHunk.Visible := CanUnstage Or (FMode = dvmEditorOnly);
+      UnstageHunkMenuItem.Enabled := CanUnstage;
+      UnstageHunkMenuItem.Visible := CanUnstage Or (FMode = dvmEditorOnly);
     End;
-  If Assigned(FMiSelectHunk) Then
-    FMiSelectHunk.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
+  If Assigned(SelectHunkMenuItem) Then
+    SelectHunkMenuItem.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
 End;
 
 Procedure TGitDiffView.DoStatusChanged;
@@ -1894,7 +1891,7 @@ Begin
   Else If FMode = dvmEditorOnly Then
     Result := SelectedLineCount > 0
   Else
-    Result := Assigned(FEdit) And FEdit.SelAvail;
+    Result := Assigned(DiffEditor) And DiffEditor.SelAvail;
 End;
 
 Procedure TGitDiffView.EditSpecialLineColors(Sender: TObject; Line: Integer;
@@ -1904,9 +1901,9 @@ Var
   LineSelected: Boolean;
 Begin
   Special := False;
-  If (Not Assigned(FEdit)) Or (Line < 1) Or (Line > FEdit.Lines.Count) Then
+  If (Not Assigned(DiffEditor)) Or (Line < 1) Or (Line > DiffEditor.Lines.Count) Then
     Exit;
-  LineText := FEdit.Lines[Line - 1];
+  LineText := DiffEditor.Lines[Line - 1];
   LineSelected := (FMode = dvmEditorOnly) And IsLineSelected(Line);
 
   { Selected change lines: classic selection look (blue + white) so they read clearly. }
@@ -1948,10 +1945,10 @@ Begin
   If FMode = dvmBrowse Then
     Begin
       { Keep caret free for scrolling; never create a selection. }
-      If Assigned(FEdit) Then
+      If Assigned(DiffEditor) Then
         Begin
-          FEdit.BlockBegin := Point(1, FEdit.CaretY);
-          FEdit.BlockEnd := Point(1, FEdit.CaretY);
+          DiffEditor.BlockBegin := Point(1, DiffEditor.CaretY);
+          DiffEditor.BlockEnd := Point(1, DiffEditor.CaretY);
         End;
       Exit;
     End;
@@ -1960,16 +1957,16 @@ Begin
     Exit;
   If Button <> mbLeft Then
     Exit;
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
 
   LineNo := LineAtMouse(X, Y);
   If LineNo < 1 Then
     Exit;
-  LineText := FEdit.Lines[LineNo - 1];
+  LineText := DiffEditor.Lines[LineNo - 1];
 
-  FEdit.CaretY := LineNo;
-  FEdit.CaretX := 1;
+  DiffEditor.CaretY := LineNo;
+  DiffEditor.CaretX := 1;
 
   { Hunk marker: click selects hunk; Ctrl+click toggles hunk selection. }
   If FMode = dvmEditorOnly Then
@@ -1985,7 +1982,7 @@ Begin
                 SelectHunkAtLine(Integer(PtrInt(FHunkStartLines[I])));
               Exit;
             End;
-      If IsVisualHunkStart(LineNo) And (X < FEdit.Gutter.Width) Then
+      If IsVisualHunkStart(LineNo) And (X < DiffEditor.Gutter.Width) Then
         Begin
           FLineDragActive := False;
           If ssCtrl in Shift Then
@@ -2015,7 +2012,7 @@ Begin
           { Provisional single-line selection; MouseUp may clear if it was a re-click. }
           ClearLineSelection(False);
           AddLineToSelection(LineNo);
-          FEdit.Invalidate;
+          DiffEditor.Invalidate;
           UpdateActionEnabled;
           DoSelectionChanged;
         End;
@@ -2027,8 +2024,8 @@ Begin
       ClearLineSelection(True);
     End;
 
-  If Assigned(FEdit) Then
-    TControl(FEdit).MouseCapture := True;
+  If Assigned(DiffEditor) Then
+    TControl(DiffEditor).MouseCapture := True;
 End;
 
 Procedure TGitDiffView.EditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
@@ -2046,7 +2043,7 @@ Begin
     FLineDragMoved := True;
   If FLineDragMoved Then
     Begin
-      FEdit.CaretY := LineNo;
+      DiffEditor.CaretY := LineNo;
       ApplyDragLineRange(LineNo);
     End;
 End;
@@ -2057,8 +2054,8 @@ Var
   LineNo: Integer;
   LineText: String;
 Begin
-  If Assigned(FEdit) Then
-    TControl(FEdit).MouseCapture := False;
+  If Assigned(DiffEditor) Then
+    TControl(DiffEditor).MouseCapture := False;
 
   If (FMode <> dvmEditorOnly) Or (Not FLineDragActive) Then
     Begin
@@ -2080,9 +2077,9 @@ Begin
   Else
     Begin
       { Click without drag. }
-      If (LineNo >= 1) And (LineNo <= FEdit.Lines.Count) Then
+      If (LineNo >= 1) And (LineNo <= DiffEditor.Lines.Count) Then
         Begin
-          LineText := FEdit.Lines[LineNo - 1];
+          LineText := DiffEditor.Lines[LineNo - 1];
           If IsDiffChangeLine(LineText) Then
             Begin
               If FLineDragCtrl Then
@@ -2113,7 +2110,7 @@ Var
   Node: TTreeNode;
   Data: PGitDiffRange;
 Begin
-  Node := FTree.Items.GetFirstNode;
+  Node := Tree.Items.GetFirstNode;
   While Assigned(Node) Do
     Begin
       If Assigned(Node.Data) Then
@@ -2124,7 +2121,7 @@ Begin
         End;
       Node := Node.GetNext;
     End;
-  FTree.Items.Clear;
+  Tree.Items.Clear;
 End;
 
 Procedure TGitDiffView.Clear;
@@ -2135,15 +2132,15 @@ Begin
   ClearDisplayMap;
   ClearLineSelection(False);
   ShowEditorPane;
-  If Assigned(FEdit) Then
-    FEdit.Lines.Clear;
-  If Assigned(FCaption) Then
-    FCaption.Caption := 'Diff';
+  If Assigned(DiffEditor) Then
+    DiffEditor.Lines.Clear;
+  If Assigned(TitleLabel) Then
+    TitleLabel.Caption := 'Diff';
   ClearTreeData;
   FUpdatingList := True;
   Try
-    If Assigned(FFileList) Then
-      FFileList.Items.Clear;
+    If Assigned(FileList) Then
+      FileList.Items.Clear;
   Finally
     FUpdatingList := False;
   End;
@@ -2169,22 +2166,22 @@ Begin
     StartLine := 1;
   If EndLine < StartLine Then
     EndLine := StartLine;
-  If EndLine > FEdit.Lines.Count Then
-    EndLine := FEdit.Lines.Count;
-  If FEdit.Lines.Count = 0 Then
+  If EndLine > DiffEditor.Lines.Count Then
+    EndLine := DiffEditor.Lines.Count;
+  If DiffEditor.Lines.Count = 0 Then
     Exit;
 
-  FEdit.CaretY := StartLine;
-  FEdit.TopLine := StartLine;
+  DiffEditor.CaretY := StartLine;
+  DiffEditor.TopLine := StartLine;
   Y1 := StartLine;
   Y2 := EndLine;
-  FEdit.BlockBegin := Point(1, Y1);
-  If Y2 >= FEdit.Lines.Count Then
-    FEdit.BlockEnd := Point(Length(FEdit.Lines[Y2 - 1]) + 1, Y2)
+  DiffEditor.BlockBegin := Point(1, Y1);
+  If Y2 >= DiffEditor.Lines.Count Then
+    DiffEditor.BlockEnd := Point(Length(DiffEditor.Lines[Y2 - 1]) + 1, Y2)
   Else
-    FEdit.BlockEnd := Point(1, Y2 + 1);
+    DiffEditor.BlockEnd := Point(1, Y2 + 1);
   Try
-    FEdit.SetFocus;
+    DiffEditor.SetFocus;
   Except
   End;
   UpdateActionEnabled;
@@ -2203,22 +2200,22 @@ Begin
     Exit;
   EnsureDiffOverviewGutter;
   Line := 0;
-  For I := 0 To FEdit.Lines.Count - 1 Do
-    If IsDiffChangeLine(FEdit.Lines[I]) Then
+  For I := 0 To DiffEditor.Lines.Count - 1 Do
+    If IsDiffChangeLine(DiffEditor.Lines[I]) Then
       Begin
         Line := I + 1;
         Break;
       End;
   If Line < 1 Then
     Begin
-      FEdit.TopLine := 1;
+      DiffEditor.TopLine := 1;
       Exit;
     End;
-  Half := FEdit.LinesInWindow Div 2;
+  Half := DiffEditor.LinesInWindow Div 2;
   If Half < 1 Then
     Half := 12;
-  FEdit.CaretY := Line;
-  FEdit.TopLine := Max(1, Line - Half);
+  DiffEditor.CaretY := Line;
+  DiffEditor.TopLine := Max(1, Line - Half);
 End;
 
 Procedure TGitDiffView.DoScrollToFirstChangeAsync(Data: PtrInt);
@@ -2244,10 +2241,10 @@ Begin
       LastLine := 0;
       Exit;
     End;
-  If FEdit.SelAvail Then
+  If DiffEditor.SelAvail Then
     Begin
-      B := FEdit.BlockBegin;
-      E := FEdit.BlockEnd;
+      B := DiffEditor.BlockBegin;
+      E := DiffEditor.BlockEnd;
       FirstLine := B.Y;
       LastLine := E.Y;
       { BlockEnd at col 1 of next line means exclusive end. }
@@ -2259,21 +2256,21 @@ Begin
           LastLine := B.Y;
         End;
     End
-  Else If (FMode = dvmStaging) And Assigned(FTree.Selected) Then
+  Else If (FMode = dvmStaging) And Assigned(Tree.Selected) Then
     Begin
-      R := NodeRange(FTree.Selected);
+      R := NodeRange(Tree.Selected);
       FirstLine := R.StartLine;
       LastLine := R.EndLine;
     End
   Else
     Begin
-      FirstLine := FEdit.CaretY;
-      LastLine := FEdit.CaretY;
+      FirstLine := DiffEditor.CaretY;
+      LastLine := DiffEditor.CaretY;
     End;
   If FirstLine < 1 Then
     FirstLine := 1;
-  If LastLine > FEdit.Lines.Count Then
-    LastLine := FEdit.Lines.Count;
+  If LastLine > DiffEditor.Lines.Count Then
+    LastLine := DiffEditor.Lines.Count;
 End;
 
 Function TGitDiffView.BuildPartialPatch(FirstLine, LastLine: Integer): String;
@@ -2383,7 +2380,7 @@ Begin
     End
   Else If (FirstLine < 1) Or (LastLine < FirstLine) Then
     Exit;
-  If (Not Assigned(FEdit)) Or ((Not FUseDisplayMap) And (FEdit.Lines.Count = 0)) Then
+  If (Not Assigned(DiffEditor)) Or ((Not FUseDisplayMap) And (DiffEditor.Lines.Count = 0)) Then
     Exit;
   If FUseDisplayMap And (Trim(FDiffText) = '') Then
     Exit;
@@ -2397,7 +2394,7 @@ Begin
     If FUseDisplayMap Then
       Lines.Text := FDiffText
     Else
-      Lines.Assign(FEdit.Lines);
+      Lines.Assign(DiffEditor.Lines);
     If Lines.Count = 0 Then
       Exit;
     InHunk := False;
@@ -2497,9 +2494,9 @@ Begin
   Result := False;
   FirstLine := 0;
   LastLine := 0;
-  If Not Assigned(FEdit) Then
+  If Not Assigned(DiffEditor) Then
     Exit;
-  Count := FEdit.Lines.Count;
+  Count := DiffEditor.Lines.Count;
   If (AtLine < 1) Or (AtLine > Count) Then
     Exit;
 
@@ -2535,7 +2532,7 @@ Begin
   I := AtLine;
   While I >= 1 Do
     Begin
-      Line := FEdit.Lines[I - 1];
+      Line := DiffEditor.Lines[I - 1];
       If Copy(Line, 1, 2) = '@@' Then
         Begin
           FirstLine := I;
@@ -2550,7 +2547,7 @@ Begin
   LastLine := Count;
   For I := FirstLine + 1 To Count Do
     Begin
-      Line := FEdit.Lines[I - 1];
+      Line := DiffEditor.Lines[I - 1];
       If (Copy(Line, 1, 2) = '@@') Or (Copy(Line, 1, 11) = 'diff --git ') Then
         Begin
           LastLine := I - 1;
@@ -2590,16 +2587,16 @@ Begin
       SelectHunkAtLine(AtLine);
       Exit;
     End;
-  If (Not Assigned(FEdit)) Or (Not Assigned(FSelectedLines)) Then
+  If (Not Assigned(DiffEditor)) Or (Not Assigned(FSelectedLines)) Then
     Exit(False);
 
   ChangeLines := TFPList.Create;
   Try
     For LineNo := FirstLine To LastLine Do
       Begin
-        If (LineNo < 1) Or (LineNo > FEdit.Lines.Count) Then
+        If (LineNo < 1) Or (LineNo > DiffEditor.Lines.Count) Then
           Continue;
-        LineText := FEdit.Lines[LineNo - 1];
+        LineText := DiffEditor.Lines[LineNo - 1];
         If IsDiffChangeLine(LineText) Then
           ChangeLines.Add(Pointer(PtrInt(LineNo)));
       End;
@@ -2631,7 +2628,7 @@ Begin
       For I := 0 To ChangeLines.Count - 1 Do
         AddLineToSelection(Integer(PtrInt(ChangeLines[I])));
 
-    FEdit.Invalidate;
+    DiffEditor.Invalidate;
     UpdateActionEnabled;
     DoSelectionChanged;
     Result := True;
@@ -2664,7 +2661,7 @@ Begin
       GetSelectionLines(FirstLine, LastLine);
       If FirstLine < 1 Then
         Begin
-          If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+          If Not FindHunkBounds(DiffEditor.CaretY, FirstLine, LastLine) Then
             Begin
               MessageDlg('Select lines to stage, or place the caret in a change hunk.',
                 mtInformation, [mbOK], 0);
@@ -2716,7 +2713,7 @@ Begin
       GetSelectionLines(FirstLine, LastLine);
       If FirstLine < 1 Then
         Begin
-          If Not FindHunkBounds(FEdit.CaretY, FirstLine, LastLine) Then
+          If Not FindHunkBounds(DiffEditor.CaretY, FirstLine, LastLine) Then
             Begin
               MessageDlg('Select lines to unstage, or place the caret in a change hunk.',
                 mtInformation, [mbOK], 0);
@@ -2766,7 +2763,7 @@ End;
 
 Procedure TGitDiffView.PopupStageHunkClick(Sender: TObject);
 Begin
-  If SelectHunkAtLine(FEdit.CaretY) Then
+  If SelectHunkAtLine(DiffEditor.CaretY) Then
     StageSelection
   Else
     MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
@@ -2774,7 +2771,7 @@ End;
 
 Procedure TGitDiffView.PopupUnstageHunkClick(Sender: TObject);
 Begin
-  If SelectHunkAtLine(FEdit.CaretY) Then
+  If SelectHunkAtLine(DiffEditor.CaretY) Then
     UnstageSelection
   Else
     MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
@@ -2782,7 +2779,7 @@ End;
 
 Procedure TGitDiffView.PopupSelectHunkClick(Sender: TObject);
 Begin
-  If Not SelectHunkAtLine(FEdit.CaretY) Then
+  If Not SelectHunkAtLine(DiffEditor.CaretY) Then
     MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
 End;
 
@@ -2790,7 +2787,7 @@ Procedure TGitDiffView.EditDblClick(Sender: TObject);
 Begin
   { Double-click a change line to select all change lines in its hunk. }
   If (FMode = dvmEditorOnly) Or (FMode = dvmStaging) Then
-    SelectHunkAtLine(FEdit.CaretY);
+    SelectHunkAtLine(DiffEditor.CaretY);
 End;
 
 Procedure TGitDiffView.EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
@@ -2846,16 +2843,16 @@ Var
   End;
 
 Begin
-  FTree.Items.BeginUpdate;
+  Tree.Items.BeginUpdate;
   Try
     ClearTreeData;
     FDiffText := DiffText;
-    FEdit.Lines.Text := DiffText;
+    DiffEditor.Lines.Text := DiffText;
 
     Lines := TStringList.Create;
     Try
       Lines.Text := DiffText;
-      Root := FTree.Items.Add(Nil, 'Diff');
+      Root := Tree.Items.Add(Nil, 'Diff');
       FileRange := NewRange(1, '', 'All');
       FileRange^.EndLine := Lines.Count;
       Root.Data := FileRange;
@@ -2884,7 +2881,7 @@ Begin
                   If (Length(Path) > 2) And (Copy(Path, 1, 2) = 'a/') Then
                     Path := Copy(Path, 3, MaxInt);
                   FileRange := NewRange(LineNo, Path, Path);
-                  FileNode := FTree.Items.AddChild(Root, Path);
+                  FileNode := Tree.Items.AddChild(Root, Path);
                   FileNode.Data := FileRange;
                   InFile := True;
                   HunkNode := Nil;
@@ -2901,7 +2898,7 @@ Begin
                   Else
                     Begin
                       FileRange := NewRange(LineNo, Path, Path);
-                      FileNode := FTree.Items.AddChild(Root, Path);
+                      FileNode := Tree.Items.AddChild(Root, Path);
                       FileNode.Data := FileRange;
                       InFile := True;
                     End;
@@ -2913,11 +2910,11 @@ Begin
               If Not Assigned(FileNode) Then
                 Begin
                   FileRange := NewRange(1, '', 'Changes');
-                  FileNode := FTree.Items.AddChild(Root, 'Changes');
+                  FileNode := Tree.Items.AddChild(Root, 'Changes');
                   FileNode.Data := FileRange;
                 End;
               HunkRange := NewRange(LineNo, Path, Line);
-              HunkNode := FTree.Items.AddChild(FileNode, Line);
+              HunkNode := Tree.Items.AddChild(FileNode, Line);
               HunkNode.Data := HunkRange;
             End
           Else If Assigned(HunkNode) And ((Copy(Line, 1, 1) = '+') Or (Copy(Line, 1, 1) = '-')) And
@@ -2926,9 +2923,9 @@ Begin
               LineRange := NewRange(LineNo, Path, Line);
               LineRange^.EndLine := LineNo;
               If Line[1] = '+' Then
-                LineNode := FTree.Items.AddChild(HunkNode, '  + ' + Copy(Line, 2, MaxInt))
+                LineNode := Tree.Items.AddChild(HunkNode, '  + ' + Copy(Line, 2, MaxInt))
               Else
-                LineNode := FTree.Items.AddChild(HunkNode, '  − ' + Copy(Line, 2, MaxInt));
+                LineNode := Tree.Items.AddChild(HunkNode, '  − ' + Copy(Line, 2, MaxInt));
               LineNode.Data := LineRange;
             End;
         End;
@@ -2943,7 +2940,7 @@ Begin
       Lines.Free;
     End;
   Finally
-    FTree.Items.EndUpdate;
+    Tree.Items.EndUpdate;
   End;
   UpdateActionEnabled;
 End;
@@ -2968,18 +2965,18 @@ Begin
     Exit;
   CancelPendingScroll;
   ShowEditorPane;
-  FEdit.Lines.Clear;
+  DiffEditor.Lines.Clear;
   FDiffText := '';
-  If (FFileList.ItemIndex < 0) Or (FFileList.ItemIndex >= FFileList.Items.Count) Then
+  If (FileList.ItemIndex < 0) Or (FileList.ItemIndex >= FileList.Items.Count) Then
     Begin
-      FEdit.Lines.Text := '(select a file)';
+      DiffEditor.Lines.Text := '(select a file)';
       UpdateActionEnabled;
       Exit;
     End;
-  Path := FFileList.Items[FFileList.ItemIndex];
+  Path := FileList.Items[FileList.ItemIndex];
   If (FRepoPath = '') Or (FBrowseSha = '') Or Not Assigned(GitClient) Then
     Begin
-      FEdit.Lines.Text := '(no repository)';
+      DiffEditor.Lines.Text := '(no repository)';
       UpdateActionEnabled;
       Exit;
     End;
@@ -2996,8 +2993,8 @@ Begin
       If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
         Exit;
       ShowEditorPane;
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
       UpdateActionEnabled;
       Exit;
     End;
@@ -3019,14 +3016,14 @@ Begin
   If Trim(DiffText) = '' Then
     Begin
       FreeOwnedLanguageHighlighter;
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := '(no textual diff for ' + Path + ')';
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Text := '(no textual diff for ' + Path + ')';
     End
   Else
     Begin
       { Load text under plain Diff first so a highlighter failure cannot leave a blank pane. }
       ApplyDiffHighlighter;
-      FEdit.Lines.Text := DiffText;
+      DiffEditor.Lines.Text := DiffText;
       ApplyMixedDiffHighlighter(Path);
       EnsureDiffOverviewGutter;
       ScheduleOverviewRefresh;
@@ -3051,7 +3048,7 @@ Begin
   SetViewMode(dvmEditorOnly);
   CancelPendingScroll;
   If Title <> '' Then
-    FCaption.Caption := Title;
+    TitleLabel.Caption := Title;
   ApplyIDEEditorAppearance;
   If DiffTextLooksBinary(DiffText) And (SourceFileName <> '') Then
     Begin
@@ -3065,8 +3062,8 @@ Begin
   If Trim(DiffText) = '' Then
     Begin
       FreeOwnedLanguageHighlighter;
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := '(no textual diff)';
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Text := '(no textual diff)';
       UpdateActionEnabled;
       Exit;
     End;
@@ -3090,14 +3087,14 @@ Begin
   SetViewMode(dvmStaging);
   ShowEditorPane;
   If Title <> '' Then
-    FCaption.Caption := Title
+    TitleLabel.Caption := Title
   Else
-    FCaption.Caption := 'Diff';
+    TitleLabel.Caption := 'Diff';
   ApplyIDEEditorAppearance;
   If Trim(DiffText) = '' Then
     Begin
       Clear;
-      FEdit.Lines.Text := '(no textual diff)';
+      DiffEditor.Lines.Text := '(no textual diff)';
       UpdateActionEnabled;
       Exit;
     End;
@@ -3113,7 +3110,7 @@ Begin
   EnsureAppearanceReady;
   Clear;
   If Title <> '' Then
-    FCaption.Caption := Title;
+    TitleLabel.Caption := Title;
   { Preserve editor-only mode when used from the Files tab. }
   If FMode = dvmEditorOnly Then
     ApplyViewMode;
@@ -3131,8 +3128,8 @@ Begin
   If SourceFileName <> '' Then
     ApplyLanguageHighlighter(SourceFileName)
   Else
-    FEdit.Highlighter := Nil;
-  FEdit.Lines.Text := Content;
+    DiffEditor.Highlighter := Nil;
+  DiffEditor.Lines.Text := Content;
   UpdateActionEnabled;
 End;
 
@@ -3150,15 +3147,15 @@ Begin
   FBrowseSha := Sha;
   ExpectedSha := Sha;
   If Title <> '' Then
-    FCaption.Caption := Title
+    TitleLabel.Caption := Title
   Else
-    FCaption.Caption := 'Commit ' + Copy(Sha, 1, 7);
+    TitleLabel.Caption := 'Commit ' + Copy(Sha, 1, 7);
   ApplyIDEEditorAppearance;
 
   If (ARepoPath = '') Or (Sha = '') Or Not Assigned(GitClient) Then
     Begin
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := '(no commit selected)';
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Text := '(no commit selected)';
       Exit;
     End;
 
@@ -3168,8 +3165,8 @@ Begin
     Begin
       If IsAlive And (FBrowseSha = ExpectedSha) Then
         Begin
-          FEdit.Highlighter := Nil;
-          FEdit.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
+          DiffEditor.Highlighter := Nil;
+          DiffEditor.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
         End;
       Paths.Free;
       Exit;
@@ -3184,9 +3181,9 @@ Begin
   FUpdatingList := True;
   Try
     For I := 0 To Paths.Count - 1 Do
-      FFileList.Items.Add(Paths[I]);
-    If FFileList.Items.Count > 0 Then
-      FFileList.ItemIndex := 0;
+      FileList.Items.Add(Paths[I]);
+    If FileList.Items.Count > 0 Then
+      FileList.ItemIndex := 0;
   Finally
     FUpdatingList := False;
     Paths.Free;
@@ -3195,10 +3192,10 @@ Begin
   If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
     Exit;
 
-  If FFileList.Items.Count = 0 Then
+  If FileList.Items.Count = 0 Then
     Begin
-      FEdit.Highlighter := Nil;
-      FEdit.Lines.Text := '(no files changed in this commit)';
+      DiffEditor.Highlighter := Nil;
+      DiffEditor.Lines.Text := '(no files changed in this commit)';
       Exit;
     End;
 
@@ -3213,11 +3210,11 @@ Begin
   Result := '';
   If FMode = dvmBrowse Then
     Begin
-      If (FFileList.ItemIndex >= 0) And (FFileList.ItemIndex < FFileList.Items.Count) Then
-        Result := FFileList.Items[FFileList.ItemIndex];
+      If (FileList.ItemIndex >= 0) And (FileList.ItemIndex < FileList.Items.Count) Then
+        Result := FileList.Items[FileList.ItemIndex];
       Exit;
     End;
-  Node := FTree.Selected;
+  Node := Tree.Selected;
   While Assigned(Node) Do
     Begin
       R := NodeRange(Node);
