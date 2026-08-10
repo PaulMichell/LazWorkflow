@@ -57,6 +57,10 @@ Type
     Function UnstagePaths(Paths: TStrings): Boolean;
     Function StageAll: Boolean;
     Function UnstageAll: Boolean;
+    { Restore paths in index and worktree to HEAD (discards local changes). }
+    Function RevertPaths(Paths: TStrings): Boolean;
+    { Append unique patterns to the repository-root .gitignore. }
+    Function AppendIgnorePatterns(Patterns: TStrings): Boolean;
     Function Commit(Const Message: String; Out NewSha: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { Unified diff of the index vs HEAD (git diff --cached). Empty when nothing staged. }
@@ -558,6 +562,94 @@ Begin
     Result := RunGit(['reset', 'HEAD'], OutputText, ExitCode);
   If Result Then
     WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.RevertPaths(Paths: TStrings): Boolean;
+Var
+  Args: Array Of String;
+  I: Integer;
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Paths = Nil) Or (Paths.Count = 0) Then
+    Exit;
+  { Modern: restore staged + worktree content from HEAD for listed paths. }
+  SetLength(Args, 5 + Paths.Count);
+  Args[0] := 'restore';
+  Args[1] := '--source=HEAD';
+  Args[2] := '--staged';
+  Args[3] := '--worktree';
+  Args[4] := '--';
+  For I := 0 To Paths.Count - 1 Do
+    Args[5 + I] := Paths[I];
+  Result := RunGit(Args, OutputText, ExitCode);
+  If Not Result Then
+    Begin
+      { Older git: checkout HEAD -- paths }
+      SetLength(Args, 3 + Paths.Count);
+      Args[0] := 'checkout';
+      Args[1] := 'HEAD';
+      Args[2] := '--';
+      For I := 0 To Paths.Count - 1 Do
+        Args[3 + I] := Paths[I];
+      Result := RunGit(Args, OutputText, ExitCode);
+    End;
+  If Result Then
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+End;
+
+Function TGitService.AppendIgnorePatterns(Patterns: TStrings): Boolean;
+Var
+  IgnorePath, Pattern: String;
+  Lines: TStringList;
+  I: Integer;
+  Changed: Boolean;
+Begin
+  Result := False;
+  FLastError := '';
+  If (FRepoPath = '') Or (Patterns = Nil) Or (Patterns.Count = 0) Then
+    Begin
+      FLastError := 'No ignore patterns to append';
+      Exit;
+    End;
+  IgnorePath := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) + '.gitignore';
+  Lines := TStringList.Create;
+  Try
+    Try
+      If FileExists(IgnorePath) Then
+        Lines.LoadFromFile(IgnorePath);
+      Changed := False;
+      For I := 0 To Patterns.Count - 1 Do
+        Begin
+          Pattern := Trim(Patterns[I]);
+          If Pattern = '' Then
+            Continue;
+          Pattern := StringReplace(Pattern, '\', '/', [rfReplaceAll]);
+          { Anchor repo-relative paths (not already rooted, negated, or a glob). }
+          If (Pattern[1] <> '/') And (Pattern[1] <> '!') And (Pos('*', Pattern) = 0) Then
+            Pattern := '/' + Pattern;
+          If Lines.IndexOf(Pattern) < 0 Then
+            Begin
+              Lines.Add(Pattern);
+              Changed := True;
+            End;
+        End;
+      If Changed Then
+        Lines.SaveToFile(IgnorePath);
+      Result := True;
+      If Changed Then
+        WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
+    Except
+      On E: Exception Do
+        Begin
+          FLastError := E.Message;
+          Result := False;
+        End;
+    End;
+  Finally
+    Lines.Free;
+  End;
 End;
 
 Function TGitService.Commit(Const Message: String; Out NewSha: String): Boolean;

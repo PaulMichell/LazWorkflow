@@ -468,8 +468,8 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FStageButtonsBar: TPanel
           Left = 0
-          Height = 40
-          Top = 238
+          Height = 80
+          Top = 198
           Width = 509
           Align = alBottom
           BevelOuter = bvNone
@@ -477,8 +477,8 @@ object ManageRepositoryForm: TManageRepositoryForm
           ChildSizing.TopBottomSpacing = 6
           ChildSizing.HorizontalSpacing = 8
           ChildSizing.Layout = cclLeftToRightThenTopToBottom
-          ChildSizing.ControlsPerLine = 6
-          ClientHeight = 40
+          ChildSizing.ControlsPerLine = 8
+          ClientHeight = 80
           ClientWidth = 509
           TabOrder = 1
           object FBtnStageAll: TButton
@@ -509,13 +509,43 @@ object ManageRepositoryForm: TManageRepositoryForm
             TabOrder = 2
             OnClick = BtnStageSelectionClick
           end
-          object FBtnIgnoreFiles: TButton
+          object FBtnRevert: TButton
             Left = 326
             Height = 34
             Top = 6
-            Width = 110
-            Caption = 'Ignore Files…'
+            Width = 70
+            Caption = 'Revert'
+            Enabled = False
             TabOrder = 3
+            OnClick = BtnRevertClick
+          end
+          object FBtnDelete: TButton
+            Left = 404
+            Height = 34
+            Top = 6
+            Width = 70
+            Caption = 'Delete'
+            Enabled = False
+            TabOrder = 4
+            OnClick = BtnDeleteClick
+          end
+          object FBtnIgnore: TButton
+            Left = 8
+            Height = 34
+            Top = 40
+            Width = 70
+            Caption = 'Ignore'
+            Enabled = False
+            TabOrder = 5
+            OnClick = BtnIgnoreClick
+          end
+          object FBtnIgnoreFiles: TButton
+            Left = 86
+            Height = 34
+            Top = 40
+            Width = 120
+            Caption = 'Ignored Files…'
+            TabOrder = 6
             OnClick = BtnIgnoreFilesClick
           end
         end
