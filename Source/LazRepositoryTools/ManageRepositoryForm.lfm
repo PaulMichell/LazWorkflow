@@ -371,43 +371,34 @@ object ManageRepositoryForm: TManageRepositoryForm
             ClientHeight = 36
             ClientWidth = 509
             TabOrder = 1
-            object FPushCheck: TCheckBox
-              Left = 8
-              Height = 34
-              Top = 4
-              Width = 203
-              Caption = 'Push after successful commit'
-              TabOrder = 0
-            end
             object FBtnSuggestMessage: TButton
-              Left = 219
+              Left = 8
               Height = 34
               Top = 4
               Width = 100
               Caption = 'Suggest'
               Hint = 'Generate a commit message with Project Assistant (staged diff)'
               ShowHint = True
-              TabOrder = 1
+              TabOrder = 0
               OnClick = BtnSuggestMessageClick
             end
             object FBtnCommit: TButton
-              Left = 327
+              Left = 116
               Height = 34
               Top = 4
               Width = 84
               Caption = 'Commit'
               Enabled = False
-              TabOrder = 2
+              TabOrder = 1
               OnClick = BtnCommitClick
             end
-            object FBtnRefreshFiles: TButton
-              Left = 419
+            object FPushCheck: TCheckBox
+              Left = 208
               Height = 34
               Top = 4
-              Width = 84
-              Caption = 'Refresh'
-              TabOrder = 3
-              OnClick = BtnRefreshFilesClick
+              Width = 203
+              Caption = 'Push after successful commit'
+              TabOrder = 2
             end
           end
         end

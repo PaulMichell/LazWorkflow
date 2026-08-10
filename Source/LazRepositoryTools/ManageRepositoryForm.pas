@@ -58,10 +58,9 @@ Type
     FMessageLabel: TLabel;
     FMessageMemo: TMemo;
     FCommitActions: TPanel;
-    FPushCheck: TCheckBox;
     FBtnSuggestMessage: TButton;
     FBtnCommit: TButton;
-    FBtnRefreshFiles: TButton;
+    FPushCheck: TCheckBox;
     FActionList: TActionList;
     FRemotesAction: TAction;
     FFetchAction: TAction;
@@ -109,7 +108,6 @@ Type
     Procedure BtnStageClick(Sender: TObject);
     Procedure BtnStageAllClick(Sender: TObject);
     Procedure BtnStageSelectionClick(Sender: TObject);
-    Procedure BtnRefreshFilesClick(Sender: TObject);
     Procedure BtnSuggestMessageClick(Sender: TObject);
     Procedure BtnCommitClick(Sender: TObject);
     Procedure MessageChange(Sender: TObject);
@@ -2253,11 +2251,6 @@ Begin
     FFilesDiffView.UnstageSelection
   Else
     FFilesDiffView.StageSelection;
-End;
-
-Procedure TManageRepositoryForm.BtnRefreshFilesClick(Sender: TObject);
-Begin
-  RefreshFilesList;
 End;
 
 Procedure TManageRepositoryForm.BtnSuggestMessageClick(Sender: TObject);
