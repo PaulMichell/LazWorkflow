@@ -32,6 +32,8 @@ Type
   End;
 
   TGitDiffView = Class(TFrame)
+  Published
+    { Streamed frame children must be published (ObjFPC default section is public). }
     FCaption: TLabel;
     FToolBar: TPanel;
     FBtnStageSel: TButton;

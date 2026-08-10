@@ -19,6 +19,8 @@ Type
   TGitRemoteOpKind = (rokFetch, rokPull, rokPush);
 
   TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
+  Published
+    { Streamed components/events must be published (ObjFPC default section is public). }
     FPages: TPageControl;
     FTabHistory: TTabSheet;
     FTabFiles: TTabSheet;

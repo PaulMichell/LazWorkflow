@@ -14,6 +14,8 @@ Uses
 
 Type
   TStatusFooterFrame = Class(TFrame)
+  Published
+    { Must be published for inline streaming in host forms (ObjFPC defaults to public). }
     FPanel: TPanel;
     FLeftLabel: TLabel;
     FCentreLabel: TLabel;
