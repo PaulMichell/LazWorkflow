@@ -1637,7 +1637,8 @@ Begin
                 StatusMap.Values[Rel] := EntryStatus;
                 If GitStatusEntryIsStaged(Entries[I]) Then
                   Begin
-                    FStagedList.Items.Add(GitStatusEntryLabel(Entries[I], True) + Rel);
+                    { GitStatusEntryLabel already includes the path (and rename old->new). }
+                    FStagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
                     FStagedPaths.Add(Rel);
                     { Fully staged (no remaining worktree change) leave the left list. }
                     If Not GitStatusEntryIsUnstaged(Entries[I]) Then
