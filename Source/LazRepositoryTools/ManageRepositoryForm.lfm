@@ -1,11 +1,11 @@
 object ManageRepositoryForm: TManageRepositoryForm
-  Left = 614
+  Left = 384
   Height = 600
-  Top = 185
-  Width = 1158
+  Top = 169
+  Width = 1135
   Caption = 'Manage Repository'
   ClientHeight = 600
-  ClientWidth = 1158
+  ClientWidth = 1135
   DesignTimePPI = 96
   KeyPreview = True
   Position = poDefaultPosOnly
@@ -19,7 +19,7 @@ object ManageRepositoryForm: TManageRepositoryForm
     Left = 0
     Height = 22
     Top = 578
-    Width = 1158
+    Width = 1135
     Align = alBottom
     Constraints.MinHeight = 22
     TabOrder = 1
@@ -28,42 +28,42 @@ object ManageRepositoryForm: TManageRepositoryForm
     Left = 0
     Height = 578
     Top = 0
-    Width = 1158
-    ActivePage = FilesTab
+    Width = 1135
+    ActivePage = HistoryTab
     Align = alClient
-    TabIndex = 1
+    TabIndex = 0
     TabOrder = 0
     OnChange = PagesChange
     object HistoryTab: TTabSheet
       Caption = 'History'
       ClientHeight = 543
-      ClientWidth = 1152
+      ClientWidth = 1129
       object MainPanel: TPanel
         Left = 0
         Height = 543
         Top = 0
-        Width = 1152
+        Width = 1129
         Align = alClient
         BevelOuter = bvNone
         ClientHeight = 543
-        ClientWidth = 1152
+        ClientWidth = 1129
         TabOrder = 0
         object DetailPanel: TPanel
           Left = 0
           Height = 240
           Top = 303
-          Width = 1152
+          Width = 1129
           Align = alBottom
           BevelOuter = bvNone
           ClientHeight = 240
-          ClientWidth = 1152
+          ClientWidth = 1129
           Constraints.MinHeight = 120
           TabOrder = 1
           object HistoryButtons: TPanel
             Left = 0
             Height = 36
             Top = 0
-            Width = 1152
+            Width = 1129
             Align = alTop
             BevelOuter = bvNone
             ChildSizing.LeftRightSpacing = 4
@@ -75,7 +75,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             ChildSizing.Layout = cclLeftToRightThenTopToBottom
             ChildSizing.ControlsPerLine = 8
             ClientHeight = 36
-            ClientWidth = 1152
+            ClientWidth = 1129
             TabOrder = 0
             object PushButton: TButton
               Left = 4
@@ -114,13 +114,11 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 4
             Height = 200
             Top = 36
-            Width = 1144
+            Width = 1121
             Align = alClient
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
-            ClientHeight = 200
-            ClientWidth = 1144
             TabOrder = 1
           end
         end
@@ -129,7 +127,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 0
           Height = 5
           Top = 298
-          Width = 1152
+          Width = 1129
           Align = alBottom
           AutoSnap = False
           MinSize = 48
@@ -139,16 +137,16 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 4
           Height = 290
           Top = 4
-          Width = 1144
+          Width = 1121
           Align = alClient
           BorderSpacing.Around = 4
           BevelOuter = bvNone
           ClientHeight = 290
-          ClientWidth = 1144
+          ClientWidth = 1121
           TabOrder = 0
           OnResize = GraphHostResize
           object GraphScrollBar: TScrollBar
-            Left = 1128
+            Left = 1105
             Height = 290
             Top = 0
             Width = 16
@@ -162,7 +160,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 0
             Height = 290
             Top = 0
-            Width = 1128
+            Width = 1105
             Align = alClient
             PopupMenu = Popup
             OnMouseDown = PaintBoxMouseDown
@@ -175,7 +173,7 @@ object ManageRepositoryForm: TManageRepositoryForm
     object FilesTab: TTabSheet
       Caption = 'Files'
       ClientHeight = 543
-      ClientWidth = 1152
+      ClientWidth = 1129
       object FilesLeftPanel: TPanel
         Left = 0
         Height = 543
@@ -265,28 +263,28 @@ object ManageRepositoryForm: TManageRepositoryForm
         Left = 385
         Height = 543
         Top = 0
-        Width = 767
+        Width = 744
         Align = alClient
         BevelOuter = bvNone
         ClientHeight = 543
-        ClientWidth = 767
+        ClientWidth = 744
         TabOrder = 1
         object CommitPanel: TPanel
           Left = 0
           Height = 140
           Top = 403
-          Width = 767
+          Width = 744
           Align = alBottom
           BevelOuter = bvNone
           ClientHeight = 140
-          ClientWidth = 767
+          ClientWidth = 744
           Constraints.MinHeight = 90
           TabOrder = 3
           object MessageLabel: TLabel
             Left = 4
             Height = 18
             Top = 4
-            Width = 763
+            Width = 740
             Align = alTop
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
@@ -297,7 +295,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 4
             Height = 78
             Top = 26
-            Width = 759
+            Width = 736
             Align = alClient
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
@@ -310,7 +308,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 0
             Height = 36
             Top = 104
-            Width = 767
+            Width = 744
             Align = alBottom
             BevelOuter = bvNone
             ChildSizing.LeftRightSpacing = 4
@@ -322,7 +320,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             ChildSizing.Layout = cclLeftToRightThenTopToBottom
             ChildSizing.ControlsPerLine = 6
             ClientHeight = 36
-            ClientWidth = 767
+            ClientWidth = 744
             TabOrder = 1
             object SuggestButton: TButton
               Left = 4
@@ -357,7 +355,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 0
           Height = 5
           Top = 398
-          Width = 767
+          Width = 744
           Align = alBottom
           ResizeAnchor = akBottom
         end
@@ -365,18 +363,18 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 0
           Height = 120
           Top = 278
-          Width = 767
+          Width = 744
           Align = alBottom
           BevelOuter = bvNone
           ClientHeight = 120
-          ClientWidth = 767
+          ClientWidth = 744
           Constraints.MinHeight = 60
           TabOrder = 2
           object StagedLabel: TLabel
             Left = 4
             Height = 18
             Top = 4
-            Width = 763
+            Width = 740
             Align = alTop
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
@@ -387,7 +385,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 4
             Height = 90
             Top = 26
-            Width = 759
+            Width = 736
             Align = alClient
             BorderSpacing.Around = 4
             ItemHeight = 0
@@ -403,7 +401,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 0
           Height = 5
           Top = 273
-          Width = 767
+          Width = 744
           Align = alBottom
           ResizeAnchor = akBottom
         end
@@ -411,7 +409,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 0
           Height = 36
           Top = 237
-          Width = 767
+          Width = 744
           Align = alBottom
           BevelOuter = bvNone
           ChildSizing.LeftRightSpacing = 4
@@ -423,7 +421,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           ChildSizing.Layout = cclLeftToRightThenTopToBottom
           ChildSizing.ControlsPerLine = 8
           ClientHeight = 36
-          ClientWidth = 767
+          ClientWidth = 744
           TabOrder = 1
           object StageAllButton: TButton
             Left = 4
@@ -486,14 +484,11 @@ object ManageRepositoryForm: TManageRepositoryForm
           Left = 4
           Height = 233
           Top = 4
-          Width = 759
+          Width = 736
           Align = alClient
           BorderSpacing.Left = 4
           BorderSpacing.Top = 4
           BorderSpacing.Right = 4
-          BorderSpacing.Bottom = 0
-          ClientHeight = 233
-          ClientWidth = 759
           TabOrder = 0
         end
       end

@@ -80,7 +80,7 @@ Type
     FOverviewGutter: TSynGutterLineOverview;
     FDiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
     FOwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
-    FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
+    FMixedHigh: TObject; { TGitMixedDiffHighlighter; Create(Nil) — never Self-owned (would stream into host LFM) }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
     FEditorOptsHooked: Boolean;
@@ -596,7 +596,11 @@ Begin
   SetLength(FDisplayToFull, 0);
   FHunkStartLines := TFPList.Create;
   FPreviewPicture := TPicture.Create;
-  FMixedHigh := TGitMixedDiffHighlighter.Create(Self);
+  { Owner must be Nil. Create(Self) puts the highlighter in the frame's
+    Components list; when TGitDiffView is inlined on a host form the designer
+    streams it into the host .lfm as a nameless object TGitMixedDiffHighlighter
+    and opening the form AVs. Manual FreeAndNil in Destroy. }
+  FMixedHigh := TGitMixedDiffHighlighter.Create(Nil);
   { Do not touch SynEdit/IDE options here. Frame construction runs while the
     Manage Repository window is restored at IDE startup; GetSynEditorSettings
     and right-gutter surgery have taken Lazarus down hard. }
@@ -617,13 +621,16 @@ Begin
         DiffEditor.UnRegisterStatusChangedHandler(@EditStatusChange);
       Except
       End;
+      { Detach before freeing private highlighters (not owned by Self). }
+      If Assigned(FMixedHigh) And (DiffEditor.Highlighter = FMixedHigh) Then
+        DiffEditor.Highlighter := Nil;
     End;
   FreeOwnedLanguageHighlighter;
+  FreeAndNil(FMixedHigh);
   FreeAndNil(FPreviewPicture);
   FreeAndNil(FLineDragSnapshot);
   FreeAndNil(FSelectedLines);
   FreeAndNil(FHunkStartLines);
-  FMixedHigh := Nil; { owned by Self }
   Inherited Destroy;
 End;
 
