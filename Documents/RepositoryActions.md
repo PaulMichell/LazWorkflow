@@ -26,12 +26,11 @@ Items are ordered by **importance for correctness, IDE safety, and user trust** 
 
 ---
 
-### 1. Stop UI-thread `WaitFor` on workers that use `Synchronize` — **Open · Valid · Critical**
+### 1. Stop UI-thread `WaitFor` on workers that use `Synchronize` — **Completed · Valid · Critical**
 
 **Review:** P1 detail/index shutdown deadlock (`StopDetailThread` / index stop + `Synchronize`).  
-**Code:** `TGitIndexThread` / `TGitDetailThread` / `TGitRemoteOpThread` still call `Synchronize(...)`. Stop paths still `Terminate` + `WaitFor` on the main thread (`ManageRepositoryForm.pas`).  
 **Assessment:** Fully valid. Classic deadlock if a worker is inside `Synchronize` while the form waits.  
-**Action:** Replace `Synchronize` with `Queue` + generation tokens; never `WaitFor` on the UI thread for work that needs the UI thread; free workers only after completion callbacks (or `FreeOnTerminate` with generation-owned results).
+**Done (2026-08-10):** Index, detail, and remote workers deliver via `Queue` (not `Synchronize`). Soft cancel bumps a generation token and `Terminate`s without `WaitFor`. Form `Destroy` hard-disposes with `DetachForm` + `RemoveQueuedEvents` + `WaitFor` (safe because Queue does not block the worker on the UI thread). Stale Queue callbacks are ignored by generation mismatch; workers free themselves on the main thread in `Deliver`.
 
 ---
 
