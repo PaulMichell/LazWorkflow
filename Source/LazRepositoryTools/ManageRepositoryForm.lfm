@@ -1,11 +1,11 @@
 object ManageRepositoryForm: TManageRepositoryForm
-  Left = 200
+  Left = 614
   Height = 600
-  Top = 100
-  Width = 900
+  Top = 185
+  Width = 1158
   Caption = 'Manage Repository'
   ClientHeight = 600
-  ClientWidth = 900
+  ClientWidth = 1158
   DesignTimePPI = 96
   KeyPreview = True
   Position = poDefaultPosOnly
@@ -15,6 +15,490 @@ object ManageRepositoryForm: TManageRepositoryForm
   OnDestroy = FormDestroy
   OnKeyDown = FormKeyDown
   OnShow = FormShow
+  inline StatusFooter: TStatusFooterFrame
+    Left = 0
+    Height = 22
+    Top = 578
+    Width = 1158
+    Align = alBottom
+    Constraints.MinHeight = 22
+    TabOrder = 1
+  end
+  object Pages: TPageControl
+    Left = 0
+    Height = 578
+    Top = 0
+    Width = 1158
+    ActivePage = FilesTab
+    Align = alClient
+    TabIndex = 1
+    TabOrder = 0
+    OnChange = PagesChange
+    object HistoryTab: TTabSheet
+      Caption = 'History'
+      ClientHeight = 543
+      ClientWidth = 1152
+      object MainPanel: TPanel
+        Left = 0
+        Height = 543
+        Top = 0
+        Width = 1152
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 543
+        ClientWidth = 1152
+        TabOrder = 0
+        object DetailPanel: TPanel
+          Left = 0
+          Height = 240
+          Top = 303
+          Width = 1152
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 240
+          ClientWidth = 1152
+          Constraints.MinHeight = 120
+          TabOrder = 1
+          object HistoryButtons: TPanel
+            Left = 0
+            Height = 36
+            Top = 0
+            Width = 1152
+            Align = alTop
+            BevelOuter = bvNone
+            ChildSizing.LeftRightSpacing = 4
+            ChildSizing.TopBottomSpacing = 4
+            ChildSizing.HorizontalSpacing = 4
+            ChildSizing.VerticalSpacing = 4
+            ChildSizing.EnlargeVertical = crsHomogenousChildResize
+            ChildSizing.ShrinkVertical = crsHomogenousChildResize
+            ChildSizing.Layout = cclLeftToRightThenTopToBottom
+            ChildSizing.ControlsPerLine = 8
+            ClientHeight = 36
+            ClientWidth = 1152
+            TabOrder = 0
+            object PushButton: TButton
+              Left = 4
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = PushAction
+              TabOrder = 0
+            end
+            object PullButton: TButton
+              Left = 92
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = PullAction
+              TabOrder = 1
+            end
+            object FetchButton: TButton
+              Left = 180
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = FetchAction
+              TabOrder = 2
+            end
+            object RemotesButton: TButton
+              Left = 268
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = RemotesAction
+              TabOrder = 3
+            end
+          end
+          inline DiffView: TGitDiffView
+            Left = 4
+            Height = 200
+            Top = 36
+            Width = 1144
+            Align = alClient
+            BorderSpacing.Left = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            ClientHeight = 200
+            ClientWidth = 1144
+            TabOrder = 1
+          end
+        end
+        object HistorySplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 298
+          Width = 1152
+          Align = alBottom
+          AutoSnap = False
+          MinSize = 48
+          ResizeAnchor = akBottom
+        end
+        object GraphHost: TPanel
+          Left = 4
+          Height = 290
+          Top = 4
+          Width = 1144
+          Align = alClient
+          BorderSpacing.Around = 4
+          BevelOuter = bvNone
+          ClientHeight = 290
+          ClientWidth = 1144
+          TabOrder = 0
+          OnResize = GraphHostResize
+          object GraphScrollBar: TScrollBar
+            Left = 1128
+            Height = 290
+            Top = 0
+            Width = 16
+            Align = alRight
+            Kind = sbVertical
+            PageSize = 0
+            TabOrder = 0
+            OnChange = ScrollBarChange
+          end
+          object GraphPaintBox: TPaintBox
+            Left = 0
+            Height = 290
+            Top = 0
+            Width = 1128
+            Align = alClient
+            PopupMenu = Popup
+            OnMouseDown = PaintBoxMouseDown
+            OnMouseWheel = PaintBoxMouseWheel
+            OnPaint = PaintBoxPaint
+          end
+        end
+      end
+    end
+    object FilesTab: TTabSheet
+      Caption = 'Files'
+      ClientHeight = 543
+      ClientWidth = 1152
+      object FilesLeftPanel: TPanel
+        Left = 0
+        Height = 543
+        Top = 0
+        Width = 380
+        Align = alLeft
+        BevelOuter = bvNone
+        ClientHeight = 543
+        ClientWidth = 380
+        TabOrder = 0
+        object FilesList: TListBox
+          Left = 4
+          Height = 482
+          Top = 4
+          Width = 372
+          Align = alClient
+          BorderSpacing.Around = 4
+          ItemHeight = 0
+          MultiSelect = True
+          TabOrder = 0
+          TopIndex = -1
+          OnDblClick = FilesListDblClick
+          OnSelectionChange = FilesListSelectionChange
+        end
+        object FilesBottomPanel: TPanel
+          Left = 0
+          Height = 53
+          Top = 490
+          Width = 380
+          Align = alBottom
+          AutoSize = True
+          BevelOuter = bvNone
+          ClientHeight = 53
+          ClientWidth = 380
+          TabOrder = 1
+          object FilterGroupBox: TGroupBox
+            Left = 4
+            Height = 49
+            Top = 0
+            Width = 372
+            Align = alTop
+            AutoSize = True
+            BorderSpacing.Left = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            Caption = 'Filter'
+            ClientHeight = 22
+            ClientWidth = 368
+            TabOrder = 0
+            object UntrackedCheck: TCheckBox
+              Left = 0
+              Height = 22
+              Top = 0
+              Width = 88
+              Caption = 'Untracked'
+              TabOrder = 0
+              OnChange = FileFilterChange
+            end
+            object CleanCheck: TCheckBox
+              Left = 108
+              Height = 22
+              Top = 0
+              Width = 59
+              Caption = 'Clean'
+              TabOrder = 1
+              OnChange = FileFilterChange
+            end
+            object IgnoredCheck: TCheckBox
+              Left = 196
+              Height = 22
+              Top = 0
+              Width = 73
+              Caption = 'Ignored'
+              TabOrder = 2
+              OnChange = FileFilterChange
+            end
+          end
+        end
+      end
+      object FilesSplitter: TSplitter
+        Left = 380
+        Height = 543
+        Top = 0
+        Width = 5
+      end
+      object FilesRightPanel: TPanel
+        Left = 385
+        Height = 543
+        Top = 0
+        Width = 767
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 543
+        ClientWidth = 767
+        TabOrder = 1
+        object CommitPanel: TPanel
+          Left = 0
+          Height = 140
+          Top = 403
+          Width = 767
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 140
+          ClientWidth = 767
+          Constraints.MinHeight = 90
+          TabOrder = 3
+          object MessageLabel: TLabel
+            Left = 4
+            Height = 18
+            Top = 4
+            Width = 763
+            Align = alTop
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            Caption = 'Commit message'
+            ParentColor = False
+          end
+          object MessageMemo: TMemo
+            Left = 4
+            Height = 78
+            Top = 26
+            Width = 759
+            Align = alClient
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            ScrollBars = ssAutoBoth
+            TabOrder = 0
+            OnChange = MessageChange
+          end
+          object CommitActionsPanel: TPanel
+            Left = 0
+            Height = 36
+            Top = 104
+            Width = 767
+            Align = alBottom
+            BevelOuter = bvNone
+            ChildSizing.LeftRightSpacing = 4
+            ChildSizing.TopBottomSpacing = 4
+            ChildSizing.HorizontalSpacing = 4
+            ChildSizing.VerticalSpacing = 4
+            ChildSizing.EnlargeVertical = crsHomogenousChildResize
+            ChildSizing.ShrinkVertical = crsHomogenousChildResize
+            ChildSizing.Layout = cclLeftToRightThenTopToBottom
+            ChildSizing.ControlsPerLine = 6
+            ClientHeight = 36
+            ClientWidth = 767
+            TabOrder = 1
+            object SuggestButton: TButton
+              Left = 4
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = SuggestMessageAction
+              ParentShowHint = False
+              ShowHint = True
+              TabOrder = 0
+            end
+            object CommitButton: TButton
+              Left = 92
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = CommitAction
+              TabOrder = 1
+            end
+            object PushCheckBox: TCheckBox
+              Left = 180
+              Height = 28
+              Top = 4
+              Width = 203
+              Caption = 'Push after successful commit'
+              TabOrder = 2
+            end
+          end
+        end
+        object CommitSplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 398
+          Width = 767
+          Align = alBottom
+          ResizeAnchor = akBottom
+        end
+        object StagedPanel: TPanel
+          Left = 0
+          Height = 120
+          Top = 278
+          Width = 767
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 120
+          ClientWidth = 767
+          Constraints.MinHeight = 60
+          TabOrder = 2
+          object StagedLabel: TLabel
+            Left = 4
+            Height = 18
+            Top = 4
+            Width = 763
+            Align = alTop
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            Caption = 'Staged for commit'
+            ParentColor = False
+          end
+          object StagedList: TListBox
+            Left = 4
+            Height = 90
+            Top = 26
+            Width = 759
+            Align = alClient
+            BorderSpacing.Around = 4
+            ItemHeight = 0
+            MultiSelect = True
+            TabOrder = 0
+            TopIndex = -1
+            OnDblClick = StagedListDblClick
+            OnSelectionChange = StagedListSelectionChange
+          end
+        end
+        object StagedSplitter: TSplitter
+          Cursor = crVSplit
+          Left = 0
+          Height = 5
+          Top = 273
+          Width = 767
+          Align = alBottom
+          ResizeAnchor = akBottom
+        end
+        object StageButtonsPanel: TPanel
+          Left = 0
+          Height = 36
+          Top = 237
+          Width = 767
+          Align = alBottom
+          BevelOuter = bvNone
+          ChildSizing.LeftRightSpacing = 4
+          ChildSizing.TopBottomSpacing = 4
+          ChildSizing.HorizontalSpacing = 4
+          ChildSizing.VerticalSpacing = 4
+          ChildSizing.EnlargeVertical = crsHomogenousChildResize
+          ChildSizing.ShrinkVertical = crsHomogenousChildResize
+          ChildSizing.Layout = cclLeftToRightThenTopToBottom
+          ChildSizing.ControlsPerLine = 8
+          ClientHeight = 36
+          ClientWidth = 767
+          TabOrder = 1
+          object StageAllButton: TButton
+            Left = 4
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = StageAllAction
+            TabOrder = 0
+          end
+          object StageButton: TButton
+            Left = 92
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = StageAction
+            TabOrder = 1
+          end
+          object StageSelectionButton: TButton
+            Left = 180
+            Height = 28
+            Top = 4
+            Width = 110
+            Action = StageSelectionAction
+            TabOrder = 2
+          end
+          object RevertButton: TButton
+            Left = 294
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = RevertAction
+            TabOrder = 3
+          end
+          object DeleteButton: TButton
+            Left = 382
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = DeleteAction
+            TabOrder = 4
+          end
+          object IgnoreButton: TButton
+            Left = 470
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = IgnoreAction
+            TabOrder = 5
+          end
+          object IgnoredFilesButton: TButton
+            Left = 558
+            Height = 28
+            Top = 4
+            Width = 106
+            Action = IgnoredFilesAction
+            TabOrder = 6
+          end
+        end
+        inline FilesDiffView: TGitDiffView
+          Left = 4
+          Height = 233
+          Top = 4
+          Width = 759
+          Align = alClient
+          BorderSpacing.Left = 4
+          BorderSpacing.Top = 4
+          BorderSpacing.Right = 4
+          BorderSpacing.Bottom = 0
+          ClientHeight = 233
+          ClientWidth = 759
+          TabOrder = 0
+        end
+      end
+    end
+  end
   object ActionList: TActionList
     Left = 40
     Top = 40
@@ -111,484 +595,6 @@ object ManageRepositoryForm: TManageRepositoryForm
     end
     object CreateBranchMenuItem: TMenuItem
       Action = CreateBranchAction
-    end
-  end
-  inline StatusFooter: TStatusFooterFrame
-    Left = 0
-    Height = 22
-    Top = 578
-    Width = 900
-    Align = alBottom
-    ClientHeight = 22
-    ClientWidth = 900
-    Constraints.MinHeight = 22
-    TabOrder = 1
-  end
-  object Pages: TPageControl
-    Left = 0
-    Height = 578
-    Top = 0
-    Width = 900
-    ActivePage = HistoryTab
-    Align = alClient
-    TabIndex = 0
-    TabOrder = 0
-    OnChange = PagesChange
-    object HistoryTab: TTabSheet
-      Caption = 'History'
-      ClientHeight = 543
-      ClientWidth = 894
-      object MainPanel: TPanel
-        Left = 0
-        Height = 543
-        Top = 0
-        Width = 894
-        Align = alClient
-        BevelOuter = bvNone
-        ClientHeight = 543
-        ClientWidth = 894
-        TabOrder = 0
-        object DetailPanel: TPanel
-          Left = 0
-          Height = 240
-          Top = 303
-          Width = 894
-          Align = alBottom
-          BevelOuter = bvNone
-          ClientHeight = 240
-          ClientWidth = 894
-          Constraints.MinHeight = 120
-          TabOrder = 1
-          object HistoryButtons: TPanel
-            Left = 0
-            Height = 36
-            Top = 0
-            Width = 894
-            Align = alTop
-            BevelOuter = bvNone
-            ChildSizing.LeftRightSpacing = 4
-            ChildSizing.TopBottomSpacing = 4
-            ChildSizing.HorizontalSpacing = 4
-            ChildSizing.VerticalSpacing = 4
-            ChildSizing.EnlargeVertical = crsHomogenousChildResize
-            ChildSizing.ShrinkVertical = crsHomogenousChildResize
-            ChildSizing.Layout = cclLeftToRightThenTopToBottom
-            ChildSizing.ControlsPerLine = 8
-            ClientHeight = 36
-            ClientWidth = 894
-            TabOrder = 0
-            object PushButton: TButton
-              Left = 4
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = PushAction
-              TabOrder = 0
-            end
-            object PullButton: TButton
-              Left = 92
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = PullAction
-              TabOrder = 1
-            end
-            object FetchButton: TButton
-              Left = 180
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = FetchAction
-              TabOrder = 2
-            end
-            object RemotesButton: TButton
-              Left = 268
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = RemotesAction
-              TabOrder = 3
-            end
-          end
-          inline DiffView: TGitDiffView
-            Left = 4
-            Height = 200
-            Top = 36
-            Width = 886
-            Align = alClient
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 0
-            BorderSpacing.Right = 4
-            BorderSpacing.Bottom = 4
-            ClientHeight = 200
-            ClientWidth = 886
-            TabOrder = 1
-          end
-        end
-        object HistorySplitter: TSplitter
-          Cursor = crVSplit
-          Left = 0
-          Height = 5
-          Top = 298
-          Width = 894
-          Align = alBottom
-          AutoSnap = False
-          MinSize = 48
-          ResizeAnchor = akBottom
-        end
-        object GraphHost: TPanel
-          Left = 4
-          Height = 294
-          Top = 4
-          Width = 886
-          Align = alClient
-          BorderSpacing.Around = 4
-          BevelOuter = bvNone
-          ClientHeight = 294
-          ClientWidth = 886
-          TabOrder = 0
-          OnResize = GraphHostResize
-          object GraphScrollBar: TScrollBar
-            Left = 870
-            Height = 294
-            Top = 0
-            Width = 16
-            Align = alRight
-            Kind = sbVertical
-            PageSize = 0
-            TabOrder = 0
-            OnChange = ScrollBarChange
-          end
-          object GraphPaintBox: TPaintBox
-            Left = 0
-            Height = 294
-            Top = 0
-            Width = 870
-            Align = alClient
-            PopupMenu = Popup
-            OnMouseDown = PaintBoxMouseDown
-            OnMouseWheel = PaintBoxMouseWheel
-            OnPaint = PaintBoxPaint
-          end
-        end
-      end
-    end
-    object FilesTab: TTabSheet
-      Caption = 'Files'
-      ClientHeight = 543
-      ClientWidth = 894
-      object FilesLeftPanel: TPanel
-        Left = 0
-        Height = 543
-        Top = 0
-        Width = 380
-        Align = alLeft
-        BevelOuter = bvNone
-        ClientHeight = 543
-        ClientWidth = 380
-        TabOrder = 0
-        object FilesList: TListBox
-          Left = 4
-          Height = 447
-          Top = 4
-          Width = 372
-          Align = alClient
-          BorderSpacing.Around = 4
-          ItemHeight = 0
-          MultiSelect = True
-          TabOrder = 0
-          TopIndex = -1
-          OnDblClick = FilesListDblClick
-          OnSelectionChange = FilesListSelectionChange
-        end
-        object FilesBottomPanel: TPanel
-          Left = 0
-          Height = 88
-          Top = 455
-          Width = 380
-          Align = alBottom
-          BevelOuter = bvNone
-          ClientHeight = 88
-          ClientWidth = 380
-          TabOrder = 1
-          object FilterGroupBox: TGroupBox
-            Left = 4
-            Height = 72
-            Top = 8
-            Width = 372
-            Align = alTop
-            BorderSpacing.Around = 8
-            Caption = 'Filter'
-            ClientHeight = 45
-            ClientWidth = 368
-            TabOrder = 0
-            object UntrackedCheck: TCheckBox
-              Left = 12
-              Height = 22
-              Top = 4
-              Width = 88
-              Caption = 'Untracked'
-              TabOrder = 0
-              OnChange = FileFilterChange
-            end
-            object CleanCheck: TCheckBox
-              Left = 120
-              Height = 22
-              Top = 4
-              Width = 59
-              Caption = 'Clean'
-              TabOrder = 1
-              OnChange = FileFilterChange
-            end
-            object IgnoredCheck: TCheckBox
-              Left = 208
-              Height = 22
-              Top = 4
-              Width = 73
-              Caption = 'Ignored'
-              TabOrder = 2
-              OnChange = FileFilterChange
-            end
-          end
-        end
-      end
-      object FilesSplitter: TSplitter
-        Left = 380
-        Height = 543
-        Top = 0
-        Width = 5
-      end
-      object FilesRightPanel: TPanel
-        Left = 385
-        Height = 543
-        Top = 0
-        Width = 509
-        Align = alClient
-        BevelOuter = bvNone
-        ClientHeight = 543
-        ClientWidth = 509
-        TabOrder = 1
-        object CommitPanel: TPanel
-          Left = 0
-          Height = 140
-          Top = 403
-          Width = 509
-          Align = alBottom
-          BevelOuter = bvNone
-          ClientHeight = 140
-          ClientWidth = 509
-          Constraints.MinHeight = 90
-          TabOrder = 3
-          object MessageLabel: TLabel
-            Left = 8
-            Height = 18
-            Top = 4
-            Width = 501
-            Align = alTop
-            BorderSpacing.Left = 8
-            BorderSpacing.Top = 4
-            Caption = 'Commit message'
-            ParentColor = False
-          end
-          object MessageMemo: TMemo
-            Left = 4
-            Height = 74
-            Top = 26
-            Width = 501
-            Align = alClient
-            BorderSpacing.Around = 4
-            ScrollBars = ssAutoBoth
-            TabOrder = 0
-            OnChange = MessageChange
-          end
-          object CommitActionsPanel: TPanel
-            Left = 0
-            Height = 36
-            Top = 104
-            Width = 509
-            Align = alBottom
-            BevelOuter = bvNone
-            ChildSizing.LeftRightSpacing = 4
-            ChildSizing.TopBottomSpacing = 4
-            ChildSizing.HorizontalSpacing = 4
-            ChildSizing.VerticalSpacing = 4
-            ChildSizing.EnlargeVertical = crsHomogenousChildResize
-            ChildSizing.ShrinkVertical = crsHomogenousChildResize
-            ChildSizing.Layout = cclLeftToRightThenTopToBottom
-            ChildSizing.ControlsPerLine = 6
-            ClientHeight = 36
-            ClientWidth = 509
-            TabOrder = 1
-            object SuggestButton: TButton
-              Left = 4
-              Height = 28
-              Top = 4
-              Width = 100
-              Action = SuggestMessageAction
-              ParentShowHint = False
-              ShowHint = True
-              TabOrder = 0
-            end
-            object CommitButton: TButton
-              Left = 108
-              Height = 28
-              Top = 4
-              Width = 84
-              Action = CommitAction
-              TabOrder = 1
-            end
-            object PushCheckBox: TCheckBox
-              Left = 196
-              Height = 28
-              Top = 4
-              Width = 203
-              Caption = 'Push after successful commit'
-              TabOrder = 2
-            end
-          end
-        end
-        object CommitSplitter: TSplitter
-          Cursor = crVSplit
-          Left = 0
-          Height = 5
-          Top = 398
-          Width = 509
-          Align = alBottom
-          ResizeAnchor = akBottom
-        end
-        object StagedPanel: TPanel
-          Left = 0
-          Height = 120
-          Top = 278
-          Width = 509
-          Align = alBottom
-          BevelOuter = bvNone
-          ClientHeight = 120
-          ClientWidth = 509
-          Constraints.MinHeight = 60
-          TabOrder = 2
-          object StagedLabel: TLabel
-            Left = 8
-            Height = 18
-            Top = 4
-            Width = 501
-            Align = alTop
-            BorderSpacing.Left = 8
-            BorderSpacing.Top = 4
-            Caption = 'Staged for commit'
-            ParentColor = False
-          end
-          object StagedList: TListBox
-            Left = 4
-            Height = 90
-            Top = 26
-            Width = 501
-            Align = alClient
-            BorderSpacing.Around = 4
-            ItemHeight = 0
-            MultiSelect = True
-            TabOrder = 0
-            TopIndex = -1
-            OnDblClick = StagedListDblClick
-            OnSelectionChange = StagedListSelectionChange
-          end
-        end
-        object StagedSplitter: TSplitter
-          Cursor = crVSplit
-          Left = 0
-          Height = 5
-          Top = 273
-          Width = 509
-          Align = alBottom
-          ResizeAnchor = akBottom
-        end
-        object StageButtonsPanel: TPanel
-          Left = 0
-          Height = 36
-          Top = 237
-          Width = 509
-          Align = alBottom
-          BevelOuter = bvNone
-          ChildSizing.LeftRightSpacing = 4
-          ChildSizing.TopBottomSpacing = 4
-          ChildSizing.HorizontalSpacing = 4
-          ChildSizing.VerticalSpacing = 4
-          ChildSizing.EnlargeVertical = crsHomogenousChildResize
-          ChildSizing.ShrinkVertical = crsHomogenousChildResize
-          ChildSizing.Layout = cclLeftToRightThenTopToBottom
-          ChildSizing.ControlsPerLine = 8
-          ClientHeight = 36
-          ClientWidth = 509
-          TabOrder = 1
-          object StageAllButton: TButton
-            Left = 4
-            Height = 28
-            Top = 4
-            Width = 100
-            Action = StageAllAction
-            TabOrder = 0
-          end
-          object StageButton: TButton
-            Left = 108
-            Height = 28
-            Top = 4
-            Width = 84
-            Action = StageAction
-            TabOrder = 1
-          end
-          object StageSelectionButton: TButton
-            Left = 196
-            Height = 28
-            Top = 4
-            Width = 110
-            Action = StageSelectionAction
-            TabOrder = 2
-          end
-          object RevertButton: TButton
-            Left = 310
-            Height = 28
-            Top = 4
-            Width = 70
-            Action = RevertAction
-            TabOrder = 3
-          end
-          object DeleteButton: TButton
-            Left = 384
-            Height = 28
-            Top = 4
-            Width = 70
-            Action = DeleteAction
-            TabOrder = 4
-          end
-          object IgnoreButton: TButton
-            Left = 458
-            Height = 28
-            Top = 4
-            Width = 70
-            Action = IgnoreAction
-            TabOrder = 5
-          end
-          object IgnoredFilesButton: TButton
-            Left = 532
-            Height = 28
-            Top = 4
-            Width = 120
-            Action = IgnoredFilesAction
-            TabOrder = 6
-          end
-        end
-        inline FilesDiffView: TGitDiffView
-          Left = 0
-          Height = 237
-          Top = 0
-          Width = 509
-          Align = alClient
-          BorderSpacing.Around = 0
-          ClientHeight = 237
-          ClientWidth = 509
-          TabOrder = 0
-        end
-      end
     end
   end
 end

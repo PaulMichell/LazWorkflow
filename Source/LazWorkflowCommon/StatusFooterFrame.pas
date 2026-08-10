@@ -25,7 +25,7 @@ Type
     Procedure SetLeftText(Const Value: String);
     Procedure SetCentreText(Const Value: String);
     Procedure SetRightText(Const Value: String);
-    Procedure SetAll(Const LeftText, CentreText, RightText: String);
+    Procedure SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
     Property LeftText: String Write SetLeftText;
     Property CentreText: String Write SetCentreText;
     Property RightText: String Write SetRightText;
@@ -44,24 +44,30 @@ End;
 
 Procedure TStatusFooterFrame.SetLeftText(Const Value: String);
 Begin
-  LeftLabel.Caption := Value;
+  If Assigned(LeftLabel) Then
+    LeftLabel.Caption := Value;
 End;
 
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
-  CentreLabel.Caption := Value;
+  If Assigned(CentreLabel) Then
+    CentreLabel.Caption := Value;
 End;
 
 Procedure TStatusFooterFrame.SetRightText(Const Value: String);
 Begin
-  RightLabel.Caption := Value;
+  If Assigned(RightLabel) Then
+    RightLabel.Caption := Value;
 End;
 
-Procedure TStatusFooterFrame.SetAll(Const LeftText, CentreText, RightText: String);
+Procedure TStatusFooterFrame.SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
 Begin
-  LeftLabel.Caption := LeftText;
-  CentreLabel.Caption := CentreText;
-  RightLabel.Caption := RightText;
+  If Assigned(LeftLabel) Then
+    LeftLabel.Caption := NewLeftText;
+  If Assigned(CentreLabel) Then
+    CentreLabel.Caption := NewCentreText;
+  If Assigned(RightLabel) Then
+    RightLabel.Caption := NewRightText;
 End;
 
 Initialization

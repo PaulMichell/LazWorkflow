@@ -83,7 +83,7 @@ Type
     FMixedHigh: TObject; { TGitMixedDiffHighlighter, owned by Self }
     FPreviewPicture: TPicture;
     FAppearanceReady: Boolean;
-    DiffEditororOptsHooked: Boolean;
+    FEditorOptsHooked: Boolean;
     FSelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
@@ -584,7 +584,7 @@ Begin
   FDiffOverviewProvider := Nil;
   FOwnedLangHigh := Nil;
   FAppearanceReady := False;
-  DiffEditororOptsHooked := False;
+  FEditorOptsHooked := False;
   FSelectedLines := TFPList.Create;
   FLineDragSnapshot := TFPList.Create;
   FLineDragActive := False;
@@ -962,13 +962,13 @@ End;
 
 Procedure TGitDiffView.HookEditorOptionsChanged;
 Begin
-  If DiffEditororOptsHooked Then
+  If FEditorOptsHooked Then
     Exit;
   If Not Assigned(SourceEditorManagerIntf) Then
     Exit;
   Try
     SourceEditorManagerIntf.RegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
-    DiffEditororOptsHooked := True;
+    FEditorOptsHooked := True;
   Except
     On E: Exception Do
       WorkflowLogger.Warning('GitDiffView', 'HookEditorOptionsChanged: ' + E.Message);
@@ -977,9 +977,9 @@ End;
 
 Procedure TGitDiffView.UnhookEditorOptionsChanged;
 Begin
-  If Not DiffEditororOptsHooked Then
+  If Not FEditorOptsHooked Then
     Exit;
-  DiffEditororOptsHooked := False;
+  FEditorOptsHooked := False;
   If Not Assigned(SourceEditorManagerIntf) Then
     Exit;
   Try
@@ -1844,10 +1844,16 @@ Begin
   CanUnstage := CanUnstageFromPreview;
   HasSel := HasActiveSelection;
   { Internal toolbar only for classic staging tree mode. }
-  StageSelectionButton.Enabled := CanStage And HasSel;
-  UnstageSelectionButton.Enabled := CanUnstage And HasSel;
-  StageSelectionButton.Visible := FMode = dvmStaging;
-  UnstageSelectionButton.Visible := FMode = dvmStaging;
+  If Assigned(StageSelectionButton) Then
+    Begin
+      StageSelectionButton.Enabled := CanStage And HasSel;
+      StageSelectionButton.Visible := FMode = dvmStaging;
+    End;
+  If Assigned(UnstageSelectionButton) Then
+    Begin
+      UnstageSelectionButton.Enabled := CanUnstage And HasSel;
+      UnstageSelectionButton.Visible := FMode = dvmStaging;
+    End;
   If Assigned(StageMenuItem) Then
     Begin
       StageMenuItem.Enabled := CanStage And HasSel;

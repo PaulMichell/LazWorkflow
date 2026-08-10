@@ -892,7 +892,8 @@ Begin
       RefreshRepositoryInfo;
       UpdateStatus;
       If Kind = rokPush Then
-        StatusFooter.SetRightText('Push complete');
+        If Assigned(StatusFooter) Then
+          StatusFooter.SetRightText('Push complete');
       If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
         RefreshFilesList;
     End;
@@ -914,7 +915,8 @@ Begin
   StopDetailThread;
   StopIndexThread;
   FIndexing := True;
-  StatusFooter.SetRightText('Indexing…');
+  If Assigned(StatusFooter) Then
+    StatusFooter.SetRightText('Indexing…');
   FIndexThread := TGitIndexThread.Create(Self, FRepoPath);
   FIndexThread.Start;
 End;
@@ -929,7 +931,8 @@ Begin
   If Not FPendingIndexOk Then
     Begin
       If Assigned(StatusFooter) Then
-        StatusFooter.SetRightText('Index failed');
+        If Assigned(StatusFooter) Then
+          StatusFooter.SetRightText('Index failed');
       WorkflowLogger.Warning('ManageRepository', 'rev-list failed for ' + FRepoPath);
       Exit;
     End;
@@ -2536,7 +2539,8 @@ Var
 Begin
   If FRepoPath = '' Then
     Begin
-      StatusFooter.SetAll('No repository', '', 'Ready');
+      If Assigned(StatusFooter) Then
+        StatusFooter.SetAll('No repository', '', 'Ready');
       Exit;
     End;
 
@@ -2568,7 +2572,8 @@ Begin
   Else
     RightText := 'Dirty';
 
-  StatusFooter.SetAll(LeftText, CentreText, RightText);
+  If Assigned(StatusFooter) Then
+    StatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
 Procedure TManageRepositoryForm.RefreshRepositoryInfo;
@@ -2681,7 +2686,8 @@ Begin
   If FRemoteOpBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
-    StatusFooter.SetRightText('Remote ' + RemoteName + ' updated');
+    If Assigned(StatusFooter) Then
+      StatusFooter.SetRightText('Remote ' + RemoteName + ' updated');
 End;
 
 End.
