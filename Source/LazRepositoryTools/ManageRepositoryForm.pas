@@ -946,15 +946,19 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
+Var
+  Allow: Boolean;
 Begin
+  { Job busy and remote-op busy both gate History toolbar actions. }
+  Allow := ActionsEnabled And (Not FJobBusy) And (Not FRemoteOpBusy);
   If Assigned(FetchAction) Then
-    FetchAction.Enabled := ActionsEnabled And Not FJobBusy;
+    FetchAction.Enabled := Allow;
   If Assigned(PullAction) Then
-    PullAction.Enabled := ActionsEnabled And Not FJobBusy;
+    PullAction.Enabled := Allow;
   If Assigned(PushAction) Then
-    PushAction.Enabled := ActionsEnabled And Not FJobBusy;
+    PushAction.Enabled := Allow;
   If Assigned(RemotesAction) Then
-    RemotesAction.Enabled := ActionsEnabled And Not FJobBusy;
+    RemotesAction.Enabled := Allow;
 End;
 
 Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
@@ -970,8 +974,8 @@ Begin
   Else
     Begin
       Screen.Cursor := crDefault;
-      If Not FRemoteOpBusy Then
-        SetRemoteActionsEnabled(True);
+      { Re-evaluate gates; FRemoteOpBusy may still be true until GitJobFinished. }
+      SetRemoteActionsEnabled(True);
       UpdateStatus;
     End;
 End;
@@ -1017,11 +1021,17 @@ Begin
   Case Job.Kind Of
     gjkFetch, gjkPull, gjkPush:
       Begin
+        { Busy-notify often runs before this handler while FRemoteOpBusy is still True,
+          so re-enable must happen here after clearing the remote-op flag. }
         FRemoteOpBusy := False;
+        FJobBusy := False;
+        Screen.Cursor := crDefault;
+        SetRemoteActionsEnabled(True);
         If Job.Cancelled Then
           Begin
             If Assigned(StatusFooter) Then
               StatusFooter.SetRightText('Cancelled');
+            UpdateStatus;
             Exit;
           End;
         Msg := Job.ErrorText;
@@ -1039,6 +1049,7 @@ Begin
           End
         Else
           MessageDlg(Msg, mtError, [mbOK], 0);
+        UpdateStatus;
       End;
     gjkCommit:
       Begin
