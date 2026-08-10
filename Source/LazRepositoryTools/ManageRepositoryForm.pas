@@ -42,7 +42,6 @@ Type
     FFilesRightPanel: TPanel;
     FStageButtonsBar: TPanel;
     FBtnStage: TButton;
-    FBtnUnstage: TButton;
     FBtnStageAll: TButton;
     FBtnStageSelection: TButton;
     FBtnIgnoreFiles: TButton;
@@ -102,7 +101,6 @@ Type
     Procedure FileFilterChange(Sender: TObject);
     Procedure BtnIgnoreFilesClick(Sender: TObject);
     Procedure BtnStageClick(Sender: TObject);
-    Procedure BtnUnstageClick(Sender: TObject);
     Procedure BtnStageAllClick(Sender: TObject);
     Procedure BtnStageSelectionClick(Sender: TObject);
     Procedure BtnRefreshFilesClick(Sender: TObject);
@@ -1735,11 +1733,42 @@ End;
 Procedure TManageRepositoryForm.UpdateStageButtonsEnabled;
 Var
   CanPreviewAction: Boolean;
+  FilesEmpty, StagedEmpty, UnstageMode: Boolean;
 Begin
+  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
+  StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
+  { Prefer unstage when the working-tree list is empty but staged entries remain,
+    or when the staged list currently holds the selection. }
+  UnstageMode := (Not StagedEmpty) And (FilesEmpty Or ListHasSelection(FStagedList));
+
+  If Assigned(FBtnStageAll) Then
+    Begin
+      If (Not StagedEmpty) And FilesEmpty Then
+        Begin
+          FBtnStageAll.Caption := 'Unstage All';
+          FBtnStageAll.Enabled := FRepoPath <> '';
+        End
+      Else
+        Begin
+          FBtnStageAll.Caption := 'Stage All';
+          FBtnStageAll.Enabled := (Not FilesEmpty) And (FRepoPath <> '');
+        End;
+    End;
+
   If Assigned(FBtnStage) Then
-    FBtnStage.Enabled := ListHasSelection(FFilesList) And (FFilesPaths.Count > 0);
-  If Assigned(FBtnUnstage) Then
-    FBtnUnstage.Enabled := ListHasSelection(FStagedList) And (FStagedPaths.Count > 0);
+    Begin
+      If UnstageMode Then
+        Begin
+          FBtnStage.Caption := 'Unstage';
+          FBtnStage.Enabled := ListHasSelection(FStagedList) And (FRepoPath <> '');
+        End
+      Else
+        Begin
+          FBtnStage.Caption := 'Stage';
+          FBtnStage.Enabled := ListHasSelection(FFilesList) And (Not FilesEmpty) And (FRepoPath <> '');
+        End;
+    End;
+
   If Assigned(FBtnStageSelection) And Assigned(FFilesDiffView) Then
     Begin
       CanPreviewAction := FFilesDiffView.HasActiveSelection And (FRepoPath <> '');
@@ -1852,7 +1881,7 @@ End;
 
 Procedure TManageRepositoryForm.StagedListDblClick(Sender: TObject);
 Begin
-  BtnUnstageClick(Sender);
+  BtnStageClick(Sender);
 End;
 
 Procedure TManageRepositoryForm.FileFilterChange(Sender: TObject);
@@ -1874,54 +1903,71 @@ End;
 Procedure TManageRepositoryForm.BtnStageClick(Sender: TObject);
 Var
   Paths: TStringList;
+  FilesEmpty, UnstageMode: Boolean;
 Begin
   If Not Assigned(GitClient) Or (FRepoPath = '') Then
     Exit;
-  Paths := CollectSelectedPaths(FFilesList, FFilesPaths);
-  Try
-    If Paths.Count = 0 Then
-      Begin
-        MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
-        Exit;
-      End;
-    GitClient.RepoPath := FRepoPath;
-    If Not GitClient.StagePaths(Paths) Then
-      MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-    RefreshFilesList;
-  Finally
-    Paths.Free;
-  End;
-End;
+  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
+  UnstageMode := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
+    (FilesEmpty Or ListHasSelection(FStagedList));
 
-Procedure TManageRepositoryForm.BtnUnstageClick(Sender: TObject);
-Var
-  Paths: TStringList;
-Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
-    Exit;
-  Paths := CollectSelectedPaths(FStagedList, FStagedPaths);
-  Try
-    If Paths.Count = 0 Then
-      Begin
-        MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
-        Exit;
+  If UnstageMode Then
+    Begin
+      Paths := CollectSelectedPaths(FStagedList, FStagedPaths);
+      Try
+        If Paths.Count = 0 Then
+          Begin
+            MessageDlg('Select one or more files in the staged list to unstage.', mtInformation, [mbOK], 0);
+            Exit;
+          End;
+        GitClient.RepoPath := FRepoPath;
+        If Not GitClient.UnstagePaths(Paths) Then
+          MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+        RefreshFilesList;
+      Finally
+        Paths.Free;
       End;
-    GitClient.RepoPath := FRepoPath;
-    If Not GitClient.UnstagePaths(Paths) Then
-      MessageDlg('Unstage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
-    RefreshFilesList;
-  Finally
-    Paths.Free;
-  End;
+    End
+  Else
+    Begin
+      Paths := CollectSelectedPaths(FFilesList, FFilesPaths);
+      Try
+        If Paths.Count = 0 Then
+          Begin
+            MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
+            Exit;
+          End;
+        GitClient.RepoPath := FRepoPath;
+        If Not GitClient.StagePaths(Paths) Then
+          MessageDlg('Stage failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+        RefreshFilesList;
+      Finally
+        Paths.Free;
+      End;
+    End;
 End;
 
 Procedure TManageRepositoryForm.BtnStageAllClick(Sender: TObject);
+Var
+  FilesEmpty, StagedEmpty: Boolean;
 Begin
   If Not Assigned(GitClient) Or (FRepoPath = '') Then
     Exit;
+  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
+  StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
   GitClient.RepoPath := FRepoPath;
-  If Not GitClient.StageAll Then
-    MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  If (Not StagedEmpty) And FilesEmpty Then
+    Begin
+      If Not GitClient.UnstageAll Then
+        MessageDlg('Unstage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+    End
+  Else
+    Begin
+      If FilesEmpty Then
+        Exit;
+      If Not GitClient.StageAll Then
+        MessageDlg('Stage all failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+    End;
   RefreshFilesList;
 End;
 

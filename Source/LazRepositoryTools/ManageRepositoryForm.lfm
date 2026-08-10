@@ -485,13 +485,13 @@ object ManageRepositoryForm: TManageRepositoryForm
             Left = 8
             Height = 34
             Top = 6
-            Width = 84
+            Width = 100
             Caption = 'Stage All'
             TabOrder = 0
             OnClick = BtnStageAllClick
           end
           object FBtnStage: TButton
-            Left = 100
+            Left = 116
             Height = 34
             Top = 6
             Width = 84
@@ -499,32 +499,23 @@ object ManageRepositoryForm: TManageRepositoryForm
             TabOrder = 1
             OnClick = BtnStageClick
           end
-          object FBtnUnstage: TButton
-            Left = 192
-            Height = 34
-            Top = 6
-            Width = 84
-            Caption = 'Unstage'
-            TabOrder = 2
-            OnClick = BtnUnstageClick
-          end
           object FBtnStageSelection: TButton
-            Left = 284
+            Left = 208
             Height = 34
             Top = 6
             Width = 110
             Caption = 'Stage Selection'
             Enabled = False
-            TabOrder = 3
+            TabOrder = 2
             OnClick = BtnStageSelectionClick
           end
           object FBtnIgnoreFiles: TButton
-            Left = 402
+            Left = 326
             Height = 34
             Top = 6
             Width = 110
             Caption = 'Ignore Files…'
-            TabOrder = 4
+            TabOrder = 3
             OnClick = BtnIgnoreFilesClick
           end
         end
