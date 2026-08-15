@@ -1076,13 +1076,13 @@ End;
 
 Function TGitService.ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean): Boolean;
 Var
-  TempName: String;
-  List: TStringList;
+  TempName, Payload, OutputText: String;
+  Stream: TFileStream;
   Args: Array Of String;
-  OutputText: String;
   ExitCode: Integer;
 Begin
   Result := False;
+  Args := Nil;
   If Trim(PatchText) = '' Then
     Begin
       FLastError := 'Empty patch';
@@ -1094,34 +1094,48 @@ Begin
       FLastError := 'Could not create temporary patch file';
       Exit;
     End;
-  List := TStringList.Create;
+  Payload := PatchText;
+  If Payload[Length(Payload)] <> #10 Then
+    Payload := Payload + #10;
   Try
-    List.Text := PatchText;
-    { Ensure trailing newline – git apply is strict. }
-    If (List.Count > 0) And (List[List.Count - 1] <> '') Then
-      List.Add('');
+    Stream := TFileStream.Create(TempName, fmCreate);
     Try
-      List.SaveToFile(TempName);
-    Except
-      On E: Exception Do
-        Begin
-          FLastError := 'Could not write patch: ' + E.Message;
-          Exit;
-        End;
+      Stream.WriteBuffer(Payload[1], Length(Payload));
+    Finally
+      Stream.Free;
     End;
+  Except
+    On E: Exception Do
+      Begin
+        FLastError := 'Could not write patch: ' + E.Message;
+        If FileExists(TempName) Then
+          DeleteFile(TempName);
+        Exit;
+      End;
+  End;
 
+  Try
+    If Reverse Then
+      Args := ['apply', '--cached', '--reverse', '--whitespace=nowarn', '--check', TempName]
+    Else
+      Args := ['apply', '--cached', '--whitespace=nowarn', '--check', TempName];
+    Result := RunGit(Args, OutputText, ExitCode);
+    If Not Result Then
+      Begin
+        If Trim(OutputText) <> '' Then
+          FLastError := Trim(OutputText);
+        Exit;
+      End;
     If Reverse Then
       Args := ['apply', '--cached', '--reverse', '--whitespace=nowarn', TempName]
     Else
       Args := ['apply', '--cached', '--whitespace=nowarn', TempName];
-
     Result := RunGit(Args, OutputText, ExitCode);
     If Result Then
       EmitWorkingTreeChanged
     Else If Trim(OutputText) <> '' Then
       FLastError := Trim(OutputText);
   Finally
-    List.Free;
     If FileExists(TempName) Then
       DeleteFile(TempName);
   End;
