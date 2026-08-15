@@ -156,6 +156,7 @@ Type
     FFilesPaths: TStringList;
     FStagedPaths: TStringList;
     FInListSelChange: Boolean;
+    FStatusGen: Integer;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
@@ -654,6 +655,8 @@ Begin
   FFilesPaths := TStringList.Create;
   FStagedPaths := TStringList.Create;
   FInListSelChange := False;
+  FStatusGen := 0;
+  FLastPorcelain := '';
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   ApplyConfig;
@@ -1137,6 +1140,8 @@ Begin
     gjkListStatus:
       Begin
         If Job.Cancelled Then
+          Exit;
+        If (Job.Tag <> FStatusGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
           Exit;
         If Job.Ok Then
           ApplyFilesFromStatus(Job.StatusEntries)
@@ -1999,9 +2004,11 @@ Begin
       UpdateStageButtonsEnabled;
       Exit;
     End;
+  Inc(FStatusGen);
   Job := TGitJob.Create(gjkListStatus);
   Job.RepoPath := FRepoPath;
   Job.Caption := 'Refreshing files…';
+  Job.Tag := FStatusGen;
   Job.IncludeUntracked := Assigned(UntrackedCheck) And UntrackedCheck.Checked;
   Job.IncludeIgnored := Assigned(IgnoredCheck) And IgnoredCheck.Checked;
   SubmitGitJob(Job);
