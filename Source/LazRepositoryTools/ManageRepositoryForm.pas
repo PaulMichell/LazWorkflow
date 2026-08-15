@@ -397,10 +397,8 @@ Begin
   Finally
     Client.Free;
   End;
-  { Always Queue when a form is still attached so soft-cancel can Free on the main thread.
-    Hard dispose DetachForm's first, so we exit without Queue and the form WaitFor+Free's. }
-  If Not Assigned(FForm) Then
-    Exit;
+  { Queue even after DetachForm so soft-cancel can Free Self on the main thread.
+    Hard dispose RemoveQueuedEvents this before WaitFor+Free. }
   Queue(@Deliver);
 End;
 
@@ -466,8 +464,6 @@ Begin
   Finally
     Client.Free;
   End;
-  If Not Assigned(FForm) Then
-    Exit;
   Queue(@Deliver);
 End;
 
@@ -573,8 +569,6 @@ Begin
   Finally
     Client.Free;
   End;
-  If Not Assigned(FForm) Then
-    Exit;
   Queue(@Deliver);
 End;
 
@@ -927,23 +921,23 @@ Begin
   Pending := Worker;
   Worker := Nil;
   Pending.Terminate;
+  { Always detach so a later Deliver cannot touch this form after it is freed. }
+  If Pending Is TGitIndexThread Then
+    TGitIndexThread(Pending).DetachForm
+  Else If Pending Is TGitDetailThread Then
+    TGitDetailThread(Pending).DetachForm
+  Else If Pending Is TGitRemoteOpThread Then
+    TGitRemoteOpThread(Pending).DetachForm;
   If HardWait Then
     Begin
-      { Detach so Execute will not Queue after WaitFor begins. }
-      If Pending Is TGitIndexThread Then
-        TGitIndexThread(Pending).DetachForm
-      Else If Pending Is TGitDetailThread Then
-        TGitDetailThread(Pending).DetachForm
-      Else If Pending Is TGitRemoteOpThread Then
-        TGitRemoteOpThread(Pending).DetachForm;
       TThread.RemoveQueuedEvents(Pending);
       Pending.WaitFor;
       { Catch a Queue posted in the race between Detach and thread exit. }
       TThread.RemoveQueuedEvents(Pending);
       Pending.Free;
     End;
-  { Soft cancel: abandon the pointer. Deliver still runs (form attached), sees a
-    generation mismatch, and Free's the worker on the main thread. }
+  { Soft cancel: abandon the pointer. Execute still Queue's Deliver, which
+    sees FForm = Nil and Frees the worker on the main thread. }
 End;
 
 Procedure TManageRepositoryForm.StopIndexThread;
