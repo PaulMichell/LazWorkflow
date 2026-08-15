@@ -194,7 +194,7 @@ End;
 Procedure TGitService.EmitWorkingTreeChanged;
 Begin
   If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
-    EmitWorkingTreeChanged;
+    WorkflowEventBus.NotifyWorkingTreeChanged(FRepoPath);
 End;
 
 Procedure TGitService.EmitHeadChanged(Const NewHeadSha: String);
@@ -206,7 +206,7 @@ End;
 Procedure TGitService.EmitCommitCreated(Const Info: TGitCommitInfo);
 Begin
   If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
-    EmitCommitCreated(Info);
+    WorkflowEventBus.NotifyCommitCreated(FRepoPath, Info);
 End;
 
 Procedure TGitService.EmitRepositoryStateChanged(Const Path: String; NewState: TGitRepositoryState);
@@ -218,7 +218,7 @@ End;
 Procedure TGitService.EmitRemoteUpdated(Const RemoteName: String);
 Begin
   If FPublishEvents And Assigned(WorkflowEventBus) And (FRepoPath <> '') Then
-    EmitRemoteUpdated(RemoteName);
+    WorkflowEventBus.NotifyRemoteUpdated(FRepoPath, RemoteName);
 End;
 
 Procedure TGitService.ResetCancel;

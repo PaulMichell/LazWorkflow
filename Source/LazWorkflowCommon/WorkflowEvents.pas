@@ -82,6 +82,8 @@ Type
   Private
     FListeners: TInterfaceList;
     FLock: TRTLCriticalSection;
+    { Snapshot so notify callbacks can add/remove listeners and do UI without holding FLock. }
+    Function CopyListeners: TInterfaceList;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -157,79 +159,98 @@ Begin
   End;
 End;
 
+Function TWorkflowEventBus.CopyListeners: TInterfaceList;
+Var
+  I: Integer;
+Begin
+  Result := TInterfaceList.Create;
+  EnterCriticalSection(FLock);
+  Try
+    For I := 0 To FListeners.Count - 1 Do
+      Result.Add(FListeners[I]);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
 Procedure TWorkflowEventBus.NotifyRepositoryStateChanged(Const RepoPath: String;
   NewState: TGitRepositoryState);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IGitRepositoryChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGitRepositoryChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
         Listener.RepositoryStateChanged(RepoPath, NewState);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyWorkingTreeChanged(Const RepoPath: String);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IGitRepositoryChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGitRepositoryChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
         Listener.WorkingTreeChanged(RepoPath);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyHeadChanged(Const RepoPath: String; Const NewHeadSha: String);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IGitRepositoryChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGitRepositoryChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
         Listener.HeadChanged(RepoPath, NewHeadSha);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyRemoteUpdated(Const RepoPath: String; Const RemoteName: String);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IGitRepositoryChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGitRepositoryChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
         Listener.RemoteUpdated(RepoPath, RemoteName);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyCommitCreated(Const RepoPath: String; Const Commit: TGitCommitInfo);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IGitCommitCreated;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IGitCommitCreated, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IGitCommitCreated, Listener) Then
         Listener.CommitCreated(RepoPath, Commit);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
@@ -237,45 +258,48 @@ Procedure TWorkflowEventBus.NotifyCompilerFinished(Const ProjectFile: String;
   Result: TCompilerResult; Const OutputText: String; ErrorCount, WarningCount: Integer);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: ICompilerFinished;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], ICompilerFinished, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], ICompilerFinished, Listener) Then
         Listener.CompilerFinished(ProjectFile, Result, OutputText, ErrorCount, WarningCount);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyDocumentChanged(Const FileName: String; Const NewContent: String);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IMarkdownDocumentChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IMarkdownDocumentChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IMarkdownDocumentChanged, Listener) Then
         Listener.DocumentChanged(FileName, NewContent);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
 Procedure TWorkflowEventBus.NotifyDocumentSaved(Const FileName: String);
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IMarkdownDocumentChanged;
 Begin
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IMarkdownDocumentChanged, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IMarkdownDocumentChanged, Listener) Then
         Listener.DocumentSaved(FileName);
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 
@@ -283,15 +307,16 @@ Function TWorkflowEventBus.RequestToolCall(Const ToolName: String; Const Argumen
   Out ResultJson: String; Out ErrorMessage: String): Boolean;
 Var
   I: Integer;
+  Snapshot: TInterfaceList;
   Listener: IAssistantToolCallRequested;
 Begin
   Result := False;
   ResultJson := '';
   ErrorMessage := '';
-  EnterCriticalSection(FLock);
+  Snapshot := CopyListeners;
   Try
-    For I := 0 To FListeners.Count - 1 Do
-      If Supports(FListeners[I], IAssistantToolCallRequested, Listener) Then
+    For I := 0 To Snapshot.Count - 1 Do
+      If Supports(Snapshot[I], IAssistantToolCallRequested, Listener) Then
         Begin
           If Listener.HandleToolCall(ToolName, ArgumentsJson, ResultJson, ErrorMessage) Then
             Begin
@@ -300,7 +325,7 @@ Begin
             End;
         End;
   Finally
-    LeaveCriticalSection(FLock);
+    Snapshot.Free;
   End;
 End;
 

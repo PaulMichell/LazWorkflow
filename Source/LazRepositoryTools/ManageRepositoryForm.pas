@@ -390,6 +390,7 @@ Var
 Begin
   Client := TGitService.Create;
   Try
+    Client.PublishEvents := False;
     If Not Terminated Then
       FResultOk := Client.FetchRevListParents(FRepoPath, FResultText);
   Finally
@@ -458,6 +459,7 @@ Var
 Begin
   Client := TGitService.Create;
   Try
+    Client.PublishEvents := False;
     If Not Terminated Then
       FResultOk := Client.FetchCommitDetails(FRepoPath, FShas, FResultText);
   Finally
@@ -534,6 +536,8 @@ Var
 Begin
   Client := TGitService.Create;
   Try
+    { This worker is leftover; if it is started again it must not publish UI events. }
+    Client.PublishEvents := False;
     Client.RepoPath := FRepoPath;
     If Not Terminated Then
       Begin
