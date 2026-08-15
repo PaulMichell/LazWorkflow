@@ -38,8 +38,10 @@ Type
     FPublishEvents: Boolean;
     FActiveProcess: TProcess;
     FProcessLock: TRTLCriticalSection;
+    FTimeoutMs: Integer;
     Procedure SetActiveProcess(Proc: TProcess);
     Procedure ClearActiveProcess;
+    Function RunTimedOut(StartTick: QWord): Boolean;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
@@ -132,6 +134,8 @@ Type
     Property Cancelled: Boolean Read FCancelled;
     { When False, skip WorkflowEventBus publishes (background job workers must not touch UI). }
     Property PublishEvents: Boolean Read FPublishEvents Write FPublishEvents;
+    { 0 = no timeout. Checked in the drain loop so a long git can be killed. }
+    Property TimeoutMs: Integer Read FTimeoutMs Write FTimeoutMs;
   End;
 
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
@@ -193,7 +197,13 @@ Begin
   FCancelled := False;
   FPublishEvents := True;
   FActiveProcess := Nil;
+  FTimeoutMs := 0;
   InitCriticalSection(FProcessLock);
+End;
+
+Function TGitService.RunTimedOut(StartTick: QWord): Boolean;
+Begin
+  Result := (FTimeoutMs > 0) And ((GetTickCount64 - StartTick) >= QWord(FTimeoutMs));
 End;
 
 Procedure TGitService.SetActiveProcess(Proc: TProcess);
@@ -286,11 +296,15 @@ Var
   I, BytesRead: Integer;
   Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
+  StartTick: QWord;
+  TimedOut: Boolean;
 Begin
   Result := False;
   OutputText := '';
   ExitCode := -1;
   FLastError := '';
+  TimedOut := False;
+  StartTick := GetTickCount64;
   Buf[Low(Buf)] := 0;
   If WorkDir = '' Then
     Begin
@@ -321,8 +335,9 @@ Begin
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
-          If IsCancelled Then
+          If IsCancelled Or RunTimedOut(StartTick) Then
             Begin
+              TimedOut := RunTimedOut(StartTick);
               Try
                 Proc.Terminate(1);
               Except
@@ -351,7 +366,12 @@ Begin
       SetLength(OutputText, Mem.Size);
       If Mem.Size > 0 Then
         Move(Mem.Memory^, OutputText[1], Mem.Size);
-      If IsCancelled Then
+      If TimedOut Then
+        Begin
+          FLastError := 'Timed out';
+          Result := False;
+        End
+      Else If IsCancelled Then
         Begin
           FLastError := 'Cancelled';
           Result := False;
@@ -394,10 +414,14 @@ Var
   Proc: TProcess;
   I, BytesRead: Integer;
   Buf: Array[0..8191] Of Byte;
+  StartTick: QWord;
+  TimedOut: Boolean;
 Begin
   Result := False;
   ExitCode := -1;
   FLastError := '';
+  TimedOut := False;
+  StartTick := GetTickCount64;
   Buf[Low(Buf)] := 0;
   If (FRepoPath = '') Or (Stream = Nil) Then
     Begin
@@ -423,8 +447,9 @@ Begin
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
-          If IsCancelled Then
+          If IsCancelled Or RunTimedOut(StartTick) Then
             Begin
+              TimedOut := RunTimedOut(StartTick);
               Try
                 Proc.Terminate(1);
               Except
@@ -452,7 +477,12 @@ Begin
       While Proc.Stderr.NumBytesAvailable > 0 Do
         Proc.Stderr.Read(Buf[0], SizeOf(Buf));
       ExitCode := Proc.ExitStatus;
-      If IsCancelled Then
+      If TimedOut Then
+        Begin
+          FLastError := 'Timed out';
+          Result := False;
+        End
+      Else If IsCancelled Then
         Begin
           FLastError := 'Cancelled';
           Result := False;

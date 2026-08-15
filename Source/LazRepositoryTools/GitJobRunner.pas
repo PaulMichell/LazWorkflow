@@ -261,6 +261,7 @@ Begin
 
         FRunner.QueueBusyNotify(True, Job.Caption);
         Git.ResetCancel;
+        Git.TimeoutMs := Job.TimeoutMs;
         Git.RepoPath := Job.RepoPath;
         Job.FOk := False;
         Job.FCancelled := False;
