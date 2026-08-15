@@ -32,7 +32,7 @@ Type
   TGitCommitRec = Record
     Sha: String;
     ParentCount: Integer;
-    Parents: Array[0..3] Of String;
+    Parents: Array Of String;
     Subject: String;
     Author: String;
     CommitTime: Int64;
@@ -196,7 +196,7 @@ Function TGitGraphModel.ParseRevListParents(Const RevListText: String): Integer;
 Var
   Pos, L, PCount, K: Integer;
   Sha, Tok: String;
-  ParentBuf: Array[0..3] Of String;
+  ParentBuf: Array Of String;
 Begin
   Clear;
   Result := 0;
@@ -220,25 +220,23 @@ Begin
         End;
 
       PCount := 0;
-      For K := 0 To 3 Do
-        ParentBuf[K] := '';
+      SetLength(ParentBuf, 0);
       While (Pos <= L) And (RevListText[Pos] <> #10) And (RevListText[Pos] <> #13) Do
         Begin
           Tok := NextToken(RevListText, Pos);
           If Tok = '' Then
             Break;
-          If PCount <= 3 Then
-            Begin
-              ParentBuf[PCount] := Tok;
-              Inc(PCount);
-            End;
+          Inc(PCount);
+          SetLength(ParentBuf, PCount);
+          ParentBuf[PCount - 1] := Tok;
         End;
       SkipLineEnd(RevListText, Pos);
 
       EnsureCapacity(FCount + 1);
       FCommits[FCount].Sha := Sha;
       FCommits[FCount].ParentCount := PCount;
-      For K := 0 To 3 Do
+      SetLength(FCommits[FCount].Parents, PCount);
+      For K := 0 To PCount - 1 Do
         FCommits[FCount].Parents[K] := ParentBuf[K];
       FCommits[FCount].Subject := '';
       FCommits[FCount].Author := '';
@@ -456,10 +454,7 @@ Begin
     Begin
       Result.Sha := '';
       Result.ParentCount := 0;
-      Result.Parents[0] := '';
-      Result.Parents[1] := '';
-      Result.Parents[2] := '';
-      Result.Parents[3] := '';
+      SetLength(Result.Parents, 0);
       Result.Subject := '';
       Result.Author := '';
       Result.CommitTime := 0;
