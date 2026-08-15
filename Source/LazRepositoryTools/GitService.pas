@@ -582,56 +582,57 @@ Begin
     End;
 End;
 
+Function NextNulField(Const S: String; Var Pos: Integer): String;
+Var
+  StartPos: Integer;
+Begin
+  StartPos := Pos;
+  While (Pos <= Length(S)) And (S[Pos] <> #0) Do
+    Inc(Pos);
+  Result := Copy(S, StartPos, Pos - StartPos);
+  If (Pos <= Length(S)) And (S[Pos] = #0) Then
+    Inc(Pos);
+End;
+
 Function TGitService.ListStatus(Out Entries: TGitStatusEntryArray): Boolean;
 Var
-  Raw, Line, Rest: String;
-  ExitCode, I, ArrowPos, Count: Integer;
-  Lines: TStringList;
+  Raw, Rec, Path, OldPath: String;
+  ExitCode, Cursor, Count: Integer;
   X, Y: Char;
-  Path, OldPath: String;
 Begin
   Entries := Nil;
   SetLength(Entries, 0);
-  { --ignored so callers can filter/show ignored paths (porcelain !!). }
-  Result := RunGit(['status', '--porcelain', '--untracked-files=all', '--ignored'], Raw, ExitCode);
+  { -z: NUL records, no quoting. Rename/copy is old path then a second NUL field. }
+  Result := RunGit(['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
+    '--untracked-files=all', '--ignored'], Raw, ExitCode);
   If Not Result Then
     Exit;
 
-  Lines := TStringList.Create;
-  Try
-    Lines.Text := Raw;
-    Count := 0;
-    For I := 0 To Lines.Count - 1 Do
-      Begin
-        Line := Lines[I];
-        If Length(Line) < 4 Then
-          Continue;
-        X := Line[1];
-        Y := Line[2];
-        Rest := Copy(Line, 4, MaxInt);
-        { Strip optional quotes git uses for awkward paths. }
-        If (Length(Rest) >= 2) And (Rest[1] = '"') And (Rest[Length(Rest)] = '"') Then
-          Rest := Copy(Rest, 2, Length(Rest) - 2);
-        OldPath := '';
-        Path := Rest;
-        ArrowPos := Pos(' -> ', Rest);
-        If ArrowPos > 0 Then
-          Begin
-            OldPath := Copy(Rest, 1, ArrowPos - 1);
-            Path := Copy(Rest, ArrowPos + 4, MaxInt);
-          End;
-        If Path = '' Then
-          Continue;
-        Inc(Count);
-        SetLength(Entries, Count);
-        Entries[Count - 1].Path := Path;
-        Entries[Count - 1].OldPath := OldPath;
-        Entries[Count - 1].IndexStatus := X;
-        Entries[Count - 1].WorkTreeStatus := Y;
-      End;
-  Finally
-    Lines.Free;
-  End;
+  Cursor := 1;
+  Count := 0;
+  While Cursor <= Length(Raw) Do
+    Begin
+      Rec := NextNulField(Raw, Cursor);
+      If Length(Rec) < 4 Then
+        Continue;
+      X := Rec[1];
+      Y := Rec[2];
+      Path := Copy(Rec, 4, MaxInt);
+      OldPath := '';
+      If (X = 'R') Or (X = 'C') Or (Y = 'R') Or (Y = 'C') Then
+        Begin
+          OldPath := Path;
+          Path := NextNulField(Raw, Cursor);
+        End;
+      If Path = '' Then
+        Continue;
+      Inc(Count);
+      SetLength(Entries, Count);
+      Entries[Count - 1].Path := Path;
+      Entries[Count - 1].OldPath := OldPath;
+      Entries[Count - 1].IndexStatus := X;
+      Entries[Count - 1].WorkTreeStatus := Y;
+    End;
 End;
 
 Function TGitService.RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
