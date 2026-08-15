@@ -113,6 +113,7 @@ Type
     Function AddRemote(Const Name, Url: String): Boolean;
     Function SetRemoteUrl(Const Name, Url: String): Boolean;
     Function RemoveRemote(Const Name: String): Boolean;
+    Function RenameRemote(Const OldName, NewName: String): Boolean;
     Function ShowCommit(Const Sha: String; Out Text: String): Boolean;
     { Paths changed in a commit (name-only, no renames rewritten). Caller frees Paths. }
     Function ListCommitPaths(Const Sha: String; Out Paths: TStringList): Boolean;
@@ -1503,6 +1504,20 @@ Begin
   If Trim(Name) = '' Then
     Exit;
   Result := RunGit(['remote', 'remove', Trim(Name)], OutputText, ExitCode);
+End;
+
+Function TGitService.RenameRemote(Const OldName, NewName: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  If (Trim(OldName) = '') Or (Trim(NewName) = '') Then
+    Begin
+      FLastError := 'Remote names are required';
+      Exit;
+    End;
+  Result := RunGit(['remote', 'rename', Trim(OldName), Trim(NewName)], OutputText, ExitCode);
 End;
 
 Function TGitService.ShowCommit(Const Sha: String; Out Text: String): Boolean;

@@ -74,6 +74,7 @@ Constructor TGitRemotesForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   OriginalNames := TStringList.Create;
+  OriginalNames.CaseSensitive := True;
   OriginalUrls := TStringList.Create;
   FEditing := False;
   FEditRow := -1;
@@ -296,10 +297,9 @@ End;
 
 Function TGitRemotesForm.SaveToGit(Out ErrorMessage: String): Boolean;
 Var
-  I, Idx: Integer;
+  I, J, Idx: Integer;
   RemoteName, Url: String;
-  DesiredNames, DesiredUrls: TStringList;
-  Keep: Boolean;
+  DesiredNames, DesiredUrls, RenamedFrom, RenamedTo: TStringList;
 Begin
   Result := False;
   ErrorMessage := '';
@@ -311,7 +311,12 @@ Begin
   GitClient.RepoPath := FRepoPath;
 
   DesiredNames := TStringList.Create;
+  DesiredNames.CaseSensitive := True;
   DesiredUrls := TStringList.Create;
+  RenamedFrom := TStringList.Create;
+  RenamedFrom.CaseSensitive := True;
+  RenamedTo := TStringList.Create;
+  RenamedTo.CaseSensitive := True;
   Try
     For I := RemotesGrid.FixedRows To RemotesGrid.RowCount - 1 Do
       Begin
@@ -323,21 +328,30 @@ Begin
         DesiredUrls.Add(Url);
       End;
 
+    { Rename when an old name disappeared and a new name appeared with the same URL. }
     For I := 0 To OriginalNames.Count - 1 Do
-      Begin
-        Keep := DesiredNames.IndexOf(OriginalNames[I]) >= 0;
-        If Not Keep Then
-          If Not GitClient.RemoveRemote(OriginalNames[I]) Then
+      If DesiredNames.IndexOf(OriginalNames[I]) < 0 Then
+        For J := 0 To DesiredNames.Count - 1 Do
+          If (OriginalNames.IndexOf(DesiredNames[J]) < 0) And
+             (OriginalUrls[I] = DesiredUrls[J]) And
+             (RenamedFrom.IndexOf(OriginalNames[I]) < 0) Then
             Begin
-              ErrorMessage := 'Failed to remove remote "' + OriginalNames[I] + '": ' + GitClient.LastError;
-              Exit;
+              If Not GitClient.RenameRemote(OriginalNames[I], DesiredNames[J]) Then
+                Begin
+                  ErrorMessage := 'Failed to rename remote "' + OriginalNames[I] + '": ' + GitClient.LastError;
+                  Exit;
+                End;
+              RenamedFrom.Add(OriginalNames[I]);
+              RenamedTo.Add(DesiredNames[J]);
+              Break;
             End;
-      End;
 
     For I := 0 To DesiredNames.Count - 1 Do
       Begin
         RemoteName := DesiredNames[I];
         Url := DesiredUrls[I];
+        If RenamedTo.IndexOf(RemoteName) >= 0 Then
+          Continue;
         Idx := OriginalNames.IndexOf(RemoteName);
         If Idx < 0 Then
           Begin
@@ -357,9 +371,19 @@ Begin
           End;
       End;
 
+    For I := 0 To OriginalNames.Count - 1 Do
+      If (DesiredNames.IndexOf(OriginalNames[I]) < 0) And (RenamedFrom.IndexOf(OriginalNames[I]) < 0) Then
+        If Not GitClient.RemoveRemote(OriginalNames[I]) Then
+          Begin
+            ErrorMessage := 'Failed to remove remote "' + OriginalNames[I] + '": ' + GitClient.LastError;
+            Exit;
+          End;
+
     WorkflowLogger.Info('GitRemotes', 'Saved remotes for ' + FRepoPath);
     Result := True;
   Finally
+    RenamedTo.Free;
+    RenamedFrom.Free;
     DesiredNames.Free;
     DesiredUrls.Free;
   End;
