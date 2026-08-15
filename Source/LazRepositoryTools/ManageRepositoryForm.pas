@@ -16,7 +16,7 @@ Uses
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
-  TGitRemoteOpKind = (rokFetch, rokPull, rokPush);
+  TGitRemoteOpKind = (rokNone, rokFetch, rokPull, rokPush);
 
   TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
     { Designer-managed controls and event methods (before first Private, as for other forms). }
@@ -539,6 +539,7 @@ Begin
     { This worker is leftover; if it is started again it must not publish UI events. }
     Client.PublishEvents := False;
     Client.RepoPath := FRepoPath;
+    Summary := Default(TGitTransferSummary);
     If Not Terminated Then
       Begin
         Case FKind Of
