@@ -604,9 +604,7 @@ Begin
   End;
   If Assigned(Reject) Then
     Begin
-      Reject.FOk := False;
-      Reject.FErrorText := 'Git job queue is full';
-      QueueFinished(Reject);
+      Reject.Free;
       Exit;
     End;
   If Result Then
