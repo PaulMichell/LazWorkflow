@@ -1089,8 +1089,8 @@ Procedure TGitService.BuildTransferSummary(Const Operation, Remote, OutputText: 
   Var Summary: TGitTransferSummary);
 Var
   Lines: TStringList;
-  I, P, A, B: Integer;
-  Line, OldSha, NewSha, AfterArrow, RangeSpec: String;
+  I, B: Integer;
+  Line, OldSha, NewSha, RangeSpec: String;
   Total, NewRefs: Integer;
   UpToDate: Boolean;
 
@@ -1152,18 +1152,9 @@ Begin
         If (Pos('[new branch]', Line) > 0) Or (Pos('[new tag]', Line) > 0) Or
            (Pos('[new ref]', Line) > 0) Then
           Begin
+            { The text after "->" is a ref name, not old..new. Counting that
+              ref would be the whole reachable history. }
             Inc(NewRefs);
-            P := Pos('->', Line);
-            If P > 0 Then
-              Begin
-                AfterArrow := Trim(Copy(Line, P + 2, MaxInt));
-                If AfterArrow <> '' Then
-                  Begin
-                    A := CountRangeCommits(AfterArrow);
-                    If A > 0 Then
-                      Inc(Total, A);
-                  End;
-              End;
             Continue;
           End;
 
