@@ -2310,6 +2310,7 @@ Var
   Selected: Boolean;
   SpacePos: Integer;
   UseLineSet: Boolean;
+  LastHunkLineKept: Boolean;
 
   Function LineSelected(ALineNo: Integer): Boolean;
   Begin
@@ -2361,6 +2362,7 @@ Var
     FlushHunk;
     InHunk := True;
     HunkHasChange := False;
+    LastHunkLineKept := False;
     HunkBody.Clear;
     OldCount := 0;
     NewCount := 0;
@@ -2427,6 +2429,7 @@ Begin
       Exit;
     InHunk := False;
     HunkHasChange := False;
+    LastHunkLineKept := False;
     FileHasChange := False;
     FilePath := '';
 
@@ -2464,6 +2467,7 @@ Begin
                 HunkBody.Add(Line);
                 Inc(OldCount);
                 Inc(NewCount);
+                LastHunkLineKept := True;
               End
             Else If (Line[1] = '-') And (Copy(Line, 1, 3) <> '---') Then
               Begin
@@ -2480,6 +2484,7 @@ Begin
                     Inc(OldCount);
                     Inc(NewCount);
                   End;
+                LastHunkLineKept := True;
               End
             Else If (Line[1] = '+') And (Copy(Line, 1, 3) <> '+++') Then
               Begin
@@ -2488,16 +2493,23 @@ Begin
                     HunkBody.Add(Line);
                     Inc(NewCount);
                     HunkHasChange := True;
-                  End;
-                { Unselected addition omitted from index-side patch. }
+                    LastHunkLineKept := True;
+                  End
+                Else
+                  LastHunkLineKept := False;
               End
             Else If Line[1] = '\' Then
-              HunkBody.Add(Line) { \ No newline at end of file }
+              Begin
+                { Marker belongs to the preceding change line; drop it if that line was omitted. }
+                If LastHunkLineKept Then
+                  HunkBody.Add(Line);
+              End
             Else
               Begin
                 HunkBody.Add(Line);
                 Inc(OldCount);
                 Inc(NewCount);
+                LastHunkLineKept := True;
               End;
           End;
       End;
@@ -2846,18 +2858,18 @@ Var
   FileRange, HunkRange, LineRange: PGitDiffRange;
   InFile: Boolean;
 
-  Procedure CloseHunk;
+  Procedure CloseHunkAt(EndLine: Integer);
   Begin
     If Assigned(HunkNode) And Assigned(HunkNode.Data) Then
-      PGitDiffRange(HunkNode.Data)^.EndLine := LineNo - 1;
+      PGitDiffRange(HunkNode.Data)^.EndLine := EndLine;
     HunkNode := Nil;
   End;
 
-  Procedure CloseFile;
+  Procedure CloseFileAt(EndLine: Integer);
   Begin
-    CloseHunk;
+    CloseHunkAt(EndLine);
     If Assigned(FileNode) And Assigned(FileNode.Data) Then
-      PGitDiffRange(FileNode.Data)^.EndLine := LineNo - 1;
+      PGitDiffRange(FileNode.Data)^.EndLine := EndLine;
     FileNode := Nil;
   End;
 
@@ -2900,7 +2912,7 @@ Begin
             Begin
               If Copy(Line, 1, 11) = 'diff --git ' Then
                 Begin
-                  CloseFile;
+                  CloseFileAt(LineNo - 1);
                   Path := Trim(Copy(Line, 12, MaxInt));
                   If Pos(' b/', Path) > 0 Then
                     Path := Copy(Path, Pos(' b/', Path) + 3, MaxInt)
@@ -2934,7 +2946,7 @@ Begin
             End
           Else If Copy(Line, 1, 2) = '@@' Then
             Begin
-              CloseHunk;
+              CloseHunkAt(LineNo - 1);
               If Not Assigned(FileNode) Then
                 Begin
                   FileRange := NewRange(1, '', 'Changes');
@@ -2958,7 +2970,10 @@ Begin
             End;
         End;
 
-      CloseFile;
+      If Lines.Count > 0 Then
+        CloseFileAt(Lines.Count)
+      Else
+        CloseFileAt(0);
       If Assigned(Root.Data) Then
         PGitDiffRange(Root.Data)^.EndLine := Lines.Count;
       Root.Expand(False);
