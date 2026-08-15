@@ -37,6 +37,9 @@ Type
     FCancelled: Boolean;
     FPublishEvents: Boolean;
     FActiveProcess: TProcess;
+    FProcessLock: TRTLCriticalSection;
+    Procedure SetActiveProcess(Proc: TProcess);
+    Procedure ClearActiveProcess;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
@@ -189,6 +192,27 @@ Begin
   FCancelled := False;
   FPublishEvents := True;
   FActiveProcess := Nil;
+  InitCriticalSection(FProcessLock);
+End;
+
+Procedure TGitService.SetActiveProcess(Proc: TProcess);
+Begin
+  EnterCriticalSection(FProcessLock);
+  Try
+    FActiveProcess := Proc;
+  Finally
+    LeaveCriticalSection(FProcessLock);
+  End;
+End;
+
+Procedure TGitService.ClearActiveProcess;
+Begin
+  EnterCriticalSection(FProcessLock);
+  Try
+    FActiveProcess := Nil;
+  Finally
+    LeaveCriticalSection(FProcessLock);
+  End;
 End;
 
 Procedure TGitService.EmitWorkingTreeChanged;
@@ -232,20 +256,25 @@ Begin
 End;
 
 Procedure TGitService.Cancel;
-Var
-  Proc: TProcess;
 Begin
   FCancelled := True;
-  Proc := FActiveProcess;
-  If Assigned(Proc) Then
-    Try
-      Proc.Terminate(1);
-    Except
-    End;
+  { Terminate under the lock so the drain loop cannot Free the process mid-call. }
+  EnterCriticalSection(FProcessLock);
+  Try
+    If Assigned(FActiveProcess) Then
+      Try
+        FActiveProcess.Terminate(1);
+      Except
+      End;
+  Finally
+    LeaveCriticalSection(FProcessLock);
+  End;
 End;
 
 Destructor TGitService.Destroy;
 Begin
+  Cancel;
+  DoneCriticalSection(FProcessLock);
   Inherited Destroy;
 End;
 
@@ -287,7 +316,7 @@ Begin
       Proc.Parameters.Add(Args[I]);
 
     Try
-      FActiveProcess := Proc;
+      SetActiveProcess(Proc);
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
@@ -346,7 +375,7 @@ Begin
         End;
     End;
   Finally
-    FActiveProcess := Nil;
+    ClearActiveProcess;
     Mem.Free;
     Proc.Free;
   End;
@@ -389,7 +418,7 @@ Begin
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
     Try
-      FActiveProcess := Proc;
+      SetActiveProcess(Proc);
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
@@ -441,7 +470,7 @@ Begin
         End;
     End;
   Finally
-    FActiveProcess := Nil;
+    ClearActiveProcess;
     Proc.Free;
   End;
 End;
