@@ -1991,6 +1991,8 @@ Begin
   Job := TGitJob.Create(gjkListStatus);
   Job.RepoPath := FRepoPath;
   Job.Caption := 'Refreshing files…';
+  Job.IncludeUntracked := Assigned(UntrackedCheck) And UntrackedCheck.Checked;
+  Job.IncludeIgnored := Assigned(IgnoredCheck) And IgnoredCheck.Checked;
   SubmitGitJob(Job);
 End;
 

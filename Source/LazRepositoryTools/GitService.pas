@@ -67,7 +67,8 @@ Type
     Function GetHeadSha(Out Sha: String): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
-    Function ListStatus(Out Entries: TGitStatusEntryArray): Boolean;
+    Function ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean = False;
+      IncludeIgnored: Boolean = False): Boolean;
     Function StagePaths(Paths: TStrings): Boolean;
     Function UnstagePaths(Paths: TStrings): Boolean;
     Function StageAll: Boolean;
@@ -594,17 +595,28 @@ Begin
     Inc(Pos);
 End;
 
-Function TGitService.ListStatus(Out Entries: TGitStatusEntryArray): Boolean;
+Function TGitService.ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean;
+  IncludeIgnored: Boolean): Boolean;
 Var
   Raw, Rec, Path, OldPath: String;
   ExitCode, Cursor, Count: Integer;
   X, Y: Char;
+  Args: Array Of String;
 Begin
   Entries := Nil;
   SetLength(Entries, 0);
+  Args := Nil;
   { -z: NUL records, no quoting. Rename/copy is old path then a second NUL field. }
-  Result := RunGit(['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
-    '--untracked-files=all', '--ignored'], Raw, ExitCode);
+  If IncludeIgnored Then
+    Args := ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
+      '--untracked-files=all', '--ignored']
+  Else If IncludeUntracked Then
+    Args := ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
+      '--untracked-files=all']
+  Else
+    Args := ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
+      '--untracked-files=no'];
+  Result := RunGit(Args, Raw, ExitCode);
   If Not Result Then
     Exit;
 

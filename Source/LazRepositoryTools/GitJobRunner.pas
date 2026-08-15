@@ -57,6 +57,8 @@ Type
     FResultSha: String;
     FTransfer: TGitTransferSummary;
     FStatusEntries: TGitStatusEntryArray;
+    FIncludeUntracked: Boolean;
+    FIncludeIgnored: Boolean;
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
@@ -80,6 +82,8 @@ Type
     Property ResultSha: String Read FResultSha;
     Property Transfer: TGitTransferSummary Read FTransfer;
     Property StatusEntries: TGitStatusEntryArray Read FStatusEntries;
+    Property IncludeUntracked: Boolean Read FIncludeUntracked Write FIncludeUntracked;
+    Property IncludeIgnored: Boolean Read FIncludeIgnored Write FIncludeIgnored;
   End;
 
   TGitJobBusyEvent = Procedure(Sender: TObject; IsBusy: Boolean; Const Caption: String) Of Object;
@@ -184,6 +188,8 @@ Begin
   FResultSha := '';
   FillChar(FTransfer, SizeOf(FTransfer), 0);
   SetLength(FStatusEntries, 0);
+  FIncludeUntracked := False;
+  FIncludeIgnored := False;
 End;
 
 Destructor TGitJob.Destroy;
@@ -544,7 +550,7 @@ Begin
       End;
     gjkListStatus:
       Begin
-        Job.FOk := Git.ListStatus(Entries);
+        Job.FOk := Git.ListStatus(Entries, Job.IncludeUntracked, Job.IncludeIgnored);
         If Job.FOk Then
           Job.FStatusEntries := Entries
         Else
