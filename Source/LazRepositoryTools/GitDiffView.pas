@@ -17,7 +17,7 @@ Interface
 
 Uses
   Classes, SysUtils, Types, Controls, Graphics, ExtCtrls, ComCtrls, StdCtrls, Forms,
-  Menus, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
+  Menus, fgl, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
   SynGutterLineOverview;
 
 Type
@@ -30,6 +30,8 @@ Type
     Path: String;
     Caption: String;
   End;
+
+  TGitLineNumberList = specialize TFPGList<Integer>;
 
   TGitDiffView = Class(TFrame)
   Published
@@ -84,16 +86,16 @@ Type
     PreviewPicture: TPicture;
     FAppearanceReady: Boolean;
     FEditorOptsHooked: Boolean;
-    SelectedLines: TFPList; { 1-based display line numbers (PtrInt) for Files multi-select }
+    SelectedLines: TGitLineNumberList; { 1-based display line numbers for Files multi-select }
     FLineDragActive: Boolean;
     FLineDragMoved: Boolean;
     FLineDragCtrl: Boolean;
     FLineDragAnchor: Integer; { 1-based }
     FLineDragWasSelected: Boolean;
-    LineDragSnapshot: TFPList; { selection at mouse-down for Ctrl+drag }
+    LineDragSnapshot: TGitLineNumberList; { selection at mouse-down for Ctrl+drag }
     FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta / @@ headers }
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
-    HunkStartLines: TFPList; { 1-based display lines: first change line of each visual hunk }
+    HunkStartLines: TGitLineNumberList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyCompactEditorFont;
     Procedure ApplyIDEEditorFont;
@@ -585,8 +587,8 @@ Begin
   OwnedLangHigh := Nil;
   FAppearanceReady := False;
   FEditorOptsHooked := False;
-  SelectedLines := TFPList.Create;
-  LineDragSnapshot := TFPList.Create;
+  SelectedLines := TGitLineNumberList.Create;
+  LineDragSnapshot := TGitLineNumberList.Create;
   FLineDragActive := False;
   FLineDragMoved := False;
   FLineDragCtrl := False;
@@ -594,7 +596,7 @@ Begin
   FLineDragWasSelected := False;
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
-  HunkStartLines := TFPList.Create;
+  HunkStartLines := TGitLineNumberList.Create;
   PreviewPicture := TPicture.Create;
   { Owner must be Nil. Create(Self) puts the highlighter in the frame's
     Components list; when TGitDiffView is inlined on a host form the designer
@@ -1086,7 +1088,7 @@ Begin
       If IsDiffChangeLine(LineText) Then
         Begin
           If NeedNewHunk Or (ContextRun >= HunkContextGap) Then
-            HunkStartLines.Add(Pointer(PtrInt(LineNo)));
+            HunkStartLines.Add(LineNo);
           ContextRun := 0;
           NeedNewHunk := False;
         End
@@ -1096,15 +1098,8 @@ Begin
 End;
 
 Function TGitDiffView.IsVisualHunkStart(LineNo: Integer): Boolean;
-Var
-  I: Integer;
 Begin
-  Result := False;
-  If Not Assigned(HunkStartLines) Then
-    Exit;
-  For I := 0 To HunkStartLines.Count - 1 Do
-    If PtrInt(HunkStartLines[I]) = LineNo Then
-      Exit(True);
+  Result := Assigned(HunkStartLines) And (HunkStartLines.IndexOf(LineNo) >= 0);
 End;
 
 Procedure TGitDiffView.SetEditorDiffText(Const DiffText: String; HideFileHeaders: Boolean);
@@ -1157,7 +1152,7 @@ Begin
     Exit(IsLineSelected(FullLineNo));
   For I := 0 To SelectedLines.Count - 1 Do
     Begin
-      Disp := Integer(PtrInt(SelectedLines[I]));
+      Disp := SelectedLines[I];
       If (Disp >= 1) And (Disp <= Length(FDisplayToFull)) And
          (FDisplayToFull[Disp - 1] = FullLineNo) Then
         Exit(True);
@@ -1254,7 +1249,7 @@ Begin
 
   For I := 0 To HunkStartLines.Count - 1 Do
     Begin
-      LineNo := Integer(PtrInt(HunkStartLines[I]));
+      LineNo := HunkStartLines[I];
       If Not LinePixelTop(LineNo, Y) Then
         Continue;
 
@@ -1348,15 +1343,8 @@ Begin
 End;
 
 Function TGitDiffView.IsLineSelected(LineNo: Integer): Boolean;
-Var
-  I: Integer;
 Begin
-  Result := False;
-  If Not Assigned(SelectedLines) Then
-    Exit;
-  For I := 0 To SelectedLines.Count - 1 Do
-    If PtrInt(SelectedLines[I]) = LineNo Then
-      Exit(True);
+  Result := Assigned(SelectedLines) And (SelectedLines.IndexOf(LineNo) >= 0);
 End;
 
 Function TGitDiffView.SelectedLineCount: Integer;
@@ -1380,7 +1368,7 @@ Begin
   LastLine := 0;
   For I := 0 To SelectedLines.Count - 1 Do
     Begin
-      LineNo := Integer(PtrInt(SelectedLines[I]));
+      LineNo := SelectedLines[I];
       If LineNo < FirstLine Then
         FirstLine := LineNo;
       If LineNo > LastLine Then
@@ -1395,26 +1383,20 @@ Begin
     Exit;
   If IsLineSelected(LineNo) Then
     Exit;
-  SelectedLines.Add(Pointer(PtrInt(LineNo)));
+  SelectedLines.Add(LineNo);
 End;
 
 Procedure TGitDiffView.ToggleLineSelection(LineNo: Integer);
 Var
-  I: Integer;
+  Idx: Integer;
 Begin
   If Not Assigned(SelectedLines) Then
     Exit;
-  For I := 0 To SelectedLines.Count - 1 Do
-    If PtrInt(SelectedLines[I]) = LineNo Then
-      Begin
-        SelectedLines.Delete(I);
-        If Assigned(DiffEditor) Then
-          DiffEditor.Invalidate;
-        UpdateActionEnabled;
-        DoSelectionChanged;
-        Exit;
-      End;
-  SelectedLines.Add(Pointer(PtrInt(LineNo)));
+  Idx := SelectedLines.IndexOf(LineNo);
+  If Idx >= 0 Then
+    SelectedLines.Delete(Idx)
+  Else
+    SelectedLines.Add(LineNo);
   If Assigned(DiffEditor) Then
     DiffEditor.Invalidate;
   UpdateActionEnabled;
@@ -2020,13 +2002,13 @@ Begin
     Begin
       If Assigned(HunkStartLines) Then
         For I := 0 To HunkStartLines.Count - 1 Do
-          If PointInHunkMarker(X, Y, Integer(PtrInt(HunkStartLines[I]))) Then
+          If PointInHunkMarker(X, Y, HunkStartLines[I]) Then
             Begin
               FLineDragActive := False;
               If ssCtrl in Shift Then
-                ToggleHunkSelectionAtLine(Integer(PtrInt(HunkStartLines[I])))
+                ToggleHunkSelectionAtLine(HunkStartLines[I])
               Else
-                SelectHunkAtLine(Integer(PtrInt(HunkStartLines[I])));
+                SelectHunkAtLine(HunkStartLines[I]);
               Exit;
             End;
       If IsVisualHunkStart(LineNo) And (X < DiffEditor.Gutter.Width) Then
@@ -2552,7 +2534,7 @@ Begin
       FirstLine := 0;
       For I := 0 To HunkStartLines.Count - 1 Do
         Begin
-          StartLine := Integer(PtrInt(HunkStartLines[I]));
+          StartLine := HunkStartLines[I];
           If StartLine <= AtLine Then
             FirstLine := StartLine
           Else
@@ -2563,7 +2545,7 @@ Begin
       LastLine := Count;
       For I := 0 To HunkStartLines.Count - 1 Do
         Begin
-          NextStart := Integer(PtrInt(HunkStartLines[I]));
+          NextStart := HunkStartLines[I];
           If NextStart > FirstLine Then
             Begin
               LastLine := NextStart - 1;
@@ -2618,10 +2600,10 @@ End;
 
 Function TGitDiffView.ToggleHunkSelectionAtLine(AtLine: Integer): Boolean;
 Var
-  FirstLine, LastLine, LineNo, I, J: Integer;
+  FirstLine, LastLine, LineNo, I, Idx: Integer;
   LineText: String;
   AllSelected: Boolean;
-  ChangeLines: TFPList;
+  ChangeLines: TGitLineNumberList;
 Begin
   { Ctrl+click on a hunk marker: if every change line in the hunk is selected,
     remove them; otherwise add all of them without clearing other selection. }
@@ -2636,7 +2618,7 @@ Begin
   If (Not Assigned(DiffEditor)) Or (Not Assigned(SelectedLines)) Then
     Exit(False);
 
-  ChangeLines := TFPList.Create;
+  ChangeLines := TGitLineNumberList.Create;
   Try
     For LineNo := FirstLine To LastLine Do
       Begin
@@ -2644,14 +2626,14 @@ Begin
           Continue;
         LineText := DiffEditor.Lines[LineNo - 1];
         If IsDiffChangeLine(LineText) Then
-          ChangeLines.Add(Pointer(PtrInt(LineNo)));
+          ChangeLines.Add(LineNo);
       End;
     If ChangeLines.Count = 0 Then
       Exit(False);
 
     AllSelected := True;
     For I := 0 To ChangeLines.Count - 1 Do
-      If Not IsLineSelected(Integer(PtrInt(ChangeLines[I]))) Then
+      If Not IsLineSelected(ChangeLines[I]) Then
         Begin
           AllSelected := False;
           Break;
@@ -2661,18 +2643,14 @@ Begin
       Begin
         For I := 0 To ChangeLines.Count - 1 Do
           Begin
-            LineNo := Integer(PtrInt(ChangeLines[I]));
-            For J := SelectedLines.Count - 1 DownTo 0 Do
-              If PtrInt(SelectedLines[J]) = LineNo Then
-                Begin
-                  SelectedLines.Delete(J);
-                  Break;
-                End;
+            Idx := SelectedLines.IndexOf(ChangeLines[I]);
+            If Idx >= 0 Then
+              SelectedLines.Delete(Idx);
           End;
       End
     Else
       For I := 0 To ChangeLines.Count - 1 Do
-        AddLineToSelection(Integer(PtrInt(ChangeLines[I])));
+        AddLineToSelection(ChangeLines[I]);
 
     DiffEditor.Invalidate;
     UpdateActionEnabled;
