@@ -22,6 +22,7 @@ Const
   GitConfigDefaultGraphFontSize = 9;
   GitConfigMinGraphFontSize = 6;
   GitConfigMaxGraphFontSize = 24;
+  GitConfigMigrationVersion = 1;
 
 Type
   TGitConfig = Class
@@ -98,8 +99,10 @@ End;
 Procedure TGitConfig.Load;
 Var
   Cfg: TConfigStorage;
-  LoadedInterval: Integer;
+  LoadedInterval, Version: Integer;
+  NeedSave: Boolean;
 Begin
+  NeedSave := False;
   Cfg := GetIDEConfigStorage(GitConfigFileName, True);
   Try
     FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
@@ -107,20 +110,28 @@ Begin
     AutoRefreshSeconds := LoadedInterval;
     GraphFontName := Cfg.GetValue('Graph/FontName', '');
     GraphFontSize := Cfg.GetValue('Graph/FontSize', GitConfigDefaultGraphFontSize);
-    { Migrate from LazGitManager.xml when the new store still looks empty/default. }
-    If (FAutoRefresh = GitConfigDefaultAutoRefresh) And
-      (LoadedInterval = GitConfigDefaultIntervalSec) And (FGraphFontName = '') And
-      (FGraphFontSize = GitConfigDefaultGraphFontSize) Then
+    Version := Cfg.GetValue('Migration/Version', 0);
+    { One-time move from LazGitManager.xml. Version 0 means this store has never
+      finished migration, so default-looking values may still be a first open. }
+    If Version < GitConfigMigrationVersion Then
       Begin
-        Cfg.Free;
-        Cfg := Nil;
-        Cfg := GetIDEConfigStorage(GitConfigLegacyFileName, True);
-        FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
-        AutoRefreshSeconds := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
+        If (FAutoRefresh = GitConfigDefaultAutoRefresh) And
+          (LoadedInterval = GitConfigDefaultIntervalSec) And (FGraphFontName = '') And
+          (FGraphFontSize = GitConfigDefaultGraphFontSize) Then
+          Begin
+            Cfg.Free;
+            Cfg := Nil;
+            Cfg := GetIDEConfigStorage(GitConfigLegacyFileName, True);
+            FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
+            AutoRefreshSeconds := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
+          End;
+        NeedSave := True;
       End;
   Finally
     Cfg.Free;
   End;
+  If NeedSave Then
+    Save;
 End;
 
 Procedure TGitConfig.Save;
@@ -133,6 +144,7 @@ Begin
     Cfg.SetValue('AutoRefresh/IntervalSec', FAutoRefreshSeconds);
     Cfg.SetValue('Graph/FontName', FGraphFontName);
     Cfg.SetValue('Graph/FontSize', FGraphFontSize);
+    Cfg.SetValue('Migration/Version', GitConfigMigrationVersion);
     Cfg.WriteToDisk;
   Finally
     Cfg.Free;
