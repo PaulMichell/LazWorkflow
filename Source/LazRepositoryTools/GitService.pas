@@ -960,7 +960,8 @@ Begin
         Clean tracked files must stay empty so the UI can show plain content. }
       If Result And (Trim(DiffText) = '') And (Not IsPathTracked(Path)) Then
         Begin
-          Result := RunGit(['diff', '--no-index', '-U100000', '--', '/dev/null', Path], DiffText, ExitCode);
+          Result := RunGit(['diff', '--no-index', '-U100000', '--',
+            {$IFDEF WINDOWS}'NUL'{$ELSE}'/dev/null'{$ENDIF}, Path], DiffText, ExitCode);
           { git --no-index returns 1 when files differ; treat non-empty output as success. }
           If (Not Result) And (Trim(DiffText) <> '') Then
             Result := True;
