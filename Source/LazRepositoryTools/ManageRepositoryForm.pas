@@ -157,6 +157,7 @@ Type
     FStagedPaths: TStringList;
     FInListSelChange: Boolean;
     FStatusGen: Integer;
+    FLastPorcelain: String;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
@@ -2907,7 +2908,7 @@ Begin
     If Branch <> FBranch Then
       NeedReload := True;
   If GitClient.GetStatus(Clean, Porcelain) Then
-    If Clean <> FClean Then
+    If (Clean <> FClean) Or (Porcelain <> FLastPorcelain) Then
       NeedReload := True;
 
   If NeedReload Then
@@ -2975,6 +2976,7 @@ Begin
   FBranch := '';
   FHeadSha := '';
   FClean := True;
+  FLastPorcelain := '';
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
 
@@ -2984,7 +2986,10 @@ Begin
   If GitClient.GetHeadSha(Sha) Then
     FHeadSha := Sha;
   If GitClient.GetStatus(Clean, Porcelain) Then
-    FClean := Clean;
+    Begin
+      FClean := Clean;
+      FLastPorcelain := Porcelain;
+    End;
 End;
 
 Procedure TManageRepositoryForm.BindRepository(Const StartPath: String);
