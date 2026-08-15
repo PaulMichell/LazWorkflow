@@ -156,7 +156,7 @@ Begin
     Exit;
   P := FShaIndex.Items[Sha];
   If P <> Nil Then
-    Result := NativeInt(P) - 1;
+    Result := Integer(PtrUInt(P) - 1);
 End;
 
 Procedure TGitGraphModel.BuildShaIndex;
@@ -165,7 +165,7 @@ Var
 Begin
   ClearIndex;
   For I := 0 To FCount - 1 Do
-    FShaIndex.Add(FCommits[I].Sha, Pointer(NativeUInt(I + 1)));
+    FShaIndex.Add(FCommits[I].Sha, Pointer(PtrUInt(I + 1)));
 End;
 
 Procedure SkipLineEnd(Const S: String; Var Pos: Integer);
