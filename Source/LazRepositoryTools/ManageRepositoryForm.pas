@@ -155,6 +155,7 @@ Type
     FLaneColors: Array[0..9] Of TColor;
     FFilesPaths: TStringList;
     FStagedPaths: TStringList;
+    FInListSelChange: Boolean;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
@@ -658,6 +659,7 @@ Begin
   FVisibleLast := 0;
   FFilesPaths := TStringList.Create;
   FStagedPaths := TStringList.Create;
+  FInListSelChange := False;
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   ApplyConfig;
@@ -2435,11 +2437,18 @@ End;
 
 Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  { Keep multi-select on this list; only clear the other list's selection. }
-  If Assigned(StagedList) And ListHasSelection(StagedList) Then
-    StagedList.ClearSelection;
-  ShowFilesDiff(FilesList, FFilesPaths, False);
-  UpdateStageButtonsEnabled;
+  If FInListSelChange Then
+    Exit;
+  FInListSelChange := True;
+  Try
+    { Keep multi-select on this list; only clear the other list's selection. }
+    If Assigned(StagedList) And ListHasSelection(StagedList) Then
+      StagedList.ClearSelection;
+    ShowFilesDiff(FilesList, FFilesPaths, False);
+    UpdateStageButtonsEnabled;
+  Finally
+    FInListSelChange := False;
+  End;
 End;
 
 Procedure TManageRepositoryForm.FilesListDblClick(Sender: TObject);
@@ -2449,10 +2458,17 @@ End;
 
 Procedure TManageRepositoryForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(FilesList) And ListHasSelection(FilesList) Then
-    FilesList.ClearSelection;
-  ShowFilesDiff(StagedList, FStagedPaths, True);
-  UpdateStageButtonsEnabled;
+  If FInListSelChange Then
+    Exit;
+  FInListSelChange := True;
+  Try
+    If Assigned(FilesList) And ListHasSelection(FilesList) Then
+      FilesList.ClearSelection;
+    ShowFilesDiff(StagedList, FStagedPaths, True);
+    UpdateStageButtonsEnabled;
+  Finally
+    FInListSelChange := False;
+  End;
 End;
 
 Procedure TManageRepositoryForm.StagedListDblClick(Sender: TObject);
