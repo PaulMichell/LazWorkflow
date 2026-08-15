@@ -812,7 +812,16 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Var
+  FocusedControl: TWinControl;
 Begin
+  FocusedControl := ActiveControl;
+  { Graph keys must not steal arrows/Enter from the commit message or file lists. }
+  If (Key <> VK_F5) And Assigned(FocusedControl) Then
+    If (FocusedControl = MessageMemo) Or (FocusedControl = FilesList) Or
+       (FocusedControl = StagedList) Or (FocusedControl Is TCustomEdit) Or
+       (FocusedControl Is TCustomListBox) Then
+      Exit;
   Case Key Of
     VK_F5:
       Begin
