@@ -670,9 +670,13 @@ Begin
     FAutoRefreshTimer.Enabled := False;
   If Assigned(GitJobs) Then
     Begin
-      GitJobs.OnBusyChanged := Nil;
-      GitJobs.CancelCurrent;
+      If (TMethod(GitJobs.OnBusyChanged).Code = TMethod(@GitJobBusyChanged).Code) And
+         (TMethod(GitJobs.OnBusyChanged).Data = Pointer(Self)) Then
+        GitJobs.OnBusyChanged := Nil;
+      GitJobs.DetachFinishedHandler(@GitJobFinished);
+      GitJobs.CancelIfHandler(@GitJobFinished);
     End;
+  Screen.Cursor := crDefault;
   { Hard dispose: Queue (not Synchronize) so WaitFor cannot deadlock the UI thread. }
   DisposeWorker(FRemoteOpThread, FRemoteGen, True);
   DisposeWorker(FDetailThread, FDetailGen, True);

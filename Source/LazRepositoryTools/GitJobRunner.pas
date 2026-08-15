@@ -120,6 +120,10 @@ Type
     { Enqueue a job. Ownership transfers to the runner; Job is freed after OnFinished. }
     Function Submit(Job: TGitJob): Boolean;
     Procedure CancelCurrent;
+    { Nil OnFinished on queued/current/delivered jobs that still point at Handler. }
+    Procedure DetachFinishedHandler(Handler: TGitJobFinishedEvent);
+    { Cancel only if the running job's OnFinished is Handler. }
+    Procedure CancelIfHandler(Handler: TGitJobFinishedEvent);
     Function Busy: Boolean;
     Function CurrentCaption: String;
     Function QueueLength: Integer;
@@ -343,6 +347,7 @@ Begin
       FWorker.Terminate;
       RTLeventSetEvent(FWake);
       FWorker.WaitFor;
+      TThread.RemoveQueuedEvents(FWorker);
       FreeAndNil(FWorker);
     End;
   EnterLock;
@@ -403,7 +408,8 @@ Begin
   Finally
     LeaveLock;
   End;
-  TThread.Queue(Nil, @DoBusyNotify);
+  If Assigned(FWorker) Then
+    TThread.Queue(FWorker, @DoBusyNotify);
 End;
 
 Procedure TGitJobRunner.DoBusyNotify;
@@ -432,7 +438,8 @@ Begin
   Finally
     LeaveLock;
   End;
-  TThread.Queue(Nil, @DoFinishedNotify);
+  If Assigned(FWorker) Then
+    TThread.Queue(FWorker, @DoFinishedNotify);
 End;
 
 Procedure TGitJobRunner.DoFinishedNotify;
@@ -607,6 +614,52 @@ Begin
       QueueBusyNotify(True, Job.Caption);
       WakeWorker;
     End;
+End;
+
+Function SameFinishedHandler(Const Left, Right: TGitJobFinishedEvent): Boolean;
+Begin
+  Result := (TMethod(Left).Code = TMethod(Right).Code) And (TMethod(Left).Data = TMethod(Right).Data);
+End;
+
+Procedure TGitJobRunner.DetachFinishedHandler(Handler: TGitJobFinishedEvent);
+Var
+  I: Integer;
+  Job: TGitJob;
+Begin
+  EnterLock;
+  Try
+    If Assigned(FCurrent) And SameFinishedHandler(FCurrent.OnFinished, Handler) Then
+      FCurrent.OnFinished := Nil;
+    For I := 0 To FQueue.Count - 1 Do
+      Begin
+        Job := TGitJob(FQueue[I]);
+        If Assigned(Job) And SameFinishedHandler(Job.OnFinished, Handler) Then
+          Job.OnFinished := Nil;
+      End;
+    For I := 0 To FDeliverQueue.Count - 1 Do
+      Begin
+        Job := TGitJob(FDeliverQueue[I]);
+        If Assigned(Job) And SameFinishedHandler(Job.OnFinished, Handler) Then
+          Job.OnFinished := Nil;
+      End;
+  Finally
+    LeaveLock;
+  End;
+End;
+
+Procedure TGitJobRunner.CancelIfHandler(Handler: TGitJobFinishedEvent);
+Var
+  Job: TGitJob;
+Begin
+  Job := Nil;
+  EnterLock;
+  Try
+    Job := FCurrent;
+  Finally
+    LeaveLock;
+  End;
+  If Assigned(Job) And SameFinishedHandler(Job.OnFinished, Handler) Then
+    CancelCurrent;
 End;
 
 Procedure TGitJobRunner.CancelCurrent;
