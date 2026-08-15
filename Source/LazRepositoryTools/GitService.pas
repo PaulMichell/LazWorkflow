@@ -261,7 +261,7 @@ Begin
   OutputText := '';
   ExitCode := -1;
   FLastError := '';
-  FillChar(Buf, SizeOf(Buf), 0);
+  Buf[Low(Buf)] := 0;
   If WorkDir = '' Then
     Begin
       FLastError := 'No repository path set';
@@ -368,6 +368,7 @@ Begin
   Result := False;
   ExitCode := -1;
   FLastError := '';
+  Buf[Low(Buf)] := 0;
   If (FRepoPath = '') Or (Stream = Nil) Then
     Begin
       FLastError := 'No repository path set';
@@ -462,6 +463,7 @@ Var
 Begin
   DetailsText := '';
   Result := False;
+  Args := Nil;
   If (Shas = Nil) Or (Shas.Count = 0) Then
     Exit;
 
@@ -559,6 +561,7 @@ Var
   X, Y: Char;
   Path, OldPath: String;
 Begin
+  Entries := Nil;
   SetLength(Entries, 0);
   { --ignored so callers can filter/show ignored paths (porcelain !!). }
   Result := RunGit(['status', '--porcelain', '--untracked-files=all', '--ignored'], Raw, ExitCode);
@@ -610,6 +613,7 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
+  Args := Nil;
   If (Paths = Nil) Or (Paths.Count = 0) Then
     Exit;
   { git <cmd> -- path1 path2 ... }
@@ -636,6 +640,7 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
+  Args := Nil;
   If (Paths = Nil) Or (Paths.Count = 0) Then
     Exit;
   { git restore --staged -- paths  (modern); fall back handled by git version }
@@ -691,6 +696,7 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
+  Args := Nil;
   If (Paths = Nil) Or (Paths.Count = 0) Then
     Exit;
   { Modern: restore staged + worktree content from HEAD for listed paths. }
@@ -1178,13 +1184,9 @@ Begin
     End;
 End;
 
-Procedure ClearTransferSummary(Var Summary: TGitTransferSummary);
+Procedure ClearTransferSummary(Out Summary: TGitTransferSummary);
 Begin
-  Summary.Remote := '';
-  Summary.CommitCount := 0;
-  Summary.NewRefs := 0;
-  Summary.UpToDate := False;
-  Summary.Message := '';
+  Summary := Default(TGitTransferSummary);
 End;
 
 Function TGitService.Fetch(Out Summary: TGitTransferSummary; Const Remote: String): Boolean;
