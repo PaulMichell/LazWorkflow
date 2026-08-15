@@ -850,12 +850,26 @@ Begin
 End;
 
 Function TGitService.WorkingTreeFullPath(Const Path: String): String;
+Var
+  Root, Combined, Expanded: String;
 Begin
   Result := '';
-  If (Path = '') Or (FRepoPath = '') Then
+  If (Trim(Path) = '') Or (FRepoPath = '') Then
     Exit;
-  Result := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) +
-    StringReplace(Path, '/', DirectorySeparator, [rfReplaceAll]);
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath));
+  If FilenameIsAbsolute(Path) Then
+    Expanded := ExpandFileName(Path)
+  Else
+    Begin
+      Combined := StringReplace(Path, '/', DirectorySeparator, [rfReplaceAll]);
+      Expanded := ExpandFileName(Root + Combined);
+    End;
+  If (Expanded = '') Or (CompareFilenames(Copy(Expanded, 1, Length(Root)), Root) <> 0) Then
+    Begin
+      FLastError := 'Path is outside the repository: ' + Path;
+      Exit;
+    End;
+  Result := Expanded;
 End;
 
 Function TGitService.ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
