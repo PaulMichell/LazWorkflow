@@ -139,6 +139,7 @@ Type
     Property TimeoutMs: Integer Read FTimeoutMs Write FTimeoutMs;
   End;
 
+Function DirectoryIsEmpty(Const Dir: String): Boolean;
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
 Function GitStatusEntryIsUnstaged(Const Entry: TGitStatusEntry): Boolean;
 Function GitStatusEntryLabel(Const Entry: TGitStatusEntry; StagedSide: Boolean): String;
@@ -150,6 +151,31 @@ Implementation
 
 Uses
   LazFileUtils;
+
+Function DirectoryIsEmpty(Const Dir: String): Boolean;
+Var
+  Rec: TSearchRec;
+  Code: Integer;
+Begin
+  Result := False;
+  If Not DirectoryExists(Dir) Then
+    Exit;
+  Result := True;
+  Code := FindFirst(IncludeTrailingPathDelimiter(Dir) + AllFilesMask, faAnyFile, Rec);
+  Try
+    While Code = 0 Do
+      Begin
+        If (Rec.Name <> '.') And (Rec.Name <> '..') Then
+          Begin
+            Result := False;
+            Exit;
+          End;
+        Code := FindNext(Rec);
+      End;
+  Finally
+    FindClose(Rec);
+  End;
+End;
 
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
 Begin
@@ -1403,9 +1429,9 @@ Begin
       FLastError := 'Parent folder does not exist: ' + ParentDir;
       Exit;
     End;
-  If DirectoryExists(Dest) Then
+  If DirectoryExists(Dest) And (Not DirectoryIsEmpty(Dest)) Then
     Begin
-      FLastError := 'Target folder already exists: ' + Dest;
+      FLastError := 'Target folder already exists and is not empty: ' + Dest;
       Exit;
     End;
   { git clone runs with cwd = parent; last arg is target folder name/path. }

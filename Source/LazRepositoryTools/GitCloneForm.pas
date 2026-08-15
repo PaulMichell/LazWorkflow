@@ -34,6 +34,9 @@ Implementation
 
 {$R *.lfm}
 
+Uses
+  GitService;
+
 Function ShowGitCloneForm(Const DefaultFolder: String; Out RemoteUrl, TargetFolder: String): Boolean;
 Var
   Form: TGitCloneForm;
@@ -101,10 +104,10 @@ Begin
       CanClose := False;
       Exit;
     End;
-  If DirectoryExists(TargetFolder) Then
+  If DirectoryExists(TargetFolder) And (Not DirectoryIsEmpty(TargetFolder)) Then
     Begin
-      MessageDlg('Target folder already exists:' + LineEnding + TargetFolder + LineEnding +
-        'Choose a new folder path.', mtWarning, [mbOK], 0);
+      MessageDlg('Target folder already exists and is not empty:' + LineEnding + TargetFolder +
+        LineEnding + 'Choose a new folder path, or an empty folder.', mtWarning, [mbOK], 0);
       CanClose := False;
     End;
 End;
