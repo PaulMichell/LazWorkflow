@@ -1033,7 +1033,9 @@ Begin
     Job.RepoPath := FRepoPath;
   Job.OnFinished := @GitJobFinished;
   Result := GitJobs.Submit(Job);
-  If Not Result Then
+  If Result Then
+    FJobBusy := True
+  Else
     MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
 End;
 
@@ -1160,7 +1162,7 @@ Var
   Job: TGitJob;
   JobKind: TGitJobKind;
 Begin
-  If (FRepoPath = '') Or FRemoteOpBusy Or FJobBusy Then
+  If (FRepoPath = '') Or FRemoteOpBusy Then
     Exit;
   Case Kind Of
     rokFetch: JobKind := gjkFetch;
