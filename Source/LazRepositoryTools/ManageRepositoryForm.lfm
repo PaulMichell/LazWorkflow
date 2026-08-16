@@ -306,10 +306,6 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
             BorderSpacing.Right = 4
-            Font.Name = 'Courier New'
-            Font.Pitch = fpFixed
-            Font.Quality = fqCleartypeNatural
-            Font.Size = 9
             ParentFont = False
             ScrollBars = ssAutoBoth
             TabOrder = 0

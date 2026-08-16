@@ -201,6 +201,9 @@ Type
     Property OnSelectionChanged: TNotifyEvent Read FOnSelectionChanged Write FOnSelectionChanged;
   End;
 
+/// Copy Source Editor font, pitch, and cell spacing onto Editor. True when a font was applied.
+Function ApplySynEditIDEFont(Editor: TSynEdit; IncludeColors: Boolean): Boolean;
+
 Implementation
 
 {$R *.lfm}
@@ -550,26 +553,28 @@ Begin
   End;
 End;
 
-Procedure TGitDiffView.ApplyIDEEditorFont;
+Function ApplySynEditIDEFont(Editor: TSynEdit; IncludeColors: Boolean): Boolean;
 Var
   SourceEdit: TSourceEditorInterface;
   SrcCtl: TWinControl;
   Probe: TSynEdit;
-  Applied: Boolean;
   FontName: String;
   FontSize: Integer;
   FontQuality: TFontQuality;
+  FontPitch: TFontPitch;
   FontColor, BgColor: TColor;
   ExtraLine, ExtraChar, TabW: Integer;
 Begin
   { Match Lazarus Source Editor font/spacing without calling GetSynEditorSettings
-    on our control (that rewires gutters, mouse actions, and beautifier). }
-  If Not Assigned(DiffEditor) Then
+    on Editor (that rewires gutters, mouse actions, and beautifier). Pitch is
+    copied so a proportional editor font is not forced onto SynEdit's fpFixed. }
+  Result := False;
+  If Not Assigned(Editor) Then
     Exit;
-  Applied := False;
   FontName := '';
   FontSize := 0;
   FontQuality := fqDefault;
+  FontPitch := fpDefault;
   FontColor := clWindowText;
   BgColor := clWindow;
   ExtraLine := 0;
@@ -590,18 +595,19 @@ Begin
               FontName := TSynEdit(SrcCtl).Font.Name;
               FontSize := TSynEdit(SrcCtl).Font.Size;
               FontQuality := TSynEdit(SrcCtl).Font.Quality;
+              FontPitch := TSynEdit(SrcCtl).Font.Pitch;
               FontColor := TSynEdit(SrcCtl).Font.Color;
               BgColor := TSynEdit(SrcCtl).Color;
               ExtraLine := TSynEdit(SrcCtl).ExtraLineSpacing;
               ExtraChar := TSynEdit(SrcCtl).ExtraCharSpacing;
               TabW := TSynEdit(SrcCtl).TabWidth;
-              Applied := (Trim(FontName) <> '') And (FontSize <> 0);
+              Result := (Trim(FontName) <> '') And (FontSize <> 0);
             End;
         End;
     End;
 
   { 2) Probe IDE options on a throwaway SynEdit, then copy font metrics only. }
-  If (Not Applied) And Assigned(IDEEditorOptions) Then
+  If (Not Result) And Assigned(IDEEditorOptions) Then
     Begin
       Probe := TSynEdit.Create(Nil);
       Try
@@ -610,48 +616,60 @@ Begin
           FontName := Probe.Font.Name;
           FontSize := Probe.Font.Size;
           FontQuality := Probe.Font.Quality;
+          FontPitch := Probe.Font.Pitch;
           FontColor := Probe.Font.Color;
           BgColor := Probe.Color;
           ExtraLine := Probe.ExtraLineSpacing;
           ExtraChar := Probe.ExtraCharSpacing;
           TabW := Probe.TabWidth;
-          Applied := (Trim(FontName) <> '') And (FontSize <> 0);
+          Result := (Trim(FontName) <> '') And (FontSize <> 0);
         Except
           On E: Exception Do
-            WorkflowLogger.Warning('GitDiffView', 'IDE font probe failed: ' + E.Message);
+            WorkflowLogger.Warning('EditorFont', 'IDE font probe failed: ' + E.Message);
         End;
       Finally
         Probe.Free;
       End;
     End;
 
-  If Not Applied Then
-    Begin
-      ApplyCompactEditorFont;
-      Exit;
-    End;
+  If Not Result Then
+    Exit;
 
   Try
-    DiffEditor.Font.BeginUpdate;
+    Editor.Font.BeginUpdate;
     Try
       { Size before Name — same order as TEditorOptions.ApplyFontSettingsTo. }
-      DiffEditor.Font.Size := FontSize;
-      DiffEditor.Font.Name := FontName;
-      DiffEditor.Font.Quality := FontQuality;
-      DiffEditor.Font.Color := FontColor;
-      DiffEditor.Font.Style := [];
+      Editor.Font.Size := FontSize;
+      Editor.Font.Name := FontName;
+      Editor.Font.Quality := FontQuality;
+      Editor.Font.Pitch := FontPitch;
+      Editor.Font.Style := [];
+      If IncludeColors Then
+        Editor.Font.Color := FontColor;
     Finally
-      DiffEditor.Font.EndUpdate;
+      Editor.Font.EndUpdate;
     End;
-    DiffEditor.Color := BgColor;
-    DiffEditor.ExtraLineSpacing := ExtraLine;
-    DiffEditor.ExtraCharSpacing := ExtraChar;
+    If IncludeColors Then
+      Editor.Color := BgColor;
+    Editor.ExtraLineSpacing := ExtraLine;
+    Editor.ExtraCharSpacing := ExtraChar;
     If TabW > 0 Then
-      DiffEditor.TabWidth := TabW;
+      Editor.TabWidth := TabW;
   Except
     On E: Exception Do
-      WorkflowLogger.Warning('GitDiffView', 'ApplyIDEEditorFont: ' + E.Message);
+      Begin
+        Result := False;
+        WorkflowLogger.Warning('EditorFont', 'ApplySynEditIDEFont: ' + E.Message);
+      End;
   End;
+End;
+
+Procedure TGitDiffView.ApplyIDEEditorFont;
+Begin
+  If Not Assigned(DiffEditor) Then
+    Exit;
+  If Not ApplySynEditIDEFont(DiffEditor, True) Then
+    ApplyCompactEditorFont;
 End;
 
 Procedure TGitDiffView.HookEditorOptionsChanged;

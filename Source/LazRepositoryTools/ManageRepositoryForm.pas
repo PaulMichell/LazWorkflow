@@ -389,18 +389,20 @@ Begin
     Exit;
   { Memo-like: wrap at the client edge, no gutter or code-editor chrome.
     Keystrokes must stay at SynEdit defaults — an empty LFM list unbinds
-    arrows, Home/End, Backspace, Delete, and clipboard. }
+    arrows, Home/End, Backspace, Delete, and clipboard.
+    Font comes from the Source Editor (proportional allowed). SynEdit still
+    places glyphs on a character cell — the same as the IDE code editor. }
   MessageEditor.Keystrokes.ResetDefaults;
   MessageEditor.Gutter.Visible := False;
   MessageEditor.RightGutter.Visible := False;
   MessageEditor.RightEdge := 0;
   MessageEditor.WantTabs := False;
-  MessageEditor.ExtraCharSpacing := 0;
-  MessageEditor.ExtraLineSpacing := 0;
-  MessageEditor.Font.Pitch := fpFixed;
-  MessageEditor.Font.Quality := fqCleartypeNatural;
-  If Trim(MessageEditor.Font.Name) = '' Then
-    MessageEditor.Font.Name := 'Courier New';
+  If Not ApplySynEditIDEFont(MessageEditor, False) Then
+    Begin
+      MessageEditor.Font.Pitch := fpDefault;
+      MessageEditor.ExtraCharSpacing := 0;
+      MessageEditor.ExtraLineSpacing := 0;
+    End;
   MessageEditor.Options := MessageEditor.Options + [eoHideRightMargin] -
     [eoScrollPastEol, eoScrollPastEof, eoEnhanceHomeKey, eoTabIndent, eoBracketHighlight];
   TLazSynEditLineWrapPlugin.Create(MessageEditor);
