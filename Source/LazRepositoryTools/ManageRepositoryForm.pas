@@ -2847,14 +2847,28 @@ End;
 
 Procedure TManageRepositoryForm.CheckoutActionExecute(Sender: TObject);
 Var
-  Sha: String;
+  Sha, Porcelain: String;
   Job: TGitJob;
+  Clean: Boolean;
 Begin
   Sha := SelectedSha;
   If (Sha = '') Or (FRepoPath = '') Or FJobBusy Then
     Exit;
-  If MessageDlg('Check out commit ' + Copy(Sha, 1, 7) + '?' + LineEnding +
-    'This may detach HEAD.', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+  Clean := True;
+  If Assigned(GitClient) Then
+    Begin
+      GitClient.RepoPath := FRepoPath;
+      GitClient.GetStatus(Clean, Porcelain);
+    End;
+  If Clean Then
+    Begin
+      If MessageDlg('Check out commit ' + Copy(Sha, 1, 7) + '?' + LineEnding +
+        'This may detach HEAD.', mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+        Exit;
+    End
+  Else If MessageDlg('The working tree has uncommitted changes.' + LineEnding + LineEnding +
+    'Check out ' + Copy(Sha, 1, 7) + ' anyway? This may detach HEAD, and Git may refuse or you may lose work.',
+    mtWarning, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
   Job := TGitJob.Create(gjkCheckout);
   Job.RepoPath := FRepoPath;
