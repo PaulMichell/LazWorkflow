@@ -10,7 +10,7 @@ Unit WorkflowLog;
 Interface
 
 Uses
-  Classes, SysUtils, TypInfo;
+  Classes, SysUtils;
 
 Type
   TWorkflowLogLevel = (wllDebug, wllInfo, wllWarning, wllError);

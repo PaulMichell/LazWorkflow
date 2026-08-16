@@ -104,9 +104,6 @@
     </Files>
     <RequiredPkgs>
       <Item>
-        <PackageName Value="SynEditDsgn"/>
-      </Item>
-      <Item>
         <PackageName Value="LazWorkflowCommon"/>
       </Item>
       <Item>
