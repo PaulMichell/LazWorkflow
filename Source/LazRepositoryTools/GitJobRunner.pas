@@ -29,7 +29,8 @@ Type
     gjkInit,
     gjkStagePaths,
     gjkUnstagePaths,
-    gjkListStatus
+    gjkListStatus,
+    gjkRepoProbe
   );
 
   TGitJob = Class;
@@ -59,6 +60,9 @@ Type
     FStatusEntries: TGitStatusEntryArray;
     FIncludeUntracked: Boolean;
     FIncludeIgnored: Boolean;
+    FQuiet: Boolean;
+    FProbeBranch: String;
+    FProbeDigest: String;
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
@@ -84,6 +88,10 @@ Type
     Property StatusEntries: TGitStatusEntryArray Read FStatusEntries;
     Property IncludeUntracked: Boolean Read FIncludeUntracked Write FIncludeUntracked;
     Property IncludeIgnored: Boolean Read FIncludeIgnored Write FIncludeIgnored;
+    { Quiet jobs skip the busy cursor / footer so auto-refresh does not steal the UI. }
+    Property Quiet: Boolean Read FQuiet Write FQuiet;
+    Property ProbeBranch: String Read FProbeBranch;
+    Property ProbeDigest: String Read FProbeDigest;
   End;
 
   TGitJobBusyEvent = Procedure(Sender: TObject; IsBusy: Boolean; Const Caption: String) Of Object;
@@ -165,6 +173,7 @@ Begin
     gjkStagePaths: Result := 'Staging…';
     gjkUnstagePaths: Result := 'Unstaging…';
     gjkListStatus: Result := 'Refreshing files…';
+    gjkRepoProbe: Result := 'Checking repository…';
   Else
     Result := 'Working…';
   End;
@@ -194,6 +203,9 @@ Begin
   SetLength(FStatusEntries, 0);
   FIncludeUntracked := False;
   FIncludeIgnored := False;
+  FQuiet := False;
+  FProbeBranch := '';
+  FProbeDigest := '';
 End;
 
 Destructor TGitJob.Destroy;
@@ -263,7 +275,8 @@ Begin
           FRunner.LeaveLock;
         End;
 
-        FRunner.QueueBusyNotify(True, Job.Caption);
+        If Not Job.Quiet Then
+          FRunner.QueueBusyNotify(True, Job.Caption);
         Git.ResetCancel;
         Git.TimeoutMs := Job.TimeoutMs;
         Git.RepoPath := Job.RepoPath;
@@ -306,10 +319,11 @@ Begin
           FRunner.LeaveLock;
         End;
 
-        If StillQueued Then
-          FRunner.QueueBusyNotify(True, Job.Caption)
-        Else
-          FRunner.QueueBusyNotify(False, '');
+        If Not Job.Quiet Then
+          If StillQueued Then
+            FRunner.QueueBusyNotify(True, Job.Caption)
+          Else
+            FRunner.QueueBusyNotify(False, '');
         FRunner.QueueFinished(Job);
       End;
   Finally
@@ -564,6 +578,13 @@ Begin
         Else
           Job.FErrorText := Git.LastError;
       End;
+    gjkRepoProbe:
+      Begin
+        Job.FOk := Git.ProbeRepository(NewSha, Job.FProbeBranch, Job.FProbeDigest);
+        Job.FResultSha := NewSha;
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
   Else
     Job.FOk := False;
     Job.FErrorText := 'Unknown job kind';
@@ -609,7 +630,8 @@ Begin
     End;
   If Result Then
     Begin
-      QueueBusyNotify(True, Job.Caption);
+      If Not Job.Quiet Then
+        QueueBusyNotify(True, Job.Caption);
       WakeWorker;
     End;
 End;

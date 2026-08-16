@@ -69,6 +69,8 @@ Type
     Function GetHeadSha(Out Sha: String): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
+    { One process: HEAD, branch, and a digest of porcelain v2 --branch output. }
+    Function ProbeRepository(Out HeadSha, Branch, Digest: String): Boolean;
     Function ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean = False;
       IncludeIgnored: Boolean = False): Boolean;
     { Tracked paths (ls-files -z). Caller frees Paths. }
@@ -640,6 +642,39 @@ Begin
       Porcelain := OutputText;
       Clean := Trim(OutputText) = '';
     End;
+End;
+
+Function TGitService.ProbeRepository(Out HeadSha, Branch, Digest: String): Boolean;
+Var
+  OutputText, Line: String;
+  ExitCode, I: Integer;
+  Lines: TStringList;
+Begin
+  HeadSha := '';
+  Branch := '';
+  Digest := '';
+  Result := RunGit(['-c', 'core.quotePath=false', 'status', '--porcelain=v2', '--branch'],
+    OutputText, ExitCode);
+  If Not Result Then
+    Exit;
+  Digest := OutputText;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := OutputText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Lines[I];
+        If Copy(Line, 1, 13) = '# branch.oid ' Then
+          HeadSha := Trim(Copy(Line, 14, MaxInt))
+        Else If Copy(Line, 1, 14) = '# branch.head ' Then
+          Branch := Trim(Copy(Line, 15, MaxInt));
+      End;
+  Finally
+    Lines.Free;
+  End;
+  If (Branch = '(detached)') Or (Branch = '') Then
+    If HeadSha <> '' Then
+      Branch := 'HEAD';
 End;
 
 Function NextNulField(Const S: String; Var Pos: Integer): String;

@@ -155,6 +155,7 @@ Type
     FInListSelChange: Boolean;
     FStatusGen: Integer;
     FStatusJobPending: Boolean;
+    FProbePending: Boolean;
     FLastPorcelain: String;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
@@ -491,6 +492,7 @@ Begin
   FInListSelChange := False;
   FStatusGen := 0;
   FStatusJobPending := False;
+  FProbePending := False;
   FLastPorcelain := '';
   FModel := TGitGraphModel.Create;
   InitLaneColors;
@@ -855,8 +857,11 @@ Begin
   Job.OnFinished := @GitJobFinished;
   Result := GitJobs.Submit(Job);
   If Result Then
-    FJobBusy := True
-  Else
+    Begin
+      If Not Job.Quiet Then
+        FJobBusy := True;
+    End
+  Else If Not Job.Quiet Then
     MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
 End;
 
@@ -974,6 +979,20 @@ Begin
             UpdateCommitEnabled;
             UpdateStageButtonsEnabled;
           End;
+      End;
+    gjkRepoProbe:
+      Begin
+        FProbePending := False;
+        If Job.Cancelled Or Not Job.Ok Then
+          Exit;
+        If (Job.ResultSha <> FHeadSha) Or (Job.ProbeBranch <> FBranch) Or
+           (Job.ProbeDigest <> FLastPorcelain) Then
+          Begin
+            WorkflowLogger.Debug('ManageRepository', 'Auto-refresh: repository changed');
+            ManualRefresh;
+          End
+        Else
+          UpdateStatus;
       End;
   Else
     { ignore }
@@ -2667,35 +2686,16 @@ End;
 
 Procedure TManageRepositoryForm.QuietRefreshIfChanged;
 Var
-  Branch, Sha, Porcelain: String;
-  Clean: Boolean;
-  NeedReload: Boolean;
+  Job: TGitJob;
 Begin
-  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+  If (FRepoPath = '') Or FProbePending Or Not Assigned(GitJobs) Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  NeedReload := False;
-  If GitClient.GetHeadSha(Sha) Then
-    If Sha <> FHeadSha Then
-      NeedReload := True;
-  If GitClient.GetCurrentBranch(Branch) Then
-    If Branch <> FBranch Then
-      NeedReload := True;
-  If GitClient.GetStatus(Clean, Porcelain) Then
-    If (Clean <> FClean) Or (Porcelain <> FLastPorcelain) Then
-      NeedReload := True;
-
-  If NeedReload Then
-    Begin
-      WorkflowLogger.Debug('ManageRepository', 'Auto-refresh: repository changed');
-      ManualRefresh;
-    End
-  Else
-    Begin
-      { Keep dirty flag in sync even when HEAD unchanged. }
-      RefreshRepositoryInfo;
-      UpdateStatus;
-    End;
+  Job := TGitJob.Create(gjkRepoProbe);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  FProbePending := True;
+  If Not SubmitGitJob(Job) Then
+    FProbePending := False;
 End;
 
 Procedure TManageRepositoryForm.UpdateStatus;
@@ -2742,10 +2742,33 @@ Begin
     StatusFooter.SetAll(LeftText, CentreText, RightText);
 End;
 
+Function StatusDigestIsClean(Const Digest: String): Boolean;
+Var
+  Lines: TStringList;
+  I: Integer;
+  Line: String;
+Begin
+  Result := True;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Digest;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Lines[I];
+        If (Line <> '') And (Line[1] <> '#') Then
+          Begin
+            Result := False;
+            Exit;
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
 Procedure TManageRepositoryForm.RefreshRepositoryInfo;
 Var
-  Branch, Sha, Porcelain: String;
-  Clean: Boolean;
+  Branch, Sha, Digest: String;
 Begin
   FBranch := '';
   FHeadSha := '';
@@ -2755,14 +2778,12 @@ Begin
     Exit;
 
   GitClient.RepoPath := FRepoPath;
-  If GitClient.GetCurrentBranch(Branch) Then
-    FBranch := Branch;
-  If GitClient.GetHeadSha(Sha) Then
-    FHeadSha := Sha;
-  If GitClient.GetStatus(Clean, Porcelain) Then
+  If GitClient.ProbeRepository(Sha, Branch, Digest) Then
     Begin
-      FClean := Clean;
-      FLastPorcelain := Porcelain;
+      FHeadSha := Sha;
+      FBranch := Branch;
+      FLastPorcelain := Digest;
+      FClean := StatusDigestIsClean(Digest);
     End;
 End;
 
