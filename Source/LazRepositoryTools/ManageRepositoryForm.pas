@@ -125,9 +125,17 @@ Type
     Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
     Procedure StagedListDblClick(Sender: TObject);
     Procedure FileFilterChange(Sender: TObject);
-    Procedure MessageChange(Sender: TObject);
     Procedure FilesDiffStatusChanged(Sender: TObject);
-    Procedure FilesDiffSelectionChanged(Sender: TObject);
+    Procedure RemoteActionUpdate(Sender: TObject);
+    Procedure StageAllActionUpdate(Sender: TObject);
+    Procedure StageActionUpdate(Sender: TObject);
+    Procedure StageSelectionActionUpdate(Sender: TObject);
+    Procedure PathActionUpdate(Sender: TObject);
+    Procedure IgnoredFilesActionUpdate(Sender: TObject);
+    Procedure SuggestMessageActionUpdate(Sender: TObject);
+    Procedure CommitActionUpdate(Sender: TObject);
+    Procedure HistoryViewActionUpdate(Sender: TObject);
+    Procedure HistoryMutateActionUpdate(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -166,8 +174,9 @@ Type
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFiles;
-    Procedure UpdateCommitEnabled;
-    Procedure UpdateStageButtonsEnabled;
+    Function CanMutate: Boolean;
+    Function HasStagedFiles: Boolean;
+    Function HasUnstagedFiles: Boolean;
     Function ListHasSelection(List: TListBox): Boolean;
     Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
     Function CollectActiveSelectedPaths: TStringList;
@@ -180,7 +189,6 @@ Type
     Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
     Procedure StartIndexLoad;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
-    Procedure SetRemoteActionsEnabled(ActionsEnabled: Boolean);
     Procedure SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
     Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
     Procedure GitJobFinished(Job: TGitJob);
@@ -410,7 +418,6 @@ Begin
       Begin
         FilesDiffView.SetViewMode(dvmEditorOnly);
         FilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
-        FilesDiffView.OnSelectionChanged := @FilesDiffSelectionChanged;
       End;
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
@@ -422,9 +429,6 @@ Begin
       FilesList.MultiSelect := True;
     If Assigned(StagedList) Then
       StagedList.MultiSelect := True;
-    UpdateCommitEnabled;
-    UpdateStageButtonsEnabled;
-
     WorkflowLogger.Info('ManageRepository', 'Manage Repository window created');
   Except
     On E: Exception Do
@@ -602,40 +606,18 @@ Begin
   FDetailLoading := False;
 End;
 
-Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
-Var
-  Allow: Boolean;
-Begin
-  { Job busy and remote-op busy both gate History toolbar actions. }
-  Allow := ActionsEnabled And (Not FJobBusy) And (Not FRemoteOpBusy);
-  If Assigned(FetchAction) Then
-    FetchAction.Enabled := Allow;
-  If Assigned(PullAction) Then
-    PullAction.Enabled := Allow;
-  If Assigned(PushAction) Then
-    PushAction.Enabled := Allow;
-  If Assigned(RemotesAction) Then
-    RemotesAction.Enabled := Allow;
-  { Settings is always available (local identity / refresh options). }
-  If Assigned(SettingsAction) Then
-    SettingsAction.Enabled := True;
-End;
-
 Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
 Begin
   FJobBusy := IsBusy;
   If IsBusy Then
     Begin
       Screen.Cursor := crHourGlass;
-      SetRemoteActionsEnabled(False);
       If Assigned(StatusFooter) And (StatusCaption <> '') Then
         StatusFooter.SetRightText(StatusCaption);
     End
   Else
     Begin
       Screen.Cursor := crDefault;
-      { Re-evaluate gates; FRemoteOpBusy may still be true until GitJobFinished. }
-      SetRemoteActionsEnabled(True);
       UpdateStatus;
     End;
 End;
@@ -691,7 +673,6 @@ Begin
         FRemoteOpBusy := False;
         FJobBusy := False;
         Screen.Cursor := crDefault;
-        SetRemoteActionsEnabled(True);
         If Job.Cancelled Then
           Begin
             If Assigned(StatusFooter) Then
@@ -813,8 +794,6 @@ Begin
                 FilesList.Items.Add('(status failed)');
               End;
             WorkflowLogger.Warning('ManageRepository', 'ListStatus: ' + Job.ErrorText);
-            UpdateCommitEnabled;
-            UpdateStageButtonsEnabled;
           End;
       End;
     gjkSuggestMessage:
@@ -829,7 +808,6 @@ Begin
         If Assigned(MessageMemo) Then
           Begin
             MessageMemo.Text := Job.CommitMessage;
-            UpdateCommitEnabled;
           End;
         WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
           IntToStr(Length(Job.CommitMessage)) + ' chars)');
@@ -1673,8 +1651,6 @@ Begin
         StagedList.Items.EndUpdate;
         FilesList.Items.EndUpdate;
       End;
-      UpdateCommitEnabled;
-      UpdateStageButtonsEnabled;
       Exit;
     End;
   Inc(FStatusGen);
@@ -1722,8 +1698,6 @@ Begin
     If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
       Begin
         FilesList.Items.Add('(no repository)');
-        UpdateCommitEnabled;
-        UpdateStageButtonsEnabled;
         Exit;
       End;
 
@@ -1830,8 +1804,6 @@ Begin
     StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
   If Assigned(FilesDiffView) Then
     FilesDiffView.Clear;
-  UpdateCommitEnabled;
-  UpdateStageButtonsEnabled;
 End;
 
 Function TManageRepositoryForm.ListHasSelection(List: TListBox): Boolean;
@@ -1849,91 +1821,114 @@ Begin
       End;
 End;
 
-Procedure TManageRepositoryForm.UpdateStageButtonsEnabled;
-Var
-  CanPreview, CanPathAction: Boolean;
-  FilesEmpty, StagedEmpty, UnstageMode: Boolean;
+Function TManageRepositoryForm.CanMutate: Boolean;
 Begin
-  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
-  StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
-  { Prefer unstage when the working-tree list is empty but staged entries remain,
-    or when the staged list currently holds the selection. }
-  UnstageMode := (Not StagedEmpty) And (FilesEmpty Or ListHasSelection(StagedList));
-
-  If Assigned(StageAllAction) Then
-    Begin
-      If (Not StagedEmpty) And FilesEmpty Then
-        Begin
-          StageAllAction.Caption := 'Unstage All';
-          StageAllAction.Enabled := FRepoPath <> '';
-        End
-      Else
-        Begin
-          StageAllAction.Caption := 'Stage All';
-          StageAllAction.Enabled := (Not FilesEmpty) And (FRepoPath <> '');
-        End;
-    End;
-
-  If Assigned(StageAction) Then
-    Begin
-      If UnstageMode Then
-        Begin
-          StageAction.Caption := 'Unstage';
-          StageAction.Enabled := ListHasSelection(StagedList) And (FRepoPath <> '');
-        End
-      Else
-        Begin
-          StageAction.Caption := 'Stage';
-          StageAction.Enabled := ListHasSelection(FilesList) And (Not FilesEmpty) And (FRepoPath <> '');
-        End;
-    End;
-
-  If Assigned(StageSelectionAction) And Assigned(FilesDiffView) Then
-    Begin
-      CanPreview := FilesDiffView.HasActiveSelection And (FRepoPath <> '');
-      If FilesDiffView.StagedSide Then
-        Begin
-          StageSelectionAction.Caption := 'Unstage Selection';
-          StageSelectionAction.Enabled := CanPreview;
-        End
-      Else
-        Begin
-          StageSelectionAction.Caption := 'Stage Selection';
-          StageSelectionAction.Enabled := CanPreview;
-        End;
-    End;
-
-  CanPathAction := (FRepoPath <> '') And
-    (ListHasSelection(FilesList) Or ListHasSelection(StagedList));
-  If Assigned(RevertAction) Then
-    RevertAction.Enabled := CanPathAction;
-  If Assigned(DeleteAction) Then
-    DeleteAction.Enabled := CanPathAction;
-  If Assigned(IgnoreAction) Then
-    IgnoreAction.Enabled := CanPathAction;
-  If Assigned(IgnoredFilesAction) Then
-    IgnoredFilesAction.Enabled := FRepoPath <> '';
+  Result := (FRepoPath <> '') And (Not FJobBusy) And (Not FRemoteOpBusy);
 End;
 
-Procedure TManageRepositoryForm.UpdateCommitEnabled;
-Var
-  HasStaged, CanCommit, AssistantAvailable: Boolean;
+Function TManageRepositoryForm.HasStagedFiles: Boolean;
 Begin
-  HasStaged := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
-  CanCommit := HasStaged And Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
-  { Suggest is permanently off unless LazAssistantTools registered the commit-message hook. }
-  AssistantAvailable := Assigned(SuggestCommitMessageFunc);
-  If Assigned(SuggestMessageAction) Then
+  Result := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
+End;
+
+Function TManageRepositoryForm.HasUnstagedFiles: Boolean;
+Begin
+  Result := Assigned(FFilesPaths) And (FFilesPaths.Count > 0);
+End;
+
+Procedure TManageRepositoryForm.RemoteActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := CanMutate;
+End;
+
+Procedure TManageRepositoryForm.StageAllActionUpdate(Sender: TObject);
+Var
+  CurrentAction: TAction;
+Begin
+  CurrentAction := Sender As TAction;
+  If HasStagedFiles And (Not HasUnstagedFiles) Then
     Begin
-      SuggestMessageAction.Enabled := HasStaged And AssistantAvailable;
-      If Not AssistantAvailable Then
-        SuggestMessageAction.Hint :=
-          'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
-      Else
-        SuggestMessageAction.Hint := 'Suggest a commit message from the staged diff';
+      CurrentAction.Caption := 'Unstage All';
+      CurrentAction.Enabled := CanMutate;
+    End
+  Else
+    Begin
+      CurrentAction.Caption := 'Stage All';
+      CurrentAction.Enabled := CanMutate And HasUnstagedFiles;
     End;
-  If Assigned(CommitAction) Then
-    CommitAction.Enabled := CanCommit;
+End;
+
+Procedure TManageRepositoryForm.StageActionUpdate(Sender: TObject);
+Var
+  CurrentAction: TAction;
+  UnstageMode: Boolean;
+Begin
+  CurrentAction := Sender As TAction;
+  UnstageMode := HasStagedFiles And ((Not HasUnstagedFiles) Or ListHasSelection(StagedList));
+  If UnstageMode Then
+    Begin
+      CurrentAction.Caption := 'Unstage';
+      CurrentAction.Enabled := CanMutate And ListHasSelection(StagedList);
+    End
+  Else
+    Begin
+      CurrentAction.Caption := 'Stage';
+      CurrentAction.Enabled := CanMutate And ListHasSelection(FilesList) And HasUnstagedFiles;
+    End;
+End;
+
+Procedure TManageRepositoryForm.StageSelectionActionUpdate(Sender: TObject);
+Var
+  CurrentAction: TAction;
+Begin
+  CurrentAction := Sender As TAction;
+  If Assigned(FilesDiffView) And FilesDiffView.StagedSide Then
+    CurrentAction.Caption := 'Unstage Selection'
+  Else
+    CurrentAction.Caption := 'Stage Selection';
+  CurrentAction.Enabled := CanMutate And Assigned(FilesDiffView) And FilesDiffView.HasActiveSelection;
+End;
+
+Procedure TManageRepositoryForm.PathActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := CanMutate And
+    (ListHasSelection(FilesList) Or ListHasSelection(StagedList));
+End;
+
+Procedure TManageRepositoryForm.IgnoredFilesActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := FRepoPath <> '';
+End;
+
+Procedure TManageRepositoryForm.SuggestMessageActionUpdate(Sender: TObject);
+Var
+  CurrentAction: TAction;
+  AssistantAvailable: Boolean;
+Begin
+  CurrentAction := Sender As TAction;
+  AssistantAvailable := Assigned(SuggestCommitMessageFunc);
+  CurrentAction.Enabled := CanMutate And HasStagedFiles And AssistantAvailable;
+  If Not AssistantAvailable Then
+    CurrentAction.Hint :=
+      'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
+  Else
+    CurrentAction.Hint := 'Suggest a commit message from the staged diff';
+End;
+
+Procedure TManageRepositoryForm.CommitActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := CanMutate And HasStagedFiles And
+    Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
+End;
+
+Procedure TManageRepositoryForm.HistoryViewActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := SelectedSha <> '';
+End;
+
+Procedure TManageRepositoryForm.HistoryMutateActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := CanMutate And (SelectedSha <> '');
 End;
 
 Function TManageRepositoryForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
@@ -2151,7 +2146,6 @@ Begin
     If Assigned(StagedList) And ListHasSelection(StagedList) Then
       StagedList.ClearSelection;
     ShowFilesDiff(FilesList, FFilesPaths, False);
-    UpdateStageButtonsEnabled;
   Finally
     FInListSelChange := False;
   End;
@@ -2171,7 +2165,6 @@ Begin
     If Assigned(FilesList) And ListHasSelection(FilesList) Then
       FilesList.ClearSelection;
     ShowFilesDiff(StagedList, FStagedPaths, True);
-    UpdateStageButtonsEnabled;
   Finally
     FInListSelChange := False;
   End;
@@ -2402,19 +2395,9 @@ Begin
   SubmitGitJob(Job);
 End;
 
-Procedure TManageRepositoryForm.MessageChange(Sender: TObject);
-Begin
-  UpdateCommitEnabled;
-End;
-
 Procedure TManageRepositoryForm.FilesDiffStatusChanged(Sender: TObject);
 Begin
   RefreshFiles;
-End;
-
-Procedure TManageRepositoryForm.FilesDiffSelectionChanged(Sender: TObject);
-Begin
-  UpdateStageButtonsEnabled;
 End;
 
 Procedure TManageRepositoryForm.CommitActionExecute(Sender: TObject);

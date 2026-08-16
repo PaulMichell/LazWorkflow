@@ -308,7 +308,6 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Right = 4
             ScrollBars = ssAutoBoth
             TabOrder = 0
-            OnChange = MessageChange
           end
           object CommitActionsPanel: TPanel
             Left = 0
@@ -506,18 +505,22 @@ object ManageRepositoryForm: TManageRepositoryForm
     object PushAction: TAction
       Caption = 'Push'
       OnExecute = PushActionExecute
+      OnUpdate = RemoteActionUpdate
     end
     object PullAction: TAction
       Caption = 'Pull'
       OnExecute = PullActionExecute
+      OnUpdate = RemoteActionUpdate
     end
     object FetchAction: TAction
       Caption = 'Fetch'
       OnExecute = FetchActionExecute
+      OnUpdate = RemoteActionUpdate
     end
     object RemotesAction: TAction
       Caption = 'Remotes…'
       OnExecute = RemotesActionExecute
+      OnUpdate = RemoteActionUpdate
     end
     object SettingsAction: TAction
       Caption = 'Settings…'
@@ -526,61 +529,74 @@ object ManageRepositoryForm: TManageRepositoryForm
     object StageAllAction: TAction
       Caption = 'Stage All'
       OnExecute = StageAllActionExecute
+      OnUpdate = StageAllActionUpdate
     end
     object StageAction: TAction
       Caption = 'Stage'
       OnExecute = StageActionExecute
+      OnUpdate = StageActionUpdate
     end
     object StageSelectionAction: TAction
       Caption = 'Stage Selection'
       Enabled = False
       OnExecute = StageSelectionActionExecute
+      OnUpdate = StageSelectionActionUpdate
     end
     object RevertAction: TAction
       Caption = 'Revert'
       Enabled = False
       OnExecute = RevertActionExecute
+      OnUpdate = PathActionUpdate
     end
     object DeleteAction: TAction
       Caption = 'Delete'
       Enabled = False
       OnExecute = DeleteActionExecute
+      OnUpdate = PathActionUpdate
     end
     object IgnoreAction: TAction
       Caption = 'Ignore'
       Enabled = False
       OnExecute = IgnoreActionExecute
+      OnUpdate = PathActionUpdate
     end
     object IgnoredFilesAction: TAction
       Caption = 'Ignored Files…'
       OnExecute = IgnoredFilesActionExecute
+      OnUpdate = IgnoredFilesActionUpdate
     end
     object SuggestMessageAction: TAction
       Caption = 'Suggest'
       Enabled = False
       Hint = 'Generate a commit message with Project Assistant (staged diff)'
       OnExecute = SuggestMessageActionExecute
+      OnUpdate = SuggestMessageActionUpdate
     end
     object CommitAction: TAction
       Caption = 'Commit'
       Enabled = False
       OnExecute = CommitActionExecute
+      OnUpdate = CommitActionUpdate
     end
     object ShowCommitAction: TAction
       Caption = 'Show commit'
       OnExecute = ShowCommitActionExecute
+      OnUpdate = HistoryViewActionUpdate
     end
     object CopyShaAction: TAction
       Caption = 'Copy SHA'
       OnExecute = CopyShaActionExecute
+      OnUpdate = HistoryViewActionUpdate
     end
     object CheckoutAction: TAction
       Caption = 'Checkout…'
       OnExecute = CheckoutActionExecute
+      OnUpdate = HistoryMutateActionUpdate
     end
     object CreateBranchAction: TAction
       Caption = 'Create branch here…'
       OnExecute = CreateBranchActionExecute
+      OnUpdate = HistoryMutateActionUpdate
     end
   end
   object Popup: TPopupMenu
