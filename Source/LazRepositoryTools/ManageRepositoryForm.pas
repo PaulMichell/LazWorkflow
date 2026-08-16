@@ -1,6 +1,10 @@
 Unit ManageRepositoryForm;
 
-{ Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing. }
+{ Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. The .lfm remains the shell;
+  History graph paint and Files lists live in coordinator units.
+  Reviewed 2026-08: job/window orchestration stays on the form. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -12,7 +16,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView, GitJobRunner, GitService;
+  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryFiles;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -144,6 +148,8 @@ Type
     FHeadSha: String;
     FClean: Boolean;
     FModel: TGitGraphModel;
+    FHistory: TManageHistoryGraph;
+    FFiles: TManageFilesPane;
     FSelectedIndex: Integer;
     FIndexing: Boolean;
     FDetailLoading: Boolean;
@@ -155,9 +161,8 @@ Type
     FDetailGen: Integer;
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
-    FLaneColors: Array[0..9] Of TColor;
-    FFilesPaths: TStringList;
-    FStagedPaths: TStringList;
+
+    { Path lists live on FFiles. }
     FInListSelChange: Boolean;
     FStatusGen: Integer;
     FStatusJobPending: Boolean;
@@ -167,7 +172,6 @@ Type
     FLastIndexAge: LongInt;
     FLastProbeAt: TDateTime;
     FProbeIntervalSec: Integer;
-    Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
     Function GitDirStampChanged: Boolean;
@@ -175,12 +179,6 @@ Type
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFiles;
     Function CanMutate: Boolean;
-    Function HasStagedFiles: Boolean;
-    Function HasUnstagedFiles: Boolean;
-    Function ListHasSelection(List: TListBox): Boolean;
-    Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
-    Function CollectActiveSelectedPaths: TStringList;
-    Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
@@ -190,38 +188,16 @@ Type
     Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
     Procedure GitJobFinished(Job: TGitJob);
     Function SubmitGitJob(Job: TGitJob): Boolean;
-    Procedure ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
     Procedure SubmitFilesStatus;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
     Procedure StopIndexLoad;
     Procedure StopDetailLoad;
-    Procedure UpdateScrollRange;
-    Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
     Procedure ShowCommitDetails(Index: Integer);
     Procedure SelectRow(Index: Integer; ScrollIntoView: Boolean);
     Procedure MoveSelection(Delta: Integer);
     Function SelectedSha: String;
-    Function ScrollOffset: Integer;
-    Function GraphScale(DesignPx: Integer): Integer;
-    Function GraphCanMeasureFont: Boolean;
-    Function GraphRowHeight: Integer;
-    Function GraphLaneWidth: Integer;
-    Function GraphLeftMargin: Integer;
-    Function GraphNodeRadius: Integer;
-    Function GraphTextGap: Integer;
-    Function GraphDateColumnWidth: Integer;
-    Function GraphContentWidth: Integer;
-    Function GraphContentHeight: Integer;
-    Procedure PrepareGraphTextFont(ACanvas: TCanvas; IsDate: Boolean);
-    Function RowAtY(Y: Integer): Integer;
-    Function LaneX(Lane: Integer): Integer;
-    Function RowMidY(Row: Integer): Integer;
-    Function FormatCommitDate(Const CommitTime: Int64): String;
-    Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
-    Function FileStatusPassesFilter(Const StatusText: String): Boolean;
     Procedure QuietRefreshIfChanged;
-    Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
     { IGitRepositoryChanged }
     Procedure RepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
     Procedure WorkingTreeChanged(Const RepoPath: String);
@@ -247,7 +223,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, StrUtils;
+  DateUtils, Math, LazFileUtils;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -302,8 +278,6 @@ Begin
   FDetailGen := 0;
   FVisibleFirst := 0;
   FVisibleLast := 0;
-  FFilesPaths := TStringList.Create;
-  FStagedPaths := TStringList.Create;
   FInListSelChange := False;
   FStatusGen := 0;
   FStatusJobPending := False;
@@ -314,7 +288,8 @@ Begin
   FLastProbeAt := 0;
   FProbeIntervalSec := 5;
   FModel := TGitGraphModel.Create;
-  InitLaneColors;
+  FHistory := TManageHistoryGraph.Create(Self);
+  FFiles := TManageFilesPane.Create;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
   If Assigned(GitJobs) Then
@@ -346,24 +321,10 @@ Begin
   If Assigned(FilesDiffView) Then
     FilesDiffView.Clear;
   WorkflowEventBus.RemoveListener(Self);
-  FreeAndNil(FFilesPaths);
-  FreeAndNil(FStagedPaths);
+  FreeAndNil(FFiles);
+  FreeAndNil(FHistory);
   FreeAndNil(FModel);
   Inherited Destroy;
-End;
-
-Procedure TManageRepositoryForm.InitLaneColors;
-Begin
-  FLaneColors[0] := RGBToColor(33, 150, 243);
-  FLaneColors[1] := RGBToColor(76, 175, 80);
-  FLaneColors[2] := RGBToColor(255, 152, 0);
-  FLaneColors[3] := RGBToColor(156, 39, 176);
-  FLaneColors[4] := RGBToColor(244, 67, 54);
-  FLaneColors[5] := RGBToColor(0, 150, 136);
-  FLaneColors[6] := RGBToColor(63, 81, 181);
-  FLaneColors[7] := RGBToColor(233, 30, 99);
-  FLaneColors[8] := RGBToColor(121, 85, 72);
-  FLaneColors[9] := RGBToColor(96, 125, 139);
 End;
 
 Procedure TManageRepositoryForm.FormCreate(Sender: TObject);
@@ -394,6 +355,11 @@ Begin
         FilesDiffView.SetViewMode(dvmEditorOnly);
         FilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
       End;
+    If Assigned(FHistory) Then
+      FHistory.Bind(GraphPaintBox, GraphScrollBar, FModel);
+    If Assigned(FFiles) Then
+      FFiles.Bind(FilesList, StagedList, FilesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
+        StagedLabel);
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
     If Assigned(CleanCheck) Then
@@ -422,7 +388,7 @@ Begin
     BindRepository;
     ApplyConfig;
     { Remeasure scroll range once the paintbox parent has a handle. }
-    UpdateScrollRange;
+    FHistory.UpdateScrollRange;
     If Assigned(GraphPaintBox) Then
       GraphPaintBox.Invalidate;
   Except
@@ -447,7 +413,7 @@ Begin
       FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
     End;
   { Graph font changes affect row metrics and painted text. }
-  UpdateScrollRange;
+  FHistory.UpdateScrollRange;
   If Assigned(GraphPaintBox) Then
     GraphPaintBox.Invalidate;
 End;
@@ -500,12 +466,12 @@ Begin
       End;
     VK_PRIOR:
       Begin
-        MoveSelection(-(GraphPaintBox.ClientHeight Div GraphRowHeight));
+        MoveSelection(-(GraphPaintBox.ClientHeight Div FHistory.RowHeight));
         Key := 0;
       End;
     VK_NEXT:
       Begin
-        MoveSelection(GraphPaintBox.ClientHeight Div GraphRowHeight);
+        MoveSelection(GraphPaintBox.ClientHeight Div FHistory.RowHeight);
         Key := 0;
       End;
   End;
@@ -537,13 +503,13 @@ Begin
   FSelectedIndex := Index;
   If ScrollIntoView Then
     Begin
-      RH := GraphRowHeight;
+      RH := FHistory.RowHeight;
       ViewH := GraphPaintBox.ClientHeight;
       RowTop := Index * RH;
       RowBottom := RowTop + RH;
-      If RowTop < ScrollOffset Then
+      If RowTop < FHistory.ScrollOffset Then
         GraphScrollBar.Position := RowTop
-      Else If RowBottom > ScrollOffset + ViewH Then
+      Else If RowBottom > FHistory.ScrollOffset + ViewH Then
         Begin
           NewPos := RowBottom - ViewH;
           If NewPos < 0 Then
@@ -562,11 +528,6 @@ Begin
   Result := '';
   If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) Then
     Result := FModel.Commit(FSelectedIndex).Sha;
-End;
-
-Function TManageRepositoryForm.ScrollOffset: Integer;
-Begin
-  Result := GraphScrollBar.Position;
 End;
 
 Procedure TManageRepositoryForm.StopIndexLoad;
@@ -760,7 +721,7 @@ Begin
             Exit;
           End;
         If Job.Ok Then
-          ApplyFilesFromStatus(Job.StatusEntries)
+          FFiles.ApplyFromStatus(Job.StatusEntries)
         Else
           Begin
             If Assigned(FilesList) Then
@@ -867,7 +828,7 @@ Begin
   FSelectedIndex := -1;
   If Parsed > 0 Then
     FSelectedIndex := 0;
-  UpdateScrollRange;
+  FHistory.UpdateScrollRange;
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex)
   Else If Assigned(DiffView) Then
@@ -920,7 +881,7 @@ Begin
   If Parsed > 0 Then
     FSelectedIndex := 0;
 
-  UpdateScrollRange;
+  FHistory.UpdateScrollRange;
   If FSelectedIndex >= 0 Then
     ShowCommitDetails(FSelectedIndex)
   Else
@@ -949,33 +910,11 @@ Begin
   ScheduleVisibleDetails;
 End;
 
-Procedure TManageRepositoryForm.GetVisibleRange(Out FirstRow, LastRow: Integer);
-Var
-  ViewH, RH: Integer;
-Begin
-  FirstRow := 0;
-  LastRow := -1;
-  If FModel.Count = 0 Then
-    Exit;
-  RH := GraphRowHeight;
-  If RH < 1 Then
-    RH := 1;
-  ViewH := GraphPaintBox.ClientHeight;
-  If ViewH < 1 Then
-    ViewH := 1;
-  FirstRow := ScrollOffset Div RH;
-  LastRow := (ScrollOffset + ViewH) Div RH;
-  If FirstRow < 0 Then
-    FirstRow := 0;
-  If LastRow >= FModel.Count Then
-    LastRow := FModel.Count - 1;
-End;
-
 Procedure TManageRepositoryForm.ScheduleVisibleDetails;
 Begin
   If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
     Exit;
-  GetVisibleRange(FVisibleFirst, FVisibleLast);
+  FHistory.GetVisibleRange(FVisibleFirst, FVisibleLast);
   FDetailTimer.Enabled := False;
   FDetailTimer.Enabled := True;
 End;
@@ -996,7 +935,7 @@ Begin
   If FDetailLoading Or FIndexing Or (FRepoPath = '') Then
     Exit;
 
-  GetVisibleRange(First, Last);
+  FHistory.GetVisibleRange(First, Last);
   First := Max(0, First - GitGraphPrefetchRows);
   Last := Min(FModel.Count - 1, Last + GitGraphPrefetchRows);
   Missing := FModel.CollectMissingShas(First, Last, Shas);
@@ -1017,34 +956,9 @@ Begin
     FDetailLoading := False;
 End;
 
-Procedure TManageRepositoryForm.UpdateScrollRange;
-Var
-  ViewH, ContentH, MaxPos, RH: Integer;
-Begin
-  If (Not Assigned(GraphPaintBox)) Or (Not Assigned(GraphScrollBar)) Or (Not Assigned(FModel)) Then
-    Exit;
-  ViewH := GraphPaintBox.ClientHeight;
-  If ViewH < 1 Then
-    ViewH := 1;
-  RH := GraphRowHeight;
-  ContentH := GraphContentHeight;
-  MaxPos := ContentH - ViewH;
-  If MaxPos < 0 Then
-    MaxPos := 0;
-  GraphScrollBar.Min := 0;
-  GraphScrollBar.SmallChange := RH;
-  GraphScrollBar.LargeChange := ViewH;
-  { Position runs 0..Max; PageSize 0 avoids platform-specific range quirks. }
-  GraphScrollBar.PageSize := 0;
-  GraphScrollBar.Max := MaxPos;
-  If GraphScrollBar.Position > MaxPos Then
-    GraphScrollBar.Position := MaxPos;
-  GraphScrollBar.Enabled := MaxPos > 0;
-End;
-
 Procedure TManageRepositoryForm.GraphHostResize(Sender: TObject);
 Begin
-  UpdateScrollRange;
+  FHistory.UpdateScrollRange;
   ScheduleVisibleDetails;
   GraphPaintBox.Invalidate;
 End;
@@ -1061,10 +975,10 @@ Var
   NewPos, MaxPos, ViewH: Integer;
 Begin
   ViewH := GraphPaintBox.ClientHeight;
-  MaxPos := GraphContentHeight - ViewH;
+  MaxPos := FHistory.ContentHeight - ViewH;
   If MaxPos < 0 Then
     MaxPos := 0;
-  NewPos := GraphScrollBar.Position - (WheelDelta Div 120) * GraphRowHeight * 3;
+  NewPos := GraphScrollBar.Position - (WheelDelta Div 120) * FHistory.RowHeight * 3;
   If NewPos < 0 Then
     NewPos := 0;
   If NewPos > MaxPos Then
@@ -1074,415 +988,14 @@ Begin
   Handled := True;
 End;
 
-Function TManageRepositoryForm.GraphScale(DesignPx: Integer): Integer;
-Var
-  PPI: Integer;
-Begin
-  { Scale design (96 DPI) pixels via form/screen PPI.
-    Do NOT use Scale96ToForm here: it calls NeedParentDesignControl and raises
-    EInvalidOperation when the control chain is not yet parented (IDE desktop
-    restore / early BindRepository during package load). }
-  PPI := PixelsPerInch;
-  If PPI <= 0 Then
-    PPI := Screen.PixelsPerInch;
-  If PPI <= 0 Then
-    PPI := 96;
-  Result := Integer((Int64(DesignPx) * PPI) Div 96);
-  If (DesignPx > 0) And (Result < 1) Then
-    Result := 1;
-End;
-
-Function TManageRepositoryForm.GraphCanMeasureFont: Boolean;
-Begin
-  { TPaintBox has no handle; its Canvas needs a parent TWinControl with a DC. }
-  Result := Assigned(GraphPaintBox) And Assigned(GraphPaintBox.Parent) And
-    GraphPaintBox.Parent.HandleAllocated;
-End;
-
-Function TManageRepositoryForm.GraphRowHeight: Integer;
-Var
-  TextH, Base, Pad: Integer;
-Begin
-  Base := GraphScale(GitGraphRowHeight);
-  Pad := GraphScale(6);
-  Result := Base;
-  { Prefer live font metrics so row height tracks painted text on HiDPI. }
-  If GraphCanMeasureFont Then
-    Begin
-      Try
-        PrepareGraphTextFont(GraphPaintBox.Canvas, False);
-        TextH := GraphPaintBox.Canvas.TextHeight('Ag');
-        Result := Max(Base, TextH + Pad);
-      Except
-        Result := Base;
-      End;
-    End;
-End;
-
-Function TManageRepositoryForm.GraphLaneWidth: Integer;
-Begin
-  Result := GraphScale(GitGraphLaneWidth);
-End;
-
-Function TManageRepositoryForm.GraphLeftMargin: Integer;
-Begin
-  Result := GraphScale(GitGraphLeftMargin);
-End;
-
-Function TManageRepositoryForm.GraphNodeRadius: Integer;
-Begin
-  Result := GraphScale(GitGraphNodeRadius);
-End;
-
-Function TManageRepositoryForm.GraphTextGap: Integer;
-Begin
-  Result := GraphScale(GitGraphTextGap);
-End;
-
-Function TManageRepositoryForm.GraphDateColumnWidth: Integer;
-Var
-  SampleW: Integer;
-Begin
-  { Measure the fixed date format so the subject never underlaps the date. }
-  SampleW := GraphScale(110);
-  If GraphCanMeasureFont Then
-    Begin
-      Try
-        PrepareGraphTextFont(GraphPaintBox.Canvas, True);
-        SampleW := GraphPaintBox.Canvas.TextWidth('0000-00-00 00:00');
-      Except
-        SampleW := GraphScale(110);
-      End;
-    End;
-  Result := SampleW + GraphScale(GitGraphDateGap);
-End;
-
-Function TManageRepositoryForm.GraphContentWidth: Integer;
-Begin
-  Result := FModel.GraphWidth(GraphLeftMargin, GraphLaneWidth);
-End;
-
-Function TManageRepositoryForm.GraphContentHeight: Integer;
-Begin
-  Result := FModel.TotalHeight(GraphRowHeight);
-End;
-
-Procedure TManageRepositoryForm.PrepareGraphTextFont(ACanvas: TCanvas; IsDate: Boolean);
-Var
-  FontName: String;
-  FontSize: Integer;
-Begin
-  If Not Assigned(ACanvas) Then
-    Exit;
-  FontName := Font.Name;
-  FontSize := GitConfigDefaultGraphFontSize;
-  If Assigned(GitManagerConfig) Then
-    Begin
-      If Trim(GitManagerConfig.GraphFontName) <> '' Then
-        FontName := GitManagerConfig.GraphFontName;
-      FontSize := GitManagerConfig.GraphFontSize;
-    End;
-  { Point sizes only — never assign Font.Height := 0 (forces Size 0 intermediate). }
-  ACanvas.Font.Name := FontName;
-  ACanvas.Font.Style := [];
-  ACanvas.Font.Quality := fqCleartypeNatural;
-  ACanvas.Font.Size := FontSize;
-  If IsDate Then
-    ACanvas.Font.Color := clGrayText
-  Else
-    ACanvas.Font.Color := clWindowText;
-End;
-
-Function TManageRepositoryForm.LaneX(Lane: Integer): Integer;
-Var
-  LW: Integer;
-Begin
-  LW := GraphLaneWidth;
-  Result := GraphLeftMargin + Lane * LW + LW Div 2;
-End;
-
-Function TManageRepositoryForm.RowMidY(Row: Integer): Integer;
-Var
-  RH: Integer;
-Begin
-  RH := GraphRowHeight;
-  Result := Row * RH + RH Div 2 - ScrollOffset;
-End;
-
-Function TManageRepositoryForm.RowAtY(Y: Integer): Integer;
-Var
-  RH: Integer;
-Begin
-  If FModel.Count = 0 Then
-    Result := -1
-  Else
-    Begin
-      RH := GraphRowHeight;
-      If RH < 1 Then
-        RH := 1;
-      Result := (Y + ScrollOffset) Div RH;
-      If (Result < 0) Or (Result >= FModel.Count) Then
-        Result := -1;
-    End;
-End;
-
-Function TManageRepositoryForm.FormatCommitDate(Const CommitTime: Int64): String;
-Begin
-  If CommitTime <= 0 Then
-    Result := '…'
-  Else
-    Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(CommitTime));
-End;
-
-Procedure TManageRepositoryForm.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
-Type
-  TRefKind = (rkLocal, rkRemote, rkTag, rkOther);
-Var
-  Parts: TStringList;
-  I, ArrowPos, CardW, CardH, CardY, PadX, Gap, MinW, RH, TextH: Integer;
-  Token, RefName: String;
-  Kind: TRefKind;
-  Bg, Fg, Border: TColor;
-Begin
-  If Trim(Refs) = '' Then
-    Exit;
-
-  Parts := TStringList.Create;
-  Try
-    { Manual split – DelimitedText mishandles spaces around commas. }
-    Token := Refs;
-    While Token <> '' Do
-      Begin
-        I := Pos(',', Token);
-        If I = 0 Then
-          Begin
-            Parts.Add(Trim(Token));
-            Break;
-          End;
-        Parts.Add(Trim(Copy(Token, 1, I - 1)));
-        Token := Copy(Token, I + 1, MaxInt);
-      End;
-
-    RH := GraphRowHeight;
-    CardH := GraphScale(16);
-    PadX := GraphScale(6);
-    Gap := GraphScale(5);
-    MinW := GraphScale(28);
-    { Chip height tracks row metrics so text stays centered at high DPI. }
-    With GraphPaintBox.Canvas Do
-      Begin
-        Font.Name := Self.Font.Name;
-        Font.Size := 8;
-        Font.Style := [];
-        Font.Quality := fqCleartypeNatural;
-        TextH := TextHeight('Ag');
-      End;
-    If CardH < TextH + GraphScale(4) Then
-      CardH := TextH + GraphScale(4);
-    If CardH > RH - GraphScale(2) Then
-      CardH := Max(TextH, RH - GraphScale(2));
-    CardY := RowTop + (RH - CardH) Div 2;
-
-    For I := 0 To Parts.Count - 1 Do
-      Begin
-        Token := Trim(Parts[I]);
-        If Token = '' Then
-          Continue;
-
-        { HEAD -> main  →  show "main" as local branch }
-        ArrowPos := Pos(' -> ', Token);
-        If ArrowPos > 0 Then
-          Begin
-            RefName := Trim(Copy(Token, ArrowPos + 4, MaxInt));
-            Kind := rkLocal;
-          End
-        Else If SameText(Copy(Token, 1, 5), 'tag: ') Then
-          Begin
-            RefName := Trim(Copy(Token, 6, MaxInt));
-            Kind := rkTag;
-          End
-        Else If SameText(Token, 'HEAD') Then
-          Continue { HEAD alone is implied by the tip branch card }
-        Else
-          Begin
-            RefName := Token;
-            If Pos('/', RefName) > 0 Then
-              Kind := rkRemote
-            Else
-              Kind := rkLocal;
-          End;
-
-        If RefName = '' Then
-          Continue;
-
-        Case Kind Of
-          rkLocal:
-            Begin
-              { Gitg-like cool blue local branch chip }
-              Bg := RGBToColor(227, 242, 253);
-              Fg := RGBToColor(13, 71, 161);
-              Border := RGBToColor(66, 165, 245);
-            End;
-          rkRemote:
-            Begin
-              { Warm amber remote chip }
-              Bg := RGBToColor(255, 243, 224);
-              Fg := RGBToColor(230, 81, 0);
-              Border := RGBToColor(255, 167, 38);
-            End;
-          rkTag:
-            Begin
-              Bg := RGBToColor(243, 229, 245);
-              Fg := RGBToColor(106, 27, 154);
-              Border := RGBToColor(186, 104, 200);
-            End;
-        Else
-          Begin
-            Bg := RGBToColor(245, 245, 245);
-            Fg := RGBToColor(66, 66, 66);
-            Border := RGBToColor(189, 189, 189);
-          End;
-        End;
-
-        With GraphPaintBox.Canvas Do
-          Begin
-            Font.Name := Self.Font.Name;
-            Font.Size := 8;
-            Font.Style := [];
-            Font.Quality := fqCleartypeNatural;
-            Font.Color := Fg;
-            CardW := TextWidth(RefName) + PadX * 2;
-            If CardW < MinW Then
-              CardW := MinW;
-
-            Brush.Style := bsSolid;
-            Brush.Color := Bg;
-            Pen.Color := Border;
-            Pen.Width := Max(1, GraphScale(1));
-            { Clean bordered rectangles – RoundRect is jagged on many widgetsets. }
-            Rectangle(TextX, CardY, TextX + CardW, CardY + CardH);
-
-            Brush.Style := bsClear;
-            TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
-            Brush.Style := bsSolid;
-          End;
-
-        TextX := TextX + CardW + Gap;
-      End;
-  Finally
-    Parts.Free;
-  End;
-End;
-
 Procedure TManageRepositoryForm.PaintBoxPaint(Sender: TObject);
-Var
-  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR: Integer;
-  TextH, TextY, EdgePenW, MsgPad: Integer;
-  C: TGitCommitRec;
-  E: TGitGraphEdge;
-  Col: TColor;
-  LabelText, DateText: String;
 Begin
-  Off := ScrollOffset;
-  RH := GraphRowHeight;
-  DateColW := GraphDateColumnWidth;
-  NodeR := GraphNodeRadius;
-  EdgePenW := Max(1, GraphScale(2));
-  MsgPad := GraphScale(16);
-  With GraphPaintBox.Canvas Do
-    Begin
-      Brush.Color := clWindow;
-      FillRect(GraphPaintBox.ClientRect);
-
-      If FIndexing And (FModel.Count = 0) Then
-        Begin
-          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
-          Font.Color := clGrayText;
-          Font.Size := 11;
-          TextOut(MsgPad, MsgPad, 'Indexing commit history…');
-          Exit;
-        End;
-
-      If FModel.Count = 0 Then
-        Begin
-          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
-          Font.Color := clGrayText;
-          Font.Size := 11;
-          If FRepoPath = '' Then
-            TextOut(MsgPad, MsgPad, 'No Git repository detected for the active project')
-          Else
-            TextOut(MsgPad, MsgPad, 'No commits to display');
-          Exit;
-        End;
-
-      GetVisibleRange(FirstRow, LastRow);
-      If LastRow < FirstRow Then
-        Exit;
-
-      { Selection under graph geometry so lane edges still show on the active row. }
-      If (FSelectedIndex >= FirstRow) And (FSelectedIndex <= LastRow) Then
-        Begin
-          Y := FSelectedIndex * RH - Off;
-          Brush.Color := RGBToColor(227, 242, 253);
-          FillRect(Bounds(0, Y, GraphPaintBox.ClientWidth, RH));
-        End;
-
-      Pen.Width := EdgePenW;
-      For I := 0 To FModel.EdgeCount - 1 Do
-        Begin
-          E := FModel.Edge(I);
-          If (E.ChildIndex > LastRow) Or (E.ParentIndex < FirstRow) Then
-            Continue;
-          Col := FLaneColors[FModel.LaneColorIndex(E.ChildLane)];
-          Pen.Color := Col;
-          X := LaneX(E.ChildLane);
-          If E.ChildLane = E.ParentLane Then
-            Line(X, RowMidY(E.ChildIndex), LaneX(E.ParentLane), RowMidY(E.ParentIndex))
-          Else
-            Begin
-              Line(X, RowMidY(E.ChildIndex), X, RowMidY(E.ParentIndex));
-              Line(X, RowMidY(E.ParentIndex), LaneX(E.ParentLane), RowMidY(E.ParentIndex));
-            End;
-        End;
-
-      For I := FirstRow To LastRow Do
-        Begin
-          C := FModel.Commit(I);
-          Y := I * RH - Off;
-
-          Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
-          X := LaneX(C.Lane);
-          Brush.Color := Col;
-          Pen.Color := Col;
-          Pen.Width := Max(1, GraphScale(1));
-          Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
-
-          TextX := GraphContentWidth + GraphTextGap;
-          Brush.Style := bsClear;
-          PrepareGraphTextFont(GraphPaintBox.Canvas, True);
-          DateText := FormatCommitDate(C.CommitTime);
-          TextH := TextHeight(DateText);
-          TextY := Y + (RH - TextH) Div 2;
-          TextOut(TextX, TextY, DateText);
-
-          TextX := TextX + DateColW;
-          PrepareGraphTextFont(GraphPaintBox.Canvas, False);
-          If C.DetailsLoaded Then
-            LabelText := C.Subject
-          Else
-            LabelText := '…';
-          TextH := TextHeight(LabelText);
-          TextY := Y + (RH - TextH) Div 2;
-          TextOut(TextX, TextY, LabelText);
-          SubjectW := TextWidth(LabelText);
-          TextX := TextX + SubjectW + GraphScale(8);
-          Brush.Style := bsSolid;
-
-          { Branch/tag cards after the subject (Gitg-style chips). }
-          If C.DetailsLoaded And (C.Refs <> '') Then
-            DrawRefCards(C.Refs, TextX, Y);
-        End;
-    End;
+  If Not Assigned(FHistory) Then
+    Exit;
+  FHistory.Indexing := FIndexing;
+  FHistory.RepoPath := FRepoPath;
+  FHistory.SelectedIndex := FSelectedIndex;
+  FHistory.Paint;
 End;
 
 Procedure TManageRepositoryForm.PaintBoxMouseDown(Sender: TObject; Button: TMouseButton;
@@ -1490,7 +1003,7 @@ Procedure TManageRepositoryForm.PaintBoxMouseDown(Sender: TObject; Button: TMous
 Var
   Row: Integer;
 Begin
-  Row := RowAtY(Y);
+  Row := FHistory.RowAtY(Y);
   If Row < 0 Then
     Exit;
   SelectRow(Row, False);
@@ -1565,67 +1078,16 @@ Begin
     End;
 End;
 
-Function TManageRepositoryForm.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
-Var
-  X, Y: Char;
-Begin
-  X := IndexStatus;
-  Y := WorkTreeStatus;
-  If (X = '?') And (Y = '?') Then
-    Result := 'untracked'
-  Else If (X = '!') Or (Y = '!') Then
-    Result := 'ignored'
-  Else If (X = 'A') Or (Y = 'A') Then
-    Result := 'added'
-  Else If (X = 'D') Or (Y = 'D') Then
-    Result := 'deleted'
-  Else If (X = 'R') Or (Y = 'R') Then
-    Result := 'renamed'
-  Else If (X = 'C') Or (Y = 'C') Then
-    Result := 'copied'
-  Else If (X = 'U') Or (Y = 'U') Then
-    Result := 'unmerged'
-  Else If (X = 'M') Or (Y = 'M') Then
-    Result := 'modified'
-  Else If (X <> ' ') Or (Y <> ' ') Then
-    Result := Trim(X + Y)
-  Else
-    Result := 'clean';
-End;
-
-Function TManageRepositoryForm.FileStatusPassesFilter(Const StatusText: String): Boolean;
-Begin
-  { Optional categories are hidden unless their filter checkbox is checked. }
-  If StatusText = 'untracked' Then
-    Result := Assigned(UntrackedCheck) And UntrackedCheck.Checked
-  Else If StatusText = 'clean' Then
-    Result := Assigned(CleanCheck) And CleanCheck.Checked
-  Else If StatusText = 'ignored' Then
-    Result := Assigned(IgnoredCheck) And IgnoredCheck.Checked
-  Else
-    Result := True;
-End;
-
 Procedure TManageRepositoryForm.RefreshFiles;
-Var
-  Job: TGitJob;
 Begin
+  If Assigned(FFiles) Then
+    FFiles.RepoPath := FRepoPath;
   If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
     Exit;
   If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
     Begin
-      FilesList.Items.BeginUpdate;
-      StagedList.Items.BeginUpdate;
-      Try
-        FilesList.Items.Clear;
-        StagedList.Items.Clear;
-        FFilesPaths.Clear;
-        FStagedPaths.Clear;
-        FilesList.Items.Add('(no repository)');
-      Finally
-        StagedList.Items.EndUpdate;
-        FilesList.Items.EndUpdate;
-      End;
+      If Assigned(FFiles) Then
+        FFiles.ClearForNoRepo;
       Exit;
     End;
   Inc(FStatusGen);
@@ -1649,166 +1111,9 @@ Begin
     FStatusJobPending := False;
 End;
 
-Procedure TManageRepositoryForm.ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
-Var
-  AllFiles, StatusMap, FullyStaged, Tracked: TStringList;
-  I: Integer;
-  FullPath, Rel, Root, StatusText: String;
-  Idx: Integer;
-  EntryStatus: String;
-  WantClean: Boolean;
-Begin
-  Tracked := Nil;
-  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
-    Exit;
-
-  FilesList.Items.BeginUpdate;
-  StagedList.Items.BeginUpdate;
-  Try
-    FilesList.Items.Clear;
-    StagedList.Items.Clear;
-    FFilesPaths.Clear;
-    FStagedPaths.Clear;
-
-    If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
-      Begin
-        FilesList.Items.Add('(no repository)');
-        Exit;
-      End;
-
-    Root := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath));
-    StatusMap := TStringList.Create;
-    FullyStaged := TStringList.Create;
-    AllFiles := TStringList.Create;
-    Try
-      StatusMap.Sorted := True;
-      StatusMap.Duplicates := dupIgnore;
-      StatusMap.CaseSensitive := FileNameCaseSensitive;
-      FullyStaged.Sorted := True;
-      FullyStaged.Duplicates := dupIgnore;
-      FullyStaged.CaseSensitive := FileNameCaseSensitive;
-
-      For I := 0 To High(Entries) Do
-        Begin
-          Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
-          EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
-          StatusMap.Values[Rel] := EntryStatus;
-          If GitStatusEntryIsStaged(Entries[I]) Then
-            Begin
-              StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
-              FStagedPaths.Add(Rel);
-              If Not GitStatusEntryIsUnstaged(Entries[I]) Then
-                FullyStaged.Add(Rel);
-            End;
-        End;
-
-      { Tracked files via git ls-files, not a recursive disk walk of build trees. }
-      WantClean := Assigned(CleanCheck) And CleanCheck.Checked;
-      AllFiles.Sorted := True;
-      AllFiles.Duplicates := dupIgnore;
-      If WantClean And Assigned(GitClient) Then
-        Begin
-          GitClient.RepoPath := FRepoPath;
-          If GitClient.ListTrackedFiles(Tracked) Then
-            AllFiles.AddStrings(Tracked);
-          Tracked.Free;
-        End
-      Else
-        { Still walk status paths so deleted/untracked/modified appear without FindAllFiles. }
-        For I := 0 To StatusMap.Count - 1 Do
-          AllFiles.Add(Root + StringReplace(StatusMap.Names[I], '/', DirectorySeparator, [rfReplaceAll]));
-      For I := 0 To AllFiles.Count - 1 Do
-        Begin
-          FullPath := ExpandFileName(AllFiles[I]);
-          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
-          If Pos('/.git/', Rel + '/') > 0 Then
-            Continue;
-          If CompareFilenames(Copy(FullPath, 1, Length(Root)), Root) = 0 Then
-            Delete(FullPath, 1, Length(Root))
-          Else
-            Continue;
-          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
-          If Rel = '' Then
-            Continue;
-          If FullyStaged.IndexOf(Rel) >= 0 Then
-            Continue;
-          Idx := StatusMap.IndexOfName(Rel);
-          If Idx >= 0 Then
-            StatusText := StatusMap.ValueFromIndex[Idx]
-          Else
-            StatusText := 'clean';
-          If Not FileStatusPassesFilter(StatusText) Then
-            Continue;
-          FilesList.Items.Add(Rel + '  ' + StatusText);
-          FFilesPaths.Add(Rel);
-        End;
-
-      For I := 0 To StatusMap.Count - 1 Do
-        Begin
-          Rel := StatusMap.Names[I];
-          If Rel = '' Then
-            Continue;
-          If FullyStaged.IndexOf(Rel) >= 0 Then
-            Continue;
-          StatusText := StatusMap.ValueFromIndex[I];
-          If Not FileStatusPassesFilter(StatusText) Then
-            Continue;
-          FullPath := Root + StringReplace(Rel, '/', DirectorySeparator, [rfReplaceAll]);
-          If FileExists(FullPath) Then
-            Continue;
-          If FFilesPaths.IndexOf(Rel) < 0 Then
-            Begin
-              FilesList.Items.Add(Rel + '  ' + StatusText);
-              FFilesPaths.Add(Rel);
-            End;
-        End;
-
-      If FilesList.Items.Count = 0 Then
-        FilesList.Items.Add('(no files)');
-    Finally
-      AllFiles.Free;
-      FullyStaged.Free;
-      StatusMap.Free;
-    End;
-  Finally
-    FilesList.Items.EndUpdate;
-    StagedList.Items.EndUpdate;
-  End;
-
-  If Assigned(StagedLabel) Then
-    StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
-  If Assigned(FilesDiffView) Then
-    FilesDiffView.Clear;
-End;
-
-Function TManageRepositoryForm.ListHasSelection(List: TListBox): Boolean;
-Var
-  I: Integer;
-Begin
-  Result := False;
-  If List = Nil Then
-    Exit;
-  For I := 0 To List.Count - 1 Do
-    If List.Selected[I] Then
-      Begin
-        Result := True;
-        Exit;
-      End;
-End;
-
 Function TManageRepositoryForm.CanMutate: Boolean;
 Begin
   Result := (FRepoPath <> '') And (Not FJobBusy) And (Not FRemoteOpBusy);
-End;
-
-Function TManageRepositoryForm.HasStagedFiles: Boolean;
-Begin
-  Result := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
-End;
-
-Function TManageRepositoryForm.HasUnstagedFiles: Boolean;
-Begin
-  Result := Assigned(FFilesPaths) And (FFilesPaths.Count > 0);
 End;
 
 Procedure TManageRepositoryForm.RemoteActionUpdate(Sender: TObject);
@@ -1821,7 +1126,7 @@ Var
   CurrentAction: TAction;
 Begin
   CurrentAction := Sender As TAction;
-  If HasStagedFiles And (Not HasUnstagedFiles) Then
+  If FFiles.HasStaged And (Not FFiles.HasUnstaged) Then
     Begin
       CurrentAction.Caption := 'Unstage All';
       CurrentAction.Enabled := CanMutate;
@@ -1829,7 +1134,7 @@ Begin
   Else
     Begin
       CurrentAction.Caption := 'Stage All';
-      CurrentAction.Enabled := CanMutate And HasUnstagedFiles;
+      CurrentAction.Enabled := CanMutate And FFiles.HasUnstaged;
     End;
 End;
 
@@ -1839,16 +1144,16 @@ Var
   UnstageMode: Boolean;
 Begin
   CurrentAction := Sender As TAction;
-  UnstageMode := HasStagedFiles And ((Not HasUnstagedFiles) Or ListHasSelection(StagedList));
+  UnstageMode := FFiles.HasStaged And ((Not FFiles.HasUnstaged) Or FFiles.ListHasSelection(StagedList));
   If UnstageMode Then
     Begin
       CurrentAction.Caption := 'Unstage';
-      CurrentAction.Enabled := CanMutate And ListHasSelection(StagedList);
+      CurrentAction.Enabled := CanMutate And FFiles.ListHasSelection(StagedList);
     End
   Else
     Begin
       CurrentAction.Caption := 'Stage';
-      CurrentAction.Enabled := CanMutate And ListHasSelection(FilesList) And HasUnstagedFiles;
+      CurrentAction.Enabled := CanMutate And FFiles.ListHasSelection(FilesList) And FFiles.HasUnstaged;
     End;
 End;
 
@@ -1867,7 +1172,7 @@ End;
 Procedure TManageRepositoryForm.PathActionUpdate(Sender: TObject);
 Begin
   (Sender As TAction).Enabled := CanMutate And
-    (ListHasSelection(FilesList) Or ListHasSelection(StagedList));
+    (FFiles.ListHasSelection(FilesList) Or FFiles.ListHasSelection(StagedList));
 End;
 
 Procedure TManageRepositoryForm.IgnoredFilesActionUpdate(Sender: TObject);
@@ -1882,7 +1187,7 @@ Var
 Begin
   CurrentAction := Sender As TAction;
   AssistantAvailable := Assigned(SuggestCommitMessageFunc);
-  CurrentAction.Enabled := CanMutate And HasStagedFiles And AssistantAvailable;
+  CurrentAction.Enabled := CanMutate And FFiles.HasStaged And AssistantAvailable;
   If Not AssistantAvailable Then
     CurrentAction.Hint :=
       'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
@@ -1892,7 +1197,7 @@ End;
 
 Procedure TManageRepositoryForm.CommitActionUpdate(Sender: TObject);
 Begin
-  (Sender As TAction).Enabled := CanMutate And HasStagedFiles And
+  (Sender As TAction).Enabled := CanMutate And FFiles.HasStaged And
     Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
 End;
 
@@ -1906,77 +1211,6 @@ Begin
   (Sender As TAction).Enabled := CanMutate And (SelectedSha <> '');
 End;
 
-Function TManageRepositoryForm.CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
-Var
-  I: Integer;
-Begin
-  Result := TStringList.Create;
-  Result.Duplicates := dupIgnore;
-  Result.Sorted := False;
-  If (List = Nil) Or (Paths = Nil) Then
-    Exit;
-  For I := 0 To List.Count - 1 Do
-    If List.Selected[I] And (I < Paths.Count) Then
-      Result.Add(Paths[I]);
-End;
-
-Function TManageRepositoryForm.CollectActiveSelectedPaths: TStringList;
-Begin
-  { Selections are mutually exclusive between the two lists. }
-  Result := CollectSelectedPaths(FilesList, FFilesPaths);
-  If Result.Count = 0 Then
-    Begin
-      Result.Free;
-      Result := CollectSelectedPaths(StagedList, FStagedPaths);
-    End;
-End;
-
-Procedure TManageRepositoryForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
-Var
-  I: Integer;
-  DiffText, Path, Title, Content: String;
-Begin
-  If Not Assigned(FilesDiffView) Then
-    Exit;
-  FilesDiffView.Clear;
-  FilesDiffView.SetViewMode(dvmEditorOnly);
-  FilesDiffView.SetStagingContext(FRepoPath, StagedSide);
-  FilesDiffView.SetViewMode(dvmEditorOnly);
-  If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
-    Exit;
-  For I := 0 To List.Count - 1 Do
-    If List.Selected[I] And (I < Paths.Count) Then
-      Begin
-        Path := Paths[I];
-        If StagedSide Then
-          Title := 'Staged: ' + Path
-        Else
-          Title := 'Working tree: ' + Path;
-        GitClient.RepoPath := FRepoPath;
-        { Images/binary: never dump bytes into SynEdit. }
-        If FilesDiffView.LoadBinaryOrImagePreview(Title, Path, '', StagedSide) Then
-          Exit;
-        If GitClient.DiffPath(Path, StagedSide, DiffText) Then
-          Begin
-            If Trim(DiffText) = '' Then
-              Begin
-                { Clean tracked file (or no staged delta): show plain content, not a green "new file" diff. }
-                If (Not StagedSide) And GitClient.ReadWorkingTreeFile(Path, Content) Then
-                  FilesDiffView.LoadPlainText(Title + ' (clean)', Content, Path)
-                Else If StagedSide Then
-                  FilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
-                Else
-                  FilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
-              End
-            Else
-              FilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
-          End
-        Else
-          FilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
-        Exit;
-      End;
-End;
-
 Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
   If FInListSelChange Then
@@ -1984,9 +1218,9 @@ Begin
   FInListSelChange := True;
   Try
     { Keep multi-select on this list; only clear the other list's selection. }
-    If Assigned(StagedList) And ListHasSelection(StagedList) Then
+    If Assigned(StagedList) And FFiles.ListHasSelection(StagedList) Then
       StagedList.ClearSelection;
-    ShowFilesDiff(FilesList, FFilesPaths, False);
+    FFiles.ShowSelectedDiff(False);
   Finally
     FInListSelChange := False;
   End;
@@ -2003,9 +1237,9 @@ Begin
     Exit;
   FInListSelChange := True;
   Try
-    If Assigned(FilesList) And ListHasSelection(FilesList) Then
+    If Assigned(FilesList) And FFiles.ListHasSelection(FilesList) Then
       FilesList.ClearSelection;
-    ShowFilesDiff(StagedList, FStagedPaths, True);
+    FFiles.ShowSelectedDiff(True);
   Finally
     FInListSelChange := False;
   End;
@@ -2039,7 +1273,7 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  Paths := CollectActiveSelectedPaths;
+  Paths := FFiles.CollectActiveSelected;
   If Paths.Count = 0 Then
     Begin
       Paths.Free;
@@ -2067,7 +1301,7 @@ Var
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
-  Paths := CollectActiveSelectedPaths;
+  Paths := FFiles.CollectActiveSelected;
   Try
     If Paths.Count = 0 Then
       Begin
@@ -2114,7 +1348,7 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  Paths := CollectActiveSelectedPaths;
+  Paths := FFiles.CollectActiveSelected;
   If Paths.Count = 0 Then
     Begin
       Paths.Free;
@@ -2141,13 +1375,13 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
-  UnstageMode := Assigned(FStagedPaths) And (FStagedPaths.Count > 0) And
-    (FilesEmpty Or ListHasSelection(StagedList));
+  FilesEmpty := (Not Assigned(FFiles.FilesPaths)) Or (FFiles.FilesPaths.Count = 0);
+  UnstageMode := Assigned(FFiles.StagedPaths) And (FFiles.StagedPaths.Count > 0) And
+    (FilesEmpty Or FFiles.ListHasSelection(StagedList));
 
   If UnstageMode Then
     Begin
-      Paths := CollectSelectedPaths(StagedList, FStagedPaths);
+      Paths := FFiles.CollectSelected(StagedList, FFiles.StagedPaths);
       If Paths.Count = 0 Then
         Begin
           Paths.Free;
@@ -2161,7 +1395,7 @@ Begin
     End
   Else
     Begin
-      Paths := CollectSelectedPaths(FilesList, FFilesPaths);
+      Paths := FFiles.CollectSelected(FilesList, FFiles.FilesPaths);
       If Paths.Count = 0 Then
         Begin
           Paths.Free;
@@ -2182,13 +1416,13 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  FilesEmpty := (Not Assigned(FFilesPaths)) Or (FFilesPaths.Count = 0);
-  StagedEmpty := (Not Assigned(FStagedPaths)) Or (FStagedPaths.Count = 0);
+  FilesEmpty := (Not Assigned(FFiles.FilesPaths)) Or (FFiles.FilesPaths.Count = 0);
+  StagedEmpty := (Not Assigned(FFiles.StagedPaths)) Or (FFiles.StagedPaths.Count = 0);
   If (Not StagedEmpty) And FilesEmpty Then
     Begin
       Job := TGitJob.Create(gjkUnstagePaths);
       Job.RepoPath := FRepoPath;
-      Job.CopyPathsFrom(FStagedPaths);
+      Job.CopyPathsFrom(FFiles.StagedPaths);
       SubmitGitJob(Job);
     End
   Else
@@ -2197,7 +1431,7 @@ Begin
         Exit;
       Job := TGitJob.Create(gjkStagePaths);
       Job.RepoPath := FRepoPath;
-      Job.CopyPathsFrom(FFilesPaths);
+      Job.CopyPathsFrom(FFiles.FilesPaths);
       SubmitGitJob(Job);
     End;
 End;
@@ -2225,7 +1459,7 @@ Begin
     Exit;
   If Not Assigned(SuggestCommitMessageFunc) Then
     Exit;
-  If FStagedPaths.Count = 0 Then
+  If FFiles.StagedPaths.Count = 0 Then
     Begin
       MessageDlg('Stage at least one change before suggesting a commit message.',
         mtInformation, [mbOK], 0);
@@ -2256,7 +1490,7 @@ Begin
       MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
       Exit;
     End;
-  If FStagedPaths.Count = 0 Then
+  If FFiles.StagedPaths.Count = 0 Then
     Begin
       MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
       Exit;
@@ -2561,6 +1795,14 @@ Begin
   If Assigned(DiffView) Then
     DiffView.Clear;
   FRepoPath := NewPath;
+  If Assigned(FHistory) Then
+    Begin
+      FHistory.RepoPath := NewPath;
+      FHistory.SelectedIndex := -1;
+      FHistory.Indexing := False;
+    End;
+  If Assigned(FFiles) Then
+    FFiles.RepoPath := NewPath;
   FLastHeadAge := -1;
   FLastIndexAge := -1;
   FLastProbeAt := 0;
@@ -2572,7 +1814,7 @@ Begin
   If Assigned(GitClient) Then
     GitClient.RepoPath := NewPath;
   RefreshRepositoryInfo;
-  UpdateScrollRange;
+  FHistory.UpdateScrollRange;
   UpdateStatus;
   If Assigned(GraphPaintBox) Then
     GraphPaintBox.Invalidate;

@@ -29,6 +29,14 @@
         <UnitName Value="RepositoryManagerMain"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/ManageRepositoryHistory.pas"/>
+        <UnitName Value="ManageRepositoryHistory"/>
+      </Item>
+      <Item>
+        <Filename Value="../Source/LazRepositoryTools/ManageRepositoryFiles.pas"/>
+        <UnitName Value="ManageRepositoryFiles"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/ManageRepositoryForm.pas"/>
         <FileType Value="MainUnit"/>
         <UnitName Value="ManageRepositoryForm"/>
