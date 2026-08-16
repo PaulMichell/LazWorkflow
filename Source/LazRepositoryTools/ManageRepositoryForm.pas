@@ -18,7 +18,7 @@ Type
   { Background Fetch / Pull / Push (History toolbar). }
   TGitRemoteOpKind = (rokNone, rokFetch, rokPull, rokPush);
 
-  TManageRepositoryForm = Class(TForm, IWorkflowListener, IGitRepositoryChanged)
+  TManageRepositoryForm = Class(TForm, IGitRepositoryChanged)
     { Designer-managed controls and event methods (before first Private, as for other forms). }
     ActionList: TActionList;
     PushAction: TAction;

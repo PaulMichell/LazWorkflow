@@ -5,6 +5,7 @@ Unit WorkflowEvents;
 {$IFDEF FPC}
   {$MODE ObjFPC}
   {$LONGSTRINGS ON}
+  {$MODESWITCH NESTEDPROCVARS}
 {$ENDIF}
 
 Interface
@@ -13,9 +14,6 @@ Uses
   Classes, SysUtils;
 
 Type
-  { Forward declarations }
-  IWorkflowListener = Interface;
-
   { Git-related events }
   TGitRepositoryState = (grsUnknown, grsClean, grsDirty, grsConflict, grsDetached);
   
@@ -71,11 +69,8 @@ Type
   TSuggestCommitMessageFunc = Function(Const DiffText, StatusSummary: String;
     Out MessageText, ErrorText: String): Boolean;
 
-  { Generic listener that can implement any subset of the above }
-  IWorkflowListener = Interface
-    ['{F6A7B8C9-D0E1-2345-F012-456789012345}']
-    { Empty marker; concrete listeners implement the specific interfaces they care about. }
-  End;
+  { Nested so notify helpers can close over their arguments. Stops when it returns True. }
+  TWorkflowEachFunc = Function(Const Listener: IInterface): Boolean Is Nested;
 
   { Simple thread-safe observer list }
   TWorkflowEventBus = Class
@@ -84,12 +79,13 @@ Type
     FLock: TRTLCriticalSection;
     { Snapshot so notify callbacks can add/remove listeners and do UI without holding FLock. }
     Function CopyListeners: TInterfaceList;
+    Function ForEach(Each: TWorkflowEachFunc): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
 
-    Procedure AddListener(Listener: IWorkflowListener);
-    Procedure RemoveListener(Listener: IWorkflowListener);
+    Procedure AddListener(Listener: IInterface);
+    Procedure RemoveListener(Listener: IInterface);
 
     { Notification helpers }
     Procedure NotifyRepositoryStateChanged(Const RepoPath: String; NewState: TGitRepositoryState);
@@ -97,7 +93,7 @@ Type
     Procedure NotifyHeadChanged(Const RepoPath: String; Const NewHeadSha: String);
     Procedure NotifyRemoteUpdated(Const RepoPath: String; Const RemoteName: String);
     Procedure NotifyCommitCreated(Const RepoPath: String; Const Commit: TGitCommitInfo);
-    Procedure NotifyCompilerFinished(Const ProjectFile: String; Result: TCompilerResult;
+    Procedure NotifyCompilerFinished(Const ProjectFile: String; CompileResult: TCompilerResult;
       Const OutputText: String; ErrorCount, WarningCount: Integer);
     Procedure NotifyDocumentChanged(Const FileName: String; Const NewContent: String);
     Procedure NotifyDocumentSaved(Const FileName: String);
@@ -134,7 +130,28 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TWorkflowEventBus.AddListener(Listener: IWorkflowListener);
+Function TWorkflowEventBus.ForEach(Each: TWorkflowEachFunc): Boolean;
+Var
+  I: Integer;
+  Snapshot: TInterfaceList;
+Begin
+  Result := False;
+  If Not Assigned(Each) Then
+    Exit;
+  Snapshot := CopyListeners;
+  Try
+    For I := 0 To Snapshot.Count - 1 Do
+      If Each(Snapshot[I]) Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+  Finally
+    Snapshot.Free;
+  End;
+End;
+
+Procedure TWorkflowEventBus.AddListener(Listener: IInterface);
 Begin
   If Not Assigned(Listener) Then
     Exit;
@@ -147,7 +164,7 @@ Begin
   End;
 End;
 
-Procedure TWorkflowEventBus.RemoveListener(Listener: IWorkflowListener);
+Procedure TWorkflowEventBus.RemoveListener(Listener: IInterface);
 Begin
   If Not Assigned(Listener) Then
     Exit;
@@ -175,158 +192,142 @@ End;
 
 Procedure TWorkflowEventBus.NotifyRepositoryStateChanged(Const RepoPath: String;
   NewState: TGitRepositoryState);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IGitRepositoryChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
-        Listener.RepositoryStateChanged(RepoPath, NewState);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    GitListener: IGitRepositoryChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IGitRepositoryChanged, GitListener) Then
+      GitListener.RepositoryStateChanged(RepoPath, NewState);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyWorkingTreeChanged(Const RepoPath: String);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IGitRepositoryChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
-        Listener.WorkingTreeChanged(RepoPath);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    GitListener: IGitRepositoryChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IGitRepositoryChanged, GitListener) Then
+      GitListener.WorkingTreeChanged(RepoPath);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyHeadChanged(Const RepoPath: String; Const NewHeadSha: String);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IGitRepositoryChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
-        Listener.HeadChanged(RepoPath, NewHeadSha);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    GitListener: IGitRepositoryChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IGitRepositoryChanged, GitListener) Then
+      GitListener.HeadChanged(RepoPath, NewHeadSha);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyRemoteUpdated(Const RepoPath: String; Const RemoteName: String);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IGitRepositoryChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IGitRepositoryChanged, Listener) Then
-        Listener.RemoteUpdated(RepoPath, RemoteName);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    GitListener: IGitRepositoryChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IGitRepositoryChanged, GitListener) Then
+      GitListener.RemoteUpdated(RepoPath, RemoteName);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyCommitCreated(Const RepoPath: String; Const Commit: TGitCommitInfo);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IGitCommitCreated;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IGitCommitCreated, Listener) Then
-        Listener.CommitCreated(RepoPath, Commit);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    CommitListener: IGitCommitCreated;
+  Begin
+    Result := False;
+    If Supports(Listener, IGitCommitCreated, CommitListener) Then
+      CommitListener.CommitCreated(RepoPath, Commit);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyCompilerFinished(Const ProjectFile: String;
-  Result: TCompilerResult; Const OutputText: String; ErrorCount, WarningCount: Integer);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: ICompilerFinished;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], ICompilerFinished, Listener) Then
-        Listener.CompilerFinished(ProjectFile, Result, OutputText, ErrorCount, WarningCount);
-  Finally
-    Snapshot.Free;
+  CompileResult: TCompilerResult; Const OutputText: String; ErrorCount, WarningCount: Integer);
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    CompilerListener: ICompilerFinished;
+  Begin
+    Result := False;
+    If Supports(Listener, ICompilerFinished, CompilerListener) Then
+      CompilerListener.CompilerFinished(ProjectFile, CompileResult, OutputText, ErrorCount, WarningCount);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyDocumentChanged(Const FileName: String; Const NewContent: String);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IMarkdownDocumentChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IMarkdownDocumentChanged, Listener) Then
-        Listener.DocumentChanged(FileName, NewContent);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    DocListener: IMarkdownDocumentChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IMarkdownDocumentChanged, DocListener) Then
+      DocListener.DocumentChanged(FileName, NewContent);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Procedure TWorkflowEventBus.NotifyDocumentSaved(Const FileName: String);
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IMarkdownDocumentChanged;
-Begin
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IMarkdownDocumentChanged, Listener) Then
-        Listener.DocumentSaved(FileName);
-  Finally
-    Snapshot.Free;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    DocListener: IMarkdownDocumentChanged;
+  Begin
+    Result := False;
+    If Supports(Listener, IMarkdownDocumentChanged, DocListener) Then
+      DocListener.DocumentSaved(FileName);
   End;
+
+Begin
+  ForEach(@CallOne);
 End;
 
 Function TWorkflowEventBus.RequestToolCall(Const ToolName: String; Const ArgumentsJson: String;
   Out ResultJson: String; Out ErrorMessage: String): Boolean;
-Var
-  I: Integer;
-  Snapshot: TInterfaceList;
-  Listener: IAssistantToolCallRequested;
+
+  Function CallOne(Const Listener: IInterface): Boolean;
+  Var
+    ToolListener: IAssistantToolCallRequested;
+  Begin
+    Result := False;
+    If Supports(Listener, IAssistantToolCallRequested, ToolListener) Then
+      Result := ToolListener.HandleToolCall(ToolName, ArgumentsJson, ResultJson, ErrorMessage);
+  End;
+
 Begin
-  Result := False;
   ResultJson := '';
   ErrorMessage := '';
-  Snapshot := CopyListeners;
-  Try
-    For I := 0 To Snapshot.Count - 1 Do
-      If Supports(Snapshot[I], IAssistantToolCallRequested, Listener) Then
-        Begin
-          If Listener.HandleToolCall(ToolName, ArgumentsJson, ResultJson, ErrorMessage) Then
-            Begin
-              Result := True;
-              Exit;
-            End;
-        End;
-  Finally
-    Snapshot.Free;
-  End;
+  Result := ForEach(@CallOne);
 End;
 
 Initialization

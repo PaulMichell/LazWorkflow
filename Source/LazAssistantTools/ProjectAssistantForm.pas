@@ -15,7 +15,7 @@ Uses
   IDEExternToolIntf, AssistantConversation, AssistantPlan;
 
 Type
-  TProjectAssistantForm = Class(TForm, IWorkflowListener, ICompilerFinished, IMarkdownDocumentChanged)
+  TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
     ActionList: TActionList;
     NewChatAction: TAction;
     SendAction: TAction;
