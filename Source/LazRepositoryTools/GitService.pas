@@ -45,6 +45,9 @@ Type
     Procedure SetActiveProcess(Proc: TProcess);
     Procedure ClearActiveProcess;
     Function RunTimedOut(StartTick: QWord): Boolean;
+    { Shared execute/drain/cancel/timeout. MergeStderr captures git messages in OutStream. }
+    Function RunGitPump(Const WorkDir: String; Const Args: Array Of String;
+      OutStream: TStream; MergeStderr: Boolean; Out ExitCode: Integer): Boolean;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
       Out ExitCode: Integer): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
@@ -327,30 +330,28 @@ Begin
   Inherited Destroy;
 End;
 
-Function TGitService.RunGitEx(Const WorkDir: String; Const Args: Array Of String;
-  Out OutputText: String; Out ExitCode: Integer): Boolean;
+Function TGitService.RunGitPump(Const WorkDir: String; Const Args: Array Of String;
+  OutStream: TStream; MergeStderr: Boolean; Out ExitCode: Integer): Boolean;
 Var
   Proc: TProcess;
   I, BytesRead: Integer;
-  Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
   StartTick: QWord;
   TimedOut: Boolean;
 Begin
   Result := False;
-  OutputText := '';
   ExitCode := -1;
   FLastError := '';
   TimedOut := False;
   StartTick := GetTickCount64;
   Buf[Low(Buf)] := 0;
-  If WorkDir = '' Then
+  If (WorkDir = '') Or (OutStream = Nil) Then
     Begin
       FLastError := 'No repository path set';
-      WorkflowLogger.Error('GitService', FLastError);
+      If WorkDir = '' Then
+        WorkflowLogger.Error('GitService', FLastError);
       Exit;
     End;
-
   If IsCancelled Then
     Begin
       FLastError := 'Cancelled';
@@ -358,137 +359,28 @@ Begin
     End;
 
   Proc := TProcess.Create(Nil);
-  Mem := TMemoryStream.Create;
   Try
     Proc.Executable := 'git';
     Proc.CurrentDirectory := WorkDir;
-    { Merge stderr so fetch/push progress lines are captured. Drain pipes without poWaitOnExit.
+    { Merge stderr so fetch/push progress is captured. Binary sinks keep stderr
+      separate so blob bytes stay clean. Drain pipes without poWaitOnExit.
       Remote ops omit poNoConsole so a credential helper or TTY prompt can run. }
-    If FAllowPrompt Then
-      Proc.Options := [poUsePipes, poStderrToOutPut]
-    Else
-      Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
-    Proc.Parameters.Clear;
-    For I := 0 To High(Args) Do
-      Proc.Parameters.Add(Args[I]);
-
-    Try
-      SetActiveProcess(Proc);
-      Proc.Execute;
-      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
-        Begin
-          If IsCancelled Or RunTimedOut(StartTick) Then
-            Begin
-              TimedOut := RunTimedOut(StartTick);
-              Try
-                Proc.Terminate(1);
-              Except
-              End;
-              Break;
-            End;
-          If Proc.Output.NumBytesAvailable > 0 Then
-            Begin
-              BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
-              If BytesRead > 0 Then
-                Mem.WriteBuffer(Buf[0], BytesRead);
-            End
-          Else If Proc.Running Then
-            Sleep(1);
-        End;
-      { Drain any remainder after exit. }
-      While Proc.Output.NumBytesAvailable > 0 Do
-        Begin
-          BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
-          If BytesRead > 0 Then
-            Mem.WriteBuffer(Buf[0], BytesRead)
-          Else
-            Break;
-        End;
-      ExitCode := Proc.ExitStatus;
-      SetLength(OutputText, Mem.Size);
-      If Mem.Size > 0 Then
-        Move(Mem.Memory^, OutputText[1], Mem.Size);
-      If TimedOut Then
-        Begin
-          FLastError := 'Timed out';
-          Result := False;
-        End
-      Else If IsCancelled Then
-        Begin
-          FLastError := 'Cancelled';
-          Result := False;
-        End
+    If MergeStderr Then
+      If FAllowPrompt Then
+        Proc.Options := [poUsePipes, poStderrToOutPut]
       Else
-        Begin
-          Result := ExitCode = 0;
-          If Not Result Then
-            Begin
-              FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
-              If Trim(OutputText) <> '' Then
-                FLastError := FLastError + ': ' + Trim(OutputText);
-              WorkflowLogger.Warning('GitService', FLastError);
-            End;
-        End;
-    Except
-      On E: Exception Do
-        Begin
-          FLastError := 'Failed to run git: ' + E.Message;
-          WorkflowLogger.Error('GitService', FLastError);
-          Result := False;
-        End;
-    End;
-  Finally
-    ClearActiveProcess;
-    Mem.Free;
-    Proc.Free;
-  End;
-End;
-
-Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
-  Out ExitCode: Integer): Boolean;
-Begin
-  Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
-End;
-
-Function TGitService.RunGitBinary(Const Args: Array Of String; Stream: TStream;
-  Out ExitCode: Integer): Boolean;
-Var
-  Proc: TProcess;
-  I, BytesRead: Integer;
-  Buf: Array[0..8191] Of Byte;
-  StartTick: QWord;
-  TimedOut: Boolean;
-Begin
-  Result := False;
-  ExitCode := -1;
-  FLastError := '';
-  TimedOut := False;
-  StartTick := GetTickCount64;
-  Buf[Low(Buf)] := 0;
-  If (FRepoPath = '') Or (Stream = Nil) Then
-    Begin
-      FLastError := 'No repository path set';
-      Exit;
-    End;
-  If IsCancelled Then
-    Begin
-      FLastError := 'Cancelled';
-      Exit;
-    End;
-
-  Proc := TProcess.Create(Nil);
-  Try
-    Proc.Executable := 'git';
-    Proc.CurrentDirectory := FRepoPath;
-    Proc.Options := [poUsePipes, poNoConsole];
+        Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut]
+    Else
+      Proc.Options := [poUsePipes, poNoConsole];
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
+
     Try
       SetActiveProcess(Proc);
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or
-            (Proc.Stderr.NumBytesAvailable > 0) Do
+            ((Not MergeStderr) And (Proc.Stderr.NumBytesAvailable > 0)) Do
         Begin
           If IsCancelled Or RunTimedOut(StartTick) Then
             Begin
@@ -503,25 +395,26 @@ Begin
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
               If BytesRead > 0 Then
-                Stream.WriteBuffer(Buf[0], BytesRead);
+                OutStream.WriteBuffer(Buf[0], BytesRead);
             End;
-          If Proc.Stderr.NumBytesAvailable > 0 Then
+          If (Not MergeStderr) And (Proc.Stderr.NumBytesAvailable > 0) Then
             Proc.Stderr.Read(Buf[0], SizeOf(Buf));
           If Proc.Running And (Proc.Output.NumBytesAvailable = 0) And
-             (Proc.Stderr.NumBytesAvailable = 0) Then
+             (MergeStderr Or (Proc.Stderr.NumBytesAvailable = 0)) Then
             Sleep(1);
         End;
       While Proc.Output.NumBytesAvailable > 0 Do
         Begin
           BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
           If BytesRead > 0 Then
-            Stream.WriteBuffer(Buf[0], BytesRead)
+            OutStream.WriteBuffer(Buf[0], BytesRead)
           Else
             Break;
         End;
-      While Proc.Stderr.NumBytesAvailable > 0 Do
-        If Proc.Stderr.Read(Buf[0], SizeOf(Buf)) <= 0 Then
-          Break;
+      If Not MergeStderr Then
+        While Proc.Stderr.NumBytesAvailable > 0 Do
+          If Proc.Stderr.Read(Buf[0], SizeOf(Buf)) <= 0 Then
+            Break;
       ExitCode := Proc.ExitStatus;
       If TimedOut Then
         Begin
@@ -543,6 +436,7 @@ Begin
       On E: Exception Do
         Begin
           FLastError := 'Failed to run git: ' + E.Message;
+          WorkflowLogger.Error('GitService', FLastError);
           Result := False;
         End;
     End;
@@ -550,6 +444,43 @@ Begin
     ClearActiveProcess;
     Proc.Free;
   End;
+End;
+
+Function TGitService.RunGitEx(Const WorkDir: String; Const Args: Array Of String;
+  Out OutputText: String; Out ExitCode: Integer): Boolean;
+Var
+  Mem: TMemoryStream;
+Begin
+  OutputText := '';
+  Mem := TMemoryStream.Create;
+  Try
+    Result := RunGitPump(WorkDir, Args, Mem, True, ExitCode);
+    SetLength(OutputText, Mem.Size);
+    If Mem.Size > 0 Then
+      Move(Mem.Memory^, OutputText[1], Mem.Size);
+    If (Not Result) And (FLastError <> 'Timed out') And (FLastError <> 'Cancelled') And
+       (Pos('Failed to run git:', FLastError) <> 1) Then
+      Begin
+        If Trim(OutputText) <> '' Then
+          FLastError := FLastError + ': ' + Trim(OutputText);
+        If FLastError <> '' Then
+          WorkflowLogger.Warning('GitService', FLastError);
+      End;
+  Finally
+    Mem.Free;
+  End;
+End;
+
+Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
+  Out ExitCode: Integer): Boolean;
+Begin
+  Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
+End;
+
+Function TGitService.RunGitBinary(Const Args: Array Of String; Stream: TStream;
+  Out ExitCode: Integer): Boolean;
+Begin
+  Result := RunGitPump(FRepoPath, Args, Stream, False, ExitCode);
 End;
 
 Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
