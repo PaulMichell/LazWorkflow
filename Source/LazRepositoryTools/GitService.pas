@@ -479,7 +479,8 @@ Begin
     Try
       SetActiveProcess(Proc);
       Proc.Execute;
-      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
+      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or
+            (Proc.Stderr.NumBytesAvailable > 0) Do
         Begin
           If IsCancelled Or RunTimedOut(StartTick) Then
             Begin
@@ -495,8 +496,11 @@ Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
               If BytesRead > 0 Then
                 Stream.WriteBuffer(Buf[0], BytesRead);
-            End
-          Else If Proc.Running Then
+            End;
+          If Proc.Stderr.NumBytesAvailable > 0 Then
+            Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+          If Proc.Running And (Proc.Output.NumBytesAvailable = 0) And
+             (Proc.Stderr.NumBytesAvailable = 0) Then
             Sleep(1);
         End;
       While Proc.Output.NumBytesAvailable > 0 Do
@@ -507,9 +511,9 @@ Begin
           Else
             Break;
         End;
-      { Drain stderr so the process cannot block on a full pipe. }
       While Proc.Stderr.NumBytesAvailable > 0 Do
-        Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+        If Proc.Stderr.Read(Buf[0], SizeOf(Buf)) <= 0 Then
+          Break;
       ExitCode := Proc.ExitStatus;
       If TimedOut Then
         Begin
