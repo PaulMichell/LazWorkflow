@@ -103,6 +103,9 @@ Type
     Function ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean = False): Boolean;
     { Full history index (SHA + parents only). Safe from worker threads. }
     Function FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
+    { Full rev-list plus the first DetailCount commit subjects for a single UI apply. }
+    Function FetchHistoryPreview(Const WorkDir: String; DetailCount: Integer;
+      Out RevListText, DetailsText: String; Out DetailsOk: Boolean): Boolean;
     { Detail lines for specific SHAs (subject/author/time/refs). Batched, worker-safe. }
     Function FetchCommitDetails(Const WorkDir: String; Shas: TStrings; Out DetailsText: String): Boolean;
     Function CountCommits(Const WorkDir: String; Out Total: Integer): Boolean;
@@ -545,6 +548,58 @@ Begin
     Enough for lanes/edges without loading subjects for every commit. }
   RevListText := '';
   Result := RunGitEx(WorkDir, ['rev-list', '--all', '--topo-order', '--parents'], RevListText, ExitCode);
+End;
+
+Procedure CollectLeadingShas(Const RevListText: String; MaxCount: Integer; Shas: TStrings);
+Var
+  Lines: TStringList;
+  I, SpacePos: Integer;
+  Line, Sha: String;
+Begin
+  If (Shas = Nil) Or (MaxCount < 1) Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := RevListText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        If Shas.Count >= MaxCount Then
+          Break;
+        Line := Trim(Lines[I]);
+        If Line = '' Then
+          Continue;
+        SpacePos := Pos(' ', Line);
+        If SpacePos > 0 Then
+          Sha := Copy(Line, 1, SpacePos - 1)
+        Else
+          Sha := Line;
+        If Sha <> '' Then
+          Shas.Add(Sha);
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function TGitService.FetchHistoryPreview(Const WorkDir: String; DetailCount: Integer;
+  Out RevListText, DetailsText: String; Out DetailsOk: Boolean): Boolean;
+Var
+  Shas: TStringList;
+Begin
+  RevListText := '';
+  DetailsText := '';
+  DetailsOk := False;
+  Result := FetchRevListParents(WorkDir, RevListText);
+  If Not Result Or (DetailCount < 1) Then
+    Exit;
+  Shas := TStringList.Create;
+  Try
+    CollectLeadingShas(RevListText, DetailCount, Shas);
+    If Shas.Count > 0 Then
+      DetailsOk := FetchCommitDetails(WorkDir, Shas, DetailsText);
+  Finally
+    Shas.Free;
+  End;
 End;
 
 Function TGitService.FetchCommitDetails(Const WorkDir: String; Shas: TStrings; Out DetailsText: String): Boolean;

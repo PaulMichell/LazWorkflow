@@ -63,6 +63,10 @@ Type
     FQuiet: Boolean;
     FProbeBranch: String;
     FProbeDigest: String;
+    FIndexText: String;
+    FDetailsText: String;
+    FIndexOk: Boolean;
+    FDetailsOk: Boolean;
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
@@ -92,6 +96,10 @@ Type
     Property Quiet: Boolean Read FQuiet Write FQuiet;
     Property ProbeBranch: String Read FProbeBranch;
     Property ProbeDigest: String Read FProbeDigest;
+    Property IndexText: String Read FIndexText;
+    Property DetailsText: String Read FDetailsText;
+    Property IndexOk: Boolean Read FIndexOk;
+    Property DetailsOk: Boolean Read FDetailsOk;
   End;
 
   TGitJobBusyEvent = Procedure(Sender: TObject; IsBusy: Boolean; Const Caption: String) Of Object;
@@ -144,7 +152,7 @@ Function GitJobKindCaption(Kind: TGitJobKind): String;
 Implementation
 
 Uses
-  WorkflowLog;
+  WorkflowLog, GitGraphModel;
 
 Type
   TGitJobWorker = Class(TThread)
@@ -206,6 +214,10 @@ Begin
   FQuiet := False;
   FProbeBranch := '';
   FProbeDigest := '';
+  FIndexText := '';
+  FDetailsText := '';
+  FIndexOk := False;
+  FDetailsOk := False;
 End;
 
 Destructor TGitJob.Destroy;
@@ -514,12 +526,18 @@ Begin
         Job.FOk := Git.Fetch(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
+        If Job.FOk Then
+          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
+            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkPull:
       Begin
         Job.FOk := Git.Pull(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
+        If Job.FOk Then
+          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
+            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkPush:
       Begin

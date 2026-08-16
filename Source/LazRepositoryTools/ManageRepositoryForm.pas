@@ -174,6 +174,7 @@ Type
     Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
+    Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
     Procedure StartIndexLoad;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetRemoteActionsEnabled(ActionsEnabled: Boolean);
@@ -906,6 +907,13 @@ Begin
                 If Assigned(StatusFooter) Then
                   StatusFooter.SetRightText('Push complete');
               End
+            Else If Job.IndexOk Then
+              Begin
+                ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
+                RefreshRepositoryInfo;
+                If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+                  RefreshFilesList;
+              End
             Else
               ManualRefresh;
           End
@@ -1033,6 +1041,34 @@ Begin
   Job.RepoPath := FRepoPath;
   If Not SubmitGitJob(Job) Then
     FRemoteOpBusy := False;
+End;
+
+Procedure TManageRepositoryForm.ApplyFetchedHistory(Const IndexText, DetailsText: String;
+  DetailsOk: Boolean);
+Var
+  Parsed: Integer;
+Begin
+  If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
+    Exit;
+  FIndexing := False;
+  Parsed := FModel.ParseRevListParents(IndexText);
+  If DetailsOk And (DetailsText <> '') Then
+    FModel.ApplyDetailsText(DetailsText);
+  FSelectedIndex := -1;
+  If Parsed > 0 Then
+    FSelectedIndex := 0;
+  UpdateScrollRange;
+  If FSelectedIndex >= 0 Then
+    ShowCommitDetails(FSelectedIndex)
+  Else If Assigned(DiffView) Then
+    DiffView.Clear;
+  If Assigned(GraphPaintBox) Then
+    Begin
+      GraphPaintBox.Invalidate;
+      GraphPaintBox.Update;
+    End;
+  ScheduleVisibleDetails;
+  UpdateStatus;
 End;
 
 Procedure TManageRepositoryForm.StartIndexLoad;
