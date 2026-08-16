@@ -142,11 +142,9 @@ Type
     FRemoteOpBusy: Boolean;
     FJobBusy: Boolean;
     FPushAfterCommit: Boolean;
-    { Generation tokens invalidate Queue callbacks after cancel; never Synchronize+WaitFor. }
+    { Generation tokens drop stale index/detail jobs after a rebind or cancel. }
     FIndexGen: Integer;
     FDetailGen: Integer;
-    FIndexThread: TThread;
-    FDetailThread: TThread;
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
@@ -191,10 +189,8 @@ Type
     Procedure SubmitFilesStatus;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
-    { Soft cancel: Terminate + bump gen (no WaitFor). Hard dispose used on form Destroy only. }
-    Procedure StopIndexThread;
-    Procedure StopDetailThread;
-    Procedure DisposeWorker(Var Worker: TThread; Var Generation: Integer; HardWait: Boolean);
+    Procedure StopIndexLoad;
+    Procedure StopDetailLoad;
     Procedure UpdateScrollRange;
     Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
     Procedure ShowCommitDetails(Index: Integer);
@@ -248,173 +244,6 @@ Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
   DateUtils, Math, FileUtil, LazFileUtils, StrUtils, Process
   {$IFDEF WINDOWS}, ShellApi{$ENDIF};
-
-Type
-  { Workers deliver via Queue (not Synchronize) so the form may Terminate+WaitFor on
-    the main thread without deadlock. Results live on the worker; generation tokens
-    drop stale Queue callbacks after cancel. }
-
-  TGitIndexThread = Class(TThread)
-  Private
-    FForm: TManageRepositoryForm;
-    FRepoPath: String;
-    FGeneration: Integer;
-    FResultOk: Boolean;
-    FResultText: String;
-    Procedure Deliver;
-  Protected
-    Procedure Execute; Override;
-  Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AGeneration: Integer);
-    Procedure DetachForm;
-    Property Generation: Integer Read FGeneration;
-  End;
-
-  TGitDetailThread = Class(TThread)
-  Private
-    FForm: TManageRepositoryForm;
-    FRepoPath: String;
-    FGeneration: Integer;
-    FShas: TStringList;
-    FResultOk: Boolean;
-    FResultText: String;
-    Procedure Deliver;
-  Protected
-    Procedure Execute; Override;
-  Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; AShas: TStringList;
-      AGeneration: Integer);
-    Destructor Destroy; Override;
-    Procedure DetachForm;
-    Property Generation: Integer Read FGeneration;
-  End;
-
-Constructor TGitIndexThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
-  AGeneration: Integer);
-Begin
-  Inherited Create(True);
-  FreeOnTerminate := False;
-  FForm := AForm;
-  FRepoPath := ARepoPath;
-  FGeneration := AGeneration;
-  FResultOk := False;
-  FResultText := '';
-End;
-
-Procedure TGitIndexThread.DetachForm;
-Begin
-  FForm := Nil;
-End;
-
-Procedure TGitIndexThread.Deliver;
-Var
-  Form: TManageRepositoryForm;
-  Gen: Integer;
-  Ok: Boolean;
-  Text: String;
-Begin
-  { Main thread after Execute. Free Self here on soft-cancel / success paths.
-    Hard dispose removes this Queue and frees the thread itself. }
-  Form := FForm;
-  Gen := FGeneration;
-  Ok := FResultOk;
-  Text := FResultText;
-  If Not Assigned(Form) Then
-    Begin
-      Free;
-      Exit;
-    End;
-  If Form.FIndexThread = Self Then
-    Form.FIndexThread := Nil;
-  If (Gen = Form.FIndexGen) And Not (csDestroying in Form.ComponentState) And
-     Not Application.Terminated Then
-    Form.ApplyIndexResult(Ok, Text)
-  Else If Not Assigned(Form.FIndexThread) Then
-    Form.FIndexing := False;
-  Free;
-End;
-
-Procedure TGitIndexThread.Execute;
-Var
-  Client: TGitService;
-Begin
-  Client := TGitService.Create;
-  Try
-    Client.PublishEvents := False;
-    If Not Terminated Then
-      FResultOk := Client.FetchRevListParents(FRepoPath, FResultText);
-  Finally
-    Client.Free;
-  End;
-  { Queue even after DetachForm so soft-cancel can Free Self on the main thread.
-    Hard dispose RemoveQueuedEvents this before WaitFor+Free. }
-  Queue(@Deliver);
-End;
-
-Constructor TGitDetailThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
-  AShas: TStringList; AGeneration: Integer);
-Begin
-  Inherited Create(True);
-  FreeOnTerminate := False;
-  FForm := AForm;
-  FRepoPath := ARepoPath;
-  FGeneration := AGeneration;
-  FShas := AShas; { takes ownership }
-  FResultOk := False;
-  FResultText := '';
-End;
-
-Destructor TGitDetailThread.Destroy;
-Begin
-  FreeAndNil(FShas);
-  Inherited Destroy;
-End;
-
-Procedure TGitDetailThread.DetachForm;
-Begin
-  FForm := Nil;
-End;
-
-Procedure TGitDetailThread.Deliver;
-Var
-  Form: TManageRepositoryForm;
-  Gen: Integer;
-  Ok: Boolean;
-  Text: String;
-Begin
-  Form := FForm;
-  Gen := FGeneration;
-  Ok := FResultOk;
-  Text := FResultText;
-  If Not Assigned(Form) Then
-    Begin
-      Free;
-      Exit;
-    End;
-  If Form.FDetailThread = Self Then
-    Form.FDetailThread := Nil;
-  If (Gen = Form.FDetailGen) And Not (csDestroying in Form.ComponentState) And
-     Not Application.Terminated Then
-    Form.ApplyDetailsResult(Ok, Text)
-  Else If Not Assigned(Form.FDetailThread) Then
-    Form.FDetailLoading := False;
-  Free;
-End;
-
-Procedure TGitDetailThread.Execute;
-Var
-  Client: TGitService;
-Begin
-  Client := TGitService.Create;
-  Try
-    Client.PublishEvents := False;
-    If Not Terminated Then
-      FResultOk := Client.FetchCommitDetails(FRepoPath, FShas, FResultText);
-  Finally
-    Client.Free;
-  End;
-  Queue(@Deliver);
-End;
 
 Function DetectStartPathFromIDE: String;
 Var
@@ -488,8 +317,6 @@ Begin
   FPushAfterCommit := False;
   FIndexGen := 0;
   FDetailGen := 0;
-  FIndexThread := Nil;
-  FDetailThread := Nil;
   FVisibleFirst := 0;
   FVisibleLast := 0;
   FFilesPaths := TStringList.Create;
@@ -526,9 +353,8 @@ Begin
       GitJobs.CancelIfHandler(@GitJobFinished);
     End;
   Screen.Cursor := crDefault;
-  { Hard dispose: Queue (not Synchronize) so WaitFor cannot deadlock the UI thread. }
-  DisposeWorker(FDetailThread, FDetailGen, True);
-  DisposeWorker(FIndexThread, FIndexGen, True);
+  Inc(FIndexGen);
+  Inc(FDetailGen);
   FRemoteOpBusy := False;
   FIndexing := False;
   FDetailLoading := False;
@@ -764,44 +590,15 @@ Begin
   Result := GraphScrollBar.Position;
 End;
 
-Procedure TManageRepositoryForm.DisposeWorker(Var Worker: TThread; Var Generation: Integer;
-  HardWait: Boolean);
-Var
-  Pending: TThread;
+Procedure TManageRepositoryForm.StopIndexLoad;
 Begin
-  { Bump generation first so any already-queued Deliver is ignored. }
-  Inc(Generation);
-  If Not Assigned(Worker) Then
-    Exit;
-  Pending := Worker;
-  Worker := Nil;
-  Pending.Terminate;
-  { Always detach so a later Deliver cannot touch this form after it is freed. }
-  If Pending Is TGitIndexThread Then
-    TGitIndexThread(Pending).DetachForm
-  Else If Pending Is TGitDetailThread Then
-    TGitDetailThread(Pending).DetachForm;
-  If HardWait Then
-    Begin
-      TThread.RemoveQueuedEvents(Pending);
-      Pending.WaitFor;
-      { Catch a Queue posted in the race between Detach and thread exit. }
-      TThread.RemoveQueuedEvents(Pending);
-      Pending.Free;
-    End;
-  { Soft cancel: abandon the pointer. Execute still Queue's Deliver, which
-    sees FForm = Nil and Frees the worker on the main thread. }
-End;
-
-Procedure TManageRepositoryForm.StopIndexThread;
-Begin
-  DisposeWorker(FIndexThread, FIndexGen, False);
+  Inc(FIndexGen);
   FIndexing := False;
 End;
 
-Procedure TManageRepositoryForm.StopDetailThread;
+Procedure TManageRepositoryForm.StopDetailLoad;
 Begin
-  DisposeWorker(FDetailThread, FDetailGen, False);
+  Inc(FDetailGen);
   FDetailLoading := False;
 End;
 
@@ -1051,6 +848,28 @@ Begin
         Else
           UpdateStatus;
       End;
+    gjkIndexHistory:
+      Begin
+        If (Job.Tag <> FIndexGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
+          Exit;
+        If Job.Cancelled Then
+          Begin
+            FIndexing := False;
+            Exit;
+          End;
+        ApplyIndexResult(Job.Ok, Job.IndexText);
+      End;
+    gjkFetchDetails:
+      Begin
+        If (Job.Tag <> FDetailGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
+          Exit;
+        If Job.Cancelled Then
+          Begin
+            FDetailLoading := False;
+            Exit;
+          End;
+        ApplyDetailsResult(Job.Ok, Job.DetailsText);
+      End;
   Else
     { ignore }
   End;
@@ -1072,9 +891,8 @@ Begin
   End;
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
-  StopDetailThread;
-  StopIndexThread;
-  FIndexing := False;
+  StopDetailLoad;
+  StopIndexLoad;
   FRemoteOpBusy := True;
   Job := TGitJob.Create(JobKind);
   Job.RepoPath := FRepoPath;
@@ -1111,16 +929,22 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.StartIndexLoad;
+Var
+  Job: TGitJob;
 Begin
   If FRepoPath = '' Then
     Exit;
-  StopDetailThread;
-  StopIndexThread; { bumps FIndexGen and soft-cancels any prior worker }
+  StopDetailLoad;
+  StopIndexLoad;
   FIndexing := True;
   If Assigned(StatusFooter) Then
     StatusFooter.SetRightText('Indexing…');
-  FIndexThread := TGitIndexThread.Create(Self, FRepoPath, FIndexGen);
-  FIndexThread.Start;
+  Job := TGitJob.Create(gjkIndexHistory);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.Tag := FIndexGen;
+  If Not SubmitGitJob(Job) Then
+    FIndexing := False;
 End;
 
 Procedure TManageRepositoryForm.ApplyIndexResult(Ok: Boolean; Const Payload: String);
@@ -1214,6 +1038,7 @@ Var
   First, Last: Integer;
   Shas: TStringList;
   Missing: Integer;
+  Job: TGitJob;
 Begin
   If FDetailLoading Or FIndexing Or (FRepoPath = '') Then
     Exit;
@@ -1230,8 +1055,13 @@ Begin
 
   FDetailLoading := True;
   Inc(FDetailGen);
-  FDetailThread := TGitDetailThread.Create(Self, FRepoPath, Shas, FDetailGen);
-  FDetailThread.Start;
+  Job := TGitJob.Create(gjkFetchDetails);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.Tag := FDetailGen;
+  Job.TakePaths(Shas);
+  If Not SubmitGitJob(Job) Then
+    FDetailLoading := False;
 End;
 
 Procedure TManageRepositoryForm.UpdateScrollRange;
@@ -2902,8 +2732,8 @@ Begin
   { Tear down workers and pending UI work before swapping repo identity. }
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
-  StopDetailThread;
-  StopIndexThread;
+  StopDetailLoad;
+  StopIndexLoad;
   If Assigned(DiffView) Then
     DiffView.Clear;
   FRepoPath := NewPath;

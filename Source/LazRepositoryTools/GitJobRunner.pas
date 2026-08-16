@@ -34,7 +34,9 @@ Type
     gjkApplyPatch,
     gjkListStatus,
     gjkRepoProbe,
-    gjkSuggestMessage
+    gjkSuggestMessage,
+    gjkIndexHistory,
+    gjkFetchDetails
   );
 
   TGitJob = Class;
@@ -194,6 +196,8 @@ Begin
     gjkListStatus: Result := 'Refreshing files…';
     gjkRepoProbe: Result := 'Checking repository…';
     gjkSuggestMessage: Result := 'Suggesting commit message…';
+    gjkIndexHistory: Result := 'Indexing…';
+    gjkFetchDetails: Result := 'Loading commit details…';
   Else
     Result := 'Working…';
   End;
@@ -655,6 +659,21 @@ Begin
             Else
               Job.FErrorText := 'Could not generate a commit message.';
           End;
+      End;
+    gjkIndexHistory:
+      Begin
+        Job.FIndexOk := Git.FetchRevListParents(Job.RepoPath, Job.FIndexText);
+        Job.FOk := Job.FIndexOk;
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkFetchDetails:
+      Begin
+        Job.FDetailsOk := Assigned(Job.Paths) And (Job.Paths.Count > 0) And
+          Git.FetchCommitDetails(Job.RepoPath, Job.Paths, Job.FDetailsText);
+        Job.FOk := Job.FDetailsOk;
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
       End;
   Else
     Begin
