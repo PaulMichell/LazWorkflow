@@ -157,9 +157,14 @@ Type
     FStatusJobPending: Boolean;
     FProbePending: Boolean;
     FLastPorcelain: String;
+    FLastHeadAge: LongInt;
+    FLastIndexAge: LongInt;
+    FLastProbeAt: TDateTime;
+    FProbeIntervalSec: Integer;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
+    Function GitDirStampChanged: Boolean;
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFilesList;
@@ -495,6 +500,10 @@ Begin
   FStatusJobPending := False;
   FProbePending := False;
   FLastPorcelain := '';
+  FLastHeadAge := -1;
+  FLastIndexAge := -1;
+  FLastProbeAt := 0;
+  FProbeIntervalSec := 5;
   FModel := TGitGraphModel.Create;
   InitLaneColors;
   ApplyConfig;
@@ -625,7 +634,12 @@ Begin
   If Assigned(FAutoRefreshTimer) Then
     Begin
       FAutoRefreshTimer.Enabled := False;
-      FAutoRefreshTimer.Interval := GitManagerConfig.AutoRefreshSeconds * 1000;
+      { Tick often to notice .git/HEAD and index; the configured seconds is the
+        fallback probe for worktree-only edits that do not touch those files. }
+      FProbeIntervalSec := GitManagerConfig.AutoRefreshSeconds;
+      If FProbeIntervalSec < 2 Then
+        FProbeIntervalSec := 2;
+      FAutoRefreshTimer.Interval := 1000;
       FAutoRefreshTimer.Enabled := GitManagerConfig.AutoRefresh And (FRepoPath <> '');
     End;
   { Graph font changes affect row metrics and painted text. }
@@ -2708,12 +2722,37 @@ Begin
   SubmitGitJob(Job);
 End;
 
+Function TManageRepositoryForm.GitDirStampChanged: Boolean;
+Var
+  GitDir: String;
+  HeadAge, IndexAge: LongInt;
+Begin
+  Result := False;
+  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+    Exit;
+  GitClient.RepoPath := FRepoPath;
+  If Not GitClient.GetGitDir(GitDir) Then
+    Exit;
+  GitDir := IncludeTrailingPathDelimiter(GitDir);
+  HeadAge := FileAge(GitDir + 'HEAD');
+  IndexAge := FileAge(GitDir + 'index');
+  If (HeadAge <> FLastHeadAge) Or (IndexAge <> FLastIndexAge) Then
+    Begin
+      FLastHeadAge := HeadAge;
+      FLastIndexAge := IndexAge;
+      Result := True;
+    End;
+End;
+
 Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
   If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
      Not Visible Then
     Exit;
-  QuietRefreshIfChanged;
+  If GitDirStampChanged Then
+    QuietRefreshIfChanged
+  Else If (FLastProbeAt = 0) Or (SecondsBetween(Now, FLastProbeAt) >= FProbeIntervalSec) Then
+    QuietRefreshIfChanged;
 End;
 
 Procedure TManageRepositoryForm.QuietRefreshIfChanged;
@@ -2722,6 +2761,7 @@ Var
 Begin
   If (FRepoPath = '') Or FProbePending Or Not Assigned(GitJobs) Then
     Exit;
+  FLastProbeAt := Now;
   Job := TGitJob.Create(gjkRepoProbe);
   Job.RepoPath := FRepoPath;
   Job.Quiet := True;
@@ -2853,6 +2893,9 @@ Begin
   If Assigned(DiffView) Then
     DiffView.Clear;
   FRepoPath := ARepoPath;
+  FLastHeadAge := -1;
+  FLastIndexAge := -1;
+  FLastProbeAt := 0;
   FSelectedIndex := -1;
   If Assigned(FModel) Then
     FModel.Clear;
