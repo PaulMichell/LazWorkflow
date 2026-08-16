@@ -306,14 +306,19 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
             BorderSpacing.Right = 4
-            ParentFont = True
+            Font.Name = 'Courier New'
+            Font.Pitch = fpFixed
+            Font.Quality = fqCleartypeNatural
+            Font.Size = 9
+            ParentFont = False
             ScrollBars = ssAutoBoth
             TabOrder = 0
+            ExtraCharSpacing = 0
+            ExtraLineSpacing = 0
             Gutter.Visible = False
             RightGutter.Visible = False
             RightEdge = 0
             WantTabs = False
-            Keystrokes = <>
           end
           object CommitActionsPanel: TPanel
             Left = 0
