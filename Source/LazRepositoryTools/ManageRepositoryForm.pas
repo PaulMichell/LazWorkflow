@@ -167,7 +167,7 @@ Type
     Function GitDirStampChanged: Boolean;
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
-    Procedure RefreshFilesList;
+    Procedure RefreshFiles;
     Procedure UpdateCommitEnabled;
     Procedure UpdateStageButtonsEnabled;
     Function ListHasSelection(List: TListBox): Boolean;
@@ -188,7 +188,6 @@ Type
     Procedure GitJobFinished(Job: TGitJob);
     Function SubmitGitJob(Job: TGitJob): Boolean;
     Procedure ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
-    Procedure RefreshFilesListAsync;
     Procedure SubmitFilesStatus;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
@@ -917,7 +916,7 @@ Begin
                 { Push does not change history; skip rev-list teardown. }
                 RefreshRepositoryInfo;
                 If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-                  RefreshFilesList;
+                  RefreshFiles;
                 If Assigned(StatusFooter) Then
                   StatusFooter.SetRightText('Push complete');
               End
@@ -926,7 +925,7 @@ Begin
                 ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
                 RefreshRepositoryInfo;
                 If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-                  RefreshFilesList;
+                  RefreshFiles;
               End
             Else
               ManualRefresh;
@@ -942,7 +941,7 @@ Begin
         If Not Job.Ok Then
           Begin
             MessageDlg('Commit failed: ' + Job.ErrorText, mtError, [mbOK], 0);
-            RefreshFilesListAsync;
+            RefreshFiles;
             Exit;
           End;
         WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
@@ -985,7 +984,7 @@ Begin
           Exit;
         If Not Job.Ok Then
           MessageDlg(Job.Caption + ' failed: ' + Job.ErrorText, mtError, [mbOK], 0);
-        RefreshFilesListAsync;
+        RefreshFiles;
       End;
     gjkListStatus:
       Begin
@@ -1762,7 +1761,7 @@ Begin
     Exit;
   If Pages.ActivePage = FilesTab Then
     Begin
-      RefreshFilesList;
+      RefreshFiles;
       { Overview paints on a child window that only sizes after the page is shown. }
       If Assigned(FilesDiffView) Then
         FilesDiffView.RefreshOverviewGutter;
@@ -1815,12 +1814,7 @@ Begin
     Result := True;
 End;
 
-Procedure TManageRepositoryForm.RefreshFilesList;
-Begin
-  RefreshFilesListAsync;
-End;
-
-Procedure TManageRepositoryForm.RefreshFilesListAsync;
+Procedure TManageRepositoryForm.RefreshFiles;
 Var
   Job: TGitJob;
 Begin
@@ -2351,7 +2345,7 @@ End;
 
 Procedure TManageRepositoryForm.FileFilterChange(Sender: TObject);
 Begin
-  RefreshFilesList;
+  RefreshFiles;
 End;
 
 Procedure TManageRepositoryForm.IgnoredFilesActionExecute(Sender: TObject);
@@ -2362,7 +2356,7 @@ Begin
       Exit;
     End;
   If ShowGitIgnoreForm(FRepoPath) Then
-    RefreshFilesList;
+    RefreshFiles;
 End;
 
 Procedure TManageRepositoryForm.RevertActionExecute(Sender: TObject);
@@ -2386,7 +2380,7 @@ Begin
       MessageDlg('Revert failed: ' + GitClient.LastError, mtError, [mbOK], 0)
     Else
       WorkflowLogger.Info('ManageRepository', Format('Reverted %d path(s)', [Paths.Count]));
-    RefreshFilesList;
+    RefreshFiles;
   Finally
     Paths.Free;
   End;
@@ -2435,7 +2429,7 @@ Begin
         mtWarning, [mbOK], 0)
     Else
       WorkflowLogger.Info('ManageRepository', Format('Moved %d path(s) to waste bin', [OkCount]));
-    RefreshFilesList;
+    RefreshFiles;
   Finally
     Paths.Free;
   End;
@@ -2462,7 +2456,7 @@ Begin
       MessageDlg('Could not update .gitignore: ' + GitClient.LastError, mtError, [mbOK], 0)
     Else
       WorkflowLogger.Info('ManageRepository', Format('Ignored %d path(s)', [Paths.Count]));
-    RefreshFilesList;
+    RefreshFiles;
   Finally
     Paths.Free;
   End;
@@ -2578,7 +2572,7 @@ End;
 
 Procedure TManageRepositoryForm.FilesDiffStatusChanged(Sender: TObject);
 Begin
-  RefreshFilesList;
+  RefreshFiles;
 End;
 
 Procedure TManageRepositoryForm.FilesDiffSelectionChanged(Sender: TObject);
@@ -2913,7 +2907,7 @@ Begin
   Else If Assigned(FilesList) Then
     FilesList.Items.Clear;
   If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-    RefreshFilesList;
+    RefreshFiles;
   ApplyConfig;
 End;
 
@@ -2936,7 +2930,7 @@ Begin
       RefreshRepositoryInfo;
       UpdateStatus;
       If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-        RefreshFilesList;
+        RefreshFiles;
     End;
 End;
 
