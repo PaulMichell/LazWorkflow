@@ -224,8 +224,57 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, SynEditTypes, SynEditWrappedView,
-  SynSpellCheckPlugin, SynSpellDictionary, LazEditTextAttributes;
+  DateUtils, Math, LazFileUtils, LazIDEIntf, Laz2_XMLCfg, SrcEditorIntf, SynEditTypes,
+  SynEditWrappedView, SynSpellCheckPlugin, SynSpellDictionary, LazEditTextAttributes;
+
+Function FindSourceEditorSpellDictionary: TSynSpellDictionary;
+Var
+  SourceEdit: TSourceEditorInterface;
+  Syn: TSynEdit;
+  Index: Integer;
+Begin
+  { The design package keeps one ASpell instance, already loaded with the user's
+    personal word list. Reuse it so commit messages match the Source Editor. }
+  Result := Nil;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  SourceEdit := SourceEditorManagerIntf.ActiveEditor;
+  If Not Assigned(SourceEdit) And (SourceEditorManagerIntf.SourceEditorCount > 0) Then
+    SourceEdit := SourceEditorManagerIntf.SourceEditors[0];
+  If Not Assigned(SourceEdit) Or Not (SourceEdit.EditorControl Is TSynEdit) Then
+    Exit;
+  Syn := TSynEdit(SourceEdit.EditorControl);
+  For Index := 0 To Syn.PluginCount - 1 Do
+    If Syn.Plugin[Index] Is TSynCustomPluginSpellCheck Then
+      Exit(TSynCustomPluginSpellCheck(Syn.Plugin[Index]).SynSpellDict);
+End;
+
+Procedure ApplyIDESpellDictionaryOptions(Dict: TSynSpellDictionaryASpell);
+Var
+  ConfFile: String;
+  XML: TRttiXMLConfig;
+Begin
+  { SpellCheckOptions.xml is written by SynEditSpellCheckerDsgn. Copy ASpell
+    settings (personal file, language, library, dict dir) without depending on
+    that design-time package. }
+  If Not Assigned(Dict) Or Not Assigned(LazarusIDE) Then
+    Exit;
+  ConfFile := AppendPathDelim(LazarusIDE.GetPrimaryConfigPath) + 'SpellCheckOptions.xml';
+  If Not FileExistsUTF8(ConfFile) Then
+    Exit;
+  Try
+    XML := TRttiXMLConfig.Create(ConfFile);
+    Try
+      XML.CheckPropertyDefault := True;
+      XML.ReadObject('SpellOpts/ASpellOpts/', Dict);
+    Finally
+      XML.Free;
+    End;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ManageRepository', 'Spell options: ' + E.Message);
+  End;
+End;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -383,7 +432,8 @@ End;
 Procedure TManageRepositoryForm.ConfigureCommitMessageEditor;
 Var
   SpellPlugin: TSynPluginSpellCheck;
-  SpellDict: TSynSpellDictionaryASpell;
+  SpellDict: TSynSpellDictionary;
+  OwnedDict: TSynSpellDictionaryASpell;
 Begin
   If Not Assigned(MessageEditor) Then
     Exit;
@@ -407,8 +457,17 @@ Begin
     [eoScrollPastEol, eoScrollPastEof, eoEnhanceHomeKey, eoTabIndent, eoBracketHighlight];
   TLazSynEditLineWrapPlugin.Create(MessageEditor);
 
-  { SynEditSpellChecker: attach always. Markup stays idle unless aspell loads a dictionary. }
-  SpellDict := TSynSpellDictionaryASpell.Create;
+  { Prefer the Source Editor's loaded ASpell (personal word list already applied).
+    Otherwise load SpellCheckOptions.xml onto a new dict. Markup stays idle if
+    aspell cannot open a dictionary. }
+  OwnedDict := Nil;
+  SpellDict := FindSourceEditorSpellDictionary;
+  If Not Assigned(SpellDict) Then
+    Begin
+      OwnedDict := TSynSpellDictionaryASpell.Create;
+      SpellDict := OwnedDict;
+      ApplyIDESpellDictionaryOptions(OwnedDict);
+    End;
   Try
     SpellDict.Load;
     SpellPlugin := TSynPluginSpellCheck.Create(MessageEditor);
@@ -421,7 +480,8 @@ Begin
     Else
       WorkflowLogger.Debug('ManageRepository', 'Commit-message spell check idle: ' + SpellDict.LastError);
   Finally
-    SpellDict.ReleaseReference;
+    If Assigned(OwnedDict) Then
+      OwnedDict.ReleaseReference;
   End;
 End;
 
