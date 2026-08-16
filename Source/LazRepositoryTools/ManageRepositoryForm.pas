@@ -140,16 +140,13 @@ Type
     FIndexing: Boolean;
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
-    FRemoteOpSuppressResult: Boolean;
     FJobBusy: Boolean;
     FPushAfterCommit: Boolean;
     { Generation tokens invalidate Queue callbacks after cancel; never Synchronize+WaitFor. }
     FIndexGen: Integer;
     FDetailGen: Integer;
-    FRemoteGen: Integer;
     FIndexThread: TThread;
     FDetailThread: TThread;
-    FRemoteOpThread: TThread;
     FVisibleFirst: Integer;
     FVisibleLast: Integer;
     FLaneColors: Array[0..9] Of TColor;
@@ -175,8 +172,6 @@ Type
     Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
-    Procedure ApplyRemoteOpResult(Ok: Boolean; Const ResultMessage: String; Kind: TGitRemoteOpKind;
-      IndexOk: Boolean; Const IndexPayload: String; DetailsOk: Boolean; Const DetailsPayload: String);
     Procedure StartIndexLoad;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetRemoteActionsEnabled(ActionsEnabled: Boolean);
@@ -191,7 +186,6 @@ Type
     { Soft cancel: Terminate + bump gen (no WaitFor). Hard dispose used on form Destroy only. }
     Procedure StopIndexThread;
     Procedure StopDetailThread;
-    Procedure StopRemoteOpThread;
     Procedure DisposeWorker(Var Worker: TThread; Var Generation: Integer; HardWait: Boolean);
     Procedure UpdateScrollRange;
     Procedure GetVisibleRange(Out FirstRow, LastRow: Integer);
@@ -286,61 +280,6 @@ Type
     Procedure DetachForm;
     Property Generation: Integer Read FGeneration;
   End;
-
-  { Fetch/Pull/Push then loads index + first detail batch off-thread.
-    History UI is updated only in ApplyRemoteOpResult after a successful transfer. }
-  TGitRemoteOpThread = Class(TThread)
-  Private
-    FForm: TManageRepositoryForm;
-    FRepoPath: String;
-    FGeneration: Integer;
-    FKind: TGitRemoteOpKind;
-    FResultOk: Boolean;
-    FResultMessage: String;
-    FIndexOk: Boolean;
-    FIndexText: String;
-    FDetailsOk: Boolean;
-    FDetailsText: String;
-    Procedure Deliver;
-  Protected
-    Procedure Execute; Override;
-  Public
-    Constructor Create(AForm: TManageRepositoryForm; Const ARepoPath: String; Kind: TGitRemoteOpKind;
-      AGeneration: Integer);
-    Procedure DetachForm;
-    Property Generation: Integer Read FGeneration;
-  End;
-
-Procedure CollectLeadingShas(Const RevListText: String; MaxCount: Integer; Shas: TStrings);
-Var
-  Lines: TStringList;
-  I, SpacePos: Integer;
-  Line, Sha: String;
-Begin
-  If (Shas = Nil) Or (MaxCount < 1) Then
-    Exit;
-  Lines := TStringList.Create;
-  Try
-    Lines.Text := RevListText;
-    For I := 0 To Lines.Count - 1 Do
-      Begin
-        If Shas.Count >= MaxCount Then
-          Break;
-        Line := Trim(Lines[I]);
-        If Line = '' Then
-          Continue;
-        SpacePos := Pos(' ', Line);
-        If SpacePos > 0 Then
-          Sha := Copy(Line, 1, SpacePos - 1)
-        Else
-          Sha := Line;
-        If Sha <> '' Then
-          Shas.Add(Sha);
-      End;
-  Finally
-    Lines.Free;
-  End;
-End;
 
 Constructor TGitIndexThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
   AGeneration: Integer);
@@ -469,111 +408,6 @@ Begin
   Queue(@Deliver);
 End;
 
-Constructor TGitRemoteOpThread.Create(AForm: TManageRepositoryForm; Const ARepoPath: String;
-  Kind: TGitRemoteOpKind; AGeneration: Integer);
-Begin
-  Inherited Create(True);
-  FreeOnTerminate := False;
-  FForm := AForm;
-  FRepoPath := ARepoPath;
-  FGeneration := AGeneration;
-  FKind := Kind;
-  FResultOk := False;
-  FResultMessage := '';
-  FIndexOk := False;
-  FIndexText := '';
-  FDetailsOk := False;
-  FDetailsText := '';
-End;
-
-Procedure TGitRemoteOpThread.DetachForm;
-Begin
-  FForm := Nil;
-End;
-
-Procedure TGitRemoteOpThread.Deliver;
-Var
-  Form: TManageRepositoryForm;
-  Gen: Integer;
-  Ok, IndexOk, DetailsOk: Boolean;
-  ResultMessage, IndexText, DetailsText: String;
-  Kind: TGitRemoteOpKind;
-Begin
-  Form := FForm;
-  Gen := FGeneration;
-  Ok := FResultOk;
-  ResultMessage := FResultMessage;
-  Kind := FKind;
-  IndexOk := FIndexOk;
-  IndexText := FIndexText;
-  DetailsOk := FDetailsOk;
-  DetailsText := FDetailsText;
-  If Not Assigned(Form) Then
-    Begin
-      Free;
-      Exit;
-    End;
-  If Form.FRemoteOpThread = Self Then
-    Form.FRemoteOpThread := Nil;
-  If (Gen = Form.FRemoteGen) And Not Form.FRemoteOpSuppressResult And
-     Not (csDestroying in Form.ComponentState) And Not Application.Terminated Then
-    Form.ApplyRemoteOpResult(Ok, ResultMessage, Kind, IndexOk, IndexText, DetailsOk, DetailsText)
-  Else If Form.FRemoteOpBusy And Not Assigned(Form.FRemoteOpThread) Then
-    Begin
-      Form.FRemoteOpBusy := False;
-      Screen.Cursor := crDefault;
-      Form.SetRemoteActionsEnabled(True);
-    End;
-  Free;
-End;
-
-Procedure TGitRemoteOpThread.Execute;
-Var
-  Client: TGitService;
-  Summary: TGitTransferSummary;
-  Shas: TStringList;
-Begin
-  Client := TGitService.Create;
-  Try
-    { This worker is leftover; if it is started again it must not publish UI events. }
-    Client.PublishEvents := False;
-    Client.RepoPath := FRepoPath;
-    Summary := Default(TGitTransferSummary);
-    If Not Terminated Then
-      Begin
-        Case FKind Of
-          rokFetch: FResultOk := Client.Fetch(Summary);
-          rokPull: FResultOk := Client.Pull(Summary);
-          rokPush: FResultOk := Client.Push(Summary);
-        Else
-          FResultOk := False;
-          Summary.Message := 'Unknown remote operation.';
-        End;
-        FResultMessage := Summary.Message;
-      End;
-
-    { After a successful transfer, load index + first detail batch before any UI update. }
-    If FResultOk And Assigned(FForm) And Not Terminated Then
-      Begin
-        FIndexOk := Client.FetchRevListParents(FRepoPath, FIndexText);
-        If FIndexOk And Assigned(FForm) And Not Terminated Then
-          Begin
-            Shas := TStringList.Create;
-            Try
-              CollectLeadingShas(FIndexText, GitGraphDetailBatch, Shas);
-              If (Shas.Count > 0) And Not Terminated Then
-                FDetailsOk := Client.FetchCommitDetails(FRepoPath, Shas, FDetailsText);
-            Finally
-              Shas.Free;
-            End;
-          End;
-      End;
-  Finally
-    Client.Free;
-  End;
-  Queue(@Deliver);
-End;
-
 Function DetectStartPathFromIDE: String;
 Var
   Project: TLazProject;
@@ -642,15 +476,12 @@ Begin
   FIndexing := False;
   FDetailLoading := False;
   FRemoteOpBusy := False;
-  FRemoteOpSuppressResult := False;
   FJobBusy := False;
   FPushAfterCommit := False;
   FIndexGen := 0;
   FDetailGen := 0;
-  FRemoteGen := 0;
   FIndexThread := Nil;
   FDetailThread := Nil;
-  FRemoteOpThread := Nil;
   FVisibleFirst := 0;
   FVisibleLast := 0;
   FFilesPaths := TStringList.Create;
@@ -682,7 +513,6 @@ Begin
     End;
   Screen.Cursor := crDefault;
   { Hard dispose: Queue (not Synchronize) so WaitFor cannot deadlock the UI thread. }
-  DisposeWorker(FRemoteOpThread, FRemoteGen, True);
   DisposeWorker(FDetailThread, FDetailGen, True);
   DisposeWorker(FIndexThread, FIndexGen, True);
   FRemoteOpBusy := False;
@@ -933,9 +763,7 @@ Begin
   If Pending Is TGitIndexThread Then
     TGitIndexThread(Pending).DetachForm
   Else If Pending Is TGitDetailThread Then
-    TGitDetailThread(Pending).DetachForm
-  Else If Pending Is TGitRemoteOpThread Then
-    TGitRemoteOpThread(Pending).DetachForm;
+    TGitDetailThread(Pending).DetachForm;
   If HardWait Then
     Begin
       TThread.RemoveQueuedEvents(Pending);
@@ -958,18 +786,6 @@ Procedure TManageRepositoryForm.StopDetailThread;
 Begin
   DisposeWorker(FDetailThread, FDetailGen, False);
   FDetailLoading := False;
-End;
-
-Procedure TManageRepositoryForm.StopRemoteOpThread;
-Begin
-  FRemoteOpSuppressResult := True;
-  DisposeWorker(FRemoteOpThread, FRemoteGen, False);
-  If FRemoteOpBusy Then
-    Begin
-      FRemoteOpBusy := False;
-      Screen.Cursor := crDefault;
-      SetRemoteActionsEnabled(True);
-    End;
 End;
 
 Procedure TManageRepositoryForm.SetRemoteActionsEnabled(ActionsEnabled: Boolean);
@@ -1182,85 +998,11 @@ Begin
   StopDetailThread;
   StopIndexThread;
   FIndexing := False;
-  FRemoteOpSuppressResult := False;
   FRemoteOpBusy := True;
   Job := TGitJob.Create(JobKind);
   Job.RepoPath := FRepoPath;
   If Not SubmitGitJob(Job) Then
     FRemoteOpBusy := False;
-End;
-
-Procedure TManageRepositoryForm.ApplyRemoteOpResult(Ok: Boolean; Const ResultMessage: String;
-  Kind: TGitRemoteOpKind; IndexOk: Boolean; Const IndexPayload: String; DetailsOk: Boolean;
-  Const DetailsPayload: String);
-Var
-  Parsed: Integer;
-Begin
-  If (csDestroying in ComponentState) Or Application.Terminated Then
-    Begin
-      FRemoteOpBusy := False;
-      Screen.Cursor := crDefault;
-      Exit;
-    End;
-
-  If Ok Then
-    Begin
-      { Single UI transition: previous graph stays visible until this apply runs. }
-      FIndexing := False;
-      If Assigned(DiffView) Then
-        DiffView.Clear;
-      FSelectedIndex := -1;
-      If Assigned(GraphScrollBar) Then
-        GraphScrollBar.Position := 0;
-
-      If IndexOk And Assigned(FModel) Then
-        Begin
-          Parsed := FModel.ParseRevListParents(IndexPayload);
-          If DetailsOk And (DetailsPayload <> '') Then
-            FModel.ApplyDetailsText(DetailsPayload);
-          If Parsed > 0 Then
-            FSelectedIndex := 0;
-          UpdateScrollRange;
-          If FSelectedIndex >= 0 Then
-            ShowCommitDetails(FSelectedIndex)
-          Else If Assigned(DiffView) Then
-            DiffView.Clear;
-          If Assigned(GraphPaintBox) Then
-            Begin
-              GraphPaintBox.Invalidate;
-              GraphPaintBox.Update;
-            End;
-          ScheduleVisibleDetails;
-        End
-      Else
-        Begin
-          { Transfer succeeded but rev-list failed — fall back to the normal re-index path. }
-          FRemoteOpBusy := False;
-          Screen.Cursor := crDefault;
-          SetRemoteActionsEnabled(True);
-          ManualRefresh;
-          MessageDlg(ResultMessage + LineEnding + LineEnding +
-            'History re-index failed; a full refresh was started.', mtWarning, [mbOK], 0);
-          Exit;
-        End;
-
-      RefreshRepositoryInfo;
-      UpdateStatus;
-      If Kind = rokPush Then
-        If Assigned(StatusFooter) Then
-          StatusFooter.SetRightText('Push complete');
-      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-        RefreshFilesList;
-    End;
-
-  FRemoteOpBusy := False;
-  Screen.Cursor := crDefault;
-  SetRemoteActionsEnabled(True);
-
-  If Ok Then
-    MessageDlg(ResultMessage, mtInformation, [mbOK], 0)
-  Else
-    MessageDlg(ResultMessage, mtError, [mbOK], 0);
 End;
 
 Procedure TManageRepositoryForm.StartIndexLoad;
