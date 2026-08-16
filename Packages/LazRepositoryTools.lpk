@@ -66,6 +66,14 @@
         <UnitName Value="GitSettingsForm"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/GitDiffPatch.pas"/>
+        <UnitName Value="GitDiffPatch"/>
+      </Item>
+      <Item>
+        <Filename Value="../Source/LazRepositoryTools/GitDiffHighlighter.pas"/>
+        <UnitName Value="GitDiffHighlighter"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/GitDiffView.pas"/>
         <UnitName Value="GitDiffView"/>
       </Item>
