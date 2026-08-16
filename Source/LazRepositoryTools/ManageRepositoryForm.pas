@@ -71,7 +71,7 @@ Type
     FilesRightPanel: TPanel;
     CommitPanel: TPanel;
     MessageLabel: TLabel;
-    MessageMemo: TMemo;
+    MessageEditor: TSynEdit;
     CommitActionsPanel: TPanel;
     SuggestButton: TButton;
     CommitButton: TButton;
@@ -178,6 +178,7 @@ Type
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshFiles;
+    Procedure ConfigureCommitMessageEditor;
     Function CanMutate: Boolean;
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
@@ -223,7 +224,8 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils;
+  DateUtils, Math, LazFileUtils, SynEditTypes, SynEditWrappedView,
+  SynSpellCheckPlugin, SynSpellDictionary, LazEditTextAttributes;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -370,10 +372,45 @@ Begin
       FilesList.MultiSelect := True;
     If Assigned(StagedList) Then
       StagedList.MultiSelect := True;
+    ConfigureCommitMessageEditor;
     WorkflowLogger.Info('ManageRepository', 'Manage Repository window created');
   Except
     On E: Exception Do
       WorkflowLogger.Error('ManageRepository', 'FormCreate: ' + E.Message);
+  End;
+End;
+
+Procedure TManageRepositoryForm.ConfigureCommitMessageEditor;
+Var
+  SpellPlugin: TSynPluginSpellCheck;
+  SpellDict: TSynSpellDictionaryASpell;
+Begin
+  If Not Assigned(MessageEditor) Then
+    Exit;
+  { Memo-like: wrap at the client edge, no gutter or code-editor chrome. }
+  MessageEditor.Gutter.Visible := False;
+  MessageEditor.RightGutter.Visible := False;
+  MessageEditor.RightEdge := 0;
+  MessageEditor.WantTabs := False;
+  MessageEditor.Options := MessageEditor.Options + [eoHideRightMargin] -
+    [eoScrollPastEol, eoScrollPastEof, eoEnhanceHomeKey, eoTabIndent, eoBracketHighlight];
+  TLazSynEditLineWrapPlugin.Create(MessageEditor);
+
+  { SynEditSpellChecker: attach always. Markup stays idle unless aspell loads a dictionary. }
+  SpellDict := TSynSpellDictionaryASpell.Create;
+  Try
+    SpellDict.Load;
+    SpellPlugin := TSynPluginSpellCheck.Create(MessageEditor);
+    SpellPlugin.Setup(SpellDict);
+    SpellPlugin.MarkupInfo.FrameColor := clRed;
+    SpellPlugin.MarkupInfo.FrameStyle := TLazTextAttrLineStyle.slsWaved;
+    SpellPlugin.MarkupInfo.FrameEdges := TLazTextAttrFrameEdges.sfeBottom;
+    If SpellDict.IsLoaded Then
+      WorkflowLogger.Info('ManageRepository', 'Commit-message spell check ready')
+    Else
+      WorkflowLogger.Debug('ManageRepository', 'Commit-message spell check idle: ' + SpellDict.LastError);
+  Finally
+    SpellDict.ReleaseReference;
   End;
 End;
 
@@ -438,9 +475,9 @@ Begin
   FocusedControl := ActiveControl;
   { Graph keys must not steal arrows/Enter from the commit message or file lists. }
   If (Key <> VK_F5) And Assigned(FocusedControl) Then
-    If (FocusedControl = MessageMemo) Or (FocusedControl = FilesList) Or
+    If (FocusedControl = MessageEditor) Or (FocusedControl = FilesList) Or
        (FocusedControl = StagedList) Or (FocusedControl Is TCustomEdit) Or
-       (FocusedControl Is TCustomListBox) Then
+       (FocusedControl Is TCustomSynEdit) Or (FocusedControl Is TCustomListBox) Then
       Exit;
   Case Key Of
     VK_F5:
@@ -659,8 +696,8 @@ Begin
             Exit;
           End;
         WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
-        If Assigned(MessageMemo) Then
-          MessageMemo.Clear;
+        If Assigned(MessageEditor) Then
+          MessageEditor.Clear;
         MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
         If FPushAfterCommit Then
           Begin
@@ -741,9 +778,9 @@ Begin
             MessageDlg(Job.ErrorText, mtWarning, [mbOK], 0);
             Exit;
           End;
-        If Assigned(MessageMemo) Then
+        If Assigned(MessageEditor) Then
           Begin
-            MessageMemo.Text := Job.CommitMessage;
+            MessageEditor.Text := Job.CommitMessage;
           End;
         WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
           IntToStr(Length(Job.CommitMessage)) + ' chars)');
@@ -1198,7 +1235,7 @@ End;
 Procedure TManageRepositoryForm.CommitActionUpdate(Sender: TObject);
 Begin
   (Sender As TAction).Enabled := CanMutate And FFiles.HasStaged And
-    Assigned(MessageMemo) And (Trim(MessageMemo.Text) <> '');
+    Assigned(MessageEditor) And (Trim(MessageEditor.Text) <> '');
 End;
 
 Procedure TManageRepositoryForm.HistoryViewActionUpdate(Sender: TObject);
@@ -1483,8 +1520,8 @@ Begin
   If FRepoPath = '' Then
     Exit;
   Msg := '';
-  If Assigned(MessageMemo) Then
-    Msg := Trim(MessageMemo.Text);
+  If Assigned(MessageEditor) Then
+    Msg := Trim(MessageEditor.Text);
   If Msg = '' Then
     Begin
       MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
