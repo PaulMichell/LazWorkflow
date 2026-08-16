@@ -23,7 +23,7 @@ Implementation
 
 Uses
   Dialogs, WorkflowLog, ManageRepositoryForm, GitService, GitConfig,
-  GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner;
+  GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner, GitPathUtils;
 
 Type
   TGitManagerIDEHooks = Class
@@ -46,21 +46,6 @@ Var
   GitManagerIDEHooks: TGitManagerIDEHooks;
   GitIdeJobHost: TGitIdeJobHost;
 
-Function ProjectStartPath(AProject: TLazProject): String;
-Begin
-  Result := '';
-  Try
-    If Not Assigned(AProject) Or AProject.IsVirtual Then
-      Exit;
-    If AProject.ProjectInfoFile <> '' Then
-      Result := ExtractFilePath(ExpandFileName(AProject.ProjectInfoFile))
-    Else If Assigned(AProject.MainFile) And (AProject.MainFile.Filename <> '') Then
-      Result := ExtractFilePath(ExpandFileName(AProject.MainFile.Filename));
-  Except
-    Result := '';
-  End;
-End;
-
 Function CurrentProjectHasRepository: Boolean;
 Var
   StartPath: String;
@@ -69,7 +54,7 @@ Begin
   Try
     If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
       Exit;
-    StartPath := ProjectStartPath(LazarusIDE.ActiveProject);
+    StartPath := GitProjectStartPath(LazarusIDE.ActiveProject);
     If StartPath = '' Then
       Exit;
     Result := GitClient.DetectRepository(StartPath) <> '';
@@ -92,7 +77,7 @@ Var
   StartPath, RepoPath: String;
 Begin
   Result := mrOk;
-  StartPath := ProjectStartPath(AProject);
+  StartPath := GitProjectStartPath(AProject);
   If StartPath = '' Then
     Begin
       UpdateRepositoryMenuState;
@@ -148,7 +133,7 @@ Begin
   If Not Assigned(LazarusIDE) Or Not Assigned(GitClient) Then
     Exit;
   Project := LazarusIDE.ActiveProject;
-  DefaultPath := ProjectStartPath(Project);
+  DefaultPath := GitProjectStartPath(Project);
   If DefaultPath = '' Then
     DefaultPath := GetCurrentDir;
 
@@ -198,7 +183,7 @@ Begin
   If Not Assigned(GitClient) Then
     Exit;
   If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-    DefaultPath := ProjectStartPath(LazarusIDE.ActiveProject)
+    DefaultPath := GitProjectStartPath(LazarusIDE.ActiveProject)
   Else
     DefaultPath := GetCurrentDir;
   If DefaultPath = '' Then

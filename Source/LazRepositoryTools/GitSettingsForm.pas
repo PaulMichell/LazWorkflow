@@ -57,12 +57,11 @@ Implementation
 {$R *.lfm}
 
 Uses
-  GitConfig, GitService, WorkflowLog, LazIDEIntf, ProjectIntf;
+  GitConfig, GitService, WorkflowLog, GitPathUtils;
 
 Function ResolveSettingsRepoPath: String;
 Var
   StartPath: String;
-  Proj: TLazProject;
 Begin
   Result := '';
   If Assigned(GitClient) And (GitClient.RepoPath <> '') And
@@ -71,14 +70,7 @@ Begin
       Result := GitClient.RepoPath;
       Exit;
     End;
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
-    Exit;
-  Proj := LazarusIDE.ActiveProject;
-  StartPath := '';
-  If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-    StartPath := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
-  If StartPath = '' Then
-    StartPath := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
+  StartPath := GitIdeStartPath;
   If (StartPath <> '') And Assigned(GitClient) Then
     Result := GitClient.DetectRepository(StartPath);
 End;

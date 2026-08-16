@@ -42,6 +42,10 @@
         <UnitName Value="GitService"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/GitPathUtils.pas"/>
+        <UnitName Value="GitPathUtils"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/GitJobRunner.pas"/>
         <UnitName Value="GitJobRunner"/>
       </Item>

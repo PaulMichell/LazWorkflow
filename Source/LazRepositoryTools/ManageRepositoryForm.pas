@@ -180,9 +180,6 @@ Type
     Function ListHasSelection(List: TListBox): Boolean;
     Function CollectSelectedPaths(List: TListBox; Paths: TStringList): TStringList;
     Function CollectActiveSelectedPaths: TStringList;
-    Function FormatPathActionSummary(Const ActionVerb: String; Paths: TStrings): String;
-    Function ConfirmPathAction(Const ActionTitle, ActionVerb: String; Paths: TStrings): Boolean;
-    Function MovePathToWasteBin(Const FullPath: String; Out ErrorText: String): Boolean;
     Procedure ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
@@ -249,30 +246,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, LazIDEIntf, ProjectIntf,
-  DateUtils, Math, FileUtil, LazFileUtils, StrUtils, Process
-  {$IFDEF WINDOWS}, ShellApi{$ENDIF};
-
-Function DetectStartPathFromIDE: String;
-Var
-  Project: TLazProject;
-Begin
-  Result := '';
-  Try
-    If Not Assigned(LazarusIDE) Then
-      Exit;
-    Project := LazarusIDE.ActiveProject;
-    If Not Assigned(Project) Or Project.IsVirtual Then
-      Exit;
-    If Project.ProjectInfoFile <> '' Then
-      Result := ExtractFilePath(ExpandFileName(Project.ProjectInfoFile));
-    If (Result = '') And Assigned(Project.MainFile) And (Project.MainFile.Filename <> '') Then
-      Result := ExtractFilePath(ExpandFileName(Project.MainFile.Filename));
-  Except
-    { Active project can be half-destroyed during IDE project switch. }
-    Result := '';
-  End;
-End;
+  WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
+  DateUtils, Math, LazFileUtils, StrUtils;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -1956,140 +1931,6 @@ Begin
     End;
 End;
 
-Function TManageRepositoryForm.FormatPathActionSummary(Const ActionVerb: String; Paths: TStrings): String;
-Var
-  I, Shown: Integer;
-  Body: String;
-Const
-  MaxListed = 15;
-Begin
-  Body := '';
-  Shown := 0;
-  If Assigned(Paths) Then
-    For I := 0 To Paths.Count - 1 Do
-      Begin
-        If Shown >= MaxListed Then
-          Begin
-            Body := Body + LineEnding + Format('…and %d more', [Paths.Count - MaxListed]);
-            Break;
-          End;
-        If Body <> '' Then
-          Body := Body + LineEnding;
-        Body := Body + Paths[I];
-        Inc(Shown);
-      End;
-  If Paths = Nil Then
-    Result := ActionVerb
-  Else
-    Result := Format('%s the following %d file(s)?' + LineEnding + LineEnding + '%s',
-      [ActionVerb, Paths.Count, Body]);
-End;
-
-Function TManageRepositoryForm.ConfirmPathAction(Const ActionTitle, ActionVerb: String;
-  Paths: TStrings): Boolean;
-Begin
-  Result := False;
-  If (Paths = Nil) Or (Paths.Count = 0) Then
-    Exit;
-  Result := MessageDlg(ActionTitle, FormatPathActionSummary(ActionVerb, Paths),
-    mtConfirmation, [mbYes, mbNo], 0) = mrYes;
-End;
-
-Function TManageRepositoryForm.MovePathToWasteBin(Const FullPath: String; Out ErrorText: String): Boolean;
-{$IFDEF WINDOWS}
-Var
-  Op: TSHFileOpStructW;
-  FromBuf: UnicodeString;
-{$ELSE}
-Var
-  Proc: TProcess;
-  Cmd: String;
-{$ENDIF}
-Begin
-  Result := False;
-  ErrorText := '';
-  If FullPath = '' Then
-    Begin
-      ErrorText := 'Empty path';
-      Exit;
-    End;
-  If (Not FileExists(FullPath)) And (Not DirectoryExists(FullPath)) Then
-    Begin
-      ErrorText := 'Path does not exist: ' + FullPath;
-      Exit;
-    End;
-
-{$IFDEF WINDOWS}
-  FromBuf := UTF8Decode(FullPath) + #0#0;
-  FillChar(Op, SizeOf(Op), 0);
-  Op.Wnd := 0;
-  Op.wFunc := FO_DELETE;
-  Op.pFrom := PWideChar(FromBuf);
-  Op.fFlags := FOF_ALLOWUNDO Or FOF_NOCONFIRMATION Or FOF_SILENT Or FOF_NOERRORUI;
-  If SHFileOperationW(@Op) = 0 Then
-    Result := Not (FileExists(FullPath) Or DirectoryExists(FullPath))
-  Else
-    ErrorText := 'Windows could not move the item to the Recycle Bin';
-{$ELSE}
-  { Prefer desktop trash tools; fall back to a home Trash folder move. }
-  Proc := TProcess.Create(Nil);
-  Try
-    Proc.Options := [poWaitOnExit, poNoConsole];
-    Cmd := FindDefaultExecutablePath('gio');
-    If Cmd <> '' Then
-      Begin
-        Proc.Executable := Cmd;
-        Proc.Parameters.Add('trash');
-        Proc.Parameters.Add(FullPath);
-        Try
-          Proc.Execute;
-          Result := Proc.ExitStatus = 0;
-        Except
-          Result := False;
-        End;
-      End;
-    If Not Result Then
-      Begin
-        Proc.Parameters.Clear;
-        Cmd := FindDefaultExecutablePath('trash-put');
-        If Cmd = '' Then
-          Cmd := FindDefaultExecutablePath('trash');
-        If Cmd <> '' Then
-          Begin
-            Proc.Executable := Cmd;
-            Proc.Parameters.Add(FullPath);
-            Try
-              Proc.Execute;
-              Result := Proc.ExitStatus = 0;
-            Except
-              Result := False;
-            End;
-          End;
-      End;
-    If Not Result Then
-      Begin
-        {$IFDEF DARWIN}
-        Proc.Parameters.Clear;
-        Proc.Executable := '/usr/bin/osascript';
-        Proc.Parameters.Add('-e');
-        Proc.Parameters.Add('tell application "Finder" to delete POSIX file "' +
-          StringReplace(FullPath, '"', '\"', [rfReplaceAll]) + '"');
-        Try
-          Proc.Execute;
-          Result := Proc.ExitStatus = 0;
-        Except
-          Result := False;
-        End;
-        {$ENDIF}
-      End;
-    If Not Result Then
-      ErrorText := 'Could not move to the waste bin: ' + FullPath;
-  Finally
-    Proc.Free;
-  End;
-{$ENDIF}
-End;
-
 Procedure TManageRepositoryForm.ShowFilesDiff(List: TListBox; Paths: TStringList; StagedSide: Boolean);
 Var
   I: Integer;
@@ -2205,7 +2046,7 @@ Begin
       MessageDlg('Select one or more files to revert.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Not ConfirmPathAction('Revert files',
+  If Not ConfirmGitPathAction('Revert files',
     'Restore from the last commit (discard local changes for)', Paths) Then
     Begin
       Paths.Free;
@@ -2233,7 +2074,7 @@ Begin
         MessageDlg('Select one or more files to delete.', mtInformation, [mbOK], 0);
         Exit;
       End;
-    If Not ConfirmPathAction('Delete files',
+    If Not ConfirmGitPathAction('Delete files',
       'Move to the waste bin', Paths) Then
       Exit;
     GitClient.RepoPath := FRepoPath;
@@ -2280,7 +2121,7 @@ Begin
       MessageDlg('Select one or more files to ignore.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Not ConfirmPathAction('Ignore files',
+  If Not ConfirmGitPathAction('Ignore files',
     'Add to .gitignore', Paths) Then
     Begin
       Paths.Free;
@@ -2679,7 +2520,7 @@ Var
 Begin
   SearchPath := StartPath;
   If SearchPath = '' Then
-    SearchPath := DetectStartPathFromIDE;
+    SearchPath := GitIdeStartPath;
   If SearchPath = '' Then
     SearchPath := GetCurrentDir;
 
