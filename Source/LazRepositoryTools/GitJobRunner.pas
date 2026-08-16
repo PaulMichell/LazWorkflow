@@ -30,7 +30,8 @@ Type
     gjkStagePaths,
     gjkUnstagePaths,
     gjkListStatus,
-    gjkRepoProbe
+    gjkRepoProbe,
+    gjkSuggestMessage
   );
 
   TGitJob = Class;
@@ -152,7 +153,7 @@ Function GitJobKindCaption(Kind: TGitJobKind): String;
 Implementation
 
 Uses
-  WorkflowLog, GitGraphModel;
+  WorkflowLog, WorkflowEvents, GitGraphModel;
 
 Type
   TGitJobWorker = Class(TThread)
@@ -182,6 +183,7 @@ Begin
     gjkUnstagePaths: Result := 'Unstaging…';
     gjkListStatus: Result := 'Refreshing files…';
     gjkRepoProbe: Result := 'Checking repository…';
+    gjkSuggestMessage: Result := 'Suggesting commit message…';
   Else
     Result := 'Working…';
   End;
@@ -517,7 +519,7 @@ End;
 Procedure TGitJobRunner.ExecuteJob(Job: TGitJob; Git: TGitService);
 Var
   Summary: TGitTransferSummary;
-  NewSha: String;
+  NewSha, DiffText, StatusText, Suggested, ErrorText: String;
   Entries: TGitStatusEntryArray;
 Begin
   Case Job.Kind Of
@@ -603,9 +605,32 @@ Begin
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
+    gjkSuggestMessage:
+      Begin
+        Job.FOk := False;
+        If Not Assigned(SuggestCommitMessageFunc) Then
+          Job.FErrorText := 'Commit message suggestion is not available.'
+        Else If Not Git.DiffStaged(DiffText) Then
+          Job.FErrorText := Git.LastError
+        Else If Trim(DiffText) = '' Then
+          Job.FErrorText := 'Staged diff is empty. Stage file contents (not only renames without content) and try again.'
+        Else
+          Begin
+            Git.StatusSummaryForCommit(StatusText);
+            Job.FOk := SuggestCommitMessageFunc(DiffText, StatusText, Suggested, ErrorText);
+            If Job.FOk Then
+              Job.FMessageText := Suggested
+            Else If ErrorText <> '' Then
+              Job.FErrorText := ErrorText
+            Else
+              Job.FErrorText := 'Could not generate a commit message.';
+          End;
+      End;
   Else
-    Job.FOk := False;
-    Job.FErrorText := 'Unknown job kind';
+    Begin
+      Job.FOk := False;
+      Job.FErrorText := 'Unknown job kind';
+    End;
   End;
 End;
 

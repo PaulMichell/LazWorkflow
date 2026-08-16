@@ -998,6 +998,23 @@ Begin
             UpdateStageButtonsEnabled;
           End;
       End;
+    gjkSuggestMessage:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          Begin
+            MessageDlg(Job.ErrorText, mtWarning, [mbOK], 0);
+            Exit;
+          End;
+        If Assigned(MessageMemo) Then
+          Begin
+            MessageMemo.Text := Job.MessageText;
+            UpdateCommitEnabled;
+          End;
+        WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
+          IntToStr(Length(Job.MessageText)) + ' chars)');
+      End;
     gjkRepoProbe:
       Begin
         FProbePending := False;
@@ -2523,11 +2540,10 @@ End;
 
 Procedure TManageRepositoryForm.SuggestMessageActionExecute(Sender: TObject);
 Var
-  DiffText, StatusText, MessageText, ErrorText: String;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  { Button stays disabled when the assistant package is not installed. }
   If Not Assigned(SuggestCommitMessageFunc) Then
     Exit;
   If FStagedPaths.Count = 0 Then
@@ -2536,39 +2552,9 @@ Begin
         mtInformation, [mbOK], 0);
       Exit;
     End;
-  GitClient.RepoPath := FRepoPath;
-  Screen.Cursor := crHourGlass;
-  Try
-    If Not GitClient.DiffStaged(DiffText) Then
-      Begin
-        MessageDlg('Could not read staged diff: ' + GitClient.LastError, mtError, [mbOK], 0);
-        Exit;
-      End;
-    If Trim(DiffText) = '' Then
-      Begin
-        MessageDlg('Staged diff is empty. Stage file contents (not only renames without content) and try again.',
-          mtInformation, [mbOK], 0);
-        Exit;
-      End;
-    StatusText := '';
-    GitClient.StatusSummaryForCommit(StatusText);
-    If Not SuggestCommitMessageFunc(DiffText, StatusText, MessageText, ErrorText) Then
-      Begin
-        If ErrorText = '' Then
-          ErrorText := 'Could not generate a commit message.';
-        MessageDlg(ErrorText, mtWarning, [mbOK], 0);
-        Exit;
-      End;
-  Finally
-    Screen.Cursor := crDefault;
-  End;
-  If Assigned(MessageMemo) Then
-    Begin
-      MessageMemo.Text := MessageText;
-      UpdateCommitEnabled;
-    End;
-  WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
-    IntToStr(Length(MessageText)) + ' chars)');
+  Job := TGitJob.Create(gjkSuggestMessage);
+  Job.RepoPath := FRepoPath;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.MessageChange(Sender: TObject);
