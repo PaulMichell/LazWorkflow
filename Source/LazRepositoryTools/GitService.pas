@@ -39,6 +39,7 @@ Type
     FActiveProcess: TProcess;
     FProcessLock: TRTLCriticalSection;
     FTimeoutMs: Integer;
+    FAllowPrompt: Boolean;
     Procedure SetActiveProcess(Proc: TProcess);
     Procedure ClearActiveProcess;
     Function RunTimedOut(StartTick: QWord): Boolean;
@@ -232,6 +233,7 @@ Begin
   FPublishEvents := True;
   FActiveProcess := Nil;
   FTimeoutMs := 0;
+  FAllowPrompt := False;
   InitCriticalSection(FProcessLock);
 End;
 
@@ -358,8 +360,12 @@ Begin
   Try
     Proc.Executable := 'git';
     Proc.CurrentDirectory := WorkDir;
-    { Merge stderr so fetch/push progress lines are captured. Drain pipes without poWaitOnExit. }
-    Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
+    { Merge stderr so fetch/push progress lines are captured. Drain pipes without poWaitOnExit.
+      Remote ops omit poNoConsole so a credential helper or TTY prompt can run. }
+    If FAllowPrompt Then
+      Proc.Options := [poUsePipes, poStderrToOutPut]
+    Else
+      Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
@@ -1437,7 +1443,12 @@ Begin
   RemoteName := Remote;
   If RemoteName = '' Then
     RemoteName := 'origin';
-  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
+  FAllowPrompt := True;
+  Try
+    Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
+  Finally
+    FAllowPrompt := False;
+  End;
   BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
   If Result Then
     EmitRemoteUpdated(RemoteName)
@@ -1461,7 +1472,12 @@ Begin
     Args := ['pull', RemoteName]
   Else
     Args := ['pull', RemoteName, Branch];
-  Result := RunGit(Args, OutputText, ExitCode);
+  FAllowPrompt := True;
+  Try
+    Result := RunGit(Args, OutputText, ExitCode);
+  Finally
+    FAllowPrompt := False;
+  End;
   BuildTransferSummary('Pull', RemoteName, OutputText, Summary);
   If Result Then
     EmitWorkingTreeChanged
@@ -1485,7 +1501,12 @@ Begin
     Args := ['push', RemoteName]
   Else
     Args := ['push', RemoteName, Branch];
-  Result := RunGit(Args, OutputText, ExitCode);
+  FAllowPrompt := True;
+  Try
+    Result := RunGit(Args, OutputText, ExitCode);
+  Finally
+    FAllowPrompt := False;
+  End;
   BuildTransferSummary('Push', RemoteName, OutputText, Summary);
   If Not Result Then
     Summary.Message := 'Push failed: ' + FLastError;
@@ -1556,7 +1577,12 @@ Begin
   { git clone runs with cwd = parent; last arg is target folder name/path. }
   If ParentDir = '' Then
     ParentDir := GetCurrentDir;
-  Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
+  FAllowPrompt := True;
+  Try
+    Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
+  Finally
+    FAllowPrompt := False;
+  End;
   If Result Then
     Begin
       FRepoPath := Dest;
