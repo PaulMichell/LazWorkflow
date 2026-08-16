@@ -18,7 +18,7 @@ Interface
 Uses
   Classes, SysUtils, Types, Controls, Graphics, ExtCtrls, ComCtrls, StdCtrls, Forms,
   Menus, fgl, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
-  SynGutterLineOverview;
+  SynGutterLineOverview, GitJobRunner;
 
 Type
   { dvmEditorOnly: full-file red/green SynEdit only (Files tab). }
@@ -146,6 +146,8 @@ Type
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
     Procedure DoSelectionChanged;
+    Procedure ApplyPatchFinished(Job: TGitJob);
+    Function SubmitApplyPatch(Const Patch: String; Reverse: Boolean): Boolean;
     Procedure EditSpecialLineColors(Sender: TObject; Line: Integer; Var Special: Boolean;
       Var FG, BG: TColor);
     Procedure EditMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
@@ -610,6 +612,11 @@ End;
 
 Destructor TGitDiffView.Destroy;
 Begin
+  If Assigned(GitJobs) Then
+    Begin
+      GitJobs.DetachFinishedHandler(@ApplyPatchFinished);
+      GitJobs.CancelIfHandler(@ApplyPatchFinished);
+    End;
   CancelPendingScroll;
   Application.RemoveAsyncCalls(Self);
   UnhookEditorOptionsChanged;
@@ -2673,13 +2680,63 @@ Begin
   End;
 End;
 
+Function TGitDiffView.SubmitApplyPatch(Const Patch: String; Reverse: Boolean): Boolean;
+Var
+  Job: TGitJob;
+Begin
+  Result := False;
+  If (FRepoPath = '') Or (Trim(Patch) = '') Then
+    Exit;
+  If Not Assigned(GitJobs) Then
+    Begin
+      MessageDlg('Git job runner is not available.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  If GitJobs.Busy Then
+    Exit;
+  Job := TGitJob.Create(gjkApplyPatch);
+  Job.RepoPath := FRepoPath;
+  Job.PatchText := Patch;
+  Job.ReversePatch := Reverse;
+  If Reverse Then
+    Job.Caption := 'Unstaging selection…'
+  Else
+    Job.Caption := 'Staging selection…';
+  Job.OnFinished := @ApplyPatchFinished;
+  Result := GitJobs.Submit(Job);
+  If Not Result Then
+    MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.ApplyPatchFinished(Job: TGitJob);
+Begin
+  If Not IsAlive Or Not Assigned(Job) Then
+    Exit;
+  If Job.Cancelled Then
+    Exit;
+  If Not Job.Ok Then
+    Begin
+      If Job.ReversePatch Then
+        MessageDlg('Unstage selection failed: ' + Job.ErrorText, mtError, [mbOK], 0)
+      Else
+        MessageDlg('Stage selection failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+      Exit;
+    End;
+  If Job.ReversePatch Then
+    WorkflowLogger.Info('GitDiff', 'Unstaged selection in ' + FRepoPath)
+  Else
+    WorkflowLogger.Info('GitDiff', 'Staged selection in ' + FRepoPath);
+  ClearLineSelection(False);
+  DoStatusChanged;
+End;
+
 Function TGitDiffView.StageSelection: Boolean;
 Var
   FirstLine, LastLine: Integer;
   Patch: String;
 Begin
   Result := False;
-  If Not CanStageFromPreview Or Not Assigned(GitClient) Then
+  If Not CanStageFromPreview Then
     Exit;
   If FMode = dvmEditorOnly Then
     Begin
@@ -2713,16 +2770,7 @@ Begin
         mtInformation, [mbOK], 0);
       Exit;
     End;
-  GitClient.RepoPath := FRepoPath;
-  Result := GitClient.ApplyPatchToIndex(Patch, False);
-  If Result Then
-    Begin
-      WorkflowLogger.Info('GitDiff', 'Staged selection in ' + FRepoPath);
-      ClearLineSelection(False);
-      DoStatusChanged;
-    End
-  Else
-    MessageDlg('Stage selection failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  Result := SubmitApplyPatch(Patch, False);
 End;
 
 Function TGitDiffView.UnstageSelection: Boolean;
@@ -2731,7 +2779,7 @@ Var
   Patch: String;
 Begin
   Result := False;
-  If Not CanUnstageFromPreview Or Not Assigned(GitClient) Then
+  If Not CanUnstageFromPreview Then
     Exit;
   If FMode = dvmEditorOnly Then
     Begin
@@ -2765,16 +2813,7 @@ Begin
         mtInformation, [mbOK], 0);
       Exit;
     End;
-  GitClient.RepoPath := FRepoPath;
-  Result := GitClient.ApplyPatchToIndex(Patch, True);
-  If Result Then
-    Begin
-      WorkflowLogger.Info('GitDiff', 'Unstaged selection in ' + FRepoPath);
-      ClearLineSelection(False);
-      DoStatusChanged;
-    End
-  Else
-    MessageDlg('Unstage selection failed: ' + GitClient.LastError, mtError, [mbOK], 0);
+  Result := SubmitApplyPatch(Patch, True);
 End;
 
 Procedure TGitDiffView.StageSelectionButtonClick(Sender: TObject);

@@ -978,12 +978,21 @@ Begin
         Else
           MessageDlg('Create branch failed: ' + Job.ErrorText, mtError, [mbOK], 0);
       End;
-    gjkStagePaths, gjkUnstagePaths:
+    gjkStagePaths, gjkUnstagePaths, gjkRevertPaths, gjkAppendIgnore:
       Begin
         If Job.Cancelled Then
           Exit;
         If Not Job.Ok Then
-          MessageDlg(Job.Caption + ' failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+          MessageDlg(Job.Caption + ' failed: ' + Job.ErrorText, mtError, [mbOK], 0)
+        Else If Assigned(Job.Paths) Then
+          Case Job.Kind Of
+            gjkRevertPaths:
+              WorkflowLogger.Info('ManageRepository', Format('Reverted %d path(s)', [Job.Paths.Count]));
+            gjkAppendIgnore:
+              WorkflowLogger.Info('ManageRepository', Format('Ignored %d path(s)', [Job.Paths.Count]));
+          Else
+            { stage / unstage already logged by GitService when events publish }
+          End;
         RefreshFiles;
       End;
     gjkListStatus:
@@ -2362,28 +2371,27 @@ End;
 Procedure TManageRepositoryForm.RevertActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   Paths := CollectActiveSelectedPaths;
-  Try
-    If Paths.Count = 0 Then
-      Begin
-        MessageDlg('Select one or more files to revert.', mtInformation, [mbOK], 0);
-        Exit;
-      End;
-    If Not ConfirmPathAction('Revert files',
-      'Restore from the last commit (discard local changes for)', Paths) Then
+  If Paths.Count = 0 Then
+    Begin
+      Paths.Free;
+      MessageDlg('Select one or more files to revert.', mtInformation, [mbOK], 0);
       Exit;
-    GitClient.RepoPath := FRepoPath;
-    If Not GitClient.RevertPaths(Paths) Then
-      MessageDlg('Revert failed: ' + GitClient.LastError, mtError, [mbOK], 0)
-    Else
-      WorkflowLogger.Info('ManageRepository', Format('Reverted %d path(s)', [Paths.Count]));
-    RefreshFiles;
-  Finally
-    Paths.Free;
-  End;
+    End;
+  If Not ConfirmPathAction('Revert files',
+    'Restore from the last commit (discard local changes for)', Paths) Then
+    Begin
+      Paths.Free;
+      Exit;
+    End;
+  Job := TGitJob.Create(gjkRevertPaths);
+  Job.RepoPath := FRepoPath;
+  Job.TakePaths(Paths);
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.DeleteActionExecute(Sender: TObject);
@@ -2438,28 +2446,27 @@ End;
 Procedure TManageRepositoryForm.IgnoreActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
+  Job: TGitJob;
 Begin
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or FJobBusy Then
     Exit;
   Paths := CollectActiveSelectedPaths;
-  Try
-    If Paths.Count = 0 Then
-      Begin
-        MessageDlg('Select one or more files to ignore.', mtInformation, [mbOK], 0);
-        Exit;
-      End;
-    If Not ConfirmPathAction('Ignore files',
-      'Add to .gitignore', Paths) Then
+  If Paths.Count = 0 Then
+    Begin
+      Paths.Free;
+      MessageDlg('Select one or more files to ignore.', mtInformation, [mbOK], 0);
       Exit;
-    GitClient.RepoPath := FRepoPath;
-    If Not GitClient.AppendIgnorePatterns(Paths) Then
-      MessageDlg('Could not update .gitignore: ' + GitClient.LastError, mtError, [mbOK], 0)
-    Else
-      WorkflowLogger.Info('ManageRepository', Format('Ignored %d path(s)', [Paths.Count]));
-    RefreshFiles;
-  Finally
-    Paths.Free;
-  End;
+    End;
+  If Not ConfirmPathAction('Ignore files',
+    'Add to .gitignore', Paths) Then
+    Begin
+      Paths.Free;
+      Exit;
+    End;
+  Job := TGitJob.Create(gjkAppendIgnore);
+  Job.RepoPath := FRepoPath;
+  Job.TakePaths(Paths);
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.StageActionExecute(Sender: TObject);

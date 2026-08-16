@@ -29,6 +29,9 @@ Type
     gjkInit,
     gjkStagePaths,
     gjkUnstagePaths,
+    gjkRevertPaths,
+    gjkAppendIgnore,
+    gjkApplyPatch,
     gjkListStatus,
     gjkRepoProbe,
     gjkSuggestMessage
@@ -68,6 +71,8 @@ Type
     FDetailsText: String;
     FIndexOk: Boolean;
     FDetailsOk: Boolean;
+    FPatchText: String;
+    FReversePatch: Boolean;
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
@@ -101,6 +106,8 @@ Type
     Property DetailsText: String Read FDetailsText;
     Property IndexOk: Boolean Read FIndexOk;
     Property DetailsOk: Boolean Read FDetailsOk;
+    Property PatchText: String Read FPatchText Write FPatchText;
+    Property ReversePatch: Boolean Read FReversePatch Write FReversePatch;
   End;
 
   TGitJobBusyEvent = Procedure(Sender: TObject; IsBusy: Boolean; Const Caption: String) Of Object;
@@ -181,6 +188,9 @@ Begin
     gjkInit: Result := 'Initialising repository…';
     gjkStagePaths: Result := 'Staging…';
     gjkUnstagePaths: Result := 'Unstaging…';
+    gjkRevertPaths: Result := 'Reverting…';
+    gjkAppendIgnore: Result := 'Updating ignore list…';
+    gjkApplyPatch: Result := 'Applying selection…';
     gjkListStatus: Result := 'Refreshing files…';
     gjkRepoProbe: Result := 'Checking repository…';
     gjkSuggestMessage: Result := 'Suggesting commit message…';
@@ -220,6 +230,8 @@ Begin
   FDetailsText := '';
   FIndexOk := False;
   FDetailsOk := False;
+  FPatchText := '';
+  FReversePatch := False;
 End;
 
 Destructor TGitJob.Destroy;
@@ -587,6 +599,24 @@ Begin
     gjkUnstagePaths:
       Begin
         Job.FOk := Assigned(Job.Paths) And (Job.Paths.Count > 0) And Git.UnstagePaths(Job.Paths);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkRevertPaths:
+      Begin
+        Job.FOk := Assigned(Job.Paths) And (Job.Paths.Count > 0) And Git.RevertPaths(Job.Paths);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkAppendIgnore:
+      Begin
+        Job.FOk := Assigned(Job.Paths) And (Job.Paths.Count > 0) And Git.AppendIgnorePatterns(Job.Paths);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkApplyPatch:
+      Begin
+        Job.FOk := Git.ApplyPatchToIndex(Job.PatchText, Job.ReversePatch);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
