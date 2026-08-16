@@ -2017,13 +2017,14 @@ End;
 
 Procedure TManageRepositoryForm.ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
 Var
-  AllFiles, StatusMap, FullyStaged: TStringList;
+  AllFiles, StatusMap, FullyStaged, Tracked: TStringList;
   I: Integer;
   FullPath, Rel, Root, StatusText: String;
   Idx: Integer;
   EntryStatus: String;
   WantClean: Boolean;
 Begin
+  Tracked := Nil;
   If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
     Exit;
 
@@ -2069,12 +2070,17 @@ Begin
             End;
         End;
 
-      { Full-tree scan only when the user asked to show clean files (item 6 still open). }
+      { Tracked files via git ls-files, not a recursive disk walk of build trees. }
       WantClean := Assigned(CleanCheck) And CleanCheck.Checked;
       AllFiles.Sorted := True;
       AllFiles.Duplicates := dupIgnore;
-      If WantClean Then
-        FindAllFiles(AllFiles, FRepoPath, '*', True)
+      If WantClean And Assigned(GitClient) Then
+        Begin
+          GitClient.RepoPath := FRepoPath;
+          If GitClient.ListTrackedFiles(Tracked) Then
+            AllFiles.AddStrings(Tracked);
+          Tracked.Free;
+        End
       Else
         { Still walk status paths so deleted/untracked/modified appear without FindAllFiles. }
         For I := 0 To StatusMap.Count - 1 Do

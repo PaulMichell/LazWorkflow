@@ -71,6 +71,8 @@ Type
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
     Function ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean = False;
       IncludeIgnored: Boolean = False): Boolean;
+    { Tracked paths (ls-files -z). Caller frees Paths. }
+    Function ListTrackedFiles(Out Paths: TStringList): Boolean;
     Function StagePaths(Paths: TStrings): Boolean;
     Function UnstagePaths(Paths: TStrings): Boolean;
     Function StageAll: Boolean;
@@ -701,6 +703,29 @@ Begin
       Entries[Count - 1].OldPath := OldPath;
       Entries[Count - 1].IndexStatus := X;
       Entries[Count - 1].WorkTreeStatus := Y;
+    End;
+End;
+
+Function TGitService.ListTrackedFiles(Out Paths: TStringList): Boolean;
+Var
+  Raw, Rel, Full: String;
+  ExitCode, Cursor: Integer;
+Begin
+  Paths := TStringList.Create;
+  Paths.Sorted := True;
+  Paths.Duplicates := dupIgnore;
+  Result := RunGit(['-c', 'core.quotePath=false', 'ls-files', '-z'], Raw, ExitCode);
+  If Not Result Then
+    Exit;
+  Cursor := 1;
+  While Cursor <= Length(Raw) Do
+    Begin
+      Rel := NextNulField(Raw, Cursor);
+      If Rel = '' Then
+        Continue;
+      Full := WorkingTreeFullPath(Rel);
+      If Full <> '' Then
+        Paths.Add(Full);
     End;
 End;
 
