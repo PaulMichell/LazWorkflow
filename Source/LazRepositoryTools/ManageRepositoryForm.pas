@@ -230,7 +230,7 @@ Type
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
     Procedure BindRepository(Const StartPath: String = '');
-    Procedure SetRepository(Const ARepoPath: String);
+    Procedure SetRepository(Const ARepoPath: String; ForceReload: Boolean = False);
     Procedure ApplyConfig;
     Procedure ManualRefresh;
     Property RepoPath: String Read FRepoPath;
@@ -655,7 +655,7 @@ Begin
     Exit;
   WorkflowLogger.Info('ManageRepository', 'Manual refresh');
   If FRepoPath <> '' Then
-    SetRepository(FRepoPath)
+    SetRepository(FRepoPath, True)
   Else
     BindRepository;
 End;
@@ -2875,10 +2875,23 @@ Begin
   SetRepository(Found);
 End;
 
-Procedure TManageRepositoryForm.SetRepository(Const ARepoPath: String);
+Procedure TManageRepositoryForm.SetRepository(Const ARepoPath: String; ForceReload: Boolean);
+Var
+  NewPath: String;
 Begin
   If csDestroying in ComponentState Then
     Exit;
+  NewPath := ARepoPath;
+  If NewPath <> '' Then
+    NewPath := ExcludeTrailingPathDelimiter(ExpandFileName(NewPath));
+  If (Not ForceReload) And (FRepoPath <> '') And (CompareFilenames(NewPath, FRepoPath) = 0) Then
+    Begin
+      RefreshRepositoryInfo;
+      UpdateStatus;
+      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+        RefreshFiles;
+      Exit;
+    End;
   { Tear down workers and pending UI work before swapping repo identity. }
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
@@ -2886,7 +2899,7 @@ Begin
   StopIndexThread;
   If Assigned(DiffView) Then
     DiffView.Clear;
-  FRepoPath := ARepoPath;
+  FRepoPath := NewPath;
   FLastHeadAge := -1;
   FLastIndexAge := -1;
   FLastProbeAt := 0;
@@ -2896,7 +2909,7 @@ Begin
   If Assigned(GraphScrollBar) Then
     GraphScrollBar.Position := 0;
   If Assigned(GitClient) Then
-    GitClient.RepoPath := ARepoPath;
+    GitClient.RepoPath := NewPath;
   RefreshRepositoryInfo;
   UpdateScrollRange;
   UpdateStatus;
@@ -2917,7 +2930,11 @@ Begin
   If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
-    BindRepository(FRepoPath);
+    Begin
+      RefreshRepositoryInfo;
+      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+        RefreshFiles;
+    End;
 End;
 
 Procedure TManageRepositoryForm.WorkingTreeChanged(Const RepoPath: String);
@@ -2939,7 +2956,7 @@ Begin
   If FRemoteOpBusy Or FJobBusy Then
     Exit;
   If SameText(RepoPath, FRepoPath) Then
-    BindRepository(FRepoPath);
+    SetRepository(FRepoPath, True);
 End;
 
 Procedure TManageRepositoryForm.RemoteUpdated(Const RepoPath: String; Const RemoteName: String);

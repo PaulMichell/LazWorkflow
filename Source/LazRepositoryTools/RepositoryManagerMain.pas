@@ -22,7 +22,7 @@ Var
 Implementation
 
 Uses
-  Dialogs, WorkflowLog, WorkflowEvents, ManageRepositoryForm, GitService, GitConfig,
+  Dialogs, WorkflowLog, ManageRepositoryForm, GitService, GitConfig,
   GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner;
 
 Type
@@ -105,7 +105,6 @@ Begin
         Begin
           GitClient.RepoPath := RepoPath;
           WorkflowLogger.Info('GitManager', 'Project opened – repository: ' + RepoPath);
-          WorkflowEventBus.NotifyRepositoryStateChanged(RepoPath, grsUnknown);
         End
       Else
         Begin
