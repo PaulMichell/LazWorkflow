@@ -897,7 +897,17 @@ Begin
         If Job.Ok Then
           Begin
             MessageDlg(Msg, mtInformation, [mbOK], 0);
-            ManualRefresh;
+            If Job.Kind = gjkPush Then
+              Begin
+                { Push does not change history; skip rev-list teardown. }
+                RefreshRepositoryInfo;
+                If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+                  RefreshFilesList;
+                If Assigned(StatusFooter) Then
+                  StatusFooter.SetRightText('Push complete');
+              End
+            Else
+              ManualRefresh;
           End
         Else
           MessageDlg(Msg, mtError, [mbOK], 0);
