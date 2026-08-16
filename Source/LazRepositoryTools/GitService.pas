@@ -40,6 +40,8 @@ Type
     FProcessLock: TRTLCriticalSection;
     FTimeoutMs: Integer;
     FAllowPrompt: Boolean;
+    Function BlobByteSize(Const Spec: String): Int64;
+    Function DiffContextLines(Const Path, Sha: String; Staged: Boolean): Integer;
     Procedure SetActiveProcess(Proc: TProcess);
     Procedure ClearActiveProcess;
     Function RunTimedOut(StartTick: QWord): Boolean;
@@ -1151,25 +1153,67 @@ Begin
     End;
 End;
 
+Function TGitService.BlobByteSize(Const Spec: String): Int64;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := 0;
+  If Spec = '' Then
+    Exit;
+  If RunGit(['cat-file', '-s', Spec], OutputText, ExitCode) Then
+    Result := StrToInt64Def(Trim(OutputText), 0);
+End;
+
+Function TGitService.DiffContextLines(Const Path, Sha: String; Staged: Boolean): Integer;
+Var
+  Spec: String;
+  ByteSize: Int64;
+  FullPath: String;
+Const
+  EmbedLimit = 262144;
+  NormalContext = 50;
+  LargeContext = 3;
+Begin
+  Result := NormalContext;
+  ByteSize := 0;
+  If Sha <> '' Then
+    Begin
+      Spec := Sha + ':' + StringReplace(Path, '\', '/', [rfReplaceAll]);
+      ByteSize := BlobByteSize(Spec);
+    End
+  Else If Staged Then
+    ByteSize := BlobByteSize(':' + StringReplace(Path, '\', '/', [rfReplaceAll]))
+  Else
+    Begin
+      FullPath := WorkingTreeFullPath(Path);
+      If (FullPath <> '') And FileExists(FullPath) Then
+        ByteSize := FileSizeUtf8(FullPath);
+    End;
+  If ByteSize > EmbedLimit Then
+    Result := LargeContext;
+End;
+
 Function TGitService.DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
 Var
   ExitCode: Integer;
+  ContextFlag: String;
 Begin
   DiffText := '';
   Result := False;
   If Path = '' Then
     Exit;
-  { Large unified context embeds the whole file with +/- markers (History-style). }
+  ContextFlag := '-U' + IntToStr(DiffContextLines(Path, '', Staged));
   If Staged Then
-    Result := RunGit(['diff', '--cached', '-U100000', '--', Path], DiffText, ExitCode)
+    Result := RunGit(['diff', '--cached', ContextFlag, '--', Path], DiffText, ExitCode)
   Else
     Begin
-      Result := RunGit(['diff', '-U100000', '--', Path], DiffText, ExitCode);
+      Result := RunGit(['diff', ContextFlag, '--', Path], DiffText, ExitCode);
       { Empty worktree diff: only synthesise "new file" for untracked paths.
         Clean tracked files must stay empty so the UI can show plain content. }
       If Result And (Trim(DiffText) = '') And (Not IsPathTracked(Path)) Then
         Begin
-          Result := RunGit(['diff', '--no-index', '-U100000', '--',
+          Result := RunGit(['diff', '--no-index', ContextFlag, '--',
             {$IFDEF WINDOWS}'NUL'{$ELSE}'/dev/null'{$ENDIF}, Path], DiffText, ExitCode);
           { git --no-index returns 1 when files differ; treat non-empty output as success. }
           If (Not Result) And (Trim(DiffText) <> '') Then
@@ -1741,8 +1785,8 @@ Begin
   Result := False;
   If (Sha = '') Or (Path = '') Then
     Exit;
-  { Large unified context embeds the whole file with +/- change markers. }
-  Result := RunGit(['show', '-U100000', '--format=format:', '--find-renames', Sha, '--', Path], DiffText, ExitCode);
+  Result := RunGit(['show', '-U' + IntToStr(DiffContextLines(Path, Sha, False)),
+    '--format=format:', '--find-renames', Sha, '--', Path], DiffText, ExitCode);
 End;
 
 Function TGitService.Checkout(Const RefName: String): Boolean;
