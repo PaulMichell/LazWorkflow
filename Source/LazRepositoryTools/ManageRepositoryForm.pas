@@ -154,6 +154,7 @@ Type
     FStagedPaths: TStringList;
     FInListSelChange: Boolean;
     FStatusGen: Integer;
+    FStatusJobPending: Boolean;
     FLastPorcelain: String;
     Procedure InitLaneColors;
     Procedure DetailTimerTimer(Sender: TObject);
@@ -181,6 +182,7 @@ Type
     Function SubmitGitJob(Job: TGitJob): Boolean;
     Procedure ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
     Procedure RefreshFilesListAsync;
+    Procedure SubmitFilesStatus;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
     { Soft cancel: Terminate + bump gen (no WaitFor). Hard dispose used on form Destroy only. }
@@ -488,6 +490,7 @@ Begin
   FStagedPaths := TStringList.Create;
   FInListSelChange := False;
   FStatusGen := 0;
+  FStatusJobPending := False;
   FLastPorcelain := '';
   FModel := TGitGraphModel.Create;
   InitLaneColors;
@@ -639,8 +642,6 @@ Begin
     SetRepository(FRepoPath)
   Else
     BindRepository;
-  If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-    RefreshFilesList;
 End;
 
 Procedure TManageRepositoryForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -892,8 +893,6 @@ Begin
           Begin
             MessageDlg(Msg, mtInformation, [mbOK], 0);
             ManualRefresh;
-            If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-              RefreshFilesListAsync;
           End
         Else
           MessageDlg(Msg, mtError, [mbOK], 0);
@@ -919,10 +918,7 @@ Begin
             StartRemoteOp(rokPush);
           End
         Else
-          Begin
-            RefreshFilesListAsync;
-            ManualRefresh;
-          End;
+          ManualRefresh;
       End;
     gjkCheckout:
       Begin
@@ -956,10 +952,15 @@ Begin
       End;
     gjkListStatus:
       Begin
+        FStatusJobPending := False;
         If Job.Cancelled Then
           Exit;
         If (Job.Tag <> FStatusGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
-          Exit;
+          Begin
+            If (FRepoPath <> '') And DirectoryExists(FRepoPath) Then
+              SubmitFilesStatus;
+            Exit;
+          End;
         If Job.Ok Then
           ApplyFilesFromStatus(Job.StatusEntries)
         Else
@@ -1748,13 +1749,24 @@ Begin
       Exit;
     End;
   Inc(FStatusGen);
+  If FStatusJobPending Then
+    Exit;
+  SubmitFilesStatus;
+End;
+
+Procedure TManageRepositoryForm.SubmitFilesStatus;
+Var
+  Job: TGitJob;
+Begin
   Job := TGitJob.Create(gjkListStatus);
   Job.RepoPath := FRepoPath;
   Job.Caption := 'Refreshing files…';
   Job.Tag := FStatusGen;
   Job.IncludeUntracked := Assigned(UntrackedCheck) And UntrackedCheck.Checked;
   Job.IncludeIgnored := Assigned(IgnoredCheck) And IgnoredCheck.Checked;
-  SubmitGitJob(Job);
+  FStatusJobPending := True;
+  If Not SubmitGitJob(Job) Then
+    FStatusJobPending := False;
 End;
 
 Procedure TManageRepositoryForm.ApplyFilesFromStatus(Const Entries: TGitStatusEntryArray);
