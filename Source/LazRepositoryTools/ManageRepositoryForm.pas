@@ -768,7 +768,7 @@ Begin
           Exit;
         If Job.Ok Then
           Begin
-            MessageDlg('Created branch "' + Job.MessageText + '" at ' + Copy(Job.RefName, 1, 7),
+            MessageDlg('Created branch "' + Job.BranchName + '" at ' + Copy(Job.RefName, 1, 7),
               mtInformation, [mbOK], 0);
             ManualRefresh;
           End
@@ -828,11 +828,11 @@ Begin
           End;
         If Assigned(MessageMemo) Then
           Begin
-            MessageMemo.Text := Job.MessageText;
+            MessageMemo.Text := Job.CommitMessage;
             UpdateCommitEnabled;
           End;
         WorkflowLogger.Info('ManageRepository', 'Suggested commit message (' +
-          IntToStr(Length(Job.MessageText)) + ' chars)');
+          IntToStr(Length(Job.CommitMessage)) + ' chars)');
       End;
     gjkRepoProbe:
       Begin
@@ -2443,7 +2443,7 @@ Begin
   FPushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
   Job := TGitJob.Create(gjkCommit);
   Job.RepoPath := FRepoPath;
-  Job.MessageText := Msg;
+  Job.CommitMessage := Msg;
   SubmitGitJob(Job);
 End;
 
@@ -2548,7 +2548,7 @@ Begin
     Exit;
   Job := TGitJob.Create(gjkCreateBranch);
   Job.RepoPath := FRepoPath;
-  Job.MessageText := BranchName;
+  Job.BranchName := BranchName;
   Job.RefName := Sha;
   SubmitGitJob(Job);
 End;

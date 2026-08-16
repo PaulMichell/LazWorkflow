@@ -49,7 +49,8 @@ Type
     FId: Integer;
     FRepoPath: String;
     FCaption: String;
-    FMessageText: String;
+    FCommitMessage: String;
+    FBranchName: String;
     FRefName: String;
     FUrl: String;
     FTargetDir: String;
@@ -84,7 +85,8 @@ Type
     Property Id: Integer Read FId Write FId;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property Caption: String Read FCaption Write FCaption;
-    Property MessageText: String Read FMessageText Write FMessageText;
+    Property CommitMessage: String Read FCommitMessage Write FCommitMessage;
+    Property BranchName: String Read FBranchName Write FBranchName;
     Property RefName: String Read FRefName Write FRefName;
     Property Url: String Read FUrl Write FUrl;
     Property TargetDir: String Read FTargetDir Write FTargetDir;
@@ -210,7 +212,8 @@ Begin
   FId := 0;
   FRepoPath := '';
   FCaption := GitJobKindCaption(AKind);
-  FMessageText := '';
+  FCommitMessage := '';
+  FBranchName := '';
   FRefName := '';
   FUrl := '';
   FTargetDir := '';
@@ -565,7 +568,7 @@ Begin
       End;
     gjkCommit:
       Begin
-        Job.FOk := Git.Commit(Job.MessageText, NewSha);
+        Job.FOk := Git.Commit(Job.CommitMessage, NewSha);
         Job.FResultSha := NewSha;
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
@@ -578,7 +581,7 @@ Begin
       End;
     gjkCreateBranch:
       Begin
-        Job.FOk := Git.CreateBranch(Job.MessageText, Job.RefName);
+        Job.FOk := Git.CreateBranch(Job.BranchName, Job.RefName);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
@@ -653,7 +656,7 @@ Begin
             Git.StatusSummaryForCommit(StatusText);
             Job.FOk := SuggestCommitMessageFunc(DiffText, StatusText, Suggested, ErrorText);
             If Job.FOk Then
-              Job.FMessageText := Suggested
+              Job.FCommitMessage := Suggested
             Else If ErrorText <> '' Then
               Job.FErrorText := ErrorText
             Else
