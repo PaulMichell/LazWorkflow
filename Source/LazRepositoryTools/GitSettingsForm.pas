@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  Spin, ButtonPanel;
+  Spin, ButtonPanel, SpellCheckerSettingsFrame;
 
 Type
   TGitSettingsForm = Class(TForm)
@@ -35,6 +35,7 @@ Type
     GraphFontSizeLabel: TLabel;
     GraphFontSizeSpin: TSpinEdit;
     GraphFontPointsLabel: TLabel;
+    SpellFrame: TSpellCheckerSettingsFrame;
     ButtonPanel: TButtonPanel;
     Procedure AutoRefreshCheckChange(Sender: TObject);
     Procedure GraphFontChooseClick(Sender: TObject);
@@ -177,6 +178,8 @@ Begin
     End;
   SyncGraphFontNameDisplay;
   AutoRefreshCheckChange(Nil);
+  If Assigned(SpellFrame) Then
+    SpellFrame.LoadFromConfig;
 
   FRepoPath := ResolveSettingsRepoPath;
   FHasRepo := FRepoPath <> '';
@@ -230,6 +233,8 @@ Begin
       GitManagerConfig.GraphFontSize := GraphFontSizeSpin.Value;
       GitManagerConfig.Save;
     End;
+  If Assigned(SpellFrame) Then
+    SpellFrame.SaveToConfig;
 
   If Not FHasRepo Or (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;

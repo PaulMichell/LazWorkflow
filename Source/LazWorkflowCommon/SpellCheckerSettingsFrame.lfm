@@ -1,0 +1,109 @@
+object SpellCheckerSettingsFrame: TSpellCheckerSettingsFrame
+  Left = 0
+  Height = 210
+  Top = 0
+  Width = 496
+  ClientHeight = 210
+  ClientWidth = 496
+  TabOrder = 0
+  DesignLeft = 300
+  DesignTop = 200
+  object SpellGroup: TGroupBox
+    Left = 0
+    Height = 210
+    Top = 0
+    Width = 496
+    Align = alClient
+    Caption = 'Spell checking'
+    ClientHeight = 183
+    ClientWidth = 492
+    TabOrder = 0
+    object EngineLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 12
+      Width = 48
+      Caption = 'Engine:'
+      ParentColor = False
+    end
+    object EngineCombo: TComboBox
+      Left = 120
+      Height = 32
+      Top = 6
+      Width = 360
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      ItemIndex = 1
+      Items.Strings = (
+        'None'
+        'Auto (Hunspell, then ASpell)'
+        'Hunspell (OpenOffice)'
+        'ASpell'
+      )
+      OnChange = EngineComboChange
+      Style = csDropDownList
+      TabOrder = 0
+      Text = 'Auto (Hunspell, then ASpell)'
+    end
+    object LanguageLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 50
+      Width = 66
+      Caption = 'Language:'
+      ParentColor = False
+    end
+    object LanguageCombo: TComboBox
+      Left = 120
+      Height = 32
+      Top = 44
+      Width = 360
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      TabOrder = 1
+    end
+    object LibraryLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 88
+      Width = 48
+      Caption = 'Library:'
+      ParentColor = False
+    end
+    object LibraryEdit: TEdit
+      Left = 120
+      Height = 32
+      Top = 82
+      Width = 360
+      Anchors = [akTop, akLeft, akRight]
+      TabOrder = 2
+    end
+    object DictDirLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 126
+      Width = 92
+      Caption = 'Dictionary dir:'
+      ParentColor = False
+    end
+    object DictDirEdit: TEdit
+      Left = 120
+      Height = 32
+      Top = 120
+      Width = 360
+      Anchors = [akTop, akLeft, akRight]
+      TabOrder = 3
+    end
+    object StatusLabel: TLabel
+      Left = 12
+      Height = 18
+      Top = 158
+      Width = 468
+      Anchors = [akTop, akLeft, akRight]
+      Caption = 'No engine loaded — memo only'
+      Font.Color = clGrayText
+      ParentColor = False
+      ParentFont = False
+    end
+  end
+end

@@ -22,7 +22,7 @@ Implementation
 
 Uses
   WorkflowLog, WorkflowEvents, ProjectAssistantForm, AssistantService, AssistantSettingsForm, AssistantMarkdownForm,
-  AssistantConfig, IDEMsgIntf, IDEExternToolIntf;
+  AssistantConfig, IDEMsgIntf, IDEExternToolIntf, SpellCheckerConfig;
 
 Type
   { Context menu on IDE Messages: Ask Assistant to fix the selected line. }
@@ -227,6 +227,14 @@ Begin
 
   If AssistantIDEHooks = Nil Then
     AssistantIDEHooks := TAssistantIDEHooks.Create;
+
+  If Assigned(LazarusIDE) Then
+    Try
+      InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('ProjectAssistant', 'Spell config load failed: ' + E.Message);
+    End;
 
   SuggestCommitMessageFunc := @SuggestCommitMessageHandler;
 

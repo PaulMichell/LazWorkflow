@@ -1,0 +1,39 @@
+object SpellCheckerSettingsForm: TSpellCheckerSettingsForm
+  Left = 280
+  Height = 290
+  Top = 180
+  Width = 520
+  BorderStyle = bsDialog
+  Caption = 'Spell checking'
+  ClientHeight = 290
+  ClientWidth = 520
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  Position = poScreenCenter
+  LCLVersion = '4.99.0.0'
+  inline SpellFrame: TSpellCheckerSettingsFrame
+    Left = 8
+    Height = 238
+    Top = 8
+    Width = 504
+    ClientHeight = 238
+    ClientWidth = 504
+    TabOrder = 0
+  end
+  object ButtonPanel: TButtonPanel
+    Left = 6
+    Height = 36
+    Top = 248
+    Width = 508
+    OKButton.Name = 'OKButton'
+    OKButton.DefaultCaption = True
+    HelpButton.Name = 'HelpButton'
+    HelpButton.DefaultCaption = True
+    CloseButton.Name = 'CloseButton'
+    CloseButton.DefaultCaption = True
+    CancelButton.Name = 'CancelButton'
+    CancelButton.DefaultCaption = True
+    TabOrder = 1
+    ShowButtons = [pbOK, pbCancel]
+  end
+end

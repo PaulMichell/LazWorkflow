@@ -18,10 +18,11 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  AssistantMain;
+  AssistantMain, SpellMemo, SpellCheckerSettingsFrame;
 
 Procedure Register;
 Begin
+  RegisterNoIcon([TSpellMemo, TSpellCheckerSettingsFrame]);
   RegisterAssistantTools;
 End;
 

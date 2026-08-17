@@ -297,7 +297,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Caption = 'Commit message'
             ParentColor = False
           end
-          object MessageEditor: TSynEdit
+          object MessageEditor: TSpellMemo
             Left = 4
             Height = 78
             Top = 26
@@ -306,15 +306,12 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
             BorderSpacing.Right = 4
-            ParentFont = False
-            ScrollBars = ssAutoBoth
+            ParentFont = True
+            ScrollBars = ssAutoVertical
             TabOrder = 0
-            ExtraCharSpacing = 0
-            ExtraLineSpacing = 0
-            Gutter.Visible = False
-            RightGutter.Visible = False
-            RightEdge = 0
+            WantReturns = True
             WantTabs = False
+            WordWrap = True
           end
           object CommitActionsPanel: TPanel
             Left = 0

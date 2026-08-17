@@ -196,6 +196,16 @@ object GitSettingsForm: TGitSettingsForm
         ParentColor = False
       end
     end
+    inline SpellFrame: TSpellCheckerSettingsFrame
+      Left = 12
+      Height = 210
+      Top = 495
+      Width = 496
+      Anchors = [akTop, akLeft, akRight]
+      ClientHeight = 210
+      ClientWidth = 496
+      TabOrder = 3
+    end
   end
   object ButtonPanel: TButtonPanel
     Left = 6

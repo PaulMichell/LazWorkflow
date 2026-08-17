@@ -179,6 +179,16 @@ object AssistantSettingsForm: TAssistantSettingsForm
     ParentFont = False
     WordWrap = True
   end
+  object SpellButton: TButton
+    Left = 16
+    Height = 28
+    Top = 516
+    Width = 150
+    Anchors = [akLeft, akBottom]
+    Caption = 'Spell checking…'
+    OnClick = SpellButtonClick
+    TabOrder = 10
+  end
   object ButtonPanel: TButtonPanel
     Left = 6
     Height = 34

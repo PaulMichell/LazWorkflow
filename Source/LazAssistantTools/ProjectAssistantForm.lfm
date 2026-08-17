@@ -119,7 +119,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     ClientHeight = 75
     ClientWidth = 960
     TabOrder = 1
-    object InputMemo: TMemo
+    object InputMemo: TSpellMemo
       Left = 6
       Height = 63
       Top = 6
@@ -128,6 +128,8 @@ object ProjectAssistantForm: TProjectAssistantForm
       BorderSpacing.Around = 6
       ScrollBars = ssAutoVertical
       TabOrder = 0
+      WantTabs = False
+      WordWrap = True
     end
   end
   object ModeBar: TPanel

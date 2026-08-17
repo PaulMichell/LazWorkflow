@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, CompOptsIntf,
+  Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan;
 
 Type
@@ -78,7 +78,7 @@ Type
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
-    InputMemo: TMemo;
+    InputMemo: TSpellMemo;
     InputPopup: TPopupMenu;
     InputCutItem: TMenuItem;
     InputCopyItem: TMenuItem;

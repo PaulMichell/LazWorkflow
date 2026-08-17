@@ -18,12 +18,12 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  RepositoryManagerMain, StatusFooterFrame, GitDiffView;
+  RepositoryManagerMain, StatusFooterFrame, GitDiffView, SpellMemo, SpellCheckerSettingsFrame;
 
 Procedure Register;
 Begin
   { Frames used as inline children must be registered for the form designer. }
-  RegisterNoIcon([TStatusFooterFrame, TGitDiffView]);
+  RegisterNoIcon([TStatusFooterFrame, TGitDiffView, TSpellMemo, TSpellCheckerSettingsFrame]);
   RegisterGitManager;
 End;
 

@@ -37,6 +37,7 @@ Type
     SignInButton: TButton;
     SignOutButton: TButton;
     PasteCodeButton: TButton;
+    SpellButton: TButton;
     ButtonPanel: TButtonPanel;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
@@ -44,6 +45,7 @@ Type
     Procedure SignOutButtonClick(Sender: TObject);
     Procedure PasteCodeButtonClick(Sender: TObject);
     Procedure RefreshModelsButtonClick(Sender: TObject);
+    Procedure SpellButtonClick(Sender: TObject);
     Procedure EnsureExtraControls;
   Public
     Procedure LoadFromConfig;
@@ -60,7 +62,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, WorkflowLog, LCLIntf;
+  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, WorkflowLog, LCLIntf,
+  SpellCheckerSettingsForm;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -403,6 +406,11 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.SetEndpoint(Trim(ApiBaseEdit.Text), AssistantClient.Model);
   PopulateModels(True);
+End;
+
+Procedure TAssistantSettingsForm.SpellButtonClick(Sender: TObject);
+Begin
+  ShowSpellCheckerSettingsDialog;
 End;
 
 Procedure TAssistantSettingsForm.SignInButtonClick(Sender: TObject);

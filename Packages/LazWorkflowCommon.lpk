@@ -18,7 +18,7 @@
     <Description Value="Shared foundation (event bus, logging, UI helpers) for LazRepositoryTools and LazAssistantTools"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="4">
+    <Files Count="16">
       <Item1>
         <Filename Value="../Source/LazWorkflowCommon/WorkflowEvents.pas"/>
         <UnitName Value="WorkflowEvents"/>
@@ -36,11 +36,62 @@
         <Filename Value="../Source/LazWorkflowCommon/StatusFooterFrame.lfm"/>
         <FileType Value="FormResource"/>
       </Item4>
+      <Item5>
+        <Filename Value="../Source/LazWorkflowCommon/SpellEngine.pas"/>
+        <UnitName Value="SpellEngine"/>
+      </Item5>
+      <Item6>
+        <Filename Value="../Source/LazWorkflowCommon/SpellEngineHunspell.pas"/>
+        <UnitName Value="SpellEngineHunspell"/>
+      </Item6>
+      <Item7>
+        <Filename Value="../Source/LazWorkflowCommon/SpellEngineAspell.pas"/>
+        <UnitName Value="SpellEngineAspell"/>
+      </Item7>
+      <Item8>
+        <Filename Value="../Source/LazWorkflowCommon/SpellWordBreaker.pas"/>
+        <UnitName Value="SpellWordBreaker"/>
+      </Item8>
+      <Item9>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerOptions.pas"/>
+        <UnitName Value="SpellCheckerOptions"/>
+      </Item9>
+      <Item10>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerConfig.pas"/>
+        <UnitName Value="SpellCheckerConfig"/>
+      </Item10>
+      <Item11>
+        <Filename Value="../Source/LazWorkflowCommon/SpellMemoMarkup.pas"/>
+        <UnitName Value="SpellMemoMarkup"/>
+      </Item11>
+      <Item12>
+        <Filename Value="../Source/LazWorkflowCommon/SpellMemo.pas"/>
+        <UnitName Value="SpellMemo"/>
+      </Item12>
+      <Item13>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerSettingsFrame.pas"/>
+        <UnitName Value="SpellCheckerSettingsFrame"/>
+      </Item13>
+      <Item14>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerSettingsFrame.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item14>
+      <Item15>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerSettingsForm.pas"/>
+        <UnitName Value="SpellCheckerSettingsForm"/>
+      </Item15>
+      <Item16>
+        <Filename Value="../Source/LazWorkflowCommon/SpellCheckerSettingsForm.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item16>
     </Files>
-    <RequiredPkgs Count="1">
+    <RequiredPkgs Count="2">
       <Item1>
-        <PackageName Value="LCL"/>
+        <PackageName Value="LazUtils"/>
       </Item1>
+      <Item2>
+        <PackageName Value="LCL"/>
+      </Item2>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>

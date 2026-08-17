@@ -15,7 +15,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, WorkflowEvents, StatusFooterFrame,
+  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SpellMemo, WorkflowEvents, StatusFooterFrame,
   GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryFiles;
 
 Type
@@ -71,7 +71,7 @@ Type
     FilesRightPanel: TPanel;
     CommitPanel: TPanel;
     MessageLabel: TLabel;
-    MessageEditor: TSynEdit;
+    MessageEditor: TSpellMemo;
     CommitActionsPanel: TPanel;
     SuggestButton: TButton;
     CommitButton: TButton;
@@ -224,57 +224,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, LazIDEIntf, Laz2_XMLCfg, SrcEditorIntf, SynEditTypes,
-  SynEditWrappedView, SynSpellCheckPlugin, SynSpellDictionary, LazEditTextAttributes;
-
-Function FindSourceEditorSpellDictionary: TSynSpellDictionary;
-Var
-  SourceEdit: TSourceEditorInterface;
-  Syn: TSynEdit;
-  Index: Integer;
-Begin
-  { The design package keeps one ASpell instance, already loaded with the user's
-    personal word list. Reuse it so commit messages match the Source Editor. }
-  Result := Nil;
-  If Not Assigned(SourceEditorManagerIntf) Then
-    Exit;
-  SourceEdit := SourceEditorManagerIntf.ActiveEditor;
-  If Not Assigned(SourceEdit) And (SourceEditorManagerIntf.SourceEditorCount > 0) Then
-    SourceEdit := SourceEditorManagerIntf.SourceEditors[0];
-  If Not Assigned(SourceEdit) Or Not (SourceEdit.EditorControl Is TSynEdit) Then
-    Exit;
-  Syn := TSynEdit(SourceEdit.EditorControl);
-  For Index := 0 To Syn.PluginCount - 1 Do
-    If Syn.Plugin[Index] Is TSynCustomPluginSpellCheck Then
-      Exit(TSynCustomPluginSpellCheck(Syn.Plugin[Index]).SynSpellDict);
-End;
-
-Procedure ApplyIDESpellDictionaryOptions(Dict: TSynSpellDictionaryASpell);
-Var
-  ConfFile: String;
-  XML: TRttiXMLConfig;
-Begin
-  { SpellCheckOptions.xml is written by SynEditSpellCheckerDsgn. Copy ASpell
-    settings (personal file, language, library, dict dir) without depending on
-    that design-time package. }
-  If Not Assigned(Dict) Or Not Assigned(LazarusIDE) Then
-    Exit;
-  ConfFile := AppendPathDelim(LazarusIDE.GetPrimaryConfigPath) + 'SpellCheckOptions.xml';
-  If Not FileExistsUTF8(ConfFile) Then
-    Exit;
-  Try
-    XML := TRttiXMLConfig.Create(ConfFile);
-    Try
-      XML.CheckPropertyDefault := True;
-      XML.ReadObject('SpellOpts/ASpellOpts/', Dict);
-    Finally
-      XML.Free;
-    End;
-  Except
-    On E: Exception Do
-      WorkflowLogger.Warning('ManageRepository', 'Spell options: ' + E.Message);
-  End;
-End;
+  DateUtils, Math, LazFileUtils, SynEdit;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -430,59 +380,13 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.ConfigureCommitMessageEditor;
-Var
-  SpellPlugin: TSynPluginSpellCheck;
-  SpellDict: TSynSpellDictionary;
-  OwnedDict: TSynSpellDictionaryASpell;
 Begin
   If Not Assigned(MessageEditor) Then
     Exit;
-  { Memo-like: wrap at the client edge, no gutter or code-editor chrome.
-    Keystrokes must stay at SynEdit defaults — an empty LFM list unbinds
-    arrows, Home/End, Backspace, Delete, and clipboard.
-    Font comes from the Source Editor (proportional allowed). SynEdit still
-    places glyphs on a character cell — the same as the IDE code editor. }
-  MessageEditor.Keystrokes.ResetDefaults;
-  MessageEditor.Gutter.Visible := False;
-  MessageEditor.RightGutter.Visible := False;
-  MessageEditor.RightEdge := 0;
   MessageEditor.WantTabs := False;
-  If Not ApplySynEditIDEFont(MessageEditor, False) Then
-    Begin
-      MessageEditor.Font.Pitch := fpDefault;
-      MessageEditor.ExtraCharSpacing := 0;
-      MessageEditor.ExtraLineSpacing := 0;
-    End;
-  MessageEditor.Options := MessageEditor.Options + [eoHideRightMargin] -
-    [eoScrollPastEol, eoScrollPastEof, eoEnhanceHomeKey, eoTabIndent, eoBracketHighlight];
-  TLazSynEditLineWrapPlugin.Create(MessageEditor);
-
-  { Prefer the Source Editor's loaded ASpell (personal word list already applied).
-    Otherwise load SpellCheckOptions.xml onto a new dict. Markup stays idle if
-    aspell cannot open a dictionary. }
-  OwnedDict := Nil;
-  SpellDict := FindSourceEditorSpellDictionary;
-  If Not Assigned(SpellDict) Then
-    Begin
-      OwnedDict := TSynSpellDictionaryASpell.Create;
-      SpellDict := OwnedDict;
-      ApplyIDESpellDictionaryOptions(OwnedDict);
-    End;
-  Try
-    SpellDict.Load;
-    SpellPlugin := TSynPluginSpellCheck.Create(MessageEditor);
-    SpellPlugin.Setup(SpellDict);
-    SpellPlugin.MarkupInfo.FrameColor := clRed;
-    SpellPlugin.MarkupInfo.FrameStyle := TLazTextAttrLineStyle.slsWaved;
-    SpellPlugin.MarkupInfo.FrameEdges := TLazTextAttrFrameEdges.sfeBottom;
-    If SpellDict.IsLoaded Then
-      WorkflowLogger.Info('ManageRepository', 'Commit-message spell check ready')
-    Else
-      WorkflowLogger.Debug('ManageRepository', 'Commit-message spell check idle: ' + SpellDict.LastError);
-  Finally
-    If Assigned(OwnedDict) Then
-      OwnedDict.ReleaseReference;
-  End;
+  MessageEditor.WordWrap := True;
+  MessageEditor.ParentFont := True;
+  MessageEditor.UseSharedConfig := True;
 End;
 
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
