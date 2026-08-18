@@ -98,8 +98,9 @@ Var
 Begin
   gtk_text_view_get_iter_location(View, @StartIter, @Loc);
   gtk_text_view_get_iter_location(View, @EndIter, @EndLoc);
-  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_TEXT, Loc.x, Loc.y + Loc.height, @X1, @Y1);
-  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_TEXT, EndLoc.x, EndLoc.y + EndLoc.height, @X2, @Y2);
+  { Widget draw handlers use widget coordinates, not the text subwindow. }
+  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_WIDGET, Loc.x, Loc.y + Loc.height, @X1, @Y1);
+  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_WIDGET, EndLoc.x, EndLoc.y + EndLoc.height, @X2, @Y2);
   If Y1 = Y2 Then
     Begin
       Width := X2 - X1;
@@ -170,6 +171,7 @@ Procedure Gtk3EnsureErrorTag(Buffer: PGtkTextBuffer);
 Var
   Table: PGtkTextTagTable;
   Tag: PGtkTextTag;
+  Value: TGValue;
 Begin
   Table := gtk_text_buffer_get_tag_table(Buffer);
   If Not Assigned(Table) Then
@@ -178,8 +180,16 @@ Begin
   If Assigned(Tag) Then
     Exit;
   Tag := gtk_text_tag_new(Pgchar(SpellErrorTagName));
-  { g_object_set also flips underline-set; g_object_set_property(G_TYPE_INT) does not. }
-  g_object_set(PGObject(Tag), Pgchar('underline'), [gint(PANGO_UNDERLINE_ERROR), Pointer(Nil)]);
+  FillChar(Value, SizeOf(Value), 0);
+  g_value_init(@Value, G_TYPE_ENUM);
+  g_value_set_enum(@Value, gint(PANGO_UNDERLINE_ERROR));
+  g_object_set_property(PGObject(Tag), Pgchar('underline'), @Value);
+  g_value_unset(@Value);
+  FillChar(Value, SizeOf(Value), 0);
+  g_value_init(@Value, G_TYPE_BOOLEAN);
+  g_value_set_boolean(@Value, True);
+  g_object_set_property(PGObject(Tag), Pgchar('underline-set'), @Value);
+  g_value_unset(@Value);
   gtk_text_tag_table_add(Table, Tag);
   g_object_unref(Tag);
 End;

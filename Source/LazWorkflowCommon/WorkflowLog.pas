@@ -10,7 +10,7 @@ Unit WorkflowLog;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, LazLoggerBase;
 
 Type
   TWorkflowLogLevel = (wllDebug, wllInfo, wllWarning, wllError);
@@ -53,8 +53,9 @@ Begin
     Except
       { Never let logging take down the IDE. }
     End;
-  { No WriteLn fallback: GUI Lazarus processes often have no console, and
-    WriteLn during package load/register has caused hard failures on Windows. }
+  { DebugLn is safe in the IDE. Start Lazarus from a terminal to see it, or
+    enable a debug log file (--debug-log=...). }
+  DebugLn('[', Area, '] ', Message);
 End;
 
 Procedure TWorkflowLogger.Debug(Const Area, Message: String);

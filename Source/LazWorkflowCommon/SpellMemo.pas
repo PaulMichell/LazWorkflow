@@ -173,8 +173,13 @@ Begin
   If Not SpellMemoApplyUnderlines(Self, Body, FRanges) Then
     Invalidate;
   If Assigned(WorkflowLogger) Then
-    WorkflowLogger.Debug('SpellMemo', Format('Rescan words=%d errors=%d ready=%s',
-      [Length(Tokens), Count, BoolToStr(SpellActive, True)]));
+    Begin
+      If SpellActive Then
+        WorkflowLogger.Info('SpellMemo', Format('Rescan words=%d errors=%d status=%s',
+          [Length(Tokens), Count, WorkflowSpellConfig.LastStatus]))
+      Else
+        WorkflowLogger.Info('SpellMemo', 'Rescan skipped — spell checker not ready');
+    End;
 End;
 
 Procedure TSpellMemo.WMPaint(Var Message: TLMPaint);

@@ -388,7 +388,17 @@ Begin
   MessageEditor.ParentFont := True;
   MessageEditor.UseSharedConfig := True;
   If Assigned(WorkflowSpellConfig) Then
-    WorkflowLogger.Info('ManageRepository', 'Commit-message spell: ' + WorkflowSpellConfig.LastStatus);
+    Begin
+      If Not WorkflowSpellConfig.IsReady Then
+        WorkflowSpellConfig.Apply;
+      WorkflowLogger.Info('ManageRepository', 'Commit-message spell: ' + WorkflowSpellConfig.LastStatus);
+      If Assigned(MessageLabel) Then
+        If WorkflowSpellConfig.IsReady Then
+          MessageLabel.Caption := 'Commit message  ·  ' + WorkflowSpellConfig.LastStatus
+        Else
+          MessageLabel.Caption := 'Commit message  ·  no spell checker';
+    End;
+  MessageEditor.Rescan;
 End;
 
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);
@@ -401,6 +411,8 @@ Begin
   Try
     BindRepository;
     ApplyConfig;
+    If Assigned(MessageEditor) Then
+      MessageEditor.Rescan;
     { Remeasure scroll range once the paintbox parent has a handle. }
     FHistory.UpdateScrollRange;
     If Assigned(GraphPaintBox) Then
