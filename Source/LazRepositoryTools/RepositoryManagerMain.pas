@@ -42,6 +42,7 @@ Var
   CmdRepoInit: TIDECommand;
   CmdRepoManage: TIDECommand;
   CmdRepoClone: TIDECommand;
+  CmdRepoOpen: TIDECommand;
   CmdRepoSettings: TIDECommand;
   GitManagerIDEHooks: TGitManagerIDEHooks;
   GitIdeJobHost: TGitIdeJobHost;
@@ -112,16 +113,72 @@ Begin
   UpdateRepositoryMenuState;
 End;
 
+Procedure ShowManageRepositoryAt(Const RepoPath: String);
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  If RepoPath = '' Then
+    Exit;
+  If Assigned(GitClient) Then
+    GitClient.RepoPath := RepoPath;
+  If Assigned(ManageRepositoryWindowCreator) Then
+    IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
+        TManageRepositoryForm(Form).SetRepository(RepoPath);
+    End;
+End;
+
 Procedure ShowManageRepository(Sender: TObject);
 Begin
   If Not CurrentProjectHasRepository Then
     Begin
       MessageDlg('No Git repository found for the current project.' + LineEnding +
-        'Use Initialise Repository or Clone Repository first.', mtInformation, [mbOK], 0);
+        'Use Initialise Repository, Clone Repository or Open Repository.', mtInformation, [mbOK], 0);
       UpdateRepositoryMenuState;
       Exit;
     End;
   IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
+  RefreshOpenManageRepositoryForms;
+End;
+
+Procedure DoOpenRepository(Sender: TObject);
+Var
+  Dialog: TSelectDirectoryDialog;
+  DefaultPath, ChosenPath, RepoPath: String;
+Begin
+  If Not Assigned(GitClient) Then
+    Exit;
+  DefaultPath := GitIdeStartPath;
+  If (DefaultPath = '') And (GitClient.RepoPath <> '') Then
+    DefaultPath := GitClient.RepoPath;
+  If DefaultPath = '' Then
+    DefaultPath := GetCurrentDir;
+
+  Dialog := TSelectDirectoryDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Open Repository';
+    Dialog.InitialDir := DefaultPath;
+    If Not Dialog.Execute Then
+      Exit;
+    ChosenPath := Trim(Dialog.FileName);
+  Finally
+    Dialog.Free;
+  End;
+
+  If ChosenPath = '' Then
+    Exit;
+  RepoPath := GitClient.DetectRepository(ChosenPath);
+  If RepoPath = '' Then
+    Begin
+      MessageDlg('No Git repository found in or above:' + LineEnding + ChosenPath,
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  ShowManageRepositoryAt(RepoPath);
 End;
 
 Procedure DoInitialiseRepository(Sender: TObject);
@@ -288,7 +345,10 @@ Begin
   { Never let restore/bind failures kill the IDE process. }
   If AForm Is TManageRepositoryForm Then
     Try
-      TManageRepositoryForm(AForm).BindRepository;
+      If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+        TManageRepositoryForm(AForm).SetRepository(GitClient.RepoPath)
+      Else
+        TManageRepositoryForm(AForm).BindRepository;
       TManageRepositoryForm(AForm).ApplyConfig;
     Except
       On E: Exception Do
@@ -298,7 +358,7 @@ End;
 
 Procedure RegisterGitManager;
 Var
-  RepoMenu, MainSec, SetSec: TIDEMenuSection;
+  RepoMenu, ManageSec, SetupSec, SetSec: TIDEMenuSection;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
 Begin
@@ -328,26 +388,30 @@ Begin
       Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
 
     Key := IDEShortCut(VK_UNKNOWN, []);
-    CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
-      IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
     CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
       IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
+    CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
+      IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
     CmdRepoClone := RegisterIDECommand(Cat, 'RepoClone', 'Clone Repository',
       IDEShortCut(VK_C, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoCloneRepository);
+    CmdRepoOpen := RegisterIDECommand(Cat, 'RepoOpen', 'Open Repository',
+      IDEShortCut(VK_O, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoOpenRepository);
     CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
     { Top-level Repository menu, placed immediately after Run.
-      Two logical sections so Lazarus draws a separator before Settings. }
+      Three sections: Manage; Initialise / Clone / Open; Settings. }
     RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
     If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
       Begin
         mnuMain.Remove(RepoMenu);
         mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
       End;
-    MainSec := RegisterIDEMenuSection(RepoMenu, 'RepoMainCmds');
-    RegisterIDEMenuCommand(MainSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
-    RegisterIDEMenuCommand(MainSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
-    RegisterIDEMenuCommand(MainSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
+    ManageSec := RegisterIDEMenuSection(RepoMenu, 'RepoManageCmds');
+    RegisterIDEMenuCommand(ManageSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+    SetupSec := RegisterIDEMenuSection(RepoMenu, 'RepoSetupCmds');
+    RegisterIDEMenuCommand(SetupSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
+    RegisterIDEMenuCommand(SetupSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
+    RegisterIDEMenuCommand(SetupSec, 'RepoOpen', 'Open Repository...', Nil, Nil, CmdRepoOpen);
     SetSec := RegisterIDEMenuSection(RepoMenu, 'RepoSettingsCmds');
     RegisterIDEMenuCommand(SetSec, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
 
