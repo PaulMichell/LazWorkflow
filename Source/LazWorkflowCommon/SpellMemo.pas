@@ -497,19 +497,12 @@ Begin
 End;
 
 Function TSpellMemo.MeasureAdvance(Const S: String): Integer;
-Var
-  Index, CodeLen: Integer;
 Begin
-  Result := 0;
-  Index := 1;
-  While Index <= Length(S) Do
-    Begin
-      UTF8CodepointToUnicode(@S[Index], CodeLen);
-      If CodeLen <= 0 Then
-        Break;
-      Result := Result + Canvas.TextWidth(Copy(S, Index, CodeLen));
-      Inc(Index, CodeLen);
-    End;
+  { Full-string width so kerning pairs (dj, AV, …) match the painted run. }
+  If S = '' Then
+    Result := 0
+  Else
+    Result := Canvas.TextWidth(S);
 End;
 
 Function TSpellMemo.LineHeight: Integer;
@@ -744,9 +737,9 @@ End;
 
 Function TSpellMemo.CharIndexAtPoint(X, Y: Integer): Integer;
 Var
-  LineIndex, Probe, Best, PrefixW, CharW, CodeLen: Integer;
+  LineIndex, Index, Best, CodeLen, LeftW, RightW: Integer;
   AbsY: Integer;
-  Prefix: String;
+  LineText: String;
 Begin
   Result := 0;
   AbsY := Y + ScrollY;
@@ -757,21 +750,20 @@ Begin
   While (LineIndex < High(FPaintLines)) And
     (AbsY >= FPaintLines[LineIndex].Top + FPaintLines[LineIndex].Height) Do
     Inc(LineIndex);
+  LineText := Copy(FText, FPaintLines[LineIndex].ByteStart, FPaintLines[LineIndex].ByteLength);
   Best := FPaintLines[LineIndex].ByteStart;
-  Probe := FPaintLines[LineIndex].ByteStart;
-  PrefixW := 3;
-  While Probe < FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength Do
+  Index := 1;
+  While Index <= Length(LineText) Do
     Begin
-      UTF8CodepointToUnicode(@FText[Probe], CodeLen);
+      UTF8CodepointToUnicode(@LineText[Index], CodeLen);
       If CodeLen <= 0 Then
         Break;
-      Prefix := Copy(FText, Probe, CodeLen);
-      CharW := Canvas.TextWidth(Prefix);
-      If X < PrefixW + (CharW Div 2) Then
+      LeftW := 3 + MeasureAdvance(Copy(LineText, 1, Index - 1));
+      RightW := 3 + MeasureAdvance(Copy(LineText, 1, Index + CodeLen - 1));
+      If X < (LeftW + RightW) Div 2 Then
         Break;
-      PrefixW := PrefixW + CharW;
-      Inc(Probe, CodeLen);
-      Best := Probe;
+      Inc(Index, CodeLen);
+      Best := FPaintLines[LineIndex].ByteStart + Index - 1;
     End;
   Result := SpellByteToCharOffset(FText, Best);
 End;
@@ -1076,15 +1068,16 @@ End;
 
 Procedure TSpellMemo.Paint;
 Var
-  LineIndex, X, Y, PrefixW, CodeLen, BytePos, CharPos, SelLo, SelHi: Integer;
+  LineIndex, Y, H, X0, SX1, SX2, SelLo, SelHi, ClipLo, ClipHi: Integer;
+  FirstChar, AfterChar, Byte0, Byte1, SavedDC: Integer;
   Pixel: TPoint;
-  Ch: String;
-  InSel: Boolean;
+  LineText: String;
   RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
 Begin
   If Not FReady Then
     Exit;
   Canvas.Font := Font;
+  Canvas.Brush.Style := bsSolid;
   Canvas.Brush.Color := Color;
   Canvas.FillRect(ClientRect);
   ClampSelection;
@@ -1092,60 +1085,87 @@ Begin
   SelHi := FSelStart + FSelLength;
   If SelHi < SelLo Then
     Begin
-      CharPos := SelLo;
+      FirstChar := SelLo;
       SelLo := SelHi;
-      SelHi := CharPos;
+      SelHi := FirstChar;
     End;
+  X0 := 3;
   For LineIndex := 0 To High(FPaintLines) Do
     Begin
       Y := FPaintLines[LineIndex].Top - ScrollY;
-      If (Y + FPaintLines[LineIndex].Height < 0) Or (Y > ClientHeight) Then
+      H := FPaintLines[LineIndex].Height;
+      If (Y + H < 0) Or (Y > ClientHeight) Then
         Continue;
-      X := 3;
-      BytePos := FPaintLines[LineIndex].ByteStart;
-      While BytePos < FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength Do
+      LineStart := FPaintLines[LineIndex].ByteStart;
+      LineEnd := LineStart + FPaintLines[LineIndex].ByteLength;
+      LineText := Copy(FText, LineStart, FPaintLines[LineIndex].ByteLength);
+      ClipLo := 0;
+      ClipHi := 0;
+      SX1 := 0;
+      SX2 := 0;
+      If (FSelLength > 0) And (LineText <> '') Then
         Begin
-          UTF8CodepointToUnicode(@FText[BytePos], CodeLen);
-          If CodeLen <= 0 Then
-            Break;
-          Ch := Copy(FText, BytePos, CodeLen);
-          CharPos := SpellByteToCharOffset(FText, BytePos);
-          InSel := (FSelLength > 0) And (CharPos >= SelLo) And (CharPos < SelHi);
-          PrefixW := Canvas.TextWidth(Ch);
-          If InSel Then
+          FirstChar := SpellByteToCharOffset(FText, LineStart);
+          AfterChar := SpellByteToCharOffset(FText, LineEnd);
+          ClipLo := SelLo;
+          ClipHi := SelHi;
+          If ClipLo < FirstChar Then
+            ClipLo := FirstChar;
+          If ClipHi > AfterChar Then
+            ClipHi := AfterChar;
+          If ClipHi > ClipLo Then
             Begin
+              Byte0 := SpellCharToByteIndex(FText, ClipLo) - LineStart;
+              Byte1 := SpellCharToByteIndex(FText, ClipHi) - LineStart;
+              If Byte0 < 0 Then
+                Byte0 := 0;
+              If Byte1 < 0 Then
+                Byte1 := 0;
+              If Byte0 > Length(LineText) Then
+                Byte0 := Length(LineText);
+              If Byte1 > Length(LineText) Then
+                Byte1 := Length(LineText);
+              SX1 := X0 + MeasureAdvance(Copy(LineText, 1, Byte0));
+              SX2 := X0 + MeasureAdvance(Copy(LineText, 1, Byte1));
+              Canvas.Brush.Style := bsSolid;
               Canvas.Brush.Color := clHighlight;
-              Canvas.Font.Color := clHighlightText;
-              Canvas.FillRect(Rect(X, Y, X + PrefixW, Y + FPaintLines[LineIndex].Height));
-            End
-          Else
+              Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
+            End;
+        End;
+      { One run, transparent brush: per-glyph backgrounds clip kerning overhangs. }
+      If LineText <> '' Then
+        Begin
+          Canvas.Brush.Style := bsClear;
+          Canvas.Font.Color := Font.Color;
+          Canvas.TextOut(X0, Y, LineText);
+          If (FSelLength > 0) And (ClipHi > ClipLo) Then
             Begin
-              Canvas.Brush.Color := Color;
+              SavedDC := SaveDC(Canvas.Handle);
+              Try
+                IntersectClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
+                Canvas.Font.Color := clHighlightText;
+                Canvas.TextOut(X0, Y, LineText);
+              Finally
+                RestoreDC(Canvas.Handle, SavedDC);
+              End;
               Canvas.Font.Color := Font.Color;
             End;
-          Canvas.TextOut(X, Y, Ch);
-          Inc(X, PrefixW);
-          Inc(BytePos, CodeLen);
         End;
       If SpellActive Then
-        Begin
-          LineStart := FPaintLines[LineIndex].ByteStart;
-          LineEnd := LineStart + FPaintLines[LineIndex].ByteLength;
-          For RangeIndex := 0 To High(FRanges) Do
-            Begin
-              RangeStart := FRanges[RangeIndex].UTF8Start;
-              RangeEnd := RangeStart + FRanges[RangeIndex].UTF8Length;
-              If (RangeEnd <= LineStart) Or (RangeStart >= LineEnd) Then
-                Continue;
-              If RangeStart < LineStart Then
-                RangeStart := LineStart;
-              If RangeEnd > LineEnd Then
-                RangeEnd := LineEnd;
-              U1 := 3 + MeasureAdvance(Copy(FText, LineStart, RangeStart - LineStart));
-              U2 := 3 + MeasureAdvance(Copy(FText, LineStart, RangeEnd - LineStart));
-              DrawErrorUnderline(Canvas, U1, U2, Y + FPaintLines[LineIndex].Height - 3);
-            End;
-        End;
+        For RangeIndex := 0 To High(FRanges) Do
+          Begin
+            RangeStart := FRanges[RangeIndex].UTF8Start;
+            RangeEnd := RangeStart + FRanges[RangeIndex].UTF8Length;
+            If (RangeEnd <= LineStart) Or (RangeStart >= LineEnd) Then
+              Continue;
+            If RangeStart < LineStart Then
+              RangeStart := LineStart;
+            If RangeEnd > LineEnd Then
+              RangeEnd := LineEnd;
+            U1 := X0 + MeasureAdvance(Copy(FText, LineStart, RangeStart - LineStart));
+            U2 := X0 + MeasureAdvance(Copy(FText, LineStart, RangeEnd - LineStart));
+            DrawErrorUnderline(Canvas, U1, U2, Y + H - 3);
+          End;
     End;
   If Focused And FCaretOn And (FSelLength = 0) And (Not (csDesigning In ComponentState)) Then
     Begin
