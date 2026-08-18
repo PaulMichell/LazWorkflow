@@ -18,12 +18,12 @@ Implementation
 
 Uses
   MenuIntf, IDECommands, IDEWindowIntf, LazarusPackageIntf,
-  RepositoryManagerMain, StatusFooterFrame, GitDiffView, SpellMemo, SpellCheckerSettingsFrame;
+  RepositoryManagerMain, GitDiffView;
 
 Procedure Register;
 Begin
-  { Frames used as inline children must be registered for the form designer. }
-  RegisterNoIcon([TStatusFooterFrame, TGitDiffView, TSpellMemo, TSpellCheckerSettingsFrame]);
+  { Shared Common controls are registered by RegLazWorkflowCommon. }
+  RegisterNoIcon([TGitDiffView]);
   RegisterGitManager;
 End;
 
