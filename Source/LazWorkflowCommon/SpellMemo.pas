@@ -1,6 +1,10 @@
 Unit SpellMemo;
 
-{ TMemo with optional Hunspell/ASpell markup (c) 2026 Michell Computing. }
+{ Portable LCL memo with optional Hunspell/ASpell markup (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Wrap layout, caret/selection
+  and spell markup are one painted control so underlines stay widgetset-free.
+  Reviewed 2026-08: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,12 +14,31 @@ Unit SpellMemo;
 Interface
 
 Uses
-  Classes, SysUtils, Controls, StdCtrls, Menus, ExtCtrls, Graphics, LMessages, SpellMemoMarkup;
+  Classes, SysUtils, Controls, StdCtrls, Menus, ExtCtrls, Graphics, Forms, LCLType, LMessages,
+  SpellMemoMarkup;
 
 Type
-  TSpellMemo = Class(TMemo)
+  TSpellPaintLine = Record
+    ByteStart: Integer;
+    ByteLength: Integer;
+    Top: Integer;
+    Height: Integer;
+  End;
+  TSpellPaintLineArray = Array Of TSpellPaintLine;
+
+  TSpellMemo = Class(TCustomControl)
   Private
+    FText: String;
     FUseSharedConfig: Boolean;
+    FWordWrap: Boolean;
+    FWantTabs: Boolean;
+    FWantReturns: Boolean;
+    FReadOnly: Boolean;
+    FScrollBars: TScrollStyle;
+    FSelStart: Integer;
+    FSelLength: Integer;
+    FSelAnchor: Integer;
+    FOnChange: TNotifyEvent;
     FDebounce: TTimer;
     FRanges: TSpellUnderlineRangeArray;
     FOwnedPopup: TPopupMenu;
@@ -25,6 +48,11 @@ Type
     FActiveLength: Integer;
     FHostPopupHandler: TNotifyEvent;
     FHookedPopup: TPopupMenu;
+    FPaintLines: TSpellPaintLineArray;
+    FContentHeight: Integer;
+    FScrollBar: TScrollBar;
+    FCaretVisible: Boolean;
+    FUpdatingScroll: Boolean;
     Procedure DebounceTimer(Sender: TObject);
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
@@ -38,34 +66,120 @@ Type
     Function SpellActive: Boolean;
     Procedure ReplaceActiveWord(Const NewText: String);
     Procedure LocateTokenAtCaret;
+    Procedure SetWordWrap(Value: Boolean);
+    Procedure SetWantTabs(Value: Boolean);
+    Procedure SetWantReturns(Value: Boolean);
+    Procedure SetReadOnly(Value: Boolean);
+    Procedure SetScrollBars(Value: TScrollStyle);
+    Procedure SetSelStart(Value: Integer);
+    Procedure SetSelLength(Value: Integer);
+    Function GetSelText: String;
+    Procedure SetSelText(Const Value: String);
+    Function TextAreaWidth: Integer;
+    Function LineHeight: Integer;
+    Procedure RebuildLayout;
+    Procedure UpdateScrollBar;
+    Procedure ScrollBarChange(Sender: TObject);
+    Function ScrollY: Integer;
+    Procedure EnsureCaretInView;
+    Procedure MoveCaret(NewStart: Integer; ExtendSel: Boolean);
+    Function CharIndexAtPoint(X, Y: Integer): Integer;
+    Function CaretPixel: TPoint;
+    Procedure UpdateCaret;
+    Procedure InsertText(Const AddText: String);
+    Procedure DeleteSelection;
+    Procedure DeleteRange(CharStart, CharCount: Integer);
+    Function CharCount: Integer;
+    Procedure ClampSelection;
   Protected
-    Procedure Change; Override;
+    Procedure CreateParams(Var Params: TCreateParams); Override;
+    Procedure Paint; Override;
+    Procedure Resize; Override;
+    Procedure FontChanged(Sender: TObject); Override;
     Procedure Loaded; Override;
     Procedure InitializeWnd; Override;
+    Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
+    Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
+    Procedure MouseMove(Shift: TShiftState; X, Y: Integer); Override;
+    Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean; Override;
+    Procedure DoEnter; Override;
+    Procedure DoExit; Override;
     Procedure DoContextPopup(MousePos: TPoint; Var Handled: Boolean); Override;
-    Procedure WMPaint(Var Message: TLMPaint); Message LM_PAINT;
+    Function RealGetText: TCaption; Override;
+    Procedure RealSetText(Const Value: TCaption); Override;
+    Procedure Change; Virtual;
+    Property OnChange: TNotifyEvent Read FOnChange Write FOnChange;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
     Procedure Rescan;
+    Procedure Clear;
+    Procedure SelectAll;
+    Procedure CopyToClipboard;
+    Procedure CutToClipboard;
+    Procedure PasteFromClipboard;
+
+    Property SelStart: Integer Read FSelStart Write SetSelStart;
+    Property SelLength: Integer Read FSelLength Write SetSelLength;
+    Property SelText: String Read GetSelText Write SetSelText;
   Published
+    Property Align;
+    Property Anchors;
+    Property BorderSpacing;
+    Property Color Default clWindow;
+    Property Constraints;
+    Property Enabled;
+    Property Font;
+    Property ParentFont;
+    Property ParentShowHint;
+    Property PopupMenu;
+    Property ReadOnly: Boolean Read FReadOnly Write SetReadOnly Default False;
+    Property ScrollBars: TScrollStyle Read FScrollBars Write SetScrollBars Default ssAutoVertical;
+    Property ShowHint;
+    Property TabOrder;
+    Property TabStop Default True;
+    Property Text;
     Property UseSharedConfig: Boolean Read FUseSharedConfig Write FUseSharedConfig Default True;
+    Property Visible;
+    Property WantReturns: Boolean Read FWantReturns Write SetWantReturns Default True;
+    Property WantTabs: Boolean Read FWantTabs Write SetWantTabs Default False;
+    Property WordWrap: Boolean Read FWordWrap Write SetWordWrap Default True;
+    Property OnClick;
+    Property OnEnter;
+    Property OnExit;
+    Property OnKeyDown;
+    Property OnKeyPress;
+    Property OnKeyUp;
+    Property OnMouseDown;
+    Property OnMouseMove;
+    Property OnMouseUp;
+    Property OnResize;
+    Property OnUTF8KeyPress;
   End;
 
 Implementation
 
 Uses
-  LCLType, LCLIntf, LazUTF8, SpellCheckerConfig, SpellWordBreaker, SpellEngine, WorkflowLog;
+  Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellWordBreaker, SpellEngine, WorkflowLog;
 
 Constructor TSpellMemo.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FUseSharedConfig := True;
+  FWordWrap := True;
+  FWantTabs := False;
+  FWantReturns := True;
+  FReadOnly := False;
+  FScrollBars := ssAutoVertical;
+  ControlStyle := ControlStyle + [csOpaque, csClickEvents, csDoubleClicks, csCaptureMouse];
+  Color := clWindow;
+  ParentColor := False;
   ParentFont := True;
-  WordWrap := True;
-  WantTabs := False;
-  ScrollBars := ssAutoVertical;
+  TabStop := True;
+  DoubleBuffered := True;
+  Width := 200;
+  Height := 80;
   FSpellItemCount := 0;
   FActiveStart := 0;
   FActiveLength := 0;
@@ -74,6 +188,13 @@ Begin
   FDebounce.Enabled := False;
   FDebounce.Interval := 200;
   FDebounce.OnTimer := @DebounceTimer;
+  FScrollBar := TScrollBar.Create(Nil);
+  FScrollBar.Kind := sbVertical;
+  FScrollBar.Parent := Self;
+  FScrollBar.Align := alRight;
+  FScrollBar.Width := 16;
+  FScrollBar.Visible := False;
+  FScrollBar.OnChange := @ScrollBarChange;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.RegisterChangedHandler(@ConfigChanged);
 End;
@@ -84,10 +205,41 @@ Begin
     WorkflowSpellConfig.UnregisterChangedHandler(@ConfigChanged);
   If Assigned(FHookedPopup) Then
     FHookedPopup.OnPopup := FHostPopupHandler;
-  SpellMemoDetach(Self);
   FreeAndNil(FDebounce);
   FreeAndNil(FOwnedPopup);
+  FreeAndNil(FScrollBar);
   Inherited Destroy;
+End;
+
+Procedure TSpellMemo.CreateParams(Var Params: TCreateParams);
+Begin
+  Inherited CreateParams(Params);
+  Params.Style := Params.Style Or WS_TABSTOP;
+  Params.ExStyle := Params.ExStyle Or WS_EX_CLIENTEDGE;
+End;
+
+Function TSpellMemo.RealGetText: TCaption;
+Begin
+  Result := FText;
+End;
+
+Procedure TSpellMemo.RealSetText(Const Value: TCaption);
+Begin
+  If FText = Value Then
+    Exit;
+  FText := Value;
+  FSelStart := UTF8Length(FText);
+  FSelLength := 0;
+  RebuildLayout;
+  UpdateScrollBar;
+  Invalidate;
+  RestartDebounce;
+  Change;
+End;
+
+Procedure TSpellMemo.Clear;
+Begin
+  Text := '';
 End;
 
 Procedure TSpellMemo.Loaded;
@@ -98,12 +250,14 @@ Begin
   If FUseSharedConfig And Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
     WorkflowSpellConfig.Apply;
   EnsurePopupHook;
+  RebuildLayout;
   RestartDebounce;
 End;
 
 Procedure TSpellMemo.InitializeWnd;
 Begin
   Inherited InitializeWnd;
+  RebuildLayout;
   If Not (csDesigning In ComponentState) Then
     RestartDebounce;
 End;
@@ -119,19 +273,11 @@ Begin
   If Not Assigned(FDebounce) Then
     Exit;
   FDebounce.Enabled := False;
-  If SpellActive And HandleAllocated Then
+  If SpellActive Then
     FDebounce.Enabled := True
   Else
-    Begin
-      SetLength(FRanges, 0);
-      SpellMemoClearUnderlines(Self);
-    End;
-End;
-
-Procedure TSpellMemo.Change;
-Begin
-  Inherited Change;
-  RestartDebounce;
+    SetLength(FRanges, 0);
+  Invalidate;
 End;
 
 Procedure TSpellMemo.ConfigChanged(Sender: TObject);
@@ -145,20 +291,747 @@ Begin
   Rescan;
 End;
 
+Procedure TSpellMemo.Change;
+Begin
+  If Assigned(FOnChange) Then
+    FOnChange(Self);
+End;
+
+Procedure TSpellMemo.SetWordWrap(Value: Boolean);
+Begin
+  If FWordWrap = Value Then
+    Exit;
+  FWordWrap := Value;
+  RebuildLayout;
+  UpdateScrollBar;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.SetWantTabs(Value: Boolean);
+Begin
+  FWantTabs := Value;
+End;
+
+Procedure TSpellMemo.SetWantReturns(Value: Boolean);
+Begin
+  FWantReturns := Value;
+End;
+
+Procedure TSpellMemo.SetReadOnly(Value: Boolean);
+Begin
+  FReadOnly := Value;
+End;
+
+Procedure TSpellMemo.SetScrollBars(Value: TScrollStyle);
+Begin
+  If FScrollBars = Value Then
+    Exit;
+  FScrollBars := Value;
+  UpdateScrollBar;
+  RebuildLayout;
+  Invalidate;
+End;
+
+Function TSpellMemo.CharCount: Integer;
+Begin
+  Result := UTF8Length(FText);
+End;
+
+Procedure TSpellMemo.ClampSelection;
+Var
+  Count: Integer;
+Begin
+  Count := CharCount;
+  If FSelStart < 0 Then
+    FSelStart := 0;
+  If FSelStart > Count Then
+    FSelStart := Count;
+  If FSelLength < 0 Then
+    FSelLength := 0;
+  If FSelStart + FSelLength > Count Then
+    FSelLength := Count - FSelStart;
+End;
+
+Procedure TSpellMemo.SetSelStart(Value: Integer);
+Begin
+  FSelStart := Value;
+  FSelLength := 0;
+  ClampSelection;
+  EnsureCaretInView;
+  UpdateCaret;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.SetSelLength(Value: Integer);
+Begin
+  FSelLength := Value;
+  ClampSelection;
+  Invalidate;
+End;
+
+Function TSpellMemo.GetSelText: String;
+Var
+  ByteStart, ByteEnd: Integer;
+Begin
+  ClampSelection;
+  ByteStart := SpellCharToByteIndex(FText, FSelStart);
+  ByteEnd := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+  Result := Copy(FText, ByteStart, ByteEnd - ByteStart);
+End;
+
+Procedure TSpellMemo.SetSelText(Const Value: String);
+Begin
+  InsertText(Value);
+End;
+
+Procedure TSpellMemo.SelectAll;
+Begin
+  FSelStart := 0;
+  FSelLength := CharCount;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.CopyToClipboard;
+Begin
+  If FSelLength > 0 Then
+    Clipboard.AsText := SelText;
+End;
+
+Procedure TSpellMemo.CutToClipboard;
+Begin
+  If FReadOnly Then
+    Exit;
+  CopyToClipboard;
+  DeleteSelection;
+End;
+
+Procedure TSpellMemo.PasteFromClipboard;
+Begin
+  If FReadOnly Then
+    Exit;
+  InsertText(Clipboard.AsText);
+End;
+
+Function TSpellMemo.TextAreaWidth: Integer;
+Begin
+  Result := ClientWidth - 6;
+  If Assigned(FScrollBar) And FScrollBar.Visible Then
+    Result := Result - FScrollBar.Width;
+  If Result < 20 Then
+    Result := 20;
+End;
+
+Function TSpellMemo.LineHeight: Integer;
+Begin
+  Canvas.Font := Font;
+  Result := Canvas.TextHeight('Hg') + 2;
+  If Result < 12 Then
+    Result := 12;
+End;
+
+Procedure TSpellMemo.RebuildLayout;
+Var
+  Para, Remain, Piece: String;
+  ParaStart, RemainStart, Count, BreakAt, LastSpace, TextPos, WalkPos, CodeLen: Integer;
+  UsedWidth, CharWidth, MaxWidth, RowTop, RowH: Integer;
+  CodePoint: Cardinal;
+Begin
+  SetLength(FPaintLines, 0);
+  Count := 0;
+  RowTop := 3;
+  RowH := LineHeight;
+  MaxWidth := TextAreaWidth;
+  Canvas.Font := Font;
+  TextPos := 1;
+  While True Do
+    Begin
+      ParaStart := TextPos;
+      While (TextPos <= Length(FText)) And (FText[TextPos] <> #10) Do
+        Inc(TextPos);
+      Para := Copy(FText, ParaStart, TextPos - ParaStart);
+      Remain := Para;
+      RemainStart := ParaStart;
+      If Remain = '' Then
+        Begin
+          If Count >= Length(FPaintLines) Then
+            SetLength(FPaintLines, Count + 16);
+          FPaintLines[Count].ByteStart := ParaStart;
+          FPaintLines[Count].ByteLength := 0;
+          FPaintLines[Count].Top := RowTop;
+          FPaintLines[Count].Height := RowH;
+          Inc(Count);
+          Inc(RowTop, RowH);
+        End
+      Else
+        While Remain <> '' Do
+          Begin
+            If Not FWordWrap Then
+              BreakAt := Length(Remain)
+            Else
+              Begin
+                UsedWidth := 0;
+                BreakAt := 0;
+                LastSpace := 0;
+                WalkPos := 1;
+                While WalkPos <= Length(Remain) Do
+                  Begin
+                    CodePoint := UTF8CodepointToUnicode(@Remain[WalkPos], CodeLen);
+                    If CodeLen <= 0 Then
+                      Break;
+                    Piece := Copy(Remain, WalkPos, CodeLen);
+                    CharWidth := Canvas.TextWidth(Piece);
+                    If (UsedWidth + CharWidth > MaxWidth) And (BreakAt > 0) Then
+                      Begin
+                        If LastSpace > 0 Then
+                          BreakAt := LastSpace;
+                        Break;
+                      End;
+                    UsedWidth := UsedWidth + CharWidth;
+                    BreakAt := WalkPos + CodeLen - 1;
+                    If (Remain[WalkPos] = ' ') Or (CodePoint = 9) Then
+                      LastSpace := BreakAt;
+                    Inc(WalkPos, CodeLen);
+                  End;
+                If BreakAt <= 0 Then
+                  BreakAt := Length(Remain);
+              End;
+            If Count >= Length(FPaintLines) Then
+              SetLength(FPaintLines, Count + 16);
+            FPaintLines[Count].ByteStart := RemainStart;
+            FPaintLines[Count].ByteLength := BreakAt;
+            FPaintLines[Count].Top := RowTop;
+            FPaintLines[Count].Height := RowH;
+            Inc(Count);
+            Inc(RowTop, RowH);
+            Inc(RemainStart, BreakAt);
+            Delete(Remain, 1, BreakAt);
+          End;
+      If TextPos > Length(FText) Then
+        Break;
+      If FText[TextPos] = #10 Then
+        Inc(TextPos);
+    End;
+  If Count = 0 Then
+    Begin
+      SetLength(FPaintLines, 1);
+      FPaintLines[0].ByteStart := 1;
+      FPaintLines[0].ByteLength := 0;
+      FPaintLines[0].Top := 3;
+      FPaintLines[0].Height := RowH;
+      Count := 1;
+      RowTop := 3 + RowH;
+    End;
+  SetLength(FPaintLines, Count);
+  FContentHeight := RowTop + 3;
+End;
+
+Procedure TSpellMemo.UpdateScrollBar;
+Var
+  NeedBar: Boolean;
+  PageSize, MaxPos: Integer;
+Begin
+  If Not Assigned(FScrollBar) Then
+    Exit;
+  NeedBar := (FScrollBars In [ssVertical, ssAutoVertical, ssBoth, ssAutoBoth]) And
+    (FContentHeight > ClientHeight);
+  If FScrollBars In [ssVertical, ssBoth] Then
+    NeedBar := True;
+  If FScrollBar.Visible <> NeedBar Then
+    Begin
+      FUpdatingScroll := True;
+      FScrollBar.Visible := NeedBar;
+      FUpdatingScroll := False;
+      RebuildLayout;
+    End;
+  If Not NeedBar Then
+    Exit;
+  PageSize := ClientHeight;
+  If PageSize < 1 Then
+    PageSize := 1;
+  MaxPos := FContentHeight - PageSize;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  FUpdatingScroll := True;
+  FScrollBar.Min := 0;
+  FScrollBar.Max := MaxPos + PageSize;
+  FScrollBar.PageSize := PageSize;
+  If FScrollBar.Position > MaxPos Then
+    FScrollBar.Position := MaxPos;
+  FUpdatingScroll := False;
+End;
+
+Procedure TSpellMemo.ScrollBarChange(Sender: TObject);
+Begin
+  If FUpdatingScroll Then
+    Exit;
+  Invalidate;
+  UpdateCaret;
+End;
+
+Function TSpellMemo.ScrollY: Integer;
+Begin
+  Result := 0;
+  If Assigned(FScrollBar) And FScrollBar.Visible Then
+    Result := FScrollBar.Position;
+End;
+
+Procedure TSpellMemo.EnsureCaretInView;
+Var
+  Pixel: TPoint;
+  Page: Integer;
+Begin
+  Pixel := CaretPixel;
+  Page := ClientHeight;
+  If Pixel.Y < 0 Then
+    If Assigned(FScrollBar) And FScrollBar.Visible Then
+      FScrollBar.Position := ScrollY + Pixel.Y - 4;
+  If Pixel.Y + LineHeight > Page Then
+    If Assigned(FScrollBar) And FScrollBar.Visible Then
+      FScrollBar.Position := ScrollY + (Pixel.Y + LineHeight - Page) + 4;
+End;
+
+Function TSpellMemo.CaretPixel: TPoint;
+Var
+  CaretByte, LineIndex, PrefixLen: Integer;
+  Prefix: String;
+Begin
+  Result.X := 3;
+  Result.Y := 3 - ScrollY;
+  CaretByte := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+  Canvas.Font := Font;
+  For LineIndex := 0 To High(FPaintLines) Do
+    If (CaretByte >= FPaintLines[LineIndex].ByteStart) And
+      (CaretByte <= FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength) Then
+      Begin
+        PrefixLen := CaretByte - FPaintLines[LineIndex].ByteStart;
+        Prefix := Copy(FText, FPaintLines[LineIndex].ByteStart, PrefixLen);
+        Result.X := 3 + Canvas.TextWidth(Prefix);
+        Result.Y := FPaintLines[LineIndex].Top - ScrollY;
+        Exit;
+      End;
+  If Length(FPaintLines) > 0 Then
+    Begin
+      Result.Y := FPaintLines[High(FPaintLines)].Top - ScrollY;
+      Result.X := 3 + Canvas.TextWidth(Copy(FText, FPaintLines[High(FPaintLines)].ByteStart,
+        FPaintLines[High(FPaintLines)].ByteLength));
+    End;
+End;
+
+Procedure TSpellMemo.UpdateCaret;
+Var
+  Pixel: TPoint;
+Begin
+  If Not HandleAllocated Then
+    Exit;
+  If Focused And (Not (csDesigning In ComponentState)) Then
+    Begin
+      Pixel := CaretPixel;
+      If Not FCaretVisible Then
+        Begin
+          CreateCaret(Handle, 0, 1, LineHeight);
+          FCaretVisible := True;
+        End;
+      SetCaretPos(Pixel.X, Pixel.Y);
+      ShowCaret(Handle);
+    End
+  Else If FCaretVisible Then
+    Begin
+      HideCaret(Handle);
+      DestroyCaret(Handle);
+      FCaretVisible := False;
+    End;
+End;
+
+Function TSpellMemo.CharIndexAtPoint(X, Y: Integer): Integer;
+Var
+  LineIndex, Probe, Best, PrefixW, CharW, CodeLen: Integer;
+  AbsY: Integer;
+  Prefix: String;
+Begin
+  Result := 0;
+  AbsY := Y + ScrollY;
+  Canvas.Font := Font;
+  If Length(FPaintLines) = 0 Then
+    Exit;
+  LineIndex := 0;
+  While (LineIndex < High(FPaintLines)) And
+    (AbsY >= FPaintLines[LineIndex].Top + FPaintLines[LineIndex].Height) Do
+    Inc(LineIndex);
+  Best := FPaintLines[LineIndex].ByteStart;
+  Probe := FPaintLines[LineIndex].ByteStart;
+  PrefixW := 3;
+  While Probe < FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength Do
+    Begin
+      UTF8CodepointToUnicode(@FText[Probe], CodeLen);
+      If CodeLen <= 0 Then
+        Break;
+      Prefix := Copy(FText, Probe, CodeLen);
+      CharW := Canvas.TextWidth(Prefix);
+      If X < PrefixW + (CharW Div 2) Then
+        Break;
+      PrefixW := PrefixW + CharW;
+      Inc(Probe, CodeLen);
+      Best := Probe;
+    End;
+  Result := SpellByteToCharOffset(FText, Best);
+End;
+
+Procedure TSpellMemo.MoveCaret(NewStart: Integer; ExtendSel: Boolean);
+Begin
+  If NewStart < 0 Then
+    NewStart := 0;
+  If NewStart > CharCount Then
+    NewStart := CharCount;
+  If ExtendSel Then
+    Begin
+      If NewStart >= FSelAnchor Then
+        Begin
+          FSelStart := FSelAnchor;
+          FSelLength := NewStart - FSelAnchor;
+        End
+      Else
+        Begin
+          FSelStart := NewStart;
+          FSelLength := FSelAnchor - NewStart;
+        End;
+    End
+  Else
+    Begin
+      FSelStart := NewStart;
+      FSelLength := 0;
+      FSelAnchor := NewStart;
+    End;
+  ClampSelection;
+  EnsureCaretInView;
+  UpdateCaret;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.DeleteRange(CharStart, CharCount: Integer);
+Var
+  ByteStart, ByteEnd: Integer;
+Begin
+  If (CharCount <= 0) Or FReadOnly Then
+    Exit;
+  ByteStart := SpellCharToByteIndex(FText, CharStart);
+  ByteEnd := SpellCharToByteIndex(FText, CharStart + CharCount);
+  System.Delete(FText, ByteStart, ByteEnd - ByteStart);
+  FSelStart := CharStart;
+  FSelLength := 0;
+  RebuildLayout;
+  UpdateScrollBar;
+  EnsureCaretInView;
+  Invalidate;
+  RestartDebounce;
+  Change;
+End;
+
+Procedure TSpellMemo.DeleteSelection;
+Begin
+  If FSelLength > 0 Then
+    DeleteRange(FSelStart, FSelLength);
+End;
+
+Procedure TSpellMemo.InsertText(Const AddText: String);
+Var
+  Clean: String;
+  ByteStart, ByteEnd: Integer;
+Begin
+  If FReadOnly Then
+    Exit;
+  Clean := StringReplace(AddText, #13#10, #10, [rfReplaceAll]);
+  Clean := StringReplace(Clean, #13, #10, [rfReplaceAll]);
+  If FSelLength > 0 Then
+    Begin
+      ByteStart := SpellCharToByteIndex(FText, FSelStart);
+      ByteEnd := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+      System.Delete(FText, ByteStart, ByteEnd - ByteStart);
+    End
+  Else
+    ByteStart := SpellCharToByteIndex(FText, FSelStart);
+  System.Insert(Clean, FText, ByteStart);
+  FSelStart := FSelStart + UTF8Length(Clean);
+  FSelLength := 0;
+  RebuildLayout;
+  UpdateScrollBar;
+  EnsureCaretInView;
+  Invalidate;
+  RestartDebounce;
+  Change;
+End;
+
+Procedure TSpellMemo.UTF8KeyPress(Var UTF8Key: TUTF8Char);
+Begin
+  Inherited UTF8KeyPress(UTF8Key);
+  If (UTF8Key = '') Or FReadOnly Then
+    Exit;
+  If (UTF8Key = #8) Or (UTF8Key = #127) Then
+    Begin
+      UTF8Key := '';
+      Exit;
+    End;
+  If (UTF8Key = #9) And (Not FWantTabs) Then
+    Exit;
+  If (UTF8Key = #13) Or (UTF8Key = #10) Then
+    Begin
+      If FWantReturns Then
+        InsertText(#10);
+      UTF8Key := '';
+      Exit;
+    End;
+  If UTF8Key >= ' ' Then
+    Begin
+      InsertText(UTF8Key);
+      UTF8Key := '';
+    End;
+End;
+
+Procedure TSpellMemo.KeyDown(Var Key: Word; Shift: TShiftState);
+Var
+  Extend: Boolean;
+  Caret, LineIndex, Target, CaretByte: Integer;
+Begin
+  Inherited KeyDown(Key, Shift);
+  Extend := ssShift In Shift;
+  Caret := FSelStart + FSelLength;
+  If FSelLength = 0 Then
+    Caret := FSelStart;
+  Case Key Of
+    VK_LEFT:
+      Begin
+        If (Not Extend) And (FSelLength > 0) Then
+          MoveCaret(FSelStart, False)
+        Else
+          MoveCaret(Caret - 1, Extend);
+        Key := 0;
+      End;
+    VK_RIGHT:
+      Begin
+        If (Not Extend) And (FSelLength > 0) Then
+          MoveCaret(FSelStart + FSelLength, False)
+        Else
+          MoveCaret(Caret + 1, Extend);
+        Key := 0;
+      End;
+    VK_HOME:
+      Begin
+        MoveCaret(0, Extend);
+        Key := 0;
+      End;
+    VK_END:
+      Begin
+        MoveCaret(CharCount, Extend);
+        Key := 0;
+      End;
+    VK_UP, VK_DOWN:
+      Begin
+        CaretByte := SpellCharToByteIndex(FText, Caret);
+        LineIndex := 0;
+        For Target := 0 To High(FPaintLines) Do
+          If (CaretByte >= FPaintLines[Target].ByteStart) And
+            (CaretByte <= FPaintLines[Target].ByteStart + FPaintLines[Target].ByteLength) Then
+            LineIndex := Target;
+        If Key = VK_UP Then
+          Dec(LineIndex)
+        Else
+          Inc(LineIndex);
+        If LineIndex < 0 Then
+          LineIndex := 0;
+        If LineIndex > High(FPaintLines) Then
+          LineIndex := High(FPaintLines);
+        MoveCaret(CharIndexAtPoint(CaretPixel.X, FPaintLines[LineIndex].Top - ScrollY + 1), Extend);
+        Key := 0;
+      End;
+    VK_BACK:
+      Begin
+        If FReadOnly Then
+          Exit;
+        If FSelLength > 0 Then
+          DeleteSelection
+        Else If FSelStart > 0 Then
+          DeleteRange(FSelStart - 1, 1);
+        Key := 0;
+      End;
+    VK_DELETE:
+      Begin
+        If FReadOnly Then
+          Exit;
+        If FSelLength > 0 Then
+          DeleteSelection
+        Else If FSelStart < CharCount Then
+          DeleteRange(FSelStart, 1);
+        Key := 0;
+      End;
+    VK_A:
+      If ssCtrl In Shift Then
+        Begin
+          SelectAll;
+          Key := 0;
+        End;
+    VK_C:
+      If ssCtrl In Shift Then
+        Begin
+          CopyToClipboard;
+          Key := 0;
+        End;
+    VK_X:
+      If ssCtrl In Shift Then
+        Begin
+          CutToClipboard;
+          Key := 0;
+        End;
+    VK_V:
+      If ssCtrl In Shift Then
+        Begin
+          PasteFromClipboard;
+          Key := 0;
+        End;
+  Else
+  End;
+End;
+
+Procedure TSpellMemo.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Var
+  NewPos: Integer;
+Begin
+  Inherited MouseDown(Button, Shift, X, Y);
+  SetFocus;
+  EnsurePopupHook;
+  NewPos := CharIndexAtPoint(X, Y);
+  MoveCaret(NewPos, ssShift In Shift);
+End;
+
+Procedure TSpellMemo.MouseMove(Shift: TShiftState; X, Y: Integer);
+Begin
+  Inherited MouseMove(Shift, X, Y);
+  If ssLeft In Shift Then
+    MoveCaret(CharIndexAtPoint(X, Y), True);
+End;
+
+Function TSpellMemo.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean;
+Begin
+  Result := True;
+  If Assigned(FScrollBar) And FScrollBar.Visible Then
+    FScrollBar.Position := FScrollBar.Position - (WheelDelta Div 120) * LineHeight;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.DoEnter;
+Begin
+  Inherited DoEnter;
+  UpdateCaret;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.DoExit;
+Begin
+  Inherited DoExit;
+  UpdateCaret;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.FontChanged(Sender: TObject);
+Begin
+  Inherited FontChanged(Sender);
+  RebuildLayout;
+  UpdateScrollBar;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.Resize;
+Begin
+  Inherited Resize;
+  RebuildLayout;
+  UpdateScrollBar;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.Paint;
+Var
+  LineIndex, X, Y, PrefixW, CodeLen, BytePos, CharPos, SelLo, SelHi: Integer;
+  LineText, Ch: String;
+  InSel: Boolean;
+  RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
+Begin
+  Canvas.Font := Font;
+  Canvas.Brush.Color := Color;
+  Canvas.FillRect(ClientRect);
+  ClampSelection;
+  SelLo := FSelStart;
+  SelHi := FSelStart + FSelLength;
+  If SelHi < SelLo Then
+    Begin
+      CharPos := SelLo;
+      SelLo := SelHi;
+      SelHi := CharPos;
+    End;
+  For LineIndex := 0 To High(FPaintLines) Do
+    Begin
+      Y := FPaintLines[LineIndex].Top - ScrollY;
+      If (Y + FPaintLines[LineIndex].Height < 0) Or (Y > ClientHeight) Then
+        Continue;
+      LineText := Copy(FText, FPaintLines[LineIndex].ByteStart, FPaintLines[LineIndex].ByteLength);
+      X := 3;
+      BytePos := FPaintLines[LineIndex].ByteStart;
+      While BytePos < FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength Do
+        Begin
+          UTF8CodepointToUnicode(@FText[BytePos], CodeLen);
+          If CodeLen <= 0 Then
+            Break;
+          Ch := Copy(FText, BytePos, CodeLen);
+          CharPos := SpellByteToCharOffset(FText, BytePos);
+          InSel := (FSelLength > 0) And (CharPos >= SelLo) And (CharPos < SelHi);
+          PrefixW := Canvas.TextWidth(Ch);
+          If InSel Then
+            Begin
+              Canvas.Brush.Color := clHighlight;
+              Canvas.Font.Color := clHighlightText;
+              Canvas.FillRect(Rect(X, Y, X + PrefixW, Y + FPaintLines[LineIndex].Height));
+            End
+          Else
+            Begin
+              Canvas.Brush.Color := Color;
+              Canvas.Font.Color := Font.Color;
+            End;
+          Canvas.TextOut(X, Y, Ch);
+          Inc(X, PrefixW);
+          Inc(BytePos, CodeLen);
+        End;
+      If SpellActive Then
+        Begin
+          LineStart := FPaintLines[LineIndex].ByteStart;
+          LineEnd := LineStart + FPaintLines[LineIndex].ByteLength;
+          For RangeIndex := 0 To High(FRanges) Do
+            Begin
+              RangeStart := FRanges[RangeIndex].UTF8Start;
+              RangeEnd := RangeStart + FRanges[RangeIndex].UTF8Length;
+              If (RangeEnd <= LineStart) Or (RangeStart >= LineEnd) Then
+                Continue;
+              If RangeStart < LineStart Then
+                RangeStart := LineStart;
+              If RangeEnd > LineEnd Then
+                RangeEnd := LineEnd;
+              U1 := 3 + Canvas.TextWidth(Copy(FText, LineStart, RangeStart - LineStart));
+              U2 := 3 + Canvas.TextWidth(Copy(FText, LineStart, RangeEnd - LineStart));
+              DrawErrorUnderline(Canvas, U1, U2, Y + FPaintLines[LineIndex].Height - 3);
+            End;
+        End;
+    End;
+  UpdateCaret;
+End;
+
 Procedure TSpellMemo.Rescan;
 Var
   Tokens: TSpellTokenArray;
   Index, Count: Integer;
-  Body: String;
 Begin
   SetLength(FRanges, 0);
   If Not SpellActive Then
     Begin
-      SpellMemoClearUnderlines(Self);
+      Invalidate;
       Exit;
     End;
-  Body := Text;
-  Tokens := SpellBreakWords(Body);
+  Tokens := SpellBreakWords(FText);
   Count := 0;
   For Index := 0 To High(Tokens) Do
     If Not WorkflowSpellConfig.IsWordCorrect(Tokens[Index].Text) Then
@@ -170,25 +1043,10 @@ Begin
         Inc(Count);
       End;
   SetLength(FRanges, Count);
-  If Not SpellMemoApplyUnderlines(Self, Body, FRanges) Then
-    Invalidate;
   If Assigned(WorkflowLogger) Then
-    Begin
-      If SpellActive Then
-        WorkflowLogger.Info('SpellMemo', Format('Rescan words=%d errors=%d status=%s',
-          [Length(Tokens), Count, WorkflowSpellConfig.LastStatus]))
-      Else
-        WorkflowLogger.Info('SpellMemo', 'Rescan skipped — spell checker not ready');
-    End;
-End;
-
-Procedure TSpellMemo.WMPaint(Var Message: TLMPaint);
-Begin
-  Inherited;
-  {$IFDEF MSWINDOWS}
-  If SpellActive And (Length(FRanges) > 0) Then
-    SpellMemoDrawWin32Waves(Self, Text, FRanges);
-  {$ENDIF}
+    WorkflowLogger.Info('SpellMemo', Format('Rescan words=%d errors=%d status=%s',
+      [Length(Tokens), Count, WorkflowSpellConfig.LastStatus]));
+  Invalidate;
 End;
 
 Procedure TSpellMemo.EnsurePopupHook;
@@ -208,21 +1066,6 @@ Begin
     End;
 End;
 
-Procedure TSpellMemo.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
-Var
-  ByteIndex, CharIndex: Integer;
-Begin
-  If (Button = mbRight) And (SelLength = 0) Then
-    Begin
-      ByteIndex := SpellMemoClientToByteIndex(Self, Text, X, Y);
-      CharIndex := SpellByteToCharOffset(Text, ByteIndex);
-      SelStart := CharIndex;
-      SelLength := 0;
-    End;
-  Inherited MouseDown(Button, Shift, X, Y);
-  EnsurePopupHook;
-End;
-
 Procedure TSpellMemo.DoContextPopup(MousePos: TPoint; Var Handled: Boolean);
 Begin
   EnsurePopupHook;
@@ -231,16 +1074,14 @@ End;
 
 Procedure TSpellMemo.LocateTokenAtCaret;
 Var
-  Body: String;
   BytePos: Integer;
   Token: TSpellToken;
 Begin
   FActiveToken := '';
   FActiveStart := 0;
   FActiveLength := 0;
-  Body := Text;
-  BytePos := SpellCharToByteIndex(Body, SelStart);
-  If SpellTokenAt(Body, BytePos, Token) Then
+  BytePos := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+  If SpellTokenAt(FText, BytePos, Token) Then
     Begin
       FActiveToken := Token.Text;
       FActiveStart := Token.ByteStart;
@@ -265,16 +1106,12 @@ Var
   Suggestions: TSpellStringArray;
   Index: Integer;
   Item: TMenuItem;
-  Misspelled: Boolean;
 Begin
   ClearSpellMenu(Menu);
   If Not Assigned(Menu) Or Not SpellActive Then
     Exit;
   LocateTokenAtCaret;
-  If FActiveToken = '' Then
-    Exit;
-  Misspelled := Not WorkflowSpellConfig.IsWordCorrect(FActiveToken);
-  If Not Misspelled Then
+  If (FActiveToken = '') Or WorkflowSpellConfig.IsWordCorrect(FActiveToken) Then
     Exit;
   Suggestions := WorkflowSpellConfig.GetSuggestions(FActiveToken, 12);
   For Index := 0 To High(Suggestions) Do
@@ -320,17 +1157,15 @@ End;
 
 Procedure TSpellMemo.ReplaceActiveWord(Const NewText: String);
 Var
-  Body: String;
   CharStart, CharEnd: Integer;
 Begin
   If (FActiveStart < 1) Or (FActiveLength <= 0) Then
     Exit;
-  Body := Text;
-  CharStart := SpellByteToCharOffset(Body, FActiveStart);
-  CharEnd := SpellByteToCharOffset(Body, FActiveStart + FActiveLength);
-  SelStart := CharStart;
-  SelLength := CharEnd - CharStart;
-  SelText := NewText;
+  CharStart := SpellByteToCharOffset(FText, FActiveStart);
+  CharEnd := SpellByteToCharOffset(FText, FActiveStart + FActiveLength);
+  FSelStart := CharStart;
+  FSelLength := CharEnd - CharStart;
+  InsertText(NewText);
 End;
 
 Procedure TSpellMemo.SuggestionClick(Sender: TObject);
