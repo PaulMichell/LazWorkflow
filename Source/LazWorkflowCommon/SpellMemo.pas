@@ -40,6 +40,8 @@ Type
     FSelAnchor: Integer;
     FOnChange: TNotifyEvent;
     FDebounce: TTimer;
+    FCaretTimer: TTimer;
+    FCaretOn: Boolean;
     FRanges: TSpellUnderlineRangeArray;
     FOwnedPopup: TPopupMenu;
     FSpellItemCount: Integer;
@@ -54,6 +56,8 @@ Type
     FUpdatingScroll: Boolean;
     FReady: Boolean;
     Procedure DebounceTimer(Sender: TObject);
+    Procedure CaretTimerTick(Sender: TObject);
+    Procedure ResetCaretBlink;
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
     Procedure ClearSpellMenu(Menu: TPopupMenu);
@@ -191,6 +195,11 @@ Begin
   FDebounce.Enabled := False;
   FDebounce.Interval := 200;
   FDebounce.OnTimer := @DebounceTimer;
+  FCaretTimer := TTimer.Create(Nil);
+  FCaretTimer.Enabled := False;
+  FCaretTimer.Interval := 530;
+  FCaretTimer.OnTimer := @CaretTimerTick;
+  FCaretOn := False;
   FScrollBar := Nil;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.RegisterChangedHandler(@ConfigChanged);
@@ -206,12 +215,15 @@ Begin
     FHookedPopup.OnPopup := FHostPopupHandler;
   If Assigned(FDebounce) Then
     FDebounce.Enabled := False;
+  If Assigned(FCaretTimer) Then
+    FCaretTimer.Enabled := False;
   If Assigned(FScrollBar) Then
     Begin
       FScrollBar.OnChange := Nil;
       FScrollBar.Parent := Nil;
     End;
   FreeAndNil(FDebounce);
+  FreeAndNil(FCaretTimer);
   FreeAndNil(FOwnedPopup);
   FreeAndNil(FScrollBar);
   Inherited Destroy;
@@ -681,9 +693,28 @@ Begin
     End;
 End;
 
+Procedure TSpellMemo.ResetCaretBlink;
+Begin
+  FCaretOn := True;
+  If Assigned(FCaretTimer) Then
+    Begin
+      FCaretTimer.Enabled := False;
+      FCaretTimer.Enabled := Focused And (Not (csDesigning In ComponentState));
+    End;
+End;
+
+Procedure TSpellMemo.CaretTimerTick(Sender: TObject);
+Begin
+  If (Not FReady) Or (csDestroying In ComponentState) Then
+    Exit;
+  FCaretOn := Not FCaretOn;
+  If HandleAllocated Then
+    Invalidate;
+End;
+
 Procedure TSpellMemo.UpdateCaret;
 Begin
-  { Caret is drawn in Paint. CreateCaret AVs on some Qt/Wayland setups. }
+  ResetCaretBlink;
   If HandleAllocated Then
     Invalidate;
 End;
@@ -973,8 +1004,11 @@ End;
 Procedure TSpellMemo.DoExit;
 Begin
   Inherited DoExit;
-  UpdateCaret;
-  Invalidate;
+  If Assigned(FCaretTimer) Then
+    FCaretTimer.Enabled := False;
+  FCaretOn := False;
+  If HandleAllocated Then
+    Invalidate;
 End;
 
 Procedure TSpellMemo.FontChanged(Sender: TObject);
@@ -1070,7 +1104,7 @@ Begin
             End;
         End;
     End;
-  If Focused And (FSelLength = 0) And (Not (csDesigning In ComponentState)) Then
+  If Focused And FCaretOn And (FSelLength = 0) And (Not (csDesigning In ComponentState)) Then
     Begin
       Pixel := CaretPixel;
       Canvas.Pen.Color := Font.Color;
