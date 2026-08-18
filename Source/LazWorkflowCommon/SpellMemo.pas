@@ -51,8 +51,8 @@ Type
     FPaintLines: TSpellPaintLineArray;
     FContentHeight: Integer;
     FScrollBar: TScrollBar;
-    FCaretVisible: Boolean;
     FUpdatingScroll: Boolean;
+    FReady: Boolean;
     Procedure DebounceTimer(Sender: TObject);
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
@@ -91,8 +91,9 @@ Type
     Procedure DeleteRange(CharStart, CharCount: Integer);
     Function CharCount: Integer;
     Procedure ClampSelection;
+    Function CanLayout: Boolean;
+    Procedure EnsureScrollBar;
   Protected
-    Procedure CreateParams(Var Params: TCreateParams); Override;
     Procedure Paint; Override;
     Procedure Resize; Override;
     Procedure FontChanged(Sender: TObject); Override;
@@ -178,6 +179,7 @@ Begin
   ParentFont := True;
   TabStop := True;
   DoubleBuffered := True;
+  BorderStyle := bsSingle;
   Width := 200;
   Height := 80;
   FSpellItemCount := 0;
@@ -188,34 +190,49 @@ Begin
   FDebounce.Enabled := False;
   FDebounce.Interval := 200;
   FDebounce.OnTimer := @DebounceTimer;
-  FScrollBar := TScrollBar.Create(Nil);
-  FScrollBar.Kind := sbVertical;
-  FScrollBar.Parent := Self;
-  FScrollBar.Align := alRight;
-  FScrollBar.Width := 16;
-  FScrollBar.Visible := False;
-  FScrollBar.OnChange := @ScrollBarChange;
+  FScrollBar := Nil;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.RegisterChangedHandler(@ConfigChanged);
+  FReady := True;
 End;
 
 Destructor TSpellMemo.Destroy;
 Begin
+  FReady := False;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.UnregisterChangedHandler(@ConfigChanged);
   If Assigned(FHookedPopup) Then
     FHookedPopup.OnPopup := FHostPopupHandler;
+  If Assigned(FDebounce) Then
+    FDebounce.Enabled := False;
+  If Assigned(FScrollBar) Then
+    Begin
+      FScrollBar.OnChange := Nil;
+      FScrollBar.Parent := Nil;
+    End;
   FreeAndNil(FDebounce);
   FreeAndNil(FOwnedPopup);
   FreeAndNil(FScrollBar);
   Inherited Destroy;
 End;
 
-Procedure TSpellMemo.CreateParams(Var Params: TCreateParams);
+Function TSpellMemo.CanLayout: Boolean;
 Begin
-  Inherited CreateParams(Params);
-  Params.Style := Params.Style Or WS_TABSTOP;
-  Params.ExStyle := Params.ExStyle Or WS_EX_CLIENTEDGE;
+  Result := FReady And (Not (csLoading In ComponentState)) And (Not (csDestroying In ComponentState)) And
+    HandleAllocated;
+End;
+
+Procedure TSpellMemo.EnsureScrollBar;
+Begin
+  If Assigned(FScrollBar) Or (Not FReady) Then
+    Exit;
+  FScrollBar := TScrollBar.Create(Nil);
+  FScrollBar.Kind := sbVertical;
+  FScrollBar.Width := 16;
+  FScrollBar.Visible := False;
+  FScrollBar.OnChange := @ScrollBarChange;
+  FScrollBar.Parent := Self;
+  FScrollBar.Align := alRight;
 End;
 
 Function TSpellMemo.RealGetText: TCaption;
@@ -230,8 +247,12 @@ Begin
   FText := Value;
   FSelStart := UTF8Length(FText);
   FSelLength := 0;
-  RebuildLayout;
-  UpdateScrollBar;
+  FSelAnchor := FSelStart;
+  If CanLayout Then
+    Begin
+      RebuildLayout;
+      UpdateScrollBar;
+    End;
   Invalidate;
   RestartDebounce;
   Change;
@@ -250,14 +271,24 @@ Begin
   If FUseSharedConfig And Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
     WorkflowSpellConfig.Apply;
   EnsurePopupHook;
-  RebuildLayout;
+  If CanLayout Then
+    Begin
+      EnsureScrollBar;
+      RebuildLayout;
+      UpdateScrollBar;
+    End;
   RestartDebounce;
 End;
 
 Procedure TSpellMemo.InitializeWnd;
 Begin
   Inherited InitializeWnd;
-  RebuildLayout;
+  If CanLayout Then
+    Begin
+      EnsureScrollBar;
+      RebuildLayout;
+      UpdateScrollBar;
+    End;
   If Not (csDesigning In ComponentState) Then
     RestartDebounce;
 End;
@@ -270,14 +301,15 @@ End;
 
 Procedure TSpellMemo.RestartDebounce;
 Begin
-  If Not Assigned(FDebounce) Then
+  If (Not FReady) Or (Not Assigned(FDebounce)) Then
     Exit;
   FDebounce.Enabled := False;
   If SpellActive Then
     FDebounce.Enabled := True
   Else
     SetLength(FRanges, 0);
-  Invalidate;
+  If HandleAllocated Then
+    Invalidate;
 End;
 
 Procedure TSpellMemo.ConfigChanged(Sender: TObject);
@@ -302,8 +334,11 @@ Begin
   If FWordWrap = Value Then
     Exit;
   FWordWrap := Value;
-  RebuildLayout;
-  UpdateScrollBar;
+  If CanLayout Then
+    Begin
+      RebuildLayout;
+      UpdateScrollBar;
+    End;
   Invalidate;
 End;
 
@@ -327,8 +362,12 @@ Begin
   If FScrollBars = Value Then
     Exit;
   FScrollBars := Value;
-  UpdateScrollBar;
-  RebuildLayout;
+  If CanLayout Then
+    Begin
+      EnsureScrollBar;
+      UpdateScrollBar;
+      RebuildLayout;
+    End;
   Invalidate;
 End;
 
@@ -423,6 +462,9 @@ End;
 
 Function TSpellMemo.LineHeight: Integer;
 Begin
+  Result := 16;
+  If Not CanLayout Then
+    Exit;
   Canvas.Font := Font;
   Result := Canvas.TextHeight('Hg') + 2;
   If Result < 12 Then
@@ -436,6 +478,8 @@ Var
   UsedWidth, CharWidth, MaxWidth, RowTop, RowH: Integer;
   CodePoint: Cardinal;
 Begin
+  If Not CanLayout Then
+    Exit;
   SetLength(FPaintLines, 0);
   Count := 0;
   RowTop := 3;
@@ -530,6 +574,9 @@ Var
   NeedBar: Boolean;
   PageSize, MaxPos: Integer;
 Begin
+  If Not CanLayout Then
+    Exit;
+  EnsureScrollBar;
   If Not Assigned(FScrollBar) Then
     Exit;
   NeedBar := (FScrollBars In [ssVertical, ssAutoVertical, ssBoth, ssAutoBoth]) And
@@ -618,28 +665,10 @@ Begin
 End;
 
 Procedure TSpellMemo.UpdateCaret;
-Var
-  Pixel: TPoint;
 Begin
-  If Not HandleAllocated Then
-    Exit;
-  If Focused And (Not (csDesigning In ComponentState)) Then
-    Begin
-      Pixel := CaretPixel;
-      If Not FCaretVisible Then
-        Begin
-          CreateCaret(Handle, 0, 1, LineHeight);
-          FCaretVisible := True;
-        End;
-      SetCaretPos(Pixel.X, Pixel.Y);
-      ShowCaret(Handle);
-    End
-  Else If FCaretVisible Then
-    Begin
-      HideCaret(Handle);
-      DestroyCaret(Handle);
-      FCaretVisible := False;
-    End;
+  { Caret is drawn in Paint. CreateCaret AVs on some Qt/Wayland setups. }
+  If HandleAllocated Then
+    Invalidate;
 End;
 
 Function TSpellMemo.CharIndexAtPoint(X, Y: Integer): Integer;
@@ -933,6 +962,8 @@ End;
 Procedure TSpellMemo.FontChanged(Sender: TObject);
 Begin
   Inherited FontChanged(Sender);
+  If Not CanLayout Then
+    Exit;
   RebuildLayout;
   UpdateScrollBar;
   Invalidate;
@@ -941,6 +972,8 @@ End;
 Procedure TSpellMemo.Resize;
 Begin
   Inherited Resize;
+  If Not CanLayout Then
+    Exit;
   RebuildLayout;
   UpdateScrollBar;
   Invalidate;
@@ -949,10 +982,13 @@ End;
 Procedure TSpellMemo.Paint;
 Var
   LineIndex, X, Y, PrefixW, CodeLen, BytePos, CharPos, SelLo, SelHi: Integer;
-  LineText, Ch: String;
+  Pixel: TPoint;
+  Ch: String;
   InSel: Boolean;
   RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
 Begin
+  If Not FReady Then
+    Exit;
   Canvas.Font := Font;
   Canvas.Brush.Color := Color;
   Canvas.FillRect(ClientRect);
@@ -970,7 +1006,6 @@ Begin
       Y := FPaintLines[LineIndex].Top - ScrollY;
       If (Y + FPaintLines[LineIndex].Height < 0) Or (Y > ClientHeight) Then
         Continue;
-      LineText := Copy(FText, FPaintLines[LineIndex].ByteStart, FPaintLines[LineIndex].ByteLength);
       X := 3;
       BytePos := FPaintLines[LineIndex].ByteStart;
       While BytePos < FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength Do
@@ -1017,7 +1052,14 @@ Begin
             End;
         End;
     End;
-  UpdateCaret;
+  If Focused And (FSelLength = 0) And (Not (csDesigning In ComponentState)) Then
+    Begin
+      Pixel := CaretPixel;
+      Canvas.Pen.Color := Font.Color;
+      Canvas.Pen.Width := 1;
+      Canvas.MoveTo(Pixel.X, Pixel.Y + 1);
+      Canvas.LineTo(Pixel.X, Pixel.Y + LineHeight - 1);
+    End;
 End;
 
 Procedure TSpellMemo.Rescan;
