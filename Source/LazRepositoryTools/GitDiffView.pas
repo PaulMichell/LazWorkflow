@@ -2625,9 +2625,9 @@ Begin
     End
   Else
     Begin
-      { Load text under plain Diff first so a highlighter failure cannot leave a blank pane. }
+      { History shows code lines only — drop diff --git / +++ / --- / @@ headers. }
       ApplyDiffHighlighter;
-      DiffEditor.Lines.Text := DiffText;
+      SetEditorDiffText(DiffText, True);
       ApplyMixedDiffHighlighter(Path);
       EnsureDiffOverviewGutter;
       ScheduleOverviewRefresh;

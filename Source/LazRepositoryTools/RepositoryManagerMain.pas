@@ -388,7 +388,7 @@ Begin
       Cat := IDECommandList.CreateCategory(Nil, 'Repository', 'Repository');
 
     Key := IDEShortCut(VK_UNKNOWN, []);
-    CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Repository',
+    CmdRepoManage := RegisterIDECommand(Cat, 'RepoManage', 'Manage Project Repository',
       IDEShortCut(VK_G, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @ShowManageRepository);
     CmdRepoInit := RegisterIDECommand(Cat, 'RepoInitialise', 'Initialise Repository',
       IDEShortCut(VK_I, [ssCtrl, ssShift], VK_UNKNOWN, []), Nil, @DoInitialiseRepository);
@@ -407,7 +407,7 @@ Begin
         mnuMain.Insert(mnuRun.SectionIndex + 1, RepoMenu);
       End;
     ManageSec := RegisterIDEMenuSection(RepoMenu, 'RepoManageCmds');
-    RegisterIDEMenuCommand(ManageSec, 'RepoManage', 'Manage Repository', Nil, Nil, CmdRepoManage);
+    RegisterIDEMenuCommand(ManageSec, 'RepoManage', 'Manage Project Repository', Nil, Nil, CmdRepoManage);
     SetupSec := RegisterIDEMenuSection(RepoMenu, 'RepoSetupCmds');
     RegisterIDEMenuCommand(SetupSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
     RegisterIDEMenuCommand(SetupSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);

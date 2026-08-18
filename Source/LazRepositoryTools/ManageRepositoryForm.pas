@@ -1691,10 +1691,12 @@ Var
 Begin
   If FRepoPath = '' Then
     Begin
+      Caption := 'Manage Repository';
       If Assigned(StatusFooter) Then
         StatusFooter.SetAll('No repository', '', 'Ready');
       Exit;
     End;
+  Caption := 'Manage Repository: ' + FRepoPath;
 
   If FBranch <> '' Then
     LeftText := FBranch
