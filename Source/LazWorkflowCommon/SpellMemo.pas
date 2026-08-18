@@ -93,6 +93,7 @@ Type
     Procedure ClampSelection;
     Function CanLayout: Boolean;
     Procedure EnsureScrollBar;
+    Function MeasureAdvance(Const S: String): Integer;
   Protected
     Procedure Paint; Override;
     Procedure Resize; Override;
@@ -460,6 +461,22 @@ Begin
     Result := 20;
 End;
 
+Function TSpellMemo.MeasureAdvance(Const S: String): Integer;
+Var
+  Index, CodeLen: Integer;
+Begin
+  Result := 0;
+  Index := 1;
+  While Index <= Length(S) Do
+    Begin
+      UTF8CodepointToUnicode(@S[Index], CodeLen);
+      If CodeLen <= 0 Then
+        Break;
+      Result := Result + Canvas.TextWidth(Copy(S, Index, CodeLen));
+      Inc(Index, CodeLen);
+    End;
+End;
+
 Function TSpellMemo.LineHeight: Integer;
 Begin
   Result := 16;
@@ -652,14 +669,14 @@ Begin
       Begin
         PrefixLen := CaretByte - FPaintLines[LineIndex].ByteStart;
         Prefix := Copy(FText, FPaintLines[LineIndex].ByteStart, PrefixLen);
-        Result.X := 3 + Canvas.TextWidth(Prefix);
+        Result.X := 3 + MeasureAdvance(Prefix);
         Result.Y := FPaintLines[LineIndex].Top - ScrollY;
         Exit;
       End;
   If Length(FPaintLines) > 0 Then
     Begin
       Result.Y := FPaintLines[High(FPaintLines)].Top - ScrollY;
-      Result.X := 3 + Canvas.TextWidth(Copy(FText, FPaintLines[High(FPaintLines)].ByteStart,
+      Result.X := 3 + MeasureAdvance(Copy(FText, FPaintLines[High(FPaintLines)].ByteStart,
         FPaintLines[High(FPaintLines)].ByteLength));
     End;
 End;
@@ -734,6 +751,7 @@ Begin
   EnsureCaretInView;
   UpdateCaret;
   Invalidate;
+  RestartDebounce;
 End;
 
 Procedure TSpellMemo.DeleteRange(CharStart, CharCount: Integer);
@@ -1046,8 +1064,8 @@ Begin
                 RangeStart := LineStart;
               If RangeEnd > LineEnd Then
                 RangeEnd := LineEnd;
-              U1 := 3 + Canvas.TextWidth(Copy(FText, LineStart, RangeStart - LineStart));
-              U2 := 3 + Canvas.TextWidth(Copy(FText, LineStart, RangeEnd - LineStart));
+              U1 := 3 + MeasureAdvance(Copy(FText, LineStart, RangeStart - LineStart));
+              U2 := 3 + MeasureAdvance(Copy(FText, LineStart, RangeEnd - LineStart));
               DrawErrorUnderline(Canvas, U1, U2, Y + FPaintLines[LineIndex].Height - 3);
             End;
         End;
@@ -1065,7 +1083,7 @@ End;
 Procedure TSpellMemo.Rescan;
 Var
   Tokens: TSpellTokenArray;
-  Index, Count: Integer;
+  Index, Count, CaretByte: Integer;
 Begin
   SetLength(FRanges, 0);
   If Not SpellActive Then
@@ -1073,17 +1091,22 @@ Begin
       Invalidate;
       Exit;
     End;
+  CaretByte := SpellCharToByteIndex(FText, FSelStart + FSelLength);
   Tokens := SpellBreakWords(FText);
   Count := 0;
   For Index := 0 To High(Tokens) Do
-    If Not WorkflowSpellConfig.IsWordCorrect(Tokens[Index].Text) Then
-      Begin
-        If Count >= Length(FRanges) Then
-          SetLength(FRanges, Count + 16);
-        FRanges[Count].UTF8Start := Tokens[Index].ByteStart;
-        FRanges[Count].UTF8Length := Tokens[Index].ByteLength;
-        Inc(Count);
-      End;
+    Begin
+      If (FSelLength = 0) And (Not SpellWordIsComplete(FText, Tokens[Index], CaretByte)) Then
+        Continue;
+      If Not WorkflowSpellConfig.IsWordCorrect(Tokens[Index].Text) Then
+        Begin
+          If Count >= Length(FRanges) Then
+            SetLength(FRanges, Count + 16);
+          FRanges[Count].UTF8Start := Tokens[Index].ByteStart;
+          FRanges[Count].UTF8Length := Tokens[Index].ByteLength;
+          Inc(Count);
+        End;
+    End;
   SetLength(FRanges, Count);
   If Assigned(WorkflowLogger) Then
     WorkflowLogger.Info('SpellMemo', Format('Rescan words=%d errors=%d status=%s',

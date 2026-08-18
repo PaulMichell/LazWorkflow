@@ -32,6 +32,7 @@ Type
 
 Function SpellBreakWords(Const Value: String): TSpellTokenArray;
 Function SpellTokenAt(Const Value: String; BytePos: Integer; Out Token: TSpellToken): Boolean;
+Function SpellWordIsComplete(Const Value: String; Const Token: TSpellToken; CaretByte: Integer): Boolean;
 
 Implementation
 
@@ -188,6 +189,23 @@ Begin
   Finally
     Breaker.Free;
   End;
+End;
+
+Function SpellWordIsComplete(Const Value: String; Const Token: TSpellToken; CaretByte: Integer): Boolean;
+Var
+  After, CodeLen: Integer;
+  CodePoint: Cardinal;
+Begin
+  Result := True;
+  After := Token.ByteStart + Token.ByteLength;
+  If (After >= 1) And (After <= Length(Value)) Then
+    Begin
+      CodePoint := UTF8CodepointToUnicode(@Value[After], CodeLen);
+      If (CodeLen > 0) And (Not IsTokenChar(CodePoint)) Then
+        Exit;
+    End;
+  { No terminator yet: still being typed if the caret is in or just after the word. }
+  Result := (CaretByte < Token.ByteStart) Or (CaretByte > After);
 End;
 
 Function SpellTokenAt(Const Value: String; BytePos: Integer; Out Token: TSpellToken): Boolean;

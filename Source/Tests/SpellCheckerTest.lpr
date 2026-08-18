@@ -37,6 +37,15 @@ Begin
   Check('breaker finds prose words', Length(Tokens) >= 3);
   Check('breaker skips path', Length(SpellBreakWords('src/GitService.pas')) = 0);
   Check('breaker keeps contraction', SpellTokenAt('don''t break this', 2, Token) And (Token.Text = 'don''t'));
+  Tokens := SpellBreakWords('lookoing');
+  Check('open word at caret is incomplete', (Length(Tokens) = 1) And
+    (Not SpellWordIsComplete('lookoing', Tokens[0], Length('lookoing') + 1)));
+  Tokens := SpellBreakWords('xx lookoing');
+  Check('open word is complete after leaving', (Length(Tokens) = 2) And
+    SpellWordIsComplete('xx lookoing', Tokens[1], 1));
+  Tokens := SpellBreakWords('lookoing ');
+  Check('word followed by space is complete', (Length(Tokens) = 1) And
+    SpellWordIsComplete('lookoing ', Tokens[0], Length('lookoing ') + 1));
 End;
 
 Procedure TestHunspell;

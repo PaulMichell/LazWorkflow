@@ -70,11 +70,16 @@ Begin
   Mid := 2;
   While X < X2 Do
     Begin
+      If X + Mid > X2 Then
+        Mid := X2 - X;
+      If Mid <= 0 Then
+        Break;
       If Down Then
         Canvas.LineTo(X + Mid, Y + Mid)
       Else
         Canvas.LineTo(X + Mid, Y);
       Inc(X, Mid);
+      Mid := 2;
       Down := Not Down;
     End;
 End;
