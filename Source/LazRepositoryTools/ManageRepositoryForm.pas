@@ -387,17 +387,10 @@ Begin
   MessageEditor.WordWrap := True;
   MessageEditor.ParentFont := True;
   MessageEditor.UseSharedConfig := True;
-  If Assigned(WorkflowSpellConfig) Then
-    Begin
-      If Not WorkflowSpellConfig.IsReady Then
-        WorkflowSpellConfig.Apply;
-      WorkflowLogger.Info('ManageRepository', 'Commit-message spell: ' + WorkflowSpellConfig.LastStatus);
-      If Assigned(MessageLabel) Then
-        If WorkflowSpellConfig.IsReady Then
-          MessageLabel.Caption := 'Commit message  ·  ' + WorkflowSpellConfig.LastStatus
-        Else
-          MessageLabel.Caption := 'Commit message  ·  no spell checker';
-    End;
+  If Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
+    WorkflowSpellConfig.Apply;
+  If Assigned(MessageLabel) Then
+    MessageLabel.Caption := 'Commit message';
   MessageEditor.Rescan;
 End;
 

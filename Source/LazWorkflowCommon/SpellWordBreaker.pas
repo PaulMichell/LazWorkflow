@@ -32,6 +32,7 @@ Type
 
 Function SpellBreakWords(Const Value: String): TSpellTokenArray;
 Function SpellTokenAt(Const Value: String; BytePos: Integer; Out Token: TSpellToken): Boolean;
+Function SpellRawTokenAt(Const Value: String; BytePos: Integer; Out Token: TSpellToken): Boolean;
 Function SpellWordIsComplete(Const Value: String; Const Token: TSpellToken; CaretByte: Integer): Boolean;
 
 Implementation
@@ -230,6 +231,35 @@ Begin
         Result := True;
         Exit;
       End;
+End;
+
+Function SpellRawTokenAt(Const Value: String; BytePos: Integer; Out Token: TSpellToken): Boolean;
+Var
+  Breaker: TSpellWordBreaker;
+  Found: TSpellToken;
+Begin
+  Result := False;
+  Token.ByteStart := 0;
+  Token.ByteLength := 0;
+  Token.Text := '';
+  Token.IsProse := False;
+  If BytePos < 1 Then
+    BytePos := 1;
+  If BytePos > Length(Value) + 1 Then
+    BytePos := Length(Value) + 1;
+  Breaker := TSpellWordBreaker.Create;
+  Try
+    Breaker.SetText(Value);
+    While Breaker.NextWord(Found) Do
+      If (BytePos >= Found.ByteStart) And (BytePos <= Found.ByteStart + Found.ByteLength) Then
+        Begin
+          Token := Found;
+          Result := True;
+          Exit;
+        End;
+  Finally
+    Breaker.Free;
+  End;
 End;
 
 End.

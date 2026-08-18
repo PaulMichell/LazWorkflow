@@ -50,6 +50,10 @@ Type
     FActiveLength: Integer;
     FHostPopupHandler: TNotifyEvent;
     FHookedPopup: TPopupMenu;
+    FEditCutItem: TMenuItem;
+    FEditCopyItem: TMenuItem;
+    FEditPasteItem: TMenuItem;
+    FEditSelectAllItem: TMenuItem;
     FPaintLines: TSpellPaintLineArray;
     FContentHeight: Integer;
     FScrollBar: TScrollBar;
@@ -67,6 +71,12 @@ Type
     Procedure AddClick(Sender: TObject);
     Procedure PopupPopup(Sender: TObject);
     Procedure EnsurePopupHook;
+    Procedure EnsureEditMenu;
+    Procedure UpdateEditMenu;
+    Procedure EditCutClick(Sender: TObject);
+    Procedure EditCopyClick(Sender: TObject);
+    Procedure EditPasteClick(Sender: TObject);
+    Procedure EditSelectAllClick(Sender: TObject);
     Function SpellActive: Boolean;
     Procedure ReplaceActiveWord(Const NewText: String);
     Procedure LocateTokenAtCaret;
@@ -107,6 +117,7 @@ Type
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
+    Procedure DblClick; Override;
     Procedure MouseMove(Shift: TShiftState; X, Y: Integer); Override;
     Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean; Override;
     Procedure DoEnter; Override;
@@ -152,6 +163,7 @@ Type
     Property WantTabs: Boolean Read FWantTabs Write SetWantTabs Default False;
     Property WordWrap: Boolean Read FWordWrap Write SetWordWrap Default True;
     Property OnClick;
+    Property OnDblClick;
     Property OnEnter;
     Property OnExit;
     Property OnKeyDown;
@@ -1148,10 +1160,80 @@ Begin
   Invalidate;
 End;
 
+Procedure TSpellMemo.EnsureEditMenu;
+Var
+  Sep: TMenuItem;
+Begin
+  If (Not Assigned(FOwnedPopup)) Or Assigned(FEditCutItem) Then
+    Exit;
+  FEditCutItem := TMenuItem.Create(FOwnedPopup);
+  FEditCutItem.Caption := 'Cut';
+  FEditCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
+  FEditCutItem.OnClick := @EditCutClick;
+  FOwnedPopup.Items.Add(FEditCutItem);
+  FEditCopyItem := TMenuItem.Create(FOwnedPopup);
+  FEditCopyItem.Caption := 'Copy';
+  FEditCopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  FEditCopyItem.OnClick := @EditCopyClick;
+  FOwnedPopup.Items.Add(FEditCopyItem);
+  FEditPasteItem := TMenuItem.Create(FOwnedPopup);
+  FEditPasteItem.Caption := 'Paste';
+  FEditPasteItem.ShortCut := ShortCut(Ord('V'), [ssCtrl]);
+  FEditPasteItem.OnClick := @EditPasteClick;
+  FOwnedPopup.Items.Add(FEditPasteItem);
+  Sep := TMenuItem.Create(FOwnedPopup);
+  Sep.Caption := '-';
+  FOwnedPopup.Items.Add(Sep);
+  FEditSelectAllItem := TMenuItem.Create(FOwnedPopup);
+  FEditSelectAllItem.Caption := 'Select All';
+  FEditSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
+  FEditSelectAllItem.OnClick := @EditSelectAllClick;
+  FOwnedPopup.Items.Add(FEditSelectAllItem);
+End;
+
+Procedure TSpellMemo.EditCutClick(Sender: TObject);
+Begin
+  CutToClipboard;
+End;
+
+Procedure TSpellMemo.EditCopyClick(Sender: TObject);
+Begin
+  CopyToClipboard;
+End;
+
+Procedure TSpellMemo.EditPasteClick(Sender: TObject);
+Begin
+  PasteFromClipboard;
+End;
+
+Procedure TSpellMemo.EditSelectAllClick(Sender: TObject);
+Begin
+  SelectAll;
+End;
+
+Procedure TSpellMemo.UpdateEditMenu;
+Var
+  HasSel, CanEdit: Boolean;
+Begin
+  HasSel := FSelLength > 0;
+  CanEdit := Not FReadOnly;
+  If Assigned(FEditCutItem) Then
+    FEditCutItem.Enabled := HasSel And CanEdit;
+  If Assigned(FEditCopyItem) Then
+    FEditCopyItem.Enabled := HasSel;
+  If Assigned(FEditPasteItem) Then
+    FEditPasteItem.Enabled := CanEdit And Clipboard.HasFormat(CF_TEXT);
+  If Assigned(FEditSelectAllItem) Then
+    FEditSelectAllItem.Enabled := FText <> '';
+End;
+
 Procedure TSpellMemo.EnsurePopupHook;
 Begin
   If PopupMenu = Nil Then
-    PopupMenu := FOwnedPopup;
+    Begin
+      EnsureEditMenu;
+      PopupMenu := FOwnedPopup;
+    End;
   If PopupMenu = FHookedPopup Then
     Exit;
   If Assigned(FHookedPopup) Then
@@ -1250,8 +1332,29 @@ End;
 Procedure TSpellMemo.PopupPopup(Sender: TObject);
 Begin
   RebuildSpellMenu(Sender As TPopupMenu);
+  If Sender = FOwnedPopup Then
+    UpdateEditMenu;
   If Assigned(FHostPopupHandler) Then
     FHostPopupHandler(Sender);
+End;
+
+Procedure TSpellMemo.DblClick;
+Var
+  Token: TSpellToken;
+  BytePos, CharStart, CharEnd: Integer;
+Begin
+  Inherited DblClick;
+  BytePos := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+  If Not SpellRawTokenAt(FText, BytePos, Token) Then
+    Exit;
+  CharStart := SpellByteToCharOffset(FText, Token.ByteStart);
+  CharEnd := SpellByteToCharOffset(FText, Token.ByteStart + Token.ByteLength);
+  FSelStart := CharStart;
+  FSelLength := CharEnd - CharStart;
+  FSelAnchor := CharStart;
+  ResetCaretBlink;
+  Invalidate;
+  RestartDebounce;
 End;
 
 Procedure TSpellMemo.ReplaceActiveWord(Const NewText: String);
