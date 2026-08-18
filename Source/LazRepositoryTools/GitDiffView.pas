@@ -2745,6 +2745,13 @@ Var
 Begin
   If Not IsAlive Then
     Exit;
+  If (FMode = dvmBrowse) And (FBrowseSha = Sha) And (FRepoPath = ARepoPath) And
+     (Sha <> '') And Assigned(FileList) And (FileList.Items.Count > 0) Then
+    Begin
+      If Title <> '' Then
+        TitleLabel.Caption := Title;
+      Exit;
+    End;
   SetViewMode(dvmBrowse);
   Clear;
   FRepoPath := ARepoPath;

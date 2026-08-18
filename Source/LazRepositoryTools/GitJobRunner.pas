@@ -565,6 +565,9 @@ Begin
         Job.FOk := Git.Push(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
+        If Job.FOk Then
+          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
+            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkCommit:
       Begin

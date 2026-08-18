@@ -356,6 +356,13 @@ Begin
         FilesDiffView.SetViewMode(dvmEditorOnly);
         FilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
       End;
+    If Assigned(GraphHost) Then
+      Begin
+        GraphHost.DoubleBuffered := True;
+        GraphHost.ParentBackground := False;
+      End;
+    If Assigned(GraphPaintBox) Then
+      GraphPaintBox.ControlStyle := GraphPaintBox.ControlStyle + [csOpaque];
     If Assigned(FHistory) Then
       FHistory.Bind(GraphPaintBox, GraphScrollBar, FModel);
     If Assigned(FFiles) Then
@@ -402,7 +409,9 @@ End;
 Procedure TManageRepositoryForm.FormShow(Sender: TObject);
 Begin
   Try
-    BindRepository;
+    { Do not rediscover from the IDE project when Open already bound a path. }
+    If FRepoPath = '' Then
+      BindRepository;
     ApplyConfig;
     If Assigned(MessageEditor) Then
       MessageEditor.Rescan;
@@ -644,16 +653,7 @@ Begin
         If Job.Ok Then
           Begin
             MessageDlg(Msg, mtInformation, [mbOK], 0);
-            If Job.Kind = gjkPush Then
-              Begin
-                { Push does not change history; skip rev-list teardown. }
-                RefreshRepositoryInfo;
-                If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-                  RefreshFiles;
-                If Assigned(StatusFooter) Then
-                  StatusFooter.SetRightText('Push complete');
-              End
-            Else If Job.IndexOk Then
+            If Job.IndexOk Then
               Begin
                 ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
                 RefreshRepositoryInfo;
@@ -662,6 +662,13 @@ Begin
               End
             Else
               ManualRefresh;
+            If Assigned(StatusFooter) Then
+              If Job.Kind = gjkPush Then
+                StatusFooter.SetRightText('Push complete')
+              Else If Job.Kind = gjkPull Then
+                StatusFooter.SetRightText('Pull complete')
+              Else
+                StatusFooter.SetRightText('Fetch complete');
           End
         Else
           MessageDlg(Msg, mtError, [mbOK], 0);
@@ -920,9 +927,8 @@ Begin
     Exit;
   If Ok Then
     FModel.ApplyDetailsText(Payload);
-  If (FSelectedIndex >= 0) And (FSelectedIndex < FModel.Count) And
-     FModel.Commit(FSelectedIndex).DetailsLoaded Then
-    ShowCommitDetails(FSelectedIndex);
+  { Do not reload the commit SynEdit here. Scrolling fetches details for newly
+    visible rows; rewriting the selected diff on every batch is the flicker. }
   If Assigned(GraphPaintBox) Then
     GraphPaintBox.Invalidate;
   { More rows may still be missing after scrolling. }

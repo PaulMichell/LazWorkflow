@@ -56,6 +56,7 @@ Type
       Out ExitCode: Integer): Boolean;
     Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
     Function CountRangeCommits(Const RangeSpec: String): Integer;
+    Function CountAheadOfUpstream: Integer;
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
       Var Summary: TGitTransferSummary);
     Function IsCancelled: Boolean;
@@ -1283,14 +1284,28 @@ Begin
     Result := 0;
 End;
 
+Function TGitService.CountAheadOfUpstream: Integer;
+Var
+  Text: String;
+  ExitCode: Integer;
+Begin
+  Result := 0;
+  If Not RunGit(['rev-list', '--count', '@{upstream}..HEAD'], Text, ExitCode) Then
+    Exit;
+  Result := StrToIntDef(Trim(Text), 0);
+  If Result < 0 Then
+    Result := 0;
+End;
+
 Procedure TGitService.BuildTransferSummary(Const Operation, Remote, OutputText: String;
   Var Summary: TGitTransferSummary);
 Var
   Lines: TStringList;
   I, B: Integer;
-  Line, OldSha, NewSha, RangeSpec: String;
+  Raw, Line, OldSha, NewSha: String;
   Total, NewRefs: Integer;
   UpToDate: Boolean;
+  Flag: Char;
 
   Function IsHexChar(C: Char): Boolean;
   Begin
@@ -1320,6 +1335,20 @@ Var
     Result := (Length(LeftSha) >= 7) And (Length(RightSha) >= 7);
   End;
 
+  Procedure AddRangeFrom(Const S: String; CountEvenIfMissing: Boolean);
+  Begin
+    If ExtractShaRange(S, OldSha, NewSha) Then
+      Begin
+        B := CountRangeCommits(OldSha + '..' + NewSha);
+        If B > 0 Then
+          Inc(Total, B)
+        Else
+          Inc(Total);
+      End
+    Else If CountEvenIfMissing Then
+      Inc(Total);
+  End;
+
 Begin
   Summary.Remote := Remote;
   Summary.CommitCount := 0;
@@ -1335,8 +1364,27 @@ Begin
     Lines.Text := OutputText;
     For I := 0 To Lines.Count - 1 Do
       Begin
-        Line := Trim(Lines[I]);
-        If Line = '' Then
+        Raw := Lines[I];
+        { Porcelain is flag + TAB + fields. Do not Trim first: a fast-forward is
+          flagged with a leading space, which Trim would discard. }
+        If (Length(Raw) >= 2) And (Raw[2] = #9) Then
+          Begin
+            Flag := Raw[1];
+            Case Flag Of
+              '=':
+                UpToDate := True;
+              '*':
+                Inc(NewRefs);
+              ' ', '+':
+                AddRangeFrom(Raw, True);
+            Else
+              AddRangeFrom(Raw, False);
+            End;
+            Continue;
+          End;
+
+        Line := Trim(Raw);
+        If (Line = '') Or (Line[1] = '#') Or SameText(Line, 'Done') Then
           Continue;
 
         If (Pos('Already up to date', Line) > 0) Or
@@ -1356,16 +1404,7 @@ Begin
             Continue;
           End;
 
-        If ExtractShaRange(Line, OldSha, NewSha) Then
-          Begin
-            { Fetch/pull: old..new is commits gained. Push uses the same form. }
-            RangeSpec := OldSha + '..' + NewSha;
-            B := CountRangeCommits(RangeSpec);
-            If B > 0 Then
-              Inc(Total, B)
-            Else
-              Inc(Total); { at least one update even if count fails }
-          End;
+        AddRangeFrom(Line, False);
       End;
   Finally
     Lines.Free;
@@ -1373,33 +1412,38 @@ Begin
 
   Summary.CommitCount := Total;
   Summary.NewRefs := NewRefs;
-  Summary.UpToDate := UpToDate Or ((Total = 0) And (NewRefs = 0));
+  { Only claim up-to-date when git said so. Empty/unparsed output used to look
+    like a successful no-op even when commits were actually pushed. }
+  Summary.UpToDate := UpToDate And (Total = 0) And (NewRefs = 0);
 
-  If Summary.UpToDate And (Total = 0) And (NewRefs = 0) Then
+  If Summary.UpToDate Then
     Summary.Message := Format('%s from %s complete.' + LineEnding + 'Already up to date.',
       [Operation, Remote])
-  Else
+  Else If (Total > 0) Or (NewRefs > 0) Then
     Begin
       Summary.Message := Format('%s from %s complete.' + LineEnding + '%d commit(s) transferred.',
         [Operation, Remote, Total]);
       If NewRefs > 0 Then
         Summary.Message := Summary.Message + LineEnding +
           Format('%d new branch/tag reference(s).', [NewRefs]);
-    End;
+    End
+  Else
+    Summary.Message := Format('%s from %s complete.', [Operation, Remote]);
 
-  { Push wording: "to" rather than "from". }
   If SameText(Operation, 'Push') Then
     Begin
-      If Summary.UpToDate And (Total = 0) And (NewRefs = 0) Then
+      If Summary.UpToDate Then
         Summary.Message := Format('Push to %s complete.' + LineEnding + 'Everything up to date.', [Remote])
-      Else
+      Else If (Total > 0) Or (NewRefs > 0) Then
         Begin
           Summary.Message := Format('Push to %s complete.' + LineEnding + '%d commit(s) transferred.',
             [Remote, Total]);
           If NewRefs > 0 Then
             Summary.Message := Summary.Message + LineEnding +
               Format('%d new branch/tag reference(s).', [NewRefs]);
-        End;
+        End
+      Else
+        Summary.Message := Format('Push to %s complete.', [Remote]);
     End;
 End;
 
@@ -1464,7 +1508,7 @@ Function TGitService.Push(Out Summary: TGitTransferSummary; Const Remote: String
   Const Branch: String): Boolean;
 Var
   OutputText: String;
-  ExitCode: Integer;
+  ExitCode, Ahead: Integer;
   Args: Array Of String;
   RemoteName: String;
 Begin
@@ -1472,10 +1516,11 @@ Begin
   RemoteName := Remote;
   If RemoteName = '' Then
     RemoteName := 'origin';
+  { Porcelain is machine-readable. Push HEAD of this work tree, not a guessed branch. }
   If Branch = '' Then
-    Args := ['push', RemoteName]
+    Args := ['push', '--porcelain', RemoteName, 'HEAD']
   Else
-    Args := ['push', RemoteName, Branch];
+    Args := ['push', '--porcelain', RemoteName, Branch];
   FAllowPrompt := True;
   Try
     Result := RunGit(Args, OutputText, ExitCode);
@@ -1483,7 +1528,19 @@ Begin
     FAllowPrompt := False;
   End;
   BuildTransferSummary('Push', RemoteName, OutputText, Summary);
-  If Not Result Then
+  If Result Then
+    Begin
+      Ahead := CountAheadOfUpstream;
+      If Ahead > 0 Then
+        Begin
+          Summary.UpToDate := False;
+          If Summary.CommitCount < Ahead Then
+            Summary.CommitCount := Ahead;
+          Summary.Message := Format('Push to %s complete.' + LineEnding +
+            'This branch is still %d commit(s) ahead of its upstream.', [RemoteName, Ahead]);
+        End;
+    End
+  Else
     Summary.Message := 'Push failed: ' + FLastError;
 End;
 
