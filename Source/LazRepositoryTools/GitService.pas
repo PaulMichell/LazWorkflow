@@ -39,7 +39,6 @@ Type
     FActiveProcess: TProcess;
     FProcessLock: TRTLCriticalSection;
     FTimeoutMs: Integer;
-    FAllowPrompt: Boolean;
     Function BlobByteSize(Const Spec: String): Int64;
     Function DiffContextLines(Const Path, Sha: String; Staged: Boolean): Integer;
     Procedure SetActiveProcess(Proc: TProcess);
@@ -239,7 +238,6 @@ Begin
   FPublishEvents := True;
   FActiveProcess := Nil;
   FTimeoutMs := 0;
-  FAllowPrompt := False;
   InitCriticalSection(FProcessLock);
 End;
 
@@ -363,16 +361,13 @@ Begin
   Try
     Proc.Executable := 'git';
     Proc.CurrentDirectory := WorkDir;
-    { Merge stderr so fetch/push progress is captured. Binary sinks keep stderr
-      separate so blob bytes stay clean. Drain pipes without poWaitOnExit.
-      Remote ops omit poNoConsole so a credential helper or TTY prompt can run. }
+    { Always hide the process. On Windows, omitting poNoConsole allocates a
+      console for git.exe. Credential Manager is a separate GUI and does not
+      need this window; status belongs on the Manage form. }
+    Proc.Options := [poUsePipes, poNoConsole];
     If MergeStderr Then
-      If FAllowPrompt Then
-        Proc.Options := [poUsePipes, poStderrToOutPut]
-      Else
-        Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut]
-    Else
-      Proc.Options := [poUsePipes, poNoConsole];
+      Proc.Options := Proc.Options + [poStderrToOutPut];
+    Proc.ShowWindow := swoHIDE;
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
@@ -1462,12 +1457,7 @@ Begin
   RemoteName := Remote;
   If RemoteName = '' Then
     RemoteName := 'origin';
-  FAllowPrompt := True;
-  Try
-    Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
-  Finally
-    FAllowPrompt := False;
-  End;
+  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
   BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
   If Result Then
     EmitRemoteUpdated(RemoteName)
@@ -1491,12 +1481,7 @@ Begin
     Args := ['pull', RemoteName]
   Else
     Args := ['pull', RemoteName, Branch];
-  FAllowPrompt := True;
-  Try
-    Result := RunGit(Args, OutputText, ExitCode);
-  Finally
-    FAllowPrompt := False;
-  End;
+  Result := RunGit(Args, OutputText, ExitCode);
   BuildTransferSummary('Pull', RemoteName, OutputText, Summary);
   If Result Then
     EmitWorkingTreeChanged
@@ -1521,12 +1506,7 @@ Begin
     Args := ['push', '--porcelain', RemoteName, 'HEAD']
   Else
     Args := ['push', '--porcelain', RemoteName, Branch];
-  FAllowPrompt := True;
-  Try
-    Result := RunGit(Args, OutputText, ExitCode);
-  Finally
-    FAllowPrompt := False;
-  End;
+  Result := RunGit(Args, OutputText, ExitCode);
   BuildTransferSummary('Push', RemoteName, OutputText, Summary);
   If Result Then
     Begin
@@ -1609,12 +1589,7 @@ Begin
   { git clone runs with cwd = parent; last arg is target folder name/path. }
   If ParentDir = '' Then
     ParentDir := GetCurrentDir;
-  FAllowPrompt := True;
-  Try
-    Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
-  Finally
-    FAllowPrompt := False;
-  End;
+  Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
   If Result Then
     Begin
       FRepoPath := Dest;
