@@ -59,6 +59,8 @@ Type
     FScrollBar: TScrollBar;
     FUpdatingScroll: Boolean;
     FReady: Boolean;
+    FIgnoreDragSelect: Boolean;
+    FDragOrigin: TPoint;
     Procedure DebounceTimer(Sender: TObject);
     Procedure CaretTimerTick(Sender: TObject);
     Procedure ResetCaretBlink;
@@ -117,6 +119,7 @@ Type
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
+    Procedure MouseUp(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
     Procedure DblClick; Override;
     Procedure MouseMove(Shift: TShiftState; X, Y: Integer); Override;
     Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean; Override;
@@ -133,6 +136,7 @@ Type
     Procedure Rescan;
     Procedure Clear;
     Procedure SelectAll;
+    Function GetTextLen: Integer; Override;
     Procedure CopyToClipboard;
     Procedure CutToClipboard;
     Procedure PasteFromClipboard;
@@ -453,6 +457,13 @@ Begin
   FSelStart := 0;
   FSelLength := CharCount;
   Invalidate;
+End;
+
+Function TSpellMemo.GetTextLen: Integer;
+Begin
+  { TWinControl.GetTextLen asks the native window, which this painted control
+    never fills. Hosts such as the assistant popup use GetTextLen > 0. }
+  Result := Length(FText);
 End;
 
 Procedure TSpellMemo.CopyToClipboard;
@@ -987,15 +998,35 @@ Begin
   Inherited MouseDown(Button, Shift, X, Y);
   SetFocus;
   EnsurePopupHook;
+  FDragOrigin := Point(X, Y);
+  { The second button-down of a double-click must not move the caret. LCL then
+    fires DblClick; any following MouseMove would otherwise drag-select. }
+  If (Button = mbLeft) And (ssDouble In Shift) Then
+    Begin
+      FIgnoreDragSelect := True;
+      Exit;
+    End;
+  FIgnoreDragSelect := False;
   NewPos := CharIndexAtPoint(X, Y);
   MoveCaret(NewPos, ssShift In Shift);
+End;
+
+Procedure TSpellMemo.MouseUp(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Begin
+  Inherited MouseUp(Button, Shift, X, Y);
+  If Button = mbLeft Then
+    FIgnoreDragSelect := False;
 End;
 
 Procedure TSpellMemo.MouseMove(Shift: TShiftState; X, Y: Integer);
 Begin
   Inherited MouseMove(Shift, X, Y);
-  If ssLeft In Shift Then
-    MoveCaret(CharIndexAtPoint(X, Y), True);
+  If Not (ssLeft In Shift) Or FIgnoreDragSelect Then
+    Exit;
+  If (Abs(X - FDragOrigin.X) < Mouse.DragThreshold) And
+    (Abs(Y - FDragOrigin.Y) < Mouse.DragThreshold) Then
+    Exit;
+  MoveCaret(CharIndexAtPoint(X, Y), True);
 End;
 
 Function TSpellMemo.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean;
@@ -1344,6 +1375,7 @@ Var
   BytePos, CharStart, CharEnd: Integer;
 Begin
   Inherited DblClick;
+  FIgnoreDragSelect := True;
   BytePos := SpellCharToByteIndex(FText, FSelStart + FSelLength);
   If Not SpellRawTokenAt(FText, BytePos, Token) Then
     Exit;
