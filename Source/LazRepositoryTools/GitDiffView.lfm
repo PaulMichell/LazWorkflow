@@ -169,6 +169,15 @@ object GitDiffView: TGitDiffView
   object Popup: TPopupMenu
     Left = 360
     Top = 120
+    OnPopup = PopupPopup
+    object CopyMenuItem: TMenuItem
+      Caption = 'Copy'
+      ShortCut = 16451
+      OnClick = PopupCopyClick
+    end
+    object CopySeparator: TMenuItem
+      Caption = '-'
+    end
     object StageMenuItem: TMenuItem
       Caption = 'Stage selected lines'
       OnClick = PopupStageClick

@@ -49,6 +49,8 @@ Type
     ImagePaintBox: TPaintBox;
     DiffHighlighter: TSynDiffSyn;
     Popup: TPopupMenu;
+    CopyMenuItem: TMenuItem;
+    CopySeparator: TMenuItem;
     StageMenuItem: TMenuItem;
     StageHunkMenuItem: TMenuItem;
     UnstageMenuItem: TMenuItem;
@@ -64,6 +66,8 @@ Type
     Procedure PopupStageHunkClick(Sender: TObject);
     Procedure PopupUnstageHunkClick(Sender: TObject);
     Procedure PopupSelectHunkClick(Sender: TObject);
+    Procedure PopupCopyClick(Sender: TObject);
+    Procedure PopupPopup(Sender: TObject);
     Procedure EditDblClick(Sender: TObject);
     Procedure EditStatusChange(Sender: TObject; Changes: TSynStatusChanges);
     Procedure ImagePaintBoxPaint(Sender: TObject);
@@ -105,6 +109,7 @@ Type
     Function ScaleDesign(DesignPx: Integer): Integer;
     Function OverviewGutterWidth: Integer;
     Procedure ApplyEditorSelectionPolicy;
+    Procedure EnsureEditorKeystrokes;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure EnsureDiffOverviewGutter;
@@ -745,6 +750,7 @@ Begin
     DiffEditor.ReadOnly := True;
     DiffEditor.WantTabs := True;
     DiffEditor.Options := DiffEditor.Options - [eoShowSpecialChars];
+    EnsureEditorKeystrokes;
     DiffEditor.OnDblClick := @EditDblClick;
     DiffEditor.OnMouseDown := @EditMouseDown;
     DiffEditor.OnMouseMove := @EditMouseMove;
@@ -1002,6 +1008,16 @@ Begin
     PaintHunkDecorations(DiffEditor.Canvas);
 End;
 
+Procedure TGitDiffView.EnsureEditorKeystrokes;
+Begin
+  If Not Assigned(DiffEditor) Then
+    Exit;
+  { The .lfm streams Keystrokes = <> and wipes the constructor defaults,
+    so Ctrl+C (and the rest) never reach the editor. }
+  If DiffEditor.Keystrokes.Count = 0 Then
+    DiffEditor.Keystrokes.ResetDefaults;
+End;
+
 Procedure TGitDiffView.ApplyEditorSelectionPolicy;
 Begin
   If Not Assigned(DiffEditor) Then
@@ -1009,10 +1025,8 @@ Begin
   Case FMode Of
     dvmBrowse:
       Begin
-        { History: scroll-only preview — no text selection. }
-        DiffEditor.Options := DiffEditor.Options + [eoNoSelection];
-        DiffEditor.BlockBegin := Point(1, 1);
-        DiffEditor.BlockEnd := Point(1, 1);
+        { History: allow drag-select and Ctrl+C of the commit text. }
+        DiffEditor.Options := DiffEditor.Options - [eoNoSelection];
         ClearLineSelection(False);
       End;
     dvmEditorOnly:
@@ -1590,6 +1604,13 @@ Begin
     End;
   If Assigned(SelectHunkMenuItem) Then
     SelectHunkMenuItem.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
+  If Assigned(CopyMenuItem) Then
+    Begin
+      CopyMenuItem.Visible := True;
+      CopyMenuItem.Enabled := Assigned(DiffEditor) And DiffEditor.SelAvail;
+    End;
+  If Assigned(CopySeparator) Then
+    CopySeparator.Visible := (FMode = dvmStaging) Or (FMode = dvmEditorOnly);
 End;
 
 Procedure TGitDiffView.DoStatusChanged;
@@ -1663,15 +1684,7 @@ Var
   I: Integer;
 Begin
   If FMode = dvmBrowse Then
-    Begin
-      { Keep caret free for scrolling; never create a selection. }
-      If Assigned(DiffEditor) Then
-        Begin
-          DiffEditor.BlockBegin := Point(1, DiffEditor.CaretY);
-          DiffEditor.BlockEnd := Point(1, DiffEditor.CaretY);
-        End;
-      Exit;
-    End;
+    Exit;
 
   If FMode <> dvmEditorOnly Then
     Exit;
@@ -2378,6 +2391,17 @@ Procedure TGitDiffView.PopupSelectHunkClick(Sender: TObject);
 Begin
   If Not SelectHunkAtLine(DiffEditor.CaretY) Then
     MessageDlg('Place the caret inside a change hunk (between @@ markers).', mtInformation, [mbOK], 0);
+End;
+
+Procedure TGitDiffView.PopupCopyClick(Sender: TObject);
+Begin
+  If Assigned(DiffEditor) And DiffEditor.SelAvail Then
+    DiffEditor.CopyToClipboard;
+End;
+
+Procedure TGitDiffView.PopupPopup(Sender: TObject);
+Begin
+  UpdateActionEnabled;
 End;
 
 Procedure TGitDiffView.EditDblClick(Sender: TObject);
