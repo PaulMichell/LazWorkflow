@@ -41,6 +41,7 @@ Type
   Protected
     Procedure Change; Override;
     Procedure Loaded; Override;
+    Procedure InitializeWnd; Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
     Procedure DoContextPopup(MousePos: TPoint; Var Handled: Boolean); Override;
     Procedure WMPaint(Var Message: TLMPaint); Message LM_PAINT;
@@ -55,7 +56,7 @@ Type
 Implementation
 
 Uses
-  LCLType, LCLIntf, LazUTF8, SpellCheckerConfig, SpellWordBreaker, SpellEngine;
+  LCLType, LCLIntf, LazUTF8, SpellCheckerConfig, SpellWordBreaker, SpellEngine, WorkflowLog;
 
 Constructor TSpellMemo.Create(TheOwner: TComponent);
 Begin
@@ -83,6 +84,7 @@ Begin
     WorkflowSpellConfig.UnregisterChangedHandler(@ConfigChanged);
   If Assigned(FHookedPopup) Then
     FHookedPopup.OnPopup := FHostPopupHandler;
+  SpellMemoDetach(Self);
   FreeAndNil(FDebounce);
   FreeAndNil(FOwnedPopup);
   Inherited Destroy;
@@ -97,6 +99,13 @@ Begin
     WorkflowSpellConfig.Apply;
   EnsurePopupHook;
   RestartDebounce;
+End;
+
+Procedure TSpellMemo.InitializeWnd;
+Begin
+  Inherited InitializeWnd;
+  If Not (csDesigning In ComponentState) Then
+    RestartDebounce;
 End;
 
 Function TSpellMemo.SpellActive: Boolean;
@@ -163,6 +172,9 @@ Begin
   SetLength(FRanges, Count);
   If Not SpellMemoApplyUnderlines(Self, Body, FRanges) Then
     Invalidate;
+  If Assigned(WorkflowLogger) Then
+    WorkflowLogger.Debug('SpellMemo', Format('Rescan words=%d errors=%d ready=%s',
+      [Length(Tokens), Count, BoolToStr(SpellActive, True)]));
 End;
 
 Procedure TSpellMemo.WMPaint(Var Message: TLMPaint);

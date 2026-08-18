@@ -224,7 +224,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, SynEdit;
+  DateUtils, Math, LazFileUtils, SynEdit, SpellCheckerConfig;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -387,6 +387,8 @@ Begin
   MessageEditor.WordWrap := True;
   MessageEditor.ParentFont := True;
   MessageEditor.UseSharedConfig := True;
+  If Assigned(WorkflowSpellConfig) Then
+    WorkflowLogger.Info('ManageRepository', 'Commit-message spell: ' + WorkflowSpellConfig.LastStatus);
 End;
 
 Procedure TManageRepositoryForm.FormDestroy(Sender: TObject);

@@ -26,6 +26,7 @@ Function SpellByteToCharOffset(Const Value: String; ByteIndex: Integer): Integer
 Function SpellCharToByteIndex(Const Value: String; CharOffset: Integer): Integer;
 Function SpellMemoApplyUnderlines(Memo: TCustomMemo; Const Value: String; Const Ranges: TSpellUnderlineRangeArray): Boolean;
 Procedure SpellMemoClearUnderlines(Memo: TCustomMemo);
+Procedure SpellMemoDetach(Memo: TCustomMemo);
 Function SpellMemoClientToByteIndex(Memo: TCustomMemo; Const Value: String; X, Y: Integer): Integer;
 Procedure SpellMemoDrawWin32Waves(Memo: TCustomMemo; Const Value: String; Const Ranges: TSpellUnderlineRangeArray);
 
@@ -33,7 +34,8 @@ Implementation
 
 Uses
   LazUTF8, LCLType, LCLIntf
-  {$IFDEF LCLGTK3}, gtk3widgets, gtk3procs, LazGtk3, LazPango1, LazGObject2, LazGLib2{$ENDIF}
+  {$IFDEF LCLGTK3}, gtk3widgets, gtk3procs, LazGtk3, LazGdk3, LazPango1, LazPangoCairo1, LazCairo1,
+    LazGObject2, LazGLib2{$ENDIF}
   {$IFDEF LCLGTK2}, gtk2, glib2, gdk2, pango, gtk2def, gtk2proc{$ENDIF}
   {$IFDEF MSWINDOWS}, Windows, Messages{$ENDIF}
   ;
@@ -65,6 +67,16 @@ Begin
 End;
 
 {$IFDEF LCLGTK3}
+Const
+  SpellOverlayKey = 'lazworkflow-spell-overlay';
+
+Type
+  TSpellGtk3Overlay = Class
+    Ranges: TSpellUnderlineRangeArray;
+    Body: String;
+    SignalId: gulong;
+  End;
+
 Function Gtk3TextView(Memo: TCustomMemo): PGtkTextView;
 Var
   Widget: TGtk3Widget;
@@ -78,11 +90,86 @@ Begin
   Result := PGtkTextView(Widget.GetContainerWidget);
 End;
 
+Procedure Gtk3DrawSquiggle(Cr: Pcairo_t; View: PGtkTextView; Const StartIter, EndIter: TGtkTextIter);
+Var
+  Loc, EndLoc: TGdkRectangle;
+  X1, Y1, X2, Y2: gint;
+  Width: Double;
+Begin
+  gtk_text_view_get_iter_location(View, @StartIter, @Loc);
+  gtk_text_view_get_iter_location(View, @EndIter, @EndLoc);
+  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_TEXT, Loc.x, Loc.y + Loc.height, @X1, @Y1);
+  gtk_text_view_buffer_to_window_coords(View, GTK_TEXT_WINDOW_TEXT, EndLoc.x, EndLoc.y + EndLoc.height, @X2, @Y2);
+  If Y1 = Y2 Then
+    Begin
+      Width := X2 - X1;
+      If Width < 4 Then
+        Width := 4;
+      cairo_set_source_rgb(Cr, 0.86, 0.10, 0.10);
+      pango_cairo_show_error_underline(Cr, X1, Y1 - 2, Width, 3);
+    End
+  Else
+    Begin
+      cairo_set_source_rgb(Cr, 0.86, 0.10, 0.10);
+      pango_cairo_show_error_underline(Cr, X1, Y1 - 2, 240, 3);
+      If X2 > 0 Then
+        pango_cairo_show_error_underline(Cr, 0, Y2 - 2, X2, 3);
+    End;
+End;
+
+Function Gtk3SpellDraw(Widget: PGtkWidget; Cr: Pcairo_t; Data: gpointer): gboolean; CDecl;
+Var
+  Overlay: TSpellGtk3Overlay;
+  View: PGtkTextView;
+  Buffer: PGtkTextBuffer;
+  StartIter, EndIter: TGtkTextIter;
+  Index, CharStart, CharEnd: Integer;
+Begin
+  Result := False;
+  Overlay := TSpellGtk3Overlay(Data);
+  If Not Assigned(Overlay) Or (Length(Overlay.Ranges) = 0) Then
+    Exit;
+  View := PGtkTextView(Widget);
+  Buffer := gtk_text_view_get_buffer(View);
+  If Not Assigned(Buffer) Then
+    Exit;
+  For Index := 0 To High(Overlay.Ranges) Do
+    Begin
+      CharStart := SpellByteToCharOffset(Overlay.Body, Overlay.Ranges[Index].UTF8Start);
+      CharEnd := SpellByteToCharOffset(Overlay.Body, Overlay.Ranges[Index].UTF8Start + Overlay.Ranges[Index].UTF8Length);
+      gtk_text_buffer_get_iter_at_offset(Buffer, @StartIter, CharStart);
+      gtk_text_buffer_get_iter_at_offset(Buffer, @EndIter, CharEnd);
+      Gtk3DrawSquiggle(Cr, View, StartIter, EndIter);
+    End;
+End;
+
+Function Gtk3EnsureOverlay(View: PGtkTextView): TSpellGtk3Overlay;
+Begin
+  Result := TSpellGtk3Overlay(g_object_get_data(PGObject(View), Pgchar(SpellOverlayKey)));
+  If Assigned(Result) Then
+    Exit;
+  Result := TSpellGtk3Overlay.Create;
+  Result.SignalId := g_signal_connect_data(PGObject(View), 'draw', TGCallback(@Gtk3SpellDraw), Result, Nil, [G_CONNECT_AFTER]);
+  g_object_set_data(PGObject(View), Pgchar(SpellOverlayKey), Result);
+End;
+
+Procedure Gtk3DetachOverlay(View: PGtkTextView);
+Var
+  Overlay: TSpellGtk3Overlay;
+Begin
+  Overlay := TSpellGtk3Overlay(g_object_get_data(PGObject(View), Pgchar(SpellOverlayKey)));
+  If Not Assigned(Overlay) Then
+    Exit;
+  If Overlay.SignalId <> 0 Then
+    g_signal_handler_disconnect(PGObject(View), Overlay.SignalId);
+  g_object_set_data(PGObject(View), Pgchar(SpellOverlayKey), Nil);
+  Overlay.Free;
+End;
+
 Procedure Gtk3EnsureErrorTag(Buffer: PGtkTextBuffer);
 Var
   Table: PGtkTextTagTable;
   Tag: PGtkTextTag;
-  Value: TGValue;
 Begin
   Table := gtk_text_buffer_get_tag_table(Buffer);
   If Not Assigned(Table) Then
@@ -91,11 +178,8 @@ Begin
   If Assigned(Tag) Then
     Exit;
   Tag := gtk_text_tag_new(Pgchar(SpellErrorTagName));
-  FillChar(Value, SizeOf(Value), 0);
-  g_value_init(@Value, G_TYPE_INT);
-  g_value_set_int(@Value, gint(PANGO_UNDERLINE_ERROR));
-  g_object_set_property(PGObject(Tag), Pgchar('underline'), @Value);
-  g_value_unset(@Value);
+  { g_object_set also flips underline-set; g_object_set_property(G_TYPE_INT) does not. }
+  g_object_set(PGObject(Tag), Pgchar('underline'), [gint(PANGO_UNDERLINE_ERROR), Pointer(Nil)]);
   gtk_text_tag_table_add(Table, Tag);
   g_object_unref(Tag);
 End;
@@ -106,6 +190,7 @@ Var
   Buffer: PGtkTextBuffer;
   StartIter, EndIter: TGtkTextIter;
   Index, CharStart, CharEnd: Integer;
+  Overlay: TSpellGtk3Overlay;
 Begin
   Result := False;
   View := Gtk3TextView(Memo);
@@ -125,6 +210,10 @@ Begin
       gtk_text_buffer_get_iter_at_offset(Buffer, @EndIter, CharEnd);
       gtk_text_buffer_apply_tag_by_name(Buffer, Pgchar(SpellErrorTagName), @StartIter, @EndIter);
     End;
+  Overlay := Gtk3EnsureOverlay(View);
+  Overlay.Body := Value;
+  Overlay.Ranges := Copy(Ranges);
+  gtk_widget_queue_draw(PGtkWidget(View));
   Result := True;
 End;
 
@@ -133,6 +222,7 @@ Var
   View: PGtkTextView;
   Buffer: PGtkTextBuffer;
   StartIter, EndIter: TGtkTextIter;
+  Overlay: TSpellGtk3Overlay;
 Begin
   View := Gtk3TextView(Memo);
   If Not Assigned(View) Then
@@ -142,6 +232,13 @@ Begin
     Exit;
   gtk_text_buffer_get_bounds(Buffer, @StartIter, @EndIter);
   gtk_text_buffer_remove_tag_by_name(Buffer, Pgchar(SpellErrorTagName), @StartIter, @EndIter);
+  Overlay := TSpellGtk3Overlay(g_object_get_data(PGObject(View), Pgchar(SpellOverlayKey)));
+  If Assigned(Overlay) Then
+    Begin
+      SetLength(Overlay.Ranges, 0);
+      Overlay.Body := '';
+    End;
+  gtk_widget_queue_draw(PGtkWidget(View));
 End;
 
 Function Gtk3ClientToByteIndex(Memo: TCustomMemo; Const Value: String; X, Y: Integer): Integer;
@@ -268,6 +365,21 @@ Begin
   {$ENDIF}
   {$IFDEF LCLGTK2}
   Gtk2ClearUnderlines(Memo);
+  {$ENDIF}
+End;
+
+Procedure SpellMemoDetach(Memo: TCustomMemo);
+{$IFDEF LCLGTK3}
+Var
+  View: PGtkTextView;
+{$ENDIF}
+Begin
+  If Not Assigned(Memo) Then
+    Exit;
+  {$IFDEF LCLGTK3}
+  View := Gtk3TextView(Memo);
+  If Assigned(View) Then
+    Gtk3DetachOverlay(View);
   {$ENDIF}
 End;
 

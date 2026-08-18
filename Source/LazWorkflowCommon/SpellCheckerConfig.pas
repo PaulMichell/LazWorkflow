@@ -65,7 +65,7 @@ Procedure InitializeSpellCheckerStorage(Const ConfigDirectory: String);
 Implementation
 
 Uses
-  Laz2_XMLCfg, LazFileUtils, SpellEngineHunspell, SpellEngineAspell;
+  Laz2_XMLCfg, LazFileUtils, SpellEngineHunspell, SpellEngineAspell, WorkflowLog;
 
 Constructor TSpellCheckerConfig.Create;
 Begin
@@ -232,6 +232,8 @@ Begin
     FLastStatus := SpellEngineKindToText(FEngine.EngineKind) + ' ready (' + FEngine.ResolvedLanguage + ')'
   Else If FLastStatus = '' Then
     FLastStatus := 'No engine loaded — memo only';
+  If Assigned(WorkflowLogger) Then
+    WorkflowLogger.Info('Spell', FLastStatus);
   NotifyChanged;
 End;
 
