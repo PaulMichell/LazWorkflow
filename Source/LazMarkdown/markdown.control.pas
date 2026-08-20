@@ -255,9 +255,13 @@ end;
 
 function TCustomMarkDownControl.GetString(AIndex: Integer): string;
 begin
+  Result:='';
   Case aIndex of
     0 : Result:=FRenderer.FontName;
     1 : Result:=FRenderer.MonoFontName;
+    2 : Result:=FRenderer.BulletChar1;
+    3 : Result:=FRenderer.BulletChar2;
+    4 : Result:=FRenderer.BulletChar3;
   end;
 end;
 
@@ -293,6 +297,10 @@ begin
   Case aIndex of
     0 : FRenderer.FontName:=aValue;
     1 : FRenderer.MonoFontName:=aValue;
+    2 : FRenderer.BulletChar1:=aValue;
+    3 : FRenderer.BulletChar2:=aValue;
+    4 : FRenderer.BulletChar3:=aValue;
+  else
   end;
 end;
 
@@ -647,6 +655,12 @@ procedure TCustomMarkDownControl.MouseMove(Shift: TShiftState; X, Y: Integer);
   procedure NormalizeSelection(aStart, aCurrent : TSelectionPoint; out P1, P2 : TSelectionPoint);
   begin
     if aStart.LayoutItemIndex>aCurrent.LayoutItemIndex then
+      begin
+      p1:=aCurrent;
+      p2:=aStart;
+      end
+    else if (aStart.LayoutItemIndex=aCurrent.LayoutItemIndex) and
+            (aStart.CharOffset>aCurrent.CharOffset) then
       begin
       p1:=aCurrent;
       p2:=aStart;

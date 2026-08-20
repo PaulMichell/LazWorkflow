@@ -690,10 +690,18 @@ begin
     if (I = StartIdx) and (I = EndIdx) then
       begin
       // Single item selection
-      Item.SelectionStartChar:=aStartPoint.CharOffset;
-      Item.SelectionEndChar:=aEndPoint.CharOffset;
-      Item.SelectionStart:=CalculateCharXPosition(Item, aStartPoint.CharOffset);
-      Item.SelectionEnd:=CalculateCharXPosition(Item, aEndPoint.CharOffset);
+      if aStartPoint.CharOffset<=aEndPoint.CharOffset then
+        begin
+        Item.SelectionStartChar:=aStartPoint.CharOffset;
+        Item.SelectionEndChar:=aEndPoint.CharOffset;
+        end
+      else
+        begin
+        Item.SelectionStartChar:=aEndPoint.CharOffset;
+        Item.SelectionEndChar:=aStartPoint.CharOffset;
+        end;
+      Item.SelectionStart:=CalculateCharXPosition(Item, Item.SelectionStartChar);
+      Item.SelectionEnd:=CalculateCharXPosition(Item, Item.SelectionEndChar);
       end
     else if I = StartIdx then
       begin
