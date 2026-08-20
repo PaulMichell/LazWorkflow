@@ -284,11 +284,14 @@ Begin
           SetLength(Wanted, Length(Wanted) + 1);
           Wanted[High(Wanted)] := Copy(Lang, 1, Pos('_', Lang) - 1);
         End;
+    End
+  Else
+    Begin
+      SetLength(Wanted, 3);
+      Wanted[0] := 'en_GB';
+      Wanted[1] := 'en_US';
+      Wanted[2] := 'en';
     End;
-  SetLength(Wanted, Length(Wanted) + 3);
-  Wanted[High(Wanted) - 2] := 'en_GB';
-  Wanted[High(Wanted) - 1] := 'en_US';
-  Wanted[High(Wanted)] := 'en';
   If Trim(DictionaryDirectory) <> '' Then
     Begin
       SetLength(Dirs, 1);
@@ -310,7 +313,33 @@ Begin
             Exit;
           End;
       End;
-  { Last resort: first aff/dic pair in the search path. }
+  { Short tags such as de should match de_DE / de_AT / de_CH. }
+  If (Lang <> '') And (Pos('_', Lang) = 0) Then
+    For DirIndex := 0 To High(Dirs) Do
+      Begin
+        Candidate := IncludeTrailingPathDelimiter(Dirs[DirIndex]);
+        If FindFirstUTF8(Candidate + Lang + '_*.dic', faAnyFile, Info) = 0 Then
+          Try
+            Repeat
+              If (Info.Attr And faDirectory) = 0 Then
+                Begin
+                  LanguageCode := ChangeFileExt(Info.Name, '');
+                  If FileExistsUTF8(Candidate + LanguageCode + '.aff') Then
+                    Begin
+                      DicFile := Candidate + LanguageCode + '.dic';
+                      AffFile := Candidate + LanguageCode + '.aff';
+                      Result := True;
+                      Exit;
+                    End;
+                End;
+            Until FindNextUTF8(Info) <> 0;
+          Finally
+            FindCloseUTF8(Info);
+          End;
+      End;
+  If Lang <> '' Then
+    Exit;
+  { Last resort when no language was requested: first aff/dic pair in the search path. }
   For DirIndex := 0 To High(Dirs) Do
     Begin
       Candidate := IncludeTrailingPathDelimiter(Dirs[DirIndex]);
