@@ -304,8 +304,8 @@ Begin
       If (TMethod(GitJobs.OnBusyChanged).Code = TMethod(@GitJobBusyChanged).Code) And
          (TMethod(GitJobs.OnBusyChanged).Data = Pointer(Self)) Then
         GitJobs.OnBusyChanged := Nil;
-      GitJobs.DetachFinishedHandler(@GitJobFinished);
       GitJobs.CancelIfHandler(@GitJobFinished);
+      GitJobs.DetachFinishedHandler(@GitJobFinished);
     End;
   Screen.Cursor := crDefault;
   Inc(FIndexGen);

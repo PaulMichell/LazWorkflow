@@ -306,38 +306,45 @@ Begin
 
         If Not Job.Quiet Then
           FRunner.QueueBusyNotify(True, Job.Caption);
-        Git.ResetCancel;
-        Git.TimeoutMs := Job.TimeoutMs;
-        Git.RepoPath := Job.RepoPath;
         Job.FOk := False;
-        Job.FCancelled := False;
         Job.FErrorText := '';
-        StartTick := GetTickCount64;
-        TimedOut := False;
-
-        Try
-          FRunner.ExecuteJob(Job, Git);
-          If (Job.TimeoutMs > 0) And ((GetTickCount64 - StartTick) >= QWord(Job.TimeoutMs)) Then
-            TimedOut := True;
-          If Git.Cancelled Or TimedOut Or Job.FCancelled Then
-            Begin
-              Job.FCancelled := True;
-              Job.FOk := False;
-              If TimedOut And (Job.FErrorText = '') Then
-                Job.FErrorText := 'Timed out'
-              Else If Job.FErrorText = '' Then
-                Job.FErrorText := 'Cancelled';
-            End
-          Else If Not Job.FOk And (Job.FErrorText = '') Then
-            Job.FErrorText := Git.LastError;
-        Except
-          On E: Exception Do
-            Begin
-              Job.FOk := False;
-              Job.FErrorText := E.Message;
-              WorkflowLogger.Error('GitJobRunner', Job.Caption + ': ' + E.Message);
+        If Job.FCancelled Or FRunner.FStopping Or Terminated Then
+          Begin
+            Job.FCancelled := True;
+            Job.FOk := False;
+            Job.FErrorText := 'Cancelled';
+          End
+        Else
+          Begin
+            Git.ResetCancel;
+            Git.TimeoutMs := Job.TimeoutMs;
+            Git.RepoPath := Job.RepoPath;
+            StartTick := GetTickCount64;
+            TimedOut := False;
+            Try
+              FRunner.ExecuteJob(Job, Git);
+              If (Job.TimeoutMs > 0) And ((GetTickCount64 - StartTick) >= QWord(Job.TimeoutMs)) Then
+                TimedOut := True;
+              If Git.Cancelled Or TimedOut Or Job.FCancelled Then
+                Begin
+                  Job.FCancelled := True;
+                  Job.FOk := False;
+                  If TimedOut And (Job.FErrorText = '') Then
+                    Job.FErrorText := 'Timed out'
+                  Else If Job.FErrorText = '' Then
+                    Job.FErrorText := 'Cancelled';
+                End
+              Else If Not Job.FOk And (Job.FErrorText = '') Then
+                Job.FErrorText := Git.LastError;
+            Except
+              On E: Exception Do
+                Begin
+                  Job.FOk := False;
+                  Job.FErrorText := E.Message;
+                  WorkflowLogger.Error('GitJobRunner', Job.Caption + ': ' + E.Message);
+                End;
             End;
-        End;
+          End;
 
         FRunner.EnterLock;
         Try

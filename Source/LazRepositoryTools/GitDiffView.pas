@@ -300,8 +300,8 @@ Destructor TGitDiffView.Destroy;
 Begin
   If Assigned(GitJobs) Then
     Begin
-      GitJobs.DetachFinishedHandler(@ApplyPatchFinished);
       GitJobs.CancelIfHandler(@ApplyPatchFinished);
+      GitJobs.DetachFinishedHandler(@ApplyPatchFinished);
     End;
   CancelPendingScroll;
   Application.RemoveAsyncCalls(Self);
