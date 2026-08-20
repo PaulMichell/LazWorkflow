@@ -445,33 +445,36 @@ Begin
   NewTokens.ExpiresAt := 0;
   Data := Nil;
   Try
-    Data := GetJSON(ResponseBody);
-    If Not (Data Is TJSONObject) Then
-      Begin
-        FLastError := 'Token response was not JSON.';
-        Exit;
-      End;
-    Obj := TJSONObject(Data);
-    NewTokens.AccessToken := Obj.Get('access_token', '');
-    NewTokens.RefreshToken := Obj.Get('refresh_token', '');
-    NewTokens.TokenType := Obj.Get('token_type', 'Bearer');
-    NewTokens.Scope := Obj.Get('scope', '');
-    ExpiresIn := Obj.Get('expires_in', Int64(0));
-    If ExpiresIn > 0 Then
-      NewTokens.ExpiresAt := IncSecond(Now, ExpiresIn)
-    Else
-      NewTokens.ExpiresAt := 0;
-    If NewTokens.AccessToken = '' Then
-      Begin
-        FLastError := 'Token response did not include access_token.';
-        Exit;
-      End;
-    Result := True;
-  Except
-    On E: Exception Do
-      FLastError := 'Failed to parse token response: ' + E.Message;
+    Try
+      Data := GetJSON(ResponseBody);
+      If Not (Data Is TJSONObject) Then
+        Begin
+          FLastError := 'Token response was not JSON.';
+          Exit;
+        End;
+      Obj := TJSONObject(Data);
+      NewTokens.AccessToken := Obj.Get('access_token', '');
+      NewTokens.RefreshToken := Obj.Get('refresh_token', '');
+      NewTokens.TokenType := Obj.Get('token_type', 'Bearer');
+      NewTokens.Scope := Obj.Get('scope', '');
+      ExpiresIn := Obj.Get('expires_in', Int64(0));
+      If ExpiresIn > 0 Then
+        NewTokens.ExpiresAt := IncSecond(Now, ExpiresIn)
+      Else
+        NewTokens.ExpiresAt := 0;
+      If NewTokens.AccessToken = '' Then
+        Begin
+          FLastError := 'Token response did not include access_token.';
+          Exit;
+        End;
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := 'Failed to parse token response: ' + E.Message;
+    End;
+  Finally
+    Data.Free;
   End;
-  Data.Free;
 End;
 
 Function TGrokOAuthClient.TokenRequest(Const FormBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
