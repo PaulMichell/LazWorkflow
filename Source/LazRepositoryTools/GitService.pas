@@ -673,6 +673,14 @@ Begin
       Branch := 'HEAD';
 End;
 
+Function GitNameIsSafe(Const Name: String): Boolean;
+Var
+  Clean: String;
+Begin
+  Clean := Trim(Name);
+  Result := (Clean <> '') And (Clean[1] <> '-');
+End;
+
 Function NextNulField(Const S: String; Var Pos: Integer): String;
 Var
   StartPos: Integer;
@@ -1706,12 +1714,12 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If (Trim(Name) = '') Or (Trim(Url) = '') Then
+  If (Not GitNameIsSafe(Name)) Or (Trim(Url) = '') Then
     Begin
       FLastError := 'Remote name and URL are required';
       Exit;
     End;
-  Result := RunGit(['remote', 'add', Trim(Name), Trim(Url)], OutputText, ExitCode);
+  Result := RunGit(['remote', 'add', '--', Trim(Name), Trim(Url)], OutputText, ExitCode);
 End;
 
 Function TGitService.SetRemoteUrl(Const Name, Url: String): Boolean;
@@ -1720,12 +1728,12 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If (Trim(Name) = '') Or (Trim(Url) = '') Then
+  If (Not GitNameIsSafe(Name)) Or (Trim(Url) = '') Then
     Begin
       FLastError := 'Remote name and URL are required';
       Exit;
     End;
-  Result := RunGit(['remote', 'set-url', Trim(Name), Trim(Url)], OutputText, ExitCode);
+  Result := RunGit(['remote', 'set-url', '--', Trim(Name), Trim(Url)], OutputText, ExitCode);
 End;
 
 Function TGitService.RemoveRemote(Const Name: String): Boolean;
@@ -1734,9 +1742,9 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If Trim(Name) = '' Then
+  If Not GitNameIsSafe(Name) Then
     Exit;
-  Result := RunGit(['remote', 'remove', Trim(Name)], OutputText, ExitCode);
+  Result := RunGit(['remote', 'remove', '--', Trim(Name)], OutputText, ExitCode);
 End;
 
 Function TGitService.RenameRemote(Const OldName, NewName: String): Boolean;
@@ -1745,12 +1753,12 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If (Trim(OldName) = '') Or (Trim(NewName) = '') Then
+  If (Not GitNameIsSafe(OldName)) Or (Not GitNameIsSafe(NewName)) Then
     Begin
       FLastError := 'Remote names are required';
       Exit;
     End;
-  Result := RunGit(['remote', 'rename', Trim(OldName), Trim(NewName)], OutputText, ExitCode);
+  Result := RunGit(['remote', 'rename', '--', Trim(OldName), Trim(NewName)], OutputText, ExitCode);
 End;
 
 Function TGitService.ShowCommit(Const Sha: String; Out Text: String): Boolean;
@@ -1807,7 +1815,7 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If RefName = '' Then
+  If Not GitNameIsSafe(RefName) Then
     Exit;
   Result := RunGit(['checkout', RefName], OutputText, ExitCode);
   If Result Then
@@ -1820,12 +1828,14 @@ Var
   ExitCode: Integer;
 Begin
   Result := False;
-  If BranchName = '' Then
+  If Not GitNameIsSafe(BranchName) Then
     Exit;
   If StartPoint = '' Then
-    Result := RunGit(['branch', BranchName], OutputText, ExitCode)
+    Result := RunGit(['branch', '--', Trim(BranchName)], OutputText, ExitCode)
+  Else If Not GitNameIsSafe(StartPoint) Then
+    Exit
   Else
-    Result := RunGit(['branch', BranchName, StartPoint], OutputText, ExitCode);
+    Result := RunGit(['branch', '--', Trim(BranchName), Trim(StartPoint)], OutputText, ExitCode);
 End;
 
 Function TGitService.GetConfigValue(Const Key: String; LocalOnly: Boolean; Out Value: String): Boolean;
