@@ -337,6 +337,7 @@ Var
   BodyPtr: Pointer;
   BodyLen: DWORD;
   Raw: RawByteString;
+  ReadOk: Boolean;
 Begin
   Result := False;
   ResponseBody := '';
@@ -414,17 +415,25 @@ Begin
       StatusCode := StrToIntDef(string(StatusBuf), 0);
 
     Raw := '';
+    ReadOk := True;
     Repeat
       BytesRead := 0;
       If Not InternetReadFile(Request, @Buf[0], SizeOf(Buf), BytesRead) Then
-        Break;
+        Begin
+          ReadOk := False;
+          ErrorText := 'WinINet InternetReadFile failed (' + IntToStr(GetLastError) + ')';
+          Break;
+        End;
       If BytesRead = 0 Then
         Break;
       SetLength(Raw, Length(Raw) + Integer(BytesRead));
       Move(Buf[0], Raw[Length(Raw) - Integer(BytesRead) + 1], BytesRead);
     Until False;
-    ResponseBody := string(Raw);
-    Result := True;
+    If ReadOk Then
+      Begin
+        ResponseBody := string(Raw);
+        Result := True;
+      End;
   Finally
     If Request <> Nil Then
       InternetCloseHandle(Request);
@@ -598,6 +607,7 @@ Var
   ChunkRaw, Utf8Carry: RawByteString;
   ChunkText: String;
   Stopped: Boolean;
+  ReadOk: Boolean;
   CompleteLen, I, Need: Integer;
   B0: Byte;
 Begin
@@ -683,6 +693,7 @@ Begin
       StatusCode := StrToIntDef(string(StatusBuf), 0);
 
     Stopped := False;
+    ReadOk := True;
     Repeat
       If Assigned(ShouldStop) And ShouldStop() Then
         Begin
@@ -691,7 +702,11 @@ Begin
         End;
       BytesRead := 0;
       If Not InternetReadFile(Request, @Buf[0], SizeOf(Buf), BytesRead) Then
-        Break;
+        Begin
+          ReadOk := False;
+          ErrorText := 'WinINet InternetReadFile failed (' + IntToStr(GetLastError) + ')';
+          Break;
+        End;
       If BytesRead = 0 Then
         Break;
       { Append to any incomplete UTF-8 sequence from the previous read. }
@@ -745,7 +760,7 @@ Begin
         ErrorText := 'Cancelled.';
         Result := False;
       End
-    Else
+    Else If ReadOk Then
       Result := True;
   Finally
     If Assigned(Control) And Control.ClosedByAbort Then
