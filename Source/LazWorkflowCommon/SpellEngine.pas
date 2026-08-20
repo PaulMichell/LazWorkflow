@@ -52,7 +52,6 @@ Implementation
 
 Function SpellEngineKindToText(Kind: TSpellEngineKind): String;
 Begin
-  Result := 'none';
   Case Kind Of
     sekNone: Result := 'none';
     sekAuto: Result := 'auto';
