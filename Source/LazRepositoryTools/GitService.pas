@@ -1603,10 +1603,11 @@ Begin
       WorkflowLogger.Error('GitService', FLastError);
       Exit;
     End;
-  If IsRepository(Dir) Then
+  If DirectoryExists(IncludeTrailingPathDelimiter(Dir) + '.git') Or
+     FileExists(IncludeTrailingPathDelimiter(Dir) + '.git') Then
     Begin
       WorkflowLogger.Warning('GitService', 'Already a Git repository: ' + Dir);
-      FRepoPath := DetectRepository(Dir);
+      FRepoPath := Dir;
       Result := True;
       Exit;
     End;
