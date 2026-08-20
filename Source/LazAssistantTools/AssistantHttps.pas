@@ -44,10 +44,12 @@ Type
     FConnect: Pointer;
     FRequest: Pointer;
     FClosedByAbort: Boolean;
+    FHttpClient: TObject;
   Public
     Constructor Create;
     Destructor Destroy; Override;
     Procedure AssignHandles(Session, Connect, Request: Pointer);
+    Procedure AssignHttpClient(Client: TObject);
     Procedure ClearHandles;
     Procedure Abort;
     { True after Abort closed native handles — caller must not close them again. }
@@ -71,6 +73,44 @@ Uses
   {$ENDIF}
   Forms, fphttpclient, opensslsockets, openssl, WorkflowLog;
 
+Type
+  THttpsChunkStream = Class(TStream)
+  Private
+    FOnChunk: THttpsChunkEvent;
+    FShouldStop: THttpsStopCheck;
+  Public
+    Constructor Create(OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck);
+    Function Write(Const Buffer; Count: LongInt): LongInt; Override;
+    Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
+  End;
+
+Constructor THttpsChunkStream.Create(OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck);
+Begin
+  Inherited Create;
+  FOnChunk := OnChunk;
+  FShouldStop := ShouldStop;
+End;
+
+Function THttpsChunkStream.Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64;
+Begin
+  Result := 0;
+End;
+
+Function THttpsChunkStream.Write(Const Buffer; Count: LongInt): LongInt;
+Var
+  Chunk: String;
+Begin
+  Result := Count;
+  If Count <= 0 Then
+    Exit;
+  If Assigned(FShouldStop) And FShouldStop() Then
+    Raise EAbort.Create('Cancelled');
+  SetLength(Chunk, Count);
+  Move(Buffer, Chunk[1], Count);
+  If Assigned(FOnChunk) Then
+    FOnChunk(Chunk);
+End;
+
 Constructor THttpsStreamControl.Create;
 Begin
   Inherited Create;
@@ -78,6 +118,7 @@ Begin
   FSession := Nil;
   FConnect := Nil;
   FRequest := Nil;
+  FHttpClient := Nil;
   FClosedByAbort := False;
 End;
 
@@ -101,6 +142,16 @@ Begin
   End;
 End;
 
+Procedure THttpsStreamControl.AssignHttpClient(Client: TObject);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FHttpClient := Client;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
 Procedure THttpsStreamControl.ClearHandles;
 Begin
   EnterCriticalSection(FLock);
@@ -108,6 +159,7 @@ Begin
     FSession := Nil;
     FConnect := Nil;
     FRequest := Nil;
+    FHttpClient := Nil;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -116,6 +168,7 @@ End;
 Procedure THttpsStreamControl.Abort;
 Var
   S, C, R: Pointer;
+  HttpClient: TObject;
 Begin
   EnterCriticalSection(FLock);
   Try
@@ -125,7 +178,9 @@ Begin
     FRequest := Nil;
     FConnect := Nil;
     FSession := Nil;
-    If (R <> Nil) Or (C <> Nil) Or (S <> Nil) Then
+    HttpClient := FHttpClient;
+    FHttpClient := Nil;
+    If (R <> Nil) Or (C <> Nil) Or (S <> Nil) Or Assigned(HttpClient) Then
       FClosedByAbort := True;
   Finally
     LeaveCriticalSection(FLock);
@@ -138,7 +193,11 @@ Begin
   If S <> Nil Then
     InternetCloseHandle(HINTERNET(S));
   {$ELSE}
-  S := S; C := C; R := R;
+  If Assigned(HttpClient) Then
+    Try
+      TFPHTTPClient(HttpClient).Terminate;
+    Except
+    End;
   {$ENDIF}
 End;
 
@@ -786,11 +845,9 @@ Function HttpsPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
 Var
   Client: TFPHTTPClient;
   BodyStream: TStringStream;
-  OutStream: TMemoryStream;
+  OutStream: TStream;
   SslErr, Auth: String;
-  Chunk: String;
-  N, ColonPos: Integer;
-  Buf: Array[0..8191] Of Byte;
+  ColonPos: Integer;
 Begin
   Result := False;
   StatusCode := 0;
@@ -815,9 +872,11 @@ Begin
 
   Client := TFPHTTPClient.Create(Nil);
   BodyStream := TStringStream.Create(JsonBody);
-  OutStream := TMemoryStream.Create;
+  OutStream := THttpsChunkStream.Create(OnChunk, ShouldStop);
   Try
     Try
+      If Assigned(Control) Then
+        Control.AssignHttpClient(Client);
       Client.AllowRedirect := False;
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');
@@ -832,24 +891,13 @@ Begin
       Client.RequestBody := BodyStream;
       Client.HTTPMethod('POST', Url, OutStream, []);
       StatusCode := Client.ResponseStatusCode;
-      OutStream.Position := 0;
-      While OutStream.Position < OutStream.Size Do
-        Begin
-          If Assigned(ShouldStop) And ShouldStop() Then
-            Begin
-              ErrorText := 'Cancelled.';
-              Exit;
-            End;
-          N := OutStream.Read(Buf[0], SizeOf(Buf));
-          If N <= 0 Then
-            Break;
-          SetLength(Chunk, N);
-          Move(Buf[0], Chunk[1], N);
-          If Assigned(OnChunk) Then
-            OnChunk(Chunk);
-        End;
       Result := True;
     Except
+      On E: EAbort Do
+        Begin
+          ErrorText := 'Cancelled.';
+          Result := False;
+        End;
       On E: Exception Do
         Begin
           ErrorText := E.Message;
@@ -858,6 +906,8 @@ Begin
         End;
     End;
   Finally
+    If Assigned(Control) Then
+      Control.AssignHttpClient(Nil);
     Client.RequestBody := Nil;
     OutStream.Free;
     BodyStream.Free;
