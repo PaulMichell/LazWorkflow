@@ -162,8 +162,8 @@ Begin
       Result := FindMarkdownDocument(Target);
       If Assigned(Result) Then
         Begin
-          { Always re-read after external writes (plan tools, other editors). }
-          Result.ReloadFromDisk(True);
+          { Re-read if clean. Dirty windows keep edits and note a pending reload. }
+          Result.ReloadFromDisk(False);
           Result.Show;
           Result.BringToFront;
           Exit;
@@ -198,14 +198,16 @@ Begin
   Result := False;
   If FFileName = '' Then
     Exit;
-  If FDirty And (Not Force) Then
+  If FDirty Then
     Begin
-      FPendingDiskReload := True;
-      UpdateStatus;
-      Exit;
+      If (Not Force) Or (MessageDlg('Reload "' + ExtractFileName(FFileName) +
+        '" from disk and discard unsaved edits?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
+        Begin
+          FPendingDiskReload := True;
+          UpdateStatus;
+          Exit;
+        End;
     End;
-  If Force Then
-    FDirty := False;
   Result := LoadFromDisk;
   If Result Then
     StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
@@ -600,8 +602,16 @@ Procedure TAssistantMarkdownForm.WatchTimerTimer(Sender: TObject);
 Var
   Age: LongInt;
 Begin
-  If (FFileName = '') Or (Not FileExists(FFileName)) Then
+  If FFileName = '' Then
     Exit;
+  If Not FileExists(FFileName) Then
+    Begin
+      FPendingDiskReload := True;
+      UpdateStatus;
+      If Assigned(StatusFooter) Then
+        StatusFooter.SetRightText('Deleted on disk');
+      Exit;
+    End;
   Age := FileAge(FFileName);
   If Age = FDiskAge Then
     Exit;
