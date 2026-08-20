@@ -61,6 +61,7 @@ Function HttpsPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
 
 { User-facing hint when OpenSSL is missing (Windows). }
 Function OpenSSLMissingHint: String;
+Function UrlIsHttps(Const Url: String): Boolean;
 
 Implementation
 
@@ -139,6 +140,11 @@ Begin
   {$ELSE}
   S := S; C := C; R := R;
   {$ENDIF}
+End;
+
+Function UrlIsHttps(Const Url: String): Boolean;
+Begin
+  Result := SameText(Copy(Trim(Url), 1, 8), 'https://');
 End;
 
 Function OpenSSLMissingHint: String;
@@ -279,7 +285,7 @@ Begin
   If SchemeEnd < 1 Then
     Exit;
   UseHttps := SameText(Copy(Url, 1, SchemeEnd - 1), 'https');
-  If (Not UseHttps) And (Not SameText(Copy(Url, 1, SchemeEnd - 1), 'http')) Then
+  If Not UseHttps Then
     Exit;
   Rest := Copy(Url, SchemeEnd + 3, MaxInt);
   SlashPos := Pos('/', Rest);
@@ -443,6 +449,11 @@ Begin
   ResponseBody := '';
   StatusCode := 0;
   ErrorText := '';
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ErrorText := 'HTTPS URL required.';
+      Exit;
+    End;
   If SameText(Copy(Url, 1, 8), 'https://') Then
     If Not EnsureOpenSSLReady(SslErr) Then
       Begin
@@ -455,7 +466,7 @@ Begin
   Parts := Nil;
   Try
     Try
-      Client.AllowRedirect := True;
+      Client.AllowRedirect := False;
       Client.AddHeader('Accept', 'application/json');
       If ContentType <> '' Then
         Client.AddHeader('Content-Type', ContentType);
@@ -505,6 +516,14 @@ End;
 Function HttpsGet(Const Url: String; Out ResponseBody: String; Out StatusCode: Integer;
   Out ErrorText: String; Const ExtraHeaders: String): Boolean;
 Begin
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ResponseBody := '';
+      StatusCode := 0;
+      ErrorText := 'HTTPS URL required.';
+      Result := False;
+      Exit;
+    End;
   {$IFDEF WINDOWS}
   If WinINetRequest('GET', Url, '', '', ExtraHeaders, ResponseBody, StatusCode, ErrorText) Then
     Begin
@@ -518,6 +537,14 @@ End;
 Function HttpsPostForm(Const Url, FormBody: String; Out ResponseBody: String;
   Out StatusCode: Integer; Out ErrorText: String): Boolean;
 Begin
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ResponseBody := '';
+      StatusCode := 0;
+      ErrorText := 'HTTPS URL required.';
+      Result := False;
+      Exit;
+    End;
   {$IFDEF WINDOWS}
   If WinINetRequest('POST', Url, 'application/x-www-form-urlencoded', FormBody, '',
     ResponseBody, StatusCode, ErrorText) Then
@@ -533,6 +560,14 @@ End;
 Function HttpsPostJson(Const Url, JsonBody, ExtraHeaders: String;
   Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
 Begin
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ResponseBody := '';
+      StatusCode := 0;
+      ErrorText := 'HTTPS URL required.';
+      Result := False;
+      Exit;
+    End;
   {$IFDEF WINDOWS}
   If WinINetRequest('POST', Url, 'application/json', JsonBody, ExtraHeaders,
     ResponseBody, StatusCode, ErrorText) Then
@@ -745,6 +780,11 @@ Begin
   Result := False;
   StatusCode := 0;
   ErrorText := '';
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ErrorText := 'HTTPS URL required.';
+      Exit;
+    End;
   {$IFDEF WINDOWS}
   { Prefer WinINet so streamed chat works without OpenSSL DLLs. }
   Result := WinINetPostJsonStream(Url, JsonBody, ExtraHeaders, OnChunk, ShouldStop, Control,
@@ -763,7 +803,7 @@ Begin
   OutStream := TMemoryStream.Create;
   Try
     Try
-      Client.AllowRedirect := True;
+      Client.AllowRedirect := False;
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');
       Auth := Trim(ExtraHeaders);

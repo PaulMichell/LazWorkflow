@@ -555,7 +555,7 @@ Begin
       Obj := TJSONObject(Data);
       FAuthEndpoint := Obj.Get('authorization_endpoint', GrokOAuthDefaultAuthEndpoint);
       FTokenEndpoint := Obj.Get('token_endpoint', GrokOAuthDefaultTokenEndpoint);
-      If (FAuthEndpoint = '') Or (FTokenEndpoint = '') Then
+      If (Not UrlIsHttps(FAuthEndpoint)) Or (Not UrlIsHttps(FTokenEndpoint)) Then
         Begin
           FAuthEndpoint := GrokOAuthDefaultAuthEndpoint;
           FTokenEndpoint := GrokOAuthDefaultTokenEndpoint;

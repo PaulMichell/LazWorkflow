@@ -62,8 +62,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, WorkflowLog, LCLIntf,
-  SpellCheckerSettingsForm;
+  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
+  LCLIntf, SpellCheckerSettingsForm;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -528,6 +528,12 @@ Begin
   If Trim(ApiBaseEdit.Text) = '' Then
     Begin
       MessageDlg('API base URL is required (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);
+      CanClose := False;
+      Exit;
+    End;
+  If Not UrlIsHttps(Trim(ApiBaseEdit.Text)) Then
+    Begin
+      MessageDlg('API base URL must be HTTPS (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);
       CanClose := False;
       Exit;
     End;
