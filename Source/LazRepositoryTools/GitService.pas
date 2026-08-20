@@ -1784,8 +1784,10 @@ Begin
   Text := '';
   If Sha = '' Then
     Exit;
-  If Not RunGit(['-c', 'core.quotePath=false', 'show', '--name-only', '--pretty=format:', '-z', Sha],
-    Text, ExitCode) Then
+  { diff-tree vs first parent (and --root for the initial commit). git show uses a
+    combined merge diff, which is empty for a clean merge. }
+  If Not RunGit(['-c', 'core.quotePath=false', 'diff-tree', '--no-commit-id', '--name-only',
+    '-r', '-z', '--root', Sha], Text, ExitCode) Then
     Exit;
   Cursor := 1;
   While Cursor <= Length(Text) Do
@@ -1805,8 +1807,8 @@ Begin
   Result := False;
   If (Sha = '') Or (Path = '') Then
     Exit;
-  Result := RunGit(['show', '-U' + IntToStr(DiffContextLines(Path, Sha, False)),
-    '--format=format:', '--find-renames', Sha, '--', Path], DiffText, ExitCode);
+  Result := RunGit(['diff-tree', '-p', '--find-renames',
+    '-U' + IntToStr(DiffContextLines(Path, Sha, False)), Sha, '--', Path], DiffText, ExitCode);
 End;
 
 Function TGitService.Checkout(Const RefName: String): Boolean;
