@@ -1026,10 +1026,10 @@ procedure TMarkDownCanvasRenderer.ParseMarkdown(const aMarkDown: utf8string);
 var
   S: TStrings;
 begin
-  FreeAndNil(fDocument);
   S:=TStringList.Create;
   try
     S.Text:=aMarkDown;
+    ParseMarkdown(S);
   finally
     S.Free;
   end;
@@ -1037,6 +1037,7 @@ end;
 
 procedure TMarkDownCanvasRenderer.ParseMarkdown(const aMarkDown: TStrings);
 begin
+  FreeAndNil(fDocument);
   fDocument:=fParser.Parse(aMarkDown);
 end;
 
