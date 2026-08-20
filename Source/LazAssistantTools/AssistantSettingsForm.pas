@@ -165,7 +165,7 @@ Begin
   ApprovalCombo.Items.Add('Ask — confirm each write/compile');
   ApprovalCombo.Items.Add('Auto — allow project tools');
   ApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
-  ApprovalCombo.ItemIndex := 2;
+  ApprovalCombo.ItemIndex := 0;
 
   { Place below thinking/approval (may already exist from the .lfm). }
   If Not Assigned(AutoNewChatDefaultCheck) Then

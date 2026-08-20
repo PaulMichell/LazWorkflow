@@ -110,8 +110,6 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Width = 488
     Anchors = [akTop, akLeft, akRight]
     Caption = 'Include IDE context (active editor + project file list) with each message'
-    Checked = True
-    State = cbChecked
     TabOrder = 5
   end
   object AutoNewChatDefaultCheck: TCheckBox

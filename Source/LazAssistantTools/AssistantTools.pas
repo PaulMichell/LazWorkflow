@@ -185,7 +185,7 @@ Begin
   Name := LowerCase(Trim(ToolName));
   If Not ToolRequiresApproval(Name) Then
     Exit;
-  Mode := aamAlways;
+  Mode := aamAsk;
   If Assigned(AssistantChatConfig) Then
     Mode := AssistantChatConfig.GetApprovalMode;
   If Mode = aamAlways Then

@@ -18,7 +18,7 @@ Const
   AssistantConfigDefaultApiBase = 'https://api.x.ai/v1';
   AssistantConfigDefaultModel = 'grok-4.5';
   AssistantConfigDefaultThinking = 'high';
-  AssistantConfigDefaultApproval = 'always';
+  AssistantConfigDefaultApproval = 'ask';
 
 Type
   { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level"). }
@@ -145,8 +145,10 @@ Begin
     Result := aamAsk
   Else If (V = 'auto') Or (V = 'acceptedits') Then
     Result := aamAuto
+  Else If (V = 'always') Then
+    Result := aamAlways
   Else
-    Result := aamAlways;
+    Result := aamAsk;
 End;
 
 Function ApprovalModeCaption(Mode: TAssistantApprovalMode): String;
@@ -197,7 +199,7 @@ Begin
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
   FActiveSkill := '';
-  FIncludeIDEContext := True;
+  FIncludeIDEContext := False;
   FThinkingLevel := AssistantConfigDefaultThinking;
   FApprovalMode := AssistantConfigDefaultApproval;
   FAutoNewChatAtContextLimit := False;
@@ -289,7 +291,7 @@ Begin
   Config.FApiBase := Cfg.GetValue('API/Base', AssistantConfigDefaultApiBase);
   Config.FModel := Cfg.GetValue('API/Model', AssistantConfigDefaultModel);
   Config.FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
-  Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', True);
+  Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', False);
   Config.FThinkingLevel := Cfg.GetValue('Chat/ThinkingLevel', AssistantConfigDefaultThinking);
   Config.FApprovalMode := Cfg.GetValue('Chat/ApprovalMode', AssistantConfigDefaultApproval);
   Config.FAutoNewChatAtContextLimit := Cfg.GetValue('Chat/AutoNewChatAtContextLimit', False);
