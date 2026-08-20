@@ -200,7 +200,6 @@ Begin
     AddSearchDir(Dirs, ExtractFilePath(ParamStr(0)));
     If Assigned(Application) Then
       AddSearchDir(Dirs, ExtractFilePath(Application.ExeName));
-    AddSearchDir(Dirs, GetCurrentDir);
     AddSearchDir(Dirs, ExpandFileName(ExtractFilePath(ParamStr(0)) + 'openssl'));
     For D := 0 To Dirs.Count - 1 Do
       For I := 0 To PairCount - 1 Do
