@@ -32,6 +32,9 @@ Implementation
 
 {$R *.lfm}
 
+Uses
+  GitService;
+
 Function ShowGitIgnoreForm(Const RepoPath: String): Boolean;
 Var
   Form: TGitIgnoreForm;
@@ -59,7 +62,14 @@ End;
 
 Procedure TGitIgnoreForm.LoadFromRepository(Const RepoPath: String);
 Begin
-  FIgnorePath := IncludeTrailingPathDelimiter(ExpandFileName(RepoPath)) + '.gitignore';
+  FIgnorePath := '';
+  If Assigned(GitClient) Then
+    Begin
+      GitClient.RepoPath := RepoPath;
+      FIgnorePath := GitClient.WorkingTreeFullPath('.gitignore');
+    End
+  Else
+    FIgnorePath := IncludeTrailingPathDelimiter(ExpandFileName(RepoPath)) + '.gitignore';
   Caption := 'Ignore Files – ' + FIgnorePath;
   If FileExists(FIgnorePath) Then
     IgnoreMemo.Lines.LoadFromFile(FIgnorePath)
@@ -72,6 +82,12 @@ Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
+  If FIgnorePath = '' Then
+    Begin
+      MessageDlg('Could not resolve a safe .gitignore path inside the repository.', mtError, [mbOK], 0);
+      CanClose := False;
+      Exit;
+    End;
   Try
     IgnoreMemo.Lines.SaveToFile(FIgnorePath);
   Except

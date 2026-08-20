@@ -920,7 +920,13 @@ Begin
       FLastError := 'No ignore patterns to append';
       Exit;
     End;
-  IgnorePath := IncludeTrailingPathDelimiter(ExpandFileName(FRepoPath)) + '.gitignore';
+  IgnorePath := WorkingTreeFullPath('.gitignore');
+  If IgnorePath = '' Then
+    Begin
+      If FLastError = '' Then
+        FLastError := 'Could not resolve .gitignore path';
+      Exit;
+    End;
   Lines := TStringList.Create;
   Try
     Try
