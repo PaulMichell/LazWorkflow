@@ -846,7 +846,8 @@ Function TGitJobRunner.Busy: Boolean;
 Begin
   EnterLock;
   Try
-    Result := FBusy Or (FQueue.Count > 0) Or Assigned(FCurrent);
+    { Matches the footer/cursor flag: quiet probe/index/detail jobs are not busy. }
+    Result := FBusy;
   Finally
     LeaveLock;
   End;

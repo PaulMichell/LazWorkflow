@@ -2228,7 +2228,10 @@ Begin
       Exit;
     End;
   If GitJobs.Busy Then
-    Exit;
+    Begin
+      MessageDlg('A Git operation is already running.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   Job := TGitJob.Create(gjkApplyPatch);
   Job.RepoPath := FRepoPath;
   Job.PatchText := Patch;
