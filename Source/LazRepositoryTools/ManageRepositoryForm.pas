@@ -590,10 +590,13 @@ Begin
 End;
 
 Function TManageRepositoryForm.SubmitGitJob(Job: TGitJob): Boolean;
+Var
+  QuietJob: Boolean;
 Begin
   Result := False;
   If Not Assigned(Job) Then
     Exit;
+  QuietJob := Job.Quiet;
   If Not Assigned(GitJobs) Then
     Begin
       FreeAndNil(Job);
@@ -609,12 +612,13 @@ Begin
     Job.RepoPath := FRepoPath;
   Job.OnFinished := @GitJobFinished;
   Result := GitJobs.Submit(Job);
+  { Submit frees Job on failure; do not read it afterwards. }
   If Result Then
     Begin
-      If Not Job.Quiet Then
+      If Not QuietJob Then
         FJobBusy := True;
     End
-  Else If Not Job.Quiet Then
+  Else If Not QuietJob Then
     MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
 End;
 
