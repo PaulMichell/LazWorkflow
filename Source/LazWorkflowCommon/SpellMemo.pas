@@ -272,10 +272,14 @@ Begin
 End;
 
 Procedure TSpellMemo.RealSetText(Const Value: TCaption);
+Var
+  Clean: String;
 Begin
-  If FText = Value Then
+  Clean := StringReplace(Value, #13#10, #10, [rfReplaceAll]);
+  Clean := StringReplace(Clean, #13, #10, [rfReplaceAll]);
+  If FText = Clean Then
     Exit;
-  FText := Value;
+  FText := Clean;
   FSelStart := UTF8Length(FText);
   FSelLength := 0;
   FSelAnchor := FSelStart;
@@ -283,6 +287,7 @@ Begin
     Begin
       RebuildLayout;
       UpdateScrollBar;
+      EnsureCaretInView;
     End;
   Invalidate;
   RestartDebounce;
@@ -522,9 +527,9 @@ End;
 
 Procedure TSpellMemo.RebuildLayout;
 Var
-  Para, Remain, Piece: String;
+  Para, Remain: String;
   ParaStart, RemainStart, Count, BreakAt, LastSpace, TextPos, WalkPos, CodeLen: Integer;
-  UsedWidth, CharWidth, MaxWidth, RowTop, RowH: Integer;
+  UsedWidth, MaxWidth, RowTop, RowH: Integer;
   CodePoint: Cardinal;
 Begin
   If Not CanLayout Then
@@ -571,15 +576,13 @@ Begin
                     CodePoint := UTF8CodepointToUnicode(@Remain[WalkPos], CodeLen);
                     If CodeLen <= 0 Then
                       Break;
-                    Piece := Copy(Remain, WalkPos, CodeLen);
-                    CharWidth := Canvas.TextWidth(Piece);
-                    If (UsedWidth + CharWidth > MaxWidth) And (BreakAt > 0) Then
+                    UsedWidth := MeasureAdvance(Copy(Remain, 1, WalkPos + CodeLen - 1));
+                    If (UsedWidth > MaxWidth) And (BreakAt > 0) Then
                       Begin
                         If LastSpace > 0 Then
                           BreakAt := LastSpace;
                         Break;
                       End;
-                    UsedWidth := UsedWidth + CharWidth;
                     BreakAt := WalkPos + CodeLen - 1;
                     If (Remain[WalkPos] = ' ') Or (CodePoint = 9) Then
                       LastSpace := BreakAt;
@@ -937,12 +940,39 @@ Begin
       End;
     VK_HOME:
       Begin
-        MoveCaret(0, Extend);
+        If (ssCtrl In Shift) Or (Length(FPaintLines) = 0) Then
+          MoveCaret(0, Extend)
+        Else
+          Begin
+            CaretByte := SpellCharToByteIndex(FText, Caret);
+            LineIndex := 0;
+            For Target := 0 To High(FPaintLines) Do
+              If ByteBelongsToPaintLine(Target, CaretByte) Then
+                Begin
+                  LineIndex := Target;
+                  Break;
+                End;
+            MoveCaret(SpellByteToCharOffset(FText, FPaintLines[LineIndex].ByteStart), Extend);
+          End;
         Key := 0;
       End;
     VK_END:
       Begin
-        MoveCaret(CharCount, Extend);
+        If (ssCtrl In Shift) Or (Length(FPaintLines) = 0) Then
+          MoveCaret(CharCount, Extend)
+        Else
+          Begin
+            CaretByte := SpellCharToByteIndex(FText, Caret);
+            LineIndex := 0;
+            For Target := 0 To High(FPaintLines) Do
+              If ByteBelongsToPaintLine(Target, CaretByte) Then
+                Begin
+                  LineIndex := Target;
+                  Break;
+                End;
+            MoveCaret(SpellByteToCharOffset(FText, FPaintLines[LineIndex].ByteStart +
+              FPaintLines[LineIndex].ByteLength), Extend);
+          End;
         Key := 0;
       End;
     VK_UP, VK_DOWN:
