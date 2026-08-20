@@ -1838,6 +1838,8 @@ end;
 
 function TMarkDownCanvasRenderer.GetBulletAt(aLevel: integer): string;
 begin
+  if aLevel<1 then
+    aLevel:=1;
   While aLevel>BulletCount do
     aLevel:=aLevel-BulletCount;
   Result:=FBullets[aLevel];
