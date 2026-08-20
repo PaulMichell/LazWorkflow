@@ -22,8 +22,6 @@ Const
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
-Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
-  Out ErrorText: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Function ProjectRootPath: String;
@@ -2391,6 +2389,9 @@ Begin
   Result := True;
   WorkflowLogger.Info('AssistantTools', ResultText);
 End;
+
+Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
+  Out ErrorText: String): Boolean; Forward;
 
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
