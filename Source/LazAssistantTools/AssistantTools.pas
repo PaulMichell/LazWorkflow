@@ -1301,15 +1301,17 @@ Begin
     End;
 End;
 
-Procedure FlushOpenEditorsUnderProject;
+Function FlushOpenEditorsUnderProject(Out ErrorText: String): Boolean;
 Var
   I: Integer;
   Ed: TSourceEditorInterface;
-  FullPath, Root, Note, Err: String;
+  FullPath, Root: String;
 Begin
-  { Write modified open buffers to disk without activating source editor windows.
-    Quiet lazbuild needs on-disk content, not only editor RAM. }
-  If Not Assigned(SourceEditorManagerIntf) Then
+  { Write modified open buffers to disk. Quiet lazbuild reads files, not editor RAM.
+    SaveProjectFileText only updates the open buffer, so use the IDE save API. }
+  Result := True;
+  ErrorText := '';
+  If Not Assigned(SourceEditorManagerIntf) Or Not Assigned(LazarusIDE) Then
     Exit;
   Root := ProjectRootPath;
   If Root = '' Then
@@ -1324,7 +1326,12 @@ Begin
         Continue;
       If Not IsPathUnderRoot(Root, FullPath) Then
         Continue;
-      SaveProjectFileText(FullPath, Ed.SourceText, False, Note, Err);
+      If LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) <> mrOk Then
+        Begin
+          Result := False;
+          ErrorText := 'Could not save editor buffer to disk: ' + FullPath;
+          Exit;
+        End;
     End;
 End;
 
@@ -1359,7 +1366,8 @@ Begin
       ErrorText := 'lazbuild not found on PATH or next to the IDE. Use ui=true for IDE compile.';
       Exit;
     End;
-  FlushOpenEditorsUnderProject;
+  If Not FlushOpenEditorsUnderProject(ErrorText) Then
+    Exit;
   WorkDir := ExtractFilePath(Lpi);
   If KindBuild Then
     Begin
