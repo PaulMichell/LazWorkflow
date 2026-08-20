@@ -85,17 +85,36 @@ End;
 
 Function PlanIsUnderRoot(Const Root, Candidate: String): Boolean;
 Var
-  R, C: String;
+  LexRoot, LexCand, Probe, PhysRoot, PhysCand: String;
 Begin
-  R := IncludeTrailingPathDelimiter(ExpandFileName(Root));
-  C := ExpandFileName(Candidate);
-  {$IFDEF WINDOWS}
-  Result := SameText(Copy(C, 1, Length(R)), R) Or
-    SameText(ExcludeTrailingPathDelimiter(C), ExcludeTrailingPathDelimiter(R));
-  {$ELSE}
-  Result := (Copy(C, 1, Length(R)) = R) Or
-    (ExcludeTrailingPathDelimiter(C) = ExcludeTrailingPathDelimiter(R));
-  {$ENDIF}
+  Result := False;
+  LexRoot := IncludeTrailingPathDelimiter(ExpandFileName(Root));
+  LexCand := ExpandFileName(Candidate);
+  If (LexCand = '') Or ((CompareFilenames(Copy(LexCand, 1, Length(LexRoot)), LexRoot) <> 0) And
+     (CompareFilenames(ExcludeTrailingPathDelimiter(LexCand), ExcludeTrailingPathDelimiter(LexRoot)) <> 0)) Then
+    Exit;
+  PhysRoot := GetPhysicalFilename(ExcludeTrailingPathDelimiter(LexRoot), pfeOriginal);
+  If PhysRoot = '' Then
+    PhysRoot := ExcludeTrailingPathDelimiter(LexRoot);
+  PhysRoot := IncludeTrailingPathDelimiter(ExpandFileName(PhysRoot));
+  Probe := LexCand;
+  While (Probe <> '') And (Not FileExistsUTF8(Probe)) And (Not DirectoryExistsUTF8(Probe)) Do
+    Begin
+      If ExtractFileDir(Probe) = Probe Then
+        Break;
+      Probe := ExcludeTrailingPathDelimiter(ExtractFileDir(Probe));
+    End;
+  If (Not FileExistsUTF8(Probe)) And (Not DirectoryExistsUTF8(Probe)) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  PhysCand := GetPhysicalFilename(Probe, pfeEmpty);
+  If PhysCand = '' Then
+    Exit;
+  PhysCand := ExpandFileName(PhysCand);
+  Result := (CompareFilenames(Copy(PhysCand, 1, Length(PhysRoot)), PhysRoot) = 0) Or
+    (CompareFilenames(ExcludeTrailingPathDelimiter(PhysCand), ExcludeTrailingPathDelimiter(PhysRoot)) = 0);
 End;
 
 Function PlanResolveUnderProject(Const RelativeOrAbsolute: String; Out Resolved: String;
