@@ -477,7 +477,7 @@ begin
     end;
 
   // compute layout as if there is a vertical scrollbar, to get a stable layout
-  HasVertSB:=FSBHorzShowing=ord(true);
+  HasVertSB:=FSBVertShowing=ord(true);
 
   FLastClientWidth:=ClientWidth;
   FLastCalcClientWidth:=FLastClientWidth;
