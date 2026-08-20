@@ -116,15 +116,13 @@ End;
 Function RandomBase64Url(ByteCount: Integer): String;
 Var
   Buf: TBytes;
-  I: Integer;
 Begin
+  Result := '';
+  If ByteCount <= 0 Then
+    Exit;
   SetLength(Buf, ByteCount);
-  If (ByteCount > 0) And (Not CryptoGetRandomBytes(@Buf[0], ByteCount)) Then
-    Begin
-      Randomize;
-      For I := 0 To High(Buf) Do
-        Buf[I] := Byte(Random(256));
-    End;
+  If Not CryptoGetRandomBytes(@Buf[0], ByteCount) Then
+    Exit;
   Result := BytesToBase64Url(Buf);
 End;
 
@@ -606,6 +604,12 @@ Begin
   FPendingState := RandomBase64Url(16);
   FPendingNonce := RandomBase64Url(16);
   FPendingVerifier := RandomBase64Url(64);
+  If (FPendingState = '') Or (FPendingNonce = '') Or (FPendingVerifier = '') Then
+    Begin
+      ClearPending;
+      FLastError := 'Could not generate secure OAuth randomness.';
+      Exit;
+    End;
   FPendingChallenge := Sha256Base64Url(FPendingVerifier);
   AuthUrl := BuildAuthorizeUrl;
   Result := AuthUrl <> '';
