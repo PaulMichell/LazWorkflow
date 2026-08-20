@@ -225,9 +225,11 @@ Begin
 End;
 
 Procedure TGrokOAuthCallbackThread.HandleConnect(Sender: TObject; Data: TSocketStream);
+Const
+  MaxCallbackBytes = 16384;
 Var
-  Request, Line, Path, Query, AuthCode, State, ErrParam: String;
-  Buf: Array[0..4095] Of Char;
+  Request, Line, Path, Query, AuthCode, State, ErrParam, Chunk: String;
+  Buf: Array[0..4095] Of Byte;
   N, HeaderEnd, SpacePos, QPos: Integer;
 Begin
   If Not Assigned(Data) Then
@@ -238,7 +240,15 @@ Begin
       N := Data.Read(Buf[0], SizeOf(Buf));
       If N <= 0 Then
         Break;
-      Request := Request + Copy(Buf, 1, N);
+      If Length(Request) + N > MaxCallbackBytes Then
+        Begin
+          FError := 'OAuth callback request too large.';
+          SendResponse(Data, 'HTTP/1.1 413 Payload Too Large', 'Request too large');
+          Exit;
+        End;
+      SetLength(Chunk, N);
+      Move(Buf[0], Chunk[1], N);
+      Request := Request + Chunk;
       HeaderEnd := Pos(#13#10#13#10, Request);
       If HeaderEnd = 0 Then
         HeaderEnd := Pos(#10#10, Request);
