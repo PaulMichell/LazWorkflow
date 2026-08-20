@@ -805,14 +805,45 @@ Begin
   Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now);
 End;
 
+Function ArchiveIdIsSafe(Const ArchiveId: String): Boolean;
+Var
+  I: Integer;
+  C: Char;
+Begin
+  Result := False;
+  If (ArchiveId = '') Or (Length(ArchiveId) > 24) Then
+    Exit;
+  For I := 1 To Length(ArchiveId) Do
+    Begin
+      C := ArchiveId[I];
+      If Not (((C >= '0') And (C <= '9')) Or (C = 'T') Or (C = 't') Or (C = 'x') Or (C = 'X')) Then
+        Exit;
+    End;
+  Result := True;
+End;
+
 Function TAssistantConversationStore.ArchivePathsForId(Const ArchiveId: String;
   Out ConvPath, IdxPath: String): Boolean;
+Var
+  Root, Full: String;
 Begin
   Result := False;
   ConvPath := '';
   IdxPath := '';
   If (FProjectRoot = '') Or (Trim(ArchiveId) = '') Then
     Exit;
+  If Not ArchiveIdIsSafe(ArchiveId) Then
+    Begin
+      FLastError := 'Invalid archive id.';
+      Exit;
+    End;
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(AssistantDir));
+  Full := ExpandFileName(Root + ConversationArchivePrefix + ArchiveId + ConversationArchiveSuffix);
+  If CompareFilenames(Copy(Full, 1, Length(Root)), Root) <> 0 Then
+    Begin
+      FLastError := 'Invalid archive id.';
+      Exit;
+    End;
   ConvPath := AssistantDir + ConversationArchivePrefix + ArchiveId + ConversationArchiveSuffix;
   IdxPath := AssistantDir + ConversationArchivePrefix + ArchiveId + ConversationArchiveIndexSuffix;
   Result := True;
@@ -1063,9 +1094,14 @@ End;
 Function TAssistantConversationStore.ActivateArchive(Const ArchiveId: String): Boolean;
 Var
   ArchConv, ArchIdx, CurConv, CurIdx, TmpId, TmpConv, TmpIdx: String;
+  ParkedConv, ParkedIdx: Boolean;
 Begin
   Result := False;
   FLastError := '';
+  ParkedConv := False;
+  ParkedIdx := False;
+  TmpConv := '';
+  TmpIdx := '';
   If FProjectRoot = '' Then
     Begin
       FLastError := 'No project root.';
@@ -1107,14 +1143,21 @@ Begin
           Begin
             FLastError := 'Could not park current conversation.';
             Exit;
-          End;
+          End
+        Else
+          ParkedConv := True;
       If FileExistsUTF8(CurIdx) Then
-        RenameFileUTF8(CurIdx, TmpIdx);
+        If RenameFileUTF8(CurIdx, TmpIdx) Then
+          ParkedIdx := True;
     End;
 
   If Not RenameFileUTF8(ArchConv, CurConv) Then
     Begin
       FLastError := 'Could not activate archive ' + ArchiveId;
+      If ParkedConv Then
+        RenameFileUTF8(TmpConv, CurConv);
+      If ParkedIdx Then
+        RenameFileUTF8(TmpIdx, CurIdx);
       Exit;
     End;
   If FileExistsUTF8(ArchIdx) Then

@@ -41,6 +41,42 @@ Begin
   Result := IncludeTrailingPathDelimiter(GetUserDir) + '.grok' + PathDelim + 'skills';
 End;
 
+Function SkillNameIsSafe(Const SkillName: String): Boolean;
+Var
+  I: Integer;
+  C: Char;
+  Root, Full, PhysRoot, PhysFile: String;
+Begin
+  Result := False;
+  If (SkillName = '') Or (Length(SkillName) > 64) Or (SkillName = '.') Or (SkillName = '..') Then
+    Exit;
+  For I := 1 To Length(SkillName) Do
+    Begin
+      C := SkillName[I];
+      If Not (((C >= 'A') And (C <= 'Z')) Or ((C >= 'a') And (C <= 'z')) Or
+         ((C >= '0') And (C <= '9')) Or (C = '.') Or (C = '_') Or (C = '-')) Then
+        Exit;
+    End;
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(AssistantUserSkillsRoot));
+  Full := ExpandFileName(Root + SkillName + PathDelim + 'SKILL.md');
+  If CompareFilenames(Copy(Full, 1, Length(Root)), Root) <> 0 Then
+    Exit;
+  PhysRoot := GetPhysicalFilename(ExcludeTrailingPathDelimiter(Root), pfeOriginal);
+  If PhysRoot = '' Then
+    PhysRoot := ExcludeTrailingPathDelimiter(Root);
+  PhysRoot := IncludeTrailingPathDelimiter(ExpandFileName(PhysRoot));
+  If FileExistsUTF8(Full) Then
+    Begin
+      PhysFile := GetPhysicalFilename(Full, pfeEmpty);
+      If PhysFile = '' Then
+        Exit;
+      PhysFile := ExpandFileName(PhysFile);
+      If CompareFilenames(Copy(PhysFile, 1, Length(PhysRoot)), PhysRoot) <> 0 Then
+        Exit;
+    End;
+  Result := True;
+End;
+
 Function StripYamlFrontMatter(Const Raw: String): String;
 Var
   TextBody, Rest: String;
@@ -124,6 +160,8 @@ Begin
         If Not FileExists(SkillFile) Then
           Continue;
         Info.Name := ExtractFileName(ExcludeTrailingPathDelimiter(SkillDir));
+        If Not SkillNameIsSafe(Info.Name) Then
+          Continue;
         Info.SkillFile := SkillFile;
         Info.Description := '';
         SL := TStringList.Create;
@@ -168,6 +206,11 @@ Begin
   If Trim(SkillName) = '' Then
     Begin
       ErrorText := 'No skill selected.';
+      Exit;
+    End;
+  If Not SkillNameIsSafe(SkillName) Then
+    Begin
+      ErrorText := 'Invalid skill name.';
       Exit;
     End;
   SkillFile := IncludeTrailingPathDelimiter(AssistantUserSkillsRoot) + SkillName + PathDelim + 'SKILL.md';
