@@ -29,7 +29,6 @@ Type
     Procedure FillLanguageCombo(Const Selected: String);
     Procedure UpdatePreviewStatus;
   Public
-    Constructor Create(TheOwner: TComponent); Override;
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
     Procedure OptionsFromControls(Dest: TSpellCheckerOptions);
@@ -42,11 +41,6 @@ Implementation
 
 Uses
   SpellEngine, SpellCheckerConfig;
-
-Constructor TSpellCheckerSettingsFrame.Create(TheOwner: TComponent);
-Begin
-  Inherited Create(TheOwner);
-End;
 
 Procedure TSpellCheckerSettingsFrame.FillLanguageCombo(Const Selected: String);
 Var

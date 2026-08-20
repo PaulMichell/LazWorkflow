@@ -55,7 +55,6 @@ Type
     FUrl: String;
     FTargetDir: String;
     FPaths: TStringList;
-    FOwnsPaths: Boolean;
     FTimeoutMs: Integer;
     FTag: PtrInt;
     FOnFinished: TGitJobFinishedEvent;
@@ -130,18 +129,18 @@ Type
     FActiveGit: TGitService;
     FOnBusyChanged: TGitJobBusyEvent;
     FDeliverQueue: TFPList;
-    FNotifyBusy: Boolean;
-    FNotifyCaption: String;
     Procedure EnterLock;
     Procedure LeaveLock;
     Procedure WakeWorker;
     Procedure QueueBusyNotify(IsBusy: Boolean; Const Caption: String);
+    Procedure QueueBusyCallback;
     Procedure DoBusyNotify;
     Procedure QueueFinished(Job: TGitJob);
     Procedure DoFinishedNotify;
     Function DequeueJob: TGitJob;
     Procedure ExecuteJob(Job: TGitJob; Git: TGitService);
-    Function QueueCountLocked: Integer;
+    Function NonQuietQueuedLocked: Boolean;
+    Function FirstNonQuietCaptionLocked: String;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -218,7 +217,6 @@ Begin
   FUrl := '';
   FTargetDir := '';
   FPaths := Nil;
-  FOwnsPaths := False;
   FTimeoutMs := GitJobDefaultTimeoutMs;
   FTag := 0;
   FOnFinished := Nil;
@@ -243,19 +241,17 @@ End;
 
 Destructor TGitJob.Destroy;
 Begin
-  If FOwnsPaths Then
-    FreeAndNil(FPaths)
-  Else
-    FPaths := Nil;
+  FreeAndNil(FPaths);
   Inherited Destroy;
 End;
 
 Procedure TGitJob.TakePaths(Paths: TStringList);
 Begin
-  If FOwnsPaths Then
-    FreeAndNil(FPaths);
-  FPaths := Paths;
-  FOwnsPaths := Assigned(Paths);
+  If FPaths <> Paths Then
+    Begin
+      FreeAndNil(FPaths);
+      FPaths := Paths;
+    End;
 End;
 
 Procedure TGitJob.CopyPathsFrom(Paths: TStrings);
@@ -283,7 +279,7 @@ Var
   Git: TGitService;
   StartTick: QWord;
   TimedOut: Boolean;
-  StillQueued: Boolean;
+  NeedNotify: Boolean;
 Begin
   Git := TGitService.Create;
   { Never publish WorkflowEventBus from a worker — listeners update LCL UI. }
@@ -347,16 +343,26 @@ Begin
         Try
           FRunner.FCurrent := Nil;
           FRunner.FActiveGit := Nil;
-          StillQueued := FRunner.QueueCountLocked > 0;
+          If FRunner.NonQuietQueuedLocked Then
+            Begin
+              FRunner.FBusy := True;
+              FRunner.FCurrentCaption := FRunner.FirstNonQuietCaptionLocked;
+              NeedNotify := True;
+            End
+          Else If FRunner.FBusy Or (Not Job.Quiet) Then
+            Begin
+              FRunner.FBusy := False;
+              FRunner.FCurrentCaption := '';
+              NeedNotify := True;
+            End
+          Else
+            NeedNotify := False;
         Finally
           FRunner.LeaveLock;
         End;
 
-        If Not Job.Quiet Then
-          If StillQueued Then
-            FRunner.QueueBusyNotify(True, Job.Caption)
-          Else
-            FRunner.QueueBusyNotify(False, '');
+        If NeedNotify Then
+          FRunner.QueueBusyCallback;
         FRunner.QueueFinished(Job);
       End;
   Finally
@@ -436,9 +442,38 @@ Begin
   RTLeventSetEvent(FWake);
 End;
 
-Function TGitJobRunner.QueueCountLocked: Integer;
+Function TGitJobRunner.NonQuietQueuedLocked: Boolean;
+Var
+  I: Integer;
+  Job: TGitJob;
 Begin
-  Result := FQueue.Count;
+  Result := False;
+  For I := 0 To FQueue.Count - 1 Do
+    Begin
+      Job := TGitJob(FQueue[I]);
+      If Assigned(Job) And (Not Job.Quiet) Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+    End;
+End;
+
+Function TGitJobRunner.FirstNonQuietCaptionLocked: String;
+Var
+  I: Integer;
+  Job: TGitJob;
+Begin
+  Result := '';
+  For I := 0 To FQueue.Count - 1 Do
+    Begin
+      Job := TGitJob(FQueue[I]);
+      If Assigned(Job) And (Not Job.Quiet) Then
+        Begin
+          Result := Job.Caption;
+          Exit;
+        End;
+    End;
 End;
 
 Procedure TGitJobRunner.QueueBusyNotify(IsBusy: Boolean; Const Caption: String);
@@ -450,11 +485,14 @@ Begin
       FCurrentCaption := Caption
     Else
       FCurrentCaption := '';
-    FNotifyBusy := IsBusy;
-    FNotifyCaption := Caption;
   Finally
     LeaveLock;
   End;
+  QueueBusyCallback;
+End;
+
+Procedure TGitJobRunner.QueueBusyCallback;
+Begin
   If Assigned(FWorker) Then
     TThread.Queue(FWorker, @DoBusyNotify);
 End;
@@ -467,8 +505,8 @@ Var
 Begin
   EnterLock;
   Try
-    IsBusy := FNotifyBusy;
-    Caption := FNotifyCaption;
+    IsBusy := FBusy;
+    Caption := FCurrentCaption;
     Handler := FOnBusyChanged;
   Finally
     LeaveLock;
@@ -692,9 +730,11 @@ End;
 Function TGitJobRunner.Submit(Job: TGitJob): Boolean;
 Var
   Reject: TGitJob;
+  NeedNotify: Boolean;
 Begin
   Result := False;
   Reject := Nil;
+  NeedNotify := False;
   If Not Assigned(Job) Then
     Exit;
   If FStopping Then
@@ -716,6 +756,12 @@ Begin
         If Job.FCaption = '' Then
           Job.FCaption := GitJobKindCaption(Job.Kind);
         FQueue.Add(Job);
+        If Not Job.Quiet Then
+          Begin
+            FBusy := True;
+            FCurrentCaption := Job.Caption;
+            NeedNotify := True;
+          End;
         Result := True;
       End;
   Finally
@@ -726,12 +772,10 @@ Begin
       Reject.Free;
       Exit;
     End;
+  If NeedNotify Then
+    QueueBusyCallback;
   If Result Then
-    Begin
-      If Not Job.Quiet Then
-        QueueBusyNotify(True, Job.Caption);
-      WakeWorker;
-    End;
+    WakeWorker;
 End;
 
 Function SameFinishedHandler(Const Left, Right: TGitJobFinishedEvent): Boolean;

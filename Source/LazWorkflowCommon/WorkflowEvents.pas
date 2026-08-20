@@ -110,6 +110,9 @@ Var
 
 Implementation
 
+Uses
+  WorkflowLog;
+
 Constructor TWorkflowEventBus.Create;
 Begin
   Inherited Create;
@@ -141,11 +144,17 @@ Begin
   Snapshot := CopyListeners;
   Try
     For I := 0 To Snapshot.Count - 1 Do
-      If Each(Snapshot[I]) Then
-        Begin
-          Result := True;
-          Exit;
-        End;
+      Try
+        If Each(Snapshot[I]) Then
+          Begin
+            Result := True;
+            Exit;
+          End;
+      Except
+        On E: Exception Do
+          If Assigned(WorkflowLogger) Then
+            WorkflowLogger.Error('WorkflowEvents', E.Message);
+      End;
   Finally
     Snapshot.Free;
   End;

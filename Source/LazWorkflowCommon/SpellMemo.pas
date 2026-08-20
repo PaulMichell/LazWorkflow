@@ -99,6 +99,8 @@ Type
     Function ScrollY: Integer;
     Procedure EnsureCaretInView;
     Procedure MoveCaret(NewStart: Integer; ExtendSel: Boolean);
+    Function CaretCharIndex: Integer;
+    Function ByteBelongsToPaintLine(LineIndex, CaretByte: Integer): Boolean;
     Function CharIndexAtPoint(X, Y: Integer): Integer;
     Function CaretPixel: TPoint;
     Procedure UpdateCaret;
@@ -425,6 +427,7 @@ Begin
   FSelStart := Value;
   FSelLength := 0;
   ClampSelection;
+  FSelAnchor := FSelStart;
   EnsureCaretInView;
   UpdateCaret;
   Invalidate;
@@ -456,6 +459,7 @@ Procedure TSpellMemo.SelectAll;
 Begin
   FSelStart := 0;
   FSelLength := CharCount;
+  FSelAnchor := 0;
   Invalidate;
 End;
 
@@ -682,6 +686,32 @@ Begin
       FScrollBar.Position := ScrollY + (Pixel.Y + LineHeight - Page) + 4;
 End;
 
+Function TSpellMemo.CaretCharIndex: Integer;
+Begin
+  If (FSelLength > 0) And (FSelStart < FSelAnchor) Then
+    Result := FSelStart
+  Else
+    Result := FSelStart + FSelLength;
+End;
+
+Function TSpellMemo.ByteBelongsToPaintLine(LineIndex, CaretByte: Integer): Boolean;
+Var
+  LineStart, LineEnd: Integer;
+Begin
+  Result := False;
+  If (LineIndex < 0) Or (LineIndex > High(FPaintLines)) Then
+    Exit;
+  LineStart := FPaintLines[LineIndex].ByteStart;
+  LineEnd := LineStart + FPaintLines[LineIndex].ByteLength;
+  If CaretByte < LineStart Then
+    Exit;
+  { Non-last rows are half-open so the wrap boundary belongs to the next row. }
+  If CaretByte < LineEnd Then
+    Result := True
+  Else
+    Result := (LineIndex = High(FPaintLines)) And (CaretByte = LineEnd);
+End;
+
 Function TSpellMemo.CaretPixel: TPoint;
 Var
   CaretByte, LineIndex, PrefixLen: Integer;
@@ -689,11 +719,10 @@ Var
 Begin
   Result.X := 3;
   Result.Y := 3 - ScrollY;
-  CaretByte := SpellCharToByteIndex(FText, FSelStart + FSelLength);
+  CaretByte := SpellCharToByteIndex(FText, CaretCharIndex);
   Canvas.Font := Font;
   For LineIndex := 0 To High(FPaintLines) Do
-    If (CaretByte >= FPaintLines[LineIndex].ByteStart) And
-      (CaretByte <= FPaintLines[LineIndex].ByteStart + FPaintLines[LineIndex].ByteLength) Then
+    If ByteBelongsToPaintLine(LineIndex, CaretByte) Then
       Begin
         PrefixLen := CaretByte - FPaintLines[LineIndex].ByteStart;
         Prefix := Copy(FText, FPaintLines[LineIndex].ByteStart, PrefixLen);
@@ -811,6 +840,7 @@ Begin
   System.Delete(FText, ByteStart, ByteEnd - ByteStart);
   FSelStart := CharStart;
   FSelLength := 0;
+  FSelAnchor := FSelStart;
   RebuildLayout;
   UpdateScrollBar;
   EnsureCaretInView;
@@ -845,6 +875,7 @@ Begin
   System.Insert(Clean, FText, ByteStart);
   FSelStart := FSelStart + UTF8Length(Clean);
   FSelLength := 0;
+  FSelAnchor := FSelStart;
   RebuildLayout;
   UpdateScrollBar;
   EnsureCaretInView;
@@ -886,9 +917,7 @@ Var
 Begin
   Inherited KeyDown(Key, Shift);
   Extend := ssShift In Shift;
-  Caret := FSelStart + FSelLength;
-  If FSelLength = 0 Then
-    Caret := FSelStart;
+  Caret := CaretCharIndex;
   Case Key Of
     VK_LEFT:
       Begin
@@ -921,9 +950,11 @@ Begin
         CaretByte := SpellCharToByteIndex(FText, Caret);
         LineIndex := 0;
         For Target := 0 To High(FPaintLines) Do
-          If (CaretByte >= FPaintLines[Target].ByteStart) And
-            (CaretByte <= FPaintLines[Target].ByteStart + FPaintLines[Target].ByteLength) Then
-            LineIndex := Target;
+          If ByteBelongsToPaintLine(Target, CaretByte) Then
+            Begin
+              LineIndex := Target;
+              Break;
+            End;
         If Key = VK_UP Then
           Dec(LineIndex)
         Else

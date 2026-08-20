@@ -159,8 +159,6 @@ Type
     { Generation tokens drop stale index/detail jobs after a rebind or cancel. }
     FIndexGen: Integer;
     FDetailGen: Integer;
-    FVisibleFirst: Integer;
-    FVisibleLast: Integer;
 
     { Path lists live on FFiles. }
     FInListSelChange: Boolean;
@@ -277,8 +275,6 @@ Begin
   FPushAfterCommit := False;
   FIndexGen := 0;
   FDetailGen := 0;
-  FVisibleFirst := 0;
-  FVisibleLast := 0;
   FInListSelChange := False;
   FStatusGen := 0;
   FStatusJobPending := False;
@@ -939,7 +935,6 @@ Procedure TManageRepositoryForm.ScheduleVisibleDetails;
 Begin
   If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
     Exit;
-  FHistory.GetVisibleRange(FVisibleFirst, FVisibleLast);
   FDetailTimer.Enabled := False;
   FDetailTimer.Enabled := True;
 End;

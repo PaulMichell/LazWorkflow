@@ -81,7 +81,6 @@ End;
 Function EmptySpellSuggestions: TSpellStringArray;
 Begin
   Result := Nil;
-  SetLength(Result, 0);
 End;
 
 Constructor TSpellEngine.Create;

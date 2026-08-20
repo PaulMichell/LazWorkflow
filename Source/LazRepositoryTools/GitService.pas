@@ -156,6 +156,8 @@ Function DirectoryIsEmpty(Const Dir: String): Boolean;
 Function GitStatusEntryIsStaged(Const Entry: TGitStatusEntry): Boolean;
 Function GitStatusEntryIsUnstaged(Const Entry: TGitStatusEntry): Boolean;
 Function GitStatusEntryLabel(Const Entry: TGitStatusEntry; StagedSide: Boolean): String;
+{ Porcelain v1 -z: XY space path NUL; rename/copy is dest NUL source NUL. }
+Procedure ParseGitStatusPorcelainV1Z(Const Raw: String; Out Entries: TGitStatusEntryArray);
 
 Var
   GitClient: TGitService;
@@ -683,18 +685,50 @@ Begin
     Inc(Pos);
 End;
 
+Procedure ParseGitStatusPorcelainV1Z(Const Raw: String; Out Entries: TGitStatusEntryArray);
+Var
+  Rec, Path, OldPath: String;
+  Cursor, Count: Integer;
+  X, Y: Char;
+Begin
+  Entries := Nil;
+  SetLength(Entries, 0);
+  Cursor := 1;
+  Count := 0;
+  While Cursor <= Length(Raw) Do
+    Begin
+      Rec := NextNulField(Raw, Cursor);
+      If Length(Rec) < 4 Then
+        Continue;
+      X := Rec[1];
+      Y := Rec[2];
+      { -z reverses rename/copy field order: destination first, source second. }
+      Path := Copy(Rec, 4, MaxInt);
+      OldPath := '';
+      If (X = 'R') Or (X = 'C') Or (Y = 'R') Or (Y = 'C') Then
+        OldPath := NextNulField(Raw, Cursor);
+      If Path = '' Then
+        Continue;
+      Inc(Count);
+      SetLength(Entries, Count);
+      Entries[Count - 1].Path := Path;
+      Entries[Count - 1].OldPath := OldPath;
+      Entries[Count - 1].IndexStatus := X;
+      Entries[Count - 1].WorkTreeStatus := Y;
+    End;
+End;
+
 Function TGitService.ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean;
   IncludeIgnored: Boolean): Boolean;
 Var
-  Raw, Rec, Path, OldPath: String;
-  ExitCode, Cursor, Count: Integer;
-  X, Y: Char;
+  Raw: String;
+  ExitCode: Integer;
   Args: Array Of String;
 Begin
   Entries := Nil;
   SetLength(Entries, 0);
   Args := Nil;
-  { -z: NUL records, no quoting. Rename/copy is old path then a second NUL field. }
+  { -z: NUL records, no quoting. Rename/copy is dest then source. }
   If IncludeIgnored Then
     Args := ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
       '--untracked-files=all', '--ignored']
@@ -707,32 +741,7 @@ Begin
   Result := RunGit(Args, Raw, ExitCode);
   If Not Result Then
     Exit;
-
-  Cursor := 1;
-  Count := 0;
-  While Cursor <= Length(Raw) Do
-    Begin
-      Rec := NextNulField(Raw, Cursor);
-      If Length(Rec) < 4 Then
-        Continue;
-      X := Rec[1];
-      Y := Rec[2];
-      Path := Copy(Rec, 4, MaxInt);
-      OldPath := '';
-      If (X = 'R') Or (X = 'C') Or (Y = 'R') Or (Y = 'C') Then
-        Begin
-          OldPath := Path;
-          Path := NextNulField(Raw, Cursor);
-        End;
-      If Path = '' Then
-        Continue;
-      Inc(Count);
-      SetLength(Entries, Count);
-      Entries[Count - 1].Path := Path;
-      Entries[Count - 1].OldPath := OldPath;
-      Entries[Count - 1].IndexStatus := X;
-      Entries[Count - 1].WorkTreeStatus := Y;
-    End;
+  ParseGitStatusPorcelainV1Z(Raw, Entries);
 End;
 
 Function TGitService.ListTrackedFiles(Out Paths: TStringList): Boolean;
@@ -789,30 +798,45 @@ Function TGitService.UnstagePaths(Paths: TStrings): Boolean;
 Var
   Args: Array Of String;
   I: Integer;
-  OutputText: String;
+  OutputText, DummySha: String;
   ExitCode: Integer;
 Begin
   Result := False;
   Args := Nil;
   If (Paths = Nil) Or (Paths.Count = 0) Then
     Exit;
-  { git restore --staged -- paths  (modern); fall back handled by git version }
-  SetLength(Args, 3 + Paths.Count);
-  Args[0] := 'restore';
-  Args[1] := '--staged';
-  Args[2] := '--';
-  For I := 0 To Paths.Count - 1 Do
-    Args[3 + I] := Paths[I];
-  Result := RunGit(Args, OutputText, ExitCode);
-  If Not Result Then
+  If GetHeadSha(DummySha) Then
     Begin
-      { Older git: git reset HEAD -- paths }
+      { git restore --staged -- paths  (modern); fall back handled by git version }
       SetLength(Args, 3 + Paths.Count);
-      Args[0] := 'reset';
-      Args[1] := 'HEAD';
+      Args[0] := 'restore';
+      Args[1] := '--staged';
       Args[2] := '--';
       For I := 0 To Paths.Count - 1 Do
         Args[3 + I] := Paths[I];
+      Result := RunGit(Args, OutputText, ExitCode);
+      If Not Result Then
+        Begin
+          { Older git: git reset HEAD -- paths }
+          SetLength(Args, 3 + Paths.Count);
+          Args[0] := 'reset';
+          Args[1] := 'HEAD';
+          Args[2] := '--';
+          For I := 0 To Paths.Count - 1 Do
+            Args[3 + I] := Paths[I];
+          Result := RunGit(Args, OutputText, ExitCode);
+        End;
+    End
+  Else
+    Begin
+      { Newly initialised repo: restore/reset need HEAD. Drop paths from the index. }
+      SetLength(Args, 4 + Paths.Count);
+      Args[0] := 'rm';
+      Args[1] := '--cached';
+      Args[2] := '-f';
+      Args[3] := '--';
+      For I := 0 To Paths.Count - 1 Do
+        Args[4 + I] := Paths[I];
       Result := RunGit(Args, OutputText, ExitCode);
     End;
   If Result Then
@@ -831,12 +855,17 @@ End;
 
 Function TGitService.UnstageAll: Boolean;
 Var
-  OutputText: String;
+  OutputText, DummySha: String;
   ExitCode: Integer;
 Begin
-  Result := RunGit(['restore', '--staged', '.'], OutputText, ExitCode);
-  If Not Result Then
-    Result := RunGit(['reset', 'HEAD'], OutputText, ExitCode);
+  If GetHeadSha(DummySha) Then
+    Begin
+      Result := RunGit(['restore', '--staged', '.'], OutputText, ExitCode);
+      If Not Result Then
+        Result := RunGit(['reset', 'HEAD'], OutputText, ExitCode);
+    End
+  Else
+    Result := RunGit(['rm', '-r', '--cached', '-f', '.'], OutputText, ExitCode);
   If Result Then
     EmitWorkingTreeChanged;
 End;
@@ -975,7 +1004,7 @@ End;
 
 Function TGitService.WorkingTreeFullPath(Const Path: String): String;
 Var
-  Root, Combined, Expanded: String;
+  Root, Combined, Expanded, PhysicalRoot, PhysicalPath: String;
 Begin
   Result := '';
   If (Trim(Path) = '') Or (FRepoPath = '') Then
@@ -992,6 +1021,26 @@ Begin
     Begin
       FLastError := 'Path is outside the repository: ' + Path;
       Exit;
+    End;
+  { ExpandFileName is lexical. A tracked symlink can point outside the tree. }
+  If FileExistsUTF8(Expanded) Or DirectoryExistsUTF8(Expanded) Then
+    Begin
+      PhysicalRoot := GetPhysicalFilename(ExcludeTrailingPathDelimiter(Root), pfeOriginal);
+      If PhysicalRoot = '' Then
+        PhysicalRoot := ExcludeTrailingPathDelimiter(Root);
+      PhysicalRoot := IncludeTrailingPathDelimiter(ExpandFileName(PhysicalRoot));
+      PhysicalPath := GetPhysicalFilename(Expanded, pfeEmpty);
+      If PhysicalPath = '' Then
+        Begin
+          FLastError := 'Path cannot be resolved: ' + Path;
+          Exit;
+        End;
+      PhysicalPath := ExpandFileName(PhysicalPath);
+      If CompareFilenames(Copy(PhysicalPath, 1, Length(PhysicalRoot)), PhysicalRoot) <> 0 Then
+        Begin
+          FLastError := 'Path is outside the repository: ' + Path;
+          Exit;
+        End;
     End;
   Result := Expanded;
 End;
@@ -1711,10 +1760,8 @@ End;
 
 Function TGitService.ListCommitPaths(Const Sha: String; Out Paths: TStringList): Boolean;
 Var
-  Text: String;
-  ExitCode, I: Integer;
-  Lines: TStringList;
-  Line: String;
+  Text, Rel: String;
+  ExitCode, Cursor: Integer;
 Begin
   Paths := TStringList.Create;
   Paths.Duplicates := dupIgnore;
@@ -1723,21 +1770,17 @@ Begin
   Text := '';
   If Sha = '' Then
     Exit;
-  If Not RunGit(['show', '--name-only', '--pretty=format:', Sha], Text, ExitCode) Then
+  If Not RunGit(['-c', 'core.quotePath=false', 'show', '--name-only', '--pretty=format:', '-z', Sha],
+    Text, ExitCode) Then
     Exit;
-  Lines := TStringList.Create;
-  Try
-    Lines.Text := Text;
-    For I := 0 To Lines.Count - 1 Do
-      Begin
-        Line := Trim(Lines[I]);
-        If Line <> '' Then
-          Paths.Add(Line);
-      End;
-    Result := True;
-  Finally
-    Lines.Free;
-  End;
+  Cursor := 1;
+  While Cursor <= Length(Text) Do
+    Begin
+      Rel := NextNulField(Text, Cursor);
+      If Rel <> '' Then
+        Paths.Add(Rel);
+    End;
+  Result := True;
 End;
 
 Function TGitService.ShowCommitPathDiff(Const Sha, Path: String; Out DiffText: String): Boolean;

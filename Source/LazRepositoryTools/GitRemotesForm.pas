@@ -300,6 +300,87 @@ Var
   I, J, Idx: Integer;
   RemoteName, Url: String;
   DesiredNames, DesiredUrls, RenamedFrom, RenamedTo: TStringList;
+  UndoOp, UndoA, UndoB: TStringList;
+
+  Procedure PushUndo(Const Op, A, B: String);
+  Begin
+    UndoOp.Add(Op);
+    UndoA.Add(A);
+    UndoB.Add(B);
+  End;
+
+  Function RollbackApplied: Boolean;
+  Var
+    K: Integer;
+  Begin
+    Result := True;
+    For K := UndoOp.Count - 1 DownTo 0 Do
+      If UndoOp[K] = 'rename' Then
+        Begin
+          If Not GitClient.RenameRemote(UndoA[K], UndoB[K]) Then
+            Result := False;
+        End
+      Else If UndoOp[K] = 'remove' Then
+        Begin
+          If Not GitClient.RemoveRemote(UndoA[K]) Then
+            Result := False;
+        End
+      Else If UndoOp[K] = 'add' Then
+        Begin
+          If Not GitClient.AddRemote(UndoA[K], UndoB[K]) Then
+            Result := False;
+        End
+      Else If UndoOp[K] = 'seturl' Then
+        Begin
+          If Not GitClient.SetRemoteUrl(UndoA[K], UndoB[K]) Then
+            Result := False;
+        End
+      Else
+        Result := False;
+  End;
+
+  Procedure RefreshOriginalSnapshot;
+  Var
+    Names, Urls: TStringList;
+    K: Integer;
+  Begin
+    Names := Nil;
+    Urls := Nil;
+    If Not GitClient.ListRemotes(Names, Urls) Then
+      Begin
+        Names.Free;
+        Urls.Free;
+        Exit;
+      End;
+    Try
+      OriginalNames.Clear;
+      OriginalUrls.Clear;
+      For K := 0 To Names.Count - 1 Do
+        Begin
+          OriginalNames.Add(Names[K]);
+          If K < Urls.Count Then
+            OriginalUrls.Add(Urls[K])
+          Else
+            OriginalUrls.Add('');
+        End;
+    Finally
+      Names.Free;
+      Urls.Free;
+    End;
+  End;
+
+  Function FailSave(Const Message: String): Boolean;
+  Begin
+    ErrorMessage := Message;
+    If Not RollbackApplied Then
+      Begin
+        ErrorMessage := ErrorMessage + LineEnding +
+          'Partial remote changes could not be reverted: ' + GitClient.LastError;
+        RefreshOriginalSnapshot;
+      End;
+    Result := False;
+  End;
+
 Begin
   Result := False;
   ErrorMessage := '';
@@ -317,6 +398,9 @@ Begin
   RenamedFrom.CaseSensitive := True;
   RenamedTo := TStringList.Create;
   RenamedTo.CaseSensitive := True;
+  UndoOp := TStringList.Create;
+  UndoA := TStringList.Create;
+  UndoB := TStringList.Create;
   Try
     For I := RemotesGrid.FixedRows To RemotesGrid.RowCount - 1 Do
       Begin
@@ -337,10 +421,8 @@ Begin
              (RenamedFrom.IndexOf(OriginalNames[I]) < 0) Then
             Begin
               If Not GitClient.RenameRemote(OriginalNames[I], DesiredNames[J]) Then
-                Begin
-                  ErrorMessage := 'Failed to rename remote "' + OriginalNames[I] + '": ' + GitClient.LastError;
-                  Exit;
-                End;
+                Exit(FailSave('Failed to rename remote "' + OriginalNames[I] + '": ' + GitClient.LastError));
+              PushUndo('rename', DesiredNames[J], OriginalNames[I]);
               RenamedFrom.Add(OriginalNames[I]);
               RenamedTo.Add(DesiredNames[J]);
               Break;
@@ -356,32 +438,30 @@ Begin
         If Idx < 0 Then
           Begin
             If Not GitClient.AddRemote(RemoteName, Url) Then
-              Begin
-                ErrorMessage := 'Failed to add remote "' + RemoteName + '": ' + GitClient.LastError;
-                Exit;
-              End;
+              Exit(FailSave('Failed to add remote "' + RemoteName + '": ' + GitClient.LastError));
+            PushUndo('remove', RemoteName, '');
           End
         Else If OriginalUrls[Idx] <> Url Then
           Begin
             If Not GitClient.SetRemoteUrl(RemoteName, Url) Then
-              Begin
-                ErrorMessage := 'Failed to update remote "' + RemoteName + '": ' + GitClient.LastError;
-                Exit;
-              End;
+              Exit(FailSave('Failed to update remote "' + RemoteName + '": ' + GitClient.LastError));
+            PushUndo('seturl', RemoteName, OriginalUrls[Idx]);
           End;
       End;
 
     For I := 0 To OriginalNames.Count - 1 Do
       If (DesiredNames.IndexOf(OriginalNames[I]) < 0) And (RenamedFrom.IndexOf(OriginalNames[I]) < 0) Then
         If Not GitClient.RemoveRemote(OriginalNames[I]) Then
-          Begin
-            ErrorMessage := 'Failed to remove remote "' + OriginalNames[I] + '": ' + GitClient.LastError;
-            Exit;
-          End;
+          Exit(FailSave('Failed to remove remote "' + OriginalNames[I] + '": ' + GitClient.LastError))
+        Else
+          PushUndo('add', OriginalNames[I], OriginalUrls[I]);
 
     WorkflowLogger.Info('GitRemotes', 'Saved remotes for ' + FRepoPath);
     Result := True;
   Finally
+    UndoB.Free;
+    UndoA.Free;
+    UndoOp.Free;
     RenamedTo.Free;
     RenamedFrom.Free;
     DesiredNames.Free;

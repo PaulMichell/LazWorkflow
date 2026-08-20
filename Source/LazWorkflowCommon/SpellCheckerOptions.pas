@@ -45,12 +45,10 @@ Type
     Function Count: Integer;
   End;
 
+Function SpellLanguageFromLocale(Const LocaleValue: String): String;
 Function DefaultSpellLanguage: String;
 
 Implementation
-
-Uses
-  LazUTF8;
 
 Constructor TSpellCheckerOptions.Create;
 Begin
@@ -78,17 +76,13 @@ Begin
   FPersonalFileName := Source.PersonalFileName;
 End;
 
-Function DefaultSpellLanguage: String;
+Function SpellLanguageFromLocale(Const LocaleValue: String): String;
 Var
   Lang: String;
   CutPos: Integer;
 Begin
-  Lang := GetEnvironmentVariable('LC_ALL');
+  Lang := Trim(LocaleValue);
   If Lang = '' Then
-    Lang := GetEnvironmentVariable('LC_MESSAGES');
-  If Lang = '' Then
-    Lang := GetEnvironmentVariable('LANG');
-  If (Lang = '') Or (Lang = 'C') Or (Lang = 'POSIX') Then
     Begin
       Result := '';
       Exit;
@@ -99,7 +93,24 @@ Begin
   CutPos := Pos('@', Lang);
   If CutPos > 0 Then
     Lang := Copy(Lang, 1, CutPos - 1);
+  If (Lang = '') Or SameText(Lang, 'C') Or SameText(Lang, 'POSIX') Then
+    Begin
+      Result := '';
+      Exit;
+    End;
   Result := StringReplace(Lang, '-', '_', [rfReplaceAll]);
+End;
+
+Function DefaultSpellLanguage: String;
+Var
+  Lang: String;
+Begin
+  Lang := GetEnvironmentVariable('LC_ALL');
+  If Lang = '' Then
+    Lang := GetEnvironmentVariable('LC_MESSAGES');
+  If Lang = '' Then
+    Lang := GetEnvironmentVariable('LANG');
+  Result := SpellLanguageFromLocale(Lang);
 End;
 
 Constructor TSpellWordSet.Create;

@@ -31,6 +31,7 @@ Type
     Procedure NotifyChanged;
     Procedure UnloadEngine;
     Function CreateEngine(Kind: TSpellEngineKind): TSpellEngine;
+    Function TryLoadEngine(Kind: TSpellEngineKind): Boolean;
     Function PersonalPath: String;
   Public
     Constructor Create;
@@ -122,6 +123,26 @@ Begin
   End;
 End;
 
+Function TSpellCheckerConfig.TryLoadEngine(Kind: TSpellEngineKind): Boolean;
+Var
+  Candidate: TSpellEngine;
+Begin
+  Result := False;
+  Candidate := CreateEngine(Kind);
+  If Not Assigned(Candidate) Then
+    Exit;
+  If Candidate.Load Then
+    Begin
+      FEngine := Candidate;
+      Result := True;
+    End
+  Else
+    Begin
+      FLastStatus := Candidate.LastError;
+      Candidate.Free;
+    End;
+End;
+
 Function TSpellCheckerConfig.PersonalPath: String;
 Begin
   Result := Trim(FOptions.PersonalFileName);
@@ -182,7 +203,6 @@ End;
 Procedure TSpellCheckerConfig.Apply;
 Var
   Kind: TSpellEngineKind;
-  Candidate: TSpellEngine;
 Begin
   UnloadEngine;
   FSessionIgnore.Clear;
@@ -196,38 +216,11 @@ Begin
     End;
   If Kind = sekAuto Then
     Begin
-      Candidate := CreateEngine(sekHunspell);
-      If Assigned(Candidate) Then
-        Begin
-          If Candidate.Load Then
-            FEngine := Candidate
-          Else
-            Begin
-              Candidate.Free;
-              Candidate := CreateEngine(sekAspell);
-              If Assigned(Candidate) Then
-                If Candidate.Load Then
-                  FEngine := Candidate
-                Else
-                  Begin
-                    FLastStatus := Candidate.LastError;
-                    FreeAndNil(Candidate);
-                  End;
-            End;
-        End;
+      If Not TryLoadEngine(sekHunspell) Then
+        TryLoadEngine(sekAspell);
     End
   Else
-    Begin
-      Candidate := CreateEngine(Kind);
-      If Assigned(Candidate) Then
-        If Candidate.Load Then
-          FEngine := Candidate
-        Else
-          Begin
-            FLastStatus := Candidate.LastError;
-            FreeAndNil(Candidate);
-          End;
-    End;
+    TryLoadEngine(Kind);
   If Assigned(FEngine) And FEngine.IsReady Then
     FLastStatus := SpellEngineKindToText(FEngine.EngineKind) + ' ready (' + FEngine.ResolvedLanguage + ')'
   Else If FLastStatus = '' Then
@@ -294,7 +287,6 @@ End;
 Procedure TSpellCheckerConfig.DiscoverLanguages(Out Languages: TSpellDiscoveredLanguageArray);
 Var
   Names: TStringList;
-  Index: Integer;
   Procedure AppendKind(List: TStrings; Kind: TSpellEngineKind);
   Var
     I, J: Integer;
@@ -330,10 +322,6 @@ Begin
   Finally
     Names.Free;
   End;
-  { Keep the unused Index warning away from empty arrays. }
-  Index := Length(Languages);
-  If Index < 0 Then
-    Languages := Nil;
 End;
 
 Function TSpellCheckerConfig.HunspellAvailable: Boolean;

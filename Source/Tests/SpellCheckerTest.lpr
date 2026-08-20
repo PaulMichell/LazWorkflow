@@ -109,9 +109,21 @@ Begin
   Check('auto kind parse', TextToSpellEngineKind('auto') = sekAuto);
 End;
 
+Procedure TestLocale;
+Begin
+  Check('C locale is not a dictionary', SpellLanguageFromLocale('C') = '');
+  Check('POSIX locale is not a dictionary', SpellLanguageFromLocale('POSIX') = '');
+  Check('C.UTF-8 is not a dictionary', SpellLanguageFromLocale('C.UTF-8') = '');
+  Check('C.utf8 is not a dictionary', SpellLanguageFromLocale('C.utf8') = '');
+  Check('en_GB.UTF-8 strips encoding', SpellLanguageFromLocale('en_GB.UTF-8') = 'en_GB');
+  Check('en-US becomes underscore', SpellLanguageFromLocale('en-US') = 'en_US');
+  Check('empty locale is empty', SpellLanguageFromLocale('') = '');
+End;
+
 Begin
   FailCount := 0;
   TestNone;
+  TestLocale;
   TestBreaker;
   TestHunspell;
   TestAspell;

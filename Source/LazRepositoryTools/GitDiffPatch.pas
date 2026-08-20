@@ -73,7 +73,7 @@ Function BuildGitPartialPatch(Lines: TStrings; FirstLine, LastLine: Integer;
 Var
   OutLines, FileHeader, HunkBody: TStringList;
   I, LineNo, OldCount, NewCount, OldStart, NewStart: Integer;
-  Line, HeaderRest, FilePath: String;
+  Line, HeaderRest: String;
   InHunk, HunkHasChange, FileHasChange: Boolean;
   Selected: Boolean;
   SpacePos: Integer;
@@ -167,7 +167,6 @@ Begin
     HunkHasChange := False;
     LastHunkLineKept := False;
     FileHasChange := False;
-    FilePath := '';
 
     For I := 0 To Lines.Count - 1 Do
       Begin
@@ -180,9 +179,6 @@ Begin
             FileHeader.Clear;
             FileHeader.Add(Line);
             FileHasChange := False;
-            FilePath := Trim(Copy(Line, 12, MaxInt));
-            If Pos(' b/', FilePath) > 0 Then
-              FilePath := Copy(FilePath, Pos(' b/', FilePath) + 3, MaxInt);
           End
         Else If (Copy(Line, 1, 6) = 'index ') Or (Copy(Line, 1, 4) = '--- ') Or
                 (Copy(Line, 1, 4) = '+++ ') Or (Copy(Line, 1, 8) = 'new file') Or

@@ -219,6 +219,8 @@ Begin
     FullyStaged := TStringList.Create;
     AllFiles := TStringList.Create;
     Try
+      { Filenames may contain '='. Git rejects ASCII control characters in paths. }
+      StatusMap.NameValueSeparator := #1;
       StatusMap.Sorted := True;
       StatusMap.Duplicates := dupIgnore;
       StatusMap.CaseSensitive := FileNameCaseSensitive;
@@ -339,7 +341,6 @@ Begin
   FilesDiffView.Clear;
   FilesDiffView.SetViewMode(dvmEditorOnly);
   FilesDiffView.SetStagingContext(RepoPath, FromStaged);
-  FilesDiffView.SetViewMode(dvmEditorOnly);
   If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
     Exit;
   For I := 0 To List.Count - 1 Do
