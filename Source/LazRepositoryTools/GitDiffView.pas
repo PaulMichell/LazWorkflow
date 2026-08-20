@@ -1430,11 +1430,19 @@ Begin
     Begin
       Mem := TMemoryStream.Create;
       Try
-        If GitClient.ReadBlobBytes(Sha, RelPath, StagedSide, Mem) And
-           TryShowImageFromStream(TitleText, Mem) Then
+        If GitClient.ReadBlobBytes(Sha, RelPath, StagedSide, Mem) Then
           Begin
-            Result := True;
-            Exit;
+            If Mem.Size > 8 * 1024 * 1024 Then
+              Begin
+                ShowBinaryMessage(TitleText);
+                Result := True;
+                Exit;
+              End;
+            If TryShowImageFromStream(TitleText, Mem) Then
+              Begin
+                Result := True;
+                Exit;
+              End;
           End;
       Finally
         Mem.Free;
