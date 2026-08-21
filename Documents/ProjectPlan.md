@@ -1,5 +1,7 @@
 # Project Plan: Lazarus Repository Tools + Project Assistant
 
+**Superseded for assistant architecture:** see [ProjectPlan-v2.md](ProjectPlan-v2.md) (2026-08-21). This document remains the v0.2 implementation log for what already shipped.
+
 **Michell Computing Style Lazarus Package Suite**  
 **Version:** 0.2 (Planning revision)  
 **Date:** 2026-07-26  
