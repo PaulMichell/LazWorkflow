@@ -10,7 +10,7 @@ Unit AssistantService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation;
+  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation, AssistantProtocol;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
@@ -102,6 +102,10 @@ Type
     Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
     { Rebuilds the next chat/completions body (used after a tool round). }
     Function BuildNextRequestJson: String;
+    { Mid-turn steering note; no-op if no actor is running. }
+    Procedure EnqueueSteer(Const Text: String);
+    { Sampler items for the session actor (Responses / Completions). }
+    Function ExportSamplerItems: TSamplerInputItemArray;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
@@ -123,7 +127,7 @@ Implementation
 
 Uses
   fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools,
-  AssistantHttps;
+  AssistantHttps, AssistantEvents, AssistantActor;
 
 Type
   { One UI snapshot for the main thread; queued under FSnapLock to avoid races. }
@@ -1200,37 +1204,41 @@ End;
 Procedure TAssistantService.ClearStreamThread;
 Var
   StartTick: QWord;
-  Stream: TAssistantStreamThread;
+  Actor: TAssistantActor;
 Begin
   If Not Assigned(FStreamThread) Then
     Begin
       FBusy := False;
       Exit;
     End;
-  Stream := TAssistantStreamThread(FStreamThread);
-  Stream.Terminate;
-  Stream.AbortHttp;
-  { Pump Synchronize/Queue so a blocked EmitSnapshots can finish; never
-    WaitFor alone on the main thread (classic deadlock with Synchronize). }
-  StartTick := GetTickCount64;
-  While (Not Stream.Finished) And (GetTickCount64 - StartTick < 8000) Do
+  If FStreamThread Is TAssistantActor Then
     Begin
-      CheckSynchronize(20);
+      Actor := TAssistantActor(FStreamThread);
+      Actor.Cancel;
+    End
+  Else
+    FStreamThread.Terminate;
+  { Pump Queue/Synchronize; abort HTTP so Stop does not wait on the socket. }
+  StartTick := GetTickCount64;
+  While (Not FStreamThread.Finished) And (GetTickCount64 - StartTick < 1500) Do
+    Begin
+      CheckSynchronize(15);
       Sleep(5);
     End;
-  If Not Stream.Finished Then
-    WorkflowLogger.Warning('AssistantService', 'Stream thread did not finish within timeout; detaching');
+  If Not FStreamThread.Finished Then
+    WorkflowLogger.Warning('AssistantService', 'Actor did not finish within 1.5s; detaching');
   Try
-    If Stream.Finished Then
+    If FStreamThread.Finished Then
       Begin
-        Stream.WaitFor;
+        FStreamThread.WaitFor;
         FreeAndNil(FStreamThread);
       End
     Else
       Begin
-        { Last resort: abandon the reference; thread free-on-terminate is false so
-          it may leak if stuck in kernel I/O, but the IDE stays responsive. }
-        Stream.Detach;
+        If FStreamThread Is TAssistantActor Then
+          TAssistantActor(FStreamThread).Detach
+        Else If FStreamThread Is TAssistantStreamThread Then
+          TAssistantStreamThread(FStreamThread).Detach;
         FStreamThread := Nil;
       End;
   Except
@@ -1579,6 +1587,61 @@ Begin
   Result := BuildRequestJson;
 End;
 
+Function TAssistantService.ExportSamplerItems: TSamplerInputItemArray;
+Var
+  I, N, C: Integer;
+  Calls: TSamplerToolCallArray;
+  RoleName: String;
+Begin
+  TrimMessagesForBudget;
+  N := Length(FMessages);
+  If Trim(FSystemPrompt) <> '' Then
+    Inc(N);
+  SetLength(Result, N + 8);
+  C := 0;
+  If Trim(FSystemPrompt) <> '' Then
+    Begin
+      Result[C] := SamplerInputMessage('system', FSystemPrompt);
+      Inc(C);
+    End;
+  For I := 0 To High(FMessages) Do
+    Begin
+      If FMessages[I].Role = amrTool Then
+        Begin
+          Result[C] := SamplerInputFunctionOutput(FMessages[I].ToolCallId, FMessages[I].Content);
+          Inc(C);
+        End
+      Else If FMessages[I].ToolCallsJson <> '' Then
+        Begin
+          If Trim(FMessages[I].Content) <> '' Then
+            Begin
+              Result[C] := SamplerInputMessage('assistant', FMessages[I].Content);
+              Inc(C);
+            End;
+          If ParseOpenAiToolCallsJson(FMessages[I].ToolCallsJson, Calls) Then
+            For N := 0 To High(Calls) Do
+              If Calls[N].Name <> '' Then
+                Begin
+                  Result[C] := SamplerInputFunctionCall(Calls[N].Id, Calls[N].Name, Calls[N].Arguments);
+                  Inc(C);
+                End;
+        End
+      Else
+        Begin
+          RoleName := RoleToJson(FMessages[I].Role);
+          Result[C] := SamplerInputMessage(RoleName, FMessages[I].Content);
+          Inc(C);
+        End;
+    End;
+  SetLength(Result, C);
+End;
+
+Procedure TAssistantService.EnqueueSteer(Const Text: String);
+Begin
+  If Assigned(FStreamThread) And (FStreamThread Is TAssistantActor) Then
+    TAssistantActor(FStreamThread).EnqueueSteer(Text);
+End;
+
 Function TAssistantService.MessageCount: Integer;
 Begin
   Result := Length(FMessages);
@@ -1735,7 +1798,7 @@ End;
 
 Function TAssistantService.StartStream(OnToken: TAssistantStreamEvent): Boolean;
 Var
-  RequestJson, AccessToken: String;
+  AccessToken, EventsFile, ToolsJson: String;
 Begin
   Result := False;
   FLastError := '';
@@ -1774,12 +1837,21 @@ Begin
   RebuildSystemPrompt;
   FToolsJsonValid := False;
   TrimMessagesForBudget;
-  RequestJson := BuildRequestJson;
-  FStreamThread := TAssistantStreamThread.Create(Self, FApiBase, AccessToken, FModel, RequestJson, OnToken);
+  EventsFile := '';
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    EventsFile := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) +
+      '.assistant' + PathDelim + 'events' + PathDelim +
+      FormatDateTime('yyyymmdd"T"hhnnss', Now) + '.jsonl';
+  If FToolsEnabled Then
+    ToolsJson := ToolsJsonCached
+  Else
+    ToolsJson := '';
+  FStreamThread := TAssistantActor.Create(Self, FApiBase, AccessToken, FModel, FReasoningEffort,
+    ToolsJson, EventsFile, OnToken);
   FBusy := True;
   FStreamThread.Start;
   Result := True;
-  WorkflowLogger.Info('AssistantService', 'Stream started – model=' + FModel);
+  WorkflowLogger.Info('AssistantService', 'Actor started – model=' + FModel);
 End;
 
 Procedure TAssistantService.CancelStream;

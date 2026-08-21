@@ -655,9 +655,9 @@ Status: complete
 
 ## 2. Event log and session actor
 
-Status: not started
+Status: complete
 
-`AssistantEvents` + `AssistantSession` thread. Turn loop without wiping thinking. Tool dispatch via existing `ExecuteAssistantToolForMode`. Coalesced queue to main. Cancel/abort HTTP. **Steering buffer:** accept mid-turn comments from the UI, drain at safe gaps (after HTTP round / after in-flight tool, never mid-compile), inject synthetic user envelope, round-trip encrypted reasoning, do not abort the turn. Stranded steers become the next prompt.
+`AssistantEvents` + `AssistantActor` thread (the plan name `AssistantSession` was already taken by the legacy transcript helper). Turn loop keeps thinking across tool rounds. Tool dispatch via `ExecuteAssistantToolForMode` on the main thread. Coalesced Queue snapshots (~50 ms). Cancel aborts HTTP and waits 1.5s instead of 8s. Steering buffer drains at safe gaps; stranded notes become the next user message. Responses is tried first with Completions fallback. Encrypted reasoning is round-tripped on the Responses path. The live form still consumes `OnToken` snapshots; typed trace UI is package 3. `AssistantService.EnqueueSteer` is ready for the shell.
 
 ## 3. Trace UI: thinking + tools + answer
 
