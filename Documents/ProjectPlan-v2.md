@@ -1,7 +1,7 @@
 # Project Plan v2: Agentic Pascal in the Lazarus IDE
 
 **Michell Computing Style Lazarus Package Suite**
-**Version:** 2.1 (Planning)
+**Version:** 2.2 (Planning)
 **Date:** 2026-08-21
 **Author:** FreePascal Engineer
 **Supersedes:** [ProjectPlan.md](ProjectPlan.md) for LazAssistantTools architecture. LazRepositoryTools and LazWorkflowCommon stay as shipped in v0.2.
@@ -23,6 +23,7 @@ v0.2 delivered a working Project Assistant (Chat / Plan / Code, streaming, tools
 
 - Thinking is a live, structured agent trace: reasoning, tool cards, compile, subagents — as readable as Build.
 - Watching that trace, the user can **steer** the still-running turn (a clarification, correction, or extra idea) without stopping it.
+- Every capability is **discoverable** from the window (menu, palette, slash, footer) — nothing useful lives only as a `/` secret.
 - One conversation. Modes are permission overlays, not three different products.
 - The harness (system prompt, skills, project rules, todos) is in the same family as Build, specialised for Michell Pascal.
 - The compiler is the syntax checker. LLM subagents are for *review lenses* and *bounded parallel work*, not for re-doing `lazbuild`.
@@ -189,7 +190,8 @@ Replace the current “god form + god service” split (`ProjectAssistantForm.pa
 | `ToolBlockFrame` | UI | Tool card |
 | `AnswerBlockFrame` | UI | Final markdown (existing `TMarkDownControl`) |
 | `SubagentBlockFrame` | UI | Child lifecycle row |
-| `ProjectAssistantForm` | UI | Shell only: mode chip, work list, history, prompt, footer |
+| `AssistantCommands` | UI | Action catalog: caption, category, slash alias, palette |
+| `ProjectAssistantForm` | UI | Shell only: mode chip, work list, history, prompt, footer, menus |
 
 Event bus stays `WorkflowEvents`. Git stays in LazRepositoryTools.
 
@@ -417,7 +419,7 @@ Hard tool gates stay. In-flight mode lock stays.
 │            │  answer markdown                             │             │
 ├────────────┴──────────────────────────────────────────────┴─────────────┤
 │ Prompt   (stays live during a turn)                                     │
-│ [Steer] [Stop]  Review ▾   Fix Error   ⋯ Settings   ← Steer while busy  │
+│ [Steer] [Stop]  Review ▾   Commands…   Fix Error   ⋯   ← palette, not 12 buttons │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ grok-4.5 · free-pascal-engineer · 12% · Thinking 4.2s                   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -426,7 +428,7 @@ Hard tool gates stay. In-flight mode lock stays.
 - **Work** is the plan-tile list in every mode (empty-state: “No active plan — switch to Plan to create one”). Selecting a tile seeds the prompt; **Work on this** is a Build action, disabled in Ask.
 - **Trace** is a `TScrollBox` (or virtual list) of typed frames, not one `TMarkDownControl` for the whole turn.
 - **History** stays the JSONL browser.
-- Bottom bar is **short**. Review Compile/Build live under **Review**. Auto-new-chat is a setting, not a permanent checkbox.
+- Bottom bar is **short**. Review Compile/Build live under **Review**. **Commands…** (and `/` in the prompt) open the same catalog as the window menu. Auto-new-chat is a setting, not a permanent checkbox.
 
 ### 6.3 Mode interaction (the missing UX)
 
@@ -446,6 +448,69 @@ This is the product difference vs running `grok` in a terminal:
 - `ensure_form_component` remains a first-class tool (Build has no LFM).
 - Open file / jump to line from tool cards.
 - Repository **Suggest** commit message stays Chat/Ask (read-only diff).
+
+### 6.5 Discoverability — nothing useful is `/`-only
+
+Build’s power is real; a lot of it is easy to miss. The TUI puts compact, rewind, effort, skills, plan view, usage, doctor, and user-invocable skills behind **type `/` in the prompt** (and a `Ctrl+P` palette that many people never find). A Lazarus dock must not copy that hiding. The IDE user will look at **menus, buttons, and the footer** first.
+
+**Rule:** every command has a caption, a category, and at least one visible surface besides slash. Slash is a *shortcut* for people who already know Build, not the catalog.
+
+**One registry, many surfaces.** `AssistantCommands` (or the form `TActionList`, Michell default) is the only list. Every row is a `TAction` with:
+
+| Field | Purpose |
+|-------|---------|
+| Caption | Human name (“Compact context”, not `/compact`) |
+| Category | Session · Work · Review · View · Model · Skills · Help |
+| ShortCut | Where it does not fight the IDE |
+| Hint | One line for palette and status |
+| Slash alias | Optional `/compact`, `/rewind`, … for the prompt popup |
+| Enabled | Mode / busy / “has plan” predicates |
+
+Surfaces that **all** read that list:
+
+1. **Window menu** — `Session`, `Work`, `Review`, `View`, `Help` on the Project Assistant form (and a matching **Tools → Project Assistant** submenu in the IDE). This is the primary discovery path for a desktop IDE.
+2. **Command palette** — `Ctrl+P` (and `?` while the assistant is focused). Searchable: caption, slash alias, hint. Same window as Build’s palette, but labelled **Commands** so it is not a secret. Button **Commands…** on the short bottom bar opens it.
+3. **Slash popup** — typing `/` in the prompt filters the same catalog. Keyboard users who know Build keep the muscle memory; the popup shows the **caption** in the first column and `/name` dimmed, so a new user learns the name.
+4. **Footer clicks** — model name → model/effort picker; context % → context breakdown (`/context`); skill name → skills list; status phase → session info. The footer is not decoration.
+5. **Context menus** — on a history row: rewind to here, export, delete, rename. On a thinking/answer block: copy, expand, collapse. On a tool card: open file, jump to Messages.
+6. **Empty-state line** in the trace, once: “Type a request, or open **Commands…** (`Ctrl+P`). Prefix `/` for the same list.” Not a 300 px help essay.
+
+Do **not** put every command back on the bottom bar. That is how v0.2 became clunky. Discoverable ≠ always visible. The bar keeps the *verbs of the current state* (Send/Steer, Stop, Review ▾, Commands…, overflow). The catalog holds the rest.
+
+**Map Build slash commands onto this product** (v2 must implement the left column; slash aliases in parentheses):
+
+| Catalog caption | Build analogue | Surface besides `/` |
+|-----------------|----------------|---------------------|
+| New conversation | `/new` `/clear` | Session menu, existing button |
+| Compact context | `/compact` | Session menu; offer when context ≥ ~85% (banner, not only auto) |
+| Context breakdown | `/context` | Click context % |
+| Session info | `/session-info` | Click model / Help |
+| Rewind to this turn | `/rewind` `/undo` | History and trace context menu |
+| Copy last answer | `/copy` | Trace context menu; Session menu |
+| Export conversation | `/export` | Session menu (already an action) |
+| Delete / rename conversation | `/delete` `/rename` | History panel |
+| Model… | `/model` | Footer, Settings, Commands |
+| Thinking level… | `/effort` | Footer, Settings (already a combo) |
+| Approval mode… | `/always-approve` `/auto` | Settings, Session menu |
+| Ask / Plan / Build | `/plan` + permission cycle | **Chips** (already visible) |
+| Open active plan | `/view-plan` | Work panel, Work menu |
+| Work on this / next package | (Code tiles today) | Work panel + Work menu |
+| Review compile / build | Review actions today | **Review ▾** |
+| Review changes (lenses) | `/review` skill | Review ▾ |
+| Fix error | Fix Error today | Review ▾ / Messages |
+| Show thinking | thinking toggle | View menu, existing button in overflow |
+| Skills… | `/skills` | Footer skill, Settings, View menu |
+| Run skill: *name* | user-invocable skills | Palette + slash; Skills dialog |
+| Sign in / out | `/login` `/logout` | Settings (already) |
+| Commands / Help | `/docs` `/tutorial` | Help menu; this plan’s user-facing guide later |
+
+**Not in v2** (TUI- or product-specific; do not pretend): `/dashboard` multi-session roster, `/vim-mode`, `/theme` (IDE already themes), `/imagine*`, `/loop`, `/workflow*`, `/hooks` `/plugins` `/marketplace` `/mcps`, `/fork`, `/btw` (aside panel — related to steer, later), `/dream` `/memory` unless we add memory. They stay off the catalog so the menu does not fill with dead items.
+
+**Skills.** Any discovered skill with `user-invocable: true` (frontmatter; default true if omitted) is a catalog row **Run “commit”** / `/commit`. Built-in names win the bare slash; the skill is still listed with a **skill** badge (Build’s collision rule). Pinning a skill in Settings is separate from *invoking* it once.
+
+**IDE keys.** `Ctrl+P` in the assistant must not steal the IDE’s command palette if that is bound globally — use the form’s `KeyPreview` only while the assistant is focused, and also register IDE commands (`ProjectAssistant.Palette`, `ProjectAssistant.NewConversation`, …) so they appear in Lazarus’s own key-mapping dialog. That is the IDE-native discovery path Build does not have.
+
+**First session.** Help → **Commands** opens the palette with an empty filter so the full list is visible. Do not rely on a tutorial overlay.
 
 ---
 
@@ -485,7 +550,7 @@ v2 scan order (stop at first name win):
 
 Catalog in the system prompt: `name`, `description`, `when-to-use`. A `read_skill` tool loads the body on demand so we do not dump every skill into every turn.
 
-User-facing: Settings still has a **pin**; pinned skill is always injected. Default pin for this product: `free-pascal-engineer`.
+User-facing: Settings still has a **pin**; pinned skill is always injected. Default pin for this product: `free-pascal-engineer`. Skills with `user-invocable: true` also appear in the command catalog (§6.5) so they are not Settings-only.
 
 ### 7.3 Project rules
 
@@ -604,7 +669,7 @@ Status: not started
 
 Status: not started
 
-Remove mode-swapped help panel. Work tiles + history always visible. Short bottom bar. Promotion banners. Plan “Build this” bar. Rename Code → Build in captions. Prompt stays editable during a turn; Send caption **Steer**; `Ctrl+Enter` injects; pending steer block in the trace.
+Remove mode-swapped help panel. Work tiles + history always visible. Short bottom bar. Promotion banners. Plan “Build this” bar. Rename Code → Build in captions. Prompt stays editable during a turn; Send caption **Steer**; `Ctrl+Enter` injects; pending steer block in the trace. **Command catalog:** window menus, `Ctrl+P` palette, `/` popup, footer clicks — one `TActionList`, no `/`-only verbs.
 
 ## 5. Harness
 
@@ -637,6 +702,8 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 | **Three separate conversations per mode** | Makes Plan → Build a copy-paste problem. One session, overlay permissions. |
 | **Steer by aborting the HTTP stream every time** | Wastes the round the user was reading; kills compile. Drain at the next gap; **Stop and send** is the interruptive verb. |
 | **Queue-until-turn-ends as the only mid-turn send** | That is Build’s default `follow_up_behavior=queue`. Too late for “I just saw the thought and need to correct it.” Steer is v2’s default; queue-until-done is a setting. |
+| **Slash menu as the only way to find compact / rewind / skills** | That is Build’s hiding problem. Slash stays as a shortcut; menus, palette, and footer are the catalog. |
+| **Put every command on the bottom bar** | v0.2 clunk. Short bar for current-state verbs; the rest live in Commands… |
 
 ---
 
@@ -653,6 +720,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 9. **No general shell** in v2.
 10. **ACP optional later**, same trace UI.
 11. **Steer is the default mid-turn send.** Merge at the next actor-loop gap; do not cancel in-flight tools. Stop-and-send is a separate verb. Prompt stays live (`ReadOnly` is a v0.2 bug for this product).
+12. **One command catalog, several surfaces.** Every user-facing verb has a caption and a non-slash home (menu, palette, footer, or context menu). `/` is muscle memory, not discovery.
 
 ---
 
@@ -668,6 +736,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 | Review fan-out cost | Default off; cap 3; changed files only |
 | `ProjectAssistantForm` rewrite risk | Shell-first: new trace in the centre, keep send/stop/history until chips land |
 | Steer during a long compile feels “stuck” | Footer “Steering at next tool gap…”; never kill `run_compile`; Stop remains the abort |
+| `Ctrl+P` fights the IDE command palette | Only while the assistant is focused; also register IDE commands for Lazarus keymap |
 | Several steers in one gap | Concatenate in order in one drain so we do not spawn extra HTTP rounds |
 
 ---
@@ -676,6 +745,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 
 - During a Build turn the user can **watch thinking grow, see each tool by name/path, and expand thought after**.
 - Mid-turn, they can type a correction and **Steer**; the next model round incorporates it without throwing away the current compile or thought so far.
+- A new user can find Compact, Rewind, Skills, Review, and Model **without knowing any `/` name** — via Commands…, the window menu, or the footer.
 - Switching Ask → Plan → Build does not wipe the transcript or start a silent new chat.
 - A Plan write offers **Build this** without hunting tabs.
 - Review of a change can run naming + structure lenses in parallel; syntax still comes from compile.
