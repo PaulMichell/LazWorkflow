@@ -1670,8 +1670,10 @@ procedure TMarkDownCanvasRenderer.CollectHTMLEntities;
 var
   Ent : THTMLEntityDef;
 begin
+  { Duplicate keys in EntityDefList (&Name vs &Name;) must not raise. }
   for ent in EntityDefList do
-    FHTMLEntities.Add(ent.e,Utf8Encode(ent.u));
+    if FHTMLEntities.Find(ent.e)=Nil then
+      FHTMLEntities.Add(ent.e,Utf8Encode(ent.u));
 end;
 
 function TMarkDownCanvasRenderer.ResolveEntities(const aText: String): String;

@@ -378,8 +378,11 @@ var
   Ent : THTMLEntityDef;
 
 begin
+  { WHATWG entities.json lists both &Name and &Name; — after stripping they
+    share a key. TFPStringHashTable.Add raises on the second insert. }
   for ent in EntityDefList do
-    aList.Add(ent.e,Utf8Encode(ent.u));
+    if aList.Find(ent.e)=Nil then
+      aList.Add(ent.e,Utf8Encode(ent.u));
 end;
 
 
