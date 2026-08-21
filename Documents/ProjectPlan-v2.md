@@ -649,9 +649,9 @@ Each section is a Code/Build tile (`Status:` line immediately under the heading)
 
 ## 1. Protocol and sampler (Responses)
 
-Status: not started
+Status: complete
 
-`AssistantProtocol` + `AssistantSampler`: Responses stream, encrypted include, Chat Completions fallback. Unit tests with fixture SSE (reasoning deltas, tool calls, completed). No UI yet.
+`AssistantProtocol` + `AssistantSampler`: Responses stream, encrypted include, Chat Completions fallback. Unit tests with fixture SSE (reasoning deltas, tool calls, completed). No UI yet. HTTP POST stays with the session actor (package 2); this package is the pure wire transform.
 
 ## 2. Event log and session actor
 
