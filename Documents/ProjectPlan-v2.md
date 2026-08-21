@@ -1,7 +1,7 @@
 # Project Plan v2: Agentic Pascal in the Lazarus IDE
 
 **Michell Computing Style Lazarus Package Suite**
-**Version:** 2.0 (Planning)
+**Version:** 2.1 (Planning)
 **Date:** 2026-08-21
 **Author:** FreePascal Engineer
 **Supersedes:** [ProjectPlan.md](ProjectPlan.md) for LazAssistantTools architecture. LazRepositoryTools and LazWorkflowCommon stay as shipped in v0.2.
@@ -22,6 +22,7 @@ v0.2 delivered a working Project Assistant (Chat / Plan / Code, streaming, tools
 **Success looks like this**
 
 - Thinking is a live, structured agent trace: reasoning, tool cards, compile, subagents — as readable as Build.
+- Watching that trace, the user can **steer** the still-running turn (a clarification, correction, or extra idea) without stopping it.
 - One conversation. Modes are permission overlays, not three different products.
 - The harness (system prompt, skills, project rules, todos) is in the same family as Build, specialised for Michell Pascal.
 - The compiler is the syntax checker. LLM subagents are for *review lenses* and *bounded parallel work*, not for re-doing `lazbuild`.
@@ -268,6 +269,8 @@ SubagentStarted { id, kind, title }
 SubagentProgress { id, phase }
 SubagentCompleted { id, ok, summary }
 PermissionNeeded { tool, summary }
+SteerQueued { text }           { shown in the trace immediately }
+Interjected { text, at }       { merged at a safe gap; turn continues }
 TurnEnded { outcome, error }
 ```
 
@@ -321,6 +324,59 @@ Without these, even perfect `reasoning_content` still feels like a wall of prose
 
 Public grok-4.6 thinking is still a **summary** of internal chain-of-thought, not the raw private trace. Build’s first-party path may be thicker. v2 can match Build’s *client* (Responses + blocks + tools + no wipe). It cannot decrypt encrypted content for display. That is a product/API limit, not a Pascal one.
 
+### 5.7 Steering comments (mid-turn interjection)
+
+This is a first-class v2 feature, copied from grok-build’s `xai-interjection-core` / session-actor drain — not a follow-up chat after the turn dies.
+
+**The problem today.** v0.2 sets `InputMemo.ReadOnly` and disables `SendAction` for the whole stream (`SetSending`). The only mid-turn verb is **Stop**. If thinking reveals a better approach, the user must wait, or abort and lose in-flight work.
+
+**You cannot splice tokens into an open SSE body.** The public API has no “append to this completion.” Steer happens at a **safe gap** in the actor loop, then the next model request includes the comment. That is how Build does it (`drain_interjections_at_safe_point`: after a tool batch, at loop top, before the turn returns).
+
+Safe gaps in our actor:
+
+1. After the current HTTP round finishes (thinking + content + tool_calls received).
+2. After the current *in-flight tool* finishes — **do not cancel `run_compile`** because the user typed a note.
+3. Before the next `POST /responses` (or Completions) round.
+
+Until that gap, the UI still shows the comment in the trace as **Steer · pending**. Footer: “Steering at next tool gap…”.
+
+**Envelope** (same idea as Build’s `format_interjection`; Michell-owned wording):
+
+```
+The user sent a message while you were working:
+<user_query>
+…steering text…
+</user_query>
+Incorporate this into the current task. Finish unfinished work unless the user
+clearly cancelled or replaced it.
+```
+
+That goes on the conversation as a synthetic user item. Encrypted reasoning from the round just finished is still round-tripped, so the model does not amnesia the thought the user was reacting to.
+
+Display in the trace as a normal user block with a small **Steer** badge — not a system footnote. Persistence: store the human text in history/events; do not store the envelope boilerplate as the visible prompt.
+
+**Two verbs — do not collapse them**
+
+| Verb | When | Effect |
+|------|------|--------|
+| **Steer** | Default mid-turn send | Queue the text; merge at the next safe gap; **turn continues** |
+| **Stop and send** | User wants a hard redirect | Abort HTTP (and optionally running tools); next turn is a new prompt with an interrupt note (“The user interrupted the previous turn”) |
+
+Build’s default `follow_up_behavior = "queue"` waits until the turn *ends*. That is the weaker product for “I just read the thought and need to correct it.” **Steer is the default mid-turn send in v2.** Queue-until-done can live in Settings for people who only want notes after the answer.
+
+**In-flight tools.** A steer never kills `run_compile` / file writes already started. Stop does. If the user steers “don’t compile yet” while compile is running, the result still arrives; the next model round sees both the compile tool result and the steer.
+
+**Idle / stranded.** If the turn ends before drain, the pending steer becomes the next user turn (Build’s interjection fallback). Never silently drop it.
+
+**UI (shell)**
+
+- Prompt stays editable while a turn is running (`ReadOnly := False`).
+- Primary button while busy: **Steer** (caption swap on `SendAction`). Shortcut: `Ctrl+Enter` (Lazarus-friendly; matches Build’s “send now” family without fighting IDE `Enter` in a memo).
+- **Stop** stays abort. After Stop, Send is a normal new turn.
+- Optional later: a short “queued steer” chip above the prompt if several notes pile up (concatenate in order at one drain, or inject one-per-gap — prefer **concatenate one drain** so we do not multiply HTTP rounds).
+
+**Out of scope for the first cut:** steering a *child* subagent independently (parent steer is enough; children finish or the parent cancels them). Images on a steer. Slash-command expansion inside a steer.
+
 ---
 
 ## 6. UI: one agent surface, modes as permission
@@ -360,8 +416,8 @@ Hard tool gates stay. In-flight mode lock stays.
 │ visible    │  tool cards …                                │             │
 │            │  answer markdown                             │             │
 ├────────────┴──────────────────────────────────────────────┴─────────────┤
-│ Prompt                                                                  │
-│ [Send] [Stop]   Review ▾   Fix Error   ⋯ Settings                       │
+│ Prompt   (stays live during a turn)                                     │
+│ [Steer] [Stop]  Review ▾   Fix Error   ⋯ Settings   ← Steer while busy  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ grok-4.5 · free-pascal-engineer · 12% · Thinking 4.2s                   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -379,6 +435,7 @@ Hard tool gates stay. In-flight mode lock stays.
 3. **Plan approval.** When Plan mode finishes a write to the active plan, show a thin bar: **Build this** (chip → Build, seed “Implement the next incomplete section”) · **Revise**. This is grok-build `exit_plan_mode` in IDE clothes.
 4. **Fix Error / Review** force Build (already true) and explain why in the badge, not a mystery tab jump.
 5. **Empty states are one sentence**, not a help essay in the side panel. Chat’s current 300 px of documentation goes away.
+6. **Steer while thinking** — prompt stays live; Send becomes Steer; see §5.7. This is the main reason the composer must not go `ReadOnly` during a turn.
 
 ### 6.4 Native IDE fusion (keep and deepen)
 
@@ -535,7 +592,7 @@ Status: not started
 
 Status: not started
 
-`AssistantEvents` + `AssistantSession` thread. Turn loop without wiping thinking. Tool dispatch via existing `ExecuteAssistantToolForMode`. Coalesced queue to main. Cancel/abort HTTP.
+`AssistantEvents` + `AssistantSession` thread. Turn loop without wiping thinking. Tool dispatch via existing `ExecuteAssistantToolForMode`. Coalesced queue to main. Cancel/abort HTTP. **Steering buffer:** accept mid-turn comments from the UI, drain at safe gaps (after HTTP round / after in-flight tool, never mid-compile), inject synthetic user envelope, round-trip encrypted reasoning, do not abort the turn. Stranded steers become the next prompt.
 
 ## 3. Trace UI: thinking + tools + answer
 
@@ -547,7 +604,7 @@ Status: not started
 
 Status: not started
 
-Remove mode-swapped help panel. Work tiles + history always visible. Short bottom bar. Promotion banners. Plan “Build this” bar. Rename Code → Build in captions.
+Remove mode-swapped help panel. Work tiles + history always visible. Short bottom bar. Promotion banners. Plan “Build this” bar. Rename Code → Build in captions. Prompt stays editable during a turn; Send caption **Steer**; `Ctrl+Enter` injects; pending steer block in the trace.
 
 ## 5. Harness
 
@@ -578,6 +635,8 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 | **Always-on naming+syntax+structure subagents** | Syntax is the compiler. Always-on LLMs are slow, costly, and argue. Review-on-demand is the Build pattern. |
 | **Port grok-build UI widgets literally** | Ratatui ≠ LCL. Copy the *block model and states*, implement as frames. |
 | **Three separate conversations per mode** | Makes Plan → Build a copy-paste problem. One session, overlay permissions. |
+| **Steer by aborting the HTTP stream every time** | Wastes the round the user was reading; kills compile. Drain at the next gap; **Stop and send** is the interruptive verb. |
+| **Queue-until-turn-ends as the only mid-turn send** | That is Build’s default `follow_up_behavior=queue`. Too late for “I just saw the thought and need to correct it.” Steer is v2’s default; queue-until-done is a setting. |
 
 ---
 
@@ -593,6 +652,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 8. **`free-pascal-engineer` always on** in Plan/Build; other skills catalogued.
 9. **No general shell** in v2.
 10. **ACP optional later**, same trace UI.
+11. **Steer is the default mid-turn send.** Merge at the next actor-loop gap; do not cancel in-flight tools. Stop-and-send is a separate verb. Prompt stays live (`ReadOnly` is a v0.2 bug for this product).
 
 ---
 
@@ -607,12 +667,15 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 | Prompt size with full skill | Existing 120k cap; catalog + `read_skill` for extras |
 | Review fan-out cost | Default off; cap 3; changed files only |
 | `ProjectAssistantForm` rewrite risk | Shell-first: new trace in the centre, keep send/stop/history until chips land |
+| Steer during a long compile feels “stuck” | Footer “Steering at next tool gap…”; never kill `run_compile`; Stop remains the abort |
+| Several steers in one gap | Concatenate in order in one drain so we do not spawn extra HTTP rounds |
 
 ---
 
 ## 15. Success metrics
 
 - During a Build turn the user can **watch thinking grow, see each tool by name/path, and expand thought after**.
+- Mid-turn, they can type a correction and **Steer**; the next model round incorporates it without throwing away the current compile or thought so far.
 - Switching Ask → Plan → Build does not wipe the transcript or start a silent new chat.
 - A Plan write offers **Build this** without hunting tabs.
 - Review of a change can run naming + structure lenses in parallel; syntax still comes from compile.
