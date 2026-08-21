@@ -47,6 +47,7 @@ Type
     FPendingVerifier: String;
     FPendingChallenge: String;
     FLoginBusy: Boolean;
+    FLastTokenErrorCode: String;
     Procedure ClearPending;
     Function HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String;
       Out StatusCode: Integer): Boolean;
@@ -54,6 +55,8 @@ Type
     Function TokenRequest(Const FormBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
     Function ExchangeAuthorizationCode(Const AuthCode: String): Boolean;
     Function IsAlreadyUsedError(Const MessageText: String): Boolean;
+    Procedure PersistTokens;
+    Procedure ForgetStoredTokens;
   Public
     Constructor Create;
     Function DiscoverEndpoints: Boolean;
@@ -84,7 +87,7 @@ Implementation
 
 Uses
   Forms, LCLIntf, dateutils, fpjson, jsonparser,
-  httpprotocol, fpsha256, fphashutils, ssockets, WorkflowLog, AssistantHttps;
+  httpprotocol, fpsha256, fphashutils, ssockets, WorkflowLog, AssistantHttps, AssistantConfig;
 
 Type
   TGrokOAuthCallbackThread = Class(TThread)
@@ -360,6 +363,7 @@ Begin
   ClearTokens;
   ClearPending;
   FLastError := '';
+  FLastTokenErrorCode := '';
   FLoginBusy := False;
 End;
 
@@ -477,19 +481,89 @@ Begin
   End;
 End;
 
+Function ExtractOAuthErrorFields(Const ResponseBody: String; Out ErrorCode, ErrorDescription: String): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  ErrorCode := '';
+  ErrorDescription := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ResponseBody);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      ErrorCode := Trim(Obj.Get('error', ''));
+      ErrorDescription := Trim(Obj.Get('error_description', ''));
+      Result := (ErrorCode <> '') Or (ErrorDescription <> '');
+    Except
+      Result := False;
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function DescribeTokenHttpError(StatusCode: Integer; Const ResponseBody: String;
+  Out ErrorCode: String): String;
+Var
+  Description: String;
+  Snippet: String;
+Begin
+  ErrorCode := '';
+  Description := '';
+  ExtractOAuthErrorFields(ResponseBody, ErrorCode, Description);
+  If SameText(ErrorCode, 'invalid_grant') Then
+    Begin
+      Result := 'Sign-in expired or was revoked. Open Settings and sign in again with SuperGrok / X Premium.';
+      Exit;
+    End;
+  If Description <> '' Then
+    Begin
+      Result := 'Token request failed: ' + Description;
+      Exit;
+    End;
+  Snippet := Trim(ResponseBody);
+  If Length(Snippet) > 400 Then
+    Snippet := Copy(Snippet, 1, 400) + '…';
+  If Snippet = '' Then
+    Result := Format('Token request failed (HTTP %d).', [StatusCode])
+  Else
+    Result := Format('Token request failed (HTTP %d): %s', [StatusCode, Snippet]);
+End;
+
+Procedure TGrokOAuthClient.PersistTokens;
+Begin
+  If Not Assigned(AssistantChatConfig) Then
+    Exit;
+  AssistantChatConfig.ApplyOAuthTokens(FTokens);
+  AssistantChatConfig.Save;
+End;
+
+Procedure TGrokOAuthClient.ForgetStoredTokens;
+Begin
+  ClearTokens;
+  If Not Assigned(AssistantChatConfig) Then
+    Exit;
+  AssistantChatConfig.ClearOAuthTokens;
+  AssistantChatConfig.Save;
+End;
+
 Function TGrokOAuthClient.TokenRequest(Const FormBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
 Var
   Body: String;
   StatusCode: Integer;
 Begin
   Result := False;
+  FLastTokenErrorCode := '';
   If Not HttpPostForm(FTokenEndpoint, FormBody, Body, StatusCode) Then
     Exit;
   If (StatusCode < 200) Or (StatusCode >= 300) Then
     Begin
-      If Length(Body) > 400 Then
-        Body := Copy(Body, 1, 400) + '…';
-      FLastError := Format('Token request failed (HTTP %d): %s', [StatusCode, Body]);
+      FLastError := DescribeTokenHttpError(StatusCode, Body, FLastTokenErrorCode);
       Exit;
     End;
   Result := ParseTokenResponse(Body, NewTokens);
@@ -517,6 +591,7 @@ Begin
     NewTokens.RefreshToken := OldRefresh;
   FTokens := NewTokens;
   ClearPending;
+  PersistTokens;
   Result := True;
 End;
 
@@ -805,10 +880,21 @@ Begin
     EncodeQuery('refresh_token', FTokens.RefreshToken) + '&' +
     EncodeQuery('client_id', GrokOAuthClientId);
   If Not TokenRequest(FormBody, NewTokens) Then
-    Exit;
+    Begin
+      { Rotation / revoke: keep retrying a dead refresh token only produces the same 400. }
+      If SameText(FLastTokenErrorCode, 'invalid_grant') Then
+        Begin
+          WorkflowLogger.Warning('GrokOAuth', 'Refresh token rejected; signing out locally');
+          ForgetStoredTokens;
+          FLastError :=
+            'Sign-in expired or was revoked. Open Settings and sign in again with SuperGrok / X Premium.';
+        End;
+      Exit;
+    End;
   If NewTokens.RefreshToken = '' Then
     NewTokens.RefreshToken := OldRefresh;
   FTokens := NewTokens;
+  PersistTokens;
   Result := True;
   WorkflowLogger.Info('GrokOAuth', 'Access token refreshed');
 End;

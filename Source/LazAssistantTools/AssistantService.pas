@@ -1757,10 +1757,12 @@ Begin
         FLastError := 'Not signed in. Open Assistant Settings and sign in with SuperGrok / X Premium.';
       Exit;
     End;
-  { Keep tokens in memory for this session; persist on Settings save / form close paths
-    rather than blocking every prompt with a config write. }
+  { Persist after refresh so a rotated refresh token survives IDE restart. }
   If Assigned(AssistantChatConfig) Then
-    AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+    Begin
+      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      AssistantChatConfig.Save;
+    End;
   If Not Assigned(OnToken) Then
     Begin
       FLastError := 'No stream callback.';
@@ -1826,7 +1828,10 @@ Begin
       Exit;
     End;
   If Assigned(AssistantChatConfig) Then
-    AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+    Begin
+      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+      AssistantChatConfig.Save;
+    End;
   If FModel = '' Then
     Begin
       ErrorText := 'No model configured.';

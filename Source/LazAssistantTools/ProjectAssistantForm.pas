@@ -2977,7 +2977,11 @@ Begin
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
       If Not AssistantClient.StartStream(@StreamToken) Then
-        FinishAssistantReply(AssistantClient.LastError);
+        Begin
+          FinishAssistantReply(AssistantClient.LastError);
+          If Assigned(GrokOAuthClient) And (Not GrokOAuthClient.IsAuthenticated) Then
+            SettingsActionExecute(Nil);
+        End;
     End
   Else
     AppendMessage('user', DisplayText);
