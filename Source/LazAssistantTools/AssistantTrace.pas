@@ -64,6 +64,7 @@ Type
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;
 Function FormatThinkingClock(DurationMs: Integer): String;
+Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Function ToolCardCaption(Const ToolName, Args: String): String;
 
 Implementation
@@ -177,7 +178,7 @@ Function TAssistantTrace.StartThinking(LoopIndex: Integer): TTraceBlock;
 Begin
   FinishCurrentThinking;
   Result := AddBlock(tbkThinking);
-  Result.Title := 'Thinking';
+  Result.Title := ThinkingCardTitle(0, True);
   Result.LoopIndex := LoopIndex;
   Result.Running := True;
   Result.StartedAt := Now;
@@ -286,10 +287,7 @@ Begin
   Block.Running := False;
   If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
     Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
-  If Block.DurationMs > 0 Then
-    Block.Title := 'Thought for ' + FormatThoughtElapsed(Block.DurationMs)
-  Else
-    Block.Title := 'Thought';
+  Block.Title := ThinkingCardTitle(Block.DurationMs, False);
 End;
 
 Procedure TAssistantTrace.CollapseThinking(HideBody: Boolean);
@@ -306,10 +304,7 @@ Begin
           Block.Running := False;
           If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
             Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
-          If Block.DurationMs > 0 Then
-            Block.Title := 'Thought for ' + FormatThoughtElapsed(Block.DurationMs)
-          Else
-            Block.Title := 'Thought';
+          Block.Title := ThinkingCardTitle(Block.DurationMs, False);
         End;
     End;
 End;
@@ -350,6 +345,16 @@ Begin
     DurationMs := 0;
   TotalSec := DurationMs Div 1000;
   Result := Format('%d:%2.2d', [TotalSec Div 60, TotalSec Mod 60]);
+End;
+
+Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
+Begin
+  If Running Then
+    Result := 'Thinking'
+  Else If DurationMs > 0 Then
+    Result := 'Thinking  ' + FormatThoughtElapsed(DurationMs)
+  Else
+    Result := 'Thinking';
 End;
 
 Function JsonStringHint(Const Args, FieldName: String): String;

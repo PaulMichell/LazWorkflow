@@ -44,7 +44,7 @@ Begin
     Check('tool caption has file', Pos('Foo.pas', Tool.Title) > 0);
     Trace.CollapseThinking;
     Check('thinking collapsed', Think.Collapsed And (Not Think.Running));
-    Check('thought title', Pos('Thought', Think.Title) > 0);
+    Check('thinking title', Pos('Thinking', Think.Title) > 0);
     Answer := Trace.EnsureAnswer;
     Answer.Body := 'Looks fine.';
     Check('same answer', Trace.EnsureAnswer = Answer);

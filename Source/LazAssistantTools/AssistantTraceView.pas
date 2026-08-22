@@ -28,7 +28,8 @@ Type
     FCopyPopup: TPopupMenu;
     Procedure SetShowThinking(Value: Boolean);
     Procedure SetStreaming(Value: Boolean);
-    Procedure ApplyVerticalStack(Host: TWinControl);
+    Function LineHeightPx: Integer;
+    Procedure ApplyVerticalStack(Host: TWinControl; Inner: Boolean);
     Procedure InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
     Function NamedChild(Host: TWinControl; Const ChildName: String): TControl;
     Procedure OrderFrames(Trace: TAssistantTrace);
@@ -36,7 +37,9 @@ Type
     Procedure BindThinking(Block: TTraceBlock);
     Procedure BindTool(Block: TTraceBlock);
     Procedure BindAnswer(Block: TTraceBlock);
-    Procedure BindText(Block: TTraceBlock; Const TitleColor: TColor);
+    Procedure BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
+    Procedure BindUser(Block: TTraceBlock);
+    Procedure SplitTrailingMdFooter(Const SourceText: String; Out BodyText, FooterText: String);
     Procedure EnsureCopyPopup;
     Procedure CopyPopupPopup(Sender: TObject);
     Procedure CopyItemClick(Sender: TObject);
@@ -70,6 +73,7 @@ Const
   HeaderHeight = 26;
   ToolHeight = 30;
   TruncatedLineCount = 12;
+  CardInnerPad = 8;
 
 Constructor TAssistantTraceView.Create(TheOwner: TComponent);
 Begin
@@ -94,7 +98,7 @@ Begin
   If Assigned(TraceHost) Then
     Begin
       TraceHost.Color := clWindow;
-      ApplyVerticalStack(TraceHost);
+      ApplyVerticalStack(TraceHost, False);
     End;
   If Assigned(EmptyLabel) Then
     Begin
@@ -113,7 +117,18 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TAssistantTraceView.ApplyVerticalStack(Host: TWinControl);
+Function TAssistantTraceView.LineHeightPx: Integer;
+Begin
+  If Not HandleAllocated Then
+    HandleNeeded;
+  Result := Canvas.TextHeight('Hg');
+  If Result < 12 Then
+    Result := 16;
+End;
+
+Procedure TAssistantTraceView.ApplyVerticalStack(Host: TWinControl; Inner: Boolean);
+Var
+  Gap: Integer;
 Begin
   If Not Assigned(Host) Then
     Exit;
@@ -123,6 +138,21 @@ Begin
   Host.ChildSizing.ControlsPerLine := 1;
   Host.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
   Host.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
+  If Inner Then
+    Begin
+      Host.ChildSizing.LeftRightSpacing := CardInnerPad;
+      Host.ChildSizing.TopBottomSpacing := CardInnerPad;
+      Host.ChildSizing.VerticalSpacing := 4;
+    End
+  Else
+    Begin
+      Gap := LineHeightPx Div 2;
+      If Gap < 6 Then
+        Gap := 8;
+      Host.ChildSizing.LeftRightSpacing := CardInnerPad;
+      Host.ChildSizing.TopBottomSpacing := CardInnerPad;
+      Host.ChildSizing.VerticalSpacing := Gap;
+    End;
 End;
 
 Procedure TAssistantTraceView.InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
@@ -131,12 +161,12 @@ Begin
   Panel.BevelOuter := bvNone;
   Panel.Align := alNone;
   Panel.Anchors := [akLeft, akTop];
-  Panel.BorderSpacing.Around := 2;
+  Panel.BorderSpacing.Around := 0;
   Panel.ParentBackground := False;
   If AutoSizePanel Then
     Begin
       Panel.AutoSize := True;
-      ApplyVerticalStack(Panel);
+      ApplyVerticalStack(Panel, True);
     End
   Else
     Begin
@@ -267,7 +297,7 @@ Begin
   Result.BorderStyle := bsNone;
   Result.ScrollBars := ssNone;
   Result.WordWrap := True;
-  Result.WantReturns := False;
+  Result.WantReturns := True;
   Result.WantTabs := False;
   Result.HideSelection := False;
   Result.TabStop := True;
@@ -296,28 +326,30 @@ Begin
   R := Rect(0, 0, MaxWidth, 0);
   Flags := DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX;
   DrawText(Canvas.Handle, PChar(Sample), Length(Sample), R, Flags);
-  Result := R.Bottom - R.Top + 6;
-  If Result < Canvas.TextHeight('Hg') + 4 Then
-    Result := Canvas.TextHeight('Hg') + 4;
+  Result := R.Bottom - R.Top + 2;
+  If Result < Canvas.TextHeight('Hg') + 2 Then
+    Result := Canvas.TextHeight('Hg') + 2;
 End;
 
 Procedure TAssistantTraceView.BindSelectableMemo(Memo: TMemo; Const SourceText: String);
 Var
-  MaxW: Integer;
+  MaxW, H: Integer;
 Begin
   If Not Assigned(Memo) Then
     Exit;
   If Memo.Text <> SourceText Then
     Memo.Text := SourceText;
-  MaxW := Memo.Width;
-  If (MaxW <= 8) And Assigned(Memo.Parent) Then
-    MaxW := Memo.Parent.ClientWidth;
-  If (MaxW <= 8) And Assigned(TraceHost) Then
-    MaxW := TraceHost.ClientWidth - 16;
-  If MaxW < 8 Then
-    MaxW := 8;
+  MaxW := 0;
+  If Assigned(TraceHost) Then
+    MaxW := TraceHost.ClientWidth - (CardInnerPad * 4);
+  If MaxW < 40 Then
+    MaxW := 40;
+  Memo.AutoSize := False;
   Memo.Width := MaxW;
-  Memo.Height := WrappedTextHeight(Memo.Font, SourceText, MaxW);
+  H := WrappedTextHeight(Memo.Font, SourceText, MaxW);
+  Memo.Constraints.MinHeight := H;
+  Memo.Constraints.MaxHeight := H;
+  Memo.Height := H;
   Memo.ScrollBars := ssNone;
 End;
 
@@ -349,15 +381,51 @@ Begin
   End;
 End;
 
-Procedure TAssistantTraceView.BindText(Block: TTraceBlock; Const TitleColor: TColor);
+Procedure TAssistantTraceView.SplitTrailingMdFooter(Const SourceText: String; Out BodyText, FooterText: String);
+Var
+  SL: TStringList;
+  I, LastNonEmpty: Integer;
+  Last, Inner: String;
+Begin
+  BodyText := TrimRight(SourceText);
+  FooterText := '';
+  SL := TStringList.Create;
+  Try
+    SL.Text := StringReplace(SourceText, #13#10, #10, [rfReplaceAll]);
+    LastNonEmpty := -1;
+    For I := SL.Count - 1 DownTo 0 Do
+      If Trim(SL[I]) <> '' Then
+        Begin
+          LastNonEmpty := I;
+          Break;
+        End;
+    If LastNonEmpty < 0 Then
+      Exit;
+    Last := Trim(SL[LastNonEmpty]);
+    If (Length(Last) >= 5) And (Copy(Last, 1, 2) = '*(') And (Copy(Last, Length(Last) - 1, 2) = ')*') Then
+      Begin
+        Inner := Trim(Copy(Last, 3, Length(Last) - 4));
+        FooterText := Inner;
+        SL.Delete(LastNonEmpty);
+        While (SL.Count > 0) And (Trim(SL[SL.Count - 1]) = '') Do
+          SL.Delete(SL.Count - 1);
+        BodyText := TrimRight(SL.Text);
+      End;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Procedure TAssistantTraceView.BindUser(Block: TTraceBlock);
 Var
   Panel: TPanel;
-  Title: TLabel;
+  Title, Footer: TLabel;
   Body: TMemo;
   Child: TControl;
+  BodyText, FooterText: String;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If NamedChild(TPanel(Block.Frame), 'BodyMemo') = Nil Then
+    If NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -371,25 +439,40 @@ Begin
       Title.Align := alNone;
       Title.Anchors := [akLeft, akTop];
       Title.Font.Style := [fsBold];
-      Title.Font.Color := TitleColor;
       Title.Name := 'TitleLabel';
       Body := MakeSelectableMemo(Panel, 'BodyMemo', False, False);
+      Footer := TLabel.Create(Panel);
+      Footer.Parent := Panel;
+      Footer.Align := alNone;
+      Footer.Anchors := [akLeft, akTop];
+      Footer.WordWrap := True;
+      Footer.Font.Style := [fsItalic];
+      Footer.Font.Color := clGrayText;
+      Footer.Name := 'FooterLabel';
+      If Footer.Font.Size > 0 Then
+        Footer.Font.Size := Footer.Font.Size - 1
+      Else If Footer.Font.Height < 0 Then
+        Footer.Font.Height := Round(Footer.Font.Height * 0.9);
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  SplitTrailingMdFooter(Block.Body, BodyText, FooterText);
   Child := NamedChild(Panel, 'TitleLabel');
   If Child Is TLabel Then
-    Begin
-      Title := TLabel(Child);
-      Title.Caption := Block.Title;
-      Title.Font.Color := TitleColor;
-    End;
+    TLabel(Child).Caption := Block.Title;
   Child := NamedChild(Panel, 'BodyMemo');
   If Child Is TMemo Then
-    BindSelectableMemo(TMemo(Child), Block.Body);
+    BindSelectableMemo(TMemo(Child), BodyText);
+  Child := NamedChild(Panel, 'FooterLabel');
+  If Child Is TLabel Then
+    Begin
+      Footer := TLabel(Child);
+      Footer.Caption := FooterText;
+      Footer.Visible := FooterText <> '';
+    End;
   Panel.Visible := True;
 End;
 
@@ -498,7 +581,7 @@ Begin
   Panel.Visible := True;
 End;
 
-Procedure TAssistantTraceView.BindAnswer(Block: TTraceBlock);
+Procedure TAssistantTraceView.BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
 Var
   Panel: TPanel;
   Title: TLabel;
@@ -506,6 +589,12 @@ Var
   Child: TControl;
   PrefW, PrefH: Integer;
 Begin
+  If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+    If NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil Then
+      Begin
+        TPanel(Block.Frame).Free;
+        Block.Frame := Nil;
+      End;
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
@@ -514,8 +603,8 @@ Begin
       Title.Parent := Panel;
       Title.Align := alNone;
       Title.Anchors := [akLeft, akTop];
-      Title.Caption := 'Assistant';
       Title.Font.Style := [fsBold];
+      Title.Font.Color := TitleColor;
       Title.Name := 'TitleLabel';
       View := TMarkDownControl.Create(Panel);
       View.Parent := Panel;
@@ -528,13 +617,19 @@ Begin
       View.ParentBackground := False;
       View.ScrollBars := ssNone;
       View.MonoFontName := 'Monospace';
-      View.BorderSpacing.Top := 4;
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  Child := NamedChild(Panel, 'TitleLabel');
+  If Child Is TLabel Then
+    Begin
+      Title := TLabel(Child);
+      Title.Caption := Block.Title;
+      Title.Font.Color := TitleColor;
+    End;
   Child := NamedChild(Panel, 'AnswerView');
   If Child Is TMarkDownControl Then
     Begin
@@ -549,20 +644,27 @@ Begin
               View.MarkDown.EndUpdate;
             End;
           End;
-        If Panel.ClientWidth > 0 Then
+        If Assigned(TraceHost) And (TraceHost.ClientWidth > 40) Then
+          View.Width := TraceHost.ClientWidth - (CardInnerPad * 4)
+        Else If Panel.ClientWidth > 0 Then
           View.Width := Panel.ClientWidth;
         View.CalcLayout;
         PrefW := 0;
         PrefH := 0;
         View.GetPreferredSize(PrefW, PrefH);
-        If PrefH < 24 Then
-          PrefH := 24;
+        If PrefH < LineHeightPx Then
+          PrefH := LineHeightPx;
         View.Height := PrefH;
       Except
-        View.Height := 48;
+        View.Height := LineHeightPx * 2;
       End;
     End;
   Panel.Visible := Block.Body <> '';
+End;
+
+Procedure TAssistantTraceView.BindAnswer(Block: TTraceBlock);
+Begin
+  BindRichCard(Block, clWindowText);
 End;
 
 Procedure TAssistantTraceView.EnsureLiveBar;
@@ -601,13 +703,14 @@ End;
 Procedure TAssistantTraceView.EnsureFrame(Block: TTraceBlock);
 Begin
   Case Block.Kind Of
+    tbkUser: BindUser(Block);
     tbkThinking: BindThinking(Block);
     tbkTool: BindTool(Block);
     tbkAnswer: BindAnswer(Block);
-    tbkSteer: BindText(Block, clNavy);
-    tbkNote: BindText(Block, clMaroon);
+    tbkSteer: BindRichCard(Block, clNavy);
+    tbkNote: BindRichCard(Block, clMaroon);
   Else
-    BindText(Block, clWindowText);
+    BindUser(Block);
   End;
 End;
 
@@ -645,7 +748,7 @@ Begin
     While TraceHost.ControlCount > 0 Do
       TraceHost.Controls[0].Free;
   Finally
-    ApplyVerticalStack(TraceHost);
+    ApplyVerticalStack(TraceHost, False);
     TraceHost.AutoSize := WasAuto;
   End;
 End;

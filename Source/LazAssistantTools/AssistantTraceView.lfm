@@ -25,22 +25,20 @@ object AssistantTraceView: TAssistantTraceView
       Align = alTop
       AutoSize = True
       BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 4
-      ChildSizing.TopBottomSpacing = 4
+      ChildSizing.LeftRightSpacing = 8
+      ChildSizing.TopBottomSpacing = 8
       ChildSizing.VerticalSpacing = 8
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 1
-      ClientHeight = 8
-      ClientWidth = 480
       ParentColor = False
       TabOrder = 0
     end
   end
   object EmptyLabel: TLabel
     Left = 8
-    Height = 17
+    Height = 18
     Top = 8
-    Width = 200
+    Width = 189
     Caption = 'Type a message below to start.'
     Font.Color = clGrayText
     ParentColor = False
