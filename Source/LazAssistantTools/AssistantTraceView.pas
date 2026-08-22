@@ -294,7 +294,7 @@ Begin
     HandleNeeded;
   Canvas.Font.Assign(TypeFace);
   R := Rect(0, 0, MaxWidth, 0);
-  Flags := DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX Or DT_EXTERNALLEADING;
+  Flags := DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX;
   DrawText(Canvas.Handle, PChar(Sample), Length(Sample), R, Flags);
   Result := R.Bottom - R.Top + 6;
   If Result < Canvas.TextHeight('Hg') + 4 Then
