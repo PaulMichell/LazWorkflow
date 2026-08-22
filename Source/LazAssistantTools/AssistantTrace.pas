@@ -43,7 +43,9 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Procedure Clear;
+    Procedure NilFrames;
     Function AddUser(Const Text: String): TTraceBlock;
+    Function EnsureUser(Const Text: String): TTraceBlock;
     Function AddNote(Const Text: String): TTraceBlock;
     Function AddSteer(Const Text: String): TTraceBlock;
     Function StartThinking(LoopIndex: Integer): TTraceBlock;
@@ -82,6 +84,14 @@ Begin
   FBlocks.Clear;
 End;
 
+Procedure TAssistantTrace.NilFrames;
+Var
+  I: Integer;
+Begin
+  For I := 0 To FBlocks.Count - 1 Do
+    TTraceBlock(FBlocks[I]).Frame := Nil;
+End;
+
 Function TAssistantTrace.GetCount: Integer;
 Begin
   Result := FBlocks.Count;
@@ -115,6 +125,33 @@ Begin
   Result := AddBlock(tbkUser);
   Result.Title := 'User';
   Result.Body := Text;
+End;
+
+Function TAssistantTrace.EnsureUser(Const Text: String): TTraceBlock;
+Var
+  First: TTraceBlock;
+Begin
+  If FBlocks.Count > 0 Then
+    Begin
+      First := TTraceBlock(FBlocks[0]);
+      If First.Kind = tbkUser Then
+        Begin
+          Result := First;
+          If Text <> '' Then
+            Result.Body := Text;
+          Exit;
+        End;
+    End;
+  If Text = '' Then
+    Begin
+      Result := Nil;
+      Exit;
+    End;
+  Result := AddBlock(tbkUser);
+  Result.Title := 'User';
+  Result.Body := Text;
+  If FBlocks.Count > 1 Then
+    FBlocks.Move(FBlocks.Count - 1, 0);
 End;
 
 Function TAssistantTrace.AddNote(Const Text: String): TTraceBlock;

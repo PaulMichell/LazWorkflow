@@ -20,7 +20,12 @@ Type
   Private
     FShowThinking: Boolean;
     FTruncatedLines: Integer;
+    FBoundTrace: TAssistantTrace;
     Procedure SetShowThinking(Value: Boolean);
+    Procedure InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
+    Function NamedChild(Host: TWinControl; Const ChildName: String): TControl;
+    Function BlockForFrame(Frame: TObject): TTraceBlock;
+    Procedure OrderFrames(Trace: TAssistantTrace);
     Procedure EnsureFrame(Block: TTraceBlock);
     Procedure BindThinking(Block: TTraceBlock);
     Procedure BindTool(Block: TTraceBlock);
@@ -56,6 +61,7 @@ Begin
   Align := alClient;
   FShowThinking := True;
   FTruncatedLines := TruncatedLineCount;
+  FBoundTrace := Nil;
   Color := clWindow;
   If Assigned(TraceScroll) Then
     Begin
@@ -65,6 +71,8 @@ Begin
   If Assigned(TraceHost) Then
     Begin
       TraceHost.Color := clWindow;
+      TraceHost.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
+      TraceHost.ChildSizing.ControlsPerLine := 1;
       TraceHost.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
       TraceHost.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
     End;
@@ -73,6 +81,80 @@ Begin
       EmptyLabel.Align := alClient;
       EmptyLabel.Alignment := taCenter;
       EmptyLabel.Layout := tlCenter;
+    End;
+End;
+
+Procedure TAssistantTraceView.InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
+Begin
+  Panel.Parent := TraceHost;
+  Panel.BevelOuter := bvNone;
+  Panel.Align := alNone;
+  { akRight takes a child out of ChildSizing and stacks every block at (0,0). }
+  Panel.Anchors := [akLeft, akTop];
+  Panel.BorderSpacing.Around := 2;
+  Panel.ParentBackground := False;
+  If AutoSizePanel Then
+    Panel.AutoSize := True
+  Else
+    Begin
+      Panel.AutoSize := False;
+      Panel.Height := FixedHeight;
+    End;
+End;
+
+Function TAssistantTraceView.NamedChild(Host: TWinControl; Const ChildName: String): TControl;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  If (Not Assigned(Host)) Or (ChildName = '') Then
+    Exit;
+  For I := 0 To Host.ControlCount - 1 Do
+    If CompareText(Host.Controls[I].Name, ChildName) = 0 Then
+      Begin
+        Result := Host.Controls[I];
+        Exit;
+      End;
+End;
+
+Function TAssistantTraceView.BlockForFrame(Frame: TObject): TTraceBlock;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  If (Not Assigned(FBoundTrace)) Or (Not Assigned(Frame)) Then
+    Exit;
+  For I := 0 To FBoundTrace.Count - 1 Do
+    If FBoundTrace[I].Frame = Frame Then
+      Begin
+        Result := FBoundTrace[I];
+        Exit;
+      End;
+End;
+
+Procedure TAssistantTraceView.OrderFrames(Trace: TAssistantTrace);
+Var
+  I, Wanted: Integer;
+  Hosted: TControl;
+Begin
+  If (Not Assigned(TraceHost)) Or (Not Assigned(Trace)) Then
+    Exit;
+  Wanted := 0;
+  For I := 0 To Trace.Count - 1 Do
+    Begin
+      If Not Assigned(Trace[I].Frame) Then
+        Continue;
+      If Not (Trace[I].Frame Is TControl) Then
+        Continue;
+      Hosted := TControl(Trace[I].Frame);
+      If Hosted.Parent <> TraceHost Then
+        Continue;
+      If (Wanted >= TraceHost.ControlCount) Or (TraceHost.Controls[Wanted] <> Hosted) Then
+        Begin
+          TraceHost.RemoveControl(Hosted);
+          TraceHost.InsertControl(Hosted, Wanted);
+        End;
+      Inc(Wanted);
     End;
 End;
 
@@ -119,9 +201,9 @@ Begin
   If Not (Sender Is TControl) Then
     Exit;
   Header := TControl(Sender);
-  If Not (TObject(Header.Tag) Is TTraceBlock) Then
+  Block := BlockForFrame(Header.Parent);
+  If Not Assigned(Block) Then
     Exit;
-  Block := TTraceBlock(Header.Tag);
   If Block.Kind <> tbkThinking Then
     Exit;
   If Block.Running Then
@@ -134,37 +216,44 @@ Procedure TAssistantTraceView.BindText(Block: TTraceBlock; Const TitleColor: TCo
 Var
   Panel: TPanel;
   Title, Body: TLabel;
+  Child: TControl;
 Begin
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      Panel.Parent := TraceHost;
-      Panel.BevelOuter := bvNone;
-      Panel.AutoSize := True;
-      Panel.Align := alNone;
-      Panel.Anchors := [akLeft, akTop, akRight];
-      Panel.BorderSpacing.Around := 2;
+      InitHostedPanel(Panel, True, 0);
+      Panel.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
+      Panel.ChildSizing.ControlsPerLine := 1;
+      Panel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
       Title := TLabel.Create(Panel);
       Title.Parent := Panel;
-      Title.Align := alTop;
+      Title.Align := alNone;
+      Title.Anchors := [akLeft, akTop];
       Title.Font.Style := [fsBold];
       Title.Font.Color := TitleColor;
       Title.Name := 'TitleLabel';
       Body := TLabel.Create(Panel);
       Body.Parent := Panel;
-      Body.Align := alTop;
+      Body.Align := alNone;
+      Body.Anchors := [akLeft, akTop];
       Body.WordWrap := True;
       Body.Name := 'BodyLabel';
       Block.Frame := Panel;
     End
+  Else If Block.Frame Is TPanel Then
+    Panel := TPanel(Block.Frame)
   Else
-    Panel := TPanel(Block.Frame);
-  Title := TLabel(Panel.FindChildControl('TitleLabel'));
-  Body := TLabel(Panel.FindChildControl('BodyLabel'));
-  If Assigned(Title) Then
-    Title.Caption := Block.Title;
-  If Assigned(Body) Then
-    Body.Caption := Block.Body;
+    Exit;
+  Child := NamedChild(Panel, 'TitleLabel');
+  If Child Is TLabel Then
+    Begin
+      Title := TLabel(Child);
+      Title.Caption := Block.Title;
+      Title.Font.Color := TitleColor;
+    End;
+  Child := NamedChild(Panel, 'BodyLabel');
+  If Child Is TLabel Then
+    TLabel(Child).Caption := Block.Body;
   Panel.Visible := True;
 End;
 
@@ -173,27 +262,21 @@ Var
   Panel: TPanel;
   Header: TButton;
   Body: TMemo;
+  Child: TControl;
   ShowBody: Boolean;
   Display: String;
 Begin
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      Panel.Parent := TraceHost;
-      Panel.BevelOuter := bvNone;
-      Panel.Align := alNone;
-      Panel.Anchors := [akLeft, akTop, akRight];
-      Panel.Height := ThinkingStreamHeight;
-      Panel.BorderSpacing.Around := 2;
+      InitHostedPanel(Panel, False, ThinkingStreamHeight);
       Panel.Color := clForm;
-      Panel.ParentBackground := False;
       Header := TButton.Create(Panel);
       Header.Parent := Panel;
       Header.Align := alTop;
       Header.Height := HeaderHeight;
       Header.Name := 'HeaderButton';
       Header.OnClick := @HeaderClick;
-      Header.Tag := PtrInt(Block);
       Body := TMemo.Create(Panel);
       Body.Parent := Panel;
       Body.Align := alClient;
@@ -206,18 +289,18 @@ Begin
       Body.Color := clForm;
       Block.Frame := Panel;
     End
+  Else If Block.Frame Is TPanel Then
+    Panel := TPanel(Block.Frame)
   Else
-    Panel := TPanel(Block.Frame);
-  Header := TButton(Panel.FindChildControl('HeaderButton'));
-  Body := TMemo(Panel.FindChildControl('BodyMemo'));
-  If Assigned(Header) Then
-    Begin
-      Header.Caption := Block.Title;
-      Header.Tag := PtrInt(Block);
-    End;
+    Exit;
+  Child := NamedChild(Panel, 'HeaderButton');
+  If Child Is TButton Then
+    TButton(Child).Caption := Block.Title;
   ShowBody := FShowThinking And (Not Block.Collapsed);
-  If Assigned(Body) Then
+  Child := NamedChild(Panel, 'BodyMemo');
+  If Child Is TMemo Then
     Begin
+      Body := TMemo(Child);
       Body.Visible := ShowBody;
       If Block.Running Then
         Display := LastLines(Block.Body, FTruncatedLines)
@@ -238,49 +321,43 @@ End;
 Procedure TAssistantTraceView.BindTool(Block: TTraceBlock);
 Var
   Panel: TPanel;
-  CaptionLabel, StatusLabel: TLabel;
+  Child: TControl;
   Status: String;
 Begin
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      Panel.Parent := TraceHost;
-      Panel.BevelOuter := bvNone;
-      Panel.Align := alNone;
-      Panel.Anchors := [akLeft, akTop, akRight];
-      Panel.Height := ToolHeight;
-      Panel.BorderSpacing.Around := 2;
+      InitHostedPanel(Panel, False, ToolHeight);
       Panel.Color := clInfoBk;
-      Panel.ParentBackground := False;
-      CaptionLabel := TLabel.Create(Panel);
-      CaptionLabel.Parent := Panel;
-      CaptionLabel.Align := alClient;
-      CaptionLabel.Layout := tlCenter;
-      CaptionLabel.Name := 'CaptionLabel';
-      CaptionLabel.BorderSpacing.Left := 8;
-      StatusLabel := TLabel.Create(Panel);
-      StatusLabel.Parent := Panel;
-      StatusLabel.Align := alRight;
-      StatusLabel.Layout := tlCenter;
-      StatusLabel.Name := 'StatusLabel';
-      StatusLabel.BorderSpacing.Right := 8;
-      StatusLabel.Font.Color := clGrayText;
+      Child := TLabel.Create(Panel);
+      Child.Parent := Panel;
+      Child.Align := alClient;
+      TLabel(Child).Layout := tlCenter;
+      Child.Name := 'CaptionLabel';
+      Child.BorderSpacing.Left := 8;
+      Child := TLabel.Create(Panel);
+      Child.Parent := Panel;
+      Child.Align := alRight;
+      TLabel(Child).Layout := tlCenter;
+      Child.Name := 'StatusLabel';
+      Child.BorderSpacing.Right := 8;
+      TLabel(Child).Font.Color := clGrayText;
       Block.Frame := Panel;
     End
+  Else If Block.Frame Is TPanel Then
+    Panel := TPanel(Block.Frame)
   Else
-    Panel := TPanel(Block.Frame);
-  CaptionLabel := TLabel(Panel.FindChildControl('CaptionLabel'));
-  StatusLabel := TLabel(Panel.FindChildControl('StatusLabel'));
-  If Assigned(CaptionLabel) Then
-    CaptionLabel.Caption := Block.Title;
-  If Block.Running Then
-    Status := FormatThoughtElapsed(Block.DurationMs)
-  Else If Block.Ok Then
+    Exit;
+  Child := NamedChild(Panel, 'CaptionLabel');
+  If Child Is TLabel Then
+    TLabel(Child).Caption := Block.Title;
+  If Block.Running Or Block.Ok Then
     Status := FormatThoughtElapsed(Block.DurationMs)
   Else
     Status := 'failed';
-  If Assigned(StatusLabel) Then
-    StatusLabel.Caption := Status;
+  Child := NamedChild(Panel, 'StatusLabel');
+  If Child Is TLabel Then
+    TLabel(Child).Caption := Status;
   Panel.Visible := True;
 End;
 
@@ -289,27 +366,30 @@ Var
   Panel: TPanel;
   Title: TLabel;
   View: TMarkDownControl;
+  Child: TControl;
+  PrefW, PrefH: Integer;
 Begin
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      Panel.Parent := TraceHost;
-      Panel.BevelOuter := bvNone;
-      Panel.Align := alNone;
-      Panel.Anchors := [akLeft, akTop, akRight];
-      Panel.AutoSize := True;
-      Panel.BorderSpacing.Around := 2;
+      InitHostedPanel(Panel, True, 0);
+      Panel.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
+      Panel.ChildSizing.ControlsPerLine := 1;
+      Panel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
       Title := TLabel.Create(Panel);
       Title.Parent := Panel;
-      Title.Align := alTop;
+      Title.Align := alNone;
+      Title.Anchors := [akLeft, akTop];
       Title.Caption := 'Assistant';
       Title.Font.Style := [fsBold];
       Title.Name := 'TitleLabel';
       View := TMarkDownControl.Create(Panel);
       View.Parent := Panel;
-      View.Align := alTop;
+      View.Align := alNone;
+      View.Anchors := [akLeft, akTop];
       View.Name := 'AnswerView';
-      View.AutoSize := True;
+      { Nested AutoSize + CalcLayout AdjustSize AVs inside a ChildSizing host. }
+      View.AutoSize := False;
       View.Color := clWindow;
       View.ParentColor := False;
       View.ParentBackground := False;
@@ -318,18 +398,36 @@ Begin
       View.BorderSpacing.Top := 4;
       Block.Frame := Panel;
     End
+  Else If Block.Frame Is TPanel Then
+    Panel := TPanel(Block.Frame)
   Else
-    Panel := TPanel(Block.Frame);
-  View := TMarkDownControl(Panel.FindChildControl('AnswerView'));
-  If Assigned(View) And (View.MarkDown.Text <> Block.Body) Then
+    Exit;
+  Child := NamedChild(Panel, 'AnswerView');
+  If Child Is TMarkDownControl Then
     Begin
-      View.MarkDown.BeginUpdate;
+      View := TMarkDownControl(Child);
       Try
-        View.MarkDown.Text := Block.Body;
-      Finally
-        View.MarkDown.EndUpdate;
+        If View.MarkDown.Text <> Block.Body Then
+          Begin
+            View.MarkDown.BeginUpdate;
+            Try
+              View.MarkDown.Text := Block.Body;
+            Finally
+              View.MarkDown.EndUpdate;
+            End;
+          End;
+        If Panel.ClientWidth > 0 Then
+          View.Width := Panel.ClientWidth;
+        View.CalcLayout;
+        PrefW := 0;
+        PrefH := 0;
+        View.GetPreferredSize(PrefW, PrefH);
+        If PrefH < 24 Then
+          PrefH := 24;
+        View.Height := PrefH;
+      Except
+        View.Height := 48;
       End;
-      View.CalcLayout;
     End;
   Panel.Visible := Block.Body <> '';
 End;
@@ -354,11 +452,23 @@ Begin
 End;
 
 Procedure TAssistantTraceView.ResetFrames;
+Var
+  WasAuto: Boolean;
 Begin
+  If Assigned(FBoundTrace) Then
+    FBoundTrace.NilFrames;
   If Not Assigned(TraceHost) Then
     Exit;
-  While TraceHost.ControlCount > 0 Do
-    TraceHost.Controls[0].Free;
+  WasAuto := TraceHost.AutoSize;
+  TraceHost.AutoSize := False;
+  TraceHost.ChildSizing.Layout := cclNone;
+  Try
+    While TraceHost.ControlCount > 0 Do
+      TraceHost.Controls[0].Free;
+  Finally
+    TraceHost.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
+    TraceHost.AutoSize := WasAuto;
+  End;
 End;
 
 Procedure TAssistantTraceView.Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
@@ -368,6 +478,7 @@ Var
 Begin
   If Not Assigned(TraceHost) Then
     Exit;
+  FBoundTrace := Trace;
   Empty := (Not Assigned(Trace)) Or (Trace.Count = 0);
   If Assigned(EmptyLabel) Then
     EmptyLabel.Visible := Empty;
@@ -376,7 +487,12 @@ Begin
   If Empty Then
     Exit;
   For I := 0 To Trace.Count - 1 Do
-    EnsureFrame(Trace[I]);
+    Try
+      EnsureFrame(Trace[I]);
+    Except
+      { A single block must not take down the rest of the turn. }
+    End;
+  OrderFrames(Trace);
   If ScrollBottom Then
     ScrollToEnd;
 End;

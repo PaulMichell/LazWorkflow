@@ -58,6 +58,8 @@ Type
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
 Function AssistantPhaseName(Phase: TAssistantPhase): String;
+{ True for live status strings the actor puts on the stream callback (not terminal errors). }
+Function IsAssistantProgressStatus(Const Text: String): Boolean;
 Function FormatSteerEnvelope(Const UserText: String): String;
 Function AssistantEventToJson(Const Event: TAssistantEvent): String;
 Function AppendAssistantEventLine(Const FileName, JsonLine: String): Boolean;
@@ -95,6 +97,19 @@ Begin
     apWaiting: Result := 'waiting';
     apTools: Result := 'tools';
   End;
+End;
+
+Function IsAssistantProgressStatus(Const Text: String): Boolean;
+Var
+  S: String;
+Begin
+  S := Trim(Text);
+  Result :=
+    (S = 'Waiting for first token…') Or
+    (S = 'Running tools…') Or
+    (S = 'Steering at next model gap…') Or
+    (S = 'Thinking…') Or
+    (S = 'Streaming…');
 End;
 
 Function FormatSteerEnvelope(Const UserText: String): String;

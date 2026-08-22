@@ -114,6 +114,16 @@ Begin
   Check('parse args', (Length(Calls) = 1) And (Pos('A.pas', Calls[0].Arguments) > 0));
 End;
 
+Procedure TestProgressStatus;
+Begin
+  Check('waiting is status', IsAssistantProgressStatus('Waiting for first token…'));
+  Check('tools is status', IsAssistantProgressStatus('Running tools…'));
+  Check('steer is status', IsAssistantProgressStatus('Steering at next model gap…'));
+  Check('http is error', Not IsAssistantProgressStatus('HTTP 400: invalid_grant'));
+  Check('empty is error', Not IsAssistantProgressStatus(''));
+  Check('access violation is error', Not IsAssistantProgressStatus('Access violation'));
+End;
+
 Procedure TestToolsFlatten;
 Var
   Completions, Responses: String;
@@ -132,6 +142,7 @@ Begin
   TestEventJson;
   TestEventFile;
   TestParseToolCalls;
+  TestProgressStatus;
   TestToolsFlatten;
   If FailCount = 0 Then
     Begin

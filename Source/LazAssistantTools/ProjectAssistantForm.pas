@@ -137,6 +137,8 @@ Type
     FLastChatPaintTick: QWord;
     FTrace: TAssistantTrace;
     FTraceView: TAssistantTraceView;
+    FRefreshingChat: Boolean;
+    FIgnoreConversationListChange: Boolean;
     FThinkingSliceStart: Integer;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
@@ -1776,6 +1778,7 @@ Begin
   If KeepTurnIndex < 0 Then
     KeepTurnIndex := ConversationListTurnIndex(ConversationList.ItemIndex);
   SelectIdx := -1;
+  FIgnoreConversationListChange := True;
   ConversationList.Items.BeginUpdate;
   Try
     ConversationList.Clear;
@@ -1825,13 +1828,19 @@ Begin
       End;
   Finally
     ConversationList.Items.EndUpdate;
+    FIgnoreConversationListChange := False;
   End;
   If ConversationList.Items.Count > 0 Then
     Begin
       If SelectIdx < 0 Then
         SelectIdx := ConversationList.Items.Count - 1;
-      ConversationList.ItemIndex := SelectIdx;
-      ConversationList.TopIndex := SelectIdx;
+      FIgnoreConversationListChange := True;
+      Try
+        ConversationList.ItemIndex := SelectIdx;
+        ConversationList.TopIndex := SelectIdx;
+      Finally
+        FIgnoreConversationListChange := False;
+      End;
       FSelectedTurnIndex := ConversationListTurnIndex(SelectIdx);
     End;
 End;
@@ -2063,6 +2072,8 @@ Procedure TProjectAssistantForm.ConversationListSelectionChange(Sender: TObject;
 Var
   TurnIndex: Integer;
 Begin
+  If FIgnoreConversationListChange Then
+    Exit;
   { Allow browsing past turns while a stream continues in the background. }
   If Not Assigned(ConversationList) Or (ConversationList.ItemIndex < 0) Then
     Exit;
@@ -2134,13 +2145,41 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
+Var
+  Block: TTraceBlock;
+  ThinkingText: String;
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
   PersistShellConfig;
   If Assigned(FTraceView) Then
     FTraceView.ShowThinking := FShowThinking;
-  RefreshChatDisplay(True);
+  If Not Assigned(FTrace) Then
+    Begin
+      RefreshChatDisplay(True);
+      Exit;
+    End;
+  { Keep existing frames. Rebuilding the markdown answer on a toggle AVs. }
+  If FShowThinking Then
+    Begin
+      If FLiveThinking <> '' Then
+        ThinkingText := FLiveThinking
+      Else
+        ThinkingText := FAssistantThinking;
+      If (ThinkingText <> '') And (FTrace.CurrentThinking = Nil) Then
+        Begin
+          Block := FTrace.StartThinking(0);
+          Block.Body := ThinkingText;
+          Block.Running := FStreamingActive And (FLiveContent = '');
+          Block.Collapsed := Not FStreamingActive;
+          If Block.Collapsed Then
+            Block.Title := 'Thought';
+        End;
+    End;
+  If Assigned(FTraceView) Then
+    FTraceView.Sync(FTrace, False)
+  Else
+    RefreshChatDisplay(True);
 End;
 
 Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
@@ -2507,9 +2546,8 @@ Begin
   If Assigned(FTraceView) Then
     FTraceView.ResetFrames;
   FTrace.Clear;
-  If FDisplayUser <> '' Then
-    FTrace.AddUser(FDisplayUser);
-  If FShowThinking And (FAssistantThinking <> '') Then
+  FTrace.EnsureUser(FDisplayUser);
+  If FAssistantThinking <> '' Then
     Begin
       Block := FTrace.StartThinking(0);
       Block.Body := FAssistantThinking;
@@ -2530,6 +2568,10 @@ Var
 Begin
   If Not Assigned(FTrace) Then
     Exit;
+  If FLiveUser <> '' Then
+    FTrace.EnsureUser(FLiveUser)
+  Else If FDisplayUser <> '' Then
+    FTrace.EnsureUser(FDisplayUser);
   Block := FTrace.CurrentThinking;
   If FThinkingSliceStart < 1 Then
     FThinkingSliceStart := 1;
@@ -2559,7 +2601,8 @@ Begin
     Exit;
   If Not Assigned(FTrace) Then
     Exit;
-  Case Event.Kind Of
+  Try
+    Case Event.Kind Of
     aekLoopStarted:
       Begin
         Block := FTrace.CurrentThinking;
@@ -2606,17 +2649,23 @@ Begin
             Block.Title := 'Steer · applied';
           End;
       End;
-  Else
-    Exit;
+    Else
+      Exit;
+    End;
+    If Assigned(FTraceView) Then
+      FTraceView.Sync(FTrace, True);
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ProjectAssistant', 'HandleTraceEvent: ' + E.Message);
   End;
-  If Assigned(FTraceView) Then
-    FTraceView.Sync(FTrace, True);
 End;
 
 Procedure TProjectAssistantForm.RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean);
 Var
   NowTick: QWord;
 Begin
+  If FRefreshingChat Then
+    Exit;
   EnsureChatView;
   NowTick := GetTickCount64;
   If (Not Force) And FStreamingActive And (FLastChatPaintTick > 0) And
@@ -2625,15 +2674,25 @@ Begin
   FLastChatPaintTick := NowTick;
   If Not Assigned(FTrace) Then
     Exit;
-  If FStreamingActive And FViewingLive Then
-    ApplyLiveThinkingAndAnswer
-  Else
-    RebuildTraceFromFields;
-  If Assigned(FTraceView) Then
-    Begin
-      FTraceView.ShowThinking := FShowThinking;
-      FTraceView.Sync(FTrace, ScrollToBottom);
+  FRefreshingChat := True;
+  Try
+    Try
+      If FViewingLive And (FStreamingActive Or (FTrace.Count > 0)) Then
+        ApplyLiveThinkingAndAnswer
+      Else
+        RebuildTraceFromFields;
+      If Assigned(FTraceView) Then
+        Begin
+          FTraceView.ShowThinking := FShowThinking;
+          FTraceView.Sync(FTrace, ScrollToBottom);
+        End;
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('ProjectAssistant', 'RefreshChatDisplay: ' + E.Message);
     End;
+  Finally
+    FRefreshingChat := False;
+  End;
 End;
 
 Function TProjectAssistantForm.RoleHeading(Const Role: String): String;
@@ -2756,8 +2815,7 @@ Begin
   If Assigned(FTrace) Then
     Begin
       FTrace.Clear;
-      If FDisplayUser <> '' Then
-        FTrace.AddUser(FDisplayUser);
+      FTrace.EnsureUser(FDisplayUser);
       FTrace.StartThinking(0);
     End;
   RefreshConversationList;
@@ -2797,8 +2855,11 @@ End;
 
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
-  DisplayBody: String;
+  DisplayBody, ResolvedError: String;
 Begin
+  ResolvedError := ErrorText;
+  If IsAssistantProgressStatus(ResolvedError) Then
+    ResolvedError := '';
   If Assigned(AssistantClient) Then
     AssistantClient.ToolsEnabled := True;
   { Second IsFinished (or Stop after finish) must not append another conversation row. }
@@ -2825,7 +2886,7 @@ Begin
   { FLive* are authoritative for the completed stream (pane may be browsing elsewhere). }
   If FStreamingActive Then
     Begin
-      If (ErrorText <> '') And (FLiveContent = '') And (FLiveThinking = '') Then
+      If (ResolvedError <> '') And (FLiveContent = '') And (FLiveThinking = '') Then
         DisplayBody := '*(error)*'
       Else
         DisplayBody := FormatAssistantMarkdown(FLiveThinking, FLiveContent);
@@ -2836,10 +2897,10 @@ Begin
       Transcript.Add(DisplayBody);
     End;
 
-  If ErrorText <> '' Then
+  If ResolvedError <> '' Then
     Begin
       If FViewingLive Then
-        FDisplaySystemNote := '**Error:** ' + ErrorText;
+        FDisplaySystemNote := '**Error:** ' + ResolvedError;
       StatusFooter.SetRightText('Error');
     End
   Else
@@ -2853,21 +2914,21 @@ Begin
       StatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
-  FLastTurnHadError := ErrorText <> '';
+  FLastTurnHadError := ResolvedError <> '';
   { Record from live buffers so a browsed-away pane still saves the real answer. }
-  RecordCurrentTurn(ErrorText);
+  RecordCurrentTurn(ResolvedError);
   If Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
-  PersistPlanReplyIfNeeded(ErrorText);
+  PersistPlanReplyIfNeeded(ResolvedError);
   { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
   If ActiveMode = amCode Then
-    TryAutoCompleteCodeWork(ErrorText)
+    TryAutoCompleteCodeWork(ResolvedError)
   Else If FCodeWorkSectionIndex >= 0 Then
     ClearCodeWorkTracking;
   { Review with errors: select top error and prompt Fix Error. }
-  If FPendingReviewErrorOffer And (ErrorText = '') Then
+  If FPendingReviewErrorOffer And (ResolvedError = '') Then
     OfferFixTopErrorAfterReview
-  Else If ErrorText <> '' Then
+  Else If ResolvedError <> '' Then
     FPendingReviewErrorOffer := False;
   UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
@@ -2876,14 +2937,14 @@ Begin
     Begin
       If FLastTurnHadError Then
         Begin
-          If (Pos('host name resolution', LowerCase(ErrorText)) > 0) Or
-            (Pos('network', LowerCase(ErrorText)) > 0) Or
-            (Pos('timed out', LowerCase(ErrorText)) > 0) Then
+          If (Pos('host name resolution', LowerCase(ResolvedError)) > 0) Or
+            (Pos('network', LowerCase(ResolvedError)) > 0) Or
+            (Pos('timed out', LowerCase(ResolvedError)) > 0) Then
             StopWorkOnPlanAgent(
               'network error talking to api.x.ai. Check connectivity, then click ' +
-              '**Work on plan** again to resume remaining packages. ' + ErrorText)
+              '**Work on plan** again to resume remaining packages. ' + ResolvedError)
           Else
-            StopWorkOnPlanAgent('error: ' + ErrorText);
+            StopWorkOnPlanAgent('error: ' + ResolvedError);
         End
       Else
         Begin
@@ -2891,24 +2952,36 @@ Begin
           Application.QueueAsyncCall(@ContinueWorkOnPlanAgent, 0);
         End;
     End;
-  If FViewingLive Then
+  FViewingLive := True;
+  If Assigned(ProjectAssistantConversation) Then
     FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
-  If FViewingLive Then
+  FDisplayUser := FLiveUser;
+  FAssistantContent := FLiveContent;
+  FAssistantThinking := FLiveThinking;
+  If ResolvedError <> '' Then
+    FDisplaySystemNote := '**Error:** ' + ResolvedError;
+  If Assigned(FTrace) Then
     Begin
-      FDisplayUser := FLiveUser;
-      FAssistantContent := FLiveContent;
-      FAssistantThinking := FLiveThinking;
-      If ErrorText <> '' Then
-        FDisplaySystemNote := '**Error:** ' + ErrorText;
-      { PersistPlanReplyIfNeeded / auto-complete / review offer may set notes. }
-      RefreshChatDisplay(True, True);
+      FTrace.EnsureUser(FDisplayUser);
+      If FLiveContent <> '' Then
+        Begin
+          FTrace.CollapseThinking;
+          FTrace.EnsureAnswer.Body := FLiveContent;
+        End;
+      If (ResolvedError <> '') And
+        ((FTrace.Count = 0) Or (FTrace[FTrace.Count - 1].Kind <> tbkNote) Or
+         (FTrace[FTrace.Count - 1].Body <> FDisplaySystemNote)) Then
+        FTrace.AddNote(FDisplaySystemNote);
     End;
+  RefreshChatDisplay(True, True);
   PersistSession;
 End;
 
 Procedure TProjectAssistantForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
   IsFinished: Boolean; Const ErrorText: String);
+Var
+  FinishErr: String;
 Begin
   { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
@@ -2931,10 +3004,13 @@ Begin
         SetStreamPhase(ErrorText);
       Exit;
     End;
+  FinishErr := ErrorText;
+  If IsAssistantProgressStatus(FinishErr) Then
+    FinishErr := '';
   { Apply final snapshot only while still the active send (not a duplicate finish). }
   If FSending And ((ContentSnapshot <> '') Or (ThinkingSnapshot <> '')) Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
-  FinishAssistantReply(ErrorText);
+  FinishAssistantReply(FinishErr);
 End;
 
 Procedure TProjectAssistantForm.StopStream;

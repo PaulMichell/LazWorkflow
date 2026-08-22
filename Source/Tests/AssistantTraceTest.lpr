@@ -56,6 +56,26 @@ Begin
   End;
 End;
 
+Procedure TestEnsureUser;
+Var
+  Trace: TAssistantTrace;
+  User: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Check('empty ensure skips', Trace.EnsureUser('') = Nil);
+    Trace.StartThinking(0);
+    User := Trace.EnsureUser('please review');
+    Check('ensure user first', (Trace.Count >= 1) And (Trace[0].Kind = tbkUser));
+    Check('ensure user body', User.Body = 'please review');
+    Check('ensure user reuse', Trace.EnsureUser('please review') = User);
+    Trace.NilFrames;
+    Check('nil frames', Trace[0].Frame = Nil);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Procedure TestElapsed;
 Begin
   Check('subsecond', Pos('s', FormatThoughtElapsed(4200)) > 0);
@@ -65,6 +85,7 @@ End;
 Begin
   FailCount := 0;
   TestBlocks;
+  TestEnsureUser;
   TestElapsed;
   If FailCount = 0 Then
     Begin

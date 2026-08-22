@@ -36,6 +36,7 @@ Type
     FThinking: String;
     FPhase: TAssistantPhase;
     FErrorText: String;
+    FStatusText: String;
     FFinishEmitted: Boolean;
     FWrotePlan: Boolean;
     FUseResponses: Boolean;
@@ -133,6 +134,7 @@ Begin
   FThinking := '';
   FPhase := apWaiting;
   FErrorText := '';
+  FStatusText := '';
   FFinishEmitted := False;
   FWrotePlan := False;
   FUseResponses := True;
@@ -268,9 +270,14 @@ Begin
   Try
     Content := FContent;
     Thinking := FThinking;
-    Err := FErrorText;
     Done := FPendingFinish;
     FPendingFinish := False;
+    { Live snapshots carry a status string on the ErrorText slot; only a finished
+      snapshot may report a terminal error. Progress text must not leak into finish. }
+    If Done Then
+      Err := FErrorText
+    Else
+      Err := FStatusText;
     Cb := FOnToken;
   Finally
     LeaveCriticalSection(FSnapLock);
@@ -305,8 +312,10 @@ Begin
     End;
   EnterCriticalSection(FSnapLock);
   Try
-    If ErrorText <> '' Then
-      FErrorText := ErrorText;
+    If IsDone Then
+      FErrorText := ErrorText
+    Else If ErrorText <> '' Then
+      FStatusText := ErrorText;
     FPendingFinish := FPendingFinish Or IsDone;
   Finally
     LeaveCriticalSection(FSnapLock);
