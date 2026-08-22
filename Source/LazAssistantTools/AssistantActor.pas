@@ -24,6 +24,9 @@ Type
     FReasoningEffort: String;
     FToolsJson: String;
     FOnToken: TAssistantStreamEvent;
+    FOnTrace: TAssistantTraceNotify;
+    FTraceLock: TRTLCriticalSection;
+    FTraceQueue: Array Of TAssistantEvent;
     FEventsFile: String;
     FSteer: TAssistantSteerBuffer;
     FParser: TAssistantSseParser;
@@ -44,13 +47,15 @@ Type
     FPendingFinish: Boolean;
     FToolCalls: TSamplerToolCallArray;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
-      Const ToolName: String = ''; Const ToolId: String = '');
+      Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
+      DurationMs: Integer = 0);
+    Procedure QueueTrace(Const Event: TAssistantEvent);
+    Procedure NotifyTrace;
     Procedure EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
     Procedure NotifyMain;
     Procedure SetPhase(Phase: TAssistantPhase);
     Procedure ApplyParserEvents(FromIndex: Integer);
     Procedure AppendThinking(Const Delta: String);
-    Procedure AppendToolLine(Const Name, Args: String);
     Function DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
     Procedure HttpsChunk(Const Chunk: String);
     Function HttpsShouldStop: Boolean;
@@ -68,6 +73,7 @@ Type
     Procedure Cancel;
     Procedure EnqueueSteer(Const Text: String);
     Procedure Detach;
+    Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
   End;
 
 Implementation
@@ -111,6 +117,7 @@ Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   InitCriticalSection(FSnapLock);
+  InitCriticalSection(FTraceLock);
   FService := Service;
   FApiBase := ApiBase;
   FAccessToken := AccessToken;
@@ -143,6 +150,8 @@ Begin
   AbortHttp;
   FreeAndNil(FParser);
   FreeAndNil(FSteer);
+  SetLength(FTraceQueue, 0);
+  DoneCriticalSection(FTraceLock);
   DoneCriticalSection(FSnapLock);
   Inherited Destroy;
 End;
@@ -164,6 +173,7 @@ End;
 Procedure TAssistantActor.Detach;
 Begin
   FOnToken := Nil;
+  FOnTrace := Nil;
   FService := Nil;
   AbortHttp;
 End;
@@ -181,8 +191,56 @@ Begin
   End;
 End;
 
+Function TraceKindForUi(Kind: TAssistantEventKind): Boolean;
+Begin
+  Result := Kind In [aekTurnStarted, aekLoopStarted, aekToolStarted, aekToolCompleted,
+    aekSteerQueued, aekInterjected, aekTurnEnded];
+End;
+
+Procedure TAssistantActor.QueueTrace(Const Event: TAssistantEvent);
+Var
+  N: Integer;
+Begin
+  If Not Assigned(FOnTrace) Then
+    Exit;
+  EnterCriticalSection(FTraceLock);
+  Try
+    N := Length(FTraceQueue);
+    SetLength(FTraceQueue, N + 1);
+    FTraceQueue[N] := Event;
+  Finally
+    LeaveCriticalSection(FTraceLock);
+  End;
+  Queue(@NotifyTrace);
+End;
+
+Procedure TAssistantActor.NotifyTrace;
+Var
+  Batch: Array Of TAssistantEvent;
+  I: Integer;
+  Cb: TAssistantTraceNotify;
+Begin
+  Cb := FOnTrace;
+  EnterCriticalSection(FTraceLock);
+  Try
+    Batch := Copy(FTraceQueue, 0, Length(FTraceQueue));
+    SetLength(FTraceQueue, 0);
+  Finally
+    LeaveCriticalSection(FTraceLock);
+  End;
+  If Not Assigned(Cb) Then
+    Exit;
+  For I := 0 To High(Batch) Do
+    Try
+      Cb(Batch[I]);
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('AssistantActor', 'Trace notify failed: ' + E.Message);
+    End;
+End;
+
 Procedure TAssistantActor.LogEvent(Kind: TAssistantEventKind; Const Text: String;
-  Const ToolName: String; Const ToolId: String);
+  Const ToolName: String; Const ToolId: String; Ok: Boolean; DurationMs: Integer);
 Var
   Event: TAssistantEvent;
 Begin
@@ -193,8 +251,11 @@ Begin
   Event.ToolName := ToolName;
   Event.ToolId := ToolId;
   Event.LoopIndex := FLoopIndex;
-  Event.Ok := True;
+  Event.Ok := Ok;
+  Event.DurationMs := DurationMs;
   AppendAssistantEvent(FEventsFile, Event);
+  If TraceKindForUi(Kind) Then
+    QueueTrace(Event);
 End;
 
 Procedure TAssistantActor.NotifyMain;
@@ -269,19 +330,6 @@ Begin
   If FPhase = apWaiting Then
     SetPhase(apThinking);
   EmitSnapshot(False, '', False);
-End;
-
-Procedure TAssistantActor.AppendToolLine(Const Name, Args: String);
-Var
-  Preview, Line: String;
-Begin
-  Preview := Trim(Args);
-  If Length(Preview) > 120 Then
-    Preview := Copy(Preview, 1, 117) + '…';
-  Line := LineEnding + '> *' + Name + '*';
-  If Preview <> '' Then
-    Line := Line + ' `' + Preview + '`';
-  MergeSamplerText(FThinking, Line);
 End;
 
 Procedure TAssistantActor.ApplyParserEvents(FromIndex: Integer);
@@ -454,7 +502,6 @@ Begin
       Call := FToolCalls[I];
       If Call.Name = '' Then
         Continue;
-      AppendToolLine(Call.Name, Call.Arguments);
       LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
       EmitSnapshot(False, 'Running tools…', True);
       StartTick := GetTickCount64;
@@ -476,7 +523,8 @@ Begin
       Else
         Content := 'Error: ' + ErrorText;
       FService.AddToolResult(Call.Id, Content);
-      LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id);
+      LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
+        Integer(GetTickCount64 - StartTick));
       If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
         FWrotePlan := True;
       WorkflowLogger.Info('AssistantActor',
@@ -497,7 +545,6 @@ Begin
   Wrapped := FormatSteerEnvelope(Note);
   FService.AddMessage(amrUser, Wrapped);
   LogEvent(aekInterjected, Note);
-  MergeSamplerText(FThinking, LineEnding + '> **Steer** ' + Copy(Note, 1, 160));
   EmitSnapshot(False, 'Steering at next model gap…', True);
   Result := True;
 End;

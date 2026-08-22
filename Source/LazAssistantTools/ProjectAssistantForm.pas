@@ -110,7 +110,7 @@ Type
     Procedure AutoNewChatCheckClick(Sender: TObject);
   Private
     ElapsedTimer: TTimer;
-    ChatView: TControl; { TMarkDownControl created at runtime. }
+    ChatView: TControl; { unused; centre is FTraceView }
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
@@ -134,6 +134,9 @@ Type
     FTurnStartedAt: String;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
+    FTrace: TAssistantTrace;
+    FTraceView: TAssistantTraceView;
+    FThinkingSliceStart: Integer;
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
     HistoryIds: TStringList; { Parallel to HistoryCombo; '' = current conversation. }
@@ -229,6 +232,9 @@ Type
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
     Procedure EnsureChatView;
+    Procedure RebuildTraceFromFields;
+    Procedure ApplyLiveThinkingAndAnswer;
+    Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
     Procedure ScrollChatToEnd;
     Procedure ScrollChatToTop;
@@ -289,8 +295,8 @@ Implementation
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
-  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, MarkDown.Control, SrcEditorIntf,
-  ProjectIntf;
+  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
+  ProjectIntf, AssistantEvents, AssistantTrace, AssistantTraceView;
 
 Const
   ChatViewMargin = 4;
@@ -330,6 +336,9 @@ Begin
   FLastChatPaintTick := 0;
   FSessionProjectKey := '';
   ChatView := Nil;
+  FTrace := TAssistantTrace.Create;
+  FTraceView := Nil;
+  FThinkingSliceStart := 1;
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   Transcript := TStringList.Create;
@@ -356,9 +365,12 @@ Begin
     AssistantClient.CancelStream;
   PersistSession;
   WorkflowEventBus.RemoveListener(Self);
+  If Assigned(AssistantClient) Then
+    AssistantClient.OnTrace := Nil;
   FreeAndNil(Transcript);
   FreeAndNil(HistoryIds);
   FreeAndNil(CodeSections);
+  FreeAndNil(FTrace);
   Inherited Destroy;
 End;
 
@@ -378,6 +390,8 @@ Begin
       ElapsedTimer.Interval := 250;
       ElapsedTimer.OnTimer := @ElapsedTimerTimer;
     End;
+  If Assigned(AssistantClient) Then
+    AssistantClient.OnTrace := @HandleTraceEvent;
   BindToActiveProject;
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
@@ -418,6 +432,10 @@ Begin
   FStreamingActive := False;
   FViewingLive := True;
   FSelectedTurnIndex := -1;
+  If Assigned(FTraceView) Then
+    FTraceView.ResetFrames;
+  If Assigned(FTrace) Then
+    FTrace.Clear;
 End;
 
 Procedure TProjectAssistantForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -2119,6 +2137,8 @@ Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
   PersistShellConfig;
+  If Assigned(FTraceView) Then
+    FTraceView.ShowThinking := FShowThinking;
   RefreshChatDisplay(True);
 End;
 
@@ -2149,6 +2169,8 @@ Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   If FSending And (FStatusPhase <> '') Then
     StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
+  If FSending And Assigned(FTraceView) And Assigned(FTrace) Then
+    FTraceView.RefreshElapsed(FTrace);
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -2369,27 +2391,22 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.EnsureChatView;
-Var
-  View: TMarkDownControl;
 Begin
-  If Assigned(ChatView) Then
+  If Assigned(FTraceView) Then
     Exit;
-  ChatHost.Color := clWhite;
+  If Not Assigned(ChatHost) Then
+    Exit;
+  ChatHost.Color := clWindow;
   ChatHost.ParentColor := False;
   ChatHost.ParentBackground := False;
-  View := TMarkDownControl.Create(Self);
-  View.Parent := ChatHost;
-  View.Align := alClient;
-  View.BorderSpacing.Around := ChatViewMargin;
-  View.Color := clWhite;
-  View.ParentColor := False;
-  View.ParentBackground := False;
-  View.ScrollBars := ssAutoBoth;
-  View.MonoFontName := 'Monospace';
-  View.FontName := 'default';
-  View.TabStop := True;
-  View.Visible := True;
-  ChatView := View;
+  FTraceView := TAssistantTraceView.Create(Self);
+  FTraceView.Parent := ChatHost;
+  FTraceView.Align := alClient;
+  FTraceView.BorderSpacing.Around := ChatViewMargin;
+  FTraceView.ShowThinking := FShowThinking;
+  ChatView := FTraceView;
+  If Not Assigned(FTrace) Then
+    FTrace := TAssistantTrace.Create;
 End;
 
 Procedure TProjectAssistantForm.EnsureInputPopup;
@@ -2469,30 +2486,134 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.ScrollChatToEnd;
-Var
-  View: TMarkDownControl;
 Begin
-  If Not Assigned(ChatView) Then
-    Exit;
-  View := TMarkDownControl(ChatView);
-  { Setter clamps to max scroll. }
-  View.ScrolledTop := High(Integer) Div 4;
+  If Assigned(FTraceView) Then
+    FTraceView.Sync(FTrace, True);
 End;
 
 Procedure TProjectAssistantForm.ScrollChatToTop;
-Var
-  View: TMarkDownControl;
 Begin
-  If Not Assigned(ChatView) Then
+  If Assigned(FTraceView) Then
+    FTraceView.Sync(FTrace, False);
+End;
+
+Procedure TProjectAssistantForm.RebuildTraceFromFields;
+Var
+  Block: TTraceBlock;
+Begin
+  If Not Assigned(FTrace) Then
     Exit;
-  View := TMarkDownControl(ChatView);
-  View.ScrolledTop := 0;
+  If Assigned(FTraceView) Then
+    FTraceView.ResetFrames;
+  FTrace.Clear;
+  If FDisplayUser <> '' Then
+    FTrace.AddUser(FDisplayUser);
+  If FShowThinking And (FAssistantThinking <> '') Then
+    Begin
+      Block := FTrace.StartThinking(0);
+      Block.Body := FAssistantThinking;
+      Block.Running := False;
+      Block.Collapsed := True;
+      Block.Title := 'Thought';
+    End;
+  If FAssistantContent <> '' Then
+    FTrace.EnsureAnswer.Body := FAssistantContent;
+  If FDisplaySystemNote <> '' Then
+    FTrace.AddNote(FDisplaySystemNote);
+End;
+
+Procedure TProjectAssistantForm.ApplyLiveThinkingAndAnswer;
+Var
+  Block: TTraceBlock;
+  Slice: String;
+Begin
+  If Not Assigned(FTrace) Then
+    Exit;
+  Block := FTrace.CurrentThinking;
+  If FThinkingSliceStart < 1 Then
+    FThinkingSliceStart := 1;
+  If Length(FLiveThinking) >= FThinkingSliceStart Then
+    Slice := Copy(FLiveThinking, FThinkingSliceStart, MaxInt)
+  Else
+    Slice := '';
+  If Slice <> '' Then
+    Begin
+      If Not Assigned(Block) Then
+        Block := FTrace.StartThinking(0);
+      Block.Body := Slice;
+      Block.Running := FStreamingActive And (FLiveContent = '');
+    End;
+  If FLiveContent <> '' Then
+    Begin
+      FTrace.CollapseThinking;
+      FTrace.EnsureAnswer.Body := FLiveContent;
+    End;
+End;
+
+Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
+Var
+  Block: TTraceBlock;
+Begin
+  If Not FViewingLive Then
+    Exit;
+  If Not Assigned(FTrace) Then
+    Exit;
+  Case Event.Kind Of
+    aekLoopStarted:
+      Begin
+        Block := FTrace.CurrentThinking;
+        If Assigned(Block) Then
+          Begin
+            Block.Running := False;
+            Block.Collapsed := True;
+          End;
+        FThinkingSliceStart := Length(FLiveThinking) + 1;
+        FTrace.StartThinking(Event.LoopIndex);
+      End;
+    aekToolStarted:
+      FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+    aekToolCompleted:
+      Begin
+        Block := FTrace.FindTool(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := False;
+        Block.Ok := Event.Ok;
+        If Event.DurationMs > 0 Then
+          Block.DurationMs := Event.DurationMs;
+        If Not Event.Ok Then
+          Block.Title := Block.Title + '  failed';
+      End;
+    aekSteerQueued:
+      FTrace.AddSteer(Event.Text);
+    aekInterjected:
+      Begin
+        Block := Nil;
+        If FTrace.Count > 0 Then
+          Block := FTrace[FTrace.Count - 1];
+        If Assigned(Block) And (Block.Kind = tbkSteer) Then
+          Begin
+            Block.Running := False;
+            Block.Title := 'Steer · applied';
+            If Event.Text <> '' Then
+              Block.Body := Event.Text;
+          End
+        Else
+          Begin
+            Block := FTrace.AddSteer(Event.Text);
+            Block.Running := False;
+            Block.Title := 'Steer · applied';
+          End;
+      End;
+  Else
+    Exit;
+  End;
+  If Assigned(FTraceView) Then
+    FTraceView.Sync(FTrace, True);
 End;
 
 Procedure TProjectAssistantForm.RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean);
 Var
-  View: TMarkDownControl;
-  Body: String;
   NowTick: QWord;
 Begin
   EnsureChatView;
@@ -2501,68 +2622,16 @@ Begin
     (NowTick - FLastChatPaintTick < ChatPaintMinIntervalMs) Then
     Exit;
   FLastChatPaintTick := NowTick;
-
-  { Current-turn surface: User first, then Assistant; optional note last. }
-  Body := '';
-  If FDisplayUser <> '' Then
-    Body := '### User' + LineEnding + LineEnding + FDisplayUser;
-  If FStreamingActive Or (FAssistantContent <> '') Or
-    (FShowThinking And (FAssistantThinking <> '')) Then
-    Begin
-      If Body <> '' Then
-        Body := Body + LineEnding + LineEnding;
-      Body := Body + '### Assistant' + LineEnding + LineEnding +
-        FormatAssistantMarkdown(FAssistantThinking, FAssistantContent);
-    End;
-  If FDisplaySystemNote <> '' Then
-    Begin
-      If Body <> '' Then
-        Body := Body + LineEnding + LineEnding;
-      Body := Body + FDisplaySystemNote;
-    End;
-  If Body = '' Then
-    Body := '*Type a message below to start.*';
-
-  View := TMarkDownControl(ChatView);
-  Try
-    { Clear selection before replacing live stream text (avoids copy AVs). }
-    View.ClearSelection;
-    View.MarkDown.BeginUpdate;
-    Try
-      { Force a content change so the control always re-parses when stepping conversation. }
-      If View.MarkDown.Text = Body Then
-        View.MarkDown.Text := Body + ' '
-      Else
-        View.MarkDown.Text := '';
-      View.MarkDown.Text := Body;
-    Finally
-      View.MarkDown.EndUpdate;
-    End;
-    { TMarkDownControl can leave a stale paint until mouse-move; force layout + full repaint. }
-    View.CalcLayout;
-    View.Invalidate;
-    View.Repaint;
-    View.Update;
-    If Assigned(ChatHost) Then
-      Begin
-        ChatHost.Invalidate;
-        ChatHost.Repaint;
-        ChatHost.Update;
-      End;
-  Except
-    On E: Exception Do
-      WorkflowLogger.Warning('ProjectAssistant', 'Chat Markdown render failed: ' + E.Message);
-  End;
-  If ScrollToBottom Then
-    ScrollChatToEnd
+  If Not Assigned(FTrace) Then
+    Exit;
+  If FStreamingActive And FViewingLive Then
+    ApplyLiveThinkingAndAnswer
   Else
-    ScrollChatToTop;
-  { Second pass after scroll so the exposed region is painted immediately. }
-  If Assigned(View) Then
+    RebuildTraceFromFields;
+  If Assigned(FTraceView) Then
     Begin
-      View.Invalidate;
-      View.Repaint;
-      View.Update;
+      FTraceView.ShowThinking := FShowThinking;
+      FTraceView.Sync(FTrace, ScrollToBottom);
     End;
 End;
 
@@ -2680,6 +2749,16 @@ Begin
   FAssistantContent := '';
   FAssistantThinking := '';
   FDisplaySystemNote := '';
+  FThinkingSliceStart := 1;
+  If Assigned(FTraceView) Then
+    FTraceView.ResetFrames;
+  If Assigned(FTrace) Then
+    Begin
+      FTrace.Clear;
+      If FDisplayUser <> '' Then
+        FTrace.AddUser(FDisplayUser);
+      FTrace.StartThinking(0);
+    End;
   RefreshConversationList;
   RefreshChatDisplay(True, True);
 End;
@@ -3420,6 +3499,8 @@ Begin
     End;
 
   RefreshFromConfig;
+  If Assigned(AssistantClient) Then
+    AssistantClient.OnTrace := @HandleTraceEvent;
   { Re-sync client tools/mode after shell prefs (and after default tab if no config). }
   ApplyActiveMode;
   If Root <> '' Then

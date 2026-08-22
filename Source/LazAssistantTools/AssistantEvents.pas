@@ -40,6 +40,8 @@ Type
     LoopIndex: Integer;
   End;
 
+  TAssistantTraceNotify = Procedure(Const Event: TAssistantEvent) Of Object;
+
   { Thread-safe queue of steering notes. Drain at actor safe gaps. }
   TAssistantSteerBuffer = Class
   Private

@@ -10,7 +10,8 @@ Unit AssistantService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation, AssistantProtocol;
+  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation, AssistantProtocol,
+  AssistantEvents;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
@@ -59,6 +60,7 @@ Type
     FMaxPromptTokens: Integer;
     FLastTrimNotice: String;
     FReasoningEffort: String;
+    FOnTrace: TAssistantTraceNotify;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
@@ -106,6 +108,7 @@ Type
     Procedure EnqueueSteer(Const Text: String);
     { Sampler items for the session actor (Responses / Completions). }
     Function ExportSamplerItems: TSamplerInputItemArray;
+    Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
@@ -1848,6 +1851,7 @@ Begin
     ToolsJson := '';
   FStreamThread := TAssistantActor.Create(Self, FApiBase, AccessToken, FModel, FReasoningEffort,
     ToolsJson, EventsFile, OnToken);
+  TAssistantActor(FStreamThread).OnTrace := FOnTrace;
   FBusy := True;
   FStreamThread.Start;
   Result := True;

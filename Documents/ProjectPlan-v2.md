@@ -661,9 +661,9 @@ Status: complete
 
 ## 3. Trace UI: thinking + tools + answer
 
-Status: not started
+Status: complete
 
-`AssistantTrace` + frames. Pre-create thinking, append deltas, collapse on content, tool cards, answer markdown. Wire into `ProjectAssistantForm` as the centre. Toggle thinking keeps working.
+`AssistantTrace` + `AssistantTraceView`: current-turn scroll of user / thinking / tool / answer blocks. Thinking is a dim italic memo (truncated while live, collapsed to “Thought for Xs” when the answer starts; click to expand). Tools are one-line cards. The answer is markdown in its own block. Hide Thinking still works. Actor `OnTrace` drives tool cards and extra thinking loops. History turns rebuild from stored prompt/thinking/response.
 
 ## 4. Shell: one surface, mode chips
 
