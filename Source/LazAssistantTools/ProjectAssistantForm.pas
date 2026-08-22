@@ -12,7 +12,8 @@ Interface
 Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
-  IDEExternToolIntf, AssistantConversation, AssistantPlan;
+  IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
+  AssistantTraceView;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -296,7 +297,7 @@ Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
-  ProjectIntf, AssistantEvents, AssistantTrace, AssistantTraceView;
+  ProjectIntf;
 
 Const
   ChatViewMargin = 4;
