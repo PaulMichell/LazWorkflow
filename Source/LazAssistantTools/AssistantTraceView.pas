@@ -34,8 +34,6 @@ Type
     Procedure BindText(Block: TTraceBlock; Const TitleColor: TColor);
     Procedure HeaderClick(Sender: TObject);
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
-    Function EstimateWrappedLines(Const SourceText: String; CharsPerLine: Integer): Integer;
-    Function ThinkingBodyHeight(Memo: TMemo; Const Display: String; Running: Boolean): Integer;
     Procedure ScrollToEnd;
   Public
     Constructor Create(TheOwner: TComponent); Override;
@@ -53,7 +51,6 @@ Uses
   MarkDown.Control;
 
 Const
-  ThinkingStreamHeight = 148;
   HeaderHeight = 26;
   ToolHeight = 30;
   TruncatedLineCount = 12;
@@ -70,6 +67,8 @@ Begin
     Begin
       TraceScroll.Color := clWindow;
       TraceScroll.ParentBackground := False;
+      TraceScroll.AutoScroll := True;
+      TraceScroll.HorzScrollBar.Visible := False;
     End;
   If Assigned(TraceHost) Then
     Begin
@@ -208,67 +207,6 @@ Begin
   End;
 End;
 
-Function TAssistantTraceView.EstimateWrappedLines(Const SourceText: String; CharsPerLine: Integer): Integer;
-Var
-  SL: TStringList;
-  I, Extra: Integer;
-Begin
-  If CharsPerLine < 8 Then
-    CharsPerLine := 8;
-  SL := TStringList.Create;
-  Try
-    SL.Text := StringReplace(SourceText, #13#10, #10, [rfReplaceAll]);
-    SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
-    If SL.Count = 0 Then
-      Begin
-        Result := 1;
-        Exit;
-      End;
-    Result := 0;
-    For I := 0 To SL.Count - 1 Do
-      Begin
-        Extra := (Length(SL[I]) + CharsPerLine - 1) Div CharsPerLine;
-        If Extra < 1 Then
-          Extra := 1;
-        Result := Result + Extra;
-      End;
-  Finally
-    SL.Free;
-  End;
-End;
-
-Function TAssistantTraceView.ThinkingBodyHeight(Memo: TMemo; Const Display: String; Running: Boolean): Integer;
-Var
-  LineH, Lines, CharsPerLine, InnerW: Integer;
-Begin
-  LineH := 16;
-  If Assigned(Memo) Then
-    Begin
-      LineH := Abs(Memo.Font.Height);
-      If LineH = 0 Then
-        LineH := Memo.Font.Size * 4 Div 3;
-    End;
-  If LineH < 12 Then
-    LineH := 16;
-  LineH := LineH + 2;
-  InnerW := 0;
-  If Assigned(Memo) Then
-    InnerW := Memo.ClientWidth;
-  If (InnerW <= 0) And Assigned(TraceHost) Then
-    InnerW := TraceHost.ClientWidth - 16;
-  If InnerW < 40 Then
-    InnerW := 40;
-  CharsPerLine := InnerW Div 7;
-  Lines := EstimateWrappedLines(Display, CharsPerLine);
-  If Lines < 1 Then
-    Lines := 1;
-  Result := Lines * LineH + 8;
-  If Running And (Result > ThinkingStreamHeight - HeaderHeight) Then
-    Result := ThinkingStreamHeight - HeaderHeight;
-  If Result < LineH + 8 Then
-    Result := LineH + 8;
-End;
-
 Procedure TAssistantTraceView.HeaderClick(Sender: TObject);
 Var
   Block: TTraceBlock;
@@ -334,33 +272,41 @@ Procedure TAssistantTraceView.BindThinking(Block: TTraceBlock);
 Var
   Panel: TPanel;
   Header: TButton;
-  Body: TMemo;
+  Body: TLabel;
   Child: TControl;
   ShowBody: Boolean;
   Display: String;
 Begin
+  { Drop the old fixed-height TMemo layout if a previous build left one. }
+  If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+    If NamedChild(TPanel(Block.Frame), 'BodyLabel') = Nil Then
+      Begin
+        TPanel(Block.Frame).Free;
+        Block.Frame := Nil;
+      End;
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      InitHostedPanel(Panel, False, ThinkingStreamHeight);
+      InitHostedPanel(Panel, True, 0);
       Panel.Color := clForm;
       Header := TButton.Create(Panel);
       Header.Parent := Panel;
-      Header.Align := alTop;
+      Header.Align := alNone;
+      Header.Anchors := [akLeft, akTop];
+      Header.AutoSize := False;
       Header.Height := HeaderHeight;
       Header.Name := 'HeaderButton';
       Header.OnClick := @HeaderClick;
-      Body := TMemo.Create(Panel);
+      Body := TLabel.Create(Panel);
       Body.Parent := Panel;
-      Body.Align := alClient;
-      Body.Name := 'BodyMemo';
-      Body.ReadOnly := True;
-      Body.ScrollBars := ssAutoVertical;
-      Body.BorderStyle := bsNone;
+      Body.Align := alNone;
+      Body.Anchors := [akLeft, akTop];
       Body.WordWrap := True;
+      Body.AutoSize := True;
+      Body.Name := 'BodyLabel';
       Body.Font.Style := [fsItalic];
       Body.Font.Color := clGrayText;
-      Body.Color := clForm;
+      Body.ShowAccelChar := False;
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
@@ -371,34 +317,21 @@ Begin
   If Child Is TButton Then
     TButton(Child).Caption := Block.Title;
   ShowBody := (FShowThinking And (Not Block.Collapsed)) Or Block.Running;
-  Child := NamedChild(Panel, 'BodyMemo');
-  If Child Is TMemo Then
+  If Block.Running Then
+    Display := LastLines(Block.Body, FTruncatedLines)
+  Else
+    Display := Block.Body;
+  Child := NamedChild(Panel, 'BodyLabel');
+  If Child Is TLabel Then
     Begin
-      Body := TMemo(Child);
+      Body := TLabel(Child);
+      Body.Caption := Display;
       Body.Visible := ShowBody;
-      If Block.Running Then
-        Display := LastLines(Block.Body, FTruncatedLines)
-      Else
-        Display := Block.Body;
-      If Body.Text <> Display Then
-        Body.Text := Display;
-      If ShowBody Then
-        Begin
-          If Block.Running Then
-            Body.ScrollBars := ssAutoVertical
-          Else
-            Body.ScrollBars := ssNone;
-        End;
-    End
-  Else
-    Body := Nil;
+    End;
   Panel.Visible := FShowThinking Or Block.Running;
-  If Not Panel.Visible Then
-    Exit;
-  If ShowBody And Assigned(Body) Then
-    Panel.Height := HeaderHeight + ThinkingBodyHeight(Body, Display, Block.Running)
-  Else
-    Panel.Height := HeaderHeight;
+  If Assigned(TraceHost) And (TraceHost.ClientWidth > 32) Then
+    Panel.Width := TraceHost.ClientWidth;
+  Panel.AutoSize := True;
 End;
 
 Procedure TAssistantTraceView.BindTool(Block: TTraceBlock);
@@ -526,9 +459,21 @@ Begin
 End;
 
 Procedure TAssistantTraceView.ScrollToEnd;
+Var
+  MaxPos: Integer;
 Begin
-  If Assigned(TraceScroll) Then
-    TraceScroll.VertScrollBar.Position := TraceScroll.VertScrollBar.Range;
+  If Not Assigned(TraceScroll) Then
+    Exit;
+  If Assigned(TraceHost) Then
+    Begin
+      TraceHost.InvalidatePreferredSize;
+      TraceHost.AdjustSize;
+    End;
+  { Range is the content height; the last valid thumb position is Range - page. }
+  MaxPos := TraceScroll.VertScrollBar.Range - TraceScroll.ClientHeight;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  TraceScroll.VertScrollBar.Position := MaxPos;
 End;
 
 Procedure TAssistantTraceView.ResetFrames;
