@@ -12,7 +12,7 @@ Unit AssistantActor;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantProtocol, AssistantEvents, AssistantService;
+  Classes, SysUtils, AssistantProtocol, AssistantSampler, AssistantEvents, AssistantService;
 
 Type
   TAssistantActor = Class(TThread)
