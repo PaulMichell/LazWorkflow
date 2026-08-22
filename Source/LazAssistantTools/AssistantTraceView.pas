@@ -27,7 +27,7 @@ Type
     Procedure BindAnswer(Block: TTraceBlock);
     Procedure BindText(Block: TTraceBlock; Const TitleColor: TColor);
     Procedure HeaderClick(Sender: TObject);
-    Function LastLines(Const Text: String; MaxLines: Integer): String;
+    Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
   Public
     Constructor Create(TheOwner: TComponent); Override;
@@ -83,17 +83,17 @@ Begin
   FShowThinking := Value;
 End;
 
-Function TAssistantTraceView.LastLines(Const Text: String; MaxLines: Integer): String;
+Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer): String;
 Var
   SL: TStringList;
   Start, I: Integer;
 Begin
-  Result := Text;
+  Result := SourceText;
   If MaxLines < 1 Then
     Exit;
   SL := TStringList.Create;
   Try
-    SL.Text := StringReplace(Text, #13#10, #10, [rfReplaceAll]);
+    SL.Text := StringReplace(SourceText, #13#10, #10, [rfReplaceAll]);
     SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
     If SL.Count <= MaxLines Then
       Exit;

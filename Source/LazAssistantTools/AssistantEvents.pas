@@ -224,7 +224,7 @@ Var
   I: Integer;
 Begin
   Result := False;
-  SetLength(Calls, 0);
+  Calls := Nil;
   If Trim(Json) = '' Then
     Exit;
   Data := Nil;
