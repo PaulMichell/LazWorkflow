@@ -242,10 +242,15 @@ Var
   LineH, Lines, CharsPerLine, InnerW: Integer;
 Begin
   LineH := 16;
-  If Assigned(Memo) And Memo.HandleAllocated Then
-    LineH := Memo.Canvas.TextHeight('Hg');
+  If Assigned(Memo) Then
+    Begin
+      LineH := Abs(Memo.Font.Height);
+      If LineH = 0 Then
+        LineH := Memo.Font.Size * 4 Div 3;
+    End;
   If LineH < 12 Then
     LineH := 16;
+  LineH := LineH + 2;
   InnerW := 0;
   If Assigned(Memo) Then
     InnerW := Memo.ClientWidth;
