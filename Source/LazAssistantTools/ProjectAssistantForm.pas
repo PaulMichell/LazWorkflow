@@ -2145,43 +2145,20 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
-Var
-  Block: TTraceBlock;
-  ThinkingText: String;
-  I: Integer;
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
   PersistShellConfig;
   If Assigned(FTraceView) Then
-    FTraceView.ShowThinking := FShowThinking;
-  If Not Assigned(FTrace) Then
     Begin
-      RefreshChatDisplay(True);
-      Exit;
-    End;
-  { Keep existing frames. Rebuilding the markdown answer on a toggle AVs. }
-  If FShowThinking Then
-    Begin
-      If FLiveThinking <> '' Then
-        ThinkingText := FLiveThinking
+      FTraceView.ShowThinking := FShowThinking;
+      FTraceView.Streaming := FStreamingActive And FViewingLive;
+      FTraceView.StreamStartedAt := StreamStart;
+      If Assigned(FTrace) Then
+        FTraceView.Sync(FTrace, False)
       Else
-        ThinkingText := FAssistantThinking;
-      If (ThinkingText <> '') And (FTrace.CurrentThinking = Nil) Then
-        Begin
-          Block := FTrace.StartThinking(0);
-          Block.Body := ThinkingText;
-          Block.Running := FStreamingActive And (FLiveContent = '');
-          Block.Collapsed := False;
-          If Not Block.Running Then
-            Block.Title := 'Thought';
-        End;
-      For I := 0 To FTrace.Count - 1 Do
-        If FTrace[I].Kind = tbkThinking Then
-          FTrace[I].Collapsed := False;
-    End;
-  If Assigned(FTraceView) Then
-    FTraceView.Sync(FTrace, False)
+        RefreshChatDisplay(True);
+    End
   Else
     RefreshChatDisplay(True);
 End;
@@ -2214,7 +2191,11 @@ Begin
   If FSending And (FStatusPhase <> '') Then
     StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
   If FSending And Assigned(FTraceView) And Assigned(FTrace) Then
-    FTraceView.RefreshElapsed(FTrace);
+    Begin
+      FTraceView.Streaming := FStreamingActive And FViewingLive;
+      FTraceView.StreamStartedAt := StreamStart;
+      FTraceView.RefreshElapsed(FTrace);
+    End;
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -2555,12 +2536,7 @@ Begin
     Begin
       Block := FTrace.StartThinking(0);
       Block.Body := FAssistantThinking;
-      Block.Running := False;
-      Block.Collapsed := Not FShowThinking;
-      If Block.DurationMs > 0 Then
-        Block.Title := 'Thought for ' + FormatThoughtElapsed(Block.DurationMs)
-      Else
-        Block.Title := 'Thought';
+      FTrace.FinishCurrentThinking;
     End;
   If FAssistantContent <> '' Then
     FTrace.EnsureAnswer.Body := FAssistantContent;
@@ -2579,7 +2555,7 @@ Begin
     FTrace.EnsureUser(FLiveUser)
   Else If FDisplayUser <> '' Then
     FTrace.EnsureUser(FDisplayUser);
-  Block := FTrace.CurrentThinking;
+  Block := FTrace.CurrentRunningThinking;
   If FThinkingSliceStart < 1 Then
     FThinkingSliceStart := 1;
   If Length(FLiveThinking) >= FThinkingSliceStart Then
@@ -2591,14 +2567,9 @@ Begin
       If Not Assigned(Block) Then
         Block := FTrace.StartThinking(0);
       Block.Body := Slice;
-      Block.Running := FStreamingActive And (FLiveContent = '');
     End;
   If FLiveContent <> '' Then
-    Begin
-      { Keep thoughts visible when Show Thinking is on; only chip them when hidden. }
-      FTrace.CollapseThinking(Not FShowThinking);
-      FTrace.EnsureAnswer.Body := FLiveContent;
-    End;
+    FTrace.EnsureAnswer.Body := FLiveContent;
 End;
 
 Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
@@ -2613,12 +2584,6 @@ Begin
     Case Event.Kind Of
     aekLoopStarted:
       Begin
-        Block := FTrace.CurrentThinking;
-        If Assigned(Block) Then
-          Begin
-            Block.Running := False;
-            Block.Collapsed := Not FShowThinking;
-          End;
         FThinkingSliceStart := Length(FLiveThinking) + 1;
         FTrace.StartThinking(Event.LoopIndex);
       End;
@@ -2692,6 +2657,8 @@ Begin
       If Assigned(FTraceView) Then
         Begin
           FTraceView.ShowThinking := FShowThinking;
+          FTraceView.Streaming := FStreamingActive And FViewingLive;
+          FTraceView.StreamStartedAt := StreamStart;
           FTraceView.Sync(FTrace, ScrollToBottom);
         End;
     Except
@@ -2973,10 +2940,8 @@ Begin
     Begin
       FTrace.EnsureUser(FDisplayUser);
       If FLiveContent <> '' Then
-        Begin
-          FTrace.CollapseThinking;
-          FTrace.EnsureAnswer.Body := FLiveContent;
-        End;
+        FTrace.EnsureAnswer.Body := FLiveContent;
+      FTrace.FinishCurrentThinking;
       If (ResolvedError <> '') And
         ((FTrace.Count = 0) Or (FTrace[FTrace.Count - 1].Kind <> tbkNote) Or
          (FTrace[FTrace.Count - 1].Body <> FDisplaySystemNote)) Then

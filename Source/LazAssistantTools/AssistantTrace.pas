@@ -39,7 +39,6 @@ Type
     Function GetCount: Integer;
     Function GetBlock(Index: Integer): TTraceBlock;
     Function AddBlock(Kind: TTraceBlockKind): TTraceBlock;
-    Procedure MoveAnswerToEnd;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -51,9 +50,12 @@ Type
     Function AddSteer(Const Text: String): TTraceBlock;
     Function StartThinking(LoopIndex: Integer): TTraceBlock;
     Function CurrentThinking: TTraceBlock;
+    Function CurrentRunningThinking: TTraceBlock;
     Function AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
     Function FindTool(Const ToolId: String): TTraceBlock;
+    { Reuse the last block when it is already an answer; otherwise append a new one. }
     Function EnsureAnswer: TTraceBlock;
+    Procedure FinishCurrentThinking;
     Procedure CollapseThinking(HideBody: Boolean = True);
     Procedure TickElapsed;
     Property Count: Integer Read GetCount;
@@ -61,6 +63,7 @@ Type
   End;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;
+Function FormatThinkingClock(DurationMs: Integer): String;
 Function ToolCardCaption(Const ToolName, Args: String): String;
 
 Implementation
@@ -168,18 +171,17 @@ Begin
   Result.Title := 'Steer';
   Result.Body := Text;
   Result.Running := True;
-  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.StartThinking(LoopIndex: Integer): TTraceBlock;
 Begin
+  FinishCurrentThinking;
   Result := AddBlock(tbkThinking);
-  Result.Title := 'Thinking…';
+  Result.Title := 'Thinking';
   Result.LoopIndex := LoopIndex;
   Result.Running := True;
   Result.StartedAt := Now;
   Result.Collapsed := False;
-  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.CurrentThinking: TTraceBlock;
@@ -199,8 +201,26 @@ Begin
     End;
 End;
 
+Function TAssistantTrace.CurrentRunningThinking: TTraceBlock;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := Nil;
+  For I := FBlocks.Count - 1 DownTo 0 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkThinking) And Block.Running Then
+        Begin
+          Result := Block;
+          Exit;
+        End;
+    End;
+End;
+
 Function TAssistantTrace.AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
 Begin
+  FinishCurrentThinking;
   Result := FindTool(ToolId);
   If Assigned(Result) Then
     Begin
@@ -217,7 +237,6 @@ Begin
   Result.Running := True;
   Result.StartedAt := Now;
   Result.Title := ToolCardCaption(ToolName, Args);
-  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.FindTool(Const ToolId: String): TTraceBlock;
@@ -239,39 +258,38 @@ Begin
     End;
 End;
 
-Procedure TAssistantTrace.MoveAnswerToEnd;
-Var
-  I: Integer;
-Begin
-  For I := 0 To FBlocks.Count - 2 Do
-    If TTraceBlock(FBlocks[I]).Kind = tbkAnswer Then
-      Begin
-        FBlocks.Move(I, FBlocks.Count - 1);
-        Exit;
-      End;
-End;
-
 Function TAssistantTrace.EnsureAnswer: TTraceBlock;
 Var
-  I: Integer;
-  Block: TTraceBlock;
+  Last: TTraceBlock;
 Begin
-  Result := Nil;
-  For I := FBlocks.Count - 1 DownTo 0 Do
+  FinishCurrentThinking;
+  If FBlocks.Count > 0 Then
     Begin
-      Block := TTraceBlock(FBlocks[I]);
-      If Block.Kind = tbkAnswer Then
+      Last := TTraceBlock(FBlocks[FBlocks.Count - 1]);
+      If Last.Kind = tbkAnswer Then
         Begin
-          Result := Block;
-          Break;
+          Result := Last;
+          Exit;
         End;
     End;
-  If Not Assigned(Result) Then
-    Begin
-      Result := AddBlock(tbkAnswer);
-      Result.Title := 'Assistant';
-    End;
-  MoveAnswerToEnd;
+  Result := AddBlock(tbkAnswer);
+  Result.Title := 'Assistant';
+End;
+
+Procedure TAssistantTrace.FinishCurrentThinking;
+Var
+  Block: TTraceBlock;
+Begin
+  Block := CurrentRunningThinking;
+  If Not Assigned(Block) Then
+    Exit;
+  Block.Running := False;
+  If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
+    Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
+  If Block.DurationMs > 0 Then
+    Block.Title := 'Thought for ' + FormatThoughtElapsed(Block.DurationMs)
+  Else
+    Block.Title := 'Thought';
 End;
 
 Procedure TAssistantTrace.CollapseThinking(HideBody: Boolean);
@@ -305,10 +323,7 @@ Begin
     Begin
       Block := TTraceBlock(FBlocks[I]);
       If (Block.Kind = tbkThinking) And Block.Running And (Block.StartedAt > 0) Then
-        Begin
-          Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
-          Block.Title := 'Thinking… ' + FormatThoughtElapsed(Block.DurationMs);
-        End;
+        Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
       If (Block.Kind = tbkTool) And Block.Running And (Block.StartedAt > 0) Then
         Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
     End;
@@ -325,6 +340,16 @@ Begin
     Result := Format('%.1fs', [Secs])
   Else
     Result := Format('%d:%2.2d', [DurationMs Div 60000, (DurationMs Div 1000) Mod 60]);
+End;
+
+Function FormatThinkingClock(DurationMs: Integer): String;
+Var
+  TotalSec: Integer;
+Begin
+  If DurationMs < 0 Then
+    DurationMs := 0;
+  TotalSec := DurationMs Div 1000;
+  Result := Format('%d:%2.2d', [TotalSec Div 60, TotalSec Mod 60]);
 End;
 
 Function JsonStringHint(Const Args, FieldName: String): String;

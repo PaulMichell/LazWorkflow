@@ -37,9 +37,10 @@ Begin
     Trace.AddUser('please review');
     Think := Trace.StartThinking(0);
     Think.Body := 'Looking at Foo.pas';
-    Tool := Trace.AddTool('call_1', 'read_file', '{"path":"Source/Foo.pas"}');
     Check('user first', (Trace.Count >= 1) And (Trace[0].Kind = tbkUser));
     Check('thinking running', Assigned(Think) And Think.Running);
+    Tool := Trace.AddTool('call_1', 'read_file', '{"path":"Source/Foo.pas"}');
+    Check('thinking finished for tool', Not Think.Running);
     Check('tool caption has file', Pos('Foo.pas', Tool.Title) > 0);
     Trace.CollapseThinking;
     Check('thinking collapsed', Think.Collapsed And (Not Think.Running));
@@ -76,27 +77,30 @@ Begin
   End;
 End;
 
-Procedure TestAnswerStaysLast;
+Procedure TestEventOrder;
 Var
   Trace: TAssistantTrace;
-  Answer: TTraceBlock;
+  FirstAnswer, FinalAnswer: TTraceBlock;
 Begin
   Trace := TAssistantTrace.Create;
   Try
     Trace.AddUser('what does this project do?');
     Trace.StartThinking(0);
-    Answer := Trace.EnsureAnswer;
-    Answer.Body := 'early content';
+    FirstAnswer := Trace.EnsureAnswer;
+    FirstAnswer.Body := 'early content';
     Trace.AddTool('call_1', 'get_project_info', '{}');
     Trace.StartThinking(1);
     Trace.AddTool('call_2', 'read_file', '{"path":"Main.pas"}');
-    Answer.Body := 'final answer';
-    Trace.EnsureAnswer;
-    Check('answer last after tools', Trace[Trace.Count - 1].Kind = tbkAnswer);
-    Check('same answer block', Trace.EnsureAnswer = Answer);
-    Check('user still first', Trace[0].Kind = tbkUser);
-    Check('thinking before answer', Trace[1].Kind = tbkThinking);
-    Check('tool before answer', Trace[2].Kind = tbkTool);
+    FinalAnswer := Trace.EnsureAnswer;
+    FinalAnswer.Body := 'final answer';
+    Check('user first', Trace[0].Kind = tbkUser);
+    Check('think then answer', (Trace[1].Kind = tbkThinking) And (Trace[2].Kind = tbkAnswer));
+    Check('intermediate stays put', Trace[2] = FirstAnswer);
+    Check('tool after intermediate', Trace[3].Kind = tbkTool);
+    Check('new answer after later tools', FinalAnswer <> FirstAnswer);
+    Check('final answer last', Trace[Trace.Count - 1] = FinalAnswer);
+    Check('reuse last answer', Trace.EnsureAnswer = FinalAnswer);
+    Check('thinking finished before tool', Not Trace[1].Running);
   Finally
     Trace.Free;
   End;
@@ -106,13 +110,15 @@ Procedure TestElapsed;
 Begin
   Check('subsecond', Pos('s', FormatThoughtElapsed(4200)) > 0);
   Check('zero', FormatThoughtElapsed(0) = '0.0s');
+  Check('clock under a minute', FormatThinkingClock(12000) = '0:12');
+  Check('clock one minute', FormatThinkingClock(60000) = '1:00');
 End;
 
 Begin
   FailCount := 0;
   TestBlocks;
   TestEnsureUser;
-  TestAnswerStaysLast;
+  TestEventOrder;
   TestElapsed;
   If FailCount = 0 Then
     Begin
