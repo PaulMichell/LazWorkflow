@@ -76,6 +76,32 @@ Begin
   End;
 End;
 
+Procedure TestAnswerStaysLast;
+Var
+  Trace: TAssistantTrace;
+  Answer: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Trace.AddUser('what does this project do?');
+    Trace.StartThinking(0);
+    Answer := Trace.EnsureAnswer;
+    Answer.Body := 'early content';
+    Trace.AddTool('call_1', 'get_project_info', '{}');
+    Trace.StartThinking(1);
+    Trace.AddTool('call_2', 'read_file', '{"path":"Main.pas"}');
+    Answer.Body := 'final answer';
+    Trace.EnsureAnswer;
+    Check('answer last after tools', Trace[Trace.Count - 1].Kind = tbkAnswer);
+    Check('same answer block', Trace.EnsureAnswer = Answer);
+    Check('user still first', Trace[0].Kind = tbkUser);
+    Check('thinking before answer', Trace[1].Kind = tbkThinking);
+    Check('tool before answer', Trace[2].Kind = tbkTool);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Procedure TestElapsed;
 Begin
   Check('subsecond', Pos('s', FormatThoughtElapsed(4200)) > 0);
@@ -86,6 +112,7 @@ Begin
   FailCount := 0;
   TestBlocks;
   TestEnsureUser;
+  TestAnswerStaysLast;
   TestElapsed;
   If FailCount = 0 Then
     Begin

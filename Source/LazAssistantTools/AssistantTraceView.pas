@@ -34,6 +34,8 @@ Type
     Procedure BindText(Block: TTraceBlock; Const TitleColor: TColor);
     Procedure HeaderClick(Sender: TObject);
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
+    Function EstimateWrappedLines(Const SourceText: String; CharsPerLine: Integer): Integer;
+    Function ThinkingBodyHeight(Memo: TMemo; Const Display: String; Running: Boolean): Integer;
     Procedure ScrollToEnd;
   Public
     Constructor Create(TheOwner: TComponent); Override;
@@ -206,6 +208,62 @@ Begin
   End;
 End;
 
+Function TAssistantTraceView.EstimateWrappedLines(Const SourceText: String; CharsPerLine: Integer): Integer;
+Var
+  SL: TStringList;
+  I, Extra: Integer;
+Begin
+  If CharsPerLine < 8 Then
+    CharsPerLine := 8;
+  SL := TStringList.Create;
+  Try
+    SL.Text := StringReplace(SourceText, #13#10, #10, [rfReplaceAll]);
+    SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
+    If SL.Count = 0 Then
+      Begin
+        Result := 1;
+        Exit;
+      End;
+    Result := 0;
+    For I := 0 To SL.Count - 1 Do
+      Begin
+        Extra := (Length(SL[I]) + CharsPerLine - 1) Div CharsPerLine;
+        If Extra < 1 Then
+          Extra := 1;
+        Result := Result + Extra;
+      End;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function TAssistantTraceView.ThinkingBodyHeight(Memo: TMemo; Const Display: String; Running: Boolean): Integer;
+Var
+  LineH, Lines, CharsPerLine, InnerW: Integer;
+Begin
+  LineH := 16;
+  If Assigned(Memo) And Memo.HandleAllocated Then
+    LineH := Memo.Canvas.TextHeight('Hg');
+  If LineH < 12 Then
+    LineH := 16;
+  InnerW := 0;
+  If Assigned(Memo) Then
+    InnerW := Memo.ClientWidth;
+  If (InnerW <= 0) And Assigned(TraceHost) Then
+    InnerW := TraceHost.ClientWidth - 16;
+  If InnerW < 40 Then
+    InnerW := 40;
+  CharsPerLine := InnerW Div 7;
+  Lines := EstimateWrappedLines(Display, CharsPerLine);
+  If Lines < 1 Then
+    Lines := 1;
+  Result := Lines * LineH + 8;
+  If Running And (Result > ThinkingStreamHeight - HeaderHeight) Then
+    Result := ThinkingStreamHeight - HeaderHeight;
+  If Result < LineH + 8 Then
+    Result := LineH + 8;
+End;
+
 Procedure TAssistantTraceView.HeaderClick(Sender: TObject);
 Var
   Block: TTraceBlock;
@@ -294,6 +352,7 @@ Begin
       Body.ReadOnly := True;
       Body.ScrollBars := ssAutoVertical;
       Body.BorderStyle := bsNone;
+      Body.WordWrap := True;
       Body.Font.Style := [fsItalic];
       Body.Font.Color := clGrayText;
       Body.Color := clForm;
@@ -306,7 +365,7 @@ Begin
   Child := NamedChild(Panel, 'HeaderButton');
   If Child Is TButton Then
     TButton(Child).Caption := Block.Title;
-  ShowBody := FShowThinking And (Not Block.Collapsed);
+  ShowBody := (FShowThinking And (Not Block.Collapsed)) Or Block.Running;
   Child := NamedChild(Panel, 'BodyMemo');
   If Child Is TMemo Then
     Begin
@@ -318,12 +377,21 @@ Begin
         Display := Block.Body;
       If Body.Text <> Display Then
         Body.Text := Display;
-    End;
+      If ShowBody Then
+        Begin
+          If Block.Running Then
+            Body.ScrollBars := ssAutoVertical
+          Else
+            Body.ScrollBars := ssNone;
+        End;
+    End
+  Else
+    Body := Nil;
   Panel.Visible := FShowThinking Or Block.Running;
   If Not Panel.Visible Then
     Exit;
-  If ShowBody Then
-    Panel.Height := ThinkingStreamHeight
+  If ShowBody And Assigned(Body) Then
+    Panel.Height := HeaderHeight + ThinkingBodyHeight(Body, Display, Block.Running)
   Else
     Panel.Height := HeaderHeight;
 End;

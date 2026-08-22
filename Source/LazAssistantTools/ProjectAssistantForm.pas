@@ -2148,6 +2148,7 @@ Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
 Var
   Block: TTraceBlock;
   ThinkingText: String;
+  I: Integer;
 Begin
   FShowThinking := Not FShowThinking;
   UpdateThinkingActionCaption;
@@ -2171,10 +2172,13 @@ Begin
           Block := FTrace.StartThinking(0);
           Block.Body := ThinkingText;
           Block.Running := FStreamingActive And (FLiveContent = '');
-          Block.Collapsed := Not FStreamingActive;
-          If Block.Collapsed Then
+          Block.Collapsed := False;
+          If Not Block.Running Then
             Block.Title := 'Thought';
         End;
+      For I := 0 To FTrace.Count - 1 Do
+        If FTrace[I].Kind = tbkThinking Then
+          FTrace[I].Collapsed := False;
     End;
   If Assigned(FTraceView) Then
     FTraceView.Sync(FTrace, False)
@@ -2552,8 +2556,11 @@ Begin
       Block := FTrace.StartThinking(0);
       Block.Body := FAssistantThinking;
       Block.Running := False;
-      Block.Collapsed := True;
-      Block.Title := 'Thought';
+      Block.Collapsed := Not FShowThinking;
+      If Block.DurationMs > 0 Then
+        Block.Title := 'Thought for ' + FormatThoughtElapsed(Block.DurationMs)
+      Else
+        Block.Title := 'Thought';
     End;
   If FAssistantContent <> '' Then
     FTrace.EnsureAnswer.Body := FAssistantContent;
@@ -2588,7 +2595,8 @@ Begin
     End;
   If FLiveContent <> '' Then
     Begin
-      FTrace.CollapseThinking;
+      { Keep thoughts visible when Show Thinking is on; only chip them when hidden. }
+      FTrace.CollapseThinking(Not FShowThinking);
       FTrace.EnsureAnswer.Body := FLiveContent;
     End;
 End;
@@ -2609,7 +2617,7 @@ Begin
         If Assigned(Block) Then
           Begin
             Block.Running := False;
-            Block.Collapsed := True;
+            Block.Collapsed := Not FShowThinking;
           End;
         FThinkingSliceStart := Length(FLiveThinking) + 1;
         FTrace.StartThinking(Event.LoopIndex);

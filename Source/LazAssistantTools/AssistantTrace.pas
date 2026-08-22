@@ -39,6 +39,7 @@ Type
     Function GetCount: Integer;
     Function GetBlock(Index: Integer): TTraceBlock;
     Function AddBlock(Kind: TTraceBlockKind): TTraceBlock;
+    Procedure MoveAnswerToEnd;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -53,7 +54,7 @@ Type
     Function AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
     Function FindTool(Const ToolId: String): TTraceBlock;
     Function EnsureAnswer: TTraceBlock;
-    Procedure CollapseThinking;
+    Procedure CollapseThinking(HideBody: Boolean = True);
     Procedure TickElapsed;
     Property Count: Integer Read GetCount;
     Property Blocks[Index: Integer]: TTraceBlock Read GetBlock; Default;
@@ -167,6 +168,7 @@ Begin
   Result.Title := 'Steer';
   Result.Body := Text;
   Result.Running := True;
+  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.StartThinking(LoopIndex: Integer): TTraceBlock;
@@ -177,6 +179,7 @@ Begin
   Result.Running := True;
   Result.StartedAt := Now;
   Result.Collapsed := False;
+  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.CurrentThinking: TTraceBlock;
@@ -214,6 +217,7 @@ Begin
   Result.Running := True;
   Result.StartedAt := Now;
   Result.Title := ToolCardCaption(ToolName, Args);
+  MoveAnswerToEnd;
 End;
 
 Function TAssistantTrace.FindTool(Const ToolId: String): TTraceBlock;
@@ -235,25 +239,42 @@ Begin
     End;
 End;
 
+Procedure TAssistantTrace.MoveAnswerToEnd;
+Var
+  I: Integer;
+Begin
+  For I := 0 To FBlocks.Count - 2 Do
+    If TTraceBlock(FBlocks[I]).Kind = tbkAnswer Then
+      Begin
+        FBlocks.Move(I, FBlocks.Count - 1);
+        Exit;
+      End;
+End;
+
 Function TAssistantTrace.EnsureAnswer: TTraceBlock;
 Var
   I: Integer;
   Block: TTraceBlock;
 Begin
+  Result := Nil;
   For I := FBlocks.Count - 1 DownTo 0 Do
     Begin
       Block := TTraceBlock(FBlocks[I]);
       If Block.Kind = tbkAnswer Then
         Begin
           Result := Block;
-          Exit;
+          Break;
         End;
     End;
-  Result := AddBlock(tbkAnswer);
-  Result.Title := 'Assistant';
+  If Not Assigned(Result) Then
+    Begin
+      Result := AddBlock(tbkAnswer);
+      Result.Title := 'Assistant';
+    End;
+  MoveAnswerToEnd;
 End;
 
-Procedure TAssistantTrace.CollapseThinking;
+Procedure TAssistantTrace.CollapseThinking(HideBody: Boolean);
 Var
   I: Integer;
   Block: TTraceBlock;
@@ -263,7 +284,7 @@ Begin
       Block := TTraceBlock(FBlocks[I]);
       If Block.Kind = tbkThinking Then
         Begin
-          Block.Collapsed := True;
+          Block.Collapsed := HideBody;
           Block.Running := False;
           If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
             Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
