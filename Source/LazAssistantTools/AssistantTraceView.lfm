@@ -28,7 +28,7 @@ object AssistantTraceView: TAssistantTraceView
       ChildSizing.LeftRightSpacing = 4
       ChildSizing.TopBottomSpacing = 4
       ChildSizing.VerticalSpacing = 8
-      ChildSizing.Layout = cclTopToBottomThenLeftToRight
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 1
       ClientHeight = 8
       ClientWidth = 480

@@ -22,6 +22,7 @@ Type
     FTruncatedLines: Integer;
     FBoundTrace: TAssistantTrace;
     Procedure SetShowThinking(Value: Boolean);
+    Procedure ApplyVerticalStack(Host: TWinControl);
     Procedure InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
     Function NamedChild(Host: TWinControl; Const ChildName: String): TControl;
     Function BlockForFrame(Frame: TObject): TTraceBlock;
@@ -71,10 +72,7 @@ Begin
   If Assigned(TraceHost) Then
     Begin
       TraceHost.Color := clWindow;
-      TraceHost.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
-      TraceHost.ChildSizing.ControlsPerLine := 1;
-      TraceHost.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
-      TraceHost.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
+      ApplyVerticalStack(TraceHost);
     End;
   If Assigned(EmptyLabel) Then
     Begin
@@ -82,6 +80,18 @@ Begin
       EmptyLabel.Alignment := taCenter;
       EmptyLabel.Layout := tlCenter;
     End;
+End;
+
+Procedure TAssistantTraceView.ApplyVerticalStack(Host: TWinControl);
+Begin
+  If Not Assigned(Host) Then
+    Exit;
+  { ControlsPerLine is per column when Layout is cclTopToBottomThenLeftToRight, so
+    TTB+1 is a horizontal row. LTR+1 is one child per row (a vertical stack). }
+  Host.ChildSizing.Layout := cclLeftToRightThenTopToBottom;
+  Host.ChildSizing.ControlsPerLine := 1;
+  Host.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
+  Host.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
 End;
 
 Procedure TAssistantTraceView.InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
@@ -94,7 +104,10 @@ Begin
   Panel.BorderSpacing.Around := 2;
   Panel.ParentBackground := False;
   If AutoSizePanel Then
-    Panel.AutoSize := True
+    Begin
+      Panel.AutoSize := True;
+      ApplyVerticalStack(Panel);
+    End
   Else
     Begin
       Panel.AutoSize := False;
@@ -222,9 +235,6 @@ Begin
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
-      Panel.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
-      Panel.ChildSizing.ControlsPerLine := 1;
-      Panel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
       Title := TLabel.Create(Panel);
       Title.Parent := Panel;
       Title.Align := alNone;
@@ -373,9 +383,6 @@ Begin
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
-      Panel.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
-      Panel.ChildSizing.ControlsPerLine := 1;
-      Panel.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
       Title := TLabel.Create(Panel);
       Title.Parent := Panel;
       Title.Align := alNone;
@@ -466,7 +473,7 @@ Begin
     While TraceHost.ControlCount > 0 Do
       TraceHost.Controls[0].Free;
   Finally
-    TraceHost.ChildSizing.Layout := cclTopToBottomThenLeftToRight;
+    ApplyVerticalStack(TraceHost);
     TraceHost.AutoSize := WasAuto;
   End;
 End;
