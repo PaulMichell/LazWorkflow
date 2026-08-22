@@ -130,7 +130,7 @@ Implementation
 
 Uses
   fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools,
-  AssistantHttps, AssistantEvents, AssistantActor;
+  AssistantHttps, AssistantActor;
 
 Type
   { One UI snapshot for the main thread; queued under FSnapLock to avoid races. }
