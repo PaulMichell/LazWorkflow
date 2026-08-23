@@ -56,6 +56,9 @@ Type
     Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
     Procedure LockControlHeight(Control: TControl; NewHeight: Integer);
+    Procedure LockControlWidth(Control: TControl; NewWidth: Integer);
+    Function ViewportWidth: Integer;
+    Procedure ApplyHostWidth;
   Protected
     Procedure Resize; Override;
   Public
@@ -117,7 +120,11 @@ Begin
         Exit;
       End;
     View.AutoSize := False;
+    View.Constraints.MinWidth := 0;
+    View.Constraints.MaxWidth := 0;
     View.Width := MaxW;
+    View.Constraints.MinWidth := MaxW;
+    View.Constraints.MaxWidth := MaxW;
     View.CalcLayout;
     PrefW := 0;
     PrefH := 0;
@@ -263,6 +270,53 @@ Begin
   Control.Constraints.MaxHeight := NewHeight;
 End;
 
+Procedure TAssistantTraceView.LockControlWidth(Control: TControl; NewWidth: Integer);
+Begin
+  If Not Assigned(Control) Then
+    Exit;
+  If NewWidth < 1 Then
+    NewWidth := 1;
+  Control.Constraints.MinWidth := 0;
+  Control.Constraints.MaxWidth := 0;
+  Control.Width := NewWidth;
+  Control.Constraints.MinWidth := NewWidth;
+  Control.Constraints.MaxWidth := NewWidth;
+End;
+
+Function TAssistantTraceView.ViewportWidth: Integer;
+Begin
+  Result := 0;
+  If Assigned(TraceScroll) Then
+    Begin
+      Result := TraceScroll.ClientWidth;
+      If Result < 80 Then
+        Result := TraceScroll.Width;
+    End;
+  If (Result < 80) And Assigned(TraceHost) Then
+    Result := TraceHost.Width;
+  If Result < 80 Then
+    Result := 0;
+End;
+
+Procedure TAssistantTraceView.ApplyHostWidth;
+Var
+  W: Integer;
+Begin
+  If Not Assigned(TraceHost) Then
+    Exit;
+  W := ViewportWidth;
+  TraceHost.AutoSize := False;
+  TraceHost.Left := 0;
+  TraceHost.Top := 0;
+  If W < 80 Then
+    Exit;
+  TraceHost.Constraints.MinWidth := 0;
+  TraceHost.Constraints.MaxWidth := 0;
+  If TraceHost.Width <> W Then
+    TraceHost.Width := W;
+  LockControlWidth(TraceHost, W);
+End;
+
 Function TAssistantTraceView.NamedChild(Host: TWinControl; Const ChildName: String): TControl;
 Var
   I: Integer;
@@ -280,12 +334,15 @@ End;
 
 Procedure TAssistantTraceView.OrderFrames(Trace: TAssistantTrace);
 Var
-  I, Y, Gap, LeftPad, InnerW: Integer;
+  I, Y, Gap, LeftPad, InnerW, CardH: Integer;
   Card: TControl;
   Block: TTraceBlock;
+  Panel: TWinControl;
 Begin
   { Position in trace order with SetBounds. Re-parenting or ChildSizing while
-    scrolled inflates the GTK range and parks a blank band above the user card. }
+    scrolled inflates the GTK range and parks a blank band above the user card.
+    AutoSize on a card would shrink it to the title "Thinking"; lock width to
+    the pane and only let height follow the wrapped body. }
   If (Not Assigned(Trace)) Or (Not Assigned(TraceHost)) Then
     Exit;
   LeftPad := CardInnerPad;
@@ -293,7 +350,7 @@ Begin
   If Gap < 6 Then
     Gap := 8;
   InnerW := TraceHost.Width - (LeftPad * 2);
-  If InnerW < 40 Then
+  If InnerW < 80 Then
     InnerW := TraceHost.Width;
   If InnerW < 1 Then
     InnerW := 1;
@@ -310,13 +367,22 @@ Begin
         Continue;
       Card.Align := alNone;
       Card.Anchors := [akLeft, akTop];
-      If (Card Is TWinControl) And TWinControl(Card).AutoSize Then
+      LockControlWidth(Card, InnerW);
+      If Card Is TWinControl Then
         Begin
-          TWinControl(Card).InvalidatePreferredSize;
-          TWinControl(Card).AdjustSize;
+          Panel := TWinControl(Card);
+          If Panel.AutoSize Then
+            Begin
+              Panel.InvalidatePreferredSize;
+              Panel.AdjustSize;
+            End;
         End;
-      Card.SetBounds(LeftPad, Y, InnerW, Card.Height);
-      Inc(Y, Card.Height + Gap);
+      CardH := Card.Height;
+      If CardH < 1 Then
+        CardH := LineHeightPx;
+      Card.SetBounds(LeftPad, Y, InnerW, CardH);
+      LockControlWidth(Card, InnerW);
+      Inc(Y, CardH + Gap);
     End;
 End;
 
@@ -527,7 +593,7 @@ Begin
   Memo.Constraints.MaxHeight := 0;
   If MaxW < 80 Then
     Exit;
-  Memo.Width := MaxW;
+  LockControlWidth(Memo, MaxW);
   H := WrappedTextHeight(Memo.Font, SourceText, MaxW);
   { GTK TMemo preferred height is several lines; lock to the wrapped text. }
   Memo.Constraints.MinHeight := H;
@@ -537,12 +603,18 @@ Begin
 End;
 
 Function TAssistantTraceView.ContentWidth: Integer;
+Var
+  W: Integer;
 Begin
   Result := 0;
-  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 80) Then
-    Result := TraceScroll.ClientWidth - (CardInnerPad * 4)
-  Else If Assigned(TraceHost) And (TraceHost.ClientWidth > 80) Then
-    Result := TraceHost.ClientWidth - (CardInnerPad * 4);
+  W := ViewportWidth;
+  If W < 80 Then
+    Exit;
+  Result := W - (CardInnerPad * 4);
+  If Result < 80 Then
+    Result := W - (CardInnerPad * 2);
+  If Result < 40 Then
+    Result := W;
 End;
 
 Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer): String;
@@ -915,28 +987,10 @@ Begin
 End;
 
 Procedure TAssistantTraceView.FitHostToContent;
-Var
-  W: Integer;
 Begin
   If Not Assigned(TraceHost) Then
     Exit;
-  W := 0;
-  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 0) Then
-    W := TraceScroll.ClientWidth;
-  If W < 1 Then
-    W := TraceHost.Width;
-  TraceHost.AutoSize := False;
-  TraceHost.Left := 0;
-  TraceHost.Top := 0;
-  If W > 0 Then
-    Begin
-      TraceHost.Constraints.MinWidth := 0;
-      TraceHost.Constraints.MaxWidth := 0;
-      If TraceHost.Width <> W Then
-        TraceHost.Width := W;
-      TraceHost.Constraints.MinWidth := W;
-      TraceHost.Constraints.MaxWidth := W;
-    End;
+  ApplyHostWidth;
   If Assigned(FBoundTrace) Then
     OrderFrames(FBoundTrace);
   ApplyScrollRange(False);
@@ -990,11 +1044,7 @@ Begin
       TraceScroll.AutoScroll := False;
       TraceScroll.HorzScrollBar.Range := 0;
     End;
-  If Assigned(TraceHost) Then
-    Begin
-      TraceHost.Left := 0;
-      TraceHost.Top := 0;
-    End;
+  ApplyHostWidth;
   If Assigned(Trace) Then
     For I := 0 To Trace.Count - 1 Do
       Try
