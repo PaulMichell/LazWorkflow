@@ -41,6 +41,8 @@ Type
     Procedure SelectAllItemClick(Sender: TObject);
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
+    Function ContentWidth: Integer;
+    Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String);
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
@@ -299,20 +301,65 @@ Begin
     Exit;
   If Memo.Text <> SourceText Then
     Memo.Text := SourceText;
-  MaxW := 0;
-  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 80) Then
-    MaxW := TraceScroll.ClientWidth - (CardInnerPad * 4)
-  Else If Assigned(TraceHost) And (TraceHost.ClientWidth > 80) Then
-    MaxW := TraceHost.ClientWidth - (CardInnerPad * 4);
+  MaxW := ContentWidth;
+  Memo.AutoSize := False;
   Memo.Constraints.MinHeight := 0;
   Memo.Constraints.MaxHeight := 0;
   If MaxW < 80 Then
     Exit;
-  Memo.AutoSize := False;
   Memo.Width := MaxW;
   H := WrappedTextHeight(Memo.Font, SourceText, MaxW);
+  { GTK TMemo preferred height is several lines; lock to the wrapped text. }
+  Memo.Constraints.MinHeight := H;
+  Memo.Constraints.MaxHeight := H;
   Memo.Height := H;
   Memo.ScrollBars := ssNone;
+End;
+
+Function TAssistantTraceView.ContentWidth: Integer;
+Begin
+  Result := 0;
+  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 80) Then
+    Result := TraceScroll.ClientWidth - (CardInnerPad * 4)
+  Else If Assigned(TraceHost) And (TraceHost.ClientWidth > 80) Then
+    Result := TraceHost.ClientWidth - (CardInnerPad * 4);
+End;
+
+Procedure TAssistantTraceView.SizeMarkdownView(View: TMarkDownControl; Const Body: String);
+Var
+  PrefW, PrefH, MaxW: Integer;
+Begin
+  If Not Assigned(View) Then
+    Exit;
+  Try
+    If View.MarkDown.Text <> Body Then
+      Begin
+        View.MarkDown.BeginUpdate;
+        Try
+          View.MarkDown.Text := Body;
+        Finally
+          View.MarkDown.EndUpdate;
+        End;
+      End;
+    MaxW := ContentWidth;
+    If MaxW < 80 Then
+      MaxW := View.Width;
+    If MaxW < 80 Then
+      Exit;
+    View.AutoSize := False;
+    View.Width := MaxW;
+    View.CalcLayout;
+    PrefW := 0;
+    PrefH := 0;
+    View.GetPreferredSize(PrefW, PrefH);
+    If PrefH < LineHeightPx Then
+      PrefH := LineHeightPx;
+    View.Constraints.MinHeight := PrefH;
+    View.Constraints.MaxHeight := PrefH;
+    View.Height := PrefH;
+  Except
+    View.Height := LineHeightPx * 2;
+  End;
 End;
 
 Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer): String;
@@ -442,12 +489,12 @@ Procedure TAssistantTraceView.BindThinking(Block: TTraceBlock);
 Var
   Panel: TPanel;
   Header: TLabel;
-  Body: TMemo;
+  View: TMarkDownControl;
   Child: TControl;
   Display: String;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If NamedChild(TPanel(Block.Frame), 'BodyMemo') = Nil Then
+    If NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -464,8 +511,19 @@ Begin
       Header.Font.Style := [fsBold];
       Header.Font.Color := clGrayText;
       Header.Name := 'HeaderLabel';
-      Body := MakeSelectableMemo(Panel, 'BodyMemo', True, True);
-      Body.Color := clForm;
+      View := TMarkDownControl.Create(Panel);
+      View.Parent := Panel;
+      View.Align := alNone;
+      View.Anchors := [akLeft, akTop];
+      View.Name := 'ThoughtView';
+      View.AutoSize := False;
+      View.Color := clForm;
+      View.ParentColor := False;
+      View.ParentBackground := False;
+      View.ScrollBars := ssNone;
+      View.FontColor := clGrayText;
+      View.FontQuoteColor := clGrayText;
+      View.MonoFontName := 'Monospace';
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
@@ -479,16 +537,15 @@ Begin
     Display := LastLines(Block.Body, FTruncatedLines)
   Else
     Display := Block.Body;
-  Child := NamedChild(Panel, 'BodyMemo');
-  If Child Is TMemo Then
+  Child := NamedChild(Panel, 'ThoughtView');
+  If Child Is TMarkDownControl Then
     Begin
-      BindSelectableMemo(TMemo(Child), Display);
-      TMemo(Child).Visible := FShowThinking;
+      View := TMarkDownControl(Child);
+      SizeMarkdownView(View, Display);
+      View.Visible := FShowThinking;
     End;
   { Hide Thinking drops thought bodies; a running card keeps the timer line. }
   Panel.Visible := FShowThinking Or Block.Running;
-  If Assigned(TraceHost) And (TraceHost.ClientWidth > 32) Then
-    Panel.Width := TraceHost.ClientWidth;
   Panel.AutoSize := True;
 End;
 
@@ -552,7 +609,6 @@ Var
   Title: TLabel;
   View: TMarkDownControl;
   Child: TControl;
-  PrefW, PrefH: Integer;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
     If NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil Then
@@ -597,33 +653,7 @@ Begin
     End;
   Child := NamedChild(Panel, 'AnswerView');
   If Child Is TMarkDownControl Then
-    Begin
-      View := TMarkDownControl(Child);
-      Try
-        If View.MarkDown.Text <> Block.Body Then
-          Begin
-            View.MarkDown.BeginUpdate;
-            Try
-              View.MarkDown.Text := Block.Body;
-            Finally
-              View.MarkDown.EndUpdate;
-            End;
-          End;
-        If Assigned(TraceHost) And (TraceHost.ClientWidth > 40) Then
-          View.Width := TraceHost.ClientWidth - (CardInnerPad * 4)
-        Else If Panel.ClientWidth > 0 Then
-          View.Width := Panel.ClientWidth;
-        View.CalcLayout;
-        PrefW := 0;
-        PrefH := 0;
-        View.GetPreferredSize(PrefW, PrefH);
-        If PrefH < LineHeightPx Then
-          PrefH := LineHeightPx;
-        View.Height := PrefH;
-      Except
-        View.Height := LineHeightPx * 2;
-      End;
-    End;
+    SizeMarkdownView(TMarkDownControl(Child), Block.Body);
   Panel.Visible := Block.Body <> '';
 End;
 
