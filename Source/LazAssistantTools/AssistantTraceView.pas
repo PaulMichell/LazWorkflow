@@ -152,8 +152,11 @@ Begin
     Begin
       TraceHost.Color := clWindow;
       { alTop inside a GTK scrollbox can cap height to the viewport, so later
-        cards are laid out but the range never grows. Size the host ourselves. }
+        cards are laid out but the range never grows. Size the host ourselves.
+        AutoSize must stay off: with Align=alNone it also shrinks the width to
+        short titles such as Thinking. }
       TraceHost.Align := alNone;
+      TraceHost.AutoSize := False;
       TraceHost.Left := 0;
       TraceHost.Top := 0;
       ApplyVerticalStack(TraceHost, False);
@@ -280,6 +283,9 @@ End;
 Procedure TAssistantTraceView.Resize;
 Begin
   Inherited Resize;
+  If Assigned(TraceHost) And Assigned(TraceScroll) And (TraceScroll.ClientWidth > 0) Then
+    If TraceHost.Width <> TraceScroll.ClientWidth Then
+      FitHostToContent;
   RelayoutIfWidthChanged;
 End;
 
@@ -828,8 +834,16 @@ Begin
     W := TraceScroll.ClientWidth;
   If W < 1 Then
     W := TraceHost.Width;
-  If (W > 0) And (TraceHost.Width <> W) Then
-    TraceHost.Width := W;
+  TraceHost.AutoSize := False;
+  If W > 0 Then
+    Begin
+      TraceHost.Constraints.MinWidth := 0;
+      TraceHost.Constraints.MaxWidth := 0;
+      If TraceHost.Width <> W Then
+        TraceHost.Width := W;
+      TraceHost.Constraints.MinWidth := W;
+      TraceHost.Constraints.MaxWidth := W;
+    End;
   TraceHost.InvalidatePreferredSize;
   PrefW := 0;
   PrefH := 0;
@@ -856,15 +870,12 @@ Begin
 End;
 
 Procedure TAssistantTraceView.ResetFrames;
-Var
-  WasAuto: Boolean;
 Begin
   If Assigned(FBoundTrace) Then
     FBoundTrace.NilFrames;
   FLastContentWidth := 0;
   If Not Assigned(TraceHost) Then
     Exit;
-  WasAuto := TraceHost.AutoSize;
   TraceHost.AutoSize := False;
   TraceHost.ChildSizing.Layout := cclNone;
   Try
@@ -872,7 +883,7 @@ Begin
       TraceHost.Controls[0].Free;
   Finally
     ApplyVerticalStack(TraceHost, False);
-    TraceHost.AutoSize := WasAuto;
+    TraceHost.AutoSize := False;
   End;
 End;
 

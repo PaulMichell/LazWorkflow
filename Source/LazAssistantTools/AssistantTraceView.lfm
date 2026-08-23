@@ -22,8 +22,8 @@ object AssistantTraceView: TAssistantTraceView
       Height = 8
       Top = 0
       Width = 480
-      Align = alTop
-      AutoSize = True
+      Align = alNone
+      AutoSize = False
       BevelOuter = bvNone
       ChildSizing.LeftRightSpacing = 8
       ChildSizing.TopBottomSpacing = 8
