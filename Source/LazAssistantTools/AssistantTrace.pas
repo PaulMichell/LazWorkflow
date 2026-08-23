@@ -66,6 +66,11 @@ Type
     Property Blocks[Index: Integer]: TTraceBlock Read GetBlock; Default;
   End;
 
+{ Slice LiveText from 1-based StartAt. Past-the-end yields '' and leaves StartAt
+  so the same loop cannot reopen an answer under a tool. The next loop must set
+  StartAt := 1 (aekLoopStarted). }
+Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
+
 Function FormatThoughtElapsed(DurationMs: Integer): String;
 Function FormatThinkingClock(DurationMs: Integer): String;
 Function FormatThoughtFooter(DurationMs: Integer): String;
@@ -366,6 +371,16 @@ Begin
       If Block.Kind = tbkThinking Then
         Result := Result + Block.DurationMs;
     End;
+End;
+
+Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
+Begin
+  If StartAt < 1 Then
+    StartAt := 1;
+  If Length(LiveText) >= StartAt Then
+    Result := Copy(LiveText, StartAt, MaxInt)
+  Else
+    Result := '';
 End;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;

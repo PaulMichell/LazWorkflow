@@ -147,6 +147,23 @@ Begin
   End;
 End;
 
+Procedure TestLiveChannelSlice;
+Var
+  StartAt: Integer;
+Begin
+  StartAt := 1;
+  Check('first loop whole', SliceLiveChannel('hello', StartAt) = 'hello');
+  StartAt := Length('I will review this project.') + 1;
+  Check('same loop after tool is empty', SliceLiveChannel('I will review this project.', StartAt) = '');
+  Check('start stays past end when empty', StartAt > Length('I will review this project.'));
+  { New loop must reset StartAt; slicing alone must not reopen the previous body. }
+  Check('stale start does not steal a shorter loop', SliceLiveChannel('Here is the review.', StartAt) = '');
+  StartAt := 1;
+  Check('new loop after reset', SliceLiveChannel('Here is the review.', StartAt) = 'Here is the review.');
+  StartAt := 0;
+  Check('zero start', SliceLiveChannel('ab', StartAt) = 'ab');
+End;
+
 Begin
   FailCount := 0;
   TestBlocks;
@@ -154,6 +171,7 @@ Begin
   TestEventOrder;
   TestElapsed;
   TestFooters;
+  TestLiveChannelSlice;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantTrace tests passed.');

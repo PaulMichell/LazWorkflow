@@ -51,6 +51,8 @@ Type
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
+    Function HostedContentHeight: Integer;
+    Procedure ApplyScrollRange(KeepBottom: Boolean);
     Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
     Procedure LockControlHeight(Control: TControl; NewHeight: Integer);
@@ -145,8 +147,11 @@ Begin
     Begin
       TraceScroll.Color := clWindow;
       TraceScroll.ParentBackground := False;
-      TraceScroll.AutoScroll := True;
+      { AutoScroll on GTK uses child Top values that already include the scroll
+        offset, which inflates Range and leaves a blank band above the cards. }
+      TraceScroll.AutoScroll := False;
       TraceScroll.HorzScrollBar.Visible := False;
+      TraceScroll.HorzScrollBar.Range := 0;
     End;
   If Assigned(TraceHost) Then
     Begin
@@ -154,12 +159,13 @@ Begin
       { alTop inside a GTK scrollbox can cap height to the viewport, so later
         cards are laid out but the range never grows. Size the host ourselves.
         AutoSize must stay off: with Align=alNone it also shrinks the width to
-        short titles such as Thinking. }
+        short titles such as Thinking. ChildSizing is also off: we stack cards
+        by SetBounds so scroll offset cannot leak into Top. }
       TraceHost.Align := alNone;
       TraceHost.AutoSize := False;
       TraceHost.Left := 0;
       TraceHost.Top := 0;
-      ApplyVerticalStack(TraceHost, False);
+      TraceHost.ChildSizing.Layout := cclNone;
     End;
   If Assigned(EmptyLabel) Then
     Begin
@@ -273,11 +279,45 @@ Begin
 End;
 
 Procedure TAssistantTraceView.OrderFrames(Trace: TAssistantTrace);
+Var
+  I, Y, Gap, LeftPad, InnerW: Integer;
+  Card: TControl;
+  Block: TTraceBlock;
 Begin
-  { Cards are created in event order. Re-parenting on every sync inflates the
-    scroll range on GTK and leaves a blank band at the top of the conversation. }
-  If Not Assigned(Trace) Then
+  { Position in trace order with SetBounds. Re-parenting or ChildSizing while
+    scrolled inflates the GTK range and parks a blank band above the user card. }
+  If (Not Assigned(Trace)) Or (Not Assigned(TraceHost)) Then
     Exit;
+  LeftPad := CardInnerPad;
+  Gap := LineHeightPx Div 2;
+  If Gap < 6 Then
+    Gap := 8;
+  InnerW := TraceHost.Width - (LeftPad * 2);
+  If InnerW < 40 Then
+    InnerW := TraceHost.Width;
+  If InnerW < 1 Then
+    InnerW := 1;
+  Y := CardInnerPad;
+  For I := 0 To Trace.Count - 1 Do
+    Begin
+      Block := Trace[I];
+      If (Not Assigned(Block)) Or (Not Assigned(Block.Frame)) Then
+        Continue;
+      If Not (Block.Frame Is TControl) Then
+        Continue;
+      Card := TControl(Block.Frame);
+      If Not Card.Visible Then
+        Continue;
+      Card.Align := alNone;
+      Card.Anchors := [akLeft, akTop];
+      If (Card Is TWinControl) And TWinControl(Card).AutoSize Then
+        Begin
+          TWinControl(Card).InvalidatePreferredSize;
+          TWinControl(Card).AdjustSize;
+        End;
+      Card.SetBounds(LeftPad, Y, InnerW, Card.Height);
+      Inc(Y, Card.Height + Gap);
+    End;
 End;
 
 Procedure TAssistantTraceView.Resize;
@@ -823,9 +863,60 @@ Begin
   End;
 End;
 
+Function TAssistantTraceView.HostedContentHeight: Integer;
+Var
+  I, Bottom: Integer;
+  Card: TControl;
+Begin
+  Result := CardInnerPad;
+  If Not Assigned(TraceHost) Then
+    Exit;
+  Bottom := 0;
+  For I := 0 To TraceHost.ControlCount - 1 Do
+    Begin
+      Card := TraceHost.Controls[I];
+      If (Not Assigned(Card)) Or (Not Card.Visible) Then
+        Continue;
+      If Card.Top + Card.Height > Bottom Then
+        Bottom := Card.Top + Card.Height;
+    End;
+  If Bottom > 0 Then
+    Result := Bottom + CardInnerPad;
+  If Result < 1 Then
+    Result := 1;
+End;
+
+Procedure TAssistantTraceView.ApplyScrollRange(KeepBottom: Boolean);
+Var
+  MaxPos, NewH, Page: Integer;
+Begin
+  If (Not Assigned(TraceScroll)) Or (Not Assigned(TraceHost)) Then
+    Exit;
+  TraceHost.Left := 0;
+  TraceHost.Top := 0;
+  NewH := HostedContentHeight;
+  If TraceHost.Height <> NewH Then
+    TraceHost.Height := NewH;
+  Page := TraceScroll.ClientHeight;
+  If Page < 1 Then
+    Page := 1;
+  TraceScroll.HorzScrollBar.Range := 0;
+  TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
+  TraceScroll.HorzScrollBar.Position := 0;
+  TraceScroll.VertScrollBar.Range := NewH;
+  TraceScroll.VertScrollBar.Page := Page;
+  MaxPos := NewH - Page;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  If KeepBottom Then
+    TraceScroll.VertScrollBar.Position := MaxPos
+  Else If TraceScroll.VertScrollBar.Position > MaxPos Then
+    TraceScroll.VertScrollBar.Position := MaxPos;
+End;
+
 Procedure TAssistantTraceView.FitHostToContent;
 Var
-  PrefW, PrefH, W: Integer;
+  W: Integer;
 Begin
   If Not Assigned(TraceHost) Then
     Exit;
@@ -835,6 +926,8 @@ Begin
   If W < 1 Then
     W := TraceHost.Width;
   TraceHost.AutoSize := False;
+  TraceHost.Left := 0;
+  TraceHost.Top := 0;
   If W > 0 Then
     Begin
       TraceHost.Constraints.MinWidth := 0;
@@ -844,29 +937,17 @@ Begin
       TraceHost.Constraints.MinWidth := W;
       TraceHost.Constraints.MaxWidth := W;
     End;
-  TraceHost.InvalidatePreferredSize;
-  PrefW := 0;
-  PrefH := 0;
-  TraceHost.GetPreferredSize(PrefW, PrefH);
-  If PrefH < 1 Then
-    PrefH := 1;
-  If TraceHost.Height <> PrefH Then
-    TraceHost.Height := PrefH;
+  If Assigned(FBoundTrace) Then
+    OrderFrames(FBoundTrace);
+  ApplyScrollRange(False);
 End;
 
 Procedure TAssistantTraceView.ScrollToEnd;
-Var
-  MaxPos: Integer;
 Begin
   If Not Assigned(TraceScroll) Then
     Exit;
   FitHostToContent;
-  MaxPos := TraceHost.Height - TraceScroll.ClientHeight;
-  If MaxPos < 0 Then
-    MaxPos := 0;
-  TraceScroll.VertScrollBar.Range := TraceHost.Height;
-  TraceScroll.VertScrollBar.Page := TraceScroll.ClientHeight;
-  TraceScroll.VertScrollBar.Position := MaxPos;
+  ApplyScrollRange(True);
 End;
 
 Procedure TAssistantTraceView.ResetFrames;
@@ -882,7 +963,9 @@ Begin
     While TraceHost.ControlCount > 0 Do
       TraceHost.Controls[0].Free;
   Finally
-    ApplyVerticalStack(TraceHost, False);
+    TraceHost.ChildSizing.Layout := cclNone;
+    TraceHost.Left := 0;
+    TraceHost.Top := 0;
     TraceHost.AutoSize := False;
   End;
 End;
@@ -902,6 +985,16 @@ Begin
     TraceScroll.Visible := Not Empty;
   If Empty Then
     Exit;
+  If Assigned(TraceScroll) Then
+    Begin
+      TraceScroll.AutoScroll := False;
+      TraceScroll.HorzScrollBar.Range := 0;
+    End;
+  If Assigned(TraceHost) Then
+    Begin
+      TraceHost.Left := 0;
+      TraceHost.Top := 0;
+    End;
   If Assigned(Trace) Then
     For I := 0 To Trace.Count - 1 Do
       Try

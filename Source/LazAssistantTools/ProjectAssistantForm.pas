@@ -2653,12 +2653,9 @@ Var
 Begin
   If Not Assigned(FTrace) Then
     Exit;
-  If FAnswerSliceStart < 1 Then
-    FAnswerSliceStart := 1;
-  If Length(FLiveContent) >= FAnswerSliceStart Then
-    Slice := Copy(FLiveContent, FAnswerSliceStart, MaxInt)
-  Else
-    Slice := '';
+  Slice := SliceLiveChannel(FLiveContent, FAnswerSliceStart);
+  If Slice = '' Then
+    Exit;
   Last := Nil;
   If FTrace.Count > 0 Then
     Last := FTrace[FTrace.Count - 1];
@@ -2666,7 +2663,7 @@ Begin
     Exit;
   If Assigned(Last) And (Last.Kind = tbkAnswer) Then
     Last.Body := Slice
-  Else If Slice <> '' Then
+  Else
     FTrace.EnsureAnswer.Body := Slice;
 End;
 
@@ -2682,6 +2679,8 @@ Begin
     Case Event.Kind Of
     aekLoopStarted:
       Begin
+        { Content snapshots are per loop; thinking snapshots stay cumulative. }
+        FAnswerSliceStart := 1;
         Block := FTrace.CurrentRunningThinking;
         If Assigned(Block) Then
           Block.LoopIndex := Event.LoopIndex
@@ -2694,7 +2693,8 @@ Begin
     aekToolStarted:
       Begin
         FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
-        { Freeze the current answer; later tokens open a new card after the tool. }
+        { Ignore further snapshots of this loop's content so they do not open a
+          duplicate answer under the tool. The next loop resets the start to 1. }
         FAnswerSliceStart := Length(FLiveContent) + 1;
       End;
     aekToolCompleted:
