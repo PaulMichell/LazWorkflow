@@ -22,6 +22,8 @@ Type
     FTruncatedLines: Integer;
     FBoundTrace: TAssistantTrace;
     FCopyPopup: TPopupMenu;
+    FLastContentWidth: Integer;
+    FRelayouting: Boolean;
     Procedure SetShowThinking(Value: Boolean);
     Function LineHeightPx: Integer;
     Procedure ApplyVerticalStack(Host: TWinControl; Inner: Boolean);
@@ -45,6 +47,9 @@ Type
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
+    Procedure RelayoutIfWidthChanged;
+  Protected
+    Procedure Resize; Override;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -87,6 +92,10 @@ Begin
       MaxW := View.Width;
     If MaxW < 80 Then
       Exit;
+    If (Not View.HandleAllocated) And Assigned(View.Parent) And View.Parent.HandleAllocated Then
+      View.HandleNeeded;
+    If Not View.HandleAllocated Then
+      Exit;
     View.AutoSize := False;
     View.Width := MaxW;
     View.CalcLayout;
@@ -111,6 +120,8 @@ Begin
   FTruncatedLines := TruncatedLineCount;
   FBoundTrace := Nil;
   FCopyPopup := Nil;
+  FLastContentWidth := 0;
+  FRelayouting := False;
   Color := clWindow;
   If Assigned(TraceScroll) Then
     Begin
@@ -221,6 +232,36 @@ Begin
     scroll range on GTK and leaves a blank band at the top of the conversation. }
   If Not Assigned(Trace) Then
     Exit;
+End;
+
+Procedure TAssistantTraceView.Resize;
+Begin
+  Inherited Resize;
+  RelayoutIfWidthChanged;
+End;
+
+Procedure TAssistantTraceView.RelayoutIfWidthChanged;
+Var
+  W: Integer;
+Begin
+  If FRelayouting Then
+    Exit;
+  If csDestroying In ComponentState Then
+    Exit;
+  If Not Assigned(FBoundTrace) Then
+    Exit;
+  W := ContentWidth;
+  If W < 80 Then
+    Exit;
+  If Abs(W - FLastContentWidth) < 12 Then
+    Exit;
+  FRelayouting := True;
+  Try
+    FLastContentWidth := W;
+    Sync(FBoundTrace, False);
+  Finally
+    FRelayouting := False;
+  End;
 End;
 
 Procedure TAssistantTraceView.SetShowThinking(Value: Boolean);
@@ -699,6 +740,7 @@ Var
 Begin
   If Assigned(FBoundTrace) Then
     FBoundTrace.NilFrames;
+  FLastContentWidth := 0;
   If Not Assigned(TraceHost) Then
     Exit;
   WasAuto := TraceHost.AutoSize;
@@ -735,6 +777,8 @@ Begin
       Except
       End;
   OrderFrames(Trace);
+  If ContentWidth >= 80 Then
+    FLastContentWidth := ContentWidth;
   If ScrollBottom Then
     ScrollToEnd;
 End;
