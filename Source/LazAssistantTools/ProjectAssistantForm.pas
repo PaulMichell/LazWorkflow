@@ -136,6 +136,7 @@ Type
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FTrace: TAssistantTrace;
+    FHistoryTrace: TAssistantTrace;
     FTraceView: TAssistantTraceView;
     FRefreshingChat: Boolean;
     FIgnoreConversationListChange: Boolean;
@@ -340,6 +341,7 @@ Begin
   FSessionProjectKey := '';
   ChatView := Nil;
   FTrace := TAssistantTrace.Create;
+  FHistoryTrace := TAssistantTrace.Create;
   FTraceView := Nil;
   FThinkingSliceStart := 1;
   FHistoryUpdating := False;
@@ -374,6 +376,7 @@ Begin
   FreeAndNil(HistoryIds);
   FreeAndNil(CodeSections);
   FreeAndNil(FTrace);
+  FreeAndNil(FHistoryTrace);
   Inherited Destroy;
 End;
 
@@ -2152,10 +2155,10 @@ Begin
   If Assigned(FTraceView) Then
     Begin
       FTraceView.ShowThinking := FShowThinking;
-      FTraceView.Streaming := FStreamingActive And FViewingLive;
-      FTraceView.StreamStartedAt := StreamStart;
-      If Assigned(FTrace) Then
+      If FViewingLive Then
         FTraceView.Sync(FTrace, False)
+      Else If Assigned(FHistoryTrace) Then
+        FTraceView.Sync(FHistoryTrace, False)
       Else
         RefreshChatDisplay(True);
     End
@@ -2190,12 +2193,8 @@ Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   If FSending And (FStatusPhase <> '') Then
     StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
-  If FSending And Assigned(FTraceView) And Assigned(FTrace) Then
-    Begin
-      FTraceView.Streaming := FStreamingActive And FViewingLive;
-      FTraceView.StreamStartedAt := StreamStart;
-      FTraceView.RefreshElapsed(FTrace);
-    End;
+  If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
+    FTraceView.RefreshElapsed(FTrace);
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -2525,28 +2524,35 @@ End;
 Procedure TProjectAssistantForm.RebuildTraceFromFields;
 Var
   Block: TTraceBlock;
+  Last: TTraceBlock;
 Begin
-  If Not Assigned(FTrace) Then
-    Exit;
+  If Not Assigned(FHistoryTrace) Then
+    FHistoryTrace := TAssistantTrace.Create;
   If Assigned(FTraceView) Then
     FTraceView.ResetFrames;
-  FTrace.Clear;
-  FTrace.EnsureUser(FDisplayUser);
+  FHistoryTrace.Clear;
+  FHistoryTrace.EnsureUser(FDisplayUser);
   If FAssistantThinking <> '' Then
     Begin
-      Block := FTrace.StartThinking(0);
+      Block := FHistoryTrace.StartThinking(0);
       Block.Body := FAssistantThinking;
-      FTrace.FinishCurrentThinking;
+      FHistoryTrace.FinishCurrentThinking;
     End;
   If FAssistantContent <> '' Then
-    FTrace.EnsureAnswer.Body := FAssistantContent;
+    FHistoryTrace.EnsureAnswer.Body := FAssistantContent;
   If FDisplaySystemNote <> '' Then
-    FTrace.AddNote(FDisplaySystemNote);
+    Begin
+      Last := Nil;
+      If FHistoryTrace.Count > 0 Then
+        Last := FHistoryTrace[FHistoryTrace.Count - 1];
+      If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> FDisplaySystemNote) Then
+        FHistoryTrace.AddNote(FDisplaySystemNote);
+    End;
 End;
 
 Procedure TProjectAssistantForm.ApplyLiveThinkingAndAnswer;
 Var
-  Block: TTraceBlock;
+  Block, Last: TTraceBlock;
   Slice: String;
 Begin
   If Not Assigned(FTrace) Then
@@ -2555,21 +2561,32 @@ Begin
     FTrace.EnsureUser(FLiveUser)
   Else If FDisplayUser <> '' Then
     FTrace.EnsureUser(FDisplayUser);
-  Block := FTrace.CurrentRunningThinking;
   If FThinkingSliceStart < 1 Then
     FThinkingSliceStart := 1;
   If Length(FLiveThinking) >= FThinkingSliceStart Then
     Slice := Copy(FLiveThinking, FThinkingSliceStart, MaxInt)
   Else
     Slice := '';
-  If Slice <> '' Then
+  Block := FTrace.CurrentRunningThinking;
+  If Assigned(Block) Then
     Begin
-      If Not Assigned(Block) Then
-        Block := FTrace.StartThinking(0);
+      If Slice <> '' Then
+        Block.Body := Slice;
+    End
+  Else If FStreamingActive And (Slice <> '') Then
+    Begin
+      Block := FTrace.StartThinking(0);
       Block.Body := Slice;
     End;
-  If FLiveContent <> '' Then
-    FTrace.EnsureAnswer.Body := FLiveContent;
+  Last := Nil;
+  If FTrace.Count > 0 Then
+    Last := FTrace[FTrace.Count - 1];
+  If (FLiveContent <> '') And (Not (Assigned(Last) And (Last.Kind = tbkNote))) Then
+    Begin
+      FTrace.EnsureAnswer.Body := FLiveContent;
+      If FThinkingSliceStart <= Length(FLiveThinking) Then
+        FThinkingSliceStart := Length(FLiveThinking) + 1;
+    End;
 End;
 
 Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
@@ -2584,8 +2601,14 @@ Begin
     Case Event.Kind Of
     aekLoopStarted:
       Begin
-        FThinkingSliceStart := Length(FLiveThinking) + 1;
-        FTrace.StartThinking(Event.LoopIndex);
+        Block := FTrace.CurrentRunningThinking;
+        If Assigned(Block) Then
+          Block.LoopIndex := Event.LoopIndex
+        Else
+          Begin
+            FThinkingSliceStart := Length(FLiveThinking) + 1;
+            FTrace.StartThinking(Event.LoopIndex);
+          End;
       End;
     aekToolStarted:
       FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
@@ -2650,16 +2673,17 @@ Begin
   FRefreshingChat := True;
   Try
     Try
-      If FViewingLive And (FStreamingActive Or (FTrace.Count > 0)) Then
+      If FViewingLive Then
         ApplyLiveThinkingAndAnswer
       Else
         RebuildTraceFromFields;
       If Assigned(FTraceView) Then
         Begin
           FTraceView.ShowThinking := FShowThinking;
-          FTraceView.Streaming := FStreamingActive And FViewingLive;
-          FTraceView.StreamStartedAt := StreamStart;
-          FTraceView.Sync(FTrace, ScrollToBottom);
+          If FViewingLive Then
+            FTraceView.Sync(FTrace, ScrollToBottom)
+          Else
+            FTraceView.Sync(FHistoryTrace, ScrollToBottom);
         End;
     Except
       On E: Exception Do
@@ -3021,6 +3045,12 @@ Begin
   FStreamingActive := False;
   RecordCurrentTurn('cancelled');
   FViewingLive := True;
+  If Assigned(FTrace) Then
+    Begin
+      FTrace.FinishCurrentThinking;
+      If FDisplaySystemNote <> '' Then
+        FTrace.AddNote(FDisplaySystemNote);
+    End;
   UnlockModeAfterSend;
   SetSending(False);
   FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;

@@ -263,7 +263,6 @@ Function TAssistantTrace.EnsureAnswer: TTraceBlock;
 Var
   Last: TTraceBlock;
 Begin
-  FinishCurrentThinking;
   If FBlocks.Count > 0 Then
     Begin
       Last := TTraceBlock(FBlocks[FBlocks.Count - 1]);
@@ -273,6 +272,7 @@ Begin
           Exit;
         End;
     End;
+  FinishCurrentThinking;
   Result := AddBlock(tbkAnswer);
   Result.Title := 'Assistant';
 End;
@@ -318,7 +318,10 @@ Begin
     Begin
       Block := TTraceBlock(FBlocks[I]);
       If (Block.Kind = tbkThinking) And Block.Running And (Block.StartedAt > 0) Then
-        Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
+        Begin
+          Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
+          Block.Title := ThinkingCardTitle(Block.DurationMs, True);
+        End;
       If (Block.Kind = tbkTool) And Block.Running And (Block.StartedAt > 0) Then
         Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
     End;
@@ -350,7 +353,7 @@ End;
 Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Begin
   If Running Then
-    Result := 'Thinking'
+    Result := 'Thinking… ' + FormatThinkingClock(DurationMs)
   Else If DurationMs > 0 Then
     Result := 'Thinking  ' + FormatThoughtElapsed(DurationMs)
   Else

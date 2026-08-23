@@ -21,13 +21,8 @@ Type
     FShowThinking: Boolean;
     FTruncatedLines: Integer;
     FBoundTrace: TAssistantTrace;
-    FStreaming: Boolean;
-    FStreamStartedAt: TDateTime;
-    FLivePanel: TPanel;
-    FLiveClock: TMemo;
     FCopyPopup: TPopupMenu;
     Procedure SetShowThinking(Value: Boolean);
-    Procedure SetStreaming(Value: Boolean);
     Function LineHeightPx: Integer;
     Procedure ApplyVerticalStack(Host: TWinControl; Inner: Boolean);
     Procedure InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
@@ -47,8 +42,6 @@ Type
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
-    Procedure EnsureLiveBar;
-    Procedure BindLiveBar;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
   Public
@@ -58,8 +51,6 @@ Type
     Procedure Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
     Procedure RefreshElapsed(Trace: TAssistantTrace);
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
-    Property Streaming: Boolean Read FStreaming Write SetStreaming;
-    Property StreamStartedAt: TDateTime Read FStreamStartedAt Write FStreamStartedAt;
   End;
 
 Implementation
@@ -67,7 +58,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Clipbrd, DateUtils, LCLIntf, LCLType, MarkDown.Control;
+  Clipbrd, LCLIntf, LCLType, MarkDown.Control;
 
 Const
   HeaderHeight = 26;
@@ -82,10 +73,6 @@ Begin
   FShowThinking := True;
   FTruncatedLines := TruncatedLineCount;
   FBoundTrace := Nil;
-  FStreaming := False;
-  FStreamStartedAt := 0;
-  FLivePanel := Nil;
-  FLiveClock := Nil;
   FCopyPopup := Nil;
   Color := clWindow;
   If Assigned(TraceScroll) Then
@@ -110,8 +97,6 @@ End;
 
 Destructor TAssistantTraceView.Destroy;
 Begin
-  FLivePanel := Nil;
-  FLiveClock := Nil;
   If Assigned(FCopyPopup) Then
     FreeAndNil(FCopyPopup);
   Inherited Destroy;
@@ -194,40 +179,11 @@ Begin
 End;
 
 Procedure TAssistantTraceView.OrderFrames(Trace: TAssistantTrace);
-Var
-  I, Wanted: Integer;
-  Hosted: TControl;
 Begin
-  If Not Assigned(TraceHost) Then
+  { Cards are created in event order. Re-parenting on every sync inflates the
+    scroll range on GTK and leaves a blank band at the top of the conversation. }
+  If Not Assigned(Trace) Then
     Exit;
-  Wanted := 0;
-  If Assigned(Trace) Then
-  For I := 0 To Trace.Count - 1 Do
-    Begin
-      If Not Assigned(Trace[I].Frame) Then
-        Continue;
-      If Not (Trace[I].Frame Is TControl) Then
-        Continue;
-      Hosted := TControl(Trace[I].Frame);
-      If Hosted.Parent <> TraceHost Then
-        Continue;
-      If Not Hosted.Visible Then
-        Continue;
-      If (Wanted >= TraceHost.ControlCount) Or (TraceHost.Controls[Wanted] <> Hosted) Then
-        Begin
-          TraceHost.RemoveControl(Hosted);
-          TraceHost.InsertControl(Hosted, Wanted);
-        End;
-      Inc(Wanted);
-    End;
-  If Assigned(FLivePanel) And FLivePanel.Visible And (FLivePanel.Parent = TraceHost) Then
-    Begin
-      If (Wanted >= TraceHost.ControlCount) Or (TraceHost.Controls[Wanted] <> FLivePanel) Then
-        Begin
-          TraceHost.RemoveControl(FLivePanel);
-          TraceHost.InsertControl(FLivePanel, Wanted);
-        End;
-    End;
 End;
 
 Procedure TAssistantTraceView.SetShowThinking(Value: Boolean);
@@ -235,11 +191,6 @@ Begin
   If FShowThinking = Value Then
     Exit;
   FShowThinking := Value;
-End;
-
-Procedure TAssistantTraceView.SetStreaming(Value: Boolean);
-Begin
-  FStreaming := Value;
 End;
 
 Procedure TAssistantTraceView.EnsureCopyPopup;
@@ -349,15 +300,17 @@ Begin
   If Memo.Text <> SourceText Then
     Memo.Text := SourceText;
   MaxW := 0;
-  If Assigned(TraceHost) Then
+  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 80) Then
+    MaxW := TraceScroll.ClientWidth - (CardInnerPad * 4)
+  Else If Assigned(TraceHost) And (TraceHost.ClientWidth > 80) Then
     MaxW := TraceHost.ClientWidth - (CardInnerPad * 4);
-  If MaxW < 40 Then
-    MaxW := 40;
+  Memo.Constraints.MinHeight := 0;
+  Memo.Constraints.MaxHeight := 0;
+  If MaxW < 80 Then
+    Exit;
   Memo.AutoSize := False;
   Memo.Width := MaxW;
   H := WrappedTextHeight(Memo.Font, SourceText, MaxW);
-  Memo.Constraints.MinHeight := H;
-  Memo.Constraints.MaxHeight := H;
   Memo.Height := H;
   Memo.ScrollBars := ssNone;
 End;
@@ -528,9 +481,12 @@ Begin
     Display := Block.Body;
   Child := NamedChild(Panel, 'BodyMemo');
   If Child Is TMemo Then
-    BindSelectableMemo(TMemo(Child), Display);
-  { Hide Thinking drops thought cards; the live bar still shows while the turn runs. }
-  Panel.Visible := FShowThinking;
+    Begin
+      BindSelectableMemo(TMemo(Child), Display);
+      TMemo(Child).Visible := FShowThinking;
+    End;
+  { Hide Thinking drops thought bodies; a running card keeps the timer line. }
+  Panel.Visible := FShowThinking Or Block.Running;
   If Assigned(TraceHost) And (TraceHost.ClientWidth > 32) Then
     Panel.Width := TraceHost.ClientWidth;
   Panel.AutoSize := True;
@@ -676,39 +632,6 @@ Begin
   BindRichCard(Block, clWindowText);
 End;
 
-Procedure TAssistantTraceView.EnsureLiveBar;
-Begin
-  If Assigned(FLivePanel) Then
-    Exit;
-  EnsureCopyPopup;
-  FLivePanel := TPanel.Create(Self);
-  InitHostedPanel(FLivePanel, False, HeaderHeight);
-  FLivePanel.Color := clForm;
-  FLiveClock := MakeSelectableMemo(FLivePanel, 'LiveClock', True, True);
-  FLiveClock.Parent := FLivePanel;
-  FLiveClock.Align := alClient;
-  FLiveClock.Color := clForm;
-  FLiveClock.BorderSpacing.Left := 8;
-  FLivePanel.Visible := False;
-End;
-
-Procedure TAssistantTraceView.BindLiveBar;
-Var
-  ElapsedMs: Integer;
-Begin
-  EnsureLiveBar;
-  If Not Assigned(FLivePanel) Then
-    Exit;
-  FLivePanel.Visible := FStreaming;
-  If Not FStreaming Then
-    Exit;
-  ElapsedMs := 0;
-  If FStreamStartedAt > 0 Then
-    ElapsedMs := MilliSecondsBetween(Now, FStreamStartedAt);
-  If Assigned(FLiveClock) Then
-    FLiveClock.Text := 'Thinking… ' + FormatThinkingClock(ElapsedMs);
-End;
-
 Procedure TAssistantTraceView.EnsureFrame(Block: TTraceBlock);
 Begin
   Case Block.Kind Of
@@ -746,8 +669,6 @@ Var
 Begin
   If Assigned(FBoundTrace) Then
     FBoundTrace.NilFrames;
-  FLivePanel := Nil;
-  FLiveClock := Nil;
   If Not Assigned(TraceHost) Then
     Exit;
   WasAuto := TraceHost.AutoSize;
@@ -770,7 +691,7 @@ Begin
   If Not Assigned(TraceHost) Then
     Exit;
   FBoundTrace := Trace;
-  Empty := ((Not Assigned(Trace)) Or (Trace.Count = 0)) And (Not FStreaming);
+  Empty := (Not Assigned(Trace)) Or (Trace.Count = 0);
   If Assigned(EmptyLabel) Then
     EmptyLabel.Visible := Empty;
   If Assigned(TraceScroll) Then
@@ -783,7 +704,6 @@ Begin
         EnsureFrame(Trace[I]);
       Except
       End;
-  BindLiveBar;
   OrderFrames(Trace);
   If ScrollBottom Then
     ScrollToEnd;
@@ -793,23 +713,25 @@ Procedure TAssistantTraceView.RefreshElapsed(Trace: TAssistantTrace);
 Var
   I: Integer;
   Block: TTraceBlock;
+  Header: TControl;
 Begin
-  If Assigned(Trace) Then
+  If Not Assigned(Trace) Then
+    Exit;
+  Trace.TickElapsed;
+  For I := 0 To Trace.Count - 1 Do
     Begin
-      Trace.TickElapsed;
-      For I := 0 To Trace.Count - 1 Do
+      Block := Trace[I];
+      If (Not Assigned(Block.Frame)) Or (Not (Block.Frame Is TPanel)) Then
+        Continue;
+      If Block.Kind = tbkThinking Then
         Begin
-          Block := Trace[I];
-          If Not Assigned(Block.Frame) Then
-            Continue;
-          If Block.Kind = tbkThinking Then
-            BindThinking(Block)
-          Else If Block.Kind = tbkTool Then
-            BindTool(Block);
-        End;
+          Header := NamedChild(TPanel(Block.Frame), 'HeaderLabel');
+          If Header Is TLabel Then
+            TLabel(Header).Caption := Block.Title;
+        End
+      Else If Block.Kind = tbkTool Then
+        BindTool(Block);
     End;
-  If FStreaming Then
-    BindLiveBar;
 End;
 
 Initialization
