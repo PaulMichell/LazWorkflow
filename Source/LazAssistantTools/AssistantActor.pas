@@ -468,8 +468,8 @@ Begin
             End
           Else
             Begin
-              If (FParser.Thinking <> '') And (Pos(FParser.Thinking, FThinking) = 0) Then
-                AppendThinking(FParser.Thinking);
+              If FParser.Thinking <> '' Then
+                MergeSamplerText(FThinking, FParser.Thinking);
               If (FParser.Content <> '') And (FContent = '') Then
                 FContent := FParser.Content;
               If FParser.EncryptedContent <> '' Then

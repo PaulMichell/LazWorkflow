@@ -162,6 +162,40 @@ Begin
   Check('new loop after reset', SliceLiveChannel('Here is the review.', StartAt) = 'Here is the review.');
   StartAt := 0;
   Check('zero start', SliceLiveChannel('ab', StartAt) = 'ab');
+  StartAt := High(Integer);
+  Check('frozen after tool ignores period', SliceLiveChannel('hello.', StartAt) = '');
+  Check('period is not an answer', Not SliceLooksLikeAnswer('.'));
+  Check('real answer', SliceLooksLikeAnswer('Gathering the main sources'));
+End;
+
+Procedure TestTraceJsonRoundTrip;
+Var
+  Trace: TAssistantTrace;
+  Json: String;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Trace.AddUser('please review');
+    Trace.StartThinking(0).Body := 'Looking at Foo.pas';
+    Trace.FinishCurrentThinking;
+    Trace.AddTool('call_1', 'get_project_info', '{}');
+    Trace.StartThinking(1).Body := 'Now read the units.';
+    Trace.FinishCurrentThinking;
+    Trace.EnsureAnswer.Body := 'Looks fine.';
+    Json := Trace.SaveToJson;
+    Check('json is array', (Length(Json) > 0) And (Json[1] = '['));
+    Check('json one line', Pos(#10, Json) < 1);
+    Trace.LoadFromJson(Json);
+    Check('roundtrip count', Trace.Count = 5);
+    Check('roundtrip user', Trace[0].Kind = tbkUser);
+    Check('roundtrip think 0', (Trace[1].Kind = tbkThinking) And (Pos('Foo.pas', Trace[1].Body) > 0));
+    Check('roundtrip tool', (Trace[2].Kind = tbkTool) And (Trace[2].ToolName = 'get_project_info'));
+    Check('roundtrip think 1', (Trace[3].Kind = tbkThinking) And (Pos('units', Trace[3].Body) > 0));
+    Check('roundtrip answer', (Trace[4].Kind = tbkAnswer) And (Pos('Looks fine', Trace[4].Body) > 0));
+    Check('joined answers', Pos('Looks fine', Trace.JoinedAnswers) > 0);
+  Finally
+    Trace.Free;
+  End;
 End;
 
 Begin
@@ -172,6 +206,7 @@ Begin
   TestElapsed;
   TestFooters;
   TestLiveChannelSlice;
+  TestTraceJsonRoundTrip;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantTrace tests passed.');

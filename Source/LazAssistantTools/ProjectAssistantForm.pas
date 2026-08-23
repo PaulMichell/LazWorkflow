@@ -143,6 +143,7 @@ Type
     FRefreshingChat: Boolean;
     FIgnoreConversationListChange: Boolean;
     FThinkingSliceStart: Integer;
+    FDisplayTraceJson: String;
     FAnswerSliceStart: Integer; { 1-based offset of the current answer block in FLiveContent. }
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
@@ -354,6 +355,7 @@ Begin
   FTraceView := Nil;
   FThinkingSliceStart := 1;
   FAnswerSliceStart := 1;
+  FDisplayTraceJson := '';
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   Transcript := TStringList.Create;
@@ -1745,6 +1747,7 @@ Begin
       FDisplayUser := FLiveUser;
       FAssistantContent := FLiveContent;
       FAssistantThinking := FLiveThinking;
+      FDisplayTraceJson := '';
       FDisplaySystemNote := '';
       FDisplayDurationMs := 0;
       FDisplayThinkingMs := 0;
@@ -1763,6 +1766,7 @@ Begin
   FDisplayUser := Turn.Prompt;
   FAssistantContent := Turn.Response;
   FAssistantThinking := Turn.Thinking;
+  FDisplayTraceJson := Turn.TraceJson;
   FDisplayDurationMs := Turn.DurationMs;
   FDisplayThinkingMs := Turn.ThinkingMs;
   If Turn.ErrorText <> '' Then
@@ -2141,14 +2145,29 @@ Begin
     Turn.Prompt := FLiveUser
   Else
     Turn.Prompt := FDisplayUser;
-  If FLiveThinking <> '' Then
-    Turn.Thinking := FLiveThinking
+  If Assigned(FTrace) And (FTrace.Count > 0) Then
+    Begin
+      Turn.TraceJson := FTrace.SaveToJson;
+      Turn.Thinking := FTrace.JoinedThinking;
+      Turn.Response := FTrace.JoinedAnswers;
+      If Turn.Response = '' Then
+        If FLiveContent <> '' Then
+          Turn.Response := FLiveContent
+        Else
+          Turn.Response := FAssistantContent;
+    End
   Else
-    Turn.Thinking := FAssistantThinking;
-  If FLiveContent <> '' Then
-    Turn.Response := FLiveContent
-  Else
-    Turn.Response := FAssistantContent;
+    Begin
+      Turn.TraceJson := '';
+      If FLiveThinking <> '' Then
+        Turn.Thinking := FLiveThinking
+      Else
+        Turn.Thinking := FAssistantThinking;
+      If FLiveContent <> '' Then
+        Turn.Response := FLiveContent
+      Else
+        Turn.Response := FAssistantContent;
+    End;
   Turn.CreatedAt := IsoNowUtc;
   Turn.StartedAt := FTurnStartedAt;
   If Turn.StartedAt = '' Then
@@ -2589,6 +2608,21 @@ Begin
     FHistoryTrace := TAssistantTrace.Create;
   ResetTraceCards;
   FHistoryTrace.Clear;
+  If Trim(FDisplayTraceJson) <> '' Then
+    Begin
+      FHistoryTrace.LoadFromJson(FDisplayTraceJson);
+      If FDisplaySystemNote <> '' Then
+        Begin
+          Last := Nil;
+          If FHistoryTrace.Count > 0 Then
+            Last := FHistoryTrace[FHistoryTrace.Count - 1];
+          If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> FDisplaySystemNote) Then
+            FHistoryTrace.AddNote(FDisplaySystemNote);
+        End;
+      If FDisplayDurationMs > 0 Then
+        FHistoryTrace.ApplyWorkedFooter(FDisplayDurationMs);
+      Exit;
+    End;
   FHistoryTrace.EnsureUser(FDisplayUser);
   If FAssistantThinking <> '' Then
     Begin
@@ -2642,8 +2676,6 @@ Begin
       Block.Body := Slice;
     End;
   ApplyLiveAnswerSlice;
-  If (FLiveContent <> '') And (FThinkingSliceStart <= Length(FLiveThinking)) Then
-    FThinkingSliceStart := Length(FLiveThinking) + 1;
 End;
 
 Procedure TProjectAssistantForm.ApplyLiveAnswerSlice;
@@ -2654,7 +2686,7 @@ Begin
   If Not Assigned(FTrace) Then
     Exit;
   Slice := SliceLiveChannel(FLiveContent, FAnswerSliceStart);
-  If Slice = '' Then
+  If (Slice = '') Or (Not SliceLooksLikeAnswer(Slice)) Then
     Exit;
   Last := Nil;
   If FTrace.Count > 0 Then
@@ -2693,9 +2725,9 @@ Begin
     aekToolStarted:
       Begin
         FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
-        { Ignore further snapshots of this loop's content so they do not open a
-          duplicate answer under the tool. The next loop resets the start to 1. }
-        FAnswerSliceStart := Length(FLiveContent) + 1;
+        { Ignore further snapshots of this loop, including a trailing ".".
+          Length+1 is not enough: one more delta would open a new answer card. }
+        FAnswerSliceStart := High(Integer);
       End;
     aekToolCompleted:
       Begin
@@ -2892,6 +2924,7 @@ Begin
   FDisplayUser := FLiveUser;
   FAssistantContent := '';
   FAssistantThinking := '';
+  FDisplayTraceJson := '';
   FDisplaySystemNote := '';
   FThinkingSliceStart := 1;
   FAnswerSliceStart := 1;

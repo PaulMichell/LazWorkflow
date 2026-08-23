@@ -58,6 +58,8 @@ Type
     ErrorText: String;
     PlanFile: String;
     TodoId: String;
+    { JSON array of live trace cards; empty on turns saved before this field. }
+    TraceJson: String;
   End;
 
   TAssistantConversationStore = Class
@@ -362,8 +364,10 @@ Begin
     '"token_estimate":' + IntToStr(Turn.TokenEstimate) + ',' +
     '"error":"' + JsonEscape(Turn.ErrorText) + '",' +
     '"plan_file":"' + JsonEscape(Turn.PlanFile) + '",' +
-    '"todo_id":"' + JsonEscape(Turn.TodoId) + '"' +
-    '}';
+    '"todo_id":"' + JsonEscape(Turn.TodoId) + '"';
+  If Trim(Turn.TraceJson) <> '' Then
+    Result := Result + ',"trace":' + Turn.TraceJson;
+  Result := Result + '}';
 End;
 
 Function TAssistantConversationStore.BuildIndexLine(Const Entry: TConversationIndexEntry; TurnIndex: Integer): String;
@@ -420,6 +424,7 @@ Begin
   Turn.ErrorText := '';
   Turn.PlanFile := '';
   Turn.TodoId := '';
+  Turn.TraceJson := '';
   If Trim(Line) = '' Then
     Exit;
   Data := Nil;
@@ -446,6 +451,8 @@ Begin
       Turn.ErrorText := Obj.Get('error', '');
       Turn.PlanFile := Obj.Get('plan_file', '');
       Turn.TodoId := Obj.Get('todo_id', '');
+      If Assigned(Obj.Find('trace')) Then
+        Turn.TraceJson := Obj.Find('trace').AsJSON;
       Result := Turn.Id <> '';
     Except
       Result := False;
@@ -651,6 +658,7 @@ Begin
   Turn.ErrorText := '';
   Turn.PlanFile := '';
   Turn.TodoId := '';
+  Turn.TraceJson := '';
   If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
       FLastError := 'Turn index out of range.';

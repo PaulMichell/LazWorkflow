@@ -108,6 +108,8 @@ Type
     destructor Destroy; override;
     procedure Paint; override;
     procedure CalcLayout; virtual;
+    { Layout at an explicit wrap width (ClientWidth is often 0 before the parent aligns). }
+    procedure CalcLayoutForWidth(AWidth: Integer);
     procedure ClearSelection;
     function GetSelectionText: String;
     function HasSelection: Boolean;
@@ -472,6 +474,22 @@ begin
   CalcLayout;
 end;
 
+procedure TCustomMarkDownControl.CalcLayoutForWidth(AWidth: Integer);
+begin
+  if AWidth<8 then
+    AWidth:=8;
+  FLastClientWidth:=AWidth;
+  FLastCalcClientWidth:=AWidth;
+  if not HandleAllocated then
+    begin
+    FCalculatedWidth:=AWidth;
+    FCalculatedHeight:=10;
+    exit;
+    end;
+  FRenderer.CalculateLayout(Canvas,AWidth,FCalculatedWidth,FCalculatedHeight);
+  InvalidatePreferredSize;
+end;
+
 procedure TCustomMarkDownControl.CalcLayout;
 var
   HasVertSB: Boolean;
@@ -489,7 +507,9 @@ begin
 
   FLastClientWidth:=ClientWidth;
   FLastCalcClientWidth:=FLastClientWidth;
-  if not HasVertSB then
+  { Only reserve scrollbar gutter when a vertical bar can appear. ssNone wrap
+    width must stay the full client or cards collapse to a few characters. }
+  if (FScrollBars in [ssAutoVertical, ssAutoBoth, ssVertical, ssBoth]) and (not HasVertSB) then
     dec(FLastCalcClientWidth,GetSystemMetrics(SM_CXVSCROLL));
   if FLastCalcClientWidth<0 then FLastCalcClientWidth:=0;
 

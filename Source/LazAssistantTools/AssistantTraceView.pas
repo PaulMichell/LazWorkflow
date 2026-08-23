@@ -31,7 +31,7 @@ Type
     Procedure FinishHostedPanel(Panel: TPanel; AutoSizePanel: Boolean);
     Function NamedChild(Host: TWinControl; Const ChildName: String): TControl;
     Function EnsureFooterLabel(Panel: TPanel): TLabel;
-    Procedure OrderFrames(Trace: TAssistantTrace);
+    Function OrderFrames(Trace: TAssistantTrace): Integer;
     Procedure EnsureFrame(Block: TTraceBlock);
     Procedure BindThinking(Block: TTraceBlock);
     Procedure BindTool(Block: TTraceBlock);
@@ -83,9 +83,32 @@ Const
   TruncatedLineCount = 12;
   CardInnerPad = 8;
 
+Function EstimateWrappedHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth, MinLineH: Integer): Integer;
+Var
+  Bmp: TBitmap;
+  R: TRect;
+Begin
+  Result := MinLineH;
+  If (SourceText = '') Or (MaxWidth < 8) Then
+    Exit;
+  Bmp := TBitmap.Create;
+  Try
+    Bmp.SetSize(1, 1);
+    Bmp.Canvas.Font.Assign(TypeFace);
+    R := Rect(0, 0, MaxWidth, 0);
+    DrawText(Bmp.Canvas.Handle, PChar(SourceText), Length(SourceText), R,
+      DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX);
+    Result := R.Bottom - R.Top + 2;
+    If Result < MinLineH Then
+      Result := MinLineH;
+  Finally
+    Bmp.Free;
+  End;
+End;
+
 Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String; MaxW, MinLineH: Integer);
 Var
-  PrefW, PrefH: Integer;
+  PrefW, PrefH, Est: Integer;
 Begin
   If Not Assigned(View) Then
     Exit;
@@ -125,15 +148,25 @@ Begin
     View.Width := MaxW;
     View.Constraints.MinWidth := MaxW;
     View.Constraints.MaxWidth := MaxW;
-    View.CalcLayout;
+    If View.HandleAllocated Then
+      View.CalcLayoutForWidth(MaxW)
+    Else
+      View.CalcLayout;
     PrefW := 0;
     PrefH := 0;
     View.GetPreferredSize(PrefW, PrefH);
     If PrefH < MinLineH Then
       PrefH := MinLineH;
+    { ClientWidth is often still 0 here; prefer a wrap-height floor so the
+      scroll range can reach the last line. }
+    Est := EstimateWrappedHeight(View.Font, Body, MaxW, MinLineH);
+    If PrefH < Est Then
+      PrefH := Est
+    Else If (Est > MinLineH) And (PrefH > Est * 4) Then
+      PrefH := Est;
     View.Height := PrefH;
     View.Constraints.MinHeight := PrefH;
-    View.Constraints.MaxHeight := PrefH;
+    View.Constraints.MaxHeight := 0;
   Except
     View.Height := MinLineH * 2;
   End;
@@ -332,7 +365,7 @@ Begin
       End;
 End;
 
-Procedure TAssistantTraceView.OrderFrames(Trace: TAssistantTrace);
+Function TAssistantTraceView.OrderFrames(Trace: TAssistantTrace): Integer;
 Var
   I, Y, Gap, LeftPad, InnerW, CardH: Integer;
   Card: TControl;
@@ -343,6 +376,7 @@ Begin
     scrolled inflates the GTK range and parks a blank band above the user card.
     AutoSize on a card would shrink it to the title "Thinking"; lock width to
     the pane and only let height follow the wrapped body. }
+  Result := CardInnerPad;
   If (Not Assigned(Trace)) Or (Not Assigned(TraceHost)) Then
     Exit;
   LeftPad := CardInnerPad;
@@ -384,6 +418,9 @@ Begin
       LockControlWidth(Card, InnerW);
       Inc(Y, CardH + Gap);
     End;
+  Result := Y - Gap + CardInnerPad;
+  If Result < CardInnerPad Then
+    Result := CardInnerPad;
 End;
 
 Procedure TAssistantTraceView.Resize;
@@ -773,10 +810,7 @@ Begin
   Child := NamedChild(Panel, 'HeaderLabel');
   If Child Is TLabel Then
     TLabel(Child).Caption := Block.Title;
-  If Block.Running Then
-    Display := LastLines(Block.Body, FTruncatedLines)
-  Else
-    Display := Block.Body;
+  Display := Block.Body;
   Child := NamedChild(Panel, 'ThoughtView');
   If Child Is TMarkDownControl Then
     Begin
@@ -960,13 +994,20 @@ End;
 
 Procedure TAssistantTraceView.ApplyScrollRange(KeepBottom: Boolean);
 Var
-  MaxPos, NewH, Page: Integer;
+  MaxPos, NewH, Page, SavedPos: Integer;
 Begin
   If (Not Assigned(TraceScroll)) Or (Not Assigned(TraceHost)) Then
     Exit;
+  SavedPos := TraceScroll.VertScrollBar.Position;
+  TraceScroll.VertScrollBar.Position := 0;
   TraceHost.Left := 0;
   TraceHost.Top := 0;
-  NewH := HostedContentHeight;
+  If Assigned(FBoundTrace) Then
+    NewH := OrderFrames(FBoundTrace)
+  Else
+    NewH := HostedContentHeight;
+  If NewH < 1 Then
+    NewH := 1;
   If TraceHost.Height <> NewH Then
     TraceHost.Height := NewH;
   Page := TraceScroll.ClientHeight;
@@ -982,8 +1023,10 @@ Begin
     MaxPos := 0;
   If KeepBottom Then
     TraceScroll.VertScrollBar.Position := MaxPos
-  Else If TraceScroll.VertScrollBar.Position > MaxPos Then
-    TraceScroll.VertScrollBar.Position := MaxPos;
+  Else If SavedPos > MaxPos Then
+    TraceScroll.VertScrollBar.Position := MaxPos
+  Else
+    TraceScroll.VertScrollBar.Position := SavedPos;
 End;
 
 Procedure TAssistantTraceView.FitHostToContent;
@@ -991,8 +1034,6 @@ Begin
   If Not Assigned(TraceHost) Then
     Exit;
   ApplyHostWidth;
-  If Assigned(FBoundTrace) Then
-    OrderFrames(FBoundTrace);
   ApplyScrollRange(False);
 End;
 
@@ -1000,7 +1041,7 @@ Procedure TAssistantTraceView.ScrollToEnd;
 Begin
   If Not Assigned(TraceScroll) Then
     Exit;
-  FitHostToContent;
+  ApplyHostWidth;
   ApplyScrollRange(True);
 End;
 

@@ -62,13 +62,19 @@ Type
     Procedure TickElapsed;
     Procedure ApplyWorkedFooter(DurationMs: Integer);
     Function ThinkingDurationMs: Integer;
+    Function JoinedThinking: String;
+    Function JoinedAnswers: String;
+    Function SaveToJson: String;
+    Procedure LoadFromJson(Const Json: String);
     Property Count: Integer Read GetCount;
     Property Blocks[Index: Integer]: TTraceBlock Read GetBlock; Default;
   End;
 
+{ True when Slice contains a letter or digit — reject a lone "." after a tool. }
+Function SliceLooksLikeAnswer(Const Slice: String): Boolean;
 { Slice LiveText from 1-based StartAt. Past-the-end yields '' and leaves StartAt
-  so the same loop cannot reopen an answer under a tool. The next loop must set
-  StartAt := 1 (aekLoopStarted). }
+  so the same loop cannot reopen an answer under a tool. After a tool, set
+  StartAt to High(Integer); the next loop must set StartAt := 1. }
 Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;
@@ -82,6 +88,38 @@ Implementation
 
 Uses
   DateUtils, fpjson, jsonparser;
+
+Function BlockKindName(Kind: TTraceBlockKind): String;
+Begin
+  Case Kind Of
+    tbkThinking: Result := 'thinking';
+    tbkTool: Result := 'tool';
+    tbkAnswer: Result := 'answer';
+    tbkNote: Result := 'note';
+    tbkSteer: Result := 'steer';
+  Else
+    Result := 'user';
+  End;
+End;
+
+Function NameToBlockKind(Const Name: String): TTraceBlockKind;
+Var
+  N: String;
+Begin
+  N := LowerCase(Trim(Name));
+  If N = 'thinking' Then
+    Result := tbkThinking
+  Else If N = 'tool' Then
+    Result := tbkTool
+  Else If N = 'answer' Then
+    Result := tbkAnswer
+  Else If N = 'note' Then
+    Result := tbkNote
+  Else If N = 'steer' Then
+    Result := tbkSteer
+  Else
+    Result := tbkUser;
+End;
 
 Constructor TAssistantTrace.Create;
 Begin
@@ -371,6 +409,132 @@ Begin
       If Block.Kind = tbkThinking Then
         Result := Result + Block.DurationMs;
     End;
+End;
+
+Function TAssistantTrace.JoinedThinking: String;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := '';
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkThinking) And (Trim(Block.Body) <> '') Then
+        Begin
+          If Result <> '' Then
+            Result := Result + LineEnding + LineEnding;
+          Result := Result + Block.Body;
+        End;
+    End;
+End;
+
+Function TAssistantTrace.JoinedAnswers: String;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := '';
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkAnswer) And SliceLooksLikeAnswer(Block.Body) Then
+        Begin
+          If Result <> '' Then
+            Result := Result + LineEnding + LineEnding;
+          Result := Result + Block.Body;
+        End;
+    End;
+End;
+
+Function TAssistantTrace.SaveToJson: String;
+Var
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Arr := TJSONArray.Create;
+  Try
+    For I := 0 To FBlocks.Count - 1 Do
+      Begin
+        Block := TTraceBlock(FBlocks[I]);
+        Obj := TJSONObject.Create;
+        Obj.Add('kind', BlockKindName(Block.Kind));
+        Obj.Add('title', Block.Title);
+        Obj.Add('body', Block.Body);
+        Obj.Add('footer', Block.Footer);
+        Obj.Add('tool', Block.ToolName);
+        Obj.Add('tool_id', Block.ToolId);
+        Obj.Add('tool_args', Block.ToolArgs);
+        Obj.Add('loop', Block.LoopIndex);
+        Obj.Add('ok', Block.Ok);
+        Obj.Add('duration_ms', Block.DurationMs);
+        Arr.Add(Obj);
+      End;
+    Result := StringReplace(Arr.AsJSON, #13#10, '', [rfReplaceAll]);
+    Result := StringReplace(Result, #10, '', [rfReplaceAll]);
+    Result := StringReplace(Result, #13, '', [rfReplaceAll]);
+  Finally
+    Arr.Free;
+  End;
+End;
+
+Procedure TAssistantTrace.LoadFromJson(Const Json: String);
+Var
+  Data: TJSONData;
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Clear;
+  If Trim(Json) = '' Then
+    Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Json);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Data);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr.Items[I] Is TJSONObject) Then
+          Continue;
+        Obj := TJSONObject(Arr.Items[I]);
+        Block := AddBlock(NameToBlockKind(Obj.Get('kind', 'user')));
+        Block.Title := Obj.Get('title', '');
+        Block.Body := Obj.Get('body', '');
+        Block.Footer := Obj.Get('footer', '');
+        Block.ToolName := Obj.Get('tool', '');
+        Block.ToolId := Obj.Get('tool_id', '');
+        Block.ToolArgs := Obj.Get('tool_args', '');
+        Block.LoopIndex := Obj.Get('loop', 0);
+        Block.Ok := Obj.Get('ok', True);
+        Block.DurationMs := Obj.Get('duration_ms', 0);
+        Block.Running := False;
+        Block.Frame := Nil;
+      End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function SliceLooksLikeAnswer(Const Slice: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  For I := 1 To Length(Slice) Do
+    If Slice[I] In ['A'..'Z', 'a'..'z', '0'..'9'] Then
+      Begin
+        Result := True;
+        Exit;
+      End;
 End;
 
 Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
