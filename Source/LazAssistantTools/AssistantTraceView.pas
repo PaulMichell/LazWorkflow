@@ -314,24 +314,30 @@ End;
 
 Function TAssistantTraceView.WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
 Var
+  Bmp: TBitmap;
   R: TRect;
-  Flags: Cardinal;
   Sample: String;
+  LineH: Integer;
 Begin
   Sample := SourceText;
   If Sample = '' Then
     Sample := 'Hg';
   If MaxWidth < 8 Then
     MaxWidth := 8;
-  If Not HandleAllocated Then
-    HandleNeeded;
-  Canvas.Font.Assign(TypeFace);
-  R := Rect(0, 0, MaxWidth, 0);
-  Flags := DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX;
-  DrawText(Canvas.Handle, PChar(Sample), Length(Sample), R, Flags);
-  Result := R.Bottom - R.Top + 2;
-  If Result < Canvas.TextHeight('Hg') + 2 Then
-    Result := Canvas.TextHeight('Hg') + 2;
+  Bmp := TBitmap.Create;
+  Try
+    Bmp.SetSize(1, 1);
+    Bmp.Canvas.Font.Assign(TypeFace);
+    R := Rect(0, 0, MaxWidth, 0);
+    DrawText(Bmp.Canvas.Handle, PChar(Sample), Length(Sample), R,
+      DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX);
+    LineH := Bmp.Canvas.TextHeight('Hg');
+    Result := R.Bottom - R.Top + 2;
+    If Result < LineH + 2 Then
+      Result := LineH + 2;
+  Finally
+    Bmp.Free;
+  End;
 End;
 
 Procedure TAssistantTraceView.BindSelectableMemo(Memo: TMemo; Const SourceText: String);
