@@ -237,6 +237,51 @@ Begin
   Check('cc reasoning_effort', Pos('"reasoning_effort":"high"', Body) > 0);
 End;
 
+Procedure TestResponsesFailedIsError;
+Var
+  Parser: TAssistantSseParser;
+  Body: String;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Body :=
+      SseLine('{"type":"response.created","response":{"id":"resp_fail"}}') +
+      SseLine('{"type":"response.failed","response":{"error":{"message":"out of credit"}}}') +
+      SseLine('[DONE]');
+    FeedAll(Parser, Body);
+    Check('failed flag', Parser.Failed);
+    Check('failed event', CountKind(Parser, sekFailed) = 1);
+    Check('failed message', Pos('out of credit', Parser.ErrorText) > 0);
+    Check('failed not completed', CountKind(Parser, sekCompleted) = 0);
+  Finally
+    Parser.Free;
+  End;
+End;
+
+Procedure TestResponsesIncomplete;
+Var
+  Parser: TAssistantSseParser;
+  Body: String;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Body :=
+      SseLine('{"type":"response.created","response":{"id":"resp_inc"}}') +
+      SseLine('{"type":"response.output_text.delta","delta":"Partial"}') +
+      SseLine('{"type":"response.incomplete","response":{"status":"incomplete",' +
+        '"incomplete_details":{"reason":"max_output_tokens"},' +
+        '"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Partial"}]}]}}') +
+      SseLine('[DONE]');
+    FeedAll(Parser, Body);
+    Check('incomplete flag', Parser.Incomplete);
+    Check('incomplete not failed', Not Parser.Failed);
+    Check('incomplete reason', Parser.ErrorText = 'max_output_tokens');
+    Check('incomplete keeps text', Pos('Partial', Parser.Content) > 0);
+  Finally
+    Parser.Free;
+  End;
+End;
+
 Procedure TestFunctionRoundTripItems;
 Var
   Items: TSamplerInputItemArray;
@@ -265,6 +310,8 @@ Begin
   TestResponsesRequestJson;
   TestChatCompletionsRequestDropsReasoning;
   TestFunctionRoundTripItems;
+  TestResponsesFailedIsError;
+  TestResponsesIncomplete;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantSampler tests passed.');

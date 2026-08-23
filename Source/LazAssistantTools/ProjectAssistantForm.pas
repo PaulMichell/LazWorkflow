@@ -378,6 +378,9 @@ Destructor TProjectAssistantForm.Destroy;
 Begin
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
+  If FSending Then
+    SetSending(False);
+  AssistantResetQuietIdeSession;
   PersistSession;
   WorkflowEventBus.RemoveListener(Self);
   If Assigned(AssistantClient) Then

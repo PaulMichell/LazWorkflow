@@ -1,6 +1,11 @@
 Unit AssistantService;
 
-{ Assistant LLM service with OAuth Bearer auth and SSE streaming (c) 2026 Michell Computing. }
+{ Assistant LLM service with OAuth Bearer auth and SSE streaming (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. The service owns history, prompt
+  assembly, model listing, and actor lifetime in one place; splitting would
+  separate the only callers of the private trim/export helpers.
+  Reviewed 2026-08: unused TAssistantStreamThread/TAssistantSSEStream removed. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -61,6 +66,9 @@ Type
     FLastTrimNotice: String;
     FReasoningEffort: String;
     FOnTrace: TAssistantTraceNotify;
+    FOrphanThreads: TFPList;
+    Procedure ReapOrphanThreads(WaitMs: QWord);
+    Procedure AbandonStreamThread;
     Procedure ClearStreamThread;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
@@ -85,8 +93,10 @@ Type
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
     Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String);
     Procedure AddToolResult(Const ToolCallId, Content: String);
+    { Restore a previously persisted message without store-time truncation. }
+    Procedure RestoreMessage(Role: TAssistantMessageRole; Const Content, ToolCallId, ToolCallsJson: String);
     Function MessageCount: Integer;
-    Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
+    Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content, ToolCallId, ToolCallsJson: String): Boolean;
     Function IsBusy: Boolean;
     Function IsSignedIn: Boolean;
     { Rough prompt size (messages + system + tools) for UI / guards. }
@@ -129,69 +139,7 @@ Var
 Implementation
 
 Uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools,
-  AssistantHttps, AssistantActor;
-
-Type
-  { One UI snapshot for the main thread; queued under FSnapLock to avoid races. }
-  TStreamSnapshot = Record
-    Content: String;
-    Thinking: String;
-    ErrorText: String;
-    IsFinished: Boolean;
-  End;
-
-  TAssistantStreamThread = Class(TThread)
-  Private
-    FService: TAssistantService;
-    FApiBase: String;
-    FAccessToken: String;
-    FModel: String;
-    FRequestJson: String;
-    FOnToken: TAssistantStreamEvent;
-    FSnapLock: TRTLCriticalSection;
-    FSnapQueue: Array Of TStreamSnapshot;
-    FSseBuffer: String;
-    FContentAccum: String;
-    FThinkingAccum: String;
-    FMergeLogCount: Integer;
-    FToolCalls: TAssistantToolCallArray;
-    FToolRound: Integer;
-    FHttpClient: TFPHTTPClient;
-    FStreamControl: THttpsStreamControl;
-    FFinishEmitted: Boolean;
-    FWrotePlanFile: Boolean; { True after a successful write_markdown this stream. }
-    Procedure NotifyMain;
-    Procedure EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
-    Procedure ProcessSseChunk(Const Chunk: String);
-    Procedure ProcessSseLine(Const Line: String);
-    Procedure ExtractDeltaParts(Const JsonText: String; Out ContentDelta, ThinkingDelta: String);
-    Procedure ExtractToolCallDeltas(Const JsonText: String);
-    Function MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
-    Function HasToolCalls: Boolean;
-    Procedure RunToolRoundOnMain;
-    Function DoOneHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
-    Procedure HttpsChunk(Const Chunk: String);
-    Function HttpsShouldStop: Boolean;
-  Protected
-    Procedure Execute; Override;
-  Public
-    Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model, RequestJson: String;
-      OnToken: TAssistantStreamEvent);
-    Destructor Destroy; Override;
-    Procedure AbortHttp;
-    Procedure Detach;
-  End;
-
-  { Feeds TFPHTTPClient response bytes into SSE line parsing as they arrive. }
-  TAssistantSSEStream = Class(TStream)
-  Private
-    FOwner: TAssistantStreamThread;
-  Public
-    Constructor Create(StreamOwner: TAssistantStreamThread);
-    Function Write(Const Buffer; Count: LongInt): LongInt; Override;
-    Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
-  End;
+  fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools, AssistantHttps, AssistantActor;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
@@ -231,164 +179,6 @@ Begin
     End;
 End;
 
-{ TAssistantSSEStream }
-
-Constructor TAssistantSSEStream.Create(StreamOwner: TAssistantStreamThread);
-Begin
-  Inherited Create;
-  FOwner := StreamOwner;
-End;
-
-Function TAssistantSSEStream.Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64;
-Begin
-  Result := 0;
-End;
-
-Function TAssistantSSEStream.Write(Const Buffer; Count: LongInt): LongInt;
-Var
-  Chunk: String;
-Begin
-  Result := Count;
-  If (Count <= 0) Or (Not Assigned(FOwner)) Or FOwner.Terminated Then
-    Exit;
-  SetString(Chunk, PChar(@Buffer), Count);
-  FOwner.ProcessSseChunk(Chunk);
-End;
-
-{ TAssistantStreamThread }
-
-Constructor TAssistantStreamThread.Create(Service: TAssistantService;
-  Const ApiBase, AccessToken, Model, RequestJson: String; OnToken: TAssistantStreamEvent);
-Begin
-  Inherited Create(True);
-  FreeOnTerminate := False;
-  InitCriticalSection(FSnapLock);
-  SetLength(FSnapQueue, 0);
-  FService := Service;
-  FApiBase := ApiBase;
-  FAccessToken := AccessToken;
-  FModel := Model;
-  FRequestJson := RequestJson;
-  FFinishEmitted := False;
-  FWrotePlanFile := False;
-  FOnToken := OnToken;
-  FSseBuffer := '';
-  FContentAccum := '';
-  FThinkingAccum := '';
-  FMergeLogCount := 0;
-  SetLength(FToolCalls, 0);
-  FToolRound := 0;
-  FHttpClient := Nil;
-  FStreamControl := Nil;
-End;
-
-Destructor TAssistantStreamThread.Destroy;
-Begin
-  AbortHttp;
-  SetLength(FSnapQueue, 0);
-  DoneCriticalSection(FSnapLock);
-  Inherited Destroy;
-End;
-
-Procedure TAssistantStreamThread.HttpsChunk(Const Chunk: String);
-Begin
-  If Not Terminated Then
-    ProcessSseChunk(Chunk);
-End;
-
-Function TAssistantStreamThread.HttpsShouldStop: Boolean;
-Begin
-  Result := Terminated;
-End;
-
-Procedure TAssistantStreamThread.AbortHttp;
-Begin
-  { Unblock WinINet / TFPHTTPClient so Terminate can finish without hanging the IDE. }
-  If Assigned(FStreamControl) Then
-    Try
-      FStreamControl.Abort;
-    Except
-    End;
-  If Assigned(FHttpClient) Then
-    Try
-      FHttpClient.Terminate;
-    Except
-      { ignore }
-    End;
-End;
-
-Procedure TAssistantStreamThread.Detach;
-Begin
-  FOnToken := Nil;
-  FService := Nil;
-  AbortHttp;
-End;
-
-Procedure TAssistantStreamThread.NotifyMain;
-Var
-  Snap: TStreamSnapshot;
-  HasItem: Boolean;
-  I: Integer;
-Begin
-  { Drain all queued snapshots so rapid stream ticks do not drop finishes. }
-  Repeat
-    HasItem := False;
-    EnterCriticalSection(FSnapLock);
-    Try
-      If Length(FSnapQueue) > 0 Then
-        Begin
-          Snap := FSnapQueue[0];
-          For I := 1 To High(FSnapQueue) Do
-            FSnapQueue[I - 1] := FSnapQueue[I];
-          SetLength(FSnapQueue, Length(FSnapQueue) - 1);
-          HasItem := True;
-        End;
-    Finally
-      LeaveCriticalSection(FSnapLock);
-    End;
-    If Not HasItem Then
-      Break;
-    If Assigned(FOnToken) Then
-      Try
-        FOnToken(Snap.Content, Snap.Thinking, Snap.IsFinished, Snap.ErrorText);
-      Except
-        On E: Exception Do
-          WorkflowLogger.Warning('AssistantStream', 'UI snapshot failed: ' + E.Message);
-      End;
-  Until False;
-End;
-
-Procedure TAssistantStreamThread.EmitSnapshots(IsDone: Boolean; Const ErrorText: String);
-Var
-  N: Integer;
-Begin
-  If Terminated And (Not IsDone) Then
-    Exit;
-  { At most one finished callback per stream (guards Break-then-fallthrough and double Exit paths). }
-  If IsDone Then
-    Begin
-      If FFinishEmitted Then
-        Exit;
-      FFinishEmitted := True;
-    End;
-  { Queue a *copy* of the snapshot under lock so the worker can keep writing
-    accumulators without racing the main thread (was a source of AVs). }
-  EnterCriticalSection(FSnapLock);
-  Try
-    N := Length(FSnapQueue);
-    SetLength(FSnapQueue, N + 1);
-    FSnapQueue[N].Content := FContentAccum;
-    FSnapQueue[N].Thinking := FThinkingAccum;
-    FSnapQueue[N].ErrorText := ErrorText;
-    FSnapQueue[N].IsFinished := IsDone;
-  Finally
-    LeaveCriticalSection(FSnapLock);
-  End;
-  { Queue avoids deadlock: main thread can CancelStream/WaitFor while we notify.
-    Tool rounds still use Synchronize so tools run on the main thread. }
-  Queue(@NotifyMain);
-End;
-
 Function JsonStringField(Obj: TJSONObject; Const FieldName: String): String;
 Var
   Node: TJSONData;
@@ -401,582 +191,7 @@ Begin
     Exit;
   If Node.JSONType = jtNull Then
     Exit;
-  If Node.JSONType = jtString Then
-    Result := Node.AsString
-  Else
-    Result := Node.AsString;
-End;
-
-Function SanitizeStreamText(Const SourceText: String): String;
-Var
-  I: Integer;
-  C: Char;
-Begin
-  { Drop C0 controls except tab/LF/CR — incomplete UTF-8 / binary noise. }
-  Result := '';
-  SetLength(Result, Length(SourceText));
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      If (C = #9) Or (C = #10) Or (C = #13) Or (Ord(C) >= 32) Then
-        Result := Result + C;
-    End;
-End;
-
-Function CollapseTrailingPhraseRepeats(Const SourceText: String): String;
-Var
-  PhraseLen, MaxLen, Count, PosEnd: Integer;
-  Phrase: String;
-Begin
-  { Collapse "… phrase phrase phrase" (same unit 3+ times) to a single trailing phrase.
-    Guards model/API loops such as repeating "0 of 6 work packages…". }
-  Result := SourceText;
-  If Length(Result) < 40 Then
-    Exit;
-  MaxLen := Length(Result) Div 3;
-  If MaxLen > 240 Then
-    MaxLen := 240;
-  PhraseLen := 12;
-  While PhraseLen <= MaxLen Do
-    Begin
-      Phrase := Copy(Result, Length(Result) - PhraseLen + 1, PhraseLen);
-      If Trim(Phrase) = '' Then
-        Begin
-          Inc(PhraseLen);
-          Continue;
-        End;
-      Count := 1;
-      PosEnd := Length(Result) - PhraseLen;
-      While (PosEnd >= PhraseLen) And
-        (Copy(Result, PosEnd - PhraseLen + 1, PhraseLen) = Phrase) Do
-        Begin
-          Inc(Count);
-          Dec(PosEnd, PhraseLen);
-        End;
-      If Count >= 3 Then
-        Begin
-          { Keep one copy of the repeated unit. }
-          SetLength(Result, Length(Result) - (Count - 1) * PhraseLen);
-          Exit;
-        End;
-      Inc(PhraseLen);
-    End;
-End;
-
-Function TAssistantStreamThread.MergeStreamText(Var Accum: String; Const Delta: String): Boolean;
-Var
-  Candidate: String;
-Begin
-  { OpenAI-style streams usually send token deltas (append). Some providers send
-    cumulative snapshots (replace when Delta starts with Accum). Also ignore
-    exact re-sends of the last chunk and collapse runaway trailing repeats. }
-  Result := False;
-  If Delta = '' Then
-    Exit;
-  If Accum = '' Then
-    Begin
-      Accum := CollapseTrailingPhraseRepeats(SanitizeStreamText(Delta));
-      Result := True;
-      Exit;
-    End;
-  { Exact duplicate of full buffer. }
-  If Delta = Accum Then
-    Exit;
-  { Cumulative snapshot (grows by replacing the whole string). }
-  If (Length(Delta) >= Length(Accum)) And (Copy(Delta, 1, Length(Accum)) = Accum) Then
-    Begin
-      Candidate := CollapseTrailingPhraseRepeats(SanitizeStreamText(Delta));
-      If Candidate = Accum Then
-        Exit;
-      Accum := Candidate;
-      Result := True;
-      Exit;
-    End;
-  { Stale shorter prefix of what we already have. }
-  If (Length(Delta) < Length(Accum)) And (Copy(Accum, 1, Length(Delta)) = Delta) Then
-    Exit;
-  { Exact re-send of the last chunk (common when SSE frames are duplicated). }
-  If (Length(Accum) >= Length(Delta)) And
-    (Copy(Accum, Length(Accum) - Length(Delta) + 1, Length(Delta)) = Delta) Then
-    Exit;
-  Candidate := CollapseTrailingPhraseRepeats(SanitizeStreamText(Accum + SanitizeStreamText(Delta)));
-  If Candidate = Accum Then
-    Exit;
-  { Hard cap — runaway streams must not grow forever or block Ready. }
-  If Length(Candidate) > 400000 Then
-    Begin
-      If Length(Accum) >= 400000 Then
-        Exit;
-      Accum := Copy(Candidate, 1, 400000);
-      Result := True;
-      Exit;
-    End;
-  Accum := Candidate;
-  Result := True;
-End;
-
-Procedure TAssistantStreamThread.ExtractDeltaParts(Const JsonText: String;
-  Out ContentDelta, ThinkingDelta: String);
-Var
-  Data: TJSONData;
-  Obj, Choice, Delta, MessageObj: TJSONObject;
-  Arr: TJSONArray;
-Begin
-  { OpenAI-compatible stream: delta.content for answer, delta.reasoning_content
-    (or delta.reasoning) for thinking summaries on reasoning models. }
-  ContentDelta := '';
-  ThinkingDelta := '';
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(JsonText);
-      If Not (Data Is TJSONObject) Then
-        Exit;
-      Obj := TJSONObject(Data);
-      Arr := Obj.FindPath('choices') As TJSONArray;
-      If (Arr = Nil) Or (Arr.Count < 1) Then
-        Exit;
-      If Not (Arr.Items[0] Is TJSONObject) Then
-        Exit;
-      Choice := TJSONObject(Arr.Items[0]);
-      Delta := Choice.FindPath('delta') As TJSONObject;
-      If Assigned(Delta) Then
-        Begin
-          ContentDelta := JsonStringField(Delta, 'content');
-          If ContentDelta = '' Then
-            ContentDelta := JsonStringField(Delta, 'text');
-          ThinkingDelta := JsonStringField(Delta, 'reasoning_content');
-          If ThinkingDelta = '' Then
-            ThinkingDelta := JsonStringField(Delta, 'reasoning');
-        End;
-      If (ContentDelta = '') And (ThinkingDelta = '') Then
-        Begin
-          MessageObj := Choice.FindPath('message') As TJSONObject;
-          If Assigned(MessageObj) Then
-            Begin
-              ContentDelta := JsonStringField(MessageObj, 'content');
-              ThinkingDelta := JsonStringField(MessageObj, 'reasoning_content');
-              If ThinkingDelta = '' Then
-                ThinkingDelta := JsonStringField(MessageObj, 'reasoning');
-            End;
-        End;
-    Except
-      ContentDelta := '';
-      ThinkingDelta := '';
-    End;
-  Finally
-    Data.Free;
-  End;
-End;
-
-Procedure TAssistantStreamThread.ExtractToolCallDeltas(Const JsonText: String);
-Var
-  Data: TJSONData;
-  Obj, Choice, Delta, Item, Func: TJSONObject;
-  Arr, ToolArr: TJSONArray;
-  I, Idx: Integer;
-  Id, Name, Args: String;
-Begin
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(JsonText);
-      If Not (Data Is TJSONObject) Then
-        Exit;
-      Obj := TJSONObject(Data);
-      Arr := Obj.FindPath('choices') As TJSONArray;
-      If (Arr = Nil) Or (Arr.Count < 1) Or Not (Arr.Items[0] Is TJSONObject) Then
-        Exit;
-      Choice := TJSONObject(Arr.Items[0]);
-      Delta := Choice.FindPath('delta') As TJSONObject;
-      If Not Assigned(Delta) Then
-        Exit;
-      ToolArr := Delta.FindPath('tool_calls') As TJSONArray;
-      If (ToolArr = Nil) Or (ToolArr.Count < 1) Then
-        Exit;
-      For I := 0 To ToolArr.Count - 1 Do
-        Begin
-          If Not (ToolArr.Items[I] Is TJSONObject) Then
-            Continue;
-          Item := TJSONObject(ToolArr.Items[I]);
-          Idx := Item.Get('index', I);
-          If Idx < 0 Then
-            Continue;
-          If Idx >= Length(FToolCalls) Then
-            SetLength(FToolCalls, Idx + 1);
-          Id := JsonStringField(Item, 'id');
-          If Id <> '' Then
-            FToolCalls[Idx].Id := Id;
-          Func := Item.FindPath('function') As TJSONObject;
-          If Assigned(Func) Then
-            Begin
-              Name := JsonStringField(Func, 'name');
-              If Name <> '' Then
-                FToolCalls[Idx].Name := Name;
-              Args := JsonStringField(Func, 'arguments');
-              If Args <> '' Then
-                FToolCalls[Idx].Arguments := FToolCalls[Idx].Arguments + Args;
-            End;
-        End;
-    Except
-      { ignore malformed tool deltas }
-    End;
-  Finally
-    Data.Free;
-  End;
-End;
-
-Function TAssistantStreamThread.HasToolCalls: Boolean;
-Var
-  I: Integer;
-Begin
-  { Require a tool name — partial argument-only stubs must not start a tool round. }
-  Result := False;
-  For I := 0 To High(FToolCalls) Do
-    If Trim(FToolCalls[I].Name) <> '' Then
-      Begin
-        Result := True;
-        Exit;
-      End;
-End;
-
-Procedure TAssistantStreamThread.RunToolRoundOnMain;
-Var
-  I: Integer;
-  ToolCallsJson, ResultText, ErrorText, Content: String;
-  Ok: Boolean;
-Begin
-  If Not Assigned(FService) Then
-    Exit;
-  Try
-    { Build tool_calls JSON array for the assistant history message. }
-    ToolCallsJson := '[';
-    For I := 0 To High(FToolCalls) Do
-      Begin
-        If FToolCalls[I].Name = '' Then
-          Continue;
-        If Length(ToolCallsJson) > 1 Then
-          ToolCallsJson := ToolCallsJson + ',';
-        If FToolCalls[I].Id = '' Then
-          FToolCalls[I].Id := Format('call_%d_%d', [FToolRound, I]);
-        ToolCallsJson := ToolCallsJson + Format(
-          '{"id":"%s","type":"function","function":{"name":"%s","arguments":"%s"}}',
-          [JsonEscape(FToolCalls[I].Id), JsonEscape(FToolCalls[I].Name),
-           JsonEscape(FToolCalls[I].Arguments)]);
-      End;
-    ToolCallsJson := ToolCallsJson + ']';
-    FService.AddAssistantToolCalls(FContentAccum, ToolCallsJson);
-
-    For I := 0 To High(FToolCalls) Do
-      Begin
-        If FToolCalls[I].Name = '' Then
-          Continue;
-        ResultText := '';
-        ErrorText := '';
-        Try
-          Ok := ExecuteAssistantToolForMode(FToolCalls[I].Name, FToolCalls[I].Arguments,
-            FService.ActiveMode, ResultText, ErrorText);
-        Except
-          On E: Exception Do
-            Begin
-              Ok := False;
-              ErrorText := 'Tool raised: ' + E.Message;
-              ResultText := '';
-            End;
-        End;
-        If Ok Then
-          Content := ResultText
-        Else
-          Content := 'Error: ' + ErrorText;
-        FService.AddToolResult(FToolCalls[I].Id, Content);
-        WorkflowLogger.Info('AssistantStream',
-          Format('tool %s ok=%s len=%d', [FToolCalls[I].Name, BoolToStr(Ok, True), Length(Content)]));
-        If Ok And (SameText(FToolCalls[I].Name, 'write_markdown') Or
-          SameText(FToolCalls[I].Name, 'update_markdown')) Then
-          FWrotePlanFile := True;
-      End;
-  Except
-    On E: Exception Do
-      Begin
-        WorkflowLogger.Warning('AssistantStream', 'Tool round failed: ' + E.Message);
-        { Ensure the model gets a tool error so the conversation can continue. }
-        For I := 0 To High(FToolCalls) Do
-          If (FToolCalls[I].Name <> '') And (FToolCalls[I].Id <> '') Then
-            Try
-              FService.AddToolResult(FToolCalls[I].Id, 'Error: tool round failed: ' + E.Message);
-            Except
-            End;
-      End;
-  End;
-End;
-
-Procedure TAssistantStreamThread.ProcessSseLine(Const Line: String);
-Var
-  Payload, ContentDelta, ThinkingDelta, Trimmed: String;
-  Changed: Boolean;
-Begin
-  If Terminated Then
-    Exit;
-  Trimmed := Trim(Line);
-  If Trimmed = '' Then
-    Exit;
-  { Accept "data: ..." and "data:..." }
-  If Copy(Trimmed, 1, 5) <> 'data:' Then
-    Exit;
-  Payload := Trim(Copy(Trimmed, 6, MaxInt));
-  If Payload = '' Then
-    Exit;
-  If Payload = '[DONE]' Then
-    Exit;
-  ExtractToolCallDeltas(Payload);
-  ExtractDeltaParts(Payload, ContentDelta, ThinkingDelta);
-  If (ContentDelta = '') And (ThinkingDelta = '') Then
-    Exit;
-  Changed := False;
-  If ThinkingDelta <> '' Then
-    If MergeStreamText(FThinkingAccum, ThinkingDelta) Then
-      Changed := True;
-  If ContentDelta <> '' Then
-    If MergeStreamText(FContentAccum, ContentDelta) Then
-      Changed := True;
-  If Not Changed Then
-    Exit;
-  Inc(FMergeLogCount);
-  If FMergeLogCount <= 12 Then
-    WorkflowLogger.Info('AssistantStream',
-      Format('merge #%d thinkLen=%d contentLen=%d dThink=%d dContent=%d',
-        [FMergeLogCount, Length(FThinkingAccum), Length(FContentAccum),
-         Length(ThinkingDelta), Length(ContentDelta)]));
-  EmitSnapshots(False, '');
-End;
-
-Procedure TAssistantStreamThread.ProcessSseChunk(Const Chunk: String);
-Var
-  P: Integer;
-  Line: String;
-Begin
-  If Terminated Then
-    Exit;
-  FSseBuffer := FSseBuffer + Chunk;
-  FSseBuffer := StringReplace(FSseBuffer, #13#10, #10, [rfReplaceAll]);
-  FSseBuffer := StringReplace(FSseBuffer, #13, #10, [rfReplaceAll]);
-  Repeat
-    P := Pos(#10, FSseBuffer);
-    If P < 1 Then
-      Break;
-    Line := Copy(FSseBuffer, 1, P - 1);
-    Delete(FSseBuffer, 1, P);
-    ProcessSseLine(Line);
-  Until Terminated;
-End;
-
-Function IsTransientNetworkError(Const ErrorText: String): Boolean;
-Var
-  E: String;
-Begin
-  E := LowerCase(ErrorText);
-  Result :=
-    (Pos('host name resolution', E) > 0) Or
-    (Pos('could not resolve', E) > 0) Or
-    (Pos('name or service not known', E) > 0) Or
-    (Pos('temporary failure in name resolution', E) > 0) Or
-    (Pos('network is unreachable', E) > 0) Or
-    (Pos('connection refused', E) > 0) Or
-    (Pos('connection reset', E) > 0) Or
-    (Pos('timed out', E) > 0) Or
-    (Pos('timeout', E) > 0) Or
-    (Pos('socket error', E) > 0) Or
-    (Pos('ssl', E) > 0) And (Pos('connect', E) > 0);
-End;
-
-Function FormatNetworkErrorHint(Const ErrorText: String): String;
-Begin
-  Result := ErrorText;
-  If IsTransientNetworkError(ErrorText) Then
-    Result := ErrorText + LineEnding + LineEnding +
-      'Network/DNS issue reaching the xAI API. Check connectivity, then retry ' +
-      '(Work on this / Work on plan). The package stays in progress.';
-End;
-
-Function TAssistantStreamThread.DoOneHttpRound(Const Url, RequestJson: String;
-  Out ErrorText: String): Boolean;
-Const
-  MaxAttempts = 3;
-Var
-  Code, Attempt: Integer;
-  ErrBody, Headers, LastErr: String;
-  Control: THttpsStreamControl;
-Begin
-  Result := False;
-  ErrorText := '';
-  LastErr := '';
-  Headers := 'Authorization: Bearer ' + FAccessToken;
-
-  For Attempt := 1 To MaxAttempts Do
-    Begin
-      If Terminated Then
-        Begin
-          ErrorText := 'Cancelled.';
-          Exit;
-        End;
-      FSseBuffer := '';
-      SetLength(FToolCalls, 0);
-      ErrorText := '';
-      Control := THttpsStreamControl.Create;
-      FStreamControl := Control;
-      Try
-        Try
-          If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
-            Control, Code, ErrorText) Then
-            Begin
-              If Terminated And (ErrorText = '') Then
-                ErrorText := 'Cancelled.';
-            End
-          Else If Terminated Then
-            ErrorText := 'Cancelled.'
-          Else If (Code < 200) Or (Code >= 300) Then
-            Begin
-              ErrBody := Trim(FSseBuffer);
-              If ErrBody = '' Then
-                ErrBody := Format('HTTP %d', [Code]);
-              If Length(ErrBody) > 400 Then
-                ErrBody := Copy(ErrBody, 1, 400) + '…';
-              ErrorText := Format('HTTP %d: %s', [Code, ErrBody]);
-            End
-          Else
-            Begin
-              If FSseBuffer <> '' Then
-                ProcessSseLine(FSseBuffer);
-              Result := True;
-              Exit;
-            End;
-        Except
-          On E: Exception Do
-            If Terminated Then
-              ErrorText := 'Cancelled.'
-            Else
-              Begin
-                ErrorText := E.Message;
-                If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
-                  ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
-              End;
-        End;
-      Finally
-        FStreamControl := Nil;
-        Control.Free;
-      End;
-
-      LastErr := ErrorText;
-      If Terminated Or (ErrorText = 'Cancelled.') Then
-        Exit;
-      { Retry only transient network failures, not HTTP 4xx from the API. }
-      If (Not IsTransientNetworkError(ErrorText)) And (Pos('HTTP 4', ErrorText) = 1) Then
-        Begin
-          ErrorText := FormatNetworkErrorHint(ErrorText);
-          Exit;
-        End;
-      If Not IsTransientNetworkError(ErrorText) Then
-        Begin
-          ErrorText := FormatNetworkErrorHint(ErrorText);
-          Exit;
-        End;
-      If Attempt < MaxAttempts Then
-        Begin
-          WorkflowLogger.Warning('AssistantStream',
-            Format('Transient network error (attempt %d/%d): %s',
-              [Attempt, MaxAttempts, ErrorText]));
-          Sleep(400 * Attempt);
-        End;
-    End;
-  ErrorText := FormatNetworkErrorHint(LastErr);
-End;
-
-Procedure TAssistantStreamThread.Execute;
-Const
-  { One HTTP stream that ends with tool_calls counts as a round.
-    Code-mode inventory / multi-file reads need more headroom than a short chat answer. }
-  MaxToolRounds = 20;
-Var
-  Url, ErrorText, RequestJson: String;
-  RoundNo: Integer;
-  WroteBefore: Boolean;
-  LastContent, LastThinking: String;
-Begin
-  Url := Trim(FApiBase);
-  While (Length(Url) > 0) And (Url[Length(Url)] = '/') Do
-    SetLength(Url, Length(Url) - 1);
-  Url := Url + '/chat/completions';
-
-  RequestJson := FRequestJson;
-  FWrotePlanFile := False;
-  LastContent := '';
-  LastThinking := '';
-  For RoundNo := 0 To MaxToolRounds Do
-    Begin
-      If Terminated Then
-        Break;
-      FContentAccum := '';
-      FThinkingAccum := '';
-      FMergeLogCount := 0;
-      If Not DoOneHttpRound(Url, RequestJson, ErrorText) Then
-        Begin
-          EmitSnapshots(True, ErrorText);
-          Exit;
-        End;
-      If Terminated Then
-        Break;
-      If Not HasToolCalls Then
-        Begin
-          EmitSnapshots(True, '');
-          Exit;
-        End;
-      Inc(FToolRound);
-      If FContentAccum <> '' Then
-        LastContent := FContentAccum;
-      If FThinkingAccum <> '' Then
-        LastThinking := FThinkingAccum;
-      WorkflowLogger.Info('AssistantStream', Format('tool round %d (%d calls)',
-        [FToolRound, Length(FToolCalls)]));
-      EmitSnapshots(False, 'Running tools…');
-      WroteBefore := FWrotePlanFile;
-      Synchronize(@RunToolRoundOnMain);
-      If Terminated Or Not Assigned(FService) Then
-        Break;
-      { Avoid endless write_markdown / plan-tool ping-pong. }
-      If FWrotePlanFile And WroteBefore Then
-        Begin
-          EmitSnapshots(True, '');
-          Exit;
-        End;
-      RequestJson := FService.BuildNextRequestJson;
-    End;
-  If Terminated Then
-    Begin
-      If Not FFinishEmitted Then
-        EmitSnapshots(True, 'Cancelled.');
-    End
-  Else
-    Begin
-      { Restore last visible snapshots if the final tool-only round left them empty. }
-      If (FContentAccum = '') And (LastContent <> '') Then
-        FContentAccum := LastContent;
-      If (FThinkingAccum = '') And (LastThinking <> '') Then
-        FThinkingAccum := LastThinking;
-      If FWrotePlanFile Or (FContentAccum <> '') Or (FThinkingAccum <> '') Then
-        Begin
-          { Prefer Ready after partial progress; note the round cap in the thinking footer only. }
-          If FContentAccum = '' Then
-            FContentAccum :=
-              '*(Tool-round limit reached after ' + IntToStr(FToolRound) +
-              ' rounds. Partial progress above — send a follow-up to continue, or narrow the package.)*';
-          EmitSnapshots(True, '');
-        End
-      Else
-        EmitSnapshots(True, Format(
-          'Stopped after %d tool rounds with no answer. Try a more focused request or split the package.',
-          [FToolRound]));
-    End;
+  Result := Node.AsString;
 End;
 
 { TAssistantService }
@@ -1078,6 +293,7 @@ Begin
   FReasoningEffort := 'high';
   SetLength(FMessages, 0);
   FStreamThread := Nil;
+  FOrphanThreads := Nil;
   FBusy := False;
   FLastError := '';
 End;
@@ -1200,8 +416,70 @@ End;
 Destructor TAssistantService.Destroy;
 Begin
   CancelStream;
+  { Detached actors still hold FService until they exit; wait longer on teardown. }
+  ReapOrphanThreads(10000);
+  If Assigned(FOrphanThreads) Then
+    Begin
+      { Running threads are leaked rather than freed underfoot. }
+      FreeAndNil(FOrphanThreads);
+    End;
   SetLength(FMessages, 0);
   Inherited Destroy;
+End;
+
+Procedure TAssistantService.ReapOrphanThreads(WaitMs: QWord);
+Var
+  I: Integer;
+  Thread: TThread;
+  StartTick: QWord;
+  Remaining: Boolean;
+Begin
+  If Not Assigned(FOrphanThreads) Then
+    Exit;
+  StartTick := GetTickCount64;
+  Repeat
+    Remaining := False;
+    I := 0;
+    While I < FOrphanThreads.Count Do
+      Begin
+        Thread := TThread(FOrphanThreads[I]);
+        If Not Assigned(Thread) Then
+          Begin
+            FOrphanThreads.Delete(I);
+            Continue;
+          End;
+        If Thread.Finished Then
+          Begin
+            Try
+              Thread.WaitFor;
+            Except
+            End;
+            Thread.Free;
+            FOrphanThreads.Delete(I);
+          End
+        Else
+          Begin
+            Remaining := True;
+            Inc(I);
+          End;
+      End;
+    If (Not Remaining) Or (GetTickCount64 - StartTick >= WaitMs) Then
+      Break;
+    CheckSynchronize(15);
+    Sleep(5);
+  Until False;
+End;
+
+Procedure TAssistantService.AbandonStreamThread;
+Begin
+  If Not Assigned(FStreamThread) Then
+    Exit;
+  If FStreamThread Is TAssistantActor Then
+    TAssistantActor(FStreamThread).Detach;
+  If Not Assigned(FOrphanThreads) Then
+    FOrphanThreads := TFPList.Create;
+  FOrphanThreads.Add(FStreamThread);
+  FStreamThread := Nil;
 End;
 
 Procedure TAssistantService.ClearStreamThread;
@@ -1209,6 +487,7 @@ Var
   StartTick: QWord;
   Actor: TAssistantActor;
 Begin
+  ReapOrphanThreads(0);
   If Not Assigned(FStreamThread) Then
     Begin
       FBusy := False;
@@ -1228,8 +507,6 @@ Begin
       CheckSynchronize(15);
       Sleep(5);
     End;
-  If Not FStreamThread.Finished Then
-    WorkflowLogger.Warning('AssistantService', 'Actor did not finish within 1.5s; detaching');
   Try
     If FStreamThread.Finished Then
       Begin
@@ -1238,17 +515,14 @@ Begin
       End
     Else
       Begin
-        If FStreamThread Is TAssistantActor Then
-          TAssistantActor(FStreamThread).Detach
-        Else If FStreamThread Is TAssistantStreamThread Then
-          TAssistantStreamThread(FStreamThread).Detach;
-        FStreamThread := Nil;
+        WorkflowLogger.Warning('AssistantService', 'Actor did not finish within 1.5s; detaching');
+        AbandonStreamThread;
       End;
   Except
     On E: Exception Do
       Begin
         WorkflowLogger.Warning('AssistantService', 'ClearStreamThread: ' + E.Message);
-        FStreamThread := Nil;
+        AbandonStreamThread;
       End;
   End;
   FBusy := False;
@@ -1384,11 +658,14 @@ Begin
   If Est <= Budget Then
     Exit;
 
-  { Phase 1: aggressively shrink older tool results and huge user/assistant blobs. }
+  { Phase 1: aggressively shrink older tool results and huge user/assistant blobs.
+    Use a While loop: dropping tool results shortens FMessages, so a For-to-High
+    bound captured at entry would walk off the end. }
   ProtectFrom := Length(FMessages) - RecentProtectCount;
   If ProtectFrom < 0 Then
     ProtectFrom := 0;
-  For I := 0 To High(FMessages) Do
+  I := 0;
+  While I <= High(FMessages) Do
     Begin
       If I >= ProtectFrom Then
         Begin
@@ -1397,6 +674,7 @@ Begin
               TruncateMessageContent(FMessages[I], RecentToolMaxChars, 'tool result');
               Changed := True;
             End;
+          Inc(I);
           Continue;
         End;
       If FMessages[I].Role = amrTool Then
@@ -1424,7 +702,11 @@ Begin
           While (I + 1 <= High(FMessages)) And (FMessages[I + 1].Role = amrTool) Do
             DropMessageRange(I + 1, 1);
           Changed := True;
+          ProtectFrom := Length(FMessages) - RecentProtectCount;
+          If ProtectFrom < 0 Then
+            ProtectFrom := 0;
         End;
+      Inc(I);
     End;
 
   Est := EstimatePromptTokens;
@@ -1590,50 +872,49 @@ Begin
   Result := BuildRequestJson;
 End;
 
+Procedure AppendSamplerItem(Var Items: TSamplerInputItemArray; Var Count: Integer; Const Item: TSamplerInputItem);
+Begin
+  If Count >= Length(Items) Then
+    Begin
+      If Length(Items) = 0 Then
+        SetLength(Items, 16)
+      Else
+        SetLength(Items, Length(Items) * 2);
+    End;
+  Items[Count] := Item;
+  Inc(Count);
+End;
+
 Function TAssistantService.ExportSamplerItems: TSamplerInputItemArray;
 Var
-  I, N, C: Integer;
+  I, C, CallIndex: Integer;
   Calls: TSamplerToolCallArray;
   RoleName: String;
 Begin
+  Result := Nil;
   TrimMessagesForBudget;
-  N := Length(FMessages);
-  If Trim(FSystemPrompt) <> '' Then
-    Inc(N);
-  SetLength(Result, N + 8);
+  SetLength(Result, 0);
   C := 0;
   If Trim(FSystemPrompt) <> '' Then
-    Begin
-      Result[C] := SamplerInputMessage('system', FSystemPrompt);
-      Inc(C);
-    End;
+    AppendSamplerItem(Result, C, SamplerInputMessage('system', FSystemPrompt));
   For I := 0 To High(FMessages) Do
     Begin
       If FMessages[I].Role = amrTool Then
-        Begin
-          Result[C] := SamplerInputFunctionOutput(FMessages[I].ToolCallId, FMessages[I].Content);
-          Inc(C);
-        End
+        AppendSamplerItem(Result, C, SamplerInputFunctionOutput(FMessages[I].ToolCallId, FMessages[I].Content))
       Else If FMessages[I].ToolCallsJson <> '' Then
         Begin
           If Trim(FMessages[I].Content) <> '' Then
-            Begin
-              Result[C] := SamplerInputMessage('assistant', FMessages[I].Content);
-              Inc(C);
-            End;
+            AppendSamplerItem(Result, C, SamplerInputMessage('assistant', FMessages[I].Content));
           If ParseOpenAiToolCallsJson(FMessages[I].ToolCallsJson, Calls) Then
-            For N := 0 To High(Calls) Do
-              If Calls[N].Name <> '' Then
-                Begin
-                  Result[C] := SamplerInputFunctionCall(Calls[N].Id, Calls[N].Name, Calls[N].Arguments);
-                  Inc(C);
-                End;
+            For CallIndex := 0 To High(Calls) Do
+              If Calls[CallIndex].Name <> '' Then
+                AppendSamplerItem(Result, C,
+                  SamplerInputFunctionCall(Calls[CallIndex].Id, Calls[CallIndex].Name, Calls[CallIndex].Arguments));
         End
       Else
         Begin
           RoleName := RoleToJson(FMessages[I].Role);
-          Result[C] := SamplerInputMessage(RoleName, FMessages[I].Content);
-          Inc(C);
+          AppendSamplerItem(Result, C, SamplerInputMessage(RoleName, FMessages[I].Content));
         End;
     End;
   SetLength(Result, C);
@@ -1650,15 +931,34 @@ Begin
   Result := Length(FMessages);
 End;
 
-Function TAssistantService.GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content: String): Boolean;
+Procedure TAssistantService.RestoreMessage(Role: TAssistantMessageRole; Const Content, ToolCallId, ToolCallsJson: String);
+Var
+  Idx: Integer;
+Begin
+  Idx := Length(FMessages);
+  SetLength(FMessages, Idx + 1);
+  FMessages[Idx].Role := Role;
+  FMessages[Idx].Content := Content;
+  FMessages[Idx].ToolCallId := ToolCallId;
+  FMessages[Idx].ToolCallsJson := ToolCallsJson;
+  FMessages[Idx].ContentEscaped := '';
+  FMessages[Idx].ToolCallIdEscaped := '';
+End;
+
+Function TAssistantService.GetMessage(Index: Integer; Out Role: TAssistantMessageRole;
+  Out Content, ToolCallId, ToolCallsJson: String): Boolean;
 Begin
   Result := False;
   Role := amrUser;
   Content := '';
+  ToolCallId := '';
+  ToolCallsJson := '';
   If (Index < 0) Or (Index >= Length(FMessages)) Then
     Exit;
   Role := FMessages[Index].Role;
   Content := FMessages[Index].Content;
+  ToolCallId := FMessages[Index].ToolCallId;
+  ToolCallsJson := FMessages[Index].ToolCallsJson;
   Result := True;
 End;
 

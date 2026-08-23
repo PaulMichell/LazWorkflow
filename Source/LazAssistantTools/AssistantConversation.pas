@@ -553,9 +553,9 @@ End;
 
 Function TAssistantConversationStore.AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
 Var
-  FS: TFileStream;
-  Line: String;
-  Offset: Int64;
+  ConvFS, IdxFS: TFileStream;
+  ConvLine, IdxLine: String;
+  ConvOffset: Int64;
   Idx: Integer;
 Begin
   Result := False;
@@ -565,39 +565,56 @@ Begin
     Exit;
   If Not FLoaded Then
     Load;
-  Line := BuildTurnJson(Turn) + #10;
-  FS := Nil;
+  Idx := Length(FTurns);
+  ConvLine := BuildTurnJson(Turn) + #10;
+  ConvFS := Nil;
+  IdxFS := Nil;
   Try
     Try
       If FileExistsUTF8(ConversationPath) Then
-        FS := TFileStream.Create(ConversationPath, fmOpenReadWrite Or fmShareDenyWrite)
+        ConvFS := TFileStream.Create(ConversationPath, fmOpenReadWrite Or fmShareDenyWrite)
       Else
-        FS := TFileStream.Create(ConversationPath, fmCreate);
-      FS.Seek(0, soEnd);
-      Offset := FS.Position;
-      If Length(Line) > 0 Then
-        FS.WriteBuffer(Line[1], Length(Line));
-      Idx := Length(FTurns);
+        ConvFS := TFileStream.Create(ConversationPath, fmCreate);
+      ConvFS.Seek(0, soEnd);
+      ConvOffset := ConvFS.Position;
+      If Length(ConvLine) > 0 Then
+        ConvFS.WriteBuffer(ConvLine[1], Length(ConvLine));
+      { Build the index line before touching memory so a failed index write can
+        truncate the conversation file with no in-memory commit. }
+      Entry := EntryFromTurn(Turn, ConvOffset, Idx);
+      IdxLine := BuildIndexLine(Entry, Idx) + #10;
+      Try
+        If FileExistsUTF8(IndexPath) Then
+          IdxFS := TFileStream.Create(IndexPath, fmOpenReadWrite Or fmShareDenyWrite)
+        Else
+          IdxFS := TFileStream.Create(IndexPath, fmCreate);
+        IdxFS.Seek(0, soEnd);
+        If Length(IdxLine) > 0 Then
+          IdxFS.WriteBuffer(IdxLine[1], Length(IdxLine));
+      Except
+        On E: Exception Do
+          Begin
+            ConvFS.Size := ConvOffset;
+            FreeAndNil(Entry);
+            FLastError := E.Message;
+            Exit;
+          End;
+      End;
       SetLength(FTurns, Idx + 1);
       FTurns[Idx] := Turn;
-      Entry := EntryFromTurn(Turn, Offset, Idx);
       FIndex.Add(Entry);
-      { Append one index line (previews only) — list UI uses memory. }
-      FreeAndNil(FS);
-      Line := BuildIndexLine(Entry, Idx) + #10;
-      If FileExistsUTF8(IndexPath) Then
-        FS := TFileStream.Create(IndexPath, fmOpenReadWrite Or fmShareDenyWrite)
-      Else
-        FS := TFileStream.Create(IndexPath, fmCreate);
-      FS.Seek(0, soEnd);
-      If Length(Line) > 0 Then
-        FS.WriteBuffer(Line[1], Length(Line));
       FLoaded := True;
       Result := True;
     Except
       On E: Exception Do
         Begin
           FLastError := E.Message;
+          If Assigned(ConvFS) And (ConvFS.Size > 0) Then
+            Try
+              If Assigned(Entry) Then
+                ConvFS.Size := Entry.FileOffset;
+            Except
+            End;
           If Assigned(Entry) And (FIndex.IndexOf(Entry) >= 0) Then
             Begin
               FIndex.Remove(Entry);
@@ -605,12 +622,13 @@ Begin
             End
           Else
             FreeAndNil(Entry);
-          If Length(FTurns) > 0 Then
-            SetLength(FTurns, Length(FTurns) - 1);
+          If Length(FTurns) > Idx Then
+            SetLength(FTurns, Idx);
         End;
     End;
   Finally
-    FS.Free;
+    IdxFS.Free;
+    ConvFS.Free;
   End;
 End;
 

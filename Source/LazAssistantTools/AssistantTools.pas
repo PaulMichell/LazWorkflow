@@ -38,13 +38,15 @@ Procedure AssistantFlushProjectIfDirty;
 { Suppress "project changed on disk" / file-diff dialogs during a chat send. }
 Procedure AssistantBeginQuietIdeSession;
 Procedure AssistantEndQuietIdeSession;
+{ Restore disk checks even if a send was abandoned without SetSending(False). }
+Procedure AssistantResetQuietIdeSession;
 
 Implementation
 
 Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog,
-  AssistantMarkdownForm, AssistantPlan, AssistantConfig, fpjson, jsonparser;
+  AssistantMarkdownForm, AssistantPlan, AssistantConfig, AssistantLfm, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -108,6 +110,14 @@ Begin
       LazarusIDE.CheckFilesOnDiskEnabled := GSavedCheckFilesOnDisk;
       WorkflowLogger.Info('AssistantTools', 'IDE disk checks restored');
     End;
+End;
+
+Procedure AssistantResetQuietIdeSession;
+Begin
+  If GQuietIdeDepth <= 0 Then
+    Exit;
+  GQuietIdeDepth := 1;
+  AssistantEndQuietIdeSession;
 End;
 
 Function JsonEscapeLocal(Const SourceText: String): String;
@@ -540,11 +550,16 @@ Begin
 End;
 
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Const
+  ReadBufSize = 65536;
 Var
-  Path, Resolved, Chunk, LineText: String;
-  MaxChars, StartLine, EndLine, LastLine, I, FirstOut, LastOut: Integer;
-  SL: TStringList;
-  Truncated: Boolean;
+  Path, Resolved, Chunk, LineText, Carry: String;
+  MaxChars, StartLine, EndLine, LineNo, FirstOut, LastOut, FileBytes: Integer;
+  Stream: TFileStream;
+  Buf: Array[0..ReadBufSize - 1] Of Byte;
+  BytesRead, I, SegStart: Integer;
+  Truncated, HitEndLine: Boolean;
+  RequestedEnd: Integer;
 Begin
   Result := False;
   ResultText := '';
@@ -571,60 +586,116 @@ Begin
   EndLine := JsonArgInt(ArgumentsJson, 'end_line', 0);
   If StartLine < 1 Then
     StartLine := 1;
-  SL := TStringList.Create;
+  RequestedEnd := EndLine;
+  Stream := Nil;
   Try
     Try
-      SL.LoadFromFile(Resolved);
-      LastLine := SL.Count;
-      If LastLine < 1 Then
+      Stream := TFileStream.Create(Resolved, fmOpenRead Or fmShareDenyNone);
+      FillChar(Buf, SizeOf(Buf), 0);
+      FileBytes := Stream.Size;
+      If FileBytes < 1 Then
         Begin
           ResultText := Format('File: %s (empty, 0 lines)', [Resolved]);
           Result := True;
           Exit;
         End;
-      If StartLine > LastLine Then
-        Begin
-          ErrorText := Format('start_line %d is past end of file (%d lines): %s',
-            [StartLine, LastLine, Resolved]);
-          Exit;
-        End;
-      If EndLine < 1 Then
-        EndLine := LastLine
-      Else If EndLine > LastLine Then
-        EndLine := LastLine;
-      If EndLine < StartLine Then
-        Begin
-          ErrorText := Format('end_line %d is before start_line %d.', [EndLine, StartLine]);
-          Exit;
-        End;
       Chunk := '';
+      Carry := '';
+      LineNo := 0;
       Truncated := False;
+      HitEndLine := False;
       FirstOut := StartLine;
       LastOut := StartLine - 1;
-      For I := StartLine To EndLine Do
+      Repeat
+        BytesRead := Stream.Read(Buf, SizeOf(Buf));
+        If BytesRead < 1 Then
+          Break;
+        SetLength(Carry, Length(Carry) + BytesRead);
+        Move(Buf[0], Carry[Length(Carry) - BytesRead + 1], BytesRead);
+        SegStart := 1;
+        I := 1;
+        While I <= Length(Carry) Do
+          Begin
+            If Carry[I] In [#10, #13] Then
+              Begin
+                LineText := Copy(Carry, SegStart, I - SegStart);
+                If (Carry[I] = #13) And (I < Length(Carry)) And (Carry[I + 1] = #10) Then
+                  Inc(I);
+                Inc(LineNo);
+                SegStart := I + 1;
+                If LineNo < StartLine Then
+                  Begin
+                    Inc(I);
+                    Continue;
+                  End;
+                If (EndLine > 0) And (LineNo > EndLine) Then
+                  Begin
+                    HitEndLine := True;
+                    Break;
+                  End;
+                If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
+                  Begin
+                    Truncated := True;
+                    Break;
+                  End;
+                If Length(Chunk) > 0 Then
+                  Chunk := Chunk + LineEnding;
+                Chunk := Chunk + LineText;
+                LastOut := LineNo;
+                If Length(Chunk) >= MaxChars Then
+                  Begin
+                    Truncated := True;
+                    Break;
+                  End;
+              End;
+            Inc(I);
+          End;
+        If SegStart > 1 Then
+          Carry := Copy(Carry, SegStart, MaxInt);
+        If Truncated Or HitEndLine Then
+          Break;
+      Until BytesRead < SizeOf(Buf);
+      If (Not Truncated) And (Not HitEndLine) And (Carry <> '') Then
         Begin
-          LineText := SL[I - 1];
-          { +1 for the line ending we will append. }
-          If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
+          Inc(LineNo);
+          LineText := Carry;
+          If (LineNo >= StartLine) And ((EndLine < 1) Or (LineNo <= EndLine)) Then
             Begin
-              Truncated := True;
-              Break;
-            End;
-          If Length(Chunk) > 0 Then
-            Chunk := Chunk + LineEnding;
-          Chunk := Chunk + LineText;
-          LastOut := I;
-          If Length(Chunk) >= MaxChars Then
-            Begin
-              Truncated := True;
-              Break;
+              If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
+                Truncated := True
+              Else
+                Begin
+                  If Length(Chunk) > 0 Then
+                    Chunk := Chunk + LineEnding;
+                  Chunk := Chunk + LineText;
+                  LastOut := LineNo;
+                End;
             End;
         End;
-      ResultText :=
-        Format('File: %s (%d lines total); lines %d–%d of requested %d–%d',
-          [Resolved, LastLine, FirstOut, LastOut, StartLine, EndLine]) + LineEnding +
-        Chunk;
-      If Truncated Or (LastOut < EndLine) Then
+      If LineNo < 1 Then
+        Begin
+          ResultText := Format('File: %s (empty, 0 lines)', [Resolved]);
+          Result := True;
+          Exit;
+        End;
+      If StartLine > LineNo Then
+        Begin
+          ErrorText := Format('start_line %d is past end of file (%d lines): %s',
+            [StartLine, LineNo, Resolved]);
+          Exit;
+        End;
+      If RequestedEnd < 1 Then
+        RequestedEnd := LastOut;
+      If Truncated Or HitEndLine Then
+        ResultText :=
+          Format('File: %s (%d bytes); lines %d–%d of requested %d–%d',
+            [Resolved, FileBytes, FirstOut, LastOut, StartLine, RequestedEnd])
+      Else
+        ResultText :=
+          Format('File: %s (%d lines total); lines %d–%d of requested %d–%d',
+            [Resolved, LineNo, FirstOut, LastOut, StartLine, RequestedEnd]);
+      ResultText := ResultText + LineEnding + Chunk;
+      If Truncated Or ((RequestedEnd > 0) And (LastOut < RequestedEnd) And HitEndLine = False) Then
         ResultText := ResultText + LineEnding + Format(
           '[… truncated. Continue with start_line=%d (same path). Do not re-read from line 1. …]',
           [LastOut + 1]);
@@ -634,7 +705,7 @@ Begin
         ErrorText := E.Message;
     End;
   Finally
-    SL.Free;
+    Stream.Free;
   End;
 End;
 
@@ -973,6 +1044,69 @@ Begin
   Ext := LowerCase(ExtractFileExt(Path));
   { The IDE owns .lpi/.lps — tool writes desync memory vs disk and raise reload dialogs. }
   Result := (Ext = '.lpi') Or (Ext = '.lps');
+End;
+
+Function IsSearchableTextExtension(Const Path: String): Boolean; Forward;
+
+Function IsSkippedSearchDirectory(Const DirName: String): Boolean;
+Var
+  N: String;
+Begin
+  N := LowerCase(DirName);
+  Result := (N = '.git') Or (N = '.svn') Or (N = '.hg') Or (N = 'node_modules') Or
+    (N = '__pycache__') Or (N = 'backup') Or (N = 'lib') Or (N = 'units');
+End;
+
+Function CollectSearchableFiles(Const DirPath, ExtFilter: String; Files: TStringList;
+  Var FileCount, WalkCount: Integer): Boolean;
+Var
+  Info: TSearchRec;
+  Child: String;
+  Code: Integer;
+Begin
+  Result := True;
+  If FileCount >= AssistantToolMaxSearchFiles Then
+    Exit;
+  Code := FindFirstUTF8(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
+  Try
+    While Code = 0 Do
+      Begin
+        Inc(WalkCount);
+        If WalkCount > 20000 Then
+          Begin
+            Result := False;
+            Exit;
+          End;
+        If (Info.Name <> '.') And (Info.Name <> '..') Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(DirPath) + Info.Name;
+            If (Info.Attr And faDirectory) <> 0 Then
+              Begin
+                If Not IsSkippedSearchDirectory(Info.Name) Then
+                  If Not CollectSearchableFiles(Child, ExtFilter, Files, FileCount, WalkCount) Then
+                    Begin
+                      Result := False;
+                      Exit;
+                    End;
+              End
+            Else If IsSearchableTextExtension(Child) Then
+              Begin
+                If (ExtFilter = '') Or (LowerCase(ExtractFileExt(Child)) = ExtFilter) Then
+                  Begin
+                    Files.Add(Child);
+                    Inc(FileCount);
+                    If FileCount >= AssistantToolMaxSearchFiles Then
+                      Exit;
+                  End;
+              End;
+          End;
+        If FileCount >= AssistantToolMaxSearchFiles Then
+          Exit;
+        Code := FindNextUTF8(Info);
+      End;
+  Finally
+    FindCloseUTF8(Info);
+  End;
 End;
 
 Function IsSearchableTextExtension(Const Path: String): Boolean;
@@ -1510,10 +1644,11 @@ End;
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Query, Path, Resolved, Glob, Rel, LineText, LowerQuery: String;
-  MaxMatches, MatchCount, FileCount, LineNo, I: Integer;
+  MaxMatches, MatchCount, FileCount, WalkCount, LineNo, I: Integer;
   Files: TStringList;
   SL: TStringList;
   ExtFilter: String;
+  WalkComplete: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1542,25 +1677,21 @@ Begin
   If MaxMatches > 200 Then
     MaxMatches := 200;
   LowerQuery := LowerCase(Query);
-  Files := FindAllFiles(Resolved, '*', True);
+  Files := TStringList.Create;
   SL := TStringList.Create;
   Try
-    MatchCount := 0;
     FileCount := 0;
+    WalkCount := 0;
+    WalkComplete := CollectSearchableFiles(Resolved, ExtFilter, Files, FileCount, WalkCount);
+    MatchCount := 0;
     ResultText := Format('Search for "%s" under %s', [Query, Resolved]) + LineEnding;
+    If Not WalkComplete Then
+      ResultText := ResultText + '[… directory walk capped before listing every file …]' + LineEnding;
+    If FileCount >= AssistantToolMaxSearchFiles Then
+      ResultText := ResultText + Format('[… stopped after listing %d text files …]',
+        [AssistantToolMaxSearchFiles]) + LineEnding;
     For I := 0 To Files.Count - 1 Do
       Begin
-        If FileCount >= AssistantToolMaxSearchFiles Then
-          Begin
-            ResultText := ResultText + Format('[… stopped after scanning %d files …]',
-              [AssistantToolMaxSearchFiles]) + LineEnding;
-            Break;
-          End;
-        If Not IsSearchableTextExtension(Files[I]) Then
-          Continue;
-        If (ExtFilter <> '') And (LowerCase(ExtractFileExt(Files[I])) <> ExtFilter) Then
-          Continue;
-        Inc(FileCount);
         Try
           SL.LoadFromFile(Files[I]);
         Except
@@ -1586,7 +1717,7 @@ Begin
               End;
           End;
       End;
-    ResultText := ResultText + Format('Matches: %d (scanned %d text files).', [MatchCount, FileCount]);
+    ResultText := ResultText + Format('Matches: %d (scanned %d text files).', [MatchCount, Files.Count]);
     Result := True;
   Finally
     SL.Free;
@@ -2135,160 +2266,6 @@ Begin
     Inc(I);
   Slice := Copy(PasBody, I, StartPos - I + 1);
   Result := Trim(Slice);
-End;
-
-Function BuildLfmPropertyLines(Const PropsJson: String; Out Lines: String; Out EventMethod: String): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
-  I: Integer;
-  Key, Val: String;
-  Node: TJSONData;
-  IsEvent, IsIdent: Boolean;
-  Ch: Char;
-  J: Integer;
-Begin
-  Result := False;
-  Lines := '';
-  EventMethod := '';
-  If Trim(PropsJson) = '' Then
-    Begin
-      Result := True;
-      Exit;
-    End;
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(PropsJson);
-      If Not (Data Is TJSONObject) Then
-        Exit;
-      Obj := TJSONObject(Data);
-      For I := 0 To Obj.Count - 1 Do
-        Begin
-          Key := Obj.Names[I];
-          Node := Obj.Items[I];
-          If Not Assigned(Node) Then
-            Continue;
-          If Node.JSONType = jtString Then
-            Begin
-              Val := Node.AsString;
-              IsEvent := (Length(Key) >= 2) And (LowerCase(Copy(Key, 1, 2)) = 'on');
-              If IsEvent And (EventMethod = '') Then
-                EventMethod := Val;
-              { Event method names and bare identifiers (clNone, etc.) stay unquoted; captions need quotes. }
-              IsIdent := Val <> '';
-              For J := 1 To Length(Val) Do
-                Begin
-                  Ch := Val[J];
-                  If Not (Ch In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then
-                    Begin
-                      IsIdent := False;
-                      Break;
-                    End;
-                End;
-              If IsEvent Or IsIdent Then
-                Lines := Lines + '    ' + Key + ' = ' + Val + LineEnding
-              Else
-                Lines := Lines + '    ' + Key + ' = ''' +
-                  StringReplace(Val, '''', '''''', [rfReplaceAll]) + '''' + LineEnding;
-            End
-          Else If Node.JSONType = jtBoolean Then
-            Lines := Lines + '    ' + Key + ' = ' + BoolToStr(Node.AsBoolean, True) + LineEnding
-          Else If Node.JSONType = jtNumber Then
-            Lines := Lines + '    ' + Key + ' = ' + Node.AsString + LineEnding
-          Else
-            Lines := Lines + '    ' + Key + ' = ' + Node.AsString + LineEnding;
-        End;
-      Result := True;
-    Except
-      Result := False;
-    End;
-  Finally
-    Data.Free;
-  End;
-End;
-
-Function UpsertLfmComponent(Var LfmBody: String; Const CompName, ClassName, PropLines: String): Boolean;
-Var
-  Lower, Marker, Block: String;
-  StartPos, EndPos, Depth, I, InsertAt: Integer;
-  LineStart: Integer;
-Begin
-  Result := False;
-  Lower := LowerCase(LfmBody);
-  Marker := 'object ' + LowerCase(CompName) + ':';
-  StartPos := Pos(Marker, Lower);
-  Block :=
-    '  object ' + CompName + ': ' + ClassName + LineEnding +
-    PropLines +
-    '    Left = 40' + LineEnding +
-    '    Top = 40' + LineEnding +
-    '  end' + LineEnding;
-  { If PropLines already has Left/Top, still OK to have defaults after — LFM last wins? Actually duplicate keys bad.
-    Prefer only add Left/Top if not in PropLines. }
-  If Pos('left =', LowerCase(PropLines)) > 0 Then
-    Block :=
-      '  object ' + CompName + ': ' + ClassName + LineEnding +
-      PropLines +
-      '  end' + LineEnding;
-  If StartPos > 0 Then
-    Begin
-      { Replace existing object block. }
-      Depth := 0;
-      I := StartPos;
-      EndPos := 0;
-      While I <= Length(LfmBody) Do
-        Begin
-          If (I = 1) Or (LfmBody[I - 1] In [#10, #13]) Then
-            Begin
-              LineStart := I;
-              If (LowerCase(Copy(LfmBody, LineStart, 6)) = 'object') Or
-                (LowerCase(Copy(LfmBody, LineStart, 8)) = 'inherited') Then
-                Inc(Depth)
-              Else If (LowerCase(Copy(LfmBody, LineStart, 3)) = 'end') And
-                ((LineStart + 3 > Length(LfmBody)) Or (LfmBody[LineStart + 3] In [#10, #13, ' ', #9])) Then
-                Begin
-                  Dec(Depth);
-                  If Depth = 0 Then
-                    Begin
-                      EndPos := LineStart;
-                      While (EndPos <= Length(LfmBody)) And (Not (LfmBody[EndPos] In [#10, #13])) Do
-                        Inc(EndPos);
-                      While (EndPos <= Length(LfmBody)) And (LfmBody[EndPos] In [#10, #13]) Do
-                        Inc(EndPos);
-                      Break;
-                    End;
-                End;
-            End;
-          Inc(I);
-        End;
-      If EndPos > StartPos Then
-        Begin
-          Delete(LfmBody, StartPos, EndPos - StartPos);
-          Insert(Block, LfmBody, StartPos);
-          Result := True;
-          Exit;
-        End;
-      { Fall through and insert if the existing block could not be bounded. }
-    End;
-  { Insert before final root "end". }
-  InsertAt := Length(LfmBody);
-  While (InsertAt > 1) And (LfmBody[InsertAt] In [#10, #13, ' ']) Do
-    Dec(InsertAt);
-  { Find last standalone end }
-  I := InsertAt;
-  While I > 1 Do
-    Begin
-      If (LowerCase(Copy(LfmBody, I, 3)) = 'end') And
-        ((I = 1) Or (LfmBody[I - 1] In [#10, #13, ' '])) Then
-        Begin
-          InsertAt := I;
-          Break;
-        End;
-      Dec(I);
-    End;
-  Insert(Block, LfmBody, InsertAt);
-  Result := True;
 End;
 
 Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;

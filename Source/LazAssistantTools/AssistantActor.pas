@@ -31,6 +31,7 @@ Type
     FSteer: TAssistantSteerBuffer;
     FParser: TAssistantSseParser;
     FHttpControl: TObject;
+    FHttpLock: TRTLCriticalSection;
     FSnapLock: TRTLCriticalSection;
     FContent: String;
     FThinking: String;
@@ -61,6 +62,7 @@ Type
     Procedure HttpsChunk(Const Chunk: String);
     Function HttpsShouldStop: Boolean;
     Procedure AbortHttp;
+    Function LockedService: TAssistantService;
     Procedure RunToolsOnMain;
     Function DrainSteerIntoHistory: Boolean;
     Function BuildRoundJson(Out Url: String): String;
@@ -118,6 +120,7 @@ Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   InitCriticalSection(FSnapLock);
+  InitCriticalSection(FHttpLock);
   InitCriticalSection(FTraceLock);
   FService := Service;
   FApiBase := ApiBase;
@@ -154,6 +157,7 @@ Begin
   FreeAndNil(FSteer);
   SetLength(FTraceQueue, 0);
   DoneCriticalSection(FTraceLock);
+  DoneCriticalSection(FHttpLock);
   DoneCriticalSection(FSnapLock);
   Inherited Destroy;
 End;
@@ -174,22 +178,43 @@ End;
 
 Procedure TAssistantActor.Detach;
 Begin
-  FOnToken := Nil;
-  FOnTrace := Nil;
-  FService := Nil;
+  { Drop UI callbacks and the service pointer so an abandoned thread cannot
+    mutate history after a new turn starts. In-flight calls already holding a
+    local service reference finish against the still-alive object. }
+  EnterCriticalSection(FSnapLock);
+  Try
+    FOnToken := Nil;
+    FOnTrace := Nil;
+    FService := Nil;
+  Finally
+    LeaveCriticalSection(FSnapLock);
+  End;
   AbortHttp;
 End;
 
-Procedure TAssistantActor.AbortHttp;
-Var
-  Control: THttpsStreamControl;
+Function TAssistantActor.LockedService: TAssistantService;
 Begin
-  If Not Assigned(FHttpControl) Then
-    Exit;
-  Control := THttpsStreamControl(FHttpControl);
+  EnterCriticalSection(FSnapLock);
   Try
-    Control.Abort;
-  Except
+    Result := FService;
+  Finally
+    LeaveCriticalSection(FSnapLock);
+  End;
+End;
+
+Procedure TAssistantActor.AbortHttp;
+Begin
+  { Hold FHttpLock across Abort so the worker cannot free the control until
+    Terminate / InternetCloseHandle has been issued. }
+  EnterCriticalSection(FHttpLock);
+  Try
+    If Assigned(FHttpControl) Then
+      Try
+        THttpsStreamControl(FHttpControl).Abort;
+      Except
+      End;
+  Finally
+    LeaveCriticalSection(FHttpLock);
   End;
 End;
 
@@ -406,7 +431,12 @@ Begin
         End;
       FParser.Reset;
       Control := THttpsStreamControl.Create;
-      FHttpControl := Control;
+      EnterCriticalSection(FHttpLock);
+      Try
+        FHttpControl := Control;
+      Finally
+        LeaveCriticalSection(FHttpLock);
+      End;
       Try
         Try
           If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
@@ -424,6 +454,18 @@ Begin
               Else
                 ErrorText := Format('HTTP %d: %s', [Code, Copy(Trim(ErrorText), 1, 400)]);
             End
+          Else If FParser.Failed Then
+            Begin
+              ErrorText := FParser.ErrorText;
+              If ErrorText = '' Then
+                ErrorText := 'response.failed';
+            End
+          Else If FParser.Incomplete And (Length(FParser.ToolCalls) = 0) And (Trim(FParser.Content) = '') Then
+            Begin
+              ErrorText := FParser.ErrorText;
+              If ErrorText = '' Then
+                ErrorText := 'response.incomplete';
+            End
           Else
             Begin
               If (FParser.Thinking <> '') And (Pos(FParser.Thinking, FThinking) = 0) Then
@@ -436,6 +478,13 @@ Begin
                   FEncryptedId := FParser.EncryptedId;
                 End;
               FToolCalls := FParser.ToolCalls;
+              If FParser.Incomplete Then
+                Begin
+                  WorkflowLogger.Warning('AssistantActor', 'Incomplete response: ' + FParser.ErrorText);
+                  If (FContent <> '') And (Pos('[Incomplete response', FContent) < 1) Then
+                    FContent := FContent + LineEnding + LineEnding +
+                      '*[Incomplete response: ' + FParser.ErrorText + ']*';
+                End;
               Result := True;
               Exit;
             End;
@@ -447,7 +496,12 @@ Begin
               ErrorText := E.Message;
         End;
       Finally
-        FHttpControl := Nil;
+        EnterCriticalSection(FHttpLock);
+        Try
+          FHttpControl := Nil;
+        Finally
+          LeaveCriticalSection(FHttpLock);
+        End;
         Control.Free;
       End;
       LastErr := ErrorText;
@@ -482,8 +536,10 @@ Var
   ResultText, ErrorText, Content, ToolCallsJson: String;
   Ok: Boolean;
   Call: TSamplerToolCall;
+  Svc: TAssistantService;
 Begin
-  If Not Assigned(FService) Then
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
     Exit;
   ToolCallsJson := '[';
   For I := 0 To High(FToolCalls) Do
@@ -503,7 +559,7 @@ Begin
         '","arguments":"' + JsonEscapeText(Call.Arguments) + '"}}';
     End;
   ToolCallsJson := ToolCallsJson + ']';
-  FService.AddAssistantToolCalls(FContent, ToolCallsJson);
+  Svc.AddAssistantToolCalls(FContent, ToolCallsJson);
   For I := 0 To High(FToolCalls) Do
     Begin
       If Terminated Then
@@ -517,7 +573,7 @@ Begin
       ResultText := '';
       ErrorText := '';
       Try
-        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, FService.ActiveMode,
+        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
           ResultText, ErrorText);
       Except
         On E: Exception Do
@@ -531,7 +587,7 @@ Begin
         Content := ResultText
       Else
         Content := 'Error: ' + ErrorText;
-      FService.AddToolResult(Call.Id, Content);
+      Svc.AddToolResult(Call.Id, Content);
       LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
         Integer(GetTickCount64 - StartTick));
       If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
@@ -544,15 +600,17 @@ End;
 Function TAssistantActor.DrainSteerIntoHistory: Boolean;
 Var
   Note, Wrapped: String;
+  Svc: TAssistantService;
 Begin
   Result := False;
-  If Terminated Or (Not Assigned(FService)) Then
+  Svc := LockedService;
+  If Terminated Or (Not Assigned(Svc)) Then
     Exit;
   Note := FSteer.DrainConcat;
   If Note = '' Then
     Exit;
   Wrapped := FormatSteerEnvelope(Note);
-  FService.AddMessage(amrUser, Wrapped);
+  Svc.AddMessage(amrUser, Wrapped);
   LogEvent(aekInterjected, Note);
   EmitSnapshot(False, 'Steering at next model gap…', True);
   Result := True;
@@ -565,9 +623,18 @@ Var
   Base: String;
   I, InsertAt: Integer;
   Shifted: TSamplerInputItemArray;
+  Svc: TAssistantService;
 Begin
   Base := TrimSlash(FApiBase);
-  Items := FService.ExportSamplerItems;
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Begin
+      SetLength(Items, 0);
+      Url := '';
+      Result := '';
+      Exit;
+    End;
+  Items := Svc.ExportSamplerItems;
   If (FEncryptedContent <> '') And FUseResponses Then
     Begin
       InsertAt := Length(Items);
@@ -602,6 +669,7 @@ Var
   RoundNo, I: Integer;
   HasTools: Boolean;
   WroteBefore: Boolean;
+  Svc: TAssistantService;
 Begin
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
@@ -609,7 +677,7 @@ Begin
   Try
   For RoundNo := 0 To MaxToolRounds Do
     Begin
-      If Terminated Or (Not Assigned(FService)) Then
+      If Terminated Or (Not Assigned(LockedService)) Then
         Break;
       FLoopIndex := RoundNo;
       If RoundNo > 0 Then
@@ -695,8 +763,9 @@ Begin
       LogEvent(aekTurnEnded, 'round_cap');
     End;
   Finally
-    If Assigned(FService) And FSteer.HasPending Then
-      FService.AddMessage(amrUser, FormatSteerEnvelope(FSteer.DrainConcat));
+    Svc := LockedService;
+    If Assigned(Svc) And FSteer.HasPending Then
+      Svc.AddMessage(amrUser, FormatSteerEnvelope(FSteer.DrainConcat));
   End;
 End;
 

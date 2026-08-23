@@ -31,6 +31,7 @@ Type
     FOutputTokens: Integer;
     FReasoningTokens: Integer;
     FFailed: Boolean;
+    FIncomplete: Boolean;
     FCompleted: Boolean;
     FErrorText: String;
     Procedure Emit(Const Event: TSamplerEvent);
@@ -60,6 +61,7 @@ Type
     Property OutputTokens: Integer Read FOutputTokens;
     Property ReasoningTokens: Integer Read FReasoningTokens;
     Property Failed: Boolean Read FFailed;
+    Property Incomplete: Boolean Read FIncomplete;
     Property ErrorText: String Read FErrorText;
   End;
 
@@ -125,6 +127,7 @@ Begin
   FOutputTokens := 0;
   FReasoningTokens := 0;
   FFailed := False;
+  FIncomplete := False;
   FCompleted := False;
   FErrorText := '';
 End;
@@ -324,6 +327,12 @@ Begin
       FFailed := True;
       FErrorText := JsonStringField(Root, 'message');
       If FErrorText = '' Then
+        Begin
+          Item := Root.FindPath('response.error') As TJSONObject;
+          If Assigned(Item) Then
+            FErrorText := JsonStringField(Item, 'message');
+        End;
+      If FErrorText = '' Then
         FErrorText := EventType;
       Event.Kind := sekFailed;
       Event.ErrorText := FErrorText;
@@ -421,15 +430,21 @@ Begin
     End;
   If EventType = 'response.incomplete' Then
     Begin
+      FIncomplete := True;
       UsageParent := Root.FindPath('response') As TJSONObject;
       If Assigned(UsageParent) Then
         Begin
           HarvestCompletedOutput(UsageParent);
           ApplyUsage(UsageParent);
+          Item := UsageParent.FindPath('incomplete_details') As TJSONObject;
+          If Assigned(Item) Then
+            FErrorText := JsonStringField(Item, 'reason');
         End;
+      If FErrorText = '' Then
+        FErrorText := 'incomplete';
       Event.Kind := sekCompleted;
       Event.Text := FContent;
-      Event.ErrorText := 'incomplete';
+      Event.ErrorText := FErrorText;
       Emit(Event);
     End;
 End;
@@ -614,8 +629,21 @@ Begin
       Finish := JsonStringField(Choice, 'finish_reason');
       If Finish <> '' Then
         Begin
+          If SameText(Finish, 'content_filter') Then
+            Begin
+              FFailed := True;
+              FErrorText := Finish;
+            End
+          Else If SameText(Finish, 'length') Then
+            Begin
+              FIncomplete := True;
+              FErrorText := Finish;
+            End;
           Event := EmptySamplerEvent;
-          Event.Kind := sekCompleted;
+          If FFailed Then
+            Event.Kind := sekFailed
+          Else
+            Event.Kind := sekCompleted;
           Event.Text := FContent;
           Event.ErrorText := Finish;
           UsageObj := Root.FindPath('usage') As TJSONObject;

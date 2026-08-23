@@ -51,6 +51,8 @@ Type
     Procedure AssignHandles(Session, Connect, Request: Pointer);
     Procedure AssignHttpClient(Client: TObject);
     Procedure ClearHandles;
+    { True if the caller now owns the native handles and must close them. }
+    Function StealNativeHandles(Out Session, Connect, Request: Pointer): Boolean;
     Procedure Abort;
     { True after Abort closed native handles — caller must not close them again. }
     Property ClosedByAbort: Boolean Read FClosedByAbort;
@@ -165,6 +167,30 @@ Begin
   End;
 End;
 
+Function THttpsStreamControl.StealNativeHandles(Out Session, Connect, Request: Pointer): Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    If FClosedByAbort Then
+      Begin
+        Session := Nil;
+        Connect := Nil;
+        Request := Nil;
+        Result := False;
+        Exit;
+      End;
+    Session := FSession;
+    Connect := FConnect;
+    Request := FRequest;
+    FSession := Nil;
+    FConnect := Nil;
+    FRequest := Nil;
+    Result := (Session <> Nil) Or (Connect <> Nil) Or (Request <> Nil);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
 Procedure THttpsStreamControl.Abort;
 Var
   S, C, R: Pointer;
@@ -182,6 +208,13 @@ Begin
     FHttpClient := Nil;
     If (R <> Nil) Or (C <> Nil) Or (S <> Nil) Or Assigned(HttpClient) Then
       FClosedByAbort := True;
+    { Terminate while the lock is held so the worker cannot Free the client
+      until the flag is set. Terminate itself only sets a stop flag. }
+    If Assigned(HttpClient) Then
+      Try
+        TFPHTTPClient(HttpClient).Terminate;
+      Except
+      End;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -192,12 +225,6 @@ Begin
     InternetCloseHandle(HINTERNET(C));
   If S <> Nil Then
     InternetCloseHandle(HINTERNET(S));
-  {$ELSE}
-  If Assigned(HttpClient) Then
-    Try
-      TFPHTTPClient(HttpClient).Terminate;
-    Except
-    End;
   {$ENDIF}
 End;
 
@@ -382,7 +409,8 @@ Begin
 End;
 
 Function WinINetRequest(Const Method, Url, ContentType, Body, ExtraHeaders: String;
-  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
+  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
+  Out RequestSent: Boolean): Boolean;
 Var
   Session, Connect, Request: HINTERNET;
   Host, Path: String;
@@ -402,6 +430,7 @@ Begin
   ResponseBody := '';
   StatusCode := 0;
   ErrorText := '';
+  RequestSent := False;
   Session := Nil;
   Connect := Nil;
   Request := Nil;
@@ -461,6 +490,8 @@ Begin
         BodyLen := Length(BodyAnsi);
       End;
 
+    { Once HttpSendRequest is invoked the body may already be in flight. }
+    RequestSent := True;
     If Not HttpSendRequest(Request, PChar(Headers), Length(Headers), BodyPtr, BodyLen) Then
       Begin
         ErrorText := 'WinINet HttpSendRequest failed (' + IntToStr(GetLastError) + ')';
@@ -583,6 +614,10 @@ End;
 
 Function HttpsGet(Const Url: String; Out ResponseBody: String; Out StatusCode: Integer;
   Out ErrorText: String; Const ExtraHeaders: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  RequestSent: Boolean;
+{$ENDIF}
 Begin
   If Not UrlIsHttps(Url) Then
     Begin
@@ -593,7 +628,7 @@ Begin
       Exit;
     End;
   {$IFDEF WINDOWS}
-  If WinINetRequest('GET', Url, '', '', ExtraHeaders, ResponseBody, StatusCode, ErrorText) Then
+  If WinINetRequest('GET', Url, '', '', ExtraHeaders, ResponseBody, StatusCode, ErrorText, RequestSent) Then
     Begin
       Result := True;
       Exit;
@@ -604,6 +639,10 @@ End;
 
 Function HttpsPostForm(Const Url, FormBody: String; Out ResponseBody: String;
   Out StatusCode: Integer; Out ErrorText: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  RequestSent: Boolean;
+{$ENDIF}
 Begin
   If Not UrlIsHttps(Url) Then
     Begin
@@ -614,10 +653,16 @@ Begin
       Exit;
     End;
   {$IFDEF WINDOWS}
+  { Do not replay a POST that WinINet may already have sent (OAuth codes rotate). }
   If WinINetRequest('POST', Url, 'application/x-www-form-urlencoded', FormBody, '',
-    ResponseBody, StatusCode, ErrorText) Then
+    ResponseBody, StatusCode, ErrorText, RequestSent) Then
     Begin
       Result := True;
+      Exit;
+    End;
+  If RequestSent Then
+    Begin
+      Result := False;
       Exit;
     End;
   {$ENDIF}
@@ -627,6 +672,10 @@ End;
 
 Function HttpsPostJson(Const Url, JsonBody, ExtraHeaders: String;
   Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  RequestSent: Boolean;
+{$ENDIF}
 Begin
   If Not UrlIsHttps(Url) Then
     Begin
@@ -638,9 +687,14 @@ Begin
     End;
   {$IFDEF WINDOWS}
   If WinINetRequest('POST', Url, 'application/json', JsonBody, ExtraHeaders,
-    ResponseBody, StatusCode, ErrorText) Then
+    ResponseBody, StatusCode, ErrorText, RequestSent) Then
     Begin
       Result := True;
+      Exit;
+    End;
+  If RequestSent Then
+    Begin
+      Result := False;
       Exit;
     End;
   {$ENDIF}
@@ -669,6 +723,7 @@ Var
   ReadOk: Boolean;
   CompleteLen, I, Need: Integer;
   B0: Byte;
+  StolenSession, StolenConnect, StolenRequest: Pointer;
 Begin
   Result := False;
   StatusCode := 0;
@@ -822,12 +877,21 @@ Begin
     Else If ReadOk Then
       Result := True;
   Finally
-    If Assigned(Control) And Control.ClosedByAbort Then
-      Control.ClearHandles
+    If Assigned(Control) Then
+      Begin
+        If Control.StealNativeHandles(StolenSession, StolenConnect, StolenRequest) Then
+          Begin
+            If StolenRequest <> Nil Then
+              InternetCloseHandle(HINTERNET(StolenRequest));
+            If StolenConnect <> Nil Then
+              InternetCloseHandle(HINTERNET(StolenConnect));
+            If StolenSession <> Nil Then
+              InternetCloseHandle(HINTERNET(StolenSession));
+          End;
+        Control.ClearHandles;
+      End
     Else
       Begin
-        If Assigned(Control) Then
-          Control.ClearHandles;
         If Request <> Nil Then
           InternetCloseHandle(Request);
         If Connect <> Nil Then
