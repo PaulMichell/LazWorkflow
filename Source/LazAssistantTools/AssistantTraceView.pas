@@ -51,7 +51,9 @@ Type
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
+    Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
+    Procedure LockControlHeight(Control: TControl; NewHeight: Integer);
   Protected
     Procedure Resize; Override;
   Public
@@ -83,6 +85,10 @@ Begin
   If Not Assigned(View) Then
     Exit;
   Try
+    { Drop the previous lock first: GetPreferredSize is clamped by MaxHeight, so a
+      growing answer would stay truncated at its first measured line. }
+    View.Constraints.MinHeight := 0;
+    View.Constraints.MaxHeight := 0;
     If View.MarkDown.Text <> Body Then
       Begin
         View.MarkDown.BeginUpdate;
@@ -95,11 +101,19 @@ Begin
     If MaxW < 80 Then
       MaxW := View.Width;
     If MaxW < 80 Then
-      Exit;
+      Begin
+        If MinLineH > 0 Then
+          View.Height := MinLineH;
+        Exit;
+      End;
     If (Not View.HandleAllocated) And Assigned(View.Parent) And View.Parent.HandleAllocated Then
       View.HandleNeeded;
     If Not View.HandleAllocated Then
-      Exit;
+      Begin
+        If MinLineH > 0 Then
+          View.Height := MinLineH;
+        Exit;
+      End;
     View.AutoSize := False;
     View.Width := MaxW;
     View.CalcLayout;
@@ -108,9 +122,9 @@ Begin
     View.GetPreferredSize(PrefW, PrefH);
     If PrefH < MinLineH Then
       PrefH := MinLineH;
+    View.Height := PrefH;
     View.Constraints.MinHeight := PrefH;
     View.Constraints.MaxHeight := PrefH;
-    View.Height := PrefH;
   Except
     View.Height := MinLineH * 2;
   End;
@@ -137,6 +151,11 @@ Begin
   If Assigned(TraceHost) Then
     Begin
       TraceHost.Color := clWindow;
+      { alTop inside a GTK scrollbox can cap height to the viewport, so later
+        cards are laid out but the range never grows. Size the host ourselves. }
+      TraceHost.Align := alNone;
+      TraceHost.Left := 0;
+      TraceHost.Top := 0;
       ApplyVerticalStack(TraceHost, False);
     End;
   If Assigned(EmptyLabel) Then
@@ -178,6 +197,8 @@ Begin
   Host.ChildSizing.ControlsPerLine := 1;
   Host.ChildSizing.EnlargeHorizontal := crsHomogenousChildResize;
   Host.ChildSizing.ShrinkHorizontal := crsHomogenousChildResize;
+  Host.ChildSizing.EnlargeVertical := crsAnchorAligning;
+  Host.ChildSizing.ShrinkVertical := crsAnchorAligning;
   If Inner Then
     Begin
       Host.ChildSizing.LeftRightSpacing := CardInnerPad;
@@ -217,6 +238,20 @@ Begin
     Exit;
   ApplyVerticalStack(Panel, True);
   Panel.AutoSize := True;
+End;
+
+Procedure TAssistantTraceView.LockControlHeight(Control: TControl; NewHeight: Integer);
+Begin
+  If Not Assigned(Control) Then
+    Exit;
+  If NewHeight < 1 Then
+    NewHeight := 1;
+  Control.AutoSize := False;
+  Control.Constraints.MinHeight := 0;
+  Control.Constraints.MaxHeight := 0;
+  Control.Height := NewHeight;
+  Control.Constraints.MinHeight := NewHeight;
+  Control.Constraints.MaxHeight := NewHeight;
 End;
 
 Function TAssistantTraceView.NamedChild(Host: TWinControl; Const ChildName: String): TControl;
@@ -631,6 +666,7 @@ Begin
       SizeMarkdownView(View, Display, ContentWidth, LineHeightPx);
       View.Visible := FShowThinking;
     End;
+  Panel.InvalidatePreferredSize;
   If Block.Running Then
     BindBlockFooter(Panel, '')
   Else
@@ -646,7 +682,11 @@ Var
   Body: TMemo;
   Child: TControl;
   Status, Line: String;
+  RowH: Integer;
 Begin
+  RowH := LineHeightPx + 12;
+  If RowH < ToolHeight Then
+    RowH := ToolHeight;
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
     If NamedChild(TPanel(Block.Frame), 'BodyMemo') = Nil Then
       Begin
@@ -656,13 +696,16 @@ Begin
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
-      InitHostedPanel(Panel, False, ToolHeight);
+      InitHostedPanel(Panel, False, RowH);
+      Block.Frame := Panel;
       Panel.Color := clInfoBk;
+      LockControlHeight(Panel, RowH);
       Body := MakeSelectableMemo(Panel, 'BodyMemo', False, False);
-      Body.Parent := Panel;
       Body.Align := alClient;
       Body.Color := clInfoBk;
+      Body.WordWrap := False;
       Body.BorderSpacing.Left := 8;
+      LockControlHeight(Body, RowH);
       Child := TLabel.Create(Panel);
       Child.Parent := Panel;
       Child.Align := alRight;
@@ -670,12 +713,12 @@ Begin
       Child.Name := 'StatusLabel';
       Child.BorderSpacing.Right := 8;
       TLabel(Child).Font.Color := clGrayText;
-      Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  LockControlHeight(Panel, RowH);
   If Block.Running Or Block.Ok Then
     Status := FormatThoughtElapsed(Block.DurationMs)
   Else
@@ -687,6 +730,7 @@ Begin
       Body := TMemo(Child);
       If Body.Text <> Line Then
         Body.Text := Line;
+      LockControlHeight(Body, RowH);
     End;
   Child := NamedChild(Panel, 'StatusLabel');
   If Child Is TLabel Then
@@ -750,6 +794,7 @@ Begin
   If Child Is TMarkDownControl Then
     SizeMarkdownView(TMarkDownControl(Child), Block.Body, ContentWidth, LineHeightPx);
   BindBlockFooter(Panel, Block.Footer);
+  Panel.InvalidatePreferredSize;
   Panel.Visible := (Block.Body <> '') Or (Block.Footer <> '');
 End;
 
@@ -772,20 +817,41 @@ Begin
   End;
 End;
 
+Procedure TAssistantTraceView.FitHostToContent;
+Var
+  PrefW, PrefH, W: Integer;
+Begin
+  If Not Assigned(TraceHost) Then
+    Exit;
+  W := 0;
+  If Assigned(TraceScroll) And (TraceScroll.ClientWidth > 0) Then
+    W := TraceScroll.ClientWidth;
+  If W < 1 Then
+    W := TraceHost.Width;
+  If (W > 0) And (TraceHost.Width <> W) Then
+    TraceHost.Width := W;
+  TraceHost.InvalidatePreferredSize;
+  PrefW := 0;
+  PrefH := 0;
+  TraceHost.GetPreferredSize(PrefW, PrefH);
+  If PrefH < 1 Then
+    PrefH := 1;
+  If TraceHost.Height <> PrefH Then
+    TraceHost.Height := PrefH;
+End;
+
 Procedure TAssistantTraceView.ScrollToEnd;
 Var
   MaxPos: Integer;
 Begin
   If Not Assigned(TraceScroll) Then
     Exit;
-  If Assigned(TraceHost) Then
-    Begin
-      TraceHost.InvalidatePreferredSize;
-      TraceHost.AdjustSize;
-    End;
-  MaxPos := TraceScroll.VertScrollBar.Range - TraceScroll.ClientHeight;
+  FitHostToContent;
+  MaxPos := TraceHost.Height - TraceScroll.ClientHeight;
   If MaxPos < 0 Then
     MaxPos := 0;
+  TraceScroll.VertScrollBar.Range := TraceHost.Height;
+  TraceScroll.VertScrollBar.Page := TraceScroll.ClientHeight;
   TraceScroll.VertScrollBar.Position := MaxPos;
 End;
 
@@ -834,6 +900,7 @@ Begin
   OrderFrames(Trace);
   If ContentWidth >= 80 Then
     FLastContentWidth := ContentWidth;
+  FitHostToContent;
   If ScrollBottom Then
     ScrollToEnd;
 End;

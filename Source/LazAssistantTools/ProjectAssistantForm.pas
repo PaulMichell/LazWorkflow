@@ -143,6 +143,7 @@ Type
     FRefreshingChat: Boolean;
     FIgnoreConversationListChange: Boolean;
     FThinkingSliceStart: Integer;
+    FAnswerSliceStart: Integer; { 1-based offset of the current answer block in FLiveContent. }
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
     HistoryIds: TStringList; { Parallel to HistoryCombo; '' = current conversation. }
@@ -243,6 +244,7 @@ Type
     Procedure EnsureChatView;
     Procedure RebuildTraceFromFields;
     Procedure ApplyLiveThinkingAndAnswer;
+    Procedure ApplyLiveAnswerSlice;
     Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
     Procedure ScrollChatToEnd;
@@ -351,6 +353,7 @@ Begin
   FHistoryTrace := TAssistantTrace.Create;
   FTraceView := Nil;
   FThinkingSliceStart := 1;
+  FAnswerSliceStart := 1;
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   Transcript := TStringList.Create;
@@ -2187,8 +2190,7 @@ Begin
   If Not Assigned(FTrace) Then
     Exit;
   FTrace.EnsureUser(FDisplayUser);
-  If FLiveContent <> '' Then
-    FTrace.EnsureAnswer.Body := FLiveContent;
+  ApplyLiveAnswerSlice;
   FTrace.FinishCurrentThinking;
   If SystemNote <> '' Then
     Begin
@@ -2610,7 +2612,7 @@ End;
 
 Procedure TProjectAssistantForm.ApplyLiveThinkingAndAnswer;
 Var
-  Block, Last: TTraceBlock;
+  Block: TTraceBlock;
   Slice: String;
 Begin
   If Not Assigned(FTrace) Then
@@ -2636,15 +2638,33 @@ Begin
       Block := FTrace.StartThinking(0);
       Block.Body := Slice;
     End;
+  ApplyLiveAnswerSlice;
+  If (FLiveContent <> '') And (FThinkingSliceStart <= Length(FLiveThinking)) Then
+    FThinkingSliceStart := Length(FLiveThinking) + 1;
+End;
+
+Procedure TProjectAssistantForm.ApplyLiveAnswerSlice;
+Var
+  Last: TTraceBlock;
+  Slice: String;
+Begin
+  If Not Assigned(FTrace) Then
+    Exit;
+  If FAnswerSliceStart < 1 Then
+    FAnswerSliceStart := 1;
+  If Length(FLiveContent) >= FAnswerSliceStart Then
+    Slice := Copy(FLiveContent, FAnswerSliceStart, MaxInt)
+  Else
+    Slice := '';
   Last := Nil;
   If FTrace.Count > 0 Then
     Last := FTrace[FTrace.Count - 1];
-  If (FLiveContent <> '') And (Not (Assigned(Last) And (Last.Kind = tbkNote))) Then
-    Begin
-      FTrace.EnsureAnswer.Body := FLiveContent;
-      If FThinkingSliceStart <= Length(FLiveThinking) Then
-        FThinkingSliceStart := Length(FLiveThinking) + 1;
-    End;
+  If Assigned(Last) And (Last.Kind = tbkNote) Then
+    Exit;
+  If Assigned(Last) And (Last.Kind = tbkAnswer) Then
+    Last.Body := Slice
+  Else If Slice <> '' Then
+    FTrace.EnsureAnswer.Body := Slice;
 End;
 
 Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
@@ -2669,7 +2689,11 @@ Begin
           End;
       End;
     aekToolStarted:
-      FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+      Begin
+        FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+        { Freeze the current answer; later tokens open a new card after the tool. }
+        FAnswerSliceStart := Length(FLiveContent) + 1;
+      End;
     aekToolCompleted:
       Begin
         Block := FTrace.FindTool(Event.ToolId);
@@ -2867,6 +2891,7 @@ Begin
   FAssistantThinking := '';
   FDisplaySystemNote := '';
   FThinkingSliceStart := 1;
+  FAnswerSliceStart := 1;
   ResetTraceCards;
   If Assigned(FTrace) Then
     Begin
