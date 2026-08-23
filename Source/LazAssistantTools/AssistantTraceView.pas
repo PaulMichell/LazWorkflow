@@ -501,7 +501,8 @@ Begin
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
-      Panel.Color := clForm;
+      Panel.ParentColor := True;
+      Panel.ParentBackground := True;
       Header := TLabel.Create(Panel);
       Header.Parent := Panel;
       Header.Align := alNone;
@@ -515,9 +516,10 @@ Begin
       View.Anchors := [akLeft, akTop];
       View.Name := 'ThoughtView';
       View.AutoSize := False;
-      View.Color := clForm;
-      View.ParentColor := False;
-      View.ParentBackground := False;
+      View.Color := clWindow;
+      View.ParentColor := True;
+      View.ParentBackground := True;
+      View.BorderStyle := bsNone;
       View.ScrollBars := ssNone;
       View.FontColor := clGrayText;
       View.FontQuoteColor := clGrayText;
