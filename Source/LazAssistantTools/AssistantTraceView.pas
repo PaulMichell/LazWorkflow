@@ -28,7 +28,9 @@ Type
     Function LineHeightPx: Integer;
     Procedure ApplyVerticalStack(Host: TWinControl; Inner: Boolean);
     Procedure InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
+    Procedure FinishHostedPanel(Panel: TPanel; AutoSizePanel: Boolean);
     Function NamedChild(Host: TWinControl; Const ChildName: String): TControl;
+    Function EnsureFooterLabel(Panel: TPanel): TLabel;
     Procedure OrderFrames(Trace: TAssistantTrace);
     Procedure EnsureFrame(Block: TTraceBlock);
     Procedure BindThinking(Block: TTraceBlock);
@@ -195,22 +197,26 @@ End;
 
 Procedure TAssistantTraceView.InitHostedPanel(Panel: TPanel; AutoSizePanel: Boolean; FixedHeight: Integer);
 Begin
+  { ChildSizing stays off until FinishHostedPanel so markdown is not asked for a
+    preferred size while siblings are still being parented. }
   Panel.Parent := TraceHost;
   Panel.BevelOuter := bvNone;
   Panel.Align := alNone;
   Panel.Anchors := [akLeft, akTop];
   Panel.BorderSpacing.Around := 0;
   Panel.ParentBackground := False;
-  If AutoSizePanel Then
-    Begin
-      Panel.AutoSize := True;
-      ApplyVerticalStack(Panel, True);
-    End
-  Else
-    Begin
-      Panel.AutoSize := False;
-      Panel.Height := FixedHeight;
-    End;
+  Panel.AutoSize := False;
+  Panel.ChildSizing.Layout := cclNone;
+  If Not AutoSizePanel Then
+    Panel.Height := FixedHeight;
+End;
+
+Procedure TAssistantTraceView.FinishHostedPanel(Panel: TPanel; AutoSizePanel: Boolean);
+Begin
+  If Not AutoSizePanel Then
+    Exit;
+  ApplyVerticalStack(Panel, True);
+  Panel.AutoSize := True;
 End;
 
 Function TAssistantTraceView.NamedChild(Host: TWinControl; Const ChildName: String): TControl;
@@ -346,7 +352,6 @@ End;
 Function TAssistantTraceView.MakeFooterLabel(Host: TWinControl): TLabel;
 Begin
   Result := TLabel.Create(Host);
-  Result.Parent := Host;
   Result.Align := alNone;
   Result.Anchors := [akLeft, akTop];
   Result.WordWrap := True;
@@ -354,10 +359,36 @@ Begin
   Result.Font.Style := [fsItalic];
   Result.Font.Color := clGrayText;
   Result.Name := 'FooterLabel';
+  Result.Caption := '';
+  Result.Visible := False;
   If Result.Font.Size > 0 Then
     Result.Font.Size := Result.Font.Size - 1
   Else If Result.Font.Height < 0 Then
     Result.Font.Height := Round(Result.Font.Height * 0.9);
+  Result.Parent := Host;
+End;
+
+Function TAssistantTraceView.EnsureFooterLabel(Panel: TPanel): TLabel;
+Var
+  Child: TControl;
+  SavedLayout: TControlChildrenLayout;
+Begin
+  Result := Nil;
+  If Not Assigned(Panel) Then
+    Exit;
+  Child := NamedChild(Panel, 'FooterLabel');
+  If Child Is TLabel Then
+    Begin
+      Result := TLabel(Child);
+      Exit;
+    End;
+  SavedLayout := Panel.ChildSizing.Layout;
+  Panel.ChildSizing.Layout := cclNone;
+  Try
+    Result := MakeFooterLabel(Panel);
+  Finally
+    Panel.ChildSizing.Layout := SavedLayout;
+  End;
 End;
 
 Procedure TAssistantTraceView.BindBlockFooter(Panel: TPanel; Const FooterText: String);
@@ -500,34 +531,30 @@ Procedure TAssistantTraceView.BindUser(Block: TTraceBlock);
 Var
   Panel: TPanel;
   Title: TLabel;
-  Body: TMemo;
   Child: TControl;
   BodyText, FooterText: String;
 Begin
-  If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil Then
-      Begin
-        TPanel(Block.Frame).Free;
-        Block.Frame := Nil;
-      End;
   If Not Assigned(Block.Frame) Then
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
+      Block.Frame := Panel;
       Title := TLabel.Create(Panel);
-      Title.Parent := Panel;
       Title.Align := alNone;
       Title.Anchors := [akLeft, akTop];
       Title.Font.Style := [fsBold];
       Title.Name := 'TitleLabel';
-      Body := MakeSelectableMemo(Panel, 'BodyMemo', False, False);
+      Title.Caption := Block.Title;
+      Title.Parent := Panel;
+      MakeSelectableMemo(Panel, 'BodyMemo', False, False);
       MakeFooterLabel(Panel);
-      Block.Frame := Panel;
+      FinishHostedPanel(Panel, True);
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  EnsureFooterLabel(Panel);
   SplitTrailingMdFooter(Block.Body, BodyText, FooterText);
   Child := NamedChild(Panel, 'TitleLabel');
   If Child Is TLabel Then
@@ -548,8 +575,7 @@ Var
   Display: String;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If (NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil) Or
-      (NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil) Then
+    If NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -558,21 +584,22 @@ Begin
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
+      Block.Frame := Panel;
       Panel.ParentColor := True;
       Panel.ParentBackground := True;
       Header := TLabel.Create(Panel);
-      Header.Parent := Panel;
       Header.Align := alNone;
       Header.Anchors := [akLeft, akTop];
       Header.Font.Style := [fsBold];
       Header.Font.Color := clGrayText;
       Header.Name := 'HeaderLabel';
+      Header.Caption := Block.Title;
+      Header.Parent := Panel;
       View := TMarkDownControl.Create(Panel);
-      View.Parent := Panel;
+      View.AutoSize := False;
       View.Align := alNone;
       View.Anchors := [akLeft, akTop];
       View.Name := 'ThoughtView';
-      View.AutoSize := False;
       View.Color := clWindow;
       View.ParentColor := True;
       View.ParentBackground := True;
@@ -581,13 +608,15 @@ Begin
       View.FontColor := clGrayText;
       View.FontQuoteColor := clGrayText;
       View.MonoFontName := 'Monospace';
+      View.Parent := Panel;
       MakeFooterLabel(Panel);
-      Block.Frame := Panel;
+      FinishHostedPanel(Panel, True);
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  EnsureFooterLabel(Panel);
   Child := NamedChild(Panel, 'HeaderLabel');
   If Child Is TLabel Then
     TLabel(Child).Caption := Block.Title;
@@ -673,8 +702,7 @@ Var
   Child: TControl;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If (NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil) Or
-      (NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil) Then
+    If NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -683,31 +711,34 @@ Begin
     Begin
       Panel := TPanel.Create(Self);
       InitHostedPanel(Panel, True, 0);
+      Block.Frame := Panel;
       Title := TLabel.Create(Panel);
-      Title.Parent := Panel;
       Title.Align := alNone;
       Title.Anchors := [akLeft, akTop];
       Title.Font.Style := [fsBold];
       Title.Font.Color := TitleColor;
       Title.Name := 'TitleLabel';
+      Title.Caption := Block.Title;
+      Title.Parent := Panel;
       View := TMarkDownControl.Create(Panel);
-      View.Parent := Panel;
+      View.AutoSize := False;
       View.Align := alNone;
       View.Anchors := [akLeft, akTop];
       View.Name := 'AnswerView';
-      View.AutoSize := False;
       View.Color := clWindow;
       View.ParentColor := False;
       View.ParentBackground := False;
       View.ScrollBars := ssNone;
       View.MonoFontName := 'Monospace';
+      View.Parent := Panel;
       MakeFooterLabel(Panel);
-      Block.Frame := Panel;
+      FinishHostedPanel(Panel, True);
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
+  EnsureFooterLabel(Panel);
   Child := NamedChild(Panel, 'TitleLabel');
   If Child Is TLabel Then
     Begin

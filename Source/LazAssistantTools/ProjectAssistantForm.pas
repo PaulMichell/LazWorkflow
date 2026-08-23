@@ -165,6 +165,7 @@ Type
     FLastTurnHadError: Boolean;
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
+    Procedure ResetTraceCards;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
     Procedure SetCurrentSystemNote(Const NoteText: String);
     Procedure EnsureConversationStore;
@@ -446,10 +447,19 @@ Begin
   FStreamingActive := False;
   FViewingLive := True;
   FSelectedTurnIndex := -1;
-  If Assigned(FTraceView) Then
-    FTraceView.ResetFrames;
+  ResetTraceCards;
   If Assigned(FTrace) Then
     FTrace.Clear;
+End;
+
+Procedure TProjectAssistantForm.ResetTraceCards;
+Begin
+  If Assigned(FTrace) Then
+    FTrace.NilFrames;
+  If Assigned(FHistoryTrace) Then
+    FHistoryTrace.NilFrames;
+  If Assigned(FTraceView) Then
+    FTraceView.ResetFrames;
 End;
 
 Procedure TProjectAssistantForm.SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -2572,8 +2582,7 @@ Var
 Begin
   If Not Assigned(FHistoryTrace) Then
     FHistoryTrace := TAssistantTrace.Create;
-  If Assigned(FTraceView) Then
-    FTraceView.ResetFrames;
+  ResetTraceCards;
   FHistoryTrace.Clear;
   FHistoryTrace.EnsureUser(FDisplayUser);
   If FAssistantThinking <> '' Then
@@ -2858,8 +2867,7 @@ Begin
   FAssistantThinking := '';
   FDisplaySystemNote := '';
   FThinkingSliceStart := 1;
-  If Assigned(FTraceView) Then
-    FTraceView.ResetFrames;
+  ResetTraceCards;
   If Assigned(FTrace) Then
     Begin
       FTrace.Clear;
