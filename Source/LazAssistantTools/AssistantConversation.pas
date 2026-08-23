@@ -51,6 +51,7 @@ Type
     StartedAt: String;
     FinishedAt: String;
     DurationMs: Integer;
+    ThinkingMs: Integer;
     Model: String;
     Skill: String;
     TokenEstimate: Integer;
@@ -355,6 +356,7 @@ Begin
     '"started_at":"' + JsonEscape(Turn.StartedAt) + '",' +
     '"finished_at":"' + JsonEscape(Turn.FinishedAt) + '",' +
     '"duration_ms":' + IntToStr(Turn.DurationMs) + ',' +
+    '"thinking_ms":' + IntToStr(Turn.ThinkingMs) + ',' +
     '"model":"' + JsonEscape(Turn.Model) + '",' +
     '"skill":"' + JsonEscape(Turn.Skill) + '",' +
     '"token_estimate":' + IntToStr(Turn.TokenEstimate) + ',' +
@@ -411,6 +413,7 @@ Begin
   Turn.StartedAt := '';
   Turn.FinishedAt := '';
   Turn.DurationMs := 0;
+  Turn.ThinkingMs := 0;
   Turn.Model := '';
   Turn.Skill := '';
   Turn.TokenEstimate := 0;
@@ -436,6 +439,7 @@ Begin
       Turn.StartedAt := Obj.Get('started_at', '');
       Turn.FinishedAt := Obj.Get('finished_at', '');
       Turn.DurationMs := Obj.Get('duration_ms', 0);
+      Turn.ThinkingMs := Obj.Get('thinking_ms', 0);
       Turn.Model := Obj.Get('model', '');
       Turn.Skill := Obj.Get('skill', '');
       Turn.TokenEstimate := Obj.Get('token_estimate', 0);
@@ -622,6 +626,7 @@ Begin
   Turn.StartedAt := '';
   Turn.FinishedAt := '';
   Turn.DurationMs := 0;
+  Turn.ThinkingMs := 0;
   Turn.Model := '';
   Turn.Skill := '';
   Turn.TokenEstimate := 0;

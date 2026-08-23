@@ -112,6 +112,39 @@ Begin
   Check('zero', FormatThoughtElapsed(0) = '0.0s');
   Check('clock under a minute', FormatThinkingClock(12000) = '0:12');
   Check('clock one minute', FormatThinkingClock(60000) = '1:00');
+  Check('thought footer', FormatThoughtFooter(12000) = 'Thought for 0:12');
+  Check('worked under an hour', FormatWorkedFooter(125000) = 'Worked for 2:05');
+  Check('worked over an hour', FormatWorkedFooter(3723000) = 'Worked for 1:02:03');
+End;
+
+Procedure TestFooters;
+Var
+  Trace: TAssistantTrace;
+  Think, Answer, Note: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Trace.AddUser('please review');
+    Think := Trace.StartThinking(0);
+    Think.Body := 'Looking at Foo.pas';
+    Think.DurationMs := 45000;
+    Trace.FinishCurrentThinking;
+    Check('completed title has no clock', Think.Title = 'Thinking');
+    Check('thought footer on completed think', Think.Footer = 'Thought for 0:45');
+    Check('thinking not running', Not Think.Running);
+    Check('running title still clocks', Pos('Thinking…', ThinkingCardTitle(12000, True)) = 1);
+    Answer := Trace.EnsureAnswer;
+    Answer.Body := 'Looks fine.';
+    Trace.ApplyWorkedFooter(125000);
+    Check('worked footer on answer', Answer.Footer = 'Worked for 2:05');
+    Note := Trace.AddNote('*Stream cancelled.*');
+    Trace.ApplyWorkedFooter(3661000);
+    Check('worked footer moves to note', Note.Footer = 'Worked for 1:01:01');
+    Check('answer footer stays', Answer.Footer = 'Worked for 2:05');
+    Check('thinking duration sum', Trace.ThinkingDurationMs = 45000);
+  Finally
+    Trace.Free;
+  End;
 End;
 
 Begin
@@ -120,6 +153,7 @@ Begin
   TestEnsureUser;
   TestEventOrder;
   TestElapsed;
+  TestFooters;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantTrace tests passed.');

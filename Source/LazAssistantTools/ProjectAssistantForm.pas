@@ -115,6 +115,8 @@ Type
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
+    FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
+    FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
     FShowThinking: Boolean;
     ActiveMode: TAssistantMode;
     FModelName: String;
@@ -175,6 +177,8 @@ Type
     Procedure ShowConversationTurn(TurnIndex: Integer);
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
+    Function CurrentStreamDurationMs: Integer;
+    Procedure FinishLiveTrace(Const SystemNote: String; DurationMs: Integer);
     Function CurrentModeFromUi: TAssistantMode;
     Procedure SelectMode(Mode: TAssistantMode);
     Procedure SyncModeUi;
@@ -328,6 +332,8 @@ Begin
   FSelectedTurnIndex := -1;
   FDisplayUser := '';
   FDisplaySystemNote := '';
+  FDisplayDurationMs := 0;
+  FDisplayThinkingMs := 0;
   FShowThinking := True;
   ActiveMode := amChat;
   FApplyingShellConfig := False;
@@ -430,6 +436,8 @@ Procedure TProjectAssistantForm.ClearCurrentTurnDisplay;
 Begin
   FDisplayUser := '';
   FDisplaySystemNote := '';
+  FDisplayDurationMs := 0;
+  FDisplayThinkingMs := 0;
   FAssistantContent := '';
   FAssistantThinking := '';
   FLiveUser := '';
@@ -1711,7 +1719,7 @@ End;
 
 Procedure TProjectAssistantForm.ShowConversationTurn(TurnIndex: Integer);
 Var
-  Prompt, Response, Thinking, ErrorText: String;
+  Turn: TConversationTurn;
 Begin
   FSelectedTurnIndex := TurnIndex;
   If TurnIndex = LiveConversationMarker Then
@@ -1722,23 +1730,27 @@ Begin
       FAssistantContent := FLiveContent;
       FAssistantThinking := FLiveThinking;
       FDisplaySystemNote := '';
+      FDisplayDurationMs := 0;
+      FDisplayThinkingMs := 0;
       RefreshChatDisplay(True, FSending);
       Exit;
     End;
   FViewingLive := False;
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  If Not ProjectAssistantConversation.GetTurnDisplay(TurnIndex, Prompt, Response, Thinking, ErrorText) Then
+  If Not ProjectAssistantConversation.GetTurn(TurnIndex, Turn) Then
     Begin
       WorkflowLogger.Warning('ProjectAssistant', 'ShowConversationTurn failed idx=' + IntToStr(TurnIndex) +
         ' ' + ProjectAssistantConversation.LastError);
       Exit;
     End;
-  FDisplayUser := Prompt;
-  FAssistantContent := Response;
-  FAssistantThinking := Thinking;
-  If ErrorText <> '' Then
-    FDisplaySystemNote := '**Error:** ' + ErrorText
+  FDisplayUser := Turn.Prompt;
+  FAssistantContent := Turn.Response;
+  FAssistantThinking := Turn.Thinking;
+  FDisplayDurationMs := Turn.DurationMs;
+  FDisplayThinkingMs := Turn.ThinkingMs;
+  If Turn.ErrorText <> '' Then
+    FDisplaySystemNote := '**Error:** ' + Turn.ErrorText
   Else
     FDisplaySystemNote := '';
   RefreshChatDisplay(True, False);
@@ -2106,9 +2118,7 @@ Begin
   If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
     (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
     Exit;
-  DurationMs := 0;
-  If StreamStart > 0 Then
-    DurationMs := Round((Now - StreamStart) * 24 * 60 * 60 * 1000);
+  DurationMs := CurrentStreamDurationMs;
   Turn.Id := NewConversationTurnId;
   Turn.Mode := AssistantModeToStr(ActiveMode);
   If FLiveUser <> '' Then
@@ -2129,6 +2139,10 @@ Begin
     Turn.StartedAt := Turn.CreatedAt;
   Turn.FinishedAt := IsoNowUtc;
   Turn.DurationMs := DurationMs;
+  If Assigned(FTrace) Then
+    Turn.ThinkingMs := FTrace.ThinkingDurationMs
+  Else
+    Turn.ThinkingMs := 0;
   Turn.Model := FModelName;
   If Assigned(AssistantClient) Then
     Turn.Skill := AssistantClient.ActiveSkill
@@ -2145,6 +2159,36 @@ Begin
     End
   Else
     WorkflowLogger.Warning('ProjectAssistant', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
+End;
+
+Function TProjectAssistantForm.CurrentStreamDurationMs: Integer;
+Begin
+  Result := 0;
+  If StreamStart > 0 Then
+    Result := Round((Now - StreamStart) * 24 * 60 * 60 * 1000);
+  If Result < 0 Then
+    Result := 0;
+End;
+
+Procedure TProjectAssistantForm.FinishLiveTrace(Const SystemNote: String; DurationMs: Integer);
+Var
+  Last: TTraceBlock;
+Begin
+  If Not Assigned(FTrace) Then
+    Exit;
+  FTrace.EnsureUser(FDisplayUser);
+  If FLiveContent <> '' Then
+    FTrace.EnsureAnswer.Body := FLiveContent;
+  FTrace.FinishCurrentThinking;
+  If SystemNote <> '' Then
+    Begin
+      Last := Nil;
+      If FTrace.Count > 0 Then
+        Last := FTrace[FTrace.Count - 1];
+      If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> SystemNote) Then
+        FTrace.AddNote(SystemNote);
+    End;
+  FTrace.ApplyWorkedFooter(DurationMs);
 End;
 
 Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
@@ -2536,6 +2580,9 @@ Begin
     Begin
       Block := FHistoryTrace.StartThinking(0);
       Block.Body := FAssistantThinking;
+      Block.StartedAt := 0;
+      If FDisplayThinkingMs > 0 Then
+        Block.DurationMs := FDisplayThinkingMs;
       FHistoryTrace.FinishCurrentThinking;
     End;
   If FAssistantContent <> '' Then
@@ -2548,6 +2595,8 @@ Begin
       If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> FDisplaySystemNote) Then
         FHistoryTrace.AddNote(FDisplaySystemNote);
     End;
+  If FDisplayDurationMs > 0 Then
+    FHistoryTrace.ApplyWorkedFooter(FDisplayDurationMs);
 End;
 
 Procedure TProjectAssistantForm.ApplyLiveThinkingAndAnswer;
@@ -2854,7 +2903,8 @@ End;
 
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
-  DisplayBody, ResolvedError: String;
+  DisplayBody, ResolvedError, TraceNote: String;
+  WorkedMs: Integer;
 Begin
   ResolvedError := ErrorText;
   If IsAssistantProgressStatus(ResolvedError) Then
@@ -2914,6 +2964,17 @@ Begin
     End;
   FStreamingActive := False;
   FLastTurnHadError := ResolvedError <> '';
+  FDisplayUser := FLiveUser;
+  FAssistantContent := FLiveContent;
+  FAssistantThinking := FLiveThinking;
+  TraceNote := '';
+  If ResolvedError <> '' Then
+    Begin
+      FDisplaySystemNote := '**Error:** ' + ResolvedError;
+      TraceNote := FDisplaySystemNote;
+    End;
+  WorkedMs := CurrentStreamDurationMs;
+  FinishLiveTrace(TraceNote, WorkedMs);
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ResolvedError);
   If Assigned(AssistantClient) Then
@@ -2955,22 +3016,6 @@ Begin
   If Assigned(ProjectAssistantConversation) Then
     FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
-  FDisplayUser := FLiveUser;
-  FAssistantContent := FLiveContent;
-  FAssistantThinking := FLiveThinking;
-  If ResolvedError <> '' Then
-    FDisplaySystemNote := '**Error:** ' + ResolvedError;
-  If Assigned(FTrace) Then
-    Begin
-      FTrace.EnsureUser(FDisplayUser);
-      If FLiveContent <> '' Then
-        FTrace.EnsureAnswer.Body := FLiveContent;
-      FTrace.FinishCurrentThinking;
-      If (ResolvedError <> '') And
-        ((FTrace.Count = 0) Or (FTrace[FTrace.Count - 1].Kind <> tbkNote) Or
-         (FTrace[FTrace.Count - 1].Body <> FDisplaySystemNote)) Then
-        FTrace.AddNote(FDisplaySystemNote);
-    End;
   RefreshChatDisplay(True, True);
   PersistSession;
 End;
@@ -3011,6 +3056,8 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.StopStream;
+Var
+  WorkedMs: Integer;
 Begin
   If Not FSending Then
     Exit;
@@ -3043,14 +3090,10 @@ Begin
   Else If FViewingLive Then
     FDisplaySystemNote := '*Stream cancelled.*';
   FStreamingActive := False;
+  WorkedMs := CurrentStreamDurationMs;
+  FinishLiveTrace(FDisplaySystemNote, WorkedMs);
   RecordCurrentTurn('cancelled');
   FViewingLive := True;
-  If Assigned(FTrace) Then
-    Begin
-      FTrace.FinishCurrentThinking;
-      If FDisplaySystemNote <> '' Then
-        FTrace.AddNote(FDisplaySystemNote);
-    End;
   UnlockModeAfterSend;
   SetSending(False);
   FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;

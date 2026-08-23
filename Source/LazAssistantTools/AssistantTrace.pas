@@ -30,6 +30,7 @@ Type
     StartedAt: TDateTime;
     FinishedAt: TDateTime;
     DurationMs: Integer;
+    Footer: String;
     Frame: TObject; { TControl created by AssistantTraceView; untyped to keep this unit LCL-free. }
   End;
 
@@ -39,6 +40,7 @@ Type
     Function GetCount: Integer;
     Function GetBlock(Index: Integer): TTraceBlock;
     Function AddBlock(Kind: TTraceBlockKind): TTraceBlock;
+    Procedure FinishThinkingBlock(Block: TTraceBlock);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -58,12 +60,16 @@ Type
     Procedure FinishCurrentThinking;
     Procedure CollapseThinking(HideBody: Boolean = True);
     Procedure TickElapsed;
+    Procedure ApplyWorkedFooter(DurationMs: Integer);
+    Function ThinkingDurationMs: Integer;
     Property Count: Integer Read GetCount;
     Property Blocks[Index: Integer]: TTraceBlock Read GetBlock; Default;
   End;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;
 Function FormatThinkingClock(DurationMs: Integer): String;
+Function FormatThoughtFooter(DurationMs: Integer): String;
+Function FormatWorkedFooter(DurationMs: Integer): String;
 Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Function ToolCardCaption(Const ToolName, Args: String): String;
 
@@ -121,6 +127,7 @@ Begin
   Result.StartedAt := 0;
   Result.FinishedAt := 0;
   Result.DurationMs := 0;
+  Result.Footer := '';
   Result.Frame := Nil;
   FBlocks.Add(Result);
 End;
@@ -277,17 +284,24 @@ Begin
   Result.Title := 'Assistant';
 End;
 
-Procedure TAssistantTrace.FinishCurrentThinking;
-Var
-  Block: TTraceBlock;
+Procedure TAssistantTrace.FinishThinkingBlock(Block: TTraceBlock);
 Begin
-  Block := CurrentRunningThinking;
   If Not Assigned(Block) Then
     Exit;
   Block.Running := False;
   If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
     Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
+  Block.FinishedAt := Now;
   Block.Title := ThinkingCardTitle(Block.DurationMs, False);
+  If Block.DurationMs > 0 Then
+    Block.Footer := FormatThoughtFooter(Block.DurationMs)
+  Else
+    Block.Footer := '';
+End;
+
+Procedure TAssistantTrace.FinishCurrentThinking;
+Begin
+  FinishThinkingBlock(CurrentRunningThinking);
 End;
 
 Procedure TAssistantTrace.CollapseThinking(HideBody: Boolean);
@@ -301,10 +315,7 @@ Begin
       If Block.Kind = tbkThinking Then
         Begin
           Block.Collapsed := HideBody;
-          Block.Running := False;
-          If (Block.StartedAt > 0) And (Block.DurationMs = 0) Then
-            Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
-          Block.Title := ThinkingCardTitle(Block.DurationMs, False);
+          FinishThinkingBlock(Block);
         End;
     End;
 End;
@@ -324,6 +335,36 @@ Begin
         End;
       If (Block.Kind = tbkTool) And Block.Running And (Block.StartedAt > 0) Then
         Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
+    End;
+End;
+
+Procedure TAssistantTrace.ApplyWorkedFooter(DurationMs: Integer);
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  For I := FBlocks.Count - 1 DownTo 0 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkAnswer) Or (Block.Kind = tbkNote) Then
+        Begin
+          Block.Footer := FormatWorkedFooter(DurationMs);
+          Exit;
+        End;
+    End;
+End;
+
+Function TAssistantTrace.ThinkingDurationMs: Integer;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := 0;
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If Block.Kind = tbkThinking Then
+        Result := Result + Block.DurationMs;
     End;
 End;
 
@@ -350,12 +391,31 @@ Begin
   Result := Format('%d:%2.2d', [TotalSec Div 60, TotalSec Mod 60]);
 End;
 
+Function FormatThoughtFooter(DurationMs: Integer): String;
+Begin
+  Result := 'Thought for ' + FormatThinkingClock(DurationMs);
+End;
+
+Function FormatWorkedFooter(DurationMs: Integer): String;
+Var
+  TotalSec, Hours, Mins, Secs: Integer;
+Begin
+  If DurationMs < 0 Then
+    DurationMs := 0;
+  TotalSec := DurationMs Div 1000;
+  Hours := TotalSec Div 3600;
+  Mins := (TotalSec Div 60) Mod 60;
+  Secs := TotalSec Mod 60;
+  If Hours > 0 Then
+    Result := Format('Worked for %d:%2.2d:%2.2d', [Hours, Mins, Secs])
+  Else
+    Result := Format('Worked for %d:%2.2d', [Mins, Secs]);
+End;
+
 Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Begin
   If Running Then
     Result := 'Thinking… ' + FormatThinkingClock(DurationMs)
-  Else If DurationMs > 0 Then
-    Result := 'Thinking  ' + FormatThoughtElapsed(DurationMs)
   Else
     Result := 'Thinking';
 End;

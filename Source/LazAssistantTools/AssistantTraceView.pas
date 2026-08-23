@@ -42,6 +42,8 @@ Type
     Procedure CopyItemClick(Sender: TObject);
     Procedure SelectAllItemClick(Sender: TObject);
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
+    Function MakeFooterLabel(Host: TWinControl): TLabel;
+    Procedure BindBlockFooter(Panel: TPanel; Const FooterText: String);
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
     Function ContentWidth: Integer;
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
@@ -341,6 +343,36 @@ Begin
     Result.Font.Color := clGrayText;
 End;
 
+Function TAssistantTraceView.MakeFooterLabel(Host: TWinControl): TLabel;
+Begin
+  Result := TLabel.Create(Host);
+  Result.Parent := Host;
+  Result.Align := alNone;
+  Result.Anchors := [akLeft, akTop];
+  Result.WordWrap := True;
+  Result.AutoSize := True;
+  Result.Font.Style := [fsItalic];
+  Result.Font.Color := clGrayText;
+  Result.Name := 'FooterLabel';
+  If Result.Font.Size > 0 Then
+    Result.Font.Size := Result.Font.Size - 1
+  Else If Result.Font.Height < 0 Then
+    Result.Font.Height := Round(Result.Font.Height * 0.9);
+End;
+
+Procedure TAssistantTraceView.BindBlockFooter(Panel: TPanel; Const FooterText: String);
+Var
+  Child: TControl;
+  Footer: TLabel;
+Begin
+  Child := NamedChild(Panel, 'FooterLabel');
+  If Not (Child Is TLabel) Then
+    Exit;
+  Footer := TLabel(Child);
+  Footer.Caption := FooterText;
+  Footer.Visible := FooterText <> '';
+End;
+
 Function TAssistantTraceView.WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
 Var
   Bmp: TBitmap;
@@ -467,7 +499,7 @@ End;
 Procedure TAssistantTraceView.BindUser(Block: TTraceBlock);
 Var
   Panel: TPanel;
-  Title, Footer: TLabel;
+  Title: TLabel;
   Body: TMemo;
   Child: TControl;
   BodyText, FooterText: String;
@@ -489,18 +521,7 @@ Begin
       Title.Font.Style := [fsBold];
       Title.Name := 'TitleLabel';
       Body := MakeSelectableMemo(Panel, 'BodyMemo', False, False);
-      Footer := TLabel.Create(Panel);
-      Footer.Parent := Panel;
-      Footer.Align := alNone;
-      Footer.Anchors := [akLeft, akTop];
-      Footer.WordWrap := True;
-      Footer.Font.Style := [fsItalic];
-      Footer.Font.Color := clGrayText;
-      Footer.Name := 'FooterLabel';
-      If Footer.Font.Size > 0 Then
-        Footer.Font.Size := Footer.Font.Size - 1
-      Else If Footer.Font.Height < 0 Then
-        Footer.Font.Height := Round(Footer.Font.Height * 0.9);
+      MakeFooterLabel(Panel);
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
@@ -514,13 +535,7 @@ Begin
   Child := NamedChild(Panel, 'BodyMemo');
   If Child Is TMemo Then
     BindSelectableMemo(TMemo(Child), BodyText);
-  Child := NamedChild(Panel, 'FooterLabel');
-  If Child Is TLabel Then
-    Begin
-      Footer := TLabel(Child);
-      Footer.Caption := FooterText;
-      Footer.Visible := FooterText <> '';
-    End;
+  BindBlockFooter(Panel, FooterText);
   Panel.Visible := True;
 End;
 
@@ -533,7 +548,8 @@ Var
   Display: String;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil Then
+    If (NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil) Or
+      (NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil) Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -565,6 +581,7 @@ Begin
       View.FontColor := clGrayText;
       View.FontQuoteColor := clGrayText;
       View.MonoFontName := 'Monospace';
+      MakeFooterLabel(Panel);
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
@@ -585,6 +602,10 @@ Begin
       SizeMarkdownView(View, Display, ContentWidth, LineHeightPx);
       View.Visible := FShowThinking;
     End;
+  If Block.Running Then
+    BindBlockFooter(Panel, '')
+  Else
+    BindBlockFooter(Panel, Block.Footer);
   { Hide Thinking drops thought bodies; a running card keeps the timer line. }
   Panel.Visible := FShowThinking Or Block.Running;
   Panel.AutoSize := True;
@@ -652,7 +673,8 @@ Var
   Child: TControl;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
-    If NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil Then
+    If (NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil) Or
+      (NamedChild(TPanel(Block.Frame), 'FooterLabel') = Nil) Then
       Begin
         TPanel(Block.Frame).Free;
         Block.Frame := Nil;
@@ -679,6 +701,7 @@ Begin
       View.ParentBackground := False;
       View.ScrollBars := ssNone;
       View.MonoFontName := 'Monospace';
+      MakeFooterLabel(Panel);
       Block.Frame := Panel;
     End
   Else If Block.Frame Is TPanel Then
@@ -695,7 +718,8 @@ Begin
   Child := NamedChild(Panel, 'AnswerView');
   If Child Is TMarkDownControl Then
     SizeMarkdownView(TMarkDownControl(Child), Block.Body, ContentWidth, LineHeightPx);
-  Panel.Visible := Block.Body <> '';
+  BindBlockFooter(Panel, Block.Footer);
+  Panel.Visible := (Block.Body <> '') Or (Block.Footer <> '');
 End;
 
 Procedure TAssistantTraceView.BindAnswer(Block: TTraceBlock);
