@@ -80,7 +80,7 @@ Uses
 Const
   HeaderHeight = 26;
   ToolHeight = 30;
-  TruncatedLineCount = 12;
+  TruncatedLineCount = 24;
   CardInnerPad = 8;
 
 Function EstimateWrappedHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth, MinLineH: Integer): Integer;
@@ -109,15 +109,23 @@ End;
 Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String; MaxW, MinLineH: Integer);
 Var
   PrefW, PrefH, Est: Integer;
+  TextChanged: Boolean;
 Begin
   If Not Assigned(View) Then
     Exit;
   Try
+    If MaxW < 80 Then
+      MaxW := View.Width;
+    TextChanged := View.MarkDown.Text <> Body;
+    { Re-layout only when the body or wrap width changed. Sync walks every card
+      on each live snapshot; repeating CalcLayout on a finished CoT pegs the UI. }
+    If (Not TextChanged) And (Abs(View.Width - MaxW) < 2) And (MaxW >= 80) And (View.Height >= MinLineH) Then
+      Exit;
     { Drop the previous lock first: GetPreferredSize is clamped by MaxHeight, so a
       growing answer would stay truncated at its first measured line. }
     View.Constraints.MinHeight := 0;
     View.Constraints.MaxHeight := 0;
-    If View.MarkDown.Text <> Body Then
+    If TextChanged Then
       Begin
         View.MarkDown.BeginUpdate;
         Try
@@ -126,8 +134,6 @@ Begin
           View.MarkDown.EndUpdate;
         End;
       End;
-    If MaxW < 80 Then
-      MaxW := View.Width;
     If MaxW < 80 Then
       Begin
         If MinLineH > 0 Then
@@ -810,7 +816,11 @@ Begin
   Child := NamedChild(Panel, 'HeaderLabel');
   If Child Is TLabel Then
     TLabel(Child).Caption := Block.Title;
-  Display := Block.Body;
+  If Block.Running Then
+    Display := LastLines(Block.Body, FTruncatedLines)
+  Else
+    Display := Block.Body;
+  View := Nil;
   Child := NamedChild(Panel, 'ThoughtView');
   If Child Is TMarkDownControl Then
     Begin
@@ -825,7 +835,12 @@ Begin
     BindBlockFooter(Panel, Block.Footer);
   { Hide Thinking drops thought bodies; a running card keeps the timer line. }
   Panel.Visible := FShowThinking Or Block.Running;
-  Panel.AutoSize := True;
+  { AutoSize + markdown GetPreferredSize on a growing CoT starves the event loop. }
+  Panel.AutoSize := False;
+  If Assigned(View) And View.Visible Then
+    LockControlHeight(Panel, LineHeightPx + 6 + View.Height + CardInnerPad)
+  Else
+    LockControlHeight(Panel, LineHeightPx + CardInnerPad);
 End;
 
 Procedure TAssistantTraceView.BindTool(Block: TTraceBlock);

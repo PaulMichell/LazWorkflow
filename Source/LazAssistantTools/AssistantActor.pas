@@ -47,6 +47,7 @@ Type
     FLoopIndex: Integer;
     FLastSnapTick: QWord;
     FPendingFinish: Boolean;
+    FNotifyQueued: Boolean;
     FToolCalls: TSamplerToolCallArray;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
       Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
@@ -147,6 +148,7 @@ Begin
   FLoopIndex := 0;
   FLastSnapTick := 0;
   FPendingFinish := False;
+  FNotifyQueued := False;
   SetLength(FToolCalls, 0);
 End;
 
@@ -297,6 +299,8 @@ Begin
     Thinking := FThinking;
     Done := FPendingFinish;
     FPendingFinish := False;
+    { Allow a later EmitSnapshot (including finish) to queue again while Cb runs. }
+    FNotifyQueued := False;
     { Live snapshots carry a status string on the ErrorText slot; only a finished
       snapshot may report a terminal error. Progress text must not leak into finish. }
     If Done Then
@@ -319,6 +323,7 @@ End;
 Procedure TAssistantActor.EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
 Var
   NowTick: QWord;
+  NeedQueue: Boolean;
 Begin
   If Terminated And (Not IsDone) Then
     Exit;
@@ -335,6 +340,7 @@ Begin
         Exit;
       FLastSnapTick := NowTick;
     End;
+  NeedQueue := False;
   EnterCriticalSection(FSnapLock);
   Try
     If IsDone Then
@@ -342,10 +348,16 @@ Begin
     Else If ErrorText <> '' Then
       FStatusText := ErrorText;
     FPendingFinish := FPendingFinish Or IsDone;
+    If Not FNotifyQueued Then
+      Begin
+        FNotifyQueued := True;
+        NeedQueue := True;
+      End;
   Finally
     LeaveCriticalSection(FSnapLock);
   End;
-  Queue(@NotifyMain);
+  If NeedQueue Then
+    Queue(@NotifyMain);
 End;
 
 Procedure TAssistantActor.SetPhase(Phase: TAssistantPhase);
