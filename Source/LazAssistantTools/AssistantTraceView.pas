@@ -119,9 +119,12 @@ End;
 
 Function TAssistantTraceView.LineHeightPx: Integer;
 Begin
-  If Not HandleAllocated Then
-    HandleNeeded;
-  Result := Canvas.TextHeight('Hg');
+  { Do not HandleNeeded here: Create runs before Parent is set. }
+  Result := 16;
+  If HandleAllocated Then
+    Result := Canvas.TextHeight('Hg')
+  Else
+    Result := Abs(Font.Height);
   If Result < 12 Then
     Result := 16;
 End;
