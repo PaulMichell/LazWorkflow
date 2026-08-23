@@ -42,7 +42,6 @@ Type
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
     Function ContentWidth: Integer;
-    Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String);
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer): String;
     Procedure ScrollToEnd;
@@ -67,6 +66,42 @@ Const
   ToolHeight = 30;
   TruncatedLineCount = 12;
   CardInnerPad = 8;
+
+Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String; MaxW, MinLineH: Integer);
+Var
+  PrefW, PrefH: Integer;
+Begin
+  If Not Assigned(View) Then
+    Exit;
+  Try
+    If View.MarkDown.Text <> Body Then
+      Begin
+        View.MarkDown.BeginUpdate;
+        Try
+          View.MarkDown.Text := Body;
+        Finally
+          View.MarkDown.EndUpdate;
+        End;
+      End;
+    If MaxW < 80 Then
+      MaxW := View.Width;
+    If MaxW < 80 Then
+      Exit;
+    View.AutoSize := False;
+    View.Width := MaxW;
+    View.CalcLayout;
+    PrefW := 0;
+    PrefH := 0;
+    View.GetPreferredSize(PrefW, PrefH);
+    If PrefH < MinLineH Then
+      PrefH := MinLineH;
+    View.Constraints.MinHeight := PrefH;
+    View.Constraints.MaxHeight := PrefH;
+    View.Height := PrefH;
+  Except
+    View.Height := MinLineH * 2;
+  End;
+End;
 
 Constructor TAssistantTraceView.Create(TheOwner: TComponent);
 Begin
@@ -325,43 +360,6 @@ Begin
     Result := TraceHost.ClientWidth - (CardInnerPad * 4);
 End;
 
-Procedure TAssistantTraceView.SizeMarkdownView(View: TMarkDownControl; Const Body: String);
-Var
-  PrefW, PrefH, MaxW: Integer;
-Begin
-  If Not Assigned(View) Then
-    Exit;
-  Try
-    If View.MarkDown.Text <> Body Then
-      Begin
-        View.MarkDown.BeginUpdate;
-        Try
-          View.MarkDown.Text := Body;
-        Finally
-          View.MarkDown.EndUpdate;
-        End;
-      End;
-    MaxW := ContentWidth;
-    If MaxW < 80 Then
-      MaxW := View.Width;
-    If MaxW < 80 Then
-      Exit;
-    View.AutoSize := False;
-    View.Width := MaxW;
-    View.CalcLayout;
-    PrefW := 0;
-    PrefH := 0;
-    View.GetPreferredSize(PrefW, PrefH);
-    If PrefH < LineHeightPx Then
-      PrefH := LineHeightPx;
-    View.Constraints.MinHeight := PrefH;
-    View.Constraints.MaxHeight := PrefH;
-    View.Height := PrefH;
-  Except
-    View.Height := LineHeightPx * 2;
-  End;
-End;
-
 Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer): String;
 Var
   SL: TStringList;
@@ -541,7 +539,7 @@ Begin
   If Child Is TMarkDownControl Then
     Begin
       View := TMarkDownControl(Child);
-      SizeMarkdownView(View, Display);
+      SizeMarkdownView(View, Display, ContentWidth, LineHeightPx);
       View.Visible := FShowThinking;
     End;
   { Hide Thinking drops thought bodies; a running card keeps the timer line. }
@@ -653,7 +651,7 @@ Begin
     End;
   Child := NamedChild(Panel, 'AnswerView');
   If Child Is TMarkDownControl Then
-    SizeMarkdownView(TMarkDownControl(Child), Block.Body);
+    SizeMarkdownView(TMarkDownControl(Child), Block.Body, ContentWidth, LineHeightPx);
   Panel.Visible := Block.Body <> '';
 End;
 
