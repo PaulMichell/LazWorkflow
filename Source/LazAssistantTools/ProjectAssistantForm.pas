@@ -3652,17 +3652,17 @@ Begin
   Proj := Nil;
   If Assigned(LazarusIDE) Then
     Proj := LazarusIDE.ActiveProject;
-  If Assigned(Proj) And (Not Proj.IsVirtual) Then
+  If Assigned(Proj) Then
     Begin
       Key := Proj.ProjectInfoFile;
       Root := ProjectAssistantRoot;
       If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
         Title := 'Project Assistant — ' + ExtractFileName(Proj.MainFile.Filename)
       Else If Key <> '' Then
-        Title := 'Project Assistant — ' + ExtractFileName(Key);
-    End
-  Else If Assigned(Proj) And Proj.IsVirtual Then
-    Title := 'Project Assistant — (unsaved project)';
+        Title := 'Project Assistant — ' + ExtractFileName(Key)
+      Else If Proj.IsVirtual Then
+        Title := 'Project Assistant — (unsaved project)';
+    End;
 
   Caption := Title;
   FSessionProjectKey := '';
@@ -3714,7 +3714,10 @@ Begin
       RefreshPlanList;
     End;
   UpdateStatusFooter;
-  WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title);
+  If Root <> '' Then
+    WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title + ' root=' + Root)
+  Else
+    WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title);
 End;
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;

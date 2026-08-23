@@ -24,27 +24,58 @@ Procedure ClearProjectChatSession;
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, fpjson, jsonparser;
+  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, fpjson, jsonparser, AssistantProjectPaths;
 
 Function ActiveProjectSessionPath: String;
 Var
   Proj: TLazProject;
-  Dir: String;
+  Dir, Root, Preferred, Legacy, MainName: String;
 Begin
   Result := '';
+  Root := '';
+  Preferred := '';
+  Legacy := '';
   If Not Assigned(LazarusIDE) Then
     Exit;
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
+  MainName := '';
+  If Assigned(Proj.MainFile) Then
+    MainName := Proj.MainFile.Filename;
+  Root := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
+  If Root <> '' Then
+    Preferred := IncludeTrailingPathDelimiter(Root) + AssistantStoreFolderName + PathDelim + AssistantSessionFileName;
+  If (Preferred <> '') And FileExistsUTF8(Preferred) Then
+    Begin
+      Result := Preferred;
+      Exit;
+    End;
+  If Root <> '' Then
+    Begin
+      Legacy := IncludeTrailingPathDelimiter(Root) + 'Source' + PathDelim + AssistantSessionFileName;
+      If FileExistsUTF8(Legacy) Then
+        Begin
+          Result := Legacy;
+          Exit;
+        End;
+    End;
   Dir := '';
-  If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-    Dir := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
+  If MainName <> '' Then
+    Dir := ExtractFilePath(ExpandFileName(MainName));
   If Dir = '' Then
     Dir := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
-  If Dir = '' Then
-    Exit;
-  Result := IncludeTrailingPathDelimiter(Dir) + AssistantSessionFileName;
+  If Dir <> '' Then
+    Legacy := IncludeTrailingPathDelimiter(Dir) + AssistantSessionFileName;
+  If (Legacy <> '') And FileExistsUTF8(Legacy) Then
+    Begin
+      Result := Legacy;
+      Exit;
+    End;
+  If Preferred <> '' Then
+    Result := Preferred
+  Else
+    Result := Legacy;
 End;
 
 Function RoleToTag(Role: TAssistantMessageRole): String;

@@ -131,12 +131,11 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser;
+  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths;
 
 Const
   PreviewMaxChars = 160;
-  AssistantDirName = '.assistant';
-  ConversationFileName = 'conversation.jsonl';
+  ConversationFileName = AssistantConversationFileName;
   IndexFileName = 'conversation.index.jsonl';
   ConfigFileName = 'config.json';
   ConversationArchivePrefix = 'conversation-';
@@ -203,24 +202,10 @@ Begin
   Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss', LocalTimeToUniversal(Now)) + 'Z';
 End;
 
-Function NormalizeAssistantProjectRoot(Const Dir: String): String;
-Var
-  Base, ParentDir: String;
-Begin
-  Result := IncludeTrailingPathDelimiter(ExpandFileName(Dir));
-  Base := ExtractFileName(ExcludeTrailingPathDelimiter(Result));
-  If SameText(Base, 'Source') Or SameText(Base, 'src') Or SameText(Base, 'Units') Then
-    Begin
-      ParentDir := ExpandFileName(Result + '..');
-      If (ParentDir <> '') And DirectoryExistsUTF8(ParentDir) Then
-        Result := IncludeTrailingPathDelimiter(ParentDir);
-    End;
-End;
-
 Function ProjectAssistantRoot: String;
 Var
   Proj: TLazProject;
-  Dir: String;
+  MainName: String;
 Begin
   Result := '';
   If Not Assigned(LazarusIDE) Then
@@ -228,15 +213,10 @@ Begin
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
-  Dir := '';
-  If Proj.ProjectInfoFile <> '' Then
-    Dir := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
-  If Dir = '' Then
-    If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-      Dir := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
-  If Dir = '' Then
-    Exit;
-  Result := NormalizeAssistantProjectRoot(Dir);
+  MainName := '';
+  If Assigned(Proj.MainFile) Then
+    MainName := Proj.MainFile.Filename;
+  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
 End;
 
 Constructor TAssistantConversationStore.Create;
@@ -271,7 +251,7 @@ Begin
   If FProjectRoot = '' Then
     Result := ''
   Else
-    Result := FProjectRoot + AssistantDirName + PathDelim;
+    Result := FProjectRoot + AssistantStoreFolderName + PathDelim;
 End;
 
 Function TAssistantConversationStore.ConversationPath: String;
@@ -299,6 +279,11 @@ Begin
   If FProjectRoot = '' Then
     Begin
       FLastError := 'No project root for assistant conversation store.';
+      Exit;
+    End;
+  If Not DirectoryExistsUTF8(ExcludeTrailingPathDelimiter(FProjectRoot)) Then
+    Begin
+      FLastError := 'Project root does not exist: ' + FProjectRoot;
       Exit;
     End;
   Dir := ExcludeTrailingPathDelimiter(AssistantDir);
