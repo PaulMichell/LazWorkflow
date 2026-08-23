@@ -6,6 +6,7 @@ object ProjectAssistantForm: TProjectAssistantForm
   Caption = 'Project Assistant'
   ClientHeight = 700
   ClientWidth = 960
+  Menu = AssistantMenu
   Position = poDefaultPosOnly
   LCLVersion = '4.99.0.0'
   OnCreate = FormCreate
@@ -66,6 +67,16 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 106
       Action = ToggleThinkingAction
       TabOrder = 2
+      Visible = False
+    end
+    object ReviewButton: TButton
+      Left = 274
+      Height = 34
+      Top = 6
+      Width = 84
+      Caption = 'Review'
+      TabOrder = 3
+      OnClick = ReviewButtonClick
     end
     object ReviewCompileButton: TButton
       Left = 384
@@ -73,7 +84,8 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 6
       Width = 112
       Action = ReviewCompileAction
-      TabOrder = 3
+      TabOrder = 9
+      Visible = False
     end
     object ReviewBuildButton: TButton
       Left = 500
@@ -81,18 +93,27 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 6
       Width = 94
       Action = ReviewBuildAction
-      TabOrder = 4
+      TabOrder = 10
+      Visible = False
     end
     object FixErrorButton: TButton
-      Left = 598
+      Left = 362
       Height = 34
       Top = 6
       Width = 84
       Action = FixErrorAction
+      TabOrder = 4
+    end
+    object CommandsButton: TButton
+      Left = 450
+      Height = 34
+      Top = 6
+      Width = 100
+      Action = CommandsAction
       TabOrder = 5
     end
     object SettingsButton: TButton
-      Left = 686
+      Left = 554
       Height = 34
       Top = 6
       Width = 84
@@ -106,6 +127,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 170
       Caption = 'Auto New Chat at 95%'
       TabOrder = 8
+      Visible = False
       OnClick = AutoNewChatCheckClick
     end
   end
@@ -149,13 +171,13 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 300
       Align = alLeft
       BorderSpacing.Around = 4
-      Caption = 'Mode'
+      Caption = ''
       Columns = 3
       ItemIndex = 0
       Items.Strings = (
-        'Chat'
+        'Ask'
         'Plan'
-        'Code'
+        'Build'
       )
       TabOrder = 0
       OnClick = ModeGroupClick
@@ -167,7 +189,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 644
       Align = alClient
       BorderSpacing.Around = 4
-      Caption = 'Mode: Chat · read-only tools'
+      Caption = 'Ask · explains and inspects · will not write files'
       Layout = tlCenter
       ParentColor = False
       WordWrap = True
@@ -203,6 +225,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         ClientHeight = 502
         ClientWidth = 300
         TabOrder = 0
+        Visible = False
         object ChatSideLabel: TLabel
           Left = 8
           Height = 486
@@ -411,7 +434,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object FixErrorAction: TAction
       Caption = 'Fix Error'
-      Hint = 'Fix the selected Messages line in Code mode (tools apply the edit)'
+      Hint = 'Fix the selected Messages line in Build mode (tools apply the edit)'
       OnExecute = FixErrorActionExecute
     end
     object SettingsAction: TAction
@@ -429,6 +452,73 @@ object ProjectAssistantForm: TProjectAssistantForm
     object DeleteHistoryAction: TAction
       Caption = 'Delete…'
       OnExecute = DeleteHistoryActionExecute
+    end
+    object CommandsAction: TAction
+      Caption = 'Commands…'
+      Hint = 'Searchable command list (Ctrl+P)'
+      OnExecute = CommandsActionExecute
+    end
+  end
+  object ReviewMenu: TPopupMenu
+    Left = 72
+    Top = 40
+    object ReviewCompileItem: TMenuItem
+      Action = ReviewCompileAction
+    end
+    object ReviewBuildItem: TMenuItem
+      Action = ReviewBuildAction
+    end
+  end
+  object AssistantMenu: TMainMenu
+    Left = 104
+    Top = 40
+    object SessionMenuItem: TMenuItem
+      Caption = 'Session'
+      object NewChatMenuItem: TMenuItem
+        Action = NewChatAction
+      end
+      object SendMenuItem: TMenuItem
+        Action = SendAction
+      end
+      object StopMenuItem: TMenuItem
+        Action = StopAction
+      end
+      object SessionSepItem: TMenuItem
+        Caption = '-'
+      end
+      object ExportMenuItem: TMenuItem
+        Action = ExportHistoryAction
+      end
+      object DeleteMenuItem: TMenuItem
+        Action = DeleteHistoryAction
+      end
+      object SessionSep2Item: TMenuItem
+        Caption = '-'
+      end
+      object SettingsMenuItem: TMenuItem
+        Action = SettingsAction
+      end
+    end
+    object ReviewMenuItem: TMenuItem
+      Caption = 'Review'
+      object ReviewCompileMenuItem: TMenuItem
+        Action = ReviewCompileAction
+      end
+      object ReviewBuildMenuItem: TMenuItem
+        Action = ReviewBuildAction
+      end
+      object FixErrorMenuItem: TMenuItem
+        Action = FixErrorAction
+      end
+    end
+    object ViewMenuItem: TMenuItem
+      Caption = 'View'
+      object ToggleThinkingMenuItem: TMenuItem
+        Action = ToggleThinkingAction
+      end
+      object CommandsMenuItem: TMenuItem
+        Action = CommandsAction
+      end
     end
   end
 end

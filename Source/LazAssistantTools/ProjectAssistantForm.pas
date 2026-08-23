@@ -30,6 +30,29 @@ Type
     ToggleThinkingAction: TAction;
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
+    CommandsAction: TAction;
+    ReviewButton: TButton;
+    CommandsButton: TButton;
+    ReviewMenu: TPopupMenu;
+    ReviewCompileItem: TMenuItem;
+    ReviewBuildItem: TMenuItem;
+    AssistantMenu: TMainMenu;
+    SessionMenuItem: TMenuItem;
+    NewChatMenuItem: TMenuItem;
+    SendMenuItem: TMenuItem;
+    StopMenuItem: TMenuItem;
+    SessionSepItem: TMenuItem;
+    ExportMenuItem: TMenuItem;
+    DeleteMenuItem: TMenuItem;
+    SessionSep2Item: TMenuItem;
+    SettingsMenuItem: TMenuItem;
+    ReviewMenuItem: TMenuItem;
+    ReviewCompileMenuItem: TMenuItem;
+    ReviewBuildMenuItem: TMenuItem;
+    FixErrorMenuItem: TMenuItem;
+    ViewMenuItem: TMenuItem;
+    ToggleThinkingMenuItem: TMenuItem;
+    CommandsMenuItem: TMenuItem;
     ModeBar: TPanel;
     ModeGroup: TRadioGroup;
     ModeBadge: TLabel;
@@ -109,6 +132,10 @@ Type
     Procedure InputPasteClick(Sender: TObject);
     Procedure InputSelectAllClick(Sender: TObject);
     Procedure AutoNewChatCheckClick(Sender: TObject);
+    Procedure ReviewButtonClick(Sender: TObject);
+    Procedure CommandsActionExecute(Sender: TObject);
+    Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
   Private
     ElapsedTimer: TTimer;
     ChatView: TControl; { unused; centre is FTraceView }
@@ -165,6 +192,7 @@ Type
     FPlanAgentPackagesDone: Integer;
     FPlanAgentMaxPackages: Integer;
     FLastTurnHadError: Boolean;
+    FCommandsPopup: TPopupMenu;
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
@@ -274,6 +302,11 @@ Type
     Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
     { DisplayText is shown/stored; ApiText is what the model receives (may include extra directives). }
     Procedure SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
+    Procedure SteerQueuedText(Const UserText: String);
+    Function ModeChipCaption(Mode: TAssistantMode): String;
+    Procedure UpdateWorkActions;
+    Procedure EnsureCommandsMenu;
+    Procedure SeedPromptFromSelectedWork;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
     { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
@@ -307,7 +340,7 @@ Implementation
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
-  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
+  FileUtil, LCLIntf, LCLType, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
   ProjectIntf;
 
 Const
@@ -398,10 +431,15 @@ End;
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Assistant';
+  KeyPreview := True;
+  OnKeyDown := @FormKeyDown;
+  If Assigned(InputMemo) Then
+    InputMemo.OnKeyDown := @InputMemoKeyDown;
   EnsureChatView;
   EnsureInputPopup;
   EnsurePlanTabUi;
   EnsureCodeTabUi;
+  EnsureCommandsMenu;
   UpdateThinkingActionCaption;
   SyncAutoNewChatCheckFromConfig;
   If Not Assigned(ElapsedTimer) Then
@@ -421,6 +459,8 @@ Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   If Assigned(ElapsedTimer) Then
     ElapsedTimer.Enabled := False;
+  If Assigned(FCommandsPopup) Then
+    FreeAndNil(FCommandsPopup);
   SetBusyCursor(False);
   { Persist OAuth tokens once on close (not on every prompt). }
   If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
@@ -537,40 +577,80 @@ Begin
   UpdateModeBadge;
 End;
 
+Function TProjectAssistantForm.ModeChipCaption(Mode: TAssistantMode): String;
+Begin
+  Case Mode Of
+    amPlan: Result := 'Plan';
+    amCode: Result := 'Build';
+  Else
+    Result := 'Ask';
+  End;
+End;
+
 Procedure TProjectAssistantForm.UpdateModeBadge;
 Var
   ToolsHint: String;
 Begin
   Case ActiveMode Of
-    amPlan: ToolsHint := 'write plan Markdown';
-    amCode: ToolsHint := 'edit sources · compile';
+    amPlan: ToolsHint := 'writes the plan file · will not edit sources';
+    amCode: ToolsHint := 'edits project files and compiles';
   Else
-    ToolsHint := 'read-only tools';
+    ToolsHint := 'explains and inspects · will not write files';
   End;
   If Assigned(ModeBadge) Then
     Begin
       If FModeLocked Or FSending Then
-        ModeBadge.Caption := Format('Mode: %s · %s · (reply in progress)',
-          [AssistantModeToStr(ActiveMode), ToolsHint])
+        ModeBadge.Caption := Format('%s · %s · (reply in progress — Steer to inject a note)',
+          [ModeChipCaption(ActiveMode), ToolsHint])
       Else If FModeSticky Then
-        ModeBadge.Caption := Format('Mode: %s · %s · (sticky until you change mode)',
-          [AssistantModeToStr(ActiveMode), ToolsHint])
+        ModeBadge.Caption := Format('%s · %s · (sticky until you change mode)',
+          [ModeChipCaption(ActiveMode), ToolsHint])
       Else
-        ModeBadge.Caption := Format('Mode: %s · %s',
-          [AssistantModeToStr(ActiveMode), ToolsHint]);
+        ModeBadge.Caption := Format('%s · %s',
+          [ModeChipCaption(ActiveMode), ToolsHint]);
     End;
   If Assigned(ModeGroup) Then
     ModeGroup.Enabled := Not (FSending Or FModeLocked);
+  UpdateWorkActions;
+End;
+
+Procedure TProjectAssistantForm.UpdateWorkActions;
+Var
+  CanWork: Boolean;
+Begin
+  CanWork := (ActiveMode = amCode) And (Not FSending);
+  If Assigned(CodeWorkButton) Then
+    CodeWorkButton.Enabled := CanWork;
+  If Assigned(CodeWorkPlanButton) Then
+    CodeWorkPlanButton.Enabled := CanWork;
+  If Assigned(CodeStartButton) Then
+    CodeStartButton.Enabled := CanWork;
+  If Assigned(CodeDoneButton) Then
+    CodeDoneButton.Enabled := (ActiveMode = amCode) And (Not FSending);
+  If Assigned(CodeResetButton) Then
+    CodeResetButton.Enabled := (ActiveMode = amCode) And (Not FSending);
 End;
 
 Procedure TProjectAssistantForm.UpdateModeSidePanels;
 Begin
+  { Work tiles stay on the left in every mode. Plan file list is a top strip in Plan. }
   If Assigned(ChatSidePanel) Then
-    ChatSidePanel.Visible := ActiveMode = amChat;
+    Begin
+      ChatSidePanel.Visible := False;
+      ChatSidePanel.Align := alNone;
+    End;
   If Assigned(PlanPanel) Then
-    PlanPanel.Visible := ActiveMode = amPlan;
+    Begin
+      PlanPanel.Align := alTop;
+      If PlanPanel.Height < 160 Then
+        PlanPanel.Height := 200;
+      PlanPanel.Visible := ActiveMode = amPlan;
+    End;
   If Assigned(CodePanel) Then
-    CodePanel.Visible := ActiveMode = amCode;
+    Begin
+      CodePanel.Align := alClient;
+      CodePanel.Visible := True;
+    End;
 End;
 
 Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
@@ -691,27 +771,14 @@ Begin
     AssistantClient.SetActiveMode(ActiveMode);
   { Fix Error always switches into Code tools, so keep it available in every mode. }
   FixErrorAction.Enabled := Not FSending;
-  Case ActiveMode Of
-    amPlan:
-      Begin
-        ReviewCompileAction.Enabled := False;
-        ReviewBuildAction.Enabled := False;
-        EnsurePlanTabUi;
-        RefreshPlanList;
-      End;
-    amCode:
-      Begin
-        ReviewCompileAction.Enabled := Not FSending;
-        ReviewBuildAction.Enabled := Not FSending;
-        EnsureCodeTabUi;
-        RefreshCodeTodos;
-      End;
-  Else
-    Begin
-      ReviewCompileAction.Enabled := Not FSending;
-      ReviewBuildAction.Enabled := Not FSending;
-    End;
-  End;
+  ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
+  ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
+  EnsurePlanTabUi;
+  EnsureCodeTabUi;
+  If ActiveMode = amPlan Then
+    RefreshPlanList;
+  RefreshCodeTodos;
+  UpdateWorkActions;
   SyncModeUi;
 End;
 
@@ -753,7 +820,8 @@ Begin
 
   PlanPanel := TPanel.Create(Self);
   PlanPanel.Parent := ModeSidePanel;
-  PlanPanel.Align := alClient;
+  PlanPanel.Align := alTop;
+  PlanPanel.Height := 200;
   PlanPanel.BevelOuter := bvNone;
   PlanPanel.BorderSpacing.Around := 8;
   PlanPanel.Visible := ActiveMode = amPlan;
@@ -978,7 +1046,7 @@ Begin
   CodePanel.Align := alClient;
   CodePanel.BevelOuter := bvNone;
   CodePanel.BorderSpacing.Around := 8;
-  CodePanel.Visible := ActiveMode = amCode;
+  CodePanel.Visible := True;
 
   CodeActiveLabel := TLabel.Create(Self);
   CodeActiveLabel.Parent := CodePanel;
@@ -1070,8 +1138,7 @@ Begin
   PlanRel := GetActivePlanRelativePath;
   If Assigned(CodeActiveLabel) Then
     If PlanRel = '' Then
-      CodeActiveLabel.Caption :=
-        'Active plan: (none) — set one on the Plan tab, then Refresh.'
+      CodeActiveLabel.Caption := 'No active plan — switch to Plan to create one.'
     Else
       CodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
         '  ·  TODO tiles are scanned from ## headings + Status: lines.';
@@ -1086,7 +1153,7 @@ Begin
       CodeSections.Clear;
     If PlanRel = '' Then
       Begin
-        CodeTodoList.Items.Add('(No active plan — open the Plan tab and Set active.)');
+        CodeTodoList.Items.Add('(No active plan — switch to Plan to create one.)');
         Exit;
       End;
     If Not ScanPlanSections(PlanRel, CodeSections, Err) Then
@@ -1671,8 +1738,14 @@ End;
 
 Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
 Begin
-  { Double-click = work on this package (not only mark in progress). }
   CodeTodoListClick(Sender);
+  If ActiveMode <> amCode Then
+    Begin
+      SeedPromptFromSelectedWork;
+      If ActiveMode = amChat Then
+        SetCurrentSystemNote('Switch to **Build** to apply source edits for this package.');
+      Exit;
+    End;
   CodeWorkOnSelectedPackage;
 End;
 
@@ -2427,13 +2500,19 @@ Begin
   FSending := IsSending;
   If Not IsSending Then
     FReviewInProgress := False;
-  SendAction.Enabled := Not IsSending;
+  SendAction.Enabled := True;
+  If IsSending Then
+    SendAction.Caption := 'Steer'
+  Else
+    SendAction.Caption := 'Send';
   StopAction.Enabled := IsSending;
   NewChatAction.Enabled := Not IsSending;
   ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FixErrorAction.Enabled := Not IsSending;
-  InputMemo.ReadOnly := IsSending;
+  { Prompt stays live so the user can Steer without aborting the turn. }
+  If Assigned(InputMemo) Then
+    InputMemo.ReadOnly := False;
   SetBusyCursor(IsSending);
   If IsSending Then
     Begin
@@ -3258,15 +3337,113 @@ Begin
     AppendMessage('user', DisplayText);
 End;
 
+Procedure TProjectAssistantForm.SteerQueuedText(Const UserText: String);
+Begin
+  If Trim(UserText) = '' Then
+    Exit;
+  If Assigned(AssistantClient) Then
+    AssistantClient.EnqueueSteer(UserText);
+  SetStreamPhase('Steering at next tool gap…');
+  WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(Trim(UserText))) + ' chars)');
+End;
+
+Procedure TProjectAssistantForm.SeedPromptFromSelectedWork;
+Var
+  Idx: Integer;
+  Section: TPlanSection;
+Begin
+  If Not Assigned(InputMemo) Or Not Assigned(CodeSections) Then
+    Exit;
+  Idx := SelectedCodeSectionIndex;
+  If (Idx < 0) Or (Idx >= CodeSections.Count) Then
+    Exit;
+  Section := TPlanSection(CodeSections[Idx]);
+  If Not Assigned(Section) Then
+    Exit;
+  InputMemo.Text := 'Work on this package: ' + Section.Title;
+  InputMemo.SetFocus;
+End;
+
+Procedure TProjectAssistantForm.EnsureCommandsMenu;
+Var
+  I: Integer;
+  Act: TContainedAction;
+  Item: TMenuItem;
+Begin
+  If Assigned(FCommandsPopup) Then
+    FCommandsPopup.Items.Clear
+  Else
+    FCommandsPopup := TPopupMenu.Create(Nil);
+  If Not Assigned(ActionList) Then
+    Exit;
+  For I := 0 To ActionList.ActionCount - 1 Do
+    Begin
+      Act := ActionList.Actions[I];
+      If Not (Act Is TAction) Then
+        Continue;
+      If Trim(TAction(Act).Caption) = '' Then
+        Continue;
+      Item := TMenuItem.Create(FCommandsPopup);
+      Item.Action := Act;
+      FCommandsPopup.Items.Add(Item);
+    End;
+End;
+
+Procedure TProjectAssistantForm.ReviewButtonClick(Sender: TObject);
+Var
+  ScreenPt: TPoint;
+Begin
+  If Not Assigned(ReviewMenu) Or Not Assigned(ReviewButton) Then
+    Exit;
+  ScreenPt := ReviewButton.ClientToScreen(Point(0, ReviewButton.Height));
+  ReviewMenu.PopUp(ScreenPt.X, ScreenPt.Y);
+End;
+
+Procedure TProjectAssistantForm.CommandsActionExecute(Sender: TObject);
+Var
+  ScreenPt: TPoint;
+Begin
+  EnsureCommandsMenu;
+  If Not Assigned(FCommandsPopup) Then
+    Exit;
+  If Assigned(CommandsButton) Then
+    ScreenPt := CommandsButton.ClientToScreen(Point(0, CommandsButton.Height))
+  Else
+    ScreenPt := ClientToScreen(Point(8, 8));
+  FCommandsPopup.PopUp(ScreenPt.X, ScreenPt.Y);
+End;
+
+Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Begin
+  If (Key = VK_RETURN) And (ssCtrl In Shift) Then
+    Begin
+      Key := 0;
+      SendActionExecute(Sender);
+    End;
+End;
+
+Procedure TProjectAssistantForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Begin
+  If (Key = Ord('P')) And (ssCtrl In Shift) And (Not (ssAlt In Shift)) And (Not (ssShift In Shift)) Then
+    Begin
+      Key := 0;
+      CommandsActionExecute(Sender);
+    End;
+End;
+
 Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
 Begin
-  If FSending Then
-    Exit;
   UserText := Trim(InputMemo.Text);
   If UserText = '' Then
     Exit;
+  If FSending Then
+    Begin
+      InputMemo.Clear;
+      SteerQueuedText(UserText);
+      Exit;
+    End;
   If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
     Begin
       MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);

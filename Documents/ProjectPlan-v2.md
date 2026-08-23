@@ -667,9 +667,9 @@ Status: complete
 
 ## 4. Shell: one surface, mode chips
 
-Status: not started
+Status: complete
 
-Remove mode-swapped help panel. Work tiles + history always visible. Short bottom bar. Promotion banners. Plan “Build this” bar. Rename Code → Build in captions. Prompt stays editable during a turn; Send caption **Steer**; `Ctrl+Enter` injects; pending steer block in the trace. **Command catalog:** window menus, `Ctrl+P` palette, `/` popup, footer clicks — one `TActionList`, no `/`-only verbs.
+Ask / Plan / Build chips (internal mode remains `amCode`). Chat help panel gone; work tiles stay on the left in every mode; plan file list is a Plan-mode strip. Prompt stays editable; Send caption **Steer** mid-turn; `Ctrl+Enter` queues a steer at the next actor gap. Short bottom bar (Review ▾, Commands…). Window **Session / Review / View** menu plus `Ctrl+P` command popup from the same `TActionList`. Slash popup, footer-click catalog, and Plan “Build this” bar remain follow-ups.
 
 ## 5. Harness
 
@@ -756,7 +756,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 
 ## 16. Next immediate step
 
-Package **1. Protocol and sampler** — fixture-driven Responses parser and encrypted round-trip in `AssistantSampler`, with Completions fallback, no UI change. Everything else hangs off that channel.
+Package **5. Harness** — templated system prompt, skill catalog + `read_skill`, always-on `free-pascal-engineer` in Plan/Build, AGENTS.md, richer tool descriptions, ephemeral `todo_write`.
 
 ---
 
