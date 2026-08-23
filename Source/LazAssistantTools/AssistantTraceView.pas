@@ -291,7 +291,7 @@ Begin
   Result.WantReturns := True;
   Result.WantTabs := False;
   Result.HideSelection := False;
-  Result.TabStop := True;
+  Result.TabStop := False;
   Result.PopupMenu := FCopyPopup;
   Result.Color := Host.Color;
   If Italic Then
