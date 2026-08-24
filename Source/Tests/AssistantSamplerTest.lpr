@@ -80,6 +80,37 @@ Begin
   End;
 End;
 
+Procedure TestInterleavedThoughtAndContent;
+Var
+  Parser: TAssistantSseParser;
+  Body: String;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Body :=
+      SseLine('{"type":"response.created","response":{"id":"resp_mix"}}') +
+      SseLine('{"type":"response.output_item.added","output_index":0,' +
+        '"item":{"type":"reasoning","id":"rs_1","summary":[]}}') +
+      SseLine('{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"The user wants "}') +
+      SseLine('{"type":"response.output_item.added","output_index":1,' +
+        '"item":{"type":"message","id":"msg_1","role":"assistant",' +
+        '"content":[{"type":"output_text","text":"I''ll start"}]}}') +
+      SseLine('{"type":"response.output_text.delta","item_id":"msg_1","delta":" from"}') +
+      SseLine('{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","delta":"me to review."}') +
+      SseLine('{"type":"response.output_item.added","output_index":1,' +
+        '"item":{"type":"message","id":"msg_1","role":"assistant",' +
+        '"content":[{"type":"output_text","text":"I''ll start from the tree"}]}}') +
+      SseLine('{"type":"response.output_text.delta","item_id":"msg_1","delta":" and walk"}');
+    FeedAll(Parser, Body);
+    Check('interleave thinking', Parser.Thinking = 'The user wants me to review.');
+    Check('interleave content grows', Parser.Content = 'I''ll start from the tree and walk');
+    Check('interleave one thought stream', Pos('The user wants The user', Parser.Thinking) = 0);
+    Check('interleave one message stream', Pos('I''ll startI''ll start', Parser.Content) = 0);
+  Finally
+    Parser.Free;
+  End;
+End;
+
 Procedure TestResponsesEncryptedHarvest;
 Var
   Parser: TAssistantSseParser;
@@ -333,6 +364,7 @@ End;
 Begin
   FailCount := 0;
   TestResponsesReasoningAndText;
+  TestInterleavedThoughtAndContent;
   TestResponsesEncryptedHarvest;
   TestResponsesToolCall;
   TestChatCompletionsFallback;

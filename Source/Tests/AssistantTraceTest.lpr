@@ -147,6 +147,38 @@ Begin
   End;
 End;
 
+Procedure TestGrowingSnapshotReusesCards;
+Var
+  Trace: TAssistantTrace;
+  Think, Answer, Think2, Answer2: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Trace.AddUser('Please review this project for bugs?');
+    Think := Trace.StartThinking(0);
+    Think.Body := 'The user wants me to review the project for bugs. Looking at the IDE context:';
+    Answer := Trace.EnsureAnswer;
+    Answer.Body := 'I''ll start from';
+    Check('ensure answer reuses', Trace.EnsureAnswer = Answer);
+    Check('thinking stays this sample', Trace.LatestBlockSinceLastTool(tbkThinking) = Think);
+    Answer.Body := 'I''ll start from the active project tree and walk';
+    Check('second snapshot still one answer', Trace.EnsureAnswer = Answer);
+    Check('user+think+answer only', Trace.Count = 3);
+    Check('thinking stays open while message grows', Think.Running);
+    Trace.AddTool('call_1', 'read_file', '{"path":"A.pas"}');
+    Check('thinking closed on tool', Not Think.Running);
+    Check('answer closed on tool', Not Answer.Running);
+    Think2 := Trace.StartThinking(1);
+    Answer2 := Trace.EnsureAnswer;
+    Answer2.Body := 'Here is the review.';
+    Check('new thinking after tool', Think2 <> Think);
+    Check('new answer after tool', Answer2 <> Answer);
+    Check('six cards after next sample', Trace.Count = 6);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Procedure TestLiveChannelSlice;
 Var
   StartAt: Integer;
@@ -205,6 +237,7 @@ Begin
   TestEventOrder;
   TestElapsed;
   TestFooters;
+  TestGrowingSnapshotReusesCards;
   TestLiveChannelSlice;
   TestTraceJsonRoundTrip;
   If FailCount = 0 Then

@@ -34,6 +34,8 @@ Type
     FIncomplete: Boolean;
     FCompleted: Boolean;
     FErrorText: String;
+    FReasoningItemId: String;
+    FMessageItemId: String;
     Procedure Emit(Const Event: TSamplerEvent);
     Procedure CompactEmptyTools;
     Procedure EnsureToolIndex(Index: Integer);
@@ -44,6 +46,8 @@ Type
     Procedure ParseChatCompletionsChunk(Obj: TObject);
     Procedure HarvestCompletedOutput(ResponseObj: TObject);
     Procedure ApplyUsage(ResponseObj: TObject);
+    Procedure MergeMessageItemText(Item: TObject);
+    Procedure NoteOutputItem(Item: TObject);
   Public
     Constructor Create;
     Procedure Reset;
@@ -130,6 +134,8 @@ Begin
   FIncomplete := False;
   FCompleted := False;
   FErrorText := '';
+  FReasoningItemId := '';
+  FMessageItemId := '';
 End;
 
 Procedure TAssistantSseParser.Emit(Const Event: TSamplerEvent);
@@ -377,6 +383,7 @@ Begin
       Item := Root.FindPath('item') As TJSONObject;
       If Not Assigned(Item) Then
         Exit;
+      NoteOutputItem(Item);
       If JsonStringField(Item, 'type') <> 'function_call' Then
         Exit;
       OutputIndex := JsonIntField(Root, 'output_index');
@@ -446,6 +453,89 @@ Begin
       Event.Text := FContent;
       Event.ErrorText := FErrorText;
       Emit(Event);
+    End;
+End;
+
+Procedure TAssistantSseParser.MergeMessageItemText(Item: TObject);
+Var
+  Root, Part: TJSONObject;
+  ContentArr: TJSONArray;
+  J: Integer;
+  MessageText: String;
+Begin
+  If Not (Item Is TJSONObject) Then
+    Exit;
+  Root := TJSONObject(Item);
+  ContentArr := Root.FindPath('content') As TJSONArray;
+  If Not Assigned(ContentArr) Then
+    Exit;
+  MessageText := '';
+  For J := 0 To ContentArr.Count - 1 Do
+    If ContentArr.Items[J] Is TJSONObject Then
+      Begin
+        Part := TJSONObject(ContentArr.Items[J]);
+        If JsonStringField(Part, 'type') = 'output_text' Then
+          MessageText := MessageText + JsonStringField(Part, 'text')
+        Else If JsonStringField(Part, 'text') <> '' Then
+          MessageText := MessageText + JsonStringField(Part, 'text');
+      End;
+  If MessageText <> '' Then
+    MergeSamplerText(FContent, MessageText);
+End;
+
+Procedure TAssistantSseParser.NoteOutputItem(Item: TObject);
+Var
+  Root: TJSONObject;
+  ItemType, ItemId, SummaryText: String;
+  Summary: TJSONArray;
+  J: Integer;
+  Event: TSamplerEvent;
+  Before: String;
+Begin
+  If Not (Item Is TJSONObject) Then
+    Exit;
+  Root := TJSONObject(Item);
+  ItemType := JsonStringField(Root, 'type');
+  ItemId := JsonStringField(Root, 'id');
+  If ItemType = 'reasoning' Then
+    Begin
+      { Same id is a snapshot of the current thought, not a new card. }
+      If (ItemId <> '') And (FReasoningItemId <> '') And (ItemId <> FReasoningItemId) Then
+        MergeSamplerText(FThinking, LineEnding + LineEnding);
+      If ItemId <> '' Then
+        FReasoningItemId := ItemId;
+      Summary := Root.FindPath('summary') As TJSONArray;
+      If Assigned(Summary) Then
+        For J := 0 To Summary.Count - 1 Do
+          If Summary.Items[J] Is TJSONObject Then
+            Begin
+              SummaryText := JsonStringField(TJSONObject(Summary.Items[J]), 'text');
+              If SummaryText = '' Then
+                Continue;
+              If MergeSamplerText(FThinking, SummaryText) Then
+                Begin
+                  Event := EmptySamplerEvent;
+                  Event.Kind := sekThoughtDelta;
+                  Event.Text := SummaryText;
+                  Emit(Event);
+                End;
+            End;
+    End
+  Else If ItemType = 'message' Then
+    Begin
+      If (ItemId <> '') And (FMessageItemId <> '') And (ItemId <> FMessageItemId) Then
+        MergeSamplerText(FContent, LineEnding + LineEnding);
+      If ItemId <> '' Then
+        FMessageItemId := ItemId;
+      Before := FContent;
+      MergeMessageItemText(Root);
+      If FContent <> Before Then
+        Begin
+          Event := EmptySamplerEvent;
+          Event.Kind := sekContentDelta;
+          Event.Text := FContent;
+          Emit(Event);
+        End;
     End;
 End;
 

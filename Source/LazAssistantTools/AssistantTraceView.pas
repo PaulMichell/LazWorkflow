@@ -1018,8 +1018,31 @@ Begin
 End;
 
 Procedure TAssistantTraceView.BindAnswer(Block: TTraceBlock);
+Var
+  Child: TControl;
+  H: Integer;
 Begin
-  BindRichCard(Block, clWindowText);
+  { Live growing text: memo wrap, not markdown parse. Finish swaps to markdown. }
+  If Block.Running Then
+    Begin
+      If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+        If NamedChild(TPanel(Block.Frame), 'BodyMemo') = Nil Then
+          Begin
+            TPanel(Block.Frame).Free;
+            Block.Frame := Nil;
+          End;
+      BindUser(Block);
+      If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+        Begin
+          Child := NamedChild(TPanel(Block.Frame), 'BodyMemo');
+          H := LineHeightPx + CardInnerPad;
+          If Assigned(Child) Then
+            H := LineHeightPx + 6 + Child.Height + CardInnerPad;
+          LockControlHeight(TPanel(Block.Frame), H);
+        End;
+    End
+  Else
+    BindRichCard(Block, clWindowText);
 End;
 
 Procedure TAssistantTraceView.EnsureFrame(Block: TTraceBlock);

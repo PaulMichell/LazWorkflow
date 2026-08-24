@@ -53,11 +53,14 @@ Type
     Function StartThinking(LoopIndex: Integer): TTraceBlock;
     Function CurrentThinking: TTraceBlock;
     Function CurrentRunningThinking: TTraceBlock;
+    { Latest block of Kind after the last tool (or from the start). Nil if a tool is newer. }
+    Function LatestBlockSinceLastTool(Kind: TTraceBlockKind): TTraceBlock;
     Function AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
     Function FindTool(Const ToolId: String): TTraceBlock;
-    { Reuse the last block when it is already an answer; otherwise append a new one. }
+    { Reuse this sample's answer (after the last tool). Growing snapshots update it in place. }
     Function EnsureAnswer: TTraceBlock;
     Procedure FinishCurrentThinking;
+    Procedure FinishCurrentAnswer;
     Procedure CollapseThinking(HideBody: Boolean = True);
     Procedure TickElapsed;
     Procedure ApplyWorkedFooter(DurationMs: Integer);
@@ -269,9 +272,29 @@ Begin
     End;
 End;
 
+Function TAssistantTrace.LatestBlockSinceLastTool(Kind: TTraceBlockKind): TTraceBlock;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := Nil;
+  For I := FBlocks.Count - 1 DownTo 0 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If Block.Kind = tbkTool Then
+        Exit;
+      If Block.Kind = Kind Then
+        Begin
+          Result := Block;
+          Exit;
+        End;
+    End;
+End;
+
 Function TAssistantTrace.AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
 Begin
   FinishCurrentThinking;
+  FinishCurrentAnswer;
   Result := FindTool(ToolId);
   If Assigned(Result) Then
     Begin
@@ -310,21 +333,15 @@ Begin
 End;
 
 Function TAssistantTrace.EnsureAnswer: TTraceBlock;
-Var
-  Last: TTraceBlock;
 Begin
-  If FBlocks.Count > 0 Then
-    Begin
-      Last := TTraceBlock(FBlocks[FBlocks.Count - 1]);
-      If Last.Kind = tbkAnswer Then
-        Begin
-          Result := Last;
-          Exit;
-        End;
-    End;
-  FinishCurrentThinking;
+  { Same sample: update the existing answer. A new card only after a tool (new model loop).
+    Do not finish thinking here — grok-4.6 still streams CoT while the message grows. }
+  Result := LatestBlockSinceLastTool(tbkAnswer);
+  If Assigned(Result) Then
+    Exit;
   Result := AddBlock(tbkAnswer);
   Result.Title := 'Assistant';
+  Result.Running := True;
 End;
 
 Procedure TAssistantTrace.FinishThinkingBlock(Block: TTraceBlock);
@@ -345,6 +362,15 @@ End;
 Procedure TAssistantTrace.FinishCurrentThinking;
 Begin
   FinishThinkingBlock(CurrentRunningThinking);
+End;
+
+Procedure TAssistantTrace.FinishCurrentAnswer;
+Var
+  Block: TTraceBlock;
+Begin
+  Block := LatestBlockSinceLastTool(tbkAnswer);
+  If Assigned(Block) Then
+    Block.Running := False;
 End;
 
 Procedure TAssistantTrace.CollapseThinking(HideBody: Boolean);

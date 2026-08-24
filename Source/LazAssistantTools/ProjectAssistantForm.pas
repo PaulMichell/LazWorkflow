@@ -2294,6 +2294,7 @@ Begin
   FTrace.EnsureUser(FDisplayUser);
   ApplyLiveAnswerSlice;
   FTrace.FinishCurrentThinking;
+  FTrace.FinishCurrentAnswer;
   If SystemNote <> '' Then
     Begin
       Last := Nil;
@@ -2751,7 +2752,11 @@ Begin
     Slice := Copy(FLiveThinking, FThinkingSliceStart, MaxInt)
   Else
     Slice := '';
+  { One thinking card per sample. Growing CoT snapshots update it; do not open a
+    new card because content started or thinking was briefly unmarked running. }
   Block := FTrace.CurrentRunningThinking;
+  If Not Assigned(Block) Then
+    Block := FTrace.LatestBlockSinceLastTool(tbkThinking);
   If Assigned(Block) Then
     Begin
       If Slice <> '' Then
@@ -2767,7 +2772,7 @@ End;
 
 Procedure TProjectAssistantForm.ApplyLiveAnswerSlice;
 Var
-  Last: TTraceBlock;
+  Last, Block: TTraceBlock;
   Slice: String;
 Begin
   If Not Assigned(FTrace) Then
@@ -2780,8 +2785,9 @@ Begin
     Last := FTrace[FTrace.Count - 1];
   If Assigned(Last) And (Last.Kind = tbkNote) Then
     Exit;
-  If Assigned(Last) And (Last.Kind = tbkAnswer) Then
-    Last.Body := Slice
+  Block := FTrace.LatestBlockSinceLastTool(tbkAnswer);
+  If Assigned(Block) Then
+    Block.Body := Slice
   Else
     FTrace.EnsureAnswer.Body := Slice;
 End;
@@ -2798,16 +2804,12 @@ Begin
     Case Event.Kind Of
     aekLoopStarted:
       Begin
-        { Content snapshots are per loop; thinking snapshots stay cumulative. }
+        { A new HTTP sample. Close the previous thinking/answer and open a new thought. }
+        FTrace.FinishCurrentThinking;
+        FTrace.FinishCurrentAnswer;
         FAnswerSliceStart := 1;
-        Block := FTrace.CurrentRunningThinking;
-        If Assigned(Block) Then
-          Block.LoopIndex := Event.LoopIndex
-        Else
-          Begin
-            FThinkingSliceStart := Length(FLiveThinking) + 1;
-            FTrace.StartThinking(Event.LoopIndex);
-          End;
+        FThinkingSliceStart := Length(FLiveThinking) + 1;
+        FTrace.StartThinking(Event.LoopIndex);
       End;
     aekToolStarted:
       Begin
