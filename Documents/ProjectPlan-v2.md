@@ -673,9 +673,9 @@ Ask / Plan / Build chips (`amBuild`, persisted as `build`; old `code` config sti
 
 ## 5. Harness
 
-Status: not started
+Status: complete
 
-Templated system prompt, skill catalog + `read_skill`, always-on `free-pascal-engineer` in Plan/Build, AGENTS.md, richer tool descriptions, ephemeral `todo_write`.
+`AssistantHarness` builds a tagged system prompt (work policy, tools, IDE fusion, communication, formatting, mode overlay, skill catalog, AGENTS.md, user info). Skills scan `{project}/.grok/skills`, `{project}/.assistant/skills`, then `~/.grok/skills` (first name wins). Plan/Build always attach `free-pascal-engineer` when present; Ask attaches only a pinned skill. `read_skill` and `grep` are available in every mode; `todo_write` is an ephemeral Plan/Build turn list. Tool JSON descriptions now state paging, exact `replace_in_file`, and quiet compile. `spawn_subagent` remains package 6.
 
 ## 6. Subagents and Review lenses
 
@@ -756,7 +756,9 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 
 ## 16. Next immediate step
 
-Package **5. Harness** — templated system prompt, skill catalog + `read_skill`, always-on `free-pascal-engineer` in Plan/Build, AGENTS.md, richer tool descriptions, ephemeral `todo_write`.
+Package **6. Subagents and Review lenses** — `spawn_subagent`, depth 1, explore + three Pascal lenses. Review menu fans out over changed files. Parent rows in the trace.
+
+Package 4 leftovers (slash popup, footer catalog, Plan “Build this”) stay for the tidy-up phase.
 
 ---
 

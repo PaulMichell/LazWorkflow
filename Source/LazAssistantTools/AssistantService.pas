@@ -139,7 +139,8 @@ Var
 Implementation
 
 Uses
-  fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools, AssistantHttps, AssistantActor;
+  fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools, AssistantHttps, AssistantActor,
+  AssistantHarness;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
@@ -313,10 +314,23 @@ Begin
 End;
 
 Procedure TAssistantService.RebuildSystemPrompt;
+Var
+  Root, PlanRel: String;
 Begin
-  { Rebuild mode base each time so active plan path stays current. }
-  FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
-  FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  If Root = '' Then
+    Root := ProjectRootPath;
+  PlanRel := GetActivePlanRelativePath;
+  If Assigned(WorkflowAssistantHarness) Then
+    FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, FActiveSkill, Root, PlanRel)
+  Else
+    Begin
+      FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
+      FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
+    End;
+  FBaseSystemPrompt := FSystemPrompt;
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
 End;
 
@@ -1136,6 +1150,8 @@ Begin
     End;
 
   ClearStreamThread;
+  If Assigned(WorkflowAssistantHarness) Then
+    WorkflowAssistantHarness.ClearTurnTodos;
   { Refresh mode/plan-path wording and tool list before every request. }
   RebuildSystemPrompt;
   FToolsJsonValid := False;

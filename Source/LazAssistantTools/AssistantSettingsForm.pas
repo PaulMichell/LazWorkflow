@@ -63,6 +63,7 @@ Implementation
 
 Uses
   AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
+  AssistantConversation,
   LCLIntf, SpellCheckerSettingsForm;
 
 Procedure AddFallbackModels(List: TStrings);
@@ -203,14 +204,21 @@ Begin
   ActiveName := '';
   If Assigned(AssistantChatConfig) Then
     ActiveName := AssistantChatConfig.ActiveSkill;
-  Root := AssistantUserSkillsRoot;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  If Root = '' Then
+    Root := AssistantUserSkillsRoot;
   SkillCombo.Style := csDropDownList;
   SkillCombo.Items.BeginUpdate;
   Try
     SkillCombo.Items.Clear;
     SkillCombo.Items.Add(AssistantSkillNoneCaption);
     SelectIdx := 0;
-    Skills := ListUserSkills;
+    If Assigned(ProjectAssistantConversation) Then
+      Skills := ListDiscoveredSkills(ProjectAssistantConversation.ProjectRoot)
+    Else
+      Skills := ListUserSkills;
     For I := 0 To High(Skills) Do
       Begin
         SkillCombo.Items.Add(Skills[I].Name);
@@ -233,9 +241,10 @@ Begin
           'Copy from another machine''s ~/.grok/skills if needed. IDE context still attaches the active unit.'
       Else
         HintLabel.Caption :=
-          Format('Loaded %d skill(s) from %s', [Length(Skills), Root]) + LineEnding +
-          'Each skill is a subfolder with SKILL.md. Skills are not auto-synced across platforms. ' +
-          'IDE context attaches the active source unit (or selection) and project file list.';
+          Format('Loaded %d skill(s) from project, .assistant, and %s', [Length(Skills), AssistantUserSkillsRoot]) +
+          LineEnding +
+          'Pin is extra session context. Plan and Build always attach free-pascal-engineer when it is installed. ' +
+          'Use read_skill for other catalog entries.';
     End;
 End;
 

@@ -1,0 +1,486 @@
+Unit AssistantHarness;
+
+{ Templated system prompt, skill catalog, AGENTS.md, and ephemeral todos (c) 2026 Michell Computing. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
+Interface
+
+Uses
+  Classes, SysUtils, AssistantConversation, AssistantSkills;
+
+Const
+  AssistantAgentsFileName = 'AGENTS.md';
+  AssistantAgentsMaxChars = 32000;
+
+Type
+  TAssistantTodoItem = Record
+    Id: String;
+    Content: String;
+    Status: String;
+  End;
+  TAssistantTodoArray = Array Of TAssistantTodoItem;
+
+  TAssistantHarness = Class
+  Private
+    FTodos: TAssistantTodoArray;
+    Function ModeCaption(Mode: TAssistantMode): String;
+    Function BuildWorkPolicy: String;
+    Function BuildToolCalling: String;
+    Function BuildIdeFusion: String;
+    Function BuildCommunication: String;
+    Function BuildFormatting: String;
+    Function BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String): String;
+    Function BuildSkillsSection(Const ProjectRoot, PinnedSkill: String; Mode: TAssistantMode): String;
+    Function BuildProjectRules(Const ProjectRoot: String): String;
+    Function BuildUserInfo(Const ProjectRoot: String): String;
+    Function AttachSkillBody(Const SkillName, ProjectRoot, Reason: String): String;
+    Function NormalizeTodoStatus(Const Value: String): String;
+    Function FindTodoIndex(Const TodoId: String): Integer;
+  Public
+    Constructor Create;
+    Destructor Destroy; Override;
+    Function BuildSystemPrompt(Mode: TAssistantMode; Const PinnedSkill, ProjectRoot, ActivePlanRel: String): String;
+    Procedure ClearTurnTodos;
+    Function TodoCount: Integer;
+    Function TodoItem(Index: Integer): TAssistantTodoItem;
+    Function ApplyTodoWrite(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+    Function ReadSkill(Const SkillName, ProjectRoot: String; Out ResultText, ErrorText: String): Boolean;
+    Function FormatTodos: String;
+  End;
+
+Var
+  WorkflowAssistantHarness: TAssistantHarness;
+
+Implementation
+
+Uses
+  LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion;
+
+Constructor TAssistantHarness.Create;
+Begin
+  Inherited Create;
+  FTodos := Nil;
+End;
+
+Destructor TAssistantHarness.Destroy;
+Begin
+  FTodos := Nil;
+  Inherited Destroy;
+End;
+
+Function TAssistantHarness.ModeCaption(Mode: TAssistantMode): String;
+Begin
+  Case Mode Of
+    amPlan: Result := 'Plan';
+    amBuild: Result := 'Build';
+  Else
+    Result := 'Ask';
+  End;
+End;
+
+Function TAssistantHarness.BuildWorkPolicy: String;
+Begin
+  Result :=
+    '<work_policy>' + LineEnding +
+    'Finish the user''s request. Do not stop at a plan or a description when the mode allows the work.' + LineEnding +
+    'Do not claim a compile, edit, or file write succeeded unless a tool result in this turn shows it.' + LineEnding +
+    'Stay in the current mode''s tool gates. If the work needs a write you cannot do, say so and name Ask / Plan / Build.' + LineEnding +
+    'Keep changes scoped to what was asked. Do not leave placeholders for unrelated work.' + LineEnding +
+    '</work_policy>';
+End;
+
+Function TAssistantHarness.BuildToolCalling: String;
+Begin
+  Result :=
+    '<tool_calling>' + LineEnding +
+    'Prefer named tools over guessing file contents. Do not echo tool JSON to the user.' + LineEnding +
+    'Use `grep` / `search_in_project` before a stack of `read_file` calls. Page large files with start_line/end_line.' + LineEnding +
+    '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
+    '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
+    'Use `read_skill` to load a catalogued SKILL.md. Use `todo_write` for the current Build turn''s short checklist.' + LineEnding +
+    '</tool_calling>';
+End;
+
+Function TAssistantHarness.BuildIdeFusion: String;
+Begin
+  Result :=
+    '<ide_fusion>' + LineEnding +
+    'Edits go through IDE buffers when the file is open (Undoable). Pair .pas and .lfm for forms.' + LineEnding +
+    'Declaring a field in .pas does not create or wire the component. Events fire only when the matching .lfm has ' +
+    '`object Name: TClass` and `OnEvent = MethodName`.' + LineEnding +
+    'Prefer `ensure_form_component` for timers, buttons, actions. Never create ApiProbe/scratch/temp units.' + LineEnding +
+    'TTimer.Interval is milliseconds (1000 = once per second).' + LineEnding +
+    '</ide_fusion>';
+End;
+
+Function TAssistantHarness.BuildCommunication: String;
+Begin
+  Result :=
+    '<communication>' + LineEnding +
+    'Lead with the answer. The user did not see tool traces as a separate transcript; do not recap every call.' + LineEnding +
+    'Keep chat short in Plan mode: the Markdown file is the source of truth. Summarise what changed and where.' + LineEnding +
+    '</communication>';
+End;
+
+Function TAssistantHarness.BuildFormatting: String;
+Begin
+  Result :=
+    '<formatting>' + LineEnding +
+    'Use Markdown only on the answer channel. Do not put the full plan body only in chat.' + LineEnding +
+    '</formatting>';
+End;
+
+Function TAssistantHarness.BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String): String;
+Var
+  PlanPath: String;
+Begin
+  PlanPath := Trim(ActivePlanRel);
+  If PlanPath = '' Then
+    PlanPath := 'Documents/Plan.md';
+  Result := '<mode_overlay>' + LineEnding;
+  Case Mode Of
+    amPlan:
+      Result := Result +
+        'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus.' + LineEnding +
+        'Write durable plan Markdown via `write_markdown` / `update_markdown`. Do not only paste the plan in chat.' + LineEnding +
+        'Default / active plan path: **' + PlanPath + '**.' + LineEnding +
+        'Structure: `##` work packages; first non-empty line under each heading is ' +
+        '`Status: not started` | `Status: in progress` | `Status: complete`.' + LineEnding +
+        'Prefer `update_markdown` for Status: lines or a single section. Never edit source (.pas/.lfm) in Plan mode.';
+    amBuild:
+      Result := Result +
+        'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus.' + LineEnding +
+        'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
+        'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete.' + LineEnding +
+        'Stay on the active work package. Prefer Michell Free Pascal conventions.';
+  Else
+    Result := Result +
+      'You are the Project Assistant in **Ask mode** for Free Pascal / Lazarus.' + LineEnding +
+      'Read-only project tools. You cannot write files or edit sources — ask the user to switch to Plan or Build for that.' + LineEnding +
+      'Prefer the active editor context already in the user message when it includes the code under discussion.';
+  End;
+  Result := Result + LineEnding + '</mode_overlay>';
+End;
+
+Function TAssistantHarness.AttachSkillBody(Const SkillName, ProjectRoot, Reason: String): String;
+Var
+  Body, Err: String;
+Begin
+  Result := '';
+  If Trim(SkillName) = '' Then
+    Exit;
+  If Not LoadSkillBody(SkillName, ProjectRoot, Body, Err) Then
+    Begin
+      Result := '(Skill "' + SkillName + '" could not be loaded: ' + Err + ')';
+      Exit;
+    End;
+  Result :=
+    '----- begin skill: ' + SkillName + ' -----' + LineEnding +
+    Reason + LineEnding + LineEnding +
+    Body + LineEnding +
+    '----- end skill: ' + SkillName + ' -----';
+End;
+
+Function TAssistantHarness.BuildSkillsSection(Const ProjectRoot, PinnedSkill: String; Mode: TAssistantMode): String;
+Var
+  Skills: TAssistantSkillList;
+  Pin, AlwaysName: String;
+  Bodies: TStringList;
+Begin
+  Skills := ListDiscoveredSkills(ProjectRoot);
+  Pin := Trim(PinnedSkill);
+  AlwaysName := AssistantDefaultSkillName;
+  Bodies := TStringList.Create;
+  Try
+    Bodies.Add('<skills>');
+    Bodies.Add('Catalog (name + description + when-to-use). Load a body with `read_skill` when you need it.');
+    Bodies.Add(FormatSkillCatalog(Skills));
+    If (Mode In [amPlan, amBuild]) And (ResolveSkillFile(AlwaysName, ProjectRoot) <> '') Then
+      Bodies.Add(AttachSkillBody(AlwaysName, ProjectRoot,
+        'Always attached in Plan and Build. Follow it as the house Free Pascal / Lazarus engineering standard.'));
+    If (Pin <> '') And (Not ((Mode In [amPlan, amBuild]) And SameText(Pin, AlwaysName))) Then
+      Bodies.Add(AttachSkillBody(Pin, ProjectRoot,
+        'The user pinned this skill for the session. Follow it as authoritative for relevant work.'));
+    Bodies.Add('</skills>');
+    Result := Trim(Bodies.Text);
+  Finally
+    Bodies.Free;
+  End;
+End;
+
+Function TAssistantHarness.BuildProjectRules(Const ProjectRoot: String): String;
+Var
+  Path, Body: String;
+  SL: TStringList;
+Begin
+  Result := '<project_rules>' + LineEnding;
+  Path := '';
+  If Trim(ProjectRoot) <> '' Then
+    Path := IncludeTrailingPathDelimiter(ProjectRoot) + AssistantAgentsFileName;
+  If (Path = '') Or (Not FileExistsUTF8(Path)) Then
+    Result := Result + '(No AGENTS.md in the project root. The plan Markdown remains the work-package source of truth.)'
+  Else
+    Begin
+      SL := TStringList.Create;
+      Try
+        Try
+          SL.LoadFromFile(Path);
+          Body := Trim(SL.Text);
+        Except
+          Body := '';
+        End;
+      Finally
+        SL.Free;
+      End;
+      If Body = '' Then
+        Result := Result + '(AGENTS.md was empty or unreadable.)'
+      Else
+        Begin
+          If Length(Body) > AssistantAgentsMaxChars Then
+            Body := Copy(Body, 1, AssistantAgentsMaxChars) + LineEnding +
+              '[AGENTS.md truncated at ' + IntToStr(AssistantAgentsMaxChars) + ' characters.]';
+          Result := Result + 'From `' + AssistantAgentsFileName + '`:' + LineEnding + LineEnding + Body;
+        End;
+    End;
+  Result := Result + LineEnding + '</project_rules>';
+End;
+
+Function TAssistantHarness.BuildUserInfo(Const ProjectRoot: String): String;
+Var
+  OSName, ActiveFile, Ver: String;
+Begin
+  {$IFDEF WINDOWS}
+  OSName := 'Windows';
+  {$ELSE}
+    {$IFDEF DARWIN}
+    OSName := 'macOS';
+    {$ELSE}
+    OSName := 'Linux';
+    {$ENDIF}
+  {$ENDIF}
+  ActiveFile := '(none)';
+  Ver := 'FPC ' + {$I %FPCVERSION%} + '; LCL ' + lcl_version;
+  If Assigned(SourceEditorManagerIntf) And Assigned(SourceEditorManagerIntf.ActiveEditor) Then
+    ActiveFile := SourceEditorManagerIntf.ActiveEditor.FileName;
+  Result :=
+    '<user_info>' + LineEnding +
+    'OS: ' + OSName + LineEnding +
+    'Project root: ' + Trim(ProjectRoot) + LineEnding +
+    'Active file: ' + ActiveFile + LineEnding +
+    'Compiler: ' + Ver + LineEnding +
+    '</user_info>';
+End;
+
+Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; Const PinnedSkill, ProjectRoot, ActivePlanRel: String): String;
+Var
+  Parts: TStringList;
+Begin
+  Parts := TStringList.Create;
+  Try
+    Parts.Add('You are the Lazarus Project Assistant (' + ModeCaption(Mode) + ' mode).');
+    Parts.Add(BuildWorkPolicy);
+    Parts.Add(BuildToolCalling);
+    Parts.Add(BuildIdeFusion);
+    Parts.Add(BuildCommunication);
+    Parts.Add(BuildFormatting);
+    Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
+    Parts.Add(BuildSkillsSection(ProjectRoot, PinnedSkill, Mode));
+    Parts.Add(BuildProjectRules(ProjectRoot));
+    Parts.Add(BuildUserInfo(ProjectRoot));
+    Result := Trim(Parts.Text);
+  Finally
+    Parts.Free;
+  End;
+End;
+
+Procedure TAssistantHarness.ClearTurnTodos;
+Begin
+  FTodos := Nil;
+End;
+
+Function TAssistantHarness.TodoCount: Integer;
+Begin
+  Result := Length(FTodos);
+End;
+
+Function TAssistantHarness.TodoItem(Index: Integer): TAssistantTodoItem;
+Begin
+  If (Index < 0) Or (Index > High(FTodos)) Then
+    Begin
+      Result.Id := '';
+      Result.Content := '';
+      Result.Status := '';
+    End
+  Else
+    Result := FTodos[Index];
+End;
+
+Function TAssistantHarness.NormalizeTodoStatus(Const Value: String): String;
+Var
+  S: String;
+Begin
+  S := LowerCase(Trim(Value));
+  S := StringReplace(S, ' ', '_', [rfReplaceAll]);
+  If (S = 'in_progress') Or (S = 'in-progress') Then
+    Result := 'in_progress'
+  Else If (S = 'completed') Or (S = 'complete') Or (S = 'done') Then
+    Result := 'completed'
+  Else If (S = 'cancelled') Or (S = 'canceled') Then
+    Result := 'cancelled'
+  Else
+    Result := 'pending';
+End;
+
+Function TAssistantHarness.FindTodoIndex(Const TodoId: String): Integer;
+Var
+  I: Integer;
+Begin
+  Result := -1;
+  For I := 0 To High(FTodos) Do
+    If SameText(FTodos[I].Id, TodoId) Then
+      Begin
+        Result := I;
+        Exit;
+      End;
+End;
+
+Function TAssistantHarness.FormatTodos: String;
+Var
+  I: Integer;
+  Mark, Line: String;
+Begin
+  If Length(FTodos) = 0 Then
+    Begin
+      Result := '(No in-turn todos.)';
+      Exit;
+    End;
+  Result := 'In-turn todos:' + LineEnding;
+  For I := 0 To High(FTodos) Do
+    Begin
+      If FTodos[I].Status = 'completed' Then
+        Mark := 'x'
+      Else If FTodos[I].Status = 'cancelled' Then
+        Mark := '-'
+      Else If FTodos[I].Status = 'in_progress' Then
+        Mark := '>'
+      Else
+        Mark := ' ';
+      Line := '- [' + Mark + '] ' + FTodos[I].Id + ': ' + FTodos[I].Content + ' (' + FTodos[I].Status + ')';
+      Result := Result + Line + LineEnding;
+    End;
+  Result := TrimRight(Result);
+End;
+
+Function TAssistantHarness.ApplyTodoWrite(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Data, Node, ItemData: TJSONData;
+  Obj: TJSONObject;
+  Arr: TJSONArray;
+  Merge: Boolean;
+  I, Idx: Integer;
+  Item: TAssistantTodoItem;
+  Incoming: TAssistantTodoArray;
+Begin
+  Incoming := Nil;
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If Trim(ArgumentsJson) = '' Then
+    Begin
+      ErrorText := 'todo_write requires a JSON object with todos.';
+      Exit;
+    End;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ArgumentsJson);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'todo_write JSON is invalid: ' + E.Message;
+          Exit;
+        End;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'todo_write requires a JSON object.';
+        Exit;
+      End;
+    Obj := TJSONObject(Data);
+    Merge := False;
+    Node := Obj.Find('merge');
+    If Assigned(Node) And (Node.JSONType = jtBoolean) Then
+      Merge := Node.AsBoolean;
+    Node := Obj.Find('todos');
+    If Not Assigned(Node) Or (Not (Node Is TJSONArray)) Then
+      Begin
+        ErrorText := 'todo_write requires a todos array.';
+        Exit;
+      End;
+    Arr := TJSONArray(Node);
+    SetLength(Incoming, Arr.Count);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        Item.Id := '';
+        Item.Content := '';
+        Item.Status := 'pending';
+        ItemData := Arr[I];
+        If ItemData Is TJSONObject Then
+          Begin
+            Item.Id := Trim(TJSONObject(ItemData).Get('id', ''));
+            Item.Content := Trim(TJSONObject(ItemData).Get('content', ''));
+            Item.Status := NormalizeTodoStatus(TJSONObject(ItemData).Get('status', 'pending'));
+          End;
+        If Item.Id = '' Then
+          Item.Id := IntToStr(I + 1);
+        Incoming[I] := Item;
+      End;
+  Finally
+    Data.Free;
+  End;
+  If Not Merge Then
+    FTodos := Incoming
+  Else
+    For I := 0 To High(Incoming) Do
+      Begin
+        Idx := FindTodoIndex(Incoming[I].Id);
+        If Idx >= 0 Then
+          Begin
+            If Incoming[I].Content <> '' Then
+              FTodos[Idx].Content := Incoming[I].Content;
+            FTodos[Idx].Status := Incoming[I].Status;
+          End
+        Else
+          Begin
+            SetLength(FTodos, Length(FTodos) + 1);
+            FTodos[High(FTodos)] := Incoming[I];
+          End;
+      End;
+  ResultText := FormatTodos;
+  Result := True;
+End;
+
+Function TAssistantHarness.ReadSkill(Const SkillName, ProjectRoot: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Body: String;
+Begin
+  Result := LoadSkillBody(SkillName, ProjectRoot, Body, ErrorText);
+  If Result Then
+    ResultText := Body
+  Else
+    ResultText := '';
+End;
+
+Initialization
+
+WorkflowAssistantHarness := TAssistantHarness.Create;
+
+Finalization
+
+FreeAndNil(WorkflowAssistantHarness);
+
+End.

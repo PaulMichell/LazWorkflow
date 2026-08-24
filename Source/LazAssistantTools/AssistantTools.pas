@@ -47,8 +47,9 @@ Implementation
 
 Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
-  SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog,
-  AssistantMarkdownForm, AssistantPlan, AssistantConfig, AssistantLfm, fpjson, jsonparser;
+  SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
+  AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
+  AssistantLfm, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -177,7 +178,8 @@ Begin
   Result := (Name = 'read_file') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'list_plans') Or (Name = 'get_active_plan') Or
-    (Name = 'search_in_project') Or (Name = 'open_file');
+    (Name = 'search_in_project') Or (Name = 'open_file') Or
+    (Name = 'grep') Or (Name = 'read_skill');
 End;
 
 Function ToolRequiresApproval(Const ToolName: String): Boolean;
@@ -240,7 +242,8 @@ Begin
   Name := LowerCase(Trim(ToolName));
   { Shared read tools for all modes. }
   If (Name = 'read_file') Or (Name = 'list_directory') Or
-    (Name = 'open_markdown') Or (Name = 'get_project_info') Then
+    (Name = 'open_markdown') Or (Name = 'get_project_info') Or
+    (Name = 'grep') Or (Name = 'read_skill') Then
     Begin
       Result := Mode In [amChat, amPlan, amBuild];
       Exit;
@@ -248,7 +251,7 @@ Begin
   { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
   If (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'list_plans') Or (Name = 'set_active_plan') Or
-    (Name = 'get_active_plan') Then
+    (Name = 'get_active_plan') Or (Name = 'todo_write') Then
     Begin
       Result := Mode In [amPlan, amBuild];
       Exit;
@@ -265,12 +268,58 @@ Begin
   Result := False;
 End;
 
-Function BuildReadToolsJson: String;
+Function BuildHarnessToolsJson: String;
 Begin
   Result :=
     '{"type":"function","function":{' +
+      '"name":"read_skill",' +
+      '"description":"Load the full body of a catalogued SKILL.md by name. ' +
+        'Search project .grok/skills, .assistant/skills, then ~/.grok/skills.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"name":{"type":"string","description":"Skill directory name, e.g. free-pascal-engineer"}' +
+      '},"required":["name"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"grep",' +
+      '"description":"Search project text files; return path:line:text. Prefer before many read_file calls. ' +
+        'Optional glob and regex. Case-insensitive literal match by default.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"pattern":{"type":"string","description":"Text or regex to find"},' +
+        '"query":{"type":"string","description":"Alias of pattern"},' +
+        '"path":{"type":"string","description":"Subfolder under project root (empty = whole project)"},' +
+        '"glob":{"type":"string","description":"Optional extension filter e.g. .pas or .lfm"},' +
+        '"regex":{"type":"boolean","description":"If true, treat pattern as a regular expression (default false)"},' +
+        '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
+      '},"required":[]}' +
+    '}}';
+End;
+
+Function BuildTodoToolJson: String;
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"todo_write",' +
+      '"description":"Replace or merge the ephemeral in-turn todo list (dies with the turn; not plan Status:). ' +
+        'status: pending, in_progress, completed, cancelled.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"merge":{"type":"boolean","description":"If true, upsert by id; if false, replace the list (default false)"},' +
+        '"todos":{"type":"array","description":"Todo items","items":{"type":"object","properties":{' +
+          '"id":{"type":"string"},' +
+          '"content":{"type":"string"},' +
+          '"status":{"type":"string"}' +
+        '}}}' +
+      '},"required":["todos"]}' +
+    '}}';
+End;
+
+Function BuildReadToolsJson: String;
+Begin
+  Result :=
+    BuildHarnessToolsJson + ',' +
+    '{"type":"function","function":{' +
       '"name":"read_file",' +
-      '"description":"Read a text file under the active Lazarus project. Use start_line/end_line to page large files; do not re-read from line 1 after a truncation notice.",' +
+      '"description":"Read a text file under the active Lazarus project. Page with start_line/end_line; ' +
+        'after truncation continue from the suggested line, not from line 1.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative or absolute file path"},' +
         '"start_line":{"type":"integer","description":"1-based first line to include (default 1)"},' +
@@ -302,6 +351,7 @@ End;
 Function BuildPlanToolsJson: String;
 Begin
   Result :=
+    BuildTodoToolJson + ',' +
     '{"type":"function","function":{' +
       '"name":"write_markdown",' +
       '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans.",' +
@@ -346,7 +396,8 @@ Begin
   Result :=
     '{"type":"function","function":{' +
       '"name":"search_in_project",' +
-      '"description":"Search project source/text files for a string (case-insensitive). Prefer this before many read_file calls.",' +
+      '"description":"Search project source/text files (same engine as grep). Prefer grep in Ask/Plan. ' +
+        'Returns path:line:text.",' +
       '"parameters":{"type":"object","properties":{' +
         '"query":{"type":"string","description":"Text to find"},' +
         '"path":{"type":"string","description":"Subfolder under project root (empty = whole project)"},' +
@@ -366,7 +417,8 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"replace_in_file",' +
-      '"description":"Exact text replacement in a project source/text file. Prefer small unique old_text. Updates open editor buffer when the file is open (Undoable in IDE).",' +
+      '"description":"Exact text replacement in a project source/text file. old_text must match exactly, ' +
+        'including whitespace; keep it small and unique. Updates the open editor buffer when the file is open.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative file path"},' +
         '"old_text":{"type":"string","description":"Exact text to find"},' +
@@ -376,7 +428,8 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"run_compile",' +
-      '"description":"Compile the active project. Default is quiet non-visual lazbuild (no Messages UI, does not steal focus). Set ui=true only for a final IDE Messages build.",' +
+      '"description":"Compile the active project. Default is quiet lazbuild (no Messages UI). ' +
+        'Set ui=true only for a final IDE Messages check.",' +
       '"parameters":{"type":"object","properties":{' +
         '"kind":{"type":"string","description":"compile (default) or build (rebuild-all when quiet)"},' +
         '"ui":{"type":"boolean","description":"If true, use IDE DoBuildProject and Messages window (default false = quiet lazbuild)"}' +
@@ -1664,15 +1717,19 @@ Var
   Files: TStringList;
   SL: TStringList;
   ExtFilter: String;
-  WalkComplete: Boolean;
+  WalkComplete, UseRegex, Hit: Boolean;
+  Re: TRegExpr;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  Re := Nil;
   Query := JsonArgString(ArgumentsJson, 'query');
   If Trim(Query) = '' Then
+    Query := JsonArgString(ArgumentsJson, 'pattern');
+  If Trim(Query) = '' Then
     Begin
-      ErrorText := 'search_in_project requires query.';
+      ErrorText := 'grep/search_in_project requires pattern or query.';
       Exit;
     End;
   Path := JsonArgString(ArgumentsJson, 'path');
@@ -1692,7 +1749,23 @@ Begin
     MaxMatches := AssistantToolMaxSearchMatches;
   If MaxMatches > 200 Then
     MaxMatches := 200;
+  UseRegex := JsonArgBool(ArgumentsJson, 'regex', False);
   LowerQuery := LowerCase(Query);
+  If UseRegex Then
+    Begin
+      Re := TRegExpr.Create;
+      Try
+        Re.ModifierI := True;
+        Re.Expression := Query;
+      Except
+        On E: Exception Do
+          Begin
+            ErrorText := 'Invalid regular expression: ' + E.Message;
+            FreeAndNil(Re);
+            Exit;
+          End;
+      End;
+    End;
   Files := TStringList.Create;
   SL := TStringList.Create;
   Try
@@ -1719,7 +1792,11 @@ Begin
         For LineNo := 0 To SL.Count - 1 Do
           Begin
             LineText := SL[LineNo];
-            If Pos(LowerQuery, LowerCase(LineText)) > 0 Then
+            If Assigned(Re) Then
+              Hit := Re.Exec(LineText)
+            Else
+              Hit := Pos(LowerQuery, LowerCase(LineText)) > 0;
+            If Hit Then
               Begin
                 Inc(MatchCount);
                 ResultText := ResultText + Format('%s:%d: %s',
@@ -1738,7 +1815,54 @@ Begin
   Finally
     SL.Free;
     Files.Free;
+    FreeAndNil(Re);
   End;
+End;
+
+Function ToolGrep(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolSearchInProject(ArgumentsJson, ResultText, ErrorText);
+End;
+
+Function ToolReadSkill(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  SkillName, Root: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  SkillName := JsonArgString(ArgumentsJson, 'name');
+  If Trim(SkillName) = '' Then
+    SkillName := JsonArgString(ArgumentsJson, 'skill');
+  If Trim(SkillName) = '' Then
+    Begin
+      ErrorText := 'read_skill requires name.';
+      Exit;
+    End;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  If Root = '' Then
+    Root := ProjectRootPath;
+  If Not Assigned(WorkflowAssistantHarness) Then
+    Begin
+      ErrorText := 'Harness is not available.';
+      Exit;
+    End;
+  Result := WorkflowAssistantHarness.ReadSkill(SkillName, Root, ResultText, ErrorText);
+End;
+
+Function ToolTodoWrite(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If Not Assigned(WorkflowAssistantHarness) Then
+    Begin
+      ErrorText := 'Harness is not available.';
+      Exit;
+    End;
+  Result := WorkflowAssistantHarness.ApplyTodoWrite(ArgumentsJson, ResultText, ErrorText);
 End;
 
 { Must appear before ToolWriteFile / ToolReplaceInFile. }
@@ -2448,6 +2572,12 @@ Begin
     Result := ToolOpenFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'ensure_form_component' Then
     Result := ToolEnsureFormComponent(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'read_skill' Then
+    Result := ToolReadSkill(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'grep' Then
+    Result := ToolGrep(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'todo_write' Then
+    Result := ToolTodoWrite(ArgumentsJson, ResultText, ErrorText)
   Else
     ErrorText := 'Unknown tool: ' + ToolName;
 End;
