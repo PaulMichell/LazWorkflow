@@ -17,7 +17,7 @@ Build the best-in-class **agentic Free Pascal / Lazarus programming tool**, fuse
 
 Grok Build is the quality bar for chain-of-thought feedback, tool visibility, harness discipline, and agent structure. This plan copies that *architecture* into Michell Computing Pascal, and uses the IDE as the native surface (editors, Messages, forms, compile, Git).
 
-v0.2 delivered a working Project Assistant (Chat / Plan / Code, streaming, tools, history JSONL). v2 replaces the assistant *runtime and working surface*. It does not throw away OAuth, path sandbox, plan `Status:` scan, IDE buffer edits, or Repository tools.
+v0.2 delivered a working Project Assistant (Chat / Plan / Code, now Ask / Plan / Build; streaming, tools, history JSONL). v2 replaces the assistant *runtime and working surface*. It does not throw away OAuth, path sandbox, plan `Status:` scan, IDE buffer edits, or Repository tools.
 
 **Success looks like this**
 
@@ -135,7 +135,7 @@ Four separate mechanisms, all missing today:
 | Tools in the trace | Footer “Running tools…” | First-class cards with path, status, elapsed |
 | Paint | Rebuild one Markdown document (~80 ms), full reparse | Incremental `push_chunk` on a thinking block |
 | Prompt | Short mode string + optional one skill pasted in | Templated `prompt.md` + skill *catalog* + AGENTS.md + reminders |
-| Modes | Chat / Plan / Code swap tools, prompt, **and side panel** | One session; Plan is a permission overlay |
+| Modes | Chat / Plan / Code swap tools, prompt, **and side panel** | One session; Ask / Plan / Build chips; Plan is a permission overlay |
 | Subagents | None | `explore` / `plan` / `general-purpose`, depth 1 |
 
 That is why thinking here is neither as rich nor as dynamic. It is not that Grok “thinks less” in the IDE.
@@ -183,7 +183,7 @@ Replace the current “god form + god service” split (`ProjectAssistantForm.pa
 | `AssistantSampler` | Service | HTTP + SSE; no tools; no form |
 | `AssistantHarness` | Service | System prompt template, skill catalog, AGENTS.md, mode overlay |
 | `AssistantSession` | Service | Actor thread: turn loop, tool rounds, encrypted reasoning store |
-| `AssistantTools` | Service | Mode allow-list + executors (split files if still huge: Read / Plan / Code) |
+| `AssistantTools` | Service | Mode allow-list + executors (split files if still huge: Read / Plan / Build) |
 | `AssistantSubagents` | Service | Spawn, capability mode, depth gate, summary back |
 | `AssistantTrace` | Bridge | In-memory block list; not a form |
 | `ThinkingBlockFrame` | UI | Streaming thinking |
@@ -385,7 +385,7 @@ Build’s default `follow_up_behavior = "queue"` waits until the turn *ends*. Th
 
 v0.2 chrome is the other half of “clunky”:
 
-- `TRadioGroup` Chat / Plan / Code **swaps the left panel** (Chat is a paragraph of help).
+- `TRadioGroup` Chat / Plan / Code **swaps the left panel** (Chat is a paragraph of help). Now Ask / Plan / Build chips with work tiles always visible.
 - Bottom bar shows **every** action (Review Compile/Build, Fix Error, Toggle Thinking, Auto New Chat) in every mode.
 - Working surface is **current-turn-only** Markdown, so the tool story disappears.
 - Mode change looks like a different app. It is not obvious whether history, the plan, and the prompt survive.
@@ -394,7 +394,7 @@ Build’s lesson: **the transcript never leaves the centre. Mode is a chip, not 
 
 ### 6.1 Mode model (keep three intents, fix the meaning)
 
-Rename **Code → Build** in the UI (package/type names can stay `amCode` until a rename pass). One line always visible:
+**Ask · Plan · Build** chips (`TAssistantMode` is `amChat`, `amPlan`, `amBuild`). One line always visible:
 
 | Chip | Permission | One-liner |
 |------|------------|-----------|
@@ -669,7 +669,7 @@ Status: complete
 
 Status: complete
 
-Ask / Plan / Build chips (internal mode remains `amCode`). Chat help panel gone; work tiles stay on the left in every mode; plan file list is a Plan-mode strip. Prompt stays editable; Send caption **Steer** mid-turn; `Ctrl+Enter` queues a steer at the next actor gap. Short bottom bar (Review ▾, Commands…). Window **Session / Review / View** menu plus `Ctrl+P` command popup from the same `TActionList`. Slash popup, footer-click catalog, and Plan “Build this” bar remain follow-ups.
+Ask / Plan / Build chips (`amBuild`, persisted as `build`; old `code` config still loads). Chat help panel gone; work tiles stay on the left in every mode; plan file list is a Plan-mode strip. Prompt stays editable; Send caption **Steer** mid-turn; `Ctrl+Enter` queues a steer at the next actor gap. Short bottom bar (Review ▾, Commands…). Window **Session / Review / View** menu plus `Ctrl+P` command popup from the same `TActionList`. Slash popup, footer-click catalog, and Plan “Build this” bar remain follow-ups.
 
 ## 5. Harness
 

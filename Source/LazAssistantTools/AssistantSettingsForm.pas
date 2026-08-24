@@ -180,7 +180,7 @@ Begin
   AutoNewChatDefaultCheck.Top := 404;
   AutoNewChatDefaultCheck.ShowHint := True;
   AutoNewChatDefaultCheck.Hint :=
-    'Default for the assistant form checkbox. Long Code/Plan runs can rollover into a fresh chat.';
+    'Default for the assistant form checkbox. Long Build/Plan runs can rollover into a fresh chat.';
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);

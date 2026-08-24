@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs;
 
 Type
-  TAssistantMode = (amChat, amPlan, amCode);
+  TAssistantMode = (amChat, amPlan, amBuild);
 
   { Lightweight row for the conversation turn list (also lives in FIndex). }
   TConversationIndexEntry = Class
@@ -172,7 +172,7 @@ Function AssistantModeToStr(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
     amPlan: Result := 'plan';
-    amCode: Result := 'code';
+    amBuild: Result := 'build';
   Else
     Result := 'chat';
   End;
@@ -185,8 +185,8 @@ Begin
   T := LowerCase(Trim(ModeText));
   If T = 'plan' Then
     Result := amPlan
-  Else If T = 'code' Then
-    Result := amCode
+  Else If (T = 'build') Or (T = 'code') Then
+    Result := amBuild
   Else
     Result := amChat;
 End;

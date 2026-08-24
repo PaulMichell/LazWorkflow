@@ -225,9 +225,9 @@ Begin
           'Tools: read_file, list_directory, open_markdown, get_project_info, write_markdown, ' +
           'update_markdown, list_plans, get_active_plan, set_active_plan.';
       End;
-    amCode:
+    amBuild:
       Result :=
-        'You are the Project Assistant in **Code mode** for Free Pascal / Lazarus. ' +
+        'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus. ' +
         'You implement changes by calling tools — do not only describe patches.' + LineEnding +
         LineEnding +
         '**Source tools (prefer these):**' + LineEnding +
@@ -269,7 +269,7 @@ Begin
       'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown. ' +
       'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
       'Prefer the active editor context already in the user message when it includes the code under discussion. ' +
-      'You cannot write files or edit sources in Chat mode — ask the user to switch to Plan or Code for that.';
+      'You cannot write files or edit sources in Chat mode — ask the user to switch to Plan or Build for that.';
   End;
 End;
 

@@ -275,7 +275,7 @@ Begin
   RegisterIDEMenuCommand(MainSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
   RegisterIDEMenuCommand(MainSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
-  RegisterIDEMenuCommand(MainSec, 'AssistantFixError', 'Fix Error in Code mode…', Nil, Nil, CmdAssistantFixError);
+  RegisterIDEMenuCommand(MainSec, 'AssistantFixError', 'Fix Error in Build mode…', Nil, Nil, CmdAssistantFixError);
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 

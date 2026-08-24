@@ -16,7 +16,7 @@
 Create two tightly integrated, first-class Lazarus IDE packages that feel native:
 
 1. **LazRepositoryTools** — A modern Git life-cycle UI with a commit history graph, live monitoring, and push/pull/fetch.
-2. **LazAssistantTools** — A **Project Assistant** window that runs in explicit **modes** (Chat / Plan / Code). Each mode has a clear purpose and **implicit tool permissions**, so the model cannot silently escalate from “answer a question” to “rewrite the project.”
+2. **LazAssistantTools** — A **Project Assistant** window that runs in explicit **modes** (Ask / Plan / Build). Each mode has a clear purpose and **implicit tool permissions**, so the model cannot silently escalate from “answer a question” to “rewrite the project.”
 
 **Core principles**
 - Seamless IDE integration (dockable windows, IDE menus/actions, project-aware state).
@@ -48,7 +48,7 @@ Create two tightly integrated, first-class Lazarus IDE packages that feel native
 │  │  tabs: History | Files… │  │  │  tabs: Chat | Plan | Code          │  │
 │  │  actions bottom/edge    │  │  │  current turn view + bottom bar    │  │
 │  └─────────────────────────┘  │  │  history browser (JSONL + index)   │  │
-│                               │  │  plan TODO panel (Code mode)       │  │
+│                               │  │  plan TODO panel (Build mode)       │  │
 │                               │  └────────────────────────────────────┘  │
 │                               │  Markdown live windows (Plan artifacts)  │
 └───────────────────────────────┴──────────────────────────────────────────┘
@@ -97,22 +97,22 @@ Modes are not mere labels. Switching mode changes:
 
 1. System prompt flavour (role and success criteria).
 2. **Tool allow-list** (hard gate in `ExecuteAssistantTool` / request JSON).
-3. Secondary panels (e.g. Code mode TODO list).
+3. Secondary panels (e.g. Build mode TODO list).
 4. Default artefact locations.
 
 | Mode | Purpose | Implicit tools / capabilities | Explicit non-goals |
 |------|---------|-------------------------------|--------------------|
 | **Chat** | Q&A, explanation, design discussion | Read-only project tools: `read_file`, `list_directory`, `get_project_info`; open Markdown **read-only** or open existing MD without write tools | No source writes; no plan document mutation; no compile |
-| **Plan** | Author and maintain project plans / design notes | Everything in Chat **plus** create / open / update Markdown under the project (default `Documents/`), open live Markdown windows, list plan docs | No arbitrary source edits; no compile (optional later: “link to Code”) |
-| **Code** | Implement, edit, verify | Everything in Plan **plus** live source edits via IDE buffers, `run_compile` / `run_build`, read Messages / compiler output, structured “next TODO” workflow | No unattended mass rewrite without mode being Code; still respect path sandbox |
+| **Plan** | Author and maintain project plans / design notes | Everything in Chat **plus** create / open / update Markdown under the project (default `Documents/`), open live Markdown windows, list plan docs | No arbitrary source edits; no compile (optional later: “link to Build”) |
+| **Build** | Implement, edit, verify | Everything in Plan **plus** live source edits via IDE buffers, `run_compile` / `run_build`, read Messages / compiler output, structured “next TODO” workflow | No unattended mass rewrite without mode being Build; still respect path sandbox |
 
 **Hard rule:** the service builds `tools` JSON from the **active mode**. The model cannot call a tool that the mode does not allow, even if it invents the name.
 
 ##### Suggested refinements (mode permissions)
 
-- **Promotion is explicit:** user switches tab to Code (or confirms “Enter Code mode for this task”). Chat never silently gains write tools mid-stream.
+- **Promotion is explicit:** user switches to Build (or confirms “Enter Build mode for this task”). Chat never silently gains write tools mid-stream.
 - **In-flight mode lock:** while a stream / tool round is active, mode tab changes are disabled or require cancel first (avoids mid-round permission flips).
-- **Per-mode “allow writes” is redundant** if the tab *is* the permission — keep one concept. Optional future: Code mode sub-toggle “Apply edits without confirmation” vs “Stage edits for Apply”.
+- **Per-mode “allow writes” is redundant** if the tab *is* the permission — keep one concept. Optional future: Build mode sub-toggle “Apply edits without confirmation” vs “Stage edits for Apply”.
 - **Plan writes are sandboxed** to project root, preferably under `Documents/` by default, with escape hatch for other project-relative paths (e.g. `Docs/ProjectPlan.md`).
 - **Code writes** use IDE-mediated buffer edits (undoable), not silent disk overwrite of open files.
 
@@ -128,9 +128,9 @@ Modes are not mere labels. Switching mode changes:
 - Tools: create / open / update Markdown; default directory **`{ProjectRoot}/Documents/`** (create if missing when first Plan write occurs).
 - Existing **live Markdown windows** remain the viewer/editor (watch + debounce reload).
 - Plan mode can maintain a **canonical plan file** (user-chosen or default e.g. `Documents/Plan.md` or continue using `Docs/ProjectPlan.md` when already present).
-- Plan sections stay scannable (see §3.2.6) so Code mode can build a live TODO tile list from headings + status footers.
+- Plan sections stay scannable (see §3.2.6) so Build mode can build a live TODO tile list from headings + status footers.
 
-#### 3.2.5 Code mode
+#### 3.2.5 Build mode
 
 - Tools: Chat + Plan capabilities as needed for context, **plus**:
   - `replace_in_file` / buffer-aware apply (exact match; path sandbox).
@@ -142,7 +142,7 @@ Modes are not mere labels. Switching mode changes:
 
 #### 3.2.6 Plan → TODO (dynamically generated from the plan)
 
-**Goal:** Code mode shows a formal “where we are” list without a second source of truth. The **plan Markdown is the only durable state**; the TODO UI is a **live view computed by scanning** that file.
+**Goal:** Build mode shows a formal “where we are” list without a second source of truth. The **plan Markdown is the only durable state**; the TODO UI is a **live view computed by scanning** that file.
 
 **Decision:** no separate `todos.json` (or SQLite todo table) as master. If the assistant rewrites plan sections, the list **changes shape** on the next scan. If status footers change, list badges update.
 
@@ -173,7 +173,7 @@ Brief description of the work…
 | 3 | Fallback: no status line → **not started** |
 | Optional | Infer `complete` if section body is only `- [x]` checkboxes and none open (secondary heuristic, not required) |
 
-**Tile metaphor (Code mode UI):** each list row is a **tile**:
+**Tile metaphor (Build mode UI):** each list row is a **tile**:
 
 - **Title** — section heading text (e.g. “3. Auth form”)
 - **Footer / badge** — status (Not started / In progress / Complete)
@@ -186,12 +186,12 @@ Selecting a tile: “Current”, jump to plan heading in the Markdown window, or
 ##### Computational scan (no dual write of task identity)
 
 ```
-On plan file open / disk change (debounced) / after Plan or Code tool write:
+On plan file open / disk change (debounced) / after Plan or Build tool write:
   1. Read plan Markdown (or use already-loaded buffer)
   2. Parse headings → sections (title, line range, body)
   3. Read status from footer convention
   4. Rebuild in-memory TODO list model
-  5. Refresh Code mode panel (and optional Plan overview)
+  5. Refresh Build mode panel (and optional Plan overview)
 ```
 
 - **Add/remove/reorder sections in the plan** → list items appear/disappear/reorder automatically.
@@ -225,7 +225,7 @@ Status: not started
 Create/update Documents/*.md; live preview windows.
 ```
 
-Code mode TODO list (computed):
+Build mode TODO list (computed):
 
 | Tile title | Status |
 |------------|--------|
@@ -258,7 +258,7 @@ Tile footer can show `In progress · 1/3`. Completing all checkboxes can prompt 
 
 ##### Roadblocks / edge cases
 
-1. **Unstructured plans** (walls of prose, no sections) → empty or single synthetic tile; Plan mode prompt + “Structure plan for Code mode” action to wrap work in `##` + `Status:` lines.
+1. **Unstructured plans** (walls of prose, no sections) → empty or single synthetic tile; Plan mode prompt + “Structure plan for Build mode” action to wrap work in `##` + `Status:` lines.
 2. **Ambiguous headings** (every `##` in a long design doc) → restrict scan to a heading range or a tagged region (`<!-- assistant-work-start -->` … `<!-- assistant-work-end -->`).
 3. **Concurrent edit** of plan in Markdown window while Code marks status → debounce + reload; last writer wins on disk (same as any MD file).
 4. **Non-English status** — stick to the three English tokens in the convention; display labels can be localised later.
@@ -382,16 +382,16 @@ Mode is a **permission control**, not a page swap. The turn surface never leaves
 ### High-Value (aligned with modes)
 1. **Mode-appropriate tool cards** in the current turn (read / wrote plan / applied edit / compile result) without flooding history.
 2. **AI commit messages** from LazRepositoryTools using Assistant in Chat mode (read-only diff).
-3. **Fix Error** remains a Code-mode entry point (pre-fill prompt + jump to Code tab).
+3. **Fix Error** remains a Build-mode entry point (pre-fill prompt + jump to Build).
 4. **Plan-driven Code loop** — TODO tiles scanned from plan sections; Next / Done update `Status:` lines in the plan.
 5. **History search** (index previews + optional deep JSONL scan) replacing scroll archaeology.
 6. **Thinking toggle** + “copy thinking” for debugging model behaviour.
 7. **Audit trail** of writes (plan + code) as rows or a separate `actions` table.
-8. Keyboard-first: IDE commands “Project Assistant: Chat|Plan|Code”.
+8. Keyboard-first: IDE commands “Project Assistant: Ask|Plan|Build”.
 
 ### Nice-to-Have
 - Mermaid in Markdown windows.
-- Multi-model routing per mode (e.g. stronger model for Code).
+- Multi-model routing per mode (e.g. stronger model for Build).
 - Shareable session export (selected history + plan snapshot).
 - Stats view: tokens over time, duration percentiles, mode mix.
 
@@ -410,11 +410,11 @@ Mode is a **permission control**, not a page swap. The turn surface never leaves
 | Markdown live windows (LazMarkdown) | **Done** |
 | Multi-conversation History (archive / switch / delete / export) | **Done** |
 | Plan mode (Documents/, write tools, active plan, Plan tab) | **Done** |
-| Code mode TODO tiles (scan plan `##` + Status) | **Done** (Start / Done / Reset write-back) |
-| Code mode source edit tools | **Done** (`write_file`, `replace_in_file`, `search_in_project`, `open_file`, `add_unit_to_project`) |
-| Code mode compile/build tools | **Done** (`run_compile` tool + Review Compile/Build UI) |
+| Build mode TODO tiles (scan plan `##` + Status) | **Done** (Start / Done / Reset write-back) |
+| Build mode source edit tools | **Done** (`write_file`, `replace_in_file`, `search_in_project`, `open_file`, `add_unit_to_project`) |
+| Build mode compile/build tools | **Done** (`run_compile` tool + Review Compile/Build UI) |
 | Form component tool (`.pas` + `.lfm`) | **Done** (`ensure_form_component`) |
-| Fix Error → Code mode | **Done** (tools apply the fix; prefers top error) |
+| Fix Error → Build mode | **Done** (tools apply the fix; prefers top error) |
 | Review → Fix top error | **Done** (after Review with errors, top error selected + Fix Error offer) |
 | Auto Status: complete | **Done** (Work-on-this + clean `run_compile` this turn) |
 | AI commit message | **Done** (Manage Repository **Suggest** via staged diff) |
@@ -437,7 +437,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 5. `.assistant/` with **`conversation.jsonl` + index** (multi-conversation archives) — **done**.
 6. History browser + export/delete — **done**.
 7. Persist shell options in `.assistant/config.json` — **done** (`show_thinking`, `active_mode`, `plan_file`).
-8. Mode-scoped tool allow-lists — **done** (Chat read-only; Plan/Code Markdown tools).
+8. Mode-scoped tool allow-lists — **done** (Chat read-only; Plan/Build Markdown tools).
 
 ### Phase 3 – Plan mode — **done**
 1. Default `Documents/` directory; create on demand — **done**.
@@ -447,12 +447,12 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 5. Plan-mode system prompt (write to disk, not only chat) + auto-save fallback — **done**.
 6. Plan tab: list / New / Open / Set active / Refresh / Open Documents/ — **done**.
 
-### Phase 4 – Code mode — **usable MVP**
+### Phase 4 – Build mode — **usable MVP**
 1. TODO panel as **live scan of plan sections** (title + status); Start / Done / Reset / Work on this — **done**.
 2. IDE-mediated source tools (`write_file`, `replace_in_file`, open buffer when possible) — **done**.
 3. `search_in_project`, `run_compile`, `add_unit_to_project`, `open_file`, `ensure_form_component` — **done**.
-4. Optional edit confirmation policy for first release — **deferred** (auto-apply in Code).
-5. Fix Error → Code mode (tools + sticky mode until tab change) — **done**.
+4. Optional edit confirmation policy for first release — **deferred** (auto-apply in Build).
+5. Fix Error → Build mode (tools + sticky mode until tab change) — **done**.
 6. Auto Status: complete after Work-on-this + clean `run_compile` — **done**.
 7. Review → Fix top error offer — **done**.
 8. End-to-end loop: plan task → edit → build → fix → mark done — **ready to try**.
@@ -486,14 +486,14 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 **Risks & roadblocks**
 
 1. **JSONL index integrity** — Crash mid-append can leave a partial last line. Mitigate: write record then flush; on open, ignore corrupt last line and rebuild index; atomic index rewrite (temp + rename).
-2. **Mode confusion** — Users may stay in Chat and expect edits. Mitigate with clear empty-state copy (“Switch to Code to edit sources”) and Fix Error auto-switching to Code.
-3. **Plan structure drift** — LLM drops `Status:` lines or uses free prose only. Mitigate with Plan/Code system prompts, a “normalise section statuses” command, and empty-state guidance when the scan finds no sections.
+2. **Mode confusion** — Users may stay in Chat and expect edits. Mitigate with clear empty-state copy (“Switch to Build to edit sources”) and Fix Error auto-switching to Build.
+3. **Plan structure drift** — LLM drops `Status:` lines or uses free prose only. Mitigate with Plan/Build system prompts, a “normalise section statuses” command, and empty-state guidance when the scan finds no sections.
 4. **Large thinking blobs** — JSONL size growth. Mitigate with optional “store thinking” preference, retention limits, or compact-old-turns.
 5. **Context vs history (resolved)** — Submit the **full conversation** on every request via `AssistantClient` messages. The UI current-turn surface and future history browser are for humans only; they do not truncate the model context.
 6. **Concurrent editors** — Plan MD open in Markdown window and updated by tools; need debounced reload (already partially present).
-7. **Security** — Code mode is powerful; path sandbox + no shell tool in v1.
+7. **Security** — Build mode is powerful; path sandbox + no shell tool in v1.
 8. **Markdown control** — **Vendored** as package `LazMarkdown` under `Source/LazMarkdown` (local copy of Lazarus lazmarkdown + entity/table fixes). LazAssistantTools depends on `LazMarkdown`, not the IDE’s `lazmarkdown` install.
-9. **Form migration** — Shell rewrite first (tabs + bottom bar + current-turn view); Plan/Code panels and history JSONL follow.
+9. **Form migration** — Shell rewrite first (tabs + bottom bar + current-turn view); Plan/Build panels and history JSONL follow.
 10. **Analytics scope creep** — Ship index fields with timestamps/duration first; defer charts. Deep SQL-like queries are out of scope until/unless SQLite is revisited.
 
 ---
@@ -517,9 +517,9 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 ## 8. Deliverables
 
 1. Packages: LazWorkflowCommon, LazRepositoryTools, LazAssistantTools.
-2. **Project Assistant** with Chat / Plan / Code modes and mode-gated tools.
+2. **Project Assistant** with Chat / Plan / Build modes and mode-gated tools.
 3. `.assistant/history.jsonl` (+ index) history browser + current-turn UI.
-4. Plan mode Markdown workflow + Code mode TODO tiles (live plan scan).
+4. Plan mode Markdown workflow + Build mode TODO tiles (live plan scan).
 5. README / user guide: modes, permissions, `.assistant` VCS guidance.
 6. Example: plan → code → compile → commit loop.
 7. Tests where feasible (history DB, path sandbox, mode allow-list).
@@ -531,7 +531,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - Native feel inside Lazarus; Manage Repository and Project Assistant share interaction patterns (top tabs, calm chrome).
 - User can revisit any past turn in seconds via history search (not scroll).
 - Chat cannot modify sources; Plan can only touch intended docs; Code can implement with compile feedback.
-- After the assistant updates plan sections/status, Code mode TODO tiles refresh from the same file without a separate todo store.
+- After the assistant updates plan sections/status, Build mode TODO tiles refresh from the same file without a separate todo store.
 - Full loop without leaving the IDE: plan → implement → build → fix → commit (with Repository tools).
 
 ---
@@ -556,7 +556,7 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 | API context | Full chat history always submitted via AssistantClient; UI is current-turn only |
 | Plan default path | `Documents/` for new plans; allow linking existing `Docs/ProjectPlan.md` |
 | Plan → TODO | Dynamic section scan (title tile + status footer); Done writes Status back into plan MD |
-| Code apply | IDE buffer edits; start with auto-apply in Code mode + undo; add confirm later if needed |
+| Code apply | IDE buffer edits; start with auto-apply in Build mode + undo; add confirm later if needed |
 | Thinking | Toggle + still store in DB when present |
 | Secrets | Keep OAuth out of `.assistant/`; gitignore `.assistant/` by default |
 | Stats | Index fields ready now; charts later |
@@ -577,17 +577,17 @@ Streaming chat, footer, sessions, Markdown windows, settings/OAuth, read tools.
 - lazmarkdown fixes (local Lazarus tree): table `ChildCount` off-by-one; bare `&` entity AV.
 
 ### 2026-07-26 – Plan revision 0.2
-- Product direction: **Project Assistant** with **Chat / Plan / Code** modes.
+- Product direction: **Project Assistant** with **Ask / Plan / Build** modes.
 - UI: top tabs, bottom actions, current-turn focus, thinking toggle.
 - Storage: project `.assistant/` with **JSONL history + sidecar index** (no SQLite dependency for v1).
-- Plan mode MD workflow (`Documents/`); Code mode edits + compile + **TODO tiles scanned from plan sections**.
+- Plan mode MD workflow (`Documents/`); Build mode edits + compile + **TODO tiles scanned from plan sections**.
 - Explicit phase 2.5–4 sequencing and roadblocks documented.
 
 ### 2026-07-26 – Status catch-up (implementation)
 - Phase 2.5 shell, multi-conversation History, Plan mode tools/UI: **landed**.
 - Form renamed to `ProjectAssistantForm`; Michell naming cleanup on assistant package.
 - Chat selection/clipboard and prompt Cut/Copy/Paste menus.
-- Phase 4: plan section scan + Code TODO panel with Start / Done / Reset status write-back.
+- Phase 4: plan section scan + Build work-package panel with Start / Done / Reset status write-back.
 
 **Next:** package docs / example loop; plan status normalise; optional Review→Fix top error.
 

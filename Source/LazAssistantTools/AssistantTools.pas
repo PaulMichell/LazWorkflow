@@ -1,6 +1,6 @@
 Unit AssistantTools;
 
-{ Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Code source edit (c) 2026 Michell Computing. }
+{ Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -30,7 +30,7 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
 Procedure SetActivePlanRelativePath(Const RelativePath: String);
-{ Last run_compile outcome for Code-mode auto Status: complete (seq bumps each run). }
+{ Last run_compile outcome for Build-mode auto Status: complete (seq bumps each run). }
 Function AssistantLastCompileSeq: Integer;
 Function AssistantLastCompileWasClean: Boolean;
 { After add_unit / project-structure tools: save .lpi so disk matches IDE memory. }
@@ -226,24 +226,24 @@ Begin
   If (Name = 'read_file') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Then
     Begin
-      Result := Mode In [amChat, amPlan, amCode];
+      Result := Mode In [amChat, amPlan, amBuild];
       Exit;
     End;
-  { Plan workspace tools — Plan and Code (Code uses them for Status: updates). }
+  { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
   If (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'list_plans') Or (Name = 'set_active_plan') Or
     (Name = 'get_active_plan') Then
     Begin
-      Result := Mode In [amPlan, amCode];
+      Result := Mode In [amPlan, amBuild];
       Exit;
     End;
-  { Code-mode source tools — never Chat or Plan. }
+  { Build-mode source tools — never Chat or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'search_in_project') Or (Name = 'run_compile') Or
     (Name = 'add_unit_to_project') Or (Name = 'open_file') Or
     (Name = 'ensure_form_component') Then
     Begin
-      Result := Mode = amCode;
+      Result := Mode = amBuild;
       Exit;
     End;
   Result := False;
@@ -325,7 +325,7 @@ Begin
     '}}';
 End;
 
-Function BuildCodeToolsJson: String;
+Function BuildSourceToolsJson: String;
 Begin
   Result :=
     '{"type":"function","function":{' +
@@ -405,8 +405,8 @@ Begin
   Case Mode Of
     amPlan:
       Result := '[' + BuildReadToolsJson + ',' + BuildPlanToolsJson + ']';
-    amCode:
-      Result := '[' + BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildCodeToolsJson + ']';
+    amBuild:
+      Result := '[' + BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson + ']';
     amChat:
       Result := BuildAssistantToolsJson;
   Else
@@ -1944,7 +1944,7 @@ Begin
           GLastCompileClean := BuildOk And (ErrorCount = 0);
           If GLastCompileClean Then
             ResultText := ResultText + LineEnding +
-              'COMPILE_CLEAN=1 (errors=0; Code mode may auto-mark the active plan package complete).'
+              'COMPILE_CLEAN=1 (errors=0; Build mode may auto-mark the active plan package complete).'
           Else
             ResultText := ResultText + LineEnding +
               'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
@@ -1981,7 +1981,7 @@ Begin
     LineEnding + LineEnding + MsgText;
   If GLastCompileClean Then
     ResultText := ResultText + LineEnding +
-      'COMPILE_CLEAN=1 (errors=0; Code mode may auto-mark the active plan package complete).'
+      'COMPILE_CLEAN=1 (errors=0; Build mode may auto-mark the active plan package complete).'
   Else
     ResultText := ResultText + LineEnding +
       'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';

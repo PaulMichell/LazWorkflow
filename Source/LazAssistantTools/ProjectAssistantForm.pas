@@ -80,18 +80,18 @@ Type
     PlanSetActiveButton: TButton;
     PlanRefreshButton: TButton;
     PlanOpenDocsButton: TButton;
-    { Code TODO workspace (runtime, left mode panel). }
-    CodePanel: TPanel;
-    CodeActiveLabel: TLabel;
-    CodeTodoList: TListBox;
-    CodeRefreshButton: TButton;
-    CodeOpenPlanButton: TButton;
-    CodeStartButton: TButton;
-    CodeDoneButton: TButton;
-    CodeResetButton: TButton;
-    CodeWorkButton: TButton;
-    CodeWorkPlanButton: TButton;
-    CodeStatusLabel: TLabel;
+    { Build work-package tiles (runtime, left panel; visible in every mode). }
+    BuildPanel: TPanel;
+    BuildActiveLabel: TLabel;
+    BuildTodoList: TListBox;
+    BuildRefreshButton: TButton;
+    BuildOpenPlanButton: TButton;
+    BuildStartButton: TButton;
+    BuildDoneButton: TButton;
+    BuildResetButton: TButton;
+    BuildWorkButton: TButton;
+    BuildWorkPlanButton: TButton;
+    BuildStatusLabel: TLabel;
     BottomBar: TPanel;
     NewChatButton: TButton;
     ToggleThinkingButton: TButton;
@@ -178,11 +178,11 @@ Type
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
-    FModeSticky: Boolean; { Keep forced Code/Plan mode after send until user changes mode. }
-    CodeSections: TObjectList; { of TPlanSection for the Code TODO list (not published). }
-    FCodeSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
-    FCodeWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
-    FCodeWorkSectionTitle: String;
+    FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
+    BuildSections: TObjectList; { of TPlanSection for the Build work-package list (not published). }
+    FBuildSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
+    FBuildWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
+    FBuildWorkSectionTitle: String;
     FCompileSeqAtSendStart: Integer; { Snapshot of AssistantLastCompileSeq at turn start. }
     FPendingReviewErrorOffer: Boolean; { After Review with errors, offer Fix Error. }
     FReviewErrorCount: Integer;
@@ -236,35 +236,35 @@ Type
     Procedure PlanOpenDocsButtonClick(Sender: TObject);
     Procedure PlanListDblClick(Sender: TObject);
     Function SelectedPlanRelativePath: String;
-    Procedure EnsureCodeTabUi;
-    Procedure RefreshCodeTodos;
-    Function SelectedCodeSectionIndex: Integer;
-    Procedure SetCodeStatusFeedback(Const MessageText: String);
-    Procedure SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
-    Procedure ClearCodeWorkTracking;
-    Procedure BeginCodeWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
-    Procedure TryAutoCompleteCodeWork(Const StreamErrorText: String);
+    Procedure EnsureBuildTabUi;
+    Procedure RefreshBuildTodos;
+    Function SelectedBuildSectionIndex: Integer;
+    Procedure SetBuildStatusFeedback(Const MessageText: String);
+    Procedure SetSelectedBuildSectionStatus(NewStatus: TPlanSectionStatus);
+    Procedure ClearBuildWorkTracking;
+    Procedure BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
+    Procedure TryAutoCompleteBuildWork(Const StreamErrorText: String);
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
-    Procedure CodeRefreshButtonClick(Sender: TObject);
-    Procedure CodeOpenPlanButtonClick(Sender: TObject);
-    Procedure CodeStartButtonClick(Sender: TObject);
-    Procedure CodeDoneButtonClick(Sender: TObject);
-    Procedure CodeResetButtonClick(Sender: TObject);
-    Procedure CodeWorkButtonClick(Sender: TObject);
-    Procedure CodeWorkPlanButtonClick(Sender: TObject);
-    Procedure CodeWorkOnSelectedPackage;
+    Procedure BuildRefreshButtonClick(Sender: TObject);
+    Procedure BuildOpenPlanButtonClick(Sender: TObject);
+    Procedure BuildStartButtonClick(Sender: TObject);
+    Procedure BuildDoneButtonClick(Sender: TObject);
+    Procedure BuildResetButtonClick(Sender: TObject);
+    Procedure BuildWorkButtonClick(Sender: TObject);
+    Procedure BuildWorkPlanButtonClick(Sender: TObject);
+    Procedure BuildWorkOnSelectedPackage;
     Procedure StartWorkOnPlanAgent;
     Procedure StopWorkOnPlanAgent(Const Reason: String);
     Procedure ContinueWorkOnPlanAgent(Data: PtrInt);
-    Function FindNextIncompleteCodeSection: Integer;
-    Function BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
+    Function FindNextIncompleteBuildSection: Integer;
+    Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
     Procedure MaybeWarnHighContextUsage;
     Function AutoNewChatAtLimitEnabled: Boolean;
     Procedure SyncAutoNewChatCheckFromConfig;
-    Procedure CodeTodoListDblClick(Sender: TObject);
-    Procedure CodeTodoListClick(Sender: TObject);
-    Procedure CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure BuildTodoListDblClick(Sender: TObject);
+    Procedure BuildTodoListClick(Sender: TObject);
+    Procedure BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -393,11 +393,11 @@ Begin
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   Transcript := TStringList.Create;
-  CodeSections := TObjectList.Create(True);
-  CodePanel := Nil;
-  FCodeSelectedIndex := -1;
-  FCodeWorkSectionIndex := -1;
-  FCodeWorkSectionTitle := '';
+  BuildSections := TObjectList.Create(True);
+  BuildPanel := Nil;
+  FBuildSelectedIndex := -1;
+  FBuildWorkSectionIndex := -1;
+  FBuildWorkSectionTitle := '';
   FCompileSeqAtSendStart := 0;
   FPendingReviewErrorOffer := False;
   FReviewErrorCount := 0;
@@ -423,7 +423,7 @@ Begin
     AssistantClient.OnTrace := Nil;
   FreeAndNil(Transcript);
   FreeAndNil(HistoryIds);
-  FreeAndNil(CodeSections);
+  FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
   FreeAndNil(FHistoryTrace);
   Inherited Destroy;
@@ -439,7 +439,7 @@ Begin
   EnsureChatView;
   EnsureInputPopup;
   EnsurePlanTabUi;
-  EnsureCodeTabUi;
+  EnsureBuildTabUi;
   EnsureCommandsMenu;
   UpdateThinkingActionCaption;
   SyncAutoNewChatCheckFromConfig;
@@ -543,7 +543,7 @@ Begin
     Exit;
   Case ModeGroup.ItemIndex Of
     1: Result := amPlan;
-    2: Result := amCode;
+    2: Result := amBuild;
   Else
     Result := amChat;
   End;
@@ -565,7 +565,7 @@ Begin
   Try
     Case ActiveMode Of
       amPlan: Wanted := 1;
-      amCode: Wanted := 2;
+      amBuild: Wanted := 2;
     Else
       Wanted := 0;
     End;
@@ -582,7 +582,7 @@ Function TProjectAssistantForm.ModeChipCaption(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
     amPlan: Result := 'Plan';
-    amCode: Result := 'Build';
+    amBuild: Result := 'Build';
   Else
     Result := 'Ask';
   End;
@@ -594,7 +594,7 @@ Var
 Begin
   Case ActiveMode Of
     amPlan: ToolsHint := 'writes the plan file · will not edit sources';
-    amCode: ToolsHint := 'edits project files and compiles';
+    amBuild: ToolsHint := 'edits project files and compiles';
   Else
     ToolsHint := 'explains and inspects · will not write files';
   End;
@@ -619,17 +619,17 @@ Procedure TProjectAssistantForm.UpdateWorkActions;
 Var
   CanWork: Boolean;
 Begin
-  CanWork := (ActiveMode = amCode) And (Not FSending);
-  If Assigned(CodeWorkButton) Then
-    CodeWorkButton.Enabled := CanWork;
-  If Assigned(CodeWorkPlanButton) Then
-    CodeWorkPlanButton.Enabled := CanWork;
-  If Assigned(CodeStartButton) Then
-    CodeStartButton.Enabled := CanWork;
-  If Assigned(CodeDoneButton) Then
-    CodeDoneButton.Enabled := (ActiveMode = amCode) And (Not FSending);
-  If Assigned(CodeResetButton) Then
-    CodeResetButton.Enabled := (ActiveMode = amCode) And (Not FSending);
+  CanWork := (ActiveMode = amBuild) And (Not FSending);
+  If Assigned(BuildWorkButton) Then
+    BuildWorkButton.Enabled := CanWork;
+  If Assigned(BuildWorkPlanButton) Then
+    BuildWorkPlanButton.Enabled := CanWork;
+  If Assigned(BuildStartButton) Then
+    BuildStartButton.Enabled := CanWork;
+  If Assigned(BuildDoneButton) Then
+    BuildDoneButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
+  If Assigned(BuildResetButton) Then
+    BuildResetButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
 End;
 
 Procedure TProjectAssistantForm.UpdateModeSidePanels;
@@ -647,10 +647,10 @@ Begin
         PlanPanel.Height := 200;
       PlanPanel.Visible := ActiveMode = amPlan;
     End;
-  If Assigned(CodePanel) Then
+  If Assigned(BuildPanel) Then
     Begin
-      CodePanel.Align := alClient;
-      CodePanel.Visible := True;
+      BuildPanel.Align := alClient;
+      BuildPanel.Visible := True;
     End;
 End;
 
@@ -667,7 +667,7 @@ Begin
   { Capture mode from the mode control, then freeze it for the turn. }
   ActiveMode := CurrentModeFromUi;
   FModeLocked := True;
-  FModeSticky := ActiveMode In [amPlan, amCode];
+  FModeSticky := ActiveMode In [amPlan, amBuild];
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(ActiveMode);
   UpdateModeBadge;
@@ -677,10 +677,10 @@ End;
 
 Procedure TProjectAssistantForm.ForceModeAndLock(Mode: TAssistantMode);
 Begin
-  { Enter a specific mode for this turn (e.g. Fix Error / Work-on-this → Code). }
+  { Enter a specific mode for this turn (e.g. Fix Error / Work-on-this → Build). }
   ActiveMode := Mode;
   FModeLocked := True;
-  FModeSticky := Mode In [amPlan, amCode];
+  FModeSticky := Mode In [amPlan, amBuild];
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(Mode);
   SyncModeUi;
@@ -691,7 +691,7 @@ End;
 Procedure TProjectAssistantForm.UnlockModeAfterSend;
 Begin
   FModeLocked := False;
-  { FModeSticky keeps Plan/Code tools until the user picks another mode. }
+  { FModeSticky keeps Plan/Build tools until the user picks another mode. }
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(ActiveMode);
   UpdateModeBadge;
@@ -755,8 +755,8 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshPlanList;
-  If Assigned(CodePanel) Then
-    RefreshCodeTodos;
+  If Assigned(BuildPanel) Then
+    RefreshBuildTodos;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
       '` (auto-saved because the model did not call write_markdown).';
@@ -770,15 +770,15 @@ Begin
     ActiveMode := CurrentModeFromUi;
   If Assigned(AssistantClient) Then
     AssistantClient.SetActiveMode(ActiveMode);
-  { Fix Error always switches into Code tools, so keep it available in every mode. }
+  { Fix Error always switches into Build tools, so keep it available in every mode. }
   FixErrorAction.Enabled := Not FSending;
   ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   EnsurePlanTabUi;
-  EnsureCodeTabUi;
+  EnsureBuildTabUi;
   If ActiveMode = amPlan Then
     RefreshPlanList;
-  RefreshCodeTodos;
+  RefreshBuildTodos;
   UpdateWorkActions;
   SyncModeUi;
 End;
@@ -1035,29 +1035,29 @@ Begin
   PlanOpenButtonClick(Sender);
 End;
 
-Procedure TProjectAssistantForm.EnsureCodeTabUi;
+Procedure TProjectAssistantForm.EnsureBuildTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(CodePanel) Or (Not Assigned(ModeSidePanel)) Then
+  If Assigned(BuildPanel) Or (Not Assigned(ModeSidePanel)) Then
     Exit;
 
-  CodePanel := TPanel.Create(Self);
-  CodePanel.Parent := ModeSidePanel;
-  CodePanel.Align := alClient;
-  CodePanel.BevelOuter := bvNone;
-  CodePanel.BorderSpacing.Around := 8;
-  CodePanel.Visible := True;
+  BuildPanel := TPanel.Create(Self);
+  BuildPanel.Parent := ModeSidePanel;
+  BuildPanel.Align := alClient;
+  BuildPanel.BevelOuter := bvNone;
+  BuildPanel.BorderSpacing.Around := 8;
+  BuildPanel.Visible := True;
 
-  CodeActiveLabel := TLabel.Create(Self);
-  CodeActiveLabel.Parent := CodePanel;
-  CodeActiveLabel.Align := alTop;
-  CodeActiveLabel.Caption := 'Active plan: (none)';
-  CodeActiveLabel.WordWrap := True;
-  CodeActiveLabel.BorderSpacing.Bottom := 6;
+  BuildActiveLabel := TLabel.Create(Self);
+  BuildActiveLabel.Parent := BuildPanel;
+  BuildActiveLabel.Align := alTop;
+  BuildActiveLabel.Caption := 'Active plan: (none)';
+  BuildActiveLabel.WordWrap := True;
+  BuildActiveLabel.BorderSpacing.Bottom := 6;
 
   Bar := TPanel.Create(Self);
-  Bar.Parent := CodePanel;
+  Bar.Parent := BuildPanel;
   Bar.Align := alTop;
   Bar.Height := 36;
   Bar.BevelOuter := bvNone;
@@ -1068,113 +1068,113 @@ Begin
   Bar.ChildSizing.TopBottomSpacing := 2;
   Bar.BorderSpacing.Bottom := 6;
 
-  CodeRefreshButton := TButton.Create(Self);
-  CodeRefreshButton.Parent := Bar;
-  CodeRefreshButton.Caption := 'Refresh';
-  CodeRefreshButton.AutoSize := True;
-  CodeRefreshButton.OnClick := @CodeRefreshButtonClick;
+  BuildRefreshButton := TButton.Create(Self);
+  BuildRefreshButton.Parent := Bar;
+  BuildRefreshButton.Caption := 'Refresh';
+  BuildRefreshButton.AutoSize := True;
+  BuildRefreshButton.OnClick := @BuildRefreshButtonClick;
 
-  CodeOpenPlanButton := TButton.Create(Self);
-  CodeOpenPlanButton.Parent := Bar;
-  CodeOpenPlanButton.Caption := 'Open plan';
-  CodeOpenPlanButton.AutoSize := True;
-  CodeOpenPlanButton.OnClick := @CodeOpenPlanButtonClick;
+  BuildOpenPlanButton := TButton.Create(Self);
+  BuildOpenPlanButton.Parent := Bar;
+  BuildOpenPlanButton.Caption := 'Open plan';
+  BuildOpenPlanButton.AutoSize := True;
+  BuildOpenPlanButton.OnClick := @BuildOpenPlanButtonClick;
 
-  CodeStartButton := TButton.Create(Self);
-  CodeStartButton.Parent := Bar;
-  CodeStartButton.Caption := 'Start';
-  CodeStartButton.AutoSize := True;
-  CodeStartButton.OnClick := @CodeStartButtonClick;
+  BuildStartButton := TButton.Create(Self);
+  BuildStartButton.Parent := Bar;
+  BuildStartButton.Caption := 'Start';
+  BuildStartButton.AutoSize := True;
+  BuildStartButton.OnClick := @BuildStartButtonClick;
 
-  CodeDoneButton := TButton.Create(Self);
-  CodeDoneButton.Parent := Bar;
-  CodeDoneButton.Caption := 'Done';
-  CodeDoneButton.AutoSize := True;
-  CodeDoneButton.OnClick := @CodeDoneButtonClick;
+  BuildDoneButton := TButton.Create(Self);
+  BuildDoneButton.Parent := Bar;
+  BuildDoneButton.Caption := 'Done';
+  BuildDoneButton.AutoSize := True;
+  BuildDoneButton.OnClick := @BuildDoneButtonClick;
 
-  CodeResetButton := TButton.Create(Self);
-  CodeResetButton.Parent := Bar;
-  CodeResetButton.Caption := 'Reset';
-  CodeResetButton.AutoSize := True;
-  CodeResetButton.OnClick := @CodeResetButtonClick;
+  BuildResetButton := TButton.Create(Self);
+  BuildResetButton.Parent := Bar;
+  BuildResetButton.Caption := 'Reset';
+  BuildResetButton.AutoSize := True;
+  BuildResetButton.OnClick := @BuildResetButtonClick;
 
-  CodeWorkButton := TButton.Create(Self);
-  CodeWorkButton.Parent := Bar;
-  CodeWorkButton.Caption := 'Work on this';
-  CodeWorkButton.AutoSize := True;
-  CodeWorkButton.OnClick := @CodeWorkButtonClick;
+  BuildWorkButton := TButton.Create(Self);
+  BuildWorkButton.Parent := Bar;
+  BuildWorkButton.Caption := 'Work on this';
+  BuildWorkButton.AutoSize := True;
+  BuildWorkButton.OnClick := @BuildWorkButtonClick;
 
-  CodeWorkPlanButton := TButton.Create(Self);
-  CodeWorkPlanButton.Parent := Bar;
-  CodeWorkPlanButton.Caption := 'Work on plan';
-  CodeWorkPlanButton.AutoSize := True;
-  CodeWorkPlanButton.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
-  CodeWorkPlanButton.ShowHint := True;
-  CodeWorkPlanButton.OnClick := @CodeWorkPlanButtonClick;
+  BuildWorkPlanButton := TButton.Create(Self);
+  BuildWorkPlanButton.Parent := Bar;
+  BuildWorkPlanButton.Caption := 'Work on plan';
+  BuildWorkPlanButton.AutoSize := True;
+  BuildWorkPlanButton.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
+  BuildWorkPlanButton.ShowHint := True;
+  BuildWorkPlanButton.OnClick := @BuildWorkPlanButtonClick;
 
-  CodeStatusLabel := TLabel.Create(Self);
-  CodeStatusLabel.Parent := CodePanel;
-  CodeStatusLabel.Align := alBottom;
-  CodeStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
-  CodeStatusLabel.WordWrap := True;
-  CodeStatusLabel.BorderSpacing.Top := 6;
+  BuildStatusLabel := TLabel.Create(Self);
+  BuildStatusLabel.Parent := BuildPanel;
+  BuildStatusLabel.Align := alBottom;
+  BuildStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
+  BuildStatusLabel.WordWrap := True;
+  BuildStatusLabel.BorderSpacing.Top := 6;
 
-  CodeTodoList := TListBox.Create(Self);
-  CodeTodoList.Parent := CodePanel;
-  CodeTodoList.Align := alClient;
-  CodeTodoList.OnClick := @CodeTodoListClick;
-  CodeTodoList.OnDblClick := @CodeTodoListDblClick;
-  CodeTodoList.OnSelectionChange := @CodeTodoListSelectionChange;
+  BuildTodoList := TListBox.Create(Self);
+  BuildTodoList.Parent := BuildPanel;
+  BuildTodoList.Align := alClient;
+  BuildTodoList.OnClick := @BuildTodoListClick;
+  BuildTodoList.OnDblClick := @BuildTodoListDblClick;
+  BuildTodoList.OnSelectionChange := @BuildTodoListSelectionChange;
 End;
 
-Procedure TProjectAssistantForm.RefreshCodeTodos;
+Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
   PlanRel, Err: String;
   I, Keep: Integer;
   Section: TPlanSection;
   NotStarted, InProgress, Complete: Integer;
 Begin
-  If Not Assigned(CodeTodoList) Then
+  If Not Assigned(BuildTodoList) Then
     Exit;
   PlanRel := GetActivePlanRelativePath;
-  If Assigned(CodeActiveLabel) Then
+  If Assigned(BuildActiveLabel) Then
     If PlanRel = '' Then
-      CodeActiveLabel.Caption := 'No active plan — switch to Plan to create one.'
+      BuildActiveLabel.Caption := 'No active plan — switch to Plan to create one.'
     Else
-      CodeActiveLabel.Caption := 'Active plan: ' + PlanRel +
+      BuildActiveLabel.Caption := 'Active plan: ' + PlanRel +
         '  ·  TODO tiles are scanned from ## headings + Status: lines.';
 
-  Keep := FCodeSelectedIndex;
-  If (Keep < 0) And Assigned(CodeTodoList) Then
-    Keep := CodeTodoList.ItemIndex;
-  CodeTodoList.Items.BeginUpdate;
+  Keep := FBuildSelectedIndex;
+  If (Keep < 0) And Assigned(BuildTodoList) Then
+    Keep := BuildTodoList.ItemIndex;
+  BuildTodoList.Items.BeginUpdate;
   Try
-    CodeTodoList.Items.Clear;
-    If Assigned(CodeSections) Then
-      CodeSections.Clear;
+    BuildTodoList.Items.Clear;
+    If Assigned(BuildSections) Then
+      BuildSections.Clear;
     If PlanRel = '' Then
       Begin
-        CodeTodoList.Items.Add('(No active plan — switch to Plan to create one.)');
+        BuildTodoList.Items.Add('(No active plan — switch to Plan to create one.)');
         Exit;
       End;
-    If Not ScanPlanSections(PlanRel, CodeSections, Err) Then
+    If Not ScanPlanSections(PlanRel, BuildSections, Err) Then
       Begin
-        CodeTodoList.Items.Add('(' + Err + ')');
+        BuildTodoList.Items.Add('(' + Err + ')');
         Exit;
       End;
-    If CodeSections.Count = 0 Then
+    If BuildSections.Count = 0 Then
       Begin
-        CodeTodoList.Items.Add(
+        BuildTodoList.Items.Add(
           '(No ## sections found. Add work packages with Status: not started | in progress | complete.)');
         Exit;
       End;
     NotStarted := 0;
     InProgress := 0;
     Complete := 0;
-    For I := 0 To CodeSections.Count - 1 Do
+    For I := 0 To BuildSections.Count - 1 Do
       Begin
-        Section := TPlanSection(CodeSections[I]);
-        CodeTodoList.Items.Add(FormatPlanSectionTile(Section, I));
+        Section := TPlanSection(BuildSections[I]);
+        BuildTodoList.Items.Add(FormatPlanSectionTile(Section, I));
         Case Section.Status Of
           pssNotStarted: Inc(NotStarted);
           pssInProgress: Inc(InProgress);
@@ -1183,59 +1183,59 @@ Begin
           { }
         End;
       End;
-    If Assigned(CodeActiveLabel) And (PlanRel <> '') Then
-      CodeActiveLabel.Caption := Format(
+    If Assigned(BuildActiveLabel) And (PlanRel <> '') Then
+      BuildActiveLabel.Caption := Format(
         'Active plan: %s  ·  %d not started · %d in progress · %d complete',
         [PlanRel, NotStarted, InProgress, Complete]);
-    If (Keep >= 0) And (Keep < CodeTodoList.Items.Count) Then
-      CodeTodoList.ItemIndex := Keep
+    If (Keep >= 0) And (Keep < BuildTodoList.Items.Count) Then
+      BuildTodoList.ItemIndex := Keep
     Else
       Begin
         { Prefer first in-progress, else first not-started. }
-        CodeTodoList.ItemIndex := 0;
-        For I := 0 To CodeSections.Count - 1 Do
-          If TPlanSection(CodeSections[I]).Status = pssInProgress Then
+        BuildTodoList.ItemIndex := 0;
+        For I := 0 To BuildSections.Count - 1 Do
+          If TPlanSection(BuildSections[I]).Status = pssInProgress Then
             Begin
-              CodeTodoList.ItemIndex := I;
+              BuildTodoList.ItemIndex := I;
               Break;
             End;
-        If (CodeTodoList.ItemIndex = 0) And (CodeSections.Count > 0) And
-          (TPlanSection(CodeSections[0]).Status <> pssInProgress) Then
-          For I := 0 To CodeSections.Count - 1 Do
-            If TPlanSection(CodeSections[I]).Status = pssNotStarted Then
+        If (BuildTodoList.ItemIndex = 0) And (BuildSections.Count > 0) And
+          (TPlanSection(BuildSections[0]).Status <> pssInProgress) Then
+          For I := 0 To BuildSections.Count - 1 Do
+            If TPlanSection(BuildSections[I]).Status = pssNotStarted Then
               Begin
-                CodeTodoList.ItemIndex := I;
+                BuildTodoList.ItemIndex := I;
                 Break;
               End;
       End;
-    FCodeSelectedIndex := CodeTodoList.ItemIndex;
+    FBuildSelectedIndex := BuildTodoList.ItemIndex;
   Finally
-    CodeTodoList.Items.EndUpdate;
+    BuildTodoList.Items.EndUpdate;
   End;
 End;
 
-Function TProjectAssistantForm.SelectedCodeSectionIndex: Integer;
+Function TProjectAssistantForm.SelectedBuildSectionIndex: Integer;
 Begin
   Result := -1;
-  If Not Assigned(CodeSections) Or (CodeSections.Count = 0) Then
+  If Not Assigned(BuildSections) Or (BuildSections.Count = 0) Then
     Exit;
   { Prefer the remembered index: button clicks often clear ListBox.ItemIndex on GTK. }
-  If (FCodeSelectedIndex >= 0) And (FCodeSelectedIndex < CodeSections.Count) Then
-    Result := FCodeSelectedIndex
-  Else If Assigned(CodeTodoList) And (CodeTodoList.ItemIndex >= 0) And
-    (CodeTodoList.ItemIndex < CodeSections.Count) Then
-    Result := CodeTodoList.ItemIndex;
+  If (FBuildSelectedIndex >= 0) And (FBuildSelectedIndex < BuildSections.Count) Then
+    Result := FBuildSelectedIndex
+  Else If Assigned(BuildTodoList) And (BuildTodoList.ItemIndex >= 0) And
+    (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    Result := BuildTodoList.ItemIndex;
 End;
 
-Procedure TProjectAssistantForm.SetCodeStatusFeedback(Const MessageText: String);
+Procedure TProjectAssistantForm.SetBuildStatusFeedback(Const MessageText: String);
 Begin
-  If Assigned(CodeStatusLabel) Then
-    CodeStatusLabel.Caption := MessageText;
+  If Assigned(BuildStatusLabel) Then
+    BuildStatusLabel.Caption := MessageText;
   StatusFooter.SetRightText(MessageText);
-  WorkflowLogger.Info('ProjectAssistant', 'Code TODO: ' + MessageText);
+  WorkflowLogger.Info('ProjectAssistant', 'Build work: ' + MessageText);
 End;
 
-Procedure TProjectAssistantForm.SetSelectedCodeSectionStatus(NewStatus: TPlanSectionStatus);
+Procedure TProjectAssistantForm.SetSelectedBuildSectionStatus(NewStatus: TPlanSectionStatus);
 Var
   PlanRel, Err, SectionTitle, Feedback: String;
   Idx: Integer;
@@ -1244,112 +1244,112 @@ Begin
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
-      SetCodeStatusFeedback('Set an active plan on the Plan tab first.');
+      SetBuildStatusFeedback('Set an active plan on the Plan tab first.');
       MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Idx := SelectedCodeSectionIndex;
+  Idx := SelectedBuildSectionIndex;
   If Idx < 0 Then
     Begin
-      SetCodeStatusFeedback('Select a work package in the list, then Start / Done / Reset.');
+      SetBuildStatusFeedback('Select a work package in the list, then Start / Done / Reset.');
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  { Copy title/status before RefreshCodeTodos frees CodeSections entries. }
-  SectionTitle := TPlanSection(CodeSections[Idx]).Title;
-  OldStatus := TPlanSection(CodeSections[Idx]).Status;
+  { Copy title/status before RefreshBuildTodos frees BuildSections entries. }
+  SectionTitle := TPlanSection(BuildSections[Idx]).Title;
+  OldStatus := TPlanSection(BuildSections[Idx]).Status;
   If OldStatus = NewStatus Then
     Begin
       Feedback := Format('"%s" is already %s.',
         [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
-      SetCodeStatusFeedback(Feedback);
+      SetBuildStatusFeedback(Feedback);
       Exit;
     End;
   If Not SetPlanSectionStatus(PlanRel, Idx, NewStatus, Err) Then
     Begin
-      SetCodeStatusFeedback('Failed: ' + Err);
+      SetBuildStatusFeedback('Failed: ' + Err);
       MessageDlg(Err, mtError, [mbOK], 0);
       Exit;
     End;
-  FCodeSelectedIndex := Idx;
-  RefreshCodeTodos;
-  If Assigned(CodeTodoList) And (Idx >= 0) And (Idx < CodeTodoList.Items.Count) Then
+  FBuildSelectedIndex := Idx;
+  RefreshBuildTodos;
+  If Assigned(BuildTodoList) And (Idx >= 0) And (Idx < BuildTodoList.Items.Count) Then
     Begin
-      CodeTodoList.ItemIndex := Idx;
-      FCodeSelectedIndex := Idx;
+      BuildTodoList.ItemIndex := Idx;
+      FBuildSelectedIndex := Idx;
     End;
   Feedback := Format('%s → %s', [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
-  SetCodeStatusFeedback(Feedback);
+  SetBuildStatusFeedback(Feedback);
   SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
     [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
   If NewStatus = pssComplete Then
-    ClearCodeWorkTracking;
+    ClearBuildWorkTracking;
 End;
 
-Procedure TProjectAssistantForm.ClearCodeWorkTracking;
+Procedure TProjectAssistantForm.ClearBuildWorkTracking;
 Begin
-  FCodeWorkSectionIndex := -1;
-  FCodeWorkSectionTitle := '';
+  FBuildWorkSectionIndex := -1;
+  FBuildWorkSectionTitle := '';
 End;
 
-Procedure TProjectAssistantForm.BeginCodeWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
+Procedure TProjectAssistantForm.BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
 Begin
-  FCodeWorkSectionIndex := SectionIndex;
-  FCodeWorkSectionTitle := SectionTitle;
+  FBuildWorkSectionIndex := SectionIndex;
+  FBuildWorkSectionTitle := SectionTitle;
   FCompileSeqAtSendStart := AssistantLastCompileSeq;
 End;
 
-Procedure TProjectAssistantForm.TryAutoCompleteCodeWork(Const StreamErrorText: String);
+Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: String);
 Var
   PlanRel, Err, Note: String;
   Idx: Integer;
   CompileThisTurn, CompileClean: Boolean;
 Begin
-  Idx := FCodeWorkSectionIndex;
+  Idx := FBuildWorkSectionIndex;
   If Idx < 0 Then
     Exit;
   If StreamErrorText <> '' Then
     Begin
-      SetCodeStatusFeedback('Work interrupted — package still in progress.');
+      SetBuildStatusFeedback('Work interrupted — package still in progress.');
       Exit;
     End;
   CompileThisTurn := AssistantLastCompileSeq > FCompileSeqAtSendStart;
   CompileClean := CompileThisTurn And AssistantLastCompileWasClean;
   If Not CompileThisTurn Then
     Begin
-      SetCodeStatusFeedback(Format('"%s" work finished (no run_compile this turn) — use Done when ready.',
-        [FCodeWorkSectionTitle]));
+      SetBuildStatusFeedback(Format('"%s" work finished (no run_compile this turn) — use Done when ready.',
+        [FBuildWorkSectionTitle]));
       Exit;
     End;
   If Not CompileClean Then
     Begin
-      SetCodeStatusFeedback(Format('"%s" work finished but compile is not clean — fix errors, then Done.',
-        [FCodeWorkSectionTitle]));
+      SetBuildStatusFeedback(Format('"%s" work finished but compile is not clean — fix errors, then Done.',
+        [FBuildWorkSectionTitle]));
       Exit;
     End;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
-      ClearCodeWorkTracking;
+      ClearBuildWorkTracking;
       Exit;
     End;
   { Ensure list still matches; refresh may reorder if plan changed. }
-  FCodeSelectedIndex := Idx;
+  FBuildSelectedIndex := Idx;
   If Not SetPlanSectionStatus(PlanRel, Idx, pssComplete, Err) Then
     Begin
-      SetCodeStatusFeedback('Auto-complete failed: ' + Err);
+      SetBuildStatusFeedback('Auto-complete failed: ' + Err);
       WorkflowLogger.Warning('ProjectAssistant', 'Auto Status complete failed: ' + Err);
       Exit;
     End;
-  RefreshCodeTodos;
-  If Assigned(CodeTodoList) And (Idx >= 0) And (Idx < CodeTodoList.Items.Count) Then
+  RefreshBuildTodos;
+  If Assigned(BuildTodoList) And (Idx >= 0) And (Idx < BuildTodoList.Items.Count) Then
     Begin
-      CodeTodoList.ItemIndex := Idx;
-      FCodeSelectedIndex := Idx;
+      BuildTodoList.ItemIndex := Idx;
+      FBuildSelectedIndex := Idx;
     End;
   Note := Format('Auto-marked **%s** complete (Work-on-this + clean `run_compile`).',
-    [FCodeWorkSectionTitle]);
-  SetCodeStatusFeedback(Format('%s → complete (auto)', [FCodeWorkSectionTitle]));
+    [FBuildWorkSectionTitle]);
+  SetBuildStatusFeedback(Format('%s → complete (auto)', [FBuildWorkSectionTitle]));
   If FViewingLive Then
     Begin
       If FDisplaySystemNote <> '' Then
@@ -1359,8 +1359,8 @@ Begin
     End
   Else
     SetCurrentSystemNote(Note);
-  WorkflowLogger.Info('ProjectAssistant', 'Auto Status complete: ' + FCodeWorkSectionTitle);
-  ClearCodeWorkTracking;
+  WorkflowLogger.Info('ProjectAssistant', 'Auto Status complete: ' + FBuildWorkSectionTitle);
+  ClearBuildWorkTracking;
 End;
 
 Procedure TProjectAssistantForm.PrepareTopErrorAfterReview(ErrorCount: Integer);
@@ -1407,7 +1407,7 @@ Begin
     Format('Review found **%d error(s)**. Top error is selected in Messages.', [FReviewErrorCount]) +
     LineEnding + LineEnding +
     '**' + Trim(MsgText) + '**' + LineEnding + LineEnding +
-    'Click **Fix Error** (or Assistant → Fix Error in Code mode) to apply a Code-mode fix with tools.';
+    'Click **Fix Error** (or Assistant → Fix Error in Build mode) to apply a Build-mode fix with tools.';
   If FViewingLive Then
     Begin
       If FDisplaySystemNote <> '' Then
@@ -1420,13 +1420,13 @@ Begin
   StatusFooter.SetRightText('Review: Fix Error ready');
 End;
 
-Procedure TProjectAssistantForm.CodeRefreshButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildRefreshButtonClick(Sender: TObject);
 Begin
-  RefreshCodeTodos;
-  SetCodeStatusFeedback('TODO list refreshed from plan file.');
+  RefreshBuildTodos;
+  SetBuildStatusFeedback('TODO list refreshed from plan file.');
 End;
 
-Procedure TProjectAssistantForm.CodeOpenPlanButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildOpenPlanButtonClick(Sender: TObject);
 Var
   PlanRel, Resolved, Err: String;
 Begin
@@ -1444,22 +1444,22 @@ Begin
   OpenMarkdownDocument(Resolved);
 End;
 
-Procedure TProjectAssistantForm.CodeStartButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildStartButtonClick(Sender: TObject);
 Begin
-  SetSelectedCodeSectionStatus(pssInProgress);
+  SetSelectedBuildSectionStatus(pssInProgress);
 End;
 
-Procedure TProjectAssistantForm.CodeDoneButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildDoneButtonClick(Sender: TObject);
 Begin
-  SetSelectedCodeSectionStatus(pssComplete);
+  SetSelectedBuildSectionStatus(pssComplete);
 End;
 
-Procedure TProjectAssistantForm.CodeResetButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildResetButtonClick(Sender: TObject);
 Begin
-  SetSelectedCodeSectionStatus(pssNotStarted);
+  SetSelectedBuildSectionStatus(pssNotStarted);
 End;
 
-Function TProjectAssistantForm.BuildCodeWorkPrompt(Const PlanRel, SectionTitle, StatusText,
+Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
   SectionBody: String): String;
 Const
   MaxBodyChars = 6000;
@@ -1471,7 +1471,7 @@ Begin
     Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
       '… *(section truncated for the prompt; open the plan file for the full text.)*';
   Result :=
-    'Work on this plan package in **Code mode**.' + LineEnding +
+    'Work on this plan package in **Build mode**.' + LineEnding +
     LineEnding +
     '**Active plan:** `' + PlanRel + '`' + LineEnding +
     '**Package:** ' + SectionTitle + LineEnding +
@@ -1498,7 +1498,7 @@ Begin
     '----- end plan section -----';
 End;
 
-Procedure TProjectAssistantForm.CodeWorkOnSelectedPackage;
+Procedure TProjectAssistantForm.BuildWorkOnSelectedPackage;
 Var
   PlanRel, Err, Body, Prompt, Title, StatusText: String;
   Idx: Integer;
@@ -1516,13 +1516,13 @@ Begin
       MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Idx := SelectedCodeSectionIndex;
+  Idx := SelectedBuildSectionIndex;
   If Idx < 0 Then
     Begin
       MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Section := TPlanSection(CodeSections[Idx]);
+  Section := TPlanSection(BuildSections[Idx]);
   Title := Section.Title;
   StatusText := PlanSectionStatusToStr(Section.Status);
   If Section.Status = pssUnknown Then
@@ -1538,10 +1538,10 @@ Begin
       Else
         Begin
           StatusText := PlanSectionStatusToStr(pssInProgress);
-          FCodeSelectedIndex := Idx;
-          RefreshCodeTodos;
-          If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
-            CodeTodoList.ItemIndex := Idx;
+          FBuildSelectedIndex := Idx;
+          RefreshBuildTodos;
+          If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
+            BuildTodoList.ItemIndex := Idx;
         End;
     End;
   If Not GetPlanSectionBody(PlanRel, Idx, Body, Err) Then
@@ -1549,21 +1549,21 @@ Begin
       MessageDlg('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
       Exit;
     End;
-  Prompt := BuildCodeWorkPrompt(PlanRel, Title, StatusText, Body);
-  { Stay in Code mode (tools + prompt) while showing the Chat turn surface. }
-  BeginCodeWorkTracking(Idx, Title);
-  ForceModeAndLock(amCode);
+  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body);
+  { Stay in Build mode (tools + prompt) while showing the chat turn surface. }
+  BeginBuildWorkTracking(Idx, Title);
+  ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
-  SetCodeStatusFeedback('Working on: ' + Title);
+  SetBuildStatusFeedback('Working on: ' + Title);
   SubmitUserText(Prompt, True);
   If Not FSending Then
     Begin
       UnlockModeAfterSend;
-      ClearCodeWorkTracking;
+      ClearBuildWorkTracking;
     End;
 End;
 
-Procedure TProjectAssistantForm.CodeWorkButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildWorkButtonClick(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
@@ -1571,10 +1571,10 @@ Begin
         mtInformation, [mbOK], 0);
       Exit;
     End;
-  CodeWorkOnSelectedPackage;
+  BuildWorkOnSelectedPackage;
 End;
 
-Function TProjectAssistantForm.FindNextIncompleteCodeSection: Integer;
+Function TProjectAssistantForm.FindNextIncompleteBuildSection: Integer;
 Var
   I: Integer;
   Section: TPlanSection;
@@ -1582,11 +1582,11 @@ Var
 Begin
   Result := -1;
   FirstNotStarted := -1;
-  If Not Assigned(CodeSections) Then
+  If Not Assigned(BuildSections) Then
     Exit;
-  For I := 0 To CodeSections.Count - 1 Do
+  For I := 0 To BuildSections.Count - 1 Do
     Begin
-      Section := TPlanSection(CodeSections[I]);
+      Section := TPlanSection(BuildSections[I]);
       If Section.Status = pssInProgress Then
         Begin
           Result := I;
@@ -1604,7 +1604,7 @@ Begin
     Exit;
   FPlanAgentRunning := False;
   Application.RemoveAsyncCalls(Self);
-  SetCodeStatusFeedback('Plan agent stopped: ' + Reason);
+  SetBuildStatusFeedback('Plan agent stopped: ' + Reason);
   SetCurrentSystemNote('**Plan agent stopped:** ' + Reason);
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Plan agent stopped: ' + Reason);
@@ -1625,9 +1625,9 @@ Begin
       MessageDlg('Set an active plan on the Plan mode panel first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  EnsureCodeTabUi;
-  RefreshCodeTodos;
-  Idx := FindNextIncompleteCodeSection;
+  EnsureBuildTabUi;
+  RefreshBuildTodos;
+  Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
       MessageDlg('All plan packages are already complete (or none found).', mtInformation, [mbOK], 0);
@@ -1636,15 +1636,15 @@ Begin
   FPlanAgentRunning := True;
   FPlanAgentPackagesDone := 0;
   FLastTurnHadError := False;
-  FCodeSelectedIndex := Idx;
-  If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
-    CodeTodoList.ItemIndex := Idx;
-  SetCodeStatusFeedback('Plan agent: starting…');
+  FBuildSelectedIndex := Idx;
+  If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
+    BuildTodoList.ItemIndex := Idx;
+  SetBuildStatusFeedback('Plan agent: starting…');
   SetCurrentSystemNote(
     '**Plan agent** started — will work through incomplete packages until complete, error, ' +
     'context ≥ 95%, or max packages.');
-  SelectMode(amCode);
-  CodeWorkOnSelectedPackage;
+  SelectMode(amBuild);
+  BuildWorkOnSelectedPackage;
   If Not FSending Then
     StopWorkOnPlanAgent('could not start first package');
 End;
@@ -1691,25 +1691,25 @@ Begin
       StopWorkOnPlanAgent(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
       Exit;
     End;
-  EnsureCodeTabUi;
-  RefreshCodeTodos;
-  Idx := FindNextIncompleteCodeSection;
+  EnsureBuildTabUi;
+  RefreshBuildTodos;
+  Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
       StopWorkOnPlanAgent(Format('all packages complete (%d worked this run)',
         [FPlanAgentPackagesDone]));
       Exit;
     End;
-  FCodeSelectedIndex := Idx;
-  If Assigned(CodeTodoList) And (Idx < CodeTodoList.Items.Count) Then
-    CodeTodoList.ItemIndex := Idx;
-  SetCodeStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
-  CodeWorkOnSelectedPackage;
+  FBuildSelectedIndex := Idx;
+  If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
+    BuildTodoList.ItemIndex := Idx;
+  SetBuildStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
+  BuildWorkOnSelectedPackage;
   If Not FSending Then
     StopWorkOnPlanAgent('failed to start next package');
 End;
 
-Procedure TProjectAssistantForm.CodeWorkPlanButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildWorkPlanButtonClick(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
@@ -1721,33 +1721,33 @@ Begin
   StartWorkOnPlanAgent;
 End;
 
-Procedure TProjectAssistantForm.CodeTodoListClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildTodoListClick(Sender: TObject);
 Begin
-  If Assigned(CodeTodoList) And Assigned(CodeSections) And
-    (CodeTodoList.ItemIndex >= 0) And
-    (CodeTodoList.ItemIndex < CodeSections.Count) Then
-    FCodeSelectedIndex := CodeTodoList.ItemIndex;
+  If Assigned(BuildTodoList) And Assigned(BuildSections) And
+    (BuildTodoList.ItemIndex >= 0) And
+    (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    FBuildSelectedIndex := BuildTodoList.ItemIndex;
 End;
 
-Procedure TProjectAssistantForm.CodeTodoListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TProjectAssistantForm.BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If Assigned(CodeTodoList) And Assigned(CodeSections) And
-    (CodeTodoList.ItemIndex >= 0) And
-    (CodeTodoList.ItemIndex < CodeSections.Count) Then
-    FCodeSelectedIndex := CodeTodoList.ItemIndex;
+  If Assigned(BuildTodoList) And Assigned(BuildSections) And
+    (BuildTodoList.ItemIndex >= 0) And
+    (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    FBuildSelectedIndex := BuildTodoList.ItemIndex;
 End;
 
-Procedure TProjectAssistantForm.CodeTodoListDblClick(Sender: TObject);
+Procedure TProjectAssistantForm.BuildTodoListDblClick(Sender: TObject);
 Begin
-  CodeTodoListClick(Sender);
-  If ActiveMode <> amCode Then
+  BuildTodoListClick(Sender);
+  If ActiveMode <> amBuild Then
     Begin
       SeedPromptFromSelectedWork;
       If ActiveMode = amChat Then
         SetCurrentSystemNote('Switch to **Build** to apply source edits for this package.');
       Exit;
     End;
-  CodeWorkOnSelectedPackage;
+  BuildWorkOnSelectedPackage;
 End;
 
 Procedure TProjectAssistantForm.ModeGroupClick(Sender: TObject);
@@ -1760,7 +1760,7 @@ Begin
       SyncModeUi;
       Exit;
     End;
-  { Explicit mode change ends sticky Plan/Code behaviour. }
+  { Explicit mode change ends sticky Plan/Build behaviour. }
   FModeSticky := False;
   ActiveMode := CurrentModeFromUi;
   ApplyActiveMode;
@@ -2487,12 +2487,12 @@ Begin
       Exit;
     End;
   SetCurrentSystemNote(
-    Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Code/Plan work ' +
+    Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Build/Plan work ' +
       'so the model stays within its token limit. Or enable **Auto New Chat at 95%%** on this form.',
       [Pct]));
   MessageDlg(
     Format('Context usage is at about %d%% of the budget.%s%s' +
-      'Start a New Chat before continuing large Plan/Code sessions, or enable "Auto New Chat at 95%%" ' +
+      'Start a New Chat before continuing large Plan/Build sessions, or enable "Auto New Chat at 95%%" ' +
       'on the assistant form (default is set in Settings).',
       [Pct, LineEnding, LineEnding]),
     mtWarning, [mbOK], 0);
@@ -3080,9 +3080,9 @@ Begin
       FStreamingActive := False;
       If Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
-      If FCodeWorkSectionIndex >= 0 Then
-        SetCodeStatusFeedback(Format('"%s" cancelled — still in progress.',
-          [FCodeWorkSectionTitle]));
+      If FBuildWorkSectionIndex >= 0 Then
+        SetBuildStatusFeedback(Format('"%s" cancelled — still in progress.',
+          [FBuildWorkSectionTitle]));
       FPendingReviewErrorOffer := False;
       UnlockModeAfterSend;
       SetSending(False);
@@ -3137,10 +3137,10 @@ Begin
     AssistantClient.MarkStreamComplete;
   PersistPlanReplyIfNeeded(ResolvedError);
   { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
-  If ActiveMode = amCode Then
-    TryAutoCompleteCodeWork(ResolvedError)
-  Else If FCodeWorkSectionIndex >= 0 Then
-    ClearCodeWorkTracking;
+  If ActiveMode = amBuild Then
+    TryAutoCompleteBuildWork(ResolvedError)
+  Else If FBuildWorkSectionIndex >= 0 Then
+    ClearBuildWorkTracking;
   { Review with errors: select top error and prompt Fix Error. }
   If FPendingReviewErrorOffer And (ResolvedError = '') Then
     OfferFixTopErrorAfterReview
@@ -3290,9 +3290,9 @@ Begin
       MaybeWarnHighContextUsage;
       { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
       If Not FModeLocked Then
-        LockModeForSend; { freeze Plan/Code before Chat surface / SetSending }
+        LockModeForSend; { freeze Plan/Build before chat surface / SetSending }
       ShowChatSurfaceKeepMode; { shared turn view already visible; sync mode chrome }
-      { Detect run_compile during this turn for Code auto Status: complete. }
+      { Detect run_compile during this turn for Build auto Status: complete. }
       FCompileSeqAtSendStart := AssistantLastCompileSeq;
       FinalApi := ApiText;
       If ActiveMode = amPlan Then
@@ -3360,12 +3360,12 @@ Var
   Idx: Integer;
   Section: TPlanSection;
 Begin
-  If Not Assigned(InputMemo) Or Not Assigned(CodeSections) Then
+  If Not Assigned(InputMemo) Or Not Assigned(BuildSections) Then
     Exit;
-  Idx := SelectedCodeSectionIndex;
-  If (Idx < 0) Or (Idx >= CodeSections.Count) Then
+  Idx := SelectedBuildSectionIndex;
+  If (Idx < 0) Or (Idx >= BuildSections.Count) Then
     Exit;
-  Section := TPlanSection(CodeSections[Idx]);
+  Section := TPlanSection(BuildSections[Idx]);
   If Not Assigned(Section) Then
     Exit;
   InputMemo.Text := 'Work on this package: ' + Section.Title;
@@ -3620,7 +3620,7 @@ Begin
     '- Skip pure noise (orphan/duplicate PPU notes that are environmental, pure informational notes with no code change).' + LineEnding +
     '- If nothing actionable: content is a single line confirming clean / no action required.' + LineEnding +
     LineEnding +
-    'If there are errors, end with one short line: the user can click **Fix Error** to start Code mode on the top error.' + LineEnding +
+    'If there are errors, end with one short line: the user can click **Fix Error** to start Build mode on the top error.' + LineEnding +
     LineEnding +
     'Do not call tools. Do not ask follow-up questions. Work only from the output below and answer once.' + LineEnding +
     LineEnding +
@@ -4118,7 +4118,7 @@ Begin
     Snippet := ExtractSourceSnippet(FileName, LineNo, 18);
   Related := CollectRelatedMessages(Line, 10);
   Result :=
-    'You are in **Code mode**. Fix this Free Pascal / Lazarus compiler message by **editing sources with tools**.' +
+    'You are in **Build mode**. Fix this Free Pascal / Lazarus compiler message by **editing sources with tools**.' +
     LineEnding + LineEnding +
     '**Primary message:**' + LineEnding +
     MsgText + LineEnding;
@@ -4192,7 +4192,7 @@ Begin
     End;
   { Snapshot compile seq so a clean run_compile this turn can auto-complete Work-on-this. }
   FCompileSeqAtSendStart := AssistantLastCompileSeq;
-  ForceModeAndLock(amCode);
+  ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
   SubmitUserTextEx(
     'Fix Error: ' + FormatMessageLine(Line),
@@ -4398,12 +4398,12 @@ Var
 Begin
   WorkflowLogger.Debug('ProjectAssistant', 'Document changed: ' + FileName);
   PlanRel := GetActivePlanRelativePath;
-  If (PlanRel = '') Or (Not Assigned(CodePanel)) Then
+  If (PlanRel = '') Or (Not Assigned(BuildPanel)) Then
     Exit;
   If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
     Exit;
   If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
-    RefreshCodeTodos;
+    RefreshBuildTodos;
 End;
 
 Procedure TProjectAssistantForm.DocumentSaved(Const FileName: String);
@@ -4419,8 +4419,8 @@ Begin
   If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
     Begin
       RefreshPlanList;
-      If Assigned(CodePanel) Then
-        RefreshCodeTodos;
+      If Assigned(BuildPanel) Then
+        RefreshBuildTodos;
     End;
 End;
 
