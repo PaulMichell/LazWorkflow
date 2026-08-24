@@ -113,6 +113,43 @@ Begin
   End;
 End;
 
+Procedure TestCodeWidthMatchesGlyphs;
+Var
+  R: TMarkDownCanvasRenderer;
+  Bmp: TBitmap;
+  I, CodeRuns: Integer;
+  Item: TLayoutItem;
+  Measured: Integer;
+Begin
+  Bmp := TBitmap.Create;
+  CodeRuns := 0;
+  Try
+    Bmp.SetSize(800, 80);
+    Bmp.Canvas.Font.Name := 'DejaVu Sans Mono';
+    Bmp.Canvas.Font.Size := 10;
+    Bmp.Canvas.Font.Pitch := fpDefault;
+    LayoutOf('- `FilterAllocatedOnly` only changes the project SQL.', R);
+    Try
+      For I := 0 To R.LayoutItemCount - 1 Do
+        Begin
+          Item := R.LayoutItem(I);
+          If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+            Continue;
+          If Not (fcCode In Item.Context) Then
+            Continue;
+          Inc(CodeRuns);
+          Measured := Bmp.Canvas.TextWidth(Item.Text);
+          Check('code run width matches glyphs for "' + Item.Text + '"', Abs(Item.Width - Measured) <= 2);
+        End;
+      Check('layout produced an inline code run', CodeRuns > 0);
+    Finally
+      R.Free;
+    End;
+  Finally
+    Bmp.Free;
+  End;
+End;
+
 Procedure TestCollapsedSpacesAroundCode;
 Var
   Tight, Padded: TMarkDownCanvasRenderer;
@@ -150,6 +187,7 @@ Begin
   FailCount := 0;
   TestRunsAbutAcrossStyleChange;
   TestNoSpaceBeforePunctuationAfterCode;
+  TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
   If FailCount = 0 Then
     Begin

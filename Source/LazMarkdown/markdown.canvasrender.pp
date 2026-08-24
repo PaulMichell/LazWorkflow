@@ -1159,14 +1159,18 @@ procedure TMarkDownCanvasRenderer.ApplyFont(const aCanvas: TCanvas; const aFontS
 begin
   { Always assign Name, Size and Style together. Qt/GTK cache the previous face
     if Size is skipped after a Name change, and mixed-style runs then measure
-    far wider than they paint — large gaps around bold/code. }
+    far wider than they paint — large gaps around bold/code.
+    Do not set Pitch:=fpFixed: Qt TextWidth then uses max-advance while TextOut
+    still paints the real glyphs, leaving holes after `inline code`. }
   aCanvas.Font.BeginUpdate;
   try
     if fcMono in aContext then
       begin
       if fMonoFontName<>'' then
-        aCanvas.Font.Name:=fMonoFontName;
-      aCanvas.Font.Pitch:=fpFixed;
+        aCanvas.Font.Name:=fMonoFontName
+      else
+        aCanvas.Font.Name:='monospace';
+      aCanvas.Font.Pitch:=fpDefault;
       end
     else
       begin
