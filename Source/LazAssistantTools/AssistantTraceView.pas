@@ -49,7 +49,7 @@ Type
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
     Function ContentWidth: Integer;
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
-    Function LastLines(Const SourceText: String; MaxLines: Integer): String;
+    Function LastLines(Const SourceText: String; MaxLines: Integer; MaxChars: Integer = 0): String;
     Procedure ScrollToEnd;
     Function HostedContentHeight: Integer;
     Procedure ApplyScrollRange(KeepBottom: Boolean);
@@ -701,17 +701,20 @@ Begin
     Result := W;
 End;
 
-Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer): String;
+Function TAssistantTraceView.LastLines(Const SourceText: String; MaxLines: Integer; MaxChars: Integer): String;
 Var
   SL: TStringList;
   Start, I: Integer;
 Begin
   Result := SourceText;
+  If MaxChars > 0 Then
+    If Length(Result) > MaxChars Then
+      Result := '…' + Copy(Result, Length(Result) - MaxChars + 1, MaxChars);
   If MaxLines < 1 Then
     Exit;
   SL := TStringList.Create;
   Try
-    SL.Text := StringReplace(SourceText, #13#10, #10, [rfReplaceAll]);
+    SL.Text := StringReplace(Result, #13#10, #10, [rfReplaceAll]);
     SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
     If SL.Count <= MaxLines Then
       Exit;
@@ -857,10 +860,9 @@ Begin
   Child := NamedChild(Panel, 'HeaderLabel');
   If Child Is TLabel Then
     TLabel(Child).Caption := Block.Title;
-  If Block.Running Then
-    Display := LastLines(Block.Body, FTruncatedLines)
-  Else
-    Display := Block.Body;
+  { CoT is often one long wrap with few line breaks; cap chars as well as lines.
+    Never markdown-parse the full accumulated thought on the UI thread. }
+  Display := LastLines(Block.Body, FTruncatedLines, 2000);
   View := Nil;
   Child := NamedChild(Panel, 'ThoughtView');
   If Child Is TMarkDownControl Then

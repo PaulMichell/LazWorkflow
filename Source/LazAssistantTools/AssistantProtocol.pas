@@ -286,13 +286,17 @@ End;
 
 Function CollapseTrailingPhraseRepeats(Const SourceText: String): String;
 Var
-  PhraseLen, Count: Integer;
+  PhraseLen, Count, Limit: Integer;
 Begin
   Result := SourceText;
   If Length(Result) < 24 Then
     Exit;
+  { Cap phrase length: walking PhraseLen to Length/3 is O(n^2) and freezes the actor. }
+  Limit := Length(Result) Div 3;
+  If Limit > 96 Then
+    Limit := 96;
   PhraseLen := 8;
-  While PhraseLen * 3 <= Length(Result) Do
+  While PhraseLen <= Limit Do
     Begin
       Count := 1;
       While ((Count + 1) * PhraseLen <= Length(Result)) And
@@ -304,7 +308,7 @@ Begin
           SetLength(Result, Length(Result) - (Count - 1) * PhraseLen);
           Exit;
         End;
-      Inc(PhraseLen);
+      Inc(PhraseLen, 8);
     End;
 End;
 
@@ -351,7 +355,10 @@ Begin
   If (Length(Accum) >= Length(Delta)) And
     (Copy(Accum, Length(Accum) - Length(Delta) + 1, Length(Delta)) = Delta) Then
     Exit;
-  Candidate := CollapseTrailingPhraseRepeats(SanitizeSamplerText(Accum + SanitizeSamplerText(Delta)));
+  Candidate := SanitizeSamplerText(Delta);
+  If (Length(Candidate) >= 48) And (Pos(Copy(Candidate, 1, 80), Accum) > 0) Then
+    Exit;
+  Candidate := CollapseTrailingPhraseRepeats(SanitizeSamplerText(Accum + Candidate));
   If Candidate = Accum Then
     Exit;
   If Length(Candidate) > MaxSamplerAccumChars Then

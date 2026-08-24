@@ -12,7 +12,8 @@ Unit AssistantActor;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantProtocol, AssistantSampler, AssistantEvents, AssistantService;
+  Classes, SysUtils, AssistantProtocol, AssistantSampler, AssistantEvents, AssistantService,
+  AssistantConversation;
 
 Type
   TAssistantActor = Class(TThread)
@@ -49,6 +50,12 @@ Type
     FPendingFinish: Boolean;
     FNotifyQueued: Boolean;
     FToolCalls: TSamplerToolCallArray;
+    FDispatchName: String;
+    FDispatchArgs: String;
+    FDispatchMode: TAssistantMode;
+    FDispatchOk: Boolean;
+    FDispatchResult: String;
+    FDispatchError: String;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
       Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
       DurationMs: Integer = 0);
@@ -64,7 +71,8 @@ Type
     Function HttpsShouldStop: Boolean;
     Procedure AbortHttp;
     Function LockedService: TAssistantService;
-    Procedure RunToolsOnMain;
+    Procedure RunTools;
+    Procedure DispatchOneToolOnMain;
     Function DrainSteerIntoHistory: Boolean;
     Function BuildRoundJson(Out Url: String): String;
     Function ShouldFallbackFromResponses(Const ErrorText: String): Boolean;
@@ -391,14 +399,12 @@ Begin
           Begin
             SetPhase(apThinking);
             AppendThinking(Event.Text);
-            LogEvent(aekThoughtDelta, Event.Text);
           End;
         sekContentDelta:
           Begin
             SetPhase(apStreaming);
             MergeSamplerText(FContent, Event.Text);
             EmitSnapshot(False, '', False);
-            LogEvent(aekContentDelta, Event.Text);
           End;
       Else
         { Started / tool deltas / completed handled from parser accumulators. }
@@ -541,7 +547,13 @@ Begin
     (Pos('unknown', E) > 0) Or (Pos('not supported', E) > 0);
 End;
 
-Procedure TAssistantActor.RunToolsOnMain;
+Procedure TAssistantActor.DispatchOneToolOnMain;
+Begin
+  FDispatchOk := ExecuteAssistantToolForMode(FDispatchName, FDispatchArgs, FDispatchMode,
+    FDispatchResult, FDispatchError);
+End;
+
+Procedure TAssistantActor.RunTools;
 Var
   I: Integer;
   StartTick: QWord;
@@ -585,8 +597,22 @@ Begin
       ResultText := '';
       ErrorText := '';
       Try
-        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
-          ResultText, ErrorText);
+        If ToolNeedsIdeThread(Call.Name) Then
+          Begin
+            FDispatchName := Call.Name;
+            FDispatchArgs := Call.Arguments;
+            FDispatchMode := Svc.ActiveMode;
+            FDispatchResult := '';
+            FDispatchError := '';
+            FDispatchOk := False;
+            Synchronize(@DispatchOneToolOnMain);
+            Ok := FDispatchOk;
+            ResultText := FDispatchResult;
+            ErrorText := FDispatchError;
+          End
+        Else
+          Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
+            ResultText, ErrorText);
       Except
         On E: Exception Do
           Begin
@@ -745,7 +771,7 @@ Begin
         Begin
           SetPhase(apTools);
           WroteBefore := FWrotePlan;
-          Synchronize(@RunToolsOnMain);
+          RunTools;
           If Terminated Then
             Break;
           If FWrotePlan And WroteBefore Then

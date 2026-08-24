@@ -22,6 +22,8 @@ Const
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
+{ True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
+Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Function ProjectRootPath: String;
@@ -215,6 +217,20 @@ Begin
       Result := False;
       ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
     End;
+End;
+
+Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
+Var
+  Name: String;
+Begin
+  Name := LowerCase(Trim(ToolName));
+  { Editors, forms, project API, compile, Markdown windows, and Ask-mode MessageDlg. }
+  Result := (Name = 'open_file') Or (Name = 'open_markdown') Or
+    (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
+    (Name = 'write_file') Or (Name = 'replace_in_file') Or
+    (Name = 'write_markdown') Or (Name = 'update_markdown') Or
+    (Name = 'get_project_info') Or (Name = 'run_compile') Or
+    (Name = 'set_active_plan');
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
