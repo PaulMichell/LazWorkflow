@@ -141,6 +141,10 @@ Begin
       growing answer would stay truncated at its first measured line. }
     View.Constraints.MinHeight := 0;
     View.Constraints.MaxHeight := 0;
+    If View.Font.Name <> '' Then
+      View.FontName := View.Font.Name;
+    If View.Font.Size > 0 Then
+      View.BaseFontSize := View.Font.Size;
     If TextChanged Then
       Begin
         View.MarkDown.BeginUpdate;

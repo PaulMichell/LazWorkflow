@@ -311,6 +311,8 @@ type
     Property ImageMargin : integer read FImageMargin Write FImageMargin;
     Property OnGetImage : TMarkdownImageEvent Read FOnGetImage Write FOnGetImage;
     property SelectionColor: TColor read FSelectionColor write FSelectionColor;
+    function LayoutItemCount: Integer;
+    function LayoutItem(Index: Integer): TLayoutItem;
   end;
 
   { TCanvasMarkDownBlockRenderer }
@@ -610,6 +612,20 @@ begin
 
   // Initialize selection
   FSelectionColor:=clHighlight;
+end;
+
+function TMarkDownCanvasRenderer.LayoutItemCount: Integer;
+begin
+  Result:=0;
+  if Assigned(FLists.Items) then
+    Result:=FLists.Items.Count;
+end;
+
+function TMarkDownCanvasRenderer.LayoutItem(Index: Integer): TLayoutItem;
+begin
+  Result:=nil;
+  if Assigned(FLists.Items) and (Index>=0) and (Index<FLists.Items.Count) then
+    Result:=FLists.Items[Index];
 end;
 
 destructor TMarkDownCanvasRenderer.Destroy;
@@ -1140,24 +1156,29 @@ end;
 
 procedure TMarkDownCanvasRenderer.ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt;
   const aFontStyle: TFontStyles; const aContext : TFontContext);
-
-  Procedure SetFontName(aName : string);
-  begin
-    if aName<>'' then
-     aCanvas.Font.Name:=aName;
-  end;
-
 begin
-  // We do not apply color, it has no influence on measurement.
-  // Color is set explicitly when drawing.
-  if fcMono in aContext then
-    SetFontName(fMonoFontName)
-  else
-    SetFontName(fFontName);
-  if aCanvas.Font.Size<>aFontSize then
+  { Always assign Name, Size and Style together. Qt/GTK cache the previous face
+    if Size is skipped after a Name change, and mixed-style runs then measure
+    far wider than they paint — large gaps around bold/code. }
+  aCanvas.Font.BeginUpdate;
+  try
+    if fcMono in aContext then
+      begin
+      if fMonoFontName<>'' then
+        aCanvas.Font.Name:=fMonoFontName;
+      aCanvas.Font.Pitch:=fpFixed;
+      end
+    else
+      begin
+      if fFontName<>'' then
+        aCanvas.Font.Name:=fFontName;
+      aCanvas.Font.Pitch:=fpDefault;
+      end;
     aCanvas.Font.Size:=aFontSize;
-  if aCanvas.Font.Style<>aFontStyle then
     aCanvas.Font.Style:=aFontStyle;
+  finally
+    aCanvas.Font.EndUpdate;
+  end;
 end;
 
 
@@ -1431,15 +1452,24 @@ begin
         WordBuffer:='';
         end;
 
-      NeedSpace:=(lChar in [#13, #10]) or aPreserveWhitespace;
-      if Not NeedSpace then
+      { Treat #13#10 as #10. }
+      if (lChar = #13) and (Index<lLength) and (lText[Index+1]=#10) then
+        Inc(Index);
+      if lChar in [#13, #10] then
+        begin
+        FlushCurrentLine;
+        NewLine(aCanvas);
+        NeedSpace:=False;
+        end
+      else if aPreserveWhitespace then
         begin
         AddWordToLine(lChar);
         NeedSpace:=False;
-        end;
-      // Treat #13#10 as #10
-      if (lChar = #13) and (Index<lLength) and (lText[Index+1]=#10) then
-        Inc(Index);
+        end
+      else
+        { CommonMark: collapse space/tab runs to one inter-word space. Emitting
+          each space as its own word leaves large gaps around style changes. }
+        NeedSpace:=True;
       end;
     Inc(Index);
     end;
