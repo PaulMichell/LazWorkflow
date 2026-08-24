@@ -1360,15 +1360,23 @@ var
     NeedSpace:=True;
   end;
 
+  function WordGluesToPrevious(const aWord: utf8string): boolean;
+  begin
+    { No space before closing punctuation, even if the source had one after `code`. }
+    Result:=(length(aWord)>0) and (aWord[1] in ['.', ',', ';', ':', '!', '?', ')', ']', '}', '/', '%', '''', '"']);
+  end;
+
   procedure AddWordToLine(const aWord: utf8string);
   var
     lLine: utf8string;
     lWidth: LongInt;
+    UseSpace: boolean;
   begin
     if length(aWord)=0 then
       exit;
+    UseSpace:=NeedSpace and not WordGluesToPrevious(aWord);
     lLine:=LineBuffer;
-    if NeedSpace and (length(LineBuffer)>0) then
+    if UseSpace and (length(LineBuffer)>0) then
       lLine:=lLine + ' ';
     lLine:=lLine + aWord;
     lWidth:=MeasureTextWidth(aCanvas, lLine, aFontSize, aFontStyle, aContext);
@@ -1376,9 +1384,9 @@ var
     if (FLayout.CurrentIndent+FLayout.LineX+lWidth)<=FLayout.MaxWidth then
       begin
       // aWord fits on current line
-      if NeedSpace and (length(LineBuffer)>0) then
+      if UseSpace and (length(LineBuffer)>0) then
         LineBuffer:=LineBuffer + ' '
-      else if NeedSpace and (length(LineBuffer) = 0) and (FLayout.LineX>0) then
+      else if UseSpace and (length(LineBuffer) = 0) and (FLayout.LineX>0) then
         // Add space at start of line buffer if we're continuing text on the same line
         LineBuffer:=' ';
       LineBuffer:=LineBuffer + aWord;

@@ -77,6 +77,42 @@ Begin
   End;
 End;
 
+Function JoinedLineText(Renderer: TMarkDownCanvasRenderer): String;
+Var
+  I: Integer;
+  Item: TLayoutItem;
+Begin
+  Result := '';
+  For I := 0 To Renderer.LayoutItemCount - 1 Do
+    Begin
+      Item := Renderer.LayoutItem(I);
+      If Assigned(Item) And (Item.Kind = likText) And (Item.Y = 0) Then
+        Result := Result + Item.Text;
+    End;
+End;
+
+Procedure TestNoSpaceBeforePunctuationAfterCode;
+Var
+  Tight, Loose: TMarkDownCanvasRenderer;
+  TightText, LooseText: String;
+Begin
+  LayoutOf('No `.lpi`. Files: `a.pas`, `b.lfm` / `c.lpr`.', Tight);
+  LayoutOf('No `.lpi` . Files: `a.pas` , `b.lfm` / `c.lpr` .', Loose);
+  Try
+    TightText := JoinedLineText(Tight);
+    LooseText := JoinedLineText(Loose);
+    Check('tight has no space before period', Pos('.lpi.', TightText) > 0);
+    Check('tight has no space before comma', Pos('.pas,', TightText) > 0);
+    Check('loose glue period after code', Pos('.lpi.', LooseText) > 0);
+    Check('loose glue comma after code', Pos('.pas,', LooseText) > 0);
+    Check('loose does not keep "lpi ."', Pos('lpi .', LooseText) = 0);
+    Check('loose does not keep "pas ,"', Pos('pas ,', LooseText) = 0);
+  Finally
+    Tight.Free;
+    Loose.Free;
+  End;
+End;
+
 Procedure TestCollapsedSpacesAroundCode;
 Var
   Tight, Padded: TMarkDownCanvasRenderer;
@@ -113,6 +149,7 @@ End;
 Begin
   FailCount := 0;
   TestRunsAbutAcrossStyleChange;
+  TestNoSpaceBeforePunctuationAfterCode;
   TestCollapsedSpacesAroundCode;
   If FailCount = 0 Then
     Begin

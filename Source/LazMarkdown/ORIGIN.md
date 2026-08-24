@@ -8,7 +8,7 @@ Local copy of Lazarus `components/markdown` (lazmarkdown) for LazWorkflow.
 
 ## Local fixes (relative to stock Lazarus 4.x)
 
-1. `markdown.canvasrender.pp` — table `GetCellTexts` ChildCount off-by-one; safer entity resolution; skip duplicate HTML entity keys; collapse paragraph space/tab runs; re-apply font Name+Size+Style together on Qt/GTK
+1. `markdown.canvasrender.pp` — table `GetCellTexts` ChildCount off-by-one; safer entity resolution; skip duplicate HTML entity keys; collapse paragraph space/tab runs; glue punctuation after `code`; re-apply font Name+Size+Style together on Qt/GTK
 2. `Src_3_2/markdown.inlinetext.pas` — bare `&` no longer AVs in `HandleEntityInner`
 3. `Src_3_2/markdown.parser.pas` — skip duplicate HTML entity keys (`AElig`, `AMP`, …) so `TMarkDownControl` can construct without “item with key already exists”
 
