@@ -196,6 +196,7 @@ Type
     FCommandsPopup: TPopupMenu;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
+    FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
@@ -286,6 +287,7 @@ Type
     Procedure ScrollChatToTop;
     Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
     Procedure SetBusyCursor(IsBusy: Boolean);
+    Procedure SetOpenBusy(IsBusy: Boolean);
     Function RoleHeading(Const Role: String): String;
     Function QuoteMarkdownLines(Const TextValue: String): String;
     Function FormatAssistantMarkdown(Const Thinking, Content: String): String;
@@ -414,6 +416,7 @@ Begin
   FLastTurnHadError := False;
   FOpenBindPending := True;
   FDeferLastTurn := True;
+  FOpenBusy := False;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -477,6 +480,7 @@ Begin
       Invalidate;
       Update;
     End;
+  SetOpenBusy(True);
   Application.QueueAsyncCall(@DeferredBind, 0);
 End;
 
@@ -486,6 +490,7 @@ Begin
     ElapsedTimer.Enabled := False;
   If Assigned(FCommandsPopup) Then
     FreeAndNil(FCommandsPopup);
+  FOpenBusy := False;
   SetBusyCursor(False);
   { Persist OAuth tokens once on close (not on every prompt). }
   If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
@@ -556,8 +561,17 @@ Begin
   { crAppStart is the classic pointer+hourglass "busy but usable" cursor. }
   If IsBusy Then
     Screen.Cursor := crAppStart
-  Else
+  Else If Not FOpenBusy Then
     Screen.Cursor := crDefault;
+End;
+
+Procedure TProjectAssistantForm.SetOpenBusy(IsBusy: Boolean);
+Begin
+  FOpenBusy := IsBusy;
+  If IsBusy Then
+    SetBusyCursor(True)
+  Else If Not FSending Then
+    SetBusyCursor(False);
 End;
 
 Function TProjectAssistantForm.CurrentModeFromUi: TAssistantMode;
@@ -2609,7 +2623,11 @@ Begin
   If csDestroying In ComponentState Then
     Exit;
   If Not FOpenBindPending Then
-    Exit;
+    Begin
+      If Not FDeferLastTurn Then
+        SetOpenBusy(False);
+      Exit;
+    End;
   If Data = 0 Then
     Begin
       If HandleAllocated Then
@@ -2617,6 +2635,7 @@ Begin
           Invalidate;
           Update;
         End;
+      SetOpenBusy(True);
       Application.QueueAsyncCall(@DeferredBind, 1);
       Exit;
     End;
@@ -2626,8 +2645,15 @@ End;
 Procedure TProjectAssistantForm.DeferredShowLastTurn(Data: PtrInt);
 Begin
   If csDestroying In ComponentState Then
-    Exit;
-  ShowLastConversationTurn;
+    Begin
+      SetOpenBusy(False);
+      Exit;
+    End;
+  Try
+    ShowLastConversationTurn;
+  Finally
+    SetOpenBusy(False);
+  End;
 End;
 
 Procedure TProjectAssistantForm.EnsureChatView;
@@ -3937,14 +3963,19 @@ Begin
       If FDeferLastTurn Then
         Begin
           FDeferLastTurn := False;
+          SetOpenBusy(True);
           Application.QueueAsyncCall(@DeferredShowLastTurn, 0);
         End
       Else
-        ShowLastConversationTurn;
+        Begin
+          ShowLastConversationTurn;
+          SetOpenBusy(False);
+        End;
     End
   Else
     Begin
       FDeferLastTurn := False;
+      SetOpenBusy(False);
       SetActivePlanRelativePath('');
       RefreshHistoryCombo;
       RefreshConversationList;
