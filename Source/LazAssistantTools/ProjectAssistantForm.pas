@@ -201,6 +201,7 @@ Type
     Procedure EnsureConversationStore;
     Procedure RefreshConversationList;
     Procedure RefreshHistoryCombo;
+    Procedure UpdateHistoryActions;
     Procedure RebuildClientFromConversation;
     Procedure ApplyLoadedConversationToUi(Const StatusNote: String);
     Function BuildConversationMarkdownExport: String;
@@ -2008,11 +2009,17 @@ Begin
     Items.Free;
     FHistoryUpdating := False;
   End;
+  UpdateHistoryActions;
+End;
+
+Procedure TProjectAssistantForm.UpdateHistoryActions;
+Begin
   If Assigned(ExportHistoryAction) Then
     ExportHistoryAction.Enabled := (Not FSending) And Assigned(ProjectAssistantConversation) And
       ProjectAssistantConversation.HasTurns;
   If Assigned(DeleteHistoryAction) Then
-    DeleteHistoryAction.Enabled := Not FSending;
+    DeleteHistoryAction.Enabled := (Not FSending) And Assigned(ProjectAssistantConversation) And
+      (ProjectAssistantConversation.ProjectRoot <> '');
 End;
 
 Function TProjectAssistantForm.DefaultExportFileName: String;
@@ -2530,6 +2537,7 @@ Begin
       StreamStart := 0;
     End;
   ApplyActiveMode;
+  UpdateHistoryActions;
   UpdateStatusFooter;
 End;
 

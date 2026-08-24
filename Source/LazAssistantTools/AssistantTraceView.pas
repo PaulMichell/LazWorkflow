@@ -82,6 +82,20 @@ Const
   ToolHeight = 30;
   TruncatedLineCount = 24;
   CardInnerPad = 8;
+  { GTK SendMoveSizeMessages uses a signed 16-bit Top/Left. Stay below 32767. }
+  MaxSafeWidgetCoord = 30000;
+  { Tall answers scroll inside the card instead of stretching the host. }
+  MaxMarkdownCardHeight = 4000;
+
+Function ClampWidgetCoordValue(Value: Integer): Integer;
+Begin
+  If Value < 0 Then
+    Result := 0
+  Else If Value > MaxSafeWidgetCoord Then
+    Result := MaxSafeWidgetCoord
+  Else
+    Result := Value;
+End;
 
 Function EstimateWrappedHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth, MinLineH: Integer): Integer;
 Var
@@ -118,8 +132,10 @@ Begin
       MaxW := View.Width;
     TextChanged := View.MarkDown.Text <> Body;
     { Re-layout only when the body or wrap width changed. Sync walks every card
-      on each live snapshot; repeating CalcLayout on a finished CoT pegs the UI. }
-    If (Not TextChanged) And (Abs(View.Width - MaxW) < 2) And (MaxW >= 80) And (View.Height >= MinLineH) Then
+      on each live snapshot; repeating CalcLayout on a finished CoT pegs the UI.
+      Recap if a previous layout exceeded the GTK coordinate limit. }
+    If (Not TextChanged) And (Abs(View.Width - MaxW) < 2) And (MaxW >= 80) And
+      (View.Height >= MinLineH) And (View.Height <= MaxMarkdownCardHeight) Then
       Exit;
     { Drop the previous lock first: GetPreferredSize is clamped by MaxHeight, so a
       growing answer would stay truncated at its first measured line. }
@@ -170,9 +186,16 @@ Begin
       PrefH := Est
     Else If (Est > MinLineH) And (PrefH > Est * 4) Then
       PrefH := Est;
+    If PrefH > MaxMarkdownCardHeight Then
+      Begin
+        View.ScrollBars := ssAutoVertical;
+        PrefH := MaxMarkdownCardHeight;
+      End
+    Else
+      View.ScrollBars := ssNone;
     View.Height := PrefH;
     View.Constraints.MinHeight := PrefH;
-    View.Constraints.MaxHeight := 0;
+    View.Constraints.MaxHeight := PrefH;
   Except
     View.Height := MinLineH * 2;
   End;
@@ -301,6 +324,7 @@ Begin
     Exit;
   If NewHeight < 1 Then
     NewHeight := 1;
+  NewHeight := ClampWidgetCoordValue(NewHeight);
   Control.AutoSize := False;
   Control.Constraints.MinHeight := 0;
   Control.Constraints.MaxHeight := 0;
@@ -420,9 +444,20 @@ Begin
       CardH := Card.Height;
       If CardH < 1 Then
         CardH := LineHeightPx;
-      Card.SetBounds(LeftPad, Y, InnerW, CardH);
+      If Y >= MaxSafeWidgetCoord Then
+        Begin
+          Card.Visible := False;
+          Continue;
+        End;
+      If Y + CardH > MaxSafeWidgetCoord Then
+        CardH := MaxSafeWidgetCoord - Y;
+      If CardH < 1 Then
+        CardH := 1;
+      Card.SetBounds(LeftPad, ClampWidgetCoordValue(Y), InnerW, CardH);
       LockControlWidth(Card, InnerW);
       Inc(Y, CardH + Gap);
+      If Y > MaxSafeWidgetCoord Then
+        Y := MaxSafeWidgetCoord;
     End;
   Result := Y - Gap + CardInnerPad;
   If Result < CardInnerPad Then
@@ -638,11 +673,17 @@ Begin
     Exit;
   LockControlWidth(Memo, MaxW);
   H := WrappedTextHeight(Memo.Font, SourceText, MaxW);
+  If H > MaxMarkdownCardHeight Then
+    Begin
+      Memo.ScrollBars := ssAutoVertical;
+      H := MaxMarkdownCardHeight;
+    End
+  Else
+    Memo.ScrollBars := ssNone;
   { GTK TMemo preferred height is several lines; lock to the wrapped text. }
   Memo.Constraints.MinHeight := H;
   Memo.Constraints.MaxHeight := H;
   Memo.Height := H;
-  Memo.ScrollBars := ssNone;
 End;
 
 Function TAssistantTraceView.ContentWidth: Integer;
@@ -957,12 +998,21 @@ Begin
       Title.Caption := Block.Title;
       Title.Font.Color := TitleColor;
     End;
+  View := Nil;
   Child := NamedChild(Panel, 'AnswerView');
   If Child Is TMarkDownControl Then
-    SizeMarkdownView(TMarkDownControl(Child), Block.Body, ContentWidth, LineHeightPx);
+    Begin
+      View := TMarkDownControl(Child);
+      SizeMarkdownView(View, Block.Body, ContentWidth, LineHeightPx);
+    End;
   BindBlockFooter(Panel, Block.Footer);
   Panel.InvalidatePreferredSize;
   Panel.Visible := (Block.Body <> '') Or (Block.Footer <> '');
+  Panel.AutoSize := False;
+  If Assigned(View) And View.Visible Then
+    LockControlHeight(Panel, LineHeightPx + 6 + View.Height + CardInnerPad)
+  Else
+    LockControlHeight(Panel, LineHeightPx + CardInnerPad);
 End;
 
 Procedure TAssistantTraceView.BindAnswer(Block: TTraceBlock);
@@ -1023,6 +1073,7 @@ Begin
     NewH := HostedContentHeight;
   If NewH < 1 Then
     NewH := 1;
+  NewH := ClampWidgetCoordValue(NewH);
   If TraceHost.Height <> NewH Then
     TraceHost.Height := NewH;
   Page := TraceScroll.ClientHeight;
