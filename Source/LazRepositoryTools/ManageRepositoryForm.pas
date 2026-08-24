@@ -390,8 +390,8 @@ Begin
   MessageEditor.WordWrap := True;
   MessageEditor.ParentFont := True;
   MessageEditor.UseSharedConfig := True;
-  If Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
-    WorkflowSpellConfig.Apply;
+  If Assigned(WorkflowSpellConfig) Then
+    WorkflowSpellConfig.EnsurePreloaded;
   If Assigned(MessageLabel) Then
     MessageLabel.Caption := 'Commit message';
   MessageEditor.Rescan;

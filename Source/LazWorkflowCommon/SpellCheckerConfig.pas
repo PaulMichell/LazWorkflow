@@ -28,11 +28,23 @@ Type
     FStorageFileName: String;
     FListeners: TMethodList;
     FLastStatus: String;
+    FEngineLock: TRTLCriticalSection;
+    FPreloadThread: TThread;
+    FPreloadSeq: Integer;
+    FIssuedValid: Boolean;
+    FIssuedKind: TSpellEngineKind;
+    FIssuedLanguage: String;
+    FIssuedLibrary: String;
+    FIssuedDict: String;
     Procedure NotifyChanged;
     Procedure UnloadEngine;
     Function CreateEngine(Kind: TSpellEngineKind): TSpellEngine;
     Function TryLoadEngine(Kind: TSpellEngineKind): Boolean;
     Function PersonalPath: String;
+    Function IssuedMatchesOptions: Boolean;
+    Procedure RememberIssuedOptions;
+    Procedure StopPreload;
+    Procedure AcceptPreloadEngine(Engine: TSpellEngine; Const Status: String; Seq: Integer);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -40,6 +52,8 @@ Type
     Procedure Load;
     Procedure Save;
     Procedure Apply;
+    { Start Hunspell/Aspell on a worker so IDE forms do not stall. Safe to call more than once. }
+    Procedure EnsurePreloaded;
     Procedure AssignOptions(Source: TSpellCheckerOptions);
     Function IsReady: Boolean;
     Function ResolvedKind: TSpellEngineKind;
@@ -68,25 +82,132 @@ Implementation
 Uses
   Laz2_XMLCfg, LazFileUtils, SpellEngineHunspell, SpellEngineAspell, WorkflowLog;
 
+Type
+  TSpellPreloadThread = Class(TThread)
+  Private
+    FOwner: TSpellCheckerConfig;
+    FSeq: Integer;
+    FKind: TSpellEngineKind;
+    FLanguage: String;
+    FLibraryFileName: String;
+    FDictionaryDirectory: String;
+    FEngine: TSpellEngine;
+    FStatus: String;
+    Procedure CommitResult;
+  Protected
+    Procedure Execute; Override;
+  Public
+    Constructor Create(Owner: TSpellCheckerConfig; Seq: Integer; Kind: TSpellEngineKind;
+      Const Language, LibraryFileName, DictionaryDirectory: String);
+    Destructor Destroy; Override;
+  End;
+
+Constructor TSpellPreloadThread.Create(Owner: TSpellCheckerConfig; Seq: Integer; Kind: TSpellEngineKind;
+  Const Language, LibraryFileName, DictionaryDirectory: String);
+Begin
+  FOwner := Owner;
+  FSeq := Seq;
+  FKind := Kind;
+  FLanguage := Language;
+  FLibraryFileName := LibraryFileName;
+  FDictionaryDirectory := DictionaryDirectory;
+  FEngine := Nil;
+  FStatus := '';
+  FreeOnTerminate := False;
+  Inherited Create(False);
+End;
+
+Destructor TSpellPreloadThread.Destroy;
+Begin
+  TThread.RemoveQueuedEvents(Self);
+  FreeAndNil(FEngine);
+  Inherited Destroy;
+End;
+
+Procedure TSpellPreloadThread.CommitResult;
+Begin
+  If Assigned(FOwner) Then
+    FOwner.AcceptPreloadEngine(FEngine, FStatus, FSeq);
+  FEngine := Nil;
+End;
+
+Procedure TSpellPreloadThread.Execute;
+Var
+  Candidate: TSpellEngine;
+
+  Function TryKind(LoadKind: TSpellEngineKind): TSpellEngine;
+  Begin
+    Result := Nil;
+    Case LoadKind Of
+      sekHunspell:
+        Result := THunspellEngine.Create(FLanguage, FLibraryFileName, FDictionaryDirectory);
+      sekAspell:
+        Result := TAspellEngine.Create(FLanguage, FLibraryFileName, FDictionaryDirectory);
+    Else
+      Exit;
+    End;
+    If Result.Load Then
+      Exit;
+    FStatus := Result.LastError;
+    FreeAndNil(Result);
+  End;
+
+Begin
+  If Terminated Or (Not Assigned(FOwner)) Then
+    Exit;
+  Candidate := Nil;
+  If FKind = sekNone Then
+    FStatus := 'No engine loaded — memo only'
+  Else If FKind = sekAuto Then
+    Begin
+      Candidate := TryKind(sekHunspell);
+      If Not Assigned(Candidate) Then
+        Candidate := TryKind(sekAspell);
+    End
+  Else
+    Candidate := TryKind(FKind);
+  FEngine := Candidate;
+  If Assigned(FEngine) And FEngine.IsReady Then
+    FStatus := SpellEngineKindToText(FEngine.EngineKind) + ' ready (' + FEngine.ResolvedLanguage + ')'
+  Else If FStatus = '' Then
+    FStatus := 'No engine loaded — memo only';
+  If Terminated Then
+    Begin
+      FreeAndNil(FEngine);
+      Exit;
+    End;
+  Queue(@CommitResult);
+End;
+
 Constructor TSpellCheckerConfig.Create;
 Begin
   Inherited Create;
+  InitCriticalSection(FEngineLock);
   FOptions := TSpellCheckerOptions.Create;
   FPersonal := TSpellWordSet.Create;
   FSessionIgnore := TSpellWordSet.Create;
   FListeners := TMethodList.Create;
   FEngine := Nil;
+  FPreloadThread := Nil;
+  FPreloadSeq := 0;
+  FIssuedValid := False;
+  FIssuedKind := sekNone;
+  FIssuedLanguage := '';
+  FIssuedLibrary := '';
+  FIssuedDict := '';
   FStorageFileName := '';
   FLastStatus := 'No engine loaded — memo only';
 End;
 
 Destructor TSpellCheckerConfig.Destroy;
 Begin
+  StopPreload;
   UnloadEngine;
   FreeAndNil(FListeners);
   FreeAndNil(FSessionIgnore);
   FreeAndNil(FPersonal);
   FreeAndNil(FOptions);
+  DoneCriticalSection(FEngineLock);
   Inherited Destroy;
 End;
 
@@ -107,7 +228,80 @@ End;
 
 Procedure TSpellCheckerConfig.UnloadEngine;
 Begin
-  FreeAndNil(FEngine);
+  EnterCriticalSection(FEngineLock);
+  Try
+    FreeAndNil(FEngine);
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
+End;
+
+Procedure TSpellCheckerConfig.StopPreload;
+Begin
+  If Not Assigned(FPreloadThread) Then
+    Exit;
+  Inc(FPreloadSeq);
+  FPreloadThread.Terminate;
+  FPreloadThread.WaitFor;
+  TThread.RemoveQueuedEvents(FPreloadThread);
+  FreeAndNil(FPreloadThread);
+End;
+
+Procedure TSpellCheckerConfig.AcceptPreloadEngine(Engine: TSpellEngine; Const Status: String; Seq: Integer);
+Begin
+  If Seq <> FPreloadSeq Then
+    Begin
+      Engine.Free;
+      Exit;
+    End;
+  EnterCriticalSection(FEngineLock);
+  Try
+    FreeAndNil(FEngine);
+    FEngine := Engine;
+    FLastStatus := Status;
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
+  If Assigned(WorkflowLogger) Then
+    WorkflowLogger.Info('Spell', FLastStatus);
+  NotifyChanged;
+End;
+
+Function TSpellCheckerConfig.IssuedMatchesOptions: Boolean;
+Begin
+  Result := FIssuedValid And (FIssuedKind = FOptions.EngineKind) And (FIssuedLanguage = FOptions.Language) And
+    (FIssuedLibrary = FOptions.LibraryFileName) And (FIssuedDict = FOptions.DictionaryDirectory);
+End;
+
+Procedure TSpellCheckerConfig.RememberIssuedOptions;
+Begin
+  FIssuedKind := FOptions.EngineKind;
+  FIssuedLanguage := FOptions.Language;
+  FIssuedLibrary := FOptions.LibraryFileName;
+  FIssuedDict := FOptions.DictionaryDirectory;
+  FIssuedValid := True;
+End;
+
+Procedure TSpellCheckerConfig.EnsurePreloaded;
+Begin
+  If FOptions.EngineKind = sekNone Then
+    Exit;
+  If Assigned(FPreloadThread) And IssuedMatchesOptions Then
+    Exit;
+  EnterCriticalSection(FEngineLock);
+  Try
+    If Assigned(FEngine) And FEngine.IsReady And IssuedMatchesOptions Then
+      Exit;
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
+  If Assigned(FPreloadThread) Then
+    StopPreload;
+  If Not IssuedMatchesOptions Then
+    UnloadEngine;
+  RememberIssuedOptions;
+  Inc(FPreloadSeq);
+  FPreloadThread := TSpellPreloadThread.Create(Self, FPreloadSeq, FIssuedKind, FIssuedLanguage, FIssuedLibrary, FIssuedDict);
 End;
 
 Function TSpellCheckerConfig.CreateEngine(Kind: TSpellEngineKind): TSpellEngine;
@@ -133,7 +327,12 @@ Begin
     Exit;
   If Candidate.Load Then
     Begin
-      FEngine := Candidate;
+      EnterCriticalSection(FEngineLock);
+      Try
+        FEngine := Candidate;
+      Finally
+        LeaveCriticalSection(FEngineLock);
+      End;
       Result := True;
     End
   Else
@@ -165,7 +364,8 @@ Var
 Begin
   If (FStorageFileName = '') Or (Not FileExistsUTF8(FStorageFileName)) Then
     Begin
-      Apply;
+      FPersonal.LoadFromFile(PersonalPath);
+      EnsurePreloaded;
       Exit;
     End;
   XML := TXMLConfig.Create(FStorageFileName);
@@ -178,7 +378,16 @@ Begin
   Finally
     XML.Free;
   End;
-  Apply;
+  FPersonal.LoadFromFile(PersonalPath);
+  If FOptions.EngineKind = sekNone Then
+    Begin
+      StopPreload;
+      UnloadEngine;
+      FIssuedValid := False;
+      FLastStatus := 'No engine loaded — memo only';
+      Exit;
+    End;
+  EnsurePreloaded;
 End;
 
 Procedure TSpellCheckerConfig.Save;
@@ -204,6 +413,7 @@ Procedure TSpellCheckerConfig.Apply;
 Var
   Kind: TSpellEngineKind;
 Begin
+  StopPreload;
   UnloadEngine;
   FSessionIgnore.Clear;
   FPersonal.LoadFromFile(PersonalPath);
@@ -211,6 +421,7 @@ Begin
   Kind := FOptions.EngineKind;
   If Kind = sekNone Then
     Begin
+      FIssuedValid := False;
       NotifyChanged;
       Exit;
     End;
@@ -225,6 +436,7 @@ Begin
     FLastStatus := SpellEngineKindToText(FEngine.EngineKind) + ' ready (' + FEngine.ResolvedLanguage + ')'
   Else If FLastStatus = '' Then
     FLastStatus := 'No engine loaded — memo only';
+  RememberIssuedOptions;
   If Assigned(WorkflowLogger) Then
     WorkflowLogger.Info('Spell', FLastStatus);
   NotifyChanged;
@@ -238,15 +450,25 @@ End;
 
 Function TSpellCheckerConfig.IsReady: Boolean;
 Begin
-  Result := Assigned(FEngine) And FEngine.IsReady;
+  EnterCriticalSection(FEngineLock);
+  Try
+    Result := Assigned(FEngine) And FEngine.IsReady;
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
 End;
 
 Function TSpellCheckerConfig.ResolvedKind: TSpellEngineKind;
 Begin
-  If Assigned(FEngine) Then
-    Result := FEngine.EngineKind
-  Else
-    Result := sekNone;
+  EnterCriticalSection(FEngineLock);
+  Try
+    If Assigned(FEngine) Then
+      Result := FEngine.EngineKind
+    Else
+      Result := sekNone;
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
 End;
 
 Function TSpellCheckerConfig.IsWordCorrect(Const WordText: String): Boolean;
@@ -256,25 +478,38 @@ Begin
     Exit;
   If FPersonal.Contains(WordText) Or FSessionIgnore.Contains(WordText) Then
     Exit;
-  If Not IsReady Then
-    Exit;
-  Result := FEngine.CheckWord(WordText);
+  EnterCriticalSection(FEngineLock);
+  Try
+    If Assigned(FEngine) And FEngine.IsReady Then
+      Result := FEngine.CheckWord(WordText);
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
 End;
 
 Function TSpellCheckerConfig.GetSuggestions(Const WordText: String; MaxCount: Integer): TSpellStringArray;
 Begin
-  If IsReady Then
-    Result := FEngine.GetSuggestions(WordText, MaxCount)
-  Else
-    Result := EmptySpellSuggestions;
+  Result := EmptySpellSuggestions;
+  EnterCriticalSection(FEngineLock);
+  Try
+    If Assigned(FEngine) And FEngine.IsReady Then
+      Result := FEngine.GetSuggestions(WordText, MaxCount);
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
 End;
 
 Procedure TSpellCheckerConfig.AddToPersonal(Const WordText: String);
 Begin
   FPersonal.Add(WordText);
   FPersonal.SaveToFile(PersonalPath);
-  If IsReady Then
-    FEngine.AddToSession(WordText);
+  EnterCriticalSection(FEngineLock);
+  Try
+    If Assigned(FEngine) And FEngine.IsReady Then
+      FEngine.AddToSession(WordText);
+  Finally
+    LeaveCriticalSection(FEngineLock);
+  End;
   NotifyChanged;
 End;
 
@@ -349,6 +584,7 @@ Begin
     Exit;
   WorkflowSpellConfig.SetStorageFileName(IncludeTrailingPathDelimiter(Dir) + 'LazWorkflowSpell.xml');
   WorkflowSpellConfig.Load;
+  WorkflowLogger.Info('Spell', 'Preloading spell engine in the background');
 End;
 
 Initialization

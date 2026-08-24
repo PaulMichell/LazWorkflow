@@ -79,7 +79,6 @@ Type
     Procedure EditCopyClick(Sender: TObject);
     Procedure EditPasteClick(Sender: TObject);
     Procedure EditSelectAllClick(Sender: TObject);
-    Procedure DeferredSpellApply(Data: PtrInt);
     Function SpellActive: Boolean;
     Procedure ReplaceActiveWord(Const NewText: String);
     Procedure LocateTokenAtCaret;
@@ -301,22 +300,11 @@ Begin
   Text := '';
 End;
 
-Procedure TSpellMemo.DeferredSpellApply(Data: PtrInt);
-Begin
-  If (Not FReady) Or (csDestroying In ComponentState) Then
-    Exit;
-  If FUseSharedConfig And Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
-    WorkflowSpellConfig.Apply;
-  RestartDebounce;
-End;
-
 Procedure TSpellMemo.Loaded;
 Begin
   Inherited Loaded;
   If csDesigning In ComponentState Then
     Exit;
-  If FUseSharedConfig And Assigned(WorkflowSpellConfig) And (Not WorkflowSpellConfig.IsReady) Then
-    Application.QueueAsyncCall(@DeferredSpellApply, 0);
   EnsurePopupHook;
   If CanLayout Then
     Begin

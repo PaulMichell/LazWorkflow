@@ -17,12 +17,19 @@ Procedure Register;
 Implementation
 
 Uses
-  StatusFooterFrame, SpellMemo, SpellCheckerSettingsFrame;
+  StatusFooterFrame, SpellMemo, SpellCheckerSettingsFrame, SpellCheckerConfig, WorkflowLog;
 
 Procedure Register;
 Begin
   { Register once here. Consumer packages must not RegisterNoIcon these classes. }
   RegisterNoIcon([TStatusFooterFrame, TSpellMemo, TSpellCheckerSettingsFrame]);
+  { Start Hunspell as soon as the IDE loads this package so first form open does not wait. }
+  If Assigned(WorkflowSpellConfig) Then
+    Begin
+      WorkflowSpellConfig.EnsurePreloaded;
+      If Assigned(WorkflowLogger) Then
+        WorkflowLogger.Info('Spell', 'Preloading spell engine in the background');
+    End;
 End;
 
 End.
