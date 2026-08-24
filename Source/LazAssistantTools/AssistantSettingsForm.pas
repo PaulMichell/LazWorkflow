@@ -148,6 +148,7 @@ Begin
   ThinkingCombo.Items.Add('Low');
   ThinkingCombo.Items.Add('Medium');
   ThinkingCombo.Items.Add('High');
+  ThinkingCombo.Items.Add('XHigh');
   ThinkingCombo.ItemIndex := 2;
 
   ApprovalLabel := TLabel.Create(Self);
@@ -323,6 +324,7 @@ Begin
   Case AssistantChatConfig.GetThinkingLevel Of
     atlLow: ThinkingCombo.ItemIndex := 0;
     atlMedium: ThinkingCombo.ItemIndex := 1;
+    atlXHigh: ThinkingCombo.ItemIndex := 3;
   Else
     ThinkingCombo.ItemIndex := 2;
   End;
@@ -387,6 +389,7 @@ Begin
   Case ThinkingCombo.ItemIndex Of
     0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
     1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);
+    3: AssistantChatConfig.SetThinkingLevelEnum(atlXHigh);
   Else
     AssistantChatConfig.SetThinkingLevelEnum(atlHigh);
   End;

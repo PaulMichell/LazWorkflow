@@ -218,6 +218,9 @@ Begin
   Check('req encrypted item', Pos('"encrypted_content":"enc_hidden"', Body) > 0);
   Check('req tools array', Pos('"tools":[', Body) > 0);
   Check('req no messages key', Pos('"messages":', Body) = 0);
+  Options.ReasoningEffort := 'xhigh';
+  Body := BuildResponsesRequestJson(Items, Options);
+  Check('req reasoning effort xhigh', Pos('"reasoning":{"effort":"xhigh"}', Body) > 0);
 End;
 
 Procedure TestChatCompletionsRequestDropsReasoning;
@@ -235,6 +238,9 @@ Begin
   Check('cc has messages', Pos('"messages":[', Body) > 0);
   Check('cc drops encrypted', Pos('enc_hidden', Body) = 0);
   Check('cc reasoning_effort', Pos('"reasoning_effort":"high"', Body) > 0);
+  Options.ReasoningEffort := 'xhigh';
+  Body := BuildChatCompletionsRequestJson(Items, Options);
+  Check('cc reasoning_effort xhigh', Pos('"reasoning_effort":"xhigh"', Body) > 0);
 End;
 
 Procedure TestResponsesFailedIsError;

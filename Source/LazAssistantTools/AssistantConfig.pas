@@ -21,8 +21,9 @@ Const
   AssistantConfigDefaultApproval = 'ask';
 
 Type
-  { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level"). }
-  TAssistantThinkingLevel = (atlLow, atlMedium, atlHigh);
+  { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level").
+    xhigh is grok-4.6+; older models treat it as high. }
+  TAssistantThinkingLevel = (atlLow, atlMedium, atlHigh, atlXHigh);
 
   { Tool approval policy (Grok Build permission mode analogue). }
   TAssistantApprovalMode = (
@@ -64,7 +65,7 @@ Type
     Property ActiveSkill: String Read FActiveSkill Write FActiveSkill;
     { Attach active editor + project file list to each outgoing user message. }
     Property IncludeIDEContext: Boolean Read FIncludeIDEContext Write FIncludeIDEContext;
-    { low | medium | high — API reasoning_effort. }
+    { low | medium | high | xhigh — API reasoning_effort. }
     Property ThinkingLevel: String Read FThinkingLevel Write FThinkingLevel;
     { ask | auto | always — tool approval policy. }
     Property ApprovalMode: String Read FApprovalMode Write FApprovalMode;
@@ -98,6 +99,7 @@ Begin
   Case Level Of
     atlLow: Result := 'low';
     atlMedium: Result := 'medium';
+    atlXHigh: Result := 'xhigh';
   Else
     Result := 'high';
   End;
@@ -108,10 +110,15 @@ Var
   V: String;
 Begin
   V := LowerCase(Trim(Value));
+  V := StringReplace(V, '_', '', [rfReplaceAll]);
+  V := StringReplace(V, '-', '', [rfReplaceAll]);
+  V := StringReplace(V, ' ', '', [rfReplaceAll]);
   If (V = 'low') Or (V = 'minimal') Or (V = 'none') Then
     Result := atlLow
   Else If (V = 'medium') Or (V = 'med') Then
     Result := atlMedium
+  Else If (V = 'xhigh') Or (V = 'extrahigh') Or (V = 'max') Then
+    Result := atlXHigh
   Else
     Result := atlHigh;
 End;
@@ -121,6 +128,7 @@ Begin
   Case Level Of
     atlLow: Result := 'Low';
     atlMedium: Result := 'Medium';
+    atlXHigh: Result := 'XHigh';
   Else
     Result := 'High';
   End;

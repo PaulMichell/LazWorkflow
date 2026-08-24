@@ -129,7 +129,7 @@ Type
     Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
     { Soft cap for chat/completions prompt (default leaves headroom under 500k models). }
     Property MaxPromptTokens: Integer Read FMaxPromptTokens Write FMaxPromptTokens;
-    { low | medium | high — sent as reasoning_effort when non-empty. }
+    { low | medium | high | xhigh — sent as reasoning_effort when non-empty. }
     Property ReasoningEffort: String Read FReasoningEffort Write FReasoningEffort;
   End;
 
@@ -407,7 +407,7 @@ Begin
       '],"tools":' + ToolsJsonCached
   Else
     Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']';
-  { Grok-4.5 reasoning effort (thinking level). }
+  { Reasoning effort (thinking level): low | medium | high | xhigh. }
   If Trim(FReasoningEffort) <> '' Then
     Result := Result + ',"reasoning_effort":"' + JsonEscape(LowerCase(Trim(FReasoningEffort))) + '"';
   Result := Result + '}';
