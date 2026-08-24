@@ -271,6 +271,7 @@ Type
     Procedure SetStreamPhase(Const Phase: String);
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
+    Procedure DeferredBind(Data: PtrInt);
     Procedure EnsureChatView;
     Procedure RebuildTraceFromFields;
     Procedure ApplyLiveThinkingAndAnswer;
@@ -412,6 +413,7 @@ End;
 
 Destructor TProjectAssistantForm.Destroy;
 Begin
+  Application.RemoveAsyncCalls(Self);
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
   If FSending Then
@@ -452,7 +454,8 @@ Begin
     End;
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := @HandleTraceEvent;
-  BindToActiveProject;
+  { Bind after first paint: conversation load + last-turn markdown can take seconds. }
+  Application.QueueAsyncCall(@DeferredBind, 0);
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
@@ -2578,6 +2581,13 @@ Begin
       FContextUsed := LoadedContext;
       UpdateStatusFooter;
     End;
+End;
+
+Procedure TProjectAssistantForm.DeferredBind(Data: PtrInt);
+Begin
+  If csDestroying In ComponentState Then
+    Exit;
+  BindToActiveProject;
 End;
 
 Procedure TProjectAssistantForm.EnsureChatView;
