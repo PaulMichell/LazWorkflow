@@ -111,6 +111,7 @@ Type
     PromptSplitter: TSplitter;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
+    Procedure FormShow(Sender: TObject);
     Procedure ModeGroupClick(Sender: TObject);
     Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
@@ -193,6 +194,8 @@ Type
     FPlanAgentMaxPackages: Integer;
     FLastTurnHadError: Boolean;
     FCommandsPopup: TPopupMenu;
+    FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
+    FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     Procedure UpdateThinkingActionCaption;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
@@ -272,6 +275,7 @@ Type
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
     Procedure DeferredBind(Data: PtrInt);
+    Procedure DeferredShowLastTurn(Data: PtrInt);
     Procedure EnsureChatView;
     Procedure RebuildTraceFromFields;
     Procedure ApplyLiveThinkingAndAnswer;
@@ -408,6 +412,8 @@ Begin
   FPlanAgentPackagesDone := 0;
   FPlanAgentMaxPackages := 25;
   FLastTurnHadError := False;
+  FOpenBindPending := True;
+  FDeferLastTurn := True;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -438,7 +444,10 @@ Begin
   OnKeyDown := @FormKeyDown;
   If Assigned(InputMemo) Then
     InputMemo.OnKeyDown := @InputMemoKeyDown;
+  Color := clBtnFace;
   EnsureChatView;
+  If Assigned(FTraceView) And Assigned(FTrace) Then
+    FTraceView.Sync(FTrace, False);
   EnsureInputPopup;
   EnsurePlanTabUi;
   EnsureBuildTabUi;
@@ -454,9 +463,21 @@ Begin
     End;
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := @HandleTraceEvent;
-  { Bind after first paint: conversation load + last-turn markdown can take seconds. }
-  Application.QueueAsyncCall(@DeferredBind, 0);
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
+End;
+
+Procedure TProjectAssistantForm.FormShow(Sender: TObject);
+Begin
+  { QueueAsyncCall from FormCreate races the first Qt paint and flashes black.
+    Show empty chrome, flush it, then bind on a later idle. }
+  If Not FOpenBindPending Then
+    Exit;
+  If HandleAllocated Then
+    Begin
+      Invalidate;
+      Update;
+    End;
+  Application.QueueAsyncCall(@DeferredBind, 0);
 End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
@@ -2587,7 +2608,26 @@ Procedure TProjectAssistantForm.DeferredBind(Data: PtrInt);
 Begin
   If csDestroying In ComponentState Then
     Exit;
+  If Not FOpenBindPending Then
+    Exit;
+  If Data = 0 Then
+    Begin
+      If HandleAllocated Then
+        Begin
+          Invalidate;
+          Update;
+        End;
+      Application.QueueAsyncCall(@DeferredBind, 1);
+      Exit;
+    End;
   BindToActiveProject;
+End;
+
+Procedure TProjectAssistantForm.DeferredShowLastTurn(Data: PtrInt);
+Begin
+  If csDestroying In ComponentState Then
+    Exit;
+  ShowLastConversationTurn;
 End;
 
 Procedure TProjectAssistantForm.EnsureChatView;
@@ -3836,6 +3876,7 @@ Begin
     Turns for the previous project were already flushed by AppendTurn. }
   If FSending Then
     StopStream;
+  FOpenBindPending := False;
 
   Key := '';
   Root := '';
@@ -3892,11 +3933,18 @@ Begin
       RestoreSessionIfNeeded;
       RefreshHistoryCombo;
       RefreshConversationList;
-      ShowLastConversationTurn;
       RefreshPlanList;
+      If FDeferLastTurn Then
+        Begin
+          FDeferLastTurn := False;
+          Application.QueueAsyncCall(@DeferredShowLastTurn, 0);
+        End
+      Else
+        ShowLastConversationTurn;
     End
   Else
     Begin
+      FDeferLastTurn := False;
       SetActivePlanRelativePath('');
       RefreshHistoryCombo;
       RefreshConversationList;

@@ -11,6 +11,7 @@ object ProjectAssistantForm: TProjectAssistantForm
   LCLVersion = '4.99.0.0'
   OnCreate = FormCreate
   OnDestroy = FormDestroy
+  OnShow = FormShow
   inline StatusFooter: TStatusFooterFrame
     Top = 678
     Width = 960
