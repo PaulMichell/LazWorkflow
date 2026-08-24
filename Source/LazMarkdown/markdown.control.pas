@@ -110,6 +110,7 @@ Type
     procedure CalcLayout; virtual;
     { Layout at an explicit wrap width (ClientWidth is often 0 before the parent aligns). }
     procedure CalcLayoutForWidth(AWidth: Integer);
+    procedure ResetScroll;
     procedure ClearSelection;
     function GetSelectionText: String;
     function HasSelection: Boolean;
@@ -488,6 +489,17 @@ begin
     end;
   FRenderer.CalculateLayout(Canvas,AWidth,FCalculatedWidth,FCalculatedHeight);
   InvalidatePreferredSize;
+end;
+
+procedure TCustomMarkDownControl.ResetScroll;
+begin
+  FScrolledLeft:=0;
+  FScrolledTop:=0;
+  FScrollbarsNeedUpdate:=True;
+  if HandleAllocated then
+    UpdateScrollBars;
+  if HandleAllocated then
+    Invalidate;
 end;
 
 procedure TCustomMarkDownControl.CalcLayout;

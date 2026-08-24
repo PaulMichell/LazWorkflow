@@ -1886,6 +1886,8 @@ Begin
   Else
     FDisplaySystemNote := '';
   RefreshChatDisplay(True, False);
+  If Assigned(FTraceView) Then
+    FTraceView.ScrollToStart;
 End;
 
 Procedure TProjectAssistantForm.ShowLastConversationTurn;

@@ -66,6 +66,7 @@ Type
     Destructor Destroy; Override;
     Procedure ResetFrames;
     Procedure Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
+    Procedure ScrollToStart;
     Procedure RefreshElapsed(Trace: TAssistantTrace);
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
   End;
@@ -183,13 +184,15 @@ Begin
     View.GetPreferredSize(PrefW, PrefH);
     If PrefH < MinLineH Then
       PrefH := MinLineH;
-    { ClientWidth is often still 0 here; prefer a wrap-height floor so the
-      scroll range can reach the last line. }
+    { EstimateWrappedHeight wraps raw markdown as one blob and is only a floor
+      when layout failed. Shrinking to it clips headings/lists and can leave
+      ScrolledTop past the visible head with no inner scrollbar. }
     Est := EstimateWrappedHeight(View.Font, Body, MaxW, MinLineH);
-    If PrefH < Est Then
-      PrefH := Est
-    Else If (Est > MinLineH) And (PrefH > Est * 4) Then
-      PrefH := Est;
+    If PrefH <= MinLineH Then
+      Begin
+        If Est > PrefH Then
+          PrefH := Est;
+      End;
     If PrefH > MaxMarkdownCardHeight Then
       Begin
         View.ScrollBars := ssAutoVertical;
@@ -200,6 +203,8 @@ Begin
     View.Height := PrefH;
     View.Constraints.MinHeight := PrefH;
     View.Constraints.MaxHeight := PrefH;
+    If TextChanged Then
+      View.ResetScroll;
   Except
     View.Height := MinLineH * 2;
   End;
@@ -1130,6 +1135,30 @@ Begin
     Exit;
   ApplyHostWidth;
   ApplyScrollRange(False);
+End;
+
+Procedure TAssistantTraceView.ScrollToStart;
+Var
+  CardIndex, ChildIndex: Integer;
+  Card: TWinControl;
+  Child: TControl;
+Begin
+  If Assigned(TraceScroll) Then
+    TraceScroll.VertScrollBar.Position := 0;
+  If Not Assigned(TraceHost) Then
+    Exit;
+  For CardIndex := 0 To TraceHost.ControlCount - 1 Do
+    Begin
+      If Not (TraceHost.Controls[CardIndex] Is TWinControl) Then
+        Continue;
+      Card := TWinControl(TraceHost.Controls[CardIndex]);
+      For ChildIndex := 0 To Card.ControlCount - 1 Do
+        Begin
+          Child := Card.Controls[ChildIndex];
+          If Child Is TMarkDownControl Then
+            TMarkDownControl(Child).ResetScroll;
+        End;
+    End;
 End;
 
 Procedure TAssistantTraceView.ScrollToEnd;
