@@ -39,6 +39,7 @@ Type
     Procedure Emit(Const Event: TSamplerEvent);
     Procedure CompactEmptyTools;
     Procedure EnsureToolIndex(Index: Integer);
+    Procedure FillToolAtIndex(Index: Integer; Const Id, Name, Arguments: String);
     Procedure MergeTool(Const Id, Name, Arguments: String);
     Procedure ProcessLine(Const Line: String);
     Procedure ParsePayload(Const Payload: String);
@@ -170,6 +171,19 @@ Begin
     Exit;
   If Index >= Length(FTools) Then
     SetLength(FTools, Index + 1);
+End;
+
+Procedure TAssistantSseParser.FillToolAtIndex(Index: Integer; Const Id, Name, Arguments: String);
+Begin
+  EnsureToolIndex(Index);
+  If Index < 0 Then
+    Exit;
+  If Id <> '' Then
+    FTools[Index].Id := Id;
+  If Name <> '' Then
+    FTools[Index].Name := Name;
+  If Arguments <> '' Then
+    MergeSamplerText(FTools[Index].Arguments, Arguments);
 End;
 
 Procedure TAssistantSseParser.MergeTool(Const Id, Name, Arguments: String);
@@ -387,12 +401,12 @@ Begin
       If JsonStringField(Item, 'type') <> 'function_call' Then
         Exit;
       OutputIndex := JsonIntField(Root, 'output_index');
-      EnsureToolIndex(OutputIndex);
       CallId := JsonStringField(Item, 'call_id');
       If CallId = '' Then
         CallId := JsonStringField(Item, 'id');
       Name := JsonStringField(Item, 'name');
-      MergeTool(CallId, Name, JsonStringField(Item, 'arguments'));
+      { Fill the output_index slot in place. MergeTool would append a second row. }
+      FillToolAtIndex(OutputIndex, CallId, Name, JsonStringField(Item, 'arguments'));
       Event.Kind := sekToolCallDelta;
       Event.ToolIndex := OutputIndex;
       Event.ToolId := CallId;

@@ -168,6 +168,8 @@ Begin
     Trace.AddTool('call_1', 'read_file', '{"path":"A.pas"}');
     Check('thinking closed on tool', Not Think.Running);
     Check('answer closed on tool', Not Answer.Running);
+    Check('no thinking card after last tool', Trace.LatestBlockSinceLastTool(tbkThinking) = Nil);
+    Check('no answer card after last tool', Trace.LatestBlockSinceLastTool(tbkAnswer) = Nil);
     Think2 := Trace.StartThinking(1);
     Answer2 := Trace.EnsureAnswer;
     Answer2.Body := 'Here is the review.';

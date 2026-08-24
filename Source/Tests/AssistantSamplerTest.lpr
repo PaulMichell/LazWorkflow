@@ -165,6 +165,33 @@ Begin
   End;
 End;
 
+Procedure TestOutputItemAddedDoesNotDuplicateTool;
+Var
+  Parser: TAssistantSseParser;
+  Body: String;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Body :=
+      SseLine('{"type":"response.created","response":{"id":"resp_dup"}}') +
+      SseLine('{"type":"response.output_item.added","output_index":1,' +
+        '"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"list_directory",' +
+        '"arguments":""}}') +
+      SseLine('{"type":"response.function_call_arguments.delta","item_id":"call_1","output_index":1,' +
+        '"delta":"{\"path\":\"Source\"}"}') +
+      SseLine('{"type":"response.completed","response":{"output":[' +
+        '{"type":"function_call","call_id":"call_1","name":"list_directory","arguments":"{\"path\":\"Source\"}"}]}}') +
+      SseLine('[DONE]');
+    FeedAll(Parser, Body);
+    Check('added+delta tool count', Length(Parser.ToolCalls) = 1);
+    Check('added+delta tool name', (Length(Parser.ToolCalls) = 1) And (Parser.ToolCalls[0].Name = 'list_directory'));
+    Check('added+delta tool id', (Length(Parser.ToolCalls) = 1) And (Parser.ToolCalls[0].Id = 'call_1'));
+    Check('added+delta tool args', (Length(Parser.ToolCalls) = 1) And (Pos('Source', Parser.ToolCalls[0].Arguments) > 0));
+  Finally
+    Parser.Free;
+  End;
+End;
+
 Procedure TestChatCompletionsFallback;
 Var
   Parser: TAssistantSseParser;
@@ -367,6 +394,7 @@ Begin
   TestInterleavedThoughtAndContent;
   TestResponsesEncryptedHarvest;
   TestResponsesToolCall;
+  TestOutputItemAddedDoesNotDuplicateTool;
   TestChatCompletionsFallback;
   TestChatCompletionsTools;
   TestSplitChunks;

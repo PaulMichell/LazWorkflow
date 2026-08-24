@@ -2752,21 +2752,13 @@ Begin
     Slice := Copy(FLiveThinking, FThinkingSliceStart, MaxInt)
   Else
     Slice := '';
-  { One thinking card per sample. Growing CoT snapshots update it; do not open a
-    new card because content started or thinking was briefly unmarked running. }
+  { One thinking card per sample. After a tool the last card is the tool, so do
+    not open a new thought from the cumulative snapshot — wait for LoopStarted. }
   Block := FTrace.CurrentRunningThinking;
   If Not Assigned(Block) Then
     Block := FTrace.LatestBlockSinceLastTool(tbkThinking);
-  If Assigned(Block) Then
-    Begin
-      If Slice <> '' Then
-        Block.Body := Slice;
-    End
-  Else If FStreamingActive And (Slice <> '') Then
-    Begin
-      Block := FTrace.StartThinking(0);
-      Block.Body := Slice;
-    End;
+  If Assigned(Block) And (Slice <> '') Then
+    Block.Body := Slice;
   ApplyLiveAnswerSlice;
 End;
 
@@ -2815,8 +2807,10 @@ Begin
       Begin
         FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
         { Ignore further snapshots of this loop, including a trailing ".".
-          Length+1 is not enough: one more delta would open a new answer card. }
+          Length+1 is not enough: one more delta would open a new answer card.
+          Freeze thinking too — the actor still sends the full CoT on each tool. }
         FAnswerSliceStart := High(Integer);
+        FThinkingSliceStart := High(Integer);
       End;
     aekToolCompleted:
       Begin
