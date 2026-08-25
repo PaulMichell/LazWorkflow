@@ -380,14 +380,11 @@ Begin
     Exit;
   W := ViewportWidth;
   TraceHost.AutoSize := False;
-  TraceHost.Left := 0;
-  TraceHost.Top := 0;
+  { Do not assign Top/Left here. On GTK3 a TScrollBox child uses viewport
+    coordinates; SetBounds(..., Top=0, ...) while scrolled parks the host at
+    the current thumb and leaves a blank band above the first card. }
   If W < 80 Then
     Exit;
-  TraceHost.Constraints.MinWidth := 0;
-  TraceHost.Constraints.MaxWidth := 0;
-  If TraceHost.Width <> W Then
-    TraceHost.Width := W;
   LockControlWidth(TraceHost, W);
 End;
 
@@ -499,13 +496,8 @@ Begin
     Exit;
   If Abs(W - FLastContentWidth) < 12 Then
     Exit;
-  FRelayouting := True;
-  Try
-    FLastContentWidth := W;
-    Sync(FBoundTrace, False);
-  Finally
-    FRelayouting := False;
-  End;
+  FLastContentWidth := W;
+  Sync(FBoundTrace, False);
 End;
 
 Procedure TAssistantTraceView.SetShowThinking(Value: Boolean);
@@ -1148,45 +1140,54 @@ Var
 Begin
   If (Not Assigned(TraceScroll)) Or (Not Assigned(TraceHost)) Then
     Exit;
-  SavedPos := TraceScroll.VertScrollBar.Position;
-  OldRange := TraceScroll.VertScrollBar.Range;
-  OldPage := TraceScroll.VertScrollBar.Page;
-  Follow := ForceBottom Or ScrollShouldFollowTail(SavedPos, OldRange, OldPage, 24);
-  If TraceHost.Left <> 0 Then
-    TraceHost.Left := 0;
-  If TraceHost.Top <> 0 Then
-    TraceHost.Top := 0;
-  If Assigned(FBoundTrace) Then
-    NewH := OrderFrames(FBoundTrace)
-  Else
-    NewH := HostedContentHeight;
-  If NewH < 1 Then
-    NewH := 1;
-  NewH := ClampWidgetCoordValue(NewH);
-  If TraceHost.Height <> NewH Then
-    TraceHost.Height := NewH;
-  Page := TraceScroll.ClientHeight;
-  If Page < 1 Then
-    Page := 1;
-  If TraceScroll.HorzScrollBar.Range <> 0 Then
-    TraceScroll.HorzScrollBar.Range := 0;
-  If TraceScroll.HorzScrollBar.Page <> TraceScroll.ClientWidth Then
-    TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
-  If TraceScroll.VertScrollBar.Range <> NewH Then
-    TraceScroll.VertScrollBar.Range := NewH;
-  If TraceScroll.VertScrollBar.Page <> Page Then
-    TraceScroll.VertScrollBar.Page := Page;
-  MaxPos := NewH - Page;
-  If MaxPos < 0 Then
-    MaxPos := 0;
-  If Follow Then
-    SetVertScrollPos(MaxPos)
-  Else
-    Begin
-      If SavedPos > MaxPos Then
-        SavedPos := MaxPos;
-      SetVertScrollPos(SavedPos);
-    End;
+  If FRelayouting Then
+    Exit;
+  FRelayouting := True;
+  Try
+    SavedPos := TraceScroll.VertScrollBar.Position;
+    OldRange := TraceScroll.VertScrollBar.Range;
+    OldPage := TraceScroll.VertScrollBar.Page;
+    Follow := ForceBottom Or ScrollShouldFollowTail(SavedPos, OldRange, OldPage, 24);
+    { GTK3 places TScrollBox children in viewport coordinates. Any SetBounds on
+      TraceHost (even Height-only) while Position<>0 writes Top=0 at the thumb
+      and stacks blank space above the cards. Layout only at scroll origin. }
+    If ScrollHandleReady And (SavedPos <> 0) Then
+      SetVertScrollPos(0);
+    ApplyHostWidth;
+    If Assigned(FBoundTrace) Then
+      NewH := OrderFrames(FBoundTrace)
+    Else
+      NewH := HostedContentHeight;
+    If NewH < 1 Then
+      NewH := 1;
+    NewH := ClampWidgetCoordValue(NewH);
+    If TraceHost.Height <> NewH Then
+      TraceHost.Height := NewH;
+    Page := TraceScroll.ClientHeight;
+    If Page < 1 Then
+      Page := 1;
+    If TraceScroll.HorzScrollBar.Range <> 0 Then
+      TraceScroll.HorzScrollBar.Range := 0;
+    If TraceScroll.HorzScrollBar.Page <> TraceScroll.ClientWidth Then
+      TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
+    If TraceScroll.VertScrollBar.Range <> NewH Then
+      TraceScroll.VertScrollBar.Range := NewH;
+    If TraceScroll.VertScrollBar.Page <> Page Then
+      TraceScroll.VertScrollBar.Page := Page;
+    MaxPos := NewH - Page;
+    If MaxPos < 0 Then
+      MaxPos := 0;
+    If Follow Then
+      SetVertScrollPos(MaxPos)
+    Else
+      Begin
+        If SavedPos > MaxPos Then
+          SavedPos := MaxPos;
+        SetVertScrollPos(SavedPos);
+      End;
+  Finally
+    FRelayouting := False;
+  End;
 End;
 
 Procedure TAssistantTraceView.FitHostToContent;
@@ -1242,10 +1243,9 @@ Begin
       TraceHost.Controls[0].Free;
   Finally
     TraceHost.ChildSizing.Layout := cclNone;
-    TraceHost.Left := 0;
-    TraceHost.Top := 0;
     TraceHost.AutoSize := False;
   End;
+  SetVertScrollPos(0);
 End;
 
 Procedure TAssistantTraceView.Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
@@ -1269,7 +1269,6 @@ Begin
     Exit;
   If Assigned(TraceScroll) Then
     TraceScroll.AutoScroll := False;
-  ApplyHostWidth;
   If Assigned(Trace) Then
     For I := 0 To Trace.Count - 1 Do
       Try
