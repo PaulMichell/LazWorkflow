@@ -53,6 +53,8 @@ Type
     Function LastLines(Const SourceText: String; MaxLines: Integer; MaxChars: Integer = 0): String;
     Procedure ScrollToEnd;
     Function HostedContentHeight: Integer;
+    Function ScrollHandleReady: Boolean;
+    Procedure SetVertScrollPos(NewPos: Integer);
     Procedure ApplyScrollRange(ForceBottom: Boolean);
     Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
@@ -230,7 +232,6 @@ Begin
         offset, which inflates Range and leaves a blank band above the cards. }
       TraceScroll.AutoScroll := False;
       TraceScroll.HorzScrollBar.Visible := False;
-      TraceScroll.HorzScrollBar.Range := 0;
     End;
   If Assigned(TraceHost) Then
     Begin
@@ -1099,6 +1100,24 @@ Begin
   End;
 End;
 
+Function TAssistantTraceView.ScrollHandleReady: Boolean;
+Begin
+  Result := Assigned(TraceScroll) And TraceScroll.HandleAllocated And
+    TraceScroll.Visible And (Not (csDestroying In TraceScroll.ComponentState));
+End;
+
+Procedure TAssistantTraceView.SetVertScrollPos(NewPos: Integer);
+Begin
+  { TScrollingWinControl.ScrollBy always calls ScrollBy_WS, which raises
+    "Handle not allocated" if the GTK widget is not realized yet. }
+  If Not ScrollHandleReady Then
+    Exit;
+  If NewPos < 0 Then
+    NewPos := 0;
+  If TraceScroll.VertScrollBar.Position <> NewPos Then
+    TraceScroll.VertScrollBar.Position := NewPos;
+End;
+
 Function TAssistantTraceView.HostedContentHeight: Integer;
 Var
   I, Bottom: Integer;
@@ -1153,8 +1172,6 @@ Begin
     TraceScroll.HorzScrollBar.Range := 0;
   If TraceScroll.HorzScrollBar.Page <> TraceScroll.ClientWidth Then
     TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
-  If TraceScroll.HorzScrollBar.Position <> 0 Then
-    TraceScroll.HorzScrollBar.Position := 0;
   If TraceScroll.VertScrollBar.Range <> NewH Then
     TraceScroll.VertScrollBar.Range := NewH;
   If TraceScroll.VertScrollBar.Page <> Page Then
@@ -1163,18 +1180,12 @@ Begin
   If MaxPos < 0 Then
     MaxPos := 0;
   If Follow Then
-    Begin
-      If TraceScroll.VertScrollBar.Position <> MaxPos Then
-        TraceScroll.VertScrollBar.Position := MaxPos;
-    End
+    SetVertScrollPos(MaxPos)
   Else
     Begin
       If SavedPos > MaxPos Then
         SavedPos := MaxPos;
-      If SavedPos < 0 Then
-        SavedPos := 0;
-      If TraceScroll.VertScrollBar.Position <> SavedPos Then
-        TraceScroll.VertScrollBar.Position := SavedPos;
+      SetVertScrollPos(SavedPos);
     End;
 End;
 
@@ -1192,8 +1203,7 @@ Var
   Card: TWinControl;
   Child: TControl;
 Begin
-  If Assigned(TraceScroll) Then
-    TraceScroll.VertScrollBar.Position := 0;
+  SetVertScrollPos(0);
   If Not Assigned(TraceHost) Then
     Exit;
   For CardIndex := 0 To TraceHost.ControlCount - 1 Do
@@ -1248,16 +1258,17 @@ Begin
   FBoundTrace := Trace;
   Empty := (Not Assigned(Trace)) Or (Trace.Count = 0);
   If Assigned(EmptyLabel) Then
-    EmptyLabel.Visible := Empty;
-  If Assigned(TraceScroll) Then
-    TraceScroll.Visible := Not Empty;
+    Begin
+      EmptyLabel.Visible := Empty;
+      If Empty Then
+        EmptyLabel.BringToFront;
+    End;
+  { Do not hide TraceScroll when empty: GTK destroys the handle, and the next
+    VertScrollBar.Position write raises TWinControl.ScrollBy_WS. }
   If Empty Then
     Exit;
   If Assigned(TraceScroll) Then
-    Begin
-      TraceScroll.AutoScroll := False;
-      TraceScroll.HorzScrollBar.Range := 0;
-    End;
+    TraceScroll.AutoScroll := False;
   ApplyHostWidth;
   If Assigned(Trace) Then
     For I := 0 To Trace.Count - 1 Do
