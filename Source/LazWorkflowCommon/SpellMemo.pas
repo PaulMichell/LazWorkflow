@@ -131,7 +131,6 @@ Type
     Function RealGetText: TCaption; Override;
     Procedure RealSetText(Const Value: TCaption); Override;
     Procedure Change; Virtual;
-    Property OnChange: TNotifyEvent Read FOnChange Write FOnChange;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -168,6 +167,7 @@ Type
     Property WantReturns: Boolean Read FWantReturns Write SetWantReturns Default True;
     Property WantTabs: Boolean Read FWantTabs Write SetWantTabs Default False;
     Property WordWrap: Boolean Read FWordWrap Write SetWordWrap Default True;
+    Property OnChange: TNotifyEvent Read FOnChange Write FOnChange;
     Property OnClick;
     Property OnDblClick;
     Property OnEnter;

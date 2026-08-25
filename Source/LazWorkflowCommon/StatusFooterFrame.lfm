@@ -20,8 +20,20 @@ object StatusFooterFrame: TStatusFooterFrame
     Color = clForm
     ParentColor = False
     TabOrder = 0
-    object LeftLabel: TLabel
+    object SkillLabel: TLabel
       Left = 6
+      Height = 22
+      Top = 0
+      Width = 1
+      Align = alLeft
+      BorderSpacing.Left = 6
+      BorderSpacing.Right = 12
+      Layout = tlCenter
+      ParentColor = False
+      Visible = False
+    end
+    object LeftLabel: TLabel
+      Left = 19
       Height = 22
       Top = 0
       Width = 1
@@ -43,10 +55,10 @@ object StatusFooterFrame: TStatusFooterFrame
       ParentColor = False
     end
     object CentreLabel: TLabel
-      Left = 19
+      Left = 32
       Height = 22
       Top = 0
-      Width = 602
+      Width = 589
       Align = alClient
       Alignment = taCenter
       Layout = tlCenter
