@@ -138,7 +138,7 @@ Begin
   ThinkingLabel.Parent := Self;
   ThinkingLabel.Left := 16;
   ThinkingLabel.Top := 350;
-  ThinkingLabel.Caption := 'Thinking level (reasoning effort):';
+  ThinkingLabel.Caption := 'Thinking level (Responses API; Completions is fallback):';
 
   ThinkingCombo := TComboBox.Create(Self);
   ThinkingCombo.Parent := Self;

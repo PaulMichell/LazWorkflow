@@ -37,7 +37,7 @@ Constructor TStatusFooterFrame.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   Align := alBottom;
-  Height := 22;
+  Height := Scale96ToForm(22);
 End;
 
 Procedure TStatusFooterFrame.SetLeftText(Const Value: String);

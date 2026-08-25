@@ -69,6 +69,7 @@ Type
     FOrphanThreads: TFPList;
     FIsSubagent: Boolean;
     FSubagentKindName: String;
+    FLastEventsFile: String;
     FSubagents: TObjectList;
     FSubagentsLock: TRTLCriticalSection;
     Function FindSubagentLocked(Const RunId: String): TObject;
@@ -138,6 +139,8 @@ Type
     Property ActiveMode: TAssistantMode Read FActiveMode;
     Property SystemPrompt: String Read FSystemPrompt Write FSystemPrompt;
     Property LastError: String Read FLastError;
+    { Absolute events JSONL written by the last StartStream (empty if none). }
+    Property LastEventsFile: String Read FLastEventsFile;
     { When False, chat/completions is sent without tools (single-shot answer). }
     Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
     { Soft cap for chat/completions prompt (default leaves headroom under 500k models). }
@@ -472,6 +475,7 @@ Begin
   FLastError := '';
   FIsSubagent := False;
   FSubagentKindName := '';
+  FLastEventsFile := '';
   InitCriticalSection(FSubagentsLock);
   FSubagents := TObjectList.Create(True);
 End;
@@ -1528,10 +1532,10 @@ Begin
   FToolsJsonValid := False;
   TrimMessagesForBudget;
   EventsFile := '';
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
-    EventsFile := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) +
-      '.assistant' + PathDelim + 'events' + PathDelim +
-      FormatDateTime('yyyymmdd"T"hhnnss', Now) + '.jsonl';
+  If (Not FIsSubagent) And Assigned(ProjectAssistantConversation) And
+    (ProjectAssistantConversation.ProjectRoot <> '') Then
+    EventsFile := CreateAssistantEventsFilePath(ProjectAssistantConversation.ProjectRoot);
+  FLastEventsFile := EventsFile;
   If FToolsEnabled Then
     ToolsJson := ToolsJsonCached
   Else
@@ -1542,7 +1546,7 @@ Begin
   FBusy := True;
   FStreamThread.Start;
   Result := True;
-  WorkflowLogger.Info('AssistantService', 'Actor started – model=' + FModel);
+  WorkflowLogger.Info('AssistantService', 'Actor started – model=' + FModel + ' wire=responses');
 End;
 
 Procedure TAssistantService.CancelStream;

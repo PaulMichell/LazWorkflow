@@ -60,6 +60,8 @@ Type
     TodoId: String;
     { JSON array of live trace cards; empty on turns saved before this field. }
     TraceJson: String;
+    { Project-relative .assistant/events/*.jsonl for replay when TraceJson is empty. }
+    EventsFile: String;
   End;
 
   TAssistantConversationStore = Class
@@ -350,6 +352,8 @@ Begin
     '"error":"' + JsonEscape(Turn.ErrorText) + '",' +
     '"plan_file":"' + JsonEscape(Turn.PlanFile) + '",' +
     '"todo_id":"' + JsonEscape(Turn.TodoId) + '"';
+  If Trim(Turn.EventsFile) <> '' Then
+    Result := Result + ',"events_file":"' + JsonEscape(Turn.EventsFile) + '"';
   If Trim(Turn.TraceJson) <> '' Then
     Result := Result + ',"trace":' + Turn.TraceJson;
   Result := Result + '}';
@@ -410,6 +414,7 @@ Begin
   Turn.PlanFile := '';
   Turn.TodoId := '';
   Turn.TraceJson := '';
+  Turn.EventsFile := '';
   If Trim(Line) = '' Then
     Exit;
   Data := Nil;
@@ -436,6 +441,7 @@ Begin
       Turn.ErrorText := Obj.Get('error', '');
       Turn.PlanFile := Obj.Get('plan_file', '');
       Turn.TodoId := Obj.Get('todo_id', '');
+      Turn.EventsFile := Obj.Get('events_file', '');
       If Assigned(Obj.Find('trace')) Then
         Turn.TraceJson := Obj.Find('trace').AsJSON;
       Result := Turn.Id <> '';
@@ -644,6 +650,7 @@ Begin
   Turn.PlanFile := '';
   Turn.TodoId := '';
   Turn.TraceJson := '';
+  Turn.EventsFile := '';
   If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
       FLastError := 'Turn index out of range.';

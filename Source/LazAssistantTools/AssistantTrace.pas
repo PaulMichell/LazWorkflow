@@ -10,7 +10,7 @@ Unit AssistantTrace;
 Interface
 
 Uses
-  Classes, SysUtils, Contnrs;
+  Classes, SysUtils, Contnrs, AssistantEvents;
 
 Type
   TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent);
@@ -73,6 +73,11 @@ Type
     Function FormatMarkdown(IncludeUser: Boolean): String;
     Function SaveToJson: String;
     Procedure LoadFromJson(Const Json: String);
+    Procedure ApplyEvent(Const Event: TAssistantEvent);
+    Procedure FinishReplay;
+    Function ReplayEvents(Const Prompt: String; Const Events: TAssistantEventArray;
+      Const ThinkingText, ResponseText: String): Boolean;
+    Function ReplayFromEventsFile(Const FileName, Prompt, ThinkingText, ResponseText: String): Boolean;
     Property Count: Integer Read GetCount;
     Property Blocks[Index: Integer]: TTraceBlock Read GetBlock; Default;
   End;
@@ -623,6 +628,154 @@ Begin
   Finally
     Arr.Free;
   End;
+End;
+
+Procedure TAssistantTrace.ApplyEvent(Const Event: TAssistantEvent);
+Var
+  Block: TTraceBlock;
+Begin
+  Case Event.Kind Of
+    aekLoopStarted:
+      Begin
+        FinishCurrentThinking;
+        FinishCurrentAnswer;
+        StartThinking(Event.LoopIndex);
+      End;
+    aekToolStarted:
+      AddTool(Event.ToolId, Event.ToolName, Event.Text);
+    aekToolCompleted:
+      Begin
+        Block := FindTool(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := AddTool(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := False;
+        Block.Ok := Event.Ok;
+        If Event.DurationMs > 0 Then
+          Block.DurationMs := Event.DurationMs;
+        If (Not Event.Ok) And (Pos('failed', LowerCase(Block.Title)) < 1) Then
+          Block.Title := Block.Title + '  failed';
+      End;
+    aekSubagentStarted:
+      Begin
+        Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := True;
+        Block.Ok := Event.Ok;
+        If Event.Text <> '' Then
+          Block.Title := Event.Text
+        Else If Event.ToolName <> '' Then
+          Block.Title := 'Subagent · ' + Event.ToolName;
+      End;
+    aekSubagentProgress:
+      Begin
+        Block := FindSubagent(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := True;
+        If Event.Text <> '' Then
+          Block.Title := Event.Text;
+      End;
+    aekSubagentCompleted:
+      Begin
+        Block := FindSubagent(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := False;
+        Block.Ok := Event.Ok;
+        If Event.DurationMs > 0 Then
+          Block.DurationMs := Event.DurationMs;
+        If Event.Text <> '' Then
+          Block.Body := Event.Text;
+        If Event.ToolName <> '' Then
+          Block.Title := 'Subagent · ' + Event.ToolName;
+        If Not Event.Ok Then
+          Block.Footer := 'failed'
+        Else If Event.DurationMs > 0 Then
+          Block.Footer := FormatThoughtElapsed(Event.DurationMs);
+      End;
+    aekSteerQueued:
+      AddSteer(Event.Text);
+    aekInterjected:
+      Begin
+        Block := Nil;
+        If FBlocks.Count > 0 Then
+          Block := TTraceBlock(FBlocks[FBlocks.Count - 1]);
+        If Assigned(Block) And (Block.Kind = tbkSteer) Then
+          Begin
+            Block.Running := False;
+            Block.Title := 'Steer · applied';
+            If Event.Text <> '' Then
+              Block.Body := Event.Text;
+          End
+        Else
+          Begin
+            Block := AddSteer(Event.Text);
+            Block.Running := False;
+            Block.Title := 'Steer · applied';
+          End;
+      End;
+    aekError:
+      If Trim(Event.Text) <> '' Then
+        AddNote('**Error:** ' + Event.Text);
+    aekTurnEnded:
+      Begin
+        FinishCurrentThinking;
+        FinishCurrentAnswer;
+      End;
+  Else
+    { turn_started / phase / deltas are structure-only or live snapshots. }
+  End;
+End;
+
+Procedure TAssistantTrace.FinishReplay;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  FinishCurrentThinking;
+  FinishCurrentAnswer;
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      Block.Running := False;
+      Block.Frame := Nil;
+    End;
+End;
+
+Function TAssistantTrace.ReplayEvents(Const Prompt: String; Const Events: TAssistantEventArray;
+  Const ThinkingText, ResponseText: String): Boolean;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Clear;
+  If Trim(Prompt) <> '' Then
+    AddUser(Prompt);
+  StartThinking(0);
+  For I := 0 To High(Events) Do
+    ApplyEvent(Events[I]);
+  FinishReplay;
+  If (Trim(ThinkingText) <> '') And (JoinedThinking = '') Then
+    Begin
+      Block := CurrentThinking;
+      If Not Assigned(Block) Then
+        Block := StartThinking(0);
+      Block.Body := ThinkingText;
+      FinishReplay;
+    End;
+  If (Trim(ResponseText) <> '') And (JoinedAnswers = '') Then
+    EnsureAnswer.Body := ResponseText;
+  FinishReplay;
+  Result := Count > 0;
+End;
+
+Function TAssistantTrace.ReplayFromEventsFile(Const FileName, Prompt, ThinkingText, ResponseText: String): Boolean;
+Var
+  Events: TAssistantEventArray;
+Begin
+  Result := False;
+  If Not LoadAssistantEventsFile(FileName, Events) Then
+    Exit;
+  Result := ReplayEvents(Prompt, Events, ThinkingText, ResponseText);
 End;
 
 Procedure TAssistantTrace.LoadFromJson(Const Json: String);

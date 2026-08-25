@@ -124,6 +124,59 @@ Begin
   Check('access violation is error', Not IsAssistantProgressStatus('Access violation'));
 End;
 
+Procedure TestParseEventRoundTrip;
+Var
+  Event, Loaded: TAssistantEvent;
+  Line: String;
+Begin
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekSubagentCompleted;
+  Event.Phase := apTools;
+  Event.ToolName := 'pascal-naming';
+  Event.ToolId := 'sub_1';
+  Event.Text := 'No F-prefix issues.';
+  Event.Ok := True;
+  Event.DurationMs := 1200;
+  Event.LoopIndex := 1;
+  Line := AssistantEventToJson(Event);
+  Check('parse roundtrip', ParseAssistantEventJson(Line, Loaded));
+  Check('parse kind', Loaded.Kind = aekSubagentCompleted);
+  Check('parse tool', Loaded.ToolName = 'pascal-naming');
+  Check('parse id', Loaded.ToolId = 'sub_1');
+  Check('parse text', Pos('F-prefix', Loaded.Text) > 0);
+  Check('parse duration', Loaded.DurationMs = 1200);
+  Check('kind from name', AssistantEventKindFromName('loop_started') = aekLoopStarted);
+  Check('unknown kind is error', AssistantEventKindFromName('nope') = aekError);
+End;
+
+Procedure TestEventsFileLoad;
+Var
+  Event: TAssistantEvent;
+  Path: String;
+  Events: TAssistantEventArray;
+Begin
+  Path := IncludeTrailingPathDelimiter(GetTempDir) + 'lazworkflow-replay-events.jsonl';
+  DeleteFile(Path);
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekTurnStarted;
+  Event.Text := 'grok-4.5';
+  Check('write start', AppendAssistantEvent(Path, Event));
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekToolStarted;
+  Event.ToolName := 'read_file';
+  Event.ToolId := 'call_1';
+  Event.Text := '{"path":"Foo.pas"}';
+  Check('write tool', AppendAssistantEvent(Path, Event));
+  Check('load events', LoadAssistantEventsFile(Path, Events));
+  Check('load count', Length(Events) = 2);
+  Check('load tool', (Length(Events) = 2) And (Events[1].Kind = aekToolStarted) And
+    (Events[1].ToolId = 'call_1'));
+  Check('relative path', Pos('events/', AssistantEventsRelativePath(
+    '/proj/.assistant/events/a.jsonl', '/proj')) > 0);
+  Check('absolute stays', AssistantEventsAbsolutePath('/tmp/x.jsonl', '/proj') = '/tmp/x.jsonl');
+  DeleteFile(Path);
+End;
+
 Procedure TestToolsFlatten;
 Var
   Completions, Responses: String;
@@ -142,6 +195,8 @@ Begin
   TestEventJson;
   TestEventFile;
   TestParseToolCalls;
+  TestParseEventRoundTrip;
+  TestEventsFileLoad;
   TestProgressStatus;
   TestToolsFlatten;
   If FailCount = 0 Then

@@ -1,67 +1,68 @@
 # LazWorkflow
 
-**Lazarus IDE Add-in Suite for Git + Assistant LLM Workflow**
+**Lazarus IDE add-in suite for Git and a project-aware Assistant**
 
-Michell Computing style packages that provide a seamless, native Git management UI and a rich Assistant (xAI / OpenAI-compatible) chat interface inside the Lazarus IDE.
+Michell Computing style packages: a native Git UI and a Project Assistant (xAI Responses API, Chat Completions fallback) fused with the Lazarus IDE.
 
 ## Packages
 
-| Package              | Description                                                                 | Depends on          |
-|----------------------|-----------------------------------------------------------------------------|---------------------|
-| **LazWorkflowCommon** | Shared event bus, interfaces, logging, common UI helpers                   | LCL, IDEIntf       |
-| **LazRepositoryTools**    | Full Git lifecycle UI + high-quality commit history graph (VS Code style)  | LazWorkflowCommon  |
-| **LazAssistantTools**      | Assistant chat UI, live Markdown document windows, compiler integration         | LazWorkflowCommon  |
+| Package | Description | Depends on |
+|---------|-------------|------------|
+| **LazWorkflowCommon** | Event bus, logging, status footer, spell-check helpers | LCL |
+| **LazMarkdown** | Vendored Markdown control used by the Assistant | LCL |
+| **LazRepositoryTools** | Manage Repository: history graph, files, fetch/pull/push | LazWorkflowCommon |
+| **LazAssistantTools** | Project Assistant: Ask / Plan / Build, streaming, tools, Git suggest | LazWorkflowCommon, LazMarkdown |
 
-## Features (Target)
+## Features
 
 ### LazRepositoryTools
-- Dockable Git Graph window (coloured lanes, interactive, live refresh)
-- Full Git lifecycle menus & actions
-- Working tree status, staging, commit, push/pull/fetch
-- File-system watcher + optional remote polling
-- Project-aware (detects Git root from current Lazarus project)
+- Dockable **Manage Repository** (History graph, Files, remotes)
+- Working tree status, staging, commit, fetch / pull / push
+- Project-aware Git root from the active Lazarus project
+- **Suggest** commit message via the Assistant (read-only diff)
 
 ### LazAssistantTools
-- Persistent multi-conversation chat with streaming
-- **xAI OAuth sign-in** (SuperGrok / X Premium) — no console API key required
-- Status footer (context usage, model, tokens, connection)
-- Live Markdown document windows (auto-reload on disk change) — ideal for `plan.md` / TODOs
-- Direct compiler invocation via IDEIntf
-- Tool calling so the model can drive Git operations and file edits
-- Bidirectional integration with LazRepositoryTools
+- **Project Assistant** dock: one transcript, **Ask · Plan · Build** chips (hard tool gates)
+- Streaming with a typed trace (thinking, tool cards, subagent rows, answer)
+- **xAI OAuth** (SuperGrok / X Premium) or an OpenAI-compatible API key
+- **Responses API** is the thinking channel; Chat Completions is automatic fallback
+- Plan Markdown under `Documents/` with live windows; Build mode scans `Status:` tiles
+- Source tools (`replace_in_file`, `run_compile`, `ensure_form_component`, …) in Build
+- Depth-1 **spawn_subagent** and **Review Changes** (Pascal naming / structure / review lenses)
+- Project-local `.assistant/` (conversation JSONL, events log, config). Gitignore it.
 
 ## Requirements
 
 - Lazarus 3.x / 4.x (or trunk)
-- Free Pascal 3.2.2+ (tested with custom 3.3.1 builds)
-- Cross-platform: Linux, Windows, macOS
-- For LazAssistantTools: SuperGrok or X Premium subscription (OAuth via `accounts.x.ai` / `auth.x.ai`)
+- Free Pascal 3.2.2+ (tested with 3.3.1)
+- Linux, Windows, macOS
+- SuperGrok / X Premium for xAI OAuth, or another OpenAI-compatible endpoint
 
 ## Installation
 
-1. Open `Packages/LazWorkflowCommon.lpk` in Lazarus → Compile → Install
-2. Open `Packages/LazRepositoryTools.lpk` → Compile → Install
-3. Open `Packages/LazAssistantTools.lpk` → Compile → Install
-4. Restart IDE
+1. `Packages/LazWorkflowCommon.lpk` → Compile → Install
+2. `Packages/LazMarkdown.lpk` → Compile → Install
+3. `Packages/LazRepositoryTools.lpk` → Compile → Install
+4. `Packages/LazAssistantTools.lpk` → Compile → Install
+5. Restart the IDE
 
-Or use Online Package Manager when published.
-
-## Repository Layout
+## Repository layout
 
 ```
 LazWorkflow/
 ├── Source/
-│   ├── LazWorkflowCommon/     # Shared foundation
-│   ├── LazRepositoryTools/         # Git UI package
-│   ├── LazAssistantTools/           # Assistant chat package
+│   ├── LazWorkflowCommon/
+│   ├── LazMarkdown/
+│   ├── LazRepositoryTools/
+│   ├── LazAssistantTools/
 │   └── Tests/
-├── Packages/                  # .lpk files
-├── Docs/
-├── Lib/                       # Compiled units (per platform)
+├── Packages/
+├── Documents/          # project plans (v2 architecture is ProjectPlan-v2.md)
+├── Lib/                # unit output per CPU-OS
 └── README.md
 ```
 
-All Pascal source lives under `Source/` following Michell Computing conventions.
+All Pascal source lives under `Source/` (Michell Computing conventions).
 
 ## Licence
 
@@ -70,6 +71,8 @@ Copyright (c) 2026 Michell Computing / contributors.
 
 ## Status
 
-**Phase 0 – Foundations** (in progress)
+**v2 work packages 1–7 are complete** (protocol, actor, trace, shell, harness, subagents, history replay).
 
-See `Docs/ProjectPlan.md` for the full roadmap.
+Still parked: slash popup, footer-click command catalog, Plan **Build this** bar. Large-trace virtualization is only needed if a turn overflows the GTK ~30k coordinate cap.
+
+See `Documents/ProjectPlan-v2.md` for architecture and leftover polish. `Documents/ProjectPlan.md` is the v0.2 implementation log.

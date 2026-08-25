@@ -6,8 +6,10 @@ object ProjectAssistantForm: TProjectAssistantForm
   Caption = 'Project Assistant'
   ClientHeight = 700
   ClientWidth = 960
+  DesignTimePPI = 96
   Menu = AssistantMenu
   Position = poDefaultPosOnly
+  Scaled = True
   LCLVersion = '4.99.0.0'
   OnCreate = FormCreate
   OnDestroy = FormDestroy

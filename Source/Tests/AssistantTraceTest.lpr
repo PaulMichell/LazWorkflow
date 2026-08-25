@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  SysUtils, AssistantTrace;
+  SysUtils, AssistantTrace, AssistantEvents;
 
 Var
   FailCount: Integer;
@@ -237,6 +237,42 @@ Begin
   End;
 End;
 
+Procedure TestReplayEvents;
+Var
+  Trace: TAssistantTrace;
+  Events: TAssistantEventArray;
+  Event: TAssistantEvent;
+Begin
+  SetLength(Events, 3);
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekToolStarted;
+  Event.ToolName := 'read_file';
+  Event.ToolId := 'call_1';
+  Event.Text := '{"path":"Foo.pas"}';
+  Events[0] := Event;
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekToolCompleted;
+  Event.ToolName := 'read_file';
+  Event.ToolId := 'call_1';
+  Event.Ok := True;
+  Event.DurationMs := 30;
+  Events[1] := Event;
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekTurnEnded;
+  Events[2] := Event;
+  Trace := TAssistantTrace.Create;
+  Try
+    Check('replay ok', Trace.ReplayEvents('please review', Events, 'Looking at Foo.pas', 'Looks fine.'));
+    Check('replay user', (Trace.Count >= 1) And (Trace[0].Kind = tbkUser));
+    Check('replay thinking filled', Pos('Foo.pas', Trace.JoinedThinking) > 0);
+    Check('replay has tool', Assigned(Trace.FindTool('call_1')));
+    Check('replay tool not running', Assigned(Trace.FindTool('call_1')) And (Not Trace.FindTool('call_1').Running));
+    Check('replay answer', Pos('Looks fine', Trace.JoinedAnswers) > 0);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Procedure TestTraceMarkdownExport;
 Var
   Trace: TAssistantTrace;
@@ -275,6 +311,7 @@ Begin
   TestGrowingSnapshotReusesCards;
   TestLiveChannelSlice;
   TestTraceJsonRoundTrip;
+  TestReplayEvents;
   TestTraceMarkdownExport;
   If FailCount = 0 Then
     Begin

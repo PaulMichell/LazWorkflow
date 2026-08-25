@@ -685,9 +685,9 @@ Status: complete
 
 ## 7. History replay and polish
 
-Status: not started
+Status: complete
 
-Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization if needed. Docs / README catch-up. Drop Chat Completions-only thinking path from the default settings once Responses is proven.
+Turns store `events_file` (project-relative `.assistant/events/*.jsonl`) alongside `trace` JSON. Opening a history row prefers the saved trace snapshot; if that is missing, `TAssistantTrace.ReplayFromEventsFile` rebuilds tool / subagent / steer cards from the event log and fills thinking/answer from the human JSONL. Footer height uses `Scale96ToForm`; the Project Assistant form is `Scaled`. README matches v2 (four packages, Ask/Plan/Build, Responses default). Actor still starts on Responses (`wire=responses`); Chat Completions remains automatic fallback only. Large-trace virtualization is deferred until a turn hits the GTK ~30k coordinate cap.
 
 ---
 
@@ -756,9 +756,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 
 ## 16. Next immediate step
 
-Package **7. History replay and polish** — rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization if needed. Docs / README catch-up. Drop Chat Completions-only thinking path from the default settings once Responses is proven.
-
-Package 4 leftovers (slash popup, footer catalog, Plan “Build this”) stay for the tidy-up phase.
+v2 numbered packages are complete. Remaining polish from package 4: slash popup, footer-click catalog, Plan **Build this** bar. Virtualize the trace only if a turn overflows the GTK coordinate cap.
 
 ---
 

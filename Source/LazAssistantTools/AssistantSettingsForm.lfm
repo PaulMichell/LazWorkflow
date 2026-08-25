@@ -4,7 +4,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
   Top = 200
   Width = 520
   BorderStyle = bsDialog
-  Caption = 'Project Chat Settings'
+  Caption = 'Project Assistant Settings'
   ClientHeight = 590
   ClientWidth = 520
   OnCloseQuery = FormCloseQuery

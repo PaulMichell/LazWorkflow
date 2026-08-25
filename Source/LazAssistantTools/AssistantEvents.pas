@@ -43,6 +43,8 @@ Type
     LoopIndex: Integer;
   End;
 
+  TAssistantEventArray = Array Of TAssistantEvent;
+
   TAssistantTraceNotify = Procedure(Const Event: TAssistantEvent) Of Object;
 
   { Thread-safe queue of steering notes. Drain at actor safe gaps. }
@@ -69,6 +71,13 @@ Function AppendAssistantEventLine(Const FileName, JsonLine: String): Boolean;
 Function AppendAssistantEvent(Const FileName: String; Const Event: TAssistantEvent): Boolean;
 Function ParseOpenAiToolCallsJson(Const Json: String; Out Calls: TSamplerToolCallArray): Boolean;
 Function CompletionsToolsToResponsesTools(Const ToolsJson: String): String;
+Function AssistantEventKindFromName(Const Name: String): TAssistantEventKind;
+Function AssistantPhaseFromName(Const Name: String): TAssistantPhase;
+Function ParseAssistantEventJson(Const Json: String; Out Event: TAssistantEvent): Boolean;
+Function LoadAssistantEventsFile(Const FileName: String; Out Events: TAssistantEventArray): Boolean;
+Function CreateAssistantEventsFilePath(Const ProjectRoot: String): String;
+Function AssistantEventsRelativePath(Const AbsFile, ProjectRoot: String): String;
+Function AssistantEventsAbsolutePath(Const RelOrAbs, ProjectRoot: String): String;
 
 Implementation
 
@@ -285,6 +294,164 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function AssistantEventKindFromName(Const Name: String): TAssistantEventKind;
+Var
+  N: String;
+Begin
+  N := LowerCase(Trim(Name));
+  If N = 'turn_started' Then
+    Result := aekTurnStarted
+  Else If N = 'phase_changed' Then
+    Result := aekPhaseChanged
+  Else If N = 'thought_delta' Then
+    Result := aekThoughtDelta
+  Else If N = 'content_delta' Then
+    Result := aekContentDelta
+  Else If N = 'loop_started' Then
+    Result := aekLoopStarted
+  Else If N = 'tool_started' Then
+    Result := aekToolStarted
+  Else If N = 'tool_completed' Then
+    Result := aekToolCompleted
+  Else If N = 'steer_queued' Then
+    Result := aekSteerQueued
+  Else If N = 'interjected' Then
+    Result := aekInterjected
+  Else If N = 'subagent_started' Then
+    Result := aekSubagentStarted
+  Else If N = 'subagent_progress' Then
+    Result := aekSubagentProgress
+  Else If N = 'subagent_completed' Then
+    Result := aekSubagentCompleted
+  Else If N = 'turn_ended' Then
+    Result := aekTurnEnded
+  Else
+    Result := aekError;
+End;
+
+Function AssistantPhaseFromName(Const Name: String): TAssistantPhase;
+Var
+  N: String;
+Begin
+  N := LowerCase(Trim(Name));
+  If N = 'thinking' Then
+    Result := apThinking
+  Else If N = 'streaming' Then
+    Result := apStreaming
+  Else If N = 'tools' Then
+    Result := apTools
+  Else
+    Result := apWaiting;
+End;
+
+Function ParseAssistantEventJson(Const Json: String; Out Event: TAssistantEvent): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Event := Default(TAssistantEvent);
+  Event.Ok := True;
+  If Trim(Json) = '' Then
+    Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Json);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      Event.Kind := AssistantEventKindFromName(Obj.Get('type', ''));
+      Event.Phase := AssistantPhaseFromName(Obj.Get('phase', ''));
+      Event.LoopIndex := Obj.Get('loop', 0);
+      Event.Ok := Obj.Get('ok', True);
+      Event.DurationMs := Obj.Get('duration_ms', 0);
+      Event.ToolName := Obj.Get('tool', '');
+      Event.ToolId := Obj.Get('tool_id', '');
+      Event.Text := Obj.Get('text', '');
+      Result := Obj.Get('type', '') <> '';
+    Except
+      Result := False;
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function LoadAssistantEventsFile(Const FileName: String; Out Events: TAssistantEventArray): Boolean;
+Var
+  SL: TStringList;
+  I, N: Integer;
+  Event: TAssistantEvent;
+Begin
+  Result := False;
+  Events := Nil;
+  If (Trim(FileName) = '') Or (Not FileExists(FileName)) Then
+    Exit;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(FileName);
+    Except
+      Exit;
+    End;
+    N := 0;
+    SetLength(Events, SL.Count);
+    For I := 0 To SL.Count - 1 Do
+      Begin
+        If N >= 8000 Then
+          Break;
+        If Not ParseAssistantEventJson(SL[I], Event) Then
+          Continue;
+        Events[N] := Event;
+        Inc(N);
+      End;
+    SetLength(Events, N);
+    Result := N > 0;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function CreateAssistantEventsFilePath(Const ProjectRoot: String): String;
+Begin
+  Result := '';
+  If Trim(ProjectRoot) = '' Then
+    Exit;
+  Result := IncludeTrailingPathDelimiter(ProjectRoot) + '.assistant' + PathDelim + 'events' + PathDelim +
+    FormatDateTime('yyyymmdd"T"hhnnsszzz', Now) + '.jsonl';
+End;
+
+Function AssistantEventsRelativePath(Const AbsFile, ProjectRoot: String): String;
+Var
+  Root: String;
+Begin
+  Result := Trim(AbsFile);
+  Root := IncludeTrailingPathDelimiter(Trim(ProjectRoot));
+  If (Length(Root) <= 1) Or (Result = '') Then
+    Exit;
+  If CompareText(Copy(Result, 1, Length(Root)), Root) = 0 Then
+    Result := Copy(Result, Length(Root) + 1, MaxInt);
+  Result := StringReplace(Result, '\', '/', [rfReplaceAll]);
+End;
+
+Function AssistantEventsAbsolutePath(Const RelOrAbs, ProjectRoot: String): String;
+Var
+  Rel: String;
+Begin
+  Rel := Trim(RelOrAbs);
+  Result := Rel;
+  If Rel = '' Then
+    Exit;
+  If (Length(Rel) >= 2) And (Rel[2] = ':') Then
+    Exit;
+  If (Length(Rel) > 0) And ((Rel[1] = '/') Or (Rel[1] = '\')) Then
+    Exit;
+  If Trim(ProjectRoot) = '' Then
+    Exit;
+  Result := IncludeTrailingPathDelimiter(ProjectRoot) + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]);
 End;
 
 Function CompletionsToolsToResponsesTools(Const ToolsJson: String): String;

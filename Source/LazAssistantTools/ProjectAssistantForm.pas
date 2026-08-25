@@ -176,6 +176,7 @@ Type
     FIgnoreConversationListChange: Boolean;
     FThinkingSliceStart: Integer;
     FDisplayTraceJson: String;
+    FDisplayEventsFile: String;
     FAnswerSliceStart: Integer; { 1-based offset of the current answer block in FLiveContent. }
     FSessionProjectKey: String; { ProjectInfoFile used for last save/load. }
     FSelectedTurnIndex: Integer; { Conversation list selection; -2 = live in-flight row. }
@@ -401,6 +402,7 @@ Begin
   FThinkingSliceStart := 1;
   FAnswerSliceStart := 1;
   FDisplayTraceJson := '';
+  FDisplayEventsFile := '';
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   Transcript := TStringList.Create;
@@ -1865,6 +1867,7 @@ Begin
       FAssistantContent := FLiveContent;
       FAssistantThinking := FLiveThinking;
       FDisplayTraceJson := '';
+      FDisplayEventsFile := '';
       FDisplaySystemNote := '';
       FDisplayDurationMs := 0;
       FDisplayThinkingMs := 0;
@@ -1884,6 +1887,7 @@ Begin
   FAssistantContent := Turn.Response;
   FAssistantThinking := Turn.Thinking;
   FDisplayTraceJson := Turn.TraceJson;
+  FDisplayEventsFile := Turn.EventsFile;
   FDisplayDurationMs := Turn.DurationMs;
   FDisplayThinkingMs := Turn.ThinkingMs;
   If Turn.ErrorText <> '' Then
@@ -2337,6 +2341,10 @@ Begin
   Turn.ErrorText := ErrorText;
   Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
+  Turn.EventsFile := '';
+  If Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
+    Turn.EventsFile := AssistantEventsRelativePath(AssistantClient.LastEventsFile,
+      ProjectAssistantConversation.ProjectRoot);
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
       FTurnRecorded := True;
@@ -2820,6 +2828,17 @@ Begin
         FHistoryTrace.ApplyWorkedFooter(FDisplayDurationMs);
       Exit;
     End;
+  If (Trim(FDisplayEventsFile) <> '') And Assigned(ProjectAssistantConversation) Then
+    If FHistoryTrace.ReplayFromEventsFile(
+      AssistantEventsAbsolutePath(FDisplayEventsFile, ProjectAssistantConversation.ProjectRoot),
+      FDisplayUser, FAssistantThinking, FAssistantContent) Then
+      Begin
+        If FDisplaySystemNote <> '' Then
+          FHistoryTrace.AddNote(FDisplaySystemNote);
+        If FDisplayDurationMs > 0 Then
+          FHistoryTrace.ApplyWorkedFooter(FDisplayDurationMs);
+        Exit;
+      End;
   FHistoryTrace.EnsureUser(FDisplayUser);
   If FAssistantThinking <> '' Then
     Begin
@@ -3154,6 +3173,7 @@ Begin
   FAssistantContent := '';
   FAssistantThinking := '';
   FDisplayTraceJson := '';
+  FDisplayEventsFile := '';
   FDisplaySystemNote := '';
   FThinkingSliceStart := 1;
   FAnswerSliceStart := 1;
