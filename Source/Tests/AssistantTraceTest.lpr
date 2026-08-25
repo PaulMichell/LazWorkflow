@@ -232,6 +232,34 @@ Begin
   End;
 End;
 
+Procedure TestTraceMarkdownExport;
+Var
+  Trace: TAssistantTrace;
+  Md: String;
+  Block: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Trace.AddUser('please review');
+    Block := Trace.AddSubagent('sub_1', 'pascal-review', 'Subagent · Review');
+    Block.Running := False;
+    Block.Body := 'No F-prefix issues.';
+    Block.Footer := '24.9s';
+    Trace.EnsureAnswer.Body := 'Merged findings.';
+    Trace.FinishCurrentAnswer;
+    Md := Trace.FormatMarkdown(False);
+    Check('export skips user', Pos('### User', Md) < 1);
+    Check('export has subagent heading', Pos('### Subagent · Review', Md) > 0);
+    Check('export has subagent body', Pos('No F-prefix issues', Md) > 0);
+    Check('export has assistant', Pos('### Assistant', Md) > 0);
+    Check('export has answer', Pos('Merged findings', Md) > 0);
+    Md := Trace.FormatMarkdown(True);
+    Check('export can include user', Pos('### User', Md) > 0);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestBlocks;
@@ -242,6 +270,7 @@ Begin
   TestGrowingSnapshotReusesCards;
   TestLiveChannelSlice;
   TestTraceJsonRoundTrip;
+  TestTraceMarkdownExport;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantTrace tests passed.');

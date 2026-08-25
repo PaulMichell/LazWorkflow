@@ -124,6 +124,7 @@ Type
     { Depth-1 children. Parent only; Start fails if live count is already MaxLiveSubagents. }
     Function IsSubagentSession: Boolean;
     Function StartSubagent(Const ArgumentsJson: String; Out RunId: String; Out ErrorText: String): Boolean;
+    Function LiveSubagentCount: Integer;
     Function SubagentIsRunning(Const RunId: String): Boolean;
     Function TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
     Procedure CancelSubagents;
@@ -1154,12 +1155,33 @@ Begin
     End;
 End;
 
+Function TAssistantService.LiveSubagentCount: Integer;
+Var
+  I: Integer;
+  Child: TChildSubagent;
+Begin
+  Result := 0;
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    If Not Assigned(FSubagents) Then
+      Exit;
+    For I := 0 To FSubagents.Count - 1 Do
+      Begin
+        Child := TChildSubagent(FSubagents[I]);
+        If Assigned(Child) And (Not Child.Finished) Then
+          Inc(Result);
+      End;
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+End;
+
 Function TAssistantService.StartSubagent(Const ArgumentsJson: String; Out RunId: String;
   Out ErrorText: String): Boolean;
 Var
   Request: TSubagentRequest;
   Child: TChildSubagent;
-  Live: Integer;
+  Live, Index: Integer;
   CompileLog: String;
 Begin
   Result := False;
@@ -1169,10 +1191,14 @@ Begin
     Exit;
   EnterCriticalSection(FSubagentsLock);
   Try
+    Live := 0;
     If Assigned(FSubagents) Then
-      Live := FSubagents.Count
-    Else
-      Live := 0;
+      For Index := 0 To FSubagents.Count - 1 Do
+        Begin
+          Child := TChildSubagent(FSubagents[Index]);
+          If Assigned(Child) And (Not Child.Finished) Then
+            Inc(Live);
+        End;
     If Not CanSpawnSubagent(Not FIsSubagent, Live, ErrorText) Then
       Exit;
     Child := TChildSubagent.Create(Self);
@@ -1184,6 +1210,8 @@ Begin
   Finally
     LeaveCriticalSection(FSubagentsLock);
   End;
+  If RunId = '' Then
+    Exit;
   CompileLog := '';
   If Request.Kind = sakPascalReview Then
     CompileLog := AssistantLastCompileLog;

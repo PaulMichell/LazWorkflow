@@ -2097,7 +2097,8 @@ Var
   SL: TStringList;
   I: Integer;
   Turn: TConversationTurn;
-  ProjectName, MetaLine: String;
+  ProjectName, MetaLine, TraceMd: String;
+  Trace: TAssistantTrace;
 Begin
   SL := TStringList.Create;
   Try
@@ -2145,21 +2146,45 @@ Begin
         Else
           SL.Add('*(empty)*');
         SL.Add('');
-        If Trim(Turn.Thinking) <> '' Then
+        If Trim(Turn.TraceJson) <> '' Then
           Begin
-            SL.Add('### Thinking');
-            SL.Add('');
-            SL.Add(Turn.Thinking);
-            SL.Add('');
-          End;
-        SL.Add('### Assistant');
-        SL.Add('');
-        If Trim(Turn.Response) <> '' Then
-          SL.Add(Turn.Response)
-        Else If Trim(Turn.ErrorText) <> '' Then
-          SL.Add('*(no response)*')
+            Trace := TAssistantTrace.Create;
+            Try
+              Trace.LoadFromJson(Turn.TraceJson);
+              TraceMd := Trace.FormatMarkdown(False);
+              If Trim(TraceMd) <> '' Then
+                SL.Add(TraceMd)
+              Else
+                Begin
+                  SL.Add('### Assistant');
+                  SL.Add('');
+                  If Trim(Turn.Response) <> '' Then
+                    SL.Add(Turn.Response)
+                  Else
+                    SL.Add('*(empty)*');
+                End;
+            Finally
+              Trace.Free;
+            End;
+          End
         Else
-          SL.Add('*(empty)*');
+          Begin
+            If Trim(Turn.Thinking) <> '' Then
+              Begin
+                SL.Add('### Thinking');
+                SL.Add('');
+                SL.Add(Turn.Thinking);
+                SL.Add('');
+              End;
+            SL.Add('### Assistant');
+            SL.Add('');
+            If Trim(Turn.Response) <> '' Then
+              SL.Add(Turn.Response)
+            Else If Trim(Turn.ErrorText) <> '' Then
+              SL.Add('*(no response)*')
+            Else
+              SL.Add('*(empty)*');
+          End;
         If Trim(Turn.ErrorText) <> '' Then
           Begin
             SL.Add('');

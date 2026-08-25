@@ -73,6 +73,8 @@ Type
     Function LockedService: TAssistantService;
     Procedure RunTools;
     Procedure RunOneTool(Const Call: TSamplerToolCall);
+    Procedure FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
+      ErrorText: String; Ok: Boolean; DurationMs: Integer);
     Procedure RunSpawnRange(FromIndex, ToIndex: Integer);
     Procedure DispatchOneToolOnMain;
     Function DrainSteerIntoHistory: Boolean;
@@ -609,91 +611,152 @@ Begin
     Format('tool %s ok=%s ms=%d', [Call.Name, BoolToStr(Ok, True), GetTickCount64 - StartTick]));
 End;
 
-Procedure TAssistantActor.RunSpawnRange(FromIndex, ToIndex: Integer);
+Procedure TAssistantActor.FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
+  ErrorText: String; Ok: Boolean; DurationMs: Integer);
 Var
-  I: Integer;
-  Call: TSamplerToolCall;
-  Request: TSubagentRequest;
-  RunIds, KindNames: Array Of String;
-  StartTick: QWord;
-  ResultText, ErrorText, Content, ParseErr: String;
-  Ok: Boolean;
+  Content: String;
   Svc: TAssistantService;
 Begin
   Svc := LockedService;
   If Not Assigned(Svc) Then
     Exit;
+  If Ok Then
+    Content := ResultText
+  Else If ResultText <> '' Then
+    Content := ResultText
+  Else
+    Content := 'Error: ' + ErrorText;
+  Svc.AddToolResult(Call.Id, Content);
+  LogEvent(aekSubagentCompleted, Copy(Content, 1, SubagentSummaryMaxChars), KindName, RunId, Ok, DurationMs);
+  WorkflowLogger.Info('AssistantActor',
+    Format('subagent %s ok=%s ms=%d', [RunId, BoolToStr(Ok, True), DurationMs]));
+End;
+
+Procedure TAssistantActor.RunSpawnRange(FromIndex, ToIndex: Integer);
+Var
+  I, Slot, NextToStart, Remaining: Integer;
+  Call: TSamplerToolCall;
+  Request: TSubagentRequest;
+  RunIds, KindNames: Array Of String;
+  Handled: Array Of Boolean;
+  StartTicks: Array Of QWord;
+  StartTick: QWord;
+  ResultText, ErrorText, ParseErr: String;
+  Ok, Progressed: Boolean;
+  Svc: TAssistantService;
+Begin
+  { At most MaxLiveSubagents run at once; extra spawn_subagent calls wait for a slot. }
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Exit;
   RunIds := Nil;
   KindNames := Nil;
+  Handled := Nil;
+  StartTicks := Nil;
   SetLength(RunIds, ToIndex - FromIndex + 1);
   SetLength(KindNames, ToIndex - FromIndex + 1);
+  SetLength(Handled, ToIndex - FromIndex + 1);
+  SetLength(StartTicks, ToIndex - FromIndex + 1);
+  Remaining := 0;
   For I := FromIndex To ToIndex Do
+    Begin
+      Slot := I - FromIndex;
+      RunIds[Slot] := '';
+      KindNames[Slot] := '';
+      Handled[Slot] := FToolCalls[I].Name = '';
+      StartTicks[Slot] := 0;
+      If Not Handled[Slot] Then
+        Inc(Remaining);
+    End;
+  NextToStart := FromIndex;
+  While Remaining > 0 Do
     Begin
       If Terminated Then
-        Exit;
-      Call := FToolCalls[I];
-      RunIds[I - FromIndex] := '';
-      KindNames[I - FromIndex] := '';
-      If Call.Name = '' Then
-        Continue;
-      EmitSnapshot(False, 'Running tools…', True);
-      StartTick := GetTickCount64;
-      If Not ParseSpawnSubagentArguments(Call.Arguments, Request, ParseErr) Then
         Begin
-          LogEvent(aekSubagentStarted, ParseErr, 'spawn_subagent', Call.Id, False);
-          Svc.AddToolResult(Call.Id, 'Error: ' + ParseErr);
-          LogEvent(aekSubagentCompleted, ParseErr, 'spawn_subagent', Call.Id, False,
-            Integer(GetTickCount64 - StartTick));
-          Continue;
-        End;
-      If Not Svc.StartSubagent(Call.Arguments, RunIds[I - FromIndex], ErrorText) Then
-        Begin
-          LogEvent(aekSubagentStarted, Request.Title, SubagentKindName(Request.Kind), Call.Id, False);
-          Svc.AddToolResult(Call.Id, 'Error: ' + ErrorText);
-          LogEvent(aekSubagentCompleted, ErrorText, SubagentKindName(Request.Kind), Call.Id, False,
-            Integer(GetTickCount64 - StartTick));
-          RunIds[I - FromIndex] := '';
-        End
-      Else
-        Begin
-          KindNames[I - FromIndex] := SubagentKindName(Request.Kind);
-          LogEvent(aekSubagentStarted, Request.Title, KindNames[I - FromIndex],
-            RunIds[I - FromIndex]);
-        End;
-    End;
-  For I := FromIndex To ToIndex Do
-    Begin
-      Call := FToolCalls[I];
-      If (Call.Name = '') Or (RunIds[I - FromIndex] = '') Then
-        Continue;
-      StartTick := GetTickCount64;
-      While Svc.SubagentIsRunning(RunIds[I - FromIndex]) Do
-        Begin
-          If Terminated Then
+          Svc.CancelSubagents;
+          For I := FromIndex To ToIndex Do
             Begin
-              Svc.CancelSubagents;
-              Break;
+              Slot := I - FromIndex;
+              If Handled[Slot] Then
+                Continue;
+              Call := FToolCalls[I];
+              If RunIds[Slot] <> '' Then
+                Begin
+                  ResultText := '';
+                  ErrorText := '';
+                  Ok := Svc.TakeSubagentResult(RunIds[Slot], ResultText, ErrorText);
+                  FinishSpawnSlot(Call, RunIds[Slot], KindNames[Slot], ResultText, ErrorText, Ok,
+                    Integer(GetTickCount64 - StartTicks[Slot]));
+                End
+              Else
+                Begin
+                  Svc.AddToolResult(Call.Id, 'Error: Cancelled.');
+                  LogEvent(aekSubagentCompleted, 'Cancelled.', KindNames[Slot], Call.Id, False, 0);
+                End;
+              Handled[Slot] := True;
+              Dec(Remaining);
             End;
-          Sleep(40);
+          Exit;
         End;
-      ResultText := '';
-      ErrorText := '';
-      Ok := Svc.TakeSubagentResult(RunIds[I - FromIndex], ResultText, ErrorText);
-      If Ok Then
-        Content := ResultText
-      Else
+      While (NextToStart <= ToIndex) And (Svc.LiveSubagentCount < MaxLiveSubagents) Do
         Begin
-          If ResultText <> '' Then
-            Content := ResultText
+          Slot := NextToStart - FromIndex;
+          Call := FToolCalls[NextToStart];
+          Inc(NextToStart);
+          If Handled[Slot] Then
+            Continue;
+          EmitSnapshot(False, 'Running tools…', True);
+          StartTick := GetTickCount64;
+          StartTicks[Slot] := StartTick;
+          If Not ParseSpawnSubagentArguments(Call.Arguments, Request, ParseErr) Then
+            Begin
+              LogEvent(aekSubagentStarted, ParseErr, 'spawn_subagent', Call.Id, False);
+              Svc.AddToolResult(Call.Id, 'Error: ' + ParseErr);
+              LogEvent(aekSubagentCompleted, ParseErr, 'spawn_subagent', Call.Id, False,
+                Integer(GetTickCount64 - StartTick));
+              Handled[Slot] := True;
+              Dec(Remaining);
+              Continue;
+            End;
+          KindNames[Slot] := SubagentKindName(Request.Kind);
+          If Not Svc.StartSubagent(Call.Arguments, RunIds[Slot], ErrorText) Then
+            Begin
+              { Budget should not hit here — the loop waits for a slot. Other start errors still fail. }
+              If Pos('Too many live subagents', ErrorText) > 0 Then
+                Begin
+                  Dec(NextToStart);
+                  Break;
+                End;
+              LogEvent(aekSubagentStarted, Request.Title, KindNames[Slot], Call.Id, False);
+              Svc.AddToolResult(Call.Id, 'Error: ' + ErrorText);
+              LogEvent(aekSubagentCompleted, ErrorText, KindNames[Slot], Call.Id, False,
+                Integer(GetTickCount64 - StartTick));
+              Handled[Slot] := True;
+              Dec(Remaining);
+            End
           Else
-            Content := 'Error: ' + ErrorText;
+            LogEvent(aekSubagentStarted, Request.Title, KindNames[Slot], RunIds[Slot]);
         End;
-      Svc.AddToolResult(Call.Id, Content);
-      LogEvent(aekSubagentCompleted, Copy(Content, 1, SubagentSummaryMaxChars), KindNames[I - FromIndex],
-        RunIds[I - FromIndex], Ok, Integer(GetTickCount64 - StartTick));
-      WorkflowLogger.Info('AssistantActor',
-        Format('subagent %s ok=%s ms=%d', [RunIds[I - FromIndex], BoolToStr(Ok, True),
-          GetTickCount64 - StartTick]));
+      Progressed := False;
+      For I := FromIndex To ToIndex Do
+        Begin
+          Slot := I - FromIndex;
+          If Handled[Slot] Or (RunIds[Slot] = '') Then
+            Continue;
+          If Svc.SubagentIsRunning(RunIds[Slot]) Then
+            Continue;
+          Call := FToolCalls[I];
+          ResultText := '';
+          ErrorText := '';
+          Ok := Svc.TakeSubagentResult(RunIds[Slot], ResultText, ErrorText);
+          FinishSpawnSlot(Call, RunIds[Slot], KindNames[Slot], ResultText, ErrorText, Ok,
+            Integer(GetTickCount64 - StartTicks[Slot]));
+          Handled[Slot] := True;
+          Dec(Remaining);
+          Progressed := True;
+        End;
+      If (Not Progressed) And (Remaining > 0) Then
+        Sleep(40);
     End;
 End;
 

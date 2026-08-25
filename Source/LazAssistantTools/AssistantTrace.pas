@@ -69,6 +69,8 @@ Type
     Function ThinkingDurationMs: Integer;
     Function JoinedThinking: String;
     Function JoinedAnswers: String;
+    { Markdown for export. IncludeUser False when the caller already wrote ### User. }
+    Function FormatMarkdown(IncludeUser: Boolean): String;
     Function SaveToJson: String;
     Procedure LoadFromJson(Const Json: String);
     Property Count: Integer Read GetCount;
@@ -498,6 +500,74 @@ Begin
           Result := Result + Block.Body;
         End;
     End;
+End;
+
+Function TAssistantTrace.FormatMarkdown(IncludeUser: Boolean): String;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+  Parts: TStringList;
+  Heading, Body: String;
+Begin
+  Parts := TStringList.Create;
+  Try
+    For I := 0 To FBlocks.Count - 1 Do
+      Begin
+        Block := TTraceBlock(FBlocks[I]);
+        If Not Assigned(Block) Then
+          Continue;
+        Heading := '';
+        Body := Trim(Block.Body);
+        Case Block.Kind Of
+          tbkUser:
+            If IncludeUser Then
+              Heading := '### User';
+          tbkThinking:
+            If Body <> '' Then
+              Heading := '### Thinking';
+          tbkTool:
+            Begin
+              Heading := '### Tool';
+              If Trim(Block.Title) <> '' Then
+                Heading := Heading + ': ' + Trim(Block.Title);
+            End;
+          tbkSubagent:
+            Begin
+              If Trim(Block.Title) <> '' Then
+                Heading := '### ' + Trim(Block.Title)
+              Else
+                Heading := '### Subagent';
+            End;
+          tbkAnswer:
+            If SliceLooksLikeAnswer(Body) Or (Block.Footer <> '') Then
+              Heading := '### Assistant';
+          tbkSteer:
+            Heading := '### Steer';
+          tbkNote:
+            Heading := '### Note';
+        End;
+        If Heading = '' Then
+          Continue;
+        If Parts.Count > 0 Then
+          Parts.Add('');
+        Parts.Add(Heading);
+        Parts.Add('');
+        If Body <> '' Then
+          Parts.Add(Body)
+        Else If Block.Kind = tbkTool Then
+          Parts.Add('*(no result)*')
+        Else If Block.Kind = tbkSubagent Then
+          Parts.Add('*(no summary)*');
+        If (Block.Footer <> '') And (Block.Kind In [tbkSubagent, tbkAnswer, tbkNote, tbkThinking]) Then
+          Begin
+            Parts.Add('');
+            Parts.Add('*' + Block.Footer + '*');
+          End;
+      End;
+    Result := TrimRight(Parts.Text);
+  Finally
+    Parts.Free;
+  End;
 End;
 
 Function TAssistantTrace.JoinedAnswers: String;

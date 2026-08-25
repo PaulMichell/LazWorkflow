@@ -309,7 +309,8 @@ Begin
     '{"type":"function","function":{' +
       '"name":"spawn_subagent",' +
       '"description":"Start a depth-1 child agent and wait for its summary. Parent only; a child cannot spawn. ' +
-        'Max 3 live children. Kinds: explore (read-only research), plan (Markdown only), general-purpose ' +
+        'At most 3 children run at once; extra spawn_subagent calls wait for a free slot. ' +
+        'Kinds: explore (read-only research), plan (Markdown only), general-purpose ' +
         '(parent mode tools), pascal-naming, pascal-structure, pascal-review (read-only lenses). ' +
         'Use for parallel explore or Review lenses. Do not spawn for syntax (use run_compile) or every edit.",' +
       '"parameters":{"type":"object","properties":{' +
