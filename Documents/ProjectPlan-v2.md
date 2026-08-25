@@ -675,13 +675,13 @@ Ask / Plan / Build chips (`amBuild`, persisted as `build`; old `code` config sti
 
 Status: complete
 
-`AssistantHarness` builds a tagged system prompt (work policy, tools, IDE fusion, communication, formatting, mode overlay, skill catalog, AGENTS.md, user info). Skills scan `{project}/.grok/skills`, `{project}/.assistant/skills`, then `~/.grok/skills` (first name wins). Plan/Build always attach `free-pascal-engineer` when present; Ask attaches only a pinned skill. `read_skill` and `grep` are available in every mode; `todo_write` is an ephemeral Plan/Build turn list. Tool JSON descriptions now state paging, exact `replace_in_file`, and quiet compile. `spawn_subagent` remains package 6.
+`AssistantHarness` builds a tagged system prompt (work policy, tools, IDE fusion, communication, formatting, mode overlay, skill catalog, AGENTS.md, user info). Skills scan `{project}/.grok/skills`, `{project}/.assistant/skills`, then `~/.grok/skills` (first name wins). Plan/Build always attach `free-pascal-engineer` when present; Ask attaches only a pinned skill. `read_skill` and `grep` are available in every mode; `todo_write` is an ephemeral Plan/Build turn list. Tool JSON descriptions now state paging, exact `replace_in_file`, and quiet compile. `spawn_subagent` is package 6.
 
 ## 6. Subagents and Review lenses
 
-Status: not started
+Status: complete
 
-`spawn_subagent`, depth 1, explore + three Pascal lenses. Review menu fans out over changed files. Parent rows in the trace.
+`spawn_subagent` on the parent only (Ask/Plan/Build), depth 1, max 3 live children. Kinds: explore, plan, general-purpose, pascal-naming, pascal-structure, pascal-review. Consecutive spawn calls in one tool round run in parallel. Review ▾ **Review changes** forces Build and seeds the three Pascal lenses over dirty editors + git porcelain. Parent trace shows a compact running row then the child summary. Children use the parent mode’s tool gates minus `spawn_subagent`; pascal-review gets the last `run_compile` log in the prompt.
 
 ## 7. History replay and polish
 
@@ -756,7 +756,7 @@ Rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization i
 
 ## 16. Next immediate step
 
-Package **6. Subagents and Review lenses** — `spawn_subagent`, depth 1, explore + three Pascal lenses. Review menu fans out over changed files. Parent rows in the trace.
+Package **7. History replay and polish** — rebuild a turn from `events/*.jsonl`. DPI, theming, large-trace virtualization if needed. Docs / README catch-up. Drop Chat Completions-only thinking path from the default settings once Responses is proven.
 
 Package 4 leftovers (slash popup, footer catalog, Plan “Build this”) stay for the tidy-up phase.
 

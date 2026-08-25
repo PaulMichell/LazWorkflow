@@ -15,8 +15,8 @@ Unit AssistantService;
 Interface
 
 Uses
-  Classes, SysUtils, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation, AssistantProtocol,
-  AssistantEvents;
+  Classes, SysUtils, Contnrs, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation,
+  AssistantProtocol, AssistantEvents;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
@@ -67,6 +67,11 @@ Type
     FReasoningEffort: String;
     FOnTrace: TAssistantTraceNotify;
     FOrphanThreads: TFPList;
+    FIsSubagent: Boolean;
+    FSubagentKindName: String;
+    FSubagents: TObjectList;
+    FSubagentsLock: TRTLCriticalSection;
+    Function FindSubagentLocked(Const RunId: String): TObject;
     Procedure ReapOrphanThreads(WaitMs: QWord);
     Procedure AbandonStreamThread;
     Procedure ClearStreamThread;
@@ -116,6 +121,13 @@ Type
     Function BuildNextRequestJson: String;
     { Mid-turn steering note; no-op if no actor is running. }
     Procedure EnqueueSteer(Const Text: String);
+    { Depth-1 children. Parent only; Start fails if live count is already MaxLiveSubagents. }
+    Function IsSubagentSession: Boolean;
+    Function StartSubagent(Const ArgumentsJson: String; Out RunId: String; Out ErrorText: String): Boolean;
+    Function SubagentIsRunning(Const RunId: String): Boolean;
+    Function TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
+    Procedure CancelSubagents;
+    Procedure ConfigureAsSubagent(Const KindName: String);
     { Sampler items for the session actor (Responses / Completions). }
     Function ExportSamplerItems: TSamplerInputItemArray;
     Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
@@ -140,7 +152,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, GrokOAuth, AssistantSkills, AssistantTools, AssistantHttps, AssistantActor,
-  AssistantHarness;
+  AssistantHarness, AssistantSubagents;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
@@ -193,6 +205,166 @@ Begin
   If Node.JSONType = jtNull Then
     Exit;
   Result := Node.AsString;
+End;
+
+Type
+  TChildSubagent = Class
+  Private
+    FOwner: TAssistantService;
+    FChild: TAssistantService;
+    FLock: TRTLCriticalSection;
+    Procedure HandleToken(Const ContentSnapshot, ThinkingSnapshot: String;
+      IsFinished: Boolean; Const ErrorText: String);
+    Procedure ForwardProgress(Const Phase: String);
+  Public
+    Id: String;
+    KindName: String;
+    Title: String;
+    Answer: String;
+    FailText: String;
+    Finished: Boolean;
+    Ok: Boolean;
+    StartedTick: QWord;
+    Constructor Create(OwnerService: TAssistantService);
+    Destructor Destroy; Override;
+    Function BindAndStart(Const Request: TSubagentRequest; ParentMode: TAssistantMode;
+      Const ApiBase, Model, Skill, Effort, CompileLog: String; Out ErrorText: String): Boolean;
+    Procedure Cancel;
+    Function SnapshotAnswer: String;
+  End;
+
+Var
+  GSubagentSeq: Integer;
+
+Constructor TChildSubagent.Create(OwnerService: TAssistantService);
+Begin
+  Inherited Create;
+  InitCriticalSection(FLock);
+  FOwner := OwnerService;
+  FChild := Nil;
+  Finished := False;
+  Ok := False;
+  StartedTick := GetTickCount64;
+End;
+
+Destructor TChildSubagent.Destroy;
+Begin
+  If Assigned(FChild) Then
+    Begin
+      Try
+        FChild.CancelStream;
+      Except
+      End;
+      FreeAndNil(FChild);
+    End;
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure TChildSubagent.ForwardProgress(Const Phase: String);
+Var
+  Event: TAssistantEvent;
+  Cb: TAssistantTraceNotify;
+Begin
+  If (Not Assigned(FOwner)) Or (Trim(Phase) = '') Then
+    Exit;
+  Cb := FOwner.OnTrace;
+  If Not Assigned(Cb) Then
+    Exit;
+  Event := Default(TAssistantEvent);
+  Event.Kind := aekSubagentProgress;
+  Event.ToolId := Id;
+  Event.ToolName := KindName;
+  Event.Text := Phase;
+  Event.Ok := True;
+  Try
+    Cb(Event);
+  Except
+  End;
+End;
+
+Procedure TChildSubagent.HandleToken(Const ContentSnapshot, ThinkingSnapshot: String;
+  IsFinished: Boolean; Const ErrorText: String);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    If Trim(ContentSnapshot) <> '' Then
+      Answer := ContentSnapshot;
+    If IsFinished Then
+      Begin
+        If (ErrorText <> '') And (Not IsAssistantProgressStatus(ErrorText)) Then
+          Begin
+            FailText := ErrorText;
+            Ok := False;
+          End
+        Else
+          Ok := FailText = '';
+        Finished := True;
+      End;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+  If IsFinished Then
+    Begin
+      If Assigned(FChild) Then
+        FChild.MarkStreamComplete;
+    End
+  Else If ErrorText <> '' Then
+    ForwardProgress(ErrorText);
+End;
+
+Function TChildSubagent.SnapshotAnswer: String;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := Answer;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TChildSubagent.Cancel;
+Begin
+  If Assigned(FChild) Then
+    FChild.CancelStream;
+  EnterCriticalSection(FLock);
+  Try
+    If Not Finished Then
+      Begin
+        If FailText = '' Then
+          FailText := 'Cancelled.';
+        Ok := False;
+        Finished := True;
+      End;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TChildSubagent.BindAndStart(Const Request: TSubagentRequest; ParentMode: TAssistantMode;
+  Const ApiBase, Model, Skill, Effort, CompileLog: String; Out ErrorText: String): Boolean;
+Var
+  UserPrompt: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  FChild := TAssistantService.Create;
+  FChild.SetEndpoint(ApiBase, Model);
+  FChild.SetActiveSkill(Skill);
+  FChild.ReasoningEffort := Effort;
+  FChild.SetActiveMode(SubagentModeForKind(Request.Kind, ParentMode));
+  FChild.ConfigureAsSubagent(SubagentKindName(Request.Kind));
+  UserPrompt := BuildSubagentUserPrompt(Request, CompileLog);
+  FChild.AddMessage(amrUser, UserPrompt);
+  If Not FChild.StartStream(@HandleToken) Then
+    Begin
+      ErrorText := FChild.LastError;
+      If ErrorText = '' Then
+        ErrorText := 'Subagent failed to start.';
+      FreeAndNil(FChild);
+      Exit;
+    End;
+  Result := True;
 End;
 
 { TAssistantService }
@@ -297,6 +469,18 @@ Begin
   FOrphanThreads := Nil;
   FBusy := False;
   FLastError := '';
+  FIsSubagent := False;
+  FSubagentKindName := '';
+  InitCriticalSection(FSubagentsLock);
+  FSubagents := TObjectList.Create(True);
+End;
+
+Procedure TAssistantService.ConfigureAsSubagent(Const KindName: String);
+Begin
+  FIsSubagent := True;
+  FSubagentKindName := Trim(KindName);
+  FToolsJsonValid := False;
+  RebuildSystemPrompt;
 End;
 
 Procedure TAssistantService.SetActiveMode(Mode: TAssistantMode);
@@ -330,6 +514,9 @@ Begin
       FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
       FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
     End;
+  If FIsSubagent Then
+    FSystemPrompt := FSystemPrompt + LineEnding + LineEnding +
+      SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName));
   FBaseSystemPrompt := FSystemPrompt;
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
 End;
@@ -352,7 +539,7 @@ Function TAssistantService.ToolsJsonCached: String;
 Begin
   If (Not FToolsJsonValid) Or (FToolsJsonMode <> FActiveMode) Then
     Begin
-      FToolsJsonCache := BuildAssistantToolsJsonForMode(FActiveMode);
+      FToolsJsonCache := BuildAssistantToolsJsonForSession(FActiveMode, Not FIsSubagent);
       FToolsJsonMode := FActiveMode;
       FToolsJsonValid := True;
     End;
@@ -429,6 +616,7 @@ End;
 
 Destructor TAssistantService.Destroy;
 Begin
+  CancelSubagents;
   CancelStream;
   { Detached actors still hold FService until they exit; wait longer on teardown. }
   ReapOrphanThreads(10000);
@@ -438,6 +626,8 @@ Begin
       FreeAndNil(FOrphanThreads);
     End;
   SetLength(FMessages, 0);
+  FreeAndNil(FSubagents);
+  DoneCriticalSection(FSubagentsLock);
   Inherited Destroy;
 End;
 
@@ -940,6 +1130,159 @@ Begin
     TAssistantActor(FStreamThread).EnqueueSteer(Text);
 End;
 
+Function TAssistantService.IsSubagentSession: Boolean;
+Begin
+  Result := FIsSubagent;
+End;
+
+Function TAssistantService.FindSubagentLocked(Const RunId: String): TObject;
+Var
+  I: Integer;
+  Child: TChildSubagent;
+Begin
+  Result := Nil;
+  If (Not Assigned(FSubagents)) Or (RunId = '') Then
+    Exit;
+  For I := 0 To FSubagents.Count - 1 Do
+    Begin
+      Child := TChildSubagent(FSubagents[I]);
+      If Assigned(Child) And (Child.Id = RunId) Then
+        Begin
+          Result := Child;
+          Exit;
+        End;
+    End;
+End;
+
+Function TAssistantService.StartSubagent(Const ArgumentsJson: String; Out RunId: String;
+  Out ErrorText: String): Boolean;
+Var
+  Request: TSubagentRequest;
+  Child: TChildSubagent;
+  Live: Integer;
+  CompileLog: String;
+Begin
+  Result := False;
+  RunId := '';
+  ErrorText := '';
+  If Not ParseSpawnSubagentArguments(ArgumentsJson, Request, ErrorText) Then
+    Exit;
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    If Assigned(FSubagents) Then
+      Live := FSubagents.Count
+    Else
+      Live := 0;
+    If Not CanSpawnSubagent(Not FIsSubagent, Live, ErrorText) Then
+      Exit;
+    Child := TChildSubagent.Create(Self);
+    Child.Id := 'sub_' + IntToStr(InterlockedIncrement(GSubagentSeq));
+    Child.KindName := SubagentKindName(Request.Kind);
+    Child.Title := Request.Title;
+    FSubagents.Add(Child);
+    RunId := Child.Id;
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+  CompileLog := '';
+  If Request.Kind = sakPascalReview Then
+    CompileLog := AssistantLastCompileLog;
+  If Not Child.BindAndStart(Request, FActiveMode, FApiBase, FModel, FActiveSkill, FReasoningEffort,
+    CompileLog, ErrorText) Then
+    Begin
+      EnterCriticalSection(FSubagentsLock);
+      Try
+        FSubagents.Remove(Child);
+      Finally
+        LeaveCriticalSection(FSubagentsLock);
+      End;
+      RunId := '';
+      Exit;
+    End;
+  Result := True;
+  WorkflowLogger.Info('AssistantService', 'Subagent started ' + RunId + ' kind=' + Child.KindName);
+End;
+
+Function TAssistantService.SubagentIsRunning(Const RunId: String): Boolean;
+Var
+  Child: TChildSubagent;
+Begin
+  Result := False;
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    Child := TChildSubagent(FindSubagentLocked(RunId));
+    If Not Assigned(Child) Then
+      Exit;
+    Result := Not Child.Finished;
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+End;
+
+Function TAssistantService.TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Child: TChildSubagent;
+  Summary: String;
+  DurationMs: Integer;
+  KindName, Title: String;
+  Ok: Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Child := Nil;
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    Child := TChildSubagent(FindSubagentLocked(RunId));
+    If Assigned(Child) Then
+      FSubagents.Extract(Child);
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+  If Not Assigned(Child) Then
+    Begin
+      ErrorText := 'Unknown subagent id.';
+      Exit;
+    End;
+  Try
+    If Not Child.Finished Then
+      Child.Cancel;
+    Summary := Child.SnapshotAnswer;
+    If Child.FailText <> '' Then
+      ErrorText := Child.FailText;
+    Ok := Child.Ok And (ErrorText = '');
+    If (Not Ok) And (Summary = '') Then
+      Summary := ErrorText;
+    KindName := Child.KindName;
+    Title := Child.Title;
+    DurationMs := Integer(GetTickCount64 - Child.StartedTick);
+    ResultText := FormatSubagentToolResult(KindName, Title, Summary, Ok, DurationMs);
+    Result := Ok;
+  Finally
+    Child.Free;
+  End;
+End;
+
+Procedure TAssistantService.CancelSubagents;
+Var
+  I: Integer;
+  Child: TChildSubagent;
+Begin
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    If Not Assigned(FSubagents) Then
+      Exit;
+    For I := 0 To FSubagents.Count - 1 Do
+      Begin
+        Child := TChildSubagent(FSubagents[I]);
+        If Assigned(Child) Then
+          Child.Cancel;
+      End;
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+End;
+
 Function TAssistantService.MessageCount: Integer;
 Begin
   Result := Length(FMessages);
@@ -1138,7 +1481,7 @@ Begin
       Exit;
     End;
   { Persist after refresh so a rotated refresh token survives IDE restart. }
-  If Assigned(AssistantChatConfig) Then
+  If (Not FIsSubagent) And Assigned(AssistantChatConfig) Then
     Begin
       AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
       AssistantChatConfig.Save;
@@ -1150,7 +1493,7 @@ Begin
     End;
 
   ClearStreamThread;
-  If Assigned(WorkflowAssistantHarness) Then
+  If (Not FIsSubagent) And Assigned(WorkflowAssistantHarness) Then
     WorkflowAssistantHarness.ClearTurnTodos;
   { Refresh mode/plan-path wording and tool list before every request. }
   RebuildSystemPrompt;
@@ -1176,6 +1519,7 @@ End;
 
 Procedure TAssistantService.CancelStream;
 Begin
+  CancelSubagents;
   If Assigned(FStreamThread) Then
     Begin
       WorkflowLogger.Info('AssistantService', 'Stream cancel requested');

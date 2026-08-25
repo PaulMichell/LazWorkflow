@@ -21,6 +21,7 @@ Const
 
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
+Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
@@ -35,6 +36,8 @@ Procedure SetActivePlanRelativePath(Const RelativePath: String);
 { Last run_compile outcome for Build-mode auto Status: complete (seq bumps each run). }
 Function AssistantLastCompileSeq: Integer;
 Function AssistantLastCompileWasClean: Boolean;
+{ Last run_compile text (quiet lazbuild or IDE Messages) for pascal-review children. }
+Function AssistantLastCompileLog: String;
 { After add_unit / project-structure tools: save .lpi so disk matches IDE memory. }
 Procedure AssistantFlushProjectIfDirty;
 { Suppress "project changed on disk" / file-diff dialogs during a chat send. }
@@ -55,6 +58,7 @@ Var
   GActivePlanRelative: String;
   GLastCompileSeq: Integer;
   GLastCompileClean: Boolean;
+  GLastCompileLog: String;
   GProjectStructureDirty: Boolean;
   GQuietIdeDepth: Integer;
   GSavedCheckFilesOnDisk: Boolean;
@@ -170,6 +174,11 @@ Begin
   Result := GLastCompileClean;
 End;
 
+Function AssistantLastCompileLog: String;
+Begin
+  Result := GLastCompileLog;
+End;
+
 Function ToolIsReadOnly(Const ToolName: String): Boolean;
 Var
   Name: String;
@@ -179,7 +188,7 @@ Begin
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'list_plans') Or (Name = 'get_active_plan') Or
     (Name = 'search_in_project') Or (Name = 'open_file') Or
-    (Name = 'grep') Or (Name = 'read_skill');
+    (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent');
 End;
 
 Function ToolRequiresApproval(Const ToolName: String): Boolean;
@@ -243,7 +252,7 @@ Begin
   { Shared read tools for all modes. }
   If (Name = 'read_file') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
-    (Name = 'grep') Or (Name = 'read_skill') Then
+    (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Then
     Begin
       Result := Mode In [amChat, amPlan, amBuild];
       Exit;
@@ -291,6 +300,26 @@ Begin
         '"regex":{"type":"boolean","description":"If true, treat pattern as a regular expression (default false)"},' +
         '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
       '},"required":[]}' +
+    '}}';
+End;
+
+Function BuildSpawnToolJson: String;
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"spawn_subagent",' +
+      '"description":"Start a depth-1 child agent and wait for its summary. Parent only; a child cannot spawn. ' +
+        'Max 3 live children. Kinds: explore (read-only research), plan (Markdown only), general-purpose ' +
+        '(parent mode tools), pascal-naming, pascal-structure, pascal-review (read-only lenses). ' +
+        'Use for parallel explore or Review lenses. Do not spawn for syntax (use run_compile) or every edit.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"kind":{"type":"string","description":"explore | plan | general-purpose | pascal-naming | pascal-structure | pascal-review"},' +
+        '"subagent_type":{"type":"string","description":"Alias of kind"},' +
+        '"title":{"type":"string","description":"Short label shown in the parent trace"},' +
+        '"description":{"type":"string","description":"Alias of title"},' +
+        '"prompt":{"type":"string","description":"Full instructions for the child"},' +
+        '"files":{"type":"string","description":"Optional changed-file list the child should focus on"}' +
+      '},"required":["prompt"]}' +
     '}}';
 End;
 
@@ -464,23 +493,31 @@ Begin
     '}}';
 End;
 
+Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
+Var
+  Body: String;
+Begin
+  Case Mode Of
+    amPlan:
+      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
+    amBuild:
+      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson;
+    amChat:
+      Body := BuildReadToolsJson;
+  End;
+  If AllowSubagents Then
+    Body := Body + ',' + BuildSpawnToolJson;
+  Result := '[' + Body + ']';
+End;
+
 Function BuildAssistantToolsJson: String;
 Begin
-  Result := '[' + BuildReadToolsJson + ']';
+  Result := BuildAssistantToolsJsonForSession(amChat, False);
 End;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Begin
-  Case Mode Of
-    amPlan:
-      Result := '[' + BuildReadToolsJson + ',' + BuildPlanToolsJson + ']';
-    amBuild:
-      Result := '[' + BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson + ']';
-    amChat:
-      Result := BuildAssistantToolsJson;
-  Else
-    Result := '[]';
-  End;
+  Result := BuildAssistantToolsJsonForSession(Mode, True);
 End;
 
 Function ProjectRootPath: String;
@@ -2088,6 +2125,7 @@ Begin
           Else
             ResultText := ResultText + LineEnding +
               'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+          GLastCompileLog := ResultText;
           Result := True;
           WorkflowLogger.Info('AssistantTools',
             Format('run_compile quiet ok=%s e=%d w=%d',
@@ -2125,6 +2163,7 @@ Begin
   Else
     ResultText := ResultText + LineEnding +
       'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+  GLastCompileLog := ResultText;
   Result := True;
   WorkflowLogger.Info('AssistantTools',
     Format('run_compile ui ok=%s e=%d w=%d',
@@ -2578,6 +2617,8 @@ Begin
     Result := ToolGrep(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'todo_write' Then
     Result := ToolTodoWrite(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'spawn_subagent' Then
+    ErrorText := 'spawn_subagent must run on the parent session actor.'
   Else
     ErrorText := 'Unknown tool: ' + ToolName;
 End;
@@ -2587,6 +2628,7 @@ Initialization
 GActivePlanRelative := '';
 GLastCompileSeq := 0;
 GLastCompileClean := False;
+GLastCompileLog := '';
 GProjectStructureDirty := False;
 GQuietIdeDepth := 0;
 GSavedCheckFilesOnDisk := True;

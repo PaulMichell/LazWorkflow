@@ -23,6 +23,9 @@ Type
     aekToolCompleted,
     aekSteerQueued,
     aekInterjected,
+    aekSubagentStarted,
+    aekSubagentProgress,
+    aekSubagentCompleted,
     aekTurnEnded,
     aekError
   );
@@ -84,6 +87,9 @@ Begin
     aekToolCompleted: Result := 'tool_completed';
     aekSteerQueued: Result := 'steer_queued';
     aekInterjected: Result := 'interjected';
+    aekSubagentStarted: Result := 'subagent_started';
+    aekSubagentProgress: Result := 'subagent_progress';
+    aekSubagentCompleted: Result := 'subagent_completed';
     aekTurnEnded: Result := 'turn_ended';
     aekError: Result := 'error';
   End;

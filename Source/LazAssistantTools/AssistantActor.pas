@@ -72,6 +72,8 @@ Type
     Procedure AbortHttp;
     Function LockedService: TAssistantService;
     Procedure RunTools;
+    Procedure RunOneTool(Const Call: TSamplerToolCall);
+    Procedure RunSpawnRange(FromIndex, ToIndex: Integer);
     Procedure DispatchOneToolOnMain;
     Function DrainSteerIntoHistory: Boolean;
     Function BuildRoundJson(Out Url: String): String;
@@ -91,7 +93,7 @@ Type
 Implementation
 
 Uses
-  AssistantHttps, AssistantTools, WorkflowLog;
+  AssistantHttps, AssistantTools, AssistantSubagents, WorkflowLog;
 
 Const
   MaxToolRounds = 20;
@@ -231,7 +233,8 @@ End;
 Function TraceKindForUi(Kind: TAssistantEventKind): Boolean;
 Begin
   Result := Kind In [aekTurnStarted, aekLoopStarted, aekToolStarted, aekToolCompleted,
-    aekSteerQueued, aekInterjected, aekTurnEnded];
+    aekSteerQueued, aekInterjected, aekSubagentStarted, aekSubagentProgress,
+    aekSubagentCompleted, aekTurnEnded];
 End;
 
 Procedure TAssistantActor.QueueTrace(Const Event: TAssistantEvent);
@@ -553,12 +556,151 @@ Begin
     FDispatchResult, FDispatchError);
 End;
 
-Procedure TAssistantActor.RunTools;
+Procedure TAssistantActor.RunOneTool(Const Call: TSamplerToolCall);
+Var
+  StartTick: QWord;
+  ResultText, ErrorText, Content: String;
+  Ok: Boolean;
+  Svc: TAssistantService;
+Begin
+  Svc := LockedService;
+  If Not Assigned(Svc) Or (Call.Name = '') Then
+    Exit;
+  LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
+  EmitSnapshot(False, 'Running tools…', True);
+  StartTick := GetTickCount64;
+  ResultText := '';
+  ErrorText := '';
+  Try
+    If ToolNeedsIdeThread(Call.Name) Then
+      Begin
+        FDispatchName := Call.Name;
+        FDispatchArgs := Call.Arguments;
+        FDispatchMode := Svc.ActiveMode;
+        FDispatchResult := '';
+        FDispatchError := '';
+        FDispatchOk := False;
+        Synchronize(@DispatchOneToolOnMain);
+        Ok := FDispatchOk;
+        ResultText := FDispatchResult;
+        ErrorText := FDispatchError;
+      End
+    Else
+      Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
+        ResultText, ErrorText);
+  Except
+    On E: Exception Do
+      Begin
+        Ok := False;
+        ErrorText := 'Tool raised: ' + E.Message;
+        ResultText := '';
+      End;
+  End;
+  If Ok Then
+    Content := ResultText
+  Else
+    Content := 'Error: ' + ErrorText;
+  Svc.AddToolResult(Call.Id, Content);
+  LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
+    Integer(GetTickCount64 - StartTick));
+  If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
+    FWrotePlan := True;
+  WorkflowLogger.Info('AssistantActor',
+    Format('tool %s ok=%s ms=%d', [Call.Name, BoolToStr(Ok, True), GetTickCount64 - StartTick]));
+End;
+
+Procedure TAssistantActor.RunSpawnRange(FromIndex, ToIndex: Integer);
 Var
   I: Integer;
+  Call: TSamplerToolCall;
+  Request: TSubagentRequest;
+  RunIds, KindNames: Array Of String;
   StartTick: QWord;
-  ResultText, ErrorText, Content, ToolCallsJson: String;
+  ResultText, ErrorText, Content, ParseErr: String;
   Ok: Boolean;
+  Svc: TAssistantService;
+Begin
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Exit;
+  RunIds := Nil;
+  KindNames := Nil;
+  SetLength(RunIds, ToIndex - FromIndex + 1);
+  SetLength(KindNames, ToIndex - FromIndex + 1);
+  For I := FromIndex To ToIndex Do
+    Begin
+      If Terminated Then
+        Exit;
+      Call := FToolCalls[I];
+      RunIds[I - FromIndex] := '';
+      KindNames[I - FromIndex] := '';
+      If Call.Name = '' Then
+        Continue;
+      EmitSnapshot(False, 'Running tools…', True);
+      StartTick := GetTickCount64;
+      If Not ParseSpawnSubagentArguments(Call.Arguments, Request, ParseErr) Then
+        Begin
+          LogEvent(aekSubagentStarted, ParseErr, 'spawn_subagent', Call.Id, False);
+          Svc.AddToolResult(Call.Id, 'Error: ' + ParseErr);
+          LogEvent(aekSubagentCompleted, ParseErr, 'spawn_subagent', Call.Id, False,
+            Integer(GetTickCount64 - StartTick));
+          Continue;
+        End;
+      If Not Svc.StartSubagent(Call.Arguments, RunIds[I - FromIndex], ErrorText) Then
+        Begin
+          LogEvent(aekSubagentStarted, Request.Title, SubagentKindName(Request.Kind), Call.Id, False);
+          Svc.AddToolResult(Call.Id, 'Error: ' + ErrorText);
+          LogEvent(aekSubagentCompleted, ErrorText, SubagentKindName(Request.Kind), Call.Id, False,
+            Integer(GetTickCount64 - StartTick));
+          RunIds[I - FromIndex] := '';
+        End
+      Else
+        Begin
+          KindNames[I - FromIndex] := SubagentKindName(Request.Kind);
+          LogEvent(aekSubagentStarted, Request.Title, KindNames[I - FromIndex],
+            RunIds[I - FromIndex]);
+        End;
+    End;
+  For I := FromIndex To ToIndex Do
+    Begin
+      Call := FToolCalls[I];
+      If (Call.Name = '') Or (RunIds[I - FromIndex] = '') Then
+        Continue;
+      StartTick := GetTickCount64;
+      While Svc.SubagentIsRunning(RunIds[I - FromIndex]) Do
+        Begin
+          If Terminated Then
+            Begin
+              Svc.CancelSubagents;
+              Break;
+            End;
+          Sleep(40);
+        End;
+      ResultText := '';
+      ErrorText := '';
+      Ok := Svc.TakeSubagentResult(RunIds[I - FromIndex], ResultText, ErrorText);
+      If Ok Then
+        Content := ResultText
+      Else
+        Begin
+          If ResultText <> '' Then
+            Content := ResultText
+          Else
+            Content := 'Error: ' + ErrorText;
+        End;
+      Svc.AddToolResult(Call.Id, Content);
+      LogEvent(aekSubagentCompleted, Copy(Content, 1, SubagentSummaryMaxChars), KindNames[I - FromIndex],
+        RunIds[I - FromIndex], Ok, Integer(GetTickCount64 - StartTick));
+      WorkflowLogger.Info('AssistantActor',
+        Format('subagent %s ok=%s ms=%d', [RunIds[I - FromIndex], BoolToStr(Ok, True),
+          GetTickCount64 - StartTick]));
+    End;
+End;
+
+Procedure TAssistantActor.RunTools;
+Var
+  I, J: Integer;
+  ToolCallsJson: String;
   Call: TSamplerToolCall;
   Svc: TAssistantService;
 Begin
@@ -584,54 +726,39 @@ Begin
     End;
   ToolCallsJson := ToolCallsJson + ']';
   Svc.AddAssistantToolCalls(FContent, ToolCallsJson);
-  For I := 0 To High(FToolCalls) Do
+  I := 0;
+  While I <= High(FToolCalls) Do
     Begin
       If Terminated Then
         Exit;
       Call := FToolCalls[I];
       If Call.Name = '' Then
-        Continue;
-      LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
-      EmitSnapshot(False, 'Running tools…', True);
-      StartTick := GetTickCount64;
-      ResultText := '';
-      ErrorText := '';
-      Try
-        If ToolNeedsIdeThread(Call.Name) Then
-          Begin
-            FDispatchName := Call.Name;
-            FDispatchArgs := Call.Arguments;
-            FDispatchMode := Svc.ActiveMode;
-            FDispatchResult := '';
-            FDispatchError := '';
-            FDispatchOk := False;
-            Synchronize(@DispatchOneToolOnMain);
-            Ok := FDispatchOk;
-            ResultText := FDispatchResult;
-            ErrorText := FDispatchError;
-          End
-        Else
-          Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
-            ResultText, ErrorText);
-      Except
-        On E: Exception Do
-          Begin
-            Ok := False;
-            ErrorText := 'Tool raised: ' + E.Message;
-            ResultText := '';
-          End;
-      End;
-      If Ok Then
-        Content := ResultText
+        Begin
+          Inc(I);
+          Continue;
+        End;
+      If IsSpawnSubagentName(Call.Name) Then
+        Begin
+          J := I + 1;
+          While J <= High(FToolCalls) Do
+            Begin
+              If FToolCalls[J].Name = '' Then
+                Begin
+                  Inc(J);
+                  Continue;
+                End;
+              If Not IsSpawnSubagentName(FToolCalls[J].Name) Then
+                Break;
+              Inc(J);
+            End;
+          RunSpawnRange(I, J - 1);
+          I := J;
+        End
       Else
-        Content := 'Error: ' + ErrorText;
-      Svc.AddToolResult(Call.Id, Content);
-      LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
-        Integer(GetTickCount64 - StartTick));
-      If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
-        FWrotePlan := True;
-      WorkflowLogger.Info('AssistantActor',
-        Format('tool %s ok=%s ms=%d', [Call.Name, BoolToStr(Ok, True), GetTickCount64 - StartTick]));
+        Begin
+          RunOneTool(Call);
+          Inc(I);
+        End;
     End;
 End;
 

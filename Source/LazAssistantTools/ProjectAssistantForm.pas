@@ -24,6 +24,7 @@ Type
     StopAction: TAction;
     ReviewCompileAction: TAction;
     ReviewBuildAction: TAction;
+    ReviewChangesAction: TAction;
     FixErrorAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
@@ -36,6 +37,7 @@ Type
     ReviewMenu: TPopupMenu;
     ReviewCompileItem: TMenuItem;
     ReviewBuildItem: TMenuItem;
+    ReviewChangesItem: TMenuItem;
     AssistantMenu: TMainMenu;
     SessionMenuItem: TMenuItem;
     NewChatMenuItem: TMenuItem;
@@ -49,6 +51,7 @@ Type
     ReviewMenuItem: TMenuItem;
     ReviewCompileMenuItem: TMenuItem;
     ReviewBuildMenuItem: TMenuItem;
+    ReviewChangesMenuItem: TMenuItem;
     FixErrorMenuItem: TMenuItem;
     ViewMenuItem: TMenuItem;
     ToggleThinkingMenuItem: TMenuItem;
@@ -122,6 +125,7 @@ Type
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure ReviewCompileActionExecute(Sender: TObject);
     Procedure ReviewBuildActionExecute(Sender: TObject);
+    Procedure ReviewChangesActionExecute(Sender: TObject);
     Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure ToggleThinkingActionExecute(Sender: TObject);
@@ -347,7 +351,7 @@ Implementation
 
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
-  AssistantSession, AssistantTools, AssistantMarkdownForm, GrokOAuth, LazFileUtils,
+  AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LCLType, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
   ProjectIntf;
 
@@ -812,6 +816,7 @@ Begin
   FixErrorAction.Enabled := Not FSending;
   ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
+  ReviewChangesAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   EnsurePlanTabUi;
   EnsureBuildTabUi;
   If ActiveMode = amPlan Then
@@ -2557,6 +2562,7 @@ Begin
   NewChatAction.Enabled := Not IsSending;
   ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
+  ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   FixErrorAction.Enabled := Not IsSending;
   { Prompt stays live so the user can Steer without aborting the turn. }
   If Assigned(InputMemo) Then
@@ -2901,6 +2907,43 @@ Begin
           Block.DurationMs := Event.DurationMs;
         If Not Event.Ok Then
           Block.Title := Block.Title + '  failed';
+      End;
+    aekSubagentStarted:
+      Begin
+        Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := True;
+        Block.Ok := Event.Ok;
+        Block.Title := SubagentRunningTitle(SubagentKindCaption(ParseSubagentKind(Event.ToolName)),
+          'Starting');
+        FAnswerSliceStart := High(Integer);
+        FThinkingSliceStart := High(Integer);
+      End;
+    aekSubagentProgress:
+      Begin
+        Block := FTrace.FindSubagent(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := True;
+        If Event.Text <> '' Then
+          Block.Title := SubagentRunningTitle(SubagentKindCaption(ParseSubagentKind(Event.ToolName)),
+            Event.Text);
+      End;
+    aekSubagentCompleted:
+      Begin
+        Block := FTrace.FindSubagent(Event.ToolId);
+        If Not Assigned(Block) Then
+          Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+        Block.Running := False;
+        Block.Ok := Event.Ok;
+        If Event.DurationMs > 0 Then
+          Block.DurationMs := Event.DurationMs;
+        If Event.Text <> '' Then
+          Block.Body := Event.Text;
+        Block.Title := SubagentFinishedTitle(SubagentKindCaption(ParseSubagentKind(Event.ToolName)), '');
+        If Not Event.Ok Then
+          Block.Footer := 'failed'
+        Else If Event.DurationMs > 0 Then
+          Block.Footer := FormatThoughtElapsed(Event.DurationMs);
       End;
     aekSteerQueued:
       FTrace.AddSteer(Event.Text);
@@ -3763,6 +3806,7 @@ Begin
   FReviewInProgress := True;
   ReviewCompileAction.Enabled := False;
   ReviewBuildAction.Enabled := False;
+  ReviewChangesAction.Enabled := False;
   StatusFooter.SetRightText(KindLabel + '…');
   Application.ProcessMessages;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
@@ -3817,6 +3861,7 @@ Begin
         FReviewInProgress := False;
         ReviewCompileAction.Enabled := True;
         ReviewBuildAction.Enabled := True;
+        ReviewChangesAction.Enabled := True;
         UpdateStatusFooter;
       End;
   End;
@@ -4444,6 +4489,25 @@ End;
 Procedure TProjectAssistantForm.ReviewBuildActionExecute(Sender: TObject);
 Begin
   ReviewBuild;
+End;
+
+Procedure TProjectAssistantForm.ReviewChangesActionExecute(Sender: TObject);
+Var
+  Prompt: String;
+Begin
+  If FSending Or FReviewInProgress Then
+    Exit;
+  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+    Begin
+      MessageDlg('Open a project before reviewing changes.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Prompt := BuildReviewLensesPrompt(FormatChangedProjectFiles);
+  ForceModeAndLock(amBuild);
+  ShowChatSurfaceKeepMode;
+  SubmitUserTextEx('Review changes (naming · structure · review)', Prompt, True);
+  If Not FSending Then
+    UnlockModeAfterSend;
 End;
 
 Procedure TProjectAssistantForm.FixErrorActionExecute(Sender: TObject);

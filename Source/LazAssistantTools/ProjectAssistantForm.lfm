@@ -433,6 +433,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Review Build'
       OnExecute = ReviewBuildActionExecute
     end
+    object ReviewChangesAction: TAction
+      Caption = 'Review changes'
+      Hint = 'Fan out Pascal naming, structure, and review lenses over changed files'
+      OnExecute = ReviewChangesActionExecute
+    end
     object FixErrorAction: TAction
       Caption = 'Fix Error'
       Hint = 'Fix the selected Messages line in Build mode (tools apply the edit)'
@@ -463,6 +468,9 @@ object ProjectAssistantForm: TProjectAssistantForm
   object ReviewMenu: TPopupMenu
     Left = 72
     Top = 40
+    object ReviewChangesItem: TMenuItem
+      Action = ReviewChangesAction
+    end
     object ReviewCompileItem: TMenuItem
       Action = ReviewCompileAction
     end
@@ -502,6 +510,9 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object ReviewMenuItem: TMenuItem
       Caption = 'Review'
+      object ReviewChangesMenuItem: TMenuItem
+        Action = ReviewChangesAction
+      end
       object ReviewCompileMenuItem: TMenuItem
         Action = ReviewCompileAction
       end

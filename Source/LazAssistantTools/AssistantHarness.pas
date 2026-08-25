@@ -102,6 +102,8 @@ Begin
     '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
     '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
     'Use `read_skill` to load a catalogued SKILL.md. Use `todo_write` for the current Build turn''s short checklist.' + LineEnding +
+    'Use `spawn_subagent` for parallel explore or Pascal review lenses (depth 1, max 3 live). ' +
+    'Do not spawn for syntax (use `run_compile`) or every edit. Children cannot spawn children.' + LineEnding +
     '</tool_calling>';
 End;
 
@@ -156,7 +158,8 @@ Begin
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus.' + LineEnding +
         'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
         'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete.' + LineEnding +
-        'Stay on the active work package. Prefer Michell Free Pascal conventions.';
+        'Stay on the active work package. Prefer Michell Free Pascal conventions.' + LineEnding +
+        'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
   Else
     Result := Result +
       'You are the Project Assistant in **Ask mode** for Free Pascal / Lazarus.' + LineEnding +

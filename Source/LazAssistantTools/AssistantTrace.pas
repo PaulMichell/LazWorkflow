@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs;
 
 Type
-  TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer);
+  TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent);
 
   TTraceBlock = Class
   Public
@@ -57,6 +57,8 @@ Type
     Function LatestBlockSinceLastTool(Kind: TTraceBlockKind): TTraceBlock;
     Function AddTool(Const ToolId, ToolName, Args: String): TTraceBlock;
     Function FindTool(Const ToolId: String): TTraceBlock;
+    Function AddSubagent(Const SubId, KindName, Title: String): TTraceBlock;
+    Function FindSubagent(Const SubId: String): TTraceBlock;
     { Reuse this sample's answer (after the last tool). Growing snapshots update it in place. }
     Function EnsureAnswer: TTraceBlock;
     Procedure FinishCurrentThinking;
@@ -100,6 +102,7 @@ Begin
     tbkAnswer: Result := 'answer';
     tbkNote: Result := 'note';
     tbkSteer: Result := 'steer';
+    tbkSubagent: Result := 'subagent';
   Else
     Result := 'user';
   End;
@@ -120,6 +123,8 @@ Begin
     Result := tbkNote
   Else If N = 'steer' Then
     Result := tbkSteer
+  Else If N = 'subagent' Then
+    Result := tbkSubagent
   Else
     Result := tbkUser;
 End;
@@ -313,6 +318,45 @@ Begin
   Result.Title := ToolCardCaption(ToolName, Args);
 End;
 
+Function TAssistantTrace.AddSubagent(Const SubId, KindName, Title: String): TTraceBlock;
+Begin
+  Result := FindSubagent(SubId);
+  If Assigned(Result) Then
+    Begin
+      If KindName <> '' Then
+        Result.ToolName := KindName;
+      If Title <> '' Then
+        Result.Title := Title;
+      Result.Running := True;
+      Exit;
+    End;
+  Result := AddBlock(tbkSubagent);
+  Result.ToolId := SubId;
+  Result.ToolName := KindName;
+  Result.Title := Title;
+  Result.Running := True;
+  Result.StartedAt := Now;
+End;
+
+Function TAssistantTrace.FindSubagent(Const SubId: String): TTraceBlock;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := Nil;
+  If SubId = '' Then
+    Exit;
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkSubagent) And (Block.ToolId = SubId) Then
+        Begin
+          Result := Block;
+          Exit;
+        End;
+    End;
+End;
+
 Function TAssistantTrace.FindTool(Const ToolId: String): TTraceBlock;
 Var
   I: Integer;
@@ -402,7 +446,8 @@ Begin
           Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
           Block.Title := ThinkingCardTitle(Block.DurationMs, True);
         End;
-      If (Block.Kind = tbkTool) And Block.Running And (Block.StartedAt > 0) Then
+      If ((Block.Kind = tbkTool) Or (Block.Kind = tbkSubagent)) And Block.Running And
+        (Block.StartedAt > 0) Then
         Block.DurationMs := MilliSecondsBetween(Now, Block.StartedAt);
     End;
 End;

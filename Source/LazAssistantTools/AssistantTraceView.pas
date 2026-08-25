@@ -35,6 +35,7 @@ Type
     Procedure EnsureFrame(Block: TTraceBlock);
     Procedure BindThinking(Block: TTraceBlock);
     Procedure BindTool(Block: TTraceBlock);
+    Procedure BindSubagent(Block: TTraceBlock);
     Procedure BindAnswer(Block: TTraceBlock);
     Procedure BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
     Procedure BindUser(Block: TTraceBlock);
@@ -76,7 +77,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Clipbrd, LCLIntf, LCLType, MarkDown.Control;
+  Clipbrd, LCLIntf, LCLType, MarkDown.Control, AssistantSubagents;
 
 Const
   HeaderHeight = 26;
@@ -957,6 +958,37 @@ Begin
   Panel.Visible := True;
 End;
 
+Procedure TAssistantTraceView.BindSubagent(Block: TTraceBlock);
+Var
+  KindCaption: String;
+Begin
+  KindCaption := SubagentKindCaption(ParseSubagentKind(Block.ToolName));
+  If Block.Running Then
+    Begin
+      If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+        If NamedChild(TPanel(Block.Frame), 'BodyMemo') = Nil Then
+          Begin
+            TPanel(Block.Frame).Free;
+            Block.Frame := Nil;
+          End;
+      If Block.Title = '' Then
+        Block.Title := SubagentRunningTitle(KindCaption, 'Starting');
+      BindTool(Block);
+    End
+  Else
+    Begin
+      If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+        If NamedChild(TPanel(Block.Frame), 'AnswerView') = Nil Then
+          Begin
+            TPanel(Block.Frame).Free;
+            Block.Frame := Nil;
+          End;
+      If Block.Title = '' Then
+        Block.Title := SubagentFinishedTitle(KindCaption, Block.Title);
+      BindRichCard(Block, clNavy);
+    End;
+End;
+
 Procedure TAssistantTraceView.BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
 Var
   Panel: TPanel;
@@ -1060,11 +1092,10 @@ Begin
     tbkUser: BindUser(Block);
     tbkThinking: BindThinking(Block);
     tbkTool: BindTool(Block);
+    tbkSubagent: BindSubagent(Block);
     tbkAnswer: BindAnswer(Block);
     tbkSteer: BindRichCard(Block, clNavy);
     tbkNote: BindRichCard(Block, clMaroon);
-  Else
-    BindUser(Block);
   End;
 End;
 
@@ -1245,7 +1276,9 @@ Begin
             TLabel(Header).Caption := Block.Title;
         End
       Else If Block.Kind = tbkTool Then
-        BindTool(Block);
+        BindTool(Block)
+      Else If (Block.Kind = tbkSubagent) And Block.Running Then
+        BindSubagent(Block);
     End;
 End;
 
