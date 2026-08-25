@@ -90,6 +90,10 @@ Function FormatThoughtFooter(DurationMs: Integer): String;
 Function FormatWorkedFooter(DurationMs: Integer): String;
 Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Function ToolCardCaption(Const ToolName, Args: String): String;
+{ True when the viewport is following the tail: everything fits, or Position is
+  within Slop of max (ContentHeight - Page). Live updates should then keep the
+  tail in view; otherwise they must not move Position. }
+Function ScrollShouldFollowTail(Position, ContentHeight, Page: Integer; Slop: Integer = 24): Boolean;
 
 Implementation
 
@@ -763,6 +767,25 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function ScrollShouldFollowTail(Position, ContentHeight, Page: Integer; Slop: Integer): Boolean;
+Var
+  MaxPos: Integer;
+Begin
+  If Page < 1 Then
+    Page := 1;
+  If Slop < 0 Then
+    Slop := 0;
+  MaxPos := ContentHeight - Page;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  If Position < 0 Then
+    Position := 0;
+  If MaxPos = 0 Then
+    Result := True
+  Else
+    Result := Position >= MaxPos - Slop;
 End;
 
 Function ToolCardCaption(Const ToolName, Args: String): String;

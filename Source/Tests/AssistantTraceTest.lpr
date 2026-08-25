@@ -108,6 +108,11 @@ End;
 
 Procedure TestElapsed;
 Begin
+  Check('short content follows', ScrollShouldFollowTail(0, 100, 200, 24));
+  Check('at max follows', ScrollShouldFollowTail(400, 500, 100, 24));
+  Check('within slop follows', ScrollShouldFollowTail(380, 500, 100, 24));
+  Check('scrolled up stays', Not ScrollShouldFollowTail(0, 500, 100, 24));
+  Check('mid view stays', Not ScrollShouldFollowTail(100, 500, 100, 24));
   Check('subsecond', Pos('s', FormatThoughtElapsed(4200)) > 0);
   Check('zero', FormatThoughtElapsed(0) = '0.0s');
   Check('clock under a minute', FormatThinkingClock(12000) = '0:12');

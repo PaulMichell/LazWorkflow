@@ -4530,7 +4530,7 @@ Begin
   Prompt := BuildReviewLensesPrompt(FormatChangedProjectFiles);
   ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
-  SubmitUserTextEx('Review changes (naming · structure · review)', Prompt, True);
+  SubmitUserTextEx('Review Changes (naming · structure · review)', Prompt, True);
   If Not FSending Then
     UnlockModeAfterSend;
 End;

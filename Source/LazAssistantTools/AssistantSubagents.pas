@@ -167,6 +167,7 @@ Begin
   End;
   Result := Result + LineEnding +
     'You cannot call spawn_subagent. Return a structured summary the parent can merge.' + LineEnding +
+    'Write in plain English. If you rank issues, use Blocking, Major, or Minor — never "Nit" or other review slang.' + LineEnding +
     '</subagent>';
 End;
 
@@ -305,7 +306,7 @@ Begin
     '- kind pascal-review — correctness, threading, memory, and whether the change actually fixes the request' +
     LineEnding + LineEnding +
     FilesBlock + LineEnding + LineEnding +
-    'If a lens has nothing to say, it should say so briefly.';
+    'If a lens has nothing to say, it should say so briefly. Rank issues as Blocking, Major, or Minor — not Nit.';
 End;
 
 Function SubagentRunningTitle(Const KindCaption, Phase: String): String;

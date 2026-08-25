@@ -83,6 +83,7 @@ Begin
   Check('naming persona', Pos('pascal-naming', SubagentPersonaPrompt(sakPascalNaming)) > 0);
   Check('naming F prefix', Pos('property storage', SubagentPersonaPrompt(sakPascalNaming)) > 0);
   Check('review persona compiler', Pos('lazbuild', SubagentPersonaPrompt(sakPascalReview)) > 0);
+  Check('persona bans nit slang', Pos('never "Nit"', SubagentPersonaPrompt(sakPascalReview)) > 0);
   Check('explore no edit', Pos('Do not edit', SubagentPersonaPrompt(sakExplore)) > 0);
   Prompt := BuildReviewLensesPrompt('- Source/Foo.pas');
   Check('review prompt spawn', Pos('spawn_subagent', Prompt) > 0);

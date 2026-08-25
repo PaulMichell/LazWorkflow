@@ -53,7 +53,7 @@ Type
     Function LastLines(Const SourceText: String; MaxLines: Integer; MaxChars: Integer = 0): String;
     Procedure ScrollToEnd;
     Function HostedContentHeight: Integer;
-    Procedure ApplyScrollRange(KeepBottom: Boolean);
+    Procedure ApplyScrollRange(ForceBottom: Boolean);
     Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
     Procedure LockControlHeight(Control: TControl; NewHeight: Integer);
@@ -1122,16 +1122,21 @@ Begin
     Result := 1;
 End;
 
-Procedure TAssistantTraceView.ApplyScrollRange(KeepBottom: Boolean);
+Procedure TAssistantTraceView.ApplyScrollRange(ForceBottom: Boolean);
 Var
-  MaxPos, NewH, Page, SavedPos: Integer;
+  MaxPos, NewH, Page, SavedPos, OldRange, OldPage: Integer;
+  Follow: Boolean;
 Begin
   If (Not Assigned(TraceScroll)) Or (Not Assigned(TraceHost)) Then
     Exit;
   SavedPos := TraceScroll.VertScrollBar.Position;
-  TraceScroll.VertScrollBar.Position := 0;
-  TraceHost.Left := 0;
-  TraceHost.Top := 0;
+  OldRange := TraceScroll.VertScrollBar.Range;
+  OldPage := TraceScroll.VertScrollBar.Page;
+  Follow := ForceBottom Or ScrollShouldFollowTail(SavedPos, OldRange, OldPage, 24);
+  If TraceHost.Left <> 0 Then
+    TraceHost.Left := 0;
+  If TraceHost.Top <> 0 Then
+    TraceHost.Top := 0;
   If Assigned(FBoundTrace) Then
     NewH := OrderFrames(FBoundTrace)
   Else
@@ -1144,20 +1149,33 @@ Begin
   Page := TraceScroll.ClientHeight;
   If Page < 1 Then
     Page := 1;
-  TraceScroll.HorzScrollBar.Range := 0;
-  TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
-  TraceScroll.HorzScrollBar.Position := 0;
-  TraceScroll.VertScrollBar.Range := NewH;
-  TraceScroll.VertScrollBar.Page := Page;
+  If TraceScroll.HorzScrollBar.Range <> 0 Then
+    TraceScroll.HorzScrollBar.Range := 0;
+  If TraceScroll.HorzScrollBar.Page <> TraceScroll.ClientWidth Then
+    TraceScroll.HorzScrollBar.Page := TraceScroll.ClientWidth;
+  If TraceScroll.HorzScrollBar.Position <> 0 Then
+    TraceScroll.HorzScrollBar.Position := 0;
+  If TraceScroll.VertScrollBar.Range <> NewH Then
+    TraceScroll.VertScrollBar.Range := NewH;
+  If TraceScroll.VertScrollBar.Page <> Page Then
+    TraceScroll.VertScrollBar.Page := Page;
   MaxPos := NewH - Page;
   If MaxPos < 0 Then
     MaxPos := 0;
-  If KeepBottom Then
-    TraceScroll.VertScrollBar.Position := MaxPos
-  Else If SavedPos > MaxPos Then
-    TraceScroll.VertScrollBar.Position := MaxPos
+  If Follow Then
+    Begin
+      If TraceScroll.VertScrollBar.Position <> MaxPos Then
+        TraceScroll.VertScrollBar.Position := MaxPos;
+    End
   Else
-    TraceScroll.VertScrollBar.Position := SavedPos;
+    Begin
+      If SavedPos > MaxPos Then
+        SavedPos := MaxPos;
+      If SavedPos < 0 Then
+        SavedPos := 0;
+      If TraceScroll.VertScrollBar.Position <> SavedPos Then
+        TraceScroll.VertScrollBar.Position := SavedPos;
+    End;
 End;
 
 Procedure TAssistantTraceView.FitHostToContent;
@@ -1247,12 +1265,11 @@ Begin
         EnsureFrame(Trace[I]);
       Except
       End;
-  OrderFrames(Trace);
   If ContentWidth >= 80 Then
     FLastContentWidth := ContentWidth;
-  FitHostToContent;
-  If ScrollBottom Then
-    ScrollToEnd;
+  { ScrollBottom only follows the tail when the bar is already at max. A user
+    who scrolled up keeps their position; Range grows so they can reach new content. }
+  ApplyScrollRange(False);
 End;
 
 Procedure TAssistantTraceView.RefreshElapsed(Trace: TAssistantTrace);

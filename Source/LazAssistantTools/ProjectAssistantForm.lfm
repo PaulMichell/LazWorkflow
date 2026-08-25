@@ -434,7 +434,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = ReviewBuildActionExecute
     end
     object ReviewChangesAction: TAction
-      Caption = 'Review changes'
+      Caption = 'Review Changes'
       Hint = 'Fan out Pascal naming, structure, and review lenses over changed files'
       OnExecute = ReviewChangesActionExecute
     end
