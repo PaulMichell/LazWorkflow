@@ -144,10 +144,54 @@ object ProjectAssistantForm: TProjectAssistantForm
     ClientHeight = 75
     ClientWidth = 960
     TabOrder = 1
+    object PlanOfferBar: TPanel
+      Left = 0
+      Height = 28
+      Top = 0
+      Width = 960
+      Align = alTop
+      BevelOuter = bvNone
+      ChildSizing.LeftRightSpacing = 4
+      ChildSizing.TopBottomSpacing = 2
+      ChildSizing.HorizontalSpacing = 8
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 6
+      ClientHeight = 28
+      ClientWidth = 960
+      TabOrder = 1
+      Visible = False
+      object PlanOfferLabel: TLabel
+        Left = 4
+        Height = 24
+        Top = 2
+        Width = 220
+        Caption = 'Plan written.'
+        Layout = tlCenter
+        ParentColor = False
+      end
+      object BuildThisButton: TButton
+        Left = 232
+        Height = 24
+        Top = 2
+        Width = 88
+        Action = BuildThisAction
+        AutoSize = True
+        TabOrder = 0
+      end
+      object RevisePlanButton: TButton
+        Left = 328
+        Height = 24
+        Top = 2
+        Width = 72
+        Action = RevisePlanAction
+        AutoSize = True
+        TabOrder = 1
+      end
+    end
     object InputMemo: TSpellMemo
       Left = 6
-      Height = 63
-      Top = 6
+      Height = 47
+      Top = 28
       Width = 948
       Align = alClient
       BorderSpacing.Around = 6
@@ -236,7 +280,7 @@ object ProjectAssistantForm: TProjectAssistantForm
           Width = 284
           Align = alClient
           BorderSpacing.Around = 8
-          Caption = 'Chat mode — Q&A and design discussion. Read-only project tools. Switch to Plan to write plan Markdown, or Code to edit sources and compile.'
+          Caption = 'Ask mode — Q&A and design discussion. Read-only project tools. Switch to Plan to write plan Markdown, or Build to edit sources and compile.'
           ParentColor = False
           WordWrap = True
         end
@@ -463,8 +507,73 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object CommandsAction: TAction
       Caption = 'Commands…'
-      Hint = 'Searchable command list (Ctrl+P)'
+      Hint = 'Command catalog (Ctrl+P). Type / in the prompt to search.'
       OnExecute = CommandsActionExecute
+    end
+    object ContextBreakdownAction: TAction
+      Caption = 'Context breakdown'
+      Hint = 'Token estimate for the next request'
+      OnExecute = ContextBreakdownActionExecute
+    end
+    object SessionInfoAction: TAction
+      Caption = 'Session info'
+      Hint = 'Mode, model, plan, and conversation'
+      OnExecute = SessionInfoActionExecute
+    end
+    object ModelPickerAction: TAction
+      Caption = 'Model…'
+      Hint = 'Choose model, thinking level, and approval'
+      OnExecute = ModelPickerActionExecute
+    end
+    object ThinkingPickerAction: TAction
+      Caption = 'Thinking level…'
+      Hint = 'Reasoning effort for the next turn'
+      OnExecute = ThinkingPickerActionExecute
+    end
+    object SkillsPickerAction: TAction
+      Caption = 'Skills…'
+      Hint = 'Pin a skill for the session'
+      OnExecute = SkillsPickerActionExecute
+    end
+    object CompactContextAction: TAction
+      Caption = 'Compact context'
+      Hint = 'Shrink older turns to free context'
+      OnExecute = CompactContextActionExecute
+    end
+    object CopyLastAnswerAction: TAction
+      Caption = 'Copy last answer'
+      Hint = 'Copy the current answer to the clipboard'
+      OnExecute = CopyLastAnswerActionExecute
+    end
+    object OpenPlanAction: TAction
+      Caption = 'Open active plan'
+      Hint = 'Open the active plan Markdown'
+      OnExecute = OpenPlanActionExecute
+    end
+    object BuildThisAction: TAction
+      Caption = 'Build this'
+      Hint = 'Switch to Build and seed the next incomplete package'
+      OnExecute = BuildThisActionExecute
+    end
+    object RevisePlanAction: TAction
+      Caption = 'Revise'
+      Hint = 'Stay in Plan and edit the prompt'
+      OnExecute = RevisePlanActionExecute
+    end
+    object AskModeAction: TAction
+      Caption = 'Ask mode'
+      Hint = 'Read-only Q&A'
+      OnExecute = AskModeActionExecute
+    end
+    object PlanModeAction: TAction
+      Caption = 'Plan mode'
+      Hint = 'Write the plan file'
+      OnExecute = PlanModeActionExecute
+    end
+    object BuildModeAction: TAction
+      Caption = 'Build mode'
+      Hint = 'Edit sources and compile'
+      OnExecute = BuildModeActionExecute
     end
   end
   object ReviewMenu: TPopupMenu
@@ -487,6 +596,12 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Session'
       object NewChatMenuItem: TMenuItem
         Action = NewChatAction
+      end
+      object CompactMenuItem: TMenuItem
+        Action = CompactContextAction
+      end
+      object CopyLastMenuItem: TMenuItem
+        Action = CopyLastAnswerAction
       end
       object SendMenuItem: TMenuItem
         Action = SendAction
@@ -529,6 +644,15 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'View'
       object ToggleThinkingMenuItem: TMenuItem
         Action = ToggleThinkingAction
+      end
+      object SkillsMenuItem: TMenuItem
+        Action = SkillsPickerAction
+      end
+      object ModelMenuItem: TMenuItem
+        Action = ModelPickerAction
+      end
+      object SessionInfoMenuItem: TMenuItem
+        Action = SessionInfoAction
       end
       object CommandsMenuItem: TMenuItem
         Action = CommandsAction

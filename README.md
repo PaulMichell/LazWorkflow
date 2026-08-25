@@ -29,6 +29,8 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 - Plan Markdown under `Documents/` with live windows; Build mode scans `Status:` tiles
 - Source tools (`replace_in_file`, `run_compile`, `ensure_form_component`, …) in Build
 - Depth-1 **spawn_subagent** and **Review Changes** (Pascal naming / structure / review lenses)
+- Command catalog on **Commands…** / `Ctrl+P`, `/` in the prompt, and footer clicks (model, skill, context, session)
+- After a Plan write, **Build this** / **Revise**
 - Project-local `.assistant/` (conversation JSONL, events log, config). Gitignore it.
 
 ## Requirements
@@ -71,8 +73,8 @@ Copyright (c) 2026 Michell Computing / contributors.
 
 ## Status
 
-**v2 work packages 1–7 are complete** (protocol, actor, trace, shell, harness, subagents, history replay).
+**v2 work packages 1–7 plus package 4 leftovers are complete** (protocol, actor, trace, shell, harness, subagents, history replay, slash catalog, footer clicks, Plan **Build this**).
 
-Still parked: slash popup, footer-click command catalog, Plan **Build this** bar. Large-trace virtualization is only needed if a turn overflows the GTK ~30k coordinate cap.
+Next: package 8 shell density (`Documents/ProjectPlan-v2.md`). Large-trace virtualization is only needed if a turn overflows the GTK ~30k coordinate cap.
 
-See `Documents/ProjectPlan-v2.md` for architecture and leftover polish. `Documents/ProjectPlan.md` is the v0.2 implementation log.
+See `Documents/ProjectPlan-v2.md` for architecture. `Documents/ProjectPlan.md` is the v0.2 implementation log.

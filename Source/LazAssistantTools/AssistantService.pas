@@ -39,6 +39,15 @@ Type
   End;
   TAssistantToolCallArray = Array Of TAssistantToolCall;
 
+  TAssistantContextBreakdown = Record
+    SystemTokens: Integer;
+    ToolsTokens: Integer;
+    HistoryTokens: Integer;
+    TotalTokens: Integer;
+    LimitTokens: Integer;
+    MessageCount: Integer;
+  End;
+
   { Called on the main thread. ContentSnapshot / ThinkingSnapshot are full text so
     far (not raw deltas). IsFinished ends the stream. Thinking is reasoning_content
     when the model streams it; Content is the final answer channel only. }
@@ -107,6 +116,9 @@ Type
     Function IsSignedIn: Boolean;
     { Rough prompt size (messages + system + tools) for UI / guards. }
     Function EstimatedPromptTokens: Integer;
+    Function GetContextBreakdown: TAssistantContextBreakdown;
+    { Shrink older turns/tool payloads. Returns estimated tokens removed. }
+    Function CompactOlderHistory: Integer;
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
     Function StartStream(OnToken: TAssistantStreamEvent): Boolean;
     Procedure CancelStream;
@@ -145,6 +157,7 @@ Type
     Property ToolsEnabled: Boolean Read FToolsEnabled Write FToolsEnabled;
     { Soft cap for chat/completions prompt (default leaves headroom under 500k models). }
     Property MaxPromptTokens: Integer Read FMaxPromptTokens Write FMaxPromptTokens;
+    Property LastTrimNotice: String Read FLastTrimNotice;
     { low | medium | high | xhigh — sent as reasoning_effort when non-empty. }
     Property ReasoningEffort: String Read FReasoningEffort Write FReasoningEffort;
   End;
@@ -831,6 +844,56 @@ End;
 Function TAssistantService.EstimatedPromptTokens: Integer;
 Begin
   Result := EstimatePromptTokens;
+End;
+
+Function TokenEstimateFromChars(Chars: Integer): Integer;
+Begin
+  Result := (Chars + 3) Div 4;
+  If Result < 0 Then
+    Result := 0;
+End;
+
+Function TAssistantService.GetContextBreakdown: TAssistantContextBreakdown;
+Var
+  I, SysChars, ToolChars, HistChars: Integer;
+Begin
+  SysChars := Length(FSystemPrompt) + 256;
+  ToolChars := Length(ToolsJsonCached);
+  HistChars := 0;
+  For I := 0 To High(FMessages) Do
+    Inc(HistChars, MessagePayloadChars(FMessages[I]));
+  Result.SystemTokens := TokenEstimateFromChars(SysChars);
+  Result.ToolsTokens := TokenEstimateFromChars(ToolChars);
+  Result.HistoryTokens := TokenEstimateFromChars(HistChars);
+  Result.TotalTokens := TokenEstimateFromChars(SysChars + ToolChars + HistChars);
+  If Result.TotalTokens < 1 Then
+    Result.TotalTokens := 1;
+  Result.LimitTokens := FMaxPromptTokens;
+  Result.MessageCount := Length(FMessages);
+End;
+
+Function TAssistantService.CompactOlderHistory: Integer;
+Var
+  Before, SavedMax, Target: Integer;
+Begin
+  Before := EstimatePromptTokens;
+  SavedMax := FMaxPromptTokens;
+  Target := (Before * 6) Div 10;
+  If Target < 40000 Then
+    Target := 40000;
+  If Target >= Before Then
+    Target := Before - 1;
+  If Target < 1 Then
+    Target := 1;
+  FMaxPromptTokens := Target;
+  Try
+    TrimMessagesForBudget;
+  Finally
+    FMaxPromptTokens := SavedMax;
+  End;
+  Result := Before - EstimatePromptTokens;
+  If Result < 0 Then
+    Result := 0;
 End;
 
 Procedure TAssistantService.DropMessageRange(FromIndex, Count: Integer);

@@ -1,6 +1,11 @@
 Unit ProjectAssistantForm;
 
-{ Project Assistant main window — shared turn view, mode side panel, status footer (c) 2026 Michell Computing. }
+{ Project Assistant main window — shared turn view, mode side panel, status footer (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
+  history, plan/build tiles, send/steer, and catalog wiring as one form.
+  Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
+  AssistantTraceView. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,10 +15,10 @@ Unit ProjectAssistantForm;
 Interface
 
 Uses
-  Classes, SysUtils, Contnrs, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
+  Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls,
+  LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView;
+  AssistantTraceView, AssistantCommands;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -32,6 +37,19 @@ Type
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
     CommandsAction: TAction;
+    ContextBreakdownAction: TAction;
+    SessionInfoAction: TAction;
+    ModelPickerAction: TAction;
+    ThinkingPickerAction: TAction;
+    SkillsPickerAction: TAction;
+    CompactContextAction: TAction;
+    CopyLastAnswerAction: TAction;
+    OpenPlanAction: TAction;
+    BuildThisAction: TAction;
+    RevisePlanAction: TAction;
+    AskModeAction: TAction;
+    PlanModeAction: TAction;
+    BuildModeAction: TAction;
     ReviewButton: TButton;
     CommandsButton: TButton;
     ReviewMenu: TPopupMenu;
@@ -43,6 +61,8 @@ Type
     NewChatMenuItem: TMenuItem;
     SendMenuItem: TMenuItem;
     StopMenuItem: TMenuItem;
+    CompactMenuItem: TMenuItem;
+    CopyLastMenuItem: TMenuItem;
     SessionSepItem: TMenuItem;
     ExportMenuItem: TMenuItem;
     DeleteMenuItem: TMenuItem;
@@ -55,6 +75,9 @@ Type
     FixErrorMenuItem: TMenuItem;
     ViewMenuItem: TMenuItem;
     ToggleThinkingMenuItem: TMenuItem;
+    SkillsMenuItem: TMenuItem;
+    ModelMenuItem: TMenuItem;
+    SessionInfoMenuItem: TMenuItem;
     CommandsMenuItem: TMenuItem;
     ModeBar: TPanel;
     ModeGroup: TRadioGroup;
@@ -105,6 +128,10 @@ Type
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
+    PlanOfferBar: TPanel;
+    PlanOfferLabel: TLabel;
+    BuildThisButton: TButton;
+    RevisePlanButton: TButton;
     InputMemo: TSpellMemo;
     InputPopup: TPopupMenu;
     InputCutItem: TMenuItem;
@@ -139,8 +166,31 @@ Type
     Procedure AutoNewChatCheckClick(Sender: TObject);
     Procedure ReviewButtonClick(Sender: TObject);
     Procedure CommandsActionExecute(Sender: TObject);
+    Procedure ContextBreakdownActionExecute(Sender: TObject);
+    Procedure SessionInfoActionExecute(Sender: TObject);
+    Procedure ModelPickerActionExecute(Sender: TObject);
+    Procedure ThinkingPickerActionExecute(Sender: TObject);
+    Procedure SkillsPickerActionExecute(Sender: TObject);
+    Procedure CompactContextActionExecute(Sender: TObject);
+    Procedure CopyLastAnswerActionExecute(Sender: TObject);
+    Procedure OpenPlanActionExecute(Sender: TObject);
+    Procedure BuildThisActionExecute(Sender: TObject);
+    Procedure RevisePlanActionExecute(Sender: TObject);
+    Procedure AskModeActionExecute(Sender: TObject);
+    Procedure PlanModeActionExecute(Sender: TObject);
+    Procedure BuildModeActionExecute(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
+    Procedure InputMemoChange(Sender: TObject);
+    Procedure InputMemoExit(Sender: TObject);
     Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure SlashListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
+    Procedure SlashListClick(Sender: TObject);
+    Procedure StatusFooterLeftClick(Sender: TObject);
+    Procedure StatusFooterSkillClick(Sender: TObject);
+    Procedure StatusFooterCentreClick(Sender: TObject);
+    Procedure StatusFooterRightClick(Sender: TObject);
+    Procedure FooterMenuClick(Sender: TObject);
   Private
     ElapsedTimer: TTimer;
     ChatView: TControl; { unused; centre is FTraceView }
@@ -199,6 +249,12 @@ Type
     FPlanAgentMaxPackages: Integer;
     FLastTurnHadError: Boolean;
     FCommandsPopup: TPopupMenu;
+    FCatalog: TAssistantCatalog;
+    FSlashList: TListBox;
+    FSlashHits: TCatalogIndexArray;
+    FFooterMenu: TPopupMenu;
+    FPlanWriteThisTurn: Boolean;
+    FShowPlanOffer: Boolean;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
@@ -319,6 +375,24 @@ Type
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Procedure UpdateWorkActions;
     Procedure EnsureCommandsMenu;
+    Procedure RebuildCommandCatalog;
+    Procedure EnsureSlashPopup;
+    Procedure HideSlashPopup;
+    Procedure PositionSlashPopup;
+    Procedure UpdateSlashPopup;
+    Function SlashPopupVisible: Boolean;
+    Procedure ExecuteCatalogItem(Const Item: TAssistantCatalogItem);
+    Procedure ExecuteSlashSelection;
+    Procedure RemovePromptSlashToken;
+    Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
+    Procedure ApplyConfigAndRefresh;
+    Procedure PinActiveSkill(Const SkillName: String);
+    Procedure FillModelFooterMenu;
+    Procedure FillThinkingFooterMenu;
+    Procedure FillApprovalFooterMenu;
+    Procedure FillSkillFooterMenu;
+    Procedure ShowPlanOfferBar(OfferVisible: Boolean);
+    Procedure DeferredHideSlash(Data: PtrInt);
     Procedure SeedPromptFromSelectedWork;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
@@ -353,14 +427,19 @@ Implementation
 Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
-  FileUtil, LCLIntf, LCLType, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
-  ProjectIntf;
+  FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
+  ProjectIntf, AssistantSkills;
 
 Const
   ChatViewMargin = 4;
   ChatPaintMinIntervalMs = 80;
   { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
   LiveConversationMarker = -2;
+  FooterTagModel = 1;
+  FooterTagThinking = 2;
+  FooterTagApproval = 3;
+  FooterTagSkill = 4;
+  FooterTagSettings = 5;
 
 Constructor TProjectAssistantForm.Create(TheOwner: TComponent);
 Begin
@@ -423,6 +502,9 @@ Begin
   FOpenBindPending := True;
   FDeferLastTurn := True;
   FOpenBusy := False;
+  FPlanWriteThisTurn := False;
+  FShowPlanOffer := False;
+  FCatalog := TAssistantCatalog.Create;
   WorkflowEventBus.AddListener(Self);
 End;
 
@@ -443,6 +525,15 @@ Begin
   FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
   FreeAndNil(FHistoryTrace);
+  If Assigned(FSlashList) Then
+    Begin
+      FSlashList.OnDrawItem := Nil;
+      FSlashList.OnClick := Nil;
+      FSlashList.Parent := Nil;
+    End;
+  FreeAndNil(FSlashList);
+  FreeAndNil(FFooterMenu);
+  FreeAndNil(FCatalog);
   Inherited Destroy;
 End;
 
@@ -452,7 +543,12 @@ Begin
   KeyPreview := True;
   OnKeyDown := @FormKeyDown;
   If Assigned(InputMemo) Then
-    InputMemo.OnKeyDown := @InputMemoKeyDown;
+    Begin
+      InputMemo.OnKeyDown := @InputMemoKeyDown;
+      InputMemo.OnUTF8KeyPress := @InputMemoUTF8KeyPress;
+      InputMemo.OnChange := @InputMemoChange;
+      InputMemo.OnExit := @InputMemoExit;
+    End;
   Color := clBtnFace;
   EnsureChatView;
   If Assigned(FTraceView) And Assigned(FTrace) Then
@@ -460,7 +556,21 @@ Begin
   EnsureInputPopup;
   EnsurePlanTabUi;
   EnsureBuildTabUi;
+  EnsureSlashPopup;
+  RebuildCommandCatalog;
   EnsureCommandsMenu;
+  If Assigned(StatusFooter) Then
+    Begin
+      StatusFooter.OnLeftClick := @StatusFooterLeftClick;
+      StatusFooter.OnSkillClick := @StatusFooterSkillClick;
+      StatusFooter.OnCentreClick := @StatusFooterCentreClick;
+      StatusFooter.OnRightClick := @StatusFooterRightClick;
+    End;
+  If Assigned(PlanOfferBar) Then
+    Begin
+      PlanOfferBar.Height := Scale96ToForm(28);
+      PlanOfferBar.Visible := False;
+    End;
   UpdateThinkingActionCaption;
   SyncAutoNewChatCheckFromConfig;
   If Not Assigned(ElapsedTimer) Then
@@ -496,6 +606,8 @@ Begin
     ElapsedTimer.Enabled := False;
   If Assigned(FCommandsPopup) Then
     FreeAndNil(FCommandsPopup);
+  If Assigned(FFooterMenu) Then
+    FFooterMenu.Items.Clear;
   FOpenBusy := False;
   SetBusyCursor(False);
   { Persist OAuth tokens once on close (not on every prompt). }
@@ -597,6 +709,8 @@ Procedure TProjectAssistantForm.SelectMode(Mode: TAssistantMode);
 Begin
   ActiveMode := Mode;
   FModeSticky := False;
+  If Mode <> amPlan Then
+    ShowPlanOfferBar(False);
   SyncModeUi;
   ApplyActiveMode;
 End;
@@ -674,6 +788,20 @@ Begin
     BuildDoneButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
   If Assigned(BuildResetButton) Then
     BuildResetButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
+  If Assigned(BuildThisAction) Then
+    BuildThisAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
+  If Assigned(RevisePlanAction) Then
+    RevisePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
+  If Assigned(OpenPlanAction) Then
+    OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
+  If Assigned(CompactContextAction) Then
+    CompactContextAction.Enabled := (Not FSending) And Assigned(AssistantClient);
+  If Assigned(AskModeAction) Then
+    AskModeAction.Enabled := Not FSending;
+  If Assigned(PlanModeAction) Then
+    PlanModeAction.Enabled := Not FSending;
+  If Assigned(BuildModeAction) Then
+    BuildModeAction.Enabled := Not FSending;
 End;
 
 Procedure TProjectAssistantForm.UpdateModeSidePanels;
@@ -790,7 +918,10 @@ Begin
     Existing.Free;
   End;
   If Not NeedWrite Then
-    Exit;
+    Begin
+      FPlanWriteThisTurn := True;
+      Exit;
+    End;
   If Not WriteMarkdownFile(PlanRel, Body + LineEnding, True, Resolved, Err) Then
     Begin
       WorkflowLogger.Warning('ProjectAssistant', 'Auto-save plan failed: ' + Err);
@@ -801,6 +932,7 @@ Begin
   RefreshPlanList;
   If Assigned(BuildPanel) Then
     RefreshBuildTodos;
+  FPlanWriteThisTurn := True;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
       '` (auto-saved because the model did not call write_markdown).';
@@ -2520,14 +2652,25 @@ Begin
       ThinkCap := ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel);
       ApprCap := ApprovalModeCaption(AssistantChatConfig.GetApprovalMode);
     End;
-  LeftText := Format('Model: %s · Think: %s · Approve: %s',
-    [FModelName, ThinkCap, ApprCap]);
-  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
-    LeftText := LeftText + ' · Skill: ' + AssistantChatConfig.ActiveSkill;
-  CentreText := Format('Context %d%%  (~%d / %d tok)', [Pct, FContextUsed, FContextLimit]);
+  LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, ApprCap]);
+  CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
   StatusFooter.SetAll(LeftText, CentreText, StatusText);
+  StatusFooter.SetLeftHint('Click to change model, thinking level, or approval');
+  StatusFooter.SetCentreHint(Format('About %d of %d tokens. Click for a breakdown.',
+    [FContextUsed, FContextLimit]));
+  StatusFooter.SetRightHint('Click for session info');
+  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
+    Begin
+      StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
+      StatusFooter.SetSkillHint('Click to pin a different skill');
+    End
+  Else
+    Begin
+      StatusFooter.SetSkillText('Skill: none');
+      StatusFooter.SetSkillHint('Click to pin a skill');
+    End;
   If (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
 End;
@@ -2584,6 +2727,11 @@ Begin
   Else If (Not IsSending) And FSending Then
     AssistantEndQuietIdeSession;
   FSending := IsSending;
+  If IsSending Then
+    Begin
+      FPlanWriteThisTurn := False;
+      ShowPlanOfferBar(False);
+    End;
   If Not IsSending Then
     FReviewInProgress := False;
   SendAction.Enabled := True;
@@ -2916,6 +3064,12 @@ Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
 Var
   Block: TTraceBlock;
 Begin
+  If (Event.Kind = aekToolCompleted) And Event.Ok Then
+    If SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown') Then
+      If ActiveMode = amPlan Then
+        FPlanWriteThisTurn := True;
+  If (Event.Kind = aekTurnEnded) And (Pos('plan_write', Event.Text) > 0) Then
+    FPlanWriteThisTurn := True;
   If Not FViewingLive Then
     Exit;
   If Not Assigned(FTrace) Then
@@ -3311,6 +3465,14 @@ Begin
   UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
+  If FPlanWriteThisTurn And (ResolvedError = '') And (ActiveMode = amPlan) Then
+    Begin
+      RefreshPlanList;
+      RefreshBuildTodos;
+      ShowPlanOfferBar(True);
+    End
+  Else
+    ShowPlanOfferBar(False);
   If FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then
@@ -3438,6 +3600,7 @@ Begin
     Exit;
   If FSending Then
     Exit;
+  HideSlashPopup;
   If AutoSend Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
@@ -3534,29 +3697,501 @@ Begin
   InputMemo.SetFocus;
 End;
 
+Procedure TProjectAssistantForm.RebuildCommandCatalog;
+Var
+  Skills: TAssistantSkillList;
+  I: Integer;
+  Root, SlashName: String;
+
+  Procedure AddAct(Act: TAction; Const Category, Slash, Aliases, Hint: String);
+  Begin
+    If Not Assigned(Act) Then
+      Exit;
+    FCatalog.Add(Act.Caption, Category, Slash, Aliases, Hint, Act, '');
+    If Trim(Act.Hint) = '' Then
+      Act.Hint := Hint;
+    If Trim(Act.Category) = '' Then
+      Act.Category := Category;
+  End;
+
+Begin
+  If Not Assigned(FCatalog) Then
+    Exit;
+  FCatalog.Clear;
+  AddAct(NewChatAction, 'Session', 'new', 'clear', 'Start a new conversation');
+  AddAct(CompactContextAction, 'Session', 'compact', '', 'Shrink older turns to free context');
+  AddAct(CopyLastAnswerAction, 'Session', 'copy', '', 'Copy the current answer');
+  AddAct(ExportHistoryAction, 'Session', 'export', '', 'Export this conversation');
+  AddAct(DeleteHistoryAction, 'Session', 'delete', '', 'Delete the current conversation');
+  AddAct(SettingsAction, 'Session', 'settings', 'login,logout', 'Sign in, model, and skill');
+  AddAct(StopAction, 'Session', 'stop', '', 'Stop the current reply');
+  AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
+  AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
+  AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
+  AddAct(AskModeAction, 'Work', 'ask', 'chat', 'Ask mode — inspect, no writes');
+  AddAct(PlanModeAction, 'Work', 'plan', '', 'Plan mode — write the plan file');
+  AddAct(BuildModeAction, 'Work', 'build', 'code', 'Build mode — edit sources and compile');
+  AddAct(ReviewChangesAction, 'Review', 'review', '', 'Pascal naming, structure, and review lenses');
+  AddAct(ReviewCompileAction, 'Review', 'review-compile', '', 'Review the last compile');
+  AddAct(ReviewBuildAction, 'Review', 'review-build', '', 'Review the last build');
+  AddAct(FixErrorAction, 'Review', 'fix', 'fix-error', 'Fix the selected Messages error');
+  AddAct(ToggleThinkingAction, 'View', 'thinking', '', 'Show or hide thinking blocks');
+  AddAct(CommandsAction, 'View', 'docs', 'help,commands', 'Browse the command catalog');
+  AddAct(ModelPickerAction, 'Model', 'model', '', 'Choose model, thinking, and approval');
+  AddAct(ThinkingPickerAction, 'Model', 'effort', 'thinking-level', 'Set reasoning effort');
+  AddAct(ContextBreakdownAction, 'Help', 'context', '', 'Token estimate for the next request');
+  AddAct(SessionInfoAction, 'Help', 'session-info', 'session', 'Mode, model, plan, and conversation');
+  AddAct(SkillsPickerAction, 'Skills', 'skills', '', 'Pin a skill for the session');
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  Skills := ListDiscoveredSkills(Root);
+  For I := 0 To High(Skills) Do
+    Begin
+      If Not Skills[I].UserInvocable Then
+        Continue;
+      SlashName := Skills[I].Name;
+      If FCatalog.HasSlash(SlashName) Then
+        SlashName := 'skill-' + Skills[I].Name;
+      FCatalog.Add('Run skill: ' + Skills[I].Name, 'Skills', SlashName, '',
+        Skills[I].Description, Nil, 'skill:' + Skills[I].Name);
+    End;
+End;
+
+Function CategoryMenu(Popup: TPopupMenu; Const Category: String): TMenuItem;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  If Not Assigned(Popup) Then
+    Exit;
+  For I := 0 To Popup.Items.Count - 1 Do
+    If SameText(Popup.Items[I].Caption, Category) Then
+      Begin
+        Result := Popup.Items[I];
+        Exit;
+      End;
+  Result := TMenuItem.Create(Popup);
+  Result.Caption := Category;
+  Popup.Items.Add(Result);
+End;
+
 Procedure TProjectAssistantForm.EnsureCommandsMenu;
 Var
   I: Integer;
-  Act: TContainedAction;
-  Item: TMenuItem;
+  Item, Host: TMenuItem;
+  Entry: TAssistantCatalogItem;
+  Cat: String;
 Begin
+  RebuildCommandCatalog;
   If Assigned(FCommandsPopup) Then
     FCommandsPopup.Items.Clear
   Else
     FCommandsPopup := TPopupMenu.Create(Nil);
-  If Not Assigned(ActionList) Then
+  If Not Assigned(FCatalog) Then
     Exit;
-  For I := 0 To ActionList.ActionCount - 1 Do
+  For I := 0 To FCatalog.Count - 1 Do
     Begin
-      Act := ActionList.Actions[I];
-      If Not (Act Is TAction) Then
+      Entry := FCatalog.GetItem(I);
+      If Copy(Entry.UserData, 1, 6) = 'skill:' Then
         Continue;
-      If Trim(TAction(Act).Caption) = '' Then
+      If Entry.Action = CommandsAction Then
+        Continue;
+      Cat := Entry.Category;
+      If Cat = '' Then
+        Cat := 'Session';
+      Host := CategoryMenu(FCommandsPopup, Cat);
+      If Not Assigned(Host) Then
         Continue;
       Item := TMenuItem.Create(FCommandsPopup);
-      Item.Action := Act;
-      FCommandsPopup.Items.Add(Item);
+      If Assigned(Entry.Action) And (Entry.Action Is TAction) Then
+        Item.Action := TAction(Entry.Action)
+      Else
+        Begin
+          Item.Caption := Entry.Caption;
+          Item.Hint := Entry.Hint;
+        End;
+      Host.Add(Item);
     End;
+End;
+
+Procedure TProjectAssistantForm.EnsureSlashPopup;
+Begin
+  If Assigned(FSlashList) Then
+    Exit;
+  FSlashList := TListBox.Create(Nil);
+  FSlashList.Visible := False;
+  FSlashList.Style := lbOwnerDrawFixed;
+  FSlashList.ItemHeight := Scale96ToForm(22);
+  FSlashList.Height := Scale96ToForm(88);
+  FSlashList.TabStop := True;
+  FSlashList.Color := clWindow;
+  FSlashList.OnDrawItem := @SlashListDrawItem;
+  FSlashList.OnClick := @SlashListClick;
+End;
+
+Function TProjectAssistantForm.SlashPopupVisible: Boolean;
+Begin
+  Result := Assigned(FSlashList) And FSlashList.Visible;
+End;
+
+Procedure TProjectAssistantForm.HideSlashPopup;
+Begin
+  If Assigned(FSlashList) Then
+    Begin
+      FSlashList.Visible := False;
+      FSlashList.Parent := Nil;
+    End;
+End;
+
+Procedure TProjectAssistantForm.PositionSlashPopup;
+Var
+  P: TPoint;
+  Count, H, MaxH: Integer;
+Begin
+  If Not Assigned(FSlashList) Or Not Assigned(InputMemo) Then
+    Exit;
+  Count := FSlashList.Items.Count;
+  If Count < 1 Then
+    Count := 1;
+  If Count > 8 Then
+    Count := 8;
+  H := Count * FSlashList.ItemHeight + 4;
+  MaxH := Scale96ToForm(220);
+  If H > MaxH Then
+    H := MaxH;
+  FSlashList.Height := H;
+  FSlashList.Width := InputMemo.Width;
+  If FSlashList.Width < Scale96ToForm(280) Then
+    FSlashList.Width := Scale96ToForm(280);
+  P := InputMemo.ClientToScreen(Point(0, 0));
+  P := ScreenToClient(P);
+  FSlashList.Parent := Self;
+  FSlashList.Left := P.X;
+  FSlashList.Top := P.Y - FSlashList.Height;
+  If FSlashList.Top < 0 Then
+    FSlashList.Top := P.Y + InputMemo.Height;
+  FSlashList.BringToFront;
+End;
+
+Function PromptCaretByte(Memo: TSpellMemo): Integer;
+Begin
+  Result := 0;
+  If Not Assigned(Memo) Then
+    Exit;
+  Result := Length(UTF8Copy(Memo.Text, 1, Memo.SelStart));
+End;
+
+Procedure TProjectAssistantForm.UpdateSlashPopup;
+Var
+  Token, Filter: String;
+  TokenStart, I, Hit: Integer;
+  Entry: TAssistantCatalogItem;
+Begin
+  If Not Assigned(InputMemo) Then
+    Exit;
+  EnsureSlashPopup;
+  RebuildCommandCatalog;
+  Token := ExtractSlashToken(InputMemo.Text, PromptCaretByte(InputMemo), TokenStart);
+  If (Token = '') Or (Token[1] <> '/') Then
+    Begin
+      HideSlashPopup;
+      Exit;
+    End;
+  Filter := NormalizeSlashName(Token);
+  FCatalog.Filter(Filter, FSlashHits);
+  FSlashList.Items.BeginUpdate;
+  Try
+    FSlashList.Items.Clear;
+    If Length(FSlashHits) = 0 Then
+      FSlashList.Items.Add('No matching commands')
+    Else
+      For I := 0 To High(FSlashHits) Do
+        Begin
+          Hit := FSlashHits[I];
+          Entry := FCatalog.GetItem(Hit);
+          FSlashList.Items.AddObject(Entry.Caption, TObject(PtrInt(Hit + 1)));
+        End;
+  Finally
+    FSlashList.Items.EndUpdate;
+  End;
+  If FSlashList.Items.Count > 0 Then
+    FSlashList.ItemIndex := 0;
+  PositionSlashPopup;
+  FSlashList.Visible := True;
+End;
+
+Procedure TProjectAssistantForm.RemovePromptSlashToken;
+Var
+  TextValue: String;
+  Caret: Integer;
+Begin
+  If Not Assigned(InputMemo) Then
+    Exit;
+  TextValue := InputMemo.Text;
+  Caret := RemoveSlashToken(TextValue, PromptCaretByte(InputMemo));
+  InputMemo.Text := TextValue;
+  InputMemo.SelStart := UTF8Length(Copy(TextValue, 1, Caret));
+End;
+
+Procedure TProjectAssistantForm.ExecuteCatalogItem(Const Item: TAssistantCatalogItem);
+Var
+  SkillName: String;
+Begin
+  HideSlashPopup;
+  If Assigned(Item.Action) And (Item.Action Is TAction) Then
+    Begin
+      If TAction(Item.Action).Enabled Then
+        TAction(Item.Action).Execute;
+      Exit;
+    End;
+  If Copy(Item.UserData, 1, 6) = 'skill:' Then
+    Begin
+      SkillName := Copy(Item.UserData, 7, MaxInt);
+      PinActiveSkill(SkillName);
+    End;
+End;
+
+Procedure TProjectAssistantForm.ExecuteSlashSelection;
+Var
+  Hit: Integer;
+Begin
+  If Not SlashPopupVisible Then
+    Exit;
+  If (FSlashList.ItemIndex < 0) Or (FSlashList.ItemIndex >= FSlashList.Items.Count) Then
+    Exit;
+  If Not Assigned(FSlashList.Items.Objects[FSlashList.ItemIndex]) Then
+    Exit;
+  Hit := Integer(PtrInt(FSlashList.Items.Objects[FSlashList.ItemIndex])) - 1;
+  RemovePromptSlashToken;
+  If (Hit >= 0) And (Hit < FCatalog.Count) Then
+    ExecuteCatalogItem(FCatalog.GetItem(Hit));
+End;
+
+Procedure TProjectAssistantForm.SlashListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect;
+  State: TOwnerDrawState);
+Var
+  Box: TListBox;
+  Hit: Integer;
+  Entry: TAssistantCatalogItem;
+  AliasText: String;
+  CaptionR, AliasR: TRect;
+Begin
+  If Not (Control Is TListBox) Then
+    Exit;
+  Box := TListBox(Control);
+  If odSelected In State Then
+    Begin
+      Box.Canvas.Brush.Color := clHighlight;
+      Box.Canvas.Font.Color := clHighlightText;
+    End
+  Else
+    Begin
+      Box.Canvas.Brush.Color := clWindow;
+      Box.Canvas.Font.Color := clWindowText;
+    End;
+  Box.Canvas.FillRect(ARect);
+  If (Index < 0) Or (Index >= Box.Items.Count) Then
+    Exit;
+  CaptionR := ARect;
+  CaptionR.Right := ARect.Left + ((ARect.Right - ARect.Left) * 2) Div 3;
+  AliasR := ARect;
+  AliasR.Left := CaptionR.Right;
+  Box.Canvas.TextRect(CaptionR, CaptionR.Left + 6, CaptionR.Top + 2, Box.Items[Index]);
+  If Assigned(Box.Items.Objects[Index]) Then
+    Begin
+      Hit := Integer(PtrInt(Box.Items.Objects[Index])) - 1;
+      Entry := FCatalog.GetItem(Hit);
+      AliasText := FormatSlashAlias(Entry.Slash);
+      If odSelected In State Then
+        Box.Canvas.Font.Color := clHighlightText
+      Else
+        Box.Canvas.Font.Color := clGrayText;
+      If AliasText <> '' Then
+        Box.Canvas.TextRect(AliasR, AliasR.Left, AliasR.Top + 2, AliasText);
+    End;
+End;
+
+Procedure TProjectAssistantForm.SlashListClick(Sender: TObject);
+Begin
+  ExecuteSlashSelection;
+End;
+
+Procedure TProjectAssistantForm.PopupUnderControl(Host: TControl; Popup: TPopupMenu);
+Var
+  P: TPoint;
+Begin
+  If Not Assigned(Host) Or Not Assigned(Popup) Then
+    Exit;
+  P := Host.ClientToScreen(Point(0, Host.Height));
+  Popup.PopUp(P.X, P.Y);
+End;
+
+Procedure TProjectAssistantForm.ApplyConfigAndRefresh;
+Begin
+  If Assigned(AssistantChatConfig) Then
+    AssistantChatConfig.Save;
+  RefreshFromConfig;
+  PersistShellConfig;
+End;
+
+Procedure TProjectAssistantForm.PinActiveSkill(Const SkillName: String);
+Begin
+  If Not Assigned(AssistantChatConfig) Then
+    Exit;
+  AssistantChatConfig.ActiveSkill := SkillName;
+  ApplyConfigAndRefresh;
+  If SkillName = '' Then
+    SetCurrentSystemNote('Pinned skill cleared. Plan and Build still attach free-pascal-engineer when it is installed.')
+  Else
+    SetCurrentSystemNote('Pinned skill **' + SkillName + '**. It is included in the next turn.');
+End;
+
+Procedure AddFooterItem(Menu: TPopupMenu; Const Caption: String; TagValue: Integer;
+  Const ValueText: String; Checked, Radio: Boolean; Handler: TNotifyEvent);
+Var
+  Item: TMenuItem;
+Begin
+  Item := TMenuItem.Create(Menu);
+  Item.Caption := Caption;
+  If Caption <> '-' Then
+    Begin
+      Item.Tag := TagValue;
+      Item.Hint := ValueText;
+      Item.Checked := Checked;
+      Item.RadioItem := Radio;
+      Item.GroupIndex := TagValue;
+      Item.OnClick := Handler;
+    End;
+  Menu.Items.Add(Item);
+End;
+
+Procedure TProjectAssistantForm.FillModelFooterMenu;
+Var
+  Models: TStringList;
+  I: Integer;
+  ModelName: String;
+Begin
+  Models := TStringList.Create;
+  Try
+    Models.Sorted := True;
+    Models.Duplicates := dupIgnore;
+    If FModelName <> '' Then
+      Models.Add(FModelName);
+    Models.Add(AssistantConfigDefaultModel);
+    Models.Add('grok-4');
+    Models.Add('grok-3');
+    For I := 0 To Models.Count - 1 Do
+      Begin
+        ModelName := Models[I];
+        AddFooterItem(FFooterMenu, ModelName, FooterTagModel, ModelName, SameText(ModelName, FModelName), True,
+          @FooterMenuClick);
+      End;
+  Finally
+    Models.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.FillThinkingFooterMenu;
+Var
+  Current: TAssistantThinkingLevel;
+Begin
+  Current := atlHigh;
+  If Assigned(AssistantChatConfig) Then
+    Current := AssistantChatConfig.GetThinkingLevel;
+  AddFooterItem(FFooterMenu, 'Low thinking', FooterTagThinking, 'low', Current = atlLow, True,
+    @FooterMenuClick);
+  AddFooterItem(FFooterMenu, 'Medium thinking', FooterTagThinking, 'medium', Current = atlMedium, True,
+    @FooterMenuClick);
+  AddFooterItem(FFooterMenu, 'High thinking', FooterTagThinking, 'high', Current = atlHigh, True,
+    @FooterMenuClick);
+  AddFooterItem(FFooterMenu, 'XHigh thinking', FooterTagThinking, 'xhigh', Current = atlXHigh, True,
+    @FooterMenuClick);
+End;
+
+Procedure TProjectAssistantForm.FillApprovalFooterMenu;
+Var
+  Current: TAssistantApprovalMode;
+Begin
+  Current := aamAsk;
+  If Assigned(AssistantChatConfig) Then
+    Current := AssistantChatConfig.GetApprovalMode;
+  AddFooterItem(FFooterMenu, 'Approval: Ask', FooterTagApproval, 'ask', Current = aamAsk, True,
+    @FooterMenuClick);
+  AddFooterItem(FFooterMenu, 'Approval: Auto', FooterTagApproval, 'auto', Current = aamAuto, True,
+    @FooterMenuClick);
+  AddFooterItem(FFooterMenu, 'Approval: Always', FooterTagApproval, 'always', Current = aamAlways, True,
+    @FooterMenuClick);
+End;
+
+Procedure TProjectAssistantForm.FillSkillFooterMenu;
+Var
+  Skills: TAssistantSkillList;
+  I: Integer;
+  Root, PinnedSkill: String;
+Begin
+  PinnedSkill := '';
+  If Assigned(AssistantChatConfig) Then
+    PinnedSkill := AssistantChatConfig.ActiveSkill;
+  AddFooterItem(FFooterMenu, '(None)', FooterTagSkill, '', PinnedSkill = '', True, @FooterMenuClick);
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  Skills := ListDiscoveredSkills(Root);
+  For I := 0 To High(Skills) Do
+    AddFooterItem(FFooterMenu, Skills[I].Name, FooterTagSkill, Skills[I].Name,
+      SameText(Skills[I].Name, PinnedSkill), True, @FooterMenuClick);
+End;
+
+Procedure TProjectAssistantForm.FooterMenuClick(Sender: TObject);
+Var
+  Item: TMenuItem;
+Begin
+  If Not (Sender Is TMenuItem) Then
+    Exit;
+  Item := TMenuItem(Sender);
+  If Not Assigned(AssistantChatConfig) Then
+    Exit;
+  Case Item.Tag Of
+    FooterTagModel:
+      If Trim(Item.Hint) <> '' Then
+        Begin
+          AssistantChatConfig.Model := Trim(Item.Hint);
+          ApplyConfigAndRefresh;
+        End;
+    FooterTagThinking:
+      Begin
+        AssistantChatConfig.SetThinkingLevelEnum(StrToThinkingLevel(Item.Hint));
+        ApplyConfigAndRefresh;
+      End;
+    FooterTagApproval:
+      Begin
+        AssistantChatConfig.SetApprovalModeEnum(StrToApprovalMode(Item.Hint));
+        ApplyConfigAndRefresh;
+      End;
+    FooterTagSkill:
+      PinActiveSkill(Item.Hint);
+    FooterTagSettings:
+      SettingsActionExecute(Sender);
+  Else
+    { }
+  End;
+End;
+
+Procedure TProjectAssistantForm.ShowPlanOfferBar(OfferVisible: Boolean);
+Begin
+  FShowPlanOffer := OfferVisible And (GetActivePlanRelativePath <> '');
+  If Assigned(PlanOfferBar) Then
+    PlanOfferBar.Visible := FShowPlanOffer;
+  If Assigned(InputPanel) Then
+    Begin
+      If FShowPlanOffer Then
+        InputPanel.Height := Scale96ToForm(103)
+      Else
+        InputPanel.Height := Scale96ToForm(75);
+    End;
+  If Assigned(PlanOfferLabel) Then
+    PlanOfferLabel.Caption := 'Plan written.';
 End;
 
 Procedure TProjectAssistantForm.ReviewButtonClick(Sender: TObject);
@@ -3573,6 +4208,7 @@ Procedure TProjectAssistantForm.CommandsActionExecute(Sender: TObject);
 Var
   ScreenPt: TPoint;
 Begin
+  HideSlashPopup;
   EnsureCommandsMenu;
   If Not Assigned(FCommandsPopup) Then
     Exit;
@@ -3585,11 +4221,67 @@ End;
 
 Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
 Begin
+  If SlashPopupVisible Then
+    Begin
+      Case Key Of
+        VK_ESCAPE:
+          Begin
+            Key := 0;
+            HideSlashPopup;
+            Exit;
+          End;
+        VK_UP:
+          Begin
+            Key := 0;
+            If FSlashList.ItemIndex > 0 Then
+              FSlashList.ItemIndex := FSlashList.ItemIndex - 1;
+            Exit;
+          End;
+        VK_DOWN:
+          Begin
+            Key := 0;
+            If FSlashList.ItemIndex < FSlashList.Items.Count - 1 Then
+              FSlashList.ItemIndex := FSlashList.ItemIndex + 1;
+            Exit;
+          End;
+        VK_RETURN, VK_TAB:
+          Begin
+            Key := 0;
+            ExecuteSlashSelection;
+            Exit;
+          End;
+      Else
+        { }
+      End;
+    End;
   If (Key = VK_RETURN) And (ssCtrl In Shift) Then
     Begin
       Key := 0;
       SendActionExecute(Sender);
     End;
+End;
+
+Procedure TProjectAssistantForm.InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
+Begin
+  If SlashPopupVisible And ((UTF8Key = #13) Or (UTF8Key = #10) Or (UTF8Key = #9)) Then
+    UTF8Key := '';
+End;
+
+Procedure TProjectAssistantForm.InputMemoChange(Sender: TObject);
+Begin
+  UpdateSlashPopup;
+End;
+
+Procedure TProjectAssistantForm.DeferredHideSlash(Data: PtrInt);
+Begin
+  If Assigned(FSlashList) And FSlashList.Focused Then
+    Exit;
+  HideSlashPopup;
+End;
+
+Procedure TProjectAssistantForm.InputMemoExit(Sender: TObject);
+Begin
+  Application.QueueAsyncCall(@DeferredHideSlash, 0);
 End;
 
 Procedure TProjectAssistantForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -3601,10 +4293,278 @@ Begin
     End;
 End;
 
+Procedure TProjectAssistantForm.StatusFooterLeftClick(Sender: TObject);
+Begin
+  ModelPickerActionExecute(Sender);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterSkillClick(Sender: TObject);
+Begin
+  SkillsPickerActionExecute(Sender);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterCentreClick(Sender: TObject);
+Begin
+  ContextBreakdownActionExecute(Sender);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterRightClick(Sender: TObject);
+Begin
+  SessionInfoActionExecute(Sender);
+End;
+
+Procedure TProjectAssistantForm.ContextBreakdownActionExecute(Sender: TObject);
+Var
+  Info: TAssistantContextBreakdown;
+  Pct: Integer;
+  Body: String;
+Begin
+  HideSlashPopup;
+  If Assigned(AssistantClient) Then
+    Info := AssistantClient.GetContextBreakdown
+  Else
+    Begin
+      Info := Default(TAssistantContextBreakdown);
+      Info.TotalTokens := FContextUsed;
+      Info.LimitTokens := FContextLimit;
+    End;
+  If Info.LimitTokens > 0 Then
+    Pct := (Info.TotalTokens * 100) Div Info.LimitTokens
+  Else
+    Pct := 0;
+  Body :=
+    Format('Context is about %d%% of the budget.', [Pct]) + LineEnding + LineEnding +
+    Format('  System prompt   ~%d tokens', [Info.SystemTokens]) + LineEnding +
+    Format('  Tool schemas    ~%d tokens', [Info.ToolsTokens]) + LineEnding +
+    Format('  History         ~%d tokens  (%d messages)', [Info.HistoryTokens, Info.MessageCount]) +
+    LineEnding +
+    Format('  Total           ~%d / %d', [Info.TotalTokens, Info.LimitTokens]);
+  If Assigned(AssistantClient) And (AssistantClient.LastTrimNotice <> '') Then
+    Body := Body + LineEnding + LineEnding + AssistantClient.LastTrimNotice;
+  MessageDlg(Body, mtInformation, [mbOK], 0);
+End;
+
+Procedure TProjectAssistantForm.SessionInfoActionExecute(Sender: TObject);
+Var
+  Body, PlanRel, Root, SkillName: String;
+  Turns: Integer;
+  SignedIn: String;
+Begin
+  HideSlashPopup;
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    PlanRel := '(none)';
+  Root := '(no project)';
+  Turns := 0;
+  If Assigned(ProjectAssistantConversation) Then
+    Begin
+      If ProjectAssistantConversation.ProjectRoot <> '' Then
+        Root := ProjectAssistantConversation.ProjectRoot;
+      Turns := ProjectAssistantConversation.TurnCount;
+    End;
+  SkillName := '(none)';
+  SignedIn := 'no';
+  If Assigned(AssistantChatConfig) Then
+    Begin
+      If AssistantChatConfig.ActiveSkill <> '' Then
+        SkillName := AssistantChatConfig.ActiveSkill;
+      If AssistantChatConfig.IsSignedIn Then
+        SignedIn := 'yes';
+    End;
+  Body :=
+    'Project Assistant session' + LineEnding + LineEnding +
+    'Mode: ' + ModeChipCaption(ActiveMode) + LineEnding +
+    'Model: ' + FModelName + LineEnding;
+  If Assigned(AssistantChatConfig) Then
+    Body := Body +
+      'Thinking: ' + ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel) + LineEnding +
+      'Approval: ' + ApprovalModeCaption(AssistantChatConfig.GetApprovalMode) + LineEnding;
+  Body := Body +
+    'Skill: ' + SkillName + LineEnding +
+    Format('Context: ~%d / %d tokens', [FContextUsed, FContextLimit]) + LineEnding +
+    'Turns: ' + IntToStr(Turns) + LineEnding +
+    'Active plan: ' + PlanRel + LineEnding +
+    'Project: ' + Root + LineEnding +
+    'Signed in: ' + SignedIn;
+  MessageDlg(Body, mtInformation, [mbOK], 0);
+End;
+
+Procedure EnsureFooterMenu(Var Menu: TPopupMenu);
+Begin
+  If Assigned(Menu) Then
+    Menu.Items.Clear
+  Else
+    Menu := TPopupMenu.Create(Nil);
+End;
+
+Procedure TProjectAssistantForm.ModelPickerActionExecute(Sender: TObject);
+Var
+  Host: TControl;
+Begin
+  HideSlashPopup;
+  EnsureFooterMenu(FFooterMenu);
+  FillModelFooterMenu;
+  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
+  FillThinkingFooterMenu;
+  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
+  FillApprovalFooterMenu;
+  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
+  AddFooterItem(FFooterMenu, 'Settings…', FooterTagSettings, '', False, False, @FooterMenuClick);
+  Host := StatusFooter.LeftLabel;
+  If Not Assigned(Host) Then
+    Host := StatusFooter;
+  PopupUnderControl(Host, FFooterMenu);
+End;
+
+Procedure TProjectAssistantForm.ThinkingPickerActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  EnsureFooterMenu(FFooterMenu);
+  FillThinkingFooterMenu;
+  PopupUnderControl(StatusFooter, FFooterMenu);
+End;
+
+Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
+Var
+  Host: TControl;
+Begin
+  HideSlashPopup;
+  EnsureFooterMenu(FFooterMenu);
+  FillSkillFooterMenu;
+  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
+  AddFooterItem(FFooterMenu, 'Settings…', FooterTagSettings, '', False, False, @FooterMenuClick);
+  Host := StatusFooter.SkillLabel;
+  If Not Assigned(Host) Then
+    Host := StatusFooter;
+  PopupUnderControl(Host, FFooterMenu);
+End;
+
+Procedure TProjectAssistantForm.CompactContextActionExecute(Sender: TObject);
+Var
+  Saved: Integer;
+Begin
+  HideSlashPopup;
+  If FSending Then
+    Begin
+      MessageDlg('Wait for the current reply to finish (or Stop) before compacting context.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not Assigned(AssistantClient) Then
+    Exit;
+  Saved := AssistantClient.CompactOlderHistory;
+  FContextUsed := AssistantClient.EstimatedPromptTokens;
+  UpdateStatusFooter;
+  If Saved < 1 Then
+    SetCurrentSystemNote('Context is already compact enough for the current budget.')
+  Else
+    SetCurrentSystemNote(Format('Compacted context — about %d tokens removed. Re-read files if an older turn was trimmed.',
+      [Saved]));
+End;
+
+Procedure TProjectAssistantForm.CopyLastAnswerActionExecute(Sender: TObject);
+Var
+  Body: String;
+  Turn: TConversationTurn;
+Begin
+  HideSlashPopup;
+  Body := Trim(FAssistantContent);
+  If (Body = '') And Assigned(ProjectAssistantConversation) And
+    (ProjectAssistantConversation.TurnCount > 0) Then
+    If ProjectAssistantConversation.GetTurn(ProjectAssistantConversation.TurnCount - 1, Turn) Then
+      Body := Trim(Turn.Response);
+  If Body = '' Then
+    Begin
+      MessageDlg('No answer to copy yet.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Clipboard.AsText := Body;
+  StatusFooter.SetRightText('Copied answer');
+End;
+
+Procedure TProjectAssistantForm.OpenPlanActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  BuildOpenPlanButtonClick(Sender);
+End;
+
+Procedure TProjectAssistantForm.BuildThisActionExecute(Sender: TObject);
+Var
+  Idx: Integer;
+  Title: String;
+Begin
+  HideSlashPopup;
+  ShowPlanOfferBar(False);
+  If GetActivePlanRelativePath = '' Then
+    Begin
+      MessageDlg('Set an active plan on the Plan panel first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  SelectMode(amBuild);
+  RefreshBuildTodos;
+  Idx := FindNextIncompleteBuildSection;
+  Title := '';
+  If (Idx >= 0) And Assigned(BuildSections) And (Idx < BuildSections.Count) Then
+    Begin
+      FBuildSelectedIndex := Idx;
+      If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
+        BuildTodoList.ItemIndex := Idx;
+      Title := TPlanSection(BuildSections[Idx]).Title;
+    End;
+  If Assigned(InputMemo) Then
+    Begin
+      If Title <> '' Then
+        InputMemo.Text := 'Implement the next incomplete section: ' + Title
+      Else
+        InputMemo.Text := 'Implement the next incomplete section of the active plan.';
+      InputMemo.SelStart := Length(InputMemo.Text);
+      InputMemo.SetFocus;
+    End;
+End;
+
+Procedure TProjectAssistantForm.RevisePlanActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  ShowPlanOfferBar(False);
+  SelectMode(amPlan);
+  If Assigned(InputMemo) Then
+    Begin
+      InputMemo.Text := 'Revise the active plan: ';
+      InputMemo.SelStart := Length(InputMemo.Text);
+      InputMemo.SetFocus;
+    End;
+End;
+
+Procedure TProjectAssistantForm.AskModeActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  If Not FSending Then
+    SelectMode(amChat);
+End;
+
+Procedure TProjectAssistantForm.PlanModeActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  If Not FSending Then
+    SelectMode(amPlan);
+End;
+
+Procedure TProjectAssistantForm.BuildModeActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  If Not FSending Then
+    SelectMode(amBuild);
+End;
+
 Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
 Begin
+  If SlashPopupVisible Then
+    Begin
+      ExecuteSlashSelection;
+      Exit;
+    End;
   UserText := Trim(InputMemo.Text);
   If UserText = '' Then
     Exit;
@@ -3924,6 +4884,7 @@ End;
 
 Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean);
 Begin
+  ShowPlanOfferBar(False);
   If FPlanAgentRunning And (Not KeepPlanAgent) Then
     StopWorkOnPlanAgent('new chat');
   If FSending Then

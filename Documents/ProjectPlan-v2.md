@@ -1,8 +1,8 @@
 # Project Plan v2: Agentic Pascal in the Lazarus IDE
 
 **Michell Computing Style Lazarus Package Suite**
-**Version:** 2.2 (Planning)
-**Date:** 2026-08-21
+**Version:** 2.3 (Planning)
+**Date:** 2026-08-25
 **Author:** FreePascal Engineer
 **Supersedes:** [ProjectPlan.md](ProjectPlan.md) for LazAssistantTools architecture. LazRepositoryTools and LazWorkflowCommon stay as shipped in v0.2.
 **Reference:** [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache 2.0) — workflow and software *structure*, not a Rust port.
@@ -669,7 +669,7 @@ Status: complete
 
 Status: complete
 
-Ask / Plan / Build chips (`amBuild`, persisted as `build`; old `code` config still loads). Chat help panel gone; work tiles stay on the left in every mode; plan file list is a Plan-mode strip. Prompt stays editable; Send caption **Steer** mid-turn; `Ctrl+Enter` queues a steer at the next actor gap. Short bottom bar (Review ▾, Commands…). Window **Session / Review / View** menu plus `Ctrl+P` command popup from the same `TActionList`. Slash popup, footer-click catalog, and Plan “Build this” bar remain follow-ups.
+Ask / Plan / Build chips (`amBuild`, persisted as `build`; old `code` config still loads). Chat help panel gone; work tiles stay on the left in every mode; plan file list is a Plan-mode strip. Prompt stays editable; Send caption **Steer** mid-turn; `Ctrl+Enter` queues a steer at the next actor gap. Short bottom bar (Review ▾, Commands…). Window **Session / Review / View** menu plus `Ctrl+P` command popup from the same `TActionList` (grouped by category). Typing `/` in the prompt filters `AssistantCommands` (caption + dim `/alias`). Footer clicks: model cluster → model/thinking/approval; skill → pin list; context % → token breakdown; phase → session info. Plan-mode write shows **Build this** / **Revise**.
 
 ## 5. Harness
 
@@ -687,7 +687,38 @@ Status: complete
 
 Status: complete
 
-Turns store `events_file` (project-relative `.assistant/events/*.jsonl`) alongside `trace` JSON. Opening a history row prefers the saved trace snapshot; if that is missing, `TAssistantTrace.ReplayFromEventsFile` rebuilds tool / subagent / steer cards from the event log and fills thinking/answer from the human JSONL. Footer height uses `Scale96ToForm`; the Project Assistant form is `Scaled`. README matches v2 (four packages, Ask/Plan/Build, Responses default). Actor still starts on Responses (`wire=responses`); Chat Completions remains automatic fallback only. Large-trace virtualization is deferred until a turn hits the GTK ~30k coordinate cap.
+Turns store `events_file` (project-relative `.assistant/events/*.jsonl`) alongside `trace` JSON. Opening a history row prefers the saved trace snapshot; if that is missing, `TAssistantTrace.ReplayFromEventsFile` rebuilds tool / subagent / steer cards from the event log and fills thinking/answer from the human JSONL. Footer height uses `Scale96ToForm`; the Project Assistant form is `Scaled`. README matches v2 (four packages, Ask/Plan/Build, Responses default). Actor still starts on Responses (`wire=responses`); Chat Completions remains automatic fallback only. Large-trace virtualization is deferred until a turn hits the GTK ~30k coordinate cap. Package 4 leftovers (slash popup, footer-click catalog, Plan **Build this**) landed with this polish.
+
+## 8. Shell density and discoverability
+
+Status: not started
+
+The dock works, but it still reads as a stack of IDE panels rather than one agent surface. Package 4 leftovers made commands *findable*; this package makes the window *quiet* so the trace is the thing you look at.
+
+Do **not** grow the bottom bar. Do **not** add a tutorial overlay. Keep static chrome in the `.lfm`.
+
+### 8.1 Density (what to take away)
+
+1. **Mode row.** Replace `TRadioGroup` (empty caption, 48 px) with three tight chips on one line. Move the long “will not write files / Steer to inject a note / sticky until you change mode” sentence into the chip tooltip and a single-line badge (mode name + one clause). The footer already shows phase.
+2. **Bottom bar.** Keep only the verbs of the current state: **Send/Steer**, **Stop**, **Review ▾**, **Commands…**. **New Chat**, **Settings**, and **Fix Error** (when no Messages error is selected) move into Session / Review / overflow `⋯`. Delete leftover hidden LFM controls (`ToggleThinkingButton`, `ReviewCompileButton`, `ReviewBuildButton`, `AutoNewChatCheck`).
+3. **History column (240 px).** Export / Delete become the history context menu (rewind lives there too). Search uses `TextHint` on the list instead of a dedicated row. Default width ~200 px; the combo remains the archive switcher.
+4. **Left work column (300 px).** Default ~220 px. Plan file list and Build tiles should not stack 200 px of plans on top of a full tile list — one work list, with the Plan strip only while `amPlan`. Runtime Plan/Build panels use `Scale96ToForm` (they are still raw 200 / 36 px).
+5. **Dead help.** Delete `ChatSidePanel` / `ChatSideLabel` (still says “Chat mode” in the resource, always `Visible := False`). Empty trace gets **one** sentence: “Type a request, or open Commands… (`Ctrl+P`). Prefix `/` for the same list.”
+
+### 8.2 Prompt and catalog (what to finish)
+
+6. **Prompt hint.** SpellMemo needs a dim empty-state line (not a 300 px essay): “Ask anything, or Commands… (`Ctrl+P`). Prefix `/` to search.”
+7. **One searchable palette.** `Ctrl+P` and `/` should be the same overlay (filter box + caption + dim slash), not a categorized popup plus a slash list. The window menu stays as the browse path for mouse users.
+8. **Rewind.** Truncate the conversation (JSONL + client history) to the selected history row. Context menu on that row: Rewind to here, Export, Delete. Not a new product — it is the remaining §6.5 catalog row.
+9. **Trace context menus.** Thinking/answer: copy, expand, collapse. Tool card: open file, jump to Messages (compile card). These are the “besides slash” surfaces for Copy / Rewind.
+
+### 8.3 Form split (so the shell stays a shell)
+
+10. **`ProjectAssistantForm` is still ~4.5k lines.** Catalog matching is now `AssistantCommands`. Next split, as frames with their own `.lfm`: history column, Plan/Build work panel. Do not invent a `CreateUI` shell. Add a dated size note each time the remainder is reviewed.
+
+### 8.4 Out of scope here
+
+Trace virtualization (GTK ~30k coordinate cap), ACP host, worktree isolation, mermaid, MCP. Compact already has a user verb; an LLM summary compact is later.
 
 ---
 
@@ -756,7 +787,7 @@ Turns store `events_file` (project-relative `.assistant/events/*.jsonl`) alongsi
 
 ## 16. Next immediate step
 
-v2 numbered packages are complete. Remaining polish from package 4: slash popup, footer-click catalog, Plan **Build this** bar. Virtualize the trace only if a turn overflows the GTK coordinate cap.
+Package 4 leftovers (slash popup, footer-click catalog, Plan **Build this**) are done. Next is package 8: shell density and a single searchable catalog overlay. Virtualize the trace only if a turn overflows the GTK ~30k coordinate cap.
 
 ---
 
