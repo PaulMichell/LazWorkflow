@@ -274,6 +274,67 @@ Begin
   End;
 End;
 
+Procedure TestGenericMonoAliasUsesFixedPitch;
+Var
+  R: TMarkDownCanvasRenderer;
+  Bmp: TBitmap;
+  SL: TStringList;
+  W, H, I, CodeCount: Integer;
+  IItem, MItem, Item: TLayoutItem;
+  BodyIWidth: Integer;
+Begin
+  R := TMarkDownCanvasRenderer.Create(Nil);
+  Bmp := TBitmap.Create;
+  SL := TStringList.Create;
+  IItem := Nil;
+  MItem := Nil;
+  Try
+    Bmp.SetSize(800, 120);
+    Bmp.Canvas.Font.Name := 'DejaVu Sans';
+    Bmp.Canvas.Font.Size := 10;
+    R.FontName := 'DejaVu Sans';
+    R.MonoFontName := 'Monospace';
+    R.BaseFontSize := 10;
+    SL.Text := '`iiiiiiii` `MMMMMMMM`';
+    R.ParseMarkdown(SL);
+    R.CalculateLayout(Bmp.Canvas, 700, W, H);
+    CodeCount := 0;
+    For I := 0 To R.LayoutItemCount - 1 Do
+      Begin
+        Item := R.LayoutItem(I);
+        If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+          Continue;
+        If Not (fcMono In Item.Context) Then
+          Continue;
+        Inc(CodeCount);
+        If Item.Text = 'iiiiiiii' Then
+          IItem := Item
+        Else If Item.Text = 'MMMMMMMM' Then
+          MItem := Item;
+      End;
+    Check('generic Monospace produced two code runs', CodeCount >= 2);
+    Check('found iiii code run', Assigned(IItem));
+    Check('found MMMM code run', Assigned(MItem));
+    If Assigned(IItem) And Assigned(MItem) Then
+      Check('iiii and MMMM share a mono advance', Abs(IItem.Width - MItem.Width) <= 2);
+    Bmp.Canvas.Font.BeginUpdate;
+    Try
+      Bmp.Canvas.Font.Name := 'DejaVu Sans';
+      Bmp.Canvas.Font.Size := 10;
+      Bmp.Canvas.Font.Style := [];
+    Finally
+      Bmp.Canvas.Font.EndUpdate;
+    End;
+    BodyIWidth := Bmp.Canvas.TextWidth('iiiiiiii');
+    If Assigned(IItem) Then
+      Check('code iiii is wider than body sans', IItem.Width > BodyIWidth + 2);
+  Finally
+    SL.Free;
+    Bmp.Free;
+    R.Free;
+  End;
+End;
+
 Procedure TestCollapsedSpacesAroundCode;
 Var
   Tight, Padded: TMarkDownCanvasRenderer;
@@ -316,6 +377,7 @@ Begin
   TestHardBreakIsNewlineNotTag;
   TestHtmlBrIsNewlineNotTag;
   TestCodeSpanUsesMonoAndTightGap;
+  TestGenericMonoAliasUsesFixedPitch;
   If FailCount = 0 Then
     Begin
       WriteLn('All MarkdownLayout tests passed.');

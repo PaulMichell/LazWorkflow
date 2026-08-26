@@ -58,6 +58,11 @@ Type
     FMISelectLine: TMenuItem;
     FMISelectAll: TMenuItem;
     FMICopy: TMenuItem;
+    FMeasureBmp: TBitmap;
+    FPaintBmp: TBitmap;
+    procedure EnsureMeasureBmp;
+    procedure EnsurePaintBmp(AWidth, AHeight: Integer);
+    procedure SyncRenderFonts(ACanvas: TCanvas);
     function GetColor(AIndex: Integer): TColor;
     function GetDocument: TMarkDownDocument;
     function GetInteger(AIndex: Integer): Integer;
@@ -451,7 +456,50 @@ begin
   BorderStyle := bsSingle;
   BorderWidth := 0;
   AutoSize := True;
+  { Widget-canvas Font.Name is ignored on GTK3; layout and paint use bitmaps. }
+  ParentFont := False;
   EnsureDefaultPopup;
+end;
+
+procedure TCustomMarkDownControl.EnsureMeasureBmp;
+begin
+  if FMeasureBmp=nil then
+  begin
+    FMeasureBmp:=TBitmap.Create;
+    FMeasureBmp.SetSize(16,16);
+  end;
+end;
+
+procedure TCustomMarkDownControl.EnsurePaintBmp(AWidth, AHeight: Integer);
+begin
+  if AWidth<1 then AWidth:=1;
+  if AHeight<1 then AHeight:=1;
+  if FPaintBmp=nil then
+    FPaintBmp:=TBitmap.Create;
+  if (FPaintBmp.Width<>AWidth) or (FPaintBmp.Height<>AHeight) then
+    FPaintBmp.SetSize(AWidth, AHeight);
+end;
+
+procedure TCustomMarkDownControl.SyncRenderFonts(ACanvas: TCanvas);
+begin
+  if not Assigned(ACanvas) then
+    Exit;
+  if Font.Size<>0 then
+    FRenderer.BaseFontSize:=Font.Size;
+  if (Font.Name<>'') and (CompareText(Font.Name, 'default')<>0) then
+    FRenderer.FontName:=Font.Name;
+  ACanvas.Font.BeginUpdate;
+  try
+    ACanvas.Font.Size:=FRenderer.BaseFontSize;
+    ACanvas.Font.Style:=[];
+    ACanvas.Font.Pitch:=fpDefault;
+    if FRenderer.FontName<>'' then
+      ACanvas.Font.Name:=FRenderer.FontName
+    else if (Font.Name<>'') and (CompareText(Font.Name, 'default')<>0) then
+      ACanvas.Font.Name:=Font.Name;
+  finally
+    ACanvas.Font.EndUpdate;
+  end;
 end;
 
 procedure TCustomMarkDownControl.CalculatePreferredSize(
@@ -481,13 +529,9 @@ begin
     AWidth:=8;
   FLastClientWidth:=AWidth;
   FLastCalcClientWidth:=AWidth;
-  if not HandleAllocated then
-    begin
-    FCalculatedWidth:=AWidth;
-    FCalculatedHeight:=10;
-    exit;
-    end;
-  FRenderer.CalculateLayout(Canvas,AWidth,FCalculatedWidth,FCalculatedHeight);
+  EnsureMeasureBmp;
+  SyncRenderFonts(FMeasureBmp.Canvas);
+  FRenderer.CalculateLayout(FMeasureBmp.Canvas,AWidth,FCalculatedWidth,FCalculatedHeight);
   InvalidatePreferredSize;
 end;
 
@@ -525,7 +569,9 @@ begin
     dec(FLastCalcClientWidth,GetSystemMetrics(SM_CXVSCROLL));
   if FLastCalcClientWidth<0 then FLastCalcClientWidth:=0;
 
-  FRenderer.CalculateLayout(Canvas,FLastCalcClientWidth,FCalculatedWidth,FCalculatedHeight);
+  EnsureMeasureBmp;
+  SyncRenderFonts(FMeasureBmp.Canvas);
+  FRenderer.CalculateLayout(FMeasureBmp.Canvas,FLastCalcClientWidth,FCalculatedWidth,FCalculatedHeight);
 
   FScrollbarsNeedUpdate:=true;
   UpdateScrollBars;
@@ -955,20 +1001,34 @@ begin
   else
     FContextPopup := Nil;
   FreeAndNil(FRenderer);
+  FreeAndNil(FMeasureBmp);
+  FreeAndNil(FPaintBmp);
   FreeAndNil(FMarkDown);
   inherited destroy;
 end;
 
 procedure TCustomMarkDownControl.Paint;
+var
+  W, H: Integer;
 begin
-  Canvas.Brush.Color:=Color;
-  Canvas.Brush.Style:=bsSolid;
-  Canvas.FillRect(0,0,Width,Height);
+  W:=Width;
+  H:=Height;
+  if W<1 then W:=1;
+  if H<1 then H:=1;
+  { GTK3 widget TextOut ignores Canvas.Font.Name and keeps the control's sans,
+    so code spans measured in mono paint as proportional glyphs with holes.
+    Draw onto a TBitmap (independent pango context) and blit. }
+  EnsurePaintBmp(W, H);
+  FPaintBmp.Canvas.Brush.Color:=Color;
+  FPaintBmp.Canvas.Brush.Style:=bsSolid;
+  FPaintBmp.Canvas.FillRect(0, 0, W, H);
   if (FCalculatedWidth>0) and (FCalculatedHeight>0) then
     begin
+    SyncRenderFonts(FPaintBmp.Canvas);
     FRenderer.BGColor:=Color;
-    FRenderer.DrawLayout(Canvas,-ScrolledLeft,-ScrolledTop);
+    FRenderer.DrawLayout(FPaintBmp.Canvas,-ScrolledLeft,-ScrolledTop);
     end;
+  Canvas.Draw(0, 0, FPaintBmp);
 end;
 
 end.

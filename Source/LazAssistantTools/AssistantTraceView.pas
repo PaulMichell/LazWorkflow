@@ -1139,6 +1139,7 @@ Begin
       View.ScrollBars := ssNone;
       View.FontColor := clGrayText;
       View.FontQuoteColor := clGrayText;
+      View.ParentFont := False;
       View.MonoFontName := 'Monospace';
       View.Parent := Panel;
       HookWheelAndPopup(View);
@@ -1309,6 +1310,7 @@ Begin
       View.ParentColor := False;
       View.ParentBackground := False;
       View.ScrollBars := ssNone;
+      View.ParentFont := False;
       View.MonoFontName := 'Monospace';
       View.Parent := Panel;
       HookWheelAndPopup(View);

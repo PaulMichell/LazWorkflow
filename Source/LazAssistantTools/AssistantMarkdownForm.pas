@@ -279,6 +279,7 @@ Begin
   Control.ParentColor := False;
   Control.ParentBackground := False;
   Control.ScrollBars := ssAutoBoth;
+  Control.ParentFont := False;
   Control.MonoFontName := 'Monospace';
   Control.FontName := 'default';
   Control.OnOpenURL := @HandlePreviewOpenURL;

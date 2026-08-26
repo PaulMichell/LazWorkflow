@@ -217,6 +217,7 @@ type
     procedure SetCurrentY(aValue: Integer);
 
     // Font and measurement
+    procedure SetMonoFontName(const aValue: utf8string);
     function DIP(const aValue: LongInt): LongInt;
     function ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
     procedure ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt; const aFontStyle: TFontStyles;
@@ -292,7 +293,7 @@ type
     Property Document : TMarkdownDocument Read FDocument;
     property TargetDPI: LongInt read FTargetDPI write FTargetDPI;
     property FontName: utf8string read FFontName write FFontName;
-    property MonoFontName: utf8string read FMonoFontName write FMonoFontName;
+    property MonoFontName: utf8string read FMonoFontName write SetMonoFontName;
 
     property FontHyperLinkColor: TColor read FHyperLinkColor write FHyperLinkColor;
     property BGCodeColor: TColor read FBGCodeColor write FBGCodeColor;
@@ -1157,45 +1158,61 @@ begin
   FLayout.LineY:=aValue;
 end;
 
+function IsGenericMonoFamily(const aName: utf8string): boolean;
+begin
+  Result:=SameText(aName,'Monospace') or SameText(aName,'monospace')
+    or SameText(aName,'Courier') or SameText(aName,'fixed')
+    or SameText(aName,'Fixed');
+end;
+
+procedure TMarkDownCanvasRenderer.SetMonoFontName(const aValue: utf8string);
+begin
+  if FMonoFontName=aValue then
+    Exit;
+  FMonoFontName:=aValue;
+  FResolvedMonoFontName:='';
+end;
+
 function TMarkDownCanvasRenderer.ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
 var
   Probe: TBitmap;
 
   function CandidateLooksMono(const aName: utf8string): boolean;
   var
-    BodyW, MonoW: Integer;
+    IWidth, MWidth, Slop: Integer;
   begin
     Result:=False;
-    if aName='' then
+    if (aName='') or IsGenericMonoFamily(aName) then
       Exit;
-    Probe.Canvas.Font.Size:=10;
-    Probe.Canvas.Font.Style:=[];
-    Probe.Canvas.Font.Pitch:=fpDefault;
-    if fFontName<>'' then
-      Probe.Canvas.Font.Name:=fFontName
-    else if aCanvas.Font.Name<>'' then
-      Probe.Canvas.Font.Name:=aCanvas.Font.Name;
-    BodyW:=Probe.Canvas.TextWidth('MMMMMMMM');
-    Probe.Canvas.Font.Name:=aName;
-    Probe.Canvas.Font.Pitch:=fpDefault;
-    MonoW:=Probe.Canvas.TextWidth('MMMMMMMM');
-    { Reject missing-face metrics that measure as huge max-advance cells. }
-    if MonoW<=0 then
+    Probe.Canvas.Font.BeginUpdate;
+    try
+      Probe.Canvas.Font.Size:=10;
+      Probe.Canvas.Font.Style:=[];
+      Probe.Canvas.Font.Pitch:=fpDefault;
+      Probe.Canvas.Font.Name:=aName;
+    finally
+      Probe.Canvas.Font.EndUpdate;
+    end;
+    IWidth:=Probe.Canvas.TextWidth('iiiiiiii');
+    MWidth:=Probe.Canvas.TextWidth('MMMMMMMM');
+    if (IWidth<=0) or (MWidth<=0) then
       Exit;
-    if (BodyW>0) and (MonoW>BodyW*3) then
-      Exit;
-    if (BodyW>0) and (MonoW<(BodyW div 4)) then
+    Slop:=Max(2, MWidth div 10);
+    { True monospace: i and M share an advance. Generic 'Monospace' can measure as
+      the widget sans on GTK3 while still passing an M-width-only check. }
+    if Abs(IWidth-MWidth)>Slop then
       Exit;
     Result:=True;
   end;
 
 const
-  Fallbacks: array[0..6] of utf8string = (
+  Fallbacks: array[0..4] of utf8string = (
     'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono',
-    'FreeMono', 'Courier New', 'Courier', 'monospace');
+    'FreeMono', 'Courier New');
 var
   I: Integer;
 begin
+  if aCanvas=Nil then;
   if FResolvedMonoFontName<>'' then
     begin
     Result:=FResolvedMonoFontName;
@@ -1204,7 +1221,7 @@ begin
   Result:='';
   Probe:=TBitmap.Create;
   try
-    Probe.SetSize(1,1);
+    Probe.SetSize(16,16);
     if (fMonoFontName<>'') and CandidateLooksMono(fMonoFontName) then
       Result:=fMonoFontName
     else
@@ -1214,42 +1231,31 @@ begin
           Result:=Fallbacks[I];
           Break;
           end;
+    if Result='' then
+      Result:=Fallbacks[0];
   finally
     Probe.Free;
   end;
-  if Result='' then
-    begin
-    if fMonoFontName<>'' then
-      Result:=fMonoFontName
-    else
-      Result:='monospace';
-    end;
   FResolvedMonoFontName:=Result;
 end;
 
 procedure TMarkDownCanvasRenderer.ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt;
   const aFontStyle: TFontStyles; const aContext : TFontContext);
 begin
-  { Always assign Name, Size and Style together. Qt/GTK cache the previous face
-    if Size is skipped after a Name change, and mixed-style runs then measure
-    far wider than they paint — large gaps around bold/code.
-    Do not set Pitch:=fpFixed: Qt TextWidth then uses max-advance while TextOut
-    still paints the real glyphs, leaving holes after `inline code`. }
+  { Size then Name — GTK/Qt cache the previous face if Size is skipped after a
+    Name change. Do not set Pitch:=fpFixed: Qt TextWidth then uses max-advance
+    while TextOut still paints the real glyphs, leaving holes after `inline code`.
+    Never assign the generic 'Monospace' family: GTK3 widget canvases map it to
+    the control's proportional face, so code runs measure wide and paint sans. }
   aCanvas.Font.BeginUpdate;
   try
-    if fcMono in aContext then
-      begin
-      aCanvas.Font.Name:=ResolvedMonoFontName(aCanvas);
-      aCanvas.Font.Pitch:=fpDefault;
-      end
-    else
-      begin
-      if fFontName<>'' then
-        aCanvas.Font.Name:=fFontName;
-      aCanvas.Font.Pitch:=fpDefault;
-      end;
     aCanvas.Font.Size:=aFontSize;
     aCanvas.Font.Style:=aFontStyle;
+    aCanvas.Font.Pitch:=fpDefault;
+    if fcMono in aContext then
+      aCanvas.Font.Name:=ResolvedMonoFontName(aCanvas)
+    else if fFontName<>'' then
+      aCanvas.Font.Name:=fFontName;
   finally
     aCanvas.Font.EndUpdate;
   end;
