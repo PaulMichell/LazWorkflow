@@ -14,6 +14,8 @@ Uses
 
 Const
   MaxLiveSubagents = 3;
+  MaxSubagentToolRounds = 8;
+  MaxSubagentRuntimeMs = 180000;
   SubagentSummaryMaxChars = 8000;
 
 Type
@@ -48,6 +50,7 @@ Function SubagentRunningTitle(Const KindCaption, Phase: String): String;
 Function SubagentFinishedTitle(Const KindCaption, Title: String): String;
 Function FormatSubagentToolResult(Const KindName, Title, Summary: String; Ok: Boolean;
   DurationMs: Integer): String;
+Function SubagentRunTimedOut(StartedTick, NowTick: QWord): Boolean;
 Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 
 Implementation
@@ -58,6 +61,12 @@ Uses
 Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 Begin
   Result := SameText(Trim(ToolName), 'spawn_subagent');
+End;
+
+Function SubagentRunTimedOut(StartedTick, NowTick: QWord): Boolean;
+Begin
+  Result := (StartedTick > 0) And (NowTick >= StartedTick) And
+    ((NowTick - StartedTick) >= MaxSubagentRuntimeMs);
 End;
 
 Function SubagentKindName(Kind: TSubagentKind): String;
@@ -148,12 +157,14 @@ Begin
         'Check Michell identifiers: PascalCase reserved words; `F` only on property storage fields; ' +
         'streamed form/frame components have no `F` prefix; no collisions with TControl/TForm members ' +
         '(Caption, Name, Text, Parent, Tag, Enabled, Visible, Color, Font, Width, Height, Edit, Tree).' + LineEnding +
-        'Report file:line findings. Do not edit. Do not re-check syntax — that is the compiler.';
+        'Report file:line findings. Do not edit. Do not re-check syntax — that is the compiler.' + LineEnding +
+        'Grep with glob `.pas`/`.lfm` and the files list; do not scan the whole tree without a glob.';
     sakPascalStructure:
       Result := Result +
         'You are a read-only **pascal-structure** review lens.' + LineEnding +
         'Check unit size (prefer under ~1000 lines), interface vs implementation Uses, form .pas/.lfm pairing, ' +
-        'and foundation/service/bridge layering. Report file:line findings. Do not edit.';
+        'and foundation/service/bridge layering. Report file:line findings. Do not edit.' + LineEnding +
+        'Grep with glob `.pas`/`.pp`/`.lfm` and the files list; do not scan the whole tree without a glob.';
     sakPascalReview:
       Result := Result +
         'You are a read-only **pascal-review** lens.' + LineEnding +

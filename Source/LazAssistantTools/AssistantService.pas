@@ -140,7 +140,10 @@ Type
     Function LiveSubagentCount: Integer;
     Function SubagentIsRunning(Const RunId: String): Boolean;
     Function TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
+    Procedure AbandonSubagent(Const RunId, Reason: String);
     Procedure CancelSubagents;
+    { Terminate the actor without waiting — safe from a worker thread. }
+    Procedure StopActorNoWait;
     Procedure ConfigureAsSubagent(Const KindName: String);
     { Sampler items for the session actor (Responses / Completions). }
     Function ExportSamplerItems: TSamplerInputItemArray;
@@ -247,6 +250,7 @@ Type
     Function BindAndStart(Const Request: TSubagentRequest; ParentMode: TAssistantMode;
       Const ApiBase, Model, Skill, Effort, CompileLog: String; Out ErrorText: String): Boolean;
     Procedure Cancel;
+    Procedure Abandon(Const Reason: String);
     Function SnapshotAnswer: String;
   End;
 
@@ -349,6 +353,27 @@ Begin
     If Not Finished Then
       Begin
         If FailText = '' Then
+          FailText := 'Cancelled.';
+        Ok := False;
+        Finished := True;
+      End;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TChildSubagent.Abandon(Const Reason: String);
+Begin
+  { Do not WaitFor the child actor — this may run on the parent actor thread. }
+  If Assigned(FChild) Then
+    FChild.StopActorNoWait;
+  EnterCriticalSection(FLock);
+  Try
+    If Not Finished Then
+      Begin
+        If Trim(Reason) <> '' Then
+          FailText := Reason
+        Else If FailText = '' Then
           FailText := 'Cancelled.';
         Ok := False;
         Finished := True;
@@ -1312,6 +1337,41 @@ Begin
   Finally
     LeaveCriticalSection(FSubagentsLock);
   End;
+End;
+
+Procedure TAssistantService.StopActorNoWait;
+Var
+  Actor: TAssistantActor;
+Begin
+  If Not Assigned(FStreamThread) Then
+    Begin
+      FBusy := False;
+      Exit;
+    End;
+  If FStreamThread Is TAssistantActor Then
+    Begin
+      Actor := TAssistantActor(FStreamThread);
+      Actor.Cancel;
+      Actor.Detach;
+    End
+  Else
+    FStreamThread.Terminate;
+  AbandonStreamThread;
+  FBusy := False;
+End;
+
+Procedure TAssistantService.AbandonSubagent(Const RunId, Reason: String);
+Var
+  Child: TChildSubagent;
+Begin
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    Child := TChildSubagent(FindSubagentLocked(RunId));
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+  If Assigned(Child) Then
+    Child.Abandon(Reason);
 End;
 
 Function TAssistantService.TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;

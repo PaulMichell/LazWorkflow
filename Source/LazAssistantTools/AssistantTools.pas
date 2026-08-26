@@ -18,6 +18,9 @@ Const
   AssistantToolMaxWriteChars = 400000;
   AssistantToolMaxSearchMatches = 50;
   AssistantToolMaxSearchFiles = 2500;
+  AssistantToolMaxSearchMs = 8000;
+  AssistantToolMaxSearchFileBytes = 2097152;
+  AssistantToolMaxSearchLineChars = 512;
 
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
@@ -45,6 +48,10 @@ Procedure AssistantBeginQuietIdeSession;
 Procedure AssistantEndQuietIdeSession;
 { Restore disk checks even if a send was abandoned without SetSending(False). }
 Procedure AssistantResetQuietIdeSession;
+{ Bind the worker thread so grep/search abort when that actor is terminated. }
+Procedure BindToolAbortThread(Worker: TThread);
+Procedure UnbindToolAbortThread;
+Function ToolsShouldStop: Boolean;
 
 Implementation
 
@@ -62,6 +69,36 @@ Var
   GProjectStructureDirty: Boolean;
   GQuietIdeDepth: Integer;
   GSavedCheckFilesOnDisk: Boolean;
+
+ThreadVar
+  GToolAbortThread: TThread;
+
+Type
+  { Access TThread.Terminated, which is protected on FPC. }
+  TToolAbortThread = Class(TThread)
+  Public
+    Function StopRequested: Boolean;
+  End;
+
+Function TToolAbortThread.StopRequested: Boolean;
+Begin
+  Result := Terminated;
+End;
+
+Procedure BindToolAbortThread(Worker: TThread);
+Begin
+  GToolAbortThread := Worker;
+End;
+
+Procedure UnbindToolAbortThread;
+Begin
+  GToolAbortThread := Nil;
+End;
+
+Function ToolsShouldStop: Boolean;
+Begin
+  Result := Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested;
+End;
 
 Procedure MarkProjectStructureDirty;
 Begin
@@ -1161,7 +1198,8 @@ Var
 Begin
   N := LowerCase(DirName);
   Result := (N = '.git') Or (N = '.svn') Or (N = '.hg') Or (N = 'node_modules') Or
-    (N = '__pycache__') Or (N = 'backup') Or (N = 'lib') Or (N = 'units');
+    (N = '__pycache__') Or (N = 'backup') Or (N = 'lib') Or (N = 'units') Or
+    (N = '.grok') Or (N = '.assistant');
 End;
 
 Function CollectSearchableFiles(Const DirPath, ExtFilter: String; Files: TStringList;
@@ -1178,6 +1216,11 @@ Begin
   Try
     While Code = 0 Do
       Begin
+        If ToolsShouldStop Then
+          Begin
+            Result := False;
+            Exit;
+          End;
         Inc(WalkCount);
         If WalkCount > 20000 Then
           Begin
@@ -1755,8 +1798,9 @@ Var
   Files: TStringList;
   SL: TStringList;
   ExtFilter: String;
-  WalkComplete, UseRegex, Hit: Boolean;
+  WalkComplete, UseRegex, Hit, Stopped: Boolean;
   Re: TRegExpr;
+  Deadline: QWord;
 Begin
   Result := False;
   ResultText := '';
@@ -1806,6 +1850,8 @@ Begin
     End;
   Files := TStringList.Create;
   SL := TStringList.Create;
+  Deadline := GetTickCount64 + AssistantToolMaxSearchMs;
+  Stopped := False;
   Try
     FileCount := 0;
     WalkCount := 0;
@@ -1819,6 +1865,13 @@ Begin
         [AssistantToolMaxSearchFiles]) + LineEnding;
     For I := 0 To Files.Count - 1 Do
       Begin
+        If ToolsShouldStop Or (GetTickCount64 >= Deadline) Then
+          Begin
+            Stopped := True;
+            Break;
+          End;
+        If FileSizeUTF8(Files[I]) > AssistantToolMaxSearchFileBytes Then
+          Continue;
         Try
           SL.LoadFromFile(Files[I]);
         Except
@@ -1831,7 +1884,11 @@ Begin
           Begin
             LineText := SL[LineNo];
             If Assigned(Re) Then
-              Hit := Re.Exec(LineText)
+              Begin
+                If Length(LineText) > AssistantToolMaxSearchLineChars Then
+                  Continue;
+                Hit := Re.Exec(LineText);
+              End
             Else
               Hit := Pos(LowerQuery, LowerCase(LineText)) > 0;
             If Hit Then
@@ -1848,6 +1905,9 @@ Begin
               End;
           End;
       End;
+    If Stopped Then
+      ResultText := ResultText + Format('[… search stopped after %d ms (scanned %d files, %d matches) …]',
+        [AssistantToolMaxSearchMs, I, MatchCount]) + LineEnding;
     ResultText := ResultText + Format('Matches: %d (scanned %d text files).', [MatchCount, Files.Count]);
     Result := True;
   Finally

@@ -51,6 +51,11 @@ Begin
   Check('parent at cap fails', (Not CanSpawnSubagent(True, MaxLiveSubagents, Err)) And (Pos('Too many', Err) > 0));
   Check('child rejected', (Not CanSpawnSubagent(False, 0, Err)) And (Pos('parent-only', Err) > 0));
   Check('max is 3', MaxLiveSubagents = 3);
+  Check('runtime budget is 3 minutes', MaxSubagentRuntimeMs = 180000);
+  Check('child tool rounds capped', MaxSubagentToolRounds = 8);
+  Check('not timed out at start', Not SubagentRunTimedOut(1000, 1000));
+  Check('timed out at budget', SubagentRunTimedOut(1000, 1000 + MaxSubagentRuntimeMs));
+  Check('not timed out just under', Not SubagentRunTimedOut(1000, 1000 + MaxSubagentRuntimeMs - 1));
 End;
 
 Procedure TestParseSpawn;

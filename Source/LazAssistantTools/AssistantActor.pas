@@ -573,30 +573,35 @@ Begin
   StartTick := GetTickCount64;
   ResultText := '';
   ErrorText := '';
+  BindToolAbortThread(Self);
   Try
-    If ToolNeedsIdeThread(Call.Name) Then
-      Begin
-        FDispatchName := Call.Name;
-        FDispatchArgs := Call.Arguments;
-        FDispatchMode := Svc.ActiveMode;
-        FDispatchResult := '';
-        FDispatchError := '';
-        FDispatchOk := False;
-        Synchronize(@DispatchOneToolOnMain);
-        Ok := FDispatchOk;
-        ResultText := FDispatchResult;
-        ErrorText := FDispatchError;
-      End
-    Else
-      Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
-        ResultText, ErrorText);
-  Except
-    On E: Exception Do
-      Begin
-        Ok := False;
-        ErrorText := 'Tool raised: ' + E.Message;
-        ResultText := '';
-      End;
+    Try
+      If ToolNeedsIdeThread(Call.Name) Then
+        Begin
+          FDispatchName := Call.Name;
+          FDispatchArgs := Call.Arguments;
+          FDispatchMode := Svc.ActiveMode;
+          FDispatchResult := '';
+          FDispatchError := '';
+          FDispatchOk := False;
+          Synchronize(@DispatchOneToolOnMain);
+          Ok := FDispatchOk;
+          ResultText := FDispatchResult;
+          ErrorText := FDispatchError;
+        End
+      Else
+        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
+          ResultText, ErrorText);
+    Except
+      On E: Exception Do
+        Begin
+          Ok := False;
+          ErrorText := 'Tool raised: ' + E.Message;
+          ResultText := '';
+        End;
+    End;
+  Finally
+    UnbindToolAbortThread;
   End;
   If Ok Then
     Content := ResultText
@@ -743,6 +748,9 @@ Begin
           Slot := I - FromIndex;
           If Handled[Slot] Or (RunIds[Slot] = '') Then
             Continue;
+          If SubagentRunTimedOut(StartTicks[Slot], GetTickCount64) Then
+            Svc.AbandonSubagent(RunIds[Slot],
+              Format('Timed out after %d s (still running tools).', [MaxSubagentRuntimeMs Div 1000]));
           If Svc.SubagentIsRunning(RunIds[Slot]) Then
             Continue;
           Call := FToolCalls[I];
@@ -894,7 +902,7 @@ End;
 Procedure TAssistantActor.Execute;
 Var
   Url, RequestJson, ErrorText: String;
-  RoundNo, I: Integer;
+  RoundNo, I, MaxRounds: Integer;
   HasTools: Boolean;
   WroteBefore: Boolean;
   Svc: TAssistantService;
@@ -903,7 +911,12 @@ Begin
   SetPhase(apWaiting);
   EmitSnapshot(False, 'Waiting for first token…', True);
   Try
-  For RoundNo := 0 To MaxToolRounds Do
+  Svc := LockedService;
+  If Assigned(Svc) And Svc.IsSubagentSession Then
+    MaxRounds := MaxSubagentToolRounds
+  Else
+    MaxRounds := MaxToolRounds;
+  For RoundNo := 0 To MaxRounds Do
     Begin
       If Terminated Or (Not Assigned(LockedService)) Then
         Break;
