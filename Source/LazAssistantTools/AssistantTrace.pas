@@ -59,6 +59,7 @@ Type
     Function FindTool(Const ToolId: String): TTraceBlock;
     Function AddSubagent(Const SubId, KindName, Title: String): TTraceBlock;
     Function FindSubagent(Const SubId: String): TTraceBlock;
+    Function FindRunningSubagentByKind(Const KindName: String): TTraceBlock;
     { Reuse this sample's answer (after the last tool). Growing snapshots update it in place. }
     Function EnsureAnswer: TTraceBlock;
     Procedure FinishCurrentThinking;
@@ -368,6 +369,25 @@ Begin
     End;
 End;
 
+Function TAssistantTrace.FindRunningSubagentByKind(Const KindName: String): TTraceBlock;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := Nil;
+  If Trim(KindName) = '' Then
+    Exit;
+  For I := FBlocks.Count - 1 DownTo 0 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind = tbkSubagent) And Block.Running And SameText(Block.ToolName, KindName) Then
+        Begin
+          Result := Block;
+          Exit;
+        End;
+    End;
+End;
+
 Function TAssistantTrace.FindTool(Const ToolId: String): TTraceBlock;
 Var
   I: Integer;
@@ -669,7 +689,13 @@ Begin
       Begin
         Block := FindSubagent(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          Block := FindRunningSubagentByKind(Event.ToolName);
+        If Not Assigned(Block) Then
+          Begin
+            If Event.ToolId = '' Then
+              Exit;
+            Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          End;
         Block.Running := True;
         If Event.Text <> '' Then
           Block.Title := Event.Text;
@@ -678,7 +704,13 @@ Begin
       Begin
         Block := FindSubagent(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          Block := FindRunningSubagentByKind(Event.ToolName);
+        If Not Assigned(Block) Then
+          Begin
+            If Event.ToolId = '' Then
+              Exit;
+            Block := AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          End;
         Block.Running := False;
         Block.Ok := Event.Ok;
         If Event.DurationMs > 0 Then

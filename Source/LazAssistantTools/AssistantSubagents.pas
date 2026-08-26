@@ -51,6 +51,9 @@ Function SubagentFinishedTitle(Const KindCaption, Title: String): String;
 Function FormatSubagentToolResult(Const KindName, Title, Summary: String; Ok: Boolean;
   DurationMs: Integer): String;
 Function SubagentRunTimedOut(StartedTick, NowTick: QWord): Boolean;
+Function IsReviewLensKind(Kind: TSubagentKind): Boolean;
+Function ReviewLensAlreadyListed(Kind: TSubagentKind; Const KindNames: Array Of String;
+  LastIndex: Integer): Boolean;
 Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 
 Implementation
@@ -67,6 +70,32 @@ Function SubagentRunTimedOut(StartedTick, NowTick: QWord): Boolean;
 Begin
   Result := (StartedTick > 0) And (NowTick >= StartedTick) And
     ((NowTick - StartedTick) >= MaxSubagentRuntimeMs);
+End;
+
+Function IsReviewLensKind(Kind: TSubagentKind): Boolean;
+Begin
+  Result := Kind In [sakPascalNaming, sakPascalStructure, sakPascalReview];
+End;
+
+Function ReviewLensAlreadyListed(Kind: TSubagentKind; Const KindNames: Array Of String;
+  LastIndex: Integer): Boolean;
+Var
+  I, Last: Integer;
+  Name: String;
+Begin
+  Result := False;
+  If Not IsReviewLensKind(Kind) Then
+    Exit;
+  Name := SubagentKindName(Kind);
+  Last := LastIndex;
+  If Last > High(KindNames) Then
+    Last := High(KindNames);
+  For I := 0 To Last Do
+    If SameText(KindNames[I], Name) Then
+      Begin
+        Result := True;
+        Exit;
+      End;
 End;
 
 Function SubagentKindName(Kind: TSubagentKind): String;

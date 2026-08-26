@@ -51,6 +51,8 @@ Begin
   Check('parent at cap fails', (Not CanSpawnSubagent(True, MaxLiveSubagents, Err)) And (Pos('Too many', Err) > 0));
   Check('child rejected', (Not CanSpawnSubagent(False, 0, Err)) And (Pos('parent-only', Err) > 0));
   Check('max is 3', MaxLiveSubagents = 3);
+  Check('naming is a review lens', IsReviewLensKind(sakPascalNaming));
+  Check('explore is not a review lens', Not IsReviewLensKind(sakExplore));
   Check('runtime budget is 3 minutes', MaxSubagentRuntimeMs = 180000);
   Check('child tool rounds capped', MaxSubagentToolRounds = 8);
   Check('not timed out at start', Not SubagentRunTimedOut(1000, 1000));
@@ -145,6 +147,15 @@ Begin
     Block := Trace.AddSubagent('sub_1', 'pascal-naming', 'Subagent running: Naming — Starting');
     Check('subagent kind', Block.Kind = tbkSubagent);
     Check('subagent find', Trace.FindSubagent('sub_1') = Block);
+    Check('running by kind', Trace.FindRunningSubagentByKind('pascal-naming') = Block);
+    Event.Kind := aekSubagentProgress;
+    Event.ToolId := 'other_id';
+    Event.ToolName := 'pascal-naming';
+    Event.Text := 'Waiting for model…';
+    Trace.ApplyEvent(Event);
+    Check('progress does not add a fourth card', Trace.Count = 1);
+    Check('names listed', ReviewLensAlreadyListed(sakPascalNaming, ['pascal-naming', 'pascal-structure'], 1));
+    Check('names not listed', Not ReviewLensAlreadyListed(sakPascalReview, ['pascal-naming', 'pascal-structure'], 1));
     Block.Running := False;
     Block.Body := 'Looks fine.';
     Check('json has subagent', Pos('subagent', Trace.SaveToJson) > 0);

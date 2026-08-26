@@ -753,6 +753,15 @@ Begin
               Continue;
             End;
           KindNames[Slot] := SubagentKindName(Request.Kind);
+          If ReviewLensAlreadyListed(Request.Kind, KindNames, Slot - 1) Then
+            Begin
+              Svc.AddToolResult(Call.Id, 'Skipped duplicate ' + KindNames[Slot] +
+                ' lens; one of this kind is already running in this round.');
+              LogEvent(aekSubagentCompleted, 'duplicate skipped', KindNames[Slot], Call.Id, True, 0);
+              Handled[Slot] := True;
+              Dec(Remaining);
+              Continue;
+            End;
           If Not Svc.StartSubagent(Call.Arguments, RunIds[Slot], ErrorText) Then
             Begin
               { Budget should not hit here — the loop waits for a slot. Other start errors still fail. }

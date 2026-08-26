@@ -3119,7 +3119,13 @@ Begin
       Begin
         Block := FTrace.FindSubagent(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          Block := FTrace.FindRunningSubagentByKind(Event.ToolName);
+        If Not Assigned(Block) Then
+          Begin
+            If Event.ToolId = '' Then
+              Exit;
+            Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          End;
         Block.Running := True;
         If Event.Text <> '' Then
           Block.Title := SubagentRunningTitle(SubagentKindCaption(ParseSubagentKind(Event.ToolName)),
@@ -3129,7 +3135,13 @@ Begin
       Begin
         Block := FTrace.FindSubagent(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          Block := FTrace.FindRunningSubagentByKind(Event.ToolName);
+        If Not Assigned(Block) Then
+          Begin
+            If Event.ToolId = '' Then
+              Exit;
+            Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
+          End;
         Block.Running := False;
         Block.Ok := Event.Ok;
         If Event.DurationMs > 0 Then
