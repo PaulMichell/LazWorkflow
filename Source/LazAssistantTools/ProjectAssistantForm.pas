@@ -68,6 +68,10 @@ Type
     DeleteMenuItem: TMenuItem;
     SessionSep2Item: TMenuItem;
     SettingsMenuItem: TMenuItem;
+    WorkMenuItem: TMenuItem;
+    OpenPlanMenuItem: TMenuItem;
+    BuildThisMenuItem: TMenuItem;
+    RevisePlanMenuItem: TMenuItem;
     ReviewMenuItem: TMenuItem;
     ReviewCompileMenuItem: TMenuItem;
     ReviewBuildMenuItem: TMenuItem;
@@ -77,8 +81,9 @@ Type
     ToggleThinkingMenuItem: TMenuItem;
     SkillsMenuItem: TMenuItem;
     ModelMenuItem: TMenuItem;
+    ThinkingLevelMenuItem: TMenuItem;
+    ContextBreakdownMenuItem: TMenuItem;
     SessionInfoMenuItem: TMenuItem;
-    CommandsMenuItem: TMenuItem;
     ModeBar: TPanel;
     ModeGroup: TRadioGroup;
     ModeBadge: TLabel;
@@ -183,7 +188,6 @@ Type
     Procedure InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
     Procedure InputMemoChange(Sender: TObject);
     Procedure InputMemoExit(Sender: TObject);
-    Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure SlashListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
     Procedure SlashListClick(Sender: TObject);
     Procedure StatusFooterLeftClick(Sender: TObject);
@@ -540,8 +544,6 @@ End;
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Begin
   Caption := 'Project Assistant';
-  KeyPreview := True;
-  OnKeyDown := @FormKeyDown;
   If Assigned(InputMemo) Then
     Begin
       InputMemo.OnKeyDown := @InputMemoKeyDown;
@@ -3740,11 +3742,10 @@ Begin
   AddAct(ReviewBuildAction, 'Review', 'review-build', '', 'Review the last build');
   AddAct(FixErrorAction, 'Review', 'fix', 'fix-error', 'Fix the selected Messages error');
   AddAct(ToggleThinkingAction, 'View', 'thinking', '', 'Show or hide thinking blocks');
-  AddAct(CommandsAction, 'View', 'docs', 'help,commands', 'Browse the command catalog');
   AddAct(ModelPickerAction, 'Model', 'model', '', 'Choose model, thinking, and approval');
   AddAct(ThinkingPickerAction, 'Model', 'effort', 'thinking-level', 'Set reasoning effort');
   AddAct(ContextBreakdownAction, 'Help', 'context', '', 'Token estimate for the next request');
-  AddAct(SessionInfoAction, 'Help', 'session-info', 'session', 'Mode, model, plan, and conversation');
+  AddAct(SessionInfoAction, 'Help', 'session-info', 'session,docs,help', 'Mode, model, plan, and conversation');
   AddAct(SkillsPickerAction, 'Skills', 'skills', '', 'Pin a skill for the session');
   Root := '';
   If Assigned(ProjectAssistantConversation) Then
@@ -4291,15 +4292,6 @@ End;
 Procedure TProjectAssistantForm.InputMemoExit(Sender: TObject);
 Begin
   Application.QueueAsyncCall(@DeferredHideSlash, 0);
-End;
-
-Procedure TProjectAssistantForm.FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
-Begin
-  If (Key = Ord('P')) And (ssCtrl In Shift) And (Not (ssAlt In Shift)) And (Not (ssShift In Shift)) Then
-    Begin
-      Key := 0;
-      CommandsActionExecute(Sender);
-    End;
 End;
 
 Procedure TProjectAssistantForm.StatusFooterLeftClick(Sender: TObject);

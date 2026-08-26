@@ -629,7 +629,19 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = SettingsAction
       end
     end
-    object ReviewMenuItem: TMenuItem
+    object WorkMenuItem: TMenuItem
+      Caption = 'Work'
+      object OpenPlanMenuItem: TMenuItem
+        Action = OpenPlanAction
+      end
+      object BuildThisMenuItem: TMenuItem
+        Action = BuildThisAction
+      end
+      object RevisePlanMenuItem: TMenuItem
+        Action = RevisePlanAction
+      end
+    end
+    object ReviewMenuItem: TMenuItem;
       Caption = 'Review'
       object ReviewChangesMenuItem: TMenuItem
         Action = ReviewChangesAction
@@ -655,11 +667,14 @@ object ProjectAssistantForm: TProjectAssistantForm
       object ModelMenuItem: TMenuItem
         Action = ModelPickerAction
       end
+      object ThinkingLevelMenuItem: TMenuItem
+        Action = ThinkingPickerAction
+      end
+      object ContextBreakdownMenuItem: TMenuItem
+        Action = ContextBreakdownAction
+      end
       object SessionInfoMenuItem: TMenuItem
         Action = SessionInfoAction
-      end
-      object CommandsMenuItem: TMenuItem
-        Action = CommandsAction
       end
     end
   end
