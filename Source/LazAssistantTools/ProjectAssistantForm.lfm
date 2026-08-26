@@ -641,7 +641,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = RevisePlanAction
       end
     end
-    object ReviewMenuItem: TMenuItem;
+    object ReviewMenuItem: TMenuItem
       Caption = 'Review'
       object ReviewChangesMenuItem: TMenuItem
         Action = ReviewChangesAction
