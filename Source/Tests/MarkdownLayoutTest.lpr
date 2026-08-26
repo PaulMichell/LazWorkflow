@@ -150,6 +150,130 @@ Begin
   End;
 End;
 
+Function JoinedAllText(Renderer: TMarkDownCanvasRenderer): String;
+Var
+  I: Integer;
+  Item: TLayoutItem;
+Begin
+  Result := '';
+  For I := 0 To Renderer.LayoutItemCount - 1 Do
+    Begin
+      Item := Renderer.LayoutItem(I);
+      If Assigned(Item) And (Item.Kind = likText) Then
+        Result := Result + Item.Text;
+    End;
+End;
+
+Procedure TestHardBreakIsNewlineNotTag;
+Var
+  R: TMarkDownCanvasRenderer;
+  All: String;
+  HasTwoLines: Boolean;
+  I: Integer;
+  Item: TLayoutItem;
+  FirstY, OtherY: Integer;
+Begin
+  LayoutOf('alpha  ' + LineEnding + 'bravo', R);
+  Try
+    All := JoinedAllText(R);
+    Check('two-space break does not paint <br', Pos('<br', LowerCase(All)) = 0);
+    Check('two-space break keeps both words', (Pos('alpha', All) > 0) And (Pos('bravo', All) > 0));
+    HasTwoLines := False;
+    FirstY := -1;
+    For I := 0 To R.LayoutItemCount - 1 Do
+      Begin
+        Item := R.LayoutItem(I);
+        If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+          Continue;
+        If FirstY < 0 Then
+          FirstY := Item.Y
+        Else If Item.Y <> FirstY Then
+          Begin
+            OtherY := Item.Y;
+            HasTwoLines := OtherY > FirstY;
+          End;
+      End;
+    Check('two-space break makes a new line', HasTwoLines);
+  Finally
+    R.Free;
+  End;
+End;
+
+Procedure TestHtmlBrIsNewlineNotTag;
+Var
+  R: TMarkDownCanvasRenderer;
+  All: String;
+  HasTwoLines: Boolean;
+  I, FirstY: Integer;
+  Item: TLayoutItem;
+Begin
+  LayoutOf('alpha<br/>bravo', R);
+  Try
+    All := JoinedAllText(R);
+    Check('html br does not paint <br', Pos('<br', LowerCase(All)) = 0);
+    Check('html br keeps both words', (Pos('alpha', All) > 0) And (Pos('bravo', All) > 0));
+    HasTwoLines := False;
+    FirstY := -1;
+    For I := 0 To R.LayoutItemCount - 1 Do
+      Begin
+        Item := R.LayoutItem(I);
+        If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+          Continue;
+        If FirstY < 0 Then
+          FirstY := Item.Y
+        Else If Item.Y > FirstY Then
+          HasTwoLines := True;
+      End;
+    Check('html br makes a new line', HasTwoLines);
+  Finally
+    R.Free;
+  End;
+End;
+
+Procedure TestCodeSpanUsesMonoAndTightGap;
+Var
+  R: TMarkDownCanvasRenderer;
+  Bmp: TBitmap;
+  I: Integer;
+  Item, Prev: TLayoutItem;
+  CodeCount, Gap, SpaceW: Integer;
+Begin
+  Bmp := TBitmap.Create;
+  Try
+    Bmp.SetSize(800, 80);
+    Bmp.Canvas.Font.Name := 'DejaVu Sans';
+    Bmp.Canvas.Font.Size := 10;
+    SpaceW := Bmp.Canvas.TextWidth(' ');
+    LayoutOf('before `FilterAllocatedOnly` after.', R);
+    Try
+      CodeCount := 0;
+      Prev := Nil;
+      For I := 0 To R.LayoutItemCount - 1 Do
+        Begin
+          Item := R.LayoutItem(I);
+          If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+            Continue;
+          If fcMono In Item.Context Then
+            Begin
+              Inc(CodeCount);
+              Check('code run is not a bare backtick', Pos('`', Item.Text) = 0);
+              If Assigned(Prev) And (Prev.Y = Item.Y) Then
+                Begin
+                  Gap := Item.X - (Prev.X + Prev.Width);
+                  Check('gap before code is a body space, not a mono hole', Gap <= SpaceW + 4);
+                End;
+            End;
+          Prev := Item;
+        End;
+      Check('inline code produced a mono run', CodeCount > 0);
+    Finally
+      R.Free;
+    End;
+  Finally
+    Bmp.Free;
+  End;
+End;
+
 Procedure TestCollapsedSpacesAroundCode;
 Var
   Tight, Padded: TMarkDownCanvasRenderer;
@@ -189,6 +313,9 @@ Begin
   TestNoSpaceBeforePunctuationAfterCode;
   TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
+  TestHardBreakIsNewlineNotTag;
+  TestHtmlBrIsNewlineNotTag;
+  TestCodeSpanUsesMonoAndTightGap;
   If FailCount = 0 Then
     Begin
       WriteLn('All MarkdownLayout tests passed.');

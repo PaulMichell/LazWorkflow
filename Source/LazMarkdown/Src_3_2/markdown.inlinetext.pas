@@ -213,6 +213,16 @@ begin
 end;
 
 
+function IsHtmlBreakInner(const aInner: string): boolean;
+var
+  S: string;
+begin
+  S:=LowerCase(Trim(aInner));
+  if (S<>'') and (S[Length(S)]='/') then
+    S:=Trim(Copy(S,1,Length(S)-1));
+  Result:=S='br';
+end;
+
 procedure TInlineTextProcessor.HandleAutoLink;
 
 var
@@ -227,6 +237,13 @@ begin
   Scanner.NextChar();
   lText:=Scanner.PeekUntil(['>']);
   lAdd:=false;
+  if (WhiteSpaceMode<>wsLeave) and IsHtmlBreakInner(lText) then
+    begin
+    Nodes.addTextNode(Scanner.location,nkLineBreak,'',True);
+    Scanner.NextChars(Length(lText));
+    Scanner.NextChar();
+    Exit;
+    end;
   if (WhiteSpaceMode<>wsLeave) then
     begin
     lAdd:=isAbsoluteURI(lText);
@@ -906,7 +923,7 @@ begin
         else
           begin
           if lWhitespace.EndsWith('  ') then
-            Nodes.addText(Scanner.location,'<br />');
+            Nodes.addTextNode(Scanner.location,nkLineBreak,'',True);
           lWhitespace:='';
           end;
         end;

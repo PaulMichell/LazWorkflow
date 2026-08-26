@@ -180,6 +180,7 @@ type
     FExtraIndent: LongInt;
     FFontName: utf8string;
     FMonoFontName: utf8string;
+    FResolvedMonoFontName: utf8string;
     FBaseFontSize: LongInt;
     FTargetDPI: LongInt;
 
@@ -217,6 +218,7 @@ type
 
     // Font and measurement
     function DIP(const aValue: LongInt): LongInt;
+    function ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
     procedure ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt; const aFontStyle: TFontStyles;
       const aContext : TFontContext);
     procedure MeasureText(const aCanvas: TCanvas; const aText: utf8string; const aFontSize: LongInt;
@@ -597,6 +599,7 @@ begin
   fTargetDPI:=96;
   fFontName:='Sans Serif';
   fMonoFontName:='Monospace';
+  FResolvedMonoFontName:='';
 
   BGCodeColor:=RGBToColor(253,245,227);
   fFontCodeColor:=clInfoText;
@@ -1154,6 +1157,76 @@ begin
   FLayout.LineY:=aValue;
 end;
 
+function TMarkDownCanvasRenderer.ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
+var
+  Probe: TBitmap;
+
+  function CandidateLooksMono(const aName: utf8string): boolean;
+  var
+    BodyW, MonoW: Integer;
+  begin
+    Result:=False;
+    if aName='' then
+      Exit;
+    Probe.Canvas.Font.Size:=10;
+    Probe.Canvas.Font.Style:=[];
+    Probe.Canvas.Font.Pitch:=fpDefault;
+    if fFontName<>'' then
+      Probe.Canvas.Font.Name:=fFontName
+    else if aCanvas.Font.Name<>'' then
+      Probe.Canvas.Font.Name:=aCanvas.Font.Name;
+    BodyW:=Probe.Canvas.TextWidth('MMMMMMMM');
+    Probe.Canvas.Font.Name:=aName;
+    Probe.Canvas.Font.Pitch:=fpDefault;
+    MonoW:=Probe.Canvas.TextWidth('MMMMMMMM');
+    { Reject missing-face metrics that measure as huge max-advance cells. }
+    if MonoW<=0 then
+      Exit;
+    if (BodyW>0) and (MonoW>BodyW*3) then
+      Exit;
+    if (BodyW>0) and (MonoW<(BodyW div 4)) then
+      Exit;
+    Result:=True;
+  end;
+
+const
+  Fallbacks: array[0..6] of utf8string = (
+    'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono',
+    'FreeMono', 'Courier New', 'Courier', 'monospace');
+var
+  I: Integer;
+begin
+  if FResolvedMonoFontName<>'' then
+    begin
+    Result:=FResolvedMonoFontName;
+    Exit;
+    end;
+  Result:='';
+  Probe:=TBitmap.Create;
+  try
+    Probe.SetSize(1,1);
+    if (fMonoFontName<>'') and CandidateLooksMono(fMonoFontName) then
+      Result:=fMonoFontName
+    else
+      for I:=0 to High(Fallbacks) do
+        if CandidateLooksMono(Fallbacks[I]) then
+          begin
+          Result:=Fallbacks[I];
+          Break;
+          end;
+  finally
+    Probe.Free;
+  end;
+  if Result='' then
+    begin
+    if fMonoFontName<>'' then
+      Result:=fMonoFontName
+    else
+      Result:='monospace';
+    end;
+  FResolvedMonoFontName:=Result;
+end;
+
 procedure TMarkDownCanvasRenderer.ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt;
   const aFontStyle: TFontStyles; const aContext : TFontContext);
 begin
@@ -1166,10 +1239,7 @@ begin
   try
     if fcMono in aContext then
       begin
-      if fMonoFontName<>'' then
-        aCanvas.Font.Name:=fMonoFontName
-      else
-        aCanvas.Font.Name:='monospace';
+      aCanvas.Font.Name:=ResolvedMonoFontName(aCanvas);
       aCanvas.Font.Pitch:=fpDefault;
       end
     else
@@ -1434,6 +1504,15 @@ begin
   WordBuffer:='';
   LineBuffer:='';
   NeedSpace:=FLayout.NeedSpaceBeforeNextText;
+  { Inter-word space before a code span must use the body face. Measuring it
+    with the mono font leaves a large hole after the opening backtick. }
+  if NeedSpace and (([fcMono,fcCode]*aContext)<>[]) and (FLayout.LineX>0) then
+    begin
+    FlushTextRun(aCanvas,' ',aFontSize,aFontStyle,aLinkHref,
+      aContext-[fcMono,fcCode,fcFencedCode],aDryRun);
+    NeedSpace:=False;
+    FLayout.NeedSpaceBeforeNextText:=False;
+    end;
 
   FirstIndex:=-1;
   LastIndex:=-1;
