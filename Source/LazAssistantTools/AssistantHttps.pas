@@ -565,6 +565,8 @@ Begin
   Parts := Nil;
   Try
     Try
+      Client.ConnectTimeout := 15000;
+      Client.IOTimeout := 120000;
       Client.AllowRedirect := False;
       Client.AddHeader('Accept', 'application/json');
       If ContentType <> '' Then
@@ -941,6 +943,8 @@ Begin
     Try
       If Assigned(Control) Then
         Control.AssignHttpClient(Client);
+      Client.ConnectTimeout := 15000;
+      Client.IOTimeout := 120000;
       Client.AllowRedirect := False;
       Client.AddHeader('Content-Type', 'application/json');
       Client.AddHeader('Accept', 'text/event-stream');

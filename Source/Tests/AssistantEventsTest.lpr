@@ -117,6 +117,7 @@ End;
 Procedure TestProgressStatus;
 Begin
   Check('waiting is status', IsAssistantProgressStatus('Waiting for first token…'));
+  Check('model wait is status', IsAssistantProgressStatus('Waiting for model…'));
   Check('tools is status', IsAssistantProgressStatus('Running tools…'));
   Check('steer is status', IsAssistantProgressStatus('Steering at next model gap…'));
   Check('http is error', Not IsAssistantProgressStatus('HTTP 400: invalid_grant'));

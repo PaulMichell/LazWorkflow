@@ -54,6 +54,7 @@ Type
     FDispatchArgs: String;
     FDispatchMode: TAssistantMode;
     FDispatchOk: Boolean;
+    FDispatchDone: Boolean;
     FDispatchResult: String;
     FDispatchError: String;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
@@ -161,6 +162,7 @@ Begin
   FLastSnapTick := 0;
   FPendingFinish := False;
   FNotifyQueued := False;
+  FDispatchDone := False;
   SetLength(FToolCalls, 0);
 End;
 
@@ -554,8 +556,18 @@ End;
 
 Procedure TAssistantActor.DispatchOneToolOnMain;
 Begin
-  FDispatchOk := ExecuteAssistantToolForMode(FDispatchName, FDispatchArgs, FDispatchMode,
-    FDispatchResult, FDispatchError);
+  Try
+    If Terminated Then
+      Begin
+        FDispatchOk := False;
+        FDispatchError := CancelWaitHint;
+      End
+    Else
+      FDispatchOk := ExecuteAssistantToolForMode(FDispatchName, FDispatchArgs, FDispatchMode,
+        FDispatchResult, FDispatchError);
+  Finally
+    FDispatchDone := True;
+  End;
 End;
 
 Procedure TAssistantActor.RunOneTool(Const Call: TSamplerToolCall);
@@ -584,10 +596,27 @@ Begin
           FDispatchResult := '';
           FDispatchError := '';
           FDispatchOk := False;
-          Synchronize(@DispatchOneToolOnMain);
-          Ok := FDispatchOk;
-          ResultText := FDispatchResult;
-          ErrorText := FDispatchError;
+          FDispatchDone := False;
+          { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
+          Queue(@DispatchOneToolOnMain);
+          While (Not FDispatchDone) And (Not Terminated) And
+            (GetTickCount64 - StartTick < 30000) Do
+            Sleep(15);
+          If Not FDispatchDone Then
+            Begin
+              Ok := False;
+              If Terminated Then
+                ErrorText := CancelWaitHint
+              Else
+                ErrorText := 'Timed out waiting for the IDE thread.';
+              ResultText := '';
+            End
+          Else
+            Begin
+              Ok := FDispatchOk;
+              ResultText := FDispatchResult;
+              ErrorText := FDispatchError;
+            End;
         End
       Else
         Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
@@ -930,6 +959,8 @@ Begin
       SetLength(FToolCalls, 0);
       { Fresh answer channel per model loop; thinking is kept. }
       FContent := '';
+      { After tools the previous snapshot stays 'Running tools…' unless we reset it. }
+      EmitSnapshot(False, 'Waiting for model…', True);
       RequestJson := BuildRoundJson(Url);
       If FUseResponses Then
         FTriedResponses := True;

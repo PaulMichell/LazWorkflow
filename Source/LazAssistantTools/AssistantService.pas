@@ -235,6 +235,7 @@ Type
     FLock: TRTLCriticalSection;
     Procedure HandleToken(Const ContentSnapshot, ThinkingSnapshot: String;
       IsFinished: Boolean; Const ErrorText: String);
+    Procedure HandleChildTrace(Const Event: TAssistantEvent);
     Procedure ForwardProgress(Const Phase: String);
   Public
     Id: String;
@@ -273,13 +274,26 @@ Begin
   If Assigned(FChild) Then
     Begin
       Try
-        FChild.CancelStream;
+        { Never CancelStream/CheckSynchronize off the main thread — that deadlocks
+          a child stuck in Queue/Synchronize and freezes the parent actor. }
+        FChild.StopActorNoWait;
       Except
       End;
       FreeAndNil(FChild);
     End;
   DoneCriticalSection(FLock);
   Inherited Destroy;
+End;
+
+Procedure TChildSubagent.HandleChildTrace(Const Event: TAssistantEvent);
+Begin
+  If Event.Kind = aekToolStarted Then
+    Begin
+      If Trim(Event.ToolName) <> '' Then
+        ForwardProgress(Event.ToolName)
+      Else
+        ForwardProgress('Running tools…');
+    End;
 End;
 
 Procedure TChildSubagent.ForwardProgress(Const Phase: String);
@@ -346,20 +360,7 @@ End;
 
 Procedure TChildSubagent.Cancel;
 Begin
-  If Assigned(FChild) Then
-    FChild.CancelStream;
-  EnterCriticalSection(FLock);
-  Try
-    If Not Finished Then
-      Begin
-        If FailText = '' Then
-          FailText := 'Cancelled.';
-        Ok := False;
-        Finished := True;
-      End;
-  Finally
-    LeaveCriticalSection(FLock);
-  End;
+  Abandon('Cancelled.');
 End;
 
 Procedure TChildSubagent.Abandon(Const Reason: String);
@@ -398,6 +399,7 @@ Begin
   FChild.ConfigureAsSubagent(SubagentKindName(Request.Kind));
   UserPrompt := BuildSubagentUserPrompt(Request, CompileLog);
   FChild.AddMessage(amrUser, UserPrompt);
+  FChild.OnTrace := @HandleChildTrace;
   If Not FChild.StartStream(@HandleToken) Then
     Begin
       ErrorText := FChild.LastError;
@@ -657,12 +659,24 @@ Begin
   Result := Result + '}';
 End;
 
+Function RunningOnMainThread: Boolean;
+Begin
+  Result := GetCurrentThreadId = MainThreadID;
+End;
+
 Destructor TAssistantService.Destroy;
 Begin
   CancelSubagents;
-  CancelStream;
-  { Detached actors still hold FService until they exit; wait longer on teardown. }
-  ReapOrphanThreads(10000);
+  If RunningOnMainThread Then
+    Begin
+      CancelStream;
+      ReapOrphanThreads(1500);
+    End
+  Else
+    Begin
+      StopActorNoWait;
+      ReapOrphanThreads(0);
+    End;
   If Assigned(FOrphanThreads) Then
     Begin
       { Running threads are leaked rather than freed underfoot. }
@@ -712,7 +726,10 @@ Begin
       End;
     If (Not Remaining) Or (GetTickCount64 - StartTick >= WaitMs) Then
       Break;
-    CheckSynchronize(15);
+    If RunningOnMainThread Then
+      CheckSynchronize(15)
+    Else
+      Sleep(15);
     Sleep(5);
   Until False;
 End;
@@ -747,11 +764,13 @@ Begin
     End
   Else
     FStreamThread.Terminate;
-  { Pump Queue/Synchronize; abort HTTP so Stop does not wait on the socket. }
+  { Pump Queue/Synchronize only on the main thread. Workers must not call
+    CheckSynchronize — it deadlocks a child waiting in Queue/Synchronize. }
   StartTick := GetTickCount64;
   While (Not FStreamThread.Finished) And (GetTickCount64 - StartTick < 1500) Do
     Begin
-      CheckSynchronize(15);
+      If RunningOnMainThread Then
+        CheckSynchronize(15);
       Sleep(5);
     End;
   Try
@@ -1401,7 +1420,7 @@ Begin
     End;
   Try
     If Not Child.Finished Then
-      Child.Cancel;
+      Child.Abandon('Cancelled.');
     Summary := Child.SnapshotAnswer;
     If Child.FailText <> '' Then
       ErrorText := Child.FailText;
@@ -1421,21 +1440,23 @@ End;
 Procedure TAssistantService.CancelSubagents;
 Var
   I: Integer;
-  Child: TChildSubagent;
+  Snapshot: Array Of TChildSubagent;
 Begin
   EnterCriticalSection(FSubagentsLock);
   Try
-    If Not Assigned(FSubagents) Then
-      Exit;
-    For I := 0 To FSubagents.Count - 1 Do
+    SetLength(Snapshot, 0);
+    If Assigned(FSubagents) Then
       Begin
-        Child := TChildSubagent(FSubagents[I]);
-        If Assigned(Child) Then
-          Child.Cancel;
+        SetLength(Snapshot, FSubagents.Count);
+        For I := 0 To FSubagents.Count - 1 Do
+          Snapshot[I] := TChildSubagent(FSubagents[I]);
       End;
   Finally
     LeaveCriticalSection(FSubagentsLock);
   End;
+  For I := 0 To High(Snapshot) Do
+    If Assigned(Snapshot[I]) Then
+      Snapshot[I].Abandon('Cancelled.');
 End;
 
 Function TAssistantService.MessageCount: Integer;
