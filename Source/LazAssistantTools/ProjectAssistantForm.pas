@@ -549,7 +549,6 @@ Begin
       InputMemo.OnChange := @InputMemoChange;
       InputMemo.OnExit := @InputMemoExit;
     End;
-  Color := clBtnFace;
   EnsureChatView;
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
@@ -2027,8 +2026,6 @@ Begin
   Else
     FDisplaySystemNote := '';
   RefreshChatDisplay(True, False);
-  If Assigned(FTraceView) Then
-    FTraceView.ScrollToStart;
 End;
 
 Procedure TProjectAssistantForm.ShowLastConversationTurn;
@@ -3200,9 +3197,16 @@ Begin
         Begin
           FTraceView.ShowThinking := FShowThinking;
           If FViewingLive Then
-            FTraceView.Sync(FTrace, ScrollToBottom)
+            Begin
+              FTraceView.Sync(FTrace, ScrollToBottom);
+              If Force And ScrollToBottom Then
+                FTraceView.ScrollToEnd;
+            End
           Else
-            FTraceView.Sync(FHistoryTrace, ScrollToBottom);
+            Begin
+              FTraceView.Sync(FHistoryTrace, False);
+              FTraceView.ScrollToStart;
+            End;
         End;
     Except
       On E: Exception Do
@@ -3758,60 +3762,63 @@ Begin
     End;
 End;
 
-Function CategoryMenu(Popup: TPopupMenu; Const Category: String): TMenuItem;
+Function CloneMenuItem(Source: TMenuItem; OwnerMenu: TPopupMenu): TMenuItem;
 Var
   I: Integer;
+  Child: TMenuItem;
+  ActCaption: String;
 Begin
   Result := Nil;
-  If Not Assigned(Popup) Then
+  If Not Assigned(Source) Then
     Exit;
-  For I := 0 To Popup.Items.Count - 1 Do
-    If SameText(Popup.Items[I].Caption, Category) Then
-      Begin
-        Result := Popup.Items[I];
-        Exit;
-      End;
-  Result := TMenuItem.Create(Popup);
-  Result.Caption := Category;
-  Popup.Items.Add(Result);
+  ActCaption := Source.Caption;
+  If Assigned(Source.Action) And (Source.Action Is TAction) Then
+    ActCaption := TAction(Source.Action).Caption;
+  If SameText(Trim(ActCaption), 'Commands…') Then
+    Exit;
+  Result := TMenuItem.Create(OwnerMenu);
+  If Assigned(Source.Action) Then
+    Result.Action := Source.Action
+  Else
+    Result.Caption := Source.Caption;
+  For I := 0 To Source.Count - 1 Do
+    Begin
+      Child := CloneMenuItem(Source.Items[I], OwnerMenu);
+      If Assigned(Child) Then
+        Result.Add(Child);
+    End;
 End;
 
 Procedure TProjectAssistantForm.EnsureCommandsMenu;
 Var
-  I: Integer;
-  Item, Host: TMenuItem;
-  Entry: TAssistantCatalogItem;
-  Cat: String;
+  I, J, AddedInGroup: Integer;
+  Cloned, Sep: TMenuItem;
+  Group: TMenuItem;
 Begin
-  RebuildCommandCatalog;
   If Assigned(FCommandsPopup) Then
     FCommandsPopup.Items.Clear
   Else
     FCommandsPopup := TPopupMenu.Create(Nil);
-  If Not Assigned(FCatalog) Then
+  If Not Assigned(AssistantMenu) Then
     Exit;
-  For I := 0 To FCatalog.Count - 1 Do
+  For I := 0 To AssistantMenu.Items.Count - 1 Do
     Begin
-      Entry := FCatalog.GetItem(I);
-      If Copy(Entry.UserData, 1, 6) = 'skill:' Then
-        Continue;
-      If Entry.Action = CommandsAction Then
-        Continue;
-      Cat := Entry.Category;
-      If Cat = '' Then
-        Cat := 'Session';
-      Host := CategoryMenu(FCommandsPopup, Cat);
-      If Not Assigned(Host) Then
-        Continue;
-      Item := TMenuItem.Create(FCommandsPopup);
-      If Assigned(Entry.Action) And (Entry.Action Is TAction) Then
-        Item.Action := TAction(Entry.Action)
-      Else
+      Group := AssistantMenu.Items[I];
+      AddedInGroup := 0;
+      For J := 0 To Group.Count - 1 Do
         Begin
-          Item.Caption := Entry.Caption;
-          Item.Hint := Entry.Hint;
+          Cloned := CloneMenuItem(Group.Items[J], FCommandsPopup);
+          If Not Assigned(Cloned) Then
+            Continue;
+          FCommandsPopup.Items.Add(Cloned);
+          Inc(AddedInGroup);
         End;
-      Host.Add(Item);
+      If (AddedInGroup > 0) And (I < AssistantMenu.Items.Count - 1) Then
+        Begin
+          Sep := TMenuItem.Create(FCommandsPopup);
+          Sep.Caption := '-';
+          FCommandsPopup.Items.Add(Sep);
+        End;
     End;
 End;
 
@@ -4212,8 +4219,10 @@ Begin
   EnsureCommandsMenu;
   If Not Assigned(FCommandsPopup) Then
     Exit;
-  If Assigned(CommandsButton) Then
-    ScreenPt := CommandsButton.ClientToScreen(Point(0, CommandsButton.Height))
+  If Assigned(SettingsButton) Then
+    ScreenPt := SettingsButton.ClientToScreen(Point(0, SettingsButton.Height))
+  Else If Assigned(SendButton) Then
+    ScreenPt := SendButton.ClientToScreen(Point(0, SendButton.Height))
   Else
     ScreenPt := ClientToScreen(Point(8, 8));
   FCommandsPopup.PopUp(ScreenPt.X, ScreenPt.Y);

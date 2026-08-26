@@ -10,7 +10,8 @@ Unit AssistantTraceView;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls, Menus, AssistantTrace;
+  Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls, Menus, LCLType, AssistantTrace,
+  MarkDown.Control;
 
 Type
   TAssistantTraceView = Class(TFrame)
@@ -22,6 +23,10 @@ Type
     FTruncatedLines: Integer;
     FBoundTrace: TAssistantTrace;
     FCopyPopup: TPopupMenu;
+    FSelectWordItem: TMenuItem;
+    FSelectLineItem: TMenuItem;
+    FSelectAllItem: TMenuItem;
+    FCopyItem: TMenuItem;
     FLastContentWidth: Integer;
     FRelayouting: Boolean;
     Procedure SetShowThinking(Value: Boolean);
@@ -43,7 +48,18 @@ Type
     Procedure EnsureCopyPopup;
     Procedure CopyPopupPopup(Sender: TObject);
     Procedure CopyItemClick(Sender: TObject);
+    Procedure SelectWordItemClick(Sender: TObject);
+    Procedure SelectLineItemClick(Sender: TObject);
     Procedure SelectAllItemClick(Sender: TObject);
+    Procedure HookWheelAndPopup(Control: TControl);
+    Procedure ForwardMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
+      MousePos: TPoint; Var Handled: Boolean);
+    Function PopupMarkdown: TMarkDownControl;
+    Function PopupMemo: TMemo;
+    Function PopupPlainText: String;
+    Procedure SelectWordInMemo(Memo: TMemo);
+    Procedure SelectLineInMemo(Memo: TMemo);
+    Procedure ResetInnerCardScroll;
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
     Function MakeFooterLabel(Host: TWinControl): TLabel;
     Procedure BindBlockFooter(Panel: TPanel; Const FooterText: String);
@@ -51,11 +67,10 @@ Type
     Function ContentWidth: Integer;
     Function WrappedTextHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth: Integer): Integer;
     Function LastLines(Const SourceText: String; MaxLines: Integer; MaxChars: Integer = 0): String;
-    Procedure ScrollToEnd;
     Function HostedContentHeight: Integer;
     Function ScrollHandleReady: Boolean;
     Procedure SetVertScrollPos(NewPos: Integer);
-    Procedure ApplyScrollRange(ForceBottom: Boolean);
+    Procedure ApplyScrollRange(ForceBottom: Boolean; PinToStart: Boolean = False);
     Procedure FitHostToContent;
     Procedure RelayoutIfWidthChanged;
     Procedure LockControlHeight(Control: TControl; NewHeight: Integer);
@@ -64,12 +79,14 @@ Type
     Procedure ApplyHostWidth;
   Protected
     Procedure Resize; Override;
+    Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean; Override;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
     Procedure ResetFrames;
     Procedure Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
     Procedure ScrollToStart;
+    Procedure ScrollToEnd;
     Procedure RefreshElapsed(Trace: TAssistantTrace);
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
   End;
@@ -79,7 +96,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Clipbrd, LCLIntf, LCLType, MarkDown.Control, AssistantSubagents;
+  Clipbrd, LCLIntf, AssistantSubagents;
 
 Const
   HeaderHeight = 26;
@@ -221,6 +238,10 @@ Begin
   FTruncatedLines := TruncatedLineCount;
   FBoundTrace := Nil;
   FCopyPopup := Nil;
+  FSelectWordItem := Nil;
+  FSelectLineItem := Nil;
+  FSelectAllItem := Nil;
+  FCopyItem := Nil;
   FLastContentWidth := 0;
   FRelayouting := False;
   Color := clWindow;
@@ -232,6 +253,7 @@ Begin
         offset, which inflates Range and leaves a blank band above the cards. }
       TraceScroll.AutoScroll := False;
       TraceScroll.HorzScrollBar.Visible := False;
+      TraceScroll.OnMouseWheel := @ForwardMouseWheel;
     End;
   If Assigned(TraceHost) Then
     Begin
@@ -247,11 +269,14 @@ Begin
       TraceHost.Top := 0;
       TraceHost.ChildSizing.Layout := cclNone;
     End;
+  If Assigned(TraceHost) Then
+    TraceHost.OnMouseWheel := @ForwardMouseWheel;
   If Assigned(EmptyLabel) Then
     Begin
       EmptyLabel.Align := alClient;
       EmptyLabel.Alignment := taCenter;
       EmptyLabel.Layout := tlCenter;
+      EmptyLabel.OnMouseWheel := @ForwardMouseWheel;
     End;
 End;
 
@@ -317,6 +342,7 @@ Begin
   Panel.ParentBackground := False;
   Panel.AutoSize := False;
   Panel.ChildSizing.Layout := cclNone;
+  HookWheelAndPopup(Panel);
   If Not AutoSizePanel Then
     Panel.Height := FixedHeight;
 End;
@@ -509,48 +535,308 @@ End;
 
 Procedure TAssistantTraceView.EnsureCopyPopup;
 Var
-  CopyItem, SelectItem: TMenuItem;
+  Sep: TMenuItem;
 Begin
   If Assigned(FCopyPopup) Then
     Exit;
   FCopyPopup := TPopupMenu.Create(Nil);
   FCopyPopup.OnPopup := @CopyPopupPopup;
-  CopyItem := TMenuItem.Create(FCopyPopup);
-  CopyItem.Caption := 'Copy';
-  CopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
-  CopyItem.OnClick := @CopyItemClick;
-  FCopyPopup.Items.Add(CopyItem);
-  SelectItem := TMenuItem.Create(FCopyPopup);
-  SelectItem.Caption := 'Select All';
-  SelectItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
-  SelectItem.OnClick := @SelectAllItemClick;
-  FCopyPopup.Items.Add(SelectItem);
+  FSelectWordItem := TMenuItem.Create(FCopyPopup);
+  FSelectWordItem.Caption := 'Select Word';
+  FSelectWordItem.OnClick := @SelectWordItemClick;
+  FCopyPopup.Items.Add(FSelectWordItem);
+  FSelectLineItem := TMenuItem.Create(FCopyPopup);
+  FSelectLineItem.Caption := 'Select Line';
+  FSelectLineItem.OnClick := @SelectLineItemClick;
+  FCopyPopup.Items.Add(FSelectLineItem);
+  FSelectAllItem := TMenuItem.Create(FCopyPopup);
+  FSelectAllItem.Caption := 'Select All';
+  FSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
+  FSelectAllItem.OnClick := @SelectAllItemClick;
+  FCopyPopup.Items.Add(FSelectAllItem);
+  Sep := TMenuItem.Create(FCopyPopup);
+  Sep.Caption := '-';
+  FCopyPopup.Items.Add(Sep);
+  FCopyItem := TMenuItem.Create(FCopyPopup);
+  FCopyItem.Caption := 'Copy';
+  FCopyItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  FCopyItem.OnClick := @CopyItemClick;
+  FCopyPopup.Items.Add(FCopyItem);
+End;
+
+Procedure TAssistantTraceView.HookWheelAndPopup(Control: TControl);
+Begin
+  If Not Assigned(Control) Then
+    Exit;
+  EnsureCopyPopup;
+  Control.PopupMenu := FCopyPopup;
+  Control.OnMouseWheel := @ForwardMouseWheel;
+End;
+
+Function TAssistantTraceView.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean;
+Var
+  Handled: Boolean;
+Begin
+  Handled := False;
+  ForwardMouseWheel(Self, Shift, WheelDelta, MousePos, Handled);
+  Result := Handled Or Inherited DoMouseWheel(Shift, WheelDelta, MousePos);
+End;
+
+Procedure TAssistantTraceView.ForwardMouseWheel(Sender: TObject; {%H-}Shift: TShiftState; WheelDelta: Integer;
+  {%H-}MousePos: TPoint; Var Handled: Boolean);
+Var
+  Step, NewPos, MaxPos, Page: Integer;
+  Md: TMarkDownControl;
+Begin
+  If Sender Is TMarkDownControl Then
+    Begin
+      Md := TMarkDownControl(Sender);
+      If Md.ScrollBars <> ssNone Then
+        Begin
+          { Tall answer cards keep their own scrollbar. }
+          Handled := False;
+          Exit;
+        End;
+    End;
+  If Not Assigned(TraceScroll) Then
+    Exit;
+  Step := LineHeightPx * 3;
+  If Step < 24 Then
+    Step := 24;
+  If WheelDelta > 0 Then
+    NewPos := TraceScroll.VertScrollBar.Position - Step
+  Else
+    NewPos := TraceScroll.VertScrollBar.Position + Step;
+  Page := TraceScroll.VertScrollBar.Page;
+  If Page < 1 Then
+    Page := TraceScroll.ClientHeight;
+  MaxPos := TraceScroll.VertScrollBar.Range - Page;
+  If MaxPos < 0 Then
+    MaxPos := 0;
+  If NewPos < 0 Then
+    NewPos := 0;
+  If NewPos > MaxPos Then
+    NewPos := MaxPos;
+  SetVertScrollPos(NewPos);
+  Handled := True;
+End;
+
+Function TAssistantTraceView.PopupMarkdown: TMarkDownControl;
+Begin
+  Result := Nil;
+  If Assigned(FCopyPopup) And (FCopyPopup.PopupComponent Is TMarkDownControl) Then
+    Result := TMarkDownControl(FCopyPopup.PopupComponent);
+End;
+
+Function TAssistantTraceView.PopupMemo: TMemo;
+Begin
+  Result := Nil;
+  If Assigned(FCopyPopup) And (FCopyPopup.PopupComponent Is TMemo) Then
+    Result := TMemo(FCopyPopup.PopupComponent);
+End;
+
+Function TAssistantTraceView.PopupPlainText: String;
+Var
+  Host: TComponent;
+Begin
+  Result := '';
+  If Not Assigned(FCopyPopup) Then
+    Exit;
+  Host := FCopyPopup.PopupComponent;
+  If Host Is TCustomEdit Then
+    Result := TCustomEdit(Host).Text
+  Else If Host Is TLabel Then
+    Result := TLabel(Host).Caption
+  Else If Host Is TPanel Then
+    Begin
+      If NamedChild(TWinControl(Host), 'BodyMemo') Is TMemo Then
+        Result := TMemo(NamedChild(TWinControl(Host), 'BodyMemo')).Text
+      Else If NamedChild(TWinControl(Host), 'TitleLabel') Is TLabel Then
+        Result := TLabel(NamedChild(TWinControl(Host), 'TitleLabel')).Caption
+      Else If NamedChild(TWinControl(Host), 'HeaderLabel') Is TLabel Then
+        Result := TLabel(NamedChild(TWinControl(Host), 'HeaderLabel')).Caption;
+    End;
+End;
+
+Procedure TAssistantTraceView.SelectWordInMemo(Memo: TMemo);
+Var
+  Body: String;
+  Caret, StartAt, EndAt, N: Integer;
+Begin
+  If Not Assigned(Memo) Then
+    Exit;
+  Body := Memo.Text;
+  N := Length(Body);
+  Caret := Memo.SelStart;
+  If Caret < 0 Then
+    Caret := 0;
+  If Caret > N Then
+    Caret := N;
+  StartAt := Caret;
+  While (StartAt > 0) And (Not (Body[StartAt] In [#0..#32])) Do
+    Dec(StartAt);
+  If (StartAt < N) And (Body[StartAt + 1] In [#0..#32]) Then
+    Inc(StartAt);
+  EndAt := Caret;
+  If EndAt < 1 Then
+    EndAt := 1;
+  While (EndAt < N) And (Not (Body[EndAt + 1] In [#0..#32])) Do
+    Inc(EndAt);
+  Memo.SelStart := StartAt;
+  Memo.SelLength := EndAt - StartAt;
+End;
+
+Procedure TAssistantTraceView.SelectLineInMemo(Memo: TMemo);
+Var
+  Body: String;
+  Caret, StartAt, EndAt, N: Integer;
+Begin
+  If Not Assigned(Memo) Then
+    Exit;
+  Body := Memo.Text;
+  N := Length(Body);
+  Caret := Memo.SelStart;
+  If Caret < 0 Then
+    Caret := 0;
+  If Caret > N Then
+    Caret := N;
+  StartAt := Caret;
+  While (StartAt > 0) And (Body[StartAt] <> #10) Do
+    Dec(StartAt);
+  If (StartAt > 0) And (Body[StartAt] = #10) Then
+    Inc(StartAt);
+  EndAt := Caret;
+  While (EndAt < N) And (Body[EndAt + 1] <> #10) Do
+    Inc(EndAt);
+  If (EndAt < N) And (Body[EndAt + 1] = #10) Then
+    Inc(EndAt);
+  Memo.SelStart := StartAt;
+  Memo.SelLength := EndAt - StartAt;
 End;
 
 Procedure TAssistantTraceView.CopyPopupPopup(Sender: TObject);
 Var
-  CopyItem: TMenuItem;
-  Edit: TCustomEdit;
+  Md: TMarkDownControl;
+  Memo: TMemo;
+  Plain: String;
 Begin
-  If FCopyPopup.Items.Count = 0 Then
-    Exit;
-  CopyItem := FCopyPopup.Items[0];
-  Edit := Nil;
-  If FCopyPopup.PopupComponent Is TCustomEdit Then
-    Edit := TCustomEdit(FCopyPopup.PopupComponent);
-  CopyItem.Enabled := Assigned(Edit) And (Edit.SelLength > 0);
+  Md := PopupMarkdown;
+  Memo := PopupMemo;
+  Plain := PopupPlainText;
+  If Assigned(FSelectWordItem) Then
+    FSelectWordItem.Enabled := Assigned(Md) Or Assigned(Memo) Or (Plain <> '');
+  If Assigned(FSelectLineItem) Then
+    FSelectLineItem.Enabled := Assigned(Md) Or Assigned(Memo) Or (Plain <> '');
+  If Assigned(FSelectAllItem) Then
+    FSelectAllItem.Enabled := Assigned(Md) Or Assigned(Memo) Or (Plain <> '');
+  If Assigned(FCopyItem) Then
+    Begin
+      If Assigned(Md) Then
+        FCopyItem.Enabled := Md.HasSelection
+      Else If Assigned(Memo) Then
+        FCopyItem.Enabled := Memo.SelLength > 0
+      Else
+        FCopyItem.Enabled := Plain <> '';
+    End;
 End;
 
 Procedure TAssistantTraceView.CopyItemClick(Sender: TObject);
+Var
+  Md: TMarkDownControl;
+  Memo: TMemo;
+  Plain: String;
 Begin
-  If FCopyPopup.PopupComponent Is TCustomEdit Then
-    TCustomEdit(FCopyPopup.PopupComponent).CopyToClipboard;
+  Md := PopupMarkdown;
+  If Assigned(Md) Then
+    Begin
+      Md.CopySelectionToClipBoard;
+      Exit;
+    End;
+  Memo := PopupMemo;
+  If Assigned(Memo) Then
+    Begin
+      If Memo.SelLength > 0 Then
+        Memo.CopyToClipboard
+      Else
+        Clipboard.AsText := Memo.Text;
+      Exit;
+    End;
+  Plain := PopupPlainText;
+  If Plain <> '' Then
+    Clipboard.AsText := Plain;
+End;
+
+Procedure TAssistantTraceView.SelectWordItemClick(Sender: TObject);
+Var
+  Md: TMarkDownControl;
+  Memo: TMemo;
+  P: TPoint;
+  Plain: String;
+Begin
+  Md := PopupMarkdown;
+  If Assigned(Md) Then
+    Begin
+      P := Md.ScreenToClient(Mouse.CursorPos);
+      Md.SelectWordAt(P.X, P.Y);
+      Exit;
+    End;
+  Memo := PopupMemo;
+  If Assigned(Memo) Then
+    Begin
+      SelectWordInMemo(Memo);
+      Exit;
+    End;
+  Plain := PopupPlainText;
+  If Plain <> '' Then
+    Clipboard.AsText := Plain;
+End;
+
+Procedure TAssistantTraceView.SelectLineItemClick(Sender: TObject);
+Var
+  Md: TMarkDownControl;
+  Memo: TMemo;
+  P: TPoint;
+  Plain: String;
+Begin
+  Md := PopupMarkdown;
+  If Assigned(Md) Then
+    Begin
+      P := Md.ScreenToClient(Mouse.CursorPos);
+      Md.SelectLineAt(P.X, P.Y);
+      Exit;
+    End;
+  Memo := PopupMemo;
+  If Assigned(Memo) Then
+    Begin
+      SelectLineInMemo(Memo);
+      Exit;
+    End;
+  Plain := PopupPlainText;
+  If Plain <> '' Then
+    Clipboard.AsText := Plain;
 End;
 
 Procedure TAssistantTraceView.SelectAllItemClick(Sender: TObject);
+Var
+  Md: TMarkDownControl;
+  Memo: TMemo;
+  Plain: String;
 Begin
-  If FCopyPopup.PopupComponent Is TCustomEdit Then
-    TCustomEdit(FCopyPopup.PopupComponent).SelectAll;
+  Md := PopupMarkdown;
+  If Assigned(Md) Then
+    Begin
+      Md.SelectAll;
+      Exit;
+    End;
+  Memo := PopupMemo;
+  If Assigned(Memo) Then
+    Begin
+      Memo.SelectAll;
+      Exit;
+    End;
+  Plain := PopupPlainText;
+  If Plain <> '' Then
+    Clipboard.AsText := Plain;
 End;
 
 Function TAssistantTraceView.MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
@@ -569,7 +855,7 @@ Begin
   Result.WantTabs := False;
   Result.HideSelection := False;
   Result.TabStop := False;
-  Result.PopupMenu := FCopyPopup;
+  HookWheelAndPopup(Result);
   Result.Color := Host.Color;
   If Italic Then
     Result.Font.Style := [fsItalic];
@@ -589,6 +875,7 @@ Begin
   Result.Name := 'FooterLabel';
   Result.Caption := '';
   Result.Visible := False;
+  HookWheelAndPopup(Result);
   If Result.Font.Size > 0 Then
     Result.Font.Size := Result.Font.Size - 1
   Else If Result.Font.Height < 0 Then
@@ -789,6 +1076,7 @@ Begin
       Title.Name := 'TitleLabel';
       Title.Caption := Block.Title;
       Title.Parent := Panel;
+      HookWheelAndPopup(Title);
       MakeSelectableMemo(Panel, 'BodyMemo', False, False);
       MakeFooterLabel(Panel);
       FinishHostedPanel(Panel, True);
@@ -838,6 +1126,7 @@ Begin
       Header.Name := 'HeaderLabel';
       Header.Caption := Block.Title;
       Header.Parent := Panel;
+      HookWheelAndPopup(Header);
       View := TMarkDownControl.Create(Panel);
       View.AutoSize := False;
       View.Align := alNone;
@@ -852,6 +1141,7 @@ Begin
       View.FontQuoteColor := clGrayText;
       View.MonoFontName := 'Monospace';
       View.Parent := Panel;
+      HookWheelAndPopup(View);
       MakeFooterLabel(Panel);
       FinishHostedPanel(Panel, True);
     End
@@ -926,6 +1216,7 @@ Begin
       Child.Name := 'StatusLabel';
       Child.BorderSpacing.Right := 8;
       TLabel(Child).Font.Color := clGrayText;
+      HookWheelAndPopup(Child);
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
@@ -1008,6 +1299,7 @@ Begin
       Title.Name := 'TitleLabel';
       Title.Caption := Block.Title;
       Title.Parent := Panel;
+      HookWheelAndPopup(Title);
       View := TMarkDownControl.Create(Panel);
       View.AutoSize := False;
       View.Align := alNone;
@@ -1019,6 +1311,7 @@ Begin
       View.ScrollBars := ssNone;
       View.MonoFontName := 'Monospace';
       View.Parent := Panel;
+      HookWheelAndPopup(View);
       MakeFooterLabel(Panel);
       FinishHostedPanel(Panel, True);
     End
@@ -1099,13 +1392,23 @@ Begin
 End;
 
 Procedure TAssistantTraceView.SetVertScrollPos(NewPos: Integer);
+Var
+  MaxPos, Page: Integer;
 Begin
   { TScrollingWinControl.ScrollBy always calls ScrollBy_WS, which raises
     "Handle not allocated" if the GTK widget is not realized yet. }
   If Not ScrollHandleReady Then
     Exit;
+  Page := TraceScroll.VertScrollBar.Page;
+  If Page < 1 Then
+    Page := TraceScroll.ClientHeight;
+  MaxPos := TraceScroll.VertScrollBar.Range - Page;
+  If MaxPos < 0 Then
+    MaxPos := 0;
   If NewPos < 0 Then
     NewPos := 0;
+  If NewPos > MaxPos Then
+    NewPos := MaxPos;
   If TraceScroll.VertScrollBar.Position <> NewPos Then
     TraceScroll.VertScrollBar.Position := NewPos;
 End;
@@ -1133,7 +1436,7 @@ Begin
     Result := 1;
 End;
 
-Procedure TAssistantTraceView.ApplyScrollRange(ForceBottom: Boolean);
+Procedure TAssistantTraceView.ApplyScrollRange(ForceBottom: Boolean; PinToStart: Boolean);
 Var
   MaxPos, NewH, Page, SavedPos, OldRange, OldPage: Integer;
   Follow: Boolean;
@@ -1147,7 +1450,7 @@ Begin
     SavedPos := TraceScroll.VertScrollBar.Position;
     OldRange := TraceScroll.VertScrollBar.Range;
     OldPage := TraceScroll.VertScrollBar.Page;
-    Follow := ForceBottom Or ScrollShouldFollowTail(SavedPos, OldRange, OldPage, 24);
+    Follow := (Not PinToStart) And (ForceBottom Or ScrollShouldFollowTail(SavedPos, OldRange, OldPage, 24));
     { GTK3 places TScrollBox children in viewport coordinates. Any SetBounds on
       TraceHost (even Height-only) while Position<>0 writes Top=0 at the thumb
       and stacks blank space above the cards. Layout only at scroll origin. }
@@ -1177,7 +1480,9 @@ Begin
     MaxPos := NewH - Page;
     If MaxPos < 0 Then
       MaxPos := 0;
-    If Follow Then
+    If PinToStart Then
+      SetVertScrollPos(0)
+    Else If Follow Then
       SetVertScrollPos(MaxPos)
     Else
       Begin
@@ -1198,13 +1503,12 @@ Begin
   ApplyScrollRange(False);
 End;
 
-Procedure TAssistantTraceView.ScrollToStart;
+Procedure TAssistantTraceView.ResetInnerCardScroll;
 Var
   CardIndex, ChildIndex: Integer;
   Card: TWinControl;
   Child: TControl;
 Begin
-  SetVertScrollPos(0);
   If Not Assigned(TraceHost) Then
     Exit;
   For CardIndex := 0 To TraceHost.ControlCount - 1 Do
@@ -1221,12 +1525,19 @@ Begin
     End;
 End;
 
+Procedure TAssistantTraceView.ScrollToStart;
+Begin
+  ResetInnerCardScroll;
+  ApplyScrollRange(False, True);
+End;
+
 Procedure TAssistantTraceView.ScrollToEnd;
 Begin
   If Not Assigned(TraceScroll) Then
     Exit;
+  ResetInnerCardScroll;
   ApplyHostWidth;
-  ApplyScrollRange(True);
+  ApplyScrollRange(True, False);
 End;
 
 Procedure TAssistantTraceView.ResetFrames;
@@ -1248,7 +1559,7 @@ Begin
   SetVertScrollPos(0);
 End;
 
-Procedure TAssistantTraceView.Sync(Trace: TAssistantTrace; ScrollBottom: Boolean);
+Procedure TAssistantTraceView.Sync(Trace: TAssistantTrace; {%H-}ScrollBottom: Boolean);
 Var
   I: Integer;
   Empty: Boolean;
@@ -1277,9 +1588,7 @@ Begin
       End;
   If ContentWidth >= 80 Then
     FLastContentWidth := ContentWidth;
-  { ScrollBottom only follows the tail when the bar is already at max. A user
-    who scrolled up keeps their position; Range grows so they can reach new content. }
-  ApplyScrollRange(False);
+  ApplyScrollRange(False, False);
 End;
 
 Procedure TAssistantTraceView.RefreshElapsed(Trace: TAssistantTrace);

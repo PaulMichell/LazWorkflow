@@ -24,112 +24,116 @@ object ProjectAssistantForm: TProjectAssistantForm
   end
   object BottomBar: TPanel
     Left = 0
-    Height = 50
-    Top = 628
+    Height = 36
+    Top = 642
     Width = 960
     Align = alBottom
     BevelOuter = bvNone
     ChildSizing.LeftRightSpacing = 4
     ChildSizing.TopBottomSpacing = 4
     ChildSizing.HorizontalSpacing = 4
+    ChildSizing.VerticalSpacing = 4
+    ChildSizing.EnlargeVertical = crsHomogenousChildResize
+    ChildSizing.ShrinkVertical = crsHomogenousChildResize
     ChildSizing.Layout = cclLeftToRightThenTopToBottom
     ChildSizing.ControlsPerLine = 12
-    ClientHeight = 50
+    ClientHeight = 36
     ClientWidth = 960
     TabOrder = 2
     object SendButton: TButton
-      Left = 6
-      Height = 34
-      Top = 6
+      Left = 4
+      Height = 28
+      Top = 4
       Width = 84
       Action = SendAction
-      BorderSpacing.Around = 6
       TabOrder = 0
     end
     object StopButton: TButton
-      Left = 96
-      Height = 34
-      Top = 6
+      Left = 92
+      Height = 28
+      Top = 4
       Width = 84
       Action = StopAction
-      BorderSpacing.Around = 6
-      TabOrder = 7
-    end
-    object NewChatButton: TButton
-      Left = 186
-      Height = 34
-      Top = 6
-      Width = 84
-      Action = NewChatAction
       TabOrder = 1
     end
+    object NewChatButton: TButton
+      Left = 180
+      Height = 28
+      Top = 4
+      Width = 84
+      Action = NewChatAction
+      TabOrder = 2
+    end
     object ToggleThinkingButton: TButton
-      Left = 274
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 106
       Action = ToggleThinkingAction
-      TabOrder = 2
+      TabOrder = 3
       Visible = False
     end
     object ReviewButton: TButton
-      Left = 274
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 84
       Caption = 'Review'
-      TabOrder = 3
+      TabOrder = 4
+      Visible = False
       OnClick = ReviewButtonClick
     end
     object ReviewCompileButton: TButton
-      Left = 384
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 112
       Action = ReviewCompileAction
-      TabOrder = 9
+      TabOrder = 5
       Visible = False
     end
     object ReviewBuildButton: TButton
-      Left = 500
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 94
       Action = ReviewBuildAction
-      TabOrder = 10
+      TabOrder = 6
       Visible = False
     end
     object FixErrorButton: TButton
-      Left = 362
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 84
       Action = FixErrorAction
-      TabOrder = 4
+      TabOrder = 7
+      Visible = False
     end
     object CommandsButton: TButton
-      Left = 450
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 100
       Action = CommandsAction
-      TabOrder = 5
+      TabOrder = 8
+      Visible = False
     end
     object SettingsButton: TButton
-      Left = 554
-      Height = 34
-      Top = 6
+      Left = 268
+      Height = 28
+      Top = 4
       Width = 84
       Action = SettingsAction
-      TabOrder = 6
+      TabOrder = 9
     end
     object AutoNewChatCheck: TCheckBox
-      Left = 774
-      Height = 34
-      Top = 6
+      Left = 356
+      Height = 28
+      Top = 4
       Width = 170
       Caption = 'Auto New Chat at 95%'
-      TabOrder = 8
+      TabOrder = 10
       Visible = False
       OnClick = AutoNewChatCheckClick
     end
