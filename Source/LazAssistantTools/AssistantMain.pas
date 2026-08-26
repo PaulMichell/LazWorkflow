@@ -217,7 +217,7 @@ End;
 
 Procedure RegisterAssistantTools;
 Var
-  AssistantMenu, MainSec, SetSec: TIDEMenuSection;
+  AssistantMenu, MainSec, WorkSec, SetSec: TIDEMenuSection;
   AfterItem: TIDEMenuItem;
   Key: TIDEShortCut;
   Cat: TIDECommandCategory;
@@ -254,7 +254,7 @@ Begin
   CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Assistant Settings', Key, Nil, @DoAssistantSettings);
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
-    Two logical sections so Lazarus draws a separator before Settings, matching Repository. }
+    Separate sections so Lazarus draws a separator after Project Assistant and before Settings. }
   AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', 'Assistant');
   If Assigned(mnuMain) And Assigned(AssistantMenu) Then
     Begin
@@ -272,10 +272,11 @@ Begin
     End;
   MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
   RegisterIDEMenuCommand(MainSec, 'ProjectAssistant', 'Project Assistant', Nil, Nil, CmdAssistantChat);
-  RegisterIDEMenuCommand(MainSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
-  RegisterIDEMenuCommand(MainSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
-  RegisterIDEMenuCommand(MainSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
-  RegisterIDEMenuCommand(MainSec, 'AssistantFixError', 'Fix Error in Build mode…', Nil, Nil, CmdAssistantFixError);
+  WorkSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantWorkCmds');
+  RegisterIDEMenuCommand(WorkSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
+  RegisterIDEMenuCommand(WorkSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
+  RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
+  RegisterIDEMenuCommand(WorkSec, 'AssistantFixError', 'Fix Error In Build Mode…', Nil, Nil, CmdAssistantFixError);
   SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
   RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 

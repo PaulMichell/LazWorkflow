@@ -515,12 +515,12 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = CommandsActionExecute
     end
     object ContextBreakdownAction: TAction
-      Caption = 'Context breakdown'
+      Caption = 'Context Breakdown'
       Hint = 'Token estimate for the next request'
       OnExecute = ContextBreakdownActionExecute
     end
     object SessionInfoAction: TAction
-      Caption = 'Session info'
+      Caption = 'Session Info'
       Hint = 'Mode, model, plan, and conversation'
       OnExecute = SessionInfoActionExecute
     end
@@ -530,7 +530,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = ModelPickerActionExecute
     end
     object ThinkingPickerAction: TAction
-      Caption = 'Thinking level…'
+      Caption = 'Thinking Level…'
       Hint = 'Reasoning effort for the next turn'
       OnExecute = ThinkingPickerActionExecute
     end
@@ -540,22 +540,22 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = SkillsPickerActionExecute
     end
     object CompactContextAction: TAction
-      Caption = 'Compact context'
+      Caption = 'Compact Context'
       Hint = 'Shrink older turns to free context'
       OnExecute = CompactContextActionExecute
     end
     object CopyLastAnswerAction: TAction
-      Caption = 'Copy last answer'
+      Caption = 'Copy Last Answer'
       Hint = 'Copy the current answer to the clipboard'
       OnExecute = CopyLastAnswerActionExecute
     end
     object OpenPlanAction: TAction
-      Caption = 'Open active plan'
+      Caption = 'Open Active Plan'
       Hint = 'Open the active plan Markdown'
       OnExecute = OpenPlanActionExecute
     end
     object BuildThisAction: TAction
-      Caption = 'Build this'
+      Caption = 'Build This'
       Hint = 'Switch to Build and seed the next incomplete package'
       OnExecute = BuildThisActionExecute
     end
@@ -565,17 +565,17 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = RevisePlanActionExecute
     end
     object AskModeAction: TAction
-      Caption = 'Ask mode'
+      Caption = 'Ask Mode'
       Hint = 'Read-only Q&A'
       OnExecute = AskModeActionExecute
     end
     object PlanModeAction: TAction
-      Caption = 'Plan mode'
+      Caption = 'Plan Mode'
       Hint = 'Write the plan file'
       OnExecute = PlanModeActionExecute
     end
     object BuildModeAction: TAction
-      Caption = 'Build mode'
+      Caption = 'Build Mode'
       Hint = 'Edit sources and compile'
       OnExecute = BuildModeActionExecute
     end

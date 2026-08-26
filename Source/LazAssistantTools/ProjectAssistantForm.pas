@@ -1025,7 +1025,7 @@ Begin
 
   PlanNewButton := TButton.Create(Self);
   PlanNewButton.Parent := Bar;
-  PlanNewButton.Caption := 'New plan…';
+  PlanNewButton.Caption := 'New Plan…';
   PlanNewButton.AutoSize := True;
   PlanNewButton.OnClick := @PlanNewButtonClick;
 
@@ -1037,7 +1037,7 @@ Begin
 
   PlanSetActiveButton := TButton.Create(Self);
   PlanSetActiveButton.Parent := Bar;
-  PlanSetActiveButton.Caption := 'Set active';
+  PlanSetActiveButton.Caption := 'Set Active';
   PlanSetActiveButton.AutoSize := True;
   PlanSetActiveButton.OnClick := @PlanSetActiveButtonClick;
 
@@ -1254,7 +1254,7 @@ Begin
 
   BuildOpenPlanButton := TButton.Create(Self);
   BuildOpenPlanButton.Parent := Bar;
-  BuildOpenPlanButton.Caption := 'Open plan';
+  BuildOpenPlanButton.Caption := 'Open Plan';
   BuildOpenPlanButton.AutoSize := True;
   BuildOpenPlanButton.OnClick := @BuildOpenPlanButtonClick;
 
@@ -1278,13 +1278,13 @@ Begin
 
   BuildWorkButton := TButton.Create(Self);
   BuildWorkButton.Parent := Bar;
-  BuildWorkButton.Caption := 'Work on this';
+  BuildWorkButton.Caption := 'Work On This';
   BuildWorkButton.AutoSize := True;
   BuildWorkButton.OnClick := @BuildWorkButtonClick;
 
   BuildWorkPlanButton := TButton.Create(Self);
   BuildWorkPlanButton.Parent := Bar;
-  BuildWorkPlanButton.Caption := 'Work on plan';
+  BuildWorkPlanButton.Caption := 'Work On Plan';
   BuildWorkPlanButton.AutoSize := True;
   BuildWorkPlanButton.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
   BuildWorkPlanButton.ShowHint := True;
