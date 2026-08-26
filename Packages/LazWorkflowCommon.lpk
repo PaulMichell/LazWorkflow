@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <SearchPaths>
         <OtherUnitFiles Value="../Source/LazWorkflowCommon"/>
-        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)"/>
+        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazWorkflowCommon"/>
       </SearchPaths>
       <CodeGeneration>
         <SmartLinkUnit Value="True"/>

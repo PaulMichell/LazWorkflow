@@ -60,7 +60,7 @@ LazWorkflow/
 │   └── Tests/
 ├── Packages/
 ├── Documents/          # project plans (v2 architecture is ProjectPlan-v2.md)
-├── Lib/                # unit output per CPU-OS
+├── Lib/                # unit output per CPU-OS, one subdirectory per package
 └── README.md
 ```
 

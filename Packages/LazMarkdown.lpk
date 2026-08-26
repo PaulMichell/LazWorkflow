@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <SearchPaths>
         <OtherUnitFiles Value="../Source/LazMarkdown;../Source/LazMarkdown/Src_3_2"/>
-        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)"/>
+        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazMarkdown"/>
       </SearchPaths>
       <CodeGeneration>
         <SmartLinkUnit Value="True"/>

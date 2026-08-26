@@ -9,7 +9,7 @@
       <SearchPaths>
         <IncludeFiles Value="../Source/LazRepositoryTools"/>
         <OtherUnitFiles Value="../Source/LazRepositoryTools"/>
-        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)"/>
+        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazRepositoryTools"/>
       </SearchPaths>
       <CodeGeneration>
         <SmartLinkUnit Value="True"/>

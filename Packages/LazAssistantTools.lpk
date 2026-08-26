@@ -9,7 +9,7 @@
       <Version Value="11"/>
       <SearchPaths>
         <OtherUnitFiles Value="../Source/LazAssistantTools"/>
-        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)"/>
+        <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazAssistantTools"/>
       </SearchPaths>
       <CodeGeneration>
         <SmartLinkUnit Value="True"/>
