@@ -697,13 +697,85 @@ Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: St
 Const
   ReadBufSize = 65536;
 Var
-  Path, Resolved, Chunk, LineText, Carry: String;
+  Path, Resolved, Chunk, Carry: String;
   MaxChars, StartLine, EndLine, LineNo, FirstOut, LastOut, FileBytes: Integer;
   Stream: TFileStream;
   Buf: Array[0..ReadBufSize - 1] Of Byte;
-  BytesRead, I, SegStart: Integer;
-  Truncated, HitEndLine: Boolean;
+  BytesRead, I: Integer;
+  Truncated, HitEndLine, PendingCR: Boolean;
   RequestedEnd: Integer;
+
+  Function RemainingBudget: Integer;
+  Begin
+    Result := MaxChars - Length(Chunk);
+    If Length(Chunk) > 0 Then
+      Dec(Result);
+    If Result < 0 Then
+      Result := 0;
+  End;
+
+  Procedure EmitLine(Const LineText: String);
+  Var
+    Remain: Integer;
+  Begin
+    Inc(LineNo);
+    If LineNo < StartLine Then
+      Exit;
+    If (EndLine > 0) And (LineNo > EndLine) Then
+      Begin
+        HitEndLine := True;
+        Exit;
+      End;
+    Remain := RemainingBudget;
+    If Remain < 1 Then
+      Begin
+        Truncated := True;
+        Exit;
+      End;
+    If Length(Chunk) > 0 Then
+      Chunk := Chunk + LineEnding;
+    If Length(LineText) > Remain Then
+      Begin
+        Chunk := Chunk + Copy(LineText, 1, Remain);
+        Truncated := True;
+      End
+    Else
+      Chunk := Chunk + LineText;
+    LastOut := LineNo;
+    If Length(Chunk) >= MaxChars Then
+      Truncated := True;
+  End;
+
+  Procedure FinishLine;
+  Begin
+    EmitLine(Carry);
+    Carry := '';
+  End;
+
+  Procedure AppendCarryChar(C: Char);
+  Var
+    Remain: Integer;
+  Begin
+    If (LineNo + 1) < StartLine Then
+      Exit;
+    If (EndLine > 0) And (LineNo + 1 > EndLine) Then
+      Exit;
+    Remain := RemainingBudget;
+    If Remain < 1 Then
+      Begin
+        Truncated := True;
+        Exit;
+      End;
+    If Length(Carry) >= Remain Then
+      Begin
+        EmitLine(Copy(Carry, 1, Remain));
+        Carry := '';
+        Truncated := True;
+        Exit;
+      End;
+    Carry := Carry + C;
+  End;
+
 Begin
   Result := False;
   ResultText := '';
@@ -748,74 +820,69 @@ Begin
       LineNo := 0;
       Truncated := False;
       HitEndLine := False;
+      PendingCR := False;
       FirstOut := StartLine;
       LastOut := StartLine - 1;
       Repeat
         BytesRead := Stream.Read(Buf, SizeOf(Buf));
         If BytesRead < 1 Then
           Break;
-        SetLength(Carry, Length(Carry) + BytesRead);
-        Move(Buf[0], Carry[Length(Carry) - BytesRead + 1], BytesRead);
-        SegStart := 1;
-        I := 1;
-        While I <= Length(Carry) Do
+        I := 0;
+        While I < BytesRead Do
           Begin
-            If Carry[I] In [#10, #13] Then
+            If PendingCR Then
               Begin
-                LineText := Copy(Carry, SegStart, I - SegStart);
-                If (Carry[I] = #13) And (I < Length(Carry)) And (Carry[I + 1] = #10) Then
-                  Inc(I);
-                Inc(LineNo);
-                SegStart := I + 1;
-                If LineNo < StartLine Then
+                PendingCR := False;
+                If Buf[I] = 10 Then
                   Begin
+                    FinishLine;
                     Inc(I);
+                    If Truncated Or HitEndLine Then
+                      Break;
                     Continue;
                   End;
-                If (EndLine > 0) And (LineNo > EndLine) Then
-                  Begin
-                    HitEndLine := True;
-                    Break;
-                  End;
-                If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
-                  Begin
-                    Truncated := True;
-                    Break;
-                  End;
-                If Length(Chunk) > 0 Then
-                  Chunk := Chunk + LineEnding;
-                Chunk := Chunk + LineText;
-                LastOut := LineNo;
-                If Length(Chunk) >= MaxChars Then
-                  Begin
-                    Truncated := True;
-                    Break;
-                  End;
+                FinishLine;
+                If Truncated Or HitEndLine Then
+                  Break;
               End;
-            Inc(I);
+            If Buf[I] = 13 Then
+              Begin
+                If I = BytesRead - 1 Then
+                  Begin
+                    PendingCR := True;
+                    Inc(I);
+                  End
+                Else If Buf[I + 1] = 10 Then
+                  Begin
+                    FinishLine;
+                    Inc(I, 2);
+                  End
+                Else
+                  Begin
+                    FinishLine;
+                    Inc(I);
+                  End;
+              End
+            Else If Buf[I] = 10 Then
+              Begin
+                FinishLine;
+                Inc(I);
+              End
+            Else
+              Begin
+                AppendCarryChar(Char(Buf[I]));
+                Inc(I);
+              End;
+            If Truncated Or HitEndLine Then
+              Break;
           End;
-        If SegStart > 1 Then
-          Carry := Copy(Carry, SegStart, MaxInt);
         If Truncated Or HitEndLine Then
           Break;
       Until BytesRead < SizeOf(Buf);
+      If PendingCR And (Not Truncated) And (Not HitEndLine) Then
+        FinishLine;
       If (Not Truncated) And (Not HitEndLine) And (Carry <> '') Then
-        Begin
-          Inc(LineNo);
-          LineText := Carry;
-          If (LineNo >= StartLine) And ((EndLine < 1) Or (LineNo <= EndLine)) Then
-            Begin
-              If (Length(Chunk) > 0) And (Length(Chunk) + Length(LineText) + 1 > MaxChars) Then
-                Truncated := True
-              Else
-                Begin
-                  If Length(Chunk) > 0 Then
-                    Chunk := Chunk + LineEnding;
-                  Chunk := Chunk + LineText;
-                  LastOut := LineNo;
-                End;
-            End;
-        End;
+        FinishLine;
       If LineNo < 1 Then
         Begin
           ResultText := Format('File: %s (empty, 0 lines)', [Resolved]);
