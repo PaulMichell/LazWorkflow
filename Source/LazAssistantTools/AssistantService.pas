@@ -244,14 +244,15 @@ Type
       IsFinished: Boolean; Const ErrorText: String);
     Procedure HandleChildTrace(Const Event: TAssistantEvent);
     Procedure ForwardProgress(Const Phase: String);
-  Public
-    Id: String;
-    KindName: String;
-    Title: String;
+  Strict Private
     Answer: String;
     FailText: String;
     Finished: Boolean;
     Ok: Boolean;
+  Public
+    Id: String;
+    KindName: String;
+    Title: String;
     StartedTick: QWord;
     Constructor Create(OwnerService: TAssistantService);
     Destructor Destroy; Override;
@@ -259,7 +260,8 @@ Type
       Const ApiBase, Model, Skill, Effort, CompileLog: String; Out ErrorText: String): Boolean;
     Procedure Cancel;
     Procedure Abandon(Const Reason: String);
-    Function SnapshotAnswer: String;
+    Function IsFinished: Boolean;
+    Procedure SnapshotState(Out IsComplete, IsOk: Boolean; Out Fail, AnswerText: String);
   End;
 
 Var
@@ -498,11 +500,24 @@ Begin
     ForwardProgress(ErrorText);
 End;
 
-Function TChildSubagent.SnapshotAnswer: String;
+Function TChildSubagent.IsFinished: Boolean;
 Begin
   EnterCriticalSection(FLock);
   Try
-    Result := Answer;
+    Result := Finished;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TChildSubagent.SnapshotState(Out IsComplete, IsOk: Boolean; Out Fail, AnswerText: String);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    IsComplete := Finished;
+    IsOk := Ok;
+    Fail := FailText;
+    AnswerText := Answer;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -1454,7 +1469,7 @@ Begin
     For I := 0 To FSubagents.Count - 1 Do
       Begin
         Child := TChildSubagent(FSubagents[I]);
-        If Assigned(Child) And (Not Child.Finished) Then
+        If Assigned(Child) And (Not Child.IsFinished) Then
           Inc(Result);
       End;
   Finally
@@ -1482,7 +1497,7 @@ Begin
       For Index := 0 To FSubagents.Count - 1 Do
         Begin
           Child := TChildSubagent(FSubagents[Index]);
-          If Assigned(Child) And (Not Child.Finished) Then
+          If Assigned(Child) And (Not Child.IsFinished) Then
             Inc(Live);
         End;
     If Not CanSpawnSubagent(Not FIsSubagent, Live, ErrorText) Then
@@ -1527,7 +1542,7 @@ Begin
     Child := TChildSubagent(FindSubagentLocked(RunId));
     If Not Assigned(Child) Then
       Exit;
-    Result := Not Child.Finished;
+    Result := Not Child.IsFinished;
   Finally
     LeaveCriticalSection(FSubagentsLock);
   End;
@@ -1599,7 +1614,7 @@ Begin
         For I := 0 To FSubagents.Count - 1 Do
           Begin
             Child := TChildSubagent(FSubagents[I]);
-            If Assigned(Child) And (Not Child.Finished) And
+            If Assigned(Child) And (Not Child.IsFinished) And
               SubagentRunTimedOut(Child.StartedTick, NowTick) Then
               Snapshot[I] := Child
             Else
@@ -1621,7 +1636,7 @@ Var
   Summary: String;
   DurationMs: Integer;
   KindName, Title: String;
-  Ok: Boolean;
+  Ok, IsComplete: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1641,12 +1656,13 @@ Begin
       Exit;
     End;
   Try
-    If Not Child.Finished Then
-      Child.Abandon('Cancelled.');
-    Summary := Child.SnapshotAnswer;
-    If Child.FailText <> '' Then
-      ErrorText := Child.FailText;
-    Ok := Child.Ok And (ErrorText = '');
+    Child.SnapshotState(IsComplete, Ok, ErrorText, Summary);
+    If Not IsComplete Then
+      Begin
+        Child.Abandon('Cancelled.');
+        Child.SnapshotState(IsComplete, Ok, ErrorText, Summary);
+      End;
+    Ok := Ok And (ErrorText = '');
     If (Not Ok) And (Summary = '') Then
       Summary := ErrorText;
     KindName := Child.KindName;
