@@ -50,13 +50,6 @@ Type
     FPendingFinish: Boolean;
     FNotifyQueued: Boolean;
     FToolCalls: TSamplerToolCallArray;
-    FDispatchName: String;
-    FDispatchArgs: String;
-    FDispatchMode: TAssistantMode;
-    FDispatchOk: Boolean;
-    FDispatchDone: Boolean;
-    FDispatchResult: String;
-    FDispatchError: String;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
       Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
       DurationMs: Integer = 0);
@@ -77,7 +70,6 @@ Type
     Procedure FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
       ErrorText: String; Ok: Boolean; DurationMs: Integer);
     Procedure RunSpawnRange(FromIndex, ToIndex: Integer);
-    Procedure DispatchOneToolOnMain;
     Function DrainSteerIntoHistory: Boolean;
     Function BuildRoundJson(Out Url: String): String;
     Function ShouldFallbackFromResponses(Const ErrorText: String): Boolean;
@@ -162,7 +154,6 @@ Begin
   FLastSnapTick := 0;
   FPendingFinish := False;
   FNotifyQueued := False;
-  FDispatchDone := False;
   SetLength(FToolCalls, 0);
 End;
 
@@ -554,19 +545,135 @@ Begin
     (Pos('unknown', E) > 0) Or (Pos('not supported', E) > 0);
 End;
 
-Procedure TAssistantActor.DispatchOneToolOnMain;
+Type
+  { One queued IDE-tool invocation. Independent of the actor so a timed-out
+    callback cannot write into the next tool's fields or run after abandon. }
+  TIdeToolDispatch = Class
+  Private
+    FLock: TRTLCriticalSection;
+    FAbandoned: Boolean;
+    FDone: Boolean;
+    FRefCount: Integer;
+    Procedure Release;
+  Public
+    Name: String;
+    Args: String;
+    Mode: TAssistantMode;
+    Ok: Boolean;
+    ResultText: String;
+    ErrorText: String;
+    Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
+    Destructor Destroy; Override;
+    Procedure ExecuteOnMain;
+    Function WaitUntilDone(TimeoutMs: QWord): Boolean;
+    Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
+  End;
+
+Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
 Begin
+  Inherited Create;
+  InitCriticalSection(FLock);
+  Name := ToolName;
+  Args := ArgumentsJson;
+  Mode := ToolMode;
+  Ok := False;
+  ResultText := '';
+  ErrorText := '';
+  FAbandoned := False;
+  FDone := False;
+  { Waiter + queued callback. Last Release Frees. }
+  FRefCount := 2;
+End;
+
+Destructor TIdeToolDispatch.Destroy;
+Begin
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure TIdeToolDispatch.Release;
+Var
+  DoFree: Boolean;
+Begin
+  EnterCriticalSection(FLock);
   Try
-    If Terminated Then
-      Begin
-        FDispatchOk := False;
-        FDispatchError := CancelWaitHint;
-      End
-    Else
-      FDispatchOk := ExecuteAssistantToolForMode(FDispatchName, FDispatchArgs, FDispatchMode,
-        FDispatchResult, FDispatchError);
+    Dec(FRefCount);
+    DoFree := FRefCount <= 0;
   Finally
-    FDispatchDone := True;
+    LeaveCriticalSection(FLock);
+  End;
+  If DoFree Then
+    Free;
+End;
+
+Procedure TIdeToolDispatch.ExecuteOnMain;
+Var
+  SkipRun: Boolean;
+Begin
+  SkipRun := False;
+  EnterCriticalSection(FLock);
+  Try
+    If FAbandoned Then
+      SkipRun := True;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+  If SkipRun Then
+    Begin
+      Release;
+      Exit;
+    End;
+  Try
+    Ok := ExecuteAssistantToolForMode(Name, Args, Mode, ResultText, ErrorText);
+  Finally
+    EnterCriticalSection(FLock);
+    Try
+      FDone := True;
+    Finally
+      LeaveCriticalSection(FLock);
+    End;
+    Release;
+  End;
+End;
+
+Function TIdeToolDispatch.WaitUntilDone(TimeoutMs: QWord): Boolean;
+Var
+  StartTick: QWord;
+  StopNow: Boolean;
+Begin
+  Result := False;
+  StartTick := GetTickCount64;
+  Repeat
+    EnterCriticalSection(FLock);
+    Try
+      If FDone Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+      StopNow := ToolsShouldStop Or (GetTickCount64 - StartTick >= TimeoutMs);
+      If StopNow Then
+        Begin
+          FAbandoned := True;
+          Result := False;
+          Exit;
+        End;
+    Finally
+      LeaveCriticalSection(FLock);
+    End;
+    Sleep(15);
+  Until False;
+End;
+
+Procedure TIdeToolDispatch.CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    ToolOk := Ok;
+    ToolResult := ResultText;
+    ToolError := ErrorText;
+  Finally
+    LeaveCriticalSection(FLock);
   End;
 End;
 
@@ -577,6 +684,7 @@ Var
   Ok: Boolean;
   Svc: TAssistantService;
   Mode: TAssistantMode;
+  ToolDispatch: TIdeToolDispatch;
 Begin
   Svc := LockedService;
   If Not Assigned(Svc) Or (Call.Name = '') Then
@@ -594,32 +702,24 @@ Begin
     Try
       If ToolNeedsIdeThread(Call.Name) Then
         Begin
-          FDispatchName := Call.Name;
-          FDispatchArgs := Call.Arguments;
-          FDispatchMode := Mode;
-          FDispatchResult := '';
-          FDispatchError := '';
-          FDispatchOk := False;
-          FDispatchDone := False;
+          ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode);
           { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
-          Queue(@DispatchOneToolOnMain);
-          While (Not FDispatchDone) And (Not Terminated) And
-            (GetTickCount64 - StartTick < 30000) Do
-            Sleep(15);
-          If Not FDispatchDone Then
+          TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
+          If ToolDispatch.WaitUntilDone(30000) Then
             Begin
+              ToolDispatch.CopyOutcome(Ok, ResultText, ErrorText);
+              ToolDispatch.Release;
+            End
+          Else
+            Begin
+              { Abandoned: ExecuteOnMain will not start, or will Free after. }
+              ToolDispatch.Release;
               Ok := False;
               If Terminated Then
                 ErrorText := CancelWaitHint
               Else
                 ErrorText := 'Timed out waiting for the IDE thread.';
               ResultText := '';
-            End
-          Else
-            Begin
-              Ok := FDispatchOk;
-              ResultText := FDispatchResult;
-              ErrorText := FDispatchError;
             End;
         End
       Else
