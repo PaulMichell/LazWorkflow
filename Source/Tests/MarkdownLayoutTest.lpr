@@ -199,6 +199,21 @@ Begin
   End;
 End;
 
+Procedure TestPlainPunctuationKeepsSourceSpace;
+Var
+  R: TMarkDownCanvasRenderer;
+  All: String;
+Begin
+  LayoutOf('hello , world', R);
+  Try
+    All := JoinedAllText(R);
+    Check('plain comma keeps source space', Pos('hello ,', All) > 0);
+    Check('plain comma does not glue hello,', Pos('hello,', All) = 0);
+  Finally
+    R.Free;
+  End;
+End;
+
 Procedure TestNumericEntitiesHexAndSupplementary;
 Var
   R: TMarkDownCanvasRenderer;
@@ -437,6 +452,7 @@ Begin
   FailCount := 0;
   TestRunsAbutAcrossStyleChange;
   TestNoSpaceBeforePunctuationAfterCode;
+  TestPlainPunctuationKeepsSourceSpace;
   TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
   TestHardBreakIsNewlineNotTag;

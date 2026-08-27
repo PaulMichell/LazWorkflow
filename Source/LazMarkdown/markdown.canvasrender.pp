@@ -143,6 +143,7 @@ type
     BaselineShiftCurrent : LongInt;
     BaselineFromIndex : Longint;
     NeedSpaceBeforeNextText : Boolean;
+    LastWasCode : Boolean;
   end;
 
   TLayoutLists = record
@@ -1441,8 +1442,11 @@ var
 
   function WordGluesToPrevious(const aWord: utf8string): boolean;
   begin
-    { No space before closing punctuation, even if the source had one after `code`. }
-    Result:=(length(aWord)>0) and (aWord[1] in ['.', ',', ';', ':', '!', '?', ')', ']', '}', '/', '%', '''', '"']);
+    { Glue punctuation only after an inline code span, not after ordinary words. }
+    Result:=FLayout.LastWasCode
+      and not (fcCode in aContext)
+      and (length(aWord)>0)
+      and (aWord[1] in ['.', ',', ';', ':', '!', '?', ')', ']', '}', '/', '%', '''', '"']);
   end;
 
   procedure AddWordToLine(const aWord: utf8string);
@@ -1470,6 +1474,7 @@ var
         LineBuffer:=' ';
       LineBuffer:=LineBuffer + aWord;
       NeedSpace:=True;
+      FLayout.LastWasCode:=fcCode in aContext;
       end
     else
       begin
@@ -1483,10 +1488,12 @@ var
         begin
         LineBuffer:=aWord;
         NeedSpace:=True;
+        FLayout.LastWasCode:=fcCode in aContext;
         end
       else
         // aWord is too long, break it character by character
         BreakLongWord(aWord);
+        FLayout.LastWasCode:=fcCode in aContext;
       end;
   end;
 
