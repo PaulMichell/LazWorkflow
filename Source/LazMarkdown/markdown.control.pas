@@ -24,6 +24,11 @@ uses
   Classes, SysUtils, Math, Graphics, Controls, StdCtrls, Menus, LCLIntf, LCLType, LMessages,
   MarkDown.Elements, MarkDown.CanvasRender, MarkDown.Parser;
 
+const
+  { GTK3 still needs a TBitmap for mono TextOut; cap the allocation. }
+  MaxPaintBitmapWidth = 4096;
+  MaxPaintBitmapHeight = 4096;
+
 Type
   TMarkdownImageEvent = MarkDown.CanvasRender.TMarkdownImageEvent;
   TOpenURLEvent = procedure(Sender : TObject; aURL : String) of object;
@@ -474,6 +479,8 @@ procedure TCustomMarkDownControl.EnsurePaintBmp(AWidth, AHeight: Integer);
 begin
   if AWidth<1 then AWidth:=1;
   if AHeight<1 then AHeight:=1;
+  if AWidth>MaxPaintBitmapWidth then AWidth:=MaxPaintBitmapWidth;
+  if AHeight>MaxPaintBitmapHeight then AHeight:=MaxPaintBitmapHeight;
   if FPaintBmp=nil then
     FPaintBmp:=TBitmap.Create;
   if (FPaintBmp.Width<>AWidth) or (FPaintBmp.Height<>AHeight) then
@@ -504,11 +511,9 @@ end;
 
 procedure TCustomMarkDownControl.CalculatePreferredSize(
   var PreferredWidth, PreferredHeight: integer; WithThemeSpace: Boolean);
-const
-  MaxWidgetSetHeight = 30000;
 begin
   PreferredWidth := 0;
-  PreferredHeight := Min(FCalculatedHeight + 2*BorderWidth, MaxWidgetSetHeight);
+  PreferredHeight := Min(FCalculatedHeight + 2*BorderWidth, MaxPaintBitmapHeight);
 end;
 
 procedure TCustomMarkDownControl.ParseMarkDown;
@@ -1015,6 +1020,8 @@ begin
   H:=Height;
   if W<1 then W:=1;
   if H<1 then H:=1;
+  if W>MaxPaintBitmapWidth then W:=MaxPaintBitmapWidth;
+  if H>MaxPaintBitmapHeight then H:=MaxPaintBitmapHeight;
   { GTK3 widget TextOut ignores Canvas.Font.Name and keeps the control's sans,
     so code spans measured in mono paint as proportional glyphs with holes.
     Draw onto a TBitmap (independent pango context) and blit. }

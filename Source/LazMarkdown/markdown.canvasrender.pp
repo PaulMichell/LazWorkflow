@@ -219,7 +219,7 @@ type
     // Font and measurement
     procedure SetMonoFontName(const aValue: utf8string);
     function DIP(const aValue: LongInt): LongInt;
-    function ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
+    function ResolvedMonoFontName: utf8string;
     procedure ApplyFont(const aCanvas: TCanvas; const aFontSize: LongInt; const aFontStyle: TFontStyles;
       const aContext : TFontContext);
     procedure MeasureText(const aCanvas: TCanvas; const aText: utf8string; const aFontSize: LongInt;
@@ -1173,7 +1173,7 @@ begin
   FResolvedMonoFontName:='';
 end;
 
-function TMarkDownCanvasRenderer.ResolvedMonoFontName(const aCanvas: TCanvas): utf8string;
+function TMarkDownCanvasRenderer.ResolvedMonoFontName: utf8string;
 var
   Probe: TBitmap;
 
@@ -1212,7 +1212,6 @@ const
 var
   I: Integer;
 begin
-  if aCanvas=Nil then;
   if FResolvedMonoFontName<>'' then
     begin
     Result:=FResolvedMonoFontName;
@@ -1253,7 +1252,7 @@ begin
     aCanvas.Font.Style:=aFontStyle;
     aCanvas.Font.Pitch:=fpDefault;
     if fcMono in aContext then
-      aCanvas.Font.Name:=ResolvedMonoFontName(aCanvas)
+      aCanvas.Font.Name:=ResolvedMonoFontName
     else if fFontName<>'' then
       aCanvas.Font.Name:=fFontName;
   finally
