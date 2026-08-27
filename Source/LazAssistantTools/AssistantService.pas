@@ -235,6 +235,13 @@ Begin
 End;
 
 Type
+  TChildSubagentState = Record
+    Finished: Boolean;
+    Ok: Boolean;
+    FailText: String;
+    Answer: String;
+  End;
+
   TChildSubagent = Class
   Private
     FOwner: TAssistantService;
@@ -261,7 +268,7 @@ Type
     Procedure Cancel;
     Procedure Abandon(Const Reason: String);
     Function IsFinished: Boolean;
-    Procedure SnapshotState(Out IsComplete, IsOk: Boolean; Out Fail, AnswerText: String);
+    Function SnapshotState: TChildSubagentState;
   End;
 
 Var
@@ -510,14 +517,15 @@ Begin
   End;
 End;
 
-Procedure TChildSubagent.SnapshotState(Out IsComplete, IsOk: Boolean; Out Fail, AnswerText: String);
+Function TChildSubagent.SnapshotState: TChildSubagentState;
 Begin
+  Result := Default(TChildSubagentState);
   EnterCriticalSection(FLock);
   Try
-    IsComplete := Finished;
-    IsOk := Ok;
-    Fail := FailText;
-    AnswerText := Answer;
+    Result.Finished := Finished;
+    Result.Ok := Ok;
+    Result.FailText := FailText;
+    Result.Answer := Answer;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -1633,10 +1641,11 @@ End;
 Function TAssistantService.TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Child: TChildSubagent;
+  State: TChildSubagentState;
   Summary: String;
   DurationMs: Integer;
   KindName, Title: String;
-  Ok, IsComplete: Boolean;
+  Ok: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1656,13 +1665,15 @@ Begin
       Exit;
     End;
   Try
-    Child.SnapshotState(IsComplete, Ok, ErrorText, Summary);
-    If Not IsComplete Then
+    State := Child.SnapshotState;
+    If Not State.Finished Then
       Begin
         Child.Abandon('Cancelled.');
-        Child.SnapshotState(IsComplete, Ok, ErrorText, Summary);
+        State := Child.SnapshotState;
       End;
-    Ok := Ok And (ErrorText = '');
+    ErrorText := State.FailText;
+    Summary := State.Answer;
+    Ok := State.Ok And (ErrorText = '');
     If (Not Ok) And (Summary = '') Then
       Summary := ErrorText;
     KindName := Child.KindName;
