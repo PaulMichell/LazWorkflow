@@ -21,6 +21,7 @@ Const
   AssistantToolMaxSearchMs = 8000;
   AssistantToolMaxSearchFileBytes = 2097152;
   AssistantToolMaxSearchLineChars = 512;
+  AssistantToolMaxCompileMs = 600000;
 
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
@@ -1473,6 +1474,18 @@ Var
   I, BytesRead: Integer;
   Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
+  StartTick: QWord;
+
+  Function AbortRunning(Const Reason: String): Boolean;
+  Begin
+    Try
+      Proc.Terminate(1);
+    Except
+    End;
+    ErrorText := Reason;
+    Result := False;
+  End;
+
 Begin
   Result := False;
   OutputText := '';
@@ -1496,8 +1509,20 @@ Begin
       Proc.Parameters.Add(Args[I]);
     Try
       Proc.Execute;
+      StartTick := GetTickCount64;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
+          If ToolsShouldStop Then
+            Begin
+              Result := AbortRunning('Cancelled.');
+              Exit;
+            End;
+          If GetTickCount64 - StartTick >= AssistantToolMaxCompileMs Then
+            Begin
+              Result := AbortRunning(Format('Timed out after %d s.',
+                [AssistantToolMaxCompileMs Div 1000]));
+              Exit;
+            End;
           If Proc.Output.NumBytesAvailable > 0 Then
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
