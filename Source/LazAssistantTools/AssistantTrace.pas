@@ -262,7 +262,7 @@ Begin
   Result.LoopIndex := LoopIndex;
   Result.Running := True;
   Result.StartedAt := Now;
-  Result.Collapsed := False;
+  Result.Collapsed := True;
 End;
 
 Function TAssistantTrace.CurrentThinking: TTraceBlock;
@@ -336,6 +336,7 @@ Begin
   Result.ToolName := ToolName;
   Result.ToolArgs := Args;
   Result.Running := True;
+  Result.Collapsed := True;
   Result.StartedAt := Now;
   Result.Title := ToolCardCaption(ToolName, Args);
 End;
@@ -727,13 +728,19 @@ Begin
       Begin
         Block := FindTool(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := AddTool(Event.ToolId, Event.ToolName, Event.Text);
+          Block := AddTool(Event.ToolId, Event.ToolName, '');
         Block.Running := False;
         Block.Ok := Event.Ok;
         If Event.DurationMs > 0 Then
           Block.DurationMs := Event.DurationMs;
-        If (Not Event.Ok) And (Pos('failed', LowerCase(Block.Title)) < 1) Then
-          Block.Title := Block.Title + '  failed';
+        If Event.Text <> '' Then
+          Block.Body := Event.Text;
+        If Not Event.Ok Then
+          Begin
+            Block.Collapsed := False;
+            If Pos('failed', LowerCase(Block.Title)) < 1 Then
+              Block.Title := Block.Title + '  failed';
+          End;
       End;
     aekSubagentStarted:
       Begin
@@ -1035,16 +1042,21 @@ End;
 
 Function ToolCardCaption(Const ToolName, Args: String): String;
 Var
-  Path, Pattern, Preview: String;
+  Path, Pattern, Preview, Name: String;
 Begin
+  Name := LowerCase(Trim(ToolName));
   Path := JsonStringHint(Args, 'path');
   If Path = '' Then
     Path := JsonStringHint(Args, 'file');
-  Pattern := JsonStringHint(Args, 'query');
-  If Pattern = '' Then
-    Pattern := JsonStringHint(Args, 'pattern');
-  If Pattern = '' Then
-    Pattern := JsonStringHint(Args, 'old_text');
+  { grep/search need the query on the one-line card. replace_in_file old_text
+    used to dump a source snippet into the title and made the row unreadable. }
+  Pattern := '';
+  If (Name = 'grep') Or (Name = 'search_in_project') Then
+    Begin
+      Pattern := JsonStringHint(Args, 'query');
+      If Pattern = '' Then
+        Pattern := JsonStringHint(Args, 'pattern');
+    End;
   Result := ToolName;
   If Path <> '' Then
     Result := Result + '  ' + ExtractFileName(Path);

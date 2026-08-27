@@ -3105,13 +3105,19 @@ Begin
       Begin
         Block := FTrace.FindTool(Event.ToolId);
         If Not Assigned(Block) Then
-          Block := FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+          Block := FTrace.AddTool(Event.ToolId, Event.ToolName, '');
         Block.Running := False;
         Block.Ok := Event.Ok;
         If Event.DurationMs > 0 Then
           Block.DurationMs := Event.DurationMs;
+        If Event.Text <> '' Then
+          Block.Body := Event.Text;
         If Not Event.Ok Then
-          Block.Title := Block.Title + '  failed';
+          Begin
+            Block.Collapsed := False;
+            If Pos('failed', LowerCase(Block.Title)) < 1 Then
+              Block.Title := Block.Title + '  failed';
+          End;
       End;
     aekSubagentStarted:
       Begin

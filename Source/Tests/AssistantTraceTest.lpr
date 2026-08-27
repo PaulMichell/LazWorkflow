@@ -42,6 +42,7 @@ Begin
     Tool := Trace.AddTool('call_1', 'read_file', '{"path":"Source/Foo.pas"}');
     Check('thinking finished for tool', Not Think.Running);
     Check('tool caption has file', Pos('Foo.pas', Tool.Title) > 0);
+    Check('new tool starts collapsed', Tool.Collapsed);
     Trace.CollapseThinking;
     Check('thinking collapsed', Think.Collapsed And (Not Think.Running));
     Check('thinking title', Pos('Thinking', Think.Title) > 0);
@@ -101,6 +102,48 @@ Begin
     Check('final answer last', Trace[Trace.Count - 1] = FinalAnswer);
     Check('reuse last answer', Trace.EnsureAnswer = FinalAnswer);
     Check('thinking finished before tool', Not Trace[1].Running);
+  Finally
+    Trace.Free;
+  End;
+End;
+
+Procedure TestToolCaptionsAndResults;
+Var
+  Trace: TAssistantTrace;
+  Tool: TTraceBlock;
+  Event: TAssistantEvent;
+Begin
+  Check('replace caption is path only',
+    Pos('Selectable', ToolCardCaption('replace_in_file',
+      '{"path":"Planner.pas","old_text":"Selectable: Boolean; { False = no highlight}"}')) < 1);
+  Check('replace caption has file',
+    Pos('Planner.pas', ToolCardCaption('replace_in_file',
+      '{"path":"Planner.pas","old_text":"Selectable: Boolean;"}')) > 0);
+  Check('grep caption keeps query',
+    Pos('CalendarSubject', ToolCardCaption('grep',
+      '{"pattern":"CalendarSubject","path":"Source"}')) > 0);
+  Trace := TAssistantTrace.Create;
+  Try
+    Tool := Trace.AddTool('call_9', 'replace_in_file', '{"path":"Main.pas","old_text":"Foo"}');
+    Check('replace row collapsed', Tool.Collapsed);
+    Event := Default(TAssistantEvent);
+    Event.Kind := aekToolCompleted;
+    Event.ToolId := 'call_9';
+    Event.ToolName := 'replace_in_file';
+    Event.Ok := True;
+    Event.Text := 'Replaced 1 occurrence(s) in Main.pas. Updated open editor buffer and saved to disk.';
+    Event.DurationMs := 12;
+    Trace.ApplyEvent(Event);
+    Check('ok result stored on body', Pos('Replaced 1', Tool.Body) > 0);
+    Check('ok result stays collapsed', Tool.Collapsed);
+    Tool := Trace.AddTool('call_10', 'replace_in_file', '{"path":"Main.pas","old_text":"Bar"}');
+    Event.ToolId := 'call_10';
+    Event.Ok := False;
+    Event.Text := 'Error: old_text not found in open editor buffer: Main.pas';
+    Trace.ApplyEvent(Event);
+    Check('failed result stored', Pos('old_text not found', Tool.Body) > 0);
+    Check('failed result expands', Not Tool.Collapsed);
+    Check('failed title marks failed', Pos('failed', LowerCase(Tool.Title)) > 0);
   Finally
     Trace.Free;
   End;
@@ -259,6 +302,7 @@ Begin
   Event.ToolId := 'call_1';
   Event.Ok := True;
   Event.DurationMs := 30;
+  Event.Text := 'File: Foo.pas (12 lines total); lines 1–12';
   Events[1] := Event;
   Event := Default(TAssistantEvent);
   Event.Kind := aekTurnEnded;
@@ -270,6 +314,7 @@ Begin
     Check('replay thinking filled', Pos('Foo.pas', Trace.JoinedThinking) > 0);
     Check('replay has tool', Assigned(Trace.FindTool('call_1')));
     Check('replay tool not running', Assigned(Trace.FindTool('call_1')) And (Not Trace.FindTool('call_1').Running));
+    Check('replay tool body', Pos('Foo.pas', Trace.FindTool('call_1').Body) > 0);
     Check('replay answer', Pos('Looks fine', Trace.JoinedAnswers) > 0);
   Finally
     Trace.Free;
@@ -312,6 +357,7 @@ Begin
   TestBlocks;
   TestEnsureUser;
   TestEventOrder;
+  TestToolCaptionsAndResults;
   TestElapsed;
   TestFooters;
   TestGrowingSnapshotReusesCards;

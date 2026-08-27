@@ -652,7 +652,11 @@ Begin
         LineEnding +
         '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
         'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete. ' +
-        'Stay on the active work package. Prefer Michell Free Pascal conventions.';
+        'Stay on the active work package. Prefer Michell Free Pascal conventions.' + LineEnding +
+        LineEnding +
+        '`read_file` returns the open editor buffer when the file is open — use that text for ' +
+        '`replace_in_file` old_text. Prefer `search_in_project`/`grep` before paging huge files. ' +
+        'If a turn hits the tool-round limit, continue from existing tool results instead of re-reading.';
   Else
     Result :=
       'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Chat mode). ' +

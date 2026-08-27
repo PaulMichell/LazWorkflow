@@ -91,9 +91,27 @@ Uses
   AssistantHttps, AssistantTools, AssistantSubagents, WorkflowLog;
 
 Const
-  MaxToolRounds = 20;
+  MaxAskToolRounds = 12;
+  MaxPlanToolRounds = 40;
+  MaxBuildToolRounds = 80;
   SnapIntervalMs = 50;
   CancelWaitHint = 'Cancelled.';
+  MaxToolEventChars = 4000;
+
+Function MaxRoundsForSession(Svc: TAssistantService): Integer;
+Begin
+  If Assigned(Svc) And Svc.IsSubagentSession Then
+    Result := MaxSubagentToolRounds
+  Else If Assigned(Svc) Then
+    Case Svc.ActiveMode Of
+      amPlan: Result := MaxPlanToolRounds;
+      amBuild: Result := MaxBuildToolRounds;
+    Else
+      Result := MaxAskToolRounds;
+    End
+  Else
+    Result := MaxAskToolRounds;
+End;
 
 Function IsTransientNetworkError(Const ErrorText: String): Boolean;
 Var
@@ -752,7 +770,7 @@ Begin
   If Not Assigned(Svc) Then
     Exit;
   Svc.AddToolResult(Call.Id, Content);
-  LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
+  LogEvent(aekToolCompleted, Copy(Content, 1, MaxToolEventChars), Call.Name, Call.Id, Ok,
     Integer(GetTickCount64 - StartTick));
   If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
     FWrotePlan := True;
@@ -1057,7 +1075,7 @@ End;
 
 Procedure TAssistantActor.Execute;
 Var
-  Url, RequestJson, ErrorText: String;
+  Url, RequestJson, ErrorText, CapNote: String;
   RoundNo, I, MaxRounds: Integer;
   HasTools: Boolean;
   WroteBefore: Boolean;
@@ -1068,16 +1086,13 @@ Begin
   EmitSnapshot(False, 'Waiting for first token…', True);
   Try
   Svc := LockedService;
-  If Assigned(Svc) And Svc.IsSubagentSession Then
-    MaxRounds := MaxSubagentToolRounds
-  Else
-    MaxRounds := MaxToolRounds;
-  For RoundNo := 0 To MaxRounds Do
+  MaxRounds := MaxRoundsForSession(Svc);
+  For RoundNo := 1 To MaxRounds Do
     Begin
       If Terminated Or (Not Assigned(LockedService)) Then
         Break;
       FLoopIndex := RoundNo;
-      If RoundNo > 0 Then
+      If RoundNo > 1 Then
         Begin
           LogEvent(aekLoopStarted, IntToStr(RoundNo));
           If FThinking <> '' Then
@@ -1154,10 +1169,15 @@ Begin
     EmitSnapshot(True, CancelWaitHint, True)
   Else
     Begin
-      If FContent = '' Then
-        FContent :=
-          '*(Tool-round limit reached after ' + IntToStr(FLoopIndex) +
-          ' rounds. Send a follow-up to continue.)*';
+      CapNote :=
+        '*(Tool-round limit reached after ' + IntToStr(MaxRounds) +
+        ' rounds. Edits already applied are in the project. Send a follow-up to continue ' +
+        'from the last tool results — do not re-read files you already have unless a later ' +
+        'replace_in_file failed.)*';
+      If Trim(FContent) = '' Then
+        FContent := CapNote
+      Else
+        FContent := TrimRight(FContent) + LineEnding + LineEnding + CapNote;
       EmitSnapshot(True, '', True);
       LogEvent(aekTurnEnded, 'round_cap');
     End;

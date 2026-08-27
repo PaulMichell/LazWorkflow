@@ -40,6 +40,8 @@ Type
     Procedure EnsureFrame(Block: TTraceBlock);
     Procedure BindThinking(Block: TTraceBlock);
     Procedure BindTool(Block: TTraceBlock);
+    Function BlockFromSender(Sender: TObject): TTraceBlock;
+    Procedure CardExpandClick(Sender: TObject);
     Procedure BindSubagent(Block: TTraceBlock);
     Procedure BindAnswer(Block: TTraceBlock);
     Procedure BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
@@ -1127,6 +1129,8 @@ Begin
       Header.Name := 'HeaderLabel';
       Header.Caption := Block.Title;
       Header.Parent := Panel;
+      Header.Cursor := crHandPoint;
+      Header.OnClick := @CardExpandClick;
       HookWheelAndPopup(Header);
       View := TMarkDownControl.Create(Panel);
       View.AutoSize := False;
@@ -1154,10 +1158,18 @@ Begin
   EnsureFooterLabel(Panel);
   Child := NamedChild(Panel, 'HeaderLabel');
   If Child Is TLabel Then
-    TLabel(Child).Caption := Block.Title;
+    Begin
+      TLabel(Child).Caption := Block.Title;
+      TLabel(Child).Cursor := crHandPoint;
+      TLabel(Child).OnClick := @CardExpandClick;
+    End;
   { CoT is often one long wrap with few line breaks; cap chars as well as lines.
-    Never markdown-parse the full accumulated thought on the UI thread. }
-  Display := LastLines(Block.Body, FTruncatedLines, 2000);
+    Never markdown-parse the full accumulated thought on the UI thread.
+    Running and collapsed cards show a live tail; click the header to expand. }
+  If Block.Running Or Block.Collapsed Then
+    Display := LastLines(Block.Body, FTruncatedLines, 2000)
+  Else
+    Display := LastLines(Block.Body, 200, 12000);
   View := Nil;
   Child := NamedChild(Panel, 'ThoughtView');
   If Child Is TMarkDownControl Then
@@ -1181,13 +1193,60 @@ Begin
     LockControlHeight(Panel, LineHeightPx + CardInnerPad);
 End;
 
+Function TAssistantTraceView.BlockFromSender(Sender: TObject): TTraceBlock;
+Var
+  Host: TControl;
+  I: Integer;
+Begin
+  Result := Nil;
+  If Not (Sender Is TControl) Or Not Assigned(FBoundTrace) Or Not Assigned(TraceHost) Then
+    Exit;
+  Host := TControl(Sender);
+  While Assigned(Host) And (Host.Parent <> TraceHost) Do
+    Host := Host.Parent;
+  If Not Assigned(Host) Then
+    Exit;
+  For I := 0 To FBoundTrace.Count - 1 Do
+    If FBoundTrace[I].Frame = Host Then
+      Begin
+        Result := FBoundTrace[I];
+        Exit;
+      End;
+End;
+
+Procedure TAssistantTraceView.CardExpandClick(Sender: TObject);
+Var
+  Block: TTraceBlock;
+Begin
+  Block := BlockFromSender(Sender);
+  If Not Assigned(Block) Then
+    Exit;
+  If Block.Kind = tbkTool Then
+    Begin
+      If Trim(Block.Body) = '' Then
+        Exit;
+      Block.Collapsed := Not Block.Collapsed;
+      BindTool(Block);
+      ApplyScrollRange(False, False);
+    End
+  Else If Block.Kind = tbkThinking Then
+    Begin
+      If Block.Running Then
+        Exit;
+      Block.Collapsed := Not Block.Collapsed;
+      BindThinking(Block);
+      ApplyScrollRange(False, False);
+    End;
+End;
+
 Procedure TAssistantTraceView.BindTool(Block: TTraceBlock);
 Var
   Panel: TPanel;
-  Body: TMemo;
+  Body, ResultMemo: TMemo;
   Child: TControl;
-  Status, Line: String;
-  RowH: Integer;
+  Status, Line, ResultText: String;
+  RowH, ResultH, TotalH: Integer;
+  ShowResult: Boolean;
 Begin
   RowH := LineHeightPx + 12;
   If RowH < ToolHeight Then
@@ -1204,13 +1263,17 @@ Begin
       InitHostedPanel(Panel, False, RowH);
       Block.Frame := Panel;
       Panel.Color := clInfoBk;
+      Panel.Cursor := crHandPoint;
+      Panel.OnClick := @CardExpandClick;
       LockControlHeight(Panel, RowH);
       Body := MakeSelectableMemo(Panel, 'BodyMemo', False, False);
       Body.Align := alClient;
       Body.Color := clInfoBk;
-      Body.WordWrap := False;
+      Body.WordWrap := True;
       Body.BorderSpacing.Left := 8;
-      LockControlHeight(Body, RowH);
+      Body.Cursor := crHandPoint;
+      Body.OnClick := @CardExpandClick;
+      Body.ShowHint := True;
       Child := TLabel.Create(Panel);
       Child.Parent := Panel;
       Child.Align := alRight;
@@ -1218,29 +1281,93 @@ Begin
       Child.Name := 'StatusLabel';
       Child.BorderSpacing.Right := 8;
       TLabel(Child).Font.Color := clGrayText;
+      Child.Cursor := crHandPoint;
+      TLabel(Child).OnClick := @CardExpandClick;
       HookWheelAndPopup(Child);
+      ResultMemo := MakeSelectableMemo(Panel, 'ResultMemo', False, True);
+      ResultMemo.Align := alBottom;
+      ResultMemo.Color := clInfoBk;
+      ResultMemo.WordWrap := True;
+      ResultMemo.BorderSpacing.Left := 8;
+      ResultMemo.BorderSpacing.Right := 8;
+      ResultMemo.Visible := False;
     End
   Else If Block.Frame Is TPanel Then
     Panel := TPanel(Block.Frame)
   Else
     Exit;
-  LockControlHeight(Panel, RowH);
-  If Block.Running Or Block.Ok Then
+  If NamedChild(Panel, 'ResultMemo') = Nil Then
+    Begin
+      ResultMemo := MakeSelectableMemo(Panel, 'ResultMemo', False, True);
+      ResultMemo.Align := alBottom;
+      ResultMemo.Color := clInfoBk;
+      ResultMemo.WordWrap := True;
+      ResultMemo.BorderSpacing.Left := 8;
+      ResultMemo.BorderSpacing.Right := 8;
+      ResultMemo.Visible := False;
+    End;
+  ShowResult := (Not Block.Running) And (Not Block.Collapsed) And (Trim(Block.Body) <> '');
+  If Block.Running Then
     Status := FormatThoughtElapsed(Block.DurationMs)
+  Else If Not Block.Ok Then
+    Status := 'failed'
   Else
-    Status := 'failed';
+    Status := FormatThoughtElapsed(Block.DurationMs);
+  If (Not Block.Running) And (Trim(Block.Body) <> '') Then
+    If Block.Collapsed Then
+      Status := Status + '  ▸'
+    Else
+      Status := Status + '  ▾';
   Line := Block.Title;
   Child := NamedChild(Panel, 'BodyMemo');
   If Child Is TMemo Then
     Begin
       Body := TMemo(Child);
+      Body.Cursor := crHandPoint;
+      Body.OnClick := @CardExpandClick;
+      Body.ShowHint := True;
+      Body.Hint := Line;
       If Body.Text <> Line Then
         Body.Text := Line;
-      LockControlHeight(Body, RowH);
     End;
   Child := NamedChild(Panel, 'StatusLabel');
   If Child Is TLabel Then
-    TLabel(Child).Caption := Status;
+    Begin
+      TLabel(Child).Caption := Status;
+      TLabel(Child).Cursor := crHandPoint;
+      TLabel(Child).OnClick := @CardExpandClick;
+    End;
+  Child := NamedChild(Panel, 'ResultMemo');
+  If Child Is TMemo Then
+    Begin
+      ResultMemo := TMemo(Child);
+      If ShowResult Then
+        Begin
+          ResultText := TrimRight(Block.Body);
+          If Length(ResultText) > 4000 Then
+            ResultText := Copy(ResultText, 1, 4000) + LineEnding + '…';
+          BindSelectableMemo(ResultMemo, ResultText);
+          ResultH := ResultMemo.Height;
+          If ResultH < LineHeightPx Then
+            ResultH := LineHeightPx;
+          If ResultH > 280 Then
+            ResultH := 280;
+          LockControlHeight(ResultMemo, ResultH);
+          ResultMemo.Visible := True;
+          TotalH := RowH + ResultH + CardInnerPad;
+        End
+      Else
+        Begin
+          ResultMemo.Visible := False;
+          LockControlHeight(ResultMemo, 1);
+          TotalH := RowH;
+        End;
+    End
+  Else
+    TotalH := RowH;
+  Panel.OnClick := @CardExpandClick;
+  Panel.Cursor := crHandPoint;
+  LockControlHeight(Panel, TotalH);
   Panel.Visible := True;
 End;
 
