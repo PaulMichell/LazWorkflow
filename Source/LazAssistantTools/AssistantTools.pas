@@ -101,6 +101,9 @@ Begin
   Result := Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested;
 End;
 
+Function ExpandResolvedPath(Const Path: String): String; Forward;
+Function FindOpenEditor(Const Resolved: String): TSourceEditorInterface; Forward;
+
 Procedure MarkProjectStructureDirty;
 Begin
   GProjectStructureDirty := True;
@@ -273,13 +276,14 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  { Editors, forms, project API, compile, Markdown windows, and Ask-mode MessageDlg. }
+  { Editors, forms, project API, compile, Markdown windows, and Ask-mode MessageDlg.
+    read_file must see the open buffer; disk-only reads made replace_in_file miss. }
   Result := (Name = 'open_file') Or (Name = 'open_markdown') Or
     (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'get_project_info') Or (Name = 'run_compile') Or
-    (Name = 'set_active_plan');
+    (Name = 'set_active_plan') Or (Name = 'read_file');
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -386,8 +390,9 @@ Begin
     BuildHarnessToolsJson + ',' +
     '{"type":"function","function":{' +
       '"name":"read_file",' +
-      '"description":"Read a text file under the active Lazarus project. Page with start_line/end_line; ' +
-        'after truncation continue from the suggested line, not from line 1.",' +
+      '"description":"Read a text file under the active Lazarus project. Uses the open editor buffer when ' +
+        'the file is open, otherwise disk. Page with start_line/end_line; after truncation continue from ' +
+        'the suggested line, not from line 1.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative or absolute file path"},' +
         '"start_line":{"type":"integer","description":"1-based first line to include (default 1)"},' +
@@ -485,8 +490,9 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"replace_in_file",' +
-      '"description":"Exact text replacement in a project source/text file. old_text must match exactly, ' +
-        'including whitespace; keep it small and unique. Updates the open editor buffer when the file is open.",' +
+      '"description":"Exact text replacement in a project source/text file. old_text must match the open ' +
+        'editor buffer when the file is open (same source as read_file), including whitespace; keep it small ' +
+        'and unique. Saves the buffer to disk so Review/Git see the edit.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative file path"},' +
         '"old_text":{"type":"string","description":"Exact text to find"},' +
@@ -693,6 +699,7 @@ Var
   BytesRead, I: Integer;
   Truncated, HitEndLine, PendingCR: Boolean;
   RequestedEnd: Integer;
+  Ed: TSourceEditorInterface;
 
   Function RemainingBudget: Integer;
   Begin
@@ -765,6 +772,76 @@ Var
     Carry := Carry + C;
   End;
 
+  Procedure PageString(Const SourceText: String);
+  Var
+    Idx, StartAt: Integer;
+    C: Char;
+  Begin
+    LineNo := 0;
+    Truncated := False;
+    HitEndLine := False;
+    Chunk := '';
+    FirstOut := StartLine;
+    LastOut := StartLine - 1;
+    StartAt := 1;
+    Idx := 1;
+    While Idx <= Length(SourceText) Do
+      Begin
+        C := SourceText[Idx];
+        If C = #13 Then
+          Begin
+            EmitLine(Copy(SourceText, StartAt, Idx - StartAt));
+            If (Idx < Length(SourceText)) And (SourceText[Idx + 1] = #10) Then
+              Inc(Idx);
+            StartAt := Idx + 1;
+            If Truncated Or HitEndLine Then
+              Break;
+          End
+        Else If C = #10 Then
+          Begin
+            EmitLine(Copy(SourceText, StartAt, Idx - StartAt));
+            StartAt := Idx + 1;
+            If Truncated Or HitEndLine Then
+              Break;
+          End;
+        Inc(Idx);
+      End;
+    If (Not Truncated) And (Not HitEndLine) And (StartAt <= Length(SourceText)) Then
+      EmitLine(Copy(SourceText, StartAt, MaxInt));
+  End;
+
+  Procedure FinishPagedResult(Const SourceLabel: String);
+  Begin
+    If LineNo < 1 Then
+      Begin
+        ResultText := Format('File: %s (empty, 0 lines)%s', [Resolved, SourceLabel]);
+        Result := True;
+        Exit;
+      End;
+    If StartLine > LineNo Then
+      Begin
+        ErrorText := Format('start_line %d is past end of file (%d lines): %s',
+          [StartLine, LineNo, Resolved]);
+        Exit;
+      End;
+    If RequestedEnd < 1 Then
+      RequestedEnd := LastOut;
+    If Truncated Or HitEndLine Then
+      ResultText :=
+        Format('File: %s (%d bytes)%s; lines %d–%d of requested %d–%d',
+          [Resolved, FileBytes, SourceLabel, FirstOut, LastOut, StartLine, RequestedEnd])
+    Else
+      ResultText :=
+        Format('File: %s (%d lines total)%s; lines %d–%d of requested %d–%d',
+          [Resolved, LineNo, SourceLabel, FirstOut, LastOut, StartLine, RequestedEnd]);
+    ResultText := ResultText + LineEnding + Chunk;
+    If Truncated Or ((RequestedEnd > 0) And (LastOut < RequestedEnd) And (Not HitEndLine)) Then
+      ResultText := ResultText + LineEnding + Format(
+        '[… truncated. Continue with start_line=%d (same path). Do not re-read from line 1. …]',
+        [LastOut + 1]);
+    Result := True;
+  End;
+
 Begin
   Result := False;
   ResultText := '';
@@ -777,11 +854,6 @@ Begin
     End;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
-  If Not FileExistsUTF8(Resolved) Then
-    Begin
-      ErrorText := 'File not found: ' + Resolved;
-      Exit;
-    End;
   MaxChars := JsonArgInt(ArgumentsJson, 'max_chars', AssistantToolMaxReadChars);
   If MaxChars < 1 Then
     MaxChars := AssistantToolMaxReadChars;
@@ -792,6 +864,19 @@ Begin
   If StartLine < 1 Then
     StartLine := 1;
   RequestedEnd := EndLine;
+  Ed := FindOpenEditor(ExpandResolvedPath(Resolved));
+  If Assigned(Ed) Then
+    Begin
+      FileBytes := Length(Ed.SourceText);
+      PageString(Ed.SourceText);
+      FinishPagedResult(' (open editor buffer)');
+      Exit;
+    End;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'File not found: ' + Resolved;
+      Exit;
+    End;
   Stream := Nil;
   Try
     Try
@@ -872,34 +957,7 @@ Begin
         FinishLine;
       If (Not Truncated) And (Not HitEndLine) And (Carry <> '') Then
         FinishLine;
-      If LineNo < 1 Then
-        Begin
-          ResultText := Format('File: %s (empty, 0 lines)', [Resolved]);
-          Result := True;
-          Exit;
-        End;
-      If StartLine > LineNo Then
-        Begin
-          ErrorText := Format('start_line %d is past end of file (%d lines): %s',
-            [StartLine, LineNo, Resolved]);
-          Exit;
-        End;
-      If RequestedEnd < 1 Then
-        RequestedEnd := LastOut;
-      If Truncated Or HitEndLine Then
-        ResultText :=
-          Format('File: %s (%d bytes); lines %d–%d of requested %d–%d',
-            [Resolved, FileBytes, FirstOut, LastOut, StartLine, RequestedEnd])
-      Else
-        ResultText :=
-          Format('File: %s (%d lines total); lines %d–%d of requested %d–%d',
-            [Resolved, LineNo, FirstOut, LastOut, StartLine, RequestedEnd]);
-      ResultText := ResultText + LineEnding + Chunk;
-      If Truncated Or ((RequestedEnd > 0) And (LastOut < RequestedEnd) And HitEndLine = False) Then
-        ResultText := ResultText + LineEnding + Format(
-          '[… truncated. Continue with start_line=%d (same path). Do not re-read from line 1. …]',
-          [LastOut + 1]);
-      Result := True;
+      FinishPagedResult('');
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -1632,7 +1690,10 @@ Begin
     Begin
       Try
         Ed.SourceText := Content;
-        Note := 'Updated open editor buffer (IDE Undo available).';
+        If Assigned(LazarusIDE) And (LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) = mrOk) Then
+          Note := 'Updated open editor buffer and saved to disk (IDE Undo available).'
+        Else
+          Note := 'Updated open editor buffer (IDE Undo available). Disk save skipped or failed.';
         Result := True;
         Exit;
       Except
@@ -1690,8 +1751,8 @@ Var
   Ed: TSourceEditorInterface;
   FullPath, Root: String;
 Begin
-  { Write modified open buffers to disk. Quiet lazbuild reads files, not editor RAM.
-    SaveProjectFileText only updates the open buffer, so use the IDE save API. }
+  { Write remaining modified open buffers to disk (quiet lazbuild reads files).
+    SaveProjectFileText now saves after a buffer update; this still covers user edits. }
   Result := True;
   ErrorText := '';
   If Not Assigned(SourceEditorManagerIntf) Or Not Assigned(LazarusIDE) Then
@@ -2151,9 +2212,27 @@ Begin
   WorkflowLogger.Info('AssistantTools', 'write_file ' + Resolved);
 End;
 
+Function DetectFileEol(Const S: String): String;
+Begin
+  If Pos(#13#10, S) > 0 Then
+    Result := #13#10
+  Else If Pos(#13, S) > 0 Then
+    Result := #13
+  Else
+    Result := #10;
+End;
+
+Function NormalizeToEol(Const S, Eol: String): String;
+Begin
+  Result := StringReplace(S, #13#10, #10, [rfReplaceAll]);
+  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
+  If (Eol <> '') And (Eol <> #10) Then
+    Result := StringReplace(Result, #10, Eol, [rfReplaceAll]);
+End;
+
 Function ToolReplaceInFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Resolved, OldText, NewText, Body, Note: String;
+  Path, Resolved, OldText, NewText, Body, Note, FileEol, AltOld: String;
   ReplaceAll, FromEditor: Boolean;
   Count, P: Integer;
 Begin
@@ -2183,11 +2262,25 @@ Begin
   ReplaceAll := JsonArgBool(ArgumentsJson, 'replace_all', False);
   If Not LoadProjectFileText(Resolved, Body, FromEditor, ErrorText) Then
     Exit;
+  FileEol := DetectFileEol(Body);
   If Pos(OldText, Body) < 1 Then
     Begin
-      ErrorText := 'old_text not found in ' + Resolved;
-      Exit;
+      AltOld := NormalizeToEol(OldText, FileEol);
+      If (AltOld <> OldText) And (Pos(AltOld, Body) > 0) Then
+        OldText := AltOld
+      Else
+        Begin
+          If FromEditor Then
+            ErrorText := 'old_text not found in open editor buffer: ' + Resolved +
+              '. Re-read this file (read_file uses the buffer); the buffer can differ from disk. ' +
+              'Use a smaller unique snippet.'
+          Else
+            ErrorText := 'old_text not found in ' + Resolved +
+              '. Re-read this file and use a smaller unique snippet.';
+          Exit;
+        End;
     End;
+  NewText := NormalizeToEol(NewText, FileEol);
   If ReplaceAll Then
     Begin
       Count := 0;
@@ -2212,8 +2305,6 @@ Begin
     Exit;
   ResultText := Format('Replaced %d occurrence(s) in %s. %s',
     [Count, ProjectRelativePath(Resolved), Note]);
-  If FromEditor Then
-    ResultText := ResultText + ' (edited open buffer)';
   ResultText := ResultText + FormLfmEditReminder(Resolved, Body);
   Result := True;
   WorkflowLogger.Info('AssistantTools', Format('replace_in_file %s n=%d', [Resolved, Count]));
