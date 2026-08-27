@@ -291,8 +291,7 @@ function TInlineTextProcessor.HandleEntityInner: String;
 
 var
   lEntity : String;
-  ch : UnicodeChar;
-  I,lLen : integer;
+  lLen : integer;
 
 begin
   Scanner.NextChar();
@@ -311,19 +310,13 @@ begin
     Exit;
     end;
   Result:='&';
-  { Named entity miss, or invalid numeric form: keep the bare ampersand. }
-  if (lLen>9) or (lEntity[1]<>'#') then
-    exit;
-  // Unicode char.
-  System.Delete(lEntity,1,1);
-  if TryStrToInt(lEntity,I) then
+  if (lLen>0) and (lEntity[1]='#') then
     begin
-    if (i=0) or (i>65535) then
-      ch:=#$FFFD
+    Result:=DecodeNumericEntityBody(lEntity);
+    if Result<>'' then
+      Scanner.NextChars(lLen+1)
     else
-      ch:=UnicodeChar(I);
-    Scanner.NextChars(lLen+1);
-    Result:=Utf8Encode(ch);
+      Result:='&';
     end;
 end;
 

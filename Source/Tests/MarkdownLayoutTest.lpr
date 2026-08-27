@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Graphics, Classes, SysUtils, MarkDown.CanvasRender, Markdown.Processors;
+  Interfaces, Graphics, Classes, SysUtils, MarkDown.CanvasRender, Markdown.Processors, Markdown.Utils;
 
 Var
   FailCount: Integer;
@@ -194,6 +194,24 @@ Begin
           End;
       End;
     Check('two-space break makes a new line', HasTwoLines);
+  Finally
+    R.Free;
+  End;
+End;
+
+Procedure TestNumericEntitiesHexAndSupplementary;
+Var
+  R: TMarkDownCanvasRenderer;
+  All, Grin: String;
+Begin
+  Grin := DecodeNumericEntityBody('#x1F600');
+  Check('hex smile is four UTF-8 bytes', Length(Grin) = 4);
+  Check('decimal smile matches hex', DecodeNumericEntityBody('#128512') = Grin);
+  Check('hex A is A', DecodeNumericEntityBody('#x41') = 'A');
+  LayoutOf('hi &#x1F600; there', R);
+  Try
+    All := JoinedAllText(R);
+    Check('layout decodes hex smile', Pos(Grin, All) > 0);
   Finally
     R.Free;
   End;
@@ -422,6 +440,7 @@ Begin
   TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
   TestHardBreakIsNewlineNotTag;
+  TestNumericEntitiesHexAndSupplementary;
   TestCopyDoesNotInsertSpacesBetweenAbuttingRuns;
   TestSoftBreakIsSpaceNotNewline;
   TestHtmlBrIsNewlineNotTag;

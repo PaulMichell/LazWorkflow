@@ -115,6 +115,8 @@ function UrlEscape(const S : String) : String; overload;
 function isAbsoluteUri(const S : String) : boolean;
 // Is S a valid email address
 function IsEmailLike(const S : String) : boolean;
+// Decode a numeric entity body such as '#128512' or '#x1F600' (no '&' / ';').
+function DecodeNumericEntityBody(const Body: String): String;
 // Parse entity string
 function ParseEntityString(aEntities : TFPStringHashTable; const aEntity : String): String;
 // Check if S ends on an entity start character, and if so, return the length of the entity
@@ -551,27 +553,72 @@ begin
   Result:=Pos(C,'!"#$%&''()*+,-./:;<=>?@[\]^_`{|}~')>0;
 end;
 
+function CodePointToUTF8(CodePoint: LongInt): String;
+
+var
+  U: UnicodeString;
+  V, Hi, Lo: LongInt;
+
+begin
+  if (CodePoint<=0) or (CodePoint>$10FFFF) or
+     ((CodePoint>=$D800) and (CodePoint<=$DFFF)) then
+    begin
+    Result:=UTF8Encode(WideChar($FFFD));
+    Exit;
+    end;
+  if CodePoint<=$FFFF then
+    U:=UnicodeChar(CodePoint)
+  else
+    begin
+    V:=CodePoint-$10000;
+    Hi:=$D800+(V shr 10);
+    Lo:=$DC00+(V and $3FF);
+    SetLength(U,2);
+    U[1]:=UnicodeChar(Hi);
+    U[2]:=UnicodeChar(Lo);
+    end;
+  Result:=UTF8Encode(U);
+end;
+
+function DecodeNumericEntityBody(const Body: String): String;
+
+var
+  S: String;
+  CodePoint: LongInt;
+  Hex: Boolean;
+
+begin
+  Result:='';
+  if (Length(Body)<2) or (Body[1]<>'#') then
+    Exit;
+  Hex:=(Length(Body)>=3) and ((Body[2]='x') or (Body[2]='X'));
+  if Hex then
+    S:='$'+Copy(Body,3,MaxInt)
+  else
+    S:=Copy(Body,2,MaxInt);
+  if S='' then
+    Exit;
+  if Hex and (Length(S)>8) then
+    Exit;
+  if (not Hex) and (Length(S)>7) then
+    Exit;
+  if not TryStrToInt(S,CodePoint) then
+    Exit;
+  Result:=CodePointToUTF8(CodePoint);
+end;
+
 function ParseEntityString(aEntities : TFPStringHashTable; const aEntity : String): String;
 
 var
   S : String;
-  C : UnicodeChar;
-  i, Len : integer;
 
 begin
   S:=copy(aEntity,2,length(aEntity)-2); // Strip & and ;
   Result:=aEntities.Items[S];
   if Result<>'' then
     Exit;
-  Len:=Length(S);
-  if (Len>0) and (Len<=9) and (S[1]='#') and TryStrToInt(Copy(S,2,Len-1),i)  then
-    begin
-    if (I<=0) or (i>65535) then
-      C:=#$FFFD
-    else
-      C:=UnicodeChar(i);
-    Result:=UTF8Encode(C);
-    end;
+  if (Length(S)>0) and (S[1]='#') then
+    Result:=DecodeNumericEntityBody(S);
 end;
 
 function CheckForTrailingEntity(const S: String): integer;
@@ -719,6 +766,7 @@ begin
   if s.CountChar('@') <> 1 then
     Exit;
   lState:=sNeutral;
+  prev:=#0;
   for c in s do
     begin
     Case lState of

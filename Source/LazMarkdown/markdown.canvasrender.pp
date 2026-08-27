@@ -25,7 +25,8 @@ unit MarkDown.CanvasRender;
 interface
 
 uses
-  SysUtils, Classes, Contnrs, Graphics, Types, Math, MarkDown.Elements, MarkDown.Parser, MarkDown.Render, Markdown.HTMLEntities, LazUTF8;
+  SysUtils, Classes, Contnrs, Graphics, Types, Math, MarkDown.Elements, MarkDown.Parser, MarkDown.Render,
+  Markdown.HTMLEntities, Markdown.Utils, LazUTF8;
 
 type
   TLayoutItemKind = (
@@ -1818,8 +1819,7 @@ function TMarkDownCanvasRenderer.ResolveEntities(const aText: String): String;
   end;
 
 var
-  lend,lPrev,lNext,lUnicode : Integer;
-  lUChar : UnicodeChar;
+  lend,lPrev,lNext : Integer;
   lEnt,lUTF8 : String;
 
 begin
@@ -1848,14 +1848,8 @@ begin
       begin
       if lEnt[1]<>'#' then
         lUTF8:=FHTMLEntities.Items[LowerCase(lEnt)]
-      else if TryStrToInt(Copy(lEnt,2,Length(lEnt)-1),lUnicode) then
-        begin
-        if (lUnicode=0) or (lUnicode>65535) then
-          lUChar:=#$FFFD
-        else
-          lUChar:=UnicodeChar(lUnicode);
-        lUTF8:=Utf8Encode(lUChar);
-        end;
+      else
+        lUTF8:=DecodeNumericEntityBody(lEnt);
       end;
     if lUTF8='' then
       { Unknown entity or empty name: keep original "&...;" span. }
