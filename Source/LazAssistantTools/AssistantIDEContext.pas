@@ -30,7 +30,8 @@ Function FormatChangedProjectFiles: String;
 Implementation
 
 Uses
-  Process, LazFileUtils, FileUtil, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog;
+  Process, LazFileUtils, FileUtil, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog,
+  AssistantProjectPaths;
 
 Function CapText(Const TextValue: String; MaxChars: Integer): String;
 Begin
@@ -133,6 +134,7 @@ End;
 Function ProjectRootForContext: String;
 Var
   Proj: TLazProject;
+  MainName: String;
 Begin
   Result := '';
   If Not Assigned(LazarusIDE) Then
@@ -140,11 +142,10 @@ Begin
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
-  If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-    Result := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
-  If Result = '' Then
-    Result := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
-  Result := IncludeTrailingPathDelimiter(Result);
+  MainName := '';
+  If Assigned(Proj.MainFile) Then
+    MainName := Proj.MainFile.Filename;
+  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
 End;
 
 Function AddUniqueLine(Lines: TStrings; Const Item: String): Boolean;

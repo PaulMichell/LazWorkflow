@@ -59,7 +59,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, fpjson, jsonparser;
+  AssistantLfm, AssistantProjectPaths, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -561,6 +561,7 @@ End;
 Function ProjectRootPath: String;
 Var
   Proj: TLazProject;
+  MainName: String;
 Begin
   Result := '';
   If Not Assigned(LazarusIDE) Then
@@ -568,11 +569,10 @@ Begin
   Proj := LazarusIDE.ActiveProject;
   If Not Assigned(Proj) Then
     Exit;
-  If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-    Result := ExtractFilePath(ExpandFileName(Proj.MainFile.Filename));
-  If Result = '' Then
-    Result := ExtractFilePath(ExpandFileName(Proj.ProjectInfoFile));
-  Result := IncludeTrailingPathDelimiter(Result);
+  MainName := '';
+  If Assigned(Proj.MainFile) Then
+    MainName := Proj.MainFile.Filename;
+  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
 End;
 
 Function IsPathUnderRoot(Const Root, Candidate: String): Boolean;
