@@ -31,7 +31,7 @@ Implementation
 
 Uses
   Process, LazFileUtils, FileUtil, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog,
-  AssistantProjectPaths;
+  AssistantConversation;
 
 Function CapText(Const TextValue: String; MaxChars: Integer): String;
 Begin
@@ -132,20 +132,8 @@ Begin
 End;
 
 Function ProjectRootForContext: String;
-Var
-  Proj: TLazProject;
-  MainName: String;
 Begin
-  Result := '';
-  If Not Assigned(LazarusIDE) Then
-    Exit;
-  Proj := LazarusIDE.ActiveProject;
-  If Not Assigned(Proj) Then
-    Exit;
-  MainName := '';
-  If Assigned(Proj.MainFile) Then
-    MainName := Proj.MainFile.Filename;
-  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
+  Result := ProjectAssistantRoot;
 End;
 
 Function AddUniqueLine(Lines: TStrings; Const Item: String): Boolean;

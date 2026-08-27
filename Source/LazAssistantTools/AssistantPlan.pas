@@ -63,25 +63,12 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, AssistantMarkdownForm, WorkflowLog,
-  AssistantProjectPaths;
+  LazFileUtils, FileUtil, AssistantMarkdownForm, WorkflowLog, AssistantConversation;
 
 Function PlanProjectRoot: String;
-Var
-  Proj: TLazProject;
-  MainName: String;
 Begin
   { Independent of AssistantTools to avoid a unit cycle. }
-  Result := '';
-  If Not Assigned(LazarusIDE) Then
-    Exit;
-  Proj := LazarusIDE.ActiveProject;
-  If Not Assigned(Proj) Then
-    Exit;
-  MainName := '';
-  If Assigned(Proj.MainFile) Then
-    MainName := Proj.MainFile.Filename;
-  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
+  Result := ProjectAssistantRoot;
 End;
 
 Function PlanIsUnderRoot(Const Root, Candidate: String): Boolean;
