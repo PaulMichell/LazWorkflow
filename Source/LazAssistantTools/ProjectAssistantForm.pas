@@ -2563,6 +2563,13 @@ Begin
     StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
   If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
     FTraceView.RefreshElapsed(FTrace);
+  If FSending And Assigned(AssistantClient) Then
+    Begin
+      AssistantClient.AbandonTimedOutSubagents;
+      If Assigned(FTrace) And FViewingLive And
+        FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
+        StopStream;
+    End;
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -3107,6 +3114,7 @@ Begin
       End;
     aekSubagentStarted:
       Begin
+        FTrace.FinishCurrentThinking;
         Block := FTrace.AddSubagent(Event.ToolId, Event.ToolName, Event.Text);
         Block.Running := True;
         Block.Ok := Event.Ok;

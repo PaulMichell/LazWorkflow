@@ -81,6 +81,8 @@ Type
     FLastEventsFile: String;
     FSubagents: TObjectList;
     FSubagentsLock: TRTLCriticalSection;
+    FDeferredSubagents: TFPList;
+    Procedure FlushDeferredSubagents;
     Function FindSubagentLocked(Const RunId: String): TObject;
     Procedure ReapOrphanThreads(WaitMs: QWord);
     Procedure AbandonStreamThread;
@@ -141,6 +143,7 @@ Type
     Function SubagentIsRunning(Const RunId: String): Boolean;
     Function TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
     Procedure AbandonSubagent(Const RunId, Reason: String);
+    Procedure AbandonTimedOutSubagents;
     Procedure CancelSubagents;
     { Terminate the actor without waiting — safe from a worker thread. }
     Procedure StopActorNoWait;
@@ -394,7 +397,7 @@ Begin
   FChild := TAssistantService.Create;
   FChild.SetEndpoint(ApiBase, Model);
   FChild.SetActiveSkill(Skill);
-  FChild.ReasoningEffort := Effort;
+  FChild.ReasoningEffort := SubagentReasoningEffort(Effort);
   FChild.SetActiveMode(SubagentModeForKind(Request.Kind, ParentMode));
   FChild.ConfigureAsSubagent(SubagentKindName(Request.Kind));
   UserPrompt := BuildSubagentUserPrompt(Request, CompileLog);
@@ -518,6 +521,7 @@ Begin
   FLastEventsFile := '';
   InitCriticalSection(FSubagentsLock);
   FSubagents := TObjectList.Create(True);
+  FDeferredSubagents := TFPList.Create;
 End;
 
 Procedure TAssistantService.ConfigureAsSubagent(Const KindName: String);
@@ -683,6 +687,8 @@ Begin
       FreeAndNil(FOrphanThreads);
     End;
   SetLength(FMessages, 0);
+  FlushDeferredSubagents;
+  FreeAndNil(FDeferredSubagents);
   FreeAndNil(FSubagents);
   DoneCriticalSection(FSubagentsLock);
   Inherited Destroy;
@@ -1393,6 +1399,53 @@ Begin
     Child.Abandon(Reason);
 End;
 
+Procedure TAssistantService.FlushDeferredSubagents;
+Var
+  Obj: TObject;
+Begin
+  If Not Assigned(FDeferredSubagents) Then
+    Exit;
+  While FDeferredSubagents.Count > 0 Do
+    Begin
+      Obj := TObject(FDeferredSubagents[0]);
+      FDeferredSubagents.Delete(0);
+      Obj.Free;
+    End;
+End;
+
+Procedure TAssistantService.AbandonTimedOutSubagents;
+Var
+  I: Integer;
+  NowTick: QWord;
+  Child: TChildSubagent;
+  Snapshot: Array Of TChildSubagent;
+Begin
+  NowTick := GetTickCount64;
+  EnterCriticalSection(FSubagentsLock);
+  Try
+    SetLength(Snapshot, 0);
+    If Assigned(FSubagents) Then
+      Begin
+        SetLength(Snapshot, FSubagents.Count);
+        For I := 0 To FSubagents.Count - 1 Do
+          Begin
+            Child := TChildSubagent(FSubagents[I]);
+            If Assigned(Child) And (Not Child.Finished) And
+              SubagentRunTimedOut(Child.StartedTick, NowTick) Then
+              Snapshot[I] := Child
+            Else
+              Snapshot[I] := Nil;
+          End;
+      End;
+  Finally
+    LeaveCriticalSection(FSubagentsLock);
+  End;
+  For I := 0 To High(Snapshot) Do
+    If Assigned(Snapshot[I]) Then
+      Snapshot[I].Abandon(Format('Timed out after %d s (still waiting on the model).',
+        [MaxSubagentRuntimeMs Div 1000]));
+End;
+
 Function TAssistantService.TakeSubagentResult(Const RunId: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Child: TChildSubagent;
@@ -1433,7 +1486,15 @@ Begin
     ResultText := FormatSubagentToolResult(KindName, Title, Summary, Ok, DurationMs);
     Result := Ok;
   Finally
-    Child.Free;
+    If RunningOnMainThread Then
+      Child.Free
+    Else If Assigned(FDeferredSubagents) Then
+      Begin
+        FDeferredSubagents.Add(Child);
+        TThread.Queue(Nil, @FlushDeferredSubagents);
+      End
+    Else
+      Child.Free;
   End;
 End;
 

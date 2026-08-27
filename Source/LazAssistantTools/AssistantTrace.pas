@@ -60,6 +60,7 @@ Type
     Function AddSubagent(Const SubId, KindName, Title: String): TTraceBlock;
     Function FindSubagent(Const SubId: String): TTraceBlock;
     Function FindRunningSubagentByKind(Const KindName: String): TTraceBlock;
+    Function HasRunningSubagentOlderThan(BudgetMs: Integer): Boolean;
     { Reuse this sample's answer (after the last tool). Growing snapshots update it in place. }
     Function EnsureAnswer: TTraceBlock;
     Procedure FinishCurrentThinking;
@@ -364,6 +365,26 @@ Begin
       If (Block.Kind = tbkSubagent) And (Block.ToolId = SubId) Then
         Begin
           Result := Block;
+          Exit;
+        End;
+    End;
+End;
+
+Function TAssistantTrace.HasRunningSubagentOlderThan(BudgetMs: Integer): Boolean;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+Begin
+  Result := False;
+  If BudgetMs < 0 Then
+    Exit;
+  For I := 0 To FBlocks.Count - 1 Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If Assigned(Block) And (Block.Kind = tbkSubagent) And Block.Running And
+        (Block.DurationMs >= BudgetMs) Then
+        Begin
+          Result := True;
           Exit;
         End;
     End;

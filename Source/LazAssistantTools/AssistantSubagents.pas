@@ -54,6 +54,7 @@ Function SubagentRunTimedOut(StartedTick, NowTick: QWord): Boolean;
 Function IsReviewLensKind(Kind: TSubagentKind): Boolean;
 Function ReviewLensAlreadyListed(Kind: TSubagentKind; Const KindNames: Array Of String;
   LastIndex: Integer): Boolean;
+Function SubagentReasoningEffort(Const ParentEffort: String): String;
 Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 
 Implementation
@@ -96,6 +97,19 @@ Begin
         Result := True;
         Exit;
       End;
+End;
+
+Function SubagentReasoningEffort(Const ParentEffort: String): String;
+Var
+  Effort: String;
+Begin
+  Effort := LowerCase(Trim(ParentEffort));
+  If (Effort = 'xhigh') Or (Effort = 'x-high') Then
+    Result := 'high'
+  Else If Effort = '' Then
+    Result := 'high'
+  Else
+    Result := Effort;
 End;
 
 Function SubagentKindName(Kind: TSubagentKind): String;

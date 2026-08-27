@@ -58,6 +58,9 @@ Begin
   Check('not timed out at start', Not SubagentRunTimedOut(1000, 1000));
   Check('timed out at budget', SubagentRunTimedOut(1000, 1000 + MaxSubagentRuntimeMs));
   Check('not timed out just under', Not SubagentRunTimedOut(1000, 1000 + MaxSubagentRuntimeMs - 1));
+  Check('xhigh is capped', SubagentReasoningEffort('xhigh') = 'high');
+  Check('high stays high', SubagentReasoningEffort('high') = 'high');
+  Check('medium stays', SubagentReasoningEffort('medium') = 'medium');
 End;
 
 Procedure TestParseSpawn;
@@ -154,6 +157,10 @@ Begin
     Event.Text := 'Waiting for model…';
     Trace.ApplyEvent(Event);
     Check('progress does not add a fourth card', Trace.Count = 1);
+    Block.DurationMs := MaxSubagentRuntimeMs;
+    Check('expired running lens', Trace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs));
+    Block.DurationMs := 10;
+    Check('fresh lens not expired', Not Trace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs));
     Check('names listed', ReviewLensAlreadyListed(sakPascalNaming, ['pascal-naming', 'pascal-structure'], 1));
     Check('names not listed', Not ReviewLensAlreadyListed(sakPascalReview, ['pascal-naming', 'pascal-structure'], 1));
     Block.Running := False;
