@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs, AssistantEvents;
 
 Type
-  TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent);
+  TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent, tbkWorked);
 
   TTraceBlock = Class
   Public
@@ -116,6 +116,7 @@ Begin
     tbkNote: Result := 'note';
     tbkSteer: Result := 'steer';
     tbkSubagent: Result := 'subagent';
+    tbkWorked: Result := 'worked';
   Else
     Result := 'user';
   End;
@@ -138,6 +139,8 @@ Begin
     Result := tbkSteer
   Else If N = 'subagent' Then
     Result := tbkSubagent
+  Else If N = 'worked' Then
+    Result := tbkWorked
   Else
     Result := tbkUser;
 End;
@@ -181,6 +184,8 @@ Begin
 End;
 
 Function TAssistantTrace.AddBlock(Kind: TTraceBlockKind): TTraceBlock;
+Var
+  InsertAt: Integer;
 Begin
   Result := TTraceBlock.Create;
   Result.Kind := Kind;
@@ -193,7 +198,11 @@ Begin
   Result.DurationMs := 0;
   Result.Footer := '';
   Result.Frame := Nil;
-  FBlocks.Add(Result);
+  InsertAt := FBlocks.Count;
+  If (Kind <> tbkWorked) And (InsertAt > 0) And (TTraceBlock(FBlocks[InsertAt - 1]).Kind = tbkWorked) Then
+    FBlocks.Insert(InsertAt - 1, Result)
+  Else
+    FBlocks.Add(Result);
 End;
 
 Function TAssistantTrace.AddUser(Const Text: String): TTraceBlock;
@@ -506,18 +515,38 @@ End;
 
 Procedure TAssistantTrace.ApplyWorkedFooter(DurationMs: Integer);
 Var
-  I: Integer;
-  Block: TTraceBlock;
+  I, Index: Integer;
+  Block, Worked: TTraceBlock;
 Begin
+  Worked := Nil;
   For I := FBlocks.Count - 1 DownTo 0 Do
     Begin
       Block := TTraceBlock(FBlocks[I]);
-      If (Block.Kind = tbkAnswer) Or (Block.Kind = tbkNote) Then
+      If Block.Kind = tbkWorked Then
         Begin
-          Block.Footer := FormatWorkedFooter(DurationMs);
-          Exit;
+          Worked := Block;
+          Break;
         End;
+      If (Copy(Block.Footer, 1, 10) = 'Worked for') Then
+        Block.Footer := '';
     End;
+  If DurationMs <= 0 Then
+    Begin
+      If Assigned(Worked) Then
+        FBlocks.Remove(Worked);
+      Exit;
+    End;
+  If Not Assigned(Worked) Then
+    Begin
+      Worked := AddBlock(tbkWorked);
+      Worked.Title := '';
+    End;
+  Worked.Body := FormatWorkedFooter(DurationMs);
+  Worked.DurationMs := DurationMs;
+  Worked.Running := False;
+  Index := FBlocks.IndexOf(Worked);
+  If (Index >= 0) And (Index <> FBlocks.Count - 1) Then
+    FBlocks.Move(Index, FBlocks.Count - 1);
 End;
 
 Function TAssistantTrace.ThinkingDurationMs: Integer;
@@ -595,6 +624,16 @@ Begin
             Heading := '### Steer';
           tbkNote:
             Heading := '### Note';
+          tbkWorked:
+            Begin
+              If Body <> '' Then
+                Begin
+                  If Parts.Count > 0 Then
+                    Parts.Add('');
+                  Parts.Add('*' + Body + '*');
+                End;
+              Continue;
+            End;
         End;
         If Heading = '' Then
           Continue;

@@ -44,6 +44,7 @@ Type
     Procedure BindAnswer(Block: TTraceBlock);
     Procedure BindRichCard(Block: TTraceBlock; Const TitleColor: TColor);
     Procedure BindUser(Block: TTraceBlock);
+    Procedure BindWorked(Block: TTraceBlock);
     Procedure SplitTrailingMdFooter(Const SourceText: String; Out BodyText, FooterText: String);
     Procedure EnsureCopyPopup;
     Procedure CopyPopupPopup(Sender: TObject);
@@ -1374,6 +1375,47 @@ Begin
     BindRichCard(Block, clWindowText);
 End;
 
+Procedure TAssistantTraceView.BindWorked(Block: TTraceBlock);
+Var
+  Panel: TPanel;
+  Line: TLabel;
+  Child: TControl;
+  CardText: String;
+Begin
+  CardText := Trim(Block.Body);
+  If CardText = '' Then
+    CardText := Trim(Block.Footer);
+  If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
+    If NamedChild(TPanel(Block.Frame), 'WorkedLabel') = Nil Then
+      Begin
+        TPanel(Block.Frame).Free;
+        Block.Frame := Nil;
+      End;
+  If Not Assigned(Block.Frame) Then
+    Begin
+      Panel := TPanel.Create(Self);
+      InitHostedPanel(Panel, True, 0);
+      Block.Frame := Panel;
+      Line := MakeFooterLabel(Panel);
+      Line.Name := 'WorkedLabel';
+      FinishHostedPanel(Panel, True);
+    End
+  Else If Block.Frame Is TPanel Then
+    Panel := TPanel(Block.Frame)
+  Else
+    Exit;
+  Child := NamedChild(Panel, 'WorkedLabel');
+  If Child Is TLabel Then
+    Begin
+      Line := TLabel(Child);
+      Line.Caption := CardText;
+      Line.Visible := CardText <> '';
+    End;
+  Panel.Visible := CardText <> '';
+  Panel.AutoSize := False;
+  LockControlHeight(Panel, LineHeightPx + CardInnerPad);
+End;
+
 Procedure TAssistantTraceView.EnsureFrame(Block: TTraceBlock);
 Begin
   Case Block.Kind Of
@@ -1384,6 +1426,7 @@ Begin
     tbkAnswer: BindAnswer(Block);
     tbkSteer: BindRichCard(Block, clNavy);
     tbkNote: BindRichCard(Block, clMaroon);
+    tbkWorked: BindWorked(Block);
   End;
 End;
 

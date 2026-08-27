@@ -141,11 +141,14 @@ Begin
     Answer := Trace.EnsureAnswer;
     Answer.Body := 'Looks fine.';
     Trace.ApplyWorkedFooter(125000);
-    Check('worked footer on answer', Answer.Footer = 'Worked for 2:05');
+    Check('worked is last card', Trace[Trace.Count - 1].Kind = tbkWorked);
+    Check('worked card text', Trace[Trace.Count - 1].Body = 'Worked for 2:05');
+    Check('answer has no worked footer', Answer.Footer = '');
     Note := Trace.AddNote('*Stream cancelled.*');
+    Check('note inserts before worked', (Note.Kind = tbkNote) And (Trace[Trace.Count - 2] = Note));
     Trace.ApplyWorkedFooter(3661000);
-    Check('worked footer moves to note', Note.Footer = 'Worked for 1:01:01');
-    Check('answer footer stays', Answer.Footer = 'Worked for 2:05');
+    Check('worked stays last after note', Trace[Trace.Count - 1].Kind = tbkWorked);
+    Check('worked card updates', Trace[Trace.Count - 1].Body = 'Worked for 1:01:01');
     Check('thinking duration sum', Trace.ThinkingDurationMs = 45000);
   Finally
     Trace.Free;
@@ -294,6 +297,9 @@ Begin
     Check('export has subagent body', Pos('No F-prefix issues', Md) > 0);
     Check('export has assistant', Pos('### Assistant', Md) > 0);
     Check('export has answer', Pos('Merged findings', Md) > 0);
+    Trace.ApplyWorkedFooter(125000);
+    Md := Trace.FormatMarkdown(False);
+    Check('export has worked footer', Pos('*Worked for 2:05*', Md) > 0);
     Md := Trace.FormatMarkdown(True);
     Check('export can include user', Pos('### User', Md) > 0);
   Finally
