@@ -2566,6 +2566,7 @@ Begin
   If FSending And Assigned(AssistantClient) Then
     Begin
       AssistantClient.AbandonTimedOutSubagents;
+      ReapAbandonedAssistantWorkers;
       If Assigned(FTrace) And FViewingLive And
         FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
         StopStream;

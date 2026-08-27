@@ -576,10 +576,14 @@ Var
   ResultText, ErrorText, Content: String;
   Ok: Boolean;
   Svc: TAssistantService;
+  Mode: TAssistantMode;
 Begin
   Svc := LockedService;
   If Not Assigned(Svc) Or (Call.Name = '') Then
     Exit;
+  Mode := Svc.ActiveMode;
+  { Do not keep Svc across Queue/Sleep — Detach may free the service. }
+  Svc := Nil;
   LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
   EmitSnapshot(False, 'Running tools…', True);
   StartTick := GetTickCount64;
@@ -592,7 +596,7 @@ Begin
         Begin
           FDispatchName := Call.Name;
           FDispatchArgs := Call.Arguments;
-          FDispatchMode := Svc.ActiveMode;
+          FDispatchMode := Mode;
           FDispatchResult := '';
           FDispatchError := '';
           FDispatchOk := False;
@@ -619,7 +623,7 @@ Begin
             End;
         End
       Else
-        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Svc.ActiveMode,
+        Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Mode,
           ResultText, ErrorText);
     Except
       On E: Exception Do
@@ -636,6 +640,9 @@ Begin
     Content := ResultText
   Else
     Content := 'Error: ' + ErrorText;
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Exit;
   Svc.AddToolResult(Call.Id, Content);
   LogEvent(aekToolCompleted, Copy(Content, 1, 240), Call.Name, Call.Id, Ok,
     Integer(GetTickCount64 - StartTick));
@@ -705,6 +712,9 @@ Begin
   NextToStart := FromIndex;
   While Remaining > 0 Do
     Begin
+      Svc := LockedService;
+      If Not Assigned(Svc) Then
+        Exit;
       If Terminated Then
         Begin
           Svc.CancelSubagents;

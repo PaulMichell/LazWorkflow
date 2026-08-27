@@ -147,6 +147,7 @@ Type
     Procedure CancelSubagents;
     { Terminate the actor without waiting — safe from a worker thread. }
     Procedure StopActorNoWait;
+    Function HasUnfinishedActor: Boolean;
     Procedure ConfigureAsSubagent(Const KindName: String);
     { Sampler items for the session actor (Responses / Completions). }
     Function ExportSamplerItems: TSamplerInputItemArray;
@@ -167,6 +168,9 @@ Type
     { low | medium | high | xhigh — sent as reasoning_effort when non-empty. }
     Property ReasoningEffort: String Read FReasoningEffort Write FReasoningEffort;
   End;
+
+{ Free finished abandoned actors/child services left after cancel. }
+Procedure ReapAbandonedAssistantWorkers;
 
 Var
   AssistantClient: TAssistantService;
@@ -260,6 +264,140 @@ Type
 
 Var
   GSubagentSeq: Integer;
+  GAbandonedLock: TRTLCriticalSection;
+  GAbandonedThreads: TFPList;
+  GAbandonedServices: TFPList;
+
+Procedure StealOrphanThreads(List: TFPList);
+Var
+  I: Integer;
+Begin
+  If (Not Assigned(List)) Or (List.Count < 1) Then
+    Exit;
+  EnterCriticalSection(GAbandonedLock);
+  Try
+    If Not Assigned(GAbandonedThreads) Then
+      GAbandonedThreads := TFPList.Create;
+    For I := 0 To List.Count - 1 Do
+      If Assigned(List[I]) Then
+        GAbandonedThreads.Add(List[I]);
+  Finally
+    LeaveCriticalSection(GAbandonedLock);
+  End;
+  List.Clear;
+End;
+
+Procedure RegisterAbandonedService(Service: TAssistantService);
+Begin
+  If Not Assigned(Service) Then
+    Exit;
+  EnterCriticalSection(GAbandonedLock);
+  Try
+    If Not Assigned(GAbandonedServices) Then
+      GAbandonedServices := TFPList.Create;
+    If GAbandonedServices.IndexOf(Service) < 0 Then
+      GAbandonedServices.Add(Service);
+  Finally
+    LeaveCriticalSection(GAbandonedLock);
+  End;
+End;
+
+Procedure ReapAbandonedAssistantWorkers;
+Var
+  I: Integer;
+  Thread: TThread;
+  Service: TAssistantService;
+  FinishedThreads, FinishedServices: TFPList;
+Begin
+  FinishedThreads := TFPList.Create;
+  FinishedServices := TFPList.Create;
+  Try
+    EnterCriticalSection(GAbandonedLock);
+    Try
+      If Assigned(GAbandonedThreads) Then
+        Begin
+          I := 0;
+          While I < GAbandonedThreads.Count Do
+            Begin
+              Thread := TThread(GAbandonedThreads[I]);
+              If Not Assigned(Thread) Then
+                GAbandonedThreads.Delete(I)
+              Else If Thread.Finished Then
+                Begin
+                  FinishedThreads.Add(Thread);
+                  GAbandonedThreads.Delete(I);
+                End
+              Else
+                Inc(I);
+            End;
+        End;
+    Finally
+      LeaveCriticalSection(GAbandonedLock);
+    End;
+    For I := 0 To FinishedThreads.Count - 1 Do
+      Begin
+        Thread := TThread(FinishedThreads[I]);
+        Try
+          Thread.WaitFor;
+        Except
+        End;
+        Thread.Free;
+      End;
+    EnterCriticalSection(GAbandonedLock);
+    Try
+      If Assigned(GAbandonedServices) Then
+        Begin
+          I := 0;
+          While I < GAbandonedServices.Count Do
+            Begin
+              Service := TAssistantService(GAbandonedServices[I]);
+              If Not Assigned(Service) Then
+                GAbandonedServices.Delete(I)
+              Else
+                Inc(I);
+            End;
+        End;
+    Finally
+      LeaveCriticalSection(GAbandonedLock);
+    End;
+    I := 0;
+    While True Do
+      Begin
+        Service := Nil;
+        EnterCriticalSection(GAbandonedLock);
+        Try
+          If (Not Assigned(GAbandonedServices)) Or (I >= GAbandonedServices.Count) Then
+            Break;
+          Service := TAssistantService(GAbandonedServices[I]);
+        Finally
+          LeaveCriticalSection(GAbandonedLock);
+        End;
+        If Not Assigned(Service) Then
+          Begin
+            Inc(I);
+            Continue;
+          End;
+        Service.ReapOrphanThreads(0);
+        If Service.HasUnfinishedActor Then
+          Inc(I)
+        Else
+          Begin
+            EnterCriticalSection(GAbandonedLock);
+            Try
+              GAbandonedServices.Remove(Service);
+            Finally
+              LeaveCriticalSection(GAbandonedLock);
+            End;
+            FinishedServices.Add(Service);
+          End;
+      End;
+    For I := 0 To FinishedServices.Count - 1 Do
+      TAssistantService(FinishedServices[I]).Free;
+  Finally
+    FinishedThreads.Free;
+    FinishedServices.Free;
+  End;
+End;
 
 Constructor TChildSubagent.Create(OwnerService: TAssistantService);
 Begin
@@ -279,10 +417,19 @@ Begin
       Try
         { Never CancelStream/CheckSynchronize off the main thread — that deadlocks
           a child stuck in Queue/Synchronize and freezes the parent actor. }
+        FChild.OnTrace := Nil;
         FChild.StopActorNoWait;
       Except
       End;
-      FreeAndNil(FChild);
+      If FChild.HasUnfinishedActor Then
+        Begin
+          { Keep the child service until its actor finishes; a local TAssistantService
+            pointer in RunOneTool must not dangle. }
+          RegisterAbandonedService(FChild);
+          FChild := Nil;
+        End
+      Else
+        FreeAndNil(FChild);
     End;
   DoneCriticalSection(FLock);
   Inherited Destroy;
@@ -683,7 +830,8 @@ Begin
     End;
   If Assigned(FOrphanThreads) Then
     Begin
-      { Running threads are leaked rather than freed underfoot. }
+      If FOrphanThreads.Count > 0 Then
+        StealOrphanThreads(FOrphanThreads);
       FreeAndNil(FOrphanThreads);
     End;
   SetLength(FMessages, 0);
@@ -692,6 +840,27 @@ Begin
   FreeAndNil(FSubagents);
   DoneCriticalSection(FSubagentsLock);
   Inherited Destroy;
+End;
+
+Function TAssistantService.HasUnfinishedActor: Boolean;
+Var
+  I: Integer;
+  Thread: TThread;
+Begin
+  Result := Assigned(FStreamThread) And (Not FStreamThread.Finished);
+  If Result Then
+    Exit;
+  If Not Assigned(FOrphanThreads) Then
+    Exit;
+  For I := 0 To FOrphanThreads.Count - 1 Do
+    Begin
+      Thread := TThread(FOrphanThreads[I]);
+      If Assigned(Thread) And (Not Thread.Finished) Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+    End;
 End;
 
 Procedure TAssistantService.ReapOrphanThreads(WaitMs: QWord);
@@ -1889,6 +2058,9 @@ End;
 
 Initialization
 
+InitCriticalSection(GAbandonedLock);
+GAbandonedThreads := TFPList.Create;
+GAbandonedServices := TFPList.Create;
 AssistantClient := TAssistantService.Create;
 If Assigned(AssistantChatConfig) Then
   AssistantClient.ApplyConfig(AssistantChatConfig);
@@ -1896,5 +2068,9 @@ If Assigned(AssistantChatConfig) Then
 Finalization
 
 FreeAndNil(AssistantClient);
+ReapAbandonedAssistantWorkers;
+FreeAndNil(GAbandonedThreads);
+FreeAndNil(GAbandonedServices);
+DoneCriticalSection(GAbandonedLock);
 
 End.
