@@ -2375,8 +2375,18 @@ procedure TCanvasMarkDownTableBlockRenderer.MeasureTableColumns(const aTableMode
   end;
 
   function NoWrapWidth(Texts : TStrings; aFontSize : Integer):LongInt;
+  var
+    I: Integer;
+    Joined: utf8string;
   begin
-    Result:=MeasureTextWidth(Texts.DelimitedText,aFontSize,[],[fcQuote]);
+    Joined:='';
+    for I:=0 to Texts.Count-1 do
+      begin
+      if I>0 then
+        Joined:=Joined+' ';
+      Joined:=Joined+Texts[I];
+      end;
+    Result:=MeasureTextWidth(Joined,aFontSize,[],[fcQuote]);
   end;
 
 var
