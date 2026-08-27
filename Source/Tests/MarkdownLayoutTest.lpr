@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Graphics, Classes, SysUtils, MarkDown.CanvasRender, Markdown.Processors, Markdown.Utils;
+  Interfaces, Graphics, Classes, SysUtils, Contnrs, MarkDown.CanvasRender, Markdown.Processors, Markdown.Utils;
 
 Var
   FailCount: Integer;
@@ -218,11 +218,23 @@ Procedure TestNumericEntitiesHexAndSupplementary;
 Var
   R: TMarkDownCanvasRenderer;
   All, Grin: String;
+  Table: TFPStringHashTable;
 Begin
   Grin := DecodeNumericEntityBody('#x1F600');
   Check('hex smile is four UTF-8 bytes', Length(Grin) = 4);
   Check('decimal smile matches hex', DecodeNumericEntityBody('#128512') = Grin);
   Check('hex A is A', DecodeNumericEntityBody('#x41') = 'A');
+  Table := TFPStringHashTable.Create;
+  Try
+    Table.Add('amp', '&');
+    Table.Add('Aacute', DecodeNumericEntityBody('#193'));
+    Check('ParseEntityString named amp', ParseEntityString(Table, '&amp;') = '&');
+    Check('ParseEntityString keeps Aacute case', ParseEntityString(Table, '&Aacute;') = DecodeNumericEntityBody('#193'));
+    Check('ParseEntityString hex A', ParseEntityString(Table, '&#x41;') = 'A');
+    Check('ParseEntityString unknown is empty', ParseEntityString(Table, '&nope;') = '');
+  Finally
+    Table.Free;
+  End;
   LayoutOf('hi &#x1F600; there', R);
   Try
     All := JoinedAllText(R);

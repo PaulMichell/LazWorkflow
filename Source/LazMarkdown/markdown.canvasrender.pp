@@ -1850,14 +1850,9 @@ begin
       lNext:=Pos('&',aText,lPrev);
       Continue;
       end;
-    lEnt:=Copy(aText,lNext+1,lEnd-lNext-1);
+    lEnt:=Copy(aText,lNext,lEnd-lNext+1);
     if (lEnt<>'') then
-      begin
-      if lEnt[1]<>'#' then
-        lUTF8:=FHTMLEntities.Items[LowerCase(lEnt)]
-      else
-        lUTF8:=DecodeNumericEntityBody(lEnt);
-      end;
+      lUTF8:=ParseEntityString(FHTMLEntities, lEnt);
     if lUTF8='' then
       { Unknown entity or empty name: keep original "&...;" span. }
       Result:=Result+Copy(aText,lNext,lEnd-lNext+1)

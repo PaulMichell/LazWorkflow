@@ -303,21 +303,11 @@ begin
     Result:='&';
     Exit;
     end;
-  Result:=FEntities.Items[lEntity];
+  Result:=ParseEntityString(FEntities, '&'+lEntity+';');
   if Result<>'' then
-    begin
-    Scanner.NextChars(lLen+1);
-    Exit;
-    end;
-  Result:='&';
-  if (lLen>0) and (lEntity[1]='#') then
-    begin
-    Result:=DecodeNumericEntityBody(lEntity);
-    if Result<>'' then
-      Scanner.NextChars(lLen+1)
-    else
-      Result:='&';
-    end;
+    Scanner.NextChars(lLen+1)
+  else
+    Result:='&';
 end;
 
 procedure TInlineTextProcessor.HandleBackTick;
