@@ -199,6 +199,22 @@ Begin
   End;
 End;
 
+Procedure TestCopyDoesNotInsertSpacesBetweenAbuttingRuns;
+Var
+  R: TMarkDownCanvasRenderer;
+  Copied: String;
+Begin
+  LayoutOf('see `name`.', R);
+  Try
+    Check('select all for copy', R.SelectAll);
+    Copied := R.GetSelectedText;
+    Check('copy keeps name.', Pos('name.', Copied) > 0);
+    Check('copy does not insert name .', Pos('name .', Copied) = 0);
+  Finally
+    R.Free;
+  End;
+End;
+
 Procedure TestSoftBreakIsSpaceNotNewline;
 Var
   R: TMarkDownCanvasRenderer;
@@ -406,6 +422,7 @@ Begin
   TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
   TestHardBreakIsNewlineNotTag;
+  TestCopyDoesNotInsertSpacesBetweenAbuttingRuns;
   TestSoftBreakIsSpaceNotNewline;
   TestHtmlBrIsNewlineNotTag;
   TestCodeSpanUsesMonoAndTightGap;

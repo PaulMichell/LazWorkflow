@@ -1038,10 +1038,9 @@ begin
       ItemText:=UTF8Copy(Item.Text, StartC + 1, EndC - StartC);
       if Result<>'' then
         begin
-        // Add spacing between items
         if Assigned(PrevItem) and (PrevItem.Y<>Item.Y) then
           Result:=Result + LineEnding
-        else
+        else if Assigned(PrevItem) and (Item.X > PrevItem.X + PrevItem.Width + 1) then
           Result:=Result + ' ';
         end;
       Result:=Result + ItemText;
