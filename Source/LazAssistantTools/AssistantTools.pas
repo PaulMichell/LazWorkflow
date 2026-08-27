@@ -60,7 +60,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, fpjson, jsonparser;
+  AssistantLfm, AssistantSearchUtil, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -333,13 +333,14 @@ Begin
     '{"type":"function","function":{' +
       '"name":"grep",' +
       '"description":"Search project text files; return path:line:text. Prefer before many read_file calls. ' +
-        'Optional glob and regex. Case-insensitive literal match by default.",' +
+        'path may be a directory or a single file. glob accepts .pas, *.pas, and *.{pas,lfm}. ' +
+        'A pattern containing | is treated as a regular expression.",' +
       '"parameters":{"type":"object","properties":{' +
         '"pattern":{"type":"string","description":"Text or regex to find"},' +
         '"query":{"type":"string","description":"Alias of pattern"},' +
-        '"path":{"type":"string","description":"Subfolder under project root (empty = whole project)"},' +
-        '"glob":{"type":"string","description":"Optional extension filter e.g. .pas or .lfm"},' +
-        '"regex":{"type":"boolean","description":"If true, treat pattern as a regular expression (default false)"},' +
+        '"path":{"type":"string","description":"Project-relative directory or file (empty = project root)"},' +
+        '"glob":{"type":"string","description":"Optional filter: .pas, *.pas, or *.{pas,lfm,sql}"},' +
+        '"regex":{"type":"boolean","description":"Treat pattern as a regular expression (default false; auto if pattern contains |)"},' +
         '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
       '},"required":[]}' +
     '}}';
@@ -391,12 +392,14 @@ Begin
     '{"type":"function","function":{' +
       '"name":"read_file",' +
       '"description":"Read a text file under the active Lazarus project. Uses the open editor buffer when ' +
-        'the file is open, otherwise disk. Page with start_line/end_line; after truncation continue from ' +
-        'the suggested line, not from line 1.",' +
+        'the file is open, otherwise disk. Page with start_line plus end_line or limit. If end_line is ' +
+        'smaller than start_line it is a line count. After truncation continue from the suggested line.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative or absolute file path"},' +
         '"start_line":{"type":"integer","description":"1-based first line to include (default 1)"},' +
-        '"end_line":{"type":"integer","description":"1-based last line to include (default end of file or max_chars)"},' +
+        '"offset":{"type":"integer","description":"Alias of start_line"},' +
+        '"end_line":{"type":"integer","description":"1-based last line, or a line count if smaller than start_line"},' +
+        '"limit":{"type":"integer","description":"Max lines from start_line (preferred when paging by count)"},' +
         '"max_chars":{"type":"integer","description":"Optional max characters to return from the selected range"}' +
       '},"required":["path"]}' +
     '}},' +
@@ -473,8 +476,8 @@ Begin
         'Returns path:line:text.",' +
       '"parameters":{"type":"object","properties":{' +
         '"query":{"type":"string","description":"Text to find"},' +
-        '"path":{"type":"string","description":"Subfolder under project root (empty = whole project)"},' +
-        '"glob":{"type":"string","description":"Optional extension filter e.g. .pas or .lfm (default: common text/source types)"},' +
+        '"path":{"type":"string","description":"Project-relative directory or file (empty = project root)"},' +
+        '"glob":{"type":"string","description":"Optional filter: .pas, *.pas, or *.{pas,lfm} (default: common text types)"},' +
         '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
       '},"required":["query"]}' +
     '}},' +
@@ -693,7 +696,7 @@ Const
   ReadBufSize = 65536;
 Var
   Path, Resolved, Chunk, Carry: String;
-  MaxChars, StartLine, EndLine, LineNo, FirstOut, LastOut, FileBytes: Integer;
+  MaxChars, StartLine, EndLine, LineLimit, LineNo, FirstOut, LastOut, FileBytes: Integer;
   Stream: TFileStream;
   Buf: Array[0..ReadBufSize - 1] Of Byte;
   BytesRead, I: Integer;
@@ -859,10 +862,12 @@ Begin
     MaxChars := AssistantToolMaxReadChars;
   If MaxChars > AssistantToolMaxReadChars Then
     MaxChars := AssistantToolMaxReadChars;
-  StartLine := JsonArgInt(ArgumentsJson, 'start_line', 1);
-  EndLine := JsonArgInt(ArgumentsJson, 'end_line', 0);
+  StartLine := JsonArgInt(ArgumentsJson, 'start_line', 0);
   If StartLine < 1 Then
-    StartLine := 1;
+    StartLine := JsonArgInt(ArgumentsJson, 'offset', 1);
+  EndLine := JsonArgInt(ArgumentsJson, 'end_line', 0);
+  LineLimit := JsonArgInt(ArgumentsJson, 'limit', 0);
+  ResolveReadLineRange(StartLine, EndLine, LineLimit);
   RequestedEnd := EndLine;
   Ed := FindOpenEditor(ExpandResolvedPath(Resolved));
   If Assigned(Ed) Then
@@ -1316,7 +1321,7 @@ Begin
     (N = '.grok') Or (N = '.assistant');
 End;
 
-Function CollectSearchableFiles(Const DirPath, ExtFilter: String; Files: TStringList;
+Function CollectSearchableFiles(Const DirPath, Glob: String; Files: TStringList;
   Var FileCount, WalkCount: Integer): Boolean;
 Var
   Info: TSearchRec;
@@ -1347,21 +1352,18 @@ Begin
             If (Info.Attr And faDirectory) <> 0 Then
               Begin
                 If Not IsSkippedSearchDirectory(Info.Name) Then
-                  If Not CollectSearchableFiles(Child, ExtFilter, Files, FileCount, WalkCount) Then
+                  If Not CollectSearchableFiles(Child, Glob, Files, FileCount, WalkCount) Then
                     Begin
                       Result := False;
                       Exit;
                     End;
               End
-            Else If IsSearchableTextExtension(Child) Then
+            Else If IsSearchableTextExtension(Child) And FileMatchesSearchGlob(Child, Glob) Then
               Begin
-                If (ExtFilter = '') Or (LowerCase(ExtractFileExt(Child)) = ExtFilter) Then
-                  Begin
-                    Files.Add(Child);
-                    Inc(FileCount);
-                    If FileCount >= AssistantToolMaxSearchFiles Then
-                      Exit;
-                  End;
+                Files.Add(Child);
+                Inc(FileCount);
+                If FileCount >= AssistantToolMaxSearchFiles Then
+                  Exit;
               End;
           End;
         If FileCount >= AssistantToolMaxSearchFiles Then
@@ -1938,8 +1940,7 @@ Var
   MaxMatches, MatchCount, FileCount, WalkCount, LineNo, I: Integer;
   Files: TStringList;
   SL: TStringList;
-  ExtFilter: String;
-  WalkComplete, UseRegex, Hit, Stopped: Boolean;
+  WalkComplete, UseRegex, Hit, Stopped, SingleFile: Boolean;
   Re: TRegExpr;
   Deadline: QWord;
 Begin
@@ -1958,21 +1959,15 @@ Begin
   Path := JsonArgString(ArgumentsJson, 'path');
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
-  If Not DirectoryExistsUTF8(Resolved) Then
-    Begin
-      ErrorText := 'Directory not found: ' + Resolved;
-      Exit;
-    End;
   Glob := Trim(JsonArgString(ArgumentsJson, 'glob'));
-  ExtFilter := LowerCase(Glob);
-  If (ExtFilter <> '') And (ExtFilter[1] <> '.') Then
-    ExtFilter := '.' + ExtFilter;
   MaxMatches := JsonArgInt(ArgumentsJson, 'max_matches', AssistantToolMaxSearchMatches);
   If MaxMatches < 1 Then
     MaxMatches := AssistantToolMaxSearchMatches;
   If MaxMatches > 200 Then
     MaxMatches := 200;
   UseRegex := JsonArgBool(ArgumentsJson, 'regex', False);
+  If (Not UseRegex) And PatternLooksLikeRegex(Query) Then
+    UseRegex := True;
   LowerQuery := LowerCase(Query);
   If UseRegex Then
     Begin
@@ -1996,9 +1991,28 @@ Begin
   Try
     FileCount := 0;
     WalkCount := 0;
-    WalkComplete := CollectSearchableFiles(Resolved, ExtFilter, Files, FileCount, WalkCount);
+    WalkComplete := True;
+    SingleFile := FileExistsUTF8(Resolved) And (Not DirectoryExistsUTF8(Resolved));
+    If SingleFile Then
+      Begin
+        If FileMatchesSearchGlob(Resolved, Glob) Then
+          Begin
+            Files.Add(Resolved);
+            FileCount := 1;
+          End;
+        ResultText := Format('Search for "%s" in %s', [Query, Resolved]) + LineEnding;
+      End
+    Else If DirectoryExistsUTF8(Resolved) Then
+      Begin
+        WalkComplete := CollectSearchableFiles(Resolved, Glob, Files, FileCount, WalkCount);
+        ResultText := Format('Search for "%s" under %s', [Query, Resolved]) + LineEnding;
+      End
+    Else
+      Begin
+        ErrorText := 'Path not found: ' + Resolved;
+        Exit;
+      End;
     MatchCount := 0;
-    ResultText := Format('Search for "%s" under %s', [Query, Resolved]) + LineEnding;
     If Not WalkComplete Then
       ResultText := ResultText + '[… directory walk capped before listing every file …]' + LineEnding;
     If FileCount >= AssistantToolMaxSearchFiles Then
@@ -2105,9 +2119,20 @@ Begin
 End;
 
 { Must appear before ToolWriteFile / ToolReplaceInFile. }
-Function FormLfmEditReminder(Const PasPath, PasBody: String): String;
+Function LooksLikeStreamedComponentEdit(Const ChangedText: String): Boolean;
 Var
-  LfmPath, RelPas: String;
+  Sample: String;
+Begin
+  Sample := ChangedText;
+  Result := (Pos('TTimer', Sample) > 0) Or (Pos('TActionList', Sample) > 0) Or
+    (Pos('TImageList', Sample) > 0) Or (Pos('TAction', Sample) > 0) Or
+    (Pos('TButton', Sample) > 0) Or (Pos('object ', Sample) > 0) Or
+    (Pos('OnTimer', Sample) > 0) Or (Pos('ensure_form_component', Sample) > 0);
+End;
+
+Function FormLfmEditReminder(Const PasPath, ChangedText: String): String;
+Var
+  LfmPath: String;
 Begin
   Result := '';
   If (LowerCase(ExtractFileExt(PasPath)) <> '.pas') And
@@ -2116,24 +2141,12 @@ Begin
   LfmPath := ChangeFileExt(PasPath, '.lfm');
   If Not FileExistsUTF8(LfmPath) Then
     Exit;
-  If (Pos('TTimer', PasBody) > 0) Or (Pos('TButton', PasBody) > 0) Or
-    (Pos('TEdit', PasBody) > 0) Or (Pos('TLabel', PasBody) > 0) Or
-    (Pos('TMemo', PasBody) > 0) Or (Pos('TAction', PasBody) > 0) Or
-    (Pos('TImageList', PasBody) > 0) Or (Pos('TActionList', PasBody) > 0) Then
-    Begin
-      RelPas := ProjectRelativePath(PasPath);
-      If RelPas = '' Then
-        RelPas := ExtractFileName(PasPath);
-      Result := LineEnding +
-        'IMPORTANT: This form unit has a sibling ' + ExtractFileName(LfmPath) +
-        '. Published components and On* events only fire if that .lfm is updated too. ' +
-        'Do not claim the form works until you call ensure_form_component (preferred), e.g. ' +
-        'ensure_form_component path=' + RelPas +
-        ' name=ColorTimer class_name=TTimer ' +
-        'properties={"Interval":1000,"Enabled":true,"OnTimer":"ColorTimerTimer"} ' +
-        'event_method=ColorTimerTimer uses_unit=ExtCtrls — or replace_in_file on the .lfm. ' +
-        'TTimer.Interval is milliseconds (1000 = once per second).';
-    End;
+  If Not LooksLikeStreamedComponentEdit(ChangedText) Then
+    Exit;
+  Result := LineEnding +
+    'Sibling ' + ExtractFileName(LfmPath) +
+    ' exists. If this edit added or renamed a streamed control or On* handler, update that .lfm ' +
+    '(ensure_form_component or replace_in_file).';
 End;
 
 Function ToolWriteFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -2305,7 +2318,7 @@ Begin
     Exit;
   ResultText := Format('Replaced %d occurrence(s) in %s. %s',
     [Count, ProjectRelativePath(Resolved), Note]);
-  ResultText := ResultText + FormLfmEditReminder(Resolved, Body);
+  ResultText := ResultText + FormLfmEditReminder(Resolved, NewText);
   Result := True;
   WorkflowLogger.Info('AssistantTools', Format('replace_in_file %s n=%d', [Resolved, Count]));
 End;

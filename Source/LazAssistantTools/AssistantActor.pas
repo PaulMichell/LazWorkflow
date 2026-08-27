@@ -487,6 +487,10 @@ Begin
                 ErrorText := Format('HTTP %d', [Code])
               Else
                 ErrorText := Format('HTTP %d: %s', [Code, Copy(Trim(ErrorText), 1, 400)]);
+              If Code = 403 Then
+                ErrorText := ErrorText +
+                  ' The API refused this request (stale token, or the prompt grew too large after many tool results). ' +
+                  'Sign in again, or Compact / start a new chat and continue.';
             End
           Else If FParser.Failed Then
             Begin
@@ -559,8 +563,9 @@ Var
 Begin
   E := LowerCase(ErrorText);
   Result := (Pos('http 404', E) > 0) Or (Pos('http 405', E) > 0) Or
-    (Pos('http 400', E) > 0) Or (Pos('not found', E) > 0) Or
-    (Pos('unknown', E) > 0) Or (Pos('not supported', E) > 0);
+    (Pos('http 400', E) > 0) Or (Pos('http 403', E) > 0) Or
+    (Pos('not found', E) > 0) Or (Pos('unknown', E) > 0) Or
+    (Pos('not supported', E) > 0);
 End;
 
 Type
