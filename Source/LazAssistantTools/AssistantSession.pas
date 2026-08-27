@@ -215,11 +215,16 @@ Begin
           If Assigned(AssistantClient) Then
             AssistantClient.ClearHistory;
           ContextUsed := Root.Get('contextUsed', 0);
-          Arr := Root.FindPath('transcript') As TJSONArray;
+          Arr := Nil;
+          If Root.Find('transcript') Is TJSONArray Then
+            Arr := TJSONArray(Root.Find('transcript'));
           If Assigned(Arr) Then
             For I := 0 To Arr.Count - 1 Do
-              Transcript.Add(Arr.Items[I].AsString);
-          Arr := Root.FindPath('messages') As TJSONArray;
+              If Arr.Items[I].JSONType In [jtString, jtNumber, jtBoolean] Then
+                Transcript.Add(Arr.Items[I].AsString);
+          Arr := Nil;
+          If Root.Find('messages') Is TJSONArray Then
+            Arr := TJSONArray(Root.Find('messages'));
           If Assigned(Arr) And Assigned(AssistantClient) Then
             For I := 0 To Arr.Count - 1 Do
               If Arr.Items[I] Is TJSONObject Then
