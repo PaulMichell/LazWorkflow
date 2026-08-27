@@ -199,6 +199,37 @@ Begin
   End;
 End;
 
+Procedure TestSoftBreakIsSpaceNotNewline;
+Var
+  R: TMarkDownCanvasRenderer;
+  All: String;
+  HasTwoLines: Boolean;
+  I, FirstY: Integer;
+  Item: TLayoutItem;
+Begin
+  LayoutOf('hello' + LineEnding + 'world', R);
+  Try
+    All := JoinedAllText(R);
+    Check('soft break keeps both words', (Pos('hello', All) > 0) And (Pos('world', All) > 0));
+    Check('soft break does not glue hello-world', Pos('helloworld', All) = 0);
+    HasTwoLines := False;
+    FirstY := -1;
+    For I := 0 To R.LayoutItemCount - 1 Do
+      Begin
+        Item := R.LayoutItem(I);
+        If (Not Assigned(Item)) Or (Item.Kind <> likText) Then
+          Continue;
+        If FirstY < 0 Then
+          FirstY := Item.Y
+        Else If Item.Y > FirstY Then
+          HasTwoLines := True;
+      End;
+    Check('soft break stays on one line', Not HasTwoLines);
+  Finally
+    R.Free;
+  End;
+End;
+
 Procedure TestHtmlBrIsNewlineNotTag;
 Var
   R: TMarkDownCanvasRenderer;
@@ -375,6 +406,7 @@ Begin
   TestCodeWidthMatchesGlyphs;
   TestCollapsedSpacesAroundCode;
   TestHardBreakIsNewlineNotTag;
+  TestSoftBreakIsSpaceNotNewline;
   TestHtmlBrIsNewlineNotTag;
   TestCodeSpanUsesMonoAndTightGap;
   TestGenericMonoAliasUsesFixedPitch;

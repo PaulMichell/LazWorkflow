@@ -1553,9 +1553,16 @@ begin
         Inc(Index);
       if lChar in [#13, #10] then
         begin
-        FlushCurrentLine;
-        NewLine(aCanvas);
-        NeedSpace:=False;
+        { CommonMark soft break: a single newline is whitespace. Hard breaks
+          are already nkLineBreak (two trailing spaces or <br>). }
+        if aPreserveWhitespace then
+          begin
+          FlushCurrentLine;
+          NewLine(aCanvas);
+          NeedSpace:=False;
+          end
+        else
+          NeedSpace:=True;
         end
       else if aPreserveWhitespace then
         begin
