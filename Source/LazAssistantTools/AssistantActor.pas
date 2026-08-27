@@ -554,14 +554,14 @@ Type
     FAbandoned: Boolean;
     FDone: Boolean;
     FRefCount: Integer;
+    FName: String;
+    FArgs: String;
+    FMode: TAssistantMode;
+    FOk: Boolean;
+    FResultText: String;
+    FErrorText: String;
     Procedure Release;
   Public
-    Name: String;
-    Args: String;
-    Mode: TAssistantMode;
-    Ok: Boolean;
-    ResultText: String;
-    ErrorText: String;
     Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
     Destructor Destroy; Override;
     Procedure ExecuteOnMain;
@@ -573,12 +573,12 @@ Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolM
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
-  Name := ToolName;
-  Args := ArgumentsJson;
-  Mode := ToolMode;
-  Ok := False;
-  ResultText := '';
-  ErrorText := '';
+  FName := ToolName;
+  FArgs := ArgumentsJson;
+  FMode := ToolMode;
+  FOk := False;
+  FResultText := '';
+  FErrorText := '';
   FAbandoned := False;
   FDone := False;
   { Waiter + queued callback. Last Release Frees. }
@@ -609,6 +609,8 @@ End;
 Procedure TIdeToolDispatch.ExecuteOnMain;
 Var
   SkipRun: Boolean;
+  ToolOk: Boolean;
+  ToolResult, ToolError: String;
 Begin
   SkipRun := False;
   EnterCriticalSection(FLock);
@@ -623,11 +625,17 @@ Begin
       Release;
       Exit;
     End;
+  ToolOk := False;
+  ToolResult := '';
+  ToolError := '';
   Try
-    Ok := ExecuteAssistantToolForMode(Name, Args, Mode, ResultText, ErrorText);
+    ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError);
   Finally
     EnterCriticalSection(FLock);
     Try
+      FOk := ToolOk;
+      FResultText := ToolResult;
+      FErrorText := ToolError;
       FDone := True;
     Finally
       LeaveCriticalSection(FLock);
@@ -669,9 +677,9 @@ Procedure TIdeToolDispatch.CopyOutcome(Out ToolOk: Boolean; Out ToolResult, Tool
 Begin
   EnterCriticalSection(FLock);
   Try
-    ToolOk := Ok;
-    ToolResult := ResultText;
-    ToolError := ErrorText;
+    ToolOk := FOk;
+    ToolResult := FResultText;
+    ToolError := FErrorText;
   Finally
     LeaveCriticalSection(FLock);
   End;
