@@ -286,3 +286,14 @@ Validation: package compilation and checked `GitGraphModelTest` passed with zero
 Remote rows retain their original identity independently of the edited name/URL. Renames run explicitly, with temporary names supporting swaps/cycles, and URL edits apply to the renamed remote. Before saving, the service snapshots the complete local config and remote refs. Failure restores the config through an exclusive config lock and restores direct/symbolic remote refs, preserving custom refspecs, push URLs, branch tracking and other local settings.
 
 Validation: package compilation and checked repository regressions passed with zero leaks. Tests cover rename plus URL change, preserved push URL and tracking, removal/addition followed by byte-for-byte config and ref restoration, and refusing to overwrite or delete another writer's config lock. Remote grid interaction and Windows replacement behaviour remain untested.
+
+## Final validation checkpoint — 8 September 2026
+
+The R1–R12 and C1–C4 fixes are implemented, together with the follow-up preview/refresh, graph, spell-loading/layout and remote-editing improvements described above. LazAssistantTools source and tests were not reviewed or changed.
+
+- Repository package entry point compiled against the local Lazarus units.
+- `GitStatusParseTest`, `RepositorySafetyTest`, `SpellCheckerTest`, `SpellConfigTest` and `GitGraphModelTest` passed with range/overflow checks and zero reported heap leaks.
+- New `SpellMemoReviewTest` compiled and ran against GTK2 on the local display. It verified End/Up/Down across hard newlines and blank paragraphs, popup injection, preserving host items when switching menus, and freeing either the menu or memo first. These checks supersede the earlier C2/C4 compilation-only limitation.
+- `git diff --check` passed. Changes were committed as separate logical groups; unrelated pre-existing untracked files were left alone.
+
+Remaining validation limits: full IDE interaction (including rapid repository switching, remote-grid editing, image formats and prolonged typing/scrolling), Windows/macOS behaviour, and end-to-end GUI timing were not exercised. The graph benchmark measures model queries only. Remote rollback restores a complete snapshot and respects the config lock; it is not a transaction isolating the whole edit sequence from other config/ref writers.

@@ -42,7 +42,8 @@ Type
     Procedure Add(Const WordText: String);
     Procedure Remove(Const WordText: String);
     Procedure LoadFromFile(Const FileName: String);
-    Function SaveToFile(Const FileName: String; Out ErrorText: String): Boolean;
+    Procedure SaveToFile(Const FileName: String); Overload;
+    Function SaveToFile(Const FileName: String; Out ErrorText: String): Boolean; Overload;
     Function Count: Integer;
   End;
 
@@ -164,6 +165,12 @@ Var I: Integer;
 Begin
   I := FList.IndexOf(Trim(WordText));
   If I >= 0 Then FList.Delete(I);
+End;
+
+Procedure TSpellWordSet.SaveToFile(Const FileName: String);
+Var ErrorText: String;
+Begin
+  If Not SaveToFile(FileName, ErrorText) Then Raise EWriteError.Create(ErrorText);
 End;
 
 Function TSpellWordSet.SaveToFile(Const FileName: String; Out ErrorText: String): Boolean;
