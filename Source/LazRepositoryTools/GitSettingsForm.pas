@@ -44,6 +44,7 @@ Type
   Private
     FRepoPath: String;
     FHasRepo: Boolean;
+    FSaveErrors: String;
     Procedure SetIdentityControlsEnabled(ControlsEnabled: Boolean);
     Procedure SyncGraphFontNameDisplay;
   Public
@@ -95,7 +96,7 @@ Begin
              Form.FRepoPath]))
         Else
           MessageDlg('Some repository settings could not be saved.' + LineEnding +
-            GitClient.LastError, mtWarning, [mbOK], 0);
+            Form.FSaveErrors, mtWarning, [mbOK], 0);
       End;
   Finally
     Form.Free;
@@ -241,12 +242,13 @@ Begin
 
   GitClient.RepoPath := FRepoPath;
   Ok := True;
+  FSaveErrors := '';
   If Not GitClient.SetConfigValue('user.name', Trim(UserNameEdit.Text), True) Then
-    Ok := False;
+    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
   If Not GitClient.SetConfigValue('user.email', Trim(UserEmailEdit.Text), True) Then
-    Ok := False;
+    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
   If Not GitClient.SetDescription(DescriptionMemo.Text) Then
-    Ok := False;
+    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
   Result := Ok;
 End;
 

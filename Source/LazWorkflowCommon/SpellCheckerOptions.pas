@@ -40,8 +40,9 @@ Type
     Procedure Clear;
     Function Contains(Const WordText: String): Boolean;
     Procedure Add(Const WordText: String);
+    Procedure Remove(Const WordText: String);
     Procedure LoadFromFile(Const FileName: String);
-    Procedure SaveToFile(Const FileName: String);
+    Function SaveToFile(Const FileName: String; Out ErrorText: String): Boolean;
     Function Count: Integer;
   End;
 
@@ -158,19 +159,24 @@ Begin
     End;
 End;
 
-Procedure TSpellWordSet.SaveToFile(Const FileName: String);
-Var
-  Dir: String;
+Procedure TSpellWordSet.Remove(Const WordText: String);
+Var I: Integer;
 Begin
-  If FileName = '' Then
-    Exit;
-  Dir := ExtractFilePath(FileName);
-  If (Dir <> '') And (Not DirectoryExists(Dir)) Then
-    ForceDirectories(Dir);
+  I := FList.IndexOf(Trim(WordText));
+  If I >= 0 Then FList.Delete(I);
+End;
+
+Function TSpellWordSet.SaveToFile(Const FileName: String; Out ErrorText: String): Boolean;
+Var Dir: String;
+Begin
+  Result := False; ErrorText := '';
   Try
+    If FileName = '' Then Raise Exception.Create('Dictionary filename is empty');
+    Dir := ExtractFilePath(FileName);
+    If (Dir <> '') And Not DirectoryExists(Dir) Then ForceDirectories(Dir);
     FList.SaveToFile(FileName);
-  Except
-  End;
+    Result := True;
+  Except On E: Exception Do ErrorText := E.Message; End;
 End;
 
 Function TSpellWordSet.Count: Integer;

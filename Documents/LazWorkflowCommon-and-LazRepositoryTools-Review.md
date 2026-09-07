@@ -260,3 +260,11 @@ Validation: package compilation and checked `RepositorySafetyTest` passed with z
 Working-tree and blob previews check the 8 MiB limit before reading; working-tree reads copy only the checked size, and blob/diff subprocess output is bounded during streaming. Failed or truncated diff text is discarded. Images require readable dimensions before decoding, with a 16 megapixel / 16384-pixel-side ceiling; unsupported dimension readers fall back to an explanatory unavailable-preview message. Also made Stage/Unstage pass patch direction explicitly, covering the tree view as well as embedded previews.
 
 Validation: package compilation and checked repository regressions passed with zero leaks. Added oversized working-tree, committed-blob and large-addition diff cases, plus a normal command after a rejected preview. Image decoding/rendering remains an interactive check.
+
+## Implementation update: spell loading, repeated work and diagnostics
+
+Simplification 3 uses the existing preload worker as the sole engine factory/load path. Unchanged options preserve the engine; changed options retire an older worker without waiting in the UI, and generation checks reject obsolete results. Dictionary checks use a bounded, configuration-invalidated cache. Spell memo tokenization is reused while text is unchanged; unchanged paragraphs reuse bounded layout caches, wrapping advances offsets instead of deleting string prefixes, and painting walks sorted underline ranges. Native prefix measurement remains in use to preserve kerning/shaping. Routine rescan logs are debug-level (O4).
+
+Simplification 4 now retains all failed repository-setting write diagnostics and reports personal-dictionary save failures, removing an unsuccessfully saved word from the in-memory personal set. Transfer-result snapshots were handled in the earlier Git result commit.
+
+Validation: package compilation, checked `SpellCheckerTest` and new checked `SpellConfigTest` passed, with zero heap leaks. Config tests cover asynchronous loading, unchanged options, cache invalidation, save failure, and rejecting obsolete loads. Paragraph/rendering performance improvements have not yet been benchmarked in a running IDE.

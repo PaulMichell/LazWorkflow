@@ -30,6 +30,8 @@ Type
     FLastStatus: String;
     FEngineLock: TRTLCriticalSection;
     FPreloadThread: TThread;
+    FRetiredPreloads: TFPList;
+    FWordCache: TStringList;
     FPreloadSeq: Integer;
     FIssuedValid: Boolean;
     FIssuedKind: TSpellEngineKind;
@@ -38,8 +40,6 @@ Type
     FIssuedDict: String;
     Procedure NotifyChanged;
     Procedure UnloadEngine;
-    Function CreateEngine(Kind: TSpellEngineKind): TSpellEngine;
-    Function TryLoadEngine(Kind: TSpellEngineKind): Boolean;
     Function PersonalPath: String;
     Function IssuedMatchesOptions: Boolean;
     Procedure RememberIssuedOptions;
@@ -59,7 +59,7 @@ Type
     Function ResolvedKind: TSpellEngineKind;
     Function IsWordCorrect(Const WordText: String): Boolean;
     Function GetSuggestions(Const WordText: String; MaxCount: Integer): TSpellStringArray;
-    Procedure AddToPersonal(Const WordText: String);
+    Function AddToPersonal(Const WordText: String): Boolean;
     Procedure IgnoreWord(Const WordText: String);
     Procedure DiscoverLanguages(Out Languages: TSpellDiscoveredLanguageArray);
     Function HunspellAvailable: Boolean;
@@ -189,6 +189,9 @@ Begin
   FListeners := TMethodList.Create;
   FEngine := Nil;
   FPreloadThread := Nil;
+  FRetiredPreloads := TFPList.Create;
+  FWordCache := TStringList.Create;
+  FWordCache.Sorted := True; FWordCache.CaseSensitive := True;
   FPreloadSeq := 0;
   FIssuedValid := False;
   FIssuedKind := sekNone;
@@ -202,7 +205,15 @@ End;
 Destructor TSpellCheckerConfig.Destroy;
 Begin
   StopPreload;
+  While FRetiredPreloads.Count > 0 Do
+    Begin
+      TThread(FRetiredPreloads.Last).WaitFor;
+      TThread(FRetiredPreloads.Last).Free;
+      FRetiredPreloads.Delete(FRetiredPreloads.Count - 1);
+    End;
+  FreeAndNil(FRetiredPreloads);
   UnloadEngine;
+  FreeAndNil(FWordCache);
   FreeAndNil(FListeners);
   FreeAndNil(FSessionIgnore);
   FreeAndNil(FPersonal);
@@ -213,6 +224,8 @@ End;
 
 Procedure TSpellCheckerConfig.NotifyChanged;
 Begin
+  EnterCriticalSection(FEngineLock);
+  Try FWordCache.Clear; Finally LeaveCriticalSection(FEngineLock); End;
   FListeners.CallNotifyEvents(Self);
 End;
 
@@ -283,7 +296,11 @@ Begin
 End;
 
 Procedure TSpellCheckerConfig.EnsurePreloaded;
+Var I: Integer;
 Begin
+  For I := FRetiredPreloads.Count - 1 DownTo 0 Do
+    If TThread(FRetiredPreloads[I]).Finished Then
+      Begin TThread(FRetiredPreloads[I]).Free; FRetiredPreloads.Delete(I); End;
   If FOptions.EngineKind = sekNone Then
     Exit;
   If Assigned(FPreloadThread) And IssuedMatchesOptions Then
@@ -296,50 +313,16 @@ Begin
     LeaveCriticalSection(FEngineLock);
   End;
   If Assigned(FPreloadThread) Then
-    StopPreload;
+    Begin
+      FPreloadThread.Terminate;
+      FRetiredPreloads.Add(FPreloadThread);
+      FPreloadThread := Nil;
+    End;
   If Not IssuedMatchesOptions Then
     UnloadEngine;
   RememberIssuedOptions;
   Inc(FPreloadSeq);
   FPreloadThread := TSpellPreloadThread.Create(Self, FPreloadSeq, FIssuedKind, FIssuedLanguage, FIssuedLibrary, FIssuedDict);
-End;
-
-Function TSpellCheckerConfig.CreateEngine(Kind: TSpellEngineKind): TSpellEngine;
-Begin
-  Result := Nil;
-  Case Kind Of
-    sekHunspell:
-      Result := THunspellEngine.Create(FOptions.Language, FOptions.LibraryFileName, FOptions.DictionaryDirectory);
-    sekAspell:
-      Result := TAspellEngine.Create(FOptions.Language, FOptions.LibraryFileName, FOptions.DictionaryDirectory);
-  Else
-    Result := Nil;
-  End;
-End;
-
-Function TSpellCheckerConfig.TryLoadEngine(Kind: TSpellEngineKind): Boolean;
-Var
-  Candidate: TSpellEngine;
-Begin
-  Result := False;
-  Candidate := CreateEngine(Kind);
-  If Not Assigned(Candidate) Then
-    Exit;
-  If Candidate.Load Then
-    Begin
-      EnterCriticalSection(FEngineLock);
-      Try
-        FEngine := Candidate;
-      Finally
-        LeaveCriticalSection(FEngineLock);
-      End;
-      Result := True;
-    End
-  Else
-    Begin
-      FLastStatus := Candidate.LastError;
-      Candidate.Free;
-    End;
 End;
 
 Function TSpellCheckerConfig.PersonalPath: String;
@@ -410,40 +393,30 @@ Begin
 End;
 
 Procedure TSpellCheckerConfig.Apply;
-Var
-  Kind: TSpellEngineKind;
 Begin
-  StopPreload;
-  UnloadEngine;
-  FSessionIgnore.Clear;
   FPersonal.LoadFromFile(PersonalPath);
-  FLastStatus := 'No engine loaded — memo only';
-  Kind := FOptions.EngineKind;
-  If Kind = sekNone Then
+  If FOptions.EngineKind = sekNone Then
     Begin
+      Inc(FPreloadSeq);
+      If Assigned(FPreloadThread) Then
+        Begin
+          FPreloadThread.Terminate; FRetiredPreloads.Add(FPreloadThread); FPreloadThread := Nil;
+        End;
+      UnloadEngine;
       FIssuedValid := False;
-      NotifyChanged;
-      Exit;
-    End;
-  If Kind = sekAuto Then
-    Begin
-      If Not TryLoadEngine(sekHunspell) Then
-        TryLoadEngine(sekAspell);
+      FLastStatus := 'No engine loaded — memo only';
     End
-  Else
-    TryLoadEngine(Kind);
-  If Assigned(FEngine) And FEngine.IsReady Then
-    FLastStatus := SpellEngineKindToText(FEngine.EngineKind) + ' ready (' + FEngine.ResolvedLanguage + ')'
-  Else If FLastStatus = '' Then
-    FLastStatus := 'No engine loaded — memo only';
-  RememberIssuedOptions;
-  If Assigned(WorkflowLogger) Then
-    WorkflowLogger.Info('Spell', FLastStatus);
+  Else EnsurePreloaded;
   NotifyChanged;
 End;
 
 Procedure TSpellCheckerConfig.AssignOptions(Source: TSpellCheckerOptions);
 Begin
+  If Source = Nil Then Exit;
+  If (FOptions.EngineKind = Source.EngineKind) And (FOptions.Language = Source.Language) And
+    (FOptions.LibraryFileName = Source.LibraryFileName) And
+    (FOptions.DictionaryDirectory = Source.DictionaryDirectory) And
+    (FOptions.PersonalFileName = Source.PersonalFileName) Then Exit;
   FOptions.Assign(Source);
   Apply;
 End;
@@ -472,6 +445,7 @@ Begin
 End;
 
 Function TSpellCheckerConfig.IsWordCorrect(Const WordText: String): Boolean;
+Var Index: Integer;
 Begin
   Result := True;
   If Trim(WordText) = '' Then
@@ -480,8 +454,14 @@ Begin
     Exit;
   EnterCriticalSection(FEngineLock);
   Try
+    If FWordCache.Find(WordText, Index) Then
+      Exit(PtrInt(FWordCache.Objects[Index]) = 1);
     If Assigned(FEngine) And FEngine.IsReady Then
-      Result := FEngine.CheckWord(WordText);
+      Begin
+        Result := FEngine.CheckWord(WordText);
+        If FWordCache.Count >= 8192 Then FWordCache.Clear;
+        FWordCache.AddObject(WordText, TObject(PtrInt(Ord(Result))));
+      End;
   Finally
     LeaveCriticalSection(FEngineLock);
   End;
@@ -499,10 +479,18 @@ Begin
   End;
 End;
 
-Procedure TSpellCheckerConfig.AddToPersonal(Const WordText: String);
+Function TSpellCheckerConfig.AddToPersonal(Const WordText: String): Boolean;
+Var ErrorText: String;
 Begin
+  Result := True;
+  If FPersonal.Contains(WordText) Then Exit;
   FPersonal.Add(WordText);
-  FPersonal.SaveToFile(PersonalPath);
+  If Not FPersonal.SaveToFile(PersonalPath, ErrorText) Then
+    Begin
+      FPersonal.Remove(WordText);
+      FLastStatus := 'Could not save personal dictionary: ' + ErrorText;
+      Exit(False);
+    End;
   EnterCriticalSection(FEngineLock);
   Try
     If Assigned(FEngine) And FEngine.IsReady Then

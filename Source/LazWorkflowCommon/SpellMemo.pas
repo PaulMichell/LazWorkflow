@@ -15,7 +15,7 @@ Interface
 
 Uses
   Classes, SysUtils, Controls, StdCtrls, Menus, ExtCtrls, Graphics, Forms, LCLType, LMessages,
-  SpellMemoMarkup;
+  SpellMemoMarkup, SpellWordBreaker;
 
 Type
   TSpellPaintLine = Record
@@ -25,10 +25,19 @@ Type
     Height: Integer;
   End;
   TSpellPaintLineArray = Array Of TSpellPaintLine;
+  TSpellParagraphLayout = Class
+    Text: String;
+    Lines: TSpellPaintLineArray;
+  End;
 
   TSpellMemo = Class(TCustomControl)
   Private
     FText: String;
+    FTokenText: String;
+    FTokens: TSpellTokenArray;
+    FLayoutCache: TStringList;
+    FLayoutWidth, FLayoutHeight, FLayoutBytes: Integer;
+    FLayoutWrap: Boolean;
     FUseSharedConfig: Boolean;
     FWordWrap: Boolean;
     FWantTabs: Boolean;
@@ -95,6 +104,7 @@ Type
     Procedure SetSelText(Const Value: String);
     Function TextAreaWidth: Integer;
     Function LineHeight: Integer;
+    Procedure ClearLayoutCache;
     Procedure RebuildLayout;
     Procedure UpdateScrollBar;
     Procedure ScrollBarChange(Sender: TObject);
@@ -188,7 +198,7 @@ Type
 Implementation
 
 Uses
-  Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellWordBreaker, SpellEngine, WorkflowLog;
+  Dialogs, Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
 
 Constructor TSpellMemo.Create(TheOwner: TComponent);
 Begin
@@ -210,6 +220,8 @@ Begin
   Height := 80;
   FSpellItemCount := 0;
   FSpellItems := TFPList.Create;
+  FLayoutCache := TStringList.Create;
+  FLayoutCache.Sorted := True; FLayoutCache.CaseSensitive := True;
   FActiveStart := 0;
   FActiveLength := 0;
   FOwnedPopup := TPopupMenu.Create(Nil);
@@ -248,6 +260,8 @@ Begin
   FreeAndNil(FCaretTimer);
   FreeAndNil(FOwnedPopup);
   FreeAndNil(FSpellItems);
+  ClearLayoutCache;
+  FreeAndNil(FLayoutCache);
   FreeAndNil(FScrollBar);
   Inherited Destroy;
 End;
@@ -528,9 +542,20 @@ Begin
     Result := 12;
 End;
 
+Procedure TSpellMemo.ClearLayoutCache;
+Var I: Integer;
+Begin
+  If FLayoutCache = Nil Then Exit;
+  For I := 0 To FLayoutCache.Count - 1 Do FLayoutCache.Objects[I].Free;
+  FLayoutCache.Clear;
+  FLayoutBytes := 0;
+End;
+
 Procedure TSpellMemo.RebuildLayout;
 Var
-  Para, Remain: String;
+  Para: String;
+  Cached: TSpellParagraphLayout;
+  CacheIndex, FirstRow, J, Offset: Integer;
   ParaStart, RemainStart, Count, BreakAt, LastSpace, TextPos, WalkPos, CodeLen: Integer;
   UsedWidth, MaxWidth, RowTop, RowH: Integer;
   CodePoint: Cardinal;
@@ -543,6 +568,10 @@ Begin
   RowH := LineHeight;
   MaxWidth := TextAreaWidth;
   Canvas.Font := Font;
+  If (FLayoutWidth <> MaxWidth) Or (FLayoutHeight <> RowH) Or (FLayoutWrap <> FWordWrap) Then ClearLayoutCache;
+  FLayoutWidth := MaxWidth; FLayoutHeight := RowH; FLayoutWrap := FWordWrap;
+  { Bound retained paragraphs; cache keys are the exact text, preserving shaping. }
+  If FLayoutCache.Count > 2048 Then ClearLayoutCache;
   TextPos := 1;
   While True Do
     Begin
@@ -550,9 +579,23 @@ Begin
       While (TextPos <= Length(FText)) And (FText[TextPos] <> #10) Do
         Inc(TextPos);
       Para := Copy(FText, ParaStart, TextPos - ParaStart);
-      Remain := Para;
+      FirstRow := Count;
+      If FLayoutCache.Find(Para, CacheIndex) Then
+        Begin
+          Cached := TSpellParagraphLayout(FLayoutCache.Objects[CacheIndex]);
+          SetLength(FPaintLines, Count + Length(Cached.Lines));
+          For J := 0 To High(Cached.Lines) Do
+            Begin
+              FPaintLines[Count] := Cached.Lines[J];
+              Inc(FPaintLines[Count].ByteStart, ParaStart - 1);
+              FPaintLines[Count].Top := RowTop;
+              Inc(Count); Inc(RowTop, RowH);
+            End;
+        End
+      Else Begin
       RemainStart := ParaStart;
-      If Remain = '' Then
+      Offset := 1;
+      If Para = '' Then
         Begin
           If Count >= Length(FPaintLines) Then
             SetLength(FPaintLines, Count + 16);
@@ -564,22 +607,22 @@ Begin
           Inc(RowTop, RowH);
         End
       Else
-        While Remain <> '' Do
+        While Offset <= Length(Para) Do
           Begin
             If Not FWordWrap Then
-              BreakAt := Length(Remain)
+              BreakAt := (Length(Para) - Offset + 1)
             Else
               Begin
                 UsedWidth := 0;
                 BreakAt := 0;
                 LastSpace := 0;
                 WalkPos := 1;
-                While WalkPos <= Length(Remain) Do
+                While WalkPos <= (Length(Para) - Offset + 1) Do
                   Begin
-                    CodePoint := UTF8CodepointToUnicode(@Remain[WalkPos], CodeLen);
+                    CodePoint := UTF8CodepointToUnicode(@Para[Offset + WalkPos - 1], CodeLen);
                     If CodeLen <= 0 Then
                       Break;
-                    UsedWidth := MeasureAdvance(Copy(Remain, 1, WalkPos + CodeLen - 1));
+                    UsedWidth := MeasureAdvance(Copy(Para, Offset, WalkPos + CodeLen - 1));
                     If (UsedWidth > MaxWidth) And (BreakAt > 0) Then
                       Begin
                         If LastSpace > 0 Then
@@ -587,12 +630,12 @@ Begin
                         Break;
                       End;
                     BreakAt := WalkPos + CodeLen - 1;
-                    If (Remain[WalkPos] = ' ') Or (CodePoint = 9) Then
+                    If (Para[Offset + WalkPos - 1] = ' ') Or (CodePoint = 9) Then
                       LastSpace := BreakAt;
                     Inc(WalkPos, CodeLen);
                   End;
                 If BreakAt <= 0 Then
-                  BreakAt := Length(Remain);
+                  BreakAt := (Length(Para) - Offset + 1);
               End;
             If Count >= Length(FPaintLines) Then
               SetLength(FPaintLines, Count + 16);
@@ -603,8 +646,22 @@ Begin
             Inc(Count);
             Inc(RowTop, RowH);
             Inc(RemainStart, BreakAt);
-            Delete(Remain, 1, BreakAt);
+            Inc(Offset, BreakAt);
           End;
+      If (Length(Para) <= 262144) And (FLayoutBytes + Length(Para) <= 2097152) Then
+      Begin
+      Cached := TSpellParagraphLayout.Create;
+      Cached.Text := Para;
+      SetLength(Cached.Lines, Count - FirstRow);
+      For J := FirstRow To Count - 1 Do
+        Begin
+          Cached.Lines[J - FirstRow] := FPaintLines[J];
+          Dec(Cached.Lines[J - FirstRow].ByteStart, ParaStart - 1);
+        End;
+      FLayoutCache.AddObject(Para, Cached);
+      Inc(FLayoutBytes, Length(Para));
+      End;
+      End;
       If TextPos > Length(FText) Then
         Break;
       If FText[TextPos] = #10 Then
@@ -1114,6 +1171,7 @@ End;
 
 Procedure TSpellMemo.FontChanged(Sender: TObject);
 Begin
+  ClearLayoutCache;
   Inherited FontChanged(Sender);
   If Not CanLayout Then
     Exit;
@@ -1134,12 +1192,14 @@ End;
 
 Procedure TSpellMemo.Paint;
 Var
+  FirstRange: Integer;
   LineIndex, Y, H, X0, SX1, SX2, SelLo, SelHi, ClipLo, ClipHi: Integer;
   FirstChar, AfterChar, Byte0, Byte1, SavedDC: Integer;
   Pixel: TPoint;
   LineText: String;
   RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
 Begin
+  FirstRange := 0;
   If Not FReady Then
     Exit;
   Canvas.Font := Font;
@@ -1217,10 +1277,13 @@ Begin
               Canvas.Font.Color := Font.Color;
             End;
         End;
+      While (FirstRange <= High(FRanges)) And
+        (FRanges[FirstRange].UTF8Start + FRanges[FirstRange].UTF8Length <= LineStart) Do Inc(FirstRange);
       If SpellActive Then
-        For RangeIndex := 0 To High(FRanges) Do
+        For RangeIndex := FirstRange To High(FRanges) Do
           Begin
             RangeStart := FRanges[RangeIndex].UTF8Start;
+            If RangeStart >= LineEnd Then Break;
             RangeEnd := RangeStart + FRanges[RangeIndex].UTF8Length;
             If (RangeEnd <= LineStart) Or (RangeStart >= LineEnd) Then
               Continue;
@@ -1255,7 +1318,9 @@ Begin
       Exit;
     End;
   CaretByte := SpellCharToByteIndex(FText, FSelStart + FSelLength);
-  Tokens := SpellBreakWords(FText);
+  If FTokenText <> FText Then
+    Begin FTokens := SpellBreakWords(FText); FTokenText := FText; End;
+  Tokens := FTokens;
   Count := 0;
   For Index := 0 To High(Tokens) Do
     Begin
@@ -1272,7 +1337,7 @@ Begin
     End;
   SetLength(FRanges, Count);
   If Assigned(WorkflowLogger) Then
-    WorkflowLogger.Info('SpellMemo', Format('Rescan words=%d errors=%d status=%s',
+    WorkflowLogger.Debug('SpellMemo', Format('Rescan words=%d errors=%d status=%s',
       [Length(Tokens), Count, WorkflowSpellConfig.LastStatus]));
   Invalidate;
 End;
@@ -1540,7 +1605,8 @@ End;
 Procedure TSpellMemo.AddClick(Sender: TObject);
 Begin
   If Assigned(WorkflowSpellConfig) And (FActiveToken <> '') Then
-    WorkflowSpellConfig.AddToPersonal(FActiveToken);
+    If Not WorkflowSpellConfig.AddToPersonal(FActiveToken) Then
+      MessageDlg(WorkflowSpellConfig.LastStatus, mtWarning, [mbOK], 0);
 End;
 
 Initialization
