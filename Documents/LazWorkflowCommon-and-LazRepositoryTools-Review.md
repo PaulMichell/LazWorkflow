@@ -236,3 +236,9 @@ The new suite passed with range, overflow and heap checks enabled. `GitStatusPar
 Root commits now show their additions, and both merge path lists and patches use the first parent. The Git runner decodes Unix wait statuses, keeps stderr separate from parsed output, and exposes a command-result snapshot. Missing config keys are successful empty/no-op operations; multi-value unset errors remain failures. Untracked diffs accept exit 1 only when actual diff output is present without error diagnostics. Transfer summaries preserve the transfer's original result across follow-up queries (part of simplification 4).
 
 Validation: the repository package compiled, and `RepositorySafetyTest` passed with range, overflow and heap checks (zero leaks). Added live Git cases for root/merge commits, missing and invalid config, multi-value unset, valid/missing/unreadable untracked files, and failed transfer diagnostics. Existing R1–R5 checks also passed. Interactive GUI and other-platform checks remain outstanding.
+
+## Implementation update: R6 and R7
+
+Partial patch construction now accepts a reverse direction and preserves the index-side context for unstaging. Hunk coordinates account for selected changes across multiple hunks. A shared parsed line model classifies additions/removals using hunk counts, so `--- divider` and `+++ divider` remain changed content. Patch construction, header filtering, selection/colouring, the tree and overview markers use this model. Overview markers are cached when content changes (the diff portion of O3); graph edge indexing remains outstanding.
+
+Validation: the package compiled and the expanded checked `RepositorySafetyTest` passed with zero leaks. Live index tests cover both directions, selecting a replacement or either individual changed line, repeated plus/minus content, separated hunks with unselected line-count changes, and missing final newlines. Interactive selection/rendering validation remains outstanding.

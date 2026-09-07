@@ -5,7 +5,7 @@ Program RepositorySafetyTest;
 
 Uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
-  Classes, SysUtils, Process, LazFileUtils, GitService, GitJobRunner;
+  Classes, SysUtils, Process, LazFileUtils, GitService, GitJobRunner, GitDiffPatch;
 
 Var
   Failures, DetachedCalls: Integer;
@@ -110,6 +110,95 @@ Begin
   WriteFile(Result + '/base.txt', 'base' + #10);
   GitRun(Result, ['add', '.']);
   GitRun(Result, ['commit', '-qm', 'initial']);
+End;
+
+Procedure TestPartialPatches;
+Var
+  Dir, BeforeText, AfterText, Diff, Patch, Expected: String;
+  G: TGitService;
+  Lines: TStringList;
+  Selected: TGitLineNumberList;
+  Parsed: TGitDiffLines;
+  Reverse: Boolean;
+  Direction, Choice, I: Integer;
+Begin
+  Dir := NewRepo('partial');
+  G := TGitService.Create; Lines := TStringList.Create; Selected := TGitLineNumberList.Create;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    BeforeText := 'top' + #10 + '-- divider' + #10 + 'middle' + #10 + 'old' + #10 + 'end' + #10;
+    AfterText := 'top' + #10 + '++ divider' + #10 + 'middle' + #10 + 'new' + #10 + 'end' + #10;
+    WriteFile(Dir + '/patch.txt', BeforeText);
+    GitRun(Dir, ['add', '.']); GitRun(Dir, ['commit', '-qm', 'patch baseline']);
+    For Direction := 0 To 1 Do
+      For Choice := 0 To 2 Do
+        Begin
+          Reverse := Direction = 1;
+          GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+          WriteFile(Dir + '/patch.txt', AfterText);
+          If Reverse Then GitRun(Dir, ['add', '.']);
+          Check('read partial source', G.DiffPath('patch.txt', Reverse, Diff));
+          Lines.Text := Diff; Parsed := ParseGitDiff(Lines); Selected.Clear;
+          For I := 0 To Lines.Count - 1 Do
+            If ((Choice <> 2) And (Lines[I] = '--- divider')) Or
+               ((Choice <> 1) And (Lines[I] = '+++ divider')) Then
+              Begin
+                Check('divider classified as change', Parsed[I].Kind In [dlAdded, dlRemoved]);
+                Selected.Add(I + 1);
+              End;
+          Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, Reverse);
+          Check('apply selected patch direction ' + IntToStr(Direction) + ' choice ' + IntToStr(Choice),
+            G.ApplyPatchToIndex(Patch, Reverse));
+          If Reverse Then
+            Begin
+              Case Choice Of
+                0: Expected := '-- divider';
+                1: Expected := '-- divider' + #10 + '++ divider';
+                2: Expected := '';
+              End;
+              Expected := 'top' + #10 + Expected + #10 + 'middle' + #10 + 'new' + #10 + 'end' + #10;
+            End
+          Else
+            Begin
+              Case Choice Of
+                0: Expected := '++ divider';
+                1: Expected := '';
+                2: Expected := '-- divider' + #10 + '++ divider';
+              End;
+              Expected := 'top' + #10 + Expected + #10 + 'middle' + #10 + 'old' + #10 + 'end' + #10;
+            End;
+          If (Choice = 1) And Not Reverse Or (Choice = 2) And Reverse Then
+            Expected := StringReplace(Expected, 'top' + #10#10, 'top' + #10, []);
+          Check('only selected lines changed', GitRun(Dir, ['show', ':patch.txt']) = Expected);
+        End;
+    { Several separated hunks and a final line without a newline. Select only
+      the last replacement so earlier unselected length changes affect offsets. }
+    BeforeText := 'first' + #10;
+    For I := 1 To 30 Do BeforeText := BeforeText + 'context ' + IntToStr(I) + #10;
+    BeforeText := BeforeText + 'last';
+    AfterText := StringReplace(BeforeText, 'first', 'first' + #10 + 'extra', []);
+    AfterText := StringReplace(AfterText, 'last', 'changed', []);
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    WriteFile(Dir + '/patch.txt', BeforeText); GitRun(Dir, ['add', '.']);
+    GitRun(Dir, ['commit', '-qm', 'separated baseline']);
+    For Direction := 0 To 1 Do
+      Begin
+        Reverse := Direction = 1;
+        GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+        WriteFile(Dir + '/patch.txt', AfterText);
+        If Reverse Then GitRun(Dir, ['add', '.']);
+        Diff := GitRun(Dir, ['diff', '-U3', '--', 'patch.txt']);
+        If Reverse Then Diff := GitRun(Dir, ['diff', '--cached', '-U3', '--', 'patch.txt']);
+        Lines.Text := Diff; Selected.Clear;
+        For I := 0 To Lines.Count - 1 Do
+          If (Lines[I] = '-last') Or (Lines[I] = '+changed') Then Selected.Add(I + 1);
+        Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, Reverse);
+        Check('separated hunks and no newline apply', G.ApplyPatchToIndex(Patch, Reverse));
+        If Reverse Then Expected := StringReplace(AfterText, 'changed', 'last', [])
+        Else Expected := StringReplace(BeforeText, 'last', 'changed', []);
+        Check('separated hunk contents', GitRun(Dir, ['show', ':patch.txt']) = Expected);
+      End;
+  Finally Selected.Free; Lines.Free; G.Free; End;
 End;
 
 Procedure TestCommandResults;
@@ -481,6 +570,7 @@ Begin
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestPartialPatches;
       TestCommandResults;
       TestLiteralPaths;
       TestRename;

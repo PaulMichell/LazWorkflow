@@ -82,6 +82,7 @@ Type
     FOnStatusChanged: TNotifyEvent;
     FOnSelectionChanged: TNotifyEvent;
     OverviewGutter: TSynGutterLineOverview;
+    FDisplayedLines: TGitDiffLines;
     DiffOverviewProvider: TObject; { TGitDiffOverviewProvider – avoid circular iface }
     OwnedLangHigh: TObject; { TLazEditCustomHighlighter, private instance }
     MixedHigh: TObject; { TGitMixedDiffHighlighter; Create(Nil) — never Self-owned (would stream into host LFM) }
@@ -174,7 +175,7 @@ Type
     Procedure ShowSelectedBrowseFile;
     Procedure ScrollToFirstChangeCentered;
     Procedure DoScrollToFirstChangeAsync(Data: PtrInt);
-    Function IsDiffChangeLine(Const Line: String): Boolean;
+    Function IsDiffChangeLine(LineNo: Integer): Boolean;
     Function IsAlive: Boolean;
   Public
     Constructor Create(TheOwner: TComponent); Override;
@@ -770,6 +771,9 @@ End;
 
 Procedure TGitDiffView.ClearDisplayMap;
 Begin
+  FDisplayedLines := Nil;
+  If Assigned(DiffOverviewProvider) Then
+    TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
   If Assigned(HunkStartLines) Then
@@ -784,6 +788,8 @@ Var
   LineText: String;
   NeedNewHunk: Boolean;
 Begin
+  If Assigned(DiffOverviewProvider) Then
+    TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
   If Assigned(HunkStartLines) Then
     HunkStartLines.Clear;
   If (Not Assigned(DiffEditor)) Or (Not Assigned(HunkStartLines)) Or (DiffEditor.Lines.Count = 0) Then
@@ -794,7 +800,7 @@ Begin
   For LineNo := 1 To DiffEditor.Lines.Count Do
     Begin
       LineText := DiffEditor.Lines[LineNo - 1];
-      If IsDiffChangeLine(LineText) Then
+      If IsDiffChangeLine(LineNo) Then
         Begin
           If NeedNewHunk Or (ContextRun >= HunkContextGap) Then
             HunkStartLines.Add(LineNo);
@@ -816,6 +822,7 @@ Var
   Full, Display: TStringList;
   I, FullLineNo: Integer;
   Line: String;
+  Parsed: TGitDiffLines;
 Begin
   ClearDisplayMap;
   If Not Assigned(DiffEditor) Then
@@ -823,6 +830,7 @@ Begin
   If Not HideFileHeaders Then
     Begin
       DiffEditor.Lines.Text := DiffText;
+      FDisplayedLines := ParseGitDiff(DiffEditor.Lines);
       RebuildVisualHunkStarts;
       Exit;
     End;
@@ -831,18 +839,22 @@ Begin
   Display := TStringList.Create;
   Try
     Full.Text := DiffText;
+    Parsed := ParseGitDiff(Full);
     SetLength(FDisplayToFull, Full.Count);
+    SetLength(FDisplayedLines, Full.Count);
     For I := 0 To Full.Count - 1 Do
       Begin
         Line := Full[I];
         FullLineNo := I + 1;
         { Drop file meta and git @@ headers — visual rules mark hunks instead. }
-        If LineIsDiffFileMeta(Line) Or LineIsHunkHeader(Line) Then
+        If Parsed[I].Kind In [dlMeta, dlHunk] Then
           Continue;
         Display.Add(Line);
+        FDisplayedLines[Display.Count - 1] := Parsed[I];
         FDisplayToFull[Display.Count - 1] := FullLineNo;
       End;
     SetLength(FDisplayToFull, Display.Count);
+    SetLength(FDisplayedLines, Display.Count);
     FUseDisplayMap := True;
     DiffEditor.Lines.Assign(Display);
     RebuildVisualHunkStarts;
@@ -1148,7 +1160,7 @@ Begin
   For LineNo := Lo To Hi Do
     Begin
       LineText := DiffEditor.Lines[LineNo - 1];
-      If IsDiffChangeLine(LineText) Then
+      If IsDiffChangeLine(LineNo) Then
         AddLineToSelection(LineNo);
     End;
   DiffEditor.Invalidate;
@@ -1656,7 +1668,7 @@ Begin
   LineSelected := (FMode = dvmEditorOnly) And IsLineSelected(Line);
 
   { Selected change lines: classic selection look (blue + white) so they read clearly. }
-  If LineSelected And IsDiffChangeLine(LineText) Then
+  If LineSelected And IsDiffChangeLine(Line) Then
     Begin
       Special := True;
       FG := clWhite;
@@ -1664,13 +1676,13 @@ Begin
       Exit;
     End;
 
-  If LineIsDiffAdded(LineText) Then
+  If IsDiffChangeLine(Line) And (LineText[1] = '+') Then
     Begin
       Special := True;
       FG := RGBToColor(27, 94, 32);
       BG := RGBToColor(232, 245, 233);
     End
-  Else If LineIsDiffRemoved(LineText) Then
+  Else If IsDiffChangeLine(Line) And (LineText[1] = '-') Then
     Begin
       Special := True;
       FG := RGBToColor(183, 28, 28);
@@ -1752,13 +1764,13 @@ Begin
   FLineDragMoved := False;
   FLineDragCtrl := ssCtrl in Shift;
   FLineDragAnchor := LineNo;
-  FLineDragWasSelected := IsDiffChangeLine(LineText) And IsLineSelected(LineNo);
+  FLineDragWasSelected := IsDiffChangeLine(LineNo) And IsLineSelected(LineNo);
   LineDragSnapshot.Clear;
   If FLineDragCtrl And Assigned(SelectedLines) Then
     For I := 0 To SelectedLines.Count - 1 Do
       LineDragSnapshot.Add(SelectedLines[I]);
 
-  If IsDiffChangeLine(LineText) Then
+  If IsDiffChangeLine(LineNo) Then
     Begin
       If Not FLineDragCtrl Then
         Begin
@@ -1833,7 +1845,7 @@ Begin
       If (LineNo >= 1) And (LineNo <= DiffEditor.Lines.Count) Then
         Begin
           LineText := DiffEditor.Lines[LineNo - 1];
-          If IsDiffChangeLine(LineText) Then
+          If IsDiffChangeLine(LineNo) Then
             Begin
               If FLineDragCtrl Then
                 ToggleLineSelection(LineNo)
@@ -1939,9 +1951,10 @@ Begin
   UpdateActionEnabled;
 End;
 
-Function TGitDiffView.IsDiffChangeLine(Const Line: String): Boolean;
+Function TGitDiffView.IsDiffChangeLine(LineNo: Integer): Boolean;
 Begin
-  Result := LineIsDiffAdded(Line) Or LineIsDiffRemoved(Line);
+  Result := (LineNo >= 1) And (LineNo <= Length(FDisplayedLines)) And
+    (FDisplayedLines[LineNo - 1].Kind In [dlAdded, dlRemoved]);
 End;
 
 Procedure TGitDiffView.ScrollToFirstChangeCentered;
@@ -1953,7 +1966,7 @@ Begin
   EnsureDiffOverviewGutter;
   Line := 0;
   For I := 0 To DiffEditor.Lines.Count - 1 Do
-    If IsDiffChangeLine(DiffEditor.Lines[I]) Then
+    If IsDiffChangeLine(I + 1) Then
       Begin
         Line := I + 1;
         Break;
@@ -2069,7 +2082,7 @@ Begin
           For I := 0 To SelectedLines.Count - 1 Do
             SelectedFull.Add(SelectedLines[I]);
       End;
-    Result := BuildGitPartialPatch(Lines, FirstLine, LastLine, SelectedFull);
+    Result := BuildGitPartialPatch(Lines, FirstLine, LastLine, SelectedFull, FStagedSide);
   Finally
     SelectedFull.Free;
     Lines.Free;
@@ -2187,7 +2200,7 @@ Begin
         If (LineNo < 1) Or (LineNo > DiffEditor.Lines.Count) Then
           Continue;
         LineText := DiffEditor.Lines[LineNo - 1];
-        If IsDiffChangeLine(LineText) Then
+        If IsDiffChangeLine(LineNo) Then
           ChangeLines.Add(LineNo);
       End;
     If ChangeLines.Count = 0 Then
@@ -2455,6 +2468,7 @@ Var
   Root, FileNode, HunkNode, LineNode: TTreeNode;
   FileRange, HunkRange, LineRange: PGitDiffRange;
   InFile: Boolean;
+  Parsed: TGitDiffLines;
 
   Procedure CloseHunkAt(EndLine: Integer);
   Begin
@@ -2486,10 +2500,13 @@ Begin
     ClearTreeData;
     FDiffText := DiffText;
     DiffEditor.Lines.Text := DiffText;
+    FDisplayedLines := ParseGitDiff(DiffEditor.Lines);
+    RebuildVisualHunkStarts;
 
     Lines := TStringList.Create;
     Try
       Lines.Text := DiffText;
+      Parsed := ParseGitDiff(Lines);
       Root := Tree.Items.Add(Nil, 'Diff');
       FileRange := NewRange(1, '', 'All');
       FileRange^.EndLine := Lines.Count;
@@ -2505,8 +2522,7 @@ Begin
           LineNo := I + 1;
           Line := Lines[I];
 
-          If (Copy(Line, 1, 11) = 'diff --git ') Or (Copy(Line, 1, 4) = '--- ') Or
-             ((Copy(Line, 1, 4) = '+++ ') And Not InFile) Then
+          If Parsed[I].Kind = dlMeta Then
             Begin
               If Copy(Line, 1, 11) = 'diff --git ' Then
                 Begin
@@ -2542,7 +2558,7 @@ Begin
                     End;
                 End;
             End
-          Else If Copy(Line, 1, 2) = '@@' Then
+          Else If Parsed[I].Kind = dlHunk Then
             Begin
               CloseHunkAt(LineNo - 1);
               If Not Assigned(FileNode) Then
@@ -2555,8 +2571,7 @@ Begin
               HunkNode := Tree.Items.AddChild(FileNode, Line);
               HunkNode.Data := HunkRange;
             End
-          Else If Assigned(HunkNode) And ((Copy(Line, 1, 1) = '+') Or (Copy(Line, 1, 1) = '-')) And
-                  (Copy(Line, 1, 3) <> '+++') And (Copy(Line, 1, 3) <> '---') Then
+          Else If Assigned(HunkNode) And (Parsed[I].Kind In [dlAdded, dlRemoved]) Then
             Begin
               LineRange := NewRange(LineNo, Path, Line);
               LineRange^.EndLine := LineNo;

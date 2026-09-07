@@ -38,6 +38,10 @@ Type
   { Right-gutter overview markers: green for added lines, red for removed. }
   TGitDiffOverviewProvider = Class(TSynGutterLineOverviewProvider)
   Private
+    FMarkers: Array Of Record
+      LineNo: Integer;
+      Added: Boolean;
+    End;
     FColorAdded: TColor;
     FColorRemoved: TColor;
     RGBAdded: TColor;
@@ -48,6 +52,7 @@ Type
     Procedure Paint(Canvas: TCanvas; AClip: TRect; TopOffset: Integer); Override;
   Public
     Constructor Create(AOwner: TComponent); Override;
+    Procedure SetLines(Const Lines: TGitDiffLines);
     Property ColorAdded: TColor Read FColorAdded Write SetColorAdded;
     Property ColorRemoved: TColor Read FColorRemoved Write SetColorRemoved;
   End;
@@ -259,12 +264,26 @@ Begin
   DoChange(Self);
 End;
 
+Procedure TGitDiffOverviewProvider.SetLines(Const Lines: TGitDiffLines);
+Var I, Count: Integer;
+Begin
+  SetLength(FMarkers, Length(Lines)); Count := 0;
+  For I := 0 To High(Lines) Do
+    If Lines[I].Kind In [dlAdded, dlRemoved] Then
+      Begin
+        FMarkers[Count].LineNo := I + 1;
+        FMarkers[Count].Added := Lines[I].Kind = dlAdded;
+        Inc(Count);
+      End;
+  SetLength(FMarkers, Count);
+  DoChange(Self);
+End;
+
 Procedure TGitDiffOverviewProvider.Paint(Canvas: TCanvas; AClip: TRect; TopOffset: Integer);
 Var
-  LineNo, Y1, Y2, Count, ClipTop, ClipBottom: Integer;
-  LineText: String;
+  I, LineNo, Y1, Y2, Count, ClipTop, ClipBottom: Integer;
   R: TRect;
-  IsAdd, IsDel: Boolean;
+  IsAdd: Boolean;
 Begin
   If (SynEdit = Nil) Or (SynEdit.Lines = Nil) Then
     Exit;
@@ -278,13 +297,10 @@ Begin
   R.Left := AClip.Left + Max(1, (AClip.Right - AClip.Left) Div 4);
   R.Right := AClip.Right - Max(1, (AClip.Right - AClip.Left) Div 4);
 
-  For LineNo := 1 To Count Do
+  For I := 0 To High(FMarkers) Do
     Begin
-      LineText := SynEdit.Lines[LineNo - 1];
-      IsAdd := LineIsDiffAdded(LineText);
-      IsDel := LineIsDiffRemoved(LineText);
-      If Not (IsAdd Or IsDel) Then
-        Continue;
+      LineNo := FMarkers[I].LineNo;
+      IsAdd := FMarkers[I].Added;
 
       Y1 := TextLineToPixel(LineNo);
       Y2 := TextLineToPixelEnd(LineNo);
