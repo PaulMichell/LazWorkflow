@@ -48,14 +48,18 @@ Type
     ParentLane: Integer;
   End;
 
+  TGitEdgeIndices = Array Of Integer;
+
   TGitGraphModel = Class
   Private
     FCommits: Array Of TGitCommitRec;
     FEdges: Array Of TGitGraphEdge;
     FCount: Integer;
     FEdgeCount: Integer;
+    FEdgeMaxParent: Array Of Integer;
     FLaneCount: Integer;
     FShaIndex: TFPDataHashTable;
+    Function BuildEdgeIntervals(Node, First, Last: Integer): Integer;
     Procedure ClearIndex;
     Procedure EnsureCapacity(MinCount: Integer);
     Procedure EnsureEdgeCapacity(MinCount: Integer);
@@ -75,6 +79,7 @@ Type
     Function CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
     Procedure RebuildLayout;
     Function Commit(Index: Integer): TGitCommitRec;
+    Function VisibleEdges(FirstRow, LastRow: Integer): TGitEdgeIndices;
     Function Edge(Index: Integer): TGitGraphEdge;
     { RowHeight / LeftMargin / LaneWidth must already be DPI-scaled device pixels. }
     Function TotalHeight(RowHeight: Integer): Integer;
@@ -114,6 +119,7 @@ Begin
   ClearIndex;
   SetLength(FCommits, 0);
   SetLength(FEdges, 0);
+  FEdgeMaxParent := Nil;
   FCount := 0;
   FEdgeCount := 0;
   FLaneCount := 0;
@@ -439,6 +445,43 @@ Begin
         FEdges[FEdgeCount].ParentLane := FCommits[ParentIdx].Lane;
         Inc(FEdgeCount);
       End;
+  SetLength(FEdgeMaxParent, FEdgeCount * 4);
+  If FEdgeCount > 0 Then BuildEdgeIntervals(0, 0, FEdgeCount - 1);
+End;
+
+Function TGitGraphModel.BuildEdgeIntervals(Node, First, Last: Integer): Integer;
+Var Mid, LeftMax, RightMax: Integer;
+Begin
+  If First = Last Then Result := FEdges[First].ParentIndex
+  Else
+    Begin
+      Mid := First + (Last - First) Div 2;
+      LeftMax := BuildEdgeIntervals(Node * 2 + 1, First, Mid);
+      RightMax := BuildEdgeIntervals(Node * 2 + 2, Mid + 1, Last);
+      If LeftMax > RightMax Then Result := LeftMax Else Result := RightMax;
+    End;
+  FEdgeMaxParent[Node] := Result;
+End;
+
+Function TGitGraphModel.VisibleEdges(FirstRow, LastRow: Integer): TGitEdgeIndices;
+Var Found: Integer;
+  Procedure Visit(Node, First, Last: Integer);
+  Var Mid: Integer;
+  Begin
+    If (FEdgeMaxParent[Node] < FirstRow) Or (FEdges[First].ChildIndex > LastRow) Then Exit;
+    If First = Last Then
+      Begin
+        If Found = Length(Result) Then SetLength(Result, Found * 2 + 16);
+        Result[Found] := First; Inc(Found); Exit;
+      End;
+    Mid := First + (Last - First) Div 2;
+    Visit(Node * 2 + 1, First, Mid);
+    Visit(Node * 2 + 2, Mid + 1, Last);
+  End;
+Begin
+  Result := Nil; Found := 0;
+  If (FEdgeCount > 0) And (LastRow >= FirstRow) Then Visit(0, 0, FEdgeCount - 1);
+  SetLength(Result, Found);
 End;
 
 Procedure TGitGraphModel.RebuildLayout;

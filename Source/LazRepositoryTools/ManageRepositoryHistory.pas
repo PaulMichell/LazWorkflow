@@ -436,6 +436,7 @@ Var
   TextH, TextY, EdgePenW, MsgPad: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
+  Visible: TGitEdgeIndices;
   Col: TColor;
   LabelText, DateText: String;
 Begin
@@ -485,9 +486,10 @@ Begin
         End;
 
       Pen.Width := EdgePenW;
-      For I := 0 To FModel.EdgeCount - 1 Do
+      Visible := FModel.VisibleEdges(FirstRow, LastRow);
+      For I := 0 To High(Visible) Do
         Begin
-          E := FModel.Edge(I);
+          E := FModel.Edge(Visible[I]);
           If (E.ChildIndex > LastRow) Or (E.ParentIndex < FirstRow) Then
             Continue;
           Col := FLaneColors[FModel.LaneColorIndex(E.ChildLane)];

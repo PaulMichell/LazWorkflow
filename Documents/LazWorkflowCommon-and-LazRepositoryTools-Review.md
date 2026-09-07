@@ -274,3 +274,9 @@ Validation: package compilation, checked `SpellCheckerTest` and new checked `Spe
 Commit path lists, selected commit diffs, working-tree/index diffs and image/blob reads now run as background jobs. Views cancel superseded reads, reject results using repository and request generation, and detach callbacks during destruction. The files pane delegates previews to the view instead of issuing Git commands. Unchanged text results preserve the displayed selection and scroll state during polling.
 
 Validation: package compilation and checked repository tests passed with zero leaks. New job tests exercise commit lists/diffs, clean text and byte previews; the existing cancellation/detachment stress cases still pass. Static search finds no direct Git service calls remaining in `GitDiffView` or `ManageRepositoryFiles`. Interactive selection latency and image rendering remain unmeasured.
+
+## Implementation update: graph edge indexing (O3)
+
+The graph model builds an interval index over child-ordered edges. Viewport queries prune edge ranges whose parents are above the viewport or children below it, while retaining long crossing edges. Painting consumes only returned edge indices. The diff overview cache was completed with R6/R7.
+
+Validation: package compilation and checked `GitGraphModelTest` passed with zero leaks. A synthetic 50,000-commit / 50,099-edge graph matched a full scan across 301 viewports. On this Linux machine, 2,000 viewport queries took 5 ms indexed versus 747 ms scanning all edges, with range/overflow/heap checks enabled. This measures model queries, not end-to-end GUI rendering.
