@@ -85,6 +85,7 @@ Type
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
     { One process: HEAD, branch, and a digest of porcelain v2 --branch output. }
+    Function RefDigest(Out Digest: String): Boolean;
     Function ProbeRepository(Out HeadSha, Branch, Digest: String): Boolean;
     Function ListStatus(Out Entries: TGitStatusEntryArray; IncludeUntracked: Boolean = False;
       IncludeIgnored: Boolean = False): Boolean;
@@ -174,10 +175,45 @@ Procedure ParseGitStatusPorcelainV1Z(Const Raw: String; Out Entries: TGitStatusE
 Var
   GitClient: TGitService;
 
+{ Union status with absolute tracked paths, preserving raw Git filenames. }
+Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
+  Tracked: TStrings): TGitStatusEntryArray;
+
 Implementation
 
 Uses
   LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+
+Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
+  Tracked: TStrings): TGitStatusEntryArray;
+Var
+  Paths: TStringList;
+  I, N: Integer;
+  Root, Rel: String;
+Begin
+  Result := Copy(Entries);
+  N := Length(Result);
+  If Assigned(Tracked) Then SetLength(Result, N + Tracked.Count);
+  Paths := TStringList.Create;
+  Try
+    Paths.Sorted := True; Paths.Duplicates := dupIgnore;
+    Paths.CaseSensitive := FileNameCaseSensitive;
+    For I := 0 To High(Entries) Do Paths.Add(Entries[I].Path);
+    Root := IncludeTrailingPathDelimiter(ExpandFileName(RepoPath));
+    If Assigned(Tracked) Then
+      For I := 0 To Tracked.Count - 1 Do
+        Begin
+          If CompareFilenames(Copy(Tracked[I], 1, Length(Root)), Root) <> 0 Then Continue;
+          Rel := Copy(Tracked[I], Length(Root) + 1, MaxInt);
+          {$IFDEF WINDOWS}Rel := StringReplace(Rel, '\', '/', [rfReplaceAll]);{$ENDIF}
+          If (Rel = '') Or (Paths.IndexOf(Rel) >= 0) Then Continue;
+          Paths.Add(Rel);
+          Result[N].Path := Rel; Result[N].IndexStatus := ' '; Result[N].WorkTreeStatus := ' ';
+          Inc(N);
+        End;
+    SetLength(Result, N);
+  Finally Paths.Free; End;
+End;
 
 Function DirectoryIsEmpty(Const Dir: String): Boolean;
 Var
@@ -677,6 +713,12 @@ Begin
     End;
 End;
 
+Function TGitService.RefDigest(Out Digest: String): Boolean;
+Var Code: Integer;
+Begin
+  Result := RunGit(['for-each-ref', '--format=%(refname) %(objectname)', '--sort=refname'], Digest, Code);
+End;
+
 Function TGitService.ProbeRepository(Out HeadSha, Branch, Digest: String): Boolean;
 Var
   OutputText, Line: String;
@@ -797,6 +839,7 @@ Begin
   Paths := TStringList.Create;
   Paths.Sorted := True;
   Paths.Duplicates := dupIgnore;
+  Paths.CaseSensitive := FileNameCaseSensitive;
   Result := RunGit(['-c', 'core.quotePath=false', 'ls-files', '-z'], Raw, ExitCode);
   If Not Result Then
     Exit;

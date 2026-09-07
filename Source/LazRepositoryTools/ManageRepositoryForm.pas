@@ -165,6 +165,7 @@ Type
     FStatusGen: Integer;
     FStatusJobPending: Boolean;
     FProbePending: Boolean;
+    FCachedGitDir, FRefsDigest: String;
     FLastPorcelain: String;
     FLastHeadAge: LongInt;
     FLastIndexAge: LongInt;
@@ -623,6 +624,8 @@ Begin
     MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
 End;
 
+Function StatusDigestIsClean(Const Digest: String): Boolean; Forward;
+
 Procedure TManageRepositoryForm.GitJobFinished(Job: TGitJob);
 Var
   Msg: String;
@@ -770,7 +773,7 @@ Begin
             Exit;
           End;
         If Job.Ok Then
-          FFiles.ApplyFromStatus(Job.StatusEntries)
+          FFiles.ApplyFromStatus(Job.StatusEntries, Job.TrackedFiles)
         Else
           Begin
             If Assigned(FilesList) Then
@@ -800,16 +803,28 @@ Begin
     gjkRepoProbe:
       Begin
         FProbePending := False;
-        If Job.Cancelled Or Not Job.Ok Then
-          Exit;
+        If Job.Cancelled Or Not Job.Ok Then Exit;
+        FCachedGitDir := Job.GitDir;
+        FClean := StatusDigestIsClean(Job.ProbeDigest);
         If (Job.ResultSha <> FHeadSha) Or (Job.ProbeBranch <> FBranch) Or
-           (Job.ProbeDigest <> FLastPorcelain) Then
+          (Job.RefsDigest <> FRefsDigest) Then
           Begin
-            WorkflowLogger.Debug('ManageRepository', 'Auto-refresh: repository changed');
+            FRefsDigest := Job.RefsDigest;
+            FHeadSha := Job.ResultSha; FBranch := Job.ProbeBranch;
+            FLastPorcelain := Job.ProbeDigest;
             ManualRefresh;
           End
         Else
-          UpdateStatus;
+          Begin
+            If Job.ProbeDigest <> FLastPorcelain Then
+              Begin
+                FLastPorcelain := Job.ProbeDigest;
+                RefreshFiles;
+              End
+            Else If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
+              FFiles.RefreshSelectedDiff;
+            UpdateStatus;
+          End;
       End;
     gjkIndexHistory:
       Begin
@@ -1151,6 +1166,7 @@ Begin
   Job.RepoPath := FRepoPath;
   Job.Caption := 'Refreshing files…';
   Job.Tag := FStatusGen;
+  Job.IncludeClean := Assigned(CleanCheck) And CleanCheck.Checked;
   Job.IncludeUntracked := Assigned(UntrackedCheck) And UntrackedCheck.Checked;
   Job.IncludeIgnored := Assigned(IgnoredCheck) And IgnoredCheck.Checked;
   FStatusJobPending := True;
@@ -1664,12 +1680,9 @@ Var
   HeadAge, IndexAge: LongInt;
 Begin
   Result := False;
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
+  If FCachedGitDir = '' Then
     Exit;
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.GetGitDir(GitDir) Then
-    Exit;
-  GitDir := IncludeTrailingPathDelimiter(GitDir);
+  GitDir := IncludeTrailingPathDelimiter(FCachedGitDir);
   HeadAge := FileAge(GitDir + 'HEAD');
   IndexAge := FileAge(GitDir + 'index');
   If (HeadAge <> FLastHeadAge) Or (IndexAge <> FLastIndexAge) Then
@@ -1777,24 +1790,8 @@ Begin
 End;
 
 Procedure TManageRepositoryForm.RefreshRepositoryInfo;
-Var
-  Branch, Sha, Digest: String;
 Begin
-  FBranch := '';
-  FHeadSha := '';
-  FClean := True;
-  FLastPorcelain := '';
-  If (FRepoPath = '') Or Not Assigned(GitClient) Then
-    Exit;
-
-  GitClient.RepoPath := FRepoPath;
-  If GitClient.ProbeRepository(Sha, Branch, Digest) Then
-    Begin
-      FHeadSha := Sha;
-      FBranch := Branch;
-      FLastPorcelain := Digest;
-      FClean := StatusDigestIsClean(Digest);
-    End;
+  QuietRefreshIfChanged;
 End;
 
 Procedure TManageRepositoryForm.BindRepository(Const StartPath: String);
@@ -1839,6 +1836,8 @@ Begin
   If CompareFilenames(NewPath, FRepoPath) <> 0 Then
     Begin
       Inc(FRepoGeneration);
+      FCachedGitDir := ''; FRefsDigest := '';
+      FHeadSha := ''; FBranch := ''; FLastPorcelain := ''; FClean := True;
       FStatusJobPending := False;
       FProbePending := False;
       FRemoteOpBusy := False;

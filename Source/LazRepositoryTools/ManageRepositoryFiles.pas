@@ -15,6 +15,7 @@ Uses
 Type
   TManageFilesPane = Class
   Private
+    FLastFromStaged: Boolean;
     FFilesPaths: TStringList;
     FStagedPaths: TStringList;
     Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
@@ -38,7 +39,8 @@ Type
     Function CollectSelected(List: TListBox; Paths: TStringList): TStringList;
     Function CollectActiveSelected: TStringList;
     Procedure ClearForNoRepo;
-    Procedure ApplyFromStatus(Const Entries: TGitStatusEntryArray);
+    Procedure ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
+    Procedure RefreshSelectedDiff;
     Procedure ShowSelectedDiff(FromStaged: Boolean);
     Property FilesPaths: TStringList Read FFilesPaths;
     Property StagedPaths: TStringList Read FStagedPaths;
@@ -53,7 +55,9 @@ Constructor TManageFilesPane.Create;
 Begin
   Inherited Create;
   FFilesPaths := TStringList.Create;
+  FFilesPaths.CaseSensitive := FileNameCaseSensitive;
   FStagedPaths := TStringList.Create;
+  FStagedPaths.CaseSensitive := FileNameCaseSensitive;
   RepoPath := '';
 End;
 
@@ -106,6 +110,7 @@ Var
   I: Integer;
 Begin
   Result := TStringList.Create;
+  Result.CaseSensitive := FileNameCaseSensitive;
   Result.Duplicates := dupIgnore;
   Result.Sorted := False;
   If (List = Nil) Or (Paths = Nil) Then
@@ -187,136 +192,48 @@ Begin
     Result := True;
 End;
 
-Procedure TManageFilesPane.ApplyFromStatus(Const Entries: TGitStatusEntryArray);
+Procedure TManageFilesPane.ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
 Var
-  AllFiles, StatusMap, FullyStaged, Tracked: TStringList;
+  AllEntries: TGitStatusEntryArray;
+  SavedFiles, SavedStaged: TStringList;
   I: Integer;
-  FullPath, Rel, Root, StatusText: String;
-  Idx: Integer;
-  EntryStatus: String;
-  WantClean: Boolean;
+  StatusText: String;
 Begin
-  Tracked := Nil;
-  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
-    Exit;
-
-  FilesList.Items.BeginUpdate;
-  StagedList.Items.BeginUpdate;
+  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then Exit;
+  SavedFiles := CollectSelected(FilesList, FFilesPaths);
+  SavedStaged := CollectSelected(StagedList, FStagedPaths);
+  FilesList.Items.BeginUpdate; StagedList.Items.BeginUpdate;
   Try
-    FilesList.Items.Clear;
-    StagedList.Items.Clear;
-    FFilesPaths.Clear;
-    FStagedPaths.Clear;
-
-    If (RepoPath = '') Or Not DirectoryExists(RepoPath) Then
+    FilesList.Items.Clear; StagedList.Items.Clear;
+    FFilesPaths.Clear; FStagedPaths.Clear;
+    AllEntries := MergeGitFileEntries(RepoPath, Entries, Tracked);
+    For I := 0 To High(AllEntries) Do
       Begin
-        FilesList.Items.Add('(no repository)');
-        Exit;
+        If GitStatusEntryIsStaged(AllEntries[I]) Then
+          Begin
+            StagedList.Items.Add(GitStatusEntryLabel(AllEntries[I], True));
+            FStagedPaths.Add(AllEntries[I].Path);
+          End;
+        If GitStatusEntryIsStaged(AllEntries[I]) And Not GitStatusEntryIsUnstaged(AllEntries[I]) Then Continue;
+        StatusText := DescribeFileStatus(AllEntries[I].IndexStatus, AllEntries[I].WorkTreeStatus);
+        If Not FileStatusPassesFilter(StatusText) Then Continue;
+        FilesList.Items.Add(AllEntries[I].Path + '  ' + StatusText);
+        FFilesPaths.Add(AllEntries[I].Path);
       End;
-
-    Root := IncludeTrailingPathDelimiter(ExpandFileName(RepoPath));
-    StatusMap := TStringList.Create;
-    FullyStaged := TStringList.Create;
-    AllFiles := TStringList.Create;
-    Try
-      { Filenames may contain '='. Git rejects ASCII control characters in paths. }
-      StatusMap.NameValueSeparator := #1;
-      StatusMap.Sorted := True;
-      StatusMap.Duplicates := dupIgnore;
-      StatusMap.CaseSensitive := FileNameCaseSensitive;
-      FullyStaged.Sorted := True;
-      FullyStaged.Duplicates := dupIgnore;
-      FullyStaged.CaseSensitive := FileNameCaseSensitive;
-
-      For I := 0 To High(Entries) Do
-        Begin
-          Rel := StringReplace(Entries[I].Path, '\', '/', [rfReplaceAll]);
-          EntryStatus := DescribeFileStatus(Entries[I].IndexStatus, Entries[I].WorkTreeStatus);
-          StatusMap.Values[Rel] := EntryStatus;
-          If GitStatusEntryIsStaged(Entries[I]) Then
-            Begin
-              StagedList.Items.Add(GitStatusEntryLabel(Entries[I], True));
-              FStagedPaths.Add(Rel);
-              If Not GitStatusEntryIsUnstaged(Entries[I]) Then
-                FullyStaged.Add(Rel);
-            End;
-        End;
-
-      WantClean := Assigned(CleanCheck) And CleanCheck.Checked;
-      AllFiles.Sorted := True;
-      AllFiles.Duplicates := dupIgnore;
-      If WantClean And Assigned(GitClient) Then
-        Begin
-          GitClient.RepoPath := RepoPath;
-          If GitClient.ListTrackedFiles(Tracked) Then
-            AllFiles.AddStrings(Tracked);
-          Tracked.Free;
-        End
-      Else
-        For I := 0 To StatusMap.Count - 1 Do
-          AllFiles.Add(Root + StringReplace(StatusMap.Names[I], '/', DirectorySeparator, [rfReplaceAll]));
-      For I := 0 To AllFiles.Count - 1 Do
-        Begin
-          FullPath := ExpandFileName(AllFiles[I]);
-          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
-          If Pos('/.git/', Rel + '/') > 0 Then
-            Continue;
-          If CompareFilenames(Copy(FullPath, 1, Length(Root)), Root) = 0 Then
-            Delete(FullPath, 1, Length(Root))
-          Else
-            Continue;
-          Rel := StringReplace(FullPath, '\', '/', [rfReplaceAll]);
-          If Rel = '' Then
-            Continue;
-          If FullyStaged.IndexOf(Rel) >= 0 Then
-            Continue;
-          Idx := StatusMap.IndexOfName(Rel);
-          If Idx >= 0 Then
-            StatusText := StatusMap.ValueFromIndex[Idx]
-          Else
-            StatusText := 'clean';
-          If Not FileStatusPassesFilter(StatusText) Then
-            Continue;
-          FilesList.Items.Add(Rel + '  ' + StatusText);
-          FFilesPaths.Add(Rel);
-        End;
-
-      For I := 0 To StatusMap.Count - 1 Do
-        Begin
-          Rel := StatusMap.Names[I];
-          If Rel = '' Then
-            Continue;
-          If FullyStaged.IndexOf(Rel) >= 0 Then
-            Continue;
-          StatusText := StatusMap.ValueFromIndex[I];
-          If Not FileStatusPassesFilter(StatusText) Then
-            Continue;
-          FullPath := Root + StringReplace(Rel, '/', DirectorySeparator, [rfReplaceAll]);
-          If FileExists(FullPath) Then
-            Continue;
-          If FFilesPaths.IndexOf(Rel) < 0 Then
-            Begin
-              FilesList.Items.Add(Rel + '  ' + StatusText);
-              FFilesPaths.Add(Rel);
-            End;
-        End;
-
-      If FilesList.Items.Count = 0 Then
-        FilesList.Items.Add('(no files)');
-    Finally
-      AllFiles.Free;
-      FullyStaged.Free;
-      StatusMap.Free;
-    End;
+    For I := 0 To FFilesPaths.Count - 1 Do FilesList.Selected[I] := SavedFiles.IndexOf(FFilesPaths[I]) >= 0;
+    For I := 0 To FStagedPaths.Count - 1 Do StagedList.Selected[I] := SavedStaged.IndexOf(FStagedPaths[I]) >= 0;
+    If FilesList.Items.Count = 0 Then FilesList.Items.Add('(no files)');
   Finally
-    FilesList.Items.EndUpdate;
-    StagedList.Items.EndUpdate;
+    StagedList.Items.EndUpdate; FilesList.Items.EndUpdate;
+    SavedFiles.Free; SavedStaged.Free;
   End;
+  If Assigned(StagedLabel) Then StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
+  RefreshSelectedDiff;
+End;
 
-  If Assigned(StagedLabel) Then
-    StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
-  If Assigned(FilesDiffView) Then
-    FilesDiffView.Clear;
+Procedure TManageFilesPane.RefreshSelectedDiff;
+Begin
+  ShowSelectedDiff(FLastFromStaged);
 End;
 
 Procedure TManageFilesPane.ShowSelectedDiff(FromStaged: Boolean);
@@ -326,6 +243,7 @@ Var
   I: Integer;
   DiffText, Path, Title, Content: String;
 Begin
+  FLastFromStaged := FromStaged;
   If Not Assigned(FilesDiffView) Then
     Exit;
   If FromStaged Then

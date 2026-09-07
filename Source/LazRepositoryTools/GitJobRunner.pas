@@ -66,6 +66,9 @@ Type
     FResultSha: String;
     FTransfer: TGitTransferSummary;
     FStatusEntries: TGitStatusEntryArray;
+    FTrackedFiles: TStringList;
+    FIncludeClean: Boolean;
+    FGitDir, FRefsDigest: String;
     FIncludeUntracked: Boolean;
     FIncludeIgnored: Boolean;
     FQuiet: Boolean;
@@ -106,6 +109,10 @@ Type
     Property ResultSha: String Read FResultSha;
     Property Transfer: TGitTransferSummary Read FTransfer;
     Property StatusEntries: TGitStatusEntryArray Read FStatusEntries;
+    Property TrackedFiles: TStringList Read FTrackedFiles;
+    Property IncludeClean: Boolean Read FIncludeClean Write FIncludeClean;
+    Property RefsDigest: String Read FRefsDigest;
+    Property GitDir: String Read FGitDir;
     Property IncludeUntracked: Boolean Read FIncludeUntracked Write FIncludeUntracked;
     Property IncludeIgnored: Boolean Read FIncludeIgnored Write FIncludeIgnored;
     { Quiet jobs skip the busy cursor / footer so auto-refresh does not steal the UI. }
@@ -252,6 +259,7 @@ End;
 Destructor TGitJob.Destroy;
 Begin
   FreeAndNil(FPaths);
+  FreeAndNil(FTrackedFiles);
   Inherited Destroy;
 End;
 
@@ -645,6 +653,8 @@ Begin
       Begin
         Job.FOk := Git.Commit(Job.CommitMessage, NewSha);
         Job.FResultSha := NewSha;
+        If Job.FOk Then Job.FOk := Git.RefDigest(Job.FRefsDigest);
+        If Job.FOk Then Git.GetGitDir(Job.FGitDir);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
@@ -706,14 +716,19 @@ Begin
       Begin
         Job.FOk := Git.ListStatus(Entries, Job.IncludeUntracked, Job.IncludeIgnored);
         If Job.FOk Then
-          Job.FStatusEntries := Entries
-        Else
+          Begin
+            Job.FStatusEntries := Entries;
+            If Job.IncludeClean Then Job.FOk := Git.ListTrackedFiles(Job.FTrackedFiles);
+          End;
+        If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
     gjkRepoProbe:
       Begin
         Job.FOk := Git.ProbeRepository(NewSha, Job.FProbeBranch, Job.FProbeDigest);
         Job.FResultSha := NewSha;
+        If Job.FOk Then Job.FOk := Git.RefDigest(Job.FRefsDigest);
+        If Job.FOk Then Git.GetGitDir(Job.FGitDir);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;

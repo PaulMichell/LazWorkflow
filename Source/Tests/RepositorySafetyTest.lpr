@@ -112,6 +112,42 @@ Begin
   GitRun(Result, ['commit', '-qm', 'initial']);
 End;
 
+Procedure TestFileUnion;
+Var
+  Entries, Merged: TGitStatusEntryArray;
+  Tracked: TStringList;
+  Dir, Sha, Branch, Digest, SecondDigest: String;
+  G: TGitService;
+Begin
+  Dir := NewRepo('file-union');
+  SetLength(Entries, 4);
+  Entries[0].Path := 'untracked.txt'; Entries[0].IndexStatus := '?'; Entries[0].WorkTreeStatus := '?';
+  Entries[1].Path := 'ignored/'; Entries[1].IndexStatus := '!'; Entries[1].WorkTreeStatus := '!';
+  Entries[2].Path := 'deleted.txt'; Entries[2].IndexStatus := ' '; Entries[2].WorkTreeStatus := 'D';
+  Entries[3].Path := 'control' + #1 + '=name'; Entries[3].OldPath := 'old';
+  Entries[3].IndexStatus := 'R'; Entries[3].WorkTreeStatus := ' ';
+  Tracked := TStringList.Create; G := TGitService.Create;
+  Try
+    Tracked.Add(Dir + '/base.txt'); Tracked.Add(Dir + '/deleted.txt');
+    Tracked.Add(Dir + '/control' + #1 + '=name');
+    Merged := MergeGitFileEntries(Dir, Entries, Tracked);
+    Check('tracked/status union retains all categories once', Length(Merged) = 5);
+    Check('raw control path and rename source retained', (Merged[3].Path = Entries[3].Path) And (Merged[3].OldPath = 'old'));
+    Check('clean record added', (Merged[4].Path = 'base.txt') And (Merged[4].WorkTreeStatus = ' '));
+    {$IFDEF UNIX}
+    Tracked.Add(Dir + '/literal\name');
+    Merged := MergeGitFileEntries(Dir, Entries, Tracked);
+    Check('Unix backslash retained', Merged[5].Path = 'literal\name');
+    {$ENDIF}
+    G.RepoPath := Dir; G.PublishEvents := False;
+    WriteFile(Dir + '/base.txt', 'first edit');
+    Check('first dirty probe', G.ProbeRepository(Sha, Branch, Digest));
+    WriteFile(Dir + '/base.txt', 'second edit');
+    Check('second dirty probe', G.ProbeRepository(Sha, Branch, SecondDigest));
+    Check('preview polling must not depend on porcelain change', Digest = SecondDigest);
+  Finally G.Free; Tracked.Free; End;
+End;
+
 Procedure TestPartialPatches;
 Var
   Dir, BeforeText, AfterText, Diff, Patch, Expected: String;
@@ -570,6 +606,7 @@ Begin
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestFileUnion;
       TestPartialPatches;
       TestCommandResults;
       TestLiteralPaths;
