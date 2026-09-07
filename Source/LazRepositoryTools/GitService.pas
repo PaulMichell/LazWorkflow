@@ -30,10 +30,18 @@ Type
     Message: String;
   End;
 
+  TGitCommandResult = Record
+    Success: Boolean;
+    ExitCode: Integer;
+    Signalled: Boolean;
+    OutputText, ErrorText: String;
+  End;
+
   TGitService = Class
   Private
     FRepoPath: String;
     FLastError: String;
+    FLastCommand: TGitCommandResult;
     FCancelled: Boolean;
     FPublishEvents: Boolean;
     FActiveProcess: TProcess;
@@ -46,9 +54,9 @@ Type
     Function RunTimedOut(StartTick: QWord): Boolean;
     { Shared execute/drain/cancel/timeout. MergeStderr captures git messages in OutStream. }
     Function RunGitPump(Const WorkDir: String; Const Args: Array Of String;
-      OutStream: TStream; MergeStderr: Boolean; Out ExitCode: Integer): Boolean;
+      OutStream: TStream; Out ExitCode: Integer): Boolean;
     Function RunGit(Const Args: Array Of String; Out OutputText: String;
-      Out ExitCode: Integer): Boolean;
+      Out ExitCode: Integer; IncludeDiagnostics: Boolean = False): Boolean;
     Function RunGitEx(Const WorkDir: String; Const Args: Array Of String;
       Out OutputText: String; Out ExitCode: Integer): Boolean;
     Function RunGitBinary(Const Args: Array Of String; Stream: TStream;
@@ -148,6 +156,7 @@ Type
     Function SetDescription(Const Description: String): Boolean;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property LastError: String Read FLastError;
+    Property LastCommand: TGitCommandResult Read FLastCommand;
     Property Cancelled: Boolean Read FCancelled;
     { When False, skip WorkflowEventBus publishes (background job workers must not touch UI). }
     Property PublishEvents: Boolean Read FPublishEvents Write FPublishEvents;
@@ -168,7 +177,7 @@ Var
 Implementation
 
 Uses
-  LazFileUtils;
+  LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Function DirectoryIsEmpty(Const Dir: String): Boolean;
 Var
@@ -335,17 +344,20 @@ Begin
 End;
 
 Function TGitService.RunGitPump(Const WorkDir: String; Const Args: Array Of String;
-  OutStream: TStream; MergeStderr: Boolean; Out ExitCode: Integer): Boolean;
+  OutStream: TStream; Out ExitCode: Integer): Boolean;
 Var
   Proc: TProcess;
   I, BytesRead: Integer;
   Buf: Array[0..8191] Of Byte;
   StartTick: QWord;
   TimedOut: Boolean;
+  ErrorStream: TStringStream;
 Begin
   Result := False;
   ExitCode := -1;
   FLastError := '';
+  FLastCommand := Default(TGitCommandResult);
+  FLastCommand.ExitCode := -1;
   TimedOut := False;
   StartTick := GetTickCount64;
   Buf[Low(Buf)] := 0;
@@ -363,6 +375,7 @@ Begin
     End;
 
   Proc := TProcess.Create(Nil);
+  ErrorStream := TStringStream.Create('');
   Try
     Proc.Executable := 'git';
     Proc.CurrentDirectory := WorkDir;
@@ -370,8 +383,7 @@ Begin
       console for git.exe. Credential Manager is a separate GUI and does not
       need this window; status belongs on the Manage form. }
     Proc.Options := [poUsePipes, poNoConsole];
-    If MergeStderr Then
-      Proc.Options := Proc.Options + [poStderrToOutPut];
+
     Proc.ShowWindow := swoHIDE;
     Proc.Parameters.Clear;
     { Every path API takes filenames, never user-supplied Git patterns. }
@@ -383,7 +395,7 @@ Begin
       SetActiveProcess(Proc);
       Proc.Execute;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or
-            ((Not MergeStderr) And (Proc.Stderr.NumBytesAvailable > 0)) Do
+            (Proc.Stderr.NumBytesAvailable > 0) Do
         Begin
           If IsCancelled Or RunTimedOut(StartTick) Then
             Begin
@@ -400,10 +412,13 @@ Begin
               If BytesRead > 0 Then
                 OutStream.WriteBuffer(Buf[0], BytesRead);
             End;
-          If (Not MergeStderr) And (Proc.Stderr.NumBytesAvailable > 0) Then
-            Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+          If Proc.Stderr.NumBytesAvailable > 0 Then
+            Begin
+              BytesRead := Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+              If BytesRead > 0 Then ErrorStream.WriteBuffer(Buf[0], BytesRead);
+            End;
           If Proc.Running And (Proc.Output.NumBytesAvailable = 0) And
-             (MergeStderr Or (Proc.Stderr.NumBytesAvailable = 0)) Then
+             (Proc.Stderr.NumBytesAvailable = 0) Then
             Sleep(1);
         End;
       While Proc.Output.NumBytesAvailable > 0 Do
@@ -414,11 +429,21 @@ Begin
           Else
             Break;
         End;
-      If Not MergeStderr Then
-        While Proc.Stderr.NumBytesAvailable > 0 Do
-          If Proc.Stderr.Read(Buf[0], SizeOf(Buf)) <= 0 Then
-            Break;
+      While Proc.Stderr.NumBytesAvailable > 0 Do
+        Begin
+          BytesRead := Proc.Stderr.Read(Buf[0], SizeOf(Buf));
+          If BytesRead <= 0 Then Break;
+          ErrorStream.WriteBuffer(Buf[0], BytesRead);
+        End;
+      FLastCommand.ErrorText := ErrorStream.DataString;
+      {$IFDEF UNIX}
+      FLastCommand.Signalled := Not WIFEXITED(Proc.ExitStatus);
+      If FLastCommand.Signalled Then ExitCode := -1
+      Else ExitCode := WEXITSTATUS(Proc.ExitStatus);
+      {$ELSE}
       ExitCode := Proc.ExitStatus;
+      {$ENDIF}
+      FLastCommand.ExitCode := ExitCode;
       If TimedOut Then
         Begin
           FLastError := 'Timed out';
@@ -433,7 +458,8 @@ Begin
         Begin
           Result := ExitCode = 0;
           If Not Result Then
-            FLastError := Format('git %s exited %d', [Args[0], ExitCode]);
+            FLastError := Format('git %s exited %d', [Args[0], ExitCode]) +
+              ': ' + Trim(FLastCommand.ErrorText);
         End;
     Except
       On E: Exception Do
@@ -444,7 +470,10 @@ Begin
         End;
     End;
   Finally
+    FLastCommand.ErrorText := ErrorStream.DataString;
+    FLastCommand.Success := Result;
     ClearActiveProcess;
+    ErrorStream.Free;
     Proc.Free;
   End;
 End;
@@ -457,10 +486,11 @@ Begin
   OutputText := '';
   Mem := TMemoryStream.Create;
   Try
-    Result := RunGitPump(WorkDir, Args, Mem, True, ExitCode);
+    Result := RunGitPump(WorkDir, Args, Mem, ExitCode);
     SetLength(OutputText, Mem.Size);
     If Mem.Size > 0 Then
       Move(Mem.Memory^, OutputText[1], Mem.Size);
+    FLastCommand.OutputText := OutputText;
     If (Not Result) And (FLastError <> 'Timed out') And (FLastError <> 'Cancelled') And
        (Pos('Failed to run git:', FLastError) <> 1) Then
       Begin
@@ -475,15 +505,17 @@ Begin
 End;
 
 Function TGitService.RunGit(Const Args: Array Of String; Out OutputText: String;
-  Out ExitCode: Integer): Boolean;
+  Out ExitCode: Integer; IncludeDiagnostics: Boolean): Boolean;
 Begin
   Result := RunGitEx(FRepoPath, Args, OutputText, ExitCode);
+  If IncludeDiagnostics And (FLastCommand.ErrorText <> '') Then
+    OutputText := OutputText + LineEnding + FLastCommand.ErrorText;
 End;
 
 Function TGitService.RunGitBinary(Const Args: Array Of String; Stream: TStream;
   Out ExitCode: Integer): Boolean;
 Begin
-  Result := RunGitPump(FRepoPath, Args, Stream, False, ExitCode);
+  Result := RunGitPump(FRepoPath, Args, Stream, ExitCode);
 End;
 
 Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
@@ -1264,23 +1296,23 @@ Begin
     Exit;
   ContextFlag := '-U' + IntToStr(DiffContextLines(Path, '', Staged));
   If Staged Then
-    Result := RunGit(['diff', '--cached', ContextFlag, '--', Path], DiffText, ExitCode)
+    Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--cached', ContextFlag, '--', Path], DiffText, ExitCode)
   Else
     Begin
-      Result := RunGit(['diff', ContextFlag, '--', Path], DiffText, ExitCode);
+      Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', ContextFlag, '--', Path], DiffText, ExitCode);
       { Empty worktree diff: only synthesise "new file" for untracked paths.
         Clean tracked files must stay empty so the UI can show plain content. }
       If Result And (Trim(DiffText) = '') And (Not IsPathTracked(Path)) Then
         Begin
-          Result := RunGit(['diff', '--no-index', ContextFlag, '--',
+          Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', ContextFlag, '--',
             {$IFDEF WINDOWS}'NUL'{$ELSE}'/dev/null'{$ENDIF}, Path], DiffText, ExitCode);
-          { git --no-index returns 1 when files differ; treat non-empty output as success. }
-          If (Not Result) And (Trim(DiffText) <> '') Then
-            Result := True;
+          { Exit 1 means files differ; diagnostics and other failures are not a diff. }
+          If (ExitCode = 1) And (FLastCommand.ErrorText = '') And
+            (DiffText <> '') And Not IsCancelled And (FLastError <> 'Timed out') Then
+            Begin Result := True; FLastError := ''; End;
         End;
     End;
-  If (Not Result) And (ExitCode = 0) Then
-    Result := True;
+
 End;
 
 Function TGitService.DiffStaged(Out DiffText: String): Boolean;
@@ -1290,10 +1322,7 @@ Begin
   DiffText := '';
   { Exit 0 with empty body is a valid "nothing staged" result. }
   Result := RunGit(['diff', '--cached', '--stat', '-p', '--no-color'], DiffText, ExitCode);
-  If (Not Result) And (ExitCode = 0) Then
-    Result := True;
-  If Result And (ExitCode <> 0) And (Trim(DiffText) = '') Then
-    Result := False;
+
 End;
 
 Function TGitService.StatusSummaryForCommit(Out SummaryText: String): Boolean;
@@ -1583,18 +1612,23 @@ Function TGitService.Fetch(Out Summary: TGitTransferSummary; Const Remote: Strin
 Var
   OutputText: String;
   ExitCode: Integer;
-  RemoteName: String;
+  RemoteName, OperationError: String;
+  OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
   RemoteName := Remote;
   If RemoteName = '' Then
     RemoteName := 'origin';
-  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode);
+  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode, True);
+  OperationError := FLastError;
+  OperationResult := FLastCommand;
   BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
   If Result Then
     EmitRemoteUpdated(RemoteName)
   Else
-    Summary.Message := 'Fetch failed: ' + FLastError;
+    Summary.Message := 'Fetch failed: ' + OperationError;
+  FLastError := OperationError;
+  FLastCommand := OperationResult;
 End;
 
 Function TGitService.Pull(Out Summary: TGitTransferSummary; Const Remote: String;
@@ -1603,7 +1637,8 @@ Var
   OutputText: String;
   ExitCode: Integer;
   Args: Array Of String;
-  RemoteName: String;
+  RemoteName, OperationError: String;
+  OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
   RemoteName := Remote;
@@ -1613,12 +1648,16 @@ Begin
     Args := ['pull', RemoteName]
   Else
     Args := ['pull', RemoteName, Branch];
-  Result := RunGit(Args, OutputText, ExitCode);
+  Result := RunGit(Args, OutputText, ExitCode, True);
+  OperationError := FLastError;
+  OperationResult := FLastCommand;
   BuildTransferSummary('Pull', RemoteName, OutputText, Summary);
   If Result Then
     EmitWorkingTreeChanged
   Else
-    Summary.Message := 'Pull failed: ' + FLastError;
+    Summary.Message := 'Pull failed: ' + OperationError;
+  FLastError := OperationError;
+  FLastCommand := OperationResult;
 End;
 
 Function TGitService.Push(Out Summary: TGitTransferSummary; Const Remote: String;
@@ -1627,7 +1666,8 @@ Var
   OutputText: String;
   ExitCode, Ahead: Integer;
   Args: Array Of String;
-  RemoteName: String;
+  RemoteName, OperationError: String;
+  OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
   RemoteName := Remote;
@@ -1638,7 +1678,9 @@ Begin
     Args := ['push', '--porcelain', RemoteName, 'HEAD']
   Else
     Args := ['push', '--porcelain', RemoteName, Branch];
-  Result := RunGit(Args, OutputText, ExitCode);
+  Result := RunGit(Args, OutputText, ExitCode, True);
+  OperationError := FLastError;
+  OperationResult := FLastCommand;
   BuildTransferSummary('Push', RemoteName, OutputText, Summary);
   If Result Then
     Begin
@@ -1653,7 +1695,9 @@ Begin
         End;
     End
   Else
-    Summary.Message := 'Push failed: ' + FLastError;
+    Summary.Message := 'Push failed: ' + OperationError;
+  FLastError := OperationError;
+  FLastCommand := OperationResult;
 End;
 
 Function TGitService.InitRepository(Const Path: String): Boolean;
@@ -1857,7 +1901,7 @@ Begin
   { diff-tree vs first parent (and --root for the initial commit). git show uses a
     combined merge diff, which is empty for a clean merge. }
   If Not RunGit(['-c', 'core.quotePath=false', 'diff-tree', '--no-commit-id', '--name-only',
-    '-r', '-z', '--root', Sha], Text, ExitCode) Then
+    '-r', '-z', '--root', '--diff-merges=first-parent', Sha], Text, ExitCode) Then
     Exit;
   Cursor := 1;
   While Cursor <= Length(Text) Do
@@ -1877,7 +1921,8 @@ Begin
   Result := False;
   If (Sha = '') Or (Path = '') Then
     Exit;
-  Result := RunGit(['diff-tree', '-p', '--find-renames',
+  Result := RunGit(['diff-tree', '--root', '--diff-merges=first-parent', '--no-commit-id',
+    '--no-color', '--no-ext-diff', '--no-textconv', '-p', '--find-renames',
     '-U' + IntToStr(DiffContextLines(Path, Sha, False)), Sha, '--', Path], DiffText, ExitCode);
 End;
 
@@ -1933,7 +1978,8 @@ Begin
       Value := Trim(OutputText);
       Result := True;
     End
-  Else If ExitCode = 1 Then
+  Else If (ExitCode = 1) And Not IsCancelled And
+    (FLastError <> 'Timed out') And (FLastCommand.ErrorText = '') Then
     Begin
       Value := '';
       FLastError := '';
@@ -1959,7 +2005,8 @@ Begin
     Args := ['config', '--global', '--unset', Key];
   If RunGit(Args, OutputText, ExitCode) Then
     Result := True
-  Else If (ExitCode = 5) Or (ExitCode = 1) Then
+  Else If ((ExitCode = 5) Or (ExitCode = 1)) And Not IsCancelled And
+    (FLastError <> 'Timed out') And (FLastCommand.ErrorText = '') Then
     Begin
       { Key was not set — already unset. }
       FLastError := '';

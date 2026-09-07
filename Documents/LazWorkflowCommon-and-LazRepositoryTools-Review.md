@@ -230,3 +230,9 @@ Added [RepositorySafetyTest.lpr](../Source/Tests/RepositorySafetyTest.lpr), whic
 - Detachment of running and queued callbacks, cancellation without cancelling an unrelated successor, and 100 batches totalling 1,600 rapid jobs to exercise transition timing.
 
 The new suite passed with range, overflow and heap checks enabled. `GitStatusParseTest` and `SpellCheckerTest` also passed, with both spell engines exercised. `Packages/LazRepositoryTools.pas` compiled successfully against the installed Lazarus dependencies, with compiler outputs kept in `/tmp`. `git diff --check` passed. The transition stress test does not exhaust all possible thread schedules; no interactive IDE or Windows/macOS validation was performed.
+
+## Implementation update: R8, R10 and R11
+
+Root commits now show their additions, and both merge path lists and patches use the first parent. The Git runner decodes Unix wait statuses, keeps stderr separate from parsed output, and exposes a command-result snapshot. Missing config keys are successful empty/no-op operations; multi-value unset errors remain failures. Untracked diffs accept exit 1 only when actual diff output is present without error diagnostics. Transfer summaries preserve the transfer's original result across follow-up queries (part of simplification 4).
+
+Validation: the repository package compiled, and `RepositorySafetyTest` passed with range, overflow and heap checks (zero leaks). Added live Git cases for root/merge commits, missing and invalid config, multi-value unset, valid/missing/unreadable untracked files, and failed transfer diagnostics. Existing R1–R5 checks also passed. Interactive GUI and other-platform checks remain outstanding.

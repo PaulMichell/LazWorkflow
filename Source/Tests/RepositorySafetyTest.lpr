@@ -112,6 +112,54 @@ Begin
   GitRun(Result, ['commit', '-qm', 'initial']);
 End;
 
+Procedure TestCommandResults;
+Var
+  Dir, Diff, Value: String;
+  G: TGitService;
+  Paths: TStringList;
+  Summary: TGitTransferSummary;
+Begin
+  Dir := NewRepo('results');
+  G := TGitService.Create;
+  Paths := Nil;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    Check('missing config read succeeds', G.GetConfigValue('review.missing', True, Value));
+    Check('missing config is empty', (Value = '') And (G.LastError = '') And (G.LastCommand.ExitCode = 1));
+    Check('missing config unset succeeds', G.UnsetConfigValue('review.missing', True));
+    Check('unset code decoded', G.LastCommand.ExitCode = 5);
+    Check('invalid config fails', Not G.GetConfigValue('invalid', True, Value));
+    Check('config diagnostics separate', (G.LastCommand.ErrorText <> '') And (Value = ''));
+    GitRun(Dir, ['config', '--add', 'review.multiple', 'one']);
+    GitRun(Dir, ['config', '--add', 'review.multiple', 'two']);
+    Check('multiple config values cannot silently unset', Not G.UnsetConfigValue('review.multiple', True));
+    Check('root commit diff', G.ShowCommitPathDiff('HEAD', 'base.txt', Diff) And (Pos('+base', Diff) > 0));
+    GitRun(Dir, ['checkout', '-qb', 'side']);
+    WriteFile(Dir + '/side.txt', 'side' + #10);
+    GitRun(Dir, ['add', '.']); GitRun(Dir, ['commit', '-qm', 'side']);
+    GitRun(Dir, ['checkout', '-q', 'main']);
+    WriteFile(Dir + '/main.txt', 'main' + #10);
+    GitRun(Dir, ['add', '.']); GitRun(Dir, ['commit', '-qm', 'main']);
+    GitRun(Dir, ['merge', '-q', '--no-edit', 'side']);
+    Check('merge paths query', G.ListCommitPaths('HEAD', Paths));
+    Check('merge compared to first parent', (Paths.Count = 1) And (Paths[0] = 'side.txt'));
+    Check('merge file diff', G.ShowCommitPathDiff('HEAD', 'side.txt', Diff) And (Pos('+side', Diff) > 0));
+    WriteFile(Dir + '/new.txt', 'new' + #10);
+    Check('untracked diff succeeds', G.DiffPath('new.txt', False, Diff) And (Pos('+new', Diff) > 0));
+    Check('missing diff fails', Not G.DiffPath('missing.txt', False, Diff));
+    Check('diagnostics do not become diff', (Diff = '') And (G.LastCommand.ErrorText <> ''));
+    {$IFDEF UNIX}
+    WriteFile(Dir + '/unreadable.txt', 'hidden'); fpChmod(Dir + '/unreadable.txt', 0);
+    If fpGetEUid <> 0 Then
+      Check('unreadable diff fails', Not G.DiffPath('unreadable.txt', False, Diff));
+    fpChmod(Dir + '/unreadable.txt', &600);
+    {$ENDIF}
+    Check('failed transfer', Not G.Fetch(Summary, 'missing-remote'));
+    Check('transfer preserves diagnostics', (G.LastCommand.ErrorText <> '') And
+      (Pos(G.LastError, Summary.Message) > 0));
+  Finally Paths.Free; G.Free; End;
+End;
+
 Procedure TestLiteralPaths;
 Var
   Dir, Diff, Indexed: String;
@@ -433,6 +481,7 @@ Begin
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestCommandResults;
       TestLiteralPaths;
       TestRename;
       TestIgnorePaths;
