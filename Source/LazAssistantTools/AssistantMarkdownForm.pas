@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, ActnList, StatusFooterFrame;
+  ComCtrls, ActnList, StatusFooterFrame, StyledControls, StyledMarkdown;
 
 Type
   TMarkdownViewMode = (mvmPreview, mvmSource);
@@ -53,7 +53,8 @@ Type
     FViewMode: TMarkdownViewMode;
     FDiskAge: LongInt;
     FPendingDiskReload: Boolean;
-    PreviewControl: TControl; { TMarkDownControl created at runtime. }
+    PreviewControl: TStyledMemo;
+    PreviewLoader: TStyledMarkdown;
     Procedure EnsurePreview;
     Procedure ApplyViewMode;
     Procedure UpdateCaption;
@@ -64,8 +65,6 @@ Type
     Function LoadFromDisk: Boolean;
     Function SaveToDisk: Boolean;
     Procedure ApplyPreviewText(Const Body: String);
-    Procedure HandlePreviewOpenURL(Sender: TObject; LinkUrl: String);
-    Procedure HandlePreviewGetImage(Sender: TObject; Const ImageUrl: String; Var Image: TPicture);
     Procedure NotifyDocumentChanged;
     Procedure NotifyDocumentSaved;
   Public
@@ -91,21 +90,10 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LCLIntf, FileUtil, LazFileUtils, MarkDown.Control, MarkDown.CanvasRender, MarkDown.Elements,
-  MarkDown.Render, WorkflowLog, WorkflowEvents, LazIDEIntf, ProjectIntf;
+  LazFileUtils, WorkflowLog, WorkflowEvents, LazIDEIntf, ProjectIntf;
 
 Const
   PreviewContentMargin = 4;
-
-Type
-  { Canvas renderer omits frontmatter (HTML/LaTeX register a no-op; canvas does not).
-    Docs with YAML/TOML/JSON --- frontmatter otherwise raise "No renderer for block class". }
-  TCanvasMarkDownFrontmatterBlockRenderer = Class(TCanvasMarkDownBlockRenderer)
-  Protected
-    Procedure DoRender(Block: TMarkDownBlock); Override;
-  Public
-    Class Function BlockClass: TMarkDownBlockClass; Override;
-  End;
 
 Var
   MarkdownForms: TList;
@@ -223,6 +211,7 @@ Begin
   FDiskAge := -1;
   FPendingDiskReload := False;
   PreviewControl := Nil;
+  PreviewLoader := Nil;
 End;
 
 Procedure TAssistantMarkdownForm.FormCreate(Sender: TObject);
@@ -243,6 +232,7 @@ Var
 Begin
   WatchTimer.Enabled := False;
   DebounceTimer.Enabled := False;
+  FreeAndNil(PreviewLoader);
   If Assigned(MarkdownForms) Then
     Begin
       I := MarkdownForms.IndexOf(Self);
@@ -263,29 +253,23 @@ Begin
 End;
 
 Procedure TAssistantMarkdownForm.EnsurePreview;
-Var
-  Control: TMarkDownControl;
 Begin
   If Assigned(PreviewControl) Then
     Exit;
   PreviewHost.Color := clWhite;
   PreviewHost.ParentColor := False;
   PreviewHost.ParentBackground := False;
-  Control := TMarkDownControl.Create(Self);
-  Control.Parent := PreviewHost;
-  Control.Align := alClient;
-  Control.BorderSpacing.Around := PreviewContentMargin;
-  Control.Color := clWhite;
-  Control.ParentColor := False;
-  Control.ParentBackground := False;
-  Control.ScrollBars := ssAutoBoth;
-  Control.ParentFont := False;
-  Control.MonoFontName := 'Monospace';
-  Control.FontName := 'default';
-  Control.OnOpenURL := @HandlePreviewOpenURL;
-  Control.OnGetImage := @HandlePreviewGetImage;
-  Control.Visible := True;
-  PreviewControl := Control;
+  PreviewControl := TStyledMemo.Create(Self);
+  PreviewControl.Parent := PreviewHost;
+  PreviewControl.Align := alClient;
+  PreviewControl.BorderSpacing.Around := PreviewContentMargin;
+  PreviewControl.Color := clWhite;
+  PreviewControl.ParentColor := False;
+  PreviewControl.ReadOnly := True;
+  PreviewControl.WordWrap := True;
+  PreviewControl.ParentFont := False;
+  PreviewControl.Visible := True;
+  PreviewLoader := TStyledMarkdown.Create(PreviewControl);
 End;
 
 Procedure TAssistantMarkdownForm.ApplyViewMode;
@@ -373,35 +357,15 @@ Begin
   End;
 End;
 
-Procedure TCanvasMarkDownFrontmatterBlockRenderer.DoRender(Block: TMarkDownBlock);
-Begin
-  { Metadata only — no visible canvas output. }
-  If Block = Nil Then
-    Exit;
-End;
-
-Class Function TCanvasMarkDownFrontmatterBlockRenderer.BlockClass: TMarkDownBlockClass;
-Begin
-  Result := TMarkdownFrontmatterBlock;
-End;
-
 Procedure TAssistantMarkdownForm.ApplyPreviewText(Const Body: String);
-Var
-  Control: TMarkDownControl;
 Begin
   EnsurePreview;
-  Control := TMarkDownControl(PreviewControl);
-  Control.MarkDown.BeginUpdate;
   Try
-    Try
-      Control.MarkDown.Text := Body;
-    Except
-      { Leave an empty preview rather than a half-laid-out control. }
-      Control.MarkDown.Text := '';
-      Raise;
-    End;
-  Finally
-    Control.MarkDown.EndUpdate;
+    PreviewLoader.LoadFromString(Body);
+  Except
+    { Leave an empty preview rather than a half-laid-out control. }
+    PreviewLoader.LoadFromString('');
+    Raise;
   End;
 End;
 
@@ -525,49 +489,6 @@ Begin
     WorkflowEventBus.NotifyDocumentSaved(FFileName);
 End;
 
-Procedure TAssistantMarkdownForm.HandlePreviewOpenURL(Sender: TObject; LinkUrl: String);
-Var
-  Target: String;
-Begin
-  Target := Trim(LinkUrl);
-  If Target = '' Then
-    Exit;
-  { Relative links resolve against the document directory. }
-  If (Pos('://', Target) = 0) And (FFileName <> '') Then
-    Begin
-      If Target[1] <> PathDelim Then
-        Target := ExpandFileName(ExtractFilePath(FFileName) + Target);
-    End;
-  If FileExists(Target) And
-    ((CompareText(ExtractFileExt(Target), '.md') = 0) Or
-     (CompareText(ExtractFileExt(Target), '.markdown') = 0) Or
-     (CompareText(ExtractFileExt(Target), '.mdown') = 0)) Then
-    OpenMarkdownDocument(Target)
-  Else
-    OpenURL(LinkUrl);
-End;
-
-Procedure TAssistantMarkdownForm.HandlePreviewGetImage(Sender: TObject; Const ImageUrl: String;
-  Var Image: TPicture);
-Var
-  Path: String;
-Begin
-  Path := Trim(ImageUrl);
-  If Path = '' Then
-    Exit;
-  If (Pos('://', Path) = 0) And (FFileName <> '') Then
-    Path := ExpandFileName(ExtractFilePath(FFileName) + Path);
-  If FileExists(Path) Then
-    Begin
-      Image := TPicture.Create;
-      Try
-        Image.LoadFromFile(Path);
-      Except
-        FreeAndNil(Image);
-      End;
-    End;
-End;
-
 Procedure TAssistantMarkdownForm.OpenActionExecute(Sender: TObject);
 Begin
   PromptOpen;
@@ -645,7 +566,6 @@ End;
 Initialization
 
 MarkdownForms := TList.Create;
-TCanvasMarkDownFrontmatterBlockRenderer.RegisterRenderer(TMarkDownCanvasRenderer);
 
 Finalization
 

@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls, Menus, LCLType, AssistantTrace,
-  MarkDown.Control;
+  StyledControls;
 
 Type
   TAssistantTraceView = Class(TFrame)
@@ -57,13 +57,14 @@ Type
     Procedure HookWheelAndPopup(Control: TControl);
     Procedure ForwardMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer;
       MousePos: TPoint; Var Handled: Boolean);
-    Function PopupMarkdown: TMarkDownControl;
+    Function PopupMarkdown: TCustomStyledText;
     Function PopupMemo: TMemo;
     Function PopupPlainText: String;
     Procedure SelectWordInMemo(Memo: TMemo);
     Procedure SelectLineInMemo(Memo: TMemo);
     Procedure ResetInnerCardScroll;
     Function MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
+    Function MakeMarkdownView(Host: TWinControl; Const ChildName: String; Gray: Boolean): TStyledMemo;
     Function MakeFooterLabel(Host: TWinControl): TLabel;
     Procedure BindBlockFooter(Panel: TPanel; Const FooterText: String);
     Procedure BindSelectableMemo(Memo: TMemo; Const SourceText: String);
@@ -99,7 +100,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Clipbrd, LCLIntf, AssistantSubagents;
+  Clipbrd, LCLIntf, StyledMarkdown, AssistantSubagents;
 
 Const
   HeaderHeight = 26;
@@ -121,115 +122,108 @@ Begin
     Result := Value;
 End;
 
-Function EstimateWrappedHeight(Const TypeFace: TFont; Const SourceText: String; MaxWidth, MinLineH: Integer): Integer;
-Var
-  Bmp: TBitmap;
-  R: TRect;
-Begin
-  Result := MinLineH;
-  If (SourceText = '') Or (MaxWidth < 8) Then
-    Exit;
-  Bmp := TBitmap.Create;
-  Try
-    Bmp.SetSize(1, 1);
-    Bmp.Canvas.Font.Assign(TypeFace);
-    R := Rect(0, 0, MaxWidth, 0);
-    DrawText(Bmp.Canvas.Handle, PChar(SourceText), Length(SourceText), R,
-      DT_CALCRECT Or DT_WORDBREAK Or DT_NOPREFIX);
-    Result := R.Bottom - R.Top + 2;
-    If Result < MinLineH Then
-      Result := MinLineH;
-  Finally
-    Bmp.Free;
+Type
+  { Card-hosted Markdown memo: keeps source for cheap re-sync and sizes to content. }
+  TTraceMarkdownView = Class(TStyledMemo)
+  Private
+    FSourceText: String;
+    Loader: TStyledMarkdown;
+  Protected
+    Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePosition: TPoint): Boolean; Override;
+  Public
+    Constructor Create(OwnerComponent: TComponent); Override;
+    Destructor Destroy; Override;
+    Procedure ApplyBody(Const Body: String; MaxW, MinLineH: Integer);
+    Property SourceText: String Read FSourceText;
   End;
+
+Constructor TTraceMarkdownView.Create(OwnerComponent: TComponent);
+Begin
+  Inherited Create(OwnerComponent);
+  Loader := TStyledMarkdown.Create(Self);
+  ReadOnly := True;
+  WordWrap := True;
+  TabStop := True;
+  Color := clWindow;
+  ParentFont := False;
+  SetScrollbars(False, False);
 End;
 
-Procedure SizeMarkdownView(View: TMarkDownControl; Const Body: String; MaxW, MinLineH: Integer);
-Var
-  PrefW, PrefH, Est: Integer;
-  TextChanged: Boolean;
+Destructor TTraceMarkdownView.Destroy;
 Begin
-  If Not Assigned(View) Then
-    Exit;
+  FreeAndNil(Loader);
+  Inherited Destroy;
+End;
+
+Function TTraceMarkdownView.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePosition: TPoint): Boolean;
+Var
+  CanScroll: Boolean;
+Begin
+  CanScroll := ContentHeight > ViewRect.Height;
+  Result := False;
+  If (Not CanScroll) And Assigned(OnMouseWheel) Then
+    Begin
+      OnMouseWheel(Self, Shift, WheelDelta, MousePosition, Result);
+      If Result Then
+        Exit;
+    End;
+  Result := Inherited DoMouseWheel(Shift, WheelDelta, MousePosition);
+End;
+
+Procedure TTraceMarkdownView.ApplyBody(Const Body: String; MaxW, MinLineH: Integer);
+Var
+  PrefH: Integer;
+  BodyChanged: Boolean;
+Begin
   Try
     If MaxW < 80 Then
-      MaxW := View.Width;
-    TextChanged := View.MarkDown.Text <> Body;
+      MaxW := Width;
+    BodyChanged := FSourceText <> Body;
     { Re-layout only when the body or wrap width changed. Sync walks every card
-      on each live snapshot; repeating CalcLayout on a finished CoT pegs the UI.
-      Recap if a previous layout exceeded the GTK coordinate limit. }
-    If (Not TextChanged) And (Abs(View.Width - MaxW) < 2) And (MaxW >= 80) And
-      (View.Height >= MinLineH) And (View.Height <= MaxMarkdownCardHeight) Then
+      on each live snapshot; repeating a full parse on a finished CoT pegs the UI. }
+    If (Not BodyChanged) And (Abs(Width - MaxW) < 2) And (MaxW >= 80) And
+      (Height >= MinLineH) And (Height <= MaxMarkdownCardHeight) Then
       Exit;
-    { Drop the previous lock first: GetPreferredSize is clamped by MaxHeight, so a
-      growing answer would stay truncated at its first measured line. }
-    View.Constraints.MinHeight := 0;
-    View.Constraints.MaxHeight := 0;
-    If View.Font.Name <> '' Then
-      View.FontName := View.Font.Name;
-    If View.Font.Size > 0 Then
-      View.BaseFontSize := View.Font.Size;
-    If TextChanged Then
+    Constraints.MinHeight := 0;
+    Constraints.MaxHeight := 0;
+    AutoSize := False;
+    Constraints.MinWidth := 0;
+    Constraints.MaxWidth := 0;
+    Width := MaxW;
+    Constraints.MinWidth := MaxW;
+    Constraints.MaxWidth := MaxW;
+    If BodyChanged Then
       Begin
-        View.MarkDown.BeginUpdate;
-        Try
-          View.MarkDown.Text := Body;
-        Finally
-          View.MarkDown.EndUpdate;
-        End;
+        Loader.LoadFromString(Body);
+        FSourceText := Body;
       End;
     If MaxW < 80 Then
       Begin
         If MinLineH > 0 Then
-          View.Height := MinLineH;
+          Height := MinLineH;
         Exit;
       End;
-    If (Not View.HandleAllocated) And Assigned(View.Parent) And View.Parent.HandleAllocated Then
-      View.HandleNeeded;
-    If Not View.HandleAllocated Then
-      Begin
-        If MinLineH > 0 Then
-          View.Height := MinLineH;
-        Exit;
-      End;
-    View.AutoSize := False;
-    View.Constraints.MinWidth := 0;
-    View.Constraints.MaxWidth := 0;
-    View.Width := MaxW;
-    View.Constraints.MinWidth := MaxW;
-    View.Constraints.MaxWidth := MaxW;
-    If View.HandleAllocated Then
-      View.CalcLayoutForWidth(MaxW)
+    CompleteLayout;
+    If ContentHeight > High(Integer) - 12 Then
+      PrefH := High(Integer)
     Else
-      View.CalcLayout;
-    PrefW := 0;
-    PrefH := 0;
-    View.GetPreferredSize(PrefW, PrefH);
+      PrefH := Integer(ContentHeight) + 12;
     If PrefH < MinLineH Then
       PrefH := MinLineH;
-    { EstimateWrappedHeight wraps raw markdown as one blob and is only a floor
-      when layout failed. Shrinking to it clips headings/lists and can leave
-      ScrolledTop past the visible head with no inner scrollbar. }
-    Est := EstimateWrappedHeight(View.Font, Body, MaxW, MinLineH);
-    If PrefH <= MinLineH Then
-      Begin
-        If Est > PrefH Then
-          PrefH := Est;
-      End;
     If PrefH > MaxMarkdownCardHeight Then
       Begin
-        View.ScrollBars := ssAutoVertical;
+        SetScrollbars(True, False);
         PrefH := MaxMarkdownCardHeight;
       End
     Else
-      View.ScrollBars := ssNone;
-    View.Height := PrefH;
-    View.Constraints.MinHeight := PrefH;
-    View.Constraints.MaxHeight := PrefH;
-    If TextChanged Then
-      View.ResetScroll;
+      SetScrollbars(False, False);
+    Height := PrefH;
+    Constraints.MinHeight := PrefH;
+    Constraints.MaxHeight := PrefH;
+    If BodyChanged Then
+      ScrollToStart;
   Except
-    View.Height := MinLineH * 2;
+    Height := MinLineH * 2;
   End;
 End;
 
@@ -589,12 +583,12 @@ Procedure TAssistantTraceView.ForwardMouseWheel(Sender: TObject; {%H-}Shift: TSh
   {%H-}MousePos: TPoint; Var Handled: Boolean);
 Var
   Step, NewPos, MaxPos, Page: Integer;
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
 Begin
-  If Sender Is TMarkDownControl Then
+  If Sender Is TCustomStyledText Then
     Begin
-      Md := TMarkDownControl(Sender);
-      If Md.ScrollBars <> ssNone Then
+      Md := TCustomStyledText(Sender);
+      If Md.ContentHeight > Md.ViewRect.Height Then
         Begin
           { Tall answer cards keep their own scrollbar. }
           Handled := False;
@@ -624,11 +618,11 @@ Begin
   Handled := True;
 End;
 
-Function TAssistantTraceView.PopupMarkdown: TMarkDownControl;
+Function TAssistantTraceView.PopupMarkdown: TCustomStyledText;
 Begin
   Result := Nil;
-  If Assigned(FCopyPopup) And (FCopyPopup.PopupComponent Is TMarkDownControl) Then
-    Result := TMarkDownControl(FCopyPopup.PopupComponent);
+  If Assigned(FCopyPopup) And (FCopyPopup.PopupComponent Is TCustomStyledText) Then
+    Result := TCustomStyledText(FCopyPopup.PopupComponent);
 End;
 
 Function TAssistantTraceView.PopupMemo: TMemo;
@@ -646,7 +640,9 @@ Begin
   If Not Assigned(FCopyPopup) Then
     Exit;
   Host := FCopyPopup.PopupComponent;
-  If Host Is TCustomEdit Then
+  If Host Is TCustomStyledText Then
+    Result := TCustomStyledText(Host).Text
+  Else If Host Is TCustomEdit Then
     Result := TCustomEdit(Host).Text
   Else If Host Is TLabel Then
     Result := TLabel(Host).Caption
@@ -719,7 +715,7 @@ End;
 
 Procedure TAssistantTraceView.CopyPopupPopup(Sender: TObject);
 Var
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
   Memo: TMemo;
   Plain: String;
 Begin
@@ -745,14 +741,17 @@ End;
 
 Procedure TAssistantTraceView.CopyItemClick(Sender: TObject);
 Var
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
   Memo: TMemo;
   Plain: String;
 Begin
   Md := PopupMarkdown;
   If Assigned(Md) Then
     Begin
-      Md.CopySelectionToClipBoard;
+      If Md.HasSelection Then
+        Md.CopyToClipboard
+      Else
+        Clipboard.AsText := Md.Text;
       Exit;
     End;
   Memo := PopupMemo;
@@ -771,7 +770,7 @@ End;
 
 Procedure TAssistantTraceView.SelectWordItemClick(Sender: TObject);
 Var
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
   Memo: TMemo;
   P: TPoint;
   Plain: String;
@@ -796,7 +795,7 @@ End;
 
 Procedure TAssistantTraceView.SelectLineItemClick(Sender: TObject);
 Var
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
   Memo: TMemo;
   P: TPoint;
   Plain: String;
@@ -821,7 +820,7 @@ End;
 
 Procedure TAssistantTraceView.SelectAllItemClick(Sender: TObject);
 Var
-  Md: TMarkDownControl;
+  Md: TCustomStyledText;
   Memo: TMemo;
   Plain: String;
 Begin
@@ -840,6 +839,23 @@ Begin
   Plain := PopupPlainText;
   If Plain <> '' Then
     Clipboard.AsText := Plain;
+End;
+
+Function TAssistantTraceView.MakeMarkdownView(Host: TWinControl; Const ChildName: String; Gray: Boolean): TStyledMemo;
+Var
+  View: TTraceMarkdownView;
+Begin
+  EnsureCopyPopup;
+  View := TTraceMarkdownView.Create(Host);
+  View.Parent := Host;
+  View.Align := alNone;
+  View.Anchors := [akLeft, akTop];
+  View.Name := ChildName;
+  View.AutoSize := False;
+  If Gray Then
+    View.Font.Color := clGrayText;
+  HookWheelAndPopup(View);
+  Result := View;
 End;
 
 Function TAssistantTraceView.MakeSelectableMemo(Host: TWinControl; Const ChildName: String; Italic, Gray: Boolean): TMemo;
@@ -1104,7 +1120,7 @@ Procedure TAssistantTraceView.BindThinking(Block: TTraceBlock);
 Var
   Panel: TPanel;
   Header: TLabel;
-  View: TMarkDownControl;
+  View: TTraceMarkdownView;
   Child: TControl;
   Display: String;
 Begin
@@ -1132,22 +1148,8 @@ Begin
       Header.Cursor := crHandPoint;
       Header.OnClick := @CardExpandClick;
       HookWheelAndPopup(Header);
-      View := TMarkDownControl.Create(Panel);
-      View.AutoSize := False;
-      View.Align := alNone;
-      View.Anchors := [akLeft, akTop];
-      View.Name := 'ThoughtView';
-      View.Color := clWindow;
+      View := TTraceMarkdownView(MakeMarkdownView(Panel, 'ThoughtView', True));
       View.ParentColor := True;
-      View.ParentBackground := True;
-      View.BorderStyle := bsNone;
-      View.ScrollBars := ssNone;
-      View.FontColor := clGrayText;
-      View.FontQuoteColor := clGrayText;
-      View.ParentFont := False;
-      View.MonoFontName := 'Monospace';
-      View.Parent := Panel;
-      HookWheelAndPopup(View);
       MakeFooterLabel(Panel);
       FinishHostedPanel(Panel, True);
     End
@@ -1172,10 +1174,10 @@ Begin
     Display := LastLines(Block.Body, 200, 12000);
   View := Nil;
   Child := NamedChild(Panel, 'ThoughtView');
-  If Child Is TMarkDownControl Then
+  If Child Is TTraceMarkdownView Then
     Begin
-      View := TMarkDownControl(Child);
-      SizeMarkdownView(View, Display, ContentWidth, LineHeightPx);
+      View := TTraceMarkdownView(Child);
+      View.ApplyBody(Display, ContentWidth, LineHeightPx);
       View.Visible := FShowThinking;
     End;
   Panel.InvalidatePreferredSize;
@@ -1406,7 +1408,7 @@ Procedure TAssistantTraceView.BindRichCard(Block: TTraceBlock; Const TitleColor:
 Var
   Panel: TPanel;
   Title: TLabel;
-  View: TMarkDownControl;
+  View: TTraceMarkdownView;
   Child: TControl;
 Begin
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
@@ -1429,19 +1431,8 @@ Begin
       Title.Caption := Block.Title;
       Title.Parent := Panel;
       HookWheelAndPopup(Title);
-      View := TMarkDownControl.Create(Panel);
-      View.AutoSize := False;
-      View.Align := alNone;
-      View.Anchors := [akLeft, akTop];
-      View.Name := 'AnswerView';
-      View.Color := clWindow;
+      View := TTraceMarkdownView(MakeMarkdownView(Panel, 'AnswerView', False));
       View.ParentColor := False;
-      View.ParentBackground := False;
-      View.ScrollBars := ssNone;
-      View.ParentFont := False;
-      View.MonoFontName := 'Monospace';
-      View.Parent := Panel;
-      HookWheelAndPopup(View);
       MakeFooterLabel(Panel);
       FinishHostedPanel(Panel, True);
     End
@@ -1459,10 +1450,10 @@ Begin
     End;
   View := Nil;
   Child := NamedChild(Panel, 'AnswerView');
-  If Child Is TMarkDownControl Then
+  If Child Is TTraceMarkdownView Then
     Begin
-      View := TMarkDownControl(Child);
-      SizeMarkdownView(View, Block.Body, ContentWidth, LineHeightPx);
+      View := TTraceMarkdownView(Child);
+      View.ApplyBody(Block.Body, ContentWidth, LineHeightPx);
     End;
   BindBlockFooter(Panel, Block.Footer);
   Panel.InvalidatePreferredSize;
@@ -1691,8 +1682,8 @@ Begin
       For ChildIndex := 0 To Card.ControlCount - 1 Do
         Begin
           Child := Card.Controls[ChildIndex];
-          If Child Is TMarkDownControl Then
-            TMarkDownControl(Child).ResetScroll;
+          If Child Is TCustomStyledText Then
+            TCustomStyledText(Child).ScrollToStart;
         End;
     End;
 End;

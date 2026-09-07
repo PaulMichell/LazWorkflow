@@ -9,9 +9,9 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 | Package | Description | Depends on |
 |---------|-------------|------------|
 | **LazWorkflowCommon** | Event bus, logging, status footer, spell-check helpers | LCL |
-| **LazMarkdown** | Vendored Markdown control used by the Assistant | LCL |
+| **LazStyledText** | Styled edit/memo/list controls and compact Markdown loader | LCL |
 | **LazRepositoryTools** | Manage Repository: history graph, files, fetch/pull/push | LazWorkflowCommon |
-| **LazAssistantTools** | Project Assistant: Ask / Plan / Build, streaming, tools, Git suggest | LazWorkflowCommon, LazMarkdown |
+| **LazAssistantTools** | Project Assistant: Ask / Plan / Build, streaming, tools, Git suggest | LazWorkflowCommon, LazStyledText |
 
 ## Features
 
@@ -43,7 +43,7 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 ## Installation
 
 1. `Packages/LazWorkflowCommon.lpk` → Compile → Install
-2. `Packages/LazMarkdown.lpk` → Compile → Install
+2. `Packages/LazStyledText.lpk` → Compile → Install
 3. `Packages/LazRepositoryTools.lpk` → Compile → Install
 4. `Packages/LazAssistantTools.lpk` → Compile → Install
 5. Restart the IDE
@@ -54,7 +54,7 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 LazWorkflow/
 ├── Source/
 │   ├── LazWorkflowCommon/
-│   ├── LazMarkdown/
+│   ├── LazStyledText/
 │   ├── LazRepositoryTools/
 │   ├── LazAssistantTools/
 │   └── Tests/
