@@ -112,6 +112,40 @@ Begin
   GitRun(Result, ['commit', '-qm', 'initial']);
 End;
 
+Procedure TestRemoteRollback;
+Var Dir, Value, Head: String; G:TGitService; Snapshot:TGitRemoteSnapshot;
+Begin
+  Dir := NewRepo('remote-rollback'); G := TGitService.Create;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    GitRun(Dir, ['remote', 'add', 'origin', '/old/url']);
+    GitRun(Dir, ['config', '--add', 'remote.origin.fetch', '+refs/custom/*:refs/remotes/origin/custom/*']);
+    GitRun(Dir, ['config', 'remote.origin.pushurl', '/push/url']);
+    GitRun(Dir, ['config', 'remote.origin.prune', 'true']);
+    GitRun(Dir, ['config', 'branch.main.remote', 'origin']);
+    GitRun(Dir, ['config', 'branch.main.merge', 'refs/heads/main']);
+    Head := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    GitRun(Dir, ['update-ref', 'refs/remotes/origin/main', Head]);
+    GitRun(Dir, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    Check('snapshot complete remote state', G.SnapshotRemotes(Snapshot));
+    Check('rename remote', G.RenameRemote('origin', 'renamed'));
+    Check('change renamed URL', G.SetRemoteUrl('renamed', '/new/url'));
+    Check('rename preserves push URL', G.GetConfigValue('remote.renamed.pushurl', True, Value) And (Value = '/push/url'));
+    Check('rename preserves tracking branch', G.GetConfigValue('branch.main.remote', True, Value) And (Value = 'renamed'));
+    Check('remove renamed remote', G.RemoveRemote('renamed'));
+    Check('add remote before rollback', G.AddRemote('another', '/another/url'));
+    GitRun(Dir, ['update-ref', 'refs/remotes/another/main', Head]);
+    Check('restore complete remote state', G.RestoreRemotes(Snapshot));
+    Check('config restored byte for byte', ReadFile(Snapshot.ConfigPath) = Snapshot.ConfigText);
+    Check('remote refs and symbolic HEAD restored',
+      GitRun(Dir, ['for-each-ref', '--format=%(refname) %(objectname) %(symref)', 'refs/remotes/']) = Snapshot.RefsText);
+    WriteFile(Snapshot.ConfigPath + '.lock', 'another writer');
+    Check('rollback respects existing config lock', Not G.RestoreRemotes(Snapshot));
+    Check('rollback does not delete another lock', ReadFile(Snapshot.ConfigPath + '.lock') = 'another writer');
+    DeleteFile(Snapshot.ConfigPath + '.lock');
+  Finally G.Free; End;
+End;
+
 Procedure TestPreviewLimits;
 Var
   Dir, Content: String;
@@ -672,6 +706,7 @@ Begin
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestRemoteRollback;
       TestPreviewLimits;
       TestFileUnion;
       TestPartialPatches;

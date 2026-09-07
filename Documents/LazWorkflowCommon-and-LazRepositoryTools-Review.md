@@ -4,7 +4,7 @@ Date: 7 September 2026
 
 Scope: the two packages' source units, package definitions, relevant form wiring, and their existing Git/status and spell-checker console tests. LazAssistantTools implementation and tests were excluded. Shared extension interfaces were considered only where defined or called by the reviewed packages.
 
-The findings below record the original review and distinguish **reproduced** behaviour from **static** findings established by tracing the code. R1–R5 have subsequently been fixed; see the implementation update at the end. Original line references refer to the pre-fix source.
+The findings below record the original review and distinguish **reproduced** behaviour from **static** findings established by tracing the code. The reviewed bug fixes and follow-up improvements have subsequently been implemented; see the implementation updates at the end for scope and validation. Original line references refer to the pre-fix source.
 
 Priority: **P1** = unintended changes, possible data loss or invalid object access; **P2** = functional errors to fix during normal development. Optimisations and simplifications follow the bugs.
 
@@ -211,7 +211,7 @@ Recommended order: first fix R1–R5, then the partial-patch and history/file-di
 
 ## Implementation update: R1–R5
 
-Implemented on 7 September 2026. R6 onward remain outstanding.
+Implemented on 7 September 2026. The later updates below track the subsequent work.
 
 | Finding | Change |
 | --- | --- |
@@ -280,3 +280,9 @@ Validation: package compilation and checked repository tests passed with zero le
 The graph model builds an interval index over child-ordered edges. Viewport queries prune edge ranges whose parents are above the viewport or children below it, while retaining long crossing edges. Painting consumes only returned edge indices. The diff overview cache was completed with R6/R7.
 
 Validation: package compilation and checked `GitGraphModelTest` passed with zero leaks. A synthetic 50,000-commit / 50,099-edge graph matched a full scan across 301 viewports. On this Linux machine, 2,000 viewport queries took 5 ms indexed versus 747 ms scanning all edges, with range/overflow/heap checks enabled. This measures model queries, not end-to-end GUI rendering.
+
+## Implementation update: remote row identity and rollback (simplification 5)
+
+Remote rows retain their original identity independently of the edited name/URL. Renames run explicitly, with temporary names supporting swaps/cycles, and URL edits apply to the renamed remote. Before saving, the service snapshots the complete local config and remote refs. Failure restores the config through an exclusive config lock and restores direct/symbolic remote refs, preserving custom refspecs, push URLs, branch tracking and other local settings.
+
+Validation: package compilation and checked repository regressions passed with zero leaks. Tests cover rename plus URL change, preserved push URL and tracking, removal/addition followed by byte-for-byte config and ref restoration, and refusing to overwrite or delete another writer's config lock. Remote grid interaction and Windows replacement behaviour remain untested.

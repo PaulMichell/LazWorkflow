@@ -33,6 +33,10 @@ Type
     Message: String;
   End;
 
+  TGitRemoteSnapshot = Record
+    RepoPath, ConfigPath, ConfigText, RefsText: String;
+  End;
+
   TGitCommandResult = Record
     Success: Boolean;
     ExitCode: Integer;
@@ -138,6 +142,8 @@ Type
       Const Branch: String = ''): Boolean;
     Function InitRepository(Const Path: String): Boolean;
     Function CloneRepository(Const RemoteUrl, TargetDir: String): Boolean;
+    Function SnapshotRemotes(Out Snapshot: TGitRemoteSnapshot): Boolean;
+    Function RestoreRemotes(Const Snapshot: TGitRemoteSnapshot): Boolean;
     Function ListRemotes(Out Names, Urls: TStringList): Boolean;
     Function AddRemote(Const Name, Url: String): Boolean;
     Function SetRemoteUrl(Const Name, Url: String): Boolean;
@@ -186,7 +192,7 @@ Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEn
 Implementation
 
 Uses
-  LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
 
 Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
   Tracked: TStrings): TGitStatusEntryArray;
@@ -1824,6 +1830,101 @@ Begin
     End
   Else If Trim(OutputText) <> '' Then
     FLastError := Trim(OutputText);
+End;
+
+Function TGitService.SnapshotRemotes(Out Snapshot: TGitRemoteSnapshot): Boolean;
+Var Code: Integer; Path: String; Stream: TFileStream;
+Begin
+  Snapshot := Default(TGitRemoteSnapshot);
+  Result := False;
+  If Not RunGit(['rev-parse', '--git-path', 'config'], Path, Code) Then Exit;
+  Path := Trim(Path);
+  If Not FilenameIsAbsolute(Path) Then Path := IncludeTrailingPathDelimiter(FRepoPath) + Path;
+  Path := GetPhysicalFilename(Path, pfeEmpty);
+  If Path = '' Then Begin FLastError := 'Could not resolve repository config'; Exit; End;
+  Try
+    Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+    Try
+      SetLength(Snapshot.ConfigText, Stream.Size);
+      If Stream.Size > 0 Then Stream.ReadBuffer(Snapshot.ConfigText[1], Stream.Size);
+    Finally Stream.Free; End;
+  Except On E: Exception Do Begin FLastError := E.Message; Exit; End; End;
+  If Not RunGit(['for-each-ref', '--format=%(refname) %(objectname) %(symref)', 'refs/remotes/'], Snapshot.RefsText, Code) Then Exit;
+  Snapshot.RepoPath := FRepoPath; Snapshot.ConfigPath := Path; Result := True;
+End;
+
+Function TGitService.RestoreRemotes(Const Snapshot: TGitRemoteSnapshot): Boolean;
+Var
+  LockPath, Text, Name, Sha, Target, Errors: String;
+  Handle: THandle;
+  Stream: THandleStream;
+  Current, Original, OriginalRefNames: TStringList;
+  I, P, Code: Integer;
+  {$IFDEF UNIX}Info: Stat;{$ENDIF}
+  Procedure RecordFailure;
+  Begin
+    Errors := Errors + FLastError + LineEnding;
+  End;
+Begin
+  Result := False;
+  If (Snapshot.ConfigPath = '') Or (CompareFilenames(Snapshot.RepoPath, FRepoPath) <> 0) Then
+    Begin FLastError := 'Remote snapshot belongs to another repository'; Exit; End;
+  LockPath := Snapshot.ConfigPath + '.lock';
+  {$IFDEF UNIX}
+  Handle := fpOpen(PChar(LockPath), O_WRONLY Or O_CREAT Or O_EXCL, &600);
+  {$ELSE}
+  Handle := Windows.CreateFile(PChar(LockPath), GENERIC_WRITE, 0, Nil, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+  {$ENDIF}
+  If Handle = THandle(-1) Then
+    Begin FLastError := 'Could not lock config for remote rollback: ' + SysErrorMessage(GetLastOSError); Exit; End;
+  Try
+    Try
+      Stream := THandleStream.Create(Handle);
+      Try
+        If Snapshot.ConfigText <> '' Then Stream.WriteBuffer(Snapshot.ConfigText[1], Length(Snapshot.ConfigText));
+      Finally Stream.Free; FileClose(Handle); End;
+      {$IFDEF UNIX}
+      If fpStat(PChar(Snapshot.ConfigPath), Info) = 0 Then fpChmod(PChar(LockPath), Info.st_mode And &777);
+      If Not RenameFile(LockPath, Snapshot.ConfigPath) Then Raise Exception.Create('Could not restore repository config');
+      {$ELSE}
+      If Not MoveFileEx(PChar(LockPath), PChar(Snapshot.ConfigPath), MOVEFILE_REPLACE_EXISTING Or MOVEFILE_WRITE_THROUGH) Then
+        Raise Exception.Create('Could not restore repository config');
+      {$ENDIF}
+    Except On E: Exception Do Begin FLastError := E.Message; Exit; End; End;
+  Finally
+    If FileExists(LockPath) Then DeleteFile(LockPath);
+  End;
+  Current := TStringList.Create; Original := TStringList.Create;
+  OriginalRefNames := TStringList.Create; OriginalRefNames.CaseSensitive := True;
+  Errors := '';
+  Try
+    Original.Text := Snapshot.RefsText;
+    For I := 0 To Original.Count - 1 Do
+      OriginalRefNames.Add(Copy(Original[I], 1, Pos(' ', Original[I]) - 1));
+    If Not RunGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/'], Text, Code) Then Exit;
+    Current.Text := Text;
+    For I := 0 To Current.Count - 1 Do
+      Begin
+        Name := Current[I];
+        { Reference names contain no spaces/newlines. Snapshot lines include a
+          trailing space after the name, so prefix matching is unambiguous. }
+        If OriginalRefNames.IndexOf(Name) < 0 Then
+          If Not RunGit(['update-ref', '--no-deref', '-d', Name], Text, Code) Then RecordFailure;
+      End;
+    For I := 0 To Original.Count - 1 Do
+      Begin
+        Text := Original[I]; P := Pos(' ', Text);
+        Name := Copy(Text, 1, P - 1); Delete(Text, 1, P);
+        P := Pos(' ', Text); Sha := Copy(Text, 1, P - 1); Target := Copy(Text, P + 1, MaxInt);
+        If Target <> '' Then
+          Begin
+            If Not RunGit(['symbolic-ref', Name, Target], Text, Code) Then RecordFailure;
+          End
+        Else If Not RunGit(['update-ref', '--no-deref', Name, Sha], Text, Code) Then RecordFailure;
+      End;
+    Result := Errors = '';
+    FLastError := Trim(Errors);
+  Finally OriginalRefNames.Free; Current.Free; Original.Free; End;
 End;
 
 Function TGitService.ListRemotes(Out Names, Urls: TStringList): Boolean;
