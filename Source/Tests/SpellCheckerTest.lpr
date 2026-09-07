@@ -37,6 +37,12 @@ Begin
   Check('breaker finds prose words', Length(Tokens) >= 3);
   Check('breaker skips path', Length(SpellBreakWords('src/GitService.pas')) = 0);
   Check('breaker keeps contraction', SpellTokenAt('don''t break this', 2, Token) And (Token.Text = 'don''t'));
+  Tokens := SpellBreakWords('hello '' recieve world');
+  Check('straight apostrophe does not end scan', (Length(Tokens) = 3) And (Tokens[1].Text = 'recieve'));
+  Tokens := SpellBreakWords('’ hello ’ recieve world');
+  Check('curly apostrophes do not end scan', Length(Tokens) = 3);
+  Tokens := SpellBreakWords('''quoted'' don''t');
+  Check('quoted words and contractions', (Length(Tokens) = 2) And (Tokens[0].Text = 'quoted') And (Tokens[1].Text = 'don''t'));
   Tokens := SpellBreakWords('lookoing');
   Check('open word at caret is incomplete', (Length(Tokens) = 1) And
     (Not SpellWordIsComplete('lookoing', Tokens[0], Length('lookoing') + 1)));
@@ -70,6 +76,13 @@ Begin
     Check('Hunspell ready', Engine.IsReady);
     Check('Hunspell accepts the', Engine.CheckWord('the'));
     Check('Hunspell rejects recieve', Not Engine.CheckWord('recieve'));
+    Engine.LibraryFileName := LibName;
+    Check('Hunspell same library reloads', Engine.Load);
+    Engine.LibraryFileName := '/does/not/exist-spell-library';
+    Check('Hunspell changed library rejected', Not Engine.Load);
+    Check('Hunspell restart diagnostic', Pos('restart', Engine.LastError) > 0);
+    Engine.LibraryFileName := LibName;
+    Check('Hunspell original binding remains usable', Engine.Load);
     Suggestions := Engine.GetSuggestions('recieve', 8);
     Check('Hunspell suggests for recieve', Length(Suggestions) > 0);
   Finally
@@ -98,6 +111,13 @@ Begin
     Check('ASpell ready', Engine.IsReady);
     Check('ASpell accepts the', Engine.CheckWord('the'));
     Check('ASpell rejects recieve', Not Engine.CheckWord('recieve'));
+    Engine.LibraryFileName := LibName;
+    Check('ASpell same library reloads', Engine.Load);
+    Engine.LibraryFileName := '/does/not/exist-spell-library';
+    Check('ASpell changed library rejected', Not Engine.Load);
+    Check('ASpell restart diagnostic', Pos('restart', Engine.LastError) > 0);
+    Engine.LibraryFileName := LibName;
+    Check('ASpell original binding remains usable', Engine.Load);
   Finally
     Engine.Free;
   End;

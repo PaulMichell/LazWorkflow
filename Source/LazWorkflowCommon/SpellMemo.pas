@@ -45,6 +45,7 @@ Type
     FRanges: TSpellUnderlineRangeArray;
     FOwnedPopup: TPopupMenu;
     FSpellItemCount: Integer;
+    FSpellItems: TFPList;
     FActiveToken: String;
     FActiveStart: Integer;
     FActiveLength: Integer;
@@ -61,6 +62,7 @@ Type
     FReady: Boolean;
     FIgnoreDragSelect: Boolean;
     FDragOrigin: TPoint;
+    Procedure UnhookPopup;
     Procedure DebounceTimer(Sender: TObject);
     Procedure CaretTimerTick(Sender: TObject);
     Procedure ResetCaretBlink;
@@ -113,6 +115,7 @@ Type
     Procedure EnsureScrollBar;
     Function MeasureAdvance(Const S: String): Integer;
   Protected
+    Procedure Notification(AComponent: TComponent; Operation: TOperation); Override;
     Procedure Paint; Override;
     Procedure Resize; Override;
     Procedure FontChanged(Sender: TObject); Override;
@@ -206,6 +209,7 @@ Begin
   Width := 200;
   Height := 80;
   FSpellItemCount := 0;
+  FSpellItems := TFPList.Create;
   FActiveStart := 0;
   FActiveLength := 0;
   FOwnedPopup := TPopupMenu.Create(Nil);
@@ -230,8 +234,7 @@ Begin
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.UnregisterChangedHandler(@ConfigChanged);
-  If Assigned(FHookedPopup) Then
-    FHookedPopup.OnPopup := FHostPopupHandler;
+  UnhookPopup;
   If Assigned(FDebounce) Then
     FDebounce.Enabled := False;
   If Assigned(FCaretTimer) Then
@@ -244,6 +247,7 @@ Begin
   FreeAndNil(FDebounce);
   FreeAndNil(FCaretTimer);
   FreeAndNil(FOwnedPopup);
+  FreeAndNil(FSpellItems);
   FreeAndNil(FScrollBar);
   Inherited Destroy;
 End;
@@ -707,11 +711,13 @@ Begin
   LineEnd := LineStart + FPaintLines[LineIndex].ByteLength;
   If CaretByte < LineStart Then
     Exit;
-  { Non-last rows are half-open so the wrap boundary belongs to the next row. }
+  { Soft-wrap boundaries belong to the next row; a hard newline leaves a
+    byte gap and its caret position belongs to this paragraph. }
   If CaretByte < LineEnd Then
     Result := True
   Else
-    Result := (LineIndex = High(FPaintLines)) And (CaretByte = LineEnd);
+    Result := (CaretByte = LineEnd) And ((LineIndex = High(FPaintLines)) Or
+      (FPaintLines[LineIndex + 1].ByteStart > LineEnd));
 End;
 
 Function TSpellMemo.CaretPixel: TPoint;
@@ -1347,12 +1353,12 @@ Begin
     End;
   If PopupMenu = FHookedPopup Then
     Exit;
-  If Assigned(FHookedPopup) Then
-    FHookedPopup.OnPopup := FHostPopupHandler;
+  UnhookPopup;
   FHookedPopup := PopupMenu;
   FHostPopupHandler := Nil;
   If Assigned(FHookedPopup) Then
     Begin
+      FHookedPopup.FreeNotification(Self);
       FHostPopupHandler := FHookedPopup.OnPopup;
       FHookedPopup.OnPopup := @PopupPopup;
     End;
@@ -1381,15 +1387,42 @@ Begin
     End;
 End;
 
-Procedure TSpellMemo.ClearSpellMenu(Menu: TPopupMenu);
+Procedure TSpellMemo.Notification(AComponent: TComponent; Operation: TOperation);
 Begin
-  If Not Assigned(Menu) Then
-    Exit;
-  While (FSpellItemCount > 0) And (Menu.Items.Count > 0) Do
+  If Operation = opRemove Then
     Begin
-      Menu.Items[0].Free;
-      Dec(FSpellItemCount);
+      If Assigned(FSpellItems) Then FSpellItems.Remove(AComponent);
+      If AComponent = FHookedPopup Then
+        Begin FHookedPopup := Nil; FHostPopupHandler := Nil; End;
     End;
+  Inherited Notification(AComponent, Operation);
+End;
+
+Procedure TSpellMemo.UnhookPopup;
+Var Handler: TNotifyEvent;
+Begin
+  ClearSpellMenu(FHookedPopup);
+  If Assigned(FHookedPopup) Then
+    Begin
+      Handler := @PopupPopup;
+      If (TMethod(FHookedPopup.OnPopup).Code = TMethod(Handler).Code) And
+        (TMethod(FHookedPopup.OnPopup).Data = Pointer(Self)) Then
+        FHookedPopup.OnPopup := FHostPopupHandler;
+      FHookedPopup.RemoveFreeNotification(Self);
+    End;
+  FHookedPopup := Nil; FHostPopupHandler := Nil;
+End;
+
+Procedure TSpellMemo.ClearSpellMenu(Menu: TPopupMenu);
+Var Item: TMenuItem;
+Begin
+  If Assigned(FSpellItems) Then
+    While FSpellItems.Count > 0 Do
+      Begin
+        Item := TMenuItem(FSpellItems.Last);
+        FSpellItems.Delete(FSpellItems.Count - 1);
+        Item.Free;
+      End;
   FSpellItemCount := 0;
 End;
 
@@ -1408,7 +1441,9 @@ Begin
   Suggestions := WorkflowSpellConfig.GetSuggestions(FActiveToken, 12);
   For Index := 0 To High(Suggestions) Do
     Begin
-      Item := TMenuItem.Create(Menu);
+      Item := TMenuItem.Create(Self);
+      FSpellItems.Add(Item);
+      Item.FreeNotification(Self);
       Item.Caption := Suggestions[Index];
       Item.OnClick := @SuggestionClick;
       Menu.Items.Insert(FSpellItemCount, Item);
@@ -1416,24 +1451,32 @@ Begin
     End;
   If FSpellItemCount > 0 Then
     Begin
-      Item := TMenuItem.Create(Menu);
+      Item := TMenuItem.Create(Self);
+      FSpellItems.Add(Item);
+      Item.FreeNotification(Self);
       Item.Caption := '-';
       Menu.Items.Insert(FSpellItemCount, Item);
       Inc(FSpellItemCount);
     End;
-  Item := TMenuItem.Create(Menu);
+  Item := TMenuItem.Create(Self);
+      FSpellItems.Add(Item);
+      Item.FreeNotification(Self);
   Item.Caption := 'Ignore "' + FActiveToken + '"';
   Item.OnClick := @IgnoreClick;
   Menu.Items.Insert(FSpellItemCount, Item);
   Inc(FSpellItemCount);
-  Item := TMenuItem.Create(Menu);
+  Item := TMenuItem.Create(Self);
+      FSpellItems.Add(Item);
+      Item.FreeNotification(Self);
   Item.Caption := 'Add "' + FActiveToken + '" to dictionary';
   Item.OnClick := @AddClick;
   Menu.Items.Insert(FSpellItemCount, Item);
   Inc(FSpellItemCount);
   If Menu.Items.Count > FSpellItemCount Then
     Begin
-      Item := TMenuItem.Create(Menu);
+      Item := TMenuItem.Create(Self);
+      FSpellItems.Add(Item);
+      Item.FreeNotification(Self);
       Item.Caption := '-';
       Menu.Items.Insert(FSpellItemCount, Item);
       Inc(FSpellItemCount);

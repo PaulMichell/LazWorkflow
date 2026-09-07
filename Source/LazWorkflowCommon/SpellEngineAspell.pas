@@ -101,11 +101,17 @@ Begin
   {$ENDIF}
 End;
 
+Var
+  BindingLock: TRTLCriticalSection;
+
 Function BindAspell(Const FullName: String): Boolean;
 Begin
+  EnterCriticalSection(BindingLock);
+  Try
   Result := False;
   If AspLibHandle <> NilHandle Then
     Begin
+      If FullName <> AspLibPath Then Exit;
       Result := Assigned(NewAspellSpeller);
       Exit;
     End;
@@ -137,6 +143,7 @@ Begin
     End
   Else
     AspLibPath := FullName;
+  Finally LeaveCriticalSection(BindingLock); End;
 End;
 
 Function FindAspellLibrary(Out FullName: String): Boolean;
@@ -144,6 +151,8 @@ Var
   Names: TStringArray;
   Index: Integer;
 Begin
+  EnterCriticalSection(BindingLock);
+  Try
   Result := False;
   FullName := '';
   If AspLibHandle <> NilHandle Then
@@ -160,6 +169,7 @@ Begin
         Result := True;
         Exit;
       End;
+  Finally LeaveCriticalSection(BindingLock); End;
 End;
 
 Procedure ListAspellLanguages(List: TStrings);
@@ -246,7 +256,8 @@ Begin
     Begin
       If Not BindAspell(LibName) Then
         Begin
-          FLastError := 'Unable to load ASpell library ' + LibName;
+          FLastError := 'Unable to load ASpell library ' + LibName +
+            '. If a different library is already loaded, restart the IDE to change it.';
           Exit;
         End;
     End
@@ -365,4 +376,8 @@ Begin
   AspellAddToSession(FSpeller, PChar(WordText), Length(WordText));
 End;
 
+Initialization
+  InitCriticalSection(BindingLock);
+Finalization
+  DoneCriticalSection(BindingLock);
 End.

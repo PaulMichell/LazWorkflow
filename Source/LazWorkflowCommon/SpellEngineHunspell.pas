@@ -96,11 +96,17 @@ Begin
   {$ENDIF}
 End;
 
+Var
+  BindingLock: TRTLCriticalSection;
+
 Function BindHunspell(Const FullName: String): Boolean;
 Begin
+  EnterCriticalSection(BindingLock);
+  Try
   Result := False;
   If HunLibHandle <> NilHandle Then
     Begin
+      If FullName <> HunLibPath Then Exit;
       Result := Assigned(HunspellCreate) And Assigned(HunspellSpellFn);
       Exit;
     End;
@@ -124,6 +130,7 @@ Begin
     End
   Else
     HunLibPath := FullName;
+  Finally LeaveCriticalSection(BindingLock); End;
 End;
 
 Function FindHunspellLibrary(Out FullName: String): Boolean;
@@ -135,6 +142,8 @@ Var
   PrefixIndex: Integer;
   {$ENDIF}
 Begin
+  EnterCriticalSection(BindingLock);
+  Try
   Result := False;
   FullName := '';
   If HunLibHandle <> NilHandle Then
@@ -165,6 +174,7 @@ Begin
           Exit;
         End;
   {$ENDIF}
+  Finally LeaveCriticalSection(BindingLock); End;
 End;
 
 Function HunspellDictionaryDirectories: TStringArray;
@@ -449,7 +459,8 @@ Begin
     Begin
       If Not BindHunspell(LibName) Then
         Begin
-          FLastError := 'Unable to load Hunspell library ' + LibName;
+          FLastError := 'Unable to load Hunspell library ' + LibName +
+            '. If a different library is already loaded, restart the IDE to change it.';
           Exit;
         End;
     End
@@ -529,4 +540,8 @@ Begin
   HunspellAddFn(FHandle, PChar(Converted));
 End;
 
+Initialization
+  InitCriticalSection(BindingLock);
+Finalization
+  DoneCriticalSection(BindingLock);
 End.

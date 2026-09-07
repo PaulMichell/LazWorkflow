@@ -130,6 +130,7 @@ Begin
   Token.ByteLength := 0;
   Token.Text := '';
   Token.IsProse := False;
+  Repeat
   While FPos <= Length(FText) Do
     Begin
       CodePoint := UTF8CodepointToUnicode(@FText[FPos], CodeLen);
@@ -153,6 +154,7 @@ Begin
   Token.ByteLength := FPos - StartPos;
   Token.Text := Copy(FText, Token.ByteStart, Token.ByteLength);
   Token.Text := StripEdgeApostrophes(Token.Text, Token.ByteStart, Token.ByteLength);
+  Until Token.ByteLength > 0;
   Token.IsProse := TokenIsProse(Token.Text);
   If Token.IsProse Then
     Begin
