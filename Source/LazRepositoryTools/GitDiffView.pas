@@ -141,7 +141,7 @@ Type
     Procedure SelectLineRange(StartLine, EndLine: Integer);
     Function NodeRange(Node: TTreeNode): TGitDiffRange;
     Procedure GetSelectionLines(Out FirstLine, LastLine: Integer);
-    Function BuildPartialPatch(FirstLine, LastLine: Integer): String;
+    Function BuildPartialPatch(FirstLine, LastLine: Integer; Reverse: Boolean): String;
     Function FindHunkBounds(AtLine: Integer; Out FirstLine, LastLine: Integer): Boolean;
     Function SelectHunkAtLine(AtLine: Integer): Boolean;
     Function ToggleHunkSelectionAtLine(AtLine: Integer): Boolean;
@@ -215,6 +215,7 @@ Implementation
 {$R *.lfm}
 
 Uses
+  FPImage,
   Math, EditorOptionsIntf, SrcEditorIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
   LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
   GitService, Dialogs, WorkflowLog, GitDiffHighlighter, LazFileUtils;
@@ -1381,12 +1382,23 @@ Begin
 End;
 
 Function TGitDiffView.TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
+Var
+  Reader: TFPCustomImageReaderClass;
+  Dimensions: TPoint;
 Begin
   Result := False;
   If (Stream = Nil) Or (Stream.Size = 0) Or (Not Assigned(PreviewPicture)) Then
     Exit;
   Stream.Position := 0;
   Try
+    Reader := TFPCustomImage.FindReaderFromStream(Stream);
+    If Reader = Nil Then Exit;
+    Stream.Position := 0;
+    Dimensions := Reader.ImageSize(Stream);
+    If (Dimensions.X < 1) Or (Dimensions.Y < 1) Or
+      (Dimensions.X > 16384) Or (Dimensions.Y > 16384) Or
+      (Int64(Dimensions.X) * Dimensions.Y > 16000000) Then Exit;
+    Stream.Position := 0;
     PreviewPicture.LoadFromStream(Stream);
   Except
     PreviewPicture.Clear;
@@ -1444,7 +1456,7 @@ Begin
       Try
         If GitClient.ReadBlobBytes(Sha, RelPath, StagedSide, Mem) Then
           Begin
-            If Mem.Size > 8 * 1024 * 1024 Then
+            If Mem.Size > GitPreviewByteLimit Then
               Begin
                 ShowBinaryMessage(TitleText);
                 Result := True;
@@ -1462,6 +1474,9 @@ Begin
     End;
   { Binary extension, or image that LCL could not decode. }
   ShowBinaryMessage(TitleText);
+  If FileExtensionIsImage(Ext) And Assigned(BinaryLabel) Then
+    BinaryLabel.Caption := 'Image preview unavailable (8 MiB / 16 megapixel limit, or unsupported image).' +
+      LineEnding + GitClient.LastError;
   Result := True;
 End;
 
@@ -2038,7 +2053,7 @@ Begin
     LastLine := DiffEditor.Lines.Count;
 End;
 
-Function TGitDiffView.BuildPartialPatch(FirstLine, LastLine: Integer): String;
+Function TGitDiffView.BuildPartialPatch(FirstLine, LastLine: Integer; Reverse: Boolean): String;
 Var
   Lines: TStringList;
   SelectedFull: TGitLineNumberList;
@@ -2082,7 +2097,7 @@ Begin
           For I := 0 To SelectedLines.Count - 1 Do
             SelectedFull.Add(SelectedLines[I]);
       End;
-    Result := BuildGitPartialPatch(Lines, FirstLine, LastLine, SelectedFull, FStagedSide);
+    Result := BuildGitPartialPatch(Lines, FirstLine, LastLine, SelectedFull, Reverse);
   Finally
     SelectedFull.Free;
     Lines.Free;
@@ -2324,7 +2339,7 @@ Begin
           SelectLineRange(FirstLine, LastLine);
         End;
     End;
-  Patch := BuildPartialPatch(FirstLine, LastLine);
+  Patch := BuildPartialPatch(FirstLine, LastLine, False);
   If Trim(Patch) = '' Then
     Begin
       MessageDlg('Nothing to stage in the current selection. Select added/removed lines (red/green), or a whole hunk.',
@@ -2367,7 +2382,7 @@ Begin
           SelectLineRange(FirstLine, LastLine);
         End;
     End;
-  Patch := BuildPartialPatch(FirstLine, LastLine);
+  Patch := BuildPartialPatch(FirstLine, LastLine, True);
   If Trim(Patch) = '' Then
     Begin
       MessageDlg('Nothing to unstage in the current selection. Select added/removed lines (red/green), or a whole hunk.',

@@ -112,6 +112,31 @@ Begin
   GitRun(Result, ['commit', '-qm', 'initial']);
 End;
 
+Procedure TestPreviewLimits;
+Var
+  Dir, Content: String;
+  G: TGitService;
+  Mem: TMemoryStream;
+  FS: TFileStream;
+Begin
+  Dir := NewRepo('preview-limit'); G := TGitService.Create; Mem := TMemoryStream.Create;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    FS := TFileStream.Create(Dir + '/large.txt', fmCreate);
+    Try FS.Size := GitPreviewByteLimit + 1; Finally FS.Free; End;
+    Check('large worktree preview rejected', Not G.ReadWorkingTreeFile('large.txt', Content));
+    Check('large worktree returned no content', (Content = '') And (Pos('limit', G.LastError) > 0));
+    GitRun(Dir, ['add', '.']); GitRun(Dir, ['commit', '-qm', 'large blob']);
+    Check('large blob rejected before read', Not G.ReadBlobBytes('HEAD', 'large.txt', False, Mem));
+    Check('large blob returned no bytes', (Mem.Size = 0) And (Pos('limit', G.LastError) > 0));
+    Content := StringOfChar('x', GitPreviewByteLimit + 100);
+    WriteFile(Dir + '/addition.txt', Content);
+    Check('large diff output rejected', Not G.DiffPath('addition.txt', False, Content));
+    Check('truncated diff is not returned', (Content = '') And (Pos('limit', G.LastError) > 0));
+    Check('normal command still works after limit', G.GetConfigValue('user.name', True, Content));
+  Finally Mem.Free; G.Free; End;
+End;
+
 Procedure TestFileUnion;
 Var
   Entries, Merged: TGitStatusEntryArray;
@@ -606,6 +631,7 @@ Begin
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestPreviewLimits;
       TestFileUnion;
       TestPartialPatches;
       TestCommandResults;

@@ -12,6 +12,9 @@ Interface
 Uses
   Classes, SysUtils, Process, WorkflowEvents, WorkflowLog;
 
+Const
+  GitPreviewByteLimit = 8 * 1024 * 1024;
+
 Type
   TGitStatusEntry = Record
     Path: String;
@@ -42,6 +45,7 @@ Type
     FRepoPath: String;
     FLastError: String;
     FLastCommand: TGitCommandResult;
+    FOutputLimit: Int64;
     FCancelled: Boolean;
     FPublishEvents: Boolean;
     FActiveProcess: TProcess;
@@ -446,7 +450,11 @@ Begin
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
               If BytesRead > 0 Then
-                OutStream.WriteBuffer(Buf[0], BytesRead);
+                Begin
+                  If (FOutputLimit > 0) And (OutStream.Size + BytesRead > FOutputLimit) Then
+                    Raise EStreamError.Create('Preview exceeds 8 MiB limit');
+                  OutStream.WriteBuffer(Buf[0], BytesRead);
+                End;
             End;
           If Proc.Stderr.NumBytesAvailable > 0 Then
             Begin
@@ -461,7 +469,11 @@ Begin
         Begin
           BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
           If BytesRead > 0 Then
-            OutStream.WriteBuffer(Buf[0], BytesRead)
+            Begin
+              If (FOutputLimit > 0) And (OutStream.Size + BytesRead > FOutputLimit) Then
+                Raise EStreamError.Create('Preview exceeds 8 MiB limit');
+              OutStream.WriteBuffer(Buf[0], BytesRead);
+            End
           Else
             Break;
         End;
@@ -500,6 +512,7 @@ Begin
     Except
       On E: Exception Do
         Begin
+          If Proc.Running Then Proc.Terminate(1);
           FLastError := 'Failed to run git: ' + E.Message;
           WorkflowLogger.Error('GitService', FLastError);
           Result := False;
@@ -1204,33 +1217,17 @@ Begin
 End;
 
 Function TGitService.ReadWorkingTreeFile(Const Path: String; Out Content: String): Boolean;
-Var
-  FullPath: String;
-  List: TStringList;
+Var Mem: TMemoryStream;
 Begin
-  Result := False;
-  Content := '';
-  FullPath := WorkingTreeFullPath(Path);
-  If FullPath = '' Then
-    Exit;
-  If Not FileExists(FullPath) Then
-    Begin
-      FLastError := 'File not found: ' + FullPath;
-      Exit;
-    End;
-  List := TStringList.Create;
+  Content := ''; Mem := TMemoryStream.Create;
   Try
-    Try
-      List.LoadFromFile(FullPath);
-      Content := List.Text;
-      Result := True;
-    Except
-      On E: Exception Do
-        FLastError := 'Could not read file: ' + E.Message;
-    End;
-  Finally
-    List.Free;
-  End;
+    Result := ReadWorkingTreeBytes(Path, Mem);
+    If Result Then
+      Begin
+        SetLength(Content, Mem.Size);
+        If Mem.Size > 0 Then Move(Mem.Memory^, Content[1], Mem.Size);
+      End;
+  Finally Mem.Free; End;
 End;
 
 Function TGitService.ReadWorkingTreeBytes(Const Path: String; Stream: TStream): Boolean;
@@ -1250,7 +1247,9 @@ Begin
   Try
     FS := TFileStream.Create(FullPath, fmOpenRead Or fmShareDenyNone);
     Try
-      Stream.CopyFrom(FS, 0);
+      If FS.Size > GitPreviewByteLimit Then
+        Begin FLastError := 'Preview exceeds 8 MiB limit'; Exit; End;
+      If FS.Size > 0 Then Stream.CopyFrom(FS, FS.Size);
       Result := True;
     Finally
       FS.Free;
@@ -1265,26 +1264,19 @@ Function TGitService.ReadBlobBytes(Const Sha, Path: String; Staged: Boolean; Str
 Var
   ExitCode: Integer;
   Spec: String;
+  PreviousLimit: Int64;
 Begin
   Result := False;
-  If (Path = '') Or (Stream = Nil) Then
-    Exit;
-  If Sha = '' Then
-    Begin
-      If Staged Then
-        Begin
-          { Indexed blob for path. }
-          Spec := ':' + StringReplace(Path, '\', '/', [rfReplaceAll]);
-          Result := RunGitBinary(['show', Spec], Stream, ExitCode);
-        End
-      Else
-        Result := ReadWorkingTreeBytes(Path, Stream);
-    End
-  Else
-    Begin
-      Spec := Sha + ':' + StringReplace(Path, '\', '/', [rfReplaceAll]);
-      Result := RunGitBinary(['show', Spec], Stream, ExitCode);
-    End;
+  If (Path = '') Or (Stream = Nil) Then Exit;
+  If (Sha = '') And Not Staged Then Exit(ReadWorkingTreeBytes(Path, Stream));
+  Spec := Sha + ':' + Path;
+  If BlobByteSize(Spec) > GitPreviewByteLimit Then
+    Begin FLastError := 'Preview exceeds 8 MiB limit'; Exit; End;
+  PreviousLimit := FOutputLimit; FOutputLimit := GitPreviewByteLimit;
+  Try
+    Result := RunGitBinary(['show', Spec], Stream, ExitCode);
+    If Not Result Then Stream.Size := 0;
+  Finally FOutputLimit := PreviousLimit; End;
 End;
 
 Function TGitService.BlobByteSize(Const Spec: String): Int64;
@@ -1330,9 +1322,12 @@ End;
 
 Function TGitService.DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
 Var
+  PreviousLimit: Int64;
   ExitCode: Integer;
   ContextFlag: String;
 Begin
+  PreviousLimit := FOutputLimit; FOutputLimit := GitPreviewByteLimit;
+  Try
   DiffText := '';
   Result := False;
   If Path = '' Then
@@ -1356,16 +1351,27 @@ Begin
         End;
     End;
 
+  Finally
+    FOutputLimit := PreviousLimit;
+    If Not Result Then DiffText := '';
+  End;
 End;
 
 Function TGitService.DiffStaged(Out DiffText: String): Boolean;
 Var
+  PreviousLimit: Int64;
   ExitCode: Integer;
 Begin
+  PreviousLimit := FOutputLimit; FOutputLimit := GitPreviewByteLimit;
+  Try
   DiffText := '';
   { Exit 0 with empty body is a valid "nothing staged" result. }
   Result := RunGit(['diff', '--cached', '--stat', '-p', '--no-color'], DiffText, ExitCode);
 
+  Finally
+    FOutputLimit := PreviousLimit;
+    If Not Result Then DiffText := '';
+  End;
 End;
 
 Function TGitService.StatusSummaryForCommit(Out SummaryText: String): Boolean;
@@ -1958,8 +1964,11 @@ End;
 
 Function TGitService.ShowCommitPathDiff(Const Sha, Path: String; Out DiffText: String): Boolean;
 Var
+  PreviousLimit: Int64;
   ExitCode: Integer;
 Begin
+  PreviousLimit := FOutputLimit; FOutputLimit := GitPreviewByteLimit;
+  Try
   DiffText := '';
   Result := False;
   If (Sha = '') Or (Path = '') Then
@@ -1967,6 +1976,10 @@ Begin
   Result := RunGit(['diff-tree', '--root', '--diff-merges=first-parent', '--no-commit-id',
     '--no-color', '--no-ext-diff', '--no-textconv', '-p', '--find-renames',
     '-U' + IntToStr(DiffContextLines(Path, Sha, False)), Sha, '--', Path], DiffText, ExitCode);
+  Finally
+    FOutputLimit := PreviousLimit;
+    If Not Result Then DiffText := '';
+  End;
 End;
 
 Function TGitService.Checkout(Const RefName: String): Boolean;

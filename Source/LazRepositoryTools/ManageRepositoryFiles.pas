@@ -281,7 +281,7 @@ Begin
                 Else If FromStaged Then
                   FilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
                 Else
-                  FilesDiffView.LoadPlainText(Title, '(no textual content)', Path);
+                  FilesDiffView.LoadPlainText(Title, 'Preview unavailable: ' + GitClient.LastError, Path);
               End
             Else
               FilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
