@@ -36,7 +36,9 @@ Type
     gjkRepoProbe,
     gjkSuggestMessage,
     gjkIndexHistory,
-    gjkFetchDetails
+    gjkFetchDetails,
+    gjkCommitPaths,
+    gjkFilePreview
   );
 
   TGitJob = Class;
@@ -45,6 +47,9 @@ Type
 
   TGitJob = Class
   Private
+    FPreviewPath, FPreviewSha, FPreviewText: String;
+    FPreviewStaged, FPreviewPlain, FPreviewReadBytes: Boolean;
+    FPreviewBytes: TMemoryStream;
     FKind: TGitJobKind;
     FId: Integer;
     FRepoPath: String;
@@ -88,6 +93,13 @@ Type
     Function CreatePushFollowup: TGitJob;
     Procedure TakePaths(Paths: TStringList);
     Procedure CopyPathsFrom(Paths: TStrings);
+    Property PreviewPath: String Read FPreviewPath Write FPreviewPath;
+    Property PreviewSha: String Read FPreviewSha Write FPreviewSha;
+    Property PreviewStaged: Boolean Read FPreviewStaged Write FPreviewStaged;
+    Property PreviewReadBytes: Boolean Read FPreviewReadBytes Write FPreviewReadBytes;
+    Property PreviewPlain: Boolean Read FPreviewPlain;
+    Property PreviewText: String Read FPreviewText;
+    Property PreviewBytes: TMemoryStream Read FPreviewBytes;
     Property Kind: TGitJobKind Read FKind;
     Property Id: Integer Read FId Write FId;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
@@ -260,6 +272,7 @@ Destructor TGitJob.Destroy;
 Begin
   FreeAndNil(FPaths);
   FreeAndNil(FTrackedFiles);
+  FreeAndNil(FPreviewBytes);
   Inherited Destroy;
 End;
 
@@ -711,6 +724,31 @@ Begin
         Job.FOk := Git.ApplyPatchToIndex(Job.PatchText, Job.ReversePatch);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
+      End;
+    gjkCommitPaths:
+      Begin
+        Job.FOk := Git.ListCommitPaths(Job.PreviewSha, Job.FPaths);
+        If Not Job.FOk Then Job.FErrorText := Git.LastError;
+      End;
+    gjkFilePreview:
+      Begin
+        If Job.PreviewReadBytes Then
+          Begin
+            Job.FPreviewBytes := TMemoryStream.Create;
+            Job.FOk := Git.ReadBlobBytes(Job.PreviewSha, Job.PreviewPath, Job.PreviewStaged, Job.FPreviewBytes);
+          End
+        Else
+          Begin
+            If Job.PreviewSha <> '' Then
+              Job.FOk := Git.ShowCommitPathDiff(Job.PreviewSha, Job.PreviewPath, Job.FPreviewText)
+            Else Job.FOk := Git.DiffPath(Job.PreviewPath, Job.PreviewStaged, Job.FPreviewText);
+            If Job.FOk And (Job.PreviewSha = '') And Not Job.PreviewStaged And (Job.FPreviewText = '') Then
+              Begin
+                Job.FPreviewPlain := True;
+                Job.FOk := Git.ReadWorkingTreeFile(Job.PreviewPath, Job.FPreviewText);
+              End;
+          End;
+        If Not Job.FOk Then Job.FErrorText := Git.LastError;
       End;
     gjkListStatus:
       Begin

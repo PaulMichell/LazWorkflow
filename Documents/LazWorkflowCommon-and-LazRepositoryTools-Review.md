@@ -268,3 +268,9 @@ Simplification 3 uses the existing preload worker as the sole engine factory/loa
 Simplification 4 now retains all failed repository-setting write diagnostics and reports personal-dictionary save failures, removing an unsuccessfully saved word from the in-memory personal set. Transfer-result snapshots were handled in the earlier Git result commit.
 
 Validation: package compilation, checked `SpellCheckerTest` and new checked `SpellConfigTest` passed, with zero heap leaks. Config tests cover asynchronous loading, unchanged options, cache invalidation, save failure, and rejecting obsolete loads. Paragraph/rendering performance improvements have not yet been benchmarked in a running IDE.
+
+## Implementation update: remaining asynchronous previews (O1)
+
+Commit path lists, selected commit diffs, working-tree/index diffs and image/blob reads now run as background jobs. Views cancel superseded reads, reject results using repository and request generation, and detach callbacks during destruction. The files pane delegates previews to the view instead of issuing Git commands. Unchanged text results preserve the displayed selection and scroll state during polling.
+
+Validation: package compilation and checked repository tests passed with zero leaks. New job tests exercise commit lists/diffs, clean text and byte previews; the existing cancellation/detachment stress cases still pass. Static search finds no direct Git service calls remaining in `GitDiffView` or `ManageRepositoryFiles`. Interactive selection latency and image rendering remain unmeasured.

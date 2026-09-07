@@ -436,6 +436,9 @@ Type
   TJobObserver = Class
     Done, Ok, WasCancelled, StaleRejected: Boolean;
     Followup: TGitJob;
+    PreviewData: String;
+    PreviewPlain: Boolean;
+    PathCount: Integer;
     CurrentRepo: String;
     CurrentGeneration: QWord;
     Procedure Finished(Job: TGitJob);
@@ -445,6 +448,13 @@ Type
 Procedure TJobObserver.Finished(Job: TGitJob);
 Begin
   Done := True; Ok := Job.Ok; WasCancelled := Job.Cancelled;
+  PreviewData := Job.PreviewText; PreviewPlain := Job.PreviewPlain;
+  If Assigned(Job.PreviewBytes) Then
+    Begin
+      SetLength(PreviewData, Job.PreviewBytes.Size);
+      If PreviewData <> '' Then Move(Job.PreviewBytes.Memory^, PreviewData[1], Length(PreviewData));
+    End;
+  If Assigned(Job.Paths) Then PathCount := Job.Paths.Count;
   If Job.Kind = gjkCommit Then
     Begin
       StaleRejected := Not Job.MatchesRepository(CurrentRepo, CurrentGeneration);
@@ -493,6 +503,37 @@ Begin
     Raise Exception.Create('commit did not reach test barrier');
 End;
 {$ENDIF}
+
+Procedure TestPreviewJobs;
+Var
+  Runner: TGitJobRunner;
+  Observer: TJobObserver;
+  Job: TGitJob;
+  Dir: String;
+  Kind: Integer;
+Begin
+  Dir := NewRepo('preview-jobs'); Runner := TGitJobRunner.Create; Observer := TJobObserver.Create;
+  Try
+    For Kind := 0 To 3 Do
+      Begin
+        Observer.Done := False;
+        If Kind = 0 Then Job := TGitJob.Create(gjkCommitPaths)
+        Else Job := TGitJob.Create(gjkFilePreview);
+        Job.RepoPath := Dir; Job.PreviewPath := 'base.txt'; Job.Quiet := True;
+        Job.OnFinished := @Observer.Finished;
+        If Kind < 2 Then Job.PreviewSha := 'HEAD';
+        Job.PreviewReadBytes := Kind = 3;
+        Check('submit preview job', Runner.Submit(Job)); AwaitDone(Observer);
+        Check('preview job succeeded', Observer.Ok);
+        Case Kind Of
+          0: Check('async commit path list', Observer.PathCount = 1);
+          1: Check('async commit diff', Pos('+base', Observer.PreviewData) > 0);
+          2: Check('async clean text', Observer.PreviewPlain And (Observer.PreviewData = 'base' + #10));
+          3: Check('async bytes', Observer.PreviewData = 'base' + #10);
+        End;
+      End;
+  Finally Runner.DetachFinishedHandler(@Observer.Finished); Runner.Free; Observer.Free; End;
+End;
 
 Procedure TestRepositoryContext;
 Var
@@ -638,6 +679,7 @@ Begin
       TestLiteralPaths;
       TestRename;
       TestIgnorePaths;
+      TestPreviewJobs;
       TestRepositoryContext;
       {$IFDEF UNIX}TestRunningDetach;{$ENDIF}
       TestDetachAndCancel;

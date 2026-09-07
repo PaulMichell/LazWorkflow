@@ -74,6 +74,9 @@ Type
   Private
     FDiffText: String;
     FRepoPath: String;
+    FReadGeneration: PtrInt;
+    FReadTitle, FReadIdentity, FReadLastText: String;
+    FReadHasText: Boolean;
     FStagedSide: Boolean;
     FMode: TGitDiffViewMode;
     FBrowseSha: String;
@@ -150,6 +153,9 @@ Type
     Procedure UpdateActionEnabled;
     Procedure DoStatusChanged;
     Procedure DoSelectionChanged;
+    Procedure ReadFinished(Job: TGitJob);
+    Procedure SubmitRead(Job: TGitJob);
+    Procedure RequestPreview(Const Title, Path, Sha: String; Staged: Boolean);
     Procedure ApplyPatchFinished(Job: TGitJob);
     Function SubmitApplyPatch(Const Patch: String; Reverse: Boolean): Boolean;
     Procedure EditSpecialLineColors(Sender: TObject; Line: Integer; Var Special: Boolean;
@@ -192,6 +198,7 @@ Type
     Function LoadBinaryOrImagePreview(Const Title, RelPath: String; Const Sha: String = '';
       StagedSide: Boolean = False): Boolean;
     { Manage form: list files in the commit; editor shows full-file embedded diff. }
+    Procedure LoadWorkingFile(Const RepoPath, Path: String; Staged: Boolean);
     Procedure LoadCommit(Const ARepoPath, Sha, Title: String);
     { RepoPath + StagedSide control partial stage/unstage against the index. }
     Procedure SetStagingContext(Const ARepoPath: String; StagedSide: Boolean);
@@ -302,6 +309,8 @@ Destructor TGitDiffView.Destroy;
 Begin
   If Assigned(GitJobs) Then
     Begin
+      GitJobs.CancelIfHandler(@ReadFinished);
+      GitJobs.DetachFinishedHandler(@ReadFinished);
       GitJobs.CancelIfHandler(@ApplyPatchFinished);
       GitJobs.DetachFinishedHandler(@ApplyPatchFinished);
     End;
@@ -1435,49 +1444,9 @@ End;
 
 Function TGitDiffView.TryShowBinaryOrImage(Const TitleText, RelPath: String; Const Sha: String;
   StagedSide: Boolean): Boolean;
-Var
-  Mem: TMemoryStream;
-  Ext: String;
 Begin
-  Result := False;
-  Ext := ExtractFileExt(RelPath);
-  If Not (FileExtensionIsImage(Ext) Or FileExtensionIsLikelyBinary(Ext)) Then
-    Exit;
-  If Not Assigned(GitClient) Or (FRepoPath = '') Then
-    Begin
-      ShowBinaryMessage(TitleText);
-      Result := True;
-      Exit;
-    End;
-  GitClient.RepoPath := FRepoPath;
-  If FileExtensionIsImage(Ext) Then
-    Begin
-      Mem := TMemoryStream.Create;
-      Try
-        If GitClient.ReadBlobBytes(Sha, RelPath, StagedSide, Mem) Then
-          Begin
-            If Mem.Size > GitPreviewByteLimit Then
-              Begin
-                ShowBinaryMessage(TitleText);
-                Result := True;
-                Exit;
-              End;
-            If TryShowImageFromStream(TitleText, Mem) Then
-              Begin
-                Result := True;
-                Exit;
-              End;
-          End;
-      Finally
-        Mem.Free;
-      End;
-    End;
-  { Binary extension, or image that LCL could not decode. }
-  ShowBinaryMessage(TitleText);
-  If FileExtensionIsImage(Ext) And Assigned(BinaryLabel) Then
-    BinaryLabel.Caption := 'Image preview unavailable (8 MiB / 16 megapixel limit, or unsupported image).' +
-      LineEnding + GitClient.LastError;
-  Result := True;
+  Result := FileExtensionIsImage(ExtractFileExt(RelPath)) Or FileExtensionIsLikelyBinary(ExtractFileExt(RelPath));
+  If Result Then RequestPreview(TitleText, RelPath, Sha, StagedSide);
 End;
 
 Function TGitDiffView.LoadBinaryOrImagePreview(Const Title, RelPath: String; Const Sha: String;
@@ -1905,6 +1874,9 @@ End;
 
 Procedure TGitDiffView.Clear;
 Begin
+  FReadIdentity := ''; FReadHasText := False; FReadLastText := '';
+  Inc(FReadGeneration);
+  If Assigned(GitJobs) Then GitJobs.CancelIfHandler(@ReadFinished);
   CancelPendingScroll;
   FDiffText := '';
   FBrowseSha := '';
@@ -2628,80 +2600,10 @@ Begin
 End;
 
 Procedure TGitDiffView.ShowSelectedBrowseFile;
-Var
-  Path, DiffText: String;
-  ExpectedSha: String;
 Begin
-  If (FMode <> dvmBrowse) Or Not IsAlive Then
-    Exit;
-  CancelPendingScroll;
-  ShowEditorPane;
-  DiffEditor.Lines.Clear;
-  FDiffText := '';
-  If (FileList.ItemIndex < 0) Or (FileList.ItemIndex >= FileList.Items.Count) Then
-    Begin
-      DiffEditor.Lines.Text := '(select a file)';
-      UpdateActionEnabled;
-      Exit;
-    End;
-  Path := FileList.Items[FileList.ItemIndex];
-  If (FRepoPath = '') Or (FBrowseSha = '') Or Not Assigned(GitClient) Then
-    Begin
-      DiffEditor.Lines.Text := '(no repository)';
-      UpdateActionEnabled;
-      Exit;
-    End;
-
-  ExpectedSha := FBrowseSha;
-  If TryShowBinaryOrImage(Path, Path, FBrowseSha, False) Then
-    Exit;
-  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Or (FMode <> dvmBrowse) Then
-    Exit;
-
-  GitClient.RepoPath := FRepoPath;
-  If Not GitClient.ShowCommitPathDiff(FBrowseSha, Path, DiffText) Then
-    Begin
-      If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
-        Exit;
-      ShowEditorPane;
-      DiffEditor.Highlighter := Nil;
-      DiffEditor.Lines.Text := 'Could not load diff for ' + Path + LineEnding + GitClient.LastError;
-      UpdateActionEnabled;
-      Exit;
-    End;
-
-  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Or (FMode <> dvmBrowse) Then
-    Exit;
-
-  If DiffTextLooksBinary(DiffText) Then
-    Begin
-      If TryShowBinaryOrImage(Path, Path, FBrowseSha, False) Then
-        Exit;
-      ShowBinaryMessage(Path);
-      Exit;
-    End;
-
-  ApplyIDEEditorAppearance;
-  ShowEditorPane;
-  FDiffText := DiffText;
-  If Trim(DiffText) = '' Then
-    Begin
-      FreeOwnedLanguageHighlighter;
-      DiffEditor.Highlighter := Nil;
-      DiffEditor.Lines.Text := '(no textual diff for ' + Path + ')';
-    End
-  Else
-    Begin
-      { History shows code lines only — drop diff --git / +++ / --- / @@ headers. }
-      ApplyDiffHighlighter;
-      SetEditorDiffText(DiffText, True);
-      ApplyMixedDiffHighlighter(Path);
-      EnsureDiffOverviewGutter;
-      ScheduleOverviewRefresh;
-      Inc(FScrollGeneration);
-      Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
-    End;
-  UpdateActionEnabled;
+  If (FMode <> dvmBrowse) Or Not IsAlive Then Exit;
+  If (FileList.ItemIndex < 0) Or (FileList.ItemIndex >= FileList.Items.Count) Then Exit;
+  RequestPreview(FileList.Items[FileList.ItemIndex], FileList.Items[FileList.ItemIndex], FBrowseSha, False);
 End;
 
 Procedure TGitDiffView.FileListSelectionChange(Sender: TObject; User: Boolean);
@@ -2804,80 +2706,109 @@ Begin
   UpdateActionEnabled;
 End;
 
-Procedure TGitDiffView.LoadCommit(Const ARepoPath, Sha, Title: String);
-Var
-  Paths: TStringList;
-  I: Integer;
-  ExpectedSha: String;
+Procedure TGitDiffView.SubmitRead(Job: TGitJob);
 Begin
-  If Not IsAlive Then
-    Exit;
-  If (FMode = dvmBrowse) And (FBrowseSha = Sha) And (FRepoPath = ARepoPath) And
-     (Sha <> '') And Assigned(FileList) And (FileList.Items.Count > 0) Then
+  Inc(FReadGeneration);
+  Job.Tag := FReadGeneration; Job.RepoPath := FRepoPath;
+  Job.Quiet := True; Job.OnFinished := @ReadFinished;
+  If Not Assigned(GitJobs) Then Begin Job.Free; Exit; End;
+  GitJobs.CancelIfHandler(@ReadFinished);
+  If Not GitJobs.Submit(Job) Then
+    LoadPlainText(FReadTitle, 'Could not queue preview');
+End;
+
+Procedure TGitDiffView.RequestPreview(Const Title, Path, Sha: String; Staged: Boolean);
+Var Job: TGitJob; Identity: String;
+Begin
+  FReadTitle := Title;
+  Identity := FRepoPath + #0 + Path + #0 + Sha + #0 + BoolToStr(Staged, True);
+  If Identity <> FReadIdentity Then
     Begin
-      If Title <> '' Then
-        TitleLabel.Caption := Title;
+      FReadIdentity := Identity; FReadHasText := False; FReadLastText := '';
+      ClearDisplayMap; FDiffText := ''; ClearLineSelection(False);
+      ShowEditorPane; DiffEditor.Highlighter := Nil; DiffEditor.Lines.Text := 'Loading…';
+    End;
+  If FileExtensionIsLikelyBinary(ExtractFileExt(Path)) And Not FileExtensionIsImage(ExtractFileExt(Path)) Then
+    Begin
+      Inc(FReadGeneration);
+      If Assigned(GitJobs) Then GitJobs.CancelIfHandler(@ReadFinished);
+      ShowBinaryMessage(Title); Exit;
+    End;
+  Job := TGitJob.Create(gjkFilePreview);
+  Job.PreviewPath := Path; Job.PreviewSha := Sha; Job.PreviewStaged := Staged;
+  Job.PreviewReadBytes := FileExtensionIsImage(ExtractFileExt(Path));
+  SubmitRead(Job);
+End;
+
+Procedure TGitDiffView.LoadWorkingFile(Const RepoPath, Path: String; Staged: Boolean);
+Var Title: String;
+Begin
+  If Not IsAlive Then Exit;
+  SetViewMode(dvmEditorOnly); SetStagingContext(RepoPath, Staged);
+  If Staged Then Title := 'Staged: ' + Path Else Title := 'Working tree: ' + Path;
+  RequestPreview(Title, Path, '', Staged);
+End;
+
+Procedure TGitDiffView.ReadFinished(Job: TGitJob);
+Var I: Integer;
+Begin
+  If Not IsAlive Or Job.Cancelled Or (Job.Tag <> FReadGeneration) Or
+    (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then Exit;
+  If Not Job.Ok Then
+    Begin FReadHasText := False; LoadPlainText(FReadTitle, 'Preview unavailable: ' + Job.ErrorText); Exit; End;
+  If Job.Kind = gjkCommitPaths Then
+    Begin
+      FUpdatingList := True;
+      Try
+        FileList.Items.Clear;
+        For I := 0 To Job.Paths.Count - 1 Do FileList.Items.Add(Job.Paths[I]);
+        If FileList.Items.Count > 0 Then FileList.ItemIndex := 0;
+      Finally FUpdatingList := False; End;
+      If FileList.Items.Count > 0 Then ShowSelectedBrowseFile
+      Else LoadPlainText(FReadTitle, '(no files changed in this commit)');
       Exit;
     End;
-  SetViewMode(dvmBrowse);
-  Clear;
-  FRepoPath := ARepoPath;
-  FBrowseSha := Sha;
-  ExpectedSha := Sha;
-  If Title <> '' Then
-    TitleLabel.Caption := Title
-  Else
-    TitleLabel.Caption := 'Commit ' + Copy(Sha, 1, 7);
-  ApplyIDEEditorAppearance;
-
-  If (ARepoPath = '') Or (Sha = '') Or Not Assigned(GitClient) Then
+  If Not Job.PreviewReadBytes Then
     Begin
-      DiffEditor.Highlighter := Nil;
-      DiffEditor.Lines.Text := '(no commit selected)';
-      Exit;
+      If FReadHasText And (Job.PreviewText = FReadLastText) Then Exit;
+      FReadLastText := Job.PreviewText; FReadHasText := True;
     End;
-
-  GitClient.RepoPath := ARepoPath;
-  Paths := Nil;
-  If Not GitClient.ListCommitPaths(Sha, Paths) Then
+  If Job.PreviewReadBytes Then
     Begin
-      If IsAlive And (FBrowseSha = ExpectedSha) Then
+      If Not TryShowImageFromStream(FReadTitle, Job.PreviewBytes) Then
         Begin
-          DiffEditor.Highlighter := Nil;
-          DiffEditor.Lines.Text := 'Could not list commit files: ' + GitClient.LastError;
+          ShowBinaryMessage(FReadTitle);
+          BinaryLabel.Caption := 'Image preview unavailable (16 megapixel limit or unsupported image).';
         End;
-      Paths.Free;
-      Exit;
-    End;
-
-  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
+    End
+  Else If DiffTextLooksBinary(Job.PreviewText) Then ShowBinaryMessage(FReadTitle)
+  Else If Job.PreviewPlain Then LoadPlainText(FReadTitle, Job.PreviewText, Job.PreviewPath)
+  Else If FMode = dvmBrowse Then
     Begin
-      Paths.Free;
-      Exit;
-    End;
+      ShowEditorPane; FDiffText := Job.PreviewText;
+      ApplyDiffHighlighter; SetEditorDiffText(Job.PreviewText, True);
+      ApplyMixedDiffHighlighter(Job.PreviewPath);
+      EnsureDiffOverviewGutter; ScheduleOverviewRefresh;
+      Inc(FScrollGeneration); Application.QueueAsyncCall(@DoScrollToFirstChangeAsync, FScrollGeneration);
+    End
+  Else LoadEmbeddedDiff(FReadTitle, Job.PreviewText, Job.PreviewPath);
+  UpdateActionEnabled;
+End;
 
-  FUpdatingList := True;
-  Try
-    For I := 0 To Paths.Count - 1 Do
-      FileList.Items.Add(Paths[I]);
-    If FileList.Items.Count > 0 Then
-      FileList.ItemIndex := 0;
-  Finally
-    FUpdatingList := False;
-    Paths.Free;
-  End;
-
-  If Not IsAlive Or (FBrowseSha <> ExpectedSha) Then
-    Exit;
-
-  If FileList.Items.Count = 0 Then
-    Begin
-      DiffEditor.Highlighter := Nil;
-      DiffEditor.Lines.Text := '(no files changed in this commit)';
-      Exit;
-    End;
-
-  ShowSelectedBrowseFile;
+Procedure TGitDiffView.LoadCommit(Const ARepoPath, Sha, Title: String);
+Var Job: TGitJob;
+Begin
+  If Not IsAlive Then Exit;
+  If (FMode = dvmBrowse) And (FBrowseSha = Sha) And (FRepoPath = ARepoPath) And
+    (Sha <> '') And (FileList.Items.Count > 0) Then Exit;
+  SetViewMode(dvmBrowse); Clear;
+  FRepoPath := ARepoPath; FBrowseSha := Sha; FReadTitle := Title;
+  If Title <> '' Then TitleLabel.Caption := Title Else TitleLabel.Caption := 'Commit ' + Copy(Sha, 1, 7);
+  ApplyIDEEditorAppearance;
+  If (ARepoPath = '') Or (Sha = '') Then Exit;
+  DiffEditor.Highlighter := Nil; DiffEditor.Lines.Text := 'Loading…';
+  Job := TGitJob.Create(gjkCommitPaths); Job.PreviewSha := Sha;
+  SubmitRead(Job);
 End;
 
 Function TGitDiffView.SelectedPath: String;

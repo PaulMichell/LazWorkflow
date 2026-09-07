@@ -241,7 +241,7 @@ Var
   List: TListBox;
   Paths: TStringList;
   I: Integer;
-  DiffText, Path, Title, Content: String;
+  Path: String;
 Begin
   FLastFromStaged := FromStaged;
   If Not Assigned(FilesDiffView) Then
@@ -256,40 +256,18 @@ Begin
       List := FilesList;
       Paths := FFilesPaths;
     End;
-  FilesDiffView.Clear;
   FilesDiffView.SetViewMode(dvmEditorOnly);
   FilesDiffView.SetStagingContext(RepoPath, FromStaged);
-  If (List = Nil) Or (Paths = Nil) Or Not Assigned(GitClient) Then
+  If (List = Nil) Or (Paths = Nil) Or Not Assigned(FilesDiffView) Then
     Exit;
   For I := 0 To List.Count - 1 Do
     If List.Selected[I] And (I < Paths.Count) Then
       Begin
         Path := Paths[I];
-        If FromStaged Then
-          Title := 'Staged: ' + Path
-        Else
-          Title := 'Working tree: ' + Path;
-        GitClient.RepoPath := RepoPath;
-        If FilesDiffView.LoadBinaryOrImagePreview(Title, Path, '', FromStaged) Then
-          Exit;
-        If GitClient.DiffPath(Path, FromStaged, DiffText) Then
-          Begin
-            If Trim(DiffText) = '' Then
-              Begin
-                If (Not FromStaged) And GitClient.ReadWorkingTreeFile(Path, Content) Then
-                  FilesDiffView.LoadPlainText(Title + ' (clean)', Content, Path)
-                Else If FromStaged Then
-                  FilesDiffView.LoadPlainText(Title, '(no staged changes for this file)', Path)
-                Else
-                  FilesDiffView.LoadPlainText(Title, 'Preview unavailable: ' + GitClient.LastError, Path);
-              End
-            Else
-              FilesDiffView.LoadEmbeddedDiff(Title, DiffText, Path);
-          End
-        Else
-          FilesDiffView.LoadPlainText(Title, 'Diff failed: ' + GitClient.LastError);
+        FilesDiffView.LoadWorkingFile(RepoPath, Path, FromStaged);
         Exit;
       End;
+  FilesDiffView.Clear;
 End;
 
 End.
