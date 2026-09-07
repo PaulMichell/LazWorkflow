@@ -155,7 +155,7 @@ Type
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
     FJobBusy: Boolean;
-    FPushAfterCommit: Boolean;
+    FRepoGeneration: QWord;
     { Generation tokens drop stale index/detail jobs after a rebind or cancel. }
     FIndexGen: Integer;
     FDetailGen: Integer;
@@ -272,7 +272,7 @@ Begin
   FDetailLoading := False;
   FRemoteOpBusy := False;
   FJobBusy := False;
-  FPushAfterCommit := False;
+  FRepoGeneration := 0;
   FIndexGen := 0;
   FDetailGen := 0;
   FInListSelChange := False;
@@ -610,6 +610,7 @@ Begin
     End;
   If Job.RepoPath = '' Then
     Job.RepoPath := FRepoPath;
+  Job.RepoGeneration := FRepoGeneration;
   Job.OnFinished := @GitJobFinished;
   Result := GitJobs.Submit(Job);
   { Submit frees Job on failure; do not read it afterwards. }
@@ -625,8 +626,28 @@ End;
 Procedure TManageRepositoryForm.GitJobFinished(Job: TGitJob);
 Var
   Msg: String;
+  Followup: TGitJob;
+  PushQueued: Boolean;
 Begin
   If (csDestroying in ComponentState) Or Not Assigned(Job) Then
+    Exit;
+
+  { Follow-up intent belongs to the completed job, even if this window now
+    displays another repository. Submit directly to preserve its context. }
+  PushQueued := False;
+  Followup := Job.CreatePushFollowup;
+  If Assigned(Followup) Then
+    Begin
+      If Assigned(GitJobs) Then
+        PushQueued := GitJobs.Submit(Followup)
+      Else
+        Followup.Free;
+      If PushQueued And Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+        FRemoteOpBusy := True;
+      If Not PushQueued Then
+        WorkflowLogger.Warning('ManageRepository', 'Could not queue push for ' + Job.RepoPath);
+    End;
+  If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
     Exit;
 
   Case Job.Kind Of
@@ -653,6 +674,8 @@ Begin
         If Job.Ok Then
           Begin
             MessageDlg(Msg, mtInformation, [mbOK], 0);
+            If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+              Exit;
             If Job.IndexOk Then
               Begin
                 ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
@@ -681,19 +704,17 @@ Begin
         If Not Job.Ok Then
           Begin
             MessageDlg('Commit failed: ' + Job.ErrorText, mtError, [mbOK], 0);
-            RefreshFiles;
+            If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+              RefreshFiles;
             Exit;
           End;
         WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
         If Assigned(MessageEditor) Then
           MessageEditor.Clear;
         MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
-        If FPushAfterCommit Then
-          Begin
-            FPushAfterCommit := False;
-            StartRemoteOp(rokPush);
-          End
-        Else
+        If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+          Exit;
+        If Not PushQueued Then
           ManualRefresh;
       End;
     gjkCheckout:
@@ -713,7 +734,8 @@ Begin
           Begin
             MessageDlg('Created branch "' + Job.BranchName + '" at ' + Copy(Job.RefName, 1, 7),
               mtInformation, [mbOK], 0);
-            ManualRefresh;
+            If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+              ManualRefresh;
           End
         Else
           MessageDlg('Create branch failed: ' + Job.ErrorText, mtError, [mbOK], 0);
@@ -733,14 +755,15 @@ Begin
           Else
             { stage / unstage already logged by GitService when events publish }
           End;
-        RefreshFiles;
+        If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+          RefreshFiles;
       End;
     gjkListStatus:
       Begin
         FStatusJobPending := False;
         If Job.Cancelled Then
           Exit;
-        If (Job.Tag <> FStatusGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
+        If (Job.Tag <> FStatusGen) Or (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then
           Begin
             If (FRepoPath <> '') And DirectoryExists(FRepoPath) Then
               SubmitFilesStatus;
@@ -790,7 +813,7 @@ Begin
       End;
     gjkIndexHistory:
       Begin
-        If (Job.Tag <> FIndexGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
+        If (Job.Tag <> FIndexGen) Or (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then
           Exit;
         If Job.Cancelled Then
           Begin
@@ -801,7 +824,7 @@ Begin
       End;
     gjkFetchDetails:
       Begin
-        If (Job.Tag <> FDetailGen) Or (Not SameText(Job.RepoPath, FRepoPath)) Then
+        If (Job.Tag <> FDetailGen) Or (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then
           Exit;
         If Job.Cancelled Then
           Begin
@@ -1522,8 +1545,8 @@ Begin
   If FJobBusy Then
     Exit;
 
-  FPushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
   Job := TGitJob.Create(gjkCommit);
+  Job.PushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
   Job.RepoPath := FRepoPath;
   Job.CommitMessage := Msg;
   SubmitGitJob(Job);
@@ -1812,6 +1835,13 @@ Begin
       If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
         RefreshFiles;
       Exit;
+    End;
+  If CompareFilenames(NewPath, FRepoPath) <> 0 Then
+    Begin
+      Inc(FRepoGeneration);
+      FStatusJobPending := False;
+      FProbePending := False;
+      FRemoteOpBusy := False;
     End;
   { Tear down workers and pending UI work before swapping repo identity. }
   If Assigned(FDetailTimer) Then

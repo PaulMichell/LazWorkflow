@@ -57,6 +57,8 @@ Type
     FPaths: TStringList;
     FTimeoutMs: Integer;
     FTag: PtrInt;
+    FRepoGeneration: QWord;
+    FPushAfterCommit: Boolean;
     FOnFinished: TGitJobFinishedEvent;
     FOk: Boolean;
     FCancelled: Boolean;
@@ -78,6 +80,9 @@ Type
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
+    Function MatchesRepository(Const Path: String; Generation: QWord): Boolean;
+    { A follow-up copies its originating repository and callback context. }
+    Function CreatePushFollowup: TGitJob;
     Procedure TakePaths(Paths: TStringList);
     Procedure CopyPathsFrom(Paths: TStrings);
     Property Kind: TGitJobKind Read FKind;
@@ -92,6 +97,8 @@ Type
     Property Paths: TStringList Read FPaths;
     Property TimeoutMs: Integer Read FTimeoutMs Write FTimeoutMs;
     Property Tag: PtrInt Read FTag Write FTag;
+    Property RepoGeneration: QWord Read FRepoGeneration Write FRepoGeneration;
+    Property PushAfterCommit: Boolean Read FPushAfterCommit Write FPushAfterCommit;
     Property OnFinished: TGitJobFinishedEvent Read FOnFinished Write FOnFinished;
     Property Ok: Boolean Read FOk;
     Property Cancelled: Boolean Read FCancelled;
@@ -137,7 +144,7 @@ Type
     Procedure DoBusyNotify;
     Procedure QueueFinished(Job: TGitJob);
     Procedure DoFinishedNotify;
-    Function DequeueJob: TGitJob;
+    Function DequeueJob(Git: TGitService): TGitJob;
     Procedure ExecuteJob(Job: TGitJob; Git: TGitService);
     Function NonQuietQueuedLocked: Boolean;
     Function FirstNonQuietCaptionLocked: String;
@@ -147,7 +154,8 @@ Type
     { Enqueue a job. Ownership transfers to the runner; Job is freed after OnFinished. }
     Function Submit(Job: TGitJob): Boolean;
     Procedure CancelCurrent;
-    { Nil OnFinished on queued/current/delivered jobs that still point at Handler. }
+    { Call on the main thread, like completion callbacks and UI destruction.
+      Nil OnFinished on queued/current/delivered jobs that point at Handler. }
     Procedure DetachFinishedHandler(Handler: TGitJobFinishedEvent);
     { Cancel only if the running job's OnFinished is Handler. }
     Procedure CancelIfHandler(Handler: TGitJobFinishedEvent);
@@ -163,7 +171,7 @@ Function GitJobKindCaption(Kind: TGitJobKind): String;
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GitGraphModel;
+  WorkflowLog, WorkflowEvents, GitGraphModel, LazFileUtils;
 
 Type
   TGitJobWorker = Class(TThread)
@@ -219,6 +227,8 @@ Begin
   FPaths := Nil;
   FTimeoutMs := GitJobDefaultTimeoutMs;
   FTag := 0;
+  FRepoGeneration := 0;
+  FPushAfterCommit := False;
   FOnFinished := Nil;
   FOk := False;
   FCancelled := False;
@@ -243,6 +253,25 @@ Destructor TGitJob.Destroy;
 Begin
   FreeAndNil(FPaths);
   Inherited Destroy;
+End;
+
+Function TGitJob.MatchesRepository(Const Path: String; Generation: QWord): Boolean;
+Begin
+  Result := (FRepoGeneration = Generation) And (FRepoPath <> '') And (Path <> '') And
+    (CompareFilenames(ExcludeTrailingPathDelimiter(ExpandFileName(FRepoPath)),
+      ExcludeTrailingPathDelimiter(ExpandFileName(Path))) = 0);
+End;
+
+Function TGitJob.CreatePushFollowup: TGitJob;
+Begin
+  Result := Nil;
+  If (FKind <> gjkCommit) Or Not FOk Or FCancelled Or Not FPushAfterCommit Then
+    Exit;
+  FPushAfterCommit := False;
+  Result := TGitJob.Create(gjkPush);
+  Result.RepoPath := FRepoPath;
+  Result.RepoGeneration := FRepoGeneration;
+  Result.OnFinished := FOnFinished;
 End;
 
 Procedure TGitJob.TakePaths(Paths: TStringList);
@@ -279,7 +308,6 @@ Var
   Git: TGitService;
   StartTick: QWord;
   TimedOut: Boolean;
-  NeedNotify: Boolean;
 Begin
   Git := TGitService.Create;
   { Never publish WorkflowEventBus from a worker — listeners update LCL UI. }
@@ -287,7 +315,7 @@ Begin
   Try
     While Not Terminated Do
       Begin
-        Job := FRunner.DequeueJob;
+        Job := FRunner.DequeueJob(Git);
         If Not Assigned(Job) Then
           Begin
             If Terminated Then
@@ -295,14 +323,6 @@ Begin
             RTLeventWaitFor(FRunner.FWake, 500);
             Continue;
           End;
-
-        FRunner.EnterLock;
-        Try
-          FRunner.FCurrent := Job;
-          FRunner.FActiveGit := Git;
-        Finally
-          FRunner.LeaveLock;
-        End;
 
         If Not Job.Quiet Then
           FRunner.QueueBusyNotify(True, Job.Caption);
@@ -316,7 +336,6 @@ Begin
           End
         Else
           Begin
-            Git.ResetCancel;
             Git.TimeoutMs := Job.TimeoutMs;
             Git.RepoPath := Job.RepoPath;
             StartTick := GetTickCount64;
@@ -346,30 +365,6 @@ Begin
             End;
           End;
 
-        FRunner.EnterLock;
-        Try
-          FRunner.FCurrent := Nil;
-          FRunner.FActiveGit := Nil;
-          If FRunner.NonQuietQueuedLocked Then
-            Begin
-              FRunner.FBusy := True;
-              FRunner.FCurrentCaption := FRunner.FirstNonQuietCaptionLocked;
-              NeedNotify := True;
-            End
-          Else If FRunner.FBusy Or (Not Job.Quiet) Then
-            Begin
-              FRunner.FBusy := False;
-              FRunner.FCurrentCaption := '';
-              NeedNotify := True;
-            End
-          Else
-            NeedNotify := False;
-        Finally
-          FRunner.LeaveLock;
-        End;
-
-        If NeedNotify Then
-          FRunner.QueueBusyCallback;
         FRunner.QueueFinished(Job);
       End;
   Finally
@@ -400,7 +395,13 @@ Var
   I: Integer;
   Job: TGitJob;
 Begin
-  FStopping := True;
+  EnterLock;
+  Try
+    FStopping := True;
+    FOnBusyChanged := Nil;
+  Finally
+    LeaveLock;
+  End;
   CancelCurrent;
   If Assigned(FWorker) Then
     Begin
@@ -523,13 +524,34 @@ Begin
 End;
 
 Procedure TGitJobRunner.QueueFinished(Job: TGitJob);
+Var
+  NeedNotify: Boolean;
 Begin
   EnterLock;
   Try
     FDeliverQueue.Add(Job);
+    FCurrent := Nil;
+    FActiveGit := Nil;
+    If NonQuietQueuedLocked Then
+      Begin
+        FBusy := True;
+        FCurrentCaption := FirstNonQuietCaptionLocked;
+        NeedNotify := True;
+      End
+    Else If FBusy Or (Not Job.Quiet) Then
+      Begin
+        FBusy := False;
+        FCurrentCaption := '';
+        NeedNotify := True;
+      End
+    Else
+      NeedNotify := False;
   Finally
     LeaveLock;
   End;
+
+  If NeedNotify Then
+    QueueBusyCallback;
   If Assigned(FWorker) Then
     TThread.Queue(FWorker, @DoFinishedNotify);
 End;
@@ -553,7 +575,7 @@ Begin
     If Not Assigned(Job) Then
       Break;
     Try
-      If Assigned(Job.OnFinished) Then
+      If Not FStopping And Assigned(Job.OnFinished) Then
         Job.OnFinished(Job);
     Except
       On E: Exception Do
@@ -563,7 +585,7 @@ Begin
   Until False;
 End;
 
-Function TGitJobRunner.DequeueJob: TGitJob;
+Function TGitJobRunner.DequeueJob(Git: TGitService): TGitJob;
 Begin
   Result := Nil;
   EnterLock;
@@ -574,6 +596,11 @@ Begin
       Begin
         Result := TGitJob(FQueue[0]);
         FQueue.Delete(0);
+        { Publish ownership and reset cancellation atomically before a caller
+          can cancel this job. Resetting later could lose a cancellation. }
+        Git.ResetCancel;
+        FCurrent := Result;
+        FActiveGit := Git;
       End;
   Finally
     LeaveLock;
@@ -751,7 +778,7 @@ Begin
     End;
   EnterLock;
   Try
-    If FQueue.Count >= GitJobMaxQueue Then
+    If FStopping Or (FQueue.Count >= GitJobMaxQueue) Then
       Begin
         Reject := Job;
         Job := Nil;
@@ -817,36 +844,32 @@ Begin
 End;
 
 Procedure TGitJobRunner.CancelIfHandler(Handler: TGitJobFinishedEvent);
-Var
-  Job: TGitJob;
 Begin
-  Job := Nil;
   EnterLock;
   Try
-    Job := FCurrent;
+    If Assigned(FCurrent) And SameFinishedHandler(FCurrent.OnFinished, Handler) Then
+      Begin
+        FCurrent.FCancelled := True;
+        If Assigned(FActiveGit) Then
+          FActiveGit.Cancel;
+      End;
   Finally
     LeaveLock;
   End;
-  If Assigned(Job) And SameFinishedHandler(Job.OnFinished, Handler) Then
-    CancelCurrent;
 End;
 
 Procedure TGitJobRunner.CancelCurrent;
-Var
-  Git: TGitService;
-  Job: TGitJob;
 Begin
   EnterLock;
   Try
-    Job := FCurrent;
-    Git := FActiveGit;
-    If Assigned(Job) Then
-      Job.FCancelled := True;
+    If Assigned(FCurrent) Then
+      FCurrent.FCancelled := True;
+    { Keep the worker from advancing to another job or freeing Git mid-cancel. }
+    If Assigned(FActiveGit) Then
+      FActiveGit.Cancel;
   Finally
     LeaveLock;
   End;
-  If Assigned(Git) Then
-    Git.Cancel;
 End;
 
 Function TGitJobRunner.Busy: Boolean;

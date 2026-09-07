@@ -451,6 +451,11 @@ Try
 Except
 End;
 FreeAndNil(GitManagerIDEHooks);
+If Assigned(GitJobs) And Assigned(GitIdeJobHost) Then
+  Begin
+    GitJobs.CancelIfHandler(@GitIdeJobHost.JobFinished);
+    GitJobs.DetachFinishedHandler(@GitIdeJobHost.JobFinished);
+  End;
 FreeAndNil(GitIdeJobHost);
 
 End.

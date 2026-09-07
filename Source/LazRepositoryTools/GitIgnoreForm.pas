@@ -22,6 +22,7 @@ Type
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
   Private
     FIgnorePath: String;
+    FRepoPath: String;
   Public
     Procedure LoadFromRepository(Const RepoPath: String);
   End;
@@ -62,6 +63,7 @@ End;
 
 Procedure TGitIgnoreForm.LoadFromRepository(Const RepoPath: String);
 Begin
+  FRepoPath := RepoPath;
   FIgnorePath := '';
   If Assigned(GitClient) Then
     Begin
@@ -88,15 +90,16 @@ Begin
       CanClose := False;
       Exit;
     End;
-  Try
-    IgnoreMemo.Lines.SaveToFile(FIgnorePath);
-  Except
-    On E: Exception Do
-      Begin
-        MessageDlg('Could not save .gitignore:' + LineEnding + E.Message, mtError, [mbOK], 0);
-        CanClose := False;
-      End;
-  End;
+  { A modal dialog may stay open while the file or active repository changes. }
+  If Not Assigned(GitClient) Then
+    Begin
+      CanClose := False;
+      Exit;
+    End;
+  GitClient.RepoPath := FRepoPath;
+  CanClose := GitClient.SaveIgnoreFile(IgnoreMemo.Lines);
+  If Not CanClose Then
+    MessageDlg(GitClient.LastError, mtError, [mbOK], 0);
 End;
 
 End.

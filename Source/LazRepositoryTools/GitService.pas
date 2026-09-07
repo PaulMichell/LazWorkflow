@@ -53,6 +53,7 @@ Type
       Out OutputText: String; Out ExitCode: Integer): Boolean;
     Function RunGitBinary(Const Args: Array Of String; Stream: TStream;
       Out ExitCode: Integer): Boolean;
+    Function ExpandUnstagePaths(Paths: TStrings; Expanded: TStringList): Boolean;
     Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
     Function CountRangeCommits(Const RangeSpec: String): Integer;
     Function CountAheadOfUpstream: Integer;
@@ -89,6 +90,8 @@ Type
     Function RevertPaths(Paths: TStrings): Boolean;
     { Append unique patterns to the repository-root .gitignore. }
     Function AppendIgnorePatterns(Patterns: TStrings): Boolean;
+    { Validate again at save time; never write through a .gitignore symlink. }
+    Function SaveIgnoreFile(Lines: TStrings): Boolean;
     Function Commit(Const Message: String; Out NewSha: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { Unified diff of the index vs HEAD (git diff --cached). Empty when nothing staged. }
@@ -371,6 +374,8 @@ Begin
       Proc.Options := Proc.Options + [poStderrToOutPut];
     Proc.ShowWindow := swoHIDE;
     Proc.Parameters.Clear;
+    { Every path API takes filenames, never user-supplied Git patterns. }
+    Proc.Parameters.Add('--literal-pathspecs');
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
 
@@ -802,9 +807,30 @@ Begin
     EmitWorkingTreeChanged;
 End;
 
+Function TGitService.ExpandUnstagePaths(Paths: TStrings; Expanded: TStringList): Boolean;
+Var
+  Entries: TGitStatusEntryArray;
+  I: Integer;
+Begin
+  { Resolve against fresh index status rather than a possibly stale UI row.
+    A rename is one displayed change but two paths in the index. Copies must
+    not unstage the independent source file. }
+  Result := ListStatus(Entries, False, False);
+  If Not Result Then
+    Exit;
+  Expanded.CaseSensitive := True;
+  Expanded.AddStrings(Paths);
+  For I := 0 To High(Entries) Do
+    If (Entries[I].IndexStatus = 'R') And (Entries[I].OldPath <> '') And
+       (Expanded.IndexOf(Entries[I].Path) >= 0) And
+       (Expanded.IndexOf(Entries[I].OldPath) < 0) Then
+      Expanded.Add(Entries[I].OldPath);
+End;
+
 Function TGitService.UnstagePaths(Paths: TStrings): Boolean;
 Var
   Args: Array Of String;
+  Expanded: TStringList;
   I: Integer;
   OutputText, DummySha: String;
   ExitCode: Integer;
@@ -813,42 +839,49 @@ Begin
   Args := Nil;
   If (Paths = Nil) Or (Paths.Count = 0) Then
     Exit;
-  If GetHeadSha(DummySha) Then
-    Begin
-      { git restore --staged -- paths  (modern); fall back handled by git version }
-      SetLength(Args, 3 + Paths.Count);
-      Args[0] := 'restore';
-      Args[1] := '--staged';
-      Args[2] := '--';
-      For I := 0 To Paths.Count - 1 Do
-        Args[3 + I] := Paths[I];
-      Result := RunGit(Args, OutputText, ExitCode);
-      If Not Result Then
-        Begin
-          { Older git: git reset HEAD -- paths }
-          SetLength(Args, 3 + Paths.Count);
-          Args[0] := 'reset';
-          Args[1] := 'HEAD';
-          Args[2] := '--';
-          For I := 0 To Paths.Count - 1 Do
-            Args[3 + I] := Paths[I];
-          Result := RunGit(Args, OutputText, ExitCode);
-        End;
-    End
-  Else
-    Begin
-      { Newly initialised repo: restore/reset need HEAD. Drop paths from the index. }
-      SetLength(Args, 4 + Paths.Count);
-      Args[0] := 'rm';
-      Args[1] := '--cached';
-      Args[2] := '-f';
-      Args[3] := '--';
-      For I := 0 To Paths.Count - 1 Do
-        Args[4 + I] := Paths[I];
-      Result := RunGit(Args, OutputText, ExitCode);
-    End;
-  If Result Then
-    EmitWorkingTreeChanged;
+  Expanded := TStringList.Create;
+  Try
+    If Not ExpandUnstagePaths(Paths, Expanded) Then
+      Exit;
+    If GetHeadSha(DummySha) Then
+      Begin
+        { git restore --staged -- paths  (modern); fall back handled by git version }
+        SetLength(Args, 3 + Expanded.Count);
+        Args[0] := 'restore';
+        Args[1] := '--staged';
+        Args[2] := '--';
+        For I := 0 To Expanded.Count - 1 Do
+          Args[3 + I] := Expanded[I];
+        Result := RunGit(Args, OutputText, ExitCode);
+        If Not Result Then
+          Begin
+            { Older git: git reset HEAD -- paths }
+            SetLength(Args, 3 + Expanded.Count);
+            Args[0] := 'reset';
+            Args[1] := 'HEAD';
+            Args[2] := '--';
+            For I := 0 To Expanded.Count - 1 Do
+              Args[3 + I] := Expanded[I];
+            Result := RunGit(Args, OutputText, ExitCode);
+          End;
+      End
+    Else
+      Begin
+        { Newly initialised repo: restore/reset need HEAD. Drop paths from the index. }
+        SetLength(Args, 4 + Expanded.Count);
+        Args[0] := 'rm';
+        Args[1] := '--cached';
+        Args[2] := '-f';
+        Args[3] := '--';
+        For I := 0 To Expanded.Count - 1 Do
+          Args[4 + I] := Expanded[I];
+        Result := RunGit(Args, OutputText, ExitCode);
+      End;
+    If Result Then
+      EmitWorkingTreeChanged;
+  Finally
+    Expanded.Free;
+  End;
 End;
 
 Function TGitService.StageAll: Boolean;
@@ -957,10 +990,8 @@ Begin
             End;
         End;
       If Changed Then
-        Lines.SaveToFile(IgnorePath);
+        Exit(SaveIgnoreFile(Lines));
       Result := True;
-      If Changed Then
-        EmitWorkingTreeChanged;
     Except
       On E: Exception Do
         Begin
@@ -970,6 +1001,32 @@ Begin
     End;
   Finally
     Lines.Free;
+  End;
+End;
+
+Function TGitService.SaveIgnoreFile(Lines: TStrings): Boolean;
+Var
+  IgnorePath: String;
+Begin
+  Result := False;
+  FLastError := '';
+  If Lines = Nil Then
+    Exit;
+  IgnorePath := WorkingTreeFullPath('.gitignore');
+  If IgnorePath = '' Then
+    Exit;
+  If FileIsSymlink(IgnorePath) Then
+    Begin
+      FLastError := 'Cannot write through a .gitignore symbolic link';
+      Exit;
+    End;
+  Try
+    Lines.SaveToFile(IgnorePath);
+    Result := True;
+    EmitWorkingTreeChanged;
+  Except
+    On E: Exception Do
+      FLastError := 'Could not save .gitignore: ' + E.Message;
   End;
 End;
 
@@ -1018,7 +1075,7 @@ End;
 
 Function TGitService.WorkingTreeFullPath(Const Path: String): String;
 Var
-  Root, Combined, Expanded, PhysicalRoot, PhysicalPath: String;
+  Root, Combined, Expanded, PhysicalRoot, PhysicalPath, Existing, Parent: String;
 Begin
   Result := '';
   If (Trim(Path) = '') Or (FRepoPath = '') Then
@@ -1036,25 +1093,37 @@ Begin
       FLastError := 'Path is outside the repository: ' + Path;
       Exit;
     End;
-  { ExpandFileName is lexical. A tracked symlink can point outside the tree. }
-  If FileExistsUTF8(Expanded) Or DirectoryExistsUTF8(Expanded) Then
+  { Check the nearest existing ancestor as well as existing files. FileExists
+    follows symlinks and is false for dangling links, so test those explicitly. }
+  Existing := Expanded;
+  While Not FileExistsUTF8(Existing) And Not DirectoryExistsUTF8(Existing) Do
     Begin
-      PhysicalRoot := GetPhysicalFilename(ExcludeTrailingPathDelimiter(Root), pfeOriginal);
-      If PhysicalRoot = '' Then
-        PhysicalRoot := ExcludeTrailingPathDelimiter(Root);
-      PhysicalRoot := IncludeTrailingPathDelimiter(ExpandFileName(PhysicalRoot));
-      PhysicalPath := GetPhysicalFilename(Expanded, pfeEmpty);
-      If PhysicalPath = '' Then
+      If FileIsSymlink(Existing) Then
+        Begin
+          FLastError := 'Path contains a dangling symbolic link: ' + Path;
+          Exit;
+        End;
+      Parent := ExtractFileDir(Existing);
+      If (Parent = '') Or (Parent = Existing) Then
         Begin
           FLastError := 'Path cannot be resolved: ' + Path;
           Exit;
         End;
-      PhysicalPath := ExpandFileName(PhysicalPath);
-      If CompareFilenames(Copy(PhysicalPath, 1, Length(PhysicalRoot)), PhysicalRoot) <> 0 Then
-        Begin
-          FLastError := 'Path is outside the repository: ' + Path;
-          Exit;
-        End;
+      Existing := Parent;
+    End;
+  PhysicalRoot := GetPhysicalFilename(ExcludeTrailingPathDelimiter(Root), pfeEmpty);
+  PhysicalPath := GetPhysicalFilename(Existing, pfeEmpty);
+  If (PhysicalRoot = '') Or (PhysicalPath = '') Then
+    Begin
+      FLastError := 'Path cannot be resolved: ' + Path;
+      Exit;
+    End;
+  PhysicalRoot := IncludeTrailingPathDelimiter(ExpandFileName(PhysicalRoot));
+  PhysicalPath := IncludeTrailingPathDelimiter(ExpandFileName(PhysicalPath));
+  If CompareFilenames(Copy(PhysicalPath, 1, Length(PhysicalRoot)), PhysicalRoot) <> 0 Then
+    Begin
+      FLastError := 'Path is outside the repository: ' + Path;
+      Exit;
     End;
   Result := Expanded;
 End;

@@ -216,7 +216,7 @@ Implementation
 Uses
   Math, EditorOptionsIntf, SrcEditorIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
   LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
-  GitService, Dialogs, WorkflowLog, GitDiffHighlighter;
+  GitService, Dialogs, WorkflowLog, GitDiffHighlighter, LazFileUtils;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -2257,6 +2257,8 @@ End;
 Procedure TGitDiffView.ApplyPatchFinished(Job: TGitJob);
 Begin
   If Not IsAlive Or Not Assigned(Job) Then
+    Exit;
+  If CompareFilenames(Job.RepoPath, FRepoPath) <> 0 Then
     Exit;
   If Job.Cancelled Then
     Exit;
