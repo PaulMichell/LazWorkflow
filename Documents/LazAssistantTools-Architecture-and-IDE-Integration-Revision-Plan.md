@@ -8,7 +8,11 @@ Status: proposed implementation plan, based on static source inspection and curr
 
 Turn LazAssistantTools into a Lazarus development agent with interchangeable backends. Keep the IDE responsible for workspace state, edits, project structure, builds, and review. Allow either the existing native agent loop or an external managed agent to perform the reasoning and orchestration.
 
-Initially provide **ChatGPT through a Codex runtime integration**, subject to the feasibility and release gates below, while preserving the existing xAI backend. Provide **OpenAI API access as a separate backend and billing choice**. Do not hide those two routes behind an ambiguous “OpenAI token” setting or silently fall back from subscription access to paid API calls.
+**Mandatory requirement, clarified by the user: both Grok and ChatGPT must use subscription-backed access, with no metered API-key calls.** Preserve the existing Grok browser OAuth flow and add ChatGPT through the Codex runtime using ChatGPT account sign-in, subject to the feasibility and release gates below. Direct paid OpenAI/xAI API backends are outside this revision's scope and are not fallback routes.
+
+OAuth describes authentication; API calls describe communication. Subscription-backed clients still make network/API requests. The requirement is that every model request uses the subscription entitlement, rather than a separately billed API account. This applies to chat, builds, summaries, compaction, retries, and child agents. When subscription access is unavailable or its allowance is exhausted, pause and report that state; never switch to metered billing, buy credits, or enable automatic top-ups.
+
+Do not assume a monthly subscription has a single monthly token bucket: the provider controls its included allowances and reset windows. Verify entitlement and active authentication during onboarding and qualification. OAuth alone is not proof of the charging route.
 
 The first useful ChatGPT milestone must read unsaved editor buffers, make genuinely undoable edits, build the correct project revision, and show navigable diagnostics and changes. A chat-only integration, or one that only edits files behind the IDE's back, would not meet the requested objective.
 
@@ -43,13 +47,12 @@ A model API generates responses and requests tools; LazAssistantTools must own t
 
 | Backend | Execution owner | Authentication and intended role |
 | --- | --- | --- |
-| Existing xAI API | Native Lazarus agent | Preserve current supported account flow behind an xAI adapter; establish regression baseline. |
-| ChatGPT / Codex | Managed runtime | Initial ChatGPT route, reusing an agent harness and account sign-in, subject to qualification. |
-| OpenAI API | Native Lazarus agent | Separate API-key profile using the Responses API; explicit usage-based billing choice. |
-| Future model APIs, including local models | Native Lazarus agent | Additional provider adapters with tested capabilities. Models without tool support remain available for chat only. |
+| Existing Grok OAuth access | Native Lazarus agent | Preserve browser OAuth and subscription entitlement behind the xAI adapter; verify the charging route in P0. No API-key fallback. |
+| ChatGPT / Codex | Managed runtime | Required ChatGPT subscription sign-in, reusing the runtime harness, subject to qualification. Reject API-key authentication. |
+| Future model APIs, including local models | Native Lazarus agent | Additional adapters with tested capabilities and explicit entitlement metadata. Metered providers are outside this revision; models without tool support remain chat-only. |
 | Optional Grok Build runtime | Managed runtime | Evaluate ACP integration after the initial architecture spike; do not make it a prerequisite for ChatGPT. |
 
-ChatGPT sign-in and API-key access have different account and billing arrangements. Availability must be checked against the user's account; the application must not promise a particular allowance. Codex can use a credential file or an OS credential store, so launching it does not itself guarantee encrypted credential storage. [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth)
+ChatGPT sign-in provides subscription access; API-key sign-in uses separately billed API access and must be rejected for this integration. Qualify the runtime's `forced_login_method = "chatgpt"` setting and check the active authentication method before starting work. Availability must be checked against the user's account; the application must not promise a particular allowance. Codex can use a credential file or an OS credential store, so launching it does not itself guarantee encrypted credential storage. [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth)
 
 The current App Server documentation describes a bidirectional local protocol, thread/turn operations, approvals, and generated schemas. It also explicitly labels the `app-server` command experimental and unsupported for production workloads; dynamic tools are experimental too. Therefore, use a pinned, tested version for a development preview and record a production-readiness decision before general release. Do not inherit the earlier plan's assumption of a stable production interface. [OpenAI App Server documentation](https://learn.chatgpt.com/docs/app-server)
 
@@ -65,12 +68,13 @@ Time-box an end-to-end prototype before substantial UI work:
 4. Run a build asynchronously and return diagnostics associated with that edit.
 5. Exercise approval, steering, cancellation, runtime failure, and IDE/project closure.
 6. Determine whether built-in filesystem and shell tools can be constrained so they cannot bypass the IDE edit policy.
+7. Verify subscription-backed usage for both Grok and ChatGPT. Exercise expired sign-in, exhausted allowance, and an inherited API-key environment/configuration; reject metered credentials and ensure auxiliary requests stay on the subscription route. Do not use stored secrets as test output.
 
 Prefer an isolated local MCP bridge when the chosen runtime supports the required behaviour. Codex documents local stdio MCP servers; use that as a transport option, not as proof that every lifecycle or approval requirement is satisfied. [OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp)
 
 A possible implementation is a small stdio bridge process connected to the running IDE through a private Unix socket or named pipe. Use a per-instance handshake, restricted endpoint permissions, and project-generation checks. Keep all tool semantics in the IDE broker so native and managed backends share implementation. Avoid opening an unauthenticated network service.
 
-If MCP cannot provide the required integration, evaluate experimental dynamic tools against the pinned runtime. If neither route passes, keep the managed backend in preview and advance the separately configured OpenAI API backend. Do not silently change account or billing route. If a runtime cannot prevent direct writes to live project files, restrict it to a staging workspace and import reviewed changes through the broker; do not advertise that as full live-editor integration.
+If MCP cannot provide the required integration, evaluate experimental dynamic tools against the pinned runtime. If neither route passes, keep ChatGPT integration blocked or in preview while seeking a supported subscription-compatible integration. A paid OpenAI API adapter does not satisfy the requirement and must not replace it. If a runtime cannot prevent direct writes to live project files, restrict it to a staging workspace and import reviewed changes through the broker; do not advertise that as full live-editor integration.
 
 ## 4. Proposed architecture
 
@@ -80,7 +84,7 @@ flowchart TB
     Coordinator --> Backend[IAssistantBackend]
     Backend --> Native[Native agent runtime]
     Backend --> Managed[Managed agent adapters]
-    Native --> Providers[IModelProvider: xAI, OpenAI, future providers]
+    Native --> Providers[IModelProvider: Grok OAuth, future providers]
     Native --> Broker[Shared Lazarus tool broker]
     Managed --> Bridge[Local tool bridge]
     Bridge --> Broker
@@ -104,7 +108,7 @@ Names below are proposed boundaries, not a requirement to create one unit per ti
 | `IAssistantBackend` | Open/resume session, start turn, steer, cancel, answer pending user/approval requests, expose status/capabilities, and close. Operations return asynchronously. |
 | `IModelProvider` | Serialize native-runtime requests, stream model events, preserve provider continuation state, and report model capabilities. No Lazarus or UI dependencies. |
 | `AssistantNativeBackend` | Adapt the existing actor/service loop; own native tool rounds, retries, compaction, and child runs. |
-| `AssistantXaiProvider`, `AssistantOpenAIProvider` | Provider authentication integration, transport details, model discovery, request options, and wire parsing. Share transport utilities only where semantics actually match. |
+| `AssistantXaiProvider`, future provider adapters | Provider authentication integration, transport details, model discovery, request options, and wire parsing. Share transport utilities only where semantics actually match. |
 | `AssistantCodexBackend` | Process/protocol lifecycle and translation between managed events and shared events. No duplicate native agent loop. |
 | `AssistantToolRegistry`, `AssistantToolBroker` | Tool descriptors, schema validation, permissions, workspace checks, execution dispatch, cancellation, and result receipts. |
 | `AssistantWorkspace`, `AssistantChangeSet` | Editor/disk snapshots, revisions, edit preparation/application, conflict handling, and change review. |
@@ -118,7 +122,7 @@ The UI must not import provider authentication units or construct provider reque
 
 Separate backend identity, account profile, model ID, model options, and runtime version. Discover available models where supported, supplement discovery with explicit adapter metadata and contract tests, and permit a configured model identifier without assuming its capabilities from its name.
 
-Represent at least: tool calling, streaming, images, structured output, supported reasoning settings, context limits, usage reporting, steering, resumable sessions, parallel tools, and execution ownership. Hide unsupported controls and explain unavailable actions. Do not send a hard-coded reasoning level to every model.
+Represent authentication kind and entitlement/billing route separately from model capabilities. Subscription-only is enforced policy for this revision; unknown or metered routes cannot start a model request. Represent at least: tool calling, streaming, images, structured output, supported reasoning settings, context limits, usage reporting, steering, resumable sessions, parallel tools, and execution ownership. Hide unsupported controls and explain unavailable actions. Do not send a hard-coded reasoning level to every model.
 
 Changing the selected provider starts a new session or branches from a neutral summary. It must not replay one provider's encrypted reasoning, internal tool items, or server state into another provider. Freeze the active run's profile so a settings change cannot redirect a running task.
 
@@ -130,9 +134,9 @@ Use a defined run state machine: idle, preparing, running, waiting for user, can
 
 The IDE dispatcher executes short, bounded main-thread operations. Network/process waits and pure snapshot processing run outside the UI thread. Serialize IDE and CodeTools access where required; do not assume the global CodeTools manager is thread-safe. Closing the IDE must cancel work, detach callbacks safely, and close runtime processes without an unbounded wait.
 
-### 4.4 Native OpenAI protocol correctness
+### 4.4 Existing Responses-format protocol correctness
 
-Keep response item IDs separate from tool `call_id` values, and return function results using the latter. Preserve the ordered output/continuation items needed by the provider, including multiple opaque reasoning items when applicable. Do not recreate provider state from the visible conversation alone. These distinctions follow the documented function-calling lifecycle. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+These wire-format fixes apply to the existing native adapter; they do not require implementing a metered OpenAI backend. Keep response item IDs separate from tool `call_id` values, and return function results using the latter. Preserve the ordered output/continuation items needed by the provider, including multiple opaque reasoning items when applicable. Do not recreate provider state from the visible conversation alone. These distinctions follow the documented function-calling lifecycle. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 
 Test fragmented SSE input, multiple simultaneous calls, Unicode, repeated argument substrings, empty deltas, final snapshots, interrupted streams, and duplicate terminal events. Distinguish append events from replacement snapshots rather than applying one text-merging heuristic to all payloads. Retry only operations whose effects can be reconciled; never replay a completed mutating tool merely because the next network response failed.
 
@@ -235,14 +239,14 @@ Each work package should be delivered through small, buildable commits with focu
 | P2 — Workspace and tool broker | Registry; scoped policy; IDE dispatcher; revisions/change sets; undoable edits; save outcomes; project-switch cancellation | P1 | Both direct and bridge callers use the same validated edit path; stale edits are rejected | 6–10 days |
 | P3 — ChatGPT preview | Pinned process/protocol adapter; account/model settings; bridge; streaming/steering/cancel; minimal versioned session persistence | P0, P2 | ChatGPT completes the first useful IDE workflow; no silent billing fallback or tool bypass | 5–9 days |
 | P4 — Build and evidence loop | Async builds; source manifests; diagnostics; task criteria; basic FPCUnit/configured test runner; completion report | P2; integrate with P3 | Correct revision is validated; failed tests/stale builds prevent false completion; UI stays responsive | 5–8 days |
-| P5 — Direct OpenAI API | Responses adapter; API-key profile; qualified model discovery/options; provider fixtures and optional live smoke tests | P1, P2 | Same IDE workflow passes with explicit API billing and correct continuation | 4–7 days |
+| P5 — Subscription enforcement | Grok and ChatGPT entitlement checks; reject API-key environments/configuration; quota pause/resume; auxiliary-request and child-run coverage | P1, P3 | Both backends use subscription access throughout; missing/exhausted entitlement never triggers metered requests | 3–5 days |
 | P6 — Pascal and designer depth | CodeTools navigation/refactoring; project operations; scoped designer support; paired source/resource transactions | P2, P4 | Rename and form-event acceptance projects pass, including conflict and Undo cases | 8–14 days |
 | P7 — Context and interaction | Snapshot retrieval; steering/task presentation; diff and diagnostic cards; bounded rendering; lifecycle/persistence hardening and migration | P3, P4 | Long sessions remain usable and resumable; relevant dirty buffers appear in context | 5–9 days |
 | P8 — Qualification and release | Cross-platform IDE/runtime matrix; failure injection; end-to-end benchmarks; user/developer documentation; support gate | P5–P7 | Release acceptance matrix passes and managed-runtime support status is explicitly documented | 4–7 days |
 
-P3 and P4 together define the first useful ChatGPT preview. Deliver the essential credential, persistence, diff, and cancellation pieces in those packages; P7 expands them rather than postponing correctness until later. If the managed-runtime gate fails, bring P5 forward as the explicitly selected API route while retaining the subscription work as experimental.
+P3 and P4 together define the first useful ChatGPT preview. Deliver the essential credential, persistence, diff, and cancellation pieces in those packages; P7 expands them rather than postponing correctness until later. Subscription authentication and billing-route checks are essential to P0/P3; P5 broadens the failure and lifecycle coverage. If the managed-runtime gate fails, continue subscription-compatible integration research rather than substituting paid API access.
 
-The estimates total approximately 45–77 engineering days before optional extensions. They are a planning range, not a delivery promise. The first useful preview is roughly 24–40 days on this sequence; the spike may materially reduce or increase that range.
+The estimates total approximately 44–75 engineering days before optional extensions. They are a planning range, not a delivery promise. The first useful preview is roughly 24–40 days on this sequence; the spike may materially reduce or increase that range.
 
 Later, separately scoped packages: debugger integration, richer component editors, package dependency operations, additional model providers, and optional Grok Build ACP. Introduce parallel child work only after workspace ownership is reliable: independent reads can overlap, but shared-buffer writes must serialize or use isolated workspaces with reviewed integration. Do not combine native and managed subagent schedulers for the same run.
 
@@ -254,7 +258,8 @@ Extend the existing [assistant test programs](../Source/Tests/AssistantSamplerTe
 | --- | --- |
 | Existing xAI workflow | Chat, planning, tool use, cancellation, and conversation loading remain functional after extraction. |
 | ChatGPT workflow | Account sign-in, model selection, unsaved-buffer read, edit, build, diagnostics, review, and resumed session work through the qualified runtime. |
-| OpenAI native workflow | Tool outputs reference the correct call IDs; multi-call and continuation fixtures pass; billing route is displayed correctly. |
+| Subscription-only operation | Grok and ChatGPT use their subscription entitlements; inherited API keys, expired login, and exhausted allowance cause a clear pause/error, never metered fallback. Summaries and child runs follow the same rule. |
+| Native protocol regression | Tool outputs reference the correct call IDs; multi-call and continuation fixtures pass on the existing Grok adapter. |
 | Unsaved Unicode source | Edit and navigation positions are correct for multibyte text and mixed newline cases; Undo preserves pre-existing user history. |
 | Concurrent user edit | A prepared assistant change is rejected or rebased explicitly when the user changes the buffer before application. |
 | Project switch or IDE close | Queued events/tools cannot operate on the next project; workers exit and late callbacks are harmless. |
@@ -270,21 +275,21 @@ Extend the existing [assistant test programs](../Source/Tests/AssistantSamplerTe
 
 Compare representative tasks with Grok Build using the same project snapshots and equivalent requests. Record completion rate, manual interventions, invalid edits, diagnostic repair cycles, elapsed time, and usage where reported. Compare outcomes and ergonomics; do not promise exact parity from a feature checklist or compare different models as though only the UI differed.
 
-Release blockers include lost user edits, cleared Undo history, wrong-project operations, duplicate tool effects, false validation success, secret leakage, unsupported silent account fallback, and an unconstrained runtime bypass of live-editor policy. Lesser UI polish issues should not obscure these correctness gates.
+Release blockers include lost user edits, cleared Undo history, wrong-project operations, duplicate tool effects, false validation success, secret leakage, any metered model request, and an unconstrained runtime bypass of live-editor policy. Lesser UI polish issues should not obscure these correctness gates.
 
 ## 9. Main risks and decisions
 
 | Risk or unresolved choice | Planned resolution |
 | --- | --- |
 | Experimental managed-runtime interface changes | Pin version, capture its schema/transcripts, detect compatibility at startup, and retain a release gate. Do not describe preview support as production-supported. |
-| Agent writes bypass live buffers | Prove tool restrictions in P0; otherwise staging import or explicit native API route. |
+| Agent writes bypass live buffers | Prove tool restrictions in P0; otherwise staging import under subscription authentication, or leave the integration gated. |
 | Lazarus interfaces differ by version/platform | Isolate adapters, declare a supported matrix, and test the actual installed IDE/compiler combinations. |
 | Refactoring/designer operations cause partial changes | Prepare complete change sets, verify revisions, journal outcomes, and qualify a limited operation subset before expansion. |
 | Thread/lifecycle complexity grows during extraction | Single run owner, bounded queues, explicit project generation, short IDE dispatch, and failure-injection tests. |
 | Scope expands into rebuilding every agent feature | Reuse managed orchestration where qualified; prioritize reliable Pascal operations and measurable task outcomes. |
 | Provider extensibility becomes a lowest-common-denominator API | Separate runtime and model-provider layers; expose capabilities and adapter-owned continuation rather than generic JSON passthrough everywhere. |
 
-No user decision blocks writing or reviewing this plan. Before implementing account onboarding, confirm the intended initial account route if the subscription-backed prototype cannot meet its gates. Runtime version and supported Lazarus platforms are engineering decisions to record during P0, not assumptions to hide in source code.
+The account-route decision is settled: subscription-backed Grok and ChatGPT only. If a prototype cannot meet that requirement, report the integration limitation and continue investigating a compatible route; do not ask to substitute metered API calls as a routine fallback. Runtime version and supported Lazarus platforms are engineering decisions to record during P0, not assumptions to hide in source code.
 
 ## 10. Source and API evidence
 
