@@ -24,7 +24,7 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Start;
+    Procedure Start(ExperimentalTools: Boolean = False);
     Procedure Close;
     Procedure Feed(Const Bytes: String);
     { Caller writes each returned JSONL frame once to the private stdio channel. }
@@ -85,7 +85,7 @@ Begin
   FOutgoing.Add('{"id":' + IntToStr(Result) + ',"method":"' +
     JsonEscapeText(Method) + '","params":' + Params + '}');
 End;
-Procedure TAssistantCodexHandshake.Start;
+Procedure TAssistantCodexHandshake.Start(ExperimentalTools: Boolean);
 Begin
   If FState <> ccsClosed Then
     Raise Exception.Create('Close the existing Codex connection before restarting.');
@@ -93,7 +93,7 @@ Begin
   FState := ccsInitializing;
   FInitializeId := Request('initialize',
     '{"clientInfo":{"name":"lazworkflow","title":"Lazarus Project Assistant","version":"0.1.0"},' +
-    '"capabilities":{"experimentalApi":false}}');
+    '"capabilities":{"experimentalApi":' + LowerCase(BoolToStr(ExperimentalTools, True)) + '}}');
 End;
 Procedure TAssistantCodexHandshake.RemoveQueuedRequest(Id: Int64);
 Var I: Integer; Prefix: String;
