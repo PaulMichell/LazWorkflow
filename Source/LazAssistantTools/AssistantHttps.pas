@@ -66,6 +66,8 @@ Function HttpsPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
 { User-facing hint when OpenSSL is missing (Windows). }
 Function OpenSSLMissingHint: String;
 Function UrlIsHttps(Const Url: String): Boolean;
+{ Extract only a bounded provider error message, not a raw response/request dump. }
+Function HttpsResponseErrorMessage(Const Body: String): String;
 
 Implementation
 
@@ -73,7 +75,7 @@ Uses
   {$IFDEF WINDOWS}
   Windows, WinInet,
   {$ENDIF}
-  Forms, fphttpclient, opensslsockets, openssl, WorkflowLog;
+  Forms, fphttpclient, opensslsockets, openssl, WorkflowLog, fpjson, jsonparser;
 
 Type
   THttpsChunkStream = Class(TStream)
@@ -85,6 +87,28 @@ Type
     Function Write(Const Buffer; Count: LongInt): LongInt; Override;
     Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
   End;
+
+Function HttpsResponseErrorMessage(Const Body: String): String;
+Var Data, Node: TJSONData;
+Begin
+  Result := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Body);
+      If Not (Data Is TJSONObject) Then Exit;
+      Node := Data.FindPath('error.message');
+      If Not Assigned(Node) Then Node := TJSONObject(Data).Find('message');
+      If Not Assigned(Node) Then Node := TJSONObject(Data).Find('error');
+      If Assigned(Node) And (Node.JSONType = jtString) Then
+        Result := Copy(Trim(Node.AsString), 1, 1000);
+    Except
+      { HTML proxy errors, truncated bodies and non-JSON payloads have no safe
+        structured detail. The caller still reports the HTTP status. }
+      Result := '';
+    End;
+  Finally Data.Free; End;
+End;
 
 Constructor THttpsChunkStream.Create(OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck);
 Begin

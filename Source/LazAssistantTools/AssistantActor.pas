@@ -43,8 +43,8 @@ Type
     FWrotePlan: Boolean;
     FUseResponses: Boolean;
     FTriedResponses: Boolean;
-    FEncryptedId: String;
-    FEncryptedContent: String;
+    FResponseOutputJson: String;
+    FResponsePrefix: String;
     FLoopIndex: Integer;
     FLastSnapTick: QWord;
     FPendingFinish: Boolean;
@@ -166,8 +166,8 @@ Begin
   FWrotePlan := False;
   FUseResponses := True;
   FTriedResponses := False;
-  FEncryptedId := '';
-  FEncryptedContent := '';
+  FResponseOutputJson := '';
+  FResponsePrefix := '';
   FLoopIndex := 0;
   FLastSnapTick := 0;
   FPendingFinish := False;
@@ -434,6 +434,8 @@ Var
 Begin
   If Terminated Then
     Exit;
+  If Length(FResponsePrefix) < 16384 Then
+    FResponsePrefix := FResponsePrefix + Copy(Chunk, 1, 16384 - Length(FResponsePrefix));
   FromIndex := FParser.EventCount;
   FParser.Feed(Chunk);
   ApplyParserEvents(FromIndex);
@@ -464,6 +466,8 @@ Begin
           Exit;
         End;
       FParser.Reset;
+      FResponseOutputJson := '';
+      FResponsePrefix := '';
       Control := THttpsStreamControl.Create;
       EnterCriticalSection(FHttpLock);
       Try
@@ -487,10 +491,8 @@ Begin
                 ErrorText := Format('HTTP %d', [Code])
               Else
                 ErrorText := Format('HTTP %d: %s', [Code, Copy(Trim(ErrorText), 1, 400)]);
-              If Code = 403 Then
-                ErrorText := ErrorText +
-                  ' The API refused this request (stale token, or the prompt grew too large after many tool results). ' +
-                  'Sign in again, or Compact / start a new chat and continue.';
+              LastErr := HttpsResponseErrorMessage(FResponsePrefix);
+              If LastErr <> '' Then ErrorText := Format('HTTP %d: %s', [Code, LastErr]);
             End
           Else If FParser.Failed Then
             Begin
@@ -512,19 +514,8 @@ Begin
                 MergeSamplerText(FThinking, FParser.Thinking);
               If (FParser.Content <> '') And (FContent = '') Then
                 FContent := FParser.Content;
-              If FParser.EncryptedContent <> '' Then
-                Begin
-                  FEncryptedContent := FParser.EncryptedContent;
-                  FEncryptedId := FParser.EncryptedId;
-                End;
+              FResponseOutputJson := FParser.OutputJson;
               FToolCalls := FParser.ToolCalls;
-              If FParser.Incomplete Then
-                Begin
-                  WorkflowLogger.Warning('AssistantActor', 'Incomplete response: ' + FParser.ErrorText);
-                  If (FContent <> '') And (Pos('[Incomplete response', FContent) < 1) Then
-                    FContent := FContent + LineEnding + LineEnding +
-                      '*[Incomplete response: ' + FParser.ErrorText + ']*';
-                End;
               Result := True;
               Exit;
             End;
@@ -975,7 +966,7 @@ Begin
         '","arguments":"' + JsonEscapeText(Call.Arguments) + '"}}';
     End;
   ToolCallsJson := ToolCallsJson + ']';
-  Svc.AddAssistantToolCalls(FContent, ToolCallsJson);
+  Svc.AddAssistantToolCalls(FContent, ToolCallsJson, FResponseOutputJson);
   I := 0;
   While I <= High(FToolCalls) Do
     Begin
@@ -1036,8 +1027,6 @@ Var
   Items: TSamplerInputItemArray;
   Options: TSamplerRequestOptions;
   Base: String;
-  I, InsertAt: Integer;
-  Shifted: TSamplerInputItemArray;
   Svc: TAssistantService;
 Begin
   Base := TrimSlash(FApiBase);
@@ -1049,16 +1038,7 @@ Begin
       Result := '';
       Exit;
     End;
-  Items := Svc.ExportSamplerItems;
-  If (FEncryptedContent <> '') And FUseResponses Then
-    Begin
-      InsertAt := Length(Items);
-      SetLength(Shifted, Length(Items) + 1);
-      For I := 0 To High(Items) Do
-        Shifted[I] := Items[I];
-      Shifted[InsertAt] := SamplerInputReasoning(FEncryptedId, FEncryptedContent);
-      Items := Shifted;
-    End;
+  Items := Svc.ExportSamplerItems(FUseResponses);
   Options := DefaultSamplerRequestOptions;
   Options.Model := FModel;
   Options.ReasoningEffort := FReasoningEffort;

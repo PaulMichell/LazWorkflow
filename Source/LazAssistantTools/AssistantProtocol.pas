@@ -30,7 +30,8 @@ Type
     sikMessage,
     sikReasoning,
     sikFunctionCall,
-    sikFunctionOutput
+    sikFunctionOutput,
+    sikProviderOutput
   );
 
   TSamplerToolCall = Record
@@ -52,6 +53,7 @@ Type
     CallId: String;
     FunctionName: String;
     Arguments: String;
+    ProviderJson: String;
   End;
   TSamplerInputItemArray = Array Of TSamplerInputItem;
 
@@ -196,6 +198,7 @@ End;
 Function ItemToResponsesJson(Const Item: TSamplerInputItem): String;
 Begin
   Case Item.Kind Of
+    sikProviderOutput: Result := Item.ProviderJson;
     sikReasoning:
       Begin
         Result := '{"type":"reasoning"';
@@ -227,7 +230,7 @@ Begin
     sikFunctionOutput:
       Result := '{"role":"tool","tool_call_id":"' + JsonEscapeText(Item.CallId) +
         '","content":"' + JsonEscapeText(Item.Content) + '"}';
-    sikReasoning:
+    sikReasoning, sikProviderOutput:
       Result := '';
   Else
     Result := '{"role":"' + JsonEscapeText(Item.Role) + '","content":"' +

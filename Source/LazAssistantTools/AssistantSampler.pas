@@ -24,6 +24,7 @@ Type
     FEvents: TSamplerEventArray;
     FThinking: String;
     FContent: String;
+    FOutputJson: String;
     FEncryptedContent: String;
     FEncryptedId: String;
     FTools: TSamplerToolCallArray;
@@ -59,6 +60,7 @@ Type
     Property Wire: TSamplerWireKind Read FWire;
     Property Thinking: String Read FThinking;
     Property Content: String Read FContent;
+    Property OutputJson: String Read FOutputJson;
     Property EncryptedContent: String Read FEncryptedContent;
     Property EncryptedId: String Read FEncryptedId;
     Property ToolCalls: TSamplerToolCallArray Read FTools;
@@ -126,6 +128,7 @@ Begin
   SetLength(FEvents, 0);
   FThinking := '';
   FContent := '';
+  FOutputJson := '';
   FEncryptedContent := '';
   FEncryptedId := '';
   SetLength(FTools, 0);
@@ -587,6 +590,7 @@ Begin
   Arr := Root.FindPath('output') As TJSONArray;
   If Not Assigned(Arr) Then
     Exit;
+  FOutputJson := Arr.AsJSON;
   { Completed output is authoritative, including call IDs and full arguments. }
   SetLength(FTools, 0);
   For I := 0 To Arr.Count - 1 Do

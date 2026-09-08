@@ -27,6 +27,8 @@ Type
     ToolCallId: String;
     { When set on an assistant message, raw OpenAI tool_calls JSON array. }
     ToolCallsJson: String;
+    { Opaque ordered Responses output for an in-memory tool round. Never display it. }
+    ResponsesOutputJson: String;
     { Cached JSON-escaped fields so request rebuild is not O(n) re-escape every send. }
     ContentEscaped: String;
     ToolCallIdEscaped: String;
@@ -111,7 +113,8 @@ Type
     Procedure SetActiveMode(Mode: TAssistantMode);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
-    Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String);
+    Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String;
+      Const ResponsesOutputJson: String = '');
     Procedure AddToolResult(Const ToolCallId, Content: String);
     { Restore a previously persisted message without store-time truncation. }
     Procedure RestoreMessage(Role: TAssistantMessageRole; Const Content, ToolCallId, ToolCallsJson: String);
@@ -153,7 +156,7 @@ Type
     Function HasUnfinishedActor: Boolean;
     Procedure ConfigureAsSubagent(Const KindName: String);
     { Sampler items for the session actor (Responses / Completions). }
-    Function ExportSamplerItems: TSamplerInputItemArray;
+    Function ExportSamplerItems(ForResponses: Boolean = False): TSamplerInputItemArray;
     Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
@@ -1079,6 +1082,8 @@ End;
 Function TAssistantService.MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
 Begin
   Result := Length(Msg.Content) + Length(Msg.ToolCallsJson) + Length(Msg.ToolCallId);
+  If Length(Msg.ResponsesOutputJson) > Result Then
+    Result := Length(Msg.ResponsesOutputJson);
 End;
 
 Function TAssistantService.EstimatePromptTokens: Integer;
@@ -1220,6 +1225,7 @@ Begin
       If Length(FMessages[I].ToolCallsJson) > 12000 Then
         Begin
           FMessages[I].ToolCallsJson := '';
+          FMessages[I].ResponsesOutputJson := '';
           If Trim(FMessages[I].Content) = '' Then
             FMessages[I].Content :=
               '[Earlier assistant tool_calls were removed to fit the context window.]';
@@ -1313,6 +1319,7 @@ Begin
           FMessages[0].Content := Notice;
           FMessages[0].ToolCallId := '';
           FMessages[0].ToolCallsJson := '';
+          FMessages[0].ResponsesOutputJson := '';
           InvalidateMessageEscape(FMessages[0]);
         End
       Else
@@ -1342,29 +1349,25 @@ Begin
   FMessages[Idx].Content := Body;
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := '';
+  FMessages[Idx].ResponsesOutputJson := '';
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
-Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String);
+Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String;
+  Const ResponsesOutputJson: String);
 Var
   Idx: Integer;
-  Calls: String;
 Begin
-  Calls := ToolCallsJson;
-  { write_file / full rewrites in tool arguments can dominate the prompt. }
-  If Length(Calls) > 100000 Then
-    Calls :=
-      '[{"id":"trimmed_args","type":"function","function":{"name":"large_tool_call","arguments":"{}"}}]';
+  { Never replace real call IDs with a synthetic truncated call: the following
+    tool outputs still refer to the original IDs. Budget trimming removes groups. }
   Idx := Length(FMessages);
   SetLength(FMessages, Idx + 1);
   FMessages[Idx].Role := amrAssistant;
   FMessages[Idx].Content := Content;
-  If (FMessages[Idx].Content = '') And (Calls <> ToolCallsJson) Then
-    FMessages[Idx].Content :=
-      '[Assistant tool_calls arguments were truncated for context size.]';
   FMessages[Idx].ToolCallId := '';
-  FMessages[Idx].ToolCallsJson := Calls;
+  FMessages[Idx].ToolCallsJson := ToolCallsJson;
+  FMessages[Idx].ResponsesOutputJson := ResponsesOutputJson;
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
 End;
@@ -1387,6 +1390,7 @@ Begin
   FMessages[Idx].Content := Body;
   FMessages[Idx].ToolCallId := ToolCallId;
   FMessages[Idx].ToolCallsJson := '';
+  FMessages[Idx].ResponsesOutputJson := '';
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
 End;
@@ -1410,9 +1414,11 @@ Begin
   Inc(Count);
 End;
 
-Function TAssistantService.ExportSamplerItems: TSamplerInputItemArray;
+Function TAssistantService.ExportSamplerItems(ForResponses: Boolean): TSamplerInputItemArray;
 Var
-  I, C, CallIndex: Integer;
+  I, C, CallIndex, J: Integer;
+  Data: TJSONData;
+  Item: TSamplerInputItem;
   Calls: TSamplerToolCallArray;
   RoleName: String;
 Begin
@@ -1426,6 +1432,23 @@ Begin
     Begin
       If FMessages[I].Role = amrTool Then
         AppendSamplerItem(Result, C, SamplerInputFunctionOutput(FMessages[I].ToolCallId, FMessages[I].Content))
+      Else If ForResponses And (FMessages[I].ResponsesOutputJson <> '') Then
+        Begin
+          Data := GetJSON(FMessages[I].ResponsesOutputJson);
+          Try
+            If Not (Data Is TJSONArray) Then
+              Raise Exception.Create('Invalid stored Responses output.');
+            For J := 0 To Data.Count - 1 Do
+              Begin
+                Item := Default(TSamplerInputItem);
+                Item.Kind := sikProviderOutput;
+                Item.ProviderJson := Data.Items[J].AsJSON;
+                AppendSamplerItem(Result, C, Item);
+              End;
+          Finally
+            Data.Free;
+          End;
+        End
       Else If FMessages[I].ToolCallsJson <> '' Then
         Begin
           If Trim(FMessages[I].Content) <> '' Then
@@ -1742,6 +1765,7 @@ Begin
   FMessages[Idx].Content := Content;
   FMessages[Idx].ToolCallId := ToolCallId;
   FMessages[Idx].ToolCallsJson := ToolCallsJson;
+  FMessages[Idx].ResponsesOutputJson := '';
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
 End;
