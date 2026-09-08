@@ -60,7 +60,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, AssistantSearchUtil, fpjson, jsonparser;
+  AssistantLfm, AssistantSearchUtil, AssistantEditorEdits, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -1662,7 +1662,7 @@ Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean
   Out Note: String; Out ErrorText: String): Boolean;
 Var
   Ed: TSourceEditorInterface;
-  SL: TStringList;
+  Stream: TFileStream;
   Dir, FullPath, OpenNote: String;
 Begin
   Result := False;
@@ -1691,11 +1691,16 @@ Begin
   If Assigned(Ed) Then
     Begin
       Try
-        Ed.SourceText := Content;
+        If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, ErrorText) Then
+          Exit;
         If Assigned(LazarusIDE) And (LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) = mrOk) Then
           Note := 'Updated open editor buffer and saved to disk (IDE Undo available).'
         Else
-          Note := 'Updated open editor buffer (IDE Undo available). Disk save skipped or failed.';
+          Begin
+            ErrorText := 'Updated open editor buffer (IDE Undo available), but disk save did not complete. ' +
+              'The buffer is already changed; inspect/save it rather than repeating the edit.';
+            Exit;
+          End;
         Result := True;
         Exit;
       Except
@@ -1713,11 +1718,12 @@ Begin
         ErrorText := 'Could not create directory: ' + Dir;
         Exit;
       End;
-  SL := TStringList.Create;
+  Stream := Nil;
   Try
     Try
-      SL.Text := Content;
-      SL.SaveToFile(FullPath);
+      Stream := TFileStream.Create(FullPath, fmCreate);
+      If Length(Content) > 0 Then
+        Stream.WriteBuffer(Content[1], Length(Content));
       Note := 'Wrote file on disk.';
       Result := True;
     Except
@@ -1728,18 +1734,12 @@ Begin
         End;
     End;
   Finally
-    SL.Free;
+    Stream.Free;
   End;
   If OpenAfter Then
     Begin
       If OpenEditorReuse(FullPath, OpenNote) Then
         Begin
-          Ed := FindOpenEditor(FullPath);
-          If Assigned(Ed) Then
-            Try
-              Ed.SourceText := Content;
-            Except
-            End;
           Note := Note + ' ' + OpenNote;
         End
       Else
