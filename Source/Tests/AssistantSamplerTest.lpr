@@ -444,6 +444,57 @@ Begin
   Finally Parser.Free; End;
 End;
 
+Procedure TestMarkdownDeltasAreLossless;
+Const Chunks: Array[0..11] Of String = ('| Unit | Interface | Implementation |', #10,
+  '|', '---|', '---|', '---|', #10, '| **', 'StyledTextTypes', '**', ' | `Classes` | `SysUtils` |', #10);
+Var Parser: TAssistantSseParser; Expected, Event: String; I, J: Integer;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Expected := '';
+    For I := Low(Chunks) To High(Chunks) Do
+      Begin
+        Expected := Expected + Chunks[I];
+        Event := SseLine('{"type":"response.output_text.delta","item_id":"table","delta":"' +
+          JsonEscapeText(Chunks[I]) + '"}');
+        For J := 1 To Length(Event) Do Parser.Feed(Event[J]);
+      End;
+    Check('stream preserves every Markdown delimiter', Parser.Content = Expected);
+    Parser.Reset;
+    For I := Low(Chunks) To High(Chunks) Do
+      Parser.Feed(SseLine('{"choices":[{"delta":{"content":"' + JsonEscapeText(Chunks[I]) + '"}}]}'));
+    Check('chat stream preserves every Markdown delimiter', Parser.Content = Expected);
+  Finally Parser.Free; End;
+End;
+
+Procedure TestTextSnapshots;
+Var Parser: TAssistantSseParser;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Parser.Feed(SseLine('{"type":"response.output_text.delta","item_id":"a","delta":"partial"}'));
+    Parser.Feed(SseLine('{"type":"response.output_item.done","item":{"type":"message","id":"a","content":[{"type":"output_text","text":"**fixed**"}]}}'));
+    Check('item snapshot replaces partial text', Parser.Content = '**fixed**');
+    Parser.Feed(SseLine('{"type":"response.output_text.delta","item_id":"b","delta":"**fixed**"}'));
+    Check('identical distinct items are retained', Parser.Content = '**fixed**' + LineEnding + LineEnding + '**fixed**');
+    Parser.Feed(SseLine('{"type":"response.output_item.done","item":{"type":"message","id":"a","content":[{"type":"output_text","text":"earlier"}]}}'));
+    Check('earlier item snapshot keeps later item', Parser.Content = 'earlier' + LineEnding + LineEnding + '**fixed**');
+    Parser.Feed(SseLine('{"type":"response.completed","response":{"output":[' +
+      '{"type":"message","id":"a","content":[{"type":"output_text","text":"final"}]},' +
+      '{"type":"message","id":"b","content":[{"type":"output_text","text":"final"}]}]}}'));
+    Check('completed output replaces all partial messages', Parser.Content = 'final' + LineEnding + LineEnding + 'final');
+    Parser.Reset;
+    Parser.Feed(SseLine('{"type":"response.reasoning_summary_text.delta","item_id":"r","delta":"**"}'));
+    Parser.Feed(SseLine('{"type":"response.reasoning_summary_text.delta","item_id":"r","delta":"word"}'));
+    Parser.Feed(SseLine('{"type":"response.reasoning_summary_text.delta","item_id":"r","delta":"**"}'));
+    Check('reasoning deltas preserve closing formatting', Parser.Thinking = '**word**');
+    Parser.Reset;
+    Parser.Feed(SseLine('{"choices":[{"delta":{"content":"partial"}}]}'));
+    Parser.Feed(SseLine('{"choices":[{"message":{"content":"final"},"finish_reason":"stop"}]}'));
+    Check('chat message snapshot replaces deltas', Parser.Content = 'final');
+  Finally Parser.Free; End;
+End;
+
 Procedure TestMergeSkipsRepeatedThought;
 Var
   Accum, First: String;
@@ -487,6 +538,8 @@ Begin
   TestResponsesFailedIsError;
   TestResponsesIncomplete;
   TestInvalidToolCompletion;
+  TestMarkdownDeltasAreLossless;
+  TestTextSnapshots;
   TestMergeSkipsRepeatedThought;
   If FailCount = 0 Then
     Begin

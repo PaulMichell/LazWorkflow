@@ -36,6 +36,7 @@ Type
     FSnapLock: TRTLCriticalSection;
     FContent: String;
     FThinking: String;
+    FThinkingBeforeRound: String;
     FPhase: TAssistantPhase;
     FErrorText: String;
     FStatusText: String;
@@ -59,7 +60,6 @@ Type
     Procedure NotifyMain;
     Procedure SetPhase(Phase: TAssistantPhase);
     Procedure ApplyParserEvents(FromIndex: Integer);
-    Procedure AppendThinking(Const Delta: String);
     Function DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
     Procedure HttpsChunk(Const Chunk: String);
     Function HttpsShouldStop: Boolean;
@@ -392,16 +392,6 @@ Begin
   LogEvent(aekPhaseChanged, AssistantPhaseName(Phase));
 End;
 
-Procedure TAssistantActor.AppendThinking(Const Delta: String);
-Begin
-  If Delta = '' Then
-    Exit;
-  MergeSamplerText(FThinking, Delta);
-  If FPhase = apWaiting Then
-    SetPhase(apThinking);
-  EmitSnapshot(False, '', False);
-End;
-
 Procedure TAssistantActor.ApplyParserEvents(FromIndex: Integer);
 Var
   I: Integer;
@@ -414,12 +404,13 @@ Begin
         sekThoughtDelta:
           Begin
             SetPhase(apThinking);
-            AppendThinking(Event.Text);
+            FThinking := FThinkingBeforeRound + FParser.Thinking;
+            EmitSnapshot(False, '', False);
           End;
         sekContentDelta:
           Begin
             SetPhase(apStreaming);
-            MergeSamplerText(FContent, Event.Text);
+            FContent := FParser.Content;
             EmitSnapshot(False, '', False);
           End;
       Else
@@ -511,9 +502,8 @@ Begin
           Else
             Begin
               If FParser.Thinking <> '' Then
-                MergeSamplerText(FThinking, FParser.Thinking);
-              If (FParser.Content <> '') And (FContent = '') Then
-                FContent := FParser.Content;
+                FThinking := FThinkingBeforeRound + FParser.Thinking;
+              FContent := FParser.Content;
               FResponseOutputJson := FParser.OutputJson;
               FToolCalls := FParser.ToolCalls;
               Result := True;
@@ -1078,11 +1068,10 @@ Begin
         Break;
       FLoopIndex := RoundNo;
       If RoundNo > 1 Then
-        Begin
-          LogEvent(aekLoopStarted, IntToStr(RoundNo));
-          If FThinking <> '' Then
-            MergeSamplerText(FThinking, LineEnding + LineEnding);
-        End;
+        LogEvent(aekLoopStarted, IntToStr(RoundNo));
+      FThinkingBeforeRound := FThinking;
+      If FThinkingBeforeRound <> '' Then
+        FThinkingBeforeRound := FThinkingBeforeRound + LineEnding + LineEnding;
       SetLength(FToolCalls, 0);
       { Fresh answer channel per model loop; thinking is kept. }
       FContent := '';

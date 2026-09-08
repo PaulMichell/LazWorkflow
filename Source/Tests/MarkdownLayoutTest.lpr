@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledCanvas, StyledMarkdown;
+  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledCanvas, StyledMarkdown, AssistantProtocol, AssistantSampler;
 
 Var
   FailCount: Integer;
@@ -147,6 +147,32 @@ Begin
   Check('column metadata is kept', (Length(Content[0].Box.Columns) = 2) And (Length(Content[1].Box.Columns) = 2));
 End;
 
+Procedure TestStreamedTables;
+Const Markdown = '| Unit | Interface | Implementation |' + #10 +
+  '|---|---|---|' + #10 + '| **First** | `Classes` | `SysUtils` |' + #10#10 +
+  'Another table:' + #10#10 + '| Unit | Interface | Implementation |' + #10 +
+  '|---|---|---|' + #10 + '| **Second** | `Classes` | `SysUtils` |';
+Var
+  Parser: TAssistantSseParser;
+  Content: TStyledContent;
+  I, Rows: Integer;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    { Single-character tokens exercise repeated pipes, dashes, stars and LF. }
+    For I := 1 To Length(Markdown) Do
+      Parser.Feed('data: {"type":"response.output_text.delta","item_id":"m","delta":"' +
+        JsonEscapeText(Markdown[I]) + '"}' + #10);
+    Content := Parse(Parser.Content);
+    Rows := 0;
+    For I := 0 To High(Content) Do
+      If Length(Content[I].Box.Columns) = 3 Then Inc(Rows);
+    Check('both streamed tables render three columns', Rows = 4);
+    Check('first streamed table retains bold', fsBold In StyleFor(Content, 'First').Styles);
+    Check('second streamed table retains bold', fsBold In StyleFor(Content, 'Second').Styles);
+  Finally Parser.Free; End;
+End;
+
 Begin
   FailCount := 0;
   Renderer := TStyledCanvas.Create;
@@ -157,6 +183,7 @@ Begin
     TestLiteralUnsupported;
     TestListsAndCodeFence;
     TestTables;
+    TestStreamedTables;
   Finally
     Renderer.Free;
   End;

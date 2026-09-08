@@ -16,12 +16,18 @@ Uses
   Classes, SysUtils, AssistantProtocol;
 
 Type
+  TSamplerTextItem = Record
+    Id, Text: String;
+    Thinking: Boolean;
+  End;
+
   TAssistantSseParser = Class
   Private
     FWire: TSamplerWireKind;
     FWireKnown: Boolean;
     FBuffer: String;
     FEvents: TSamplerEventArray;
+    FTextItems: Array Of TSamplerTextItem;
     FThinking: String;
     FContent: String;
     FOutputJson: String;
@@ -37,6 +43,7 @@ Type
     FErrorText: String;
     FReasoningItemId: String;
     FMessageItemId: String;
+    Procedure UpdateText(Thinking: Boolean; Const Id, Text: String; Snapshot: Boolean);
     Function ValidateToolCalls: Boolean;
     Procedure Emit(Const Event: TSamplerEvent);
     Procedure CompactEmptyTools;
@@ -126,6 +133,7 @@ Begin
   FWireKnown := False;
   FBuffer := '';
   SetLength(FEvents, 0);
+  SetLength(FTextItems, 0);
   FThinking := '';
   FContent := '';
   FOutputJson := '';
@@ -388,7 +396,7 @@ Begin
       Delta := JsonStringField(Root, 'delta');
       If Delta = '' Then
         Exit;
-      MergeSamplerText(FThinking, Delta);
+      UpdateText(True, JsonStringField(Root, 'item_id'), Delta, False);
       Event.Kind := sekThoughtDelta;
       Event.Text := Delta;
       Emit(Event);
@@ -399,7 +407,7 @@ Begin
       Delta := JsonStringField(Root, 'delta');
       If Delta = '' Then
         Exit;
-      MergeSamplerText(FThinking, Delta);
+      UpdateText(True, JsonStringField(Root, 'item_id'), Delta, False);
       Event.Kind := sekThoughtDelta;
       Event.Text := Delta;
       Emit(Event);
@@ -410,7 +418,7 @@ Begin
       Delta := JsonStringField(Root, 'delta');
       If Delta = '' Then
         Exit;
-      MergeSamplerText(FContent, Delta);
+      UpdateText(False, JsonStringField(Root, 'item_id'), Delta, False);
       Event.Kind := sekContentDelta;
       Event.Text := Delta;
       Emit(Event);
@@ -494,6 +502,44 @@ Begin
     End;
 End;
 
+Procedure TAssistantSseParser.UpdateText(Thinking: Boolean;
+  Const Id, Text: String; Snapshot: Boolean);
+Var
+  ItemId, Combined: String;
+  I, Index: Integer;
+Begin
+  ItemId := Id;
+  If ItemId = '' Then
+    If Thinking Then ItemId := FReasoningItemId Else ItemId := FMessageItemId;
+  If Thinking Then FReasoningItemId := ItemId Else FMessageItemId := ItemId;
+  Index := -1;
+  For I := 0 To High(FTextItems) Do
+    If (FTextItems[I].Thinking = Thinking) And (FTextItems[I].Id = ItemId) Then
+      Begin
+        Index := I;
+        Break;
+      End;
+  If Index < 0 Then
+    Begin
+      Index := Length(FTextItems);
+      SetLength(FTextItems, Index + 1);
+      FTextItems[Index].Id := ItemId;
+      FTextItems[Index].Thinking := Thinking;
+    End;
+  { Only explicit snapshots replace text. Every delta byte is significant,
+    including repeated Markdown delimiters and whitespace. }
+  If Snapshot Then FTextItems[Index].Text := Text
+  Else FTextItems[Index].Text := FTextItems[Index].Text + Text;
+  Combined := '';
+  For I := 0 To High(FTextItems) Do
+    If (FTextItems[I].Thinking = Thinking) And (FTextItems[I].Text <> '') Then
+      Begin
+        If Combined <> '' Then Combined := Combined + LineEnding + LineEnding;
+        Combined := Combined + FTextItems[I].Text;
+      End;
+  If Thinking Then FThinking := Combined Else FContent := Combined;
+End;
+
 Procedure TAssistantSseParser.MergeMessageItemText(Item: TObject);
 Var
   Root, Part: TJSONObject;
@@ -517,8 +563,7 @@ Begin
         Else If JsonStringField(Part, 'text') <> '' Then
           MessageText := MessageText + JsonStringField(Part, 'text');
       End;
-  If MessageText <> '' Then
-    MergeSamplerText(FContent, MessageText);
+  UpdateText(False, JsonStringField(Root, 'id'), MessageText, True);
 End;
 
 Procedure TAssistantSseParser.NoteOutputItem(Item: TObject);
@@ -537,34 +582,26 @@ Begin
   ItemId := JsonStringField(Root, 'id');
   If ItemType = 'reasoning' Then
     Begin
-      { Same id is a snapshot of the current thought, not a new card. }
-      If (ItemId <> '') And (FReasoningItemId <> '') And (ItemId <> FReasoningItemId) Then
-        MergeSamplerText(FThinking, LineEnding + LineEnding);
-      If ItemId <> '' Then
-        FReasoningItemId := ItemId;
+      Before := FThinking;
+      SummaryText := '';
       Summary := Root.FindPath('summary') As TJSONArray;
       If Assigned(Summary) Then
-        For J := 0 To Summary.Count - 1 Do
-          If Summary.Items[J] Is TJSONObject Then
-            Begin
-              SummaryText := JsonStringField(TJSONObject(Summary.Items[J]), 'text');
-              If SummaryText = '' Then
-                Continue;
-              If MergeSamplerText(FThinking, SummaryText) Then
-                Begin
-                  Event := EmptySamplerEvent;
-                  Event.Kind := sekThoughtDelta;
-                  Event.Text := SummaryText;
-                  Emit(Event);
-                End;
-            End;
+        Begin
+          For J := 0 To Summary.Count - 1 Do
+            If Summary.Items[J] Is TJSONObject Then
+              SummaryText := SummaryText + JsonStringField(TJSONObject(Summary.Items[J]), 'text');
+          UpdateText(True, ItemId, SummaryText, True);
+        End;
+      If FThinking <> Before Then
+        Begin
+          Event := EmptySamplerEvent;
+          Event.Kind := sekThoughtDelta;
+          Event.Text := FThinking;
+          Emit(Event);
+        End;
     End
   Else If ItemType = 'message' Then
     Begin
-      If (ItemId <> '') And (FMessageItemId <> '') And (ItemId <> FMessageItemId) Then
-        MergeSamplerText(FContent, LineEnding + LineEnding);
-      If ItemId <> '' Then
-        FMessageItemId := ItemId;
       Before := FContent;
       MergeMessageItemText(Root);
       If FContent <> Before Then
@@ -582,7 +619,8 @@ Var
   Root, Item, Part, UsageObj, Details: TJSONObject;
   Arr, Summary, ContentArr: TJSONArray;
   I, J, ToolIndex: Integer;
-  ItemType, SummaryText, MessageText: String;
+  ItemType, SummaryText, MessageText, FinalThinking, FinalContent: String;
+  HasMessage: Boolean;
 Begin
   If Not (ResponseObj Is TJSONObject) Then
     Exit;
@@ -591,6 +629,9 @@ Begin
   If Not Assigned(Arr) Then
     Exit;
   FOutputJson := Arr.AsJSON;
+  FinalThinking := '';
+  FinalContent := '';
+  HasMessage := False;
   { Completed output is authoritative, including call IDs and full arguments. }
   SetLength(FTools, 0);
   For I := 0 To Arr.Count - 1 Do
@@ -605,17 +646,16 @@ Begin
             FEncryptedId := JsonStringField(Item, 'id');
           If JsonStringField(Item, 'encrypted_content') <> '' Then
             FEncryptedContent := JsonStringField(Item, 'encrypted_content');
-          If FThinking = '' Then
+          SummaryText := '';
+          Summary := Item.FindPath('summary') As TJSONArray;
+          If Assigned(Summary) Then
+            For J := 0 To Summary.Count - 1 Do
+              If Summary.Items[J] Is TJSONObject Then
+                SummaryText := SummaryText + JsonStringField(TJSONObject(Summary.Items[J]), 'text');
+          If SummaryText <> '' Then
             Begin
-              Summary := Item.FindPath('summary') As TJSONArray;
-              If Assigned(Summary) Then
-                For J := 0 To Summary.Count - 1 Do
-                  If Summary.Items[J] Is TJSONObject Then
-                    Begin
-                      SummaryText := JsonStringField(TJSONObject(Summary.Items[J]), 'text');
-                      If SummaryText <> '' Then
-                        MergeSamplerText(FThinking, SummaryText);
-                    End;
+              If FinalThinking <> '' Then FinalThinking := FinalThinking + LineEnding + LineEnding;
+              FinalThinking := FinalThinking + SummaryText;
             End;
         End
       Else If ItemType = 'function_call' Then
@@ -627,8 +667,7 @@ Begin
         End
       Else If ItemType = 'message' Then
         Begin
-          If FContent <> '' Then
-            Continue;
+          HasMessage := True;
           ContentArr := Item.FindPath('content') As TJSONArray;
           If Not Assigned(ContentArr) Then
             Continue;
@@ -643,9 +682,14 @@ Begin
                   MessageText := MessageText + JsonStringField(Part, 'text');
               End;
           If MessageText <> '' Then
-            FContent := MessageText;
+            Begin
+              If FinalContent <> '' Then FinalContent := FinalContent + LineEnding + LineEnding;
+              FinalContent := FinalContent + MessageText;
+            End;
         End;
     End;
+  If HasMessage Then FContent := FinalContent;
+  If FinalThinking <> '' Then FThinking := FinalThinking;
   UsageObj := Root.FindPath('usage') As TJSONObject;
   If Assigned(UsageObj) Then
     Begin
@@ -701,7 +745,7 @@ Begin
             ThinkingDelta := JsonStringField(Delta, 'reasoning');
           If ThinkingDelta <> '' Then
             Begin
-              MergeSamplerText(FThinking, ThinkingDelta);
+              UpdateText(True, '', ThinkingDelta, False);
               Event := EmptySamplerEvent;
               Event.Kind := sekThoughtDelta;
               Event.Text := ThinkingDelta;
@@ -709,7 +753,7 @@ Begin
             End;
           If ContentDelta <> '' Then
             Begin
-              MergeSamplerText(FContent, ContentDelta);
+              UpdateText(False, '', ContentDelta, False);
               Event := EmptySamplerEvent;
               Event.Kind := sekContentDelta;
               Event.Text := ContentDelta;
@@ -748,16 +792,16 @@ Begin
                 End;
         End;
       MessageObj := Choice.FindPath('message') As TJSONObject;
-      If Assigned(MessageObj) And (FContent = '') And (FThinking = '') Then
+      If Assigned(MessageObj) Then
         Begin
           ContentDelta := JsonStringField(MessageObj, 'content');
           ThinkingDelta := JsonStringField(MessageObj, 'reasoning_content');
           If ThinkingDelta = '' Then
             ThinkingDelta := JsonStringField(MessageObj, 'reasoning');
           If ThinkingDelta <> '' Then
-            MergeSamplerText(FThinking, ThinkingDelta);
+            UpdateText(True, '', ThinkingDelta, True);
           If ContentDelta <> '' Then
-            MergeSamplerText(FContent, ContentDelta);
+            UpdateText(False, '', ContentDelta, True);
         End;
       Finish := JsonStringField(Choice, 'finish_reason');
       If Finish <> '' Then
