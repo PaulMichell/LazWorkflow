@@ -18,7 +18,8 @@ Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView, AssistantCommands;
+  AssistantTraceView, AssistantCommands, AssistantCodexRun, AssistantToolBroker,
+  AssistantIDEWorkspace;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -198,6 +199,19 @@ Type
     Procedure StatusFooterCentreClick(Sender: TObject);
     Procedure StatusFooterRightClick(Sender: TObject);
     Procedure FooterMenuClick(Sender: TObject);
+  Private
+    FUseCodex: Boolean;
+    FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity: String;
+    FCodexRun: TAssistantCodexRun;
+    FCodexWorkspace: TAssistantIDEWorkspace;
+    FCodexBroker: TAssistantToolBroker;
+    Procedure ConfigureChatGPT(Sender: TObject);
+    Procedure SelectGrok(Sender: TObject);
+    Procedure InitializeBackendMenu;
+    Procedure SaveBackendSettings;
+    Procedure StartCodexReply(Const DisplayText, ApiText: String);
+    Procedure PollCodex;
+    Procedure ReleaseCodexRun;
   Private
     ElapsedTimer: TTimer;
     ChatView: TControl; { unused; centre is FTraceView }
@@ -436,7 +450,7 @@ Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
-  ProjectIntf, AssistantSkills;
+  ProjectIntf, AssistantSkills, IniFiles, AssistantCodexSettings, AssistantCodexClient;
 
 Const
   ChatViewMargin = 4;
@@ -513,12 +527,16 @@ Begin
   FOpenBusy := False;
   FPlanWriteThisTurn := False;
   FShowPlanOffer := False;
+  InitializeBackendMenu;
   FCatalog := TAssistantCatalog.Create;
   WorkflowEventBus.AddListener(Self);
 End;
 
 Destructor TProjectAssistantForm.Destroy;
 Begin
+  ReleaseCodexRun;
+  FreeAndNil(FCodexBroker);
+  FreeAndNil(FCodexWorkspace);
   Application.RemoveAsyncCalls(Self);
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
@@ -2474,7 +2492,7 @@ Begin
   Else
     Turn.ThinkingMs := 0;
   Turn.Model := FModelName;
-  If Assigned(AssistantClient) Then
+  If (Not FUseCodex) And Assigned(AssistantClient) Then
     Turn.Skill := AssistantClient.ActiveSkill
   Else
     Turn.Skill := '';
@@ -2483,7 +2501,7 @@ Begin
   Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
   Turn.EventsFile := '';
-  If Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
+  If (Not FUseCodex) And Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
     Turn.EventsFile := AssistantEventsRelativePath(AssistantClient.LastEventsFile,
       ProjectAssistantConversation.ProjectRoot);
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
@@ -2588,8 +2606,156 @@ Begin
   StatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
 
+Procedure TProjectAssistantForm.InitializeBackendMenu;
+Var MenuRoot, Item: TMenuItem; Config: TIniFile;
+Begin
+  FCodexProfile := IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) +
+    'assistant-codex-preview';
+  Config := TIniFile.Create(IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) + 'assistant-backend.ini');
+  Try
+    FCodexRuntime := Config.ReadString('ChatGPT', 'Runtime', '');
+    FCodexModel := Config.ReadString('ChatGPT', 'Model', '');
+    FUseCodex := Config.ReadBool('ChatGPT', 'Selected', False);
+  Finally Config.Free; End;
+  MenuRoot := TMenuItem.Create(Self); MenuRoot.Caption := 'Backend';
+  AssistantMenu.Items.Add(MenuRoot);
+  Item := TMenuItem.Create(Self); Item.Caption := 'Grok'; Item.OnClick := @SelectGrok;
+  MenuRoot.Add(Item);
+  Item := TMenuItem.Create(Self); Item.Caption := 'ChatGPT (preview)…';
+  Item.OnClick := @ConfigureChatGPT; MenuRoot.Add(Item);
+End;
+
+Procedure TProjectAssistantForm.SaveBackendSettings;
+Var Config: TIniFile;
+Begin
+  Config := TIniFile.Create(IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) + 'assistant-backend.ini');
+  Try
+    Config.WriteString('ChatGPT', 'Runtime', FCodexRuntime);
+    Config.WriteString('ChatGPT', 'Model', FCodexModel);
+    Config.WriteBool('ChatGPT', 'Selected', FUseCodex);
+  Finally Config.Free; End;
+End;
+
+Procedure TProjectAssistantForm.ConfigureChatGPT(Sender: TObject);
+Begin
+  If FSending Then Exit;
+  If ConfigureCodex(FCodexProfile, FCodexRuntime, FCodexModel) Then
+    Begin
+      FUseCodex := True;
+      SaveBackendSettings;
+      RefreshFromConfig;
+    End;
+End;
+
+Procedure TProjectAssistantForm.SelectGrok(Sender: TObject);
+Begin
+  If FSending Then Exit;
+  FUseCodex := False;
+  SaveBackendSettings;
+  RefreshFromConfig;
+End;
+
+Procedure TProjectAssistantForm.ReleaseCodexRun;
+Begin
+  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
+  If Assigned(FCodexRun) Then
+    Begin
+      FCodexRun.Cancel;
+      ReapCodexWorker(FCodexRun);
+      FCodexRun := Nil;
+    End;
+End;
+
+Procedure TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String);
+Var Prompt, Recap: String; I: Integer; Turn: TConversationTurn;
+Begin
+  If (FCodexRuntime = '') Or (FCodexModel = '') Then
+    Begin
+      ConfigureChatGPT(Nil);
+      If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
+    End;
+  If FPlanAgentRunning Then
+    Begin
+      StopWorkOnPlanAgent('ChatGPT preview supports individual turns; automatic plan execution is not enabled.');
+      Exit;
+    End;
+  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
+  FCodexIdentity := FCodexWorkspace.Identity;
+  FCodexBroker.BeginRun(ActiveMode = amBuild);
+  RefreshFromConfig;
+  Recap := '';
+  If Assigned(ProjectAssistantConversation) Then
+    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
+      Begin
+        If Length(Recap) >= 24000 Then Break;
+        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
+          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
+            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
+      End;
+  Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
+    'Read buffers before editing; use returned revisions. Only open editor buffers are currently accessible. ' +
+    'Ask and Plan are read-only; Build allows explicit buffer edits, saves and saved-input builds. ' +
+    'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
+    'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
+    'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +
+    BuildIDEContextBlockLight + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
+    Recap + LineEnding + 'Current user request:' + LineEnding + ApiText;
+  If Not FModeLocked Then LockModeForSend;
+  ShowChatSurfaceKeepMode;
+  SetCurrentUserDisplay(DisplayText, True);
+  FLiveUser := FDisplayUser; FLiveContent := ''; FLiveThinking := '';
+  FAssistantContent := ''; FAssistantThinking := '';
+  AppendMessage('user', FDisplayUser);
+  FContextUsed := Length(Prompt) Div 4;
+  FStatusPhase := 'Connecting to ChatGPT…';
+  SetSending(True);
+  BeginAssistantReply;
+  Try
+    FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
+      Prompt, FCodexBroker.ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile);
+    FCodexRun.Start;
+  Except
+    On E: Exception Do
+      Begin ReleaseCodexRun; FinishAssistantReply(E.Message); End;
+  End;
+End;
+
+Procedure TProjectAssistantForm.PollCodex;
+Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
+  ToolText: String; OK: Boolean; Block: TTraceBlock;
+Begin
+  If FCodexWorkspace.Identity <> FCodexIdentity Then Begin StopStream; Exit; End;
+  Snapshot := FCodexRun.Snapshot;
+  ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
+  If FCodexRun.ServiceOneTool(FCodexBroker, Tool, ToolText, OK) Then
+    Begin
+      { Use the text captured at the tool request, even if the worker advanced
+        between the timer snapshot and the IDE handoff. }
+      ApplyAssistantSnapshots(Tool.ContentBefore, Tool.ThinkingBefore);
+      ApplyLiveThinkingAndAnswer;
+      Block := FTrace.AddTool(Tool.CallId, Tool.Tool, Tool.Arguments);
+      Block.Body := ToolText; Block.Ok := OK; Block.Running := False;
+      FAnswerSliceStart := Length(FLiveContent) + 1;
+      FThinkingSliceStart := Length(FLiveThinking) + 1;
+      FTrace.StartThinking(0);
+      RefreshChatDisplay(False, True);
+    End;
+  If Snapshot.Done Then
+    Begin
+      ReleaseCodexRun;
+      FinishAssistantReply(Snapshot.ErrorText);
+    End
+  Else
+    Begin
+      StatusFooter.SetRightText(FormatElapsedStatus('ChatGPT'));
+      If FViewingLive Then FTraceView.RefreshElapsed(FTrace);
+    End;
+End;
+
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
+  If Assigned(FCodexRun) Then Begin PollCodex; Exit; End;
   If FSending And (FStatusPhase <> '') Then
     StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
   If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
@@ -2613,6 +2779,7 @@ Begin
     End
   Else If Assigned(AssistantClient) Then
     FModelName := AssistantClient.Model;
+  If FUseCodex Then FModelName := 'ChatGPT / ' + FCodexModel;
   SyncAutoNewChatCheckFromConfig;
   UpdateStatusFooter;
 End;
@@ -2657,7 +2824,7 @@ Var
   Pct: Integer;
   StatusText, LeftText, CentreText, ThinkCap, ApprCap: String;
 Begin
-  If Assigned(AssistantClient) And (Not FSending) Then
+  If (Not FUseCodex) And Assigned(AssistantClient) And (Not FSending) Then
     Begin
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If AssistantClient.MaxPromptTokens > 0 Then
@@ -2679,6 +2846,8 @@ Begin
     StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
+  Else If FUseCodex Then
+    StatusText := 'ChatGPT preview'
   Else If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
     StatusText := 'Ready'
   Else
@@ -2694,12 +2863,24 @@ Begin
   CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
+  If FUseCodex Then
+    Begin
+      LeftText := FModelName;
+      CentreText := Format('Context ~%d tokens', [FContextUsed]);
+    End;
   StatusFooter.SetAll(LeftText, CentreText, StatusText);
   StatusFooter.SetLeftHint('Click to change model, thinking level, or approval');
   StatusFooter.SetCentreHint(Format('About %d of %d tokens. Click for a breakdown.',
     [FContextUsed, FContextLimit]));
   StatusFooter.SetRightHint('Click for session info');
-  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
+  If FUseCodex Then
+    Begin
+      StatusFooter.SetLeftHint('Click for ChatGPT connection and model');
+      StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
+      StatusFooter.SetSkillText('Lazarus tools');
+      StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
+    End
+  Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
     Begin
       StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
       StatusFooter.SetSkillHint('Click to pin a different skill');
@@ -2709,7 +2890,7 @@ Begin
       StatusFooter.SetSkillText('Skill: none');
       StatusFooter.SetSkillHint('Click to pin a skill');
     End;
-  If (Not FSending) And (Pct >= 95) Then
+  If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
 End;
 
@@ -2760,9 +2941,9 @@ End;
 
 Procedure TProjectAssistantForm.SetSending(IsSending: Boolean);
 Begin
-  If IsSending And (Not FSending) Then
+  If (Not FUseCodex) And IsSending And (Not FSending) Then
     AssistantBeginQuietIdeSession
-  Else If (Not IsSending) And FSending Then
+  Else If (Not FUseCodex) And (Not IsSending) And FSending Then
     AssistantEndQuietIdeSession;
   FSending := IsSending;
   If IsSending Then
@@ -3447,12 +3628,12 @@ Begin
   ResolvedError := ErrorText;
   If IsAssistantProgressStatus(ResolvedError) Then
     ResolvedError := '';
-  If Assigned(AssistantClient) Then
+  If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.ToolsEnabled := True;
   { Second IsFinished (or Stop after finish) must not append another conversation row. }
   If Not FSending Then
     Begin
-      If Assigned(AssistantClient) Then
+      If (Not FUseCodex) And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       Exit;
     End;
@@ -3460,7 +3641,7 @@ Begin
     Begin
       FUserCancelled := False;
       FStreamingActive := False;
-      If Assigned(AssistantClient) Then
+      If (Not FUseCodex) And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       If FBuildWorkSectionIndex >= 0 Then
         SetBuildStatusFeedback(Format('"%s" cancelled — still in progress.',
@@ -3493,7 +3674,7 @@ Begin
   Else
     Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
-      If Assigned(AssistantClient) And (FLiveContent <> '') Then
+      If (Not FUseCodex) And Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
@@ -3515,11 +3696,11 @@ Begin
   FinishLiveTrace(TraceNote, WorkedMs);
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ResolvedError);
-  If Assigned(AssistantClient) Then
+  If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
-  PersistPlanReplyIfNeeded(ResolvedError);
+  If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
   { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
-  If ActiveMode = amBuild Then
+  If (Not FUseCodex) And (ActiveMode = amBuild) Then
     TryAutoCompleteBuildWork(ResolvedError)
   Else If FBuildWorkSectionIndex >= 0 Then
     ClearBuildWorkTracking;
@@ -3539,7 +3720,7 @@ Begin
     End
   Else
     ShowPlanOfferBar(False);
-  If FPlanAgentRunning Then
+  If (Not FUseCodex) And FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then
         Begin
@@ -3608,8 +3789,9 @@ Begin
   If Not FSending Then
     Exit;
   FUserCancelled := True;
+  ReleaseCodexRun;
   { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
-  If Assigned(AssistantClient) Then
+  If (Not FUseCodex) And Assigned(AssistantClient) Then
     Begin
       AssistantClient.CancelStream;
       AssistantClient.ToolsEnabled := True;
@@ -3618,7 +3800,7 @@ Begin
     Begin
       If (FLiveContent <> '') Or (FLiveThinking <> '') Then
         Begin
-          If Assigned(AssistantClient) And (FLiveContent <> '') Then
+          If (Not FUseCodex) And Assigned(AssistantClient) And (FLiveContent <> '') Then
             AssistantClient.AddMessage(amrAssistant, FLiveContent);
           FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
         End;
@@ -3647,7 +3829,7 @@ Begin
   RefreshChatDisplay(True, True);
   StatusFooter.SetRightText('Cancelled');
   PersistSession;
-  If FPlanAgentRunning Then
+  If (Not FUseCodex) And FPlanAgentRunning Then
     StopWorkOnPlanAgent('stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
@@ -3667,6 +3849,8 @@ Begin
   If FSending Then
     Exit;
   HideSlashPopup;
+  If AutoSend And FUseCodex Then
+    Begin StartCodexReply(DisplayText, ApiText); Exit; End;
   If AutoSend Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
@@ -3740,6 +3924,12 @@ Procedure TProjectAssistantForm.SteerQueuedText(Const UserText: String);
 Begin
   If Trim(UserText) = '' Then
     Exit;
+  If Assigned(FCodexRun) Then
+    Begin
+      If FCodexRun.Steer(UserText) Then SetStreamPhase('Steer queued…')
+      Else InputMemo.Text := UserText;
+      Exit;
+    End;
   If Assigned(AssistantClient) Then
     AssistantClient.EnqueueSteer(UserText);
   SetStreamPhase('Steering at next tool gap…');
@@ -4381,6 +4571,8 @@ Var
   Pct: Integer;
   Body: String;
 Begin
+  If FUseCodex Then
+    Begin MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   If Assigned(AssistantClient) Then
     Info := AssistantClient.GetContextBreakdown
@@ -4412,6 +4604,8 @@ Var
   Turns: Integer;
   SignedIn: String;
 Begin
+  If FUseCodex Then
+    Begin MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Backend → ChatGPT to check the account and available models.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
@@ -4463,6 +4657,7 @@ Procedure TProjectAssistantForm.ModelPickerActionExecute(Sender: TObject);
 Var
   Host: TControl;
 Begin
+  If FUseCodex Then Begin ConfigureChatGPT(Sender); Exit; End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillModelFooterMenu;
@@ -4480,6 +4675,8 @@ End;
 
 Procedure TProjectAssistantForm.ThinkingPickerActionExecute(Sender: TObject);
 Begin
+  If FUseCodex Then
+    Begin MessageDlg('ChatGPT preview uses the selected model’s default reasoning settings.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillThinkingFooterMenu;
@@ -4490,6 +4687,8 @@ Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
 Var
   Host: TControl;
 Begin
+  If FUseCodex Then
+    Begin MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillSkillFooterMenu;
@@ -4505,6 +4704,8 @@ Procedure TProjectAssistantForm.CompactContextActionExecute(Sender: TObject);
 Var
   Saved: Integer;
 Begin
+  If FUseCodex Then
+    Begin MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   If FSending Then
     Begin
@@ -4636,7 +4837,7 @@ Begin
       SteerQueuedText(UserText);
       Exit;
     End;
-  If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
+  If (Not FUseCodex) And ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
     Begin
       MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
       SettingsActionExecute(Nil);
@@ -4819,6 +5020,8 @@ Begin
     Exit;
   If FSending Then
     Exit;
+  If FUseCodex Then
+    Begin StartCodexReply(DisplayLabel, ApiText); Exit; End;
   If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
     Begin
       AppendMessage('user', DisplayLabel);
@@ -5585,6 +5788,7 @@ End;
 
 Procedure TProjectAssistantForm.SettingsActionExecute(Sender: TObject);
 Begin
+  If FUseCodex Then Begin ConfigureChatGPT(Sender); Exit; End;
   ShowAssistantSettingsForm;
   RefreshFromConfig;
 End;

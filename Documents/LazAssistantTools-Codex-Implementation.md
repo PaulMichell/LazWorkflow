@@ -4,10 +4,11 @@ Updated: 8 September 2026.
 
 ## Delivered
 
-The code now has a managed Codex run path, separate from the Grok native actor. It is a development library and test harness, not yet a selectable backend in the Project Assistant window.
+The assistant window now offers **Backend → ChatGPT (preview)…**. This selects a managed Codex run path with a separate subscription sign-in profile, browser login, discovered models, streaming, Stop, steering, conversation history and Lazarus tools. Grok remains available in the same menu. This is a Linux development preview; live account/inference acceptance remains to be performed by the user.
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
+| Assistant UI | Assistant-owned backend menu and connection dialog; account work off the IDE thread; persisted non-secret runtime/model selection; streamed tool cards and history | Package build; account/model worker exercised with fake runtime |
 | Runtime qualification | Exact `codex-cli 0.153.0` check before connection; offline experimental-schema inspection and SHA-256 report | `qualify_codex_runtime.py`; actual bundled runtime successfully inspected |
 | Process transport | One owning worker, nonblocking stdin, fragmented JSONL, separate stderr draining, bounded frames/queues, write timeout, cancellation, process-group cleanup, EOF/error handling | `AssistantCodexTransportTest`, including blocked/closed stdin, flooding, truncation and missing executable |
 | Managed client | ChatGPT account gate; explicit login entry point; model discovery; thread/turn requests; streamed text; steering; interruption; dynamic-tool correlation; rejection of unknown approvals, duplicate calls, authentication changes and unexpected returned provider/sandbox policy | `AssistantCodexClientTest` and existing handshake tests |
@@ -42,9 +43,9 @@ The protocol route follows the [official App Server documentation](https://learn
 
 `TAssistantToolBroker` and `TAssistantIDEWorkspace` belong to the IDE thread. Begin a fresh broker run when starting a task, and cancel it when the project, IDE lifetime, or task changes. The initial IDE adapter works with files already open in Lazarus and rejects paths outside the project resolver's scope.
 
-Create `TAssistantCodexRun` with the runtime path, working directory, model, prompt, broker tool descriptors and broker run ID. Start its worker. An IDE timer should call `ServiceTool(Broker)` and read `Snapshot`; it must not call the process client directly. On cancellation, cancel both the run and broker. Continue servicing lifecycle completion until `Snapshot.Done` before destroying the worker. No asynchronous callback owns an IDE pointer.
+Create `TAssistantCodexRun` with the runtime path, working directory, model, prompt, broker tool descriptors and broker run ID. Start its worker. An IDE timer should call `ServiceTool(Broker)` and read `Snapshot`; it must not call the process client directly. On cancellation, cancel both the run and broker. The form hands cancelled/completed workers to a detached reaper, which joins and destroys them off the IDE thread. No asynchronous callback owns an IDE pointer.
 
-The generic broker and real IDE adapter are implemented, but this host contract is not yet wired into the existing Project Assistant form's send/stop/history lifecycle. The Grok tool registry also still needs migration to the shared broker; this pass does not claim that every backend already uses one registry.
+The Project Assistant form now implements this contract, including project changes and closure. It records tool cards and ChatGPT model labels without attaching Grok event/skill metadata. Each request creates an ephemeral Codex thread and includes a bounded recap from the same conversation and ChatGPT model. Durable Codex thread resume and migration of the Grok tool registry to the shared broker remain open.
 
 ## Build result boundary
 
@@ -52,16 +53,33 @@ The build pilot observes open editor buffers and the saved project file. It chec
 
 Complete build evidence requires a dependency-complete immutable snapshot or equivalent coordinated source/version tracking. The original Grok `run_compile` implementation has not been replaced by this pilot yet.
 
+## Testing the preview
+
+1. Rebuild the installed `LazAssistantTools` package/IDE and restart Lazarus to load the changed units.
+2. Open a project and open the units you want ChatGPT to inspect in the Lazarus editor.
+3. In the **assistant window**, choose **Backend → ChatGPT (preview)…**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
+4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model and click **Use ChatGPT**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
+5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
+6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. Ask/Plan expose no write or build tools.
+7. With project and editor changes saved, request a build and ask for its diagnostics. The pilot uses `lazbuild` asynchronously; a successful exit is deliberately not reported as fully source-verified.
+8. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and switching back to **Backend → Grok** while idle.
+
+Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves only backend/runtime/model preferences in `assistant-backend.ini`. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
+
+The managed profile disables shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Turns request restricted read-only filesystem access with no project-readable roots. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
+
+The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though its generated schema includes that value. The implementation now uses `on-request` and rejects unsupported approval requests. Both real signed-out initialization and strict configuration parsing succeeded with the preview settings. No browser sign-in or model inference was initiated during development.
+
 ## Remaining release work
 
-1. Qualify an isolated runtime profile and inherited configuration. Prove that built-in tools, configured MCP servers, hooks and plugins cannot bypass broker edits or subscription routing. The requested and returned read-only sandbox/provider policies are checked; that alone is not proof about external tools. The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) documents separate shell and MCP controls.
-2. Add the explicit account/connection UI and run a user-initiated ChatGPT sign-in and live subscription-backed inference check. Check allowance separately from account authentication. The existing handshake login method is not a finished UI flow.
-3. Wire the managed worker into the assistant panel, including project/IDE closure, send/stop/steer, model selection, event/history presentation and resume. Keep it unavailable until the tool-isolation and live read/edit/build acceptance checks pass.
+1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
+2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
+3. Expand the broker beyond open buffers: project-scoped file reading/opening, fine-grained symbol operations and other planned IDE capabilities. Pinned Grok skills, reasoning controls and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
-5. Expand protocol tests for multiple/interleaved message items, final-item snapshots, persistent thread resume, account refresh, quota errors and broader runtime-failure permutations. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
+5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
 ## Verification
 
-All 17 test programs and the full assistant package build passed against the local Lazarus checkout with range/overflow checks. Logs: `/tmp/laz-codex-implementation`.
+All 17 test programs and the full assistant package build passed against the local Lazarus checkout with range/overflow checks. Logs: `/tmp/laz-codex-preview`.
 
 The tests use fake runtime/compiler processes and real SynEdit where applicable. They establish the local implementation behaviour described above, not a live model → full Lazarus project acceptance run.
