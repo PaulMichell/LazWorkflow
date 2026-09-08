@@ -93,13 +93,8 @@ Function BuildResponsesRequestJson(Const Items: TSamplerInputItemArray;
 { POST /v1/chat/completions body. Reasoning items are skipped (no wire field). }
 Function BuildChatCompletionsRequestJson(Const Items: TSamplerInputItemArray;
   Const Options: TSamplerRequestOptions): String;
-{ Append Delta onto Accum; True when Accum changed. Handles delta vs snapshot streams. }
-Function MergeSamplerText(Var Accum: String; Const Delta: String): Boolean;
 
 Implementation
-
-Const
-  MaxSamplerAccumChars = 400000;
 
 Function JsonEscapeText(Const SourceText: String): String;
 Var
@@ -288,95 +283,6 @@ Begin
   If Effort <> '' Then
     Result := Result + ',"reasoning_effort":"' + JsonEscapeText(Effort) + '"';
   Result := Result + '}';
-End;
-
-Function CollapseTrailingPhraseRepeats(Const SourceText: String): String;
-Var
-  PhraseLen, Count, Limit: Integer;
-Begin
-  Result := SourceText;
-  If Length(Result) < 24 Then
-    Exit;
-  { Cap phrase length: walking PhraseLen to Length/3 is O(n^2) and freezes the actor. }
-  Limit := Length(Result) Div 3;
-  If Limit > 96 Then
-    Limit := 96;
-  PhraseLen := 8;
-  While PhraseLen <= Limit Do
-    Begin
-      Count := 1;
-      While ((Count + 1) * PhraseLen <= Length(Result)) And
-        (Copy(Result, Length(Result) - (Count + 1) * PhraseLen + 1, PhraseLen) =
-         Copy(Result, Length(Result) - Count * PhraseLen + 1, PhraseLen)) Do
-        Inc(Count);
-      If Count >= 3 Then
-        Begin
-          SetLength(Result, Length(Result) - (Count - 1) * PhraseLen);
-          Exit;
-        End;
-      Inc(PhraseLen, 8);
-    End;
-End;
-
-Function SanitizeSamplerText(Const SourceText: String): String;
-Var
-  I: Integer;
-  C: Char;
-Begin
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      If (C = #9) Or (C = #10) Or (C = #13) Or (Ord(C) >= 32) Then
-        Result := Result + C;
-    End;
-End;
-
-Function MergeSamplerText(Var Accum: String; Const Delta: String): Boolean;
-Var
-  Candidate: String;
-Begin
-  Result := False;
-  If Delta = '' Then
-    Exit;
-  If Accum = '' Then
-    Begin
-      Accum := CollapseTrailingPhraseRepeats(SanitizeSamplerText(Delta));
-      Result := True;
-      Exit;
-    End;
-  If Delta = Accum Then
-    Exit;
-  If (Length(Delta) >= Length(Accum)) And (Copy(Delta, 1, Length(Accum)) = Accum) Then
-    Begin
-      Candidate := CollapseTrailingPhraseRepeats(SanitizeSamplerText(Delta));
-      If Candidate = Accum Then
-        Exit;
-      Accum := Candidate;
-      Result := True;
-      Exit;
-    End;
-  If (Length(Delta) < Length(Accum)) And (Copy(Accum, 1, Length(Delta)) = Delta) Then
-    Exit;
-  If (Length(Accum) >= Length(Delta)) And
-    (Copy(Accum, Length(Accum) - Length(Delta) + 1, Length(Delta)) = Delta) Then
-    Exit;
-  Candidate := SanitizeSamplerText(Delta);
-  If (Length(Candidate) >= 48) And (Pos(Copy(Candidate, 1, 80), Accum) > 0) Then
-    Exit;
-  Candidate := CollapseTrailingPhraseRepeats(SanitizeSamplerText(Accum + Candidate));
-  If Candidate = Accum Then
-    Exit;
-  If Length(Candidate) > MaxSamplerAccumChars Then
-    Begin
-      If Length(Accum) >= MaxSamplerAccumChars Then
-        Exit;
-      Accum := Copy(Candidate, 1, MaxSamplerAccumChars);
-      Result := True;
-      Exit;
-    End;
-  Accum := Candidate;
-  Result := True;
 End;
 
 End.

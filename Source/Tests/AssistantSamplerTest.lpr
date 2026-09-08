@@ -495,31 +495,6 @@ Begin
   Finally Parser.Free; End;
 End;
 
-Procedure TestMergeSkipsRepeatedThought;
-Var
-  Accum, First: String;
-  Tick: QWord;
-  I: Integer;
-Begin
-  First := 'user asked me to review this project for bugs. The active project is EcologySurveyScheduler.';
-  Accum := First;
-  Check('merge first copy skipped', Not MergeSamplerText(Accum, First));
-  Check('merge accum unchanged', Accum = First);
-  Check('merge similar paragraph skipped', Not MergeSamplerText(Accum,
-    'user asked me to review this project for bugs. The active project is EcologySurveyScheduler, not LazWorkflow.'));
-  For I := 1 To 40 Do
-    MergeSamplerText(Accum,
-      'user asked me to review this project for bugs. The active project is EcologySurveyScheduler (' + IntToStr(I) + ').');
-  Check('merge repeats do not grow a CoT wall', Accum = First);
-  Check('merge new sentence appends', MergeSamplerText(Accum,
-    'Next I will open the project main file and scan for nil checks.'));
-  Check('merge new sentence present', Pos('scan for nil checks', Accum) > 0);
-  Accum := StringOfChar('x', 20000);
-  Tick := GetTickCount64;
-  MergeSamplerText(Accum, 'yyyy');
-  Check('merge on long accum stays fast', GetTickCount64 - Tick < 500);
-End;
-
 Begin
   FailCount := 0;
   TestResponsesReasoningAndText;
@@ -540,7 +515,6 @@ Begin
   TestInvalidToolCompletion;
   TestMarkdownDeltasAreLossless;
   TestTextSnapshots;
-  TestMergeSkipsRepeatedThought;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantSampler tests passed.');
