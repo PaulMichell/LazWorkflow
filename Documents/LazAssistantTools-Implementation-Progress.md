@@ -97,3 +97,7 @@ See [the detailed implementation record](LazAssistantTools-Codex-Implementation.
 Added the assistant-owned Backend menu and subscription connection/model dialog, separate managed profile, background account discovery, managed send/stop/steer and tool/history rendering. Native Grok settings and automatic build-task completion are excluded from the Codex path. The real runtime exposed an obsolete `untrusted` policy accepted by its schema but rejected at startup; corrected to `on-request` with unsupported approvals refused.
 
 All 17 regression programs and the package build pass. Additional client checks cover final-only/sequential message snapshots, exact pre-tool text, account/model discovery, missing API keys in the managed environment, and external MCP rejection. A signed-out real-runtime probe and strict configuration parse passed. Live browser sign-in and model usage were not performed. See the detailed implementation record for the user test sequence and remaining limitations.
+
+## Signed-in runtime fix (9 September 2026)
+
+Reproduced the reported external-tool failure: ChatGPT sign-in automatically exposed `codex_apps` in the dedicated profile. Runtime launch now disables app connectors explicitly, including for existing profiles. Signed-in inventory checks confirmed the server disappears; no inference or app tools were invoked. Regression coverage now models the signed-in default rather than assuming a fresh profile has no runtime servers.

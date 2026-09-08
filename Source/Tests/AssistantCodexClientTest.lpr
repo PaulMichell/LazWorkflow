@@ -32,7 +32,11 @@ Procedure Send(Const Line: String);
 Begin WriteLn(Line); Flush(Output); End;
 Procedure FakeRuntime;
 Var Line, Method, Id, Prompt: String; Data: TJSONData; Obj, Params: TJSONObject;
+  I: Integer; AppsDisabled: Boolean;
 Begin
+  AppsDisabled := False;
+  For I := 2 To ParamCount Do
+    If (ParamStr(I - 1) = '-c') And (ParamStr(I) = 'features.apps=false') Then AppsDisabled := True;
   While Not EOF(Input) Do
     Begin
       ReadLn(Line); Data := GetJSON(Line);
@@ -53,6 +57,9 @@ Begin
           Begin
             If GetEnvironmentVariable('LAZ_TEST_EXTERNAL_MCP') = '1' Then
               Send('{"id":' + Id + ',"result":{"data":[{"name":"external"}],"nextCursor":null}}')
+            Else If Not AppsDisabled Then
+              { Real signed-in runtimes expose this server by default. }
+              Send('{"id":' + Id + ',"result":{"data":[{"name":"codex_apps","tools":{"connector_tool":{}}}],"nextCursor":null}}')
             Else Send('{"id":' + Id + ',"result":{"data":[],"nextCursor":null}}');
           End
         Else If Method = 'model/list' Then Send('{"id":' + Id + ',"result":{"data":[{"id":"test-model"}],"nextCursor":null}}')

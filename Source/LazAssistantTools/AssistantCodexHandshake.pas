@@ -46,6 +46,9 @@ Begin
   Args.Clear;
   Args.Add('-c'); Args.Add('forced_login_method="chatgpt"');
   Args.Add('-c'); Args.Add('model_provider="openai"');
+  { ChatGPT sign-in enables codex_apps by default even in an otherwise empty
+    CODEX_HOME. Override on every launch, including existing preview profiles. }
+  Args.Add('-c'); Args.Add('features.apps=false');
   Args.Add('app-server');
   Args.Add('--listen'); Args.Add('stdio://');
 End;

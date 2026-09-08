@@ -66,7 +66,7 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 
 Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves only backend/runtime/model preferences in `assistant-backend.ini`. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
 
-The managed profile disables shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Turns request restricted read-only filesystem access with no project-readable roots. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
+The managed profile disables app connectors, shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Turns request restricted read-only filesystem access with no project-readable roots. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
 
 The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though its generated schema includes that value. The implementation now uses `on-request` and rejects unsupported approval requests. Both real signed-out initialization and strict configuration parsing succeeded with the preview settings. No browser sign-in or model inference was initiated during development.
 
@@ -83,3 +83,11 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 All 17 test programs and the full assistant package build passed against the local Lazarus checkout with range/overflow checks. Logs: `/tmp/laz-codex-preview`.
 
 The tests use fake runtime/compiler processes and real SynEdit where applicable. They establish the local implementation behaviour described above, not a live model → full Lazarus project acceptance run.
+
+## Signed-in startup correction (9 September 2026)
+
+The first live test failed the external-tool check because a ChatGPT-authenticated runtime enables the built-in `codex_apps` server by default, even with a dedicated `CODEX_HOME`. This was absent in the earlier signed-out probe. The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) documents `features.apps` as enabled by default.
+
+The launcher now passes `-c features.apps=false` on every start, and new managed profile configurations also persist that setting. Existing sign-ins work without recreating the profile. The check requiring an empty external MCP inventory remains in place; Lazarus dynamic tools are registered separately.
+
+An inventory-only check against the existing signed-in Lazarus profile reproduced `codex_apps` with 88 tools. Repeating with the override returned an empty inventory. No model turn or app tool was invoked. The fake signed-in runtime now models this default, and tests verify both successful isolated startup and continued rejection of unrelated external MCP servers.

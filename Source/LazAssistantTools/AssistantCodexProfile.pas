@@ -39,6 +39,7 @@ Begin
       Config.Add('sandbox_mode = "read-only"');
       Config.Add('web_search = "disabled"');
       Config.Add('[features]');
+      Config.Add('apps = false');
       Config.Add('shell_tool = false');
       Config.Add('unified_exec = false');
       Config.Add('skill_mcp_dependency_install = false');
