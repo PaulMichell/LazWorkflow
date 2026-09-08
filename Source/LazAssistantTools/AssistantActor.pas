@@ -498,7 +498,9 @@ Begin
               If ErrorText = '' Then
                 ErrorText := 'response.failed';
             End
-          Else If FParser.Incomplete And (Length(FParser.ToolCalls) = 0) And (Trim(FParser.Content) = '') Then
+          Else If Not FParser.Completed Then
+            ErrorText := 'Response stream ended before completion; no tools were executed.'
+          Else If FParser.Incomplete Then
             Begin
               ErrorText := FParser.ErrorText;
               If ErrorText = '' Then
@@ -563,9 +565,7 @@ Var
 Begin
   E := LowerCase(ErrorText);
   Result := (Pos('http 404', E) > 0) Or (Pos('http 405', E) > 0) Or
-    (Pos('http 400', E) > 0) Or (Pos('http 403', E) > 0) Or
-    (Pos('not found', E) > 0) Or (Pos('unknown', E) > 0) Or
-    (Pos('not supported', E) > 0);
+    (Pos('http 501', E) > 0);
 End;
 
 Type

@@ -40,7 +40,6 @@ Type
     Procedure CompactEmptyTools;
     Procedure EnsureToolIndex(Index: Integer);
     Procedure FillToolAtIndex(Index: Integer; Const Id, Name, Arguments: String);
-    Procedure MergeTool(Const Id, Name, Arguments: String);
     Procedure ProcessLine(Const Line: String);
     Procedure ParsePayload(Const Payload: String);
     Procedure ParseResponsesEvent(Obj: TObject);
@@ -65,6 +64,7 @@ Type
     Property InputTokens: Integer Read FInputTokens;
     Property OutputTokens: Integer Read FOutputTokens;
     Property ReasoningTokens: Integer Read FReasoningTokens;
+    Property Completed: Boolean Read FCompleted;
     Property Failed: Boolean Read FFailed;
     Property Incomplete: Boolean Read FIncomplete;
     Property ErrorText: String Read FErrorText;
@@ -167,8 +167,8 @@ End;
 
 Procedure TAssistantSseParser.EnsureToolIndex(Index: Integer);
 Begin
-  If Index < 0 Then
-    Exit;
+  If (Index < 0) Or (Index > 4095) Then
+    Raise Exception.Create('Invalid tool output index');
   If Index >= Length(FTools) Then
     SetLength(FTools, Index + 1);
 End;
@@ -183,37 +183,7 @@ Begin
   If Name <> '' Then
     FTools[Index].Name := Name;
   If Arguments <> '' Then
-    MergeSamplerText(FTools[Index].Arguments, Arguments);
-End;
-
-Procedure TAssistantSseParser.MergeTool(Const Id, Name, Arguments: String);
-Var
-  I, Slot: Integer;
-Begin
-  Slot := -1;
-  If Id <> '' Then
-    For I := 0 To High(FTools) Do
-      If FTools[I].Id = Id Then
-        Begin
-          Slot := I;
-          Break;
-        End;
-  If Slot < 0 Then
-    Begin
-      Slot := Length(FTools);
-      SetLength(FTools, Slot + 1);
-    End;
-  If Id <> '' Then
-    FTools[Slot].Id := Id;
-  If Name <> '' Then
-    FTools[Slot].Name := Name;
-  If Arguments <> '' Then
-    If FTools[Slot].Arguments = '' Then
-      FTools[Slot].Arguments := Arguments
-    Else If Pos(FTools[Slot].Arguments, Arguments) = 1 Then
-      FTools[Slot].Arguments := Arguments
-    Else If Pos(Arguments, FTools[Slot].Arguments) <> 1 Then
-      FTools[Slot].Arguments := FTools[Slot].Arguments + Arguments;
+    FTools[Index].Arguments := Arguments;
 End;
 
 Procedure TAssistantSseParser.CompactEmptyTools;
@@ -236,7 +206,7 @@ Var
   P: Integer;
   Line: String;
 Begin
-  If Chunk = '' Then
+  If (Chunk = '') Or FFailed Then
     Exit;
   FBuffer := FBuffer + Chunk;
   FBuffer := StringReplace(FBuffer, #13#10, #10, [rfReplaceAll]);
@@ -256,6 +226,8 @@ Var
   Trimmed, Payload: String;
   Event: TSamplerEvent;
 Begin
+  If FFailed Or (FCompleted And (FWire = swkResponses)) Then
+    Exit;
   Trimmed := Trim(Line);
   If Trimmed = '' Then
     Exit;
@@ -287,6 +259,7 @@ Var
   Data: TJSONData;
   Obj: TJSONObject;
   TypeText: String;
+  Event: TSamplerEvent;
 Begin
   Data := Nil;
   Try
@@ -317,6 +290,10 @@ Begin
         Begin
           FFailed := True;
           FErrorText := 'SSE JSON: ' + E.Message;
+          Event := EmptySamplerEvent;
+          Event.Kind := sekFailed;
+          Event.ErrorText := FErrorText;
+          Emit(Event);
         End;
     End;
   Finally
@@ -392,7 +369,8 @@ Begin
       Emit(Event);
       Exit;
     End;
-  If EventType = 'response.output_item.added' Then
+  If (EventType = 'response.output_item.added') Or
+    (EventType = 'response.output_item.done') Then
     Begin
       Item := Root.FindPath('item') As TJSONObject;
       If Not Assigned(Item) Then
@@ -402,14 +380,14 @@ Begin
         Exit;
       OutputIndex := JsonIntField(Root, 'output_index');
       CallId := JsonStringField(Item, 'call_id');
-      If CallId = '' Then
-        CallId := JsonStringField(Item, 'id');
       Name := JsonStringField(Item, 'name');
-      { Fill the output_index slot in place. MergeTool would append a second row. }
+      { Snapshots replace arguments; deltas below append bytes verbatim. }
       FillToolAtIndex(OutputIndex, CallId, Name, JsonStringField(Item, 'arguments'));
+      FTools[OutputIndex].ItemId := JsonStringField(Item, 'id');
       Event.Kind := sekToolCallDelta;
       Event.ToolIndex := OutputIndex;
       Event.ToolId := CallId;
+      Event.ToolItemId := FTools[OutputIndex].ItemId;
       Event.ToolName := Name;
       Emit(Event);
       Exit;
@@ -421,13 +399,12 @@ Begin
         Exit;
       OutputIndex := JsonIntField(Root, 'output_index');
       EnsureToolIndex(OutputIndex);
-      MergeSamplerText(FTools[OutputIndex].Arguments, Delta);
-      CallId := JsonStringField(Root, 'item_id');
-      If CallId <> '' Then
-        FTools[OutputIndex].Id := CallId;
+      FTools[OutputIndex].Arguments := FTools[OutputIndex].Arguments + Delta;
+      FTools[OutputIndex].ItemId := JsonStringField(Root, 'item_id');
       Event.Kind := sekToolCallDelta;
       Event.ToolIndex := OutputIndex;
       Event.ToolId := FTools[OutputIndex].Id;
+      Event.ToolItemId := FTools[OutputIndex].ItemId;
       Event.ToolName := FTools[OutputIndex].Name;
       Event.Text := Delta;
       Emit(Event);
@@ -557,7 +534,7 @@ Procedure TAssistantSseParser.HarvestCompletedOutput(ResponseObj: TObject);
 Var
   Root, Item, Part, UsageObj, Details: TJSONObject;
   Arr, Summary, ContentArr: TJSONArray;
-  I, J: Integer;
+  I, J, ToolIndex: Integer;
   ItemType, SummaryText, MessageText: String;
 Begin
   If Not (ResponseObj Is TJSONObject) Then
@@ -566,6 +543,8 @@ Begin
   Arr := Root.FindPath('output') As TJSONArray;
   If Not Assigned(Arr) Then
     Exit;
+  { Completed output is authoritative, including call IDs and full arguments. }
+  SetLength(FTools, 0);
   For I := 0 To Arr.Count - 1 Do
     Begin
       If Not (Arr.Items[I] Is TJSONObject) Then
@@ -593,8 +572,10 @@ Begin
         End
       Else If ItemType = 'function_call' Then
         Begin
-          MergeTool(JsonStringField(Item, 'call_id'), JsonStringField(Item, 'name'),
-            JsonStringField(Item, 'arguments'));
+          ToolIndex := Length(FTools);
+          FillToolAtIndex(ToolIndex, JsonStringField(Item, 'call_id'),
+            JsonStringField(Item, 'name'), JsonStringField(Item, 'arguments'));
+          FTools[ToolIndex].ItemId := JsonStringField(Item, 'id');
         End
       Else If ItemType = 'message' Then
         Begin
@@ -707,7 +688,7 @@ Begin
                         FTools[Idx].Name := Name;
                       Args := JsonStringField(Func, 'arguments');
                       If Args <> '' Then
-                        MergeSamplerText(FTools[Idx].Arguments, Args);
+                        FTools[Idx].Arguments := FTools[Idx].Arguments + Args;
                     End;
                   Event := EmptySamplerEvent;
                   Event.Kind := sekToolCallDelta;

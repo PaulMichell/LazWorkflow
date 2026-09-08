@@ -192,6 +192,65 @@ Begin
   End;
 End;
 
+Procedure TestDistinctToolIdsAndRepeatedArguments;
+Var
+  Parser: TAssistantSseParser;
+  Body: String;
+  I: Integer;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Body :=
+      SseLine('{"type":"response.output_item.added","output_index":2,' +
+        '"item":{"type":"function_call","id":"fc_distinct","call_id":"call_real","name":"write_file","arguments":""}}') +
+      SseLine('{"type":"response.function_call_arguments.delta","item_id":"fc_distinct","output_index":2,"delta":"x"}') +
+      SseLine('{"type":"response.function_call_arguments.delta","item_id":"fc_distinct","output_index":2,"delta":"x"}');
+    For I := 1 To Length(Body) Do
+      Parser.Feed(Body[I]);
+    Check('fragmented call ID survives item delta', Parser.ToolCalls[2].Id = 'call_real');
+    Check('item ID retained separately', Parser.ToolCalls[2].ItemId = 'fc_distinct');
+    Check('repeated argument bytes preserved', Parser.ToolCalls[2].Arguments = 'xx');
+    Check('event call ID preserved', Parser.GetEvent(Parser.EventCount - 1).ToolId = 'call_real');
+    Check('event item ID preserved', Parser.GetEvent(Parser.EventCount - 1).ToolItemId = 'fc_distinct');
+    Parser.Feed(SseLine('{"type":"response.completed","response":{"output":[' +
+      '{"type":"function_call","id":"fc_distinct","call_id":"call_real","name":"write_file","arguments":"{}"},' +
+      '{"type":"function_call","id":"fc_second","call_id":"call_second","name":"read_file","arguments":"{}"}]}}'));
+    Check('authoritative output replaces sparse streamed calls', Length(Parser.ToolCalls) = 2);
+    Check('final snapshot replaces arguments', Parser.ToolCalls[0].Arguments = '{}');
+    Check('second call retained', Parser.ToolCalls[1].Id = 'call_second');
+    Parser.Feed(SseLine('{"type":"response.completed","response":{"output":[]}}'));
+    Check('duplicate terminal ignored', CountKind(Parser, sekCompleted) = 1);
+    Check('duplicate terminal does not clear tools', Length(Parser.ToolCalls) = 2);
+  Finally
+    Parser.Free;
+  End;
+End;
+
+Procedure TestToolDoneAndInvalidIndex;
+Var Parser: TAssistantSseParser;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Parser.Feed(SseLine('{"type":"response.output_item.done","output_index":0,' +
+      '"item":{"type":"function_call","id":"fc_done","call_id":"call_done","name":"read_file","arguments":"{}"}}') +
+      SseLine('[DONE]'));
+    Check('item done captures tool', Length(Parser.ToolCalls) = 1);
+    Check('item done preserves call ID', Parser.ToolCalls[0].Id = 'call_done');
+    Parser.Reset;
+    Parser.Feed(SseLine('{"type":"response.function_call_arguments.delta","output_index":-1,"delta":"x"}'));
+    Check('invalid index fails safely', Parser.Failed);
+    Check('parse failure emits event', CountKind(Parser, sekFailed) = 1);
+    Parser.Feed(SseLine('[DONE]'));
+    Check('parse failure cannot complete', CountKind(Parser, sekCompleted) = 0);
+    Parser.Reset;
+    Parser.Feed(SseLine('{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"arguments":"x"}}]}}]}') +
+      SseLine('{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"x"}}]}}]}'));
+    Check('chat arguments preserve repeated chunks', Parser.ToolCalls[0].Arguments = 'xx');
+  Finally
+    Parser.Free;
+  End;
+End;
+
 Procedure TestChatCompletionsFallback;
 Var
   Parser: TAssistantSseParser;
@@ -395,6 +454,8 @@ Begin
   TestResponsesEncryptedHarvest;
   TestResponsesToolCall;
   TestOutputItemAddedDoesNotDuplicateTool;
+  TestDistinctToolIdsAndRepeatedArguments;
+  TestToolDoneAndInvalidIndex;
   TestChatCompletionsFallback;
   TestChatCompletionsTools;
   TestSplitChunks;

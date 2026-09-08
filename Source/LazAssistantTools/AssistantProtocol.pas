@@ -34,7 +34,9 @@ Type
   );
 
   TSamplerToolCall = Record
+    { Id is the function call ID used when submitting its result. }
     Id: String;
+    ItemId: String;
     Name: String;
     Arguments: String;
   End;
@@ -59,6 +61,7 @@ Type
     Text: String;
     ToolIndex: Integer;
     ToolId: String;
+    ToolItemId: String;
     ToolName: String;
     ErrorText: String;
     InputTokens: Integer;
