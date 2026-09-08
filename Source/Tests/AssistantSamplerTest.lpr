@@ -422,6 +422,28 @@ Begin
   Check('fn call id', Pos('"call_id":"call_1"', Body) > 0);
 End;
 
+Procedure TestInvalidToolCompletion;
+Var Parser: TAssistantSseParser;
+Begin
+  Parser := TAssistantSseParser.Create;
+  Try
+    Parser.Feed(SseLine('{"type":"response.output_item.added","output_index":0,' +
+      '"item":{"type":"function_call","id":"fc_only","name":"write_file","arguments":"{}"}}'));
+    Check('unfinished stream is not completed', Not Parser.Completed);
+    Parser.Feed(SseLine('[DONE]'));
+    Check('missing call ID is rejected instead of invented', Parser.Failed And Not Parser.Completed);
+    Parser.Reset;
+    Parser.Feed(SseLine('{"type":"response.completed","response":{"output":[' +
+      '{"type":"function_call","call_id":"c","name":"write_file","arguments":"{"}]}}'));
+    Check('truncated tool JSON cannot complete', Parser.Failed And Not Parser.Completed);
+    Parser.Reset;
+    Parser.Feed(SseLine('{"type":"response.completed","response":{"output":[' +
+      '{"type":"function_call","call_id":"c","name":"write_file","arguments":"{}"},' +
+      '{"type":"function_call","call_id":"c","name":"write_file","arguments":"{}"}]}}'));
+    Check('duplicate call IDs cannot execute twice', Parser.Failed And Not Parser.Completed);
+  Finally Parser.Free; End;
+End;
+
 Procedure TestMergeSkipsRepeatedThought;
 Var
   Accum, First: String;
@@ -464,6 +486,7 @@ Begin
   TestFunctionRoundTripItems;
   TestResponsesFailedIsError;
   TestResponsesIncomplete;
+  TestInvalidToolCompletion;
   TestMergeSkipsRepeatedThought;
   If FailCount = 0 Then
     Begin

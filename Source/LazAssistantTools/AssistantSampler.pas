@@ -36,6 +36,7 @@ Type
     FErrorText: String;
     FReasoningItemId: String;
     FMessageItemId: String;
+    Function ValidateToolCalls: Boolean;
     Procedure Emit(Const Event: TSamplerEvent);
     Procedure CompactEmptyTools;
     Procedure EnsureToolIndex(Index: Integer);
@@ -139,14 +140,57 @@ Begin
   FMessageItemId := '';
 End;
 
+Function TAssistantSseParser.ValidateToolCalls: Boolean;
+Var I, J: Integer; Data: TJSONData;
+Begin
+  Result := False;
+  For I := 0 To High(FTools) Do
+    Begin
+      If (FTools[I].Name = '') And (FTools[I].Id = '') And
+        (FTools[I].Arguments = '') Then Continue;
+      If (FTools[I].Name = '') Or (FTools[I].Id = '') Then
+        Begin FErrorText := 'Incomplete tool identity in response.'; Exit; End;
+      For J := 0 To I - 1 Do
+        If FTools[J].Id = FTools[I].Id Then
+          Begin FErrorText := 'Duplicate tool call ID in response.'; Exit; End;
+      Data := Nil;
+      Try
+        Try
+          Data := GetJSON(FTools[I].Arguments);
+          If Not (Data Is TJSONObject) Then
+            Begin FErrorText := 'Tool arguments must be a JSON object.'; Exit; End;
+        Except
+          On E: Exception Do
+            Begin FErrorText := 'Invalid JSON tool arguments in response.'; Exit; End;
+        End;
+      Finally
+        Data.Free;
+      End;
+    End;
+  Result := True;
+End;
+
 Procedure TAssistantSseParser.Emit(Const Event: TSamplerEvent);
 Var
   N: Integer;
+  Failure: TSamplerEvent;
 Begin
   If Event.Kind = sekNone Then
     Exit;
   If Event.Kind = sekCompleted Then
-    FCompleted := True;
+    Begin
+      If FCompleted Or FFailed Then Exit;
+      If Not ValidateToolCalls Then
+        Begin
+          FFailed := True;
+          Failure := EmptySamplerEvent;
+          Failure.Kind := sekFailed;
+          Failure.ErrorText := FErrorText;
+          Emit(Failure);
+          Exit;
+        End;
+      FCompleted := True;
+    End;
   N := Length(FEvents);
   SetLength(FEvents, N + 1);
   FEvents[N] := Event;
