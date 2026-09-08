@@ -497,6 +497,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Settings…'
       OnExecute = SettingsActionExecute
     end
+    object ToggleToolUseAction: TAction
+      Caption = 'Hide Tool Use'
+      OnExecute = ToggleToolUseActionExecute
+    end
     object ToggleThinkingAction: TAction
       Caption = 'Show Thinking'
       OnExecute = ToggleThinkingActionExecute
@@ -658,6 +662,9 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object ViewMenuItem: TMenuItem
       Caption = 'View'
+      object ToggleToolUseMenuItem: TMenuItem
+        Action = ToggleToolUseAction
+      end
       object ToggleThinkingMenuItem: TMenuItem
         Action = ToggleThinkingAction
       end

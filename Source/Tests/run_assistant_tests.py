@@ -36,7 +36,7 @@ def main():
              'AssistantTraceTest', 'AssistantCodexHandshakeTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
-                  'AssistantEditorEditsTest', 'AssistantProviderTest', 'MarkdownLayoutTest']
+                  'AssistantEditorEditsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
     failures = []
 
     def run(label, command):

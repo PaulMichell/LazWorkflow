@@ -101,9 +101,9 @@ Type
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
     { Project shell prefs in .assistant/config.json (mode, thinking, active plan, …). }
     Function LoadShellConfig(Out ShowThinking: Boolean; Out ActiveMode: TAssistantMode;
-      Out PlanFile: String): Boolean;
+      Out PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
     Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode;
-      Const PlanFile: String): Boolean;
+      Const PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
     { Compatibility wrappers — prefer LoadShellConfig / SaveShellConfig. }
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
@@ -699,7 +699,7 @@ Begin
 End;
 
 Function TAssistantConversationStore.LoadShellConfig(Out ShowThinking: Boolean;
-  Out ActiveMode: TAssistantMode; Out PlanFile: String): Boolean;
+  Out ActiveMode: TAssistantMode; Out PlanFile: String; ShowToolUse: PBoolean): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -708,6 +708,7 @@ Var
 Begin
   Result := False;
   ShowThinking := True;
+  If Assigned(ShowToolUse) Then ShowToolUse^ := True;
   ActiveMode := amChat;
   PlanFile := '';
   If Not FileExistsUTF8(ConfigPath) Then
@@ -722,6 +723,7 @@ Begin
         Exit;
       Obj := TJSONObject(Data);
       ShowThinking := Obj.Get('show_thinking', True);
+      If Assigned(ShowToolUse) Then ShowToolUse^ := Obj.Get('show_tool_use', True);
       ModeText := Obj.Get('active_mode', 'chat');
       ActiveMode := StrToAssistantMode(ModeText);
       PlanFile := Obj.Get('plan_file', '');
@@ -741,7 +743,7 @@ Begin
 End;
 
 Function TAssistantConversationStore.SaveShellConfig(ShowThinking: Boolean;
-  ActiveMode: TAssistantMode; Const PlanFile: String): Boolean;
+  ActiveMode: TAssistantMode; Const PlanFile: String; ShowToolUse: PBoolean): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -779,6 +781,7 @@ Begin
         OwnsObj := True;
       End;
     Obj.Booleans['show_thinking'] := ShowThinking;
+    If Assigned(ShowToolUse) Then Obj.Booleans['show_tool_use'] := ShowToolUse^;
     Obj.Strings['active_mode'] := AssistantModeToStr(ActiveMode);
     Obj.Strings['plan_file'] := PlanNorm;
     Try

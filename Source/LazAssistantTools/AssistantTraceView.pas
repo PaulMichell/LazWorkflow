@@ -20,6 +20,7 @@ Type
     EmptyLabel: TLabel;
   Private
     FShowThinking: Boolean;
+    FShowToolUse: Boolean;
     FTruncatedLines: Integer;
     FBoundTrace: TAssistantTrace;
     FCopyPopup: TPopupMenu;
@@ -92,6 +93,7 @@ Type
     Procedure ScrollToStart;
     Procedure ScrollToEnd;
     Procedure RefreshElapsed(Trace: TAssistantTrace);
+    Property ShowToolUse: Boolean Read FShowToolUse Write FShowToolUse;
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
   End;
 
@@ -232,6 +234,7 @@ Begin
   Inherited Create(TheOwner);
   Align := alClient;
   FShowThinking := True;
+  FShowToolUse := True;
   FTruncatedLines := TruncatedLineCount;
   FBoundTrace := Nil;
   FCopyPopup := Nil;
@@ -1370,7 +1373,7 @@ Begin
   Panel.OnClick := @CardExpandClick;
   Panel.Cursor := crHandPoint;
   LockControlHeight(Panel, TotalH);
-  Panel.Visible := True;
+  Panel.Visible := FShowToolUse;
 End;
 
 Procedure TAssistantTraceView.BindSubagent(Block: TTraceBlock);

@@ -34,6 +34,7 @@ Type
     SettingsAction: TAction;
     StopButton: TButton;
     ToggleThinkingAction: TAction;
+    ToggleToolUseAction: TAction;
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
     CommandsAction: TAction;
@@ -79,6 +80,7 @@ Type
     FixErrorMenuItem: TMenuItem;
     ViewMenuItem: TMenuItem;
     ToggleThinkingMenuItem: TMenuItem;
+    ToggleToolUseMenuItem: TMenuItem;
     SkillsMenuItem: TMenuItem;
     ModelMenuItem: TMenuItem;
     ThinkingLevelMenuItem: TMenuItem;
@@ -161,6 +163,7 @@ Type
     Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure ToggleThinkingActionExecute(Sender: TObject);
+    Procedure ToggleToolUseActionExecute(Sender: TObject);
     Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
     Procedure InputPopupPopup(Sender: TObject);
@@ -204,6 +207,7 @@ Type
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
     FShowThinking: Boolean;
+    FShowToolUse: Boolean;
     ActiveMode: TAssistantMode;
     FModelName: String;
     FContextUsed: Integer;
@@ -262,7 +266,7 @@ Type
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
-    Procedure UpdateThinkingActionCaption;
+    Procedure UpdateViewActionCaptions;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -468,6 +472,7 @@ Begin
   FDisplayDurationMs := 0;
   FDisplayThinkingMs := 0;
   FShowThinking := True;
+  FShowToolUse := True;
   ActiveMode := amChat;
   FApplyingShellConfig := False;
   FModeLocked := False;
@@ -572,7 +577,7 @@ Begin
       PlanOfferBar.Height := Scale96ToForm(28);
       PlanOfferBar.Visible := False;
     End;
-  UpdateThinkingActionCaption;
+  UpdateViewActionCaptions;
   SyncAutoNewChatCheckFromConfig;
   If Not Assigned(ElapsedTimer) Then
     Begin
@@ -620,7 +625,7 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window destroyed');
 End;
 
-Procedure TProjectAssistantForm.UpdateThinkingActionCaption;
+Procedure TProjectAssistantForm.UpdateViewActionCaptions;
 Begin
   If Not Assigned(ToggleThinkingAction) Then
     Exit;
@@ -628,6 +633,10 @@ Begin
     ToggleThinkingAction.Caption := 'Hide Thinking'
   Else
     ToggleThinkingAction.Caption := 'Show Thinking';
+  If FShowToolUse Then
+    ToggleToolUseAction.Caption := 'Hide Tool Use'
+  Else
+    ToggleToolUseAction.Caption := 'Show Tool Use';
 End;
 
 Procedure TProjectAssistantForm.ClearCurrentTurnDisplay;
@@ -968,23 +977,24 @@ Begin
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
   If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, ActiveMode,
-    GetActivePlanRelativePath) Then
+    GetActivePlanRelativePath, @FShowToolUse) Then
     WorkflowLogger.Warning('ProjectAssistant',
       'config.json save failed: ' + ProjectAssistantConversation.LastError);
 End;
 
 Procedure TProjectAssistantForm.ApplyShellConfigFromStore;
 Var
-  ShowThinking: Boolean;
+  ShowThinking, ShowToolUse: Boolean;
   Mode: TAssistantMode;
   PlanFile: String;
 Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile) Then
+  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile, @ShowToolUse) Then
     Exit;
   FShowThinking := ShowThinking;
-  UpdateThinkingActionCaption;
+  FShowToolUse := ShowToolUse;
+  UpdateViewActionCaptions;
   SetActivePlanRelativePath(PlanFile);
   SelectMode(Mode);
   RefreshPlanList;
@@ -2518,11 +2528,32 @@ End;
 Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
 Begin
   FShowThinking := Not FShowThinking;
-  UpdateThinkingActionCaption;
+  UpdateViewActionCaptions;
   PersistShellConfig;
   If Assigned(FTraceView) Then
     Begin
       FTraceView.ShowThinking := FShowThinking;
+      FTraceView.ShowToolUse := FShowToolUse;
+      If FViewingLive Then
+        FTraceView.Sync(FTrace, False)
+      Else If Assigned(FHistoryTrace) Then
+        FTraceView.Sync(FHistoryTrace, False)
+      Else
+        RefreshChatDisplay(True);
+    End
+  Else
+    RefreshChatDisplay(True);
+End;
+
+Procedure TProjectAssistantForm.ToggleToolUseActionExecute(Sender: TObject);
+Begin
+  FShowToolUse := Not FShowToolUse;
+  UpdateViewActionCaptions;
+  PersistShellConfig;
+  If Assigned(FTraceView) Then
+    Begin
+      FTraceView.ShowThinking := FShowThinking;
+      FTraceView.ShowToolUse := FShowToolUse;
       If FViewingLive Then
         FTraceView.Sync(FTrace, False)
       Else If Assigned(FHistoryTrace) Then
@@ -2866,6 +2897,7 @@ Begin
   FTraceView.Align := alClient;
   FTraceView.BorderSpacing.Around := ChatViewMargin;
   FTraceView.ShowThinking := FShowThinking;
+  FTraceView.ShowToolUse := FShowToolUse;
   ChatView := FTraceView;
   If Not Assigned(FTrace) Then
     FTrace := TAssistantTrace.Create;
@@ -3225,6 +3257,7 @@ Begin
       If Assigned(FTraceView) Then
         Begin
           FTraceView.ShowThinking := FShowThinking;
+          FTraceView.ShowToolUse := FShowToolUse;
           If FViewingLive Then
             Begin
               FTraceView.Sync(FTrace, ScrollToBottom);
@@ -3769,6 +3802,7 @@ Begin
   AddAct(ReviewBuildAction, 'Review', 'review-build', '', 'Review the last build');
   AddAct(FixErrorAction, 'Review', 'fix', 'fix-error', 'Fix the selected Messages error');
   AddAct(ToggleThinkingAction, 'View', 'thinking', '', 'Show or hide thinking blocks');
+  AddAct(ToggleToolUseAction, 'View', 'tools', '', 'Show or hide tool use');
   AddAct(ModelPickerAction, 'Model', 'model', '', 'Choose model, thinking, and approval');
   AddAct(ThinkingPickerAction, 'Model', 'effort', 'thinking-level', 'Set reasoning effort');
   AddAct(ContextBreakdownAction, 'Help', 'context', '', 'Token estimate for the next request');

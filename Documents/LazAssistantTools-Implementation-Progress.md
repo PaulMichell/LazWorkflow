@@ -79,3 +79,9 @@ The reported three-column table appeared with a one-column separator (`|---|`) a
 Responses and Chat Completions now append text and reasoning deltas verbatim. Responses item snapshots replace the text belonging to that item, preserving separate messages even when their contents match. Completed message output replaces partial streamed text and retains all messages. The actor consumes the parser's authoritative text instead of applying a second heuristic merge; thinking from preceding tool rounds is kept separately.
 
 Validation: all 13 assistant/Markdown test programs pass and the complete assistant package compiles. Regressions cover byte-fragmented SSE, repeated Markdown delimiters, item/final snapshots, identical messages, and two streamed tables rendered with three columns and bold cells. `MarkdownLayoutTest` is now part of the runner's GUI group. Logs are in `/tmp/laz-assistant-tables`. No live model request was made. Rebuild/restart Lazarus and retry the prompt; previously stored text that already lost delimiters is not repaired by this change.
+
+## Follow-up: assistant View menu tool visibility
+
+Added **View → Hide Tool Use** to the Project Assistant window's own menu, toggling to **Show Tool Use**. It hides tool-call rows in live and historical traces without deleting tool results or changing execution. Newly arriving rows and timer refreshes respect the setting. The project-local `show_tool_use` preference defaults to visible and survives plan updates by existing configuration callers.
+
+Validation: all 14 test programs and the assistant package build pass. `AssistantTraceViewTest` covers hiding/restoring rows, incoming tools, timer refreshes, retained results and preference persistence. Logs: `/tmp/laz-assistant-hide-tools`.
