@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live styled Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="35">
+    <Files Count="41">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -161,6 +161,30 @@
         <Filename Value="../Source/LazAssistantTools/AssistantCodexHandshake.pas"/>
         <UnitName Value="AssistantCodexHandshake"/>
       </Item35>
+      <Item36>
+        <Filename Value="../Source/LazAssistantTools/AssistantCodexTransport.pas"/>
+        <UnitName Value="AssistantCodexTransport"/>
+      </Item36>
+      <Item37>
+        <Filename Value="../Source/LazAssistantTools/AssistantCodexClient.pas"/>
+        <UnitName Value="AssistantCodexClient"/>
+      </Item37>
+      <Item38>
+        <Filename Value="../Source/LazAssistantTools/AssistantToolBroker.pas"/>
+        <UnitName Value="AssistantToolBroker"/>
+      </Item38>
+      <Item39>
+        <Filename Value="../Source/LazAssistantTools/AssistantIDEWorkspace.pas"/>
+        <UnitName Value="AssistantIDEWorkspace"/>
+      </Item39>
+      <Item40>
+        <Filename Value="../Source/LazAssistantTools/AssistantCodexRun.pas"/>
+        <UnitName Value="AssistantCodexRun"/>
+      </Item40>
+      <Item41>
+        <Filename Value="../Source/LazAssistantTools/AssistantBuildJob.pas"/>
+        <UnitName Value="AssistantBuildJob"/>
+      </Item41>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
