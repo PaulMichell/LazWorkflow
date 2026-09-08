@@ -1,7 +1,8 @@
 Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
-  AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker;
+  AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
+  AssistantCodexAccount, AssistantCodexProfile;
 Type
   TMemoryWorkspace = Class(TAssistantWorkspaceAdapter)
   Public
@@ -46,7 +47,13 @@ Begin
             Params := TJSONObject(Obj.Find('params'));
             If (Params.Get('sandbox', '') <> 'read-only') Or
               (Params.Get('modelProvider', '') <> 'openai') Then Halt(2);
-            Send('{"id":' + Id + ',"result":{"modelProvider":"openai","approvalPolicy":"untrusted","sandbox":{"type":"readOnly"},"thread":{"id":"thread-1"}}}');
+            Send('{"id":' + Id + ',"result":{"modelProvider":"openai","approvalPolicy":"on-request","sandbox":{"type":"readOnly"},"thread":{"id":"thread-1"}}}');
+          End
+        Else If Method = 'mcpServerStatus/list' Then
+          Begin
+            If GetEnvironmentVariable('LAZ_TEST_EXTERNAL_MCP') = '1' Then
+              Send('{"id":' + Id + ',"result":{"data":[{"name":"external"}],"nextCursor":null}}')
+            Else Send('{"id":' + Id + ',"result":{"data":[],"nextCursor":null}}');
           End
         Else If Method = 'model/list' Then Send('{"id":' + Id + ',"result":{"data":[{"id":"test-model"}],"nextCursor":null}}')
         Else If Method = 'turn/start' Then
@@ -57,6 +64,14 @@ Begin
             If Prompt = 'authchange' Then
               Begin Send('{"method":"account/updated","params":{"authMode":"apikey"}}'); Continue; End;
             If Prompt = 'hang' Then Continue;
+            If Prompt = 'finalonly' Then
+              Begin
+                Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"answer-1","type":"agentMessage","text":"Final answer"}}}');
+                Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"answer-1","type":"agentMessage","text":"Final answer"}}}');
+                Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"answer-2","type":"agentMessage","text":"Second paragraph"}}}');
+                Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}');
+                Continue;
+              End;
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"text"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
@@ -109,6 +124,34 @@ Begin
     Run.Free; Broker.Free; Workspace.Free;
   End;
 End;
+Procedure TestAccount;
+Var Job: TAssistantCodexAccount; Value: TCodexAccountSnapshot;
+  Profile: String; Deadline: QWord; Env: TStringList; Client: TAssistantCodexClient; Id: TGuid;
+Begin
+  CreateGUID(Id); Profile := GetTempDir + 'laz-codex-account-' + GUIDToString(Id);
+  Job := TAssistantCodexAccount.Create(ParamStr(0), Profile, False);
+  Try
+    Job.Start; Deadline := GetTickCount64 + 5000;
+    Repeat Value := Job.Snapshot; Sleep(1); Until Value.Done Or (GetTickCount64 >= Deadline);
+    Check('account worker completes discovery without a model turn', Value.Done And
+      (Value.State = ccsSubscriptionAuthenticated) And (Pos('test-model', Value.ModelsJson) > 0));
+  Finally Job.Cancel; Job.Free; End;
+  Env := TStringList.Create; Client := TAssistantCodexClient.Create(500);
+  Try
+    CodexProfileEnvironment(Profile, Env);
+    Check('isolated home set', Env.Values['CODEX_HOME'] = Profile);
+    Check('metered API keys absent', (Env.Values['OPENAI_API_KEY'] = '') And (Env.Values['CODEX_API_KEY'] = ''));
+    Env.Values['LAZ_TEST_EXTERNAL_MCP'] := '1';
+    Check('external tools test connects', Client.Connect(ParamStr(0), Profile, Env));
+    Deadline := GetTickCount64 + 3000;
+    Repeat Client.Pump; Sleep(1); Until (Client.State = crsReady) Or (GetTickCount64 >= Deadline);
+    Check('thread blocked before isolation check', Not Client.StartThread(Profile, 'test-model', '[]'));
+    Client.CheckToolIsolation;
+    Deadline := GetTickCount64 + 3000;
+    Repeat Client.Pump; Sleep(1); Until (Client.State = crsFailed) Or (GetTickCount64 >= Deadline);
+    Check('external MCP configuration rejected', (Client.State = crsFailed) And Not Client.ToolIsolationChecked);
+  Finally Client.Free; Env.Free; DeleteFile(Profile + '/config.toml'); RemoveDir(Profile); End;
+End;
 Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord;
 Procedure WaitState(State: TCodexRunState);
 Begin
@@ -122,6 +165,10 @@ Begin
   Check('start client process', Client.Connect(ParamStr(0), GetTempDir));
   WaitState(crsReady);
   Check('subscription account required', Client.Authentication.State = ccsSubscriptionAuthenticated);
+  Check('isolation check queued', Client.CheckToolIsolation);
+  Deadline := GetTickCount64 + 3000;
+  Repeat Client.Pump; Sleep(1); Until Client.ToolIsolationChecked Or (GetTickCount64 >= Deadline);
+  Check('isolation verified', Client.ToolIsolationChecked);
   Check('thread queued', Client.StartThread(GetTempDir, 'test-model', '[]'));
   WaitState(crsReady);
 End;
@@ -142,10 +189,14 @@ Begin
     Repeat Client.Pump; Sleep(1); Until Client.TakeTool(Tool) Or (GetTickCount64 > Deadline);
     Check('tool correlated', (Tool.CallId = 'call-1') And (Tool.TurnId = 'turn-1'));
     Check('streamed formatting intact', Client.Content = '**text**');
+    Check('tool carries its exact preceding text', Tool.ContentBefore = '**text**');
     Check('wrong tool completion refused', Not Client.CompleteTool('wrong', 'result', True));
     Check('tool result sent', Client.CompleteTool('call-1', 'result', True));
     Check('tool cannot complete twice', Not Client.CompleteTool('call-1', 'result', True));
     WaitState(crsCompleted);
+    Start; Client.StartTurn('finalonly'); WaitState(crsCompleted);
+    Check('final-only messages retained once with paragraph separation',
+      Client.Content = 'Final answer' + LineEnding + LineEnding + 'Second paragraph');
     Start; Client.StartTurn('duplicate'); WaitState(crsFailed);
     Check('duplicate call rejected', Pos('duplicate', Client.LastError) > 0);
     Start; Client.StartTurn('authchange'); WaitState(crsFailed);
@@ -155,5 +206,6 @@ Begin
     Check('cancelled tool cannot execute', Not Client.TakeTool(Tool));
   Finally Client.Free; End;
   TestWorkerBridge;
+  TestAccount;
   WriteLn('All Codex client tests passed.');
 End.

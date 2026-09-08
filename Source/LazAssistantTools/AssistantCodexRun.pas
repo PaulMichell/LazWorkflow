@@ -15,7 +15,7 @@ Type
   TAssistantCodexRun = Class(TThread)
   Private
     FLock: TRTLCriticalSection;
-    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId: String;
+    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile: String;
     FSnapshot: TCodexRunSnapshot;
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
@@ -28,7 +28,7 @@ Type
     Procedure Execute; Override;
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
-      TimeoutMs: Cardinal = 600000);
+      TimeoutMs: Cardinal = 600000; Const ProfileDir: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean;
@@ -36,17 +36,19 @@ Type
     { Caller must run on the broker's owning IDE thread. Returns after at most
       one short buffer operation; it never waits for process/network output. }
     Procedure ServiceTool(Broker: TAssistantToolBroker);
+    Function ServiceOneTool(Broker: TAssistantToolBroker; Out Tool: TCodexToolRequest;
+      Out Text: String; Out OK: Boolean): Boolean;
   End;
 Implementation
-Uses AssistantCodexHandshake;
+Uses AssistantCodexHandshake, AssistantCodexProfile;
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
-  ToolsJson, RunId: String; TimeoutMs: Cardinal);
+  ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   InitCriticalSection(FLock);
   FExecutable := Executable; FCwd := Cwd; FModel := Model; FPrompt := Prompt;
-  FToolsJson := ToolsJson; FRunId := RunId; FTimeout := TimeoutMs;
+  FToolsJson := ToolsJson; FRunId := RunId; FTimeout := TimeoutMs; FProfile := ProfileDir;
   FSnapshot.State := crsConnecting;
 End;
 Destructor TAssistantCodexRun.Destroy;
@@ -85,8 +87,13 @@ Begin
   Finally LeaveCriticalSection(FLock); End;
 End;
 Procedure TAssistantCodexRun.ServiceTool(Broker: TAssistantToolBroker);
-Var Tool: TCodexToolRequest; Text, ErrorText: String; OK: Boolean;
+Var Tool: TCodexToolRequest; Text: String; OK: Boolean;
+Begin ServiceOneTool(Broker, Tool, Text, OK); End;
+Function TAssistantCodexRun.ServiceOneTool(Broker: TAssistantToolBroker;
+  Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
+Var ErrorText: String;
 Begin
+  Result := False; Tool := Default(TCodexToolRequest); Text := ''; OK := False;
   EnterCriticalSection(FLock);
   Try
     If Cancelled Or FSnapshot.Done Or Not FToolPending Or FToolReady Or FToolServicing Then Exit;
@@ -95,6 +102,7 @@ Begin
   Finally LeaveCriticalSection(FLock); End;
   OK := Broker.Execute(FRunId, Tool.Tool, Tool.Arguments, Text, ErrorText);
   If Not OK Then Text := ErrorText;
+  Result := True;
   EnterCriticalSection(FLock);
   Try
     If Not Cancelled And Not FSnapshot.Done And FToolPending Then
@@ -105,9 +113,9 @@ End;
 Procedure TAssistantCodexRun.Execute;
 Var Client: TAssistantCodexClient; Deadline: QWord; Tool: TCodexToolRequest;
   SteerText, ToolResult, ToolCallId: String; Stage: Integer;
-  HaveResult, ToolSuccess: Boolean;
+  HaveResult, ToolSuccess: Boolean; Env: TStringList; RunDirectory: String;
 Begin
-  Client := Nil;
+  Client := Nil; Env := Nil;
   Try
     Try
       If Cancelled Then
@@ -118,7 +126,14 @@ Begin
           Exit;
         End;
       Client := TAssistantCodexClient.Create(5000);
-      If Not Client.Connect(FExecutable, FCwd) Then Begin Publish(Client); Exit; End;
+      RunDirectory := FCwd;
+      If FProfile <> '' Then
+        Begin
+          RunDirectory := FProfile;
+          Env := TStringList.Create;
+          CodexProfileEnvironment(FProfile, Env);
+        End;
+      If Not Client.Connect(FExecutable, RunDirectory, Env) Then Begin Publish(Client); Exit; End;
       Deadline := GetTickCount64 + FTimeout;
       Stage := 0;
       Repeat
@@ -136,8 +151,10 @@ Begin
           End;
         If (Stage = 0) And (Client.State = crsReady) Then
           Begin
-            If Client.StartThread(FCwd, FModel, FToolsJson) Then Stage := 1;
+            If Client.CheckToolIsolation Then Stage := 3;
           End
+        Else If (Stage = 3) And Client.ToolIsolationChecked Then
+          Begin If Client.StartThread(RunDirectory, FModel, FToolsJson) Then Stage := 1; End
         Else If (Stage = 1) And (Client.State = crsReady) Then
           Begin
             If Client.StartTurn(FPrompt) Then Stage := 2;
@@ -181,7 +198,7 @@ Begin
         End;
     End;
   Finally
-    Client.Free;
+    Client.Free; Env.Free;
     EnterCriticalSection(FLock);
     Try FSnapshot.Done := True; FToolPending := False;
     Finally LeaveCriticalSection(FLock); End;

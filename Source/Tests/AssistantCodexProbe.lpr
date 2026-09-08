@@ -2,8 +2,8 @@ Program AssistantCodexProbe;
 { Explicit diagnostic, excluded from normal tests. Does not start model turns
   or print account identities, tokens, URLs, or raw protocol frames. }
 {$mode objfpc}{$H+}
-Uses cthreads, Classes, SysUtils, AssistantCodexClient, AssistantCodexHandshake;
-Var Client: TAssistantCodexClient; Env: TStringList; Deadline: QWord; I: Integer;
+Uses cthreads, Classes, SysUtils, AssistantCodexClient, AssistantCodexHandshake, AssistantCodexProfile;
+Var Client: TAssistantCodexClient; Env: TStringList; Deadline: QWord; ErrorText: String;
 Begin
   If ParamCount <> 2 Then
     Begin WriteLn('Usage: AssistantCodexProbe /absolute/path/to/codex /isolated/codex/home'); Halt(2); End;
@@ -12,10 +12,9 @@ Begin
   Env := TStringList.Create;
   Client := TAssistantCodexClient.Create(10000);
   Try
-    For I := 1 To GetEnvironmentVariableCount Do Env.Add(GetEnvironmentString(I));
-    Env.Values['CODEX_HOME'] := ExpandFileName(ParamStr(2));
-    Env.Values['OPENAI_API_KEY'] := '';
-    Env.Values['CODEX_API_KEY'] := '';
+    If Not PrepareCodexProfile(ParamStr(2), ErrorText) Then
+      Begin WriteLn(ErrorText); Halt(1); End;
+    CodexProfileEnvironment(ParamStr(2), Env);
     If Not Client.Connect(ParamStr(1), ParamStr(2), Env) Then
       Begin WriteLn(Client.LastError); Halt(1); End;
     Deadline := GetTickCount64 + 15000;

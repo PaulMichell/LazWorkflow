@@ -12,6 +12,7 @@ Type
     crsStartingTurn, crsRunning, crsCancelling, crsCompleted, crsFailed);
   TCodexToolRequest = Record
     RequestId, CallId, ThreadId, TurnId, Tool, Arguments: String;
+    ContentBefore, ThinkingBefore: String;
   End;
   TAssistantCodexClient = Class
   Private
@@ -19,6 +20,10 @@ Type
     FHandshake: TAssistantCodexHandshake;
     FState: TCodexRunState;
     FThreadId, FTurnId, FContent, FThinking, FError, FModels: String;
+    FToolIsolationChecked: Boolean;
+    FMessageIds: TStringList;
+    FMessageId: String;
+    FMessageStart: Integer;
     FPendingId, FPendingMethod: String;
     FNextId: Int64;
     FDeadline: QWord;
@@ -30,6 +35,7 @@ Type
     Procedure Fail(Const Reason: String);
     Procedure HandleFrame(Const Frame: String);
     Procedure FlushHandshake;
+    Procedure MessageText(Const ItemId, Text: String; Complete: Boolean);
   Public
     Constructor Create(RequestTimeoutMs: Cardinal = 30000);
     Destructor Destroy; Override;
@@ -39,6 +45,7 @@ Type
     Procedure Disconnect;
     Procedure StartLogin;
     Function ListModels: Boolean;
+    Function CheckToolIsolation: Boolean;
     Function StartThread(Const WorkingDirectory, Model, ToolsJson: String): Boolean;
     Function StartTurn(Const Prompt: String): Boolean;
     Function Steer(Const Text: String): Boolean;
@@ -47,6 +54,7 @@ Type
     Procedure CancelConnection;
     Function TakeTool(Out Tool: TCodexToolRequest): Boolean;
     Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean;
+    Property ToolIsolationChecked: Boolean Read FToolIsolationChecked;
     Property State: TCodexRunState Read FState;
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
     Property Content: String Read FContent;
@@ -66,12 +74,14 @@ Begin
   FTransport := TAssistantCodexTransport.Create;
   FHandshake := TAssistantCodexHandshake.Create;
   FSeenCalls := TStringList.Create;
+  FMessageIds := TStringList.Create;
   FRequestTimeout := RequestTimeoutMs;
 End;
 Destructor TAssistantCodexClient.Destroy;
 Begin
   Disconnect;
   FSeenCalls.Free;
+  FMessageIds.Free;
   FHandshake.Free;
   FTransport.Free;
   Inherited Destroy;
@@ -83,6 +93,8 @@ Begin
   FState := crsDisconnected;
   FThreadId := ''; FTurnId := ''; FPendingId := ''; FPendingMethod := '';
   FContent := ''; FThinking := ''; FModels := '';
+  FToolIsolationChecked := False;
+  FMessageIds.Clear; FMessageId := ''; FMessageStart := 1;
   FSeenCalls.Clear; SetLength(FTools, 0); FToolTaken := False;
 End;
 Function TAssistantCodexClient.Connect(Const Executable, WorkingDirectory: String;
@@ -157,13 +169,18 @@ Begin
     (FState In [crsReady, crsCompleted]);
   If Result Then Result := Request('model/list', '{"includeHidden":false,"limit":100}');
 End;
+Function TAssistantCodexClient.CheckToolIsolation: Boolean;
+Begin
+  Result := (FHandshake.State = ccsSubscriptionAuthenticated) And (FState = crsReady);
+  If Result Then Result := Request('mcpServerStatus/list', '{"limit":100}');
+End;
 Function TAssistantCodexClient.StartThread(Const WorkingDirectory, Model,
   ToolsJson: String): Boolean;
 Var Data: TJSONData;
 Begin
   Result := False;
   If (FHandshake.State <> ccsSubscriptionAuthenticated) Or
-    Not (FState In [crsReady, crsCompleted]) Then Exit;
+    Not (FState In [crsReady, crsCompleted]) Or Not FToolIsolationChecked Then Exit;
   Data := GetJSON(ToolsJson);
   Try
     If Not (Data Is TJSONArray) Then Exit;
@@ -172,7 +189,7 @@ Begin
       runtime qualification against external MCP/configured tool bypasses. }
     Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
       ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-      '"approvalPolicy":"untrusted","sandbox":"read-only","ephemeral":true,' +
+      '"approvalPolicy":"on-request","sandbox":"read-only","ephemeral":true,' +
       '"environments":[],"dynamicTools":' + Data.AsJSON +
       ',"developerInstructions":"Use the lazarus tools for project and editor operations. ' +
       'Live buffers may differ from disk. Never bypass their revision checks.",' +
@@ -187,10 +204,12 @@ Begin
   If Not Result Then Exit;
   Result := Request('turn/start', '{"threadId":' + Quote(FThreadId) +
     ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"untrusted","sandboxPolicy":{"type":"readOnly"}}');
+    '"approvalPolicy":"on-request","sandboxPolicy":{"type":"readOnly",' +
+    '"access":{"type":"restricted","includePlatformDefaults":true,"readableRoots":[]}}}');
   If Result Then
     Begin
       FContent := ''; FThinking := ''; FTurnId := '';
+      FMessageIds.Clear; FMessageId := ''; FMessageStart := 1;
       FSeenCalls.Clear; SetLength(FTools, 0); FToolTaken := False;
       FState := crsStartingTurn;
     End;
@@ -231,6 +250,23 @@ Begin
   SetLength(FTools, Length(FTools)-1);
   FToolTaken := False;
 End;
+Procedure TAssistantCodexClient.MessageText(Const ItemId, Text: String; Complete: Boolean);
+Var Key: String;
+Begin
+  Key := ItemId;
+  If Key = '' Then Key := 'legacy-message';
+  If FMessageId <> Key Then
+    Begin
+      { Repeated completion of an earlier item must not duplicate its text. }
+      If FMessageIds.IndexOf(Key) >= 0 Then Exit;
+      If FMessageIds.Count >= 1024 Then Begin Fail('Too many Codex message items.'); Exit; End;
+      FMessageIds.Add(Key); FMessageId := Key;
+      If FContent <> '' Then FContent := FContent + LineEnding + LineEnding;
+      FMessageStart := Length(FContent) + 1;
+    End;
+  If Complete Then SetLength(FContent, FMessageStart - 1);
+  FContent := FContent + Text;
+End;
 Procedure TAssistantCodexClient.HandleFrame(Const Frame: String);
 Var Data, Node, Value: TJSONData; Root, Params, Turn: TJSONObject;
   Method, Id, Status: String; N: Integer; Tool: TCodexToolRequest;
@@ -266,6 +302,7 @@ Begin
           (FSeenCalls.Count >= 1024) Then
           Begin Fail('Invalid, stale or duplicate Codex tool request.'); Exit; End;
         Tool.Arguments := Value.AsJSON;
+        Tool.ContentBefore := FContent; Tool.ThinkingBefore := FThinking;
         FSeenCalls.Add(Tool.CallId);
         N := Length(FTools); SetLength(FTools, N + 1); FTools[N] := Tool;
         Exit;
@@ -290,7 +327,13 @@ Begin
             Turn := TJSONObject(Value);
             If (FTurnId = '') Or (Turn.Get('id', '') <> FTurnId) Then Exit;
             Status := Turn.Get('status', '');
-            If Status = 'failed' Then Begin Fail('Codex turn failed.'); Exit; End;
+            If Status = 'failed' Then
+              Begin
+                Value := Turn.FindPath('error.message');
+                If Assigned(Value) And (Value.JSONType = jtString) Then Fail(Copy(Value.AsString, 1, 2048))
+                Else Fail('Codex turn failed.');
+                Exit;
+              End;
             If Not (Status = 'completed') And Not (Status = 'interrupted') Then Exit;
             FState := crsCompleted; FPendingId := ''; FPendingMethod := '';
             SetLength(FTools, 0); FToolTaken := False;
@@ -298,7 +341,13 @@ Begin
         Else If (Params.Get('turnId', '') = FTurnId) And (FTurnId <> '') Then
           Begin
             If Method = 'item/agentMessage/delta' Then
-              FContent := FContent + Params.Get('delta', '')
+              MessageText(Params.Get('itemId', ''), Params.Get('delta', ''), False)
+            Else If Method = 'item/completed' Then
+              Begin
+                Value := Params.Find('item');
+                If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'agentMessage') Then
+                  MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True);
+              End
             Else If (Method = 'item/reasoning/summaryTextDelta') Or
               (Method = 'item/reasoning/textDelta') Then
               FThinking := FThinking + Params.Get('delta', '');
@@ -310,14 +359,21 @@ Begin
     If Not Assigned(Node) Or (Node.JSONType <> jtString) Then Exit;
     Id := Node.AsString;
     If (FPendingId = '') Or (Id <> FPendingId) Then Exit;
-    If Assigned(Root.Find('error')) Then Begin Fail('Codex rejected ' + FPendingMethod + '.'); Exit; End;
+    If Assigned(Root.Find('error')) Then
+      Begin
+        Value := Root.FindPath('error.message');
+        If Assigned(Value) And (Value.JSONType = jtString) Then
+          Fail('Codex: ' + Copy(Value.AsString, 1, 2048))
+        Else Fail('Codex rejected ' + FPendingMethod + '.');
+        Exit;
+      End;
     Value := Root.Find('result');
     If Not (Value Is TJSONObject) Then Raise Exception.Create('Missing result');
     Params := TJSONObject(Value);
     If FPendingMethod = 'thread/start' Then
       Begin
         If (Params.Get('modelProvider', '') <> 'openai') Or
-          (Params.Get('approvalPolicy', '') <> 'untrusted') Then
+          (Params.Get('approvalPolicy', '') <> 'on-request') Then
           Begin Fail('Codex did not apply the required provider/approval policy.'); Exit; End;
         Value := Params.FindPath('sandbox.type');
         If Not Assigned(Value) Or (Value.AsString <> 'readOnly') Then
@@ -336,7 +392,15 @@ Begin
         If FTurnId = '' Then Raise Exception.Create('Missing turn ID');
         FState := crsRunning;
       End
-    Else If FPendingMethod = 'model/list' Then FModels := Params.AsJSON;
+    Else If FPendingMethod = 'model/list' Then FModels := Params.AsJSON
+    Else If FPendingMethod = 'mcpServerStatus/list' Then
+      Begin
+        Value := Params.Find('data');
+        If Not (Value Is TJSONArray) Or (TJSONArray(Value).Count <> 0) Or
+          ((Params.Find('nextCursor') <> Nil) And (Params.Find('nextCursor').JSONType <> jtNull)) Then
+          Begin Fail('External runtime tools are enabled. Use the dedicated Lazarus Codex profile.'); Exit; End;
+        FToolIsolationChecked := True;
+      End;
     FPendingId := ''; FPendingMethod := '';
   Finally Data.Free; End;
 End;
