@@ -4,6 +4,8 @@ Prepared: 8 September 2026. Source checkpoint: `1f52527`.
 
 Status: proposed implementation plan, based on static source inspection and current official integration documentation. No assistant implementation changes or live provider tests were performed for this document.
 
+Implementation has started. See [implementation progress and validation](LazAssistantTools-Implementation-Progress.md) for completed changes, current limitations and the next work items.
+
 ## 1. Recommended direction
 
 Turn LazAssistantTools into a Lazarus development agent with interchangeable backends. Keep the IDE responsible for workspace state, edits, project structure, builds, and review. Allow either the existing native agent loop or an external managed agent to perform the reasoning and orchestration.

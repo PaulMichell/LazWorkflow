@@ -125,22 +125,26 @@ Begin
   Check('missing tree without a sibling is empty', Root = '');
 End;
 
-Procedure TestRealRenamedEcologyFolder;
+Procedure TestActualFolderRename;
 Var
-  Root, NewRoot: String;
+  Base, OldRoot, NewRoot, RelativeLpi, Root: String;
 Begin
-  NewRoot := '/home/paul/Projects/EcologySurveyScheduler';
-  If Not DirectoryExists(NewRoot) Then
-    Begin
-      WriteLn('skip  real EcologySurveyScheduler tree not present');
-      Exit;
-    End;
-  Root := ResolveAssistantProjectRoot(
-    '/home/paul/Projects/EcologySurveryScheduler/Source/EcologySurveryScheduler.lpi', '');
-  Check('Lazarus recent-project path finds EcologySurveyScheduler', SameDir(Root, NewRoot));
-  Root := ResolveAssistantProjectRoot(
-    '/home/paul/Projects/EcologySurveyScheduler/Source/EcologySurveryScheduler.lpi', '');
-  Check('opened EcologySurveyScheduler.lpi uses repo .assistant', SameDir(Root, NewRoot));
+  Base := IncludeTrailingPathDelimiter(GetTempDir) + 'lazasst-rename-' + FormatDateTime('hhnnsszzz', Now);
+  OldRoot := IncludeTrailingPathDelimiter(Base) + 'EcologySurveryScheduler';
+  NewRoot := IncludeTrailingPathDelimiter(Base) + 'EcologySurveyScheduler';
+  RelativeLpi := 'Source' + PathDelim + 'EcologySurveryScheduler.lpi';
+  Try
+    WriteTextFile(IncludeTrailingPathDelimiter(OldRoot) + RelativeLpi, '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(OldRoot) + AssistantStoreFolderName +
+      PathDelim + AssistantConversationFileName, '{"id":"fixture"}');
+    Check('fixture project folder renamed', RenameFile(OldRoot, NewRoot));
+    Root := ResolveAssistantProjectRoot(IncludeTrailingPathDelimiter(OldRoot) + RelativeLpi, '');
+    Check('recent-project path resolves actual rename', SameDir(Root, NewRoot));
+    Root := ResolveAssistantProjectRoot(IncludeTrailingPathDelimiter(NewRoot) + RelativeLpi, '');
+    Check('opened renamed project uses repo assistant store', SameDir(Root, NewRoot));
+  Finally
+    DeleteTree(Base);
+  End;
 End;
 
 Begin
@@ -148,7 +152,7 @@ Begin
   TestRenameFindsAssistant;
   TestNestedProjectWalksToRepoAssistant;
   TestMissingPathWithoutSiblingIsEmpty;
-  TestRealRenamedEcologyFolder;
+  TestActualFolderRename;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantProjectPaths tests passed.');
