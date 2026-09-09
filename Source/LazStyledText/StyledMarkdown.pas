@@ -336,18 +336,18 @@ Const
 Var
   Lines: TStringList;
   Line, Body, Fence: UTF8String;
-  Index, Finish, Count, Indent, Level, MarkerEnd: Integer;
+  Index, Finish, Count, Indent, Level, MarkerEnd, ListContentIndent: Integer;
   Style: TStyledStyle;
   Background: TColor;
   Group: QWord;
-  ParagraphOpen, HardBreak, BlockLine, Literal: Boolean;
+  ParagraphOpen, HardBreak, BlockLine, Literal, ListContinuation: Boolean;
 Begin
   FRenderer := Renderer;
   Lines := TStringList.Create;
   Try
     Lines.Text := Value;
     Index := 0;
-    ParagraphOpen := False;
+    ParagraphOpen := False; ListContentIndent := -1;
     While Index < Lines.Count Do
       Begin
         Line := Lines[Index];
@@ -413,7 +413,10 @@ Begin
           End;
         { Unsupported block forms stay verbatim, including their line breaks.
           Four-space indentation is not interpreted as code in this subset. }
-        Literal := (Indent >= 4) Or (Pos('|', Body) > 0) Or
+        ListContinuation := (ListContentIndent >= 0) And
+          (Indent >= ListContentIndent) And (Indent < ListContentIndent + 4);
+        If (ListContentIndent >= 0) And (Indent < ListContentIndent) Then ListContentIndent := -1;
+        Literal := ((Indent >= 4) And Not ListContinuation) Or (Pos('|', Body) > 0) Or
           (Body[1] In ['<', '$', '[', '!']) Or
           ((Body[1] In ['-', '=', '*', '_']) And
            (RunLength(Body, 1) = Length(Body)) And (Length(Body) >= 3));
@@ -449,6 +452,7 @@ Begin
             If MarkerEnd > 0 Then
               Begin
                 BlockLine := True;
+                ListContentIndent := Indent + MarkerEnd + 1;
                 Indent := 20 + Indent * 6;
                 If MarkerEnd = 1 Then Body := UTF8String('• ') + Copy(Body, 3, Length(Body));
               End

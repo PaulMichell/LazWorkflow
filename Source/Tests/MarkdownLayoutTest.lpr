@@ -173,6 +173,19 @@ Begin
   Finally Parser.Free; End;
 End;
 
+Procedure TestListContinuation;
+Var Content: TStyledContent;
+Begin
+  Content := Parse('9. **Previous**' + #10#10 + '   **Fix:** previous' + #10#10 +
+    '10. **Last item**' + #10#10 + '    **Location:** [file.pas:7](/project/file.pas:7)' +
+    #10#10 + '    **Fix:** Handle empty streams.' );
+  Check('two-digit list continuation renders bold labels',
+    (Pos('**Fix:**', Plain(Content)) = 0) And (Pos('**Location:**', Plain(Content)) = 0) And
+    (fsBold In StyleFor(Content, 'Location:').Styles));
+  Content := Parse('    **standalone indentation**');
+  Check('standalone indented literal retained', Pos('**standalone indentation**', Plain(Content)) > 0);
+End;
+
 Begin
   FailCount := 0;
   Renderer := TStyledCanvas.Create;
@@ -184,6 +197,7 @@ Begin
     TestListsAndCodeFence;
     TestTables;
     TestStreamedTables;
+    TestListContinuation;
   Finally
     Renderer.Free;
   End;

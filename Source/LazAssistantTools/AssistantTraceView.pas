@@ -1127,6 +1127,13 @@ Var
   Child: TControl;
   Display: String;
 Begin
+  { A timing placeholder is not a visible reasoning response. This also hides
+    empty blocks from older saved conversations. }
+  If Trim(Block.Body) = '' Then
+    Begin
+      If Assigned(Block.Frame) Then Begin Block.Frame.Free; Block.Frame := Nil; End;
+      Exit;
+    End;
   If Assigned(Block.Frame) And (Block.Frame Is TPanel) Then
     If NamedChild(TPanel(Block.Frame), 'ThoughtView') = Nil Then
       Begin

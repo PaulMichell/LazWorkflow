@@ -690,6 +690,7 @@ Begin
     For I := 0 To FBlocks.Count - 1 Do
       Begin
         Block := TTraceBlock(FBlocks[I]);
+        If (Block.Kind = tbkThinking) And (Trim(Block.Body) = '') Then Continue;
         Obj := TJSONObject.Create;
         Obj.Add('kind', BlockKindName(Block.Kind));
         Obj.Add('title', Block.Title);

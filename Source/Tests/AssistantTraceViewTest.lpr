@@ -22,7 +22,7 @@ Var
   Host: TForm;
   View: TAssistantTraceView;
   Trace: TAssistantTrace;
-  Tool, Answer: TTraceBlock;
+  Tool, Answer, Thought: TTraceBlock;
 Begin
   Host := TForm.CreateNew(Nil);
   Trace := TAssistantTrace.Create;
@@ -31,6 +31,14 @@ Begin
     View := TAssistantTraceView.Create(Host);
     View.Parent := Host;
     View.Align := alClient;
+    Thought := Trace.StartThinking(0);
+    View.Sync(Trace, False);
+    Check('empty running thought creates no card', Thought.Frame = Nil);
+    Check('empty thought omitted from history', Pos('thinking', Trace.SaveToJson) = 0);
+    Thought.Body := 'Summary arrived'; View.Sync(Trace, False);
+    Check('thought card appears when text arrives', Assigned(Thought.Frame));
+    Thought.Body := ''; View.Sync(Trace, False);
+    Check('empty thought card removed', Thought.Frame = Nil);
     Tool := Trace.AddTool('call_1', 'read_file', '{}');
     Tool.Body := 'saved result';
     Answer := Trace.EnsureAnswer;
