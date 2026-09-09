@@ -24,6 +24,9 @@ Type
     FMessageIds: TStringList;
     FMessageId: String;
     FMessageStart: Integer;
+    FReasoningIds: TStringList;
+    FReasoningId: String;
+    FReasoningStart, FSummaryIndex: Integer;
     FPendingId, FPendingMethod: String;
     FNextId: Int64;
     FDeadline: QWord;
@@ -36,6 +39,7 @@ Type
     Procedure HandleFrame(Const Frame: String);
     Procedure FlushHandshake;
     Procedure MessageText(Const ItemId, Text: String; Complete: Boolean);
+    Procedure ReasoningText(Const ItemId, Text: String; SummaryIndex: Integer; Complete: Boolean);
   Public
     Constructor Create(RequestTimeoutMs: Cardinal = 30000);
     Destructor Destroy; Override;
@@ -75,6 +79,7 @@ Begin
   FHandshake := TAssistantCodexHandshake.Create;
   FSeenCalls := TStringList.Create;
   FMessageIds := TStringList.Create;
+  FReasoningIds := TStringList.Create;
   FRequestTimeout := RequestTimeoutMs;
 End;
 Destructor TAssistantCodexClient.Destroy;
@@ -82,6 +87,7 @@ Begin
   Disconnect;
   FSeenCalls.Free;
   FMessageIds.Free;
+  FReasoningIds.Free;
   FHandshake.Free;
   FTransport.Free;
   Inherited Destroy;
@@ -95,6 +101,7 @@ Begin
   FContent := ''; FThinking := ''; FModels := '';
   FToolIsolationChecked := False;
   FMessageIds.Clear; FMessageId := ''; FMessageStart := 1;
+  FReasoningIds.Clear; FReasoningId := ''; FReasoningStart := 1; FSummaryIndex := -1;
   FSeenCalls.Clear; SetLength(FTools, 0); FToolTaken := False;
 End;
 Function TAssistantCodexClient.Connect(Const Executable, WorkingDirectory: String;
@@ -204,11 +211,12 @@ Begin
   If Not Result Then Exit;
   Result := Request('turn/start', '{"threadId":' + Quote(FThreadId) +
     ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"on-request","permissions":"lazarus_ide"}');
+    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"}');
   If Result Then
     Begin
       FContent := ''; FThinking := ''; FTurnId := '';
       FMessageIds.Clear; FMessageId := ''; FMessageStart := 1;
+      FReasoningIds.Clear; FReasoningId := ''; FReasoningStart := 1; FSummaryIndex := -1;
       FSeenCalls.Clear; SetLength(FTools, 0); FToolTaken := False;
       FState := crsStartingTurn;
     End;
@@ -266,9 +274,29 @@ Begin
   If Complete Then SetLength(FContent, FMessageStart - 1);
   FContent := FContent + Text;
 End;
+Procedure TAssistantCodexClient.ReasoningText(Const ItemId, Text: String;
+  SummaryIndex: Integer; Complete: Boolean);
+Var Key: String;
+Begin
+  Key := ItemId;
+  If Key = '' Then Key := 'legacy-reasoning';
+  If FReasoningId <> Key Then
+    Begin
+      If FReasoningIds.IndexOf(Key) >= 0 Then Exit;
+      If FReasoningIds.Count >= 1024 Then Begin Fail('Too many Codex reasoning items.'); Exit; End;
+      FReasoningIds.Add(Key); FReasoningId := Key;
+      If FThinking <> '' Then FThinking := FThinking + LineEnding + LineEnding;
+      FReasoningStart := Length(FThinking) + 1; FSummaryIndex := -1;
+    End;
+  If Complete Then SetLength(FThinking, FReasoningStart - 1)
+  Else If (FSummaryIndex <> SummaryIndex) And (Length(FThinking) >= FReasoningStart) Then
+    FThinking := FThinking + LineEnding + LineEnding;
+  FSummaryIndex := SummaryIndex;
+  FThinking := FThinking + Text;
+End;
 Procedure TAssistantCodexClient.HandleFrame(Const Frame: String);
 Var Data, Node, Value: TJSONData; Root, Params, Turn: TJSONObject;
-  Method, Id, Status: String; N: Integer; Tool: TCodexToolRequest;
+  Method, Id, Status, SummaryText: String; N, I: Integer; Parts: TJSONData; Tool: TCodexToolRequest;
 Begin
   Data := GetJSON(Frame);
   Try
@@ -345,11 +373,25 @@ Begin
               Begin
                 Value := Params.Find('item');
                 If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'agentMessage') Then
-                  MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True);
+                  MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True)
+                Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'reasoning') Then
+                  Begin
+                    Parts := TJSONObject(Value).Find('summary'); SummaryText := '';
+                    If Parts Is TJSONArray Then
+                      For I := 0 To Parts.Count - 1 Do
+                        If (Parts.Items[I].JSONType = jtString) And (Parts.Items[I].AsString <> '') Then
+                          Begin
+                            If SummaryText <> '' Then SummaryText := SummaryText + LineEnding + LineEnding;
+                            SummaryText := SummaryText + Parts.Items[I].AsString;
+                          End;
+                    If SummaryText <> '' Then
+                      ReasoningText(TJSONObject(Value).Get('id', ''), SummaryText, 0, True);
+                  End;
               End
-            Else If (Method = 'item/reasoning/summaryTextDelta') Or
-              (Method = 'item/reasoning/textDelta') Then
-              FThinking := FThinking + Params.Get('delta', '');
+            Else If Method = 'item/reasoning/summaryTextDelta' Then
+              ReasoningText(Params.Get('itemId', ''), Params.Get('delta', ''), Params.Get('summaryIndex', 0), False)
+            Else If Method = 'item/reasoning/textDelta' Then
+              ReasoningText(Params.Get('itemId', ''), Params.Get('delta', ''), Params.Get('contentIndex', 0), False);
             If (Length(FContent) > CodexMaxQueueBytes) Or (Length(FThinking) > CodexMaxQueueBytes) Then
               Fail('Codex turn text limit exceeded.');
           End;

@@ -105,3 +105,7 @@ Reproduced the reported external-tool failure: ChatGPT sign-in automatically exp
 ## Restricted-read request fix (9 September 2026)
 
 Replaced the rejected `readOnly.access` override with a launcher-defined `lazarus_ide` named permission profile for thread and turn startup. It permits minimal runtime reads and disables command networking, retaining the broker boundary. Updated regression and schema-qualification checks. All 17 tests and the package build pass. A real ephemeral thread and one minimal subscription-backed request completed successfully; project read/edit/build acceptance is still outstanding.
+
+## Thinking display fix (9 September 2026)
+
+Added explicit automatic reasoning-summary requests and completed reasoning-item parsing for Codex. Section breaks and pre-tool summaries are retained without duplicate completion text. A live subscription test emitted a summary successfully. All 17 tests and the package build pass. Thinking displays model-provided summaries when available.

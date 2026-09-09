@@ -73,6 +73,7 @@ Begin
                 Send('{"id":' + Id + ',"error":{"code":-32600,"message":"Use named permissions for restricted reads"}}');
                 Continue;
               End;
+            If Params.Get('summary', '') <> 'auto' Then Halt(3);
             Prompt := Params.FindPath('input[0].text').AsString;
             Send('{"id":' + Id + ',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}');
             If Prompt = 'authchange' Then
@@ -86,6 +87,12 @@ Begin
                 Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}');
                 Continue;
               End;
+            Send('{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"reason-1","summaryIndex":0,"delta":"Checking **"}}');
+            Send('{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"reason-1","summaryIndex":0,"delta":"buffers**"}}');
+            Send('{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"reason-1","summaryIndex":1,"delta":"Then dependencies"}}');
+            Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"reason-1","type":"reasoning","summary":["Checking **buffers**","Then dependencies"],"content":[]}}}');
+            Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"reason-2","type":"reasoning","summary":["Final-only summary"],"content":[]}}}');
+            Send('{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"reason-2","type":"reasoning","summary":["Final-only summary"],"content":[]}}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"text"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
@@ -124,6 +131,7 @@ Begin
     Check('worker run completes', Snapshot.Done And (Snapshot.State = crsCompleted));
     Check('worker dispatches one IDE read through broker', Workspace.Reads = 1);
     Check('worker streams answer snapshot', Snapshot.Content = '**text**');
+    Check('worker publishes reasoning for the UI', Pos('Final-only summary', Snapshot.Thinking) > 0);
     Run.Free; Run := Nil;
     RunId := Broker.BeginRun(False);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
@@ -204,6 +212,10 @@ Begin
     Check('tool correlated', (Tool.CallId = 'call-1') And (Tool.TurnId = 'turn-1'));
     Check('streamed formatting intact', Client.Content = '**text**');
     Check('tool carries its exact preceding text', Tool.ContentBefore = '**text**');
+    Check('reasoning sections and final-only summaries retained once', Client.Thinking =
+      'Checking **buffers**' + LineEnding + LineEnding + 'Then dependencies' +
+      LineEnding + LineEnding + 'Final-only summary');
+    Check('tool preserves preceding reasoning', Tool.ThinkingBefore = Client.Thinking);
     Check('wrong tool completion refused', Not Client.CompleteTool('wrong', 'result', True));
     Check('tool result sent', Client.CompleteTool('call-1', 'result', True));
     Check('tool cannot complete twice', Not Client.CompleteTool('call-1', 'result', True));

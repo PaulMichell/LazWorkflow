@@ -31,7 +31,7 @@ run('app-server', 'generate-json-schema', '--experimental', '--out', str(schema_
 required = {
     'v2/ThreadStartParams.json': ['dynamicTools', 'modelProvider', 'permissions', 'approvalPolicy'],
     'v2/ThreadStartResponse.json': ['modelProvider', 'sandbox', 'approvalPolicy', 'thread'],
-    'v2/TurnStartParams.json': ['threadId', 'input', 'permissions'],
+    'v2/TurnStartParams.json': ['threadId', 'input', 'permissions', 'summary'],
     'v2/TurnInterruptParams.json': ['threadId', 'turnId'],
     'v2/TurnSteerParams.json': ['threadId', 'expectedTurnId', 'input'],
     'DynamicToolCallParams.json': ['threadId', 'turnId', 'callId', 'tool', 'arguments'],
