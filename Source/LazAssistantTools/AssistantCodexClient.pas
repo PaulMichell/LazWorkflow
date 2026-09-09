@@ -51,7 +51,7 @@ Type
     Function ListModels: Boolean;
     Function CheckToolIsolation: Boolean;
     Function StartThread(Const WorkingDirectory, Model, ToolsJson: String): Boolean;
-    Function StartTurn(Const Prompt: String): Boolean;
+    Function StartTurn(Const Prompt: String; Const Effort: String = ''): Boolean;
     Function Steer(Const Text: String): Boolean;
     Procedure Interrupt;
     { May be called from the UI to force connection shutdown on next Pump. }
@@ -204,14 +204,16 @@ Begin
     If Result Then FState := crsStartingThread;
   Finally Data.Free; End;
 End;
-Function TAssistantCodexClient.StartTurn(Const Prompt: String): Boolean;
+Function TAssistantCodexClient.StartTurn(Const Prompt: String; Const Effort: String): Boolean;
+Var Options: String;
 Begin
+  Options := ''; If Effort <> '' Then Options := ',"effort":' + Quote(Effort);
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FThreadId <> '') And (FState In [crsReady, crsCompleted]);
   If Not Result Then Exit;
   Result := Request('turn/start', '{"threadId":' + Quote(FThreadId) +
     ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"}');
+    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"' + Options + '}');
   If Result Then
     Begin
       FContent := ''; FThinking := ''; FTurnId := '';

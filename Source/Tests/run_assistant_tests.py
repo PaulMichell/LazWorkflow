@@ -33,11 +33,11 @@ def main():
     flags += [f'-Fl{path.resolve()}' for path in args.library_dir]
     tests = ['AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
-             'AssistantTraceTest', 'AssistantCodexHandshakeTest',
+             'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantCodexHandshakeTest',
              'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
-                  'AssistantEditorEditsTest', 'AssistantWorkspaceTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
+                  'AssistantEditorEditsTest', 'AssistantWorkspaceTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
     failures = []
 
     def run(label, command):

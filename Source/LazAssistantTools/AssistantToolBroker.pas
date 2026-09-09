@@ -27,6 +27,7 @@ Type
   TBrokerSnapshot = Record
     Path, Text, Revision: String;
   End;
+  TAssistantToolApproval = Function(Const Tool, Path, OldText, NewText: String): Boolean Of Object;
   TAssistantToolBroker = Class
   Private
     FAdapter: TAssistantWorkspaceAdapter; { borrowed; broker must be destroyed first }
@@ -35,6 +36,8 @@ Type
     FCancelled, FAllowEdits: Boolean;
     FRevision: Integer;
     FSnapshots: Array Of TBrokerSnapshot;
+    FOnApproval: TAssistantToolApproval;
+    Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
     Function Remember(Const Path, Text: String): String;
   Public
     Constructor Create(Adapter: TAssistantWorkspaceAdapter);
@@ -43,6 +46,7 @@ Type
     Function Execute(Const RunId, Tool, Arguments: String;
       Out ResultText, ErrorText: String): Boolean;
     Function ToolsJson: String;
+    Property OnApproval: TAssistantToolApproval Read FOnApproval Write FOnApproval;
     Property RunId: String Read FRunId;
   End;
 Implementation
@@ -115,6 +119,17 @@ Begin
   FSnapshots[Index].Text := Text;
   FSnapshots[Index].Revision := Result;
 End;
+Function TAssistantToolBroker.Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  If Assigned(FOnApproval) And Not FOnApproval(Tool, Path, OldText, NewText) Then
+    Begin ErrorText := 'User declined this tool operation.'; Exit; End;
+  { A modal approval can dispatch IDE events. Revalidate the run before any
+    effect; adapters also compare the approved buffer text at mutation time. }
+  If FCancelled Or (FRunId <> RunId) Or (FAdapter.Identity <> FIdentity) Then
+    Begin ErrorText := 'Workspace/run changed or was cancelled during approval.'; Exit; End;
+  Result := True;
+End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
   Out ResultText, ErrorText: String): Boolean;
 Var Data, Node: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
@@ -138,7 +153,11 @@ Begin
         Begin
           If Not FAllowEdits Or Not FAdapter.CanBuild Then
             Begin ErrorText := 'Build tools are unavailable in this mode.'; Exit; End;
-          If Tool = 'lazarus_start_build' Then Result := FAdapter.StartBuild(ResultText, ErrorText)
+          If Tool = 'lazarus_start_build' Then
+            Begin
+              If Not Approve(RunId, Tool, '', '', '', ErrorText) Then Exit;
+              Result := FAdapter.StartBuild(ResultText, ErrorText);
+            End
           Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
           Exit;
         End;
@@ -184,6 +203,7 @@ Begin
         Begin ErrorText := 'Stale buffer revision; read the buffer again before changing or saving it.'; Exit; End;
       If Tool = 'lazarus_save_buffer' Then
         Begin
+          If Not Approve(RunId, Tool, Path, Text, '', ErrorText) Then Exit;
           Result := FAdapter.SaveBuffer(Path, Text, ErrorText);
           If Result Then ResultText := '{"saved":true,"revision":' + Quoted(Revision) + '}';
           Exit;
@@ -194,6 +214,7 @@ Begin
       NewText := Node.AsString;
       If Length(NewText) > MaxBufferBytes Then
         Begin ErrorText := 'Replacement exceeds the buffer limit.'; Exit; End;
+      If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
       { Reserve a revision before mutation; a budget failure must have no effects. }
       Revision := Remember(Path, NewText);
       If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;

@@ -201,14 +201,12 @@ Type
     Procedure FooterMenuClick(Sender: TObject);
   Private
     FUseCodex: Boolean;
-    FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity: String;
+    FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
     FCodexWorkspace: TAssistantIDEWorkspace;
     FCodexBroker: TAssistantToolBroker;
-    Procedure ConfigureChatGPT(Sender: TObject);
-    Procedure SelectGrok(Sender: TObject);
-    Procedure InitializeBackendMenu;
-    Procedure SaveBackendSettings;
+    Procedure LoadConnectionSettings;
+    Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Procedure StartCodexReply(Const DisplayText, ApiText: String);
     Procedure PollCodex;
     Procedure ReleaseCodexRun;
@@ -450,7 +448,7 @@ Uses
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
-  ProjectIntf, AssistantSkills, IniFiles, AssistantCodexSettings, AssistantCodexClient;
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient;
 
 Const
   ChatViewMargin = 4;
@@ -527,7 +525,7 @@ Begin
   FOpenBusy := False;
   FPlanWriteThisTurn := False;
   FShowPlanOffer := False;
-  InitializeBackendMenu;
+  LoadConnectionSettings;
   FCatalog := TAssistantCatalog.Create;
   WorkflowEventBus.AddListener(Self);
 End;
@@ -2606,53 +2604,55 @@ Begin
   StatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
 
-Procedure TProjectAssistantForm.InitializeBackendMenu;
-Var MenuRoot, Item: TMenuItem; Config: TIniFile;
+Function TProjectAssistantForm.ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
+Var Dialog: TForm; Description: TLabel; BeforeMemo, AfterMemo: TMemo;
+  AllowButton, DeclineButton: TButton; WasEnabled: Boolean;
 Begin
-  FCodexProfile := IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) +
-    'assistant-codex-preview';
-  Config := TIniFile.Create(IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) + 'assistant-backend.ini');
+  WasEnabled := ElapsedTimer.Enabled; ElapsedTimer.Enabled := False;
+  Dialog := TForm.CreateNew(Self);
   Try
-    FCodexRuntime := Config.ReadString('ChatGPT', 'Runtime', '');
-    FCodexModel := Config.ReadString('ChatGPT', 'Model', '');
-    FUseCodex := Config.ReadBool('ChatGPT', 'Selected', False);
-  Finally Config.Free; End;
-  MenuRoot := TMenuItem.Create(Self); MenuRoot.Caption := 'Backend';
-  AssistantMenu.Items.Add(MenuRoot);
-  Item := TMenuItem.Create(Self); Item.Caption := 'Grok'; Item.OnClick := @SelectGrok;
-  MenuRoot.Add(Item);
-  Item := TMenuItem.Create(Self); Item.Caption := 'ChatGPT (preview)…';
-  Item.OnClick := @ConfigureChatGPT; MenuRoot.Add(Item);
+    Dialog.Caption := 'Review ChatGPT tool request'; Dialog.Position := poOwnerFormCenter;
+    Dialog.SetBounds(0, 0, 800, 600); Dialog.BorderStyle := bsDialog;
+    Description := TLabel.Create(Dialog); Description.Parent := Dialog;
+    Description.AutoSize := False; Description.WordWrap := True; Description.SetBounds(16, 16, 768, 64);
+    If Tool = 'lazarus_start_build' Then
+      Description.Caption := 'Allow a build of the active project using its saved files and configured build commands?'
+    Else If Tool = 'lazarus_save_buffer' Then
+      Description.Caption := 'Save this exact buffer to disk: ' + Path
+    Else Description.Caption := 'Replace this buffer (current text above, proposed text below): ' + Path;
+    BeforeMemo := TMemo.Create(Dialog); BeforeMemo.Parent := Dialog;
+    BeforeMemo.SetBounds(16, 88, 768, 200); BeforeMemo.ReadOnly := True;
+    BeforeMemo.ScrollBars := ssBoth; BeforeMemo.WordWrap := False; BeforeMemo.Text := OldText;
+    AfterMemo := TMemo.Create(Dialog); AfterMemo.Parent := Dialog;
+    AfterMemo.SetBounds(16, 304, 768, 230); AfterMemo.ReadOnly := True;
+    AfterMemo.ScrollBars := ssBoth; AfterMemo.WordWrap := False; AfterMemo.Text := NewText;
+    AfterMemo.Visible := Tool = 'lazarus_replace_buffer';
+    BeforeMemo.Visible := Tool <> 'lazarus_start_build';
+    If Tool = 'lazarus_save_buffer' Then BeforeMemo.Height := 446;
+    AllowButton := TButton.Create(Dialog); AllowButton.Parent := Dialog; AllowButton.Caption := 'Allow once';
+    AllowButton.SetBounds(550, 552, 110, 32); AllowButton.ModalResult := mrYes;
+    DeclineButton := TButton.Create(Dialog); DeclineButton.Parent := Dialog; DeclineButton.Caption := 'Decline';
+    DeclineButton.SetBounds(674, 552, 110, 32); DeclineButton.ModalResult := mrCancel;
+    DeclineButton.Cancel := True; DeclineButton.Default := True;
+    Result := Dialog.ShowModal = mrYes;
+    If Result Then Result := Assigned(FCodexRun) And Not FCodexRun.Snapshot.Done;
+  Finally Dialog.Free; ElapsedTimer.Enabled := WasEnabled And Assigned(FCodexRun); End;
 End;
 
-Procedure TProjectAssistantForm.SaveBackendSettings;
-Var Config: TIniFile;
+Procedure TProjectAssistantForm.LoadConnectionSettings;
+Var Connections: TAssistantConnections; Item: TAssistantConnection;
 Begin
-  Config := TIniFile.Create(IncludeTrailingPathDelimiter(LazarusIDE.GetPrimaryConfigPath) + 'assistant-backend.ini');
+  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
   Try
-    Config.WriteString('ChatGPT', 'Runtime', FCodexRuntime);
-    Config.WriteString('ChatGPT', 'Model', FCodexModel);
-    Config.WriteBool('ChatGPT', 'Selected', FUseCodex);
-  Finally Config.Free; End;
-End;
-
-Procedure TProjectAssistantForm.ConfigureChatGPT(Sender: TObject);
-Begin
-  If FSending Then Exit;
-  If ConfigureCodex(FCodexProfile, FCodexRuntime, FCodexModel) Then
-    Begin
-      FUseCodex := True;
-      SaveBackendSettings;
-      RefreshFromConfig;
-    End;
-End;
-
-Procedure TProjectAssistantForm.SelectGrok(Sender: TObject);
-Begin
-  If FSending Then Exit;
-  FUseCodex := False;
-  SaveBackendSettings;
-  RefreshFromConfig;
+    Connections.Load; Item := Connections.Active;
+    FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
+    If FUseCodex Then
+      Begin
+        FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
+        FCodexProfile := Connections.ProfileDir(Item);
+        FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
+      End;
+  Finally Connections.Free; End;
 End;
 
 Procedure TProjectAssistantForm.ReleaseCodexRun;
@@ -2667,11 +2667,12 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String);
-Var Prompt, Recap: String; I: Integer; Turn: TConversationTurn;
+Var Prompt, Recap, ContextText: String; I: Integer; Turn: TConversationTurn; WithContext: Boolean;
 Begin
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
     Begin
-      ConfigureChatGPT(Nil);
+      SettingsActionExecute(Nil);
+      If Not FUseCodex Then Exit;
       If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
     End;
   If FPlanAgentRunning Then
@@ -2682,6 +2683,8 @@ Begin
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   FCodexIdentity := FCodexWorkspace.Identity;
+  FCodexBroker.OnApproval := Nil;
+  If FCodexApproval = 'ask' Then FCodexBroker.OnApproval := @ApproveCodexTool;
   FCodexBroker.BeginRun(ActiveMode = amBuild);
   RefreshFromConfig;
   Recap := '';
@@ -2693,6 +2696,9 @@ Begin
           Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
             'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
       End;
+  WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
+  ContextText := '';
+  If WithContext Then ContextText := BuildIDEContextBlockLight;
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
@@ -2700,11 +2706,11 @@ Begin
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
     'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +
-    BuildIDEContextBlockLight + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
+    ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
     Recap + LineEnding + 'Current user request:' + LineEnding + ApiText;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
-  SetCurrentUserDisplay(DisplayText, True);
+  SetCurrentUserDisplay(DisplayText, WithContext);
   FLiveUser := FDisplayUser; FLiveContent := ''; FLiveThinking := '';
   FAssistantContent := ''; FAssistantThinking := '';
   AppendMessage('user', FDisplayUser);
@@ -2714,7 +2720,7 @@ Begin
   BeginAssistantReply;
   Try
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, FCodexBroker.ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile);
+      Prompt, FCodexBroker.ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort);
     FCodexRun.Start;
   Except
     On E: Exception Do
@@ -2866,7 +2872,8 @@ Begin
     CentreText := CentreText + ' ⚠';
   If FUseCodex Then
     Begin
-      LeftText := FModelName;
+      ThinkCap := FCodexEffort; If ThinkCap = '' Then ThinkCap := 'model default';
+      LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, FCodexApproval]);
       CentreText := Format('Context ~%d tokens', [FContextUsed]);
     End;
   StatusFooter.SetAll(LeftText, CentreText, StatusText);
@@ -4606,7 +4613,7 @@ Var
   SignedIn: String;
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Backend → ChatGPT to check the account and available models.', mtInformation, [mbOK], 0); Exit; End;
+    Begin MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0); Exit; End;
   HideSlashPopup;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
@@ -4655,29 +4662,14 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.ModelPickerActionExecute(Sender: TObject);
-Var
-  Host: TControl;
 Begin
-  If FUseCodex Then Begin ConfigureChatGPT(Sender); Exit; End;
-  HideSlashPopup;
-  EnsureFooterMenu(FFooterMenu);
-  FillModelFooterMenu;
-  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
-  FillThinkingFooterMenu;
-  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
-  FillApprovalFooterMenu;
-  AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
-  AddFooterItem(FFooterMenu, 'Settings…', FooterTagSettings, '', False, False, @FooterMenuClick);
-  Host := StatusFooter.LeftLabel;
-  If Not Assigned(Host) Then
-    Host := StatusFooter;
-  PopupUnderControl(Host, FFooterMenu);
+  SettingsActionExecute(Sender);
 End;
 
 Procedure TProjectAssistantForm.ThinkingPickerActionExecute(Sender: TObject);
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview uses the selected model’s default reasoning settings.', mtInformation, [mbOK], 0); Exit; End;
+    Begin SettingsActionExecute(Sender); Exit; End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillThinkingFooterMenu;
@@ -5789,8 +5781,9 @@ End;
 
 Procedure TProjectAssistantForm.SettingsActionExecute(Sender: TObject);
 Begin
-  If FUseCodex Then Begin ConfigureChatGPT(Sender); Exit; End;
+  If FSending Then Exit;
   ShowAssistantSettingsForm;
+  LoadConnectionSettings;
   RefreshFromConfig;
 End;
 

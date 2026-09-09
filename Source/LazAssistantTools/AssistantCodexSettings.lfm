@@ -1,0 +1,4 @@
+object CodexConnectionFrame: TCodexConnectionFrame
+  Height = 310
+  Width = 660
+end

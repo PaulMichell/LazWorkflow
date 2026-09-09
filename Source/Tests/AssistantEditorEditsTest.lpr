@@ -25,12 +25,28 @@ Type
   Public
     Editor: TTestEditor;
     ProjectId: String;
+    ApprovalAction, ApprovalCalls, Builds: Integer;
+    ApprovalBroker: TAssistantToolBroker;
+    Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
+    Function CanBuild: Boolean; Override;
+    Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
+    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
   End;
+Function TBrokerWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
+Begin
+  Inc(ApprovalCalls);
+  Result := ApprovalAction <> 0;
+  Case ApprovalAction Of
+    2: ProjectId := 'switched-during-approval';
+    3: ApprovalBroker.Cancel;
+    4: Editor.Syn.Text := 'user edit during approval';
+  End;
+End;
 Function TBrokerWorkspace.Identity: String;
 Begin Result := ProjectId; End;
 Function TBrokerWorkspace.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
@@ -39,6 +55,12 @@ Function TBrokerWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: Strin
 Begin Result := ApplyAssistantEditorText(Editor, ExpectedText, NewText, ErrorText); End;
 Function TBrokerWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
 Begin ErrorText := 'Injected save failure'; Result := False; End;
+Function TBrokerWorkspace.CanBuild: Boolean;
+Begin Result := True; End;
+Function TBrokerWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
+Begin Inc(Builds); ResultText := '{"started":true}'; ErrorText := ''; Result := True; End;
+Function TBrokerWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := '{"done":true}'; ErrorText := ''; Result := True; End;
 Function TBrokerWorkspace.Describe: String;
 Begin Result := 'Test project'; End;
 Function TTestEditor.GetSourceText: String;
@@ -84,6 +106,12 @@ Begin
       Check('broker returns exact unsaved text', TJSONObject(Data).Get('text', '') = Original);
     Finally Data.Free; End;
     Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Workspace.ApprovalBroker := Broker; Broker.OnApproval := @Workspace.Approve;
+    Check('declined edit has no side effect', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err)
+      And (Editor.SourceText = Original) And (Pos('declined', Err) > 0));
+    Check('declined save never reaches adapter', Not Broker.Execute(Run, 'lazarus_save_buffer', Args, Reply, Err)
+      And (Pos('declined', Err) > 0));
+    Workspace.ApprovalAction := 1;
     Check('broker applies revision-checked edit', Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
     Check('broker updated live editor', Editor.SourceText = Changed);
     Check('replayed revision rejected', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
@@ -94,6 +122,7 @@ Begin
     Check('old run rejected', Not Broker.Execute(OldRun, 'lazarus_project_info', '{}', Reply, Err));
     Check('Ask mode advertises no mutation tool', Pos('lazarus_replace_buffer', Broker.ToolsJson) = 0);
     Check('Ask mode rejects mutation', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
+    Check('Ask mode rejects edits without requesting approval', Workspace.ApprovalCalls = 3);
     Workspace.ProjectId := 'project-2';
     Check('project switch rejects tools', Not Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err));
     Run := Broker.BeginRun(True); Broker.Cancel;
@@ -106,6 +135,35 @@ Begin
     Check('save failure reported', Not Broker.Execute(Run, 'lazarus_save_buffer',
       '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '"}', Reply, Err));
     Check('failed save has no success result', (Reply = '') And (Pos('save failure', Err) > 0));
+    Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Workspace.ApprovalAction := 4;
+    Check('user buffer change during approval rejects replacement',
+      Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err)
+      And (Pos('user edit during approval', Editor.SourceText) = 1));
+    Editor.Syn.Text := Original;
+    Run := Broker.BeginRun(True);
+    Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
+    Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+    Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Workspace.ApprovalAction := 2;
+    Check('project change during approval blocks edit',
+      Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Original)
+      And (Pos('during approval', Err) > 0));
+    Workspace.ApprovalAction := 3;
+    Run := Broker.BeginRun(True);
+    Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
+    Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+    Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Check('cancellation during approval blocks edit',
+      Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Original)
+      And (Pos('during approval', Err) > 0));
+    Run := Broker.BeginRun(True); Workspace.ApprovalCalls := 0; Workspace.ApprovalAction := 0;
+    Check('declined build does not launch compiler', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 0));
+    Workspace.ApprovalAction := 1;
+    Check('approved build launches once', Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
+    Check('polling build status needs no new approval', Broker.Execute(Run, 'lazarus_build_status', '{}', Reply, Err) And (Workspace.ApprovalCalls = 2));
+    Run := Broker.BeginRun(False); Broker.OnApproval := Nil;
+    Check('automatic approval cannot enable builds in Ask mode', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
   Finally Broker.Free; Workspace.Free; End;
 End;
 Var Ed: TTestEditor; Host: TForm; Before, UserText, Changed, Err: String;

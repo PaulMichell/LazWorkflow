@@ -18,7 +18,7 @@ A reproducible test runner and temporary project-rename fixtures accompany this 
 
 ## Current product boundary
 
-**ChatGPT is now selectable as a Linux development preview in the assistant's own Backend menu.** Browser sign-in, model discovery, send/stop/steer, history, isolated runtime configuration and revision-checked Lazarus tools are connected. The installed Codex runtime passes signed-out initialization with the preview profile. Live subscription inference and full IDE acceptance are still to be tested by the user. See [test instructions and remaining work](LazAssistantTools-Codex-Implementation.md).
+**ChatGPT is now selectable as a Linux development preview in Settings → Connections.** Browser sign-in, model discovery, send/stop/steer, history, isolated runtime configuration and revision-checked Lazarus tools are connected. The installed Codex runtime passes signed-out initialization with the preview profile. Live subscription inference and full IDE acceptance are still to be tested by the user. See [test instructions and remaining work](LazAssistantTools-Codex-Implementation.md).
 
 The existing Grok path remains available alongside the ChatGPT preview. Its account flow has been moved behind an interface, but the native actor still owns Responses/chat-completions serialization. Provider-specific request capabilities, full backend event contracts and managed-runtime execution ownership remain to be extracted. This is partial P1, not a claim of arbitrary-model compatibility.
 
@@ -117,3 +117,13 @@ Implemented project directory listing, paged file reading and explicit backgroun
 Added `AssistantWorkspaceTest` for the actual broker/IDE adapter with temporary filesystem fixtures and mocked IDE interfaces. Next work remains fine-grained IDE operations, file creation/report workflows, Grok broker migration, durable continuation and dependency-complete build evidence.
 
 Validation for this step: all 18 test programs and the assistant package build passed. The final bounded file-scan change also passed a targeted workspace test and package rebuild. No live model request was needed for these adapter tests.
+
+## Settings, connections and rendering (9 September 2026)
+
+Removed the Backend menu and embedded account/model setup in a resizable Settings form with Connections and General pages. Added a versioned registry of named connections, migration of existing ChatGPT preferences without moving credentials, separate profiles for additional ChatGPT accounts, and staged Save/Cancel behavior. Global spell-checker selection is embedded on General. Grok and ChatGPT can remain valid together; simultaneous agent execution remains future work.
+
+Fixed bold labels under four-space continuation paragraphs in two-digit list items. Empty Thinking placeholders no longer create cards or saved trace entries. See [design, limits and tests](LazAssistantTools-Settings-and-Connections.md).
+
+Added per-ChatGPT-connection reasoning effort from model discovery and Ask/Auto/Always tool permissions. Ask presents the proposed edit/save/build for review and revalidates run/project state afterwards. Auto and Always retain mode and revision restrictions. Regression coverage includes approval denial, cancellation/project/buffer changes during approval, build approval and effort serialization. All 20 test programs and the package compile passed; see the settings document for details.
+
+Next bounded implementation work: expose report/file creation through the broker with explicit approval and no overwrite, then continue fine-grained IDE operations. Grok broker migration, durable continuation and dependency-complete build evidence remain open; configuring multiple connections does not yet implement parallel agent execution.

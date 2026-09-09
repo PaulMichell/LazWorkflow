@@ -15,7 +15,7 @@ Type
   TAssistantCodexRun = Class(TThread)
   Private
     FLock: TRTLCriticalSection;
-    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile: String;
+    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile, FEffort: String;
     FSnapshot: TCodexRunSnapshot;
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
@@ -28,7 +28,7 @@ Type
     Procedure Execute; Override;
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
-      TimeoutMs: Cardinal = 600000; Const ProfileDir: String = '');
+      TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean;
@@ -42,14 +42,14 @@ Type
 Implementation
 Uses AssistantCodexHandshake, AssistantCodexProfile;
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
-  ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String);
+  ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   InitCriticalSection(FLock);
   FExecutable := Executable; FCwd := Cwd; FModel := Model; FPrompt := Prompt;
   FToolsJson := ToolsJson; FRunId := RunId; FTimeout := TimeoutMs; FProfile := ProfileDir;
-  FSnapshot.State := crsConnecting;
+  FEffort := Effort; FSnapshot.State := crsConnecting;
 End;
 Destructor TAssistantCodexRun.Destroy;
 Begin
@@ -157,7 +157,7 @@ Begin
           Begin If Client.StartThread(RunDirectory, FModel, FToolsJson) Then Stage := 1; End
         Else If (Stage = 1) And (Client.State = crsReady) Then
           Begin
-            If Client.StartTurn(FPrompt) Then Stage := 2;
+            If Client.StartTurn(FPrompt, FEffort) Then Stage := 2;
           End;
         EnterCriticalSection(FLock);
         Try

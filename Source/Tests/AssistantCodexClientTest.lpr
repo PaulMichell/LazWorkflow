@@ -75,6 +75,8 @@ Begin
               End;
             If Params.Get('summary', '') <> 'auto' Then Halt(3);
             Prompt := Params.FindPath('input[0].text').AsString;
+            If (Prompt = 'normal') And (Params.Get('effort', '') <> 'high') Then Halt(4);
+            If (Prompt <> 'normal') And Assigned(Params.Find('effort')) Then Halt(5);
             Send('{"id":' + Id + ',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}');
             If Prompt = 'authchange' Then
               Begin Send('{"method":"account/updated","params":{"authMode":"apikey"}}'); Continue; End;
@@ -120,7 +122,7 @@ Begin
   Try
     RunId := Broker.BeginRun(False);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
-      'normal', Broker.ToolsJson, RunId, 3000);
+      'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
     Run.Start;
     Deadline := GetTickCount64 + 5000;
     Repeat
@@ -135,7 +137,7 @@ Begin
     Run.Free; Run := Nil;
     RunId := Broker.BeginRun(False);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
-      'normal', Broker.ToolsJson, RunId, 3000);
+      'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
     Run.Start; Run.Cancel; Broker.Cancel;
     Deadline := GetTickCount64 + 7000;
     Repeat Run.ServiceTool(Broker); Snapshot := Run.Snapshot; Sleep(1);
@@ -205,7 +207,7 @@ Begin
     Deadline := GetTickCount64 + 3000;
     Repeat Client.Pump; Sleep(1); Until (Client.ModelsJson <> '') Or (GetTickCount64 > Deadline);
     Check('model discovery received', Pos('test-model', Client.ModelsJson) > 0);
-    Check('turn queued', Client.StartTurn('normal'));
+    Check('turn queued', Client.StartTurn('normal', 'high'));
     WaitState(crsRunning);
     Deadline := GetTickCount64 + 3000;
     Repeat Client.Pump; Sleep(1); Until Client.TakeTool(Tool) Or (GetTickCount64 > Deadline);

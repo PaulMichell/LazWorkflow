@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel;
+  ButtonPanel, ComCtrls, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame;
 
 Type
   TAssistantSettingsForm = Class(TForm)
@@ -47,7 +47,25 @@ Type
     Procedure RefreshModelsButtonClick(Sender: TObject);
     Procedure SpellButtonClick(Sender: TObject);
     Procedure EnsureExtraControls;
+  Private
+    Connections: TAssistantConnections;
+    ConnectionList: TListBox;
+    ConnectionName: TEdit;
+    ActiveConnectionLabel: TLabel;
+    GrokPanel: TScrollBox;
+    CodexFrame: TCodexConnectionFrame;
+    SpellFrame: TSpellCheckerSettingsFrame;
+    SelectedConnection: Integer;
+    Procedure BuildSettingsPages;
+    Procedure GeneralPageResize(Sender: TObject);
+    Procedure RefreshConnections;
+    Procedure StoreConnection;
+    Procedure ConnectionChanged(Sender: TObject);
+    Procedure AddConnection(Sender: TObject);
+    Procedure RemoveConnection(Sender: TObject);
+    Procedure UseConnection(Sender: TObject);
   Public
+    Destructor Destroy; Override;
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
     Procedure RefreshAuthStatus;
@@ -64,7 +82,7 @@ Implementation
 Uses
   AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation,
-  LCLIntf, SpellCheckerSettingsForm;
+  LCLIntf, SpellCheckerSettingsForm, LazIDEIntf;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -111,6 +129,9 @@ Begin
       End;
   Finally
     Form.Free;
+    { Restore any endpoint temporarily used for discovery when Cancel was chosen. }
+    If Assigned(AssistantClient) And Assigned(AssistantChatConfig) Then
+      AssistantClient.ApplyConfig(AssistantChatConfig);
   End;
 End;
 
@@ -191,8 +212,144 @@ Begin
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
   EnsureExtraControls;
+  BuildSettingsPages;
   PopulateSkills;
   RefreshAuthStatus;
+End;
+
+Destructor TAssistantSettingsForm.Destroy;
+Begin
+  Connections.Free;
+  Inherited Destroy;
+End;
+
+Procedure TAssistantSettingsForm.BuildSettingsPages;
+Var Pages: TPageControl; ConnectionPage, GeneralPage: TTabSheet;
+  Sidebar, Details, Header: TPanel; Control: TControl; I: Integer; Button: TButton;
+  LabelControl: TLabel;
+Begin
+  SelectedConnection := -1;
+  ClientWidth := 960; ClientHeight := 760;
+  Constraints.MinWidth := 900; Constraints.MinHeight := 650;
+  BorderStyle := bsSizeable;
+  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
+  Connections.Load;
+  Pages := TPageControl.Create(Self); Pages.Name := 'SettingsPages'; Pages.Parent := Self; Pages.Align := alClient;
+  ConnectionPage := TTabSheet.Create(Pages); ConnectionPage.PageControl := Pages; ConnectionPage.Caption := 'Connections';
+  GeneralPage := TTabSheet.Create(Pages); GeneralPage.PageControl := Pages; GeneralPage.Caption := 'General';
+  Sidebar := TPanel.Create(Self); Sidebar.Parent := ConnectionPage; Sidebar.Align := alLeft; Sidebar.Width := 220; Sidebar.BevelOuter := bvNone;
+  Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Name := 'AddConnectionButton'; Button.Caption := 'Add ChatGPT connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @AddConnection;
+  Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Caption := 'Remove connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @RemoveConnection;
+  ConnectionList := TListBox.Create(Self); ConnectionList.Name := 'ConnectionsList'; ConnectionList.Parent := Sidebar; ConnectionList.Align := alClient; ConnectionList.OnClick := @ConnectionChanged;
+  Details := TPanel.Create(Self); Details.Parent := ConnectionPage; Details.Align := alClient; Details.BevelOuter := bvNone;
+  Header := TPanel.Create(Self); Header.Parent := Details; Header.Align := alTop; Header.Height := 112; Header.BevelOuter := bvNone;
+  LabelControl := TLabel.Create(Self); LabelControl.Parent := Header; LabelControl.SetBounds(16, 8, 150, 20); LabelControl.Caption := 'Connection name';
+  ConnectionName := TEdit.Create(Self); ConnectionName.Name := 'ConnectionNameEdit'; ConnectionName.Parent := Header; ConnectionName.SetBounds(16, 30, 400, 28);
+  Button := TButton.Create(Self); Button.Parent := Header; Button.SetBounds(430, 30, 230, 28); Button.Name := 'UseConnectionButton'; Button.Caption := 'Use for current chat'; Button.OnClick := @UseConnection;
+  ActiveConnectionLabel := TLabel.Create(Self); ActiveConnectionLabel.Parent := Header; ActiveConnectionLabel.SetBounds(16, 70, 650, 32); ActiveConnectionLabel.AutoSize := False; ActiveConnectionLabel.WordWrap := True;
+  GrokPanel := TScrollBox.Create(Self); GrokPanel.Parent := Details; GrokPanel.Align := alClient; GrokPanel.BorderStyle := bsNone;
+  { Reuse Grok's existing account and model controls inside its own connection
+    details, retaining the established credential owner. }
+  For I := ControlCount - 1 DownTo 0 Do
+    Begin
+      Control := Controls[I];
+      If (Control = Pages) Or (Control = ButtonPanel) Then Continue;
+      Control.Anchors := [akLeft, akTop];
+      Control.Parent := GrokPanel;
+    End;
+  SpellButton.Visible := False;
+  IncludeContextCheck.Parent := GeneralPage; IncludeContextCheck.SetBounds(20, 20, 700, 24);
+  AutoNewChatDefaultCheck.Parent := GeneralPage; AutoNewChatDefaultCheck.SetBounds(20, 52, 800, 24);
+  AutoNewChatDefaultCheck.Caption := 'Automatically start a new Grok chat at 95% context use';
+  SpellFrame := TSpellCheckerSettingsFrame.Create(Self); SpellFrame.Name := 'GlobalSpellSettings'; SpellFrame.Parent := GeneralPage;
+  SpellFrame.SetBounds(20, 104, 820, 230); SpellFrame.Anchors := [akLeft, akTop]; SpellFrame.LoadFromConfig;
+  GeneralPage.OnResize := @GeneralPageResize;
+  LabelControl := TLabel.Create(Self); LabelControl.Parent := GeneralPage;
+  LabelControl.SetBounds(20, 358, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
+  LabelControl.Caption := 'These preferences apply across connections. Sign-in and sign-out actions take effect immediately; Cancel discards preference edits. Selecting a connection does not sign out other accounts.';
+  ApiBaseLabel.Top := 418; ApiBaseEdit.Top := 440;
+  ManualLabel.Top := 484; ManualEdit.Top := 508; PasteCodeButton.Top := 508;
+  HintLabel.Top := 552;
+  ThinkingLabel.Caption := 'Grok reasoning level'; ApprovalLabel.Caption := 'Grok tool approvals';
+  CodexFrame := TCodexConnectionFrame.Create(Self); CodexFrame.Parent := Details; CodexFrame.Align := alClient;
+  RefreshConnections;
+  For I := 0 To Connections.Count - 1 Do
+    If Connections[I].Id = Connections.ActiveId Then ConnectionList.ItemIndex := I;
+  ConnectionChanged(Nil);
+  Pages.ActivePage := ConnectionPage;
+End;
+
+Procedure TAssistantSettingsForm.GeneralPageResize(Sender: TObject);
+Begin
+  If Assigned(SpellFrame) And Assigned(SpellFrame.Parent) Then
+    SpellFrame.Width := SpellFrame.Parent.ClientWidth - 40;
+End;
+
+Procedure TAssistantSettingsForm.StoreConnection;
+Var Item: TAssistantConnection;
+Begin
+  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then Exit;
+  Item := Connections[SelectedConnection];
+  If Trim(ConnectionName.Text) <> '' Then Item.Name := Trim(ConnectionName.Text);
+  If Item.Backend = 'codex' Then
+    Begin Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text); Item.Model := Trim(CodexFrame.ModelCombo.Text);
+      Item.ReasoningEffort := CodexFrame.ReasoningEffort; Item.ApprovalMode := CodexFrame.ApprovalMode; End;
+End;
+
+Procedure TAssistantSettingsForm.RefreshConnections;
+Var I, Selected: Integer; Item: TAssistantConnection;
+Begin
+  Selected := ConnectionList.ItemIndex;
+  ConnectionList.Items.Clear;
+  For I := 0 To Connections.Count - 1 Do
+    Begin
+      Item := Connections[I];
+      If Item.Id = Connections.ActiveId Then ConnectionList.Items.Add(Item.Name + ' (current)')
+      Else ConnectionList.Items.Add(Item.Name);
+    End;
+  If Selected >= Connections.Count Then Selected := Connections.Count - 1;
+  ConnectionList.ItemIndex := Selected;
+  Item := Connections.Active;
+  If Assigned(Item) Then ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '. Other saved connections remain available.';
+End;
+
+Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);
+Var Item: TAssistantConnection; NewSelection: Integer;
+Begin
+  If CodexFrame.Busy Then Begin ConnectionList.ItemIndex := SelectedConnection; Exit; End;
+  NewSelection := ConnectionList.ItemIndex;
+  StoreConnection; RefreshConnections;
+  SelectedConnection := NewSelection; ConnectionList.ItemIndex := NewSelection;
+  If SelectedConnection < 0 Then Exit;
+  Item := Connections[SelectedConnection]; ConnectionName.Text := Item.Name;
+  GrokPanel.Visible := Item.Backend = 'grok'; CodexFrame.Visible := Item.Backend = 'codex';
+  If Item.Backend = 'codex' Then CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort, Item.ApprovalMode);
+End;
+
+Procedure TAssistantSettingsForm.AddConnection(Sender: TObject);
+Begin
+  If CodexFrame.Busy Then Exit;
+  StoreConnection; Connections.AddChatGPT; RefreshConnections;
+  SelectedConnection := -1; ConnectionList.ItemIndex := Connections.Count - 1; ConnectionChanged(Nil);
+End;
+
+Procedure TAssistantSettingsForm.RemoveConnection(Sender: TObject);
+Begin
+  If CodexFrame.Busy Or (SelectedConnection < 0) Then Exit;
+  If Connections[SelectedConnection].Backend = 'grok' Then
+    Begin MessageDlg('The existing Grok account is managed using Sign out.', mtInformation, [mbOK], 0); Exit; End;
+  Connections.Remove(SelectedConnection); SelectedConnection := -1;
+  RefreshConnections; ConnectionList.ItemIndex := 0; ConnectionChanged(Nil);
+End;
+
+Procedure TAssistantSettingsForm.UseConnection(Sender: TObject);
+Begin
+  StoreConnection;
+  If SelectedConnection < 0 Then Exit;
+  If (Connections[SelectedConnection].Backend = 'codex') And
+    ((Connections[SelectedConnection].Runtime = '') Or (Connections[SelectedConnection].Model = '')) Then
+    Begin MessageDlg('Choose the runtime and sign in or refresh models first.', mtInformation, [mbOK], 0); Exit; End;
+  Connections.ActiveId := Connections[SelectedConnection].Id; RefreshConnections;
 End;
 
 Procedure TAssistantSettingsForm.PopulateSkills;
@@ -263,14 +420,14 @@ Begin
     Ok := False;
     ErrorText := '';
     If Assigned(AssistantClient) And AssistantClient.IsSignedIn And
-      (ForceRefresh Or Assigned(GrokOAuthClient)) Then
+      ForceRefresh Then
       Begin
         ModelHintLabel.Caption := 'Loading models…';
         Application.ProcessMessages;
         Ok := AssistantClient.ListAvailableModels(ModelList.Items, ErrorText);
       End
     Else
-      ErrorText := 'Sign in to load the live model list.';
+      ErrorText := 'Use Refresh list to discover models from the account.';
 
     If Not Ok Then
       Begin
@@ -363,7 +520,7 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.ApplyConfig(AssistantChatConfig);
   RefreshAuthStatus;
-  PopulateModels(True);
+  PopulateModels(False);
 End;
 
 Procedure TAssistantSettingsForm.SaveToConfig;
@@ -411,6 +568,9 @@ Begin
   If Assigned(GrokOAuthClient) Then
     AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   AssistantChatConfig.Save;
+  StoreConnection;
+  Connections.Save;
+  SpellFrame.SaveToConfig;
 End;
 
 Procedure TAssistantSettingsForm.RefreshModelsButtonClick(Sender: TObject);
@@ -537,6 +697,12 @@ Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
+  StoreConnection;
+  If CodexFrame.Busy Then
+    Begin CanClose := False; MessageDlg('Wait for the connection check, or Cancel to close settings.', mtInformation, [mbOK], 0); Exit; End;
+  If Assigned(Connections.Active) And (Connections.Active.Backend = 'codex') And
+    ((Connections.Active.Runtime = '') Or (Connections.Active.Model = '')) Then
+    Begin CanClose := False; MessageDlg('The current ChatGPT connection needs a runtime and model.', mtInformation, [mbOK], 0); Exit; End;
   If Trim(ApiBaseEdit.Text) = '' Then
     Begin
       MessageDlg('API base URL is required (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);

@@ -1,14 +1,14 @@
 # Codex implementation: development preview
 
-Updated: 8 September 2026.
+Updated: 9 September 2026.
 
 ## Delivered
 
-The assistant window now offers **Backend → ChatGPT (preview)…**. This selects a managed Codex run path with a separate subscription sign-in profile, browser login, discovered models, streaming, Stop, steering, conversation history and Lazarus tools. Grok remains available in the same menu. This is a Linux development preview; full live IDE read/edit/build acceptance remains to be performed by the user.
+The assistant window now offers **Settings → Connections → ChatGPT**. This selects a managed Codex run path with a separate subscription sign-in profile, browser login, discovered models, streaming, Stop, steering, conversation history and Lazarus tools. Grok remains available as a separate saved connection in Settings. This is a Linux development preview; full live IDE read/edit/build acceptance remains to be performed by the user.
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
-| Assistant UI | Assistant-owned backend menu and connection dialog; account work off the IDE thread; persisted non-secret runtime/model selection; streamed tool cards and history | Package build; account/model worker exercised with fake runtime |
+| Assistant UI | Settings Connections/General pages; named accounts with independent profiles, model/effort/approval preferences; account work off the IDE thread; streamed tool cards and history | Package build; account/model worker exercised with fake runtime |
 | Runtime qualification | Exact `codex-cli 0.153.0` check before connection; offline experimental-schema inspection and SHA-256 report | `qualify_codex_runtime.py`; actual bundled runtime successfully inspected |
 | Process transport | One owning worker, nonblocking stdin, fragmented JSONL, separate stderr draining, bounded frames/queues, write timeout, cancellation, process-group cleanup, EOF/error handling | `AssistantCodexTransportTest`, including blocked/closed stdin, flooding, truncation and missing executable |
 | Managed client | ChatGPT account gate; explicit login entry point; model discovery; thread/turn requests; streamed text; steering; interruption; dynamic-tool correlation; rejection of unknown approvals, duplicate calls, authentication changes and unexpected returned provider/sandbox policy | `AssistantCodexClientTest` and existing handshake tests |
@@ -57,14 +57,14 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 
 1. Rebuild the installed `LazAssistantTools` package/IDE and restart Lazarus to load the changed units.
 2. Open a project. Units can be inspected while closed; existing unsaved buffers take precedence over disk.
-3. In the **assistant window**, choose **Backend → ChatGPT (preview)…**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
-4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model and click **Use ChatGPT**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
+3. In the **assistant window**, open **Settings → Connections** and select **ChatGPT**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
+4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model, reasoning level and tool usage permissions, click **Use for current chat**, then **OK**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
 5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
-6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. Ask/Plan expose no write or build tools.
+6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. The default Ask approval setting presents edits, saves and builds for review. Ask/Plan expose no write or build tools.
 7. With project and editor changes saved, request a build and ask for its diagnostics. The pilot uses `lazbuild` asynchronously; a successful exit is deliberately not reported as fully source-verified.
-8. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and switching back to **Backend → Grok** while idle.
+8. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and selecting Grok under **Settings → Connections** while idle.
 
-Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves only backend/runtime/model preferences in `assistant-backend.ini`. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
+Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves named connection definitions and the current selection in `assistant-connections.ini`; existing `assistant-backend.ini` values migrate on first load. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
 
 The managed profile disables app connectors, shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Threads and turns select the launcher-defined `lazarus_ide` permissions profile: only `:minimal` filesystem reads, no project-readable roots, and command network access disabled. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
 
@@ -74,7 +74,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading and explicit editor opening are implemented. Pinned Grok skills, reasoning controls and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading and explicit editor opening are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -117,3 +117,11 @@ Test by asking ChatGPT to list the project root and review a unit that is not op
 `AssistantWorkspaceTest` exercises the real broker and workspace adapter against temporary files and mock Lazarus project/editor interfaces. It covers directory discovery, paged disk reads, unsaved-buffer preference, background opening/reuse, revision return, Ask write rejection, missing files, traversal/symlink escapes, binary files, FIFOs, size limits, cancellation and project changes. The existing SynEdit tests continue to cover edit revision checks and Undo. Full-suite results are recorded in `/tmp/laz-workspace-inspection`.
 
 Validation for this step: all 18 test programs and the assistant package build passed. The final bounded file-scan change also passed a targeted workspace test and package rebuild. No live model request was needed for these adapter tests.
+
+## Settings and rendering revision (9 September 2026)
+
+Connection management now lives entirely in Settings, with independent saved connections and a General page containing shared spell-checker preferences. The Backend menu has been removed. See [the settings design and migration record](LazAssistantTools-Settings-and-Connections.md). The same revision fixes bold list continuations and suppresses empty Thinking cards/history entries.
+
+## Settings revision (9 September 2026)
+
+The assistant Backend menu has been removed. All saved connections are managed in Settings; General includes the shared spell-checker preferences. Each ChatGPT connection now has model-advertised reasoning effort and Ask/Auto/Always permissions for Lazarus tools. The selected effort is sent to each new turn, while approval remains in the IDE broker. Ask/Plan restrictions and managed runtime isolation apply regardless of approval choice. Existing ChatGPT sign-in profiles are retained. See [settings design and validation](LazAssistantTools-Settings-and-Connections.md). All 20 regression programs and the assistant package build passed for this revision.
