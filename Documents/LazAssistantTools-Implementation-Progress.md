@@ -126,4 +126,14 @@ Fixed bold labels under four-space continuation paragraphs in two-digit list ite
 
 Added per-ChatGPT-connection reasoning effort from model discovery and Ask/Auto/Always tool permissions. Ask presents the proposed edit/save/build for review and revalidates run/project state afterwards. Auto and Always retain mode and revision restrictions. Regression coverage includes approval denial, cancellation/project/buffer changes during approval, build approval and effort serialization. All 20 test programs and the package compile passed; see the settings document for details.
 
-Next bounded implementation work: expose report/file creation through the broker with explicit approval and no overwrite, then continue fine-grained IDE operations. Grok broker migration, durable continuation and dependency-complete build evidence remain open; configuring multiple connections does not yet implement parallel agent execution.
+Report/file creation has now been implemented as the next bounded broker step (below). Continue with fine-grained IDE operations. Grok broker migration, durable continuation and dependency-complete build evidence remain open; configuring multiple connections does not yet implement parallel agent execution.
+
+## Next broker step: creating reports and project text files (9 September 2026)
+
+Build mode now exposes `lazarus_create_file` for new project text files, including Markdown reports under a missing Documents directory. The shared broker enforces the mode boundary, content limit and per-connection approval setting. Ask approval displays the complete proposed content and destination before creating anything. The adapter repeats project-path and editor checks after approval, and refuses existing files, directories, symlinks and paths already owned by an unsaved editor.
+
+The Linux implementation creates missing parent directories through directory handles without following child symlinks. It writes and flushes a temporary sibling, then uses atomic hard-link publication which cannot replace an existing destination. Failed writes do not publish a partial report. Parent directories created during an approved operation may remain empty if a later filesystem operation fails. Filesystems that do not support hard links fail without overwriting; other operating systems do not advertise this tool yet.
+
+Creation explicitly writes a new file to disk. It does not open an editor, modify project membership, save other buffers or compile. Existing-file edits still require opening/reading a buffer and presenting its revision. Ask and Plan remain read-only, so a user who wants a report saved should use Build mode.
+
+Tests cover exact UTF-8 content, empty files, nested paths, refusal to overwrite, temporary-file cleanup, traversal and symlink rejection, size/binary limits, approval denial, concurrent destination creation, an editor appearing during approval, cancellation and mode restrictions. All 21 test programs and the full assistant package build passed with range/overflow checks. Full validation logs: `/tmp/laz-assistant-report-creation`. No live model call was made.

@@ -13,8 +13,8 @@ The assistant window now offers **Settings → Connections → ChatGPT**. This s
 | Process transport | One owning worker, nonblocking stdin, fragmented JSONL, separate stderr draining, bounded frames/queues, write timeout, cancellation, process-group cleanup, EOF/error handling | `AssistantCodexTransportTest`, including blocked/closed stdin, flooding, truncation and missing executable |
 | Managed client | ChatGPT account gate; explicit login entry point; model discovery; thread/turn requests; streamed text; steering; interruption; dynamic-tool correlation; rejection of unknown approvals, duplicate calls, authentication changes and unexpected returned provider/sandbox policy | `AssistantCodexClientTest` and existing handshake tests |
 | Worker/IDE boundary | Worker owns Codex; IDE thread services one short broker operation at a time; bounded tool handoff; main thread reads snapshots without waiting for the process | Fake runtime → worker → broker → tool result test; cancellation-before-start regression |
-| Revision broker | Per-run GUID, project identity, bounded snapshots, opaque revision tokens, Ask/Build policy, read/edit/save descriptors, no unrestricted fallback tool | Real SynEdit tests verify unsaved text, stale/replayed revision rejection and one-step Undo |
-| IDE adapter | Project-scoped open-buffer operations through Lazarus; `ReplaceText` preserves Undo; explicit saves report failure; post-edit readback accounts for SynEdit normalization | Package compiles; shared editor primitive and broker tested with real SynEdit |
+| Revision broker | Per-run GUID, project identity, bounded snapshots, opaque revision tokens, Ask/Build policy, read/create/edit/save descriptors, no unrestricted fallback tool | Real SynEdit tests verify unsaved text, stale/replayed revision rejection and one-step Undo |
+| IDE adapter | Project-scoped inspection and new-file creation; open-buffer operations through Lazarus; `ReplaceText` preserves Undo; explicit saves report failure; post-edit readback accounts for SynEdit normalization | Package compiles; shared editor primitive and broker tested with real SynEdit |
 | Async build pilot | Worker-owned `lazbuild`; refuses dirty editor/project inputs; no implicit saves; timeout/cancel; bounded diagnostic output; observed-input manifest and stale checks | `AssistantBuildJobTest` covers success, compiler error, stale input, timeout, cancellation and absent compiler |
 
 No metered API provider or fallback has been introduced. A recognized ChatGPT account is an authentication condition, not proof of available allowance or successful inference.
@@ -61,8 +61,9 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model, reasoning level and tool usage permissions, click **Use for current chat**, then **OK**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
 5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
 6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. The default Ask approval setting presents edits, saves and builds for review. Ask/Plan expose no write or build tools.
-7. With project and editor changes saved, request a build and ask for its diagnostics. The pilot uses `lazbuild` asynchronously; a successful exit is deliberately not reported as fully source-verified.
-8. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and selecting Grok under **Settings → Connections** while idle.
+7. In **Build**, try: `Review this project and save a new Markdown report to Documents/BugReport.md.` With Ask permissions, review the proposed content and choose Allow once. The tool creates missing parent directories and refuses existing destinations; use another filename or revision-checked editor tools for an existing report.
+8. With project and editor changes saved, request a build and ask for its diagnostics. The pilot uses `lazbuild` asynchronously; a successful exit is deliberately not reported as fully source-verified.
+9. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and selecting Grok under **Settings → Connections** while idle.
 
 Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves named connection definitions and the current selection in `assistant-connections.ini`; existing `assistant-backend.ini` values migrate on first load. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
 
@@ -74,7 +75,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading and explicit editor opening are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening and new text-file creation are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -125,3 +126,9 @@ Connection management now lives entirely in Settings, with independent saved con
 ## Settings revision (9 September 2026)
 
 The assistant Backend menu has been removed. All saved connections are managed in Settings; General includes the shared spell-checker preferences. Each ChatGPT connection now has model-advertised reasoning effort and Ask/Auto/Always permissions for Lazarus tools. The selected effort is sent to each new turn, while approval remains in the IDE broker. Ask/Plan restrictions and managed runtime isolation apply regardless of approval choice. Existing ChatGPT sign-in profiles are retained. See [settings design and validation](LazAssistantTools-Settings-and-Connections.md). All 20 regression programs and the assistant package build passed for this revision.
+
+## New project file creation (9 September 2026)
+
+`lazarus_create_file` now supports new reports and other project text files in Build mode. It creates missing directories, applies the selected connection's approval policy, refuses existing disk/editor content and publishes only a complete file. It does not add files to the Lazarus project or save existing editor buffers. Linux directory handles and atomic no-overwrite publication enforce this boundary. Ask/Plan expose no creation tool. See the [progress report](LazAssistantTools-Implementation-Progress.md) for filesystem limits and regression coverage.
+
+Validation: all 21 assistant test programs and the package build passed; logs: `/tmp/laz-assistant-report-creation`. Tests use isolated files, mock IDE interfaces and fake runtime processes; the live report prompt remains a user acceptance check after rebuilding/restarting Lazarus.

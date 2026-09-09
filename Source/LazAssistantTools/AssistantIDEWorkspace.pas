@@ -17,6 +17,9 @@ Type
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
+    Function CanCreateFiles: Boolean; Override;
+    Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Override;
+    Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -29,7 +32,7 @@ Type
   End;
 Implementation
 Uses Classes, SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
@@ -103,6 +106,41 @@ Begin
   If Not CheckInspectableFile(Resolved, ErrorText) Then Exit;
   Result := OpenEditorReuse(Resolved, Note);
   If Not Result Then ErrorText := Note;
+End;
+Function TAssistantIDEWorkspace.CanCreateFiles: Boolean;
+Begin Result := {$IFDEF LINUX}True{$ELSE}False{$ENDIF}; End;
+Function TAssistantIDEWorkspace.CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean;
+{$IFDEF UNIX}Var Info: Stat;{$ENDIF}
+Begin
+  Result := False; CanonicalPath := ''; ErrorText := '';
+  If (Trim(Path) = '') Or (Pos(#0, Path) > 0) Or (Length(Path) > 4096) Then
+    Begin ErrorText := 'A new project file path is required.'; Exit; End;
+  If Not ResolveProjectPath(Path, CanonicalPath, ErrorText) Then Exit;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Begin ErrorText := 'Source editor manager is unavailable.'; Exit; End;
+  If Assigned(SourceEditorManagerIntf.SourceEditorIntfWithFilename(CanonicalPath)) Then
+    Begin ErrorText := 'An editor buffer already owns this path; use its revision tools.'; Exit; End;
+  {$IFDEF UNIX}
+  If fpLStat(CanonicalPath, Info) = 0 Then
+  {$ELSE}
+  If FileExistsUTF8(CanonicalPath) Or DirectoryExistsUTF8(CanonicalPath) Then
+  {$ENDIF}
+    Begin ErrorText := 'Destination already exists; new-file creation never overwrites.'; Exit; End;
+  Result := True;
+End;
+Function TAssistantIDEWorkspace.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
+Var Resolved, Root, RelativePath: String;
+Begin
+  Result := False; ResultText := '';
+  { Repeat all IDE checks after approval: an unsaved editor or a disk file may
+    have appeared while the review dialog was open. }
+  If Not CheckNewFile(Path, Resolved, ErrorText) Then Exit;
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(ProjectRootPath));
+  RelativePath := Copy(Resolved, Length(Root) + 1, MaxInt);
+  If Not CreateNewProjectText(Root, RelativePath, Text, ErrorText) Then Exit;
+  ResultText := '{"created":true,"saved":true,"opened":false,"addedToProject":false,"path":"' +
+    JsonEscapeText(Resolved) + '","bytes":' + IntToStr(Length(Text)) + '}';
+  Result := True;
 End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;

@@ -15,7 +15,7 @@ ChatGPT sign-in and model discovery are embedded in the Connections page. They r
 
 Each ChatGPT connection has its own reasoning level and usage permissions. **Check / refresh models** obtains `supportedReasoningEfforts` for each model from the subscription runtime. The list always includes **Model default**, which omits the request's effort override. Selecting a different model removes unsupported choices; a saved value remains visible before discovery. Explicit choices are sent as `turn/start.effort`. Reasoning effort controls model work; **Show Thinking** controls visibility of whatever summary the model supplies.
 
-- **Ask** (default, including migration): read operations proceed; buffer replacement, saving and starting a build require an Allow once response. The review shows the exact current and proposed text for replacements, the current content for saves, or the build operation. Decline has no write/build effect.
+- **Ask** (default, including migration): read operations proceed; new-file creation, buffer replacement, saving and starting a build require an Allow once response. The review shows the exact current and proposed text for replacements, the current content for saves, the complete proposed new-file content, or the build operation. Decline has no write/build effect.
 - **Auto:** allow the registered project tools within the active mode.
 - **Always:** allow registered tools without prompts. Because the current Codex registry contains only bounded project tools, Auto and Always currently have the same effect. Neither enables arbitrary runtime tools.
 

@@ -68,7 +68,7 @@ Begin
   LabelControl.SetBounds(338, 150, 300, 20); LabelControl.Caption := 'Tool usage permissions';
   ApprovalCombo := TComboBox.Create(Self); ApprovalCombo.Parent := Self; ApprovalCombo.Style := csDropDownList;
   ApprovalCombo.SetBounds(338, 175, 303, 28);
-  ApprovalCombo.Items.Add('Ask before edits, saves and builds');
+  ApprovalCombo.Items.Add('Ask before file changes and builds');
   ApprovalCombo.Items.Add('Auto: allow project tools');
   ApprovalCombo.Items.Add('Always: allow registered tools'); ApprovalCombo.ItemIndex := 0;
   LabelControl := TLabel.Create(Self); LabelControl.Parent := Self; LabelControl.AutoSize := False;

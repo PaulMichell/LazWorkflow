@@ -2619,6 +2619,8 @@ Begin
       Description.Caption := 'Allow a build of the active project using its saved files and configured build commands?'
     Else If Tool = 'lazarus_save_buffer' Then
       Description.Caption := 'Save this exact buffer to disk: ' + Path
+    Else If Tool = 'lazarus_create_file' Then
+      Description.Caption := 'Create this new file and any missing parent directories (proposed text below): ' + Path
     Else Description.Caption := 'Replace this buffer (current text above, proposed text below): ' + Path;
     BeforeMemo := TMemo.Create(Dialog); BeforeMemo.Parent := Dialog;
     BeforeMemo.SetBounds(16, 88, 768, 200); BeforeMemo.ReadOnly := True;
@@ -2626,8 +2628,9 @@ Begin
     AfterMemo := TMemo.Create(Dialog); AfterMemo.Parent := Dialog;
     AfterMemo.SetBounds(16, 304, 768, 230); AfterMemo.ReadOnly := True;
     AfterMemo.ScrollBars := ssBoth; AfterMemo.WordWrap := False; AfterMemo.Text := NewText;
-    AfterMemo.Visible := Tool = 'lazarus_replace_buffer';
-    BeforeMemo.Visible := Tool <> 'lazarus_start_build';
+    AfterMemo.Visible := (Tool = 'lazarus_replace_buffer') Or (Tool = 'lazarus_create_file');
+    BeforeMemo.Visible := (Tool <> 'lazarus_start_build') And (Tool <> 'lazarus_create_file');
+    If Tool = 'lazarus_create_file' Then AfterMemo.SetBounds(16, 88, 768, 446);
     If Tool = 'lazarus_save_buffer' Then BeforeMemo.Height := 446;
     AllowButton := TButton.Create(Dialog); AllowButton.Parent := Dialog; AllowButton.Caption := 'Allow once';
     AllowButton.SetBounds(550, 552, 110, 32); AllowButton.ModalResult := mrYes;
@@ -2702,7 +2705,8 @@ Begin
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
-    'Ask and Plan are read-only; Build allows explicit buffer edits, saves and saved-input builds. ' +
+    'Ask and Plan are read-only; Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
+    'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
     'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +

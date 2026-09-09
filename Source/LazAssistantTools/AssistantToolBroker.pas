@@ -19,6 +19,9 @@ Type
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Virtual;
+    Function CanCreateFiles: Boolean; Virtual;
+    Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Virtual;
+    Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -62,6 +65,12 @@ Function TAssistantWorkspaceAdapter.ListDirectory(Const Arguments: String; Out R
 Begin ResultText := ''; ErrorText := 'Directory inspection unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.OpenBuffer(Const Path: String; Out ErrorText: String): Boolean;
 Begin ErrorText := 'Opening buffers unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanCreateFiles: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean;
+Begin CanonicalPath := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -149,6 +158,23 @@ Begin
       If Not (Data Is TJSONObject) Then
         Begin ErrorText := 'Expected object arguments.'; Exit; End;
       Args := TJSONObject(Data);
+      If Tool = 'lazarus_create_file' Then
+        Begin
+          If Not FAllowEdits Or Not FAdapter.CanCreateFiles Then
+            Begin ErrorText := 'New file creation requires Build mode and a supported workspace.'; Exit; End;
+          Node := Args.Find('path');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin ErrorText := 'A new project file path is required.'; Exit; End;
+          If Not FAdapter.CheckNewFile(Node.AsString, Path, ErrorText) Then Exit;
+          Node := Args.Find('text');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
+            Begin ErrorText := 'File text is required.'; Exit; End;
+          NewText := Node.AsString;
+          If (Length(NewText) > MaxBufferBytes) Or (Pos(#0, NewText) > 0) Then
+            Begin ErrorText := 'File must contain at most 1 MiB of text without NUL bytes.'; Exit; End;
+          If Not Approve(RunId, Tool, Path, '', NewText, ErrorText) Then Exit;
+          Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText); Exit;
+        End;
       If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Then
         Begin
           If Not FAllowEdits Or Not FAdapter.CanBuild Then
@@ -258,6 +284,8 @@ Begin
   If FAllowEdits Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.","inputSchema":' + SaveSchema + '}';
+  If FAllowEdits And FAdapter.CanCreateFiles Then Result := Result +
+    ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
   If FAllowEdits And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of saved project inputs. Refuses dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Get asynchronous build diagnostics and observed-input manifest. A compiler exit code is not test or full-source validation.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}';
