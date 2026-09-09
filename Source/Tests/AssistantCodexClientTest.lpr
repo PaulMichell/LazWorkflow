@@ -49,7 +49,8 @@ Begin
         Else If Method = 'thread/start' Then
           Begin
             Params := TJSONObject(Obj.Find('params'));
-            If (Params.Get('sandbox', '') <> 'read-only') Or
+            If (Params.Get('permissions', '') <> 'lazarus_ide') Or
+              Assigned(Params.Find('sandbox')) Or
               (Params.Get('modelProvider', '') <> 'openai') Then Halt(2);
             Send('{"id":' + Id + ',"result":{"modelProvider":"openai","approvalPolicy":"on-request","sandbox":{"type":"readOnly"},"thread":{"id":"thread-1"}}}');
           End
@@ -66,6 +67,12 @@ Begin
         Else If Method = 'turn/start' Then
           Begin
             Params := TJSONObject(Obj.Find('params'));
+            If (Params.Get('permissions', '') <> 'lazarus_ide') Or
+              Assigned(Params.Find('sandboxPolicy')) Then
+              Begin
+                Send('{"id":' + Id + ',"error":{"code":-32600,"message":"Use named permissions for restricted reads"}}');
+                Continue;
+              End;
             Prompt := Params.FindPath('input[0].text').AsString;
             Send('{"id":' + Id + ',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}');
             If Prompt = 'authchange' Then

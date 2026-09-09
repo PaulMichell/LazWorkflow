@@ -38,6 +38,8 @@ Begin
     Check('runtime forced to ChatGPT login', Args.IndexOf('forced_login_method="chatgpt"') >= 0);
     Check('runtime forced to OpenAI provider', Args.IndexOf('model_provider="openai"') >= 0);
     Check('automatic ChatGPT app connectors disabled', Args.IndexOf('features.apps=false') >= 0);
+    Check('minimal filesystem profile defined', Args.IndexOf('permissions.lazarus_ide.filesystem={":minimal"="read"}') >= 0);
+    Check('profile command network disabled', Args.IndexOf('permissions.lazarus_ide.network.enabled=false') >= 0);
     Check('private stdio transport', Args.IndexOf('stdio://') >= 0);
     Id := Initialize(Session);
     Check('handshake checks account', Session.State = ccsCheckingAccount);

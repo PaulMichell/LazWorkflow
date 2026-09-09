@@ -189,7 +189,7 @@ Begin
       runtime qualification against external MCP/configured tool bypasses. }
     Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
       ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-      '"approvalPolicy":"on-request","sandbox":"read-only","ephemeral":true,' +
+      '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
       '"environments":[],"dynamicTools":' + Data.AsJSON +
       ',"developerInstructions":"Use the lazarus tools for project and editor operations. ' +
       'Live buffers may differ from disk. Never bypass their revision checks.",' +
@@ -204,8 +204,7 @@ Begin
   If Not Result Then Exit;
   Result := Request('turn/start', '{"threadId":' + Quote(FThreadId) +
     ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"on-request","sandboxPolicy":{"type":"readOnly",' +
-    '"access":{"type":"restricted","includePlatformDefaults":true,"readableRoots":[]}}}');
+    '"approvalPolicy":"on-request","permissions":"lazarus_ide"}');
   If Result Then
     Begin
       FContent := ''; FThinking := ''; FTurnId := '';

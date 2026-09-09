@@ -4,7 +4,7 @@ Updated: 8 September 2026.
 
 ## Delivered
 
-The assistant window now offers **Backend → ChatGPT (preview)…**. This selects a managed Codex run path with a separate subscription sign-in profile, browser login, discovered models, streaming, Stop, steering, conversation history and Lazarus tools. Grok remains available in the same menu. This is a Linux development preview; live account/inference acceptance remains to be performed by the user.
+The assistant window now offers **Backend → ChatGPT (preview)…**. This selects a managed Codex run path with a separate subscription sign-in profile, browser login, discovered models, streaming, Stop, steering, conversation history and Lazarus tools. Grok remains available in the same menu. This is a Linux development preview; full live IDE read/edit/build acceptance remains to be performed by the user.
 
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 
 Sign-in is kept in `<Lazarus primary config>/assistant-codex-preview`; the runtime owns credentials. The IDE saves only backend/runtime/model preferences in `assistant-backend.ini`. It does not import the user's global Codex credentials or API keys. Account authentication does not guarantee available subscription allowance; request failures appear in the answer's error note.
 
-The managed profile disables app connectors, shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Turns request restricted read-only filesystem access with no project-readable roots. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
+The managed profile disables app connectors, shell/unified execution, automatic skill MCP dependency installation and web search. Runtime startup and thread working directory use the separate profile, not the project. Before starting a thread, the client requires an empty MCP-server inventory; unknown/native approval requests are rejected. Threads and turns select the launcher-defined `lazarus_ide` permissions profile: only `:minimal` filesystem reads, no project-readable roots, and command network access disabled. IDE edits and saves go through the revision broker. These controls are tied to the pinned runtime; broader adversarial/plugin and platform qualification is still required before calling this production-ready.
 
 The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though its generated schema includes that value. The implementation now uses `on-request` and rejects unsupported approval requests. Both real signed-out initialization and strict configuration parsing succeeded with the preview settings. No browser sign-in or model inference was initiated during development.
 
@@ -91,3 +91,11 @@ The first live test failed the external-tool check because a ChatGPT-authenticat
 The launcher now passes `-c features.apps=false` on every start, and new managed profile configurations also persist that setting. Existing sign-ins work without recreating the profile. The check requiring an empty external MCP inventory remains in place; Lazarus dynamic tools are registered separately.
 
 An inventory-only check against the existing signed-in Lazarus profile reproduced `codex_apps` with 88 tools. Repeating with the override returned an empty inventory. No model turn or app tool was invoked. The fake signed-in runtime now models this default, and tests verify both successful isolated startup and continued rejection of unrelated external MCP servers.
+
+## Restricted-read protocol correction (9 September 2026)
+
+The next live request exposed another schema/runtime discrepancy: the pinned runtime still emits the legacy `readOnly.access` shape in its schema but rejects that field during turn startup. Restricted reads now use the named `permissions` field on both `thread/start` and `turn/start`. The launcher defines `permissions.lazarus_ide.filesystem={":minimal"="read"}` and `permissions.lazarus_ide.network.enabled=false` on every launch, so existing profiles require no migration. The client still validates the returned read-only sandbox and approval policy.
+
+The [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) describes named filesystem permission profiles. A real ephemeral thread using the existing ChatGPT sign-in accepted this profile and returned a read-only sandbox with network access disabled. One minimal subscription-backed request (`Reply with OK only. Do not use tools.`) then completed successfully. No project files or IDE tools were involved; full IDE acceptance remains open.
+
+Regression tests now reject the obsolete sandbox override and require named permissions for both thread and turn requests. The offline qualification script checks the `permissions` fields. All 17 regression programs and the package build pass; logs are in `/tmp/laz-codex-permissions-fix`.

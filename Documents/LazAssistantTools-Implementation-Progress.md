@@ -101,3 +101,7 @@ All 17 regression programs and the package build pass. Additional client checks 
 ## Signed-in runtime fix (9 September 2026)
 
 Reproduced the reported external-tool failure: ChatGPT sign-in automatically exposed `codex_apps` in the dedicated profile. Runtime launch now disables app connectors explicitly, including for existing profiles. Signed-in inventory checks confirmed the server disappears; no inference or app tools were invoked. Regression coverage now models the signed-in default rather than assuming a fresh profile has no runtime servers.
+
+## Restricted-read request fix (9 September 2026)
+
+Replaced the rejected `readOnly.access` override with a launcher-defined `lazarus_ide` named permission profile for thread and turn startup. It permits minimal runtime reads and disables command networking, retaining the broker boundary. Updated regression and schema-qualification checks. All 17 tests and the package build pass. A real ephemeral thread and one minimal subscription-backed request completed successfully; project read/edit/build acceptance is still outstanding.

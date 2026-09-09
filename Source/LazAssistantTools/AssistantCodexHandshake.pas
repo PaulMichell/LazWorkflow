@@ -49,6 +49,10 @@ Begin
   { ChatGPT sign-in enables codex_apps by default even in an otherwise empty
     CODEX_HOME. Override on every launch, including existing preview profiles. }
   Args.Add('-c'); Args.Add('features.apps=false');
+  { Define the broker-only filesystem profile on every launch so existing
+    managed profiles need no migration or renewed sign-in. }
+  Args.Add('-c'); Args.Add('permissions.lazarus_ide.filesystem={":minimal"="read"}');
+  Args.Add('-c'); Args.Add('permissions.lazarus_ide.network.enabled=false');
   Args.Add('app-server');
   Args.Add('--listen'); Args.Add('stdio://');
 End;
