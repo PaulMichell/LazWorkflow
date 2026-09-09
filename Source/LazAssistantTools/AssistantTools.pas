@@ -34,6 +34,10 @@ Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode
 Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
+{ Shared, bounded read helpers; these never dispatch arbitrary native tools. }
+Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
 Procedure SetActivePlanRelativePath(Const RelativePath: String);

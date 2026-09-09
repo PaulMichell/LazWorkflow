@@ -109,3 +109,11 @@ Replaced the rejected `readOnly.access` override with a launcher-defined `lazaru
 ## Thinking display fix (9 September 2026)
 
 Added explicit automatic reasoning-summary requests and completed reasoning-item parsing for Codex. Section breaks and pre-tool summaries are retained without duplicate completion text. A live subscription test emitted a summary successfully. All 17 tests and the package build pass. Thinking displays model-provided summaries when available.
+
+## Next broker step: project inspection (9 September 2026)
+
+Implemented project directory listing, paged file reading and explicit background editor opening through the shared broker. Closed-file reads now work, while unsaved editor contents remain authoritative. Opening returns a revision for the existing edit/save flow. Ask and Plan gain inspection only; Build retains write/save control. The existing scoped native read/list primitives are reused through explicit adapter methods, with no arbitrary native-tool fallback.
+
+Added `AssistantWorkspaceTest` for the actual broker/IDE adapter with temporary filesystem fixtures and mocked IDE interfaces. Next work remains fine-grained IDE operations, file creation/report workflows, Grok broker migration, durable continuation and dependency-complete build evidence.
+
+Validation for this step: all 18 test programs and the assistant package build passed. The final bounded file-scan change also passed a targeted workspace test and package rebuild. No live model request was needed for these adapter tests.

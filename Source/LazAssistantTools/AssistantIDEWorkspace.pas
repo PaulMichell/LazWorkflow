@@ -1,7 +1,7 @@
 Unit AssistantIDEWorkspace;
 
-{ Main-thread adapter for the shared tool broker. Open editor buffers only:
-  no hidden disk mutation or automatic opening/saving of unrelated editors. }
+{ Main-thread adapter for the shared tool broker. Project inspection prefers
+  live buffers; opening tabs and saving content are separate explicit tools. }
 {$mode objfpc}{$H+}
 Interface
 Uses AssistantToolBroker, AssistantBuildJob;
@@ -13,6 +13,10 @@ Type
     FBuildIdentity, FBuildMode: String;
   Public
     Destructor Destroy; Override;
+    Function CanInspectFiles: Boolean; Override;
+    Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -25,7 +29,8 @@ Type
   End;
 Implementation
 Uses Classes, SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  AssistantEditorEdits, AssistantIDEContext, AssistantProtocol;
+  AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;
@@ -33,6 +38,71 @@ Begin
   If Assigned(FBuild) Then FBuild.Cancel;
   FBuild := Nil;
   SetLength(FBuildInputs, 0);
+End;
+Function TAssistantIDEWorkspace.CanInspectFiles: Boolean;
+Begin Result := True; End;
+Function CheckInspectableFile(Const Path: String; Out ErrorText: String): Boolean;
+Var Stream: TFileStream; Buffer: Array[0..8191] Of Byte; I, Count, Remaining: Integer;
+  {$IFDEF UNIX}Info: Stat;{$ENDIF}
+Begin
+  Result := False; ErrorText := '';
+  {$IFDEF UNIX}
+  If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Then
+    Begin ErrorText := 'An existing regular project file is required.'; Exit; End;
+  If Info.st_size > 1048576 Then
+    Begin ErrorText := 'Project file exceeds the 1 MiB inspection limit.'; Exit; End;
+  {$ELSE}
+  If Not FileExistsUTF8(Path) Then
+    Begin ErrorText := 'An existing project file is required.'; Exit; End;
+  {$ENDIF}
+  Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+  Try
+    If Stream.Size > 1048576 Then
+      Begin ErrorText := 'Project file exceeds the 1 MiB inspection limit.'; Exit; End;
+    Remaining := 1048576;
+    Repeat
+      Count := Stream.Read(Buffer, SizeOf(Buffer));
+      Dec(Remaining, Count);
+      For I := 0 To Count - 1 Do
+        If Buffer[I] = 0 Then
+          Begin ErrorText := 'Binary or UTF-16 files are not supported by the text inspection tools.'; Exit; End;
+    Until (Count = 0) Or (Remaining <= 0);
+  Finally Stream.Free; End;
+  Result := True;
+End;
+Function TAssistantIDEWorkspace.ReadFile(Const Arguments: String;
+  Out ResultText, ErrorText: String): Boolean;
+Var Data: TJSONData; Path: String; Editor: TSourceEditorInterface;
+Begin
+  Result := False; ResultText := ''; Data := GetJSON(Arguments);
+  Try
+    If Not ResolveProjectPath(TJSONObject(Data).Get('path', ''), Path, ErrorText) Then Exit;
+    Editor := Nil;
+    If Assigned(SourceEditorManagerIntf) Then Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path);
+    If Assigned(Editor) Then
+      Begin
+        If Length(Editor.SourceText) > 1048576 Then
+          Begin ErrorText := 'Buffer exceeds the 1 MiB inspection limit.'; Exit; End;
+      End
+    Else If Not CheckInspectableFile(Path, ErrorText) Then Exit;
+    Result := ToolReadFile(Arguments, ResultText, ErrorText);
+  Finally Data.Free; End;
+End;
+Function TAssistantIDEWorkspace.ListDirectory(Const Arguments: String;
+  Out ResultText, ErrorText: String): Boolean;
+Begin Result := ToolListDirectory(Arguments, ResultText, ErrorText); End;
+Function TAssistantIDEWorkspace.OpenBuffer(Const Path: String; Out ErrorText: String): Boolean;
+Var Resolved: String; Editor: TSourceEditorInterface; Note: String;
+Begin
+  Result := False;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then Exit;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Begin ErrorText := 'Source editor manager is unavailable.'; Exit; End;
+  Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
+  If Assigned(Editor) Then Exit(True);
+  If Not CheckInspectableFile(Resolved, ErrorText) Then Exit;
+  Result := OpenEditorReuse(Resolved, Note);
+  If Not Result Then ErrorText := Note;
 End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;

@@ -41,7 +41,7 @@ The protocol route follows the [official App Server documentation](https://learn
 
 ## Host integration contract
 
-`TAssistantToolBroker` and `TAssistantIDEWorkspace` belong to the IDE thread. Begin a fresh broker run when starting a task, and cancel it when the project, IDE lifetime, or task changes. The initial IDE adapter works with files already open in Lazarus and rejects paths outside the project resolver's scope.
+`TAssistantToolBroker` and `TAssistantIDEWorkspace` belong to the IDE thread. Begin a fresh broker run when starting a task, and cancel it when the project, IDE lifetime, or task changes. The IDE adapter lists and reads project files and can explicitly open an existing file in a background editor tab. Reads prefer unsaved editor contents. Paths outside the project resolver's scope are rejected.
 
 Create `TAssistantCodexRun` with the runtime path, working directory, model, prompt, broker tool descriptors and broker run ID. Start its worker. An IDE timer should call `ServiceTool(Broker)` and read `Snapshot`; it must not call the process client directly. On cancellation, cancel both the run and broker. The form hands cancelled/completed workers to a detached reaper, which joins and destroys them off the IDE thread. No asynchronous callback owns an IDE pointer.
 
@@ -56,7 +56,7 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 ## Testing the preview
 
 1. Rebuild the installed `LazAssistantTools` package/IDE and restart Lazarus to load the changed units.
-2. Open a project and open the units you want ChatGPT to inspect in the Lazarus editor.
+2. Open a project. Units can be inspected while closed; existing unsaved buffers take precedence over disk.
 3. In the **assistant window**, choose **Backend → ChatGPT (preview)…**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
 4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model and click **Use ChatGPT**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
 5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
@@ -74,7 +74,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Expand the broker beyond open buffers: project-scoped file reading/opening, fine-grained symbol operations and other planned IDE capabilities. Pinned Grok skills, reasoning controls and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading and explicit editor opening are implemented. Pinned Grok skills, reasoning controls and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -105,3 +105,15 @@ Regression tests now reject the obsolete sandbox override and require named perm
 Codex turns now explicitly request `summary: "auto"`. Previously the client relied on the runtime default and parsed only reasoning deltas, leaving empty Thinking cards when summaries were disabled or supplied only at item completion. The client now also consumes completed reasoning-item summaries, preserves section and item boundaries, and replaces streamed text with the completed summary without duplicating it. Summaries are retained in worker snapshots and pre-tool text for the existing Thinking display and history. Show Thinking remains a local visibility toggle; it does not request private reasoning or guarantee a summary on every turn.
 
 The [App Server documentation](https://learn.chatgpt.com/docs/app-server) specifies the turn summary option and reasoning summary/completion events. A small live arithmetic request using the existing subscription sign-in completed and delivered 26 summary characters through both streaming and completion events; the diagnostic recorded counts only. All 17 test programs and the package build passed (`/tmp/laz-codex-thinking-fix`), including streamed sections, completion-only items, duplicate completion and worker delivery.
+
+## Project inspection tools (9 September 2026)
+
+The shared broker now advertises `lazarus_list_directory`, `lazarus_read_file` and `lazarus_open_buffer` when its adapter supports project inspection. They use the same run/project identity and cancellation checks as buffer edits. Ask and Plan can list, read and open tabs; changing or saving contents still requires Build.
+
+File reading reuses the existing native bounded read helper, including unsaved-buffer preference, line ranges, truncation information and the 48,000-character output cap. Directory listings reuse the existing 400-entry cap. The IDE adapter validates project scope before reading or opening. Closed files must be regular files of at most 1 MiB; binary/UTF-16 files containing NUL are rejected. New editor tabs open in the background without loading designer resources, creating missing files or saving anything. Opening an already-open file preserves its unsaved buffer. `lazarus_open_buffer` returns a revision for subsequent buffer operations; paged `lazarus_read_file` results are not edit revisions.
+
+Test by asking ChatGPT to list the project root and review a unit that is not open, then in Build ask for a small edit to that unit. It should open the existing file and use the returned revision before editing. Markdown-file creation is not part of this step; reports can still be returned in chat, and existing open documents can be edited in Build.
+
+`AssistantWorkspaceTest` exercises the real broker and workspace adapter against temporary files and mock Lazarus project/editor interfaces. It covers directory discovery, paged disk reads, unsaved-buffer preference, background opening/reuse, revision return, Ask write rejection, missing files, traversal/symlink escapes, binary files, FIFOs, size limits, cancellation and project changes. The existing SynEdit tests continue to cover edit revision checks and Undo. Full-suite results are recorded in `/tmp/laz-workspace-inspection`.
+
+Validation for this step: all 18 test programs and the assistant package build passed. The final bounded file-scan change also passed a targeted workspace test and package rebuild. No live model request was needed for these adapter tests.

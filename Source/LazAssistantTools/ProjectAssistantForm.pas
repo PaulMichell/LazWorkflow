@@ -2694,7 +2694,8 @@ Begin
             'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
       End;
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
-    'Read buffers before editing; use returned revisions. Only open editor buffers are currently accessible. ' +
+    'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
+    'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Ask and Plan are read-only; Build allows explicit buffer edits, saves and saved-input builds. ' +
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +

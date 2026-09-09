@@ -15,6 +15,10 @@ Type
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Virtual; Abstract;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Virtual; Abstract;
     Function Describe: String; Virtual; Abstract;
+    Function CanInspectFiles: Boolean; Virtual;
+    Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -46,6 +50,14 @@ Uses fpjson, jsonparser, AssistantProtocol;
 Const MaxBufferBytes = 1048576; MaxSnapshotBytes = 8388608; MaxSnapshots = 64;
 Function Quoted(Const S: String): String;
 Begin Result := '"' + JsonEscapeText(S) + '"'; End;
+Function TAssistantWorkspaceAdapter.CanInspectFiles: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'File inspection unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Directory inspection unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.OpenBuffer(Const Path: String; Out ErrorText: String): Boolean;
+Begin ErrorText := 'Opening buffers unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -132,8 +144,23 @@ Begin
         End;
       If Tool = 'lazarus_project_info' Then
         Begin ResultText := FAdapter.Describe; Exit(True); End;
+      If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
+        (Tool = 'lazarus_open_buffer') Then
+        Begin
+          If Not FAdapter.CanInspectFiles Then
+            Begin ErrorText := 'Project file inspection unavailable.'; Exit; End;
+          Node := Args.Find('path');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or
+            ((Tool <> 'lazarus_list_directory') And (Trim(Node.AsString) = '')) Then
+            Begin ErrorText := 'A project path is required.'; Exit; End;
+          If Tool = 'lazarus_read_file' Then
+            Begin Result := FAdapter.ReadFile(Arguments, ResultText, ErrorText); Exit; End;
+          If Tool = 'lazarus_list_directory' Then
+            Begin Result := FAdapter.ListDirectory(Arguments, ResultText, ErrorText); Exit; End;
+          If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
+        End;
       If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
-        (Tool <> 'lazarus_save_buffer') Then
+        (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') Then
         Begin ErrorText := 'Tool is not registered with the IDE broker.'; Exit; End;
       Node := Args.Find('path');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
@@ -141,7 +168,7 @@ Begin
       If Not FAdapter.ReadBuffer(Node.AsString, Path, Text, ErrorText) Then Exit;
       If Length(Text) > MaxBufferBytes Then
         Begin ErrorText := 'Buffer exceeds the supported size.'; Exit; End;
-      If Tool = 'lazarus_read_buffer' Then
+      If (Tool = 'lazarus_read_buffer') Or (Tool = 'lazarus_open_buffer') Then
         Begin
           Revision := Remember(Path, Text);
           If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;
@@ -197,11 +224,16 @@ Begin
 End;
 Function TAssistantToolBroker.ToolsJson: String;
 Const ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
+  FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
   SaveSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"}},"required":["path","revision"],"additionalProperties":false}';
 Begin
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the active Lazarus project and open buffers.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text including unsaved changes and get a revision token.","inputSchema":' + ReadSchema + '}';
+  If FAdapter.CanInspectFiles Then Result := Result +
+    ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
+    '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
+    '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. Return current text and an edit revision; does not create or save files.","inputSchema":' + ReadSchema + '}';
   If FAllowEdits Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.","inputSchema":' + SaveSchema + '}';

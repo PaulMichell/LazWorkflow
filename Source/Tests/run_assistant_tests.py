@@ -37,7 +37,7 @@ def main():
              'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
-                  'AssistantEditorEditsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
+                  'AssistantEditorEditsTest', 'AssistantWorkspaceTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
     failures = []
 
     def run(label, command):
