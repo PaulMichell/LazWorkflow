@@ -777,7 +777,7 @@ Var
   ToolsHint: String;
 Begin
   Case ActiveMode Of
-    amPlan: ToolsHint := 'writes the plan file · will not edit sources';
+    amPlan: ToolsHint := 'creates and edits Markdown · will not edit sources';
     amBuild: ToolsHint := 'edits project files and compiles';
   Else
     ToolsHint := 'explains and inspects · will not write files';
@@ -2688,7 +2688,10 @@ Begin
   FCodexIdentity := FCodexWorkspace.Identity;
   FCodexBroker.OnApproval := Nil;
   If FCodexApproval = 'ask' Then FCodexBroker.OnApproval := @ApproveCodexTool;
-  FCodexBroker.BeginRun(ActiveMode = amBuild);
+  Case ActiveMode Of
+    amBuild: FCodexBroker.BeginRun(awsProject);
+    amPlan: FCodexBroker.BeginRun(awsMarkdown);
+  Else FCodexBroker.BeginRun(awsReadOnly); End;
   RefreshFromConfig;
   Recap := '';
   If Assigned(ProjectAssistantConversation) Then
@@ -2705,7 +2708,8 @@ Begin
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
-    'Ask and Plan are read-only; Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
+    'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
+    'Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
     'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +

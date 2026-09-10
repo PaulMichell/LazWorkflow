@@ -8,6 +8,7 @@ Unit AssistantToolBroker;
 Interface
 Uses Classes, SysUtils;
 Type
+  TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject);
   TAssistantWorkspaceAdapter = Class
   Public
     Function Identity: String; Virtual; Abstract;
@@ -15,6 +16,7 @@ Type
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Virtual; Abstract;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Virtual; Abstract;
     Function Describe: String; Virtual; Abstract;
+    Function IsMarkdownPath(Const Path: String): Boolean; Virtual;
     Function CanInspectFiles: Boolean; Virtual;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -36,15 +38,17 @@ Type
     FAdapter: TAssistantWorkspaceAdapter; { borrowed; broker must be destroyed first }
     FOwner: TThreadID;
     FRunId, FIdentity: String;
-    FCancelled, FAllowEdits: Boolean;
+    FCancelled: Boolean;
+    FWriteScope: TAssistantWriteScope;
     FRevision: Integer;
     FSnapshots: Array Of TBrokerSnapshot;
     FOnApproval: TAssistantToolApproval;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
+    Function CanWritePath(Const Path: String): Boolean;
     Function Remember(Const Path, Text: String): String;
   Public
     Constructor Create(Adapter: TAssistantWorkspaceAdapter);
-    Function BeginRun(AllowEdits: Boolean): String;
+    Function BeginRun(WriteScope: TAssistantWriteScope): String;
     Procedure Cancel;
     Function Execute(Const RunId, Tool, Arguments: String;
       Out ResultText, ErrorText: String): Boolean;
@@ -57,6 +61,17 @@ Uses fpjson, jsonparser, AssistantProtocol;
 Const MaxBufferBytes = 1048576; MaxSnapshotBytes = 8388608; MaxSnapshots = 64;
 Function Quoted(Const S: String): String;
 Begin Result := '"' + JsonEscapeText(S) + '"'; End;
+Function TAssistantWorkspaceAdapter.IsMarkdownPath(Const Path: String): Boolean;
+Var Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '.md') Or (Ext = '.markdown') Or (Ext = '.mdown');
+End;
+Function TAssistantToolBroker.CanWritePath(Const Path: String): Boolean;
+Begin
+  Result := (FWriteScope = awsProject) Or
+    ((FWriteScope = awsMarkdown) And FAdapter.IsMarkdownPath(Path));
+End;
 Function TAssistantWorkspaceAdapter.CanInspectFiles: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
@@ -86,7 +101,7 @@ Begin
   FOwner := GetCurrentThreadID;
   FCancelled := True;
 End;
-Function TAssistantToolBroker.BeginRun(AllowEdits: Boolean): String;
+Function TAssistantToolBroker.BeginRun(WriteScope: TAssistantWriteScope): String;
 Var Id: TGuid;
 Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
@@ -96,7 +111,7 @@ Begin
   FRunId := GUIDToString(Id);
   FIdentity := FAdapter.Identity;
   FCancelled := False;
-  FAllowEdits := AllowEdits;
+  FWriteScope := WriteScope;
   FRevision := 0;
   SetLength(FSnapshots, 0);
   Result := FRunId;
@@ -137,6 +152,8 @@ Begin
     effect; adapters also compare the approved buffer text at mutation time. }
   If FCancelled Or (FRunId <> RunId) Or (FAdapter.Identity <> FIdentity) Then
     Begin ErrorText := 'Workspace/run changed or was cancelled during approval.'; Exit; End;
+  If (Path <> '') And Not CanWritePath(Path) Then
+    Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
   Result := True;
 End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
@@ -160,12 +177,16 @@ Begin
       Args := TJSONObject(Data);
       If Tool = 'lazarus_create_file' Then
         Begin
-          If Not FAllowEdits Or Not FAdapter.CanCreateFiles Then
-            Begin ErrorText := 'New file creation requires Build mode and a supported workspace.'; Exit; End;
+          If (FWriteScope = awsReadOnly) Or Not FAdapter.CanCreateFiles Then
+            Begin ErrorText := 'New file creation requires Plan or Build mode and a supported workspace.'; Exit; End;
           Node := Args.Find('path');
           If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
             Begin ErrorText := 'A new project file path is required.'; Exit; End;
+          If Not CanWritePath(Node.AsString) Then
+            Begin ErrorText := 'Plan mode can only create Markdown files.'; Exit; End;
           If Not FAdapter.CheckNewFile(Node.AsString, Path, ErrorText) Then Exit;
+          If Not CanWritePath(Path) Then
+            Begin ErrorText := 'Plan mode can only create Markdown files.'; Exit; End;
           Node := Args.Find('text');
           If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
             Begin ErrorText := 'File text is required.'; Exit; End;
@@ -177,7 +198,7 @@ Begin
         End;
       If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Then
         Begin
-          If Not FAllowEdits Or Not FAdapter.CanBuild Then
+          If (FWriteScope <> awsProject) Or Not FAdapter.CanBuild Then
             Begin ErrorText := 'Build tools are unavailable in this mode.'; Exit; End;
           If Tool = 'lazarus_start_build' Then
             Begin
@@ -220,8 +241,8 @@ Begin
           ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}';
           Exit(True);
         End;
-      If Not FAllowEdits Then
-        Begin ErrorText := 'Buffer changes and saves require Build mode.'; Exit; End;
+      If Not CanWritePath(Node.AsString) Or Not CanWritePath(Path) Then
+        Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
       Revision := Args.Get('revision', ''); Index := -1;
       For I := 0 To High(FSnapshots) Do
         If (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
@@ -274,19 +295,22 @@ Const ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"re
   FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
   SaveSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"}},"required":["path","revision"],"additionalProperties":false}';
+Var WriteNote: String;
 Begin
+  WriteNote := '';
+  If FWriteScope = awsMarkdown Then WriteNote := ' Plan mode: only .md, .markdown and .mdown files are writable.';
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the active Lazarus project and open buffers.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text including unsaved changes and get a revision token.","inputSchema":' + ReadSchema + '}';
   If FAdapter.CanInspectFiles Then Result := Result +
     ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
     '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
     '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. Return current text and an edit revision; does not create or save files.","inputSchema":' + ReadSchema + '}';
-  If FAllowEdits Then Result := Result +
-    ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.","inputSchema":' + ChangeSchema + '},' +
-    '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.","inputSchema":' + SaveSchema + '}';
-  If FAllowEdits And FAdapter.CanCreateFiles Then Result := Result +
-    ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
-  If FAllowEdits And FAdapter.CanBuild Then Result := Result +
+  If FWriteScope <> awsReadOnly Then Result := Result +
+    ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
+    '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
+  If (FWriteScope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
+    ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
+  If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of saved project inputs. Refuses dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Get asynchronous build diagnostics and observed-input manifest. A compiler exit code is not test or full-source validation.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}';
   Result := Result + ']';

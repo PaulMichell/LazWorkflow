@@ -73,7 +73,7 @@ Begin
   ApprovalCombo.Items.Add('Always: allow registered tools'); ApprovalCombo.ItemIndex := 0;
   LabelControl := TLabel.Create(Self); LabelControl.Parent := Self; LabelControl.AutoSize := False;
   LabelControl.SetBounds(16, 215, 625, 54); LabelControl.WordWrap := True;
-  LabelControl.Caption := 'Refresh models to discover supported reasoning levels. Ask and Plan stay read-only. Auto and Always currently allow the same bounded Lazarus tools.';
+  LabelControl.Caption := 'Refresh models to discover supported reasoning levels. Ask is read-only; Plan can write Markdown. Auto and Always currently allow the same bounded Lazarus tools.';
   SignIn := TButton.Create(Self); SignIn.Parent := Self; SignIn.SetBounds(16, 285, 180, 32);
   SignIn.Caption := 'Sign in with ChatGPT'; SignIn.OnClick := @StartCheck;
   CheckButton := TButton.Create(Self); CheckButton.Parent := Self; CheckButton.SetBounds(210, 285, 180, 32);

@@ -1,6 +1,6 @@
 # Codex implementation: development preview
 
-Updated: 9 September 2026.
+Updated: 10 September 2026.
 
 ## Delivered
 
@@ -60,8 +60,8 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 3. In the **assistant window**, open **Settings → Connections** and select **ChatGPT**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
 4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model, reasoning level and tool usage permissions, click **Use for current chat**, then **OK**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
 5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
-6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. The default Ask approval setting presents edits, saves and builds for review. Ask/Plan expose no write or build tools.
-7. In **Build**, try: `Review this project and save a new Markdown report to Documents/BugReport.md.` With Ask permissions, review the proposed content and choose Allow once. The tool creates missing parent directories and refuses existing destinations; use another filename or revision-checked editor tools for an existing report.
+6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. The default Ask approval setting presents edits, saves and builds for review. Ask exposes no write tools. Plan can create, edit and save Markdown only; source edits and builds require Build mode.
+7. In **Plan** (or Build), try: `Review this project and save a new Markdown report to Documents/BugReport.md.` With Ask permissions, review the proposed content and choose Allow once. The tool creates missing parent directories and refuses existing destinations; use another filename or revision-checked editor tools for an existing report.
 8. With project and editor changes saved, request a build and ask for its diagnostics. The pilot uses `lazbuild` asynchronously; a successful exit is deliberately not reported as fully source-verified.
 9. Test **Stop**, a follow-up prompt, **Hide Tool Use** in the assistant View menu, and selecting Grok under **Settings → Connections** while idle.
 
@@ -75,7 +75,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening and new text-file creation are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode returns its plan in the answer.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening and new text-file creation are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode can save and revise Markdown plans through the broker.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -109,7 +109,7 @@ The [App Server documentation](https://learn.chatgpt.com/docs/app-server) specif
 
 ## Project inspection tools (9 September 2026)
 
-The shared broker now advertises `lazarus_list_directory`, `lazarus_read_file` and `lazarus_open_buffer` when its adapter supports project inspection. They use the same run/project identity and cancellation checks as buffer edits. Ask and Plan can list, read and open tabs; changing or saving contents still requires Build.
+The shared broker now advertises `lazarus_list_directory`, `lazarus_read_file` and `lazarus_open_buffer` when its adapter supports project inspection. They use the same run/project identity and cancellation checks as buffer edits. Ask and Plan can list, read and open tabs. Since 10 September, Plan can change and save Markdown; other file changes require Build.
 
 File reading reuses the existing native bounded read helper, including unsaved-buffer preference, line ranges, truncation information and the 48,000-character output cap. Directory listings reuse the existing 400-entry cap. The IDE adapter validates project scope before reading or opening. Closed files must be regular files of at most 1 MiB; binary/UTF-16 files containing NUL are rejected. New editor tabs open in the background without loading designer resources, creating missing files or saving anything. Opening an already-open file preserves its unsaved buffer. `lazarus_open_buffer` returns a revision for subsequent buffer operations; paged `lazarus_read_file` results are not edit revisions.
 
@@ -129,6 +129,14 @@ The assistant Backend menu has been removed. All saved connections are managed i
 
 ## New project file creation (9 September 2026)
 
-`lazarus_create_file` now supports new reports and other project text files in Build mode. It creates missing directories, applies the selected connection's approval policy, refuses existing disk/editor content and publishes only a complete file. It does not add files to the Lazarus project or save existing editor buffers. Linux directory handles and atomic no-overwrite publication enforce this boundary. Ask/Plan expose no creation tool. See the [progress report](LazAssistantTools-Implementation-Progress.md) for filesystem limits and regression coverage.
+`lazarus_create_file` now supports new reports and other project text files in Build mode. It creates missing directories, applies the selected connection's approval policy, refuses existing disk/editor content and publishes only a complete file. It does not add files to the Lazarus project or save existing editor buffers. Linux directory handles and atomic no-overwrite publication enforce this boundary. Ask exposes no creation tool; Plan supports Markdown creation as of 10 September. See the [progress report](LazAssistantTools-Implementation-Progress.md) for filesystem limits and regression coverage.
 
 Validation: all 21 assistant test programs and the package build passed; logs: `/tmp/laz-assistant-report-creation`. Tests use isolated files, mock IDE interfaces and fake runtime processes; the live report prompt remains a user acceptance check after rebuilding/restarting Lazarus.
+
+## Markdown writes in Plan mode (10 September 2026)
+
+ChatGPT Plan mode now matches the native Grok behavior: it can create and edit project Markdown documents (`.md`, `.markdown`, `.mdown`, case-insensitive). New documents use `lazarus_create_file`; existing documents use `lazarus_open_buffer`/`lazarus_read_buffer`, `lazarus_replace_buffer` with the current revision, and `lazarus_save_buffer` to persist the exact edited text. Plan cannot create or save sources/forms/project files, or start builds. Ask remains read-only. All connection approval settings continue to apply.
+
+The broker now records an explicit read-only, Markdown or project write scope instead of a Boolean edit flag. The IDE adapter checks both the document name and resolved target for Markdown, including after approval, so a Markdown-named symlink cannot disguise a source file or escape the project. Tool descriptions, the managed prompt and the mode hint reflect the same policy.
+
+Validation: all 21 test programs and the assistant package build passed with range/overflow checks. Logs: `/tmp/laz-plan-markdown`. No live model request was made; rebuild/restart Lazarus to test the updated Plan workflow.

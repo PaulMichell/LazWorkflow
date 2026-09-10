@@ -13,6 +13,7 @@ Type
     FBuildIdentity, FBuildMode: String;
   Public
     Destructor Destroy; Override;
+    Function IsMarkdownPath(Const Path: String): Boolean; Override;
     Function CanInspectFiles: Boolean; Override;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -41,6 +42,18 @@ Begin
   If Assigned(FBuild) Then FBuild.Cancel;
   FBuild := Nil;
   SetLength(FBuildInputs, 0);
+End;
+Function TAssistantIDEWorkspace.IsMarkdownPath(Const Path: String): Boolean;
+Var PhysicalPath, Resolved, ErrorText: String;
+Begin
+  Result := False;
+  If Not Inherited IsMarkdownPath(Path) Then Exit;
+  { A Markdown-named symlink must not permit changing a source file. Check
+    again after approval, since a link may have changed while the dialog ran. }
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then Exit;
+  PhysicalPath := GetPhysicalFilename(Resolved, pfeOriginal);
+  If PhysicalPath = '' Then Exit;
+  Result := Inherited IsMarkdownPath(PhysicalPath);
 End;
 Function TAssistantIDEWorkspace.CanInspectFiles: Boolean;
 Begin Result := True; End;

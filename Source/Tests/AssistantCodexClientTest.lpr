@@ -120,7 +120,7 @@ Begin
   Broker := TAssistantToolBroker.Create(Workspace);
   Run := Nil;
   Try
-    RunId := Broker.BeginRun(False);
+    RunId := Broker.BeginRun(awsReadOnly);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
       'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
     Run.Start;
@@ -135,7 +135,7 @@ Begin
     Check('worker streams answer snapshot', Snapshot.Content = '**text**');
     Check('worker publishes reasoning for the UI', Pos('Final-only summary', Snapshot.Thinking) > 0);
     Run.Free; Run := Nil;
-    RunId := Broker.BeginRun(False);
+    RunId := Broker.BeginRun(awsReadOnly);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
       'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
     Run.Start; Run.Cancel; Broker.Cancel;

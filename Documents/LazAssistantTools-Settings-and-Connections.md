@@ -19,7 +19,7 @@ Each ChatGPT connection has its own reasoning level and usage permissions. **Che
 - **Auto:** allow the registered project tools within the active mode.
 - **Always:** allow registered tools without prompts. Because the current Codex registry contains only bounded project tools, Auto and Always currently have the same effect. Neither enables arbitrary runtime tools.
 
-Ask and Plan modes remain read-only under all three permission choices. Runtime isolation and subscription-only authentication are independent of this setting. Approval is followed by run/project validation; buffer adapters still compare the approved text immediately before mutation. Build status polling does not prompt again. Settings cannot change while a chat request is running.
+Ask remains read-only under all three permission choices. Plan can create, edit and save project Markdown files; other file changes and builds require Build mode. Runtime isolation and subscription-only authentication are independent of this setting. Approval is followed by run/project validation; buffer adapters still compare the approved text immediately before mutation. Build status polling does not prompt again. Settings cannot change while a chat request is running.
 
 ## Connection identity and persistence
 

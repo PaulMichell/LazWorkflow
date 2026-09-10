@@ -26,6 +26,8 @@ Type
     Editor: TTestEditor;
     ProjectId: String;
     ApprovalAction, ApprovalCalls, Builds: Integer;
+    SaveSucceeds: Boolean;
+    SavedText: String;
     ApprovalBroker: TAssistantToolBroker;
     Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
     Function Identity: String; Override;
@@ -54,7 +56,10 @@ Begin CanonicalPath := Path; Text := Editor.SourceText; ErrorText := ''; Result 
 Function TBrokerWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
 Begin Result := ApplyAssistantEditorText(Editor, ExpectedText, NewText, ErrorText); End;
 Function TBrokerWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
-Begin ErrorText := 'Injected save failure'; Result := False; End;
+Begin
+  Result := SaveSucceeds; ErrorText := '';
+  If Result Then SavedText := ExpectedText Else ErrorText := 'Injected save failure';
+End;
 Function TBrokerWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
 Function TBrokerWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -98,7 +103,7 @@ Begin
   Try
     Original := Editor.SourceText;
     Changed := StringReplace(Original, 'b', 'broker edit', []);
-    Run := Broker.BeginRun(True);
+    Run := Broker.BeginRun(awsProject);
     Check('broker reads unsaved IDE text', Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err));
     Data := GetJSON(Reply);
     Try
@@ -118,16 +123,16 @@ Begin
     Editor.Syn.Undo;
     Check('broker edit is one Undo operation', Editor.SourceText = Original);
     Check('Undo invalidates model revision', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
-    OldRun := Run; Run := Broker.BeginRun(False);
+    OldRun := Run; Run := Broker.BeginRun(awsReadOnly);
     Check('old run rejected', Not Broker.Execute(OldRun, 'lazarus_project_info', '{}', Reply, Err));
     Check('Ask mode advertises no mutation tool', Pos('lazarus_replace_buffer', Broker.ToolsJson) = 0);
     Check('Ask mode rejects mutation', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
     Check('Ask mode rejects edits without requesting approval', Workspace.ApprovalCalls = 3);
     Workspace.ProjectId := 'project-2';
     Check('project switch rejects tools', Not Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err));
-    Run := Broker.BeginRun(True); Broker.Cancel;
+    Run := Broker.BeginRun(awsProject); Broker.Cancel;
     Check('cancelled run rejects tools', Not Broker.Execute(Run, 'lazarus_project_info', '{}', Reply, Err));
-    Run := Broker.BeginRun(True);
+    Run := Broker.BeginRun(awsProject);
     Check('unknown tool has no fallback', Not Broker.Execute(Run, 'write_file', '{}', Reply, Err));
     Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
     Data := GetJSON(Reply);
@@ -141,7 +146,7 @@ Begin
       Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err)
       And (Pos('user edit during approval', Editor.SourceText) = 1));
     Editor.Syn.Text := Original;
-    Run := Broker.BeginRun(True);
+    Run := Broker.BeginRun(awsProject);
     Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
     Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
     Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
@@ -150,20 +155,47 @@ Begin
       Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Original)
       And (Pos('during approval', Err) > 0));
     Workspace.ApprovalAction := 3;
-    Run := Broker.BeginRun(True);
+    Run := Broker.BeginRun(awsProject);
     Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
     Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
     Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
     Check('cancellation during approval blocks edit',
       Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Original)
       And (Pos('during approval', Err) > 0));
-    Run := Broker.BeginRun(True); Workspace.ApprovalCalls := 0; Workspace.ApprovalAction := 0;
+    Run := Broker.BeginRun(awsProject); Workspace.ApprovalCalls := 0; Workspace.ApprovalAction := 0;
     Check('declined build does not launch compiler', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 0));
     Workspace.ApprovalAction := 1;
     Check('approved build launches once', Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
     Check('polling build status needs no new approval', Broker.Execute(Run, 'lazarus_build_status', '{}', Reply, Err) And (Workspace.ApprovalCalls = 2));
-    Run := Broker.BeginRun(False); Broker.OnApproval := Nil;
+    Run := Broker.BeginRun(awsReadOnly); Broker.OnApproval := Nil;
     Check('automatic approval cannot enable builds in Ask mode', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
+    Run := Broker.BeginRun(awsMarkdown); Broker.OnApproval := @Workspace.Approve;
+    Workspace.ApprovalAction := 0; Workspace.ApprovalCalls := 0;
+    Check('Plan advertises Markdown edits and saves', (Pos('lazarus_replace_buffer', Broker.ToolsJson) > 0)
+      And (Pos('lazarus_save_buffer', Broker.ToolsJson) > 0) And (Pos('Plan mode: only .md', Broker.ToolsJson) > 0));
+    Check('Plan does not advertise builds', Pos('lazarus_start_build', Broker.ToolsJson) = 0);
+    Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"Plan.MD"}', Reply, Err);
+    Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+    Args := '{"path":"Plan.MD","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Check('Plan Markdown edit still needs approval', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err)
+      And (Editor.SourceText = Original) And (Workspace.ApprovalCalls = 1));
+    Workspace.ApprovalAction := 1;
+    Check('Plan edits Markdown with exact revision', Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Changed));
+    Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+    Check('Plan rejects replayed Markdown revision', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
+    Workspace.SaveSucceeds := True;
+    Check('Plan explicitly saves changed Markdown', Broker.Execute(Run, 'lazarus_save_buffer',
+      '{"path":"Plan.MD","revision":"' + JsonEscapeText(Revision) + '"}', Reply, Err) And (Workspace.SavedText = Changed));
+    Editor.Syn.Undo; Check('Plan Markdown edit retains Undo', Editor.SourceText = Original);
+    Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
+    Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+    Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+    Broker.OnApproval := Nil;
+    Check('Plan rejects source edit even with valid revision and automatic approval', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err) And (Editor.SourceText = Original));
+    Check('Plan rejects source save even with valid revision', Not Broker.Execute(Run, 'lazarus_save_buffer', Args, Reply, Err));
+    Check('Plan rejects builds under automatic approval', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
+    Check('Markdown extensions match native Plan tools', Workspace.IsMarkdownPath('plan.markdown') And Workspace.IsMarkdownPath('plan.mdown') And Not Workspace.IsMarkdownPath('plan.md.pas'));
+
   Finally Broker.Free; Workspace.Free; End;
 End;
 Var Ed: TTestEditor; Host: TForm; Before, UserText, Changed, Err: String;

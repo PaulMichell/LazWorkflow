@@ -96,7 +96,7 @@ Begin
   Workspace := TAssistantIDEWorkspace.Create; Broker := TAssistantToolBroker.Create(Workspace);
   Approval := TFileApproval.Create; Approval.Manager := Manager; Approval.Broker := Broker;
   Try
-    Run := Broker.BeginRun(False);
+    Run := Broker.BeginRun(awsReadOnly);
     Check('inspection tools advertised in Ask', Pos('lazarus_read_file', Broker.ToolsJson) > 0);
     Check('Ask has no create tool', Pos('lazarus_create_file', Broker.ToolsJson) = 0);
     Check('Ask rejects file creation', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"report.md","text":"report"}', Reply, Err) And Not FileExists(Root + '/report.md'));
@@ -122,7 +122,7 @@ Begin
     Stream := TFileStream.Create(Root + '/large.pas', fmCreate);
     Try Stream.Size := 1048577; Finally Stream.Free; End;
     Check('oversized file refused', Not Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"large.pas"}', Reply, Err));
-    Run := Broker.BeginRun(True); Broker.OnApproval := @Approval.Approve;
+    Run := Broker.BeginRun(awsProject); Broker.OnApproval := @Approval.Approve;
     Check('Build advertises file creation', Pos('lazarus_create_file', Broker.ToolsJson) > 0);
     Check('declined report has no file or directory effect', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"# Findings"}', Reply, Err)
       And Not DirectoryExists(Root + '/Documents') And (Approval.SeenText = '# Findings'));
@@ -141,12 +141,27 @@ Begin
     Check('cancel during approval prevents file creation', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"cancelled.md","text":"report"}', Reply, Err) And Not FileExists(Root + '/cancelled.md'));
     Broker.Cancel;
     Check('cancel blocks file inspection', Not Broker.Execute(Run, 'lazarus_list_directory', '{"path":"."}', Reply, Err));
-    Run := Broker.BeginRun(False); Project.ProjectFile := Root + '/other.lpi';
+    Run := Broker.BeginRun(awsMarkdown); Approval.Action := 0;
+    Check('Plan advertises new file tool without builds', (Pos('lazarus_create_file', Broker.ToolsJson) > 0) And (Pos('lazarus_start_build', Broker.ToolsJson) = 0));
+    Check('Plan creation can be declined', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Plan.md","text":"# Plan"}', Reply, Err) And Not FileExists(Root + '/Documents/Plan.md'));
+    Approval.Action := 1;
+    Check('Plan creates Markdown report', Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Plan.md","text":"# Plan"}', Reply, Err) And FileExists(Root + '/Documents/Plan.md'));
+    Broker.OnApproval := Nil;
+    Check('Plan cannot create Pascal source', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.pas","text":"unit New;"}', Reply, Err) And Not FileExists(Root + '/new.pas'));
+    Check('Plan cannot create form or project files', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.lfm","text":"object"}', Reply, Err)
+      And Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.lpi","text":"<project/>"}', Reply, Err));
+    fpSymlink(PChar(Root + '/closed.pas'), PChar(Root + '/source-alias.md'));
+    Check('Markdown symlink cannot disguise source', Not Workspace.IsMarkdownPath(Root + '/source-alias.md'));
+    Manager.Editor.Path := Root + '/source-alias.md';
+    Check('Plan rejects source behind Markdown alias', Not Broker.Execute(Run, 'lazarus_save_buffer', '{"path":"source-alias.md","revision":"invalid"}', Reply, Err) And (Pos('Markdown', Err) > 0));
+    Check('Plan cannot escape project with Markdown extension', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"../outside.md","text":"# Plan"}', Reply, Err));
+    Run := Broker.BeginRun(awsReadOnly); Project.ProjectFile := Root + '/other.lpi';
     Check('project switch blocks file inspection', Not Broker.Execute(Run, 'lazarus_read_file', '{"path":"closed.pas"}', Reply, Err));
   Finally
     Approval.Free; Broker.Free; Workspace.Free;
     LazarusIDE := Nil; SourceEditorManagerIntf := Nil;
     Manager.Editor.Free; Manager.Free; IDE.Free; Project.Free;
+    DeleteFile(Root + '/source-alias.md'); DeleteFile(Root + '/Documents/Plan.md');
     DeleteFile(Root + '/Documents/Review.md'); RemoveDir(Root + '/Documents'); DeleteFile(Root + '/race.md');
     DeleteFile(Root + '/binary');
     DeleteFile(Root + '/large.pas'); DeleteFile(Root + '/pipe'); DeleteFile(Root + '/escape');

@@ -134,6 +134,14 @@ Build mode now exposes `lazarus_create_file` for new project text files, includi
 
 The Linux implementation creates missing parent directories through directory handles without following child symlinks. It writes and flushes a temporary sibling, then uses atomic hard-link publication which cannot replace an existing destination. Failed writes do not publish a partial report. Parent directories created during an approved operation may remain empty if a later filesystem operation fails. Filesystems that do not support hard links fail without overwriting; other operating systems do not advertise this tool yet.
 
-Creation explicitly writes a new file to disk. It does not open an editor, modify project membership, save other buffers or compile. Existing-file edits still require opening/reading a buffer and presenting its revision. Ask and Plan remain read-only, so a user who wants a report saved should use Build mode.
+Creation explicitly writes a new file to disk. It does not open an editor, modify project membership, save other buffers or compile. Existing-file edits still require opening/reading a buffer and presenting its revision. Ask remains read-only. Since the Plan-mode correction below, a user can save Markdown reports in Plan or Build mode.
 
 Tests cover exact UTF-8 content, empty files, nested paths, refusal to overwrite, temporary-file cleanup, traversal and symlink rejection, size/binary limits, approval denial, concurrent destination creation, an editor appearing during approval, cancellation and mode restrictions. All 21 test programs and the full assistant package build passed with range/overflow checks. Full validation logs: `/tmp/laz-assistant-report-creation`. No live model call was made.
+
+## Plan-mode Markdown correction (10 September 2026)
+
+Enabled Markdown creation, revision-checked editing and explicit saving in the ChatGPT Plan broker, matching Grok's existing Markdown workspace tools. Supported extensions are `.md`, `.markdown` and `.mdown`, including uppercase variants. Replaced the broker's Boolean write permission with explicit read-only/Markdown/project scopes. Source edits, non-Markdown creation and builds remain Build-only. Connection approvals still apply; switching to Auto or Always does not widen the mode's scope.
+
+Added regressions for approved/declined Markdown creation, editing, saving, stale revisions, Undo, forbidden source edits/saves/creation, rejected builds, project traversal and Markdown symlinks targeting source files. Updated UI hints, tool descriptions and prompts so the model knows it can save a plan rather than only returning it in chat.
+
+Validation: all 21 test programs and the assistant package build passed with range/overflow checks. Logs: `/tmp/laz-plan-markdown`. No live model request was made; rebuild/restart Lazarus to test the updated Plan workflow.
