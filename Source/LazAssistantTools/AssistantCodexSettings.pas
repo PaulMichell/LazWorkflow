@@ -7,10 +7,12 @@ Type
   Private
 
     Status: TLabel;
-    SignIn, CheckButton: TButton;
+    SignIn, CheckButton, BrowseButton, DetectButton: TButton;
     Timer: TTimer;
     Job: TAssistantCodexAccount;
     OpenedUrl, ModelsJson: String;
+    Procedure BrowseRuntime(Sender: TObject);
+    Procedure DetectRuntime(Sender: TObject);
     Procedure ModelChanged(Sender: TObject);
     Procedure StartCheck(Sender: TObject);
     Procedure Tick(Sender: TObject);
@@ -31,7 +33,7 @@ Type
 Procedure ReapCodexWorker(Worker: TThread);
 Implementation
 {$R *.lfm}
-Uses Dialogs, LCLIntf, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile;
+Uses Dialogs, LCLIntf, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
 Type
   TWorkerReaper = Class(TThread)
     Worker: TThread;
@@ -54,8 +56,12 @@ Begin
   Inherited Create(TheOwner);
   SetBounds(0, 0, 660, 310);
   LabelControl := TLabel.Create(Self); LabelControl.Parent := Self;
-  LabelControl.SetBounds(16, 16, 620, 20); LabelControl.Caption := 'Codex executable (preview requires version 0.153.0)';
-  RuntimeEdit := TEdit.Create(Self); RuntimeEdit.Parent := Self; RuntimeEdit.SetBounds(16, 42, 625, 28);
+  LabelControl.SetBounds(16, 16, 620, 20); LabelControl.Caption := 'Codex executable (supported versions: 0.153.0 and 0.153.4)';
+  RuntimeEdit := TEdit.Create(Self); RuntimeEdit.Parent := Self; RuntimeEdit.SetBounds(16, 42, 405, 28);
+  BrowseButton := TButton.Create(Self); BrowseButton.Parent := Self; BrowseButton.Name := 'BrowseRuntimeButton';
+  BrowseButton.SetBounds(430, 42, 96, 28); BrowseButton.Caption := 'Browse…'; BrowseButton.OnClick := @BrowseRuntime;
+  DetectButton := TButton.Create(Self); DetectButton.Parent := Self; DetectButton.Name := 'DetectRuntimeButton';
+  DetectButton.SetBounds(535, 42, 106, 28); DetectButton.Caption := 'Auto-detect'; DetectButton.OnClick := @DetectRuntime;
   LabelControl := TLabel.Create(Self); LabelControl.Parent := Self;
   LabelControl.SetBounds(16, 85, 600, 20); LabelControl.Caption := 'Model';
   ModelCombo := TComboBox.Create(Self); ModelCombo.Style := csDropDownList; ModelCombo.Parent := Self; ModelCombo.SetBounds(16, 110, 625, 28);
@@ -78,7 +84,7 @@ Begin
   SignIn.Caption := 'Sign in with ChatGPT'; SignIn.OnClick := @StartCheck;
   CheckButton := TButton.Create(Self); CheckButton.Parent := Self; CheckButton.SetBounds(210, 285, 180, 32);
   CheckButton.Caption := 'Check / refresh models'; CheckButton.OnClick := @StartCheck;
-  Status := TLabel.Create(Self); Status.Parent := Self; Status.AutoSize := False;
+  Status := TLabel.Create(Self); Status.Name := 'ConnectionStatus'; Status.Parent := Self; Status.AutoSize := False;
   Status.SetBounds(16, 332, 625, 70); Status.WordWrap := True;
   Status.Caption := 'Uses ChatGPT subscription access. API-key billing is disabled.';
   Timer := TTimer.Create(Self); Timer.Interval := 100; Timer.Enabled := False; Timer.OnTimer := @Tick;
@@ -89,14 +95,40 @@ Begin
   If Assigned(Job) Then Begin Job.Cancel; ReapCodexWorker(Job); Job := Nil; End;
   Inherited Destroy;
 End;
+Procedure TCodexConnectionFrame.BrowseRuntime(Sender: TObject);
+Var Dialog: TOpenDialog;
+Begin
+  If Busy Then Exit;
+  Dialog := TOpenDialog.Create(Self);
+  Try
+    Dialog.Title := 'Select the Codex executable';
+    Dialog.Options := [ofFileMustExist, ofPathMustExist, ofEnableSizing];
+    If FileExistsUTF8(RuntimeEdit.Text) Then Dialog.FileName := RuntimeEdit.Text;
+    If Dialog.Execute Then
+      If FileIsExecutable(Dialog.FileName) Then
+        Begin RuntimeEdit.Text := Dialog.FileName; Status.Caption := 'Executable selected. Check this connection to verify compatibility and sign-in.'; End
+      Else Status.Caption := 'The selected file is not executable. Select the Codex program.';
+  Finally Dialog.Free; End;
+End;
+Procedure TCodexConnectionFrame.DetectRuntime(Sender: TObject);
+Var Found: String;
+Begin
+  If Busy Then Exit;
+  Found := FindCodexExecutable;
+  If Found = '' Then
+    Status.Caption := 'Codex was not found on PATH or in the VS Code extension. Use Browse to select an installed executable.'
+  Else
+    Begin RuntimeEdit.Text := Found; Status.Caption := 'Installed executable detected. Check this connection to verify compatibility and sign-in.'; End;
+End;
 Procedure TCodexConnectionFrame.StartCheck(Sender: TObject);
 Begin
   If Assigned(Job) Then Exit;
-  If Not FileExists(RuntimeEdit.Text) Then
-    Begin Status.Caption := 'Select the installed Codex executable first.'; Exit; End;
+  RuntimeEdit.Text := Trim(RuntimeEdit.Text);
+  If Not FileIsExecutable(RuntimeEdit.Text) Then
+    Begin Status.Caption := 'The saved Codex path is missing or is not executable. An extension update may have moved it. Use Auto-detect or Browse, then check again.'; Exit; End;
   Job := TAssistantCodexAccount.Create(RuntimeEdit.Text, Profile, Sender = SignIn);
   OpenedUrl := ''; SignIn.Enabled := False; CheckButton.Enabled := False;
-  RuntimeEdit.Enabled := False;
+  RuntimeEdit.Enabled := False; BrowseButton.Enabled := False; DetectButton.Enabled := False;
   Status.Caption := 'Connecting to Codex…'; Job.Start; Timer.Enabled := True;
 End;
 Function TCodexConnectionFrame.ReasoningEffort: String;
@@ -162,7 +194,7 @@ Begin
     End;
   If Not Value.Done Then Exit;
   Timer.Enabled := False; ReapCodexWorker(Job); Job := Nil;
-  RuntimeEdit.Enabled := True; SignIn.Enabled := True; CheckButton.Enabled := True;
+  BrowseButton.Enabled := True; DetectButton.Enabled := True; RuntimeEdit.Enabled := True; SignIn.Enabled := True; CheckButton.Enabled := True;
   If Value.ErrorText <> '' Then Begin Status.Caption := Value.ErrorText; Exit; End;
   If Value.State <> ccsSubscriptionAuthenticated Then
     Begin Status.Caption := 'ChatGPT sign-in is required for this assistant profile.'; Exit; End;
@@ -179,12 +211,17 @@ Begin
   If Effort <> '' Then Begin EffortCombo.Items.Add(Effort); EffortCombo.ItemIndex := 1; End;
   ApprovalCombo.ItemIndex := 0;
   If Approval = 'auto' Then ApprovalCombo.ItemIndex := 1 Else If Approval = 'always' Then ApprovalCombo.ItemIndex := 2;
-  RuntimeEdit.Enabled := True; SignIn.Enabled := True; CheckButton.Enabled := True;
-  RuntimeEdit.Text := Runtime;
-  If RuntimeEdit.Text = '' Then RuntimeEdit.Text := FindCodexExecutable;
+  BrowseButton.Enabled := True; DetectButton.Enabled := True; RuntimeEdit.Enabled := True; SignIn.Enabled := True; CheckButton.Enabled := True;
+  RuntimeEdit.Text := Trim(Runtime);
   ModelCombo.Items.Clear;
   If Model <> '' Then Begin ModelCombo.Items.Add(Model); ModelCombo.ItemIndex := 0; End;
   Status.Caption := 'Sign in or check this connection. Other connections stay signed in.';
+  If Not FileIsExecutable(RuntimeEdit.Text) Then
+    Begin
+      DetectRuntime(Nil);
+      If (Trim(Runtime) <> '') And (RuntimeEdit.Text <> Trim(Runtime)) Then
+        Status.Caption := 'The saved executable is no longer available. Found the installed Codex; check this connection, then press OK to save its new path.';
+    End;
 End;
 Function TCodexConnectionFrame.Busy: Boolean;
 Begin Result := Assigned(Job); End;

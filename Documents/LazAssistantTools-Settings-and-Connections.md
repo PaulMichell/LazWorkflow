@@ -50,3 +50,11 @@ The full suite contains 20 test programs. New connection tests cover migration, 
 Markdown regressions cover item 9 followed by item 10 with indented bold labels, alongside preservation of standalone literal indentation. Trace view tests check that empty thoughts have no card or saved-history entry, and that a card appears when summary text arrives.
 
 Additional regressions check model-advertised effort choices and removal of unsupported values, per-connection effort/approval persistence, explicit effort serialization through both client and managed worker, approval denial, edits/project changes/cancellation during approval, build approval, and mode restrictions under automatic approval. All 20 programs passed and the full package compiled with range/overflow checks; logs: `/tmp/laz-settings-final`. The GUI tests required local-display access. No live model request was made in this revision.
+
+## Runtime selection and extension updates (10 September 2026)
+
+ChatGPT connection settings now include **Browse** and **Auto-detect** beside the Codex executable. Opening a connection with a missing or non-executable saved path searches the installed locations again, reports any replacement and stages it until OK. Valid custom paths are preserved. The account profile, model, reasoning and approval preferences remain attached to the same connection.
+
+The installed VS Code extension moved from `26.5901.22334` to `26.5903.71938`, which explained the reported missing-executable message. Its runtime is 0.153.4; the preview now accepts that exact version alongside 0.153.0, following offline schema and signed-out startup checks. Other versions still require qualification. See [runtime evidence](LazAssistantTools-Codex-Implementation.md).
+
+The settings regression passed missing-path recovery, existing-path preservation, connection preference retention, Save/Cancel behavior and a captured layout check. All 22 assistant programs and the package build passed across the full run and targeted reruns. After rebuilding/restarting Lazarus, open the ChatGPT connection, use **Check / refresh models**, then **OK** to save the recovered path.

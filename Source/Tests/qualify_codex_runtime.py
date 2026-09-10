@@ -24,8 +24,8 @@ def run(*arguments):
 
 
 version = run('--version')
-if version != 'codex-cli 0.153.0':
-    raise SystemExit('Unsupported runtime version; expected codex-cli 0.153.0')
+if version not in {'codex-cli 0.153.0', 'codex-cli 0.153.4'}:
+    raise SystemExit('Unsupported runtime version; expected codex-cli 0.153.0 or 0.153.4')
 schema_dir = output / 'schema'
 run('app-server', 'generate-json-schema', '--experimental', '--out', str(schema_dir))
 required = {

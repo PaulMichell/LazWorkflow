@@ -220,7 +220,7 @@ Begin
     Check('external MCP configuration rejected', (Client.State = crsFailed) And Not Client.ToolIsolationChecked);
   Finally Client.Free; Env.Free; DeleteFile(Profile + '/config.toml'); RemoveDir(Profile); End;
 End;
-Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord;
+Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord; VersionEnv: TStringList;
 Procedure WaitState(State: TCodexRunState);
 Begin
   Deadline := GetTickCount64 + 3000;
@@ -241,10 +241,25 @@ Begin
   WaitState(crsReady);
 End;
 Begin
-  If ParamStr(1) = '--version' Then Begin WriteLn(QualifiedCodexVersion); Halt; End;
+  If ParamStr(1) = '--version' Then
+    Begin
+      If GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION') <> '' Then WriteLn(GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION'))
+      Else WriteLn(QualifiedCodexVersion);
+      Halt;
+    End;
   If ParamCount > 0 Then Begin FakeRuntime; Halt; End;
   Client := TAssistantCodexClient.Create(500);
   Try
+    VersionEnv := TStringList.Create;
+    Try
+      CodexProfileEnvironment(GetTempDir, VersionEnv);
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := PreviousQualifiedCodexVersion;
+      Check('previous qualified runtime still connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.153.99';
+      Check('unqualified runtime remains rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
+        And (Pos('not qualified', Client.LastError) > 0));
+    Finally VersionEnv.Free; End;
     Check('unauthenticated turn rejected', Not Client.StartTurn('test'));
     Start;
     Check('model discovery queued', Client.ListModels);

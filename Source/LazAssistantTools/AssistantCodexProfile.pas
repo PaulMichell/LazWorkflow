@@ -59,7 +59,7 @@ Begin
   Try
     Repeat
       Result := Root + Search.Name + '/bin/linux-x86_64/codex';
-      If FileExistsUTF8(Result) Then Exit;
+      If FileIsExecutable(Result) Then Exit;
     Until FindNext(Search) <> 0;
   Finally FindClose(Search); End;
   Result := '';

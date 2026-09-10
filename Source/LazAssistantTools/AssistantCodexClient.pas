@@ -2,11 +2,12 @@ Unit AssistantCodexClient;
 
 { Worker-owned managed-runtime protocol. Dynamic tools are surfaced to a
   caller-owned IDE broker; native approvals are rejected, never auto-approved.
-  Qualified protocol: Codex CLI 0.153.0, generated experimental JSON schema. }
+  Qualified protocol: Codex CLI 0.153.0 and 0.153.4, generated experimental JSON schema. }
 {$mode objfpc}{$H+}
 Interface
 Uses Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport;
-Const QualifiedCodexVersion = 'codex-cli 0.153.0';
+Const QualifiedCodexVersion = 'codex-cli 0.153.4';
+  PreviousQualifiedCodexVersion = 'codex-cli 0.153.0';
 Type
   TCodexRunState = (crsDisconnected, crsConnecting, crsReady, crsStartingThread,
     crsStartingTurn, crsRunning, crsCancelling, crsCompleted, crsFailed);
@@ -120,13 +121,13 @@ Begin
     Repeat
       FTransport.Poll;
       While FTransport.TakeFrame(Frame) Do
-        If Trim(Frame) = QualifiedCodexVersion Then VersionOK := True;
+        If (Trim(Frame) = QualifiedCodexVersion) Or (Trim(Frame) = PreviousQualifiedCodexVersion) Then VersionOK := True;
       If VersionOK Or (FTransport.LastError <> '') Then Break;
       Sleep(1);
     Until GetTickCount64 >= Deadline;
     FTransport.Stop;
     If Not VersionOK Then
-      Begin Fail('Codex version is not qualified; expected ' + QualifiedCodexVersion + '.'); Result := False; Exit; End;
+      Begin Fail('Codex version is not qualified; supported versions are 0.153.0 and 0.153.4. Use Settings to select a supported executable.'); Result := False; Exit; End;
     CodexSubscriptionArguments(Args);
     Result := FTransport.Start(Executable, WorkingDirectory, Args, Environment);
   Finally Args.Free; End;

@@ -1,7 +1,7 @@
 Program AssistantSettingsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls,
-  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantConfig;
+  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig;
 Var ConfigRoot: String;
 Type
   TMemoryConfig = Class(TConfigMemStorage)
@@ -32,7 +32,18 @@ Begin
   IDE := TIDE.Create(Nil); LazarusIDE := IDE;
   Frame := TCodexConnectionFrame.Create(Nil);
   Try
-    Frame.LoadConnection(ConfigRoot, '', 'model-one', 'high', 'auto');
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', 'high', 'auto');
+    Check('existing custom executable remains selected', Frame.RuntimeEdit.Text = ParamStr(0));
+    Check('runtime Browse and Auto-detect controls available',
+      Assigned(Frame.FindComponent('BrowseRuntimeButton')) And Assigned(Frame.FindComponent('DetectRuntimeButton')));
+    If FindCodexExecutable <> '' Then
+      Begin
+        Frame.LoadConnection(ConfigRoot, ConfigRoot + '/removed-extension/codex', 'model-one', 'high', 'auto');
+        Check('missing saved executable recovered without changing connection identity',
+          (Frame.RuntimeEdit.Text = FindCodexExecutable) And (Frame.Profile = ConfigRoot)
+          And (Frame.ModelCombo.Text = 'model-one') And (Frame.ReasoningEffort = 'high')
+          And (Pos('no longer available', TLabel(Frame.FindComponent('ConnectionStatus')).Caption) > 0));
+      End;
     Frame.LoadModels('{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}');
     Check('model discovery preserves supported saved reasoning and approval',
       (Frame.ReasoningEffort = 'high') And (Frame.ApprovalMode = 'auto') And (Frame.EffortCombo.Items.Count = 3));

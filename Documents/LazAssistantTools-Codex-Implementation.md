@@ -9,7 +9,7 @@ The assistant window now offers **Settings → Connections → ChatGPT**. This s
 | Layer | Implementation | Evidence |
 | --- | --- | --- |
 | Assistant UI | Settings Connections/General pages; named accounts with independent profiles, model/effort/approval preferences; account work off the IDE thread; streamed tool cards and history | Package build; account/model worker exercised with fake runtime |
-| Runtime qualification | Exact `codex-cli 0.153.0` check before connection; offline experimental-schema inspection and SHA-256 report | `qualify_codex_runtime.py`; actual bundled runtime successfully inspected |
+| Runtime qualification | Exact `codex-cli 0.153.0` / `0.153.4` allowlist before connection; offline experimental-schema inspection and SHA-256 report | `qualify_codex_runtime.py`; actual bundled runtime successfully inspected |
 | Process transport | One owning worker, nonblocking stdin, fragmented JSONL, separate stderr draining, bounded frames/queues, write timeout, cancellation, process-group cleanup, EOF/error handling | `AssistantCodexTransportTest`, including blocked/closed stdin, flooding, truncation and missing executable |
 | Managed client | ChatGPT account gate; explicit login entry point; model discovery; thread/turn requests; streamed text; steering; interruption; dynamic-tool correlation; rejection of unknown approvals, duplicate calls, authentication changes and unexpected returned provider/sandbox policy | `AssistantCodexClientTest` and existing handshake tests |
 | Worker/IDE boundary | Worker owns Codex; IDE thread services one short broker operation at a time; bounded tool handoff; main thread reads snapshots without waiting for the process | Fake runtime → worker → broker → tool result test; cancellation-before-start regression |
@@ -21,11 +21,11 @@ No metered API provider or fallback has been introduced. A recognized ChatGPT ac
 
 ## Runtime evidence
 
-The executable found in this environment is:
+The currently installed executable (after the 10 September extension update) is:
 
-`/home/paul/.vscode/extensions/openai.chatgpt-26.5901.22334-linux-x64/bin/linux-x86_64/codex`
+`/home/paul/.vscode/extensions/openai.chatgpt-26.5903.71938-linux-x64/bin/linux-x86_64/codex`
 
-It reports `codex-cli 0.153.0`. Stable and experimental schemas were generated, and the relevant fields were checked against the implementation. Reproduce the offline check with:
+It reports `codex-cli 0.153.4`. Its experimental schema passed the field checks and the actual Pascal client reached the expected signed-out account state using an isolated temporary profile. Version 0.153.0 remains supported from the earlier qualification. Reproduce the offline check with:
 
 ```sh
 python3 Source/Tests/qualify_codex_runtime.py \
@@ -57,7 +57,7 @@ Complete build evidence requires a dependency-complete immutable snapshot or equ
 
 1. Rebuild the installed `LazAssistantTools` package/IDE and restart Lazarus to load the changed units.
 2. Open a project. Units can be inspected while closed; existing unsaved buffers take precedence over disk.
-3. In the **assistant window**, open **Settings → Connections** and select **ChatGPT**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Select the executable above if discovery is empty or finds a different version.
+3. In the **assistant window**, open **Settings → Connections** and select **ChatGPT**. The dialog searches PATH and the local VS Code ChatGPT extension for Codex. Missing saved paths are rediscovered when the connection opens. Use **Auto-detect** or **Browse** to change the executable, then check the connection and press **OK** to persist it. Valid custom paths are retained.
 4. Click **Sign in with ChatGPT**, complete sign-in in your browser, then select a discovered model, reasoning level and tool usage permissions, click **Use for current chat**, then **OK**. On subsequent visits, **Check / refresh models** checks the existing account without starting a model turn.
 5. In **Ask**, try: `Read the active editor buffer using the Lazarus tools and summarize it. Do not modify anything.` Include a small unsaved comment to confirm that the answer uses the editor rather than disk.
 6. In **Build**, request a small edit to an open unit. Inspect the unsaved edit, use Lazarus Undo, then request another edit to check fresh revisions. Saving is a separate tool operation. The default Ask approval setting presents edits, saves and builds for review. Ask exposes no write tools. Plan can create, edit and save Markdown only; source edits and builds require Build mode.
@@ -154,3 +154,13 @@ Validation: all 22 assistant test programs and the full package build passed wit
 ChatGPT now has `lazarus_find_references` and `lazarus_symbol_context`, available in Ask, Plan and Build alongside declaration lookup. References require an explicit batch of project files and return coverage/failure/truncation metadata. Symbol context includes bounded source/declaration snippets and a CodeTools hint. All require the queried buffer's current revision and preserve unsaved editor content. See [navigation details](LazAssistantTools-CodeTools-Navigation.md).
 
 Validation: all 22 regression programs and the assistant package build passed with range/overflow checks (`/tmp/laz-assistant-references`). Live IDE/model acceptance remains a separate check after rebuilding/restarting Lazarus.
+
+## Extension-update connection recovery (10 September 2026)
+
+A VS Code extension update removed the saved `26.5901.22334` runtime directory and installed `26.5903.71938` with Codex 0.153.4. Settings previously retried the missing saved filename and displayed only “Select the installed Codex executable first.”
+
+Connections now rediscover a missing/non-executable saved path when opened, explain the replacement, and provide Browse and Auto-detect controls. Detection does not launch a model or change the account profile, model, effort or approvals. A working custom executable stays selected; Cancel discards the staged replacement. Executable checks and errors now distinguish path selection from the subsequent compatibility/account check.
+
+The runtime allowlist now includes exactly 0.153.0 and 0.153.4; unknown versions still fail. The installed 0.153.4 passed offline generated-schema checks (`/tmp/laz-codex-1534-qualification`) and an actual `TAssistantCodexClient` startup/account handshake in a fresh signed-out profile. This follows the [official App Server protocol](https://learn.chatgpt.com/docs/app-server); it does not establish full signed-in inference/isolation qualification for this new binary. No credentials were copied and no model request was sent.
+
+All 22 regression programs passed. The settings test and package build were rerun successfully after fixing a declaration-order compilation error in the new controls. GUI capture confirmed the runtime controls fit. Tests cover missing-path recovery, valid custom paths, retained connection values, the new runtime, continued acceptance of 0.153.0, and rejection of unqualified versions. Logs and binaries are under `/tmp/laz-assistant-references`.
