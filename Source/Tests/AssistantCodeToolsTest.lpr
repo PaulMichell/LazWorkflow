@@ -1,7 +1,7 @@
 Program AssistantCodeToolsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, fpjson, jsonparser,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, CodeToolManager, CodeCache, DefineTemplates,
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, SynEdit, Types, CodeToolManager, CodeCache, DefineTemplates,
   AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantProtocol;
 Type
   TProject = Class(TLazProject)
@@ -14,6 +14,15 @@ Type
   Public
     Path, Text: String;
     Code: TCodeBuffer;
+    Syn: TSynEdit;
+    Function GetReadOnly: Boolean; Override;
+    Procedure SelectText(Const StartPos, EndPos: TPoint); Override;
+    Procedure SetCursorTextXY(Const Value: TPoint); Override;
+    Procedure SetSelection(Const Value: String); Override;
+    Procedure BeginUndoBlock; Override;
+    Procedure EndUndoBlock; Override;
+    Procedure BeginUpdate; Override;
+    Procedure EndUpdate; Override;
     Function GetSourceText: String; Override;
     Function GetCodeToolsBuffer: TObject; Override;
   End;
@@ -38,11 +47,22 @@ Type
     Project: TProject;
     Broker: TAssistantToolBroker;
     AfterLookup: Integer;
+    ApprovalAction, ApprovalCalls: Integer;
+    Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
     Procedure ApplyLookupChange;
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
   End;
+Function TObservedWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
+Begin
+  Inc(ApprovalCalls); Result := ApprovalAction <> 0;
+  Case ApprovalAction Of
+    2: Editor.Syn.Text := Editor.Syn.Text + '// approval edit';
+    3: Broker.Cancel;
+    4: Project.Path := Project.Path + '.changed';
+  End;
+End;
 Function TObservedWorkspace.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
 Begin
   Result := Inherited FindDeclaration(Path, Line, Column, ResultText, ErrorText);
@@ -71,7 +91,23 @@ Begin Result := Path; End;
 Function TProject.GetMainFile: TLazProjectFile;
 Begin Result := Nil; End;
 Function TEditor.GetSourceText: String;
-Begin Result := Text; End;
+Begin If Assigned(Syn) Then Result := Syn.Text Else Result := Text; End;
+Function TEditor.GetReadOnly: Boolean;
+Begin Result := Assigned(Syn) And Syn.ReadOnly; End;
+Procedure TEditor.SelectText(Const StartPos, EndPos: TPoint);
+Begin Syn.BlockBegin := StartPos; Syn.BlockEnd := EndPos; End;
+Procedure TEditor.SetCursorTextXY(Const Value: TPoint);
+Begin Syn.LogicalCaretXY := Value; End;
+Procedure TEditor.SetSelection(Const Value: String);
+Begin Syn.SelText := Value; End;
+Procedure TEditor.BeginUndoBlock;
+Begin Syn.BeginUndoBlock; End;
+Procedure TEditor.EndUndoBlock;
+Begin Syn.EndUndoBlock; End;
+Procedure TEditor.BeginUpdate;
+Begin Syn.BeginUpdate; End;
+Procedure TEditor.EndUpdate;
+Begin Syn.EndUpdate; End;
 Function TEditor.GetCodeToolsBuffer: TObject;
 Begin Result := Code; End;
 Function TManager.SourceEditorIntfWithFilename(Const Filename: String): TSourceEditorInterface;
@@ -84,7 +120,7 @@ Begin
   If Assigned(ReentrantWorkspace) Then
     ReentryBlocked := Not ReentrantWorkspace.FindDeclaration(Editor.Path, 7, 6, Reply, Err) And (Pos('busy', Err) > 0);
   Inc(PrepareCalls); Result := Ready;
-  If Result Then Editor.Code.Source := Editor.Text;
+  If Result Then Editor.Code.Source := Editor.SourceText;
 End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
@@ -97,9 +133,18 @@ Begin Data := GetJSON(Value); Try Result := Data.FindPath(Name).Count; Finally D
 Function BoolField(Const Value, Name: String): Boolean;
 Var Data: TJSONData;
 Begin Data := GetJSON(Value); Try Result := Data.FindPath(Name).AsBoolean; Finally Data.Free; End; End;
-Var Root, Reply, Err, Run, Revision, Args, RefArgs, ReferenceLine, DiskDependency: String; Define: TDefineTemplate; Id: TGuid;
+Var Root, Reply, Err, Run, Revision, Args, RefArgs, ReferenceLine, DiskDependency, RenameSource, ApplyArgs, ExpectedText: String; Define: TDefineTemplate; Id: TGuid;
   IDE: TIDE; Project: TProject; Editor: TEditor; Manager: TManager;
   Workspace: TObservedWorkspace; OtherWorkspace: TAssistantIDEWorkspace; Dependency: TCodeBuffer; Broker: TAssistantToolBroker; Calls: Integer; Stream: TFileStream;
+Function PreviewFixture(Const Source, Identifier: String): Boolean;
+Begin
+  Editor.Syn.Text := Source;
+  Run := Broker.BeginRun(awsProject);
+  If Not Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err) Then Exit(False);
+  Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Field(Reply, 'revision')) +
+    '","line":1,"column":' + IntToStr(Pos(Identifier, Source)) + ',"new_name":"LocalCount"}';
+  Result := Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err);
+End;
 Begin
   Application.Initialize; Dependency := Nil;
   CreateGUID(Id); Root := GetTempDir + 'laz-codetools-' + GUIDToString(Id); ForceDirectories(Root);
@@ -298,6 +343,117 @@ Begin
     Run := Broker.BeginRun(awsProject);
     Check('Build also advertises all semantic tools', (Pos('lazarus_find_declaration', Broker.ToolsJson) > 0)
       And (Pos('lazarus_find_references', Broker.ToolsJson) > 0) And (Pos('lazarus_symbol_context', Broker.ToolsJson) > 0));
+    Workspace.AfterLookup := 0;
+    Editor.Syn := TSynEdit.Create(Nil);
+    Try
+      RenameSource := 'unit Example;' + LineEnding + '{$mode objfpc}{$H+}' + LineEnding +
+        'interface' + LineEnding + 'implementation' + LineEnding +
+        'procedure Other;' + LineEnding + 'var Counter: Integer;' + LineEnding +
+        'begin Counter := 1; end;' + LineEnding +
+        'procedure Test;' + LineEnding + 'var Counter: Integer;' + LineEnding +
+        'begin' + LineEnding + '  Counter := 1;' + LineEnding +
+        '  Counter := Counter + 1; // Counter stays in this comment' + LineEnding +
+        '  if ''Counter'' = '''' then;' + LineEnding + 'end;' + LineEnding + 'end.' + LineEnding;
+      Editor.Syn.Text := RenameSource; RenameSource := Editor.Syn.Text;
+      Run := Broker.BeginRun(awsReadOnly);
+      Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
+      Revision := Field(Reply, 'revision');
+      Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Revision) + '","line":11,"column":3,"new_name":"LocalCount"}';
+      If Not Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err) Then
+        Begin WriteLn(Err); Check('real CodeTools local rename preview', False); End;
+      Check('local preview includes declaration and only matching semantic usages',
+        (CountField(Reply, 'rename.changes') = 4) And (Field(Reply, 'rename.oldName') = 'Counter')
+        And (Field(Reply, 'rename.changes[0].line') = '9') And (Editor.Syn.Text = RenameSource)
+        And Not FileExists(Editor.Path));
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Check('Ask previews but cannot apply', (Pos('lazarus_preview_local_rename', Broker.ToolsJson) > 0)
+        And (Pos('lazarus_apply_local_rename', Broker.ToolsJson) = 0)
+        And Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err));
+      Run := Broker.BeginRun(awsMarkdown);
+      Check('Plan previews but cannot apply', (Pos('lazarus_preview_local_rename', Broker.ToolsJson) > 0)
+        And (Pos('lazarus_apply_local_rename', Broker.ToolsJson) = 0)
+        And Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err));
+      Run := Broker.BeginRun(awsProject);
+      Check('preview from previous run expires', Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err));
+      Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
+      Revision := Field(Reply, 'revision');
+      Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Revision) + '","line":11,"column":3,"new_name":"LocalCount"}';
+      Check('Build produces local rename preview', Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err));
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Broker.OnApproval := @Workspace.Approve; Workspace.ApprovalAction := 1;
+      If Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err) Then
+        Begin WriteLn(Err); Check('apply local rename', False); End;
+      ExpectedText := StringReplace(RenameSource, 'var Counter: Integer;' + LineEnding + 'begin' + LineEnding,
+        'var LocalCount: Integer;' + LineEnding + 'begin' + LineEnding, []);
+      ExpectedText := StringReplace(ExpectedText, '  Counter := 1;', '  LocalCount := 1;', []);
+      ExpectedText := StringReplace(ExpectedText, '  Counter := Counter + 1;', '  LocalCount := LocalCount + 1;', []);
+      Check('apply changes only previewed positions without saving', (Editor.Syn.Text = ExpectedText)
+        And Not BoolField(Reply, 'saved') And (Field(Reply, 'revision') <> Revision)
+        And Not FileExists(Editor.Path));
+      Check('preview cannot be replayed', Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err));
+      Editor.Syn.Undo;
+      Check('one native Undo restores entire local rename', Editor.Syn.Text = RenameSource);
+      Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
+      Revision := Field(Reply, 'revision');
+      Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Revision) + '","line":11,"column":3,"new_name":"LocalCount"}';
+      Check('implicit Result identifier rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'Result', []), Reply, Err));
+      Check('implicit Self identifier rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'Self', []), Reply, Err));
+      Check('keyword rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'begin', []), Reply, Err));
+      Check('collision rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'Other', []), Reply, Err));
+      Check('case-only rename rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'counter', []), Reply, Err));
+      Check('invalid identifier rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, 'LocalCount', 'two words', []), Reply, Err));
+      Check('procedure rename rejected', Not Broker.Execute(Run, 'lazarus_preview_local_rename', StringReplace(Args, '"line":11,"column":3', '"line":8,"column":11', []), Reply, Err));
+      For Calls := 0 To 4 Do
+        Begin
+          Project.Path := Root + '/project.lpi'; Editor.Syn.Text := RenameSource;
+          Run := Broker.BeginRun(awsProject);
+          Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
+          Revision := Field(Reply, 'revision');
+          Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Revision) + '","line":11,"column":3,"new_name":"LocalCount"}';
+          Check('prepare approval lifecycle preview', Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err));
+          ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+          Workspace.ApprovalAction := Calls;
+          If Calls = 1 Then Editor.Syn.Text := Editor.Syn.Text + '// edit before apply';
+          Check('denial/stale source/cancel/project change rejects rename ' + IntToStr(Calls),
+            Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
+            And (Pos('LocalCount', Editor.Syn.Text) = 0));
+        End;
+      Project.Path := Root + '/project.lpi'; Broker.OnApproval := Nil;
+      Editor.Syn.Text := StringReplace(RenameSource, '  Counter := 1;', '{$ifdef TEST}  Counter := 1;{$endif}', []);
+      Run := Broker.BeginRun(awsProject);
+      Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
+      Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Field(Reply, 'revision')) + '","line":9,"column":5,"new_name":"LocalCount"}';
+      Check('conditional source cannot produce a partial rename', Not Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err));
+      Check('global var cannot be renamed by local tool', Not PreviewFixture(
+        'unit Example; interface var Counter: Integer; implementation end.', 'Counter'));
+      Check('parameter cannot be renamed by local tool', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test(Counter: Integer); begin Counter := 1; end; end.', 'Counter'));
+      Check('field cannot be renamed by local tool', Not PreviewFixture(
+        'unit Example; interface type TRec = record Counter: Integer; end; implementation end.', 'Counter'));
+      Check('escaped local identifier rejected', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; var &Counter: Integer; begin &Counter := 1; end; end.', '&Counter'));
+      Check('nested capture retained and nested shadow excluded', PreviewFixture(
+        'unit Example; interface implementation procedure Outer; var Counter: Integer; ' +
+        'procedure Inner; begin Counter := 1; end; procedure Shadow; var Counter: Integer; begin Counter := 2; end; ' +
+        'begin Counter := 0; Inner; Shadow; end; end.', 'Counter') And (CountField(Reply, 'rename.changes') = 3));
+      Check('ordinary resource and mode directives are supported', PreviewFixture(
+        'unit Example; (*$mode objfpc*) {$R *.lfm} interface implementation procedure Test; var Counter: Integer; begin Counter := 1; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 2));
+      Check('multiple variable declaration renames one symbol', PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Other, Counter: Integer; begin Counter := Other; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 2));
+      Check('UTF8 and tabs preserve byte locations', PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter: Integer; begin ' + #9 + '{é} Counter := Counter + 1; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 3));
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Check('UTF8 rename applies', Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
+        And (Pos(#9 + '{é} LocalCount := LocalCount + 1;', Editor.Syn.Text) > 0));
+      DiskDependency := 'unit Example; interface implementation procedure Test; var Counter: Integer; begin ';
+      For Calls := 1 To 201 Do DiskDependency := DiskDependency + 'Counter := 1; ';
+      DiskDependency := DiskDependency + 'end; end.';
+      Check('too many occurrences reject whole preview', Not PreviewFixture(DiskDependency, 'Counter')
+        And (Pos('200 occurrences', Err) > 0) And (Pos('LocalCount', Editor.Syn.Text) = 0));
+    Finally Editor.Syn.Free; Editor.Syn := Nil; End;
   Finally
     If Assigned(Dependency) Then Dependency.UnlockAutoDiskRevert;
     Broker.Free; Workspace.Free; OtherWorkspace.Free; LazarusIDE := Nil; SourceEditorManagerIntf := Nil;

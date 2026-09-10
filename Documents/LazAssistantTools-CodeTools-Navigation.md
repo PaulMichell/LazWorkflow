@@ -76,7 +76,7 @@ python3 Source/Tests/run_assistant_tests.py \
 
 ## Remaining work
 
-Reference lookup and symbol context are implemented. Next: reviewable semantic rename/refactoring previews and transactions. Designer transactions and Grok broker migration remain open. Source/build evidence and durable managed continuation remain separate work items. Declaration lookup alone does not establish that a semantic refactoring or build is correct.
+Reference lookup and symbol context are implemented. The first routine-local variable rename preview/apply transaction is now implemented; see [local rename](LazAssistantTools-Local-Rename-Transactions.md). Broader symbol scopes and multi-file transactions remain open. Designer transactions and Grok broker migration remain open. Source/build evidence and durable managed continuation remain separate work items. Declaration lookup alone does not establish that a semantic refactoring or build is correct.
 
 Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.
 

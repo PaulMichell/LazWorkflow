@@ -3,13 +3,13 @@ Unit AssistantSymbolTools;
 {$mode objfpc}{$H+}
 Interface
 Uses Classes;
-Type TAssistantSymbolQuery = (sqDeclaration, sqContext, sqReferences);
+Type TAssistantSymbolQuery = (sqDeclaration, sqContext, sqReferences, sqLocalRename);
 Function QueryAssistantSymbol(Const Path, SourceText: String; Line, Column: Integer;
   Kind: TAssistantSymbolQuery; SearchPaths: TStrings; MaxResults: Integer;
-  Out ResultText, ErrorText: String): Boolean;
+  Out ResultText, ErrorText: String; Const RenameTo: String = ''): Boolean;
 Implementation
 Uses SysUtils, LazUTF8, LazFileUtils, LazIDEIntf, SrcEditorIntf, CodeToolManager,
-  CodeCache, CTUnitGraph, fpjson, AssistantTools
+  CodeCache, CTUnitGraph, fpjson, AssistantTools, AssistantRenamePreview
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const MaxFileBytes = 1048576; MaxSearchBytes = 8388608;
 Var AssistantCodeToolsBusy: Boolean = False;
@@ -73,7 +73,7 @@ Begin
 End;
 Function QueryAssistantSymbol(Const Path, SourceText: String; Line, Column: Integer;
   Kind: TAssistantSymbolQuery; SearchPaths: TStrings; MaxResults: Integer;
-  Out ResultText, ErrorText: String): Boolean;
+  Out ResultText, ErrorText: String; Const RenameTo: String): Boolean;
 Var Editor: TSourceEditorInterface; Code, Target: TCodeBuffer;
   X, Y, TopLine, BlockTop, BlockBottom, I, J, Bytes, OutputBytes: Integer;
   TargetPath, Note, LineText, Resolved, CurrentText, StopReason, Key: String;
@@ -121,8 +121,9 @@ Begin
     LineText := Code.GetLine(Line - 1, False);
     If (Column < 1) Or (Column > Length(LineText)) Or ((Byte(LineText[Column]) And $C0) = $80) Then
       Begin ErrorText := 'Column is outside the line or inside a UTF-8 character.'; Exit; End;
-    Target := Nil;
-    If Not CodeToolBoss.FindDeclaration(Code, Column, Line, Target, X, Y, TopLine, BlockTop, BlockBottom) Then
+    Target := Nil; X := Column; Y := Line;
+    If (Kind = sqLocalRename) And IsVariableDeclaration(Code, X, Y) Then Target := Code;
+    If Not Assigned(Target) And Not CodeToolBoss.FindDeclaration(Code, Column, Line, Target, X, Y, TopLine, BlockTop, BlockBottom) Then
       Begin
         ErrorText := 'CodeTools could not resolve this declaration.';
         If CodeToolBoss.ErrorMessage <> '' Then ErrorText := ErrorText + ' ' + UTF8Copy(CodeToolBoss.ErrorMessage, 1, 2000);
@@ -131,7 +132,9 @@ Begin
     If Not Assigned(Target) Or (Target.Filename = '') Or (X < 1) Or (Y < 1) Or (Y > Target.LineCount) Then
       Begin ErrorText := 'CodeTools returned no declaration location.'; Exit; End;
     InProject := ResolveProjectPath(Target.Filename, TargetPath, Note);
-    If Kind = sqDeclaration Then Root := Location(Target, X, Y, 2000)
+    If Kind = sqLocalRename Then
+      Begin If Not PrepareLocalRename(Code, Target, X, Y, RenameTo, Root, ErrorText) Then Exit; End
+    Else If Kind = sqDeclaration Then Root := Location(Target, X, Y, 2000)
     Else
       Begin
         Root := TJSONObject.Create; Root.Add('declaration', Location(Target, X, Y, 2000));

@@ -23,6 +23,9 @@ Type
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanFindDeclaration: Boolean; Override;
     Function CanInspectSymbols: Boolean; Override;
+    Function CanPreviewRename: Boolean; Override;
+    Function PreviewLocalRename(Const Path: String; Line, Column: Integer; Const NewName: String;
+      Out NewText, PreviewText, ErrorText: String): Boolean; Override;
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
@@ -164,6 +167,21 @@ Function TAssistantIDEWorkspace.CanFindDeclaration: Boolean;
 Begin Result := Assigned(LazarusIDE) And Assigned(CodeToolBoss) And Assigned(SourceEditorManagerIntf); End;
 Function TAssistantIDEWorkspace.CanInspectSymbols: Boolean;
 Begin Result := CanFindDeclaration; End;
+Function TAssistantIDEWorkspace.CanPreviewRename: Boolean;
+Begin Result := CanInspectSymbols; End;
+Function TAssistantIDEWorkspace.PreviewLocalRename(Const Path: String; Line, Column: Integer;
+  Const NewName: String; Out NewText, PreviewText, ErrorText: String): Boolean;
+Var Resolved, Text, Reply: String; Data: TJSONData;
+Begin
+  Result := False; NewText := ''; PreviewText := '';
+  If Not ReadBuffer(Path, Resolved, Text, ErrorText) Then Exit;
+  If Not QueryAssistantSymbol(Resolved, Text, Line, Column, sqLocalRename, Nil, 0, Reply, ErrorText, NewName) Then Exit;
+  Data := GetJSON(Reply);
+  Try
+    NewText := TJSONObject(Data).Get('text', ''); TJSONObject(Data).Delete('text');
+    PreviewText := Data.AsJSON; Result := True;
+  Finally Data.Free; End;
+End;
 Function TAssistantIDEWorkspace.FindDeclaration(Const Path: String; Line, Column: Integer;
   Out ResultText, ErrorText: String): Boolean;
 Var Resolved, Text: String;

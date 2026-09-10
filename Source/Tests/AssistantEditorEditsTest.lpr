@@ -25,7 +25,7 @@ Type
   Public
     Editor: TTestEditor;
     ProjectId: String;
-    ApprovalAction, ApprovalCalls, Builds: Integer;
+    ApprovalAction, ApprovalCalls, Builds, MutationAction: Integer;
     SaveSucceeds: Boolean;
     SavedText: String;
     ApprovalBroker: TAssistantToolBroker;
@@ -54,7 +54,14 @@ Begin Result := ProjectId; End;
 Function TBrokerWorkspace.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
 Begin CanonicalPath := Path; Text := Editor.SourceText; ErrorText := ''; Result := True; End;
 Function TBrokerWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
-Begin Result := ApplyAssistantEditorText(Editor, ExpectedText, NewText, ErrorText); End;
+Begin
+  Result := ApplyAssistantEditorText(Editor, ExpectedText, NewText, ErrorText);
+  If Result Then Case MutationAction Of
+    1: ApprovalBroker.Cancel;
+    2: Raise Exception.Create('Injected callback failure after mutation');
+    3: ApprovalBroker.BeginRun(awsProject);
+  End;
+End;
 Function TBrokerWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
 Begin
   Result := SaveSucceeds; ErrorText := '';
@@ -95,7 +102,7 @@ Begin
 End;
 Procedure TestBroker(Editor: TTestEditor);
 Var Workspace: TBrokerWorkspace; Broker: TAssistantToolBroker;
-  Run, OldRun, Reply, Err, Revision, Original, Changed, Args: String; Data: TJSONData;
+  Run, OldRun, Reply, Err, Revision, Original, Changed, Args: String; Data: TJSONData; I: Integer;
 Begin
   Workspace := TBrokerWorkspace.Create;
   Workspace.Editor := Editor; Workspace.ProjectId := 'project-1';
@@ -196,6 +203,19 @@ Begin
     Check('Plan rejects builds under automatic approval', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
     Check('Markdown extensions match native Plan tools', Workspace.IsMarkdownPath('plan.markdown') And Workspace.IsMarkdownPath('plan.mdown') And Not Workspace.IsMarkdownPath('plan.md.pas'));
 
+    For I := 1 To 3 Do
+      Begin
+        Editor.Syn.Text := Original; Workspace.MutationAction := I;
+        Run := Broker.BeginRun(awsProject);
+        Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err);
+        Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;
+        Args := '{"path":"unit.pas","revision":"' + JsonEscapeText(Revision) + '","text":"' + JsonEscapeText(Changed) + '"}';
+        Check('mutation callback invalidation reports changed buffer ' + IntToStr(I),
+          Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err)
+          And (Editor.SourceText = Changed) And (Reply = '') And (Pos('reread', Err) > 0));
+        Editor.Syn.Undo;
+        Check('failed commit report retains native Undo ' + IntToStr(I), Editor.SourceText = Original);
+      End;
   Finally Broker.Free; Workspace.Free; End;
 End;
 Var Ed: TTestEditor; Host: TForm; Before, UserText, Changed, Err: String;

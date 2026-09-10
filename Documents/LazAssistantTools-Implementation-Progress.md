@@ -152,7 +152,7 @@ Added `lazarus_find_declaration` to the shared broker and ChatGPT tool set in al
 
 Added real-CodeTools tests for local/cross-unit unsaved declarations, conditional compilation, byte coordinates, stale requests and lifecycle changes. Also protected managed tool handoff lifetime and nested panel polling when an IDE callback cancels the run. See [workflow, validation and limits](LazAssistantTools-CodeTools-Navigation.md).
 
-Reference lookup and symbol context are implemented in the follow-up below; next are reviewable refactoring transactions. Grok broker migration, complete build evidence, durable continuation and parallel-agent execution remain open.
+Reference lookup and symbol context are implemented in the follow-up below; the first local-variable refactoring transaction is implemented below; broader transactions remain open. Grok broker migration, complete build evidence, durable continuation and parallel-agent execution remain open.
 
 Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.
 
@@ -160,8 +160,18 @@ Validation: all 22 assistant test programs and the full package build passed wit
 
 Added `lazarus_find_references` and `lazarus_symbol_context` to the shared broker and ChatGPT tool set in all modes. A shared CodeTools helper now handles declaration, context and reference queries under the existing global reentry guard. Reference searches take explicit batches of project source files, prefer unsaved buffers, reject changed inputs and report partial coverage, parse failures and truncation. Context returns bounded source/declaration snippets and the CodeTools hint; external declarations remain location-only. Directory metadata is refreshed to discover files added since a preceding query.
 
-See [navigation workflow, limits and tests](LazAssistantTools-CodeTools-Navigation.md). All 22 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-references`). No model turn was needed for these tests. Next semantic step: reviewable rename/refactoring previews, with exact input revisions and explicit apply/Undo transactions.
+See [navigation workflow, limits and tests](LazAssistantTools-CodeTools-Navigation.md). All 22 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-references`). No model turn was needed for these tests. The first local-variable preview/apply/Undo transaction is implemented in the 11 September follow-up below; multi-file and broader symbol support remain open.
 
 ## ChatGPT executable recovery (10 September 2026)
 
 Fixed the reported Settings connection failure after a VS Code extension update moved the bundled executable. Added Browse/Auto-detect, staged recovery of missing saved paths, executable validation and actionable status text. Qualified the installed 0.153.4 schema and signed-out client startup; retained 0.153.0 support and rejection of unknown versions. Existing account profile locations are unchanged. See [connection recovery and validation](LazAssistantTools-Codex-Implementation.md#extension-update-connection-recovery-10-september-2026).
+
+## Local-variable rename transactions (11 September 2026)
+
+Added `lazarus_preview_local_rename` in all modes and `lazarus_apply_local_rename` in Build. CodeTools identifies routine-local declarations and exact semantic uses; the broker retains one bounded before/after preview, and application consumes its token. The source and semantic result are revalidated after approval. Applying preserves native Undo and returns the actual buffer revision without saving. The approval form displays both current and proposed source.
+
+This first subset rejects parameters, fields, exported/global symbols, cross-file/include/resource edits, conditional/macro sources, existing names and oversized previews. Broader semantic refactoring remains open. See [workflow, limits, tests and next steps](LazAssistantTools-Local-Rename-Transactions.md).
+
+The shared editor commit path also now handles callbacks that cancel or replace the run during mutation without indexing discarded snapshots or returning a misleading success. Partial mutation failures direct the user to inspect/reread the buffer and retain Undo.
+
+Validation: all 22 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-local-rename`), followed by a targeted CodeTools test/package rebuild for the final resource-directive correction. Tests use real CodeTools and SynEdit; no model request was sent. Rebuild/restart Lazarus for live acceptance.

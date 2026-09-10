@@ -6,7 +6,7 @@ Unit AssistantToolBroker;
   operations must not be smuggled through a generic unvalidated tool fallback. }
 {$mode objfpc}{$H+}
 Interface
-Uses Classes, SysUtils;
+Uses Classes, SysUtils, fpjson;
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject);
   TAssistantWorkspaceAdapter = Class
@@ -26,6 +26,9 @@ Type
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanFindDeclaration: Boolean; Virtual;
     Function CanInspectSymbols: Boolean; Virtual;
+    Function CanPreviewRename: Boolean; Virtual;
+    Function PreviewLocalRename(Const Path: String; Line, Column: Integer; Const NewName: String;
+      Out NewText, PreviewText, ErrorText: String): Boolean; Virtual;
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -36,6 +39,10 @@ Type
   End;
   TBrokerSnapshot = Record
     Path, Text, Revision: String;
+  End;
+  TLocalRenamePreview = Record
+    Id, Path, Text, NewText, Details, NewName: String;
+    Line, Column: Integer;
   End;
   TAssistantToolApproval = Function(Const Tool, Path, OldText, NewText: String): Boolean Of Object;
   TAssistantToolBroker = Class
@@ -48,6 +55,10 @@ Type
     FRevision: Integer;
     FSnapshots: Array Of TBrokerSnapshot;
     FOnApproval: TAssistantToolApproval;
+    FRenamePreview: TLocalRenamePreview;
+    Function ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
+      Out ResultText, ErrorText: String): Boolean;
+    Function CommitBuffer(Const Path, Text, NewText: String; Out ResultText, ErrorText: String): Boolean;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
     Function CanWritePath(Const Path: String): Boolean;
     Function Remember(Const Path, Text: String): String;
@@ -62,7 +73,7 @@ Type
     Property RunId: String Read FRunId;
   End;
 Implementation
-Uses fpjson, jsonparser, AssistantProtocol;
+Uses jsonparser, AssistantProtocol;
 Const MaxBufferBytes = 1048576; MaxSnapshotBytes = 8388608; MaxSnapshots = 64;
 Function Quoted(Const S: String): String;
 Begin Result := '"' + JsonEscapeText(S) + '"'; End;
@@ -91,6 +102,11 @@ Function TAssistantWorkspaceAdapter.CheckNewFile(Const Path: String; Out Canonic
 Begin CanonicalPath := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
 Begin ResultText := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanPreviewRename: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.PreviewLocalRename(Const Path: String; Line, Column: Integer;
+  Const NewName: String; Out NewText, PreviewText, ErrorText: String): Boolean;
+Begin NewText := ''; PreviewText := ''; ErrorText := 'Local rename preview is unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanInspectSymbols: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
@@ -128,7 +144,7 @@ Begin
   FCancelled := False;
   FWriteScope := WriteScope;
   FRevision := 0;
-  SetLength(FSnapshots, 0);
+  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview);
   Result := FRunId;
 End;
 Procedure TAssistantToolBroker.Cancel;
@@ -136,7 +152,7 @@ Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
   FCancelled := True;
   FAdapter.CancelBuild;
-  SetLength(FSnapshots, 0);
+  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview);
 End;
 Function TAssistantToolBroker.Remember(Const Path, Text: String): String;
 Var I, Index, Bytes: Integer;
@@ -171,6 +187,112 @@ Begin
     Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
   Result := True;
 End;
+Function TAssistantToolBroker.ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
+  Out ResultText, ErrorText: String): Boolean;
+Var Pending: TLocalRenamePreview; Node: TJSONData; Id: TGuid;
+  ActualPath, ActualText, Revision, RecheckedText, RecheckedDetails: String;
+  I: Integer; Fresh: Boolean;
+  Function StillCurrent: Boolean;
+  Begin
+    Result := Not FCancelled And (FRunId = RunId) And (FAdapter.Identity = FIdentity);
+    If Not Result Then Begin ErrorText := 'Workspace/run changed during rename; prepare a new preview.'; Exit; End;
+    Result := FAdapter.ReadBuffer(Pending.Path, ActualPath, ActualText, ErrorText) And
+      (ActualPath = Pending.Path) And (ActualText = Pending.Text);
+    If Not Result Then ErrorText := 'Source changed since rename preview; read it again and prepare a new preview.';
+  End;
+Begin
+  Result := False; ResultText := ''; ErrorText := '';
+  If Not FAdapter.CanPreviewRename Then Begin ErrorText := 'Local rename is unavailable.'; Exit; End;
+  If Tool = 'lazarus_apply_local_rename' Then
+    Begin
+      If FWriteScope <> awsProject Then Begin ErrorText := 'Applying a source rename requires Build mode.'; Exit; End;
+      Node := Args.Find('preview_id');
+      If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Or
+        (Node.AsString <> FRenamePreview.Id) Then
+        Begin ErrorText := 'Unknown, expired or already consumed rename preview.'; Exit; End;
+      Pending := FRenamePreview; FRenamePreview := Default(TLocalRenamePreview);
+      If Not StillCurrent Then Exit;
+      If Not Approve(RunId, Tool, Pending.Path, Pending.Text, Pending.NewText, ErrorText) Then Exit;
+      If Not StillCurrent Then Exit;
+      { Recompute against current CodeTools configuration after modal approval. }
+      If Not FAdapter.PreviewLocalRename(Pending.Path, Pending.Line, Pending.Column, Pending.NewName,
+        RecheckedText, RecheckedDetails, ErrorText) Then Exit;
+      If Not StillCurrent Then Exit;
+      If (RecheckedText <> Pending.NewText) Or (RecheckedDetails <> Pending.Details) Then
+        Begin ErrorText := 'Semantic rename changed since preview; prepare a new preview.'; Exit; End;
+      Result := CommitBuffer(Pending.Path, Pending.Text, Pending.NewText, ResultText, ErrorText);
+      If Result Then ResultText := '{"preview_id":' + Quoted(Pending.Id) + ',"applied":true,' + Copy(ResultText, 2, MaxInt);
+      Exit;
+    End;
+  FRenamePreview := Default(TLocalRenamePreview); Pending := Default(TLocalRenamePreview);
+  Node := Args.Find('path');
+  If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+    Begin ErrorText := 'A source buffer path is required.'; Exit; End;
+  If Not FAdapter.ReadBuffer(Node.AsString, Pending.Path, Pending.Text, ErrorText) Then Exit;
+  Revision := Args.Get('revision', ''); Fresh := False;
+  For I := 0 To High(FSnapshots) Do
+    If (FSnapshots[I].Path = Pending.Path) And (FSnapshots[I].Revision = Revision) And
+      (FSnapshots[I].Text = Pending.Text) Then Fresh := True;
+  If Not Fresh Then Begin ErrorText := 'Stale buffer revision; read the buffer before preparing a rename.'; Exit; End;
+  Node := Args.Find('line');
+  If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, Pending.Line) Or
+    (Pending.Line < 1) Or (Pending.Line > MaxBufferBytes) Then
+    Begin ErrorText := 'line must be a positive integer within the buffer limit.'; Exit; End;
+  Node := Args.Find('column');
+  If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, Pending.Column) Or
+    (Pending.Column < 1) Or (Pending.Column > MaxBufferBytes) Then
+    Begin ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.'; Exit; End;
+  Node := Args.Find('new_name');
+  If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Length(Node.AsString) > 127) Then
+    Begin ErrorText := 'new_name must be a Pascal identifier of at most 127 characters.'; Exit; End;
+  Pending.NewName := Node.AsString;
+  If Not FAdapter.PreviewLocalRename(Pending.Path, Pending.Line, Pending.Column, Pending.NewName,
+    Pending.NewText, Pending.Details, ErrorText) Then Exit;
+  If Not StillCurrent Then Exit;
+  If (Length(Pending.NewText) > MaxBufferBytes) Or (Length(Pending.Details) > 65536) Then
+    Begin ErrorText := 'Rename exceeds the preview size limit.'; Exit; End;
+  If CreateGUID(Id) <> 0 Then Begin ErrorText := 'Cannot create rename preview identity.'; Exit; End;
+  Pending.Id := GUIDToString(Id); FRenamePreview := Pending;
+  ResultText := '{"preview_id":' + Quoted(Pending.Id) + ',"path":' + Quoted(Pending.Path) +
+    ',"sourceRevision":' + Quoted(Revision) + ',"applied":false,"saved":false,"rename":' + Pending.Details + '}';
+  Result := True;
+End;
+Function TAssistantToolBroker.CommitBuffer(Const Path, Text, NewText: String;
+  Out ResultText, ErrorText: String): Boolean;
+Var Revision, ActualPath, ActualText, CommitRun: String;
+  Procedure Invalidate;
+  Var I: Integer;
+  Begin
+    If FRunId <> CommitRun Then Exit;
+    For I := 0 To High(FSnapshots) Do If FSnapshots[I].Path = Path Then
+      Begin FSnapshots[I].Revision := ''; FSnapshots[I].Text := ''; End;
+  End;
+Begin
+  Result := False; ResultText := ''; CommitRun := FRunId;
+  { Reserve before mutation; a budget failure must have no effects. }
+  Revision := Remember(Path, NewText);
+  If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;
+  Try
+    If Not FAdapter.ReplaceBuffer(Path, Text, NewText, ErrorText) Then
+      Begin Invalidate; Exit; End;
+    If FCancelled Or (FRunId <> CommitRun) Or (FAdapter.Identity <> FIdentity) Then
+      Begin Invalidate; ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.'; Exit; End;
+    { SynEdit can normalize line endings; return a revision of the actual text. }
+    If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or (ActualPath <> Path) Then
+      Begin Invalidate; ErrorText := 'Buffer was edited but could not be read back; inspect and reread it.'; Exit; End;
+    If FCancelled Or (FRunId <> CommitRun) Or (FAdapter.Identity <> FIdentity) Then
+      Begin Invalidate; ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.'; Exit; End;
+    Revision := Remember(Path, ActualText);
+    If Revision = '' Then
+      Begin Invalidate; ErrorText := 'Buffer was edited but its normalized text exceeds the snapshot budget.'; Exit; End;
+    ResultText := '{"bufferUpdated":true,"saved":false,"revision":' + Quoted(Revision) +
+      ',"text":' + Quoted(ActualText) + '}';
+    Result := True;
+  Except
+    On E: Exception Do
+      Begin Invalidate; ErrorText := 'Editor commit failed; inspect and reread the buffer before retrying: ' + E.Message; End;
+  End;
+End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
   Out ResultText, ErrorText: String): Boolean;
 Var Data, Node: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
@@ -191,6 +313,8 @@ Begin
       If Not (Data Is TJSONObject) Then
         Begin ErrorText := 'Expected object arguments.'; Exit; End;
       Args := TJSONObject(Data);
+      If (Tool = 'lazarus_preview_local_rename') Or (Tool = 'lazarus_apply_local_rename') Then
+        Begin Result := ExecuteRename(RunId, Tool, Args, ResultText, ErrorText); Exit; End;
       If Tool = 'lazarus_create_file' Then
         Begin
           If (FWriteScope = awsReadOnly) Or Not FAdapter.CanCreateFiles Then
@@ -332,29 +456,7 @@ Begin
       If Length(NewText) > MaxBufferBytes Then
         Begin ErrorText := 'Replacement exceeds the buffer limit.'; Exit; End;
       If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
-      { Reserve a revision before mutation; a budget failure must have no effects. }
-      Revision := Remember(Path, NewText);
-      If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;
-      Result := FAdapter.ReplaceBuffer(Path, Text, NewText, ErrorText);
-      If Not Result Then
-        Begin FSnapshots[Index].Revision := ''; FSnapshots[Index].Text := ''; Exit; End;
-      { SynEdit can normalize line endings. Revision tokens must refer to the
-        actual buffer, not the requested bytes. Read back without saving. }
-      If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or (ActualPath <> Path) Then
-        Begin
-          FSnapshots[Index].Revision := '';
-          ErrorText := 'Buffer was edited but could not be read back; inspect and reread it.';
-          Exit(False);
-        End;
-      Revision := Remember(Path, ActualText);
-      If Revision = '' Then
-        Begin
-          FSnapshots[Index].Revision := '';
-          ErrorText := 'Buffer was edited but its normalized text exceeds the snapshot budget.';
-          Exit(False);
-        End;
-      ResultText := '{"bufferUpdated":true,"saved":false,"revision":' + Quoted(Revision) +
-        ',"text":' + Quoted(ActualText) + '}';
+      Result := CommitBuffer(Path, Text, NewText, ResultText, ErrorText);
     Except
       On E: Exception Do ErrorText := 'IDE tool failed: ' + E.Message;
     End;
@@ -380,6 +482,11 @@ Begin
   If FAdapter.CanInspectSymbols Then Result := Result +
     ',{"type":"function","name":"lazarus_symbol_context","description":"Get a CodeTools hint and bounded source/declaration context for a Pascal symbol, using the current buffer revision. Read-only; positions are 1-based UTF-8 byte columns. External declarations expose location only.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_find_references","description":"Find semantic Pascal references to the symbol at this revision and location. Supply an explicit search_paths list of 1-32 project source files. Prefers unsaved IDE buffers. Returns searched files, failures and truncation; never assume whole-project coverage. Comments, strings, inactive branches and unrelated same-name symbols are excluded. Read-only; columns are 1-based UTF-8 bytes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"search_paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":32},"max_results":{"type":"integer","minimum":1,"maximum":200,"default":100}},"required":["path","revision","line","column","search_paths"],"additionalProperties":false}}';
+  If FAdapter.CanPreviewRename Then
+    Begin
+      Result := Result + ',{"type":"function","name":"lazarus_preview_local_rename","description":"Preview a routine-local var rename using CodeTools. Requires a current buffer revision; coordinates are 1-based UTF-8 bytes. Returns exact changes and a one-use preview_id without editing. Supports one editor only; rejects parameters, globals, fields, directives/includes/assembly and names already present. Preview is valid only in this run; no partial renames.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"new_name":{"type":"string"}},"required":["path","revision","line","column","new_name"],"additionalProperties":false}}';
+      If FWriteScope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. Consumes preview_id, preserves editor Undo and returns a fresh buffer revision. Does not save or compile; never supply replacement text.","inputSchema":{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"],"additionalProperties":false}}';
+    End;
   If FWriteScope <> awsReadOnly Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
