@@ -152,6 +152,12 @@ Added `lazarus_find_declaration` to the shared broker and ChatGPT tool set in al
 
 Added real-CodeTools tests for local/cross-unit unsaved declarations, conditional compilation, byte coordinates, stale requests and lifecycle changes. Also protected managed tool handoff lifetime and nested panel polling when an IDE callback cancels the run. See [workflow, validation and limits](LazAssistantTools-CodeTools-Navigation.md).
 
-Next semantic work: reference lookup and symbol context, followed by reviewable refactoring transactions. Grok broker migration, complete build evidence, durable continuation and parallel-agent execution remain open.
+Reference lookup and symbol context are implemented in the follow-up below; next are reviewable refactoring transactions. Grok broker migration, complete build evidence, durable continuation and parallel-agent execution remain open.
 
 Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.
+
+## Semantic reference lookup and symbol context (10 September 2026)
+
+Added `lazarus_find_references` and `lazarus_symbol_context` to the shared broker and ChatGPT tool set in all modes. A shared CodeTools helper now handles declaration, context and reference queries under the existing global reentry guard. Reference searches take explicit batches of project source files, prefer unsaved buffers, reject changed inputs and report partial coverage, parse failures and truncation. Context returns bounded source/declaration snippets and the CodeTools hint; external declarations remain location-only. Directory metadata is refreshed to discover files added since a preceding query.
+
+See [navigation workflow, limits and tests](LazAssistantTools-CodeTools-Navigation.md). All 22 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-references`). No model turn was needed for these tests. Next semantic step: reviewable rename/refactoring previews, with exact input revisions and explicit apply/Undo transactions.

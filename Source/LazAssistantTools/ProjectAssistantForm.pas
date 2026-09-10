@@ -2709,7 +2709,8 @@ Begin
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
-    'Use lazarus_find_declaration with a current buffer revision for semantic Pascal identifier lookup; columns are UTF-8 byte offsets. ' +
+    'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
+    'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +
     'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
     'Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
     'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +

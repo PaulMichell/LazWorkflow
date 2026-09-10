@@ -4,7 +4,7 @@ Unit AssistantIDEWorkspace;
   live buffers; opening tabs and saving content are separate explicit tools. }
 {$mode objfpc}{$H+}
 Interface
-Uses AssistantToolBroker, AssistantBuildJob;
+Uses Classes, AssistantToolBroker, AssistantBuildJob;
 Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
   Private
@@ -22,6 +22,9 @@ Type
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Override;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanFindDeclaration: Boolean; Override;
+    Function CanInspectSymbols: Boolean; Override;
+    Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
+    Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
@@ -34,12 +37,9 @@ Type
     Function Describe: String; Override;
   End;
 Implementation
-Uses Classes, SysUtils, Forms, Controls, LazFileUtils, LazUTF8, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  CodeToolManager, CodeCache, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+Uses SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
+  CodeToolManager, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
-{ All assistant adapters share the IDE's global CodeTools manager. Access is
-  on the IDE thread; this guard also excludes reentry through another adapter. }
-Var AssistantCodeToolsBusy: Boolean = False;
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;
@@ -162,58 +162,31 @@ Begin
 End;
 Function TAssistantIDEWorkspace.CanFindDeclaration: Boolean;
 Begin Result := Assigned(LazarusIDE) And Assigned(CodeToolBoss) And Assigned(SourceEditorManagerIntf); End;
+Function TAssistantIDEWorkspace.CanInspectSymbols: Boolean;
+Begin Result := CanFindDeclaration; End;
 Function TAssistantIDEWorkspace.FindDeclaration(Const Path: String; Line, Column: Integer;
   Out ResultText, ErrorText: String): Boolean;
-Var Resolved, SourceText, Ext, TargetPath, Note, LineText: String;
-  Editor: TSourceEditorInterface; Code, Target: TCodeBuffer;
-  X, Y, TopLine, BlockTop, BlockBottom: Integer; InProject: Boolean;
+Var Resolved, Text: String;
 Begin
-  Result := False; ResultText := ''; ErrorText := '';
-  If Not CanFindDeclaration Or AssistantCodeToolsBusy Then
-    Begin ErrorText := 'Lazarus CodeTools is unavailable or busy.'; Exit; End;
-  If Not ReadBuffer(Path, Resolved, SourceText, ErrorText) Then Exit;
-  Ext := LowerCase(ExtractFileExt(Resolved));
-  If Not ((Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.p') Or (Ext = '.lpr') Or
-    (Ext = '.dpr') Or (Ext = '.inc')) Then
-    Begin ErrorText := 'Declaration lookup requires a Pascal source buffer.'; Exit; End;
-  If Length(SourceText) > 1048576 Then
-    Begin ErrorText := 'Source exceeds the 1 MiB lookup limit.'; Exit; End;
-  AssistantCodeToolsBusy := True;
-  Try
-    { The IDE synchronizes all unsaved source buffers into its existing
-      CodeTools cache, retaining project/build-mode defines and search paths. }
-    If Not LazarusIDE.BeginCodeTools Then
-      Begin ErrorText := 'The IDE could not prepare CodeTools; finish the current IDE operation and retry.'; Exit; End;
-    Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
-    If Not Assigned(Editor) Or Not (Editor.CodeToolsBuffer Is TCodeBuffer) Then
-      Begin ErrorText := 'The editor has no CodeTools source buffer.'; Exit; End;
-    Code := TCodeBuffer(Editor.CodeToolsBuffer);
-    If (Code.Source <> SourceText) Or (Editor.SourceText <> SourceText) Then
-      Begin ErrorText := 'Source changed or CodeTools cache is not synchronized; read the buffer again.'; Exit; End;
-    If (Line < 1) Or (Line > Code.LineCount) Then
-      Begin ErrorText := 'Line is outside the current source buffer.'; Exit; End;
-    LineText := Code.GetLine(Line - 1, False);
-    If (Column < 1) Or (Column > Length(LineText)) Or
-      ((Byte(LineText[Column]) And $C0) = $80) Then
-      Begin ErrorText := 'Column is outside the line or inside a UTF-8 character.'; Exit; End;
-    Target := Nil;
-    If Not CodeToolBoss.FindDeclaration(Code, Column, Line, Target, X, Y,
-      TopLine, BlockTop, BlockBottom) Then
-      Begin
-        ErrorText := 'CodeTools could not resolve this declaration.';
-        If CodeToolBoss.ErrorMessage <> '' Then ErrorText := ErrorText + ' ' + UTF8Copy(CodeToolBoss.ErrorMessage, 1, 2000);
-        Exit;
-      End;
-    If Not Assigned(Target) Or (Target.Filename = '') Or (X < 1) Or (Y < 1) Then
-      Begin ErrorText := 'CodeTools returned no declaration location.'; Exit; End;
-    InProject := ResolveProjectPath(Target.Filename, TargetPath, Note);
-    LineText := '';
-    If InProject And (Y <= Target.LineCount) Then LineText := UTF8Copy(Target.GetLine(Y - 1, False), 1, 2000);
-    ResultText := '{"path":"' + JsonEscapeText(Target.Filename) + '","line":' + IntToStr(Y) +
-      ',"column":' + IntToStr(X) + ',"columnEncoding":"utf8-bytes","inProject":' +
-      LowerCase(BoolToStr(InProject, True)) + ',"lineText":"' + JsonEscapeText(LineText) + '"}';
-    Result := True;
-  Finally AssistantCodeToolsBusy := False; End;
+  Result := False; ResultText := '';
+  If Not ReadBuffer(Path, Resolved, Text, ErrorText) Then Exit;
+  Result := QueryAssistantSymbol(Resolved, Text, Line, Column, sqDeclaration, Nil, 0, ResultText, ErrorText);
+End;
+Function TAssistantIDEWorkspace.SymbolContext(Const Path: String; Line, Column: Integer;
+  Out ResultText, ErrorText: String): Boolean;
+Var Resolved, Text: String;
+Begin
+  Result := False; ResultText := '';
+  If Not ReadBuffer(Path, Resolved, Text, ErrorText) Then Exit;
+  Result := QueryAssistantSymbol(Resolved, Text, Line, Column, sqContext, Nil, 0, ResultText, ErrorText);
+End;
+Function TAssistantIDEWorkspace.FindReferences(Const Path: String; Line, Column: Integer;
+  SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean;
+Var Resolved, Text: String;
+Begin
+  Result := False; ResultText := '';
+  If Not ReadBuffer(Path, Resolved, Text, ErrorText) Then Exit;
+  Result := QueryAssistantSymbol(Resolved, Text, Line, Column, sqReferences, SearchPaths, MaxResults, ResultText, ErrorText);
 End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;

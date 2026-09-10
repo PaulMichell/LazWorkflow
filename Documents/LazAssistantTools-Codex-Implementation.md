@@ -75,7 +75,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening, new text-file creation and revision-checked CodeTools declaration lookup are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode can save and revise Markdown plans through the broker.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening, new text-file creation and revision-checked CodeTools declaration lookup, scoped references and symbol context are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode can save and revise Markdown plans through the broker.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -148,3 +148,9 @@ ChatGPT can now resolve Pascal declarations through `lazarus_find_declaration` i
 After rebuilding/restarting Lazarus, try: `Use Lazarus CodeTools to find the declaration of <identifier> in this unit and explain where it is defined.` Include an unsaved identifier change to check that the lookup uses the editor cache. See [navigation details and tests](LazAssistantTools-CodeTools-Navigation.md).
 
 Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.
+
+## Reference lookup and symbol context (10 September 2026)
+
+ChatGPT now has `lazarus_find_references` and `lazarus_symbol_context`, available in Ask, Plan and Build alongside declaration lookup. References require an explicit batch of project files and return coverage/failure/truncation metadata. Symbol context includes bounded source/declaration snippets and a CodeTools hint. All require the queried buffer's current revision and preserve unsaved editor content. See [navigation details](LazAssistantTools-CodeTools-Navigation.md).
+
+Validation: all 22 regression programs and the assistant package build passed with range/overflow checks (`/tmp/laz-assistant-references`). Live IDE/model acceptance remains a separate check after rebuilding/restarting Lazarus.

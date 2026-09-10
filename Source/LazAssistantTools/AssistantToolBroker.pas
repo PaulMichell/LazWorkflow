@@ -25,6 +25,9 @@ Type
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Virtual;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanFindDeclaration: Boolean; Virtual;
+    Function CanInspectSymbols: Boolean; Virtual;
+    Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -88,10 +91,16 @@ Function TAssistantWorkspaceAdapter.CheckNewFile(Const Path: String; Out Canonic
 Begin CanonicalPath := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
 Begin ResultText := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanInspectSymbols: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Symbol context is unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Reference lookup is unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanFindDeclaration: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'CodeTools declaration lookup is unavailable.'; Result := False; End;
+Begin ResultText := ''; ErrorText := 'CodeTools symbol lookup is unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -165,9 +174,10 @@ End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
   Out ResultText, ErrorText: String): Boolean;
 Var Data, Node: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
-  I, Index, Line, Column: Integer;
+  I, Index, Line, Column, MaxResults: Integer; SearchPaths: TStringList; ResultField: String; Semantic: Boolean;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
+  Semantic := (Tool = 'lazarus_find_declaration') Or (Tool = 'lazarus_find_references') Or (Tool = 'lazarus_symbol_context');
   If GetCurrentThreadID <> FOwner Then
     Begin ErrorText := 'IDE tool dispatched on the wrong thread.'; Exit; End;
   If FCancelled Or (RunId = '') Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
@@ -233,7 +243,7 @@ Begin
         End;
       If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
         (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') And
-        (Tool <> 'lazarus_find_declaration') Then
+        (Not Semantic) Then
         Begin ErrorText := 'Tool is not registered with the IDE broker.'; Exit; End;
       Node := Args.Find('path');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
@@ -248,18 +258,19 @@ Begin
           ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}';
           Exit(True);
         End;
-      If (Tool <> 'lazarus_find_declaration') And
+      If (Not Semantic) And
         (Not CanWritePath(Node.AsString) Or Not CanWritePath(Path)) Then
         Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
       Revision := Args.Get('revision', ''); Index := -1;
       For I := 0 To High(FSnapshots) Do
         If (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
-        Begin ErrorText := 'Stale buffer revision; read the buffer again before changing or saving it.'; Exit; End;
-      If Tool = 'lazarus_find_declaration' Then
+        Begin ErrorText := 'Stale buffer revision; read the buffer again before using this request.'; Exit; End;
+      If Semantic Then
         Begin
-          If Not FAdapter.CanFindDeclaration Then
-            Begin ErrorText := 'CodeTools declaration lookup is unavailable.'; Exit; End;
+          If ((Tool = 'lazarus_find_declaration') And Not FAdapter.CanFindDeclaration) Or
+            ((Tool <> 'lazarus_find_declaration') And Not FAdapter.CanInspectSymbols) Then
+            Begin ErrorText := 'CodeTools symbol lookup is unavailable.'; Exit; End;
           Node := Args.Find('line');
           If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
             Not TryStrToInt(Node.AsJSON, Line) Or (Line < 1) Or (Line > MaxBufferBytes) Then
@@ -268,15 +279,43 @@ Begin
           If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
             Not TryStrToInt(Node.AsJSON, Column) Or (Column < 1) Or (Column > MaxBufferBytes) Then
             Begin ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.'; Exit; End;
-          If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit;
+          ResultField := 'declaration';
+          If Tool = 'lazarus_find_declaration' Then
+            Begin If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit; End
+          Else If Tool = 'lazarus_symbol_context' Then
+            Begin
+              ResultField := 'symbol';
+              If Not FAdapter.SymbolContext(Path, Line, Column, ResultText, ErrorText) Then Exit;
+            End
+          Else
+            Begin
+              ResultField := 'references'; MaxResults := 100;
+              Node := Args.Find('max_results');
+              If Assigned(Node) And ((Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, MaxResults) Or
+                (MaxResults < 1) Or (MaxResults > 200)) Then
+                Begin ErrorText := 'max_results must be an integer from 1 to 200.'; Exit; End;
+              Node := Args.Find('search_paths');
+              If Not (Node Is TJSONArray) Or (Node.Count < 1) Or (Node.Count > 32) Then
+                Begin ErrorText := 'search_paths must list 1 to 32 project source files.'; Exit; End;
+              SearchPaths := TStringList.Create;
+              Try
+                For I := 0 To Node.Count - 1 Do
+                  Begin
+                    If (Node.Items[I].JSONType <> jtString) Or (Trim(Node.Items[I].AsString) = '') Then
+                      Begin ErrorText := 'Each search path must be a nonempty string.'; Exit; End;
+                    SearchPaths.Add(Node.Items[I].AsString);
+                  End;
+                If Not FAdapter.FindReferences(Path, Line, Column, SearchPaths, MaxResults, ResultText, ErrorText) Then Exit;
+              Finally SearchPaths.Free; End;
+            End;
           { CodeTools can invoke IDE callbacks. Do not return coordinates from
             a request whose workspace or source changed while it was running. }
           If FCancelled Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
-            Begin ResultText := ''; ErrorText := 'Workspace/run changed during declaration lookup.'; Exit; End;
+            Begin ResultText := ''; ErrorText := 'Workspace/run changed during symbol lookup.'; Exit; End;
           If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or
             (ActualPath <> Path) Or (ActualText <> Text) Then
-            Begin ResultText := ''; ErrorText := 'Source changed during declaration lookup; read it again.'; Exit; End;
-          ResultText := '{"sourceRevision":' + Quoted(Revision) + ',"declaration":' + ResultText + '}';
+            Begin ResultText := ''; ErrorText := 'Source changed during symbol lookup; read it again.'; Exit; End;
+          ResultText := '{"sourceRevision":' + Quoted(Revision) + ',' + Quoted(ResultField) + ':' + ResultText + '}';
           Exit(True);
         End;
       If Tool = 'lazarus_save_buffer' Then
@@ -338,6 +377,9 @@ Begin
     '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. Return current text and an edit revision; does not create or save files.","inputSchema":' + ReadSchema + '}';
   If FAdapter.CanFindDeclaration Then Result := Result +
     ',{"type":"function","name":"lazarus_find_declaration","description":"Resolve a Pascal identifier using Lazarus CodeTools and the current project configuration. First read/open the source buffer and supply its revision. Coordinates are 1-based lines and UTF-8 byte columns, including tabs as one byte. Returns a declaration location without moving the editor, changing files or issuing an edit revision for the target.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}}';
+  If FAdapter.CanInspectSymbols Then Result := Result +
+    ',{"type":"function","name":"lazarus_symbol_context","description":"Get a CodeTools hint and bounded source/declaration context for a Pascal symbol, using the current buffer revision. Read-only; positions are 1-based UTF-8 byte columns. External declarations expose location only.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}},' +
+    '{"type":"function","name":"lazarus_find_references","description":"Find semantic Pascal references to the symbol at this revision and location. Supply an explicit search_paths list of 1-32 project source files. Prefers unsaved IDE buffers. Returns searched files, failures and truncation; never assume whole-project coverage. Comments, strings, inactive branches and unrelated same-name symbols are excluded. Read-only; columns are 1-based UTF-8 bytes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"search_paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":32},"max_results":{"type":"integer","minimum":1,"maximum":200,"default":100}},"required":["path","revision","line","column","search_paths"],"additionalProperties":false}}';
   If FWriteScope <> awsReadOnly Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
