@@ -75,7 +75,7 @@ The real `0.153.0` runtime rejects `approval_policy = "untrusted"` even though i
 
 1. Perform the user-initiated live subscription sign-in/read/edit/build acceptance sequence above, including quota exhaustion, account refresh, Stop during inference and project closure. Broaden isolation checks for inherited hooks/plugins and runtime upgrades.
 2. Add durable thread resume and complete handling of arbitrarily interleaved message/reasoning items. Current tests cover literal deltas, completed message snapshots without deltas, repeated completion and distinct sequential messages.
-3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening and new text-file creation are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode can save and revise Markdown plans through the broker.
+3. Continue expanding the broker with fine-grained symbol operations and other planned IDE capabilities. Project-scoped listing, file reading, explicit editor opening, new text-file creation and revision-checked CodeTools declaration lookup are implemented. Pinned Grok skills and automatic plan execution are not enabled for the ChatGPT preview. Plan mode can save and revise Markdown plans through the broker.
 4. Complete source-consistent asynchronous builds, then migrate the native path and remove its main-thread compile waits and automatic-save/completion behaviour.
 5. Qualify Windows/macOS separately; the process/build pilots currently support Linux only.
 
@@ -140,3 +140,11 @@ ChatGPT Plan mode now matches the native Grok behavior: it can create and edit p
 The broker now records an explicit read-only, Markdown or project write scope instead of a Boolean edit flag. The IDE adapter checks both the document name and resolved target for Markdown, including after approval, so a Markdown-named symlink cannot disguise a source file or escape the project. Tool descriptions, the managed prompt and the mode hint reflect the same policy.
 
 Validation: all 21 test programs and the assistant package build passed with range/overflow checks. Logs: `/tmp/laz-plan-markdown`. No live model request was made; rebuild/restart Lazarus to test the updated Plan workflow.
+
+## CodeTools navigation (10 September 2026)
+
+ChatGPT can now resolve Pascal declarations through `lazarus_find_declaration` in Ask, Plan and Build. After reading/opening a source buffer, it supplies the current revision and one-based line/UTF-8 byte column. The IDE synchronizes its CodeTools cache and resolves the identifier under the existing project configuration. Results contain the declaration location; they do not open or edit the target. Stale requests and state changes during lookup are rejected.
+
+After rebuilding/restarting Lazarus, try: `Use Lazarus CodeTools to find the declaration of <identifier> in this unit and explain where it is defined.` Include an unsaved identifier change to check that the lookup uses the editor cache. See [navigation details and tests](LazAssistantTools-CodeTools-Navigation.md).
+
+Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.

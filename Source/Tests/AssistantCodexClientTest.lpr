@@ -4,19 +4,41 @@ Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
   AssistantCodexAccount, AssistantCodexProfile;
 Type
+  TRunReaper = Class(TThread)
+    Run: TAssistantCodexRun;
+    Started, Reaped: LongInt;
+    Procedure Execute; Override;
+  End;
   TMemoryWorkspace = Class(TAssistantWorkspaceAdapter)
   Public
     Reads: Integer;
+    Reaper: TRunReaper;
+    ReaperWaited, WorkerStopped: Boolean;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
   End;
+Procedure TRunReaper.Execute;
+Begin InterlockedExchange(Started, 1); Run.Free; InterlockedExchange(Reaped, 1); End;
 Function TMemoryWorkspace.Identity: String;
 Begin Result := 'project-test'; End;
 Function TMemoryWorkspace.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
-Begin Inc(Reads); CanonicalPath := Path; Text := 'unsaved IDE contents'; ErrorText := ''; Result := True; End;
+Var Deadline: QWord;
+Begin
+  Inc(Reads); CanonicalPath := Path; Text := 'unsaved IDE contents'; ErrorText := ''; Result := True;
+  If Assigned(Reaper) Then
+    Begin
+      Reaper.Run.Cancel; Deadline := GetTickCount64 + 5000;
+      While Not Reaper.Run.Snapshot.Done And (GetTickCount64 < Deadline) Do Sleep(1);
+      WorkerStopped := Reaper.Run.Snapshot.Done;
+      Reaper.Start;
+      While (InterlockedCompareExchange(Reaper.Started, 0, 0) = 0) And (GetTickCount64 < Deadline) Do Sleep(1);
+      Sleep(30);
+      ReaperWaited := InterlockedCompareExchange(Reaper.Reaped, 0, 0) = 0;
+    End;
+End;
 Function TMemoryWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
 Begin ErrorText := 'Test is read-only'; Result := False; End;
 Function TMemoryWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
@@ -148,6 +170,28 @@ Begin
     Run.Free; Broker.Free; Workspace.Free;
   End;
 End;
+Procedure TestCancellationDuringTool;
+Var Workspace: TMemoryWorkspace; Broker: TAssistantToolBroker; Run: TAssistantCodexRun;
+  Reaper: TRunReaper; Deadline: QWord;
+Begin
+  Workspace := TMemoryWorkspace.Create; Broker := TAssistantToolBroker.Create(Workspace);
+  Broker.BeginRun(awsReadOnly);
+  Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
+    'normal', Broker.ToolsJson, Broker.RunId, 3000, '', 'high');
+  Reaper := TRunReaper.Create(True); Reaper.Run := Run; Workspace.Reaper := Reaper;
+  Try
+    Run.Start; Deadline := GetTickCount64 + 5000;
+    Repeat
+      Run.ServiceTool(Broker);
+      If Workspace.Reads > 0 Then Break; { the reaper now owns Run; never dereference it again }
+      Sleep(1);
+    Until GetTickCount64 >= Deadline;
+    Check('tool callback cancels a completed worker', (Workspace.Reads = 1) And Workspace.WorkerStopped);
+    Run := Nil;
+    Reaper.WaitFor;
+    Check('reaper waits until IDE tool handoff returns', Workspace.ReaperWaited And (Reaper.Reaped = 1));
+  Finally Reaper.Free; Run.Free; Broker.Free; Workspace.Free; End;
+End;
 Procedure TestAccount;
 Var Job: TAssistantCodexAccount; Value: TCodexAccountSnapshot;
   Profile: String; Deadline: QWord; Env: TStringList; Client: TAssistantCodexClient; Id: TGuid;
@@ -234,6 +278,7 @@ Begin
     Check('cancelled tool cannot execute', Not Client.TakeTool(Tool));
   Finally Client.Free; End;
   TestWorkerBridge;
+  TestCancellationDuringTool;
   TestAccount;
   WriteLn('All Codex client tests passed.');
 End.

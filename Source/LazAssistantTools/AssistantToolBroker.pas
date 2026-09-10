@@ -24,6 +24,8 @@ Type
     Function CanCreateFiles: Boolean; Virtual;
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Virtual;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function CanFindDeclaration: Boolean; Virtual;
+    Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -86,6 +88,10 @@ Function TAssistantWorkspaceAdapter.CheckNewFile(Const Path: String; Out Canonic
 Begin CanonicalPath := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
 Begin ResultText := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanFindDeclaration: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'CodeTools declaration lookup is unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -159,7 +165,7 @@ End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
   Out ResultText, ErrorText: String): Boolean;
 Var Data, Node: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
-  I, Index: Integer;
+  I, Index, Line, Column: Integer;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If GetCurrentThreadID <> FOwner Then
@@ -226,7 +232,8 @@ Begin
           If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
         End;
       If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
-        (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') Then
+        (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') And
+        (Tool <> 'lazarus_find_declaration') Then
         Begin ErrorText := 'Tool is not registered with the IDE broker.'; Exit; End;
       Node := Args.Find('path');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
@@ -241,13 +248,37 @@ Begin
           ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}';
           Exit(True);
         End;
-      If Not CanWritePath(Node.AsString) Or Not CanWritePath(Path) Then
+      If (Tool <> 'lazarus_find_declaration') And
+        (Not CanWritePath(Node.AsString) Or Not CanWritePath(Path)) Then
         Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
       Revision := Args.Get('revision', ''); Index := -1;
       For I := 0 To High(FSnapshots) Do
         If (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
         Begin ErrorText := 'Stale buffer revision; read the buffer again before changing or saving it.'; Exit; End;
+      If Tool = 'lazarus_find_declaration' Then
+        Begin
+          If Not FAdapter.CanFindDeclaration Then
+            Begin ErrorText := 'CodeTools declaration lookup is unavailable.'; Exit; End;
+          Node := Args.Find('line');
+          If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
+            Not TryStrToInt(Node.AsJSON, Line) Or (Line < 1) Or (Line > MaxBufferBytes) Then
+            Begin ErrorText := 'line must be a positive integer within the buffer limit.'; Exit; End;
+          Node := Args.Find('column');
+          If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
+            Not TryStrToInt(Node.AsJSON, Column) Or (Column < 1) Or (Column > MaxBufferBytes) Then
+            Begin ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.'; Exit; End;
+          If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit;
+          { CodeTools can invoke IDE callbacks. Do not return coordinates from
+            a request whose workspace or source changed while it was running. }
+          If FCancelled Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
+            Begin ResultText := ''; ErrorText := 'Workspace/run changed during declaration lookup.'; Exit; End;
+          If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or
+            (ActualPath <> Path) Or (ActualText <> Text) Then
+            Begin ResultText := ''; ErrorText := 'Source changed during declaration lookup; read it again.'; Exit; End;
+          ResultText := '{"sourceRevision":' + Quoted(Revision) + ',"declaration":' + ResultText + '}';
+          Exit(True);
+        End;
       If Tool = 'lazarus_save_buffer' Then
         Begin
           If Not Approve(RunId, Tool, Path, Text, '', ErrorText) Then Exit;
@@ -305,6 +336,8 @@ Begin
     ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
     '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
     '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. Return current text and an edit revision; does not create or save files.","inputSchema":' + ReadSchema + '}';
+  If FAdapter.CanFindDeclaration Then Result := Result +
+    ',{"type":"function","name":"lazarus_find_declaration","description":"Resolve a Pascal identifier using Lazarus CodeTools and the current project configuration. First read/open the source buffer and supply its revision. Coordinates are 1-based lines and UTF-8 byte columns, including tabs as one byte. Returns a declaration location without moving the editor, changing files or issuing an edit revision for the target.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}}';
   If FWriteScope <> awsReadOnly Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';

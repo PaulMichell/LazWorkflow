@@ -203,6 +203,7 @@ Type
     FUseCodex: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
+    FPollingCodex: Boolean;
     FCodexWorkspace: TAssistantIDEWorkspace;
     FCodexBroker: TAssistantToolBroker;
     Procedure LoadConnectionSettings;
@@ -2708,6 +2709,7 @@ Begin
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
+    'Use lazarus_find_declaration with a current buffer revision for semantic Pascal identifier lookup; columns are UTF-8 byte offsets. ' +
     'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
     'Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
     'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +
@@ -2738,34 +2740,41 @@ End;
 
 Procedure TProjectAssistantForm.PollCodex;
 Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
-  ToolText: String; OK: Boolean; Block: TTraceBlock;
+  ToolText: String; OK, Serviced: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
 Begin
-  If FCodexWorkspace.Identity <> FCodexIdentity Then Begin StopStream; Exit; End;
-  Snapshot := FCodexRun.Snapshot;
-  ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
-  If FCodexRun.ServiceOneTool(FCodexBroker, Tool, ToolText, OK) Then
-    Begin
-      { Use the text captured at the tool request, even if the worker advanced
-        between the timer snapshot and the IDE handoff. }
-      ApplyAssistantSnapshots(Tool.ContentBefore, Tool.ThinkingBefore);
-      ApplyLiveThinkingAndAnswer;
-      Block := FTrace.AddTool(Tool.CallId, Tool.Tool, Tool.Arguments);
-      Block.Body := ToolText; Block.Ok := OK; Block.Running := False;
-      FAnswerSliceStart := Length(FLiveContent) + 1;
-      FThinkingSliceStart := Length(FLiveThinking) + 1;
-      FTrace.StartThinking(0);
-      RefreshChatDisplay(False, True);
-    End;
-  If Snapshot.Done Then
-    Begin
-      ReleaseCodexRun;
-      FinishAssistantReply(Snapshot.ErrorText);
-    End
-  Else
-    Begin
-      StatusFooter.SetRightText(FormatElapsedStatus('ChatGPT'));
-      If FViewingLive Then FTraceView.RefreshElapsed(FTrace);
-    End;
+  If FPollingCodex Then Exit;
+  FPollingCodex := True;
+  Try
+    Run := FCodexRun;
+    If FCodexWorkspace.Identity <> FCodexIdentity Then Begin StopStream; Exit; End;
+    Snapshot := FCodexRun.Snapshot;
+    ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
+    Serviced := Run.ServiceOneTool(FCodexBroker, Tool, ToolText, OK);
+    If FCodexRun <> Run Then Exit; { cancelled/replaced during an IDE callback }
+    If Serviced Then
+      Begin
+        { Use the text captured at the tool request, even if the worker advanced
+          between the timer snapshot and the IDE handoff. }
+        ApplyAssistantSnapshots(Tool.ContentBefore, Tool.ThinkingBefore);
+        ApplyLiveThinkingAndAnswer;
+        Block := FTrace.AddTool(Tool.CallId, Tool.Tool, Tool.Arguments);
+        Block.Body := ToolText; Block.Ok := OK; Block.Running := False;
+        FAnswerSliceStart := Length(FLiveContent) + 1;
+        FThinkingSliceStart := Length(FLiveThinking) + 1;
+        FTrace.StartThinking(0);
+        RefreshChatDisplay(False, True);
+      End;
+    If Snapshot.Done Then
+      Begin
+        ReleaseCodexRun;
+        FinishAssistantReply(Snapshot.ErrorText);
+      End
+    Else
+      Begin
+        StatusFooter.SetRightText(FormatElapsedStatus('ChatGPT'));
+        If FViewingLive Then FTraceView.RefreshElapsed(FTrace);
+      End;
+  Finally FPollingCodex := False; End;
 End;
 
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);

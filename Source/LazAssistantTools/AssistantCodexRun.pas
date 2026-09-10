@@ -34,7 +34,8 @@ Type
     Function Steer(Const Text: String): Boolean;
     Function Snapshot: TCodexRunSnapshot;
     { Caller must run on the broker's owning IDE thread. Returns after at most
-      one short buffer operation; it never waits for process/network output. }
+      one IDE operation; it never waits for process/network output. CodeTools
+      may parse dependencies synchronously on this thread. }
     Procedure ServiceTool(Broker: TAssistantToolBroker);
     Function ServiceOneTool(Broker: TAssistantToolBroker; Out Tool: TCodexToolRequest;
       Out Text: String; Out OK: Boolean): Boolean;
@@ -52,7 +53,15 @@ Begin
   FEffort := Effort; FSnapshot.State := crsConnecting;
 End;
 Destructor TAssistantCodexRun.Destroy;
+Var Servicing: Boolean;
 Begin
+  { The detached reaper may outlive a cancelled runtime while an IDE tool is
+    still returning from a callback. Keep its handoff state alive until then. }
+  Repeat
+    EnterCriticalSection(FLock);
+    Try Servicing := FToolServicing; Finally LeaveCriticalSection(FLock); End;
+    If Servicing Then Sleep(1);
+  Until Not Servicing;
   { TThread.Destroy joins. Owner must poll Snapshot.Done before destruction
     to keep Lazarus responsive, including after cancelling during shutdown. }
   Inherited Destroy;
@@ -100,15 +109,19 @@ Begin
     Tool := FTool;
     FToolServicing := True;
   Finally LeaveCriticalSection(FLock); End;
-  OK := Broker.Execute(FRunId, Tool.Tool, Tool.Arguments, Text, ErrorText);
-  If Not OK Then Text := ErrorText;
-  Result := True;
-  EnterCriticalSection(FLock);
   Try
-    If Not Cancelled And Not FSnapshot.Done And FToolPending Then
-      Begin FToolResult := Text; FToolSuccess := OK; FToolReady := True; End;
-    FToolServicing := False;
-  Finally LeaveCriticalSection(FLock); End;
+    OK := Broker.Execute(FRunId, Tool.Tool, Tool.Arguments, Text, ErrorText);
+    If Not OK Then Text := ErrorText;
+    Result := True;
+    EnterCriticalSection(FLock);
+    Try
+      If Not Cancelled And Not FSnapshot.Done And FToolPending Then
+        Begin FToolResult := Text; FToolSuccess := OK; FToolReady := True; End;
+    Finally LeaveCriticalSection(FLock); End;
+  Finally
+    EnterCriticalSection(FLock);
+    Try FToolServicing := False; Finally LeaveCriticalSection(FLock); End;
+  End;
 End;
 Procedure TAssistantCodexRun.Execute;
 Var Client: TAssistantCodexClient; Deadline: QWord; Tool: TCodexToolRequest;

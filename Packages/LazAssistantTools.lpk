@@ -206,7 +206,7 @@
         <UnitName Value="AssistantFileCreation"/>
       </Item46>
     </Files>
-    <RequiredPkgs Count="4">
+    <RequiredPkgs Count="5">
       <Item1>
         <PackageName Value="LazStyledText"/>
         <DefaultFilename Value="LazStyledText.lpk"/>
@@ -220,6 +220,9 @@
       <Item4>
         <PackageName Value="LCL"/>
       </Item4>
+      <Item5>
+        <PackageName Value="CodeTools"/>
+      </Item5>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>

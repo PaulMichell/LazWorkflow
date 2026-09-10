@@ -1,6 +1,6 @@
 # LazAssistantTools implementation progress
 
-Updated: 8 September 2026.
+Updated: 10 September 2026.
 
 This records implementation against the [revision plan](LazAssistantTools-Architecture-and-IDE-Integration-Revision-Plan.md). Subscription-backed Grok and ChatGPT access remains mandatory. No metered backend or API-key fallback has been added.
 
@@ -145,3 +145,13 @@ Enabled Markdown creation, revision-checked editing and explicit saving in the C
 Added regressions for approved/declined Markdown creation, editing, saving, stale revisions, Undo, forbidden source edits/saves/creation, rejected builds, project traversal and Markdown symlinks targeting source files. Updated UI hints, tool descriptions and prompts so the model knows it can save a plan rather than only returning it in chat.
 
 Validation: all 21 test programs and the assistant package build passed with range/overflow checks. Logs: `/tmp/laz-plan-markdown`. No live model request was made; rebuild/restart Lazarus to test the updated Plan workflow.
+
+## Next IDE step: semantic declaration lookup (10 September 2026)
+
+Added `lazarus_find_declaration` to the shared broker and ChatGPT tool set in all modes. It uses the Lazarus CodeTools manager and synchronized unsaved editor cache, preserving IDE project defines and unit/include paths. It requires an exact source revision and one-based UTF-8 byte coordinates, returns a declaration location without moving the editor, and rejects results when source/project/run state changes during lookup. In-project results include a bounded declaration line; library results expose location metadata only.
+
+Added real-CodeTools tests for local/cross-unit unsaved declarations, conditional compilation, byte coordinates, stale requests and lifecycle changes. Also protected managed tool handoff lifetime and nested panel polling when an IDE callback cancels the run. See [workflow, validation and limits](LazAssistantTools-CodeTools-Navigation.md).
+
+Next semantic work: reference lookup and symbol context, followed by reviewable refactoring transactions. Grok broker migration, complete build evidence, durable continuation and parallel-agent execution remain open.
+
+Validation: all 22 assistant test programs and the full package build passed with range/overflow checks; logs: `/tmp/laz-assistant-declarations`. Tests use real CodeTools, mock IDE interfaces and fake runtime processes. No live model request was made for this revision.
