@@ -15,6 +15,8 @@ Type
     Destructor Destroy; Override;
     Function IsMarkdownPath(Const Path: String): Boolean; Override;
     Function CanInspectFiles: Boolean; Override;
+    Function CanChangeSets: Boolean; Override;
+    Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
@@ -41,8 +43,15 @@ Type
   End;
 Implementation
 Uses SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  CodeToolManager, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  SynEdit, CodeToolManager, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
+Type
+  { Owned by the editor control, so reopening a file cannot reuse a receipt's
+    identity even when the allocator reuses the same object address. }
+  TAssistantChangeIdentity = Class(TComponent)
+  Public
+    ID: String;
+  End;
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;
@@ -62,6 +71,38 @@ Begin
   PhysicalPath := GetPhysicalFilename(Resolved, pfeOriginal);
   If PhysicalPath = '' Then Exit;
   Result := Inherited IsMarkdownPath(PhysicalPath);
+End;
+Function TAssistantIDEWorkspace.CanChangeSets: Boolean;
+Begin Result := Assigned(SourceEditorManagerIntf); End;
+Function TAssistantIDEWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
+Var Editor: TSourceEditorInterface; Physical: String;
+  Control: TCustomSynEdit; Token: TAssistantChangeIdentity; I: Integer; Guid: TGuid;
+  Function Supported(Const Name: String): Boolean;
+  Var Ext: String;
+  Begin
+    Ext := LowerCase(ExtractFileExt(Name));
+    Result := (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.lpr') Or (Ext = '.dpr') Or (Ext = '.inc') Or
+      (Ext = '.md') Or (Ext = '.markdown') Or (Ext = '.mdown') Or (Ext = '.txt');
+  End;
+Begin
+  Result := False; Stamp := '';
+  If Not ReadBuffer(Path, CanonicalPath, Text, ErrorText) Then Exit;
+  Physical := GetPhysicalFilename(CanonicalPath, pfeOriginal);
+  If (Physical = '') Or Not Supported(Path) Or Not Supported(CanonicalPath) Or Not Supported(Physical) Then
+    Begin ErrorText := 'Change sets support Pascal, Markdown and .txt buffers; project/designer metadata is excluded.'; Exit; End;
+  Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(CanonicalPath);
+  If Not Assigned(Editor) Or Editor.ReadOnly Or Not (Editor.EditorControl Is TCustomSynEdit) Then
+    Begin ErrorText := 'Change set requires a writable SynEdit buffer.'; Exit; End;
+  Control := TCustomSynEdit(Editor.EditorControl); Token := Nil;
+  For I := 0 To Control.ComponentCount - 1 Do
+    If Control.Components[I] Is TAssistantChangeIdentity Then Token := TAssistantChangeIdentity(Control.Components[I]);
+  If Not Assigned(Token) Then
+    Begin
+      If CreateGUID(Guid) <> 0 Then Begin ErrorText := 'Cannot create editor identity.'; Exit; End;
+      Token := TAssistantChangeIdentity.Create(Control); Token.ID := GUIDToString(Guid);
+    End;
+  Stamp := Token.ID + ':' + IntToStr(Control.ChangeStamp);
+  Result := True;
 End;
 Function TAssistantIDEWorkspace.CanInspectFiles: Boolean;
 Begin Result := True; End;

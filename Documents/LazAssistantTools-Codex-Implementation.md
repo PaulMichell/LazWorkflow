@@ -176,3 +176,11 @@ All 22 regression programs and the package build passed with range/overflow chec
 The existing local rename tools now distinguish active Pascal identifiers from comments, strings and inactive branches through CodeTools tokenization. Common compiler switches and conditional sections outside the selected routine are supported. Conditionals inside that routine, includes/macros and actual assembly still produce explicit limitations. Apply rechecks IDE defines after approval, and changing to a configuration where the declaration is inactive rejects the rename without editing.
 
 All 22 tests and the package build passed (`/tmp/laz-assistant-rename-context`). See [rename workflow and qualification](LazAssistantTools-Local-Rename-Transactions.md). Rebuild/restart Lazarus to test the change; broader symbol and multi-file rename support remains open.
+
+## Coordinated editor changes (11 September 2026)
+
+Added `lazarus_prepare_changes`, `lazarus_apply_changes`, `lazarus_change_status` and `lazarus_revert_changes`. ChatGPT can now coordinate reviewed edits across open project text buffers, with revision/stamp checks, per-file native Undo and recovery that preserves subsequent user edits. Apply/revert require Build; saving remains explicit. Receipts survive new runs in the same panel, but not panel closure or IDE restart.
+
+See [workflow, limits and live acceptance](LazAssistantTools-Multi-File-Transactions.md). Complete multi-file semantic rename and durable recovery remain future work. Rebuild/restart Lazarus to expose the new tools.
+
+Validation: all 23 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-change-sets`). Tests use real SynEdit and mock IDE interfaces; no live model request was sent. Rebuild/restart Lazarus for live acceptance.

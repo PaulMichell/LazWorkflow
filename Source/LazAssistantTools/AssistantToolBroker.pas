@@ -6,7 +6,7 @@ Unit AssistantToolBroker;
   operations must not be smuggled through a generic unvalidated tool fallback. }
 {$mode objfpc}{$H+}
 Interface
-Uses Classes, SysUtils, fpjson;
+Uses Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets;
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject);
   TAssistantWorkspaceAdapter = Class
@@ -18,6 +18,8 @@ Type
     Function Describe: String; Virtual; Abstract;
     Function IsMarkdownPath(Const Path: String): Boolean; Virtual;
     Function CanInspectFiles: Boolean; Virtual;
+    Function CanChangeSets: Boolean; Virtual;
+    Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Virtual;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Virtual;
@@ -56,6 +58,12 @@ Type
     FSnapshots: Array Of TBrokerSnapshot;
     FOnApproval: TAssistantToolApproval;
     FRenamePreview: TLocalRenamePreview;
+    FPrepared: TAssistantChangeSet;
+    FReceipts: TObjectList;
+    FChangeBusy: Boolean;
+    FChangeRun, FChangeIdentity: String;
+    Function ChangeCurrent: Boolean;
+    Function ExecuteChanges(Const Tool: String; Args: TJSONObject; Out ResultText, ErrorText: String): Boolean;
     Function ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
       Out ResultText, ErrorText: String): Boolean;
     Function CommitBuffer(Const Path, Text, NewText: String; Out ResultText, ErrorText: String): Boolean;
@@ -64,6 +72,7 @@ Type
     Function Remember(Const Path, Text: String): String;
   Public
     Constructor Create(Adapter: TAssistantWorkspaceAdapter);
+    Destructor Destroy; Override;
     Function BeginRun(WriteScope: TAssistantWriteScope): String;
     Procedure Cancel;
     Function Execute(Const RunId, Tool, Arguments: String;
@@ -88,6 +97,10 @@ Begin
   Result := (FWriteScope = awsProject) Or
     ((FWriteScope = awsMarkdown) And FAdapter.IsMarkdownPath(Path));
 End;
+Function TAssistantWorkspaceAdapter.CanChangeSets: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
+Begin CanonicalPath := ''; Text := ''; Stamp := ''; ErrorText := 'Stamped editor changes are unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanInspectFiles: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
@@ -128,10 +141,12 @@ Begin End;
 Constructor TAssistantToolBroker.Create(Adapter: TAssistantWorkspaceAdapter);
 Begin
   Inherited Create;
-  FAdapter := Adapter;
+  FAdapter := Adapter; FReceipts := TObjectList.Create(True);
   FOwner := GetCurrentThreadID;
   FCancelled := True;
 End;
+Destructor TAssistantToolBroker.Destroy;
+Begin FPrepared.Free; FReceipts.Free; Inherited Destroy; End;
 Function TAssistantToolBroker.BeginRun(WriteScope: TAssistantWriteScope): String;
 Var Id: TGuid;
 Begin
@@ -144,7 +159,7 @@ Begin
   FCancelled := False;
   FWriteScope := WriteScope;
   FRevision := 0;
-  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview);
+  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview); FreeAndNil(FPrepared);
   Result := FRunId;
 End;
 Procedure TAssistantToolBroker.Cancel;
@@ -152,7 +167,7 @@ Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
   FCancelled := True;
   FAdapter.CancelBuild;
-  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview);
+  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview); FreeAndNil(FPrepared);
 End;
 Function TAssistantToolBroker.Remember(Const Path, Text: String): String;
 Var I, Index, Bytes: Integer;
@@ -186,6 +201,106 @@ Begin
   If (Path <> '') And Not CanWritePath(Path) Then
     Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
   Result := True;
+End;
+Function TAssistantToolBroker.ChangeCurrent: Boolean;
+Begin Result := Not FCancelled And (FRunId = FChangeRun) And (FAdapter.Identity = FChangeIdentity); End;
+Function TAssistantToolBroker.ExecuteChanges(Const Tool: String; Args: TJSONObject;
+  Out ResultText, ErrorText: String): Boolean;
+Var SetItem, Candidate: TAssistantChangeSet; Changes, Node, Item: TJSONData;
+  I, J, Total: Integer; ID, Path, Text, Stamp, Revision, BeforeText, AfterText: String;
+  Fresh: Boolean; Guid: TGuid; List: TJSONArray;
+Begin
+  Result := False; ResultText := ''; ErrorText := ''; Candidate := Nil;
+  If Not FAdapter.CanChangeSets Then Begin ErrorText := 'Multi-editor changes are unavailable.'; Exit; End;
+  FChangeBusy := True; FChangeRun := FRunId; FChangeIdentity := FIdentity;
+  Try
+    If Tool = 'lazarus_prepare_changes' Then
+      Begin
+        FreeAndNil(FPrepared);
+        Changes := Args.Find('changes');
+        If Not (Changes Is TJSONArray) Or (Changes.Count < 1) Or (Changes.Count > 16) Then
+          Begin ErrorText := 'changes must contain 1-16 editor changes.'; Exit; End;
+        If FReceipts.Count >= 32 Then Begin ErrorText := 'Receipt count limit reached; recovery data is retained until the panel closes.'; Exit; End;
+        Candidate := TAssistantChangeSet.Create; Candidate.Project := FIdentity; Candidate.State := 'prepared';
+        SetLength(Candidate.Items, Changes.Count);
+        For I := 0 To Changes.Count - 1 Do
+          Begin
+            Item := Changes.Items[I];
+            If Not (Item Is TJSONObject) Then Begin ErrorText := 'Each change must be an object.'; Exit; End;
+            Node := TJSONObject(Item).Find('path');
+            If Not Assigned(Node) Or (Node.JSONType <> jtString) Then Begin ErrorText := 'Each change needs a path.'; Exit; End;
+            If Not FAdapter.ReadChangeBuffer(Node.AsString, Path, Text, Stamp, ErrorText) Then Exit;
+            If (Stamp = '') Or (Length(Text) > MaxBufferBytes) Then Begin ErrorText := 'Missing editor stamp or oversized source.'; Exit; End;
+            For J := 0 To I - 1 Do If Candidate.Items[J].Path = Path Then
+              Begin ErrorText := 'A change set cannot contain the same resolved editor twice.'; Exit; End;
+            Node := TJSONObject(Item).Find('revision');
+            If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
+              Begin ErrorText := 'Each change needs a nonempty buffer revision.'; Exit; End;
+            Revision := Node.AsString; Fresh := False;
+            For J := 0 To High(FSnapshots) Do
+              If (FSnapshots[J].Path = Path) And (FSnapshots[J].Revision = Revision) And (FSnapshots[J].Text = Text) Then Fresh := True;
+            If Not Fresh Then Begin ErrorText := 'Stale buffer revision: ' + Path; Exit; End;
+            Node := TJSONObject(Item).Find('text');
+            If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Length(Node.AsString) > MaxBufferBytes) Or
+              (Pos(#0, Node.AsString) > 0) Then Begin ErrorText := 'Each change needs bounded text without NUL bytes.'; Exit; End;
+            Candidate.Items[I].Path := Path; Candidate.Items[I].BeforeText := Text;
+            Candidate.Items[I].BeforeStamp := Stamp; Candidate.Items[I].AfterText := Node.AsString;
+            Candidate.Items[I].State := 'pending';
+          End;
+        Total := Candidate.Bytes;
+        If Total > 2097152 Then Begin ErrorText := 'Change set exceeds the 2 MiB before/after text budget.'; Exit; End;
+        For I := 0 To FReceipts.Count - 1 Do Inc(Total, TAssistantChangeSet(FReceipts[I]).Bytes);
+        If Total > MaxSnapshotBytes Then Begin ErrorText := 'Retained recovery data exceeds the 8 MiB budget.'; Exit; End;
+        If Not Candidate.CheckAll(@FAdapter.ReadChangeBuffer, @ChangeCurrent, ErrorText) Then Exit;
+        If CreateGUID(Guid) <> 0 Then Begin ErrorText := 'Cannot create change-set identity.'; Exit; End;
+        Candidate.Id := GUIDToString(Guid); FPrepared := Candidate; Candidate := Nil;
+        ResultText := FPrepared.Receipt; Exit(True);
+      End;
+    ID := Args.Get('change_set_id', '');
+    If (Tool = 'lazarus_change_status') And (ID = '') Then
+      Begin
+        List := TJSONArray.Create;
+        Try
+          If Assigned(FPrepared) And (FPrepared.Project = FIdentity) Then List.Add(GetJSON(FPrepared.Receipt));
+          For I := 0 To FReceipts.Count - 1 Do
+            If TAssistantChangeSet(FReceipts[I]).Project = FIdentity Then List.Add(GetJSON(TAssistantChangeSet(FReceipts[I]).Receipt));
+          ResultText := List.AsJSON; Exit(True);
+        Finally List.Free; End;
+      End;
+    SetItem := Nil;
+    If Assigned(FPrepared) And (FPrepared.Id = ID) Then SetItem := FPrepared;
+    For I := 0 To FReceipts.Count - 1 Do If TAssistantChangeSet(FReceipts[I]).Id = ID Then SetItem := TAssistantChangeSet(FReceipts[I]);
+    If Not Assigned(SetItem) Or (ID = '') Or (SetItem.Project <> FIdentity) Then
+      Begin ErrorText := 'Unknown or expired change set for this project.'; Exit; End;
+    If Tool = 'lazarus_change_status' Then Begin ResultText := SetItem.Receipt; Exit(True); End;
+    If FWriteScope <> awsProject Then Begin ErrorText := 'Applying or reverting a change set requires Build mode.'; Exit; End;
+    If Tool = 'lazarus_apply_changes' Then
+      Begin
+        If SetItem <> FPrepared Then Begin ErrorText := 'Change-set preview was already consumed.'; Exit; End;
+        { Move before modal callbacks: cancellation may discard FPrepared. }
+        FPrepared := Nil; FReceipts.Add(SetItem); SetItem.State := 'reviewing';
+        If Not SetItem.CheckAll(@FAdapter.ReadChangeBuffer, @ChangeCurrent, ErrorText) Then
+          Begin SetItem.State := 'rejected'; SetItem.Error := ErrorText; ResultText := SetItem.Receipt; ErrorText := ResultText; Exit; End;
+      End
+    Else If SetItem = FPrepared Then Begin ErrorText := 'This set has not been applied.'; Exit; End;
+    SetItem.ReviewText(BeforeText, AfterText);
+    If Tool = 'lazarus_revert_changes' Then
+      Begin Text := BeforeText; BeforeText := AfterText; AfterText := Text; End;
+    If Not Approve(FChangeRun, Tool, '', BeforeText, AfterText, ErrorText) Then
+      Begin
+        If Tool = 'lazarus_apply_changes' Then SetItem.State := 'rejected';
+        SetItem.Error := ErrorText; ResultText := SetItem.Receipt; ErrorText := ResultText; Exit;
+      End;
+    If Tool = 'lazarus_apply_changes' Then Result := SetItem.Apply(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent)
+    Else Result := SetItem.Revert(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent);
+    { Discard model revisions for all affected buffers; callers reread actual
+      editor text after any outcome, including recovery. }
+    If FRunId = FChangeRun Then
+      For I := 0 To High(FSnapshots) Do
+        For J := 0 To High(SetItem.Items) Do If FSnapshots[I].Path = SetItem.Items[J].Path Then FSnapshots[I].Revision := '';
+    ResultText := SetItem.Receipt;
+    If Not Result Then ErrorText := ResultText;
+  Finally Candidate.Free; FChangeBusy := False; End;
 End;
 Function TAssistantToolBroker.ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
   Out ResultText, ErrorText: String): Boolean;
@@ -231,7 +346,7 @@ Begin
   If Not FAdapter.ReadBuffer(Node.AsString, Pending.Path, Pending.Text, ErrorText) Then Exit;
   Revision := Args.Get('revision', ''); Fresh := False;
   For I := 0 To High(FSnapshots) Do
-    If (FSnapshots[I].Path = Pending.Path) And (FSnapshots[I].Revision = Revision) And
+    If (Revision <> '') And (FSnapshots[I].Path = Pending.Path) And (FSnapshots[I].Revision = Revision) And
       (FSnapshots[I].Text = Pending.Text) Then Fresh := True;
   If Not Fresh Then Begin ErrorText := 'Stale buffer revision; read the buffer before preparing a rename.'; Exit; End;
   Node := Args.Find('line');
@@ -304,6 +419,7 @@ Begin
     Begin ErrorText := 'IDE tool dispatched on the wrong thread.'; Exit; End;
   If FCancelled Or (RunId = '') Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
     Begin ErrorText := 'Workspace/run changed or was cancelled; start a new run.'; Exit; End;
+  If FChangeBusy Then Begin ErrorText := 'A multi-editor transaction is in progress.'; Exit; End;
   If Length(Arguments) > MaxBufferBytes + 65536 Then
     Begin ErrorText := 'Tool arguments exceed the buffer limit.'; Exit; End;
   Data := Nil;
@@ -313,6 +429,9 @@ Begin
       If Not (Data Is TJSONObject) Then
         Begin ErrorText := 'Expected object arguments.'; Exit; End;
       Args := TJSONObject(Data);
+      If (Tool = 'lazarus_prepare_changes') Or (Tool = 'lazarus_apply_changes') Or
+        (Tool = 'lazarus_change_status') Or (Tool = 'lazarus_revert_changes') Then
+        Begin Result := ExecuteChanges(Tool, Args, ResultText, ErrorText); Exit; End;
       If (Tool = 'lazarus_preview_local_rename') Or (Tool = 'lazarus_apply_local_rename') Then
         Begin Result := ExecuteRename(RunId, Tool, Args, ResultText, ErrorText); Exit; End;
       If Tool = 'lazarus_create_file' Then
@@ -387,7 +506,7 @@ Begin
         Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
       Revision := Args.Get('revision', ''); Index := -1;
       For I := 0 To High(FSnapshots) Do
-        If (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
+        If (Revision <> '') And (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
         Begin ErrorText := 'Stale buffer revision; read the buffer again before using this request.'; Exit; End;
       If Semantic Then
@@ -482,6 +601,14 @@ Begin
   If FAdapter.CanInspectSymbols Then Result := Result +
     ',{"type":"function","name":"lazarus_symbol_context","description":"Get a CodeTools hint and bounded source/declaration context for a Pascal symbol, using the current buffer revision. Read-only; positions are 1-based UTF-8 byte columns. External declarations expose location only.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_find_references","description":"Find semantic Pascal references to the symbol at this revision and location. Supply an explicit search_paths list of 1-32 project source files. Prefers unsaved IDE buffers. Returns searched files, failures and truncation; never assume whole-project coverage. Comments, strings, inactive branches and unrelated same-name symbols are excluded. Read-only; columns are 1-based UTF-8 bytes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"search_paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":32},"max_results":{"type":"integer","minimum":1,"maximum":200,"default":100}},"required":["path","revision","line","column","search_paths"],"additionalProperties":false}}';
+  If FAdapter.CanChangeSets Then
+    Begin
+      Result := Result + ',{"type":"function","name":"lazarus_prepare_changes","description":"Prepare one reviewed change set for 1-16 already open project text buffers. Read each buffer first and supply its revision and complete proposed text. Does not edit or save; returns a one-use change_set_id. Replaces the previous pending set. No project/designer metadata edits or inferred rename coverage.","inputSchema":{"type":"object","properties":{"changes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}},' +
+        '{"type":"function","name":"lazarus_change_status","description":"Get an in-memory change-set receipt with per-file apply/recovery outcomes. Without an ID, lists receipts for this project. Receipts survive new chats/runs until the assistant panel closes; they are not durable.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"additionalProperties":false}}';
+      If FWriteScope = awsProject Then Result := Result +
+        ',{"type":"function","name":"lazarus_apply_changes","description":"Review and apply an exact prepared multi-editor change set in Build. Validates every source and editor stamp before each write. On failure restores only confirmed unchanged assistant edits; returns explicit per-file outcomes. No saves or builds. Read buffers again for fresh edit/save revisions.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}},' +
+        '{"type":"function","name":"lazarus_revert_changes","description":"Review and restore confirmed edits from a retained change-set receipt in Build. Skips changed, closed or unverified editors; returns partial outcomes instead of overwriting user edits. Does not save. Native Undo remains per editor.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}}';
+    End;
   If FAdapter.CanPreviewRename Then
     Begin
       Result := Result + ',{"type":"function","name":"lazarus_preview_local_rename","description":"Preview a routine-local var rename using CodeTools. Requires a current buffer revision; coordinates are 1-based UTF-8 bytes. Returns exact changes and a one-use preview_id without editing. Supports one editor only; rejects parameters, globals, fields, includes/macros/assembly, conditionals inside the routine and names in active code. Ignores comments, strings and unrelated inactive branches. Preview is valid only in this run; no partial renames.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"new_name":{"type":"string"}},"required":["path","revision","line","column","new_name"],"additionalProperties":false}}';

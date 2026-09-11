@@ -1,6 +1,6 @@
 # LazAssistantTools implementation progress
 
-Updated: 10 September 2026.
+Updated: 11 September 2026.
 
 This records implementation against the [revision plan](LazAssistantTools-Architecture-and-IDE-Integration-Revision-Plan.md). Subscription-backed Grok and ChatGPT access remains mandatory. No metered backend or API-key fallback has been added.
 
@@ -22,7 +22,7 @@ A reproducible test runner and temporary project-rename fixtures accompany this 
 
 The existing Grok path remains available alongside the ChatGPT preview. Its account flow has been moved behind an interface, but the native actor still owns Responses/chat-completions serialization. Provider-specific request capabilities, full backend event contracts and managed-runtime execution ownership remain to be extracted. This is partial P1, not a claim of arbitrary-model compatibility.
 
-The new broker exposes run-scoped model-visible buffer revisions and rechecks them through the editor helper. The old native tools still require migration to that broker. Durable revisions and multi-file change sets remain P2 work. The successful Undo test is meaningful, but it is not an end-to-end stale-model-edit or designer transaction test. Disk-save failure reporting has been corrected by inspection; disk failure injection remains to be added when persistence moves behind the workspace adapter.
+The new broker exposes run-scoped model-visible buffer revisions and rechecks them through the editor helper. The old native tools still require migration to that broker. The initial in-memory multi-file change-set foundation is implemented below. Durable revisions/journals and native-tool migration remain P2 work. The successful Undo test is meaningful, but it is not an end-to-end stale-model-edit or designer transaction test. Disk-save failure reporting has been corrected by inspection; disk failure injection remains to be added when persistence moves behind the workspace adapter.
 
 No live Grok/ChatGPT model calls, subscription-usage measurements, token refresh tests or browser sign-ins were performed. Codex CLI `0.153.0` was located in the VS Code extension, its schema generated, and its initialization tested with an isolated, signed-out profile. Account entitlement, live bridge compatibility and broader plugin/hook isolation still require qualification. The preview uses a separate profile, rejects nonempty MCP inventories, disables shell features, and requests restricted read-only runtime access. Dynamic tools use the experimental App Server interface; release qualification remains open.
 
@@ -183,3 +183,13 @@ Completed the next refactoring prerequisite. Rename checks now use CodeTools tok
 Tests verify that switching IDE defines during approval invalidates a preview whose declaration becomes inactive, with no source change. The existing one-use token, exact-text validation, Build-only apply, no-save behavior and native Undo are retained. See [current workflow and limits](LazAssistantTools-Local-Rename-Transactions.md).
 
 Validation: all 22 assistant programs and the package build passed with range/overflow checks (`/tmp/laz-assistant-rename-context`). No model request was sent. Broader symbol scopes, narrower semantic collision analysis and reviewed multi-file transactions remain open.
+
+## Multi-file editor change sets and recovery (11 September 2026)
+
+Implemented the recommended transaction foundation before expanding semantic rename. ChatGPT can prepare 1–16 already-open project text buffers, review their complete before/after text together, and apply the set in Build. Every buffer is revalidated before each write using exact text, an editor lifetime identity and its change stamp. Application preserves per-file Undo and does not save.
+
+Failed applications restore only confirmed assistant edits whose bytes and stamps still match. Later user edits, reopened/read-only editors and uncertain mutations are preserved with explicit conflict/unknown outcomes. Cancellation/project switches stop recovery; per-project receipts remain available across runs until the panel closes. Fresh buffer reads are required before subsequent edits/saves. Preparation rejects empty revisions as well as stale ones.
+
+See [workflow, recovery states, limits and live acceptance](LazAssistantTools-Multi-File-Transactions.md). This is an in-memory text-buffer foundation; complete semantic multi-file rename, durable journals, disk/designer transactions and Grok broker migration remain open. The next larger work includes broader qualified refactoring and dependency-complete build/test/repair evidence.
+
+Validation: all 23 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-change-sets`). Tests use real SynEdit and mock IDE interfaces; no live model request was sent. Rebuild/restart Lazarus for live acceptance.

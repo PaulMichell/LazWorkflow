@@ -2622,6 +2622,8 @@ Begin
       Description.Caption := 'Save this exact buffer to disk: ' + Path
     Else If Tool = 'lazarus_create_file' Then
       Description.Caption := 'Create this new file and any missing parent directories (proposed text below): ' + Path
+    Else If (Tool = 'lazarus_apply_changes') Or (Tool = 'lazarus_revert_changes') Then
+      Description.Caption := 'Review all listed editor changes (current/expected text above, proposed text below). No files will be saved. Recovery skips editors changed since application.'
     Else If Tool = 'lazarus_apply_local_rename' Then
       Description.Caption := 'Apply this local-variable rename without saving (current text above, proposed text below): ' + Path
     Else Description.Caption := 'Replace this buffer (current text above, proposed text below): ' + Path;
@@ -2631,7 +2633,7 @@ Begin
     AfterMemo := TMemo.Create(Dialog); AfterMemo.Parent := Dialog;
     AfterMemo.SetBounds(16, 304, 768, 230); AfterMemo.ReadOnly := True;
     AfterMemo.ScrollBars := ssBoth; AfterMemo.WordWrap := False; AfterMemo.Text := NewText;
-    AfterMemo.Visible := (Tool = 'lazarus_replace_buffer') Or (Tool = 'lazarus_create_file') Or (Tool = 'lazarus_apply_local_rename');
+    AfterMemo.Visible := (Tool = 'lazarus_replace_buffer') Or (Tool = 'lazarus_create_file') Or (Tool = 'lazarus_apply_local_rename') Or (Tool = 'lazarus_apply_changes') Or (Tool = 'lazarus_revert_changes');
     BeforeMemo.Visible := (Tool <> 'lazarus_start_build') And (Tool <> 'lazarus_create_file');
     If Tool = 'lazarus_create_file' Then AfterMemo.SetBounds(16, 88, 768, 446);
     If Tool = 'lazarus_save_buffer' Then BeforeMemo.Height := 446;
@@ -2712,6 +2714,7 @@ Begin
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
+    'For coordinated edits, read every buffer and use lazarus_prepare_changes then lazarus_apply_changes in Build. Inspect per-file outcomes; lazarus_change_status and lazarus_revert_changes provide retained recovery. Reread before saving. ' +
     'For a routine-local variable rename, use lazarus_preview_local_rename, review its changes, then lazarus_apply_local_rename in Build; save separately. ' +
     'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +
     'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
