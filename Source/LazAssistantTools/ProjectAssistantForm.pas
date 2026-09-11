@@ -2714,6 +2714,7 @@ Begin
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
+    'For build/repair work, save only authorized changes, start a build and poll its job_id until done. Use diagnostic items to locate failures, reread before repair, then rebuild. Report stale or incomplete evidence and distinguish compilation from tests. ' +
     'For coordinated edits, read every buffer and use lazarus_prepare_changes then lazarus_apply_changes in Build. Inspect per-file outcomes; lazarus_change_status and lazarus_revert_changes provide retained recovery. Reread before saving. ' +
     'For a routine-local variable or constant rename, use lazarus_preview_local_rename, review its changes, then lazarus_apply_local_rename in Build; save separately. ' +
     'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +

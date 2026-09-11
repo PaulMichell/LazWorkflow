@@ -11,6 +11,8 @@ Type
     FBuild: IAssistantBuildJob;
     FBuildInputs: TBuildInputs;
     FBuildIdentity, FBuildMode: String;
+  Protected
+    Function BuildExecutable: String; Virtual;
   Public
     Destructor Destroy; Override;
     Function IsMarkdownPath(Const Path: String): Boolean; Override;
@@ -249,9 +251,14 @@ Begin
 End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
+Function TAssistantIDEWorkspace.BuildExecutable: String;
+Begin
+  Result := FindDefaultExecutablePath('lazbuild');
+  If Result = '' Then Result := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'lazbuild';
+End;
 Function TAssistantIDEWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
-Var Editor: TSourceEditorInterface; I, N, Bytes: Integer; Exe, ProjectFile: String;
-  Stream: TFileStream;
+Var Editor: TSourceEditorInterface; I: Integer; Exe, ProjectFile, Path, Resource: String;
+  Inputs: TBuildInputs; Project: TLazProject; Value: TBuildJobSnapshot;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Assigned(FBuild) And Not FBuild.Snapshot.Done Then
@@ -259,68 +266,79 @@ Begin
   If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or
     Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'No active Lazarus project.'; Exit; End;
-  If LazarusIDE.ActiveProject.Modified Then
-    Begin ErrorText := 'Save project settings explicitly before building.'; Exit; End;
-  ProjectFile := LazarusIDE.ActiveProject.ProjectInfoFile;
-  Exe := FindDefaultExecutablePath('lazbuild');
-  If Exe = '' Then Exe := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'lazbuild';
-  If Not FileExistsUTF8(Exe) Then
-    Begin ErrorText := 'lazbuild was not found.'; Exit; End;
-  SetLength(FBuildInputs, 0); Bytes := 0;
+  Project := LazarusIDE.ActiveProject;
+  If Project.Modified Then Begin ErrorText := 'Save project settings explicitly before building.'; Exit; End;
+  ProjectFile := Project.ProjectInfoFile;
+  Exe := BuildExecutable;
+  If Not FileExistsUTF8(Exe) Then Begin ErrorText := 'lazbuild was not found.'; Exit; End;
+  Inputs := Nil;
+  If Not AddBuildInput(Inputs, ProjectFile, ErrorText) Then Exit;
+  { Include closed project members and their ordinary paired form resources.
+    This expands observed evidence, but is not transitive dependency discovery. }
+  For I := 0 To Project.FileCount - 1 Do
+    Begin
+      If Not Assigned(Project.Files[I]) Then Continue;
+      Path := Project.Files[I].Filename;
+      If Path = '' Then Begin ErrorText := 'Save unnamed project files before building.'; Exit; End;
+      If Not FilenameIsAbsolute(Path) Then Path := ExtractFilePath(ProjectFile) + Path;
+      If Not AddBuildInput(Inputs, Path, ErrorText) Then Exit;
+      Resource := ChangeFileExt(Path, '.lfm');
+      If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs, Resource, ErrorText) Then Exit;
+      Resource := ChangeFileExt(Path, '.lrs');
+      If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs, Resource, ErrorText) Then Exit;
+    End;
   For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
     Begin
       Editor := SourceEditorManagerIntf.SourceEditors[I];
       If Not Assigned(Editor) Then Continue;
-      { Conservative: reject any dirty open input instead of guessing which
-        external unit search paths the compiler might resolve. }
-      If Editor.Modified Then
-        Begin ErrorText := 'Save changed editor buffers explicitly before building.'; Exit; End;
+      If Editor.Modified Or Editor.ModifiedDesign Then
+        Begin ErrorText := 'Save changed editor buffers and designer resources explicitly before building.'; Exit; End;
       If Editor.FileName = '' Then Continue;
-      N := Length(FBuildInputs);
-      If N >= 64 Then Begin ErrorText := 'Too many open buffers for the build snapshot.'; Exit; End;
-      SetLength(FBuildInputs, N + 1);
-      FBuildInputs[N].Path := Editor.FileName;
-      FBuildInputs[N].Text := Editor.SourceText;
-      Inc(Bytes, Length(FBuildInputs[N].Text));
-      If Bytes > 8388608 Then Begin ErrorText := 'Build snapshot size limit exceeded.'; Exit; End;
+      If Not AddBuildInput(Inputs, Editor.FileName, ErrorText) Then Exit;
     End;
-  Stream := TFileStream.Create(ProjectFile, fmOpenRead Or fmShareDenyNone);
-  Try
-    If Stream.Size > 1048576 Then Begin ErrorText := 'Project file size limit exceeded.'; Exit; End;
-    N := Length(FBuildInputs); SetLength(FBuildInputs, N + 1);
-    FBuildInputs[N].Path := ProjectFile; SetLength(FBuildInputs[N].Text, Stream.Size);
-    If Stream.Size > 0 Then Stream.ReadBuffer(FBuildInputs[N].Text[1], Stream.Size);
-  Finally Stream.Free; End;
-  FBuildIdentity := Identity;
-  FBuildMode := LazarusIDE.ActiveProject.ActiveBuildModeID;
+  { Check actual buffer text too: Modified=False alone is not evidence that
+    editor bytes match what the external compiler will read. }
+  For I := 0 To High(Inputs) Do
+    Begin
+      Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Inputs[I].Path);
+      If Assigned(Editor) And (Editor.SourceText <> Inputs[I].Text) Then
+        Begin ErrorText := 'Editor text differs from saved build input: ' + Inputs[I].Path; Exit; End;
+    End;
+  FBuildIdentity := Identity; FBuildMode := Project.ActiveBuildModeID;
+  FBuildInputs := Inputs;
   FBuild := StartAssistantBuild(Exe, ProjectFile, FBuildMode, FBuildInputs);
-  ResultText := '{"started":true,"savedBuffers":false}'; Result := True;
+  Value := FBuild.Snapshot;
+  ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","savedBuffers":false}'; Result := True;
 End;
 Function TAssistantIDEWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
-Var Value: TBuildJobSnapshot; I: Integer; Editor: TSourceEditorInterface; Stale: Boolean;
+Var Value: TBuildJobSnapshot; I: Integer; Editor: TSourceEditorInterface; Stale: Boolean; Note: String;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Not Assigned(FBuild) Then Begin ErrorText := 'No build has been started.'; Exit; End;
   Value := FBuild.Snapshot;
-  If Not Value.Done Then Begin ResultText := '{"done":false}'; Exit(True); End;
-  Stale := (Identity <> FBuildIdentity) Or Not Value.InputsUnchanged;
+  Stale := (Identity <> FBuildIdentity) Or (Value.Done And Not Value.InputsUnchanged);
   If Not Stale Then
     Begin
-      Stale := LazarusIDE.ActiveProject.Modified Or
-        (LazarusIDE.ActiveProject.ActiveBuildModeID <> FBuildMode);
-      For I := 0 To High(FBuildInputs) Do
+      Stale := Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or Not Assigned(SourceEditorManagerIntf);
+      If Not Stale Then
         Begin
-          Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FBuildInputs[I].Path);
-          If Assigned(Editor) And (Editor.Modified Or (Editor.SourceText <> FBuildInputs[I].Text)) Then Stale := True;
+          Stale := LazarusIDE.ActiveProject.Modified Or (LazarusIDE.ActiveProject.ActiveBuildModeID <> FBuildMode);
+          { Recheck disk at observation time as well as worker completion: an
+            earlier successful build must not validate subsequent saved edits. }
+          If Value.Done And Not BuildInputsMatch(FBuildInputs, Note) Then Stale := True;
+          For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+            Begin
+              Editor := SourceEditorManagerIntf.SourceEditors[I];
+              If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+            End;
+          For I := 0 To High(FBuildInputs) Do
+            Begin
+              Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FBuildInputs[I].Path);
+              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then Stale := True;
+            End;
         End;
     End;
-  ResultText := '{"done":true,"exitCode":' + IntToStr(Value.ExitCode) +
-    ',"cancelled":' + LowerCase(BoolToStr(Value.Cancelled, True)) +
-    ',"stale":' + LowerCase(BoolToStr(Stale, True)) +
-    ',"verified":false,"validationScope":"Observed open buffers and project file; dependencies are not frozen",' +
-    '"manifest":' + Value.Manifest + ',"diagnostics":"' + JsonEscapeText(Value.OutputText) +
-    '","error":"' + JsonEscapeText(Value.ErrorText) + '"}';
-  Result := True;
+  ResultText := AssistantBuildStatusJSON(Value, Stale); Result := True;
 End;
 Function TAssistantIDEWorkspace.Identity: String;
 Begin

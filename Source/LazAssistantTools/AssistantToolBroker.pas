@@ -410,7 +410,7 @@ Begin
 End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
   Out ResultText, ErrorText: String): Boolean;
-Var Data, Node: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
+Var Data, Node, BuildReply: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
   I, Index, Line, Column, MaxResults: Integer; SearchPaths: TStringList; ResultField: String; Semantic: Boolean;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
@@ -464,7 +464,21 @@ Begin
               If Not Approve(RunId, Tool, '', '', '', ErrorText) Then Exit;
               Result := FAdapter.StartBuild(ResultText, ErrorText);
             End
-          Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
+          Else
+            Begin
+              Node := Args.Find('job_id');
+              If Assigned(Node) And ((Node.JSONType <> jtString) Or (Node.AsString = '')) Then
+                Begin ErrorText := 'job_id must be a nonempty string.'; Exit; End;
+              Result := FAdapter.BuildStatus(ResultText, ErrorText);
+              If Result And Assigned(Node) Then
+                Begin
+                  BuildReply := GetJSON(ResultText);
+                  Try
+                    If Not (BuildReply Is TJSONObject) Or (TJSONObject(BuildReply).Get('job_id', '') <> Node.AsString) Then
+                      Begin Result := False; ResultText := ''; ErrorText := 'Build job is no longer current; do not use another job as evidence.'; End;
+                  Finally BuildReply.Free; End;
+                End;
+            End;
           Exit;
         End;
       If Tool = 'lazarus_project_info' Then
@@ -621,7 +635,7 @@ Begin
     ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
   If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of saved project inputs. Refuses dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_build_status","description":"Get asynchronous build diagnostics and observed-input manifest. A compiler exit code is not test or full-source validation.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}';
+    '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
   Result := Result + ']';
 End;
 End.

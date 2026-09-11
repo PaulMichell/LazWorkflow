@@ -188,3 +188,9 @@ Validation: all 23 assistant test programs and the full package build passed wit
 ## Local constant refactoring (11 September 2026)
 
 `lazarus_preview_local_rename` and `lazarus_apply_local_rename` now support routine-local constants as well as variables. Preview reports `symbolKind`; application stays Build-only and preserves Undo without saving. Tests cover typed constants, nested captures/shadowing and rejection of global/conditional/colliding cases. See [current rename scope](LazAssistantTools-Local-Rename-Transactions.md).
+
+## Build/repair loop evidence (11 September 2026)
+
+ChatGPT can now poll a correlated build job for live output and structured FPC diagnostics. Closed project units and paired resources join the observed-input manifest, and saved changes after compilation invalidate earlier evidence. Unsaved designer changes also block launch. The managed prompt directs the model to reread, repair, save authorized edits and rebuild, while separating compilation from tests.
+
+All 24 tests and the package build passed (`/tmp/laz-assistant-refactor-loop`), followed by a targeted workspace test/package rebuild for the final designer-state check. See [workflow and live acceptance](LazAssistantTools-Build-Repair-Evidence.md). Full dependency qualification, configured test execution and completion gates remain open; no live model request was sent.

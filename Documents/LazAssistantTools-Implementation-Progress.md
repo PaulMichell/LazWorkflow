@@ -199,3 +199,13 @@ Validation: all 23 assistant test programs and the full package build passed wit
 Expanded the existing semantic preview/apply tools from local variables to local constants. Previews identify the symbol kind, follow nested captures and exclude shadowed declarations. Apply retains the existing one-use preview, post-approval semantic checks and native Undo. Parameters, global/exported symbols and complete multi-file semantic rename remain open.
 
 See [rename scope and qualification](LazAssistantTools-Local-Rename-Transactions.md). Real CodeTools/SynEdit regressions and package compilation passed; no live model request was sent.
+
+## Development loop: correlated build and repair evidence (11 September 2026)
+
+Build jobs now have stable IDs, recorded executable/arguments, live merged output and structured FPC diagnostic locations. Polling an earlier job ID cannot accidentally return evidence from a replacement build. Tool responses expose output/diagnostic/manifest truncation within the managed transport limit.
+
+Build snapshots now include closed project file entries and paired form resources, as well as open buffers and the project file. Status rechecks disk after completion, catches newly dirty buffers and pending designer changes, and rejects mismatched project/build settings. Builds continue to require explicit saves. The managed prompt now describes correlated build/diagnose/repair/rebuild behavior and separate compilation/test reporting.
+
+All 24 test programs and the package build passed (`/tmp/laz-assistant-refactor-loop`); the final designer-state check also passed the targeted workspace regression and package rebuild. See [workflow, result fields, limits and live acceptance](LazAssistantTools-Build-Repair-Evidence.md).
+
+The next development-loop work is transitive dependency/configuration coverage, configured tests and completion criteria. `verified` and `testsRun` remain false. Broader symbol scopes, complete multi-file semantic rename, Grok broker migration and durable recovery remain open.
