@@ -8,7 +8,7 @@ Function IsVariableDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
 Function PrepareLocalRename(Code, Declaration: TCodeBuffer; X, Y: Integer;
   Const NewName: String; Out Preview: TJSONObject; Out ErrorText: String): Boolean;
 Implementation
-Uses Classes, SysUtils, CodeToolManager, CodeTree, CTUnitGraph, KeywordFuncLists;
+Uses Classes, SysUtils, CodeToolManager, CodeTree, CTUnitGraph, KeywordFuncLists, BasicCodeTools;
 Function IsVariableDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
 Var Node: TCodeTreeNode; Name: String; Tool: TCodeTool;
   Position: TCodePosition; CleanPos: Integer;
@@ -34,41 +34,71 @@ Begin
   Result := Not WordIsKeyWord.DoItCaseInsensitive(PChar(S)) And
     Not SameText(S, 'Self') And Not SameText(S, 'Result');
 End;
-Function HasWord(Const Text, Word: String): Boolean;
-Var I, Start: Integer;
+Function CheckRenameContext(Code: TCodeBuffer; Tool: TCodeTool;
+  Routine: TCodeTreeNode; Const NewName: String; Out ErrorText: String): Boolean;
+Var First, Last: TCodePosition; P, Start, Prev, N, Depth: Integer;
+  Token, Name, Value: String; Conditional: Boolean;
 Begin
-  Result := False; I := 1;
-  While I <= Length(Text) Do
-    If IdentChar(Text[I]) Then
-      Begin
-        Start := I;
-        Repeat Inc(I); Until (I > Length(Text)) Or Not IdentChar(Text[I]);
-        If SameText(Copy(Text, Start, I - Start), Word) Then Exit(True);
-      End
-    Else Inc(I);
-End;
-Function SupportedDirectives(Const Text: String): Boolean;
-Var I, Start: Integer; Directive, Closing: String;
-Begin
-  { Deliberately conservative even for directive-looking comment/string text.
-    Only declarations unaffected by conditional/macro/include expansion qualify. }
-  Result := False; I := 1;
-  While I <= Length(Text) Do
+  Result := False;
+  If (Routine.EndPos <= Routine.StartPos) Or
+    Not Tool.CleanPosToCodePos(Routine.StartPos, First) Or
+    Not Tool.CleanPosToCodePos(Routine.EndPos - 1, Last) Or
+    (First.Code <> Code) Or (Last.Code <> Code) Then
+    Begin ErrorText := 'Cannot establish the complete routine source boundary.'; Exit; End;
+  { CodeTools tokenization distinguishes directives from quoted text and real
+    comments. Inspect raw source too: inactive directives inside the routine
+    must not disappear merely because this configuration skips them. }
+  P := 1; Depth := 0;
+  While P <= Length(Code.Source) Do
     Begin
-      Start := 0;
-      If Copy(Text, I, 2) = '{$' Then Begin Start := I + 2; Closing := '}'; End
-      Else If Copy(Text, I, 3) = '(*$' Then Begin Start := I + 3; Closing := '*)'; End;
-      If Start > 0 Then
+      Prev := P;
+      Token := ReadNextPascalAtom(Code.Source, P, Start, Tool.Scanner.NestedComments, False);
+      If P <= Prev Then Begin ErrorText := 'Cannot scan source directives completely.'; Exit; End;
+      If Copy(Token, 1, 2) = '{$' Then Token := Copy(Token, 3, Length(Token) - 3)
+      Else If Copy(Token, 1, 3) = '(*$' Then Token := Copy(Token, 4, Length(Token) - 5)
+      Else Continue;
+      Token := Trim(Token); N := 1;
+      While (N <= Length(Token)) And (Token[N] In ['A'..'Z', 'a'..'z', '_']) Do Inc(N);
+      Name := UpperCase(Copy(Token, 1, N - 1)); Value := UpperCase(Trim(Copy(Token, N, MaxInt)));
+      Conditional := (Name = 'IF') Or (Name = 'IFDEF') Or (Name = 'IFNDEF') Or
+        (Name = 'IFOPT') Or (Name = 'ELSE') Or (Name = 'ELSEIF') Or (Name = 'ENDIF') Or (Name = 'IFEND');
+      If Conditional Then
         Begin
-          I := Start;
-          While (I <= Length(Text)) And (Copy(Text, I, Length(Closing)) <> Closing) Do Inc(I);
-          Directive := UpperCase(Trim(Copy(Text, Start, I - Start)));
-          If Not ((Pos('MODE ', Directive) = 1) Or (Directive = 'H+') Or (Directive = 'H-') Or
-            (Directive = 'R+') Or (Directive = 'R-') Or (Pos('R ', Directive) = 1) Or
-            (Pos('CODEPAGE ', Directive) = 1)) Then Exit;
+          If (Start >= First.P) And (Start <= Last.P) Then
+            Begin ErrorText := 'Conditional directives inside the selected routine are unsupported; no partial rename is produced.'; Exit; End;
+          If (Name = 'IF') Or (Name = 'IFDEF') Or (Name = 'IFNDEF') Or (Name = 'IFOPT') Then Inc(Depth)
+          Else
+            Begin
+              If Depth = 0 Then Begin ErrorText := 'Unbalanced conditional directives in source.'; Exit; End;
+              If (Name = 'ENDIF') Or (Name = 'IFEND') Then Dec(Depth);
+            End;
+          Continue;
         End;
-      Inc(I);
+      If ((Name = 'MODE') Or (Name = 'CODEPAGE')) And (Value <> '') Then Continue;
+      If (Name = 'R') And (Value <> '') And Not (Value[1] In ['+', '-']) Then Continue;
+      If ((Name = 'H') Or (Name = 'R') Or (Name = 'Q') Or (Name = 'B')) And
+        ((Value = '+') Or (Value = '-')) Then Continue;
+      If ((Name = 'RANGECHECKS') Or (Name = 'OVERFLOWCHECKS') Or (Name = 'BOOLEVAL') Or
+        (Name = 'LONGSTRINGS') Or (Name = 'WARNINGS') Or (Name = 'HINTS') Or (Name = 'NOTES')) And
+        ((Value = 'ON') Or (Value = 'OFF')) Then Continue;
+      ErrorText := 'Unsupported rename directive: $' + Name + '. Includes, defines and macros still require wider dependency handling.';
+      Exit;
     End;
+  If Depth <> 0 Then Begin ErrorText := 'Cannot account for all conditional directives in source.'; Exit; End;
+  { Scan actual, configured Pascal tokens for collisions. Comments, strings and
+    inactive branches do not introduce bindings. Keep code-wide checks until
+    narrower name-resolution/capture analysis is qualified. }
+  Tool.MoveCursorToCleanPos(1);
+  Repeat
+    Tool.ReadNextAtom;
+    Token := Tool.GetAtom;
+    If Token = '' Then Break;
+    If SameText(Token, 'asm') Then
+      Begin ErrorText := 'Assembly in active source is unsupported by local rename.'; Exit; End;
+    If (Token[1] = '&') Then Delete(Token, 1, 1);
+    If SameText(Token, NewName) Then
+      Begin ErrorText := 'The new name occurs in active Pascal code; choose another name to avoid capture or collisions.'; Exit; End;
+  Until Tool.CurPos.EndPos > Tool.SrcLen;
   Result := True;
 End;
 Function PrepareLocalRename(Code, Declaration: TCodeBuffer; X, Y: Integer;
@@ -101,8 +131,6 @@ Begin
   If (Code <> Declaration) Or SameText(ExtractFileExt(Code.Filename), '.inc') Then
     Begin ErrorText := 'Local rename requires a standalone Pascal source editor containing the declaration.'; Exit; End;
   If Not PlainIdentifier(NewName) Then Begin ErrorText := 'Use a non-keyword ASCII Pascal identifier of 1-127 characters.'; Exit; End;
-  If Not SupportedDirectives(Code.Source) Or HasWord(Code.Source, 'asm') Then
-    Begin ErrorText := 'Local rename does not yet support conditional/include/macro directives or assembly in the source.'; Exit; End;
   If Not CodeToolBoss.GetIdentifierAt(Declaration, X, Y, OldName, Node) Then
     Begin ErrorText := 'Cannot inspect the declaration identifier.'; Exit; End;
   Tool := CodeToolBoss.FindCodeToolForSource(Code);
@@ -115,8 +143,7 @@ Begin
     Begin ErrorText := 'This preview supports routine-local var declarations only; parameters, fields and global symbols are unsupported.'; Exit; End;
   If Not PlainIdentifier(OldName) Or SameText(OldName, NewName) Then
     Begin ErrorText := 'Use a different identifier; escaped identifiers and case-only renames are unsupported.'; Exit; End;
-  If HasWord(Code.Source, NewName) Then
-    Begin ErrorText := 'The new name already occurs in this source; choose an unused name to avoid capture or collisions.'; Exit; End;
+  If Not CheckRenameContext(Code, Tool, Node.Parent.Parent, NewName, ErrorText) Then Exit;
   Try
     Positions := TStringList.Create;
     If Not AddPosition(Declaration, X, Y) Then Exit;
@@ -142,7 +169,7 @@ Begin
     If Length(NewText) > 1048576 Then Begin ErrorText := 'Renamed source exceeds the 1 MiB limit.'; Exit; End;
     Preview := TJSONObject.Create;
     Preview.Add('oldName', OldName); Preview.Add('newName', NewName);
-    Preview.Add('scope', 'one routine-local variable in one editor; no save');
+    Preview.Add('scope', 'one routine-local variable under current IDE defines; other conditional routines unchanged; no save');
     Preview.Add('text', NewText);
     Changes := TJSONArray.Create; Preview.Add('changes', Changes);
     For I := 0 To High(Offsets) Do

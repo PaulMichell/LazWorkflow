@@ -170,3 +170,9 @@ All 22 regression programs passed. The settings test and package build were reru
 ChatGPT can now preview a routine-local variable rename through CodeTools using `lazarus_preview_local_rename`, then apply its one-use token in Build through `lazarus_apply_local_rename`. Preview is available in all modes. Apply repeats source/semantic validation after approval, preserves native Undo and returns a fresh buffer revision without saving. Unsupported declarations, conditional/include sources, collisions and incomplete/oversized change sets are rejected. See [workflow, limits and acceptance prompt](LazAssistantTools-Local-Rename-Transactions.md).
 
 All 22 regression programs and the package build passed with range/overflow checks (`/tmp/laz-assistant-local-rename`); the final resource-directive correction also passed a targeted semantic test and package rebuild. No live model request was made. General rename, multi-file recovery and form-resource refactoring remain open.
+
+## Rename context improvements (11 September 2026)
+
+The existing local rename tools now distinguish active Pascal identifiers from comments, strings and inactive branches through CodeTools tokenization. Common compiler switches and conditional sections outside the selected routine are supported. Conditionals inside that routine, includes/macros and actual assembly still produce explicit limitations. Apply rechecks IDE defines after approval, and changing to a configuration where the declaration is inactive rejects the rename without editing.
+
+All 22 tests and the package build passed (`/tmp/laz-assistant-rename-context`). See [rename workflow and qualification](LazAssistantTools-Local-Rename-Transactions.md). Rebuild/restart Lazarus to test the change; broader symbol and multi-file rename support remains open.

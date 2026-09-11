@@ -1,7 +1,7 @@
 Program AssistantCodeToolsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, fpjson, jsonparser,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, SynEdit, Types, CodeToolManager, CodeCache, DefineTemplates,
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, SynEdit, Types, CodeToolManager, CodeCache, DefineTemplates, BasicCodeTools,
   AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantProtocol;
 Type
   TProject = Class(TLazProject)
@@ -48,6 +48,7 @@ Type
     Broker: TAssistantToolBroker;
     AfterLookup: Integer;
     ApprovalAction, ApprovalCalls: Integer;
+    DefineOnApproval: TDefineTemplate;
     Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
     Procedure ApplyLookupChange;
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
@@ -61,6 +62,7 @@ Begin
     2: Editor.Syn.Text := Editor.Syn.Text + '// approval edit';
     3: Broker.Cancel;
     4: Project.Path := Project.Path + '.changed';
+    5: CodeToolBoss.DefineTree.Add(DefineOnApproval);
   End;
 End;
 Function TObservedWorkspace.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
@@ -137,12 +139,14 @@ Var Root, Reply, Err, Run, Revision, Args, RefArgs, ReferenceLine, DiskDependenc
   IDE: TIDE; Project: TProject; Editor: TEditor; Manager: TManager;
   Workspace: TObservedWorkspace; OtherWorkspace: TAssistantIDEWorkspace; Dependency: TCodeBuffer; Broker: TAssistantToolBroker; Calls: Integer; Stream: TFileStream;
 Function PreviewFixture(Const Source, Identifier: String): Boolean;
+Var FixtureLine, FixtureColumn: Integer;
 Begin
   Editor.Syn.Text := Source;
   Run := Broker.BeginRun(awsProject);
   If Not Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err) Then Exit(False);
+  If Not SrcPosToLineCol(Source, Pos(Identifier, Source), FixtureLine, FixtureColumn) Then Exit(False);
   Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Field(Reply, 'revision')) +
-    '","line":1,"column":' + IntToStr(Pos(Identifier, Source)) + ',"new_name":"LocalCount"}';
+    '","line":' + IntToStr(FixtureLine) + ',"column":' + IntToStr(FixtureColumn) + ',"new_name":"LocalCount"}';
   Result := Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err);
 End;
 Begin
@@ -448,6 +452,68 @@ Begin
       ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
       Check('UTF8 rename applies', Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
         And (Pos(#9 + '{é} LocalCount := LocalCount + 1;', Editor.Syn.Text) > 0));
+      Check('comment and string words do not cause false collisions or assembly rejection', PreviewFixture(
+        'unit Example; {$mode objfpc} interface implementation procedure Test; var Counter: Integer; begin ' +
+        '{ LocalCount asm } (* LocalCount asm {$include fake.inc} *) Counter := 1; ' +
+        'if ''LocalCount asm {$ifdef FAKE}'' = '''' then; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 2));
+      Check('nested comments do not create fake directives or identifiers', PreviewFixture(
+        'unit Example; {$mode objfpc} interface implementation procedure Test; var Counter: Integer; begin ' +
+        '{ outer { LocalCount asm {$ifdef FAKE} } } Counter := 1; end; end.', 'Counter'));
+      Check('inactive includes remain rejected outside routine', Not PreviewFixture(
+        'unit Example; interface implementation {$ifdef ASSISTANT_RENAME_NEVER} {$include fake.inc} {$endif} ' +
+        'procedure Test; var Counter: Integer; begin Counter := 1; end; end.', 'Counter')
+        And (Pos('Unsupported rename directive', Err) > 0));
+      Check('multiline conditional wrapper respects raw routine boundaries', PreviewFixture(
+        'unit Example;' + LineEnding + 'interface' + LineEnding + 'implementation' + LineEnding +
+        '{$ifndef ASSISTANT_RENAME_NEVER}' + LineEnding + 'procedure Test;' + LineEnding +
+        'var Counter: Integer;' + LineEnding + 'begin' + LineEnding +
+        '  Counter := 1;' + LineEnding + 'end;' + LineEnding + '{$endif}' + LineEnding + 'end.', 'Counter')
+        And (Field(Reply, 'rename.changes[0].line') = '6') And (Field(Reply, 'rename.changes[1].line') = '8'));
+      Check('line-comment directive text is ignored', PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter: Integer; begin Counter := 1; end; end. // LocalCount asm {$ifdef FAKE}', 'Counter'));
+      Check('common checking and diagnostic directives are supported', PreviewFixture(
+        'unit Example; {$mode' + #9 + 'objfpc} {$H+} {$R+} {$Q-} {$BOOLEVAL OFF} {$RANGECHECKS ON} ' +
+        '{$OVERFLOWCHECKS OFF} {$WARNINGS ON} {$HINTS OFF} {$NOTES ON} interface implementation ' +
+        'procedure Test; var Counter: Integer; begin Counter := 1; end; end.', 'Counter'));
+      Check('escaped code collision remains rejected', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter, &LocalCount: Integer; begin Counter := 1; end; end.', 'Counter')
+        And (Pos('active Pascal code', Err) > 0));
+      Check('actual assembly remains rejected', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter: Integer; begin Counter := 1; asm nop end; end; end.', 'Counter')
+        And (Pos('Assembly', Err) > 0));
+      Check('macro directives remain rejected', Not PreviewFixture(
+        'unit Example; {$macro on} interface implementation procedure Test; var Counter: Integer; begin Counter := 1; end; end.', 'Counter')
+        And (Pos('Unsupported rename directive', Err) > 0));
+      Check('inactive directives inside routine remain rejected', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter: Integer; begin ' +
+        '{$ifdef ASSISTANT_RENAME_NEVER} Counter := 1; {$else} Counter := 2; {$endif} end; end.', 'Counter')
+        And (Pos('inside the selected routine', Err) > 0));
+      Check('conditional sections in other routines are allowed', PreviewFixture(
+        'unit Example; interface implementation procedure Test; var Counter: Integer; begin Counter := 1; end; ' +
+        'procedure Other; begin {$ifdef ASSISTANT_RENAME_NEVER} {$ifdef SECOND} {$endif} {$else} {$endif} end; end.', 'Counter'));
+      DiskDependency := 'unit Example; interface implementation {$ifdef ASSISTANT_RENAME_ALTERNATE} ' +
+        'procedure Test; var LocalCount: Integer; begin LocalCount := 0; end; {$else} ' +
+        'procedure Test; var Counter: Integer; begin Counter := 1; end; {$endif} end.';
+      Check('inactive declarations outside selected routine do not conflict', PreviewFixture(DiskDependency, 'Counter')
+        And (CountField(Reply, 'rename.changes') = 2));
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Check('conditional routine rename applies only selected declaration and uses', Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
+        And (Editor.Syn.Text = StringReplace(DiskDependency, 'Counter', 'LocalCount', [rfReplaceAll]) + LineEnding));
+      Editor.Syn.Undo;
+      Check('conditional routine rename has one Undo', Editor.Syn.Text = DiskDependency + LineEnding);
+      Check('prepare configuration-change preview', PreviewFixture(DiskDependency, 'Counter'));
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Workspace.DefineOnApproval := TDefineTemplate.Create('rename-alternate', '', 'ASSISTANT_RENAME_ALTERNATE', '1', da_Define);
+      Workspace.ApprovalAction := 5; Broker.OnApproval := @Workspace.Approve;
+      Try
+        Check('changed defines during approval discard rename without editing',
+          Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
+          And (Editor.Syn.Text = DiskDependency + LineEnding) And (Reply = ''));
+      Finally
+        CodeToolBoss.DefineTree.RemoveDefineTemplate(Workspace.DefineOnApproval);
+        Workspace.DefineOnApproval := Nil; Broker.OnApproval := Nil;
+      End;
       DiskDependency := 'unit Example; interface implementation procedure Test; var Counter: Integer; begin ';
       For Calls := 1 To 201 Do DiskDependency := DiskDependency + 'Counter := 1; ';
       DiskDependency := DiskDependency + 'end; end.';

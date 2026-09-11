@@ -175,3 +175,11 @@ This first subset rejects parameters, fields, exported/global symbols, cross-fil
 The shared editor commit path also now handles callbacks that cancel or replace the run during mutation without indexing discarded snapshots or returning a misleading success. Partial mutation failures direct the user to inspect/reread the buffer and retain Undo.
 
 Validation: all 22 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-local-rename`), followed by a targeted CodeTools test/package rebuild for the final resource-directive correction. Tests use real CodeTools and SynEdit; no model request was sent. Rebuild/restart Lazarus for live acceptance.
+
+## Rename conflict and directive handling (11 September 2026)
+
+Completed the next refactoring prerequisite. Rename checks now use CodeTools tokenization, so comments, strings and unrelated inactive declarations do not cause false name conflicts. Common checking/diagnostic compiler switches are supported. CodeTools maps the selected routine to its physical source range: conditional sections outside it are allowed, while conditional directives inside it still reject the preview to avoid omitted references. Includes, defines, macros and actual assembly remain unsupported.
+
+Tests verify that switching IDE defines during approval invalidates a preview whose declaration becomes inactive, with no source change. The existing one-use token, exact-text validation, Build-only apply, no-save behavior and native Undo are retained. See [current workflow and limits](LazAssistantTools-Local-Rename-Transactions.md).
+
+Validation: all 22 assistant programs and the package build passed with range/overflow checks (`/tmp/laz-assistant-rename-context`). No model request was sent. Broader symbol scopes, narrower semantic collision analysis and reviewed multi-file transactions remain open.
