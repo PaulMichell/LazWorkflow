@@ -1,7 +1,7 @@
 Program AssistantBuildWorkspaceTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, fpjson, jsonparser,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker;
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantTestSettings;
 Type
   TProjectFile = Class(TLazProjectFile)
   Public
@@ -37,11 +37,27 @@ Type
   Public
     Project: TProject;
     Function GetActiveProject: TLazProject; Override;
+    Class Function GetPrimaryConfigPath: String; Override;
   End;
   TWorkspace = Class(TAssistantIDEWorkspace)
+  Public
+    ApprovalAction: Integer;
+    Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
   Protected
     Function BuildExecutable: String; Override;
   End;
+Class Function TIDE.GetPrimaryConfigPath: String;
+Begin Result := ExtractFilePath(LazarusIDE.ActiveProject.ProjectInfoFile); End;
+Function TWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
+Var Settings: TAssistantTestSettings;
+Begin
+  Result := ApprovalAction <> 1;
+  If (Tool = 'lazarus_start_tests') And (ApprovalAction = 2) Then
+    Begin
+      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+      Try Settings.Load; Inc(Settings.TimeoutSeconds); Settings.Save; Finally Settings.Free; End;
+    End;
+End;
 Function TProjectFile.GetFilename: String;
 Begin Result := Path; End;
 Function TProject.GetProjectInfoFile: String;
@@ -83,7 +99,7 @@ Function Field(Const Text, Name: String): String;
 Var Data: TJSONData;
 Begin Data := GetJSON(Text); Try Result := Data.FindPath(Name).AsString; Finally Data.Free; End; End;
 Var Workspace: TWorkspace; IDE: TIDE; Project: TProject; Manager: TManager; Editor: TEditor; Broker: TAssistantToolBroker;
-  Root, Run, Reply, Err, JobArgs, FirstID: String; ID: TGuid; Deadline: QWord;
+  Root, Run, Reply, Err, JobArgs, FirstID, BuildID, TestArgs: String; Settings: TAssistantTestSettings; ID: TGuid; Deadline: QWord;
 Procedure StartAndWait;
 Begin
   If Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) Then Begin WriteLn(Err); Check('build starts', False); End;
@@ -97,6 +113,7 @@ Begin
   Check('job finishes', Field(Reply, 'done') = 'true');
 End;
 Begin
+  If (ParamCount > 0) And (ParamStr(1) = 'test-failure') Then Begin WriteLn('test failed'); Halt(2); End;
   If ParamCount > 0 Then Begin WriteLn('closed.pas(1,1) Hint: fixture compiled'); Halt(0); End;
   Application.Initialize; CreateGUID(ID); Root := GetTempDir + 'laz-build-workspace-' + GUIDToString(ID); ForceDirectories(Root);
   Project := TProject.Create(Nil); Project.Path := Root + '/project.lpi'; Project.Mode := 'Debug';
@@ -131,6 +148,43 @@ Begin
     Editor.DirtyDesign := False; Editor.Text := 'different bytes';
     Check('unsaved text is refused even if modified flag is false', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
     Editor.Text := 'unit Open;'; StartAndWait;
+    BuildID := Field(Reply, 'job_id');
+    TestArgs := '{"build_job_id":"' + BuildID + '"}';
+    Check('disabled test runner cannot execute', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+    Settings := TAssistantTestSettings.Create(Root, Project.Path);
+    Try
+      Settings.Enabled := True; Settings.Executable := ParamStr(0); Settings.Arguments.Add('configured-tests'); Settings.Save;
+      Workspace.ApprovalAction := 1; Broker.OnApproval := @Workspace.Approve;
+      Check('test approval denial prevents launch', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      Workspace.ApprovalAction := 2;
+      Check('changed configuration during approval prevents launch', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err)
+        And (Pos('changed during approval', Err) > 0));
+      Workspace.ApprovalAction := 0;
+      Check('configured test command starts for current build', Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      JobArgs := '{"job_id":"' + Field(Reply, 'job_id') + '"}'; Deadline := GetTickCount64 + 4000;
+      Repeat
+        Check('poll configured tests', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err));
+        If Field(Reply, 'done') = 'true' Then Break;
+        Sleep(50);
+      Until GetTickCount64 > Deadline;
+      Check('successful configured tests remain linked to build', (Field(Reply, 'outcome') = 'test_command_passed')
+        And (Field(Reply, 'build_job_id') = BuildID) And (Field(Reply, 'testsRun') = 'true'));
+      Settings.Arguments[0] := 'test-failure'; Settings.Save;
+      Check('changing configuration invalidates old test evidence', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err)
+        And (Field(Reply, 'stale') = 'true'));
+      Check('failing test runner starts', Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      JobArgs := '{"job_id":"' + Field(Reply, 'job_id') + '"}'; Deadline := GetTickCount64 + 4000;
+      Repeat
+        Check('poll failing tests', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err));
+        If Field(Reply, 'done') = 'true' Then Break;
+        Sleep(50);
+      Until GetTickCount64 > Deadline;
+      Check('test failure cannot become compile success', Field(Reply, 'outcome') = 'test_command_failed');
+      FirstID := JobArgs; StartAndWait;
+      Check('replacement build invalidates earlier test evidence', Broker.Execute(Run, 'lazarus_test_status', FirstID, Reply, Err)
+        And (Field(Reply, 'stale') = 'true'));
+    Finally DeleteFile(Settings.StorageFilename); Settings.Free; RemoveDir(Root + '/assistant-tests'); End;
+    Broker.OnApproval := Nil;
     Project.Mode := 'Release';
     Check('build-mode switch invalidates evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));

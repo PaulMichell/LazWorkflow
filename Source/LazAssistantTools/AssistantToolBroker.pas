@@ -34,6 +34,10 @@ Type
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function CanTest: Boolean; Virtual;
+    Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Virtual;
+    Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -130,6 +134,14 @@ Function TAssistantWorkspaceAdapter.CanFindDeclaration: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
 Begin ResultText := ''; ErrorText := 'CodeTools symbol lookup is unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanTest: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean;
+Begin Command := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.TestStatus(Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -455,10 +467,22 @@ Begin
           If Not Approve(RunId, Tool, Path, '', NewText, ErrorText) Then Exit;
           Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText); Exit;
         End;
-      If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Then
+      If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Or (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanBuild Then
             Begin ErrorText := 'Build tools are unavailable in this mode.'; Exit; End;
+          If (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
+            If Not FAdapter.CanTest Then Begin ErrorText := 'Configured tests are unavailable.'; Exit; End;
+          If Tool = 'lazarus_start_tests' Then
+            Begin
+              Node := Args.Find('build_job_id');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
+                Begin ErrorText := 'A successful current build_job_id is required.'; Exit; End;
+              ActualPath := Node.AsString;
+              If Not FAdapter.TestCommand(ActualPath, Text, ErrorText) Then Exit;
+              If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;
+              Result := FAdapter.StartTests(ActualPath, Text, ResultText, ErrorText); Exit;
+            End;
           If Tool = 'lazarus_start_build' Then
             Begin
               If Not Approve(RunId, Tool, '', '', '', ErrorText) Then Exit;
@@ -469,7 +493,8 @@ Begin
               Node := Args.Find('job_id');
               If Assigned(Node) And ((Node.JSONType <> jtString) Or (Node.AsString = '')) Then
                 Begin ErrorText := 'job_id must be a nonempty string.'; Exit; End;
-              Result := FAdapter.BuildStatus(ResultText, ErrorText);
+              If Tool = 'lazarus_test_status' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
+              Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
               If Result And Assigned(Node) Then
                 Begin
                   BuildReply := GetJSON(ResultText);
@@ -636,6 +661,9 @@ Begin
   If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of saved project inputs. Refuses dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
+  If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
+    ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured project test command after a successful current build. Configure it in Settings > Project tests. Cannot supply commands or arguments. Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.","inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"}},"required":["build_job_id"],"additionalProperties":false}},' +
+    '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
   Result := Result + ']';
 End;
 End.

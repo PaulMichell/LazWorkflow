@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel, ComCtrls, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame;
+  ButtonPanel, ComCtrls, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
 
 Type
   TAssistantSettingsForm = Class(TForm)
@@ -55,6 +55,7 @@ Type
     GrokPanel: TScrollBox;
     CodexFrame: TCodexConnectionFrame;
     SpellFrame: TSpellCheckerSettingsFrame;
+    TestFrame: TAssistantTestSettingsFrame;
     SelectedConnection: Integer;
     Procedure BuildSettingsPages;
     Procedure GeneralPageResize(Sender: TObject);
@@ -224,7 +225,7 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.BuildSettingsPages;
-Var Pages: TPageControl; ConnectionPage, GeneralPage: TTabSheet;
+Var Pages: TPageControl; ConnectionPage, GeneralPage, TestPage: TTabSheet;
   Sidebar, Details, Header: TPanel; Control: TControl; I: Integer; Button: TButton;
   LabelControl: TLabel;
 Begin
@@ -237,6 +238,10 @@ Begin
   Pages := TPageControl.Create(Self); Pages.Name := 'SettingsPages'; Pages.Parent := Self; Pages.Align := alClient;
   ConnectionPage := TTabSheet.Create(Pages); ConnectionPage.PageControl := Pages; ConnectionPage.Caption := 'Connections';
   GeneralPage := TTabSheet.Create(Pages); GeneralPage.PageControl := Pages; GeneralPage.Caption := 'General';
+  TestPage := TTabSheet.Create(Pages); TestPage.PageControl := Pages; TestPage.Caption := 'Project tests';
+  TestFrame := TAssistantTestSettingsFrame.Create(Self); TestFrame.Name := 'ProjectTestSettings'; TestFrame.Parent := TestPage; TestFrame.Align := alClient;
+  If Assigned(LazarusIDE.ActiveProject) Then TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile)
+  Else TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, '');
   Sidebar := TPanel.Create(Self); Sidebar.Parent := ConnectionPage; Sidebar.Align := alLeft; Sidebar.Width := 220; Sidebar.BevelOuter := bvNone;
   Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Name := 'AddConnectionButton'; Button.Caption := 'Add ChatGPT connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @AddConnection;
   Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Caption := 'Remove connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @RemoveConnection;
@@ -571,6 +576,7 @@ Begin
   StoreConnection;
   Connections.Save;
   SpellFrame.SaveToConfig;
+  TestFrame.Save;
 End;
 
 Procedure TAssistantSettingsForm.RefreshModelsButtonClick(Sender: TObject);
@@ -693,10 +699,13 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
+Var Note: String;
 Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
+  If Not TestFrame.Validate(Note) Then
+    Begin CanClose := False; MessageDlg(Note, mtError, [mbOK], 0); Exit; End;
   StoreConnection;
   If CodexFrame.Busy Then
     Begin CanClose := False; MessageDlg('Wait for the connection check, or Cancel to close settings.', mtInformation, [mbOK], 0); Exit; End;

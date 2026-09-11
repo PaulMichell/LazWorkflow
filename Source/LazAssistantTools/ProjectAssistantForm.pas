@@ -2616,7 +2616,9 @@ Begin
     Dialog.SetBounds(0, 0, 800, 600); Dialog.BorderStyle := bsDialog;
     Description := TLabel.Create(Dialog); Description.Parent := Dialog;
     Description.AutoSize := False; Description.WordWrap := True; Description.SetBounds(16, 16, 768, 64);
-    If Tool = 'lazarus_start_build' Then
+    If Tool = 'lazarus_start_tests' Then
+      Description.Caption := 'Run the configured project test executable and arguments shown below. The working directory is the project directory; no files will be saved automatically.'
+    Else If Tool = 'lazarus_start_build' Then
       Description.Caption := 'Allow a build of the active project using its saved files and configured build commands?'
     Else If Tool = 'lazarus_save_buffer' Then
       Description.Caption := 'Save this exact buffer to disk: ' + Path
@@ -2714,7 +2716,7 @@ Begin
     'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
-    'For build/repair work, save only authorized changes, start a build and poll its job_id until done. Use diagnostic items to locate failures, reread before repair, then rebuild. Report stale or incomplete evidence and distinguish compilation from tests. ' +
+    'For build/repair work, save only authorized changes, start a build and poll its job_id until done. Use diagnostic items to locate failures, reread before repair, then rebuild. Report stale or incomplete evidence and distinguish compilation from tests. After a successful current build, use lazarus_start_tests with its build_job_id and poll lazarus_test_status with the test job_id. If no runner is configured, report missing test evidence. ' +
     'For coordinated edits, read every buffer and use lazarus_prepare_changes then lazarus_apply_changes in Build. Inspect per-file outcomes; lazarus_change_status and lazarus_revert_changes provide retained recovery. Reread before saving. ' +
     'For a routine-local variable or constant rename, use lazarus_preview_local_rename, review its changes, then lazarus_apply_local_rename in Build; save separately. ' +
     'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +

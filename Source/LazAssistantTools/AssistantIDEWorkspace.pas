@@ -8,7 +8,8 @@ Uses Classes, AssistantToolBroker, AssistantBuildJob;
 Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
   Private
-    FBuild: IAssistantBuildJob;
+    FBuild, FTests: IAssistantBuildJob;
+    FTestBuildId, FTestCommand, FTestExecutable: String;
     FBuildInputs: TBuildInputs;
     FBuildIdentity, FBuildMode: String;
   Protected
@@ -33,6 +34,10 @@ Type
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanTest: Boolean; Override;
+    Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Override;
+    Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -45,7 +50,7 @@ Type
   End;
 Implementation
 Uses SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  SynEdit, CodeToolManager, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  SynEdit, CodeToolManager, AssistantTestSettings, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Type
   { Owned by the editor control, so reopening a file cannot reuse a receipt's
@@ -58,6 +63,7 @@ Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;
 Begin
+  If Assigned(FTests) Then FTests.Cancel; FTests := Nil;
   If Assigned(FBuild) Then FBuild.Cancel;
   FBuild := Nil;
   SetLength(FBuildInputs, 0);
@@ -249,6 +255,83 @@ Begin
   If Not ReadBuffer(Path, Resolved, Text, ErrorText) Then Exit;
   Result := QueryAssistantSymbol(Resolved, Text, Line, Column, sqReferences, SearchPaths, MaxResults, ResultText, ErrorText);
 End;
+Function TAssistantIDEWorkspace.CanTest: Boolean;
+Begin Result := True; End;
+Function TAssistantIDEWorkspace.TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean;
+Var Status: String; Data: TJSONData; Settings: TAssistantTestSettings; Fingerprint: String;
+Begin
+  Result := False; Command := ''; ErrorText := '';
+  If Assigned(FTests) And Not FTests.Snapshot.Done Then Begin ErrorText := 'A test command is already running.'; Exit; End;
+  If Not BuildStatus(Status, ErrorText) Then Exit;
+  Data := GetJSON(Status);
+  Try
+    If (BuildId = '') Or (Data.FindPath('job_id').AsString <> BuildId) Or
+      (Data.FindPath('outcome').AsString <> 'compile_passed') Then
+      Begin ErrorText := 'Tests require a successful current build with unchanged observed inputs.'; Exit; End;
+  Finally Data.Free; End;
+  Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+  Try
+    Settings.Load;
+    If Not Settings.Enabled Then Begin ErrorText := 'Configure and enable the runner in Settings > Project tests.'; Exit; End;
+    If Not Settings.Validate(ErrorText) Then Exit;
+    If Not ExecutableFingerprint(Settings.ResolvedExecutable, Fingerprint, ErrorText) Then Exit;
+    { Include the reviewed binary identity, so changing it during approval also
+      invalidates this command even when its path and arguments stay the same. }
+    Data := GetJSON(Settings.CommandJSON);
+    Try
+      TJSONObject(Data).Add('executableFingerprint', Fingerprint);
+      TJSONObject(Data).Add('build_job_id', BuildId); Command := Data.AsJSON;
+    Finally Data.Free; End;
+    Result := True;
+  Finally Settings.Free; End;
+End;
+Function TAssistantIDEWorkspace.StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean;
+Var Command: String; Data: TJSONData; Args: TStringList; I: Integer; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
+Begin
+  Result := False; ResultText := '';
+  If Not TestCommand(BuildId, Command, ErrorText) Then Exit;
+  If Command <> ExpectedCommand Then Begin ErrorText := 'Test configuration, executable or build changed during approval.'; Exit; End;
+  Data := GetJSON(Command); Args := TStringList.Create;
+  Try
+    For I := 0 To Data.FindPath('arguments').Count - 1 Do Args.Add(Data.FindPath('arguments').Items[I].AsString);
+    Job := StartAssistantTest(Data.FindPath('executable').AsString, Data.FindPath('workingDirectory').AsString,
+      BuildId, Args, FBuildInputs, Data.FindPath('timeoutSeconds').AsInteger * 1000, Data.FindPath('executableFingerprint').AsString);
+    FTests := Job; FTestBuildId := BuildId; FTestCommand := Command; FTestExecutable := Data.FindPath('executable').AsString;
+    Value := FTests.Snapshot;
+    ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","build_job_id":"' + JsonEscapeText(BuildId) + '"}';
+    Result := True;
+  Finally Args.Free; Data.Free; End;
+End;
+Function TAssistantIDEWorkspace.TestStatus(Out ResultText, ErrorText: String): Boolean;
+Var Value: TBuildJobSnapshot; Status, Note, Fingerprint: String; Data: TJSONData; Stale: Boolean;
+  Settings: TAssistantTestSettings;
+Begin
+  Result := False; ResultText := ''; ErrorText := '';
+  If Not Assigned(FTests) Then Begin ErrorText := 'No test command has been started.'; Exit; End;
+  Value := FTests.Snapshot; Stale := Value.Done And Not Value.InputsUnchanged;
+  If Not BuildStatus(Status, Note) Then Stale := True
+  Else
+    Begin
+      Data := GetJSON(Status);
+      Try
+        Stale := Stale Or (Data.FindPath('job_id').AsString <> FTestBuildId) Or
+          (Data.FindPath('outcome').AsString <> 'compile_passed');
+      Finally Data.Free; End;
+    End;
+  If Not Stale Then
+    Begin
+      If Not ExecutableFingerprint(FTestExecutable, Fingerprint, Note) Or (Fingerprint <> Value.ExecutableFingerprint) Then Stale := True;
+      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+      Try
+        Settings.Load; Data := GetJSON(Settings.CommandJSON);
+        Try
+          TJSONObject(Data).Add('executableFingerprint', Fingerprint); TJSONObject(Data).Add('build_job_id', FTestBuildId);
+          If Data.AsJSON <> FTestCommand Then Stale := True;
+        Finally Data.Free; End;
+      Finally Settings.Free; End;
+    End;
+  ResultText := AssistantBuildStatusJSON(Value, Stale); Result := True;
+End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
 Function TAssistantIDEWorkspace.BuildExecutable: String;
@@ -258,9 +341,11 @@ Begin
 End;
 Function TAssistantIDEWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
 Var Editor: TSourceEditorInterface; I: Integer; Exe, ProjectFile, Path, Resource: String;
-  Inputs: TBuildInputs; Project: TLazProject; Value: TBuildJobSnapshot;
+  Inputs: TBuildInputs; Project: TLazProject; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
+  If Assigned(FTests) And Not FTests.Snapshot.Done Then
+    Begin ErrorText := 'A test command is already running.'; Exit; End;
   If Assigned(FBuild) And Not FBuild.Snapshot.Done Then
     Begin ErrorText := 'A build is already running.'; Exit; End;
   If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or
@@ -304,9 +389,9 @@ Begin
       If Assigned(Editor) And (Editor.SourceText <> Inputs[I].Text) Then
         Begin ErrorText := 'Editor text differs from saved build input: ' + Inputs[I].Path; Exit; End;
     End;
+  Job := StartAssistantBuild(Exe, ProjectFile, Project.ActiveBuildModeID, Inputs);
   FBuildIdentity := Identity; FBuildMode := Project.ActiveBuildModeID;
-  FBuildInputs := Inputs;
-  FBuild := StartAssistantBuild(Exe, ProjectFile, FBuildMode, FBuildInputs);
+  FBuildInputs := Inputs; FBuild := Job;
   Value := FBuild.Snapshot;
   ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","savedBuffers":false}'; Result := True;
 End;

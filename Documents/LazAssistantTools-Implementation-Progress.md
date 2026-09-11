@@ -209,3 +209,13 @@ Build snapshots now include closed project file entries and paired form resource
 All 24 test programs and the package build passed (`/tmp/laz-assistant-refactor-loop`); the final designer-state check also passed the targeted workspace regression and package rebuild. See [workflow, result fields, limits and live acceptance](LazAssistantTools-Build-Repair-Evidence.md).
 
 The next development-loop work is transitive dependency/configuration coverage, configured tests and completion criteria. `verified` and `testsRun` remain false. Broader symbol scopes, complete multi-file semantic rename, Grok broker migration and durable recovery remain open.
+
+## Development loop: configured project tests (11 September 2026)
+
+Added Settings → Project tests with an enabled flag, executable/Browse, literal argument lines and timeout. Commands are staged with Save/Cancel and stored per project in the IDE profile. ChatGPT's Build tools can run only that configured command after a successful current build; review includes command details and a binary fingerprint. Changes during approval prevent launch.
+
+Tests have distinct job IDs, parent build IDs and pass/fail/cancel/stale outcomes. Source/resource, designer, configuration, executable and build changes invalidate earlier evidence. The shared asynchronous worker provides bounded output and cancellation. Exit-zero test commands do not imply automatic test discovery, full dependency validation or task completion.
+
+All 25 regression programs and the assistant package build passed (`/tmp/laz-assistant-configured-tests`); final malformed-settings and scope-text changes also passed the targeted runner/package checks. Settings Save/Cancel and the new page layout were verified. See [configuration, tool workflow, limits and remaining work](LazAssistantTools-Configured-Tests.md).
+
+Next development-loop priorities are dependency/artifact coverage, supported test-report parsing and acceptance-based completion gates. Broader semantic refactoring, durable continuation and Grok broker migration remain open.

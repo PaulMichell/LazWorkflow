@@ -30,7 +30,7 @@ While running, output snapshots are published approximately every 100 ms. Standa
 | `items` | Located FPC diagnostics: job ID, path, line, column, severity, message and raw line. Column zero means the compiler gave no column. Paths are compiler-reported, not automatically opened or rewritten. |
 | `manifest` | SHA-1 fingerprints of the observed saved inputs. These identify bytes; they are not a security or immutable-build guarantee. |
 | `diagnostics` | Bounded raw log excerpt, including messages the location parser does not recognize. |
-| `verified`, `testsRun` | Both remain false: this step does not qualify the entire dependency closure or execute tests. |
+| `verified`, `testsRun` | Both remain false for build jobs. The configured-test follow-up provides separate test jobs; full dependency qualification remains open. |
 
 The parser accepts FPC location lines with fatal/error/warning/hint/note severity. Unrecognized lines remain in the raw log; they are not guessed into locations. Compiler exit status determines compile failure even when no located error can be parsed.
 
@@ -57,3 +57,7 @@ All 24 assistant regression programs and the assistant package build passed with
 After rebuilding/restarting Lazarus, test in a small project with an intentional compile error: “Build the saved project, inspect the diagnostics, repair the error with Lazarus tools, and build again. Do not claim tests passed unless you actually ran them.” With tool permissions set to Ask, inspect each proposed edit/save/build. Separately check that a saved edit after build completion makes the earlier job stale.
 
 Next: discover and fingerprint the actual transitive source/include/package/configuration dependencies; qualify consistent build inputs; add a user-configured test runner and test-result evidence; connect acceptance criteria to completion checks; add diagnostic navigation and durable job/task recovery. Parameter/exported-symbol/multi-file semantic refactoring also remains open. No FPCUnit runner or automatic “task complete” gate is claimed by this step.
+
+## Configured-test follow-up
+
+The [configured project test runner](LazAssistantTools-Configured-Tests.md) is now implemented. It reuses this worker, with separate test outcomes, executable fingerprints and parent build IDs. Test discovery/report parsing, complete dependency/artifact qualification and completion gates remain open.

@@ -194,3 +194,9 @@ Validation: all 23 assistant test programs and the full package build passed wit
 ChatGPT can now poll a correlated build job for live output and structured FPC diagnostics. Closed project units and paired resources join the observed-input manifest, and saved changes after compilation invalidate earlier evidence. Unsaved designer changes also block launch. The managed prompt directs the model to reread, repair, save authorized edits and rebuild, while separating compilation from tests.
 
 All 24 tests and the package build passed (`/tmp/laz-assistant-refactor-loop`), followed by a targeted workspace test/package rebuild for the final designer-state check. See [workflow and live acceptance](LazAssistantTools-Build-Repair-Evidence.md). Full dependency qualification, configured test execution and completion gates remain open; no live model request was sent.
+
+## Configured project tests (11 September 2026)
+
+Settings → Project tests now defines a per-project executable, literal arguments and timeout. After a current successful build, ChatGPT can call `lazarus_start_tests` with its `build_job_id`, then poll `lazarus_test_status` with the returned job ID. The existing approval policy applies; model arguments cannot replace the configured command. Results distinguish configured-test success/failure from compilation and invalidate stale source/configuration/executable evidence.
+
+All 25 tests and the package build passed (`/tmp/laz-assistant-configured-tests`), followed by targeted runner/package checks for the final malformed-settings and scope wording. The settings page and Save/Cancel behavior were verified. See [setup and live acceptance](LazAssistantTools-Configured-Tests.md). Full dependency/artifact qualification, test-report parsing and completion gates remain open.

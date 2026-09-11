@@ -34,7 +34,7 @@ def main():
     tests = ['AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
              'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantFileCreationTest', 'AssistantCodexHandshakeTest',
-             'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
+             'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
                   'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']

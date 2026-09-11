@@ -1,0 +1,7 @@
+object AssistantTestSettingsFrame: TAssistantTestSettingsFrame
+  Left = 0
+  Height = 530
+  Top = 0
+  Width = 850
+  TabOrder = 0
+end

@@ -10,9 +10,9 @@ Type
   TBuildInput = Record Path, Text: String; End;
   TBuildInputs = Array Of TBuildInput;
   TBuildJobSnapshot = Record
-    Done, Cancelled, InputsUnchanged, OutputTruncated: Boolean;
+    Done, Cancelled, InputsUnchanged, OutputTruncated, ProcessStarted: Boolean;
     ExitCode: Integer;
-    OutputText, ErrorText, Manifest, JobId, Command: String;
+    OutputText, ErrorText, Manifest, JobId, Command, Kind, ParentJobId, ExecutableFingerprint: String;
   End;
   IAssistantBuildJob = Interface
     ['{60D8C4B7-37B3-4B1C-89A5-F62B824BF6C8}']
@@ -23,6 +23,9 @@ Function ReadBuildInput(Const Path: String; Out Text, ErrorText: String): Boolea
 Function BuildInputsMatch(Const Inputs: TBuildInputs; Out ErrorText: String): Boolean;
 Function AddBuildInput(Var Inputs: TBuildInputs; Const Path: String; Out ErrorText: String): Boolean;
 Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean): String;
+Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: String): Boolean;
+Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''): IAssistantBuildJob;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000): IAssistantBuildJob;
 Implementation
@@ -42,15 +45,33 @@ Type
   Private
     FState: TBuildState;
     FKeepAlive: IAssistantBuildJob;
-    FExecutable, FProject, FMode: String;
+    FExecutable, FDirectory: String;
+    FArguments: TStringList;
     FInputs: TBuildInputs;
     FTimeout: Cardinal;
     FInitial: TBuildJobSnapshot;
     Procedure ChildFork(Sender: TObject);
     Function InputsMatch: Boolean;
+  Public
+    Destructor Destroy; Override;
   Protected
     Procedure Execute; Override;
   End;
+Destructor TBuildWorker.Destroy;
+Begin FArguments.Free; Inherited Destroy; End;
+Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: String): Boolean;
+{$IFDEF LINUX}Var Info: Stat;{$ENDIF}
+Begin
+  Result := False; Fingerprint := ''; ErrorText := '';
+  Try
+    {$IFDEF LINUX}
+    If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Or (Info.st_size > 67108864) Or
+      (fpAccess(Path, X_OK) <> 0) Then
+      Begin ErrorText := 'Test runner must be an executable regular file of at most 64 MiB.'; Exit; End;
+    {$ENDIF}
+    Fingerprint := SHA1Print(SHA1File(Path)); Result := True;
+  Except On E: Exception Do ErrorText := 'Cannot fingerprint test executable: ' + E.Message; End;
+End;
 Constructor TBuildState.Create;
 Begin
   Inherited Create;
@@ -122,15 +143,21 @@ Begin
   Try
     Root.Add('job_id', Value.JobId); Root.Add('done', Value.Done);
     Root.Add('exitCode', Value.ExitCode); Root.Add('cancelled', Value.Cancelled);
-    Root.Add('stale', Stale); Root.Add('verified', False); Root.Add('testsRun', False);
+    Root.Add('stale', Stale); Root.Add('verified', False); Root.Add('testsRun', (Value.Kind = 'test') And Value.ProcessStarted);
+    Root.Add('kind', Value.Kind); Root.Add('build_job_id', Value.ParentJobId);
+    Root.Add('executableFingerprint', Value.ExecutableFingerprint);
     If Not Value.Done Then Outcome := 'running'
     Else If Value.Cancelled Then Outcome := 'cancelled'
     Else If Stale Then Outcome := 'stale'
     Else If Value.ErrorText <> '' Then Outcome := 'failed'
+    Else If Value.Kind = 'test' Then
+      Begin If Value.ExitCode = 0 Then Outcome := 'test_command_passed' Else Outcome := 'test_command_failed'; End
     Else If Value.ExitCode <> 0 Then Outcome := 'compile_failed'
     Else Outcome := 'compile_passed';
     Root.Add('outcome', Outcome);
-    Root.Add('validationScope', 'Observed saved project members, paired resources, open buffers and project file; transitive dependencies/toolchain are not frozen. Compilation is not test validation.');
+    If Value.Kind = 'test' Then
+      Root.Add('validationScope', 'Configured test process exit and observed saved inputs/executable; tests are not automatically discovered or counted, and transitive dependencies/toolchain are not frozen.')
+    Else Root.Add('validationScope', 'Observed saved project members, paired resources, open buffers and project file; transitive dependencies/toolchain are not frozen. Compilation is not test validation.');
     Manifest := TJSONArray.Create; Root.Add('manifest', Manifest); Truncated := False; Bytes := 0;
     If Value.Manifest <> '' Then
       Begin
@@ -162,9 +189,11 @@ Begin
   Finally Root.Free; End;
 End;
 Function TBuildWorker.InputsMatch: Boolean;
-Var Note: String;
+Var Note, Fingerprint: String;
 Begin
   Result := (InterlockedCompareExchange(FState.Cancelled, 0, 0) = 0) And BuildInputsMatch(FInputs, Note);
+  If Result And (FInitial.Kind = 'test') Then
+    Result := ExecutableFingerprint(FExecutable, Fingerprint, Note) And (Fingerprint = FInitial.ExecutableFingerprint);
 End;
 Procedure TBuildWorker.Execute;
 Var P: TProcess; Value: TBuildJobSnapshot; Deadline, LastPublish: QWord;
@@ -208,10 +237,10 @@ Begin
       Value.Manifest := Value.Manifest + ']'; Publish;
       If Not InputsMatch Then Raise Exception.Create('Build inputs changed or are not saved; build not started.');
       P := TProcess.Create(Nil);
-      P.Executable := FExecutable; P.CurrentDirectory := ExtractFilePath(FProject);
-      P.Parameters.Add('--build-mode=' + FMode); P.Parameters.Add(FProject);
+      P.Executable := FExecutable; P.CurrentDirectory := FDirectory;
+      P.Parameters.Assign(FArguments);
       P.Options := [poUsePipes, poStderrToOutPut]; P.OnForkEvent := @ChildFork;
-      P.Execute;
+      P.Execute; Value.ProcessStarted := True; Publish;
       Deadline := GetTickCount64 + FTimeout;
       Repeat
         Drain(P.Output);
@@ -219,14 +248,14 @@ Begin
         Value.Cancelled := InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0;
         If Value.Cancelled Then Break;
         If GetTickCount64 >= Deadline Then
-          Begin Value.ErrorText := 'Build timed out.'; Break; End;
+          Begin Value.ErrorText := 'Build/test command timed out.'; Break; End;
         If Not P.Running And (P.Output.NumBytesAvailable = 0) Then Break;
         Sleep(5);
       Until False;
       If Not P.Running Then Value.ExitCode := P.ExitCode;
       Value.InputsUnchanged := InputsMatch;
       If Not Value.InputsUnchanged And (Value.ErrorText = '') And Not Value.Cancelled Then
-        Value.ErrorText := 'Observed source inputs changed during the build; diagnostics are stale.';
+        Value.ErrorText := 'Observed inputs or test executable changed during execution; results are stale.';
     Except
       On E: Exception Do Value.ErrorText := E.Message;
     End;
@@ -250,24 +279,45 @@ Begin
     FKeepAlive := Nil;
   End;
 End;
-Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
+Function StartCommand(Const Executable, Directory, Kind, ParentJobId, ExpectedFingerprint: String; Arguments: TStrings;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
-Var State: TBuildState; Worker: TBuildWorker; Id: TGuid; Command: TJSONObject; Args: TJSONArray;
+Var State: TBuildState; Worker: TBuildWorker; Id: TGuid; Command: TJSONObject; Args: TJSONArray; I: Integer; Note: String;
 Begin
-  If CreateGUID(Id) <> 0 Then Raise Exception.Create('Cannot create build identity.');
-  State := TBuildState.Create;
-  Result := State; State.Value.JobId := GUIDToString(Id);
+  For I := 0 To Arguments.Count - 1 Do
+    If (Arguments[I] = '') Or (Pos(#0, Arguments[I]) > 0) Then
+      Raise Exception.Create('Empty or NUL-containing process arguments are unsupported.');
+  If CreateGUID(Id) <> 0 Then Raise Exception.Create('Cannot create job identity.');
+  State := TBuildState.Create; Result := State;
+  State.Value.JobId := GUIDToString(Id); State.Value.Kind := Kind; State.Value.ParentJobId := ParentJobId;
+  If (Kind = 'test') And Not ExecutableFingerprint(Executable, State.Value.ExecutableFingerprint, Note) Then
+    Raise Exception.Create(Note);
+  If (ExpectedFingerprint <> '') And (State.Value.ExecutableFingerprint <> ExpectedFingerprint) Then
+    Raise Exception.Create('Test executable changed after approval.');
   Command := TJSONObject.Create;
   Try
-    Command.Add('executable', Executable); Command.Add('workingDirectory', ExtractFilePath(ProjectFile));
-    Args := TJSONArray.Create; Args.Add('--build-mode=' + BuildMode); Args.Add(ProjectFile); Command.Add('arguments', Args);
-    State.Value.Command := Command.AsJSON;
+    Command.Add('executable', Executable); Command.Add('workingDirectory', Directory);
+    Args := TJSONArray.Create;
+    For I := 0 To Arguments.Count - 1 Do Args.Add(Arguments[I]);
+    Command.Add('arguments', Args); State.Value.Command := Command.AsJSON;
   Finally Command.Free; End;
   Worker := TBuildWorker.Create(True);
   Worker.FreeOnTerminate := True;
   Worker.FState := State; Worker.FKeepAlive := Result; Worker.FInitial := State.Value;
-  Worker.FExecutable := Executable; Worker.FProject := ProjectFile; Worker.FMode := BuildMode;
-  Worker.FInputs := Copy(Inputs); Worker.FTimeout := TimeoutMs;
-  Worker.Start;
+  Worker.FExecutable := Executable; Worker.FDirectory := Directory;
+  Worker.FArguments := TStringList.Create; Worker.FArguments.Assign(Arguments);
+  Worker.FInputs := Copy(Inputs); Worker.FTimeout := TimeoutMs; Worker.Start;
+End;
+Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String): IAssistantBuildJob;
+Begin Result := StartCommand(Executable, Directory, 'test', BuildId, ExpectedFingerprint, Arguments, Inputs, TimeoutMs); End;
+Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
+Var Arguments: TStringList;
+Begin
+  Arguments := TStringList.Create;
+  Try
+    Arguments.Add('--build-mode=' + BuildMode); Arguments.Add(ProjectFile);
+    Result := StartCommand(Executable, ExtractFilePath(ProjectFile), 'build', '', '', Arguments, Inputs, TimeoutMs);
+  Finally Arguments.Free; End;
 End;
 End.
