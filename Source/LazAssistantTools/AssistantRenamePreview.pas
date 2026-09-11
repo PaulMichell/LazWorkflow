@@ -4,19 +4,19 @@ Unit AssistantRenamePreview;
 {$mode objfpc}{$H+}
 Interface
 Uses CodeCache, fpjson;
-Function IsVariableDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
+Function IsLocalRenameDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
 Function PrepareLocalRename(Code, Declaration: TCodeBuffer; X, Y: Integer;
   Const NewName: String; Out Preview: TJSONObject; Out ErrorText: String): Boolean;
 Implementation
 Uses Classes, SysUtils, CodeToolManager, CodeTree, CTUnitGraph, KeywordFuncLists, BasicCodeTools;
-Function IsVariableDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
+Function IsLocalRenameDeclaration(Code: TCodeBuffer; Var X, Y: Integer): Boolean;
 Var Node: TCodeTreeNode; Name: String; Tool: TCodeTool;
   Position: TCodePosition; CleanPos: Integer;
 Begin
   Result := False;
   If Not CodeToolBoss.GetIdentifierAt(Code, X, Y, Name, Node) Then Exit;
   If Assigned(Node) And (Node.Desc = ctnIdentifier) Then Node := Node.Parent;
-  If Not Assigned(Node) Or (Node.Desc <> ctnVarDefinition) Then Exit;
+  If Not Assigned(Node) Or Not (Node.Desc In [ctnVarDefinition, ctnConstDefinition]) Then Exit;
   Tool := CodeToolBoss.FindCodeToolForSource(Code);
   If Not Assigned(Tool) Then Exit;
   Position.Code := Code; Code.LineColToPosition(Y, X, Position.P);
@@ -103,7 +103,7 @@ Begin
 End;
 Function PrepareLocalRename(Code, Declaration: TCodeBuffer; X, Y: Integer;
   Const NewName: String; Out Preview: TJSONObject; Out ErrorText: String): Boolean;
-Var Node: TCodeTreeNode; OldName, NewText, Key: String; Tool: TCodeTool;
+Var Node: TCodeTreeNode; OldName, NewText, Key, SymbolKind: String; Tool: TCodeTool;
   Refs: TFPList; Cache: TFindIdentifierReferenceCache; Positions: TStringList;
   Ref: PCodeXYPosition; I, J, Offset, Swap, DeclOffset: Integer;
   Offsets: Array Of Integer; Changes: TJSONArray; Entry: TJSONObject;
@@ -137,12 +137,14 @@ Begin
   If Not Assigned(Tool) Or (Tool.Scanner.MainCode <> Code) Then
     Begin ErrorText := 'Included sources are unsupported by local rename.'; Exit; End;
   If Assigned(Node) And (Node.Desc = ctnIdentifier) Then Node := Node.Parent;
-  If Not Assigned(Node) Or (Node.Desc <> ctnVarDefinition) Or Not Assigned(Node.Parent) Or
-    (Node.Parent.Desc <> ctnVarSection) Or Not Assigned(Node.Parent.Parent) Or
+  If Not Assigned(Node) Or Not (Node.Desc In [ctnVarDefinition, ctnConstDefinition]) Or Not Assigned(Node.Parent) Or
+    Not (((Node.Desc = ctnVarDefinition) And (Node.Parent.Desc = ctnVarSection)) Or
+      ((Node.Desc = ctnConstDefinition) And (Node.Parent.Desc = ctnConstSection))) Or Not Assigned(Node.Parent.Parent) Or
     (Node.Parent.Parent.Desc <> ctnProcedure) Then
-    Begin ErrorText := 'This preview supports routine-local var declarations only; parameters, fields and global symbols are unsupported.'; Exit; End;
+    Begin ErrorText := 'This preview supports routine-local var/const declarations only; parameters, fields and global symbols are unsupported.'; Exit; End;
   If Not PlainIdentifier(OldName) Or SameText(OldName, NewName) Then
     Begin ErrorText := 'Use a different identifier; escaped identifiers and case-only renames are unsupported.'; Exit; End;
+  If Node.Desc = ctnConstDefinition Then SymbolKind := 'constant' Else SymbolKind := 'variable';
   If Not CheckRenameContext(Code, Tool, Node.Parent.Parent, NewName, ErrorText) Then Exit;
   Try
     Positions := TStringList.Create;
@@ -169,7 +171,8 @@ Begin
     If Length(NewText) > 1048576 Then Begin ErrorText := 'Renamed source exceeds the 1 MiB limit.'; Exit; End;
     Preview := TJSONObject.Create;
     Preview.Add('oldName', OldName); Preview.Add('newName', NewName);
-    Preview.Add('scope', 'one routine-local variable under current IDE defines; other conditional routines unchanged; no save');
+    Preview.Add('symbolKind', SymbolKind);
+    Preview.Add('scope', 'one routine-local variable or constant under current IDE defines; other conditional routines unchanged; no save');
     Preview.Add('text', NewText);
     Changes := TJSONArray.Create; Preview.Add('changes', Changes);
     For I := 0 To High(Offsets) Do

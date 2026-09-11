@@ -122,7 +122,7 @@ Begin
     If (Column < 1) Or (Column > Length(LineText)) Or ((Byte(LineText[Column]) And $C0) = $80) Then
       Begin ErrorText := 'Column is outside the line or inside a UTF-8 character.'; Exit; End;
     Target := Nil; X := Column; Y := Line;
-    If (Kind = sqLocalRename) And IsVariableDeclaration(Code, X, Y) Then Target := Code;
+    If (Kind = sqLocalRename) And IsLocalRenameDeclaration(Code, X, Y) Then Target := Code;
     If Not Assigned(Target) And Not CodeToolBoss.FindDeclaration(Code, Column, Line, Target, X, Y, TopLine, BlockTop, BlockBottom) Then
       Begin
         ErrorText := 'CodeTools could not resolve this declaration.';

@@ -193,3 +193,9 @@ Failed applications restore only confirmed assistant edits whose bytes and stamp
 See [workflow, recovery states, limits and live acceptance](LazAssistantTools-Multi-File-Transactions.md). This is an in-memory text-buffer foundation; complete semantic multi-file rename, durable journals, disk/designer transactions and Grok broker migration remain open. The next larger work includes broader qualified refactoring and dependency-complete build/test/repair evidence.
 
 Validation: all 23 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-change-sets`). Tests use real SynEdit and mock IDE interfaces; no live model request was sent. Rebuild/restart Lazarus for live acceptance.
+
+## Refactoring: routine-local constants (11 September 2026)
+
+Expanded the existing semantic preview/apply tools from local variables to local constants. Previews identify the symbol kind, follow nested captures and exclude shadowed declarations. Apply retains the existing one-use preview, post-approval semantic checks and native Undo. Parameters, global/exported symbols and complete multi-file semantic rename remain open.
+
+See [rename scope and qualification](LazAssistantTools-Local-Rename-Transactions.md). Real CodeTools/SynEdit regressions and package compilation passed; no live model request was sent.

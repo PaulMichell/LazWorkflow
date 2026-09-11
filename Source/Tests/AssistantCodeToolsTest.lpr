@@ -428,6 +428,35 @@ Begin
       Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"example.pas"}', Reply, Err);
       Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Field(Reply, 'revision')) + '","line":9,"column":5,"new_name":"LocalCount"}';
       Check('conditional source cannot produce a partial rename', Not Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err));
+      Check('local constant declaration and semantic uses are renamed', PreviewFixture(
+        'unit Example; interface implementation procedure Test; const Counter = 42; ' +
+        'begin if Counter = 42 then; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 2) And (Field(Reply, 'rename.symbolKind') = 'constant'));
+      ExpectedText := Editor.Syn.Text;
+      ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
+      Check('constant rename applies exact preview', Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err)
+        And (Editor.Syn.Text = StringReplace(ExpectedText, 'Counter', 'LocalCount', [rfReplaceAll])));
+      Editor.Syn.Undo; Check('constant rename preserves one native Undo', Editor.Syn.Text = ExpectedText);
+      Check('typed local constant is supported', PreviewFixture(
+        'unit Example; interface implementation procedure Test; const Counter: Integer = 42; ' +
+        'begin if Counter = 42 then; end; end.', 'Counter') And (CountField(Reply, 'rename.changes') = 2));
+      Check('local constant nested captures and shadowing are resolved', PreviewFixture(
+        'unit Example; interface implementation procedure Outer; const Counter = 42; ' +
+        'procedure Inner; begin if Counter = 42 then; end; ' +
+        'procedure Shadow; const Counter = 7; begin if Counter = 7 then; end; ' +
+        'begin if Counter = 42 then; Inner; Shadow; end; end.', 'Counter')
+        And (CountField(Reply, 'rename.changes') = 3));
+      Check('constant use resolves its local declaration', PreviewFixture(
+        'unit Example; interface implementation procedure Test; const Counter = 42; ' +
+        'begin if COUNTER = 42 then; end; end.', 'COUNTER') And (CountField(Reply, 'rename.changes') = 2));
+      Check('global constant remains outside local rename scope', Not PreviewFixture(
+        'unit Example; interface const Counter = 42; implementation end.', 'Counter'));
+      Check('constant collision rejects preview', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; const Counter = 42; LocalCount = 7; ' +
+        'begin if Counter = LocalCount then; end; end.', 'Counter'));
+      Check('conditional constant references cannot be omitted', Not PreviewFixture(
+        'unit Example; interface implementation procedure Test; const Counter = 42; ' +
+        'begin {$ifdef NEVER} if Counter = 42 then; {$endif} end; end.', 'Counter'));
       Check('global var cannot be renamed by local tool', Not PreviewFixture(
         'unit Example; interface var Counter: Integer; implementation end.', 'Counter'));
       Check('parameter cannot be renamed by local tool', Not PreviewFixture(

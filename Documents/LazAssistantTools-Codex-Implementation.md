@@ -184,3 +184,7 @@ Added `lazarus_prepare_changes`, `lazarus_apply_changes`, `lazarus_change_status
 See [workflow, limits and live acceptance](LazAssistantTools-Multi-File-Transactions.md). Complete multi-file semantic rename and durable recovery remain future work. Rebuild/restart Lazarus to expose the new tools.
 
 Validation: all 23 assistant test programs and the full package build passed with range/overflow checks (`/tmp/laz-assistant-change-sets`). Tests use real SynEdit and mock IDE interfaces; no live model request was sent. Rebuild/restart Lazarus for live acceptance.
+
+## Local constant refactoring (11 September 2026)
+
+`lazarus_preview_local_rename` and `lazarus_apply_local_rename` now support routine-local constants as well as variables. Preview reports `symbolKind`; application stays Build-only and preserves Undo without saving. Tests cover typed constants, nested captures/shadowing and rejection of global/conditional/colliding cases. See [current rename scope](LazAssistantTools-Local-Rename-Transactions.md).

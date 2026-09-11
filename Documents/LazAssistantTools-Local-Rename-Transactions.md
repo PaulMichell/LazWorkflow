@@ -37,9 +37,9 @@ Each broker run retains only one pending rename. Another preview attempt replace
 
 ## Supported semantics and limits
 
-CodeTools must identify a routine-local `var` declaration in the queried standalone Pascal editor. Declaration and references are resolved through the IDE's existing synchronized CodeTools cache and project settings. Nested-routine captures are included; unrelated same-name variables, comments and strings are excluded. Multiple variables in one declaration are handled individually.
+CodeTools must identify a routine-local `var` or `const` declaration in the queried standalone Pascal editor. Declaration and references are resolved through the IDE's existing synchronized CodeTools cache and project settings. Nested-routine captures are included; unrelated same-name variables, comments and strings are excluded. Multiple variables in one declaration are handled individually.
 
-Parameters, fields, constants, procedure/type names, global/exported symbols, included source files, and form-resource changes are unsupported. `.inc` files and references crossing a physical source boundary are rejected. There is no truncated or partial rename preview.
+Parameters, fields, global constants, procedure/type names, global/exported symbols, included source files, and form-resource changes are unsupported. `.inc` files and references crossing a physical source boundary are rejected. There is no truncated or partial rename preview.
 
 Old and new names must be plain ASCII Pascal identifiers of at most 127 characters. Keywords, `Self`, `Result`, escaped identifiers and case-only renames are rejected. To avoid capture, the new name must not already occur as an identifier in active Pascal code, including escaped spellings such as `&ItemCount`. CodeTools tokenization excludes comments, strings and inactive branches from this check. Active code elsewhere in the same unit still causes a conservative rejection; scope-specific name resolution remains future work.
 
@@ -80,3 +80,9 @@ Replaced substring/word scans with CodeTools token readers. The selected routine
 New real-CodeTools/SynEdit regressions cover comments, strings, nested/line comments containing directive-looking text, compiler switches, escaped-name collisions, real assembly, macro and inactive-include rejection, conditional sections in unrelated routines, multiline routine boundaries, inactive declarations, application and Undo within a conditional wrapper, and define changes during approval.
 
 Validation: all 22 assistant test programs and the package build passed with range/overflow checks. Logs: `/tmp/laz-assistant-rename-context`. No live model request was made. Rebuild/restart Lazarus to use the updated tools; the preview/apply arguments are unchanged.
+
+## Local constants (11 September 2026)
+
+The existing preview/apply tools now also support routine-local constants. Preview reports `symbolKind` (`variable` or `constant`). Both selecting a declaration and selecting a use are supported. Semantic references include captures by nested routines and exclude nested same-name declarations and their uses. Existing collision/directive restrictions and post-approval semantic validation apply unchanged. Global constants, parameters, fields and procedure/type renames remain unsupported.
+
+Real-CodeTools/SynEdit tests cover ordinary and typed constants, selection from a use, nested captures/shadowing, exact application, one native Undo, global-constant rejection, collisions and conditional references. The targeted regression program and assistant package compilation passed. No model request was sent.
