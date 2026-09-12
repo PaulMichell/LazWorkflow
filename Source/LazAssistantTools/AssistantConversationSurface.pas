@@ -325,8 +325,10 @@ Begin
           If Focused And (FocusedKey=FLayout[I].Key) Then
             Begin
               Style:=DefaultStyledBoxStyle; Style.BorderWidth:=1; Style.BorderColor:=clHighlight;
+              If FLayout[I].Kind In [tbkUser,tbkAnswer] Then Style.CornerRadius:=12;
+              SectionHeight:=Fragment.Height+FLayout[I].Padding*2;
               Renderer.DrawBoxFrame(GetStyledBoxGeometry(OriginX+FLayout[I].Left,
-                OriginY+FLayout.Top(I), FLayout[I].OuterWidth, Min(Int64(28), Fragment.Height),Style),Style,Clip);
+                OriginY+FLayout.Top(I), FLayout[I].OuterWidth, SectionHeight,Style),Style,Clip);
             End;
         End;
       Inc(I);
