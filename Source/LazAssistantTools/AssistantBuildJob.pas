@@ -12,7 +12,8 @@ Type
   TBuildJobSnapshot = Record
     Done, Cancelled, InputsUnchanged, OutputTruncated, ProcessStarted: Boolean;
     ExitCode: Integer;
-    OutputText, ErrorText, Manifest, JobId, Command, Kind, ParentJobId, ExecutableFingerprint: String;
+    OutputText, ErrorText, Manifest, JobId, Command, Kind, ParentJobId, ExecutableFingerprint, ReportFormat, ReportJSON: String;
+    MinimumTests: Integer;
   End;
   IAssistantBuildJob = Interface
     ['{60D8C4B7-37B3-4B1C-89A5-F62B824BF6C8}']
@@ -25,11 +26,11 @@ Function AddBuildInput(Var Inputs: TBuildInputs; Const Path: String; Out ErrorTe
 Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean): String;
 Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: String): Boolean;
 Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
-  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''): IAssistantBuildJob;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''; Const ReportFormat: String = 'exit-code'; MinimumTests: Integer = 1): IAssistantBuildJob;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000): IAssistantBuildJob;
 Implementation
-Uses Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, fpjson, jsonparser {$IFDEF LINUX}, BaseUnix{$ENDIF};
+Uses Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser {$IFDEF LINUX}, BaseUnix{$ENDIF};
 Type
   TBuildState = Class(TInterfacedObject, IAssistantBuildJob)
   Public
@@ -154,10 +155,16 @@ Begin
       Begin If Value.ExitCode = 0 Then Outcome := 'test_command_passed' Else Outcome := 'test_command_failed'; End
     Else If Value.ExitCode <> 0 Then Outcome := 'compile_failed'
     Else Outcome := 'compile_passed';
+    If Value.ReportJSON <> '' Then
+      Begin
+        Data := GetJSON(Value.ReportJSON);
+        If (Outcome = 'test_command_passed') And Not Data.FindPath('passed').AsBoolean Then Outcome := 'test_report_failed';
+        Root.Add('testReport', Data);
+      End;
     Root.Add('outcome', Outcome);
     If Value.Kind = 'test' Then
-      Root.Add('validationScope', 'Configured test process exit and observed saved inputs/executable; tests are not automatically discovered or counted, and transitive dependencies/toolchain are not frozen.')
-    Else Root.Add('validationScope', 'Observed saved project members, paired resources, open buffers and project file; transitive dependencies/toolchain are not frozen. Compilation is not test validation.');
+      Root.Add('validationScope', 'Configured process and observed saved inputs/executable. Check testReport when XML reporting is configured; test relevance and compiler/runtime environment are not verified.')
+    Else Root.Add('validationScope', 'Observed saved input manifest; check dependencies for CodeTools source coverage. Compiler/linker environment is not frozen. Compilation is not test validation.');
     Manifest := TJSONArray.Create; Root.Add('manifest', Manifest); Truncated := False; Bytes := 0;
     If Value.Manifest <> '' Then
       Begin
@@ -273,13 +280,15 @@ Begin
         P.Free;
       End;
     Value.Cancelled := InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0;
+    If (Value.Kind = 'test') And (Value.ReportFormat = 'fpcunit-xml') Then
+      Value.ReportJSON := ParseFPCUnitReport(Value.OutputText, Value.OutputTruncated, Value.MinimumTests);
     Value.Done := True;
     EnterCriticalSection(FState.Lock);
     Try FState.Value := Value; Finally LeaveCriticalSection(FState.Lock); End;
     FKeepAlive := Nil;
   End;
 End;
-Function StartCommand(Const Executable, Directory, Kind, ParentJobId, ExpectedFingerprint: String; Arguments: TStrings;
+Function StartCommand(Const Executable, Directory, Kind, ParentJobId, ExpectedFingerprint, ReportFormat: String; MinimumTests: Integer; Arguments: TStrings;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
 Var State: TBuildState; Worker: TBuildWorker; Id: TGuid; Command: TJSONObject; Args: TJSONArray; I: Integer; Note: String;
 Begin
@@ -288,7 +297,7 @@ Begin
       Raise Exception.Create('Empty or NUL-containing process arguments are unsupported.');
   If CreateGUID(Id) <> 0 Then Raise Exception.Create('Cannot create job identity.');
   State := TBuildState.Create; Result := State;
-  State.Value.JobId := GUIDToString(Id); State.Value.Kind := Kind; State.Value.ParentJobId := ParentJobId;
+  State.Value.JobId := GUIDToString(Id); State.Value.ReportFormat := ReportFormat; State.Value.MinimumTests := MinimumTests; State.Value.Kind := Kind; State.Value.ParentJobId := ParentJobId;
   If (Kind = 'test') And Not ExecutableFingerprint(Executable, State.Value.ExecutableFingerprint, Note) Then
     Raise Exception.Create(Note);
   If (ExpectedFingerprint <> '') And (State.Value.ExecutableFingerprint <> ExpectedFingerprint) Then
@@ -308,8 +317,8 @@ Begin
   Worker.FInputs := Copy(Inputs); Worker.FTimeout := TimeoutMs; Worker.Start;
 End;
 Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
-  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String): IAssistantBuildJob;
-Begin Result := StartCommand(Executable, Directory, 'test', BuildId, ExpectedFingerprint, Arguments, Inputs, TimeoutMs); End;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint, ReportFormat: String; MinimumTests: Integer): IAssistantBuildJob;
+Begin Result := StartCommand(Executable, Directory, 'test', BuildId, ExpectedFingerprint, ReportFormat, MinimumTests, Arguments, Inputs, TimeoutMs); End;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
 Var Arguments: TStringList;
@@ -317,7 +326,7 @@ Begin
   Arguments := TStringList.Create;
   Try
     Arguments.Add('--build-mode=' + BuildMode); Arguments.Add(ProjectFile);
-    Result := StartCommand(Executable, ExtractFilePath(ProjectFile), 'build', '', '', Arguments, Inputs, TimeoutMs);
+    Result := StartCommand(Executable, ExtractFilePath(ProjectFile), 'build', '', '', 'exit-code', 1, Arguments, Inputs, TimeoutMs);
   Finally Arguments.Free; End;
 End;
 End.

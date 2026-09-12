@@ -89,6 +89,7 @@ Begin
     TestFrame.Load(ConfigRoot, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := True;
     TestFrame.ExecutableEdit.Text := ParamStr(0); TestFrame.ArgumentMemo.Lines.Add('--all');
     TestFrame.ArgumentMemo.Lines.Add('two words'); TestFrame.TimeoutEdit.Value := 15;
+    TestFrame.ReportCombo.ItemIndex := 1; TestFrame.MinimumEdit.Value := 3;
     Check('test settings validate without launching a process', TestFrame.Validate(Note));
     If GetEnvironmentVariable('LAZ_SETTINGS_CAPTURE') <> '' Then
       Begin
@@ -99,7 +100,7 @@ Begin
     Dialog.SaveToConfig;
     TestSettings := TAssistantTestSettings.Create(ConfigRoot, ConfigRoot + '/fixture.lpi');
     Try TestSettings.Load; Check('test settings UI saves exact project command', TestSettings.Enabled And
-      (TestSettings.Arguments.Count = 2) And (TestSettings.Arguments[1] = 'two words') And (TestSettings.TimeoutSeconds = 15));
+      (TestSettings.Arguments.Count = 2) And (TestSettings.Arguments[1] = 'two words') And (TestSettings.TimeoutSeconds = 15) And (TestSettings.ReportFormat = 'fpcunit-xml') And (TestSettings.MinimumTests = 3));
     Finally TestSettings.Free; End;
     Store := TAssistantConnections.Create(ConfigRoot);
     Try

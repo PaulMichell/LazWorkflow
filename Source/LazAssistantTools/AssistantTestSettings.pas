@@ -11,7 +11,8 @@ Type
     Enabled: Boolean;
     Executable: String;
     Arguments: TStringList;
-    TimeoutSeconds: Integer;
+    TimeoutSeconds, MinimumTests: Integer;
+    ReportFormat: String;
     Constructor Create(Const ConfigRoot, ProjectFile: String);
     Destructor Destroy; Override;
     Procedure Load;
@@ -28,7 +29,7 @@ Constructor TAssistantTestSettings.Create(Const ConfigRoot, ProjectFile: String)
 Begin
   Inherited Create; FRoot := ConfigRoot; FProject := ProjectFile;
   If FProject <> '' Then FProject := ExpandFileName(FProject);
-  Arguments := TStringList.Create; TimeoutSeconds := 600;
+  Arguments := TStringList.Create; TimeoutSeconds := 600; MinimumTests := 1; ReportFormat := 'exit-code';
 End;
 Destructor TAssistantTestSettings.Destroy;
 Begin Arguments.Free; Inherited Destroy; End;
@@ -45,13 +46,15 @@ End;
 Procedure TAssistantTestSettings.Load;
 Var Ini: TIniFile; I: Integer; Data: TJSONData;
 Begin
-  Enabled := False; Executable := ''; TimeoutSeconds := 600; Arguments.Clear;
+  Enabled := False; Executable := ''; TimeoutSeconds := 600; MinimumTests := 1; ReportFormat := 'exit-code'; Arguments.Clear;
   If (FProject = '') Or Not FileExists(StorageFilename) Then Exit;
   Ini := TIniFile.Create(StorageFilename);
   Try
     If (Ini.ReadInteger('test', 'version', 0) <> 1) Or (Ini.ReadString('test', 'project', '') <> FProject) Then Exit;
     Executable := Ini.ReadString('test', 'executable', '');
     TimeoutSeconds := Ini.ReadInteger('test', 'timeout', 600);
+    ReportFormat := Ini.ReadString('test', 'report_format', 'exit-code');
+    MinimumTests := Ini.ReadInteger('test', 'minimum_tests', 1);
     Try Data := GetJSON(Ini.ReadString('test', 'arguments', '[]'));
     Except On E: Exception Do Exit; End;
     Try
@@ -68,6 +71,8 @@ Begin
   Result := False; ErrorText := '';
   If FProject = '' Then Begin ErrorText := 'Open a saved project before configuring tests.'; Exit; End;
   If Not Enabled Then Exit(True);
+  If Not ((ReportFormat = 'exit-code') Or (ReportFormat = 'fpcunit-xml')) Or (MinimumTests < 1) Or (MinimumTests > 1000000) Then
+    Begin ErrorText := 'Choose a supported test report and a minimum count from 1 to 1000000.'; Exit; End;
   If (Trim(Executable) = '') Or (Length(Executable) > 4096) Or (Pos(#0, Executable) > 0) Or
     (Pos(#10, Executable) > 0) Or (Pos(#13, Executable) > 0) Then
     Begin ErrorText := 'Choose a test executable path without control characters.'; Exit; End;
@@ -93,6 +98,7 @@ Begin
     Ini.Clear; Ini.WriteInteger('test', 'version', 1); Ini.WriteString('test', 'project', FProject);
     Ini.WriteBool('test', 'enabled', Enabled); Ini.WriteString('test', 'executable', Executable);
     Ini.WriteInteger('test', 'timeout', TimeoutSeconds);
+    Ini.WriteString('test', 'report_format', ReportFormat); Ini.WriteInteger('test', 'minimum_tests', MinimumTests);
     Data := TJSONArray.Create;
     Try For I := 0 To Arguments.Count - 1 Do Data.Add(Arguments[I]); Ini.WriteString('test', 'arguments', Data.AsJSON);
     Finally Data.Free; End;
@@ -106,6 +112,7 @@ Begin
   Root := TJSONObject.Create;
   Try
     Root.Add('enabled', Enabled); Root.Add('executable', ResolvedExecutable); Root.Add('workingDirectory', WorkingDirectory);
+    Root.Add('reportFormat', ReportFormat); Root.Add('minimumTests', MinimumTests);
     Root.Add('timeoutSeconds', TimeoutSeconds); Args := TJSONArray.Create; Root.Add('arguments', Args);
     For I := 0 To Arguments.Count - 1 Do Args.Add(Arguments[I]);
     Result := Root.AsJSON;

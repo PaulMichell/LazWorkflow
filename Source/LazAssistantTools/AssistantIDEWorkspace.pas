@@ -295,7 +295,7 @@ Begin
   Try
     For I := 0 To Data.FindPath('arguments').Count - 1 Do Args.Add(Data.FindPath('arguments').Items[I].AsString);
     Job := StartAssistantTest(Data.FindPath('executable').AsString, Data.FindPath('workingDirectory').AsString,
-      BuildId, Args, FBuildInputs, Data.FindPath('timeoutSeconds').AsInteger * 1000, Data.FindPath('executableFingerprint').AsString);
+      BuildId, Args, FBuildInputs, Data.FindPath('timeoutSeconds').AsInteger * 1000, Data.FindPath('executableFingerprint').AsString, Data.FindPath('reportFormat').AsString, Data.FindPath('minimumTests').AsInteger);
     FTests := Job; FTestBuildId := BuildId; FTestCommand := Command; FTestExecutable := Data.FindPath('executable').AsString;
     Value := FTests.Snapshot;
     ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","build_job_id":"' + JsonEscapeText(BuildId) + '"}';
