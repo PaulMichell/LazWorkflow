@@ -198,7 +198,7 @@ Names are provisional; they describe responsibilities rather than a requirement 
 
 ## Implementation sequence and review gates
 
-The user approved implementation after design review. The core deliverables of phases 1–6 are implemented; platform/accessibility validation and large-document publication latency remain follow-up work, as recorded in the implementation report.
+The user approved implementation after design review. The core deliverables of phases 1–6 are implemented; platform/accessibility validation and extreme-input performance acceptance remain follow-up work, as recorded in the implementation report.
 
 | Phase | Deliverable | Gate before proceeding |
 | --- | --- | --- |
@@ -256,3 +256,9 @@ The implementation report distinguishes completed regression checks from outstan
 Large Markdown sections now parse in a single background worker using detached paragraph/style values. The UI retains the last completed snapshot, publishes accepted results with conversation/section/version checks, and binds styles and measures text on the UI thread. Rapid-update, cancellation, font-change and stale-result regressions are included. The layout timer now waits a fresh interval after each work slice to avoid continuously overdue updates.
 
 The existing 4.2 MB fixture's initial synchronization fell from approximately 254 ms to 5 ms locally. Large-result publication can still take roughly 100 ms, so the 8 ms target remains open for that stage. See the implementation report for measurements, validation and remaining work.
+
+### Prepared-document publication follow-up
+
+The worker now prepares the mapped paragraph content, complete document and initial layout index before publication, then reclaims the replaced snapshot. The UI retains renderer ownership and performs only registration, attachment, visible measurement and painting. Width-only changes to large replies reuse parsed content and retain the previous fragment until the replacement is ready.
+
+Visible and background preparation share one 8 ms measurement budget per timer update. In the existing 2.8 MB streaming fixture, the largest measured layout update fell from approximately 101 ms to 9 ms and the event-pump call from approximately 106 ms to 14 ms. Those measurements support the common-case improvement; they do not close platform, accessibility, font/DPI or extreme-input acceptance work. See the implementation report for tests and remaining items.

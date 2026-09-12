@@ -60,7 +60,7 @@ Where required, supply `--library-dir` for local linker libraries. Capture mode 
 
 ## Remaining acceptance and optimization work
 
-1. **Large-document publication latency:** Background parsing is now implemented for Markdown bodies of at least 64 KiB; see the follow-up below. Binding styles and publishing a very large parsed document still happen on the UI thread and can exceed the 8 ms target. Further staging of that handoff and profiling of measurement/cache work remain.
+1. **Performance acceptance:** Background parsing and prepared-document publication are implemented for large Markdown bodies; see both follow-ups below. The latest 2.8 MB test measured a 9 ms worst layout update. The 8 ms work budget is a scheduling target, not a guaranteed upper bound on all UI work. Extremely long single paragraphs, memory peaks and font/DPI transitions still need focused profiling.
 2. **Platform and accessibility validation:** GTK3, Qt, Windows, high-DPI transitions and screen-reader behavior are not verified. The control has an accessible name and keyboard interaction, but a platform text-accessibility provider and screen-reader parity are not claimed. Bubble/scrollbar dimensions use the current StyledSurface pixel conventions.
 3. **Live IDE acceptance:** Test the user's actual IDE with streaming responses, splitter resizing, tool expansion, drag selection and long archived conversations. Automated GTK2 tests cover the model and real canvas, but do not substitute for this workflow check.
 4. **Archive lifecycle:** Existing application restrictions on switching conversations during a running request remain. Reading earlier turns within the active conversation works while output arrives; background streaming into another archived conversation is not introduced here.
@@ -93,4 +93,38 @@ All 29 test programs passed on GTK2, together with the direct assistant compilat
 | Closing while a snapshot is pending | Approximately 101 ms in the local GTK2 harness; cooperative cancellation and thread join completed. |
 | 10,000 collapsed tool rows | Approximately 154 ms for synchronization and explicit full measurement; control count and extent unchanged. |
 
-These local measurements do not establish a strict frame-time guarantee. The diagnostic `CompleteLayout` deliberately forces synchronous completion; normal streaming does not call it. Parsed-result binding, document construction and cache/measurement work can still cause a noticeable one-off pause for multi-megabyte answers. That handoff is the next performance optimization; platform, accessibility and live-IDE acceptance items above remain open.
+These local measurements do not establish a strict frame-time guarantee. The diagnostic `CompleteLayout` deliberately forces synchronous completion; normal streaming does not call it. Parsed-result binding, document construction and cache/measurement work can still cause a noticeable one-off pause for multi-megabyte answers. Those handoff costs motivated the prepared-document stage below. Platform, accessibility and live-IDE acceptance items above remain open.
+
+## Follow-up: prepared-document publication
+
+Implemented after the background parser and Markdown Viewer tweaks, 12 September 2026.
+
+The worker now has three stages, with exclusive ownership transferred between it and the UI:
+
+1. Parse Markdown into local paragraph/style values.
+2. After the UI registers the small style table, apply the returned integer mapping, compose the title/body/footer, build a `TStyledDocument`, and construct an unmeasured `TStyledMemoLayout` and initial height index. This stage uses no canvas, font object, widget or section pointer.
+3. Reclaim the replaced fragment and cached content on the worker during normal publication. Clearing or closing the view still cancels/joins the worker and disposes any remaining state.
+
+The UI attaches its renderer to the prepared layout once, swaps in the accepted document, and measures visible text. The existing epoch, section identity, source version and font-size checks still apply. Width, title, footer and result-state changes during preparation cause the same snapshot to be prepared again with current metadata. A width-only resize of a large reply preserves the old fragment until its replacement is ready and reuses the parsed body without parsing Markdown again.
+
+`TStyledMemoLayout.AttachRenderer` explicitly supports this ownership transfer and rejects attaching a second renderer. `TParsedStyledMarkdown.BindStyles` accepts a registered style mapping without accessing the renderer. Existing synchronous callers remain supported.
+
+Visible and background paragraph preparation now share an 8 ms work budget within a layout-timer update, including the measurement budget passed to StyledText. Visible text gets priority. Incomplete preparation keeps the timer active; exhausted passes no longer each receive a fresh 8 ms allowance. Painting, index updates and scheduling overhead remain outside a strict measurement-time guarantee.
+
+### Validation and measurements
+
+The 2,818,137-byte streaming fixture measured:
+
+| Metric | Before this follow-up | After this follow-up |
+| --- | --- | --- |
+| Largest layout-timer update | Approximately 101 ms | 9 ms |
+| Largest event-pump call | Approximately 106 ms | 14 ms |
+| Initial synchronization | Below millisecond resolution | Below millisecond resolution |
+
+The preparation-only change first measured 25 ms for a layout update; sharing the measurement budget reduced it further. These are local GTK2 observations, not universal timing limits.
+
+The extended async regression checks parse/prepare/disposal ownership, valid document construction, header/footer composition, distinct body box groups, table columns, initial height indexes, one-time renderer attachment and disposal on the worker thread. Integration checks include width-only resize without reparsing, updated metadata and font size during preparation, stale-result rejection, reading-anchor preservation, shutdown and equality with synchronous Markdown output.
+
+All 29 assistant test programs passed on GTK2, together with direct assistant compilation and real LazWorkflowCommon, LazStyledText and LazAssistantTools package builds. The standalone scrolling fixture also keeps all 10,000 tool sections reachable with two shared scrollbar controls.
+
+The next acceptance work is the live IDE workflow, font/DPI and accessibility behavior, other widget sets, and profiling extreme single-paragraph inputs and memory peaks. The common large-reply handoff no longer rebuilds the entire styled document on the UI thread.

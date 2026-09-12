@@ -1,7 +1,7 @@
 Program AssistantMarkdownAsyncTest;
 {$mode objfpc}{$H+}{$codepage utf8}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Graphics,
-  StyledTextTypes, StyledTextDocument, StyledMarkdown, AssistantTrace, AssistantConversationSurface;
+  StyledTextTypes, StyledTextDocument, StyledMarkdown, AssistantTrace, AssistantConversationSurface, AssistantMarkdownWorker;
 Procedure Check(Const Name: String; Passed: Boolean);
 Begin
   If Not Passed Then Begin WriteLn('FAIL ',Name); Halt(1); End;
@@ -11,6 +11,59 @@ Var Host: TForm; View: TAssistantConversationSurface; Trace: TAssistantTrace;
   Block: TTraceBlock; Body, Latest, OldKey: String; I,J: Integer;
   BeforeTop: Int64; Started, Deadline, CountBefore, MaxPumpMs: QWord;
   Expected: TStyledContent; Parsed: TParsedStyledMarkdown;
+Var DisposalThread: TThreadID;
+Type TDisposalProbe = Class
+  Destructor Destroy; Override;
+End;
+Destructor TDisposalProbe.Destroy;
+Begin DisposalThread:=GetCurrentThreadID; Inherited Destroy; End;
+Procedure TestPreparedJob;
+Var Worker: TAssistantMarkdownWorker; Job: TAssistantMarkdownJob;
+  StopAt: QWord; N: Integer; Rejected: Boolean;
+  Procedure AwaitJob;
+  Begin
+    StopAt:=GetTickCount64+5000;
+    Repeat
+      Job:=Worker.Take;
+      If Assigned(Job) Then Exit;
+      Sleep(1);
+    Until GetTickCount64>=StopAt;
+    Check('worker stage finishes',False);
+  End;
+Begin
+  Worker:=TAssistantMarkdownWorker.Create; Job:=Nil;
+  Try
+    Job:=TAssistantMarkdownJob.Create;
+    Job.Source:='## Heading'+#10+#10+'| A | B |'+#10+'| --- | --- |'+#10+'| **one** | two |';
+    Job.BaseSize:=10;
+    Check('submit parse stage',Worker.Submit(Job)); Job:=Nil; AwaitJob;
+    Check('parse has no prepared document yet',Assigned(Job.Parsed) And Not Assigned(Job.PreparedDocument));
+    SetLength(Job.Mapping,Length(Job.Parsed.Styles));
+    For N:=0 To High(Job.Mapping) Do Job.Mapping[N]:=View.Renderer.AddStyle(Job.Parsed.Styles[N]);
+    Job.Prefix:=StyledContentFromText('Assistant'); Job.Prefix[0].Box.Group:=1;
+    Job.Suffix:=StyledContentFromText('Worked for 0:01');
+    Job.Width:=320; Job.Stage:=amsPrepare;
+    Check('submit preparation stage',Worker.Submit(Job)); Job:=Nil; AwaitJob;
+    Check('worker built a valid document',Assigned(Job.PreparedDocument) And Job.PreparedDocument.Validate);
+    Check('worker kept header and footer',(Job.PreparedDocument[0]^.Text='Assistant') And
+      (Job.PreparedDocument[Job.PreparedDocument.Count-1]^.Text='Worked for 0:01'));
+    Check('worker shifted body groups past header',Job.PreparedDocument[1]^.Box.Group<>Job.PreparedDocument[0]^.Box.Group);
+    Check('worker retained table columns',Length(Job.PreparedDocument[2]^.Box.Columns)=2);
+    Check('worker prepared all estimated heights',Length(Job.PreparedLayout.Heights.Values)=Job.PreparedDocument.Count);
+    Job.PreparedLayout.AttachRenderer(View.Renderer);
+    Job.PreparedLayout.Ensure(1,True);
+    Check('prepared layout measures after UI attachment',Assigned(Job.PreparedLayout.Paragraphs[1]));
+    Rejected:=False;
+    Try Job.PreparedLayout.AttachRenderer(View.Renderer); Except On E: EArgumentException Do Rejected:=True; End;
+    Check('layout cannot attach a second renderer',Rejected);
+    Job.RetiredObject:=TDisposalProbe.Create; Job.Stage:=amsRetire;
+    Check('submit disposal stage',Worker.Submit(Job)); Job:=Nil;
+    StopAt:=GetTickCount64+5000;
+    While Worker.Busy And (GetTickCount64<StopAt) Do Sleep(1);
+    Check('retired snapshot freed on worker',(Not Worker.Busy) And (DisposalThread<>0) And (DisposalThread<>GetCurrentThreadID));
+  Finally Job.Free; Worker.Free; End;
+End;
+
 Procedure Sync;
 Var N: Integer;
 Begin
@@ -40,6 +93,7 @@ Begin
     Host.SetBounds(0,0,800,600);
     View:=TAssistantConversationSurface.Create(Host); View.Parent:=Host; View.Align:=alClient;
     Host.Show; Application.ProcessMessages;
+    TestPreparedJob;
     Body:=UTF8String('Paragraph **bold** with café and `code`.')+#10+#10;
     While Length(Body)<2*1024*1024 Do Body+=Body;
     Trace.AddUser('Keep this question visible.');
@@ -70,9 +124,16 @@ Begin
     Check('partial fence converges to code',Pos('```',StyledContentText(View.Layout[1].BodyContent))=0);
     CountBefore:=View.Layout.ParseCount; Sync;
     Check('unchanged source is not reparsed',View.Layout.ParseCount=CountBefore);
+    Host.Width:=720; Application.ProcessMessages; AwaitLatest;
+    Check('width-only reflow keeps parsed content',View.Layout.ParseCount=CountBefore);
+    Check('width-only preparation uses current width',View.Layout[1].Full.Width=View.Layout[1].OuterWidth-2*View.Layout[1].Padding);
     Block.Body:=Latest+#10+'## A larger heading'; Sync;
+    Block.Title:='Assistant updated'; Block.Footer:='Latest footer'; Sync;
     View.Font.Size:=14; Host.Width:=650;
     AwaitLatest;
+    Check('prepared header tracks metadata changes',View.Layout[1].Full.Document[0]^.Text='Assistant updated');
+    Check('prepared footer tracks metadata changes',View.Layout[1].Full.Document[View.Layout[1].Full.Document.Count-1]^.Text='Latest footer');
+    Check('prepared width tracks resize',View.Layout[1].Full.Width=View.Layout[1].OuterWidth-2*View.Layout[1].Padding);
     Check('pending parse respects font changes',View.Layout[1].ParsedBaseSize=14);
     Check('extent published after async update',View.ContentHeight=View.Layout.TotalHeight);
     OldKey:=Block.ID; Block.Body:=Latest+#10+'OLD CONVERSATION'; Sync;

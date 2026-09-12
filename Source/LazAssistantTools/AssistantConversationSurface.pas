@@ -175,6 +175,7 @@ Procedure TAssistantConversationSurface.PrepareViewport;
 Var Anchor: TConversationAnchor; I,First,Last,Pass: Integer; LocalTop: Int64;
 Begin
   If FUpdating Or Not Assigned(FLayout) Then Exit;
+  If Not FInTick Then FLayout.BeginWorkSlice;
   FUpdating := True;
   Try
     Anchor := CaptureAnchor;
@@ -194,7 +195,7 @@ Begin
       End;
     FLayout.TrimDrawings(First, Last, ScrollTop, ScrollTop+ViewRect.Height); Inc(FLayoutRevision);
   Finally FUpdating := False; End;
-  If Assigned(Timer) And Not FInTick And FLayout.PendingWork Then Timer.Enabled:=True;
+  If Assigned(Timer) And Not FInTick And (FLayout.PendingWork Or FLayout.LayoutIncomplete) Then Timer.Enabled:=True;
 End;
 Procedure TAssistantConversationSurface.Tick(Sender: TObject);
 Var Deadline, Started: QWord; Anchor: TConversationAnchor;
@@ -202,6 +203,7 @@ Begin
   If FUpdating Or (csDestroying In ComponentState) Then Exit;
   Started:=GetTickCount64;
   Timer.Enabled:=False; FInTick:=True;
+  FLayout.BeginWorkSlice;
   Try
   If Selecting Then
     Begin
@@ -209,6 +211,7 @@ Begin
       Else If PointerPosition.Y > ViewRect.Bottom Then ScrollTop := ScrollTop + 20;
       SelectionEnd := HitPosition(PointerPosition.X, EnsureRange(PointerPosition.Y, ViewRect.Top, ViewRect.Bottom-1));
     End;
+  PrepareViewport;
   Anchor := CaptureAnchor; Deadline := GetTickCount64 + 8;
   While (BackgroundIndex < FLayout.Count) And (GetTickCount64 < Deadline) Do
     Begin
@@ -223,7 +226,7 @@ Begin
     FMaxUpdateMilliseconds:=Max(FMaxUpdateMilliseconds,GetTickCount64-Started);
     { Rearm after work completes. A periodic timer shorter than a large update
       can otherwise keep the GTK event pump busy until all history is measured. }
-    Timer.Enabled:=Selecting Or (BackgroundIndex<FLayout.Count) Or FLayout.PendingWork;
+    Timer.Enabled:=Selecting Or (BackgroundIndex<FLayout.Count) Or FLayout.PendingWork Or FLayout.LayoutIncomplete;
   End;
 End;
 Procedure TAssistantConversationSurface.CompleteLayout;

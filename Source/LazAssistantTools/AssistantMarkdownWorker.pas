@@ -4,15 +4,25 @@ Unit AssistantMarkdownWorker;
   section pointers cross the thread boundary. The caller polls completed jobs. }
 {$mode objfpc}{$H+}
 Interface
-Uses Classes, SysUtils, SyncObjs, StyledMarkdown;
+Uses Classes, SysUtils, SyncObjs, StyledMarkdown, StyledTextTypes, StyledTextDocument, StyledMemoLayout;
 Type
+  TAssistantMarkdownStage = (amsParse, amsPrepare, amsRetire);
   TAssistantMarkdownJob = Class
   Public
     Key, Source, ErrorText: String;
     Epoch, Identity, Version: QWord;
-    BaseSize: Integer;
+    BaseSize, Width, Kind: Integer;
+    OK, CountParse: Boolean;
+    Stage: TAssistantMarkdownStage;
+    Title, Footer: String;
+    Mapping: TStyledIntegers;
+    Prefix, Suffix, BoundBody, RetiredContent: TStyledContent;
+    PreparedDocument: TStyledDocument;
+    PreparedLayout: TStyledMemoLayout;
+    RetiredObject: TObject;
     Parsed: TParsedStyledMarkdown;
     Cancelled: Boolean;
+    Procedure PrepareDocument;
     Destructor Destroy; Override;
   End;
   TAssistantMarkdownWorker = Class(TThread)
@@ -36,7 +46,35 @@ Type
   End;
 Implementation
 Destructor TAssistantMarkdownJob.Destroy;
-Begin Parsed.Free; Inherited Destroy; End;
+Begin
+  PreparedLayout.Free; PreparedDocument.Free; RetiredObject.Free; Parsed.Free;
+  Inherited Destroy;
+End;
+Procedure TAssistantMarkdownJob.PrepareDocument;
+Var Content: TStyledContent; I,Offset: Integer;
+Begin
+  FreeAndNil(PreparedLayout); FreeAndNil(PreparedDocument);
+  If Assigned(Parsed) Then
+    Begin BoundBody:=Parsed.BindStyles(Mapping); FreeAndNil(Parsed); End
+  Else If Length(BoundBody)=0 Then BoundBody:=StyledContentFromText(Source);
+  SetLength(Content,Length(Prefix)+Length(BoundBody)+Length(Suffix));
+  Offset:=0;
+  For I:=0 To High(Prefix) Do Begin Content[Offset]:=Prefix[I]; Inc(Offset); End;
+  For I:=0 To High(BoundBody) Do
+    Begin
+      Content[Offset]:=BoundBody[I];
+      If Content[Offset].Box.Group<>0 Then Inc(Content[Offset].Box.Group);
+      Inc(Offset);
+    End;
+  For I:=0 To High(Suffix) Do Begin Content[Offset]:=Suffix[I]; Inc(Offset); End;
+  If Length(Content)=0 Then Content:=StyledContentFromText('');
+  For I:=0 To High(Content) Do
+    If Content[I].Box.Group=0 Then Content[I].Box.Style.Margin.Bottom:=6;
+  PreparedDocument:=TStyledDocument.Create;
+  PreparedDocument.Replace(StyledPosition(0,0),PreparedDocument.EndPosition,Content);
+  PreparedLayout:=TStyledMemoLayout.Create(PreparedDocument,Nil);
+  PreparedLayout.Reset(Width,True,24);
+End;
 Constructor TAssistantMarkdownWorker.Create;
 Begin
   Inherited Create(True);
@@ -97,8 +135,20 @@ Begin
       Lock.Acquire;
       Try WorkItem:=Job; Finally Lock.Release; End;
       If Not Assigned(WorkItem) Then Continue;
+      If WorkItem.Stage=amsRetire Then
+        Begin
+          WorkItem.Free;
+          Lock.Acquire;
+          Try Job:=Nil; Finally Lock.Release; End;
+          Continue;
+        End;
       Try
-        WorkItem.Parsed:=ParseStyledMarkdown(WorkItem.Source,WorkItem.BaseSize,@IsCancelled);
+        If IsCancelled Then Raise EAbort.Create('Markdown preparation cancelled');
+        Case WorkItem.Stage Of
+          amsParse: WorkItem.Parsed:=ParseStyledMarkdown(WorkItem.Source,WorkItem.BaseSize,@IsCancelled);
+          amsPrepare: WorkItem.PrepareDocument;
+        End;
+        If IsCancelled Then WorkItem.Cancelled:=True;
       Except
         On E: EAbort Do WorkItem.Cancelled:=True;
         On E: Exception Do WorkItem.ErrorText:=E.Message;
