@@ -34,7 +34,7 @@ Type
     Function Spacing(Index: Integer): TStyledInsets;
     Function TextLeft(Index: Integer): Integer;
     Function TextTop(Index: Integer): Int64;
-    Procedure Paint(Const Clip: TRect; OriginX: Integer; OriginY: Int64; Const First, Last: TStyledPosition; Selected: Boolean);
+    Procedure Paint(Const Clip: TRect; OriginX: Integer; OriginY: Int64; Const First, Last: TStyledPosition; Selected: Boolean; Prepare: Boolean = True);
   End;
 
 Implementation
@@ -185,7 +185,7 @@ Begin
 End;
 
 Procedure TStyledMemoLayout.Paint(Const Clip: TRect; OriginX: Integer; OriginY: Int64;
-  Const First, Last: TStyledPosition; Selected: Boolean);
+  Const First, Last: TStyledPosition; Selected: Boolean; Prepare: Boolean);
 Var
   Index, LastVisible, Item, FirstGroup, LastGroup, FirstOffset, LastOffset: Integer;
   Geometry: TStyledBoxGeometry;
@@ -204,7 +204,7 @@ Begin
       While LastVisible <= LastGroup Do
         Begin
           If OriginY + HeightBefore(Heights, LastVisible) >= Clip.Bottom Then Break;
-          Ensure(LastVisible, False);
+          If Prepare Then Ensure(LastVisible, False);
           Inc(LastVisible);
         End;
       If Boxed Then
@@ -216,6 +216,7 @@ Begin
         End;
       For Item := Index To LastVisible - 1 Do
         Begin
+          If Not Assigned(Paragraphs[Item]) Then Continue;
           FirstOffset := -1;
           LastOffset := -1;
           If Selected And (Item >= First.Paragraph) And (Item <= Last.Paragraph) Then
