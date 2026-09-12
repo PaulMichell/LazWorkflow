@@ -34,7 +34,7 @@ def main():
               ('LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText')]
     flags += [f'-Fu{path}' for path in unit_dirs]
     flags += [f'-Fl{path.resolve()}' for path in args.library_dir]
-    tests = ['AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
+    tests = ['AssistantAcceptanceTest', 'AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
              'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantFileCreationTest', 'AssistantCodexHandshakeTest',
              'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']

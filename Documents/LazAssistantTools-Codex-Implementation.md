@@ -200,3 +200,11 @@ All 24 tests and the package build passed (`/tmp/laz-assistant-refactor-loop`), 
 Settings → Project tests now defines a per-project executable, literal arguments and timeout. After a current successful build, ChatGPT can call `lazarus_start_tests` with its `build_job_id`, then poll `lazarus_test_status` with the returned job ID. The existing approval policy applies; model arguments cannot replace the configured command. Results distinguish configured-test success/failure from compilation and invalidate stale source/configuration/executable evidence.
 
 All 25 tests and the package build passed (`/tmp/laz-assistant-configured-tests`), followed by targeted runner/package checks for the final malformed-settings and scope wording. The settings page and Save/Cancel behavior were verified. See [setup and live acceptance](LazAssistantTools-Configured-Tests.md). Full dependency/artifact qualification, test-report parsing and completion gates remain open.
+
+## Validation and completion (12 September 2026)
+
+ChatGPT builds now report CodeTools transitive source/include coverage and explicit gaps. Project tests can parse complete FPCUnit XML and enforce a minimum number of executed tests. Work on this uses declared `Validation: build` or `Validation: tests` criteria and an unchanged-plan check before automatic completion. Unchecked/manual criteria remain for review.
+
+See [setup, semantics, limitations and live acceptance](LazAssistantTools-Validation-and-Completion.md). Full compiler/runtime environment and artifact qualification remain open; a successful build is still not proof of behavioral correctness.
+
+Final validation: all 27 regression programs, direct package compilation and a clean real `lazbuild` package rebuild passed (`/tmp/laz-assistant-acceptance-final`). The updated Project tests page was visually checked. No live model request was sent.

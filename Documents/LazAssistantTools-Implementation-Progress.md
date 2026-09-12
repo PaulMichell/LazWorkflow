@@ -219,3 +219,13 @@ Tests have distinct job IDs, parent build IDs and pass/fail/cancel/stale outcome
 All 25 regression programs and the assistant package build passed (`/tmp/laz-assistant-configured-tests`); final malformed-settings and scope-text changes also passed the targeted runner/package checks. Settings Save/Cancel and the new page layout were verified. See [configuration, tool workflow, limits and remaining work](LazAssistantTools-Configured-Tests.md).
 
 Next development-loop priorities are dependency/artifact coverage, supported test-report parsing and acceptance-based completion gates. Broader semantic refactoring, durable continuation and Grok broker migration remain open.
+
+## Development loop: dependency evidence, reports and completion (12 September 2026)
+
+Implemented CodeTools transitive source/include capture and rediscovery, FPCUnit XML parsing with minimum executed-test counts, and explicit plan validation gates. ChatGPT Work on this now requires current correlated evidence, complete CodeTools source coverage and an unchanged plan before automatic completion. Unchecked/manual criteria retain manual Done. Grok's uncorrelated clean-compile shortcut is removed; its plan walk stops for review until broker migration provides equivalent evidence.
+
+Fixed the reported package compilation failure by declaring SynEdit directly. Added a real lazbuild package check to the regression runner so broad unit search paths cannot hide missing package dependencies.
+
+See [workflow, limits and live acceptance](LazAssistantTools-Validation-and-Completion.md). Remaining development-loop work: compiler-derived package/configuration/resource/artifact coverage, proof that tests exercise the parent build, diagnostic navigation, and durable task/job recovery. Broader semantic refactoring and Grok broker migration also remain open. The new source-coverage flag is deliberately separate from full environment verification.
+
+Final validation: all 27 regression programs, direct package compilation and a clean real `lazbuild` package rebuild passed (`/tmp/laz-assistant-acceptance-final`). The updated Project tests page was visually checked. No live model request was sent.

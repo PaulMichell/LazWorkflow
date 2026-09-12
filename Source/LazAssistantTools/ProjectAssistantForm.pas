@@ -18,7 +18,7 @@ Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView, AssistantCommands, AssistantCodexRun, AssistantToolBroker,
+  AssistantTraceView, AssistantCommands, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
   AssistantIDEWorkspace;
 
 Type
@@ -260,7 +260,8 @@ Type
     FBuildSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FBuildWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
     FBuildWorkSectionTitle: String;
-    FCompileSeqAtSendStart: Integer; { Snapshot of AssistantLastCompileSeq at turn start. }
+    FBuildWorkPlanPath, FBuildWorkPlanText, FBuildWorkBody, FBuildWorkIdentity: String;
+    FCompletionBuildJSON, FCompletionTestJSON: String;
     FPendingReviewErrorOffer: Boolean; { After Review with errors, offer Fix Error. }
     FReviewErrorCount: Integer;
     FContextWarnShown: Boolean; { One-shot warning / auto-rollover when context ≥ 95%. }
@@ -512,7 +513,6 @@ Begin
   FBuildSelectedIndex := -1;
   FBuildWorkSectionIndex := -1;
   FBuildWorkSectionTitle := '';
-  FCompileSeqAtSendStart := 0;
   FPendingReviewErrorOffer := False;
   FReviewErrorCount := 0;
   FContextWarnShown := False;
@@ -1495,50 +1495,49 @@ Procedure TProjectAssistantForm.ClearBuildWorkTracking;
 Begin
   FBuildWorkSectionIndex := -1;
   FBuildWorkSectionTitle := '';
+  FBuildWorkPlanPath := ''; FBuildWorkPlanText := ''; FBuildWorkBody := ''; FBuildWorkIdentity := '';
+  FCompletionBuildJSON := ''; FCompletionTestJSON := '';
 End;
 
 Procedure TProjectAssistantForm.BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
+Var Note: String;
 Begin
-  FBuildWorkSectionIndex := SectionIndex;
-  FBuildWorkSectionTitle := SectionTitle;
-  FCompileSeqAtSendStart := AssistantLastCompileSeq;
+  ClearBuildWorkTracking;
+  FBuildWorkSectionIndex := SectionIndex; FBuildWorkSectionTitle := SectionTitle;
+  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
+  FBuildWorkIdentity := FCodexWorkspace.Identity;
+  If Not ResolvePlanPath(GetActivePlanRelativePath, FBuildWorkPlanPath, Note) Or
+    Not ReadBuildInput(FBuildWorkPlanPath, FBuildWorkPlanText, Note) Or
+    Not GetPlanSectionBody(FBuildWorkPlanPath, SectionIndex, FBuildWorkBody, Note) Then
+    FBuildWorkPlanPath := '';
 End;
 
 Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: String);
 Var
-  PlanRel, Err, Note: String;
-  Idx: Integer;
-  CompileThisTurn, CompileClean: Boolean;
+  PlanRel, Err, Note, CurrentPlan: String;
+  Idx: Integer; Editor: TSourceEditorInterface;
 Begin
   Idx := FBuildWorkSectionIndex;
-  If Idx < 0 Then
-    Exit;
+  If Idx < 0 Then Exit;
   If StreamErrorText <> '' Then
+    Begin SetBuildStatusFeedback('Work interrupted — package still in progress.'); Exit; End;
+  If Not FUseCodex Then
     Begin
-      SetBuildStatusFeedback('Work interrupted — package still in progress.');
-      Exit;
+      If FPlanAgentRunning Then StopWorkOnPlanAgent('package requires manual review before Done');
+      SetBuildStatusFeedback('Use Done after review: this backend does not yet provide correlated validation evidence.'); Exit;
     End;
-  CompileThisTurn := AssistantLastCompileSeq > FCompileSeqAtSendStart;
-  CompileClean := CompileThisTurn And AssistantLastCompileWasClean;
-  If Not CompileThisTurn Then
-    Begin
-      SetBuildStatusFeedback(Format('"%s" work finished (no run_compile this turn) — use Done when ready.',
-        [FBuildWorkSectionTitle]));
-      Exit;
-    End;
-  If Not CompileClean Then
-    Begin
-      SetBuildStatusFeedback(Format('"%s" work finished but compile is not clean — fix errors, then Done.',
-        [FBuildWorkSectionTitle]));
-      Exit;
-    End;
-  PlanRel := GetActivePlanRelativePath;
-  If PlanRel = '' Then
-    Begin
-      ClearBuildWorkTracking;
-      Exit;
-    End;
-  { Ensure list still matches; refresh may reorder if plan changed. }
+  If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
+    Begin SetBuildStatusFeedback(Note); Exit; End;
+  If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
+    (FCodexWorkspace.Identity <> FBuildWorkIdentity) Or
+    Not ResolvePlanPath(GetActivePlanRelativePath, PlanRel, Err) Or (PlanRel <> FBuildWorkPlanPath) Or
+    Not ReadBuildInput(PlanRel, CurrentPlan, Err) Or (CurrentPlan <> FBuildWorkPlanText) Then
+    Begin SetBuildStatusFeedback('Project or plan changed during work; review before using Done.'); Exit; End;
+  If Not Assigned(SourceEditorManagerIntf) Then Exit;
+  Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(PlanRel);
+  If Assigned(Editor) And (Editor.Modified Or (Editor.SourceText <> CurrentPlan)) Then
+    Begin SetBuildStatusFeedback('Plan has unsaved edits; review before using Done.'); Exit; End;
+  { The full saved plan still matches the selected section snapshot. }
   FBuildSelectedIndex := Idx;
   If Not SetPlanSectionStatus(PlanRel, Idx, pssComplete, Err) Then
     Begin
@@ -1552,8 +1551,7 @@ Begin
       BuildTodoList.ItemIndex := Idx;
       FBuildSelectedIndex := Idx;
     End;
-  Note := Format('Auto-marked **%s** complete (Work-on-this + clean `run_compile`).',
-    [FBuildWorkSectionTitle]);
+  Note := Format('Auto-marked **%s** complete. %s', [FBuildWorkSectionTitle, Note]);
   SetBuildStatusFeedback(Format('%s → complete (auto)', [FBuildWorkSectionTitle]));
   If FViewingLive Then
     Begin
@@ -1666,41 +1664,35 @@ End;
 
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
   SectionBody: String): String;
-Const
-  MaxBodyChars = 6000;
-Var
-  Body: String;
+Const MaxBodyChars = 6000;
+Var Body, ToolInstructions: String;
 Begin
   Body := Trim(SectionBody);
   If Length(Body) > MaxBodyChars Then
     Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
       '… *(section truncated for the prompt; open the plan file for the full text.)*';
-  Result :=
-    'Work on this plan package in **Build mode**.' + LineEnding +
-    LineEnding +
-    '**Active plan:** `' + PlanRel + '`' + LineEnding +
-    '**Package:** ' + SectionTitle + LineEnding +
-    '**Status:** ' + StatusText + LineEnding +
-    LineEnding +
-    'Instructions:' + LineEnding +
-    '1. Focus only on this work package unless blocked.' + LineEnding +
-    '2. Discover with `search_in_project` / `get_project_info` / `list_directory`, then `read_file`.' + LineEnding +
-    '3. **Apply code changes with tools:** `replace_in_file` for surgical edits, `write_file` only for real ' +
-    'non-empty project files (never ApiProbe/scratch/empty units), `ensure_form_component` for form components ' +
-    '(updates .pas **and** .lfm), `add_unit_to_project` when needed. Discover APIs with search/read — do not ' +
-    'create temporary probe units. Do not only describe patches; do not claim .lfm edits without tools.' + LineEnding +
-    '4. After edits call `run_compile` (default is quiet/non-visual lazbuild — do not set ui=true ' +
-    'for intermediate checks). Fix errors/warnings you introduced. A clean quiet compile (errors=0) ' +
-    'auto-marks complete. Optional final `run_compile` with ui=true only if you need IDE Messages.' + LineEnding +
-    '5. For inventory/review packages: put findings **in the chat** (tables); avoid extra Baseline.md files. ' +
-    'If no code changes are required, still call `run_compile` once when the project should build clean, ' +
-    'or tell the user to mark Done manually.' + LineEnding +
-    '6. Prefer tools for Status updates; the IDE may also set `Status: complete` after a clean compile.' + LineEnding +
-    '7. When finished, say clearly what changed and whether compile is clean.' + LineEnding +
-    LineEnding +
-    '----- begin plan section -----' + LineEnding +
-    Body + LineEnding +
-    '----- end plan section -----';
+  If FUseCodex Then
+    ToolInstructions :=
+      '2. Inspect with lazarus_project_info, lazarus_list_directory and lazarus_read_file. Open buffers before editing; use fresh revisions. ' +
+      'Apply authorized changes with the advertised Lazarus edit tools and save explicitly.' + LineEnding +
+      '3. Start a build and poll lazarus_build_status with its job_id until done. Repair introduced errors and rebuild. ' +
+      'For Validation: tests, run the configured test command with that build_job_id and poll its test job. ' +
+      'Report source coverage gaps, stale evidence and missing/failed test reports.'
+  Else
+    ToolInstructions :=
+      '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
+      'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
+      '3. Run run_compile after edits, repair introduced errors and compile again. This backend currently requires manual Done after review.';
+  Result := 'Work on this plan package in **Build mode**.' + LineEnding + LineEnding +
+    '**Active plan:** `' + PlanRel + '`' + LineEnding + '**Package:** ' + SectionTitle + LineEnding +
+    '**Status:** ' + StatusText + LineEnding + LineEnding +
+    'Instructions:' + LineEnding + '1. Focus only on this work package unless blocked.' + LineEnding +
+    ToolInstructions + LineEnding +
+    '4. Follow the acceptance criteria in the section. Do not change the plan status or validation requirements to make work pass. ' +
+    'The IDE handles automatic completion only for an unchanged plan with an explicit Validation: build or Validation: tests criterion, ' +
+    'complete CodeTools source coverage and current matching evidence. Unchecked acceptance items require manual review.' + LineEnding +
+    '5. Report what changed, compilation and test results, and any criteria that still need review. A clean compile alone does not prove correct behavior.' +
+    LineEnding + LineEnding + '----- begin plan section -----' + LineEnding + Body + LineEnding + '----- end plan section -----';
 End;
 
 Procedure TProjectAssistantForm.BuildWorkOnSelectedPackage;
@@ -2750,7 +2742,7 @@ End;
 
 Procedure TProjectAssistantForm.PollCodex;
 Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
-  ToolText: String; OK, Serviced: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
+  ToolText, EvidenceError: String; OK, Serviced: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
 Begin
   If FPollingCodex Then Exit;
   FPollingCodex := True;
@@ -2776,6 +2768,15 @@ Begin
       End;
     If Snapshot.Done Then
       Begin
+        { Capture current evidence before releasing the broker cancels its jobs. }
+        FCompletionBuildJSON := ''; FCompletionTestJSON := '';
+        If (FBuildWorkSectionIndex >= 0) And (ActiveMode = amBuild) And (Snapshot.ErrorText = '') Then
+          Begin
+            FCodexWorkspace.BuildStatus(FCompletionBuildJSON, EvidenceError);
+            If FCodexRun <> Run Then Exit;
+            FCodexWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
+            If FCodexRun <> Run Then Exit;
+          End;
         ReleaseCodexRun;
         FinishAssistantReply(Snapshot.ErrorText);
       End
@@ -3734,9 +3735,9 @@ Begin
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
-  { Code Work-on-this: auto Status: complete after a clean run_compile this turn. }
-  If (Not FUseCodex) And (ActiveMode = amBuild) Then
-    TryAutoCompleteBuildWork(ResolvedError)
+  { Only explicit validation with current correlated evidence can auto-complete. }
+  If ActiveMode = amBuild Then
+    Begin Try TryAutoCompleteBuildWork(ResolvedError); Finally ClearBuildWorkTracking; End; End
   Else If FBuildWorkSectionIndex >= 0 Then
     ClearBuildWorkTracking;
   { Review with errors: select top error and prompt Fix Error. }
@@ -3902,8 +3903,6 @@ Begin
       If Not FModeLocked Then
         LockModeForSend; { freeze Plan/Build before chat surface / SetSending }
       ShowChatSurfaceKeepMode; { shared turn view already visible; sync mode chrome }
-      { Detect run_compile during this turn for Build auto Status: complete. }
-      FCompileSeqAtSendStart := AssistantLastCompileSeq;
       FinalApi := ApiText;
       If ActiveMode = amPlan Then
         Begin
@@ -5613,8 +5612,6 @@ Begin
       LazarusIDE.DoOpenFileAndJumpToPos(Line.GetFullFilename,
         Point(Col, Line.Line), TopLine, -1, -1, [ofOnlyIfExists, ofRegularFile]);
     End;
-  { Snapshot compile seq so a clean run_compile this turn can auto-complete Work-on-this. }
-  FCompileSeqAtSendStart := AssistantLastCompileSeq;
   ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
   SubmitUserTextEx(

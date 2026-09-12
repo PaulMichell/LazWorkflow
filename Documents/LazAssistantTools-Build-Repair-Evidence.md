@@ -40,7 +40,7 @@ The snapshot now includes the project file, project file entries even when their
 
 The worker checks captured disk bytes before launch and after completion. Completed status checks disk bytes again, so a later saved change to a closed source or form resource invalidates an earlier passing build. Status also checks the active project/build mode, project Modified state, all dirty editors/designer resources (including newly opened ones), and captured buffers' current text.
 
-Snapshots are limited to 512 unique filenames, 1 MiB per input and 32 MiB total. Duplicated filenames do not consume another snapshot. Special files such as FIFOs are refused before opening on Linux. Exceeding a snapshot limit prevents launch rather than dropping inputs.
+Snapshots are limited to 512 unique filenames, 1 MiB per input and 32 MiB total. Duplicated filenames do not consume another snapshot. Special files such as FIFOs are refused before opening on Linux. Exceeding a limit for the initial project/editor snapshot prevents launch. The dependency follow-up below records discovery limits as explicit coverage gaps, so compiler diagnostics remain available.
 
 ## Output limits
 
@@ -61,3 +61,9 @@ Next: discover and fingerprint the actual transitive source/include/package/conf
 ## Configured-test follow-up
 
 The [configured project test runner](LazAssistantTools-Configured-Tests.md) is now implemented. It reuses this worker, with separate test outcomes, executable fingerprints and parent build IDs. Test discovery/report parsing, complete dependency/artifact qualification and completion gates remain open.
+
+## Source coverage and completion follow-up (12 September 2026)
+
+Build snapshots now expand through CodeTools transitive uses, implicit System, active nested includes and paired dependency resources. Completed status rechecks both captured bytes and current resolution. Missing sources, scan limits and cache mismatches produce explicit gaps and prevent automatic completion. Compiler/linker/runtime coverage remains incomplete.
+
+FPCUnit report parsing and explicit `Validation: build` / `Validation: tests` completion checks are implemented. See [current scope, criteria, tests and live acceptance](LazAssistantTools-Validation-and-Completion.md). These changes supersede the earlier remaining-work descriptions above.
