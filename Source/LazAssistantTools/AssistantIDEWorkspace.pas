@@ -10,7 +10,10 @@ Type
   Private
     FBuild, FTests: IAssistantBuildJob;
     FTestBuildId, FTestCommand, FTestExecutable: String;
-    FBuildInputs: TBuildInputs;
+    FBuildInputs, FBuildRoots: TBuildInputs;
+    FDependencyEvidence: String;
+    FDefineStep: Integer;
+    FBuildGeneration: QWord;
     FBuildIdentity, FBuildMode: String;
   Protected
     Function BuildExecutable: String; Virtual;
@@ -50,7 +53,7 @@ Type
   End;
 Implementation
 Uses SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  SynEdit, CodeToolManager, AssistantTestSettings, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  SynEdit, CodeToolManager, AssistantTestSettings, AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Type
   { Owned by the editor control, so reopening a file cannot reuse a receipt's
@@ -63,10 +66,11 @@ Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;
 Begin
+  Inc(FBuildGeneration);
   If Assigned(FTests) Then FTests.Cancel; FTests := Nil;
   If Assigned(FBuild) Then FBuild.Cancel;
   FBuild := Nil;
-  SetLength(FBuildInputs, 0);
+  SetLength(FBuildInputs, 0); SetLength(FBuildRoots, 0); FDependencyEvidence := '';
 End;
 Function TAssistantIDEWorkspace.IsMarkdownPath(Const Path: String): Boolean;
 Var PhysicalPath, Resolved, ErrorText: String;
@@ -341,7 +345,7 @@ Begin
 End;
 Function TAssistantIDEWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
 Var Editor: TSourceEditorInterface; I: Integer; Exe, ProjectFile, Path, Resource: String;
-  Inputs: TBuildInputs; Project: TLazProject; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
+  Inputs, Roots: TBuildInputs; Evidence, ProjectIdentity, RequestedMode: String; Generation: QWord; DefineStep: Integer; Project: TLazProject; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Assigned(FTests) And Not FTests.Snapshot.Done Then
@@ -351,15 +355,14 @@ Begin
   If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or
     Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'No active Lazarus project.'; Exit; End;
-  Project := LazarusIDE.ActiveProject;
+  Project := LazarusIDE.ActiveProject; Generation := FBuildGeneration; ProjectIdentity := Identity; RequestedMode := Project.ActiveBuildModeID;
   If Project.Modified Then Begin ErrorText := 'Save project settings explicitly before building.'; Exit; End;
   ProjectFile := Project.ProjectInfoFile;
   Exe := BuildExecutable;
   If Not FileExistsUTF8(Exe) Then Begin ErrorText := 'lazbuild was not found.'; Exit; End;
   Inputs := Nil;
   If Not AddBuildInput(Inputs, ProjectFile, ErrorText) Then Exit;
-  { Include closed project members and their ordinary paired form resources.
-    This expands observed evidence, but is not transitive dependency discovery. }
+  { Project members are roots for transitive source discovery below. }
   For I := 0 To Project.FileCount - 1 Do
     Begin
       If Not Assigned(Project.Files[I]) Then Continue;
@@ -381,6 +384,18 @@ Begin
       If Editor.FileName = '' Then Continue;
       If Not AddBuildInput(Inputs, Editor.FileName, ErrorText) Then Exit;
     End;
+  Roots := Copy(Inputs);
+  CaptureAssistantDependencies(Inputs, Evidence, DefineStep);
+  If (FBuildGeneration <> Generation) Or (Identity <> ProjectIdentity) Then
+    Begin ErrorText := 'Build cancelled or project changed during dependency discovery.'; Exit; End;
+  If Project.Modified Or (Project.ActiveBuildModeID <> RequestedMode) Or Not Assigned(SourceEditorManagerIntf) Then
+    Begin ErrorText := 'Project settings changed during dependency discovery.'; Exit; End;
+  For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+    Begin
+      Editor := SourceEditorManagerIntf.SourceEditors[I];
+      If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then
+        Begin ErrorText := 'Editor changed during dependency discovery.'; Exit; End;
+    End;
   { Check actual buffer text too: Modified=False alone is not evidence that
     editor bytes match what the external compiler will read. }
   For I := 0 To High(Inputs) Do
@@ -391,12 +406,15 @@ Begin
     End;
   Job := StartAssistantBuild(Exe, ProjectFile, Project.ActiveBuildModeID, Inputs);
   FBuildIdentity := Identity; FBuildMode := Project.ActiveBuildModeID;
-  FBuildInputs := Inputs; FBuild := Job;
+  Inc(FBuildGeneration);
+  FBuildInputs := Inputs; FBuildRoots := Roots; FDependencyEvidence := Evidence;
+  FDefineStep := DefineStep; FBuild := Job;
   Value := FBuild.Snapshot;
   ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","savedBuffers":false}'; Result := True;
 End;
 Function TAssistantIDEWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
-Var Value: TBuildJobSnapshot; I: Integer; Editor: TSourceEditorInterface; Stale: Boolean; Note: String;
+Var Value: TBuildJobSnapshot; I, J, DefineStep: Integer; Editor: TSourceEditorInterface; Stale, Found: Boolean; Note, Evidence: String;
+  CurrentInputs: TBuildInputs; Root, Dependency: TJSONObject; Generation: QWord;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Not Assigned(FBuild) Then Begin ErrorText := 'No build has been started.'; Exit; End;
@@ -423,7 +441,50 @@ Begin
             End;
         End;
     End;
-  ResultText := AssistantBuildStatusJSON(Value, Stale); Result := True;
+  { Rediscover when observing a completed build: a new higher-priority unit or
+    newly created paired resource must also invalidate previous evidence. }
+  Evidence := FDependencyEvidence; Generation := FBuildGeneration;
+  If Value.Done And Not Stale Then
+    Begin
+      CurrentInputs := Copy(FBuildRoots);
+      CaptureAssistantDependencies(CurrentInputs, Evidence, DefineStep);
+      If Generation <> FBuildGeneration Then Begin ErrorText := 'Build changed during dependency discovery.'; Exit; End;
+      Stale := (DefineStep <> FDefineStep) Or (Length(CurrentInputs) <> Length(FBuildInputs));
+      For I := 0 To High(CurrentInputs) Do
+        Begin
+          Found := False;
+          For J := 0 To High(FBuildInputs) Do
+            If (CurrentInputs[I].Path = FBuildInputs[J].Path) And (CurrentInputs[I].Text = FBuildInputs[J].Text) Then
+              Begin Found := True; Break; End;
+          If Not Found Then Stale := True;
+        End;
+      Stale := Stale Or (Identity <> FBuildIdentity) Or Not Assigned(SourceEditorManagerIntf);
+      If Not Stale Then
+        Begin
+          Stale := LazarusIDE.ActiveProject.Modified Or (LazarusIDE.ActiveProject.ActiveBuildModeID <> FBuildMode);
+          For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+            Begin
+              Editor := SourceEditorManagerIntf.SourceEditors[I];
+              If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+            End;
+          For I := 0 To High(FBuildInputs) Do
+            Begin
+              Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FBuildInputs[I].Path);
+              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then Stale := True;
+            End;
+        End;
+      { A previously complete scan becoming incomplete cannot retain validity. }
+      Root := TJSONObject(GetJSON(FDependencyEvidence)); Dependency := TJSONObject(GetJSON(Evidence));
+      Try
+        If Not Root.Get('sourceClosureComplete', False) Then
+          Begin Dependency.Booleans['sourceClosureComplete'] := False; Dependency.Add('initialScanIncomplete', True); Evidence := Dependency.AsJSON; End
+        Else If Not Dependency.Get('sourceClosureComplete', False) Then Stale := True;
+      Finally Root.Free; Dependency.Free; End;
+    End;
+  Root := TJSONObject(GetJSON(AssistantBuildStatusJSON(Value, Stale)));
+  Try Root.Add('dependencies', GetJSON(Evidence)); ResultText := Root.AsJSON;
+  Finally Root.Free; End;
+  Result := True;
 End;
 Function TAssistantIDEWorkspace.Identity: String;
 Begin

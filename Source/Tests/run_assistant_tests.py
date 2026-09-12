@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build/test the assistant against an already-built Lazarus checkout (Linux).
 
-All generated units, executables and logs go to an isolated output directory.
+Regression units, executables and logs go to an isolated output directory.
+The optional real package check writes the package's normal Lib output too.
 The GUI group needs a working display. No live model calls are made.
 """
 import argparse
@@ -16,6 +17,8 @@ def main():
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--library-dir', type=Path, action='append', default=[])
     parser.add_argument('--gui', action='store_true')
+    parser.add_argument('--package-check', action='store_true',
+                        help='Also validate .lpk dependencies with lazbuild (repository dependencies must already be built).')
     parser.add_argument('--compile-only', action='store_true')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
@@ -37,7 +40,7 @@ def main():
              'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
-                  'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
+                  'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
     failures = []
 
     def run(label, command):
@@ -66,6 +69,17 @@ def main():
             if not args.compile_only:
                 run(name, [str(output / name)])
     run('assistant-package-build', flags + [str(repo / 'Packages' / 'LazAssistantTools.pas')])
+    if args.package_check:
+        lazbuild = args.lazarus_root / 'lazbuild'
+        package_flags = [str(lazbuild), f'--pcp={output / "package-config"}',
+                         f'--lazarusdir={args.lazarus_root}', '--ws=gtk2']
+        linked = True
+        for name in ('LazWorkflowCommon', 'LazStyledText', 'LazAssistantTools'):
+            linked = run(name + '-package-link', package_flags +
+                         ['--add-package-link', str(repo / 'Packages' / (name + '.lpk'))]) and linked
+        if linked:
+            run('assistant-lazbuild-package', package_flags +
+                ['--skip-dependencies', '--build-all', str(repo / 'Packages' / 'LazAssistantTools.lpk')])
     print(f'Logs: {output}', flush=True)
     return bool(failures)
 

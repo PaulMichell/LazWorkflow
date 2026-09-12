@@ -9,10 +9,9 @@ Function QueryAssistantSymbol(Const Path, SourceText: String; Line, Column: Inte
   Out ResultText, ErrorText: String; Const RenameTo: String = ''): Boolean;
 Implementation
 Uses SysUtils, LazUTF8, LazFileUtils, LazIDEIntf, SrcEditorIntf, CodeToolManager,
-  CodeCache, CTUnitGraph, fpjson, AssistantTools, AssistantRenamePreview
+  CodeCache, CTUnitGraph, fpjson, AssistantTools, AssistantRenamePreview, AssistantCodeToolsGuard
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const MaxFileBytes = 1048576; MaxSearchBytes = 8388608;
-Var AssistantCodeToolsBusy: Boolean = False;
 Type
   TSearchInput = Record
     Path, Text, DiskText: String;
@@ -84,11 +83,12 @@ Var Editor: TSourceEditorInterface; Code, Target: TCodeBuffer;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Not Assigned(LazarusIDE) Or Not Assigned(CodeToolBoss) Or
-    Not Assigned(SourceEditorManagerIntf) Or AssistantCodeToolsBusy Then
+    Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'Lazarus CodeTools is unavailable or busy.'; Exit; End;
   If Not PascalPath(Path) Then Begin ErrorText := 'Symbol lookup requires a Pascal source buffer.'; Exit; End;
   If Length(SourceText) > MaxFileBytes Then Begin ErrorText := 'Source exceeds the 1 MiB lookup limit.'; Exit; End;
-  AssistantCodeToolsBusy := True; Root := Nil; Paths := Nil; Seen := Nil; RefList := Nil; Cache := Nil;
+  If Not EnterAssistantCodeTools Then Begin ErrorText := 'Lazarus CodeTools is busy.'; Exit; End;
+  Root := Nil; Paths := Nil; Seen := Nil; RefList := Nil; Cache := Nil;
   Try
     Paths := TStringList.Create; Paths.CaseSensitive := True;
     If Kind = sqReferences Then
@@ -235,7 +235,7 @@ Begin
   Finally
     Root.Free; Paths.Free; Seen.Free;
     CodeToolBoss.FreeListOfPCodeXYPosition(RefList); Cache.Free;
-    AssistantCodeToolsBusy := False;
+    LeaveAssistantCodeTools;
   End;
 End;
 End.

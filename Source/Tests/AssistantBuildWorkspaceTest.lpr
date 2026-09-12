@@ -1,7 +1,7 @@
 Program AssistantBuildWorkspaceTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, fpjson, jsonparser,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantTestSettings;
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, CodeToolManager, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantTestSettings;
 Type
   TProjectFile = Class(TLazProjectFile)
   Public
@@ -36,6 +36,8 @@ Type
   TIDE = Class(TLazIDEInterface)
   Public
     Project: TProject;
+    CancelWorkspace: TAssistantIDEWorkspace;
+    Function BeginCodeTools: Boolean; Override;
     Function GetActiveProject: TLazProject; Override;
     Class Function GetPrimaryConfigPath: String; Override;
   End;
@@ -46,6 +48,11 @@ Type
   Protected
     Function BuildExecutable: String; Override;
   End;
+Function TIDE.BeginCodeTools: Boolean;
+Begin
+  If Assigned(CancelWorkspace) Then CancelWorkspace.CancelBuild;
+  Result := True;
+End;
 Class Function TIDE.GetPrimaryConfigPath: String;
 Begin Result := ExtractFilePath(LazarusIDE.ActiveProject.ProjectInfoFile); End;
 Function TWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
@@ -190,13 +197,32 @@ Begin
       And (Field(Reply, 'stale') = 'true'));
     Project.Mode := 'Debug'; Project.Dirty := True;
     Check('project settings must be explicitly saved', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
-    Project.Dirty := False; DeleteFile(Project.Member.Path);
+    Project.Dirty := False; Manager.Editor := Nil;
+    WriteFile(Project.Member.Path, 'unit Closed; interface uses Indirect; implementation end.');
+    CodeToolBoss.LoadFile(Project.Member.Path, True, True);
+    WriteFile(Root + '/indirect.pas', 'unit Indirect; interface implementation end.');
+    WriteFile(Root + '/system.pp', 'unit System; interface implementation end.');
+    StartAndWait;
+    Check('workspace reports complete CodeTools source closure', Field(Reply, 'dependencies.sourceClosureComplete') = 'true');
+    WriteFile(Root + '/indirect.pas', 'unit Indirect; interface const Later = 1; implementation end.');
+    Check('closed transitive dependency invalidates completed build', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+      And (Field(Reply, 'stale') = 'true'));
+    CodeToolBoss.LoadFile(Root + '/indirect.pas', True, True); StartAndWait;
+    WriteFile(Root + '/indirect.lfm', 'new resource');
+    Check('new dependency resource invalidates completed build', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+      And (Field(Reply, 'stale') = 'true'));
+    IDE.CancelWorkspace := Workspace;
+    Check('cancellation in CodeTools callback prevents compiler launch', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('cancelled discovery leaves no job', Not Workspace.BuildStatus(Reply, Err));
+    IDE.CancelWorkspace := Nil;
+    DeleteFile(Project.Member.Path);
     Check('missing project source prevents launch', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
     Run := Broker.BeginRun(awsMarkdown);
     Check('Plan cannot launch compiler', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
   Finally
     Broker.Free; Workspace.Free; LazarusIDE := Nil; SourceEditorManagerIntf := Nil;
     IDE.Free; Manager.Free; Editor.Free; Project.Member.Free; Project.Free;
+    DeleteFile(Root + '/indirect.pas'); DeleteFile(Root + '/indirect.lfm'); DeleteFile(Root + '/system.pp');
     DeleteFile(Root + '/open.pas'); DeleteFile(Root + '/closed.pas'); DeleteFile(Root + '/closed.lfm'); DeleteFile(Root + '/project.lpi'); RemoveDir(Root);
   End;
 End.
