@@ -28,9 +28,12 @@ Type
     RestartParagraph, RestartOffset: Integer;
     Constructor Create(NewDocument: TStyledDocument; NewRenderer: TStyledCanvas);
     Destructor Destroy; Override;
+    { An unmeasured layout may be built with a nil renderer off the UI thread.
+      Attach its renderer only after exclusive ownership reaches the UI thread. }
+    Procedure AttachRenderer(NewRenderer: TStyledCanvas);
     Procedure Reset(NewWidth: Integer; NewWordWrap: Boolean; Estimate: Integer);
     Function DocumentChanged(First, Removed, Added: Integer): Boolean;
-    Procedure Ensure(Index: Integer; Finish: Boolean);
+    Procedure Ensure(Index: Integer; Finish: Boolean; Milliseconds: Integer = 8);
     Function Spacing(Index: Integer): TStyledInsets;
     Function TextLeft(Index: Integer): Integer;
     Function TextTop(Index: Integer): Int64;
@@ -58,6 +61,13 @@ Var
 Begin
   For Layout In Paragraphs Do Layout.Free;
   Inherited Destroy;
+End;
+
+Procedure TStyledMemoLayout.AttachRenderer(NewRenderer: TStyledCanvas);
+Begin
+  If Assigned(Renderer) Or Not Assigned(NewRenderer) Then
+    Raise EArgumentException.Create('Attach a renderer only to a detached layout');
+  Renderer:=NewRenderer;
 End;
 
 Procedure TStyledMemoLayout.RebuildGroups;
@@ -163,7 +173,7 @@ Begin
   If Result Then Reset(Width, WordWrap, EstimateHeight);
 End;
 
-Procedure TStyledMemoLayout.Ensure(Index: Integer; Finish: Boolean);
+Procedure TStyledMemoLayout.Ensure(Index: Integer; Finish: Boolean; Milliseconds: Integer);
 Var
   Wrap: TStyledWrap;
   Insets: TStyledInsets;
@@ -177,7 +187,7 @@ Begin
   If Index = RestartParagraph Then Begin Restart := RestartOffset; RestartParagraph := -1; End;
   Renderer.BeginLayout(Paragraphs[Index], Document[Index]^, Max(1, Width - Insets.Left - Insets.Right), Wrap, Restart);
   If Finish Then Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, 0)
-  Else Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, 8);
+  Else Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, Max(1,Milliseconds));
   Estimate := Paragraphs[Index].Height;
   If Not Paragraphs[Index].Complete Then
     Estimate := Max(Estimate, Round(Estimate * (Length(Document[Index]^.Text) / Max(1, Paragraphs[Index].NextOffset))));

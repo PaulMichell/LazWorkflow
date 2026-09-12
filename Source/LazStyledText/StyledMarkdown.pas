@@ -44,6 +44,8 @@ Type
     Styles: Array Of TStyledStyle;
     Function AddStyle(Const Style: TStyledStyle): Integer;
     Function Bind(Renderer: TStyledCanvas): TStyledContent;
+    { Apply a previously registered style mapping without accessing a canvas. }
+    Function BindStyles(Const Mapping: TStyledIntegers): TStyledContent;
   End;
 
 Function ParseStyledMarkdown(Const MarkdownText: UTF8String; BaseSize: Integer = 10;
@@ -532,11 +534,18 @@ Begin
 End;
 
 Function TParsedStyledMarkdown.Bind(Renderer: TStyledCanvas): TStyledContent;
-Var Mapping: TStyledIntegers; I,J: Integer;
+Var Mapping: TStyledIntegers; I: Integer;
 Begin
   If Not Assigned(Renderer) Then Raise EArgumentException.Create('Styled Markdown requires a renderer');
   SetLength(Mapping,Length(Styles));
   For I:=0 To High(Styles) Do Mapping[I]:=Renderer.AddStyle(Styles[I]);
+  Result:=BindStyles(Mapping);
+End;
+
+Function TParsedStyledMarkdown.BindStyles(Const Mapping: TStyledIntegers): TStyledContent;
+Var I,J: Integer;
+Begin
+  If Length(Mapping)<>Length(Styles) Then Raise EArgumentException.Create('Invalid Markdown style mapping');
   Result:=Copy(Content);
   For I:=0 To High(Result) Do
     Begin
