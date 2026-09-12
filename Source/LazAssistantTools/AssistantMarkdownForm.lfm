@@ -24,11 +24,16 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
       OnExecute = SaveActionExecute
     end
     object PreviewModeAction: TAction
+      AutoCheck = True
       Caption = 'Preview'
+      Checked = True
+      GroupIndex = 1
       OnExecute = PreviewModeActionExecute
     end
     object SourceModeAction: TAction
+      AutoCheck = True
       Caption = 'Source'
+      GroupIndex = 1
       OnExecute = SourceModeActionExecute
     end
   end
@@ -69,11 +74,16 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
       Left = 120
       Top = 2
       Action = PreviewModeAction
+      Down = True
+      Grouped = True
+      Style = tbsCheck
     end
     object ToolButtonSource: TToolButton
       Left = 188
       Top = 2
       Action = SourceModeAction
+      Grouped = True
+      Style = tbsCheck
     end
   end
   inline StatusFooter: TStatusFooterFrame

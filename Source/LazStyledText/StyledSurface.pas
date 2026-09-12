@@ -94,12 +94,14 @@ Begin
   FRenderer := TStyledCanvas.Create;
   VerticalBar := TScrollBar.Create(Nil);
   VerticalBar.Parent := Self;
+  VerticalBar.Cursor := crArrow;
   VerticalBar.Kind := sbVertical;
   VerticalBar.TabStop := False;
   VerticalBar.Visible := False;
   VerticalBar.OnChange := @DoScroll;
   HorizontalBar := TScrollBar.Create(Nil);
   HorizontalBar.Parent := Self;
+  HorizontalBar.Cursor := crArrow;
   HorizontalBar.TabStop := False;
   HorizontalBar.Visible := False;
   HorizontalBar.OnChange := @DoScroll;

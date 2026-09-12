@@ -266,6 +266,7 @@ Begin
   PreviewControl.Color := clWhite;
   PreviewControl.ParentColor := False;
   PreviewControl.ReadOnly := True;
+  PreviewControl.ShowCaret := False;
   PreviewControl.WordWrap := True;
   PreviewControl.ParentFont := False;
   PreviewControl.Visible := True;
@@ -274,6 +275,8 @@ End;
 
 Procedure TAssistantMarkdownForm.ApplyViewMode;
 Begin
+  PreviewModeAction.Checked := FViewMode = mvmPreview;
+  SourceModeAction.Checked := FViewMode = mvmSource;
   If FViewMode = mvmPreview Then
     Begin
       SourceMemo.Visible := False;
