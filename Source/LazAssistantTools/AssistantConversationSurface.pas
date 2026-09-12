@@ -15,13 +15,13 @@ Type
   Private
     FLayout: TConversationLayout;
     Timer: TTimer;
-    FShowThinking, FShowTools, FFollowTail, FUpdating, Selecting: Boolean;
+    FShowThinking, FShowTools, FFollowTail, FUpdating, Selecting, FInTick: Boolean;
     SelectionStart, SelectionEnd: TConversationPosition;
     SavedAnchor: TConversationAnchor;
     FocusedKey: String;
     PointerPosition: TPoint;
     BackgroundIndex: Integer;
-    FLayoutRevision, FPaintRevision: QWord;
+    FLayoutRevision, FPaintRevision, FMaxUpdateMilliseconds: QWord;
     Procedure GetDialogCode(Var Message: TLMGetDlgCode); Message LM_GETDLGCODE;
     Procedure Tick(Sender: TObject);
     Procedure MenuClick(Sender: TObject);
@@ -69,6 +69,7 @@ Type
     Property SelectedText: String Read GetSelectedText;
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
     Property ShowToolUse: Boolean Read FShowTools Write SetShowTools;
+    Property MaxUpdateMilliseconds: QWord Read FMaxUpdateMilliseconds;
     Property LayoutRevision: QWord Read FLayoutRevision;
     Property PaintRevision: QWord Read FPaintRevision;
   End;
@@ -193,11 +194,15 @@ Begin
       End;
     FLayout.TrimDrawings(First, Last, ScrollTop, ScrollTop+ViewRect.Height); Inc(FLayoutRevision);
   Finally FUpdating := False; End;
+  If Assigned(Timer) And Not FInTick And FLayout.PendingWork Then Timer.Enabled:=True;
 End;
 Procedure TAssistantConversationSurface.Tick(Sender: TObject);
-Var Deadline: QWord; Anchor: TConversationAnchor;
+Var Deadline, Started: QWord; Anchor: TConversationAnchor;
 Begin
   If FUpdating Or (csDestroying In ComponentState) Then Exit;
+  Started:=GetTickCount64;
+  Timer.Enabled:=False; FInTick:=True;
+  Try
   If Selecting Then
     Begin
       If PointerPosition.Y < ViewRect.Top Then ScrollTop := ScrollTop - 20
@@ -212,7 +217,14 @@ Begin
   FLayout.Reindex; FUpdating := True;
   Try SetExtent(ViewRect.Width, FLayout.TotalHeight); If FFollowTail Then ScrollToEnd Else RestoreAnchor(Anchor);
   Finally FUpdating := False; End;
-  PrepareViewport; Invalidate; Timer.Enabled := Selecting Or (BackgroundIndex < FLayout.Count);
+  PrepareViewport; Invalidate;
+  Finally
+    FInTick:=False;
+    FMaxUpdateMilliseconds:=Max(FMaxUpdateMilliseconds,GetTickCount64-Started);
+    { Rearm after work completes. A periodic timer shorter than a large update
+      can otherwise keep the GTK event pump busy until all history is measured. }
+    Timer.Enabled:=Selecting Or (BackgroundIndex<FLayout.Count) Or FLayout.PendingWork;
+  End;
 End;
 Procedure TAssistantConversationSurface.CompleteLayout;
 Var I: Integer; Anchor: TConversationAnchor;

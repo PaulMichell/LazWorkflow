@@ -198,7 +198,7 @@ Names are provisional; they describe responsibilities rather than a requirement 
 
 ## Implementation sequence and review gates
 
-The user approved implementation after design review. The core deliverables of phases 1–6 are implemented; platform/accessibility validation and large-message parsing latency remain follow-up work, as recorded in the implementation report.
+The user approved implementation after design review. The core deliverables of phases 1–6 are implemented; platform/accessibility validation and large-document publication latency remain follow-up work, as recorded in the implementation report.
 
 | Phase | Deliverable | Gate before proceeding |
 | --- | --- | --- |
@@ -250,3 +250,9 @@ The production view now uses one StyledText surface, with typed Markdown section
 Following the user's additional design feedback, tool/subagent rows start collapsed, including failed calls, and subsequent events retain the user's expansion choice. User and assistant messages use rounded canvas-painted bubbles, aligned right and left respectively. Bubble padding participates in the same measurements used for scrolling and selection.
 
 The implementation report distinguishes completed regression checks from outstanding performance and platform acceptance work. Backend/development-loop work can resume after the user has tested this replacement in the IDE.
+
+### Background parsing follow-up
+
+Large Markdown sections now parse in a single background worker using detached paragraph/style values. The UI retains the last completed snapshot, publishes accepted results with conversation/section/version checks, and binds styles and measures text on the UI thread. Rapid-update, cancellation, font-change and stale-result regressions are included. The layout timer now waits a fresh interval after each work slice to avoid continuously overdue updates.
+
+The existing 4.2 MB fixture's initial synchronization fell from approximately 254 ms to 5 ms locally. Large-result publication can still take roughly 100 ms, so the 8 ms target remains open for that stage. See the implementation report for measurements, validation and remaining work.

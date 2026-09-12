@@ -3,7 +3,7 @@ Unit AssistantConversationLayout;
 {$mode objfpc}{$H+}{$codepage utf8}
 Interface
 Uses Classes, SysUtils, Contnrs, Types, StyledTextTypes, StyledTextDocument,
-  StyledCanvas, StyledMemoLayout, AssistantTrace;
+  StyledCanvas, StyledMemoLayout, AssistantTrace, AssistantMarkdownWorker;
 Type
   TConversationFragment = Class
   Public
@@ -26,7 +26,9 @@ Type
     Full, Short: TConversationFragment;
     FullHeight, ShortHeight: Int64;
     Left, OuterWidth, Padding: Integer;
-    Seen: QWord;
+    Seen, Identity, Version, ParsedVersion, FullVersion: QWord;
+    ParsedBaseSize: Integer;
+    BodyContent: TStyledContent;
     Destructor Destroy; Override;
     Procedure Invalidate;
     Function Fragment: TConversationFragment;
@@ -39,9 +41,13 @@ Type
     FWidth, FBaseSize: Integer;
     FGeneration, SyncGeneration: QWord;
     FShowThinking, FShowTools: Boolean;
-    FParseCount: QWord;
+    FParseCount, Epoch, NextIdentity: QWord;
+    Worker: TAssistantMarkdownWorker;
+    Procedure PollParser;
+    Procedure RequestParse(Section: TConversationSection);
+    Function GetPendingWork: Boolean;
     Function GetSection(Index: Integer): TConversationSection;
-    Function BuildContent(Section: TConversationSection; Short: Boolean): TStyledContent;
+    Function BuildContent(Section: TConversationSection; Short: Boolean; BodyReady: Boolean = True): TStyledContent;
   Public
     Heights: TStyledHeightIndex;
     Constructor Create(ARenderer: TStyledCanvas);
@@ -60,6 +66,7 @@ Type
     Function Top(Index: Integer): Int64;
     Function AtY(Y: Int64): Integer;
     Property Sections[Index: Integer]: TConversationSection Read GetSection; Default;
+    Property PendingWork: Boolean Read GetPendingWork;
     Property ParseCount: QWord Read FParseCount;
   End;
 Implementation
@@ -118,10 +125,12 @@ Begin
   FWidth := 1; FBaseSize := 10; FShowThinking := True; FShowTools := True;
 End;
 Destructor TConversationLayout.Destroy;
-Begin Clear; Lookup.Free; FSections.Free; Inherited Destroy; End;
+Begin Worker.Free; Worker:=Nil; Clear; Lookup.Free; FSections.Free; Inherited Destroy; End;
 Procedure TConversationLayout.Clear;
 Var I: Integer;
 Begin
+  Inc(Epoch);
+  If Assigned(Worker) Then Worker.Cancel;
   For I := 0 To Lookup.Count - 1 Do Lookup.Objects[I].Free;
   Lookup.Clear; FSections.Clear; ResetHeights(Heights, 0, 0);
 End;
@@ -152,14 +161,25 @@ Begin
   If I < 0 Then
     Begin
       Section := TConversationSection.Create; Section.Key := Key; Section.Invalidate;
+      Inc(NextIdentity); Section.Identity:=NextIdentity; Section.Version:=1;
       Section.Collapsed := Block.Collapsed; Lookup.AddObject(Key, Section);
     End
   Else Section := TConversationSection(Lookup.Objects[I]);
   If Section.Seen = SyncGeneration Then Exit;
   Section.Seen := SyncGeneration;
-  If (Section.Body <> Block.Body) Or (Section.Footer <> Block.Footer) Or (Section.Kind <> Block.Kind) Or
-    ((Section.Title = '') <> (DisplayTitle = '')) Then Section.Invalidate
-  Else If Section.Title <> DisplayTitle Then Begin UpdateTitle(Section.Full,False); UpdateTitle(Section.Short,True); End;
+  If Section.Body<>Block.Body Then Inc(Section.Version);
+  If (Section.Kind<>Block.Kind) Or (Section.Footer<>Block.Footer) Or
+    ((Section.Title='')<>(DisplayTitle='')) Then Section.Invalidate
+  Else If Section.Body<>Block.Body Then
+    Begin
+      { Keep the last completed full document while a large replacement parses.
+        Short thinking remains cheap and is rebuilt from the latest source. }
+      If (Length(Block.Body)>=65536) And Not (Block.Kind In [tbkTool,tbkSteer]) Then
+        Begin FreeAndNil(Section.Short); Section.ShortHeight:=28; End
+      Else Section.Invalidate;
+    End;
+  If Section.Title<>DisplayTitle Then
+    Begin UpdateTitle(Section.Full,False); UpdateTitle(Section.Short,True); End;
   Section.Kind := Block.Kind; Section.Title := DisplayTitle; Section.Body := Block.Body; Section.Footer := Block.Footer;
   Section.Running := Block.Running; Section.OK := Block.OK;
   If Not Section.UserCollapsed Then
@@ -209,7 +229,7 @@ Begin
     End;
   If LastVisible >= 0 Then SetHeight(Heights, LastVisible, Heights.Values[LastVisible] - 10);
 End;
-Function TConversationLayout.BuildContent(Section: TConversationSection; Short: Boolean): TStyledContent;
+Function TConversationLayout.BuildContent(Section: TConversationSection; Short: Boolean; BodyReady: Boolean): TStyledContent;
 Var Part: TStyledContent; Style: TStyledStyle; N,I: Integer; Text: String;
   Procedure Append(Const Content: TStyledContent);
   Var J,Offset: Integer;
@@ -230,11 +250,14 @@ Begin
       Append(Part); Style.Styles := []; Style.Foreground:=clDefault;
     End;
   Text := Section.Body;
+  If Not BodyReady Then Text:='';
   If Short And (Section.Kind In [tbkTool, tbkSubagent]) Then Text := ''
   Else If Short And (Section.Kind = tbkThinking) And (Length(Text) > 2000) Then Text := Copy(Text, Length(Text)-1999, 2000);
   If Text <> '' Then
     Begin
       If Section.Kind In [tbkTool, tbkSteer] Then Part := StyledContentFromText(Text, Renderer.AddStyle(Style))
+      Else If Not Short And (Section.ParsedVersion>0) And (Section.ParsedBaseSize=FBaseSize) Then
+        Part:=Copy(Section.BodyContent)
       Else Begin Part := BuildStyledMarkdown(Renderer, Text, FBaseSize); Inc(FParseCount); End;
       { Parser box groups are fragment-local. Shift them past the title. }
       For I := 0 To High(Part) Do If Part[I].Box.Group <> 0 Then Inc(Part[I].Box.Group);
@@ -246,19 +269,79 @@ Begin
   For N := 0 To High(Result) Do
     If Result[N].Box.Group = 0 Then Result[N].Box.Style.Margin.Bottom := 6;
 End;
+Function TConversationLayout.GetPendingWork: Boolean;
+Begin Result:=Assigned(Worker) And Worker.Busy; End;
+
+Procedure TConversationLayout.RequestParse(Section: TConversationSection);
+Var Job: TAssistantMarkdownJob;
+Begin
+  If Not Assigned(Worker) Then Worker:=TAssistantMarkdownWorker.Create;
+  If Worker.Busy Then Exit;
+  Job:=TAssistantMarkdownJob.Create;
+  Job.Key:=Section.Key; Job.Source:=Section.Body;
+  Job.Epoch:=Epoch; Job.Identity:=Section.Identity; Job.Version:=Section.Version;
+  Job.BaseSize:=FBaseSize;
+  If Not Worker.Submit(Job) Then Job.Free;
+End;
+
+Procedure TConversationLayout.PollParser;
+Var Job: TAssistantMarkdownJob; I: Integer; Section: TConversationSection;
+Begin
+  If Not Assigned(Worker) Then Exit;
+  Job:=Worker.Take;
+  If Not Assigned(Job) Then Exit;
+  Try
+    If Job.Cancelled Or (Job.Epoch<>Epoch) Or (Job.BaseSize<>FBaseSize) Then Exit;
+    I:=Lookup.IndexOf(Job.Key);
+    If I<0 Then Exit;
+    Section:=TConversationSection(Lookup.Objects[I]);
+    If (Section.Identity<>Job.Identity) Or ((Job.Version<=Section.ParsedVersion) And (Job.BaseSize=Section.ParsedBaseSize)) Or
+      ((Job.Version<>Section.Version) And (Length(Section.Body)<65536)) Then Exit;
+    { A completed snapshot may be displayed while a newer streaming snapshot is
+      pending. Identity and epoch checks prevent cross-conversation reuse. }
+    If Assigned(Job.Parsed) Then Section.BodyContent:=Job.Parsed.Bind(Renderer)
+    Else Section.BodyContent:=StyledContentFromText(Job.Source);
+    Section.ParsedVersion:=Job.Version; Section.ParsedBaseSize:=Job.BaseSize;
+    Inc(FParseCount);
+  Finally Job.Free; End;
+End;
+
 Function TConversationLayout.PrepareSection(Index: Integer; Top, Bottom: Int64; Finish: Boolean): Boolean;
 Var Section: TConversationSection; Fragment: TConversationFragment;
+  MarkdownBody, LargeBody, BodyReady, Pending: Boolean;
 Begin
-  Result := True; If (Index < 0) Or (Index >= Count) Then Exit;
-  Section := Sections[Index]; If Not Section.Visible Then Exit;
-  Fragment := Section.Fragment;
+  PollParser;
+  Result:=True;
+  If (Index<0) Or (Index>=Count) Then Exit;
+  Section:=Sections[Index];
+  If Not Section.Visible Then Exit;
+  MarkdownBody:=Not Section.Collapsed And Not (Section.Kind In [tbkTool,tbkSteer]);
+  LargeBody:=MarkdownBody And (Length(Section.Body)>=65536);
+  Pending:=False;
+  If MarkdownBody And ((Section.ParsedVersion<>Section.Version) Or (Section.ParsedBaseSize<>FBaseSize)) Then
+    Begin
+      If LargeBody And Not Finish Then
+        Begin RequestParse(Section); Pending:=True; End
+      Else
+        Begin
+          Section.BodyContent:=BuildStyledMarkdown(Renderer,Section.Body,FBaseSize);
+          Section.ParsedVersion:=Section.Version; Section.ParsedBaseSize:=FBaseSize;
+          Inc(FParseCount);
+        End;
+    End;
+  BodyReady:=Not MarkdownBody Or ((Section.ParsedVersion>0) And (Section.ParsedBaseSize=FBaseSize));
+  If MarkdownBody And Assigned(Section.Full) And BodyReady And
+    (Section.FullVersion<>Section.ParsedVersion) Then FreeAndNil(Section.Full);
+  Fragment:=Section.Fragment;
   If Not Assigned(Fragment) Then
     Begin
-      Fragment := TConversationFragment.Create(Renderer, BuildContent(Section, Section.Collapsed), Max(1, Section.OuterWidth-Section.Padding*2));
-      If Section.Collapsed Then Section.Short := Fragment Else Section.Full := Fragment;
+      Fragment:=TConversationFragment.Create(Renderer,BuildContent(Section,Section.Collapsed,BodyReady),
+        Max(1,Section.OuterWidth-Section.Padding*2));
+      If Section.Collapsed Then Section.Short:=Fragment
+      Else Begin Section.Full:=Fragment; If BodyReady Then Section.FullVersion:=Section.ParsedVersion Else Section.FullVersion:=0; End;
     End;
-  Result := Fragment.Prepare(Top-Section.Padding, Bottom-Section.Padding, Finish);
-  If Section.Collapsed Then Section.ShortHeight := Fragment.Height Else Section.FullHeight := Fragment.Height;
+  Result:=Fragment.Prepare(Top-Section.Padding,Bottom-Section.Padding,Finish) And Not Pending;
+  If Section.Collapsed Then Section.ShortHeight:=Fragment.Height Else Section.FullHeight:=Fragment.Height;
 End;
 Procedure TConversationLayout.TrimDrawings(FirstVisible, LastVisible: Integer; ViewTop, ViewBottom: Int64);
 Var I,A,B: Integer; Fragment:TConversationFragment;
