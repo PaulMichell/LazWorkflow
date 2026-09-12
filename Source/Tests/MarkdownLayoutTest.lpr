@@ -173,6 +173,35 @@ Begin
   Finally Parser.Free; End;
 End;
 
+Type
+  TCancelProbe = Class
+    Function Cancelled: Boolean;
+  End;
+Function TCancelProbe.Cancelled: Boolean;
+Begin Result:=True; End;
+Procedure TestDetachedParsing;
+Var Parsed: TParsedStyledMarkdown; Content, Again: TStyledContent;
+  Other: TStyledCanvas; Style: TStyledStyle; Probe: TCancelProbe; Aborted: Boolean;
+Begin
+  Parsed:=ParseStyledMarkdown('**bold** and `code`');
+  Other:=TStyledCanvas.Create;
+  Try
+    Style:=DefaultStyledStyle; Style.Size:=42; Other.AddStyle(Style);
+    Content:=Parsed.Bind(Renderer); Again:=Parsed.Bind(Other);
+    Check('detached Markdown binds to different registries',Plain(Content)=Plain(Again));
+    Check('binding preserves bold values',fsBold In Other.StyleInfo[Again[0].Ranges[0].Style].Styles);
+    Check('binding leaves local style IDs intact',Parsed.Content[0].Ranges[0].Style=0);
+    Again:=Parsed.Bind(Renderer);
+    Check('repeat binding preserves styles',Again[0].Ranges[0].Style=Content[0].Ranges[0].Style);
+  Finally Other.Free; Parsed.Free; End;
+  Probe:=TCancelProbe.Create; Aborted:=False;
+  Try
+    Try Parsed:=ParseStyledMarkdown('cancelled',10,@Probe.Cancelled); Parsed.Free;
+    Except On E: EAbort Do Aborted:=True; End;
+    Check('cancelled parse aborts without a renderer',Aborted);
+  Finally Probe.Free; End;
+End;
+
 Procedure TestListContinuation;
 Var Content: TStyledContent;
 Begin
@@ -198,6 +227,7 @@ Begin
     TestTables;
     TestStreamedTables;
     TestListContinuation;
+    TestDetachedParsing;
   Finally
     Renderer.Free;
   End;

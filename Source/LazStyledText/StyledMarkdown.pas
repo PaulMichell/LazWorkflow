@@ -35,6 +35,21 @@ Function BuildStyledMarkdown(Renderer: TStyledCanvas; Const MarkdownText: UTF8St
   BaseSize: Integer = 10): TStyledContent;
 
 Type
+  TMarkdownCancelled = Function: Boolean Of Object;
+  { Owns values only: safe to create in a worker. Style IDs are local until
+    Bind transfers them to a renderer on its owning UI thread. }
+  TParsedStyledMarkdown = Class
+  Public
+    Content: TStyledContent;
+    Styles: Array Of TStyledStyle;
+    Function AddStyle(Const Style: TStyledStyle): Integer;
+    Function Bind(Renderer: TStyledCanvas): TStyledContent;
+  End;
+
+Function ParseStyledMarkdown(Const MarkdownText: UTF8String; BaseSize: Integer = 10;
+  Cancelled: TMarkdownCancelled = Nil): TParsedStyledMarkdown;
+
+Type
   TStyledMarkdown = Class
   Private
     FTarget: TCustomStyledText;
@@ -59,9 +74,11 @@ Type
   { Emits paragraphs and style ranges directly; no intermediate syntax tree. }
   TMarkdownReader = Class
   Private
-    FRenderer: TStyledCanvas;
+    FParsed: TParsedStyledMarkdown;
+    FCancelled: TMarkdownCancelled;
     FContent: TStyledContent;
     FCount: Integer;
+    Procedure CheckCancelled;
     Procedure NewParagraph(Indent: Integer; Background: TColor = clNone;
       Group: QWord = 0);
     Procedure Append(Const Value: UTF8String; Const Style: TStyledStyle);
@@ -69,12 +86,13 @@ Type
     Procedure Inline(Const Value: UTF8String; Const Style: TStyledStyle;
       Depth: Integer = 0);
   Public
-    Function Parse(Renderer: TStyledCanvas; Const Value: UTF8String;
+    Function Parse(Parsed: TParsedStyledMarkdown; Const Value: UTF8String;
       BaseSize: Integer): TStyledContent;
   End;
 
 Procedure TMarkdownReader.NewParagraph(Indent: Integer; Background: TColor; Group: QWord);
 Begin
+  CheckCancelled;
   If FCount = Length(FContent) Then SetLength(FContent, Max(16, FCount * 2));
   FContent[FCount] := Default(TStyledParagraph);
   If Group = 0 Then Group := FCount + 1;
@@ -90,7 +108,7 @@ End;
 Procedure TMarkdownReader.Append(Const Value: UTF8String; Const Style: TStyledStyle);
 Begin
   If Value <> '' Then
-    AppendStyledText(FContent[FCount - 1], Value, FRenderer.AddStyle(Style));
+    AppendStyledText(FContent[FCount - 1], Value, FParsed.AddStyle(Style));
 End;
 
 Function RunLength(Const Value: UTF8String; Start: Integer): Integer;
@@ -142,6 +160,7 @@ Begin
   Start := 1;
   While Index <= Length(Value) Do
     Begin
+      If (Index And 255)=0 Then CheckCancelled;
       { Keep unsupported link/image/reference syntax intact, including emphasis
         in labels and destinations. An incomplete construct retains its tail. }
       If Value[Index] = '[' Then
@@ -329,7 +348,7 @@ Begin
   End;
 End;
 
-Function TMarkdownReader.Parse(Renderer: TStyledCanvas; Const Value: UTF8String;
+Function TMarkdownReader.Parse(Parsed: TParsedStyledMarkdown; Const Value: UTF8String;
   BaseSize: Integer): TStyledContent;
 Const
   HeadingScale: Array[1..6] Of Integer = (180, 155, 135, 120, 110, 100);
@@ -342,7 +361,8 @@ Var
   Group: QWord;
   ParagraphOpen, HardBreak, BlockLine, Literal, ListContinuation: Boolean;
 Begin
-  FRenderer := Renderer;
+  FParsed := Parsed;
+  CheckCancelled;
   Lines := TStringList.Create;
   Try
     Lines.Text := Value;
@@ -350,6 +370,7 @@ Begin
     ParagraphOpen := False; ListContentIndent := -1;
     While Index < Lines.Count Do
       Begin
+        CheckCancelled;
         Line := Lines[Index];
         Body := TrimLeft(Line);
         Indent := Length(Line) - Length(Body);
@@ -493,21 +514,67 @@ Begin
   End;
 End;
 
-Function BuildStyledMarkdown(Renderer: TStyledCanvas; Const MarkdownText: UTF8String;
-  BaseSize: Integer): TStyledContent;
-Var
-  Reader: TMarkdownReader;
-  Value: UTF8String;
+Procedure TMarkdownReader.CheckCancelled;
+Begin
+  If Assigned(FCancelled) And FCancelled() Then Raise EAbort.Create('Markdown parsing cancelled');
+End;
+
+Function TParsedStyledMarkdown.AddStyle(Const Style: TStyledStyle): Integer;
+Var I: Integer;
+Begin
+  For I:=0 To High(Styles) Do
+    If (Styles[I].FontName=Style.FontName) And (Styles[I].Size=Style.Size) And
+      (Styles[I].Styles=Style.Styles) And (Styles[I].Foreground=Style.Foreground) And
+      (Styles[I].Background=Style.Background) And (Styles[I].Script=Style.Script) Then Exit(I);
+  Result:=Length(Styles);
+  SetLength(Styles,Result+1);
+  Styles[Result]:=Style;
+End;
+
+Function TParsedStyledMarkdown.Bind(Renderer: TStyledCanvas): TStyledContent;
+Var Mapping: TStyledIntegers; I,J: Integer;
 Begin
   If Not Assigned(Renderer) Then Raise EArgumentException.Create('Styled Markdown requires a renderer');
-  Value := MarkdownText;
-  If Copy(Value, 1, 3) = #$EF#$BB#$BF Then Delete(Value, 1, 3);
-  Reader := TMarkdownReader.Create;
+  SetLength(Mapping,Length(Styles));
+  For I:=0 To High(Styles) Do Mapping[I]:=Renderer.AddStyle(Styles[I]);
+  Result:=Copy(Content);
+  For I:=0 To High(Result) Do
+    Begin
+      Result[I].Ranges:=Copy(Content[I].Ranges);
+      For J:=0 To High(Result[I].Ranges) Do
+        Result[I].Ranges[J].Style:=Mapping[Result[I].Ranges[J].Style];
+    End;
+End;
+
+Function ParseStyledMarkdown(Const MarkdownText: UTF8String; BaseSize: Integer;
+  Cancelled: TMarkdownCancelled): TParsedStyledMarkdown;
+Var Reader: TMarkdownReader; Value: UTF8String;
+Begin
+  Result:=TParsedStyledMarkdown.Create;
+  Reader:=TMarkdownReader.Create;
   Try
-    Result := Reader.Parse(Renderer, NormaliseStyledText(Value), Max(1, BaseSize));
+    Try
+      Reader.FCancelled:=Cancelled;
+      Reader.CheckCancelled;
+      Value:=MarkdownText;
+      If Copy(Value,1,3)=#$EF#$BB#$BF Then Delete(Value,1,3);
+      Result.Content:=Reader.Parse(Result,NormaliseStyledText(Value),Max(1,BaseSize));
+    Except
+      Result.Free;
+      Raise;
+    End;
   Finally
     Reader.Free;
   End;
+End;
+
+Function BuildStyledMarkdown(Renderer: TStyledCanvas; Const MarkdownText: UTF8String;
+  BaseSize: Integer): TStyledContent;
+Var Parsed: TParsedStyledMarkdown;
+Begin
+  If Not Assigned(Renderer) Then Raise EArgumentException.Create('Styled Markdown requires a renderer');
+  Parsed:=ParseStyledMarkdown(MarkdownText,BaseSize);
+  Try Result:=Parsed.Bind(Renderer); Finally Parsed.Free; End;
 End;
 
 Constructor TStyledMarkdown.Create(Target: TCustomStyledText);
