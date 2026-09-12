@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--library-dir', type=Path, action='append', default=[])
     parser.add_argument('--gui', action='store_true')
     parser.add_argument('--package-check', action='store_true',
-                        help='Also validate .lpk dependencies with lazbuild (repository dependencies must already be built).')
+                        help='Also validate .lpk dependencies with lazbuild (rebuilds repository dependencies).')
     parser.add_argument('--compile-only', action='store_true')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
@@ -40,7 +40,7 @@ def main():
              'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest']
     if args.gui:
         tests += ['AssistantSubagentsTest', 'AssistantHarnessTest',
-                  'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest']
+                  'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest', 'AssistantConversationSurfaceTest']
     failures = []
 
     def run(label, command):
@@ -78,8 +78,10 @@ def main():
             linked = run(name + '-package-link', package_flags +
                          ['--add-package-link', str(repo / 'Packages' / (name + '.lpk'))]) and linked
         if linked:
-            run('assistant-lazbuild-package', package_flags +
-                ['--skip-dependencies', '--build-all', str(repo / 'Packages' / 'LazAssistantTools.lpk')])
+            for name in ('LazWorkflowCommon', 'LazStyledText', 'LazAssistantTools'):
+                if not run(name + '-lazbuild-package', package_flags +
+                           ['--skip-dependencies', '--build-all', str(repo / 'Packages' / (name + '.lpk'))]):
+                    break
     print(f'Logs: {output}', flush=True)
     return bool(failures)
 

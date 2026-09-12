@@ -71,8 +71,7 @@ Begin
     Check('ensure user first', (Trace.Count >= 1) And (Trace[0].Kind = tbkUser));
     Check('ensure user body', User.Body = 'please review');
     Check('ensure user reuse', Trace.EnsureUser('please review') = User);
-    Trace.NilFrames;
-    Check('nil frames', Trace[0].Frame = Nil);
+    Check('stable block identity', Trace[0].ID <> '');
   Finally
     Trace.Free;
   End;

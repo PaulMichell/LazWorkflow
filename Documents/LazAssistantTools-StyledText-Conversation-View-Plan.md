@@ -1,7 +1,7 @@
 # StyledText conversation output redesign
 
 Prepared: 12 September 2026.  
-Status: proposed design for review; no source changes.  
+Status: core replacement implemented; GTK2 validation completed. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) for results and remaining acceptance work.
 Scope: the Project Assistant's central conversation/output control, including live output, history, visibility filters, selection and scrolling.
 
 ## Recommendation
@@ -198,7 +198,7 @@ Names are provisional; they describe responsibilities rather than a requirement 
 
 ## Implementation sequence and review gates
 
-Each phase should be a logical commit or small set of commits. This document does not authorize starting those source changes before design review.
+The user approved implementation after design review. The core deliverables of phases 1–6 are implemented; platform/accessibility validation and large-message parsing latency remain follow-up work, as recorded in the implementation report.
 
 | Phase | Deliverable | Gate before proceeding |
 | --- | --- | --- |
@@ -242,3 +242,11 @@ Benchmark at least a normal conversation, 10,000 small blocks, and a few multi-m
 My recommendation is to proceed with the typed Markdown document, one StyledText surface, and one effective-height index. Keep the existing history format and use data-only per-section caches. Establish scroll/anchor correctness before adding broader Markdown features or further rendering optimizations.
 
 The first implementation work would be the reproduction/geometry harness and document layout foundation. Backend and development-loop feature work remains paused while this output-control replacement is reviewed and implemented.
+
+## Implementation update — 12 September 2026
+
+The production view now uses one StyledText surface, with typed Markdown sections, stable block identities, cached paragraph measurements and one effective height index. History turns form a continuous conversation. The former panel/memo cards, nested vertical scrolling, 4,000-pixel card limit and 30,000-pixel coordinate limit have been removed.
+
+Following the user's additional design feedback, tool/subagent rows start collapsed, including failed calls, and subsequent events retain the user's expansion choice. User and assistant messages use rounded canvas-painted bubbles, aligned right and left respectively. Bubble padding participates in the same measurements used for scrolling and selection.
+
+The implementation report distinguishes completed regression checks from outstanding performance and platform acceptance work. Backend/development-loop work can resume after the user has tested this replacement in the IDE.

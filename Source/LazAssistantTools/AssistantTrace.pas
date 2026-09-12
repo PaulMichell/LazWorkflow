@@ -16,10 +16,14 @@ Type
   TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent, tbkWorked);
 
   TTraceBlock = Class
+  Private
+    FBody: String;
+    FRevision: QWord;
+    Procedure SetBody(Const Value: String);
   Public
+    ID: String;
     Kind: TTraceBlockKind;
     Title: String;
-    Body: String;
     ToolName: String;
     ToolId: String;
     ToolArgs: String;
@@ -31,7 +35,9 @@ Type
     FinishedAt: TDateTime;
     DurationMs: Integer;
     Footer: String;
-    Frame: TObject; { TControl created by AssistantTraceView; untyped to keep this unit LCL-free. }
+    Constructor Create;
+    Property Revision: QWord Read FRevision;
+    Property Body: String Read FBody Write SetBody;
   End;
 
   TAssistantTrace = Class
@@ -45,7 +51,6 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Procedure Clear;
-    Procedure NilFrames;
     Function AddUser(Const Text: String): TTraceBlock;
     Function EnsureUser(Const Text: String): TTraceBlock;
     Function AddNote(Const Text: String): TTraceBlock;
@@ -145,6 +150,12 @@ Begin
     Result := tbkUser;
 End;
 
+Constructor TTraceBlock.Create;
+Var Guid: TGuid;
+Begin Inherited Create; CreateGUID(Guid); ID := GUIDToString(Guid); End;
+Procedure TTraceBlock.SetBody(Const Value: String);
+Begin If FBody = Value Then Exit; FBody := Value; Inc(FRevision); End;
+
 Constructor TAssistantTrace.Create;
 Begin
   Inherited Create;
@@ -162,13 +173,7 @@ Begin
   FBlocks.Clear;
 End;
 
-Procedure TAssistantTrace.NilFrames;
-Var
-  I: Integer;
-Begin
-  For I := 0 To FBlocks.Count - 1 Do
-    TTraceBlock(FBlocks[I]).Frame := Nil;
-End;
+
 
 Function TAssistantTrace.GetCount: Integer;
 Begin
@@ -197,7 +202,6 @@ Begin
   Result.FinishedAt := 0;
   Result.DurationMs := 0;
   Result.Footer := '';
-  Result.Frame := Nil;
   InsertAt := FBlocks.Count;
   If (Kind <> tbkWorked) And (InsertAt > 0) And (TTraceBlock(FBlocks[InsertAt - 1]).Kind = tbkWorked) Then
     FBlocks.Insert(InsertAt - 1, Result)
@@ -692,6 +696,7 @@ Begin
         Block := TTraceBlock(FBlocks[I]);
         If (Block.Kind = tbkThinking) And (Trim(Block.Body) = '') Then Continue;
         Obj := TJSONObject.Create;
+        Obj.Add('id', Block.ID);
         Obj.Add('kind', BlockKindName(Block.Kind));
         Obj.Add('title', Block.Title);
         Obj.Add('body', Block.Body);
@@ -837,7 +842,6 @@ Begin
     Begin
       Block := TTraceBlock(FBlocks[I]);
       Block.Running := False;
-      Block.Frame := Nil;
     End;
 End;
 
@@ -905,6 +909,7 @@ Begin
           Continue;
         Obj := TJSONObject(Arr.Items[I]);
         Block := AddBlock(NameToBlockKind(Obj.Get('kind', 'user')));
+        Block.ID := Obj.Get('id', Block.ID);
         Block.Title := Obj.Get('title', '');
         Block.Body := Obj.Get('body', '');
         Block.Footer := Obj.Get('footer', '');
@@ -915,7 +920,6 @@ Begin
         Block.Ok := Obj.Get('ok', True);
         Block.DurationMs := Obj.Get('duration_ms', 0);
         Block.Running := False;
-        Block.Frame := Nil;
       End;
   Finally
     Data.Free;
