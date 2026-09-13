@@ -1,7 +1,7 @@
 # StyledText conversation output redesign
 
 Prepared: 12 September 2026.  
-Status: core replacement implemented; GTK2 validation completed. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) for results and remaining acceptance work.
+Status: core replacement implemented; GTK2 validation and the first live Qt5/XWayland output pass completed. A rapid prompt-input failure remains open. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) and [live acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) for results and remaining work.
 Scope: the Project Assistant's central conversation/output control, including live output, history, visibility filters, selection and scrolling.
 
 ## Recommendation
@@ -276,3 +276,11 @@ Regressions cover 96/144/192 DPI and returning to 96 DPI, including paragraph 10
 Added a regular GUI stress regression for long formatted prose, unbroken tokens, fenced code and whitespace. It found and reproduced a reading-position jump when resizing halfway through a long paragraph. Anchor restoration now waits for incremental measurement to reach the requested text position and yields to explicit navigation or a conversation change.
 
 The implementation report records timings, Pascal heap usage and a 42.71 MiB process resident-memory peak, with their limits. This closes the first long-paragraph correctness/profiling pass; it does not claim a strict frame-time or total-memory bound. Remaining acceptance work includes live IDE use, physical monitor transitions, accessibility, other widget sets, larger-input/allocation profiling and pathological shaping/table cases.
+
+### Live Qt5 IDE acceptance — 13 September 2026
+
+The first live output pass used a freshly built, isolated Qt5 IDE and two actual ChatGPT requests against a disposable project. Streaming output, tables/bold, scroll endpoints, collapsed tools, complete selection outlines, filtering, resize/splitters, selection/copy, minimize/restore and completed-conversation history restoration passed the exercised checks. Requests without thinking text produced no empty thinking blocks.
+
+The [acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) records screenshots and limitations. It also adds two findings: **L1**, rapid synthetic typing loses characters in the separate `TSpellMemo` prompt editor, and **L2**, the fresh window leaves too little width for the conversation. Investigate and fix L1 next, with a focused Qt5 reproduction and exact input/copy checks; review initial pane proportions alongside L2. Full chat-workflow acceptance remains open until L1 is resolved.
+
+Accessibility, native Wayland/GTK3/Windows, physical monitor transitions, remaining live event variants and larger-input/allocation/pathological-table profiling follow. The completed Qt5/XWayland checks do not establish coverage for those configurations.
