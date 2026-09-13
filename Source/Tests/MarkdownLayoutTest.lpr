@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledCanvas, StyledMarkdown, AssistantProtocol, AssistantSampler;
+  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledTextDocument, StyledCanvas, StyledMarkdown, AssistantProtocol, AssistantSampler;
 
 Var
   FailCount: Integer;
@@ -63,6 +63,30 @@ Begin
           Exit(Renderer.StyleInfo[Range.Style]);
     End;
   Result := DefaultStyledStyle;
+End;
+
+Procedure TestRendererDPI;
+Const Resolutions: Array[0..3] Of Integer = (96,144,192,96);
+Var Bitmap: TBitmap; Font: TFont; Layout: TStyledLayout;
+  Content: TStyledContent; Generation: QWord; NormalHeight: Int64; PPI,I: Integer;
+Begin
+  Bitmap:=TBitmap.Create; Font:=TFont.Create; Layout:=TStyledLayout.Create;
+  Try
+    Bitmap.SetSize(400,200); Font.Name:='DejaVu Sans';
+    Content:=StyledContentFromText('DPI measurement'); NormalHeight:=0;
+    For I:=0 To High(Resolutions) Do
+      Begin
+        PPI:=Resolutions[I];
+        Font.PixelsPerInch:=PPI; Font.Size:=12;
+        Renderer.Configure(Bitmap.Canvas,Font); Generation:=Renderer.Generation;
+        Renderer.Prepare(Layout,Content[0],1000,swNone);
+        If NormalHeight=0 Then NormalHeight:=Layout.Height
+        Else If PPI=96 Then Check('returning to 96 DPI restores text height',Layout.Height=NormalHeight)
+        Else Check('higher DPI increases text height',Layout.Height>NormalHeight);
+        Renderer.Configure(Bitmap.Canvas,Font);
+        Check('repeated configure preserves the DPI generation',Renderer.Generation=Generation);
+      End;
+  Finally Layout.Free; Font.Free; Bitmap.Free; End;
 End;
 
 Procedure TestSoftAndHardBreaks;
@@ -219,6 +243,7 @@ Begin
   FailCount := 0;
   Renderer := TStyledCanvas.Create;
   Try
+    TestRendererDPI;
     TestSoftAndHardBreaks;
     TestInlineCodeAndPunctuation;
     TestEmphasisAndHeading;

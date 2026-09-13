@@ -222,6 +222,9 @@ Begin
       Inc(FGeneration);
       For Index := 0 To High(MetricValid) Do MetricValid[Index] := False;
     End;
+  { LCL TFont.Assign preserves the destination DPI. Copy it explicitly so
+    subsequent paints compare the same metrics and do not invalidate forever. }
+  BaseFont.PixelsPerInch := Font.PixelsPerInch;
   BaseFont.Assign(Font);
   Target := Canvas;
   ActiveStyle := -1;

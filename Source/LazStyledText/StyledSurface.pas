@@ -26,6 +26,7 @@ Type
     FShowVertical, FShowHorizontal: Boolean;
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
+    Procedure UpdateScrollbarBounds;
     Procedure DoScroll(Sender: TObject);
     Procedure SetScrollTop(Value: Int64);
     Procedure SetScrollLeft(Value: Integer);
@@ -78,7 +79,7 @@ Type
 Implementation
 
 Uses
-  Math, SysUtils, Forms;
+  Math, SysUtils, Forms, LCLIntf, LCLType;
 
 Constructor TStyledSurface.Create(OwnerComponent: TComponent);
 Begin
@@ -118,9 +119,10 @@ End;
 
 Function TStyledSurface.ViewRect: TRect;
 Begin
-  Result := Rect(7, 6, Max(7, ClientWidth - 7), Max(6, ClientHeight - 6));
-  If FShowVertical Then Dec(Result.Right, 16);
-  If FShowHorizontal Then Dec(Result.Bottom, 16);
+  Result := Rect(Scale96ToFont(7), Scale96ToFont(6),
+    ClientWidth - Scale96ToFont(7), ClientHeight - Scale96ToFont(6));
+  If FShowVertical Then Dec(Result.Right, VerticalBar.Width);
+  If FShowHorizontal Then Dec(Result.Bottom, HorizontalBar.Height);
   Result.Right := Max(Result.Left + 1, Result.Right);
   Result.Bottom := Max(Result.Top + 1, Result.Bottom);
 End;
@@ -139,12 +141,27 @@ Begin
   Resize;
 End;
 
+Procedure TStyledSurface.UpdateScrollbarBounds;
+Var Edge, VWidth, HHeight: Integer;
+Begin
+  If Not Assigned(VerticalBar) Or Not Assigned(HorizontalBar) Then Exit;
+  Edge := Max(1, Scale96ToFont(1));
+  { Native themes may constrain the requested size. Reserve the actual bar
+    dimensions so its thumb never overlaps the viewport. }
+  VerticalBar.Width := Max(Scale96ToFont(16), GetSystemMetrics(SM_CXVSCROLL));
+  HorizontalBar.Height := Max(Scale96ToFont(16), GetSystemMetrics(SM_CYHSCROLL));
+  VWidth := VerticalBar.Width; HHeight := HorizontalBar.Height;
+  VerticalBar.SetBounds(Max(0, ClientWidth - Edge - VWidth), Edge, VWidth,
+    Max(1, ClientHeight - 2*Edge - Ord(FShowHorizontal)*HHeight));
+  HorizontalBar.SetBounds(Edge, Max(0, ClientHeight - Edge - HHeight),
+    Max(1, ClientWidth - 2*Edge - Ord(FShowVertical)*VWidth), HHeight);
+End;
+
 Procedure TStyledSurface.Resize;
 Begin
   Inherited Resize;
   If Not Assigned(VerticalBar) Then Exit;
-  VerticalBar.SetBounds(Max(0, ClientWidth - 17), 1, 16, Max(1, ClientHeight - 2 - Ord(FShowHorizontal) * 16));
-  HorizontalBar.SetBounds(1, Max(0, ClientHeight - 17), Max(1, ClientWidth - 2 - Ord(FShowVertical) * 16), 16);
+  UpdateScrollbarBounds;
   GeometryChanged;
   SetExtent(FContentWidth, FContentHeight);
   Invalidate;
@@ -156,7 +173,9 @@ Begin
   If Assigned(FRenderer) Then
     Begin
       ConfigureCanvas;
+      UpdateScrollbarBounds;
       GeometryChanged;
+      SetExtent(FContentWidth, FContentHeight);
       Invalidate;
     End;
 End;
