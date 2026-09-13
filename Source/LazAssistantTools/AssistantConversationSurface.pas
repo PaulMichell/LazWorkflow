@@ -114,7 +114,7 @@ Begin FLayout.Add(Key, Block); End;
 Procedure TAssistantConversationSurface.EndDocument;
 Begin
   FLayout.EndSync; ConfigureCanvas;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools);
+  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
   BackgroundIndex := 0; FUpdating := True;
   Try
     SetExtent(ViewRect.Width, FLayout.TotalHeight);
@@ -244,7 +244,7 @@ Var Anchor: TConversationAnchor;
 Begin
   If Not Assigned(FLayout) Or FUpdating Then Exit;
   Anchor := CaptureAnchor; ConfigureCanvas;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools);
+  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
   BackgroundIndex := 0; FUpdating := True;
   Try SetExtent(ViewRect.Width, FLayout.TotalHeight); If FFollowTail Then ScrollToEnd Else RestoreAnchor(Anchor);
   Finally FUpdating := False; End;
@@ -272,7 +272,7 @@ Var Anchor: TConversationAnchor;
 Begin
   If (Thinking = FShowThinking) And (Tools = FShowTools) Then Exit;
   Anchor := CaptureAnchor; ClearSelection; FShowThinking := Thinking; FShowTools := Tools;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), Thinking, Tools);
+  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), Thinking, Tools, Font.PixelsPerInch);
   FUpdating := True;
   Try SetExtent(ViewRect.Width, FLayout.TotalHeight); If FFollowTail Then ScrollToEnd Else RestoreAnchor(Anchor);
   Finally FUpdating := False; End;
@@ -308,7 +308,7 @@ Begin
         Begin
           If FLayout[I].Kind In [tbkUser,tbkAnswer] Then
             Begin
-              Style := DefaultStyledBoxStyle; Style.CornerRadius := 12;
+              Style := DefaultStyledBoxStyle; Style.CornerRadius := Scale96ToFont(12);
               Style.BorderWidth := 1;
               If FLayout[I].Kind=tbkUser Then
                 Begin Style.Background := $EFF8E5; Style.BorderColor := $D5E4C5; End
@@ -325,7 +325,7 @@ Begin
           If Focused And (FocusedKey=FLayout[I].Key) Then
             Begin
               Style:=DefaultStyledBoxStyle; Style.BorderWidth:=1; Style.BorderColor:=clHighlight;
-              If FLayout[I].Kind In [tbkUser,tbkAnswer] Then Style.CornerRadius:=12;
+              If FLayout[I].Kind In [tbkUser,tbkAnswer] Then Style.CornerRadius:=Scale96ToFont(12);
               SectionHeight:=Fragment.Height+FLayout[I].Padding*2;
               Renderer.DrawBoxFrame(GetStyledBoxGeometry(OriginX+FLayout[I].Left,
                 OriginY+FLayout.Top(I), FLayout[I].OuterWidth, SectionHeight,Style),Style,Clip);
@@ -402,7 +402,7 @@ Begin
   Inherited MouseDown(Button,Shift,X,Y); PointerPosition:=Point(X,Y); If CanFocus Then SetFocus;
   If Button<>mbLeft Then Exit;
   Position:=HitPosition(X,Y); I:=FLayout.IndexOf(Position.Key); FocusedKey:=Position.Key;
-  If (Position.Text.Paragraph=0) And (I>=0) And (X<ViewRect.Left+24) Then Begin Toggle(I); Exit; End;
+  If (Position.Text.Paragraph=0) And (I>=0) And (X<ViewRect.Left+Scale96ToFont(24)) Then Begin Toggle(I); Exit; End;
   If Not (ssShift In Shift) Then SelectionStart:=Position;
   SelectionEnd:=Position; Selecting:=True; MouseCapture:=True; FFollowTail:=False; Timer.Enabled:=True; Invalidate;
 End;

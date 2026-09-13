@@ -1,6 +1,6 @@
 Program AssistantMarkdownAsyncTest;
 {$mode objfpc}{$H+}{$codepage utf8}
-Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Graphics,
+Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Graphics, StdCtrls,
   StyledTextTypes, StyledTextDocument, StyledMarkdown, AssistantTrace, AssistantConversationSurface, AssistantMarkdownWorker;
 Procedure Check(Const Name: String; Passed: Boolean);
 Begin
@@ -81,10 +81,72 @@ Begin
     Elapsed:=GetTickCount64-PumpStart;
     If Elapsed>MaxPumpMs Then MaxPumpMs:=Elapsed;
     If (View.Layout[1].ParsedVersion=View.Layout[1].Version) And
-      (View.Layout[1].FullVersion=View.Layout[1].Version) And Not View.Layout.PendingWork Then Exit;
+      (View.Layout[1].FullVersion=View.Layout[1].Version) And
+      (View.Layout[1].ParsedBaseSize=View.Font.Size) And
+      (View.Layout[1].Full.Generation=View.Renderer.Generation) And
+      (View.Layout[1].Full.Width=View.Layout[1].OuterWidth-2*View.Layout[1].Padding) And
+      Not View.Layout.PendingWork Then Exit;
     Sleep(2);
   Until GetTickCount64>StopAt;
+  WriteLn('pending=',View.Layout.PendingWork,' size=',View.Font.Size,
+    ' parsed=',View.Layout[1].ParsedBaseSize,' gen=',View.Renderer.Generation,
+    ' full=',View.Layout[1].Full.Generation,' width=',View.Layout[1].Full.Width,
+    ' expected=',View.Layout[1].OuterWidth-2*View.Layout[1].Padding);
   Check('asynchronous parse completed',False);
+End;
+Procedure TestFontAnchor;
+Var State, Actual: TConversationViewState; N,J: Integer; SavedParses, Generation: QWord;
+  A,B: TConversationPosition;
+Begin
+  State:=View.SaveViewState;
+  Try
+    State.FollowTail:=False; State.Anchor.Key:=Block.ID;
+    State.Anchor.Text:=StyledPosition(100,0); State.Anchor.TextAnchor:=True;
+    State.Anchor.Offset:=0; View.RestoreViewState(State);
+    Actual:=View.SaveViewState;
+    Try Check('fixture starts inside a large reply',Actual.Anchor.TextAnchor And
+      (Actual.Anchor.Text.Paragraph=100)); Finally Actual.Free; End;
+    A.Key:=Block.ID; A.Text:=StyledPosition(101,0);
+    B.Key:=Block.ID; B.Text:=StyledPosition(101,9); View.SelectRange(A,B);
+    For N:=0 To 4 Do
+      Begin
+        SavedParses:=View.Layout.ParseCount;
+        View.Font.BeginUpdate;
+        Try
+          Case N Of
+            0: View.Font.Size:=14;
+            1: View.Font.Name:='DejaVu Sans Mono';
+            2: View.Font.PixelsPerInch:=144;
+            3: View.Font.PixelsPerInch:=192;
+            4: View.Font.PixelsPerInch:=96;
+          End;
+          If N>=2 Then View.Font.Size:=14;
+        Finally View.Font.EndUpdate; End;
+        AwaitLatest;
+        Actual:=View.SaveViewState;
+        Try
+          Check('font/DPI change retains the reading paragraph '+IntToStr(N),
+            (Actual.Anchor.Key=State.Anchor.Key) And Actual.Anchor.TextAnchor And
+            (Actual.Anchor.Text.Paragraph=State.Anchor.Text.Paragraph));
+        Finally Actual.Free; End;
+        Check('selection survives font/DPI change',View.SelectedText='Paragraph');
+        Check('bubble padding follows DPI',View.Layout[1].Padding=View.Scale96ToFont(12));
+        Check('viewport gutter follows DPI',View.ViewRect.Left=View.Scale96ToFont(7));
+        For J:=0 To View.ControlCount-1 Do
+          If (View.Controls[J] Is TScrollBar) And
+            (TScrollBar(View.Controls[J]).Kind=sbVertical) Then
+            Check('viewport reserves the native scrollbar at each DPI',
+              (View.Controls[J].Width>0) And
+              (View.ViewRect.Right=View.ClientWidth-View.Scale96ToFont(7)-View.Controls[J].Width) And
+              (View.Controls[J].Left>=View.ViewRect.Right) And
+              (View.Controls[J].Left+View.Controls[J].Width<=View.ClientWidth));
+        Generation:=View.Renderer.Generation; View.Repaint; View.Repaint;
+        Check('unchanged paints keep the metric generation',View.Renderer.Generation=Generation);
+        Check('font/DPI extent matches the index',View.ContentHeight=View.Layout.TotalHeight);
+        If N>0 Then Check('face/DPI reflow reuses parsed Markdown',View.Layout.ParseCount=SavedParses);
+      End;
+    View.Font.Size:=10; AwaitLatest; View.JumpToStart;
+  Finally State.Free; End;
 End;
 Begin
   Application.Initialize;
@@ -127,6 +189,7 @@ Begin
     Host.Width:=720; Application.ProcessMessages; AwaitLatest;
     Check('width-only reflow keeps parsed content',View.Layout.ParseCount=CountBefore);
     Check('width-only preparation uses current width',View.Layout[1].Full.Width=View.Layout[1].OuterWidth-2*View.Layout[1].Padding);
+    TestFontAnchor;
     Block.Body:=Latest+#10+'## A larger heading'; Sync;
     Block.Title:='Assistant updated'; Block.Footer:='Latest footer'; Sync;
     View.Font.Size:=14; Host.Width:=650;

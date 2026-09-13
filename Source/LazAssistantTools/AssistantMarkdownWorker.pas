@@ -11,7 +11,7 @@ Type
   Public
     Key, Source, ErrorText: String;
     Epoch, Identity, Version: QWord;
-    BaseSize, Width, Kind: Integer;
+    BaseSize, Width, Kind, PixelsPerInch: Integer;
     OK, CountParse: Boolean;
     Stage: TAssistantMarkdownStage;
     Title, Footer: String;
@@ -51,8 +51,9 @@ Begin
   Inherited Destroy;
 End;
 Procedure TAssistantMarkdownJob.PrepareDocument;
-Var Content: TStyledContent; I,Offset: Integer;
+Var Content: TStyledContent; I,Offset,ScalePPI: Integer;
 Begin
+  ScalePPI:=PixelsPerInch; If ScalePPI<=0 Then ScalePPI:=96;
   FreeAndNil(PreparedLayout); FreeAndNil(PreparedDocument);
   If Assigned(Parsed) Then
     Begin BoundBody:=Parsed.BindStyles(Mapping); FreeAndNil(Parsed); End
@@ -69,11 +70,11 @@ Begin
   For I:=0 To High(Suffix) Do Begin Content[Offset]:=Suffix[I]; Inc(Offset); End;
   If Length(Content)=0 Then Content:=StyledContentFromText('');
   For I:=0 To High(Content) Do
-    If Content[I].Box.Group=0 Then Content[I].Box.Style.Margin.Bottom:=6;
+    If Content[I].Box.Group=0 Then Content[I].Box.Style.Margin.Bottom:=Round(6*ScalePPI/96);
   PreparedDocument:=TStyledDocument.Create;
   PreparedDocument.Replace(StyledPosition(0,0),PreparedDocument.EndPosition,Content);
   PreparedLayout:=TStyledMemoLayout.Create(PreparedDocument,Nil);
-  PreparedLayout.Reset(Width,True,24);
+  PreparedLayout.Reset(Width,True,Round(24*ScalePPI/96));
 End;
 Constructor TAssistantMarkdownWorker.Create;
 Begin

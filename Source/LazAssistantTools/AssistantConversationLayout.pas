@@ -40,7 +40,7 @@ Type
     FSections: TFPList;
     Lookup: TStringList;
     Renderer: TStyledCanvas;
-    FWidth, FBaseSize: Integer;
+    FWidth, FBaseSize, FPixelsPerInch: Integer;
     FGeneration, SyncGeneration: QWord;
     FShowThinking, FShowTools, NeedsPreparation: Boolean;
     WorkDeadline: QWord;
@@ -61,7 +61,7 @@ Type
     Procedure BeginSync;
     Procedure Add(Const Key: String; Block: TTraceBlock);
     Procedure EndSync;
-    Procedure Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean);
+    Procedure Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer = 96);
     Procedure Reindex;
     Function PrepareSection(Index: Integer; Top, Bottom: Int64; Finish: Boolean = False): Boolean;
     Procedure TrimDrawings(FirstVisible, LastVisible: Integer; ViewTop, ViewBottom: Int64);
@@ -137,7 +137,7 @@ Constructor TConversationLayout.Create(ARenderer: TStyledCanvas);
 Begin
   Inherited Create; Renderer := ARenderer; FSections := TFPList.Create;
   Lookup := TStringList.Create; Lookup.Sorted := True; Lookup.CaseSensitive := True;
-  FWidth := 1; FBaseSize := 10; FShowThinking := True; FShowTools := True;
+  FWidth := 1; FBaseSize := 10; FPixelsPerInch := 96; FShowThinking := True; FShowTools := True;
 End;
 Destructor TConversationLayout.Destroy;
 Begin Worker.Free; Worker:=Nil; Clear; Lookup.Free; FSections.Free; Inherited Destroy; End;
@@ -211,16 +211,16 @@ Begin
       Begin Lookup.Objects[I].Free; Lookup.Delete(I); End;
   Reindex;
 End;
-Procedure TConversationLayout.Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean);
-Var I: Integer; WidthOnly: Boolean;
+Procedure TConversationLayout.Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer);
+Var I: Integer;
 Begin
   Width := Max(1, Width);
-  If (FWidth <> Width) Or (FBaseSize <> BaseSize) Or (FGeneration <> Renderer.Generation) Then
+  If (FWidth <> Width) Or (FBaseSize <> BaseSize) Or (FGeneration <> Renderer.Generation) Or (FPixelsPerInch <> PixelsPerInch) Then
     Begin
-      WidthOnly:=(FBaseSize=BaseSize) And (FGeneration=Renderer.Generation);
       FWidth := Width; FBaseSize := BaseSize; FGeneration := Renderer.Generation;
+      FPixelsPerInch := Max(1, PixelsPerInch);
       For I := 0 To Count - 1 Do
-        If WidthOnly And (Length(Sections[I].Body)>=65536) And Assigned(Sections[I].Full) And
+        If (Length(Sections[I].Body)>=65536) And Assigned(Sections[I].Full) And
           Not (Sections[I].Kind In [tbkTool,tbkSteer]) Then
           Begin FreeAndNil(Sections[I].Short); Sections[I].ShortHeight:=28; End
         Else Sections[I].Invalidate;
@@ -237,7 +237,7 @@ Begin
       Section.Left := 0; Section.OuterWidth := FWidth; Section.Padding := 0;
       If Section.Kind In [tbkUser,tbkAnswer] Then
         Begin
-          Section.Padding := Min(12, Max(0, (FWidth-1) Div 4));
+          Section.Padding := Min(Round(12*FPixelsPerInch/96), Max(0, (FWidth-1) Div 4));
           If Section.Kind=tbkUser Then Section.OuterWidth := Max(1, FWidth*85 Div 100)
           Else Section.OuterWidth := Max(1, FWidth*95 Div 100);
           If Section.Kind=tbkUser Then Section.Left := FWidth-Section.OuterWidth;
@@ -247,9 +247,9 @@ Begin
         Not ((Section.Kind = tbkAnswer) And (Trim(Section.Body) = '') And (Section.Footer = ''));
       If Not Section.Visible Then Continue;
       If Section.Collapsed Then H := Section.ShortHeight Else H := Section.FullHeight;
-      SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding*2 + 10); LastVisible := I;
+      SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding*2 + Round(10*FPixelsPerInch/96)); LastVisible := I;
     End;
-  If LastVisible >= 0 Then SetHeight(Heights, LastVisible, Heights.Values[LastVisible] - 10);
+  If LastVisible >= 0 Then SetHeight(Heights, LastVisible, Heights.Values[LastVisible] - Round(10*FPixelsPerInch/96));
 End;
 Function TConversationLayout.BuildContent(Section: TConversationSection; Short: Boolean; BodyReady: Boolean): TStyledContent;
 Var Part: TStyledContent; Style: TStyledStyle; N,I: Integer; Text: String;
@@ -267,7 +267,7 @@ Begin
       Style.Styles := [fsBold]; If Not Section.OK Then Style.Foreground := clMaroon; Text := Section.Title;
       If Section.Kind In [tbkThinking, tbkTool, tbkSubagent] Then
         Begin If Short Then Text := UTF8String('▸ ') + Text Else Text := UTF8String('▾ ') + Text; End;
-      Part := StyledContentFromText(Text, Renderer.AddStyle(Style)); Part[0].Box.Group:=1; Part[0].Box.Style:=DefaultStyledBoxStyle; Part[0].Box.Style.Margin.Bottom:=6;
+      Part := StyledContentFromText(Text, Renderer.AddStyle(Style)); Part[0].Box.Group:=1; Part[0].Box.Style:=DefaultStyledBoxStyle; Part[0].Box.Style.Margin.Bottom:=Round(6*FPixelsPerInch/96);
       If Section.Kind In [tbkTool,tbkSubagent] Then Part[0].Box.Style.Background:=$F4F4F4;
       Append(Part); Style.Styles := []; Style.Foreground:=clDefault;
     End;
@@ -289,7 +289,7 @@ Begin
     Begin Style.Styles := [fsItalic]; Style.Foreground := clGrayText; Append(StyledContentFromText(Section.Footer, Renderer.AddStyle(Style))); End;
   If Length(Result) = 0 Then Result := StyledContentFromText('');
   For N := 0 To High(Result) Do
-    If Result[N].Box.Group = 0 Then Result[N].Box.Style.Margin.Bottom := 6;
+    If Result[N].Box.Group = 0 Then Result[N].Box.Style.Margin.Bottom := Round(6*FPixelsPerInch/96);
 End;
 Function TConversationLayout.GetPendingWork: Boolean;
 Begin Result:=Assigned(Worker) And Worker.Busy; End;
@@ -311,6 +311,7 @@ End;
 Procedure TConversationLayout.ConfigurePreparation(Job: TAssistantMarkdownJob; Section: TConversationSection);
 Var Frame: TStyledContent;
 Begin
+  Job.PixelsPerInch:=FPixelsPerInch;
   Job.Title:=Section.Title; Job.Footer:=Section.Footer; Job.OK:=Section.OK;
   Job.Width:=Max(1,Section.OuterWidth-Section.Padding*2);
   Frame:=BuildContent(Section,False,False);
@@ -340,7 +341,8 @@ Begin
     If (Section.Identity<>Job.Identity) Or (Ord(Section.Kind)<>Job.Kind) Or
       ((Job.BaseSize=Section.ParsedBaseSize) And ((Job.Version<Section.ParsedVersion) Or
         ((Job.Version=Section.ParsedVersion) And Assigned(Section.Full) And
-         (Section.FullVersion=Job.Version) And (Section.Full.Width=Job.Width)))) Or
+         (Section.FullVersion=Job.Version) And (Section.Full.Width=Job.Width) And
+         (Section.Full.Generation=Renderer.Generation)))) Or
       ((Job.Version<>Section.Version) And (Length(Section.Body)<65536)) Then Exit;
     If Job.Stage=amsParse Then
       Begin
@@ -352,7 +354,7 @@ Begin
         SubmitPreparation;
         Exit;
       End;
-    If (Job.Title<>Section.Title) Or (Job.Footer<>Section.Footer) Or (Job.OK<>Section.OK) Or
+    If (Job.PixelsPerInch<>FPixelsPerInch) Or (Job.Title<>Section.Title) Or (Job.Footer<>Section.Footer) Or (Job.OK<>Section.OK) Or
       (Job.Width<>Max(1,Section.OuterWidth-Section.Padding*2)) Then
       Begin SubmitPreparation; Exit; End;
     If Not Assigned(Job.PreparedLayout) Then Exit;
@@ -400,11 +402,14 @@ Begin
         End;
     End;
   If LargeBody And Not Finish And Not Pending And
-    (Not Assigned(Section.Full) Or (Section.Full.Width<>Max(1,Section.OuterWidth-Section.Padding*2))) Then
+    (Not Assigned(Section.Full) Or (Section.Full.Width<>Max(1,Section.OuterWidth-Section.Padding*2)) Or
+     (Section.Full.Generation<>Renderer.Generation)) Then
     Begin RequestParse(Section,True); Pending:=True; End;
   BodyReady:=Not MarkdownBody Or ((Section.ParsedVersion>0) And (Section.ParsedBaseSize=FBaseSize));
   If MarkdownBody And Assigned(Section.Full) And BodyReady And
-    (Section.FullVersion<>Section.ParsedVersion) Then FreeAndNil(Section.Full);
+    ((Section.FullVersion<>Section.ParsedVersion) Or
+     (Finish And ((Section.Full.Generation<>Renderer.Generation) Or
+       (Section.Full.Width<>Max(1,Section.OuterWidth-Section.Padding*2))))) Then FreeAndNil(Section.Full);
   Fragment:=Section.Fragment;
   If Not Assigned(Fragment) Then
     Begin
@@ -413,7 +418,10 @@ Begin
       If Section.Collapsed Then Section.Short:=Fragment
       Else Begin Section.Full:=Fragment; If BodyReady And Not Pending Then Section.FullVersion:=Section.ParsedVersion Else Section.FullVersion:=0; End;
     End;
-  Result:=Fragment.Prepare(Top-Section.Padding,Bottom-Section.Padding,Finish,WorkDeadline) And Not Pending;
+  { Keep the previous measurements intact until the replacement is ready.
+    Measuring against a new font here would mix two metric generations. }
+  If Pending And (Fragment.Generation<>Renderer.Generation) Then Result:=False
+  Else Result:=Fragment.Prepare(Top-Section.Padding,Bottom-Section.Padding,Finish,WorkDeadline) And Not Pending;
   If Not Result Then NeedsPreparation:=True;
   If Section.Collapsed Then Section.ShortHeight:=Fragment.Height Else Section.FullHeight:=Fragment.Height;
 End;

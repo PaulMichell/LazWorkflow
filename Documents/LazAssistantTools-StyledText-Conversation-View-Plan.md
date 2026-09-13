@@ -262,3 +262,10 @@ The existing 4.2 MB fixture's initial synchronization fell from approximately 25
 The worker now prepares the mapped paragraph content, complete document and initial layout index before publication, then reclaims the replaced snapshot. The UI retains renderer ownership and performs only registration, attachment, visible measurement and painting. Width-only changes to large replies reuse parsed content and retain the previous fragment until the replacement is ready.
 
 Visible and background preparation share one 8 ms measurement budget per timer update. In the existing 2.8 MB streaming fixture, the largest measured layout update fell from approximately 101 ms to 9 ms and the event-pump call from approximately 106 ms to 14 ms. Those measurements support the common-case improvement; they do not close platform, accessibility, font/DPI or extreme-input acceptance work. See the implementation report for tests and remaining items.
+
+
+### Font/DPI correctness follow-up — 13 September 2026
+
+Implemented the next automated acceptance step. Large replies retain their reading paragraph and selection through font-size, font-face and programmatic DPI changes. Fixed repeated renderer invalidation caused by `TFont.Assign` preserving the destination DPI. The viewport and bubble geometry now scale with font DPI, while scrollbar space follows actual native dimensions. Prepared replacement documents validate current DPI and renderer generation.
+
+Regressions cover 96/144/192 DPI and returning to 96 DPI, including paragraph 100 inside the existing 2.8 MB asynchronous reply. See the implementation report for details. Physical monitor transitions, live IDE acceptance, accessibility, other widget sets and extreme-input/memory profiling remain open.

@@ -60,8 +60,8 @@ Where required, supply `--library-dir` for local linker libraries. Capture mode 
 
 ## Remaining acceptance and optimization work
 
-1. **Performance acceptance:** Background parsing and prepared-document publication are implemented for large Markdown bodies; see both follow-ups below. The latest 2.8 MB test measured a 9 ms worst layout update. The 8 ms work budget is a scheduling target, not a guaranteed upper bound on all UI work. Extremely long single paragraphs, memory peaks and font/DPI transitions still need focused profiling.
-2. **Platform and accessibility validation:** GTK3, Qt, Windows, high-DPI transitions and screen-reader behavior are not verified. The control has an accessible name and keyboard interaction, but a platform text-accessibility provider and screen-reader parity are not claimed. Bubble/scrollbar dimensions use the current StyledSurface pixel conventions.
+1. **Performance acceptance:** Background parsing and prepared-document publication are implemented for large Markdown bodies; see both follow-ups below. The latest 2.8 MB test measured a 9 ms worst layout update. The 8 ms work budget is a scheduling target, not a guaranteed upper bound on all UI work. Extremely long single paragraphs and memory peaks still need focused profiling. Automated font/DPI correctness checks are now covered by the follow-up below; physical monitor transitions remain unverified.
+2. **Platform and accessibility validation:** GTK3, Qt, Windows, physical monitor DPI transitions and screen-reader behavior are not verified. The control has an accessible name and keyboard interaction, but a platform text-accessibility provider and screen-reader parity are not claimed. Bubble geometry and viewport gutters scale with font DPI; scrollbar space uses the actual native dimensions, respecting widget-set constraints.
 3. **Live IDE acceptance:** Test the user's actual IDE with streaming responses, splitter resizing, tool expansion, drag selection and long archived conversations. Automated GTK2 tests cover the model and real canvas, but do not substitute for this workflow check.
 4. **Archive lifecycle:** Existing application restrictions on switching conversations during a running request remain. Reading earlier turns within the active conversation works while output arrives; background streaming into another archived conversation is not introduced here.
 5. **Further profiling:** Measure heap peaks, per-frame rendering latency and extremely long single-paragraph/code-token cases before claiming a strict time or memory budget. Retained source/parsed content is intentionally not bounded by viewport size.
@@ -128,3 +128,24 @@ The extended async regression checks parse/prepare/disposal ownership, valid doc
 All 29 assistant test programs passed on GTK2, together with direct assistant compilation and real LazWorkflowCommon, LazStyledText and LazAssistantTools package builds. The standalone scrolling fixture also keeps all 10,000 tool sections reachable with two shared scrollbar controls.
 
 The next acceptance work is the live IDE workflow, font/DPI and accessibility behavior, other widget sets, and profiling extreme single-paragraph inputs and memory peaks. The common large-reply handoff no longer rebuilds the entire styled document on the UI thread.
+
+
+## Follow-up: font and DPI changes
+
+Implemented 13 September 2026.
+
+The new regression first reproduced a reading-position failure inside a large reply: changing the font discarded its full fragment, and anchor restoration clamped the paragraph to a temporary header-only document. Large replies now retain their previous fragment until the replacement is prepared. Renderer generation participates in replacement scheduling and duplicate-result checks, so a font-face or DPI change rebuilds measurements even when source and width are unchanged. Font-face/DPI changes reuse parsed Markdown; a point-size change reparses size-dependent heading styles. Forced synchronous completion also replaces stale fragments.
+
+A second failure prevented high-DPI preparation from settling. Lazarus's `TFont.Assign` preserves the destination DPI, so the renderer's cached font never matched the surface font and every configure/paint invalidated measurements again. `StyledCanvas` now copies DPI explicitly before assigning the font.
+
+Viewport gutters, chat-bubble padding/radius, inter-section spacing and disclosure hit areas scale with font DPI. Worker preparation receives DPI for section spacing and height estimates, and rechecks it before publication. `StyledSurface` updates scrollbar geometry on font changes as well as resize. It reserves actual native scrollbar dimensions: GTK2 may constrain a requested width, and the previous fixed reservation could disagree with the displayed control. The shared StyledText changes also apply to other consumers, including the Markdown viewer.
+
+### Validation
+
+- `MarkdownLayoutTest` verifies that repeated renderer configuration at 96, 144 and 192 DPI keeps a stable generation, that text height increases with DPI, and that returning to 96 DPI restores its original height.
+- `AssistantMarkdownAsyncTest` reads paragraph 100 of the 2.8 MB reply while changing font size, font face and DPI, then returning to 96 DPI. It checks the reading paragraph, selected text, parsed-content reuse, prepared-fragment generation/width, viewport and bubble geometry, native scrollbar reservation and the shared extent. These checks use normal asynchronous preparation.
+- The existing conversation surface regression still checks scroll endpoints, tail-follow, filtering, collapse, width changes, cross-message selection and 10,000 sections.
+
+All 29 assistant regression programs passed, together with direct assistant compilation and real LazWorkflowCommon, LazStyledText and LazAssistantTools package builds. Logs are in `/tmp/laz-assistant-dpi-verified`.
+
+These are real GTK2 controls with programmatic font/DPI changes. They do not establish physical monitor transition behavior, accessibility parity or results on other widget sets. Remaining work is live IDE acceptance, accessibility, other widget sets, and extreme single-paragraph/memory profiling.
