@@ -60,7 +60,7 @@ Where required, supply `--library-dir` for local linker libraries. Capture mode 
 
 ## Remaining acceptance and optimization work
 
-1. **Performance acceptance:** Background parsing and prepared-document publication are implemented for large Markdown bodies; see both follow-ups below. The latest 2.8 MB test measured a 9 ms worst layout update. The 8 ms work budget is a scheduling target, not a guaranteed upper bound on all UI work. Extremely long single paragraphs and memory peaks still need focused profiling. Automated font/DPI correctness checks are now covered by the follow-up below; physical monitor transitions remain unverified.
+1. **Performance acceptance:** Background parsing and prepared-document publication are implemented for large Markdown bodies; see both follow-ups below. The latest 2.8 MB test measured a 9 ms worst layout update. The 8 ms work budget is a scheduling target, not a guaranteed upper bound on all UI work. The first long-paragraph/code-line and Pascal heap measurements are recorded below. Larger inputs, allocation attribution and pathological shaping/table cases still need profiling. Automated font/DPI correctness checks are now covered by the follow-up below; physical monitor transitions remain unverified.
 2. **Platform and accessibility validation:** GTK3, Qt, Windows, physical monitor DPI transitions and screen-reader behavior are not verified. The control has an accessible name and keyboard interaction, but a platform text-accessibility provider and screen-reader parity are not claimed. Bubble geometry and viewport gutters scale with font DPI; scrollbar space uses the actual native dimensions, respecting widget-set constraints.
 3. **Live IDE acceptance:** Test the user's actual IDE with streaming responses, splitter resizing, tool expansion, drag selection and long archived conversations. Automated GTK2 tests cover the model and real canvas, but do not substitute for this workflow check.
 4. **Archive lifecycle:** Existing application restrictions on switching conversations during a running request remain. Reading earlier turns within the active conversation works while output arrives; background streaming into another archived conversation is not introduced here.
@@ -149,3 +149,31 @@ Viewport gutters, chat-bubble padding/radius, inter-section spacing and disclosu
 All 29 assistant regression programs passed, together with direct assistant compilation and real LazWorkflowCommon, LazStyledText and LazAssistantTools package builds. Logs are in `/tmp/laz-assistant-dpi-verified`.
 
 These are real GTK2 controls with programmatic font/DPI changes. They do not establish physical monitor transition behavior, accessibility parity or results on other widget sets. Remaining work is live IDE acceptance, accessibility, other widget sets, and extreme single-paragraph/memory profiling.
+
+
+## Follow-up: long-paragraph reflow and stress coverage
+
+Implemented 13 September 2026.
+
+The next acceptance step exercises one very long paragraph, rather than many small paragraphs. A 512 KiB unbroken reply reproduced a reading-position failure: resizing while reading near byte 262,000 moved the view back near byte 3,800. The replacement layout had measured only its first lines, and anchor restoration treated the last currently measured line as the requested position.
+
+The surface now retains a pending text anchor until measurement reaches that byte offset. Position preparation shares the existing layout work deadline; it no longer forces a whole paragraph to finish synchronously just to restore an anchor. During reflow, later lines can remain temporarily unmeasured, but the desired reading position survives until they become available. Scrolling, wheel/keyboard navigation, clicking, explicit start/end navigation, clearing and restoring another view state take precedence over the pending restoration.
+
+`AssistantConversationStressTest` is included in the GUI regression group. It covers a roughly 600 KiB paragraph with mixed formatting and UTF-8, a 512 KiB unbroken token, a 512 KiB fenced code line and a fenced line containing 512 KiB of spaces. It records elapsed layout time, maximum event-pump/paint/update duration and Pascal allocator usage. Assertions cover source retention, shared extents, constant native control count, the long-paragraph reading position after resize, incremental font reflow, cancellation by navigation, exact tail-follow and clearing a pending anchor. Timing figures are diagnostic, not machine-dependent pass/fail thresholds.
+
+### Initial local measurements
+
+| Fixture | Full layout elapsed | Largest event-pump call | Largest layout update | Pascal heap after layout |
+| --- | ---: | ---: | ---: | ---: |
+| Mixed prose, 606,208 bytes | 2,362 ms | 30 ms | 12 ms | 6.24 MiB |
+| Unbroken token, 524,288 bytes | 3,071 ms | 10 ms | 8 ms | 2.74 MiB |
+| Fenced code line, 524,302 bytes | 2,676 ms | 10 ms | 8 ms | 3.30 MiB |
+| Fenced spaces, 524,304 bytes | 52 ms | 10 ms | 9 ms | 2.39 MiB |
+
+All 30 assistant regression programs passed, together with direct assistant compilation and real LazWorkflowCommon, LazStyledText and LazAssistantTools package builds. Logs are in `/tmp/laz-assistant-stress-verified`.
+
+These figures are from the initial isolated GTK2 stress run. Full layout elapsed time includes timer gaps; it is not one continuous UI block. The process-wide Pascal heap peak was approximately 6.86 MiB in that run. Heap figures include the harness, source and renderer state, and exclude allocations owned by GTK/Pango and other native libraries. They do not establish a bound on total process memory. A completed very long paragraph retains drawing runs for that paragraph, so memory is not strictly proportional to the viewport.
+
+A separate run of the complete stress harness, including resize/font/navigation checks, finished in 20.26 seconds with a peak resident set of 43,736 KiB (42.71 MiB), measured using Linux `getrusage` through Python. This includes the harness, loaded libraries and native allocations; it is a process-wide peak, not an allocation breakdown or a memory limit. The output and resource measurements are saved in `/tmp/laz-conversation-stress-isolated.log` and `/tmp/laz-conversation-stress-resources.txt`.
+
+The checks provide repeatable coverage for these long-input cases. Physical monitor transitions, live IDE acceptance, accessibility, other widget sets, larger-input/allocation profiling and pathological single-cluster/table shaping remain open.

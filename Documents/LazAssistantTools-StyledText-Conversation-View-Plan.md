@@ -269,3 +269,10 @@ Visible and background preparation share one 8 ms measurement budget per timer u
 Implemented the next automated acceptance step. Large replies retain their reading paragraph and selection through font-size, font-face and programmatic DPI changes. Fixed repeated renderer invalidation caused by `TFont.Assign` preserving the destination DPI. The viewport and bubble geometry now scale with font DPI, while scrollbar space follows actual native dimensions. Prepared replacement documents validate current DPI and renderer generation.
 
 Regressions cover 96/144/192 DPI and returning to 96 DPI, including paragraph 100 inside the existing 2.8 MB asynchronous reply. See the implementation report for details. Physical monitor transitions, live IDE acceptance, accessibility, other widget sets and extreme-input/memory profiling remain open.
+
+
+### Long-paragraph stress follow-up — 13 September 2026
+
+Added a regular GUI stress regression for long formatted prose, unbroken tokens, fenced code and whitespace. It found and reproduced a reading-position jump when resizing halfway through a long paragraph. Anchor restoration now waits for incremental measurement to reach the requested text position and yields to explicit navigation or a conversation change.
+
+The implementation report records timings, Pascal heap usage and a 42.71 MiB process resident-memory peak, with their limits. This closes the first long-paragraph correctness/profiling pass; it does not claim a strict frame-time or total-memory bound. Remaining acceptance work includes live IDE use, physical monitor transitions, accessibility, other widget sets, larger-input/allocation profiling and pathological shaping/table cases.

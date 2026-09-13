@@ -64,6 +64,7 @@ Type
     Procedure Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer = 96);
     Procedure Reindex;
     Function PrepareSection(Index: Integer; Top, Bottom: Int64; Finish: Boolean = False): Boolean;
+    Function PreparePosition(Index: Integer; Const Position: TStyledPosition): Boolean;
     Procedure TrimDrawings(FirstVisible, LastVisible: Integer; ViewTop, ViewBottom: Int64);
     Function IndexOf(Const Key: String): Integer;
     Function Count: Integer;
@@ -424,6 +425,31 @@ Begin
   Else Result:=Fragment.Prepare(Top-Section.Padding,Bottom-Section.Padding,Finish,WorkDeadline) And Not Pending;
   If Not Result Then NeedsPreparation:=True;
   If Section.Collapsed Then Section.ShortHeight:=Fragment.Height Else Section.FullHeight:=Fragment.Height;
+End;
+Function TConversationLayout.PreparePosition(Index: Integer; Const Position: TStyledPosition): Boolean;
+Var Section: TConversationSection; Fragment: TConversationFragment;
+  P,Offset: Integer;
+  Function Reached: Boolean;
+  Begin
+    Result:=Assigned(Fragment.Layout.Paragraphs[P]) And
+      (Fragment.Layout.Paragraphs[P].LineCount>0) And
+      (Fragment.Layout.Paragraphs[P].Complete Or
+       (Fragment.Layout.Paragraphs[P].NextOffset>Offset));
+  End;
+Begin
+  Section:=Sections[Index]; Fragment:=Section.Fragment;
+  If Not Assigned(Fragment) Then Begin NeedsPreparation:=True; Exit(False); End;
+  P:=EnsureRange(Position.Paragraph,0,Fragment.Document.Count-1);
+  Offset:=EnsureRange(Position.Offset,0,Length(Fragment.Document[P]^.Text));
+  Result:=Reached;
+  If Not Result And (Fragment.Generation=Renderer.Generation) And
+    (GetTickCount64<WorkDeadline) Then
+    Begin
+      Fragment.Layout.Ensure(P,False,Max(Int64(1),Int64(WorkDeadline)-Int64(GetTickCount64)));
+      Result:=Reached;
+      If Section.Collapsed Then Section.ShortHeight:=Fragment.Height Else Section.FullHeight:=Fragment.Height;
+    End;
+  If Not Result Then NeedsPreparation:=True;
 End;
 Procedure TConversationLayout.TrimDrawings(FirstVisible, LastVisible: Integer; ViewTop, ViewBottom: Int64);
 Var I,A,B: Integer; Fragment:TConversationFragment;

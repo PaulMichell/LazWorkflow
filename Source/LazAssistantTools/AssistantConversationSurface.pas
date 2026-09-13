@@ -17,7 +17,8 @@ Type
     Timer: TTimer;
     FShowThinking, FShowTools, FFollowTail, FUpdating, Selecting, FInTick: Boolean;
     SelectionStart, SelectionEnd: TConversationPosition;
-    SavedAnchor: TConversationAnchor;
+    SavedAnchor, PendingAnchor: TConversationAnchor;
+    HasPendingAnchor: Boolean;
     FocusedKey: String;
     PointerPosition: TPoint;
     BackgroundIndex: Integer;
@@ -39,6 +40,7 @@ Type
     Procedure PaintContent(Const Clip: TRect; OriginX: Integer; OriginY: Int64); Override;
     Procedure GeometryChanged; Override;
     Procedure Scrolled; Override;
+    Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePosition: TPoint): Boolean; Override;
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X,Y: Integer); Override;
     Procedure MouseMove(Shift: TShiftState; X,Y: Integer); Override;
@@ -93,7 +95,7 @@ Destructor TAssistantConversationSurface.Destroy;
 Begin Timer.Enabled := False; FreeAndNil(FLayout); Inherited Destroy; End;
 Procedure TAssistantConversationSurface.Clear;
 Begin
-  Timer.Enabled := False; FLayout.Clear; BackgroundIndex := 0;
+  Timer.Enabled := False; HasPendingAnchor:=False; FLayout.Clear; BackgroundIndex := 0;
   ClearSelection; FUpdating := True;
   Try SetExtent(ViewRect.Width, 0); ScrollTop := 0; Finally FUpdating := False; End;
   FFollowTail := True; Inc(FLayoutRevision); Invalidate;
@@ -103,7 +105,7 @@ Begin Result := TConversationViewState.Create; Result.Anchor := CaptureAnchor; R
 Procedure TAssistantConversationSurface.RestoreViewState(State: TConversationViewState);
 Begin
   If Not Assigned(State) Then Exit;
-  FFollowTail := State.FollowTail; FUpdating := True;
+  HasPendingAnchor:=False; FFollowTail := State.FollowTail; FUpdating := True;
   Try If FFollowTail Then ScrollToEnd Else RestoreAnchor(State.Anchor); Finally FUpdating := False; End;
   PrepareViewport; Invalidate;
 End;
@@ -126,6 +128,7 @@ End;
 Function TAssistantConversationSurface.CaptureAnchor: TConversationAnchor;
 Var I,P,L: Integer; Fragment: TConversationFragment; LocalY: Int64;
 Begin
+  If HasPendingAnchor Then Exit(PendingAnchor);
   Result := Default(TConversationAnchor); Result.Index := -1;
   If Not Assigned(FLayout) Then Exit;
   I := FLayout.AtY(ScrollTop); If I < 0 Then Exit;
@@ -144,6 +147,7 @@ End;
 Procedure TAssistantConversationSurface.RestoreAnchor(Const Anchor: TConversationAnchor);
 Var I,P,L: Integer; LocalY: Int64; Fragment: TConversationFragment;
 Begin
+  HasPendingAnchor:=False;
   I := FLayout.IndexOf(Anchor.Key);
   If (I < 0) Or Not FLayout[I].Visible Then
     Begin
@@ -160,7 +164,14 @@ Begin
   If Anchor.TextAnchor And Assigned(Fragment) Then
     Begin
       P := EnsureRange(Anchor.Text.Paragraph, 0, Fragment.Document.Count-1);
-      If Not Assigned(Fragment.Layout.Paragraphs[P]) Then Fragment.Layout.Ensure(P, True);
+      { A large paragraph may have only its first lines measured. Do not
+        replace the requested text position with that temporary last line. }
+      If Not FLayout.PreparePosition(I,Anchor.Text) Then
+        Begin
+          PendingAnchor:=Anchor; HasPendingAnchor:=True;
+          FLayout.Reindex; SetExtent(ViewRect.Width,FLayout.TotalHeight);
+          Exit;
+        End;
       If FLayout[I].Collapsed Then FLayout[I].ShortHeight := Fragment.Height Else FLayout[I].FullHeight := Fragment.Height;
       FLayout.Reindex; SetExtent(ViewRect.Width, FLayout.TotalHeight);
       If Assigned(Fragment.Layout.Paragraphs[P]) Then
@@ -253,18 +264,25 @@ End;
 Procedure TAssistantConversationSurface.Scrolled;
 Begin
   If FUpdating Then Exit;
+  HasPendingAnchor:=False;
   FFollowTail := Not Selecting And (ScrollTop >= Max(Int64(0), ContentHeight - ViewRect.Height) - 3);
   PrepareViewport;
 End;
+Function TAssistantConversationSurface.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer;
+  MousePosition: TPoint): Boolean;
+Begin
+  HasPendingAnchor:=False;
+  Result:=Inherited DoMouseWheel(Shift,WheelDelta,MousePosition);
+End;
 Procedure TAssistantConversationSurface.JumpToEnd;
-Begin FFollowTail := True; FUpdating := True; Try ScrollToEnd; Finally FUpdating := False; End; PrepareViewport; Invalidate; End;
+Begin HasPendingAnchor:=False; FFollowTail := True; FUpdating := True; Try ScrollToEnd; Finally FUpdating := False; End; PrepareViewport; Invalidate; End;
 Procedure TAssistantConversationSurface.JumpToStart;
-Begin FFollowTail := False; ScrollTop := 0; FFollowTail := False; PrepareViewport; Invalidate; End;
+Begin HasPendingAnchor:=False; FFollowTail := False; ScrollTop := 0; FFollowTail := False; PrepareViewport; Invalidate; End;
 Procedure TAssistantConversationSurface.NavigateTo(Const Key: String);
 Var I: Integer;
 Begin
   I := FLayout.IndexOf(Key); If I < 0 Then Exit;
-  FFollowTail := False; FUpdating := True; Try ScrollTop := FLayout.Top(I); Finally FUpdating := False; End;
+  HasPendingAnchor:=False; FFollowTail := False; FUpdating := True; Try ScrollTop := FLayout.Top(I); Finally FUpdating := False; End;
   PrepareViewport; Invalidate;
 End;
 Procedure TAssistantConversationSurface.SetFilters(Thinking, Tools: Boolean);
@@ -401,6 +419,7 @@ Var I:Integer; Position:TConversationPosition;
 Begin
   Inherited MouseDown(Button,Shift,X,Y); PointerPosition:=Point(X,Y); If CanFocus Then SetFocus;
   If Button<>mbLeft Then Exit;
+  HasPendingAnchor:=False;
   Position:=HitPosition(X,Y); I:=FLayout.IndexOf(Position.Key); FocusedKey:=Position.Key;
   If (Position.Text.Paragraph=0) And (I>=0) And (X<ViewRect.Left+Scale96ToFont(24)) Then Begin Toggle(I); Exit; End;
   If Not (ssShift In Shift) Then SelectionStart:=Position;
@@ -438,6 +457,7 @@ Var I:Integer;
 Begin
   If ssCtrl In Shift Then
     Case Key Of VK_A:Begin SelectAll; Key:=0; End; VK_C:Begin Clipboard.AsText:=SelectedText; Key:=0; End; End;
+  If Key In [VK_HOME,VK_END,VK_UP,VK_DOWN,VK_PRIOR,VK_NEXT] Then HasPendingAnchor:=False;
   Case Key Of
     VK_HOME: JumpToStart; VK_END: JumpToEnd;
     VK_UP: ScrollTop:=ScrollTop-24; VK_DOWN: ScrollTop:=ScrollTop+24;
