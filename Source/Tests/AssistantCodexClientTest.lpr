@@ -136,15 +136,17 @@ Begin
 End;
 Procedure TestWorkerBridge;
 Var Workspace: TMemoryWorkspace; Broker: TAssistantToolBroker; Run: TAssistantCodexRun;
-  RunId: String; Snapshot: TCodexRunSnapshot; Deadline: QWord;
+  RunId, Profile: String; Snapshot: TCodexRunSnapshot; Deadline: QWord;
 Begin
   Workspace := TMemoryWorkspace.Create;
   Broker := TAssistantToolBroker.Create(Workspace);
   Run := Nil;
+  Profile := GetTempFileName;
+  DeleteFile(Profile);
   Try
     RunId := Broker.BeginRun(awsReadOnly);
     Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
-      'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
+      'normal', Broker.ToolsJson, RunId, 3000, Profile, 'high');
     Run.Start;
     Deadline := GetTickCount64 + 5000;
     Repeat
@@ -153,6 +155,7 @@ Begin
       Sleep(1);
     Until Snapshot.Done Or (GetTickCount64 >= Deadline);
     Check('worker run completes', Snapshot.Done And (Snapshot.State = crsCompleted));
+    Check('first run creates its managed profile', FileExists(Profile + '/config.toml'));
     Check('worker dispatches one IDE read through broker', Workspace.Reads = 1);
     Check('worker streams answer snapshot', Snapshot.Content = '**text**');
     Check('worker publishes reasoning for the UI', Pos('Final-only summary', Snapshot.Thinking) > 0);
@@ -168,6 +171,8 @@ Begin
     Check('cancelled worker executes no IDE tools', Workspace.Reads = 1);
   Finally
     Run.Free; Broker.Free; Workspace.Free;
+    DeleteFile(Profile + '/config.toml');
+    RemoveDir(Profile);
   End;
 End;
 Procedure TestCancellationDuringTool;

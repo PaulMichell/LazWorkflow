@@ -125,7 +125,7 @@ Begin
 End;
 Procedure TAssistantCodexRun.Execute;
 Var Client: TAssistantCodexClient; Deadline: QWord; Tool: TCodexToolRequest;
-  SteerText, ToolResult, ToolCallId: String; Stage: Integer;
+  SteerText, ToolResult, ToolCallId, ProfileError: String; Stage: Integer;
   HaveResult, ToolSuccess: Boolean; Env: TStringList; RunDirectory: String;
 Begin
   Client := Nil; Env := Nil;
@@ -142,6 +142,15 @@ Begin
       RunDirectory := FCwd;
       If FProfile <> '' Then
         Begin
+          If Not PrepareCodexProfile(FProfile, ProfileError) Then
+            Begin
+              EnterCriticalSection(FLock);
+              Try
+                FSnapshot.State := crsFailed;
+                FSnapshot.ErrorText := ProfileError;
+              Finally LeaveCriticalSection(FLock); End;
+              Exit;
+            End;
           RunDirectory := FProfile;
           Env := TStringList.Create;
           CodexProfileEnvironment(FProfile, Env);
