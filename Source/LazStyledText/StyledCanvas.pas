@@ -30,6 +30,8 @@ Type
   Public
     Source: UTF8String;
     Cells: Array Of TStyledLayout;
+    CellParagraphs: TStyledContent;
+    NextCell: Integer;
     CellStarts, CellLefts, CellWidths: TStyledIntegers;
     CellStyle: TStyledBoxStyle;
     Lines: Array Of TStyledVisualLine;
@@ -146,6 +148,8 @@ Var
 Begin
   For Index := 0 To High(Cells) Do Cells[Index].Free;
   Cells := Nil;
+  CellParagraphs := Nil;
+  NextCell := 0;
   CellStarts := Nil;
   CellLefts := Nil;
   CellWidths := Nil;
@@ -524,6 +528,8 @@ Var
   Started: QWord;
   Finish: Integer;
 Begin
+  If Length(Layout.Cells) > 0 Then
+    Exit(ContinueStyledTable(Self, Layout, Paragraph, Milliseconds));
   Started := GetTickCount64;
   While Not Layout.Complete Do
     Begin

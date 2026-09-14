@@ -11,20 +11,22 @@ Uses
   Graphics, Types, StyledTextTypes, StyledCanvas;
 
 Procedure PrepareStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; Const Paragraph: TStyledParagraph);
+Function ContinueStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout;
+  Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
 Procedure DrawStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; X: Integer; Y: Int64;
   Const Clip: TRect; SelectionStart, SelectionEnd: Integer; Foreground: TColor);
 
 Implementation
 
 Uses
-  Math, StrUtils;
+  Math, StrUtils, SysUtils;
 
 Procedure PrepareStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; Const Paragraph: TStyledParagraph);
 Var
   Cell: TStyledParagraph;
   Range: TStyledRange;
   Geometry: TStyledBoxGeometry;
-  Index, Count, Start, Finish, Left, Right, LineIndex, RunIndex, Shift, TotalLines: Integer;
+  Index, Count, Start, Finish, Left, Right: Integer;
   Child: TStyledLayout;
 Begin
   Count := 1;
@@ -34,6 +36,7 @@ Begin
     back to ordinary text until its number of cells matches the column schema. }
   If Count <> Length(Paragraph.Box.Columns) Then Exit;
   SetLength(Layout.Cells, Count);
+  SetLength(Layout.CellParagraphs, Count);
   SetLength(Layout.CellStarts, Count);
   SetLength(Layout.CellLefts, Count);
   SetLength(Layout.CellWidths, Count);
@@ -41,7 +44,7 @@ Begin
   Layout.CellStyle.Margin := StyledInsets(0);
   Layout.CellStyle.CornerRadius := 0;
   Start := 0;
-  TotalLines := 0;
+
   For Index := 0 To Count - 1 Do
     Begin
       Finish := PosEx(#9, Paragraph.Text, Start + 1) - 1;
@@ -60,8 +63,33 @@ Begin
       Geometry := GetStyledBoxGeometry(0, 0, Layout.CellWidths[Index], 0, Layout.CellStyle);
       Child := TStyledLayout.Create;
       Layout.Cells[Index] := Child;
-      Renderer.Prepare(Child, Cell, Max(1, Geometry.Content.Right - Geometry.Content.Left), swWord);
-      For LineIndex := 0 To Child.LineCount - 1 Do
+      Layout.CellParagraphs[Index] := Cell;
+      Renderer.BeginLayout(Child, Cell, Max(1, Geometry.Content.Right - Geometry.Content.Left), swWord);
+      Start := Finish + 1;
+    End;
+  Layout.Width := Max(0, Layout.AvailableWidth);
+End;
+
+Function ContinueStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout;
+  Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
+Var
+  Started: QWord;
+  Remaining, Index, LineIndex, FirstLine, RunIndex, Shift, TotalLines: Integer;
+  Child: TStyledLayout;
+Begin
+  If Layout.Complete Then Exit(True);
+  Started := GetTickCount64;
+  While Layout.NextCell < Length(Layout.Cells) Do
+    Begin
+      Index := Layout.NextCell;
+      Child := Layout.Cells[Index];
+      FirstLine := Child.LineCount;
+      Remaining := 0;
+      If Milliseconds > 0 Then
+        Remaining := Max(1, Int64(Milliseconds) - Int64(GetTickCount64 - Started));
+      Renderer.ContinueLayout(Child, Layout.CellParagraphs[Index], Remaining);
+      { Align each new line once, including lines published by a partial cell. }
+      For LineIndex := FirstLine To Child.LineCount - 1 Do
         Begin
           Shift := Max(0, Child.AvailableWidth - Child.Lines[LineIndex].Width);
           Case Paragraph.Box.Columns[Index] Of
@@ -76,11 +104,15 @@ Begin
         End;
       Layout.Height := Max(Layout.Height, Child.Height + Max(0, Layout.CellStyle.BorderWidth) * 2 +
         Layout.CellStyle.Padding.Top + Layout.CellStyle.Padding.Bottom);
-      Inc(TotalLines, Child.LineCount);
-      Start := Finish + 1;
+      If Child.Complete Then Inc(Layout.NextCell);
+      If (Milliseconds > 0) And (GetTickCount64 - Started >= QWord(Milliseconds)) Then Break;
     End;
+  { Publish geometry for selection and scroll extents while cells are pending. }
+  TotalLines := 0;
+  For Child In Layout.Cells Do Inc(TotalLines, Child.LineCount);
   SetLength(Layout.Lines, TotalLines);
-  For Index := 0 To Count - 1 Do
+  Layout.LineCount := 0;
+  For Index := 0 To High(Layout.Cells) Do
     For LineIndex := 0 To Layout.Cells[Index].LineCount - 1 Do
       Begin
         Layout.Lines[Layout.LineCount] := Layout.Cells[Index].Lines[LineIndex];
@@ -89,9 +121,14 @@ Begin
         Inc(Layout.Lines[Layout.LineCount].Top, Max(0, Layout.CellStyle.BorderWidth) + Layout.CellStyle.Padding.Top);
         Inc(Layout.LineCount);
       End;
-  Layout.Width := Max(0, Layout.AvailableWidth);
-  Layout.NextOffset := Length(Paragraph.Text);
-  Layout.Complete := True;
+  Layout.Complete := Layout.NextCell = Length(Layout.Cells);
+  If Layout.Complete Then
+    Begin
+      Layout.NextOffset := Length(Paragraph.Text);
+      Layout.CellParagraphs := Nil;
+    End
+  Else Layout.NextOffset := Layout.CellStarts[Layout.NextCell] + Layout.Cells[Layout.NextCell].NextOffset;
+  Result := Layout.Complete;
 End;
 
 Procedure DrawStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; X: Integer; Y: Int64;

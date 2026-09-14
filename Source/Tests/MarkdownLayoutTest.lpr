@@ -242,6 +242,46 @@ Begin
   Finally Layout.Free; Canvas.Free; Bitmap.Free; End;
 End;
 
+Procedure TestIncrementalTable;
+Var Bitmap: TBitmap; Canvas: TStyledCanvas; Partial, Whole: TStyledLayout;
+  Content: TStyledContent; I, J, Steps: Integer; Deadline: QWord;
+Begin
+  Bitmap:=TBitmap.Create; Canvas:=TStyledCanvas.Create;
+  Partial:=TStyledLayout.Create; Whole:=TStyledLayout.Create;
+  Try
+    Bitmap.SetSize(600,300); Canvas.Configure(Bitmap.Canvas,Bitmap.Canvas.Font);
+    Content:=BuildStyledMarkdown(Canvas,'| First | Second |'+#10+'| :---: | ---: |'+#10+
+      '| '+StringOfChar('x',262144)+' | right aligned |',10);
+    I:=High(Content);
+    Check('large table fixture parsed',Length(Content[I].Box.Columns)=2);
+    Canvas.BeginLayout(Partial,Content[I],400,swWord);
+    Check('table initialisation defers cell measurement',
+      Not Partial.Complete And (Partial.Cells[0].LineCount=0));
+    Canvas.ContinueLayout(Partial,Content[I],1);
+    Check('large table yields with usable partial geometry',
+      Not Partial.Complete And (Partial.LineCount>0) And (Partial.Height>0));
+    Steps:=0; Deadline:=GetTickCount64+10000;
+    While Not Partial.Complete And (GetTickCount64<Deadline) Do
+      Begin Canvas.ContinueLayout(Partial,Content[I],1); Inc(Steps); End;
+    Check('incremental table completes',Partial.Complete And (Steps>0));
+    Canvas.Prepare(Whole,Content[I],400,swWord);
+    Check('incremental table matches synchronous extent',
+      (Partial.Height=Whole.Height) And (Partial.LineCount=Whole.LineCount) And
+      (Partial.NextOffset=Length(Content[I].Text)));
+    For I:=0 To High(Whole.Cells) Do
+      Begin
+        Check('cell source preserved',Partial.Cells[I].Source=Whole.Cells[I].Source);
+        For J:=0 To Whole.Cells[I].RunCount-1 Do
+          Check('cell alignment independent of measurement slices',
+            Partial.Cells[I].Runs[J].X=Whole.Cells[I].Runs[J].X);
+      End;
+    Check('temporary cell paragraphs released',Length(Partial.CellParagraphs)=0);
+    I:=High(Content);
+    Canvas.Prepare(Partial,Content[I],200,swWord);
+    Check('resizing rebuilds table geometry',Partial.Complete And (Partial.Height>Whole.Height));
+  Finally Whole.Free; Partial.Free; Canvas.Free; Bitmap.Free; End;
+End;
+
 Procedure TestListContinuation;
 Var Content: TStyledContent;
 Begin
@@ -270,6 +310,7 @@ Begin
     TestListContinuation;
     TestDetachedParsing;
     TestOversizedCluster;
+    TestIncrementalTable;
   Finally
     Renderer.Free;
   End;
