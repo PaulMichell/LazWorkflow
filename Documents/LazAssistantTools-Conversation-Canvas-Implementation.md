@@ -191,3 +191,10 @@ Further tracing corrected L1's diagnosis: keystrokes queued behind repeated para
 ### Initial-window fix — 14 September 2026
 
 The IDE's initial bounds now use screen percentages, and the form reserves conversation space when resized narrowly. Side-pane widths shrink proportionally; the history buttons divide their available width. The fresh IDE profile and final Qt5 form checks confirm the default size and narrow layouts. See L2 and its screenshot in the acceptance report. That report also records the separate, unresolved shutdown exception as L3.
+
+
+### Performance and live-event follow-up — 14 September 2026
+
+The requested extended profiling and live IDE event-fixture pass is complete. It found and fixed Unicode cluster splitting, synchronous large-table measurement, offscreen history-layout starvation, and missing first-run Codex profile creation. The [performance and event acceptance report](LazAssistantTools-Performance-and-Event-Acceptance.md) records reproducible fixtures, allocation/RSS attribution, live screenshots, test results and remaining limits.
+
+The live Qt5 IDE exercised supplied thinking, an actual missing-file tool rejection, backend failure, runtime exit, user cancellation and final-only/duplicate events using a deterministic offline runtime. An additional real ChatGPT call was blocked by automatic approval review of credential copying; it was not run. This distinction is retained in the report. L3, accessibility and further platform/DPI acceptance remain open.

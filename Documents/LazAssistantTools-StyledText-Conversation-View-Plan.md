@@ -296,3 +296,10 @@ The real Assistant-form harness captured all 457 rapidly typed characters on imm
 L2 is fixed. IDE registration now uses screen-relative initial bounds, replacing absolute coordinates that produced the cramped window. Resizing preserves space for the conversation by reducing side panes proportionally when necessary. History buttons share the available width without overlapping. A fresh IDE profile recorded 1536 × 850 on a 1920 × 1080 desktop; the final form was inspected at 640, 680 and 1200 pixels wide. The current sources also compiled into the isolated Qt5 IDE successfully.
 
 The acceptance report records a separate shutdown access violation after IDE/form teardown, mapped to the LCL clipboard area (L3). Reproduce and compare that exit path before attributing it to a particular change. Accessibility, further platform/DPI checks, live event variants and additional performance profiling remain as listed above.
+
+
+### Performance and live-event follow-up — 14 September 2026
+
+The requested extended profiling and live IDE event-fixture pass is complete. It found and fixed Unicode cluster splitting, synchronous large-table measurement, offscreen history-layout starvation, and missing first-run Codex profile creation. The [performance and event acceptance report](LazAssistantTools-Performance-and-Event-Acceptance.md) records reproducible fixtures, allocation/RSS attribution, live screenshots, test results and remaining limits.
+
+The live Qt5 IDE exercised supplied thinking, an actual missing-file tool rejection, backend failure, runtime exit, user cancellation and final-only/duplicate events using a deterministic offline runtime. An additional real ChatGPT call was blocked by automatic approval review of credential copying; it was not run. This distinction is retained in the report. L3, accessibility and further platform/DPI acceptance remain open.

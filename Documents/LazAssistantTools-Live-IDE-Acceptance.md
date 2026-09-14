@@ -83,12 +83,14 @@ After the IDE logged project closure, destruction of the Assistant window and ma
 
 Next check: reproduce a normal IDE exit, compare against the preceding revision with the same profile/clipboard state, and trace clipboard ownership/lifetime if it recurs. Local evidence: `Lib/InputVerification/ide-run.log` and `Lib/LiveIDEAcceptance/lazarus.map`. No clipboard teardown change was made in this task.
 
+Follow-up observation, 14 September: after the event-fixture pass, normal File → Quit again logged project closure, Assistant destruction and main-form destruction before an access violation. This executable reported addresses `$437764` and `$43DA61` and exited with code 217. Those addresses have not been mapped in this build; this is a second shutdown symptom, not proof of the same clipboard cause. Evidence: `Lib/ConversationAcceptance/ide-run-new.log`. L3 diagnosis/comparison remains open.
+
 ## Remaining acceptance work
 
 1. L1 and L2 are fixed and verified. Investigate the separate shutdown observation L3.
 2. Accessibility: platform text exposure, screen-reader behavior and a systematic keyboard-only workflow.
 3. Native Wayland, GTK3, Windows and physical monitor/DPI transitions. Qt5/XWayland has the live coverage above; this does not imply every Qt configuration is verified.
-4. Larger histories/inputs, allocation attribution and pathological shaping/table profiling beyond the existing automated fixtures.
-5. Populated thinking, backend failures and other event variants in live IDE sessions. Existing automated coverage does not constitute a live test of every event type.
+4. Extended history/input/allocation and pathological table/shaping profiling: completed on 14 September; see the [follow-up report](LazAssistantTools-Performance-and-Event-Acceptance.md) for fixes, measurements and remaining performance limits.
+5. Live IDE event variants: the deterministic offline-runtime pass is complete; see the follow-up report for populated thinking, failures, disconnect, Stop and final-only events. An additional real-provider request was blocked by credential-copy approval review and remains unrun.
 
 Application restrictions on switching conversations during an active request remain unchanged. These live history checks switched completed conversations. No source code was changed during this acceptance pass.
