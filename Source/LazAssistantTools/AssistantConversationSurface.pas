@@ -224,6 +224,10 @@ Begin
     End;
   PrepareViewport;
   Anchor := CaptureAnchor; Deadline := GetTickCount64 + 8;
+  { Viewport preparation and reindexing can consume the previous slice on a
+    large history. Give offscreen measurement its own bounded slice so it
+    cannot be starved indefinitely by the visible content. }
+  FLayout.BeginWorkSlice;
   While (BackgroundIndex < FLayout.Count) And (GetTickCount64 < Deadline) Do
     Begin
       If FLayout.PrepareSection(BackgroundIndex, 0, 0) Then Inc(BackgroundIndex) Else Break;
