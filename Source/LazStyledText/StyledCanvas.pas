@@ -414,7 +414,7 @@ Procedure TStyledCanvas.AddLine(Layout: TStyledLayout; Const Paragraph: TStyledP
 Var
   Line: TStyledVisualLine;
   Run: TStyledDrawingRun;
-  Position, Hint, EndRun, Above, Below, Leading, TabWidth, Scan: Integer;
+  Position, Hint, EndRun, RunLimit, Above, Below, Leading, TabWidth, Scan: Integer;
   Body: TStyledMetrics;
 Begin
   Line := Default(TStyledVisualLine);
@@ -432,12 +432,13 @@ Begin
     Begin
       Run := Default(TStyledDrawingRun);
       Run.Style := StyleAt(Paragraph, Position, Hint);
-      EndRun := Min(Finish, Paragraph.Ranges[Hint].Start + Paragraph.Ranges[Hint].Count);
-      EndRun := Min(EndRun, Position + 2048);
+      RunLimit := Min(Finish, Paragraph.Ranges[Hint].Start + Paragraph.Ranges[Hint].Count);
+      EndRun := Min(RunLimit, Position + 2048);
       If EndRun < Finish Then
         Begin
           Scan := PreviousCluster(Paragraph.Text, EndRun + 1);
-          If Scan > Position Then EndRun := Scan;
+          If Scan > Position Then EndRun := Scan
+          Else EndRun := Min(RunLimit, NextCluster(Paragraph.Text, Position));
         End;
       Run.IsTab := Paragraph.Text[Position + 1] = #9;
       If Run.IsTab Then EndRun := Position + 1

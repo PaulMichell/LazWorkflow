@@ -226,6 +226,22 @@ Begin
   Finally Probe.Free; End;
 End;
 
+Procedure TestOversizedCluster;
+Var Bitmap:TBitmap; Canvas:TStyledCanvas; Layout:TStyledLayout;
+  Content:TStyledContent; Text:UTF8String; I:Integer;
+Begin
+  Text:='x'; For I:=1 To 4096 Do Text+=UTF8String('́');
+  Bitmap:=TBitmap.Create; Canvas:=TStyledCanvas.Create; Layout:=TStyledLayout.Create;
+  Try
+    Bitmap.SetSize(400,100); Canvas.Configure(Bitmap.Canvas,Bitmap.Canvas.Font);
+    Content:=StyledContentFromText(Text);
+    Canvas.Prepare(Layout,Content[0],300,swWord);
+    Check('oversized combining cluster stays in one drawing run',
+      (Layout.RunCount=1) And (Layout.Runs[0].Start=0) And (Layout.Runs[0].Count=Length(Text)));
+    Check('oversized cluster preserves complete source',Layout.Source=Text);
+  Finally Layout.Free; Canvas.Free; Bitmap.Free; End;
+End;
+
 Procedure TestListContinuation;
 Var Content: TStyledContent;
 Begin
@@ -253,6 +269,7 @@ Begin
     TestStreamedTables;
     TestListContinuation;
     TestDetachedParsing;
+    TestOversizedCluster;
   Finally
     Renderer.Free;
   End;
