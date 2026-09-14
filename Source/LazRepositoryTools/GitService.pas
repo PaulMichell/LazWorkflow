@@ -254,7 +254,7 @@ Begin
         Code := FindNext(Rec);
       End;
   Finally
-    FindClose(Rec);
+    SysUtils.FindClose(Rec);
   End;
 End;
 
@@ -1517,7 +1517,7 @@ Begin
       FLastError := 'Empty patch';
       Exit;
     End;
-  TempName := GetTempFileName(GetTempDir, 'lazgit-partial-');
+  TempName := SysUtils.GetTempFileName(GetTempDir, 'lazgit-partial-');
   If TempName = '' Then
     Begin
       FLastError := 'Could not create temporary patch file';
@@ -1538,7 +1538,7 @@ Begin
       Begin
         FLastError := 'Could not write patch: ' + E.Message;
         If FileExists(TempName) Then
-          DeleteFile(TempName);
+          SysUtils.DeleteFile(TempName);
         Exit;
       End;
   End;
@@ -1566,7 +1566,7 @@ Begin
       FLastError := Trim(OutputText);
   Finally
     If FileExists(TempName) Then
-      DeleteFile(TempName);
+      SysUtils.DeleteFile(TempName);
   End;
 End;
 
@@ -1982,7 +1982,7 @@ Begin
       {$ENDIF}
     Except On E: Exception Do Begin FLastError := E.Message; Exit; End; End;
   Finally
-    If FileExists(LockPath) Then DeleteFile(LockPath);
+    If FileExists(LockPath) Then SysUtils.DeleteFile(LockPath);
   End;
   Current := TStringList.Create; Original := TStringList.Create;
   OriginalRefNames := TStringList.Create; OriginalRefNames.CaseSensitive := True;

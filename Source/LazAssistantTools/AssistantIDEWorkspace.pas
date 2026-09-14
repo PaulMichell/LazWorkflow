@@ -41,6 +41,8 @@ Type
     Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Override;
     Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanGit: Boolean; Override;
+    Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -62,6 +64,10 @@ Type
   Public
     ID: String;
   End;
+Function TAssistantIDEWorkspace.CanGit: Boolean;
+Begin Result := ProjectRootPath <> ''; End;
+Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin Result := ToolRunGit(Arguments, ResultText, ErrorText); End;
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin CancelBuild; Inherited Destroy; End;
 Procedure TAssistantIDEWorkspace.CancelBuild;

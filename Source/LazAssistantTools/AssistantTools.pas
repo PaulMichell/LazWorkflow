@@ -35,6 +35,7 @@ Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 { Shared, bounded read helpers; these never dispatch arbitrary native tools. }
+Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
@@ -64,7 +65,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, AssistantSearchUtil, AssistantEditorEdits, fpjson, jsonparser;
+  AssistantLfm, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -286,7 +287,7 @@ Begin
     (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
-    (Name = 'get_project_info') Or (Name = 'run_compile') Or
+    (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
     (Name = 'set_active_plan') Or (Name = 'read_file');
 End;
 
@@ -313,7 +314,7 @@ Begin
     End;
   { Build-mode source tools — never Chat or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'search_in_project') Or (Name = 'run_compile') Or
+    (Name = 'search_in_project') Or (Name = 'run_compile') Or (Name = 'run_git') Or
     (Name = 'add_unit_to_project') Or (Name = 'open_file') Or
     (Name = 'ensure_form_component') Then
     Begin
@@ -553,7 +554,9 @@ Begin
     amPlan:
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
     amBuild:
-      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson;
+      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson +
+        ',{"type":"function","function":{"name":"run_git","description":' +
+        '"' + JsonEscapeLocal(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
     amChat:
       Body := BuildReadToolsJson;
   End;
@@ -693,6 +696,37 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var Data, Args: TJSONData; I: Integer; Editor: TSourceEditorInterface; Root, Command: String;
+Begin
+  Result := False; ResultText := ''; ErrorText := ''; Root := ProjectRootPath;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ArgumentsJson); Command := '';
+      If Data Is TJSONObject Then
+        Begin
+          Args := TJSONObject(Data).Find('arguments');
+          If (Args Is TJSONArray) And (Args.Count > 0) Then Command := Args.Items[0].AsString;
+        End;
+      If (Command = 'add') Or (Command = 'commit') Then
+        Begin
+          If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And LazarusIDE.ActiveProject.Modified Then
+            Begin ErrorText := 'Save authorized project settings before staging or committing.'; Exit; End;
+          If Assigned(SourceEditorManagerIntf) Then
+            For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+              Begin
+                Editor := SourceEditorManagerIntf.SourceEditors[I];
+                If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) And
+                  ((Editor.FileName = '') Or IsPathUnderRoot(Root, Editor.FileName)) Then
+                  Begin ErrorText := 'Save authorized project editor and designer changes before staging or committing. Git reads saved files.'; Exit; End;
+              End;
+        End;
+      Result := RunAssistantGit(Root, ArgumentsJson, ResultText, ErrorText);
+    Except On E: Exception Do ErrorText := E.Message; End;
+  Finally Data.Free; End;
 End;
 
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -2852,6 +2886,8 @@ Begin
     Result := ToolWriteFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'replace_in_file' Then
     Result := ToolReplaceInFile(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'run_git' Then
+    Result := ToolRunGit(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_compile' Then
     Result := ToolRunCompile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'add_unit_to_project' Then

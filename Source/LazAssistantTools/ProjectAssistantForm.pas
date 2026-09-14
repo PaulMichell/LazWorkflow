@@ -2728,11 +2728,14 @@ Begin
     'For a routine-local variable or constant rename, use lazarus_preview_local_rename, review its changes, then lazarus_apply_local_rename in Build; save separately. ' +
     'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +
     'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
-    'Build allows new project text files, explicit buffer edits, saves and saved-input builds. ' +
+    'Build allows new project text files, explicit buffer edits, saves, saved-input builds and Git via lazarus_run_git. ' +
+    'For Git, save authorized edits first, inspect status and the staged diff, stage explicit files and exclude unrelated changes. ' +
+    'Read the active plan including its overall instructions. Honor explicit conversation or plan instructions to commit automatically after completing and validating changes, without asking again; tool approval settings still apply. Preserve these instructions in plans and report the commit hash only after successful Git evidence. ' +
     'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
     'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +
+    'Active plan: ' + GetActivePlanRelativePath + LineEnding +
     ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
     Recap + LineEnding + 'Current user request:' + LineEnding + ApiText;
   If Not FModeLocked Then LockModeForSend;

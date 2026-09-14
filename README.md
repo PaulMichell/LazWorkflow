@@ -33,6 +33,20 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 - After a Plan write, **Build this** / **Revise**
 - Project-local `.assistant/` (conversation JSONL, events log, config). Gitignore it.
 
+### Git commits from Build mode
+
+Build mode provides `run_git` (API backend) or `lazarus_run_git` (ChatGPT backend)
+for `status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, explicit `add`, and
+normal `commit -m` commands in the active project directory. Git must be on PATH.
+Save authorized editor changes before staging; inspect the staged diff and keep
+unrelated changes out of the commit.
+
+You can put this instruction in the conversation or active plan:
+"After completing and validating each work package, automatically commit its changes."
+Use **Approval: Auto** to execute these tool calls without individual prompts;
+**Ask** continues to request approval. Ask and Plan modes cannot execute Git.
+Remote operations, destructive commands and history rewriting are not exposed.
+
 ## Requirements
 
 - Lazarus 3.x / 4.x (or trunk)

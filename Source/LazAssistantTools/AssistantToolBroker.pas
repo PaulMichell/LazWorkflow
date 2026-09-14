@@ -38,6 +38,8 @@ Type
     Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Virtual;
     Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function CanGit: Boolean; Virtual;
+    Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -86,7 +88,7 @@ Type
     Property RunId: String Read FRunId;
   End;
 Implementation
-Uses jsonparser, AssistantProtocol;
+Uses jsonparser, AssistantProtocol, AssistantGit;
 Const MaxBufferBytes = 1048576; MaxSnapshotBytes = 8388608; MaxSnapshots = 64;
 Function Quoted(Const S: String): String;
 Begin Result := '"' + JsonEscapeText(S) + '"'; End;
@@ -142,6 +144,10 @@ Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand: S
 Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.TestStatus(Out ResultText, ErrorText: String): Boolean;
 Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Function TAssistantWorkspaceAdapter.CanGit: Boolean;
+Begin Result := False; End;
+Function TAssistantWorkspaceAdapter.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin ResultText := ''; ErrorText := 'Git is unavailable.'; Result := False; End;
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
 Begin Result := False; End;
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
@@ -506,6 +512,14 @@ Begin
             End;
           Exit;
         End;
+      If Tool = 'lazarus_run_git' Then
+        Begin
+          If (FWriteScope <> awsProject) Or Not FAdapter.CanGit Then
+            Begin ErrorText := 'Git execution requires Build mode.'; Exit; End;
+          If Not Approve(RunId, Tool, '', '', Arguments, ErrorText) Then Exit;
+          Result := FAdapter.RunGit(Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If Tool = 'lazarus_project_info' Then
         Begin ResultText := FAdapter.Describe; Exit(True); End;
       If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
@@ -664,6 +678,9 @@ Begin
   If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured project test command after a successful current build. Configure it in Settings > Project tests. Cannot supply commands or arguments. Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.","inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"}},"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
+  If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
+    ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
+    ',"inputSchema":' + AssistantGitSchema + '}';
   Result := Result + ']';
 End;
 End.

@@ -51,7 +51,9 @@ Type
     FInputs: TBuildInputs;
     FTimeout: Cardinal;
     FInitial: TBuildJobSnapshot;
+    {$IFDEF LINUX}
     Procedure ChildFork(Sender: TObject);
+    {$ENDIF}
     Function InputsMatch: Boolean;
   Public
     Destructor Destroy; Override;
@@ -88,8 +90,10 @@ Begin
   EnterCriticalSection(Lock);
   Try Result := Value; Finally LeaveCriticalSection(Lock); End;
 End;
+{$IFDEF LINUX}
 Procedure TBuildWorker.ChildFork(Sender: TObject);
-Begin {$IFDEF LINUX}If fpSetsid < 0 Then fpExit(126);{$ENDIF} End;
+Begin If fpSetsid < 0 Then fpExit(126); End;
+{$ENDIF}
 Function ReadBuildInput(Const Path: String; Out Text, ErrorText: String): Boolean;
 Var Stream: TFileStream;
   {$IFDEF LINUX}Info: Stat;{$ENDIF}
@@ -246,7 +250,10 @@ Begin
       P := TProcess.Create(Nil);
       P.Executable := FExecutable; P.CurrentDirectory := FDirectory;
       P.Parameters.Assign(FArguments);
-      P.Options := [poUsePipes, poStderrToOutPut]; P.OnForkEvent := @ChildFork;
+      P.Options := [poUsePipes, poStderrToOutPut];
+      {$IFDEF LINUX}
+      P.OnForkEvent := @ChildFork;
+      {$ENDIF}
       P.Execute; Value.ProcessStarted := True; Publish;
       Deadline := GetTickCount64 + FTimeout;
       Repeat

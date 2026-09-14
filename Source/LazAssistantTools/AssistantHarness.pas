@@ -158,6 +158,9 @@ Begin
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus.' + LineEnding +
         'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
         'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete.' + LineEnding +
+        'Use run_git for repository inspection, explicit staging and commits. Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
+        'When the user instructs you in a conversation or active plan to commit changes automatically, carry out those commits after completing and validating the requested work. Do not ask again for already-authorized commits; tool approval settings still apply. Report the commit hash only after Git confirms success.' + LineEnding +
+        'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
         'Stay on the active work package. Prefer Michell Free Pascal conventions.' + LineEnding +
         'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
   Else
