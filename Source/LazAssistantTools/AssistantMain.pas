@@ -281,7 +281,7 @@ Begin
   RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 
   ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
-    '120', '80', '800', '650');
+    '10%', '8%', '90%', '90%');
 
   If Not Assigned(AssistantFixQuickFix) Then
     Begin

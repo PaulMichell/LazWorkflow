@@ -1,7 +1,7 @@
 # StyledText conversation output redesign
 
 Prepared: 12 September 2026.  
-Status: core replacement implemented; GTK2 validation and the first live Qt5/XWayland output pass completed. The rapid prompt-input failure is fixed and verified. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) and [live acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) for results and remaining work.
+Status: core replacement implemented; GTK2 validation and the first live Qt5/XWayland output pass completed. Prompt-input and initial-window fixes are verified. A separate IDE shutdown observation remains to investigate. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) and [live acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) for results and remaining work.
 Scope: the Project Assistant's central conversation/output control, including live output, history, visibility filters, selection and scrolling.
 
 ## Recommendation
@@ -290,3 +290,9 @@ Accessibility, native Wayland/GTK3/Windows, physical monitor transitions, remain
 L1 is fixed. Tracing showed delayed keyboard delivery rather than permanently discarded characters: expensive per-keystroke wrapping allowed Send to capture an incomplete prompt. Input now updates immediately while a short timer batches layout; geometry-dependent operations flush pending work. Canvas text fitting replaces sequential prefix measurements, with boundary corrections preserving GTK2/Qt5 wrapping.
 
 The real Assistant-form harness captured all 457 rapidly typed characters on immediate submission in three consecutive runs. All 31 GTK2 regression programs and three package builds passed; focused Qt5 editing/wrapping tests passed too. See the acceptance report for measurements and test scope. L2's initial proportions are the next item being completed.
+
+### Initial-window follow-up — 14 September 2026
+
+L2 is fixed. IDE registration now uses screen-relative initial bounds, replacing absolute coordinates that produced the cramped window. Resizing preserves space for the conversation by reducing side panes proportionally when necessary. History buttons share the available width without overlapping. A fresh IDE profile recorded 1536 × 850 on a 1920 × 1080 desktop; the final form was inspected at 640, 680 and 1200 pixels wide. The current sources also compiled into the isolated Qt5 IDE successfully.
+
+The acceptance report records a separate shutdown access violation after IDE/form teardown, mapped to the LCL clipboard area (L3). Reproduce and compare that exit path before attributing it to a particular change. Accessibility, further platform/DPI checks, live event variants and additional performance profiling remain as listed above.

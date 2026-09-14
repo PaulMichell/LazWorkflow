@@ -2,7 +2,7 @@
 
 Tested: 13 September 2026. Source revision: `3be63c5`.
 
-**Result: the exercised conversation-output checks passed. The rapid-input failure was subsequently diagnosed and fixed on 14 September; see L1 below.** This completes the first live Qt5 acceptance pass, not all platform or accessibility acceptance.
+**Result: the exercised conversation-output checks passed. The rapid-input and initial-window findings were fixed and verified on 14 September; see L1/L2 below.** A separate IDE shutdown exception is recorded as L3. This completes the first live Qt5 acceptance pass, not all platform or accessibility acceptance.
 
 ## Environment and scope
 
@@ -67,13 +67,25 @@ Validation:
 
 ### L2 — Fresh-window proportions leave little conversation space
 
-Priority: low. Status: observed; design adjustment pending.
+Priority: low. Status: fixed and verified on 14 September 2026.
 
-The initial 680 × 600 Assistant window left roughly 100 pixels for the conversation between its side panes. Enlarging the window restored usable proportions. Review the initial size and adaptive pane widths together, including small displays; simply imposing a large minimum width could create another usability problem.
+The initial 680 × 600 Assistant window left roughly 100 pixels for the conversation between its side panes. The IDE registration supplied absolute right/bottom coordinates, overriding the form's larger design size. Registration now uses screen-relative bounds: left/right 10%/90%, top/bottom 8%/90%. A fresh isolated IDE profile recorded a 1536 × 850 window on the 1920 × 1080 desktop. Existing saved IDE positions remain under the IDE's layout management.
+
+When a small/restored window would squeeze the conversation, the form reduces the two side panes proportionally. It reserves up to 360 scaled pixels for conversation content, or half the available width on small windows. It does not impose a large minimum window size. Ordinary splitter choices remain unchanged unless resizing makes that reserve unavailable. History Export/Delete buttons share the available width so they do not overlap after the pane narrows.
+
+The real Qt5 Assistant form was checked at 640, 680 and 1200 pixels wide, including shrinking and widening. The conversation stayed usable and the final history buttons did not overlap. Narrow panes still abbreviate long labels; this is not a redesign of every work-panel toolbar. See the [680-pixel window after the change](Images/Live-IDE-Acceptance/narrow-window-after.png).
+
+### L3 — Access violation during isolated IDE shutdown
+
+Status: observed once in the isolated IDE log; reproduction and cause pending.
+
+After the IDE logged project closure, destruction of the Assistant window and main-form shutdown, it reported an access violation. Mapping the reported addresses against the local executable's link map points to LCL clipboard request-handler/destruction code. That identifies the teardown area, not the cause or whether it predates these changes. Focused Qt5 input tests, including destruction with pending layout, completed successfully.
+
+Next check: reproduce a normal IDE exit, compare against the preceding revision with the same profile/clipboard state, and trace clipboard ownership/lifetime if it recurs. Local evidence: `Lib/InputVerification/ide-run.log` and `Lib/LiveIDEAcceptance/lazarus.map`. No clipboard teardown change was made in this task.
 
 ## Remaining acceptance work
 
-1. L1 is fixed and verified; review L2's initial layout.
+1. L1 and L2 are fixed and verified. Investigate the separate shutdown observation L3.
 2. Accessibility: platform text exposure, screen-reader behavior and a systematic keyboard-only workflow.
 3. Native Wayland, GTK3, Windows and physical monitor/DPI transitions. Qt5/XWayland has the live coverage above; this does not imply every Qt configuration is verified.
 4. Larger histories/inputs, allocation attribution and pathological shaping/table profiling beyond the existing automated fixtures.
