@@ -90,6 +90,10 @@ Type
     Function DetectRepository(Const StartPath: String): String;
     Function IsRepository(Const Path: String): Boolean;
     Function GetHeadSha(Out Sha: String): Boolean;
+    { True when HEAD has a parent (not the root/first commit). }
+    Function HeadHasParent: Boolean;
+    { True when Sha is reachable from any remote-tracking ref. Query failure leaves Pushed False. }
+    Function IsCommitPushed(Const Sha: String; Out Pushed: Boolean): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
     { One process: HEAD, branch, and a digest of porcelain v2 --branch output. }
@@ -109,7 +113,11 @@ Type
     Function AppendIgnorePatterns(Patterns: TStrings): Boolean;
     { Validate again at save time; never write through a .gitignore symlink. }
     Function SaveIgnoreFile(Lines: TStrings): Boolean;
-    Function Commit(Const Message: String; Out NewSha: String): Boolean;
+    Function Commit(Const Message: String; Out NewSha: String; Amend: Boolean = False): Boolean;
+    { Move HEAD to its parent. Soft keeps the last commit staged; mixed returns it to the worktree. }
+    Function ResetLastCommit(Soft: Boolean): Boolean;
+    { Full commit message (subject and body) for Sha. }
+    Function GetCommitMessage(Const Sha: String; Out MessageText: String): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { Unified diff of the index vs HEAD (git diff --cached). Empty when nothing staged. }
     Function DiffStaged(Out DiffText: String): Boolean;
@@ -706,6 +714,31 @@ Begin
     Sha := Trim(OutputText);
 End;
 
+Function TGitService.HeadHasParent: Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  Result := RunGit(['rev-parse', '--verify', '--quiet', 'HEAD~1'], OutputText, ExitCode);
+End;
+
+Function TGitService.IsCommitPushed(Const Sha: String; Out Pushed: Boolean): Boolean;
+Var
+  OutputText, Trimmed: String;
+  ExitCode: Integer;
+Begin
+  Pushed := False;
+  Result := False;
+  Trimmed := Trim(Sha);
+  If Trimmed = '' Then
+    Exit;
+  { First matching remote-tracking ref is enough. Empty output means Sha is local-only. }
+  Result := RunGit(['for-each-ref', '--count=1', '--contains=' + Trimmed, '--format=%(refname)',
+    'refs/remotes'], OutputText, ExitCode);
+  If Result Then
+    Pushed := Trim(OutputText) <> '';
+End;
+
 Function TGitService.GetCurrentBranch(Out Branch: String): Boolean;
 Var
   OutputText: String;
@@ -1124,20 +1157,26 @@ Begin
   End;
 End;
 
-Function TGitService.Commit(Const Message: String; Out NewSha: String): Boolean;
+Function TGitService.Commit(Const Message: String; Out NewSha: String; Amend: Boolean): Boolean;
 Var
   OutputText: String;
   ExitCode: Integer;
   Info: TGitCommitInfo;
+  Args: Array Of String;
 Begin
   NewSha := '';
   Result := False;
+  Args := Nil;
   If Trim(Message) = '' Then
     Begin
       FLastError := 'Commit message is empty';
       Exit;
     End;
-  Result := RunGit(['commit', '-m', Message], OutputText, ExitCode);
+  If Amend Then
+    Args := ['commit', '--amend', '-m', Message]
+  Else
+    Args := ['commit', '-m', Message];
+  Result := RunGit(Args, OutputText, ExitCode);
   If Not Result Then
     Exit;
   If GetHeadSha(NewSha) Then
@@ -1153,6 +1192,57 @@ Begin
       EmitWorkingTreeChanged;
       EmitHeadChanged(NewSha);
     End;
+End;
+
+Function TGitService.ResetLastCommit(Soft: Boolean): Boolean;
+Var
+  OutputText, NewSha: String;
+  ExitCode: Integer;
+  Mode: String;
+Begin
+  Result := False;
+  If Soft Then
+    Mode := '--soft'
+  Else
+    Mode := '--mixed';
+  If HeadHasParent Then
+    Result := RunGit(['reset', '-q', Mode, 'HEAD~1'], OutputText, ExitCode)
+  Else If Soft Then
+    Begin
+      FLastError := 'The first commit cannot be unpacked for amend';
+      Result := False;
+    End
+  Else
+    Begin
+      Result := RunGit(['update-ref', '-d', 'HEAD'], OutputText, ExitCode);
+      If Result Then
+        Result := UnstageAll;
+    End;
+  If Result Then
+    Begin
+      If GetHeadSha(NewSha) Then
+        EmitHeadChanged(NewSha)
+      Else
+        EmitHeadChanged('');
+      EmitWorkingTreeChanged;
+    End;
+End;
+
+Function TGitService.GetCommitMessage(Const Sha: String; Out MessageText: String): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+Begin
+  MessageText := '';
+  Result := False;
+  If Trim(Sha) = '' Then
+    Begin
+      FLastError := 'Commit SHA is empty';
+      Exit;
+    End;
+  Result := RunGit(['log', '-1', '--format=%B', Trim(Sha)], OutputText, ExitCode);
+  If Result Then
+    MessageText := TrimRight(OutputText);
 End;
 
 Function TGitService.IsPathTracked(Const Path: String): Boolean;

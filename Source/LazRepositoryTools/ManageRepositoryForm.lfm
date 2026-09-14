@@ -99,21 +99,39 @@ object ManageRepositoryForm: TManageRepositoryForm
               Action = FetchAction
               TabOrder = 2
             end
-            object RemotesButton: TButton
+            object AmendButton: TButton
               Left = 268
               Height = 28
               Top = 4
               Width = 84
-              Action = RemotesAction
+              Action = AmendAction
+              ShowHint = True
               TabOrder = 3
             end
-            object SettingsButton: TButton
+            object RemoveButton: TButton
               Left = 356
               Height = 28
               Top = 4
               Width = 84
-              Action = SettingsAction
+              Action = RemoveAction
+              ShowHint = True
               TabOrder = 4
+            end
+            object RemotesButton: TButton
+              Left = 444
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = RemotesAction
+              TabOrder = 5
+            end
+            object SettingsButton: TButton
+              Left = 532
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = SettingsAction
+              TabOrder = 6
             end
           end
           inline DiffView: TGitDiffView
@@ -520,6 +538,20 @@ object ManageRepositoryForm: TManageRepositoryForm
       Caption = 'Fetch'
       OnExecute = FetchActionExecute
       OnUpdate = RemoteActionUpdate
+    end
+    object AmendAction: TAction
+      Caption = 'Amend'
+      Enabled = False
+      Hint = 'Edit the last commit on the Files tab. Enabled when HEAD is selected and has not been pushed.'
+      OnExecute = AmendActionExecute
+      OnUpdate = RewriteHeadActionUpdate
+    end
+    object RemoveAction: TAction
+      Caption = 'Remove'
+      Enabled = False
+      Hint = 'Delete the last commit and return its changes to the Files list. Enabled when HEAD is selected and has not been pushed.'
+      OnExecute = RemoveActionExecute
+      OnUpdate = RewriteHeadActionUpdate
     end
     object RemotesAction: TAction
       Caption = 'Remotes…'

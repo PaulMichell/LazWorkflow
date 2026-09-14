@@ -38,7 +38,9 @@ Type
     gjkIndexHistory,
     gjkFetchDetails,
     gjkCommitPaths,
-    gjkFilePreview
+    gjkFilePreview,
+    gjkPrepareAmend,
+    gjkRemoveLastCommit
   );
 
   TGitJob = Class;
@@ -85,6 +87,9 @@ Type
     FDetailsOk: Boolean;
     FPatchText: String;
     FReversePatch: Boolean;
+    FAmendCommit: Boolean;
+    FHeadPushed: Boolean;
+    FHeadPushedKnown: Boolean;
   Public
     Constructor Create(AKind: TGitJobKind);
     Destructor Destroy; Override;
@@ -137,6 +142,9 @@ Type
     Property DetailsOk: Boolean Read FDetailsOk;
     Property PatchText: String Read FPatchText Write FPatchText;
     Property ReversePatch: Boolean Read FReversePatch Write FReversePatch;
+    Property AmendCommit: Boolean Read FAmendCommit Write FAmendCommit;
+    Property HeadPushed: Boolean Read FHeadPushed Write FHeadPushed;
+    Property HeadPushedKnown: Boolean Read FHeadPushedKnown Write FHeadPushedKnown;
   End;
 
   TGitJobBusyEvent = Procedure(Sender: TObject; IsBusy: Boolean; Const Caption: String) Of Object;
@@ -226,6 +234,8 @@ Begin
     gjkSuggestMessage: Result := 'Suggesting commit message…';
     gjkIndexHistory: Result := 'Indexing…';
     gjkFetchDetails: Result := 'Loading commit details…';
+    gjkPrepareAmend: Result := 'Preparing amend…';
+    gjkRemoveLastCommit: Result := 'Removing commit…';
   Else
     Result := 'Working…';
   End;
@@ -266,6 +276,9 @@ Begin
   FDetailsOk := False;
   FPatchText := '';
   FReversePatch := False;
+  FAmendCommit := False;
+  FHeadPushed := True;
+  FHeadPushedKnown := False;
 End;
 
 Destructor TGitJob.Destroy;
@@ -633,6 +646,7 @@ Var
   Summary: TGitTransferSummary;
   NewSha, DiffText, StatusText, Suggested, ErrorText: String;
   Entries: TGitStatusEntryArray;
+  Pushed: Boolean;
 Begin
   Case Job.Kind Of
     gjkFetch:
@@ -664,7 +678,7 @@ Begin
       End;
     gjkCommit:
       Begin
-        Job.FOk := Git.Commit(Job.CommitMessage, NewSha);
+        Job.FOk := Git.Commit(Job.CommitMessage, NewSha, Job.AmendCommit);
         Job.FResultSha := NewSha;
         If Job.FOk Then Job.FOk := Git.RefDigest(Job.FRefsDigest);
         If Job.FOk Then Git.GetGitDir(Job.FGitDir);
@@ -767,6 +781,18 @@ Begin
         Job.FResultSha := NewSha;
         If Job.FOk Then Job.FOk := Git.RefDigest(Job.FRefsDigest);
         If Job.FOk Then Git.GetGitDir(Job.FGitDir);
+        Job.FHeadPushedKnown := False;
+        Job.FHeadPushed := True;
+        If Job.FOk Then
+          Begin
+            If NewSha = '' Then
+              Job.FHeadPushedKnown := True
+            Else If Git.IsCommitPushed(NewSha, Pushed) Then
+              Begin
+                Job.FHeadPushedKnown := True;
+                Job.FHeadPushed := Pushed;
+              End;
+          End;
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
@@ -803,6 +829,24 @@ Begin
         Job.FDetailsOk := Assigned(Job.Paths) And (Job.Paths.Count > 0) And
           Git.FetchCommitDetails(Job.RepoPath, Job.Paths, Job.FDetailsText);
         Job.FOk := Job.FDetailsOk;
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkPrepareAmend:
+      Begin
+        Job.FAmendCommit := False;
+        Job.FOk := Git.GetCommitMessage('HEAD', Job.FCommitMessage);
+        If Job.FOk Then
+          If Git.HeadHasParent Then
+            Job.FOk := Git.ResetLastCommit(True)
+          Else
+            Job.FAmendCommit := True;
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkRemoveLastCommit:
+      Begin
+        Job.FOk := Git.ResetLastCommit(False);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;

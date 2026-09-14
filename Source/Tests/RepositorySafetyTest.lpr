@@ -475,6 +475,9 @@ Type
     PathCount: Integer;
     CurrentRepo: String;
     CurrentGeneration: QWord;
+    CommitMessage: String;
+    AmendCommit: Boolean;
+    HeadPushed, HeadPushedKnown: Boolean;
     Procedure Finished(Job: TGitJob);
     Procedure Detached(Job: TGitJob);
   End;
@@ -482,6 +485,8 @@ Type
 Procedure TJobObserver.Finished(Job: TGitJob);
 Begin
   Done := True; Ok := Job.Ok; WasCancelled := Job.Cancelled;
+  CommitMessage := Job.CommitMessage; AmendCommit := Job.AmendCommit;
+  HeadPushed := Job.HeadPushed; HeadPushedKnown := Job.HeadPushedKnown;
   PreviewData := Job.PreviewText; PreviewPlain := Job.PreviewPlain;
   If Assigned(Job.PreviewBytes) Then
     Begin
@@ -701,11 +706,137 @@ Begin
   End;
 End;
 
+Procedure TestAmendAndRemove;
+Var
+  Dir, First, Second, Parent, MessageText, NewSha, Status: String;
+  G: TGitService;
+  Pushed: Boolean;
+  Runner: TGitJobRunner;
+  Observer: TJobObserver;
+  Job: TGitJob;
+Begin
+  Dir := NewRepo('amend-remove');
+  G := TGitService.Create;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    First := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    Check('root has no parent', Not G.HeadHasParent);
+    Check('root message', G.GetCommitMessage('HEAD', MessageText) And (MessageText = 'initial'));
+    Check('unpushed without remotes', G.IsCommitPushed(First, Pushed) And Not Pushed);
+
+    WriteFile(Dir + '/added.txt', 'added' + #10);
+    GitRun(Dir, ['add', '.']);
+    GitRun(Dir, ['commit', '-qm', 'second' + #10 + #10 + 'body line']);
+    Second := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    Check('second has parent', G.HeadHasParent);
+    Check('full message body', G.GetCommitMessage('HEAD', MessageText) And
+      (Pos('second', MessageText) > 0) And (Pos('body line', MessageText) > 0));
+    Check('second still unpushed', G.IsCommitPushed(Second, Pushed) And Not Pushed);
+
+    GitRun(Dir, ['update-ref', 'refs/remotes/origin/main', First]);
+    Check('parent on remote is pushed', G.IsCommitPushed(First, Pushed) And Pushed);
+    Check('local tip still unpushed', G.IsCommitPushed(Second, Pushed) And Not Pushed);
+    GitRun(Dir, ['update-ref', 'refs/remotes/origin/main', Second]);
+    Check('tip on remote is pushed', G.IsCommitPushed(Second, Pushed) And Pushed);
+    GitRun(Dir, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    Check('deleted remote ref unpushes tip', G.IsCommitPushed(Second, Pushed) And Not Pushed);
+
+    Check('amend message only', G.Commit('amended second', NewSha, True) And (NewSha <> ''));
+    Check('amended message stored', G.GetCommitMessage('HEAD', MessageText) And
+      (MessageText = 'amended second'));
+    Second := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+
+    Check('soft reset last commit', G.ResetLastCommit(True));
+    Parent := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    Check('soft reset moved HEAD to parent', Parent = First);
+    Status := GitRun(Dir, ['status', '--porcelain']);
+    Check('soft reset keeps added file staged', Pos('A  added.txt', Status) > 0);
+    Check('recommit after soft reset', G.Commit('amended second', NewSha, False));
+    Second := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    Check('recommit is not the parent', Second <> First);
+
+    Check('mixed reset last commit', G.ResetLastCommit(False));
+    Check('mixed reset moved HEAD to parent', Trim(GitRun(Dir, ['rev-parse', 'HEAD'])) = First);
+    Status := GitRun(Dir, ['status', '--porcelain']);
+    Check('mixed reset returns added file to worktree', (Pos('added.txt', Status) > 0) And
+      (Pos('A  added.txt', Status) = 0));
+  Finally
+    G.Free;
+  End;
+
+  Dir := NewRepo('amend-root');
+  G := TGitService.Create;
+  Try
+    G.RepoPath := Dir; G.PublishEvents := False;
+    Check('soft reset refused on root', Not G.ResetLastCommit(True));
+    Check('mixed reset removes root commit', G.ResetLastCommit(False));
+    Check('root remove leaves unborn HEAD', Not G.GetHeadSha(NewSha));
+    Check('root files remain on disk', FileExists(Dir + '/base.txt'));
+  Finally
+    G.Free;
+  End;
+
+  Dir := NewRepo('amend-jobs');
+  WriteFile(Dir + '/job.txt', 'job' + #10);
+  GitRun(Dir, ['add', '.']);
+  GitRun(Dir, ['commit', '-qm', 'job commit']);
+  Parent := Trim(GitRun(Dir, ['rev-parse', 'HEAD~1']));
+  Runner := TGitJobRunner.Create;
+  Observer := TJobObserver.Create;
+  Try
+    Observer.Done := False;
+    Job := TGitJob.Create(gjkPrepareAmend);
+    Job.RepoPath := Dir; Job.OnFinished := @Observer.Finished;
+    Check('submit prepare amend', Runner.Submit(Job));
+    AwaitDone(Observer);
+    Check('prepare amend succeeded', Observer.Ok);
+    Check('prepare amend captured message', Pos('job commit', Observer.CommitMessage) > 0);
+    Check('prepare amend unpacked onto parent', Not Observer.AmendCommit);
+    Check('prepare amend moved HEAD', Trim(GitRun(Dir, ['rev-parse', 'HEAD'])) = Parent);
+    Status := GitRun(Dir, ['status', '--porcelain']);
+    Check('prepare amend staged job file', Pos('job.txt', Status) > 0);
+
+    GitRun(Dir, ['commit', '-qm', 'job commit']);
+    Observer.Done := False;
+    Job := TGitJob.Create(gjkRemoveLastCommit);
+    Job.RepoPath := Dir; Job.OnFinished := @Observer.Finished;
+    Check('submit remove last commit', Runner.Submit(Job));
+    AwaitDone(Observer);
+    Check('remove last commit succeeded', Observer.Ok);
+    Status := GitRun(Dir, ['status', '--porcelain']);
+    Check('remove last commit returned job file', Pos('job.txt', Status) > 0);
+
+    Observer.Done := False;
+    Job := TGitJob.Create(gjkRepoProbe);
+    Job.RepoPath := Dir; Job.Quiet := True; Job.OnFinished := @Observer.Finished;
+    Check('submit probe after remove', Runner.Submit(Job));
+    AwaitDone(Observer);
+    Check('probe after remove succeeded', Observer.Ok);
+    Check('probe reports unpushed HEAD', Observer.HeadPushedKnown And Not Observer.HeadPushed);
+
+    Dir := NewRepo('amend-root-job');
+    First := Trim(GitRun(Dir, ['rev-parse', 'HEAD']));
+    Observer.Done := False;
+    Job := TGitJob.Create(gjkPrepareAmend);
+    Job.RepoPath := Dir; Job.OnFinished := @Observer.Finished;
+    Check('submit root prepare amend', Runner.Submit(Job));
+    AwaitDone(Observer);
+    Check('root prepare amend succeeded', Observer.Ok And Observer.AmendCommit);
+    Check('root prepare amend keeps HEAD', Trim(GitRun(Dir, ['rev-parse', 'HEAD'])) = First);
+    Check('root prepare amend message', Observer.CommitMessage = 'initial');
+  Finally
+    Runner.DetachFinishedHandler(@Observer.Finished);
+    Runner.Free;
+    Observer.Free;
+  End;
+End;
+
 Begin
   TempRoot := GetTempFileName(GetTempDir, 'repository-safety-');
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestAmendAndRemove;
       TestRemoteRollback;
       TestPreviewLimits;
       TestFileUnion;

@@ -28,6 +28,8 @@ Type
     PushAction: TAction;
     PullAction: TAction;
     FetchAction: TAction;
+    AmendAction: TAction;
+    RemoveAction: TAction;
     RemotesAction: TAction;
     SettingsAction: TAction;
     StageAllAction: TAction;
@@ -53,6 +55,8 @@ Type
     PushButton: TButton;
     PullButton: TButton;
     FetchButton: TButton;
+    AmendButton: TButton;
+    RemoveButton: TButton;
     RemotesButton: TButton;
     SettingsButton: TButton;
     DiffView: TGitDiffView;
@@ -109,6 +113,8 @@ Type
     Procedure PushActionExecute(Sender: TObject);
     Procedure PullActionExecute(Sender: TObject);
     Procedure FetchActionExecute(Sender: TObject);
+    Procedure AmendActionExecute(Sender: TObject);
+    Procedure RemoveActionExecute(Sender: TObject);
     Procedure RemotesActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure StageAllActionExecute(Sender: TObject);
@@ -140,12 +146,16 @@ Type
     Procedure CommitActionUpdate(Sender: TObject);
     Procedure HistoryViewActionUpdate(Sender: TObject);
     Procedure HistoryMutateActionUpdate(Sender: TObject);
+    Procedure RewriteHeadActionUpdate(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
     FRepoPath: String;
     FBranch: String;
     FHeadSha: String;
+    FHeadPushed: Boolean;
+    FHeadPushedKnown: Boolean;
+    FAmendHead: Boolean;
     FClean: Boolean;
     FModel: TGitGraphModel;
     FHistory: TManageHistoryGraph;
@@ -179,6 +189,9 @@ Type
     Procedure RefreshFiles;
     Procedure ConfigureCommitMessageEditor;
     Function CanMutate: Boolean;
+    Function CanRewriteLastCommit: Boolean;
+    Procedure ActivateFilesTab;
+    Procedure ApplyCommitMessage(Const MessageText: String);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
@@ -268,6 +281,9 @@ Constructor TManageRepositoryForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FClean := True;
+  FHeadPushed := True;
+  FHeadPushedKnown := False;
+  FAmendHead := False;
   FSelectedIndex := -1;
   FIndexing := False;
   FDetailLoading := False;
@@ -712,6 +728,7 @@ Begin
             Exit;
           End;
         WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
+        FAmendHead := False;
         If Assigned(MessageEditor) Then
           MessageEditor.Clear;
         MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
@@ -805,6 +822,8 @@ Begin
         FProbePending := False;
         If Job.Cancelled Or Not Job.Ok Then Exit;
         FCachedGitDir := Job.GitDir;
+        FHeadPushed := Job.HeadPushed;
+        FHeadPushedKnown := Job.HeadPushedKnown;
         FClean := StatusDigestIsClean(Job.ProbeDigest);
         If (Job.ResultSha <> FHeadSha) Or (Job.ProbeBranch <> FBranch) Or
           (Job.RefsDigest <> FRefsDigest) Then
@@ -847,6 +866,47 @@ Begin
             Exit;
           End;
         ApplyDetailsResult(Job.Ok, Job.DetailsText);
+      End;
+    gjkPrepareAmend:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          Begin
+            MessageDlg('Amend failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+            Exit;
+          End;
+        FAmendHead := Job.AmendCommit;
+        ApplyCommitMessage(Job.CommitMessage);
+        ActivateFilesTab;
+        WorkflowLogger.Info('ManageRepository', 'Last commit opened for amend');
+        ManualRefresh;
+        If Assigned(StatusFooter) Then
+          StatusFooter.SetRightText('Editing last commit');
+        If Assigned(MessageEditor) And MessageEditor.CanFocus Then
+          MessageEditor.SetFocus;
+      End;
+    gjkRemoveLastCommit:
+      Begin
+        If Job.Cancelled Then
+          Exit;
+        If Not Job.Ok Then
+          Begin
+            MessageDlg('Remove failed: ' + Job.ErrorText, mtError, [mbOK], 0);
+            Exit;
+          End;
+        FAmendHead := False;
+        If Assigned(MessageEditor) Then
+          MessageEditor.Clear;
+        If Assigned(UntrackedCheck) Then
+          UntrackedCheck.Checked := True;
+        ActivateFilesTab;
+        WorkflowLogger.Info('ManageRepository', 'Removed last commit');
+        ManualRefresh;
+        If Assigned(StatusFooter) Then
+          StatusFooter.SetRightText('Last commit removed');
+        If Assigned(FilesList) And FilesList.CanFocus Then
+          FilesList.SetFocus;
       End;
   Else
     { ignore }
@@ -1179,6 +1239,25 @@ Begin
   Result := (FRepoPath <> '') And (Not FJobBusy) And (Not FRemoteOpBusy);
 End;
 
+Function TManageRepositoryForm.CanRewriteLastCommit: Boolean;
+Begin
+  Result := CanMutate And FHeadPushedKnown And (Not FHeadPushed) And (FHeadSha <> '') And
+    SameText(SelectedSha, FHeadSha);
+End;
+
+Procedure TManageRepositoryForm.ActivateFilesTab;
+Begin
+  If Assigned(Pages) And Assigned(FilesTab) Then
+    Pages.ActivePage := FilesTab;
+  RefreshFiles;
+End;
+
+Procedure TManageRepositoryForm.ApplyCommitMessage(Const MessageText: String);
+Begin
+  If Assigned(MessageEditor) Then
+    MessageEditor.Text := AdjustLineBreaks(TrimRight(MessageText));
+End;
+
 Procedure TManageRepositoryForm.RemoteActionUpdate(Sender: TObject);
 Begin
   (Sender As TAction).Enabled := CanMutate;
@@ -1260,8 +1339,13 @@ End;
 
 Procedure TManageRepositoryForm.CommitActionUpdate(Sender: TObject);
 Begin
-  (Sender As TAction).Enabled := CanMutate And FFiles.HasStaged And
-    Assigned(MessageEditor) And (Trim(MessageEditor.Text) <> '');
+  (Sender As TAction).Enabled := CanMutate And Assigned(MessageEditor) And
+    (Trim(MessageEditor.Text) <> '') And (FFiles.HasStaged Or FAmendHead);
+End;
+
+Procedure TManageRepositoryForm.RewriteHeadActionUpdate(Sender: TObject);
+Begin
+  (Sender As TAction).Enabled := CanRewriteLastCommit;
 End;
 
 Procedure TManageRepositoryForm.HistoryViewActionUpdate(Sender: TObject);
@@ -1553,7 +1637,7 @@ Begin
       MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
       Exit;
     End;
-  If FFiles.StagedPaths.Count = 0 Then
+  If (FFiles.StagedPaths.Count = 0) And Not FAmendHead Then
     Begin
       MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
       Exit;
@@ -1565,6 +1649,7 @@ Begin
   Job.PushAfterCommit := Assigned(PushCheckBox) And PushCheckBox.Checked;
   Job.RepoPath := FRepoPath;
   Job.CommitMessage := Msg;
+  Job.AmendCommit := FAmendHead;
   SubmitGitJob(Job);
 End;
 
@@ -1584,6 +1669,32 @@ Begin
   ShowGitSettingsForm;
   ApplyConfig;
   ApplyRepositoryConfigToOpenForms;
+End;
+
+Procedure TManageRepositoryForm.AmendActionExecute(Sender: TObject);
+Var
+  Job: TGitJob;
+Begin
+  If Not CanRewriteLastCommit Then
+    Exit;
+  Job := TGitJob.Create(gjkPrepareAmend);
+  Job.RepoPath := FRepoPath;
+  SubmitGitJob(Job);
+End;
+
+Procedure TManageRepositoryForm.RemoveActionExecute(Sender: TObject);
+Var
+  Job: TGitJob;
+Begin
+  If Not CanRewriteLastCommit Then
+    Exit;
+  If MessageDlg('Remove the last commit from the history?' + LineEnding + LineEnding +
+    'The commit is deleted. Its file changes return to the Files list.',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
+    Exit;
+  Job := TGitJob.Create(gjkRemoveLastCommit);
+  Job.RepoPath := FRepoPath;
+  SubmitGitJob(Job);
 End;
 
 Procedure TManageRepositoryForm.FetchActionExecute(Sender: TObject);
@@ -1838,6 +1949,7 @@ Begin
       Inc(FRepoGeneration);
       FCachedGitDir := ''; FRefsDigest := '';
       FHeadSha := ''; FBranch := ''; FLastPorcelain := ''; FClean := True;
+      FHeadPushed := True; FHeadPushedKnown := False; FAmendHead := False;
       FStatusJobPending := False;
       FProbePending := False;
       FRemoteOpBusy := False;
