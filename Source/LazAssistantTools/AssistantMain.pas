@@ -313,6 +313,9 @@ SuggestCommitMessageFunc := Nil;
 FreeAndNil(AssistantIDEHooks);
 If Assigned(AssistantFixQuickFix) And Assigned(MsgQuickFixes) Then
   MsgQuickFixes.UnregisterQuickFix(AssistantFixQuickFix);
-FreeAndNil(AssistantFixQuickFix);
+{ The registry owns registered quick fixes. UnregisterQuickFix destroys the
+  instance too; if the registry has already gone, it freed the instance during
+  IDE shutdown. This is only a borrowed reference in either case. }
+AssistantFixQuickFix := Nil;
 
 End.

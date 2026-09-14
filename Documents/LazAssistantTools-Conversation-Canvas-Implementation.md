@@ -198,3 +198,10 @@ The IDE's initial bounds now use screen percentages, and the form reserves conve
 The requested extended profiling and live IDE event-fixture pass is complete. It found and fixed Unicode cluster splitting, synchronous large-table measurement, offscreen history-layout starvation, and missing first-run Codex profile creation. The [performance and event acceptance report](LazAssistantTools-Performance-and-Event-Acceptance.md) records reproducible fixtures, allocation/RSS attribution, live screenshots, test results and remaining limits.
 
 The live Qt5 IDE exercised supplied thinking, an actual missing-file tool rejection, backend failure, runtime exit, user cancellation and final-only/duplicate events using a deterministic offline runtime. An additional real ChatGPT call was blocked by automatic approval review of credential copying; it was not run. This distinction is retained in the report. L3, accessibility and further platform/DPI acceptance remain open.
+
+
+### Shutdown ownership fix — 14 September 2026
+
+L3 is fixed. GDB identified a second free of the registered Assistant message quick fix during unit finalization. The IDE registry owns and destroys that object, including on unregistration; the Assistant now only clears its borrowed reference after optional unregistration. Three normal exits of the isolated Qt5 IDE passed (Assistant hidden, open, and after clipboard copy), and the actual GTK2 Assistant package build passed. See [L3 evidence and ownership diagnosis](LazAssistantTools-Live-IDE-Acceptance.md#l3--access-violation-during-isolated-ide-shutdown). No clipboard code was changed.
+
+Screen-reader testing is excluded at the user’s request. Remaining work is keyboard-only acceptance, relevant platform/physical-DPI checks, and the optional performance/provider follow-ups already listed.

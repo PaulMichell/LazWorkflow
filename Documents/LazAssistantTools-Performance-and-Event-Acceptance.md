@@ -80,12 +80,12 @@ A proposed additional real ChatGPT request was not run. Automatic approval revie
 
 All **31 existing GTK2 test programs**, the added offline event test, and all three actual package builds (`LazStyledText`, `LazWorkflowCommon`, `LazAssistantTools`) passed. The five extended profiles also passed. Local build/test/profile logs and JSON resource measurements are retained under `Lib/ConversationAcceptance`; screenshots needed for review are committed above. No changes were made to the disposable project's Pascal sources.
 
-Normal File → Quit after these tests reproduced a shutdown access violation after the Assistant and main forms were destroyed (exit code 217). This is recorded under L3 in the live IDE report. The current build’s addresses have not been mapped, so the failure is not attributed to a particular component or change. Successful event rendering does not imply a clean IDE shutdown.
+Normal File → Quit after these tests reproduced a shutdown access violation after the Assistant and main forms were destroyed (exit code 217). That observation was subsequently traced to a double free of the Assistant message quick fix and fixed; see L3 in the live IDE report for the debugger evidence and three clean post-fix exits.
 
 ## What remains on the wider plan
 
-- L3: investigate the separately recorded IDE shutdown/clipboard exception.
-- Accessibility and a systematic keyboard-only workflow.
+- L3 is now fixed and verified; no further work is needed for that reproduced shutdown defect.
+- A systematic keyboard-only workflow; screen-reader testing is excluded at the user’s request.
 - Native Wayland, other widget sets/platforms, and physical monitor/DPI transitions.
 - Further tuning of extreme shaping, full-update cost and retained paragraph memory if those workloads are product requirements.
 - Optional new real-provider confirmation of these events, subject to an approved sign-in approach. Offline fixtures cannot reproduce every provider behavior or network condition.

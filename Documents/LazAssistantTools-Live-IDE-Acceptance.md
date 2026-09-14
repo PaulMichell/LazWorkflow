@@ -77,18 +77,35 @@ The real Qt5 Assistant form was checked at 640, 680 and 1200 pixels wide, includ
 
 ### L3 — Access violation during isolated IDE shutdown
 
-Status: observed once in the isolated IDE log; reproduction and cause pending.
+Status: **fixed and verified, 14 September 2026**.
 
-After the IDE logged project closure, destruction of the Assistant window and main-form shutdown, it reported an access violation. Mapping the reported addresses against the local executable's link map points to LCL clipboard request-handler/destruction code. That identifies the teardown area, not the cause or whether it predates these changes. Focused Qt5 input tests, including destruction with pending layout, completed successfully.
+The crash occurred after project closure, Assistant destruction and main-form destruction. Earlier address mapping suggested clipboard cleanup, but that was only an unconfirmed lead. A debug build of the unchanged code reproduced the failure on normal File → Quit and identified the actual call:
 
-Next check: reproduce a normal IDE exit, compare against the preceding revision with the same profile/clipboard state, and trace clipboard ownership/lifetime if it recurs. Local evidence: `Lib/InputVerification/ide-run.log` and `Lib/LiveIDEAcceptance/lazarus.map`. No clipboard teardown change was made in this task.
+```text
+SYSTEM.TObject.Free
+SYSUTILS.FreeAndNil
+AssistantMain.finalize at AssistantMain.pas:316
+SYSTEM.FinalizeUnits
+```
 
-Follow-up observation, 14 September: after the event-fixture pass, normal File → Quit again logged project closure, Assistant destruction and main-form destruction before an access violation. This executable reported addresses `$437764` and `$43DA61` and exited with code 217. Those addresses have not been mapped in this build; this is a second shutdown symptom, not proof of the same clipboard cause. Evidence: `Lib/ConversationAcceptance/ide-run-new.log`. L3 diagnosis/comparison remains open.
+`TMsgQuickFixes` owns its registered quick fixes through `TObjectList.Create(True)`. Its destructor frees those objects and sets the global `MsgQuickFixes` to nil. The Assistant retained a borrowed pointer to its registered `TAssistantFixMessageQuickFix`, then called `FreeAndNil` on that stale pointer during unit finalization. There was also a double-free path if the registry was still alive: `UnregisterQuickFix` removes the object from the owning list and destroys it, before the same explicit free.
+
+The Assistant now unregisters only while the registry is alive, then clears its borrowed reference without freeing it again. Registration and the “Ask Assistant to Fix...” behavior are unchanged. No clipboard implementation was changed.
+
+Validation used the same local Lazarus 4.99 Qt5/XWayland environment and a separately built executable. The unchanged debug executable stopped with SIGSEGV at the Assistant finalizer. With the fix, three independent normal File → Quit checks returned exit code **0**, logged completed IDE destruction and contained no access violation:
+
+| Case | Assistant visible | Exit code |
+| --- | --- | ---: |
+| Assistant hidden | No | 0 |
+| Assistant open with restored conversation | Yes | 0 |
+| After selecting/copying text in the Assistant prompt | Yes | 0 |
+
+The actual `LazAssistantTools` GTK2 package build also passed. These checks exercised application shutdown and unit finalization; a standalone renderer test would not cover the faulty ownership path. Local evidence is in `Lib/ShutdownAcceptance`: `baseline-debug.log`, `build-before.log`, `build-after.log`, `exit-hidden.log`, `exit-open.log`, `exit-clipboard.log`, their JSON results and `package-build.log`. The disposable profiles contain no copied provider credentials and these tests made no model requests. The installed IDE was not replaced.
 
 ## Remaining acceptance work
 
-1. L1 and L2 are fixed and verified. Investigate the separate shutdown observation L3.
-2. Accessibility: platform text exposure, screen-reader behavior and a systematic keyboard-only workflow.
+1. L1, L2 and L3 are fixed and verified. No shutdown work remains for this reproduced defect.
+2. A systematic keyboard-only workflow. Screen-reader testing is excluded from acceptance at the user’s request.
 3. Native Wayland, GTK3, Windows and physical monitor/DPI transitions. Qt5/XWayland has the live coverage above; this does not imply every Qt configuration is verified.
 4. Extended history/input/allocation and pathological table/shaping profiling: completed on 14 September; see the [follow-up report](LazAssistantTools-Performance-and-Event-Acceptance.md) for fixes, measurements and remaining performance limits.
 5. Live IDE event variants: the deterministic offline-runtime pass is complete; see the follow-up report for populated thinking, failures, disconnect, Stop and final-only events. An additional real-provider request was blocked by credential-copy approval review and remains unrun.
