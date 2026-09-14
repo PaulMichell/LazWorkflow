@@ -1,7 +1,7 @@
 # StyledText conversation output redesign
 
 Prepared: 12 September 2026.  
-Status: core replacement implemented; GTK2 validation and the first live Qt5/XWayland output pass completed. A rapid prompt-input failure remains open. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) and [live acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) for results and remaining work.
+Status: core replacement implemented; GTK2 validation and the first live Qt5/XWayland output pass completed. The rapid prompt-input failure is fixed and verified. See the [implementation report](LazAssistantTools-Conversation-Canvas-Implementation.md) and [live acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) for results and remaining work.
 Scope: the Project Assistant's central conversation/output control, including live output, history, visibility filters, selection and scrolling.
 
 ## Recommendation
@@ -284,3 +284,9 @@ The first live output pass used a freshly built, isolated Qt5 IDE and two actual
 The [acceptance report](LazAssistantTools-Live-IDE-Acceptance.md) records screenshots and limitations. It also adds two findings: **L1**, rapid synthetic typing loses characters in the separate `TSpellMemo` prompt editor, and **L2**, the fresh window leaves too little width for the conversation. Investigate and fix L1 next, with a focused Qt5 reproduction and exact input/copy checks; review initial pane proportions alongside L2. Full chat-workflow acceptance remains open until L1 is resolved.
 
 Accessibility, native Wayland/GTK3/Windows, physical monitor transitions, remaining live event variants and larger-input/allocation/pathological-table profiling follow. The completed Qt5/XWayland checks do not establish coverage for those configurations.
+
+### Prompt-input follow-up — 14 September 2026
+
+L1 is fixed. Tracing showed delayed keyboard delivery rather than permanently discarded characters: expensive per-keystroke wrapping allowed Send to capture an incomplete prompt. Input now updates immediately while a short timer batches layout; geometry-dependent operations flush pending work. Canvas text fitting replaces sequential prefix measurements, with boundary corrections preserving GTK2/Qt5 wrapping.
+
+The real Assistant-form harness captured all 457 rapidly typed characters on immediate submission in three consecutive runs. All 31 GTK2 regression programs and three package builds passed; focused Qt5 editing/wrapping tests passed too. See the acceptance report for measurements and test scope. L2's initial proportions are the next item being completed.

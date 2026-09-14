@@ -49,6 +49,8 @@ Type
     FSelAnchor: Integer;
     FOnChange: TNotifyEvent;
     FDebounce: TTimer;
+    FInputLayoutTimer: TTimer;
+    FInputLayoutPending: Boolean;
     FCaretTimer: TTimer;
     FCaretOn: Boolean;
     FRanges: TSpellUnderlineRangeArray;
@@ -106,6 +108,9 @@ Type
     Function LineHeight: Integer;
     Procedure ClearLayoutCache;
     Procedure RebuildLayout;
+    Procedure QueueInputLayout;
+    Procedure FlushInputLayout;
+    Procedure InputLayoutTimerTick(Sender: TObject);
     Procedure UpdateScrollBar;
     Procedure ScrollBarChange(Sender: TObject);
     Function ScrollY: Integer;
@@ -229,6 +234,10 @@ Begin
   FDebounce.Enabled := False;
   FDebounce.Interval := 200;
   FDebounce.OnTimer := @DebounceTimer;
+  FInputLayoutTimer := TTimer.Create(Nil);
+  FInputLayoutTimer.Enabled := False;
+  FInputLayoutTimer.Interval := 16;
+  FInputLayoutTimer.OnTimer := @InputLayoutTimerTick;
   FCaretTimer := TTimer.Create(Nil);
   FCaretTimer.Enabled := False;
   FCaretTimer.Interval := 530;
@@ -257,6 +266,7 @@ Begin
       FScrollBar.Parent := Nil;
     End;
   FreeAndNil(FDebounce);
+  FreeAndNil(FInputLayoutTimer);
   FreeAndNil(FCaretTimer);
   FreeAndNil(FOwnedPopup);
   FreeAndNil(FSpellItems);
@@ -361,7 +371,7 @@ Begin
     FDebounce.Enabled := True
   Else
     SetLength(FRanges, 0);
-  If HandleAllocated Then
+  If HandleAllocated And Not FInputLayoutPending Then
     Invalidate;
 End;
 
@@ -551,17 +561,40 @@ Begin
   FLayoutBytes := 0;
 End;
 
+Procedure TSpellMemo.QueueInputLayout;
+Begin
+  FInputLayoutPending := True;
+  If CanLayout And Assigned(FInputLayoutTimer) Then
+    FInputLayoutTimer.Enabled := True;
+End;
+
+Procedure TSpellMemo.FlushInputLayout;
+Begin
+  If Not FInputLayoutPending Or Not CanLayout Then Exit;
+  RebuildLayout;
+  UpdateScrollBar;
+  EnsureCaretInView;
+  Invalidate;
+End;
+
+Procedure TSpellMemo.InputLayoutTimerTick(Sender: TObject);
+Begin
+  FInputLayoutTimer.Enabled := False;
+  FlushInputLayout;
+End;
+
 Procedure TSpellMemo.RebuildLayout;
 Var
-  Para: String;
+  Para, Remaining: String;
   Cached: TSpellParagraphLayout;
   CacheIndex, FirstRow, J, Offset: Integer;
-  ParaStart, RemainStart, Count, BreakAt, LastSpace, TextPos, WalkPos, CodeLen: Integer;
-  UsedWidth, MaxWidth, RowTop, RowH: Integer;
-  CodePoint: Cardinal;
+  ParaStart, RemainStart, Count, BreakAt, LastSpace, TextPos, WalkPos, FitChars, NextBreak: Integer;
+  MaxWidth, RowTop, RowH: Integer;
 Begin
   If Not CanLayout Then
     Exit;
+  FInputLayoutPending := False;
+  If Assigned(FInputLayoutTimer) Then FInputLayoutTimer.Enabled := False;
   SetLength(FPaintLines, 0);
   Count := 0;
   RowTop := 3;
@@ -613,29 +646,37 @@ Begin
               BreakAt := (Length(Para) - Offset + 1)
             Else
               Begin
-                UsedWidth := 0;
-                BreakAt := 0;
-                LastSpace := 0;
-                WalkPos := 1;
-                While WalkPos <= (Length(Para) - Offset + 1) Do
+                Remaining := Copy(Para, Offset, MaxInt);
+                { Use the canvas's shaped text fit instead of measuring every
+                  growing prefix on every key press. Qt's fallback searches
+                  prefixes logarithmically; native backends can fit directly.
+                  TextFitInfo returns characters, while our rows use bytes. }
+                FitChars := Canvas.TextFitInfo(Remaining, MaxWidth);
+                If FitChars < 1 Then FitChars := 1;
+                BreakAt := UTF8CodepointToByteIndex(PChar(Remaining), Length(Remaining), FitChars);
+                If BreakAt <= 0 Then BreakAt := UTF8CodepointSize(PChar(Remaining));
+                { Some backends fit using advances in the complete paragraph.
+                  A standalone painted prefix can differ through shaping or
+                  rounding. Correct that boundary with full-prefix widths. }
+                While (FitChars > 1) And
+                  (MeasureAdvance(Copy(Remaining, 1, BreakAt)) > MaxWidth) Do
                   Begin
-                    CodePoint := UTF8CodepointToUnicode(@Para[Offset + WalkPos - 1], CodeLen);
-                    If CodeLen <= 0 Then
-                      Break;
-                    UsedWidth := MeasureAdvance(Copy(Para, Offset, WalkPos + CodeLen - 1));
-                    If (UsedWidth > MaxWidth) And (BreakAt > 0) Then
-                      Begin
-                        If LastSpace > 0 Then
-                          BreakAt := LastSpace;
-                        Break;
-                      End;
-                    BreakAt := WalkPos + CodeLen - 1;
-                    If (Para[Offset + WalkPos - 1] = ' ') Or (CodePoint = 9) Then
-                      LastSpace := BreakAt;
-                    Inc(WalkPos, CodeLen);
+                    Dec(FitChars);
+                    BreakAt := UTF8CodepointToByteIndex(PChar(Remaining), Length(Remaining), FitChars);
                   End;
-                If BreakAt <= 0 Then
-                  BreakAt := (Length(Para) - Offset + 1);
+                While BreakAt < Length(Remaining) Do
+                  Begin
+                    NextBreak := BreakAt + UTF8CodepointSize(@Remaining[BreakAt + 1]);
+                    If MeasureAdvance(Copy(Remaining, 1, NextBreak)) > MaxWidth Then Break;
+                    BreakAt := NextBreak;
+                  End;
+                If BreakAt < Length(Remaining) Then
+                  Begin
+                    LastSpace := 0;
+                    For WalkPos := 1 To BreakAt Do
+                      If Remaining[WalkPos] In [' ', #9] Then LastSpace := WalkPos;
+                    If LastSpace > 0 Then BreakAt := LastSpace;
+                  End;
               End;
             If Count >= Length(FPaintLines) Then
               SetLength(FPaintLines, Count + 16);
@@ -739,6 +780,7 @@ Var
   Pixel: TPoint;
   Page: Integer;
 Begin
+  FlushInputLayout;
   Pixel := CaretPixel;
   Page := ClientHeight;
   If Pixel.Y < 0 Then
@@ -835,6 +877,7 @@ Var
   AbsY: Integer;
   LineText: String;
 Begin
+  FlushInputLayout;
   Result := 0;
   AbsY := Y + ScrollY;
   Canvas.Font := Font;
@@ -906,10 +949,7 @@ Begin
   FSelStart := CharStart;
   FSelLength := 0;
   FSelAnchor := FSelStart;
-  RebuildLayout;
-  UpdateScrollBar;
-  EnsureCaretInView;
-  Invalidate;
+  QueueInputLayout;
   RestartDebounce;
   Change;
 End;
@@ -941,10 +981,9 @@ Begin
   FSelStart := FSelStart + UTF8Length(Clean);
   FSelLength := 0;
   FSelAnchor := FSelStart;
-  RebuildLayout;
-  UpdateScrollBar;
-  EnsureCaretInView;
-  Invalidate;
+  { Record edits and notify the host immediately. Coalesce text measurement
+    so rapid keyboard events cannot queue behind per-character rewrapping. }
+  QueueInputLayout;
   RestartDebounce;
   Change;
 End;
@@ -981,6 +1020,7 @@ Var
   Caret, LineIndex, Target, CaretByte: Integer;
 Begin
   Inherited KeyDown(Key, Shift);
+  If Key In [VK_HOME, VK_END, VK_UP, VK_DOWN] Then FlushInputLayout;
   Extend := ssShift In Shift;
   Caret := CaretCharIndex;
   Case Key Of
@@ -1202,6 +1242,7 @@ Begin
   FirstRange := 0;
   If Not FReady Then
     Exit;
+  FlushInputLayout;
   Canvas.Font := Font;
   Canvas.Brush.Style := bsSolid;
   Canvas.Brush.Color := Color;

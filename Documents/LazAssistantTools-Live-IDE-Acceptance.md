@@ -2,7 +2,7 @@
 
 Tested: 13 September 2026. Source revision: `3be63c5`.
 
-**Result: the exercised conversation-output checks passed. Prompt input has a reproducible rapid-typing failure that remains open.** This completes the first live Qt5 acceptance pass, not all platform or accessibility acceptance.
+**Result: the exercised conversation-output checks passed. The rapid-input failure was subsequently diagnosed and fixed on 14 September; see L1 below.** This completes the first live Qt5 acceptance pass, not all platform or accessibility acceptance.
 
 ## Environment and scope
 
@@ -37,9 +37,9 @@ Screenshots: [expanded tool and full selection outline](Images/Live-IDE-Acceptan
 
 ## Open findings
 
-### L1 — Prompt editor loses characters during rapid synthetic typing
+### L1 — Prompt input queues behind layout and can be submitted early
 
-Priority: high. Status: reproduced; cause and fix pending.
+Priority: high. Status: diagnosed, fixed and verified on 14 September 2026.
 
 The prompt editor uses `TSpellMemo` in `Source/LazWorkflowCommon/SpellMemo.pas`, independently of the StyledText conversation surface. After the initial submitted prompt was visibly truncated, input-only comparisons used this exact 457-character string:
 
@@ -54,9 +54,16 @@ The prompt editor uses `TSpellMemo` in `Source/LazWorkflowCommon/SpellMemo.pas`,
 | Prompt editor, `xdotool type --delay 20` | All 457 characters; exact match |
 | Native history-search `TEdit`, `xdotool type --delay 1` | All 457 characters; exact match |
 
-The rapid prompt-editor check waited one second before copying the result. This separates the reproduced failure from merely clicking Send before input settles. The comparison does not establish whether ordinary human typing or other widget sets are affected.
+The original check waited one second before copying. Further tracing showed that this was insufficient: the remaining keystrokes eventually arrived. Repeated full-prefix measurements on each edit held up keyboard processing; immediate submission could capture a partial prompt. This corrects the original interpretation of permanently lost characters.
 
-Next work: reproduce in a small Qt5 `TSpellMemo` harness, trace key/text delivery and layout/change handling, fix the established cause, and repeat these exact-copy comparisons plus UTF-8, paste, editing and normal submission checks. Do not assume the conversation renderer or the backend drops the text.
+`TSpellMemo` now updates text, selection and change notifications immediately and batches input layout through a 16 ms timer. Painting, geometry-dependent navigation and hit testing flush pending layout when needed. Text replacement, resize and font changes supersede queued measurements; destruction frees the timer. Wrapping uses the canvas text-fit operation with a full-prefix boundary correction for backend shaping/rounding differences, instead of measuring every growing prefix.
+
+Validation:
+
+- The unchanged Qt5 editor took approximately 1,991 ms to process the 457-character fixture. The final regression, including final layout, took approximately 3 ms locally on both Qt5 and GTK2. This measures a controlled input burst, not a universal latency guarantee.
+- Merely optimizing fitting was insufficient: immediate Send still captured 448/457 characters in the full Assistant form. With batching, three consecutive 1 ms typing runs followed immediately by Send captured all 457 characters exactly. The harness used the real form and prompt handlers, replacing Send with a local recorder; it made no model calls.
+- `SpellMemoInputTest` compares observable wrapped End positions against the former full-prefix algorithm at four widths, including accented text, Greek, Japanese, emoji, tabs and hard newlines. It also covers UTF-8 deletion, replacement, read-only behavior, copy/paste, navigation before the timer fires, replacing pending text and destruction with pending input.
+- All 31 programs in the GTK2 assistant suite, direct assistant compilation and the three actual package builds passed. The focused input test also passed on Qt5. Logs are retained locally under `Lib/InputVerification` and `/tmp/laz-input-repro`.
 
 ### L2 — Fresh-window proportions leave little conversation space
 
@@ -66,7 +73,7 @@ The initial 680 × 600 Assistant window left roughly 100 pixels for the conversa
 
 ## Remaining acceptance work
 
-1. Fix and verify L1 before treating the complete chat workflow as accepted; review L2's initial layout.
+1. L1 is fixed and verified; review L2's initial layout.
 2. Accessibility: platform text exposure, screen-reader behavior and a systematic keyboard-only workflow.
 3. Native Wayland, GTK3, Windows and physical monitor/DPI transitions. Qt5/XWayland has the live coverage above; this does not imply every Qt configuration is verified.
 4. Larger histories/inputs, allocation attribution and pathological shaping/table profiling beyond the existing automated fixtures.
