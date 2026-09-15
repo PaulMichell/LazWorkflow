@@ -105,7 +105,7 @@ The actual `LazAssistantTools` GTK2 package build also passed. These checks exer
 ## Remaining acceptance work
 
 1. L1, L2 and L3 are fixed and verified. No shutdown work remains for this reproduced defect.
-2. A systematic keyboard-only workflow. Screen-reader testing is excluded from acceptance at the user’s request.
+2. Complete the remaining live keyboard workflow checks. Focus trapping and Markdown shortcut gaps are fixed; 18 focused GTK2/Qt5 checks pass, with partial native form coverage. See the [keyboard acceptance report](LazAssistantTools-Keyboard-Acceptance.md). Screen-reader testing is excluded from acceptance at the user’s request.
 3. Native Wayland, GTK3, Windows and physical monitor/DPI transitions. Qt5/XWayland has the live coverage above; this does not imply every Qt configuration is verified.
 4. Extended history/input/allocation and pathological table/shaping profiling: completed on 14 September; see the [follow-up report](LazAssistantTools-Performance-and-Event-Acceptance.md) for fixes, measurements and remaining performance limits.
 5. Live IDE event variants: the deterministic offline-runtime pass is complete; see the follow-up report for populated thinking, failures, disconnect, Stop and final-only events. An additional real-provider request was blocked by credential-copy approval review and remains unrun.

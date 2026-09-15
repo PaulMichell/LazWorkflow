@@ -255,7 +255,7 @@ Begin
 
   { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
     Separate sections so Lazarus draws a separator after Project Assistant and before Settings. }
-  AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', 'Assistant');
+  AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', '&Assistant');
   If Assigned(mnuMain) And Assigned(AssistantMenu) Then
     Begin
       mnuMain.Remove(AssistantMenu);

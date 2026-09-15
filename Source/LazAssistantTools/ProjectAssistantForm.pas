@@ -5573,6 +5573,7 @@ End;
 Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);
 Begin
   StartNewChat;
+  If InputMemo.CanFocus Then InputMemo.SetFocus;
 End;
 
 Procedure TProjectAssistantForm.HistoryComboChange(Sender: TObject);

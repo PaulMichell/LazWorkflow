@@ -506,6 +506,7 @@ Procedure TAssistantMarkdownForm.PreviewModeActionExecute(Sender: TObject);
 Begin
   FViewMode := mvmPreview;
   ApplyViewMode;
+  If PreviewControl.CanFocus Then PreviewControl.SetFocus;
   UpdateStatus;
 End;
 
@@ -513,6 +514,7 @@ Procedure TAssistantMarkdownForm.SourceModeActionExecute(Sender: TObject);
 Begin
   FViewMode := mvmSource;
   ApplyViewMode;
+  If SourceMemo.CanFocus Then SourceMemo.SetFocus;
   UpdateStatus;
 End;
 

@@ -601,7 +601,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     Left = 104
     Top = 40
     object SessionMenuItem: TMenuItem
-      Caption = 'Session'
+      Caption = '&Session'
       object NewChatMenuItem: TMenuItem
         Action = NewChatAction
       end
@@ -634,7 +634,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object WorkMenuItem: TMenuItem
-      Caption = 'Work'
+      Caption = '&Work'
       object OpenPlanMenuItem: TMenuItem
         Action = OpenPlanAction
       end
@@ -646,7 +646,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object ReviewMenuItem: TMenuItem
-      Caption = 'Review'
+      Caption = '&Review'
       object ReviewChangesMenuItem: TMenuItem
         Action = ReviewChangesAction
       end
@@ -661,7 +661,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object ViewMenuItem: TMenuItem
-      Caption = 'View'
+      Caption = '&View'
       object ToggleToolUseMenuItem: TMenuItem
         Action = ToggleToolUseAction
       end

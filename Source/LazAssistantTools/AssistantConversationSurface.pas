@@ -25,6 +25,7 @@ Type
     FLayoutRevision, FPaintRevision, FMaxUpdateMilliseconds: QWord;
     Procedure GetDialogCode(Var Message: TLMGetDlgCode); Message LM_GETDLGCODE;
     Procedure Tick(Sender: TObject);
+    Procedure LeaveConversation(ForwardDirection: Boolean);
     Procedure MenuClick(Sender: TObject);
     Procedure PrepareViewport;
     Procedure RestoreAnchor(Const Anchor: TConversationAnchor);
@@ -76,7 +77,7 @@ Type
     Property PaintRevision: QWord Read FPaintRevision;
   End;
 Implementation
-Uses Math, Graphics, Clipbrd, LCLType, StyledCanvas, StyledTextDocument;
+Uses Math, Graphics, Clipbrd, LCLType, Forms, StyledCanvas, StyledTextDocument;
 Constructor TAssistantConversationSurface.Create(AOwner: TComponent);
 Var Item: TMenuItem; I: Integer;
 Const Captions: Array[0..5] Of String = ('Copy', 'Copy Markdown', 'Select word', 'Select line', 'Select all', 'Jump to latest');
@@ -456,6 +457,14 @@ Procedure TAssistantConversationSurface.DblClick;
 Begin Inherited DblClick; Selecting:=False; MouseCapture:=False; SelectWord; End;
 Procedure TAssistantConversationSurface.GetDialogCode(Var Message:TLMGetDlgCode);
 Begin Message.Result:=DLGC_WANTARROWS Or DLGC_WANTCHARS Or DLGC_WANTALLKEYS Or DLGC_WANTTAB; End;
+Procedure TAssistantConversationSurface.LeaveConversation(ForwardDirection: Boolean);
+Var Form: TCustomForm;
+Begin
+  { The trace frame contains only this surface. Search the form's full tab
+    order so leaving the last item does not wrap back into the same control. }
+  Form:=GetParentForm(Self);
+  If Assigned(Form) Then Form.SelectNext(Self,ForwardDirection,True);
+End;
 Procedure TAssistantConversationSurface.KeyDown(Var Key:Word; Shift:TShiftState);
 Var I:Integer;
 Begin
@@ -469,11 +478,11 @@ Begin
     VK_RETURN,VK_SPACE: Toggle(FLayout.IndexOf(FocusedKey));
     VK_TAB: Begin
       If ssCtrl In Shift Then
-        Begin If Assigned(Parent) Then Parent.SelectNext(Self,Not (ssShift In Shift),True); Key:=0; Exit; End;
+        Begin LeaveConversation(Not (ssShift In Shift)); Key:=0; Exit; End;
       I:=FLayout.IndexOf(FocusedKey); If ssShift In Shift Then Dec(I) Else Inc(I);
       While (I>=0) And (I<FLayout.Count) And Not FLayout[I].Visible Do If ssShift In Shift Then Dec(I) Else Inc(I);
       If (I>=0) And (I<FLayout.Count) Then Begin FocusedKey:=FLayout[I].Key; NavigateTo(FocusedKey); Key:=0; End
-      Else If Assigned(Parent) Then Parent.SelectNext(Self,Not (ssShift In Shift),True);
+      Else LeaveConversation(Not (ssShift In Shift));
     End;
     Else Begin Inherited KeyDown(Key,Shift); Exit; End;
   End;

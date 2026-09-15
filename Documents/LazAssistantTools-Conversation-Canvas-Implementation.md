@@ -205,3 +205,8 @@ The live Qt5 IDE exercised supplied thinking, an actual missing-file tool reject
 L3 is fixed. GDB identified a second free of the registered Assistant message quick fix during unit finalization. The IDE registry owns and destroys that object, including on unregistration; the Assistant now only clears its borrowed reference after optional unregistration. Three normal exits of the isolated Qt5 IDE passed (Assistant hidden, open, and after clipboard copy), and the actual GTK2 Assistant package build passed. See [L3 evidence and ownership diagnosis](LazAssistantTools-Live-IDE-Acceptance.md#l3--access-violation-during-isolated-ide-shutdown). No clipboard code was changed.
 
 Screen-reader testing is excluded at the user’s request. Remaining work is keyboard-only acceptance, relevant platform/physical-DPI checks, and the optional performance/provider follow-ups already listed.
+
+
+### Keyboard follow-up — 15 September 2026
+
+Fixed the conversation tab-focus trap, added Markdown Open/Save/Preview/Source shortcuts and focus transfer, added menu mnemonics, and focused the prompt on New Chat. All 18 focused checks pass on GTK2 and Qt5; the GTK2 package and four adjacent regressions pass. Native keyboard Settings access and New Chat typing also passed in an isolated real-form host. Full live IDE workflow coverage remains partial; see the [keyboard acceptance report](LazAssistantTools-Keyboard-Acceptance.md) for exact coverage and outstanding checks. Screen-reader testing remains excluded.

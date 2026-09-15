@@ -17,15 +17,19 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     Top = 48
     object OpenAction: TAction
       Caption = 'Open…'
+      ShortCut = 16463
       OnExecute = OpenActionExecute
     end
     object SaveAction: TAction
       Caption = 'Save'
+      ShortCut = 16467
       OnExecute = SaveActionExecute
     end
     object PreviewModeAction: TAction
       AutoCheck = True
       Caption = 'Preview'
+      Hint = 'Preview (Ctrl+1)'
+      ShortCut = 16433
       Checked = True
       GroupIndex = 1
       OnExecute = PreviewModeActionExecute
@@ -33,6 +37,8 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     object SourceModeAction: TAction
       AutoCheck = True
       Caption = 'Source'
+      Hint = 'Source (Ctrl+2)'
+      ShortCut = 16434
       GroupIndex = 1
       OnExecute = SourceModeActionExecute
     end
