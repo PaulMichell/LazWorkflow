@@ -22,6 +22,7 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 - **Suggest** commit message via the Assistant (read-only diff)
 
 ### LazAssistantTools
+- **Working on** selector: choose the current project or a loaded/opened package, with separate package history, plans and test settings. See [package targets](Documents/LazAssistantTools-Package-Targets.md).
 - **Project Assistant** dock: one transcript, **Ask · Plan · Build** chips (hard tool gates)
 - Streaming with a typed trace (thinking, tool cards, subagent rows, answer)
 - **xAI OAuth** (SuperGrok / X Premium) or an OpenAI-compatible API key
