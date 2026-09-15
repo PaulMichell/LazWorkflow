@@ -201,6 +201,12 @@ Type
     Procedure StatusFooterRightClick(Sender: TObject);
     Procedure FooterMenuClick(Sender: TObject);
   Private
+    FTargetCombo: TComboBox;
+    FTargetPaths: TStringList;
+    Procedure RefreshTargetChoices(Sender: TObject);
+    Procedure TargetChoiceChanged(Sender: TObject);
+  Private
+
     FUseCodex: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -447,7 +453,7 @@ Implementation
 
 {$R *.lfm}
 
-Uses
+Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
@@ -592,7 +598,18 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
+Var TargetBar:TPanel; TargetLabel:TLabel;
 Begin
+  TargetBar:=TPanel.Create(Self);TargetBar.Parent:=Self;TargetBar.Align:=alTop;
+  TargetBar.Height:=Scale96ToForm(34);TargetBar.BevelOuter:=bvNone;TargetBar.Top:=0;
+  TargetLabel:=TLabel.Create(Self);TargetLabel.Parent:=TargetBar;TargetLabel.Caption:='Working &on:';
+  TargetLabel.Align:=alLeft;TargetLabel.Layout:=tlCenter;TargetLabel.BorderSpacing.Around:=4;
+  FTargetPaths:=TStringList.Create;
+  FTargetCombo:=TComboBox.Create(Self);FTargetCombo.Name:='WorkTargetCombo';FTargetCombo.Parent:=TargetBar;
+  FTargetCombo.Align:=alClient;FTargetCombo.BorderSpacing.Around:=4;FTargetCombo.Style:=csDropDownList;
+  TargetLabel.FocusControl:=FTargetCombo;
+  FTargetCombo.OnDropDown:=@RefreshTargetChoices;FTargetCombo.OnChange:=@TargetChoiceChanged;
+  RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
   ConversationPanel.OnResize := @HistoryPanelResize;
   HistoryPanelResize(ConversationPanel);
@@ -638,6 +655,60 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
+Procedure TProjectAssistantForm.RefreshTargetChoices(Sender:TObject);
+Var I,Selected:Integer; P:TIDEPackage;
+Begin
+  If Not Assigned(FTargetCombo) Then Exit;
+  FTargetCombo.Items.BeginUpdate;
+  Try
+    FTargetCombo.Items.Clear;FTargetPaths.Clear;Selected:=0;
+    FTargetCombo.Items.Add('Current Lazarus project');FTargetPaths.Add('');
+    If Assigned(PackageEditingInterface) Then
+      For I:=0 To PackageEditingInterface.GetPackageCount-1 Do
+        Begin
+          P:=PackageEditingInterface.GetPackages(I);
+          If Not Assigned(P) Or (P.Filename='') Or P.IsVirtual Then Continue;
+          If (AssistantTarget.Kind=atkPackage) And SameFileName(ExpandFileName(P.Filename),AssistantTarget.Manifest) Then
+            Selected:=FTargetPaths.Count;
+          FTargetCombo.Items.Add('Package — '+P.Name+' ('+P.Filename+')');FTargetPaths.Add(P.Filename);
+        End;
+    If (AssistantTarget.Kind=atkPackage) And (Selected=0) Then
+      Begin Selected:=FTargetPaths.Count;FTargetPaths.Add(AssistantTarget.Manifest);FTargetCombo.Items.Add(AssistantTarget.DisplayName);End;
+    FTargetCombo.Items.Add('Open package…');FTargetPaths.Add('*');
+    FTargetCombo.ItemIndex:=Selected;
+  Finally FTargetCombo.Items.EndUpdate;End;
+End;
+
+Procedure TProjectAssistantForm.TargetChoiceChanged(Sender:TObject);
+Var Path,Note:String; Dialog:TOpenDialog;
+Begin
+  If FSending Or FReviewInProgress Then Begin RefreshTargetChoices(Nil);Exit;End;
+  If (FTargetCombo.ItemIndex<0) Or (FTargetCombo.ItemIndex>=FTargetPaths.Count) Then Exit;
+  Path:=FTargetPaths[FTargetCombo.ItemIndex];
+  If Path='*' Then
+    Begin
+      Dialog:=TOpenDialog.Create(Self);
+      Try
+        Dialog.Title:='Select Lazarus package';Dialog.Filter:='Lazarus packages|*.lpk';
+        Dialog.Options:=[ofFileMustExist,ofEnableSizing];Dialog.InitialDir:=AssistantTarget.Root;
+        If Not Dialog.Execute Then Begin RefreshTargetChoices(Nil);Exit;End;
+        Path:=Dialog.FileName;
+        If Not Assigned(PackageEditingInterface) Or
+          (PackageEditingInterface.DoOpenPackageFile(Path,[],False)<>mrOk) Then
+          Begin RefreshTargetChoices(Nil);Exit;End;
+      Finally Dialog.Free;End;
+    End;
+  If ((Path='') And (AssistantTarget.Kind=atkProject)) Or
+    ((Path<>'') And (AssistantTarget.Kind=atkPackage) And SameFileName(Path,AssistantTarget.Manifest)) Then Exit;
+  PersistSession;
+  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
+  If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
+  If Path='' Then AssistantTarget.SelectProject
+  Else If Not AssistantTarget.SelectPackage(Path,Note) Then
+    Begin MessageDlg(Note,mtError,[mbOK],0);RefreshTargetChoices(Nil);Exit;End;
+  BindToActiveProject;
+End;
+
 Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
 Var ButtonWidth: Integer;
 Begin
@@ -666,6 +737,7 @@ End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
+  FreeAndNil(FTargetPaths);
   If Assigned(ElapsedTimer) Then
     ElapsedTimer.Enabled := False;
   If Assigned(FCommandsPopup) Then
@@ -727,7 +799,7 @@ Begin
   FDisplaySystemNote := '';
   If WithIdeContext Then
     FDisplayUser := UserText + LineEnding + LineEnding +
-      '*(IDE context attached for the model: active editor + project files.)*'
+      '*(IDE context attached for the model: selected target + relevant editor.)*'
   Else
     FDisplayUser := UserText;
 End;
@@ -816,7 +888,7 @@ Var
 Begin
   Case ActiveMode Of
     amPlan: ToolsHint := 'creates and edits Markdown · will not edit sources';
-    amBuild: ToolsHint := 'edits project files and compiles';
+    amBuild: ToolsHint := 'edits target files and compiles';
   Else
     ToolsHint := 'explains and inspects · will not write files';
   End;
@@ -2014,10 +2086,10 @@ Begin
   If Root = '' Then
     Exit;
   RootChanged := Not SameFileName(ExcludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot),
-    ExcludeTrailingPathDelimiter(Root));
+    ExcludeTrailingPathDelimiter(Root)) Or (ProjectAssistantConversation.TargetStoreKey <> AssistantTarget.StoreKey);
   If RootChanged Then
     Begin
-      ProjectAssistantConversation.SetProjectRoot(Root);
+      ProjectAssistantConversation.SetProjectRoot(Root, AssistantTarget.StoreKey);
       ProjectAssistantConversation.Load; { one bulk parse into memory }
       ApplyShellConfigFromStore;
     End
@@ -2295,15 +2367,7 @@ Var
 Begin
   SL := TStringList.Create;
   Try
-    ProjectName := '(unknown project)';
-    If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-      Begin
-        If Assigned(LazarusIDE.ActiveProject.MainFile) And
-          (LazarusIDE.ActiveProject.MainFile.Filename <> '') Then
-          ProjectName := LazarusIDE.ActiveProject.MainFile.Filename
-        Else
-          ProjectName := LazarusIDE.ActiveProject.ProjectInfoFile;
-      End;
+    ProjectName := AssistantTarget.DisplayName;
     SL.Add('# Project Assistant conversation');
     SL.Add('');
     SL.Add('- **Exported:** ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', Now));
@@ -2720,7 +2784,7 @@ Begin
   ContextText := '';
   If WithContext Then ContextText := BuildIDEContextBlockLight;
   Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
-    'Discover project files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
+    'Discover target files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
     'For build/repair work, save only authorized changes, start a build and poll its job_id until done. Use diagnostic items to locate failures, reread before repair, then rebuild. Report stale or incomplete evidence and distinguish compilation from tests. After a successful current build, use lazarus_start_tests with its build_job_id and poll lazarus_test_status with the test job_id. If no runner is configured, report missing test evidence. ' +
@@ -3000,6 +3064,7 @@ Begin
   Else If (Not FUseCodex) And (Not IsSending) And FSending Then
     AssistantEndQuietIdeSession;
   FSending := IsSending;
+  If Assigned(FTargetCombo) Then FTargetCombo.Enabled := Not IsSending;
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
@@ -3048,9 +3113,7 @@ Var
 Begin
   If FSending Then
     Exit;
-  Key := '';
-  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-    Key := LazarusIDE.ActiveProject.ProjectInfoFile;
+  Key := AssistantTarget.Manifest;
   If Key = '' Then
     Exit;
   FSessionProjectKey := Key;
@@ -3062,9 +3125,7 @@ Var
   Key: String;
   LoadedContext: Integer;
 Begin
-  Key := '';
-  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-    Key := LazarusIDE.ActiveProject.ProjectInfoFile;
+  Key := AssistantTarget.Manifest;
   If Key = '' Then
     Exit;
   If SameText(Key, FSessionProjectKey) And Assigned(AssistantClient) And
@@ -4938,14 +4999,7 @@ Begin
     Outcome := Format('failed with %d error(s)', [ErrorCount])
   Else
     Outcome := 'completed with warnings/notes';
-  ProjectName := '(unknown)';
-  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-    Begin
-      If Assigned(LazarusIDE.ActiveProject.MainFile) Then
-        ProjectName := LazarusIDE.ActiveProject.MainFile.Filename
-      Else
-        ProjectName := LazarusIDE.ActiveProject.ProjectInfoFile;
-    End;
+  ProjectName := AssistantTarget.DisplayName;
   Result :=
     'Task: review Free Pascal / Lazarus IDE ' + LowerCase(KindLabel) +
     ' messages from my local machine (same text as the Messages window).' + LineEnding +
@@ -5034,9 +5088,9 @@ Begin
       AppendMessage('system', 'LazarusIDE not available – cannot run ' + KindLabel + '.');
       Exit;
     End;
-  If Not Assigned(LazarusIDE.ActiveProject) Then
+  If Not AssistantTarget.Available Then
     Begin
-      MessageDlg('Open a project before using Review ' + KindLabel + '.', mtInformation, [mbOK], 0);
+      MessageDlg('Select a project or package before using Review ' + KindLabel + '.', mtInformation, [mbOK], 0);
       Exit;
     End;
 
@@ -5049,7 +5103,12 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
 
   Try
-    BuildResult := LazarusIDE.DoBuildProject(Reason, []);
+    If AssistantTarget.Kind=atkPackage Then
+      Begin
+        If Reason=crBuild Then BuildResult:=PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfCleanCompile,pcfDoNotSaveEditorFiles],False)
+        Else BuildResult:=PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfDoNotSaveEditorFiles],False);
+      End
+    Else BuildResult := LazarusIDE.DoBuildProject(Reason, []);
     BuildOk := BuildResult = mrOk;
     OutputText := CollectIDEMessagesText(ErrorCount, WarningCount, HintCount);
     DisplayLabel := BuildReviewDisplayLabel(KindLabel, ErrorCount, WarningCount, HintCount, BuildOk);
@@ -5179,7 +5238,6 @@ End;
 Procedure TProjectAssistantForm.BindToActiveProject;
 Var
   Key, Title, Root: String;
-  Proj: TLazProject;
 Begin
   { Cancel any in-flight stream for the previous project before rebinding.
     Do not PersistSession first: when ProjectOpened fires, ActiveProject is already
@@ -5189,23 +5247,14 @@ Begin
     StopStream;
   FOpenBindPending := False;
 
-  Key := '';
-  Root := '';
-  Title := 'Project Assistant';
-  Proj := Nil;
-  If Assigned(LazarusIDE) Then
-    Proj := LazarusIDE.ActiveProject;
-  If Assigned(Proj) Then
-    Begin
-      Key := Proj.ProjectInfoFile;
-      Root := ProjectAssistantRoot;
-      If Assigned(Proj.MainFile) And (Proj.MainFile.Filename <> '') Then
-        Title := 'Project Assistant — ' + ExtractFileName(Proj.MainFile.Filename)
-      Else If Key <> '' Then
-        Title := 'Project Assistant — ' + ExtractFileName(Key)
-      Else If Proj.IsVirtual Then
-        Title := 'Project Assistant — (unsaved project)';
-    End;
+  Key := AssistantTarget.Manifest;
+  Root := AssistantTarget.Root;
+  If Not AssistantTarget.Available Then Root := '';
+  Title := 'Assistant — ' + AssistantTarget.DisplayName;
+  RefreshTargetChoices(Nil);
+  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
+  If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
+  SetActivePlanRelativePath('');
 
   Caption := Title;
   FSessionProjectKey := '';
@@ -5224,7 +5273,7 @@ Begin
         ProjectAssistantConversation.SetProjectRoot('')
       Else
         Begin
-          ProjectAssistantConversation.SetProjectRoot(Root);
+          ProjectAssistantConversation.SetProjectRoot(Root, AssistantTarget.StoreKey);
           ProjectAssistantConversation.Load;
           { Must run after Load: restore mode tab + thinking from config.json.
             EnsureConversationStore alone is not enough — Bind always reloads
@@ -5280,6 +5329,7 @@ Var
   I: Integer;
   Form: TCustomForm;
 Begin
+  If AssistantTarget.Kind=atkPackage Then Exit;
   { Do not auto-create the window — only refresh forms that already exist. }
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
@@ -5294,6 +5344,7 @@ Var
   I: Integer;
   Form: TCustomForm;
 Begin
+  If AssistantTarget.Kind=atkPackage Then Exit;
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];
@@ -5636,12 +5687,7 @@ Begin
     Dlg.DefaultExt := 'md';
     Dlg.FileName := DefaultExportFileName;
     Dlg.Options := Dlg.Options + [ofOverwritePrompt, ofPathMustExist];
-    If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And
-      (Not LazarusIDE.ActiveProject.IsVirtual) Then
-      Begin
-        If LazarusIDE.ActiveProject.ProjectInfoFile <> '' Then
-          Dlg.InitialDir := ExtractFilePath(ExpandFileName(LazarusIDE.ActiveProject.ProjectInfoFile));
-      End;
+    Dlg.InitialDir := AssistantTarget.Root;
     If Not Dlg.Execute Then
       Exit;
     Path := Dlg.FileName;
@@ -5734,9 +5780,9 @@ Var
 Begin
   If FSending Or FReviewInProgress Then
     Exit;
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+  If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Then
     Begin
-      MessageDlg('Open a project before reviewing changes.', mtInformation, [mbOK], 0);
+      MessageDlg('Select a project or package before reviewing changes.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Prompt := BuildReviewLensesPrompt(FormatChangedProjectFiles);

@@ -55,8 +55,8 @@ Begin Settings.Free; Inherited Destroy; End;
 Procedure TAssistantTestSettingsFrame.Load(Const ConfigRoot, ProjectFile: String);
 Begin
   FreeAndNil(Settings); Settings := TAssistantTestSettings.Create(ConfigRoot, ProjectFile); Settings.Load;
-  Enabled := ProjectFile <> ''; ProjectLabel.Caption := 'Project: ' + ProjectFile;
-  If ProjectFile = '' Then ProjectLabel.Caption := 'Open a saved project to configure its test command.';
+  Enabled := ProjectFile <> ''; ProjectLabel.Caption := 'Target: ' + ProjectFile;
+  If ProjectFile = '' Then ProjectLabel.Caption := 'Select a saved project or package to configure its test command.';
   EnabledCheck.Checked := Settings.Enabled; ExecutableEdit.Text := Settings.Executable;
   If Settings.ReportFormat = 'fpcunit-xml' Then ReportCombo.ItemIndex := 1 Else ReportCombo.ItemIndex := 0;
   MinimumEdit.Value := Settings.MinimumTests;

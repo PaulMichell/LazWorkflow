@@ -66,7 +66,7 @@ Type
 
   TAssistantConversationStore = Class
   Private
-    FProjectRoot: String;
+    FProjectRoot, FTargetStoreKey: String;
     FIndex: TObjectList; { of TConversationIndexEntry }
     FTurns: Array Of TConversationTurn; { full prompt/thinking/response cache }
     FLastError: String;
@@ -89,7 +89,7 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure SetProjectRoot(Const RootPath: String);
+    Procedure SetProjectRoot(Const RootPath: String; Const TargetStoreKey: String = '');
     { Load index + full turns into memory once (disk I/O only here / on append). }
     Function Load: Boolean;
     Function AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
@@ -117,6 +117,7 @@ Type
     Function DeleteConversation(Const ArchiveId: String): Boolean; { '' deletes current }
     Function HistoryTitleForCurrent: String;
     Property ProjectRoot: String Read FProjectRoot;
+    Property TargetStoreKey: String Read FTargetStoreKey;
     Property LastError: String Read FLastError;
     Property Loaded: Boolean Read FLoaded;
   End;
@@ -133,7 +134,7 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths;
+  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths, AssistantWorkTarget;
 
 Const
   PreviewMaxChars = 160;
@@ -205,21 +206,7 @@ Begin
 End;
 
 Function ProjectAssistantRoot: String;
-Var
-  Proj: TLazProject;
-  MainName: String;
-Begin
-  Result := '';
-  If Not Assigned(LazarusIDE) Then
-    Exit;
-  Proj := LazarusIDE.ActiveProject;
-  If Not Assigned(Proj) Then
-    Exit;
-  MainName := '';
-  If Assigned(Proj.MainFile) Then
-    MainName := Proj.MainFile.Filename;
-  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
-End;
+Begin Result := AssistantTarget.Root; End;
 
 Constructor TAssistantConversationStore.Create;
 Begin
@@ -238,8 +225,9 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TAssistantConversationStore.SetProjectRoot(Const RootPath: String);
+Procedure TAssistantConversationStore.SetProjectRoot(Const RootPath: String; Const TargetStoreKey: String);
 Begin
+  FTargetStoreKey := TargetStoreKey;
   If Trim(RootPath) = '' Then
     FProjectRoot := ''
   Else
@@ -253,7 +241,10 @@ Begin
   If FProjectRoot = '' Then
     Result := ''
   Else
-    Result := FProjectRoot + AssistantStoreFolderName + PathDelim;
+    Begin
+      Result := FProjectRoot + AssistantStoreFolderName + PathDelim;
+      If FTargetStoreKey <> '' Then Result := Result + 'targets' + PathDelim + FTargetStoreKey + PathDelim;
+    End;
 End;
 
 Function TAssistantConversationStore.ConversationPath: String;

@@ -54,7 +54,10 @@ End;
 
 Function ScoreAssistantRoot(Const Root: String): Integer;
 Var
-  Dir: String;
+  Dir, Store: String;
+  Entry: TSearchRec;
+  Code: Integer;
+  PackageOnly: Boolean;
 Begin
   Result := 0;
   Dir := ExcludeTrailingPathDelimiter(Root);
@@ -62,10 +65,30 @@ Begin
     Exit;
   If FileExistsUTF8(ConversationPathInRoot(Dir)) Then
     Result := 3
-  Else If DirectoryExistsUTF8(IncludeTrailingPathDelimiter(Dir) + AssistantStoreFolderName) Then
-    Result := 2
-  Else If DirectoryExistsUTF8(IncludeTrailingPathDelimiter(Dir) + '.git') Then
-    Result := 1;
+  Else
+    Begin
+      Store := IncludeTrailingPathDelimiter(Dir) + AssistantStoreFolderName;
+      If DirectoryExistsUTF8(Store) Then
+        Begin
+          { Package namespaces must not redirect the legacy project's root
+            discovery merely because a package was selected in this tree. }
+          PackageOnly := DirectoryExistsUTF8(Store + PathDelim + 'targets');
+          If PackageOnly Then
+            Begin
+              Code := FindFirstUTF8(Store + PathDelim + '*', faAnyFile, Entry);
+              If Code = 0 Then
+                Try
+                  Repeat
+                    If (Entry.Name <> '.') And (Entry.Name <> '..') And (Entry.Name <> 'targets') Then
+                      Begin PackageOnly := False; Break; End;
+                    Code := FindNextUTF8(Entry);
+                  Until Code <> 0;
+                Finally FindCloseUTF8(Entry); End;
+            End;
+          If Not PackageOnly Then Exit(2);
+        End;
+      If DirectoryExistsUTF8(IncludeTrailingPathDelimiter(Dir) + '.git') Then Result := 1;
+    End;
 End;
 
 Function WalkToAssistantStoreRoot(Const StartDir: String): String;

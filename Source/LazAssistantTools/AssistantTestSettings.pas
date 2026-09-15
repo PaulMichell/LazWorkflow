@@ -1,5 +1,5 @@
 Unit AssistantTestSettings;
-{ User-owned per-project test commands, stored in the IDE configuration tree. }
+{ User-owned per-target test commands, stored in the IDE configuration tree. }
 {$mode objfpc}{$H+}
 Interface
 Uses Classes, SysUtils;
@@ -69,7 +69,7 @@ Function TAssistantTestSettings.Validate(Out ErrorText: String): Boolean;
 Var I, Bytes: Integer;
 Begin
   Result := False; ErrorText := '';
-  If FProject = '' Then Begin ErrorText := 'Open a saved project before configuring tests.'; Exit; End;
+  If FProject = '' Then Begin ErrorText := 'Select a saved project or package before configuring tests.'; Exit; End;
   If Not Enabled Then Exit(True);
   If Not ((ReportFormat = 'exit-code') Or (ReportFormat = 'fpcunit-xml')) Or (MinimumTests < 1) Or (MinimumTests > 1000000) Then
     Begin ErrorText := 'Choose a supported test report and a minimum count from 1 to 1000000.'; Exit; End;

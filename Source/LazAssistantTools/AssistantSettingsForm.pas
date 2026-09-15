@@ -80,7 +80,7 @@ Implementation
 
 {$R *.lfm}
 
-Uses
+Uses AssistantWorkTarget,
   AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation,
   LCLIntf, SpellCheckerSettingsForm, LazIDEIntf;
@@ -238,9 +238,9 @@ Begin
   Pages := TPageControl.Create(Self); Pages.Name := 'SettingsPages'; Pages.Parent := Self; Pages.Align := alClient;
   ConnectionPage := TTabSheet.Create(Pages); ConnectionPage.PageControl := Pages; ConnectionPage.Caption := 'Connections';
   GeneralPage := TTabSheet.Create(Pages); GeneralPage.PageControl := Pages; GeneralPage.Caption := 'General';
-  TestPage := TTabSheet.Create(Pages); TestPage.PageControl := Pages; TestPage.Caption := 'Project tests';
+  TestPage := TTabSheet.Create(Pages); TestPage.PageControl := Pages; TestPage.Caption := 'Target tests';
   TestFrame := TAssistantTestSettingsFrame.Create(Self); TestFrame.Name := 'ProjectTestSettings'; TestFrame.Parent := TestPage; TestFrame.Align := alClient;
-  If Assigned(LazarusIDE.ActiveProject) Then TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile)
+  If AssistantTarget.Available Then TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest)
   Else TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, '');
   Sidebar := TPanel.Create(Self); Sidebar.Parent := ConnectionPage; Sidebar.Align := alLeft; Sidebar.Width := 220; Sidebar.BevelOuter := bvNone;
   Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Name := 'AddConnectionButton'; Button.Caption := 'Add ChatGPT connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @AddConnection;

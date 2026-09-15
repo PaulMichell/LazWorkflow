@@ -31,7 +31,7 @@ Implementation
 
 Uses
   Process, LazFileUtils, FileUtil, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog,
-  AssistantConversation;
+  AssistantConversation, AssistantWorkTarget;
 
 Function CapText(Const TextValue: String; MaxChars: Integer): String;
 Begin
@@ -60,6 +60,8 @@ Begin
       Result := 'Active editor: (none)';
       Exit;
     End;
+  If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
+    Begin Result := 'Active editor is outside the selected package; its text is not attached.'; Exit; End;
   CursorPos := Ed.CursorTextXY;
   Result :=
     'Active editor: ' + Ed.FileName + LineEnding +
@@ -82,54 +84,7 @@ Begin
 End;
 
 Function BuildProjectFilesSection: String;
-Var
-  Proj: TLazProject;
-  I, Listed: Integer;
-  Fn: String;
-  Lines: TStringList;
-Begin
-  Result := '';
-  If Not Assigned(LazarusIDE) Then
-    Begin
-      Result := 'Project: (LazarusIDE unavailable)';
-      Exit;
-    End;
-  Proj := LazarusIDE.ActiveProject;
-  If Not Assigned(Proj) Then
-    Begin
-      Result := 'Project: (no active project)';
-      Exit;
-    End;
-  Lines := TStringList.Create;
-  Try
-    If Assigned(Proj.MainFile) Then
-      Lines.Add('Main file: ' + Proj.MainFile.Filename)
-    Else
-      Lines.Add('Main file: (none)');
-    Lines.Add('Project info: ' + Proj.ProjectInfoFile);
-    Lines.Add('Files in project:');
-    Listed := 0;
-    For I := 0 To Proj.FileCount - 1 Do
-      Begin
-        If Not Assigned(Proj.Files[I]) Then
-          Continue;
-        Fn := Proj.Files[I].Filename;
-        If Fn = '' Then
-          Continue;
-        Inc(Listed);
-        If Listed <= AssistantContextMaxProjectFiles Then
-          Lines.Add('  ' + Fn);
-      End;
-    If Listed > AssistantContextMaxProjectFiles Then
-      Lines.Add(Format('  … and %d more files (list capped at %d)',
-        [Listed - AssistantContextMaxProjectFiles, AssistantContextMaxProjectFiles]));
-    If Listed = 0 Then
-      Lines.Add('  (no files listed)');
-    Result := Lines.Text;
-  Finally
-    Lines.Free;
-  End;
-End;
+Begin Result := AssistantTarget.Describe; End;
 
 Function ProjectRootForContext: String;
 Begin
@@ -164,6 +119,7 @@ Begin
       Ed := SourceEditorManagerIntf.SourceEditors[I];
       If Not Assigned(Ed) Or (Not Ed.Modified) Then
         Continue;
+      If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then Continue;
       FullPath := ExpandFileName(Ed.FileName);
       If FullPath = '' Then
         Continue;
@@ -230,7 +186,8 @@ Begin
           Path := Trim(Copy(Path, Pos(' -> ', Path) + 4, MaxInt));
         If (Length(Path) >= 2) And (Path[1] = '"') And (Path[Length(Path)] = '"') Then
           Path := Copy(Path, 2, Length(Path) - 2);
-        AddUniqueLine(Files, Path);
+        If (AssistantTarget.Kind<>atkPackage) Or AssistantTarget.AllowsWrite(ExpandFileName(Root+Path)) Then
+          AddUniqueLine(Files, Path);
       End;
   Finally
     Lines.Free;
@@ -291,6 +248,7 @@ Var
 Begin
   Result :=
     '----- begin IDE context (light) -----' + LineEnding +
+    AssistantTarget.Describe + LineEnding +
     'Long conversation: only a short editor summary is attached. Use read_file for full sources.' +
     LineEnding;
   If Not Assigned(SourceEditorManagerIntf) Then
@@ -306,6 +264,8 @@ Begin
         '----- end IDE context -----';
       Exit;
     End;
+  If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
+    Begin Result := Result + 'Active editor is outside the selected package; its text is not attached.' + LineEnding + '----- end IDE context -----'; Exit; End;
   CursorPos := Ed.CursorTextXY;
   Result := Result +
     'Active editor: ' + Ed.FileName + LineEnding +

@@ -42,18 +42,25 @@ Begin
   Result:=CurrentTarget;
 End;
 Function TargetPathWithin(Const Directory, Filename: String): Boolean;
-Var Base, Candidate, Probe, PhysicalBase, Physical: String;
+Var Base, Candidate, PhysicalBase, Physical: String;
+  Function PhysicalFuturePath(Const Path:String):String;
+  Var Probe:String;
+  Begin
+    Probe:=Path;
+    While Not FileExistsUTF8(Probe) And Not DirectoryExistsUTF8(Probe) Do
+      Begin If ExtractFileDir(Probe)=Probe Then Exit('');Probe:=ExtractFileDir(Probe);End;
+    Result:=GetPhysicalFilename(Probe,pfeEmpty);
+    If Result<>'' Then Result:=ExpandFileName(Result+Copy(Path,Length(Probe)+1,MaxInt));
+  End;
 Begin
   Result:=False; If (Directory='') Or (Filename='') Then Exit;
   Base:=IncludeTrailingPathDelimiter(ExpandFileName(Directory)); Candidate:=ExpandFileName(Filename);
   If (CompareFilenames(Copy(Candidate,1,Length(Base)),Base)<>0) And
     (CompareFilenames(Candidate,ExcludeTrailingPathDelimiter(Base))<>0) Then Exit;
-  PhysicalBase:=GetPhysicalFilename(ExcludeTrailingPathDelimiter(Base),pfeOriginal);
-  Probe:=Candidate;
-  While Not FileExistsUTF8(Probe) And Not DirectoryExistsUTF8(Probe) Do
-    Begin If ExtractFileDir(Probe)=Probe Then Exit; Probe:=ExtractFileDir(Probe); End;
-  Physical:=GetPhysicalFilename(Probe,pfeEmpty); If Physical='' Then Exit;
-  PhysicalBase:=IncludeTrailingPathDelimiter(ExpandFileName(PhysicalBase)); Physical:=ExpandFileName(Physical);
+  PhysicalBase:=PhysicalFuturePath(ExcludeTrailingPathDelimiter(Base));
+  Physical:=PhysicalFuturePath(Candidate);
+  If (PhysicalBase='') Or (Physical='') Then Exit;
+  PhysicalBase:=IncludeTrailingPathDelimiter(PhysicalBase);
   Result:=(CompareFilenames(Copy(Physical,1,Length(PhysicalBase)),PhysicalBase)=0) Or
     (CompareFilenames(Physical,ExcludeTrailingPathDelimiter(PhysicalBase))=0);
 End;
@@ -96,18 +103,39 @@ Begin
   If (Kind=atkPackage) And Not Available Then Result:=Result+' (closed)';
 End;
 Function TAssistantWorkTarget.Modified:Boolean;
+Var List:TFPList; I:Integer;
 Begin
   Result:=True; If Not Available Then Exit;
-  If Kind=atkPackage Then Result:=Package.Modified Else Result:=LazarusIDE.ActiveProject.Modified;
+  If Kind=atkPackage Then
+    Begin
+      Result:=Package.Modified;If Result Then Exit;
+      List:=Nil;
+      Try
+        PackageEditingInterface.GetRequiredPackages(Package,List,[]);
+        If Assigned(List) Then For I:=0 To List.Count-1 Do
+          If TIDEPackage(List[I]).Modified Then Exit(True);
+      Finally List.Free;End;
+    End
+  Else Result:=LazarusIDE.ActiveProject.Modified;
 End;
 Function TAssistantWorkTarget.BuildMode:String;
 Begin
   Result:=''; If (Kind=atkProject) And Available Then Result:=LazarusIDE.ActiveProject.ActiveBuildModeID;
 End;
 Function TAssistantWorkTarget.ConfigurationStamp:String;
+Var List:TFPList; I:Integer; P:TIDEPackage; Stamps:TStringList;
 Begin
   Result:=BuildMode;
-  If (Kind=atkPackage) And Available Then Result:=IntToStr(Package.ChangeStamp);
+  If (Kind=atkPackage) And Available Then
+    Begin
+      Result:=IntToStr(Package.ChangeStamp);List:=Nil;Stamps:=TStringList.Create;
+      Try
+        PackageEditingInterface.GetRequiredPackages(Package,List,[]);
+        If Assigned(List) Then For I:=0 To List.Count-1 Do
+          Begin P:=TIDEPackage(List[I]);Stamps.Add(P.Filename+':'+IntToStr(P.ChangeStamp)+':'+BoolToStr(P.Modified,True));End;
+        Stamps.Sort;Result:=Result+':'+Stamps.Text;
+      Finally List.Free;Stamps.Free;End;
+    End;
 End;
 Procedure TAssistantWorkTarget.Members(Files:TStrings);
 Var I:Integer; Name:String; P:TIDEPackage; Proj:TLazProject;
@@ -157,7 +185,7 @@ Begin
   Base:=ExtractFileDir(FPackageFile); Parent:=Base;
   While (Parent<>'') And (Parent<>ExtractFileDir(Parent)) Do
     Begin
-      If DirectoryExistsUTF8(Parent+PathDelim+'.git') Or FileExistsUTF8(Parent+PathDelim+'.git') Then
+      If FileExistsUTF8(Parent+PathDelim+'.git'+PathDelim+'HEAD') Or FileExistsUTF8(Parent+PathDelim+'.git') Then
         Exit(IncludeTrailingPathDelimiter(Parent));
       Parent:=ExtractFileDir(Parent);
     End;

@@ -31,6 +31,7 @@ Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolea
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
+Function FindLazbuildExecutable: String;
 Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
@@ -65,7 +66,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, fpjson, jsonparser;
+  AssistantLfm, AssistantWorkTarget, PackageIntf, IDEOptionsIntf, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -623,9 +624,9 @@ Begin
   Resolved := '';
   ErrorText := '';
   Root := ProjectRootPath;
-  If Root = '' Then
+  If Not AssistantTarget.Available Or (Root = '') Then
     Begin
-      ErrorText := 'No active Lazarus project is open.';
+      ErrorText := 'No available Assistant work target.';
       Exit;
     End;
   Cand := Trim(RelativeOrAbsolute);
@@ -699,9 +700,18 @@ Begin
 End;
 
 Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
-Var Data, Args: TJSONData; I: Integer; Editor: TSourceEditorInterface; Root, Command: String;
+Var Data, Args: TJSONData; I: Integer; Editor: TSourceEditorInterface; Root, Command, CheckReply, Staged, StagedPath: String; CheckData:TJSONData; StartPos,EndPos:Integer;
+  Function CanStage(Const RelativePath:String):Boolean;
+  Var FullPath:String;
+  Begin
+    FullPath:=ExpandFileName(IncludeTrailingPathDelimiter(Root)+RelativePath);
+    Result:=AssistantTarget.AllowsWrite(FullPath) Or
+      (CompareFilenames(FullPath,AssistantTarget.Manifest)=0);
+  End;
 Begin
   Result := False; ResultText := ''; ErrorText := ''; Root := ProjectRootPath;
+  If Not AssistantTarget.Available Then
+    Begin ErrorText := 'No available Assistant work target.'; Exit; End;
   Data := Nil;
   Try
     Try
@@ -711,16 +721,37 @@ Begin
           Args := TJSONObject(Data).Find('arguments');
           If (Args Is TJSONArray) And (Args.Count > 0) Then Command := Args.Items[0].AsString;
         End;
+      If (AssistantTarget.Kind=atkPackage) And (Command='add') And (Args Is TJSONArray) Then
+        For I:=2 To Args.Count-1 Do If Not CanStage(Args.Items[I].AsString) Then
+          Begin ErrorText:='Cannot stage a path outside the selected package scope.';Exit;End;
+      If (AssistantTarget.Kind=atkPackage) And (Command='commit') Then
+        Begin
+          If Not RunAssistantGit(Root,'{"arguments":["diff","--cached","--no-renames","--name-only","-z"]}',CheckReply,ErrorText) Then Exit;
+          CheckData:=GetJSON(CheckReply);
+          Try
+            If TJSONObject(CheckData).Get('truncated',True) Then
+              Begin ErrorText:='Staged path list is too large to verify package scope.';Exit;End;
+            Staged:=TJSONObject(CheckData).Get('output','');StartPos:=1;
+            While StartPos<=Length(Staged) Do
+              Begin
+                EndPos:=StartPos;While (EndPos<=Length(Staged)) And (Staged[EndPos]<>#0) Do Inc(EndPos);
+                StagedPath:=Copy(Staged,StartPos,EndPos-StartPos);StartPos:=EndPos+1;
+                If Not CanStage(StagedPath) Then
+                  Begin ErrorText:='Index includes files outside the selected package. Review and separate the staged changes before committing.';Exit;End;
+              End;
+          Finally CheckData.Free;End;
+        End;
       If (Command = 'add') Or (Command = 'commit') Then
         Begin
-          If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And LazarusIDE.ActiveProject.Modified Then
+          If AssistantTarget.Modified Then
             Begin ErrorText := 'Save authorized project settings before staging or committing.'; Exit; End;
           If Assigned(SourceEditorManagerIntf) Then
             For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
               Begin
                 Editor := SourceEditorManagerIntf.SourceEditors[I];
                 If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) And
-                  ((Editor.FileName = '') Or IsPathUnderRoot(Root, Editor.FileName)) Then
+                  ((Editor.FileName = '') Or IsPathUnderRoot(Root, Editor.FileName)) And
+                  ((AssistantTarget.Kind=atkProject) Or AssistantTarget.ContainsFile(Editor.FileName)) Then
                   Begin ErrorText := 'Save authorized project editor and designer changes before staging or committing. Git reads saved files.'; Exit; End;
               End;
         End;
@@ -1090,29 +1121,11 @@ Begin
 End;
 
 Function ToolGetProjectInfo(Out ResultText, ErrorText: String): Boolean;
-Var
-  Proj: TLazProject;
-  Root: String;
 Begin
-  Result := False;
-  ResultText := '';
-  ErrorText := '';
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
-    Begin
-      ErrorText := 'No active Lazarus project.';
-      Exit;
-    End;
-  Proj := LazarusIDE.ActiveProject;
-  Root := ProjectRootPath;
-  ResultText :=
-    'Project root: ' + Root + LineEnding +
-    'Project info: ' + Proj.ProjectInfoFile + LineEnding;
-  If Assigned(Proj.MainFile) Then
-    ResultText := ResultText + 'Main file: ' + Proj.MainFile.Filename + LineEnding;
-  ResultText := ResultText + 'Title: ' + Proj.GetTitle;
-  If GetActivePlanRelativePath <> '' Then
-    ResultText := ResultText + LineEnding + 'Active plan: ' + GetActivePlanRelativePath;
-  Result := True;
+  Result := AssistantTarget.Available; ErrorText := ''; ResultText := '';
+  If Not Result Then Begin ErrorText := 'No available Assistant work target.'; Exit; End;
+  ResultText := AssistantTarget.Describe;
+  If GetActivePlanRelativePath <> '' Then ResultText := ResultText + LineEnding + 'Active plan: ' + GetActivePlanRelativePath;
 End;
 
 Function JsonArgBool(Const ArgumentsJson, FieldName: String; DefaultValue: Boolean): Boolean;
@@ -1550,6 +1563,12 @@ Begin
       Result := Cand;
       Exit;
     End;
+  If Assigned(IDEEnvironmentOptions) Then
+    Begin
+      Cand := IncludeTrailingPathDelimiter(IDEEnvironmentOptions.GetParsedLazarusDirectory) +
+        'lazbuild'{$IFDEF WINDOWS}+'.exe'{$ENDIF};
+      If FileExistsUTF8(Cand) Then Exit(Cand);
+    End;
   Result := '';
 End;
 
@@ -1707,6 +1726,8 @@ Begin
   Note := '';
   ErrorText := '';
   FullPath := ExpandResolvedPath(Resolved);
+  If Not AssistantTarget.AllowsWrite(FullPath) Then
+    Begin ErrorText := 'Path is outside the selected target write scope.'; Exit; End;
   If IsLazarusProjectInfoPath(FullPath) Then
     Begin
       ErrorText :=
@@ -1810,6 +1831,7 @@ Begin
         Continue;
       If Not IsPathUnderRoot(Root, FullPath) Then
         Continue;
+      If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(FullPath) Then Continue;
       If LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) <> mrOk Then
         Begin
           Result := False;
@@ -1833,12 +1855,12 @@ Begin
   WarningCount := 0;
   HintCount := 0;
   BuildOk := False;
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+  If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Then
     Begin
       ErrorText := 'No active Lazarus project.';
       Exit;
     End;
-  Lpi := LazarusIDE.ActiveProject.ProjectInfoFile;
+  Lpi := AssistantTarget.Manifest;
   If (Lpi = '') Or (Not FileExistsUTF8(Lpi)) Then
     Begin
       ErrorText := 'Project .lpi not found for quiet compile.';
@@ -2235,7 +2257,7 @@ Begin
   { Only auto-add substantial Pascal units — never empty probes. }
   AddToProject := JsonArgBool(ArgumentsJson, 'add_to_project',
     IsPascalUnitPath(Resolved) And Meaningful);
-  If AddToProject And IsPascalUnitPath(Resolved) And Assigned(LazarusIDE) And
+  If (AssistantTarget.Kind=atkProject) And AddToProject And IsPascalUnitPath(Resolved) And Assigned(LazarusIDE) And
     Assigned(LazarusIDE.ActiveProject) Then
     Begin
       Proj := LazarusIDE.ActiveProject;
@@ -2373,7 +2395,7 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
+  If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Then
     Begin
       ErrorText := 'No active Lazarus project.';
       Exit;
@@ -2424,7 +2446,12 @@ Begin
   Try
     { pbfDoNotSaveEditorFiles: we already flushed project buffers when quiet path ran;
       for pure UI path, IDE still saves as usual. }
-    BuildResult := LazarusIDE.DoBuildProject(Reason, []);
+    If AssistantTarget.Kind=atkPackage Then
+    Begin
+      If Reason=crBuild Then BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfCleanCompile,pcfDoNotSaveEditorFiles],False)
+      Else BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfDoNotSaveEditorFiles],False);
+    End
+  Else BuildResult := LazarusIDE.DoBuildProject(Reason, []);
     BuildOk := BuildResult = mrOk;
   Except
     On E: Exception Do
@@ -2835,7 +2862,21 @@ Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultT
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Var
-  Name: String;
+  Name, Path, ResolvedPath, TargetIdentity: String;
+  Function CheckTarget: Boolean;
+  Begin
+    Result := True;
+    If AssistantTarget.Kind<>atkPackage Then Exit;
+    If Name='add_unit_to_project' Then
+      Begin ErrorText := 'Package membership is managed in the Lazarus package editor.'; Exit(False); End;
+    If (Name='write_file') Or (Name='replace_in_file') Or (Name='ensure_form_component') Or (Name='write_markdown') Or (Name='update_markdown') Then
+      Begin
+        Path := JsonArgString(ArgumentsJson, 'path');
+        Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+        If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
+        If Not Result And (ErrorText='') Then ErrorText := 'Path is outside the selected package write scope.';
+      End;
+  End;
 Begin
   Result := False;
   ResultText := '';
@@ -2847,8 +2888,13 @@ Begin
         [ToolName, AssistantModeToStr(Mode)]);
       Exit;
     End;
+  TargetIdentity := AssistantTarget.Identity;
+  If Not CheckTarget Then Exit;
   If Not ApproveToolIfNeeded(Name, ArgumentsJson, ErrorText) Then
     Exit;
+  If TargetIdentity <> AssistantTarget.Identity Then
+    Begin ErrorText := 'Assistant target changed during approval.'; Exit; End;
+  If Not CheckTarget Then Exit;
   Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText);
 End;
 

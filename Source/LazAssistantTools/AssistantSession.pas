@@ -24,7 +24,7 @@ Procedure ClearProjectChatSession;
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, fpjson, jsonparser, AssistantProjectPaths;
+  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, fpjson, jsonparser, AssistantProjectPaths, AssistantWorkTarget;
 
 Function ActiveProjectSessionPath: String;
 Var
@@ -32,6 +32,11 @@ Var
   Dir, Root, Preferred, Legacy, MainName: String;
 Begin
   Result := '';
+  If AssistantTarget.Kind = atkPackage Then
+    Begin
+      If AssistantTarget.Available Then Result := AssistantTarget.StoreDirectory + AssistantSessionFileName;
+      Exit;
+    End;
   Root := '';
   Preferred := '';
   Legacy := '';

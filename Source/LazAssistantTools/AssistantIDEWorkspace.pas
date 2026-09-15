@@ -15,6 +15,7 @@ Type
     FDefineStep: Integer;
     FBuildGeneration: QWord;
     FBuildIdentity, FBuildMode: String;
+    Function EditorAffectsBuild(Editor: TObject): Boolean;
   Protected
     Function BuildExecutable: String; Virtual;
   Public
@@ -55,7 +56,7 @@ Type
   End;
 Implementation
 Uses SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  SynEdit, CodeToolManager, AssistantTestSettings, AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings, AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
   {$IFDEF UNIX}, BaseUnix{$ENDIF};
 Type
   { Owned by the editor control, so reopening a file cannot reuse a receipt's
@@ -64,8 +65,18 @@ Type
   Public
     ID: String;
   End;
+Function TAssistantIDEWorkspace.EditorAffectsBuild(Editor: TObject): Boolean;
+Var I:Integer; Ed:TSourceEditorInterface;
+Begin
+  Result:=False; If Not Assigned(Editor) Then Exit;
+  If AssistantTarget.Kind=atkProject Then Exit(True);
+  Ed:=TSourceEditorInterface(Editor);
+  If AssistantTarget.ContainsFile(Ed.FileName) Then Exit(True);
+  For I:=0 To High(FBuildInputs) Do
+    If CompareFilenames(Ed.FileName,FBuildInputs[I].Path)=0 Then Exit(True);
+End;
 Function TAssistantIDEWorkspace.CanGit: Boolean;
-Begin Result := ProjectRootPath <> ''; End;
+Begin Result := AssistantTarget.Available And (ProjectRootPath <> ''); End;
 Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin Result := ToolRunGit(Arguments, ResultText, ErrorText); End;
 Destructor TAssistantIDEWorkspace.Destroy;
@@ -105,6 +116,8 @@ Var Editor: TSourceEditorInterface; Physical: String;
 Begin
   Result := False; Stamp := '';
   If Not ReadBuffer(Path, CanonicalPath, Text, ErrorText) Then Exit;
+  If Not AssistantTarget.AllowsWrite(CanonicalPath) Then
+    Begin ErrorText := 'Path is outside the selected target write scope.'; Exit; End;
   Physical := GetPhysicalFilename(CanonicalPath, pfeOriginal);
   If (Physical = '') Or Not Supported(Path) Or Not Supported(CanonicalPath) Or Not Supported(Physical) Then
     Begin ErrorText := 'Change sets support Pascal, Markdown and .txt buffers; project/designer metadata is excluded.'; Exit; End;
@@ -196,6 +209,8 @@ Begin
   If (Trim(Path) = '') Or (Pos(#0, Path) > 0) Or (Length(Path) > 4096) Then
     Begin ErrorText := 'A new project file path is required.'; Exit; End;
   If Not ResolveProjectPath(Path, CanonicalPath, ErrorText) Then Exit;
+  If Not AssistantTarget.AllowsWrite(CanonicalPath) Then
+    Begin ErrorText := 'Path is outside the selected target write scope.'; Exit; End;
   If Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'Source editor manager is unavailable.'; Exit; End;
   If Assigned(SourceEditorManagerIntf.SourceEditorIntfWithFilename(CanonicalPath)) Then
@@ -279,10 +294,10 @@ Begin
       (Data.FindPath('outcome').AsString <> 'compile_passed') Then
       Begin ErrorText := 'Tests require a successful current build with unchanged observed inputs.'; Exit; End;
   Finally Data.Free; End;
-  Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+  Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest);
   Try
     Settings.Load;
-    If Not Settings.Enabled Then Begin ErrorText := 'Configure and enable the runner in Settings > Project tests.'; Exit; End;
+    If Not Settings.Enabled Then Begin ErrorText := 'Configure and enable the runner in Settings > Target tests.'; Exit; End;
     If Not Settings.Validate(ErrorText) Then Exit;
     If Not ExecutableFingerprint(Settings.ResolvedExecutable, Fingerprint, ErrorText) Then Exit;
     { Include the reviewed binary identity, so changing it during approval also
@@ -331,7 +346,7 @@ Begin
   If Not Stale Then
     Begin
       If Not ExecutableFingerprint(FTestExecutable, Fingerprint, Note) Or (Fingerprint <> Value.ExecutableFingerprint) Then Stale := True;
-      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest);
       Try
         Settings.Load; Data := GetJSON(Settings.CommandJSON);
         Try
@@ -345,46 +360,48 @@ End;
 Function TAssistantIDEWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
 Function TAssistantIDEWorkspace.BuildExecutable: String;
-Begin
-  Result := FindDefaultExecutablePath('lazbuild');
-  If Result = '' Then Result := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'lazbuild';
-End;
+Begin Result := FindLazbuildExecutable; End;
 Function TAssistantIDEWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
 Var Editor: TSourceEditorInterface; I: Integer; Exe, ProjectFile, Path, Resource: String;
-  Inputs, Roots: TBuildInputs; Evidence, ProjectIdentity, RequestedMode: String; Generation: QWord; DefineStep: Integer; Project: TLazProject; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
+  Inputs, Roots: TBuildInputs; Evidence, ProjectIdentity, RequestedMode: String; Generation: QWord; DefineStep: Integer; Files: TStringList; Value: TBuildJobSnapshot; Job: IAssistantBuildJob;
 Begin
   Result := False; ResultText := ''; ErrorText := '';
   If Assigned(FTests) And Not FTests.Snapshot.Done Then
     Begin ErrorText := 'A test command is already running.'; Exit; End;
   If Assigned(FBuild) And Not FBuild.Snapshot.Done Then
     Begin ErrorText := 'A build is already running.'; Exit; End;
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or
+  If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Or
     Not Assigned(SourceEditorManagerIntf) Then
-    Begin ErrorText := 'No active Lazarus project.'; Exit; End;
-  Project := LazarusIDE.ActiveProject; Generation := FBuildGeneration; ProjectIdentity := Identity; RequestedMode := Project.ActiveBuildModeID;
-  If Project.Modified Then Begin ErrorText := 'Save project settings explicitly before building.'; Exit; End;
-  ProjectFile := Project.ProjectInfoFile;
+    Begin ErrorText := 'No available Assistant work target.'; Exit; End;
+  Generation := FBuildGeneration; ProjectIdentity := Identity; RequestedMode := AssistantTarget.ConfigurationStamp;
+  If AssistantTarget.Modified Then Begin ErrorText := 'Save target and dependency settings explicitly before building.'; Exit; End;
+  ProjectFile := AssistantTarget.Manifest;
   Exe := BuildExecutable;
   If Not FileExistsUTF8(Exe) Then Begin ErrorText := 'lazbuild was not found.'; Exit; End;
   Inputs := Nil;
   If Not AddBuildInput(Inputs, ProjectFile, ErrorText) Then Exit;
-  { Project members are roots for transitive source discovery below. }
-  For I := 0 To Project.FileCount - 1 Do
-    Begin
-      If Not Assigned(Project.Files[I]) Then Continue;
-      Path := Project.Files[I].Filename;
-      If Path = '' Then Begin ErrorText := 'Save unnamed project files before building.'; Exit; End;
-      If Not FilenameIsAbsolute(Path) Then Path := ExtractFilePath(ProjectFile) + Path;
-      If Not AddBuildInput(Inputs, Path, ErrorText) Then Exit;
-      Resource := ChangeFileExt(Path, '.lfm');
-      If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs, Resource, ErrorText) Then Exit;
-      Resource := ChangeFileExt(Path, '.lrs');
-      If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs, Resource, ErrorText) Then Exit;
-    End;
+  { Target members seed the CodeTools closure; dependency manifests also form
+    saved evidence, without granting write access to dependency source trees. }
+  Files:=TStringList.Create;
+  Try
+    AssistantTarget.Members(Files);
+    For I:=0 To Files.Count-1 Do
+      Begin
+        Path:=Files[I];
+        If Not AddBuildInput(Inputs,Path,ErrorText) Then Exit;
+        Resource:=ChangeFileExt(Path,'.lfm');
+        If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs,Resource,ErrorText) Then Exit;
+        Resource:=ChangeFileExt(Path,'.lrs');
+        If FileExistsUTF8(Resource) And Not AddBuildInput(Inputs,Resource,ErrorText) Then Exit;
+      End;
+    AssistantTarget.Dependencies(Files);
+    For I:=0 To Files.Count-1 Do If Not AddBuildInput(Inputs,Files[I],ErrorText) Then Exit;
+  Finally Files.Free; End;
   For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
     Begin
       Editor := SourceEditorManagerIntf.SourceEditors[I];
       If Not Assigned(Editor) Then Continue;
+      If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Editor.FileName) Then Continue;
       If Editor.Modified Or Editor.ModifiedDesign Then
         Begin ErrorText := 'Save changed editor buffers and designer resources explicitly before building.'; Exit; End;
       If Editor.FileName = '' Then Continue;
@@ -394,12 +411,12 @@ Begin
   CaptureAssistantDependencies(Inputs, Evidence, DefineStep);
   If (FBuildGeneration <> Generation) Or (Identity <> ProjectIdentity) Then
     Begin ErrorText := 'Build cancelled or project changed during dependency discovery.'; Exit; End;
-  If Project.Modified Or (Project.ActiveBuildModeID <> RequestedMode) Or Not Assigned(SourceEditorManagerIntf) Then
-    Begin ErrorText := 'Project settings changed during dependency discovery.'; Exit; End;
+  If AssistantTarget.Modified Or (AssistantTarget.ConfigurationStamp <> RequestedMode) Or Not Assigned(SourceEditorManagerIntf) Then
+    Begin ErrorText := 'Target settings changed during dependency discovery.'; Exit; End;
   For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
     Begin
       Editor := SourceEditorManagerIntf.SourceEditors[I];
-      If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then
+      If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then
         Begin ErrorText := 'Editor changed during dependency discovery.'; Exit; End;
     End;
   { Check actual buffer text too: Modified=False alone is not evidence that
@@ -410,8 +427,10 @@ Begin
       If Assigned(Editor) And (Editor.SourceText <> Inputs[I].Text) Then
         Begin ErrorText := 'Editor text differs from saved build input: ' + Inputs[I].Path; Exit; End;
     End;
-  Job := StartAssistantBuild(Exe, ProjectFile, Project.ActiveBuildModeID, Inputs);
-  FBuildIdentity := Identity; FBuildMode := Project.ActiveBuildModeID;
+  If AssistantTarget.Kind=atkPackage Then
+    Job := StartAssistantBuild(Exe,ProjectFile,'',Inputs,600000,LazarusIDE.GetPrimaryConfigPath,GetLCLWidgetTypeName)
+  Else Job := StartAssistantBuild(Exe, ProjectFile, AssistantTarget.BuildMode, Inputs);
+  FBuildIdentity := Identity; FBuildMode := AssistantTarget.ConfigurationStamp;
   Inc(FBuildGeneration);
   FBuildInputs := Inputs; FBuildRoots := Roots; FDependencyEvidence := Evidence;
   FDefineStep := DefineStep; FBuild := Job;
@@ -428,17 +447,17 @@ Begin
   Stale := (Identity <> FBuildIdentity) Or (Value.Done And Not Value.InputsUnchanged);
   If Not Stale Then
     Begin
-      Stale := Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Or Not Assigned(SourceEditorManagerIntf);
+      Stale := Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Or Not Assigned(SourceEditorManagerIntf);
       If Not Stale Then
         Begin
-          Stale := LazarusIDE.ActiveProject.Modified Or (LazarusIDE.ActiveProject.ActiveBuildModeID <> FBuildMode);
+          Stale := AssistantTarget.Modified Or (AssistantTarget.ConfigurationStamp <> FBuildMode);
           { Recheck disk at observation time as well as worker completion: an
             earlier successful build must not validate subsequent saved edits. }
           If Value.Done And Not BuildInputsMatch(FBuildInputs, Note) Then Stale := True;
           For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditors[I];
-              If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
             End;
           For I := 0 To High(FBuildInputs) Do
             Begin
@@ -467,11 +486,11 @@ Begin
       Stale := Stale Or (Identity <> FBuildIdentity) Or Not Assigned(SourceEditorManagerIntf);
       If Not Stale Then
         Begin
-          Stale := LazarusIDE.ActiveProject.Modified Or (LazarusIDE.ActiveProject.ActiveBuildModeID <> FBuildMode);
+          Stale := AssistantTarget.Modified Or (AssistantTarget.ConfigurationStamp <> FBuildMode);
           For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditors[I];
-              If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
             End;
           For I := 0 To High(FBuildInputs) Do
             Begin
@@ -493,12 +512,7 @@ Begin
   Result := True;
 End;
 Function TAssistantIDEWorkspace.Identity: String;
-Begin
-  Result := '';
-  If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
-    Result := IntToHex(PtrUInt(LazarusIDE.ActiveProject), SizeOf(Pointer)*2) + ':' +
-      LazarusIDE.ActiveProject.ProjectInfoFile;
-End;
+Begin Result := AssistantTarget.Identity; End;
 Function TAssistantIDEWorkspace.ReadBuffer(Const Path: String;
   Out CanonicalPath, Text, ErrorText: String): Boolean;
 Var Editor: TSourceEditorInterface;
@@ -517,6 +531,8 @@ Function TAssistantIDEWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText:
   Out ErrorText: String): Boolean;
 Begin
   Result := False;
+  If Not AssistantTarget.AllowsWrite(Path) Then
+    Begin ErrorText := 'Path is outside the selected target write scope.'; Exit; End;
   If Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'Source editor manager is unavailable.'; Exit; End;
   Result := ApplyAssistantEditorText(SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path),
@@ -526,7 +542,9 @@ Function TAssistantIDEWorkspace.SaveBuffer(Const Path, ExpectedText: String;
   Out ErrorText: String): Boolean;
 Var Editor: TSourceEditorInterface;
 Begin
-  Result := False; ErrorText := '';
+  Result := False;
+  If Not AssistantTarget.AllowsWrite(Path) Then
+    Begin ErrorText := 'Path is outside the selected target write scope.'; Exit; End; ErrorText := '';
   If Not Assigned(LazarusIDE) Or Not Assigned(SourceEditorManagerIntf) Then
     Begin ErrorText := 'Lazarus editor is unavailable.'; Exit; End;
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path);

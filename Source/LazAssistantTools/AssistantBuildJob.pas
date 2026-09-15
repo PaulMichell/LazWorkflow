@@ -28,7 +28,7 @@ Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: S
 Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''; Const ReportFormat: String = 'exit-code'; MinimumTests: Integer = 1): IAssistantBuildJob;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
-  Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000): IAssistantBuildJob;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000; Const IDEProfile: String = ''; Const WidgetSet: String = ''): IAssistantBuildJob;
 Implementation
 Uses Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser {$IFDEF LINUX}, BaseUnix{$ENDIF};
 Type
@@ -327,12 +327,15 @@ Function StartAssistantTest(Const Executable, Directory, BuildId: String; Argume
   Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint, ReportFormat: String; MinimumTests: Integer): IAssistantBuildJob;
 Begin Result := StartCommand(Executable, Directory, 'test', BuildId, ExpectedFingerprint, ReportFormat, MinimumTests, Arguments, Inputs, TimeoutMs); End;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
-  Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
+  Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const IDEProfile, WidgetSet: String): IAssistantBuildJob;
 Var Arguments: TStringList;
 Begin
   Arguments := TStringList.Create;
   Try
-    Arguments.Add('--build-mode=' + BuildMode); Arguments.Add(ProjectFile);
+    If IDEProfile <> '' Then Arguments.Add('--pcp=' + IDEProfile);
+    If WidgetSet <> '' Then Arguments.Add('--widgetset=' + WidgetSet);
+    If BuildMode <> '' Then Arguments.Add('--build-mode=' + BuildMode);
+    Arguments.Add(ProjectFile);
     Result := StartCommand(Executable, ExtractFilePath(ProjectFile), 'build', '', '', 'exit-code', 1, Arguments, Inputs, TimeoutMs);
   Finally Arguments.Free; End;
 End;
