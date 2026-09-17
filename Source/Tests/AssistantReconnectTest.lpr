@@ -3,6 +3,10 @@ Program AssistantReconnectTest;
 Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Forms, Classes, SysUtils,
   AssistantTestIDEHost, AssistantActor, AssistantHttps;
 Type
+  TObserver = Class
+    Calls: Integer;
+    Procedure Token(Const Content, Thinking: String; Done: Boolean; Const ErrorText: String);
+  End;
   TFakeActor = Class(TAssistantActor)
   Public
     Attempts, Waits: Integer;
@@ -14,6 +18,10 @@ Type
     Function WaitForReconnect: Boolean; Override;
     Procedure Execute; Override;
   End;
+Procedure TObserver.Token(Const Content, Thinking: String; Done: Boolean; Const ErrorText: String);
+Begin
+  Inc(Calls);
+End;
 Function TFakeActor.PostRound(Const Url, RequestJson, Headers: String;
   Control: THttpsStreamControl; Out Code: Integer; Out ErrorText: String): Boolean;
 Begin
@@ -64,9 +72,27 @@ Begin
       Check('permanent error remains visible', (A.Attempts = 1) And (A.Err = Failure));
   Finally A.Free; End;
 End;
+Procedure TestDetachedCallbacks;
+Var A: TFakeActor; Observer: TObserver; Deadline: QWord;
+Begin
+  Observer := TObserver.Create;
+  A := TFakeActor.Create(Nil, '', '', '', '', '', '', @Observer.Token);
+  Try
+    A.Failure := 'Error reading data from socket';
+    A.Start;
+    Deadline := GetTickCount64 + 5000;
+    While (Not A.Finished) And (GetTickCount64 < Deadline) Do Sleep(5);
+    Check('fake actor finished before view disposal', A.Finished);
+    A.DetachCallbacks;
+    A.WaitFor;
+    CheckSynchronize;
+    Check('queued stream callbacks cannot reach closed view', Observer.Calls = 0);
+  Finally A.Free; Observer.Free; End;
+End;
 Var A: TFakeActor; Started: QWord;
 Begin
   Application.Initialize;
+  TestDetachedCallbacks;
   RunCase('Error reading data from socket', True);
   RunCase('Connection reset by peer', True);
   RunCase('', True);

@@ -72,6 +72,14 @@ Type
   { Nested so notify helpers can close over their arguments. Stops when it returns True. }
   TWorkflowEachFunc = Function(Const Listener: IInterface): Boolean Is Nested;
 
+  { Snapshots retain registration tokens, not non-refcounted form interfaces.
+    Removing a form clears its token before the form can be destroyed. }
+  IWorkflowSubscription = Interface
+    ['{EFC23AC3-D15B-48D8-95E8-17AB47B39048}']
+    Function GetListener: IInterface;
+    Procedure Clear;
+  End;
+
   { Simple thread-safe observer list }
   TWorkflowEventBus = Class
   Private
@@ -113,6 +121,32 @@ Implementation
 Uses
   WorkflowLog;
 
+Type
+  TWorkflowSubscription = Class(TInterfacedObject, IWorkflowSubscription)
+  Private
+    FListener: IInterface;
+  Public
+    Constructor Create(Const Listener: IInterface);
+    Function GetListener: IInterface;
+    Procedure Clear;
+  End;
+
+Constructor TWorkflowSubscription.Create(Const Listener: IInterface);
+Begin
+  Inherited Create;
+  FListener := Listener;
+End;
+
+Function TWorkflowSubscription.GetListener: IInterface;
+Begin
+  Result := FListener;
+End;
+
+Procedure TWorkflowSubscription.Clear;
+Begin
+  FListener := Nil;
+End;
+
 Constructor TWorkflowEventBus.Create;
 Begin
   Inherited Create;
@@ -137,6 +171,7 @@ Function TWorkflowEventBus.ForEach(Each: TWorkflowEachFunc): Boolean;
 Var
   I: Integer;
   Snapshot: TInterfaceList;
+  Listener: IInterface;
 Begin
   Result := False;
   If Not Assigned(Each) Then
@@ -145,7 +180,13 @@ Begin
   Try
     For I := 0 To Snapshot.Count - 1 Do
       Try
-        If Each(Snapshot[I]) Then
+        EnterCriticalSection(FLock);
+        Try
+          Listener := (Snapshot[I] As IWorkflowSubscription).GetListener;
+        Finally
+          LeaveCriticalSection(FLock);
+        End;
+        If Assigned(Listener) And Each(Listener) Then
           Begin
             Result := True;
             Exit;
@@ -161,25 +202,39 @@ Begin
 End;
 
 Procedure TWorkflowEventBus.AddListener(Listener: IInterface);
+Var
+  I: Integer;
 Begin
   If Not Assigned(Listener) Then
     Exit;
   EnterCriticalSection(FLock);
   Try
-    If FListeners.IndexOf(Listener) < 0 Then
-      FListeners.Add(Listener);
+    For I := 0 To FListeners.Count - 1 Do
+      If (FListeners[I] As IWorkflowSubscription).GetListener = Listener Then Exit;
+    FListeners.Add(TWorkflowSubscription.Create(Listener));
   Finally
     LeaveCriticalSection(FLock);
   End;
 End;
 
 Procedure TWorkflowEventBus.RemoveListener(Listener: IInterface);
+Var
+  I: Integer;
+  Subscription: IWorkflowSubscription;
 Begin
   If Not Assigned(Listener) Then
     Exit;
   EnterCriticalSection(FLock);
   Try
-    FListeners.Remove(Listener);
+    For I := FListeners.Count - 1 DownTo 0 Do
+      Begin
+        Subscription := FListeners[I] As IWorkflowSubscription;
+        If Subscription.GetListener = Listener Then
+          Begin
+            Subscription.Clear;
+            FListeners.Delete(I);
+          End;
+      End;
   Finally
     LeaveCriticalSection(FLock);
   End;

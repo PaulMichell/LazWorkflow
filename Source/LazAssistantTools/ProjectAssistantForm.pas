@@ -569,17 +569,24 @@ End;
 
 Destructor TProjectAssistantForm.Destroy;
 Begin
+  Destroying;
+  If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
+  Application.RemoveAsyncCalls(Self);
+  If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
+  If Assigned(AssistantClient) Then AssistantClient.DetachStreamCallbacks;
   ReleaseCodexRun;
   FreeAndNil(FCodexBroker);
   FreeAndNil(FCodexWorkspace);
-  Application.RemoveAsyncCalls(Self);
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
-  If FSending Then
-    SetSending(False);
+  FSending := False;
   AssistantResetQuietIdeSession;
-  PersistSession;
-  WorkflowEventBus.RemoveListener(Self);
+  Try
+    PersistSession;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Error('ProjectAssistant', 'Saving session on close: ' + E.Message);
+  End;
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := Nil;
   FreeAndNil(Transcript);
@@ -738,22 +745,29 @@ End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
-  FreeAndNil(FTargetPaths);
-  If Assigned(ElapsedTimer) Then
-    ElapsedTimer.Enabled := False;
-  If Assigned(FCommandsPopup) Then
-    FreeAndNil(FCommandsPopup);
-  If Assigned(FFooterMenu) Then
-    FFooterMenu.Items.Clear;
-  FOpenBusy := False;
-  SetBusyCursor(False);
-  { Persist OAuth tokens once on close (not on every prompt). }
-  If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
-    Begin
-      AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
-      AssistantChatConfig.Save;
-    End;
-  WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window destroyed');
+  Try
+    FreeAndNil(FTargetPaths);
+    If Assigned(ElapsedTimer) Then
+      ElapsedTimer.Enabled := False;
+    If Assigned(FCommandsPopup) Then
+      FreeAndNil(FCommandsPopup);
+    If Assigned(FFooterMenu) Then
+      FFooterMenu.Items.Clear;
+    FOpenBusy := False;
+    SetBusyCursor(False);
+    { Persist OAuth tokens once on close (not on every prompt). }
+    If Assigned(AssistantChatConfig) And Assigned(GrokOAuthClient) Then
+      Begin
+        AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
+        AssistantChatConfig.Save;
+      End;
+    WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window destroyed');
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.FormDestroy: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TProjectAssistantForm.UpdateViewActionCaptions;
@@ -1960,6 +1974,7 @@ Procedure TProjectAssistantForm.ContinueWorkOnPlanAgent(Data: PtrInt);
 Var
   Idx, Pct: Integer;
 Begin
+  If csDestroying In ComponentState Then Exit;
   If Not FPlanAgentRunning Then
     Exit;
   If FSending Then
@@ -2738,17 +2753,27 @@ End;
 Procedure TProjectAssistantForm.LoadConnectionSettings;
 Var Connections: TAssistantConnections; Item: TAssistantConnection;
 Begin
-  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
   Try
-    Connections.Load; Item := Connections.Active;
-    FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
-    If FUseCodex Then
+    FUseCodex := False;
+    If Not Assigned(LazarusIDE) Then Exit;
+    Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
+    Try
+      Connections.Load; Item := Connections.Active;
+      FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
+      If FUseCodex Then
+        Begin
+          FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
+          FCodexProfile := Connections.ProfileDir(Item);
+          FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
+        End;
+    Finally Connections.Free; End;
+  Except
+    On E: Exception Do
       Begin
-        FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
-        FCodexProfile := Connections.ProfileDir(Item);
-        FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
+        FUseCodex := False;
+        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
-  Finally Connections.Free; End;
+  End;
 End;
 
 Procedure TProjectAssistantForm.ReleaseCodexRun;
@@ -2887,19 +2912,28 @@ End;
 
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
-  If Assigned(FCodexRun) Then Begin PollCodex; Exit; End;
-  If FSending And (FStatusPhase <> '') Then
-    StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
-  If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
-    FTraceView.RefreshElapsed(FTrace);
-  If FSending And Assigned(AssistantClient) Then
-    Begin
-      AssistantClient.AbandonTimedOutSubagents;
-      ReapAbandonedAssistantWorkers;
-      If Assigned(FTrace) And FViewingLive And
-        FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
-        StopStream;
-    End;
+  Try
+    If csDestroying In ComponentState Then Exit;
+    If Assigned(FCodexRun) Then Begin PollCodex; Exit; End;
+    If FSending And (FStatusPhase <> '') Then
+      StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
+    If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
+      FTraceView.RefreshElapsed(FTrace);
+    If FSending And Assigned(AssistantClient) Then
+      Begin
+        AssistantClient.AbandonTimedOutSubagents;
+        ReapAbandonedAssistantWorkers;
+        If Assigned(FTrace) And FViewingLive And
+          FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
+          StopStream;
+      End;
+  Except
+    On E: Exception Do
+      Begin
+        If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
+        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.ElapsedTimerTimer: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TProjectAssistantForm.RefreshFromConfig;
@@ -3158,39 +3192,55 @@ End;
 
 Procedure TProjectAssistantForm.DeferredBind(Data: PtrInt);
 Begin
-  If csDestroying In ComponentState Then
-    Exit;
-  If Not FOpenBindPending Then
-    Begin
-      If Not FDeferLastTurn Then
+  Try
+    If csDestroying In ComponentState Then
+      Exit;
+    If Not FOpenBindPending Then
+      Begin
+        If Not FDeferLastTurn Then
+          SetOpenBusy(False);
+        Exit;
+      End;
+    If Data = 0 Then
+      Begin
+        If HandleAllocated Then
+          Begin
+            Invalidate;
+            Update;
+          End;
+        SetOpenBusy(True);
+        Application.QueueAsyncCall(@DeferredBind, 1);
+        Exit;
+      End;
+    BindToActiveProject;
+  Except
+    On E: Exception Do
+      Begin
+        FOpenBindPending := False;
         SetOpenBusy(False);
-      Exit;
-    End;
-  If Data = 0 Then
-    Begin
-      If HandleAllocated Then
-        Begin
-          Invalidate;
-          Update;
-        End;
-      SetOpenBusy(True);
-      Application.QueueAsyncCall(@DeferredBind, 1);
-      Exit;
-    End;
-  BindToActiveProject;
+        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.DeferredBind: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TProjectAssistantForm.DeferredShowLastTurn(Data: PtrInt);
 Begin
-  If csDestroying In ComponentState Then
-    Begin
-      SetOpenBusy(False);
-      Exit;
-    End;
   Try
-    ShowLastConversationTurn;
-  Finally
-    SetOpenBusy(False);
+    If csDestroying In ComponentState Then
+      Begin
+        SetOpenBusy(False);
+        Exit;
+      End;
+    Try
+      ShowLastConversationTurn;
+    Finally
+      SetOpenBusy(False);
+    End;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.DeferredShowLastTurn: ' + E.Message);
+      End;
   End;
 End;
 
@@ -3356,6 +3406,7 @@ Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
 Var
   Block: TTraceBlock;
 Begin
+  If csDestroying In ComponentState Then Exit;
   If (Event.Kind = aekToolCompleted) And Event.Ok Then
     If SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown') Then
       If ActiveMode = amPlan Then
@@ -3816,6 +3867,7 @@ Procedure TProjectAssistantForm.StreamToken(Const ContentSnapshot, ThinkingSnaps
 Var
   FinishErr: String;
 Begin
+  If csDestroying In ComponentState Then Exit;
   { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
     Begin
@@ -5118,7 +5170,7 @@ Begin
   ReviewBuildAction.Enabled := False;
   ReviewChangesAction.Enabled := False;
   StatusFooter.SetRightText(KindLabel + '…');
-  Application.ProcessMessages;
+  StatusFooter.Update;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
 
   Try

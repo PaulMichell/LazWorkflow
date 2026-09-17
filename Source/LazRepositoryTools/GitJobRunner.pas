@@ -553,8 +553,13 @@ Begin
   Finally
     LeaveLock;
   End;
-  If Assigned(Handler) Then
-    Handler(Self, IsBusy, Caption);
+  If Assigned(Handler) And Not FStopping Then
+    Try
+      Handler(Self, IsBusy, Caption);
+    Except
+      On E: Exception Do
+        WorkflowLogger.Error('GitJobRunner', 'OnBusyChanged: ' + E.Message);
+    End;
 End;
 
 Procedure TGitJobRunner.QueueFinished(Job: TGitJob);

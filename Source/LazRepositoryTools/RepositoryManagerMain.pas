@@ -78,39 +78,54 @@ Var
   StartPath, RepoPath: String;
 Begin
   Result := mrOk;
-  StartPath := GitProjectStartPath(AProject);
-  If StartPath = '' Then
-    Begin
-      UpdateRepositoryMenuState;
-      Exit;
-    End;
-  If Assigned(GitClient) Then
-    Begin
-      RepoPath := GitClient.DetectRepository(StartPath);
-      If RepoPath <> '' Then
-        Begin
-          GitClient.RepoPath := RepoPath;
-          WorkflowLogger.Info('GitManager', 'Project opened – repository: ' + RepoPath);
-        End
-      Else
-        Begin
-          GitClient.RepoPath := '';
-          WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
-        End;
-    End;
-  RefreshOpenManageRepositoryForms;
-  UpdateRepositoryMenuState;
+  Try
+    StartPath := GitProjectStartPath(AProject);
+    If StartPath = '' Then
+      Begin
+        UpdateRepositoryMenuState;
+        Exit;
+      End;
+    If Assigned(GitClient) Then
+      Begin
+        RepoPath := GitClient.DetectRepository(StartPath);
+        If RepoPath <> '' Then
+          Begin
+            GitClient.RepoPath := RepoPath;
+            WorkflowLogger.Info('GitManager', 'Project opened – repository: ' + RepoPath);
+          End
+        Else
+          Begin
+            GitClient.RepoPath := '';
+            WorkflowLogger.Warning('GitManager', 'Project opened – no Git repository above ' + StartPath);
+          End;
+      End;
+    RefreshOpenManageRepositoryForms;
+    UpdateRepositoryMenuState;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TGitManagerIDEHooks.ProjectOpened: ' + E.Message);
+      End;
+  End;
 End;
 
 Function TGitManagerIDEHooks.ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
-  { Do not rebind from ActiveProject here – it is half-torn-down during close and
-    was a source of access violations after browsing the Manage window. }
-  If Assigned(GitClient) Then
-    GitClient.RepoPath := '';
-  ClearOpenManageRepositoryForms;
-  UpdateRepositoryMenuState;
+  Try
+    { Do not rebind from ActiveProject here – it is half-torn-down during close and
+      was a source of access violations after browsing the Manage window. }
+    If Assigned(GitClient) Then
+      GitClient.RepoPath := '';
+    ClearOpenManageRepositoryForms;
+    { ActiveProject is being destroyed; do not query it from the close hook. }
+    If Assigned(CmdRepoManage) Then CmdRepoManage.Enabled := False;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TGitManagerIDEHooks.ProjectClose: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure ShowManageRepositoryAt(Const RepoPath: String);
@@ -118,31 +133,46 @@ Var
   I: Integer;
   Form: TCustomForm;
 Begin
-  If RepoPath = '' Then
-    Exit;
-  If Assigned(GitClient) Then
-    GitClient.RepoPath := RepoPath;
-  If Assigned(ManageRepositoryWindowCreator) Then
-    IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
-  For I := Screen.CustomFormCount - 1 DownTo 0 Do
-    Begin
-      Form := Screen.CustomForms[I];
-      If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
-        TManageRepositoryForm(Form).SetRepository(RepoPath);
-    End;
+  Try
+    If RepoPath = '' Then
+      Exit;
+    If Assigned(GitClient) Then
+      GitClient.RepoPath := RepoPath;
+    If Assigned(IDEWindowCreators) And Assigned(ManageRepositoryWindowCreator) Then
+      IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
+    For I := Screen.CustomFormCount - 1 DownTo 0 Do
+      Begin
+        Form := Screen.CustomForms[I];
+        If (Form Is TManageRepositoryForm) And Not (csDestroying in Form.ComponentState) Then
+          TManageRepositoryForm(Form).SetRepository(RepoPath);
+      End;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'ShowManageRepositoryAt: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure ShowManageRepository(Sender: TObject);
 Begin
-  If Not CurrentProjectHasRepository Then
-    Begin
-      MessageDlg('No Git repository found for the current project.' + LineEnding +
-        'Use Initialise Repository, Clone Repository or Open Repository.', mtInformation, [mbOK], 0);
-      UpdateRepositoryMenuState;
-      Exit;
-    End;
-  IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
-  RefreshOpenManageRepositoryForms;
+  Try
+    If Not CurrentProjectHasRepository Then
+      Begin
+        MessageDlg('No Git repository found for the current project.' + LineEnding +
+          'Use Initialise Repository, Clone Repository or Open Repository.', mtInformation, [mbOK], 0);
+        UpdateRepositoryMenuState;
+        Exit;
+      End;
+    If Not Assigned(IDEWindowCreators) Or Not Assigned(ManageRepositoryWindowCreator) Then Exit;
+    IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
+    RefreshOpenManageRepositoryForms;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'ShowManageRepository: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure DoOpenRepository(Sender: TObject);
@@ -326,34 +356,26 @@ Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
   Var AForm: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
   AForm := Nil;
+  If Not Assigned(LazarusIDE) Then Exit;
   Try
-    IDEWindowCreators.CreateForm(AForm, TManageRepositoryForm, DoDisableAutoSizing,
-      LazarusIDE.OwningComponent);
+    { Assign only after construction succeeds. The IDE helper publishes a raw
+      instance before Create, which can leave a dangling pointer on failure. }
+    AForm := TManageRepositoryForm.Create(LazarusIDE.OwningComponent);
+    AForm.Name := AFormName;
+    If DoDisableAutoSizing Then
+      AForm.DisableAutoSizing{$IFDEF DebugDisableAutoSizing}('TAnchorDockMaster Delayed'){$ENDIF};
+    If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+      TManageRepositoryForm(AForm).SetRepository(GitClient.RepoPath)
+    Else
+      TManageRepositoryForm(AForm).BindRepository;
+    TManageRepositoryForm(AForm).ApplyConfig;
   Except
     On E: Exception Do
       Begin
-        WorkflowLogger.Error('GitManager', 'CreateManageRepositoryForm CreateForm: ' + E.Message);
-        { Fallback shell so IDE desktop restore does not leave a nil form. }
+        WorkflowLogger.Error('GitManager', 'CreateManageRepositoryForm: ' + E.Message);
         FreeAndNil(AForm);
-        AForm := TForm.Create(LazarusIDE.OwningComponent);
-        AForm.Caption := 'Manage Repository';
       End;
   End;
-  If Not Assigned(AForm) Then
-    Exit;
-  AForm.Name := AFormName;
-  { Never let restore/bind failures kill the IDE process. }
-  If AForm Is TManageRepositoryForm Then
-    Try
-      If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
-        TManageRepositoryForm(AForm).SetRepository(GitClient.RepoPath)
-      Else
-        TManageRepositoryForm(AForm).BindRepository;
-      TManageRepositoryForm(AForm).ApplyConfig;
-    Except
-      On E: Exception Do
-        WorkflowLogger.Error('GitManager', 'CreateManageRepositoryForm bind: ' + E.Message);
-    End;
 End;
 
 Procedure RegisterGitManager;

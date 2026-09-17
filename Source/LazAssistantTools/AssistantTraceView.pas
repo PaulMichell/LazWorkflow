@@ -44,7 +44,15 @@ Begin
 End;
 Destructor TAssistantTraceView.Destroy;
 Var I: Integer;
-Begin FBoundTrace:=Nil; Saved.Free; TurnIDs.Free; For I:=0 To Positions.Count-1 Do Positions.Objects[I].Free; Positions.Free; Inherited Destroy; End;
+Begin
+  FBoundTrace := Nil;
+  Saved.Free;
+  TurnIDs.Free;
+  If Assigned(Positions) Then
+    For I := 0 To Positions.Count - 1 Do Positions.Objects[I].Free;
+  Positions.Free;
+  Inherited Destroy;
+End;
 Procedure TAssistantTraceView.ResetContent;
 Begin RememberPosition; ActiveKey:=''; FBoundTrace:=Nil; Saved.Clear; TurnIDs.Clear; FirstTurn:=''; SavedRoot:=''; FSurface.Clear; End;
 Procedure TAssistantTraceView.RememberPosition;

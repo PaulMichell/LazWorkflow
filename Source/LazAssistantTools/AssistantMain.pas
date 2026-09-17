@@ -50,7 +50,15 @@ Var
 
 Procedure ShowProjectAssistantWindow(Sender: TObject);
 Begin
-  IDEWindowCreators.ShowForm(ProjectAssistantWindowCreator.FormName, True);
+  Try
+    If Assigned(IDEWindowCreators) And Assigned(ProjectAssistantWindowCreator) Then
+      IDEWindowCreators.ShowForm(ProjectAssistantWindowCreator.FormName, True);
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'ShowProjectAssistantWindow: ' + E.Message);
+      End;
+  End;
 End;
 
 Function GetProjectAssistantForm(ShowWindow: Boolean = True): TProjectAssistantForm;
@@ -58,10 +66,11 @@ Var
   Form: TCustomForm;
 Begin
   Result := Nil;
+  If Not Assigned(IDEWindowCreators) Or Not Assigned(ProjectAssistantWindowCreator) Then Exit;
   If ShowWindow Then
     ShowProjectAssistantWindow(Nil);
   Form := IDEWindowCreators.GetForm(ProjectAssistantWindowCreator.FormName, True);
-  If Form Is TProjectAssistantForm Then
+  If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
     Result := TProjectAssistantForm(Form);
 End;
 
@@ -134,28 +143,55 @@ End;
 Procedure CreateProjectAssistantForm(Sender: TObject; FormName: String;
   Var Form: TCustomForm; DoDisableAutoSizing: Boolean);
 Begin
-  IDEWindowCreators.CreateForm(Form, TProjectAssistantForm, DoDisableAutoSizing, LazarusIDE.OwningComponent);
-  Form.Name := FormName;
+  Form := Nil;
+  If Not Assigned(LazarusIDE) Then Exit;
+  Try
+    { A failed constructor frees its instance: do not expose it before success. }
+    Form := TProjectAssistantForm.Create(LazarusIDE.OwningComponent);
+    Form.Name := FormName;
+    If DoDisableAutoSizing Then
+      Form.DisableAutoSizing{$IFDEF DebugDisableAutoSizing}('TAnchorDockMaster Delayed'){$ENDIF};
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('ProjectAssistant', 'CreateProjectAssistantForm: ' + E.Message);
+        FreeAndNil(Form);
+      End;
+  End;
 End;
 
 Function TAssistantIDEHooks.ProjectOpened(Sender: TObject; LazProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
-  If Assigned(LazProject) Then
-    WorkflowLogger.Info('ProjectAssistant', 'Project opened: ' + LazProject.ProjectInfoFile)
-  Else
-    WorkflowLogger.Info('ProjectAssistant', 'Project opened (nil)');
-  { New project create and load both fire this; rebind open Project Assistant windows. }
-  NotifyOpenProjectAssistantFormsProjectChanged;
+  Try
+    If Assigned(LazProject) Then
+      WorkflowLogger.Info('ProjectAssistant', 'Project opened: ' + LazProject.ProjectInfoFile)
+    Else
+      WorkflowLogger.Info('ProjectAssistant', 'Project opened (nil)');
+    { New project create and load both fire this; rebind open Project Assistant windows. }
+    NotifyOpenProjectAssistantFormsProjectChanged;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TAssistantIDEHooks.ProjectOpened: ' + E.Message);
+      End;
+  End;
 End;
 
 Function TAssistantIDEHooks.ProjectClose(Sender: TObject; LazProject: TLazProject): TModalResult;
 Begin
   Result := mrOk;
-  { Do not rebind from ActiveProject here – it is half-torn-down during close.
-    Clear open forms; ProjectOpened rebinds when the next project is ready. }
-  WorkflowLogger.Info('ProjectAssistant', 'Project closing');
-  NotifyOpenProjectAssistantFormsProjectCleared;
+  Try
+    { Do not rebind from ActiveProject here – it is half-torn-down during close.
+      Clear open forms; ProjectOpened rebinds when the next project is ready. }
+    WorkflowLogger.Info('ProjectAssistant', 'Project closing');
+    NotifyOpenProjectAssistantFormsProjectCleared;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'TAssistantIDEHooks.ProjectClose: ' + E.Message);
+      End;
+  End;
 End;
 
 Function SuggestCommitMessageHandler(Const DiffText, StatusSummary: String;
@@ -223,79 +259,86 @@ Var
   Cat: TIDECommandCategory;
   InsertAt: Integer;
 Begin
-  WorkflowLogger.Info('ProjectAssistant', 'Registering LazAssistantTools');
+  Try
+    WorkflowLogger.Info('ProjectAssistant', 'Registering LazAssistantTools');
 
-  If AssistantIDEHooks = Nil Then
-    AssistantIDEHooks := TAssistantIDEHooks.Create;
+    If AssistantIDEHooks = Nil Then
+      AssistantIDEHooks := TAssistantIDEHooks.Create;
 
-  If Assigned(LazarusIDE) Then
-    Try
-      InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('ProjectAssistant', 'Spell config load failed: ' + E.Message);
-    End;
+    If Assigned(LazarusIDE) Then
+      Try
+        InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
+      Except
+        On E: Exception Do
+          WorkflowLogger.Warning('ProjectAssistant', 'Spell config load failed: ' + E.Message);
+      End;
 
-  SuggestCommitMessageFunc := @SuggestCommitMessageHandler;
+    SuggestCommitMessageFunc := @SuggestCommitMessageHandler;
 
-  Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
-  If Cat = Nil Then
-    Cat := IDECommandList.CreateCategory(Nil, 'Assistant', 'Assistant');
+    Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);
+    If Cat = Nil Then
+      Cat := IDECommandList.CreateCategory(Nil, 'Assistant', 'Assistant');
 
-  Key := IDEShortCut(VK_UNKNOWN, []);
-  CmdAssistantChat := RegisterIDECommand(Cat, 'ProjectAssistant', 'Project Assistant', Key, Nil, @ShowProjectAssistantWindow);
-  CmdAssistantOpenMarkdown := RegisterIDECommand(Cat, 'AssistantOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoAssistantOpenMarkdown);
-  CmdAssistantReviewCompile := RegisterIDECommand(Cat, 'AssistantReviewCompile', 'Review Compile',
-    Key, Nil, @DoAssistantReviewCompile);
-  CmdAssistantReviewBuild := RegisterIDECommand(Cat, 'AssistantReviewBuild', 'Review Build',
-    Key, Nil, @DoAssistantReviewBuild);
-  CmdAssistantFixError := RegisterIDECommand(Cat, 'AssistantFixError', 'Fix Selected Message with Assistant',
-    Key, Nil, @DoAssistantFixError);
-  CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Assistant Settings', Key, Nil, @DoAssistantSettings);
+    Key := IDEShortCut(VK_UNKNOWN, []);
+    CmdAssistantChat := RegisterIDECommand(Cat, 'ProjectAssistant', 'Project Assistant', Key, Nil, @ShowProjectAssistantWindow);
+    CmdAssistantOpenMarkdown := RegisterIDECommand(Cat, 'AssistantOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoAssistantOpenMarkdown);
+    CmdAssistantReviewCompile := RegisterIDECommand(Cat, 'AssistantReviewCompile', 'Review Compile',
+      Key, Nil, @DoAssistantReviewCompile);
+    CmdAssistantReviewBuild := RegisterIDECommand(Cat, 'AssistantReviewBuild', 'Review Build',
+      Key, Nil, @DoAssistantReviewBuild);
+    CmdAssistantFixError := RegisterIDECommand(Cat, 'AssistantFixError', 'Fix Selected Message with Assistant',
+      Key, Nil, @DoAssistantFixError);
+    CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Assistant Settings', Key, Nil, @DoAssistantSettings);
 
-  { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
-    Separate sections so Lazarus draws a separator after Project Assistant and before Settings. }
-  AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', '&Assistant');
-  If Assigned(mnuMain) And Assigned(AssistantMenu) Then
-    Begin
-      mnuMain.Remove(AssistantMenu);
-      AfterItem := mnuMain.FindByName('Repository');
-      If Not Assigned(AfterItem) Then
-        AfterItem := mnuRun;
-      If Assigned(AfterItem) And (AfterItem.SectionIndex >= 0) Then
-        InsertAt := AfterItem.SectionIndex + 1
-      Else
-        InsertAt := mnuMain.Count;
-      If InsertAt > mnuMain.Count Then
-        InsertAt := mnuMain.Count;
-      mnuMain.Insert(InsertAt, AssistantMenu);
-    End;
-  MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
-  RegisterIDEMenuCommand(MainSec, 'ProjectAssistant', 'Project Assistant', Nil, Nil, CmdAssistantChat);
-  WorkSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantWorkCmds');
-  RegisterIDEMenuCommand(WorkSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
-  RegisterIDEMenuCommand(WorkSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
-  RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
-  RegisterIDEMenuCommand(WorkSec, 'AssistantFixError', 'Fix Error In Build Mode…', Nil, Nil, CmdAssistantFixError);
-  SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
-  RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
+    { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
+      Separate sections so Lazarus draws a separator after Project Assistant and before Settings. }
+    AssistantMenu := RegisterIDESubMenu(mnuMain, 'Assistant', '&Assistant');
+    If Assigned(mnuMain) And Assigned(AssistantMenu) Then
+      Begin
+        mnuMain.Remove(AssistantMenu);
+        AfterItem := mnuMain.FindByName('Repository');
+        If Not Assigned(AfterItem) Then
+          AfterItem := mnuRun;
+        If Assigned(AfterItem) And (AfterItem.SectionIndex >= 0) Then
+          InsertAt := AfterItem.SectionIndex + 1
+        Else
+          InsertAt := mnuMain.Count;
+        If InsertAt > mnuMain.Count Then
+          InsertAt := mnuMain.Count;
+        mnuMain.Insert(InsertAt, AssistantMenu);
+      End;
+    MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
+    RegisterIDEMenuCommand(MainSec, 'ProjectAssistant', 'Project Assistant', Nil, Nil, CmdAssistantChat);
+    WorkSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantWorkCmds');
+    RegisterIDEMenuCommand(WorkSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
+    RegisterIDEMenuCommand(WorkSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
+    RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
+    RegisterIDEMenuCommand(WorkSec, 'AssistantFixError', 'Fix Error In Build Mode…', Nil, Nil, CmdAssistantFixError);
+    SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
+    RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 
-  ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
-    '10%', '8%', '90%', '90%');
+    ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
+      '10%', '8%', '90%', '90%');
 
-  If Not Assigned(AssistantFixQuickFix) Then
-    Begin
-      AssistantFixQuickFix := TAssistantFixMessageQuickFix.Create;
-      RegisterIDEMsgQuickFix(AssistantFixQuickFix);
-    End;
+    If Not Assigned(AssistantFixQuickFix) Then
+      Begin
+        AssistantFixQuickFix := TAssistantFixMessageQuickFix.Create;
+        RegisterIDEMsgQuickFix(AssistantFixQuickFix);
+      End;
 
-  If Assigned(LazarusIDE) Then
-    Begin
-      LazarusIDE.AddHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
-      LazarusIDE.AddHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
-    End;
+    If Assigned(LazarusIDE) Then
+      Begin
+        LazarusIDE.AddHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
+        LazarusIDE.AddHandlerOnProjectClose(@AssistantIDEHooks.ProjectClose);
+      End;
 
-  WorkflowLogger.Info('ProjectAssistant', 'LazAssistantTools registered successfully');
+    WorkflowLogger.Info('ProjectAssistant', 'LazAssistantTools registered successfully');
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('PluginBoundary', 'RegisterAssistantTools: ' + E.Message);
+      End;
+  End;
 End;
 
 Initialization

@@ -50,7 +50,7 @@ Type
     FLastError: String;
     FLastCommand: TGitCommandResult;
     FOutputLimit: Int64;
-    FCancelled: Boolean;
+    FCancelled: LongInt;
     FPublishEvents: Boolean;
     FActiveProcess: TProcess;
     FProcessLock: TRTLCriticalSection;
@@ -175,7 +175,7 @@ Type
     Property RepoPath: String Read FRepoPath Write FRepoPath;
     Property LastError: String Read FLastError;
     Property LastCommand: TGitCommandResult Read FLastCommand;
-    Property Cancelled: Boolean Read FCancelled;
+    Property Cancelled: Boolean Read IsCancelled;
     { When False, skip WorkflowEventBus publishes (background job workers must not touch UI). }
     Property PublishEvents: Boolean Read FPublishEvents Write FPublishEvents;
     { 0 = no timeout. Checked in the drain loop so a long git can be killed. }
@@ -301,7 +301,7 @@ Begin
   Inherited Create;
   FRepoPath := '';
   FLastError := '';
-  FCancelled := False;
+  InterlockedExchange(FCancelled, 0);
   FPublishEvents := True;
   FActiveProcess := Nil;
   FTimeoutMs := 0;
@@ -365,21 +365,21 @@ End;
 
 Procedure TGitService.ResetCancel;
 Begin
-  FCancelled := False;
+  InterlockedExchange(FCancelled, 0);
 End;
 
 Function TGitService.IsCancelled: Boolean;
 Begin
-  Result := FCancelled;
+  Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
 End;
 
 Procedure TGitService.Cancel;
 Begin
-  FCancelled := True;
+  InterlockedExchange(FCancelled, 1);
   { Terminate under the lock so the drain loop cannot Free the process mid-call. }
   EnterCriticalSection(FProcessLock);
   Try
-    If Assigned(FActiveProcess) Then
+    If Assigned(FActiveProcess) And (FActiveProcess.ProcessID > 0) Then
       Try
         FActiveProcess.Terminate(1);
       Except
@@ -445,8 +445,11 @@ Begin
       Proc.Parameters.Add(Args[I]);
 
     Try
-      SetActiveProcess(Proc);
+      { Never expose an unlaunched process to Cancel: on Unix Terminate with
+        PID zero signals the whole IDE process group. Cancellation between
+        Execute and publication is handled by the first drain-loop check. }
       Proc.Execute;
+      SetActiveProcess(Proc);
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or
             (Proc.Stderr.NumBytesAvailable > 0) Do
         Begin

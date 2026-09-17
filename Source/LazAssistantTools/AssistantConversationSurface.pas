@@ -93,7 +93,11 @@ Begin
   AccessibleName := 'Assistant conversation';
 End;
 Destructor TAssistantConversationSurface.Destroy;
-Begin Timer.Enabled := False; FreeAndNil(FLayout); Inherited Destroy; End;
+Begin
+  If Assigned(Timer) Then Timer.Enabled := False;
+  FreeAndNil(FLayout);
+  Inherited Destroy;
+End;
 Procedure TAssistantConversationSurface.Clear;
 Begin
   Timer.Enabled := False; HasPendingAnchor:=False; FLayout.Clear; BackgroundIndex := 0;

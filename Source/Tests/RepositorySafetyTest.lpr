@@ -478,8 +478,11 @@ Type
     CommitMessage: String;
     AmendCommit: Boolean;
     HeadPushed, HeadPushedKnown: Boolean;
+    BusyCalls, FailedFinishCalls: Integer;
     Procedure Finished(Job: TGitJob);
     Procedure Detached(Job: TGitJob);
+    Procedure FailBusy(Sender: TObject; IsBusy: Boolean; Const Caption: String);
+    Procedure FailFinished(Job: TGitJob);
   End;
 
 Procedure TJobObserver.Finished(Job: TGitJob);
@@ -500,6 +503,18 @@ Begin
       Followup := Job.CreatePushFollowup;
       Check('push intent consumed only once', Job.CreatePushFollowup = Nil);
     End;
+End;
+
+Procedure TJobObserver.FailBusy(Sender: TObject; IsBusy: Boolean; Const Caption: String);
+Begin
+  Inc(BusyCalls);
+  Raise Exception.Create('Injected busy callback failure');
+End;
+
+Procedure TJobObserver.FailFinished(Job: TGitJob);
+Begin
+  Inc(FailedFinishCalls);
+  Raise Exception.Create('Injected completion callback failure');
 End;
 
 Procedure TJobObserver.Detached(Job: TGitJob);
@@ -831,11 +846,38 @@ Begin
   End;
 End;
 
+Procedure TestCallbackFailures;
+Var Runner: TGitJobRunner; Observer: TJobObserver; Job: TGitJob; Dir: String;
+Begin
+  Dir := NewRepo('callback-failures');
+  Runner := TGitJobRunner.Create;
+  Observer := TJobObserver.Create;
+  Try
+    Runner.OnBusyChanged := @Observer.FailBusy;
+    Job := TGitJob.Create(gjkRepoProbe); Job.RepoPath := Dir;
+    Job.OnFinished := @Observer.FailFinished;
+    Check('submit with raising busy handler', Runner.Submit(Job));
+    Job := TGitJob.Create(gjkRepoProbe); Job.RepoPath := Dir;
+    Job.OnFinished := @Observer.Finished;
+    Check('submit successor after raising handler', Runner.Submit(Job));
+    AwaitDone(Observer);
+    Check('busy callback actually failed', Observer.BusyCalls > 0);
+    Check('completion callback actually failed', Observer.FailedFinishCalls = 1);
+    Check('successor delivered after callback failures', Observer.Done And Observer.Ok);
+  Finally
+    Runner.OnBusyChanged := Nil;
+    Runner.DetachFinishedHandler(@Observer.Finished);
+    Runner.DetachFinishedHandler(@Observer.FailFinished);
+    Runner.Free; Observer.Free;
+  End;
+End;
+
 Begin
   TempRoot := GetTempFileName(GetTempDir, 'repository-safety-');
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestCallbackFailures;
       TestAmendAndRemove;
       TestRemoteRollback;
       TestPreviewLimits;

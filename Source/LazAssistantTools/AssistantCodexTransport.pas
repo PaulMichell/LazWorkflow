@@ -120,7 +120,7 @@ Begin
   If Assigned(FProcess) Then
     Begin
       {$IFDEF LINUX}
-      If FProcess.Running Then
+      If (FProcess.ProcessID > 0) And FProcess.Running Then
         Begin
           If fpKill(-FProcess.ProcessID, SIGTERM) <> 0 Then
             fpKill(FProcess.ProcessID, SIGTERM);

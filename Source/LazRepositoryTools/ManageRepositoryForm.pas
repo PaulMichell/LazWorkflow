@@ -312,6 +312,10 @@ End;
 
 Destructor TManageRepositoryForm.Destroy;
 Begin
+  Destroying;
+  Application.RemoveAsyncCalls(Self);
+  If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
+  If Assigned(FilesDiffView) Then FilesDiffView.OnStatusChanged := Nil;
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
   If Assigned(FAutoRefreshTimer) Then
@@ -330,11 +334,6 @@ Begin
   FRemoteOpBusy := False;
   FIndexing := False;
   FDetailLoading := False;
-  If Assigned(DiffView) Then
-    DiffView.Clear;
-  If Assigned(FilesDiffView) Then
-    FilesDiffView.Clear;
-  WorkflowEventBus.RemoveListener(Self);
   FreeAndNil(FFiles);
   FreeAndNil(FHistory);
   FreeAndNil(FModel);
@@ -1035,6 +1034,8 @@ End;
 
 Procedure TManageRepositoryForm.ScheduleVisibleDetails;
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
     Exit;
   FDetailTimer.Enabled := False;
@@ -1043,8 +1044,17 @@ End;
 
 Procedure TManageRepositoryForm.DetailTimerTimer(Sender: TObject);
 Begin
-  FDetailTimer.Enabled := False;
-  StartDetailLoadIfNeeded;
+  If csDestroying In ComponentState Then Exit;
+  Try
+    FDetailTimer.Enabled := False;
+    StartDetailLoadIfNeeded;
+  Except
+    On E: Exception Do
+      Begin
+        FDetailTimer.Enabled := False;
+        WorkflowLogger.Error('PluginBoundary', 'TManageRepositoryForm.DetailTimerTimer: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TManageRepositoryForm.StartDetailLoadIfNeeded;
@@ -1080,6 +1090,8 @@ End;
 
 Procedure TManageRepositoryForm.GraphHostResize(Sender: TObject);
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   FHistory.UpdateScrollRange;
   ScheduleVisibleDetails;
   GraphPaintBox.Invalidate;
@@ -1087,6 +1099,8 @@ End;
 
 Procedure TManageRepositoryForm.ScrollBarChange(Sender: TObject);
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   ScheduleVisibleDetails;
   GraphPaintBox.Invalidate;
 End;
@@ -1096,6 +1110,8 @@ Procedure TManageRepositoryForm.PaintBoxMouseWheel(Sender: TObject; Shift: TShif
 Var
   NewPos, MaxPos, ViewH: Integer;
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   ViewH := GraphPaintBox.ClientHeight;
   MaxPos := FHistory.ContentHeight - ViewH;
   If MaxPos < 0 Then
@@ -1112,8 +1128,8 @@ End;
 
 Procedure TManageRepositoryForm.PaintBoxPaint(Sender: TObject);
 Begin
-  If Not Assigned(FHistory) Then
-    Exit;
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   FHistory.Indexing := FIndexing;
   FHistory.RepoPath := FRepoPath;
   FHistory.SelectedIndex := FSelectedIndex;
@@ -1125,6 +1141,8 @@ Procedure TManageRepositoryForm.PaintBoxMouseDown(Sender: TObject; Button: TMous
 Var
   Row: Integer;
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
+    Not Assigned(FModel) Then Exit;
   Row := FHistory.RowAtY(Y);
   If Row < 0 Then
     Exit;
@@ -1360,6 +1378,7 @@ End;
 
 Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
   If FInListSelChange Then
     Exit;
   FInListSelChange := True;
@@ -1380,6 +1399,7 @@ End;
 
 Procedure TManageRepositoryForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
   If FInListSelChange Then
     Exit;
   FInListSelChange := True;
@@ -1619,6 +1639,7 @@ End;
 
 Procedure TManageRepositoryForm.FilesDiffStatusChanged(Sender: TObject);
 Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
   RefreshFiles;
 End;
 
@@ -1806,13 +1827,21 @@ End;
 
 Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
-  If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
-     Not Visible Then
-    Exit;
-  If GitDirStampChanged Then
-    QuietRefreshIfChanged
-  Else If (FLastProbeAt = 0) Or (SecondsBetween(Now, FLastProbeAt) >= FProbeIntervalSec) Then
-    QuietRefreshIfChanged;
+  Try
+    If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
+       Not Visible Then
+      Exit;
+    If GitDirStampChanged Then
+      QuietRefreshIfChanged
+    Else If (FLastProbeAt = 0) Or (SecondsBetween(Now, FLastProbeAt) >= FProbeIntervalSec) Then
+      QuietRefreshIfChanged;
+  Except
+    On E: Exception Do
+      Begin
+        FAutoRefreshTimer.Enabled := False;
+        WorkflowLogger.Error('PluginBoundary', 'TManageRepositoryForm.AutoRefreshTimerTimer: ' + E.Message);
+      End;
+  End;
 End;
 
 Procedure TManageRepositoryForm.QuietRefreshIfChanged;

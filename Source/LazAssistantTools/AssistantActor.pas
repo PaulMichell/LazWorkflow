@@ -63,6 +63,7 @@ Type
     Function HttpsShouldStop: Boolean;
     Procedure AbortHttp;
     Function LockedService: TAssistantService;
+    Procedure ExecuteTurn;
     Procedure RunTools;
     Procedure RunOneTool(Const Call: TSamplerToolCall);
     Procedure FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
@@ -85,6 +86,7 @@ Type
     Procedure Cancel;
     Procedure EnqueueSteer(Const Text: String);
     Procedure Detach;
+    Procedure DetachCallbacks;
     Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
   End;
 
@@ -207,6 +209,17 @@ Begin
     Exit;
   FSteer.Enqueue(Text);
   LogEvent(aekSteerQueued, Trim(Text));
+End;
+
+Procedure TAssistantActor.DetachCallbacks;
+Begin
+  EnterCriticalSection(FSnapLock);
+  Try
+    FOnToken := Nil;
+    FOnTrace := Nil;
+  Finally
+    LeaveCriticalSection(FSnapLock);
+  End;
 End;
 
 Procedure TAssistantActor.Detach;
@@ -1073,6 +1086,19 @@ Begin
 End;
 
 Procedure TAssistantActor.Execute;
+Begin
+  Try
+    ExecuteTurn;
+  Except
+    On E: Exception Do
+      Begin
+        WorkflowLogger.Error('AssistantActor', 'Turn failed: ' + E.Message);
+        EmitSnapshot(True, E.Message, True);
+      End;
+  End;
+End;
+
+Procedure TAssistantActor.ExecuteTurn;
 Var
   Url, RequestJson, ErrorText, CapNote: String;
   RoundNo, I, MaxRounds: Integer;

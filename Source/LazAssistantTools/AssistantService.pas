@@ -130,6 +130,7 @@ Type
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
     Function StartStream(OnToken: TAssistantStreamEvent): Boolean;
     Procedure CancelStream;
+    Procedure DetachStreamCallbacks;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
     { One-shot non-streaming completion; does not touch chat history or tools.
@@ -854,6 +855,7 @@ End;
 
 Destructor TAssistantService.Destroy;
 Begin
+  DetachStreamCallbacks;
   CancelSubagents;
   If RunningOnMainThread Then
     Begin
@@ -872,6 +874,7 @@ Begin
       FreeAndNil(FOrphanThreads);
     End;
   SetLength(FMessages, 0);
+  TThread.RemoveQueuedEvents(Nil, @FlushDeferredSubagents);
   FlushDeferredSubagents;
   FreeAndNil(FDeferredSubagents);
   FreeAndNil(FSubagents);
@@ -1629,14 +1632,22 @@ Procedure TAssistantService.FlushDeferredSubagents;
 Var
   Obj: TObject;
 Begin
-  If Not Assigned(FDeferredSubagents) Then
-    Exit;
-  While FDeferredSubagents.Count > 0 Do
-    Begin
-      Obj := TObject(FDeferredSubagents[0]);
-      FDeferredSubagents.Delete(0);
-      Obj.Free;
+  Repeat
+    Obj := Nil;
+    EnterCriticalSection(FSubagentsLock);
+    Try
+      If Assigned(FDeferredSubagents) And (FDeferredSubagents.Count > 0) Then
+        Begin
+          Obj := TObject(FDeferredSubagents[0]);
+          FDeferredSubagents.Delete(0);
+        End;
+    Finally
+      LeaveCriticalSection(FSubagentsLock);
     End;
+    If Not Assigned(Obj) Then Exit;
+    { Destruction can pump callbacks; never hold the list lock here. }
+    Obj.Free;
+  Until False;
 End;
 
 Procedure TAssistantService.AbandonTimedOutSubagents;
@@ -1720,7 +1731,12 @@ Begin
       Child.Free
     Else If Assigned(FDeferredSubagents) Then
       Begin
-        FDeferredSubagents.Add(Child);
+        EnterCriticalSection(FSubagentsLock);
+        Try
+          FDeferredSubagents.Add(Child);
+        Finally
+          LeaveCriticalSection(FSubagentsLock);
+        End;
         TThread.Queue(Nil, @FlushDeferredSubagents);
       End
     Else
@@ -1861,6 +1877,14 @@ Begin
   FStreamThread.Start;
   Result := True;
   WorkflowLogger.Info('AssistantService', 'Actor started – model=' + FModel + ' wire=responses');
+End;
+
+Procedure TAssistantService.DetachStreamCallbacks;
+Begin
+  { Closing a view must disconnect it before CancelStream pumps queued calls. }
+  FOnTrace := Nil;
+  If FStreamThread Is TAssistantActor Then
+    TAssistantActor(FStreamThread).DetachCallbacks;
 End;
 
 Procedure TAssistantService.CancelStream;

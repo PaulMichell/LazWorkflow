@@ -31,15 +31,15 @@ def main():
         parser.error('No compiled Lazarus units found; build Lazarus/GTK2 first.')
     flags = ['fpc', '-v0', '-gl', '-Cr', '-Co', f'-FU{output}', f'-FE{output}']
     flags += [f'-Fu{repo / "Source" / name}' for name in
-              ('LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText')]
+              ('LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'LazRepositoryTools')]
     flags += [f'-Fu{path}' for path in unit_dirs]
     flags += [f'-Fl{path.resolve()}' for path in args.library_dir]
-    tests = ['AssistantAcceptanceTest', 'AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
+    tests = ['WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'RepositorySafetyTest', 'AssistantAcceptanceTest', 'AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
              'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantFileCreationTest', 'AssistantCodexHandshakeTest',
              'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest', 'AssistantGitTest']
     if args.gui:
-        tests += ['SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
+        tests += ['PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
                   'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest', 'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest']
     failures = []
 
@@ -69,6 +69,7 @@ def main():
             if not args.compile_only:
                 run(name, [str(output / name)])
     run('assistant-package-build', flags + [str(repo / 'Packages' / 'LazAssistantTools.pas')])
+    run('repository-package-build', flags + [str(repo / 'Packages' / 'LazRepositoryTools.pas')])
     if args.package_check:
         lazbuild = args.lazarus_root / 'lazbuild'
         package_flags = [str(lazbuild), f'--pcp={output / "package-config"}',
