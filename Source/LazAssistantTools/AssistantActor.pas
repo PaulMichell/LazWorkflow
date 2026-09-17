@@ -13,7 +13,7 @@ Interface
 
 Uses
   Classes, SysUtils, AssistantProtocol, AssistantSampler, AssistantEvents, AssistantService,
-  AssistantConversation;
+  AssistantConversation, AssistantHttps;
 
 Type
   TAssistantActor = Class(TThread)
@@ -60,8 +60,6 @@ Type
     Procedure NotifyMain;
     Procedure SetPhase(Phase: TAssistantPhase);
     Procedure ApplyParserEvents(FromIndex: Integer);
-    Function DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
-    Procedure HttpsChunk(Const Chunk: String);
     Function HttpsShouldStop: Boolean;
     Procedure AbortHttp;
     Function LockedService: TAssistantService;
@@ -74,6 +72,11 @@ Type
     Function BuildRoundJson(Out Url: String): String;
     Function ShouldFallbackFromResponses(Const ErrorText: String): Boolean;
   Protected
+    Procedure HttpsChunk(Const Chunk: String);
+    Function DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
+    Function PostRound(Const Url, RequestJson, Headers: String;
+      Control: THttpsStreamControl; Out Code: Integer; Out ErrorText: String): Boolean; Virtual;
+    Function WaitForReconnect: Boolean; Virtual;
     Procedure Execute; Override;
   Public
     Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model,
@@ -88,7 +91,7 @@ Type
 Implementation
 
 Uses
-  AssistantHttps, AssistantTools, AssistantSubagents, WorkflowLog;
+  AssistantTools, AssistantSubagents, WorkflowLog;
 
 Const
   MaxAskToolRounds = 12;
@@ -128,7 +131,12 @@ Begin
     (Pos('connection reset', E) > 0) Or
     (Pos('timed out', E) > 0) Or
     (Pos('timeout', E) > 0) Or
-    (Pos('socket error', E) > 0);
+    (Pos('socket error', E) > 0) Or
+    (Pos('error reading data from socket', E) > 0) Or
+    (Pos('error writing data to socket', E) > 0) Or
+    (Pos('broken pipe', E) > 0) Or
+    (Pos('connection closed', E) > 0) Or
+    (Pos('response stream ended before completion', E) > 0);
 End;
 
 Function TrimSlash(Const Url: String): String;
@@ -405,13 +413,13 @@ Begin
           Begin
             SetPhase(apThinking);
             FThinking := FThinkingBeforeRound + FParser.Thinking;
-            EmitSnapshot(False, '', False);
+            EmitSnapshot(False, 'Thinking…', False);
           End;
         sekContentDelta:
           Begin
             SetPhase(apStreaming);
             FContent := FParser.Content;
-            EmitSnapshot(False, '', False);
+            EmitSnapshot(False, 'Streaming…', False);
           End;
       Else
         { Started / tool deltas / completed handled from parser accumulators. }
@@ -437,11 +445,26 @@ Begin
   Result := Terminated;
 End;
 
-Function TAssistantActor.DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
-Const
-  MaxAttempts = 3;
+Function TAssistantActor.PostRound(Const Url, RequestJson, Headers: String;
+  Control: THttpsStreamControl; Out Code: Integer; Out ErrorText: String): Boolean;
+Begin
+  Result := HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
+    Control, Code, ErrorText);
+End;
+
+Function TAssistantActor.WaitForReconnect: Boolean;
 Var
-  Code, Attempt: Integer;
+  StartTick: QWord;
+Begin
+  StartTick := GetTickCount64;
+  While (Not Terminated) And (GetTickCount64 - StartTick < 30000) Do
+    Sleep(50);
+  Result := Not Terminated;
+End;
+
+Function TAssistantActor.DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
+Var
+  Code: Integer;
   Headers, LastErr: String;
   Control: THttpsStreamControl;
 Begin
@@ -449,14 +472,19 @@ Begin
   ErrorText := '';
   LastErr := '';
   Headers := 'Authorization: Bearer ' + FAccessToken;
-  For Attempt := 1 To MaxAttempts Do
+  While Not Terminated Do
     Begin
       If Terminated Then
         Begin
           ErrorText := CancelWaitHint;
           Exit;
         End;
+      ErrorText := '';
       FParser.Reset;
+      { Discard only the interrupted attempt, retaining completed tool rounds. }
+      FContent := '';
+      FThinking := FThinkingBeforeRound;
+      SetLength(FToolCalls, 0);
       FResponseOutputJson := '';
       FResponsePrefix := '';
       Control := THttpsStreamControl.Create;
@@ -468,8 +496,7 @@ Begin
       End;
       Try
         Try
-          If Not HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
-            Control, Code, ErrorText) Then
+          If Not PostRound(Url, RequestJson, Headers, Control, Code, ErrorText) Then
             Begin
               If Terminated And (ErrorText = '') Then
                 ErrorText := CancelWaitHint;
@@ -525,19 +552,16 @@ Begin
         End;
         Control.Free;
       End;
-      LastErr := ErrorText;
       If Terminated Or (ErrorText = CancelWaitHint) Then
         Exit;
       If (Not IsTransientNetworkError(ErrorText)) Then
         Exit;
-      If Attempt < MaxAttempts Then
-        Begin
-          WorkflowLogger.Warning('AssistantActor',
-            Format('Transient network error (attempt %d/%d): %s', [Attempt, MaxAttempts, ErrorText]));
-          Sleep(200 * Attempt);
-        End;
+      WorkflowLogger.Warning('AssistantActor', 'Reconnecting in 30 seconds: ' + ErrorText);
+      EmitSnapshot(False, 'Re-establishing Connection', True);
+      If Not WaitForReconnect Then
+        Break;
     End;
-  ErrorText := LastErr;
+  ErrorText := CancelWaitHint;
 End;
 
 Function TAssistantActor.ShouldFallbackFromResponses(Const ErrorText: String): Boolean;

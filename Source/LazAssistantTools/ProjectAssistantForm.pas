@@ -245,6 +245,7 @@ Type
     FReviewInProgress: Boolean;
     StreamStart: TDateTime;
     FTurnStartedAt: String;
+    FReconnectStartTick: QWord;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
     FLastChatPaintTick: QWord;
     FTrace: TAssistantTrace;
@@ -2656,7 +2657,19 @@ End;
 Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
+  ReconnectSecs: QWord;
 Begin
+  If Phase = 'Re-establishing Connection' Then
+    Begin
+      ReconnectSecs := (GetTickCount64 - FReconnectStartTick) Div 1000;
+      If ReconnectSecs >= 3600 Then
+        Result := Format('%s %d:%2.2d:%2.2d', [Phase, ReconnectSecs Div 3600,
+          (ReconnectSecs Div 60) Mod 60, ReconnectSecs Mod 60])
+      Else
+        Result := Format('%s %2.2d:%2.2d', [Phase, ReconnectSecs Div 60,
+          ReconnectSecs Mod 60]);
+      Exit;
+    End;
   If StreamStart <= 0 Then
     Begin
       Result := Phase;
@@ -2672,6 +2685,8 @@ End;
 
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
 Begin
+  If (Phase = 'Re-establishing Connection') And (FStatusPhase <> Phase) Then
+    FReconnectStartTick := GetTickCount64;
   FStatusPhase := Phase;
   StatusFooter.SetRightText(FormatElapsedStatus(Phase));
 End;
@@ -3645,12 +3660,16 @@ Begin
     { Always keep live buffers for the background stream. }
     FLiveContent := ContentSnapshot;
     FLiveThinking := ThinkingSnapshot;
-    If FLiveContent <> '' Then
-      SetStreamPhase('Streaming…')
-    Else If FLiveThinking <> '' Then
-      SetStreamPhase('Thinking…')
-    Else If FStatusPhase = '' Then
-      SetStreamPhase('Waiting for first token…');
+    { Keep the reconnect clock until the actor reports new stream progress. }
+    If FStatusPhase <> 'Re-establishing Connection' Then
+      Begin
+        If FLiveContent <> '' Then
+          SetStreamPhase('Streaming…')
+        Else If FLiveThinking <> '' Then
+          SetStreamPhase('Thinking…')
+        Else If FStatusPhase = '' Then
+          SetStreamPhase('Waiting for first token…');
+      End;
     { Only repaint the chat pane when the user is watching the live turn. }
     If FViewingLive Then
       Begin

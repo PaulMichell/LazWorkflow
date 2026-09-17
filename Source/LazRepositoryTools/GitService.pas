@@ -71,7 +71,6 @@ Type
       Out ExitCode: Integer): Boolean;
     Function ExpandUnstagePaths(Paths: TStrings; Expanded: TStringList): Boolean;
     Function RunGitPaths(Const SubCommand: String; Const Paths: TStrings): Boolean;
-    Function CountRangeCommits(Const RangeSpec: String): Integer;
     Function CountAheadOfUpstream: Integer;
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
       Var Summary: TGitTransferSummary);
@@ -1570,21 +1569,6 @@ Begin
   End;
 End;
 
-Function TGitService.CountRangeCommits(Const RangeSpec: String): Integer;
-Var
-  Text: String;
-  ExitCode: Integer;
-Begin
-  Result := 0;
-  If Trim(RangeSpec) = '' Then
-    Exit;
-  If Not RunGit(['rev-list', '--count', RangeSpec], Text, ExitCode) Then
-    Exit;
-  Result := StrToIntDef(Trim(Text), 0);
-  If Result < 0 Then
-    Result := 0;
-End;
-
 Function TGitService.CountAheadOfUpstream: Integer;
 Var
   Text: String;
@@ -1601,8 +1585,8 @@ End;
 Procedure TGitService.BuildTransferSummary(Const Operation, Remote, OutputText: String;
   Var Summary: TGitTransferSummary);
 Var
-  Lines: TStringList;
-  I, B: Integer;
+  Lines, SeenRanges, SeenCommits, RangeCommits: TStringList;
+  I: Integer;
   Raw, Line, OldSha, NewSha: String;
   Total, NewRefs: Integer;
   UpToDate: Boolean;
@@ -1637,12 +1621,32 @@ Var
   End;
 
   Procedure AddRangeFrom(Const S: String; CountEvenIfMissing: Boolean);
+  Var
+    RangeSpec, CommitText, CommitSha: String;
+    J, Code: Integer;
   Begin
     If ExtractShaRange(S, OldSha, NewSha) Then
       Begin
-        B := CountRangeCommits(OldSha + '..' + NewSha);
-        If B > 0 Then
-          Inc(Total, B)
+        RangeSpec := LowerCase(OldSha + '..' + NewSha);
+        { Pull prints the fetched range and then the same range in "Updating".
+          Count each commit once, including overlapping ranges from other refs
+          or ranges printed with different object-id abbreviation lengths. }
+        If SeenRanges.IndexOf(RangeSpec) >= 0 Then
+          Exit;
+        SeenRanges.Add(RangeSpec);
+        If RunGit(['rev-list', RangeSpec], CommitText, Code) Then
+          Begin
+            RangeCommits.Text := CommitText;
+            For J := 0 To RangeCommits.Count - 1 Do
+              Begin
+                CommitSha := Trim(RangeCommits[J]);
+                If (CommitSha <> '') And (SeenCommits.IndexOf(CommitSha) < 0) Then
+                  Begin
+                    SeenCommits.Add(CommitSha);
+                    Inc(Total);
+                  End;
+              End;
+          End
         Else
           Inc(Total);
       End
@@ -1661,7 +1665,12 @@ Begin
   UpToDate := False;
 
   Lines := TStringList.Create;
+  SeenRanges := TStringList.Create;
+  SeenCommits := TStringList.Create;
+  RangeCommits := TStringList.Create;
   Try
+    SeenRanges.Sorted := True;
+    SeenCommits.Sorted := True;
     Lines.Text := OutputText;
     For I := 0 To Lines.Count - 1 Do
       Begin
@@ -1708,6 +1717,9 @@ Begin
         AddRangeFrom(Line, False);
       End;
   Finally
+    RangeCommits.Free;
+    SeenCommits.Free;
+    SeenRanges.Free;
     Lines.Free;
   End;
 

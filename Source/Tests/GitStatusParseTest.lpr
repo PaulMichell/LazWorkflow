@@ -190,12 +190,60 @@ Begin
   End;
 End;
 
+Procedure TestPullSummary;
+Var
+  Root, RemoteDir, CloneDir: String;
+  Git: TGitService;
+  Summary: TGitTransferSummary;
+Begin
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'lazworkflow-git-pull-' +
+    IntToStr(GetProcessID);
+  RemoteDir := Root + DirectorySeparator + 'remote';
+  CloneDir := Root + DirectorySeparator + 'clone';
+  ForceDirectories(RemoteDir);
+  Git := TGitService.Create;
+  Try
+    Git.PublishEvents := False;
+    Check('pull fixture init', RunProcess(RemoteDir, 'git', ['init', '-b', 'main']));
+    RunProcess(RemoteDir, 'git', ['config', 'user.email', 'test@example.com']);
+    RunProcess(RemoteDir, 'git', ['config', 'user.name', 'Test']);
+    Check('pull fixture initial commit', RunProcess(RemoteDir, 'git',
+      ['commit', '--allow-empty', '-m', 'initial']));
+    Check('pull fixture second branch', RunProcess(RemoteDir, 'git', ['branch', 'mirror']));
+    Check('pull fixture clone', RunProcess(Root, 'git', ['clone', RemoteDir, CloneDir]));
+    RunProcess(CloneDir, 'git', ['config', 'pull.ff', 'only']);
+    Git.RepoPath := CloneDir;
+    Check('pull fixture new commit one', RunProcess(RemoteDir, 'git',
+      ['commit', '--allow-empty', '-m', 'one']));
+    Check('pull fixture new commit two', RunProcess(RemoteDir, 'git',
+      ['commit', '--allow-empty', '-m', 'two']));
+    Check('pull succeeds', Git.Pull(Summary));
+    Check('pull counts two commits once', Summary.CommitCount = 2);
+    Check('pull confirmation contains correct count',
+      Pos('2 commit(s) transferred.', Summary.Message) > 0);
+    Check('repeat pull succeeds', Git.Pull(Summary));
+    Check('repeat pull is up to date', Summary.UpToDate And (Summary.CommitCount = 0));
+    Check('overlapping range new commit', RunProcess(RemoteDir, 'git',
+      ['commit', '--allow-empty', '-m', 'three']));
+    Check('advance second branch', RunProcess(RemoteDir, 'git', ['branch', '-f', 'mirror', 'HEAD']));
+    Check('fetch overlapping ranges succeeds', Git.Fetch(Summary));
+    { main adds one commit; mirror adds the same commit plus the prior two. }
+    Check('fetch counts distinct commits across refs', Summary.CommitCount = 3);
+    Check('pull after fetch succeeds', Git.Pull(Summary));
+    Check('pull after fetch counts local update only', Summary.CommitCount = 1);
+  Finally
+    Git.Free;
+    RemoveTree(Root);
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestRenameOrder;
   TestCopyAndModified;
   TestEqualsInName;
   TestLiveGit;
+  TestPullSummary;
   If FailCount = 0 Then
     Begin
       WriteLn('All checks passed.');
