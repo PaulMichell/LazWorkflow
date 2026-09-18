@@ -32,7 +32,11 @@ Var
 Begin
   Left := Bounds.Left;
   Right := Bounds.Right;
-  If (Y < Bounds.Top) Or (Y >= Bounds.Bottom) Then Begin Right := Left; Exit; End;
+  If (Y < Bounds.Top) Or (Y >= Bounds.Bottom) Then
+    Begin
+      Right := Left;
+      Exit;
+    End;
   Distance := Max(0.0, Max(Bounds.Top + Radius - (Y + 0.5), (Y + 0.5) - (Bounds.Bottom - Radius)));
   If (Radius > 0) And (Distance > 0) Then
     Begin

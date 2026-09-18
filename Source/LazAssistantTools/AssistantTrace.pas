@@ -152,9 +152,17 @@ End;
 
 Constructor TTraceBlock.Create;
 Var Guid: TGuid;
-Begin Inherited Create; CreateGUID(Guid); ID := GUIDToString(Guid); End;
+Begin
+  Inherited Create;
+  CreateGUID(Guid);
+  ID := GUIDToString(Guid);
+End;
 Procedure TTraceBlock.SetBody(Const Value: String);
-Begin If FBody = Value Then Exit; FBody := Value; Inc(FRevision); End;
+Begin
+  If FBody = Value Then Exit;
+  FBody := Value;
+  Inc(FRevision);
+End;
 
 Constructor TAssistantTrace.Create;
 Begin

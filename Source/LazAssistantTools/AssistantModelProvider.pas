@@ -2,9 +2,17 @@ Unit AssistantModelProvider;
 
 { Native model-provider boundary. Managed agent runtimes own a separate loop.
   (c) 2026 Michell Computing. }
-{$mode objfpc}{$H+}
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
 Interface
-Uses Classes;
+
+Uses
+  Classes;
+
 Type
   TAssistantAuthentication = (aaaUnknown, aaaSubscription, aaaMeteredApiKey);
   IAssistantModelProvider = Interface
@@ -19,11 +27,14 @@ Type
     Function CompleteOnce(Const ApiBase, Model, SystemPrompt, UserPrompt: String;
       PersistRefresh: Boolean; Out AnswerText, ErrorText: String): Boolean;
   End;
+
 Function RequireSubscriptionProvider(Const Provider: IAssistantModelProvider;
-  Out ErrorText: String): Boolean;
+    Out ErrorText: String): Boolean;
+
 Implementation
+
 Function RequireSubscriptionProvider(Const Provider: IAssistantModelProvider;
-  Out ErrorText: String): Boolean;
+    Out ErrorText: String): Boolean;
 Begin
   ErrorText := '';
   Result := Assigned(Provider) And (Provider.Authentication = aaaSubscription);

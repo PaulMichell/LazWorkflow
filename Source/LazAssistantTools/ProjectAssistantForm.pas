@@ -608,15 +608,15 @@ End;
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Var TargetBar:TPanel; TargetLabel:TLabel;
 Begin
-  TargetBar:=TPanel.Create(Self);TargetBar.Parent:=Self;TargetBar.Align:=alTop;
-  TargetBar.Height:=Scale96ToForm(34);TargetBar.BevelOuter:=bvNone;TargetBar.Top:=0;
-  TargetLabel:=TLabel.Create(Self);TargetLabel.Parent:=TargetBar;TargetLabel.Caption:='Working &on:';
-  TargetLabel.Align:=alLeft;TargetLabel.Layout:=tlCenter;TargetLabel.BorderSpacing.Around:=4;
-  FTargetPaths:=TStringList.Create;
-  FTargetCombo:=TComboBox.Create(Self);FTargetCombo.Name:='WorkTargetCombo';FTargetCombo.Parent:=TargetBar;
-  FTargetCombo.Align:=alClient;FTargetCombo.BorderSpacing.Around:=4;FTargetCombo.Style:=csDropDownList;
-  TargetLabel.FocusControl:=FTargetCombo;
-  FTargetCombo.OnDropDown:=@RefreshTargetChoices;FTargetCombo.OnChange:=@TargetChoiceChanged;
+  TargetBar := TPanel.Create(Self); TargetBar.Parent := Self; TargetBar.Align := alTop;
+  TargetBar.Height := Scale96ToForm(34); TargetBar.BevelOuter := bvNone; TargetBar.Top := 0;
+  TargetLabel := TLabel.Create(Self); TargetLabel.Parent := TargetBar; TargetLabel.Caption := 'Working &on:';
+  TargetLabel.Align := alLeft; TargetLabel.Layout := tlCenter; TargetLabel.BorderSpacing.Around := 4;
+  FTargetPaths := TStringList.Create;
+  FTargetCombo := TComboBox.Create(Self); FTargetCombo.Name := 'WorkTargetCombo'; FTargetCombo.Parent := TargetBar;
+  FTargetCombo.Align := alClient; FTargetCombo.BorderSpacing.Around := 4; FTargetCombo.Style := csDropDownList;
+  TargetLabel.FocusControl := FTargetCombo;
+  FTargetCombo.OnDropDown := @RefreshTargetChoices; FTargetCombo.OnChange := @TargetChoiceChanged;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
   ConversationPanel.OnResize := @HistoryPanelResize;
@@ -669,41 +669,56 @@ Begin
   If Not Assigned(FTargetCombo) Then Exit;
   FTargetCombo.Items.BeginUpdate;
   Try
-    FTargetCombo.Items.Clear;FTargetPaths.Clear;Selected:=0;
+    FTargetCombo.Items.Clear; FTargetPaths.Clear; Selected := 0;
     FTargetCombo.Items.Add('Current Lazarus project');FTargetPaths.Add('');
     If Assigned(PackageEditingInterface) Then
-      For I:=0 To PackageEditingInterface.GetPackageCount-1 Do
+      For I := 0 To PackageEditingInterface.GetPackageCount - 1 Do
         Begin
-          P:=PackageEditingInterface.GetPackages(I);
+          P := PackageEditingInterface.GetPackages(I);
           If Not Assigned(P) Or (P.Filename='') Or P.IsVirtual Then Continue;
           If (AssistantTarget.Kind=atkPackage) And SameFileName(ExpandFileName(P.Filename),AssistantTarget.Manifest) Then
-            Selected:=FTargetPaths.Count;
+            Selected := FTargetPaths.Count;
           FTargetCombo.Items.Add('Package — '+P.Name+' ('+P.Filename+')');FTargetPaths.Add(P.Filename);
         End;
     If (AssistantTarget.Kind=atkPackage) And (Selected=0) Then
-      Begin Selected:=FTargetPaths.Count;FTargetPaths.Add(AssistantTarget.Manifest);FTargetCombo.Items.Add(AssistantTarget.DisplayName);End;
+      Begin
+        Selected := FTargetPaths.Count;
+        FTargetPaths.Add(AssistantTarget.Manifest);
+        FTargetCombo.Items.Add(AssistantTarget.DisplayName);
+      End;
     FTargetCombo.Items.Add('Open package…');FTargetPaths.Add('*');
-    FTargetCombo.ItemIndex:=Selected;
+    FTargetCombo.ItemIndex := Selected;
   Finally FTargetCombo.Items.EndUpdate;End;
 End;
 
 Procedure TProjectAssistantForm.TargetChoiceChanged(Sender:TObject);
 Var Path,Note:String; Dialog:TOpenDialog;
 Begin
-  If FSending Or FReviewInProgress Then Begin RefreshTargetChoices(Nil);Exit;End;
+  If FSending Or FReviewInProgress Then
+    Begin
+      RefreshTargetChoices(Nil);
+      Exit;
+    End;
   If (FTargetCombo.ItemIndex<0) Or (FTargetCombo.ItemIndex>=FTargetPaths.Count) Then Exit;
-  Path:=FTargetPaths[FTargetCombo.ItemIndex];
+  Path := FTargetPaths[FTargetCombo.ItemIndex];
   If Path='*' Then
     Begin
-      Dialog:=TOpenDialog.Create(Self);
+      Dialog := TOpenDialog.Create(Self);
       Try
-        Dialog.Title:='Select Lazarus package';Dialog.Filter:='Lazarus packages|*.lpk';
-        Dialog.Options:=[ofFileMustExist,ofEnableSizing];Dialog.InitialDir:=AssistantTarget.Root;
-        If Not Dialog.Execute Then Begin RefreshTargetChoices(Nil);Exit;End;
-        Path:=Dialog.FileName;
+        Dialog.Title := 'Select Lazarus package'; Dialog.Filter := 'Lazarus packages|*.lpk';
+        Dialog.Options := [ofFileMustExist, ofEnableSizing]; Dialog.InitialDir := AssistantTarget.Root;
+        If Not Dialog.Execute Then
+          Begin
+            RefreshTargetChoices(Nil);
+            Exit;
+          End;
+        Path := Dialog.FileName;
         If Not Assigned(PackageEditingInterface) Or
           (PackageEditingInterface.DoOpenPackageFile(Path,[],False)<>mrOk) Then
-          Begin RefreshTargetChoices(Nil);Exit;End;
+          Begin
+            RefreshTargetChoices(Nil);
+            Exit;
+          End;
       Finally Dialog.Free;End;
     End;
   If ((Path='') And (AssistantTarget.Kind=atkProject)) Or
@@ -713,7 +728,11 @@ Begin
   If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
   If Path='' Then AssistantTarget.SelectProject
   Else If Not AssistantTarget.SelectPackage(Path,Note) Then
-    Begin MessageDlg(Note,mtError,[mbOK],0);RefreshTargetChoices(Nil);Exit;End;
+    Begin
+      MessageDlg(Note, mtError, [mbOK], 0);
+      RefreshTargetChoices(Nil);
+      Exit;
+    End;
   BindToActiveProject;
 End;
 
@@ -1644,23 +1663,35 @@ Begin
   Idx := FBuildWorkSectionIndex;
   If Idx < 0 Then Exit;
   If StreamErrorText <> '' Then
-    Begin SetBuildStatusFeedback('Work interrupted — package still in progress.'); Exit; End;
+    Begin
+      SetBuildStatusFeedback('Work interrupted — package still in progress.');
+      Exit;
+    End;
   If Not FUseCodex Then
     Begin
       If FPlanAgentRunning Then StopWorkOnPlanAgent('package requires manual review before Done');
       SetBuildStatusFeedback('Use Done after review: this backend does not yet provide correlated validation evidence.'); Exit;
     End;
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
-    Begin SetBuildStatusFeedback(Note); Exit; End;
+    Begin
+      SetBuildStatusFeedback(Note);
+      Exit;
+    End;
   If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
     (FCodexWorkspace.Identity <> FBuildWorkIdentity) Or
     Not ResolvePlanPath(GetActivePlanRelativePath, PlanRel, Err) Or (PlanRel <> FBuildWorkPlanPath) Or
     Not ReadBuildInput(PlanRel, CurrentPlan, Err) Or (CurrentPlan <> FBuildWorkPlanText) Then
-    Begin SetBuildStatusFeedback('Project or plan changed during work; review before using Done.'); Exit; End;
+    Begin
+      SetBuildStatusFeedback('Project or plan changed during work; review before using Done.');
+      Exit;
+    End;
   If Not Assigned(SourceEditorManagerIntf) Then Exit;
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(PlanRel);
   If Assigned(Editor) And (Editor.Modified Or (Editor.SourceText <> CurrentPlan)) Then
-    Begin SetBuildStatusFeedback('Plan has unsaved edits; review before using Done.'); Exit; End;
+    Begin
+      SetBuildStatusFeedback('Plan has unsaved edits; review before using Done.');
+      Exit;
+    End;
   { The full saved plan still matches the selected section snapshot. }
   FBuildSelectedIndex := Idx;
   If Not SetPlanSectionStatus(PlanRel, Idx, pssComplete, Err) Then
@@ -2858,7 +2889,10 @@ Begin
     FCodexRun.Start;
   Except
     On E: Exception Do
-      Begin ReleaseCodexRun; FinishAssistantReply(E.Message); End;
+      Begin
+        ReleaseCodexRun;
+        FinishAssistantReply(E.Message);
+      End;
   End;
 End;
 
@@ -2870,7 +2904,11 @@ Begin
   FPollingCodex := True;
   Try
     Run := FCodexRun;
-    If FCodexWorkspace.Identity <> FCodexIdentity Then Begin StopStream; Exit; End;
+    If FCodexWorkspace.Identity <> FCodexIdentity Then
+      Begin
+        StopStream;
+        Exit;
+      End;
     Snapshot := FCodexRun.Snapshot;
     ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
     Serviced := Run.ServiceOneTool(FCodexBroker, Tool, ToolText, OK);
@@ -2914,7 +2952,11 @@ Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   Try
     If csDestroying In ComponentState Then Exit;
-    If Assigned(FCodexRun) Then Begin PollCodex; Exit; End;
+    If Assigned(FCodexRun) Then
+      Begin
+        PollCodex;
+        Exit;
+      End;
     If FSending And (FStatusPhase <> '') Then
       StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
     If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
@@ -3816,7 +3858,13 @@ Begin
   If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
   { Only explicit validation with current correlated evidence can auto-complete. }
   If ActiveMode = amBuild Then
-    Begin Try TryAutoCompleteBuildWork(ResolvedError); Finally ClearBuildWorkTracking; End; End
+    Begin
+      Try
+        TryAutoCompleteBuildWork(ResolvedError);
+      Finally
+        ClearBuildWorkTracking;
+      End;
+    End
   Else If FBuildWorkSectionIndex >= 0 Then
     ClearBuildWorkTracking;
   { Review with errors: select top error and prompt Fix Error. }
@@ -3966,7 +4014,10 @@ Begin
     Exit;
   HideSlashPopup;
   If AutoSend And FUseCodex Then
-    Begin StartCodexReply(DisplayText, ApiText); Exit; End;
+    Begin
+      StartCodexReply(DisplayText, ApiText);
+      Exit;
+    End;
   If AutoSend Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
@@ -4686,7 +4737,10 @@ Var
   Body: String;
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   HideSlashPopup;
   If Assigned(AssistantClient) Then
     Info := AssistantClient.GetContextBreakdown
@@ -4719,7 +4773,10 @@ Var
   SignedIn: String;
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   HideSlashPopup;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
@@ -4775,7 +4832,10 @@ End;
 Procedure TProjectAssistantForm.ThinkingPickerActionExecute(Sender: TObject);
 Begin
   If FUseCodex Then
-    Begin SettingsActionExecute(Sender); Exit; End;
+    Begin
+      SettingsActionExecute(Sender);
+      Exit;
+    End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillThinkingFooterMenu;
@@ -4787,7 +4847,10 @@ Var
   Host: TControl;
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillSkillFooterMenu;
@@ -4804,7 +4867,10 @@ Var
   Saved: Integer;
 Begin
   If FUseCodex Then
-    Begin MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   HideSlashPopup;
   If FSending Then
     Begin
@@ -5113,7 +5179,10 @@ Begin
   If FSending Then
     Exit;
   If FUseCodex Then
-    Begin StartCodexReply(DisplayLabel, ApiText); Exit; End;
+    Begin
+      StartCodexReply(DisplayLabel, ApiText);
+      Exit;
+    End;
   If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
     Begin
       AppendMessage('user', DisplayLabel);
@@ -5176,8 +5245,8 @@ Begin
   Try
     If AssistantTarget.Kind=atkPackage Then
       Begin
-        If Reason=crBuild Then BuildResult:=PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfCleanCompile,pcfDoNotSaveEditorFiles],False)
-        Else BuildResult:=PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfDoNotSaveEditorFiles],False);
+        If Reason = crBuild Then BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package, [pcfCleanCompile, pcfDoNotSaveEditorFiles], False)
+        Else BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package, [pcfDoNotSaveEditorFiles], False);
       End
     Else BuildResult := LazarusIDE.DoBuildProject(Reason, []);
     BuildOk := BuildResult = mrOk;

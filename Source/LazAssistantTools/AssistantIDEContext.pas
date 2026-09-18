@@ -61,7 +61,10 @@ Begin
       Exit;
     End;
   If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
-    Begin Result := 'Active editor is outside the selected package; its text is not attached.'; Exit; End;
+    Begin
+      Result := 'Active editor is outside the selected package; its text is not attached.';
+      Exit;
+    End;
   CursorPos := Ed.CursorTextXY;
   Result :=
     'Active editor: ' + Ed.FileName + LineEnding +
@@ -84,7 +87,9 @@ Begin
 End;
 
 Function BuildProjectFilesSection: String;
-Begin Result := AssistantTarget.Describe; End;
+Begin
+  Result := AssistantTarget.Describe;
+End;
 
 Function ProjectRootForContext: String;
 Begin
@@ -265,7 +270,10 @@ Begin
       Exit;
     End;
   If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
-    Begin Result := Result + 'Active editor is outside the selected package; its text is not attached.' + LineEnding + '----- end IDE context -----'; Exit; End;
+    Begin
+      Result := Result + 'Active editor is outside the selected package; its text is not attached.' + LineEnding + '----- end IDE context -----';
+      Exit;
+    End;
   CursorPos := Ed.CursorTextXY;
   Result := Result +
     'Active editor: ' + Ed.FileName + LineEnding +

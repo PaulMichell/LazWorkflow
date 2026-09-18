@@ -297,8 +297,12 @@ Begin
   Item := Connections[SelectedConnection];
   If Trim(ConnectionName.Text) <> '' Then Item.Name := Trim(ConnectionName.Text);
   If Item.Backend = 'codex' Then
-    Begin Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text); Item.Model := Trim(CodexFrame.ModelCombo.Text);
-      Item.ReasoningEffort := CodexFrame.ReasoningEffort; Item.ApprovalMode := CodexFrame.ApprovalMode; End;
+    Begin
+      Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text);
+      Item.Model := Trim(CodexFrame.ModelCombo.Text);
+      Item.ReasoningEffort := CodexFrame.ReasoningEffort;
+      Item.ApprovalMode := CodexFrame.ApprovalMode;
+    End;
 End;
 
 Procedure TAssistantSettingsForm.RefreshConnections;
@@ -321,7 +325,11 @@ End;
 Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);
 Var Item: TAssistantConnection; NewSelection: Integer;
 Begin
-  If CodexFrame.Busy Then Begin ConnectionList.ItemIndex := SelectedConnection; Exit; End;
+  If CodexFrame.Busy Then
+    Begin
+      ConnectionList.ItemIndex := SelectedConnection;
+      Exit;
+    End;
   NewSelection := ConnectionList.ItemIndex;
   StoreConnection; RefreshConnections;
   SelectedConnection := NewSelection; ConnectionList.ItemIndex := NewSelection;
@@ -342,7 +350,10 @@ Procedure TAssistantSettingsForm.RemoveConnection(Sender: TObject);
 Begin
   If CodexFrame.Busy Or (SelectedConnection < 0) Then Exit;
   If Connections[SelectedConnection].Backend = 'grok' Then
-    Begin MessageDlg('The existing Grok account is managed using Sign out.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('The existing Grok account is managed using Sign out.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   Connections.Remove(SelectedConnection); SelectedConnection := -1;
   RefreshConnections; ConnectionList.ItemIndex := 0; ConnectionChanged(Nil);
 End;
@@ -353,7 +364,10 @@ Begin
   If SelectedConnection < 0 Then Exit;
   If (Connections[SelectedConnection].Backend = 'codex') And
     ((Connections[SelectedConnection].Runtime = '') Or (Connections[SelectedConnection].Model = '')) Then
-    Begin MessageDlg('Choose the runtime and sign in or refresh models first.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      MessageDlg('Choose the runtime and sign in or refresh models first.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   Connections.ActiveId := Connections[SelectedConnection].Id; RefreshConnections;
 End;
 
@@ -705,13 +719,25 @@ Begin
   If ModalResult <> mrOk Then
     Exit;
   If Not TestFrame.Validate(Note) Then
-    Begin CanClose := False; MessageDlg(Note, mtError, [mbOK], 0); Exit; End;
+    Begin
+      CanClose := False;
+      MessageDlg(Note, mtError, [mbOK], 0);
+      Exit;
+    End;
   StoreConnection;
   If CodexFrame.Busy Then
-    Begin CanClose := False; MessageDlg('Wait for the connection check, or Cancel to close settings.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      CanClose := False;
+      MessageDlg('Wait for the connection check, or Cancel to close settings.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If Assigned(Connections.Active) And (Connections.Active.Backend = 'codex') And
     ((Connections.Active.Runtime = '') Or (Connections.Active.Model = '')) Then
-    Begin CanClose := False; MessageDlg('The current ChatGPT connection needs a runtime and model.', mtInformation, [mbOK], 0); Exit; End;
+    Begin
+      CanClose := False;
+      MessageDlg('The current ChatGPT connection needs a runtime and model.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If Trim(ApiBaseEdit.Text) = '' Then
     Begin
       MessageDlg('API base URL is required (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);

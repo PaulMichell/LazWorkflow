@@ -67,7 +67,7 @@ Procedure TStyledMemoLayout.AttachRenderer(NewRenderer: TStyledCanvas);
 Begin
   If Assigned(Renderer) Or Not Assigned(NewRenderer) Then
     Raise EArgumentException.Create('Attach a renderer only to a detached layout');
-  Renderer:=NewRenderer;
+  Renderer := NewRenderer;
 End;
 
 Procedure TStyledMemoLayout.RebuildGroups;
@@ -167,7 +167,11 @@ Begin
   GroupsChanged := Length(Groups) <> NewCount;
   If Not GroupsChanged Then
     For Index := First To First + Added - 1 Do
-      If Groups[Index] <> Document[Index]^.Box.Group Then Begin GroupsChanged := True; Break; End;
+      If Groups[Index] <> Document[Index]^.Box.Group Then
+        Begin
+          GroupsChanged := True;
+          Break;
+        End;
   If GroupsChanged Then RebuildGroups;
   Result := (Delta <> 0) Or GroupsChanged Or (Length(Heights.Values) <> NewCount);
   If Result Then Reset(Width, WordWrap, EstimateHeight);
@@ -184,7 +188,11 @@ Begin
   Insets := Spacing(Index);
   If WordWrap Or (Document[Index]^.Box.Group <> 0) Then Wrap := swWord Else Wrap := swNone;
   Restart := 0;
-  If Index = RestartParagraph Then Begin Restart := RestartOffset; RestartParagraph := -1; End;
+  If Index = RestartParagraph Then
+    Begin
+      Restart := RestartOffset;
+      RestartParagraph := -1;
+    End;
   Renderer.BeginLayout(Paragraphs[Index], Document[Index]^, Max(1, Width - Insets.Left - Insets.Right), Wrap, Restart);
   If Finish Then Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, 0)
   Else Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, Max(1,Milliseconds));

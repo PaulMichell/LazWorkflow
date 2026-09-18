@@ -206,7 +206,9 @@ Begin
 End;
 
 Function ProjectAssistantRoot: String;
-Begin Result := AssistantTarget.Root; End;
+Begin
+  Result := AssistantTarget.Root;
+End;
 
 Constructor TAssistantConversationStore.Create;
 Begin

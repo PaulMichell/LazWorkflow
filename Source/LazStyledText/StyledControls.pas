@@ -841,12 +841,37 @@ Begin
   Extend := ssShift In Shift;
   If CommandKey Then
     Case Key Of
-      VK_A: Begin SelectAll; Key := 0; End;
-      VK_C: Begin CopyToClipboard; Key := 0; End;
-      VK_X: Begin CutToClipboard; Key := 0; End;
-      VK_V: Begin PasteFromClipboard; Key := 0; End;
-      VK_Z: Begin If Extend Then Redo Else Undo; Key := 0; End;
-      VK_Y: Begin Redo; Key := 0; End;
+      VK_A:
+      Begin
+        SelectAll;
+        Key := 0;
+      End;
+      VK_C:
+      Begin
+        CopyToClipboard;
+        Key := 0;
+      End;
+      VK_X:
+      Begin
+        CutToClipboard;
+        Key := 0;
+      End;
+      VK_V:
+      Begin
+        PasteFromClipboard;
+        Key := 0;
+      End;
+      VK_Z:
+      Begin
+        If Extend Then Redo
+        Else Undo;
+        Key := 0;
+      End;
+      VK_Y:
+      Begin
+        Redo;
+        Key := 0;
+      End;
     Else
     End;
   If Key = 0 Then Exit;
@@ -917,7 +942,11 @@ Begin
       End;
     VK_BACK, VK_DELETE:
       Begin
-        If ReadOnly Then Begin Key := 0; Exit; End;
+        If ReadOnly Then
+          Begin
+            Key := 0;
+            Exit;
+          End;
         If Not HasSelection Then Anchor := StepPosition(Caret, Key = VK_DELETE, CommandKey);
         InsertText('');
       End;

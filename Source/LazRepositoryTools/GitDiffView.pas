@@ -2711,7 +2711,11 @@ Begin
   Inc(FReadGeneration);
   Job.Tag := FReadGeneration; Job.RepoPath := FRepoPath;
   Job.Quiet := True; Job.OnFinished := @ReadFinished;
-  If Not Assigned(GitJobs) Then Begin Job.Free; Exit; End;
+  If Not Assigned(GitJobs) Then
+    Begin
+      Job.Free;
+      Exit;
+    End;
   GitJobs.CancelIfHandler(@ReadFinished);
   If Not GitJobs.Submit(Job) Then
     LoadPlainText(FReadTitle, 'Could not queue preview');
@@ -2755,7 +2759,11 @@ Begin
   If Not IsAlive Or Job.Cancelled Or (Job.Tag <> FReadGeneration) Or
     (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then Exit;
   If Not Job.Ok Then
-    Begin FReadHasText := False; LoadPlainText(FReadTitle, 'Preview unavailable: ' + Job.ErrorText); Exit; End;
+    Begin
+      FReadHasText := False;
+      LoadPlainText(FReadTitle, 'Preview unavailable: ' + Job.ErrorText);
+      Exit;
+    End;
   If Job.Kind = gjkCommitPaths Then
     Begin
       FUpdatingList := True;

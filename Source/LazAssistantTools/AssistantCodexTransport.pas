@@ -2,14 +2,23 @@ Unit AssistantCodexTransport;
 
 { Single-owner, nonblocking JSONL process transport. Use from a worker, never
   the IDE thread. Cancel is the only method callable from another thread.
-  Linux preview: other platforms fail closed until their pipe handling is tested. }
-{$mode objfpc}{$H+}
+  Linux preview: other platforms fail closed until their pipe handling is tested. (c) 2026 Michell Computing. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
 Interface
-Uses Classes, SysUtils, Process;
+
+Uses
+  Classes, SysUtils, Process;
+
 Const
   CodexMaxFrameBytes = 1048576;
   CodexMaxQueueBytes = 4194304;
   CodexMaxQueueFrames = 256;
+
 Type
   TAssistantCodexTransport = Class
   Private
@@ -42,9 +51,12 @@ Type
     Property LastError: String Read FError;
     Property ExitCode: Integer Read FExitCode;
   End;
+
 Implementation
 {$IFDEF LINUX}
-Uses BaseUnix, Unix, Syscall;
+
+Uses
+  BaseUnix, Unix, Syscall;
 {$ENDIF}
 
 Constructor TAssistantCodexTransport.Create(WriteTimeoutMs: Cardinal);
@@ -56,6 +68,7 @@ Begin
   FWriteTimeout := WriteTimeoutMs;
   FExitCode := -1;
 End;
+
 Destructor TAssistantCodexTransport.Destroy;
 Begin
   Stop;
@@ -63,6 +76,7 @@ Begin
   FOutgoing.Free;
   Inherited Destroy;
 End;
+
 Procedure TAssistantCodexTransport.ChildFork(Sender: TObject);
 Begin
   {$IFDEF LINUX}
@@ -70,13 +84,15 @@ Begin
   If fpSetsid < 0 Then fpExit(126);
   {$ENDIF}
 End;
+
 Procedure TAssistantCodexTransport.CheckOwner;
 Begin
   If GetCurrentThreadID <> FOwner Then
     Raise Exception.Create('Codex transport must be used by its owning worker.');
 End;
+
 Function TAssistantCodexTransport.Start(Const Executable, WorkingDirectory: String;
-  Args: TStrings; Environment: TStrings): Boolean;
+    Args: TStrings; Environment: TStrings): Boolean;
 Begin
   CheckOwner;
   Stop;
@@ -105,7 +121,7 @@ Begin
     FProcess.Execute;
     If fpFcntl(FProcess.Input.Handle, F_SETFL,
       fpFcntl(FProcess.Input.Handle, F_GETFL) Or O_NONBLOCK) < 0 Then
-      Raise Exception.Create('Nonblocking pipe setup failed');
+        Raise Exception.Create('Nonblocking pipe setup failed');
     Result := True;
   Except
     { Never expose environment or process output in errors. }
@@ -113,8 +129,10 @@ Begin
   End;
   {$ENDIF}
 End;
+
 Procedure TAssistantCodexTransport.Stop;
-{$IFDEF LINUX}Var Deadline: QWord;{$ENDIF}
+{$IFDEF LINUX}Var
+  Deadline: QWord; {$ENDIF}
 Begin
   CheckOwner;
   If Assigned(FProcess) Then
@@ -140,20 +158,24 @@ Begin
   FWriteBytes := 0;
   FWriteOffset := 1;
 End;
+
 Procedure TAssistantCodexTransport.Fail(Const Reason: String);
 Begin
   FError := Reason;
   Stop;
 End;
+
 Procedure TAssistantCodexTransport.Cancel;
 Begin
   InterlockedExchange(FCancel, 1);
 End;
+
 Function TAssistantCodexTransport.Running: Boolean;
 Begin
   CheckOwner;
   Result := Assigned(FProcess) And FProcess.Running;
 End;
+
 Function TAssistantCodexTransport.Queue(Const JsonLine: String): Boolean;
 Begin
   CheckOwner;
@@ -161,17 +183,25 @@ Begin
   If (FError <> '') Or Not Running Then Exit;
   If (Length(JsonLine) > CodexMaxFrameBytes) Or (Pos(#10, JsonLine) > 0) Or
     (Pos(#13, JsonLine) > 0) Or (JsonLine = '') Then
-    Begin Fail('Invalid or oversized outgoing Codex frame.'); Exit; End;
+      Begin
+        Fail('Invalid or oversized outgoing Codex frame.');
+        Exit;
+      End;
   If (FOutgoing.Count >= CodexMaxQueueFrames) Or
     (Length(JsonLine) + 1 > CodexMaxQueueBytes - FWriteBytes) Then
-    Begin Fail('Codex outgoing queue limit exceeded.'); Exit; End;
+      Begin
+        Fail('Codex outgoing queue limit exceeded.');
+        Exit;
+      End;
   If FOutgoing.Count = 0 Then FWriteStarted := GetTickCount64;
   FOutgoing.Add(JsonLine + #10);
   Inc(FWriteBytes, Length(JsonLine) + 1);
   Result := True;
 End;
+
 Procedure TAssistantCodexTransport.AcceptBytes(Const Bytes: String);
-Var I: Integer;
+Var
+  I: Integer;
 Begin
   For I := 1 To Length(Bytes) Do
     If Bytes[I] = #10 Then
@@ -182,21 +212,31 @@ Begin
           Begin
             If (FIncoming.Count >= CodexMaxQueueFrames) Or
               (Length(FBuffer) > CodexMaxQueueBytes - FReadBytes) Then
-              Begin Fail('Codex incoming queue limit exceeded.'); Exit; End;
+                Begin
+                  Fail('Codex incoming queue limit exceeded.');
+                  Exit;
+                End;
             FIncoming.Add(FBuffer);
             Inc(FReadBytes, Length(FBuffer));
           End;
         FBuffer := '';
       End
-    Else
-      Begin
-        If Length(FBuffer) >= CodexMaxFrameBytes Then
-          Begin Fail('Oversized incoming Codex frame.'); Exit; End;
-        FBuffer := FBuffer + Bytes[I];
-      End;
+            Else
+              Begin
+                If Length(FBuffer) >= CodexMaxFrameBytes Then
+                  Begin
+                    Fail('Oversized incoming Codex frame.');
+                    Exit;
+                  End;
+                FBuffer := FBuffer + Bytes[I];
+              End;
 End;
+
 Procedure TAssistantCodexTransport.Drain;
-Var Buf: Array[0..8191] Of Char; N, Budget: Integer; Bytes: String;
+Var
+  Buf: Array[0..8191] Of Char;
+  N, Budget: Integer;
+  Bytes: String;
 Begin
   Budget := 65536;
   While Assigned(FProcess) And (FProcess.Output.NumBytesAvailable > 0) And (Budget > 0) Do
@@ -220,30 +260,42 @@ Begin
       Dec(Budget, N);
     End;
 End;
+
 Procedure TAssistantCodexTransport.Flush;
-{$IFDEF LINUX}
-Var N, Err: Integer; Frame: String; Blocked, Previous, Pending: TSigSet;
-  WaitTime: TTimespec; HadPending: Boolean;
-{$ENDIF}
+  {$IFDEF LINUX}
+Var
+  N, Err: Integer;
+  Frame: String;
+  Blocked, Previous, Pending: TSigSet;
+  WaitTime: TTimespec;
+  HadPending: Boolean;
+  {$ENDIF}
 Begin
   {$IFDEF LINUX}
   If (FOutgoing.Count = 0) Or Not Assigned(FProcess) Then Exit;
   If GetTickCount64 - FWriteStarted >= FWriteTimeout Then
-    Begin Fail('Codex stdin write timed out.'); Exit; End;
+    Begin
+      Fail('Codex stdin write timed out.');
+      Exit;
+    End;
   Frame := FOutgoing[0];
   { A dead child's pipe must not deliver SIGPIPE to the Lazarus process.
     Block only on this worker, consume only a signal generated by this write. }
   fpSigEmptySet(Blocked);
   fpSigAddSet(Blocked, SIGPIPE);
   If fpSigProcMask(SIG_BLOCK, @Blocked, @Previous) <> 0 Then
-    Begin Fail('Unable to protect Codex pipe write.'); Exit; End;
+    Begin
+      Fail('Unable to protect Codex pipe write.');
+      Exit;
+    End;
   fpSigEmptySet(Pending);
   { FPC 3.3.1 fpSigPending omits Linux's required sigset-size argument.
     Call the syscall explicitly rather than reading an uninitialized mask. }
   If do_syscall(syscall_nr_rt_sigpending, TSysParam(@Pending), TSysParam(8)) <> 0 Then
     Begin
       fpSigProcMask(SIG_SETMASK, @Previous, Nil);
-      Fail('Unable to inspect pending pipe signals.'); Exit;
+      Fail('Unable to inspect pending pipe signals.');
+      Exit;
     End;
   HadPending := fpSigIsMember(Pending, SIGPIPE) = 1;
   N := fpWrite(FProcess.Input.Handle, Frame[FWriteOffset], Length(Frame) - FWriteOffset + 1);
@@ -266,15 +318,19 @@ Begin
           FWriteStarted := GetTickCount64;
         End;
     End
-  Else If (N < 0) And Not (Err In [ESysEAGAIN, ESysEINTR]) Then
-    Fail('Codex stdin closed unexpectedly.');
+      Else If (N < 0) And Not (Err In [ESysEAGAIN, ESysEINTR]) Then
+        Fail('Codex stdin closed unexpectedly.');
   {$ENDIF}
 End;
+
 Procedure TAssistantCodexTransport.Poll;
 Begin
   CheckOwner;
   If InterlockedCompareExchange(FCancel, 0, 0) <> 0 Then
-    Begin Fail('Codex connection cancelled.'); Exit; End;
+    Begin
+      Fail('Codex connection cancelled.');
+      Exit;
+    End;
   If Not Assigned(FProcess) Then Exit;
   Drain;
   If Not Assigned(FProcess) Then Exit;
@@ -288,6 +344,7 @@ Begin
     End;
   Flush;
 End;
+
 Function TAssistantCodexTransport.TakeFrame(Out Frame: String): Boolean;
 Begin
   CheckOwner;

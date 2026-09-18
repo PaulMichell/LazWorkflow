@@ -1360,7 +1360,10 @@ Begin
     End;
   CaretByte := SpellCharToByteIndex(FText, FSelStart + FSelLength);
   If FTokenText <> FText Then
-    Begin FTokens := SpellBreakWords(FText); FTokenText := FText; End;
+    Begin
+      FTokens := SpellBreakWords(FText);
+      FTokenText := FText;
+    End;
   Tokens := FTokens;
   Count := 0;
   For Index := 0 To High(Tokens) Do
@@ -1499,7 +1502,10 @@ Begin
     Begin
       If Assigned(FSpellItems) Then FSpellItems.Remove(AComponent);
       If AComponent = FHookedPopup Then
-        Begin FHookedPopup := Nil; FHostPopupHandler := Nil; End;
+        Begin
+          FHookedPopup := Nil;
+          FHostPopupHandler := Nil;
+        End;
     End;
   Inherited Notification(AComponent, Operation);
 End;

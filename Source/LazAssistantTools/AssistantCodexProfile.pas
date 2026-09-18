@@ -1,16 +1,28 @@
 Unit AssistantCodexProfile;
 
-{ Separate managed-runtime profile. Never import tokens or API keys into the IDE. }
-{$mode objfpc}{$H+}
+{ Separate managed-runtime profile. Never import tokens or API keys into the IDE. (c) 2026 Michell Computing. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
 Interface
-Uses Classes, SysUtils;
+
+Uses
+  Classes, SysUtils;
 Procedure CodexProfileEnvironment(Const ProfileDir: String; Values: TStrings);
 Function PrepareCodexProfile(Const ProfileDir: String; Out ErrorText: String): Boolean;
 Function FindCodexExecutable: String;
+
 Implementation
-Uses FileUtil, LazFileUtils {$IFDEF UNIX}, BaseUnix{$ENDIF};
+
+Uses
+  FileUtil, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+
 Procedure CodexProfileEnvironment(Const ProfileDir: String; Values: TStrings);
-Var I: Integer;
+Var
+  I: Integer;
 Begin
   Values.Clear;
   For I := 1 To GetEnvironmentVariableCount Do Values.Add(GetEnvironmentString(I));
@@ -19,10 +31,14 @@ Begin
   Values.Values['CODEX_API_KEY'] := '';
   Values.Values['OPENAI_BASE_URL'] := '';
 End;
+
 Function PrepareCodexProfile(Const ProfileDir: String; Out ErrorText: String): Boolean;
-Var Config: TStringList; Path: String;
+Var
+  Config: TStringList;
+  Path: String;
 Begin
-  Result := False; ErrorText := '';
+  Result := False;
+  ErrorText := '';
   Try
     If Not ForceDirectories(ProfileDir) Then Raise Exception.Create('Cannot create runtime profile');
     {$IFDEF UNIX}
@@ -44,13 +60,19 @@ Begin
       Config.Add('unified_exec = false');
       Config.Add('skill_mcp_dependency_install = false');
       Config.SaveToFile(Path);
-      {$IFDEF UNIX}fpChmod(Path, &600);{$ENDIF}
-    Finally Config.Free; End;
+      {$IFDEF UNIX}fpChmod(Path, &600); {$ENDIF}
+    Finally
+      Config.Free;
+    End;
     Result := True;
-  Except On E: Exception Do ErrorText := E.Message; End;
+  Except On E: Exception Do ErrorText := E.Message;
+  End;
 End;
+
 Function FindCodexExecutable: String;
-Var Root: String; Search: TSearchRec;
+Var
+  Root: String;
+  Search: TSearchRec;
 Begin
   Result := FindDefaultExecutablePath('codex');
   If Result <> '' Then Exit;
@@ -61,7 +83,9 @@ Begin
       Result := Root + Search.Name + '/bin/linux-x86_64/codex';
       If FileIsExecutable(Result) Then Exit;
     Until FindNext(Search) <> 0;
-  Finally FindClose(Search); End;
+  Finally
+    FindClose(Search);
+  End;
   Result := '';
 End;
 End.

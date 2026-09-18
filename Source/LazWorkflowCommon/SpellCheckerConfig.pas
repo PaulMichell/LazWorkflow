@@ -300,7 +300,10 @@ Var I: Integer;
 Begin
   For I := FRetiredPreloads.Count - 1 DownTo 0 Do
     If TThread(FRetiredPreloads[I]).Finished Then
-      Begin TThread(FRetiredPreloads[I]).Free; FRetiredPreloads.Delete(I); End;
+      Begin
+        TThread(FRetiredPreloads[I]).Free;
+        FRetiredPreloads.Delete(I);
+      End;
   If FOptions.EngineKind = sekNone Then
     Exit;
   If Assigned(FPreloadThread) And IssuedMatchesOptions Then

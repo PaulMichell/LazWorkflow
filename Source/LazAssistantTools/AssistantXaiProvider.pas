@@ -2,14 +2,25 @@ Unit AssistantXaiProvider;
 
 { Existing Grok subscription OAuth transport, isolated from shared orchestration.
   (c) 2026 Michell Computing. }
-{$mode objfpc}{$H+}
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
 Interface
-Uses AssistantModelProvider, AssistantConfig;
+
+Uses
+  AssistantModelProvider, AssistantConfig;
 Function CreateXaiModelProvider: IAssistantModelProvider;
 Procedure RestoreXaiCredentials(Config: TAssistantConfig);
+
 Implementation
-Uses Classes, SysUtils, fpjson, jsonparser, GrokOAuth, AssistantHttps,
+
+Uses
+  Classes, SysUtils, fpjson, jsonparser, GrokOAuth, AssistantHttps,
   AssistantProtocol, WorkflowLog;
+
 Type
   TXaiModelProvider = Class(TInterfacedObject, IAssistantModelProvider)
     Function BackendId: String;
@@ -21,27 +32,44 @@ Type
     Function CompleteOnce(Const ApiBase, Model, SystemPrompt, UserPrompt: String;
       PersistRefresh: Boolean; Out AnswerText, ErrorText: String): Boolean;
   End;
+
 Function CreateXaiModelProvider: IAssistantModelProvider;
-Begin Result := TXaiModelProvider.Create; End;
+Begin
+  Result := TXaiModelProvider.Create;
+End;
+
 Procedure RestoreXaiCredentials(Config: TAssistantConfig);
 Begin
   If Assigned(Config) And Assigned(GrokOAuthClient) Then
     GrokOAuthClient.SetTokens(Config.ToOAuthTokens);
 End;
+
 Function TXaiModelProvider.BackendId: String;
-Begin Result := 'xai-subscription'; End;
+Begin
+  Result := 'xai-subscription';
+End;
+
 Function TXaiModelProvider.Authentication: TAssistantAuthentication;
-Begin Result := aaaSubscription; End;
+Begin
+  Result := aaaSubscription;
+End;
+
 Function TXaiModelProvider.IsSignedIn: Boolean;
-Begin Result := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated; End;
+Begin
+  Result := Assigned(GrokOAuthClient) And GrokOAuthClient.IsAuthenticated;
+End;
+
 Function TXaiModelProvider.GetAccessToken(PersistRefresh: Boolean;
-  Out Token, ErrorText: String): Boolean;
+    Out Token, ErrorText: String): Boolean;
 Begin
   Result := False;
   Token := '';
   ErrorText := '';
   If Not Assigned(GrokOAuthClient) Then
-    Begin ErrorText := 'Grok OAuth client is not available.'; Exit; End;
+    Begin
+      ErrorText := 'Grok OAuth client is not available.';
+      Exit;
+    End;
   Token := GrokOAuthClient.GetValidAccessToken;
   If Token = '' Then
     Begin
@@ -56,14 +84,17 @@ Begin
     End;
   Result := True;
 End;
+
 Function JsonStringField(Obj: TJSONObject; Const Name: String): String;
-Var Node: TJSONData;
+Var
+  Node: TJSONData;
 Begin
   Result := '';
   If Not Assigned(Obj) Then Exit;
   Node := Obj.Find(Name);
   If Assigned(Node) And (Node.JSONType <> jtNull) Then Result := Node.AsString;
 End;
+
 Function LooksLikeChatModelId(Const ModelId: String): Boolean;
 Var
   LowerId: String;
@@ -77,11 +108,11 @@ Begin
     (Pos('voice', LowerId) > 0) Or (Pos('tts', LowerId) > 0) Or
     (Pos('embedding', LowerId) > 0) Or (Pos('whisper', LowerId) > 0) Or
     (Pos('image-gen', LowerId) > 0) Then
-    Result := False;
+      Result := False;
 End;
 
 Function TXaiModelProvider.ListModels(Const ApiBase: String; ModelIds: TStrings;
-  PersistRefresh: Boolean; Out ErrorText: String): Boolean;
+    PersistRefresh: Boolean; Out ErrorText: String): Boolean;
 Var
   AccessToken, BaseUrl, Body, AuthHdr, HttpErr: String;
   StatusCode: Integer;
@@ -147,10 +178,10 @@ Begin
                   If (Obj.Find('image_price') <> Nil) And
                     (Obj.Find('completion_text_token_price') = Nil) And
                     (Obj.Find('prompt_text_token_price') = Nil) Then
-                    Continue;
+                      Continue;
                 End
-              Else If Item.JSONType = jtString Then
-                ModelId := Item.AsString;
+                  Else If Item.JSONType = jtString Then
+                    ModelId := Item.AsString;
               If LooksLikeChatModelId(ModelId) And (ModelIds.IndexOf(ModelId) < 0) Then
                 ModelIds.Add(ModelId);
             End;
@@ -176,7 +207,7 @@ Begin
 End;
 
 Function TXaiModelProvider.CompleteOnce(Const ApiBase, Model, SystemPrompt, UserPrompt: String;
-  PersistRefresh: Boolean; Out AnswerText, ErrorText: String): Boolean;
+    PersistRefresh: Boolean; Out AnswerText, ErrorText: String): Boolean;
 Var
   AccessToken, Url, Body, ResponseBody, Headers: String;
   StatusCode: Integer;
@@ -252,6 +283,5 @@ Begin
     Data.Free;
   End;
 End;
-
 
 End.

@@ -3,7 +3,10 @@ Unit StyledTableLayout;
 { Tab-separated table rows built from styled cell boxes (c) 2026 Michell Computing.
   Equal-width columns keep rows aligned without measuring the whole document. }
 
-{$MODE ObjFPC}{$H+}
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
 
 Interface
 
@@ -12,9 +15,9 @@ Uses
 
 Procedure PrepareStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; Const Paragraph: TStyledParagraph);
 Function ContinueStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout;
-  Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
+    Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
 Procedure DrawStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; X: Integer; Y: Int64;
-  Const Clip: TRect; SelectionStart, SelectionEnd: Integer; Foreground: TColor);
+    Const Clip: TRect; SelectionStart, SelectionEnd: Integer; Foreground: TColor);
 
 Implementation
 
@@ -71,7 +74,7 @@ Begin
 End;
 
 Function ContinueStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout;
-  Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
+    Const Paragraph: TStyledParagraph; Milliseconds: Integer): Boolean;
 Var
   Started: QWord;
   Remaining, Index, LineIndex, FirstLine, RunIndex, Shift, TotalLines: Integer;
@@ -95,11 +98,11 @@ Begin
           Case Paragraph.Box.Columns[Index] Of
             scaLeft: Shift := 0;
             scaCenter: Shift := Shift Div 2;
-            scaRight: ;
+            scaRight:;
           End;
           For RunIndex := Child.Lines[LineIndex].FirstRun To
             Child.Lines[LineIndex].FirstRun + Child.Lines[LineIndex].RunCount - 1 Do
-            Inc(Child.Runs[RunIndex].X, Shift);
+              Inc(Child.Runs[RunIndex].X, Shift);
           Inc(Child.Lines[LineIndex].Width, Shift);
         End;
       Layout.Height := Max(Layout.Height, Child.Height + Max(0, Layout.CellStyle.BorderWidth) * 2 +
@@ -132,7 +135,7 @@ Begin
 End;
 
 Procedure DrawStyledTable(Renderer: TStyledCanvas; Layout: TStyledLayout; X: Integer; Y: Int64;
-  Const Clip: TRect; SelectionStart, SelectionEnd: Integer; Foreground: TColor);
+    Const Clip: TRect; SelectionStart, SelectionEnd: Integer; Foreground: TColor);
 Var
   Index, First, Last: Integer;
   Geometry: TStyledBoxGeometry;
@@ -150,10 +153,10 @@ Begin
       Last := -1;
       If (SelectionStart >= 0) And (SelectionStart <= Layout.CellStarts[Index] + Length(Layout.Cells[Index].Source)) And
         (SelectionEnd > Layout.CellStarts[Index]) Then
-        Begin
-          First := Max(0, SelectionStart - Layout.CellStarts[Index]);
-          Last := Min(Length(Layout.Cells[Index].Source) + 1, SelectionEnd - Layout.CellStarts[Index]);
-        End;
+          Begin
+            First := Max(0, SelectionStart - Layout.CellStarts[Index]);
+            Last := Min(Length(Layout.Cells[Index].Source) + 1, SelectionEnd - Layout.CellStarts[Index]);
+          End;
       Renderer.Draw(Layout.Cells[Index], Geometry.Content.Left, Geometry.Content.Top, CellClip, First, Last, Foreground);
     End;
 End;

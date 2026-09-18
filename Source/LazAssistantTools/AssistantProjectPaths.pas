@@ -80,7 +80,10 @@ Begin
                 Try
                   Repeat
                     If (Entry.Name <> '.') And (Entry.Name <> '..') And (Entry.Name <> 'targets') Then
-                      Begin PackageOnly := False; Break; End;
+                      Begin
+                        PackageOnly := False;
+                        Break;
+                      End;
                     Code := FindNextUTF8(Entry);
                   Until Code <> 0;
                 Finally FindCloseUTF8(Entry); End;

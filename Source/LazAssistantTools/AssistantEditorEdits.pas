@@ -1,16 +1,21 @@
 Unit AssistantEditorEdits;
 
 { Version-checked, undoable source-editor updates. (c) 2026 Michell Computing. }
-{$mode objfpc}{$H+}
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
 
 Interface
 
-Uses SysUtils, Types, SrcEditorIntf;
+Uses
+  SysUtils, Types, SrcEditorIntf;
 
-{ Call on the IDE thread. ExpectedText is the exact source snapshot read by the
+  { Call on the IDE thread. ExpectedText is the exact source snapshot read by the
   caller. A failed precondition makes no changes. Does not save to disk. }
 Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
-  Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+    Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -23,7 +28,8 @@ Begin
 End;
 
 Function TextPosition(Const S: String; Offset: Integer): TPoint;
-Var I: Integer;
+Var
+  I: Integer;
 Begin
   Result := Point(1, 1);
   I := 1;
@@ -35,24 +41,34 @@ Begin
           Inc(Result.Y);
           Result.X := 1;
         End
-      Else
-        Inc(Result.X);
+          Else
+            Inc(Result.X);
       Inc(I);
     End;
 End;
 
 Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
-  Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
-Var Prefix, Suffix, OldLength, NewLength: Integer;
+    Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+Var
+  Prefix, Suffix, OldLength, NewLength: Integer;
 Begin
   Result := False;
   ErrorText := '';
   If Not Assigned(Editor) Then
-    Begin ErrorText := 'Source editor is no longer available.'; Exit; End;
+    Begin
+      ErrorText := 'Source editor is no longer available.';
+      Exit;
+    End;
   If Editor.ReadOnly Then
-    Begin ErrorText := 'Source editor is read-only.'; Exit; End;
+    Begin
+      ErrorText := 'Source editor is read-only.';
+      Exit;
+    End;
   If Editor.SourceText <> ExpectedText Then
-    Begin ErrorText := 'Source buffer changed after it was read; read it again before editing.'; Exit; End;
+    Begin
+      ErrorText := 'Source buffer changed after it was read; read it again before editing.';
+      Exit;
+    End;
   If ExpectedText = NewText Then Exit(True);
   OldLength := Length(ExpectedText);
   NewLength := Length(NewText);

@@ -222,7 +222,11 @@ Begin
               Chunk := Copy(Value, Index + Count, Closing - Index - Count);
               Styled := Style;
               Case Value[Index] Of
-                '`': Begin Styled.FontName := 'Monospace'; Styled.Background := clInfoBk; End;
+                '`':
+                Begin
+                  Styled.FontName := 'Monospace';
+                  Styled.Background := clInfoBk;
+                End;
                 '~': Include(Styled.Styles, fsStrikeOut);
                 '*', '_':
                   Begin
@@ -524,13 +528,13 @@ End;
 Function TParsedStyledMarkdown.AddStyle(Const Style: TStyledStyle): Integer;
 Var I: Integer;
 Begin
-  For I:=0 To High(Styles) Do
+  For I := 0 To High(Styles) Do
     If (Styles[I].FontName=Style.FontName) And (Styles[I].Size=Style.Size) And
       (Styles[I].Styles=Style.Styles) And (Styles[I].Foreground=Style.Foreground) And
       (Styles[I].Background=Style.Background) And (Styles[I].Script=Style.Script) Then Exit(I);
-  Result:=Length(Styles);
+  Result := Length(Styles);
   SetLength(Styles,Result+1);
-  Styles[Result]:=Style;
+  Styles[Result] := Style;
 End;
 
 Function TParsedStyledMarkdown.Bind(Renderer: TStyledCanvas): TStyledContent;
@@ -538,20 +542,20 @@ Var Mapping: TStyledIntegers; I: Integer;
 Begin
   If Not Assigned(Renderer) Then Raise EArgumentException.Create('Styled Markdown requires a renderer');
   SetLength(Mapping,Length(Styles));
-  For I:=0 To High(Styles) Do Mapping[I]:=Renderer.AddStyle(Styles[I]);
-  Result:=BindStyles(Mapping);
+  For I := 0 To High(Styles) Do Mapping[I] := Renderer.AddStyle(Styles[I]);
+  Result := BindStyles(Mapping);
 End;
 
 Function TParsedStyledMarkdown.BindStyles(Const Mapping: TStyledIntegers): TStyledContent;
 Var I,J: Integer;
 Begin
   If Length(Mapping)<>Length(Styles) Then Raise EArgumentException.Create('Invalid Markdown style mapping');
-  Result:=Copy(Content);
-  For I:=0 To High(Result) Do
+  Result := Copy(Content);
+  For I := 0 To High(Result) Do
     Begin
-      Result[I].Ranges:=Copy(Content[I].Ranges);
-      For J:=0 To High(Result[I].Ranges) Do
-        Result[I].Ranges[J].Style:=Mapping[Result[I].Ranges[J].Style];
+      Result[I].Ranges := Copy(Content[I].Ranges);
+      For J := 0 To High(Result[I].Ranges) Do
+        Result[I].Ranges[J].Style := Mapping[Result[I].Ranges[J].Style];
     End;
 End;
 
@@ -559,15 +563,15 @@ Function ParseStyledMarkdown(Const MarkdownText: UTF8String; BaseSize: Integer;
   Cancelled: TMarkdownCancelled): TParsedStyledMarkdown;
 Var Reader: TMarkdownReader; Value: UTF8String;
 Begin
-  Result:=TParsedStyledMarkdown.Create;
-  Reader:=TMarkdownReader.Create;
+  Result := TParsedStyledMarkdown.Create;
+  Reader := TMarkdownReader.Create;
   Try
     Try
-      Reader.FCancelled:=Cancelled;
+      Reader.FCancelled := Cancelled;
       Reader.CheckCancelled;
-      Value:=MarkdownText;
+      Value := MarkdownText;
       If Copy(Value,1,3)=#$EF#$BB#$BF Then Delete(Value,1,3);
-      Result.Content:=Reader.Parse(Result,NormaliseStyledText(Value),Max(1,BaseSize));
+      Result.Content := Reader.Parse(Result, NormaliseStyledText(Value), Max(1, BaseSize));
     Except
       Result.Free;
       Raise;
@@ -582,8 +586,8 @@ Function BuildStyledMarkdown(Renderer: TStyledCanvas; Const MarkdownText: UTF8St
 Var Parsed: TParsedStyledMarkdown;
 Begin
   If Not Assigned(Renderer) Then Raise EArgumentException.Create('Styled Markdown requires a renderer');
-  Parsed:=ParseStyledMarkdown(MarkdownText,BaseSize);
-  Try Result:=Parsed.Bind(Renderer); Finally Parsed.Free; End;
+  Parsed := ParseStyledMarkdown(MarkdownText, BaseSize);
+  Try Result := Parsed.Bind(Renderer); Finally Parsed.Free; End;
 End;
 
 Constructor TStyledMarkdown.Create(Target: TCustomStyledText);

@@ -244,11 +244,20 @@ Begin
   Ok := True;
   FSaveErrors := '';
   If Not GitClient.SetConfigValue('user.name', Trim(UserNameEdit.Text), True) Then
-    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
+    Begin
+      Ok := False;
+      FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding;
+    End;
   If Not GitClient.SetConfigValue('user.email', Trim(UserEmailEdit.Text), True) Then
-    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
+    Begin
+      Ok := False;
+      FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding;
+    End;
   If Not GitClient.SetDescription(DescriptionMemo.Text) Then
-    Begin Ok := False; FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding; End;
+    Begin
+      Ok := False;
+      FSaveErrors := FSaveErrors + GitClient.LastError + LineEnding;
+    End;
   Result := Ok;
 End;
 

@@ -3,10 +3,18 @@ Unit AssistantToolBroker;
 { Backend-neutral, IDE-thread tool broker. Owns run identity and model-visible
   revisions. The adapter resolves project paths and uses the actual IDE buffers.
   This initial registry exposes bounded buffer operations; execution and build
-  operations must not be smuggled through a generic unvalidated tool fallback. }
-{$mode objfpc}{$H+}
+  operations must not be smuggled through a generic unvalidated tool fallback. (c) 2026 Michell Computing. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
 Interface
-Uses Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets;
+
+Uses
+  Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets;
+
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject);
   TAssistantWorkspaceAdapter = Class
@@ -87,86 +95,219 @@ Type
     Property OnApproval: TAssistantToolApproval Read FOnApproval Write FOnApproval;
     Property RunId: String Read FRunId;
   End;
+
 Implementation
-Uses jsonparser, AssistantProtocol, AssistantGit;
-Const MaxBufferBytes = 1048576; MaxSnapshotBytes = 8388608; MaxSnapshots = 64;
+
+Uses
+  jsonparser, AssistantProtocol, AssistantGit;
+
+Const
+  MaxBufferBytes = 1048576;
+  MaxSnapshotBytes = 8388608;
+  MaxSnapshots = 64;
+
 Function Quoted(Const S: String): String;
-Begin Result := '"' + JsonEscapeText(S) + '"'; End;
+Begin
+  Result := '"' + JsonEscapeText(S) + '"';
+End;
+
 Function TAssistantWorkspaceAdapter.IsMarkdownPath(Const Path: String): Boolean;
-Var Ext: String;
+Var
+  Ext: String;
 Begin
   Ext := LowerCase(ExtractFileExt(Path));
   Result := (Ext = '.md') Or (Ext = '.markdown') Or (Ext = '.mdown');
 End;
+
 Function TAssistantToolBroker.CanWritePath(Const Path: String): Boolean;
 Begin
   Result := (FWriteScope = awsProject) Or
     ((FWriteScope = awsMarkdown) And FAdapter.IsMarkdownPath(Path));
 End;
+
 Function TAssistantWorkspaceAdapter.CanChangeSets: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
-Begin CanonicalPath := ''; Text := ''; Stamp := ''; ErrorText := 'Stamped editor changes are unavailable.'; Result := False; End;
+Begin
+  CanonicalPath := '';
+  Text := '';
+  Stamp := '';
+  ErrorText := 'Stamped editor changes are unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanInspectFiles: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'File inspection unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'File inspection unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Directory inspection unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Directory inspection unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.OpenBuffer(Const Path: String; Out ErrorText: String): Boolean;
-Begin ErrorText := 'Opening buffers unavailable.'; Result := False; End;
+Begin
+  ErrorText := 'Opening buffers unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanCreateFiles: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean;
-Begin CanonicalPath := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Begin
+  CanonicalPath := '';
+  ErrorText := 'New file creation unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'New file creation unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'New file creation unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanPreviewRename: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.PreviewLocalRename(Const Path: String; Line, Column: Integer;
-  Const NewName: String; Out NewText, PreviewText, ErrorText: String): Boolean;
-Begin NewText := ''; PreviewText := ''; ErrorText := 'Local rename preview is unavailable.'; Result := False; End;
+    Const NewName: String; Out NewText, PreviewText, ErrorText: String): Boolean;
+Begin
+  NewText := '';
+  PreviewText := '';
+  ErrorText := 'Local rename preview is unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanInspectSymbols: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Symbol context is unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Symbol context is unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Reference lookup is unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Reference lookup is unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanFindDeclaration: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'CodeTools symbol lookup is unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'CodeTools symbol lookup is unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanTest: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean;
-Begin Command := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Begin
+  Command := '';
+  ErrorText := 'Configured tests are unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Configured tests are unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.TestStatus(Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Configured tests are unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Configured tests are unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanGit: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Git is unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Git is unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.CanBuild: Boolean;
-Begin Result := False; End;
+Begin
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Build adapter unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Build adapter unavailable.';
+  Result := False;
+End;
+
 Function TAssistantWorkspaceAdapter.BuildStatus(Out ResultText, ErrorText: String): Boolean;
-Begin ResultText := ''; ErrorText := 'Build adapter unavailable.'; Result := False; End;
+Begin
+  ResultText := '';
+  ErrorText := 'Build adapter unavailable.';
+  Result := False;
+End;
+
 Procedure TAssistantWorkspaceAdapter.CancelBuild;
-Begin End;
+Begin
+End;
+
 Constructor TAssistantToolBroker.Create(Adapter: TAssistantWorkspaceAdapter);
 Begin
   Inherited Create;
-  FAdapter := Adapter; FReceipts := TObjectList.Create(True);
+  FAdapter := Adapter;
+  FReceipts := TObjectList.Create(True);
   FOwner := GetCurrentThreadID;
   FCancelled := True;
 End;
+
 Destructor TAssistantToolBroker.Destroy;
-Begin FPrepared.Free; FReceipts.Free; Inherited Destroy; End;
+Begin
+  FPrepared.Free;
+  FReceipts.Free;
+  Inherited Destroy;
+End;
+
 Function TAssistantToolBroker.BeginRun(WriteScope: TAssistantWriteScope): String;
-Var Id: TGuid;
+Var
+  Id: TGuid;
 Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
   If Not Assigned(FAdapter) Then Raise Exception.Create('Workspace adapter required');
@@ -177,21 +318,29 @@ Begin
   FCancelled := False;
   FWriteScope := WriteScope;
   FRevision := 0;
-  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview); FreeAndNil(FPrepared);
+  SetLength(FSnapshots, 0);
+  FRenamePreview := Default(TLocalRenamePreview);
+  FreeAndNil(FPrepared);
   Result := FRunId;
 End;
+
 Procedure TAssistantToolBroker.Cancel;
 Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
   FCancelled := True;
   FAdapter.CancelBuild;
-  SetLength(FSnapshots, 0); FRenamePreview := Default(TLocalRenamePreview); FreeAndNil(FPrepared);
+  SetLength(FSnapshots, 0);
+  FRenamePreview := Default(TLocalRenamePreview);
+  FreeAndNil(FPrepared);
 End;
+
 Function TAssistantToolBroker.Remember(Const Path, Text: String): String;
-Var I, Index, Bytes: Integer;
+Var
+  I, Index, Bytes: Integer;
 Begin
   Result := '';
-  Index := -1; Bytes := 0;
+  Index := -1;
+  Bytes := 0;
   For I := 0 To High(FSnapshots) Do
     If FSnapshots[I].Path = Path Then Index := I
     Else Inc(Bytes, Length(FSnapshots[I].Text));
@@ -199,7 +348,8 @@ Begin
   If Index < 0 Then
     Begin
       If Length(FSnapshots) >= MaxSnapshots Then Exit;
-      Index := Length(FSnapshots); SetLength(FSnapshots, Index + 1);
+      Index := Length(FSnapshots);
+      SetLength(FSnapshots, Index + 1);
     End;
   Inc(FRevision);
   Result := FRunId + ':' + IntToStr(FRevision);
@@ -207,72 +357,153 @@ Begin
   FSnapshots[Index].Text := Text;
   FSnapshots[Index].Revision := Result;
 End;
+
 Function TAssistantToolBroker.Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
 Begin
   Result := False;
   If Assigned(FOnApproval) And Not FOnApproval(Tool, Path, OldText, NewText) Then
-    Begin ErrorText := 'User declined this tool operation.'; Exit; End;
+    Begin
+      ErrorText := 'User declined this tool operation.';
+      Exit;
+    End;
   { A modal approval can dispatch IDE events. Revalidate the run before any
     effect; adapters also compare the approved buffer text at mutation time. }
   If FCancelled Or (FRunId <> RunId) Or (FAdapter.Identity <> FIdentity) Then
-    Begin ErrorText := 'Workspace/run changed or was cancelled during approval.'; Exit; End;
+    Begin
+      ErrorText := 'Workspace/run changed or was cancelled during approval.';
+      Exit;
+    End;
   If (Path <> '') And Not CanWritePath(Path) Then
-    Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
+    Begin
+      ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.';
+      Exit;
+    End;
   Result := True;
 End;
+
 Function TAssistantToolBroker.ChangeCurrent: Boolean;
-Begin Result := Not FCancelled And (FRunId = FChangeRun) And (FAdapter.Identity = FChangeIdentity); End;
-Function TAssistantToolBroker.ExecuteChanges(Const Tool: String; Args: TJSONObject;
-  Out ResultText, ErrorText: String): Boolean;
-Var SetItem, Candidate: TAssistantChangeSet; Changes, Node, Item: TJSONData;
-  I, J, Total: Integer; ID, Path, Text, Stamp, Revision, BeforeText, AfterText: String;
-  Fresh: Boolean; Guid: TGuid; List: TJSONArray;
 Begin
-  Result := False; ResultText := ''; ErrorText := ''; Candidate := Nil;
-  If Not FAdapter.CanChangeSets Then Begin ErrorText := 'Multi-editor changes are unavailable.'; Exit; End;
-  FChangeBusy := True; FChangeRun := FRunId; FChangeIdentity := FIdentity;
+  Result := Not FCancelled And (FRunId = FChangeRun) And (FAdapter.Identity = FChangeIdentity);
+End;
+
+Function TAssistantToolBroker.ExecuteChanges(Const Tool: String; Args: TJSONObject;
+    Out ResultText, ErrorText: String): Boolean;
+Var
+  SetItem, Candidate: TAssistantChangeSet;
+  Changes, Node, Item: TJSONData;
+  I, J, Total: Integer;
+  ID, Path, Text, Stamp, Revision, BeforeText, AfterText: String;
+  Fresh: Boolean;
+  Guid: TGuid;
+  List: TJSONArray;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Candidate := Nil;
+  If Not FAdapter.CanChangeSets Then
+    Begin
+      ErrorText := 'Multi-editor changes are unavailable.';
+      Exit;
+    End;
+  FChangeBusy := True;
+  FChangeRun := FRunId;
+  FChangeIdentity := FIdentity;
   Try
     If Tool = 'lazarus_prepare_changes' Then
       Begin
         FreeAndNil(FPrepared);
         Changes := Args.Find('changes');
         If Not (Changes Is TJSONArray) Or (Changes.Count < 1) Or (Changes.Count > 16) Then
-          Begin ErrorText := 'changes must contain 1-16 editor changes.'; Exit; End;
-        If FReceipts.Count >= 32 Then Begin ErrorText := 'Receipt count limit reached; recovery data is retained until the panel closes.'; Exit; End;
-        Candidate := TAssistantChangeSet.Create; Candidate.Project := FIdentity; Candidate.State := 'prepared';
+          Begin
+            ErrorText := 'changes must contain 1-16 editor changes.';
+            Exit;
+          End;
+        If FReceipts.Count >= 32 Then
+          Begin
+            ErrorText := 'Receipt count limit reached; recovery data is retained until the panel closes.';
+            Exit;
+          End;
+        Candidate := TAssistantChangeSet.Create;
+        Candidate.Project := FIdentity;
+        Candidate.State := 'prepared';
         SetLength(Candidate.Items, Changes.Count);
         For I := 0 To Changes.Count - 1 Do
           Begin
             Item := Changes.Items[I];
-            If Not (Item Is TJSONObject) Then Begin ErrorText := 'Each change must be an object.'; Exit; End;
+            If Not (Item Is TJSONObject) Then
+              Begin
+                ErrorText := 'Each change must be an object.';
+                Exit;
+              End;
             Node := TJSONObject(Item).Find('path');
-            If Not Assigned(Node) Or (Node.JSONType <> jtString) Then Begin ErrorText := 'Each change needs a path.'; Exit; End;
+            If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
+              Begin
+                ErrorText := 'Each change needs a path.';
+                Exit;
+              End;
             If Not FAdapter.ReadChangeBuffer(Node.AsString, Path, Text, Stamp, ErrorText) Then Exit;
-            If (Stamp = '') Or (Length(Text) > MaxBufferBytes) Then Begin ErrorText := 'Missing editor stamp or oversized source.'; Exit; End;
+            If (Stamp = '') Or (Length(Text) > MaxBufferBytes) Then
+              Begin
+                ErrorText := 'Missing editor stamp or oversized source.';
+                Exit;
+              End;
             For J := 0 To I - 1 Do If Candidate.Items[J].Path = Path Then
-              Begin ErrorText := 'A change set cannot contain the same resolved editor twice.'; Exit; End;
+              Begin
+                ErrorText := 'A change set cannot contain the same resolved editor twice.';
+                Exit;
+              End;
             Node := TJSONObject(Item).Find('revision');
             If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
-              Begin ErrorText := 'Each change needs a nonempty buffer revision.'; Exit; End;
-            Revision := Node.AsString; Fresh := False;
+              Begin
+                ErrorText := 'Each change needs a nonempty buffer revision.';
+                Exit;
+              End;
+            Revision := Node.AsString;
+            Fresh := False;
             For J := 0 To High(FSnapshots) Do
               If (FSnapshots[J].Path = Path) And (FSnapshots[J].Revision = Revision) And (FSnapshots[J].Text = Text) Then Fresh := True;
-            If Not Fresh Then Begin ErrorText := 'Stale buffer revision: ' + Path; Exit; End;
+            If Not Fresh Then
+              Begin
+                ErrorText := 'Stale buffer revision: ' + Path;
+                Exit;
+              End;
             Node := TJSONObject(Item).Find('text');
             If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Length(Node.AsString) > MaxBufferBytes) Or
-              (Pos(#0, Node.AsString) > 0) Then Begin ErrorText := 'Each change needs bounded text without NUL bytes.'; Exit; End;
-            Candidate.Items[I].Path := Path; Candidate.Items[I].BeforeText := Text;
-            Candidate.Items[I].BeforeStamp := Stamp; Candidate.Items[I].AfterText := Node.AsString;
+              (Pos(#0, Node.AsString) > 0) Then
+                Begin
+                  ErrorText := 'Each change needs bounded text without NUL bytes.';
+                  Exit;
+                End;
+            Candidate.Items[I].Path := Path;
+            Candidate.Items[I].BeforeText := Text;
+            Candidate.Items[I].BeforeStamp := Stamp;
+            Candidate.Items[I].AfterText := Node.AsString;
             Candidate.Items[I].State := 'pending';
           End;
         Total := Candidate.Bytes;
-        If Total > 2097152 Then Begin ErrorText := 'Change set exceeds the 2 MiB before/after text budget.'; Exit; End;
+        If Total > 2097152 Then
+          Begin
+            ErrorText := 'Change set exceeds the 2 MiB before/after text budget.';
+            Exit;
+          End;
         For I := 0 To FReceipts.Count - 1 Do Inc(Total, TAssistantChangeSet(FReceipts[I]).Bytes);
-        If Total > MaxSnapshotBytes Then Begin ErrorText := 'Retained recovery data exceeds the 8 MiB budget.'; Exit; End;
+        If Total > MaxSnapshotBytes Then
+          Begin
+            ErrorText := 'Retained recovery data exceeds the 8 MiB budget.';
+            Exit;
+          End;
         If Not Candidate.CheckAll(@FAdapter.ReadChangeBuffer, @ChangeCurrent, ErrorText) Then Exit;
-        If CreateGUID(Guid) <> 0 Then Begin ErrorText := 'Cannot create change-set identity.'; Exit; End;
-        Candidate.Id := GUIDToString(Guid); FPrepared := Candidate; Candidate := Nil;
-        ResultText := FPrepared.Receipt; Exit(True);
+        If CreateGUID(Guid) <> 0 Then
+          Begin
+            ErrorText := 'Cannot create change-set identity.';
+            Exit;
+          End;
+        Candidate.Id := GUIDToString(Guid);
+        FPrepared := Candidate;
+        Candidate := Nil;
+        ResultText := FPrepared.Receipt;
+        Exit(True);
       End;
     ID := Args.Get('change_set_id', '');
     If (Tool = 'lazarus_change_status') And (ID = '') Then
@@ -282,32 +513,69 @@ Begin
           If Assigned(FPrepared) And (FPrepared.Project = FIdentity) Then List.Add(GetJSON(FPrepared.Receipt));
           For I := 0 To FReceipts.Count - 1 Do
             If TAssistantChangeSet(FReceipts[I]).Project = FIdentity Then List.Add(GetJSON(TAssistantChangeSet(FReceipts[I]).Receipt));
-          ResultText := List.AsJSON; Exit(True);
-        Finally List.Free; End;
+          ResultText := List.AsJSON;
+          Exit(True);
+        Finally
+          List.Free;
+        End;
       End;
     SetItem := Nil;
     If Assigned(FPrepared) And (FPrepared.Id = ID) Then SetItem := FPrepared;
     For I := 0 To FReceipts.Count - 1 Do If TAssistantChangeSet(FReceipts[I]).Id = ID Then SetItem := TAssistantChangeSet(FReceipts[I]);
     If Not Assigned(SetItem) Or (ID = '') Or (SetItem.Project <> FIdentity) Then
-      Begin ErrorText := 'Unknown or expired change set for this project.'; Exit; End;
-    If Tool = 'lazarus_change_status' Then Begin ResultText := SetItem.Receipt; Exit(True); End;
-    If FWriteScope <> awsProject Then Begin ErrorText := 'Applying or reverting a change set requires Build mode.'; Exit; End;
+      Begin
+        ErrorText := 'Unknown or expired change set for this project.';
+        Exit;
+      End;
+    If Tool = 'lazarus_change_status' Then
+      Begin
+        ResultText := SetItem.Receipt;
+        Exit(True);
+      End;
+    If FWriteScope <> awsProject Then
+      Begin
+        ErrorText := 'Applying or reverting a change set requires Build mode.';
+        Exit;
+      End;
     If Tool = 'lazarus_apply_changes' Then
       Begin
-        If SetItem <> FPrepared Then Begin ErrorText := 'Change-set preview was already consumed.'; Exit; End;
+        If SetItem <> FPrepared Then
+          Begin
+            ErrorText := 'Change-set preview was already consumed.';
+            Exit;
+          End;
         { Move before modal callbacks: cancellation may discard FPrepared. }
-        FPrepared := Nil; FReceipts.Add(SetItem); SetItem.State := 'reviewing';
+        FPrepared := Nil;
+        FReceipts.Add(SetItem);
+        SetItem.State := 'reviewing';
         If Not SetItem.CheckAll(@FAdapter.ReadChangeBuffer, @ChangeCurrent, ErrorText) Then
-          Begin SetItem.State := 'rejected'; SetItem.Error := ErrorText; ResultText := SetItem.Receipt; ErrorText := ResultText; Exit; End;
+          Begin
+            SetItem.State := 'rejected';
+            SetItem.Error := ErrorText;
+            ResultText := SetItem.Receipt;
+            ErrorText := ResultText;
+            Exit;
+          End;
       End
-    Else If SetItem = FPrepared Then Begin ErrorText := 'This set has not been applied.'; Exit; End;
+        Else If SetItem = FPrepared Then
+          Begin
+            ErrorText := 'This set has not been applied.';
+            Exit;
+          End;
     SetItem.ReviewText(BeforeText, AfterText);
     If Tool = 'lazarus_revert_changes' Then
-      Begin Text := BeforeText; BeforeText := AfterText; AfterText := Text; End;
+      Begin
+        Text := BeforeText;
+        BeforeText := AfterText;
+        AfterText := Text;
+      End;
     If Not Approve(FChangeRun, Tool, '', BeforeText, AfterText, ErrorText) Then
       Begin
         If Tool = 'lazarus_apply_changes' Then SetItem.State := 'rejected';
-        SetItem.Error := ErrorText; ResultText := SetItem.Receipt; ErrorText := ResultText; Exit;
+        SetItem.Error := ErrorText;
+        ResultText := SetItem.Receipt;
+        ErrorText := ResultText;
+        Exit;
       End;
     If Tool = 'lazarus_apply_changes' Then Result := SetItem.Apply(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent)
     Else Result := SetItem.Revert(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent);
@@ -316,34 +584,60 @@ Begin
     If FRunId = FChangeRun Then
       For I := 0 To High(FSnapshots) Do
         For J := 0 To High(SetItem.Items) Do If FSnapshots[I].Path = SetItem.Items[J].Path Then FSnapshots[I].Revision := '';
-    ResultText := SetItem.Receipt;
+      ResultText := SetItem.Receipt;
     If Not Result Then ErrorText := ResultText;
-  Finally Candidate.Free; FChangeBusy := False; End;
+  Finally
+    Candidate.Free;
+    FChangeBusy := False;
+  End;
 End;
+
 Function TAssistantToolBroker.ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
-  Out ResultText, ErrorText: String): Boolean;
-Var Pending: TLocalRenamePreview; Node: TJSONData; Id: TGuid;
+    Out ResultText, ErrorText: String): Boolean;
+Var
+  Pending: TLocalRenamePreview;
+  Node: TJSONData;
+  Id: TGuid;
   ActualPath, ActualText, Revision, RecheckedText, RecheckedDetails: String;
-  I: Integer; Fresh: Boolean;
+  I: Integer;
+  Fresh: Boolean;
   Function StillCurrent: Boolean;
   Begin
     Result := Not FCancelled And (FRunId = RunId) And (FAdapter.Identity = FIdentity);
-    If Not Result Then Begin ErrorText := 'Workspace/run changed during rename; prepare a new preview.'; Exit; End;
+    If Not Result Then
+      Begin
+        ErrorText := 'Workspace/run changed during rename; prepare a new preview.';
+        Exit;
+      End;
     Result := FAdapter.ReadBuffer(Pending.Path, ActualPath, ActualText, ErrorText) And
       (ActualPath = Pending.Path) And (ActualText = Pending.Text);
     If Not Result Then ErrorText := 'Source changed since rename preview; read it again and prepare a new preview.';
   End;
 Begin
-  Result := False; ResultText := ''; ErrorText := '';
-  If Not FAdapter.CanPreviewRename Then Begin ErrorText := 'Local rename is unavailable.'; Exit; End;
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If Not FAdapter.CanPreviewRename Then
+    Begin
+      ErrorText := 'Local rename is unavailable.';
+      Exit;
+    End;
   If Tool = 'lazarus_apply_local_rename' Then
     Begin
-      If FWriteScope <> awsProject Then Begin ErrorText := 'Applying a source rename requires Build mode.'; Exit; End;
+      If FWriteScope <> awsProject Then
+        Begin
+          ErrorText := 'Applying a source rename requires Build mode.';
+          Exit;
+        End;
       Node := Args.Find('preview_id');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Or
         (Node.AsString <> FRenamePreview.Id) Then
-        Begin ErrorText := 'Unknown, expired or already consumed rename preview.'; Exit; End;
-      Pending := FRenamePreview; FRenamePreview := Default(TLocalRenamePreview);
+          Begin
+            ErrorText := 'Unknown, expired or already consumed rename preview.';
+            Exit;
+          End;
+      Pending := FRenamePreview;
+      FRenamePreview := Default(TLocalRenamePreview);
       If Not StillCurrent Then Exit;
       If Not Approve(RunId, Tool, Pending.Path, Pending.Text, Pending.NewText, ErrorText) Then Exit;
       If Not StillCurrent Then Exit;
@@ -352,265 +646,467 @@ Begin
         RecheckedText, RecheckedDetails, ErrorText) Then Exit;
       If Not StillCurrent Then Exit;
       If (RecheckedText <> Pending.NewText) Or (RecheckedDetails <> Pending.Details) Then
-        Begin ErrorText := 'Semantic rename changed since preview; prepare a new preview.'; Exit; End;
+        Begin
+          ErrorText := 'Semantic rename changed since preview; prepare a new preview.';
+          Exit;
+        End;
       Result := CommitBuffer(Pending.Path, Pending.Text, Pending.NewText, ResultText, ErrorText);
       If Result Then ResultText := '{"preview_id":' + Quoted(Pending.Id) + ',"applied":true,' + Copy(ResultText, 2, MaxInt);
       Exit;
     End;
-  FRenamePreview := Default(TLocalRenamePreview); Pending := Default(TLocalRenamePreview);
+  FRenamePreview := Default(TLocalRenamePreview);
+  Pending := Default(TLocalRenamePreview);
   Node := Args.Find('path');
   If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
-    Begin ErrorText := 'A source buffer path is required.'; Exit; End;
+    Begin
+      ErrorText := 'A source buffer path is required.';
+      Exit;
+    End;
   If Not FAdapter.ReadBuffer(Node.AsString, Pending.Path, Pending.Text, ErrorText) Then Exit;
-  Revision := Args.Get('revision', ''); Fresh := False;
+  Revision := Args.Get('revision', '');
+  Fresh := False;
   For I := 0 To High(FSnapshots) Do
     If (Revision <> '') And (FSnapshots[I].Path = Pending.Path) And (FSnapshots[I].Revision = Revision) And
       (FSnapshots[I].Text = Pending.Text) Then Fresh := True;
-  If Not Fresh Then Begin ErrorText := 'Stale buffer revision; read the buffer before preparing a rename.'; Exit; End;
+    If Not Fresh Then
+      Begin
+        ErrorText := 'Stale buffer revision; read the buffer before preparing a rename.';
+        Exit;
+      End;
   Node := Args.Find('line');
   If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, Pending.Line) Or
     (Pending.Line < 1) Or (Pending.Line > MaxBufferBytes) Then
-    Begin ErrorText := 'line must be a positive integer within the buffer limit.'; Exit; End;
+      Begin
+        ErrorText := 'line must be a positive integer within the buffer limit.';
+        Exit;
+      End;
   Node := Args.Find('column');
   If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, Pending.Column) Or
     (Pending.Column < 1) Or (Pending.Column > MaxBufferBytes) Then
-    Begin ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.'; Exit; End;
+      Begin
+        ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.';
+        Exit;
+      End;
   Node := Args.Find('new_name');
   If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Length(Node.AsString) > 127) Then
-    Begin ErrorText := 'new_name must be a Pascal identifier of at most 127 characters.'; Exit; End;
+    Begin
+      ErrorText := 'new_name must be a Pascal identifier of at most 127 characters.';
+      Exit;
+    End;
   Pending.NewName := Node.AsString;
   If Not FAdapter.PreviewLocalRename(Pending.Path, Pending.Line, Pending.Column, Pending.NewName,
     Pending.NewText, Pending.Details, ErrorText) Then Exit;
   If Not StillCurrent Then Exit;
   If (Length(Pending.NewText) > MaxBufferBytes) Or (Length(Pending.Details) > 65536) Then
-    Begin ErrorText := 'Rename exceeds the preview size limit.'; Exit; End;
-  If CreateGUID(Id) <> 0 Then Begin ErrorText := 'Cannot create rename preview identity.'; Exit; End;
-  Pending.Id := GUIDToString(Id); FRenamePreview := Pending;
+    Begin
+      ErrorText := 'Rename exceeds the preview size limit.';
+      Exit;
+    End;
+  If CreateGUID(Id) <> 0 Then
+    Begin
+      ErrorText := 'Cannot create rename preview identity.';
+      Exit;
+    End;
+  Pending.Id := GUIDToString(Id);
+  FRenamePreview := Pending;
   ResultText := '{"preview_id":' + Quoted(Pending.Id) + ',"path":' + Quoted(Pending.Path) +
     ',"sourceRevision":' + Quoted(Revision) + ',"applied":false,"saved":false,"rename":' + Pending.Details + '}';
   Result := True;
 End;
+
 Function TAssistantToolBroker.CommitBuffer(Const Path, Text, NewText: String;
-  Out ResultText, ErrorText: String): Boolean;
-Var Revision, ActualPath, ActualText, CommitRun: String;
+    Out ResultText, ErrorText: String): Boolean;
+Var
+  Revision, ActualPath, ActualText, CommitRun: String;
   Procedure Invalidate;
-  Var I: Integer;
+  Var
+    I: Integer;
   Begin
     If FRunId <> CommitRun Then Exit;
     For I := 0 To High(FSnapshots) Do If FSnapshots[I].Path = Path Then
-      Begin FSnapshots[I].Revision := ''; FSnapshots[I].Text := ''; End;
+      Begin
+        FSnapshots[I].Revision := '';
+        FSnapshots[I].Text := '';
+      End;
   End;
 Begin
-  Result := False; ResultText := ''; CommitRun := FRunId;
+  Result := False;
+  ResultText := '';
+  CommitRun := FRunId;
   { Reserve before mutation; a budget failure must have no effects. }
   Revision := Remember(Path, NewText);
-  If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;
+  If Revision = '' Then
+    Begin
+      ErrorText := 'Snapshot budget exhausted.';
+      Exit;
+    End;
   Try
     If Not FAdapter.ReplaceBuffer(Path, Text, NewText, ErrorText) Then
-      Begin Invalidate; Exit; End;
+      Begin
+        Invalidate;
+        Exit;
+      End;
     If FCancelled Or (FRunId <> CommitRun) Or (FAdapter.Identity <> FIdentity) Then
-      Begin Invalidate; ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.'; Exit; End;
+      Begin
+        Invalidate;
+        ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.';
+        Exit;
+      End;
     { SynEdit can normalize line endings; return a revision of the actual text. }
     If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or (ActualPath <> Path) Then
-      Begin Invalidate; ErrorText := 'Buffer was edited but could not be read back; inspect and reread it.'; Exit; End;
+      Begin
+        Invalidate;
+        ErrorText := 'Buffer was edited but could not be read back; inspect and reread it.';
+        Exit;
+      End;
     If FCancelled Or (FRunId <> CommitRun) Or (FAdapter.Identity <> FIdentity) Then
-      Begin Invalidate; ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.'; Exit; End;
+      Begin
+        Invalidate;
+        ErrorText := 'Buffer was edited but the workspace/run changed; inspect and reread it.';
+        Exit;
+      End;
     Revision := Remember(Path, ActualText);
     If Revision = '' Then
-      Begin Invalidate; ErrorText := 'Buffer was edited but its normalized text exceeds the snapshot budget.'; Exit; End;
+      Begin
+        Invalidate;
+        ErrorText := 'Buffer was edited but its normalized text exceeds the snapshot budget.';
+        Exit;
+      End;
     ResultText := '{"bufferUpdated":true,"saved":false,"revision":' + Quoted(Revision) +
       ',"text":' + Quoted(ActualText) + '}';
     Result := True;
   Except
     On E: Exception Do
-      Begin Invalidate; ErrorText := 'Editor commit failed; inspect and reread the buffer before retrying: ' + E.Message; End;
+      Begin
+        Invalidate;
+        ErrorText := 'Editor commit failed; inspect and reread the buffer before retrying: ' + E.Message;
+      End;
   End;
 End;
+
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
-  Out ResultText, ErrorText: String): Boolean;
-Var Data, Node, BuildReply: TJSONData; Args: TJSONObject; Path, Text, Revision, NewText, ActualPath, ActualText: String;
-  I, Index, Line, Column, MaxResults: Integer; SearchPaths: TStringList; ResultField: String; Semantic: Boolean;
+    Out ResultText, ErrorText: String): Boolean;
+Var
+  Data, Node, BuildReply: TJSONData;
+  Args: TJSONObject;
+  Path, Text, Revision, NewText, ActualPath, ActualText: String;
+  I, Index, Line, Column, MaxResults: Integer;
+  SearchPaths: TStringList;
+  ResultField: String;
+  Semantic: Boolean;
 Begin
-  Result := False; ResultText := ''; ErrorText := '';
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
   Semantic := (Tool = 'lazarus_find_declaration') Or (Tool = 'lazarus_find_references') Or (Tool = 'lazarus_symbol_context');
   If GetCurrentThreadID <> FOwner Then
-    Begin ErrorText := 'IDE tool dispatched on the wrong thread.'; Exit; End;
+    Begin
+      ErrorText := 'IDE tool dispatched on the wrong thread.';
+      Exit;
+    End;
   If FCancelled Or (RunId = '') Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
-    Begin ErrorText := 'Workspace/run changed or was cancelled; start a new run.'; Exit; End;
-  If FChangeBusy Then Begin ErrorText := 'A multi-editor transaction is in progress.'; Exit; End;
+    Begin
+      ErrorText := 'Workspace/run changed or was cancelled; start a new run.';
+      Exit;
+    End;
+  If FChangeBusy Then
+    Begin
+      ErrorText := 'A multi-editor transaction is in progress.';
+      Exit;
+    End;
   If Length(Arguments) > MaxBufferBytes + 65536 Then
-    Begin ErrorText := 'Tool arguments exceed the buffer limit.'; Exit; End;
+    Begin
+      ErrorText := 'Tool arguments exceed the buffer limit.';
+      Exit;
+    End;
   Data := Nil;
   Try
     Try
       Data := GetJSON(Arguments);
       If Not (Data Is TJSONObject) Then
-        Begin ErrorText := 'Expected object arguments.'; Exit; End;
+        Begin
+          ErrorText := 'Expected object arguments.';
+          Exit;
+        End;
       Args := TJSONObject(Data);
       If (Tool = 'lazarus_prepare_changes') Or (Tool = 'lazarus_apply_changes') Or
         (Tool = 'lazarus_change_status') Or (Tool = 'lazarus_revert_changes') Then
-        Begin Result := ExecuteChanges(Tool, Args, ResultText, ErrorText); Exit; End;
+          Begin
+            Result := ExecuteChanges(Tool, Args, ResultText, ErrorText);
+            Exit;
+          End;
       If (Tool = 'lazarus_preview_local_rename') Or (Tool = 'lazarus_apply_local_rename') Then
-        Begin Result := ExecuteRename(RunId, Tool, Args, ResultText, ErrorText); Exit; End;
+        Begin
+          Result := ExecuteRename(RunId, Tool, Args, ResultText, ErrorText);
+          Exit;
+        End;
       If Tool = 'lazarus_create_file' Then
         Begin
           If (FWriteScope = awsReadOnly) Or Not FAdapter.CanCreateFiles Then
-            Begin ErrorText := 'New file creation requires Plan or Build mode and a supported workspace.'; Exit; End;
+            Begin
+              ErrorText := 'New file creation requires Plan or Build mode and a supported workspace.';
+              Exit;
+            End;
           Node := Args.Find('path');
           If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
-            Begin ErrorText := 'A new project file path is required.'; Exit; End;
+            Begin
+              ErrorText := 'A new project file path is required.';
+              Exit;
+            End;
           If Not CanWritePath(Node.AsString) Then
-            Begin ErrorText := 'Plan mode can only create Markdown files.'; Exit; End;
+            Begin
+              ErrorText := 'Plan mode can only create Markdown files.';
+              Exit;
+            End;
           If Not FAdapter.CheckNewFile(Node.AsString, Path, ErrorText) Then Exit;
           If Not CanWritePath(Path) Then
-            Begin ErrorText := 'Plan mode can only create Markdown files.'; Exit; End;
+            Begin
+              ErrorText := 'Plan mode can only create Markdown files.';
+              Exit;
+            End;
           Node := Args.Find('text');
           If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
-            Begin ErrorText := 'File text is required.'; Exit; End;
+            Begin
+              ErrorText := 'File text is required.';
+              Exit;
+            End;
           NewText := Node.AsString;
           If (Length(NewText) > MaxBufferBytes) Or (Pos(#0, NewText) > 0) Then
-            Begin ErrorText := 'File must contain at most 1 MiB of text without NUL bytes.'; Exit; End;
+            Begin
+              ErrorText := 'File must contain at most 1 MiB of text without NUL bytes.';
+              Exit;
+            End;
           If Not Approve(RunId, Tool, Path, '', NewText, ErrorText) Then Exit;
-          Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText); Exit;
+          Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText);
+          Exit;
         End;
       If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Or (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanBuild Then
-            Begin ErrorText := 'Build tools are unavailable in this mode.'; Exit; End;
+            Begin
+              ErrorText := 'Build tools are unavailable in this mode.';
+              Exit;
+            End;
           If (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
-            If Not FAdapter.CanTest Then Begin ErrorText := 'Configured tests are unavailable.'; Exit; End;
+            If Not FAdapter.CanTest Then
+              Begin
+                ErrorText := 'Configured tests are unavailable.';
+                Exit;
+              End;
           If Tool = 'lazarus_start_tests' Then
             Begin
               Node := Args.Find('build_job_id');
               If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
-                Begin ErrorText := 'A successful current build_job_id is required.'; Exit; End;
+                Begin
+                  ErrorText := 'A successful current build_job_id is required.';
+                  Exit;
+                End;
               ActualPath := Node.AsString;
               If Not FAdapter.TestCommand(ActualPath, Text, ErrorText) Then Exit;
               If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;
-              Result := FAdapter.StartTests(ActualPath, Text, ResultText, ErrorText); Exit;
+              Result := FAdapter.StartTests(ActualPath, Text, ResultText, ErrorText);
+              Exit;
             End;
           If Tool = 'lazarus_start_build' Then
             Begin
               If Not Approve(RunId, Tool, '', '', '', ErrorText) Then Exit;
               Result := FAdapter.StartBuild(ResultText, ErrorText);
             End
-          Else
-            Begin
-              Node := Args.Find('job_id');
-              If Assigned(Node) And ((Node.JSONType <> jtString) Or (Node.AsString = '')) Then
-                Begin ErrorText := 'job_id must be a nonempty string.'; Exit; End;
-              If Tool = 'lazarus_test_status' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
-              Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
-              If Result And Assigned(Node) Then
+              Else
                 Begin
-                  BuildReply := GetJSON(ResultText);
-                  Try
-                    If Not (BuildReply Is TJSONObject) Or (TJSONObject(BuildReply).Get('job_id', '') <> Node.AsString) Then
-                      Begin Result := False; ResultText := ''; ErrorText := 'Build job is no longer current; do not use another job as evidence.'; End;
-                  Finally BuildReply.Free; End;
+                  Node := Args.Find('job_id');
+                  If Assigned(Node) And ((Node.JSONType <> jtString) Or (Node.AsString = '')) Then
+                    Begin
+                      ErrorText := 'job_id must be a nonempty string.';
+                      Exit;
+                    End;
+                  If Tool = 'lazarus_test_status' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
+                  Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
+                  If Result And Assigned(Node) Then
+                    Begin
+                      BuildReply := GetJSON(ResultText);
+                      Try
+                        If Not (BuildReply Is TJSONObject) Or (TJSONObject(BuildReply).Get('job_id', '') <> Node.AsString) Then
+                          Begin
+                            Result := False;
+                            ResultText := '';
+                            ErrorText := 'Build job is no longer current; do not use another job as evidence.';
+                          End;
+                      Finally
+                        BuildReply.Free;
+                      End;
+                    End;
                 End;
-            End;
           Exit;
         End;
       If Tool = 'lazarus_run_git' Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanGit Then
-            Begin ErrorText := 'Git execution requires Build mode.'; Exit; End;
+            Begin
+              ErrorText := 'Git execution requires Build mode.';
+              Exit;
+            End;
           If Not Approve(RunId, Tool, '', '', Arguments, ErrorText) Then Exit;
           Result := FAdapter.RunGit(Arguments, ResultText, ErrorText);
           Exit;
         End;
       If Tool = 'lazarus_project_info' Then
-        Begin ResultText := FAdapter.Describe; Exit(True); End;
+        Begin
+          ResultText := FAdapter.Describe;
+          Exit(True);
+        End;
       If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
         (Tool = 'lazarus_open_buffer') Then
-        Begin
-          If Not FAdapter.CanInspectFiles Then
-            Begin ErrorText := 'Project file inspection unavailable.'; Exit; End;
-          Node := Args.Find('path');
-          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or
-            ((Tool <> 'lazarus_list_directory') And (Trim(Node.AsString) = '')) Then
-            Begin ErrorText := 'A project path is required.'; Exit; End;
-          If Tool = 'lazarus_read_file' Then
-            Begin Result := FAdapter.ReadFile(Arguments, ResultText, ErrorText); Exit; End;
-          If Tool = 'lazarus_list_directory' Then
-            Begin Result := FAdapter.ListDirectory(Arguments, ResultText, ErrorText); Exit; End;
-          If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
-        End;
+          Begin
+            If Not FAdapter.CanInspectFiles Then
+              Begin
+                ErrorText := 'Project file inspection unavailable.';
+                Exit;
+              End;
+            Node := Args.Find('path');
+            If Not Assigned(Node) Or (Node.JSONType <> jtString) Or
+              ((Tool <> 'lazarus_list_directory') And (Trim(Node.AsString) = '')) Then
+                Begin
+                  ErrorText := 'A project path is required.';
+                  Exit;
+                End;
+            If Tool = 'lazarus_read_file' Then
+              Begin
+                Result := FAdapter.ReadFile(Arguments, ResultText, ErrorText);
+                Exit;
+              End;
+            If Tool = 'lazarus_list_directory' Then
+              Begin
+                Result := FAdapter.ListDirectory(Arguments, ResultText, ErrorText);
+                Exit;
+              End;
+            If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
+          End;
       If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
         (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') And
         (Not Semantic) Then
-        Begin ErrorText := 'Tool is not registered with the IDE broker.'; Exit; End;
+          Begin
+            ErrorText := 'Tool is not registered with the IDE broker.';
+            Exit;
+          End;
       Node := Args.Find('path');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
-        Begin ErrorText := 'A buffer path is required.'; Exit; End;
+        Begin
+          ErrorText := 'A buffer path is required.';
+          Exit;
+        End;
       If Not FAdapter.ReadBuffer(Node.AsString, Path, Text, ErrorText) Then Exit;
       If Length(Text) > MaxBufferBytes Then
-        Begin ErrorText := 'Buffer exceeds the supported size.'; Exit; End;
+        Begin
+          ErrorText := 'Buffer exceeds the supported size.';
+          Exit;
+        End;
       If (Tool = 'lazarus_read_buffer') Or (Tool = 'lazarus_open_buffer') Then
         Begin
           Revision := Remember(Path, Text);
-          If Revision = '' Then Begin ErrorText := 'Snapshot budget exhausted.'; Exit; End;
+          If Revision = '' Then
+            Begin
+              ErrorText := 'Snapshot budget exhausted.';
+              Exit;
+            End;
           ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}';
           Exit(True);
         End;
       If (Not Semantic) And
         (Not CanWritePath(Node.AsString) Or Not CanWritePath(Path)) Then
-        Begin ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.'; Exit; End;
-      Revision := Args.Get('revision', ''); Index := -1;
+          Begin
+            ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.';
+            Exit;
+          End;
+      Revision := Args.Get('revision', '');
+      Index := -1;
       For I := 0 To High(FSnapshots) Do
         If (Revision <> '') And (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
-        Begin ErrorText := 'Stale buffer revision; read the buffer again before using this request.'; Exit; End;
+        Begin
+          ErrorText := 'Stale buffer revision; read the buffer again before using this request.';
+          Exit;
+        End;
       If Semantic Then
         Begin
           If ((Tool = 'lazarus_find_declaration') And Not FAdapter.CanFindDeclaration) Or
             ((Tool <> 'lazarus_find_declaration') And Not FAdapter.CanInspectSymbols) Then
-            Begin ErrorText := 'CodeTools symbol lookup is unavailable.'; Exit; End;
+              Begin
+                ErrorText := 'CodeTools symbol lookup is unavailable.';
+                Exit;
+              End;
           Node := Args.Find('line');
           If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
             Not TryStrToInt(Node.AsJSON, Line) Or (Line < 1) Or (Line > MaxBufferBytes) Then
-            Begin ErrorText := 'line must be a positive integer within the buffer limit.'; Exit; End;
+              Begin
+                ErrorText := 'line must be a positive integer within the buffer limit.';
+                Exit;
+              End;
           Node := Args.Find('column');
           If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or
             Not TryStrToInt(Node.AsJSON, Column) Or (Column < 1) Or (Column > MaxBufferBytes) Then
-            Begin ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.'; Exit; End;
+              Begin
+                ErrorText := 'column must be a positive UTF-8 byte column within the buffer limit.';
+                Exit;
+              End;
           ResultField := 'declaration';
           If Tool = 'lazarus_find_declaration' Then
-            Begin If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit; End
-          Else If Tool = 'lazarus_symbol_context' Then
             Begin
-              ResultField := 'symbol';
-              If Not FAdapter.SymbolContext(Path, Line, Column, ResultText, ErrorText) Then Exit;
+              If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit;
             End
-          Else
-            Begin
-              ResultField := 'references'; MaxResults := 100;
-              Node := Args.Find('max_results');
-              If Assigned(Node) And ((Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, MaxResults) Or
-                (MaxResults < 1) Or (MaxResults > 200)) Then
-                Begin ErrorText := 'max_results must be an integer from 1 to 200.'; Exit; End;
-              Node := Args.Find('search_paths');
-              If Not (Node Is TJSONArray) Or (Node.Count < 1) Or (Node.Count > 32) Then
-                Begin ErrorText := 'search_paths must list 1 to 32 project source files.'; Exit; End;
-              SearchPaths := TStringList.Create;
-              Try
-                For I := 0 To Node.Count - 1 Do
-                  Begin
-                    If (Node.Items[I].JSONType <> jtString) Or (Trim(Node.Items[I].AsString) = '') Then
-                      Begin ErrorText := 'Each search path must be a nonempty string.'; Exit; End;
-                    SearchPaths.Add(Node.Items[I].AsString);
-                  End;
-                If Not FAdapter.FindReferences(Path, Line, Column, SearchPaths, MaxResults, ResultText, ErrorText) Then Exit;
-              Finally SearchPaths.Free; End;
-            End;
+              Else If Tool = 'lazarus_symbol_context' Then
+                Begin
+                  ResultField := 'symbol';
+                  If Not FAdapter.SymbolContext(Path, Line, Column, ResultText, ErrorText) Then Exit;
+                End
+                  Else
+                    Begin
+                      ResultField := 'references';
+                      MaxResults := 100;
+                      Node := Args.Find('max_results');
+                      If Assigned(Node) And ((Node.JSONType <> jtNumber) Or Not TryStrToInt(Node.AsJSON, MaxResults) Or
+                        (MaxResults < 1) Or (MaxResults > 200)) Then
+                          Begin
+                            ErrorText := 'max_results must be an integer from 1 to 200.';
+                            Exit;
+                          End;
+                      Node := Args.Find('search_paths');
+                      If Not (Node Is TJSONArray) Or (Node.Count < 1) Or (Node.Count > 32) Then
+                        Begin
+                          ErrorText := 'search_paths must list 1 to 32 project source files.';
+                          Exit;
+                        End;
+                      SearchPaths := TStringList.Create;
+                      Try
+                        For I := 0 To Node.Count - 1 Do
+                          Begin
+                            If (Node.Items[I].JSONType <> jtString) Or (Trim(Node.Items[I].AsString) = '') Then
+                              Begin
+                                ErrorText := 'Each search path must be a nonempty string.';
+                                Exit;
+                              End;
+                            SearchPaths.Add(Node.Items[I].AsString);
+                          End;
+                        If Not FAdapter.FindReferences(Path, Line, Column, SearchPaths, MaxResults, ResultText, ErrorText) Then Exit;
+                      Finally
+                        SearchPaths.Free;
+                      End;
+                    End;
           { CodeTools can invoke IDE callbacks. Do not return coordinates from
             a request whose workspace or source changed while it was running. }
           If FCancelled Or (RunId <> FRunId) Or (FAdapter.Identity <> FIdentity) Then
-            Begin ResultText := ''; ErrorText := 'Workspace/run changed during symbol lookup.'; Exit; End;
+            Begin
+              ResultText := '';
+              ErrorText := 'Workspace/run changed during symbol lookup.';
+              Exit;
+            End;
           If Not FAdapter.ReadBuffer(Path, ActualPath, ActualText, ErrorText) Or
             (ActualPath <> Path) Or (ActualText <> Text) Then
-            Begin ResultText := ''; ErrorText := 'Source changed during symbol lookup; read it again.'; Exit; End;
+              Begin
+                ResultText := '';
+                ErrorText := 'Source changed during symbol lookup; read it again.';
+                Exit;
+              End;
           ResultText := '{"sourceRevision":' + Quoted(Revision) + ',' + Quoted(ResultField) + ':' + ResultText + '}';
           Exit(True);
         End;
@@ -623,23 +1119,34 @@ Begin
         End;
       Node := Args.Find('text');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
-        Begin ErrorText := 'Replacement text is required.'; Exit; End;
+        Begin
+          ErrorText := 'Replacement text is required.';
+          Exit;
+        End;
       NewText := Node.AsString;
       If Length(NewText) > MaxBufferBytes Then
-        Begin ErrorText := 'Replacement exceeds the buffer limit.'; Exit; End;
+        Begin
+          ErrorText := 'Replacement exceeds the buffer limit.';
+          Exit;
+        End;
       If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
       Result := CommitBuffer(Path, Text, NewText, ResultText, ErrorText);
     Except
       On E: Exception Do ErrorText := 'IDE tool failed: ' + E.Message;
     End;
-  Finally Data.Free; End;
+  Finally
+    Data.Free;
+  End;
 End;
+
 Function TAssistantToolBroker.ToolsJson: String;
-Const ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
+Const
+  ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
   FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
   SaveSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"}},"required":["path","revision"],"additionalProperties":false}';
-Var WriteNote: String;
+Var
+  WriteNote: String;
 Begin
   WriteNote := '';
   If FWriteScope = awsMarkdown Then WriteNote := ' Plan mode: only .md, .markdown and .mdown files are writable.';

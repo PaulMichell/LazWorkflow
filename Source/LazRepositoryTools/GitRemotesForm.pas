@@ -313,7 +313,11 @@ Var
   End;
 Begin
   Result := False; ErrorMessage := ''; Mutated := False;
-  If Not Assigned(GitClient) Then Begin ErrorMessage := 'Git client is not available.'; Exit; End;
+  If Not Assigned(GitClient) Then
+    Begin
+      ErrorMessage := 'Git client is not available.';
+      Exit;
+    End;
   GitClient.RepoPath := FRepoPath;
   Names := TStringList.Create; Names.CaseSensitive := True;
   Urls := TStringList.Create; Originals := TStringList.Create; Originals.CaseSensitive := True;

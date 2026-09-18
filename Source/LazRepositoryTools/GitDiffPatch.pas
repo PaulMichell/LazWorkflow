@@ -83,9 +83,16 @@ Var
   Var C: Integer;
   Begin
     C := Pos(',', Value);
-    If C = 0 Then Begin Start := StrToIntDef(Value, 0); Count := 1; End
-    Else Begin Start := StrToIntDef(Copy(Value, 1, C - 1), 0);
-      Count := StrToIntDef(Copy(Value, C + 1, MaxInt), 0); End;
+    If C = 0 Then
+      Begin
+        Start := StrToIntDef(Value, 0);
+        Count := 1;
+      End
+    Else
+      Begin
+        Start := StrToIntDef(Copy(Value, 1, C - 1), 0);
+        Count := StrToIntDef(Copy(Value, C + 1, MaxInt), 0);
+      End;
   End;
 Begin
   Result := Nil;
@@ -101,12 +108,26 @@ Begin
       Else If (OldLeft > 0) Or (NewLeft > 0) Then
         Begin
           If Copy(S, 1, 1) = '+' Then
-            Begin Result[I].Kind := dlAdded; Dec(NewLeft); End
+            Begin
+              Result[I].Kind := dlAdded;
+              Dec(NewLeft);
+            End
           Else If Copy(S, 1, 1) = '-' Then
-            Begin Result[I].Kind := dlRemoved; Dec(OldLeft); End
+            Begin
+              Result[I].Kind := dlRemoved;
+              Dec(OldLeft);
+            End
           Else If (S = '') Or (S[1] = ' ') Then
-            Begin Result[I].Kind := dlContext; Dec(OldLeft); Dec(NewLeft); End
-          Else Begin OldLeft := 0; NewLeft := 0; End;
+            Begin
+              Result[I].Kind := dlContext;
+              Dec(OldLeft);
+              Dec(NewLeft);
+            End
+          Else
+            Begin
+              OldLeft := 0;
+              NewLeft := 0;
+            End;
         End
       Else If Copy(S, 1, 3) = '@@ ' Then
         Begin
@@ -145,10 +166,18 @@ Begin
         If Parsed[I].Kind = dlMeta Then
           Begin
             If Copy(Lines[I], 1, 11) = 'diff --git ' Then
-              Begin Headers.Clear; Delta := 0; FileWritten := False; End;
+              Begin
+                Headers.Clear;
+                Delta := 0;
+                FileWritten := False;
+              End;
             Headers.Add(Lines[I]); Inc(I); Continue;
           End;
-        If Parsed[I].Kind <> dlHunk Then Begin Inc(I); Continue; End;
+        If Parsed[I].Kind <> dlHunk Then
+          Begin
+            Inc(I);
+            Continue;
+          End;
         OldBase := Parsed[I].OldStart - Ord(Parsed[I].OldCount > 0);
         NewBase := Parsed[I].NewStart - Ord(Parsed[I].NewCount > 0);
         If Reverse Then OldBase := NewBase - Delta Else NewBase := OldBase + Delta;
@@ -159,7 +188,13 @@ Begin
             S := Lines[I];
             Selected := LineIsSelectedInPatch(I + 1, FirstLine, LastLine, SelectedFullLines);
             Case Parsed[I].Kind Of
-              dlContext: Begin Body.Add(S); Inc(OldCount); Inc(NewCount); Kept := True; End;
+              dlContext:
+              Begin
+                Body.Add(S);
+                Inc(OldCount);
+                Inc(NewCount);
+                Kept := True;
+              End;
               dlAdded, dlRemoved:
                 Begin
                   Kept := Selected Or ((Parsed[I].Kind = dlAdded) = Reverse);
@@ -169,7 +204,11 @@ Begin
                       If Parsed[I].Kind = dlAdded Then Inc(NewCount) Else Inc(OldCount);
                     End
                   Else If Kept Then
-                    Begin Body.Add(' ' + Copy(S, 2, MaxInt)); Inc(OldCount); Inc(NewCount); End;
+                    Begin
+                      Body.Add(' ' + Copy(S, 2, MaxInt));
+                      Inc(OldCount);
+                      Inc(NewCount);
+                    End;
                 End;
               dlNoNewline: If Kept Then Body.Add(S);
             End;

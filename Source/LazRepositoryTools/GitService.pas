@@ -1346,7 +1346,10 @@ Begin
     FS := TFileStream.Create(FullPath, fmOpenRead Or fmShareDenyNone);
     Try
       If FS.Size > GitPreviewByteLimit Then
-        Begin FLastError := 'Preview exceeds 8 MiB limit'; Exit; End;
+        Begin
+          FLastError := 'Preview exceeds 8 MiB limit';
+          Exit;
+        End;
       If FS.Size > 0 Then Stream.CopyFrom(FS, FS.Size);
       Result := True;
     Finally
@@ -1369,7 +1372,10 @@ Begin
   If (Sha = '') And Not Staged Then Exit(ReadWorkingTreeBytes(Path, Stream));
   Spec := Sha + ':' + Path;
   If BlobByteSize(Spec) > GitPreviewByteLimit Then
-    Begin FLastError := 'Preview exceeds 8 MiB limit'; Exit; End;
+    Begin
+      FLastError := 'Preview exceeds 8 MiB limit';
+      Exit;
+    End;
   PreviousLimit := FOutputLimit; FOutputLimit := GitPreviewByteLimit;
   Try
     Result := RunGitBinary(['show', Spec], Stream, ExitCode);
@@ -1445,7 +1451,10 @@ Begin
           { Exit 1 means files differ; diagnostics and other failures are not a diff. }
           If (ExitCode = 1) And (FLastCommand.ErrorText = '') And
             (DiffText <> '') And Not IsCancelled And (FLastError <> 'Timed out') Then
-            Begin Result := True; FLastError := ''; End;
+            Begin
+              Result := True;
+              FLastError := '';
+            End;
         End;
     End;
 
@@ -1946,14 +1955,23 @@ Begin
   Path := Trim(Path);
   If Not FilenameIsAbsolute(Path) Then Path := IncludeTrailingPathDelimiter(FRepoPath) + Path;
   Path := GetPhysicalFilename(Path, pfeEmpty);
-  If Path = '' Then Begin FLastError := 'Could not resolve repository config'; Exit; End;
+  If Path = '' Then
+    Begin
+      FLastError := 'Could not resolve repository config';
+      Exit;
+    End;
   Try
     Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
     Try
       SetLength(Snapshot.ConfigText, Stream.Size);
       If Stream.Size > 0 Then Stream.ReadBuffer(Snapshot.ConfigText[1], Stream.Size);
     Finally Stream.Free; End;
-  Except On E: Exception Do Begin FLastError := E.Message; Exit; End; End;
+  Except On E: Exception Do
+  Begin
+    FLastError := E.Message;
+    Exit;
+  End;
+  End;
   If Not RunGit(['for-each-ref', '--format=%(refname) %(objectname) %(symref)', 'refs/remotes/'], Snapshot.RefsText, Code) Then Exit;
   Snapshot.RepoPath := FRepoPath; Snapshot.ConfigPath := Path; Result := True;
 End;
@@ -1973,7 +1991,10 @@ Var
 Begin
   Result := False;
   If (Snapshot.ConfigPath = '') Or (CompareFilenames(Snapshot.RepoPath, FRepoPath) <> 0) Then
-    Begin FLastError := 'Remote snapshot belongs to another repository'; Exit; End;
+    Begin
+      FLastError := 'Remote snapshot belongs to another repository';
+      Exit;
+    End;
   LockPath := Snapshot.ConfigPath + '.lock';
   {$IFDEF UNIX}
   Handle := fpOpen(PChar(LockPath), O_WRONLY Or O_CREAT Or O_EXCL, &600);
@@ -1981,7 +2002,10 @@ Begin
   Handle := Windows.CreateFile(PChar(LockPath), GENERIC_WRITE, 0, Nil, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
   {$ENDIF}
   If Handle = THandle(-1) Then
-    Begin FLastError := 'Could not lock config for remote rollback: ' + SysErrorMessage(GetLastOSError); Exit; End;
+    Begin
+      FLastError := 'Could not lock config for remote rollback: ' + SysErrorMessage(GetLastOSError);
+      Exit;
+    End;
   Try
     Try
       Stream := THandleStream.Create(Handle);
@@ -1995,7 +2019,12 @@ Begin
       If Not MoveFileEx(PChar(LockPath), PChar(Snapshot.ConfigPath), MOVEFILE_REPLACE_EXISTING Or MOVEFILE_WRITE_THROUGH) Then
         Raise Exception.Create('Could not restore repository config');
       {$ENDIF}
-    Except On E: Exception Do Begin FLastError := E.Message; Exit; End; End;
+    Except On E: Exception Do
+    Begin
+      FLastError := E.Message;
+      Exit;
+    End;
+    End;
   Finally
     If FileExists(LockPath) Then SysUtils.DeleteFile(LockPath);
   End;
