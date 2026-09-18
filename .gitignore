@@ -32,3 +32,6 @@ Packages/*.pas
 .DS_Store
 Thumbs.db
 *~
+
+# Command-line tools built to the repository root
+/PascalStyle
