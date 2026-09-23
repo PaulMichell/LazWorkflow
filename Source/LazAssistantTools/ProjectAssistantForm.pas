@@ -263,7 +263,8 @@ Type
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
     FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
-    BuildSections: TObjectList; { of TPlanSection for the Build work-package list (not published). }
+    BuildSections: TObjectList; { of TPlanSection for the Build progress list (not published). }
+    PlanListPaths: TStringList; { Parallel to PlanList captions; relative paths. }
     FBuildSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FBuildWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
     FBuildWorkSectionTitle: String;
@@ -323,6 +324,7 @@ Type
     Procedure ApplyShellConfigFromStore;
     Procedure EnsurePlanTabUi;
     Procedure RefreshPlanList;
+    Function ActivePlanCaption(Const ActivePlan: String): String;
     Procedure PlanNewButtonClick(Sender: TObject);
     Procedure PlanOpenButtonClick(Sender: TObject);
     Procedure PlanSetActiveButtonClick(Sender: TObject);
@@ -333,6 +335,8 @@ Type
     Procedure EnsureBuildTabUi;
     Procedure RefreshBuildTodos;
     Function SelectedBuildSectionIndex: Integer;
+    Function SelectedBuildRowIsContext: Boolean;
+    Function BuildSelectionMessage: String;
     Procedure SetBuildStatusFeedback(Const MessageText: String);
     Procedure SetSelectedBuildSectionStatus(NewStatus: TPlanSectionStatus);
     Procedure ClearBuildWorkTracking;
@@ -352,7 +356,7 @@ Type
     Procedure StopWorkOnPlanAgent(Const Reason: String);
     Procedure ContinueWorkOnPlanAgent(Data: PtrInt);
     Function FindNextIncompleteBuildSection: Integer;
-    Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody: String): String;
+    Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String): String;
     Procedure MaybeWarnHighContextUsage;
     Function AutoNewChatAtLimitEnabled: Boolean;
     Procedure SyncAutoNewChatCheckFromConfig;
@@ -514,6 +518,7 @@ Begin
   FDisplayEventsFile := '';
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
+  PlanListPaths := TStringList.Create;
   Transcript := TStringList.Create;
   BuildSections := TObjectList.Create(True);
   BuildPanel := Nil;
@@ -591,6 +596,7 @@ Begin
     AssistantClient.OnTrace := Nil;
   FreeAndNil(Transcript);
   FreeAndNil(HistoryIds);
+  FreeAndNil(PlanListPaths);
   FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
   If Assigned(FSlashList) Then
@@ -1040,14 +1046,8 @@ Begin
 End;
 
 Function TProjectAssistantForm.LooksLikePlanMarkdown(Const Body: String): Boolean;
-Var
-  T: String;
 Begin
-  T := Trim(Body);
-  Result := (Length(T) >= 120) And
-    ((Pos('##', T) > 0) Or (Pos('# ', T) = 1) Or (Pos('# ', T) > 0)) And
-    ((Pos('Status:', T) > 0) Or (Pos('status:', LowerCase(T)) > 0) Or
-     (Pos('Implementation', T) > 0) Or (Pos('work package', LowerCase(T)) > 0));
+  Result := TextIsAssistantPlan(Body);
 End;
 
 Procedure TProjectAssistantForm.PersistPlanReplyIfNeeded(Const ErrorText: String);
@@ -1232,35 +1232,49 @@ End;
 Function TProjectAssistantForm.SelectedPlanRelativePath: String;
 Begin
   Result := '';
-  If Not Assigned(PlanList) Then
+  If Not Assigned(PlanList) Or Not Assigned(PlanListPaths) Then
     Exit;
-  If (PlanList.ItemIndex < 0) Or (PlanList.ItemIndex >= PlanList.Items.Count) Then
+  If (PlanList.ItemIndex < 0) Or (PlanList.ItemIndex >= PlanListPaths.Count) Then
     Exit;
-  Result := PlanList.Items[PlanList.ItemIndex];
+  Result := PlanListPaths[PlanList.ItemIndex];
+End;
+
+Function TProjectAssistantForm.ActivePlanCaption(Const ActivePlan: String): String;
+Var
+  Resolved, Title, Err: String;
+Begin
+  If ActivePlan = '' Then
+    Result := 'Active plan: (none) — create one under Documents/ or Set active'
+  Else If (Not ResolvePlanPath(ActivePlan, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
+    Result := 'Active plan: ' + ActivePlan
+  Else If TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+    Result := 'Active plan: ' + FormatPlanListCaption(Title, ActivePlan)
+  Else
+    Result := 'Active plan: ' + ActivePlan + ' — not a recognised assistant plan';
 End;
 
 Procedure TProjectAssistantForm.RefreshPlanList;
 Var
-  Paths: TStringList;
-  Err: String;
+  Paths, Titles: TStringList;
+  Err, ActivePlan, CaptionText: String;
   I, Sel: Integer;
-  ActivePlan: String;
 Begin
   If Not Assigned(PlanList) Then
     Exit;
+  If Not Assigned(PlanListPaths) Then
+    PlanListPaths := TStringList.Create;
   ActivePlan := GetActivePlanRelativePath;
   If Assigned(PlanActiveLabel) Then
-    If ActivePlan = '' Then
-      PlanActiveLabel.Caption := 'Active plan: (none) — create one under Documents/ or Set active'
-    Else
-      PlanActiveLabel.Caption := 'Active plan: ' + ActivePlan;
+    PlanActiveLabel.Caption := ActivePlanCaption(ActivePlan);
 
   Paths := Nil;
+  Titles := Nil;
   Sel := -1;
   PlanList.Items.BeginUpdate;
   Try
     PlanList.Items.Clear;
-    If Not ListProjectMarkdownPlans(Paths, Err) Then
+    PlanListPaths.Clear;
+    If Not ListProjectMarkdownPlans(Paths, Titles, Err) Then
       Begin
         If Err <> '' Then
           PlanList.Items.Add('(' + Err + ')');
@@ -1268,7 +1282,12 @@ Begin
       End;
     For I := 0 To Paths.Count - 1 Do
       Begin
-        PlanList.Items.Add(Paths[I]);
+        If I < Titles.Count Then
+          CaptionText := FormatPlanListCaption(Titles[I], Paths[I])
+        Else
+          CaptionText := Paths[I];
+        PlanList.Items.Add(CaptionText);
+        PlanListPaths.Add(Paths[I]);
         If SameText(Paths[I], ActivePlan) Then
           Sel := I;
       End;
@@ -1279,6 +1298,7 @@ Begin
   Finally
     PlanList.Items.EndUpdate;
     Paths.Free;
+    Titles.Free;
   End;
 End;
 
@@ -1463,7 +1483,7 @@ Begin
   BuildStatusLabel := TLabel.Create(Self);
   BuildStatusLabel.Parent := BuildPanel;
   BuildStatusLabel.Align := alBottom;
-  BuildStatusLabel.Caption := 'Select a work package, then Start / Done / Reset.';
+  BuildStatusLabel.Caption := 'Select an actionable item, then Start / Done / Reset.';
   BuildStatusLabel.WordWrap := True;
   BuildStatusLabel.BorderSpacing.Top := 6;
 
@@ -1477,24 +1497,26 @@ End;
 
 Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
-  PlanRel, Err: String;
-  I, Keep: Integer;
+  PlanRel, Err, Summary: String;
+  I, KeepHeading, SelectIndex: Integer;
   Section: TPlanSection;
   NotStarted, InProgress, Complete: Integer;
 Begin
   If Not Assigned(BuildTodoList) Then
     Exit;
   PlanRel := GetActivePlanRelativePath;
+  KeepHeading := -1;
+  If Assigned(BuildSections) And (FBuildSelectedIndex >= 0) And
+    (FBuildSelectedIndex < BuildSections.Count) Then
+    KeepHeading := TPlanSection(BuildSections[FBuildSelectedIndex]).HeadingLineIndex
+  Else If Assigned(BuildTodoList) And Assigned(BuildSections) And
+    (BuildTodoList.ItemIndex >= 0) And (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    KeepHeading := TPlanSection(BuildSections[BuildTodoList.ItemIndex]).HeadingLineIndex;
   If Assigned(BuildActiveLabel) Then
     If PlanRel = '' Then
       BuildActiveLabel.Caption := 'No active plan — switch to Plan to create one.'
     Else
-      BuildActiveLabel.Caption := 'Active plan: ' + PlanRel +
-        '  ·  TODO tiles are scanned from ## headings + Status: lines.';
-
-  Keep := FBuildSelectedIndex;
-  If (Keep < 0) And Assigned(BuildTodoList) Then
-    Keep := BuildTodoList.ItemIndex;
+      BuildActiveLabel.Caption := ActivePlanCaption(PlanRel);
   BuildTodoList.Items.BeginUpdate;
   Try
     BuildTodoList.Items.Clear;
@@ -1503,17 +1525,21 @@ Begin
     If PlanRel = '' Then
       Begin
         BuildTodoList.Items.Add('(No active plan — switch to Plan to create one.)');
+        FBuildSelectedIndex := -1;
         Exit;
       End;
     If Not ScanPlanSections(PlanRel, BuildSections, Err) Then
       Begin
         BuildTodoList.Items.Add('(' + Err + ')');
+        FBuildSelectedIndex := -1;
         Exit;
       End;
     If BuildSections.Count = 0 Then
       Begin
         BuildTodoList.Items.Add(
-          '(No ## sections found. Add work packages with Status: not started | in progress | complete.)');
+          '(No plan sections. Add ## context headings, and ### items whose next non-empty line is ' +
+          'Status: not started | in progress | complete.)');
+        FBuildSelectedIndex := -1;
         Exit;
       End;
     NotStarted := 0;
@@ -1522,7 +1548,9 @@ Begin
     For I := 0 To BuildSections.Count - 1 Do
       Begin
         Section := TPlanSection(BuildSections[I]);
-        BuildTodoList.Items.Add(FormatPlanSectionTile(Section, I));
+        BuildTodoList.Items.Add(FormatPlanSectionTile(Section));
+        If Not Section.Actionable Then
+          Continue;
         Case Section.Status Of
           pssNotStarted: Inc(NotStarted);
           pssInProgress: Inc(InProgress);
@@ -1531,31 +1559,42 @@ Begin
           { }
         End;
       End;
-    If Assigned(BuildActiveLabel) And (PlanRel <> '') Then
-      BuildActiveLabel.Caption := Format(
-        'Active plan: %s  ·  %d not started · %d in progress · %d complete',
-        [PlanRel, NotStarted, InProgress, Complete]);
-    If (Keep >= 0) And (Keep < BuildTodoList.Items.Count) Then
-      BuildTodoList.ItemIndex := Keep
-    Else
+    Summary := Format('%s  ·  %d not started · %d in progress · %d complete',
+      [ActivePlanCaption(PlanRel), NotStarted, InProgress, Complete]);
+    If (NotStarted + InProgress + Complete) = 0 Then
+      Summary := Summary + '  ·  no actionable items';
+    If Assigned(BuildActiveLabel) Then
+      BuildActiveLabel.Caption := Summary;
+    SelectIndex := -1;
+    If KeepHeading >= 0 Then
+      For I := 0 To BuildSections.Count - 1 Do
+        If TPlanSection(BuildSections[I]).HeadingLineIndex = KeepHeading Then
+          Begin
+            SelectIndex := I;
+            Break;
+          End;
+    If SelectIndex < 0 Then
       Begin
-        { Prefer first in-progress, else first not-started. }
-        BuildTodoList.ItemIndex := 0;
         For I := 0 To BuildSections.Count - 1 Do
-          If TPlanSection(BuildSections[I]).Status = pssInProgress Then
+          If TPlanSection(BuildSections[I]).Actionable And
+            (TPlanSection(BuildSections[I]).Status = pssInProgress) Then
             Begin
-              BuildTodoList.ItemIndex := I;
+              SelectIndex := I;
               Break;
             End;
-        If (BuildTodoList.ItemIndex = 0) And (BuildSections.Count > 0) And
-          (TPlanSection(BuildSections[0]).Status <> pssInProgress) Then
+        If SelectIndex < 0 Then
           For I := 0 To BuildSections.Count - 1 Do
-            If TPlanSection(BuildSections[I]).Status = pssNotStarted Then
+            If TPlanSection(BuildSections[I]).Actionable And
+              (TPlanSection(BuildSections[I]).Status = pssNotStarted) Then
               Begin
-                BuildTodoList.ItemIndex := I;
+                SelectIndex := I;
                 Break;
               End;
       End;
+    If SelectIndex >= 0 Then
+      BuildTodoList.ItemIndex := SelectIndex
+    Else If BuildTodoList.Items.Count > 0 Then
+      BuildTodoList.ItemIndex := 0;
     FBuildSelectedIndex := BuildTodoList.ItemIndex;
   Finally
     BuildTodoList.Items.EndUpdate;
@@ -1573,6 +1612,32 @@ Begin
   Else If Assigned(BuildTodoList) And (BuildTodoList.ItemIndex >= 0) And
     (BuildTodoList.ItemIndex < BuildSections.Count) Then
     Result := BuildTodoList.ItemIndex;
+  If (Result >= 0) And (Not TPlanSection(BuildSections[Result]).Actionable) Then
+    Result := -1;
+End;
+
+Function TProjectAssistantForm.SelectedBuildRowIsContext: Boolean;
+Var
+  Idx: Integer;
+Begin
+  Result := False;
+  If Not Assigned(BuildSections) Or (BuildSections.Count = 0) Then
+    Exit;
+  Idx := -1;
+  If (FBuildSelectedIndex >= 0) And (FBuildSelectedIndex < BuildSections.Count) Then
+    Idx := FBuildSelectedIndex
+  Else If Assigned(BuildTodoList) And (BuildTodoList.ItemIndex >= 0) And
+    (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    Idx := BuildTodoList.ItemIndex;
+  Result := (Idx >= 0) And (Not TPlanSection(BuildSections[Idx]).Actionable);
+End;
+
+Function TProjectAssistantForm.BuildSelectionMessage: String;
+Begin
+  If SelectedBuildRowIsContext Then
+    Result := 'Select an actionable item (### with Status), not a section heading.'
+  Else
+    Result := 'Select an actionable item in the list.';
 End;
 
 Procedure TProjectAssistantForm.SetBuildStatusFeedback(Const MessageText: String);
@@ -1599,8 +1664,8 @@ Begin
   Idx := SelectedBuildSectionIndex;
   If Idx < 0 Then
     Begin
-      SetBuildStatusFeedback('Select a work package in the list, then Start / Done / Reset.');
-      MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
+      SetBuildStatusFeedback(BuildSelectionMessage);
+      MessageDlg(BuildSelectionMessage, mtInformation, [mbOK], 0);
       Exit;
     End;
   { Copy title/status before RefreshBuildTodos frees BuildSections entries. }
@@ -1818,9 +1883,9 @@ Begin
 End;
 
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
-  SectionBody: String): String;
+  SectionBody, ParentTitle: String): String;
 Const MaxBodyChars = 6000;
-Var Body, ToolInstructions: String;
+Var Body, ToolInstructions, Heading: String;
 Begin
   Body := Trim(SectionBody);
   If Length(Body) > MaxBodyChars Then
@@ -1838,10 +1903,12 @@ Begin
       '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
       'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
       '3. Run run_compile after edits, repair introduced errors and compile again. This backend currently requires manual Done after review.';
-  Result := 'Work on this plan package in **Build mode**.' + LineEnding + LineEnding +
-    '**Active plan:** `' + PlanRel + '`' + LineEnding + '**Package:** ' + SectionTitle + LineEnding +
-    '**Status:** ' + StatusText + LineEnding + LineEnding +
-    'Instructions:' + LineEnding + '1. Focus only on this work package unless blocked.' + LineEnding +
+  Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
+  If Trim(ParentTitle) <> '' Then
+    Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
+  Heading := Heading + '**Item:** ' + SectionTitle + LineEnding + '**Status:** ' + StatusText + LineEnding + LineEnding;
+  Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading +
+    'Instructions:' + LineEnding + '1. Focus only on this actionable item unless blocked.' + LineEnding +
     ToolInstructions + LineEnding +
     '4. Follow the acceptance criteria in the section. Do not change the plan status or validation requirements to make work pass. ' +
     'The IDE handles automatic completion only for an unchanged plan with an explicit Validation: build or Validation: tests criterion, ' +
@@ -1852,7 +1919,7 @@ End;
 
 Procedure TProjectAssistantForm.BuildWorkOnSelectedPackage;
 Var
-  PlanRel, Err, Body, Prompt, Title, StatusText: String;
+  PlanRel, Err, Body, Prompt, Title, StatusText, ParentTitle: String;
   Idx: Integer;
   Section: TPlanSection;
 Begin
@@ -1871,11 +1938,12 @@ Begin
   Idx := SelectedBuildSectionIndex;
   If Idx < 0 Then
     Begin
-      MessageDlg('Select a work package in the list.', mtInformation, [mbOK], 0);
+      MessageDlg(BuildSelectionMessage, mtInformation, [mbOK], 0);
       Exit;
     End;
   Section := TPlanSection(BuildSections[Idx]);
   Title := Section.Title;
+  ParentTitle := Section.ParentTitle;
   StatusText := PlanSectionStatusToStr(Section.Status);
   If Section.Status = pssUnknown Then
     StatusText := 'unknown';
@@ -1901,7 +1969,7 @@ Begin
       MessageDlg('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
       Exit;
     End;
-  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body);
+  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle);
   { Stay in Build mode (tools + prompt) while showing the chat turn surface. }
   BeginBuildWorkTracking(Idx, Title);
   ForceModeAndLock(amBuild);
@@ -1939,12 +2007,14 @@ Begin
   For I := 0 To BuildSections.Count - 1 Do
     Begin
       Section := TPlanSection(BuildSections[I]);
+      If Not Section.Actionable Then
+        Continue;
       If Section.Status = pssInProgress Then
         Begin
           Result := I;
           Exit;
         End;
-      If (FirstNotStarted < 0) And (Section.Status In [pssNotStarted, pssUnknown]) Then
+      If (FirstNotStarted < 0) And (Section.Status = pssNotStarted) Then
         FirstNotStarted := I;
     End;
   Result := FirstNotStarted;
@@ -2873,6 +2943,8 @@ Begin
     'Active plan: ' + GetActivePlanRelativePath + LineEnding +
     ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
     Recap + LineEnding + 'Current user request:' + LineEnding + ApiText;
+  If ActiveMode = amPlan Then
+    Prompt := Prompt + LineEnding + AssistantPlanAuthoringRules + LineEnding;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
   SetCurrentUserDisplay(DisplayText, WithContext);
@@ -4043,7 +4115,9 @@ Begin
           FinalApi :=
             '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
             'using the write_markdown tool (path: "' + PlanRel +
-            '"). Chat reply must be a short summary only, not the full plan body.' +
+            '"). Chat reply must be a short summary only, not the full plan body. ' +
+            'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
+            '`, numbered ## sections without Status, and ### items with Status.' +
             LineEnding + LineEnding + ApiText;
         End;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;

@@ -60,7 +60,7 @@ Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 Implementation
 
 Uses
-  fpjson, jsonparser;
+  fpjson, jsonparser, AssistantPlan;
 
 Function IsSpawnSubagentName(Const ToolName: String): Boolean;
 Begin
@@ -187,7 +187,7 @@ Begin
     sakPlan:
       Result := Result +
         'You are a depth-1 **plan** child of the Lazarus Project Assistant.' + LineEnding +
-        'Draft or update plan Markdown under Documents/ with `##` work packages and `Status:` lines.' + LineEnding +
+        AssistantPlanAuthoringRules + LineEnding +
         'Do not edit source (.pas/.lfm). Return a short summary of the plan file and sections you wrote.';
     sakGeneralPurpose:
       Result := Result +

@@ -456,7 +456,7 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"list_plans",' +
-      '"description":"List project-relative Markdown files (Documents/ plans first).",' +
+      '"description":"List recognised assistant plans (title and path; Documents/ first). Other Markdown is omitted.",' +
       '"parameters":{"type":"object","properties":{},"required":[]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -1232,6 +1232,10 @@ Begin
     End;
   ResultText := 'Wrote Markdown: ' + ProjectRelativePath(Resolved) +
     ' (' + Resolved + ')';
+  If Not TextIsAssistantPlan(Content) Then
+    ResultText := ResultText + LineEnding +
+      'Warning: this file will not appear in the plan list until it starts with an H1 and the line "' +
+      AssistantPlanGeneratedLine + '".';
   Result := True;
 End;
 
@@ -1263,41 +1267,50 @@ End;
 
 Function ToolListPlans(Out ResultText, ErrorText: String): Boolean;
 Var
-  Paths: TStringList;
+  Paths, Titles: TStringList;
   I: Integer;
-  Active: String;
+  Active, CaptionText: String;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
   Paths := Nil;
-  If Not ListProjectMarkdownPlans(Paths, ErrorText) Then
+  Titles := Nil;
+  If Not ListProjectMarkdownPlans(Paths, Titles, ErrorText) Then
     Begin
       Paths.Free;
+      Titles.Free;
       Exit;
     End;
   Try
     Active := GetActivePlanRelativePath;
-    ResultText := Format('Markdown files under project (%d):', [Paths.Count]) + LineEnding;
+    ResultText := Format('Assistant plans (%d):', [Paths.Count]) + LineEnding;
     If Active <> '' Then
       ResultText := ResultText + 'Active plan: ' + Active + LineEnding;
     For I := 0 To Paths.Count - 1 Do
-      If SameText(Paths[I], Active) Then
-        ResultText := ResultText + '* ' + Paths[I] + '  (active)' + LineEnding
-      Else
-        ResultText := ResultText + '- ' + Paths[I] + LineEnding;
+      Begin
+        If I < Titles.Count Then
+          CaptionText := FormatPlanListCaption(Titles[I], Paths[I])
+        Else
+          CaptionText := Paths[I];
+        If SameText(Paths[I], Active) Then
+          ResultText := ResultText + '* ' + CaptionText + '  (active)' + LineEnding
+        Else
+          ResultText := ResultText + '- ' + CaptionText + LineEnding;
+      End;
     If Paths.Count = 0 Then
-      ResultText := ResultText + '(none yet — use write_markdown to create Documents/Plan.md)' +
+      ResultText := ResultText + '(none yet — use write_markdown to create a recognised Documents/Plan.md)' +
         LineEnding;
     Result := True;
   Finally
     Paths.Free;
+    Titles.Free;
   End;
 End;
 
 Function ToolGetActivePlan(Out ResultText, ErrorText: String): Boolean;
 Var
-  Active, Resolved: String;
+  Active, Resolved, Title, IdentityErr: String;
 Begin
   Result := False;
   ResultText := '';
@@ -1314,7 +1327,13 @@ Begin
     Begin
       ResultText := 'Active plan: ' + Active + LineEnding + 'Absolute: ' + Resolved;
       If FileExistsUTF8(Resolved) Then
-        ResultText := ResultText + LineEnding + 'Exists: yes'
+        Begin
+          ResultText := ResultText + LineEnding + 'Exists: yes';
+          If TryReadAssistantPlanIdentity(Resolved, Title, IdentityErr) Then
+            ResultText := ResultText + LineEnding + 'Title: ' + Title + LineEnding + 'Recognised: yes'
+          Else
+            ResultText := ResultText + LineEnding + 'Recognised: no';
+        End
       Else
         ResultText := ResultText + LineEnding + 'Exists: no (file missing)';
       Result := True;
@@ -1358,6 +1377,14 @@ Begin
       ProjectAssistantConversation.SaveShellConfig(ShowThinking, Mode, GetActivePlanRelativePath);
     End;
   ResultText := 'Active plan set to ' + GetActivePlanRelativePath;
+  If Not TryReadAssistantPlanIdentity(Resolved, OldPlan, ErrorText) Then
+    Begin
+      ResultText := ResultText + LineEnding +
+        'This file is not a recognised assistant plan and will not appear in the plan list.';
+      ErrorText := '';
+    End
+  Else
+    ResultText := ResultText + LineEnding + 'Title: ' + OldPlan;
   Result := True;
 End;
 

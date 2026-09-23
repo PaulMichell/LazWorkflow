@@ -58,7 +58,7 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion;
+  LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion, AssistantPlan;
 
 Constructor TAssistantHarness.Create;
 Begin
@@ -150,8 +150,7 @@ Begin
         'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus.' + LineEnding +
         'Write durable plan Markdown via `write_markdown` / `update_markdown`. Do not only paste the plan in chat.' + LineEnding +
         'Default / active plan path: **' + PlanPath + '**.' + LineEnding +
-        'Structure: `##` work packages; first non-empty line under each heading is ' +
-        '`Status: not started` | `Status: in progress` | `Status: complete`.' + LineEnding +
+        AssistantPlanAuthoringRules + LineEnding +
         'Prefer `update_markdown` for Status: lines or a single section. Never edit source (.pas/.lfm) in Plan mode.';
     amBuild:
       Result := Result +
@@ -161,7 +160,9 @@ Begin
         'Use run_git for repository inspection, explicit staging and commits. Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
         'When the user instructs you in a conversation or active plan to commit changes automatically, carry out those commits after completing and validating the requested work. Do not ask again for already-authorized commits; tool approval settings still apply. Report the commit hash only after Git confirms success.' + LineEnding +
         'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
-        'Stay on the active work package. Prefer Michell Free Pascal conventions.' + LineEnding +
+        'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +
+        '`##` headings are context and must not receive a Status line.' + LineEnding +
+        'Prefer Michell Free Pascal conventions.' + LineEnding +
         'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
   Else
     Result := Result +

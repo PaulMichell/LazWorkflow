@@ -186,7 +186,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantXaiProvider, AssistantSkills, AssistantTools, AssistantActor,
-  AssistantHarness, AssistantSubagents;
+  AssistantHarness, AssistantSubagents, AssistantPlan;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
@@ -616,8 +616,7 @@ Begin
           '2. Do NOT put the full plan body only in the chat reply. Chat should be a short summary ' +
           '(what changed, which file, next steps). The Markdown file is the source of truth. ' +
           '3. Default / active plan path: **' + PlanPath + '**. Use that path unless the user names another. ' +
-          '4. Structure: `##` work packages; first non-empty line under each heading is ' +
-          '`Status: not started` | `Status: in progress` | `Status: complete`. ' +
+          '4. ' + AssistantPlanAuthoringRules + LineEnding +
           '5. Prefer `update_markdown` for Status: lines or a single section; `write_markdown` for new files or full plans. ' +
           '6. After writing, you may call `set_active_plan` and `open_markdown` if helpful. ' +
           '7. Never edit source (.pas/.lfm) in Plan mode. ' +
@@ -662,7 +661,8 @@ Begin
         LineEnding +
         '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
         'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete. ' +
-        'Stay on the active work package. Prefer Michell Free Pascal conventions.' + LineEnding +
+        'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +
+        '`##` headings are context and must not receive a Status line. Prefer Michell Free Pascal conventions.' + LineEnding +
         LineEnding +
         '`read_file` returns the open editor buffer when the file is open — use that text for ' +
         '`replace_in_file` old_text. Prefer `search_in_project`/`grep` before paging huge files. ' +
