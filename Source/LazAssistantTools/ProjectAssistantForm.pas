@@ -342,6 +342,7 @@ Type
     Procedure ClearBuildWorkTracking;
     Procedure BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
     Procedure TryAutoCompleteBuildWork(Const StreamErrorText: String);
+    Function CompleteTrackedWorkItem(Out ErrorText: String): Boolean;
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
     Procedure BuildRefreshButtonClick(Sender: TObject);
@@ -1720,6 +1721,69 @@ Begin
     FBuildWorkPlanPath := '';
 End;
 
+Function TProjectAssistantForm.CompleteTrackedWorkItem(Out ErrorText: String): Boolean;
+Var
+  PlanRel, Resolved, Err: String;
+  Sections: TObjectList;
+  I, Idx: Integer;
+  Section: TPlanSection;
+Begin
+  Result := False;
+  ErrorText := '';
+  PlanRel := GetActivePlanRelativePath;
+  If (PlanRel = '') Or (FBuildWorkSectionTitle = '') Then
+    Begin
+      ErrorText := 'No tracked plan item.';
+      Exit;
+    End;
+  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
+    Begin
+      ErrorText := Err;
+      Exit;
+    End;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(Resolved, Sections, Err) Then
+      Begin
+        ErrorText := Err;
+        Exit;
+      End;
+    Idx := -1;
+    If (FBuildWorkSectionIndex >= 0) And (FBuildWorkSectionIndex < Sections.Count) Then
+      Begin
+        Section := TPlanSection(Sections[FBuildWorkSectionIndex]);
+        If Section.Actionable And SameText(Section.Title, FBuildWorkSectionTitle) Then
+          Idx := FBuildWorkSectionIndex;
+      End;
+    If Idx < 0 Then
+      For I := 0 To Sections.Count - 1 Do
+        Begin
+          Section := TPlanSection(Sections[I]);
+          If Section.Actionable And SameText(Section.Title, FBuildWorkSectionTitle) Then
+            Begin
+              Idx := I;
+              Break;
+            End;
+        End;
+    If Idx < 0 Then
+      Begin
+        ErrorText := 'Work item is no longer actionable: ' + FBuildWorkSectionTitle;
+        Exit;
+      End;
+    Section := TPlanSection(Sections[Idx]);
+    If Section.Status <> pssComplete Then
+      If Not SetPlanSectionStatus(Resolved, Idx, pssComplete, Err) Then
+        Begin
+          ErrorText := Err;
+          Exit;
+        End;
+    FBuildSelectedIndex := Idx;
+    Result := True;
+  Finally
+    Sections.Free;
+  End;
+End;
+
 Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: String);
 Var
   PlanRel, Err, Note, CurrentPlan: String;
@@ -1729,13 +1793,35 @@ Begin
   If Idx < 0 Then Exit;
   If StreamErrorText <> '' Then
     Begin
-      SetBuildStatusFeedback('Work interrupted — package still in progress.');
+      SetBuildStatusFeedback('Work interrupted — item still in progress.');
+      RefreshBuildTodos;
       Exit;
     End;
   If Not FUseCodex Then
     Begin
-      If FPlanAgentRunning Then StopWorkOnPlanAgent('package requires manual review before Done');
-      SetBuildStatusFeedback('Use Done after review: this backend does not yet provide correlated validation evidence.'); Exit;
+      If Not CompleteTrackedWorkItem(Err) Then
+        Begin
+          If FPlanAgentRunning Then
+            StopWorkOnPlanAgent('could not mark the item complete: ' + Err);
+          SetBuildStatusFeedback('Plan status not updated: ' + Err);
+        End
+      Else
+        Begin
+          Note := Format('Marked **%s** complete.', [FBuildWorkSectionTitle]);
+          SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
+          If FViewingLive Then
+            Begin
+              If FDisplaySystemNote <> '' Then
+                FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Note
+              Else
+                FDisplaySystemNote := Note;
+            End;
+        End;
+      RefreshBuildTodos;
+      If Assigned(BuildTodoList) And (FBuildSelectedIndex >= 0) And
+        (FBuildSelectedIndex < BuildTodoList.Items.Count) Then
+        BuildTodoList.ItemIndex := FBuildSelectedIndex;
+      Exit;
     End;
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
@@ -1902,7 +1988,8 @@ Begin
     ToolInstructions :=
       '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
       'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
-      '3. Run run_compile after edits, repair introduced errors and compile again. This backend currently requires manual Done after review.';
+      '3. Run run_compile after edits, repair introduced errors and compile again. ' +
+      'A turn that finishes without error marks this item complete and refreshes the progress list.';
   Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
   If Trim(ParentTitle) <> '' Then
     Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
@@ -3523,8 +3610,7 @@ Begin
   If csDestroying In ComponentState Then Exit;
   If (Event.Kind = aekToolCompleted) And Event.Ok Then
     If SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown') Then
-      If ActiveMode = amPlan Then
-        FPlanWriteThisTurn := True;
+      FPlanWriteThisTurn := True;
   If (Event.Kind = aekTurnEnded) And (Pos('plan_write', Event.Text) > 0) Then
     FPlanWriteThisTurn := True;
   If Not FViewingLive Then
@@ -3947,14 +4033,18 @@ Begin
   UnlockModeAfterSend;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
-  If FPlanWriteThisTurn And (ResolvedError = '') And (ActiveMode = amPlan) Then
+  If FPlanWriteThisTurn And (ResolvedError = '') Then
     Begin
       RefreshPlanList;
       RefreshBuildTodos;
-      ShowPlanOfferBar(True);
+      ShowPlanOfferBar(ActiveMode = amPlan);
     End
   Else
-    ShowPlanOfferBar(False);
+    Begin
+      If ActiveMode = amBuild Then
+        RefreshBuildTodos;
+      ShowPlanOfferBar(False);
+    End;
   If (Not FUseCodex) And FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then

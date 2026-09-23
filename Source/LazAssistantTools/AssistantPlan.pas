@@ -77,7 +77,21 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, FileUtil, AssistantMarkdownForm, WorkflowLog, AssistantConversation;
+  LazFileUtils, FileUtil, AssistantMarkdownForm, WorkflowLog, WorkflowEvents, AssistantConversation;
+
+Procedure PublishPlanFileWrite(Const Resolved, Content: String; OpenAfter: Boolean);
+Begin
+  { The progress list listens on the bus. Do not rely on a viewer being open. }
+  If Assigned(WorkflowEventBus) And (Resolved <> '') Then
+    Begin
+      WorkflowEventBus.NotifyDocumentSaved(Resolved);
+      WorkflowEventBus.NotifyDocumentChanged(Resolved, Content);
+    End;
+  If Assigned(FindMarkdownDocument(Resolved)) Then
+    ReloadMarkdownDocument(Resolved, True)
+  Else If OpenAfter Then
+    OpenMarkdownDocument(Resolved);
+End;
 
 Function PlanProjectRoot: String;
 Begin
@@ -553,9 +567,7 @@ Begin
       SL.SaveToFile(Resolved);
       Result := True;
       WorkflowLogger.Info('AssistantPlan', 'Wrote Markdown: ' + Resolved);
-      { Always refresh an open viewer; open a new one when requested. }
-      If OpenAfter Or Assigned(FindMarkdownDocument(Resolved)) Then
-        OpenMarkdownDocument(Resolved);
+      PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -629,8 +641,7 @@ Begin
       Result := True;
       WorkflowLogger.Info('AssistantPlan',
         Format('Updated Markdown %s (%d replacement(s))', [Resolved, ReplaceCount]));
-      If OpenAfter Or Assigned(FindMarkdownDocument(Resolved)) Then
-        OpenMarkdownDocument(Resolved);
+      PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -917,8 +928,7 @@ Begin
         WorkflowLogger.Info('AssistantPlan',
           Format('Set section "%s" to %s in %s',
             [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
-        { Reload open viewer only — do not re-enter full OpenMarkdownDocument create path. }
-        ReloadMarkdownDocument(Resolved, True);
+        PublishPlanFileWrite(Resolved, SL.Text, False);
       Except
         On E: Exception Do
           ErrorText := E.Message;
