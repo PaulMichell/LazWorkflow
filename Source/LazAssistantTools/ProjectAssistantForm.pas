@@ -5,7 +5,8 @@ Unit ProjectAssistantForm;
   Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
   history, plan/build tiles, send/steer, and catalog wiring as one form.
   Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
-  AssistantTraceView. }
+  AssistantTraceView. Reviewed 2026-09-23: composer attach, paste, and drop
+  stay here because they are streamed controls. Decode stays in AssistantImages. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -25,6 +26,7 @@ Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
     ActionList: TActionList;
     NewChatAction: TAction;
+    AttachImageAction: TAction;
     SendAction: TAction;
     SendButton: TButton;
     StopAction: TAction;
@@ -61,6 +63,7 @@ Type
     AssistantMenu: TMainMenu;
     SessionMenuItem: TMenuItem;
     NewChatMenuItem: TMenuItem;
+    AttachImageMenuItem: TMenuItem;
     SendMenuItem: TMenuItem;
     StopMenuItem: TMenuItem;
     CompactMenuItem: TMenuItem;
@@ -134,6 +137,8 @@ Type
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
+    AttachmentStrip: TPanel;
+    AttachImageButton: TButton;
     PlanOfferBar: TPanel;
     PlanOfferLabel: TLabel;
     BuildThisButton: TButton;
@@ -170,6 +175,9 @@ Type
     Procedure InputCutClick(Sender: TObject);
     Procedure InputCopyClick(Sender: TObject);
     Procedure InputPasteClick(Sender: TObject);
+    Procedure AttachImageActionExecute(Sender: TObject);
+    Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
+    Procedure RemoveComposerImageClick(Sender: TObject);
     Procedure InputSelectAllClick(Sender: TObject);
     Procedure AutoNewChatCheckClick(Sender: TObject);
     Procedure ReviewButtonClick(Sender: TObject);
@@ -227,6 +235,16 @@ Type
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
     FComposerImagesSent: Boolean;
+    Procedure ApplyInputPanelHeight;
+    Procedure RefreshComposerImages;
+    Procedure RefreshAttachAction;
+    Function ComposerAttachAllowed(Out Reason: String): Boolean;
+    Function ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
+    Function AttachImageStream(Const OriginalName: String; Stream: TStream; Out ErrorText: String): Boolean;
+    Function AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
+    Procedure PasteComposer;
+    Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
+    Procedure ClearUnsentComposerImages;
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
@@ -466,7 +484,7 @@ Implementation
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
-  FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
+  FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages;
 
 Const
@@ -842,6 +860,21 @@ Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   Try
     FreeAndNil(FTargetPaths);
+    If Assigned(AttachmentStrip) Then
+      While AttachmentStrip.ControlCount > 0 Do
+        Begin
+          If AttachmentStrip.Controls[0] = AttachImageButton Then
+            Begin
+              If AttachmentStrip.ControlCount = 1 Then Break;
+              AttachmentStrip.Controls[1].Parent := Nil;
+              AttachmentStrip.Controls[1].Free;
+            End
+          Else
+            Begin
+              AttachmentStrip.Controls[0].Parent := Nil;
+              AttachmentStrip.Controls[0].Free;
+            End;
+        End;
     If Assigned(ElapsedTimer) Then
       ElapsedTimer.Enabled := False;
     If Assigned(FCommandsPopup) Then
@@ -3325,6 +3358,7 @@ Begin
     Begin
       StatusFooter.SetLeftHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
+      RefreshAttachAction;
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
       StatusFooter.SetSkillText('Lazarus tools');
       StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
@@ -3332,6 +3366,7 @@ Begin
   Else
     Begin
       If Assigned(SendAction) Then SendAction.Hint := '';
+      RefreshAttachAction;
       If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
         Begin
           StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
@@ -3583,6 +3618,8 @@ Begin
   InputMemo.WantTabs := False;
 End;
 
+Function ClipboardHasImage: Boolean; Forward;
+
 Procedure TProjectAssistantForm.InputPopupPopup(Sender: TObject);
 Var
   HasSel: Boolean;
@@ -3595,7 +3632,7 @@ Begin
   If Assigned(InputCopyItem) Then
     InputCopyItem.Enabled := HasSel;
   If Assigned(InputPasteItem) Then
-    InputPasteItem.Enabled := CanEdit And Clipboard.HasFormat(CF_TEXT);
+    InputPasteItem.Enabled := CanEdit And (Clipboard.HasFormat(CF_TEXT) Or ClipboardHasImage);
   If Assigned(InputSelectAllItem) Then
     InputSelectAllItem.Enabled := Assigned(InputMemo) And (InputMemo.GetTextLen > 0);
 End;
@@ -3612,10 +3649,477 @@ Begin
     InputMemo.CopyToClipboard;
 End;
 
+Function StillImageExtension(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext <> '') And (Pos(Ext + ',', AssistantStillImageExtensions + ',') > 0);
+End;
+
+Function ClipboardMime(Const Mime: String): TClipboardFormat;
+Begin
+  Result := RegisterClipboardFormat(Mime);
+End;
+
+Function ClipboardHasImage: Boolean;
+Begin
+  Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or
+    Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(CF_PICTURE);
+End;
+
+Function ReadClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
+Begin
+  Result := False;
+  Stream.Clear;
+  If Not Clipboard.HasFormat(FormatId) Then Exit;
+  Try
+    Result := Clipboard.GetFormat(FormatId, Stream) And (Stream.Size > 0);
+  Except
+    Result := False;
+  End;
+  Stream.Position := 0;
+End;
+
+Function ClipboardPictureToPng(Stream: TMemoryStream): Boolean;
+Var
+  Pic: TPicture;
+  Png: TPortableNetworkGraphic;
+Begin
+  Result := False;
+  Stream.Clear;
+  If Not Clipboard.HasFormat(CF_PICTURE) Then Exit;
+  Pic := TPicture.Create;
+  Try
+    Try
+      Pic.LoadFromClipboardFormat(CF_PICTURE);
+    Except
+      Exit;
+    End;
+    If (Pic.Width < 1) Or (Pic.Height < 1) Or (Pic.Graphic = Nil) Then Exit;
+    Png := TPortableNetworkGraphic.Create;
+    Try
+      Png.Assign(Pic.Graphic);
+      Png.SaveToStream(Stream);
+      Result := Stream.Size > 0;
+      Stream.Position := 0;
+    Finally
+      Png.Free;
+    End;
+  Finally
+    Pic.Free;
+  End;
+End;
+
+Function TurnReferencesImage(Const ImageId: String): Boolean;
+Var
+  I, J: Integer;
+  Turn: TConversationTurn;
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  If (ImageId = '') Or Not Assigned(ProjectAssistantConversation) Then Exit;
+  For I := 0 To ProjectAssistantConversation.TurnCount - 1 Do
+    Begin
+      If Not ProjectAssistantConversation.GetTurn(I, Turn) Then Continue;
+      If Not ParseAssistantImageRefs(Turn.AttachmentsJson, Refs) Then Continue;
+      For J := 0 To High(Refs) Do
+        If Refs[J].Id = ImageId Then Exit(True);
+    End;
+End;
+
+Procedure AppendComposerStored(Form: TProjectAssistantForm; Const Stored: TAssistantStoredImage);
+Var
+  Refs: TAssistantImageRefArray;
+  N: Integer;
+Begin
+  ParseAssistantImageRefs(Form.FComposerImagesJson, Refs);
+  N := Length(Refs);
+  SetLength(Refs, N + 1);
+  Refs[N] := ImageRefFromStored(Stored);
+  Form.FComposerImagesJson := AssistantImageRefsToJson(Refs);
+  Form.RefreshComposerImages;
+End;
+
+Procedure AssignThumbImage(Target: TImage; Const ProjectRoot: String; Const Ref: TAssistantImageRef);
+Var
+  Img: TFPMemoryImage;
+  Writer: TFPWriterPNG;
+  Png: TPortableNetworkGraphic;
+  Stream: TMemoryStream;
+  ErrorText: String;
+Begin
+  Target.Picture.Clear;
+  Target.Stretch := False;
+  Target.Proportional := True;
+  Target.Center := True;
+  If Not LoadStoredAssistantImage(ProjectRoot, Ref.DisplayPath, Img, ErrorText) Then Exit;
+  Try
+    If (Img.Width < 1) Or (Img.Height < 1) Then Exit;
+    Target.Stretch := (Img.Width > Target.Width) Or (Img.Height > Target.Height);
+    Stream := TMemoryStream.Create;
+    Writer := TFPWriterPNG.Create;
+    Png := TPortableNetworkGraphic.Create;
+    Try
+      Img.SaveToStream(Stream, Writer);
+      Stream.Position := 0;
+      Png.LoadFromStream(Stream);
+      Target.Picture.Assign(Png);
+    Finally
+      Png.Free;
+      Writer.Free;
+      Stream.Free;
+    End;
+  Finally
+    Img.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ApplyInputPanelHeight;
+Var
+  Height96: Integer;
+Begin
+  If Not Assigned(InputPanel) Then Exit;
+  Height96 := 75;
+  If FShowPlanOffer Then Inc(Height96, 28);
+  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then Inc(Height96, 108);
+  InputPanel.Height := Scale96ToForm(Height96);
+End;
+
+Procedure TProjectAssistantForm.RefreshAttachAction;
+Var
+  Reason: String;
+Begin
+  If Not Assigned(AttachImageAction) Then Exit;
+  AttachImageAction.Enabled := ComposerAttachAllowed(Reason);
+  If AttachImageAction.Enabled Then
+    AttachImageAction.Hint := 'Attach an image to the next message'
+  Else If Reason <> '' Then
+    AttachImageAction.Hint := Reason
+  Else
+    AttachImageAction.Hint := 'Attach is disabled.';
+End;
+
+Function TProjectAssistantForm.ComposerAttachAllowed(Out Reason: String): Boolean;
+Begin
+  Reason := '';
+  If FUseCodex Then
+    Begin
+      Reason := AssistantCodexImageAttachReason;
+      Result := False;
+      Exit;
+    End;
+  If Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(Reason)) Then
+    Begin
+      If Reason = '' Then Reason := 'This model lists no image input. Attach is disabled.';
+      Result := False;
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  Root := '';
+  StoreDir := '';
+  ErrorText := '';
+  EnsureConversationStore;
+  Root := ProjectAssistantRoot;
+  If Assigned(ProjectAssistantConversation) Then StoreDir := ProjectAssistantConversation.AssistantDirectory;
+  If (Root = '') Or (StoreDir = '') Then
+    Begin
+      ErrorText := 'Open a project before attaching an image.';
+      Exit;
+    End;
+  If Not ForceDirectoriesUTF8(ExcludeTrailingPathDelimiter(StoreDir)) Then
+    Begin
+      ErrorText := 'The image store could not be created.';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.AttachImageStream(Const OriginalName: String; Stream: TStream; Out ErrorText: String): Boolean;
+Var
+  Root, StoreDir: String;
+  Stored: TAssistantStoredImage;
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  ErrorText := '';
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  If Length(Refs) >= AssistantImageMaxAttachments Then
+    Begin
+      ErrorText := 'At most 8 images can be attached.';
+      Exit;
+    End;
+  If Not ComposerStoreReady(Root, StoreDir, ErrorText) Then Exit;
+  Stream.Position := 0;
+  If Not StoreAssistantImageStreamInStore(Root, StoreDir, OriginalName, Stream, Stored, ErrorText) Then Exit;
+  AppendComposerStored(Self, Stored);
+  Result := True;
+End;
+
+Function TProjectAssistantForm.AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
+Var
+  Root, StoreDir: String;
+  Stored: TAssistantStoredImage;
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  ErrorText := '';
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  If Length(Refs) >= AssistantImageMaxAttachments Then
+    Begin
+      ErrorText := 'At most 8 images can be attached.';
+      Exit;
+    End;
+  If Not ComposerStoreReady(Root, StoreDir, ErrorText) Then Exit;
+  If Not StoreAssistantImageInStore(Root, StoreDir, SourcePath, Stored, ErrorText) Then Exit;
+  AppendComposerStored(Self, Stored);
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.RefreshComposerImages;
+Var
+  Refs: TAssistantImageRefArray;
+  I: Integer;
+  Root, CaptionText: String;
+  Panel: TPanel;
+  Thumb: TImage;
+  NameLabel: TLabel;
+  RemoveButton: TButton;
+  Control: TControl;
+Begin
+  If Not Assigned(AttachmentStrip) Then Exit;
+  AttachmentStrip.DisableAlign;
+  Try
+    For I := AttachmentStrip.ControlCount - 1 DownTo 0 Do
+      Begin
+        Control := AttachmentStrip.Controls[I];
+        If Control = AttachImageButton Then Continue;
+        Control.Parent := Nil;
+        Control.Free;
+      End;
+    ParseAssistantImageRefs(FComposerImagesJson, Refs);
+    AttachmentStrip.Visible := Length(Refs) > 0;
+    If AttachmentStrip.Visible Then
+      AttachmentStrip.Height := Scale96ToForm(108);
+    If AttachmentStrip.Visible Then
+      Begin
+        Root := '';
+        If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
+        For I := 0 To High(Refs) Do
+          Begin
+            Panel := TPanel.Create(Nil);
+            Panel.Parent := AttachmentStrip;
+            Panel.Align := alNone;
+            Panel.BevelOuter := bvNone;
+            Panel.Width := Scale96ToForm(104);
+            Panel.Height := Scale96ToForm(100);
+            Panel.Tag := I;
+            Thumb := TImage.Create(Panel);
+            Thumb.Parent := Panel;
+            Thumb.Left := Scale96ToForm(4);
+            Thumb.Top := Scale96ToForm(2);
+            Thumb.Width := Scale96ToForm(96);
+            Thumb.Height := Scale96ToForm(48);
+            AssignThumbImage(Thumb, Root, Refs[I]);
+            NameLabel := TLabel.Create(Panel);
+            NameLabel.Parent := Panel;
+            NameLabel.Left := Scale96ToForm(4);
+            NameLabel.Top := Scale96ToForm(52);
+            NameLabel.AutoSize := False;
+            NameLabel.Width := Scale96ToForm(96);
+            NameLabel.Height := Scale96ToForm(16);
+            CaptionText := Refs[I].Name;
+            If CaptionText = '' Then CaptionText := 'Image';
+            NameLabel.Caption := CaptionText;
+            NameLabel.Hint := CaptionText;
+            NameLabel.ShowHint := True;
+            RemoveButton := TButton.Create(Panel);
+            RemoveButton.Parent := Panel;
+            RemoveButton.Left := Scale96ToForm(4);
+            RemoveButton.Top := Scale96ToForm(70);
+            RemoveButton.Width := Scale96ToForm(96);
+            RemoveButton.Height := Scale96ToForm(22);
+            RemoveButton.Caption := 'Remove';
+            RemoveButton.Tag := I;
+            RemoveButton.OnClick := @RemoveComposerImageClick;
+          End;
+      End;
+  Finally
+    AttachmentStrip.EnableAlign;
+  End;
+  ApplyInputPanelHeight;
+End;
+
+Procedure TProjectAssistantForm.ClearUnsentComposerImages;
+Var
+  Refs: TAssistantImageRefArray;
+  I: Integer;
+  Root, ErrorText: String;
+Begin
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
+  If (Root <> '') And (Not FSending) Then
+    For I := 0 To High(Refs) Do
+      If Not TurnReferencesImage(Refs[I].Id) Then
+        If Not DeleteStoredAssistantImage(Root, Refs[I], ErrorText) And (ErrorText <> '') Then
+          WorkflowLogger.Warning('ProjectAssistant', 'Unsent image: ' + ErrorText);
+  FComposerImagesJson := '';
+  RefreshComposerImages;
+End;
+
+Procedure TProjectAssistantForm.RemoveComposerImageClick(Sender: TObject);
+Var
+  Index, I, N: Integer;
+  Refs, Kept: TAssistantImageRefArray;
+  Root, ErrorText: String;
+Begin
+  If Not (Sender Is TControl) Then Exit;
+  Index := Integer(TControl(Sender).Tag);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  If (Index < 0) Or (Index > High(Refs)) Then Exit;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
+  If (Root <> '') And (Not FSending) And (Not TurnReferencesImage(Refs[Index].Id)) Then
+    DeleteStoredAssistantImage(Root, Refs[Index], ErrorText);
+  SetLength(Kept, Length(Refs) - 1);
+  N := 0;
+  For I := 0 To High(Refs) Do
+    If I <> Index Then
+      Begin
+        Kept[N] := Refs[I];
+        Inc(N);
+      End;
+  FComposerImagesJson := AssistantImageRefsToJson(Kept);
+  RefreshComposerImages;
+End;
+
+Procedure TProjectAssistantForm.AttachImageActionExecute(Sender: TObject);
+Var
+  Dialog: TOpenDialog;
+  Reason, ErrorText: String;
+  I: Integer;
+Begin
+  If Not ComposerAttachAllowed(Reason) Then
+    Begin
+      If Reason = '' Then Reason := 'Attach is disabled.';
+      MessageDlg(Reason, mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  EnsureConversationStore;
+  If ProjectAssistantRoot = '' Then
+    Begin
+      MessageDlg('Open a project before attaching an image.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Dialog := TOpenDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Attach image';
+    Dialog.InitialDir := ProjectAssistantRoot;
+    Dialog.Options := [ofAllowMultiSelect, ofFileMustExist, ofEnableSizing];
+    Dialog.Filter := 'Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.ico;*.xpm;*.tif;*.tiff;*.pbm;*.pgm;*.ppm';
+    If Not Dialog.Execute Then Exit;
+    For I := 0 To Dialog.Files.Count - 1 Do
+      If Not AttachImageFile(Dialog.Files[I], ErrorText) Then
+        Begin
+          If ErrorText = '' Then ErrorText := 'That file is not an image.';
+          MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+        End;
+  Finally
+    Dialog.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
+Var
+  I: Integer;
+  Reason, ErrorText: String;
+  SawImage: Boolean;
+Begin
+  SawImage := False;
+  For I := 0 To High(FileNames) Do
+    If StillImageExtension(FileNames[I]) Then SawImage := True;
+  If Not SawImage Then Exit;
+  If Not ComposerAttachAllowed(Reason) Then
+    Begin
+      If Reason = '' Then Reason := 'Attach is disabled.';
+      MessageDlg(Reason, mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  For I := 0 To High(FileNames) Do
+    Begin
+      If Not StillImageExtension(FileNames[I]) Then Continue;
+      If AttachImageFile(FileNames[I], ErrorText) Then Continue;
+      If ErrorText = '' Then ErrorText := 'That file is not an image.';
+      MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+    End;
+End;
+
+Function TProjectAssistantForm.TryAttachClipboardImage(Out ErrorText: String): Boolean;
+Var
+  Stream: TMemoryStream;
+  Reason, Name: String;
+  Formats: Array[0..2] Of String;
+  I: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not ClipboardHasImage Then Exit;
+  If Not ComposerAttachAllowed(Reason) Then
+    Begin
+      ErrorText := Reason;
+      Exit;
+    End;
+  Formats[0] := 'image/png';
+  Formats[1] := 'image/jpeg';
+  Formats[2] := 'image/bmp';
+  Stream := TMemoryStream.Create;
+  Try
+    For I := 0 To 2 Do
+      If ReadClipboardBytes(ClipboardMime(Formats[I]), Stream) Then
+        Begin
+          If Formats[I] = 'image/jpeg' Then Name := 'Clipboard.jpg'
+          Else If Formats[I] = 'image/bmp' Then Name := 'Clipboard.bmp'
+          Else Name := 'Clipboard.png';
+          If AttachImageStream(Name, Stream, ErrorText) Then Exit(True);
+        End;
+    If ReadClipboardBytes(CF_PICTURE, Stream) And AttachImageStream('Clipboard.bmp', Stream, ErrorText) Then Exit(True);
+    If ClipboardPictureToPng(Stream) And AttachImageStream('Clipboard.png', Stream, ErrorText) Then Exit(True);
+    If ErrorText = '' Then ErrorText := 'The clipboard image could not be read.';
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.PasteComposer;
+Var
+  HadText, Attached: Boolean;
+  ImageError: String;
+Begin
+  If Not Assigned(InputMemo) Or InputMemo.ReadOnly Then Exit;
+  HadText := Clipboard.HasFormat(CF_TEXT);
+  Attached := False;
+  ImageError := '';
+  Try
+    Attached := TryAttachClipboardImage(ImageError);
+  Except
+    Attached := False;
+    If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
+  End;
+  If HadText Then
+    InputMemo.PasteFromClipboard;
+  If (Not Attached) And (ImageError <> '') Then
+    MessageDlg(ImageError, mtInformation, [mbOK], 0);
+End;
+
 Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);
 Begin
-  If Assigned(InputMemo) And (Not InputMemo.ReadOnly) Then
-    InputMemo.PasteFromClipboard;
+  PasteComposer;
 End;
 
 Procedure TProjectAssistantForm.InputSelectAllClick(Sender: TObject);
@@ -4119,7 +4623,10 @@ Begin
         AssistantClient.DropLastUserImageRefs;
     End
   Else If FComposerImagesSent Then
-    FComposerImagesJson := '';
+    Begin
+      FComposerImagesJson := '';
+      RefreshComposerImages;
+    End;
   FComposerImagesSent := False;
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
@@ -4900,13 +5407,7 @@ Begin
   FShowPlanOffer := OfferVisible And (GetActivePlanRelativePath <> '');
   If Assigned(PlanOfferBar) Then
     PlanOfferBar.Visible := FShowPlanOffer;
-  If Assigned(InputPanel) Then
-    Begin
-      If FShowPlanOffer Then
-        InputPanel.Height := Scale96ToForm(103)
-      Else
-        InputPanel.Height := Scale96ToForm(75);
-    End;
+  ApplyInputPanelHeight;
   If Assigned(PlanOfferLabel) Then
     PlanOfferLabel.Caption := 'Plan written.';
 End;
@@ -4940,6 +5441,12 @@ End;
 
 Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
 Begin
+  If (Key = VK_V) And (ssCtrl In Shift) Then
+    Begin
+      Key := 0;
+      PasteComposer;
+      Exit;
+    End;
   If SlashPopupVisible Then
     Begin
       Case Key Of
@@ -5616,6 +6123,7 @@ Begin
   If FSending Then
     StopStream;
   SetSending(False);
+  ClearUnsentComposerImages;
   EnsureConversationStore;
   If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
     Begin
@@ -5648,6 +6156,7 @@ Begin
     Conversation turns are already on disk via AppendTurn. }
   If FSending Then
     StopStream;
+  ClearUnsentComposerImages;
   Caption := 'Project Assistant';
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;

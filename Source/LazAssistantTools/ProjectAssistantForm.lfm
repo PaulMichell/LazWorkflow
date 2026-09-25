@@ -142,10 +142,47 @@ object ProjectAssistantForm: TProjectAssistantForm
     Top = 567
     Width = 960
     Align = alBottom
+    AllowDropFiles = True
     BevelOuter = bvNone
     ClientHeight = 75
     ClientWidth = 960
     TabOrder = 1
+    OnDropFiles = InputPanelDropFiles
+    object AttachmentStrip: TPanel
+      Left = 0
+      Height = 108
+      Top = 0
+      Width = 960
+      Align = alTop
+      AllowDropFiles = True
+      BevelOuter = bvNone
+      ChildSizing.LeftRightSpacing = 4
+      ChildSizing.TopBottomSpacing = 4
+      ChildSizing.HorizontalSpacing = 4
+      ChildSizing.VerticalSpacing = 4
+      ChildSizing.EnlargeHorizontal = crsAnchorAligning
+      ChildSizing.EnlargeVertical = crsAnchorAligning
+      ChildSizing.ShrinkHorizontal = crsAnchorAligning
+      ChildSizing.ShrinkVertical = crsAnchorAligning
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 12
+      ClientHeight = 108
+      ClientWidth = 960
+      OnDropFiles = InputPanelDropFiles
+      TabOrder = 2
+      Visible = False
+      object AttachImageButton: TButton
+        Left = 4
+        Height = 28
+        Top = 4
+        Width = 96
+        Action = AttachImageAction
+        Align = alNone
+        AutoSize = True
+        ShowHint = True
+        TabOrder = 0
+      end
+    end
     object PlanOfferBar: TPanel
       Left = 0
       Height = 28
@@ -196,7 +233,9 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 34
       Width = 948
       Align = alClient
+      AllowDropFiles = True
       BorderSpacing.Around = 6
+      OnDropFiles = InputPanelDropFiles
       TabOrder = 0
     end
   end
@@ -446,6 +485,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'New Chat'
       OnExecute = NewChatActionExecute
     end
+    object AttachImageAction: TAction
+      Caption = 'Attach Image'
+      Hint = 'Attach an image to the next message'
+      OnExecute = AttachImageActionExecute
+    end
     object SendAction: TAction
       Caption = 'Send'
       OnExecute = SendActionExecute
@@ -584,6 +628,9 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = '&Session'
       object NewChatMenuItem: TMenuItem
         Action = NewChatAction
+      end
+      object AttachImageMenuItem: TMenuItem
+        Action = AttachImageAction
       end
       object CompactMenuItem: TMenuItem
         Action = CompactContextAction
