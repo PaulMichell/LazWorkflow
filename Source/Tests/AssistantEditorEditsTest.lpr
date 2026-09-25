@@ -132,9 +132,9 @@ Begin
     Check('Undo invalidates model revision', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
     OldRun := Run; Run := Broker.BeginRun(awsReadOnly);
     Check('old run rejected', Not Broker.Execute(OldRun, 'lazarus_project_info', '{}', Reply, Err));
-    Check('Ask mode advertises no mutation tool', Pos('lazarus_replace_buffer', Broker.ToolsJson) = 0);
-    Check('Ask mode rejects mutation', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
-    Check('Ask mode rejects edits without requesting approval', Workspace.ApprovalCalls = 3);
+    Check('Inspect mode advertises no mutation tool', Pos('lazarus_replace_buffer', Broker.ToolsJson) = 0);
+    Check('Inspect mode rejects mutation', Not Broker.Execute(Run, 'lazarus_replace_buffer', Args, Reply, Err));
+    Check('Inspect mode rejects edits without requesting approval', Workspace.ApprovalCalls = 3);
     Workspace.ProjectId := 'project-2';
     Check('project switch rejects tools', Not Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"unit.pas"}', Reply, Err));
     Run := Broker.BeginRun(awsProject); Broker.Cancel;
@@ -175,7 +175,7 @@ Begin
     Check('approved build launches once', Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
     Check('polling build status needs no new approval', Broker.Execute(Run, 'lazarus_build_status', '{}', Reply, Err) And (Workspace.ApprovalCalls = 2));
     Run := Broker.BeginRun(awsReadOnly); Broker.OnApproval := Nil;
-    Check('automatic approval cannot enable builds in Ask mode', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
+    Check('automatic approval cannot enable builds in Inspect mode', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) And (Workspace.Builds = 1));
     Run := Broker.BeginRun(awsMarkdown); Broker.OnApproval := @Workspace.Approve;
     Workspace.ApprovalAction := 0; Workspace.ApprovalCalls := 0;
     Check('Plan advertises Markdown edits and saves', (Pos('lazarus_replace_buffer', Broker.ToolsJson) > 0)

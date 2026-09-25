@@ -35,11 +35,11 @@ Begin
   Check('parse naming alias', ParseSubagentKind('naming') = sakPascalNaming);
   Check('parse review', ParseSubagentKind('pascal-review') = sakPascalReview);
   Check('unknown falls to explore', ParseSubagentKind('syntax-bot') = sakExplore);
-  Check('explore is ask tools', SubagentModeForKind(sakExplore, amBuild) = amChat);
+  Check('explore is inspect tools', SubagentModeForKind(sakExplore, amBuild) = amInspect);
   Check('plan kind is plan tools', SubagentModeForKind(sakPlan, amBuild) = amPlan);
   Check('general inherits parent', SubagentModeForKind(sakGeneralPurpose, amBuild) = amBuild);
-  Check('general ask stays ask', SubagentModeForKind(sakGeneralPurpose, amChat) = amChat);
-  Check('naming is read-only', SubagentModeForKind(sakPascalNaming, amBuild) = amChat);
+  Check('general inspect stays inspect', SubagentModeForKind(sakGeneralPurpose, amInspect) = amInspect);
+  Check('naming is read-only', SubagentModeForKind(sakPascalNaming, amBuild) = amInspect);
 End;
 
 Procedure TestCanSpawn;

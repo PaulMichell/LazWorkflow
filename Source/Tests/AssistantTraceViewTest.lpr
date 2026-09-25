@@ -61,7 +61,7 @@ Begin
     Store.LoadShellConfig(Thinking, Mode, Plan, @Tools);
     Check('missing configuration shows tools', Tools);
     Tools := False;
-    Check('save hidden preference', Store.SaveShellConfig(True, amChat, '', @Tools));
+    Check('save hidden preference', Store.SaveShellConfig(True, amInspect, '', @Tools));
     Check('legacy plan update', Store.SaveShellConfig(False, amPlan, 'plan.md'));
     Tools := True;
     Check('load preferences', Store.LoadShellConfig(Thinking, Mode, Plan, @Tools));
