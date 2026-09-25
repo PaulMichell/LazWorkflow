@@ -10,7 +10,7 @@ Unit AssistantProtocol;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, AssistantImages;
 
 Type
   { Which inference wire this parser / request uses. }
@@ -54,6 +54,8 @@ Type
     FunctionName: String;
     Arguments: String;
     ProviderJson: String;
+    { User messages only. Other kinds keep string content even if this is set. }
+    ImageRefs: TAssistantImageRefArray;
   End;
   TSamplerInputItemArray = Array Of TSamplerInputItem;
 
@@ -79,6 +81,8 @@ Type
     ReasoningEffort: String;
     { When True (default), Responses requests include encrypted reasoning and store:false. }
     IncludeEncryptedReasoning: Boolean;
+    { Project root used to read upload derivatives. Empty when the item has no images. }
+    ProjectRoot: String;
   End;
 
 Function JsonEscapeText(Const SourceText: String): String;
@@ -128,6 +132,7 @@ Begin
   Result.ToolsJson := '';
   Result.ReasoningEffort := 'high';
   Result.IncludeEncryptedReasoning := True;
+  Result.ProjectRoot := '';
 End;
 
 Function SamplerInputMessage(Const Role, Content: String): TSamplerInputItem;
@@ -190,7 +195,53 @@ Begin
     End;
 End;
 
-Function ItemToResponsesJson(Const Item: TSamplerInputItem): String;
+Function ItemCarriesUserImages(Const Item: TSamplerInputItem): Boolean;
+Begin
+  Result := (Item.Kind = sikMessage) And SameText(Item.Role, 'user') And (Length(Item.ImageRefs) > 0);
+End;
+
+Function QuotedJson(Const Value: String): String;
+Begin
+  Result := '"' + JsonEscapeText(Value) + '"';
+End;
+
+Function UploadDataUri(Const ProjectRoot: String; Const Ref: TAssistantImageRef): String;
+Var
+  ErrorText: String;
+Begin
+  If Not AssistantImageDataUri(ProjectRoot, Ref, Result, ErrorText) Then
+    Raise Exception.Create(ErrorText);
+End;
+
+{ Frozen against Source/Tests/Fixtures/XaiImageUnderstandingParts.json.
+  Responses image_url is a data URI string. Chat image_url.url is a data URI; detail is omitted. }
+Function UserImageContentArray(Const Item: TSamplerInputItem; Const ProjectRoot: String; ResponsesWire: Boolean): String;
+Var
+  I: Integer;
+  Uri, ImagePart, TextPart: String;
+Begin
+  Result := '';
+  For I := 0 To High(Item.ImageRefs) Do
+    Begin
+      Uri := UploadDataUri(ProjectRoot, Item.ImageRefs[I]);
+      If ResponsesWire Then
+        ImagePart := '{"type":"input_image","image_url":' + QuotedJson(Uri) + '}'
+      Else
+        ImagePart := '{"type":"image_url","image_url":{"url":' + QuotedJson(Uri) + '}}';
+      If Result <> '' Then
+        Result := Result + ',';
+      Result := Result + ImagePart;
+    End;
+  If ResponsesWire Then
+    TextPart := '{"type":"input_text","text":' + QuotedJson(Item.Content) + '}'
+  Else
+    TextPart := '{"type":"text","text":' + QuotedJson(Item.Content) + '}';
+  If Result <> '' Then
+    Result := Result + ',';
+  Result := '[' + Result + TextPart + ']';
+End;
+
+Function ItemToResponsesJson(Const Item: TSamplerInputItem; Const ProjectRoot: String): String;
 Begin
   Case Item.Kind Of
     sikProviderOutput: Result := Item.ProviderJson;
@@ -209,12 +260,15 @@ Begin
       Result := '{"type":"function_call_output","call_id":"' + JsonEscapeText(Item.CallId) +
         '","output":"' + JsonEscapeText(Item.Content) + '"}';
   Else
-    Result := '{"role":"' + JsonEscapeText(Item.Role) + '","content":"' +
-      JsonEscapeText(Item.Content) + '"}';
+    If ItemCarriesUserImages(Item) Then
+      Result := '{"role":"user","content":' + UserImageContentArray(Item, ProjectRoot, True) + '}'
+    Else
+      Result := '{"role":"' + JsonEscapeText(Item.Role) + '","content":"' +
+        JsonEscapeText(Item.Content) + '"}';
   End;
 End;
 
-Function ItemToChatCompletionsJson(Const Item: TSamplerInputItem): String;
+Function ItemToChatCompletionsJson(Const Item: TSamplerInputItem; Const ProjectRoot: String): String;
 Begin
   Case Item.Kind Of
     sikFunctionCall:
@@ -228,8 +282,11 @@ Begin
     sikReasoning, sikProviderOutput:
       Result := '';
   Else
-    Result := '{"role":"' + JsonEscapeText(Item.Role) + '","content":"' +
-      JsonEscapeText(Item.Content) + '"}';
+    If ItemCarriesUserImages(Item) Then
+      Result := '{"role":"user","content":' + UserImageContentArray(Item, ProjectRoot, False) + '}'
+    Else
+      Result := '{"role":"' + JsonEscapeText(Item.Role) + '","content":"' +
+        JsonEscapeText(Item.Content) + '"}';
   End;
 End;
 
@@ -244,7 +301,7 @@ Begin
   Count := 0;
   For I := 0 To High(Items) Do
     Begin
-      Parts[Count] := ItemToResponsesJson(Items[I]);
+      Parts[Count] := ItemToResponsesJson(Items[I], Options.ProjectRoot);
       If Parts[Count] <> '' Then
         Inc(Count);
     End;
@@ -271,7 +328,7 @@ Begin
   Count := 0;
   For I := 0 To High(Items) Do
     Begin
-      Parts[Count] := ItemToChatCompletionsJson(Items[I]);
+      Parts[Count] := ItemToChatCompletionsJson(Items[I], Options.ProjectRoot);
       If Parts[Count] <> '' Then
         Inc(Count);
     End;

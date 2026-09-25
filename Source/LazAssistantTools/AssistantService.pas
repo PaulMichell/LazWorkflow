@@ -1675,7 +1675,10 @@ Begin
       Else
         Begin
           RoleName := RoleToJson(FMessages[I].Role);
-          AppendSamplerItem(Result, C, SamplerInputMessage(RoleName, FMessages[I].Content));
+          Item := SamplerInputMessage(RoleName, FMessages[I].Content);
+          If FMessages[I].Role = amrUser Then
+            Item.ImageRefs := LimitAssistantImageRefs(FMessages[I].ImageRefs);
+          AppendSamplerItem(Result, C, Item);
         End;
     End;
   SetLength(Result, C);

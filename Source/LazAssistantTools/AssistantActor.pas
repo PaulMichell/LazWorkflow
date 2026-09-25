@@ -1067,6 +1067,10 @@ Begin
     End;
   Items := Svc.ExportSamplerItems(FUseResponses);
   Options := DefaultSamplerRequestOptions;
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    Options.ProjectRoot := ProjectAssistantConversation.ProjectRoot
+  Else
+    Options.ProjectRoot := ProjectAssistantRoot;
   Options.Model := FModel;
   Options.ReasoningEffort := FReasoningEffort;
   If FUseResponses Then

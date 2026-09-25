@@ -11,7 +11,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, AssistantProtocol, AssistantSampler;
+  Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng, AssistantImages, AssistantProtocol,
+  AssistantSampler;
 
 Var
   FailCount: Integer;
@@ -45,6 +46,76 @@ End;
 Procedure FeedAll(Parser: TAssistantSseParser; Const Body: String);
 Begin
   Parser.Feed(Body);
+End;
+
+Function ImageFixturePath: String;
+Var
+  Dir, Probe: String;
+Begin
+  Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
+  Probe := Dir + 'Source/Tests/Fixtures/XaiImageUnderstandingParts.json';
+  If FileExists(Probe) Then Exit(Probe);
+  Dir := ExtractFilePath(ParamStr(0));
+  While (Dir <> '') And (ExcludeTrailingPathDelimiter(Dir) <> Dir) Do
+    Begin
+      Probe := IncludeTrailingPathDelimiter(Dir) + 'Source/Tests/Fixtures/XaiImageUnderstandingParts.json';
+      If FileExists(Probe) Then Exit(Probe);
+      Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));
+    End;
+  Result := '';
+End;
+
+Function ImageFixtureJson: TJSONObject;
+Var
+  Lines: TStringList;
+  Data: TJSONData;
+Begin
+  Result := Nil;
+  Lines := TStringList.Create;
+  Data := Nil;
+  Try
+    If ImageFixturePath = '' Then Exit;
+    Lines.LoadFromFile(ImageFixturePath);
+    Data := GetJSON(Lines.Text);
+    If Data Is TJSONObject Then
+      Begin
+        Result := TJSONObject(Data);
+        Data := Nil;
+      End;
+  Finally
+    Data.Free;
+    Lines.Free;
+  End;
+End;
+
+Function FixtureText(Const Name: String): String;
+Var
+  Fixture: TJSONObject;
+Begin
+  Result := '';
+  Fixture := ImageFixtureJson;
+  If Not Assigned(Fixture) Then Exit;
+  Try
+    Result := Fixture.Get(Name, '');
+  Finally
+    Fixture.Free;
+  End;
+End;
+
+Function CountOccurrences(Const Haystack, Needle: String): Integer;
+Var
+  FromAt, At: Integer;
+Begin
+  Result := 0;
+  If Needle = '' Then Exit;
+  FromAt := 1;
+  While FromAt <= Length(Haystack) Do
+    Begin
+      At := Pos(Needle, Copy(Haystack, FromAt, MaxInt));
+      If At < 1 Then Exit;
+      Inc(Result);
+      FromAt := FromAt + At + Length(Needle) - 1;
+    End;
 End;
 
 Procedure TestResponsesReasoningAndText;
@@ -335,6 +406,7 @@ Begin
   Check('req encrypted item', Pos('"encrypted_content":"enc_hidden"', Body) > 0);
   Check('req tools array', Pos('"tools":[', Body) > 0);
   Check('req no messages key', Pos('"messages":', Body) = 0);
+  Check('text-only responses fixture', Body = FixtureText('text_only_responses'));
   Options.ReasoningEffort := 'xhigh';
   Body := BuildResponsesRequestJson(Items, Options);
   Check('req reasoning effort xhigh', Pos('"reasoning":{"effort":"xhigh"}', Body) > 0);
@@ -353,6 +425,7 @@ Begin
   Options := DefaultSamplerRequestOptions;
   Body := BuildChatCompletionsRequestJson(Items, Options);
   Check('cc has messages', Pos('"messages":[', Body) > 0);
+  Check('text-only chat fixture', Body = FixtureText('text_only_chat'));
   Check('cc drops encrypted', Pos('enc_hidden', Body) = 0);
   Check('cc reasoning_effort', Pos('"reasoning_effort":"high"', Body) > 0);
   Options.ReasoningEffort := 'xhigh';
@@ -420,6 +493,135 @@ Begin
   Check('fn call type', Pos('"type":"function_call"', Body) > 0);
   Check('fn output type', Pos('"type":"function_call_output"', Body) > 0);
   Check('fn call id', Pos('"call_id":"call_1"', Body) > 0);
+End;
+
+Procedure DeleteTree(Const Dir: String);
+Var
+  Info: TSearchRec;
+  Child: String;
+Begin
+  If (Dir = '') Or (Not DirectoryExists(Dir)) Then Exit;
+  If FindFirst(IncludeTrailingPathDelimiter(Dir) + '*', faAnyFile, Info) = 0 Then
+    Try
+      Repeat
+        If (Info.Name <> '.') And (Info.Name <> '..') Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(Dir) + Info.Name;
+            If (Info.Attr And faDirectory) <> 0 Then
+              DeleteTree(Child)
+            Else
+              DeleteFile(Child);
+          End;
+      Until FindNext(Info) <> 0;
+    Finally
+      FindClose(Info);
+    End;
+  RmDir(Dir);
+End;
+
+Function UserContent(Data: TJSONData; Const ArrayName: String): TJSONObject;
+Var
+  Arr: TJSONArray;
+  I: Integer;
+  Item: TJSONData;
+Begin
+  Result := Nil;
+  If Not Assigned(Data) Then Exit;
+  Arr := Data.FindPath(ArrayName) As TJSONArray;
+  If Not Assigned(Arr) Then Exit;
+  For I := 0 To Arr.Count - 1 Do
+    Begin
+      Item := Arr.Items[I];
+      If (Item Is TJSONObject) And (TJSONObject(Item).Get('role', '') = 'user') Then
+        Exit(TJSONObject(Item));
+    End;
+End;
+
+Procedure TestImageWireFixture;
+Var
+  Root, ErrorText, Uri, Body, FixtureText: String;
+  Img: TFPMemoryImage;
+  Writer: TFPWriterPNG;
+  Stream: TMemoryStream;
+  Lines: TStringList;
+  Stored: TAssistantStoredImage;
+  Ref: TAssistantImageRef;
+  Refs: TAssistantImageRefArray;
+  Items: TSamplerInputItemArray;
+  Options: TSamplerRequestOptions;
+  Fixture, Request: TJSONData;
+  Expected, Actual, SystemItem: TJSONObject;
+Begin
+  Check('image part fixture is present', ImageFixturePath <> '');
+  If ImageFixturePath = '' Then Exit;
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-image-wire-' + FormatDateTime('hhnnsszzz', Now);
+  ForceDirectories(Root);
+  Img := TFPMemoryImage.Create(1, 1);
+  Writer := TFPWriterPNG.Create;
+  Stream := TMemoryStream.Create;
+  Lines := TStringList.Create;
+  Fixture := Nil;
+  Request := Nil;
+  Try
+    Img.Colors[0, 0] := FPColor($FFFF, 0, 0);
+    Img.SaveToStream(Stream, Writer);
+    Stream.Position := 0;
+    Check('store upload derivative', StoreAssistantImageFromStream(Root, 'sample.png', Stream, Stored, ErrorText));
+    Ref := ImageRefFromStored(Stored);
+    SetLength(Refs, 1);
+    Refs[0] := Ref;
+    Check('upload derivative uri', AssistantImageDataUri(Root, Ref, Uri, ErrorText) And (Pos('data:', Uri) = 1));
+    Lines.LoadFromFile(ImageFixturePath);
+    FixtureText := StringReplace(Lines.Text, 'DATAURI', Uri, [rfReplaceAll]);
+    Fixture := GetJSON(FixtureText);
+    SetLength(Items, 4);
+    Items[0] := SamplerInputMessage('system', 'rules');
+    Items[0].ImageRefs := Refs;
+    Items[1] := SamplerInputMessage('assistant', 'earlier');
+    Items[1].ImageRefs := Refs;
+    Items[2] := SamplerInputFunctionOutput('call_1', 'tool text');
+    Items[2].ImageRefs := Refs;
+    Items[3] := SamplerInputMessage('user', AssistantImageLookText);
+    Items[3].ImageRefs := Refs;
+    Options := DefaultSamplerRequestOptions;
+    Options.ProjectRoot := Root;
+    Options.ToolsJson := '';
+    Options.IncludeEncryptedReasoning := False;
+    Body := BuildResponsesRequestJson(Items, Options);
+    Check('responses uri once', CountOccurrences(Body, Uri) = 1);
+    Check('responses user content is an array', Pos('"role":"user","content":[', Body) > 0);
+    Check('responses user content is not a string', Pos('"role":"user","content":"', Body) = 0);
+    Request := GetJSON(Body);
+    Expected := TJSONObject(Fixture).Find('responses_user') As TJSONObject;
+    Actual := UserContent(Request, 'input');
+    Check('responses part matches fixture', Assigned(Expected) And Assigned(Actual) And (Actual.AsJSON = Expected.AsJSON));
+    SystemItem := Nil;
+    If Request.FindPath('input') Is TJSONArray Then
+      If TJSONArray(Request.FindPath('input')).Items[0] Is TJSONObject Then
+        SystemItem := TJSONObject(TJSONArray(Request.FindPath('input')).Items[0]);
+    Check('responses system stays a string', Assigned(SystemItem) And (SystemItem.Get('role', '') = 'system') And
+      Assigned(SystemItem.Find('content')) And (SystemItem.Find('content').JSONType = jtString));
+    Request.Free;
+    Request := Nil;
+    Body := BuildChatCompletionsRequestJson(Items, Options);
+    Check('chat uri once', CountOccurrences(Body, Uri) = 1);
+    Check('chat user content is an array', Pos('"role":"user","content":[', Body) > 0);
+    Check('chat detail omitted', Pos('"detail"', Body) = 0);
+    Request := GetJSON(Body);
+    Expected := TJSONObject(Fixture).Find('chat_user') As TJSONObject;
+    Actual := UserContent(Request, 'messages');
+    Check('chat part matches fixture', Assigned(Expected) And Assigned(Actual) And (Actual.AsJSON = Expected.AsJSON));
+    Check('tool output does not grow an image part', Pos('"role":"tool","content":"tool text"', Body) > 0);
+    Check('assistant stays a string', Pos('"role":"assistant","content":"earlier"', Body) > 0);
+  Finally
+    Request.Free;
+    Fixture.Free;
+    Lines.Free;
+    Stream.Free;
+    Writer.Free;
+    Img.Free;
+    DeleteTree(Root);
+  End;
 End;
 
 Procedure TestInvalidToolCompletion;
@@ -509,6 +711,7 @@ Begin
   TestSplitChunks;
   TestResponsesRequestJson;
   TestChatCompletionsRequestDropsReasoning;
+  TestImageWireFixture;
   TestFunctionRoundTripItems;
   TestResponsesFailedIsError;
   TestResponsesIncomplete;
