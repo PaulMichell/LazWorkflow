@@ -19,7 +19,7 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantCommands, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
-  AssistantIDEWorkspace;
+  AssistantIDEWorkspace, AssistantGit;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -696,7 +696,10 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.TargetChoiceChanged(Sender:TObject);
-Var Path,Note:String; Dialog:TOpenDialog;
+Var
+  Path, Note, KeptPlan, Resolved, Err: String;
+  Dialog: TOpenDialog;
+  SwitchingToProject: Boolean;
 Begin
   If FSending Or FReviewInProgress Then
     Begin
@@ -727,6 +730,10 @@ Begin
     End;
   If ((Path='') And (AssistantTarget.Kind=atkProject)) Or
     ((Path<>'') And (AssistantTarget.Kind=atkPackage) And SameFileName(Path,AssistantTarget.Manifest)) Then Exit;
+  SwitchingToProject := Path = '';
+  KeptPlan := '';
+  If SwitchingToProject Then
+    KeptPlan := GetActivePlanRelativePath;
   PersistSession;
   If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
   If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
@@ -738,6 +745,15 @@ Begin
       Exit;
     End;
   BindToActiveProject;
+  { The project store has its own plan_file. Keep the plan the user was already working on. }
+  If (KeptPlan <> '') And (Not SameText(GetActivePlanRelativePath, KeptPlan)) And
+    ResolvePlanPath(KeptPlan, Resolved, Err) And FileExistsUTF8(Resolved) Then
+    Begin
+      SetActivePlanRelativePath(KeptPlan);
+      PersistShellConfig;
+      RefreshPlanList;
+      RefreshBuildTodos;
+    End;
 End;
 
 Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
@@ -1089,6 +1105,10 @@ Begin
   If Not WriteMarkdownFile(PlanRel, Body + LineEnding, True, Resolved, Err) Then
     Begin
       WorkflowLogger.Warning('ProjectAssistant', 'Auto-save plan failed: ' + Err);
+      If FDisplaySystemNote <> '' Then
+        FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Err
+      Else
+        FDisplaySystemNote := Err;
       Exit;
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
@@ -1690,7 +1710,13 @@ Begin
   SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
     [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
   If NewStatus = pssComplete Then
-    ClearBuildWorkTracking;
+    Begin
+      ClearBuildWorkTracking;
+      If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
+        SetCurrentSystemNote(Format(
+          'Plan status updated: **%s** → complete. This working root is a Git repository. Commit the plan file if that completion should be in history.',
+          [SectionTitle]));
+    End;
 End;
 
 Procedure TProjectAssistantForm.ClearBuildWorkTracking;
@@ -1730,6 +1756,14 @@ Begin
   { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
+      SetBuildStatusFeedback(Note);
+      If FPlanAgentRunning Then
+        StopWorkOnPlanAgent(Note);
+      Exit;
+    End;
+  If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
+    Begin
+      Note := Note + ' This working root is a Git repository, so the item stays in progress until a commit contains the completion.';
       SetBuildStatusFeedback(Note);
       If FPlanAgentRunning Then
         StopWorkOnPlanAgent(Note);
@@ -1904,10 +1938,9 @@ Begin
   Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading +
     'Instructions:' + LineEnding + '1. Focus only on this actionable item unless blocked.' + LineEnding +
     ToolInstructions + LineEnding +
-    '4. Follow the acceptance criteria in the section. Do not change the plan status or validation requirements to make work pass. ' +
-    'The IDE handles automatic completion only for an unchanged plan with an explicit Validation: build or Validation: tests criterion, ' +
-    'complete CodeTools source coverage and current matching evidence. Unchecked acceptance items require manual review.' + LineEnding +
-    '5. Report what changed, compilation and test results, and any criteria that still need review. A clean compile alone does not prove correct behavior.' +
+    '4. ' + AssistantPlanCompletionRules + LineEnding +
+    '5. Follow the acceptance criteria in the section. Do not change validation requirements to make work pass. ' +
+    'Unchecked acceptance items require manual review. A clean compile alone does not prove correct behavior.' +
     LineEnding + LineEnding + '----- begin plan section -----' + LineEnding + Body + LineEnding + '----- end plan section -----';
 End;
 
@@ -2963,6 +2996,7 @@ Begin
     'Build allows new project text files, explicit buffer edits, saves, saved-input builds and Git via lazarus_run_git. ' +
     'For Git, save authorized edits first, inspect status and the staged diff, stage explicit files and exclude unrelated changes. ' +
     'Read the active plan including its overall instructions. Honor explicit conversation or plan instructions to commit automatically after completing and validating changes, without asking again; tool approval settings still apply. Preserve these instructions in plans and report the commit hash only after successful Git evidence. ' +
+    AssistantPlanCompletionRules + ' ' +
     'Use lazarus_create_file to save a new report or other text file; it never overwrites existing content. ' +
     'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
     'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
@@ -3258,6 +3292,8 @@ Begin
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
+      ResetAssistantGitTurn;
+      ResetAssistantPlanTurn;
       ShowPlanOfferBar(False);
     End;
   If Not IsSending Then
@@ -3872,7 +3908,7 @@ End;
 
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
-  DisplayBody, ResolvedError, TraceNote: String;
+  DisplayBody, ResolvedError, TraceNote, Settlement, AskedNote: String;
   WorkedMs: Integer;
 Begin
   ResolvedError := ErrorText;
@@ -3943,13 +3979,31 @@ Begin
       TraceNote := FDisplaySystemNote;
     End;
   WorkedMs := CurrentStreamDurationMs;
+  If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
+  If RevertUncommittedPlanCompletion(Settlement) And (Settlement <> '') Then
+    Begin
+      If TraceNote <> '' Then
+        TraceNote := TraceNote + LineEnding + LineEnding + Settlement
+      Else
+        TraceNote := Settlement;
+    End;
+  AskedNote := AssistantTurnSettlementNote(FLiveUser, FPlanWriteThisTurn);
+  If AskedNote <> '' Then
+    Begin
+      If TraceNote <> '' Then
+        TraceNote := TraceNote + LineEnding + LineEnding + AskedNote
+      Else
+        TraceNote := AskedNote;
+    End;
+  If TraceNote <> '' Then
+    FDisplaySystemNote := TraceNote;
   FinishLiveTrace(TraceNote, WorkedMs);
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ResolvedError);
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
-  If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
-  { Only explicit validation with current correlated evidence can auto-complete. }
+  { Only explicit validation with current correlated evidence can auto-complete.
+    A Git repository keeps the item in progress until a commit contains the completion. }
   If ActiveMode = amBuild Then
     Begin
       Try

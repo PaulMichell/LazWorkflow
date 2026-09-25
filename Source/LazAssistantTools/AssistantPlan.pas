@@ -1,6 +1,11 @@
 Unit AssistantPlan;
 
-{ Plan-mode paths, Documents/ workspace, and plan Markdown helpers (c) 2026 Michell Computing. }
+{ Plan-mode paths, Documents/ workspace, and plan Markdown helpers (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Recognition, the progress
+  scan, Markdown writes, and the completion-commit rule share one status
+  parser. A second scanner would drift from the progress list.
+  Reviewed 2026-09-25. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -52,6 +57,15 @@ Function TextIsAssistantPlan(Const Body: String): Boolean;
 Function TryReadAssistantPlanIdentity(Const RelativeOrAbsolute: String; Out Title, ErrorText: String): Boolean;
 Function FormatPlanListCaption(Const Title, RelativePath: String): String;
 Function AssistantPlanAuthoringRules: String;
+Function AssistantPlanCompletionRules: String;
+{ True when NextBody marks an actionable item complete that PreviousBody did not. }
+Function PlanBodyIntroducesCompletion(Const PreviousBody, NextBody: String): Boolean;
+Procedure ResetAssistantPlanTurn;
+{ Restores a completion write when that plan file is still uncommitted. }
+Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
+{ Note for a user turn that asked for a commit or a completed status and did not get one.
+  The generated Work-on-this prompt is ignored. }
+Function AssistantTurnSettlementNote(Const UserText: String; PlanWasWritten: Boolean): String;
 { True when an assistant plan puts Status under ##. A ### note is not a todo. Non-plans return False. }
 Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String): Boolean;
 { Paths and Titles are created here and paired by index. Caller frees both, including on failure. }
@@ -79,7 +93,18 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, FileUtil, AssistantMarkdownForm, WorkflowLog, WorkflowEvents, AssistantConversation;
+  LazFileUtils, FileUtil, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
+  AssistantConversation, AssistantGit;
+
+Var
+  CompletionPath: String;
+  CompletionPrevious: String;
+  CompletionExisted: Boolean;
+
+Function PlanCompletionBlocked(Const PreviousBody, NextBody: String; Out ErrorText: String): Boolean; Forward;
+Procedure NotePlanCompletionWrite(Const Path, PreviousBody: String; Existed: Boolean); Forward;
+Function StatusFollowsHeading(SL: TStringList; HeadingIndex: Integer; Out StatusText: String;
+  Out StatusLine: Integer): Boolean; Forward;
 
 Procedure PublishPlanFileWrite(Const Resolved, Content: String; OpenAfter: Boolean);
 Begin
@@ -438,6 +463,18 @@ Begin
     '- Preamble and overview prose go before the first `##`, or under a `##` section with no Status line.';
 End;
 
+Function AssistantPlanCompletionRules: String;
+Begin
+  Result :=
+    'When an actionable item is finished, set its Status to complete with update_markdown. ' +
+    'Do not put Status on a ## heading. A clean compile does not complete the item. ' +
+    'If the working root is a Git repository, run_git commit must succeed in this turn before Status becomes complete. ' +
+    'Commit the finished files first, then set the status, then commit the plan file. ' +
+    'Use one -m string for the subject and body, or several -m arguments; Git joins them with a blank line. ' +
+    'If the working root has no Git repository, set Status to complete with no commit. ' +
+    'Report a commit hash only from a successful run_git result. If a tool fails, say so.';
+End;
+
 Procedure AppendPlanPair(Target: TStringList; Const RelativePath, Title: String);
 Begin
   Target.Add(RelativePath + #1 + Title);
@@ -547,7 +584,8 @@ End;
 Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter: Boolean;
   Out Resolved: String; Out ErrorText: String): Boolean;
 Var
-  Dir: String;
+  Dir, Previous: String;
+  Existed: Boolean;
   SL: TStringList;
 Begin
   Result := False;
@@ -564,12 +602,28 @@ Begin
       End;
   If PlanMarkdownStructureError(Content, ErrorText) Then
     Exit;
+  Previous := '';
+  Existed := FileExistsUTF8(Resolved) And (Not FileIsSymlink(Resolved));
+  If Existed Then
+    Begin
+      SL := TStringList.Create;
+      Try
+        SL.LoadFromFile(Resolved);
+        Previous := SL.Text;
+      Finally
+        SL.Free;
+      End;
+    End;
+  If PlanCompletionBlocked(Previous, Content, ErrorText) Then
+    Exit;
   SL := TStringList.Create;
   Try
     Try
       SL.Text := Content;
       SL.SaveToFile(Resolved);
       Result := True;
+      If PlanBodyIntroducesCompletion(Previous, Content) Then
+        NotePlanCompletionWrite(Resolved, Previous, Existed);
       WorkflowLogger.Info('AssistantPlan', 'Wrote Markdown: ' + Resolved);
       PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
     Except
@@ -586,7 +640,7 @@ Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: Strin
   Out ReplaceCount: Integer): Boolean;
 Var
   SL: TStringList;
-  Body: String;
+  Body, Previous: String;
   P: Integer;
 Begin
   Result := False;
@@ -609,7 +663,8 @@ Begin
   Try
     Try
       SL.LoadFromFile(Resolved);
-      Body := SL.Text;
+      Previous := SL.Text;
+      Body := Previous;
       If ReplaceAll Then
         Begin
           ReplaceCount := 0;
@@ -645,9 +700,16 @@ Begin
           ReplaceCount := 0;
           Exit;
         End;
+      If PlanCompletionBlocked(Previous, Body, ErrorText) Then
+        Begin
+          ReplaceCount := 0;
+          Exit;
+        End;
       SL.Text := Body;
       SL.SaveToFile(Resolved);
       Result := True;
+      If PlanBodyIntroducesCompletion(Previous, Body) Then
+        NotePlanCompletionWrite(Resolved, Previous, True);
       WorkflowLogger.Info('AssistantPlan',
         Format('Updated Markdown %s (%d replacement(s))', [Resolved, ReplaceCount]));
       PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
@@ -795,6 +857,213 @@ Begin
     Exit;
   StatusText := Trim(Copy(S, P + 1, MaxInt));
   Result := StatusText <> '';
+End;
+
+Procedure BlankFencedLines(Lines: TStringList);
+Var
+  Index, FenceLength, Mark: Integer;
+  Fence: Char;
+  Line: String;
+Begin
+  Fence := #0;
+  FenceLength := 0;
+  For Index := 0 To Lines.Count - 1 Do
+    Begin
+      Line := Trim(Lines[Index]);
+      If (Length(Line) >= 3) And ((Line[1] = '`') Or (Line[1] = '~')) Then
+        Begin
+          Mark := 1;
+          While (Mark <= Length(Line)) And (Line[Mark] = Line[1]) Do
+            Inc(Mark);
+          Dec(Mark);
+          If Mark >= 3 Then
+            Begin
+              If Fence = #0 Then
+                Begin
+                  Fence := Line[1];
+                  FenceLength := Mark;
+                End
+              Else If (Line[1] = Fence) And (Mark >= FenceLength) And (Trim(Copy(Line, Mark + 1, MaxInt)) = '') Then
+                Fence := #0;
+              Lines[Index] := '';
+              Continue;
+            End;
+        End;
+      If Fence <> #0 Then
+        Lines[Index] := '';
+    End;
+End;
+
+Procedure CollectCompleteKeys(Const Body: String; Keys: TStrings);
+Var
+  Lines: TStringList;
+  Index, Level, StatusLine: Integer;
+  Title, StatusText, ParentTitle: String;
+Begin
+  If Not Assigned(Keys) Then Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Body;
+    BlankFencedLines(Lines);
+    ParentTitle := '';
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        Level := PlanHeadingLevel(Lines[Index], Title);
+        If Level = 2 Then
+          ParentTitle := Title
+        Else If Level = 1 Then
+          ParentTitle := ''
+        Else If (Level = 3) And StatusFollowsHeading(Lines, Index, StatusText, StatusLine) And
+          (StrToPlanSectionStatus(StatusText) = pssComplete) Then
+          Keys.Add(ParentTitle + #1 + Title);
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function PlanBodyIntroducesCompletion(Const PreviousBody, NextBody: String): Boolean;
+Var
+  Previous, Next: TStringList;
+  Index: Integer;
+Begin
+  Result := False;
+  If Not TextIsAssistantPlan(NextBody) Then Exit;
+  Previous := TStringList.Create;
+  Next := TStringList.Create;
+  Try
+    CollectCompleteKeys(PreviousBody, Previous);
+    CollectCompleteKeys(NextBody, Next);
+    For Index := 0 To Next.Count - 1 Do
+      If Previous.IndexOf(Next[Index]) < 0 Then
+        Exit(True);
+  Finally
+    Next.Free;
+    Previous.Free;
+  End;
+End;
+
+Function PlanCompletionBlocked(Const PreviousBody, NextBody: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not PlanBodyIntroducesCompletion(PreviousBody, NextBody) Then Exit;
+  If Not WorkingRootHasGitRepository(PlanProjectRoot) Then Exit;
+  If AssistantGitTurnCommitted Then Exit;
+  ErrorText := 'This working root is a Git repository, so Status cannot become complete until run_git commit succeeds ' +
+    'in this turn. Commit the finished work first, then set Status to complete, then commit the plan file. ' +
+    'A project with no Git repository can be marked complete with no commit.';
+  Result := True;
+End;
+
+Procedure NotePlanCompletionWrite(Const Path, PreviousBody: String; Existed: Boolean);
+Begin
+  If CompletionPath <> '' Then Exit;
+  If Not WorkingRootHasGitRepository(PlanProjectRoot) Then Exit;
+  CompletionPath := Path;
+  CompletionPrevious := PreviousBody;
+  CompletionExisted := Existed;
+End;
+
+Procedure ResetAssistantPlanTurn;
+Begin
+  CompletionPath := '';
+  CompletionPrevious := '';
+  CompletionExisted := False;
+End;
+
+Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
+Var
+  Root, RelativePath, EscapedPath, Reply, GitError: String;
+  Lines: TStringList;
+  Data: TJSONData;
+  Clean: Boolean;
+Begin
+  Result := False;
+  Note := '';
+  If CompletionPath = '' Then Exit;
+  Root := PlanProjectRoot;
+  If Not WorkingRootHasGitRepository(Root) Then
+    Begin
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  RelativePath := ProjectRelativePath(CompletionPath);
+  EscapedPath := StringReplace(RelativePath, '\', '\\', [rfReplaceAll]);
+  EscapedPath := StringReplace(EscapedPath, '"', '\"', [rfReplaceAll]);
+  If Not RunAssistantGit(Root, '{"arguments":["status","--porcelain","--","' + EscapedPath + '"]}', Reply, GitError) Then
+    Begin
+      Note := 'Could not check whether the plan file was committed. ' + GitError;
+      Result := True;
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  Clean := False;
+  Data := Nil;
+  Try
+    Data := GetJSON(Reply);
+    If Data Is TJSONObject Then
+      Clean := Trim(TJSONObject(Data).Get('output', '')) = '';
+  Except
+    Clean := False;
+  End;
+  Data.Free;
+  If Clean Then
+    Begin
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  If Not CompletionExisted Then
+    Begin
+      If FileIsSymlink(CompletionPath) Then
+        Note := 'The new plan ' + RelativePath + ' was not committed, and it is a symbolic link so it was left in place.'
+      Else If Not DeleteFileUTF8(CompletionPath) Then
+        Note := 'The new plan ' + RelativePath + ' was not committed, and it could not be removed.'
+      Else
+        Note := 'Removed ' + RelativePath + ' because this Git repository has no commit that contains the completion.';
+    End
+  Else
+    Begin
+      Lines := TStringList.Create;
+      Try
+        Try
+          Lines.Text := CompletionPrevious;
+          Lines.SaveToFile(CompletionPath);
+          PublishPlanFileWrite(CompletionPath, CompletionPrevious, False);
+          Note := 'The plan status was put back because this Git repository has no commit that contains the completion. ' +
+            'Commit the finished work, set Status to complete, then commit the plan file.';
+        Except
+          On E: Exception Do
+            Note := 'The completion in ' + RelativePath + ' is not committed, and restoring the previous text failed. ' +
+              E.Message;
+        End;
+      Finally
+        Lines.Free;
+      End;
+    End;
+  Result := Note <> '';
+  ResetAssistantPlanTurn;
+End;
+
+Function AssistantTurnSettlementNote(Const UserText: String; PlanWasWritten: Boolean): String;
+Var
+  Low: String;
+  AskedCommit, AskedStatus: Boolean;
+Begin
+  Result := '';
+  If Pos('Work on this plan item', UserText) = 1 Then Exit;
+  Low := LowerCase(UserText);
+  AskedCommit := Pos('commit', Low) > 0;
+  AskedStatus := ((Pos('status', Low) > 0) Or (Pos('mark', Low) > 0) Or (Pos('flag', Low) > 0)) And
+    ((Pos('complete', Low) > 0) Or (Pos('done', Low) > 0));
+  If AskedCommit And WorkingRootHasGitRepository(PlanProjectRoot) And (Not AssistantGitTurnCommitted) Then
+    Result := 'No Git commit succeeded in this turn. The repository does not contain this reply''s work.';
+  If AskedStatus And (Not PlanWasWritten) Then
+    Begin
+      If Result <> '' Then
+        Result := Result + ' ';
+      Result := Result + 'The plan status was not written in this turn.';
+    End;
 End;
 
 Function StatusFollowsHeading(SL: TStringList; HeadingIndex: Integer; Out StatusText: String;

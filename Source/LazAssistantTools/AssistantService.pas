@@ -673,7 +673,7 @@ Begin
         'Discover symbols with `search_in_project` / `list_directory` / `read_file` only.' + LineEnding +
         LineEnding +
         '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
-        'A clean `run_compile` does not close the work item. Auto-complete happens only for Validation: build or Validation: tests when the evidence matches. ' +
+        AssistantPlanCompletionRules + ' ' +
         'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +
         '`##` headings are context and must not receive a Status line. Prefer Michell Free Pascal conventions.' + LineEnding +
         LineEnding +
