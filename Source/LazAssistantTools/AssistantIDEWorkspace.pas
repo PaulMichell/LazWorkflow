@@ -469,7 +469,7 @@ Begin
   Finally
     Data.Free;
   End;
-  Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest);
+  Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, AssistantTarget.Manifest);
   Try
     Settings.Load;
     If Not Settings.Enabled Then
@@ -563,7 +563,7 @@ Begin
   If Not Stale Then
     Begin
       If Not ExecutableFingerprint(FTestExecutable, Fingerprint, Note) Or (Fingerprint <> Value.ExecutableFingerprint) Then Stale := True;
-      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest);
+      Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, AssistantTarget.Manifest);
       Try
         Settings.Load;
         Data := GetJSON(Settings.CommandJSON);

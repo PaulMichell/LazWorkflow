@@ -32,7 +32,7 @@ Michell Computing style packages: a native Git UI and a Project Assistant (xAI R
 - Depth-1 **spawn_subagent** and **Review Changes** (Pascal naming / structure / review lenses)
 - Command catalog on **Commands…** / `Ctrl+P`, `/` in the prompt, and footer clicks (model, skill, context, session)
 - After a Plan write, **Build this** / **Revise**
-- Project-local `.assistant/` (conversation JSONL, events log, config). Gitignore it.
+- Project-local `.assistant/` (conversation JSONL, events log, `config.json`). Gitignore it.
 
 ### Git commits from Build mode
 
@@ -54,6 +54,15 @@ Remote operations, destructive commands and history rewriting are not exposed.
 - Free Pascal 3.2.2+ (tested with 3.3.1)
 - Linux, Windows, macOS
 - SuperGrok / X Premium for xAI OAuth, or another OpenAI-compatible endpoint
+
+## Settings files
+
+Two JSON files hold settings. A missing file means defaults. Legacy XML and INI names are not read and are not migrated.
+
+- **IDE document:** `<Lazarus primary config>/LazWorkflow.json`. Common owns `spell`. Assistant owns `assistant` (connections, model, thinking, approval). Repository owns `repository` (refresh and graph font). A save replaces only that package's section and leaves every other key, including keys the package does not understand.
+- **Target document:** `<working-root>/.assistant/config.json` for the open project, or `<working-root>/.assistant/targets/package-<relative-hash>/config.json` for a package. The Assistant stores shell options and the target test command there. Repository never reads or writes it, so a Repository-only install creates no `.assistant` store.
+
+Either optional package installs and runs without the other. Repository requires Common. Assistant requires Common and LazStyledText. Neither requires the other. Common does not use either optional package. Suggest stays disabled until the Assistant registers `SuggestCommitMessageFunc`.
 
 ## Installation
 

@@ -10,13 +10,16 @@ Unit AssistantProjectPaths;
 Interface
 
 Uses
-  SysUtils;
+  SysUtils, fpjson;
 
 Const
   AssistantStoreFolderName = '.assistant';
   AssistantConversationFileName = 'conversation.jsonl';
+  AssistantTargetConfigFileName = 'config.json';
 
-{ Directory that should hold .assistant for this project file (trailing delimiter). Empty if none exists. }
+Function LoadTargetConfig(Const StoreDirectory: String): TJSONObject;
+Function SaveTargetConfig(Const StoreDirectory: String; Config: TJSONObject; Out ErrorText: String): Boolean;
+Function TargetConfigPath(Const StoreDirectory: String): String;
 Function ResolveAssistantProjectRoot(Const ProjectInfoFile, MainFileName: String): String;
 { If ProjectFile is missing (folder renamed), find a sibling tree that still contains that file name. }
 Function LocateExistingProjectFile(Const ProjectFile: String): String;
@@ -24,7 +27,116 @@ Function LocateExistingProjectFile(Const ProjectFile: String): String;
 Implementation
 
 Uses
-  LazFileUtils;
+  Classes, jsonparser, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+
+Function TargetConfigPath(Const StoreDirectory: String): String;
+Begin
+  If Trim(StoreDirectory) = '' Then
+    Result := ''
+  Else
+    Result := IncludeTrailingPathDelimiter(StoreDirectory) + AssistantTargetConfigFileName;
+End;
+
+Procedure RemoveManagedStoreNote(Const StoreDirectory: String);
+Var
+  Path: String;
+  Lines: TStringList;
+Begin
+  If Trim(StoreDirectory) = '' Then Exit;
+  Path := IncludeTrailingPathDelimiter(StoreDirectory) + 'README.txt';
+  If (Not FileExistsUTF8(Path)) Or FileIsSymlink(Path) Then Exit;
+  Lines := TStringList.Create;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+    Except
+      Exit;
+    End;
+    If Pos('Managed by LazAssistantTools', Lines.Text) = 0 Then Exit;
+    DeleteFileUTF8(Path);
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function LoadTargetConfig(Const StoreDirectory: String): TJSONObject;
+Var
+  Path: String;
+  Lines: TStringList;
+  Data: TJSONData;
+Begin
+  RemoveManagedStoreNote(StoreDirectory);
+  Result := TJSONObject.Create;
+  Path := TargetConfigPath(StoreDirectory);
+  If (Path = '') Or (Not FileExistsUTF8(Path)) Then
+    Exit;
+  Lines := TStringList.Create;
+  Data := Nil;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+      Data := GetJSON(Lines.Text);
+      If Data Is TJSONObject Then
+        Begin
+          Result.Free;
+          Result := TJSONObject(Data);
+          Data := Nil;
+        End;
+    Except
+      { Invalid target document: defaults for the missing keys. }
+    End;
+  Finally
+    Data.Free;
+    Lines.Free;
+  End;
+End;
+
+Function SaveTargetConfig(Const StoreDirectory: String; Config: TJSONObject; Out ErrorText: String): Boolean;
+Var
+  Path, Temp: String;
+  Lines: TStringList;
+Begin
+  Result := False;
+  ErrorText := '';
+  Path := TargetConfigPath(StoreDirectory);
+  If (Path = '') Or (Not Assigned(Config)) Then
+    Begin
+      ErrorText := 'No target is selected.';
+      Exit;
+    End;
+  If Not ForceDirectoriesUTF8(ExcludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(StoreDirectory))) Then
+    Begin
+      ErrorText := 'Could not create the target store.';
+      Exit;
+    End;
+  Temp := Path + '.tmp';
+  Lines := TStringList.Create;
+  Try
+    Try
+      Lines.Text := Config.FormatJSON;
+      Lines.SaveToFile(Temp);
+      {$IFDEF UNIX}
+      If fpChmod(Temp, &600) <> 0 Then
+        Raise Exception.Create('Could not protect the target document.');
+      {$ENDIF}
+      If Not RenameFile(Temp, Path) Then
+        Begin
+          DeleteFileUTF8(Path);
+          If Not RenameFile(Temp, Path) Then
+            Raise Exception.Create('Could not replace the target document.');
+        End;
+      Result := True;
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := E.Message;
+          DeleteFileUTF8(Temp);
+        End;
+    End;
+  Finally
+    Lines.Free;
+  End;
+End;
 
 Function IsStopDir(Const Dir: String): Boolean;
 Var

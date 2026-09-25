@@ -17,7 +17,7 @@ Type
   Private
 
     Status: TLabel;
-    SignIn, CheckButton, BrowseButton, DetectButton: TButton;
+    SignIn, CheckButton, BrowseButton, DetectButton, DeleteProfileButton: TButton;
     Timer: TTimer;
     Job: TAssistantCodexAccount;
     OpenedUrl, ModelsJson: String;
@@ -26,6 +26,7 @@ Type
     Procedure ModelChanged(Sender: TObject);
     Procedure StartCheck(Sender: TObject);
     Procedure Tick(Sender: TObject);
+    Procedure DeleteProfile(Sender: TObject);
   Public
     RuntimeEdit: TEdit;
     ModelCombo, EffortCombo, ApprovalCombo: TComboBox;
@@ -144,6 +145,15 @@ Begin
   CheckButton.SetBounds(210, 285, 180, 32);
   CheckButton.Caption := 'Check / refresh models';
   CheckButton.OnClick := @StartCheck;
+  DeleteProfileButton := TButton.Create(Self);
+  DeleteProfileButton.Parent := Self;
+  DeleteProfileButton.Name := 'DeleteProfileButton';
+  DeleteProfileButton.SetBounds(400, 285, 241, 32);
+  DeleteProfileButton.Caption := 'Delete profile directory';
+  DeleteProfileButton.Enabled := False;
+  DeleteProfileButton.ShowHint := True;
+  DeleteProfileButton.Hint := 'Deletes the runtime sign-in directory. Does not remove the connection definition.';
+  DeleteProfileButton.OnClick := @DeleteProfile;
   Status := TLabel.Create(Self);
   Status.Name := 'ConnectionStatus';
   Status.Parent := Self;
@@ -219,6 +229,7 @@ Begin
   OpenedUrl := '';
   SignIn.Enabled := False;
   CheckButton.Enabled := False;
+  DeleteProfileButton.Enabled := False;
   RuntimeEdit.Enabled := False;
   BrowseButton.Enabled := False;
   DetectButton.Enabled := False;
@@ -329,6 +340,7 @@ Begin
   RuntimeEdit.Enabled := True;
   SignIn.Enabled := True;
   CheckButton.Enabled := True;
+  DeleteProfileButton.Enabled := CodexProfilePathIsDerived(Profile);
   If Value.ErrorText <> '' Then
     Begin
       Status.Caption := Value.ErrorText;
@@ -347,6 +359,33 @@ Begin
   End;
   If ModelCombo.Items.Count > 0 Then Status.Caption := 'Signed in with ChatGPT. Available allowance is checked when you send a request.'
   Else Status.Caption := 'Signed in, but no available models were discovered.';
+End;
+
+Procedure TCodexConnectionFrame.DeleteProfile(Sender: TObject);
+Var
+  ErrorText: String;
+  Present: Boolean;
+Begin
+  If Busy Then Exit;
+  If Not CodexProfilePathIsDerived(Profile) Then
+    Begin
+      Status.Caption := 'Refusing to delete a path that is not this connection''s derived Codex profile.';
+      Exit;
+    End;
+  Present := DirectoryExists(Profile) Or FileExists(Profile);
+  If Not Present Then
+    Begin
+      Status.Caption := 'No profile directory is present. The connection definition was not changed.';
+      Exit;
+    End;
+  If MessageDlg('Delete the Codex profile directory for this connection?' + LineEnding + LineEnding +
+    'Runtime sign-in in that directory will be removed. The connection definition is kept. ' +
+    'Saving settings does not delete this directory.',
+    mtWarning, [mbYes, mbNo], 0) <> mrYes Then Exit;
+  If Not DeleteCodexProfileDirectory(Profile, ErrorText) Then
+    Status.Caption := ErrorText
+  Else
+    Status.Caption := 'Profile directory deleted. The connection definition was kept.';
 End;
 
 Procedure TCodexConnectionFrame.LoadConnection(Const ProfileDir, Runtime, Model: String; Const Effort, Approval: String);
@@ -376,6 +415,7 @@ Begin
   RuntimeEdit.Enabled := True;
   SignIn.Enabled := True;
   CheckButton.Enabled := True;
+  DeleteProfileButton.Enabled := CodexProfilePathIsDerived(ProfileDir);
   RuntimeEdit.Text := Trim(Runtime);
   ModelCombo.Items.Clear;
   If Model <> '' Then

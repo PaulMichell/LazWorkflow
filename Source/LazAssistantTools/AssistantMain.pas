@@ -21,8 +21,8 @@ Var
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, ProjectAssistantForm, AssistantService, AssistantSettingsForm, AssistantMarkdownForm,
-  AssistantConfig, IDEMsgIntf, IDEExternToolIntf, SpellCheckerConfig;
+  WorkflowLog, WorkflowEvents, WorkflowSettings, ProjectAssistantForm, AssistantService, AssistantSettingsForm,
+  AssistantMarkdownForm, AssistantConfig, GrokOAuth, IDEMsgIntf, IDEExternToolIntf;
 
 Type
   { Context menu on IDE Messages: Ask Assistant to fix the selected line. }
@@ -266,11 +266,15 @@ Begin
       AssistantIDEHooks := TAssistantIDEHooks.Create;
 
     If Assigned(LazarusIDE) Then
+      SetWorkflowSettingsDirectory(LazarusIDE.GetPrimaryConfigPath);
+    If Assigned(AssistantChatConfig) Then
       Try
-        InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
+        AssistantChatConfig.Load;
+        If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
+          GrokOAuthClient.SetTokens(AssistantChatConfig.ToOAuthTokens);
       Except
         On E: Exception Do
-          WorkflowLogger.Warning('ProjectAssistant', 'Spell config load failed: ' + E.Message);
+          WorkflowLogger.Warning('ProjectAssistant', 'Config load failed: ' + E.Message);
       End;
 
     SuggestCommitMessageFunc := @SuggestCommitMessageHandler;

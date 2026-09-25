@@ -152,7 +152,7 @@ Begin
     Check('symlink cannot extend write scope',Not AssistantTarget.AllowsWrite(Root+'/Source/One/escape/Two.pas'));
     Check('manifest editing requires package editor',Not AssistantTarget.AllowsWrite(Packages.First.Filename));
     Check('read resolver uses target root',ResolveProjectPath('Source/One/One.pas',Path,Note) And (Path=Packages.First.Member.Path));
-    Check('legacy tools describe selected package',ExecuteAssistantToolForMode('get_project_info','{}',amChat,Reply,Note) And (Pos('One.lpk',Reply)>0));
+    Check('legacy tools describe selected package',ExecuteAssistantToolForMode('get_project_info','{}',amInspect,Reply,Note) And (Pos('One.lpk',Reply)>0));
     Check('legacy package writes cannot alter unrelated source',Not ExecuteAssistantToolForMode('write_file','{"path":"App/App.pas","content":"bad"}',amBuild,Reply,Note));
     Check('Git cannot stage unrelated project source',Not ToolRunGit('{"arguments":["add","--","App/App.pas"]}',Reply,Note));
     Check('legacy membership tool cannot modify active project',Not ExecuteAssistantToolForMode('add_unit_to_project','{"path":"Source/One/One.pas"}',amBuild,Reply,Note));
@@ -160,6 +160,7 @@ Begin
     Check('save package plan setting',Store.SaveShellConfig(True,amPlan,'Documents/One.md'));
     Key:=AssistantTarget.StoreKey;Path:=ActiveProjectSessionPath;
     Check('package session uses isolated store',Pos('/targets/'+Key+'/',Path)>0);
+    Check('session file is not written',SaveProjectChatSession(Nil,0) And Not FileExists(Path));
     Settings1:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);
     Check('select another package',AssistantTarget.SelectPackage(Packages.Second.Filename,Note));
     Settings2:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);

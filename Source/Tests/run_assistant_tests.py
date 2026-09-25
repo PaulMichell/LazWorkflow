@@ -20,6 +20,8 @@ def main():
     parser.add_argument('--package-check', action='store_true',
                         help='Also validate .lpk dependencies with lazbuild (rebuilds repository dependencies).')
     parser.add_argument('--compile-only', action='store_true')
+    parser.add_argument('--independent', action='store_true',
+                        help='Prove Repository and Assistant install alone: restricted unit paths, section round-trip, nil Suggest.')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     output = (args.output_dir or Path(tempfile.mkdtemp(prefix='laz-assistant-tests-'))).resolve()
@@ -37,17 +39,18 @@ def main():
     tests = ['WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'RepositorySafetyTest', 'AssistantAcceptanceTest', 'AssistantCommandsTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
              'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantFileCreationTest', 'AssistantCodexHandshakeTest',
-             'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest', 'AssistantGitTest']
+             'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest', 'AssistantGitTest',
+             'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall']
     if args.gui:
         tests += ['PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
                   'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest', 'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest', 'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest', 'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest']
     failures = []
 
-    def run(label, command):
+    def run(label, command, timeout=90):
         try:
             result = subprocess.run(command, cwd=repo, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    timeout=90)
+                                    timeout=timeout)
             (output / f'{label}.log').write_text(result.stdout)
             if result.returncode:
                 print(f'FAIL {label}: see {output / (label + ".log")}', flush=True)
@@ -63,6 +66,38 @@ def main():
             return False
         print(f'PASS {label}', flush=True)
         return True
+
+    def restricted(label, sources, target, execute=False, timeout=180):
+        out = output / label
+        out.mkdir(parents=True, exist_ok=True)
+        command = ['fpc', '-v0', '-gl', '-Cr', '-Co', '-MObjFPC', f'-FU{out}', f'-FE{out}']
+        command += [f'-Fu{repo / "Source" / name}' for name in sources]
+        command += [f'-Fu{path}' for path in unit_dirs]
+        command.append(str(target))
+        built = run(label + '-build', command, timeout)
+        if built and execute and not args.compile_only:
+            built = run(label, [str(out / target.stem)], timeout)
+        return built
+
+    if args.independent:
+        # Each compile gets its own output directory so a foreign package unit cannot be satisfied by a leftover ppu.
+        checks = [
+            restricted('common-package', ['LazWorkflowCommon'], repo / 'Packages' / 'LazWorkflowCommon.pas'),
+            restricted('styled-package', ['LazStyledText'], repo / 'Packages' / 'LazStyledText.pas'),
+            restricted('repository-package', ['LazRepositoryTools', 'LazWorkflowCommon'],
+                       repo / 'Packages' / 'LazRepositoryTools.pas', False, 300),
+            restricted('assistant-package', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
+                       repo / 'Packages' / 'LazAssistantTools.pas', False, 300),
+            restricted('RepositoryOnlyInstall', ['LazRepositoryTools', 'LazWorkflowCommon'],
+                       repo / 'Source' / 'Tests' / 'RepositoryOnlyInstall.lpr', True, 240),
+            restricted('AssistantOnlyInstall', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
+                       repo / 'Source' / 'Tests' / 'AssistantOnlyInstall.lpr', True, 240),
+            restricted('IndependentInstallTest',
+                       ['LazRepositoryTools', 'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
+                       repo / 'Source' / 'Tests' / 'IndependentInstallTest.lpr', True, 240),
+        ]
+        print(f'Logs: {output}', flush=True)
+        return not all(checks)
 
     for name in tests:
         if run(name + '-build', flags + [str(repo / 'Source' / 'Tests' / (name + '.lpr'))]):

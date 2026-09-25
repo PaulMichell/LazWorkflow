@@ -1,7 +1,7 @@
 Program AssistantBuildWorkspaceTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, fpjson, jsonparser,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, CodeToolManager, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker, AssistantTestSettings;
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, CodeToolManager, AssistantTestIDEHost, AssistantWorkTarget, AssistantIDEWorkspace, AssistantToolBroker, AssistantTestSettings;
 Type
   TProjectFile = Class(TLazProjectFile)
   Public
@@ -61,7 +61,7 @@ Begin
   Result := ApprovalAction <> 1;
   If (Tool = 'lazarus_start_tests') And (ApprovalAction = 2) Then
     Begin
-      Settings := TAssistantTestSettings.Create(LazarusIDE.GetPrimaryConfigPath, LazarusIDE.ActiveProject.ProjectInfoFile);
+      Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, LazarusIDE.ActiveProject.ProjectInfoFile);
       Try Settings.Load; Inc(Settings.TimeoutSeconds); Settings.Save; Finally Settings.Free; End;
     End;
 End;
@@ -128,7 +128,7 @@ Begin
   WriteFile(Project.Path, '<project/>'); WriteFile(Project.Member.Path, 'unit Closed;'); WriteFile(Root + '/closed.lfm', 'object Form1: TForm1 end');
   Editor := TEditor.Create; Editor.Path := Root + '/open.pas'; Editor.Text := 'unit Open;'; WriteFile(Editor.Path, Editor.Text);
   Manager := TManager.Create(Nil); IDE := TIDE.Create(Nil); IDE.Project := Project;
-  LazarusIDE := IDE; SourceEditorManagerIntf := Manager;
+  LazarusIDE := IDE; SourceEditorManagerIntf := Manager; AssistantTarget.SelectProject;
   Workspace := TWorkspace.Create; Broker := TAssistantToolBroker.Create(Workspace);
   Try
     Run := Broker.BeginRun(awsProject); StartAndWait; FirstID := Field(Reply, 'job_id');
@@ -158,7 +158,9 @@ Begin
     BuildID := Field(Reply, 'job_id');
     TestArgs := '{"build_job_id":"' + BuildID + '"}';
     Check('disabled test runner cannot execute', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
-    Settings := TAssistantTestSettings.Create(Root, Project.Path);
+    Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, Project.Path);
+    Check('configured tests use the target document',
+      Settings.StorageFilename = IncludeTrailingPathDelimiter(Root) + '.assistant' + PathDelim + 'config.json');
     Try
       Settings.Enabled := True; Settings.Executable := ParamStr(0); Settings.Arguments.Add('configured-tests'); Settings.Save;
       Workspace.ApprovalAction := 1; Broker.OnApproval := @Workspace.Approve;
@@ -190,7 +192,7 @@ Begin
       FirstID := JobArgs; StartAndWait;
       Check('replacement build invalidates earlier test evidence', Broker.Execute(Run, 'lazarus_test_status', FirstID, Reply, Err)
         And (Field(Reply, 'stale') = 'true'));
-    Finally DeleteFile(Settings.StorageFilename); Settings.Free; RemoveDir(Root + '/assistant-tests'); End;
+    Finally DeleteFile(Settings.StorageFilename); Settings.Free; RemoveDir(IncludeTrailingPathDelimiter(Root) + '.assistant'); End;
     Broker.OnApproval := Nil;
     Project.Mode := 'Release';
     Check('build-mode switch invalidates evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)

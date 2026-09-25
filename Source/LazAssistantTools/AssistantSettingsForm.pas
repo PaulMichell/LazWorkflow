@@ -240,11 +240,15 @@ Begin
   GeneralPage := TTabSheet.Create(Pages); GeneralPage.PageControl := Pages; GeneralPage.Caption := 'General';
   TestPage := TTabSheet.Create(Pages); TestPage.PageControl := Pages; TestPage.Caption := 'Target tests';
   TestFrame := TAssistantTestSettingsFrame.Create(Self); TestFrame.Name := 'ProjectTestSettings'; TestFrame.Parent := TestPage; TestFrame.Align := alClient;
-  If AssistantTarget.Available Then TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, AssistantTarget.Manifest)
-  Else TestFrame.Load(LazarusIDE.GetPrimaryConfigPath, '');
+  If AssistantTarget.Available Then
+    TestFrame.Load(AssistantTarget.StoreDirectory, AssistantTarget.Manifest)
+  Else
+    TestFrame.Load('', '');
   Sidebar := TPanel.Create(Self); Sidebar.Parent := ConnectionPage; Sidebar.Align := alLeft; Sidebar.Width := 220; Sidebar.BevelOuter := bvNone;
   Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Name := 'AddConnectionButton'; Button.Caption := 'Add ChatGPT connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @AddConnection;
   Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Caption := 'Remove connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @RemoveConnection;
+  Button.ShowHint := True;
+  Button.Hint := 'Removes the saved definition only. The Codex profile directory is kept.';
   ConnectionList := TListBox.Create(Self); ConnectionList.Name := 'ConnectionsList'; ConnectionList.Parent := Sidebar; ConnectionList.Align := alClient; ConnectionList.OnClick := @ConnectionChanged;
   Details := TPanel.Create(Self); Details.Parent := ConnectionPage; Details.Align := alClient; Details.BevelOuter := bvNone;
   Header := TPanel.Create(Self); Header.Parent := Details; Header.Align := alTop; Header.Height := 112; Header.BevelOuter := bvNone;
@@ -375,7 +379,7 @@ Procedure TAssistantSettingsForm.PopulateSkills;
 Var
   Skills: TAssistantSkillList;
   I, SelectIdx: Integer;
-  ActiveName, Root: String;
+  ActiveName, Root, SkillRoot: String;
 Begin
   ActiveName := '';
   If Assigned(AssistantChatConfig) Then
@@ -408,16 +412,17 @@ Begin
   { Show the real scan path — ~/.grok is per OS user profile, not cloud-synced. }
   If Assigned(HintLabel) Then
     Begin
+      If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+        SkillRoot := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) + '.assistant' + PathDelim + 'skills'
+      Else
+        SkillRoot := AssistantUserSkillsRoot;
       If Length(Skills) = 0 Then
         HintLabel.Caption :=
-          'No skills found. Skills are local to this OS user (not shared across Windows/Linux).' +
-          LineEnding +
-          'Create folders as: ' + Root + PathDelim + '<name>' + PathDelim + 'SKILL.md' +
-          LineEnding +
-          'Copy from another machine''s ~/.grok/skills if needed. IDE context still attaches the active unit.'
+          'No skills found. Create ' + SkillRoot + PathDelim + '<name>' + PathDelim + 'SKILL.md.' + LineEnding +
+          'Skills load from .assistant/skills, then ' + AssistantUserSkillsRoot + '.'
       Else
         HintLabel.Caption :=
-          Format('Loaded %d skill(s) from project, .assistant, and %s', [Length(Skills), AssistantUserSkillsRoot]) +
+          Format('Loaded %d skill(s) from .assistant/skills, then %s', [Length(Skills), AssistantUserSkillsRoot]) +
           LineEnding +
           'Pin is extra session context. Plan and Build always attach free-pascal-engineer when it is installed. ' +
           'Use read_skill for other catalog entries.';

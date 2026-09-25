@@ -114,7 +114,7 @@ Begin
   LabelControl.AutoSize := False;
   LabelControl.WordWrap := True;
   LabelControl.Anchors := [akLeft, akTop, akRight];
-  LabelControl.Caption := 'Tests run after a current successful build. FPCUnit XML must be the complete stdout report; ignored tests do not count towards the minimum. Exit-only mode records process success without verifying test counts. The assistant uses this exact command. Settings are stored in your IDE profile.';
+  LabelControl.Caption := 'Tests run after a current successful build. FPCUnit XML must be the complete stdout report; ignored tests do not count towards the minimum. Exit-only mode records process success without verifying test counts. The assistant uses this exact command. Settings are stored in the selected target document.';
 End;
 
 Destructor TAssistantTestSettingsFrame.Destroy;

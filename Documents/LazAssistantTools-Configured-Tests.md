@@ -6,13 +6,13 @@ ChatGPT can now run a user-configured test command after a successful current bu
 
 ## Settings
 
-Open the assistant's **Settings → Project tests** with a saved project active. Enable the runner, choose its executable and enter one nonempty argument per line. Set a timeout from 1 to 3600 seconds (default 600). The working directory is always the project directory. Relative executable paths resolve there; absolute paths are also supported. Browse selects an existing executable, but settings may be saved before a project-generated runner has been built.
+Open the assistant's **Settings → Target tests** with a saved project active. Enable the runner, choose its executable and enter one nonempty argument per line. Set a timeout from 1 to 3600 seconds (default 600). The working directory is always the project directory. Relative executable paths resolve there; absolute paths are also supported. Browse selects an existing executable, but settings may be saved before a project-generated runner has been built.
 
 Arguments are passed directly to the process, without a shell or shell quoting. Spaces, quotes and shell-like text are literal. Blank argument lines are rejected because the installed FPC launcher can truncate the argument list at an empty argument. Use no argument lines for a command that takes no arguments.
 
 Choose a runner that returns a nonzero exit code on failure. You are responsible for selecting the intended tests and arguments. No particular FPCUnit runner layout or test discovery convention is inferred. If the project build does not build the runner, build/update that executable explicitly before asking the assistant to run it.
 
-Settings are stored per saved project path under `assistant-tests/` in the Lazarus primary configuration directory, separate from backend connections and normal project files. Merely opening Settings does not persist changes. OK saves the staged command; Cancel discards it. No active saved project means this page is disabled. A project moved to another path needs its test command configured again.
+The command is the `tests` object in the selected target's `.assistant/config.json`: enabled, executable, arguments, timeout, report format, and minimum tests. For the open project that file is `<working-root>/.assistant/config.json`. For a package it is `<working-root>/.assistant/targets/package-<relative-hash>/config.json`. It is not under the Lazarus primary configuration directory, and it is not keyed by a hash of the absolute path. Moving the project directory keeps the command because the file moves with the target. IDE-wide assistant and spell settings stay in `LazWorkflow.json` and are not written here. Merely opening Settings does not persist changes. OK saves the staged command; Cancel discards it. No active saved target means this page is disabled.
 
 ## Tool workflow
 

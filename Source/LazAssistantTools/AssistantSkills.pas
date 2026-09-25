@@ -1,6 +1,6 @@
 Unit AssistantSkills;
 
-{ Discover and load skills from project, .assistant, and ~/.grok/skills (c) 2026 Michell Computing. }
+{ Discover and load skills from <working-root>/.assistant/skills, then ~/.grok/skills (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -117,7 +117,6 @@ Begin
   If Root <> '' Then
     Begin
       Root := IncludeTrailingPathDelimiter(ExpandFileName(Root));
-      AddRoot(Result, Root + '.grok' + PathDelim + 'skills');
       AddRoot(Result, Root + '.assistant' + PathDelim + 'skills');
     End;
   AddRoot(Result, AssistantUserSkillsRoot);

@@ -10,7 +10,7 @@ Unit AssistantConfig;
 Interface
 
 Uses
-  Classes, SysUtils, GrokOAuth;
+  Classes, SysUtils, GrokOAuth, AssistantConnections;
 
 Const
   AssistantConfigFileName = 'LazAssistantTools.xml';
@@ -50,6 +50,9 @@ Type
     Constructor Create;
     Procedure Load;
     Procedure Save;
+    { Nil connections keeps the saved connection list and updates the Grok account from this config. }
+    Procedure LoadWithConnections(Connections: TAssistantConnections);
+    Procedure SaveWithConnections(Connections: TAssistantConnections);
     Procedure Assign(Source: TAssistantConfig);
     Procedure ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
     Procedure ClearOAuthTokens;
@@ -92,7 +95,7 @@ Var
 Implementation
 
 Uses
-  BaseIDEIntf, LazConfigStorage;
+  fpjson, WorkflowSettings;
 
 Function ThinkingLevelToStr(Level: TAssistantThinkingLevel): String;
 Begin
@@ -290,35 +293,13 @@ Begin
   Result.ExpiresAt := FExpiresAt;
 End;
 
-Procedure ApplyConfigStorage(Cfg: TConfigStorage; Config: TAssistantConfig);
-Var
-  LegacyKey: String;
+Procedure NormalizeAssistantConfig(Config: TAssistantConfig);
 Begin
-  If (Not Assigned(Cfg)) Or (Not Assigned(Config)) Then
+  If Not Assigned(Config) Then
     Exit;
-  Config.FApiBase := Cfg.GetValue('API/Base', AssistantConfigDefaultApiBase);
-  Config.FModel := Cfg.GetValue('API/Model', AssistantConfigDefaultModel);
-  Config.FActiveSkill := Cfg.GetValue('Chat/ActiveSkill', '');
-  Config.FIncludeIDEContext := Cfg.GetValue('Chat/IncludeIDEContext', False);
-  Config.FThinkingLevel := Cfg.GetValue('Chat/ThinkingLevel', AssistantConfigDefaultThinking);
-  Config.FApprovalMode := Cfg.GetValue('Chat/ApprovalMode', AssistantConfigDefaultApproval);
-  Config.FAutoNewChatAtContextLimit := Cfg.GetValue('Chat/AutoNewChatAtContextLimit', False);
-  Config.FAccessToken := Cfg.GetValue('OAuth/AccessToken', '');
-  Config.FRefreshToken := Cfg.GetValue('OAuth/RefreshToken', '');
-  Config.FTokenType := Cfg.GetValue('OAuth/TokenType', 'Bearer');
-  Config.FScope := Cfg.GetValue('OAuth/Scope', '');
-  Config.FExpiresAt := ConfigToDateTime(Cfg.GetValue('OAuth/ExpiresAt', ''));
-  If (Config.FAccessToken = '') And (Config.FRefreshToken = '') Then
-    Begin
-      LegacyKey := Cfg.GetValue('API/Key', '');
-      If LegacyKey <> '' Then
-        Config.FAccessToken := '';
-    End;
   If Trim(Config.FApiBase) = '' Then
     Config.FApiBase := AssistantConfigDefaultApiBase;
   If Trim(Config.FModel) = '' Then
-    Config.FModel := AssistantConfigDefaultModel
-  Else If SameText(Config.FModel, 'grok-4') Or SameText(Config.FModel, 'grok-4-latest') Then
     Config.FModel := AssistantConfigDefaultModel;
   If Trim(Config.FTokenType) = '' Then
     Config.FTokenType := 'Bearer';
@@ -326,48 +307,241 @@ Begin
   Config.FApprovalMode := ApprovalModeToStr(StrToApprovalMode(Config.FApprovalMode));
 End;
 
-Procedure TAssistantConfig.Load;
-Var
-  Cfg: TConfigStorage;
+Procedure ApplyOAuthObject(Config: TAssistantConfig; Auth: TJSONObject);
 Begin
-  Cfg := GetIDEConfigStorage(AssistantConfigFileName, True);
+  If (Not Assigned(Config)) Or (Not Assigned(Auth)) Then
+    Exit;
+  Config.FAccessToken := Auth.Get('access_token', '');
+  Config.FRefreshToken := Auth.Get('refresh_token', '');
+  Config.FTokenType := Auth.Get('token_type', 'Bearer');
+  Config.FScope := Auth.Get('scope', '');
+  Config.FExpiresAt := ConfigToDateTime(Auth.Get('expiry', ''));
+End;
+
+Function OAuthObject(Config: TAssistantConfig): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('access_token', Config.FAccessToken);
+  Result.Add('refresh_token', Config.FRefreshToken);
+  Result.Add('token_type', Config.FTokenType);
+  Result.Add('scope', Config.FScope);
+  Result.Add('expiry', DateTimeToConfig(Config.FExpiresAt));
+End;
+
+Procedure ApplyGrokObject(Config: TAssistantConfig; Obj: TJSONObject);
+Var
+  Auth: TJSONData;
+Begin
+  If (Not Assigned(Config)) Or (Not Assigned(Obj)) Then
+    Exit;
+  Config.FApiBase := Obj.Get('api_base', AssistantConfigDefaultApiBase);
+  Config.FActiveSkill := Obj.Get('skill', '');
+  Config.FModel := Obj.Get('model', AssistantConfigDefaultModel);
+  Config.FThinkingLevel := Obj.Get('thinking', AssistantConfigDefaultThinking);
+  Config.FApprovalMode := Obj.Get('approval', AssistantConfigDefaultApproval);
+  Auth := Obj.Find('oauth');
+  If Auth Is TJSONObject Then
+    ApplyOAuthObject(Config, TJSONObject(Auth))
+  Else
+    Config.ClearOAuthTokens;
+  NormalizeAssistantConfig(Config);
+End;
+
+Function ConnectionObject(Item: TAssistantConnection; Config: TAssistantConfig): TJSONObject;
+Var
+  Thinking, Approval, Model: String;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('id', Item.Id);
+  Result.Add('name', Item.Name);
+  Result.Add('backend', Item.Backend);
+  Model := Item.Model;
+  Thinking := Item.ReasoningEffort;
+  Approval := Item.ApprovalMode;
+  If (Item.Backend = 'grok') And Assigned(Config) Then
+    Begin
+      Model := Config.Model;
+      Thinking := Config.ThinkingLevel;
+      Approval := Config.ApprovalMode;
+      Result.Add('api_base', Config.ApiBase);
+      Result.Add('skill', Config.ActiveSkill);
+      Result.Add('oauth', OAuthObject(Config));
+    End;
+  Result.Add('model', Model);
+  Result.Add('thinking', Thinking);
+  Result.Add('approval', Approval);
+  If Item.Backend = 'codex' Then
+    Result.Add('runtime', Item.Runtime);
+End;
+
+Procedure ReadConnection(Obj: TJSONObject; Item: TAssistantConnection);
+Begin
+  Item.Id := Obj.Get('id', Item.Id);
+  Item.Name := Obj.Get('name', Item.Name);
+  Item.Backend := Obj.Get('backend', Item.Backend);
+  Item.Model := Obj.Get('model', '');
+  Item.ReasoningEffort := Obj.Get('thinking', '');
+  Item.ApprovalMode := Obj.Get('approval', 'ask');
+  If Not ((Item.ApprovalMode = 'auto') Or (Item.ApprovalMode = 'always')) Then
+    Item.ApprovalMode := 'ask';
+  Item.Runtime := Obj.Get('runtime', '');
+End;
+
+Procedure TAssistantConfig.LoadWithConnections(Connections: TAssistantConnections);
+Var
+  Section, Obj: TJSONObject;
+  Node, ItemNode: TJSONData;
+  Item: TAssistantConnection;
+  I: Integer;
+  SeenGrok: Boolean;
+Begin
+  Section := ReadWorkflowSection('assistant');
   Try
-    ApplyConfigStorage(Cfg, Self);
-    If (FAccessToken = '') And (FRefreshToken = '') Then
+    FIncludeIDEContext := False;
+    FAutoNewChatAtContextLimit := False;
+    If Assigned(Connections) Then
+      Connections.ClearStored;
+    If Not Assigned(Section) Then
       Begin
-        Cfg.Free;
-        Cfg := Nil;
-        Cfg := GetIDEConfigStorage(AssistantConfigLegacyFileName, True);
-        ApplyConfigStorage(Cfg, Self);
+        If Assigned(Connections) Then
+          Connections.EnsureBuiltinGrok;
+        Exit;
+      End;
+    FIncludeIDEContext := Section.Get('include_ide_context', False);
+    FAutoNewChatAtContextLimit := Section.Get('auto_new_chat_at_limit', False);
+    SeenGrok := False;
+    Node := Section.Find('connections');
+    If Node Is TJSONArray Then
+      For I := 0 To TJSONArray(Node).Count - 1 Do
+        Begin
+          ItemNode := TJSONArray(Node).Items[I];
+          If Not (ItemNode Is TJSONObject) Then
+            Continue;
+          Obj := TJSONObject(ItemNode);
+          If Assigned(Connections) Then
+            Begin
+              Item := Connections.AddStored(Obj.Get('id', ''), Obj.Get('name', ''), Obj.Get('backend', ''));
+              If Assigned(Item) Then
+                Begin
+                  ReadConnection(Obj, Item);
+                  If Item.Backend = 'grok' Then
+                    Begin
+                      SeenGrok := True;
+                      ApplyGrokObject(Self, Obj);
+                    End;
+                End;
+            End
+          Else If Obj.Get('backend', '') = 'grok' Then
+            Begin
+              SeenGrok := True;
+              ApplyGrokObject(Self, Obj);
+            End;
+        End;
+    If Assigned(Connections) Then
+      Begin
+        If Not SeenGrok Then
+          Connections.EnsureBuiltinGrok;
+        Connections.ActiveId := Section.Get('active_connection', 'grok');
+        If Connections.Active = Nil Then
+          Connections.ActiveId := 'grok';
       End;
   Finally
-    Cfg.Free;
+    Section.Free;
+  End;
+  NormalizeAssistantConfig(Self);
+End;
+
+Procedure TAssistantConfig.SaveWithConnections(Connections: TAssistantConnections);
+Var
+  Section, Existing, Obj: TJSONObject;
+  Node, ItemNode: TJSONData;
+  Arr: TJSONArray;
+  I: Integer;
+  ErrorText: String;
+  Item: TAssistantConnection;
+  HasGrok: Boolean;
+Begin
+  Section := TJSONObject.Create;
+  Try
+    Section.Add('include_ide_context', FIncludeIDEContext);
+    Section.Add('auto_new_chat_at_limit', FAutoNewChatAtContextLimit);
+    Arr := TJSONArray.Create;
+    Section.Add('connections', Arr);
+    If Assigned(Connections) Then
+      Begin
+        If Connections.Count = 0 Then
+          Connections.EnsureBuiltinGrok;
+        Section.Add('active_connection', Connections.ActiveId);
+        For I := 0 To Connections.Count - 1 Do
+          Arr.Add(ConnectionObject(Connections[I], Self));
+      End
+    Else
+      Begin
+        Existing := ReadWorkflowSection('assistant');
+        Try
+          If Assigned(Existing) Then
+            Section.Add('active_connection', Existing.Get('active_connection', 'grok'))
+          Else
+            Section.Add('active_connection', 'grok');
+          Node := Nil;
+          If Assigned(Existing) Then
+            Node := Existing.Find('connections');
+          If Node Is TJSONArray Then
+            For I := 0 To TJSONArray(Node).Count - 1 Do
+              Begin
+                ItemNode := TJSONArray(Node).Items[I];
+                If Not (ItemNode Is TJSONObject) Then
+                  Continue;
+                Obj := TJSONObject(ItemNode);
+                If Obj.Get('backend', '') = 'grok' Then
+                  Begin
+                    Item := TAssistantConnection.Create;
+                    Try
+                      Item.Id := Obj.Get('id', 'grok');
+                      Item.Name := Obj.Get('name', 'Grok');
+                      Item.Backend := 'grok';
+                      Arr.Add(ConnectionObject(Item, Self));
+                    Finally
+                      Item.Free;
+                    End;
+                  End
+                Else
+                  Arr.Add(Obj.Clone);
+              End;
+        Finally
+          Existing.Free;
+        End;
+        HasGrok := False;
+        For I := 0 To Arr.Count - 1 Do
+          If (Arr.Items[I] Is TJSONObject) And (TJSONObject(Arr.Items[I]).Get('backend', '') = 'grok') Then
+            HasGrok := True;
+        If Not HasGrok Then
+          Begin
+            Item := TAssistantConnection.Create;
+            Try
+              Item.Id := 'grok';
+              Item.Name := 'Grok';
+              Item.Backend := 'grok';
+              Arr.Add(ConnectionObject(Item, Self));
+            Finally
+              Item.Free;
+            End;
+          End;
+      End;
+    WriteWorkflowSection('assistant', Section, ErrorText);
+  Finally
+    Section.Free;
   End;
 End;
 
-Procedure TAssistantConfig.Save;
-Var
-  Cfg: TConfigStorage;
+Procedure TAssistantConfig.Load;
 Begin
-  Cfg := GetIDEConfigStorage(AssistantConfigFileName, False);
-  Try
-    Cfg.SetValue('API/Base', FApiBase);
-    Cfg.SetValue('API/Model', FModel);
-    Cfg.SetValue('Chat/ActiveSkill', FActiveSkill);
-    Cfg.SetValue('Chat/IncludeIDEContext', FIncludeIDEContext);
-    Cfg.SetValue('Chat/ThinkingLevel', ThinkingLevelToStr(GetThinkingLevel));
-    Cfg.SetValue('Chat/ApprovalMode', ApprovalModeToStr(GetApprovalMode));
-    Cfg.SetValue('Chat/AutoNewChatAtContextLimit', FAutoNewChatAtContextLimit);
-    Cfg.SetValue('API/Key', '');
-    Cfg.SetValue('OAuth/AccessToken', FAccessToken);
-    Cfg.SetValue('OAuth/RefreshToken', FRefreshToken);
-    Cfg.SetValue('OAuth/TokenType', FTokenType);
-    Cfg.SetValue('OAuth/Scope', FScope);
-    Cfg.SetValue('OAuth/ExpiresAt', DateTimeToConfig(FExpiresAt));
-    Cfg.WriteToDisk;
-  Finally
-    Cfg.Free;
-  End;
+  LoadWithConnections(Nil);
+End;
+
+Procedure TAssistantConfig.Save;
+Begin
+  SaveWithConnections(Nil);
 End;
 
 Initialization

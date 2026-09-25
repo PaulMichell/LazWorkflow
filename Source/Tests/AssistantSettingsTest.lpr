@@ -1,7 +1,7 @@
 Program AssistantSettingsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls,
-  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantTestSettings, AssistantTestSettingsFrame;
+  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, WorkflowSettings, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantTestSettings, AssistantTestSettingsFrame;
 Var ConfigRoot: String;
 Type
   TMemoryConfig = Class(TConfigMemStorage)
@@ -23,13 +23,15 @@ Begin Result := ConfigRoot; End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
 Var Frame: TCodexConnectionFrame; IDE: TIDE; Dialog, CancelledDialog: TAssistantSettingsForm; OriginalContext: Boolean; List: TListBox; Names: TEdit;
-  TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note: String;
+  TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note, StoreDir: String;
   Pages: TPageControl; Store: TAssistantConnections; Guid: TGuid; Bitmap: TBitmap; PNG: TPortableNetworkGraphic;
 Begin
   Application.Initialize;
   CreateGUID(Guid); ConfigRoot := GetTempDir + 'laz-settings-' + GUIDToString(Guid); ForceDirectories(ConfigRoot);
   GetIDEConfigStorage := @MemoryConfig;
-  WorkflowSpellConfig.SetStorageFileName(ConfigRoot + '/spell.xml');
+  SetWorkflowSettingsDirectory(ConfigRoot);
+  WorkflowSpellConfig.SetStorageFileName(WorkflowSettingsPath);
+  StoreDir := IncludeTrailingPathDelimiter(ConfigRoot) + '.assistant' + PathDelim;
   IDE := TIDE.Create(Nil); LazarusIDE := IDE;
   Frame := TCodexConnectionFrame.Create(Nil);
   Try
@@ -59,9 +61,9 @@ Begin
     Dialog.LoadFromConfig;
     List := TListBox(Dialog.FindComponent('ConnectionsList'));
     Names := TEdit(Dialog.FindComponent('ConnectionNameEdit'));
-    Check('two independent default connections shown', List.Items.Count = 2);
+    Check('built-in Grok connection shown without a migrated account', List.Items.Count = 1);
     TButton(Dialog.FindComponent('AddConnectionButton')).Click;
-    Check('additional connection can be added', List.Items.Count = 3);
+    Check('additional connection can be added', List.Items.Count = 2);
     Names.Text := 'Another ChatGPT account';
     List.ItemIndex := 0; List.OnClick(List);
     TButton(Dialog.FindComponent('UseConnectionButton')).Click;
@@ -86,7 +88,7 @@ Begin
       TControl(Dialog.FindComponent('GlobalSpellSettings')).Width <= Pages.ActivePage.ClientWidth);
     TestFrame := TAssistantTestSettingsFrame(Dialog.FindComponent('ProjectTestSettings'));
     Check('project test controls disabled without a saved project', Not TestFrame.Enabled);
-    TestFrame.Load(ConfigRoot, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := True;
+    TestFrame.Load(StoreDir, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := True;
     TestFrame.ExecutableEdit.Text := ParamStr(0); TestFrame.ArgumentMemo.Lines.Add('--all');
     TestFrame.ArgumentMemo.Lines.Add('two words'); TestFrame.TimeoutEdit.Value := 15;
     TestFrame.ReportCombo.ItemIndex := 1; TestFrame.MinimumEdit.Value := 3;
@@ -98,13 +100,16 @@ Begin
         Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-project-tests.png'); Finally PNG.Free; Bitmap.Free; End;
       End;
     Dialog.SaveToConfig;
-    TestSettings := TAssistantTestSettings.Create(ConfigRoot, ConfigRoot + '/fixture.lpi');
+    TestSettings := TAssistantTestSettings.Create(StoreDir, ConfigRoot + '/fixture.lpi');
     Try TestSettings.Load; Check('test settings UI saves exact project command', TestSettings.Enabled And
       (TestSettings.Arguments.Count = 2) And (TestSettings.Arguments[1] = 'two words') And (TestSettings.TimeoutSeconds = 15) And (TestSettings.ReportFormat = 'fpcunit-xml') And (TestSettings.MinimumTests = 3));
     Finally TestSettings.Free; End;
     Store := TAssistantConnections.Create(ConfigRoot);
     Try
-      Store.Load; Check('settings save preserves multiple connection details', (Store.Count = 3) And (Store[2].Name = 'Another ChatGPT account'));
+      Store.Load; Check('settings save preserves the added connection', (Store.Count = 2) And (Store[1].Name = 'Another ChatGPT account'));
+      Check('settings save wrote the IDE document and the target document',
+        FileExists(WorkflowSettingsPath) And FileExists(StoreDir + 'config.json') And
+        Not FileExists(ConfigRoot + '/assistant-connections.ini') And Not FileExists(ConfigRoot + '/spell.xml'));
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
@@ -112,17 +117,17 @@ Begin
         TButton(CancelledDialog.FindComponent('AddConnectionButton')).Click;
         CancelledDialog.IncludeContextCheck.Checked := Not OriginalContext;
         TestFrame := TAssistantTestSettingsFrame(CancelledDialog.FindComponent('ProjectTestSettings'));
-        TestFrame.Load(ConfigRoot, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := False;
+        TestFrame.Load(StoreDir, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := False;
         CancelledDialog.ModalResult := mrCancel;
       Finally CancelledDialog.Free; End;
-      TestSettings := TAssistantTestSettings.Create(ConfigRoot, ConfigRoot + '/fixture.lpi');
+      TestSettings := TAssistantTestSettings.Create(StoreDir, ConfigRoot + '/fixture.lpi');
       Try TestSettings.Load; Check('Cancel retains saved project test command', TestSettings.Enabled);
         DeleteFile(TestSettings.StorageFilename);
       Finally TestSettings.Free; End;
-      RemoveDir(ConfigRoot + '/assistant-tests');
       Store.Load;
       Check('Cancel discards connection and general preference edits',
-        (Store.Count = 3) And (AssistantChatConfig.IncludeIDEContext = OriginalContext));
+        (Store.Count = 2) And (AssistantChatConfig.IncludeIDEContext = OriginalContext));
     Finally Store.Free; End;
-  Finally Dialog.Free; LazarusIDE := Nil; IDE.Free; DeleteFile(ConfigRoot + '/spell.xml'); DeleteFile(ConfigRoot + '/assistant-connections.ini'); RemoveDir(ConfigRoot); End;
+  Finally Dialog.Free; LazarusIDE := Nil; IDE.Free; DeleteFile(WorkflowSettingsPath); DeleteFile(StoreDir + 'config.json');
+    RemoveDir(ExcludeTrailingPathDelimiter(StoreDir)); SetWorkflowSettingsDirectory(''); RemoveDir(ConfigRoot); End;
 End.

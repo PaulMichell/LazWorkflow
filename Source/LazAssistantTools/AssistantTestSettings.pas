@@ -1,6 +1,6 @@
 Unit AssistantTestSettings;
 
-{ User-owned per-target test commands, stored in the IDE configuration tree. (c) 2026 Michell Computing. }
+{ User-owned per-target test commands in the target config.json. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -36,7 +36,7 @@ Type
 Implementation
 
 Uses
-  IniFiles, sha1, fpjson, jsonparser;
+  fpjson, AssistantProjectPaths;
 
 Constructor TAssistantTestSettings.Create(Const ConfigRoot, ProjectFile: String);
 Begin
@@ -58,7 +58,10 @@ End;
 
 Function TAssistantTestSettings.StorageFilename: String;
 Begin
-  Result := IncludeTrailingPathDelimiter(FRoot) + 'assistant-tests/' + SHA1Print(SHA1String(FProject)) + '.ini';
+  Result := '';
+  If Trim(FRoot) = '' Then
+    Exit;
+  Result := IncludeTrailingPathDelimiter(FRoot) + AssistantTargetConfigFileName;
 End;
 
 Function TAssistantTestSettings.WorkingDirectory: String;
@@ -75,9 +78,9 @@ End;
 
 Procedure TAssistantTestSettings.Load;
 Var
-  Ini: TIniFile;
+  Document, Tests: TJSONObject;
+  Node: TJSONData;
   I: Integer;
-  Data: TJSONData;
 Begin
   Enabled := False;
   Executable := '';
@@ -85,31 +88,28 @@ Begin
   MinimumTests := 1;
   ReportFormat := 'exit-code';
   Arguments.Clear;
-  If (FProject = '') Or Not FileExists(StorageFilename) Then Exit;
-  Ini := TIniFile.Create(StorageFilename);
+  If (FProject = '') Or (FRoot = '') Then
+    Exit;
+  Document := LoadTargetConfig(FRoot);
   Try
-    If (Ini.ReadInteger('test', 'version', 0) <> 1) Or (Ini.ReadString('test', 'project', '') <> FProject) Then Exit;
-    Executable := Ini.ReadString('test', 'executable', '');
-    TimeoutSeconds := Ini.ReadInteger('test', 'timeout', 600);
-    ReportFormat := Ini.ReadString('test', 'report_format', 'exit-code');
-    MinimumTests := Ini.ReadInteger('test', 'minimum_tests', 1);
-    Try
-      Data := GetJSON(Ini.ReadString('test', 'arguments', '[]'));
-    Except On E: Exception Do Exit;
-    End;
-    Try
-      If Not (Data Is TJSONArray) Or (Data.Count > 128) Then Exit;
-      For I := 0 To Data.Count - 1 Do
+    If Not (Document.Find('tests') Is TJSONObject) Then
+      Exit;
+    Tests := TJSONObject(Document.Find('tests'));
+    Executable := Tests.Get('executable', '');
+    TimeoutSeconds := Tests.Get('timeout_seconds', 600);
+    ReportFormat := Tests.Get('report_format', 'exit-code');
+    MinimumTests := Tests.Get('minimum_tests', 1);
+    Node := Tests.Find('arguments');
+    If (Node Is TJSONArray) And (TJSONArray(Node).Count <= 128) Then
+      For I := 0 To TJSONArray(Node).Count - 1 Do
         Begin
-          If Data.Items[I].JSONType <> jtString Then Exit;
-          Arguments.Add(Data.Items[I].AsString);
+          If TJSONArray(Node).Items[I].JSONType <> jtString Then
+            Exit;
+          Arguments.Add(TJSONArray(Node).Items[I].AsString);
         End;
-    Finally
-      Data.Free;
-    End;
-    Enabled := Ini.ReadBool('test', 'enabled', False);
+    Enabled := Tests.Get('enabled', False);
   Finally
-    Ini.Free;
+    Document.Free;
   End;
 End;
 
@@ -166,40 +166,35 @@ End;
 
 Procedure TAssistantTestSettings.Save;
 Var
-  Ini: TMemIniFile;
+  Document, Tests: TJSONObject;
+  Args: TJSONArray;
   I: Integer;
-  Note, Temp: String;
-  Data: TJSONArray;
+  Note: String;
 Begin
-  If Not Validate(Note) Then Raise Exception.Create(Note);
-  ForceDirectories(ExtractFilePath(StorageFilename));
-  Temp := StorageFilename + '.tmp';
-  Ini := TMemIniFile.Create(Temp);
+  If FRoot = '' Then
+    Exit;
+  If Not Validate(Note) Then
+    Raise Exception.Create(Note);
+  Document := LoadTargetConfig(FRoot);
   Try
-    Ini.Clear;
-    Ini.WriteInteger('test', 'version', 1);
-    Ini.WriteString('test', 'project', FProject);
-    Ini.WriteBool('test', 'enabled', Enabled);
-    Ini.WriteString('test', 'executable', Executable);
-    Ini.WriteInteger('test', 'timeout', TimeoutSeconds);
-    Ini.WriteString('test', 'report_format', ReportFormat);
-    Ini.WriteInteger('test', 'minimum_tests', MinimumTests);
-    Data := TJSONArray.Create;
-    Try
-      For I := 0 To Arguments.Count - 1 Do Data.Add(Arguments[I]);
-      Ini.WriteString('test', 'arguments', Data.AsJSON);
-    Finally
-      Data.Free;
-    End;
-    Ini.UpdateFile;
+    If Assigned(Document.Find('tests')) Then
+      Document.Delete('tests');
+    Tests := TJSONObject.Create;
+    Document.Add('tests', Tests);
+    Tests.Add('enabled', Enabled);
+    Tests.Add('executable', Executable);
+    Tests.Add('timeout_seconds', TimeoutSeconds);
+    Tests.Add('report_format', ReportFormat);
+    Tests.Add('minimum_tests', MinimumTests);
+    Args := TJSONArray.Create;
+    Tests.Add('arguments', Args);
+    For I := 0 To Arguments.Count - 1 Do
+      Args.Add(Arguments[I]);
+    If Not SaveTargetConfig(FRoot, Document, Note) Then
+      Raise Exception.Create(Note);
   Finally
-    Ini.Free;
+    Document.Free;
   End;
-  If Not RenameFile(Temp, StorageFilename) Then
-    Begin
-      DeleteFile(Temp);
-      Raise Exception.Create('Cannot save test settings.');
-    End;
 End;
 
 Function TAssistantTestSettings.CommandJSON: String;

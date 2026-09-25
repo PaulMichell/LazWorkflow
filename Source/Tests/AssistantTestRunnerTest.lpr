@@ -1,6 +1,6 @@
 Program AssistantTestRunnerTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Classes, SysUtils, BaseUnix, IniFiles, fpjson, jsonparser, AssistantTestSettings, AssistantBuildJob, AssistantTestReport, fpcunit, xmltestreport, XMLWrite;
+Uses cthreads, Classes, SysUtils, BaseUnix, fpjson, jsonparser, AssistantTestSettings, AssistantBuildJob, AssistantTestReport, fpcunit, xmltestreport, XMLWrite;
 Type TFixture = Class(TTestCase)
   Protected Procedure RunTest; Override;
 End;
@@ -21,7 +21,7 @@ Procedure WriteFile(Const Path, Text: String);
 Var Stream: TFileStream;
 Begin Stream := TFileStream.Create(Path, fmCreate); Try If Text <> '' Then Stream.WriteBuffer(Text[1], Length(Text)); Finally Stream.Free; End; End;
 Var Root, Note, OldFingerprint: String; Id: TGuid; Settings, Reloaded: TAssistantTestSettings;
-  Job: IAssistantBuildJob; Value: TBuildJobSnapshot; Inputs: TBuildInputs; Deadline: QWord; Args: TStringList; Ini: TIniFile; Data: TJSONData; Rejected: Boolean;
+  Job: IAssistantBuildJob; Value: TBuildJobSnapshot; Inputs: TBuildInputs; Deadline: QWord; Args, Lines: TStringList; Data: TJSONData; Rejected: Boolean;
 Procedure WaitDone;
 Begin
   Deadline := GetTickCount64 + 4000;
@@ -43,8 +43,8 @@ Begin
       WriteLn('configured tests completed'); Halt(0);
     End;
   CreateGUID(Id); Root := GetTempDir + 'laz-tests-' + GUIDToString(Id); ForceDirectories(Root);
-  Settings := TAssistantTestSettings.Create(Root, Root + '/project.lpi');
-  Reloaded := TAssistantTestSettings.Create(Root, Root + '/other.lpi'); Args := TStringList.Create;
+  Settings := TAssistantTestSettings.Create(Root + '/.assistant/', Root + '/project.lpi');
+  Reloaded := TAssistantTestSettings.Create(Root + '/other/.assistant/', Root + '/other/project.lpi'); Args := TStringList.Create;
   Try
     Settings.Load; Check('test runner is disabled by default', Not Settings.Enabled);
     Settings.Enabled := True; Settings.Executable := './test runner'; Settings.Arguments.Add('  spaces  ');
@@ -55,14 +55,18 @@ Begin
       (Settings.Arguments[0] = '  spaces  ') And (Settings.Arguments[1] = '"quoted"') And (Settings.Arguments[2] = '  second  '));
     Check('report configuration roundtrips', (Settings.ReportFormat = 'fpcunit-xml') And (Settings.MinimumTests = 2));
     Check('relative executable resolves from project directory', Settings.ResolvedExecutable = Root + '/test runner');
-    Reloaded.Load; Check('test commands belong to one project', Not Reloaded.Enabled And (Settings.StorageFilename <> Reloaded.StorageFilename));
+    Reloaded.Load; Check('test commands belong to one target document', Not Reloaded.Enabled And (Settings.StorageFilename <> Reloaded.StorageFilename)
+      And (ExtractFileName(Settings.StorageFilename) = 'config.json'));
     Settings.Arguments.Add(''); Check('empty argument rejected explicitly', Not Settings.Validate(Note));
     Settings.Arguments.Delete(Settings.Arguments.Count - 1);
     Settings.Arguments.Add('bad' + #0 + 'argument'); Check('NUL argument rejected', Not Settings.Validate(Note));
     Settings.Arguments.Delete(Settings.Arguments.Count - 1); Settings.TimeoutSeconds := 0;
     Check('invalid timeout rejected', Not Settings.Validate(Note)); Settings.TimeoutSeconds := 3;
-    Ini := TIniFile.Create(Settings.StorageFilename);
-    Try Ini.WriteString('test', 'arguments', 'malformed'); Finally Ini.Free; End;
+    Lines := TStringList.Create;
+    Try
+      Lines.Text := '{"show_thinking":true,"tests":{"enabled":true,"executable":"./test runner","arguments":[1]}}';
+      Lines.SaveToFile(Settings.StorageFilename);
+    Finally Lines.Free; End;
     Settings.Load; Check('malformed saved arguments disable execution', Not Settings.Enabled);
     WriteFile(Root + '/input.pas', 'saved source'); SetLength(Inputs, 1); Inputs[0].Path := Root + '/input.pas'; Inputs[0].Text := 'saved source';
     Args.Add('arguments'); Args.Add('two words'); Args.Add('$(touch never-created)'); Args.Add('  spaces  ');
@@ -111,7 +115,8 @@ Begin
     WriteFile(Root + '/not-executable', 'text');
     Check('non-executable test path rejected', Not ExecutableFingerprint(Root + '/not-executable', OldFingerprint, Note));
   Finally
-    Job := Nil; Args.Free; DeleteFile(Settings.StorageFilename); Settings.Free; Reloaded.Free;
-    RemoveDir(Root + '/assistant-tests'); DeleteFile(Root + '/input.pas'); DeleteFile(Root + '/not-executable'); RemoveDir(Root);
+    Job := Nil; Args.Free; DeleteFile(Settings.StorageFilename); DeleteFile(Reloaded.StorageFilename); Settings.Free; Reloaded.Free;
+    RemoveDir(Root + '/.assistant'); RemoveDir(Root + '/other/.assistant'); RemoveDir(Root + '/other');
+    DeleteFile(Root + '/input.pas'); DeleteFile(Root + '/not-executable'); RemoveDir(Root);
   End;
 End.

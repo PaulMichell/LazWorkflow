@@ -2,7 +2,7 @@ Unit AssistantActor;
 
 { Session actor thread: Responses stream, tool rounds, steer drain, cancel (c) 2026 Michell Computing.
 
-  Named Actor because AssistantSession.pas already holds the legacy transcript file. }
+  Named Actor because the model message list is stored on the conversation turn. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
