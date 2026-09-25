@@ -804,7 +804,7 @@ Begin
     gjkSuggestMessage:
       Begin
         Job.FOk := False;
-        If Not Assigned(SuggestCommitMessageFunc) Then
+        If Not SuggestCommitMessageAvailable Then
           Job.FErrorText := 'Commit message suggestion is not available.'
         Else If Not Git.DiffStaged(DiffText) Then
           Job.FErrorText := Git.LastError

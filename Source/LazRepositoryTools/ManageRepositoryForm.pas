@@ -1346,8 +1346,8 @@ Var
   AssistantAvailable: Boolean;
 Begin
   CurrentAction := Sender As TAction;
-  AssistantAvailable := Assigned(SuggestCommitMessageFunc);
-  CurrentAction.Enabled := CanMutate And FFiles.HasStaged And AssistantAvailable;
+  AssistantAvailable := SuggestCommitMessageAvailable;
+  CurrentAction.Enabled := SuggestCommitActionEnabled(CanMutate, FFiles.HasStaged);
   If Not AssistantAvailable Then
     CurrentAction.Hint :=
       'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
@@ -1624,7 +1624,7 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  If Not Assigned(SuggestCommitMessageFunc) Then
+  If Not SuggestCommitMessageAvailable Then
     Exit;
   If FFiles.StagedPaths.Count = 0 Then
     Begin

@@ -23,7 +23,7 @@ Implementation
 
 Uses
   Dialogs, WorkflowLog, ManageRepositoryForm, GitService, GitConfig,
-  GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner, GitPathUtils, SpellCheckerConfig;
+  GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner, GitPathUtils, WorkflowSettings;
 
 Type
   TGitManagerIDEHooks = Class
@@ -390,19 +390,14 @@ Begin
     If GitManagerIDEHooks = Nil Then
       GitManagerIDEHooks := TGitManagerIDEHooks.Create;
 
+    If Assigned(LazarusIDE) Then
+      SetWorkflowSettingsDirectory(LazarusIDE.GetPrimaryConfigPath);
     If Assigned(GitManagerConfig) Then
       Try
         GitManagerConfig.Load;
       Except
         On E: Exception Do
           WorkflowLogger.Warning('GitManager', 'Config load failed: ' + E.Message);
-      End;
-    If Assigned(LazarusIDE) Then
-      Try
-        InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
-      Except
-        On E: Exception Do
-          WorkflowLogger.Warning('GitManager', 'Spell config load failed: ' + E.Message);
       End;
 
     Cat := IDECommandList.FindCategoryByName(CommandCategoryViewName);

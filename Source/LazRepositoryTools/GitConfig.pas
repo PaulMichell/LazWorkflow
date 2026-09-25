@@ -52,7 +52,7 @@ Var
 Implementation
 
 Uses
-  BaseIDEIntf, LazConfigStorage;
+  fpjson, WorkflowSettings;
 
 Constructor TGitConfig.Create;
 Begin
@@ -98,63 +98,45 @@ End;
 
 Procedure TGitConfig.Load;
 Var
-  Cfg: TConfigStorage;
-  LoadedInterval, Version: Integer;
-  NeedSave: Boolean;
+  Section: TJSONObject;
 Begin
-  NeedSave := False;
-  Cfg := GetIDEConfigStorage(GitConfigFileName, True);
+  FAutoRefresh := GitConfigDefaultAutoRefresh;
+  AutoRefreshSeconds := GitConfigDefaultIntervalSec;
+  GraphFontName := '';
+  GraphFontSize := GitConfigDefaultGraphFontSize;
+  Section := ReadWorkflowSection('repository');
+  If Not Assigned(Section) Then
+    Exit;
   Try
-    FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
-    LoadedInterval := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
-    AutoRefreshSeconds := LoadedInterval;
-    GraphFontName := Cfg.GetValue('Graph/FontName', '');
-    GraphFontSize := Cfg.GetValue('Graph/FontSize', GitConfigDefaultGraphFontSize);
-    Version := Cfg.GetValue('Migration/Version', 0);
-    { One-time move from LazGitManager.xml. Version 0 means this store has never
-      finished migration, so default-looking values may still be a first open. }
-    If Version < GitConfigMigrationVersion Then
-      Begin
-        If (FAutoRefresh = GitConfigDefaultAutoRefresh) And
-          (LoadedInterval = GitConfigDefaultIntervalSec) And (FGraphFontName = '') And
-          (FGraphFontSize = GitConfigDefaultGraphFontSize) Then
-          Begin
-            Cfg.Free;
-            Cfg := Nil;
-            Cfg := GetIDEConfigStorage(GitConfigLegacyFileName, True);
-            FAutoRefresh := Cfg.GetValue('AutoRefresh/Enabled', GitConfigDefaultAutoRefresh);
-            AutoRefreshSeconds := Cfg.GetValue('AutoRefresh/IntervalSec', GitConfigDefaultIntervalSec);
-          End;
-        NeedSave := True;
-      End;
+    FAutoRefresh := Section.Get('auto_refresh', GitConfigDefaultAutoRefresh);
+    AutoRefreshSeconds := Section.Get('interval_sec', GitConfigDefaultIntervalSec);
+    GraphFontName := Section.Get('graph_font_name', '');
+    GraphFontSize := Section.Get('graph_font_size', GitConfigDefaultGraphFontSize);
   Finally
-    Cfg.Free;
+    Section.Free;
   End;
-  If NeedSave Then
-    Save;
 End;
 
 Procedure TGitConfig.Save;
 Var
-  Cfg: TConfigStorage;
+  Section: TJSONObject;
+  ErrorText: String;
 Begin
-  Cfg := GetIDEConfigStorage(GitConfigFileName, False);
+  Section := TJSONObject.Create;
   Try
-    Cfg.SetValue('AutoRefresh/Enabled', FAutoRefresh);
-    Cfg.SetValue('AutoRefresh/IntervalSec', FAutoRefreshSeconds);
-    Cfg.SetValue('Graph/FontName', FGraphFontName);
-    Cfg.SetValue('Graph/FontSize', FGraphFontSize);
-    Cfg.SetValue('Migration/Version', GitConfigMigrationVersion);
-    Cfg.WriteToDisk;
+    Section.Add('auto_refresh', FAutoRefresh);
+    Section.Add('interval_sec', FAutoRefreshSeconds);
+    Section.Add('graph_font_name', FGraphFontName);
+    Section.Add('graph_font_size', FGraphFontSize);
+    WriteWorkflowSection('repository', Section, ErrorText);
   Finally
-    Cfg.Free;
+    Section.Free;
   End;
 End;
 
 Initialization
 
-{ Create only — Load is deferred to RegisterGitManager so GetIDEConfigStorage
-  is not called during unit initialization while the IDE is still starting. }
+{ Create only. RegisterGitManager loads the repository section after the settings directory is known. }
 GitManagerConfig := TGitConfig.Create;
 
 Finalization
