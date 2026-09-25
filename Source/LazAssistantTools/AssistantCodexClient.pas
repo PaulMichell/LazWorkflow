@@ -2,7 +2,8 @@ Unit AssistantCodexClient;
 
 { Worker-owned managed-runtime protocol. Dynamic tools are surfaced to a
   caller-owned IDE broker; native approvals are rejected, never auto-approved.
-  Qualified protocol: Codex CLI 0.153.0 and 0.153.4, generated experimental JSON schema. (c) 2026 Michell Computing. }
+  Qualified protocol: Codex CLI 0.153.0 and 0.153.4, generated experimental JSON schema.
+  Pictures stay on the Grok connection. This client does not send an image input item. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -17,6 +18,11 @@ Uses
 Const
   QualifiedCodexVersion = 'codex-cli 0.153.4';
   PreviousQualifiedCodexVersion = 'codex-cli 0.153.0';
+  { Image support is the Grok connection. Do not add a guessed local_image field here. }
+  CodexImagesSupported = False;
+
+/// turn/start params for this client. One text item. No image item and no local path.
+Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 
 Type
   TCodexRunState = (crsDisconnected, crsConnecting, crsReady, crsStartingThread,
@@ -88,6 +94,17 @@ Uses
 Function Quote(Const S: String): String;
 Begin
   Result := '"' + JsonEscapeText(S) + '"';
+End;
+
+Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
+Var
+  Options: String;
+Begin
+  Options := '';
+  If Effort <> '' Then Options := ',"effort":' + Quote(Effort);
+  Result := '{"threadId":' + Quote(ThreadId) +
+    ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
+    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"' + Options + '}';
 End;
 
 Constructor TAssistantCodexClient.Create(RequestTimeoutMs: Cardinal);
@@ -274,17 +291,12 @@ Begin
 End;
 
 Function TAssistantCodexClient.StartTurn(Const Prompt: String; Const Effort: String): Boolean;
-Var
-  Options: String;
 Begin
-  Options := '';
-  If Effort <> '' Then Options := ',"effort":' + Quote(Effort);
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FThreadId <> '') And (FState In [crsReady, crsCompleted]);
   If Not Result Then Exit;
-  Result := Request('turn/start', '{"threadId":' + Quote(FThreadId) +
-    ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"' + Options + '}');
+  { Text only. A note is not a picture, and a path would fail the minimal read sandbox. }
+  Result := Request('turn/start', CodexTurnStartParams(FThreadId, Prompt, Effort));
   If Result Then
     Begin
       FContent := '';

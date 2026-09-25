@@ -3056,7 +3056,7 @@ Begin
   ModelText := AssistantImageModelText(ApiText, Length(Refs));
   If Length(Refs) > 0 Then
     Begin
-      { turn/start in this client is a text item. Do not pretend that text is the picture. }
+      { ChatGPT does not receive the picture. Leave the composer intact. }
       SetCurrentSystemNote(AssistantCodexImageAttachReason);
       MessageDlg(AssistantCodexImageAttachReason, mtInformation, [mbOK], 0);
       If Assigned(InputMemo) Then
@@ -3324,19 +3324,24 @@ Begin
   If FUseCodex Then
     Begin
       StatusFooter.SetLeftHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
+      If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
       StatusFooter.SetSkillText('Lazarus tools');
       StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
     End
-  Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
-    Begin
-      StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
-      StatusFooter.SetSkillHint('Click to pin a different skill');
-    End
   Else
     Begin
-      StatusFooter.SetSkillText('Skill: none');
-      StatusFooter.SetSkillHint('Click to pin a skill');
+      If Assigned(SendAction) Then SendAction.Hint := '';
+      If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
+        Begin
+          StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
+          StatusFooter.SetSkillHint('Click to pin a different skill');
+        End
+      Else
+        Begin
+          StatusFooter.SetSkillText('Skill: none');
+          StatusFooter.SetSkillHint('Click to pin a skill');
+        End;
     End;
   If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;

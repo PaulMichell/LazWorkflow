@@ -1,0 +1,8 @@
+{
+  "decision": "Image support is limited to the Grok connection. This qualified Codex client sends one text UserInput item. It does not send an image item or a local_image field. A text note is not the picture.",
+  "threadId": "thread-1",
+  "prompt": "See the note",
+  "effort": "high",
+  "withEffort": "{\"threadId\":\"thread-1\",\"input\":[{\"type\":\"text\",\"text\":\"See the note\"}],\"approvalPolicy\":\"on-request\",\"permissions\":\"lazarus_ide\",\"summary\":\"auto\",\"effort\":\"high\"}",
+  "withoutEffort": "{\"threadId\":\"thread-1\",\"input\":[{\"type\":\"text\",\"text\":\"See the note\"}],\"approvalPolicy\":\"on-request\",\"permissions\":\"lazarus_ide\",\"summary\":\"auto\"}"
+}

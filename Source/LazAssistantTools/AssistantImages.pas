@@ -40,9 +40,9 @@ Const
   AssistantImageOmittedPrefix = '[Image omitted from model context:';
   AssistantImageSystemSentence =
     'User messages may include images; describe only what is visible; do not invent image contents; do not fetch URLs.';
-  { This client's turn/start input is a text item only. Not a guessed image field. }
+  { ChatGPT in this client does not send pictures. Not a guessed image field, and not a text note standing in for one. }
   AssistantCodexImageAttachReason =
-    'ChatGPT turn/start in this runtime only accepts text. Attach is disabled until an image item is confirmed.';
+    'Images are sent on the Grok connection. This ChatGPT runtime cannot see pictures, so Attach is disabled.';
   { Extensions FileExtensionIsImage already names. Acceptance is by stream sniff, not by this list. }
   AssistantStillImageExtensions = '.png,.jpg,.jpeg,.gif,.bmp,.ico,.xpm,.tif,.tiff,.pbm,.pgm,.ppm';
 

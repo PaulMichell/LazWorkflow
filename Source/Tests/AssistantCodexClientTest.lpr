@@ -225,6 +225,56 @@ Begin
     Check('external MCP configuration rejected', (Client.State = crsFailed) And Not Client.ToolIsolationChecked);
   Finally Client.Free; Env.Free; DeleteFile(Profile + '/config.toml'); RemoveDir(Profile); End;
 End;
+Function CodexFixturePath: String;
+Var Dir, Probe: String;
+Begin
+  Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
+  Probe := Dir + 'Source/Tests/Fixtures/CodexTurnStartParams.json';
+  If FileExists(Probe) Then Exit(Probe);
+  Dir := ExtractFilePath(ParamStr(0));
+  While (Dir <> '') And (ExcludeTrailingPathDelimiter(Dir) <> Dir) Do
+    Begin
+      Probe := IncludeTrailingPathDelimiter(Dir) + 'Source/Tests/Fixtures/CodexTurnStartParams.json';
+      If FileExists(Probe) Then Exit(Probe);
+      Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));
+    End;
+  Result := '';
+End;
+Procedure AssertTextOnly(Const Name, Body: String);
+Var Data: TJSONData; Input: TJSONData;
+Begin
+  Check(Name + ' has no local_image', (Pos('local_image', Body) = 0) And (Pos('localImage', Body) = 0));
+  Check(Name + ' has no image item', Pos('"type":"image"', Body) = 0);
+  Data := GetJSON(Body);
+  Try
+    Check(Name + ' is an object', Data Is TJSONObject);
+    Input := TJSONObject(Data).Find('input');
+    Check(Name + ' has one text item', (Input Is TJSONArray) And (TJSONArray(Input).Count = 1) And
+      (TJSONObject(TJSONArray(Input).Items[0]).Get('type', '') = 'text'));
+  Finally Data.Free; End;
+End;
+Procedure TestTurnStartBody;
+Var Lines: TStringList; Data: TJSONData; Obj: TJSONObject; Built: String;
+Begin
+  Check('codex image support stays off', Not CodexImagesSupported);
+  Lines := TStringList.Create;
+  Data := Nil;
+  Try
+    Check('turn/start fixture found', CodexFixturePath <> '');
+    Lines.LoadFromFile(CodexFixturePath);
+    Data := GetJSON(Lines.Text);
+    Check('turn/start fixture is an object', Data Is TJSONObject);
+    Obj := TJSONObject(Data);
+    Built := CodexTurnStartParams(Obj.Get('threadId', ''), Obj.Get('prompt', ''), Obj.Get('effort', ''));
+    Check('turn/start body matches fixture', Built = Obj.Get('withEffort', ''));
+    AssertTextOnly('with effort', Built);
+    Built := CodexTurnStartParams(Obj.Get('threadId', ''), Obj.Get('prompt', ''), '');
+    Check('turn/start without effort matches fixture', Built = Obj.Get('withoutEffort', ''));
+    AssertTextOnly('without effort', Built);
+    Built := CodexTurnStartParams('thread-1', 'data:image/png;base64,AAAA', '');
+    AssertTextOnly('data uri stays text', Built);
+  Finally Data.Free; Lines.Free; End;
+End;
 Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord; VersionEnv: TStringList;
 Procedure WaitState(State: TCodexRunState);
 Begin
@@ -253,6 +303,7 @@ Begin
       Halt;
     End;
   If ParamCount > 0 Then Begin FakeRuntime; Halt; End;
+  TestTurnStartBody;
   Client := TAssistantCodexClient.Create(500);
   Try
     VersionEnv := TStringList.Create;
