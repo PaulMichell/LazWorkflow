@@ -664,7 +664,7 @@ Begin
     Begin
       Editor := SourceEditorManagerIntf.SourceEditors[I];
       If Not Assigned(Editor) Then Continue;
-      If (AssistantTarget.Kind = atkPackage) And Not AssistantTarget.ContainsFile(Editor.FileName) Then Continue;
+      If (AssistantTarget.Kind <> atkProject) And Not AssistantTarget.ContainsFile(Editor.FileName) Then Continue;
       If Editor.Modified Or Editor.ModifiedDesign Then
         Begin
           ErrorText := 'Save changed editor buffers and designer resources explicitly before building.';

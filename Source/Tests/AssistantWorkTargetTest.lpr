@@ -112,7 +112,7 @@ Begin ForceDirectories(ExtractFileDir(Path));F:=TFileStream.Create(Path,fmCreate
 Var IDE:TIDE; Packages:TPackages; Proj:TProject; Editors:TEditors; Workspace:TWorkspace;
   Store:TAssistantConversationStore; Settings1,Settings2:TAssistantTestSettings;
   Id:TGuid; Note,Key,ProjectStore,Reply,Identity,Path:String; Data:TJSONData;
-  Dialog:TProjectAssistantForm;Combo:TComboBox;I,OneIndex,TwoIndex:Integer;
+  Dialog:TProjectAssistantForm;Combo:TComboBox;
   Thinking:Boolean; Mode:TAssistantMode; Deadline:QWord;
 Begin
   { This executable also acts as a fake compiler: packages have no --build-mode. }
@@ -197,24 +197,23 @@ Begin
     Dialog:=TProjectAssistantForm.Create(Nil);
     Try
       Dialog.Show;Application.ProcessMessages;Dialog.BindToActiveProject;
-      Combo:=TComboBox(Dialog.FindComponent('WorkTargetCombo'));
+      Combo:=TComboBox(Dialog.FindComponent('TargetCombo'));
       Check('target selector is available in Assistant',Assigned(Combo));
       Check('package title is visible',Pos('One.lpk',Dialog.Caption)>0);
-      Combo.OnDropDown(Combo);OneIndex:=-1;TwoIndex:=-1;
-      For I:=0 To Combo.Items.Count-1 Do
-        Begin
-          If Pos('One.lpk',Combo.Items[I])>0 Then OneIndex:=I;
-          If Pos('Two.lpk',Combo.Items[I])>0 Then TwoIndex:=I;
-        End;
-      Check('loaded package choices are present',(OneIndex>=0) And (TwoIndex>=0));
-      Combo.ItemIndex:=TwoIndex;Combo.OnChange(Combo);
-      Check('selector switches target and conversation store',
-        (AssistantTarget.Manifest=Packages.Second.Filename) And
-        (ProjectAssistantConversation.TargetStoreKey=AssistantTarget.StoreKey));
+      Combo.OnDropDown(Combo);
+      Check('current project is the default choice',(Combo.Items.Count>0) And (Combo.Items[0]='Current Project'));
+      Check('packages are not target choices',(Pos('One.lpk',Combo.Items.Text)=0) And (Pos('Two.lpk',Combo.Items.Text)=0));
+      Check('folder button sits with the target',Assigned(Dialog.FindComponent('TargetBrowseButton')));
+      Check('select a folder as the target',AssistantTarget.SelectFolder(Root+'/Source/One',Note));
+      Check('folder target is that directory',AssistantTarget.Root=Root+'/Source/One/');
+      Check('files inside the folder are writable',AssistantTarget.AllowsWrite(Root+'/Source/One/New.pas'));
+      Check('a sibling folder is outside the target',Not AssistantTarget.AllowsWrite(Root+'/Source/Two/Two.pas'));
+      Check('the project file is outside the folder',Not AssistantTarget.AllowsWrite(Editors.Editor.Path));
+      AssistantTarget.SelectPackage(Packages.First.Filename,Note);
       NotifyOpenProjectAssistantFormsProjectCleared;
-      Check('project-close notification preserves pinned package',Pos('Two.lpk',Dialog.Caption)>0);
+      Check('project-close notification preserves pinned package',Pos('One.lpk',Dialog.Caption)>0);
       NotifyOpenProjectAssistantFormsProjectChanged;
-      Check('project-open notification preserves pinned package',AssistantTarget.Manifest=Packages.Second.Filename);
+      Check('project-open notification preserves pinned package',AssistantTarget.Manifest=Packages.First.Filename);
       Combo.ItemIndex:=0;Combo.OnChange(Combo);
       Check('selector restores current project and legacy store',
         (AssistantTarget.Kind=atkProject) And (ProjectAssistantConversation.TargetStoreKey=''));

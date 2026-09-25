@@ -60,7 +60,7 @@ Begin
       Result := 'Active editor: (none)';
       Exit;
     End;
-  If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
+  If (AssistantTarget.Kind<>atkProject) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
     Begin
       Result := 'Active editor is outside the selected package; its text is not attached.';
       Exit;
@@ -124,7 +124,7 @@ Begin
       Ed := SourceEditorManagerIntf.SourceEditors[I];
       If Not Assigned(Ed) Or (Not Ed.Modified) Then
         Continue;
-      If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then Continue;
+      If (AssistantTarget.Kind<>atkProject) And Not AssistantTarget.ContainsFile(Ed.FileName) Then Continue;
       FullPath := ExpandFileName(Ed.FileName);
       If FullPath = '' Then
         Continue;
@@ -191,7 +191,7 @@ Begin
           Path := Trim(Copy(Path, Pos(' -> ', Path) + 4, MaxInt));
         If (Length(Path) >= 2) And (Path[1] = '"') And (Path[Length(Path)] = '"') Then
           Path := Copy(Path, 2, Length(Path) - 2);
-        If (AssistantTarget.Kind<>atkPackage) Or AssistantTarget.AllowsWrite(ExpandFileName(Root+Path)) Then
+        If (AssistantTarget.Kind=atkProject) Or AssistantTarget.AllowsWrite(ExpandFileName(Root+Path)) Then
           AddUniqueLine(Files, Path);
       End;
   Finally
@@ -269,7 +269,7 @@ Begin
         '----- end IDE context -----';
       Exit;
     End;
-  If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
+  If (AssistantTarget.Kind<>atkProject) And Not AssistantTarget.ContainsFile(Ed.FileName) Then
     Begin
       Result := Result + 'Active editor is outside the selected package; its text is not attached.' + LineEnding + '----- end IDE context -----';
       Exit;

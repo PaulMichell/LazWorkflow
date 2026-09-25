@@ -1,7 +1,8 @@
 Unit AssistantWorkTarget;
 
-{ IDE-thread work target. A selected package is pinned by manifest, never by an
-  editor tab or a borrowed package pointer that may be destroyed by Lazarus. (c) 2026 Michell Computing. }
+{ IDE-thread work target. The target is the root folder for reads, writes, and
+  Git. An empty folder means the current Lazarus project. A chosen folder does
+  not widen to the Git root or to package membership. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -14,10 +15,11 @@ Uses
   Classes, SysUtils, PackageIntf;
 
 Type
-  TAssistantTargetKind = (atkProject, atkPackage);
+  TAssistantTargetKind = (atkProject, atkPackage, atkFolder);
   TAssistantWorkTarget = Class
   Private
     FPackageFile: String;
+    FFolder: String;
     FGeneration: QWord;
   Public
     Function Kind: TAssistantTargetKind;
@@ -41,18 +43,30 @@ Type
     Function Describe: String;
     Procedure SelectProject;
     Function SelectPackage(Const Filename: String; Out ErrorText: String): Boolean;
+    /// Use Directory as the target root. Empty selects the current project.
+    Function SelectFolder(Const Directory: String; Out ErrorText: String): Boolean;
   End;
+
+Const
+  AssistantRecentTargetLimit = 10;
+  AssistantCurrentProjectCaption = 'Current Project';
 
 Function AssistantTarget: TAssistantWorkTarget;
 Function TargetPathWithin(Const Directory, Filename: String): Boolean;
+Procedure LoadAssistantRecentTargets(Paths: TStrings);
+Procedure RememberAssistantTarget(Const Directory: String);
+Function SavedAssistantTarget: String;
+Procedure SaveAssistantTarget(Const Directory: String);
 
 Implementation
 
 Uses
-  LazIDEIntf, ProjectIntf, LazFileUtils, AssistantProjectPaths, sha1;
+  LazIDEIntf, ProjectIntf, LazFileUtils, fpjson, AssistantProjectPaths, WorkflowSettings, sha1;
 
 Var
   CurrentTarget: TAssistantWorkTarget;
+  RecentTargets: TStringList;
+  RecentTargetsLoaded: Boolean;
 
 Function AssistantTarget: TAssistantWorkTarget;
 Begin
@@ -93,8 +107,137 @@ End;
 
 Function TAssistantWorkTarget.Kind: TAssistantTargetKind;
 Begin
-  If FPackageFile = '' Then Result := atkProject
+  If FFolder <> '' Then Result := atkFolder
+  Else If FPackageFile = '' Then Result := atkProject
   Else Result := atkPackage;
+End;
+
+Function CurrentProjectRoot: String;
+Var
+  Proj: TLazProject;
+  MainName: String;
+Begin
+  Result := '';
+  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then Exit;
+  Proj := LazarusIDE.ActiveProject;
+  MainName := '';
+  If Assigned(Proj.MainFile) Then MainName := Proj.MainFile.Filename;
+  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
+End;
+
+Function NormalizeTargetFolder(Const Directory: String): String;
+Begin
+  Result := Trim(Directory);
+  If Result = '' Then Exit;
+  Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
+End;
+
+Function SameTargetFolder(Const Left, Right: String): Boolean;
+Begin
+  Result := CompareFilenames(NormalizeTargetFolder(Left), NormalizeTargetFolder(Right)) = 0;
+End;
+
+Procedure EnsureRecentTargets;
+Var
+  Section: TJSONObject;
+  Node: TJSONData;
+  Index: Integer;
+  Path: String;
+Begin
+  If RecentTargetsLoaded Then Exit;
+  RecentTargetsLoaded := True;
+  If Not Assigned(RecentTargets) Then RecentTargets := TStringList.Create;
+  RecentTargets.Clear;
+  Section := ReadWorkflowSection('assistant');
+  If Not Assigned(Section) Then Exit;
+  Try
+    Node := Section.Find('recent_targets');
+    If Not (Node Is TJSONArray) Then Exit;
+    For Index := 0 To TJSONArray(Node).Count - 1 Do
+      Begin
+        If RecentTargets.Count >= AssistantRecentTargetLimit Then Break;
+        If TJSONArray(Node).Items[Index].JSONType <> jtString Then Continue;
+        Path := NormalizeTargetFolder(TJSONArray(Node).Items[Index].AsString);
+        If (Path = '') Or (Not DirectoryExistsUTF8(Path)) Then Continue;
+        If RecentTargets.IndexOf(Path) >= 0 Then Continue;
+        RecentTargets.Add(Path);
+      End;
+  Finally
+    Section.Free;
+  End;
+End;
+
+Procedure WriteTargetSettings(Const Selected: String);
+Var
+  Section: TJSONObject;
+  Arr: TJSONArray;
+  Index: Integer;
+  ErrorText: String;
+Begin
+  EnsureRecentTargets;
+  Section := ReadWorkflowSection('assistant');
+  If Not Assigned(Section) Then Section := TJSONObject.Create;
+  Try
+    If Assigned(Section.Find('target_directory')) Then Section.Delete('target_directory');
+    Section.Add('target_directory', Selected);
+    If Assigned(Section.Find('recent_targets')) Then Section.Delete('recent_targets');
+    Arr := TJSONArray.Create;
+    Section.Add('recent_targets', Arr);
+    For Index := 0 To RecentTargets.Count - 1 Do
+      Arr.Add(RecentTargets[Index]);
+    WriteWorkflowSection('assistant', Section, ErrorText);
+  Finally
+    Section.Free;
+  End;
+End;
+
+Procedure LoadAssistantRecentTargets(Paths: TStrings);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(Paths) Then Exit;
+  Paths.Clear;
+  EnsureRecentTargets;
+  For Index := 0 To RecentTargets.Count - 1 Do
+    Paths.Add(RecentTargets[Index]);
+End;
+
+Procedure RememberAssistantTarget(Const Directory: String);
+Var
+  Path, ProjectRoot: String;
+  Index: Integer;
+Begin
+  Path := NormalizeTargetFolder(Directory);
+  If (Path = '') Or (Not DirectoryExistsUTF8(Path)) Then Exit;
+  ProjectRoot := ExcludeTrailingPathDelimiter(CurrentProjectRoot);
+  If (ProjectRoot <> '') And SameTargetFolder(Path, ProjectRoot) Then Exit;
+  EnsureRecentTargets;
+  Index := RecentTargets.IndexOf(Path);
+  If Index >= 0 Then RecentTargets.Delete(Index);
+  RecentTargets.Insert(0, Path);
+  While RecentTargets.Count > AssistantRecentTargetLimit Do
+    RecentTargets.Delete(RecentTargets.Count - 1);
+  WriteTargetSettings(Path);
+End;
+
+Function SavedAssistantTarget: String;
+Var
+  Section: TJSONObject;
+Begin
+  Result := '';
+  Section := ReadWorkflowSection('assistant');
+  If Not Assigned(Section) Then Exit;
+  Try
+    Result := NormalizeTargetFolder(Section.Get('target_directory', ''));
+    If (Result <> '') And (Not DirectoryExistsUTF8(Result)) Then Result := '';
+  Finally
+    Section.Free;
+  End;
+End;
+
+Procedure SaveAssistantTarget(Const Directory: String);
+Begin
+  WriteTargetSettings(NormalizeTargetFolder(Directory));
 End;
 
 Function TAssistantWorkTarget.Package: TIDEPackage;
@@ -114,6 +257,7 @@ End;
 
 Function TAssistantWorkTarget.Manifest: String;
 Begin
+  If Kind = atkFolder Then Exit(FFolder);
   Result := FPackageFile;
   If (Kind = atkProject) And Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
     Result := LazarusIDE.ActiveProject.ProjectInfoFile;
@@ -121,7 +265,8 @@ End;
 
 Function TAssistantWorkTarget.Available: Boolean;
 Begin
-  If Kind = atkPackage Then Result := Assigned(Package)
+  If Kind = atkFolder Then Result := DirectoryExistsUTF8(FFolder)
+  Else If Kind = atkPackage Then Result := Assigned(Package)
   Else Result := Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject);
 End;
 
@@ -131,6 +276,8 @@ Var
 Begin
   Result := '';
   If Not Available Then Exit;
+  If Kind = atkFolder Then
+    Exit('2:' + IntToStr(FGeneration) + ':' + FFolder);
   If Kind = atkPackage Then Owner := Pointer(Package)
   Else Owner := Pointer(LazarusIDE.ActiveProject);
   Result := IntToStr(Ord(Kind)) + ':' + IntToStr(FGeneration) + ':' + IntToHex(PtrUInt(Owner), SizeOf(Pointer) * 2) + ':' + Manifest;
@@ -138,6 +285,7 @@ End;
 
 Function TAssistantWorkTarget.DisplayName: String;
 Begin
+  If Kind = atkFolder Then Exit(FFolder);
   If Kind = atkPackage Then Result := 'Package — '
   Else Result := 'Project — ';
   If Manifest <> '' Then Result := Result + ExtractFileName(Manifest)
@@ -153,6 +301,7 @@ Var
 Begin
   Result := True;
   If Not Available Then Exit;
+  If Kind = atkFolder Then Exit(False);
   If Kind = atkPackage Then
     Begin
       Result := Package.Modified;
@@ -261,6 +410,7 @@ Var
   I: Integer;
 Begin
   Result := '';
+  If Kind = atkFolder Then Exit(IncludeTrailingPathDelimiter(FFolder));
   If Kind = atkProject Then
     Begin
       If Not Available Then Exit;
@@ -312,7 +462,7 @@ Var
   Files: TStringList;
   I: Integer;
 Begin
-  If Kind = atkProject Then Exit(TargetPathWithin(Root, Filename));
+  If Kind <> atkPackage Then Exit(TargetPathWithin(Root, Filename));
   Result := False;
   If Filename = '' Then Exit;
   Files := TStringList.Create;
@@ -332,7 +482,7 @@ Var
 Begin
   Result := False;
   If Not Available Or Not TargetPathWithin(Root, Filename) Then Exit;
-  If Kind = atkProject Then Exit(True);
+  If Kind <> atkPackage Then Exit(True);
   If Package.ReadOnly Then Exit;
   Ext := LowerCase(ExtractFileExt(Filename));
   If (Ext = '.lpk') Or (Ext = '.lpi') Then Exit;
@@ -362,7 +512,7 @@ Var
   Files: TStringList;
   I: Integer;
 Begin
-  Result := 'Target: ' + DisplayName + LineEnding + 'Manifest: ' + Manifest + LineEnding + 'Working root: ' + Root + LineEnding;
+  Result := 'Target: ' + DisplayName + LineEnding + 'Manifest: ' + Manifest + LineEnding + 'Target root: ' + Root + LineEnding;
   Files := TStringList.Create;
   Try
     Members(Files);
@@ -379,7 +529,10 @@ Begin
     Dependencies(Files);
     Result := Result + 'Required packages (context, not added write roots):' + LineEnding;
     For I := 0 To Files.Count - 1 Do Result := Result + '  ' + Files[I] + LineEnding;
-    If Kind = atkPackage Then Result := Result + 'Writes: member directories and Documents within the working root; package metadata is managed separately in Lazarus.' + LineEnding;
+    If Kind = atkFolder Then
+      Result := Result + 'Writes: any path inside the target.' + LineEnding
+    Else If Kind = atkPackage Then
+      Result := Result + 'Writes: member directories and Documents within the target; package metadata is managed separately in Lazarus.' + LineEnding;
   Finally
     Files.Free;
   End;
@@ -388,12 +541,49 @@ End;
 Procedure TAssistantWorkTarget.SelectProject;
 Begin
   FPackageFile := '';
+  FFolder := '';
   Inc(FGeneration);
+End;
+
+Function TAssistantWorkTarget.SelectFolder(Const Directory: String; Out ErrorText: String): Boolean;
+Var
+  Path, ProjectRoot: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  Path := NormalizeTargetFolder(Directory);
+  If Path = '' Then
+    Begin
+      SelectProject;
+      Result := True;
+      Exit;
+    End;
+  If Not DirectoryExistsUTF8(Path) Then
+    Begin
+      ErrorText := 'Select an existing folder.';
+      Exit;
+    End;
+  If Path = ExtractFileDir(Path) Then
+    Begin
+      ErrorText := 'The filesystem root cannot be the target.';
+      Exit;
+    End;
+  ProjectRoot := ExcludeTrailingPathDelimiter(CurrentProjectRoot);
+  If (ProjectRoot <> '') And SameTargetFolder(Path, ProjectRoot) Then
+    Begin
+      SelectProject;
+      Result := True;
+      Exit;
+    End;
+  FPackageFile := '';
+  FFolder := Path;
+  Inc(FGeneration);
+  Result := True;
 End;
 
 Function TAssistantWorkTarget.SelectPackage(Const Filename: String; Out ErrorText: String): Boolean;
 Var
-  Previous: String;
+  Previous, PreviousFolder: String;
 Begin
   Result := False;
   ErrorText := '';
@@ -403,10 +593,13 @@ Begin
       Exit;
     End;
   Previous := FPackageFile;
+  PreviousFolder := FFolder;
+  FFolder := '';
   FPackageFile := ExpandFileName(Filename);
   If Not Available Then
     Begin
       FPackageFile := Previous;
+      FFolder := PreviousFolder;
       ErrorText := 'Open the package in Lazarus before selecting it.';
       Exit;
     End;
@@ -415,5 +608,6 @@ Begin
 End;
 
 Finalization
+FreeAndNil(RecentTargets);
 FreeAndNil(CurrentTarget);
 End.

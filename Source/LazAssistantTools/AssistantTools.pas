@@ -1936,7 +1936,7 @@ Begin
         Continue;
       If Not IsPathUnderRoot(Root, FullPath) Then
         Continue;
-      If (AssistantTarget.Kind=atkPackage) And Not AssistantTarget.ContainsFile(FullPath) Then Continue;
+      If (AssistantTarget.Kind<>atkProject) And Not AssistantTarget.ContainsFile(FullPath) Then Continue;
       If LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) <> mrOk Then
         Begin
           Result := False;

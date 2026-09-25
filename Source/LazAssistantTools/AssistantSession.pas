@@ -33,7 +33,7 @@ Var
   Dir, Root, Preferred, Legacy, MainName: String;
 Begin
   Result := '';
-  If AssistantTarget.Kind = atkPackage Then
+  If AssistantTarget.Kind <> atkProject Then
     Begin
       If AssistantTarget.Available Then Result := AssistantTarget.StoreDirectory + AssistantSessionFileName;
       Exit;

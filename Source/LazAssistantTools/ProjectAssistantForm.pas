@@ -200,9 +200,13 @@ Type
     Procedure FooterMenuClick(Sender: TObject);
   Private
     FTargetCombo: TComboBox;
+    FTargetBrowseButton: TButton;
     FTargetPaths: TStringList;
+    FTargetRestored: Boolean;
     Procedure RefreshTargetChoices(Sender: TObject);
     Procedure TargetChoiceChanged(Sender: TObject);
+    Procedure TargetBrowseClick(Sender: TObject);
+    Procedure ApplyTarget(Const Directory: String);
   Private
 
     FUseCodex: Boolean;
@@ -597,6 +601,7 @@ Begin
   FreeAndNil(PlanListPaths);
   FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
+  FreeAndNil(FTargetPaths);
   If Assigned(FSlashList) Then
     Begin
       FSlashList.OnDrawItem := Nil;
@@ -610,17 +615,47 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
-Var TargetBar:TPanel; TargetLabel:TLabel;
+Var
+  TargetBar: TPanel;
+  TargetLabel: TLabel;
 Begin
-  TargetBar := TPanel.Create(Self); TargetBar.Parent := Self; TargetBar.Align := alTop;
-  TargetBar.Height := Scale96ToForm(34); TargetBar.BevelOuter := bvNone; TargetBar.Top := 0;
-  TargetLabel := TLabel.Create(Self); TargetLabel.Parent := TargetBar; TargetLabel.Caption := 'Working &on:';
-  TargetLabel.Align := alLeft; TargetLabel.Layout := tlCenter; TargetLabel.BorderSpacing.Around := 4;
+  TargetBar := TPanel.Create(Self);
+  TargetBar.Parent := Self;
+  TargetBar.Align := alTop;
+  TargetBar.Height := Scale96ToForm(34);
+  TargetBar.BevelOuter := bvNone;
+  TargetBar.Top := 0;
+  FTargetBrowseButton := TButton.Create(Self);
+  FTargetBrowseButton.Name := 'TargetBrowseButton';
+  FTargetBrowseButton.Parent := TargetBar;
+  FTargetBrowseButton.Align := alRight;
+  FTargetBrowseButton.Caption := '...';
+  FTargetBrowseButton.Width := Scale96ToForm(36);
+  FTargetBrowseButton.BorderSpacing.Top := 4;
+  FTargetBrowseButton.BorderSpacing.Right := 4;
+  FTargetBrowseButton.BorderSpacing.Bottom := 4;
+  FTargetBrowseButton.Hint := 'Choose a target folder';
+  FTargetBrowseButton.ShowHint := True;
+  FTargetBrowseButton.OnClick := @TargetBrowseClick;
+  TargetLabel := TLabel.Create(Self);
+  TargetLabel.Parent := TargetBar;
+  TargetLabel.Caption := '&Target:';
+  TargetLabel.Align := alLeft;
+  TargetLabel.Layout := tlCenter;
+  TargetLabel.BorderSpacing.Around := 4;
   FTargetPaths := TStringList.Create;
-  FTargetCombo := TComboBox.Create(Self); FTargetCombo.Name := 'WorkTargetCombo'; FTargetCombo.Parent := TargetBar;
-  FTargetCombo.Align := alClient; FTargetCombo.BorderSpacing.Around := 4; FTargetCombo.Style := csDropDownList;
+  FTargetCombo := TComboBox.Create(Self);
+  FTargetCombo.Name := 'TargetCombo';
+  FTargetCombo.Parent := TargetBar;
+  FTargetCombo.Align := alClient;
+  FTargetCombo.BorderSpacing.Top := 4;
+  FTargetCombo.BorderSpacing.Left := 4;
+  FTargetCombo.BorderSpacing.Bottom := 4;
+  FTargetCombo.Style := csDropDownList;
   TargetLabel.FocusControl := FTargetCombo;
-  FTargetCombo.OnDropDown := @RefreshTargetChoices; FTargetCombo.OnChange := @TargetChoiceChanged;
+  FTargetCombo.OnDropDown := @RefreshTargetChoices;
+  FTargetCombo.OnChange := @TargetChoiceChanged;
+  FTargetBrowseButton.Align := alRight;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
   ConversationPanel.OnResize := @HistoryPanelResize;
@@ -667,85 +702,68 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
-Procedure TProjectAssistantForm.RefreshTargetChoices(Sender:TObject);
-Var I,Selected:Integer; P:TIDEPackage;
+Procedure TProjectAssistantForm.RefreshTargetChoices(Sender: TObject);
+Var
+  Recent: TStringList;
+  Index, Selected: Integer;
+  Path: String;
 Begin
-  If Not Assigned(FTargetCombo) Then Exit;
+  If Not Assigned(FTargetCombo) Or Not Assigned(FTargetPaths) Then Exit;
+  Recent := TStringList.Create;
   FTargetCombo.Items.BeginUpdate;
   Try
-    FTargetCombo.Items.Clear; FTargetPaths.Clear; Selected := 0;
-    FTargetCombo.Items.Add('Current Lazarus project');FTargetPaths.Add('');
-    If Assigned(PackageEditingInterface) Then
-      For I := 0 To PackageEditingInterface.GetPackageCount - 1 Do
-        Begin
-          P := PackageEditingInterface.GetPackages(I);
-          If Not Assigned(P) Or (P.Filename='') Or P.IsVirtual Then Continue;
-          If (AssistantTarget.Kind=atkPackage) And SameFileName(ExpandFileName(P.Filename),AssistantTarget.Manifest) Then
-            Selected := FTargetPaths.Count;
-          FTargetCombo.Items.Add('Package — '+P.Name+' ('+P.Filename+')');FTargetPaths.Add(P.Filename);
-        End;
-    If (AssistantTarget.Kind=atkPackage) And (Selected=0) Then
+    FTargetCombo.Items.Clear;
+    FTargetPaths.Clear;
+    FTargetCombo.Items.Add(AssistantCurrentProjectCaption);
+    FTargetPaths.Add('');
+    LoadAssistantRecentTargets(Recent);
+    For Index := 0 To Recent.Count - 1 Do
       Begin
-        Selected := FTargetPaths.Count;
-        FTargetPaths.Add(AssistantTarget.Manifest);
-        FTargetCombo.Items.Add(AssistantTarget.DisplayName);
+        If FTargetPaths.Count > AssistantRecentTargetLimit Then Break;
+        Path := Recent[Index];
+        If FTargetPaths.IndexOf(Path) >= 0 Then Continue;
+        FTargetCombo.Items.Add(Path);
+        FTargetPaths.Add(Path);
       End;
-    FTargetCombo.Items.Add('Open package…');FTargetPaths.Add('*');
+    Selected := 0;
+    If AssistantTarget.Kind = atkFolder Then
+      Begin
+        Selected := FTargetPaths.IndexOf(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
+        If Selected < 0 Then
+          Begin
+            FTargetCombo.Items.Add(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
+            FTargetPaths.Add(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
+            Selected := FTargetPaths.Count - 1;
+          End;
+      End
+    Else If AssistantTarget.Kind <> atkProject Then
+      Selected := -1;
     FTargetCombo.ItemIndex := Selected;
-  Finally FTargetCombo.Items.EndUpdate;End;
+  Finally
+    FTargetCombo.Items.EndUpdate;
+    Recent.Free;
+  End;
 End;
 
-Procedure TProjectAssistantForm.TargetChoiceChanged(Sender:TObject);
+Procedure TProjectAssistantForm.ApplyTarget(Const Directory: String);
 Var
-  Path, Note, KeptPlan, Resolved, Err: String;
-  Dialog: TOpenDialog;
-  SwitchingToProject: Boolean;
+  Note, KeptPlan, Resolved, Err: String;
 Begin
-  If FSending Or FReviewInProgress Then
-    Begin
-      RefreshTargetChoices(Nil);
-      Exit;
-    End;
-  If (FTargetCombo.ItemIndex<0) Or (FTargetCombo.ItemIndex>=FTargetPaths.Count) Then Exit;
-  Path := FTargetPaths[FTargetCombo.ItemIndex];
-  If Path='*' Then
-    Begin
-      Dialog := TOpenDialog.Create(Self);
-      Try
-        Dialog.Title := 'Select Lazarus package'; Dialog.Filter := 'Lazarus packages|*.lpk';
-        Dialog.Options := [ofFileMustExist, ofEnableSizing]; Dialog.InitialDir := AssistantTarget.Root;
-        If Not Dialog.Execute Then
-          Begin
-            RefreshTargetChoices(Nil);
-            Exit;
-          End;
-        Path := Dialog.FileName;
-        If Not Assigned(PackageEditingInterface) Or
-          (PackageEditingInterface.DoOpenPackageFile(Path,[],False)<>mrOk) Then
-          Begin
-            RefreshTargetChoices(Nil);
-            Exit;
-          End;
-      Finally Dialog.Free;End;
-    End;
-  If ((Path='') And (AssistantTarget.Kind=atkProject)) Or
-    ((Path<>'') And (AssistantTarget.Kind=atkPackage) And SameFileName(Path,AssistantTarget.Manifest)) Then Exit;
-  SwitchingToProject := Path = '';
-  KeptPlan := '';
-  If SwitchingToProject Then
-    KeptPlan := GetActivePlanRelativePath;
+  KeptPlan := GetActivePlanRelativePath;
   PersistSession;
   If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
   If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
-  If Path='' Then AssistantTarget.SelectProject
-  Else If Not AssistantTarget.SelectPackage(Path,Note) Then
+  If Not AssistantTarget.SelectFolder(Directory, Note) Then
     Begin
       MessageDlg(Note, mtError, [mbOK], 0);
       RefreshTargetChoices(Nil);
       Exit;
     End;
+  If AssistantTarget.Kind = atkFolder Then
+    RememberAssistantTarget(AssistantTarget.Root)
+  Else
+    SaveAssistantTarget('');
   BindToActiveProject;
-  { The project store has its own plan_file. Keep the plan the user was already working on. }
   If (KeptPlan <> '') And (Not SameText(GetActivePlanRelativePath, KeptPlan)) And
     ResolvePlanPath(KeptPlan, Resolved, Err) And FileExistsUTF8(Resolved) Then
     Begin
@@ -754,6 +772,41 @@ Begin
       RefreshPlanList;
       RefreshBuildTodos;
     End;
+  RefreshTargetChoices(Nil);
+End;
+
+Procedure TProjectAssistantForm.TargetChoiceChanged(Sender: TObject);
+Var
+  Path: String;
+Begin
+  If FSending Or FReviewInProgress Then
+    Begin
+      RefreshTargetChoices(Nil);
+      Exit;
+    End;
+  If (FTargetCombo.ItemIndex < 0) Or (FTargetCombo.ItemIndex >= FTargetPaths.Count) Then Exit;
+  Path := FTargetPaths[FTargetCombo.ItemIndex];
+  If (Path = '') And (AssistantTarget.Kind = atkProject) Then Exit;
+  If (Path <> '') And (AssistantTarget.Kind = atkFolder) And
+    (CompareFilenames(ExcludeTrailingPathDelimiter(Path), ExcludeTrailingPathDelimiter(AssistantTarget.Root)) = 0) Then
+    Exit;
+  ApplyTarget(Path);
+End;
+
+Procedure TProjectAssistantForm.TargetBrowseClick(Sender: TObject);
+Var
+  Dialog: TSelectDirectoryDialog;
+Begin
+  If FSending Or FReviewInProgress Then Exit;
+  Dialog := TSelectDirectoryDialog.Create(Self);
+  Try
+    Dialog.Title := 'Select target folder';
+    Dialog.InitialDir := ExcludeTrailingPathDelimiter(AssistantTarget.Root);
+    If Not Dialog.Execute Then Exit;
+    ApplyTarget(Dialog.FileName);
+  Finally
+    Dialog.Free;
+  End;
 End;
 
 Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
@@ -3289,6 +3342,7 @@ Begin
     AssistantEndQuietIdeSession;
   FSending := IsSending;
   If Assigned(FTargetCombo) Then FTargetCombo.Enabled := Not IsSending;
+  If Assigned(FTargetBrowseButton) Then FTargetBrowseButton.Enabled := Not IsSending;
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
@@ -5530,8 +5584,15 @@ End;
 
 Procedure TProjectAssistantForm.BindToActiveProject;
 Var
-  Key, Title, Root: String;
+  Key, Title, Root, Saved, Note: String;
 Begin
+  If Not FTargetRestored Then
+    Begin
+      FTargetRestored := True;
+      Saved := SavedAssistantTarget;
+      If Saved <> '' Then
+        AssistantTarget.SelectFolder(Saved, Note);
+    End;
   { Cancel any in-flight stream for the previous project before rebinding.
     Do not PersistSession first: when ProjectOpened fires, ActiveProject is already
     the new project, so a save would write the old transcript under the new path.
@@ -5622,7 +5683,7 @@ Var
   I: Integer;
   Form: TCustomForm;
 Begin
-  If AssistantTarget.Kind=atkPackage Then Exit;
+  If AssistantTarget.Kind<>atkProject Then Exit;
   { Do not auto-create the window — only refresh forms that already exist. }
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
@@ -5637,7 +5698,7 @@ Var
   I: Integer;
   Form: TCustomForm;
 Begin
-  If AssistantTarget.Kind=atkPackage Then Exit;
+  If AssistantTarget.Kind<>atkProject Then Exit;
   For I := Screen.CustomFormCount - 1 DownTo 0 Do
     Begin
       Form := Screen.CustomForms[I];

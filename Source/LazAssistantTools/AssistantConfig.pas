@@ -528,6 +528,18 @@ Begin
             End;
           End;
       End;
+    Existing := ReadWorkflowSection('assistant');
+    Try
+      If Assigned(Existing) Then
+        Begin
+          If Assigned(Existing.Find('target_directory')) And (Section.Find('target_directory') = Nil) Then
+            Section.Add('target_directory', Existing.Get('target_directory', ''));
+          If (Existing.Find('recent_targets') Is TJSONArray) And (Section.Find('recent_targets') = Nil) Then
+            Section.Add('recent_targets', Existing.Find('recent_targets').Clone);
+        End;
+    Finally
+      Existing.Free;
+    End;
     WriteWorkflowSection('assistant', Section, ErrorText);
   Finally
     Section.Free;
