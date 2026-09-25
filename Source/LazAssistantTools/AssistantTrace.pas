@@ -1,6 +1,10 @@
 Unit AssistantTrace;
 
-{ In-memory current-turn block list for the Project Assistant trace (c) 2026 Michell Computing. }
+{ In-memory current-turn block list for the Project Assistant trace (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Replay, markdown export, and
+  JSON load/save are one trace surface. Reviewed 2026-09-23: user-block image
+  ids stay here so export can name files without a second trace unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -14,6 +18,17 @@ Uses
 
 Type
   TTraceBlockKind = (tbkUser, tbkThinking, tbkTool, tbkAnswer, tbkNote, tbkSteer, tbkSubagent, tbkWorked);
+
+  { Id, name, and display path. Never pixel bytes. Meaningful on tbkUser. }
+  TTraceImageRef = Record
+    Id: String;
+    Name: String;
+    DisplayPath: String;
+    Width: Integer;
+    Height: Integer;
+    Missing: Boolean;
+  End;
+  TTraceImageRefArray = Array Of TTraceImageRef;
 
   TTraceBlock = Class
   Private
@@ -35,6 +50,7 @@ Type
     FinishedAt: TDateTime;
     DurationMs: Integer;
     Footer: String;
+    ImageRefs: TTraceImageRefArray;
     Constructor Create;
     Property Revision: QWord Read FRevision;
     Property Body: String Read FBody Write SetBody;
@@ -53,6 +69,11 @@ Type
     Procedure Clear;
     Function AddUser(Const Text: String): TTraceBlock;
     Function EnsureUser(Const Text: String): TTraceBlock;
+    { Store ids and names on the user block, creating that block when the prompt is empty. }
+    Procedure SetUserImages(Const Ids, Names: Array Of String);
+    Procedure SetUserImageRefs(Const Refs: TTraceImageRefArray);
+    { Fill a user block that has no refs. Does not replace refs the trace already stored. }
+    Procedure KeepUserImageRefs(Const Refs: TTraceImageRefArray);
     Function AddNote(Const Text: String): TTraceBlock;
     Function AddSteer(Const Text: String): TTraceBlock;
     Function StartThinking(LoopIndex: Integer): TTraceBlock;
@@ -96,6 +117,8 @@ Function SliceLooksLikeAnswer(Const Slice: String): Boolean;
   StartAt to High(Integer); the next loop must set StartAt := 1. }
 Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
 
+Function MissingImageTileHeight(PixelsPerInch: Integer): Integer;
+Function MissingImageTileCaption(Const Ref: TTraceImageRef): String;
 Function FormatThoughtElapsed(DurationMs: Integer): String;
 Function FormatThinkingClock(DurationMs: Integer): String;
 Function FormatThoughtFooter(DurationMs: Integer): String;
@@ -249,6 +272,152 @@ Begin
   Result.Body := Text;
   If FBlocks.Count > 1 Then
     FBlocks.Move(FBlocks.Count - 1, 0);
+End;
+
+Function CleanTraceLabel(Const Value: String): String;
+Var
+  Lower: String;
+Begin
+  Result := Trim(Value);
+  Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
+  Lower := LowerCase(Result);
+  If (Length(Result) > 240) Or (Pos('data:', Lower) > 0) Or (Pos('base64', Lower) > 0) Then
+    Result := '';
+End;
+
+Function TraceImageFileName(Const Ref: TTraceImageRef): String;
+Begin
+  Result := CleanTraceLabel(Ref.Name);
+  If Result = '' Then Result := CleanTraceLabel(Ref.Id);
+  If Result = '' Then Result := 'Image';
+End;
+
+Function TraceImagesToJson(Const Refs: TTraceImageRefArray): TJSONArray;
+Var
+  I: Integer;
+  Obj: TJSONObject;
+Begin
+  Result := TJSONArray.Create;
+  For I := 0 To High(Refs) Do
+    Begin
+      Obj := TJSONObject.Create;
+      Obj.Add('id', CleanTraceLabel(Refs[I].Id));
+      Obj.Add('name', CleanTraceLabel(Refs[I].Name));
+      Obj.Add('display', CleanTraceLabel(Refs[I].DisplayPath));
+      Obj.Add('width', Refs[I].Width);
+      Obj.Add('height', Refs[I].Height);
+      Result.Add(Obj);
+    End;
+End;
+
+Function TraceImagesFromJson(Data: TJSONData): TTraceImageRefArray;
+Var
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  I, Kept: Integer;
+Begin
+  Result := Nil;
+  SetLength(Result, 0);
+  If Not (Data Is TJSONArray) Then Exit;
+  Arr := TJSONArray(Data);
+  SetLength(Result, Arr.Count);
+  Kept := 0;
+  For I := 0 To Arr.Count - 1 Do
+    If Arr.Items[I] Is TJSONObject Then
+      Begin
+        Obj := TJSONObject(Arr.Items[I]);
+        Result[Kept].Id := CleanTraceLabel(Obj.Get('id', ''));
+        Result[Kept].Name := CleanTraceLabel(Obj.Get('name', ''));
+        Result[Kept].DisplayPath := CleanTraceLabel(Obj.Get('display', ''));
+        Result[Kept].Width := Obj.Get('width', 0);
+        Result[Kept].Height := Obj.Get('height', 0);
+        Result[Kept].Missing := False;
+        If (Result[Kept].Id <> '') Or (Result[Kept].Name <> '') Or (Result[Kept].DisplayPath <> '') Then Inc(Kept);
+      End;
+  SetLength(Result, Kept);
+End;
+
+Procedure TAssistantTrace.SetUserImages(Const Ids, Names: Array Of String);
+Var
+  Block: TTraceBlock;
+  I, RefCount: Integer;
+Begin
+  RefCount := Length(Ids);
+  If Length(Names) > RefCount Then RefCount := Length(Names);
+  If RefCount < 1 Then Exit;
+  Block := EnsureUser('');
+  If Not Assigned(Block) Then
+    Begin
+      Block := AddBlock(tbkUser);
+      Block.Title := 'User';
+      If FBlocks.Count > 1 Then FBlocks.Move(FBlocks.Count - 1, 0);
+    End;
+  SetLength(Block.ImageRefs, RefCount);
+  For I := 0 To RefCount - 1 Do
+    Begin
+      If I < Length(Ids) Then Block.ImageRefs[I].Id := CleanTraceLabel(Ids[I]) Else Block.ImageRefs[I].Id := '';
+      If I < Length(Names) Then Block.ImageRefs[I].Name := CleanTraceLabel(Names[I]) Else Block.ImageRefs[I].Name := '';
+      Block.ImageRefs[I].DisplayPath := '';
+      Block.ImageRefs[I].Width := 0;
+      Block.ImageRefs[I].Height := 0;
+      Block.ImageRefs[I].Missing := False;
+    End;
+End;
+
+Procedure TAssistantTrace.SetUserImageRefs(Const Refs: TTraceImageRefArray);
+Var
+  Block: TTraceBlock;
+  I: Integer;
+Begin
+  If Length(Refs) < 1 Then Exit;
+  Block := EnsureUser('');
+  If Not Assigned(Block) Then
+    Begin
+      Block := AddBlock(tbkUser);
+      Block.Title := 'User';
+      If FBlocks.Count > 1 Then FBlocks.Move(FBlocks.Count - 1, 0);
+    End;
+  SetLength(Block.ImageRefs, Length(Refs));
+  For I := 0 To High(Refs) Do
+    Begin
+      Block.ImageRefs[I].Id := CleanTraceLabel(Refs[I].Id);
+      Block.ImageRefs[I].Name := CleanTraceLabel(Refs[I].Name);
+      Block.ImageRefs[I].DisplayPath := CleanTraceLabel(Refs[I].DisplayPath);
+      Block.ImageRefs[I].Width := Refs[I].Width;
+      Block.ImageRefs[I].Height := Refs[I].Height;
+      If (Block.ImageRefs[I].Width < 0) Or (Block.ImageRefs[I].Width > 16384) Then Block.ImageRefs[I].Width := 0;
+      If (Block.ImageRefs[I].Height < 0) Or (Block.ImageRefs[I].Height > 16384) Then Block.ImageRefs[I].Height := 0;
+      Block.ImageRefs[I].Missing := Refs[I].Missing;
+    End;
+End;
+
+Procedure TAssistantTrace.KeepUserImageRefs(Const Refs: TTraceImageRefArray);
+Var
+  Block: TTraceBlock;
+  I, J: Integer;
+Begin
+  If Length(Refs) < 1 Then Exit;
+  Block := EnsureUser('');
+  If Not Assigned(Block) Then
+    Begin
+      SetUserImageRefs(Refs);
+      Exit;
+    End;
+  If Length(Block.ImageRefs) = 0 Then
+    Begin
+      SetUserImageRefs(Refs);
+      Exit;
+    End;
+  For I := 0 To High(Block.ImageRefs) Do
+    For J := 0 To High(Refs) Do
+      If (Block.ImageRefs[I].Id <> '') And (Block.ImageRefs[I].Id = CleanTraceLabel(Refs[J].Id)) Then
+        Begin
+          If Block.ImageRefs[I].Name = '' Then Block.ImageRefs[I].Name := CleanTraceLabel(Refs[J].Name);
+          If Block.ImageRefs[I].DisplayPath = '' Then Block.ImageRefs[I].DisplayPath := CleanTraceLabel(Refs[J].DisplayPath);
+          If Block.ImageRefs[I].Width < 1 Then Block.ImageRefs[I].Width := Refs[J].Width;
+          If Block.ImageRefs[I].Height < 1 Then Block.ImageRefs[I].Height := Refs[J].Height;
+        End;
 End;
 
 Function TAssistantTrace.AddNote(Const Text: String): TTraceBlock;
@@ -600,6 +769,7 @@ Var
   Block: TTraceBlock;
   Parts: TStringList;
   Heading, Body: String;
+  J: Integer;
 Begin
   Parts := TStringList.Create;
   Try
@@ -660,6 +830,9 @@ Begin
           Parts.Add('*(no result)*')
         Else If Block.Kind = tbkSubagent Then
           Parts.Add('*(no summary)*');
+        If (Block.Kind = tbkUser) And IncludeUser Then
+          For J := 0 To High(Block.ImageRefs) Do
+            Parts.Add(TraceImageFileName(Block.ImageRefs[J]));
         If (Block.Footer <> '') And (Block.Kind In [tbkSubagent, tbkAnswer, tbkNote, tbkThinking]) Then
           Begin
             Parts.Add('');
@@ -715,6 +888,8 @@ Begin
         Obj.Add('loop', Block.LoopIndex);
         Obj.Add('ok', Block.Ok);
         Obj.Add('duration_ms', Block.DurationMs);
+        If (Block.Kind = tbkUser) And (Length(Block.ImageRefs) > 0) Then
+          Obj.Add('images', TraceImagesToJson(Block.ImageRefs));
         Arr.Add(Obj);
       End;
     Result := StringReplace(Arr.AsJSON, #13#10, '', [rfReplaceAll]);
@@ -928,6 +1103,8 @@ Begin
         Block.Ok := Obj.Get('ok', True);
         Block.DurationMs := Obj.Get('duration_ms', 0);
         Block.Running := False;
+        If Block.Kind = tbkUser Then
+          Block.ImageRefs := TraceImagesFromJson(Obj.Find('images'));
       End;
   Finally
     Data.Free;
@@ -955,6 +1132,23 @@ Begin
     Result := Copy(LiveText, StartAt, MaxInt)
   Else
     Result := '';
+End;
+
+Function MissingImageTileHeight(PixelsPerInch: Integer): Integer;
+Begin
+  If PixelsPerInch < 1 Then PixelsPerInch := 96;
+  Result := Round(32 * PixelsPerInch / 96);
+  If Result < 24 Then Result := 24;
+End;
+
+Function MissingImageTileCaption(Const Ref: TTraceImageRef): String;
+Begin
+  Result := Trim(Ref.Name);
+  If Result = '' Then Result := Trim(Ref.Id);
+  If Result = '' Then Result := 'Image';
+  If (Ref.Width > 0) And (Ref.Height > 0) Then
+    Result := Result + ', ' + IntToStr(Ref.Width) + ' x ' + IntToStr(Ref.Height);
+  Result := Result + ', unavailable';
 End;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;

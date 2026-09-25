@@ -41,6 +41,7 @@ Type
     Seen, Identity, Version, ParsedVersion, FullVersion: QWord;
     ParsedBaseSize: Integer;
     BodyContent: TStyledContent;
+    MissingImages: TTraceImageRefArray;
     Destructor Destroy; Override;
     Procedure Invalidate;
     Function Fragment: TConversationFragment;
@@ -236,6 +237,25 @@ Begin
   FSections.Clear;
 End;
 
+Procedure CopyMissingImages(Block: TTraceBlock; Section: TConversationSection);
+Var
+  I, Kept: Integer;
+Begin
+  SetLength(Section.MissingImages, 0);
+  If (Not Assigned(Block)) Or (Block.Kind <> tbkUser) Then Exit;
+  Kept := 0;
+  For I := 0 To High(Block.ImageRefs) Do
+    If Block.ImageRefs[I].Missing Then Inc(Kept);
+  SetLength(Section.MissingImages, Kept);
+  Kept := 0;
+  For I := 0 To High(Block.ImageRefs) Do
+    If Block.ImageRefs[I].Missing Then
+      Begin
+        Section.MissingImages[Kept] := Block.ImageRefs[I];
+        Inc(Kept);
+      End;
+End;
+
 Procedure TConversationLayout.Add(Const Key: String; Block: TTraceBlock);
 Var
   I: Integer;
@@ -302,6 +322,7 @@ Begin
       UpdateTitle(Section.Short, True);
     End;
   Section.Kind := Block.Kind;
+  CopyMissingImages(Block, Section);
   Section.Title := DisplayTitle;
   Section.Body := Block.Body;
   Section.Footer := Block.Footer;
@@ -377,6 +398,8 @@ Begin
       If Not Section.Visible Then Continue;
       If Section.Collapsed Then H := Section.ShortHeight
       Else H := Section.FullHeight;
+      If Section.Kind = tbkUser Then
+        H := H + Int64(Length(Section.MissingImages)) * MissingImageTileHeight(FPixelsPerInch);
       SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding * 2 + Round(10 * FPixelsPerInch / 96));
       LastVisible := I;
     End;

@@ -460,7 +460,7 @@ Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf,
-  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient;
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages;
 
 Const
   ChatViewMargin = 4;
@@ -2511,8 +2511,10 @@ Begin
         SL.Add('');
         If Trim(Turn.Prompt) <> '' Then
           SL.Add(Turn.Prompt)
-        Else
+        Else If Trim(Turn.AttachmentsJson) = '' Then
           SL.Add('*(empty)*');
+        If Trim(Turn.AttachmentsJson) <> '' Then
+          AppendAssistantImageFileNames(Turn.AttachmentsJson, SL);
         SL.Add('');
         If Trim(Turn.TraceJson) <> '' Then
           Begin
@@ -2571,33 +2573,32 @@ End;
 Procedure TProjectAssistantForm.RebuildClientFromConversation;
 Var
   I: Integer;
-  Prompt, Response, Thinking, Err: String;
+  Turn: TConversationTurn;
 Begin
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
   FContextUsed := 0;
-  If Not Assigned(ProjectAssistantConversation) Then
+  If Not Assigned(ProjectAssistantConversation) Or Not Assigned(AssistantClient) Then
     Exit;
   For I := 0 To ProjectAssistantConversation.TurnCount - 1 Do
     Begin
-      If Not ProjectAssistantConversation.GetTurnDisplay(I, Prompt, Response, Thinking, Err) Then
+      If Not ProjectAssistantConversation.GetTurn(I, Turn) Then
         Continue;
-      If Assigned(AssistantClient) Then
+      If Trim(Turn.MessagesJson) <> '' Then
+        AssistantClient.RestoreMessagesJson(Turn.MessagesJson)
+      Else
         Begin
-          If Trim(Prompt) <> '' Then
-            Begin
-              AssistantClient.AddMessage(amrUser, Prompt);
-              FContextUsed := FContextUsed + Length(Prompt) Div 4 + 8;
-            End;
-          If Trim(Response) <> '' Then
-            Begin
-              AssistantClient.AddMessage(amrAssistant, Response);
-              FContextUsed := FContextUsed + Length(Response) Div 4 + 20;
-            End;
-          If Trim(Thinking) <> '' Then
-            FContextUsed := FContextUsed + Length(Thinking) Div 4;
+          If (Trim(Turn.Prompt) <> '') Or (Trim(Turn.AttachmentsJson) <> '') Then
+            AssistantClient.AddMessage(amrUser, Turn.Prompt);
+          If Trim(Turn.Response) <> '' Then
+            AssistantClient.AddMessage(amrAssistant, Turn.Response);
         End;
+      If Trim(Turn.AttachmentsJson) <> '' Then
+        AssistantClient.EnsureLastUserImageRefs(Turn.AttachmentsJson);
+      FContextUsed := FContextUsed + Length(Turn.Prompt) Div 4 + Length(Turn.Response) Div 4 + 8;
     End;
+  AssistantClient.NoteMessagesStored;
+  FContextUsed := AssistantClient.EstimatedPromptTokens;
 End;
 
 Procedure TProjectAssistantForm.ApplyLoadedConversationToUi(Const StatusNote: String);
@@ -2639,6 +2640,27 @@ Begin
   ShowConversationTurn(TurnIndex);
 End;
 
+Procedure ApplyTurnAttachmentsToTrace(Trace: TAssistantTrace; Const AttachmentsJson: String);
+Var
+  Refs: TAssistantImageRefArray;
+  TraceRefs: TTraceImageRefArray;
+  I: Integer;
+Begin
+  If Not Assigned(Trace) Then Exit;
+  If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Or (Length(Refs) = 0) Then Exit;
+  SetLength(TraceRefs, Length(Refs));
+  For I := 0 To High(Refs) Do
+    Begin
+      TraceRefs[I].Id := Refs[I].Id;
+      TraceRefs[I].Name := Refs[I].Name;
+      TraceRefs[I].DisplayPath := Refs[I].DisplayPath;
+      TraceRefs[I].Width := Refs[I].Width;
+      TraceRefs[I].Height := Refs[I].Height;
+      TraceRefs[I].Missing := False;
+    End;
+  Trace.SetUserImageRefs(TraceRefs);
+End;
+
 Procedure TProjectAssistantForm.RecordCurrentTurn(Const ErrorText: String);
 Var
   Turn: TConversationTurn;
@@ -2653,8 +2675,14 @@ Begin
   EnsureConversationStore;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
+  If (Not FUseCodex) And Assigned(AssistantClient) Then
+    Begin
+      Turn.MessagesJson := AssistantClient.ExportUnstoredMessagesJson;
+      Turn.AttachmentsJson := AssistantClient.LastUserAttachmentsJson;
+    End;
   If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
-    (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') Then
+    (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') And
+    (Trim(Turn.AttachmentsJson) = '') Then
     Exit;
   DurationMs := CurrentStreamDurationMs;
   Turn.Id := NewConversationTurnId;
@@ -2663,6 +2691,8 @@ Begin
     Turn.Prompt := FLiveUser
   Else
     Turn.Prompt := FDisplayUser;
+  If Assigned(FTrace) And (Trim(Turn.AttachmentsJson) <> '') Then
+    ApplyTurnAttachmentsToTrace(FTrace, Turn.AttachmentsJson);
   If Assigned(FTrace) And (FTrace.Count > 0) Then
     Begin
       Turn.TraceJson := FTrace.SaveToJson;
@@ -2712,6 +2742,8 @@ Begin
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
       FTurnRecorded := True;
+      If (Not FUseCodex) And Assigned(AssistantClient) Then
+        AssistantClient.NoteMessagesStored;
       RefreshHistoryCombo;
     End
   Else

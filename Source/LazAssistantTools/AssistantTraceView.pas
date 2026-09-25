@@ -29,6 +29,7 @@ Type
     Procedure SetShowTools(Value: Boolean);
     Procedure AddTrace(Trace: TAssistantTrace);
     Procedure LoadSaved(Store: TAssistantConversationStore);
+    Procedure ApplyTurnImages(Trace: TAssistantTrace; Const Turn: TConversationTurn; Const StoreDirectory: String);
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -47,6 +48,9 @@ Type
 Implementation
 
 {$R *.lfm}
+
+Uses
+  AssistantImages;
 Constructor TAssistantTraceView.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
@@ -143,6 +147,39 @@ Begin
   FSurface.EndDocument;
 End;
 
+Procedure TAssistantTraceView.ApplyTurnImages(Trace: TAssistantTrace; Const Turn: TConversationTurn;
+  Const StoreDirectory: String);
+Var
+  Refs: TAssistantImageRefArray;
+  TraceRefs: TTraceImageRefArray;
+  I, J: Integer;
+  Block: TTraceBlock;
+Begin
+  If Not Assigned(Trace) Then Exit;
+  If ParseAssistantImageRefs(Turn.AttachmentsJson, Refs) And (Length(Refs) > 0) Then
+    Begin
+      SetLength(TraceRefs, Length(Refs));
+      For I := 0 To High(Refs) Do
+        Begin
+          TraceRefs[I].Id := Refs[I].Id;
+          TraceRefs[I].Name := Refs[I].Name;
+          TraceRefs[I].DisplayPath := Refs[I].DisplayPath;
+          TraceRefs[I].Width := Refs[I].Width;
+          TraceRefs[I].Height := Refs[I].Height;
+          TraceRefs[I].Missing := False;
+        End;
+      Trace.KeepUserImageRefs(TraceRefs);
+    End;
+  For I := 0 To Trace.Count - 1 Do
+    Begin
+      Block := Trace[I];
+      If Not Assigned(Block) Or (Block.Kind <> tbkUser) Then Continue;
+      For J := 0 To High(Block.ImageRefs) Do
+        Block.ImageRefs[J].Missing := Not AssistantImageDisplayPresent(StoreDirectory, Block.ImageRefs[J].Id,
+          Block.ImageRefs[J].DisplayPath);
+    End;
+End;
+
 Procedure TAssistantTraceView.LoadSaved(Store: TAssistantConversationStore);
 Var
   Turn: TConversationTurn;
@@ -184,6 +221,7 @@ Begin
             If Turn.ErrorText <> '' Then Trace.AddNote('**Error:** ' + Turn.ErrorText);
           End;
         If Turn.DurationMs > 0 Then Trace.ApplyWorkedFooter(Turn.DurationMs);
+        ApplyTurnImages(Trace, Turn, Store.AssistantDirectory);
         { Legacy generated IDs must also be stable across history reloads. New
           archives carry block IDs that survive the live-to-saved transition. }
         If Pos('"id"', Turn.TraceJson) = 0 Then
@@ -203,6 +241,8 @@ Var
   ChangedConversation: Boolean;
 Begin
   LoadSaved(Store);
+  If IncludeLive And Assigned(Live) And Assigned(Store) Then
+    ApplyTurnImages(Live, Default(TConversationTurn), Store.AssistantDirectory);
   ChangedConversation := ActiveKey <> PendingKey;
   FBoundTrace := Nil;
   If IncludeLive Then FBoundTrace := Live;

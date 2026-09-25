@@ -555,6 +555,8 @@ Var
   Selected: Boolean;
   Style: TStyledBoxStyle;
   SectionHeight: Int64;
+  TileH, RowH, TileIndex, TileTop, TileLeft, TileWidth: Integer;
+  TileRect: TRect;
 Begin
   FPaintRevision := FLayoutRevision;
   If FLayout.TotalHeight = 0 Then
@@ -571,7 +573,10 @@ Begin
   While (I >= 0) And (I < FLayout.Count) And (OriginY + FLayout.Top(I) < Clip.Bottom) Do
     Begin
       Fragment := FLayout[I].Fragment;
-      If FLayout[I].Visible And Assigned(Fragment) Then
+      TileH := 0;
+      If FLayout[I].Kind = tbkUser Then
+        TileH := Length(FLayout[I].MissingImages) * MissingImageTileHeight(Font.PixelsPerInch);
+      If FLayout[I].Visible And (Assigned(Fragment) Or (TileH > 0)) Then
         Begin
           If FLayout[I].Kind In [tbkUser, tbkAnswer] Then
             Begin
@@ -588,23 +593,52 @@ Begin
                   Style.Background := $F7F7F7;
                   Style.BorderColor := $E4E4E4;
                 End;
-              SectionHeight := Fragment.Height + FLayout[I].Padding * 2;
+              SectionHeight := TileH + FLayout[I].Padding * 2;
+              If Assigned(Fragment) Then SectionHeight := SectionHeight + Fragment.Height;
               Renderer.DrawBoxFrame(GetStyledBoxGeometry(OriginX + FLayout[I].Left,
                 OriginY + FLayout.Top(I), FLayout[I].OuterWidth, SectionHeight, Style), Style, Clip);
             End;
+          If TileH > 0 Then
+            Begin
+              RowH := MissingImageTileHeight(Font.PixelsPerInch);
+              TileLeft := OriginX + FLayout[I].Left + FLayout[I].Padding;
+              TileWidth := FLayout[I].OuterWidth - FLayout[I].Padding * 2;
+              If TileWidth < 48 Then TileWidth := 48;
+              TileTop := Integer(OriginY + FLayout.Top(I) + FLayout[I].Padding);
+              BufferCanvas.Font.Assign(Font);
+              BufferCanvas.Font.Color := clGrayText;
+              BufferCanvas.Brush.Style := bsSolid;
+              BufferCanvas.Brush.Color := $F4F4F4;
+              BufferCanvas.Pen.Color := $C8C8C8;
+              For TileIndex := 0 To High(FLayout[I].MissingImages) Do
+                Begin
+                  TileRect := Rect(TileLeft, TileTop + 2, TileLeft + TileWidth, TileTop + RowH - 2);
+                  BufferCanvas.Rectangle(TileRect);
+                  BufferCanvas.Brush.Style := bsClear;
+                  BufferCanvas.TextRect(TileRect, TileRect.Left + 6, TileRect.Top + 4,
+                    MissingImageTileCaption(FLayout[I].MissingImages[TileIndex]));
+                  BufferCanvas.Brush.Style := bsSolid;
+                  Inc(TileTop, RowH);
+                End;
+            End;
+          If Assigned(Fragment) Then
+            Begin
           Selected := (A >= 0) And (B >= 0) And (I >= A) And (I <= B) And (Compare(First, Last) <> 0);
           StartPos := StyledPosition(0, 0);
           EndPos := Fragment.Document.EndPosition;
           If I = A Then StartPos := Fragment.Document.Clamp(First.Text);
           If I = B Then EndPos := Fragment.Document.Clamp(Last.Text);
-          Fragment.Layout.Paint(Clip, OriginX + FLayout[I].Left + FLayout[I].Padding, OriginY + FLayout.Top(I) + FLayout[I].Padding, StartPos, EndPos, Selected, False);
+          Fragment.Layout.Paint(Clip, OriginX + FLayout[I].Left + FLayout[I].Padding,
+            OriginY + FLayout.Top(I) + FLayout[I].Padding + TileH, StartPos, EndPos, Selected, False);
+            End;
           If Focused And (FocusedKey = FLayout[I].Key) Then
             Begin
               Style := DefaultStyledBoxStyle;
               Style.BorderWidth := 1;
               Style.BorderColor := clHighlight;
               If FLayout[I].Kind In [tbkUser, tbkAnswer] Then Style.CornerRadius := Scale96ToFont(12);
-              SectionHeight := Fragment.Height + FLayout[I].Padding * 2;
+              SectionHeight := TileH + FLayout[I].Padding * 2;
+              If Assigned(Fragment) Then SectionHeight := SectionHeight + Fragment.Height;
               Renderer.DrawBoxFrame(GetStyledBoxGeometry(OriginX + FLayout[I].Left,
                 OriginY + FLayout.Top(I), FLayout[I].OuterWidth, SectionHeight, Style), Style, Clip);
             End;
@@ -628,6 +662,13 @@ Begin
   Fragment := FLayout[I].Fragment;
   If Not Assigned(Fragment) Then Exit;
   LocalY := Int64(Y) - ViewRect.Top + ScrollTop - FLayout.Top(I) - FLayout[I].Padding;
+  If FLayout[I].Kind = tbkUser Then
+    LocalY := LocalY - Int64(Length(FLayout[I].MissingImages)) * MissingImageTileHeight(Font.PixelsPerInch);
+  If LocalY < 0 Then
+    Begin
+      Result.Text := StyledPosition(0, 0);
+      Exit;
+    End;
   P := ItemAtHeight(Fragment.Layout.Heights, LocalY);
   Result.Text := StyledPosition(P, 0);
   If Not Assigned(Fragment.Layout.Paragraphs[P]) Then Exit;

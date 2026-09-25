@@ -64,6 +64,8 @@ Type
     EventsFile: String;
     { JSON array of this turn's model messages. Empty on older lines. }
     MessagesJson: String;
+    { JSON array of image refs. Empty on older lines. No pixel bytes. }
+    AttachmentsJson: String;
   End;
 
   TAssistantConversationStore = Class
@@ -88,6 +90,7 @@ Type
     Procedure RewriteIndexFile;
     Function ArchivePathsForId(Const ArchiveId: String; Out ConvPath, IdxPath: String): Boolean;
     Function TitleFromIndexFile(Const IdxFile: String): String;
+    Procedure CollectConversationFiles(Files: TStrings);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -118,6 +121,8 @@ Type
     Function ActivateArchive(Const ArchiveId: String): Boolean;
     Function DeleteConversation(Const ArchiveId: String): Boolean; { '' deletes current }
     Function HistoryTitleForCurrent: String;
+    { Directory that contains conversation.jsonl, including a package target store. }
+    Function AssistantDirectory: String;
     Property ProjectRoot: String Read FProjectRoot;
     Property TargetStoreKey: String Read FTargetStoreKey;
     Property LastError: String Read FLastError;
@@ -136,7 +141,8 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths, AssistantWorkTarget;
+  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths,
+  AssistantWorkTarget, AssistantImages;
 
 Const
   PreviewMaxChars = 160;
@@ -254,6 +260,34 @@ Begin
     End;
 End;
 
+Function TAssistantConversationStore.AssistantDirectory: String;
+Begin
+  Result := AssistantDir;
+End;
+
+Procedure TAssistantConversationStore.CollectConversationFiles(Files: TStrings);
+Var
+  Rec: TSearchRec;
+  Code: Integer;
+Begin
+  If Not Assigned(Files) Then Exit;
+  If (ConversationPath <> '') And FileExistsUTF8(ConversationPath) And Not FileIsSymlink(ConversationPath) Then
+    Files.Add(ConversationPath);
+  If AssistantDir = '' Then Exit;
+  Code := FindFirstUTF8(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix, faAnyFile, Rec);
+  Try
+    While Code = 0 Do
+      Begin
+        If (Pos('.index.', LowerCase(Rec.Name)) = 0) And ((Rec.Attr And faDirectory) = 0) And
+          (Not FileIsSymlink(AssistantDir + Rec.Name)) Then
+          Files.Add(AssistantDir + Rec.Name);
+        Code := FindNextUTF8(Rec);
+      End;
+  Finally
+    FindCloseUTF8(Rec);
+  End;
+End;
+
 Function TAssistantConversationStore.ConversationPath: String;
 Begin
   Result := AssistantDir + ConversationFileName;
@@ -340,6 +374,8 @@ Begin
     Result := Result + ',"messages":' + Trim(Turn.MessagesJson);
   If Trim(Turn.TraceJson) <> '' Then
     Result := Result + ',"trace":' + Turn.TraceJson;
+  If (Trim(Turn.AttachmentsJson) <> '') And (Trim(Turn.AttachmentsJson)[1] = '[') Then
+    Result := Result + ',"attachments":' + Trim(Turn.AttachmentsJson);
   Result := Result + '}';
 End;
 
@@ -367,7 +403,10 @@ Begin
   Result.Mode := Turn.Mode;
   Result.CreatedAt := Turn.CreatedAt;
   Result.DurationMs := Turn.DurationMs;
-  Result.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars);
+  If Trim(Turn.Prompt) <> '' Then
+    Result.PromptPreview := PreviewOf(Turn.Prompt, PreviewMaxChars)
+  Else
+    Result.PromptPreview := PreviewOf(AssistantImageHistoryPreview(Turn.AttachmentsJson), PreviewMaxChars);
   Result.ResponsePreview := PreviewOf(Turn.Response, PreviewMaxChars);
   Result.HasThinking := Turn.Thinking <> '';
   Result.ErrorText := PreviewOf(Turn.ErrorText, 80);
@@ -400,6 +439,7 @@ Begin
   Turn.TraceJson := '';
   Turn.EventsFile := '';
   Turn.MessagesJson := '';
+  Turn.AttachmentsJson := '';
   If Trim(Line) = '' Then
     Exit;
   Data := Nil;
@@ -429,6 +469,8 @@ Begin
       Turn.EventsFile := Obj.Get('events_file', '');
       If Obj.Find('messages') Is TJSONArray Then
         Turn.MessagesJson := Obj.Find('messages').AsJSON;
+      If Obj.Find('attachments') Is TJSONArray Then
+        Turn.AttachmentsJson := Obj.Find('attachments').AsJSON;
       If Assigned(Obj.Find('trace')) Then
         Turn.TraceJson := Obj.Find('trace').AsJSON;
       Result := Turn.Id <> '';
@@ -639,6 +681,7 @@ Begin
   Turn.TraceJson := '';
   Turn.EventsFile := '';
   Turn.MessagesJson := '';
+  Turn.AttachmentsJson := '';
   If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
       FLastError := 'Turn index out of range.';
@@ -930,7 +973,7 @@ End;
 
 Function TAssistantConversationStore.ArchiveCurrent(Out ArchiveId: String): Boolean;
 Var
-  ConvPath, IdxPath, ArchConv, ArchIdx: String;
+  ConvPath, IdxPath, ArchConv, ArchIdx, ImageError: String;
 Begin
   Result := False;
   ArchiveId := '';
@@ -970,6 +1013,15 @@ Begin
     Begin
       If Not RenameFileUTF8(IdxPath, ArchIdx) Then
         WorkflowLogger.Warning('AssistantConversation', 'Could not archive index for ' + ArchiveId);
+    End;
+  If Not PreserveAssistantImages(AssistantDir, ArchiveId, ArchConv, ImageError) Then
+    Begin
+      If FileExistsUTF8(ArchConv) Then RenameFileUTF8(ArchConv, ConvPath);
+      If (ArchIdx <> '') And FileExistsUTF8(ArchIdx) And (Not FileExistsUTF8(IdxPath)) Then
+        RenameFileUTF8(ArchIdx, IdxPath);
+      FLastError := ImageError;
+      ArchiveId := '';
+      Exit;
     End;
   ClearAll;
   FLoaded := False;
@@ -1106,7 +1158,7 @@ End;
 
 Function TAssistantConversationStore.ActivateArchive(Const ArchiveId: String): Boolean;
 Var
-  ArchConv, ArchIdx, CurConv, CurIdx, TmpId, TmpConv, TmpIdx: String;
+  ArchConv, ArchIdx, CurConv, CurIdx, TmpId, TmpConv, TmpIdx, ImageError: String;
   ParkedConv, ParkedIdx: Boolean;
 Begin
   Result := False;
@@ -1162,6 +1214,13 @@ Begin
       If FileExistsUTF8(CurIdx) Then
         If RenameFileUTF8(CurIdx, TmpIdx) Then
           ParkedIdx := True;
+      If ParkedConv And (Not PreserveAssistantImages(AssistantDir, TmpId, TmpConv, ImageError)) Then
+        Begin
+          If ParkedConv Then RenameFileUTF8(TmpConv, CurConv);
+          If ParkedIdx Then RenameFileUTF8(TmpIdx, CurIdx);
+          FLastError := ImageError;
+          Exit;
+        End;
     End;
 
   If Not RenameFileUTF8(ArchConv, CurConv) Then
@@ -1179,12 +1238,15 @@ Begin
   ClearAll;
   FLoaded := False;
   Result := Load;
+  If Result And (Not RestoreAssistantImages(AssistantDir, ArchiveId, CurConv, ImageError)) Then
+    WorkflowLogger.Warning('AssistantConversation', 'Could not restore images for ' + ArchiveId + ': ' + ImageError);
   WorkflowLogger.Info('AssistantConversation', 'Activated archive ' + ArchiveId);
 End;
 
 Function TAssistantConversationStore.DeleteConversation(Const ArchiveId: String): Boolean;
 Var
-  ConvPath, IdxPath: String;
+  ConvPath, IdxPath, ImageError: String;
+  Files: TStringList;
 Begin
   Result := False;
   FLastError := '';
@@ -1201,24 +1263,40 @@ Begin
         DeleteFileUTF8(IndexPath);
       ClearAll;
       FLoaded := True;
-      Result := True;
-      WorkflowLogger.Info('AssistantConversation', 'Deleted current conversation');
-      Exit;
-    End;
-  If Not ArchivePathsForId(ArchiveId, ConvPath, IdxPath) Then
-    Exit;
-  If FileExistsUTF8(ConvPath) Then
+    End
+  Else
     Begin
-      If Not DeleteFileUTF8(ConvPath) Then
+      If Not ArchivePathsForId(ArchiveId, ConvPath, IdxPath) Then
+        Exit;
+      If FileExistsUTF8(ConvPath) Then
         Begin
-          FLastError := 'Could not delete ' + ConvPath;
+          If Not DeleteFileUTF8(ConvPath) Then
+            Begin
+              FLastError := 'Could not delete ' + ConvPath;
+              Exit;
+            End;
+        End;
+      If FileExistsUTF8(IdxPath) Then
+        DeleteFileUTF8(IdxPath);
+      If Not DeleteAssistantImageArchive(AssistantDir, ArchiveId, ImageError) Then
+        Begin
+          FLastError := ImageError;
           Exit;
         End;
     End;
-  If FileExistsUTF8(IdxPath) Then
-    DeleteFileUTF8(IdxPath);
+  Files := TStringList.Create;
+  Try
+    CollectConversationFiles(Files);
+    If Not ReleaseUnreferencedAssistantImages(AssistantDir, Files, ImageError) Then
+      Begin
+        FLastError := ImageError;
+        Exit;
+      End;
+  Finally
+    Files.Free;
+  End;
   Result := True;
-  WorkflowLogger.Info('AssistantConversation', 'Deleted archive ' + ArchiveId);
+  WorkflowLogger.Info('AssistantConversation', 'Deleted conversation ' + ArchiveId);
 End;
 
 Initialization

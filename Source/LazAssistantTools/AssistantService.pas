@@ -16,7 +16,7 @@ Interface
 
 Uses
   Classes, SysUtils, Contnrs, WorkflowLog, WorkflowEvents, AssistantConfig, AssistantConversation,
-  AssistantProtocol, AssistantEvents, AssistantModelProvider;
+  AssistantProtocol, AssistantEvents, AssistantModelProvider, AssistantImages;
 
 Type
   TAssistantMessageRole = (amrSystem, amrUser, amrAssistant, amrTool);
@@ -32,6 +32,8 @@ Type
     { Cached JSON-escaped fields so request rebuild is not O(n) re-escape every send. }
     ContentEscaped: String;
     ToolCallIdEscaped: String;
+    { Image refs for amrUser only. Paths, never pixel bytes. }
+    ImageRefs: TAssistantImageRefArray;
   End;
 
   TAssistantToolCall = Record
@@ -82,6 +84,7 @@ Type
     FIsSubagent: Boolean;
     FSubagentKindName: String;
     FLastEventsFile: String;
+    FStoredMessageCount: Integer;
     FSubagents: TObjectList;
     FSubagentsLock: TRTLCriticalSection;
     FDeferredSubagents: TFPList;
@@ -113,6 +116,13 @@ Type
     Procedure SetActiveMode(Mode: TAssistantMode);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
+    { User turn entry. Image refs are not accepted on tool, steer-note, or subagent prompts. }
+    Procedure AddUserMessage(Const Content: String; Const ImageRefs: TAssistantImageRefArray);
+    Function ExportUnstoredMessagesJson: String;
+    Procedure RestoreMessagesJson(Const JsonText: String);
+    Procedure NoteMessagesStored;
+    Function LastUserAttachmentsJson: String;
+    Procedure EnsureLastUserImageRefs(Const AttachmentsJson: String);
     Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String;
       Const ResponsesOutputJson: String = '');
     Procedure AddToolResult(Const ToolCallId, Content: String);
@@ -1056,6 +1066,7 @@ End;
 Procedure TAssistantService.ClearHistory;
 Begin
   SetLength(FMessages, 0);
+  FStoredMessageCount := 0;
   FLastTrimNotice := '';
 End;
 
@@ -1174,6 +1185,10 @@ Begin
   For I := FromIndex To N - Count - 1 Do
     FMessages[I] := FMessages[I + Count];
   SetLength(FMessages, N - Count);
+  If FromIndex < FStoredMessageCount Then
+    FStoredMessageCount := FStoredMessageCount - Count;
+  If FStoredMessageCount < 0 Then FStoredMessageCount := 0;
+  If FStoredMessageCount > Length(FMessages) Then FStoredMessageCount := Length(FMessages);
 End;
 
 Procedure TAssistantService.TrimMessagesForBudget;
@@ -1328,6 +1343,7 @@ Begin
           FMessages[0].ToolCallId := '';
           FMessages[0].ToolCallsJson := '';
           FMessages[0].ResponsesOutputJson := '';
+          SetLength(FMessages[0].ImageRefs, 0);
           InvalidateMessageEscape(FMessages[0]);
         End
       Else
@@ -1339,6 +1355,163 @@ Begin
         Format('Trimmed chat context to ~%d tokens (budget %d, messages=%d)',
           [EstimatePromptTokens, Budget, Length(FMessages)]));
     End;
+End;
+
+Procedure TAssistantService.AddUserMessage(Const Content: String; Const ImageRefs: TAssistantImageRefArray);
+Begin
+  AddMessage(amrUser, Content);
+  If Length(FMessages) < 1 Then Exit;
+  FMessages[High(FMessages)].ImageRefs := LimitAssistantImageRefs(ImageRefs);
+End;
+
+Function TAssistantService.ExportUnstoredMessagesJson: String;
+Var
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  Node: TJSONData;
+  I: Integer;
+  RefsJson: String;
+Begin
+  Result := '';
+  If FStoredMessageCount < 0 Then FStoredMessageCount := 0;
+  If FStoredMessageCount > Length(FMessages) Then FStoredMessageCount := Length(FMessages);
+  If FStoredMessageCount >= Length(FMessages) Then Exit;
+  Arr := TJSONArray.Create;
+  Try
+    For I := FStoredMessageCount To High(FMessages) Do
+      Begin
+        Obj := TJSONObject.Create;
+        Obj.Add('role', RoleToJson(FMessages[I].Role));
+        Obj.Add('content', FMessages[I].Content);
+        If FMessages[I].ToolCallId <> '' Then Obj.Add('tool_call_id', FMessages[I].ToolCallId);
+        If Trim(FMessages[I].ToolCallsJson) <> '' Then
+          Begin
+            Node := Nil;
+            Try
+              Node := GetJSON(FMessages[I].ToolCallsJson);
+            Except
+              Node := Nil;
+            End;
+            If Assigned(Node) Then Obj.Add('tool_calls', Node) Else Node.Free;
+          End;
+        If Trim(FMessages[I].ResponsesOutputJson) <> '' Then
+          Begin
+            Node := Nil;
+            Try
+              Node := GetJSON(FMessages[I].ResponsesOutputJson);
+            Except
+              Node := Nil;
+            End;
+            If Assigned(Node) Then Obj.Add('responses_output', Node);
+          End;
+        If (FMessages[I].Role = amrUser) And (Length(FMessages[I].ImageRefs) > 0) Then
+          Begin
+            RefsJson := AssistantImageRefsToJson(FMessages[I].ImageRefs);
+            If RefsJson <> '' Then
+              Begin
+                Node := Nil;
+                Try
+                  Node := GetJSON(RefsJson);
+                Except
+                  Node := Nil;
+                End;
+                If Assigned(Node) Then Obj.Add('attachments', Node);
+              End;
+          End;
+        Arr.Add(Obj);
+      End;
+    If Arr.Count > 0 Then Result := Arr.AsJSON;
+  Finally
+    Arr.Free;
+  End;
+End;
+
+Procedure TAssistantService.RestoreMessagesJson(Const JsonText: String);
+Var
+  Data: TJSONData;
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  I: Integer;
+  RoleName, Content, ToolId, ToolCalls, Responses: String;
+  Role: TAssistantMessageRole;
+  Refs: TAssistantImageRefArray;
+Begin
+  If Trim(JsonText) = '' Then Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(JsonText);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONArray) Then Exit;
+    Arr := TJSONArray(Data);
+    For I := 0 To Arr.Count - 1 Do
+      If Arr.Items[I] Is TJSONObject Then
+        Begin
+          Obj := TJSONObject(Arr.Items[I]);
+          RoleName := Obj.Get('role', 'user');
+          Content := Obj.Get('content', '');
+          ToolId := Obj.Get('tool_call_id', '');
+          ToolCalls := '';
+          Responses := '';
+          If Assigned(Obj.Find('tool_calls')) Then ToolCalls := Obj.Find('tool_calls').AsJSON;
+          If Assigned(Obj.Find('responses_output')) Then Responses := Obj.Find('responses_output').AsJSON;
+          If RoleName = 'assistant' Then Role := amrAssistant
+          Else If RoleName = 'tool' Then Role := amrTool
+          Else If RoleName = 'system' Then Role := amrSystem
+          Else Role := amrUser;
+          If Role = amrTool Then
+            AddToolResult(ToolId, Content)
+          Else If (Role = amrAssistant) And (ToolCalls <> '') Then
+            AddAssistantToolCalls(Content, ToolCalls, Responses)
+          Else If Role = amrUser Then
+            Begin
+              SetLength(Refs, 0);
+              If Assigned(Obj.Find('attachments')) Then
+                ParseAssistantImageRefs(Obj.Find('attachments').AsJSON, Refs);
+              AddUserMessage(Content, Refs);
+            End
+          Else
+            AddMessage(Role, Content);
+        End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure TAssistantService.NoteMessagesStored;
+Begin
+  FStoredMessageCount := Length(FMessages);
+End;
+
+Function TAssistantService.LastUserAttachmentsJson: String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := High(FMessages) DownTo 0 Do
+    If FMessages[I].Role = amrUser Then
+      Begin
+        Result := AssistantImageRefsToJson(FMessages[I].ImageRefs);
+        Exit;
+      End;
+End;
+
+Procedure TAssistantService.EnsureLastUserImageRefs(Const AttachmentsJson: String);
+Var
+  I: Integer;
+  Refs: TAssistantImageRefArray;
+Begin
+  If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Or (Length(Refs) = 0) Then Exit;
+  For I := High(FMessages) DownTo 0 Do
+    If FMessages[I].Role = amrUser Then
+      Begin
+        If Length(FMessages[I].ImageRefs) = 0 Then
+          FMessages[I].ImageRefs := LimitAssistantImageRefs(Refs);
+        Exit;
+      End;
+  AddUserMessage('', Refs);
 End;
 
 Procedure TAssistantService.AddMessage(Role: TAssistantMessageRole; Const Content: String);
