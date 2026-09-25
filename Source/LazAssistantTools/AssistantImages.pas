@@ -37,6 +37,7 @@ Const
   AssistantImageContextTokens = 1100;
   AssistantImagesFolderName = 'images';
   AssistantImageLookText = 'Look at the attached image(s).';
+  AssistantImageOmittedPrefix = '[Image omitted from model context:';
   AssistantImageSystemSentence =
     'User messages may include images; describe only what is visible; do not invent image contents; do not fetch URLs.';
   { This client's turn/start input is a text item only. Not a guessed image field. }
@@ -2969,7 +2970,7 @@ End;
 
 Function AssistantImageOmittedNote(Const Ref: TAssistantImageRef): String;
 Begin
-  Result := '[Image omitted from model context: ' + AssistantImageFileLabel(Ref);
+  Result := AssistantImageOmittedPrefix + ' ' + AssistantImageFileLabel(Ref);
   If (Ref.Width > 0) And (Ref.Height > 0) Then
     Result := Result + ', ' + IntToStr(Ref.Width) + 'x' + IntToStr(Ref.Height);
   Result := Result + ']';

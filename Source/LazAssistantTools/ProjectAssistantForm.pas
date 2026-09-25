@@ -5048,6 +5048,8 @@ Begin
     Format('  Tool schemas    ~%d tokens', [Info.ToolsTokens]) + LineEnding +
     Format('  History         ~%d tokens  (%d messages)', [Info.HistoryTokens, Info.MessageCount]) +
     LineEnding +
+    Format('  Images          ~%d tokens  (%d still on the next request)', [Info.ImageTokens, Info.ImageCount]) +
+    LineEnding +
     Format('  Total           ~%d / %d', [Info.TotalTokens, Info.LimitTokens]);
   If Assigned(AssistantClient) And (AssistantClient.LastTrimNotice <> '') Then
     Body := Body + LineEnding + LineEnding + AssistantClient.LastTrimNotice;

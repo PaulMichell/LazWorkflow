@@ -47,6 +47,8 @@ Type
     SystemTokens: Integer;
     ToolsTokens: Integer;
     HistoryTokens: Integer;
+    ImageTokens: Integer;
+    ImageCount: Integer;
     TotalTokens: Integer;
     LimitTokens: Integer;
     MessageCount: Integer;
@@ -98,7 +100,9 @@ Type
     Function EscapedToolCallId(Var Msg: TAssistantMessage): String;
     Function ToolsJsonCached: String;
     Function MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
+    Function CountRequestImages: Integer;
     Function EstimatePromptTokens: Integer;
+    Procedure OmitMessageImages(Var Msg: TAssistantMessage);
     Procedure InvalidateMessageEscape(Var Msg: TAssistantMessage);
     Procedure TruncateMessageContent(Var Msg: TAssistantMessage; MaxChars: Integer; Const LabelText: String);
     Procedure DropMessageRange(FromIndex, Count: Integer);
@@ -1106,9 +1110,19 @@ End;
 
 Function TAssistantService.MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
 Begin
+  { Text only. Image refs are paths; file bytes and data URIs are not in the message. }
   Result := Length(Msg.Content) + Length(Msg.ToolCallsJson) + Length(Msg.ToolCallId);
   If Length(Msg.ResponsesOutputJson) > Result Then
     Result := Length(Msg.ResponsesOutputJson);
+End;
+
+Function TAssistantService.CountRequestImages: Integer;
+Var
+  I: Integer;
+Begin
+  Result := 0;
+  For I := 0 To High(FMessages) Do
+    Inc(Result, Length(FMessages[I].ImageRefs));
 End;
 
 Function TAssistantService.EstimatePromptTokens: Integer;
@@ -1118,8 +1132,9 @@ Begin
   Chars := Length(FSystemPrompt) + Length(ToolsJsonCached) + 256;
   For I := 0 To High(FMessages) Do
     Inc(Chars, MessagePayloadChars(FMessages[I]));
-  { ~4 characters per token is a common rough estimate for mixed code/text. }
-  Result := (Chars + 3) Div 4;
+  { ~4 characters per token is a common rough estimate for mixed code/text.
+    Each image still on the next request adds a flat token charge, not its bytes. }
+  Result := (Chars + 3) Div 4 + CountRequestImages * AssistantImageContextTokens;
   If Result < 1 Then
     Result := 1;
 End;
@@ -1148,7 +1163,9 @@ Begin
   Result.SystemTokens := TokenEstimateFromChars(SysChars);
   Result.ToolsTokens := TokenEstimateFromChars(ToolChars);
   Result.HistoryTokens := TokenEstimateFromChars(HistChars);
-  Result.TotalTokens := TokenEstimateFromChars(SysChars + ToolChars + HistChars);
+  Result.ImageCount := CountRequestImages;
+  Result.ImageTokens := Result.ImageCount * AssistantImageContextTokens;
+  Result.TotalTokens := TokenEstimateFromChars(SysChars + ToolChars + HistChars) + Result.ImageTokens;
   If Result.TotalTokens < 1 Then
     Result.TotalTokens := 1;
   Result.LimitTokens := FMaxPromptTokens;
@@ -1197,6 +1214,27 @@ Begin
   If FStoredMessageCount > Length(FMessages) Then FStoredMessageCount := Length(FMessages);
 End;
 
+Procedure TAssistantService.OmitMessageImages(Var Msg: TAssistantMessage);
+Var
+  I: Integer;
+  Note: String;
+Begin
+  If Length(Msg.ImageRefs) = 0 Then Exit;
+  Note := '';
+  For I := 0 To High(Msg.ImageRefs) Do
+    Begin
+      If Note <> '' Then Note := Note + LineEnding;
+      Note := Note + AssistantImageOmittedNote(Msg.ImageRefs[I]);
+    End;
+  { Display files stay in the store. Clearing the refs keeps them off the next request. }
+  SetLength(Msg.ImageRefs, 0);
+  If Trim(Msg.Content) = '' Then
+    Msg.Content := Note
+  Else
+    Msg.Content := Msg.Content + LineEnding + Note;
+  InvalidateMessageEscape(Msg);
+End;
+
 Procedure TAssistantService.TrimMessagesForBudget;
 Const
   MinMessagesToKeep = 6;
@@ -1235,6 +1273,11 @@ Begin
             End;
           Inc(I);
           Continue;
+        End;
+      If Length(FMessages[I].ImageRefs) > 0 Then
+        Begin
+          OmitMessageImages(FMessages[I]);
+          Changed := True;
         End;
       If FMessages[I].Role = amrTool Then
         Begin
@@ -1499,7 +1542,7 @@ Begin
           Else If Role = amrUser Then
             Begin
               SetLength(Refs, 0);
-              If Assigned(Obj.Find('attachments')) Then
+              If (Pos(AssistantImageOmittedPrefix, Content) < 1) And Assigned(Obj.Find('attachments')) Then
                 ParseAssistantImageRefs(Obj.Find('attachments').AsJSON, Refs);
               AddUserMessage(Content, Refs);
             End
@@ -1538,6 +1581,7 @@ Begin
   For I := High(FMessages) DownTo 0 Do
     If FMessages[I].Role = amrUser Then
       Begin
+        If Pos(AssistantImageOmittedPrefix, FMessages[I].Content) > 0 Then Exit;
         If Length(FMessages[I].ImageRefs) = 0 Then
           FMessages[I].ImageRefs := LimitAssistantImageRefs(Refs);
         Exit;
