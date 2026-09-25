@@ -17,12 +17,14 @@ Procedure Register;
 Implementation
 
 Uses
-  StatusFooterFrame, SpellMemo, SpellCheckerSettingsFrame, SpellCheckerConfig, WorkflowLog;
+  LazIDEIntf, StatusFooterFrame, SpellMemo, SpellCheckerSettingsFrame, SpellCheckerConfig, WorkflowLog;
 
 Procedure Register;
 Begin
   { Register once here. Consumer packages must not RegisterNoIcon these classes. }
   RegisterNoIcon([TStatusFooterFrame, TSpellMemo, TSpellCheckerSettingsFrame]);
+  If Assigned(LazarusIDE) Then
+    InitializeSpellCheckerStorage(LazarusIDE.GetPrimaryConfigPath);
   { Start Hunspell as soon as the IDE loads this package so first form open does not wait. }
   If Assigned(WorkflowSpellConfig) Then
     Begin

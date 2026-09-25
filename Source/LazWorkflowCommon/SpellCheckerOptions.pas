@@ -42,6 +42,8 @@ Type
     Procedure Add(Const WordText: String);
     Procedure Remove(Const WordText: String);
     Procedure LoadFromFile(Const FileName: String);
+    Procedure ReplaceFromStrings(Words: TStrings);
+    Procedure CopyToStrings(Words: TStrings);
     Procedure SaveToFile(Const FileName: String); Overload;
     Function SaveToFile(Const FileName: String; Out ErrorText: String): Boolean; Overload;
     Function Count: Integer;
@@ -147,6 +149,23 @@ Begin
   Clean := Trim(WordText);
   If Clean <> '' Then
     FList.Add(Clean);
+End;
+
+Procedure TSpellWordSet.ReplaceFromStrings(Words: TStrings);
+Var
+  I: Integer;
+Begin
+  FList.Clear;
+  If Not Assigned(Words) Then
+    Exit;
+  For I := 0 To Words.Count - 1 Do
+    Add(Words[I]);
+End;
+
+Procedure TSpellWordSet.CopyToStrings(Words: TStrings);
+Begin
+  If Assigned(Words) Then
+    Words.Assign(FList);
 End;
 
 Procedure TSpellWordSet.LoadFromFile(Const FileName: String);

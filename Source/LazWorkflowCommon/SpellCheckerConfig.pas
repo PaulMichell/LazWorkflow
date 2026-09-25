@@ -80,7 +80,7 @@ Procedure InitializeSpellCheckerStorage(Const ConfigDirectory: String);
 Implementation
 
 Uses
-  Laz2_XMLCfg, LazFileUtils, SpellEngineHunspell, SpellEngineAspell, WorkflowLog;
+  LazFileUtils, fpjson, WorkflowSettings, SpellEngineHunspell, SpellEngineAspell, WorkflowLog;
 
 Type
   TSpellPreloadThread = Class(TThread)
@@ -344,27 +344,75 @@ Begin
   FStorageFileName := FileName;
 End;
 
+Procedure ReadPersonalWords(Section: TJSONObject; Words: TSpellWordSet);
+Var
+  Node, Item: TJSONData;
+  List: TStringList;
+  I: Integer;
+Begin
+  List := TStringList.Create;
+  Try
+    Node := Nil;
+    If Assigned(Section) Then
+      Node := Section.Find('personal_words');
+    If Node Is TJSONArray Then
+      For I := 0 To TJSONArray(Node).Count - 1 Do
+        Begin
+          Item := TJSONArray(Node).Items[I];
+          If Item.JSONType = jtString Then
+            List.Add(Item.AsString);
+        End;
+    Words.ReplaceFromStrings(List);
+  Finally
+    List.Free;
+  End;
+End;
+
+Procedure WritePersonalWords(Section: TJSONObject; Words: TSpellWordSet);
+Var
+  List: TStringList;
+  Arr: TJSONArray;
+  I: Integer;
+Begin
+  List := TStringList.Create;
+  Arr := TJSONArray.Create;
+  Try
+    Words.CopyToStrings(List);
+    For I := 0 To List.Count - 1 Do
+      Arr.Add(List[I]);
+    Section.Add('personal_words', Arr);
+    Arr := Nil;
+  Finally
+    Arr.Free;
+    List.Free;
+  End;
+End;
+
 Procedure TSpellCheckerConfig.Load;
 Var
-  XML: TXMLConfig;
+  Section: TJSONObject;
 Begin
-  If (FStorageFileName = '') Or (Not FileExistsUTF8(FStorageFileName)) Then
+  If FStorageFileName = '' Then
     Begin
-      FPersonal.LoadFromFile(PersonalPath);
       EnsurePreloaded;
       Exit;
     End;
-  XML := TXMLConfig.Create(FStorageFileName);
+  Section := ReadWorkflowSection('spell');
   Try
-    FOptions.EngineKind := TextToSpellEngineKind(XML.GetValue('Spell/Engine', 'auto'));
-    FOptions.Language := XML.GetValue('Spell/Language', '');
-    FOptions.LibraryFileName := XML.GetValue('Spell/LibraryFileName', '');
-    FOptions.DictionaryDirectory := XML.GetValue('Spell/DictionaryDirectory', '');
-    FOptions.PersonalFileName := XML.GetValue('Spell/PersonalFileName', '');
+    If Assigned(Section) Then
+      Begin
+        FOptions.EngineKind := TextToSpellEngineKind(Section.Get('engine', 'auto'));
+        FOptions.Language := Section.Get('language', '');
+        FOptions.LibraryFileName := Section.Get('library', '');
+        FOptions.DictionaryDirectory := Section.Get('dictionary_directory', '');
+        FOptions.PersonalFileName := Section.Get('personal_file', '');
+        ReadPersonalWords(Section, FPersonal);
+      End
+    Else
+      FPersonal.ReplaceFromStrings(Nil);
   Finally
-    XML.Free;
+    Section.Free;
   End;
-  FPersonal.LoadFromFile(PersonalPath);
   If FOptions.EngineKind = sekNone Then
     Begin
       StopPreload;
@@ -378,26 +426,34 @@ End;
 
 Procedure TSpellCheckerConfig.Save;
 Var
-  XML: TXMLConfig;
+  Section: TJSONObject;
+  ErrorText: String;
 Begin
   If FStorageFileName = '' Then
     Exit;
-  XML := TXMLConfig.Create(FStorageFileName);
+  FLastStatus := '';
+  Section := TJSONObject.Create;
   Try
-    XML.SetValue('Spell/Engine', SpellEngineKindToText(FOptions.EngineKind));
-    XML.SetValue('Spell/Language', FOptions.Language);
-    XML.SetValue('Spell/LibraryFileName', FOptions.LibraryFileName);
-    XML.SetValue('Spell/DictionaryDirectory', FOptions.DictionaryDirectory);
-    XML.SetValue('Spell/PersonalFileName', FOptions.PersonalFileName);
-    XML.Flush;
+    Section.Add('engine', SpellEngineKindToText(FOptions.EngineKind));
+    Section.Add('language', FOptions.Language);
+    Section.Add('library', FOptions.LibraryFileName);
+    Section.Add('dictionary_directory', FOptions.DictionaryDirectory);
+    Section.Add('personal_file', FOptions.PersonalFileName);
+    WritePersonalWords(Section, FPersonal);
+    If Not WriteWorkflowSection('spell', Section, ErrorText) Then
+      FLastStatus := ErrorText;
   Finally
-    XML.Free;
+    Section.Free;
   End;
 End;
 
 Procedure TSpellCheckerConfig.Apply;
+Var
+  CacheError: String;
 Begin
-  FPersonal.LoadFromFile(PersonalPath);
+  { personal_words in LazWorkflow.json is the source of truth. The engine file is a cache. }
+  If Trim(FOptions.PersonalFileName) <> '' Then
+    FPersonal.SaveToFile(PersonalPath, CacheError);
   If FOptions.EngineKind = sekNone Then
     Begin
       Inc(FPreloadSeq);
@@ -488,10 +544,16 @@ Begin
   Result := True;
   If FPersonal.Contains(WordText) Then Exit;
   FPersonal.Add(WordText);
-  If Not FPersonal.SaveToFile(PersonalPath, ErrorText) Then
+  If (Trim(FOptions.PersonalFileName) <> '') And (Not FPersonal.SaveToFile(PersonalPath, ErrorText)) Then
     Begin
       FPersonal.Remove(WordText);
       FLastStatus := 'Could not save personal dictionary: ' + ErrorText;
+      Exit(False);
+    End;
+  Save;
+  If (FStorageFileName <> '') And (FLastStatus <> '') Then
+    Begin
+      FPersonal.Remove(WordText);
       Exit(False);
     End;
   EnterCriticalSection(FEngineLock);
@@ -573,7 +635,8 @@ Begin
   Dir := Trim(ConfigDirectory);
   If Dir = '' Then
     Exit;
-  WorkflowSpellConfig.SetStorageFileName(IncludeTrailingPathDelimiter(Dir) + 'LazWorkflowSpell.xml');
+  SetWorkflowSettingsDirectory(Dir);
+  WorkflowSpellConfig.SetStorageFileName(WorkflowSettingsPath);
   WorkflowSpellConfig.Load;
   WorkflowLogger.Info('Spell', 'Preloading spell engine in the background');
 End;

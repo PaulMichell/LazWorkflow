@@ -111,6 +111,10 @@ Type
       Out ResultJson: String; Out ErrorMessage: String): Boolean;
   End;
 
+{ False until LazAssistantTools registers a handler. Suggest stays disabled. }
+Function SuggestCommitMessageAvailable: Boolean;
+Function SuggestCommitActionEnabled(CanMutate, HasStaged: Boolean): Boolean;
+
 Var
   WorkflowEventBus: TWorkflowEventBus;
   { Nil until LazAssistantTools registers a handler (signed-in OAuth complete-once). }
@@ -120,6 +124,16 @@ Implementation
 
 Uses
   WorkflowLog;
+
+Function SuggestCommitMessageAvailable: Boolean;
+Begin
+  Result := Assigned(SuggestCommitMessageFunc);
+End;
+
+Function SuggestCommitActionEnabled(CanMutate, HasStaged: Boolean): Boolean;
+Begin
+  Result := CanMutate And HasStaged And SuggestCommitMessageAvailable;
+End;
 
 Type
   TWorkflowSubscription = Class(TInterfacedObject, IWorkflowSubscription)

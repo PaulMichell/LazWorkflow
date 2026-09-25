@@ -18,7 +18,7 @@
     <Description Value="Shared foundation (event bus, logging, UI helpers) for LazRepositoryTools and LazAssistantTools"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="17">
+    <Files Count="18">
       <Item1>
         <Filename Value="../Source/LazWorkflowCommon/RegLazWorkflowCommon.pas"/>
         <HasRegisterProc Value="True"/>
@@ -89,14 +89,21 @@
         <Filename Value="../Source/LazWorkflowCommon/WorkflowEvents.pas"/>
         <UnitName Value="WorkflowEvents"/>
       </Item17>
+      <Item18>
+        <Filename Value="../Source/LazWorkflowCommon/WorkflowSettings.pas"/>
+        <UnitName Value="WorkflowSettings"/>
+      </Item18>
     </Files>
-    <RequiredPkgs Count="2">
+    <RequiredPkgs Count="3">
       <Item1>
         <PackageName Value="LazUtils"/>
       </Item1>
       <Item2>
         <PackageName Value="LCL"/>
       </Item2>
+      <Item3>
+        <PackageName Value="IDEIntf"/>
+      </Item3>
     </RequiredPkgs>
     <UsageOptions>
       <UnitPath Value="$(PkgOutDir)"/>
