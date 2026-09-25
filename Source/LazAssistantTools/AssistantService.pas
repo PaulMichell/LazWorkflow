@@ -118,6 +118,10 @@ Type
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
     { User turn entry. Image refs are not accepted on tool, steer-note, or subagent prompts. }
     Procedure AddUserMessage(Const Content: String; Const ImageRefs: TAssistantImageRefArray);
+    { Drop image refs on the latest user message so a rejected upload is not resent. }
+    Procedure DropLastUserImageRefs;
+    { False only when the last model list has an explicit input-modality list without images. }
+    Function ImagesAttachAllowed(Out Reason: String): Boolean;
     Function ExportUnstoredMessagesJson: String;
     Procedure RestoreMessagesJson(Const JsonText: String);
     Procedure NoteMessagesStored;
@@ -765,7 +769,9 @@ Begin
     End;
   If FIsSubagent Then
     FSystemPrompt := FSystemPrompt + LineEnding + LineEnding +
-      SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName));
+      SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName))
+  Else
+    FSystemPrompt := FSystemPrompt + LineEnding + AssistantImageSystemSentence;
   FBaseSystemPrompt := FSystemPrompt;
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
 End;
@@ -1358,10 +1364,35 @@ Begin
 End;
 
 Procedure TAssistantService.AddUserMessage(Const Content: String; Const ImageRefs: TAssistantImageRefArray);
+Var
+  Refs: TAssistantImageRefArray;
 Begin
-  AddMessage(amrUser, Content);
+  Refs := LimitAssistantImageRefs(ImageRefs);
+  AddMessage(amrUser, AssistantImageModelText(Content, Length(Refs)));
   If Length(FMessages) < 1 Then Exit;
-  FMessages[High(FMessages)].ImageRefs := LimitAssistantImageRefs(ImageRefs);
+  FMessages[High(FMessages)].ImageRefs := Refs;
+End;
+
+Procedure TAssistantService.DropLastUserImageRefs;
+Var
+  I: Integer;
+Begin
+  For I := High(FMessages) DownTo 0 Do
+    If FMessages[I].Role = amrUser Then
+      Begin
+        SetLength(FMessages[I].ImageRefs, 0);
+        Exit;
+      End;
+End;
+
+Function TAssistantService.ImagesAttachAllowed(Out Reason: String): Boolean;
+Begin
+  Reason := '';
+  Result := True;
+  { Missing list allows attach. Do not infer vision support from the model name. }
+  If XaiModelImageInput(FModel) <> xiiAbsent Then Exit;
+  Result := False;
+  Reason := 'This model lists no image input. Attach is disabled.';
 End;
 
 Function TAssistantService.ExportUnstoredMessagesJson: String;
@@ -1533,6 +1564,7 @@ Begin
   FMessages[Idx].ResponsesOutputJson := '';
   FMessages[Idx].ContentEscaped := '';
   FMessages[Idx].ToolCallIdEscaped := '';
+  SetLength(FMessages[Idx].ImageRefs, 0);
 End;
 
 Procedure TAssistantService.AddAssistantToolCalls(Const Content, ToolCallsJson: String;

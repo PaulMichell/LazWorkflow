@@ -12,8 +12,14 @@ Interface
 
 Uses
   AssistantModelProvider, AssistantConfig;
+
+Type
+  TXaiImageInput = (xiiUnknown, xiiAccepted, xiiAbsent);
+
 Function CreateXaiModelProvider: IAssistantModelProvider;
 Procedure RestoreXaiCredentials(Config: TAssistantConfig);
+/// Last successful model list. xiiUnknown means no explicit input-modality list: allow attach.
+Function XaiModelImageInput(Const ModelId: String): TXaiImageInput;
 
 Implementation
 
@@ -95,6 +101,86 @@ Begin
   If Assigned(Node) And (Node.JSONType <> jtNull) Then Result := Node.AsString;
 End;
 
+Var
+  ImageInputIds: TStringList;
+
+Function XaiModelImageInput(Const ModelId: String): TXaiImageInput;
+Var
+  Index: Integer;
+  Key: String;
+Begin
+  Result := xiiUnknown;
+  Key := LowerCase(Trim(ModelId));
+  If (Key = '') Or (Not Assigned(ImageInputIds)) Then Exit;
+  Index := ImageInputIds.IndexOfName(Key);
+  If Index < 0 Then Exit;
+  If ImageInputIds.ValueFromIndex[Index] = '1' Then
+    Result := xiiAccepted
+  Else
+    Result := xiiAbsent;
+End;
+
+Procedure RememberImageInput(List: TStringList; Const ModelId: String; Accepts: Boolean);
+Var
+  Key, Flag: String;
+Begin
+  If Not Assigned(List) Then Exit;
+  Key := LowerCase(Trim(ModelId));
+  If Key = '' Then Exit;
+  If Accepts Then Flag := '1' Else Flag := '0';
+  List.Values[Key] := Flag;
+End;
+
+Function ModalityListHasImage(Arr: TJSONArray): Boolean;
+Var
+  I: Integer;
+  Item: TJSONData;
+  Name: String;
+Begin
+  Result := False;
+  If Not Assigned(Arr) Then Exit;
+  For I := 0 To Arr.Count - 1 Do
+    Begin
+      Item := Arr.Items[I];
+      Name := '';
+      If Item.JSONType = jtString Then
+        Name := LowerCase(Trim(Item.AsString))
+      Else If Item Is TJSONObject Then
+        Begin
+          Name := LowerCase(Trim(JsonStringField(TJSONObject(Item), 'type')));
+          If Name = '' Then Name := LowerCase(Trim(JsonStringField(TJSONObject(Item), 'name')));
+        End;
+      If (Name = 'image') Or (Name = 'images') Then Exit(True);
+    End;
+End;
+
+Procedure NoteExplicitImageInput(List: TStringList; Obj: TJSONObject; Const ModelId: String);
+Var
+  Node, AliasNode: TJSONData;
+  Aliases: TJSONArray;
+  I: Integer;
+  Accepts: Boolean;
+Begin
+  If (Not Assigned(List)) Or (Not Assigned(Obj)) Or (Trim(ModelId) = '') Then Exit;
+  Node := Obj.Find('input_modalities');
+  If Node = Nil Then Node := Obj.Find('inputModalities');
+  If (Node = Nil) Or (Node.JSONType <> jtArray) Then Exit;
+  Accepts := ModalityListHasImage(TJSONArray(Node));
+  RememberImageInput(List, ModelId, Accepts);
+  AliasNode := Obj.Find('aliases');
+  If (AliasNode = Nil) Or (AliasNode.JSONType <> jtArray) Then Exit;
+  Aliases := TJSONArray(AliasNode);
+  For I := 0 To Aliases.Count - 1 Do
+    If Aliases.Items[I].JSONType = jtString Then
+      RememberImageInput(List, Aliases.Items[I].AsString, Accepts);
+End;
+
+Procedure PublishImageInput(Noted: TStringList);
+Begin
+  FreeAndNil(ImageInputIds);
+  ImageInputIds := Noted;
+End;
+
 Function LooksLikeChatModelId(Const ModelId: String): Boolean;
 Var
   LowerId: String;
@@ -123,6 +209,7 @@ Var
   ModelId: String;
   Paths: Array[0..1] Of String;
   PathIdx: Integer;
+  Noted: TStringList;
 Begin
   Result := False;
   ErrorText := '';
@@ -140,9 +227,12 @@ Begin
   Paths[0] := '/language-models';
   Paths[1] := '/models';
   AuthHdr := 'Authorization: Bearer ' + AccessToken;
-
-  For PathIdx := 0 To High(Paths) Do
-    Begin
+  Noted := TStringList.Create;
+  Noted.NameValueSeparator := '=';
+  Try
+    For PathIdx := 0 To High(Paths) Do
+      Begin
+        Noted.Clear;
       Body := '';
       Data := Nil;
       Try
@@ -174,6 +264,7 @@ Begin
                 Begin
                   Obj := TJSONObject(Item);
                   ModelId := JsonStringField(Obj, 'id');
+                  NoteExplicitImageInput(Noted, Obj, ModelId);
                   { Skip pure image-generation entries when /models is used. }
                   If (Obj.Find('image_price') <> Nil) And
                     (Obj.Find('completion_text_token_price') = Nil) And
@@ -192,6 +283,8 @@ Begin
               Result := True;
               WorkflowLogger.Info('AssistantXaiProvider',
                 Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
+              PublishImageInput(Noted);
+              Noted := Nil;
               Exit;
             End;
         Except
@@ -202,6 +295,9 @@ Begin
         Data.Free;
       End;
     End;
+  Finally
+    Noted.Free;
+  End;
   If ErrorText = '' Then
     ErrorText := 'No chat models returned by the API.';
 End;
@@ -283,5 +379,8 @@ Begin
     Data.Free;
   End;
 End;
+
+Finalization
+  FreeAndNil(ImageInputIds);
 
 End.

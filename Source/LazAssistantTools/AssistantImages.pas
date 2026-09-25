@@ -37,6 +37,11 @@ Const
   AssistantImageContextTokens = 1100;
   AssistantImagesFolderName = 'images';
   AssistantImageLookText = 'Look at the attached image(s).';
+  AssistantImageSystemSentence =
+    'User messages may include images; describe only what is visible; do not invent image contents; do not fetch URLs.';
+  { This client's turn/start input is a text item only. Not a guessed image field. }
+  AssistantCodexImageAttachReason =
+    'ChatGPT turn/start in this runtime only accepts text. Attach is disabled until an image item is confirmed.';
   { Extensions FileExtensionIsImage already names. Acceptance is by stream sniff, not by this list. }
   AssistantStillImageExtensions = '.png,.jpg,.jpeg,.gif,.bmp,.ico,.xpm,.tif,.tiff,.pbm,.pgm,.ppm';
 
@@ -113,6 +118,8 @@ Function AssistantImageDataUri(Const ProjectRoot: String; Const Ref: TAssistantI
 Function AssistantImageOmittedNote(Const Ref: TAssistantImageRef): String;
 /// Model text part. Empty user words with images become the look sentence, which is not the user's words.
 Function AssistantImageModelText(Const UserText: String; ImageCount: Integer): String;
+/// True when an API error refused the image, not when a local store check failed.
+Function AssistantRequestRejectedImage(Const ErrorText: String): Boolean;
 /// Delete display and upload files for an unsent attachment. Does not follow a symbolic link.
 Function DeleteStoredAssistantImage(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
   Out ErrorText: String): Boolean;
@@ -2974,6 +2981,20 @@ Begin
     Result := AssistantImageLookText
   Else
     Result := UserText;
+End;
+
+Function AssistantRequestRejectedImage(Const ErrorText: String): Boolean;
+Var
+  S: String;
+Begin
+  S := LowerCase(ErrorText);
+  Result := (Pos('does not support image', S) > 0) Or (Pos('do not support image', S) > 0) Or
+    (Pos('doesn''t support image', S) > 0) Or (Pos('images are not supported', S) > 0) Or
+    (Pos('image input is not', S) > 0) Or (Pos('image_url is not supported', S) > 0) Or
+    (Pos('unsupported image', S) > 0) Or (Pos('invalid image', S) > 0) Or (Pos('rejected the image', S) > 0) Or
+    (Pos('rejected image', S) > 0) Or ((Pos('image content', S) > 0) And (Pos('not supported', S) > 0)) Or
+    ((Pos('input_image', S) > 0) And ((Pos('invalid', S) > 0) Or (Pos('unsupported', S) > 0) Or (Pos('reject', S) > 0))) Or
+    ((Pos('modalit', S) > 0) And (Pos('image', S) > 0));
 End;
 
 Function DeleteOneStoredFile(Const ProjectRoot, RelativePath: String; Out ErrorText: String): Boolean;

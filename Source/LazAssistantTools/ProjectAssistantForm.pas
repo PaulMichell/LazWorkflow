@@ -225,6 +225,8 @@ Type
     ChatView: TControl; { unused; centre is FTraceView }
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
+    FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
+    FComposerImagesSent: Boolean;
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
@@ -2761,7 +2763,7 @@ Begin
   EnsureConversationStore;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
-  If (Not FUseCodex) And Assigned(AssistantClient) Then
+  If Assigned(AssistantClient) Then
     Begin
       Turn.MessagesJson := AssistantClient.ExportUnstoredMessagesJson;
       Turn.AttachmentsJson := AssistantClient.LastUserAttachmentsJson;
@@ -2828,7 +2830,7 @@ Begin
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
       FTurnRecorded := True;
-      If (Not FUseCodex) And Assigned(AssistantClient) Then
+      If Assigned(AssistantClient) Then
         AssistantClient.NoteMessagesStored;
       RefreshHistoryCombo;
     End
@@ -3002,7 +3004,12 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String);
-Var Prompt, Recap, ContextText: String; I: Integer; Turn: TConversationTurn; WithContext: Boolean;
+Var
+  Prompt, Recap, ContextText, ModelText: String;
+  I: Integer;
+  Turn: TConversationTurn;
+  WithContext: Boolean;
+  Refs: TAssistantImageRefArray;
 Begin
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
     Begin
@@ -3015,6 +3022,21 @@ Begin
       StopWorkOnPlanAgent('ChatGPT preview supports individual turns; automatic plan execution is not enabled.');
       Exit;
     End;
+  SetLength(Refs, 0);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Refs := LimitAssistantImageRefs(Refs);
+  ModelText := AssistantImageModelText(ApiText, Length(Refs));
+  If Length(Refs) > 0 Then
+    Begin
+      { turn/start in this client is a text item. Do not pretend that text is the picture. }
+      SetCurrentSystemNote(AssistantCodexImageAttachReason);
+      MessageDlg(AssistantCodexImageAttachReason, mtInformation, [mbOK], 0);
+      If Assigned(InputMemo) Then
+        InputMemo.Text := DisplayText;
+      Exit;
+    End;
+  If Assigned(AssistantClient) Then
+    AssistantClient.AddUserMessage(ModelText, Refs);
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   FCodexIdentity := FCodexWorkspace.Identity;
@@ -3056,7 +3078,7 @@ Begin
     'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +
     'Active plan: ' + GetActivePlanRelativePath + LineEnding +
     ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
-    Recap + LineEnding + 'Current user request:' + LineEnding + ApiText;
+    Recap + LineEnding + 'Current user request:' + LineEnding + ModelText;
   If ActiveMode = amPlan Then
     Prompt := Prompt + LineEnding + AssistantPlanAuthoringRules + LineEnding;
   If Not FModeLocked Then LockModeForSend;
@@ -3216,7 +3238,7 @@ End;
 Procedure TProjectAssistantForm.UpdateStatusFooter;
 Var
   Pct: Integer;
-  StatusText, LeftText, CentreText, ThinkCap, ApprCap: String;
+  StatusText, LeftText, CentreText, ThinkCap, ApprCap, BlockReason: String;
 Begin
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not FSending) Then
     Begin
@@ -3265,12 +3287,15 @@ Begin
     End;
   StatusFooter.SetAll(LeftText, CentreText, StatusText);
   StatusFooter.SetLeftHint('Click to change model, thinking level, or approval');
+  If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
+    (BlockReason <> '') Then
+    StatusFooter.SetLeftHint('Click to change model, thinking level, or approval. ' + BlockReason);
   StatusFooter.SetCentreHint(Format('About %d of %d tokens. Click for a breakdown.',
     [FContextUsed, FContextLimit]));
   StatusFooter.SetRightHint('Click for session info');
   If FUseCodex Then
     Begin
-      StatusFooter.SetLeftHint('Click for ChatGPT connection and model');
+      StatusFooter.SetLeftHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
       StatusFooter.SetSkillText('Lazarus tools');
       StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
@@ -4014,7 +4039,7 @@ Begin
   Else
     Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
-      If (Not FUseCodex) And Assigned(AssistantClient) And (FLiveContent <> '') Then
+      If Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
@@ -4054,6 +4079,15 @@ Begin
   FinishLiveTrace(TraceNote, WorkedMs);
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ResolvedError);
+  If AssistantRequestRejectedImage(ResolvedError) Then
+    Begin
+      { The pictures stay in the composer. Do not resend the rejected refs on the next request. }
+      If Assigned(AssistantClient) Then
+        AssistantClient.DropLastUserImageRefs;
+    End
+  Else If FComposerImagesSent Then
+    FComposerImagesJson := '';
+  FComposerImagesSent := False;
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   { Only explicit validation with current correlated evidence can auto-complete.
@@ -4169,7 +4203,7 @@ Begin
     Begin
       If (FLiveContent <> '') Or (FLiveThinking <> '') Then
         Begin
-          If (Not FUseCodex) And Assigned(AssistantClient) And (FLiveContent <> '') Then
+          If Assigned(AssistantClient) And (FLiveContent <> '') Then
             AssistantClient.AddMessage(amrAssistant, FLiveContent);
           FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
         End;
@@ -4210,10 +4244,14 @@ End;
 
 Procedure TProjectAssistantForm.SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
 Var
-  FinalApi, ContextBlock, PlanRel: String;
+  FinalApi, ContextBlock, PlanRel, ModelText, BlockReason: String;
   WithContext: Boolean;
+  Refs: TAssistantImageRefArray;
 Begin
-  If Trim(ApiText) = '' Then
+  SetLength(Refs, 0);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Refs := LimitAssistantImageRefs(Refs);
+  If (Trim(ApiText) = '') And (Length(Refs) = 0) Then
     Exit;
   If FSending Then
     Exit;
@@ -4234,12 +4272,24 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
+      If (Length(Refs) > 0) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) Then
+        Begin
+          If BlockReason = '' Then
+            BlockReason := 'This model lists no image input. Attach is disabled.';
+          SetCurrentSystemNote(BlockReason);
+          MessageDlg(BlockReason, mtInformation, [mbOK], 0);
+          If Assigned(InputMemo) Then
+            InputMemo.Text := DisplayText;
+          Exit;
+        End;
       MaybeWarnHighContextUsage;
       { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
       If Not FModeLocked Then
         LockModeForSend; { freeze Plan/Build before chat surface / SetSending }
       ShowChatSurfaceKeepMode; { shared turn view already visible; sync mode chrome }
-      FinalApi := ApiText;
+      { Visible words stay DisplayText. The look sentence is model text only. }
+      ModelText := AssistantImageModelText(ApiText, Length(Refs));
+      FinalApi := ModelText;
       If ActiveMode = amPlan Then
         Begin
           PlanRel := GetActivePlanRelativePath;
@@ -4251,7 +4301,7 @@ Begin
             '"). Chat reply must be a short summary only, not the full plan body. ' +
             'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
             '`, numbered ## sections without Status, and ### items with Status.' +
-            LineEnding + LineEnding + ApiText;
+            LineEnding + LineEnding + ModelText;
         End;
       WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(DisplayText, WithContext);
@@ -4270,8 +4320,10 @@ Begin
           FinalApi := FinalApi + LineEnding + LineEnding + ContextBlock;
         End;
       AppendMessage('user', FDisplayUser);
-      { Prior turns already on AssistantClient are sent with this request (trimmed if huge). }
-      AssistantClient.AddMessage(amrUser, FinalApi);
+      { Prior turns already on AssistantClient are sent with this request (trimmed if huge).
+        IDE context is already a text suffix on FinalApi. It is not an image part. }
+      FComposerImagesSent := Length(Refs) > 0;
+      AssistantClient.AddUserMessage(FinalApi, Refs);
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If FContextUsed < Length(FinalApi) Div 4 Then
         FContextUsed := Length(FinalApi) Div 4 + 8;
