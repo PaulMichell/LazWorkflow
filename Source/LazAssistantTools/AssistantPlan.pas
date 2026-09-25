@@ -52,6 +52,8 @@ Function TextIsAssistantPlan(Const Body: String): Boolean;
 Function TryReadAssistantPlanIdentity(Const RelativeOrAbsolute: String; Out Title, ErrorText: String): Boolean;
 Function FormatPlanListCaption(Const Title, RelativePath: String): String;
 Function AssistantPlanAuthoringRules: String;
+{ True when an assistant plan puts Status under ##. A ### note is not a todo. Non-plans return False. }
+Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String): Boolean;
 { Paths and Titles are created here and paired by index. Caller frees both, including on failure. }
 Function ListProjectMarkdownPlans(Out Paths, Titles: TStringList; Out ErrorText: String): Boolean;
 Function DefaultNewPlanMarkdown(Const Title: String = ''): String;
@@ -560,6 +562,8 @@ Begin
         ErrorText := 'Could not create directory: ' + Dir;
         Exit;
       End;
+  If PlanMarkdownStructureError(Content, ErrorText) Then
+    Exit;
   SL := TStringList.Create;
   Try
     Try
@@ -636,6 +640,11 @@ Begin
           Body := Copy(Body, 1, P - 1) + NewText + Copy(Body, P + Length(OldText), MaxInt);
           ReplaceCount := 1;
         End;
+      If PlanMarkdownStructureError(Body, ErrorText) Then
+        Begin
+          ReplaceCount := 0;
+          Exit;
+        End;
       SL.Text := Body;
       SL.SaveToFile(Resolved);
       Result := True;
@@ -702,6 +711,69 @@ Begin
   End;
   { Middle dot survives list boxes that trim leading spaces. }
   Result := '· ' + Section.Title + ' — ' + StatusLabel;
+End;
+
+Function ParseStatusLine(Const Line: String; Out StatusText: String): Boolean; Forward;
+
+Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String): Boolean;
+Var
+  Lines: TStringList;
+  I, Level, FenceLength, N: Integer;
+  Heading, StatusText, Line: String;
+  Fence: Char;
+  SectionLevel: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not TextIsAssistantPlan(Content) Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Content;
+    Fence := #0;
+    FenceLength := 0;
+    SectionLevel := 0;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        If (Length(Line) >= 3) And ((Line[1] = '`') Or (Line[1] = '~')) Then
+          Begin
+            N := 1;
+            While (N <= Length(Line)) And (Line[N] = Line[1]) Do
+              Inc(N);
+            Dec(N);
+            If N >= 3 Then
+              Begin
+                If Fence = #0 Then
+                  Begin
+                    Fence := Line[1];
+                    FenceLength := N;
+                  End
+                Else If (Line[1] = Fence) And (N >= FenceLength) And (Trim(Copy(Line, N + 1, MaxInt)) = '') Then
+                  Fence := #0;
+                Continue;
+              End;
+          End;
+        If Fence <> #0 Then
+          Continue;
+        Level := PlanHeadingLevel(Lines[I], Heading);
+        If Level In [1, 2, 3] Then
+          Begin
+            SectionLevel := Level;
+            Continue;
+          End;
+        { Status under ## is rejected. A later Status line in a ### note does not make that note a todo. }
+        If ParseStatusLine(Lines[I], StatusText) And (SectionLevel = 2) Then
+          Begin
+            ErrorText := 'A Status: line cannot sit under a ## heading. Put Status only on a ### item. ' +
+              'A ### heading without Status is a note, not a todo.';
+            Result := True;
+            Exit;
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
 End;
 
 Function ParseStatusLine(Const Line: String; Out StatusText: String): Boolean;
