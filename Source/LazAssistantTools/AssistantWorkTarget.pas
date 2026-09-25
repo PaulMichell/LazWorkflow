@@ -36,6 +36,8 @@ Type
     Procedure Dependencies(Files: TStrings);
     Function ContainsFile(Const Filename: String): Boolean;
     Function AllowsWrite(Const Filename: String): Boolean;
+    /// Refusal for a write, stage, or commit outside the selected target. Names that target.
+    Function ScopeRefusal(Const Action, Path: String): String;
     Function Describe: String;
     Procedure SelectProject;
     Function SelectPackage(Const Filename: String; Out ErrorText: String): Boolean;
@@ -343,6 +345,16 @@ Begin
   Finally
     Files.Free;
   End;
+End;
+
+Function TAssistantWorkTarget.ScopeRefusal(Const Action, Path: String): String;
+Begin
+  If Kind = atkPackage Then
+    Result := 'Cannot ' + Action + ' ' + Path + '. The selected target is ' + DisplayName +
+      '. Writes, staging, and commits stay in that package''s member directories and in Documents/ under the working root. ' +
+      'Choose the current project as the Assistant target to include the rest of the repository. The active plan stays with you.'
+  Else
+    Result := 'Cannot ' + Action + ' ' + Path + '. It is outside the selected target ' + DisplayName + '.';
 End;
 
 Function TAssistantWorkTarget.Describe: String;

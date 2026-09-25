@@ -77,6 +77,8 @@ Var
   GQuietIdeDepth: Integer;
   GSavedCheckFilesOnDisk: Boolean;
 
+Function QuietSaveTargetForGit(Out ErrorText: String): Boolean; Forward;
+
 ThreadVar
   GToolAbortThread: TThread;
 
@@ -446,7 +448,7 @@ Begin
     BuildTodoToolJson + ',' +
     '{"type":"function","function":{' +
       '"name":"write_markdown",' +
-      '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. A ### heading without Status is a note, not a todo.",' +
+      '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. A ### heading without Status is a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; commit the plan file after that change. Without a repository, complete needs no commit.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path (default Documents/Plan.md)"},' +
         '"content":{"type":"string","description":"Full Markdown body to write"},' +
@@ -455,7 +457,7 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"update_markdown",' +
-      '"description":"Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when changing Status: lines or a single section. Rejects a Status: line under a ## heading. A ### heading without Status stays a note, not a todo.",' +
+      '"description":"Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when changing Status: lines or a single section. Rejects a Status: line under a ## heading. A ### heading without Status stays a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; commit the plan file after that change. Without a repository, complete needs no commit.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path (default: active plan)"},' +
         '"old_text":{"type":"string","description":"Exact text to find"},' +
@@ -779,7 +781,7 @@ Begin
       If (AssistantTarget.Kind=atkPackage) And (Command='add') And (Args Is TJSONArray) Then
         For I := 2 To Args.Count - 1 Do If Not CanStage(Args.Items[I].AsString) Then
           Begin
-            ErrorText := 'Cannot stage a path outside the selected package scope.';
+            ErrorText := AssistantTarget.ScopeRefusal('stage', Args.Items[I].AsString);
             Exit;
           End;
       If (AssistantTarget.Kind=atkPackage) And (Command='commit') Then
@@ -799,7 +801,7 @@ Begin
                 StagedPath := Copy(Staged, StartPos, EndPos - StartPos); StartPos := EndPos + 1;
                 If Not CanStage(StagedPath) Then
                   Begin
-                    ErrorText := 'Index includes files outside the selected package. Review and separate the staged changes before committing.';
+                    ErrorText := AssistantTarget.ScopeRefusal('commit', StagedPath);
                     Exit;
                   End;
               End;
@@ -807,11 +809,8 @@ Begin
         End;
       If (Command = 'add') Or (Command = 'commit') Then
         Begin
-          If AssistantTarget.Modified Then
-            Begin
-              ErrorText := 'Save authorized project settings before staging or committing.';
-              Exit;
-            End;
+          If Not QuietSaveTargetForGit(ErrorText) Then
+            Exit;
           If Assigned(SourceEditorManagerIntf) Then
             For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
               Begin
@@ -820,7 +819,8 @@ Begin
                   ((Editor.FileName = '') Or IsPathUnderRoot(Root, Editor.FileName)) And
                   ((AssistantTarget.Kind=atkProject) Or AssistantTarget.ContainsFile(Editor.FileName)) Then
                   Begin
-                    ErrorText := 'Save authorized project editor and designer changes before staging or committing. Git reads saved files.';
+                    ErrorText := 'Save ' + Editor.FileName +
+                      ' before staging or committing. Git reads the saved file, and this editor still has unsaved changes.';
                     Exit;
                   End;
               End;
@@ -1830,7 +1830,7 @@ Begin
   FullPath := ExpandResolvedPath(Resolved);
   If Not AssistantTarget.AllowsWrite(FullPath) Then
     Begin
-      ErrorText := 'Path is outside the selected target write scope.';
+      ErrorText := AssistantTarget.ScopeRefusal('write', FullPath);
       Exit;
     End;
   If IsLazarusProjectInfoPath(FullPath) Then
@@ -1944,6 +1944,71 @@ Begin
           Exit;
         End;
     End;
+End;
+
+Function QuietSaveTargetForGit(Out ErrorText: String): Boolean;
+Var
+  ForeignName: String;
+  Selected, Other: TIDEPackage;
+  Index: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not FlushOpenEditorsUnderProject(ErrorText) Then
+    Exit;
+  If AssistantTarget.Kind = atkProject Then
+    Begin
+      If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And LazarusIDE.ActiveProject.Modified Then
+        If LazarusIDE.DoSaveProject([sfQuietUnitCheck]) <> mrOk Then
+          Begin
+            ErrorText := 'Could not save project ' + LazarusIDE.ActiveProject.ProjectInfoFile +
+              ' before staging or committing.';
+            Exit;
+          End;
+      If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) And LazarusIDE.ActiveProject.Modified Then
+        Begin
+          ErrorText := 'Project ' + LazarusIDE.ActiveProject.ProjectInfoFile +
+            ' is still modified after a quiet save. Save it in Lazarus before staging or committing.';
+          Exit;
+        End;
+    End
+  Else If Assigned(PackageEditingInterface) And AssistantTarget.Available Then
+    Begin
+      Selected := AssistantTarget.Package;
+      If Assigned(Selected) And Selected.Modified Then
+        Begin
+          ForeignName := '';
+          For Index := 0 To PackageEditingInterface.GetPackageCount - 1 Do
+            Begin
+              Other := PackageEditingInterface.GetPackages(Index);
+              If (Not Assigned(Other)) Or (Not Other.Modified) Or Other.ReadOnly Or (Other = Selected) Then
+                Continue;
+              ForeignName := Other.Filename;
+              If ForeignName = '' Then
+                ForeignName := 'another package';
+              Break;
+            End;
+          If ForeignName <> '' Then
+            Begin
+              ErrorText := 'Package ' + Selected.Filename + ' is unsaved, and ' + ForeignName +
+                ' is also modified. Save ' + ExtractFileName(Selected.Filename) +
+                ' in Lazarus before staging or committing. A quiet save would also write the other package.';
+              Exit;
+            End;
+          If PackageEditingInterface.DoSaveAllPackages([]) <> mrOk Then
+            Begin
+              ErrorText := 'Could not save package ' + Selected.Filename + ' before staging or committing.';
+              Exit;
+            End;
+          If Selected.Modified Then
+            Begin
+              ErrorText := 'Package ' + Selected.Filename +
+                ' is still modified after a quiet save. Save it in Lazarus before staging or committing.';
+              Exit;
+            End;
+        End;
+    End;
+  Result := True;
 End;
 
 Function RunQuietLazbuild(KindBuild: Boolean; Out ResultText, ErrorText: String;
@@ -3270,7 +3335,7 @@ Var
         Else
           Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
         If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
-        If Not Result And (ErrorText='') Then ErrorText := 'Path is outside the selected package write scope.';
+        If Not Result And (ErrorText='') Then ErrorText := AssistantTarget.ScopeRefusal('write', Path);
       End;
   End;
 Begin
