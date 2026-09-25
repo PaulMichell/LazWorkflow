@@ -346,6 +346,7 @@ Type
     Procedure ClearBuildWorkTracking;
     Procedure BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
     Procedure TryAutoCompleteBuildWork(Const StreamErrorText: String);
+    Function BuildWorkSectionIsComplete: Boolean;
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
     Procedure BuildRefreshButtonClick(Sender: TObject);
@@ -1808,6 +1809,13 @@ Begin
       RefreshBuildTodos;
       Exit;
     End;
+  { The saved plan is authoritative. The pre-turn text has no Validation line on most items,
+    and stopping on that text ended the run after a completion had already been written. }
+  If FPlanAgentRunning And BuildWorkSectionIsComplete Then
+    Begin
+      SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
+      Exit;
+    End;
   { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
@@ -1866,6 +1874,26 @@ Begin
     SetCurrentSystemNote(Note);
   WorkflowLogger.Info('ProjectAssistant', 'Auto Status complete: ' + FBuildWorkSectionTitle);
   ClearBuildWorkTracking;
+End;
+
+Function TProjectAssistantForm.BuildWorkSectionIsComplete: Boolean;
+Var
+  Sections: TObjectList;
+  Err: String;
+Begin
+  Result := False;
+  If (FBuildWorkPlanPath = '') Or (FBuildWorkSectionIndex < 0) Then
+    Exit;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(FBuildWorkPlanPath, Sections, Err) Then
+      Exit;
+    If FBuildWorkSectionIndex >= Sections.Count Then
+      Exit;
+    Result := TPlanSection(Sections[FBuildWorkSectionIndex]).Status = pssComplete;
+  Finally
+    Sections.Free;
+  End;
 End;
 
 Procedure TProjectAssistantForm.PrepareTopErrorAfterReview(ErrorCount: Integer);
@@ -4090,8 +4118,9 @@ Begin
   FComposerImagesSent := False;
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
-  { Only explicit validation with current correlated evidence can auto-complete.
-    A Git repository keeps the item in progress until a commit contains the completion. }
+  { Validation evidence can auto-complete when the root is not a Git repository.
+    In a repository the model sets Status, and that plan file is committed before the item counts as complete.
+    An item that is already complete does not stop the plan agent. }
   If ActiveMode = amBuild Then
     Begin
       Try

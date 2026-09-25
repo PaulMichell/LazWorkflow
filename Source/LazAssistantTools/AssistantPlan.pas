@@ -5,6 +5,8 @@ Unit AssistantPlan;
   Size note: exceeds the 1000 line preference. Recognition, the progress
   scan, Markdown writes, and the completion-commit rule share one status
   parser. A second scanner would drift from the progress list.
+  An uncommitted completion is committed at turn end; a failed commit restores
+  the file and its index.
   Reviewed 2026-09-25. }
 
 {$IFDEF FPC}
@@ -61,7 +63,8 @@ Function AssistantPlanCompletionRules: String;
 { True when NextBody marks an actionable item complete that PreviousBody did not. }
 Function PlanBodyIntroducesCompletion(Const PreviousBody, NextBody: String): Boolean;
 Procedure ResetAssistantPlanTurn;
-{ Restores a completion write when that plan file is still uncommitted. }
+{ Commits a completion this turn wrote but did not commit.
+  Restores the previous text, including the index, when that commit fails. }
 Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
 { Note for a user turn that asked for a commit or a completed status and did not get one.
   The generated Work-on-this prompt is ignored. }
@@ -93,7 +96,7 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, FileUtil, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
+  LazFileUtils, FileUtil, Process, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
   AssistantConversation, AssistantGit;
 
 Var
@@ -471,6 +474,8 @@ Begin
     'If the working root is a Git repository, run_git commit must succeed in this turn before Status becomes complete. ' +
     'Commit the finished files first, then set the status, then commit the plan file. ' +
     'Use one -m string for the subject and body, or several -m arguments; Git joins them with a blank line. ' +
+    'A commit may end with -- and the files to record, so other staged files stay staged. ' +
+    'If the turn ends with Status complete and that plan file is still uncommitted, the assistant commits the plan file and keeps the status. ' +
     'If the working root has no Git repository, set Status to complete with no commit. ' +
     'Report a commit hash only from a successful run_git result. If a tool fails, say so.';
 End;
@@ -972,12 +977,274 @@ Begin
   CompletionExisted := False;
 End;
 
+Function GitArgsJson(Const Args: Array Of String): String;
+Var
+  Obj: TJSONObject;
+  Arr: TJSONArray;
+  Index: Integer;
+Begin
+  Obj := TJSONObject.Create;
+  Arr := TJSONArray.Create;
+  For Index := 0 To High(Args) Do
+    Arr.Add(Args[Index]);
+  Obj.Add('arguments', Arr);
+  Result := Obj.AsJSON;
+  Obj.Free;
+End;
+
+Function GitReplyOutput(Const Reply: String): String;
+Var
+  Data: TJSONData;
+Begin
+  Result := '';
+  Data := Nil;
+  Try
+    Data := GetJSON(Reply);
+    If Data Is TJSONObject Then
+      Result := TJSONObject(Data).Get('output', '');
+  Except
+    Result := '';
+  End;
+  Data.Free;
+End;
+
+Function PlanPorcelainDirty(Const Output: String): Boolean;
+Var
+  Lines: TStringList;
+  Index: Integer;
+  Line: String;
+Begin
+  Result := False;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Output;
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[Index]);
+        If (Line = '') Or (Copy(Line, 1, 5) = 'hint:') Then
+          Continue;
+        Result := True;
+        Exit;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function ShortHash(Const Output: String): String;
+Var
+  Lines: TStringList;
+  Index, CharIndex: Integer;
+  Line: String;
+  Hex: Boolean;
+Begin
+  Result := '';
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Output;
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[Index]);
+        If (Line = '') Or (Copy(Line, 1, 5) = 'hint:') Then
+          Continue;
+        If (Length(Line) < 7) Or (Length(Line) > 40) Then
+          Exit;
+        Hex := True;
+        For CharIndex := 1 To Length(Line) Do
+          If Not (Line[CharIndex] In ['0'..'9', 'a'..'f', 'A'..'F']) Then
+            Hex := False;
+        If Hex Then
+          Result := Line;
+        Exit;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function PlanRelativeIsSafe(Const RelativePath: String): Boolean;
+Begin
+  Result := (RelativePath <> '') And (RelativePath[1] <> '/') And (RelativePath[1] <> '\') And
+    (Pos('..', RelativePath) = 0) And (Pos(#0, RelativePath) = 0);
+End;
+
+Function LoadTextFile(Const Path: String; Out Body: String): Boolean;
+Var
+  Lines: TStringList;
+Begin
+  Result := False;
+  Body := '';
+  Lines := TStringList.Create;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+      Body := Lines.Text;
+      Result := True;
+    Except
+      Result := False;
+    End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function PlanFilePorcelain(Const Root, RelativePath: String; Out Dirty: Boolean; Out ErrorText: String): Boolean;
+Var
+  Reply: String;
+Begin
+  Dirty := True;
+  ErrorText := '';
+  Result := RunAssistantGit(Root, GitArgsJson(['status', '--porcelain', '--', RelativePath]), Reply, ErrorText);
+  If Result Then
+    Dirty := PlanPorcelainDirty(GitReplyOutput(Reply));
+End;
+
+Function UnstagePlanPath(Const Root, RelativePath: String): Boolean;
+Var
+  Git: TProcess;
+Begin
+  Result := False;
+  If (Root = '') Or Not PlanRelativeIsSafe(RelativePath) Then
+    Exit;
+  Git := TProcess.Create(Nil);
+  Try
+    Git.Executable := 'git';
+    Git.CurrentDirectory := Root;
+    Git.Options := [poWaitOnExit, poNoConsole];
+    Git.Parameters.Add('--no-pager');
+    Git.Parameters.Add('reset');
+    Git.Parameters.Add('-q');
+    Git.Parameters.Add('HEAD');
+    Git.Parameters.Add('--');
+    Git.Parameters.Add(RelativePath);
+    Git.Execute;
+    Result := Git.ExitCode = 0;
+  Finally
+    Git.Free;
+  End;
+End;
+
+Function RestoreNotedPlanCompletion(Const Root, RelativePath: String): String;
+Var
+  Lines: TStringList;
+Begin
+  If FileIsSymlink(CompletionPath) Then
+    Begin
+      Result := 'The plan ' + RelativePath + ' is a symbolic link, so the completion was left in place.';
+      Exit;
+    End;
+  If Not CompletionExisted Then
+    Begin
+      If Not DeleteFileUTF8(CompletionPath) Then
+        Result := 'The new plan ' + RelativePath + ' could not be committed, and it could not be removed.'
+      Else
+        Result := 'Removed ' + RelativePath + ' because the plan commit failed.';
+    End
+  Else
+    Begin
+      Lines := TStringList.Create;
+      Try
+        Try
+          Lines.Text := CompletionPrevious;
+          Lines.SaveToFile(CompletionPath);
+          PublishPlanFileWrite(CompletionPath, CompletionPrevious, False);
+          Result := 'The plan status was put back because the plan commit failed. ' +
+            'Commit the finished work, set Status to complete, then commit the plan file.';
+        Except
+          On E: Exception Do
+            Result := 'The plan commit failed, and restoring ' + RelativePath + ' failed. ' + E.Message;
+        End;
+      Finally
+        Lines.Free;
+      End;
+    End;
+  If Not PlanRelativeIsSafe(RelativePath) Then
+    Result := Result + ' The index was left unchanged because the plan path is not a project-relative file.'
+  Else If Not UnstagePlanPath(Root, RelativePath) Then
+    Result := Result + ' The index for that file could not be restored.';
+End;
+
+Procedure PlanCompletionCommitText(Const PreviousBody, CurrentBody: String; Out Subject, Detail: String);
+Var
+  PreviousKeys, NextKeys: TStringList;
+  Index, SplitAt, Added: Integer;
+  Key, Title, Listed: String;
+Begin
+  Subject := 'Plan: record the completed item';
+  Detail := 'The work was committed earlier in this turn. This commit records Status: complete.';
+  PreviousKeys := TStringList.Create;
+  NextKeys := TStringList.Create;
+  Try
+    CollectCompleteKeys(PreviousBody, PreviousKeys);
+    CollectCompleteKeys(CurrentBody, NextKeys);
+    Listed := '';
+    Added := 0;
+    Title := '';
+    For Index := 0 To NextKeys.Count - 1 Do
+      If PreviousKeys.IndexOf(NextKeys[Index]) < 0 Then
+        Begin
+          Key := NextKeys[Index];
+          SplitAt := Pos(#1, Key);
+          If SplitAt > 0 Then
+            Title := Copy(Key, SplitAt + 1, MaxInt)
+          Else
+            Title := Key;
+          If Title = '' Then
+            Title := 'the finished item';
+          Inc(Added);
+          If Listed <> '' Then
+            Listed := Listed + ', ';
+          Listed := Listed + Title;
+        End;
+    If Added = 1 Then
+      Subject := 'Plan: mark ' + Title + ' complete'
+    Else If Added > 1 Then
+      Subject := 'Plan: mark completed items';
+    If Length(Subject) > 120 Then
+      Subject := Copy(Subject, 1, 117) + '...';
+    If Listed <> '' Then
+      Detail := 'The work was committed earlier in this turn. This commit records Status: complete for ' + Listed + '.';
+  Finally
+    NextKeys.Free;
+    PreviousKeys.Free;
+  End;
+End;
+
+Function CommitNotedPlanFile(Const Root, RelativePath, CurrentBody: String): String;
+Var
+  Reply, Err, Subject, Detail, Hash: String;
+  Dirty: Boolean;
+Begin
+  If Not RunAssistantGit(Root, GitArgsJson(['add', '--', RelativePath]), Reply, Err) Then
+    Begin
+      Result := RestoreNotedPlanCompletion(Root, RelativePath) + ' Staging the plan file failed. ' + Err;
+      Exit;
+    End;
+  PlanCompletionCommitText(CompletionPrevious, CurrentBody, Subject, Detail);
+  If Not RunAssistantGit(Root,
+    GitArgsJson(['commit', '-m', Subject, '-m', Detail, '--', RelativePath]), Reply, Err) Then
+    Begin
+      If PlanFilePorcelain(Root, RelativePath, Dirty, Reply) And (Not Dirty) Then
+        Begin
+          Result := '';
+          Exit;
+        End;
+      Result := RestoreNotedPlanCompletion(Root, RelativePath) + ' The plan commit failed. ' + Err;
+      Exit;
+    End;
+  Hash := '';
+  If RunAssistantGit(Root, GitArgsJson(['log', '-1', '--format=%h', '--', RelativePath]), Reply, Err) Then
+    Hash := ShortHash(GitReplyOutput(Reply));
+  If Hash <> '' Then
+    Result := 'Committed ' + RelativePath + ' as ' + Hash + ' so the completion is in history.'
+  Else
+    Result := 'Committed ' + RelativePath + ' so the completion is in history.';
+End;
+
 Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
 Var
-  Root, RelativePath, EscapedPath, Reply, GitError: String;
-  Lines: TStringList;
-  Data: TJSONData;
-  Clean: Boolean;
+  Root, RelativePath, CurrentBody, GitError: String;
+  Dirty: Boolean;
 Begin
   Result := False;
   Note := '';
@@ -989,58 +1256,45 @@ Begin
       Exit;
     End;
   RelativePath := ProjectRelativePath(CompletionPath);
-  EscapedPath := StringReplace(RelativePath, '\', '\\', [rfReplaceAll]);
-  EscapedPath := StringReplace(EscapedPath, '"', '\"', [rfReplaceAll]);
-  If Not RunAssistantGit(Root, '{"arguments":["status","--porcelain","--","' + EscapedPath + '"]}', Reply, GitError) Then
+  If FileIsSymlink(CompletionPath) Then
+    Begin
+      Note := 'The plan ' + RelativePath + ' is a symbolic link, so the completion was left in place and not committed.';
+      Result := True;
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  If Not FileExistsUTF8(CompletionPath) Or Not LoadTextFile(CompletionPath, CurrentBody) Then
+    Begin
+      Note := 'Could not read ' + RelativePath + ' to commit the completion.';
+      Result := True;
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  If Not PlanBodyIntroducesCompletion(CompletionPrevious, CurrentBody) Then
+    Begin
+      ResetAssistantPlanTurn;
+      Exit;
+    End;
+  If Not PlanFilePorcelain(Root, RelativePath, Dirty, GitError) Then
     Begin
       Note := 'Could not check whether the plan file was committed. ' + GitError;
       Result := True;
       ResetAssistantPlanTurn;
       Exit;
     End;
-  Clean := False;
-  Data := Nil;
-  Try
-    Data := GetJSON(Reply);
-    If Data Is TJSONObject Then
-      Clean := Trim(TJSONObject(Data).Get('output', '')) = '';
-  Except
-    Clean := False;
-  End;
-  Data.Free;
-  If Clean Then
+  If Not Dirty Then
     Begin
       ResetAssistantPlanTurn;
       Exit;
     End;
-  If Not CompletionExisted Then
+  If Not AssistantGitTurnCommitted Then
     Begin
-      If FileIsSymlink(CompletionPath) Then
-        Note := 'The new plan ' + RelativePath + ' was not committed, and it is a symbolic link so it was left in place.'
-      Else If Not DeleteFileUTF8(CompletionPath) Then
-        Note := 'The new plan ' + RelativePath + ' was not committed, and it could not be removed.'
-      Else
-        Note := 'Removed ' + RelativePath + ' because this Git repository has no commit that contains the completion.';
-    End
-  Else
-    Begin
-      Lines := TStringList.Create;
-      Try
-        Try
-          Lines.Text := CompletionPrevious;
-          Lines.SaveToFile(CompletionPath);
-          PublishPlanFileWrite(CompletionPath, CompletionPrevious, False);
-          Note := 'The plan status was put back because this Git repository has no commit that contains the completion. ' +
-            'Commit the finished work, set Status to complete, then commit the plan file.';
-        Except
-          On E: Exception Do
-            Note := 'The completion in ' + RelativePath + ' is not committed, and restoring the previous text failed. ' +
-              E.Message;
-        End;
-      Finally
-        Lines.Free;
-      End;
+      Note := RestoreNotedPlanCompletion(Root, RelativePath);
+      Result := Note <> '';
+      ResetAssistantPlanTurn;
+      Exit;
     End;
+  Note := CommitNotedPlanFile(Root, RelativePath, CurrentBody);
   Result := Note <> '';
   ResetAssistantPlanTurn;
 End;

@@ -41,7 +41,7 @@ Type
     FErrorText: String;
     FStatusText: String;
     FFinishEmitted: Boolean;
-    FWrotePlan: Boolean;
+    FPlanWrites: Integer;
     FUseResponses: Boolean;
     FTriedResponses: Boolean;
     FResponseOutputJson: String;
@@ -173,7 +173,7 @@ Begin
   FErrorText := '';
   FStatusText := '';
   FFinishEmitted := False;
-  FWrotePlan := False;
+  FPlanWrites := 0;
   FUseResponses := True;
   FTriedResponses := False;
   FResponseOutputJson := '';
@@ -796,7 +796,7 @@ Begin
   LogEvent(aekToolCompleted, Copy(Content, 1, MaxToolEventChars), Call.Name, Call.Id, Ok,
     Integer(GetTickCount64 - StartTick));
   If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
-    FWrotePlan := True;
+    Inc(FPlanWrites);
   WorkflowLogger.Info('AssistantActor',
     Format('tool %s ok=%s ms=%d', [Call.Name, BoolToStr(Ok, True), GetTickCount64 - StartTick]));
 End;
@@ -1101,9 +1101,8 @@ End;
 Procedure TAssistantActor.ExecuteTurn;
 Var
   Url, RequestJson, ErrorText, CapNote: String;
-  RoundNo, I, MaxRounds: Integer;
+  RoundNo, I, MaxRounds, WritesBefore: Integer;
   HasTools: Boolean;
-  WroteBefore: Boolean;
   Svc: TAssistantService;
 Begin
   LogEvent(aekTurnStarted, FModel);
@@ -1170,11 +1169,12 @@ Begin
       If HasTools Then
         Begin
           SetPhase(apTools);
-          WroteBefore := FWrotePlan;
+          { The first plan write must not end the turn. Status: complete still has to be committed. }
+          WritesBefore := FPlanWrites;
           RunTools;
           If Terminated Then
             Break;
-          If FWrotePlan And WroteBefore Then
+          If (FPlanWrites > WritesBefore) And (WritesBefore > 0) Then
             Begin
               EmitSnapshot(True, '', True);
               LogEvent(aekTurnEnded, 'plan_write');

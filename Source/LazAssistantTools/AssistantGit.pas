@@ -18,7 +18,8 @@ Const
     'Run Git in the active project directory in Build mode. Supply an argument array starting with status, diff, log, ' +
     'show, rev-parse, ls-files, add or commit, without git or shell syntax. Stage using ["add","--","path"]. ' +
     'Commit using ["commit","-m","message"]. Put the subject and body in that one message, or pass several -m arguments; ' +
-    'Git joins them with a blank line. A package target can stage and commit only that package and Documents/. ' +
+    'Git joins them with a blank line. End with -- and project-relative paths to commit only those files. ' +
+    'A package target can stage and commit only that package and Documents/. ' +
     'The refusal names the target. Global options, history rewriting, destructive commands and remote operations are not supported. ' +
     'Operates on saved files; save authorized edits first. Inspect status and staged diff before committing; stage only requested files. ' +
     'Follow explicit commit instructions in the conversation or active plan, including automatic commits after completed work. ' +
@@ -67,10 +68,13 @@ Begin
   Index := 1;
   While Index < Args.Count Do
     Begin
+      If Args.Items[Index].AsString = '--' Then
+        Break;
       If Args.Items[Index].AsString <> '-m' Then
         Begin
           ErrorText := 'Use commit with -m and a nonempty message. Put the subject and body in one -m string, ' +
-            'or pass several -m arguments. Git joins them with a blank line. Other commit options are not allowed.';
+            'or pass several -m arguments. Git joins them with a blank line. ' +
+            'To commit only some files, end with -- and those paths. Other commit options are not allowed.';
           Exit;
         End;
       If (Index + 1 >= Args.Count) Or (Trim(Args.Items[Index + 1].AsString) = '') Then
@@ -87,6 +91,43 @@ Begin
       ErrorText := 'Use commit with -m and a nonempty message. Put the subject and body in one -m string, ' +
         'or pass several -m arguments. Git joins them with a blank line.';
       Exit;
+    End;
+  Result := True;
+End;
+
+Function CommitPathsAccepted(Const Root: String; Args: TJSONArray; Out ErrorText: String): Boolean;
+Var
+  Index: Integer;
+  Path: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  Index := 1;
+  While Index < Args.Count Do
+    Begin
+      If Args.Items[Index].AsString = '--' Then
+        Break;
+      Inc(Index, 2);
+    End;
+  If Index >= Args.Count Then
+    Exit(True);
+  Inc(Index);
+  If Index >= Args.Count Then
+    Begin
+      ErrorText := 'After --, pass the project-relative files to commit.';
+      Exit;
+    End;
+  While Index < Args.Count Do
+    Begin
+      Path := Args.Items[Index].AsString;
+      If (Path = '') Or (Path[1] In ['-', '/', '\', ':']) Or (Pos(':', Path) > 0) Or
+        (Pos('..', Path) > 0) Or (Pos('*', Path) > 0) Or (Pos('?', Path) > 0) Or (Path = '.') Or
+        DirectoryExists(IncludeTrailingPathDelimiter(Root) + Path) Then
+        Begin
+          ErrorText := 'Commit explicit project-relative file paths without traversal or wildcards.';
+          Exit;
+        End;
+      Inc(Index);
     End;
   Result := True;
 End;
@@ -150,6 +191,8 @@ Begin
           End;
       { Commits use explicit messages and the reviewed index, without rewrites. }
       If (Command = 'commit') And (Not CommitMessagesAccepted(TJSONArray(Args), ErrorText)) Then
+        Exit;
+      If (Command = 'commit') And (Not CommitPathsAccepted(ProjectRoot, TJSONArray(Args), ErrorText)) Then
         Exit;
       For I := 1 To Args.Count - 1 Do
         Begin
