@@ -148,7 +148,7 @@ That is why thinking here is neither as rich nor as dynamic. It is not that Grok
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Lazarus IDE                                                             │
 │  ┌─ Project Assistant (dockable) ─────────────────────────────────────┐ │
-│  │  Mode chip (Ask · Plan · Build)     permission, not a page swap    │ │
+│  │  Mode chip (Inspect · Plan · Build) permission, not a page swap    │ │
 │  │  ┌─ Work ─┐  ┌─ Trace (scrollback of typed blocks) ─┐  ┌ History ┐ │ │
 │  │  │ tiles  │  │ thinking · tool · compile · answer   │  │ JSONL   │ │ │
 │  │  │ plan   │  │ subagent rows                        │  │         │ │ │
@@ -394,17 +394,17 @@ Build’s lesson: **the transcript never leaves the centre. Mode is a chip, not 
 
 ### 6.1 Mode model (keep three intents, fix the meaning)
 
-**Ask · Plan · Build** chips (`TAssistantMode` is `amChat`, `amPlan`, `amBuild`). One line always visible:
+**Inspect · Plan · Build** chips (`TAssistantMode` is `amInspect`, `amPlan`, `amBuild`). One line always visible:
 
 | Chip | Permission | One-liner |
 |------|------------|-----------|
-| **Ask** | Read-only project tools | “Explains and inspects. Will not write files.” |
-| **Plan** | Ask + Markdown under `Documents/` (and active plan path) | “Writes the plan file. Will not edit sources.” |
+| **Inspect** | Read-only project tools | “Explains and inspects. Will not write files.” |
+| **Plan** | Inspect + Markdown under `Documents/` (and active plan path) | “Writes the plan file. Will not edit sources.” |
 | **Build** | Plan + source tools + compile | “Edits project files and compiles.” |
 
 Hard tool gates stay. In-flight mode lock stays.
 
-**Same conversation across chips.** Switching Ask → Plan → Build does not start a new chat. The harness overlay and `tools` JSON change at the next request (or after cancel). History is the session, not “Chat history vs Code history.”
+**Same conversation across chips.** Switching Inspect → Plan → Build does not start a new chat. The harness overlay and `tools` JSON change at the next request (or after cancel). History is the session, not “Chat history vs Code history.”
 
 ### 6.2 Layout
 
@@ -433,7 +433,7 @@ Hard tool gates stay. In-flight mode lock stays.
 ### 6.3 Mode interaction (the missing UX)
 
 1. **Stay.** Default is last mode per project (`config.json`).
-2. **Promote, don’t scold.** If Ask hits a write-shaped request, the answer can say so *and* the shell shows **Switch to Build to apply**. Same for “write a plan” in Ask → **Switch to Plan**.
+2. **Promote, don’t scold.** If Inspect hits a write-shaped request, the answer can say so *and* the shell shows **Switch to Build to apply**. Same for “write a plan” in Inspect → **Switch to Plan**.
 3. **Plan approval.** When Plan mode finishes a write to the active plan, show a thin bar: **Build this** (chip → Build, seed “Implement the next incomplete section”) · **Revise**. This is grok-build `exit_plan_mode` in IDE clothes.
 4. **Fix Error / Review** force Build (already true) and explain why in the badge, not a mystery tab jump.
 5. **Empty states are one sentence**, not a help essay in the side panel. Chat’s current 300 px of documentation goes away.
@@ -703,7 +703,7 @@ Do **not** grow the bottom bar. Do **not** add a tutorial overlay. Keep static c
 2. **Bottom bar.** Keep only the verbs of the current state: **Send/Steer**, **Stop**, **Review ▾**, **Commands…**. **New Chat**, **Settings**, and **Fix Error** (when no Messages error is selected) move into Session / Review / overflow `⋯`. Delete leftover hidden LFM controls (`ToggleThinkingButton`, `ReviewCompileButton`, `ReviewBuildButton`, `AutoNewChatCheck`).
 3. **History column (240 px).** Export / Delete become the history context menu (rewind lives there too). Search uses `TextHint` on the list instead of a dedicated row. Default width ~200 px; the combo remains the archive switcher.
 4. **Left work column (300 px).** Default ~220 px. Plan file list and Build tiles should not stack 200 px of plans on top of a full tile list — one work list, with the Plan strip only while `amPlan`. Runtime Plan/Build panels use `Scale96ToForm` (they are still raw 200 / 36 px).
-5. **Dead help.** Delete `ChatSidePanel` / `ChatSideLabel` (still says “Chat mode” in the resource, always `Visible := False`). Empty trace gets **one** sentence: “Type a request, or open Commands… (`Ctrl+P`). Prefix `/` for the same list.”
+5. **Dead help.** `ChatSidePanel` / `ChatSideLabel` are removed. Empty trace still needs **one** sentence: “Type a request, or open Commands… (`Ctrl+P`). Prefix `/` for the same list.”
 
 ### 8.2 Prompt and catalog (what to finish)
 
@@ -777,7 +777,7 @@ Trace virtualization (GTK ~30k coordinate cap), ACP host, worktree isolation, me
 - During a Build turn the user can **watch thinking grow, see each tool by name/path, and expand thought after**.
 - Mid-turn, they can type a correction and **Steer**; the next model round incorporates it without throwing away the current compile or thought so far.
 - A new user can find Compact, Rewind, Skills, Review, and Model **without knowing any `/` name** — via Commands…, the window menu, or the footer.
-- Switching Ask → Plan → Build does not wipe the transcript or start a silent new chat.
+- Switching Inspect → Plan → Build does not wipe the transcript or start a silent new chat.
 - A Plan write offers **Build this** without hunting tabs.
 - Review of a change can run naming + structure lenses in parallel; syntax still comes from compile.
 - Thinking across tool rounds is still on screen (not reset to empty).

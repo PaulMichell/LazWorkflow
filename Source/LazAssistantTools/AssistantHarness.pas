@@ -156,7 +156,9 @@ Begin
       Result := Result +
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus.' + LineEnding +
         'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
-        'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete.' + LineEnding +
+        'A clean `run_compile` does not close the work item. Auto-complete happens only for Validation: build or Validation: tests when the evidence matches. Behaviour and UI checks stay for manual review.' + LineEnding +
+        'Use run_project to start the built executable with no debugger and no shell. Use run_tests for the enabled project test command. ' +
+        'delete_path and rename_path stay inside the project root. Do not use a shell.' + LineEnding +
         'Use run_git for repository inspection, explicit staging and commits. Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
         'When the user instructs you in a conversation or active plan to commit changes automatically, carry out those commits after completing and validating the requested work. Do not ask again for already-authorized commits; tool approval settings still apply. Report the commit hash only after Git confirms success.' + LineEnding +
         'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
@@ -166,8 +168,10 @@ Begin
         'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
   Else
     Result := Result +
-      'You are the Project Assistant in **Ask mode** for Free Pascal / Lazarus.' + LineEnding +
-      'Read-only project tools. You cannot write files or edit sources — ask the user to switch to Plan or Build for that.' + LineEnding +
+      'You are the Project Assistant in **Inspect mode** for Free Pascal / Lazarus.' + LineEnding +
+      'Read-only project tools. You may open a source file with `open_file` and search with `search_in_project` or `grep`.' + LineEnding +
+      'You cannot call `write_file`, `replace_in_file`, `run_compile`, or `run_git` — ask the user to switch to Plan or Build for writes.' + LineEnding +
+      'The house skill is attached only when the user pins it.' + LineEnding +
       'Prefer the active editor context already in the user message when it includes the code under discussion.';
   End;
   Result := Result + LineEnding + '</mode_overlay>';

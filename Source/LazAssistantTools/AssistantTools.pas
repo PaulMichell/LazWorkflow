@@ -43,7 +43,7 @@ Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
 Procedure SetActivePlanRelativePath(Const RelativePath: String);
-{ Last run_compile outcome for Build-mode auto Status: complete (seq bumps each run). }
+{ Last run_compile outcome. A clean compile does not close a plan item (seq bumps each run). }
 Function AssistantLastCompileSeq: Integer;
 Function AssistantLastCompileWasClean: Boolean;
 { Last run_compile text (quiet lazbuild or IDE Messages) for pascal-review children. }
@@ -66,7 +66,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, AssistantWorkTarget, PackageIntf, IDEOptionsIntf, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, fpjson, jsonparser;
+  AssistantLfm, AssistantWorkTarget, PackageIntf, IDEOptionsIntf, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -289,6 +289,8 @@ Begin
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
+    (Name = 'run_project') Or (Name = 'run_tests') Or
+    (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'set_active_plan') Or (Name = 'read_file');
 End;
 
@@ -302,7 +304,7 @@ Begin
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Then
     Begin
-      Result := Mode In [amChat, amPlan, amBuild];
+      Result := Mode In [amInspect, amPlan, amBuild];
       Exit;
     End;
   { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
@@ -313,10 +315,18 @@ Begin
       Result := Mode In [amPlan, amBuild];
       Exit;
     End;
-  { Build-mode source tools — never Chat or Plan. }
+  { Open and search are read-only. Inspect may use them; it cannot write or compile. }
+  If (Name = 'search_in_project') Or (Name = 'open_file') Then
+    Begin
+      Result := Mode In [amInspect, amBuild];
+      Exit;
+    End;
+  { Build-mode source tools — never Inspect or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'search_in_project') Or (Name = 'run_compile') Or (Name = 'run_git') Or
-    (Name = 'add_unit_to_project') Or (Name = 'open_file') Or
+    (Name = 'run_compile') Or (Name = 'run_git') Or
+    (Name = 'run_project') Or (Name = 'run_tests') Or
+    (Name = 'delete_path') Or (Name = 'rename_path') Or
+    (Name = 'add_unit_to_project') Or
     (Name = 'ensure_form_component') Then
     Begin
       Result := Mode = amBuild;
@@ -331,7 +341,7 @@ Begin
     '{"type":"function","function":{' +
       '"name":"read_skill",' +
       '"description":"Load the full body of a catalogued SKILL.md by name. ' +
-        'Search project .grok/skills, .assistant/skills, then ~/.grok/skills.",' +
+        'Search <working-root>/.assistant/skills, then ~/.grok/skills.",' +
       '"parameters":{"type":"object","properties":{' +
         '"name":{"type":"string","description":"Skill directory name, e.g. free-pascal-engineer"}' +
       '},"required":["name"]}' +
@@ -436,7 +446,7 @@ Begin
     BuildTodoToolJson + ',' +
     '{"type":"function","function":{' +
       '"name":"write_markdown",' +
-      '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans.",' +
+      '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. A ### heading without Status is a note, not a todo.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path (default Documents/Plan.md)"},' +
         '"content":{"type":"string","description":"Full Markdown body to write"},' +
@@ -445,7 +455,7 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"update_markdown",' +
-      '"description":"Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when changing Status: lines or a single section.",' +
+      '"description":"Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when changing Status: lines or a single section. Rejects a Status: line under a ## heading. A ### heading without Status stays a note, not a todo.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path (default: active plan)"},' +
         '"old_text":{"type":"string","description":"Exact text to find"},' +
@@ -473,13 +483,13 @@ Begin
     '}}';
 End;
 
-Function BuildSourceToolsJson: String;
+Function BuildNavigationToolsJson: String;
 Begin
   Result :=
     '{"type":"function","function":{' +
       '"name":"search_in_project",' +
-      '"description":"Search project source/text files (same engine as grep). Prefer grep in Ask/Plan. ' +
-        'Returns path:line:text.",' +
+      '"description":"Search project source/text files (same engine as grep). ' +
+        'Inspect and Build may call it. Returns path:line:text.",' +
       '"parameters":{"type":"object","properties":{' +
         '"query":{"type":"string","description":"Text to find"},' +
         '"path":{"type":"string","description":"Project-relative directory or file (empty = project root)"},' +
@@ -487,6 +497,18 @@ Begin
         '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
       '},"required":["query"]}' +
     '}},' +
+    '{"type":"function","function":{' +
+      '"name":"open_file",' +
+      '"description":"Open a project source file in the Lazarus source editor. Does not modify the file.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative file path"}' +
+      '},"required":["path"]}' +
+    '}}';
+End;
+
+Function BuildSourceToolsJson: String;
+Begin
+  Result :=
     '{"type":"function","function":{' +
       '"name":"write_file",' +
       '"description":"Create or overwrite a real project file. Never create empty files or ApiProbe/scratch/temp units — use search_in_project, list_directory, and read_file to discover APIs. Prefer replace_in_file for small edits.",' +
@@ -527,13 +549,6 @@ Begin
       '},"required":["path"]}' +
     '}},' +
     '{"type":"function","function":{' +
-      '"name":"open_file",' +
-      '"description":"Open a project source file in the Lazarus source editor.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative file path"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
       '"name":"ensure_form_component",' +
       '"description":"Add or update a published form component in BOTH the .pas unit and matching .lfm. Required when adding TTimer, TButton, etc. so events fire. Prefer this over hand-editing LFM alone.",' +
       '"parameters":{"type":"object","properties":{' +
@@ -547,6 +562,40 @@ Begin
     '}}';
 End;
 
+Function BuildRunToolsJson: String;
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"run_project",' +
+      '"description":"Start the active project executable directly. No shell and no debugger. ' +
+        'The executable must already be built and must stay inside the project root.",' +
+      '"parameters":{"type":"object","properties":{},"required":[]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"run_tests",' +
+      '"description":"Run the enabled test command for this target. Arguments are passed directly, not through a shell. ' +
+        'The executable and working directory must stay inside the project root.",' +
+      '"parameters":{"type":"object","properties":{},"required":[]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"delete_path",' +
+      '"description":"Delete one file, symbolic link, or empty directory inside the project root. ' +
+        'Refuses the project root, Git metadata, and the project or package file. Does not use a shell.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative or absolute path inside the project root"}' +
+      '},"required":["path"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"rename_path",' +
+      '"description":"Rename or move a file or directory inside the project root. Both paths must stay in the project. ' +
+        'Refuses the project root, Git metadata, and the project or package file. Does not use a shell.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Existing project path"},' +
+        '"new_path":{"type":"string","description":"New path inside the project root"}' +
+      '},"required":["path","new_path"]}' +
+    '}}';
+End;
+
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
 Var
   Body: String;
@@ -555,11 +604,14 @@ Begin
     amPlan:
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
     amBuild:
-      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildSourceToolsJson +
+      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
+        BuildSourceToolsJson + ',' + BuildRunToolsJson +
         ',{"type":"function","function":{"name":"run_git","description":' +
         '"' + JsonEscapeLocal(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
-    amChat:
-      Body := BuildReadToolsJson;
+    amInspect:
+      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson;
+  Else
+    Body := BuildReadToolsJson;
   End;
   If AllowSubagents Then
     Body := Body + ',' + BuildSpawnToolJson;
@@ -568,7 +620,7 @@ End;
 
 Function BuildAssistantToolsJson: String;
 Begin
-  Result := BuildAssistantToolsJsonForSession(amChat, False);
+  Result := BuildAssistantToolsJsonForSession(amInspect, False);
 End;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
@@ -1622,7 +1674,7 @@ Begin
 End;
 
 Function RunProcessCapture(Const Exe, WorkDir: String; Const Args: Array Of String;
-  Out OutputText: String; Out ExitCode: Integer; Out ErrorText: String): Boolean;
+  Out OutputText: String; Out ExitCode: Integer; Out ErrorText: String; TimeoutMs: QWord = 0): Boolean;
 Var
   Proc: TProcess;
   I, BytesRead: Integer;
@@ -1645,6 +1697,8 @@ Begin
   OutputText := '';
   ExitCode := -1;
   ErrorText := '';
+  If TimeoutMs = 0 Then
+    TimeoutMs := AssistantToolMaxCompileMs;
   FillChar(Buf, SizeOf(Buf), 0);
   If (Exe = '') Or (Not FileExistsUTF8(Exe)) Then
     Begin
@@ -1671,10 +1725,9 @@ Begin
               Result := AbortRunning('Cancelled.');
               Exit;
             End;
-          If GetTickCount64 - StartTick >= AssistantToolMaxCompileMs Then
+          If GetTickCount64 - StartTick >= TimeoutMs Then
             Begin
-              Result := AbortRunning(Format('Timed out after %d s.',
-                [AssistantToolMaxCompileMs Div 1000]));
+              Result := AbortRunning(Format('Timed out after %d s.', [TimeoutMs Div 1000]));
               Exit;
             End;
           If Proc.Output.NumBytesAvailable > 0 Then
@@ -2478,7 +2531,7 @@ Begin
           GLastCompileClean := BuildOk And (ErrorCount = 0);
           If GLastCompileClean Then
             ResultText := ResultText + LineEnding +
-              'COMPILE_CLEAN=1 (errors=0; Build mode may auto-mark the active plan package complete).'
+              'COMPILE_CLEAN=1 (errors=0). A clean compile does not close the work item; completion needs Validation: build or Validation: tests with matching evidence.'
           Else
             ResultText := ResultText + LineEnding +
               'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
@@ -2521,7 +2574,7 @@ Begin
     LineEnding + LineEnding + MsgText;
   If GLastCompileClean Then
     ResultText := ResultText + LineEnding +
-      'COMPILE_CLEAN=1 (errors=0; Build mode may auto-mark the active plan package complete).'
+      'COMPILE_CLEAN=1 (errors=0). A clean compile does not close the work item; completion needs Validation: build or Validation: tests with matching evidence.'
   Else
     ResultText := ResultText + LineEnding +
       'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
@@ -2908,6 +2961,282 @@ Begin
   WorkflowLogger.Info('AssistantTools', ResultText);
 End;
 
+Function PathHasControlCharacter(Const Path: String): Boolean;
+Begin
+  Result := (Pos(#0, Path) > 0) Or (Pos(#10, Path) > 0) Or (Pos(#13, Path) > 0);
+End;
+
+Function IsGitMetadataPath(Const Resolved: String): Boolean;
+Var
+  GitDir, Cand: String;
+Begin
+  GitDir := IncludeTrailingPathDelimiter(ExcludeTrailingPathDelimiter(ProjectRootPath)) + '.git';
+  Cand := ExpandFileName(Resolved);
+  Result := (CompareFilenames(ExcludeTrailingPathDelimiter(Cand), ExcludeTrailingPathDelimiter(GitDir)) = 0) Or
+    (CompareFilenames(Copy(Cand, 1, Length(IncludeTrailingPathDelimiter(GitDir))), IncludeTrailingPathDelimiter(GitDir)) = 0);
+End;
+
+Function RefuseProtectedPath(Const Resolved: String; Out ErrorText: String): Boolean;
+Var
+  Root, Manifest: String;
+Begin
+  Result := True;
+  ErrorText := '';
+  Root := ExcludeTrailingPathDelimiter(ProjectRootPath);
+  If CompareFilenames(ExcludeTrailingPathDelimiter(ExpandFileName(Resolved)), Root) = 0 Then
+    Begin
+      ErrorText := 'Refusing to change the project root.';
+      Exit;
+    End;
+  If IsGitMetadataPath(Resolved) Then
+    Begin
+      ErrorText := 'Refusing to change Git metadata.';
+      Exit;
+    End;
+  If AssistantTarget.Available Then
+    Begin
+      Manifest := AssistantTarget.Manifest;
+      If (Manifest <> '') And (CompareFilenames(ExpandFileName(Manifest), ExpandFileName(Resolved)) = 0) Then
+        Begin
+          ErrorText := 'Refusing to change the project or package file.';
+          Exit;
+        End;
+    End;
+  Result := False;
+End;
+
+Function DirectoryIsEmpty(Const Directory: String): Boolean;
+Var
+  Info: TSearchRec;
+  Found: Integer;
+Begin
+  Result := True;
+  Found := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
+  If Found <> 0 Then
+    Exit;
+  Try
+    Repeat
+      If (Info.Name <> '.') And (Info.Name <> '..') Then
+        Exit(False);
+    Until FindNextUTF8(Info) <> 0;
+  Finally
+    FindCloseUTF8(Info);
+  End;
+End;
+
+Function ToolDeletePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Resolved: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If PathHasControlCharacter(JsonArgString(ArgumentsJson, 'path')) Then
+    Begin
+      ErrorText := 'Path contains a control character.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'path'), Resolved, ErrorText) Then
+    Exit;
+  If RefuseProtectedPath(Resolved, ErrorText) Then
+    Exit;
+  If FileIsSymlink(Resolved) Then
+    Begin
+      If Not DeleteFileUTF8(Resolved) Then
+        ErrorText := 'Could not delete the symbolic link.'
+      Else
+        Begin
+          ResultText := 'Deleted symbolic link ' + Resolved;
+          Result := True;
+        End;
+      Exit;
+    End;
+  If DirectoryExistsUTF8(Resolved) Then
+    Begin
+      If Not DirectoryIsEmpty(Resolved) Then
+        Begin
+          ErrorText := 'Directory is not empty. Delete its files first.';
+          Exit;
+        End;
+      If Not RemoveDir(Resolved) Then
+        ErrorText := 'Could not remove the directory.'
+      Else
+        Begin
+          ResultText := 'Removed empty directory ' + Resolved;
+          Result := True;
+        End;
+      Exit;
+    End;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'Path does not exist.';
+      Exit;
+    End;
+  If Not DeleteFileUTF8(Resolved) Then
+    ErrorText := 'Could not delete the file.'
+  Else
+    Begin
+      ResultText := 'Deleted ' + Resolved;
+      Result := True;
+    End;
+End;
+
+Function ToolRenamePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  SourcePath, DestPath: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If PathHasControlCharacter(JsonArgString(ArgumentsJson, 'path')) Or
+    PathHasControlCharacter(JsonArgString(ArgumentsJson, 'new_path')) Then
+    Begin
+      ErrorText := 'Path contains a control character.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'path'), SourcePath, ErrorText) Then
+    Exit;
+  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'new_path'), DestPath, ErrorText) Then
+    Exit;
+  If RefuseProtectedPath(SourcePath, ErrorText) Or RefuseProtectedPath(DestPath, ErrorText) Then
+    Exit;
+  If CompareFilenames(SourcePath, DestPath) = 0 Then
+    Begin
+      ErrorText := 'The new path is the same as the old path.';
+      Exit;
+    End;
+  If (Not FileExistsUTF8(SourcePath)) And (Not DirectoryExistsUTF8(SourcePath)) Then
+    Begin
+      ErrorText := 'Path does not exist.';
+      Exit;
+    End;
+  If FileExistsUTF8(DestPath) Or DirectoryExistsUTF8(DestPath) Then
+    Begin
+      ErrorText := 'The new path already exists.';
+      Exit;
+    End;
+  If Not RenameFile(SourcePath, DestPath) Then
+    ErrorText := 'Could not rename the path.'
+  Else
+    Begin
+      ResultText := 'Renamed ' + SourcePath + ' to ' + DestPath;
+      Result := True;
+    End;
+End;
+
+Function ToolRunProject(Out ResultText, ErrorText: String): Boolean;
+Var
+  Proj: TLazProject;
+  Exe, WorkDir: String;
+  Proc: TProcess;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If AssistantTarget.Kind <> atkProject Then
+    Begin
+      ErrorText := 'Run starts the active project executable, not a package.';
+      Exit;
+    End;
+  If (Not Assigned(LazarusIDE)) Or (Not Assigned(LazarusIDE.ActiveProject)) Then
+    Begin
+      ErrorText := 'No active Lazarus project.';
+      Exit;
+    End;
+  Proj := LazarusIDE.ActiveProject;
+  If Not Assigned(Proj.LazCompilerOptions) Then
+    Begin
+      ErrorText := 'The active project has no compiler options.';
+      Exit;
+    End;
+  Exe := Proj.LazCompilerOptions.CreateTargetFilename;
+  If Exe = '' Then
+    Begin
+      ErrorText := 'The active project has no target executable.';
+      Exit;
+    End;
+  If Not FilenameIsAbsolute(Exe) Then
+    Exe := ExpandFileName(ExtractFilePath(Proj.ProjectInfoFile) + Exe);
+  If Not ResolveProjectPath(Exe, Exe, ErrorText) Then
+    Exit;
+  If Not FileExistsUTF8(Exe) Then
+    Begin
+      ErrorText := 'Build the project before running it. Executable not found: ' + Exe;
+      Exit;
+    End;
+  WorkDir := ProjectRootPath;
+  Proc := TProcess.Create(Nil);
+  Try
+    Proc.Executable := Exe;
+    Proc.CurrentDirectory := WorkDir;
+    Proc.Options := [poNoConsole];
+    Proc.Execute;
+    ResultText := 'Started ' + Exe + ' (pid ' + IntToStr(Proc.ProcessID) +
+      '). No debugger is attached, and no shell was used.';
+    Result := True;
+  Except
+    On E: Exception Do
+      ErrorText := 'Could not start the project: ' + E.Message;
+  End;
+  Proc.Free;
+End;
+
+Function ToolRunTests(Out ResultText, ErrorText: String): Boolean;
+Var
+  Settings: TAssistantTestSettings;
+  Exe, WorkDir, OutputText: String;
+  Args: Array Of String;
+  I, ExitCode: Integer;
+  TimeoutMs: QWord;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If Not AssistantTarget.Available Then
+    Begin
+      ErrorText := 'No available Assistant work target.';
+      Exit;
+    End;
+  Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, AssistantTarget.Manifest);
+  Try
+    Settings.Load;
+    If Not Settings.Enabled Then
+      Begin
+        ErrorText := 'Configure and enable the test command for this target first.';
+        Exit;
+      End;
+    If Not Settings.Validate(ErrorText) Then
+      Exit;
+    Exe := Settings.ResolvedExecutable;
+    WorkDir := Settings.WorkingDirectory;
+    If Not ResolveProjectPath(Exe, Exe, ErrorText) Then
+      Exit;
+    If Not ResolveProjectPath(WorkDir, WorkDir, ErrorText) Then
+      Exit;
+    If Not FileExistsUTF8(Exe) Then
+      Begin
+        ErrorText := 'Test executable not found: ' + Exe;
+        Exit;
+      End;
+    SetLength(Args, Settings.Arguments.Count);
+    For I := 0 To Settings.Arguments.Count - 1 Do
+      Args[I] := Settings.Arguments[I];
+    TimeoutMs := QWord(Settings.TimeoutSeconds) * 1000;
+    If TimeoutMs > AssistantToolMaxCompileMs Then
+      TimeoutMs := AssistantToolMaxCompileMs;
+    If Not RunProcessCapture(Exe, WorkDir, Args, OutputText, ExitCode, ErrorText, TimeoutMs) Then
+      Exit;
+    If Length(OutputText) > AssistantToolMaxReadChars Then
+      OutputText := Copy(OutputText, 1, AssistantToolMaxReadChars) + LineEnding + '… (output truncated)';
+    ResultText := 'Test executable: ' + Exe + LineEnding +
+      'Working directory: ' + WorkDir + LineEnding +
+      'Exit code: ' + IntToStr(ExitCode) + LineEnding + LineEnding + OutputText;
+    Result := True;
+  Finally
+    Settings.Free;
+  End;
+End;
+
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String): Boolean; Forward;
 
@@ -2924,10 +3253,22 @@ Var
         ErrorText := 'Package membership is managed in the Lazarus package editor.';
         Exit(False);
       End;
-    If (Name='write_file') Or (Name='replace_in_file') Or (Name='ensure_form_component') Or (Name='write_markdown') Or (Name='update_markdown') Then
+    If (Name='write_file') Or (Name='replace_in_file') Or (Name='ensure_form_component') Or
+      (Name='write_markdown') Or (Name='update_markdown') Or (Name='delete_path') Or (Name='rename_path') Then
       Begin
         Path := JsonArgString(ArgumentsJson, 'path');
-        Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+        If Name = 'rename_path' Then
+          Begin
+            Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+            If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
+            If Result Then
+              Begin
+                Path := JsonArgString(ArgumentsJson, 'new_path');
+                Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+              End;
+          End
+        Else
+          Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
         If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
         If Not Result And (ErrorText='') Then ErrorText := 'Path is outside the selected package write scope.';
       End;
@@ -2994,6 +3335,14 @@ Begin
     Result := ToolRunGit(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_compile' Then
     Result := ToolRunCompile(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'run_project' Then
+    Result := ToolRunProject(ResultText, ErrorText)
+  Else If Name = 'run_tests' Then
+    Result := ToolRunTests(ResultText, ErrorText)
+  Else If Name = 'delete_path' Then
+    Result := ToolDeletePath(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'rename_path' Then
+    Result := ToolRenamePath(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'add_unit_to_project' Then
     Result := ToolAddUnitToProject(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'open_file' Then

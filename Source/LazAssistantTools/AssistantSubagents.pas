@@ -176,7 +176,7 @@ Begin
     sakPlan: Result := amPlan;
     sakGeneralPurpose: Result := ParentMode;
   Else
-    Result := amChat;
+    Result := amInspect;
   End;
 End;
 

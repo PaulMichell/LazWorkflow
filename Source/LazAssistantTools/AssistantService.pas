@@ -641,6 +641,9 @@ Begin
         '- `open_file` — open in the IDE editor' + LineEnding +
         '- `run_compile` — **prefer quiet** (default): non-visual lazbuild, no Messages UI. ' +
         'Use `ui=true` only for a final IDE Messages check.' + LineEnding +
+        '- `run_project` — start the built executable directly. No shell and no debugger.' + LineEnding +
+        '- `run_tests` — run the enabled test command for this target. Arguments are not passed through a shell.' + LineEnding +
+        '- `delete_path` / `rename_path` — one path inside the project root. Refuses the root, Git metadata, and the project file.' + LineEnding +
         LineEnding +
         '**Forms / LFM (critical — compile success is not enough):**' + LineEnding +
         '- Declaring a field in .pas does **not** create or wire the component. Events fire only when the ' +
@@ -660,7 +663,7 @@ Begin
         'Discover symbols with `search_in_project` / `list_directory` / `read_file` only.' + LineEnding +
         LineEnding +
         '**Workflow:** search → read → edit (.pas and .lfm) → run_compile → fix until clean. ' +
-        'A clean `run_compile` (errors=0) after Work-on-this may auto-mark the plan package complete. ' +
+        'A clean `run_compile` does not close the work item. Auto-complete happens only for Validation: build or Validation: tests when the evidence matches. ' +
         'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +
         '`##` headings are context and must not receive a Status line. Prefer Michell Free Pascal conventions.' + LineEnding +
         LineEnding +
@@ -669,11 +672,13 @@ Begin
         'If a turn hits the tool-round limit, continue from existing tool results instead of re-reading.';
   Else
     Result :=
-      'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Chat mode). ' +
-      'You may call tools read_file, list_directory, open_markdown, and get_project_info when you need project files or to open Markdown. ' +
+      'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Inspect mode). ' +
+      'You may call read_file, list_directory, grep, search_in_project, open_file, open_markdown, and get_project_info. ' +
+      'open_file opens a source tab and does not modify it. search_in_project searches project text. ' +
       'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
       'Prefer the active editor context already in the user message when it includes the code under discussion. ' +
-      'You cannot write files or edit sources in Chat mode — ask the user to switch to Plan or Build for that.';
+      'You cannot call write_file, replace_in_file, run_compile, or run_git in Inspect mode — ask the user to switch to Plan or Build for that. ' +
+      'The house skill is attached only when the user pins it.';
   End;
 End;
 
@@ -683,13 +688,13 @@ Begin
   FProvider := CreateXaiModelProvider;
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
-  FBaseSystemPrompt := ModeSystemPromptBase(amChat);
+  FBaseSystemPrompt := ModeSystemPromptBase(amInspect);
   FActiveSkill := '';
-  FActiveMode := amChat;
+  FActiveMode := amInspect;
   FSystemPrompt := FBaseSystemPrompt;
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
   FToolsJsonCache := '';
-  FToolsJsonMode := amChat;
+  FToolsJsonMode := amInspect;
   FToolsJsonValid := False;
   FToolsEnabled := True;
   { Grok / xAI chat models often hard-cap near 500k tokens; stay under with margin. }

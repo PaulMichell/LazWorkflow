@@ -9,7 +9,7 @@ Tested: 13 September 2026. Source revision: `3be63c5`.
 - Linux KDE Wayland desktop, Lazarus 4.99, Qt5 using XWayland (`QT_QPA_PLATFORM=xcb`). Native Wayland was not exercised.
 - A separate IDE executable was compiled from the current repository packages and local Lazarus checkout. The build compiled both conversation surface/layout units and finished successfully: 286,762 lines, 19.8 seconds, 14 warnings and 54 notes. Local build evidence is in `Lib/LiveIDEAcceptance/build.log`.
 - A separate Lazarus profile and disposable `LiveViewCheck` project were used. The installed IDE executable was not replaced. The project's program and `Greeting.pas` remained unchanged.
-- Two real requests used the existing ChatGPT sign-in through Codex, model `gpt-6-astra`, low reasoning, in Ask mode. No new API billing configuration was introduced. The copied sign-in file was removed from the isolated profile after testing.
+- Two real requests used the existing ChatGPT sign-in through Codex, model `gpt-6-astra`, low reasoning, in the read-only mode. No new API billing configuration was introduced. The copied sign-in file was removed from the isolated profile after testing.
 - This was real IDE interaction with mouse/keyboard automation and screenshot/clipboard checks. Earlier GTK2 regression results remain separate: 30 programs plus the three package builds passed before this live session.
 
 ## Observed results

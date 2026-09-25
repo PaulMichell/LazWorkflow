@@ -6,20 +6,18 @@ object ProjectAssistantForm: TProjectAssistantForm
   Caption = 'Project Assistant'
   ClientHeight = 700
   ClientWidth = 960
-  DesignTimePPI = 96
   Menu = AssistantMenu
   Position = poDefaultPosOnly
-  Scaled = True
   LCLVersion = '4.99.0.0'
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnShow = FormShow
   inline StatusFooter: TStatusFooterFrame
+    Left = 0
+    Height = 22
     Top = 678
     Width = 960
-    Height = 22
     Align = alBottom
-    ClientWidth = 960
     TabOrder = 3
   end
   object BottomBar: TPanel
@@ -74,7 +72,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
     end
     object ReviewButton: TButton
-      Left = 268
+      Left = 378
       Height = 28
       Top = 4
       Width = 84
@@ -84,7 +82,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnClick = ReviewButtonClick
     end
     object ReviewCompileButton: TButton
-      Left = 268
+      Left = 466
       Height = 28
       Top = 4
       Width = 112
@@ -93,7 +91,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
     end
     object ReviewBuildButton: TButton
-      Left = 268
+      Left = 582
       Height = 28
       Top = 4
       Width = 94
@@ -102,7 +100,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
     end
     object FixErrorButton: TButton
-      Left = 268
+      Left = 680
       Height = 28
       Top = 4
       Width = 84
@@ -111,16 +109,16 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
     end
     object CommandsButton: TButton
-      Left = 268
+      Left = 768
       Height = 28
       Top = 4
-      Width = 100
+      Width = 98
       Action = CommandsAction
       TabOrder = 8
       Visible = False
     end
     object SettingsButton: TButton
-      Left = 268
+      Left = 870
       Height = 28
       Top = 4
       Width = 84
@@ -128,10 +126,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       TabOrder = 9
     end
     object AutoNewChatCheck: TCheckBox
-      Left = 356
+      Left = 958
       Height = 28
       Top = 4
-      Width = 170
+      Width = 160
       Caption = 'Auto New Chat at 95%'
       TabOrder = 10
       Visible = False
@@ -141,7 +139,7 @@ object ProjectAssistantForm: TProjectAssistantForm
   object InputPanel: TPanel
     Left = 0
     Height = 75
-    Top = 553
+    Top = 567
     Width = 960
     Align = alBottom
     BevelOuter = bvNone
@@ -166,27 +164,27 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
       object PlanOfferLabel: TLabel
         Left = 4
-        Height = 24
+        Height = 28
         Top = 2
-        Width = 220
+        Width = 77
         Caption = 'Plan written.'
         Layout = tlCenter
         ParentColor = False
       end
       object BuildThisButton: TButton
-        Left = 232
-        Height = 24
+        Left = 89
+        Height = 28
         Top = 2
-        Width = 88
+        Width = 73
         Action = BuildThisAction
         AutoSize = True
         TabOrder = 0
       end
       object RevisePlanButton: TButton
-        Left = 328
-        Height = 24
+        Left = 170
+        Height = 28
         Top = 2
-        Width = 72
+        Width = 53
         Action = RevisePlanAction
         AutoSize = True
         TabOrder = 1
@@ -194,15 +192,12 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object InputMemo: TSpellMemo
       Left = 6
-      Height = 47
-      Top = 28
+      Height = 35
+      Top = 34
       Width = 948
       Align = alClient
       BorderSpacing.Around = 6
-      ScrollBars = ssAutoVertical
       TabOrder = 0
-      WantTabs = False
-      WordWrap = True
     end
   end
   object ModeBar: TPanel
@@ -221,12 +216,21 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 4
       Width = 300
       Align = alLeft
+      AutoFill = True
       BorderSpacing.Around = 4
-      Caption = ''
+      ChildSizing.LeftRightSpacing = 6
+      ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
+      ChildSizing.EnlargeVertical = crsHomogenousChildResize
+      ChildSizing.ShrinkHorizontal = crsScaleChilds
+      ChildSizing.ShrinkVertical = crsScaleChilds
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 3
+      ClientHeight = 36
+      ClientWidth = 296
       Columns = 3
       ItemIndex = 0
       Items.Strings = (
-        'Ask'
+        'Inspect'
         'Plan'
         'Build'
       )
@@ -234,10 +238,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnClick = ModeGroupClick
     end
     object ModeBadge: TLabel
-      Left = 312
+      Left = 308
       Height = 40
       Top = 4
-      Width = 644
+      Width = 648
       Align = alClient
       BorderSpacing.Around = 4
       Caption = 'Ask · explains and inspects · will not write files'
@@ -248,63 +252,39 @@ object ProjectAssistantForm: TProjectAssistantForm
   end
   object ClientPanel: TPanel
     Left = 0
-    Height = 502
+    Height = 516
     Top = 48
     Width = 960
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 502
+    ClientHeight = 516
     ClientWidth = 960
     TabOrder = 0
     object ModeSidePanel: TPanel
       Left = 0
-      Height = 502
+      Height = 516
       Top = 0
       Width = 300
       Align = alLeft
       BevelOuter = bvNone
-      ClientHeight = 502
+      ClientHeight = 516
       ClientWidth = 300
       TabOrder = 0
-      object ChatSidePanel: TPanel
-        Left = 0
-        Height = 502
-        Top = 0
-        Width = 300
-        Align = alClient
-        BevelOuter = bvNone
-        ClientHeight = 502
-        ClientWidth = 300
-        TabOrder = 0
-        Visible = False
-        object ChatSideLabel: TLabel
-          Left = 8
-          Height = 486
-          Top = 8
-          Width = 284
-          Align = alClient
-          BorderSpacing.Around = 8
-          Caption = 'Ask mode — Q&A and design discussion. Read-only project tools. Switch to Plan to write plan Markdown, or Build to edit sources and compile.'
-          ParentColor = False
-          WordWrap = True
-        end
-      end
     end
     object ModeSplitter: TSplitter
       Left = 300
-      Height = 502
+      Height = 516
       Top = 0
       Width = 5
-      ResizeAnchor = akLeft
     end
     object ConversationPanel: TPanel
       Left = 720
-      Height = 502
+      Height = 516
       Top = 0
       Width = 240
       Align = alRight
       BevelOuter = bvNone
-      ClientHeight = 502
+      ClientHeight = 516
       ClientWidth = 240
       TabOrder = 2
       object HistoryLabel: TLabel
@@ -395,7 +375,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         AnchorSideRight.Side = asrBottom
         AnchorSideBottom.Control = ConversationSearch
         Left = 4
-        Height = 346
+        Height = 360
         Top = 116
         Width = 232
         Anchors = [akTop, akLeft, akRight, akBottom]
@@ -418,7 +398,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         AnchorSideBottom.Side = asrBottom
         Left = 4
         Height = 32
-        Top = 466
+        Top = 480
         Width = 232
         Anchors = [akLeft, akRight, akBottom]
         BorderSpacing.Left = 4
@@ -430,17 +410,17 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object ChatSplitter: TSplitter
       Left = 715
-      Height = 502
+      Height = 516
       Top = 0
       Width = 5
       Align = alRight
       ResizeAnchor = akRight
     end
     object ChatHost: TPanel
-      Left = 305
-      Height = 494
+      Left = 309
+      Height = 508
       Top = 4
-      Width = 410
+      Width = 402
       Align = alClient
       BorderSpacing.Around = 4
       BevelOuter = bvNone
@@ -454,7 +434,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     Cursor = crVSplit
     Left = 0
     Height = 3
-    Top = 550
+    Top = 564
     Width = 960
     Align = alBottom
     ResizeAnchor = akBottom
@@ -568,10 +548,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Stay in Plan and edit the prompt'
       OnExecute = RevisePlanActionExecute
     end
-    object AskModeAction: TAction
-      Caption = 'Ask Mode'
+    object InspectModeAction: TAction
+      Caption = 'Inspect Mode'
       Hint = 'Read-only Q&A'
-      OnExecute = AskModeActionExecute
+      OnExecute = InspectModeActionExecute
     end
     object PlanModeAction: TAction
       Caption = 'Plan Mode'

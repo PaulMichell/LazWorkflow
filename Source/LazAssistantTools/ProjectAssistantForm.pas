@@ -49,7 +49,7 @@ Type
     OpenPlanAction: TAction;
     BuildThisAction: TAction;
     RevisePlanAction: TAction;
-    AskModeAction: TAction;
+    InspectModeAction: TAction;
     PlanModeAction: TAction;
     BuildModeAction: TAction;
     ReviewButton: TButton;
@@ -93,8 +93,6 @@ Type
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
     ModeSplitter: TSplitter;
-    ChatSidePanel: TPanel;
-    ChatSideLabel: TLabel;
     ConversationPanel: TPanel;
     HistoryLabel: TLabel;
     HistoryCombo: TComboBox;
@@ -186,7 +184,7 @@ Type
     Procedure OpenPlanActionExecute(Sender: TObject);
     Procedure BuildThisActionExecute(Sender: TObject);
     Procedure RevisePlanActionExecute(Sender: TObject);
-    Procedure AskModeActionExecute(Sender: TObject);
+    Procedure InspectModeActionExecute(Sender: TObject);
     Procedure PlanModeActionExecute(Sender: TObject);
     Procedure BuildModeActionExecute(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -342,7 +340,6 @@ Type
     Procedure ClearBuildWorkTracking;
     Procedure BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
     Procedure TryAutoCompleteBuildWork(Const StreamErrorText: String);
-    Function CompleteTrackedWorkItem(Out ErrorText: String): Boolean;
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
     Procedure BuildRefreshButtonClick(Sender: TObject);
@@ -500,7 +497,7 @@ Begin
   FDisplayThinkingMs := 0;
   FShowThinking := True;
   FShowToolUse := True;
-  ActiveMode := amChat;
+  ActiveMode := amInspect;
   FApplyingShellConfig := False;
   FModeLocked := False;
   FModeSticky := False;
@@ -871,14 +868,14 @@ End;
 
 Function TProjectAssistantForm.CurrentModeFromUi: TAssistantMode;
 Begin
-  Result := amChat;
+  Result := amInspect;
   If Not Assigned(ModeGroup) Then
     Exit;
   Case ModeGroup.ItemIndex Of
     1: Result := amPlan;
     2: Result := amBuild;
   Else
-    Result := amChat;
+    Result := amInspect;
   End;
 End;
 
@@ -916,10 +913,11 @@ End;
 Function TProjectAssistantForm.ModeChipCaption(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
+    amInspect: Result := 'Inspect';
     amPlan: Result := 'Plan';
     amBuild: Result := 'Build';
   Else
-    Result := 'Ask';
+    Result := 'Inspect';
   End;
 End;
 
@@ -973,8 +971,8 @@ Begin
     OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
   If Assigned(CompactContextAction) Then
     CompactContextAction.Enabled := (Not FSending) And Assigned(AssistantClient);
-  If Assigned(AskModeAction) Then
-    AskModeAction.Enabled := Not FSending;
+  If Assigned(InspectModeAction) Then
+    InspectModeAction.Enabled := Not FSending;
   If Assigned(PlanModeAction) Then
     PlanModeAction.Enabled := Not FSending;
   If Assigned(BuildModeAction) Then
@@ -984,11 +982,6 @@ End;
 Procedure TProjectAssistantForm.UpdateModeSidePanels;
 Begin
   { Work tiles stay on the left in every mode. Plan file list is a top strip in Plan. }
-  If Assigned(ChatSidePanel) Then
-    Begin
-      ChatSidePanel.Visible := False;
-      ChatSidePanel.Align := alNone;
-    End;
   If Assigned(PlanPanel) Then
     Begin
       PlanPanel.Align := alTop;
@@ -1721,69 +1714,6 @@ Begin
     FBuildWorkPlanPath := '';
 End;
 
-Function TProjectAssistantForm.CompleteTrackedWorkItem(Out ErrorText: String): Boolean;
-Var
-  PlanRel, Resolved, Err: String;
-  Sections: TObjectList;
-  I, Idx: Integer;
-  Section: TPlanSection;
-Begin
-  Result := False;
-  ErrorText := '';
-  PlanRel := GetActivePlanRelativePath;
-  If (PlanRel = '') Or (FBuildWorkSectionTitle = '') Then
-    Begin
-      ErrorText := 'No tracked plan item.';
-      Exit;
-    End;
-  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
-    Begin
-      ErrorText := Err;
-      Exit;
-    End;
-  Sections := TObjectList.Create(True);
-  Try
-    If Not ScanPlanSections(Resolved, Sections, Err) Then
-      Begin
-        ErrorText := Err;
-        Exit;
-      End;
-    Idx := -1;
-    If (FBuildWorkSectionIndex >= 0) And (FBuildWorkSectionIndex < Sections.Count) Then
-      Begin
-        Section := TPlanSection(Sections[FBuildWorkSectionIndex]);
-        If Section.Actionable And SameText(Section.Title, FBuildWorkSectionTitle) Then
-          Idx := FBuildWorkSectionIndex;
-      End;
-    If Idx < 0 Then
-      For I := 0 To Sections.Count - 1 Do
-        Begin
-          Section := TPlanSection(Sections[I]);
-          If Section.Actionable And SameText(Section.Title, FBuildWorkSectionTitle) Then
-            Begin
-              Idx := I;
-              Break;
-            End;
-        End;
-    If Idx < 0 Then
-      Begin
-        ErrorText := 'Work item is no longer actionable: ' + FBuildWorkSectionTitle;
-        Exit;
-      End;
-    Section := TPlanSection(Sections[Idx]);
-    If Section.Status <> pssComplete Then
-      If Not SetPlanSectionStatus(Resolved, Idx, pssComplete, Err) Then
-        Begin
-          ErrorText := Err;
-          Exit;
-        End;
-    FBuildSelectedIndex := Idx;
-    Result := True;
-  Finally
-    Sections.Free;
-  End;
-End;
-
 Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: String);
 Var
   PlanRel, Err, Note, CurrentPlan: String;
@@ -1797,35 +1727,12 @@ Begin
       RefreshBuildTodos;
       Exit;
     End;
-  If Not FUseCodex Then
-    Begin
-      If Not CompleteTrackedWorkItem(Err) Then
-        Begin
-          If FPlanAgentRunning Then
-            StopWorkOnPlanAgent('could not mark the item complete: ' + Err);
-          SetBuildStatusFeedback('Plan status not updated: ' + Err);
-        End
-      Else
-        Begin
-          Note := Format('Marked **%s** complete.', [FBuildWorkSectionTitle]);
-          SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
-          If FViewingLive Then
-            Begin
-              If FDisplaySystemNote <> '' Then
-                FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Note
-              Else
-                FDisplaySystemNote := Note;
-            End;
-        End;
-      RefreshBuildTodos;
-      If Assigned(BuildTodoList) And (FBuildSelectedIndex >= 0) And
-        (FBuildSelectedIndex < BuildTodoList.Items.Count) Then
-        BuildTodoList.ItemIndex := FBuildSelectedIndex;
-      Exit;
-    End;
+  { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
       SetBuildStatusFeedback(Note);
+      If FPlanAgentRunning Then
+        StopWorkOnPlanAgent(Note);
       Exit;
     End;
   If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
@@ -1989,7 +1896,7 @@ Begin
       '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
       'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
       '3. Run run_compile after edits, repair introduced errors and compile again. ' +
-      'A turn that finishes without error marks this item complete and refreshes the progress list.';
+      'A clean compile does not mark this item complete.';
   Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
   If Trim(ParentTitle) <> '' Then
     Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
@@ -2253,7 +2160,7 @@ Begin
   If ActiveMode <> amBuild Then
     Begin
       SeedPromptFromSelectedWork;
-      If ActiveMode = amChat Then
+      If ActiveMode = amInspect Then
         SetCurrentSystemNote('Switch to **Build** to apply source edits for this package.');
       Exit;
     End;
@@ -2952,6 +2859,7 @@ Begin
         Begin
           FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
           FCodexProfile := Connections.ProfileDir(Item);
+          { Model, effort and approval stay on the connection and apply to this turn, not the profile. }
           FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
         End;
     Finally Connections.Free; End;
@@ -3361,19 +3269,18 @@ Procedure TProjectAssistantForm.PersistSession;
 Var
   Key: String;
 Begin
+  { Model messages are stored on the conversation turn. Do not write .lazgrokchat-session. }
   If FSending Then
     Exit;
   Key := AssistantTarget.Manifest;
   If Key = '' Then
     Exit;
   FSessionProjectKey := Key;
-  SaveProjectChatSession(Transcript, FContextUsed);
 End;
 
 Procedure TProjectAssistantForm.RestoreSessionIfNeeded;
 Var
   Key: String;
-  LoadedContext: Integer;
 Begin
   Key := AssistantTarget.Manifest;
   If Key = '' Then
@@ -3382,13 +3289,9 @@ Begin
     (AssistantClient.MessageCount > 0) Then
     Exit;
   FSessionProjectKey := Key;
-  { Load messages for the model only — do not replace the chat pane with a banner.
-    The visible turn comes from conversation (ShowLastConversationTurn). }
-  If LoadProjectChatSession(Transcript, LoadedContext) Then
-    Begin
-      FContextUsed := LoadedContext;
-      UpdateStatusFooter;
-    End;
+  { Model context comes from conversation.jsonl turns, not .lazgrokchat-session. }
+  RebuildClientFromConversation;
+  UpdateStatusFooter;
 End;
 
 Procedure TProjectAssistantForm.DeferredBind(Data: PtrInt);
@@ -4313,7 +4216,7 @@ Begin
   AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
   AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
   AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
-  AddAct(AskModeAction, 'Work', 'ask', 'chat', 'Ask mode — inspect, no writes');
+  AddAct(InspectModeAction, 'Work', 'inspect', '', 'Inspect mode — read-only, no writes');
   AddAct(PlanModeAction, 'Work', 'plan', '', 'Plan mode — write the plan file');
   AddAct(BuildModeAction, 'Work', 'build', 'code', 'Build mode — edit sources and compile');
   AddAct(ReviewChangesAction, 'Review', 'review', '', 'Pascal naming, structure, and review lenses');
@@ -5127,11 +5030,11 @@ Begin
     End;
 End;
 
-Procedure TProjectAssistantForm.AskModeActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.InspectModeActionExecute(Sender: TObject);
 Begin
   HideSlashPopup;
   If Not FSending Then
-    SelectMode(amChat);
+    SelectMode(amInspect);
 End;
 
 Procedure TProjectAssistantForm.PlanModeActionExecute(Sender: TObject);

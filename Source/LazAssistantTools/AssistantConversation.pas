@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs;
 
 Type
-  TAssistantMode = (amChat, amPlan, amBuild);
+  TAssistantMode = (amInspect, amPlan, amBuild);
 
   { Lightweight row for the conversation turn list (also lives in FIndex). }
   TConversationIndexEntry = Class
@@ -62,6 +62,8 @@ Type
     TraceJson: String;
     { Project-relative .assistant/events/*.jsonl for replay when TraceJson is empty. }
     EventsFile: String;
+    { JSON array of this turn's model messages. Empty on older lines. }
+    MessagesJson: String;
   End;
 
   TAssistantConversationStore = Class
@@ -174,10 +176,11 @@ End;
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
+    amInspect: Result := 'inspect';
     amPlan: Result := 'plan';
     amBuild: Result := 'build';
   Else
-    Result := 'chat';
+    Result := 'inspect';
   End;
 End;
 
@@ -186,12 +189,14 @@ Var
   T: String;
 Begin
   T := LowerCase(Trim(ModeText));
-  If T = 'plan' Then
+  If T = 'inspect' Then
+    Result := amInspect
+  Else If T = 'plan' Then
     Result := amPlan
-  Else If (T = 'build') Or (T = 'code') Then
+  Else If T = 'build' Then
     Result := amBuild
   Else
-    Result := amChat;
+    Result := amInspect;
 End;
 
 Function NewConversationTurnId: String;
@@ -266,8 +271,7 @@ End;
 
 Function TAssistantConversationStore.EnsureDir: Boolean;
 Var
-  Dir, Readme: String;
-  SL: TStringList;
+  Dir: String;
 Begin
   Result := False;
   FLastError := '';
@@ -288,21 +292,6 @@ Begin
         FLastError := 'Could not create ' + Dir;
         Exit;
       End;
-  Readme := AssistantDir + 'README.txt';
-  If Not FileExistsUTF8(Readme) Then
-    Begin
-      SL := TStringList.Create;
-      Try
-        SL.Add('Managed by LazAssistantTools (Project Assistant).');
-        SL.Add('Safe to exclude from version control.');
-        Try
-          SL.SaveToFile(Readme);
-        Except
-        End;
-      Finally
-        SL.Free;
-      End;
-    End;
   Result := True;
 End;
 
@@ -347,6 +336,8 @@ Begin
     '"todo_id":"' + JsonEscape(Turn.TodoId) + '"';
   If Trim(Turn.EventsFile) <> '' Then
     Result := Result + ',"events_file":"' + JsonEscape(Turn.EventsFile) + '"';
+  If (Trim(Turn.MessagesJson) <> '') And (Trim(Turn.MessagesJson)[1] = '[') Then
+    Result := Result + ',"messages":' + Trim(Turn.MessagesJson);
   If Trim(Turn.TraceJson) <> '' Then
     Result := Result + ',"trace":' + Turn.TraceJson;
   Result := Result + '}';
@@ -391,7 +382,7 @@ Var
 Begin
   Result := False;
   Turn.Id := '';
-  Turn.Mode := 'chat';
+  Turn.Mode := 'inspect';
   Turn.Prompt := '';
   Turn.Thinking := '';
   Turn.Response := '';
@@ -408,6 +399,7 @@ Begin
   Turn.TodoId := '';
   Turn.TraceJson := '';
   Turn.EventsFile := '';
+  Turn.MessagesJson := '';
   If Trim(Line) = '' Then
     Exit;
   Data := Nil;
@@ -419,7 +411,7 @@ Begin
       Obj := TJSONObject(Data);
       { Only fields needed for UI stepping + minimal metadata. }
       Turn.Id := Obj.Get('id', '');
-      Turn.Mode := Obj.Get('mode', 'chat');
+      Turn.Mode := Obj.Get('mode', 'inspect');
       Turn.Prompt := Obj.Get('prompt', '');
       Turn.Thinking := Obj.Get('thinking', '');
       Turn.Response := Obj.Get('response', '');
@@ -435,6 +427,8 @@ Begin
       Turn.PlanFile := Obj.Get('plan_file', '');
       Turn.TodoId := Obj.Get('todo_id', '');
       Turn.EventsFile := Obj.Get('events_file', '');
+      If Obj.Find('messages') Is TJSONArray Then
+        Turn.MessagesJson := Obj.Find('messages').AsJSON;
       If Assigned(Obj.Find('trace')) Then
         Turn.TraceJson := Obj.Find('trace').AsJSON;
       Result := Turn.Id <> '';
@@ -627,7 +621,7 @@ Function TAssistantConversationStore.GetTurn(TurnIndex: Integer; Out Turn: TConv
 Begin
   Result := False;
   Turn.Id := '';
-  Turn.Mode := 'chat';
+  Turn.Mode := 'inspect';
   Turn.Prompt := '';
   Turn.Thinking := '';
   Turn.Response := '';
@@ -644,6 +638,7 @@ Begin
   Turn.TodoId := '';
   Turn.TraceJson := '';
   Turn.EventsFile := '';
+  Turn.MessagesJson := '';
   If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
       FLastError := 'Turn index out of range.';
@@ -702,7 +697,7 @@ Begin
   Result := False;
   ShowThinking := True;
   If Assigned(ShowToolUse) Then ShowToolUse^ := True;
-  ActiveMode := amChat;
+  ActiveMode := amInspect;
   PlanFile := '';
   If Not FileExistsUTF8(ConfigPath) Then
     Exit;
@@ -717,7 +712,7 @@ Begin
       Obj := TJSONObject(Data);
       ShowThinking := Obj.Get('show_thinking', True);
       If Assigned(ShowToolUse) Then ShowToolUse^ := Obj.Get('show_tool_use', True);
-      ModeText := Obj.Get('active_mode', 'chat');
+      ModeText := Obj.Get('active_mode', 'inspect');
       ActiveMode := StrToAssistantMode(ModeText);
       PlanFile := Obj.Get('plan_file', '');
       PlanFile := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
@@ -753,7 +748,6 @@ Begin
   PlanNorm := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
   SL := TStringList.Create;
   Try
-    { Merge into existing config.json so future keys survive. }
     If FileExistsUTF8(ConfigPath) Then
       Begin
         Try
@@ -800,11 +794,11 @@ Var
   IgnoredThinking: Boolean;
   PlanFile: String;
 Begin
-  Mode := amChat;
+  Mode := amInspect;
   PlanFile := '';
   If Not LoadShellConfig(IgnoredThinking, Mode, PlanFile) Then
     Begin
-      Mode := amChat;
+      Mode := amInspect;
       PlanFile := '';
     End;
   Result := SaveShellConfig(ShowThinking, Mode, PlanFile);
