@@ -145,7 +145,7 @@ Build-mode overlay text that says "work package" can stay, but it must not tell 
 No unit test covers `AssistantPlan`. Do not add a scratch program. Compile the `LazAssistantTools` package and check the two lists by hand.
 
 ### 5.1 Compile and check both lists
-Status: in progress
+Status: complete
 
 Compile `Packages/LazAssistantTools.lpk` and fix errors in the units touched above. Then, in the Project Assistant window:
 
