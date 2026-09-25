@@ -225,7 +225,7 @@ Type
     FCodexBroker: TAssistantToolBroker;
     Procedure LoadConnectionSettings;
     Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
-    Procedure StartCodexReply(Const DisplayText, ApiText: String);
+    Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
     Procedure ReleaseCodexRun;
   Private
@@ -234,7 +234,11 @@ Type
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
+    FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
+    Function ComposerHasImages: Boolean;
+    Procedure StashComposerImages;
+    Procedure RestoreHeldComposerImages;
     Procedure ApplyInputPanelHeight;
     Procedure RefreshComposerImages;
     Procedure RefreshAttachAction;
@@ -423,9 +427,9 @@ Type
     Function BuildReviewDisplayLabel(Const KindLabel: String;
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
     Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
-    Procedure SubmitUserText(Const UserText: String; AutoSend: Boolean);
+    Function SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
     { DisplayText is shown/stored; ApiText is what the model receives (may include extra directives). }
-    Procedure SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
+    Function SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
     Procedure SteerQueuedText(Const UserText: String);
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Procedure UpdateWorkActions;
@@ -3064,7 +3068,7 @@ Begin
     End;
 End;
 
-Procedure TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String);
+Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
   Prompt, Recap, ContextText, ModelText: String;
   I: Integer;
@@ -3072,6 +3076,7 @@ Var
   WithContext: Boolean;
   Refs: TAssistantImageRefArray;
 Begin
+  Result := False;
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
     Begin
       SettingsActionExecute(Nil);
@@ -3156,11 +3161,13 @@ Begin
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
       Prompt, FCodexBroker.ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort);
     FCodexRun.Start;
+    Result := True;
   Except
     On E: Exception Do
       Begin
         ReleaseCodexRun;
         FinishAssistantReply(E.Message);
+        Result := False;
       End;
   End;
 End;
@@ -4621,10 +4628,12 @@ Begin
       { The pictures stay in the composer. Do not resend the rejected refs on the next request. }
       If Assigned(AssistantClient) Then
         AssistantClient.DropLastUserImageRefs;
+      RestoreHeldComposerImages;
     End
   Else If FComposerImagesSent Then
     Begin
       FComposerImagesJson := '';
+      FComposerImagesHeld := '';
       RefreshComposerImages;
     End;
   FComposerImagesSent := False;
@@ -4778,17 +4787,18 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
-Procedure TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean);
+Function TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
 Begin
-  SubmitUserTextEx(UserText, UserText, AutoSend);
+  Result := SubmitUserTextEx(UserText, UserText, AutoSend);
 End;
 
-Procedure TProjectAssistantForm.SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean);
+Function TProjectAssistantForm.SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
 Var
   FinalApi, ContextBlock, PlanRel, ModelText, BlockReason: String;
   WithContext: Boolean;
   Refs: TAssistantImageRefArray;
 Begin
+  Result := False;
   SetLength(Refs, 0);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   Refs := LimitAssistantImageRefs(Refs);
@@ -4799,7 +4809,7 @@ Begin
   HideSlashPopup;
   If AutoSend And FUseCodex Then
     Begin
-      StartCodexReply(DisplayText, ApiText);
+      Result := StartCodexReply(DisplayText, ApiText);
       Exit;
     End;
   If AutoSend Then
@@ -4863,7 +4873,6 @@ Begin
       AppendMessage('user', FDisplayUser);
       { Prior turns already on AssistantClient are sent with this request (trimmed if huge).
         IDE context is already a text suffix on FinalApi. It is not an image part. }
-      FComposerImagesSent := Length(Refs) > 0;
       AssistantClient.AddUserMessage(FinalApi, Refs);
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If FContextUsed < Length(FinalApi) Div 4 Then
@@ -4874,11 +4883,17 @@ Begin
       BeginAssistantReply;
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
-      If Not AssistantClient.StartStream(@StreamToken) Then
+      If AssistantClient.StartStream(@StreamToken) Then
+        Begin
+          FComposerImagesSent := Length(Refs) > 0;
+          Result := True;
+        End
+      Else
         Begin
           FinishAssistantReply(AssistantClient.LastError);
           If Assigned(GrokOAuthClient) And (Not GrokOAuthClient.IsAuthenticated) Then
             SettingsActionExecute(Nil);
+          Result := False;
         End;
     End
   Else
@@ -5786,22 +5801,83 @@ Begin
     SelectMode(amBuild);
 End;
 
+Function TProjectAssistantForm.ComposerHasImages: Boolean;
+Var
+  Refs: TAssistantImageRefArray;
+Begin
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Result := Length(Refs) > 0;
+End;
+
+Procedure TProjectAssistantForm.StashComposerImages;
+Begin
+  FComposerImagesHeld := FComposerImagesJson;
+  FComposerImagesJson := '';
+  RefreshComposerImages;
+End;
+
+Procedure TProjectAssistantForm.RestoreHeldComposerImages;
+Var
+  Held, Current, Merged: TAssistantImageRefArray;
+  I, J, N: Integer;
+  Found: Boolean;
+Begin
+  If FComposerImagesHeld = '' Then Exit;
+  ParseAssistantImageRefs(FComposerImagesHeld, Held);
+  ParseAssistantImageRefs(FComposerImagesJson, Current);
+  SetLength(Merged, Length(Held) + Length(Current));
+  N := 0;
+  For I := 0 To High(Held) Do
+    Begin
+      Merged[N] := Held[I];
+      Inc(N);
+    End;
+  For I := 0 To High(Current) Do
+    Begin
+      Found := False;
+      For J := 0 To N - 1 Do
+        If Merged[J].Id = Current[I].Id Then Found := True;
+      If Not Found Then
+        Begin
+          Merged[N] := Current[I];
+          Inc(N);
+        End;
+    End;
+  SetLength(Merged, N);
+  Merged := LimitAssistantImageRefs(Merged);
+  FComposerImagesJson := AssistantImageRefsToJson(Merged);
+  FComposerImagesHeld := '';
+  RefreshComposerImages;
+End;
+
 Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
 Var
   UserText: String;
+  HasImages: Boolean;
 Begin
   If SlashPopupVisible Then
     Begin
       ExecuteSlashSelection;
       Exit;
     End;
+  If Not Assigned(InputMemo) Then Exit;
   UserText := Trim(InputMemo.Text);
-  If UserText = '' Then
+  HasImages := ComposerHasImages;
+  If (UserText = '') And (Not HasImages) Then
     Exit;
   If FSending Then
     Begin
-      InputMemo.Clear;
-      SteerQueuedText(UserText);
+      { Steer is text only. Pictures stay for the next message. }
+      If UserText <> '' Then
+        Begin
+          InputMemo.Clear;
+          SteerQueuedText(UserText);
+        End;
+      If HasImages Then
+        Begin
+          SetCurrentSystemNote('The pictures stay in the composer for the next message.');
+          MessageDlg('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
+        End;
       Exit;
     End;
   If (Not FUseCodex) And ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
@@ -5810,8 +5886,9 @@ Begin
       SettingsActionExecute(Nil);
       Exit;
     End;
+  If Not SubmitUserText(UserText, True) Then Exit;
   InputMemo.Clear;
-  SubmitUserText(UserText, True);
+  StashComposerImages;
 End;
 
 Procedure TProjectAssistantForm.StopActionExecute(Sender: TObject);
