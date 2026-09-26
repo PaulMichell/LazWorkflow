@@ -279,6 +279,9 @@ Begin
     SteerClient := TAssistantCodexClient.Create(500);
     Try
       Check('steer refuses image refs', Not SteerClient.Steer('look', '[{"id":"img1"}]'));
+      Check('codex image item is unsupported', Not CodexImagesSupported And
+        (Pos('"type":"image"', CodexTurnSteerParams('thread-1', 'turn-9', 'look')) = 0) And
+        (Pos('"type":"image"', CodexTurnStartParams('thread-1', 'look', '')) = 0));
     Finally SteerClient.Free; End;
   Finally Data.Free; Lines.Free; End;
 End;

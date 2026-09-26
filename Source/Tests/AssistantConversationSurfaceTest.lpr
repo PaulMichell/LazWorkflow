@@ -67,6 +67,7 @@ Begin
  PPI:=View.Layout.PixelsPerInch; ContentW:=View.Layout.ImageContentWidth(0);
  Check('known image size sets the row',View.Layout.ImageRowHeight(0)=UserImageSlotHeight(Refs[0],ContentW,PPI));
  Check('present image increases the section height',View.Layout.Heights.Values[0]=Plain+View.Layout.ImageRowHeight(0));
+ Check('100 by 50 image is taller than the same text',View.Layout.Heights.Values[0]>Plain);
  Check('present image is not enlarged past 1:1',ScaledImageExtent(100,50,ContentW,PPI,W,H) And (W<=Round(100*PPI/96)) And (H<=Round(50*PPI/96)));
  Check('image row is inside the section, not an overlay',
    View.Layout.Heights.Values[0]=View.Layout[0].FullHeight+View.Layout.ImageRowHeight(0)+2*View.Layout[0].Padding+Round(10*PPI/96));

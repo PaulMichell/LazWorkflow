@@ -652,6 +652,8 @@ Begin
     Options.IncludeEncryptedReasoning := False;
     Body := BuildResponsesRequestJson(Items, Options);
     Check('responses uri once', CountOccurrences(Body, Uri) = 1);
+    Check('image body has one data URI in the content array', (CountOccurrences(Body, Uri) = 1) And
+      (Pos('"content":[', Body) > 0) And (Pos('"content":"' + Uri, Body) = 0));
     Check('responses user content is an array', Pos('"role":"user","content":[', Body) > 0);
     Check('responses user content is not a string', Pos('"role":"user","content":"', Body) = 0);
     Request := GetJSON(Body);
@@ -668,6 +670,8 @@ Begin
     Request := Nil;
     Body := BuildChatCompletionsRequestJson(Items, Options);
     Check('chat uri once', CountOccurrences(Body, Uri) = 1);
+    Check('chat image body has one data URI in the content array', (CountOccurrences(Body, Uri) = 1) And
+      (Pos('"content":[', Body) > 0) And (Pos('"content":"' + Uri, Body) = 0));
     Check('chat user content is an array', Pos('"role":"user","content":[', Body) > 0);
     Check('chat detail omitted', Pos('"detail"', Body) = 0);
     Request := GetJSON(Body);

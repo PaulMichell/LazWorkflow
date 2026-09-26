@@ -27,6 +27,23 @@ Begin
     End;
 End;
 
+Procedure TestImageRowTallerThanText;
+Var
+  None, Refs: TTraceImageRefArray;
+  W, H: Integer;
+Begin
+  SetLength(None, 0);
+  SetLength(Refs, 1);
+  Refs[0].Id := 'img100';
+  Refs[0].Name := 'wide.png';
+  Refs[0].Width := 100;
+  Refs[0].Height := 50;
+  Refs[0].Missing := False;
+  Check('100 by 50 image row is taller than the same text',
+    UserImageRowHeight(Refs, 400, 96) > UserImageRowHeight(None, 400, 96));
+  Check('100 by 50 stays 1:1 in a wide bubble', ScaledImageExtent(100, 50, 400, 96, W, H) And (W = 100) And (H = 50));
+End;
+
 Procedure TestBlocks;
 Var
   Trace: TAssistantTrace;
@@ -391,6 +408,7 @@ End;
 Begin
   FailCount := 0;
   TestBlocks;
+  TestImageRowTallerThanText;
   TestSteerImages;
   TestEnsureUser;
   TestEventOrder;
