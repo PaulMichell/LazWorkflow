@@ -41,6 +41,8 @@ Type
     Ok: Boolean;
     DurationMs: Integer;
     LoopIndex: Integer;
+    { Image refs for a tool result's following user message. JSON array, never pixel bytes. }
+    AttachmentsJson: String;
   End;
 
   TAssistantEventArray = Array Of TAssistantEvent;
@@ -151,6 +153,8 @@ Begin
     Result := Result + ',"tool_id":"' + JsonEscapeText(Event.ToolId) + '"';
   If Event.Text <> '' Then
     Result := Result + ',"text":"' + JsonEscapeText(Event.Text) + '"';
+  If Trim(Event.AttachmentsJson) <> '' Then
+    Result := Result + ',"attachments":' + Event.AttachmentsJson;
   Result := Result + '}';
 End;
 
@@ -372,6 +376,8 @@ Begin
       Event.ToolName := Obj.Get('tool', '');
       Event.ToolId := Obj.Get('tool_id', '');
       Event.Text := Obj.Get('text', '');
+      If Assigned(Obj.Find('attachments')) Then
+        Event.AttachmentsJson := Obj.Find('attachments').AsJSON;
       Result := Obj.Get('type', '') <> '';
     Except
       Result := False;

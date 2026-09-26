@@ -4287,6 +4287,8 @@ Begin
           Block.DurationMs := Event.DurationMs;
         If Event.Text <> '' Then
           Block.Body := Event.Text;
+        If Event.AttachmentsJson <> '' Then
+          FTrace.AppendUserImages(Event.AttachmentsJson);
         If Not Event.Ok Then
           Begin
             Block.Collapsed := False;

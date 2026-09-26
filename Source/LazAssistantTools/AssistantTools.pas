@@ -1,6 +1,10 @@
 Unit AssistantTools;
 
-{ Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing. }
+{ Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Tool schemas, sandbox checks, and
+  dispatch are one IDE tool surface. Reviewed 2026-09-26: read_image stays here
+  with the other project-root tools. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,7 +14,7 @@ Unit AssistantTools;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantConversation;
+  Classes, SysUtils, AssistantConversation, AssistantImages;
 
 Const
   AssistantToolMaxReadChars = 48000;
@@ -31,6 +35,8 @@ Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolea
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Function FindLazbuildExecutable: String;
 Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
@@ -234,7 +240,7 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  Result := (Name = 'read_file') Or (Name = 'list_directory') Or
+  Result := (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'list_plans') Or (Name = 'get_active_plan') Or
     (Name = 'search_in_project') Or (Name = 'open_file') Or
@@ -303,7 +309,7 @@ Var
 Begin
   Name := LowerCase(Trim(ToolName));
   { Shared read tools for all modes. }
-  If (Name = 'read_file') Or (Name = 'list_directory') Or
+  If (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Then
     Begin
@@ -420,6 +426,17 @@ Begin
         '"end_line":{"type":"integer","description":"1-based last line, or a line count if smaller than start_line"},' +
         '"limit":{"type":"integer","description":"Max lines from start_line (preferred when paging by count)"},' +
         '"max_chars":{"type":"integer","description":"Optional max characters to return from the selected range"}' +
+      '},"required":["path"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"read_image",' +
+      '"description":"Read a project image into the next model turn. Resolves a project-relative path in the ' +
+        'sandbox, refuses paths outside the root, symbolic links that leave the project, and files over the image ' +
+        'limits, then copies the accepted still image into the conversation store. The result text is the name, ' +
+        'dimensions, and id only. The picture is attached to the following user message, not written into the ' +
+        'result. A PNG is not a text edit: do not use write_file or replace_in_file on images.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative or absolute image path inside the project root"}' +
       '},"required":["path"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -3339,10 +3356,10 @@ Begin
 End;
 
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
-  Out ErrorText: String): Boolean; Forward;
+  Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
-  Out ResultText: String; Out ErrorText: String): Boolean;
+  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
   Name, Path, ResolvedPath, TargetIdentity: String;
   Function CheckTarget: Boolean;
@@ -3378,6 +3395,7 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  ImageRefs := Nil;
   Name := LowerCase(Trim(ToolName));
   If Not ToolAllowedInMode(Name, Mode) Then
     Begin
@@ -3395,21 +3413,78 @@ Begin
       Exit;
     End;
   If Not CheckTarget Then Exit;
-  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText);
+  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText, ImageRefs);
+End;
+
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String): Boolean;
+Var
+  ImageRefs: TAssistantImageRefArray;
+Begin
+  Result := ExecuteAssistantToolForMode(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
+End;
+
+Function SymlinkLeavesProject(Const Resolved: String): Boolean;
+Var
+  Physical: String;
+Begin
+  Result := False;
+  If Not FileIsSymlink(Resolved) Then Exit;
+  Physical := GetPhysicalFilename(Resolved, pfeEmpty);
+  Result := (Physical = '') Or Not IsPathUnderRoot(ProjectRootPath, Physical);
+End;
+
+Function ToolReadImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
+  Out ImageRefs: TAssistantImageRefArray): Boolean;
+Var
+  Path, Resolved, Name: String;
+  Stored: TAssistantStoredImage;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  ImageRefs := Nil;
+  Path := JsonArgString(ArgumentsJson, 'path');
+  If Trim(Path) = '' Then
+    Begin
+      ErrorText := 'read_image requires path.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then Exit;
+  If SymlinkLeavesProject(Resolved) Then
+    Begin
+      ErrorText := 'Refusing a symbolic link that leaves the project.';
+      Exit;
+    End;
+  If Not FileExistsUTF8(Resolved) Or DirectoryExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'Image file was not found.';
+      Exit;
+    End;
+  If Not StoreAssistantImageFromFile(ProjectRootPath, Resolved, Stored, ErrorText) Then Exit;
+  Name := Stored.OriginalName;
+  If Name = '' Then Name := ExtractFileName(Resolved);
+  ResultText := Name + ', ' + IntToStr(Stored.Width) + ' x ' + IntToStr(Stored.Height) + ', ' + Stored.Id;
+  SetLength(ImageRefs, 1);
+  ImageRefs[0] := ImageRefFromStored(Stored);
+  Result := True;
 End;
 
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
-  Out ErrorText: String): Boolean;
+  Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
   Name: String;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  ImageRefs := Nil;
   Name := LowerCase(Trim(ToolName));
   WorkflowLogger.Info('AssistantTools', 'Execute ' + Name);
   If Name = 'read_file' Then
     Result := ToolReadFile(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'read_image' Then
+    Result := ToolReadImage(ArgumentsJson, ResultText, ErrorText, ImageRefs)
   Else If Name = 'list_directory' Then
     Result := ToolListDirectory(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'open_markdown' Then

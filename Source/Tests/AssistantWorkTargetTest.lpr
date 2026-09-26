@@ -4,7 +4,9 @@ Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf,
   LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantWorkTarget,
   AssistantConversation, AssistantSession, AssistantIDEContext, AssistantIDEWorkspace,
   AssistantTools, AssistantTestSettings, fpjson, jsonparser, ProjectAssistantForm,
-  StdCtrls, BaseIDEIntf, LazConfigStorage;
+  StdCtrls, BaseIDEIntf, LazConfigStorage, FPImage, FPWritePNG, FileUtil,
+  AssistantImages, AssistantService, AssistantProtocol, AssistantTrace, AssistantEvents,
+  AssistantConfig;
 Type
   TMemoryConfig=Class(TConfigMemStorage)
   Public
@@ -105,6 +107,92 @@ Begin Result:=Nil; If Filename=Editor.Path Then Result:=Editor; End;
 Function TWorkspace.BuildExecutable:String; Begin Result:=ParamStr(0); End;
 Procedure Check(Const Name:String; OK:Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ',Name);Halt(1);End;WriteLn('ok ',Name);End;
+Procedure TestReadImage;
+Var Root, Outside, Note, Reply, Body:String; Img:TFPMemoryImage; Writer:TFPWriterPNG; Stream:TFileStream;
+  Refs:TAssistantImageRefArray; Svc:TAssistantService; Items:TSamplerInputItemArray; Options:TSamplerRequestOptions;
+  Trace:TAssistantTrace; Event, Parsed:TAssistantEvent; I:Integer; SawImage:Boolean;
+  SavedApproval:TAssistantApprovalMode;
+Begin
+  Check('read_image is available in Inspect', ToolAllowedInMode('read_image', amInspect));
+  Check('read_image is available in Plan', ToolAllowedInMode('read_image', amPlan));
+  Check('read_image is available in Build', ToolAllowedInMode('read_image', amBuild));
+  Check('Inspect lists read_image', Pos('"name":"read_image"', BuildAssistantToolsJsonForMode(amInspect))>0);
+  Check('Plan lists read_image', Pos('"name":"read_image"', BuildAssistantToolsJsonForMode(amPlan))>0);
+  Check('Build lists read_image', Pos('"name":"read_image"', BuildAssistantToolsJsonForMode(amBuild))>0);
+  Root:=GetTempFileName(GetTempDir,'read-image-'); DeleteFile(Root); ForceDirectories(Root);
+  Outside:=GetTempFileName(GetTempDir,'read-image-out-'); DeleteFile(Outside);
+  Img:=TFPMemoryImage.Create(8,4); Writer:=TFPWriterPNG.Create; Stream:=Nil;
+  Try
+    Img.Colors[0,0]:=FPColor($FFFF,$0000,$0000,$FFFF);
+    Stream:=TFileStream.Create(Root+'/photo.png', fmCreate);
+    Img.SaveToStream(Stream, Writer);
+    FreeAndNil(Stream);
+    Stream:=TFileStream.Create(Outside, fmCreate);
+    Img.SaveToStream(Stream, Writer);
+  Finally
+    Stream.Free; Writer.Free; Img.Free;
+  End;
+  Check('folder target for read_image', AssistantTarget.SelectFolder(Root, Note));
+  SetLength(Refs, 0);
+  Check('read_image stores the picture', ExecuteAssistantToolForMode('read_image', '{"path":"photo.png"}', amInspect,
+    Reply, Note, Refs) And (Length(Refs)=1));
+  Check('result is the name', Pos('photo.png', Reply)>0);
+  Check('result is the dimensions', Pos('8 x 4', Reply)>0);
+  Check('result is the id', Pos(Refs[0].Id, Reply)>0);
+  Check('result has no image bytes', (Pos('base64', LowerCase(Reply))=0) And (Pos('data:', LowerCase(Reply))=0) And
+    (Pos(Root, Reply)=0));
+  Svc:=TAssistantService.Create;
+  Try
+    Svc.AddToolResult('call_1', 'photo.png, 8 x 4, '+Refs[0].Id);
+    Svc.AddUserMessage('', Refs);
+    Items:=Svc.ExportSamplerItems(False);
+    Options:=DefaultSamplerRequestOptions;
+    Options.ProjectRoot:=Root;
+    Body:=BuildChatCompletionsRequestJson(Items, Options);
+    SawImage:=False;
+    For I:=0 To High(Items) Do
+      If (Items[I].Role='user') And (Length(Items[I].ImageRefs)>0) Then SawImage:=True;
+    Check('following user input carries the image refs', SawImage);
+    Check('following user input uses the content array', (Pos('"type":"image_url"', Body)>0) And
+      (Pos('data:image/', Body)>0));
+    Check('tool text in the request has no image bytes', Pos('base64', Copy(Body, 1, Pos('"role":"user"', Body)))=0);
+  Finally
+    Svc.Free;
+  End;
+  Trace:=TAssistantTrace.Create;
+  Try
+    Trace.AppendUserImages(AssistantImageRefsToJson(Refs));
+    Check('user-visible block shows the picture without the look sentence', (Trace.Count=1) And
+      (Trace[0].Kind=tbkUser) And (Trace[0].Body='') And (Length(Trace[0].ImageRefs)=1));
+  Finally
+    Trace.Free;
+  End;
+  Event:=Default(TAssistantEvent);
+  Event.Kind:=aekToolCompleted;
+  Event.Text:='photo.png, 8 x 4, id';
+  Event.AttachmentsJson:=AssistantImageRefsToJson(Refs);
+  Check('event round-trip keeps attachment refs', ParseAssistantEventJson(AssistantEventToJson(Event), Parsed) And
+    (Pos(Refs[0].Id, Parsed.AttachmentsJson)>0) And (Pos('base64', Parsed.AttachmentsJson)=0));
+  SavedApproval := AssistantChatConfig.GetApprovalMode;
+  AssistantChatConfig.SetApprovalModeEnum(aamAlways);
+  Try
+    Check('png is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
+      '{"path":"photo.png","content":"not an image"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+    Check('replace_in_file still refuses a png', (Not ExecuteAssistantToolForMode('replace_in_file',
+      '{"path":"photo.png","old_text":"a","new_text":"b"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+  Finally
+    AssistantChatConfig.SetApprovalModeEnum(SavedApproval);
+  End;
+  Check('escape link created', fpSymlink(PChar(Outside), PChar(Root+'/escape.png'))=0);
+  SetLength(Refs, 0);
+  Check('symbolic link that leaves the project is refused', Not ExecuteAssistantToolForMode('read_image',
+    '{"path":"escape.png"}', amPlan, Reply, Note, Refs));
+  Check('escape is refused by the sandbox', (Pos('symbolic link', LowerCase(Note))>0) Or
+    (Pos('outside the active project', LowerCase(Note))>0));
+  AssistantTarget.SelectProject;
+  DeleteFile(Outside);
+  DeleteDirectory(Root, False);
+End;
 Procedure WriteFile(Const Path,Body:String);
 Var F:TFileStream;
 Begin ForceDirectories(ExtractFileDir(Path));F:=TFileStream.Create(Path,fmCreate);
@@ -118,7 +206,9 @@ Begin
   { This executable also acts as a fake compiler: packages have no --build-mode. }
   If (ParamCount>0) And SameText(ExtractFileExt(ParamStr(ParamCount)),'.lpk') Then
     Begin If (ParamCount<>3) Or (Pos('--pcp=',ParamStr(1))<>1) Or (Pos('--widgetset=',ParamStr(2))<>1) Then Halt(2);WriteLn('package compile fixture');Halt(0);End;
-  Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;CreateGUID(Id);Root:=GetTempDir+'laz-target-'+GUIDToString(Id);
+  Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;
+  TestReadImage;
+  CreateGUID(Id);Root:=GetTempDir+'laz-target-'+GUIDToString(Id);
   WriteFile(Root+'/.git/HEAD','ref: refs/heads/main');
   WriteFile(Root+'/Packages/One.lpk','<package/>');WriteFile(Root+'/Packages/Two.lpk','<package/>');
   WriteFile(Root+'/Source/One/One.pas','unit One; interface implementation end.');

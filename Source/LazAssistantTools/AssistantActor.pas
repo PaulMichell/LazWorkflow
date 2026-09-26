@@ -13,7 +13,7 @@ Interface
 
 Uses
   Classes, SysUtils, AssistantProtocol, AssistantSampler, AssistantEvents, AssistantService,
-  AssistantConversation, AssistantHttps;
+  AssistantConversation, AssistantHttps, AssistantImages;
 
 Type
   TAssistantActor = Class(TThread)
@@ -51,9 +51,10 @@ Type
     FPendingFinish: Boolean;
     FNotifyQueued: Boolean;
     FToolCalls: TSamplerToolCallArray;
+    FPendingImageRefs: TAssistantImageRefArray;
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
       Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
-      DurationMs: Integer = 0);
+      DurationMs: Integer = 0; Const AttachmentsJson: String = '');
     Procedure QueueTrace(Const Event: TAssistantEvent);
     Procedure NotifyTrace;
     Procedure EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
@@ -314,7 +315,8 @@ Begin
 End;
 
 Procedure TAssistantActor.LogEvent(Kind: TAssistantEventKind; Const Text: String;
-  Const ToolName: String; Const ToolId: String; Ok: Boolean; DurationMs: Integer);
+  Const ToolName: String; Const ToolId: String; Ok: Boolean; DurationMs: Integer;
+  Const AttachmentsJson: String);
 Var
   Event: TAssistantEvent;
 Begin
@@ -327,6 +329,7 @@ Begin
   Event.LoopIndex := FLoopIndex;
   Event.Ok := Ok;
   Event.DurationMs := DurationMs;
+  Event.AttachmentsJson := AttachmentsJson;
   AppendAssistantEvent(FEventsFile, Event);
   If TraceKindForUi(Kind) Then
     QueueTrace(Event);
@@ -601,6 +604,7 @@ Type
     FOk: Boolean;
     FResultText: String;
     FErrorText: String;
+    FImageRefs: TAssistantImageRefArray;
     Procedure Release;
   Public
     Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
@@ -608,6 +612,8 @@ Type
     Procedure ExecuteOnMain;
     Function WaitUntilDone(TimeoutMs: QWord): Boolean;
     Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
+    Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String;
+      Out ImageRefs: TAssistantImageRefArray);
   End;
 
 Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
@@ -652,6 +658,7 @@ Var
   SkipRun: Boolean;
   ToolOk: Boolean;
   ToolResult, ToolError: String;
+  ImageRefs: TAssistantImageRefArray;
 Begin
   SkipRun := False;
   EnterCriticalSection(FLock);
@@ -669,14 +676,16 @@ Begin
   ToolOk := False;
   ToolResult := '';
   ToolError := '';
+  ImageRefs := Nil;
   Try
-    ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError);
+    ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
   Finally
     EnterCriticalSection(FLock);
     Try
       FOk := ToolOk;
       FResultText := ToolResult;
       FErrorText := ToolError;
+      FImageRefs := ImageRefs;
       FDone := True;
     Finally
       LeaveCriticalSection(FLock);
@@ -714,26 +723,37 @@ Begin
   Until False;
 End;
 
-Procedure TIdeToolDispatch.CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
+Procedure TIdeToolDispatch.CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String;
+  Out ImageRefs: TAssistantImageRefArray);
 Begin
   EnterCriticalSection(FLock);
   Try
     ToolOk := FOk;
     ToolResult := FResultText;
     ToolError := FErrorText;
+    ImageRefs := FImageRefs;
   Finally
     LeaveCriticalSection(FLock);
   End;
 End;
 
+Procedure TIdeToolDispatch.CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
+Var
+  ImageRefs: TAssistantImageRefArray;
+Begin
+  CopyOutcome(ToolOk, ToolResult, ToolError, ImageRefs);
+End;
+
 Procedure TAssistantActor.RunOneTool(Const Call: TSamplerToolCall);
 Var
   StartTick: QWord;
-  ResultText, ErrorText, Content: String;
+  ResultText, ErrorText, Content, AttachmentsJson: String;
   Ok: Boolean;
   Svc: TAssistantService;
   Mode: TAssistantMode;
   ToolDispatch: TIdeToolDispatch;
+  ImageRefs: TAssistantImageRefArray;
+  I, Base: Integer;
 Begin
   Svc := LockedService;
   If Not Assigned(Svc) Or (Call.Name = '') Then
@@ -746,6 +766,7 @@ Begin
   StartTick := GetTickCount64;
   ResultText := '';
   ErrorText := '';
+  ImageRefs := Nil;
   BindToolAbortThread(Self);
   Try
     Try
@@ -756,7 +777,7 @@ Begin
           TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
           If ToolDispatch.WaitUntilDone(30000) Then
             Begin
-              ToolDispatch.CopyOutcome(Ok, ResultText, ErrorText);
+              ToolDispatch.CopyOutcome(Ok, ResultText, ErrorText, ImageRefs);
               ToolDispatch.Release;
             End
           Else
@@ -773,7 +794,7 @@ Begin
         End
       Else
         Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Mode,
-          ResultText, ErrorText);
+          ResultText, ErrorText, ImageRefs);
     Except
       On E: Exception Do
         Begin
@@ -793,8 +814,17 @@ Begin
   If Not Assigned(Svc) Then
     Exit;
   Svc.AddToolResult(Call.Id, Content);
+  AttachmentsJson := '';
+  If Ok And SameText(Call.Name, 'read_image') And (Length(ImageRefs) > 0) And (Not Svc.IsSubagentSession) Then
+    Begin
+      Base := Length(FPendingImageRefs);
+      SetLength(FPendingImageRefs, Base + Length(ImageRefs));
+      For I := 0 To High(ImageRefs) Do
+        FPendingImageRefs[Base + I] := ImageRefs[I];
+      AttachmentsJson := AssistantImageRefsToJson(ImageRefs);
+    End;
   LogEvent(aekToolCompleted, Copy(Content, 1, MaxToolEventChars), Call.Name, Call.Id, Ok,
-    Integer(GetTickCount64 - StartTick));
+    Integer(GetTickCount64 - StartTick), AttachmentsJson);
   If Ok And (SameText(Call.Name, 'write_markdown') Or SameText(Call.Name, 'update_markdown')) Then
     Inc(FPlanWrites);
   WorkflowLogger.Info('AssistantActor',
@@ -971,7 +1001,16 @@ Var
   ToolCallsJson: String;
   Call: TSamplerToolCall;
   Svc: TAssistantService;
+  Procedure FlushReadImages;
+  Begin
+    If Length(FPendingImageRefs) = 0 Then Exit;
+    Svc := LockedService;
+    If Assigned(Svc) And (Not Svc.IsSubagentSession) Then
+      Svc.AddUserMessage('', FPendingImageRefs);
+    SetLength(FPendingImageRefs, 0);
+  End;
 Begin
+  SetLength(FPendingImageRefs, 0);
   Svc := LockedService;
   If Not Assigned(Svc) Then
     Exit;
@@ -998,7 +1037,10 @@ Begin
   While I <= High(FToolCalls) Do
     Begin
       If Terminated Then
-        Exit;
+        Begin
+          FlushReadImages;
+          Exit;
+        End;
       Call := FToolCalls[I];
       If Call.Name = '' Then
         Begin
@@ -1028,6 +1070,7 @@ Begin
           Inc(I);
         End;
     End;
+  FlushReadImages;
 End;
 
 Function TAssistantActor.DrainSteerIntoHistory: Boolean;

@@ -639,7 +639,7 @@ Begin
           '6. After writing, you may call `set_active_plan` and `open_markdown` if helpful. ' +
           '7. Never edit source (.pas/.lfm) in Plan mode. ' +
           LineEnding +
-          'Tools: read_file, list_directory, open_markdown, get_project_info, write_markdown, ' +
+          'Tools: read_file, read_image, list_directory, open_markdown, get_project_info, write_markdown, ' +
           'update_markdown, list_plans, get_active_plan, set_active_plan.';
       End;
     amBuild:
@@ -650,6 +650,7 @@ Begin
         '**Source tools (prefer these):**' + LineEnding +
         '- `search_in_project` — find symbols/strings before bulk reads' + LineEnding +
         '- `read_file` — page large files with start_line/end_line' + LineEnding +
+        '- `read_image` — copy a project image into the next model turn. The result is the name, dimensions, and id only.' + LineEnding +
         '- `replace_in_file` — exact surgical edit (small unique old_text)' + LineEnding +
         '- `write_file` — real project files only (never empty, never ApiProbe/scratch/temp units)' + LineEnding +
         '- `replace_in_file` — exact surgical edit' + LineEnding +
@@ -691,7 +692,8 @@ Begin
   Else
     Result :=
       'You are a helpful Free Pascal / Lazarus expert working inside the IDE (Inspect mode). ' +
-      'You may call read_file, list_directory, grep, search_in_project, open_file, open_markdown, and get_project_info. ' +
+      'You may call read_file, read_image, list_directory, grep, search_in_project, open_file, open_markdown, and get_project_info. ' +
+      'read_image copies a project image into the next model turn and returns the name, dimensions, and id only. ' +
       'open_file opens a source tab and does not modify it. search_in_project searches project text. ' +
       'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
       'Prefer the active editor context already in the user message when it includes the code under discussion. ' +

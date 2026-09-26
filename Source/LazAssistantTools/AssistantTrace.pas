@@ -73,6 +73,8 @@ Type
     { Store ids and names on the user block, creating that block when the prompt is empty. }
     Procedure SetUserImages(Const Ids, Names: Array Of String);
     Procedure SetUserImageRefs(Const Refs: TTraceImageRefArray);
+    { A later user block for an image a tool just stored. Empty words; the picture is the content. }
+    Procedure AppendUserImages(Const ImagesJson: String);
     { Fill a user block that has no refs. Does not replace refs the trace already stored. }
     Procedure KeepUserImageRefs(Const Refs: TTraceImageRefArray);
     Function AddNote(Const Text: String): TTraceBlock;
@@ -401,6 +403,29 @@ Begin
       If (Block.ImageRefs[I].Height < 0) Or (Block.ImageRefs[I].Height > 16384) Then Block.ImageRefs[I].Height := 0;
       Block.ImageRefs[I].Missing := Refs[I].Missing;
     End;
+End;
+
+Procedure TAssistantTrace.AppendUserImages(Const ImagesJson: String);
+Var
+  Data: TJSONData;
+  Block: TTraceBlock;
+  Refs: TTraceImageRefArray;
+Begin
+  If Trim(ImagesJson) = '' Then Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ImagesJson);
+    Except
+      Exit;
+    End;
+    Refs := TraceImagesFromJson(Data);
+  Finally
+    Data.Free;
+  End;
+  If Length(Refs) = 0 Then Exit;
+  Block := AddUser('');
+  If Assigned(Block) Then Block.ImageRefs := Refs;
 End;
 
 Procedure TAssistantTrace.KeepUserImageRefs(Const Refs: TTraceImageRefArray);
@@ -935,6 +960,8 @@ Begin
           Block.DurationMs := Event.DurationMs;
         If Event.Text <> '' Then
           Block.Body := Event.Text;
+        If Event.AttachmentsJson <> '' Then
+          AppendUserImages(Event.AttachmentsJson);
         If Not Event.Ok Then
           Begin
             Block.Collapsed := False;
