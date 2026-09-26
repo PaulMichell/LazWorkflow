@@ -156,19 +156,32 @@ Var
   Block: TTraceBlock;
 Begin
   If Not Assigned(Trace) Then Exit;
-  If ParseAssistantImageRefs(Turn.AttachmentsJson, Refs) And (Length(Refs) > 0) Then
+  { A saved turn is rebuilt from its prompt and attachment ids. The live trace
+    passes an empty turn and only refreshes which files are still present. }
+  If (Turn.Id <> '') Or (Trim(Turn.AttachmentsJson) <> '') Then
     Begin
-      SetLength(TraceRefs, Length(Refs));
-      For I := 0 To High(Refs) Do
+      SetLength(Refs, 0);
+      If ParseAssistantImageRefs(Turn.AttachmentsJson, Refs) And (Length(Refs) > 0) Then
         Begin
-          TraceRefs[I].Id := Refs[I].Id;
-          TraceRefs[I].Name := Refs[I].Name;
-          TraceRefs[I].DisplayPath := Refs[I].DisplayPath;
-          TraceRefs[I].Width := Refs[I].Width;
-          TraceRefs[I].Height := Refs[I].Height;
-          TraceRefs[I].Missing := False;
+          SetLength(TraceRefs, Length(Refs));
+          For I := 0 To High(Refs) Do
+            Begin
+              TraceRefs[I].Id := Refs[I].Id;
+              TraceRefs[I].Name := Refs[I].Name;
+              TraceRefs[I].DisplayPath := Refs[I].DisplayPath;
+              TraceRefs[I].Width := Refs[I].Width;
+              TraceRefs[I].Height := Refs[I].Height;
+              TraceRefs[I].Missing := False;
+            End;
+          Trace.SetUserImageRefs(TraceRefs);
+          Block := Trace.EnsureUser(Turn.Prompt);
+          If Assigned(Block) Then Block.Body := Turn.Prompt;
+        End
+      Else If Trim(Turn.Prompt) <> '' Then
+        Begin
+          Block := Trace.EnsureUser(Turn.Prompt);
+          If Assigned(Block) Then Block.Body := Turn.Prompt;
         End;
-      Trace.KeepUserImageRefs(TraceRefs);
     End;
   For I := 0 To Trace.Count - 1 Do
     Begin
@@ -240,6 +253,7 @@ Var
   I, PositionIndex: Integer;
   ChangedConversation: Boolean;
 Begin
+  If Assigned(Store) Then FSurface.ImageRoot := Store.ProjectRoot;
   LoadSaved(Store);
   If IncludeLive And Assigned(Live) And Assigned(Store) Then
     ApplyTurnImages(Live, Default(TConversationTurn), Store.AssistantDirectory);

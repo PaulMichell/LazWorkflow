@@ -4518,6 +4518,7 @@ Begin
     Begin
       FTrace.Clear;
       FTrace.EnsureUser(FDisplayUser);
+      ApplyTurnAttachmentsToTrace(FTrace, FComposerImagesJson);
       FTrace.StartThinking(0);
     End;
   RefreshConversationList;

@@ -1,10 +1,18 @@
 Program AssistantConversationSurfaceTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Math, Graphics, StyledTextTypes,
-  AssistantTrace, AssistantConversationSurface;
+Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Math, Graphics, LCLType, FileUtil, FPImage, FPWritePNG,
+  StyledTextTypes, AssistantTrace, AssistantConversationSurface, AssistantImages;
 Procedure Check(Const Name:String; OK:Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ',Name); Halt(1); End; WriteLn('ok ',Name); End;
-Var Host:TForm; View:TAssistantConversationSurface; Trace:TAssistantTrace; I,J,ControlsBefore:Integer; Body,Key:String;
+Type
+  TImageSurface=Class(TAssistantConversationSurface)
+    Procedure Press(Key:Word);
+  End;
+Procedure TImageSurface.Press(Key:Word);
+Begin
+  KeyDown(Key,[]);
+End;
+Var Host:TForm; View:TImageSurface; Trace:TAssistantTrace; I,J,ControlsBefore:Integer; Body,Key:String;
   BeforeHeight,BeforeTop:Int64; Parses,Started,ParsedAt:QWord; Bitmap:TBitmap; PNG:TPortableNetworkGraphic; A,B:TConversationPosition;
 Procedure Sync;
 Var N:Integer;
@@ -14,10 +22,141 @@ Begin
  Check('extent equals the height index',View.ContentHeight=View.Layout.TotalHeight);
  Check('scroll position in range',(View.ScrollTop>=0) And (View.ScrollTop<=Max(Int64(0),View.ContentHeight-View.ViewRect.Height)));
 End;
+Procedure CheckImages;
+Var Refs:TTraceImageRefArray; Plain,TextY:Int64; W,H,X,Y,PPI,ContentW:Integer; Hit:TConversationPointerHit; SavedWidth:Integer;
+Begin
+ Check('1:1 cap at 96 DPI',ScaledImageExtent(100,50,400,96,W,H) And (W=100) And (H=50));
+ Check('wider than the bubble scales down',ScaledImageExtent(100,50,40,96,W,H) And (W=40) And (H=20));
+ Check('surface DPI is not an extra enlargement',ScaledImageExtent(100,50,400,192,W,H) And (W=200) And (H=100));
+ Check('DPI scale still fits the bubble',ScaledImageExtent(100,50,80,192,W,H) And (W=80) And (H=40));
+ Trace.Clear; View.Clear;
+ Trace.AddUser('A short user message'); Trace.EnsureAnswer.Body:='Reply'; Sync;
+ Plain:=View.Layout.Heights.Values[0];
+ SetLength(Refs,1);
+ Refs[0].Id:='known-size'; Refs[0].Name:='diagram.png'; Refs[0].Width:=100; Refs[0].Height:=50; Refs[0].Missing:=False;
+ Trace.SetUserImageRefs(Refs); Sync;
+ PPI:=View.Layout.PixelsPerInch; ContentW:=View.Layout.ImageContentWidth(0);
+ Check('known image size sets the row',View.Layout.ImageRowHeight(0)=UserImageSlotHeight(Refs[0],ContentW,PPI));
+ Check('present image increases the section height',View.Layout.Heights.Values[0]=Plain+View.Layout.ImageRowHeight(0));
+ Check('present image is not enlarged past 1:1',ScaledImageExtent(100,50,ContentW,PPI,W,H) And (W<=Round(100*PPI/96)) And (H<=Round(50*PPI/96)));
+ Check('image row is inside the section, not an overlay',
+   View.Layout.Heights.Values[0]=View.Layout[0].FullHeight+View.Layout.ImageRowHeight(0)+2*View.Layout[0].Padding+Round(10*PPI/96));
+ View.JumpToStart;
+ X:=View.ViewRect.Left+View.Layout[0].Left+View.Layout[0].Padding+4;
+ Y:=View.ViewRect.Top+View.Layout[0].Padding+4;
+ Check('pointer in the picture row hits the picture',View.PointerHit(X,Y).ImageIndex=0);
+ TextY:=View.ViewRect.Top+View.Layout[0].Padding+View.Layout.ImageRowHeight(0)+4;
+ Hit:=View.PointerHit(X,TextY);
+ Check('pointer below the pictures hits the text',(Hit.ImageIndex<0) And (Hit.Position.Key=Trace[0].ID) And (Hit.Position.Text.Paragraph=0));
+ Refs[0].Missing:=True; Trace.SetUserImageRefs(Refs); Sync;
+ Check('missing file uses the fixed tile height',View.Layout.Heights.Values[0]=Plain+MissingImageTileHeight(PPI));
+ Check('missing file is still inside the section height',View.Layout.ImageRowHeight(0)=MissingImageTileHeight(PPI));
+ Body:='First words of the user.';
+ For J:=1 To 40 Do Body:=Body+LineEnding+LineEnding+'Paragraph '+IntToStr(J)+' stays below the picture.';
+ Trace.Clear; View.Clear; Trace.AddUser(Body);
+ Refs[0].Width:=100; Refs[0].Height:=400; Refs[0].Missing:=False; Trace.SetUserImageRefs(Refs); Sync;
+ X:=View.ViewRect.Left+View.Layout[0].Left+View.Layout[0].Padding+4;
+ Y:=View.ViewRect.Top+View.Layout[0].Padding+View.Layout.ImageRowHeight(0)+4;
+ Hit:=View.PointerHit(X,Y);
+ Check('text below a tall picture is the start of the words',(Hit.ImageIndex<0) And (Hit.Position.Text.Paragraph=0));
+ View.JumpToStart; BeforeTop:=View.ScrollTop; View.Press(VK_DOWN);
+ Check('keyboard scroll moves through the image row',View.ScrollTop>BeforeTop);
+ View.ScrollTop:=View.Layout[0].Padding+View.Layout.ImageRowHeight(0);
+ Hit:=View.PointerHit(X,View.ViewRect.Top+4);
+ Check('scrolling past the pictures lands on the text',(Hit.ImageIndex<0) And (Hit.Position.Text.Paragraph=0));
+ SavedWidth:=Host.Width; BeforeTop:=View.ScrollTop;
+ Host.Width:=640; Application.ProcessMessages; View.CompleteLayout;
+ Check('resize keeps the text below the pictures',View.ScrollTop>=View.Layout[0].Padding+View.Layout.ImageRowHeight(0));
+ Host.Width:=SavedWidth; Application.ProcessMessages; View.CompleteLayout;
+End;
+Procedure CheckPainted;
+Var Root, ErrorText: String; Img: TFPMemoryImage; Writer: TFPWriterPNG; Stream: TMemoryStream;
+  Stored: TAssistantStoredImage; Refs: TTraceImageRefArray; X, Y, W, H, PPI, ContentW, SampleX, SampleY: Integer;
+  Shot: TBitmap; Color: TColor; Pixel: TFPColor;
+ Function IsRed(Value: TColor): Boolean;
+ Begin
+  Result := (Red(Value) > 200) And (Green(Value) < 80) And (Blue(Value) < 80);
+ End;
+Begin
+ Root := GetTempFileName(GetTempDir, 'paint-images-');
+ DeleteFile(Root);
+ ForceDirectories(Root);
+ Img := TFPMemoryImage.Create(16, 8);
+ Stream := TMemoryStream.Create;
+ Writer := TFPWriterPNG.Create;
+ Try
+  Pixel.Red := $FFFF;
+  Pixel.Green := 0;
+  Pixel.Blue := 0;
+  Pixel.Alpha := $FFFF;
+  For Y := 0 To Img.Height - 1 Do
+   For X := 0 To Img.Width - 1 Do
+    Img.Colors[X, Y] := Pixel;
+  Img.SaveToStream(Stream, Writer);
+  Stream.Position := 0;
+  Check('store a picture for the user block', StoreAssistantImageFromStream(Root, 'red.png', Stream, Stored, ErrorText));
+ Finally
+  Writer.Free;
+  Stream.Free;
+  Img.Free;
+ End;
+ View.ImageRoot := Root;
+ Trace.Clear; View.Clear;
+ Trace.AddUser('Words under the picture');
+ SetLength(Refs, 1);
+ Refs[0].Id := Stored.Id;
+ Refs[0].Name := Stored.OriginalName;
+ Refs[0].DisplayPath := Stored.DisplayRelativePath;
+ Refs[0].Width := Stored.Width;
+ Refs[0].Height := Stored.Height;
+ Refs[0].Missing := False;
+ Trace.SetUserImageRefs(Refs);
+ Sync;
+ View.JumpToStart;
+ Application.ProcessMessages;
+ PPI := View.Layout.PixelsPerInch;
+ ContentW := View.Layout.ImageContentWidth(0);
+ Check('stored picture has a display size', ScaledImageExtent(Stored.Width, Stored.Height, ContentW, PPI, W, H) And (W > 0) And (H > 0));
+ SampleX := View.ViewRect.Left + View.Layout[0].Left + View.Layout[0].Padding + W Div 2;
+ SampleY := View.ViewRect.Top + View.Layout[0].Padding + H Div 2;
+ Shot := TBitmap.Create;
+ Try
+  Shot.SetSize(Max(1, View.ClientWidth), Max(1, View.ClientHeight));
+  View.PaintTo(Shot.Canvas, 0, 0);
+  If (SampleX >= 0) And (SampleY >= 0) And (SampleX < Shot.Width) And (SampleY < Shot.Height) Then
+   Color := Shot.Canvas.Pixels[SampleX, SampleY]
+  Else
+   Color := clNone;
+ Finally
+  Shot.Free;
+ End;
+ WriteLn('painted sample ', Red(Color), ',', Green(Color), ',', Blue(Color), ' at ', SampleX, ',', SampleY);
+ Check('present file is painted inside the user bubble', IsRed(Color));
+ Refs[0].Missing := True;
+ Trace.SetUserImageRefs(Refs);
+ Sync;
+ View.JumpToStart;
+ Application.ProcessMessages;
+ Shot := TBitmap.Create;
+ Try
+  Shot.SetSize(Max(1, View.ClientWidth), Max(1, View.ClientHeight));
+  View.PaintTo(Shot.Canvas, 0, 0);
+  SampleY := View.ViewRect.Top + View.Layout[0].Padding + MissingImageTileHeight(PPI) Div 2;
+  SampleX := View.ViewRect.Left + View.Layout[0].Left + View.Layout[0].Padding + Max(8, ContentW - 8);
+  If (SampleX >= 0) And (SampleY >= 0) And (SampleX < Shot.Width) And (SampleY < Shot.Height) Then
+   Color := Shot.Canvas.Pixels[SampleX, SampleY]
+  Else
+   Color := clNone;
+ Finally
+  Shot.Free;
+ End;
+ Check('missing file is a tile, not the stored picture', Not IsRed(Color));
+ DeleteDirectory(Root, False);
+End;
 Begin
  Application.Initialize; Host:=TForm.CreateNew(nil); Trace:=TAssistantTrace.Create;
  Try
- Host.SetBounds(0,0,800,600); View:=TAssistantConversationSurface.Create(Host); View.Parent:=Host; View.Align:=alClient;
+ Host.SetBounds(0,0,800,600); View:=TImageSurface.Create(Host); View.Parent:=Host; View.Align:=alClient;
  Host.Show; Application.ProcessMessages; ControlsBefore:=View.ControlCount;
  Trace.AddTool('failure','read_file','{}').Body:='Failed output';
  Trace.FindTool('failure').OK:=False; Trace.FindTool('failure').Collapsed:=False;
@@ -62,6 +201,8 @@ Begin
  View.JumpToEnd; Trace.EnsureAnswer.Body:=Trace.EnsureAnswer.Body+' after end'; Sync;
  Check('tail remains at end after update',View.FollowTail And (View.ScrollTop=View.ContentHeight-View.ViewRect.Height));
  View.Clear; Check('clear resets extent and offset',(View.ContentHeight=0) And (View.ScrollTop=0));
+ CheckImages;
+ CheckPainted;
  Trace.Clear; View.ShowToolUse:=True;
  For I:=1 To 10000 Do Trace.AddTool(IntToStr(I),'read_file','{}');
  Started:=GetTickCount64; Sync;

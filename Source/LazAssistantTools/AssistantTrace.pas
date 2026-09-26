@@ -4,7 +4,8 @@ Unit AssistantTrace;
 
   Size note: exceeds the 1000 line preference. Replay, markdown export, and
   JSON load/save are one trace surface. Reviewed 2026-09-23: user-block image
-  ids stay here so export can name files without a second trace unit. }
+  ids and the shared display-slot metrics stay here so export and the
+  conversation layout share one formula without a second trace unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -119,6 +120,16 @@ Function SliceLiveChannel(Const LiveText: String; Var StartAt: Integer): String;
 
 Function MissingImageTileHeight(PixelsPerInch: Integer): Integer;
 Function MissingImageTileCaption(Const Ref: TTraceImageRef): String;
+{ Device-pixel size inside the bubble. Not enlarged past 1:1 at PixelsPerInch.
+  False when the source size is unknown. }
+Function ScaledImageExtent(ImageWidth, ImageHeight, ContentWidth, PixelsPerInch: Integer;
+  Out DisplayWidth, DisplayHeight: Integer): Boolean;
+{ One picture slot, including the gap before the next slot or the words.
+  A missing file, or a present file with no known size, uses the fixed tile height. }
+Function UserImageSlotHeight(Const Ref: TTraceImageRef; ContentWidth, PixelsPerInch: Integer): Integer;
+Function UserImageRowHeight(Const Refs: TTraceImageRefArray; ContentWidth, PixelsPerInch: Integer): Integer;
+{ LocalY is measured from the top of the image row. -1 when it is not in a slot. }
+Function ImageIndexInRow(Const Refs: TTraceImageRefArray; ContentWidth, PixelsPerInch: Integer; LocalY: Int64): Integer;
 Function FormatThoughtElapsed(DurationMs: Integer): String;
 Function FormatThinkingClock(DurationMs: Integer): String;
 Function FormatThoughtFooter(DurationMs: Integer): String;
@@ -133,7 +144,7 @@ Function ScrollShouldFollowTail(Position, ContentHeight, Page: Integer; Slop: In
 Implementation
 
 Uses
-  DateUtils, fpjson, jsonparser;
+  DateUtils, Math, fpjson, jsonparser;
 
 Function BlockKindName(Kind: TTraceBlockKind): String;
 Begin
@@ -1149,6 +1160,78 @@ Begin
   If (Ref.Width > 0) And (Ref.Height > 0) Then
     Result := Result + ', ' + IntToStr(Ref.Width) + ' x ' + IntToStr(Ref.Height);
   Result := Result + ', unavailable';
+End;
+
+Function ImageSlotGap(PixelsPerInch: Integer): Integer;
+Begin
+  If PixelsPerInch < 1 Then PixelsPerInch := 96;
+  Result := Round(6 * PixelsPerInch / 96);
+  If Result < 4 Then Result := 4;
+End;
+
+Function ScaledImageExtent(ImageWidth, ImageHeight, ContentWidth, PixelsPerInch: Integer;
+  Out DisplayWidth, DisplayHeight: Integer): Boolean;
+Var
+  NativeW, NativeH: Integer;
+Begin
+  DisplayWidth := 0;
+  DisplayHeight := 0;
+  Result := False;
+  If PixelsPerInch < 1 Then PixelsPerInch := 96;
+  If ContentWidth < 1 Then ContentWidth := 1;
+  If (ImageWidth < 1) Or (ImageHeight < 1) Then Exit;
+  { 1:1 is one image pixel per logical pixel. Device pixels follow the surface DPI. }
+  NativeW := Round(Int64(ImageWidth) * PixelsPerInch / 96);
+  NativeH := Round(Int64(ImageHeight) * PixelsPerInch / 96);
+  If NativeW < 1 Then NativeW := 1;
+  If NativeH < 1 Then NativeH := 1;
+  If NativeW > ContentWidth Then
+    Begin
+      DisplayWidth := ContentWidth;
+      DisplayHeight := Max(1, Round(Int64(NativeH) * ContentWidth / NativeW));
+    End
+  Else
+    Begin
+      DisplayWidth := NativeW;
+      DisplayHeight := NativeH;
+    End;
+  Result := True;
+End;
+
+Function UserImageSlotHeight(Const Ref: TTraceImageRef; ContentWidth, PixelsPerInch: Integer): Integer;
+Var
+  DisplayWidth, DisplayHeight: Integer;
+Begin
+  If PixelsPerInch < 1 Then PixelsPerInch := 96;
+  If Ref.Missing Or Not ScaledImageExtent(Ref.Width, Ref.Height, ContentWidth, PixelsPerInch, DisplayWidth, DisplayHeight) Then
+    Result := MissingImageTileHeight(PixelsPerInch)
+  Else
+    Result := DisplayHeight + ImageSlotGap(PixelsPerInch);
+End;
+
+Function UserImageRowHeight(Const Refs: TTraceImageRefArray; ContentWidth, PixelsPerInch: Integer): Integer;
+Var
+  I: Integer;
+Begin
+  Result := 0;
+  For I := 0 To High(Refs) Do
+    Inc(Result, UserImageSlotHeight(Refs[I], ContentWidth, PixelsPerInch));
+End;
+
+Function ImageIndexInRow(Const Refs: TTraceImageRefArray; ContentWidth, PixelsPerInch: Integer; LocalY: Int64): Integer;
+Var
+  I: Integer;
+  TopY, SlotH: Int64;
+Begin
+  Result := -1;
+  If LocalY < 0 Then Exit;
+  TopY := 0;
+  For I := 0 To High(Refs) Do
+    Begin
+      SlotH := UserImageSlotHeight(Refs[I], ContentWidth, PixelsPerInch);
+      If LocalY < TopY + SlotH Then Exit(I);
+      Inc(TopY, SlotH);
+    End;
 End;
 
 Function FormatThoughtElapsed(DurationMs: Integer): String;

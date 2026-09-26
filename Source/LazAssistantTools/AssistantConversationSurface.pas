@@ -1,6 +1,10 @@
 Unit AssistantConversationSurface;
 
-{ One canvas, one logical scroll extent and cross-section text selection. (c) 2026 Michell Computing. }
+{ One canvas, one logical scroll extent and cross-section text selection. (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. The picture cache stays with
+  this canvas so paint, hit-testing, and section height use one image row.
+  Reviewed 2026-09-23: no second conversation surface. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -11,7 +15,7 @@ Unit AssistantConversationSurface;
 Interface
 
 Uses
-  Classes, SysUtils, Types, Controls, ExtCtrls, Menus, LMessages, StyledSurface,
+  Classes, SysUtils, Types, Graphics, Controls, ExtCtrls, Menus, LMessages, StyledSurface,
   StyledTextTypes, AssistantTrace, AssistantConversationLayout;
 
 Type
@@ -31,9 +35,15 @@ Type
     Anchor: TConversationAnchor;
     FollowTail: Boolean;
   End;
+  TConversationPointerHit = Record
+    Position: TConversationPosition;
+    ImageIndex: Integer;
+  End;
   TAssistantConversationSurface = Class(TStyledSurface)
   Private
     FLayout: TConversationLayout;
+    FImageRoot: String;
+    Pictures: TStringList;
     Timer: TTimer;
     FShowThinking, FShowTools, FFollowTail, FUpdating, Selecting, FInTick: Boolean;
     SelectionStart, SelectionEnd: TConversationPosition;
@@ -51,6 +61,10 @@ Type
     Procedure RestoreAnchor(Const Anchor: TConversationAnchor);
     Function CaptureAnchor: TConversationAnchor;
     Function HitPosition(X, Y: Integer): TConversationPosition;
+    Procedure SetImageRoot(Const Value: String);
+    Procedure ClearPictures;
+    Procedure TrimPictures;
+    Function PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TBitmap;
     Function Compare(Const A, B: TConversationPosition): Integer;
     Procedure SetFilters(Thinking, Tools: Boolean);
     Procedure SetShowThinking(Value: Boolean);
@@ -87,7 +101,9 @@ Type
     Procedure SelectLine;
     Procedure ClearSelection;
     Function MarkdownText: String;
+    Function PointerHit(X, Y: Integer): TConversationPointerHit;
     Property Layout: TConversationLayout Read FLayout;
+    Property ImageRoot: String Read FImageRoot Write SetImageRoot;
     Property FollowTail: Boolean Read FFollowTail;
     Property SelectedText: String Read GetSelectedText;
     Property ShowThinking: Boolean Read FShowThinking Write SetShowThinking;
@@ -100,7 +116,270 @@ Type
 Implementation
 
 Uses
-  Math, Graphics, Clipbrd, LCLType, Forms, StyledCanvas, StyledTextDocument;
+  Math, Clipbrd, LCLType, Forms, FPImage, IntfGraphics,
+  StyledCanvas, StyledTextDocument, AssistantImages;
+
+Const
+  UserBubbleColor = TColor($00EFF8E5);
+
+{ GTK StretchDraw of a 24-bit bitmap after assigning ClipRect paints nothing on
+  this memory buffer, so a present file vanished while the missing-file Rectangle
+  still showed. Copy the visible rectangle; fall back to FillRect if that blit
+  does not land. The working blit is remembered after one probe. }
+Type
+  TImageBlitKind = (ibkCopy, ibkPixels);
+
+Var
+  ImageBlitKind: TImageBlitKind;
+  ImageBlitProven: Boolean;
+
+Function PictureKey(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): String;
+Begin
+  Result := Ref.Id + #1 + Ref.DisplayPath + #1 + IntToStr(DisplayW) + 'x' + IntToStr(DisplayH);
+End;
+
+Function UserBubbleFPColor: TFPColor;
+Var
+  ColorValue: Integer;
+Begin
+  ColorValue := UserBubbleColor;
+  Result.Red := (ColorValue And $FF) * 257;
+  Result.Green := ((ColorValue Shr 8) And $FF) * 257;
+  Result.Blue := ((ColorValue Shr 16) And $FF) * 257;
+  Result.Alpha := 65535;
+End;
+
+Function ColorsMatch(Left, Right: TColor): Boolean;
+Begin
+  Result := (Abs(Integer(Red(Left)) - Integer(Red(Right))) <= 12) And
+    (Abs(Integer(Green(Left)) - Integer(Green(Right))) <= 12) And
+    (Abs(Integer(Blue(Left)) - Integer(Blue(Right))) <= 12);
+End;
+
+Function ZeroAlphaMeansOpaque(Img: TFPCustomImage): Boolean;
+Var
+  X, Y: Integer;
+Begin
+  Result := True;
+  For Y := 0 To Img.Height - 1 Do
+    For X := 0 To Img.Width - 1 Do
+      If Img.Colors[X, Y].Alpha <> 0 Then Exit(False);
+End;
+
+Function FlattenPixel(Const Src, Bubble: TFPColor; ZeroAlphaIsOpaque: Boolean): TFPColor;
+Var
+  Alpha: Int64;
+Begin
+  If ZeroAlphaIsOpaque Or (Src.Alpha >= 65535) Then
+    Begin
+      Result := Src;
+      Result.Alpha := 65535;
+      Exit;
+    End;
+  Alpha := Src.Alpha;
+  Result.Red := (Int64(Src.Red) * Alpha + Int64(Bubble.Red) * (65535 - Alpha)) Div 65535;
+  Result.Green := (Int64(Src.Green) * Alpha + Int64(Bubble.Green) * (65535 - Alpha)) Div 65535;
+  Result.Blue := (Int64(Src.Blue) * Alpha + Int64(Bubble.Blue) * (65535 - Alpha)) Div 65535;
+  Result.Alpha := 65535;
+End;
+
+Function ScaleToBitmap(Img: TFPCustomImage; DestW, DestH: Integer): TBitmap;
+Var
+  Raw: TLazIntfImage;
+  X, Y, X0, Y0, X1, Y1, SX, SY, StepX, StepY, Count: Integer;
+  Probe: TColor;
+  RedSum, GreenSum, BlueSum: Int64;
+  Bubble, Flat: TFPColor;
+  ZeroAlphaIsOpaque: Boolean;
+Begin
+  Result := Nil;
+  If (Not Assigned(Img)) Or (Img.Width < 1) Or (Img.Height < 1) Or (DestW < 1) Or (DestH < 1) Then Exit;
+  Result := TBitmap.Create;
+  Try
+    Result.PixelFormat := pf32bit;
+    Result.SetSize(DestW, DestH);
+    Result.Transparent := False;
+    ZeroAlphaIsOpaque := ZeroAlphaMeansOpaque(Img);
+    Bubble := UserBubbleFPColor;
+    Raw := Result.CreateIntfImage;
+    Try
+      For Y := 0 To DestH - 1 Do
+        Begin
+          Y0 := Y * Img.Height Div DestH;
+          Y1 := (Y + 1) * Img.Height Div DestH;
+          If Y1 <= Y0 Then Y1 := Y0 + 1;
+          If Y1 > Img.Height Then Y1 := Img.Height;
+          For X := 0 To DestW - 1 Do
+            Begin
+              X0 := X * Img.Width Div DestW;
+              X1 := (X + 1) * Img.Width Div DestW;
+              If X1 <= X0 Then X1 := X0 + 1;
+              If X1 > Img.Width Then X1 := Img.Width;
+              RedSum := 0;
+              GreenSum := 0;
+              BlueSum := 0;
+              Count := 0;
+              { At most a 4 by 4 sample of each source box, so a large photo does not stall the first paint. }
+              StepX := Max(1, (X1 - X0) Div 4);
+              StepY := Max(1, (Y1 - Y0) Div 4);
+              SY := Y0;
+              While SY < Y1 Do
+                Begin
+                  SX := X0;
+                  While SX < X1 Do
+                    Begin
+                      Flat := FlattenPixel(Img.Colors[SX, SY], Bubble, ZeroAlphaIsOpaque);
+                      Inc(RedSum, Flat.Red);
+                      Inc(GreenSum, Flat.Green);
+                      Inc(BlueSum, Flat.Blue);
+                      Inc(Count);
+                      Inc(SX, StepX);
+                    End;
+                  Inc(SY, StepY);
+                End;
+              If Count < 1 Then Count := 1;
+              Flat.Red := RedSum Div Count;
+              Flat.Green := GreenSum Div Count;
+              Flat.Blue := BlueSum Div Count;
+              Flat.Alpha := 65535;
+              Raw.Colors[X, Y] := Flat;
+            End;
+        End;
+      Result.LoadFromIntfImage(Raw);
+    Finally
+      Raw.Free;
+    End;
+  Except
+    FreeAndNil(Result);
+    Exit;
+  End;
+  { Reading a pixel builds the GTK pixmap from the raw image. A later CopyRect
+    otherwise samples an empty device bitmap. A failed read must not discard the bitmap. }
+  Try
+    Probe := Result.Canvas.Pixels[0, 0];
+    If Probe = clNone Then Result.Transparent := False;
+  Except
+    Result.Transparent := False;
+  End;
+End;
+
+Procedure BlitPixels(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TBitmap);
+Var
+  X, Y, RunX, SrcX, SrcY, Right: Integer;
+  Color, Next: TColor;
+Begin
+  Canvas.Brush.Style := bsSolid;
+  For Y := Max(Dest.Top, Clip.Top) To Min(Dest.Bottom, Clip.Bottom) - 1 Do
+    Begin
+      SrcY := (Y - Dest.Top) * Picture.Height Div Max(1, Dest.Bottom - Dest.Top);
+      If SrcY >= Picture.Height Then SrcY := Picture.Height - 1;
+      If SrcY < 0 Then SrcY := 0;
+      X := Max(Dest.Left, Clip.Left);
+      Right := Min(Dest.Right, Clip.Right);
+      While X < Right Do
+        Begin
+          SrcX := (X - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
+          If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
+          If SrcX < 0 Then SrcX := 0;
+          Color := Picture.Canvas.Pixels[SrcX, SrcY];
+          RunX := X + 1;
+          While RunX < Right Do
+            Begin
+              SrcX := (RunX - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
+              If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
+              Next := Picture.Canvas.Pixels[SrcX, SrcY];
+              If Next <> Color Then Break;
+              Inc(RunX);
+            End;
+          Canvas.Brush.Color := Color;
+          Canvas.FillRect(X, Y, RunX, Y + 1);
+          X := RunX;
+        End;
+    End;
+End;
+
+Procedure BlitOnce(Canvas: TCanvas; Const Dest, Visible, Src: TRect; Picture: TBitmap; Kind: TImageBlitKind);
+Begin
+  Case Kind Of
+    ibkCopy: Canvas.CopyRect(Visible, Picture.Canvas, Src);
+    ibkPixels: BlitPixels(Canvas, Dest, Visible, Picture);
+  Else
+    Canvas.CopyRect(Visible, Picture.Canvas, Src);
+  End;
+End;
+
+Function BlitSample(Canvas: TCanvas; Picture: TBitmap; Const Dest, Visible: TRect; Out At: TPoint; Out Expected: TColor): Boolean;
+Var
+  X, Y, StepX, StepY, SrcX, SrcY: Integer;
+Begin
+  Result := False;
+  Expected := clNone;
+  At := Point(Visible.Left, Visible.Top);
+  StepX := Max(1, (Visible.Right - Visible.Left) Div 4);
+  StepY := Max(1, (Visible.Bottom - Visible.Top) Div 4);
+  Y := Visible.Top;
+  While Y < Visible.Bottom Do
+    Begin
+      X := Visible.Left;
+      While X < Visible.Right Do
+        Begin
+          SrcX := (X - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
+          SrcY := (Y - Dest.Top) * Picture.Height Div Max(1, Dest.Bottom - Dest.Top);
+          If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
+          If SrcY >= Picture.Height Then SrcY := Picture.Height - 1;
+          If SrcX < 0 Then SrcX := 0;
+          If SrcY < 0 Then SrcY := 0;
+          Expected := Picture.Canvas.Pixels[SrcX, SrcY];
+          If Not ColorsMatch(Canvas.Pixels[X, Y], Expected) Then
+            Begin
+              At := Point(X, Y);
+              Exit(True);
+            End;
+          Inc(X, StepX);
+        End;
+      Inc(Y, StepY);
+    End;
+End;
+
+Procedure BlitPicture(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TBitmap);
+Var
+  Visible, Src: TRect;
+  Kind: TImageBlitKind;
+  Sample: TPoint;
+  Expected: TColor;
+Begin
+  If (Not Assigned(Picture)) Or (Picture.Width < 1) Or (Picture.Height < 1) Then Exit;
+  If Not IntersectRect(Visible, Dest, Clip) Then Exit;
+  Src.Left := Visible.Left - Dest.Left;
+  Src.Top := Visible.Top - Dest.Top;
+  Src.Right := Src.Left + (Visible.Right - Visible.Left);
+  Src.Bottom := Src.Top + (Visible.Bottom - Visible.Top);
+  If Src.Left < 0 Then Src.Left := 0;
+  If Src.Top < 0 Then Src.Top := 0;
+  If Src.Right > Picture.Width Then Src.Right := Picture.Width;
+  If Src.Bottom > Picture.Height Then Src.Bottom := Picture.Height;
+  If (Src.Right <= Src.Left) Or (Src.Bottom <= Src.Top) Then Exit;
+  If ImageBlitProven Then
+    Begin
+      BlitOnce(Canvas, Dest, Visible, Src, Picture, ImageBlitKind);
+      Exit;
+    End;
+  If Not BlitSample(Canvas, Picture, Dest, Visible, Sample, Expected) Then
+    Begin
+      BlitOnce(Canvas, Dest, Visible, Src, Picture, ibkCopy);
+      Exit;
+    End;
+  For Kind := ibkCopy To ibkPixels Do
+    Begin
+      BlitOnce(Canvas, Dest, Visible, Src, Picture, Kind);
+      If ColorsMatch(Canvas.Pixels[Sample.X, Sample.Y], Expected) Then
+        Begin
+          ImageBlitKind := Kind;
+          ImageBlitProven := True;
+          Exit;
+        End;
+    End;
+End;
 
 Constructor TAssistantConversationSurface.Create(AOwner: TComponent);
 Var
@@ -135,14 +414,99 @@ End;
 Destructor TAssistantConversationSurface.Destroy;
 Begin
   If Assigned(Timer) Then Timer.Enabled := False;
+  ClearPictures;
+  FreeAndNil(Pictures);
   FreeAndNil(FLayout);
   Inherited Destroy;
+End;
+
+Procedure TAssistantConversationSurface.SetImageRoot(Const Value: String);
+Begin
+  If FImageRoot = Value Then Exit;
+  FImageRoot := Value;
+  ClearPictures;
+  Invalidate;
+End;
+
+Procedure TAssistantConversationSurface.ClearPictures;
+Var
+  I: Integer;
+Begin
+  If Not Assigned(Pictures) Then Exit;
+  For I := 0 To Pictures.Count - 1 Do Pictures.Objects[I].Free;
+  Pictures.Clear;
+End;
+
+Procedure TAssistantConversationSurface.TrimPictures;
+Var
+  I, J, DisplayW, DisplayH, ContentW: Integer;
+  Keep: TStringList;
+  Ref: TTraceImageRef;
+Begin
+  If Not Assigned(Pictures) Or (Pictures.Count = 0) Then Exit;
+  Keep := TStringList.Create;
+  Try
+    Keep.Sorted := True;
+    Keep.Duplicates := dupIgnore;
+    For I := 0 To FLayout.Count - 1 Do
+      Begin
+        ContentW := FLayout.ImageContentWidth(I);
+        For J := 0 To High(FLayout[I].Images) Do
+          Begin
+            Ref := FLayout[I].Images[J];
+            If Ref.Missing Then Continue;
+            DisplayW := 0;
+            DisplayH := 0;
+            If Not ScaledImageExtent(Ref.Width, Ref.Height, ContentW, FLayout.PixelsPerInch, DisplayW, DisplayH) Then Continue;
+            Keep.Add(PictureKey(Ref, DisplayW, DisplayH));
+          End;
+      End;
+    For I := Pictures.Count - 1 DownTo 0 Do
+      If Keep.IndexOf(Pictures[I]) < 0 Then
+        Begin
+          Pictures.Objects[I].Free;
+          Pictures.Delete(I);
+        End;
+  Finally
+    Keep.Free;
+  End;
+End;
+
+Function TAssistantConversationSurface.PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TBitmap;
+Var
+  Index: Integer;
+  Key, ErrorText: String;
+  Img: TFPMemoryImage;
+Begin
+  Result := Nil;
+  If Ref.Missing Or (FImageRoot = '') Or (Ref.DisplayPath = '') Or (DisplayW < 1) Or (DisplayH < 1) Then Exit;
+  If Not Assigned(Pictures) Then
+    Begin
+      Pictures := TStringList.Create;
+      Pictures.Sorted := True;
+      Pictures.Duplicates := dupError;
+    End;
+  Key := PictureKey(Ref, DisplayW, DisplayH);
+  Index := Pictures.IndexOf(Key);
+  If Index >= 0 Then Exit(TBitmap(Pictures.Objects[Index]));
+  Img := Nil;
+  Try
+    If LoadStoredAssistantImage(FImageRoot, Ref.DisplayPath, Img, ErrorText) And Assigned(Img) And
+      (Img.Width > 0) And (Img.Height > 0) Then
+      Result := ScaleToBitmap(Img, DisplayW, DisplayH);
+  Except
+    FreeAndNil(Result);
+  End;
+  FreeAndNil(Img);
+  { A failed load is cached as Nil so a missing decode is not retried every paint. }
+  Pictures.AddObject(Key, Result);
 End;
 
 Procedure TAssistantConversationSurface.Clear;
 Begin
   Timer.Enabled := False;
   HasPendingAnchor := False;
+  ClearPictures;
   FLayout.Clear;
   BackgroundIndex := 0;
   ClearSelection;
@@ -197,6 +561,7 @@ Begin
   FLayout.EndSync;
   ConfigureCanvas;
   FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
+  TrimPictures;
   BackgroundIndex := 0;
   FUpdating := True;
   Try
@@ -230,8 +595,10 @@ Begin
   Result.Offset := LocalY;
   Fragment := FLayout[I].Fragment;
   If Not Assigned(Fragment) Then Exit;
-  Dec(LocalY, FLayout[I].Padding);
-  P := ItemAtHeight(Fragment.Layout.Heights, Max(Int64(0), LocalY));
+  Dec(LocalY, FLayout[I].Padding + FLayout.ImageRowHeight(I));
+  { The viewport top is still in the picture row. Keep the section offset. }
+  If LocalY < 0 Then Exit;
+  P := ItemAtHeight(Fragment.Layout.Heights, LocalY);
   If Not Assigned(Fragment.Layout.Paragraphs[P]) Then Exit;
   L := Fragment.Layout.Paragraphs[P].LineAtY(LocalY - Fragment.Layout.TextTop(P));
   If L < 0 Then Exit;
@@ -292,7 +659,8 @@ Begin
       If Assigned(Fragment.Layout.Paragraphs[P]) Then
         Begin
           L := Fragment.Layout.Paragraphs[P].LineAtOffset(Anchor.Text.Offset);
-          If L >= 0 Then LocalY := FLayout[I].Padding + Fragment.Layout.TextTop(P) + Fragment.Layout.Paragraphs[P].Lines[L].Top + Anchor.Offset;
+          If L >= 0 Then LocalY := FLayout[I].Padding + FLayout.ImageRowHeight(I) + Fragment.Layout.TextTop(P) +
+            Fragment.Layout.Paragraphs[P].Lines[L].Top + Anchor.Offset;
         End;
     End;
   ScrollTop := FLayout.Top(I) + Max(Int64(0), Min(LocalY, FLayout.Heights.Values[I] - 1));
@@ -548,15 +916,25 @@ End;
 
 Procedure TAssistantConversationSurface.PaintContent(Const Clip: TRect; OriginX: Integer; OriginY: Int64);
 Var
-  I, A, B: Integer;
+  I, A, B, TileIndex, TileLeft, TileWidth, DisplayW, DisplayH, SlotH, PPI, ContentW: Integer;
+  TileTop: Integer;
   Fragment: TConversationFragment;
   First, Last: TConversationPosition;
   StartPos, EndPos: TStyledPosition;
   Selected: Boolean;
   Style: TStyledBoxStyle;
   SectionHeight: Int64;
-  TileH, RowH, TileIndex, TileTop, TileLeft, TileWidth: Integer;
-  TileRect: TRect;
+  TileH: Integer;
+  Picture: TBitmap;
+  Dest: TRect;
+  Procedure DrawUnavailable(Const Area: TRect; Const Caption: String);
+  Begin
+    If (Area.Right <= Area.Left + 4) Or (Area.Bottom <= Area.Top + 4) Then Exit;
+    BufferCanvas.Rectangle(Area);
+    BufferCanvas.Brush.Style := bsClear;
+    BufferCanvas.TextRect(Area, Area.Left + 6, Area.Top + 4, Caption);
+    BufferCanvas.Brush.Style := bsSolid;
+  End;
 Begin
   FPaintRevision := FLayoutRevision;
   If FLayout.TotalHeight = 0 Then
@@ -574,8 +952,7 @@ Begin
     Begin
       Fragment := FLayout[I].Fragment;
       TileH := 0;
-      If FLayout[I].Kind = tbkUser Then
-        TileH := Length(FLayout[I].MissingImages) * MissingImageTileHeight(Font.PixelsPerInch);
+      If FLayout[I].Kind = tbkUser Then TileH := FLayout.ImageRowHeight(I);
       If FLayout[I].Visible And (Assigned(Fragment) Or (TileH > 0)) Then
         Begin
           If FLayout[I].Kind In [tbkUser, tbkAnswer] Then
@@ -585,7 +962,7 @@ Begin
               Style.BorderWidth := 1;
               If FLayout[I].Kind = tbkUser Then
                 Begin
-                  Style.Background := $EFF8E5;
+                  Style.Background := UserBubbleColor;
                   Style.BorderColor := $D5E4C5;
                 End
               Else
@@ -600,9 +977,10 @@ Begin
             End;
           If TileH > 0 Then
             Begin
-              RowH := MissingImageTileHeight(Font.PixelsPerInch);
+              PPI := FLayout.PixelsPerInch;
+              ContentW := FLayout.ImageContentWidth(I);
               TileLeft := OriginX + FLayout[I].Left + FLayout[I].Padding;
-              TileWidth := FLayout[I].OuterWidth - FLayout[I].Padding * 2;
+              TileWidth := ContentW;
               If TileWidth < 48 Then TileWidth := 48;
               TileTop := Integer(OriginY + FLayout.Top(I) + FLayout[I].Padding);
               BufferCanvas.Font.Assign(Font);
@@ -610,26 +988,38 @@ Begin
               BufferCanvas.Brush.Style := bsSolid;
               BufferCanvas.Brush.Color := $F4F4F4;
               BufferCanvas.Pen.Color := $C8C8C8;
-              For TileIndex := 0 To High(FLayout[I].MissingImages) Do
+              For TileIndex := 0 To High(FLayout[I].Images) Do
                 Begin
-                  TileRect := Rect(TileLeft, TileTop + 2, TileLeft + TileWidth, TileTop + RowH - 2);
-                  BufferCanvas.Rectangle(TileRect);
-                  BufferCanvas.Brush.Style := bsClear;
-                  BufferCanvas.TextRect(TileRect, TileRect.Left + 6, TileRect.Top + 4,
-                    MissingImageTileCaption(FLayout[I].MissingImages[TileIndex]));
-                  BufferCanvas.Brush.Style := bsSolid;
-                  Inc(TileTop, RowH);
+                  SlotH := UserImageSlotHeight(FLayout[I].Images[TileIndex], ContentW, PPI);
+                  DisplayW := 0;
+                  DisplayH := 0;
+                  Picture := Nil;
+                  If Not FLayout[I].Images[TileIndex].Missing Then
+                    Begin
+                      ScaledImageExtent(FLayout[I].Images[TileIndex].Width, FLayout[I].Images[TileIndex].Height,
+                        ContentW, PPI, DisplayW, DisplayH);
+                      Picture := PictureFor(FLayout[I].Images[TileIndex], DisplayW, DisplayH);
+                    End;
+                  If Assigned(Picture) And (Picture.Width > 0) And (Picture.Height > 0) Then
+                    Begin
+                      Dest := Rect(TileLeft, TileTop, TileLeft + Picture.Width, TileTop + Picture.Height);
+                      BlitPicture(BufferCanvas, Dest, Clip, Picture);
+                    End
+                  Else
+                    DrawUnavailable(Rect(TileLeft, TileTop + 2, TileLeft + TileWidth, TileTop + SlotH - 2),
+                      MissingImageTileCaption(FLayout[I].Images[TileIndex]));
+                  Inc(TileTop, SlotH);
                 End;
             End;
           If Assigned(Fragment) Then
             Begin
-          Selected := (A >= 0) And (B >= 0) And (I >= A) And (I <= B) And (Compare(First, Last) <> 0);
-          StartPos := StyledPosition(0, 0);
-          EndPos := Fragment.Document.EndPosition;
-          If I = A Then StartPos := Fragment.Document.Clamp(First.Text);
-          If I = B Then EndPos := Fragment.Document.Clamp(Last.Text);
-          Fragment.Layout.Paint(Clip, OriginX + FLayout[I].Left + FLayout[I].Padding,
-            OriginY + FLayout.Top(I) + FLayout[I].Padding + TileH, StartPos, EndPos, Selected, False);
+              Selected := (A >= 0) And (B >= 0) And (I >= A) And (I <= B) And (Compare(First, Last) <> 0);
+              StartPos := StyledPosition(0, 0);
+              EndPos := Fragment.Document.EndPosition;
+              If I = A Then StartPos := Fragment.Document.Clamp(First.Text);
+              If I = B Then EndPos := Fragment.Document.Clamp(Last.Text);
+              Fragment.Layout.Paint(Clip, OriginX + FLayout[I].Left + FLayout[I].Padding,
+                OriginY + FLayout.Top(I) + FLayout[I].Padding + TileH, StartPos, EndPos, Selected, False);
             End;
           If Focused And (FocusedKey = FLayout[I].Key) Then
             Begin
@@ -661,9 +1051,7 @@ Begin
   Result.Key := FLayout[I].Key;
   Fragment := FLayout[I].Fragment;
   If Not Assigned(Fragment) Then Exit;
-  LocalY := Int64(Y) - ViewRect.Top + ScrollTop - FLayout.Top(I) - FLayout[I].Padding;
-  If FLayout[I].Kind = tbkUser Then
-    LocalY := LocalY - Int64(Length(FLayout[I].MissingImages)) * MissingImageTileHeight(Font.PixelsPerInch);
+  LocalY := Int64(Y) - ViewRect.Top + ScrollTop - FLayout.Top(I) - FLayout[I].Padding - FLayout.ImageRowHeight(I);
   If LocalY < 0 Then
     Begin
       Result.Text := StyledPosition(0, 0);
@@ -676,6 +1064,22 @@ Begin
     LocalY - Fragment.Layout.TextTop(P), Trailing);
   Result.Text.Trailing := Trailing;
   Result.Text := Fragment.Document.Clamp(Result.Text);
+End;
+
+Function TAssistantConversationSurface.PointerHit(X, Y: Integer): TConversationPointerHit;
+Var
+  I, ContentLeft, ContentW: Integer;
+  SectionY: Int64;
+Begin
+  Result.Position := HitPosition(X, Y);
+  Result.ImageIndex := -1;
+  I := FLayout.IndexOf(Result.Position.Key);
+  If (I < 0) Or (FLayout[I].Kind <> tbkUser) Or (Length(FLayout[I].Images) = 0) Then Exit;
+  ContentW := FLayout.ImageContentWidth(I);
+  ContentLeft := ViewRect.Left + FLayout[I].Left + FLayout[I].Padding;
+  If (X < ContentLeft) Or (X >= ContentLeft + ContentW) Then Exit;
+  SectionY := Int64(Y) - ViewRect.Top + ScrollTop - FLayout.Top(I) - FLayout[I].Padding;
+  Result.ImageIndex := ImageIndexInRow(FLayout[I].Images, ContentW, FLayout.PixelsPerInch, SectionY);
 End;
 
 Function TAssistantConversationSurface.Compare(Const A, B: TConversationPosition): Integer;
@@ -791,6 +1195,14 @@ Begin
   Position := HitPosition(X, Y);
   I := FLayout.IndexOf(Position.Key);
   FocusedKey := Position.Key;
+  If PointerHit(X, Y).ImageIndex >= 0 Then
+    Begin
+      ClearSelection;
+      Selecting := False;
+      FFollowTail := False;
+      Invalidate;
+      Exit;
+    End;
   If (Position.Text.Paragraph = 0) And (I >= 0) And (X < ViewRect.Left + Scale96ToFont(24)) Then
     Begin
       Toggle(I);
@@ -878,6 +1290,8 @@ Begin
   Inherited DblClick;
   Selecting := False;
   MouseCapture := False;
+  { A picture owns this gesture. Opening it is a later step. }
+  If PointerHit(PointerPosition.X, PointerPosition.Y).ImageIndex >= 0 Then Exit;
   SelectWord;
 End;
 

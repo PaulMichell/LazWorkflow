@@ -41,7 +41,7 @@ Type
     Seen, Identity, Version, ParsedVersion, FullVersion: QWord;
     ParsedBaseSize: Integer;
     BodyContent: TStyledContent;
-    MissingImages: TTraceImageRefArray;
+    Images: TTraceImageRefArray;
     Destructor Destroy; Override;
     Procedure Invalidate;
     Function Fragment: TConversationFragment;
@@ -78,11 +78,14 @@ Type
     Function PreparePosition(Index: Integer; Const Position: TStyledPosition): Boolean;
     Procedure TrimDrawings(FirstVisible, LastVisible: Integer; ViewTop, ViewBottom: Int64);
     Function IndexOf(Const Key: String): Integer;
+    Function ImageContentWidth(Index: Integer): Integer;
+    Function ImageRowHeight(Index: Integer): Integer;
     Function Count: Integer;
     Function TotalHeight: Int64;
     Function Top(Index: Integer): Int64;
     Function AtY(Y: Int64): Integer;
     Property Sections[Index: Integer]: TConversationSection Read GetSection; Default;
+    Property PixelsPerInch: Integer Read FPixelsPerInch;
     Property LayoutIncomplete: Boolean Read NeedsPreparation;
     Property PendingWork: Boolean Read GetPendingWork;
     Property ParseCount: QWord Read FParseCount;
@@ -237,23 +240,15 @@ Begin
   FSections.Clear;
 End;
 
-Procedure CopyMissingImages(Block: TTraceBlock; Section: TConversationSection);
+Procedure CopyUserImages(Block: TTraceBlock; Section: TConversationSection);
 Var
-  I, Kept: Integer;
+  I: Integer;
 Begin
-  SetLength(Section.MissingImages, 0);
+  SetLength(Section.Images, 0);
   If (Not Assigned(Block)) Or (Block.Kind <> tbkUser) Then Exit;
-  Kept := 0;
+  SetLength(Section.Images, Length(Block.ImageRefs));
   For I := 0 To High(Block.ImageRefs) Do
-    If Block.ImageRefs[I].Missing Then Inc(Kept);
-  SetLength(Section.MissingImages, Kept);
-  Kept := 0;
-  For I := 0 To High(Block.ImageRefs) Do
-    If Block.ImageRefs[I].Missing Then
-      Begin
-        Section.MissingImages[Kept] := Block.ImageRefs[I];
-        Inc(Kept);
-      End;
+    Section.Images[I] := Block.ImageRefs[I];
 End;
 
 Procedure TConversationLayout.Add(Const Key: String; Block: TTraceBlock);
@@ -322,7 +317,7 @@ Begin
       UpdateTitle(Section.Short, True);
     End;
   Section.Kind := Block.Kind;
-  CopyMissingImages(Block, Section);
+  CopyUserImages(Block, Section);
   Section.Title := DisplayTitle;
   Section.Body := Block.Body;
   Section.Footer := Block.Footer;
@@ -399,7 +394,7 @@ Begin
       If Section.Collapsed Then H := Section.ShortHeight
       Else H := Section.FullHeight;
       If Section.Kind = tbkUser Then
-        H := H + Int64(Length(Section.MissingImages)) * MissingImageTileHeight(FPixelsPerInch);
+        H := H + UserImageRowHeight(Section.Images, Max(1, Section.OuterWidth - Section.Padding * 2), FPixelsPerInch);
       SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding * 2 + Round(10 * FPixelsPerInch / 96));
       LastVisible := I;
     End;
@@ -642,7 +637,8 @@ Begin
   { Keep the previous measurements intact until the replacement is ready.
     Measuring against a new font here would mix two metric generations. }
   If Pending And (Fragment.Generation <> Renderer.Generation) Then Result := False
-  Else Result := Fragment.Prepare(Top - Section.Padding, Bottom - Section.Padding, Finish, WorkDeadline) And Not Pending;
+  Else Result := Fragment.Prepare(Top - Section.Padding - ImageRowHeight(Index),
+    Bottom - Section.Padding - ImageRowHeight(Index), Finish, WorkDeadline) And Not Pending;
   If Not Result Then NeedsPreparation := True;
   If Section.Collapsed Then Section.ShortHeight := Fragment.Height
   Else Section.FullHeight := Fragment.Height;
@@ -696,8 +692,8 @@ Begin
       If Not Sections[I].Visible Or (I < FirstVisible) Or (I > LastVisible) Then Fragment.EvictDrawings
       Else
         Begin
-          A := ItemAtHeight(Fragment.Layout.Heights, Max(Int64(0), ViewTop - Top(I) - Sections[I].Padding - 200));
-          B := ItemAtHeight(Fragment.Layout.Heights, Max(Int64(0), ViewBottom - Top(I) - Sections[I].Padding + 200));
+          A := ItemAtHeight(Fragment.Layout.Heights, Max(Int64(0), ViewTop - Top(I) - Sections[I].Padding - ImageRowHeight(I) - 200));
+          B := ItemAtHeight(Fragment.Layout.Heights, Max(Int64(0), ViewBottom - Top(I) - Sections[I].Padding - ImageRowHeight(I) + 200));
           Fragment.RetainDrawings(Max(0, A - 2), Min(Fragment.Document.Count - 1, B + 2));
         End;
     End;
@@ -709,6 +705,21 @@ Var
 Begin
   Result := -1;
   For I := 0 To Count - 1 Do If Sections[I].Key = Key Then Exit(I);
+End;
+
+Function TConversationLayout.ImageContentWidth(Index: Integer): Integer;
+Begin
+  Result := 1;
+  If (Index < 0) Or (Index >= Count) Then Exit;
+  Result := Sections[Index].OuterWidth - Sections[Index].Padding * 2;
+  If Result < 1 Then Result := 1;
+End;
+
+Function TConversationLayout.ImageRowHeight(Index: Integer): Integer;
+Begin
+  Result := 0;
+  If (Index < 0) Or (Index >= Count) Then Exit;
+  Result := UserImageRowHeight(Sections[Index].Images, ImageContentWidth(Index), FPixelsPerInch);
 End;
 
 Function TConversationLayout.GetSection(Index: Integer): TConversationSection;
