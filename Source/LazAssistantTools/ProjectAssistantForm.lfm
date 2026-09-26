@@ -212,7 +212,7 @@ object ProjectAssistantForm: TProjectAssistantForm
   end
     object AttachmentStrip: TPanel
       Left = 0
-      Height = 108
+      Height = 80
       Top = 75
       Width = 960
       Align = alNone
@@ -221,27 +221,17 @@ object ProjectAssistantForm: TProjectAssistantForm
       ChildSizing.TopBottomSpacing = 4
       ChildSizing.HorizontalSpacing = 4
       ChildSizing.VerticalSpacing = 4
-      ChildSizing.EnlargeHorizontal = crsAnchorAligning
-      ChildSizing.EnlargeVertical = crsAnchorAligning
-      ChildSizing.ShrinkHorizontal = crsAnchorAligning
-      ChildSizing.ShrinkVertical = crsAnchorAligning
+      ChildSizing.EnlargeHorizontal = crsHomogenousSpaceResize
+      ChildSizing.EnlargeVertical = crsHomogenousSpaceResize
+      ChildSizing.ShrinkHorizontal = crsHomogenousSpaceResize
+      ChildSizing.ShrinkVertical = crsHomogenousSpaceResize
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 12
-      ClientHeight = 108
+      ChildSizing.ControlsPerLine = 8
+      ClientHeight = 80
       ClientWidth = 960
+      PopupMenu = AttachmentPopup
       TabOrder = 2
       Visible = False
-      object AttachImageButton: TButton
-        Left = 4
-        Height = 28
-        Top = 4
-        Width = 96
-        Action = AttachImageAction
-        Align = alNone
-        AutoSize = True
-        ShowHint = True
-        TabOrder = 0
-      end
     end
   end
   object ModeBar: TPanel
@@ -495,6 +485,27 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Attach an image to the next message'
       OnExecute = AttachImageActionExecute
     end
+    object RemoveAttachmentAction: TAction
+      Tag = -1
+      Caption = 'Remove'
+      Enabled = False
+      Hint = 'Remove this image from the next message'
+      OnExecute = RemoveAttachmentActionExecute
+    end
+    object SaveAttachmentAction: TAction
+      Tag = -1
+      Caption = 'Save'
+      Enabled = False
+      Hint = 'Save this image'
+      OnExecute = SaveAttachmentActionExecute
+    end
+    object PreviewAttachmentAction: TAction
+      Tag = -1
+      Caption = 'Preview'
+      Enabled = False
+      Hint = 'Preview this image'
+      OnExecute = PreviewAttachmentActionExecute
+    end
     object SendAction: TAction
       Caption = 'Send'
       OnExecute = SendActionExecute
@@ -624,6 +635,23 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object ReviewBuildItem: TMenuItem
       Action = ReviewBuildAction
+    end
+  end
+  object AttachmentPopup: TPopupMenu
+    OnPopup = AttachmentPopupPopup
+    Left = 168
+    Top = 40
+    object AttachmentAttachItem: TMenuItem
+      Action = AttachImageAction
+    end
+    object AttachmentRemoveItem: TMenuItem
+      Action = RemoveAttachmentAction
+    end
+    object AttachmentSaveItem: TMenuItem
+      Action = SaveAttachmentAction
+    end
+    object AttachmentPreviewItem: TMenuItem
+      Action = PreviewAttachmentAction
     end
   end
   object AssistantMenu: TMainMenu

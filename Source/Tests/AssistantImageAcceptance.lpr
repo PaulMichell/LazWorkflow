@@ -110,32 +110,35 @@ Begin
   Result := 0;
   If Not Assigned(Form) Or Not Assigned(Form.AttachmentStrip) Then Exit;
   For I := 0 To Form.AttachmentStrip.ControlCount - 1 Do
-    If Form.AttachmentStrip.Controls[I] <> Form.AttachImageButton Then Inc(Result);
+    If Form.AttachmentStrip.Controls[I] Is TImage Then Inc(Result);
+End;
+
+Function AttachmentHint(Form: TProjectAssistantForm; Index: Integer): String;
+Var
+  I, Seen: Integer;
+  Control: TControl;
+Begin
+  Result := '';
+  Seen := 0;
+  If Not Assigned(Form) Or Not Assigned(Form.AttachmentStrip) Then Exit;
+  For I := 0 To Form.AttachmentStrip.ControlCount - 1 Do
+    Begin
+      Control := Form.AttachmentStrip.Controls[I];
+      If Not (Control Is TImage) Then Continue;
+      If Seen = Index Then Exit(Control.Hint);
+      Inc(Seen);
+    End;
 End;
 
 Function ClickRemove(Form: TProjectAssistantForm): Boolean;
-Var
-  I, J: Integer;
-  Panel: TControl;
-  Button: TButton;
 Begin
   Result := False;
-  If Not Assigned(Form.AttachmentStrip) Then Exit;
-  For I := 0 To Form.AttachmentStrip.ControlCount - 1 Do
-    Begin
-      Panel := Form.AttachmentStrip.Controls[I];
-      If (Panel = Form.AttachImageButton) Or Not (Panel Is TWinControl) Then Continue;
-      For J := 0 To TWinControl(Panel).ControlCount - 1 Do
-        If TWinControl(Panel).Controls[J] Is TButton Then
-          Begin
-            Button := TButton(TWinControl(Panel).Controls[J]);
-            If Button.Caption = 'Remove' Then
-              Begin
-                Button.Click;
-                Exit(True);
-              End;
-          End;
-    End;
+  If ThumbnailCount(Form) < 1 Then Exit;
+  If Not Assigned(Form.RemoveAttachmentAction) Then Exit;
+  Form.RemoveAttachmentAction.Tag := 0;
+  Form.RemoveAttachmentAction.Enabled := True;
+  Form.RemoveAttachmentAction.Execute;
+  Result := True;
 End;
 
 Procedure PasteKey(Form: TProjectAssistantForm);
@@ -457,11 +460,16 @@ Begin
     WritePng(ProjectRoot + 'clip.png', 32, 18);
     HostForm := OpenForm;
     Check('the form accepts file drops', HostForm.AllowDropFiles);
+    Check('image list popup offers attach, remove, save, and preview',
+      Assigned(HostForm.AttachmentPopup) And (HostForm.AttachmentPopup.Items.Count = 4) And
+      (HostForm.AttachImageAction.Caption = 'Attach Image') And (HostForm.RemoveAttachmentAction.Caption = 'Remove') And
+      (HostForm.SaveAttachmentAction.Caption = 'Save') And (HostForm.PreviewAttachmentAction.Caption = 'Preview'));
     If Clipboard.HasFormat(CF_TEXT) Then SavedClipboard := Clipboard.AsText;
     PutPngOnClipboard(ProjectRoot + 'clip.png');
     HostForm.InputMemo.Clear;
     PasteKey(HostForm);
     Check('clipboard PNG attaches to an empty prompt', ThumbnailCount(HostForm) = 1);
+    Check('clipboard thumbnail hints Clipboard', AttachmentHint(HostForm, 0) = 'Clipboard');
     Check('image-only paste does not insert text', Trim(HostForm.InputMemo.Text) = '');
     LastDialogText := '';
     DialogTimer := TTimer.Create(Nil);
@@ -477,6 +485,7 @@ Begin
     HostForm.OnDropFiles(HostForm, Names);
     Application.ProcessMessages;
     Check('JPEG from Documents/Images attaches', ThumbnailCount(HostForm) = 2);
+    Check('file thumbnail hints the file name', AttachmentHint(HostForm, 1) = 'sample.jpg');
     Names[0] := 'file://' + PngPath;
     HostForm.OnDropFiles(HostForm, Names);
     Application.ProcessMessages;

@@ -6,7 +6,8 @@ Unit ProjectAssistantForm;
   history, plan/build tiles, send/steer, and catalog wiring as one form.
   Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
   AssistantTraceView. Reviewed 2026-09-23: composer attach, paste, and drop
-  stay here because they are streamed controls. Decode stays in AssistantImages.
+  stay here because they are streamed controls. The image list holds pictures only;
+  attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
   reorder the text, buttons, or status bar. Paste reads pictures through the
   LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
@@ -31,6 +32,9 @@ Type
     ActionList: TActionList;
     NewChatAction: TAction;
     AttachImageAction: TAction;
+    RemoveAttachmentAction: TAction;
+    SaveAttachmentAction: TAction;
+    PreviewAttachmentAction: TAction;
     SendAction: TAction;
     SendButton: TButton;
     StopAction: TAction;
@@ -143,7 +147,6 @@ Type
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
     AttachmentStrip: TPanel;
-    AttachImageButton: TButton;
     PlanOfferBar: TPanel;
     PlanOfferLabel: TLabel;
     BuildThisButton: TButton;
@@ -154,6 +157,11 @@ Type
     InputCopyItem: TMenuItem;
     InputPasteItem: TMenuItem;
     InputSelectAllItem: TMenuItem;
+    AttachmentPopup: TPopupMenu;
+    AttachmentAttachItem: TMenuItem;
+    AttachmentRemoveItem: TMenuItem;
+    AttachmentSaveItem: TMenuItem;
+    AttachmentPreviewItem: TMenuItem;
     PromptSplitter: TSplitter;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
@@ -181,8 +189,12 @@ Type
     Procedure InputCopyClick(Sender: TObject);
     Procedure InputPasteClick(Sender: TObject);
     Procedure AttachImageActionExecute(Sender: TObject);
+    Procedure AttachmentPopupPopup(Sender: TObject);
+    Procedure RemoveAttachmentActionExecute(Sender: TObject);
+    Procedure SaveAttachmentActionExecute(Sender: TObject);
+    Procedure PreviewAttachmentActionExecute(Sender: TObject);
+    Procedure AttachmentImageDblClick(Sender: TObject);
     Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
-    Procedure RemoveComposerImageClick(Sender: TObject);
     Procedure InputSelectAllClick(Sender: TObject);
     Procedure AutoNewChatCheckClick(Sender: TObject);
     Procedure ReviewButtonClick(Sender: TObject);
@@ -322,6 +334,11 @@ Type
     Function ComposerChromeHeight: Integer;
     Procedure PlaceComposerChildren;
     Procedure RefreshComposerImages;
+    Function AttachmentStripHeight: Integer;
+    Function ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
+    Procedure RemoveComposerImageAt(Index: Integer);
+    Procedure SaveComposerImage(Index: Integer);
+    Procedure PreviewComposerImage(Index: Integer);
     Procedure RefreshAttachAction;
     Function ComposerAttachAllowed(Out Reason: String): Boolean;
     Function ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
@@ -507,7 +524,8 @@ Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
-  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages,
+  AssistantImageView
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Const
@@ -971,17 +989,8 @@ Begin
     If Assigned(AttachmentStrip) Then
       While AttachmentStrip.ControlCount > 0 Do
         Begin
-          If AttachmentStrip.Controls[0] = AttachImageButton Then
-            Begin
-              If AttachmentStrip.ControlCount = 1 Then Break;
-              AttachmentStrip.Controls[1].Parent := Nil;
-              AttachmentStrip.Controls[1].Free;
-            End
-          Else
-            Begin
-              AttachmentStrip.Controls[0].Parent := Nil;
-              AttachmentStrip.Controls[0].Free;
-            End;
+          AttachmentStrip.Controls[0].Parent := Nil;
+          AttachmentStrip.Controls[0].Free;
         End;
     If Assigned(ElapsedTimer) Then
       ElapsedTimer.Enabled := False;
@@ -4306,7 +4315,7 @@ Begin
   Else
     Inc(Result, Scale96ToForm(22));
   If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-    Inc(Result, Scale96ToForm(108));
+    Inc(Result, AttachmentStripHeight);
 End;
 
 Procedure TProjectAssistantForm.PlaceComposerChildren;
@@ -4333,7 +4342,7 @@ Begin
     End;
   StripHeight := 0;
   If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-    StripHeight := Scale96ToForm(108);
+    StripHeight := AttachmentStripHeight;
   If Assigned(AttachmentStrip) Then
     Begin
       AttachmentStrip.Align := alNone;
@@ -4362,7 +4371,7 @@ Begin
   Try
     If FInputHeight < Scale96ToForm(48) Then FInputHeight := Scale96ToForm(75);
     If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-      AttachmentStrip.Height := Scale96ToForm(108);
+      AttachmentStrip.Height := AttachmentStripHeight;
     StackHeight := FInputHeight + ComposerChromeHeight;
     ComposerStack.Align := alBottom;
     ComposerStack.SetBounds(0, ClientHeight - StackHeight, ClientWidth, StackHeight);
@@ -4495,15 +4504,82 @@ Begin
   Result := True;
 End;
 
+Function ComposerImageHint(Const OriginalName: String): String;
+Var
+  FileName, Stem: String;
+Begin
+  FileName := Trim(OriginalName);
+  FileName := StringReplace(FileName, '\', '/', [rfReplaceAll]);
+  FileName := Trim(ExtractFileName(FileName));
+  Stem := ChangeFileExt(FileName, '');
+  If SameText(Stem, 'Clipboard') Then
+    Result := 'Clipboard'
+  Else If FileName <> '' Then
+    Result := FileName
+  Else
+    Result := 'Image';
+End;
+
+Function ComposerSaveFilterIndex(Const FileName: String): Integer;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(FileName));
+  If (Ext = '.jpg') Or (Ext = '.jpeg') Then Result := 2
+  Else If Ext = '.gif' Then Result := 3
+  Else If Ext = '.bmp' Then Result := 4
+  Else If (Ext = '.tif') Or (Ext = '.tiff') Then Result := 5
+  Else If Ext = '.xpm' Then Result := 6
+  Else If (Ext = '.pbm') Or (Ext = '.pgm') Or (Ext = '.ppm') Then Result := 7
+  Else If Ext = '.ico' Then Result := 8
+  Else Result := 1;
+End;
+
+Function TProjectAssistantForm.AttachmentStripHeight: Integer;
+Begin
+  { 4px padding, a 72px picture, 4px padding. No caption and no button. }
+  Result := Scale96ToForm(80);
+End;
+
+Function TProjectAssistantForm.ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
+Var
+  Local: TPoint;
+  Control: TControl;
+  I: Integer;
+Begin
+  Result := -1;
+  If Not Assigned(AttachmentStrip) Then Exit;
+  Local := AttachmentStrip.ScreenToClient(ScreenPoint);
+  Control := AttachmentStrip.ControlAtPos(Local, True, True);
+  If Not Assigned(Control) Or (Control = AttachmentStrip) Then
+    For I := AttachmentStrip.ControlCount - 1 DownTo 0 Do
+      If PtInRect(AttachmentStrip.Controls[I].BoundsRect, Local) Then
+        Begin
+          Control := AttachmentStrip.Controls[I];
+          Break;
+        End;
+  If Assigned(Control) And (Control <> AttachmentStrip) Then Result := Control.Tag;
+End;
+
+Function ComposerRefAt(Form: TProjectAssistantForm; Index: Integer; Out Ref: TAssistantImageRef): Boolean;
+Var
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  Ref := Default(TAssistantImageRef);
+  If Not Assigned(Form) Then Exit;
+  ParseAssistantImageRefs(Form.FComposerImagesJson, Refs);
+  If (Index < 0) Or (Index > High(Refs)) Then Exit;
+  Ref := Refs[Index];
+  Result := True;
+End;
+
 Procedure TProjectAssistantForm.RefreshComposerImages;
 Var
   Refs: TAssistantImageRefArray;
-  I: Integer;
-  Root, CaptionText: String;
-  Panel: TPanel;
+  I, Side: Integer;
+  Root: String;
   Thumb: TImage;
-  NameLabel: TLabel;
-  RemoveButton: TButton;
   Control: TControl;
 Begin
   If Not Assigned(AttachmentStrip) Then Exit;
@@ -4515,55 +4591,34 @@ Begin
     For I := AttachmentStrip.ControlCount - 1 DownTo 0 Do
       Begin
         Control := AttachmentStrip.Controls[I];
-        If Control = AttachImageButton Then Continue;
         Control.Parent := Nil;
         Control.Free;
       End;
     ParseAssistantImageRefs(FComposerImagesJson, Refs);
     AttachmentStrip.Visible := Length(Refs) > 0;
+    AttachmentStrip.PopupMenu := AttachmentPopup;
     If AttachmentStrip.Visible Then
-      AttachmentStrip.Height := Scale96ToForm(108);
+      AttachmentStrip.Height := AttachmentStripHeight;
     If AttachmentStrip.Visible Then
       Begin
         Root := '';
+        Side := Scale96ToForm(72);
         If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
         For I := 0 To High(Refs) Do
           Begin
-            Panel := TPanel.Create(Nil);
-            Panel.Parent := AttachmentStrip;
-            Panel.Align := alNone;
-            Panel.BevelOuter := bvNone;
-            Panel.Width := Scale96ToForm(104);
-            Panel.Height := Scale96ToForm(100);
-            Panel.Tag := I;
-            Thumb := TImage.Create(Panel);
-            Thumb.Parent := Panel;
-            Thumb.Left := Scale96ToForm(4);
-            Thumb.Top := Scale96ToForm(2);
-            Thumb.Width := Scale96ToForm(96);
-            Thumb.Height := Scale96ToForm(48);
+            Thumb := TImage.Create(Nil);
+            Thumb.Parent := AttachmentStrip;
+            Thumb.Align := alNone;
+            Thumb.AutoSize := False;
+            Thumb.Width := Side;
+            Thumb.Height := Side;
+            Thumb.Tag := I;
+            Thumb.ParentShowHint := False;
+            Thumb.ShowHint := True;
+            Thumb.Hint := ComposerImageHint(Refs[I].Name);
+            Thumb.PopupMenu := AttachmentPopup;
+            Thumb.OnDblClick := @AttachmentImageDblClick;
             AssignThumbImage(Thumb, Root, Refs[I]);
-            NameLabel := TLabel.Create(Panel);
-            NameLabel.Parent := Panel;
-            NameLabel.Left := Scale96ToForm(4);
-            NameLabel.Top := Scale96ToForm(52);
-            NameLabel.AutoSize := False;
-            NameLabel.Width := Scale96ToForm(96);
-            NameLabel.Height := Scale96ToForm(16);
-            CaptionText := Refs[I].Name;
-            If CaptionText = '' Then CaptionText := 'Image';
-            NameLabel.Caption := CaptionText;
-            NameLabel.Hint := CaptionText;
-            NameLabel.ShowHint := True;
-            RemoveButton := TButton.Create(Panel);
-            RemoveButton.Parent := Panel;
-            RemoveButton.Left := Scale96ToForm(4);
-            RemoveButton.Top := Scale96ToForm(70);
-            RemoveButton.Width := Scale96ToForm(96);
-            RemoveButton.Height := Scale96ToForm(22);
-            RemoveButton.Caption := 'Remove';
-            RemoveButton.Tag := I;
-            RemoveButton.OnClick := @RemoveComposerImageClick;
           End;
       End;
   Finally
@@ -4591,14 +4646,12 @@ Begin
   RefreshComposerImages;
 End;
 
-Procedure TProjectAssistantForm.RemoveComposerImageClick(Sender: TObject);
+Procedure TProjectAssistantForm.RemoveComposerImageAt(Index: Integer);
 Var
-  Index, I, N: Integer;
+  I, N: Integer;
   Refs, Kept: TAssistantImageRefArray;
   Root, ErrorText: String;
 Begin
-  If Not (Sender Is TControl) Then Exit;
-  Index := Integer(TControl(Sender).Tag);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   If (Index < 0) Or (Index > High(Refs)) Then Exit;
   Root := '';
@@ -4615,6 +4668,108 @@ Begin
       End;
   FComposerImagesJson := AssistantImageRefsToJson(Kept);
   RefreshComposerImages;
+End;
+
+Procedure TProjectAssistantForm.SaveComposerImage(Index: Integer);
+Var
+  Ref: TAssistantImageRef;
+  Dialog: TSaveDialog;
+  Root, ErrorText, FileName, Ext: String;
+Begin
+  If Not ComposerRefAt(Self, Index, Ref) Then Exit;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
+  If (Root = '') Or (Trim(Ref.DisplayPath) = '') Then
+    Begin
+      MessageDlg('The image is unavailable.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  FileName := AttachmentSaveName(Ref.Name, Ref.Id);
+  Dialog := TSaveDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Save As';
+    Dialog.Filter := 'PNG image|*.png|JPEG image|*.jpg;*.jpeg|GIF image|*.gif|Bitmap image|*.bmp|' +
+      'TIFF image|*.tif;*.tiff|XPM image|*.xpm|PNM image|*.pbm;*.pgm;*.ppm|Icon|*.ico|All files|*.*';
+    Dialog.FilterIndex := ComposerSaveFilterIndex(FileName);
+    Dialog.FileName := FileName;
+    Ext := ExtractFileExt(FileName);
+    If Ext <> '' Then Dialog.DefaultExt := Copy(Ext, 2, MaxInt);
+    Dialog.Options := [ofOverwritePrompt, ofPathMustExist, ofEnableSizing, ofHideReadOnly];
+    If DirectoryExists(Root) Then Dialog.InitialDir := Root;
+    If Not Dialog.Execute Then Exit;
+    If Not WriteStoredImageFile(Root, Ref.DisplayPath, Dialog.FileName, ErrorText) Then
+      Begin
+        If ErrorText = '' Then ErrorText := 'The image could not be saved.';
+        MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+      End;
+  Finally
+    Dialog.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.PreviewComposerImage(Index: Integer);
+Var
+  Ref: TAssistantImageRef;
+  TraceRef: TTraceImageRef;
+  Root: String;
+Begin
+  If Not ComposerRefAt(Self, Index, Ref) Then Exit;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
+  TraceRef := Default(TTraceImageRef);
+  TraceRef.Id := Ref.Id;
+  TraceRef.Name := Ref.Name;
+  TraceRef.DisplayPath := Ref.DisplayPath;
+  TraceRef.Width := Ref.Width;
+  TraceRef.Height := Ref.Height;
+  TraceRef.Missing := False;
+  ShowAssistantImage(Root, TraceRef);
+End;
+
+Procedure TProjectAssistantForm.AttachmentPopupPopup(Sender: TObject);
+Var
+  Index: Integer;
+  Refs: TAssistantImageRefArray;
+  HasImage: Boolean;
+Begin
+  Index := ComposerImageIndexUnder(Mouse.CursorPos);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  HasImage := (Index >= 0) And (Index <= High(Refs));
+  If Assigned(RemoveAttachmentAction) Then
+    Begin
+      RemoveAttachmentAction.Tag := Index;
+      RemoveAttachmentAction.Enabled := HasImage;
+    End;
+  If Assigned(SaveAttachmentAction) Then
+    Begin
+      SaveAttachmentAction.Tag := Index;
+      SaveAttachmentAction.Enabled := HasImage;
+    End;
+  If Assigned(PreviewAttachmentAction) Then
+    Begin
+      PreviewAttachmentAction.Tag := Index;
+      PreviewAttachmentAction.Enabled := HasImage;
+    End;
+End;
+
+Procedure TProjectAssistantForm.RemoveAttachmentActionExecute(Sender: TObject);
+Begin
+  If Sender Is TComponent Then RemoveComposerImageAt(TComponent(Sender).Tag);
+End;
+
+Procedure TProjectAssistantForm.SaveAttachmentActionExecute(Sender: TObject);
+Begin
+  If Sender Is TComponent Then SaveComposerImage(TComponent(Sender).Tag);
+End;
+
+Procedure TProjectAssistantForm.PreviewAttachmentActionExecute(Sender: TObject);
+Begin
+  If Sender Is TComponent Then PreviewComposerImage(TComponent(Sender).Tag);
+End;
+
+Procedure TProjectAssistantForm.AttachmentImageDblClick(Sender: TObject);
+Begin
+  If Sender Is TControl Then PreviewComposerImage(TControl(Sender).Tag);
 End;
 
 Procedure TProjectAssistantForm.AttachImageActionExecute(Sender: TObject);
