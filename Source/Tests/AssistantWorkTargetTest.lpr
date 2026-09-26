@@ -136,6 +136,10 @@ Begin
   Try
     ProjectStore:=AssistantTarget.StoreDirectory;
     Check('project remains the default target',AssistantTarget.Kind=atkProject);
+    Check('the open project directory can be chosen as a folder',
+      AssistantTarget.SelectFolder(Root,Note) And (AssistantTarget.Kind=atkFolder) And
+      (ExcludeTrailingPathDelimiter(AssistantTarget.Root)=ExcludeTrailingPathDelimiter(ExpandFileName(Root))));
+    AssistantTarget.SelectProject;
     Check('select loaded package',AssistantTarget.SelectPackage(Packages.First.Filename,Note));
     Check('package root includes sibling Source and Documents',AssistantTarget.Root=Root+'/');
     Check('active project is unchanged',IDE.Proj=Proj);

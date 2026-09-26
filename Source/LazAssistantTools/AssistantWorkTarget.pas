@@ -44,6 +44,7 @@ Type
     Procedure SelectProject;
     Function SelectPackage(Const Filename: String; Out ErrorText: String): Boolean;
     /// Use Directory as the target root. Empty selects the current project.
+    /// A chosen directory stays a folder even when it is the open project's directory.
     Function SelectFolder(Const Directory: String; Out ErrorText: String): Boolean;
   End;
 
@@ -204,13 +205,11 @@ End;
 
 Procedure RememberAssistantTarget(Const Directory: String);
 Var
-  Path, ProjectRoot: String;
+  Path: String;
   Index: Integer;
 Begin
   Path := NormalizeTargetFolder(Directory);
   If (Path = '') Or (Not DirectoryExistsUTF8(Path)) Then Exit;
-  ProjectRoot := ExcludeTrailingPathDelimiter(CurrentProjectRoot);
-  If (ProjectRoot <> '') And SameTargetFolder(Path, ProjectRoot) Then Exit;
   EnsureRecentTargets;
   Index := RecentTargets.IndexOf(Path);
   If Index >= 0 Then RecentTargets.Delete(Index);
@@ -547,7 +546,7 @@ End;
 
 Function TAssistantWorkTarget.SelectFolder(Const Directory: String; Out ErrorText: String): Boolean;
 Var
-  Path, ProjectRoot: String;
+  Path: String;
 Begin
   Result := False;
   ErrorText := '';
@@ -566,13 +565,6 @@ Begin
   If Path = ExtractFileDir(Path) Then
     Begin
       ErrorText := 'The filesystem root cannot be the target.';
-      Exit;
-    End;
-  ProjectRoot := ExcludeTrailingPathDelimiter(CurrentProjectRoot);
-  If (ProjectRoot <> '') And SameTargetFolder(Path, ProjectRoot) Then
-    Begin
-      SelectProject;
-      Result := True;
       Exit;
     End;
   FPackageFile := '';

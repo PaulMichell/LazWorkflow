@@ -208,6 +208,7 @@ Type
     Procedure FooterMenuClick(Sender: TObject);
   Private
     FTargetCombo: TComboBox;
+    FRefreshingTargets: Boolean;
     FTargetBrowseButton: TButton;
     FTargetPaths: TStringList;
     FTargetRestored: Boolean;
@@ -749,6 +750,7 @@ Var
 Begin
   If Not Assigned(FTargetCombo) Or Not Assigned(FTargetPaths) Then Exit;
   Recent := TStringList.Create;
+  FRefreshingTargets := True;
   FTargetCombo.Items.BeginUpdate;
   Try
     FTargetCombo.Items.Clear;
@@ -780,6 +782,7 @@ Begin
     FTargetCombo.ItemIndex := Selected;
   Finally
     FTargetCombo.Items.EndUpdate;
+    FRefreshingTargets := False;
     Recent.Free;
   End;
 End;
@@ -818,6 +821,7 @@ Procedure TProjectAssistantForm.TargetChoiceChanged(Sender: TObject);
 Var
   Path: String;
 Begin
+  If FRefreshingTargets Then Exit;
   If FSending Or FReviewInProgress Then
     Begin
       RefreshTargetChoices(Nil);
