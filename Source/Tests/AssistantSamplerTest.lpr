@@ -48,21 +48,26 @@ Begin
   Parser.Feed(Body);
 End;
 
-Function ImageFixturePath: String;
+Function FixtureFilePath(Const FileName: String): String;
 Var
   Dir, Probe: String;
 Begin
   Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
-  Probe := Dir + 'Source/Tests/Fixtures/XaiImageUnderstandingParts.json';
+  Probe := Dir + 'Source/Tests/Fixtures/' + FileName;
   If FileExists(Probe) Then Exit(Probe);
   Dir := ExtractFilePath(ParamStr(0));
   While (Dir <> '') And (ExcludeTrailingPathDelimiter(Dir) <> Dir) Do
     Begin
-      Probe := IncludeTrailingPathDelimiter(Dir) + 'Source/Tests/Fixtures/XaiImageUnderstandingParts.json';
+      Probe := IncludeTrailingPathDelimiter(Dir) + 'Source/Tests/Fixtures/' + FileName;
       If FileExists(Probe) Then Exit(Probe);
       Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));
     End;
   Result := '';
+End;
+
+Function ImageFixturePath: String;
+Begin
+  Result := FixtureFilePath('XaiImageUnderstandingParts.json');
 End;
 
 Function ImageFixtureJson: TJSONObject;
@@ -537,6 +542,64 @@ Begin
     End;
 End;
 
+{ Completed fixture XaiCompletedResponse.json.
+  Observed Responses output item types: reasoning, message.
+  Observed reasoning summary part: summary_text with text.
+  Observed message content part: output_text with text.
+  Observed Chat Completions completion: delta.content and message.content are strings.
+  No image part type and no data: image field. Store-and-show is skipped.
+  Do not guess a field and send it. }
+Procedure TestCompletedResponseHasNoImagePart;
+Var
+  Lines: TStringList;
+  Fixture, EventData: TJSONData;
+  Events: TJSONArray;
+  Parser: TAssistantSseParser;
+  I: Integer;
+  Body, Observed: String;
+Begin
+  Check('completed fixture is present', FixtureFilePath('XaiCompletedResponse.json') <> '');
+  If FixtureFilePath('XaiCompletedResponse.json') = '' Then Exit;
+  Lines := TStringList.Create;
+  Fixture := Nil;
+  Parser := TAssistantSseParser.Create;
+  Try
+    Lines.LoadFromFile(FixtureFilePath('XaiCompletedResponse.json'));
+    Fixture := GetJSON(Lines.Text);
+    Check('completed fixture is an object', Fixture Is TJSONObject);
+    If Not (Fixture Is TJSONObject) Then Exit;
+    Observed := TJSONObject(Fixture).Get('observed', '');
+    Check('completed schema recorded', (Pos('output_text', Observed) > 0) And (Pos('skipped', Observed) > 0));
+    Check('completed fixture has no image part type', (Pos('output_image', Observed) = 0) And
+      (Pos('data:', Lines.Text) = 0) And (Pos('b64', Lines.Text) = 0));
+    Events := TJSONObject(Fixture).Find('responses_events') As TJSONArray;
+    Check('responses events present', Assigned(Events) And (Events.Count > 0));
+    Body := '';
+    If Assigned(Events) Then
+      For I := 0 To Events.Count - 1 Do
+        Body := Body + SseLine(Events.Items[I].AsJSON);
+    FeedAll(Parser, Body + SseLine('[DONE]'));
+    Check('text completion still parses', Parser.Completed And
+      (Parser.Content = TJSONObject(Fixture).Get('expected_responses_text', '')));
+    Check('text completion adds no image store', Pos('data:', Parser.Content) = 0);
+    Parser.Reset;
+    Events := TJSONObject(Fixture).Find('chat_events') As TJSONArray;
+    Body := '';
+    If Assigned(Events) Then
+      For I := 0 To Events.Count - 1 Do
+        Body := Body + SseLine(Events.Items[I].AsJSON);
+    FeedAll(Parser, Body + SseLine('[DONE]'));
+    Check('chat text completion still parses', Parser.Completed And
+      (Parser.Content = TJSONObject(Fixture).Get('expected_chat_text', '')));
+    EventData := TJSONObject(Fixture).Find('part_types');
+    Check('observed part types stay text', Assigned(EventData) And (Pos('image', LowerCase(EventData.AsJSON)) = 0));
+  Finally
+    Parser.Free;
+    Fixture.Free;
+    Lines.Free;
+  End;
+End;
+
 Procedure TestImageWireFixture;
 Var
   Root, ErrorText, Uri, Body, FixtureText: String;
@@ -712,6 +775,7 @@ Begin
   TestResponsesRequestJson;
   TestChatCompletionsRequestDropsReasoning;
   TestImageWireFixture;
+  TestCompletedResponseHasNoImagePart;
   TestFunctionRoundTripItems;
   TestResponsesFailedIsError;
   TestResponsesIncomplete;

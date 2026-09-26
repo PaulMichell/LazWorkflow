@@ -684,6 +684,9 @@ Begin
           If Not Assigned(ContentArr) Then
             Continue;
           MessageText := '';
+          { Completed fixture parts are output_text with a text field. No image
+            part type was observed, so this loop does not store a picture.
+            Do not guess an output image field. }
           For J := 0 To ContentArr.Count - 1 Do
             If ContentArr.Items[J] Is TJSONObject Then
               Begin
