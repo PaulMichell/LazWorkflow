@@ -6,7 +6,9 @@ Unit ProjectAssistantForm;
   history, plan/build tiles, send/steer, and catalog wiring as one form.
   Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
   AssistantTraceView. Reviewed 2026-09-23: composer attach, paste, and drop
-  stay here because they are streamed controls. Decode stays in AssistantImages. }
+  stay here because they are streamed controls. Decode stays in AssistantImages.
+  The composer stack is positioned explicitly so showing the image list cannot
+  reorder the text, buttons, or status bar. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -127,6 +129,7 @@ Type
     BuildWorkButton: TButton;
     BuildWorkPlanButton: TButton;
     BuildStatusLabel: TLabel;
+    ComposerStack: TPanel;
     BottomBar: TPanel;
     NewChatButton: TButton;
     ToggleThinkingButton: TButton;
@@ -195,6 +198,8 @@ Type
     Procedure InspectModeActionExecute(Sender: TObject);
     Procedure PlanModeActionExecute(Sender: TObject);
     Procedure BuildModeActionExecute(Sender: TObject);
+    Procedure ComposerStackResize(Sender: TObject);
+    Procedure InputMemoPaste(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
     Procedure InputMemoChange(Sender: TObject);
@@ -238,7 +243,11 @@ Type
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
     FPasteComposerBusy: Boolean;
+    FPasteGotImage: Boolean;
+    FPasteRequestTick: QWord;
     FInputDropArmed: Boolean;
+    FInputHeight: Integer;
+    FComposerLayoutLock: Boolean;
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
@@ -309,6 +318,9 @@ Type
     Procedure StashComposerImages;
     Procedure RestoreHeldComposerImages;
     Procedure ApplyInputPanelHeight;
+    Procedure LayoutComposer;
+    Function ComposerChromeHeight: Integer;
+    Procedure PlaceComposerChildren;
     Procedure RefreshComposerImages;
     Procedure RefreshAttachAction;
     Function ComposerAttachAllowed(Out Reason: String): Boolean;
@@ -316,6 +328,7 @@ Type
     Function AttachImageStream(Const OriginalName: String; Stream: TStream; Out ErrorText: String): Boolean;
     Function AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
     Procedure PasteComposer;
+    Procedure QueueComposerPaste;
     Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
     Procedure ClearUnsentComposerImages;
     Procedure UpdateViewActionCaptions;
@@ -495,7 +508,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages
-  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
+  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGdkPixbuf2, LazGLib2, LazGObject2{$ENDIF};
 
 Const
   ChatViewMargin = 4;
@@ -711,7 +724,11 @@ Begin
       InputMemo.OnUTF8KeyPress := @InputMemoUTF8KeyPress;
       InputMemo.OnChange := @InputMemoChange;
       InputMemo.OnExit := @InputMemoExit;
+      InputMemo.OnPaste := @InputMemoPaste;
     End;
+  ApplyInputPanelHeight;
+  If Assigned(ComposerStack) Then
+    ComposerStack.OnResize := @ComposerStackResize;
   EnsureChatView;
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
@@ -871,6 +888,7 @@ End;
 {$IFDEF LCLGTK3}
 Var
   ArmedDropControls: TList;
+  GtkPasteForm: TProjectAssistantForm;
 
 Procedure GtkFileDropReceived(Widget: PGtkWidget; Context: PGdkDragContext; X, Y: LongInt; Data: PGtkSelectionData;
   Info: LongWord; Time: LongWord; UserData: Pointer); cdecl;
@@ -950,6 +968,9 @@ End;
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   Try
+    {$IFDEF LCLGTK3}
+    If GtkPasteForm = Self Then GtkPasteForm := Nil;
+    {$ENDIF}
     FreeAndNil(FTargetPaths);
     If Assigned(AttachmentStrip) Then
       While AttachmentStrip.ControlCount > 0 Do
@@ -3732,7 +3753,7 @@ Begin
   InputPopup.Items.Add(InputCopyItem);
   InputPasteItem := TMenuItem.Create(InputPopup);
   InputPasteItem.Caption := 'Paste';
-  InputPasteItem.ShortCut := ShortCut(Ord('V'), [ssCtrl]);
+  { No shortcut. Ctrl+V is handled by the memo so a disabled item cannot eat the key. }
   InputPasteItem.OnClick := @InputPasteClick;
   InputPopup.Items.Add(InputPasteItem);
   Sep := TMenuItem.Create(InputPopup);
@@ -3761,7 +3782,9 @@ Begin
   If Assigned(InputCopyItem) Then
     InputCopyItem.Enabled := HasSel;
   If Assigned(InputPasteItem) Then
-    InputPasteItem.Enabled := CanEdit And (Clipboard.HasFormat(CF_TEXT) Or ClipboardHasImage);
+    { Always offer Paste while the memo can edit. A disabled Ctrl+V shortcut
+      swallows the key before the composer can read an image. }
+    InputPasteItem.Enabled := CanEdit;
   If Assigned(InputSelectAllItem) Then
     InputSelectAllItem.Enabled := Assigned(InputMemo) And (InputMemo.GetTextLen > 0);
 End;
@@ -3791,19 +3814,60 @@ Begin
   Result := RegisterClipboardFormat(Mime);
 End;
 
-Function ClipboardHasImage: Boolean;
+Function MimeLooksLikeStillImage(Const Mime: String): Boolean;
+Var
+  Lowered: String;
 Begin
-  { GTK screenshots also offer x-png and x-bmp atoms. Open so the targets are
-    enumerated before HasFormat, which otherwise returns false on GTK3. }
+  Lowered := LowerCase(Trim(Mime));
+  Result := (Copy(Lowered, 1, 6) = 'image/') And (Pos('svg', Lowered) = 0);
+End;
+
+Function ClipboardFormatMime(FormatId: TClipboardFormat): String;
+Begin
+  Result := '';
+  Try
+    Result := ClipboardFormatToMimeType(FormatId);
+  Except
+    Result := '';
+  End;
+End;
+
+{$IFDEF LCLGTK3}
+Function GtkClipboardImageAvailable: Boolean;
+Var
+  GtkClip: PGtkClipboard;
+Begin
+  Result := False;
+  GtkClip := gtk_clipboard_get(gdk_atom_intern('CLIPBOARD', False));
+  If GtkClip = Nil Then Exit;
+  Result := gtk_clipboard_wait_is_image_available(GtkClip);
+End;
+{$ENDIF}
+
+Function ClipboardHasImage: Boolean;
+Var
+  I: Integer;
+Begin
+  { Open first so GTK enumerates targets. Foreign images are often CF_BITMAP
+    rather than a registered image/png atom. }
   Clipboard.Open;
   Try
-    Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/x-png')) Or
-      Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or Clipboard.HasFormat(ClipboardMime('image/bmp')) Or
-      Clipboard.HasFormat(ClipboardMime('image/x-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/x-MS-bmp')) Or
-      Clipboard.HasFormat(ClipboardMime('image/x-win-bmp')) Or Clipboard.HasFormat(CF_PICTURE);
+    Result := Clipboard.HasFormat(CF_BITMAP) Or Clipboard.HasFormat(CF_PICTURE);
+    If Not Result Then
+      For I := 0 To Clipboard.FormatCount - 1 Do
+        If MimeLooksLikeStillImage(ClipboardFormatMime(Clipboard.Formats[I])) Then Exit(True);
+    If Not Result Then
+      Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/x-png')) Or
+        Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or Clipboard.HasFormat(ClipboardMime('image/gif')) Or
+        Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(ClipboardMime('image/tiff')) Or
+        Clipboard.HasFormat(ClipboardMime('image/x-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/x-MS-bmp')) Or
+        Clipboard.HasFormat(ClipboardMime('image/x-win-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/webp'));
   Finally
     Clipboard.Close;
   End;
+  {$IFDEF LCLGTK3}
+  If Not Result Then Result := GtkClipboardImageAvailable;
+  {$ENDIF}
 End;
 
 Function ReadClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
@@ -3820,41 +3884,330 @@ Begin
 End;
 
 Function ClipboardImageName(Const Mime: String): String;
+Var
+  Lowered: String;
 Begin
-  If (Pos('jpeg', Mime) > 0) Or (Pos('jpg', Mime) > 0) Then Result := 'Clipboard.jpg'
-  Else If Pos('bmp', Mime) > 0 Then Result := 'Clipboard.bmp'
+  Lowered := LowerCase(Mime);
+  If (Pos('jpeg', Lowered) > 0) Or (Pos('jpg', Lowered) > 0) Then Result := 'Clipboard.jpg'
+  Else If Pos('gif', Lowered) > 0 Then Result := 'Clipboard.gif'
+  Else If Pos('tif', Lowered) > 0 Then Result := 'Clipboard.tif'
+  Else If Pos('bmp', Lowered) > 0 Then Result := 'Clipboard.bmp'
+  Else If Pos('xpm', Lowered) > 0 Then Result := 'Clipboard.xpm'
   Else Result := 'Clipboard.png';
 End;
 
-Function ClipboardPictureToPng(Stream: TMemoryStream): Boolean;
+Function GraphicToPngStream(Graphic: TGraphic; Stream: TMemoryStream): Boolean;
 Var
-  Pic: TPicture;
   Png: TPortableNetworkGraphic;
 Begin
   Result := False;
   Stream.Clear;
-  If Not Clipboard.HasFormat(CF_PICTURE) Then Exit;
+  If (Graphic = Nil) Or (Graphic.Width < 1) Or (Graphic.Height < 1) Then Exit;
+  Png := TPortableNetworkGraphic.Create;
+  Try
+    Png.Assign(Graphic);
+    Png.SaveToStream(Stream);
+    Result := Stream.Size > 0;
+    Stream.Position := 0;
+  Finally
+    Png.Free;
+  End;
+End;
+
+Function ClipboardGraphicToPng(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
+Var
+  Pic: TPicture;
+Begin
+  Result := False;
+  Stream.Clear;
+  If Not Clipboard.HasFormat(FormatId) Then Exit;
   Pic := TPicture.Create;
   Try
     Try
-      Pic.LoadFromClipboardFormat(CF_PICTURE);
+      Pic.LoadFromClipboardFormat(FormatId);
     Except
       Exit;
     End;
-    If (Pic.Width < 1) Or (Pic.Height < 1) Or (Pic.Graphic = Nil) Then Exit;
-    Png := TPortableNetworkGraphic.Create;
-    Try
-      Png.Assign(Pic.Graphic);
-      Png.SaveToStream(Stream);
-      Result := Stream.Size > 0;
-      Stream.Position := 0;
-    Finally
-      Png.Free;
-    End;
+    Result := GraphicToPngStream(Pic.Graphic, Stream);
   Finally
     Pic.Free;
   End;
 End;
+
+{$IFDEF LCLGTK3}
+Function GtkPixbufToPng(Pixbuf: PGdkPixbuf; Stream: TMemoryStream): Boolean;
+Var
+  Img: TFPMemoryImage;
+  Writer: TFPWriterPNG;
+  X, Y, Width, Height, Stride, Channels, Sample: Integer;
+  Pixels, Row: PByte;
+  Red, Green, Blue, Alpha: Byte;
+Begin
+  Result := False;
+  Stream.Clear;
+  If Pixbuf = Nil Then Exit;
+  Width := gdk_pixbuf_get_width(Pixbuf);
+  Height := gdk_pixbuf_get_height(Pixbuf);
+  Stride := gdk_pixbuf_get_rowstride(Pixbuf);
+  Channels := gdk_pixbuf_get_n_channels(Pixbuf);
+  Sample := gdk_pixbuf_get_bits_per_sample(Pixbuf);
+  If (Width < 1) Or (Height < 1) Or (Channels < 3) Or (Sample <> 8) Or (Stride < Width * Channels) Then Exit;
+  Pixels := PByte(gdk_pixbuf_get_pixels(Pixbuf));
+  If Pixels = Nil Then Exit;
+  Img := TFPMemoryImage.Create(Width, Height);
+  Writer := TFPWriterPNG.Create;
+  Try
+    For Y := 0 To Height - 1 Do
+      Begin
+        Row := Pixels + Y * Stride;
+        For X := 0 To Width - 1 Do
+          Begin
+            Red := Row[X * Channels];
+            Green := Row[X * Channels + 1];
+            Blue := Row[X * Channels + 2];
+            If Channels >= 4 Then Alpha := Row[X * Channels + 3]
+            Else Alpha := 255;
+            Img.Colors[X, Y] := FPColor(Red shl 8, Green shl 8, Blue shl 8, Alpha shl 8);
+          End;
+      End;
+    Img.SaveToStream(Stream, Writer);
+    Result := Stream.Size > 0;
+    Stream.Position := 0;
+  Finally
+    Writer.Free;
+    Img.Free;
+  End;
+End;
+
+Function GtkClipboardImageToPng(Stream: TMemoryStream): Boolean;
+Var
+  GtkClip: PGtkClipboard;
+  Pixbuf: PGdkPixbuf;
+Begin
+  Result := False;
+  { Do not call this while TClipboard is open. GTK waits on the selection and
+    a nested LCL clipboard lock returns nothing. }
+  GtkClip := gtk_clipboard_get(gdk_atom_intern('CLIPBOARD', False));
+  If GtkClip = Nil Then Exit;
+  Pixbuf := gtk_clipboard_wait_for_image(GtkClip);
+  If Pixbuf = Nil Then Exit;
+  Try
+    Result := GtkPixbufToPng(Pixbuf, Stream);
+  Finally
+    g_object_unref(Pixbuf);
+  End;
+End;
+
+Function DroppedLocalPath(Const Name: String): String; Forward;
+Function AtomText(Atom: TGdkAtom): String; Forward;
+Function SelectionBytes(Data: PGtkSelectionData; Stream: TMemoryStream): Boolean; Forward;
+
+Function GtkPasteAlive: TProjectAssistantForm;
+Begin
+  Result := Nil;
+  If Not (GtkPasteForm Is TProjectAssistantForm) Then Exit;
+  If csDestroying In GtkPasteForm.ComponentState Then Exit;
+  Result := GtkPasteForm;
+End;
+
+Procedure NotePasteImageFailure(Form: TProjectAssistantForm; Const ErrorText: String);
+Begin
+  If (ErrorText = '') Or Not Assigned(Form.StatusFooter) Then Exit;
+  Form.StatusFooter.SetRightText(ErrorText);
+End;
+
+Procedure GtkImageReceived(Clipboard: PGtkClipboard; Pixbuf: PGdkPixbuf; Data: Pointer); cdecl;
+Var
+  Form: TProjectAssistantForm;
+  Stream: TMemoryStream;
+  ErrorText: String;
+Begin
+  If Data <> Pointer(GtkPasteForm) Then Exit;
+  Form := GtkPasteAlive;
+  If (Form = Nil) Or (Pixbuf = Nil) Or Form.FPasteGotImage Then Exit;
+  If Not Form.ComposerAttachAllowed(ErrorText) Then
+    Begin
+      Form.FPasteGotImage := True;
+      NotePasteImageFailure(Form, ErrorText);
+      Exit;
+    End;
+  { GTK owns this pixbuf for the callback. Do not unref it. }
+  Stream := TMemoryStream.Create;
+  Try
+    If Not GtkPixbufToPng(Pixbuf, Stream) Then Exit;
+    Form.FPasteGotImage := True;
+    ErrorText := '';
+    If Not Form.AttachImageStream('Clipboard.png', Stream, ErrorText) Then
+      Begin
+        Form.FPasteGotImage := False;
+        NotePasteImageFailure(Form, ErrorText);
+      End;
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Function SelectionText(Data: PGtkSelectionData): String;
+Var
+  Bytes: PChar;
+  Len: Integer;
+Begin
+  Result := '';
+  If Data = Nil Then Exit;
+  Len := gtk_selection_data_get_length(Data);
+  If Len < 1 Then Exit;
+  Bytes := PChar(gtk_selection_data_get_data(Data));
+  If Bytes = Nil Then Exit;
+  SetLength(Result, Len);
+  Move(Bytes^, Result[1], Len);
+  While (Result <> '') And (Result[Length(Result)] In [#0, #10, #13]) Do
+    Delete(Result, Length(Result), 1);
+End;
+
+Procedure AttachClipboardPaths(Form: TProjectAssistantForm; Const Body: String);
+Var
+  Lines: TStringList;
+  I: Integer;
+  LocalName, ErrorText: String;
+Begin
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := StringReplace(Body, #13, #10, [rfReplaceAll]);
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        LocalName := Trim(Lines[I]);
+        If (LocalName = '') Or SameText(LocalName, 'copy') Or SameText(LocalName, 'cut') Then Continue;
+        LocalName := DroppedLocalPath(LocalName);
+        If Not StillImageExtension(LocalName) Or Not FileExistsUTF8(LocalName) Then Continue;
+        If Form.FPasteGotImage Then Exit;
+        Form.FPasteGotImage := True;
+        ErrorText := '';
+        If Not Form.AttachImageFile(LocalName, ErrorText) Then
+          Begin
+            Form.FPasteGotImage := False;
+            NotePasteImageFailure(Form, ErrorText);
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Procedure GtkContentsReceived(Clipboard: PGtkClipboard; SelectionData: PGtkSelectionData; Data: Pointer); cdecl;
+Var
+  Form: TProjectAssistantForm;
+  Stream: TMemoryStream;
+  Mime, ErrorText: String;
+Begin
+  If Data <> Pointer(GtkPasteForm) Then Exit;
+  Form := GtkPasteAlive;
+  If (Form = Nil) Or (SelectionData = Nil) Or Form.FPasteGotImage Then Exit;
+  If Not Form.ComposerAttachAllowed(ErrorText) Then
+    Begin
+      Form.FPasteGotImage := True;
+      NotePasteImageFailure(Form, ErrorText);
+      Exit;
+    End;
+  If gtk_selection_data_get_target(SelectionData) = Nil Then Exit;
+  Mime := LowerCase(AtomText(gtk_selection_data_get_target(SelectionData)^));
+  If (Mime = 'text/uri-list') Or (Mime = 'x-special/gnome-copied-files') Or (Mime = 'text/plain') Or
+    (Mime = 'text/plain;charset=utf-8') Then
+    Begin
+      AttachClipboardPaths(Form, SelectionText(SelectionData));
+      Exit;
+    End;
+  If Not MimeLooksLikeStillImage(Mime) Then Exit;
+  Stream := TMemoryStream.Create;
+  Try
+    If Not SelectionBytes(SelectionData, Stream) Then Exit;
+    Form.FPasteGotImage := True;
+    ErrorText := '';
+    If Not Form.AttachImageStream(ClipboardImageName(Mime), Stream, ErrorText) Then
+      Begin
+        Form.FPasteGotImage := False;
+        NotePasteImageFailure(Form, ErrorText);
+      End;
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Procedure GtkTextReceived(Clipboard: PGtkClipboard; Text: Pgchar; Data: Pointer); cdecl;
+Var
+  Form: TProjectAssistantForm;
+  Body, LocalName, Reason: String;
+Begin
+  If Data <> Pointer(GtkPasteForm) Then Exit;
+  Form := GtkPasteAlive;
+  If (Form = Nil) Or (Text = Nil) Or (Text^ = #0) Or Not Assigned(Form.InputMemo) Then Exit;
+  Body := Text;
+  LocalName := DroppedLocalPath(Trim(Body));
+  { A copied image file is the attachment, not a path typed into the prompt. }
+  If (Pos(#10, Body) = 0) And StillImageExtension(LocalName) And FileExistsUTF8(LocalName) And
+    Form.ComposerAttachAllowed(Reason) Then
+    Begin
+      AttachClipboardPaths(Form, Body);
+      Exit;
+    End;
+  Form.InputMemo.SelText := Body;
+End;
+
+Function AtomText(Atom: TGdkAtom): String;
+Var
+  Name: Pgchar;
+Begin
+  Result := '';
+  Name := gdk_atom_name(Atom);
+  If Name = Nil Then Exit;
+  Result := Name;
+  g_free(Name);
+End;
+
+Function SelectionBytes(Data: PGtkSelectionData; Stream: TMemoryStream): Boolean;
+Var
+  Bytes: PByte;
+  Len: Integer;
+Begin
+  Result := False;
+  Stream.Clear;
+  If Data = Nil Then Exit;
+  Len := gtk_selection_data_get_length(Data);
+  Bytes := PByte(gtk_selection_data_get_data(Data));
+  If (Len < 8) Or (Bytes = Nil) Then Exit;
+  Stream.WriteBuffer(Bytes^, Len);
+  Stream.Position := 0;
+  Result := True;
+End;
+
+Procedure RequestGtkTarget(Clip: PGtkClipboard; Const Mime: String);
+Begin
+  gtk_clipboard_request_contents(Clip, gdk_atom_intern(PChar(Mime), False), @GtkContentsReceived, GtkPasteForm);
+End;
+
+Procedure RequestGtkClipboardPaste(Form: TProjectAssistantForm);
+Var
+  Clip: PGtkClipboard;
+Begin
+  If (Form.FPasteRequestTick <> 0) And (GetTickCount64 - Form.FPasteRequestTick < 250) Then Exit;
+  Form.FPasteRequestTick := GetTickCount64;
+  Form.FPasteGotImage := False;
+  GtkPasteForm := Form;
+  { Started from the key or menu event. Wayland grants the clipboard only for
+    that gesture, and a synchronous wait inside the handler returns nothing. }
+  Clip := gtk_clipboard_get(gdk_atom_intern('CLIPBOARD', False));
+  If Clip = Nil Then Exit;
+  gtk_clipboard_request_image(Clip, @GtkImageReceived, Form);
+  gtk_clipboard_request_text(Clip, @GtkTextReceived, Form);
+  RequestGtkTarget(Clip, 'image/png');
+  RequestGtkTarget(Clip, 'image/jpeg');
+  RequestGtkTarget(Clip, 'image/gif');
+  RequestGtkTarget(Clip, 'image/bmp');
+  RequestGtkTarget(Clip, 'image/webp');
+  RequestGtkTarget(Clip, 'image/tiff');
+  RequestGtkTarget(Clip, 'text/uri-list');
+  RequestGtkTarget(Clip, 'x-special/gnome-copied-files');
+End;
+{$ENDIF}
 
 Function TurnReferencesImage(Const ImageId: String): Boolean;
 Var
@@ -3920,15 +4273,110 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.ApplyInputPanelHeight;
+Function TProjectAssistantForm.ComposerChromeHeight: Integer;
+Begin
+  Result := 0;
+  If Assigned(BottomBar) And (BottomBar.Height > 0) Then
+    Inc(Result, BottomBar.Height)
+  Else
+    Inc(Result, Scale96ToForm(36));
+  If Assigned(StatusFooter) And (StatusFooter.Height > 0) Then
+    Inc(Result, StatusFooter.Height)
+  Else
+    Inc(Result, Scale96ToForm(22));
+  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+    Inc(Result, Scale96ToForm(108));
+End;
+
+Procedure TProjectAssistantForm.PlaceComposerChildren;
 Var
-  Height96: Integer;
+  Y, StripHeight, BandWidth: Integer;
+Begin
+  { Align stays alNone. LCL sorts alBottom siblings by the current bottom edge,
+    so growing one of them docks the text under the status bar. }
+  If Not Assigned(ComposerStack) Then Exit;
+  BandWidth := ComposerStack.ClientWidth;
+  If BandWidth < 1 Then BandWidth := ComposerStack.Width;
+  Y := ComposerStack.ClientHeight;
+  If Assigned(StatusFooter) Then
+    Begin
+      StatusFooter.Align := alNone;
+      StatusFooter.SetBounds(0, Y - StatusFooter.Height, BandWidth, StatusFooter.Height);
+      Y := StatusFooter.Top;
+    End;
+  If Assigned(BottomBar) Then
+    Begin
+      BottomBar.Align := alNone;
+      BottomBar.SetBounds(0, Y - BottomBar.Height, BandWidth, BottomBar.Height);
+      Y := BottomBar.Top;
+    End;
+  StripHeight := 0;
+  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+    StripHeight := Scale96ToForm(108);
+  If Assigned(AttachmentStrip) Then
+    Begin
+      AttachmentStrip.Align := alNone;
+      If StripHeight > 0 Then
+        AttachmentStrip.SetBounds(0, Y - StripHeight, BandWidth, StripHeight)
+      Else
+        AttachmentStrip.SetBounds(0, Y, BandWidth, 0);
+      If StripHeight > 0 Then Y := AttachmentStrip.Top;
+    End;
+  If Assigned(InputPanel) Then
+    Begin
+      InputPanel.Align := alNone;
+      If Y < 1 Then Y := 1;
+      InputPanel.SetBounds(0, 0, BandWidth, Y);
+    End;
+End;
+
+Procedure TProjectAssistantForm.LayoutComposer;
+Var
+  StackHeight: Integer;
+Begin
+  If Not Assigned(ComposerStack) Or FComposerLayoutLock Then Exit;
+  If csDestroying In ComponentState Then Exit;
+  FComposerLayoutLock := True;
+  DisableAlign;
+  Try
+    If FInputHeight < Scale96ToForm(48) Then FInputHeight := Scale96ToForm(75);
+    If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+      AttachmentStrip.Height := Scale96ToForm(108);
+    StackHeight := FInputHeight + ComposerChromeHeight;
+    ComposerStack.Align := alBottom;
+    ComposerStack.SetBounds(0, ClientHeight - StackHeight, ClientWidth, StackHeight);
+    PlaceComposerChildren;
+  Finally
+    EnableAlign;
+    FComposerLayoutLock := False;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ComposerStackResize(Sender: TObject);
+Var
+  Available, Minimum: Integer;
+Begin
+  If FComposerLayoutLock Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Then Exit;
+  If Not Assigned(ComposerStack) Then Exit;
+  Minimum := Scale96ToForm(48);
+  If FShowPlanOffer Then Inc(Minimum, Scale96ToForm(28));
+  Available := ComposerStack.ClientHeight - ComposerChromeHeight;
+  If Available < Minimum Then Available := Minimum;
+  FInputHeight := Available;
+  FComposerLayoutLock := True;
+  Try
+    PlaceComposerChildren;
+  Finally
+    FComposerLayoutLock := False;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ApplyInputPanelHeight;
 Begin
   If Not Assigned(InputPanel) Then Exit;
-  Height96 := 75;
-  If FShowPlanOffer Then Inc(Height96, 28);
-  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then Inc(Height96, 108);
-  InputPanel.Height := Scale96ToForm(Height96);
+  FInputHeight := Scale96ToForm(75);
+  If FShowPlanOffer Then Inc(FInputHeight, Scale96ToForm(28));
+  LayoutComposer;
 End;
 
 Procedure TProjectAssistantForm.RefreshAttachAction;
@@ -4038,6 +4486,9 @@ Var
   Control: TControl;
 Begin
   If Not Assigned(AttachmentStrip) Then Exit;
+  { A visibility change realigns the stack. Ignore that until the height below
+    includes the strip, or the text row is shrunk by the strip height. }
+  FComposerLayoutLock := True;
   AttachmentStrip.DisableAlign;
   Try
     For I := AttachmentStrip.ControlCount - 1 DownTo 0 Do
@@ -4096,8 +4547,9 @@ Begin
       End;
   Finally
     AttachmentStrip.EnableAlign;
+    FComposerLayoutLock := False;
   End;
-  ApplyInputPanelHeight;
+  LayoutComposer;
 End;
 
 Procedure TProjectAssistantForm.ClearUnsentComposerImages;
@@ -4252,40 +4704,90 @@ End;
 Function TProjectAssistantForm.TryAttachClipboardImage(Out ErrorText: String): Boolean;
 Var
   Stream: TMemoryStream;
-  Reason, ClipboardName: String;
-  Formats: Array[0..6] Of String;
-  I: Integer;
+  Reason, Mime: String;
+  Tried: Array Of String;
+  I, J: Integer;
+  Known: Boolean;
+  SawImage: Boolean;
+
+  Function AlreadyTried(Const Name: String): Boolean;
+  Var
+    K: Integer;
+  Begin
+    Result := False;
+    For K := 0 To High(Tried) Do
+      If SameText(Tried[K], Name) Then Exit(True);
+  End;
+
+  Procedure NoteTried(Const Name: String);
+  Begin
+    If AlreadyTried(Name) Then Exit;
+    SetLength(Tried, Length(Tried) + 1);
+    Tried[High(Tried)] := Name;
+  End;
+
+  Function TryBytes(Const Name: String): Boolean;
+  Begin
+    Result := False;
+    Stream.Position := 0;
+    If Stream.Size < 8 Then Exit;
+    ErrorText := '';
+    Result := AttachImageStream(Name, Stream, ErrorText);
+  End;
+
 Begin
   Result := False;
   ErrorText := '';
-  If Not ClipboardHasImage Then Exit;
+  SawImage := ClipboardHasImage;
+  If Not SawImage Then Exit;
   If Not ComposerAttachAllowed(Reason) Then
     Begin
       ErrorText := Reason;
+      If ErrorText = '' Then ErrorText := 'Attach is disabled.';
       Exit;
     End;
-  Formats[0] := 'image/png';
-  Formats[1] := 'image/x-png';
-  Formats[2] := 'image/jpeg';
-  Formats[3] := 'image/bmp';
-  Formats[4] := 'image/x-bmp';
-  Formats[5] := 'image/x-MS-bmp';
-  Formats[6] := 'image/x-win-bmp';
+  Tried := Nil;
+  SetLength(Tried, 0);
   Stream := TMemoryStream.Create;
   Try
     Clipboard.Open;
     Try
-      For I := 0 To High(Formats) Do
-        If ReadClipboardBytes(ClipboardMime(Formats[I]), Stream) Then
-          Begin
-            ClipboardName := ClipboardImageName(Formats[I]);
-            If AttachImageStream(ClipboardName, Stream, ErrorText) Then Exit(True);
-          End;
-      If ReadClipboardBytes(CF_PICTURE, Stream) And AttachImageStream('Clipboard.bmp', Stream, ErrorText) Then Exit(True);
-      If ClipboardPictureToPng(Stream) And AttachImageStream('Clipboard.png', Stream, ErrorText) Then Exit(True);
+      For I := 0 To Clipboard.FormatCount - 1 Do
+        Begin
+          Mime := ClipboardFormatMime(Clipboard.Formats[I]);
+          If Not MimeLooksLikeStillImage(Mime) Then Continue;
+          NoteTried(Mime);
+          If ReadClipboardBytes(Clipboard.Formats[I], Stream) And TryBytes(ClipboardImageName(Mime)) Then Exit(True);
+          If ReadClipboardBytes(ClipboardMime(Mime), Stream) And TryBytes(ClipboardImageName(Mime)) Then Exit(True);
+        End;
+      NoteTried('image/png');
+      NoteTried('image/x-png');
+      NoteTried('image/jpeg');
+      NoteTried('image/jpg');
+      NoteTried('image/gif');
+      NoteTried('image/bmp');
+      NoteTried('image/x-bmp');
+      NoteTried('image/x-MS-bmp');
+      NoteTried('image/x-win-bmp');
+      NoteTried('image/tiff');
+      NoteTried('image/tif');
+      NoteTried('image/webp');
+      NoteTried('image/x-icon');
+      NoteTried('image/x-xpixmap');
+      For J := 0 To High(Tried) Do
+        Begin
+          Known := MimeLooksLikeStillImage(Tried[J]);
+          If Not Known Then Continue;
+          If ReadClipboardBytes(ClipboardMime(Tried[J]), Stream) And TryBytes(ClipboardImageName(Tried[J])) Then Exit(True);
+        End;
+      If ClipboardGraphicToPng(CF_BITMAP, Stream) And TryBytes('Clipboard.png') Then Exit(True);
+      If ClipboardGraphicToPng(CF_PICTURE, Stream) And TryBytes('Clipboard.png') Then Exit(True);
     Finally
       Clipboard.Close;
     End;
+    {$IFDEF LCLGTK3}
+    If GtkClipboardImageToPng(Stream) And TryBytes('Clipboard.png') Then Exit(True);
+    {$ENDIF}
     If ErrorText = '' Then ErrorText := 'The clipboard image could not be read.';
   Finally
     Stream.Free;
@@ -4295,7 +4797,7 @@ End;
 Procedure TProjectAssistantForm.PasteComposer;
 Var
   HadText, Attached: Boolean;
-  ImageError: String;
+  PastedText, ImageError: String;
 Begin
   If Not Assigned(InputMemo) Or InputMemo.ReadOnly Then Exit;
   { Ctrl+V can arrive both as the memo key and as the popup shortcut. }
@@ -4303,6 +4805,8 @@ Begin
   FPasteComposerBusy := True;
   Try
     HadText := Clipboard.HasFormat(CF_TEXT);
+    PastedText := '';
+    If HadText Then PastedText := Clipboard.AsText;
     Attached := False;
     ImageError := '';
     Try
@@ -4311,8 +4815,9 @@ Begin
       Attached := False;
       If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
     End;
-    If HadText Then
-      InputMemo.PasteFromClipboard;
+    { SelText, not PasteFromClipboard: OnPaste calls back into this method. }
+    If PastedText <> '' Then
+      InputMemo.SelText := PastedText;
     If (Not Attached) And (ImageError <> '') Then
       MessageDlg(ImageError, mtInformation, [mbOK], 0);
   Finally
@@ -4320,9 +4825,23 @@ Begin
   End;
 End;
 
+Procedure TProjectAssistantForm.QueueComposerPaste;
+Begin
+  {$IFDEF LCLGTK3}
+  RequestGtkClipboardPaste(Self);
+  {$ELSE}
+  PasteComposer;
+  {$ENDIF}
+End;
+
 Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);
 Begin
-  PasteComposer;
+  QueueComposerPaste;
+End;
+
+Procedure TProjectAssistantForm.InputMemoPaste(Sender: TObject);
+Begin
+  QueueComposerPaste;
 End;
 
 Procedure TProjectAssistantForm.InputSelectAllClick(Sender: TObject);
@@ -5661,7 +6180,7 @@ Begin
   If (Key = VK_V) And (ssCtrl In Shift) Then
     Begin
       Key := 0;
-      PasteComposer;
+      QueueComposerPaste;
       Exit;
     End;
   If SlashPopupVisible Then

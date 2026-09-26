@@ -12,20 +12,30 @@ object ProjectAssistantForm: TProjectAssistantForm
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnShow = FormShow
-  inline StatusFooter: TStatusFooterFrame
+  object ComposerStack: TPanel
     Left = 0
-    Height = 22
-    Top = 678
+    Height = 133
+    Top = 567
     Width = 960
     Align = alBottom
-    TabOrder = 3
-  end
-  object BottomBar: TPanel
-    Left = 0
-    Height = 36
-    Top = 642
-    Width = 960
-    Align = alBottom
+    BevelOuter = bvNone
+    ClientHeight = 133
+    ClientWidth = 960
+    TabOrder = 1
+    inline StatusFooter: TStatusFooterFrame
+      Left = 0
+      Height = 22
+      Top = 111
+      Width = 960
+      Align = alNone
+      TabOrder = 3
+    end
+    object BottomBar: TPanel
+      Left = 0
+      Height = 36
+      Top = 75
+      Width = 960
+      Align = alNone
     BevelOuter = bvNone
     ChildSizing.LeftRightSpacing = 4
     ChildSizing.TopBottomSpacing = 4
@@ -136,49 +146,16 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnClick = AutoNewChatCheckClick
     end
   end
-  object InputPanel: TPanel
-    Left = 0
-    Height = 75
-    Top = 567
-    Width = 960
-    Align = alBottom
+    object InputPanel: TPanel
+      Left = 0
+      Height = 75
+      Top = 0
+      Width = 960
+      Align = alNone
     BevelOuter = bvNone
     ClientHeight = 75
     ClientWidth = 960
-    TabOrder = 1
-    object AttachmentStrip: TPanel
-      Left = 0
-      Height = 108
-      Top = 0
-      Width = 960
-      Align = alTop
-      BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 4
-      ChildSizing.TopBottomSpacing = 4
-      ChildSizing.HorizontalSpacing = 4
-      ChildSizing.VerticalSpacing = 4
-      ChildSizing.EnlargeHorizontal = crsAnchorAligning
-      ChildSizing.EnlargeVertical = crsAnchorAligning
-      ChildSizing.ShrinkHorizontal = crsAnchorAligning
-      ChildSizing.ShrinkVertical = crsAnchorAligning
-      ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 12
-      ClientHeight = 108
-      ClientWidth = 960
-      TabOrder = 2
-      Visible = False
-      object AttachImageButton: TButton
-        Left = 4
-        Height = 28
-        Top = 4
-        Width = 96
-        Action = AttachImageAction
-        Align = alNone
-        AutoSize = True
-        ShowHint = True
-        TabOrder = 0
-      end
-    end
+    TabOrder = 0
     object PlanOfferBar: TPanel
       Left = 0
       Height = 28
@@ -231,6 +208,40 @@ object ProjectAssistantForm: TProjectAssistantForm
       Align = alClient
       BorderSpacing.Around = 6
       TabOrder = 0
+    end
+  end
+    object AttachmentStrip: TPanel
+      Left = 0
+      Height = 108
+      Top = 75
+      Width = 960
+      Align = alNone
+      BevelOuter = bvNone
+      ChildSizing.LeftRightSpacing = 4
+      ChildSizing.TopBottomSpacing = 4
+      ChildSizing.HorizontalSpacing = 4
+      ChildSizing.VerticalSpacing = 4
+      ChildSizing.EnlargeHorizontal = crsAnchorAligning
+      ChildSizing.EnlargeVertical = crsAnchorAligning
+      ChildSizing.ShrinkHorizontal = crsAnchorAligning
+      ChildSizing.ShrinkVertical = crsAnchorAligning
+      ChildSizing.Layout = cclLeftToRightThenTopToBottom
+      ChildSizing.ControlsPerLine = 12
+      ClientHeight = 108
+      ClientWidth = 960
+      TabOrder = 2
+      Visible = False
+      object AttachImageButton: TButton
+        Left = 4
+        Height = 28
+        Top = 4
+        Width = 96
+        Action = AttachImageAction
+        Align = alNone
+        AutoSize = True
+        ShowHint = True
+        TabOrder = 0
+      end
     end
   end
   object ModeBar: TPanel

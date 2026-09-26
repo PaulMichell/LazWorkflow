@@ -48,6 +48,7 @@ Type
     FSelLength: Integer;
     FSelAnchor: Integer;
     FOnChange: TNotifyEvent;
+    FOnPaste: TNotifyEvent;
     FDebounce: TTimer;
     FInputLayoutTimer: TTimer;
     FInputLayoutPending: Boolean;
@@ -187,6 +188,7 @@ Type
     Property WantTabs: Boolean Read FWantTabs Write SetWantTabs Default False;
     Property WordWrap: Boolean Read FWordWrap Write SetWordWrap Default True;
     Property OnChange: TNotifyEvent Read FOnChange Write FOnChange;
+    Property OnPaste: TNotifyEvent Read FOnPaste Write FOnPaste;
     Property OnClick;
     Property OnDblClick;
     Property OnEnter;
@@ -521,6 +523,13 @@ Procedure TSpellMemo.PasteFromClipboard;
 Begin
   If FReadOnly Then
     Exit;
+  { The host can turn an image on the clipboard into an attachment. Text-only
+    hosts leave OnPaste unset and keep the plain insert. }
+  If Assigned(FOnPaste) Then
+    Begin
+      FOnPaste(Self);
+      Exit;
+    End;
   InsertText(Clipboard.AsText);
 End;
 
@@ -1142,6 +1151,12 @@ Begin
       If ssCtrl In Shift Then
         Begin
           CutToClipboard;
+          Key := 0;
+        End;
+    VK_INSERT:
+      If (ssShift In Shift) And (Not (ssCtrl In Shift)) Then
+        Begin
+          PasteFromClipboard;
           Key := 0;
         End;
     VK_V:
