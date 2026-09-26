@@ -4,7 +4,7 @@ Unit AssistantConversationSurface;
 
   Size note: exceeds the 1000 line preference. The picture cache stays with
   this canvas so paint, hit-testing, and section height use one image row.
-  Reviewed 2026-09-23: no second conversation surface. }
+  Reviewed 2026-09-26: picture colors stay in memory so paint does not depend on a device bitmap. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -19,6 +19,13 @@ Uses
   StyledTextTypes, AssistantTrace, AssistantConversationLayout;
 
 Type
+  { Scaled attachment pixels. Device bitmaps are not used: GTK blits them as empty. }
+  TDisplayPicture = Class
+  Public
+    Width: Integer;
+    Height: Integer;
+    Colors: Array Of TColor;
+  End;
   TConversationPosition = Record
     Key: String;
     Text: TStyledPosition;
@@ -64,7 +71,7 @@ Type
     Procedure SetImageRoot(Const Value: String);
     Procedure ClearPictures;
     Procedure TrimPictures;
-    Function PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TBitmap;
+    Function PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TDisplayPicture;
     Function Compare(Const A, B: TConversationPosition): Integer;
     Procedure SetFilters(Thinking, Tools: Boolean);
     Procedure SetShowThinking(Value: Boolean);
@@ -116,26 +123,34 @@ Type
 Implementation
 
 Uses
-  Math, Clipbrd, LCLType, Forms, FPImage, IntfGraphics,
+  Math, Clipbrd, LCLType, Forms, FPImage,
   StyledCanvas, StyledTextDocument, AssistantImages;
 
 Const
   UserBubbleColor = TColor($00EFF8E5);
 
-{ GTK StretchDraw of a 24-bit bitmap after assigning ClipRect paints nothing on
-  this memory buffer, so a present file vanished while the missing-file Rectangle
-  still showed. Copy the visible rectangle; fall back to FillRect if that blit
-  does not land. The working blit is remembered after one probe. }
-Type
-  TImageBlitKind = (ibkCopy, ibkPixels);
-
-Var
-  ImageBlitKind: TImageBlitKind;
-  ImageBlitProven: Boolean;
+{ GTK StretchDraw and CopyRect of a device bitmap paint nothing on this memory
+  buffer after the bubble clip, while FillRect still shows. Scale into memory
+  colors and paint those with FillRect, the same primitive as the missing tile. }
 
 Function PictureKey(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): String;
 Begin
   Result := Ref.Id + #1 + Ref.DisplayPath + #1 + IntToStr(DisplayW) + 'x' + IntToStr(DisplayH);
+End;
+
+Function ChannelByte(Value: Word): Byte;
+Begin
+  Result := Value Shr 8;
+End;
+
+Function PackedColor(RedByte, GreenByte, BlueByte: Byte): TColor;
+Begin
+  Result := TColor(RedByte Or (GreenByte Shl 8) Or (BlueByte Shl 16));
+End;
+
+Function FPColorToPacked(Const Value: TFPColor): TColor;
+Begin
+  Result := PackedColor(ChannelByte(Value.Red), ChannelByte(Value.Green), ChannelByte(Value.Blue));
 End;
 
 Function UserBubbleFPColor: TFPColor;
@@ -147,13 +162,6 @@ Begin
   Result.Green := ((ColorValue Shr 8) And $FF) * 257;
   Result.Blue := ((ColorValue Shr 16) And $FF) * 257;
   Result.Alpha := 65535;
-End;
-
-Function ColorsMatch(Left, Right: TColor): Boolean;
-Begin
-  Result := (Abs(Integer(Red(Left)) - Integer(Red(Right))) <= 12) And
-    (Abs(Integer(Green(Left)) - Integer(Green(Right))) <= 12) And
-    (Abs(Integer(Blue(Left)) - Integer(Blue(Right))) <= 12);
 End;
 
 Function ZeroAlphaMeansOpaque(Img: TFPCustomImage): Boolean;
@@ -183,201 +191,127 @@ Begin
   Result.Alpha := 65535;
 End;
 
-Function ScaleToBitmap(Img: TFPCustomImage; DestW, DestH: Integer): TBitmap;
+Function ScaleToPicture(Img: TFPCustomImage; DestW, DestH: Integer): TDisplayPicture;
 Var
-  Raw: TLazIntfImage;
   X, Y, X0, Y0, X1, Y1, SX, SY, StepX, StepY, Count: Integer;
-  Probe: TColor;
   RedSum, GreenSum, BlueSum: Int64;
   Bubble, Flat: TFPColor;
   ZeroAlphaIsOpaque: Boolean;
 Begin
   Result := Nil;
   If (Not Assigned(Img)) Or (Img.Width < 1) Or (Img.Height < 1) Or (DestW < 1) Or (DestH < 1) Then Exit;
-  Result := TBitmap.Create;
+  Result := TDisplayPicture.Create;
   Try
-    Result.PixelFormat := pf32bit;
-    Result.SetSize(DestW, DestH);
-    Result.Transparent := False;
+    Result.Width := DestW;
+    Result.Height := DestH;
+    SetLength(Result.Colors, DestW * DestH);
     ZeroAlphaIsOpaque := ZeroAlphaMeansOpaque(Img);
     Bubble := UserBubbleFPColor;
-    Raw := Result.CreateIntfImage;
-    Try
-      For Y := 0 To DestH - 1 Do
-        Begin
-          Y0 := Y * Img.Height Div DestH;
-          Y1 := (Y + 1) * Img.Height Div DestH;
-          If Y1 <= Y0 Then Y1 := Y0 + 1;
-          If Y1 > Img.Height Then Y1 := Img.Height;
-          For X := 0 To DestW - 1 Do
-            Begin
-              X0 := X * Img.Width Div DestW;
-              X1 := (X + 1) * Img.Width Div DestW;
-              If X1 <= X0 Then X1 := X0 + 1;
-              If X1 > Img.Width Then X1 := Img.Width;
-              RedSum := 0;
-              GreenSum := 0;
-              BlueSum := 0;
-              Count := 0;
-              { At most a 4 by 4 sample of each source box, so a large photo does not stall the first paint. }
-              StepX := Max(1, (X1 - X0) Div 4);
-              StepY := Max(1, (Y1 - Y0) Div 4);
-              SY := Y0;
-              While SY < Y1 Do
-                Begin
-                  SX := X0;
-                  While SX < X1 Do
-                    Begin
-                      Flat := FlattenPixel(Img.Colors[SX, SY], Bubble, ZeroAlphaIsOpaque);
-                      Inc(RedSum, Flat.Red);
-                      Inc(GreenSum, Flat.Green);
-                      Inc(BlueSum, Flat.Blue);
-                      Inc(Count);
-                      Inc(SX, StepX);
-                    End;
-                  Inc(SY, StepY);
-                End;
-              If Count < 1 Then Count := 1;
-              Flat.Red := RedSum Div Count;
-              Flat.Green := GreenSum Div Count;
-              Flat.Blue := BlueSum Div Count;
-              Flat.Alpha := 65535;
-              Raw.Colors[X, Y] := Flat;
-            End;
-        End;
-      Result.LoadFromIntfImage(Raw);
-    Finally
-      Raw.Free;
-    End;
+    For Y := 0 To DestH - 1 Do
+      Begin
+        Y0 := Y * Img.Height Div DestH;
+        Y1 := (Y + 1) * Img.Height Div DestH;
+        If Y1 <= Y0 Then Y1 := Y0 + 1;
+        If Y1 > Img.Height Then Y1 := Img.Height;
+        For X := 0 To DestW - 1 Do
+          Begin
+            X0 := X * Img.Width Div DestW;
+            X1 := (X + 1) * Img.Width Div DestW;
+            If X1 <= X0 Then X1 := X0 + 1;
+            If X1 > Img.Width Then X1 := Img.Width;
+            RedSum := 0;
+            GreenSum := 0;
+            BlueSum := 0;
+            Count := 0;
+            { At most a 4 by 4 sample of each source box, so a large photo does not stall the first paint. }
+            StepX := Max(1, (X1 - X0) Div 4);
+            StepY := Max(1, (Y1 - Y0) Div 4);
+            SY := Y0;
+            While SY < Y1 Do
+              Begin
+                SX := X0;
+                While SX < X1 Do
+                  Begin
+                    Flat := FlattenPixel(Img.Colors[SX, SY], Bubble, ZeroAlphaIsOpaque);
+                    Inc(RedSum, Flat.Red);
+                    Inc(GreenSum, Flat.Green);
+                    Inc(BlueSum, Flat.Blue);
+                    Inc(Count);
+                    Inc(SX, StepX);
+                  End;
+                Inc(SY, StepY);
+              End;
+            If Count < 1 Then Count := 1;
+            Flat.Red := RedSum Div Count;
+            Flat.Green := GreenSum Div Count;
+            Flat.Blue := BlueSum Div Count;
+            Result.Colors[Y * DestW + X] := FPColorToPacked(Flat);
+          End;
+      End;
   Except
     FreeAndNil(Result);
-    Exit;
-  End;
-  { Reading a pixel builds the GTK pixmap from the raw image. A later CopyRect
-    otherwise samples an empty device bitmap. A failed read must not discard the bitmap. }
-  Try
-    Probe := Result.Canvas.Pixels[0, 0];
-    If Probe = clNone Then Result.Transparent := False;
-  Except
-    Result.Transparent := False;
   End;
 End;
 
-Procedure BlitPixels(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TBitmap);
+Procedure PaintDisplayPicture(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TDisplayPicture);
 Var
-  X, Y, RunX, SrcX, SrcY, Right: Integer;
-  Color, Next: TColor;
+  Visible: TRect;
+  X, Y, RunX, SrcX, SrcY: Integer;
+  Color: TColor;
+  Function SourceColor(LocalX, LocalY: Integer): TColor;
+  Begin
+    If LocalX < 0 Then LocalX := 0;
+    If LocalY < 0 Then LocalY := 0;
+    If LocalX >= Picture.Width Then LocalX := Picture.Width - 1;
+    If LocalY >= Picture.Height Then LocalY := Picture.Height - 1;
+    Result := Picture.Colors[LocalY * Picture.Width + LocalX];
+  End;
+  Function MapX(Value: Integer): Integer;
+  Begin
+    Result := (Value - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
+  End;
+  Function MapY(Value: Integer): Integer;
+  Begin
+    Result := (Value - Dest.Top) * Picture.Height Div Max(1, Dest.Bottom - Dest.Top);
+  End;
+  Function UniformColor(Out Value: TColor): Boolean;
+  Var
+    PX, PY: Integer;
+  Begin
+    Value := SourceColor(MapX(Visible.Left), MapY(Visible.Top));
+    Result := True;
+    For PY := Visible.Top To Visible.Bottom - 1 Do
+      For PX := Visible.Left To Visible.Right - 1 Do
+        If SourceColor(MapX(PX), MapY(PY)) <> Value Then Exit(False);
+  End;
 Begin
+  If (Not Assigned(Picture)) Or (Picture.Width < 1) Or (Picture.Height < 1) Then Exit;
+  If Length(Picture.Colors) < Picture.Width * Picture.Height Then Exit;
+  Visible := Rect(0, 0, 0, 0);
+  If Not IntersectRect(Visible, Dest, Clip) Then Exit;
   Canvas.Brush.Style := bsSolid;
-  For Y := Max(Dest.Top, Clip.Top) To Min(Dest.Bottom, Clip.Bottom) - 1 Do
+  If UniformColor(Color) Then
     Begin
-      SrcY := (Y - Dest.Top) * Picture.Height Div Max(1, Dest.Bottom - Dest.Top);
-      If SrcY >= Picture.Height Then SrcY := Picture.Height - 1;
-      If SrcY < 0 Then SrcY := 0;
-      X := Max(Dest.Left, Clip.Left);
-      Right := Min(Dest.Right, Clip.Right);
-      While X < Right Do
+      Canvas.Brush.Color := Color;
+      Canvas.FillRect(Visible);
+      Exit;
+    End;
+  Y := Visible.Top;
+  While Y < Visible.Bottom Do
+    Begin
+      SrcY := MapY(Y);
+      X := Visible.Left;
+      While X < Visible.Right Do
         Begin
-          SrcX := (X - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
-          If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
-          If SrcX < 0 Then SrcX := 0;
-          Color := Picture.Canvas.Pixels[SrcX, SrcY];
+          SrcX := MapX(X);
+          Color := SourceColor(SrcX, SrcY);
           RunX := X + 1;
-          While RunX < Right Do
-            Begin
-              SrcX := (RunX - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
-              If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
-              Next := Picture.Canvas.Pixels[SrcX, SrcY];
-              If Next <> Color Then Break;
-              Inc(RunX);
-            End;
+          While (RunX < Visible.Right) And (SourceColor(MapX(RunX), SrcY) = Color) Do Inc(RunX);
           Canvas.Brush.Color := Color;
           Canvas.FillRect(X, Y, RunX, Y + 1);
           X := RunX;
         End;
-    End;
-End;
-
-Procedure BlitOnce(Canvas: TCanvas; Const Dest, Visible, Src: TRect; Picture: TBitmap; Kind: TImageBlitKind);
-Begin
-  Case Kind Of
-    ibkCopy: Canvas.CopyRect(Visible, Picture.Canvas, Src);
-    ibkPixels: BlitPixels(Canvas, Dest, Visible, Picture);
-  Else
-    Canvas.CopyRect(Visible, Picture.Canvas, Src);
-  End;
-End;
-
-Function BlitSample(Canvas: TCanvas; Picture: TBitmap; Const Dest, Visible: TRect; Out At: TPoint; Out Expected: TColor): Boolean;
-Var
-  X, Y, StepX, StepY, SrcX, SrcY: Integer;
-Begin
-  Result := False;
-  Expected := clNone;
-  At := Point(Visible.Left, Visible.Top);
-  StepX := Max(1, (Visible.Right - Visible.Left) Div 4);
-  StepY := Max(1, (Visible.Bottom - Visible.Top) Div 4);
-  Y := Visible.Top;
-  While Y < Visible.Bottom Do
-    Begin
-      X := Visible.Left;
-      While X < Visible.Right Do
-        Begin
-          SrcX := (X - Dest.Left) * Picture.Width Div Max(1, Dest.Right - Dest.Left);
-          SrcY := (Y - Dest.Top) * Picture.Height Div Max(1, Dest.Bottom - Dest.Top);
-          If SrcX >= Picture.Width Then SrcX := Picture.Width - 1;
-          If SrcY >= Picture.Height Then SrcY := Picture.Height - 1;
-          If SrcX < 0 Then SrcX := 0;
-          If SrcY < 0 Then SrcY := 0;
-          Expected := Picture.Canvas.Pixels[SrcX, SrcY];
-          If Not ColorsMatch(Canvas.Pixels[X, Y], Expected) Then
-            Begin
-              At := Point(X, Y);
-              Exit(True);
-            End;
-          Inc(X, StepX);
-        End;
-      Inc(Y, StepY);
-    End;
-End;
-
-Procedure BlitPicture(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TBitmap);
-Var
-  Visible, Src: TRect;
-  Kind: TImageBlitKind;
-  Sample: TPoint;
-  Expected: TColor;
-Begin
-  If (Not Assigned(Picture)) Or (Picture.Width < 1) Or (Picture.Height < 1) Then Exit;
-  If Not IntersectRect(Visible, Dest, Clip) Then Exit;
-  Src.Left := Visible.Left - Dest.Left;
-  Src.Top := Visible.Top - Dest.Top;
-  Src.Right := Src.Left + (Visible.Right - Visible.Left);
-  Src.Bottom := Src.Top + (Visible.Bottom - Visible.Top);
-  If Src.Left < 0 Then Src.Left := 0;
-  If Src.Top < 0 Then Src.Top := 0;
-  If Src.Right > Picture.Width Then Src.Right := Picture.Width;
-  If Src.Bottom > Picture.Height Then Src.Bottom := Picture.Height;
-  If (Src.Right <= Src.Left) Or (Src.Bottom <= Src.Top) Then Exit;
-  If ImageBlitProven Then
-    Begin
-      BlitOnce(Canvas, Dest, Visible, Src, Picture, ImageBlitKind);
-      Exit;
-    End;
-  If Not BlitSample(Canvas, Picture, Dest, Visible, Sample, Expected) Then
-    Begin
-      BlitOnce(Canvas, Dest, Visible, Src, Picture, ibkCopy);
-      Exit;
-    End;
-  For Kind := ibkCopy To ibkPixels Do
-    Begin
-      BlitOnce(Canvas, Dest, Visible, Src, Picture, Kind);
-      If ColorsMatch(Canvas.Pixels[Sample.X, Sample.Y], Expected) Then
-        Begin
-          ImageBlitKind := Kind;
-          ImageBlitProven := True;
-          Exit;
-        End;
+      Inc(Y);
     End;
 End;
 
@@ -472,7 +406,7 @@ Begin
   End;
 End;
 
-Function TAssistantConversationSurface.PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TBitmap;
+Function TAssistantConversationSurface.PictureFor(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): TDisplayPicture;
 Var
   Index: Integer;
   Key, ErrorText: String;
@@ -488,12 +422,12 @@ Begin
     End;
   Key := PictureKey(Ref, DisplayW, DisplayH);
   Index := Pictures.IndexOf(Key);
-  If Index >= 0 Then Exit(TBitmap(Pictures.Objects[Index]));
+  If Index >= 0 Then Exit(TDisplayPicture(Pictures.Objects[Index]));
   Img := Nil;
   Try
     If LoadStoredAssistantImage(FImageRoot, Ref.DisplayPath, Img, ErrorText) And Assigned(Img) And
       (Img.Width > 0) And (Img.Height > 0) Then
-      Result := ScaleToBitmap(Img, DisplayW, DisplayH);
+      Result := ScaleToPicture(Img, DisplayW, DisplayH);
   Except
     FreeAndNil(Result);
   End;
@@ -925,7 +859,7 @@ Var
   Style: TStyledBoxStyle;
   SectionHeight: Int64;
   TileH: Integer;
-  Picture: TBitmap;
+  Picture: TDisplayPicture;
   Dest: TRect;
   Procedure DrawUnavailable(Const Area: TRect; Const Caption: String);
   Begin
@@ -1003,7 +937,7 @@ Begin
                   If Assigned(Picture) And (Picture.Width > 0) And (Picture.Height > 0) Then
                     Begin
                       Dest := Rect(TileLeft, TileTop, TileLeft + Picture.Width, TileTop + Picture.Height);
-                      BlitPicture(BufferCanvas, Dest, Clip, Picture);
+                      PaintDisplayPicture(BufferCanvas, Dest, Clip, Picture);
                     End
                   Else
                     DrawUnavailable(Rect(TileLeft, TileTop + 2, TileLeft + TileWidth, TileTop + SlotH - 2),

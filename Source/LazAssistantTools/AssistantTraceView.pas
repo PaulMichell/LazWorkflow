@@ -141,6 +141,7 @@ Begin
   { Legacy refresh callers update the live fragment without discarding history.
     ScrollBottom is a follow-tail hint, never an instruction to move a reader. }
   FBoundTrace := Trace;
+  If SavedRoot <> '' Then FSurface.ImageRoot := SavedRoot;
   FSurface.BeginDocument;
   For I := 0 To Saved.Count - 1 Do AddTrace(TAssistantTrace(Saved[I]));
   AddTrace(Trace);
