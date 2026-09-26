@@ -8,7 +8,9 @@ Unit ProjectAssistantForm;
   AssistantTraceView. Reviewed 2026-09-23: composer attach, paste, and drop
   stay here because they are streamed controls. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
-  reorder the text, buttons, or status bar. }
+  reorder the text, buttons, or status bar. Paste reads pictures through the
+  LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
+  share one path. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -243,8 +245,6 @@ Type
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
     FPasteComposerBusy: Boolean;
-    FPasteGotImage: Boolean;
-    FPasteRequestTick: QWord;
     FInputDropArmed: Boolean;
     FInputHeight: Integer;
     FComposerLayoutLock: Boolean;
@@ -508,7 +508,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages
-  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGdkPixbuf2, LazGLib2, LazGObject2{$ENDIF};
+  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Const
   ChatViewMargin = 4;
@@ -888,7 +888,6 @@ End;
 {$IFDEF LCLGTK3}
 Var
   ArmedDropControls: TList;
-  GtkPasteForm: TProjectAssistantForm;
 
 Procedure GtkFileDropReceived(Widget: PGtkWidget; Context: PGdkDragContext; X, Y: LongInt; Data: PGtkSelectionData;
   Info: LongWord; Time: LongWord; UserData: Pointer); cdecl;
@@ -968,9 +967,6 @@ End;
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   Try
-    {$IFDEF LCLGTK3}
-    If GtkPasteForm = Self Then GtkPasteForm := Nil;
-    {$ENDIF}
     FreeAndNil(FTargetPaths);
     If Assigned(AttachmentStrip) Then
       While AttachmentStrip.ControlCount > 0 Do
@@ -3801,6 +3797,8 @@ Begin
     InputMemo.CopyToClipboard;
 End;
 
+Function DroppedLocalPath(Const Name: String): String; Forward;
+
 Function StillImageExtension(Const Path: String): Boolean;
 Var
   Ext: String;
@@ -3832,42 +3830,36 @@ Begin
   End;
 End;
 
-{$IFDEF LCLGTK3}
-Function GtkClipboardImageAvailable: Boolean;
+Function MimeMeansClipboardImage(Const Mime: String): Boolean;
 Var
-  GtkClip: PGtkClipboard;
+  Lowered: String;
 Begin
-  Result := False;
-  GtkClip := gtk_clipboard_get(gdk_atom_intern('CLIPBOARD', False));
-  If GtkClip = Nil Then Exit;
-  Result := gtk_clipboard_wait_is_image_available(GtkClip);
+  Lowered := LowerCase(Mime);
+  { Qt offers application/x-qt-image rather than image/png. The bytes are not a
+    file; PredefinedClipboardFormat(pcfBitmap) is the LCL conversion. }
+  Result := MimeLooksLikeStillImage(Lowered) Or (Pos('qt-image', Lowered) > 0) Or (Pos('bitmap', Lowered) > 0) Or
+    (Pos('pixmap', Lowered) > 0);
 End;
-{$ENDIF}
 
 Function ClipboardHasImage: Boolean;
 Var
   I: Integer;
 Begin
-  { Open first so GTK enumerates targets. Foreign images are often CF_BITMAP
-    rather than a registered image/png atom. }
   Clipboard.Open;
   Try
-    Result := Clipboard.HasFormat(CF_BITMAP) Or Clipboard.HasFormat(CF_PICTURE);
-    If Not Result Then
-      For I := 0 To Clipboard.FormatCount - 1 Do
-        If MimeLooksLikeStillImage(ClipboardFormatMime(Clipboard.Formats[I])) Then Exit(True);
-    If Not Result Then
-      Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/x-png')) Or
-        Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or Clipboard.HasFormat(ClipboardMime('image/gif')) Or
-        Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(ClipboardMime('image/tiff')) Or
-        Clipboard.HasFormat(ClipboardMime('image/x-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/x-MS-bmp')) Or
-        Clipboard.HasFormat(ClipboardMime('image/x-win-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/webp'));
+    Result := Clipboard.HasFormat(PredefinedClipboardFormat(pcfBitmap)) Or
+      Clipboard.HasFormat(PredefinedClipboardFormat(pcfPicture)) Or
+      Clipboard.HasFormat(PredefinedClipboardFormat(pcfPixmap)) Or
+      Clipboard.HasFormat(CF_BITMAP) Or Clipboard.HasFormat(CF_PICTURE);
+    If Result Then Exit;
+    For I := 0 To Clipboard.FormatCount - 1 Do
+      If MimeMeansClipboardImage(ClipboardFormatMime(Clipboard.Formats[I])) Then Exit(True);
+    Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or
+      Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(ClipboardMime('image/gif')) Or
+      Clipboard.HasFormat(ClipboardMime('application/x-qt-image'));
   Finally
     Clipboard.Close;
   End;
-  {$IFDEF LCLGTK3}
-  If Not Result Then Result := GtkClipboardImageAvailable;
-  {$ENDIF}
 End;
 
 Function ReadClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
@@ -3914,13 +3906,14 @@ Begin
   End;
 End;
 
-Function ClipboardGraphicToPng(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
+Function LoadClipboardPicture(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
 Var
   Pic: TPicture;
 Begin
+  { Do not require HasFormat. On Qt, CF_BITMAP is false while pcfBitmap still
+    returns the native picture. }
   Result := False;
   Stream.Clear;
-  If Not Clipboard.HasFormat(FormatId) Then Exit;
   Pic := TPicture.Create;
   Try
     Try
@@ -3934,7 +3927,35 @@ Begin
   End;
 End;
 
-{$IFDEF LCLGTK3}
+Function TryLclClipboardPictures(Stream: TMemoryStream): Boolean;
+Var
+  I: Integer;
+  Formats: Array[0..4] Of TClipboardFormat;
+Begin
+  Result := False;
+  Formats[0] := PredefinedClipboardFormat(pcfBitmap);
+  Formats[1] := PredefinedClipboardFormat(pcfPicture);
+  Formats[2] := PredefinedClipboardFormat(pcfPixmap);
+  Formats[3] := CF_BITMAP;
+  Formats[4] := CF_PICTURE;
+  For I := 0 To High(Formats) Do
+    If LoadClipboardPicture(Formats[I], Stream) Then Exit(True);
+End;
+
+Function ForceClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
+Begin
+  Result := False;
+  Stream.Clear;
+  Try
+    Result := Clipboard.GetFormat(FormatId, Stream) And (Stream.Size > 8);
+  Except
+    Result := False;
+  End;
+  Stream.Position := 0;
+End;
+
+{$IF FALSE}
+{ Widgetset paste lives in the LCL clipboard. This block is unused. }
 Function GtkPixbufToPng(Pixbuf: PGdkPixbuf; Stream: TMemoryStream): Boolean;
 Var
   Img: TFPMemoryImage;
@@ -4739,17 +4760,27 @@ Begin
   Result := False;
   ErrorText := '';
   SawImage := ClipboardHasImage;
-  If Not SawImage Then Exit;
   If Not ComposerAttachAllowed(Reason) Then
     Begin
-      ErrorText := Reason;
-      If ErrorText = '' Then ErrorText := 'Attach is disabled.';
+      If SawImage Then
+        Begin
+          ErrorText := Reason;
+          If ErrorText = '' Then ErrorText := 'Attach is disabled.';
+        End;
       Exit;
     End;
   Tried := Nil;
   SetLength(Tried, 0);
   Stream := TMemoryStream.Create;
   Try
+    { Widgetset picture formats first. Qt screenshots are application/x-qt-image;
+      LCL turns that into a picture. Do this before asking for text. }
+    If TryLclClipboardPictures(Stream) And TryBytes('Clipboard.png') Then Exit(True);
+    If ForceClipboardBytes(ClipboardMime('image/png'), Stream) And TryBytes('Clipboard.png') Then Exit(True);
+    If ForceClipboardBytes(ClipboardMime('image/jpeg'), Stream) And TryBytes('Clipboard.jpg') Then Exit(True);
+    If ForceClipboardBytes(ClipboardMime('image/bmp'), Stream) And TryBytes('Clipboard.bmp') Then Exit(True);
+    If ForceClipboardBytes(ClipboardMime('image/gif'), Stream) And TryBytes('Clipboard.gif') Then Exit(True);
+    If Not SawImage Then Exit;
     Clipboard.Open;
     Try
       For I := 0 To Clipboard.FormatCount - 1 Do
@@ -4780,41 +4811,53 @@ Begin
           If Not Known Then Continue;
           If ReadClipboardBytes(ClipboardMime(Tried[J]), Stream) And TryBytes(ClipboardImageName(Tried[J])) Then Exit(True);
         End;
-      If ClipboardGraphicToPng(CF_BITMAP, Stream) And TryBytes('Clipboard.png') Then Exit(True);
-      If ClipboardGraphicToPng(CF_PICTURE, Stream) And TryBytes('Clipboard.png') Then Exit(True);
+      If LoadClipboardPicture(CF_BITMAP, Stream) And TryBytes('Clipboard.png') Then Exit(True);
+      If LoadClipboardPicture(CF_PICTURE, Stream) And TryBytes('Clipboard.png') Then Exit(True);
+      If ForceClipboardBytes(ClipboardMime('image/png'), Stream) And TryBytes('Clipboard.png') Then Exit(True);
+      If ForceClipboardBytes(ClipboardMime('image/jpeg'), Stream) And TryBytes('Clipboard.jpg') Then Exit(True);
+      If ForceClipboardBytes(ClipboardMime('image/bmp'), Stream) And TryBytes('Clipboard.bmp') Then Exit(True);
+      If ForceClipboardBytes(ClipboardMime('image/gif'), Stream) And TryBytes('Clipboard.gif') Then Exit(True);
     Finally
       Clipboard.Close;
     End;
-    {$IFDEF LCLGTK3}
-    If GtkClipboardImageToPng(Stream) And TryBytes('Clipboard.png') Then Exit(True);
-    {$ENDIF}
     If ErrorText = '' Then ErrorText := 'The clipboard image could not be read.';
   Finally
     Stream.Free;
   End;
 End;
 
+Function ClipboardTextIsImageFile(Const Text: String; Out LocalPath: String): Boolean;
+Begin
+  LocalPath := DroppedLocalPath(Trim(Text));
+  Result := (Pos(#10, Text) = 0) And (Pos(#13, Text) = 0) And StillImageExtension(LocalPath) And
+    FileExistsUTF8(LocalPath);
+End;
+
 Procedure TProjectAssistantForm.PasteComposer;
 Var
-  HadText, Attached: Boolean;
-  PastedText, ImageError: String;
+  Attached: Boolean;
+  PastedText, ImageError, LocalPath: String;
 Begin
   If Not Assigned(InputMemo) Or InputMemo.ReadOnly Then Exit;
   { Ctrl+V can arrive both as the memo key and as the popup shortcut. }
   If FPasteComposerBusy Then Exit;
   FPasteComposerBusy := True;
   Try
-    HadText := Clipboard.HasFormat(CF_TEXT);
-    PastedText := '';
-    If HadText Then PastedText := Clipboard.AsText;
     Attached := False;
     ImageError := '';
     Try
+      { Picture before text. Some widgetsets only return the mime that was asked for first. }
       Attached := TryAttachClipboardImage(ImageError);
     Except
       Attached := False;
       If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
     End;
+    PastedText := '';
+    If Clipboard.HasFormat(CF_TEXT) Then PastedText := Clipboard.AsText;
+    If (Not Attached) And ClipboardTextIsImageFile(PastedText, LocalPath) Then
+      Attached := AttachImageFile(LocalPath, ImageError);
+    { A copied image file is the attachment, not a path typed into the prompt. }
+    If Attached And ClipboardTextIsImageFile(PastedText, LocalPath) Then PastedText := '';
     { SelText, not PasteFromClipboard: OnPaste calls back into this method. }
     If PastedText <> '' Then
       InputMemo.SelText := PastedText;
@@ -4827,11 +4870,7 @@ End;
 
 Procedure TProjectAssistantForm.QueueComposerPaste;
 Begin
-  {$IFDEF LCLGTK3}
-  RequestGtkClipboardPaste(Self);
-  {$ELSE}
   PasteComposer;
-  {$ENDIF}
 End;
 
 Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);
