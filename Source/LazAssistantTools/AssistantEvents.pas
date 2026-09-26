@@ -49,18 +49,23 @@ Type
 
   TAssistantTraceNotify = Procedure(Const Event: TAssistantEvent) Of Object;
 
-  { Thread-safe queue of steering notes. Drain at actor safe gaps. }
+  { Thread-safe queue of steering notes. Drain at actor safe gaps.
+    AttachmentsJson is a ref array, never pixel bytes. Image-only notes are pending. }
   TAssistantSteerBuffer = Class
   Private
     FLock: TRTLCriticalSection;
     FItems: TStringList;
+    FAttachments: TStringList;
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Enqueue(Const Text: String);
+    Procedure Enqueue(Const Text: String); Overload;
+    Procedure Enqueue(Const Text, AttachmentsJson: String); Overload;
     Function HasPending: Boolean;
     { Concatenate and clear in arrival order. Empty string if none. }
     Function DrainConcat: String;
+    { Text notes in order, plus one JSON array of every attachment ref. Clears the queue. }
+    Function Drain(Out Text, AttachmentsJson: String): Boolean;
   End;
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
@@ -193,30 +198,80 @@ Begin
   Result := AppendAssistantEventLine(FileName, AssistantEventToJson(Event));
 End;
 
+Function CombineAttachmentJson(Parts: TStrings): String;
+Var
+  OutArr: TJSONArray;
+  Data, Item: TJSONData;
+  I, J: Integer;
+Begin
+  Result := '';
+  If Not Assigned(Parts) Then Exit;
+  OutArr := TJSONArray.Create;
+  Try
+    For I := 0 To Parts.Count - 1 Do
+      Begin
+        If Trim(Parts[I]) = '' Then Continue;
+        Data := Nil;
+        Try
+          Data := GetJSON(Parts[I]);
+        Except
+          Data := Nil;
+        End;
+        If Not Assigned(Data) Then Continue;
+        Try
+          If Data Is TJSONArray Then
+            For J := 0 To TJSONArray(Data).Count - 1 Do
+              Begin
+                Item := Nil;
+                Try
+                  Item := GetJSON(TJSONArray(Data).Items[J].AsJSON);
+                Except
+                  Item := Nil;
+                End;
+                If Assigned(Item) Then OutArr.Add(Item);
+              End;
+        Finally
+          Data.Free;
+        End;
+      End;
+    If OutArr.Count > 0 Then Result := OutArr.AsJSON;
+  Finally
+    OutArr.Free;
+  End;
+End;
+
 Constructor TAssistantSteerBuffer.Create;
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FItems := TStringList.Create;
+  FAttachments := TStringList.Create;
 End;
 
 Destructor TAssistantSteerBuffer.Destroy;
 Begin
+  FreeAndNil(FAttachments);
   FreeAndNil(FItems);
   DoneCriticalSection(FLock);
   Inherited Destroy;
 End;
 
 Procedure TAssistantSteerBuffer.Enqueue(Const Text: String);
+Begin
+  Enqueue(Text, '');
+End;
+
+Procedure TAssistantSteerBuffer.Enqueue(Const Text, AttachmentsJson: String);
 Var
-  Body: String;
+  Body, RefsJson: String;
 Begin
   Body := Trim(Text);
-  If Body = '' Then
-    Exit;
+  RefsJson := Trim(AttachmentsJson);
+  If (Body = '') And (RefsJson = '') Then Exit;
   EnterCriticalSection(FLock);
   Try
     FItems.Add(Body);
+    FAttachments.Add(RefsJson);
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -232,23 +287,45 @@ Begin
   End;
 End;
 
-Function TAssistantSteerBuffer.DrainConcat: String;
+Function TAssistantSteerBuffer.Drain(Out Text, AttachmentsJson: String): Boolean;
 Var
   I: Integer;
+  Texts, Parts: TStringList;
 Begin
-  Result := '';
-  EnterCriticalSection(FLock);
+  Text := '';
+  AttachmentsJson := '';
+  Texts := TStringList.Create;
+  Parts := TStringList.Create;
   Try
-    For I := 0 To FItems.Count - 1 Do
+    EnterCriticalSection(FLock);
+    Try
+      Result := FItems.Count > 0;
+      If Not Result Then Exit;
+      Texts.Assign(FItems);
+      Parts.Assign(FAttachments);
+      FItems.Clear;
+      FAttachments.Clear;
+    Finally
+      LeaveCriticalSection(FLock);
+    End;
+    For I := 0 To Texts.Count - 1 Do
       Begin
-        If Result <> '' Then
-          Result := Result + LineEnding + LineEnding;
-        Result := Result + FItems[I];
+        If Trim(Texts[I]) = '' Then Continue;
+        If Text <> '' Then Text := Text + LineEnding + LineEnding;
+        Text := Text + Texts[I];
       End;
-    FItems.Clear;
+    AttachmentsJson := CombineAttachmentJson(Parts);
   Finally
-    LeaveCriticalSection(FLock);
+    Texts.Free;
+    Parts.Free;
   End;
+End;
+
+Function TAssistantSteerBuffer.DrainConcat: String;
+Var
+  Ignored: String;
+Begin
+  If Not Drain(Result, Ignored) Then Result := '';
 End;
 
 Function ParseOpenAiToolCallsJson(Const Json: String; Out Calls: TSamplerToolCallArray): Boolean;

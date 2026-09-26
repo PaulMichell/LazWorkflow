@@ -120,7 +120,7 @@ Type
     Procedure SetActiveMode(Mode: TAssistantMode);
     Procedure ClearHistory;
     Procedure AddMessage(Role: TAssistantMessageRole; Const Content: String);
-    { User turn entry. Image refs are not accepted on tool, steer-note, or subagent prompts. }
+    { User turn entry. Image refs are not accepted on tool results or subagent prompts. }
     Procedure AddUserMessage(Const Content: String; Const ImageRefs: TAssistantImageRefArray);
     { Drop image refs on the latest user message so a rejected upload is not resent. }
     Procedure DropLastUserImageRefs;
@@ -130,7 +130,11 @@ Type
     Procedure RestoreMessagesJson(Const JsonText: String);
     Procedure NoteMessagesStored;
     Function LastUserAttachmentsJson: String;
+    { Opening user message of the unstored turn. Later steer refs are not this field. }
+    Function OpeningUserAttachmentsJson: String;
     Procedure EnsureLastUserImageRefs(Const AttachmentsJson: String);
+    { Fill the first user message at or after FromIndex when it has no refs yet. }
+    Procedure EnsureUserImageRefsFrom(FromIndex: Integer; Const AttachmentsJson: String);
     Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String;
       Const ResponsesOutputJson: String = '');
     Procedure AddToolResult(Const ToolCallId, Content: String);
@@ -159,8 +163,10 @@ Type
     Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
     { Rebuilds the next chat/completions body (used after a tool round). }
     Function BuildNextRequestJson: String;
-    { Mid-turn steering note; no-op if no actor is running. }
-    Procedure EnqueueSteer(Const Text: String);
+    { Mid-turn steer. Does not change mode or tool permissions. No-op if no actor is running.
+      Image refs are injected at the next gap as user-message parts. A subagent session drops them. }
+    Procedure EnqueueSteer(Const Text: String); Overload;
+    Function EnqueueSteer(Const Text: String; Const ImageRefs: TAssistantImageRefArray): Boolean; Overload;
     { Depth-1 children. Parent only; Start fails if live count is already MaxLiveSubagents. }
     Function IsSubagentSession: Boolean;
     Function StartSubagent(Const ArgumentsJson: String; Out RunId: String; Out ErrorText: String): Boolean;
@@ -1574,6 +1580,39 @@ Begin
       End;
 End;
 
+Function TAssistantService.OpeningUserAttachmentsJson: String;
+Var
+  I, Start: Integer;
+Begin
+  Result := '';
+  Start := FStoredMessageCount;
+  If Start < 0 Then Start := 0;
+  If Start > Length(FMessages) Then Exit;
+  For I := Start To High(FMessages) Do
+    If FMessages[I].Role = amrUser Then
+      Begin
+        Result := AssistantImageRefsToJson(FMessages[I].ImageRefs);
+        Exit;
+      End;
+End;
+
+Procedure TAssistantService.EnsureUserImageRefsFrom(FromIndex: Integer; Const AttachmentsJson: String);
+Var
+  I: Integer;
+  Refs: TAssistantImageRefArray;
+Begin
+  If FromIndex < 0 Then FromIndex := 0;
+  If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Or (Length(Refs) = 0) Then Exit;
+  For I := FromIndex To High(FMessages) Do
+    If FMessages[I].Role = amrUser Then
+      Begin
+        If Pos(AssistantImageOmittedPrefix, FMessages[I].Content) > 0 Then Exit;
+        If Length(FMessages[I].ImageRefs) = 0 Then
+          FMessages[I].ImageRefs := LimitAssistantImageRefs(Refs);
+        Exit;
+      End;
+End;
+
 Procedure TAssistantService.EnsureLastUserImageRefs(Const AttachmentsJson: String);
 Var
   I: Integer;
@@ -1731,9 +1770,19 @@ Begin
 End;
 
 Procedure TAssistantService.EnqueueSteer(Const Text: String);
+Var
+  Refs: TAssistantImageRefArray;
 Begin
+  SetLength(Refs, 0);
+  EnqueueSteer(Text, Refs);
+End;
+
+Function TAssistantService.EnqueueSteer(Const Text: String; Const ImageRefs: TAssistantImageRefArray): Boolean;
+Begin
+  Result := False;
+  { Mode and tool permissions stay as they were when the turn started. }
   If Assigned(FStreamThread) And (FStreamThread Is TAssistantActor) Then
-    TAssistantActor(FStreamThread).EnqueueSteer(Text);
+    Result := TAssistantActor(FStreamThread).EnqueueSteer(Text, ImageRefs);
 End;
 
 Function TAssistantService.IsSubagentSession: Boolean;

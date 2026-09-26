@@ -351,9 +351,47 @@ Begin
   End;
 End;
 
+Procedure TestSteerImages;
+Var
+  Trace: TAssistantTrace;
+  Event: TAssistantEvent;
+  I, UserImages: Integer;
+  Steer: TTraceBlock;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Event := Default(TAssistantEvent);
+    Event.Kind := aekSteerQueued;
+    Event.Text := 'use this instead';
+    Event.AttachmentsJson := '[{"id":"img1","name":"shot.png","display":".assistant/images/img1.png","width":100,"height":50}]';
+    Trace.ApplyEvent(Event);
+    Steer := Trace.FindLatestSteer;
+    Check('steer block queued', Assigned(Steer) And (Steer.Body = 'use this instead'));
+    Check('steer text is not a file note', Pos('shot.png', Steer.Body) = 0);
+    UserImages := 0;
+    For I := 0 To Trace.Count - 1 Do
+      If (Trace[I].Kind = tbkUser) And (Length(Trace[I].ImageRefs) = 1) And (Trace[I].ImageRefs[0].Id = 'img1') Then
+        Inc(UserImages);
+    Check('steer image is a user block', UserImages = 1);
+    Event := Default(TAssistantEvent);
+    Event.Kind := aekInterjected;
+    Event.Text := 'use this instead';
+    Trace.ApplyEvent(Event);
+    Check('steer applied after image block', Assigned(Steer) And (Steer.Title = 'Steer · applied') And (Not Steer.Running));
+    UserImages := 0;
+    For I := 0 To Trace.Count - 1 Do
+      If (Trace[I].Kind = tbkUser) And (Length(Trace[I].ImageRefs) > 0) Then
+        Inc(UserImages);
+    Check('applied steer did not duplicate the image', UserImages = 1);
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestBlocks;
+  TestSteerImages;
   TestEnsureUser;
   TestEventOrder;
   TestToolCaptionsAndResults;

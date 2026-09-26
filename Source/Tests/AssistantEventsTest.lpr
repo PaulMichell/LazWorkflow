@@ -30,7 +30,7 @@ End;
 Procedure TestSteerBuffer;
 Var
   Buf: TAssistantSteerBuffer;
-  Combined: String;
+  Combined, Attachments: String;
 Begin
   Buf := TAssistantSteerBuffer.Create;
   Try
@@ -43,6 +43,15 @@ Begin
     Check('steer first note', Pos('use replace_in_file', Combined) > 0);
     Check('steer second note', Pos('skip the probe unit', Combined) > 0);
     Check('steer concat sep', Pos(LineEnding + LineEnding, Combined) > 0);
+    Buf.Enqueue('look here', '[{"id":"img1","name":"shot.png"}]');
+    Buf.Enqueue('', '[{"id":"img2","name":"other.png"}]');
+    Check('image steer pending', Buf.HasPending);
+    Check('image steer drain', Buf.Drain(Combined, Attachments));
+    Check('image steer keeps words', Combined = 'look here');
+    Check('image steer refs merged', (Pos('img1', Attachments) > 0) And (Pos('img2', Attachments) > 0));
+    Check('image steer cleared', Not Buf.HasPending);
+    Buf.Enqueue('', '');
+    Check('blank steer stays empty', Not Buf.HasPending);
   Finally
     Buf.Free;
   End;

@@ -23,6 +23,8 @@ Const
 
 /// turn/start params for this client. One text item. No image item and no local path.
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
+/// turn/steer params for this client. One text item. No image item: 2.4 found none in this protocol.
+Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
 
 Type
   TCodexRunState = (crsDisconnected, crsConnecting, crsReady, crsStartingThread,
@@ -69,7 +71,9 @@ Type
     Function CheckToolIsolation: Boolean;
     Function StartThread(Const WorkingDirectory, Model, ToolsJson: String): Boolean;
     Function StartTurn(Const Prompt: String; Const Effort: String = ''): Boolean;
-    Function Steer(Const Text: String): Boolean;
+    Function Steer(Const Text: String): Boolean; Overload;
+    { Image refs are refused while CodexImagesSupported is false. A text note is not the picture. }
+    Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Procedure Interrupt;
     { May be called from the UI to force connection shutdown on next Pump. }
     Procedure CancelConnection;
@@ -105,6 +109,13 @@ Begin
   Result := '{"threadId":' + Quote(ThreadId) +
     ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
     '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"' + Options + '}';
+End;
+
+Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
+Begin
+  { No protocol image item in this version. Do not add a guessed field or a local path. }
+  Result := '{"threadId":' + Quote(ThreadId) + ',"expectedTurnId":' + Quote(TurnId) +
+    ',"input":[{"type":"text","text":' + Quote(Text) + '}]}';
 End;
 
 Constructor TAssistantCodexClient.Create(RequestTimeoutMs: Cardinal);
@@ -318,9 +329,16 @@ End;
 
 Function TAssistantCodexClient.Steer(Const Text: String): Boolean;
 Begin
+  Result := Steer(Text, '');
+End;
+
+Function TAssistantCodexClient.Steer(Const Text, AttachmentsJson: String): Boolean;
+Begin
+  Result := False;
+  { 2.4 found no image input item. Refuse the refs instead of describing the file in text. }
+  If (Not CodexImagesSupported) And (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') Then Exit;
   Result := (FState = crsRunning) And (FTurnId <> '');
-  If Result Then Result := Request('turn/steer', '{"threadId":' + Quote(FThreadId) +
-    ',"expectedTurnId":' + Quote(FTurnId) + ',"input":[{"type":"text","text":' + Quote(Text) + '}]}');
+  If Result Then Result := Request('turn/steer', CodexTurnSteerParams(FThreadId, FTurnId, Text));
 End;
 
 Procedure TAssistantCodexClient.Interrupt;

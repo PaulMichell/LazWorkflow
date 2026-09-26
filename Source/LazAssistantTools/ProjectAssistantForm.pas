@@ -2770,7 +2770,7 @@ End;
 
 Procedure TProjectAssistantForm.RebuildClientFromConversation;
 Var
-  I: Integer;
+  I, Before: Integer;
   Turn: TConversationTurn;
 Begin
   If Assigned(AssistantClient) Then
@@ -2782,6 +2782,7 @@ Begin
     Begin
       If Not ProjectAssistantConversation.GetTurn(I, Turn) Then
         Continue;
+      Before := AssistantClient.MessageCount;
       If Trim(Turn.MessagesJson) <> '' Then
         AssistantClient.RestoreMessagesJson(Turn.MessagesJson)
       Else
@@ -2792,7 +2793,7 @@ Begin
             AssistantClient.AddMessage(amrAssistant, Turn.Response);
         End;
       If Trim(Turn.AttachmentsJson) <> '' Then
-        AssistantClient.EnsureLastUserImageRefs(Turn.AttachmentsJson);
+        AssistantClient.EnsureUserImageRefsFrom(Before, Turn.AttachmentsJson);
       FContextUsed := FContextUsed + Length(Turn.Prompt) Div 4 + Length(Turn.Response) Div 4 + 8;
     End;
   AssistantClient.NoteMessagesStored;
@@ -2876,7 +2877,7 @@ Begin
   If Assigned(AssistantClient) Then
     Begin
       Turn.MessagesJson := AssistantClient.ExportUnstoredMessagesJson;
-      Turn.AttachmentsJson := AssistantClient.LastUserAttachmentsJson;
+      Turn.AttachmentsJson := AssistantClient.OpeningUserAttachmentsJson;
     End;
   If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
     (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') And
@@ -4347,13 +4348,16 @@ Begin
           Block.Footer := FormatThoughtElapsed(Event.DurationMs);
       End;
     aekSteerQueued:
-      FTrace.AddSteer(Event.Text);
+      Begin
+        FTrace.AddSteer(Event.Text);
+        { Pictures travel as a user block, not as a sentence that names the file. }
+        If Event.AttachmentsJson <> '' Then
+          FTrace.AppendUserImages(Event.AttachmentsJson);
+      End;
     aekInterjected:
       Begin
-        Block := Nil;
-        If FTrace.Count > 0 Then
-          Block := FTrace[FTrace.Count - 1];
-        If Assigned(Block) And (Block.Kind = tbkSteer) Then
+        Block := FTrace.FindLatestSteer;
+        If Assigned(Block) Then
           Begin
             Block.Running := False;
             Block.Title := 'Steer · applied';
@@ -5900,8 +5904,14 @@ End;
 
 Procedure TProjectAssistantForm.SendActionExecute(Sender: TObject);
 Var
-  UserText: String;
-  HasImages: Boolean;
+  UserText, Reason: String;
+  HasImages, AcceptImages: Boolean;
+  Refs: TAssistantImageRefArray;
+  Procedure PicturesStay;
+  Begin
+    SetCurrentSystemNote('The pictures stay in the composer for the next message.');
+    MessageDlg('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
+  End;
 Begin
   If SlashPopupVisible Then
     Begin
@@ -5915,7 +5925,32 @@ Begin
     Exit;
   If FSending Then
     Begin
-      { Steer is text only. Pictures stay for the next message. }
+      Reason := '';
+      { Codex has no turn/steer image item. Keep the 3.2 warning and do not clear the strip. }
+      AcceptImages := HasImages And ComposerAttachAllowed(Reason) And (Not FUseCodex) And (Not Assigned(FCodexRun));
+      If (UserText = '') And (Not AcceptImages) Then
+        Begin
+          If HasImages Then
+            Begin
+              If Reason <> '' Then
+                WorkflowLogger.Info('ProjectAssistant', 'Steer kept pictures: ' + Reason);
+              PicturesStay;
+            End;
+          Exit;
+        End;
+      If AcceptImages Then
+        Begin
+          ParseAssistantImageRefs(FComposerImagesJson, Refs);
+          Refs := LimitAssistantImageRefs(Refs);
+          If (Not Assigned(AssistantClient)) Or (Not AssistantClient.EnqueueSteer(UserText, Refs)) Then Exit;
+          InputMemo.Clear;
+          FComposerImagesJson := '';
+          RefreshComposerImages;
+          SetStreamPhase('Steering at next tool gap…');
+          WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(UserText)) + ' chars, ' +
+            IntToStr(Length(Refs)) + ' images)');
+          Exit;
+        End;
       If UserText <> '' Then
         Begin
           InputMemo.Clear;
@@ -5923,8 +5958,9 @@ Begin
         End;
       If HasImages Then
         Begin
-          SetCurrentSystemNote('The pictures stay in the composer for the next message.');
-          MessageDlg('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
+          If Reason <> '' Then
+            WorkflowLogger.Info('ProjectAssistant', 'Steer kept pictures: ' + Reason);
+          PicturesStay;
         End;
       Exit;
     End;

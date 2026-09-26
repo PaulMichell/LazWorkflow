@@ -70,6 +70,7 @@ Type
     Procedure FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
       ErrorText: String; Ok: Boolean; DurationMs: Integer);
     Procedure RunSpawnRange(FromIndex, ToIndex: Integer);
+    Function InjectPendingSteer(Svc: TAssistantService; Out VisibleNote: String): Boolean;
     Function DrainSteerIntoHistory: Boolean;
     Function BuildRoundJson(Out Url: String): String;
     Function ShouldFallbackFromResponses(Const ErrorText: String): Boolean;
@@ -85,7 +86,7 @@ Type
       ReasoningEffort, ToolsJson, EventsFile: String; OnToken: TAssistantStreamEvent);
     Destructor Destroy; Override;
     Procedure Cancel;
-    Procedure EnqueueSteer(Const Text: String);
+    Function EnqueueSteer(Const Text: String; Const ImageRefs: TAssistantImageRefArray): Boolean;
     Procedure Detach;
     Procedure DetachCallbacks;
     Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
@@ -204,12 +205,23 @@ Begin
   AbortHttp;
 End;
 
-Procedure TAssistantActor.EnqueueSteer(Const Text: String);
+Function TAssistantActor.EnqueueSteer(Const Text: String; Const ImageRefs: TAssistantImageRefArray): Boolean;
+Var
+  Note, Attachments: String;
+  Refs: TAssistantImageRefArray;
+  Svc: TAssistantService;
 Begin
-  If Trim(Text) = '' Then
-    Exit;
-  FSteer.Enqueue(Text);
-  LogEvent(aekSteerQueued, Trim(Text));
+  Note := Trim(Text);
+  SetLength(Refs, 0);
+  { A steer does not change mode or tool permissions. A subagent cannot receive images. }
+  Svc := LockedService;
+  If Not (Assigned(Svc) And Svc.IsSubagentSession) Then
+    Refs := LimitAssistantImageRefs(ImageRefs);
+  Attachments := AssistantImageRefsToJson(Refs);
+  Result := (Note <> '') Or (Attachments <> '');
+  If Not Result Then Exit;
+  FSteer.Enqueue(Note, Attachments);
+  LogEvent(aekSteerQueued, Note, '', '', True, 0, Attachments);
 End;
 
 Procedure TAssistantActor.DetachCallbacks;
@@ -1073,23 +1085,46 @@ Begin
   FlushReadImages;
 End;
 
+Function TAssistantActor.InjectPendingSteer(Svc: TAssistantService; Out VisibleNote: String): Boolean;
+Var
+  Note, AttachmentsJson, ModelNote, Wrapped: String;
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  VisibleNote := '';
+  SetLength(Refs, 0);
+  If Not Assigned(Svc) Then Exit;
+  If Not FSteer.Drain(Note, AttachmentsJson) Then Exit;
+  { Image parts stay on this session. They are not copied onto a subagent prompt. }
+  If Not Svc.IsSubagentSession Then
+    Begin
+      If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Then SetLength(Refs, 0);
+      Refs := LimitAssistantImageRefs(Refs);
+    End;
+  If (Trim(Note) = '') And (Length(Refs) = 0) Then Exit;
+  VisibleNote := Note;
+  ModelNote := Note;
+  If (Trim(ModelNote) = '') And (Length(Refs) > 0) Then ModelNote := AssistantImageLookText;
+  Wrapped := FormatSteerEnvelope(ModelNote);
+  If Length(Refs) = 0 Then
+    Svc.AddMessage(amrUser, Wrapped)
+  Else
+    Svc.AddUserMessage(Wrapped, Refs);
+  Result := True;
+End;
+
 Function TAssistantActor.DrainSteerIntoHistory: Boolean;
 Var
-  Note, Wrapped: String;
   Svc: TAssistantService;
+  Note: String;
 Begin
   Result := False;
   Svc := LockedService;
-  If Terminated Or (Not Assigned(Svc)) Then
-    Exit;
-  Note := FSteer.DrainConcat;
-  If Note = '' Then
-    Exit;
-  Wrapped := FormatSteerEnvelope(Note);
-  Svc.AddMessage(amrUser, Wrapped);
+  If Terminated Or (Not Assigned(Svc)) Or (Not FSteer.HasPending) Then Exit;
+  Result := InjectPendingSteer(Svc, Note);
+  If Not Result Then Exit;
   LogEvent(aekInterjected, Note);
   EmitSnapshot(False, 'Steering at next model gap…', True);
-  Result := True;
 End;
 
 Function TAssistantActor.BuildRoundJson(Out Url: String): String;
@@ -1147,7 +1182,7 @@ End;
 
 Procedure TAssistantActor.ExecuteTurn;
 Var
-  Url, RequestJson, ErrorText, CapNote: String;
+  Url, RequestJson, ErrorText, CapNote, Note: String;
   RoundNo, I, MaxRounds, WritesBefore: Integer;
   HasTools: Boolean;
   Svc: TAssistantService;
@@ -1255,7 +1290,7 @@ Begin
   Finally
     Svc := LockedService;
     If Assigned(Svc) And FSteer.HasPending Then
-      Svc.AddMessage(amrUser, FormatSteerEnvelope(FSteer.DrainConcat));
+      InjectPendingSteer(Svc, Note);
   End;
 End;
 

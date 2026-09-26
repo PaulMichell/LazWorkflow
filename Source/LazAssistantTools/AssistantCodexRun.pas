@@ -39,7 +39,9 @@ Type
       TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
-    Function Steer(Const Text: String): Boolean;
+    Function Steer(Const Text: String): Boolean; Overload;
+    { Refs are not queued. This protocol has no image item; the composer keeps the pictures. }
+    Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Function Snapshot: TCodexRunSnapshot;
     { Caller must run on the broker's owning IDE thread. Returns after at most
       one IDE operation; it never waits for process/network output. CodeTools
@@ -105,6 +107,14 @@ End;
 
 Function TAssistantCodexRun.Steer(Const Text: String): Boolean;
 Begin
+  Result := Steer(Text, '');
+End;
+
+Function TAssistantCodexRun.Steer(Const Text, AttachmentsJson: String): Boolean;
+Begin
+  Result := False;
+  { Do not store image refs as the steer note. The form keeps the 3.2 warning. }
+  If (Not CodexImagesSupported) And (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') Then Exit;
   EnterCriticalSection(FLock);
   Try
     Result := Not Cancelled And Not FSnapshot.Done And (FSteer = '') And

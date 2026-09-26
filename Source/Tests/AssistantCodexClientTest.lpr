@@ -254,7 +254,7 @@ Begin
   Finally Data.Free; End;
 End;
 Procedure TestTurnStartBody;
-Var Lines: TStringList; Data: TJSONData; Obj: TJSONObject; Built: String;
+Var Lines: TStringList; Data: TJSONData; Obj: TJSONObject; Built: String; SteerClient: TAssistantCodexClient;
 Begin
   Check('codex image support stays off', Not CodexImagesSupported);
   Lines := TStringList.Create;
@@ -273,6 +273,13 @@ Begin
     AssertTextOnly('without effort', Built);
     Built := CodexTurnStartParams('thread-1', 'data:image/png;base64,AAAA', '');
     AssertTextOnly('data uri stays text', Built);
+    Built := CodexTurnSteerParams('thread-1', 'turn-9', 'look at this');
+    AssertTextOnly('turn/steer', Built);
+    Check('turn/steer names the turn', Pos('"expectedTurnId":"turn-9"', Built) > 0);
+    SteerClient := TAssistantCodexClient.Create(500);
+    Try
+      Check('steer refuses image refs', Not SteerClient.Steer('look', '[{"id":"img1"}]'));
+    Finally SteerClient.Free; End;
   Finally Data.Free; Lines.Free; End;
 End;
 Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord; VersionEnv: TStringList;

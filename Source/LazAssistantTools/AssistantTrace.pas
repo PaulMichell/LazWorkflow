@@ -79,6 +79,7 @@ Type
     Procedure KeepUserImageRefs(Const Refs: TTraceImageRefArray);
     Function AddNote(Const Text: String): TTraceBlock;
     Function AddSteer(Const Text: String): TTraceBlock;
+    Function FindLatestSteer: TTraceBlock;
     Function StartThinking(LoopIndex: Integer): TTraceBlock;
     Function CurrentThinking: TTraceBlock;
     Function CurrentRunningThinking: TTraceBlock;
@@ -469,6 +470,19 @@ Begin
   Result.Title := 'Steer';
   Result.Body := Text;
   Result.Running := True;
+End;
+
+Function TAssistantTrace.FindLatestSteer: TTraceBlock;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  For I := FBlocks.Count - 1 DownTo 0 Do
+    If TTraceBlock(FBlocks[I]).Kind = tbkSteer Then
+      Begin
+        Result := TTraceBlock(FBlocks[I]);
+        Exit;
+      End;
 End;
 
 Function TAssistantTrace.StartThinking(LoopIndex: Integer): TTraceBlock;
@@ -1019,13 +1033,15 @@ Begin
           Block.Footer := FormatThoughtElapsed(Event.DurationMs);
       End;
     aekSteerQueued:
-      AddSteer(Event.Text);
+      Begin
+        AddSteer(Event.Text);
+        If Event.AttachmentsJson <> '' Then
+          AppendUserImages(Event.AttachmentsJson);
+      End;
     aekInterjected:
       Begin
-        Block := Nil;
-        If FBlocks.Count > 0 Then
-          Block := TTraceBlock(FBlocks[FBlocks.Count - 1]);
-        If Assigned(Block) And (Block.Kind = tbkSteer) Then
+        Block := FindLatestSteer;
+        If Assigned(Block) Then
           Begin
             Block.Running := False;
             Block.Title := 'Steer · applied';
