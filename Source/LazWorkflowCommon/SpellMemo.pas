@@ -136,6 +136,7 @@ Type
     Procedure FontChanged(Sender: TObject); Override;
     Procedure Loaded; Override;
     Procedure InitializeWnd; Override;
+    Procedure GetDialogCode(Var Message: TLMGetDlgCode); Message LM_GETDLGCODE;
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
@@ -1012,6 +1013,13 @@ Begin
       InsertText(UTF8Key);
       UTF8Key := '';
     End;
+End;
+
+Procedure TSpellMemo.GetDialogCode(Var Message: TLMGetDlgCode);
+Begin
+  { A painted editor must ask for the key. Otherwise GTK can swallow Ctrl+V
+    before OnKeyDown, and an image paste never reaches the composer. }
+  Message.Result := DLGC_WANTARROWS Or DLGC_WANTCHARS Or DLGC_WANTALLKEYS;
 End;
 
 Procedure TSpellMemo.KeyDown(Var Key: Word; Shift: TShiftState);

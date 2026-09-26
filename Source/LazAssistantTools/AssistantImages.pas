@@ -94,6 +94,9 @@ Function DeleteAssistantImageArchive(Const StoreDirectory, ArchiveId: String; Ou
 /// Delete live image files that none of ConversationFiles still names. The list is current plus archives.
 Function ReleaseUnreferencedAssistantImages(Const StoreDirectory: String; ConversationFiles: TStrings;
   Out ErrorText: String): Boolean;
+/// Delete images-<id> directories whose archive is no longer on disk. Activate leaves those copies behind.
+Function ReleaseOrphanAssistantImageArchives(Const StoreDirectory: String; ConversationFiles: TStrings;
+  Out ErrorText: String): Boolean;
 /// True when the display file is a regular file in the live image directory.
 Function AssistantImageDisplayPresent(Const StoreDirectory, ImageId, DisplayPath: String): Boolean;
 
@@ -2799,6 +2802,53 @@ Begin
     Result := True;
   Finally
     Names.Free;
+  End;
+End;
+
+Function ReleaseOrphanAssistantImageArchives(Const StoreDirectory: String; ConversationFiles: TStrings;
+  Out ErrorText: String): Boolean;
+Var
+  Kept: TStringList;
+  I, Code: Integer;
+  Name, Id, Directory: String;
+  Rec: TSearchRec;
+Begin
+  Result := False;
+  ErrorText := '';
+  Kept := TStringList.Create;
+  Try
+    Kept.Sorted := True;
+    Kept.Duplicates := dupIgnore;
+    If Assigned(ConversationFiles) Then
+      For I := 0 To ConversationFiles.Count - 1 Do
+        Begin
+          Name := ExtractFileName(ConversationFiles[I]);
+          If (Pos('.index.', LowerCase(Name)) > 0) Or Not SameText(ExtractFileExt(Name), '.jsonl') Then Continue;
+          If Not SameText(Copy(Name, 1, Length('conversation-')), 'conversation-') Then Continue;
+          Id := ChangeFileExt(Name, '');
+          Delete(Id, 1, Length('conversation-'));
+          If ArchiveIdAllowed(Id) Then Kept.Add(Id);
+        End;
+    Directory := ExcludeTrailingPathDelimiter(Trim(StoreDirectory));
+    If (Directory = '') Or FileIsSymlink(Directory) Or Not DirectoryExistsUTF8(Directory) Then Exit(True);
+    If Not PathInside(Directory, Directory) Then Exit(True);
+    Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + 'images-*', faAnyFile, Rec);
+    Try
+      While Code = 0 Do
+        Begin
+          Id := '';
+          If (Copy(Rec.Name, 1, Length('images-')) = 'images-') And ((Rec.Attr And faDirectory) <> 0) Then
+            Id := Copy(Rec.Name, Length('images-') + 1, MaxInt);
+          If ArchiveIdAllowed(Id) And (Kept.IndexOf(Id) < 0) Then
+            If Not DeleteAssistantImageArchive(StoreDirectory, Id, ErrorText) Then Exit;
+          Code := FindNextUTF8(Rec);
+        End;
+    Finally
+      FindCloseUTF8(Rec);
+    End;
+    Result := True;
+  Finally
+    Kept.Free;
   End;
 End;
 

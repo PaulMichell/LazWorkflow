@@ -237,6 +237,8 @@ Type
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
+    FPasteComposerBusy: Boolean;
+    FInputDropArmed: Boolean;
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
@@ -492,7 +494,8 @@ Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
-  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages;
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages
+  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Const
   ChatViewMargin = 4;
@@ -695,7 +698,9 @@ Begin
   FTargetBrowseButton.Align := alRight;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
-  { File drop is a form property. Panels and the memo do not publish it. }
+  { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
+    drop to the widget under the pointer, so the input controls are armed after
+    their handles exist. Names arrive through OnDropFiles. }
   AllowDropFiles := True;
   OnDropFiles := @InputPanelDropFiles;
   ConversationPanel.OnResize := @HistoryPanelResize;
@@ -863,8 +868,72 @@ Begin
   DeleteHistoryButton.Width := ButtonWidth;
 End;
 
+{$IFDEF LCLGTK3}
+Var
+  ArmedDropControls: TList;
+
+Procedure GtkFileDropReceived(Widget: PGtkWidget; Context: PGdkDragContext; X, Y: LongInt; Data: PGtkSelectionData;
+  Info: LongWord; Time: LongWord; UserData: Pointer); cdecl;
+Var
+  Uris: PPChar;
+  I: Integer;
+  Names: Array Of String;
+  Form: TProjectAssistantForm;
+Begin
+  If Not (TObject(UserData) Is TProjectAssistantForm) Then Exit;
+  Form := TProjectAssistantForm(UserData);
+  Names := Nil;
+  If Not Assigned(Data) Then Exit;
+  SetLength(Names, 0);
+  Uris := PPChar(gtk_selection_data_get_uris(Data));
+  If Uris = Nil Then Exit;
+  I := 0;
+  While Uris[I] <> Nil Do
+    Begin
+      SetLength(Names, Length(Names) + 1);
+      Names[High(Names)] := Uris[I];
+      Inc(I);
+    End;
+  g_strfreev(Uris);
+  If (Length(Names) > 0) And Assigned(Form.OnDropFiles) Then Form.OnDropFiles(Form, Names);
+  gtk_drag_finish(Context, True, False, Time);
+End;
+
+Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
+Var
+  Target: TGtkTargetEntry;
+  Native: PGtkWidget;
+  ConnectFlags: TGConnectFlags;
+Begin
+  If Not Assigned(Control) Or Not Control.HandleAllocated Or Not (TObject(Control.Handle) Is TGtk3Widget) Then Exit;
+  If Not Assigned(ArmedDropControls) Then ArmedDropControls := TList.Create;
+  If ArmedDropControls.IndexOf(Control) >= 0 Then Exit;
+  Native := TGtk3Widget(Control.Handle).Widget;
+  If Native = Nil Then Exit;
+  Target.target := 'text/uri-list';
+  Target.flags := 0;
+  Target.info := 0;
+  ConnectFlags := Default(TGConnectFlags);
+  gtk_drag_dest_set(Native, GTK_DEST_DEFAULT_ALL, @Target, 1, [GDK_ACTION_COPY]);
+  g_signal_connect_data(Native, 'drag-data-received', TGCallback(@GtkFileDropReceived), Form, Nil, ConnectFlags);
+  ArmedDropControls.Add(Control);
+End;
+{$ELSE}
+Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
+Begin
+  If Assigned(Control) And Assigned(Form) Then Exit;
+End;
+{$ENDIF}
+
 Procedure TProjectAssistantForm.FormShow(Sender: TObject);
 Begin
+  If Not FInputDropArmed Then
+    Begin
+      ArmControlFileDrop(InputPanel, Self);
+      ArmControlFileDrop(AttachmentStrip, Self);
+      ArmControlFileDrop(InputMemo, Self);
+      FInputDropArmed := InputMemo.HandleAllocated;
+    End;
   { QueueAsyncCall from FormCreate races the first Qt paint and flashes black.
     Show empty chrome, flush it, then bind on a later idle. }
   If Not FOpenBindPending Then
@@ -2772,6 +2841,7 @@ Procedure TProjectAssistantForm.RebuildClientFromConversation;
 Var
   I, Before: Integer;
   Turn: TConversationTurn;
+  Refs: TAssistantImageRefArray;
 Begin
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
@@ -2787,7 +2857,13 @@ Begin
         AssistantClient.RestoreMessagesJson(Turn.MessagesJson)
       Else
         Begin
-          If (Trim(Turn.Prompt) <> '') Or (Trim(Turn.AttachmentsJson) <> '') Then
+          { AddMessage would keep an empty prompt and drop the look sentence.
+            An image-only turn must still send that sentence with the picture. }
+          SetLength(Refs, 0);
+          ParseAssistantImageRefs(Turn.AttachmentsJson, Refs);
+          If Length(Refs) > 0 Then
+            AssistantClient.AddUserMessage(Turn.Prompt, Refs)
+          Else If Trim(Turn.Prompt) <> '' Then
             AssistantClient.AddMessage(amrUser, Turn.Prompt);
           If Trim(Turn.Response) <> '' Then
             AssistantClient.AddMessage(amrAssistant, Turn.Response);
@@ -3717,8 +3793,17 @@ End;
 
 Function ClipboardHasImage: Boolean;
 Begin
-  Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or
-    Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(CF_PICTURE);
+  { GTK screenshots also offer x-png and x-bmp atoms. Open so the targets are
+    enumerated before HasFormat, which otherwise returns false on GTK3. }
+  Clipboard.Open;
+  Try
+    Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/x-png')) Or
+      Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or Clipboard.HasFormat(ClipboardMime('image/bmp')) Or
+      Clipboard.HasFormat(ClipboardMime('image/x-bmp')) Or Clipboard.HasFormat(ClipboardMime('image/x-MS-bmp')) Or
+      Clipboard.HasFormat(ClipboardMime('image/x-win-bmp')) Or Clipboard.HasFormat(CF_PICTURE);
+  Finally
+    Clipboard.Close;
+  End;
 End;
 
 Function ReadClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
@@ -3732,6 +3817,13 @@ Begin
     Result := False;
   End;
   Stream.Position := 0;
+End;
+
+Function ClipboardImageName(Const Mime: String): String;
+Begin
+  If (Pos('jpeg', Mime) > 0) Or (Pos('jpg', Mime) > 0) Then Result := 'Clipboard.jpg'
+  Else If Pos('bmp', Mime) > 0 Then Result := 'Clipboard.bmp'
+  Else Result := 'Clipboard.png';
 End;
 
 Function ClipboardPictureToPng(Stream: TMemoryStream): Boolean;
@@ -4088,15 +4180,58 @@ Begin
   End;
 End;
 
+Function PercentDecode(Const Text: String): String;
+Var
+  I, Code, N, Value: Integer;
+  Bytes: Array Of Byte;
+Begin
+  SetLength(Bytes, Length(Text));
+  N := 0;
+  I := 1;
+  While I <= Length(Text) Do
+    Begin
+      If (Text[I] = '%') And (I + 2 <= Length(Text)) Then
+        Begin
+          Val('$' + Copy(Text, I + 1, 2), Value, Code);
+          If (Code = 0) And (Value >= 0) And (Value <= 255) Then
+            Begin
+              Bytes[N] := Byte(Value);
+              Inc(N);
+              Inc(I, 3);
+              Continue;
+            End;
+        End;
+      Bytes[N] := Ord(Text[I]);
+      Inc(N);
+      Inc(I);
+    End;
+  SetLength(Result, N);
+  If N > 0 Then Move(Bytes[0], Result[1], N);
+End;
+
+Function DroppedLocalPath(Const Name: String): String;
+Var
+  QueryAt: Integer;
+Begin
+  Result := Trim(Name);
+  If Copy(LowerCase(Result), 1, 7) <> 'file://' Then Exit;
+  Delete(Result, 1, 7);
+  If Copy(LowerCase(Result), 1, 9) = 'localhost' Then Delete(Result, 1, 9);
+  QueryAt := Pos('?', Result);
+  If QueryAt > 0 Then Result := Copy(Result, 1, QueryAt - 1);
+  Result := PercentDecode(Result);
+  If (Result <> '') And (Result[1] <> '/') Then Result := '/' + Result;
+End;
+
 Procedure TProjectAssistantForm.InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
 Var
   I: Integer;
-  Reason, ErrorText: String;
+  Reason, ErrorText, LocalName: String;
   SawImage: Boolean;
 Begin
   SawImage := False;
   For I := 0 To High(FileNames) Do
-    If StillImageExtension(FileNames[I]) Then SawImage := True;
+    If StillImageExtension(DroppedLocalPath(FileNames[I])) Then SawImage := True;
   If Not SawImage Then Exit;
   If Not ComposerAttachAllowed(Reason) Then
     Begin
@@ -4106,8 +4241,9 @@ Begin
     End;
   For I := 0 To High(FileNames) Do
     Begin
-      If Not StillImageExtension(FileNames[I]) Then Continue;
-      If AttachImageFile(FileNames[I], ErrorText) Then Continue;
+      LocalName := DroppedLocalPath(FileNames[I]);
+      If Not StillImageExtension(LocalName) Then Continue;
+      If AttachImageFile(LocalName, ErrorText) Then Continue;
       If ErrorText = '' Then ErrorText := 'That file is not an image.';
       MessageDlg(ErrorText, mtInformation, [mbOK], 0);
     End;
@@ -4117,7 +4253,7 @@ Function TProjectAssistantForm.TryAttachClipboardImage(Out ErrorText: String): B
 Var
   Stream: TMemoryStream;
   Reason, ClipboardName: String;
-  Formats: Array[0..2] Of String;
+  Formats: Array[0..6] Of String;
   I: Integer;
 Begin
   Result := False;
@@ -4129,20 +4265,27 @@ Begin
       Exit;
     End;
   Formats[0] := 'image/png';
-  Formats[1] := 'image/jpeg';
-  Formats[2] := 'image/bmp';
+  Formats[1] := 'image/x-png';
+  Formats[2] := 'image/jpeg';
+  Formats[3] := 'image/bmp';
+  Formats[4] := 'image/x-bmp';
+  Formats[5] := 'image/x-MS-bmp';
+  Formats[6] := 'image/x-win-bmp';
   Stream := TMemoryStream.Create;
   Try
-    For I := 0 To 2 Do
-      If ReadClipboardBytes(ClipboardMime(Formats[I]), Stream) Then
-        Begin
-          If Formats[I] = 'image/jpeg' Then ClipboardName := 'Clipboard.jpg'
-          Else If Formats[I] = 'image/bmp' Then ClipboardName := 'Clipboard.bmp'
-          Else ClipboardName := 'Clipboard.png';
-          If AttachImageStream(ClipboardName, Stream, ErrorText) Then Exit(True);
-        End;
-    If ReadClipboardBytes(CF_PICTURE, Stream) And AttachImageStream('Clipboard.bmp', Stream, ErrorText) Then Exit(True);
-    If ClipboardPictureToPng(Stream) And AttachImageStream('Clipboard.png', Stream, ErrorText) Then Exit(True);
+    Clipboard.Open;
+    Try
+      For I := 0 To High(Formats) Do
+        If ReadClipboardBytes(ClipboardMime(Formats[I]), Stream) Then
+          Begin
+            ClipboardName := ClipboardImageName(Formats[I]);
+            If AttachImageStream(ClipboardName, Stream, ErrorText) Then Exit(True);
+          End;
+      If ReadClipboardBytes(CF_PICTURE, Stream) And AttachImageStream('Clipboard.bmp', Stream, ErrorText) Then Exit(True);
+      If ClipboardPictureToPng(Stream) And AttachImageStream('Clipboard.png', Stream, ErrorText) Then Exit(True);
+    Finally
+      Clipboard.Close;
+    End;
     If ErrorText = '' Then ErrorText := 'The clipboard image could not be read.';
   Finally
     Stream.Free;
@@ -4155,19 +4298,26 @@ Var
   ImageError: String;
 Begin
   If Not Assigned(InputMemo) Or InputMemo.ReadOnly Then Exit;
-  HadText := Clipboard.HasFormat(CF_TEXT);
-  Attached := False;
-  ImageError := '';
+  { Ctrl+V can arrive both as the memo key and as the popup shortcut. }
+  If FPasteComposerBusy Then Exit;
+  FPasteComposerBusy := True;
   Try
-    Attached := TryAttachClipboardImage(ImageError);
-  Except
+    HadText := Clipboard.HasFormat(CF_TEXT);
     Attached := False;
-    If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
+    ImageError := '';
+    Try
+      Attached := TryAttachClipboardImage(ImageError);
+    Except
+      Attached := False;
+      If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
+    End;
+    If HadText Then
+      InputMemo.PasteFromClipboard;
+    If (Not Attached) And (ImageError <> '') Then
+      MessageDlg(ImageError, mtInformation, [mbOK], 0);
+  Finally
+    FPasteComposerBusy := False;
   End;
-  If HadText Then
-    InputMemo.PasteFromClipboard;
-  If (Not Attached) And (ImageError <> '') Then
-    MessageDlg(ImageError, mtInformation, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.InputPasteClick(Sender: TObject);

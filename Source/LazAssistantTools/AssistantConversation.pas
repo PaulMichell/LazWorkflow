@@ -1292,6 +1292,11 @@ Begin
         FLastError := ImageError;
         Exit;
       End;
+    If Not ReleaseOrphanAssistantImageArchives(AssistantDir, Files, ImageError) Then
+      Begin
+        FLastError := ImageError;
+        Exit;
+      End;
   Finally
     Files.Free;
   End;
