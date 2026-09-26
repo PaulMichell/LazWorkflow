@@ -10,7 +10,7 @@ Unit AssistantProjectPaths;
 Interface
 
 Uses
-  SysUtils, fpjson;
+  Classes, SysUtils, fpjson;
 
 Const
   AssistantStoreFolderName = '.assistant';
@@ -23,11 +23,14 @@ Function TargetConfigPath(Const StoreDirectory: String): String;
 Function ResolveAssistantProjectRoot(Const ProjectInfoFile, MainFileName: String): String;
 { If ProjectFile is missing (folder renamed), find a sibling tree that still contains that file name. }
 Function LocateExistingProjectFile(Const ProjectFile: String): String;
+{ Packages under RootDirectory, or projects when that folder has no package.
+  Skips hidden directories, Backup, lib output, and symlinks. }
+Procedure CollectFolderCompileFiles(Const RootDirectory: String; Files: TStrings);
 
 Implementation
 
 Uses
-  Classes, jsonparser, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  jsonparser, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Function TargetConfigPath(Const StoreDirectory: String): String;
 Begin
@@ -327,6 +330,88 @@ Begin
   If (Dir = '') Or (Not DirectoryExistsUTF8(Dir)) Then
     Exit;
   Result := WalkToAssistantStoreRoot(Dir);
+End;
+
+Function SkipFolderCompileDirectory(Const DirectoryName: String): Boolean;
+Begin
+  Result := (DirectoryName = '') Or (DirectoryName[1] = '.') Or
+    (CompareText(DirectoryName, 'backup') = 0) Or (CompareText(DirectoryName, 'lib') = 0);
+End;
+
+Procedure CollectFolderCompileFiles(Const RootDirectory: String; Files: TStrings);
+Const
+  FolderCompileMaxDepth = 8;
+  FolderCompileMaxFiles = 64;
+Var
+  Root: String;
+  Packages, Projects: TStringList;
+  Procedure AddManifest(List: TStrings; Const FileName: String);
+  Begin
+    If List.Count >= FolderCompileMaxFiles Then
+      Exit;
+    List.Add(ExpandFileNameUTF8(FileName));
+  End;
+  Procedure Walk(Const Directory: String; Depth: Integer);
+  Var
+    Info: TSearchRec;
+    Code: Integer;
+    Child, Ext: String;
+  Begin
+    If Depth > FolderCompileMaxDepth Then
+      Exit;
+    Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
+    If Code <> 0 Then
+      Exit;
+    Try
+      While Code = 0 Do
+        Begin
+          If (Info.Name <> '.') And (Info.Name <> '..') Then
+            Begin
+              Child := IncludeTrailingPathDelimiter(Directory) + Info.Name;
+              If Not FileIsSymlink(Child) Then
+                Begin
+                  If (Info.Attr And faDirectory) <> 0 Then
+                    Begin
+                      If Not SkipFolderCompileDirectory(Info.Name) Then
+                        Walk(Child, Depth + 1);
+                    End
+                  Else
+                    Begin
+                      Ext := ExtractFileExt(Info.Name);
+                      If CompareText(Ext, '.lpk') = 0 Then
+                        AddManifest(Packages, Child)
+                      Else If CompareText(Ext, '.lpi') = 0 Then
+                        AddManifest(Projects, Child);
+                    End;
+                End;
+            End;
+          Code := FindNextUTF8(Info);
+        End;
+    Finally
+      FindCloseUTF8(Info);
+    End;
+  End;
+Begin
+  Files.Clear;
+  Root := ExcludeTrailingPathDelimiter(Trim(RootDirectory));
+  If (Root = '') Or (Not DirectoryExistsUTF8(Root)) Then
+    Exit;
+  Packages := TStringList.Create;
+  Projects := TStringList.Create;
+  Try
+    Packages.Sorted := True;
+    Projects.Sorted := True;
+    Packages.Duplicates := dupIgnore;
+    Projects.Duplicates := dupIgnore;
+    Walk(Root, 0);
+    If Packages.Count > 0 Then
+      Files.AddStrings(Packages)
+    Else
+      Files.AddStrings(Projects);
+  Finally
+    Projects.Free;
+    Packages.Free;
+  End;
 End;
 
 End.

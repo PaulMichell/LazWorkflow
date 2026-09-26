@@ -236,19 +236,6 @@ Type
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
-    Function ComposerHasImages: Boolean;
-    Procedure StashComposerImages;
-    Procedure RestoreHeldComposerImages;
-    Procedure ApplyInputPanelHeight;
-    Procedure RefreshComposerImages;
-    Procedure RefreshAttachAction;
-    Function ComposerAttachAllowed(Out Reason: String): Boolean;
-    Function ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
-    Function AttachImageStream(Const OriginalName: String; Stream: TStream; Out ErrorText: String): Boolean;
-    Function AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
-    Procedure PasteComposer;
-    Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
-    Procedure ClearUnsentComposerImages;
     FDisplaySystemNote: String; { Optional system/error note for the current surface. }
     FDisplayDurationMs: Integer; { Stored turn wall time when browsing history. }
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
@@ -303,6 +290,7 @@ Type
     FPlanAgentRunning: Boolean;
     FPlanAgentPackagesDone: Integer;
     FPlanAgentMaxPackages: Integer;
+    FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FLastTurnHadError: Boolean;
     FCommandsPopup: TPopupMenu;
     FCatalog: TAssistantCatalog;
@@ -314,6 +302,19 @@ Type
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
+    Function ComposerHasImages: Boolean;
+    Procedure StashComposerImages;
+    Procedure RestoreHeldComposerImages;
+    Procedure ApplyInputPanelHeight;
+    Procedure RefreshComposerImages;
+    Procedure RefreshAttachAction;
+    Function ComposerAttachAllowed(Out Reason: String): Boolean;
+    Function ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
+    Function AttachImageStream(Const OriginalName: String; Stream: TStream; Out ErrorText: String): Boolean;
+    Function AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
+    Procedure PasteComposer;
+    Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
+    Procedure ClearUnsentComposerImages;
     Procedure UpdateViewActionCaptions;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
@@ -383,7 +384,8 @@ Type
     Procedure StopWorkOnPlanAgent(Const Reason: String);
     Procedure ContinueWorkOnPlanAgent(Data: PtrInt);
     Function FindNextIncompleteBuildSection: Integer;
-    Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String): String;
+    Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
+      ContinueSameItem: Boolean): String;
     Procedure MaybeWarnHighContextUsage;
     Function AutoNewChatAtLimitEnabled: Boolean;
     Procedure SyncAutoNewChatCheckFromConfig;
@@ -559,6 +561,7 @@ Begin
   FPlanAgentRunning := False;
   FPlanAgentPackagesDone := 0;
   FPlanAgentMaxPackages := 25;
+  FPlanAgentResumeIndex := -1;
   FLastTurnHadError := False;
   FOpenBindPending := True;
   FDeferLastTurn := True;
@@ -1850,15 +1853,27 @@ Begin
     and stopping on that text ended the run after a completion had already been written. }
   If FPlanAgentRunning And BuildWorkSectionIsComplete Then
     Begin
+      FPlanAgentResumeIndex := -1;
       SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
       Exit;
     End;
-  { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence. }
+  { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence.
+    An item with no machine criterion stays in progress and the plan agent continues it. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
-      SetBuildStatusFeedback(Note);
-      If FPlanAgentRunning Then
-        StopWorkOnPlanAgent(Note);
+      If FPlanAgentRunning And AssistantAcceptanceIsHumanReview(Note) Then
+        Begin
+          FPlanAgentResumeIndex := FBuildWorkSectionIndex;
+          SetBuildStatusFeedback(Format('%s stays in progress. The plan agent continues this item.',
+            [FBuildWorkSectionTitle]));
+        End
+      Else
+        Begin
+          FPlanAgentResumeIndex := -1;
+          SetBuildStatusFeedback(Note);
+          If FPlanAgentRunning Then
+            StopWorkOnPlanAgent(Note);
+        End;
       Exit;
     End;
   If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
@@ -2030,7 +2045,7 @@ Begin
 End;
 
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
-  SectionBody, ParentTitle: String): String;
+  SectionBody, ParentTitle: String; ContinueSameItem: Boolean): String;
 Const MaxBodyChars = 6000;
 Var Body, ToolInstructions, Heading: String;
 Begin
@@ -2055,7 +2070,19 @@ Begin
   If Trim(ParentTitle) <> '' Then
     Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
   Heading := Heading + '**Item:** ' + SectionTitle + LineEnding + '**Status:** ' + StatusText + LineEnding + LineEnding;
-  Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading +
+  If ContinueSameItem Then
+    Result := 'Continue this same plan item in **Build mode**. The previous turn left it in progress.' +
+      LineEnding + LineEnding +
+      'Edits already applied are in the project. Do not re-read a file you already have unless a later replace_in_file failed.' +
+      LineEnding +
+      'Run run_compile. A folder target compiles the Lazarus packages under that folder, not the project open in the IDE.' +
+      LineEnding +
+      'When the written acceptance criteria are met, commit the finished files, set Status to complete, then commit the plan file. ' +
+      'A missing Validation line does not block that status change. A clean compile alone does not complete the item.' +
+      LineEnding + LineEnding + Heading
+  Else
+    Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading;
+  Result := Result +
     'Instructions:' + LineEnding + '1. Focus only on this actionable item unless blocked.' + LineEnding +
     ToolInstructions + LineEnding +
     '4. ' + AssistantPlanCompletionRules + LineEnding +
@@ -2116,7 +2143,9 @@ Begin
       MessageDlg('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
       Exit;
     End;
-  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle);
+  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle,
+    FPlanAgentRunning And (Idx = FPlanAgentResumeIndex));
+  FPlanAgentResumeIndex := -1;
   { Stay in Build mode (tools + prompt) while showing the chat turn surface. }
   BeginBuildWorkTracking(Idx, Title);
   ForceModeAndLock(amBuild);
@@ -2204,6 +2233,7 @@ Begin
     End;
   FPlanAgentRunning := True;
   FPlanAgentPackagesDone := 0;
+  FPlanAgentResumeIndex := -1;
   FLastTurnHadError := False;
   FBuildSelectedIndex := Idx;
   If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
@@ -4070,7 +4100,7 @@ End;
 Function TProjectAssistantForm.TryAttachClipboardImage(Out ErrorText: String): Boolean;
 Var
   Stream: TMemoryStream;
-  Reason, Name: String;
+  Reason, ClipboardName: String;
   Formats: Array[0..2] Of String;
   I: Integer;
 Begin
@@ -4090,10 +4120,10 @@ Begin
     For I := 0 To 2 Do
       If ReadClipboardBytes(ClipboardMime(Formats[I]), Stream) Then
         Begin
-          If Formats[I] = 'image/jpeg' Then Name := 'Clipboard.jpg'
-          Else If Formats[I] = 'image/bmp' Then Name := 'Clipboard.bmp'
-          Else Name := 'Clipboard.png';
-          If AttachImageStream(Name, Stream, ErrorText) Then Exit(True);
+          If Formats[I] = 'image/jpeg' Then ClipboardName := 'Clipboard.jpg'
+          Else If Formats[I] = 'image/bmp' Then ClipboardName := 'Clipboard.bmp'
+          Else ClipboardName := 'Clipboard.png';
+          If AttachImageStream(ClipboardName, Stream, ErrorText) Then Exit(True);
         End;
     If ReadClipboardBytes(CF_PICTURE, Stream) And AttachImageStream('Clipboard.bmp', Stream, ErrorText) Then Exit(True);
     If ClipboardPictureToPng(Stream) And AttachImageStream('Clipboard.png', Stream, ErrorText) Then Exit(True);
@@ -6194,6 +6224,7 @@ End;
 
 Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean);
 Begin
+  FPlanAgentResumeIndex := -1;
   ShowPlanOfferBar(False);
   If FPlanAgentRunning And (Not KeepPlanAgent) Then
     StopWorkOnPlanAgent('new chat');

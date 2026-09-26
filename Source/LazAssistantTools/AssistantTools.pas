@@ -66,7 +66,8 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
-  AssistantLfm, AssistantWorkTarget, PackageIntf, IDEOptionsIntf, AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, fpjson, jsonparser;
+  AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
+  AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -535,8 +536,10 @@ Begin
     '}},' +
     '{"type":"function","function":{' +
       '"name":"run_compile",' +
-      '"description":"Compile the active project. Default is quiet lazbuild (no Messages UI). ' +
-        'Set ui=true only for a final IDE Messages check.",' +
+      '"description":"Compile the work target. A project or package uses that manifest. ' +
+        'A folder compiles every .lpk under the folder, or every .lpi when the folder has no package. ' +
+        'It does not compile the IDE active project. Default is quiet lazbuild. ' +
+        'Set ui=true only for a final IDE Messages check of a project or package.",' +
       '"parameters":{"type":"object","properties":{' +
         '"kind":{"type":"string","description":"compile (default) or build (rebuild-all when quiet)"},' +
         '"ui":{"type":"boolean","description":"If true, use IDE DoBuildProject and Messages window (default false = quiet lazbuild)"}' +
@@ -2011,12 +2014,23 @@ Begin
   Result := True;
 End;
 
+Function CompileCleanSuffix(Clean: Boolean): String;
+Begin
+  If Clean Then
+    Result := 'COMPILE_CLEAN=1 (errors=0). A clean compile does not close the work item. ' +
+      'Set Status to complete when the item''s written acceptance criteria are met. ' +
+      'A missing Validation line does not forbid that status change.'
+  Else
+    Result := 'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+End;
+
 Function RunQuietLazbuild(KindBuild: Boolean; Out ResultText, ErrorText: String;
   Out ErrorCount, WarningCount, HintCount: Integer; Out BuildOk: Boolean): Boolean;
 Var
   Lazbuild, Lpi, WorkDir, OutputText, Diag: String;
-  ExitCode: Integer;
+  ExitCode, I, Extra: Integer;
   Args: Array Of String;
+  Manifests: TStringList;
 Begin
   Result := False;
   ResultText := '';
@@ -2030,43 +2044,71 @@ Begin
       ErrorText := 'No active Lazarus project.';
       Exit;
     End;
-  Lpi := AssistantTarget.Manifest;
-  If (Lpi = '') Or (Not FileExistsUTF8(Lpi)) Then
-    Begin
-      ErrorText := 'Project .lpi not found for quiet compile.';
+  Manifests := TStringList.Create;
+  Try
+    If AssistantTarget.Kind = atkFolder Then
+      Begin
+        CollectFolderCompileFiles(AssistantTarget.Root, Manifests);
+        If Manifests.Count = 0 Then
+          Begin
+            ErrorText := 'No Lazarus package or project file found under the target folder.';
+            Exit;
+          End;
+        WorkDir := ExcludeTrailingPathDelimiter(AssistantTarget.Root);
+      End
+    Else
+      Begin
+        Lpi := AssistantTarget.Manifest;
+        If (Lpi = '') Or (Not FileExistsUTF8(Lpi)) Then
+          Begin
+            ErrorText := 'Project .lpi not found for quiet compile.';
+            Exit;
+          End;
+        Manifests.Add(Lpi);
+        WorkDir := ExtractFilePath(Lpi);
+      End;
+    Lazbuild := FindLazbuildExecutable;
+    If Lazbuild = '' Then
+      Begin
+        If AssistantTarget.Kind = atkFolder Then
+          ErrorText := 'lazbuild not found on PATH or next to the IDE. A folder target is not compiled with the IDE active project.'
+        Else
+          ErrorText := 'lazbuild not found on PATH or next to the IDE. Use ui=true for IDE compile.';
+        Exit;
+      End;
+    If Not FlushOpenEditorsUnderProject(ErrorText) Then
       Exit;
-    End;
-  Lazbuild := FindLazbuildExecutable;
-  If Lazbuild = '' Then
-    Begin
-      ErrorText := 'lazbuild not found on PATH or next to the IDE. Use ui=true for IDE compile.';
-      Exit;
-    End;
-  If Not FlushOpenEditorsUnderProject(ErrorText) Then
-    Exit;
-  WorkDir := ExtractFilePath(Lpi);
-  If KindBuild Then
-    Begin
-      SetLength(Args, 2);
+    Extra := 0;
+    If KindBuild Then
+      Extra := 1;
+    Args := Nil;
+    SetLength(Args, Manifests.Count + Extra);
+    If KindBuild Then
       Args[0] := '--build-all';
-      Args[1] := Lpi;
-    End
-  Else
-    Begin
-      SetLength(Args, 1);
-      Args[0] := Lpi;
-    End;
-  If Not RunProcessCapture(Lazbuild, WorkDir, Args, OutputText, ExitCode, ErrorText) Then
-    Exit;
-  Diag := CountCompilerDiagnostics(OutputText, ErrorCount, WarningCount, HintCount);
-  BuildOk := (ExitCode = 0) And (ErrorCount = 0);
-  ResultText :=
-    Format('quiet lazbuild finished: ok=%s exit=%d errors=%d warnings=%d hints/notes=%d',
-      [BoolToStr(BuildOk, True), ExitCode, ErrorCount, WarningCount, HintCount]) +
-    LineEnding +
-    '(non-visual compile — Messages window not updated; use ui=true for IDE Messages build)' +
-    LineEnding + LineEnding + Diag;
-  Result := True;
+    For I := 0 To Manifests.Count - 1 Do
+      Args[I + Extra] := Manifests[I];
+    If Not RunProcessCapture(Lazbuild, WorkDir, Args, OutputText, ExitCode, ErrorText) Then
+      Exit;
+    Diag := CountCompilerDiagnostics(OutputText, ErrorCount, WarningCount, HintCount);
+    BuildOk := (ExitCode = 0) And (ErrorCount = 0);
+    ResultText :=
+      Format('quiet lazbuild finished: ok=%s exit=%d errors=%d warnings=%d hints/notes=%d',
+        [BoolToStr(BuildOk, True), ExitCode, ErrorCount, WarningCount, HintCount]) +
+      LineEnding +
+      '(non-visual compile — Messages window not updated; use ui=true for IDE Messages build)' +
+      LineEnding + LineEnding + Diag;
+    If AssistantTarget.Kind = atkFolder Then
+      Begin
+        ResultText := ResultText + LineEnding + 'Compiled:';
+        For I := 0 To Manifests.Count - 1 Do
+          ResultText := ResultText + LineEnding + '  ' + Manifests[I];
+        ResultText := ResultText + LineEnding +
+          'Folder target: lazbuild compiled these files. The IDE active project was not used.';
+      End;
+    Result := True;
+  Finally
+    Manifests.Free;
+  End;
 End;
 
 Function FormatIdeMessageLine(Line: TMessageLine): String;
@@ -2578,13 +2620,17 @@ Begin
   UseUi := JsonArgBool(ArgumentsJson, 'ui', False);
   If (Not UseUi) And (Kind = 'build') And (JsonArgString(ArgumentsJson, 'ui') = '') Then
     UseUi := False; { still quiet unless ui=true }
+  { A folder has no single IDE project. ui=true would compile whatever project is open. }
+  If AssistantTarget.Kind = atkFolder Then
+    UseUi := False;
   If Not UseUi Then
     Begin
       If Not RunQuietLazbuild(Kind = 'build', ResultText, ErrorText,
         ErrorCount, WarningCount, HintCount, BuildOk) Then
         Begin
-          { Fall back to IDE compile if lazbuild missing. }
-          If Pos('lazbuild not found', ErrorText) = 0 Then
+          { Fall back to IDE compile if lazbuild missing. A folder must not fall back:
+            that compiles the open project instead of the packages under the target. }
+          If (AssistantTarget.Kind = atkFolder) Or (Pos('lazbuild not found', ErrorText) = 0) Then
             Exit;
           WorkflowLogger.Warning('AssistantTools', ErrorText + ' — falling back to IDE compile.');
           UseUi := True;
@@ -2594,12 +2640,7 @@ Begin
         Begin
           Inc(GLastCompileSeq);
           GLastCompileClean := BuildOk And (ErrorCount = 0);
-          If GLastCompileClean Then
-            ResultText := ResultText + LineEnding +
-              'COMPILE_CLEAN=1 (errors=0). A clean compile does not close the work item; completion needs Validation: build or Validation: tests with matching evidence.'
-          Else
-            ResultText := ResultText + LineEnding +
-              'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+          ResultText := ResultText + LineEnding + CompileCleanSuffix(GLastCompileClean);
           GLastCompileLog := ResultText;
           Result := True;
           WorkflowLogger.Info('AssistantTools',
@@ -2637,12 +2678,7 @@ Begin
     Format('IDE %s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
       [Kind, BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount, HintCount]) +
     LineEnding + LineEnding + MsgText;
-  If GLastCompileClean Then
-    ResultText := ResultText + LineEnding +
-      'COMPILE_CLEAN=1 (errors=0). A clean compile does not close the work item; completion needs Validation: build or Validation: tests with matching evidence.'
-  Else
-    ResultText := ResultText + LineEnding +
-      'COMPILE_CLEAN=0 (fix errors before treating the work package as done).';
+  ResultText := ResultText + LineEnding + CompileCleanSuffix(GLastCompileClean);
   GLastCompileLog := ResultText;
   Result := True;
   WorkflowLogger.Info('AssistantTools',

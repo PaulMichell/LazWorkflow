@@ -8,7 +8,14 @@ Unit AssistantAcceptance;
 {$ENDIF}
 
 Interface
+
+Const
+  AssistantAcceptanceHumanReviewReason =
+    'No explicit Validation: build or Validation: tests criterion; use Done after review.';
+
 Function CheckAssistantAcceptance(Const Section, BuildJSON, TestJSON: String; Out Reason: String): Boolean;
+{ True when Reason is the missing machine-validation result. Work on Plan keeps running. }
+Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
 
 Implementation
 
@@ -36,7 +43,7 @@ Var
   End;
 Begin
   Result := False;
-  Reason := 'No explicit Validation: build or Validation: tests criterion; use Done after review.';
+  Reason := AssistantAcceptanceHumanReviewReason;
   Lines := TStringList.Create;
   Build := Nil;
   Tests := Nil;
@@ -74,7 +81,15 @@ Begin
             Rule := LowerCase(Trim(Copy(Line, 12, MaxInt)));
           End;
       End;
-    If (Rules <> 1) Or ((Rule <> 'build') And (Rule <> 'tests')) Then Exit;
+    If Rules = 0 Then
+      Exit;
+    If Rules <> 1 Then
+      Begin
+        Reason := 'More than one Validation line; the item stays in progress.';
+        Exit;
+      End;
+    If (Rule <> 'build') And (Rule <> 'tests') Then
+      Exit;
     Try
       Reason := 'A current successful build with complete CodeTools source coverage is required.';
       If BuildJSON = '' Then Exit;
@@ -112,4 +127,10 @@ Begin
     Tests.Free;
   End;
 End;
+
+Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
+Begin
+  Result := Reason = AssistantAcceptanceHumanReviewReason;
+End;
+
 End.

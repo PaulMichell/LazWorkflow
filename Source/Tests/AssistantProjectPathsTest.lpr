@@ -10,6 +10,7 @@ Program AssistantProjectPathsTest;
 Uses
   {$IFDEF UNIX}
   cthreads,
+  BaseUnix,
   {$ENDIF}
   Classes, SysUtils, AssistantProjectPaths;
 
@@ -147,9 +148,63 @@ Begin
   End;
 End;
 
+Procedure TestFolderCompileFiles;
+Var
+  Base, Root: String;
+  Files: TStringList;
+  Function Listed(Const RelativePath: String): Boolean;
+  Begin
+    Result := Files.IndexOf(ExpandFileName(IncludeTrailingPathDelimiter(Root) + RelativePath)) >= 0;
+  End;
+Begin
+  Base := IncludeTrailingPathDelimiter(GetTempDir) + 'lazasst-compile-' + FormatDateTime('hhnnsszzz', Now);
+  Root := IncludeTrailingPathDelimiter(Base) + 'Repo';
+  Files := TStringList.Create;
+  Try
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Packages/LazAssistantTools.lpk', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Packages/LazWorkflowCommon.lpk', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'dummy.lpi', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Source/Tools/PascalStyle.lpi', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'lib/hidden.lpi', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Lib/hidden.lpk', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Backup/old.lpk', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Root) + '.git/hidden.lpk', '<CONFIG/>');
+    WriteTextFile(IncludeTrailingPathDelimiter(Base) + 'Outside/escaped.lpk', '<CONFIG/>');
+    {$IFDEF UNIX}
+    Check('directory symlink created',
+      FpSymlink(PChar(IncludeTrailingPathDelimiter(Base) + 'Outside'), PChar(IncludeTrailingPathDelimiter(Root) + 'Packages/Link')) = 0);
+    Check('package symlink created',
+      FpSymlink(PChar(IncludeTrailingPathDelimiter(Base) + 'Outside/escaped.lpk'),
+        PChar(IncludeTrailingPathDelimiter(Root) + 'Packages/link.lpk')) = 0);
+    {$ENDIF}
+    CollectFolderCompileFiles(Root, Files);
+    Check('folder compile keeps both packages', (Files.Count = 2) And
+      Listed('Packages/LazAssistantTools.lpk') And Listed('Packages/LazWorkflowCommon.lpk'));
+    Check('folder compile skips projects, output, backup, and hidden files',
+      Not Listed('dummy.lpi') And Not Listed('Source/Tools/PascalStyle.lpi') And
+      Not Listed('lib/hidden.lpi') And Not Listed('Lib/hidden.lpk') And
+      Not Listed('Backup/old.lpk') And Not Listed('.git/hidden.lpk') And Not Listed('Packages/link.lpk'));
+    DeleteFile(IncludeTrailingPathDelimiter(Root) + 'Packages/LazAssistantTools.lpk');
+    DeleteFile(IncludeTrailingPathDelimiter(Root) + 'Packages/LazWorkflowCommon.lpk');
+    CollectFolderCompileFiles(Root, Files);
+    Check('folder without a package compiles its projects', (Files.Count = 2) And
+      Listed('dummy.lpi') And Listed('Source/Tools/PascalStyle.lpi'));
+    CollectFolderCompileFiles(IncludeTrailingPathDelimiter(Base) + 'Missing', Files);
+    Check('missing folder compiles nothing', Files.Count = 0);
+  Finally
+    {$IFDEF UNIX}
+    FpUnlink(PChar(IncludeTrailingPathDelimiter(Root) + 'Packages/Link'));
+    FpUnlink(PChar(IncludeTrailingPathDelimiter(Root) + 'Packages/link.lpk'));
+    {$ENDIF}
+    Files.Free;
+    DeleteTree(Base);
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestRenameFindsAssistant;
+  TestFolderCompileFiles;
   TestNestedProjectWalksToRepoAssistant;
   TestMissingPathWithoutSiblingIsEmpty;
   TestActualFolderRename;
