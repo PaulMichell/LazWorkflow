@@ -1,19 +1,48 @@
 Program AssistantConversationSurfaceTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Math, Graphics, LCLType, FileUtil, FPImage, FPWritePNG,
-  StyledTextTypes, AssistantTrace, AssistantConversationSurface, AssistantImages;
+Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Math, Graphics, LCLType, Clipbrd, Menus, FileUtil, FPImage, FPWritePNG,
+  StyledTextTypes, AssistantTrace, AssistantConversationSurface, AssistantImages, AssistantImageView;
 Procedure Check(Const Name:String; OK:Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ',Name); Halt(1); End; WriteLn('ok ',Name); End;
 Type
   TImageSurface=Class(TAssistantConversationSurface)
+    OpenedName:String;
     Procedure Press(Key:Word);
+    Procedure PressShift(Key:Word; Shift:TShiftState);
+    Procedure MoveTo(X, Y:Integer);
+    Procedure OpenDouble;
+    Procedure OpenAttachment(Const Ref:TTraceImageRef); Override;
   End;
 Procedure TImageSurface.Press(Key:Word);
 Begin
   KeyDown(Key,[]);
 End;
+Procedure TImageSurface.PressShift(Key:Word; Shift:TShiftState);
+Begin
+  KeyDown(Key, Shift);
+End;
+Procedure TImageSurface.MoveTo(X, Y:Integer);
+Begin
+  MouseMove([], X, Y);
+End;
+Procedure TImageSurface.OpenDouble;
+Begin
+  DblClick;
+End;
+Procedure TImageSurface.OpenAttachment(Const Ref:TTraceImageRef);
+Begin
+  OpenedName:=Ref.Name;
+End;
 Var Host:TForm; View:TImageSurface; Trace:TAssistantTrace; I,J,ControlsBefore:Integer; Body,Key:String;
   BeforeHeight,BeforeTop:Int64; Parses,Started,ParsedAt:QWord; Bitmap:TBitmap; PNG:TPortableNetworkGraphic; A,B:TConversationPosition;
+Function MenuByCaption(Const Caption:String):TMenuItem;
+Var N:Integer;
+Begin
+  Result:=Nil;
+  If Not Assigned(View) Or Not Assigned(View.PopupMenu) Then Exit;
+  For N:=0 To View.PopupMenu.Items.Count-1 Do
+    If View.PopupMenu.Items[N].Caption=Caption Then Exit(View.PopupMenu.Items[N]);
+End;
 Procedure Sync;
 Var N:Integer;
 Begin
@@ -71,8 +100,8 @@ Begin
 End;
 Procedure CheckPainted;
 Var Root, ErrorText: String; Img: TFPMemoryImage; Writer: TFPWriterPNG; Stream: TMemoryStream;
-  Stored: TAssistantStoredImage; Refs: TTraceImageRefArray; X, Y, W, H, PPI, ContentW, SampleX, SampleY: Integer;
-  Shot: TBitmap; Color: TColor; Pixel: TFPColor;
+  Stored: TAssistantStoredImage; Refs: TTraceImageRefArray; X, Y, W, H, PPI, ContentW, SampleX, SampleY, NativeW: Integer;
+  Shot: TBitmap; Color: TColor; Pixel: TFPColor; Dialog: TAssistantImageView; KeyCode: Word;
  Function IsRed(Value: TColor): Boolean;
  Begin
   Result := (Red(Value) > 200) And (Green(Value) < 80) And (Blue(Value) < 80);
@@ -132,6 +161,46 @@ Begin
  End;
  WriteLn('painted sample ', Red(Color), ',', Green(Color), ',', Blue(Color), ' at ', SampleX, ',', SampleY);
  Check('present file is painted inside the user bubble', IsRed(Color));
+ Check('save name is the original file', AttachmentSaveName(Stored.OriginalName, Stored.Id) = Stored.OriginalName);
+ Check('unnamed image still has a save name', AttachmentSaveName('', '') = 'Image.png');
+ View.OpenedName := '';
+ View.MoveTo(SampleX, SampleY);
+ View.Press(VK_RETURN);
+ Check('Enter on an attachment opens it', View.OpenedName = Stored.OriginalName);
+ View.OpenedName := '';
+ View.OpenDouble;
+ Check('double-click opens the attachment', View.OpenedName = Stored.OriginalName);
+ View.PopupMenu.OnPopup(View.PopupMenu);
+ Check('Copy Image appears on an attachment', Assigned(MenuByCaption('Copy Image')) And MenuByCaption('Copy Image').Visible);
+ Check('Save Image appears on an attachment', Assigned(MenuByCaption('Save Image')) And MenuByCaption('Save Image').Visible);
+ MenuByCaption('Copy Image').OnClick(MenuByCaption('Copy Image'));
+ Check('copy places a PNG on the clipboard', Clipboard.HasFormat(RegisterClipboardFormat('image/png')));
+ A.Key := Trace[0].ID; A.Text := StyledPosition(0, 0); B.Key := Trace[0].ID; B.Text := StyledPosition(0, 5);
+ View.SelectRange(A, B);
+ View.PressShift(VK_C, [ssCtrl]);
+ Check('Ctrl+C on a text selection still copies text', Pos('Words', Clipboard.AsText) > 0);
+ View.MoveTo(SampleX, View.ViewRect.Top + View.Layout[0].Padding + View.Layout.ImageRowHeight(0) + 4);
+ View.PopupMenu.OnPopup(View.PopupMenu);
+ Check('Copy Image hides off the attachment', Assigned(MenuByCaption('Copy Image')) And Not MenuByCaption('Copy Image').Visible);
+ Check('Save Image hides off the attachment', Assigned(MenuByCaption('Save Image')) And Not MenuByCaption('Save Image').Visible);
+ View.OpenedName := '';
+ View.Press(VK_RETURN);
+ Check('Enter on the words does not open the picture', View.OpenedName = '');
+ Dialog := TAssistantImageView.Create(Nil);
+ Try
+  Dialog.LoadImage(Root, Trace[0].ImageRefs[0]);
+  PPI := Dialog.Font.PixelsPerInch;
+  If PPI < 1 Then PPI := 96;
+  NativeW := Round(Int64(Stored.Width) * PPI / 96);
+  If NativeW < 1 Then NativeW := 1;
+  Check('viewer is 1:1 at the surface DPI', ScaledImageExtent(Stored.Width, Stored.Height, NativeW, PPI, W, H) And
+    (Dialog.ImagePaint.Width = W) And (Dialog.ImagePaint.Height = H));
+  KeyCode := VK_ESCAPE;
+  Dialog.FormKeyDown(Dialog, KeyCode, []);
+  Check('Esc closes the image view', (KeyCode = 0) And (Dialog.ModalResult = mrCancel));
+ Finally
+  Dialog.Free;
+ End;
  Refs[0].Missing := True;
  Trace.SetUserImageRefs(Refs);
  Sync;

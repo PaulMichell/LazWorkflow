@@ -58,12 +58,19 @@ Type
     HasPendingAnchor: Boolean;
     FocusedKey: String;
     PointerPosition: TPoint;
+    CopyImageItem, SaveImageItem, ImageSeparator: TMenuItem;
+    MenuImage: TTraceImageRef;
+    MenuImageValid: Boolean;
     BackgroundIndex: Integer;
     FLayoutRevision, FPaintRevision, FMaxUpdateMilliseconds: QWord;
     Procedure GetDialogCode(Var Message: TLMGetDlgCode); Message LM_GETDLGCODE;
     Procedure Tick(Sender: TObject);
     Procedure LeaveConversation(ForwardDirection: Boolean);
     Procedure MenuClick(Sender: TObject);
+    Procedure MenuPopup(Sender: TObject);
+    Procedure CopyImageClick(Sender: TObject);
+    Procedure SaveImageClick(Sender: TObject);
+    Function AttachmentUnder(X, Y: Integer; Out Ref: TTraceImageRef): Boolean;
     Procedure PrepareViewport;
     Procedure RestoreAnchor(Const Anchor: TConversationAnchor);
     Function CaptureAnchor: TConversationAnchor;
@@ -88,6 +95,7 @@ Type
     Procedure MouseMove(Shift: TShiftState; X, Y: Integer); Override;
     Procedure MouseUp(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
     Procedure DblClick; Override;
+    Procedure OpenAttachment(Const Ref: TTraceImageRef); Virtual;
   Public
     Constructor Create(AOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -124,7 +132,7 @@ Implementation
 
 Uses
   Math, Clipbrd, LCLType, Forms, FPImage,
-  StyledCanvas, StyledTextDocument, AssistantImages;
+  StyledCanvas, StyledTextDocument, AssistantImages, AssistantImageView;
 
 Const
   UserBubbleColor = TColor($00EFF8E5);
@@ -333,6 +341,21 @@ Begin
   Timer.Enabled := False;
   Timer.OnTimer := @Tick;
   PopupMenu := TPopupMenu.Create(Self);
+  PopupMenu.OnPopup := @MenuPopup;
+  CopyImageItem := TMenuItem.Create(PopupMenu);
+  CopyImageItem.Caption := 'Copy Image';
+  CopyImageItem.OnClick := @CopyImageClick;
+  CopyImageItem.Visible := False;
+  PopupMenu.Items.Add(CopyImageItem);
+  SaveImageItem := TMenuItem.Create(PopupMenu);
+  SaveImageItem.Caption := 'Save Image';
+  SaveImageItem.OnClick := @SaveImageClick;
+  SaveImageItem.Visible := False;
+  PopupMenu.Items.Add(SaveImageItem);
+  ImageSeparator := TMenuItem.Create(PopupMenu);
+  ImageSeparator.Caption := '-';
+  ImageSeparator.Visible := False;
+  PopupMenu.Items.Add(ImageSeparator);
   For I := 0 To High(Captions) Do
     Begin
       Item := TMenuItem.Create(PopupMenu);
@@ -1220,12 +1243,17 @@ Begin
 End;
 
 Procedure TAssistantConversationSurface.DblClick;
+Var
+  Ref: TTraceImageRef;
 Begin
   Inherited DblClick;
   Selecting := False;
   MouseCapture := False;
-  { A picture owns this gesture. Opening it is a later step. }
-  If PointerHit(PointerPosition.X, PointerPosition.Y).ImageIndex >= 0 Then Exit;
+  If AttachmentUnder(PointerPosition.X, PointerPosition.Y, Ref) Then
+    Begin
+      OpenAttachment(Ref);
+      Exit;
+    End;
   SelectWord;
 End;
 
@@ -1244,9 +1272,48 @@ Begin
   If Assigned(Form) Then Form.SelectNext(Self, ForwardDirection, True);
 End;
 
+Function TAssistantConversationSurface.AttachmentUnder(X, Y: Integer; Out Ref: TTraceImageRef): Boolean;
+Var
+  Hit: TConversationPointerHit;
+  Index: Integer;
+Begin
+  Result := False;
+  Ref := Default(TTraceImageRef);
+  Hit := PointerHit(X, Y);
+  If Hit.ImageIndex < 0 Then Exit;
+  Index := FLayout.IndexOf(Hit.Position.Key);
+  If (Index < 0) Or (Hit.ImageIndex > High(FLayout[Index].Images)) Then Exit;
+  Ref := FLayout[Index].Images[Hit.ImageIndex];
+  Result := True;
+End;
+
+Procedure TAssistantConversationSurface.OpenAttachment(Const Ref: TTraceImageRef);
+Begin
+  ShowAssistantImage(FImageRoot, Ref);
+End;
+
+Procedure TAssistantConversationSurface.MenuPopup(Sender: TObject);
+Begin
+  MenuImageValid := AttachmentUnder(PointerPosition.X, PointerPosition.Y, MenuImage);
+  CopyImageItem.Visible := MenuImageValid;
+  SaveImageItem.Visible := MenuImageValid;
+  ImageSeparator.Visible := MenuImageValid;
+End;
+
+Procedure TAssistantConversationSurface.CopyImageClick(Sender: TObject);
+Begin
+  If MenuImageValid Then CopyAssistantImage(FImageRoot, MenuImage);
+End;
+
+Procedure TAssistantConversationSurface.SaveImageClick(Sender: TObject);
+Begin
+  If MenuImageValid Then SaveAssistantImage(FImageRoot, MenuImage);
+End;
+
 Procedure TAssistantConversationSurface.KeyDown(Var Key: Word; Shift: TShiftState);
 Var
   I: Integer;
+  Ref: TTraceImageRef;
 Begin
   If ssCtrl In Shift Then
     Case Key Of VK_A:
@@ -1268,7 +1335,12 @@ Begin
     VK_DOWN: ScrollTop := ScrollTop + 24;
     VK_PRIOR: ScrollTop := ScrollTop - ViewRect.Height;
     VK_NEXT: ScrollTop := ScrollTop + ViewRect.Height;
-    VK_RETURN, VK_SPACE: Toggle(FLayout.IndexOf(FocusedKey));
+    VK_RETURN:
+      Begin
+        If AttachmentUnder(PointerPosition.X, PointerPosition.Y, Ref) Then OpenAttachment(Ref)
+        Else Toggle(FLayout.IndexOf(FocusedKey));
+      End;
+    VK_SPACE: Toggle(FLayout.IndexOf(FocusedKey));
     VK_TAB:
     Begin
       If ssCtrl In Shift Then
