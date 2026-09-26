@@ -142,19 +142,16 @@ object ProjectAssistantForm: TProjectAssistantForm
     Top = 567
     Width = 960
     Align = alBottom
-    AllowDropFiles = True
     BevelOuter = bvNone
     ClientHeight = 75
     ClientWidth = 960
     TabOrder = 1
-    OnDropFiles = InputPanelDropFiles
     object AttachmentStrip: TPanel
       Left = 0
       Height = 108
       Top = 0
       Width = 960
       Align = alTop
-      AllowDropFiles = True
       BevelOuter = bvNone
       ChildSizing.LeftRightSpacing = 4
       ChildSizing.TopBottomSpacing = 4
@@ -168,7 +165,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       ChildSizing.ControlsPerLine = 12
       ClientHeight = 108
       ClientWidth = 960
-      OnDropFiles = InputPanelDropFiles
       TabOrder = 2
       Visible = False
       object AttachImageButton: TButton
@@ -233,9 +229,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 34
       Width = 948
       Align = alClient
-      AllowDropFiles = True
       BorderSpacing.Around = 6
-      OnDropFiles = InputPanelDropFiles
       TabOrder = 0
     end
   end

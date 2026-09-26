@@ -603,7 +603,15 @@ Begin
 End;
 
 Destructor TProjectAssistantForm.Destroy;
+Var
+  OwnWrite: Boolean;
 Begin
+  { BeforeDestruction takes the write lock and sets csDestroying. A failed
+    constructor skips BeforeDestruction, so take the lock here or TCustomForm.Destroy
+    calls EndWrite with no matching BeginWrite and the real error is lost. }
+  OwnWrite := Not (csDestroying In ComponentState);
+  If OwnWrite Then
+    GlobalNameSpace.BeginWrite;
   Destroying;
   If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
   Application.RemoveAsyncCalls(Self);
@@ -686,6 +694,9 @@ Begin
   FTargetBrowseButton.Align := alRight;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
+  { File drop is a form property. Panels and the memo do not publish it. }
+  AllowDropFiles := True;
+  OnDropFiles := @InputPanelDropFiles;
   ConversationPanel.OnResize := @HistoryPanelResize;
   HistoryPanelResize(ConversationPanel);
   If Assigned(InputMemo) Then
