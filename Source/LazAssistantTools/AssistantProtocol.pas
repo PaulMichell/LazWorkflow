@@ -101,28 +101,90 @@ Function BuildChatCompletionsRequestJson(Const Items: TSamplerInputItemArray;
 Implementation
 
 Function JsonEscapeText(Const SourceText: String): String;
+Const
+  Replacement = #$EF#$BF#$BD;
 Var
-  I: Integer;
-  C: Char;
-Begin
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
+  I, Len, Need, Extra, Code: Integer;
+  Lead, Cont: Byte;
+  Procedure AppendByte(Value: Byte);
+  Begin
+    Result := Result + Chr(Value);
+  End;
+  Procedure AppendAscii(Value: Byte);
+  Begin
+    Case Chr(Value) Of
+      '"': Result := Result + '\"';
+      '\': Result := Result + '\\';
+      #8: Result := Result + '\b';
+      #9: Result := Result + '\t';
+      #10: Result := Result + '\n';
+      #12: Result := Result + '\f';
+      #13: Result := Result + '\r';
+    Else
+      If Value < 32 Then
+        Result := Result + '\u' + IntToHex(Value, 4)
       Else
-        If Ord(C) < 32 Then
-          Result := Result + '\u' + IntToHex(Ord(C), 4)
-        Else
-          Result := Result + C;
-      End;
+        AppendByte(Value);
+    End;
+  End;
+Begin
+  { Tool output can contain raw bytes from a file. A strict JSON parser rejects
+    those bytes as an invalid Unicode code point, so only scalar values are kept. }
+  Result := '';
+  Len := Length(SourceText);
+  I := 1;
+  While I <= Len Do
+    Begin
+      Lead := Ord(SourceText[I]);
+      If Lead < $80 Then
+        Begin
+          AppendAscii(Lead);
+          Inc(I);
+          Continue;
+        End;
+      Need := 0;
+      Code := 0;
+      If (Lead >= $C2) And (Lead <= $DF) Then
+        Begin
+          Need := 2;
+          Code := Lead And $1F;
+        End
+      Else If (Lead >= $E0) And (Lead <= $EF) Then
+        Begin
+          Need := 3;
+          Code := Lead And $0F;
+        End
+      Else If (Lead >= $F0) And (Lead <= $F4) Then
+        Begin
+          Need := 4;
+          Code := Lead And $07;
+        End;
+      If (Need = 0) Or (I + Need - 1 > Len) Then
+        Begin
+          Result := Result + Replacement;
+          Inc(I);
+          Continue;
+        End;
+      For Extra := 1 To Need - 1 Do
+        Begin
+          Cont := Ord(SourceText[I + Extra]);
+          If (Cont And $C0) <> $80 Then
+            Begin
+              Need := 0;
+              Break;
+            End;
+          Code := (Code Shl 6) Or (Cont And $3F);
+        End;
+      If (Need = 0) Or (Code > $10FFFF) Or ((Code >= $D800) And (Code <= $DFFF)) Or
+        ((Need = 2) And (Code < $80)) Or ((Need = 3) And (Code < $800)) Or
+        ((Need = 4) And (Code < $10000)) Then
+        Begin
+          Result := Result + Replacement;
+          Inc(I);
+          Continue;
+        End;
+      Result := Result + Copy(SourceText, I, Need);
+      Inc(I, Need);
     End;
 End;
 

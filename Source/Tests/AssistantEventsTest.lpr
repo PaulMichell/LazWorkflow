@@ -187,6 +187,27 @@ Begin
   DeleteFile(Path);
 End;
 
+Procedure TestJsonEscapeKeepsUnicodeScalars;
+Var
+  Escaped, Body: String;
+  Items: TSamplerInputItemArray;
+  Options: TSamplerRequestOptions;
+Begin
+  Check('quotes and slashes are escaped', JsonEscapeText('a"b\c') = 'a\"b\\c');
+  Check('controls use a short escape', JsonEscapeText(#1) = '\u0001');
+  Check('a utf-8 letter stays', JsonEscapeText(#$C3#$A9) = #$C3#$A9);
+  Escaped := JsonEscapeText(#$A5);
+  Check('a lone high byte is replaced', (Pos(#$A5, Escaped) = 0) And (Pos(#$EF#$BF#$BD, Escaped) > 0));
+  Escaped := JsonEscapeText(#$ED#$A0#$80);
+  Check('a utf-8 surrogate is replaced', Pos(#$ED#$A0#$80, Escaped) = 0);
+  SetLength(Items, 1);
+  Items[0] := SamplerInputFunctionOutput('call-1', 'plan '#$A5);
+  Options := DefaultSamplerRequestOptions;
+  Options.Model := 'grok-4';
+  Body := BuildResponsesRequestJson(Items, Options);
+  Check('function output omits the invalid byte', Pos(#$A5, Body) = 0);
+End;
+
 Procedure TestToolsFlatten;
 Var
   Completions, Responses: String;
@@ -208,6 +229,7 @@ Begin
   TestParseEventRoundTrip;
   TestEventsFileLoad;
   TestProgressStatus;
+  TestJsonEscapeKeepsUnicodeScalars;
   TestToolsFlatten;
   If FailCount = 0 Then
     Begin
