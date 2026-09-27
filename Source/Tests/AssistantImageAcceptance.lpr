@@ -104,30 +104,17 @@ Begin
 End;
 
 Function ThumbnailCount(Form: TProjectAssistantForm): Integer;
-Var
-  I: Integer;
 Begin
   Result := 0;
-  If Not Assigned(Form) Or Not Assigned(Form.AttachmentStrip) Then Exit;
-  For I := 0 To Form.AttachmentStrip.ControlCount - 1 Do
-    If Form.AttachmentStrip.Controls[I] Is TImage Then Inc(Result);
+  If Assigned(Form) And Assigned(Form.AttachmentStrip) Then Result := Form.AttachmentStrip.ControlCount;
 End;
 
 Function AttachmentHint(Form: TProjectAssistantForm; Index: Integer): String;
-Var
-  I, Seen: Integer;
-  Control: TControl;
 Begin
   Result := '';
-  Seen := 0;
   If Not Assigned(Form) Or Not Assigned(Form.AttachmentStrip) Then Exit;
-  For I := 0 To Form.AttachmentStrip.ControlCount - 1 Do
-    Begin
-      Control := Form.AttachmentStrip.Controls[I];
-      If Not (Control Is TImage) Then Continue;
-      If Seen = Index Then Exit(Control.Hint);
-      Inc(Seen);
-    End;
+  If (Index < 0) Or (Index >= Form.AttachmentStrip.ControlCount) Then Exit;
+  Result := Form.AttachmentStrip.Controls[Index].Hint;
 End;
 
 Function ClickRemove(Form: TProjectAssistantForm): Boolean;

@@ -193,6 +193,7 @@ Type
     Procedure RemoveAttachmentActionExecute(Sender: TObject);
     Procedure SaveAttachmentActionExecute(Sender: TObject);
     Procedure PreviewAttachmentActionExecute(Sender: TObject);
+    Procedure AttachmentImageMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure AttachmentImageDblClick(Sender: TObject);
     Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
     Procedure InputSelectAllClick(Sender: TObject);
@@ -254,6 +255,7 @@ Type
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
+    FComposerSelectedIndex: Integer; { Thumbnail outlined when more than one picture is attached. }
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
     FPasteComposerBusy: Boolean;
@@ -335,6 +337,8 @@ Type
     Procedure PlaceComposerChildren;
     Procedure RefreshComposerImages;
     Procedure PlaceComposerThumbnails;
+    Procedure ApplyComposerImageSelection;
+    Procedure SelectComposerImage(Index: Integer);
     Function AttachmentStripHeight: Integer;
     Function ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
     Procedure RemoveComposerImageAt(Index: Integer);
@@ -4566,6 +4570,45 @@ Begin
       Control.SetBounds(X, Gap, Side, Side);
       X := X + Side + Gap;
     End;
+  ApplyComposerImageSelection;
+End;
+
+Procedure TProjectAssistantForm.ApplyComposerImageSelection;
+Var
+  I: Integer;
+  Frame: TPanel;
+  Selected: Boolean;
+Begin
+  If Not Assigned(AttachmentStrip) Then Exit;
+  For I := 0 To AttachmentStrip.ControlCount - 1 Do
+    Begin
+      If Not (AttachmentStrip.Controls[I] Is TPanel) Then Continue;
+      Frame := TPanel(AttachmentStrip.Controls[I]);
+      Selected := (AttachmentStrip.ControlCount > 1) And (Frame.Tag = FComposerSelectedIndex);
+      Frame.ParentBackground := Not Selected;
+      Frame.ParentColor := Not Selected;
+      If Selected Then
+        Begin
+          Frame.ParentBackground := False;
+          Frame.ParentColor := False;
+          Frame.Color := clHighlight;
+        End;
+      Frame.Invalidate;
+    End;
+End;
+
+Procedure TProjectAssistantForm.SelectComposerImage(Index: Integer);
+Var
+  Refs: TAssistantImageRefArray;
+Begin
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  If Length(Refs) < 2 Then
+    FComposerSelectedIndex := -1
+  Else If (Index >= 0) And (Index <= High(Refs)) Then
+    FComposerSelectedIndex := Index
+  Else If (FComposerSelectedIndex < 0) Or (FComposerSelectedIndex > High(Refs)) Then
+    FComposerSelectedIndex := 0;
+  ApplyComposerImageSelection;
 End;
 
 Function TProjectAssistantForm.ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
@@ -4604,8 +4647,9 @@ End;
 Procedure TProjectAssistantForm.RefreshComposerImages;
 Var
   Refs: TAssistantImageRefArray;
-  I, Side: Integer;
-  Root: String;
+  I, Side, Border, Inner: Integer;
+  Root, HintText: String;
+  Frame: TPanel;
   Thumb: TImage;
   Control: TControl;
 Begin
@@ -4622,6 +4666,10 @@ Begin
         Control.Free;
       End;
     ParseAssistantImageRefs(FComposerImagesJson, Refs);
+    If Length(Refs) < 2 Then
+      FComposerSelectedIndex := -1
+    Else If (FComposerSelectedIndex < 0) Or (FComposerSelectedIndex > High(Refs)) Then
+      FComposerSelectedIndex := 0;
     AttachmentStrip.Visible := Length(Refs) > 0;
     AttachmentStrip.PopupMenu := AttachmentPopup;
     AttachmentStrip.ChildSizing.Layout := cclNone;
@@ -4631,27 +4679,47 @@ Begin
       Begin
         Root := '';
         Side := Scale96ToForm(72);
+        Border := Scale96ToForm(2);
+        If Border < 1 Then Border := 1;
+        Inner := Side - (Border * 2);
+        If Inner < 8 Then Inner := Side;
         If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
         For I := 0 To High(Refs) Do
           Begin
-            Thumb := TImage.Create(Nil);
-            Thumb.Parent := AttachmentStrip;
+            HintText := ComposerImageHint(Refs[I].Name);
+            Frame := TPanel.Create(Nil);
+            Frame.Parent := AttachmentStrip;
+            Frame.BevelOuter := bvNone;
+            Frame.Caption := '';
+            Frame.Align := alNone;
+            Frame.Anchors := [akLeft, akTop];
+            Frame.Tag := I;
+            Frame.ParentShowHint := False;
+            Frame.ShowHint := True;
+            Frame.Hint := HintText;
+            Frame.PopupMenu := AttachmentPopup;
+            Frame.OnMouseDown := @AttachmentImageMouseDown;
+            Frame.OnDblClick := @AttachmentImageDblClick;
+            Thumb := TImage.Create(Frame);
+            Thumb.Parent := Frame;
             Thumb.Align := alNone;
             Thumb.Anchors := [akLeft, akTop];
             Thumb.AutoSize := False;
-            Thumb.Constraints.MinWidth := Side;
-            Thumb.Constraints.MaxWidth := Side;
-            Thumb.Constraints.MinHeight := Side;
-            Thumb.Constraints.MaxHeight := Side;
-            Thumb.SetBounds(Scale96ToForm(4) + I * (Side + Scale96ToForm(4)), Scale96ToForm(4), Side, Side);
+            Thumb.SetBounds(Border, Border, Inner, Inner);
+            Thumb.Constraints.MinWidth := Inner;
+            Thumb.Constraints.MaxWidth := Inner;
+            Thumb.Constraints.MinHeight := Inner;
+            Thumb.Constraints.MaxHeight := Inner;
             Thumb.Tag := I;
             Thumb.ParentShowHint := False;
             Thumb.ShowHint := True;
-            Thumb.Hint := ComposerImageHint(Refs[I].Name);
+            Thumb.Hint := HintText;
             Thumb.PopupMenu := AttachmentPopup;
+            Thumb.OnMouseDown := @AttachmentImageMouseDown;
             Thumb.OnDblClick := @AttachmentImageDblClick;
             AssignThumbImage(Thumb, Root, Refs[I]);
           End;
+        ApplyComposerImageSelection;
       End;
   Finally
     AttachmentStrip.EnableAlign;
@@ -4686,6 +4754,10 @@ Var
 Begin
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   If (Index < 0) Or (Index > High(Refs)) Then Exit;
+  If Index < FComposerSelectedIndex Then
+    Dec(FComposerSelectedIndex)
+  Else If Index = FComposerSelectedIndex Then
+    If FComposerSelectedIndex > High(Refs) - 1 Then FComposerSelectedIndex := High(Refs) - 1;
   Root := '';
   If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
   If (Root <> '') And (Not FSending) And (Not TurnReferencesImage(Refs[Index].Id)) Then
@@ -4767,6 +4839,7 @@ Begin
   Index := ComposerImageIndexUnder(Mouse.CursorPos);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   HasImage := (Index >= 0) And (Index <= High(Refs));
+  If HasImage Then SelectComposerImage(Index);
   If Assigned(RemoveAttachmentAction) Then
     Begin
       RemoveAttachmentAction.Tag := Index;
@@ -4799,9 +4872,18 @@ Begin
   If Sender Is TComponent Then PreviewComposerImage(TComponent(Sender).Tag);
 End;
 
+Procedure TProjectAssistantForm.AttachmentImageMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Begin
+  If Sender Is TControl Then SelectComposerImage(TControl(Sender).Tag);
+End;
+
 Procedure TProjectAssistantForm.AttachmentImageDblClick(Sender: TObject);
 Begin
-  If Sender Is TControl Then PreviewComposerImage(TControl(Sender).Tag);
+  If Sender Is TControl Then
+    Begin
+      SelectComposerImage(TControl(Sender).Tag);
+      PreviewComposerImage(TControl(Sender).Tag);
+    End;
 End;
 
 Procedure TProjectAssistantForm.AttachImageActionExecute(Sender: TObject);

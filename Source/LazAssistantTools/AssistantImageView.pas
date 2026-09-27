@@ -10,7 +10,7 @@ Unit AssistantImageView;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ActnList,
+  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, ActnList,
   AssistantTrace;
 
 Type
@@ -19,7 +19,6 @@ Type
     CloseAction: TAction;
     ImageScroll: TScrollBox;
     ImagePaint: TPaintBox;
-    CloseButton: TButton;
     Procedure CloseActionExecute(Sender: TObject);
     Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure ImagePaintPaint(Sender: TObject);

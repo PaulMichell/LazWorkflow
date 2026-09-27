@@ -20,18 +20,9 @@ object AssistantImageView: TAssistantImageView
       OnExecute = CloseActionExecute
     end
   end
-  object CloseButton: TButton
-    Left = 0
-    Height = 32
-    Top = 388
-    Width = 560
-    Align = alBottom
-    Action = CloseAction
-    TabOrder = 1
-  end
   object ImageScroll: TScrollBox
     Left = 0
-    Height = 388
+    Height = 420
     Top = 0
     Width = 560
     Align = alClient
