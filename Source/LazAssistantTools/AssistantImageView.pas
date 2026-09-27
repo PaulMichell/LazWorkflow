@@ -294,9 +294,11 @@ Begin
   Color := PreviewBackdrop;
   If Assigned(ImageScroll) Then
     Begin
+      { The picture area is painted dark grey. The scroll box itself stays white
+        so a scrollbar track is not the same colour as its thumb. }
       ImageScroll.ParentColor := False;
       ImageScroll.ParentBackground := False;
-      ImageScroll.Color := PreviewBackdrop;
+      ImageScroll.Color := clWhite;
     End;
 End;
 

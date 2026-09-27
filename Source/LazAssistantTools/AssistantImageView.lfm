@@ -57,7 +57,7 @@ object AssistantImageView: TAssistantImageView
     Width = 560
     Align = alClient
     AutoScroll = True
-    Color = 4210752
+    Color = clWhite
     ParentBackground = False
     ParentColor = False
     PopupMenu = ZoomPopup
