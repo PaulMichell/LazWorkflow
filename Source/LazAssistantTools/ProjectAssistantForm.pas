@@ -255,7 +255,7 @@ Type
     Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
-    FComposerSelectedIndex: Integer; { Thumbnail outlined when more than one picture is attached. }
+    FComposerSelectedIndex: Integer; { Outlined thumbnail. -1 when the strip is empty. }
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
     FPasteComposerBusy: Boolean;
@@ -4584,7 +4584,7 @@ Begin
     Begin
       If Not (AttachmentStrip.Controls[I] Is TPanel) Then Continue;
       Frame := TPanel(AttachmentStrip.Controls[I]);
-      Selected := (AttachmentStrip.ControlCount > 1) And (Frame.Tag = FComposerSelectedIndex);
+      Selected := (FComposerSelectedIndex >= 0) And (Frame.Tag = FComposerSelectedIndex);
       Frame.ParentBackground := Not Selected;
       Frame.ParentColor := Not Selected;
       If Selected Then
@@ -4602,7 +4602,7 @@ Var
   Refs: TAssistantImageRefArray;
 Begin
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
-  If Length(Refs) < 2 Then
+  If Length(Refs) < 1 Then
     FComposerSelectedIndex := -1
   Else If (Index >= 0) And (Index <= High(Refs)) Then
     FComposerSelectedIndex := Index
@@ -4666,7 +4666,7 @@ Begin
         Control.Free;
       End;
     ParseAssistantImageRefs(FComposerImagesJson, Refs);
-    If Length(Refs) < 2 Then
+    If Length(Refs) < 1 Then
       FComposerSelectedIndex := -1
     Else If (FComposerSelectedIndex < 0) Or (FComposerSelectedIndex > High(Refs)) Then
       FComposerSelectedIndex := 0;

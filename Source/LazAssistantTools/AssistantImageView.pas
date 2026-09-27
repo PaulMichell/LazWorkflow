@@ -1,6 +1,9 @@
 Unit AssistantImageView;
 
-{ Scrollable 1:1 view of a stored conversation image (c) 2026 Michell Computing. }
+{ Sizable view of a stored conversation image (c) 2026 Michell Computing.
+
+  Opens fitted to the current monitor. An image larger than that monitor is
+  halved until it fits. Zoom lives on the picture popup. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,23 +13,48 @@ Unit AssistantImageView;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, ActnList,
+  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, ActnList, Menus,
   AssistantTrace;
 
 Type
   TAssistantImageView = Class(TForm)
     ActionList: TActionList;
     CloseAction: TAction;
+    ZoomOutAction: TAction;
+    ZoomInAction: TAction;
+    ZoomActualAction: TAction;
     ImageScroll: TScrollBox;
     ImagePaint: TPaintBox;
+    ZoomPopup: TPopupMenu;
+    ZoomOutItem: TMenuItem;
+    ZoomInItem: TMenuItem;
+    ZoomActualItem: TMenuItem;
     Procedure CloseActionExecute(Sender: TObject);
     Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+    Procedure FormResize(Sender: TObject);
+    Procedure FormShow(Sender: TObject);
     Procedure ImagePaintPaint(Sender: TObject);
+    Procedure ZoomOutActionExecute(Sender: TObject);
+    Procedure ZoomInActionExecute(Sender: TObject);
+    Procedure ZoomActualActionExecute(Sender: TObject);
+    Procedure ZoomPopupPopup(Sender: TObject);
   Private
     Picture: TPortableNetworkGraphic;
     FMissingCaption: String;
+    FZoom: Double;
+    FDisplayWidth: Integer;
+    FDisplayHeight: Integer;
+    FDrawLeft: Integer;
+    FDrawTop: Integer;
+    FPlacing: Boolean;
     Procedure ReleasePicture;
-    Procedure ApplyExtent(ImageWidth, ImageHeight: Integer);
+    Procedure ApplyBackdrop;
+    Function ActualDisplaySize(Out ActualWidth, ActualHeight: Integer): Boolean;
+    Function PreviewMonitorWorkArea(Out Work: TRect): Boolean;
+    Procedure SetZoom(NewZoom: Double);
+    Procedure PlaceDisplayedImage;
+    Procedure FitWindowToImage;
+    Procedure UpdateZoomActions;
   Public
     Destructor Destroy; Override;
     Procedure LoadImage(Const ProjectRoot: String; Const Ref: TTraceImageRef);
@@ -47,7 +75,12 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LCLType, Clipbrd, FPImage, FPWritePNG, AssistantImages;
+  Math, LCLType, Clipbrd, FPImage, FPWritePNG, AssistantImages;
+
+Const
+  PreviewBackdrop = TColor($404040);
+  PreviewMinZoom = 1.0 / 64;
+  PreviewMaxZoom = 16;
 
 Procedure ForceOpaqueIfBlank(Img: TFPCustomImage);
 Var
@@ -74,18 +107,6 @@ Begin
   Result := Control.Font.PixelsPerInch;
   If Result < 1 Then Result := Screen.PixelsPerInch;
   If Result < 1 Then Result := 96;
-End;
-
-Function ImageViewExtent(ImageWidth, ImageHeight, PixelsPerInch: Integer; Out DisplayWidth, DisplayHeight: Integer): Boolean;
-Var
-  NativeW: Integer;
-Begin
-  DisplayWidth := 0;
-  DisplayHeight := 0;
-  If PixelsPerInch < 1 Then PixelsPerInch := 96;
-  NativeW := Round(Int64(ImageWidth) * PixelsPerInch / 96);
-  If NativeW < 1 Then NativeW := 1;
-  Result := ScaledImageExtent(ImageWidth, ImageHeight, NativeW, PixelsPerInch, DisplayWidth, DisplayHeight);
 End;
 
 Function AttachmentSaveName(Const Name, Id: String): String;
@@ -268,19 +289,183 @@ Begin
   FreeAndNil(Picture);
 End;
 
-Procedure TAssistantImageView.ApplyExtent(ImageWidth, ImageHeight: Integer);
-Var
-  PPI, DisplayW, DisplayH: Integer;
+Procedure TAssistantImageView.ApplyBackdrop;
 Begin
-  PPI := PixelsPerInchOf(Self);
-  If Not ImageViewExtent(ImageWidth, ImageHeight, PPI, DisplayW, DisplayH) Then
+  Color := PreviewBackdrop;
+  If Assigned(ImageScroll) Then
     Begin
-      DisplayW := 240;
-      DisplayH := MissingImageTileHeight(PPI);
+      ImageScroll.ParentColor := False;
+      ImageScroll.ParentBackground := False;
+      ImageScroll.Color := PreviewBackdrop;
     End;
-  If DisplayW < 1 Then DisplayW := 1;
-  If DisplayH < 1 Then DisplayH := 1;
-  ImagePaint.SetBounds(0, 0, DisplayW, DisplayH);
+End;
+
+Function TAssistantImageView.ActualDisplaySize(Out ActualWidth, ActualHeight: Integer): Boolean;
+Var
+  PPI: Integer;
+Begin
+  ActualWidth := 0;
+  ActualHeight := 0;
+  Result := Assigned(Picture) And (Picture.Width > 0) And (Picture.Height > 0);
+  If Not Result Then Exit;
+  PPI := PixelsPerInchOf(Self);
+  ActualWidth := Round(Int64(Picture.Width) * PPI / 96);
+  ActualHeight := Round(Int64(Picture.Height) * PPI / 96);
+  If ActualWidth < 1 Then ActualWidth := 1;
+  If ActualHeight < 1 Then ActualHeight := 1;
+End;
+
+Function TAssistantImageView.PreviewMonitorWorkArea(Out Work: TRect): Boolean;
+Var
+  Current: TMonitor;
+Begin
+  Work := Rect(0, 0, 800, 600);
+  Result := False;
+  Current := Nil;
+  If Assigned(Screen) And (Screen.MonitorCount > 0) Then
+    Begin
+      Current := Screen.MonitorFromPoint(Mouse.CursorPos, mdNearest);
+      If Not Assigned(Current) Then Current := Screen.PrimaryMonitor;
+    End;
+  If Not Assigned(Current) Then Exit;
+  Work := Current.WorkareaRect;
+  Result := (Work.Right > Work.Left) And (Work.Bottom > Work.Top);
+End;
+
+Procedure TAssistantImageView.SetZoom(NewZoom: Double);
+Var
+  ActualW, ActualH: Integer;
+Begin
+  If NewZoom < PreviewMinZoom Then NewZoom := PreviewMinZoom;
+  If NewZoom > PreviewMaxZoom Then NewZoom := PreviewMaxZoom;
+  FZoom := NewZoom;
+  If Not ActualDisplaySize(ActualW, ActualH) Then Exit;
+  FDisplayWidth := Max(1, Round(ActualW * FZoom));
+  FDisplayHeight := Max(1, Round(ActualH * FZoom));
+  PlaceDisplayedImage;
+  UpdateZoomActions;
+End;
+
+Procedure TAssistantImageView.PlaceDisplayedImage;
+Var
+  ViewW, ViewH, BoxW, BoxH: Integer;
+Begin
+  If Not Assigned(ImageScroll) Or Not Assigned(ImagePaint) Then Exit;
+  ImageScroll.AutoScroll := False;
+  ViewW := ImageScroll.ClientWidth;
+  ViewH := ImageScroll.ClientHeight;
+  If ViewW < 1 Then ViewW := 1;
+  If ViewH < 1 Then ViewH := 1;
+  If (FDisplayWidth < 1) Or (FDisplayHeight < 1) Then
+    Begin
+      FDrawLeft := 8;
+      FDrawTop := 8;
+      BoxW := ViewW;
+      BoxH := ViewH;
+    End
+  Else If (FDisplayWidth <= ViewW) And (FDisplayHeight <= ViewH) Then
+    Begin
+      FDrawLeft := (ViewW - FDisplayWidth) Div 2;
+      FDrawTop := (ViewH - FDisplayHeight) Div 2;
+      BoxW := ViewW;
+      BoxH := ViewH;
+    End
+  Else
+    Begin
+      ImageScroll.AutoScroll := True;
+      If FDisplayWidth < ViewW Then
+        Begin
+          FDrawLeft := (ViewW - FDisplayWidth) Div 2;
+          BoxW := ViewW;
+        End
+      Else
+        Begin
+          FDrawLeft := 0;
+          BoxW := FDisplayWidth;
+        End;
+      If FDisplayHeight < ViewH Then
+        Begin
+          FDrawTop := (ViewH - FDisplayHeight) Div 2;
+          BoxH := ViewH;
+        End
+      Else
+        Begin
+          FDrawTop := 0;
+          BoxH := FDisplayHeight;
+        End;
+    End;
+  ImagePaint.SetBounds(0, 0, BoxW, BoxH);
+  ImagePaint.Invalidate;
+End;
+
+Procedure TAssistantImageView.FitWindowToImage;
+Var
+  Work: TRect;
+  FrameW, FrameH, MaxW, MaxH, ActualW, ActualH, DispW, DispH, Margin, ClientW, ClientH: Integer;
+  Zoom: Double;
+Begin
+  If Not PreviewMonitorWorkArea(Work) Then Exit;
+  HandleNeeded;
+  ApplyBackdrop;
+  FrameW := Width - ClientWidth;
+  FrameH := Height - ClientHeight;
+  If FrameW < 0 Then FrameW := 0;
+  If FrameH < 0 Then FrameH := 0;
+  Margin := 16;
+  MaxW := Work.Width - FrameW - Margin * 2;
+  MaxH := Work.Height - FrameH - Margin * 2;
+  If MaxW < 64 Then MaxW := 64;
+  If MaxH < 64 Then MaxH := 64;
+  If Not ActualDisplaySize(ActualW, ActualH) Then
+    Begin
+      FZoom := 1;
+      FDisplayWidth := 240;
+      FDisplayHeight := MissingImageTileHeight(PixelsPerInchOf(Self));
+      If FDisplayHeight < 48 Then FDisplayHeight := 48;
+    End
+  Else
+    Begin
+      Zoom := 1;
+      DispW := ActualW;
+      DispH := ActualH;
+      While ((DispW > MaxW) Or (DispH > MaxH)) And (Zoom * 0.5 >= PreviewMinZoom) Do
+        Begin
+          Zoom := Zoom * 0.5;
+          DispW := Max(1, Round(ActualW * Zoom));
+          DispH := Max(1, Round(ActualH * Zoom));
+        End;
+      FZoom := Zoom;
+      FDisplayWidth := Max(1, DispW);
+      FDisplayHeight := Max(1, DispH);
+    End;
+  ClientW := FDisplayWidth;
+  ClientH := FDisplayHeight;
+  If ClientW > MaxW Then ClientW := MaxW;
+  If ClientH > MaxH Then ClientH := MaxH;
+  If ClientW < 32 Then ClientW := 32;
+  If ClientH < 32 Then ClientH := 32;
+  FPlacing := True;
+  Try
+    Position := poDesigned;
+    ClientWidth := ClientW;
+    ClientHeight := ClientH;
+    Left := Work.Left + (Work.Width - Width) Div 2;
+    Top := Work.Top + (Work.Height - Height) Div 2;
+  Finally
+    FPlacing := False;
+  End;
+  PlaceDisplayedImage;
+  UpdateZoomActions;
+End;
+
+Procedure TAssistantImageView.UpdateZoomActions;
+Var
+  HasPicture: Boolean;
+Begin
+  HasPicture := Assigned(Picture) And (Picture.Width > 0) And (Picture.Height > 0);
+  If Assigned(ZoomOutAction) Then ZoomOutAction.Enabled := HasPicture And (FZoom * 0.5 >= PreviewMinZoom - 0.0001);
+  If Assigned(ZoomInAction) Then ZoomInAction.Enabled := HasPicture And (FZoom * 2 <= PreviewMaxZoom + 0.0001);
+  If Assigned(ZoomActualAction) Then ZoomActualAction.Enabled := HasPicture And (Abs(FZoom - 1) > 0.001);
 End;
 
 Destructor TAssistantImageView.Destroy;
@@ -296,22 +481,22 @@ Var
 Begin
   ReleasePicture;
   FMissingCaption := '';
+  FZoom := 1;
   Caption := AttachmentSaveName(Ref.Name, Ref.Id);
   HandleNeeded;
+  ApplyBackdrop;
   If Not LoadDisplayImage(ProjectRoot, Ref, Img, ErrorText) Then
     Begin
       FMissingCaption := MissingImageTileCaption(Ref);
-      ApplyExtent(0, 0);
-      ImagePaint.Invalidate;
+      FitWindowToImage;
       Exit;
     End;
   Try
     Picture := GraphicFromImage(Img);
-    ApplyExtent(Img.Width, Img.Height);
   Finally
     Img.Free;
   End;
-  ImagePaint.Invalidate;
+  FitWindowToImage;
 End;
 
 Procedure TAssistantImageView.CloseActionExecute(Sender: TObject);
@@ -329,24 +514,56 @@ Begin
     End;
 End;
 
+Procedure TAssistantImageView.FormResize(Sender: TObject);
+Begin
+  If Not FPlacing Then PlaceDisplayedImage;
+End;
+
+Procedure TAssistantImageView.FormShow(Sender: TObject);
+Begin
+  { The title frame is known only after the window is mapped. Fit again so a
+    large picture still sits inside the monitor. }
+  FitWindowToImage;
+End;
+
+Procedure TAssistantImageView.ZoomOutActionExecute(Sender: TObject);
+Begin
+  SetZoom(FZoom * 0.5);
+End;
+
+Procedure TAssistantImageView.ZoomInActionExecute(Sender: TObject);
+Begin
+  SetZoom(FZoom * 2);
+End;
+
+Procedure TAssistantImageView.ZoomActualActionExecute(Sender: TObject);
+Begin
+  SetZoom(1);
+End;
+
+Procedure TAssistantImageView.ZoomPopupPopup(Sender: TObject);
+Begin
+  UpdateZoomActions;
+End;
+
 Procedure TAssistantImageView.ImagePaintPaint(Sender: TObject);
 Var
   Dest: TRect;
 Begin
   ImagePaint.Canvas.Brush.Style := bsSolid;
-  ImagePaint.Canvas.Brush.Color := clWindow;
+  ImagePaint.Canvas.Brush.Color := PreviewBackdrop;
   ImagePaint.Canvas.FillRect(ImagePaint.ClientRect);
-  If Assigned(Picture) And (Picture.Width > 0) And (Picture.Height > 0) Then
+  If Assigned(Picture) And (FDisplayWidth > 0) And (FDisplayHeight > 0) Then
     Begin
-      Dest := Rect(0, 0, ImagePaint.Width, ImagePaint.Height);
+      Dest := Rect(FDrawLeft, FDrawTop, FDrawLeft + FDisplayWidth, FDrawTop + FDisplayHeight);
       ImagePaint.Canvas.StretchDraw(Dest, Picture);
     End
   Else If FMissingCaption <> '' Then
     Begin
       ImagePaint.Canvas.Brush.Style := bsClear;
       ImagePaint.Canvas.Font.Assign(Font);
-      ImagePaint.Canvas.Font.Color := clGrayText;
-      ImagePaint.Canvas.TextOut(8, 8, FMissingCaption);
+      ImagePaint.Canvas.Font.Color := clSilver;
+      ImagePaint.Canvas.TextOut(FDrawLeft, FDrawTop, FMissingCaption);
     End;
 End;
 
