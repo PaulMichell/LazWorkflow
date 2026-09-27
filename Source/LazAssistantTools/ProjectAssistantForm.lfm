@@ -221,12 +221,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       ChildSizing.TopBottomSpacing = 4
       ChildSizing.HorizontalSpacing = 4
       ChildSizing.VerticalSpacing = 4
-      ChildSizing.EnlargeHorizontal = crsHomogenousSpaceResize
-      ChildSizing.EnlargeVertical = crsHomogenousSpaceResize
-      ChildSizing.ShrinkHorizontal = crsHomogenousSpaceResize
-      ChildSizing.ShrinkVertical = crsHomogenousSpaceResize
-      ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 8
+      ChildSizing.Layout = cclNone
       ClientHeight = 80
       ClientWidth = 960
       PopupMenu = AttachmentPopup

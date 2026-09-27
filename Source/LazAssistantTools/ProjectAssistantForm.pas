@@ -334,6 +334,7 @@ Type
     Function ComposerChromeHeight: Integer;
     Procedure PlaceComposerChildren;
     Procedure RefreshComposerImages;
+    Procedure PlaceComposerThumbnails;
     Function AttachmentStripHeight: Integer;
     Function ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
     Procedure RemoveComposerImageAt(Index: Integer);
@@ -4351,6 +4352,7 @@ Begin
       Else
         AttachmentStrip.SetBounds(0, Y, BandWidth, 0);
       If StripHeight > 0 Then Y := AttachmentStrip.Top;
+      PlaceComposerThumbnails;
     End;
   If Assigned(InputPanel) Then
     Begin
@@ -4537,8 +4539,33 @@ End;
 
 Function TProjectAssistantForm.AttachmentStripHeight: Integer;
 Begin
-  { 4px padding, a 72px picture, 4px padding. No caption and no button. }
+  { 4px padding, a 72px thumbnail, 4px padding. }
   Result := Scale96ToForm(80);
+End;
+
+Procedure TProjectAssistantForm.PlaceComposerThumbnails;
+Var
+  I, Gap, Side, X: Integer;
+  Control: TControl;
+Begin
+  If Not Assigned(AttachmentStrip) Then Exit;
+  { ChildSizing would give the only picture the whole strip. Keep a fixed tile. }
+  AttachmentStrip.ChildSizing.Layout := cclNone;
+  Gap := Scale96ToForm(4);
+  Side := Scale96ToForm(72);
+  X := Gap;
+  For I := 0 To AttachmentStrip.ControlCount - 1 Do
+    Begin
+      Control := AttachmentStrip.Controls[I];
+      Control.Align := alNone;
+      Control.Anchors := [akLeft, akTop];
+      Control.Constraints.MinWidth := Side;
+      Control.Constraints.MaxWidth := Side;
+      Control.Constraints.MinHeight := Side;
+      Control.Constraints.MaxHeight := Side;
+      Control.SetBounds(X, Gap, Side, Side);
+      X := X + Side + Gap;
+    End;
 End;
 
 Function TProjectAssistantForm.ComposerImageIndexUnder(Const ScreenPoint: TPoint): Integer;
@@ -4597,6 +4624,7 @@ Begin
     ParseAssistantImageRefs(FComposerImagesJson, Refs);
     AttachmentStrip.Visible := Length(Refs) > 0;
     AttachmentStrip.PopupMenu := AttachmentPopup;
+    AttachmentStrip.ChildSizing.Layout := cclNone;
     If AttachmentStrip.Visible Then
       AttachmentStrip.Height := AttachmentStripHeight;
     If AttachmentStrip.Visible Then
@@ -4609,9 +4637,13 @@ Begin
             Thumb := TImage.Create(Nil);
             Thumb.Parent := AttachmentStrip;
             Thumb.Align := alNone;
+            Thumb.Anchors := [akLeft, akTop];
             Thumb.AutoSize := False;
-            Thumb.Width := Side;
-            Thumb.Height := Side;
+            Thumb.Constraints.MinWidth := Side;
+            Thumb.Constraints.MaxWidth := Side;
+            Thumb.Constraints.MinHeight := Side;
+            Thumb.Constraints.MaxHeight := Side;
+            Thumb.SetBounds(Scale96ToForm(4) + I * (Side + Scale96ToForm(4)), Scale96ToForm(4), Side, Side);
             Thumb.Tag := I;
             Thumb.ParentShowHint := False;
             Thumb.ShowHint := True;
