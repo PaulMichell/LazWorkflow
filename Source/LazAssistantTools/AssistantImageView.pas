@@ -3,7 +3,7 @@ Unit AssistantImageView;
 { Sizable view of a stored conversation image (c) 2026 Michell Computing.
 
   Opens fitted to the current monitor. An image larger than that monitor is
-  halved until it fits. Zoom lives on the picture popup. }
+  halved until it fits. Zoom lives on the picture popup and the mouse wheel. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -38,6 +38,7 @@ Type
     Procedure ZoomInActionExecute(Sender: TObject);
     Procedure ZoomActualActionExecute(Sender: TObject);
     Procedure ZoomPopupPopup(Sender: TObject);
+    Procedure PreviewMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
   Private
     Picture: TPortableNetworkGraphic;
     FMissingCaption: String;
@@ -47,6 +48,7 @@ Type
     FDrawLeft: Integer;
     FDrawTop: Integer;
     FPlacing: Boolean;
+    FWheelRemain: Integer;
     Procedure ReleasePicture;
     Procedure ApplyBackdrop;
     Function ActualDisplaySize(Out ActualWidth, ActualHeight: Integer): Boolean;
@@ -546,6 +548,25 @@ End;
 Procedure TAssistantImageView.ZoomPopupPopup(Sender: TObject);
 Begin
   UpdateZoomActions;
+End;
+
+Procedure TAssistantImageView.PreviewMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint;
+  Var Handled: Boolean);
+Begin
+  Handled := True;
+  If Not Assigned(Picture) Then Exit;
+  { One menu step per notch. A precise wheel may send a smaller delta. }
+  FWheelRemain := FWheelRemain + WheelDelta;
+  While FWheelRemain >= 120 Do
+    Begin
+      FWheelRemain := FWheelRemain - 120;
+      ZoomInActionExecute(Sender);
+    End;
+  While FWheelRemain <= -120 Do
+    Begin
+      FWheelRemain := FWheelRemain + 120;
+      ZoomOutActionExecute(Sender);
+    End;
 End;
 
 Procedure TAssistantImageView.ImagePaintPaint(Sender: TObject);

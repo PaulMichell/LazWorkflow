@@ -13,6 +13,7 @@ object AssistantImageView: TAssistantImageView
   Position = poDesigned
   LCLVersion = '3.0'
   OnKeyDown = FormKeyDown
+  OnMouseWheel = PreviewMouseWheel
   OnResize = FormResize
   OnShow = FormShow
   object ActionList: TActionList
@@ -62,12 +63,14 @@ object AssistantImageView: TAssistantImageView
     ParentColor = False
     PopupMenu = ZoomPopup
     TabOrder = 0
+    OnMouseWheel = PreviewMouseWheel
     object ImagePaint: TPaintBox
       Left = 0
       Height = 32
       Top = 0
       Width = 32
       PopupMenu = ZoomPopup
+      OnMouseWheel = PreviewMouseWheel
       OnPaint = ImagePaintPaint
     end
   end
