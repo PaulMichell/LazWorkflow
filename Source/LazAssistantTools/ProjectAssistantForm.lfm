@@ -308,6 +308,22 @@ object ProjectAssistantForm: TProjectAssistantForm
           end
         end
       end
+      object SidebarPages: TPageControl
+        Left = 0
+        Height = 492
+        Top = 72
+        Width = 300
+        ActivePage = HistorySheet
+        Align = alClient
+        TabIndex = 0
+        TabOrder = 1
+        object HistorySheet: TTabSheet
+          Caption = 'History'
+        end
+        object PlanSheet: TTabSheet
+          Caption = 'Plan'
+        end
+      end
     end
     object ModeSplitter: TSplitter
       Left = 300

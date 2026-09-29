@@ -22,7 +22,7 @@ Unit ProjectAssistantForm;
 Interface
 
 Uses
-  Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls,
+  Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls, ComCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantCommands, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
@@ -106,6 +106,9 @@ Type
     ModePicker: TPanel;
     ModeLabel: TLabel;
     ModeCombo: TComboBox;
+    SidebarPages: TPageControl;
+    HistorySheet: TTabSheet;
+    PlanSheet: TTabSheet;
     ModeSplitter: TSplitter;
     ConversationPanel: TPanel;
     HistoryLabel: TLabel;
