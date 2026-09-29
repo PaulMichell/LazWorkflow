@@ -14,18 +14,18 @@ object ProjectAssistantForm: TProjectAssistantForm
   OnShow = FormShow
   object ComposerStack: TPanel
     Left = 0
-    Height = 133
-    Top = 567
+    Height = 58
+    Top = 642
     Width = 960
     Align = alBottom
     BevelOuter = bvNone
-    ClientHeight = 133
+    ClientHeight = 58
     ClientWidth = 960
     TabOrder = 1
     inline StatusFooter: TStatusFooterFrame
       Left = 0
       Height = 22
-      Top = 111
+      Top = 36
       Width = 960
       Align = alNone
       TabOrder = 3
@@ -33,7 +33,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     object BottomBar: TPanel
       Left = 0
       Height = 36
-      Top = 75
+      Top = 0
       Width = 960
       Align = alNone
     BevelOuter = bvNone
@@ -146,88 +146,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnClick = AutoNewChatCheckClick
     end
   end
-    object InputPanel: TPanel
-      Left = 0
-      Height = 75
-      Top = 0
-      Width = 960
-      Align = alNone
-    BevelOuter = bvNone
-    ClientHeight = 75
-    ClientWidth = 960
-    TabOrder = 0
-    object PlanOfferBar: TPanel
-      Left = 0
-      Height = 28
-      Top = 0
-      Width = 960
-      Align = alTop
-      BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 4
-      ChildSizing.TopBottomSpacing = 2
-      ChildSizing.HorizontalSpacing = 8
-      ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 6
-      ClientHeight = 28
-      ClientWidth = 960
-      TabOrder = 1
-      Visible = False
-      object PlanOfferLabel: TLabel
-        Left = 4
-        Height = 28
-        Top = 2
-        Width = 77
-        Caption = 'Plan written.'
-        Layout = tlCenter
-        ParentColor = False
-      end
-      object BuildThisButton: TButton
-        Left = 89
-        Height = 28
-        Top = 2
-        Width = 73
-        Action = BuildThisAction
-        AutoSize = True
-        TabOrder = 0
-      end
-      object RevisePlanButton: TButton
-        Left = 170
-        Height = 28
-        Top = 2
-        Width = 53
-        Action = RevisePlanAction
-        AutoSize = True
-        TabOrder = 1
-      end
-    end
-    object InputMemo: TSpellMemo
-      Left = 6
-      Height = 35
-      Top = 34
-      Width = 948
-      Align = alClient
-      BorderSpacing.Around = 6
-      TabOrder = 0
-    end
-  end
-    object AttachmentStrip: TPanel
-      Left = 0
-      Height = 80
-      Top = 75
-      Width = 960
-      Align = alNone
-      BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 4
-      ChildSizing.TopBottomSpacing = 4
-      ChildSizing.HorizontalSpacing = 4
-      ChildSizing.VerticalSpacing = 4
-      ChildSizing.Layout = cclNone
-      ClientHeight = 80
-      ClientWidth = 960
-      PopupMenu = AttachmentPopup
-      TabOrder = 2
-      Visible = False
-    end
   end
   object ClientPanel: TPanel
     Left = 0
@@ -240,11 +158,11 @@ object ProjectAssistantForm: TProjectAssistantForm
     ClientWidth = 960
     TabOrder = 0
     object ModeSidePanel: TPanel
-      Left = 0
-      Height = 564
+      Left = 660
+      Height = 642
       Top = 0
       Width = 300
-      Align = alLeft
+      Align = alRight
       BevelOuter = bvNone
       ClientHeight = 564
       ClientWidth = 300
@@ -449,33 +367,139 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object ModeSplitter: TSplitter
-      Left = 300
-      Height = 516
+      Left = 655
+      Height = 642
       Top = 0
       Width = 5
+      Align = alRight
+      ResizeAnchor = akRight
     end
-    object ChatHost: TPanel
-      Left = 309
-      Height = 508
-      Top = 4
-      Width = 402
+    object ConversationColumn: TPanel
+      Left = 0
+      Height = 642
+      Top = 0
+      Width = 655
       Align = alClient
-      BorderSpacing.Around = 4
       BevelOuter = bvNone
-      Color = clWhite
-      ParentBackground = False
-      ParentColor = False
+      ClientHeight = 642
+      ClientWidth = 655
       TabOrder = 1
+      object PromptHost: TPanel
+        Left = 0
+        Height = 75
+        Top = 564
+        Width = 655
+        Align = alBottom
+        BevelOuter = bvNone
+        ClientHeight = 75
+        ClientWidth = 655
+        TabOrder = 0
+        object InputPanel: TPanel
+          Left = 0
+          Height = 75
+          Top = 0
+          Width = 655
+          Align = alClient
+          BevelOuter = bvNone
+          ClientHeight = 75
+          ClientWidth = 655
+          TabOrder = 0
+          object PlanOfferBar: TPanel
+            Left = 0
+            Height = 28
+            Top = 0
+            Width = 655
+            Align = alTop
+            BevelOuter = bvNone
+            ChildSizing.LeftRightSpacing = 4
+            ChildSizing.TopBottomSpacing = 2
+            ChildSizing.HorizontalSpacing = 8
+            ChildSizing.Layout = cclLeftToRightThenTopToBottom
+            ChildSizing.ControlsPerLine = 6
+            ClientHeight = 28
+            ClientWidth = 655
+            TabOrder = 1
+            Visible = False
+            object PlanOfferLabel: TLabel
+              Left = 4
+              Height = 28
+              Top = 2
+              Width = 77
+              Caption = 'Plan written.'
+              Layout = tlCenter
+              ParentColor = False
+            end
+            object BuildThisButton: TButton
+              Left = 89
+              Height = 28
+              Top = 2
+              Width = 73
+              Action = BuildThisAction
+              AutoSize = True
+              TabOrder = 0
+            end
+            object RevisePlanButton: TButton
+              Left = 170
+              Height = 28
+              Top = 2
+              Width = 53
+              Action = RevisePlanAction
+              AutoSize = True
+              TabOrder = 1
+            end
+          end
+          object InputMemo: TSpellMemo
+            Left = 6
+            Height = 35
+            Top = 34
+            Width = 643
+            Align = alClient
+            BorderSpacing.Around = 6
+            TabOrder = 0
+          end
+        end
+        object AttachmentStrip: TPanel
+          Left = 0
+          Height = 80
+          Top = 75
+          Width = 655
+          Align = alBottom
+          BevelOuter = bvNone
+          ChildSizing.LeftRightSpacing = 4
+          ChildSizing.TopBottomSpacing = 4
+          ChildSizing.HorizontalSpacing = 4
+          ChildSizing.VerticalSpacing = 4
+          ChildSizing.Layout = cclNone
+          ClientHeight = 80
+          ClientWidth = 655
+          PopupMenu = AttachmentPopup
+          TabOrder = 1
+          Visible = False
+        end
+      end
+      object PromptSplitter: TSplitter
+        Cursor = crVSplit
+        Left = 0
+        Height = 5
+        Top = 559
+        Width = 655
+        Align = alBottom
+        ResizeAnchor = akBottom
+      end
+      object ChatHost: TPanel
+        Left = 0
+        Height = 559
+        Top = 0
+        Width = 655
+        Align = alClient
+        BorderSpacing.Around = 4
+        BevelOuter = bvNone
+        Color = clWhite
+        ParentBackground = False
+        ParentColor = False
+        TabOrder = 2
+      end
     end
-  end
-  object PromptSplitter: TSplitter
-    Cursor = crVSplit
-    Left = 0
-    Height = 3
-    Top = 564
-    Width = 960
-    Align = alBottom
-    ResizeAnchor = akBottom
   end
   object ActionList: TActionList
     Left = 40

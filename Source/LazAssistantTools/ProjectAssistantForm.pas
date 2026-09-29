@@ -1,6 +1,6 @@
 Unit ProjectAssistantForm;
 
-{ Project Assistant main window — shared turn view, mode side panel, status footer (c) 2026 Michell Computing.
+{ Project Assistant main window — conversation and prompt on the left, sidebar on the right (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
   history, plan/build tiles, send/steer, and catalog wiring as one form.
@@ -110,6 +110,8 @@ Type
     HistorySheet: TTabSheet;
     PlanSheet: TTabSheet;
     ModeSplitter: TSplitter;
+    ConversationColumn: TPanel;
+    PromptHost: TPanel;
     HistoryLabel: TLabel;
     HistoryCombo: TComboBox;
     ExportHistoryButton: TButton;
@@ -221,6 +223,7 @@ Type
     Procedure PlanModeActionExecute(Sender: TObject);
     Procedure BuildModeActionExecute(Sender: TObject);
     Procedure ComposerStackResize(Sender: TObject);
+    Procedure PromptHostResize(Sender: TObject);
     Procedure InputMemoPaste(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
@@ -349,6 +352,7 @@ Type
     Procedure LayoutComposer;
     Function ComposerChromeHeight: Integer;
     Procedure PlaceComposerChildren;
+    Procedure PlacePromptChildren;
     Procedure RefreshComposerImages;
     Procedure PlaceComposerThumbnails;
     Procedure ApplyComposerImageSelection;
@@ -651,7 +655,7 @@ Begin
     SideBudget := 1;
   If ModeSidePanel.Width <= SideBudget Then
     Exit;
-  { Shrink only the combined sidebar when a saved or small window would squeeze out
+  { Shrink only the right-hand sidebar when a saved or small window would squeeze out
     the conversation. Ordinary splitter choices remain untouched until the form
     becomes too narrow. No large minimum window size is imposed. }
   ClientPanel.DisableAlign;
@@ -771,6 +775,10 @@ Begin
   ApplyInputPanelHeight;
   If Assigned(ComposerStack) Then
     ComposerStack.OnResize := @ComposerStackResize;
+  If Assigned(PromptHost) Then
+    PromptHost.OnResize := @PromptHostResize;
+  If Assigned(PromptSplitter) Then
+    PromptSplitter.MinSize := Scale96ToForm(48);
   EnsureChatView;
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
@@ -4611,16 +4619,14 @@ Begin
     Inc(Result, StatusFooter.Height)
   Else
     Inc(Result, Scale96ToForm(22));
-  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-    Inc(Result, AttachmentStripHeight);
 End;
 
 Procedure TProjectAssistantForm.PlaceComposerChildren;
 Var
-  Y, StripHeight, BandWidth: Integer;
+  Y, BandWidth: Integer;
 Begin
   { Align stays alNone. LCL sorts alBottom siblings by the current bottom edge,
-    so growing one of them docks the text under the status bar. }
+    so growing one of them docks the buttons under the status bar. }
   If Not Assigned(ComposerStack) Then Exit;
   BandWidth := ComposerStack.ClientWidth;
   If BandWidth < 1 Then BandWidth := ComposerStack.Width;
@@ -4634,9 +4640,20 @@ Begin
   If Assigned(BottomBar) Then
     Begin
       BottomBar.Align := alNone;
-      BottomBar.SetBounds(0, Y - BottomBar.Height, BandWidth, BottomBar.Height);
-      Y := BottomBar.Top;
+      BottomBar.SetBounds(0, 0, BandWidth, Y);
     End;
+End;
+
+Procedure TProjectAssistantForm.PlacePromptChildren;
+Var
+  Y, StripHeight, BandWidth: Integer;
+Begin
+  { The memo and its pictures stay in the left column. Align is not used here:
+    showing the picture strip must not push the memo out of the column. }
+  If Not Assigned(PromptHost) Then Exit;
+  BandWidth := PromptHost.ClientWidth;
+  If BandWidth < 1 Then BandWidth := PromptHost.Width;
+  Y := PromptHost.ClientHeight;
   StripHeight := 0;
   If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
     StripHeight := AttachmentStripHeight;
@@ -4660,7 +4677,7 @@ End;
 
 Procedure TProjectAssistantForm.LayoutComposer;
 Var
-  StackHeight: Integer;
+  StackHeight, PromptHeight: Integer;
 Begin
   If Not Assigned(ComposerStack) Or FComposerLayoutLock Then Exit;
   If csDestroying In ComponentState Then Exit;
@@ -4670,10 +4687,17 @@ Begin
     If FInputHeight < Scale96ToForm(48) Then FInputHeight := Scale96ToForm(75);
     If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
       AttachmentStrip.Height := AttachmentStripHeight;
-    StackHeight := FInputHeight + ComposerChromeHeight;
-    ComposerStack.Align := alBottom;
-    ComposerStack.SetBounds(0, ClientHeight - StackHeight, ClientWidth, StackHeight);
+    StackHeight := ComposerChromeHeight;
+    ComposerStack.Height := StackHeight;
     PlaceComposerChildren;
+    If Assigned(PromptHost) Then
+      Begin
+        PromptHeight := FInputHeight;
+        If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+          Inc(PromptHeight, AttachmentStripHeight);
+        PromptHost.Height := PromptHeight;
+        PlacePromptChildren;
+      End;
   Finally
     EnableAlign;
     FComposerLayoutLock := False;
@@ -4681,19 +4705,33 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.ComposerStackResize(Sender: TObject);
-Var
-  Available, Minimum: Integer;
 Begin
   If FComposerLayoutLock Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Then Exit;
-  If Not Assigned(ComposerStack) Then Exit;
+  FComposerLayoutLock := True;
+  Try
+    PlaceComposerChildren;
+  Finally
+    FComposerLayoutLock := False;
+  End;
+End;
+
+Procedure TProjectAssistantForm.PromptHostResize(Sender: TObject);
+Var
+  Available, Minimum, Strip: Integer;
+Begin
+  If FComposerLayoutLock Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Then Exit;
+  If Not Assigned(PromptHost) Then Exit;
   Minimum := Scale96ToForm(48);
   If FShowPlanOffer Then Inc(Minimum, Scale96ToForm(28));
-  Available := ComposerStack.ClientHeight - ComposerChromeHeight;
+  Strip := 0;
+  If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+    Strip := AttachmentStripHeight;
+  Available := PromptHost.ClientHeight - Strip;
   If Available < Minimum Then Available := Minimum;
   FInputHeight := Available;
   FComposerLayoutLock := True;
   Try
-    PlaceComposerChildren;
+    PlacePromptChildren;
   Finally
     FComposerLayoutLock := False;
   End;
