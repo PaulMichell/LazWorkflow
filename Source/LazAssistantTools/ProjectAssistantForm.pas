@@ -120,7 +120,7 @@ Type
     ConversationList: TListBox;
     ChatSplitter: TSplitter;
     ChatHost: TPanel;
-    { Plan workspace (runtime, left mode panel). }
+    { Plan file list (runtime, Plan sheet). }
     PlanPanel: TPanel;
     PlanActiveLabel: TLabel;
     PlanList: TListBox;
@@ -129,7 +129,7 @@ Type
     PlanSetActiveButton: TButton;
     PlanRefreshButton: TButton;
     PlanOpenDocsButton: TButton;
-    { Build work-package tiles (runtime, left panel; visible in every mode). }
+    { Build work-package tiles (runtime, Plan sheet). }
     BuildPanel: TPanel;
     BuildActiveLabel: TLabel;
     BuildTodoList: TListBox;
@@ -1346,11 +1346,16 @@ End;
 
 Procedure TProjectAssistantForm.PinSidebarHeader;
 Begin
-  { Plan panel is also alTop. Re-dock the header so Target and Mode stay above it. }
+  { Target and Mode stay above the History and Plan pages. }
   If Not Assigned(SidebarHeader) Then
     Exit;
   SidebarHeader.Align := alTop;
   SidebarHeader.Top := 0;
+  If Assigned(SidebarPages) Then
+    Begin
+      SidebarPages.Align := alClient;
+      SidebarPages.Top := SidebarHeader.Height;
+    End;
 End;
 
 Procedure TProjectAssistantForm.UpdateModeBadge;
@@ -1608,11 +1613,11 @@ Procedure TProjectAssistantForm.EnsurePlanTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(PlanPanel) Or (Not Assigned(ModeSidePanel)) Then
+  If Assigned(PlanPanel) Or (Not Assigned(PlanSheet)) Then
     Exit;
 
   PlanPanel := TPanel.Create(Self);
-  PlanPanel.Parent := ModeSidePanel;
+  PlanPanel.Parent := PlanSheet;
   PlanPanel.Align := alTop;
   PlanPanel.Height := 200;
   PlanPanel.BevelOuter := bvNone;
@@ -1851,11 +1856,11 @@ Procedure TProjectAssistantForm.EnsureBuildTabUi;
 Var
   Bar: TPanel;
 Begin
-  If Assigned(BuildPanel) Or (Not Assigned(ModeSidePanel)) Then
+  If Assigned(BuildPanel) Or (Not Assigned(PlanSheet)) Then
     Exit;
 
   BuildPanel := TPanel.Create(Self);
-  BuildPanel.Parent := ModeSidePanel;
+  BuildPanel.Parent := PlanSheet;
   BuildPanel.Align := alClient;
   BuildPanel.BevelOuter := bvNone;
   BuildPanel.BorderSpacing.Around := 8;
