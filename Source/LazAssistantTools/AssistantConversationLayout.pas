@@ -368,18 +368,11 @@ End;
 
 Procedure TConversationLayout.Reindex;
 Var
-  I, LastVisible, Gap: Integer;
+  I, LastVisible: Integer;
   Section: TConversationSection;
   H: Int64;
-  { A closed tool is only its grey header. The usual trailing gap would be white under that bar. }
-  Function TrailingGap(Item: TConversationSection): Integer;
-  Begin
-    If Item.Collapsed And (Item.Kind In [tbkTool, tbkSubagent]) Then Result := 0
-    Else Result := Gap;
-  End;
 Begin
   ResetHeights(Heights, Count, 0);
-  Gap := Round(10 * FPixelsPerInch / 96);
   LastVisible := -1;
   For I := 0 To Count - 1 Do
     Begin
@@ -402,10 +395,10 @@ Begin
       Else H := Section.FullHeight;
       If Section.Kind = tbkUser Then
         H := H + UserImageRowHeight(Section.Images, Max(1, Section.OuterWidth - Section.Padding * 2), FPixelsPerInch);
-      SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding * 2 + TrailingGap(Section));
+      SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding * 2 + Round(10 * FPixelsPerInch / 96));
       LastVisible := I;
     End;
-  If LastVisible >= 0 Then SetHeight(Heights, LastVisible, Heights.Values[LastVisible] - TrailingGap(Sections[LastVisible]));
+  If LastVisible >= 0 Then SetHeight(Heights, LastVisible, Heights.Values[LastVisible] - Round(10 * FPixelsPerInch / 96));
 End;
 
 Function TConversationLayout.BuildContent(Section: TConversationSection; Short: Boolean; BodyReady: Boolean): TStyledContent;
