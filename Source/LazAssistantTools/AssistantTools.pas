@@ -623,6 +623,11 @@ Var
   Body: String;
 Begin
   Case Mode Of
+    amChat:
+      Begin
+        Result := '';
+        Exit;
+      End;
     amPlan:
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
     amBuild:
@@ -633,8 +638,13 @@ Begin
     amInspect:
       Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson;
   Else
-    Body := BuildReadToolsJson;
+    Body := '';
   End;
+  If Body = '' Then
+    Begin
+      Result := '';
+      Exit;
+    End;
   If AllowSubagents Then
     Body := Body + ',' + BuildSpawnToolJson;
   Result := '[' + Body + ']';

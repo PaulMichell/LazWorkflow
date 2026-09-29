@@ -111,6 +111,7 @@ Begin
     Result := MaxSubagentToolRounds
   Else If Assigned(Svc) Then
     Case Svc.ActiveMode Of
+      amChat: Result := 1;
       amPlan: Result := MaxPlanToolRounds;
       amBuild: Result := MaxBuildToolRounds;
     Else

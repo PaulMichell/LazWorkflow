@@ -75,10 +75,11 @@ End;
 Function TAssistantHarness.ModeCaption(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
+    amChat: Result := 'Chat';
     amPlan: Result := 'Plan';
     amBuild: Result := 'Build';
   Else
-    Result := 'Ask';
+    Result := 'Inspect';
   End;
 End;
 
@@ -88,7 +89,7 @@ Begin
     '<work_policy>' + LineEnding +
     'Finish the user''s request. Do not stop at a plan or a description when the mode allows the work.' + LineEnding +
     'Do not claim a compile, edit, or file write succeeded unless a tool result in this turn shows it.' + LineEnding +
-    'Stay in the current mode''s tool gates. If the work needs a write you cannot do, say so and name Ask / Plan / Build.' + LineEnding +
+    'Stay in the current mode''s tool gates. If the work needs a write you cannot do, say so and name Inspect / Plan / Build.' + LineEnding +
     'Keep changes scoped to what was asked. Do not leave placeholders for unrelated work.' + LineEnding +
     '</work_policy>';
 End;
@@ -145,6 +146,10 @@ Begin
     PlanPath := 'Documents/Plan.md';
   Result := '<mode_overlay>' + LineEnding;
   Case Mode Of
+    amChat:
+      Result := Result +
+        'You are in **Chat**. This is a general conversation with no project tools and no skill.' + LineEnding +
+        'Do not claim you can read, search, or edit files.';
     amPlan:
       Result := Result +
         'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus.' + LineEnding +
@@ -291,6 +296,16 @@ Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; Const PinnedS
 Var
   Parts: TStringList;
 Begin
+  { Chat is a general conversation: no skill catalog, no skill body, no IDE or project rules. }
+  If Mode = amChat Then
+    Begin
+      Result :=
+        'You are a helpful assistant in a general chat.' + LineEnding +
+        'You have no project tools, no IDE access, and no attached skill.' + LineEnding +
+        'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
+        'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.';
+      Exit;
+    End;
   Parts := TStringList.Create;
   Try
     Parts.Add('You are the Lazarus Project Assistant (' + ModeCaption(Mode) + ' mode).');

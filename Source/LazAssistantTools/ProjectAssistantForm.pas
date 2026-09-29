@@ -5,7 +5,8 @@ Unit ProjectAssistantForm;
   Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
   history, plan/build tiles, send/steer, and catalog wiring as one form.
   Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
-  AssistantTraceView. Reviewed 2026-09-23: composer attach, paste, and drop
+  AssistantTraceView. Reviewed 2026-09-27: Chat is a fourth mode with no project
+  tools or skill; the mode bar is a label and combobox. Composer attach, paste, and drop
   stay here because they are streamed controls. The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
@@ -59,6 +60,7 @@ Type
     OpenPlanAction: TAction;
     BuildThisAction: TAction;
     RevisePlanAction: TAction;
+    ChatModeAction: TAction;
     InspectModeAction: TAction;
     PlanModeAction: TAction;
     BuildModeAction: TAction;
@@ -99,7 +101,9 @@ Type
     ContextBreakdownMenuItem: TMenuItem;
     SessionInfoMenuItem: TMenuItem;
     ModeBar: TPanel;
-    ModeGroup: TRadioGroup;
+    ModePicker: TPanel;
+    ModeLabel: TLabel;
+    ModeCombo: TComboBox;
     ModeBadge: TLabel;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
@@ -167,7 +171,7 @@ Type
     Procedure FormDestroy(Sender: TObject);
     Procedure FormShow(Sender: TObject);
     Procedure HistoryPanelResize(Sender: TObject);
-    Procedure ModeGroupClick(Sender: TObject);
+    Procedure ModeComboChange(Sender: TObject);
     Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
@@ -210,6 +214,7 @@ Type
     Procedure OpenPlanActionExecute(Sender: TObject);
     Procedure BuildThisActionExecute(Sender: TObject);
     Procedure RevisePlanActionExecute(Sender: TObject);
+    Procedure ChatModeActionExecute(Sender: TObject);
     Procedure InspectModeActionExecute(Sender: TObject);
     Procedure PlanModeActionExecute(Sender: TObject);
     Procedure BuildModeActionExecute(Sender: TObject);
@@ -300,6 +305,7 @@ Type
     HistoryIds: TStringList; { Parallel to HistoryCombo; '' = current conversation. }
     FHistoryUpdating: Boolean;
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
+    FSkipModePersist: Boolean; { True while restoring a saved mode, so SelectMode does not rewrite config. }
     FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
     FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
     BuildSections: TObjectList; { of TPlanSection for the Build progress list (not published). }
@@ -372,6 +378,8 @@ Type
     Function CurrentStreamDurationMs: Integer;
     Procedure FinishLiveTrace(Const SystemNote: String; DurationMs: Integer);
     Function CurrentModeFromUi: TAssistantMode;
+    Procedure EnsureModeComboItems;
+    Function ModeOfLoadedConversation: TAssistantMode;
     Procedure SelectMode(Mode: TAssistantMode);
     Procedure SyncModeUi;
     Procedure UpdateModeBadge;
@@ -506,7 +514,7 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
-    Procedure StartNewChat(KeepPlanAgent: Boolean = False);
+    Procedure StartNewChat(KeepPlanAgent: Boolean = False; UseChatDefault: Boolean = True);
     Procedure ReviewCompile;
     Procedure ReviewBuild;
     Procedure FixSelectedError;
@@ -568,7 +576,7 @@ Begin
   FDisplayThinkingMs := 0;
   FShowThinking := True;
   FShowToolUse := True;
-  ActiveMode := amInspect;
+  ActiveMode := amChat;
   FApplyingShellConfig := False;
   FModeLocked := False;
   FModeSticky := False;
@@ -611,6 +619,7 @@ Begin
   LoadConnectionSettings;
   FCatalog := TAssistantCatalog.Create;
   WorkflowEventBus.AddListener(Self);
+  SyncModeUi;
 End;
 
 Procedure TProjectAssistantForm.Resize;
@@ -1093,17 +1102,65 @@ Begin
     SetBusyCursor(False);
 End;
 
+Function ModeComboIndex(Mode: TAssistantMode): Integer;
+Begin
+  { Visual order: Chat, Inspect, Plan, Build. }
+  Case Mode Of
+    amInspect: Result := 1;
+    amPlan: Result := 2;
+    amBuild: Result := 3;
+  Else
+    Result := 0;
+  End;
+End;
+
 Function TProjectAssistantForm.CurrentModeFromUi: TAssistantMode;
 Begin
-  Result := amInspect;
-  If Not Assigned(ModeGroup) Then
+  Result := amChat;
+  If Not Assigned(ModeCombo) Then
     Exit;
-  Case ModeGroup.ItemIndex Of
-    1: Result := amPlan;
-    2: Result := amBuild;
+  Case ModeCombo.ItemIndex Of
+    1: Result := amInspect;
+    2: Result := amPlan;
+    3: Result := amBuild;
   Else
-    Result := amInspect;
+    Result := amChat;
   End;
+End;
+
+Procedure TProjectAssistantForm.EnsureModeComboItems;
+Begin
+  If Not Assigned(ModeCombo) Then
+    Exit;
+  If ModeCombo.Items.Count = 4 Then
+    Exit;
+  ModeCombo.Items.BeginUpdate;
+  Try
+    ModeCombo.Items.Clear;
+    ModeCombo.Items.Add('Chat');
+    ModeCombo.Items.Add('Inspect');
+    ModeCombo.Items.Add('Plan');
+    ModeCombo.Items.Add('Build');
+  Finally
+    ModeCombo.Items.EndUpdate;
+  End;
+  ModeCombo.Style := csDropDownList;
+End;
+
+Function TProjectAssistantForm.ModeOfLoadedConversation: TAssistantMode;
+Var
+  Turn: TConversationTurn;
+Begin
+  Result := amChat;
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  If ProjectAssistantConversation.TurnCount < 1 Then
+    Exit;
+  If Not ProjectAssistantConversation.GetTurn(ProjectAssistantConversation.TurnCount - 1, Turn) Then
+    Exit;
+  If Trim(Turn.Mode) = '' Then
+    Exit;
+  Result := StrToAssistantMode(Turn.Mode);
 End;
 
 Procedure TProjectAssistantForm.SelectMode(Mode: TAssistantMode);
@@ -1114,22 +1171,20 @@ Begin
     ShowPlanOfferBar(False);
   SyncModeUi;
   ApplyActiveMode;
+  If Not FSkipModePersist Then
+    PersistShellConfig;
 End;
 
 Procedure TProjectAssistantForm.SyncModeUi;
 Var
   Wanted: Integer;
 Begin
+  EnsureModeComboItems;
   FApplyingShellConfig := True;
   Try
-    Case ActiveMode Of
-      amPlan: Wanted := 1;
-      amBuild: Wanted := 2;
-    Else
-      Wanted := 0;
-    End;
-    If Assigned(ModeGroup) And (ModeGroup.ItemIndex <> Wanted) Then
-      ModeGroup.ItemIndex := Wanted;
+    Wanted := ModeComboIndex(ActiveMode);
+    If Assigned(ModeCombo) And (ModeCombo.ItemIndex <> Wanted) Then
+      ModeCombo.ItemIndex := Wanted;
   Finally
     FApplyingShellConfig := False;
   End;
@@ -1140,11 +1195,12 @@ End;
 Function TProjectAssistantForm.ModeChipCaption(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
+    amChat: Result := 'Chat';
     amInspect: Result := 'Inspect';
     amPlan: Result := 'Plan';
     amBuild: Result := 'Build';
   Else
-    Result := 'Inspect';
+    Result := 'Chat';
   End;
 End;
 
@@ -1153,6 +1209,7 @@ Var
   ToolsHint: String;
 Begin
   Case ActiveMode Of
+    amChat: ToolsHint := 'general chat · no project tools or skill';
     amPlan: ToolsHint := 'creates and edits Markdown · will not edit sources';
     amBuild: ToolsHint := 'edits target files and compiles';
   Else
@@ -1170,8 +1227,8 @@ Begin
         ModeBadge.Caption := Format('%s · %s',
           [ModeChipCaption(ActiveMode), ToolsHint]);
     End;
-  If Assigned(ModeGroup) Then
-    ModeGroup.Enabled := Not (FSending Or FModeLocked);
+  If Assigned(ModeCombo) Then
+    ModeCombo.Enabled := Not (FSending Or FModeLocked);
   UpdateWorkActions;
 End;
 
@@ -1198,6 +1255,8 @@ Begin
     OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
   If Assigned(CompactContextAction) Then
     CompactContextAction.Enabled := (Not FSending) And Assigned(AssistantClient);
+  If Assigned(ChatModeAction) Then
+    ChatModeAction.Enabled := Not FSending;
   If Assigned(InspectModeAction) Then
     InspectModeAction.Enabled := Not FSending;
   If Assigned(PlanModeAction) Then
@@ -1228,7 +1287,10 @@ Begin
   { Shared turn view is always visible; keep mode UI in sync without tab swaps. }
   SyncModeUi;
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(ActiveMode);
+    Begin
+      AssistantClient.SetActiveMode(ActiveMode);
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
+    End;
 End;
 
 Procedure TProjectAssistantForm.LockModeForSend;
@@ -1238,7 +1300,10 @@ Begin
   FModeLocked := True;
   FModeSticky := ActiveMode In [amPlan, amBuild];
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(ActiveMode);
+    Begin
+      AssistantClient.SetActiveMode(ActiveMode);
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
+    End;
   UpdateModeBadge;
   WorkflowLogger.Info('ProjectAssistant',
     'Mode locked for send: ' + AssistantModeToStr(ActiveMode));
@@ -1251,8 +1316,13 @@ Begin
   FModeLocked := True;
   FModeSticky := Mode In [amPlan, amBuild];
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(Mode);
+    Begin
+      AssistantClient.SetActiveMode(Mode);
+      AssistantClient.ToolsEnabled := Mode <> amChat;
+    End;
   SyncModeUi;
+  If Not FSkipModePersist Then
+    PersistShellConfig;
   WorkflowLogger.Info('ProjectAssistant',
     'Mode forced for send: ' + AssistantModeToStr(Mode));
 End;
@@ -1262,7 +1332,10 @@ Begin
   FModeLocked := False;
   { FModeSticky keeps Plan/Build tools until the user picks another mode. }
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(ActiveMode);
+    Begin
+      AssistantClient.SetActiveMode(ActiveMode);
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
+    End;
   UpdateModeBadge;
 End;
 
@@ -1340,7 +1413,10 @@ Begin
   If (Not FModeLocked) And (Not FModeSticky) Then
     ActiveMode := CurrentModeFromUi;
   If Assigned(AssistantClient) Then
-    AssistantClient.SetActiveMode(ActiveMode);
+    Begin
+      AssistantClient.SetActiveMode(ActiveMode);
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
+    End;
   { Fix Error always switches into Build tools, so keep it available in every mode. }
   FixErrorAction.Enabled := Not FSending;
   ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
@@ -1376,12 +1452,24 @@ Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile, @ShowToolUse) Then
-    Exit;
+    Begin
+      { No saved shell mode. A project conversation keeps the mode of its last turn. }
+      If ProjectAssistantConversation.TurnCount > 0 Then
+        SelectMode(ModeOfLoadedConversation)
+      Else
+        SelectMode(amChat);
+      Exit;
+    End;
   FShowThinking := ShowThinking;
   FShowToolUse := ShowToolUse;
   UpdateViewActionCaptions;
   SetActivePlanRelativePath(PlanFile);
-  SelectMode(Mode);
+  FSkipModePersist := True;
+  Try
+    SelectMode(Mode);
+  Finally
+    FSkipModePersist := False;
+  End;
   RefreshPlanList;
 End;
 
@@ -2458,28 +2546,25 @@ Begin
   If ActiveMode <> amBuild Then
     Begin
       SeedPromptFromSelectedWork;
-      If ActiveMode = amInspect Then
+      If ActiveMode In [amChat, amInspect] Then
         SetCurrentSystemNote('Switch to **Build** to apply source edits for this package.');
       Exit;
     End;
   BuildWorkOnSelectedPackage;
 End;
 
-Procedure TProjectAssistantForm.ModeGroupClick(Sender: TObject);
+Procedure TProjectAssistantForm.ModeComboChange(Sender: TObject);
 Begin
   If FApplyingShellConfig Then
     Exit;
   If FSending Or FModeLocked Then
     Begin
-      { Freeze mode UI during a send; restore radio selection to ActiveMode. }
+      { Freeze mode UI during a send; restore the combobox to ActiveMode. }
       SyncModeUi;
       Exit;
     End;
   { Explicit mode change ends sticky Plan/Build behaviour. }
-  FModeSticky := False;
-  ActiveMode := CurrentModeFromUi;
-  ApplyActiveMode;
-  PersistShellConfig;
+  SelectMode(CurrentModeFromUi);
   WorkflowLogger.Info('ProjectAssistant', 'Mode: ' + AssistantModeToStr(ActiveMode));
   RefreshConversationList;
 End;
@@ -3262,6 +3347,7 @@ Begin
   FCodexBroker.OnApproval := Nil;
   If FCodexApproval = 'ask' Then FCodexBroker.OnApproval := @ApproveCodexTool;
   Case ActiveMode Of
+    amChat: FCodexBroker.BeginRun(awsNone);
     amBuild: FCodexBroker.BeginRun(awsProject);
     amPlan: FCodexBroker.BeginRun(awsMarkdown);
   Else FCodexBroker.BeginRun(awsReadOnly); End;
@@ -3275,10 +3361,16 @@ Begin
           Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
             'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
       End;
-  WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
+  WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
   ContextText := '';
   If WithContext Then ContextText := BuildIDEContextBlockLight;
-  Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
+  If ActiveMode = amChat Then
+    Prompt := 'You are a helpful assistant in a general chat. You have no project tools, no IDE access, and no attached skill. ' +
+      'Answer directly. Do not claim you can read or edit files.' + LineEnding +
+      'Previous conversation (bounded recap):' + LineEnding +
+      Recap + LineEnding + 'Current user request:' + LineEnding + ModelText
+  Else
+    Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
     'Discover target files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
     'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
     'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
@@ -3520,14 +3612,27 @@ Begin
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       RefreshAttachAction;
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
-      StatusFooter.SetSkillText('Lazarus tools');
-      StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
+      If ActiveMode = amChat Then
+        Begin
+          StatusFooter.SetSkillText('Skill: not sent');
+          StatusFooter.SetSkillHint('Chat does not send a skill or Lazarus tools');
+        End
+      Else
+        Begin
+          StatusFooter.SetSkillText('Lazarus tools');
+          StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
+        End;
     End
   Else
     Begin
       If Assigned(SendAction) Then SendAction.Hint := '';
       RefreshAttachAction;
-      If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
+      If ActiveMode = amChat Then
+        Begin
+          StatusFooter.SetSkillText('Skill: not sent');
+          StatusFooter.SetSkillHint('Chat does not send a skill');
+        End
+      Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
         Begin
           StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
           StatusFooter.SetSkillHint('Click to pin a different skill');
@@ -3563,7 +3668,7 @@ Begin
         SetCurrentSystemNote(
           Format('**Context usage at %d%%** — automatically starting a **New Chat** to free the token budget.',
             [Pct]));
-        StartNewChat(KeepAgent);
+        StartNewChat(KeepAgent, False);
         SetCurrentSystemNote(
           Format('**New Chat** started automatically at %d%% context use. Previous conversation is in History.',
             [Pct]));
@@ -5567,7 +5672,7 @@ Begin
   If IsAssistantProgressStatus(ResolvedError) Then
     ResolvedError := '';
   If (Not FUseCodex) And Assigned(AssistantClient) Then
-    AssistantClient.ToolsEnabled := True;
+    AssistantClient.ToolsEnabled := ActiveMode <> amChat;
   { Second IsFinished (or Stop after finish) must not append another conversation row. }
   If Not FSending Then
     Begin
@@ -5776,7 +5881,7 @@ Begin
   If (Not FUseCodex) And Assigned(AssistantClient) Then
     Begin
       AssistantClient.CancelStream;
-      AssistantClient.ToolsEnabled := True;
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
     End;
   If FStreamingActive Or (FLiveUser <> '') Then
     Begin
@@ -5883,7 +5988,8 @@ Begin
             '`, numbered ## sections without Status, and ### items with Status.' +
             LineEnding + LineEnding + ModelText;
         End;
-      WithContext := Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
+      WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And
+        AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(DisplayText, WithContext);
       FLiveUser := FDisplayUser;
       FLiveContent := '';
@@ -5907,7 +6013,7 @@ Begin
       If FContextUsed < Length(FinalApi) Div 4 Then
         FContextUsed := Length(FinalApi) Div 4 + 8;
       FStatusPhase := 'Waiting for first token…';
-      AssistantClient.ToolsEnabled := True;
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
       SetSending(True);
       BeginAssistantReply;
       { Large skill + IDE context means a noticeable wait before the first token.
@@ -5993,6 +6099,7 @@ Begin
   AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
   AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
   AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
+  AddAct(ChatModeAction, 'Work', 'chat', '', 'Chat mode — general chat, no project tools or skill');
   AddAct(InspectModeAction, 'Work', 'inspect', '', 'Inspect mode — read-only, no writes');
   AddAct(PlanModeAction, 'Work', 'plan', '', 'Plan mode — write the plan file');
   AddAct(BuildModeAction, 'Work', 'build', 'code', 'Build mode — edit sources and compile');
@@ -6809,6 +6916,13 @@ Begin
     End;
 End;
 
+Procedure TProjectAssistantForm.ChatModeActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  If Not FSending Then
+    SelectMode(amChat);
+End;
+
 Procedure TProjectAssistantForm.InspectModeActionExecute(Sender: TObject);
 Begin
   HideSlashPopup;
@@ -7149,7 +7263,7 @@ Begin
   BeginAssistantReply;
   If Not AssistantClient.StartStream(@StreamToken) Then
     Begin
-      AssistantClient.ToolsEnabled := True;
+      AssistantClient.ToolsEnabled := ActiveMode <> amChat;
       FinishAssistantReply(AssistantClient.LastError);
     End;
 End;
@@ -7253,7 +7367,7 @@ Begin
   ReviewProject(crBuild, 'Build');
 End;
 
-Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean);
+Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean; UseChatDefault: Boolean);
 Begin
   FPlanAgentResumeIndex := -1;
   ShowPlanOfferBar(False);
@@ -7283,8 +7397,15 @@ Begin
   RefreshHistoryCombo;
   RefreshConversationList;
   RefreshChatDisplay(True, False);
+  If UseChatDefault Then
+    SelectMode(amChat);
   If Not FAutoRolloverInProgress Then
-    SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
+    Begin
+      If UseChatDefault Then
+        SetCurrentSystemNote('New conversation started in **Chat**. Previous chat moved to History.')
+      Else
+        SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
+    End;
   PersistSession;
   UpdateStatusFooter;
 End;
@@ -7308,6 +7429,8 @@ Begin
     AssistantClient.ClearHistory;
   If Assigned(ProjectAssistantConversation) Then
     ProjectAssistantConversation.SetProjectRoot('');
+  { Do not write Chat into the project config: the root is already cleared. }
+  SelectMode(amChat);
   SetActivePlanRelativePath('');
   RefreshHistoryCombo;
   RefreshConversationList;
@@ -7360,7 +7483,11 @@ Begin
   If Assigned(ProjectAssistantConversation) Then
     Begin
       If Root = '' Then
-        ProjectAssistantConversation.SetProjectRoot('')
+        Begin
+          ProjectAssistantConversation.SetProjectRoot('');
+          { No project: Chat, and do not write that into the previous project's config. }
+          SelectMode(amChat);
+        End
       Else
         Begin
           ProjectAssistantConversation.SetProjectRoot(Root, AssistantTarget.StoreKey);
@@ -7747,6 +7874,7 @@ Begin
       Exit;
     End;
   ClearProjectChatSession;
+  SelectMode(ModeOfLoadedConversation);
   ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
   PersistSession;
   WorkflowLogger.Info('ProjectAssistant', 'History activated: ' + ArchiveId);

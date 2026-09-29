@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets;
 
 Type
-  TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject);
+  TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
   TAssistantWorkspaceAdapter = Class
   Public
     Function Identity: String; Virtual; Abstract;
@@ -809,6 +809,11 @@ Begin
       ErrorText := 'Workspace/run changed or was cancelled; start a new run.';
       Exit;
     End;
+  If FWriteScope = awsNone Then
+    Begin
+      ErrorText := 'Chat has no Lazarus tools.';
+      Exit;
+    End;
   If FChangeBusy Then
     Begin
       ErrorText := 'A multi-editor transaction is in progress.';
@@ -1148,6 +1153,11 @@ Const
 Var
   WriteNote: String;
 Begin
+  If FWriteScope = awsNone Then
+    Begin
+      Result := '[]';
+      Exit;
+    End;
   WriteNote := '';
   If FWriteScope = awsMarkdown Then WriteNote := ' Plan mode: only .md, .markdown and .mdown files are writable.';
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project or package and relevant open buffer.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +

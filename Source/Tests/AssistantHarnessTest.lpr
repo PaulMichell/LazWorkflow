@@ -110,6 +110,12 @@ Begin
     Check('AGENTS.md inlined', Pos('Use PascalCase keywords in this repo', Prompt) > 0);
     Check('work_policy section', Pos('<work_policy>', Prompt) > 0);
     Check('ide_fusion section', Pos('<ide_fusion>', Prompt) > 0);
+    Prompt := Harness.BuildSystemPrompt(amChat, 'free-pascal-engineer', Root, '');
+    Check('chat names general chat', Pos('general chat', Prompt) > 0);
+    Check('chat does not attach skill body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0);
+    Check('chat does not catalog skills', Pos('free-pascal-engineer', Prompt) = 0);
+    Check('chat does not inline AGENTS.md', Pos('AGENTS.md', Prompt) = 0);
+    Check('chat has no tool policy', Pos('<work_policy>', Prompt) = 0);
     Prompt := Harness.BuildSystemPrompt(amInspect, '', Root, '');
     Check('inspect does not dump fpe body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0);
     Check('inspect still catalogs fpe', Pos('free-pascal-engineer', Prompt) > 0);

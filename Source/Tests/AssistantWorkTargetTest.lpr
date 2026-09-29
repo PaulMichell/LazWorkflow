@@ -113,6 +113,8 @@ Var Root, Outside, Note, Reply, Body:String; Img:TFPMemoryImage; Writer:TFPWrite
   Trace:TAssistantTrace; Event, Parsed:TAssistantEvent; I:Integer; SawImage:Boolean;
   SavedApproval:TAssistantApprovalMode;
 Begin
+  Check('read_image is not available in Chat', Not ToolAllowedInMode('read_image', amChat));
+  Check('Chat sends no tools', BuildAssistantToolsJsonForMode(amChat) = '');
   Check('read_image is available in Inspect', ToolAllowedInMode('read_image', amInspect));
   Check('read_image is available in Plan', ToolAllowedInMode('read_image', amPlan));
   Check('read_image is available in Build', ToolAllowedInMode('read_image', amBuild));

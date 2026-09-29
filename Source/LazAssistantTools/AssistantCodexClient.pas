@@ -288,13 +288,22 @@ Begin
     { Built-in actions have no write permission. Approvals must be serviced by
       this client, which rejects them. A live-editor release still requires
       runtime qualification against external MCP/configured tool bypasses. }
-    Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
-      ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-      '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
-      '"environments":[],"dynamicTools":' + Data.AsJSON +
-      ',"developerInstructions":"Use the lazarus tools for project and editor operations. ' +
-      'Live buffers may differ from disk. Never bypass their revision checks.",' +
-      '"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}');
+    If Data.Count = 0 Then
+      Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
+        ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
+        '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
+        '"environments":[],"dynamicTools":[],' +
+        '"developerInstructions":"This is a general chat. Do not use tools, the IDE, or the filesystem. ' +
+        'Answer from the conversation only.",' +
+        '"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}')
+    Else
+      Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
+        ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
+        '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
+        '"environments":[],"dynamicTools":' + Data.AsJSON +
+        ',"developerInstructions":"Use the lazarus tools for project and editor operations. ' +
+        'Live buffers may differ from disk. Never bypass their revision checks.",' +
+        '"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}');
     If Result Then FState := crsStartingThread;
   Finally
     Data.Free;

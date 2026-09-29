@@ -625,6 +625,12 @@ Var
   PlanPath: String;
 Begin
   Case Mode Of
+    amChat:
+      Result :=
+        'You are a helpful assistant in a general chat. ' +
+        'You have no project tools, no IDE access, and no attached skill. ' +
+        'Answer directly. Do not claim you can read, search, or edit files. ' +
+        'If the question needs the Lazarus project, say the user can switch to Inspect, Plan, or Build.';
     amPlan:
       Begin
         PlanPath := GetActivePlanRelativePath;
@@ -714,13 +720,13 @@ Begin
   FProvider := CreateXaiModelProvider;
   FApiBase := AssistantConfigDefaultApiBase;
   FModel := AssistantConfigDefaultModel;
-  FBaseSystemPrompt := ModeSystemPromptBase(amInspect);
+  FBaseSystemPrompt := ModeSystemPromptBase(amChat);
   FActiveSkill := '';
-  FActiveMode := amInspect;
+  FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
   FSystemPromptEscaped := JsonEscape(FSystemPrompt);
   FToolsJsonCache := '';
-  FToolsJsonMode := amInspect;
+  FToolsJsonMode := amChat;
   FToolsJsonValid := False;
   FToolsEnabled := True;
   { Grok / xAI chat models often hard-cap near 500k tokens; stay under with margin. }
@@ -774,6 +780,8 @@ Begin
   PlanRel := GetActivePlanRelativePath;
   If Assigned(WorkflowAssistantHarness) Then
     FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, FActiveSkill, Root, PlanRel)
+  Else If FActiveMode = amChat Then
+    FSystemPrompt := ModeSystemPromptBase(amChat)
   Else
     Begin
       FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);

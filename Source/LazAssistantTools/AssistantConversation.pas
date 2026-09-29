@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs;
 
 Type
-  TAssistantMode = (amInspect, amPlan, amBuild);
+  TAssistantMode = (amInspect, amPlan, amBuild, amChat);
 
   { Lightweight row for the conversation turn list (also lives in FIndex). }
   TConversationIndexEntry = Class
@@ -182,11 +182,12 @@ End;
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
+    amChat: Result := 'chat';
     amInspect: Result := 'inspect';
     amPlan: Result := 'plan';
     amBuild: Result := 'build';
   Else
-    Result := 'inspect';
+    Result := 'chat';
   End;
 End;
 
@@ -195,7 +196,9 @@ Var
   T: String;
 Begin
   T := LowerCase(Trim(ModeText));
-  If T = 'inspect' Then
+  If T = 'chat' Then
+    Result := amChat
+  Else If T = 'inspect' Then
     Result := amInspect
   Else If T = 'plan' Then
     Result := amPlan
@@ -740,7 +743,7 @@ Begin
   Result := False;
   ShowThinking := True;
   If Assigned(ShowToolUse) Then ShowToolUse^ := True;
-  ActiveMode := amInspect;
+  ActiveMode := amChat;
   PlanFile := '';
   If Not FileExistsUTF8(ConfigPath) Then
     Exit;
@@ -755,7 +758,7 @@ Begin
       Obj := TJSONObject(Data);
       ShowThinking := Obj.Get('show_thinking', True);
       If Assigned(ShowToolUse) Then ShowToolUse^ := Obj.Get('show_tool_use', True);
-      ModeText := Obj.Get('active_mode', 'inspect');
+      ModeText := Obj.Get('active_mode', 'chat');
       ActiveMode := StrToAssistantMode(ModeText);
       PlanFile := Obj.Get('plan_file', '');
       PlanFile := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
@@ -837,11 +840,11 @@ Var
   IgnoredThinking: Boolean;
   PlanFile: String;
 Begin
-  Mode := amInspect;
+  Mode := amChat;
   PlanFile := '';
   If Not LoadShellConfig(IgnoredThinking, Mode, PlanFile) Then
     Begin
-      Mode := amInspect;
+      Mode := amChat;
       PlanFile := '';
     End;
   Result := SaveShellConfig(ShowThinking, Mode, PlanFile);
