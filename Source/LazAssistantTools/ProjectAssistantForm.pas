@@ -757,8 +757,7 @@ Begin
     their handles exist. Names arrive through OnDropFiles. }
   AllowDropFiles := True;
   OnDropFiles := @InputPanelDropFiles;
-  ConversationPanel.OnResize := @HistoryPanelResize;
-  HistoryPanelResize(ConversationPanel);
+  HistoryPanelResize(HistorySheet);
   If Assigned(InputMemo) Then
     Begin
       InputMemo.OnKeyDown := @InputMemoKeyDown;
@@ -1030,8 +1029,8 @@ End;
 Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
 Var ButtonWidth: Integer;
 Begin
-  If Not Assigned(ExportHistoryButton) Or Not Assigned(DeleteHistoryButton) Then Exit;
-  ButtonWidth := (ConversationPanel.ClientWidth - ExportHistoryButton.BorderSpacing.Left -
+  If Not Assigned(HistorySheet) Or Not Assigned(ExportHistoryButton) Or Not Assigned(DeleteHistoryButton) Then Exit;
+  ButtonWidth := (HistorySheet.ClientWidth - ExportHistoryButton.BorderSpacing.Left -
     DeleteHistoryButton.BorderSpacing.Right - Scale96ToForm(4)) Div 2;
   If ButtonWidth < 1 Then ButtonWidth := 1;
   ExportHistoryButton.Width := ButtonWidth;

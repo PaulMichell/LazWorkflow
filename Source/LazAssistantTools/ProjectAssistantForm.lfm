@@ -319,6 +319,127 @@ object ProjectAssistantForm: TProjectAssistantForm
         TabOrder = 1
         object HistorySheet: TTabSheet
           Caption = 'History'
+          OnResize = HistoryPanelResize
+          object HistoryLabel: TLabel
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideTop.Control = HistorySheet
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            Left = 4
+            Height = 18
+            Top = 4
+            Width = 232
+            Anchors = [akTop, akLeft, akRight]
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            Caption = 'History'
+            ParentColor = False
+          end
+          object HistoryCombo: TComboBox
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideTop.Control = HistoryLabel
+            AnchorSideTop.Side = asrBottom
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            Left = 4
+            Height = 32
+            Top = 26
+            Width = 232
+            Anchors = [akTop, akLeft, akRight]
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            ItemHeight = 18
+            Style = csDropDownList
+            TabOrder = 0
+            OnChange = HistoryComboChange
+          end
+          object ExportHistoryButton: TButton
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideTop.Control = HistoryCombo
+            AnchorSideTop.Side = asrBottom
+            Left = 4
+            Height = 28
+            Top = 62
+            Width = 108
+            Action = ExportHistoryAction
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            TabOrder = 1
+          end
+          object DeleteHistoryButton: TButton
+            AnchorSideTop.Control = HistoryCombo
+            AnchorSideTop.Side = asrBottom
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            Left = 128
+            Height = 28
+            Top = 62
+            Width = 108
+            Action = DeleteHistoryAction
+            Anchors = [akTop, akRight]
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            TabOrder = 2
+          end
+          object ConversationLabel: TLabel
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideTop.Control = ExportHistoryButton
+            AnchorSideTop.Side = asrBottom
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            Left = 4
+            Height = 18
+            Top = 94
+            Width = 232
+            Anchors = [akTop, akLeft, akRight]
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            Caption = 'Conversation'
+            ParentColor = False
+          end
+          object ConversationList: TListBox
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideTop.Control = ConversationLabel
+            AnchorSideTop.Side = asrBottom
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = ConversationSearch
+            Left = 4
+            Height = 280
+            Top = 116
+            Width = 232
+            Anchors = [akTop, akLeft, akRight, akBottom]
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            ItemHeight = 0
+            TabOrder = 3
+            TopIndex = -1
+            OnClick = ConversationListClick
+            OnDblClick = ConversationListClick
+            OnSelectionChange = ConversationListSelectionChange
+          end
+          object ConversationSearch: TEdit
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = HistorySheet
+            AnchorSideBottom.Side = asrBottom
+            Left = 4
+            Height = 32
+            Top = 400
+            Width = 232
+            Anchors = [akLeft, akRight, akBottom]
+            BorderSpacing.Left = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            TabOrder = 4
+            OnChange = ConversationSearchChange
+          end
         end
         object PlanSheet: TTabSheet
           Caption = 'Plan'
@@ -341,126 +462,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       ClientHeight = 516
       ClientWidth = 240
       TabOrder = 2
-      object HistoryLabel: TLabel
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideTop.Control = ConversationPanel
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        Left = 4
-        Height = 18
-        Top = 4
-        Width = 232
-        Anchors = [akTop, akLeft, akRight]
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 4
-        BorderSpacing.Right = 4
-        Caption = 'History'
-        ParentColor = False
-      end
-      object HistoryCombo: TComboBox
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideTop.Control = HistoryLabel
-        AnchorSideTop.Side = asrBottom
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        Left = 4
-        Height = 32
-        Top = 26
-        Width = 232
-        Anchors = [akTop, akLeft, akRight]
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 4
-        BorderSpacing.Right = 4
-        ItemHeight = 18
-        Style = csDropDownList
-        TabOrder = 0
-        OnChange = HistoryComboChange
-      end
-      object ExportHistoryButton: TButton
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideTop.Control = HistoryCombo
-        AnchorSideTop.Side = asrBottom
-        Left = 4
-        Height = 28
-        Top = 62
-        Width = 108
-        Action = ExportHistoryAction
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 4
-        TabOrder = 1
-      end
-      object DeleteHistoryButton: TButton
-        AnchorSideTop.Control = HistoryCombo
-        AnchorSideTop.Side = asrBottom
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        Left = 128
-        Height = 28
-        Top = 62
-        Width = 108
-        Action = DeleteHistoryAction
-        Anchors = [akTop, akRight]
-        BorderSpacing.Top = 4
-        BorderSpacing.Right = 4
-        TabOrder = 2
-      end
-      object ConversationLabel: TLabel
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideTop.Control = ExportHistoryButton
-        AnchorSideTop.Side = asrBottom
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        Left = 4
-        Height = 18
-        Top = 94
-        Width = 232
-        Anchors = [akTop, akLeft, akRight]
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 4
-        BorderSpacing.Right = 4
-        Caption = 'Conversation'
-        ParentColor = False
-      end
-      object ConversationList: TListBox
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideTop.Control = ConversationLabel
-        AnchorSideTop.Side = asrBottom
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        AnchorSideBottom.Control = ConversationSearch
-        Left = 4
-        Height = 360
-        Top = 116
-        Width = 232
-        Anchors = [akTop, akLeft, akRight, akBottom]
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 4
-        BorderSpacing.Right = 4
-        BorderSpacing.Bottom = 4
-        ItemHeight = 0
-        TabOrder = 3
-        TopIndex = -1
-        OnClick = ConversationListClick
-        OnDblClick = ConversationListClick
-        OnSelectionChange = ConversationListSelectionChange
-      end
-      object ConversationSearch: TEdit
-        AnchorSideLeft.Control = ConversationPanel
-        AnchorSideRight.Control = ConversationPanel
-        AnchorSideRight.Side = asrBottom
-        AnchorSideBottom.Control = ConversationPanel
-        AnchorSideBottom.Side = asrBottom
-        Left = 4
-        Height = 32
-        Top = 480
-        Width = 232
-        Anchors = [akLeft, akRight, akBottom]
-        BorderSpacing.Left = 4
-        BorderSpacing.Right = 4
-        BorderSpacing.Bottom = 4
-        TabOrder = 4
-        OnChange = ConversationSearchChange
-      end
     end
     object ChatSplitter: TSplitter
       Left = 715
