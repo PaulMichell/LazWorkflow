@@ -40,7 +40,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  SpellEngine, SpellCheckerConfig;
+  SpellEngine, SpellCheckerConfig, SpellEngineHunspell;
 
 Procedure TSpellCheckerSettingsFrame.FillLanguageCombo(Const Selected: String);
 Var
@@ -134,6 +134,7 @@ End;
 Procedure TSpellCheckerSettingsFrame.UpdatePreviewStatus;
 Var
   Preview: TSpellCheckerOptions;
+  FoundLibrary: String;
 Begin
   If Not Assigned(StatusLabel) Then
     Exit;
@@ -145,8 +146,14 @@ Begin
         StatusLabel.Caption := 'No engine loaded — memo only';
         Exit;
       End;
-    If (Preview.EngineKind In [sekHunspell, sekAuto]) And WorkflowSpellConfig.HunspellAvailable Then
-      StatusLabel.Caption := 'Hunspell library found'
+    FoundLibrary := '';
+    If (Preview.EngineKind In [sekHunspell, sekAuto]) And FindHunspellLibrary(FoundLibrary) Then
+      Begin
+        If Pos('libreoffice', LowerCase(FoundLibrary)) > 0 Then
+          StatusLabel.Caption := 'Hunspell library found in LibreOffice'
+        Else
+          StatusLabel.Caption := 'Hunspell library found';
+      End
     Else If (Preview.EngineKind In [sekAspell, sekAuto]) And WorkflowSpellConfig.AspellAvailable Then
       StatusLabel.Caption := 'ASpell library found'
     Else
