@@ -110,7 +110,6 @@ Type
     HistorySheet: TTabSheet;
     PlanSheet: TTabSheet;
     ModeSplitter: TSplitter;
-    ConversationPanel: TPanel;
     HistoryLabel: TLabel;
     HistoryCombo: TComboBox;
     ExportHistoryButton: TButton;
@@ -118,7 +117,6 @@ Type
     ConversationLabel: TLabel;
     ConversationSearch: TEdit;
     ConversationList: TListBox;
-    ChatSplitter: TSplitter;
     ChatHost: TPanel;
     { Plan file list (runtime, Plan sheet). }
     PlanPanel: TPanel;
@@ -633,28 +631,29 @@ End;
 
 Procedure TProjectAssistantForm.Resize;
 Var
-  Available, SideWidth, SideBudget, ChatReserve, LeftWidth: Integer;
+  Available, SideBudget, ChatReserve: Integer;
 Begin
   Inherited Resize;
   If (csLoading In ComponentState) Or (csDestroying In ComponentState) Or
-    Not Assigned(ClientPanel) Or Not Assigned(ModeSidePanel) Or
-    Not Assigned(ConversationPanel) Or Not Assigned(ModeSplitter) Or
-    Not Assigned(ChatSplitter) Then Exit;
-  Available := ClientPanel.ClientWidth - ModeSplitter.Width - ChatSplitter.Width;
-  If Available <= 0 Then Exit;
+    Not Assigned(ClientPanel) Or Not Assigned(ModeSidePanel) Or Not Assigned(ModeSplitter) Then
+    Exit;
+  Available := ClientPanel.ClientWidth - ModeSplitter.Width;
+  If Available <= 0 Then
+    Exit;
   ChatReserve := Scale96ToForm(360);
-  If ChatReserve > Available Div 2 Then ChatReserve := Available Div 2;
+  If ChatReserve > Available Div 2 Then
+    ChatReserve := Available Div 2;
   SideBudget := Available - ChatReserve;
-  SideWidth := ModeSidePanel.Width + ConversationPanel.Width;
-  If (SideWidth <= SideBudget) Or (SideWidth = 0) Then Exit;
-  { Preserve the side-pane ratio when a saved/small window would squeeze out
-    the conversation. Ordinary splitter choices remain untouched until the
-    form becomes too narrow. No large minimum window size is imposed. }
-  LeftWidth := Integer(Int64(ModeSidePanel.Width) * SideBudget Div SideWidth);
+  If SideBudget < 1 Then
+    SideBudget := 1;
+  If ModeSidePanel.Width <= SideBudget Then
+    Exit;
+  { Shrink only the combined sidebar when a saved or small window would squeeze out
+    the conversation. Ordinary splitter choices remain untouched until the form
+    becomes too narrow. No large minimum window size is imposed. }
   ClientPanel.DisableAlign;
   Try
-    ModeSidePanel.Width := LeftWidth;
-    ConversationPanel.Width := SideBudget - LeftWidth;
+    ModeSidePanel.Width := SideBudget;
   Finally
     ClientPanel.EnableAlign;
   End;

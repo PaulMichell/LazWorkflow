@@ -452,25 +452,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 0
       Width = 5
     end
-    object ConversationPanel: TPanel
-      Left = 720
-      Height = 516
-      Top = 0
-      Width = 240
-      Align = alRight
-      BevelOuter = bvNone
-      ClientHeight = 516
-      ClientWidth = 240
-      TabOrder = 2
-    end
-    object ChatSplitter: TSplitter
-      Left = 715
-      Height = 516
-      Top = 0
-      Width = 5
-      Align = alRight
-      ResizeAnchor = akRight
-    end
     object ChatHost: TPanel
       Left = 309
       Height = 508
