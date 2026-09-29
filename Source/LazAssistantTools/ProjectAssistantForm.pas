@@ -171,6 +171,8 @@ Type
     Procedure FormDestroy(Sender: TObject);
     Procedure FormShow(Sender: TObject);
     Procedure HistoryPanelResize(Sender: TObject);
+    Procedure SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
+    Procedure SidebarPagesChange(Sender: TObject);
     Procedure ModeComboChange(Sender: TObject);
     Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
@@ -312,6 +314,7 @@ Type
     FApplyingShellConfig: Boolean; { True while restoring mode tab from config.json. }
     FSkipModePersist: Boolean; { True while restoring a saved mode, so SelectMode does not rewrite config. }
     FModeLocked: Boolean; { True while a send freezes the active mode (tools/prompt). }
+    FAdjustingSidebarPage: Boolean; { True while bouncing a disabled Plan sheet back to History. }
     FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
     BuildSections: TObjectList; { of TPlanSection for the Build progress list (not published). }
     PlanListPaths: TStringList; { Parallel to PlanList captions; relative paths. }
@@ -1399,8 +1402,52 @@ Begin
     BuildModeAction.Enabled := Not FSending;
 End;
 
-Procedure TProjectAssistantForm.UpdateModeSidePanels;
+Procedure TProjectAssistantForm.SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
 Begin
+  { Only a move onto the disabled Plan sheet is refused. Leaving it must stay possible. }
+  If Not Assigned(PlanSheet) Or PlanSheet.Enabled Then
+    Exit;
+  If Assigned(SidebarPages) And (SidebarPages.ActivePage = PlanSheet) Then
+    Exit;
+  AllowChange := False;
+  If Sender <> SidebarPages Then
+    Exit;
+End;
+
+Procedure TProjectAssistantForm.SidebarPagesChange(Sender: TObject);
+Begin
+  If FAdjustingSidebarPage Or Not Assigned(SidebarPages) Or Not Assigned(PlanSheet) Or
+    Not Assigned(HistorySheet) Then
+    Exit;
+  If (SidebarPages.ActivePage <> PlanSheet) Or PlanSheet.Enabled Then
+    Exit;
+  FAdjustingSidebarPage := True;
+  Try
+    SidebarPages.ActivePage := HistorySheet;
+  Finally
+    FAdjustingSidebarPage := False;
+  End;
+  If Sender <> SidebarPages Then
+    Exit;
+End;
+
+Procedure TProjectAssistantForm.UpdateModeSidePanels;
+Var
+  PlanAllowed: Boolean;
+Begin
+  { Chat and Inspect cannot open Plan. Do not select that page when it becomes allowed. }
+  PlanAllowed := ActiveMode In [amPlan, amBuild];
+  If Assigned(PlanSheet) Then
+    Begin
+      If Not PlanAllowed Then
+        Begin
+          If Assigned(SidebarPages) And Assigned(HistorySheet) And (SidebarPages.ActivePage = PlanSheet) Then
+            SidebarPages.ActivePage := HistorySheet;
+          PlanSheet.Enabled := False;
+        End
+      Else
+        PlanSheet.Enabled := True;
+    End;
   { Work tiles stay on the left in every mode. Plan file list is a top strip in Plan. }
   If Assigned(PlanPanel) Then
     Begin

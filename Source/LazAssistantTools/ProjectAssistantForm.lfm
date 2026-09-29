@@ -317,6 +317,8 @@ object ProjectAssistantForm: TProjectAssistantForm
         Align = alClient
         TabIndex = 0
         TabOrder = 1
+        OnChange = SidebarPagesChange
+        OnChanging = SidebarPagesChanging
         object HistorySheet: TTabSheet
           Caption = 'History'
           OnResize = HistoryPanelResize
