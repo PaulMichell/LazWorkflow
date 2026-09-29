@@ -1448,7 +1448,7 @@ Begin
       Else
         PlanSheet.Enabled := True;
     End;
-  { Work tiles stay on the left in every mode. Plan file list is a top strip in Plan. }
+  { Plan file list only in Plan. Work tiles only while the Plan page is enabled. }
   If Assigned(PlanPanel) Then
     Begin
       PlanPanel.Align := alTop;
@@ -1459,7 +1459,7 @@ Begin
   If Assigned(BuildPanel) Then
     Begin
       BuildPanel.Align := alClient;
-      BuildPanel.Visible := True;
+      BuildPanel.Visible := PlanAllowed;
     End;
   PinSidebarHeader;
 End;
@@ -1910,7 +1910,7 @@ Begin
   BuildPanel.Align := alClient;
   BuildPanel.BevelOuter := bvNone;
   BuildPanel.BorderSpacing.Around := 8;
-  BuildPanel.Visible := True;
+  BuildPanel.Visible := ActiveMode In [amPlan, amBuild];
 
   BuildActiveLabel := TLabel.Create(Self);
   BuildActiveLabel.Parent := BuildPanel;
