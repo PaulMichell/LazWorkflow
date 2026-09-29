@@ -229,94 +229,86 @@ object ProjectAssistantForm: TProjectAssistantForm
       Visible = False
     end
   end
-  object ModeBar: TPanel
-    Left = 0
-    Height = 48
-    Top = 0
-    Width = 960
-    Align = alTop
-    BevelOuter = bvNone
-    ClientHeight = 48
-    ClientWidth = 960
-    TabOrder = 4
-    object ModePicker: TPanel
-      Left = 0
-      Height = 48
-      Top = 0
-      Width = 248
-      Align = alLeft
-      BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 8
-      ChildSizing.TopBottomSpacing = 10
-      ChildSizing.HorizontalSpacing = 6
-      ChildSizing.EnlargeVertical = crsHomogenousChildResize
-      ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 2
-      ClientHeight = 48
-      ClientWidth = 248
-      TabOrder = 0
-      object ModeLabel: TLabel
-        Left = 8
-        Height = 28
-        Top = 10
-        Width = 42
-        AutoSize = True
-        Caption = 'Mode:'
-        FocusControl = ModeCombo
-        Layout = tlCenter
-        ParentColor = False
-      end
-      object ModeCombo: TComboBox
-        Left = 56
-        Height = 28
-        Top = 10
-        Width = 168
-        ItemHeight = 0
-        ItemIndex = 0
-        Items.Strings = (
-          'Chat'
-          'Inspect'
-          'Plan'
-          'Build'
-        )
-        Style = csDropDownList
-        TabOrder = 0
-        OnChange = ModeComboChange
-      end
-    end
-    object ModeBadge: TLabel
-      Left = 248
-      Height = 40
-      Top = 4
-      Width = 736
-      Align = alClient
-      BorderSpacing.Around = 4
-      Caption = 'Chat · general chat · no project tools or skill'
-      Layout = tlCenter
-      ParentColor = False
-      WordWrap = True
-    end
-  end
   object ClientPanel: TPanel
     Left = 0
-    Height = 516
-    Top = 48
+    Height = 564
+    Top = 0
     Width = 960
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 516
+    ClientHeight = 564
     ClientWidth = 960
     TabOrder = 0
     object ModeSidePanel: TPanel
       Left = 0
-      Height = 516
+      Height = 564
       Top = 0
       Width = 300
       Align = alLeft
       BevelOuter = bvNone
-      ClientHeight = 516
+      ClientHeight = 564
       ClientWidth = 300
       TabOrder = 0
+      object SidebarHeader: TPanel
+        Left = 0
+        Height = 72
+        Top = 0
+        Width = 300
+        Align = alTop
+        BevelOuter = bvNone
+        BorderSpacing.Left = 8
+        BorderSpacing.Top = 6
+        BorderSpacing.Right = 8
+        BorderSpacing.Bottom = 4
+        ClientHeight = 72
+        ClientWidth = 284
+        TabOrder = 0
+        object ModePicker: TPanel
+          Left = 0
+          Height = 36
+          Top = 36
+          Width = 284
+          Align = alClient
+          BevelOuter = bvNone
+          ClientHeight = 36
+          ClientWidth = 284
+          TabOrder = 0
+          object ModeLabel: TLabel
+            Left = 0
+            Height = 36
+            Top = 0
+            Width = 42
+            Align = alLeft
+            AutoSize = True
+            BorderSpacing.Right = 6
+            Caption = 'Mode:'
+            FocusControl = ModeCombo
+            Layout = tlCenter
+            ParentColor = False
+          end
+          object ModeCombo: TComboBox
+            Left = 48
+            Height = 28
+            Top = 4
+            Width = 232
+            Align = alClient
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            ItemHeight = 0
+            ItemIndex = 0
+            Items.Strings = (
+              'Chat'
+              'Inspect'
+              'Plan'
+              'Build'
+            )
+            Style = csDropDownList
+            TabOrder = 0
+            OnChange = ModeComboChange
+          end
+        end
+      end
     end
     object ModeSplitter: TSplitter
       Left = 300

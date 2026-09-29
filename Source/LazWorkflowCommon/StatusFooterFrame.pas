@@ -17,9 +17,12 @@ Type
     Panel: TPanel;
     SkillLabel: TLabel;
     LeftLabel: TLabel;
+    CentreHost: TPanel;
+    ModelLabel: TLabel;
     CentreLabel: TLabel;
     RightLabel: TLabel;
     Procedure LabelClick(Sender: TObject);
+    Procedure CentreHostResize(Sender: TObject);
   Private
     FOnLeftClick: TNotifyEvent;
     FOnSkillClick: TNotifyEvent;
@@ -35,13 +38,16 @@ Type
     Constructor Create(TheOwner: TComponent); Override;
     Procedure SetLeftText(Const Value: String);
     Procedure SetSkillText(Const Value: String);
+    Procedure SetModelText(Const Value: String);
     Procedure SetCentreText(Const Value: String);
     Procedure SetRightText(Const Value: String);
     Procedure SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
     Procedure SetLeftHint(Const Value: String);
     Procedure SetSkillHint(Const Value: String);
+    Procedure SetModelHint(Const Value: String);
     Procedure SetCentreHint(Const Value: String);
     Procedure SetRightHint(Const Value: String);
+    Procedure LayoutCentrePair;
     Property LeftText: String Write SetLeftText;
     Property SkillText: String Write SetSkillText;
     Property CentreText: String Write SetCentreText;
@@ -88,16 +94,29 @@ Begin
   Height := Scale96ToForm(22);
   ConfigureLabel(LeftLabel);
   ConfigureLabel(SkillLabel);
+  ConfigureLabel(ModelLabel);
   ConfigureLabel(CentreLabel);
   ConfigureLabel(RightLabel);
+  If Assigned(LeftLabel) Then
+    Begin
+      LeftLabel.Cursor := crDefault;
+      LeftLabel.Font.Color := clWindowText;
+      LeftLabel.OnClick := Nil;
+    End;
   If Assigned(SkillLabel) Then
     SkillLabel.Visible := False;
 End;
 
 Procedure TStatusFooterFrame.SetOnLeftClick(Value: TNotifyEvent);
 Begin
+  { The model line is centred with context. LeftLabel is the mode description. }
   FOnLeftClick := Value;
-  ApplyClickStyle(LeftLabel, Assigned(Value));
+  ApplyClickStyle(ModelLabel, Assigned(Value));
+  If Assigned(LeftLabel) Then
+    Begin
+      LeftLabel.Cursor := crDefault;
+      LeftLabel.OnClick := Nil;
+    End;
 End;
 
 Procedure TStatusFooterFrame.SetOnSkillClick(Value: TNotifyEvent);
@@ -120,9 +139,9 @@ End;
 
 Procedure TStatusFooterFrame.LabelClick(Sender: TObject);
 Begin
-  If Sender = LeftLabel Then
+  If (Sender = ModelLabel) Or (Sender = LeftLabel) Then
     Begin
-      If Assigned(FOnLeftClick) Then
+      If Assigned(FOnLeftClick) And (Sender = ModelLabel) Then
         FOnLeftClick(Sender);
     End
   Else If Sender = SkillLabel Then
@@ -145,7 +164,42 @@ End;
 Procedure TStatusFooterFrame.SetLeftText(Const Value: String);
 Begin
   If Assigned(LeftLabel) Then
-    LeftLabel.Caption := Value;
+    Begin
+      LeftLabel.AutoSize := True;
+      LeftLabel.Caption := Value;
+    End;
+  If Assigned(Panel) Then
+    Panel.Realign;
+  LayoutCentrePair;
+End;
+
+Procedure TStatusFooterFrame.LayoutCentrePair;
+Var
+  Gap, PairWidth, Origin, ModelTop, CentreTop: Integer;
+Begin
+  If Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
+    Exit;
+  ModelLabel.AutoSize := True;
+  CentreLabel.AutoSize := True;
+  Gap := Scale96ToForm(16);
+  PairWidth := ModelLabel.Width + Gap + CentreLabel.Width;
+  Origin := (CentreHost.ClientWidth - PairWidth) Div 2;
+  If Origin < 0 Then
+    Origin := 0;
+  ModelTop := (CentreHost.ClientHeight - ModelLabel.Height) Div 2;
+  If ModelTop < 0 Then
+    ModelTop := 0;
+  CentreTop := (CentreHost.ClientHeight - CentreLabel.Height) Div 2;
+  If CentreTop < 0 Then
+    CentreTop := 0;
+  ModelLabel.SetBounds(Origin, ModelTop, ModelLabel.Width, ModelLabel.Height);
+  CentreLabel.SetBounds(Origin + ModelLabel.Width + Gap, CentreTop, CentreLabel.Width, CentreLabel.Height);
+End;
+
+Procedure TStatusFooterFrame.CentreHostResize(Sender: TObject);
+Begin
+  If Sender = CentreHost Then
+    LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetSkillText(Const Value: String);
@@ -156,10 +210,24 @@ Begin
   SkillLabel.Visible := Trim(Value) <> '';
 End;
 
+Procedure TStatusFooterFrame.SetModelText(Const Value: String);
+Begin
+  If Assigned(ModelLabel) Then
+    Begin
+      ModelLabel.AutoSize := True;
+      ModelLabel.Caption := Value;
+    End;
+  LayoutCentrePair;
+End;
+
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
   If Assigned(CentreLabel) Then
-    CentreLabel.Caption := Value;
+    Begin
+      CentreLabel.AutoSize := True;
+      CentreLabel.Caption := Value;
+    End;
+  LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetRightText(Const Value: String);
@@ -185,6 +253,12 @@ Procedure TStatusFooterFrame.SetSkillHint(Const Value: String);
 Begin
   If Assigned(SkillLabel) Then
     SkillLabel.Hint := Value;
+End;
+
+Procedure TStatusFooterFrame.SetModelHint(Const Value: String);
+Begin
+  If Assigned(ModelLabel) Then
+    ModelLabel.Hint := Value;
 End;
 
 Procedure TStatusFooterFrame.SetCentreHint(Const Value: String);

@@ -21,7 +21,7 @@ object StatusFooterFrame: TStatusFooterFrame
     ParentColor = False
     TabOrder = 0
     object SkillLabel: TLabel
-      Left = 6
+      Left = 120
       Height = 22
       Top = 0
       Width = 1
@@ -33,11 +33,12 @@ object StatusFooterFrame: TStatusFooterFrame
       Visible = False
     end
     object LeftLabel: TLabel
-      Left = 19
+      Left = 6
       Height = 22
       Top = 0
       Width = 1
       Align = alLeft
+      AutoSize = True
       BorderSpacing.Left = 6
       BorderSpacing.Right = 12
       Layout = tlCenter
@@ -54,15 +55,36 @@ object StatusFooterFrame: TStatusFooterFrame
       Layout = tlCenter
       ParentColor = False
     end
-    object CentreLabel: TLabel
-      Left = 32
+    object CentreHost: TPanel
+      Left = 140
       Height = 22
       Top = 0
-      Width = 589
+      Width = 480
       Align = alClient
-      Alignment = taCenter
-      Layout = tlCenter
+      BevelOuter = bvNone
+      ClientHeight = 22
+      ClientWidth = 480
       ParentColor = False
+      TabOrder = 0
+      OnResize = CentreHostResize
+      object ModelLabel: TLabel
+        Left = 80
+        Height = 22
+        Top = 0
+        Width = 160
+        AutoSize = True
+        Layout = tlCenter
+        ParentColor = False
+      end
+      object CentreLabel: TLabel
+        Left = 256
+        Height = 22
+        Top = 0
+        Width = 80
+        AutoSize = True
+        Layout = tlCenter
+        ParentColor = False
+      end
     end
   end
 end

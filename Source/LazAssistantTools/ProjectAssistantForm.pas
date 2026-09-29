@@ -100,13 +100,12 @@ Type
     ThinkingLevelMenuItem: TMenuItem;
     ContextBreakdownMenuItem: TMenuItem;
     SessionInfoMenuItem: TMenuItem;
-    ModeBar: TPanel;
+    ClientPanel: TPanel;
+    ModeSidePanel: TPanel;
+    SidebarHeader: TPanel;
     ModePicker: TPanel;
     ModeLabel: TLabel;
     ModeCombo: TComboBox;
-    ModeBadge: TLabel;
-    ClientPanel: TPanel;
-    ModeSidePanel: TPanel;
     ModeSplitter: TSplitter;
     ConversationPanel: TPanel;
     HistoryLabel: TLabel;
@@ -383,6 +382,8 @@ Type
     Procedure SelectMode(Mode: TAssistantMode);
     Procedure SyncModeUi;
     Procedure UpdateModeBadge;
+    Function ModeStatusText: String;
+    Procedure PinSidebarHeader;
     Procedure UpdateModeSidePanels;
     Procedure ApplyActiveMode;
     Procedure ShowChatSurfaceKeepMode;
@@ -701,46 +702,47 @@ End;
 
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Var
-  TargetBar: TPanel;
+  TargetRow: TPanel;
   TargetLabel: TLabel;
 Begin
-  TargetBar := TPanel.Create(Self);
-  TargetBar.Parent := Self;
-  TargetBar.Align := alTop;
-  TargetBar.Height := Scale96ToForm(34);
-  TargetBar.BevelOuter := bvNone;
-  TargetBar.Top := 0;
+  TargetRow := TPanel.Create(Self);
+  TargetRow.Name := 'TargetRow';
+  TargetRow.Parent := SidebarHeader;
+  TargetRow.Align := alTop;
+  TargetRow.Height := Scale96ToForm(32);
+  TargetRow.BevelOuter := bvNone;
   FTargetBrowseButton := TButton.Create(Self);
   FTargetBrowseButton.Name := 'TargetBrowseButton';
-  FTargetBrowseButton.Parent := TargetBar;
+  FTargetBrowseButton.Parent := TargetRow;
   FTargetBrowseButton.Align := alRight;
   FTargetBrowseButton.Caption := '...';
   FTargetBrowseButton.Width := Scale96ToForm(36);
-  FTargetBrowseButton.BorderSpacing.Top := 4;
-  FTargetBrowseButton.BorderSpacing.Right := 4;
-  FTargetBrowseButton.BorderSpacing.Bottom := 4;
+  FTargetBrowseButton.BorderSpacing.Top := 2;
+  FTargetBrowseButton.BorderSpacing.Right := 0;
+  FTargetBrowseButton.BorderSpacing.Bottom := 2;
   FTargetBrowseButton.Hint := 'Choose a target folder';
   FTargetBrowseButton.ShowHint := True;
   FTargetBrowseButton.OnClick := @TargetBrowseClick;
   TargetLabel := TLabel.Create(Self);
-  TargetLabel.Parent := TargetBar;
+  TargetLabel.Parent := TargetRow;
   TargetLabel.Caption := '&Target:';
   TargetLabel.Align := alLeft;
+  TargetLabel.AutoSize := True;
   TargetLabel.Layout := tlCenter;
-  TargetLabel.BorderSpacing.Around := 4;
+  TargetLabel.BorderSpacing.Right := 6;
   FTargetPaths := TStringList.Create;
   FTargetCombo := TComboBox.Create(Self);
   FTargetCombo.Name := 'TargetCombo';
-  FTargetCombo.Parent := TargetBar;
+  FTargetCombo.Parent := TargetRow;
   FTargetCombo.Align := alClient;
-  FTargetCombo.BorderSpacing.Top := 4;
-  FTargetCombo.BorderSpacing.Left := 4;
-  FTargetCombo.BorderSpacing.Bottom := 4;
+  FTargetCombo.BorderSpacing.Top := 2;
+  FTargetCombo.BorderSpacing.Left := 0;
+  FTargetCombo.BorderSpacing.Right := 4;
+  FTargetCombo.BorderSpacing.Bottom := 2;
   FTargetCombo.Style := csDropDownList;
   TargetLabel.FocusControl := FTargetCombo;
   FTargetCombo.OnDropDown := @RefreshTargetChoices;
   FTargetCombo.OnChange := @TargetChoiceChanged;
-  FTargetBrowseButton.Align := alRight;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
   { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
@@ -767,6 +769,7 @@ Begin
   EnsureInputPopup;
   EnsurePlanTabUi;
   EnsureBuildTabUi;
+  PinSidebarHeader;
   EnsureSlashPopup;
   RebuildCommandCatalog;
   EnsureCommandsMenu;
@@ -1204,7 +1207,7 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.UpdateModeBadge;
+Function TProjectAssistantForm.ModeStatusText: String;
 Var
   ToolsHint: String;
 Begin
@@ -1215,18 +1218,27 @@ Begin
   Else
     ToolsHint := 'explains and inspects · will not write files';
   End;
-  If Assigned(ModeBadge) Then
-    Begin
-      If FModeLocked Or FSending Then
-        ModeBadge.Caption := Format('%s · %s · (reply in progress — Steer to inject a note)',
-          [ModeChipCaption(ActiveMode), ToolsHint])
-      Else If FModeSticky Then
-        ModeBadge.Caption := Format('%s · %s · (sticky until you change mode)',
-          [ModeChipCaption(ActiveMode), ToolsHint])
-      Else
-        ModeBadge.Caption := Format('%s · %s',
-          [ModeChipCaption(ActiveMode), ToolsHint]);
-    End;
+  If FModeLocked Or FSending Then
+    Result := Format('%s · %s · reply in progress', [ModeChipCaption(ActiveMode), ToolsHint])
+  Else If FModeSticky Then
+    Result := Format('%s · %s · sticky', [ModeChipCaption(ActiveMode), ToolsHint])
+  Else
+    Result := Format('%s · %s', [ModeChipCaption(ActiveMode), ToolsHint]);
+End;
+
+Procedure TProjectAssistantForm.PinSidebarHeader;
+Begin
+  { Plan panel is also alTop. Re-dock the header so Target and Mode stay above it. }
+  If Not Assigned(SidebarHeader) Then
+    Exit;
+  SidebarHeader.Align := alTop;
+  SidebarHeader.Top := 0;
+End;
+
+Procedure TProjectAssistantForm.UpdateModeBadge;
+Begin
+  If Assigned(StatusFooter) Then
+    StatusFooter.SetLeftText(ModeStatusText);
   If Assigned(ModeCombo) Then
     ModeCombo.Enabled := Not (FSending Or FModeLocked);
   UpdateWorkActions;
@@ -1280,6 +1292,7 @@ Begin
       BuildPanel.Align := alClient;
       BuildPanel.Visible := True;
     End;
+  PinSidebarHeader;
 End;
 
 Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
@@ -3598,17 +3611,21 @@ Begin
       LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, FCodexApproval]);
       CentreText := Format('Context ~%d tokens', [FContextUsed]);
     End;
-  StatusFooter.SetAll(LeftText, CentreText, StatusText);
-  StatusFooter.SetLeftHint('Click to change model, thinking level, or approval');
+  StatusFooter.SetLeftText(ModeStatusText);
+  StatusFooter.SetModelText(LeftText);
+  StatusFooter.SetCentreText(CentreText);
+  StatusFooter.SetRightText(StatusText);
+  StatusFooter.SetLeftHint(ModeStatusText);
+  StatusFooter.SetModelHint('Click to change model, thinking level, or approval');
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
     (BlockReason <> '') Then
-    StatusFooter.SetLeftHint('Click to change model, thinking level, or approval. ' + BlockReason);
+    StatusFooter.SetModelHint('Click to change model, thinking level, or approval. ' + BlockReason);
   StatusFooter.SetCentreHint(Format('About %d of %d tokens. Click for a breakdown.',
     [FContextUsed, FContextLimit]));
   StatusFooter.SetRightHint('Click for session info');
   If FUseCodex Then
     Begin
-      StatusFooter.SetLeftHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
+      StatusFooter.SetModelHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       RefreshAttachAction;
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
