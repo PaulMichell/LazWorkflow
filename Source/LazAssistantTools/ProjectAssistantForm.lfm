@@ -293,7 +293,6 @@ object ProjectAssistantForm: TProjectAssistantForm
             Width = 232
             Align = alClient
             BorderSpacing.Top = 4
-            BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
             ItemHeight = 0
             ItemIndex = 0

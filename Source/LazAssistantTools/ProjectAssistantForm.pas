@@ -232,7 +232,10 @@ Type
     Procedure FooterMenuClick(Sender: TObject);
   Private
     FTargetCombo: TComboBox;
+    FTargetLabel: TLabel;
+    FTargetRow: TPanel;
     FRefreshingTargets: Boolean;
+    FAligningTargetMode: Boolean;
     FTargetBrowseButton: TButton;
     FTargetPaths: TStringList;
     FTargetRestored: Boolean;
@@ -240,6 +243,8 @@ Type
     Procedure TargetChoiceChanged(Sender: TObject);
     Procedure TargetBrowseClick(Sender: TObject);
     Procedure ApplyTarget(Const Directory: String);
+    Procedure AlignTargetModeControls;
+    Procedure UpdateTargetComboHint(Sender: TObject);
   Private
 
     FUseCodex: Boolean;
@@ -701,49 +706,48 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
-Var
-  TargetRow: TPanel;
-  TargetLabel: TLabel;
 Begin
-  TargetRow := TPanel.Create(Self);
-  TargetRow.Name := 'TargetRow';
-  TargetRow.Parent := SidebarHeader;
-  TargetRow.Align := alTop;
-  TargetRow.Height := Scale96ToForm(32);
-  TargetRow.BevelOuter := bvNone;
+  FTargetRow := TPanel.Create(Self);
+  FTargetRow.Name := 'TargetRow';
+  FTargetRow.Parent := SidebarHeader;
+  FTargetRow.Align := alTop;
+  FTargetRow.BevelOuter := bvNone;
   FTargetBrowseButton := TButton.Create(Self);
   FTargetBrowseButton.Name := 'TargetBrowseButton';
-  FTargetBrowseButton.Parent := TargetRow;
+  FTargetBrowseButton.Parent := FTargetRow;
   FTargetBrowseButton.Align := alRight;
   FTargetBrowseButton.Caption := '...';
+  FTargetBrowseButton.AutoSize := False;
   FTargetBrowseButton.Width := Scale96ToForm(36);
-  FTargetBrowseButton.BorderSpacing.Top := 2;
-  FTargetBrowseButton.BorderSpacing.Right := 0;
-  FTargetBrowseButton.BorderSpacing.Bottom := 2;
   FTargetBrowseButton.Hint := 'Choose a target folder';
   FTargetBrowseButton.ShowHint := True;
+  FTargetBrowseButton.ParentShowHint := False;
   FTargetBrowseButton.OnClick := @TargetBrowseClick;
-  TargetLabel := TLabel.Create(Self);
-  TargetLabel.Parent := TargetRow;
-  TargetLabel.Caption := '&Target:';
-  TargetLabel.Align := alLeft;
-  TargetLabel.AutoSize := True;
-  TargetLabel.Layout := tlCenter;
-  TargetLabel.BorderSpacing.Right := 6;
+  FTargetLabel := TLabel.Create(Self);
+  FTargetLabel.Name := 'TargetLabel';
+  FTargetLabel.Parent := FTargetRow;
+  FTargetLabel.Caption := '&Target:';
+  FTargetLabel.Align := alLeft;
+  FTargetLabel.AutoSize := True;
+  FTargetLabel.Layout := tlCenter;
+  If Assigned(ModeLabel) Then
+    FTargetLabel.BorderSpacing.Right := ModeLabel.BorderSpacing.Right
+  Else
+    FTargetLabel.BorderSpacing.Right := Scale96ToForm(6);
   FTargetPaths := TStringList.Create;
   FTargetCombo := TComboBox.Create(Self);
   FTargetCombo.Name := 'TargetCombo';
-  FTargetCombo.Parent := TargetRow;
+  FTargetCombo.Parent := FTargetRow;
   FTargetCombo.Align := alClient;
-  FTargetCombo.BorderSpacing.Top := 2;
-  FTargetCombo.BorderSpacing.Left := 0;
-  FTargetCombo.BorderSpacing.Right := 4;
-  FTargetCombo.BorderSpacing.Bottom := 2;
   FTargetCombo.Style := csDropDownList;
-  TargetLabel.FocusControl := FTargetCombo;
+  FTargetCombo.ParentShowHint := False;
+  FTargetCombo.ShowHint := True;
+  FTargetLabel.FocusControl := FTargetCombo;
   FTargetCombo.OnDropDown := @RefreshTargetChoices;
   FTargetCombo.OnChange := @TargetChoiceChanged;
+  FTargetCombo.OnMouseEnter := @UpdateTargetComboHint;
   RefreshTargetChoices(Nil);
+  AlignTargetModeControls;
   Caption := 'Project Assistant';
   { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
     drop to the widget under the pointer, so the input controls are armed after
@@ -799,6 +803,115 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
+Function TargetFolderCaption(Const Path: String): String;
+Var
+  Trimmed: String;
+Begin
+  Trimmed := ExcludeTrailingPathDelimiter(Path);
+  Result := ExtractFileName(Trimmed);
+  If Result = '' Then
+    Result := Path;
+End;
+
+Function TargetFolderHint(Const Path: String): String;
+Begin
+  If Trim(Path) = '' Then
+    Result := ''
+  Else
+    Result := IncludeTrailingPathDelimiter(ExcludeTrailingPathDelimiter(Path));
+End;
+
+Procedure TProjectAssistantForm.AlignTargetModeControls;
+Var
+  LabelWidth, Gap, RowHeight, SharedHeight: Integer;
+Begin
+  { Target and Mode share a label column. The mode combo runs to the choose-target
+    button's right edge; both target controls match the mode combo's height. }
+  If FAligningTargetMode Then
+    Exit;
+  If Not Assigned(ModeCombo) Or Not Assigned(ModeLabel) Or Not Assigned(ModePicker) Or
+    Not Assigned(SidebarHeader) Or Not Assigned(FTargetRow) Or Not Assigned(FTargetLabel) Or
+    Not Assigned(FTargetCombo) Or Not Assigned(FTargetBrowseButton) Then
+    Exit;
+  FAligningTargetMode := True;
+  Try
+    ModeLabel.AutoSize := True;
+    FTargetLabel.AutoSize := True;
+    LabelWidth := ModeLabel.Width;
+    If FTargetLabel.Width > LabelWidth Then
+      LabelWidth := FTargetLabel.Width;
+    ModeLabel.AutoSize := False;
+    FTargetLabel.AutoSize := False;
+    ModeLabel.Width := LabelWidth;
+    FTargetLabel.Width := LabelWidth;
+    ModeLabel.Layout := tlCenter;
+    FTargetLabel.Layout := tlCenter;
+    FTargetLabel.BorderSpacing.Right := ModeLabel.BorderSpacing.Right;
+
+    Gap := ModeCombo.BorderSpacing.Top;
+    If ModeCombo.BorderSpacing.Bottom > Gap Then
+      Gap := ModeCombo.BorderSpacing.Bottom;
+    If Gap < 1 Then
+      Gap := Scale96ToForm(4);
+    ModeCombo.Align := alClient;
+    ModeCombo.BorderSpacing.Left := 0;
+    ModeCombo.BorderSpacing.Right := 0;
+    ModeCombo.BorderSpacing.Top := Gap;
+    ModeCombo.BorderSpacing.Bottom := Gap;
+
+    SharedHeight := ModeCombo.Height;
+    If SharedHeight < Scale96ToForm(20) Then
+      SharedHeight := Scale96ToForm(28);
+    RowHeight := SharedHeight + Gap + Gap;
+    FTargetRow.Align := alTop;
+    FTargetRow.Height := RowHeight;
+    If SidebarHeader.Height <> RowHeight * 2 Then
+      SidebarHeader.Height := RowHeight * 2;
+
+    FTargetBrowseButton.Align := alRight;
+    FTargetBrowseButton.AutoSize := False;
+    FTargetBrowseButton.BorderSpacing.Left := 0;
+    FTargetBrowseButton.BorderSpacing.Right := 0;
+    FTargetBrowseButton.BorderSpacing.Top := Gap;
+    FTargetBrowseButton.BorderSpacing.Bottom := Gap;
+    FTargetCombo.Align := alClient;
+    FTargetCombo.BorderSpacing.Left := 0;
+    FTargetCombo.BorderSpacing.Right := Gap;
+    FTargetCombo.BorderSpacing.Top := Gap;
+    FTargetCombo.BorderSpacing.Bottom := Gap;
+
+    If SidebarHeader.HandleAllocated Then
+      SidebarHeader.Realign;
+    If ModeCombo.Height > 0 Then
+      SharedHeight := ModeCombo.Height;
+    FTargetCombo.Constraints.MinHeight := SharedHeight;
+    FTargetCombo.Constraints.MaxHeight := SharedHeight;
+    FTargetBrowseButton.Constraints.MinHeight := SharedHeight;
+    FTargetBrowseButton.Constraints.MaxHeight := SharedHeight;
+    If SidebarHeader.HandleAllocated Then
+      SidebarHeader.Realign;
+  Finally
+    FAligningTargetMode := False;
+  End;
+End;
+
+Procedure TProjectAssistantForm.UpdateTargetComboHint(Sender: TObject);
+Var
+  Path: String;
+Begin
+  If Not Assigned(FTargetCombo) Then
+    Exit;
+  Path := '';
+  If Assigned(FTargetPaths) And (FTargetCombo.ItemIndex >= 0) And
+    (FTargetCombo.ItemIndex < FTargetPaths.Count) Then
+    Path := FTargetPaths[FTargetCombo.ItemIndex];
+  FTargetCombo.ParentShowHint := False;
+  FTargetCombo.ShowHint := Path <> '';
+  FTargetCombo.Hint := TargetFolderHint(Path);
+  If Not Assigned(Sender) Then
+    Exit;
+End;
+
 Procedure TProjectAssistantForm.RefreshTargetChoices(Sender: TObject);
 Var
   Recent: TStringList;
@@ -820,7 +933,7 @@ Begin
         If FTargetPaths.Count > AssistantRecentTargetLimit Then Break;
         Path := Recent[Index];
         If FTargetPaths.IndexOf(Path) >= 0 Then Continue;
-        FTargetCombo.Items.Add(Path);
+        FTargetCombo.Items.Add(TargetFolderCaption(Path));
         FTargetPaths.Add(Path);
       End;
     Selected := 0;
@@ -829,8 +942,9 @@ Begin
         Selected := FTargetPaths.IndexOf(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
         If Selected < 0 Then
           Begin
-            FTargetCombo.Items.Add(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
-            FTargetPaths.Add(ExcludeTrailingPathDelimiter(AssistantTarget.Root));
+            Path := ExcludeTrailingPathDelimiter(AssistantTarget.Root);
+            FTargetCombo.Items.Add(TargetFolderCaption(Path));
+            FTargetPaths.Add(Path);
             Selected := FTargetPaths.Count - 1;
           End;
       End
@@ -842,6 +956,7 @@ Begin
     FRefreshingTargets := False;
     Recent.Free;
   End;
+  UpdateTargetComboHint(Nil);
 End;
 
 Procedure TProjectAssistantForm.ApplyTarget(Const Directory: String);
@@ -979,6 +1094,7 @@ End;
 
 Procedure TProjectAssistantForm.FormShow(Sender: TObject);
 Begin
+  AlignTargetModeControls;
   If Not FInputDropArmed Then
     Begin
       ArmControlFileDrop(InputPanel, Self);
@@ -3804,6 +3920,7 @@ Begin
       End;
     If Data = 0 Then
       Begin
+        AlignTargetModeControls;
         If HandleAllocated Then
           Begin
             Invalidate;

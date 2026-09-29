@@ -301,6 +301,9 @@ Begin
       Check('packages are not target choices',(Pos('One.lpk',Combo.Items.Text)=0) And (Pos('Two.lpk',Combo.Items.Text)=0));
       Check('folder button sits with the target',Assigned(Dialog.FindComponent('TargetBrowseButton')));
       Check('select a folder as the target',AssistantTarget.SelectFolder(Root+'/Source/One',Note));
+      Combo.OnDropDown(Combo);
+      Check('folder choice shows the leaf name',(Combo.ItemIndex>=0) And (Combo.Items[Combo.ItemIndex]='One'));
+      Check('folder choice hint is the full path',Combo.Hint=IncludeTrailingPathDelimiter(Root+'/Source/One'));
       Check('folder target is that directory',AssistantTarget.Root=Root+'/Source/One/');
       Check('files inside the folder are writable',AssistantTarget.AllowsWrite(Root+'/Source/One/New.pas'));
       Check('a sibling folder is outside the target',Not AssistantTarget.AllowsWrite(Root+'/Source/Two/Two.pas'));
