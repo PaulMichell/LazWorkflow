@@ -198,7 +198,7 @@ object GitSettingsForm: TGitSettingsForm
     end
     inline SpellFrame: TSpellCheckerSettingsFrame
       Left = 12
-      Height = 210
+      Height = 248
       Top = 495
       Width = 496
       Anchors = [akTop, akLeft, akRight]
