@@ -267,7 +267,6 @@ Type
   Private
     ElapsedTimer: TTimer;
     ChatView: TControl; { unused; centre is FTraceView }
-    Transcript: TStringList; { Session export / legacy; not the main UI surface. }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
     FComposerSelectedIndex: Integer; { Outlined thumbnail. -1 when the strip is empty. }
@@ -610,7 +609,6 @@ Begin
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
   PlanListPaths := TStringList.Create;
-  Transcript := TStringList.Create;
   BuildSections := TObjectList.Create(True);
   BuildPanel := Nil;
   FBuildSelectedIndex := -1;
@@ -696,7 +694,6 @@ Begin
   End;
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := Nil;
-  FreeAndNil(Transcript);
   FreeAndNil(HistoryIds);
   FreeAndNil(PlanListPaths);
   FreeAndNil(BuildSections);
@@ -3184,7 +3181,6 @@ End;
 
 Procedure TProjectAssistantForm.ApplyLoadedConversationToUi(Const StatusNote: String);
 Begin
-  Transcript.Clear;
   FUserCancelled := False;
   FTurnRecorded := False;
   FLastChatPaintTick := 0;
@@ -5522,15 +5518,6 @@ Procedure TProjectAssistantForm.AppendMessage(Const Role, Content: String);
 Var
   R: String;
 Begin
-  { Keep a thin legacy transcript for session export; UI uses current-turn fields. }
-  If Transcript.Count > 0 Then
-    Transcript.Add('');
-  Transcript.Add('### ' + RoleHeading(Role));
-  Transcript.Add('');
-  If Content <> '' Then
-    Transcript.Add(Content)
-  Else
-    Transcript.Add('');
   R := LowerCase(Trim(Role));
   If R = 'user' Then
     SetCurrentUserDisplay(Content, False)
@@ -5614,7 +5601,7 @@ End;
 
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
-  DisplayBody, ResolvedError, TraceNote, Settlement, AskedNote: String;
+  ResolvedError, TraceNote, Settlement, AskedNote: String;
   WorkedMs: Integer;
 Begin
   ResolvedError := ErrorText;
@@ -5644,19 +5631,6 @@ Begin
       Exit;
     End;
   { FLive* are authoritative for the completed stream (pane may be browsing elsewhere). }
-  If FStreamingActive Then
-    Begin
-      If (ResolvedError <> '') And (FLiveContent = '') And (FLiveThinking = '') Then
-        DisplayBody := '*(error)*'
-      Else
-        DisplayBody := FormatAssistantMarkdown(FLiveThinking, FLiveContent);
-      If Transcript.Count > 0 Then
-        Transcript.Add('');
-      Transcript.Add('### Assistant');
-      Transcript.Add('');
-      Transcript.Add(DisplayBody);
-    End;
-
   If ResolvedError <> '' Then
     Begin
       If FViewingLive Then
@@ -7281,7 +7255,6 @@ Begin
         If Not ProjectAssistantConversation.StartNewConversation Then
           WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError);
       End;
-    Transcript.Clear;
     FContextUsed := 0;
     FTurnRecorded := False;
     FSelectedTurnIndex := -1;
@@ -7332,7 +7305,6 @@ Begin
       If Not ProjectAssistantConversation.StartNewConversation Then
         WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
     End;
-  Transcript.Clear;
   FContextUsed := 0;
   FContextWarnShown := False;
   FUserCancelled := False;
@@ -7369,7 +7341,6 @@ Begin
   Caption := 'Project Assistant';
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
-  Transcript.Clear;
   FContextUsed := 0;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
@@ -7421,7 +7392,6 @@ Begin
   Caption := Title;
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
-  Transcript.Clear;
   FContextUsed := 0;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
@@ -7911,7 +7881,6 @@ Begin
     End;
   If IsCurrent Then
     Begin
-      Transcript.Clear;
       FContextUsed := 0;
       FTurnRecorded := False;
       FSelectedTurnIndex := -1;
