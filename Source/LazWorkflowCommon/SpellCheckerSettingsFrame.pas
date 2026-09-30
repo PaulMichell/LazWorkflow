@@ -24,10 +24,13 @@ Type
     DictDirLabel: TLabel;
     DictDirEdit: TEdit;
     StatusLabel: TLabel;
+    LocateButton: TButton;
     Procedure EngineComboChange(Sender: TObject);
+    Procedure LocateButtonClick(Sender: TObject);
   Private
     Procedure FillLanguageCombo(Const Selected: String);
     Procedure UpdatePreviewStatus;
+    Procedure EnsureEngineItems;
   Public
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
@@ -40,7 +43,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  SpellEngine, SpellCheckerConfig;
+  LazFileUtils, LazUTF8, SpellEngine, SpellCheckerConfig, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows;
 
 Procedure TSpellCheckerSettingsFrame.FillLanguageCombo(Const Selected: String);
 Var
@@ -84,15 +87,27 @@ Begin
   End;
 End;
 
+Procedure TSpellCheckerSettingsFrame.EnsureEngineItems;
+Begin
+  {$IFDEF WINDOWS}
+  If Assigned(EngineCombo) And (EngineCombo.Items.IndexOf('Windows') < 0) Then
+    EngineCombo.Items.Add('Windows');
+  If Assigned(EngineCombo) And (EngineCombo.Items.Count > 1) Then
+    EngineCombo.Items[1] := 'Auto (Windows, Hunspell, then ASpell)';
+  {$ENDIF}
+End;
+
 Procedure TSpellCheckerSettingsFrame.OptionsToControls(Source: TSpellCheckerOptions);
 Begin
   If Not Assigned(Source) Then
     Exit;
+  EnsureEngineItems;
   Case Source.EngineKind Of
     sekNone: EngineCombo.ItemIndex := 0;
     sekAuto: EngineCombo.ItemIndex := 1;
     sekHunspell: EngineCombo.ItemIndex := 2;
     sekAspell: EngineCombo.ItemIndex := 3;
+    sekWindows: EngineCombo.ItemIndex := 4;
   Else
     EngineCombo.ItemIndex := 1;
   End;
@@ -109,10 +124,12 @@ Var
 Begin
   If Not Assigned(Dest) Then
     Exit;
+  EnsureEngineItems;
   Case EngineCombo.ItemIndex Of
     0: Dest.EngineKind := sekNone;
     2: Dest.EngineKind := sekHunspell;
     3: Dest.EngineKind := sekAspell;
+    4: Dest.EngineKind := sekWindows;
   Else
     Dest.EngineKind := sekAuto;
   End;
@@ -134,6 +151,7 @@ End;
 Procedure TSpellCheckerSettingsFrame.UpdatePreviewStatus;
 Var
   Preview: TSpellCheckerOptions;
+  FoundLibrary: String;
 Begin
   If Not Assigned(StatusLabel) Then
     Exit;
@@ -145,8 +163,28 @@ Begin
         StatusLabel.Caption := 'No engine loaded — memo only';
         Exit;
       End;
-    If (Preview.EngineKind In [sekHunspell, sekAuto]) And WorkflowSpellConfig.HunspellAvailable Then
-      StatusLabel.Caption := 'Hunspell library found'
+    FoundLibrary := '';
+    {$IFDEF WINDOWS}
+    If (Preview.EngineKind In [sekWindows, sekAuto]) And WindowsSpellAvailable(FoundLibrary) Then
+      Begin
+        StatusLabel.Caption := 'Windows spell checker found';
+        If FoundLibrary <> '' Then
+          StatusLabel.Caption := StatusLabel.Caption + ' · ' + FoundLibrary;
+        Exit;
+      End;
+    If Preview.EngineKind = sekWindows Then
+      Begin
+        StatusLabel.Caption := 'Windows spell checker is not available';
+        Exit;
+      End;
+    {$ENDIF}
+    If (Preview.EngineKind In [sekHunspell, sekAuto]) And FindHunspellLibrary(FoundLibrary) Then
+      Begin
+        If Pos('libreoffice', LowerCase(FoundLibrary)) > 0 Then
+          StatusLabel.Caption := 'Hunspell library found in LibreOffice'
+        Else
+          StatusLabel.Caption := 'Hunspell library found';
+      End
     Else If (Preview.EngineKind In [sekAspell, sekAuto]) And WorkflowSpellConfig.AspellAvailable Then
       StatusLabel.Caption := 'ASpell library found'
     Else
@@ -184,6 +222,191 @@ Begin
     StatusLabel.Caption := WorkflowSpellConfig.LastStatus;
   Finally
     NewOptions.Free;
+  End;
+End;
+
+Function ChooseDictionaryDirectory(Const Dirs: TStringArray): String;
+Var
+  Index: Integer;
+  Parent, Candidate: String;
+  SharedParent: Boolean;
+Begin
+  Result := '';
+  If Length(Dirs) = 0 Then
+    Exit;
+  Parent := ExtractFileDir(Dirs[0]);
+  SharedParent := (Parent <> '') And (Length(Dirs) > 1);
+  If SharedParent Then
+    For Index := 1 To High(Dirs) Do
+      If Not SameText(ExtractFileDir(Dirs[Index]), Parent) Then
+        SharedParent := False;
+  If SharedParent And SameText(ExtractFileName(Parent), 'extensions') Then
+    Begin
+      Result := Parent;
+      Exit;
+    End;
+  Result := Dirs[0];
+  For Index := 0 To High(Dirs) Do
+    Begin
+      Candidate := IncludeTrailingPathDelimiter(Dirs[Index]);
+      If FileExistsUTF8(Candidate + 'en_GB.dic') Or FileExistsUTF8(Candidate + 'en_US.dic') Then
+        Begin
+          Result := Dirs[Index];
+          Exit;
+        End;
+    End;
+End;
+
+Function LocateHunspellInstallation(Out LibraryFile, DictDir: String): Boolean;
+Var
+  Dirs: TStringArray;
+Begin
+  LibraryFile := '';
+  DictDir := '';
+  Dirs := Nil;
+  ResetHunspellDiscovery;
+  ConfigureWindowsHunspell(LibraryFile, Dirs);
+  If LibraryFile = '' Then
+    FindHunspellLibrary(LibraryFile);
+  If Length(Dirs) = 0 Then
+    Dirs := HunspellDictionaryDirectories;
+  DictDir := ChooseDictionaryDirectory(Dirs);
+  Result := (LibraryFile <> '') And (DictDir <> '');
+End;
+
+Function LocateAspellInstallation(Out LibraryFile, DictDir: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  Roots: Array[0..2] Of String;
+  Index: Integer;
+  Root, Candidate: String;
+{$ENDIF}
+Begin
+  LibraryFile := '';
+  DictDir := '';
+  Result := FindAspellLibrary(LibraryFile);
+  {$IFDEF WINDOWS}
+  If Not Result Then
+    Begin
+      Roots[0] := GetEnvironmentVariableUTF8('ProgramW6432');
+      Roots[1] := GetEnvironmentVariableUTF8('ProgramFiles');
+      Roots[2] := GetEnvironmentVariableUTF8('ProgramFiles(x86)');
+      For Index := 0 To High(Roots) Do
+        Begin
+          Root := IncludeTrailingPathDelimiter(ExcludeTrailingPathDelimiter(Roots[Index])) + 'Aspell\';
+          Candidate := Root + 'bin\aspell-15.dll';
+          If Not FileExistsUTF8(Candidate) Then
+            Candidate := Root + 'bin\libaspell-15.dll';
+          If FileExistsUTF8(Candidate) Then
+            Begin
+              LibraryFile := Candidate;
+              Result := True;
+              Break;
+            End;
+        End;
+    End;
+  If Result And (ExtractFileDir(LibraryFile) <> '') Then
+    Begin
+      Candidate := IncludeTrailingPathDelimiter(ExtractFileDir(ExtractFileDir(LibraryFile))) + 'dict';
+      If DirectoryExistsUTF8(Candidate) Then
+        DictDir := Candidate;
+    End;
+  {$ENDIF}
+  Result := LibraryFile <> '';
+End;
+
+Procedure TSpellCheckerSettingsFrame.LocateButtonClick(Sender: TObject);
+Var
+  Preview: TSpellCheckerOptions;
+  LibraryFile, DictDir, SelectedLanguage: String;
+  FoundKind: TSpellEngineKind;
+Begin
+  If Not Assigned(StatusLabel) Then
+    Exit;
+  Preview := TSpellCheckerOptions.Create;
+  Try
+    OptionsFromControls(Preview);
+    SelectedLanguage := Preview.Language;
+    EnsureEngineItems;
+    If Preview.EngineKind = sekNone Then
+      Begin
+        StatusLabel.Caption := 'Select a spell checker first';
+        Exit;
+      End;
+    FoundKind := sekNone;
+    LibraryFile := '';
+    DictDir := '';
+    {$IFDEF WINDOWS}
+    If Preview.EngineKind In [sekWindows, sekAuto] Then
+      If WindowsSpellAvailable(SelectedLanguage) Then
+        Begin
+          FoundKind := sekWindows;
+          If Preview.EngineKind = sekWindows Then
+            EngineCombo.ItemIndex := 4;
+          If Preview.EngineKind = sekWindows Then
+            Begin
+              LibraryEdit.Text := '';
+              DictDirEdit.Text := '';
+            End;
+          SaveToConfig;
+          If Assigned(WorkflowSpellConfig) Then
+            WorkflowSpellConfig.Apply;
+          FillLanguageCombo(Preview.Language);
+          StatusLabel.Caption := 'Configured windows (' + SelectedLanguage + ')';
+          If Preview.EngineKind = sekAuto Then
+            StatusLabel.Caption := StatusLabel.Caption + '. Auto uses it first on Windows.';
+          Exit;
+        End
+      Else If Preview.EngineKind = sekWindows Then
+        Begin
+          StatusLabel.Caption := 'Windows spell checker is not available. Add a language in Windows settings.';
+          Exit;
+        End;
+    {$ENDIF}
+    If Preview.EngineKind In [sekHunspell, sekAuto] Then
+      Begin
+        If LocateHunspellInstallation(LibraryFile, DictDir) Then
+          FoundKind := sekHunspell
+        Else If (LibraryFile <> '') Or (DictDir <> '') Then
+          Begin
+            If LibraryFile <> '' Then
+              LibraryEdit.Text := LibraryFile;
+            If DictDir <> '' Then
+              DictDirEdit.Text := DictDir;
+            StatusLabel.Caption := HunspellDiscoveryNote;
+            If StatusLabel.Caption = '' Then
+              StatusLabel.Caption := 'Hunspell was only partly found';
+            Exit;
+          End;
+      End;
+    If (FoundKind = sekNone) And (Preview.EngineKind In [sekAspell, sekAuto]) And
+       LocateAspellInstallation(LibraryFile, DictDir) Then
+      FoundKind := sekAspell;
+    If FoundKind = sekNone Then
+      Begin
+        StatusLabel.Caption := HunspellDiscoveryNote;
+        If StatusLabel.Caption = '' Then
+          StatusLabel.Caption := 'No installation found for the selected spell checker';
+        Exit;
+      End;
+    If (Preview.EngineKind = sekAuto) And (FoundKind = sekAspell) Then
+      EngineCombo.ItemIndex := 3;
+    If LibraryFile <> '' Then
+      LibraryEdit.Text := LibraryFile;
+    If DictDir <> '' Then
+      DictDirEdit.Text := DictDir;
+    SaveToConfig;
+    FillLanguageCombo(SelectedLanguage);
+    If Assigned(WorkflowSpellConfig) And (WorkflowSpellConfig.LastStatus <> '') Then
+      StatusLabel.Caption := WorkflowSpellConfig.LastStatus
+    Else
+      Begin
+        StatusLabel.Caption := 'Configured ' + SpellEngineKindToText(FoundKind) + '. Library ' + LibraryFile;
+        If DictDir <> '' Then
+          StatusLabel.Caption := StatusLabel.Caption + '. Dictionaries ' + DictDir;
+      End;
+  Finally
+    Preview.Free;
   End;
 End;
 

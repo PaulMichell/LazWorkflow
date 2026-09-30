@@ -1,16 +1,16 @@
 object SpellCheckerSettingsFrame: TSpellCheckerSettingsFrame
   Left = 0
-  Height = 210
+  Height = 248
   Top = 0
   Width = 496
-  ClientHeight = 210
+  ClientHeight = 248
   ClientWidth = 496
   TabOrder = 0
   DesignLeft = 300
   DesignTop = 200
   object SpellGroup: TGroupBox
     Left = 0
-    Height = 210
+    Height = 248
     Top = 0
     Width = 496
     Align = alClient
@@ -94,10 +94,19 @@ object SpellCheckerSettingsFrame: TSpellCheckerSettingsFrame
       Anchors = [akTop, akLeft, akRight]
       TabOrder = 3
     end
+    object LocateButton: TButton
+      Left = 120
+      Height = 28
+      Top = 156
+      Width = 200
+      Caption = 'Locate Spellchecker'
+      OnClick = LocateButtonClick
+      TabOrder = 4
+    end
     object StatusLabel: TLabel
       Left = 12
       Height = 18
-      Top = 158
+      Top = 192
       Width = 468
       Anchors = [akTop, akLeft, akRight]
       Caption = 'No engine loaded — memo only'

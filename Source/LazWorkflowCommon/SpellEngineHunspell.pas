@@ -43,11 +43,19 @@ Function FindHunspellLibrary(Out FullName: String): Boolean;
 Function HunspellDictionaryDirectories: TStringArray;
 Function FindHunspellDictionary(Const Language, DictionaryDirectory: String; Out AffFile, DicFile, LanguageCode: String): Boolean;
 Procedure ListHunspellLanguages(List: TStrings; Const DictionaryDirectory: String = '');
+/// Locate a Hunspell DLL and aff/dic directories on Windows, preferring LibreOffice.
+/// Other platforms return false. True means both a library file and a dictionary directory were found.
+Function ConfigureWindowsHunspell(Out LibraryFileName: String; Out DictionaryDirectories: TStringArray): Boolean;
+Function HunspellDiscoveryNote: String;
+Procedure ResetHunspellDiscovery;
 
 Implementation
 
 Uses
-  DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions;
+  {$IFDEF WINDOWS}
+  Windows,
+  {$ENDIF}
+  DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions, WorkflowLog, SpellHunspellWindows;
 
 Type
   THunspellCreate = Function(AffPath, DicPath: PChar): Pointer; CDecl;
@@ -99,6 +107,77 @@ End;
 Var
   BindingLock: TRTLCriticalSection;
 
+Procedure AppendUniqueDirectory(Var Dirs: TStringArray; Const Dir: String);
+Var
+  Index: Integer;
+  Clean: String;
+Begin
+  Clean := ExcludeTrailingPathDelimiter(Dir);
+  If (Clean = '') Or (Not DirectoryExistsUTF8(Clean)) Then
+    Exit;
+  For Index := 0 To High(Dirs) Do
+    If CompareFilenames(Dirs[Index], Clean) = 0 Then
+      Exit;
+  SetLength(Dirs, Length(Dirs) + 1);
+  Dirs[High(Dirs)] := Clean;
+End;
+
+Procedure AppendConfiguredDictionaries(Var Dirs: TStringArray);
+Var
+  Configured: TStringArray;
+  Index: Integer;
+Begin
+  Configured := WindowsHunspellDictionaryDirectories;
+  For Index := 0 To High(Configured) Do
+    AppendUniqueDirectory(Dirs, Configured[Index]);
+End;
+
+Function ConfigureWindowsHunspell(Out LibraryFileName: String; Out DictionaryDirectories: TStringArray): Boolean;
+Var
+  Libraries: TStringArray;
+Begin
+  Libraries := WindowsHunspellLibraryFiles;
+  DictionaryDirectories := WindowsHunspellDictionaryDirectories;
+  LibraryFileName := '';
+  If Length(Libraries) > 0 Then
+    LibraryFileName := Libraries[0];
+  Result := (LibraryFileName <> '') And (Length(DictionaryDirectories) > 0);
+End;
+
+Function HunspellDiscoveryNote: String;
+Begin
+  Result := WindowsHunspellDiscoveryNote;
+End;
+
+Procedure ResetHunspellDiscovery;
+Begin
+  ResetWindowsHunspellDiscovery;
+End;
+
+Function LoadSpellLibrary(Const FileName: String): TLibHandle;
+{$IFDEF WINDOWS}
+Var
+  WideName: UnicodeString;
+  ErrorCode: DWORD;
+{$ENDIF}
+Begin
+  {$IFDEF WINDOWS}
+  If (Pos('\', FileName) > 0) Or (Pos('/', FileName) > 0) Then
+    Begin
+      WideName := UTF8Decode(FileName);
+      Result := TLibHandle(LoadLibraryExW(PWideChar(WideName), 0, LOAD_WITH_ALTERED_SEARCH_PATH));
+      If Result = NilHandle Then
+        Begin
+          ErrorCode := GetLastError;
+          If Assigned(WorkflowLogger) Then
+            WorkflowLogger.Warning('Spell', 'Could not load ' + FileName + ' (Windows error ' + IntToStr(ErrorCode) + ')');
+        End;
+      Exit;
+    End;
+  {$ENDIF}
+  Result := LoadLibrary(FileName);
+End;
+
 Function BindHunspell(Const FullName: String): Boolean;
 Begin
   EnterCriticalSection(BindingLock);
@@ -110,7 +189,7 @@ Begin
       Result := Assigned(HunspellCreate) And Assigned(HunspellSpellFn);
       Exit;
     End;
-  HunLibHandle := LoadLibrary(FullName);
+  HunLibHandle := LoadSpellLibrary(FullName);
   If HunLibHandle = NilHandle Then
     Exit;
   Pointer(HunspellCreate) := GetProcedureAddress(HunLibHandle, 'Hunspell_create');
@@ -135,7 +214,7 @@ End;
 
 Function FindHunspellLibrary(Out FullName: String): Boolean;
 Var
-  Names: TStringArray;
+  Names, Configured: TStringArray;
   Index: Integer;
   {$IFDEF DARWIN}
   Prefixes: Array[0..3] Of String;
@@ -160,6 +239,14 @@ Begin
         Result := True;
         Exit;
       End;
+  Configured := WindowsHunspellLibraryFiles;
+  For Index := 0 To High(Configured) Do
+    If BindHunspell(Configured[Index]) Then
+      Begin
+        FullName := HunLibPath;
+        Result := True;
+        Exit;
+      End;
   {$IFDEF DARWIN}
   Prefixes[0] := '/opt/homebrew/lib/';
   Prefixes[1] := '/usr/local/lib/';
@@ -178,39 +265,55 @@ Begin
 End;
 
 Function HunspellDictionaryDirectories: TStringArray;
-  Procedure AddDir(Var Dirs: TStringArray; Const Dir: String);
-  Var
-    I: Integer;
-    Clean: String;
-  Begin
-    Clean := ExcludeTrailingPathDelimiter(Dir);
-    If (Clean = '') Or (Not DirectoryExistsUTF8(Clean)) Then
-      Exit;
-    For I := 0 To High(Dirs) Do
-      If CompareFilenames(Dirs[I], Clean) = 0 Then
-        Exit;
-    SetLength(Dirs, Length(Dirs) + 1);
-    Dirs[High(Dirs)] := Clean;
-  End;
 Begin
   Result := Nil;
   SetLength(Result, 0);
   {$IFDEF UNIX}
-  AddDir(Result, '/usr/share/hunspell');
-  AddDir(Result, '/usr/share/myspell');
-  AddDir(Result, '/usr/share/myspell/dicts');
-  AddDir(Result, '/usr/local/share/hunspell');
-  AddDir(Result, GetUserDir + '.openoffice.org/3/user/wordbook');
+  AppendUniqueDirectory(Result, '/usr/share/hunspell');
+  AppendUniqueDirectory(Result, '/usr/share/myspell');
+  AppendUniqueDirectory(Result, '/usr/share/myspell/dicts');
+  AppendUniqueDirectory(Result, '/usr/local/share/hunspell');
+  AppendUniqueDirectory(Result, GetUserDir + '.openoffice.org/3/user/wordbook');
   {$ENDIF}
-  {$IFDEF WINDOWS}
-  AddDir(Result, 'C:\Program Files\LibreOffice\share\dict\ooo');
-  AddDir(Result, 'C:\Program Files (x86)\LibreOffice\share\dict\ooo');
-  AddDir(Result, GetEnvironmentVariableUTF8('LOCALAPPDATA') + '\LibreOffice\4\user\wordbook');
-  {$ENDIF}
+  AppendConfiguredDictionaries(Result);
   {$IFDEF DARWIN}
-  AddDir(Result, '/Library/Spelling');
-  AddDir(Result, GetUserDir + 'Library/Spelling');
-  AddDir(Result, '/Applications/LibreOffice.app/Contents/Resources/extensions');
+  AppendUniqueDirectory(Result, '/Library/Spelling');
+  AppendUniqueDirectory(Result, GetUserDir + 'Library/Spelling');
+  AppendUniqueDirectory(Result, '/Applications/LibreOffice.app/Contents/Resources/extensions');
+  {$ENDIF}
+End;
+
+Function HunspellSearchDirectories(Const DictionaryDirectory: String): TStringArray;
+{$IFDEF WINDOWS}
+Var
+  Index, Limit: Integer;
+  HasPair: Boolean;
+{$ENDIF}
+Begin
+  Result := Nil;
+  If Trim(DictionaryDirectory) <> '' Then
+    Begin
+      SetLength(Result, 1);
+      Result[0] := ExcludeTrailingPathDelimiter(Trim(DictionaryDirectory));
+    End
+  Else
+    Result := HunspellDictionaryDirectories;
+  {$IFDEF WINDOWS}
+  If Trim(DictionaryDirectory) = '' Then
+    Exit;
+  Limit := Length(Result);
+  Index := 0;
+  While Index < Limit Do
+    Begin
+      AppendWindowsChildDictionaries(Result, Result[Index]);
+      Inc(Index);
+    End;
+  HasPair := False;
+  For Index := 0 To High(Result) Do
+    If WindowsDirectoryHasAffDicPair(Result[Index]) Then
+      HasPair := True;
+  If Not HasPair Then
+    AppendConfiguredDictionaries(Result);
   {$ENDIF}
 End;
 
@@ -223,13 +326,7 @@ Var
 Begin
   If Not Assigned(List) Then
     Exit;
-  If Trim(DictionaryDirectory) <> '' Then
-    Begin
-      SetLength(Dirs, 1);
-      Dirs[0] := ExcludeTrailingPathDelimiter(DictionaryDirectory);
-    End
-  Else
-    Dirs := HunspellDictionaryDirectories;
+  Dirs := HunspellSearchDirectories(DictionaryDirectory);
   For DirIndex := 0 To High(Dirs) Do
     Begin
       InfoResult := FindFirstUTF8(IncludeTrailingPathDelimiter(Dirs[DirIndex]) + '*.dic', faAnyFile, Info);
@@ -302,13 +399,7 @@ Begin
       Wanted[1] := 'en_US';
       Wanted[2] := 'en';
     End;
-  If Trim(DictionaryDirectory) <> '' Then
-    Begin
-      SetLength(Dirs, 1);
-      Dirs[0] := ExcludeTrailingPathDelimiter(DictionaryDirectory);
-    End
-  Else
-    Dirs := HunspellDictionaryDirectories;
+  Dirs := HunspellSearchDirectories(DictionaryDirectory);
   For Index := 0 To High(Wanted) Do
     For DirIndex := 0 To High(Dirs) Do
       Begin

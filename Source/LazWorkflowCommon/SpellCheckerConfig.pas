@@ -80,7 +80,7 @@ Procedure InitializeSpellCheckerStorage(Const ConfigDirectory: String);
 Implementation
 
 Uses
-  LazFileUtils, fpjson, WorkflowSettings, SpellEngineHunspell, SpellEngineAspell, WorkflowLog;
+  LazFileUtils, fpjson, WorkflowSettings, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows, WorkflowLog;
 
 Type
   TSpellPreloadThread = Class(TThread)
@@ -139,6 +139,8 @@ Var
   Begin
     Result := Nil;
     Case LoadKind Of
+      sekWindows:
+        Result := TWindowsSpellEngine.Create(FLanguage, FLibraryFileName, FDictionaryDirectory);
       sekHunspell:
         Result := THunspellEngine.Create(FLanguage, FLibraryFileName, FDictionaryDirectory);
       sekAspell:
@@ -160,7 +162,11 @@ Begin
     FStatus := 'No engine loaded — memo only'
   Else If FKind = sekAuto Then
     Begin
-      Candidate := TryKind(sekHunspell);
+      {$IFDEF WINDOWS}
+      Candidate := TryKind(sekWindows);
+      {$ENDIF}
+      If Not Assigned(Candidate) Then
+        Candidate := TryKind(sekHunspell);
       If Not Assigned(Candidate) Then
         Candidate := TryKind(sekAspell);
     End
@@ -306,6 +312,11 @@ Begin
       End;
   If FOptions.EngineKind = sekNone Then
     Exit;
+  If Assigned(FPreloadThread) And FPreloadThread.Finished Then
+    Begin
+      FPreloadThread.WaitFor;
+      FreeAndNil(FPreloadThread);
+    End;
   If Assigned(FPreloadThread) And IssuedMatchesOptions Then
     Exit;
   EnterCriticalSection(FEngineLock);
@@ -602,6 +613,11 @@ Begin
   Try
     Names.Sorted := True;
     Names.Duplicates := dupIgnore;
+    {$IFDEF WINDOWS}
+    ListWindowsSpellLanguages(Names);
+    AppendKind(Names, sekWindows);
+    Names.Clear;
+    {$ENDIF}
     ListHunspellLanguages(Names, FOptions.DictionaryDirectory);
     AppendKind(Names, sekHunspell);
     Names.Clear;

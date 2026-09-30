@@ -54,6 +54,81 @@ Begin
     SpellWordIsComplete('lookoing ', Tokens[0], Length('lookoing ') + 1));
 End;
 
+{$IFDEF WINDOWS}
+Function StandardLibreOfficePresent: Boolean;
+Var
+  Parents: Array[0..3] Of String;
+  Index: Integer;
+  Info: TSearchRec;
+  Parent, Child: String;
+Begin
+  Result := False;
+  Parents[0] := GetEnvironmentVariable('ProgramW6432');
+  Parents[1] := GetEnvironmentVariable('ProgramFiles');
+  Parents[2] := GetEnvironmentVariable('ProgramFiles(x86)');
+  Parents[3] := 'C:\Program Files';
+  For Index := 0 To High(Parents) Do
+    Begin
+      Parent := ExcludeTrailingPathDelimiter(Parents[Index]);
+      If Parent = '' Then
+        Continue;
+      If DirectoryExists(Parent + '\LibreOffice\program') Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+      If FindFirst(Parent + '\LibreOffice*', faDirectory, Info) <> 0 Then
+        Continue;
+      Try
+        Repeat
+          If ((Info.Attr And faDirectory) <> 0) And (Info.Name <> '.') And (Info.Name <> '..') Then
+            Begin
+              Child := Parent + '\' + Info.Name + '\program';
+              If DirectoryExists(Child) Then
+                Begin
+                  Result := True;
+                  Exit;
+                End;
+            End;
+        Until FindNext(Info) <> 0;
+      Finally
+        FindClose(Info);
+      End;
+    End;
+End;
+{$ENDIF}
+
+{$IFDEF WINDOWS}
+Procedure TestWindowsConfigure;
+Var
+  LibraryFileName, AffFile, DicFile, LanguageCode, Loaded: String;
+  Dirs: TStringArray;
+  Index: Integer;
+Begin
+  If Not ConfigureWindowsHunspell(LibraryFileName, Dirs) Then
+    Begin
+      Check('installed LibreOffice is configured', Not StandardLibreOfficePresent);
+      WriteLn('skip Windows Hunspell configure (LibreOffice not found)');
+      Exit;
+    End;
+  WriteLn('Windows Hunspell library: ', LibraryFileName);
+  For Index := 0 To High(Dirs) Do
+    WriteLn('Windows Hunspell dictionary: ', Dirs[Index]);
+  Check('configured library exists', (LibraryFileName <> '') And FileExists(LibraryFileName));
+  Check('configured dictionary directory exists', (Length(Dirs) > 0) And DirectoryExists(Dirs[0]));
+  Check('configured library loads', FindHunspellLibrary(Loaded) And (Loaded <> ''));
+  Check('configured files open a dictionary', FindHunspellDictionary('', '', AffFile, DicFile, LanguageCode));
+End;
+{$ELSE}
+Procedure TestWindowsConfigure;
+Var
+  LibraryFileName: String;
+  Dirs: TStringArray;
+Begin
+  Check('windows configure is inert off Windows', Not ConfigureWindowsHunspell(LibraryFileName, Dirs));
+End;
+{$ENDIF}
+
 Procedure TestHunspell;
 Var
   Engine: THunspellEngine;
@@ -138,6 +213,7 @@ Begin
   Check('en_GB.UTF-8 strips encoding', SpellLanguageFromLocale('en_GB.UTF-8') = 'en_GB');
   Check('en-US becomes underscore', SpellLanguageFromLocale('en-US') = 'en_US');
   Check('empty locale is empty', SpellLanguageFromLocale('') = '');
+  Check('windows kind round trip', TextToSpellEngineKind(SpellEngineKindToText(sekWindows)) = sekWindows);
 End;
 
 Begin
@@ -145,6 +221,7 @@ Begin
   TestNone;
   TestLocale;
   TestBreaker;
+  TestWindowsConfigure;
   TestHunspell;
   TestAspell;
   If FailCount = 0 Then
