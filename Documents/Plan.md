@@ -70,7 +70,7 @@ Remove the unit from `Packages/LazAssistantTools.lpk` and drop `AssistantSession
 
 ### 5.1 Delete filename constants nothing reads
 
-Status: not started
+Status: complete
 
 - `Source/LazAssistantTools/AssistantConfig.pas` lines 16–17: `AssistantConfigFileName` and `AssistantConfigLegacyFileName`.
 - `Source/LazRepositoryTools/GitConfig.pas` lines 16–17 and 25: `GitConfigFileName`, `GitConfigLegacyFileName`, and `GitConfigMigrationVersion`.
