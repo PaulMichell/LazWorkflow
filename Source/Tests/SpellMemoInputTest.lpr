@@ -3,7 +3,7 @@ Program SpellMemoInputTest;
 
 Uses
   cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls,
-  LCLType, LazUTF8, Clipbrd, SpellMemo;
+  LCLType, LazUTF8, Clipbrd, Menus, SpellMemo;
 
 Type
   TInputMemo = Class(TSpellMemo)
@@ -11,6 +11,7 @@ Type
     Procedure TypeText(Const Value: String);
     Procedure Press(Key: Word; Shift: TShiftState = []);
     Procedure CheckWrap(Const Value: String; AWidth: Integer);
+    Procedure ApplyAmpersandSuggestion;
   End;
 
 Procedure Check(Const Name: String; OK: Boolean);
@@ -38,6 +39,26 @@ End;
 Procedure TInputMemo.Press(Key: Word; Shift: TShiftState);
 Begin
   KeyDown(Key, Shift);
+End;
+
+Procedure TInputMemo.ApplyAmpersandSuggestion;
+Var
+  Menu: TPopupMenu;
+  Item: TMenuItem;
+Begin
+  Text := 'wrod';
+  SelStart := 1;
+  LocateTokenAtCaret;
+  Menu := TPopupMenu.Create(Self);
+  Try
+    Item := AddSpellSuggestion(Menu, 'AT&T');
+    Check('caption escapes a literal ampersand', Item.Caption = 'AT&&T');
+    Item.Caption := 'ATT';
+    SuggestionClick(Item);
+  Finally
+    Menu.Free;
+  End;
+  Check('suggestion AT&T replaces the word', Text = 'AT&T');
 End;
 
 Procedure TInputMemo.CheckWrap(Const Value: String; AWidth: Integer);
@@ -178,6 +199,7 @@ Begin
     Memo.Press(VK_HOME);
     Memo.Press(VK_END);
     Check('unwrapped End', Memo.SelStart = Length(Prompt));
+    Memo.ApplyAmpersandSuggestion;
     Memo.TypeText(' pending at destruction');
     Memo.Free;
     Application.ProcessMessages;

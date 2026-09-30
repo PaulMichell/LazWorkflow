@@ -4,7 +4,7 @@ Unit SpellMemo;
 
   Size note: exceeds the 1000 line preference. Wrap layout, caret/selection
   and spell markup are one painted control so underlines stay widgetset-free.
-  Reviewed 2026-08: no hidden sibling material. }
+  Reviewed 2026-09: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -58,6 +58,7 @@ Type
     FOwnedPopup: TPopupMenu;
     FSpellItemCount: Integer;
     FSpellItems: TFPList;
+    FSpellSuggestions: TStringList; { parallel to FSpellItems; empty for separators and commands }
     FActiveToken: String;
     FActiveStart: Integer;
     FActiveLength: Integer;
@@ -81,8 +82,8 @@ Type
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
     Procedure ClearSpellMenu(Menu: TPopupMenu);
+    Procedure DetachSpellItem(Item: TObject);
     Procedure RebuildSpellMenu(Menu: TPopupMenu);
-    Procedure SuggestionClick(Sender: TObject);
     Procedure IgnoreClick(Sender: TObject);
     Procedure AddClick(Sender: TObject);
     Procedure PopupPopup(Sender: TObject);
@@ -95,7 +96,6 @@ Type
     Procedure EditSelectAllClick(Sender: TObject);
     Function SpellActive: Boolean;
     Procedure ReplaceActiveWord(Const NewText: String);
-    Procedure LocateTokenAtCaret;
     Procedure SetWordWrap(Value: Boolean);
     Procedure SetWantTabs(Value: Boolean);
     Procedure SetWantReturns(Value: Boolean);
@@ -131,6 +131,9 @@ Type
     Procedure EnsureScrollBar;
     Function MeasureAdvance(Const S: String): Integer;
   Protected
+    Procedure LocateTokenAtCaret;
+    Function AddSpellSuggestion(Menu: TPopupMenu; Const Suggestion: String): TMenuItem;
+    Procedure SuggestionClick(Sender: TObject);
     Procedure Notification(AComponent: TComponent; Operation: TOperation); Override;
     Procedure Paint; Override;
     Procedure Resize; Override;
@@ -228,10 +231,13 @@ Begin
   Height := 80;
   FSpellItemCount := 0;
   FSpellItems := TFPList.Create;
+  FSpellSuggestions := TStringList.Create;
   FLayoutCache := TStringList.Create;
   FLayoutCache.Sorted := True; FLayoutCache.CaseSensitive := True;
   FActiveStart := 0;
   FActiveLength := 0;
+  { This LCL menu has no AutoHotkeys property. The stored suggestion, not the caption,
+    is what a click applies, so an accelerator rewrite cannot change the word. }
   FOwnedPopup := TPopupMenu.Create(Nil);
   FDebounce := TTimer.Create(Nil);
   FDebounce.Enabled := False;
@@ -273,6 +279,7 @@ Begin
   FreeAndNil(FCaretTimer);
   FreeAndNil(FOwnedPopup);
   FreeAndNil(FSpellItems);
+  FreeAndNil(FSpellSuggestions);
   ClearLayoutCache;
   FreeAndNil(FLayoutCache);
   FreeAndNil(FScrollBar);
@@ -1523,7 +1530,7 @@ Procedure TSpellMemo.Notification(AComponent: TComponent; Operation: TOperation)
 Begin
   If Operation = opRemove Then
     Begin
-      If Assigned(FSpellItems) Then FSpellItems.Remove(AComponent);
+      DetachSpellItem(AComponent);
       If AComponent = FHookedPopup Then
         Begin
           FHookedPopup := Nil;
@@ -1548,17 +1555,52 @@ Begin
   FHookedPopup := Nil; FHostPopupHandler := Nil;
 End;
 
+Function SpellMenuCaption(Const Value: String): String;
+Begin
+  Result := StringReplace(Value, '&', '&&', [rfReplaceAll]);
+End;
+
+Procedure TSpellMemo.DetachSpellItem(Item: TObject);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(FSpellItems) Or Not Assigned(Item) Then
+    Exit;
+  Index := FSpellItems.IndexOf(Item);
+  If Index < 0 Then
+    Exit;
+  FSpellItems.Delete(Index);
+  If Assigned(FSpellSuggestions) And (Index < FSpellSuggestions.Count) Then
+    FSpellSuggestions.Delete(Index);
+End;
+
 Procedure TSpellMemo.ClearSpellMenu(Menu: TPopupMenu);
-Var Item: TMenuItem;
+Var
+  Item: TMenuItem;
 Begin
   If Assigned(FSpellItems) Then
     While FSpellItems.Count > 0 Do
       Begin
         Item := TMenuItem(FSpellItems.Last);
-        FSpellItems.Delete(FSpellItems.Count - 1);
+        DetachSpellItem(Item);
         Item.Free;
       End;
   FSpellItemCount := 0;
+End;
+
+Function TSpellMemo.AddSpellSuggestion(Menu: TPopupMenu; Const Suggestion: String): TMenuItem;
+Begin
+  Result := TMenuItem.Create(Self);
+  FSpellItems.Add(Result);
+  FSpellSuggestions.Add(Suggestion);
+  Result.FreeNotification(Self);
+  Result.Caption := SpellMenuCaption(Suggestion);
+  Result.OnClick := @SuggestionClick;
+  If Assigned(Menu) Then
+    Begin
+      Menu.Items.Insert(FSpellItemCount, Result);
+      Inc(FSpellItemCount);
+    End;
 End;
 
 Procedure TSpellMemo.RebuildSpellMenu(Menu: TPopupMenu);
@@ -1575,35 +1617,30 @@ Begin
     Exit;
   Suggestions := WorkflowSpellConfig.GetSuggestions(FActiveToken, 12);
   For Index := 0 To High(Suggestions) Do
-    Begin
-      Item := TMenuItem.Create(Self);
-      FSpellItems.Add(Item);
-      Item.FreeNotification(Self);
-      Item.Caption := Suggestions[Index];
-      Item.OnClick := @SuggestionClick;
-      Menu.Items.Insert(FSpellItemCount, Item);
-      Inc(FSpellItemCount);
-    End;
+    AddSpellSuggestion(Menu, Suggestions[Index]);
   If FSpellItemCount > 0 Then
     Begin
       Item := TMenuItem.Create(Self);
       FSpellItems.Add(Item);
+      FSpellSuggestions.Add('');
       Item.FreeNotification(Self);
       Item.Caption := '-';
       Menu.Items.Insert(FSpellItemCount, Item);
       Inc(FSpellItemCount);
     End;
   Item := TMenuItem.Create(Self);
-      FSpellItems.Add(Item);
-      Item.FreeNotification(Self);
-  Item.Caption := 'Ignore "' + FActiveToken + '"';
+  FSpellItems.Add(Item);
+  FSpellSuggestions.Add('');
+  Item.FreeNotification(Self);
+  Item.Caption := 'Ignore "' + SpellMenuCaption(FActiveToken) + '"';
   Item.OnClick := @IgnoreClick;
   Menu.Items.Insert(FSpellItemCount, Item);
   Inc(FSpellItemCount);
   Item := TMenuItem.Create(Self);
-      FSpellItems.Add(Item);
-      Item.FreeNotification(Self);
-  Item.Caption := 'Add "' + FActiveToken + '" to dictionary';
+  FSpellItems.Add(Item);
+  FSpellSuggestions.Add('');
+  Item.FreeNotification(Self);
+  Item.Caption := 'Add "' + SpellMenuCaption(FActiveToken) + '" to dictionary';
   Item.OnClick := @AddClick;
   Menu.Items.Insert(FSpellItemCount, Item);
   Inc(FSpellItemCount);
@@ -1611,6 +1648,7 @@ Begin
     Begin
       Item := TMenuItem.Create(Self);
       FSpellItems.Add(Item);
+      FSpellSuggestions.Add('');
       Item.FreeNotification(Self);
       Item.Caption := '-';
       Menu.Items.Insert(FSpellItemCount, Item);
@@ -1661,9 +1699,15 @@ Begin
 End;
 
 Procedure TSpellMemo.SuggestionClick(Sender: TObject);
+Var
+  Index: Integer;
 Begin
-  If Sender Is TMenuItem Then
-    ReplaceActiveWord(StringReplace(TMenuItem(Sender).Caption, '&', '', [rfReplaceAll]));
+  If Not (Sender Is TMenuItem) Or Not Assigned(FSpellItems) Or Not Assigned(FSpellSuggestions) Then
+    Exit;
+  Index := FSpellItems.IndexOf(Sender);
+  If (Index < 0) Or (Index >= FSpellSuggestions.Count) Or (FSpellSuggestions[Index] = '') Then
+    Exit;
+  ReplaceActiveWord(FSpellSuggestions[Index]);
 End;
 
 Procedure TSpellMemo.IgnoreClick(Sender: TObject);
