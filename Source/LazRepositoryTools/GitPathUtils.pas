@@ -15,6 +15,8 @@ Uses
 Function GitProjectStartPath(AProject: TLazProject): String;
 Function GitIdeStartPath: String;
 Function ConfirmGitPathAction(Const ActionTitle, ActionVerb: String; Paths: TStrings): Boolean;
+/// Darwin Finder waste-bin arguments. The path is passed after --, never inside -e.
+Procedure AppendFinderWasteBinArguments(Parameters: TStrings; Const FullPath: String);
 Function MovePathToWasteBin(Const FullPath: String; Out ErrorText: String): Boolean;
 
 Implementation
@@ -86,6 +88,20 @@ Begin
     Exit;
   Result := MessageDlg(ActionTitle, FormatPathActionSummary(ActionVerb, Paths),
     mtConfirmation, [mbYes, mbNo], 0) = mrYes;
+End;
+
+Procedure AppendFinderWasteBinArguments(Parameters: TStrings; Const FullPath: String);
+Begin
+  If Parameters = Nil Then
+    Exit;
+  Parameters.Add('-e');
+  Parameters.Add('on run argv');
+  Parameters.Add('-e');
+  Parameters.Add('tell application "Finder" to delete (POSIX file (item 1 of argv))');
+  Parameters.Add('-e');
+  Parameters.Add('end run');
+  Parameters.Add('--');
+  Parameters.Add(FullPath);
 End;
 
 Function MovePathToWasteBin(Const FullPath: String; Out ErrorText: String): Boolean;
@@ -162,16 +178,20 @@ Begin
       Begin
         {$IFDEF DARWIN}
         Proc.Parameters.Clear;
-        Proc.Executable := '/usr/bin/osascript';
-        Proc.Parameters.Add('-e');
-        Proc.Parameters.Add('tell application "Finder" to delete POSIX file "' +
-          StringReplace(FullPath, '"', '\"', [rfReplaceAll]) + '"');
-        Try
-          Proc.Execute;
-          Result := Proc.ExitStatus = 0;
-        Except
-          Result := False;
-        End;
+        Cmd := '/usr/bin/osascript';
+        If Not FileExists(Cmd) Then
+          Cmd := FindDefaultExecutablePath('osascript');
+        If Cmd <> '' Then
+          Begin
+            Proc.Executable := Cmd;
+            AppendFinderWasteBinArguments(Proc.Parameters, FullPath);
+            Try
+              Proc.Execute;
+              Result := Proc.ExitStatus = 0;
+            Except
+              Result := False;
+            End;
+          End;
         {$ENDIF}
       End;
     If Not Result Then
