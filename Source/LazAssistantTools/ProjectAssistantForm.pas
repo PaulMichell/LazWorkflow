@@ -469,9 +469,6 @@ Type
     Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
     Procedure SetBusyCursor(IsBusy: Boolean);
     Procedure SetOpenBusy(IsBusy: Boolean);
-    Function RoleHeading(Const Role: String): String;
-    Function QuoteMarkdownLines(Const TextValue: String): String;
-    Function FormatAssistantMarkdown(Const Thinking, Content: String): String;
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
     Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
@@ -5442,76 +5439,6 @@ Begin
   Finally
     FRefreshingChat := False;
   End;
-End;
-
-Function TProjectAssistantForm.RoleHeading(Const Role: String): String;
-Var
-  R: String;
-Begin
-  R := LowerCase(Trim(Role));
-  If R = 'user' Then
-    Result := 'User'
-  Else If R = 'assistant' Then
-    Result := 'Assistant'
-  Else If R = 'system' Then
-    Result := 'System'
-  Else If R = 'tool' Then
-    Result := 'Tool'
-  Else
-    Result := Role;
-End;
-
-Function TProjectAssistantForm.QuoteMarkdownLines(Const TextValue: String): String;
-Var
-  SL: TStringList;
-  I: Integer;
-  Line: String;
-Begin
-  { Blockquote each line so thinking reads as a secondary section. }
-  SL := TStringList.Create;
-  Try
-    SL.Text := StringReplace(TextValue, #13#10, #10, [rfReplaceAll]);
-    SL.Text := StringReplace(SL.Text, #13, #10, [rfReplaceAll]);
-    Result := '';
-    For I := 0 To SL.Count - 1 Do
-      Begin
-        Line := SL[I];
-        If Result <> '' Then
-          Result := Result + LineEnding;
-        If Line = '' Then
-          Result := Result + '>'
-        Else
-          Result := Result + '> ' + Line;
-      End;
-    If Result = '' Then
-      Result := '>';
-  Finally
-    SL.Free;
-  End;
-End;
-
-Function TProjectAssistantForm.FormatAssistantMarkdown(Const Thinking, Content: String): String;
-Begin
-  { Thinking is display-only; Content is the final answer (API history). }
-  If (Thinking = '') And (Content = '') Then
-    Begin
-      Result := '*Waiting for model…*';
-      Exit;
-    End;
-  If FShowThinking And (Thinking <> '') Then
-    Begin
-      Result := '> **Thinking**' + LineEnding + '>' + LineEnding + QuoteMarkdownLines(Thinking);
-      If Content <> '' Then
-        Result := Result + LineEnding + LineEnding + Content
-      Else
-        Result := Result + LineEnding + LineEnding + '*Waiting for answer…*';
-    End
-  Else If Content <> '' Then
-    Result := Content
-  Else If FStreamingActive Then
-    Result := '*Waiting for answer…*'
-  Else
-    Result := '';
 End;
 
 Procedure TProjectAssistantForm.AppendMessage(Const Role, Content: String);
