@@ -213,6 +213,7 @@ Begin
   Check('en_GB.UTF-8 strips encoding', SpellLanguageFromLocale('en_GB.UTF-8') = 'en_GB');
   Check('en-US becomes underscore', SpellLanguageFromLocale('en-US') = 'en_US');
   Check('empty locale is empty', SpellLanguageFromLocale('') = '');
+  Check('windows kind round trip', TextToSpellEngineKind(SpellEngineKindToText(sekWindows)) = sekWindows);
 End;
 
 Begin

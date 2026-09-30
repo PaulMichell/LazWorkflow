@@ -30,6 +30,7 @@ Type
   Private
     Procedure FillLanguageCombo(Const Selected: String);
     Procedure UpdatePreviewStatus;
+    Procedure EnsureEngineItems;
   Public
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
@@ -42,7 +43,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LazFileUtils, LazUTF8, SpellEngine, SpellCheckerConfig, SpellEngineHunspell, SpellEngineAspell;
+  LazFileUtils, LazUTF8, SpellEngine, SpellCheckerConfig, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows;
 
 Procedure TSpellCheckerSettingsFrame.FillLanguageCombo(Const Selected: String);
 Var
@@ -86,15 +87,27 @@ Begin
   End;
 End;
 
+Procedure TSpellCheckerSettingsFrame.EnsureEngineItems;
+Begin
+  {$IFDEF WINDOWS}
+  If Assigned(EngineCombo) And (EngineCombo.Items.IndexOf('Windows') < 0) Then
+    EngineCombo.Items.Add('Windows');
+  If Assigned(EngineCombo) And (EngineCombo.Items.Count > 1) Then
+    EngineCombo.Items[1] := 'Auto (Windows, Hunspell, then ASpell)';
+  {$ENDIF}
+End;
+
 Procedure TSpellCheckerSettingsFrame.OptionsToControls(Source: TSpellCheckerOptions);
 Begin
   If Not Assigned(Source) Then
     Exit;
+  EnsureEngineItems;
   Case Source.EngineKind Of
     sekNone: EngineCombo.ItemIndex := 0;
     sekAuto: EngineCombo.ItemIndex := 1;
     sekHunspell: EngineCombo.ItemIndex := 2;
     sekAspell: EngineCombo.ItemIndex := 3;
+    sekWindows: EngineCombo.ItemIndex := 4;
   Else
     EngineCombo.ItemIndex := 1;
   End;
@@ -111,10 +124,12 @@ Var
 Begin
   If Not Assigned(Dest) Then
     Exit;
+  EnsureEngineItems;
   Case EngineCombo.ItemIndex Of
     0: Dest.EngineKind := sekNone;
     2: Dest.EngineKind := sekHunspell;
     3: Dest.EngineKind := sekAspell;
+    4: Dest.EngineKind := sekWindows;
   Else
     Dest.EngineKind := sekAuto;
   End;
@@ -149,6 +164,20 @@ Begin
         Exit;
       End;
     FoundLibrary := '';
+    {$IFDEF WINDOWS}
+    If (Preview.EngineKind In [sekWindows, sekAuto]) And WindowsSpellAvailable(FoundLibrary) Then
+      Begin
+        StatusLabel.Caption := 'Windows spell checker found';
+        If FoundLibrary <> '' Then
+          StatusLabel.Caption := StatusLabel.Caption + ' · ' + FoundLibrary;
+        Exit;
+      End;
+    If Preview.EngineKind = sekWindows Then
+      Begin
+        StatusLabel.Caption := 'Windows spell checker is not available';
+        Exit;
+      End;
+    {$ENDIF}
     If (Preview.EngineKind In [sekHunspell, sekAuto]) And FindHunspellLibrary(FoundLibrary) Then
       Begin
         If Pos('libreoffice', LowerCase(FoundLibrary)) > 0 Then
@@ -298,14 +327,42 @@ Begin
   Try
     OptionsFromControls(Preview);
     SelectedLanguage := Preview.Language;
+    EnsureEngineItems;
     If Preview.EngineKind = sekNone Then
       Begin
-        StatusLabel.Caption := 'Select Hunspell or ASpell first';
+        StatusLabel.Caption := 'Select a spell checker first';
         Exit;
       End;
     FoundKind := sekNone;
     LibraryFile := '';
     DictDir := '';
+    {$IFDEF WINDOWS}
+    If Preview.EngineKind In [sekWindows, sekAuto] Then
+      If WindowsSpellAvailable(SelectedLanguage) Then
+        Begin
+          FoundKind := sekWindows;
+          If Preview.EngineKind = sekWindows Then
+            EngineCombo.ItemIndex := 4;
+          If Preview.EngineKind = sekWindows Then
+            Begin
+              LibraryEdit.Text := '';
+              DictDirEdit.Text := '';
+            End;
+          SaveToConfig;
+          If Assigned(WorkflowSpellConfig) Then
+            WorkflowSpellConfig.Apply;
+          FillLanguageCombo(Preview.Language);
+          StatusLabel.Caption := 'Configured windows (' + SelectedLanguage + ')';
+          If Preview.EngineKind = sekAuto Then
+            StatusLabel.Caption := StatusLabel.Caption + '. Auto uses it first on Windows.';
+          Exit;
+        End
+      Else If Preview.EngineKind = sekWindows Then
+        Begin
+          StatusLabel.Caption := 'Windows spell checker is not available. Add a language in Windows settings.';
+          Exit;
+        End;
+    {$ENDIF}
     If Preview.EngineKind In [sekHunspell, sekAuto] Then
       Begin
         If LocateHunspellInstallation(LibraryFile, DictDir) Then

@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils;
 
 Type
-  TSpellEngineKind = (sekNone, sekAuto, sekHunspell, sekAspell);
+  TSpellEngineKind = (sekNone, sekAuto, sekHunspell, sekAspell, sekWindows);
 
   TSpellEngineFeature = (sefSuggest);
   TSpellEngineFeatures = Set Of TSpellEngineFeature;
@@ -57,6 +57,7 @@ Begin
     sekAuto: Result := 'auto';
     sekHunspell: Result := 'hunspell';
     sekAspell: Result := 'aspell';
+    sekWindows: Result := 'windows';
   Else
     Result := 'none';
   End;
@@ -73,6 +74,8 @@ Begin
     Result := sekHunspell
   Else If (KindText = 'aspell') Or (KindText = 'asp') Then
     Result := sekAspell
+  Else If (KindText = 'windows') Or (KindText = 'win') Then
+    Result := sekWindows
   Else
     Result := sekNone;
 End;
