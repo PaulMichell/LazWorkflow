@@ -134,6 +134,8 @@ Function StrToAssistantMode(Const ModeText: String): TAssistantMode;
 Function NewConversationTurnId: String;
 Function IsoNowUtc: String;
 Function ProjectAssistantRoot: String;
+/// Test hook. The next generated archive id uses this value once, then the clock. Empty clears it.
+Procedure SetNextArchiveIdForTest(Const ArchiveId: String);
 
 Var
   ProjectAssistantConversation: TAssistantConversationStore;
@@ -152,6 +154,9 @@ Const
   ConversationArchivePrefix = 'conversation-';
   ConversationArchiveSuffix = '.jsonl';
   ConversationArchiveIndexSuffix = '.index.jsonl';
+
+Var
+  ForcedArchiveId: String;
 
 Function JsonEscape(Const SourceText: String): String;
 Var
@@ -860,8 +865,19 @@ End;
 
 Function NewArchiveId: String;
 Begin
-  { Filesystem-safe timestamp id (no colons). }
-  Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now);
+  { Filesystem-safe timestamp id (no colons). A test may force the next id once. }
+  If ForcedArchiveId <> '' Then
+    Begin
+      Result := ForcedArchiveId;
+      ForcedArchiveId := '';
+    End
+  Else
+    Result := FormatDateTime('yyyymmdd"T"hhnnsszzz', Now);
+End;
+
+Procedure SetNextArchiveIdForTest(Const ArchiveId: String);
+Begin
+  ForcedArchiveId := ArchiveId;
 End;
 
 Function ArchiveIdIsSafe(Const ArchiveId: String): Boolean;
@@ -1000,7 +1016,10 @@ Begin
   RewriteIndexFile;
   ArchiveId := NewArchiveId;
   If Not ArchivePathsForId(ArchiveId, ArchConv, ArchIdx) Then
-    Exit;
+    Begin
+      ArchiveId := '';
+      Exit;
+    End;
   ConvPath := ConversationPath;
   IdxPath := IndexPath;
   If FileExistsUTF8(ConvPath) Then
@@ -1012,10 +1031,15 @@ Begin
           Exit;
         End;
     End;
-  If FileExistsUTF8(IdxPath) Then
+  If FileExistsUTF8(IdxPath) And (Not RenameFileUTF8(IdxPath, ArchIdx)) Then
     Begin
-      If Not RenameFileUTF8(IdxPath, ArchIdx) Then
-        WorkflowLogger.Warning('AssistantConversation', 'Could not archive index for ' + ArchiveId);
+      { Put the conversation back. A missing index would list this archive with no turns. }
+      If FileExistsUTF8(ArchConv) And (Not RenameFileUTF8(ArchConv, ConvPath)) Then
+        FLastError := 'Could not archive ' + IdxPath + ' and could not restore ' + ConvPath
+      Else
+        FLastError := 'Could not archive ' + IdxPath;
+      ArchiveId := '';
+      Exit;
     End;
   If Not PreserveAssistantImages(AssistantDir, ArchiveId, ArchConv, ImageError) Then
     Begin
@@ -1215,7 +1239,15 @@ Begin
         Else
           ParkedConv := True;
       If FileExistsUTF8(CurIdx) Then
-        If RenameFileUTF8(CurIdx, TmpIdx) Then
+        If Not RenameFileUTF8(CurIdx, TmpIdx) Then
+          Begin
+            If ParkedConv And (Not RenameFileUTF8(TmpConv, CurConv)) Then
+              FLastError := 'Could not park current index and could not restore the conversation.'
+            Else
+              FLastError := 'Could not park current index.';
+            Exit;
+          End
+        Else
           ParkedIdx := True;
       If ParkedConv And (Not PreserveAssistantImages(AssistantDir, TmpId, TmpConv, ImageError)) Then
         Begin
@@ -1235,8 +1267,23 @@ Begin
         RenameFileUTF8(TmpIdx, CurIdx);
       Exit;
     End;
-  If FileExistsUTF8(ArchIdx) Then
-    RenameFileUTF8(ArchIdx, CurIdx);
+  If FileExistsUTF8(ArchIdx) And (Not RenameFileUTF8(ArchIdx, CurIdx)) Then
+    Begin
+      { The archive conversation is already at the current path. Move it back before restoring the park,
+        or a Linux rename would overwrite the archive with the parked file. }
+      If FileExistsUTF8(CurConv) And (Not FileExistsUTF8(ArchConv)) Then
+        If Not RenameFileUTF8(CurConv, ArchConv) Then
+          Begin
+            FLastError := 'Could not activate archive ' + ArchiveId + ' and could not restore it.';
+            Exit;
+          End;
+      If ParkedConv Then
+        RenameFileUTF8(TmpConv, CurConv);
+      If ParkedIdx Then
+        RenameFileUTF8(TmpIdx, CurIdx);
+      FLastError := 'Could not activate archive ' + ArchiveId;
+      Exit;
+    End;
 
   ClearAll;
   FLoaded := False;
