@@ -36,6 +36,7 @@ Var
   WindowsLibraryFiles: TStringArray = Nil;
   WindowsDictionaryDirs: TStringArray = Nil;
   WindowsDiscoveryNote: String = '';
+  WindowsRelatedDlls: String = '';
 
 Procedure AppendUniqueDirectory(Var Dirs: TStringArray; Const Dir: String);
 Var
@@ -614,35 +615,230 @@ Begin
   AddShortcutsIn(Roots, GetEnvironmentVariableUTF8('PUBLIC') + '\Desktop', 1);
 End;
 
+Function ReadCString(Stream: TStream; Offset: Int64): String;
+Var
+  Buffer: Array[0..255] Of AnsiChar;
+  Count: Integer;
+Begin
+  Result := '';
+  If (Offset < 0) Or (Offset >= Stream.Size) Then
+    Exit;
+  Stream.Seek(Offset, soBeginning);
+  Count := Stream.Read(Buffer, SizeOf(Buffer) - 1);
+  If Count <= 0 Then
+    Exit;
+  Buffer[Count] := #0;
+  Result := String(PAnsiChar(@Buffer[0]));
+End;
+
+Function RvaToOffset(Const Sections: Array Of DWORD; Count: Integer; RVA: DWORD): Int64;
+Var
+  Index: Integer;
+  VirtualAddress, VirtualSize, RawPointer: DWORD;
+Begin
+  Result := -1;
+  Index := 0;
+  While Index + 2 < Count Do
+    Begin
+      VirtualAddress := Sections[Index];
+      VirtualSize := Sections[Index + 1];
+      RawPointer := Sections[Index + 2];
+      If (RVA >= VirtualAddress) And (RVA < VirtualAddress + VirtualSize) Then
+        Begin
+          Result := Int64(RawPointer) + (RVA - VirtualAddress);
+          Exit;
+        End;
+      Inc(Index, 3);
+    End;
+End;
+
+{ Returns DLL names imported by a PE file. Used to find LibreOffice's renamed Hunspell library. }
+Function PeImportedDllNames(Const FileName: String): TStringArray;
+Var
+  Stream: TFileStream;
+  Dos: Array[0..63] Of Byte;
+  HeaderOffset, ImportRVA, NameRVA, RawSize: DWORD;
+  CoffSections: Word;
+  OptionalSize: Word;
+  Magic: Word;
+  SectionStart, Index, Descriptor, ImportOffset: Int64;
+  SectionVA, SectionSize, SectionRaw: DWORD;
+  Sections: Array Of DWORD;
+  NameText: String;
+Begin
+  Result := Nil;
+  Try
+    Stream := TFileStream.Create(FileName, fmOpenRead Or fmShareDenyNone);
+  Except
+    On Exception Do
+      Exit;
+  End;
+  Try
+    If Stream.Size < 256 Then
+      Exit;
+    If Stream.Read(Dos, 64) <> 64 Then
+      Exit;
+    If (Dos[0] <> Ord('M')) Or (Dos[1] <> Ord('Z')) Then
+      Exit;
+    HeaderOffset := PDWORD(@Dos[60])^;
+    If (HeaderOffset = 0) Or (HeaderOffset + 160 >= Stream.Size) Then
+      Exit;
+    Stream.Seek(HeaderOffset + 4, soBeginning);
+    Stream.Seek(2, soCurrent);
+    If Stream.Read(CoffSections, 2) <> 2 Then
+      Exit;
+    Stream.Seek(12, soCurrent);
+    If Stream.Read(OptionalSize, 2) <> 2 Then
+      Exit;
+    Stream.Seek(2, soCurrent);
+    If Stream.Read(Magic, 2) <> 2 Then
+      Exit;
+    If Magic = $20B Then
+      Stream.Seek(118, soCurrent)
+    Else If Magic = $10B Then
+      Stream.Seek(102, soCurrent)
+    Else
+      Exit;
+    Stream.Read(ImportRVA, 4);
+    If ImportRVA = 0 Then
+      Exit;
+    SectionStart := HeaderOffset + 24 + OptionalSize;
+    SetLength(Sections, CoffSections * 3);
+    For Index := 0 To CoffSections - 1 Do
+      Begin
+        Stream.Seek(SectionStart + Index * 40 + 8, soBeginning);
+        Stream.Read(SectionSize, 4);
+        Stream.Read(SectionVA, 4);
+        Stream.Read(RawSize, 4);
+        Stream.Read(SectionRaw, 4);
+        If RawSize > SectionSize Then
+          SectionSize := RawSize;
+        Sections[Index * 3] := SectionVA;
+        Sections[Index * 3 + 1] := SectionSize;
+        Sections[Index * 3 + 2] := SectionRaw;
+      End;
+    ImportOffset := RvaToOffset(Sections, Length(Sections), ImportRVA);
+    If ImportOffset < 0 Then
+      Exit;
+    Descriptor := ImportOffset;
+    While Descriptor + 20 < Stream.Size Do
+      Begin
+        Stream.Seek(Descriptor + 12, soBeginning);
+        If Stream.Read(NameRVA, 4) <> 4 Then
+          Exit;
+        If NameRVA = 0 Then
+          Exit;
+        NameText := ReadCString(Stream, RvaToOffset(Sections, Length(Sections), NameRVA));
+        If NameText <> '' Then
+          Begin
+            SetLength(Result, Length(Result) + 1);
+            Result[High(Result)] := NameText;
+          End;
+        Inc(Descriptor, 20);
+        If Length(Result) > 64 Then
+          Exit;
+      End;
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Function DllExportsHunspell(Const FileName: String): Boolean;
+Var
+  WideName: UnicodeString;
+  Handle: THandle;
+  OldMode: UINT;
+Begin
+  Result := False;
+  If FileName = '' Then
+    Exit;
+  OldMode := SetErrorMode(SEM_FAILCRITICALERRORS Or SEM_NOOPENFILEERRORBOX);
+  Try
+    WideName := UTF8Decode(FileName);
+    Handle := LoadLibraryExW(PWideChar(WideName), 0, LOAD_WITH_ALTERED_SEARCH_PATH);
+    If Handle = 0 Then
+      Exit;
+    Try
+      Result := GetProcAddress(Handle, 'Hunspell_create') <> Nil;
+      If Not Result Then
+        Result := GetProcAddress(Handle, 'Hunspell_create@8') <> Nil;
+    Finally
+      FreeLibrary(Handle);
+    End;
+  Finally
+    SetErrorMode(OldMode);
+  End;
+End;
+
+Procedure RememberRelatedDll(Const Name: String);
+Begin
+  If Name = '' Then
+    Exit;
+  If WindowsRelatedDlls = '' Then
+    WindowsRelatedDlls := Name
+  Else If (Pos(Name, WindowsRelatedDlls) = 0) And (Length(WindowsRelatedDlls) < 240) Then
+    WindowsRelatedDlls := WindowsRelatedDlls + ', ' + Name;
+End;
+
 Procedure AppendProgramLibraries(Var Libraries: TStringArray; Const Root: String);
 Const
-  Preferred: Array[0..6] Of String = (
-    'hunspell.dll', 'libhunspell-1.7.dll', 'libhunspell-1.7-0.dll', 'libhunspell.dll',
-    'libhunspell-1.6.dll', 'libhunspell-1.6-0.dll', 'hunspelllo.dll');
+  Preferred: Array[0..10] Of String = (
+    'hunspell.dll', 'hunspelllo.dll', 'libhunspelllo.dll', 'libhunspell.dll',
+    'libhunspell-1.7.dll', 'libhunspell-1.7-0.dll', 'libhunspell-1.6.dll',
+    'lnglo.dll', 'lng.dll', 'spell.dll', 'spelllo.dll');
 Var
-  ProgramDir, LowerName: String;
-  Index: Integer;
+  ProgramDir, FileName, LowerName, Imported: String;
+  Index, ImportIndex: Integer;
   Info: TSearchRec;
-  Masks: Array[0..1] Of String;
+  Imports: TStringArray;
 Begin
   ProgramDir := IncludeTrailingPathDelimiter(Root) + 'program';
   If Not DirectoryExistsUTF8(ProgramDir) Then
-    Exit;
+    Begin
+      RememberRelatedDll('no program folder');
+      Exit;
+    End;
   For Index := 0 To High(Preferred) Do
-    AppendUniqueFile(Libraries, IncludeTrailingPathDelimiter(ProgramDir) + Preferred[Index]);
-  Masks[0] := 'hunspell*.dll';
-  Masks[1] := 'libhunspell*.dll';
-  For Index := 0 To High(Masks) Do
-    If FindFirstUTF8(IncludeTrailingPathDelimiter(ProgramDir) + Masks[Index], faAnyFile, Info) = 0 Then
-      Try
-        Repeat
-          LowerName := LowerCase(Info.Name);
-          If ((Info.Attr And faDirectory) = 0) And (Pos('hunspell', LowerName) > 0) Then
-            AppendUniqueFile(Libraries, IncludeTrailingPathDelimiter(ProgramDir) + Info.Name);
-        Until FindNextUTF8(Info) <> 0;
-      Finally
-        FindCloseUTF8(Info);
-      End;
+    If FileExistsUTF8(IncludeTrailingPathDelimiter(ProgramDir) + Preferred[Index]) Then
+      RememberRelatedDll(Preferred[Index]);
+  If FindFirstUTF8(IncludeTrailingPathDelimiter(ProgramDir) + '*.dll', faAnyFile, Info) <> 0 Then
+    Exit;
+  Try
+    Repeat
+      If (Info.Attr And faDirectory) <> 0 Then
+        Continue;
+      LowerName := LowerCase(Info.Name);
+      FileName := IncludeTrailingPathDelimiter(ProgramDir) + Info.Name;
+      If (Pos('huns', LowerName) > 0) Or (Pos('spell', LowerName) > 0) Or (Pos('lng', LowerName) > 0) Then
+        RememberRelatedDll(Info.Name);
+      If (Pos('huns', LowerName) > 0) Or (Pos('spell', LowerName) > 0) Then
+        AppendUniqueFile(Libraries, FileName);
+      Imports := PeImportedDllNames(FileName);
+      For ImportIndex := 0 To High(Imports) Do
+        If (Pos('huns', LowerCase(Imports[ImportIndex])) > 0) Or (Pos('spell', LowerCase(Imports[ImportIndex])) > 0) Then
+          Begin
+            RememberRelatedDll(Info.Name + ' imports ' + Imports[ImportIndex]);
+            Imported := IncludeTrailingPathDelimiter(ProgramDir) + ExtractFileName(Imports[ImportIndex]);
+            If FileExistsUTF8(Imported) Then
+              AppendUniqueFile(Libraries, Imported);
+          End;
+    Until FindNextUTF8(Info) <> 0;
+  Finally
+    FindCloseUTF8(Info);
+  End;
+  Index := 0;
+  While Index <= High(Libraries) Do
+    Begin
+      If DllExportsHunspell(Libraries[Index]) Then
+        Inc(Index)
+      Else
+        Begin
+          { Keep only DLLs that export the Hunspell C API. }
+          If Index < High(Libraries) Then
+            Libraries[Index] := Libraries[High(Libraries)];
+          SetLength(Libraries, Length(Libraries) - 1);
+        End;
+    End;
 End;
 
 Procedure AddDictionariesUnder(Var Dirs: TStringArray; Const Parent: String; Levels: Integer);
@@ -751,6 +947,7 @@ Begin
   Libraries := Nil;
   Dictionaries := Nil;
   Roots := Nil;
+  WindowsRelatedDlls := '';
   Try
     CollectLibreOfficeRoots(Roots);
   Except
@@ -767,7 +964,11 @@ Begin
   If Length(Roots) = 0 Then
     WindowsDiscoveryNote := 'LibreOffice was not found. No soffice.exe in Program Files, App Paths, PATH, or the Start Menu.'
   Else If Length(Libraries) = 0 Then
-    WindowsDiscoveryNote := 'Found LibreOffice at ' + Roots[0] + ' but program has no hunspell DLL'
+    Begin
+      WindowsDiscoveryNote := 'Found LibreOffice at ' + Roots[0] + ' but no loadable Hunspell library';
+      If WindowsRelatedDlls <> '' Then
+        WindowsDiscoveryNote := WindowsDiscoveryNote + '. Saw ' + WindowsRelatedDlls;
+    End
   Else If Length(Dictionaries) = 0 Then
     WindowsDiscoveryNote := 'Found ' + Libraries[0] + ' but no .aff/.dic dictionary'
   Else
@@ -833,6 +1034,7 @@ Begin
     WindowsLibraryFiles := Nil;
     WindowsDictionaryDirs := Nil;
     WindowsDiscoveryNote := '';
+    WindowsRelatedDlls := '';
   Finally
     LeaveCriticalSection(WindowsHunspellLock);
   End;
