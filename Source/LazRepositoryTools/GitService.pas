@@ -814,6 +814,40 @@ Begin
   Result := (Clean <> '') And (Clean[1] <> '-');
 End;
 
+Function GitStringHasAsciiControl(Const Value: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  For I := 1 To Length(Value) Do
+    If (Value[I] < #32) Or (Value[I] = #127) Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+End;
+
+{ Clone URLs are positional. Reject option-like and control text before Git runs. }
+Function GitCloneUrlRejection(Const RemoteUrl: String; Out Reason: String): Boolean;
+Var
+  Clean: String;
+Begin
+  Reason := '';
+  Result := True;
+  If GitStringHasAsciiControl(RemoteUrl) Then
+    Reason := 'Remote URL was rejected because it contains a control character'
+  Else
+    Begin
+      Clean := Trim(RemoteUrl);
+      If Clean = '' Then
+        Reason := 'Remote URL is empty'
+      Else If Clean[1] = '-' Then
+        Reason := 'Remote URL was rejected because it looks like a Git option'
+      Else
+        Result := False;
+    End;
+End;
+
 Function NextNulField(Const S: String; Var Pos: Integer): String;
 Var
   StartPos: Integer;
@@ -1785,10 +1819,19 @@ Var
   OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
-  RemoteName := Remote;
-  If RemoteName = '' Then
-    RemoteName := 'origin';
-  Result := RunGit(['fetch', RemoteName], OutputText, ExitCode, True);
+  Result := False;
+  If Remote = '' Then
+    RemoteName := 'origin'
+  Else
+    RemoteName := Trim(Remote);
+  If Not GitNameIsSafe(RemoteName) Then
+    Begin
+      FLastError := 'Remote name was rejected';
+      Summary.Message := 'Fetch failed: ' + FLastError;
+      Exit;
+    End;
+  { '--' stops option parsing if a later edit drops the name check. }
+  Result := RunGit(['fetch', '--', RemoteName], OutputText, ExitCode, True);
   OperationError := FLastError;
   OperationResult := FLastCommand;
   BuildTransferSummary('Fetch', RemoteName, OutputText, Summary);
@@ -1806,17 +1849,32 @@ Var
   OutputText: String;
   ExitCode: Integer;
   Args: Array Of String;
-  RemoteName, OperationError: String;
+  RemoteName, BranchName, OperationError: String;
   OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
-  RemoteName := Remote;
-  If RemoteName = '' Then
-    RemoteName := 'origin';
-  If Branch = '' Then
-    Args := ['pull', RemoteName]
+  Result := False;
+  If Remote = '' Then
+    RemoteName := 'origin'
   Else
-    Args := ['pull', RemoteName, Branch];
+    RemoteName := Trim(Remote);
+  BranchName := Trim(Branch);
+  If Not GitNameIsSafe(RemoteName) Then
+    Begin
+      FLastError := 'Remote name was rejected';
+      Summary.Message := 'Pull failed: ' + FLastError;
+      Exit;
+    End;
+  If (BranchName <> '') And (Not GitNameIsSafe(BranchName)) Then
+    Begin
+      FLastError := 'Branch name was rejected';
+      Summary.Message := 'Pull failed: ' + FLastError;
+      Exit;
+    End;
+  If BranchName = '' Then
+    Args := ['pull', '--', RemoteName]
+  Else
+    Args := ['pull', '--', RemoteName, BranchName];
   Result := RunGit(Args, OutputText, ExitCode, True);
   OperationError := FLastError;
   OperationResult := FLastCommand;
@@ -1835,18 +1893,34 @@ Var
   OutputText: String;
   ExitCode, Ahead: Integer;
   Args: Array Of String;
-  RemoteName, OperationError: String;
+  RemoteName, BranchName, OperationError: String;
   OperationResult: TGitCommandResult;
 Begin
   ClearTransferSummary(Summary);
-  RemoteName := Remote;
-  If RemoteName = '' Then
-    RemoteName := 'origin';
-  { Porcelain is machine-readable. Push HEAD of this work tree, not a guessed branch. }
-  If Branch = '' Then
-    Args := ['push', '--porcelain', RemoteName, 'HEAD']
+  Result := False;
+  If Remote = '' Then
+    RemoteName := 'origin'
   Else
-    Args := ['push', '--porcelain', RemoteName, Branch];
+    RemoteName := Trim(Remote);
+  BranchName := Trim(Branch);
+  If Not GitNameIsSafe(RemoteName) Then
+    Begin
+      FLastError := 'Remote name was rejected';
+      Summary.Message := 'Push failed: ' + FLastError;
+      Exit;
+    End;
+  If (BranchName <> '') And (Not GitNameIsSafe(BranchName)) Then
+    Begin
+      FLastError := 'Branch name was rejected';
+      Summary.Message := 'Push failed: ' + FLastError;
+      Exit;
+    End;
+  { Porcelain is machine-readable. Push HEAD of this work tree, not a guessed branch.
+    '--' ends options before the remote and refspec. }
+  If BranchName = '' Then
+    Args := ['push', '--porcelain', '--', RemoteName, 'HEAD']
+  Else
+    Args := ['push', '--porcelain', '--', RemoteName, BranchName];
   Result := RunGit(Args, OutputText, ExitCode, True);
   OperationError := FLastError;
   OperationResult := FLastCommand;
@@ -1906,16 +1980,17 @@ Function TGitService.CloneRepository(Const RemoteUrl, TargetDir: String): Boolea
 Var
   OutputText: String;
   ExitCode: Integer;
-  ParentDir, Url, Dest: String;
+  ParentDir, Url, Dest, Rejection: String;
 Begin
   Result := False;
-  Url := Trim(RemoteUrl);
-  Dest := ExpandFileName(TargetDir);
-  If Url = '' Then
+  If GitCloneUrlRejection(RemoteUrl, Rejection) Then
     Begin
-      FLastError := 'Remote URL is empty';
+      { Do not log RemoteUrl. A rejected value may be a Git option, not a URL. }
+      FLastError := Rejection;
       Exit;
     End;
+  Url := Trim(RemoteUrl);
+  Dest := ExpandFileName(TargetDir);
   If Dest = '' Then
     Begin
       FLastError := 'Target directory is empty';
@@ -1932,10 +2007,11 @@ Begin
       FLastError := 'Target folder already exists and is not empty: ' + Dest;
       Exit;
     End;
-  { git clone runs with cwd = parent; last arg is target folder name/path. }
+  { git clone runs with cwd = parent; last arg is target folder name/path.
+    '--' stops option parsing so a URL cannot be --upload-pack=... if a caller skips the check. }
   If ParentDir = '' Then
     ParentDir := GetCurrentDir;
-  Result := RunGitEx(ParentDir, ['clone', Url, Dest], OutputText, ExitCode);
+  Result := RunGitEx(ParentDir, ['clone', '--', Url, Dest], OutputText, ExitCode);
   If Result Then
     Begin
       FRepoPath := Dest;

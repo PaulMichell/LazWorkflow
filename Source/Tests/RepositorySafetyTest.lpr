@@ -5,7 +5,7 @@ Program RepositorySafetyTest;
 
 Uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
-  Classes, SysUtils, Process, LazFileUtils, GitService, GitJobRunner, GitDiffPatch;
+  Classes, SysUtils, Process, LazFileUtils, WorkflowLog, GitService, GitJobRunner, GitDiffPatch;
 
 Var
   Failures, DetachedCalls: Integer;
@@ -872,11 +872,83 @@ Begin
   End;
 End;
 
+Type
+  TCloneLogSink = Class
+    Text: String;
+    Procedure Capture(Level: TWorkflowLogLevel; Const Area, Message: String);
+  End;
+
+Procedure TCloneLogSink.Capture(Level: TWorkflowLogLevel; Const Area, Message: String);
+Begin
+  Text := Text + IntToStr(Ord(Level)) + ' ' + Area + ' ' + Message + LineEnding;
+End;
+
+Procedure TestCloneUrlRejection;
+Var
+  ParentDir, Dest, Source: String;
+  G: TGitService;
+  Sink: TCloneLogSink;
+  Summary: TGitTransferSummary;
+  PreviousLevel: TWorkflowLogLevel;
+  PreviousLog: TWorkflowLogEvent;
+Begin
+  ParentDir := TempRoot + DirectorySeparator + 'clone-parent';
+  ForceDirectories(ParentDir);
+  Dest := ParentDir + DirectorySeparator + 'not-created';
+  G := TGitService.Create;
+  Sink := TCloneLogSink.Create;
+  PreviousLevel := wllInfo;
+  PreviousLog := Nil;
+  Try
+    G.PublishEvents := False;
+    If Assigned(WorkflowLogger) Then
+      Begin
+        PreviousLevel := WorkflowLogger.MinLevel;
+        PreviousLog := WorkflowLogger.OnLog;
+        WorkflowLogger.MinLevel := wllDebug;
+        WorkflowLogger.OnLog := @Sink.Capture;
+      End;
+    Check('option URL rejected', Not G.CloneRepository('--upload-pack=/bin/true', Dest));
+    Check('rejection explained', (Pos('rejected', LowerCase(G.LastError)) > 0) And
+      (Pos('option', LowerCase(G.LastError)) > 0));
+    Check('rejected URL absent from error', Pos('--upload-pack', G.LastError) = 0);
+    Check('rejected URL not logged', Pos('--upload-pack', Sink.Text) = 0);
+    Check('destination not created', Not DirectoryExists(Dest) And Not FileExists(Dest));
+    Check('control URL rejected', Not G.CloneRepository('https://example.invalid/repo.git' + #10, Dest));
+    Check('control rejection explained', Pos('control', LowerCase(G.LastError)) > 0);
+    Check('control URL not logged', Pos('example.invalid', Sink.Text) = 0);
+    Check('destination still absent', Not DirectoryExists(Dest));
+    Check('blank URL rejected', Not G.CloneRepository('   ', Dest));
+    Check('blank URL explained', Pos('empty', LowerCase(G.LastError)) > 0);
+    Source := NewRepo('clone-source');
+    Check('safe local clone', G.CloneRepository(Source, ParentDir + DirectorySeparator + 'cloned'));
+    Check('safe clone created repository',
+      DirectoryExists(ParentDir + DirectorySeparator + 'cloned' + DirectorySeparator + '.git'));
+    G.RepoPath := Source;
+    Check('option remote fetch rejected', Not G.Fetch(Summary, '--upload-pack=/bin/true'));
+    Check('fetch rejection explained', Pos('rejected', LowerCase(G.LastError)) > 0);
+    Check('option branch pull rejected', Not G.Pull(Summary, 'origin', '--force'));
+    Check('pull branch rejection explained', Pos('rejected', LowerCase(G.LastError)) > 0);
+    Check('option remote push rejected', Not G.Push(Summary, '--upload-pack=/bin/true'));
+    Check('push rejection explained', Pos('rejected', LowerCase(G.LastError)) > 0);
+    Check('option names not logged', Pos('--upload-pack', Sink.Text) = 0);
+  Finally
+    If Assigned(WorkflowLogger) Then
+      Begin
+        WorkflowLogger.OnLog := PreviousLog;
+        WorkflowLogger.MinLevel := PreviousLevel;
+      End;
+    Sink.Free;
+    G.Free;
+  End;
+End;
+
 Begin
   TempRoot := GetTempFileName(GetTempDir, 'repository-safety-');
   DeleteFile(TempRoot); ForceDirectories(TempRoot);
   Try
     Try
+      TestCloneUrlRejection;
       TestCallbackFailures;
       TestAmendAndRemove;
       TestRemoteRollback;
