@@ -235,6 +235,7 @@ Begin
   LibraryFile := '';
   DictDir := '';
   Dirs := Nil;
+  ResetHunspellDiscovery;
   ConfigureWindowsHunspell(LibraryFile, Dirs);
   If LibraryFile = '' Then
     FindHunspellLibrary(LibraryFile);
@@ -305,14 +306,30 @@ Begin
     FoundKind := sekNone;
     LibraryFile := '';
     DictDir := '';
-    If (Preview.EngineKind In [sekHunspell, sekAuto]) And LocateHunspellInstallation(LibraryFile, DictDir) Then
-      FoundKind := sekHunspell;
+    If Preview.EngineKind In [sekHunspell, sekAuto] Then
+      Begin
+        If LocateHunspellInstallation(LibraryFile, DictDir) Then
+          FoundKind := sekHunspell
+        Else If (LibraryFile <> '') Or (DictDir <> '') Then
+          Begin
+            If LibraryFile <> '' Then
+              LibraryEdit.Text := LibraryFile;
+            If DictDir <> '' Then
+              DictDirEdit.Text := DictDir;
+            StatusLabel.Caption := HunspellDiscoveryNote;
+            If StatusLabel.Caption = '' Then
+              StatusLabel.Caption := 'Hunspell was only partly found';
+            Exit;
+          End;
+      End;
     If (FoundKind = sekNone) And (Preview.EngineKind In [sekAspell, sekAuto]) And
        LocateAspellInstallation(LibraryFile, DictDir) Then
       FoundKind := sekAspell;
     If FoundKind = sekNone Then
       Begin
-        StatusLabel.Caption := 'No installation found for the selected spell checker';
+        StatusLabel.Caption := HunspellDiscoveryNote;
+        If StatusLabel.Caption = '' Then
+          StatusLabel.Caption := 'No installation found for the selected spell checker';
         Exit;
       End;
     If (Preview.EngineKind = sekAuto) And (FoundKind = sekAspell) Then

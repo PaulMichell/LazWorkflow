@@ -46,6 +46,8 @@ Procedure ListHunspellLanguages(List: TStrings; Const DictionaryDirectory: Strin
 /// Locate a Hunspell DLL and aff/dic directories on Windows, preferring LibreOffice.
 /// Other platforms return false. True means both a library file and a dictionary directory were found.
 Function ConfigureWindowsHunspell(Out LibraryFileName: String; Out DictionaryDirectories: TStringArray): Boolean;
+Function HunspellDiscoveryNote: String;
+Procedure ResetHunspellDiscovery;
 
 Implementation
 
@@ -140,6 +142,16 @@ Begin
   If Length(Libraries) > 0 Then
     LibraryFileName := Libraries[0];
   Result := (LibraryFileName <> '') And (Length(DictionaryDirectories) > 0);
+End;
+
+Function HunspellDiscoveryNote: String;
+Begin
+  Result := WindowsHunspellDiscoveryNote;
+End;
+
+Procedure ResetHunspellDiscovery;
+Begin
+  ResetWindowsHunspellDiscovery;
 End;
 
 Function LoadSpellLibrary(Const FileName: String): TLibHandle;
