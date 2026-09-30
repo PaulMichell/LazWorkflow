@@ -7,7 +7,7 @@ Unit AssistantPlan;
   parser. A second scanner would drift from the progress list.
   An uncommitted completion is committed at turn end; a failed commit restores
   the file and its index.
-  Reviewed 2026-09-25. }
+  Reviewed 2026-09-30. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -586,6 +586,62 @@ Begin
     'Concrete implementation notes for the first work item.' + LineEnding;
 End;
 
+{ Same rules as AssistantTools.DetectFileEol. CRLF wins when both styles are present. }
+Function DetectFileEol(Const S: String): String;
+Begin
+  If Pos(#13#10, S) > 0 Then
+    Result := #13#10
+  Else If Pos(#13, S) > 0 Then
+    Result := #13
+  Else
+    Result := #10;
+End;
+
+{ Same rules as AssistantTools.NormalizeToEol. }
+Function NormalizeToEol(Const S, Eol: String): String;
+Begin
+  Result := StringReplace(S, #13#10, #10, [rfReplaceAll]);
+  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
+  If (Eol <> '') And (Eol <> #10) Then
+    Result := StringReplace(Result, #10, Eol, [rfReplaceAll]);
+End;
+
+Function ReadFileBytes(Const Path: String; Out Body: String): Boolean;
+Var
+  Stream: TFileStream;
+Begin
+  Result := False;
+  Body := '';
+  Stream := Nil;
+  Try
+    Try
+      Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyWrite);
+      SetLength(Body, Stream.Size);
+      If Length(Body) > 0 Then
+        Stream.ReadBuffer(Body[1], Length(Body));
+      Result := True;
+    Except
+      Result := False;
+      Body := '';
+    End;
+  Finally
+    Stream.Free;
+  End;
+End;
+
+{ Existing non-symlink files keep the ending already on disk. New files and symlinks use LF. }
+Function PlanFileLineBreak(Const Path: String): String;
+Var
+  Raw: String;
+Begin
+  Result := #10;
+  If (Path = '') Or FileIsSymlink(Path) Or (Not FileExistsUTF8(Path)) Then
+    Exit;
+  If Not ReadFileBytes(Path, Raw) Then
+    Exit;
+  Result := DetectFileEol(Raw);
+End;
+
 Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter: Boolean;
   Out Resolved: String; Out ErrorText: String): Boolean;
 Var
@@ -614,6 +670,7 @@ Begin
       SL := TStringList.Create;
       Try
         SL.LoadFromFile(Resolved);
+        SL.LineBreak := PlanFileLineBreak(Resolved);
         Previous := SL.Text;
       Finally
         SL.Free;
@@ -625,6 +682,7 @@ Begin
   Try
     Try
       SL.Text := Content;
+      SL.LineBreak := PlanFileLineBreak(Resolved);
       SL.SaveToFile(Resolved);
       Result := True;
       If PlanBodyIntroducesCompletion(Previous, Content) Then
@@ -645,7 +703,7 @@ Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: Strin
   Out ReplaceCount: Integer): Boolean;
 Var
   SL: TStringList;
-  Body, Previous: String;
+  Body, Previous, FileEol, SearchText, Replacement: String;
   P: Integer;
 Begin
   Result := False;
@@ -668,17 +726,30 @@ Begin
   Try
     Try
       SL.LoadFromFile(Resolved);
+      FileEol := PlanFileLineBreak(Resolved);
+      SL.LineBreak := FileEol;
       Previous := SL.Text;
       Body := Previous;
+      SearchText := OldText;
+      If Pos(SearchText, Body) < 1 Then
+        Begin
+          SearchText := NormalizeToEol(OldText, FileEol);
+          If (SearchText = OldText) Or (Pos(SearchText, Body) < 1) Then
+            Begin
+              ErrorText := 'old_text not found in ' + Resolved;
+              Exit;
+            End;
+        End;
+      Replacement := NormalizeToEol(NewText, FileEol);
       If ReplaceAll Then
         Begin
           ReplaceCount := 0;
           P := 1;
           While P <= Length(Body) Do
-            If Copy(Body, P, Length(OldText)) = OldText Then
+            If Copy(Body, P, Length(SearchText)) = SearchText Then
               Begin
                 Inc(ReplaceCount);
-                Inc(P, Length(OldText));
+                Inc(P, Length(SearchText));
               End
             Else
               Inc(P);
@@ -687,17 +758,17 @@ Begin
               ErrorText := 'old_text not found in ' + Resolved;
               Exit;
             End;
-          Body := StringReplace(Body, OldText, NewText, [rfReplaceAll]);
+          Body := StringReplace(Body, SearchText, Replacement, [rfReplaceAll]);
         End
       Else
         Begin
-          P := Pos(OldText, Body);
+          P := Pos(SearchText, Body);
           If P < 1 Then
             Begin
               ErrorText := 'old_text not found in ' + Resolved;
               Exit;
             End;
-          Body := Copy(Body, 1, P - 1) + NewText + Copy(Body, P + Length(OldText), MaxInt);
+          Body := Copy(Body, 1, P - 1) + Replacement + Copy(Body, P + Length(SearchText), MaxInt);
           ReplaceCount := 1;
         End;
       If PlanMarkdownStructureError(Body, ErrorText) Then
@@ -711,6 +782,7 @@ Begin
           Exit;
         End;
       SL.Text := Body;
+      SL.LineBreak := FileEol;
       SL.SaveToFile(Resolved);
       Result := True;
       If PlanBodyIntroducesCompletion(Previous, Body) Then
@@ -1146,6 +1218,7 @@ Begin
       Try
         Try
           Lines.Text := CompletionPrevious;
+          Lines.LineBreak := DetectFileEol(CompletionPrevious);
           Lines.SaveToFile(CompletionPath);
           PublishPlanFileWrite(CompletionPath, CompletionPrevious, False);
           Result := 'The plan status was put back because the plan commit failed. ' +
@@ -1518,6 +1591,7 @@ Begin
                 SL.Insert(Section.HeadingLineIndex + 2, StatusLine);
               End;
           End;
+        SL.LineBreak := PlanFileLineBreak(Resolved);
         SL.SaveToFile(Resolved);
         Result := True;
         WorkflowLogger.Info('AssistantPlan',
