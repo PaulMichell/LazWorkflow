@@ -20,7 +20,7 @@ The block is wrapped in `{$IF FALSE}` … `{$ENDIF}` and is labelled unused. It 
 
 ### 2.1 Delete the transcript list and every write to it
 
-Status: not started
+Status: complete
 
 `Source/LazAssistantTools/ProjectAssistantForm.pas`.
 
