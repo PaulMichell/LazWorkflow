@@ -13,8 +13,6 @@ Uses
   Classes, SysUtils, GrokOAuth, AssistantConnections;
 
 Const
-  AssistantConfigFileName = 'LazAssistantTools.xml';
-  AssistantConfigLegacyFileName = 'LazGrokChat.xml';
   AssistantConfigDefaultApiBase = 'https://api.x.ai/v1';
   AssistantConfigDefaultModel = 'grok-4.5';
   AssistantConfigDefaultThinking = 'high';

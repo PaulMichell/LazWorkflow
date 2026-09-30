@@ -13,8 +13,6 @@ Uses
   Classes, SysUtils;
 
 Const
-  GitConfigFileName = 'LazRepositoryTools.xml';
-  GitConfigLegacyFileName = 'LazGitManager.xml';
   GitConfigDefaultAutoRefresh = True;
   GitConfigDefaultIntervalSec = 5;
   GitConfigMinIntervalSec = 2;
@@ -22,7 +20,6 @@ Const
   GitConfigDefaultGraphFontSize = 9;
   GitConfigMinGraphFontSize = 6;
   GitConfigMaxGraphFontSize = 24;
-  GitConfigMigrationVersion = 1;
 
 Type
   TGitConfig = Class
