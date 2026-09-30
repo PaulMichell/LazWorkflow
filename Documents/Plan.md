@@ -33,7 +33,7 @@ The list is never read. Session export and model history use conversation turns,
 
 ### 2.2 Delete the formatters that exist only to fill that list
 
-Status: not started
+Status: complete
 
 `Source/LazAssistantTools/ProjectAssistantForm.pas`.
 
