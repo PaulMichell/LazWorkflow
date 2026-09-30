@@ -2,7 +2,7 @@ Program AssistantWorkTargetTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf,
   LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantWorkTarget,
-  AssistantConversation, AssistantSession, AssistantIDEContext, AssistantIDEWorkspace,
+  AssistantConversation, AssistantIDEContext, AssistantIDEWorkspace,
   AssistantTools, AssistantTestSettings, fpjson, jsonparser, ProjectAssistantForm,
   StdCtrls, BaseIDEIntf, LazConfigStorage, FPImage, FPWritePNG, FileUtil,
   AssistantImages, AssistantService, AssistantProtocol, AssistantTrace, AssistantEvents,
@@ -254,9 +254,8 @@ Begin
     Check('legacy membership tool cannot modify active project',Not ExecuteAssistantToolForMode('add_unit_to_project','{"path":"Source/One/One.pas"}',amBuild,Reply,Note));
     Store.SetProjectRoot(AssistantTarget.Root,AssistantTarget.StoreKey);
     Check('save package plan setting',Store.SaveShellConfig(True,amPlan,'Documents/One.md'));
-    Key:=AssistantTarget.StoreKey;Path:=ActiveProjectSessionPath;
+    Key:=AssistantTarget.StoreKey;Path:=AssistantTarget.StoreDirectory;
     Check('package session uses isolated store',Pos('/targets/'+Key+'/',Path)>0);
-    Check('session file is not written',SaveProjectChatSession(Nil,0) And Not FileExists(Path));
     Settings1:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);
     Check('select another package',AssistantTarget.SelectPackage(Packages.Second.Filename,Note));
     Settings2:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);

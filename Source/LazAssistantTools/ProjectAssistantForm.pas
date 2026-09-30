@@ -544,7 +544,7 @@ Implementation
 
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
-  AssistantSession, AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
+  AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages,
   AssistantImageView
@@ -7184,7 +7184,6 @@ Begin
     FSelectedTurnIndex := -1;
     If Assigned(AssistantClient) Then
       AssistantClient.ClearHistory;
-    ClearProjectChatSession;
     RefreshHistoryCombo;
     RefreshConversationList;
 
@@ -7238,7 +7237,6 @@ Begin
   ClearCurrentTurnDisplay;
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
-  ClearProjectChatSession;
   RefreshHistoryCombo;
   RefreshConversationList;
   RefreshChatDisplay(True, False);
@@ -7716,7 +7714,6 @@ Begin
       RefreshHistoryCombo;
       Exit;
     End;
-  ClearProjectChatSession;
   SelectMode(ModeOfLoadedConversation);
   ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
   PersistSession;
@@ -7811,7 +7808,6 @@ Begin
       ClearCurrentTurnDisplay;
       If Assigned(AssistantClient) Then
         AssistantClient.ClearHistory;
-      ClearProjectChatSession;
       RefreshHistoryCombo;
       RefreshConversationList;
       RefreshChatDisplay(True, False);
