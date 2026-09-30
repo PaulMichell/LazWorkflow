@@ -58,7 +58,7 @@ The field comment already says it is unused. It is assigned `Nil` and later `FTr
 
 ### 4.1 Remove AssistantSession and the calls that keep it linked
 
-Status: not started
+Status: complete
 
 `Source/LazAssistantTools/AssistantSession.pas` lines 1–108, the whole unit.
 
