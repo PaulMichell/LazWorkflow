@@ -266,7 +266,6 @@ Type
     Procedure ReleaseCodexRun;
   Private
     ElapsedTimer: TTimer;
-    ChatView: TControl; { unused; centre is FTraceView }
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
     FComposerSelectedIndex: Integer; { Outlined thumbnail. -1 when the strip is empty. }
@@ -596,7 +595,6 @@ Begin
   FStatusPhase := '';
   FLastChatPaintTick := 0;
   FSessionProjectKey := '';
-  ChatView := Nil;
   FTrace := TAssistantTrace.Create;
   FTraceView := Nil;
   FThinkingSliceStart := 1;
@@ -4031,7 +4029,6 @@ Begin
   FTraceView.BorderSpacing.Around := ChatViewMargin;
   FTraceView.ShowThinking := FShowThinking;
   FTraceView.ShowToolUse := FShowToolUse;
-  ChatView := FTraceView;
   If Not Assigned(FTrace) Then
     FTrace := TAssistantTrace.Create;
 End;
