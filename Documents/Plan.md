@@ -48,7 +48,7 @@ The chat canvas does not use these. Thinking and answer text are shown through `
 
 ### 3.1 Delete the ChatView field
 
-Status: not started
+Status: complete
 
 `Source/LazAssistantTools/ProjectAssistantForm.pas` lines 269, 603, and 4041.
 
