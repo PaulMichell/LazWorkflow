@@ -2498,24 +2498,6 @@ Begin
   WorkflowLogger.Info('AssistantTools', 'write_file ' + Resolved);
 End;
 
-Function DetectFileEol(Const S: String): String;
-Begin
-  If Pos(#13#10, S) > 0 Then
-    Result := #13#10
-  Else If Pos(#13, S) > 0 Then
-    Result := #13
-  Else
-    Result := #10;
-End;
-
-Function NormalizeToEol(Const S, Eol: String): String;
-Begin
-  Result := StringReplace(S, #13#10, #10, [rfReplaceAll]);
-  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
-  If (Eol <> '') And (Eol <> #10) Then
-    Result := StringReplace(Result, #10, Eol, [rfReplaceAll]);
-End;
-
 Function ToolReplaceInFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Resolved, OldText, NewText, Body, Note, FileEol, AltOld: String;

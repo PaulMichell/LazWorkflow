@@ -74,6 +74,10 @@ Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String
 { Paths and Titles are created here and paired by index. Caller frees both, including on failure. }
 Function ListProjectMarkdownPlans(Out Paths, Titles: TStringList; Out ErrorText: String): Boolean;
 Function DefaultNewPlanMarkdown(Const Title: String = ''): String;
+{ CRLF wins when both styles are present. A bare CR is its own ending, otherwise LF. }
+Function DetectFileEol(Const S: String): String;
+{ Normalize to LF, then to Eol when that ending is not LF. }
+Function NormalizeToEol(Const S, Eol: String): String;
 Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter: Boolean;
   Out Resolved: String; Out ErrorText: String): Boolean;
 Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: String;
@@ -586,7 +590,6 @@ Begin
     'Concrete implementation notes for the first work item.' + LineEnding;
 End;
 
-{ Same rules as AssistantTools.DetectFileEol. CRLF wins when both styles are present. }
 Function DetectFileEol(Const S: String): String;
 Begin
   If Pos(#13#10, S) > 0 Then
@@ -597,7 +600,6 @@ Begin
     Result := #10;
 End;
 
-{ Same rules as AssistantTools.NormalizeToEol. }
 Function NormalizeToEol(Const S, Eol: String): String;
 Begin
   Result := StringReplace(S, #13#10, #10, [rfReplaceAll]);
