@@ -104,34 +104,56 @@ Function JsonEscapeText(Const SourceText: String): String;
 Const
   Replacement = #$EF#$BF#$BD;
 Var
-  I, Len, Need, Extra, Code: Integer;
+  I, Len, Need, Extra, Code, Used, Capacity: Integer;
   Lead, Cont: Byte;
+  Procedure Grow(ExtraBytes: Integer);
+  Begin
+    If Used + ExtraBytes <= Capacity Then Exit;
+    If Capacity < 16 Then Capacity := 16;
+    While Used + ExtraBytes > Capacity Do Capacity := Capacity * 2;
+    SetLength(Result, Capacity);
+  End;
+  Procedure AppendRaw(Const Text: String);
+  Var
+    Count: Integer;
+  Begin
+    Count := Length(Text);
+    If Count = 0 Then Exit;
+    Grow(Count);
+    Move(Text[1], Result[Used + 1], Count);
+    Inc(Used, Count);
+  End;
   Procedure AppendByte(Value: Byte);
   Begin
-    Result := Result + Chr(Value);
+    Grow(1);
+    Inc(Used);
+    Result[Used] := Chr(Value);
   End;
   Procedure AppendAscii(Value: Byte);
   Begin
     Case Chr(Value) Of
-      '"': Result := Result + '\"';
-      '\': Result := Result + '\\';
-      #8: Result := Result + '\b';
-      #9: Result := Result + '\t';
-      #10: Result := Result + '\n';
-      #12: Result := Result + '\f';
-      #13: Result := Result + '\r';
+      '"': AppendRaw('\"');
+      '\': AppendRaw('\\');
+      #8: AppendRaw('\b');
+      #9: AppendRaw('\t');
+      #10: AppendRaw('\n');
+      #12: AppendRaw('\f');
+      #13: AppendRaw('\r');
     Else
-      If Value < 32 Then
-        Result := Result + '\u' + IntToHex(Value, 4)
-      Else
-        AppendByte(Value);
+      If Value < 32 Then AppendRaw('\u' + IntToHex(Value, 4))
+      Else AppendByte(Value);
     End;
   End;
 Begin
   { Tool output can contain raw bytes from a file. A strict JSON parser rejects
-    those bytes as an invalid Unicode code point, so only scalar values are kept. }
+    those bytes as an invalid Unicode code point, so only scalar values are kept.
+    The buffer doubles so a large body is not copied once per byte. }
   Result := '';
   Len := Length(SourceText);
+  If Len = 0 Then Exit;
+  Used := 0;
+  Capacity := Len;
+  SetLength(Result, Capacity);
   I := 1;
   While I <= Len Do
     Begin
@@ -161,7 +183,7 @@ Begin
         End;
       If (Need = 0) Or (I + Need - 1 > Len) Then
         Begin
-          Result := Result + Replacement;
+          AppendRaw(Replacement);
           Inc(I);
           Continue;
         End;
@@ -179,13 +201,16 @@ Begin
         ((Need = 2) And (Code < $80)) Or ((Need = 3) And (Code < $800)) Or
         ((Need = 4) And (Code < $10000)) Then
         Begin
-          Result := Result + Replacement;
+          AppendRaw(Replacement);
           Inc(I);
           Continue;
         End;
-      Result := Result + Copy(SourceText, I, Need);
+      Grow(Need);
+      Move(SourceText[I], Result[Used + 1], Need);
+      Inc(Used, Need);
       Inc(I, Need);
     End;
+  SetLength(Result, Used);
 End;
 
 Function DefaultSamplerRequestOptions: TSamplerRequestOptions;

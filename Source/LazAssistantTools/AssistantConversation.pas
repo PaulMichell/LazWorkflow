@@ -144,7 +144,7 @@ Implementation
 
 Uses
   LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths,
-  AssistantWorkTarget, AssistantImages;
+  AssistantWorkTarget, AssistantImages, AssistantProtocol;
 
 Const
   PreviewMaxChars = 160;
@@ -157,32 +157,6 @@ Const
 
 Var
   ForcedArchiveId: String;
-
-Function JsonEscape(Const SourceText: String): String;
-Var
-  I: Integer;
-  C: Char;
-Begin
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
-      Else
-        If Ord(C) < 32 Then
-          Result := Result + '\u' + IntToHex(Ord(C), 4)
-        Else
-          Result := Result + C;
-      End;
-    End;
-End;
 
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Begin
@@ -360,24 +334,24 @@ End;
 Function TAssistantConversationStore.BuildTurnJson(Const Turn: TConversationTurn): String;
 Begin
   Result := '{' +
-    '"id":"' + JsonEscape(Turn.Id) + '",' +
-    '"mode":"' + JsonEscape(Turn.Mode) + '",' +
-    '"prompt":"' + JsonEscape(Turn.Prompt) + '",' +
-    '"thinking":"' + JsonEscape(Turn.Thinking) + '",' +
-    '"response":"' + JsonEscape(Turn.Response) + '",' +
-    '"created_at":"' + JsonEscape(Turn.CreatedAt) + '",' +
-    '"started_at":"' + JsonEscape(Turn.StartedAt) + '",' +
-    '"finished_at":"' + JsonEscape(Turn.FinishedAt) + '",' +
+    '"id":"' + JsonEscapeText(Turn.Id) + '",' +
+    '"mode":"' + JsonEscapeText(Turn.Mode) + '",' +
+    '"prompt":"' + JsonEscapeText(Turn.Prompt) + '",' +
+    '"thinking":"' + JsonEscapeText(Turn.Thinking) + '",' +
+    '"response":"' + JsonEscapeText(Turn.Response) + '",' +
+    '"created_at":"' + JsonEscapeText(Turn.CreatedAt) + '",' +
+    '"started_at":"' + JsonEscapeText(Turn.StartedAt) + '",' +
+    '"finished_at":"' + JsonEscapeText(Turn.FinishedAt) + '",' +
     '"duration_ms":' + IntToStr(Turn.DurationMs) + ',' +
     '"thinking_ms":' + IntToStr(Turn.ThinkingMs) + ',' +
-    '"model":"' + JsonEscape(Turn.Model) + '",' +
-    '"skill":"' + JsonEscape(Turn.Skill) + '",' +
+    '"model":"' + JsonEscapeText(Turn.Model) + '",' +
+    '"skill":"' + JsonEscapeText(Turn.Skill) + '",' +
     '"token_estimate":' + IntToStr(Turn.TokenEstimate) + ',' +
-    '"error":"' + JsonEscape(Turn.ErrorText) + '",' +
-    '"plan_file":"' + JsonEscape(Turn.PlanFile) + '",' +
-    '"todo_id":"' + JsonEscape(Turn.TodoId) + '"';
+    '"error":"' + JsonEscapeText(Turn.ErrorText) + '",' +
+    '"plan_file":"' + JsonEscapeText(Turn.PlanFile) + '",' +
+    '"todo_id":"' + JsonEscapeText(Turn.TodoId) + '"';
   If Trim(Turn.EventsFile) <> '' Then
-    Result := Result + ',"events_file":"' + JsonEscape(Turn.EventsFile) + '"';
+    Result := Result + ',"events_file":"' + JsonEscapeText(Turn.EventsFile) + '"';
   If (Trim(Turn.MessagesJson) <> '') And (Trim(Turn.MessagesJson)[1] = '[') Then
     Result := Result + ',"messages":' + Trim(Turn.MessagesJson);
   If Trim(Turn.TraceJson) <> '' Then
@@ -390,14 +364,14 @@ End;
 Function TAssistantConversationStore.BuildIndexLine(Const Entry: TConversationIndexEntry; TurnIndex: Integer): String;
 Begin
   Result := '{' +
-    '"id":"' + JsonEscape(Entry.Id) + '",' +
-    '"mode":"' + JsonEscape(Entry.Mode) + '",' +
-    '"created_at":"' + JsonEscape(Entry.CreatedAt) + '",' +
+    '"id":"' + JsonEscapeText(Entry.Id) + '",' +
+    '"mode":"' + JsonEscapeText(Entry.Mode) + '",' +
+    '"created_at":"' + JsonEscapeText(Entry.CreatedAt) + '",' +
     '"duration_ms":' + IntToStr(Entry.DurationMs) + ',' +
-    '"prompt_preview":"' + JsonEscape(Entry.PromptPreview) + '",' +
-    '"response_preview":"' + JsonEscape(Entry.ResponsePreview) + '",' +
+    '"prompt_preview":"' + JsonEscapeText(Entry.PromptPreview) + '",' +
+    '"response_preview":"' + JsonEscapeText(Entry.ResponsePreview) + '",' +
     '"has_thinking":' + LowerCase(BoolToStr(Entry.HasThinking, True)) + ',' +
-    '"error":"' + JsonEscape(Entry.ErrorText) + '",' +
+    '"error":"' + JsonEscapeText(Entry.ErrorText) + '",' +
     '"file_offset":' + IntToStr(Entry.FileOffset) + ',' +
     '"turn_index":' + IntToStr(TurnIndex) +
     '}';

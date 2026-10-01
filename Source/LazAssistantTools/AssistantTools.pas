@@ -71,7 +71,7 @@ Implementation
 Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
-  AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantConfig,
+  AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, fpjson, jsonparser;
 
@@ -181,32 +181,6 @@ Begin
     Exit;
   GQuietIdeDepth := 1;
   AssistantEndQuietIdeSession;
-End;
-
-Function JsonEscapeLocal(Const SourceText: String): String;
-Var
-  I: Integer;
-  C: Char;
-Begin
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
-      Else
-        If Ord(C) < 32 Then
-          Result := Result + '\u' + IntToHex(Ord(C), 4)
-        Else
-          Result := Result + C;
-      End;
-    End;
 End;
 
 Function GetActivePlanRelativePath: String;
@@ -634,7 +608,7 @@ Begin
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
         BuildSourceToolsJson + ',' + BuildRunToolsJson +
         ',{"type":"function","function":{"name":"run_git","description":' +
-        '"' + JsonEscapeLocal(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
+        '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
     amInspect:
       Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson;
   Else

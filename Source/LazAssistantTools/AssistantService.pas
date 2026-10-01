@@ -224,32 +224,6 @@ Begin
   End;
 End;
 
-Function JsonEscape(Const SourceText: String): String;
-Var
-  I: Integer;
-  C: Char;
-Begin
-  Result := '';
-  For I := 1 To Length(SourceText) Do
-    Begin
-      C := SourceText[I];
-      Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
-      Else
-        If Ord(C) < 32 Then
-          Result := Result + '\u' + IntToHex(Ord(C), 4)
-        Else
-          Result := Result + C;
-      End;
-    End;
-End;
-
 Function JsonStringField(Obj: TJSONObject; Const FieldName: String): String;
 Var
   Node: TJSONData;
@@ -724,7 +698,7 @@ Begin
   FActiveSkill := '';
   FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
-  FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+  FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
   FToolsJsonCache := '';
   FToolsJsonMode := amChat;
   FToolsJsonValid := False;
@@ -793,20 +767,20 @@ Begin
   Else
     FSystemPrompt := FSystemPrompt + LineEnding + AssistantImageSystemSentence;
   FBaseSystemPrompt := FSystemPrompt;
-  FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+  FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
 End;
 
 Function TAssistantService.EscapedContent(Var Msg: TAssistantMessage): String;
 Begin
   If Msg.ContentEscaped = '' Then
-    Msg.ContentEscaped := JsonEscape(Msg.Content);
+    Msg.ContentEscaped := JsonEscapeText(Msg.Content);
   Result := Msg.ContentEscaped;
 End;
 
 Function TAssistantService.EscapedToolCallId(Var Msg: TAssistantMessage): String;
 Begin
   If Msg.ToolCallIdEscaped = '' Then
-    Msg.ToolCallIdEscaped := JsonEscape(Msg.ToolCallId);
+    Msg.ToolCallIdEscaped := JsonEscapeText(Msg.ToolCallId);
   Result := Msg.ToolCallIdEscaped;
 End;
 
@@ -836,7 +810,7 @@ Begin
   If Trim(FSystemPrompt) <> '' Then
     Begin
       If FSystemPromptEscaped = '' Then
-        FSystemPromptEscaped := JsonEscape(FSystemPrompt);
+        FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
       Parts[PartCount] := '{"role":"system","content":"' + FSystemPromptEscaped + '"}';
       Inc(PartCount);
       HasSystem := True;
@@ -879,13 +853,13 @@ Begin
       Inc(P, L);
     End;
   If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
-    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined +
+    Result := '{"model":"' + JsonEscapeText(FModel) + '","stream":true,"messages":[' + Joined +
       '],"tools":' + ToolsJsonCached
   Else
-    Result := '{"model":"' + JsonEscape(FModel) + '","stream":true,"messages":[' + Joined + ']';
+    Result := '{"model":"' + JsonEscapeText(FModel) + '","stream":true,"messages":[' + Joined + ']';
   { Reasoning effort (thinking level): low | medium | high | xhigh. }
   If Trim(FReasoningEffort) <> '' Then
-    Result := Result + ',"reasoning_effort":"' + JsonEscape(LowerCase(Trim(FReasoningEffort))) + '"';
+    Result := Result + ',"reasoning_effort":"' + JsonEscapeText(LowerCase(Trim(FReasoningEffort))) + '"';
   Result := Result + '}';
 End;
 

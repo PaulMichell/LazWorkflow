@@ -65,6 +65,10 @@ Begin
     Check('bounded output reports truncation', Value.OutputTruncated And (Length(Value.OutputText) = 1048576));
     Note := AssistantBuildStatusJSON(Value, False);
     Check('large logs fit managed tool transport', Length(JsonEscapeText(Note)) < 1048000);
+    Check('quote becomes a backslash escape', JsonEscapeText('"') = '\"');
+    Check('a valid e acute is unchanged', JsonEscapeText(#$C3#$A9) = #$C3#$A9);
+    Check('a lone FF byte is replaced', JsonEscapeText(#$FF) = #$EF#$BF#$BD);
+    Check('a long quote string doubles', Length(JsonEscapeText(StringOfChar('"', 100000))) = 200000);
     Data := GetJSON(Note);
     Try Check('raw log excerpt truncation is explicit', Data.FindPath('logExcerptTruncated').AsBoolean);
     Finally Data.Free; End;
