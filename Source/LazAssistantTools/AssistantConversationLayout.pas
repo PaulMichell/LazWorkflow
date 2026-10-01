@@ -57,6 +57,9 @@ Type
     WorkDeadline: QWord;
     FParseCount, Epoch, NextIdentity: QWord;
     Worker: TAssistantMarkdownWorker;
+    DeferPoll: Boolean;
+    Function SectionNeedsWorkerParse(Section: TConversationSection): Boolean;
+    Procedure ScheduleDeferredParse;
     Procedure PollParser;
     Procedure RequestParse(Section: TConversationSection; PrepareCached: Boolean = False);
     Procedure ConfigurePreparation(Job: TAssistantMarkdownJob; Section: TConversationSection);
@@ -95,6 +98,11 @@ Implementation
 
 Uses
   Math, Graphics, StyledMarkdown;
+
+Function KeepsMarkdownFragment(Kind: TTraceBlockKind; Const Body: String; HasFull: Boolean): Boolean;
+Begin
+  Result := Not (Kind In [tbkTool, tbkSteer]) And (HasFull Or (Length(Body) >= 65536));
+End;
 
 Constructor TConversationFragment.Create(Renderer: TStyledCanvas; Const Content: TStyledContent; AWidth: Integer);
 Begin
@@ -220,6 +228,7 @@ Procedure TConversationLayout.BeginWorkSlice;
 Begin
   WorkDeadline := GetTickCount64 + 8;
   NeedsPreparation := False;
+  DeferPoll := False;
 End;
 
 Procedure TConversationLayout.Clear;
@@ -227,6 +236,7 @@ Var
   I: Integer;
 Begin
   Inc(Epoch);
+  DeferPoll := False;
   If Assigned(Worker) Then Worker.Cancel;
   For I := 0 To Lookup.Count - 1 Do Lookup.Objects[I].Free;
   Lookup.Clear;
@@ -302,9 +312,10 @@ Begin
     ((Section.Title = '') <> (DisplayTitle = '')) Then Section.Invalidate
   Else If Section.Body <> Block.Body Then
     Begin
-      { Keep the last completed full document while a large replacement parses.
-        Short thinking remains cheap and is rebuilt from the latest source. }
-      If (Length(Block.Body) >= 65536) And Not (Block.Kind In [tbkTool, tbkSteer]) Then
+      { Keep the last full document while a replacement parses. A first short
+        message has no fragment yet. Collapsed thinking without one stays cheap.
+        Tool and steer blocks stay plain text. }
+      If KeepsMarkdownFragment(Block.Kind, Block.Body, Assigned(Section.Full)) Then
         Begin
           FreeAndNil(Section.Short);
           Section.ShortHeight := 28;
@@ -470,9 +481,39 @@ Begin
     If Result[N].Box.Group = 0 Then Result[N].Box.Style.Margin.Bottom := Round(6 * FPixelsPerInch / 96);
 End;
 
+Function TConversationLayout.SectionNeedsWorkerParse(Section: TConversationSection): Boolean;
+Begin
+  Result := Assigned(Section) And Section.Visible And Not Section.Collapsed And
+    KeepsMarkdownFragment(Section.Kind, Section.Body, Assigned(Section.Full)) And
+    ((Section.ParsedVersion <> Section.Version) Or (Section.ParsedBaseSize <> FBaseSize));
+End;
+
+Procedure TConversationLayout.ScheduleDeferredParse;
+Var
+  I: Integer;
+Begin
+  { A job submitted in this slice stays queued so the caller can still see the
+    previous fragment. The next idle poll publishes it and requests anything newer. }
+  If DeferPoll Then Exit;
+  For I := 0 To Count - 1 Do
+    If SectionNeedsWorkerParse(Sections[I]) Then
+      Begin
+        NeedsPreparation := True;
+        If Not Assigned(Worker) Or Not Worker.Busy Then RequestParse(Sections[I]);
+        Exit;
+      End;
+End;
+
 Function TConversationLayout.GetPendingWork: Boolean;
+Var
+  I: Integer;
 Begin
   Result := Assigned(Worker) And Worker.Busy;
+  If Result Then Exit;
+  { RequestParse gives up while the worker is busy. Keep the timer alive until
+    an idle poll can submit the source that moved during that job. }
+  For I := 0 To Count - 1 Do
+    If SectionNeedsWorkerParse(Sections[I]) Then Exit(True);
 End;
 
 Procedure TConversationLayout.RequestParse(Section: TConversationSection; PrepareCached: Boolean);
@@ -495,7 +536,8 @@ Begin
       Job.BoundBody := Section.BodyContent;
       ConfigurePreparation(Job, Section);
     End;
-  If Not Worker.Submit(Job) Then Job.Free;
+  If Not Worker.Submit(Job) Then Job.Free
+  Else DeferPoll := True;
 End;
 
 Procedure TConversationLayout.ConfigurePreparation(Job: TAssistantMarkdownJob; Section: TConversationSection);
@@ -527,9 +569,13 @@ Var
     If Worker.Submit(Job) Then Job := Nil;
   End;
 Begin
-  If Not Assigned(Worker) Then Exit;
+  If Not Assigned(Worker) Or DeferPoll Then Exit;
   Job := Worker.Take;
-  If Not Assigned(Job) Then Exit;
+  If Not Assigned(Job) Then
+    Begin
+      ScheduleDeferredParse;
+      Exit;
+    End;
   Try
     If Job.Cancelled Or (Job.Epoch <> Epoch) Or (Job.BaseSize <> FBaseSize) Then Exit;
     I := Lookup.IndexOf(Job.Key);
@@ -539,8 +585,7 @@ Begin
       ((Job.BaseSize = Section.ParsedBaseSize) And ((Job.Version < Section.ParsedVersion) Or
       ((Job.Version = Section.ParsedVersion) And Assigned(Section.Full) And
       (Section.FullVersion = Job.Version) And (Section.Full.Width = Job.Width) And
-      (Section.Full.Generation = Renderer.Generation)))) Or
-      ((Job.Version <> Section.Version) And (Length(Section.Body) < 65536)) Then Exit;
+      (Section.Full.Generation = Renderer.Generation)))) Then Exit;
     If Job.Stage = amsParse Then
       Begin
         If Assigned(Job.Parsed) Then
@@ -580,6 +625,7 @@ Begin
         If Not Worker.Submit(Job) Then Job.Free;
       End;
   End;
+  ScheduleDeferredParse;
 End;
 
 Function TConversationLayout.PrepareSection(Index: Integer; Top, Bottom: Int64; Finish: Boolean): Boolean;
@@ -598,7 +644,10 @@ Begin
   Pending := False;
   If MarkdownBody And ((Section.ParsedVersion <> Section.Version) Or (Section.ParsedBaseSize <> FBaseSize)) Then
     Begin
-      If LargeBody And Not Finish Then
+      { Keep a fragment that is already on screen and parse the new body on the
+        worker. The first short message has no fragment and still parses here.
+        Finish must converge before it returns. }
+      If Not Finish And (LargeBody Or Assigned(Section.Full)) Then
         Begin
           RequestParse(Section);
           Pending := True;

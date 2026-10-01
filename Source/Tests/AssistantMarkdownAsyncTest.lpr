@@ -94,6 +94,24 @@ Begin
     ' expected=',View.Layout[1].OuterWidth-2*View.Layout[1].Padding);
   Check('asynchronous parse completed',False);
 End;
+Procedure TestGrowingReply;
+Var Source: String;
+Begin
+  Source:='Short **answer**.';
+  Block.Body:=Source;
+  Sync; View.CompleteLayout; AwaitLatest;
+  Check('short answer has a fragment',Assigned(View.Layout[1].Full) And
+    (View.Layout[1].ParsedVersion=View.Layout[1].Version));
+  Source:=Source+#10+#10+'Appended paragraph.';
+  Block.Body:=Source;
+  Sync;
+  Check('growing reply keeps its fragment',Assigned(View.Layout[1].Full));
+  Check('growing reply defers the new parse',View.Layout[1].ParsedVersion<>View.Layout[1].Version);
+  AwaitLatest;
+  Expected:=BuildStyledMarkdown(View.Renderer,Source,View.Font.Size);
+  Check('growing reply publishes the new source',
+    StyledContentText(Expected)=StyledContentText(View.Layout[1].BodyContent));
+End;
 Procedure TestFontAnchor;
 Var State, Actual: TConversationViewState; N,J: Integer; SavedParses, Generation: QWord;
   A,B: TConversationPosition;
@@ -160,7 +178,10 @@ Begin
     While Length(Body)<2*1024*1024 Do Body+=Body;
     Trace.AddUser('Keep this question visible.');
     Block:=Trace.EnsureAnswer; Block.Body:='Previous completed reply.';
-    Sync; View.CompleteLayout; View.JumpToStart; BeforeTop:=View.ScrollTop;
+    Sync; View.CompleteLayout;
+    TestGrowingReply;
+    MaxPumpMs:=0;
+    View.JumpToStart; BeforeTop:=View.ScrollTop;
     Block.Body:=Body+'| Key | Value |'+#10+'| --- | --- |'+#10+'| One | Two |'+#10+#10+'```pascal'+#10+'Result := 1;';
     Started:=GetTickCount64; Sync;
     WriteLn('large update initial sync: ',GetTickCount64-Started,' ms');
