@@ -74,6 +74,11 @@ Type
     Function CountAheadOfUpstream: Integer;
     Procedure BuildTransferSummary(Const Operation, Remote, OutputText: String;
       Var Summary: TGitTransferSummary);
+    Function AcceptTransferRemote(Const Operation, Remote: String; Out RemoteName: String;
+      Out Summary: TGitTransferSummary): Boolean;
+    Function AcceptTransferBranch(Const Operation, Branch: String; Out BranchName: String;
+      Out Summary: TGitTransferSummary): Boolean;
+    Procedure RestoreTransferCommand(Const OperationError: String; Const OperationResult: TGitCommandResult);
     Function IsCancelled: Boolean;
     Procedure EmitWorkingTreeChanged;
     Procedure EmitHeadChanged(Const NewHeadSha: String);
@@ -1666,38 +1671,141 @@ Var
     Result := (Length(LeftSha) >= 7) And (Length(RightSha) >= 7);
   End;
 
-  Procedure AddRangeFrom(Const S: String; CountEvenIfMissing: Boolean);
+  Function SameAbbreviatedSha(Const A, B: String): Boolean;
   Var
-    RangeSpec, CommitText, CommitSha: String;
+    Left, Right: String;
+  Begin
+    Left := LowerCase(A);
+    Right := LowerCase(B);
+    If Length(Left) > Length(Right) Then
+      Result := Copy(Left, 1, Length(Right)) = Right
+    Else
+      Result := Copy(Right, 1, Length(Left)) = Left;
+  End;
+
+  Function RangeLeft(Const Spec: String): String;
+  Begin
+    Result := Copy(Spec, 1, Pos('..', Spec) - 1);
+  End;
+
+  Procedure RememberRange(Const LeftSha, RightSha: String);
+  Var
+    J, DotPos: Integer;
+    ExistingLeft, ExistingRight: String;
+  Begin
+    For J := 0 To SeenRanges.Count - 1 Do
+      Begin
+        DotPos := Pos('..', SeenRanges[J]);
+        ExistingLeft := Copy(SeenRanges[J], 1, DotPos - 1);
+        ExistingRight := Copy(SeenRanges[J], DotPos + 2, MaxInt);
+        { The same range may be printed twice, or once with a shorter object id. }
+        If SameAbbreviatedSha(ExistingLeft, LeftSha) And SameAbbreviatedSha(ExistingRight, RightSha) Then
+          Begin
+            If Length(LeftSha) > Length(ExistingLeft) Then
+              ExistingLeft := LowerCase(LeftSha);
+            If Length(RightSha) > Length(ExistingRight) Then
+              ExistingRight := LowerCase(RightSha);
+            SeenRanges[J] := ExistingLeft + '..' + ExistingRight;
+            Exit;
+          End;
+      End;
+    SeenRanges.Add(LowerCase(LeftSha) + '..' + LowerCase(RightSha));
+  End;
+
+  Procedure AddUniqueCommits(Const CommitText: String);
+  Var
+    J: Integer;
+    CommitSha: String;
+  Begin
+    RangeCommits.Text := CommitText;
+    For J := 0 To RangeCommits.Count - 1 Do
+      Begin
+        CommitSha := Trim(RangeCommits[J]);
+        If (CommitSha <> '') And (SeenCommits.IndexOf(CommitSha) < 0) Then
+          Begin
+            SeenCommits.Add(CommitSha);
+            Inc(Total);
+          End;
+      End;
+  End;
+
+  Procedure CountRangesSeparately;
+  Var
     J, Code: Integer;
+    CommitText: String;
+  Begin
+    For J := 0 To SeenRanges.Count - 1 Do
+      If RunGit(['rev-list', SeenRanges[J]], CommitText, Code) Then
+        AddUniqueCommits(CommitText)
+      Else
+        Inc(Total);
+  End;
+
+  Function RangesShareExcludedTip: Boolean;
+  Var
+    J: Integer;
+    First: String;
+  Begin
+    Result := True;
+    If SeenRanges.Count <= 1 Then
+      Exit;
+    First := RangeLeft(SeenRanges[0]);
+    For J := 1 To SeenRanges.Count - 1 Do
+      If Not SameAbbreviatedSha(First, RangeLeft(SeenRanges[J])) Then
+        Exit(False);
+  End;
+
+  Procedure CountCollectedRanges;
+  Var
+    Args: Array Of String;
+    J, Code: Integer;
+    CommitText: String;
+  Begin
+    Args := Nil;
+    If SeenRanges.Count = 0 Then
+      Exit;
+    { rev-list of several A..B specs excludes every left tip from the whole walk.
+      That is the union when the ranges share one excluded tip. Different bases
+      would drop commits that belong only to the wider range, so those stay on
+      the per-range path. A failed combined call uses that path too, so one bad
+      spec does not zero the count. }
+    If Not RangesShareExcludedTip Then
+      Begin
+        CountRangesSeparately;
+        Exit;
+      End;
+    SetLength(Args, SeenRanges.Count + 1);
+    Args[0] := 'rev-list';
+    For J := 0 To SeenRanges.Count - 1 Do
+      Args[J + 1] := SeenRanges[J];
+    If RunGit(Args, CommitText, Code) Then
+      AddUniqueCommits(CommitText)
+    Else
+      CountRangesSeparately;
+  End;
+
+  Procedure AddRangeFrom(Const S: String; CountEvenIfMissing: Boolean);
   Begin
     If ExtractShaRange(S, OldSha, NewSha) Then
-      Begin
-        RangeSpec := LowerCase(OldSha + '..' + NewSha);
-        { Pull prints the fetched range and then the same range in "Updating".
-          Count each commit once, including overlapping ranges from other refs
-          or ranges printed with different object-id abbreviation lengths. }
-        If SeenRanges.IndexOf(RangeSpec) >= 0 Then
-          Exit;
-        SeenRanges.Add(RangeSpec);
-        If RunGit(['rev-list', RangeSpec], CommitText, Code) Then
-          Begin
-            RangeCommits.Text := CommitText;
-            For J := 0 To RangeCommits.Count - 1 Do
-              Begin
-                CommitSha := Trim(RangeCommits[J]);
-                If (CommitSha <> '') And (SeenCommits.IndexOf(CommitSha) < 0) Then
-                  Begin
-                    SeenCommits.Add(CommitSha);
-                    Inc(Total);
-                  End;
-              End;
-          End
-        Else
-          Inc(Total);
-      End
+      RememberRange(OldSha, NewSha)
     Else If CountEvenIfMissing Then
       Inc(Total);
+  End;
+
+  Procedure AssignTransferMessage(Const Action, IdleText: String);
+  Begin
+    If Summary.UpToDate Then
+      Summary.Message := Format('%s complete.' + LineEnding + '%s', [Action, IdleText])
+    Else If (Total > 0) Or (NewRefs > 0) Then
+      Begin
+        Summary.Message := Format('%s complete.' + LineEnding + '%d commit(s) transferred.',
+          [Action, Total]);
+        If NewRefs > 0 Then
+          Summary.Message := Summary.Message + LineEnding +
+            Format('%d new branch/tag reference(s).', [NewRefs]);
+      End
+    Else
+      Summary.Message := Format('%s complete.', [Action]);
   End;
 
 Begin
@@ -1715,7 +1823,6 @@ Begin
   SeenCommits := TStringList.Create;
   RangeCommits := TStringList.Create;
   Try
-    SeenRanges.Sorted := True;
     SeenCommits.Sorted := True;
     Lines.Text := OutputText;
     For I := 0 To Lines.Count - 1 Do
@@ -1762,6 +1869,7 @@ Begin
 
         AddRangeFrom(Line, False);
       End;
+    CountCollectedRanges;
   Finally
     RangeCommits.Free;
     SeenCommits.Free;
@@ -1775,40 +1883,47 @@ Begin
     like a successful no-op even when commits were actually pushed. }
   Summary.UpToDate := UpToDate And (Total = 0) And (NewRefs = 0);
 
-  If Summary.UpToDate Then
-    Summary.Message := Format('%s from %s complete.' + LineEnding + 'Already up to date.',
-      [Operation, Remote])
-  Else If (Total > 0) Or (NewRefs > 0) Then
-    Begin
-      Summary.Message := Format('%s from %s complete.' + LineEnding + '%d commit(s) transferred.',
-        [Operation, Remote, Total]);
-      If NewRefs > 0 Then
-        Summary.Message := Summary.Message + LineEnding +
-          Format('%d new branch/tag reference(s).', [NewRefs]);
-    End
-  Else
-    Summary.Message := Format('%s from %s complete.', [Operation, Remote]);
-
+  AssignTransferMessage(Operation + ' from ' + Remote, 'Already up to date.');
   If SameText(Operation, 'Push') Then
-    Begin
-      If Summary.UpToDate Then
-        Summary.Message := Format('Push to %s complete.' + LineEnding + 'Everything up to date.', [Remote])
-      Else If (Total > 0) Or (NewRefs > 0) Then
-        Begin
-          Summary.Message := Format('Push to %s complete.' + LineEnding + '%d commit(s) transferred.',
-            [Remote, Total]);
-          If NewRefs > 0 Then
-            Summary.Message := Summary.Message + LineEnding +
-              Format('%d new branch/tag reference(s).', [NewRefs]);
-        End
-      Else
-        Summary.Message := Format('Push to %s complete.', [Remote]);
-    End;
+    AssignTransferMessage('Push to ' + Remote, 'Everything up to date.');
 End;
 
 Procedure ClearTransferSummary(Out Summary: TGitTransferSummary);
 Begin
   Summary := Default(TGitTransferSummary);
+End;
+
+Function TGitService.AcceptTransferRemote(Const Operation, Remote: String; Out RemoteName: String;
+  Out Summary: TGitTransferSummary): Boolean;
+Begin
+  ClearTransferSummary(Summary);
+  If Remote = '' Then
+    RemoteName := 'origin'
+  Else
+    RemoteName := Trim(Remote);
+  Result := GitNameIsSafe(RemoteName);
+  If Result Then
+    Exit;
+  FLastError := 'Remote name was rejected';
+  Summary.Message := Operation + ' failed: ' + FLastError;
+End;
+
+Function TGitService.AcceptTransferBranch(Const Operation, Branch: String; Out BranchName: String;
+  Out Summary: TGitTransferSummary): Boolean;
+Begin
+  BranchName := Trim(Branch);
+  Result := (BranchName = '') Or GitNameIsSafe(BranchName);
+  If Result Then
+    Exit;
+  FLastError := 'Branch name was rejected';
+  Summary.Message := Operation + ' failed: ' + FLastError;
+End;
+
+Procedure TGitService.RestoreTransferCommand(Const OperationError: String;
+  Const OperationResult: TGitCommandResult);
+Begin
+  FLastError := OperationError;
+  FLastCommand := OperationResult;
 End;
 
 Function TGitService.Fetch(Out Summary: TGitTransferSummary; Const Remote: String): Boolean;
@@ -1818,18 +1933,9 @@ Var
   RemoteName, OperationError: String;
   OperationResult: TGitCommandResult;
 Begin
-  ClearTransferSummary(Summary);
   Result := False;
-  If Remote = '' Then
-    RemoteName := 'origin'
-  Else
-    RemoteName := Trim(Remote);
-  If Not GitNameIsSafe(RemoteName) Then
-    Begin
-      FLastError := 'Remote name was rejected';
-      Summary.Message := 'Fetch failed: ' + FLastError;
-      Exit;
-    End;
+  If Not AcceptTransferRemote('Fetch', Remote, RemoteName, Summary) Then
+    Exit;
   { '--' stops option parsing if a later edit drops the name check. }
   Result := RunGit(['fetch', '--', RemoteName], OutputText, ExitCode, True);
   OperationError := FLastError;
@@ -1839,8 +1945,7 @@ Begin
     EmitRemoteUpdated(RemoteName)
   Else
     Summary.Message := 'Fetch failed: ' + OperationError;
-  FLastError := OperationError;
-  FLastCommand := OperationResult;
+  RestoreTransferCommand(OperationError, OperationResult);
 End;
 
 Function TGitService.Pull(Out Summary: TGitTransferSummary; Const Remote: String;
@@ -1852,25 +1957,11 @@ Var
   RemoteName, BranchName, OperationError: String;
   OperationResult: TGitCommandResult;
 Begin
-  ClearTransferSummary(Summary);
   Result := False;
-  If Remote = '' Then
-    RemoteName := 'origin'
-  Else
-    RemoteName := Trim(Remote);
-  BranchName := Trim(Branch);
-  If Not GitNameIsSafe(RemoteName) Then
-    Begin
-      FLastError := 'Remote name was rejected';
-      Summary.Message := 'Pull failed: ' + FLastError;
-      Exit;
-    End;
-  If (BranchName <> '') And (Not GitNameIsSafe(BranchName)) Then
-    Begin
-      FLastError := 'Branch name was rejected';
-      Summary.Message := 'Pull failed: ' + FLastError;
-      Exit;
-    End;
+  If Not AcceptTransferRemote('Pull', Remote, RemoteName, Summary) Then
+    Exit;
+  If Not AcceptTransferBranch('Pull', Branch, BranchName, Summary) Then
+    Exit;
   If BranchName = '' Then
     Args := ['pull', '--', RemoteName]
   Else
@@ -1883,8 +1974,7 @@ Begin
     EmitWorkingTreeChanged
   Else
     Summary.Message := 'Pull failed: ' + OperationError;
-  FLastError := OperationError;
-  FLastCommand := OperationResult;
+  RestoreTransferCommand(OperationError, OperationResult);
 End;
 
 Function TGitService.Push(Out Summary: TGitTransferSummary; Const Remote: String;
@@ -1896,25 +1986,11 @@ Var
   RemoteName, BranchName, OperationError: String;
   OperationResult: TGitCommandResult;
 Begin
-  ClearTransferSummary(Summary);
   Result := False;
-  If Remote = '' Then
-    RemoteName := 'origin'
-  Else
-    RemoteName := Trim(Remote);
-  BranchName := Trim(Branch);
-  If Not GitNameIsSafe(RemoteName) Then
-    Begin
-      FLastError := 'Remote name was rejected';
-      Summary.Message := 'Push failed: ' + FLastError;
-      Exit;
-    End;
-  If (BranchName <> '') And (Not GitNameIsSafe(BranchName)) Then
-    Begin
-      FLastError := 'Branch name was rejected';
-      Summary.Message := 'Push failed: ' + FLastError;
-      Exit;
-    End;
+  If Not AcceptTransferRemote('Push', Remote, RemoteName, Summary) Then
+    Exit;
+  If Not AcceptTransferBranch('Push', Branch, BranchName, Summary) Then
+    Exit;
   { Porcelain is machine-readable. Push HEAD of this work tree, not a guessed branch.
     '--' ends options before the remote and refspec. }
   If BranchName = '' Then
@@ -1939,8 +2015,7 @@ Begin
     End
   Else
     Summary.Message := 'Push failed: ' + OperationError;
-  FLastError := OperationError;
-  FLastCommand := OperationResult;
+  RestoreTransferCommand(OperationError, OperationResult);
 End;
 
 Function TGitService.InitRepository(Const Path: String): Boolean;
