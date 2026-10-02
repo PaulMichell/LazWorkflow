@@ -2868,28 +2868,8 @@ Begin
 End;
 
 Function TProjectAssistantForm.DefaultExportFileName: String;
-Var
-  Stamp, Title: String;
-  I: Integer;
 Begin
-  Stamp := FormatDateTime('yyyymmdd"-"hhnnss', Now);
-  Title := 'conversation';
-  If Assigned(HistoryCombo) And (HistoryCombo.ItemIndex >= 0) Then
-    Title := HistoryCombo.Items[HistoryCombo.ItemIndex];
-  If SameText(Copy(Title, 1, 7), 'Current') Then
-    Begin
-      Title := Trim(Copy(Title, 8, MaxInt));
-      If (Title <> '') And (Title[1] = '—') Then
-        Title := Trim(Copy(Title, 2, MaxInt));
-      If (Title = '') Or SameText(Title, '(empty)') Then
-        Title := 'conversation';
-    End;
-  For I := 1 To Length(Title) Do
-    If Title[I] In ['/', '\', ':', '*', '?', '"', '<', '>', '|'] Then
-      Title[I] := '-';
-  If Length(Title) > 48 Then
-    Title := Copy(Title, 1, 48);
-  Result := Title + '-' + Stamp + '.md';
+  Result := 'Conversation ' + FormatDateTime('yyyymmdd"-"hhnnss', Now) + '.md';
 End;
 
 Function TProjectAssistantForm.BuildConversationMarkdownExport: String;
