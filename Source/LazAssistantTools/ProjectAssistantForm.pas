@@ -547,7 +547,6 @@ Uses AssistantWorkTarget, PackageIntf,
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Const
-  ChatViewMargin = 4;
   ChatPaintMinIntervalMs = 80;
   { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
   LiveConversationMarker = -2;
@@ -715,6 +714,7 @@ Begin
   HistoryPanelResize(HistorySheet);
   If Assigned(InputMemo) Then
     Begin
+      InputMemo.BorderSpacing.Around := 0;
       InputMemo.OnKeyDown := @InputMemoKeyDown;
       InputMemo.OnUTF8KeyPress := @InputMemoUTF8KeyPress;
       InputMemo.OnChange := @InputMemoChange;
@@ -3858,13 +3858,14 @@ Begin
     Exit;
   If Not Assigned(ChatHost) Then
     Exit;
+  ChatHost.BorderSpacing.Around := 0;
   ChatHost.Color := clWindow;
   ChatHost.ParentColor := False;
   ChatHost.ParentBackground := False;
   FTraceView := TAssistantTraceView.Create(Self);
   FTraceView.Parent := ChatHost;
   FTraceView.Align := alClient;
-  FTraceView.BorderSpacing.Around := ChatViewMargin;
+  FTraceView.BorderSpacing.Around := 0;
   FTraceView.ShowThinking := FShowThinking;
   FTraceView.ShowToolUse := FShowToolUse;
   If Not Assigned(FTrace) Then
