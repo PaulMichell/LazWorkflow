@@ -6,8 +6,8 @@ Unit ProjectAssistantForm;
   history, plan/build tiles, send/steer, and catalog wiring as one form.
   Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
   AssistantTraceView. Reviewed 2026-09-27: Chat is a fourth mode with no project
-  tools or skill; the mode bar is a label and combobox. Composer attach, paste, and drop
-  stay here because they are streamed controls. The image list holds pictures only;
+  tools or skill; the mode bar is a label and combobox. Composer paste and drop
+  stay here. Attach Image is on the memo popup, after Paste. The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
   reorder the text, buttons, or status bar. Paste reads pictures through the
@@ -147,7 +147,6 @@ Type
     ReviewCompileButton: TButton;
     ReviewBuildButton: TButton;
     FixErrorButton: TButton;
-    AttachImageButton: TButton;
     SettingsButton: TButton;
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
@@ -162,6 +161,7 @@ Type
     InputCutItem: TMenuItem;
     InputCopyItem: TMenuItem;
     InputPasteItem: TMenuItem;
+    InputAttachImageItem: TMenuItem;
     InputSelectAllItem: TMenuItem;
     AttachmentPopup: TPopupMenu;
     AttachmentAttachItem: TMenuItem;
@@ -3630,6 +3630,9 @@ Begin
   { No shortcut. Ctrl+V is handled by the memo so a disabled item cannot eat the key. }
   InputPasteItem.OnClick := @InputPasteClick;
   InputPopup.Items.Add(InputPasteItem);
+  InputAttachImageItem := TMenuItem.Create(InputPopup);
+  InputAttachImageItem.Action := AttachImageAction;
+  InputPopup.Items.Add(InputAttachImageItem);
   Sep := TMenuItem.Create(InputPopup);
   Sep.Caption := '-';
   InputPopup.Items.Add(Sep);
@@ -3659,6 +3662,7 @@ Begin
     { Always offer Paste while the memo can edit. A disabled Ctrl+V shortcut
       swallows the key before the composer can read an image. }
     InputPasteItem.Enabled := CanEdit;
+  RefreshAttachAction;
   If Assigned(InputSelectAllItem) Then
     InputSelectAllItem.Enabled := Assigned(InputMemo) And (InputMemo.GetTextLen > 0);
 End;
