@@ -181,23 +181,81 @@ object ProjectAssistantForm: TProjectAssistantForm
         ClientHeight = 72
         ClientWidth = 284
         TabOrder = 0
+        object TargetRow: TPanel
+          Left = 0
+          Height = 36
+          Top = 0
+          Width = 284
+          Anchors = [akLeft, akTop, akRight]
+          BevelOuter = bvNone
+          ClientHeight = 36
+          ClientWidth = 284
+          TabOrder = 0
+          object TargetLabel: TLabel
+            Left = 0
+            Height = 36
+            Top = 0
+            Width = 64
+            Align = alLeft
+            AutoSize = False
+            BorderSpacing.Right = 6
+            Caption = '&Target:'
+            FocusControl = TargetCombo
+            Layout = tlCenter
+            ParentColor = False
+          end
+          object TargetBrowseButton: TButton
+            Left = 248
+            Height = 28
+            Top = 4
+            Width = 36
+            Align = alRight
+            AutoSize = False
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Bottom = 4
+            Caption = '...'
+            Hint = 'Choose a target folder'
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 1
+            OnClick = TargetBrowseClick
+          end
+          object TargetCombo: TComboBox
+            Left = 70
+            Height = 28
+            Top = 4
+            Width = 174
+            Align = alClient
+            BorderSpacing.Top = 4
+            BorderSpacing.Bottom = 4
+            ItemHeight = 0
+            ParentShowHint = False
+            ShowHint = True
+            Style = csDropDownList
+            TabOrder = 0
+            OnChange = TargetChoiceChanged
+            OnDropDown = RefreshTargetChoices
+            OnMouseEnter = UpdateTargetComboHint
+          end
+        end
         object ModePicker: TPanel
           Left = 0
           Height = 36
           Top = 36
           Width = 284
-          Align = alClient
+          Anchors = [akLeft, akTop, akRight]
           BevelOuter = bvNone
           ClientHeight = 36
           ClientWidth = 284
-          TabOrder = 0
+          TabOrder = 1
           object ModeLabel: TLabel
             Left = 0
             Height = 36
             Top = 0
-            Width = 42
+            Width = 64
             Align = alLeft
-            AutoSize = True
+            AutoSize = False
             BorderSpacing.Right = 6
             Caption = 'Mode:'
             FocusControl = ModeCombo
@@ -205,10 +263,10 @@ object ProjectAssistantForm: TProjectAssistantForm
             ParentColor = False
           end
           object ModeCombo: TComboBox
-            Left = 48
+            Left = 70
             Height = 28
             Top = 4
-            Width = 232
+            Width = 214
             Align = alClient
             BorderSpacing.Top = 4
             BorderSpacing.Bottom = 4
