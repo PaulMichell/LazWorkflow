@@ -109,6 +109,9 @@ Type
       Out PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
     Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode;
       Const PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
+    { Registered plan paths in available_plans. A missing key is an empty list. }
+    Function LoadAvailablePlanPaths(Paths: TStrings): Boolean;
+    Function SaveAvailablePlanPaths(Paths: TStrings): Boolean;
     { Compatibility wrappers — prefer LoadShellConfig / SaveShellConfig. }
     Function SaveShowThinking(ShowThinking: Boolean): Boolean;
     Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
@@ -810,6 +813,122 @@ Begin
     Else
       Data.Free;
     SL.Free;
+  End;
+End;
+
+Function LoadAssistantConfigObject(Const ConfigFile: String): TJSONObject;
+Var
+  SL: TStringList;
+  Data: TJSONData;
+Begin
+  Result := TJSONObject.Create;
+  If (ConfigFile = '') Or (Not FileExistsUTF8(ConfigFile)) Then
+    Exit;
+  SL := TStringList.Create;
+  Data := Nil;
+  Try
+    Try
+      SL.LoadFromFile(ConfigFile);
+      Data := GetJSON(SL.Text);
+      If Data Is TJSONObject Then
+        Begin
+          Result.Free;
+          Result := TJSONObject(Data);
+          Data := Nil;
+        End;
+    Except
+      { Invalid settings: callers keep the other keys they can still write. }
+    End;
+  Finally
+    Data.Free;
+    SL.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.LoadAvailablePlanPaths(Paths: TStrings): Boolean;
+Var
+  Obj: TJSONObject;
+  Node: TJSONData;
+  Arr: TJSONArray;
+  I: Integer;
+  Item: String;
+Begin
+  Result := False;
+  If Not Assigned(Paths) Then
+    Exit;
+  Paths.Clear;
+  If FProjectRoot = '' Then
+    Begin
+      FLastError := 'No project root for assistant plan list.';
+      Exit;
+    End;
+  Obj := LoadAssistantConfigObject(ConfigPath);
+  Try
+    Node := Obj.Find('available_plans');
+    If Assigned(Node) And (Node Is TJSONArray) Then
+      Begin
+        Arr := TJSONArray(Node);
+        For I := 0 To Arr.Count - 1 Do
+          Begin
+            If Arr.Items[I].JSONType <> jtString Then
+              Continue;
+            Item := StringReplace(Trim(Arr.Items[I].AsString), '\', '/', [rfReplaceAll]);
+            If Item <> '' Then
+              Paths.Add(Item);
+          End;
+      End;
+    Result := True;
+  Finally
+    Obj.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.SaveAvailablePlanPaths(Paths: TStrings): Boolean;
+Var
+  Obj: TJSONObject;
+  Arr: TJSONArray;
+  I, NameIndex: Integer;
+  Item: String;
+  SL: TStringList;
+Begin
+  Result := False;
+  If Not Assigned(Paths) Then
+    Exit;
+  If Not EnsureDir Then
+    Exit;
+  Obj := LoadAssistantConfigObject(ConfigPath);
+  Try
+    Arr := TJSONArray.Create;
+    Try
+      For I := 0 To Paths.Count - 1 Do
+        Begin
+          Item := StringReplace(Trim(Paths[I]), '\', '/', [rfReplaceAll]);
+          If Item <> '' Then
+            Arr.Add(Item);
+        End;
+      NameIndex := Obj.IndexOfName('available_plans');
+      If NameIndex >= 0 Then
+        Obj.Delete(NameIndex);
+      Obj.Add('available_plans', Arr);
+      Arr := Nil;
+    Finally
+      Arr.Free;
+    End;
+    SL := TStringList.Create;
+    Try
+      Try
+        SL.Text := Obj.FormatJSON;
+        SL.SaveToFile(ConfigPath);
+        Result := True;
+      Except
+        On E: Exception Do
+          FLastError := E.Message;
+      End;
+    Finally
+      SL.Free;
+    End;
+  Finally
+    Obj.Free;
   End;
 End;
 

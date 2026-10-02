@@ -58,6 +58,18 @@ Function IsAssistantPlanGeneratedLine(Const Line: String): Boolean;
 Function TextIsAssistantPlan(Const Body: String): Boolean;
 Function TryReadAssistantPlanIdentity(Const RelativeOrAbsolute: String; Out Title, ErrorText: String): Boolean;
 Function FormatPlanListCaption(Const Title, RelativePath: String): String;
+{ Combo text is the title only. An empty title falls back to the file name, not the path. }
+Function PlanComboCaption(Const Title, RelativePath: String): String;
+{ While a plan run is in progress, plan writes refresh an open viewer and do not open a new one. }
+Procedure SetAssistantPlanViewerQuiet(Quiet: Boolean);
+Function AssistantPlanViewerQuiet: Boolean;
+{ Paths and Titles are created here. Missing files are dropped and the settings are saved.
+  The current active plan is kept when its file still exists, without scanning the project. }
+Function ListAvailableAssistantPlans(Const ActiveRelative: String; Out Paths, Titles: TStringList;
+  Out ActiveMissing: Boolean; Out ErrorText: String): Boolean;
+Function AddAvailableAssistantPlan(Const RelativeOrAbsolute: String; Out ErrorText: String): Boolean;
+{ Removes the path from the available list. Does not delete the Markdown file. }
+Function RemoveAvailableAssistantPlan(Const RelativeOrAbsolute: String; Out ErrorText: String): Boolean;
 Function AssistantPlanAuthoringRules: String;
 Function AssistantPlanCompletionRules: String;
 { True when NextBody marks an actionable item complete that PreviousBody did not. }
@@ -71,7 +83,7 @@ Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
 Function AssistantTurnSettlementNote(Const UserText: String; PlanWasWritten: Boolean): String;
 { True when an assistant plan puts Status under ##. A ### note is not a todo. Non-plans return False. }
 Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String): Boolean;
-{ Paths and Titles are created here and paired by index. Caller frees both, including on failure. }
+{ Folder scan of recognised plans. The plan sheet does not use this; it uses the registered list. }
 Function ListProjectMarkdownPlans(Out Paths, Titles: TStringList; Out ErrorText: String): Boolean;
 Function DefaultNewPlanMarkdown(Const Title: String = ''): String;
 { CRLF wins when both styles are present. A bare CR is its own ending, otherwise LF. }
@@ -107,6 +119,7 @@ Var
   CompletionPath: String;
   CompletionPrevious: String;
   CompletionExisted: Boolean;
+  PlanViewerQuiet: Boolean;
 
 Function PlanCompletionBlocked(Const PreviousBody, NextBody: String; Out ErrorText: String): Boolean; Forward;
 Procedure NotePlanCompletionWrite(Const Path, PreviousBody: String; Existed: Boolean); Forward;
@@ -121,7 +134,13 @@ Begin
       WorkflowEventBus.NotifyDocumentSaved(Resolved);
       WorkflowEventBus.NotifyDocumentChanged(Resolved, Content);
     End;
-  If Assigned(FindMarkdownDocument(Resolved)) Then
+  { A plan run updates the summary list. Do not steal the window by opening a viewer. }
+  If PlanViewerQuiet Then
+    Begin
+      If Assigned(FindMarkdownDocument(Resolved)) Then
+        ReloadMarkdownDocument(Resolved, False, False);
+    End
+  Else If Assigned(FindMarkdownDocument(Resolved)) Then
     ReloadMarkdownDocument(Resolved, True)
   Else If OpenAfter Then
     OpenMarkdownDocument(Resolved);
@@ -455,13 +474,204 @@ Begin
   Result := DisplayTitle + ' (' + RelativePath + ')';
 End;
 
+Function PlanComboCaption(Const Title, RelativePath: String): String;
+Begin
+  Result := Trim(Title);
+  If Result = '' Then
+    Result := ChangeFileExt(ExtractFileName(StringReplace(RelativePath, '/', PathDelim, [rfReplaceAll])), '');
+End;
+
+Procedure SetAssistantPlanViewerQuiet(Quiet: Boolean);
+Begin
+  PlanViewerQuiet := Quiet;
+End;
+
+Function AssistantPlanViewerQuiet: Boolean;
+Begin
+  Result := PlanViewerQuiet;
+End;
+
+Function NormalizeAvailablePlanPath(Const RelativePath: String): String;
+Begin
+  Result := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
+End;
+
+Function AvailablePlanIndex(Paths: TStrings; Const RelativePath: String): Integer;
+Var
+  I: Integer;
+  Norm: String;
+Begin
+  Result := -1;
+  Norm := NormalizeAvailablePlanPath(RelativePath);
+  If (Norm = '') Or (Not Assigned(Paths)) Then
+    Exit;
+  For I := 0 To Paths.Count - 1 Do
+    If SameText(NormalizeAvailablePlanPath(Paths[I]), Norm) Then
+      Begin
+        Result := I;
+        Exit;
+      End;
+End;
+
+Function AvailablePlanStoreReady(Out ErrorText: String): Boolean;
+Begin
+  Result := Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '');
+  If Not Result Then
+    ErrorText := 'No project assistant store.';
+End;
+
+Function ListAvailableAssistantPlans(Const ActiveRelative: String; Out Paths, Titles: TStringList;
+  Out ActiveMissing: Boolean; Out ErrorText: String): Boolean;
+Var
+  Stored, Kept: TStringList;
+  I: Integer;
+  Rel, Resolved, Title, Err: String;
+  Changed: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  ActiveMissing := False;
+  Paths := TStringList.Create;
+  Titles := TStringList.Create;
+  If Not AvailablePlanStoreReady(ErrorText) Then
+    Exit;
+  Stored := TStringList.Create;
+  Kept := TStringList.Create;
+  Try
+    If Not ProjectAssistantConversation.LoadAvailablePlanPaths(Stored) Then
+      Begin
+        ErrorText := ProjectAssistantConversation.LastError;
+        Exit;
+      End;
+    Changed := False;
+    For I := 0 To Stored.Count - 1 Do
+      Begin
+        Rel := NormalizeAvailablePlanPath(Stored[I]);
+        If (Rel = '') Or (AvailablePlanIndex(Kept, Rel) >= 0) Then
+          Begin
+            Changed := True;
+            Continue;
+          End;
+        If (Not ResolvePlanPath(Rel, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
+          Begin
+            Changed := True;
+            Continue;
+          End;
+        Kept.Add(Rel);
+      End;
+    { Keep the plan already chosen. Do not scan the project for the rest. }
+    Rel := NormalizeAvailablePlanPath(ActiveRelative);
+    If Rel <> '' Then
+      Begin
+        If (Not ResolvePlanPath(Rel, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
+          ActiveMissing := True
+        Else If (AvailablePlanIndex(Kept, Rel) < 0) And TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+          Begin
+            Kept.Add(Rel);
+            Changed := True;
+          End;
+      End;
+    If Changed And (Not ProjectAssistantConversation.SaveAvailablePlanPaths(Kept)) Then
+      Begin
+        ErrorText := ProjectAssistantConversation.LastError;
+        Exit;
+      End;
+    For I := 0 To Kept.Count - 1 Do
+      Begin
+        Rel := Kept[I];
+        Title := '';
+        If ResolvePlanPath(Rel, Resolved, Err) Then
+          TryReadAssistantPlanIdentity(Resolved, Title, Err);
+        Paths.Add(Rel);
+        Titles.Add(PlanComboCaption(Title, Rel));
+      End;
+    Result := True;
+  Finally
+    Stored.Free;
+    Kept.Free;
+  End;
+End;
+
+Function AddAvailableAssistantPlan(Const RelativeOrAbsolute: String; Out ErrorText: String): Boolean;
+Var
+  Resolved, Rel, Title: String;
+  Paths: TStringList;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not TryReadAssistantPlanIdentity(RelativeOrAbsolute, Title, ErrorText) Then
+    Exit;
+  If Not ResolvePlanPath(RelativeOrAbsolute, Resolved, ErrorText) Then
+    Exit;
+  Rel := NormalizeAvailablePlanPath(ProjectRelativePath(Resolved));
+  If Rel = '' Then
+    Begin
+      ErrorText := 'Plan path is outside the project.';
+      Exit;
+    End;
+  If Not AvailablePlanStoreReady(ErrorText) Then
+    Exit;
+  Paths := TStringList.Create;
+  Try
+    If Not ProjectAssistantConversation.LoadAvailablePlanPaths(Paths) Then
+      Begin
+        ErrorText := ProjectAssistantConversation.LastError;
+        Exit;
+      End;
+    If AvailablePlanIndex(Paths, Rel) < 0 Then
+      Paths.Add(Rel);
+    Result := ProjectAssistantConversation.SaveAvailablePlanPaths(Paths);
+    If Not Result Then
+      ErrorText := ProjectAssistantConversation.LastError;
+  Finally
+    Paths.Free;
+  End;
+End;
+
+Function RemoveAvailableAssistantPlan(Const RelativeOrAbsolute: String; Out ErrorText: String): Boolean;
+Var
+  Resolved, Rel, Err: String;
+  Paths: TStringList;
+  Index: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  Rel := NormalizeAvailablePlanPath(RelativeOrAbsolute);
+  If ResolvePlanPath(RelativeOrAbsolute, Resolved, Err) Then
+    Rel := NormalizeAvailablePlanPath(ProjectRelativePath(Resolved));
+  If Rel = '' Then
+    Begin
+      ErrorText := 'No plan path to remove.';
+      Exit;
+    End;
+  If Not AvailablePlanStoreReady(ErrorText) Then
+    Exit;
+  Paths := TStringList.Create;
+  Try
+    If Not ProjectAssistantConversation.LoadAvailablePlanPaths(Paths) Then
+      Begin
+        ErrorText := ProjectAssistantConversation.LastError;
+        Exit;
+      End;
+    Index := AvailablePlanIndex(Paths, Rel);
+    If Index >= 0 Then
+      Paths.Delete(Index);
+    Result := ProjectAssistantConversation.SaveAvailablePlanPaths(Paths);
+    If Not Result Then
+      ErrorText := ProjectAssistantConversation.LastError;
+  Finally
+    Paths.Free;
+  End;
+End;
+
 Function AssistantPlanAuthoringRules: String;
 Begin
   Result :=
     'Assistant plan files use this format:' + LineEnding +
     '- First line is a level-1 heading: `# Plan title`.' + LineEnding +
     '- The next non-empty line is exactly: `' + AssistantPlanGeneratedLine + '`' + LineEnding +
-    '- Only files with that identity line are assistant plans. Other Markdown is not listed.' + LineEnding +
+    '- Only files with that identity line are assistant plans. The plan list is the set registered in ' +
+    'the project .assistant settings. A folder scan does not add plans.' + LineEnding +
     '- `## N. Section title` is context (N = 1, 2, 3…). Do not put a Status line under `##`.' + LineEnding +
     '- `### N.M Item title` is an actionable item (1.1, 1.2, 2.1…). The next non-empty line must be ' +
     '`Status: not started`, `Status: in progress`, or `Status: complete`.' + LineEnding +
@@ -481,7 +691,9 @@ Begin
     'A commit may end with -- and the files to record, so other staged files stay staged. ' +
     'If the turn ends with Status complete and that plan file is still uncommitted, the assistant commits the plan file and keeps the status. ' +
     'If the working root has no Git repository, set Status to complete with no commit. ' +
-    'Report a commit hash only from a successful run_git result. If a tool fails, say so.';
+    'Report a commit hash only from a successful run_git result. If a tool fails, say so. ' +
+    'During a plan run, do not open the plan viewer. Status changes update the summary list. ' +
+    'If that Markdown window is already open, it is refreshed.';
 End;
 
 Procedure AppendPlanPair(Target: TStringList; Const RelativePath, Title: String);

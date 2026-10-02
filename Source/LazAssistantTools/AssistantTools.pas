@@ -444,7 +444,7 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path (default Documents/Plan.md)"},' +
         '"content":{"type":"string","description":"Full Markdown body to write"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after write (default true)"}' +
+        '"open":{"type":"boolean","description":"Open live viewer after write (default true). Ignored during a plan run."}' +
       '},"required":["content"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -455,12 +455,12 @@ Begin
         '"old_text":{"type":"string","description":"Exact text to find"},' +
         '"new_text":{"type":"string","description":"Replacement text"},' +
         '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after update (default true)"}' +
+        '"open":{"type":"boolean","description":"Open live viewer after update (default true). Ignored during a plan run."}' +
       '},"required":["old_text","new_text"]}' +
     '}},' +
     '{"type":"function","function":{' +
       '"name":"list_plans",' +
-      '"description":"List recognised assistant plans (title and path; Documents/ first). Other Markdown is omitted.",' +
+      '"description":"List plans registered in the project .assistant settings. Missing files are dropped. The project folders are not scanned.",' +
       '"parameters":{"type":"object","properties":{},"required":[]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -1185,6 +1185,14 @@ Begin
       ErrorText := 'Markdown file not found: ' + Resolved;
       Exit;
     End;
+  If AssistantPlanViewerQuiet Then
+    Begin
+      If Assigned(FindMarkdownDocument(Resolved)) Then
+        ReloadMarkdownDocument(Resolved, False, False);
+      ResultText := 'Plan run in progress. The Markdown viewer was not opened. The plan summary updates from the file.';
+      Result := True;
+      Exit;
+    End;
   If OpenMarkdownDocument(Resolved) = Nil Then
     Begin
       ErrorText := 'Failed to open Markdown window for ' + Resolved;
@@ -1288,10 +1296,17 @@ Begin
     End;
   ResultText := 'Wrote Markdown: ' + ProjectRelativePath(Resolved) +
     ' (' + Resolved + ')';
-  If Not TextIsAssistantPlan(Content) Then
+  If TextIsAssistantPlan(Content) And
+    SameText(ProjectRelativePath(Resolved), GetActivePlanRelativePath) Then
+    Begin
+      If Not AddAvailableAssistantPlan(Resolved, ErrorText) Then
+        ResultText := ResultText + LineEnding + 'Warning: could not register the plan: ' + ErrorText;
+      ErrorText := '';
+    End
+  Else If Not TextIsAssistantPlan(Content) Then
     ResultText := ResultText + LineEnding +
-      'Warning: this file will not appear in the plan list until it starts with an H1 and the line "' +
-      AssistantPlanGeneratedLine + '".';
+      'Warning: this file is not registered in the plan list until it starts with an H1 and the line "' +
+      AssistantPlanGeneratedLine + '", and is set as the active plan or added from the Plan sheet.';
   Result := True;
 End;
 
@@ -1326,13 +1341,14 @@ Var
   Paths, Titles: TStringList;
   I: Integer;
   Active, CaptionText: String;
+  ActiveMissing: Boolean;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
   Paths := Nil;
   Titles := Nil;
-  If Not ListProjectMarkdownPlans(Paths, Titles, ErrorText) Then
+  If Not ListAvailableAssistantPlans(GetActivePlanRelativePath, Paths, Titles, ActiveMissing, ErrorText) Then
     Begin
       Paths.Free;
       Titles.Free;
@@ -1340,8 +1356,10 @@ Begin
     End;
   Try
     Active := GetActivePlanRelativePath;
-    ResultText := Format('Assistant plans (%d):', [Paths.Count]) + LineEnding;
-    If Active <> '' Then
+    ResultText := Format('Registered plans (%d):', [Paths.Count]) + LineEnding;
+    If ActiveMissing Then
+      ResultText := ResultText + 'Active plan file is missing and was removed from the list.' + LineEnding
+    Else If Active <> '' Then
       ResultText := ResultText + 'Active plan: ' + Active + LineEnding;
     For I := 0 To Paths.Count - 1 Do
       Begin
@@ -1355,8 +1373,8 @@ Begin
           ResultText := ResultText + '- ' + CaptionText + LineEnding;
       End;
     If Paths.Count = 0 Then
-      ResultText := ResultText + '(none yet — use write_markdown to create a recognised Documents/Plan.md)' +
-        LineEnding;
+      ResultText := ResultText +
+        '(none yet — add a recognised plan from the Plan sheet, or set_active_plan)' + LineEnding;
     Result := True;
   Finally
     Paths.Free;
@@ -1436,11 +1454,17 @@ Begin
   If Not TryReadAssistantPlanIdentity(Resolved, OldPlan, ErrorText) Then
     Begin
       ResultText := ResultText + LineEnding +
-        'This file is not a recognised assistant plan and will not appear in the plan list.';
+        'This file is not a recognised assistant plan and was not added to the plan list.';
       ErrorText := '';
     End
   Else
-    ResultText := ResultText + LineEnding + 'Title: ' + OldPlan;
+    Begin
+      If Not AddAvailableAssistantPlan(Resolved, ErrorText) Then
+        ResultText := ResultText + LineEnding + 'Warning: could not register the plan: ' + ErrorText
+      Else
+        ResultText := ResultText + LineEnding + 'Title: ' + OldPlan;
+      ErrorText := '';
+    End;
   Result := True;
 End;
 

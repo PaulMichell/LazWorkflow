@@ -83,7 +83,8 @@ Type
 Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 { Force-reload any open viewer for this path (no-op if none open). }
-Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True): Boolean;
+Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True;
+  BringForward: Boolean = True): Boolean;
 
 Implementation
 
@@ -122,7 +123,7 @@ Begin
     End;
 End;
 
-Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean): Boolean;
+Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean; BringForward: Boolean): Boolean;
 Var
   Form: TAssistantMarkdownForm;
 Begin
@@ -131,7 +132,7 @@ Begin
   If Not Assigned(Form) Then
     Exit;
   Result := Form.ReloadFromDisk(Force);
-  If Result Then
+  If Result And BringForward Then
     Begin
       Form.Show;
       Form.BringToFront;

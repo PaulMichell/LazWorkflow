@@ -60,6 +60,8 @@ Type
     CompactContextAction: TAction;
     CopyLastAnswerAction: TAction;
     OpenPlanAction: TAction;
+    OpenPlanSheetAction: TAction;
+    RemovePlanAction: TAction;
     BuildThisAction: TAction;
     RevisePlanAction: TAction;
     ChatModeAction: TAction;
@@ -134,6 +136,10 @@ Type
     ActivePlanCombo: TComboBox;
     BuildStatusLabel: TLabel;
     BuildTodoList: TListBox;
+    PlanSheetFooter: TPanel;
+    PlanCommandBar: TPanel;
+    OpenPlanSheetButton: TButton;
+    RemovePlanButton: TButton;
     ComposerStack: TPanel;
     BottomBar: TPanel;
     NewChatButton: TButton;
@@ -218,6 +224,7 @@ Type
     Procedure SkillsPickerActionExecute(Sender: TObject);
     Procedure CompactContextActionExecute(Sender: TObject);
     Procedure CopyLastAnswerActionExecute(Sender: TObject);
+    Procedure RemovePlanActionExecute(Sender: TObject);
     Procedure OpenPlanActionExecute(Sender: TObject);
     Procedure BuildThisActionExecute(Sender: TObject);
     Procedure RevisePlanActionExecute(Sender: TObject);
@@ -647,6 +654,7 @@ Begin
   If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
+  SetAssistantPlanViewerQuiet(False);
   If Assigned(AssistantClient) Then AssistantClient.DetachStreamCallbacks;
   ReleaseCodexRun;
   FreeAndNil(FCodexBroker);
@@ -1237,6 +1245,10 @@ Begin
     RevisePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
   If Assigned(OpenPlanAction) Then
     OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
+  If Assigned(OpenPlanSheetAction) Then
+    OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
+  If Assigned(RemovePlanAction) Then
+    RemovePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
   If Assigned(CompactContextAction) Then
     CompactContextAction.Enabled := (Not FSending) And Assigned(AssistantClient);
   If Assigned(ChatModeAction) Then
@@ -1494,12 +1506,13 @@ End;
 Procedure TProjectAssistantForm.RefreshActivePlanChoices(Sender: TObject);
 Var
   Paths, Titles: TStringList;
-  Err, ActivePlan, CaptionText, Resolved, Title: String;
+  Err, ActivePlan, CaptionText: String;
   I, Selected: Integer;
+  ActiveMissing: Boolean;
 Begin
   If Not Assigned(ActivePlanCombo) Or Not Assigned(ActivePlanPaths) Then
     Exit;
-  { OnDropDown passes the combo. Other callers pass Nil. Both refill from disk. }
+  { OnDropDown passes the combo. Other callers pass Nil. Both refill from the settings. }
   If (Sender <> Nil) And (Sender <> ActivePlanCombo) Then
     Exit;
   FRefreshingPlans := True;
@@ -1511,36 +1524,48 @@ Begin
     Selected := -1;
     Paths := Nil;
     Titles := Nil;
-    If ListProjectMarkdownPlans(Paths, Titles, Err) Then
-      For I := 0 To Paths.Count - 1 Do
-        Begin
-          If I < Titles.Count Then
-            CaptionText := FormatPlanListCaption(Titles[I], Paths[I])
-          Else
-            CaptionText := Paths[I];
-          ActivePlanCombo.Items.Add(CaptionText);
-          ActivePlanPaths.Add(Paths[I]);
-          If SameText(Paths[I], ActivePlan) Then
-            Selected := I;
-        End;
-    { Keep the current plan visible when the scan omitted it, as the target combo keeps the folder. }
-    If (ActivePlan <> '') And (Selected < 0) Then
+    ActiveMissing := False;
+    If ListAvailableAssistantPlans(ActivePlan, Paths, Titles, ActiveMissing, Err) Then
       Begin
-        CaptionText := ActivePlan;
-        If ResolvePlanPath(ActivePlan, Resolved, Err) And FileExistsUTF8(Resolved) And
-          TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
-          CaptionText := FormatPlanListCaption(Title, ActivePlan);
-        ActivePlanCombo.Items.Add(CaptionText);
-        ActivePlanPaths.Add(ActivePlan);
-        Selected := ActivePlanPaths.Count - 1;
-      End;
+        If ActiveMissing Then
+          Begin
+            SetActivePlanRelativePath('');
+            PersistShellConfig;
+            ActivePlan := '';
+            WorkflowLogger.Info('ProjectAssistant', 'Removed missing active plan from the available list.');
+          End;
+        For I := 0 To Paths.Count - 1 Do
+          Begin
+            If I < Titles.Count Then
+              CaptionText := Titles[I]
+            Else
+              CaptionText := PlanComboCaption('', Paths[I]);
+            ActivePlanCombo.Items.Add(CaptionText);
+            ActivePlanPaths.Add(Paths[I]);
+            If SameText(Paths[I], ActivePlan) Then
+              Selected := I;
+          End;
+      End
+    Else If Err <> '' Then
+      WorkflowLogger.Warning('ProjectAssistant', 'Available plan list: ' + Err);
     ActivePlanCombo.ItemIndex := Selected;
+    ActivePlanCombo.ParentShowHint := False;
+    ActivePlanCombo.ShowHint := Selected >= 0;
+    If Selected >= 0 Then
+      ActivePlanCombo.Hint := ActivePlanPaths[Selected]
+    Else
+      ActivePlanCombo.Hint := '';
   Finally
     ActivePlanCombo.Items.EndUpdate;
     FRefreshingPlans := False;
     Paths.Free;
     Titles.Free;
   End;
+  If ActiveMissing Then
+    Begin
+      RefreshBuildTodos;
+      UpdateWorkActions;
+    End;
 End;
 
 Procedure TProjectAssistantForm.ActivePlanChoiceChanged(Sender: TObject);
@@ -1572,37 +1597,57 @@ End;
 Procedure TProjectAssistantForm.ActivePlanBrowseClick(Sender: TObject);
 Var
   Dialog: TOpenDialog;
-  InitialDir, Resolved, Title, Err, Rel: String;
+  InitialDir, Resolved, Title, Err, Rel, Rejected, ChosenPath: String;
+  I: Integer;
+  Added: Boolean;
 Begin
   If FSending Or FReviewInProgress Then
     Exit;
   Dialog := TOpenDialog.Create(Nil);
   Try
-    Dialog.Title := 'Select plan';
+    Dialog.Title := 'Add plans';
     Dialog.Filter := 'Markdown (*.md)|*.md';
-    Dialog.Options := Dialog.Options + [ofFileMustExist];
+    Dialog.Options := Dialog.Options + [ofFileMustExist, ofAllowMultiSelect];
     InitialDir := ExcludeTrailingPathDelimiter(ProjectDocumentsDir);
     If (InitialDir = '') Or (Not DirectoryExistsUTF8(InitialDir)) Then
       InitialDir := ExcludeTrailingPathDelimiter(ProjectRootPath);
     Dialog.InitialDir := InitialDir;
     If Not Dialog.Execute Then
       Exit;
-    If Not ResolvePlanPath(Dialog.FileName, Resolved, Err) Then
+    Added := False;
+    Rejected := '';
+    Rel := '';
+    For I := 0 To Dialog.Files.Count - 1 Do
       Begin
-        MessageDlg(Err, mtError, [mbOK], 0);
-        Exit;
+        ChosenPath := Dialog.Files[I];
+        If Not ResolvePlanPath(ChosenPath, Resolved, Err) Then
+          Begin
+            Rejected := Rejected + ChosenPath + ': ' + Err + LineEnding;
+            Continue;
+          End;
+        If Not TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+          Begin
+            Rejected := Rejected + ExtractFileName(Resolved) + ': ' + Err + LineEnding;
+            Continue;
+          End;
+        If Not AddAvailableAssistantPlan(Resolved, Err) Then
+          Begin
+            Rejected := Rejected + ExtractFileName(Resolved) + ': ' + Err + LineEnding;
+            Continue;
+          End;
+        Rel := ProjectRelativePath(Resolved);
+        Added := True;
       End;
-    If Not TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+    If Added Then
       Begin
-        MessageDlg(Err, mtError, [mbOK], 0);
-        Exit;
+        SetActivePlanRelativePath(Rel);
+        PersistShellConfig;
+        RefreshActivePlanChoices(Nil);
+        RefreshBuildTodos;
+        UpdateWorkActions;
       End;
-    Rel := ProjectRelativePath(Resolved);
-    SetActivePlanRelativePath(Rel);
-    PersistShellConfig;
-    RefreshActivePlanChoices(Nil);
-    RefreshBuildTodos;
-    UpdateWorkActions;
+    If Rejected <> '' Then
+      MessageDlg('Some files were not added:' + LineEnding + Rejected, mtError, [mbOK], 0);
   Finally
     Dialog.Free;
   End;
@@ -1633,6 +1678,8 @@ Begin
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
+  If Not AddAvailableAssistantPlan(Resolved, Err) Then
+    MessageDlg(Err, mtWarning, [mbOK], 0);
   RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
   UpdateWorkActions;
@@ -2133,6 +2180,7 @@ Begin
   If Not FPlanAgentRunning Then
     Exit;
   FPlanAgentRunning := False;
+  SetAssistantPlanViewerQuiet(False);
   Application.RemoveAsyncCalls(Self);
   SetBuildStatusFeedback('Plan agent stopped: ' + Reason);
   SetCurrentSystemNote('**Plan agent stopped:** ' + Reason);
@@ -2164,6 +2212,7 @@ Begin
       Exit;
     End;
   FPlanAgentRunning := True;
+  SetAssistantPlanViewerQuiet(True);
   FPlanAgentPackagesDone := 0;
   FPlanAgentResumeIndex := -1;
   FLastTurnHadError := False;
@@ -3390,6 +3439,10 @@ Begin
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
   If Assigned(ActivePlanCombo) Then ActivePlanCombo.Enabled := Not IsSending;
   If Assigned(ActivePlanBrowseButton) Then ActivePlanBrowseButton.Enabled := Not IsSending;
+  If Assigned(RemovePlanAction) Then
+    RemovePlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
+  If Assigned(OpenPlanSheetAction) Then
+    OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
@@ -6239,6 +6292,31 @@ Begin
       Exit;
     End;
   OpenMarkdownDocument(Resolved);
+End;
+
+Procedure TProjectAssistantForm.RemovePlanActionExecute(Sender: TObject);
+Var
+  Rel, Err: String;
+Begin
+  If FSending Or FReviewInProgress Then
+    Exit;
+  Rel := GetActivePlanRelativePath;
+  If Rel = '' Then
+    Begin
+      MessageDlg('Select a plan to remove from the list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not RemoveAvailableAssistantPlan(Rel, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  SetActivePlanRelativePath('');
+  PersistShellConfig;
+  RefreshActivePlanChoices(Nil);
+  RefreshBuildTodos;
+  UpdateWorkActions;
+  SetBuildStatusFeedback('Removed from the available list. The file was kept.');
 End;
 
 Procedure TProjectAssistantForm.BuildThisActionExecute(Sender: TObject);
