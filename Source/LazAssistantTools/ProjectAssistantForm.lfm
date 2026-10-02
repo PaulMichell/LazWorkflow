@@ -449,6 +449,7 @@ object ProjectAssistantForm: TProjectAssistantForm
               ParentShowHint = False
               ShowHint = True
               TabOrder = 1
+              OnClick = ActivePlanBrowseClick
             end
             object ActivePlanCombo: TComboBox
               Left = 70
@@ -461,6 +462,8 @@ object ProjectAssistantForm: TProjectAssistantForm
               ItemHeight = 18
               Style = csDropDownList
               TabOrder = 0
+              OnChange = ActivePlanChoiceChanged
+              OnDropDown = RefreshActivePlanChoices
             end
           end
           object BuildStatusLabel: TLabel

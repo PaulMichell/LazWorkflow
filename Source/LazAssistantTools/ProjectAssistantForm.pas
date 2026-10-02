@@ -168,6 +168,9 @@ Type
     Procedure TargetBrowseClick(Sender: TObject);
     Procedure TargetChoiceChanged(Sender: TObject);
     Procedure RefreshTargetChoices(Sender: TObject);
+    Procedure ActivePlanBrowseClick(Sender: TObject);
+    Procedure ActivePlanChoiceChanged(Sender: TObject);
+    Procedure RefreshActivePlanChoices(Sender: TObject);
     Procedure UpdateTargetComboHint(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
@@ -230,6 +233,7 @@ Type
     Procedure FooterMenuClick(Sender: TObject);
   Private
     FRefreshingTargets: Boolean;
+    FRefreshingPlans: Boolean;
     FTargetPaths: TStringList;
     FTargetRestored: Boolean;
     Procedure ApplyTarget(Const Directory: String);
@@ -300,7 +304,7 @@ Type
     FAdjustingSidebarPage: Boolean; { True while bouncing a disabled Plan sheet back to History. }
     FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
     BuildSections: TObjectList; { of TPlanSection for the Build progress list (not published). }
-    PlanListPaths: TStringList; { Relative paths for the active plan choices. }
+    ActivePlanPaths: TStringList; { Parallel to ActivePlanCombo; relative paths. }
     FBuildSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FBuildWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
     FBuildWorkSectionTitle: String;
@@ -389,7 +393,6 @@ Type
     Function LooksLikePlanMarkdown(Const Body: String): Boolean;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
-    Procedure RefreshPlanList;
     Function ActivePlanCaption(Const ActivePlan: String): String;
     Procedure PlanNewButtonClick(Sender: TObject);
     Procedure PlanOpenButtonClick(Sender: TObject);
@@ -582,7 +585,7 @@ Begin
   FDisplayEventsFile := '';
   FHistoryUpdating := False;
   HistoryIds := TStringList.Create;
-  PlanListPaths := TStringList.Create;
+  ActivePlanPaths := TStringList.Create;
   BuildSections := TObjectList.Create(True);
   FBuildSelectedIndex := -1;
   FBuildWorkSectionIndex := -1;
@@ -668,7 +671,7 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := Nil;
   FreeAndNil(HistoryIds);
-  FreeAndNil(PlanListPaths);
+  FreeAndNil(ActivePlanPaths);
   FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
   FreeAndNil(FTargetPaths);
@@ -851,7 +854,7 @@ Begin
     Begin
       SetActivePlanRelativePath(KeptPlan);
       PersistShellConfig;
-      RefreshPlanList;
+      RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
     End;
   RefreshTargetChoices(Nil);
@@ -1416,7 +1419,7 @@ Begin
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
   FPlanWriteThisTurn := True;
   If FViewingLive Then
@@ -1441,7 +1444,7 @@ Begin
   ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   If ActiveMode = amPlan Then
-    RefreshPlanList;
+    RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
   UpdateWorkActions;
   SyncModeUi;
@@ -1486,7 +1489,7 @@ Begin
   Finally
     FSkipModePersist := False;
   End;
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
 End;
 
 Function TProjectAssistantForm.SelectedPlanRelativePath: String;
@@ -1508,9 +1511,121 @@ Begin
     Result := 'Active plan: ' + ActivePlan + ' — not a recognised assistant plan';
 End;
 
-Procedure TProjectAssistantForm.RefreshPlanList;
+Procedure TProjectAssistantForm.RefreshActivePlanChoices(Sender: TObject);
+Var
+  Paths, Titles: TStringList;
+  Err, ActivePlan, CaptionText, Resolved, Title: String;
+  I, Selected: Integer;
 Begin
-  { The document list is gone. The active-plan combo is filled by a later item. }
+  If Not Assigned(ActivePlanCombo) Or Not Assigned(ActivePlanPaths) Then
+    Exit;
+  { OnDropDown passes the combo. Other callers pass Nil. Both refill from disk. }
+  If (Sender <> Nil) And (Sender <> ActivePlanCombo) Then
+    Exit;
+  FRefreshingPlans := True;
+  ActivePlanCombo.Items.BeginUpdate;
+  Try
+    ActivePlanCombo.Items.Clear;
+    ActivePlanPaths.Clear;
+    ActivePlan := GetActivePlanRelativePath;
+    Selected := -1;
+    Paths := Nil;
+    Titles := Nil;
+    If ListProjectMarkdownPlans(Paths, Titles, Err) Then
+      For I := 0 To Paths.Count - 1 Do
+        Begin
+          If I < Titles.Count Then
+            CaptionText := FormatPlanListCaption(Titles[I], Paths[I])
+          Else
+            CaptionText := Paths[I];
+          ActivePlanCombo.Items.Add(CaptionText);
+          ActivePlanPaths.Add(Paths[I]);
+          If SameText(Paths[I], ActivePlan) Then
+            Selected := I;
+        End;
+    { Keep the current plan visible when the scan omitted it, as the target combo keeps the folder. }
+    If (ActivePlan <> '') And (Selected < 0) Then
+      Begin
+        CaptionText := ActivePlan;
+        If ResolvePlanPath(ActivePlan, Resolved, Err) And FileExistsUTF8(Resolved) And
+          TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+          CaptionText := FormatPlanListCaption(Title, ActivePlan);
+        ActivePlanCombo.Items.Add(CaptionText);
+        ActivePlanPaths.Add(ActivePlan);
+        Selected := ActivePlanPaths.Count - 1;
+      End;
+    ActivePlanCombo.ItemIndex := Selected;
+  Finally
+    ActivePlanCombo.Items.EndUpdate;
+    FRefreshingPlans := False;
+    Paths.Free;
+    Titles.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ActivePlanChoiceChanged(Sender: TObject);
+Var
+  Rel: String;
+Begin
+  If FRefreshingPlans Then
+    Exit;
+  If FSending Or FReviewInProgress Then
+    Begin
+      RefreshActivePlanChoices(Nil);
+      Exit;
+    End;
+  If Not Assigned(ActivePlanCombo) Or Not Assigned(ActivePlanPaths) Then
+    Exit;
+  If (ActivePlanCombo.ItemIndex < 0) Or (ActivePlanCombo.ItemIndex >= ActivePlanPaths.Count) Then
+    Exit;
+  Rel := ActivePlanPaths[ActivePlanCombo.ItemIndex];
+  If SameText(Rel, GetActivePlanRelativePath) Then
+    Exit;
+  SetActivePlanRelativePath(Rel);
+  PersistShellConfig;
+  RefreshBuildTodos;
+  If Sender <> ActivePlanCombo Then
+    Exit;
+End;
+
+Procedure TProjectAssistantForm.ActivePlanBrowseClick(Sender: TObject);
+Var
+  Dialog: TOpenDialog;
+  InitialDir, Resolved, Title, Err, Rel: String;
+Begin
+  If FSending Or FReviewInProgress Then
+    Exit;
+  Dialog := TOpenDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Select plan';
+    Dialog.Filter := 'Markdown (*.md)|*.md';
+    Dialog.Options := Dialog.Options + [ofFileMustExist];
+    InitialDir := ExcludeTrailingPathDelimiter(ProjectDocumentsDir);
+    If (InitialDir = '') Or (Not DirectoryExistsUTF8(InitialDir)) Then
+      InitialDir := ExcludeTrailingPathDelimiter(ProjectRootPath);
+    Dialog.InitialDir := InitialDir;
+    If Not Dialog.Execute Then
+      Exit;
+    If Not ResolvePlanPath(Dialog.FileName, Resolved, Err) Then
+      Begin
+        MessageDlg(Err, mtError, [mbOK], 0);
+        Exit;
+      End;
+    If Not TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
+      Begin
+        MessageDlg(Err, mtError, [mbOK], 0);
+        Exit;
+      End;
+    Rel := ProjectRelativePath(Resolved);
+    SetActivePlanRelativePath(Rel);
+    PersistShellConfig;
+    RefreshActivePlanChoices(Nil);
+    RefreshBuildTodos;
+  Finally
+    Dialog.Free;
+  End;
+  If Sender <> ActivePlanBrowseButton Then
+    Exit;
 End;
 
 Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
@@ -1535,7 +1650,7 @@ Begin
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
   SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
     '**. Stay in **Plan** mode and send a message to refine it with the model.');
 End;
@@ -1587,12 +1702,12 @@ Begin
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
 End;
 
 Procedure TProjectAssistantForm.PlanRefreshButtonClick(Sender: TObject);
 Begin
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
 End;
 
 Procedure TProjectAssistantForm.PlanOpenDocsButtonClick(Sender: TObject);
@@ -1636,7 +1751,6 @@ Begin
       BuildSections.Clear;
     If PlanRel = '' Then
       Begin
-        BuildTodoList.Items.Add('(No active plan — switch to Plan to create one.)');
         FBuildSelectedIndex := -1;
         Exit;
       End;
@@ -3437,6 +3551,8 @@ Begin
   FSending := IsSending;
   If Assigned(TargetCombo) Then TargetCombo.Enabled := Not IsSending;
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
+  If Assigned(ActivePlanCombo) Then ActivePlanCombo.Enabled := Not IsSending;
+  If Assigned(ActivePlanBrowseButton) Then ActivePlanBrowseButton.Enabled := Not IsSending;
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
@@ -5194,7 +5310,7 @@ Begin
   SetSending(False);
   If FPlanWriteThisTurn And (ResolvedError = '') Then
     Begin
-      RefreshPlanList;
+      RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
       ShowPlanOfferBar(ActiveMode = amPlan);
     End
@@ -6829,7 +6945,7 @@ Begin
   RefreshConversationList;
   ClearCurrentTurnDisplay;
   RefreshChatDisplay(True, False);
-  RefreshPlanList;
+  RefreshActivePlanChoices(Nil);
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Unbound from project');
 End;
@@ -6902,7 +7018,7 @@ Begin
       RestoreSessionIfNeeded;
       RefreshHistoryCombo;
       RefreshConversationList;
-      RefreshPlanList;
+      RefreshActivePlanChoices(Nil);
       If FDeferLastTurn Then
         Begin
           FDeferLastTurn := False;
@@ -6924,7 +7040,7 @@ Begin
       RefreshConversationList;
       ClearCurrentTurnDisplay;
       RefreshChatDisplay(True, False);
-      RefreshPlanList;
+      RefreshActivePlanChoices(Nil);
     End;
   UpdateStatusFooter;
   If Root <> '' Then
@@ -7461,7 +7577,7 @@ Begin
     Exit;
   If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
     Begin
-      RefreshPlanList;
+      RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
     End;
 End;
