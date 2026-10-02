@@ -186,6 +186,9 @@ Type
     Procedure UpdateTargetComboHint(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure BuildTodoListClick(Sender: TObject);
+    Procedure BuildTodoListDblClick(Sender: TObject);
+    Procedure BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
     Procedure HistoryComboChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
@@ -430,9 +433,6 @@ Type
     Procedure MaybeWarnHighContextUsage;
     Function AutoNewChatAtLimitEnabled: Boolean;
     Procedure SyncAutoNewChatCheckFromConfig;
-    Procedure BuildTodoListDblClick(Sender: TObject);
-    Procedure BuildTodoListClick(Sender: TObject);
-    Procedure BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
