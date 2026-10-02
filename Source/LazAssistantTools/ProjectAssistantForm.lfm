@@ -428,6 +428,7 @@ object ProjectAssistantForm: TProjectAssistantForm
           Caption = 'Plan'
           ClientHeight = 525
           ClientWidth = 294
+          OnResize = PlanSheetResize
           object ActivePlanRow: TPanel
             Left = 8
             Height = 36
@@ -486,72 +487,20 @@ object ProjectAssistantForm: TProjectAssistantForm
               OnDropDown = RefreshActivePlanChoices
             end
           end
-          object PlanSheetFooter: TPanel
-            Left = 8
-            Height = 76
-            Top = 441
-            Width = 278
-            Align = alBottom
-            BevelOuter = bvNone
-            BorderSpacing.Left = 8
-            BorderSpacing.Right = 8
-            BorderSpacing.Bottom = 8
-            ClientHeight = 76
-            ClientWidth = 278
-            TabOrder = 2
-            object PlanCommandBar: TPanel
-              Left = 0
-              Height = 36
-              Top = 40
-              Width = 278
-              Align = alBottom
-              BevelOuter = bvNone
-              ChildSizing.TopBottomSpacing = 4
-              ChildSizing.HorizontalSpacing = 4
-              ChildSizing.EnlargeVertical = crsHomogenousChildResize
-              ChildSizing.ShrinkVertical = crsHomogenousChildResize
-              ChildSizing.Layout = cclLeftToRightThenTopToBottom
-              ChildSizing.ControlsPerLine = 2
-              ClientHeight = 36
-              ClientWidth = 278
-              TabOrder = 0
-              object OpenPlanSheetButton: TButton
-                Left = 0
-                Height = 28
-                Top = 4
-                Width = 84
-                Action = OpenPlanSheetAction
-                TabOrder = 0
-              end
-              object RemovePlanButton: TButton
-                Left = 88
-                Height = 28
-                Top = 4
-                Width = 84
-                Action = RemovePlanAction
-                TabOrder = 1
-              end
-            end
-            object BuildStatusLabel: TLabel
-              Left = 0
-              Height = 40
-              Top = 0
-              Width = 278
-              Align = alClient
-              AutoSize = False
-              BorderSpacing.Top = 6
-              Caption = ''
-              ParentColor = False
-              WordWrap = True
-            end
-          end
           object BuildTodoList: TListBox
+            AnchorSideLeft.Control = PlanSheet
+            AnchorSideTop.Control = ActivePlanRow
+            AnchorSideTop.Side = asrBottom
+            AnchorSideRight.Control = PlanSheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = BuildStatusLabel
             Left = 8
-            Height = 389
+            Height = 385
             Top = 48
             Width = 278
-            Align = alClient
+            Anchors = [akTop, akLeft, akRight, akBottom]
             BorderSpacing.Left = 8
+            BorderSpacing.Top = 4
             BorderSpacing.Right = 8
             BorderSpacing.Bottom = 8
             ItemHeight = 0
@@ -560,6 +509,52 @@ object ProjectAssistantForm: TProjectAssistantForm
             OnClick = BuildTodoListClick
             OnDblClick = BuildTodoListDblClick
             OnSelectionChange = BuildTodoListSelectionChange
+          end
+          object BuildStatusLabel: TLabel
+            AnchorSideLeft.Control = PlanSheet
+            AnchorSideRight.Control = PlanSheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = OpenPlanSheetButton
+            Left = 8
+            Height = 40
+            Top = 441
+            Width = 278
+            Anchors = [akLeft, akRight, akBottom]
+            AutoSize = False
+            BorderSpacing.Left = 8
+            BorderSpacing.Right = 8
+            BorderSpacing.Bottom = 8
+            ParentColor = False
+            WordWrap = True
+          end
+          object OpenPlanSheetButton: TButton
+            AnchorSideLeft.Control = PlanSheet
+            AnchorSideBottom.Control = PlanSheet
+            AnchorSideBottom.Side = asrBottom
+            Left = 8
+            Height = 28
+            Top = 489
+            Width = 137
+            Action = OpenPlanSheetAction
+            Anchors = [akLeft, akBottom]
+            BorderSpacing.Left = 8
+            BorderSpacing.Bottom = 8
+            TabOrder = 2
+          end
+          object RemovePlanButton: TButton
+            AnchorSideRight.Control = PlanSheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = PlanSheet
+            AnchorSideBottom.Side = asrBottom
+            Left = 149
+            Height = 28
+            Top = 489
+            Width = 137
+            Action = RemovePlanAction
+            Anchors = [akRight, akBottom]
+            BorderSpacing.Right = 8
+            BorderSpacing.Bottom = 8
+            TabOrder = 3
           end
         end
       end

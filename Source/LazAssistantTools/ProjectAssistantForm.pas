@@ -136,8 +136,6 @@ Type
     ActivePlanCombo: TComboBox;
     BuildStatusLabel: TLabel;
     BuildTodoList: TListBox;
-    PlanSheetFooter: TPanel;
-    PlanCommandBar: TPanel;
     OpenPlanSheetButton: TButton;
     RemovePlanButton: TButton;
     ComposerStack: TPanel;
@@ -175,6 +173,7 @@ Type
     Procedure FormDestroy(Sender: TObject);
     Procedure FormShow(Sender: TObject);
     Procedure HistoryPanelResize(Sender: TObject);
+    Procedure PlanSheetResize(Sender: TObject);
     Procedure SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
     Procedure SidebarPagesChange(Sender: TObject);
     Procedure ModeComboChange(Sender: TObject);
@@ -702,6 +701,7 @@ Begin
   AllowDropFiles := True;
   OnDropFiles := @InputPanelDropFiles;
   HistoryPanelResize(HistorySheet);
+  PlanSheetResize(PlanSheet);
   If Assigned(InputMemo) Then
     Begin
       InputMemo.BorderSpacing.Around := 0;
@@ -900,15 +900,25 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
-Var ButtonWidth: Integer;
+Procedure SizeSheetBottomButtons(Host: TWinControl; LeftButton, RightButton: TButton; Gap: Integer);
+Var
+  ButtonWidth: Integer;
 Begin
-  If Not Assigned(HistorySheet) Or Not Assigned(ExportHistoryButton) Or Not Assigned(DeleteHistoryButton) Then Exit;
-  ButtonWidth := (HistorySheet.ClientWidth - ExportHistoryButton.BorderSpacing.Left -
-    DeleteHistoryButton.BorderSpacing.Right - Scale96ToForm(4)) Div 2;
+  If Not Assigned(Host) Or Not Assigned(LeftButton) Or Not Assigned(RightButton) Then Exit;
+  ButtonWidth := (Host.ClientWidth - LeftButton.BorderSpacing.Left - RightButton.BorderSpacing.Right - Gap) Div 2;
   If ButtonWidth < 1 Then ButtonWidth := 1;
-  ExportHistoryButton.Width := ButtonWidth;
-  DeleteHistoryButton.Width := ButtonWidth;
+  LeftButton.Width := ButtonWidth;
+  RightButton.Width := ButtonWidth;
+End;
+
+Procedure TProjectAssistantForm.HistoryPanelResize(Sender: TObject);
+Begin
+  SizeSheetBottomButtons(HistorySheet, ExportHistoryButton, DeleteHistoryButton, Scale96ToForm(4));
+End;
+
+Procedure TProjectAssistantForm.PlanSheetResize(Sender: TObject);
+Begin
+  SizeSheetBottomButtons(PlanSheet, OpenPlanSheetButton, RemovePlanButton, Scale96ToForm(4));
 End;
 
 {$IFDEF LCLGTK3}
