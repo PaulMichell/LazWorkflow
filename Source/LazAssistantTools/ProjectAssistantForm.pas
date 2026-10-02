@@ -123,27 +123,13 @@ Type
     ExportHistoryButton: TButton;
     DeleteHistoryButton: TButton;
     ChatHost: TPanel;
-    { Plan file list (runtime, Plan sheet). }
-    PlanPanel: TPanel;
-    PlanActiveLabel: TLabel;
-    PlanList: TListBox;
-    PlanNewButton: TButton;
-    PlanOpenButton: TButton;
-    PlanSetActiveButton: TButton;
-    PlanRefreshButton: TButton;
-    PlanOpenDocsButton: TButton;
-    { Build work-package tiles (runtime, Plan sheet). }
-    BuildPanel: TPanel;
-    BuildActiveLabel: TLabel;
-    BuildTodoList: TListBox;
-    BuildRefreshButton: TButton;
-    BuildOpenPlanButton: TButton;
-    BuildStartButton: TButton;
-    BuildDoneButton: TButton;
-    BuildResetButton: TButton;
-    BuildWorkButton: TButton;
-    BuildWorkPlanButton: TButton;
+    { Plan sheet. Streamed in the form resource, not created at runtime. }
+    ActivePlanRow: TPanel;
+    ActivePlanLabel: TLabel;
+    ActivePlanBrowseButton: TButton;
+    ActivePlanCombo: TComboBox;
     BuildStatusLabel: TLabel;
+    BuildTodoList: TListBox;
     ComposerStack: TPanel;
     BottomBar: TPanel;
     NewChatButton: TButton;
@@ -314,7 +300,7 @@ Type
     FAdjustingSidebarPage: Boolean; { True while bouncing a disabled Plan sheet back to History. }
     FModeSticky: Boolean; { Keep forced Build/Plan mode after send until user changes mode. }
     BuildSections: TObjectList; { of TPlanSection for the Build progress list (not published). }
-    PlanListPaths: TStringList; { Parallel to PlanList captions; relative paths. }
+    PlanListPaths: TStringList; { Relative paths for the active plan choices. }
     FBuildSelectedIndex: Integer; { Survives button clicks that clear ListBox.ItemIndex. }
     FBuildWorkSectionIndex: Integer; { Plan section for active Work-on-this (-1 = none). }
     FBuildWorkSectionTitle: String;
@@ -403,7 +389,6 @@ Type
     Function LooksLikePlanMarkdown(Const Body: String): Boolean;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
-    Procedure EnsurePlanTabUi;
     Procedure RefreshPlanList;
     Function ActivePlanCaption(Const ActivePlan: String): String;
     Procedure PlanNewButtonClick(Sender: TObject);
@@ -413,7 +398,6 @@ Type
     Procedure PlanOpenDocsButtonClick(Sender: TObject);
     Procedure PlanListDblClick(Sender: TObject);
     Function SelectedPlanRelativePath: String;
-    Procedure EnsureBuildTabUi;
     Procedure RefreshBuildTodos;
     Function SelectedBuildSectionIndex: Integer;
     Function SelectedBuildRowIsContext: Boolean;
@@ -600,7 +584,6 @@ Begin
   HistoryIds := TStringList.Create;
   PlanListPaths := TStringList.Create;
   BuildSections := TObjectList.Create(True);
-  BuildPanel := Nil;
   FBuildSelectedIndex := -1;
   FBuildWorkSectionIndex := -1;
   FBuildWorkSectionTitle := '';
@@ -732,8 +715,6 @@ Begin
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
   EnsureInputPopup;
-  EnsurePlanTabUi;
-  EnsureBuildTabUi;
   PinSidebarHeader;
   EnsureSlashPopup;
   RebuildCommandCatalog;
@@ -1252,20 +1233,7 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.UpdateWorkActions;
-Var
-  CanWork: Boolean;
 Begin
-  CanWork := (ActiveMode = amBuild) And (Not FSending);
-  If Assigned(BuildWorkButton) Then
-    BuildWorkButton.Enabled := CanWork;
-  If Assigned(BuildWorkPlanButton) Then
-    BuildWorkPlanButton.Enabled := CanWork;
-  If Assigned(BuildStartButton) Then
-    BuildStartButton.Enabled := CanWork;
-  If Assigned(BuildDoneButton) Then
-    BuildDoneButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
-  If Assigned(BuildResetButton) Then
-    BuildResetButton.Enabled := (ActiveMode = amBuild) And (Not FSending);
   If Assigned(BuildThisAction) Then
     BuildThisAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
   If Assigned(RevisePlanAction) Then
@@ -1329,19 +1297,6 @@ Begin
         End
       Else
         PlanSheet.Enabled := True;
-    End;
-  { Plan file list only in Plan. Work tiles only while the Plan page is enabled. }
-  If Assigned(PlanPanel) Then
-    Begin
-      PlanPanel.Align := alTop;
-      If PlanPanel.Height < 160 Then
-        PlanPanel.Height := 200;
-      PlanPanel.Visible := ActiveMode = amPlan;
-    End;
-  If Assigned(BuildPanel) Then
-    Begin
-      BuildPanel.Align := alClient;
-      BuildPanel.Visible := PlanAllowed;
     End;
   PinSidebarHeader;
 End;
@@ -1462,8 +1417,7 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshPlanList;
-  If Assigned(BuildPanel) Then
-    RefreshBuildTodos;
+  RefreshBuildTodos;
   FPlanWriteThisTurn := True;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
@@ -1486,8 +1440,6 @@ Begin
   ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not FSending) And (Not FReviewInProgress);
-  EnsurePlanTabUi;
-  EnsureBuildTabUi;
   If ActiveMode = amPlan Then
     RefreshPlanList;
   RefreshBuildTodos;
@@ -1537,83 +1489,9 @@ Begin
   RefreshPlanList;
 End;
 
-Procedure TProjectAssistantForm.EnsurePlanTabUi;
-Var
-  Bar: TPanel;
-Begin
-  If Assigned(PlanPanel) Or (Not Assigned(PlanSheet)) Then
-    Exit;
-
-  PlanPanel := TPanel.Create(Self);
-  PlanPanel.Parent := PlanSheet;
-  PlanPanel.Align := alTop;
-  PlanPanel.Height := 200;
-  PlanPanel.BevelOuter := bvNone;
-  PlanPanel.BorderSpacing.Around := 8;
-  PlanPanel.Visible := ActiveMode = amPlan;
-
-  PlanActiveLabel := TLabel.Create(Self);
-  PlanActiveLabel.Parent := PlanPanel;
-  PlanActiveLabel.Align := alTop;
-  PlanActiveLabel.Caption := 'Active plan: (none)';
-  PlanActiveLabel.BorderSpacing.Bottom := 6;
-
-  Bar := TPanel.Create(Self);
-  Bar.Parent := PlanPanel;
-  Bar.Align := alTop;
-  Bar.Height := 36;
-  Bar.BevelOuter := bvNone;
-  Bar.ChildSizing.Layout := cclLeftToRightThenTopToBottom;
-  Bar.ChildSizing.ControlsPerLine := 8;
-  Bar.ChildSizing.HorizontalSpacing := 6;
-  Bar.ChildSizing.LeftRightSpacing := 0;
-  Bar.ChildSizing.TopBottomSpacing := 2;
-  Bar.BorderSpacing.Bottom := 6;
-
-  PlanNewButton := TButton.Create(Self);
-  PlanNewButton.Parent := Bar;
-  PlanNewButton.Caption := 'New Plan…';
-  PlanNewButton.AutoSize := True;
-  PlanNewButton.OnClick := @PlanNewButtonClick;
-
-  PlanOpenButton := TButton.Create(Self);
-  PlanOpenButton.Parent := Bar;
-  PlanOpenButton.Caption := 'Open';
-  PlanOpenButton.AutoSize := True;
-  PlanOpenButton.OnClick := @PlanOpenButtonClick;
-
-  PlanSetActiveButton := TButton.Create(Self);
-  PlanSetActiveButton.Parent := Bar;
-  PlanSetActiveButton.Caption := 'Set Active';
-  PlanSetActiveButton.AutoSize := True;
-  PlanSetActiveButton.OnClick := @PlanSetActiveButtonClick;
-
-  PlanRefreshButton := TButton.Create(Self);
-  PlanRefreshButton.Parent := Bar;
-  PlanRefreshButton.Caption := 'Refresh';
-  PlanRefreshButton.AutoSize := True;
-  PlanRefreshButton.OnClick := @PlanRefreshButtonClick;
-
-  PlanOpenDocsButton := TButton.Create(Self);
-  PlanOpenDocsButton.Parent := Bar;
-  PlanOpenDocsButton.Caption := 'Open Documents/';
-  PlanOpenDocsButton.AutoSize := True;
-  PlanOpenDocsButton.OnClick := @PlanOpenDocsButtonClick;
-
-  PlanList := TListBox.Create(Self);
-  PlanList.Parent := PlanPanel;
-  PlanList.Align := alClient;
-  PlanList.OnDblClick := @PlanListDblClick;
-End;
-
 Function TProjectAssistantForm.SelectedPlanRelativePath: String;
 Begin
   Result := '';
-  If Not Assigned(PlanList) Or Not Assigned(PlanListPaths) Then
-    Exit;
-  If (PlanList.ItemIndex < 0) Or (PlanList.ItemIndex >= PlanListPaths.Count) Then
-    Exit;
-  Result := PlanListPaths[PlanList.ItemIndex];
 End;
 
 Function TProjectAssistantForm.ActivePlanCaption(Const ActivePlan: String): String;
@@ -1631,52 +1509,8 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.RefreshPlanList;
-Var
-  Paths, Titles: TStringList;
-  Err, ActivePlan, CaptionText: String;
-  I, Sel: Integer;
 Begin
-  If Not Assigned(PlanList) Then
-    Exit;
-  If Not Assigned(PlanListPaths) Then
-    PlanListPaths := TStringList.Create;
-  ActivePlan := GetActivePlanRelativePath;
-  If Assigned(PlanActiveLabel) Then
-    PlanActiveLabel.Caption := ActivePlanCaption(ActivePlan);
-
-  Paths := Nil;
-  Titles := Nil;
-  Sel := -1;
-  PlanList.Items.BeginUpdate;
-  Try
-    PlanList.Items.Clear;
-    PlanListPaths.Clear;
-    If Not ListProjectMarkdownPlans(Paths, Titles, Err) Then
-      Begin
-        If Err <> '' Then
-          PlanList.Items.Add('(' + Err + ')');
-        Exit;
-      End;
-    For I := 0 To Paths.Count - 1 Do
-      Begin
-        If I < Titles.Count Then
-          CaptionText := FormatPlanListCaption(Titles[I], Paths[I])
-        Else
-          CaptionText := Paths[I];
-        PlanList.Items.Add(CaptionText);
-        PlanListPaths.Add(Paths[I]);
-        If SameText(Paths[I], ActivePlan) Then
-          Sel := I;
-      End;
-    If Sel >= 0 Then
-      PlanList.ItemIndex := Sel
-    Else If PlanList.Items.Count > 0 Then
-      PlanList.ItemIndex := 0;
-  Finally
-    PlanList.Items.EndUpdate;
-    Paths.Free;
-    Titles.Free;
-  End;
+  { The document list is gone. The active-plan combo is filled by a later item. }
 End;
 
 Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
@@ -1780,104 +1614,10 @@ Begin
   PlanOpenButtonClick(Sender);
 End;
 
-Procedure TProjectAssistantForm.EnsureBuildTabUi;
-Var
-  Bar: TPanel;
-Begin
-  If Assigned(BuildPanel) Or (Not Assigned(PlanSheet)) Then
-    Exit;
-
-  BuildPanel := TPanel.Create(Self);
-  BuildPanel.Parent := PlanSheet;
-  BuildPanel.Align := alClient;
-  BuildPanel.BevelOuter := bvNone;
-  BuildPanel.BorderSpacing.Around := 8;
-  BuildPanel.Visible := ActiveMode In [amPlan, amBuild];
-
-  BuildActiveLabel := TLabel.Create(Self);
-  BuildActiveLabel.Parent := BuildPanel;
-  BuildActiveLabel.Align := alTop;
-  BuildActiveLabel.Caption := 'Active plan: (none)';
-  BuildActiveLabel.WordWrap := True;
-  BuildActiveLabel.BorderSpacing.Bottom := 6;
-
-  Bar := TPanel.Create(Self);
-  Bar.Parent := BuildPanel;
-  Bar.Align := alTop;
-  Bar.Height := 36;
-  Bar.BevelOuter := bvNone;
-  Bar.ChildSizing.Layout := cclLeftToRightThenTopToBottom;
-  Bar.ChildSizing.ControlsPerLine := 10;
-  Bar.ChildSizing.HorizontalSpacing := 6;
-  Bar.ChildSizing.LeftRightSpacing := 0;
-  Bar.ChildSizing.TopBottomSpacing := 2;
-  Bar.BorderSpacing.Bottom := 6;
-
-  BuildRefreshButton := TButton.Create(Self);
-  BuildRefreshButton.Parent := Bar;
-  BuildRefreshButton.Caption := 'Refresh';
-  BuildRefreshButton.AutoSize := True;
-  BuildRefreshButton.OnClick := @BuildRefreshButtonClick;
-
-  BuildOpenPlanButton := TButton.Create(Self);
-  BuildOpenPlanButton.Parent := Bar;
-  BuildOpenPlanButton.Caption := 'Open Plan';
-  BuildOpenPlanButton.AutoSize := True;
-  BuildOpenPlanButton.OnClick := @BuildOpenPlanButtonClick;
-
-  BuildStartButton := TButton.Create(Self);
-  BuildStartButton.Parent := Bar;
-  BuildStartButton.Caption := 'Start';
-  BuildStartButton.AutoSize := True;
-  BuildStartButton.OnClick := @BuildStartButtonClick;
-
-  BuildDoneButton := TButton.Create(Self);
-  BuildDoneButton.Parent := Bar;
-  BuildDoneButton.Caption := 'Done';
-  BuildDoneButton.AutoSize := True;
-  BuildDoneButton.OnClick := @BuildDoneButtonClick;
-
-  BuildResetButton := TButton.Create(Self);
-  BuildResetButton.Parent := Bar;
-  BuildResetButton.Caption := 'Reset';
-  BuildResetButton.AutoSize := True;
-  BuildResetButton.OnClick := @BuildResetButtonClick;
-
-  BuildWorkButton := TButton.Create(Self);
-  BuildWorkButton.Parent := Bar;
-  BuildWorkButton.Caption := 'Work On This';
-  BuildWorkButton.AutoSize := True;
-  BuildWorkButton.OnClick := @BuildWorkButtonClick;
-
-  BuildWorkPlanButton := TButton.Create(Self);
-  BuildWorkPlanButton.Parent := Bar;
-  BuildWorkPlanButton.Caption := 'Work On Plan';
-  BuildWorkPlanButton.AutoSize := True;
-  BuildWorkPlanButton.Hint := 'Agentically work through incomplete plan packages until done, error, or context limit';
-  BuildWorkPlanButton.ShowHint := True;
-  BuildWorkPlanButton.OnClick := @BuildWorkPlanButtonClick;
-
-  BuildStatusLabel := TLabel.Create(Self);
-  BuildStatusLabel.Parent := BuildPanel;
-  BuildStatusLabel.Align := alBottom;
-  BuildStatusLabel.Caption := 'Select an actionable item, then Start / Done / Reset.';
-  BuildStatusLabel.WordWrap := True;
-  BuildStatusLabel.BorderSpacing.Top := 6;
-
-  BuildTodoList := TListBox.Create(Self);
-  BuildTodoList.Parent := BuildPanel;
-  BuildTodoList.Align := alClient;
-  BuildTodoList.OnClick := @BuildTodoListClick;
-  BuildTodoList.OnDblClick := @BuildTodoListDblClick;
-  BuildTodoList.OnSelectionChange := @BuildTodoListSelectionChange;
-End;
-
 Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
-  PlanRel, Err, Summary: String;
+  PlanRel, Err: String;
   I, KeepHeading, SelectIndex: Integer;
-  Section: TPlanSection;
-  NotStarted, InProgress, Complete: Integer;
 Begin
   If Not Assigned(BuildTodoList) Then
     Exit;
@@ -1889,11 +1629,6 @@ Begin
   Else If Assigned(BuildTodoList) And Assigned(BuildSections) And
     (BuildTodoList.ItemIndex >= 0) And (BuildTodoList.ItemIndex < BuildSections.Count) Then
     KeepHeading := TPlanSection(BuildSections[BuildTodoList.ItemIndex]).HeadingLineIndex;
-  If Assigned(BuildActiveLabel) Then
-    If PlanRel = '' Then
-      BuildActiveLabel.Caption := 'No active plan — switch to Plan to create one.'
-    Else
-      BuildActiveLabel.Caption := ActivePlanCaption(PlanRel);
   BuildTodoList.Items.BeginUpdate;
   Try
     BuildTodoList.Items.Clear;
@@ -1919,29 +1654,8 @@ Begin
         FBuildSelectedIndex := -1;
         Exit;
       End;
-    NotStarted := 0;
-    InProgress := 0;
-    Complete := 0;
     For I := 0 To BuildSections.Count - 1 Do
-      Begin
-        Section := TPlanSection(BuildSections[I]);
-        BuildTodoList.Items.Add(FormatPlanSectionTile(Section));
-        If Not Section.Actionable Then
-          Continue;
-        Case Section.Status Of
-          pssNotStarted: Inc(NotStarted);
-          pssInProgress: Inc(InProgress);
-          pssComplete: Inc(Complete);
-        Else
-          { }
-        End;
-      End;
-    Summary := Format('%s  ·  %d not started · %d in progress · %d complete',
-      [ActivePlanCaption(PlanRel), NotStarted, InProgress, Complete]);
-    If (NotStarted + InProgress + Complete) = 0 Then
-      Summary := Summary + '  ·  no actionable items';
-    If Assigned(BuildActiveLabel) Then
-      BuildActiveLabel.Caption := Summary;
+      BuildTodoList.Items.Add(FormatPlanSectionTile(TPlanSection(BuildSections[I])));
     SelectIndex := -1;
     If KeepHeading >= 0 Then
       For I := 0 To BuildSections.Count - 1 Do
@@ -2490,7 +2204,6 @@ Begin
       MessageDlg('Set an active plan on the Plan mode panel first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  EnsureBuildTabUi;
   RefreshBuildTodos;
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
@@ -2558,7 +2271,6 @@ Begin
       StopWorkOnPlanAgent(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
       Exit;
     End;
-  EnsureBuildTabUi;
   RefreshBuildTodos;
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
@@ -7729,7 +7441,7 @@ Var
 Begin
   WorkflowLogger.Debug('ProjectAssistant', 'Document changed: ' + FileName);
   PlanRel := GetActivePlanRelativePath;
-  If (PlanRel = '') Or (Not Assigned(BuildPanel)) Then
+  If PlanRel = '' Then
     Exit;
   If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
     Exit;
@@ -7750,8 +7462,7 @@ Begin
   If SameFileName(ExpandFileName(FileName), ExpandFileName(Resolved)) Then
     Begin
       RefreshPlanList;
-      If Assigned(BuildPanel) Then
-        RefreshBuildTodos;
+      RefreshBuildTodos;
     End;
 End;
 

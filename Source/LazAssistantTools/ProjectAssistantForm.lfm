@@ -406,6 +406,93 @@ object ProjectAssistantForm: TProjectAssistantForm
         end
         object PlanSheet: TTabSheet
           Caption = 'Plan'
+          ClientHeight = 525
+          ClientWidth = 294
+          object ActivePlanRow: TPanel
+            Left = 8
+            Height = 36
+            Top = 8
+            Width = 278
+            Align = alTop
+            BorderSpacing.Left = 8
+            BorderSpacing.Top = 8
+            BorderSpacing.Right = 8
+            BorderSpacing.Bottom = 4
+            BevelOuter = bvNone
+            ClientHeight = 36
+            ClientWidth = 278
+            TabOrder = 0
+            object ActivePlanLabel: TLabel
+              Left = 0
+              Height = 36
+              Top = 0
+              Width = 64
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Right = 6
+              Caption = 'Active:'
+              FocusControl = ActivePlanCombo
+              Layout = tlCenter
+              ParentColor = False
+            end
+            object ActivePlanBrowseButton: TButton
+              Left = 242
+              Height = 28
+              Hint = 'Choose a plan file'
+              Top = 4
+              Width = 36
+              Align = alRight
+              BorderSpacing.Left = 4
+              BorderSpacing.Top = 4
+              BorderSpacing.Bottom = 4
+              Caption = '...'
+              ParentShowHint = False
+              ShowHint = True
+              TabOrder = 1
+            end
+            object ActivePlanCombo: TComboBox
+              Left = 70
+              Height = 28
+              Top = 4
+              Width = 168
+              Align = alClient
+              BorderSpacing.Top = 4
+              BorderSpacing.Bottom = 4
+              ItemHeight = 18
+              Style = csDropDownList
+              TabOrder = 0
+            end
+          end
+          object BuildStatusLabel: TLabel
+            Left = 8
+            Height = 36
+            Top = 483
+            Width = 278
+            Align = alBottom
+            AutoSize = False
+            BorderSpacing.Left = 8
+            BorderSpacing.Top = 6
+            BorderSpacing.Right = 8
+            Caption = ''
+            ParentColor = False
+            WordWrap = True
+          end
+          object BuildTodoList: TListBox
+            Left = 8
+            Height = 427
+            Top = 48
+            Width = 278
+            Align = alClient
+            BorderSpacing.Left = 8
+            BorderSpacing.Right = 8
+            BorderSpacing.Bottom = 8
+            ItemHeight = 0
+            TabOrder = 1
+            TopIndex = -1
+            OnClick = BuildTodoListClick
+            OnDblClick = BuildTodoListDblClick
+            OnSelectionChange = BuildTodoListSelectionChange
+          end
         end
       end
     end
