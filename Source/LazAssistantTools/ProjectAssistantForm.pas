@@ -33,6 +33,7 @@ Type
     ActionList: TActionList;
     NewChatAction: TAction;
     NewPlanAction: TAction;
+    RunPlanAction: TAction;
     AttachImageAction: TAction;
     RemoveAttachmentAction: TAction;
     SaveAttachmentAction: TAction;
@@ -86,6 +87,7 @@ Type
     SettingsMenuItem: TMenuItem;
     WorkMenuItem: TMenuItem;
     NewPlanMenuItem: TMenuItem;
+    RunPlanMenuItem: TMenuItem;
     OpenPlanMenuItem: TMenuItem;
     BuildThisMenuItem: TMenuItem;
     RevisePlanMenuItem: TMenuItem;
@@ -136,6 +138,7 @@ Type
     BottomBar: TPanel;
     NewChatButton: TButton;
     NewPlanButton: TButton;
+    RunPlanButton: TButton;
     ToggleThinkingButton: TButton;
     ReviewCompileButton: TButton;
     ReviewBuildButton: TButton;
@@ -182,6 +185,7 @@ Type
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure NewPlanActionExecute(Sender: TObject);
+    Procedure RunPlanActionExecute(Sender: TObject);
     Procedure ReviewCompileActionExecute(Sender: TObject);
     Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure ReviewChangesActionExecute(Sender: TObject);
@@ -426,9 +430,9 @@ Type
     Procedure BuildWorkButtonClick(Sender: TObject);
     Procedure BuildWorkPlanButtonClick(Sender: TObject);
     Procedure BuildWorkOnSelectedPackage;
-    Procedure StartWorkOnPlanAgent;
-    Procedure StopWorkOnPlanAgent(Const Reason: String);
-    Procedure ContinueWorkOnPlanAgent(Data: PtrInt);
+    Procedure RunPlan;
+    Procedure StopRunPlan(Const Reason: String);
+    Procedure ContinueRunPlan(Data: PtrInt);
     Function FindNextIncompleteBuildSection: Integer;
     Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
       ContinueSameItem: Boolean): String;
@@ -861,6 +865,7 @@ Begin
       PersistShellConfig;
       RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
+      UpdateWorkActions;
     End;
   RefreshTargetChoices(Nil);
 End;
@@ -1260,6 +1265,8 @@ Begin
     BuildModeAction.Enabled := Not FSending;
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not FSending;
+  If Assigned(RunPlanAction) Then
+    RunPlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
 End;
 
 Procedure TProjectAssistantForm.SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
@@ -1428,6 +1435,7 @@ Begin
   PersistShellConfig;
   RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
+  UpdateWorkActions;
   FPlanWriteThisTurn := True;
   If FViewingLive Then
     FDisplaySystemNote := '**Plan saved** to `' + GetActivePlanRelativePath +
@@ -1591,6 +1599,7 @@ Begin
   SetActivePlanRelativePath(Rel);
   PersistShellConfig;
   RefreshBuildTodos;
+  UpdateWorkActions;
   If Sender <> ActivePlanCombo Then
     Exit;
 End;
@@ -1628,6 +1637,7 @@ Begin
     PersistShellConfig;
     RefreshActivePlanChoices(Nil);
     RefreshBuildTodos;
+    UpdateWorkActions;
   Finally
     Dialog.Free;
   End;
@@ -1660,6 +1670,7 @@ Begin
   PersistShellConfig;
   RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
+  UpdateWorkActions;
   SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
     '**. Stay in **Plan** mode and send a message to refine it with the model.');
 End;
@@ -1717,6 +1728,7 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshActivePlanChoices(Nil);
+  UpdateWorkActions;
 End;
 
 Procedure TProjectAssistantForm.PlanRefreshButtonClick(Sender: TObject);
@@ -2014,7 +2026,7 @@ Begin
           FPlanAgentResumeIndex := -1;
           SetBuildStatusFeedback(Note);
           If FPlanAgentRunning Then
-            StopWorkOnPlanAgent(Note);
+            StopRunPlan(Note);
         End;
       Exit;
     End;
@@ -2023,7 +2035,7 @@ Begin
       Note := Note + ' This working root is a Git repository, so the item stays in progress until a commit contains the completion.';
       SetBuildStatusFeedback(Note);
       If FPlanAgentRunning Then
-        StopWorkOnPlanAgent(Note);
+        StopRunPlan(Note);
       Exit;
     End;
   If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
@@ -2338,7 +2350,7 @@ Begin
   Result := FirstNotStarted;
 End;
 
-Procedure TProjectAssistantForm.StopWorkOnPlanAgent(Const Reason: String);
+Procedure TProjectAssistantForm.StopRunPlan(Const Reason: String);
 Begin
   If Not FPlanAgentRunning Then
     Exit;
@@ -2350,13 +2362,14 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Plan agent stopped: ' + Reason);
 End;
 
-Procedure TProjectAssistantForm.StartWorkOnPlanAgent;
+Procedure TProjectAssistantForm.RunPlan;
 Var
   Idx: Integer;
 Begin
+  SelectMode(amBuild);
   If FSending Or FPlanAgentRunning Then
     Begin
-      MessageDlg('Wait for the current reply to finish before starting Work on plan.',
+      MessageDlg('Wait for the current reply to finish before starting Run Plan.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -2383,13 +2396,12 @@ Begin
   SetCurrentSystemNote(
     '**Plan agent** started — will work through incomplete packages until complete, error, ' +
     'context ≥ 95%, or max packages.');
-  SelectMode(amBuild);
   BuildWorkOnSelectedPackage;
   If Not FSending Then
-    StopWorkOnPlanAgent('could not start first package');
+    StopRunPlan('could not start first package');
 End;
 
-Procedure TProjectAssistantForm.ContinueWorkOnPlanAgent(Data: PtrInt);
+Procedure TProjectAssistantForm.ContinueRunPlan(Data: PtrInt);
 Var
   Idx, Pct: Integer;
 Begin
@@ -2398,12 +2410,12 @@ Begin
     Exit;
   If FSending Then
     Begin
-      Application.QueueAsyncCall(@ContinueWorkOnPlanAgent, 0);
+      Application.QueueAsyncCall(@ContinueRunPlan, 0);
       Exit;
     End;
   If FLastTurnHadError Then
     Begin
-      StopWorkOnPlanAgent('last package ended with an error');
+      StopRunPlan('last package ended with an error');
       Exit;
     End;
   If FContextLimit > 0 Then
@@ -2422,21 +2434,21 @@ Begin
           Else
             Begin
               MaybeWarnHighContextUsage;
-              StopWorkOnPlanAgent(Format('context usage %d%% — start a New Chat', [Pct]));
+              StopRunPlan(Format('context usage %d%% — start a New Chat', [Pct]));
               Exit;
             End;
         End;
     End;
   If FPlanAgentPackagesDone >= FPlanAgentMaxPackages Then
     Begin
-      StopWorkOnPlanAgent(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
+      StopRunPlan(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
       Exit;
     End;
   RefreshBuildTodos;
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
-      StopWorkOnPlanAgent(Format('all packages complete (%d worked this run)',
+      StopRunPlan(Format('all packages complete (%d worked this run)',
         [FPlanAgentPackagesDone]));
       Exit;
     End;
@@ -2446,19 +2458,24 @@ Begin
   SetBuildStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
   BuildWorkOnSelectedPackage;
   If Not FSending Then
-    StopWorkOnPlanAgent('failed to start next package');
+    StopRunPlan('failed to start next package');
 End;
 
-Procedure TProjectAssistantForm.BuildWorkPlanButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.RunPlanActionExecute(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
       If MessageDlg('Stop the plan agent after the current reply finishes?',
         mtConfirmation, [mbYes, mbNo], 0) = mrYes Then
-        StopWorkOnPlanAgent('stopped by user');
+        StopRunPlan('stopped by user');
       Exit;
     End;
-  StartWorkOnPlanAgent;
+  RunPlan;
+End;
+
+Procedure TProjectAssistantForm.BuildWorkPlanButtonClick(Sender: TObject);
+Begin
+  RunPlanActionExecute(Sender);
 End;
 
 Procedure TProjectAssistantForm.BuildTodoListClick(Sender: TObject);
@@ -3216,7 +3233,7 @@ Begin
     End;
   If FPlanAgentRunning Then
     Begin
-      StopWorkOnPlanAgent('ChatGPT preview supports individual turns; automatic plan execution is not enabled.');
+      StopRunPlan('ChatGPT preview supports individual turns; automatic plan execution is not enabled.');
       Exit;
     End;
   SetLength(Refs, 0);
@@ -3618,6 +3635,8 @@ Begin
   NewChatAction.Enabled := Not IsSending;
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not IsSending;
+  If Assigned(RunPlanAction) Then
+    RunPlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
   ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
@@ -5361,6 +5380,7 @@ Begin
     Begin
       RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
+      UpdateWorkActions;
       ShowPlanOfferBar(ActiveMode = amPlan);
     End
   Else
@@ -5376,16 +5396,16 @@ Begin
           If (Pos('host name resolution', LowerCase(ResolvedError)) > 0) Or
             (Pos('network', LowerCase(ResolvedError)) > 0) Or
             (Pos('timed out', LowerCase(ResolvedError)) > 0) Then
-            StopWorkOnPlanAgent(
+            StopRunPlan(
               'network error talking to api.x.ai. Check connectivity, then click ' +
-              '**Work on plan** again to resume remaining packages. ' + ResolvedError)
+              '**Run Plan** again to resume remaining packages. ' + ResolvedError)
           Else
-            StopWorkOnPlanAgent('error: ' + ResolvedError);
+            StopRunPlan('error: ' + ResolvedError);
         End
       Else
         Begin
           Inc(FPlanAgentPackagesDone);
-          Application.QueueAsyncCall(@ContinueWorkOnPlanAgent, 0);
+          Application.QueueAsyncCall(@ContinueRunPlan, 0);
         End;
     End;
   FViewingLive := True;
@@ -5480,7 +5500,7 @@ Begin
   StatusFooter.SetRightText('Cancelled');
   PersistSession;
   If (Not FUseCodex) And FPlanAgentRunning Then
-    StopWorkOnPlanAgent('stream cancelled by user');
+    StopRunPlan('stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
@@ -5660,6 +5680,8 @@ Begin
   AddAct(SettingsAction, 'Session', 'settings', 'login,logout', 'Sign in, model, and skill');
   AddAct(StopAction, 'Session', 'stop', '', 'Stop the current reply');
   AddAct(NewPlanAction, 'Work', 'new-plan', '', 'Create a plan and switch to Plan mode');
+  AddAct(RunPlanAction, 'Work', 'run-plan', '',
+    'Switch to Build and work through incomplete packages until done, error, or context limit');
   AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
   AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
   AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
@@ -6934,7 +6956,7 @@ Begin
   FPlanAgentResumeIndex := -1;
   ShowPlanOfferBar(False);
   If FPlanAgentRunning And (Not KeepPlanAgent) Then
-    StopWorkOnPlanAgent('new chat');
+    StopRunPlan('new chat');
   If FSending Then
     StopStream;
   SetSending(False);
@@ -6991,6 +7013,7 @@ Begin
   { Do not write Chat into the project config: the root is already cleared. }
   SelectMode(amChat);
   SetActivePlanRelativePath('');
+  UpdateWorkActions;
   RefreshHistoryCombo;
   RefreshConversationList;
   ClearCurrentTurnDisplay;
@@ -7086,6 +7109,7 @@ Begin
       FDeferLastTurn := False;
       SetOpenBusy(False);
       SetActivePlanRelativePath('');
+      UpdateWorkActions;
       RefreshHistoryCombo;
       RefreshConversationList;
       ClearCurrentTurnDisplay;

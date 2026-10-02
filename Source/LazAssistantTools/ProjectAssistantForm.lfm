@@ -80,6 +80,14 @@ object ProjectAssistantForm: TProjectAssistantForm
       Action = NewPlanAction
       TabOrder = 3
     end
+    object RunPlanButton: TButton
+      Left = 356
+      Height = 28
+      Top = 4
+      Width = 84
+      Action = RunPlanAction
+      TabOrder = 4
+    end
     object ToggleThinkingButton: TButton
       Left = 268
       Height = 28
@@ -654,6 +662,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Create a plan and switch to Plan mode'
       OnExecute = NewPlanActionExecute
     end
+    object RunPlanAction: TAction
+      Caption = 'Run Plan'
+      Hint = 'Switch to Build and work through incomplete packages until done, error, or context limit'
+      OnExecute = RunPlanActionExecute
+    end
     object AttachImageAction: TAction
       Caption = 'Attach Image'
       Hint = 'Attach an image to the next message'
@@ -876,6 +889,9 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = '&Work'
       object NewPlanMenuItem: TMenuItem
         Action = NewPlanAction
+      end
+      object RunPlanMenuItem: TMenuItem
+        Action = RunPlanAction
       end
       object OpenPlanMenuItem: TMenuItem
         Action = OpenPlanAction
