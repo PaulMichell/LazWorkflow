@@ -226,7 +226,8 @@ Begin
   ParentFont := True;
   TabStop := True;
   DoubleBuffered := True;
-  BorderStyle := bsSingle;
+  { Paint draws the one-pixel frame. A widget border would add a second, thicker edge. }
+  BorderStyle := bsNone;
   Width := 200;
   Height := 80;
   FSpellItemCount := 0;
@@ -301,6 +302,9 @@ Begin
   FScrollBar.Width := 16;
   FScrollBar.Visible := False;
   FScrollBar.OnChange := @ScrollBarChange;
+  FScrollBar.BorderSpacing.Top := 1;
+  FScrollBar.BorderSpacing.Right := 1;
+  FScrollBar.BorderSpacing.Bottom := 1;
   FScrollBar.Parent := Self;
   FScrollBar.Align := alRight;
 End;
@@ -1375,6 +1379,16 @@ Begin
       Canvas.MoveTo(Pixel.X, Pixel.Y + 1);
       Canvas.LineTo(Pixel.X, Pixel.Y + LineHeight - 1);
     End;
+  { Same frame colours as the conversation surface, so the two editors match. }
+  Canvas.Brush.Style := bsSolid;
+  If Focused Then
+    Canvas.Brush.Color := $00C08038
+  Else
+    Canvas.Brush.Color := $00C8C5BE;
+  Canvas.FillRect(0, 0, ClientWidth, 1);
+  Canvas.FillRect(0, ClientHeight - 1, ClientWidth, ClientHeight);
+  Canvas.FillRect(0, 0, 1, ClientHeight);
+  Canvas.FillRect(ClientWidth - 1, 0, ClientWidth, ClientHeight);
 End;
 
 Procedure TSpellMemo.Rescan;
