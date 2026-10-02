@@ -6,7 +6,6 @@ object ProjectAssistantForm: TProjectAssistantForm
   Caption = 'Project Assistant'
   ClientHeight = 700
   ClientWidth = 960
-  Menu = AssistantMenu
   Position = poDefaultPosOnly
   LCLVersion = '5.99.0.0'
   OnCreate = FormCreate
@@ -141,13 +140,21 @@ object ProjectAssistantForm: TProjectAssistantForm
         TabOrder = 8
         Visible = False
       end
+      object AttachImageButton: TButton
+        Left = 930
+        Height = 28
+        Top = 4
+        Width = 112
+        Action = AttachImageAction
+        TabOrder = 9
+      end
       object SettingsButton: TButton
         Left = 1046
         Height = 28
         Top = 4
         Width = 84
         Action = SettingsAction
-        TabOrder = 9
+        TabOrder = 10
       end
       object AutoNewChatCheck: TCheckBox
         Left = 1134
@@ -155,7 +162,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Top = 4
         Width = 160
         Caption = 'Auto New Chat at 95%'
-        TabOrder = 10
+        TabOrder = 11
         Visible = False
         OnClick = AutoNewChatCheckClick
       end

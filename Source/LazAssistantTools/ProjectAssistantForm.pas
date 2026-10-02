@@ -149,6 +149,7 @@ Type
     ReviewCompileButton: TButton;
     ReviewBuildButton: TButton;
     FixErrorButton: TButton;
+    AttachImageButton: TButton;
     SettingsButton: TButton;
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
@@ -693,6 +694,8 @@ Begin
   FTargetPaths := TStringList.Create;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
+  { AssistantMenu still feeds the commands popup. It is not the window menu bar. }
+  Menu := Nil;
   { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
     drop to the widget under the pointer, so the input controls are armed after
     their handles exist. Names arrive through OnDropFiles. }
