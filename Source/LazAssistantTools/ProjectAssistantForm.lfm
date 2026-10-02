@@ -44,7 +44,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     ChildSizing.EnlargeVertical = crsHomogenousChildResize
     ChildSizing.ShrinkVertical = crsHomogenousChildResize
     ChildSizing.Layout = cclLeftToRightThenTopToBottom
-    ChildSizing.ControlsPerLine = 12
+    ChildSizing.ControlsPerLine = 16
     ClientHeight = 36
     ClientWidth = 960
     TabOrder = 2
@@ -71,6 +71,14 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 84
       Action = NewChatAction
       TabOrder = 2
+    end
+    object NewPlanButton: TButton
+      Left = 268
+      Height = 28
+      Top = 4
+      Width = 84
+      Action = NewPlanAction
+      TabOrder = 3
     end
     object ToggleThinkingButton: TButton
       Left = 268
@@ -641,6 +649,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'New Chat'
       OnExecute = NewChatActionExecute
     end
+    object NewPlanAction: TAction
+      Caption = 'New Plan'
+      Hint = 'Create a plan and switch to Plan mode'
+      OnExecute = NewPlanActionExecute
+    end
     object AttachImageAction: TAction
       Caption = 'Attach Image'
       Hint = 'Attach an image to the next message'
@@ -861,6 +874,9 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object WorkMenuItem: TMenuItem
       Caption = '&Work'
+      object NewPlanMenuItem: TMenuItem
+        Action = NewPlanAction
+      end
       object OpenPlanMenuItem: TMenuItem
         Action = OpenPlanAction
       end

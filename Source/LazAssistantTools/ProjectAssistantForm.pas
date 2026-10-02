@@ -32,6 +32,7 @@ Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
     ActionList: TActionList;
     NewChatAction: TAction;
+    NewPlanAction: TAction;
     AttachImageAction: TAction;
     RemoveAttachmentAction: TAction;
     SaveAttachmentAction: TAction;
@@ -84,6 +85,7 @@ Type
     SessionSep2Item: TMenuItem;
     SettingsMenuItem: TMenuItem;
     WorkMenuItem: TMenuItem;
+    NewPlanMenuItem: TMenuItem;
     OpenPlanMenuItem: TMenuItem;
     BuildThisMenuItem: TMenuItem;
     RevisePlanMenuItem: TMenuItem;
@@ -133,6 +135,7 @@ Type
     ComposerStack: TPanel;
     BottomBar: TPanel;
     NewChatButton: TButton;
+    NewPlanButton: TButton;
     ToggleThinkingButton: TButton;
     ReviewCompileButton: TButton;
     ReviewBuildButton: TButton;
@@ -178,6 +181,7 @@ Type
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
     Procedure NewChatActionExecute(Sender: TObject);
+    Procedure NewPlanActionExecute(Sender: TObject);
     Procedure ReviewCompileActionExecute(Sender: TObject);
     Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure ReviewChangesActionExecute(Sender: TObject);
@@ -394,6 +398,7 @@ Type
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
     Function ActivePlanCaption(Const ActivePlan: String): String;
+    Procedure NewPlan;
     Procedure PlanNewButtonClick(Sender: TObject);
     Procedure PlanOpenButtonClick(Sender: TObject);
     Procedure PlanSetActiveButtonClick(Sender: TObject);
@@ -1253,6 +1258,8 @@ Begin
     PlanModeAction.Enabled := Not FSending;
   If Assigned(BuildModeAction) Then
     BuildModeAction.Enabled := Not FSending;
+  If Assigned(NewPlanAction) Then
+    NewPlanAction.Enabled := Not FSending;
 End;
 
 Procedure TProjectAssistantForm.SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
@@ -1628,10 +1635,11 @@ Begin
     Exit;
 End;
 
-Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
+Procedure TProjectAssistantForm.NewPlan;
 Var
   Title, Rel, Resolved, Err, Content: String;
 Begin
+  SelectMode(amPlan);
   Title := 'Project Plan';
   If Not InputQuery('New plan', 'Plan title:', Title) Then
     Exit;
@@ -1651,8 +1659,14 @@ Begin
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   RefreshActivePlanChoices(Nil);
+  RefreshBuildTodos;
   SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
     '**. Stay in **Plan** mode and send a message to refine it with the model.');
+End;
+
+Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
+Begin
+  NewPlan;
 End;
 
 Procedure TProjectAssistantForm.PlanOpenButtonClick(Sender: TObject);
@@ -3602,6 +3616,8 @@ Begin
     SendAction.Caption := 'Send';
   StopAction.Enabled := IsSending;
   NewChatAction.Enabled := Not IsSending;
+  If Assigned(NewPlanAction) Then
+    NewPlanAction.Enabled := Not IsSending;
   ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
@@ -5643,6 +5659,7 @@ Begin
   AddAct(DeleteHistoryAction, 'Session', 'delete', '', 'Delete the current conversation');
   AddAct(SettingsAction, 'Session', 'settings', 'login,logout', 'Sign in, model, and skill');
   AddAct(StopAction, 'Session', 'stop', '', 'Stop the current reply');
+  AddAct(NewPlanAction, 'Work', 'new-plan', '', 'Create a plan and switch to Plan mode');
   AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
   AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
   AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
@@ -7383,6 +7400,11 @@ Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);
 Begin
   StartNewChat;
   If InputMemo.CanFocus Then InputMemo.SetFocus;
+End;
+
+Procedure TProjectAssistantForm.NewPlanActionExecute(Sender: TObject);
+Begin
+  NewPlan;
 End;
 
 Procedure TProjectAssistantForm.HistoryComboChange(Sender: TObject);
