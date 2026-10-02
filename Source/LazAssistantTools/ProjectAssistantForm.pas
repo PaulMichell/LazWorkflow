@@ -401,34 +401,18 @@ Type
     Function LooksLikePlanMarkdown(Const Body: String): Boolean;
     Procedure PersistShellConfig;
     Procedure ApplyShellConfigFromStore;
-    Function ActivePlanCaption(Const ActivePlan: String): String;
     Procedure NewPlan;
-    Procedure PlanNewButtonClick(Sender: TObject);
-    Procedure PlanOpenButtonClick(Sender: TObject);
-    Procedure PlanSetActiveButtonClick(Sender: TObject);
-    Procedure PlanRefreshButtonClick(Sender: TObject);
-    Procedure PlanOpenDocsButtonClick(Sender: TObject);
-    Procedure PlanListDblClick(Sender: TObject);
-    Function SelectedPlanRelativePath: String;
     Procedure RefreshBuildTodos;
     Function SelectedBuildSectionIndex: Integer;
     Function SelectedBuildRowIsContext: Boolean;
     Function BuildSelectionMessage: String;
     Procedure SetBuildStatusFeedback(Const MessageText: String);
-    Procedure SetSelectedBuildSectionStatus(NewStatus: TPlanSectionStatus);
     Procedure ClearBuildWorkTracking;
     Procedure BeginBuildWorkTracking(SectionIndex: Integer; Const SectionTitle: String);
     Procedure TryAutoCompleteBuildWork(Const StreamErrorText: String);
     Function BuildWorkSectionIsComplete: Boolean;
     Procedure PrepareTopErrorAfterReview(ErrorCount: Integer);
     Procedure OfferFixTopErrorAfterReview;
-    Procedure BuildRefreshButtonClick(Sender: TObject);
-    Procedure BuildOpenPlanButtonClick(Sender: TObject);
-    Procedure BuildStartButtonClick(Sender: TObject);
-    Procedure BuildDoneButtonClick(Sender: TObject);
-    Procedure BuildResetButtonClick(Sender: TObject);
-    Procedure BuildWorkButtonClick(Sender: TObject);
-    Procedure BuildWorkPlanButtonClick(Sender: TObject);
     Procedure BuildWorkOnSelectedPackage;
     Procedure RunPlan;
     Procedure StopRunPlan(Const Reason: String);
@@ -1507,25 +1491,6 @@ Begin
   RefreshActivePlanChoices(Nil);
 End;
 
-Function TProjectAssistantForm.SelectedPlanRelativePath: String;
-Begin
-  Result := '';
-End;
-
-Function TProjectAssistantForm.ActivePlanCaption(Const ActivePlan: String): String;
-Var
-  Resolved, Title, Err: String;
-Begin
-  If ActivePlan = '' Then
-    Result := 'Active plan: (none) — create one under Documents/ or Set active'
-  Else If (Not ResolvePlanPath(ActivePlan, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
-    Result := 'Active plan: ' + ActivePlan
-  Else If TryReadAssistantPlanIdentity(Resolved, Title, Err) Then
-    Result := 'Active plan: ' + FormatPlanListCaption(Title, ActivePlan)
-  Else
-    Result := 'Active plan: ' + ActivePlan + ' — not a recognised assistant plan';
-End;
-
 Procedure TProjectAssistantForm.RefreshActivePlanChoices(Sender: TObject);
 Var
   Paths, Titles: TStringList;
@@ -1673,86 +1638,6 @@ Begin
   UpdateWorkActions;
   SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
     '**. Stay in **Plan** mode and send a message to refine it with the model.');
-End;
-
-Procedure TProjectAssistantForm.PlanNewButtonClick(Sender: TObject);
-Begin
-  NewPlan;
-End;
-
-Procedure TProjectAssistantForm.PlanOpenButtonClick(Sender: TObject);
-Var
-  Rel, Resolved, Err: String;
-Begin
-  Rel := SelectedPlanRelativePath;
-  If Rel = '' Then
-    Rel := GetActivePlanRelativePath;
-  If Rel = '' Then
-    Begin
-      MessageDlg('Select a plan in the list, or create a new one.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If Not ResolvePlanPath(Rel, Resolved, Err) Then
-    Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
-      Exit;
-    End;
-  If Not FileExistsUTF8(Resolved) Then
-    Begin
-      MessageDlg('File not found: ' + Resolved, mtError, [mbOK], 0);
-      Exit;
-    End;
-  OpenMarkdownDocument(Resolved);
-End;
-
-Procedure TProjectAssistantForm.PlanSetActiveButtonClick(Sender: TObject);
-Var
-  Rel, Resolved, Err: String;
-Begin
-  Rel := SelectedPlanRelativePath;
-  If Rel = '' Then
-    Begin
-      MessageDlg('Select a Markdown file in the list.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If Not ResolvePlanPath(Rel, Resolved, Err) Then
-    Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
-      Exit;
-    End;
-  If Not FileExistsUTF8(Resolved) Then
-    Begin
-      MessageDlg('File not found: ' + Resolved, mtError, [mbOK], 0);
-      Exit;
-    End;
-  SetActivePlanRelativePath(ProjectRelativePath(Resolved));
-  PersistShellConfig;
-  RefreshActivePlanChoices(Nil);
-  UpdateWorkActions;
-End;
-
-Procedure TProjectAssistantForm.PlanRefreshButtonClick(Sender: TObject);
-Begin
-  RefreshActivePlanChoices(Nil);
-End;
-
-Procedure TProjectAssistantForm.PlanOpenDocsButtonClick(Sender: TObject);
-Var
-  Err, Dir: String;
-Begin
-  If Not EnsureProjectDocumentsDir(Err) Then
-    Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
-      Exit;
-    End;
-  Dir := ExcludeTrailingPathDelimiter(ProjectDocumentsDir);
-  If Not OpenDocument(Dir) Then
-    MessageDlg('Could not open folder: ' + Dir, mtWarning, [mbOK], 0);
-End;
-
-Procedure TProjectAssistantForm.PlanListDblClick(Sender: TObject);
-Begin
-  PlanOpenButtonClick(Sender);
 End;
 
 Procedure TProjectAssistantForm.RefreshBuildTodos;
@@ -1910,63 +1795,6 @@ Begin
   { The status label is the plan count line. Selection and agent notes stay on the footer. }
   StatusFooter.SetRightText(MessageText);
   WorkflowLogger.Info('ProjectAssistant', 'Build work: ' + MessageText);
-End;
-
-Procedure TProjectAssistantForm.SetSelectedBuildSectionStatus(NewStatus: TPlanSectionStatus);
-Var
-  PlanRel, Err, SectionTitle, Feedback: String;
-  Idx: Integer;
-  OldStatus: TPlanSectionStatus;
-Begin
-  PlanRel := GetActivePlanRelativePath;
-  If PlanRel = '' Then
-    Begin
-      SetBuildStatusFeedback('Set an active plan on the Plan tab first.');
-      MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  Idx := SelectedBuildSectionIndex;
-  If Idx < 0 Then
-    Begin
-      SetBuildStatusFeedback(BuildSelectionMessage);
-      MessageDlg(BuildSelectionMessage, mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  { Copy title/status before RefreshBuildTodos frees BuildSections entries. }
-  SectionTitle := TPlanSection(BuildSections[Idx]).Title;
-  OldStatus := TPlanSection(BuildSections[Idx]).Status;
-  If OldStatus = NewStatus Then
-    Begin
-      Feedback := Format('"%s" is already %s.',
-        [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
-      SetBuildStatusFeedback(Feedback);
-      Exit;
-    End;
-  If Not SetPlanSectionStatus(PlanRel, Idx, NewStatus, Err) Then
-    Begin
-      SetBuildStatusFeedback('Failed: ' + Err);
-      MessageDlg(Err, mtError, [mbOK], 0);
-      Exit;
-    End;
-  FBuildSelectedIndex := Idx;
-  RefreshBuildTodos;
-  If Assigned(BuildTodoList) And (Idx >= 0) And (Idx < BuildTodoList.Items.Count) Then
-    Begin
-      BuildTodoList.ItemIndex := Idx;
-      FBuildSelectedIndex := Idx;
-    End;
-  Feedback := Format('%s → %s', [SectionTitle, PlanSectionStatusToStr(NewStatus)]);
-  SetBuildStatusFeedback(Feedback);
-  SetCurrentSystemNote(Format('Plan status updated: **%s** → `%s`.',
-    [SectionTitle, PlanSectionStatusToStr(NewStatus)]));
-  If NewStatus = pssComplete Then
-    Begin
-      ClearBuildWorkTracking;
-      If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
-        SetCurrentSystemNote(Format(
-          'Plan status updated: **%s** → complete. This working root is a Git repository. Commit the plan file if that completion should be in history.',
-          [SectionTitle]));
-    End;
 End;
 
 Procedure TProjectAssistantForm.ClearBuildWorkTracking;
@@ -2159,45 +1987,6 @@ Begin
   StatusFooter.SetRightText('Review: Fix Error ready');
 End;
 
-Procedure TProjectAssistantForm.BuildRefreshButtonClick(Sender: TObject);
-Begin
-  RefreshBuildTodos;
-  SetBuildStatusFeedback('TODO list refreshed from plan file.');
-End;
-
-Procedure TProjectAssistantForm.BuildOpenPlanButtonClick(Sender: TObject);
-Var
-  PlanRel, Resolved, Err: String;
-Begin
-  PlanRel := GetActivePlanRelativePath;
-  If PlanRel = '' Then
-    Begin
-      MessageDlg('No active plan. Use the Plan tab to create or set one.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
-    Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
-      Exit;
-    End;
-  OpenMarkdownDocument(Resolved);
-End;
-
-Procedure TProjectAssistantForm.BuildStartButtonClick(Sender: TObject);
-Begin
-  SetSelectedBuildSectionStatus(pssInProgress);
-End;
-
-Procedure TProjectAssistantForm.BuildDoneButtonClick(Sender: TObject);
-Begin
-  SetSelectedBuildSectionStatus(pssComplete);
-End;
-
-Procedure TProjectAssistantForm.BuildResetButtonClick(Sender: TObject);
-Begin
-  SetSelectedBuildSectionStatus(pssNotStarted);
-End;
-
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
   SectionBody, ParentTitle: String; ContinueSameItem: Boolean): String;
 Const MaxBodyChars = 6000;
@@ -2311,17 +2100,6 @@ Begin
       UnlockModeAfterSend;
       ClearBuildWorkTracking;
     End;
-End;
-
-Procedure TProjectAssistantForm.BuildWorkButtonClick(Sender: TObject);
-Begin
-  If FPlanAgentRunning Then
-    Begin
-      MessageDlg('Plan agent is already running. Use Stop to cancel the current reply, then try again.',
-        mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  BuildWorkOnSelectedPackage;
 End;
 
 Function TProjectAssistantForm.FindNextIncompleteBuildSection: Integer;
@@ -2471,11 +2249,6 @@ Begin
       Exit;
     End;
   RunPlan;
-End;
-
-Procedure TProjectAssistantForm.BuildWorkPlanButtonClick(Sender: TObject);
-Begin
-  RunPlanActionExecute(Sender);
 End;
 
 Procedure TProjectAssistantForm.BuildTodoListClick(Sender: TObject);
@@ -6450,9 +6223,22 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.OpenPlanActionExecute(Sender: TObject);
+Var
+  PlanRel, Resolved, Err: String;
 Begin
   HideSlashPopup;
-  BuildOpenPlanButtonClick(Sender);
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      MessageDlg('No active plan. Use the Plan tab to create or set one.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
+    Begin
+      MessageDlg(Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  OpenMarkdownDocument(Resolved);
 End;
 
 Procedure TProjectAssistantForm.BuildThisActionExecute(Sender: TObject);
