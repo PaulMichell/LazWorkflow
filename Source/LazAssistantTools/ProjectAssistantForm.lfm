@@ -240,7 +240,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         object HistorySheet: TTabSheet
           Caption = 'History'
           OnResize = HistoryPanelResize
-          object HistoryLabel: TLabel
+          object ConversationLabel: TLabel
             AnchorSideLeft.Control = HistorySheet
             AnchorSideTop.Control = HistorySheet
             AnchorSideRight.Control = HistorySheet
@@ -248,70 +248,6 @@ object ProjectAssistantForm: TProjectAssistantForm
             Left = 4
             Height = 18
             Top = 4
-            Width = 232
-            Anchors = [akTop, akLeft, akRight]
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 4
-            BorderSpacing.Right = 4
-            Caption = 'History'
-            ParentColor = False
-          end
-          object HistoryCombo: TComboBox
-            AnchorSideLeft.Control = HistorySheet
-            AnchorSideTop.Control = HistoryLabel
-            AnchorSideTop.Side = asrBottom
-            AnchorSideRight.Control = HistorySheet
-            AnchorSideRight.Side = asrBottom
-            Left = 4
-            Height = 32
-            Top = 26
-            Width = 232
-            Anchors = [akTop, akLeft, akRight]
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 4
-            BorderSpacing.Right = 4
-            ItemHeight = 18
-            Style = csDropDownList
-            TabOrder = 0
-            OnChange = HistoryComboChange
-          end
-          object ExportHistoryButton: TButton
-            AnchorSideLeft.Control = HistorySheet
-            AnchorSideTop.Control = HistoryCombo
-            AnchorSideTop.Side = asrBottom
-            Left = 4
-            Height = 28
-            Top = 62
-            Width = 108
-            Action = ExportHistoryAction
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 4
-            TabOrder = 1
-          end
-          object DeleteHistoryButton: TButton
-            AnchorSideTop.Control = HistoryCombo
-            AnchorSideTop.Side = asrBottom
-            AnchorSideRight.Control = HistorySheet
-            AnchorSideRight.Side = asrBottom
-            Left = 128
-            Height = 28
-            Top = 62
-            Width = 108
-            Action = DeleteHistoryAction
-            Anchors = [akTop, akRight]
-            BorderSpacing.Top = 4
-            BorderSpacing.Right = 4
-            TabOrder = 2
-          end
-          object ConversationLabel: TLabel
-            AnchorSideLeft.Control = HistorySheet
-            AnchorSideTop.Control = ExportHistoryButton
-            AnchorSideTop.Side = asrBottom
-            AnchorSideRight.Control = HistorySheet
-            AnchorSideRight.Side = asrBottom
-            Left = 4
-            Height = 18
-            Top = 94
             Width = 232
             Anchors = [akTop, akLeft, akRight]
             BorderSpacing.Left = 4
@@ -326,10 +262,11 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideTop.Side = asrBottom
             AnchorSideRight.Control = HistorySheet
             AnchorSideRight.Side = asrBottom
-            AnchorSideBottom.Control = ConversationSearch
+            AnchorSideBottom.Control = HistoryLabel
+            AnchorSideBottom.Side = asrTop
             Left = 4
             Height = 280
-            Top = 116
+            Top = 26
             Width = 232
             Anchors = [akTop, akLeft, akRight, akBottom]
             BorderSpacing.Left = 4
@@ -337,28 +274,76 @@ object ProjectAssistantForm: TProjectAssistantForm
             BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
             ItemHeight = 0
-            TabOrder = 3
+            TabOrder = 0
             TopIndex = -1
             OnClick = ConversationListClick
             OnDblClick = ConversationListClick
             OnSelectionChange = ConversationListSelectionChange
           end
-          object ConversationSearch: TEdit
+          object HistoryLabel: TLabel
             AnchorSideLeft.Control = HistorySheet
             AnchorSideRight.Control = HistorySheet
             AnchorSideRight.Side = asrBottom
-            AnchorSideBottom.Control = HistorySheet
-            AnchorSideBottom.Side = asrBottom
+            AnchorSideBottom.Control = HistoryCombo
+            AnchorSideBottom.Side = asrTop
             Left = 4
-            Height = 32
-            Top = 400
+            Height = 18
+            Top = 310
             Width = 232
             Anchors = [akLeft, akRight, akBottom]
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
-            TabOrder = 4
-            OnChange = ConversationSearchChange
+            Caption = 'Prior Conversations:'
+            ParentColor = False
+          end
+          object HistoryCombo: TComboBox
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = ExportHistoryButton
+            AnchorSideBottom.Side = asrTop
+            Left = 4
+            Height = 32
+            Top = 332
+            Width = 232
+            Anchors = [akLeft, akRight, akBottom]
+            BorderSpacing.Left = 4
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            ItemHeight = 18
+            Style = csDropDownList
+            TabOrder = 1
+            OnChange = HistoryComboChange
+          end
+          object ExportHistoryButton: TButton
+            AnchorSideLeft.Control = HistorySheet
+            AnchorSideBottom.Control = HistorySheet
+            AnchorSideBottom.Side = asrBottom
+            Left = 4
+            Height = 28
+            Top = 368
+            Width = 108
+            Action = ExportHistoryAction
+            Anchors = [akLeft, akBottom]
+            BorderSpacing.Left = 4
+            BorderSpacing.Bottom = 4
+            TabOrder = 2
+          end
+          object DeleteHistoryButton: TButton
+            AnchorSideRight.Control = HistorySheet
+            AnchorSideRight.Side = asrBottom
+            AnchorSideBottom.Control = HistorySheet
+            AnchorSideBottom.Side = asrBottom
+            Left = 128
+            Height = 28
+            Top = 368
+            Width = 108
+            Action = DeleteHistoryAction
+            Anchors = [akRight, akBottom]
+            BorderSpacing.Right = 4
+            BorderSpacing.Bottom = 4
+            TabOrder = 3
           end
         end
         object PlanSheet: TTabSheet

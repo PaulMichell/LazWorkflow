@@ -112,13 +112,12 @@ Type
     ModeSplitter: TSplitter;
     ConversationColumn: TPanel;
     PromptHost: TPanel;
+    ConversationLabel: TLabel;
+    ConversationList: TListBox;
     HistoryLabel: TLabel;
     HistoryCombo: TComboBox;
     ExportHistoryButton: TButton;
     DeleteHistoryButton: TButton;
-    ConversationLabel: TLabel;
-    ConversationSearch: TEdit;
-    ConversationList: TListBox;
     ChatHost: TPanel;
     { Plan file list (runtime, Plan sheet). }
     PlanPanel: TPanel;
@@ -176,7 +175,6 @@ Type
     Procedure SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
     Procedure SidebarPagesChange(Sender: TObject);
     Procedure ModeComboChange(Sender: TObject);
-    Procedure ConversationSearchChange(Sender: TObject);
     Procedure ConversationListClick(Sender: TObject);
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
     Procedure HistoryComboChange(Sender: TObject);
@@ -2859,16 +2857,12 @@ Procedure TProjectAssistantForm.RefreshConversationList;
 Var
   I, SeqNo, KeepTurnIndex: Integer;
   Entry: TConversationIndexEntry;
-  Filter, Line, Preview: String;
-  ShowItem: Boolean;
+  Line, Preview: String;
   SelectIdx: Integer;
 Begin
   If Not Assigned(ConversationList) Or Not Assigned(ProjectAssistantConversation) Then
     Exit;
   EnsureConversationStore;
-  Filter := '';
-  If Assigned(ConversationSearch) Then
-    Filter := LowerCase(Trim(ConversationSearch.Text));
   KeepTurnIndex := FSelectedTurnIndex;
   If KeepTurnIndex < 0 Then
     KeepTurnIndex := ConversationListTurnIndex(ConversationList.ItemIndex);
@@ -2888,17 +2882,9 @@ Begin
         Line := IntToStr(SeqNo) + ' - ' + Entry.PromptPreview;
         If Entry.ErrorText <> '' Then
           Line := Line + ' [err]';
-        ShowItem := True;
-        If Filter <> '' Then
-          ShowItem := (Pos(Filter, LowerCase(Entry.PromptPreview)) > 0) Or
-            (Pos(Filter, LowerCase(Entry.ResponsePreview)) > 0) Or
-            (Pos(Filter, LowerCase(Entry.Mode)) > 0);
-        If ShowItem Then
-          Begin
-            ConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
-            If Entry.TurnIndex = KeepTurnIndex Then
-              SelectIdx := ConversationList.Items.Count - 1;
-          End;
+        ConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
+        If Entry.TurnIndex = KeepTurnIndex Then
+          SelectIdx := ConversationList.Items.Count - 1;
       End;
     { In-flight prompt at the bottom while the model runs — omit once the turn
       is recorded so the list never shows live + completed duplicates. }
@@ -2911,15 +2897,9 @@ Begin
           Preview := Copy(Preview, 1, 119) + '…';
         SeqNo := ProjectAssistantConversation.IndexCount + 1;
         Line := IntToStr(SeqNo) + ' - ' + Preview + ' …';
-        ShowItem := True;
-        If Filter <> '' Then
-          ShowItem := Pos(Filter, LowerCase(Preview)) > 0;
-        If ShowItem Then
-          Begin
-            ConversationList.Items.AddObject(Line, TObject(PtrUInt(LiveConversationMarker + 1)));
-            If (KeepTurnIndex = LiveConversationMarker) Or FViewingLive Then
-              SelectIdx := ConversationList.Items.Count - 1;
-          End;
+        ConversationList.Items.AddObject(Line, TObject(PtrUInt(LiveConversationMarker + 1)));
+        If (KeepTurnIndex = LiveConversationMarker) Or FViewingLive Then
+          SelectIdx := ConversationList.Items.Count - 1;
       End;
   Finally
     ConversationList.Items.EndUpdate;
@@ -2938,11 +2918,6 @@ Begin
       End;
       FSelectedTurnIndex := ConversationListTurnIndex(SelectIdx);
     End;
-End;
-
-Procedure TProjectAssistantForm.ConversationSearchChange(Sender: TObject);
-Begin
-  RefreshConversationList;
 End;
 
 Procedure TProjectAssistantForm.RefreshHistoryCombo;
