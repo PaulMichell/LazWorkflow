@@ -1731,9 +1731,23 @@ End;
 
 Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
-  PlanRel, Err: String;
-  I, KeepHeading, SelectIndex: Integer;
+  PlanRel, Err, Summary: String;
+  I, KeepHeading, SelectIndex, NotStarted, InProgress, Complete: Integer;
+  Section: TPlanSection;
+
+  Procedure ShowPlanCounts;
+  Begin
+    If Not Assigned(BuildStatusLabel) Then
+      Exit;
+    Summary := Format('%d not started · %d in progress · %d complete', [NotStarted, InProgress, Complete]);
+    If (NotStarted + InProgress + Complete) = 0 Then
+      Summary := Summary + '  ·  no actionable items';
+    BuildStatusLabel.Caption := Summary;
+  End;
+
 Begin
+  If Assigned(BuildStatusLabel) Then
+    BuildStatusLabel.Caption := '';
   If Not Assigned(BuildTodoList) Then
     Exit;
   PlanRel := GetActivePlanRelativePath;
@@ -1766,10 +1780,30 @@ Begin
           '(No plan sections. Add ## context headings, and ### items whose next non-empty line is ' +
           'Status: not started | in progress | complete.)');
         FBuildSelectedIndex := -1;
+        NotStarted := 0;
+        InProgress := 0;
+        Complete := 0;
+        ShowPlanCounts;
         Exit;
       End;
+    NotStarted := 0;
+    InProgress := 0;
+    Complete := 0;
     For I := 0 To BuildSections.Count - 1 Do
-      BuildTodoList.Items.Add(FormatPlanSectionTile(TPlanSection(BuildSections[I])));
+      Begin
+        Section := TPlanSection(BuildSections[I]);
+        BuildTodoList.Items.Add(FormatPlanSectionTile(Section));
+        If Not Section.Actionable Then
+          Continue;
+        Case Section.Status Of
+          pssNotStarted: Inc(NotStarted);
+          pssInProgress: Inc(InProgress);
+          pssComplete: Inc(Complete);
+        Else
+          { }
+        End;
+      End;
+    ShowPlanCounts;
     SelectIndex := -1;
     If KeepHeading >= 0 Then
       For I := 0 To BuildSections.Count - 1 Do
@@ -1847,8 +1881,7 @@ End;
 
 Procedure TProjectAssistantForm.SetBuildStatusFeedback(Const MessageText: String);
 Begin
-  If Assigned(BuildStatusLabel) Then
-    BuildStatusLabel.Caption := MessageText;
+  { The status label is the plan count line. Selection and agent notes stay on the footer. }
   StatusFooter.SetRightText(MessageText);
   WorkflowLogger.Info('ProjectAssistant', 'Build work: ' + MessageText);
 End;
