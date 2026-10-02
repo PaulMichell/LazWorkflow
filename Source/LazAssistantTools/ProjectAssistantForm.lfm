@@ -507,7 +507,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = BuildStatusLabel
             Left = 4
-            Height = 405
+            Height = 427
             Top = 40
             Width = 286
             Anchors = [akTop, akLeft, akRight, akBottom]
@@ -528,14 +528,15 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = OpenPlanSheetButton
             Left = 4
-            Height = 40
-            Top = 449
+            Height = 18
+            Top = 471
             Width = 286
+            Alignment = taCenter
             Anchors = [akLeft, akRight, akBottom]
-            AutoSize = False
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
+            Caption = '0 not started · 0 in progress · 0 complete'
             ParentColor = False
             WordWrap = True
           end
