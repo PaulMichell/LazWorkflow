@@ -1153,6 +1153,10 @@ Begin
     Options.ProjectRoot := ProjectAssistantRoot;
   Options.Model := FModel;
   Options.ReasoningEffort := FReasoningEffort;
+  Options.AnswerVerbosity := Svc.AnswerVerbosity;
+  Options.MaxOutputTokens := Svc.MaxOutputTokens;
+  Options.SearchMode := Svc.SearchMode;
+  Options.SearchCitations := Svc.SearchCitations;
   If FUseResponses Then
     Begin
       Options.ToolsJson := CompletionsToolsToResponsesTools(FToolsJson);

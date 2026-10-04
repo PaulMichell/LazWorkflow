@@ -147,6 +147,10 @@ Begin
     Chat.AutoNewChatAtContextLimit := True;
     Chat.ShowThinking := False;
     Chat.ShowToolCalls := False;
+    Chat.SearchMode := 'auto';
+    Chat.SearchCitations := True;
+    Chat.AnswerVerbosity := 'low';
+    Chat.MaxOutputTokens := 4096;
     Connections.EnsureBuiltinGrok;
     Chat.SaveWithConnections(Connections);
   Finally
@@ -172,6 +176,10 @@ Begin
       Assigned(Section) And Section.Get('auto_new_chat_at_limit', False));
     Check('assistant show_thinking written', Assigned(Section) And (Not Section.Get('show_thinking', True)));
     Check('assistant show_tool_calls written', Assigned(Section) And (Not Section.Get('show_tool_calls', True)));
+    Check('assistant search_mode written', Assigned(Section) And (Section.Get('search_mode', '') = 'auto'));
+    Check('assistant search_citations written', Assigned(Section) And Section.Get('search_citations', False));
+    Check('assistant answer_verbosity written', Assigned(Section) And (Section.Get('answer_verbosity', '') = 'low'));
+    Check('assistant max_output_tokens written', Assigned(Section) And (Section.Get('max_output_tokens', 0) = 4096));
   Finally
     Section.Free;
   End;

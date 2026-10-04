@@ -11,7 +11,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel, ComCtrls, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
+  ButtonPanel, ComCtrls, Spin, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
 
 Type
   TAssistantSettingsForm = Class(TForm)
@@ -31,6 +31,13 @@ Type
     ThinkingCombo: TComboBox;
     ApprovalLabel: TLabel;
     ApprovalCombo: TComboBox;
+    SearchLabel: TLabel;
+    SearchCombo: TComboBox;
+    CitationsCheck: TCheckBox;
+    VerbosityLabel: TLabel;
+    VerbosityCombo: TComboBox;
+    MaxOutputLabel: TLabel;
+    MaxOutputEdit: TSpinEdit;
     ApiBaseLabel: TLabel;
     ApiBaseEdit: TEdit;
     HintLabel: TLabel;
@@ -49,6 +56,8 @@ Type
     Procedure RefreshModelsButtonClick(Sender: TObject);
     Procedure SpellButtonClick(Sender: TObject);
     Procedure EnsureExtraControls;
+    Procedure GrokModelSelectionChange(Sender: TObject; User: Boolean);
+    Procedure GrokSearchModeChange(Sender: TObject);
   Private
     Connections: TAssistantConnections;
     ConnectionList: TListBox;
@@ -59,7 +68,9 @@ Type
     SpellFrame: TSpellCheckerSettingsFrame;
     TestFrame: TAssistantTestSettingsFrame;
     SelectedConnection: Integer;
+    FFillingModels: Boolean;
     Procedure BuildSettingsPages;
+    Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
     Procedure GeneralPageResize(Sender: TObject);
     Procedure RefreshConnections;
     Procedure StoreConnection;
@@ -84,7 +95,7 @@ Implementation
 
 Uses AssistantWorkTarget,
   AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
-  AssistantConversation, ProjectAssistantForm,
+  AssistantConversation, ProjectAssistantForm, AssistantXaiProvider,
   LCLIntf, SpellCheckerSettingsForm, LazIDEIntf;
 
 Procedure AddFallbackModels(List: TStrings);
@@ -100,17 +111,39 @@ End;
 Procedure SelectModelInList(List: TListBox; Const ModelName: String);
 Var
   I: Integer;
+  Wanted: String;
 Begin
-  If ModelName = '' Then
+  Wanted := XaiModelIdFromDisplay(ModelName);
+  If Wanted = '' Then
     Exit;
-  I := List.Items.IndexOf(ModelName);
-  If I >= 0 Then
-    List.ItemIndex := I
+  For I := 0 To List.Items.Count - 1 Do
+    If SameText(XaiModelIdFromDisplay(List.Items[I]), Wanted) Then
+      Begin
+        List.ItemIndex := I;
+        Exit;
+      End;
+  List.Items.Insert(0, XaiModelDisplayText(Wanted));
+  List.ItemIndex := 0;
+End;
+
+Procedure DecorateModelList(List: TStrings);
+Var
+  I: Integer;
+Begin
+  For I := 0 To List.Count - 1 Do
+    List[I] := XaiModelDisplayText(XaiModelIdFromDisplay(List[I]));
+End;
+
+Function EffortFromCaption(Const Caption: String): String;
+Begin
+  If SameText(Caption, 'Low') Then
+    Result := 'low'
+  Else If SameText(Caption, 'Medium') Then
+    Result := 'medium'
+  Else If SameText(Caption, 'XHigh') Then
+    Result := 'xhigh'
   Else
-    Begin
-      List.Items.Insert(0, ModelName);
-      List.ItemIndex := 0;
-    End;
+    Result := 'high';
 End;
 
 Procedure ShowAssistantSettingsForm;
@@ -208,6 +241,68 @@ Begin
   AutoNewChatDefaultCheck.ShowHint := True;
   AutoNewChatDefaultCheck.Hint :=
     'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.';
+  If Not Assigned(SearchCombo) Then
+    Begin
+      SearchLabel := TLabel.Create(Self);
+      SearchLabel.Parent := Self;
+      SearchLabel.Left := 16;
+      SearchLabel.Caption := 'Live search:';
+      SearchCombo := TComboBox.Create(Self);
+      SearchCombo.Parent := Self;
+      SearchCombo.Left := 16;
+      SearchCombo.Width := 220;
+      SearchCombo.Style := csDropDownList;
+      SearchCombo.Items.Add('Off');
+      SearchCombo.Items.Add('Auto');
+      SearchCombo.Items.Add('On');
+      SearchCombo.ItemIndex := 0;
+      SearchCombo.OnChange := @GrokSearchModeChange;
+      CitationsCheck := TCheckBox.Create(Self);
+      CitationsCheck.Parent := Self;
+      CitationsCheck.Left := 16;
+      CitationsCheck.Width := 420;
+      CitationsCheck.Caption := 'Return citations';
+      VerbosityLabel := TLabel.Create(Self);
+      VerbosityLabel.Parent := Self;
+      VerbosityLabel.Left := 16;
+      VerbosityLabel.Caption := 'Answer length:';
+      VerbosityCombo := TComboBox.Create(Self);
+      VerbosityCombo.Parent := Self;
+      VerbosityCombo.Left := 16;
+      VerbosityCombo.Width := 220;
+      VerbosityCombo.Style := csDropDownList;
+      VerbosityCombo.Items.Add('Low');
+      VerbosityCombo.Items.Add('Medium');
+      VerbosityCombo.Items.Add('High');
+      VerbosityCombo.ItemIndex := 1;
+      MaxOutputLabel := TLabel.Create(Self);
+      MaxOutputLabel.Parent := Self;
+      MaxOutputLabel.Left := 16;
+      MaxOutputLabel.Caption := 'Max output tokens (0 = provider default):';
+      MaxOutputEdit := TSpinEdit.Create(Self);
+      MaxOutputEdit.Parent := Self;
+      MaxOutputEdit.Left := 16;
+      MaxOutputEdit.Width := 120;
+      MaxOutputEdit.MinValue := 0;
+      MaxOutputEdit.MaxValue := 1000000;
+      MaxOutputEdit.Increment := 1024;
+      MaxOutputEdit.Value := 0;
+    End;
+  SearchLabel.Top := 430;
+  SearchCombo.Top := 450;
+  CitationsCheck.Top := 486;
+  VerbosityLabel.Top := 520;
+  VerbosityCombo.Top := 540;
+  MaxOutputLabel.Top := 576;
+  MaxOutputEdit.Top := 596;
+  SearchCombo.ShowHint := True;
+  SearchCombo.Hint := 'Off sends no search. Auto lets Grok decide. On asks it to search on the completions fallback.';
+  CitationsCheck.ShowHint := True;
+  CitationsCheck.Hint := 'Ask the completions fallback to return source citations. The Responses path returns search sources with the search tools.';
+  VerbosityCombo.ShowHint := True;
+  VerbosityCombo.Hint := 'Length of the visible answer. Separate from reasoning level. Sent on the Responses path.';
+  MaxOutputEdit.ShowHint := True;
+  MaxOutputEdit.Hint := '0 uses the provider default.';
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
@@ -216,6 +311,8 @@ Begin
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
   EnsureExtraControls;
+  If Assigned(ModelList) Then
+    ModelList.OnSelectionChange := @GrokModelSelectionChange;
   BuildSettingsPages;
   PopulateSkills;
   RefreshAuthStatus;
@@ -281,9 +378,16 @@ Begin
   LabelControl := TLabel.Create(Self); LabelControl.Parent := GeneralPage;
   LabelControl.SetBounds(20, 432, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
   LabelControl.Caption := 'These preferences apply across connections. Sign-in and sign-out actions take effect immediately; Cancel discards preference edits. Selecting a connection does not sign out other accounts.';
-  ApiBaseLabel.Top := 448; ApiBaseEdit.Top := 470;
-  ManualLabel.Top := 514; ManualEdit.Top := 538; PasteCodeButton.Top := 538;
-  HintLabel.Top := 582;
+  If Assigned(SearchLabel) Then
+    Begin
+      SearchLabel.Top := 430; SearchCombo.Top := 450;
+      CitationsCheck.Top := 486;
+      VerbosityLabel.Top := 520; VerbosityCombo.Top := 540;
+      MaxOutputLabel.Top := 576; MaxOutputEdit.Top := 596;
+    End;
+  ApiBaseLabel.Top := 640; ApiBaseEdit.Top := 662;
+  ManualLabel.Top := 706; ManualEdit.Top := 730; PasteCodeButton.Top := 730;
+  HintLabel.Top := 774;
   ThinkingLabel.Caption := 'Grok reasoning level'; ApprovalLabel.Caption := 'Grok tool approvals';
   CodexFrame := TCodexConnectionFrame.Create(Self); CodexFrame.Parent := Details; CodexFrame.Align := alClient;
   RefreshConnections;
@@ -439,6 +543,7 @@ Var
   ErrorText, CurrentModel: String;
   Ok: Boolean;
 Begin
+  FFillingModels := True;
   CurrentModel := AssistantConfigDefaultModel;
   If Assigned(AssistantChatConfig) And (Trim(AssistantChatConfig.Model) <> '') Then
     CurrentModel := AssistantChatConfig.Model;
@@ -470,10 +575,85 @@ Begin
       ModelHintLabel.Caption := Format('%d models available. Select one, then OK.',
         [ModelList.Items.Count]);
 
+    DecorateModelList(ModelList.Items);
     SelectModelInList(ModelList, CurrentModel);
+    If Assigned(AssistantChatConfig) Then
+      RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel)
+    Else
+      RefreshGrokReasoningChoices('high');
   Finally
     ModelList.Items.EndUpdate;
+    FFillingModels := False;
   End;
+End;
+
+Procedure TAssistantSettingsForm.GrokModelSelectionChange(Sender: TObject; User: Boolean);
+Var
+  Effort: String;
+Begin
+  If (Not User) Or FFillingModels Or (Not Assigned(ThinkingCombo)) Then
+    Exit;
+  Effort := 'high';
+  If ThinkingCombo.ItemIndex >= 0 Then
+    Effort := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex]);
+  RefreshGrokReasoningChoices(Effort);
+End;
+
+Procedure TAssistantSettingsForm.GrokSearchModeChange(Sender: TObject);
+Begin
+  If Assigned(CitationsCheck) And Assigned(SearchCombo) Then
+    CitationsCheck.Enabled := SearchCombo.ItemIndex > 0;
+End;
+
+Procedure TAssistantSettingsForm.RefreshGrokReasoningChoices(Const PreferredEffort: String);
+Var
+  ModelId, Effort: String;
+  Procedure AddLevel(Const Level, Caption: String);
+  Begin
+    If Not XaiModelAllowsEffort(ModelId, Level) Then
+      Exit;
+    ThinkingCombo.Items.Add(Caption);
+  End;
+  Function IndexOfCaption(Const Caption: String): Integer;
+  Begin
+    Result := ThinkingCombo.Items.IndexOf(Caption);
+  End;
+Begin
+  If Not Assigned(ThinkingCombo) Then
+    Exit;
+  ModelId := '';
+  If Assigned(ModelList) And (ModelList.ItemIndex >= 0) Then
+    ModelId := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
+  Effort := LowerCase(Trim(PreferredEffort));
+  If Effort = '' Then
+    Effort := 'high';
+  ThinkingCombo.Items.BeginUpdate;
+  Try
+    ThinkingCombo.Items.Clear;
+    AddLevel('low', 'Low');
+    AddLevel('medium', 'Medium');
+    AddLevel('high', 'High');
+    AddLevel('xhigh', 'XHigh');
+    If ThinkingCombo.Items.Count = 0 Then
+      Begin
+        ThinkingCombo.Items.Add('Low');
+        ThinkingCombo.Items.Add('Medium');
+        ThinkingCombo.Items.Add('High');
+        ThinkingCombo.Items.Add('XHigh');
+      End;
+  Finally
+    ThinkingCombo.Items.EndUpdate;
+  End;
+  If SameText(Effort, 'low') And (IndexOfCaption('Low') >= 0) Then
+    ThinkingCombo.ItemIndex := IndexOfCaption('Low')
+  Else If SameText(Effort, 'medium') And (IndexOfCaption('Medium') >= 0) Then
+    ThinkingCombo.ItemIndex := IndexOfCaption('Medium')
+  Else If SameText(Effort, 'xhigh') And (IndexOfCaption('XHigh') >= 0) Then
+    ThinkingCombo.ItemIndex := IndexOfCaption('XHigh')
+  Else If IndexOfCaption('High') >= 0 Then
+    ThinkingCombo.ItemIndex := IndexOfCaption('High')
+  Else
+    ThinkingCombo.ItemIndex := ThinkingCombo.Items.Count - 1;
 End;
 
 Procedure TAssistantSettingsForm.RefreshAuthStatus;
@@ -520,13 +700,30 @@ Begin
     ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
   If Assigned(ShowToolCallsCheck) Then
     ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
-  Case AssistantChatConfig.GetThinkingLevel Of
-    atlLow: ThinkingCombo.ItemIndex := 0;
-    atlMedium: ThinkingCombo.ItemIndex := 1;
-    atlXHigh: ThinkingCombo.ItemIndex := 3;
-  Else
-    ThinkingCombo.ItemIndex := 2;
-  End;
+  RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel);
+  If Assigned(SearchCombo) Then
+    Begin
+      If SameText(AssistantChatConfig.SearchMode, 'on') Then
+        SearchCombo.ItemIndex := 2
+      Else If SameText(AssistantChatConfig.SearchMode, 'auto') Then
+        SearchCombo.ItemIndex := 1
+      Else
+        SearchCombo.ItemIndex := 0;
+      GrokSearchModeChange(Nil);
+    End;
+  If Assigned(CitationsCheck) Then
+    CitationsCheck.Checked := AssistantChatConfig.SearchCitations;
+  If Assigned(VerbosityCombo) Then
+    Begin
+      If SameText(AssistantChatConfig.AnswerVerbosity, 'low') Then
+        VerbosityCombo.ItemIndex := 0
+      Else If SameText(AssistantChatConfig.AnswerVerbosity, 'high') Then
+        VerbosityCombo.ItemIndex := 2
+      Else
+        VerbosityCombo.ItemIndex := 1;
+    End;
+  If Assigned(MaxOutputEdit) Then
+    MaxOutputEdit.Value := AssistantChatConfig.MaxOutputTokens;
   Case AssistantChatConfig.GetApprovalMode Of
     aamAsk: ApprovalCombo.ItemIndex := 0;
     aamAuto: ApprovalCombo.ItemIndex := 1;
@@ -568,7 +765,7 @@ Begin
 
   ModelName := '';
   If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
-    ModelName := Trim(ModelList.Items[ModelList.ItemIndex]);
+    ModelName := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
   If ModelName = '' Then
     ModelName := AssistantConfigDefaultModel;
   AssistantChatConfig.Model := ModelName;
@@ -589,13 +786,32 @@ Begin
     AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
   If Assigned(ShowToolCallsCheck) Then
     AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
-  Case ThinkingCombo.ItemIndex Of
-    0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
-    1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);
-    3: AssistantChatConfig.SetThinkingLevelEnum(atlXHigh);
+  If Assigned(SearchCombo) Then
+    Begin
+      Case SearchCombo.ItemIndex Of
+        1: AssistantChatConfig.SearchMode := 'auto';
+        2: AssistantChatConfig.SearchMode := 'on';
+      Else
+        AssistantChatConfig.SearchMode := 'off';
+      End;
+    End;
+  If Assigned(CitationsCheck) Then
+    AssistantChatConfig.SearchCitations := CitationsCheck.Checked;
+  If Assigned(VerbosityCombo) Then
+    Begin
+      Case VerbosityCombo.ItemIndex Of
+        0: AssistantChatConfig.AnswerVerbosity := 'low';
+        2: AssistantChatConfig.AnswerVerbosity := 'high';
+      Else
+        AssistantChatConfig.AnswerVerbosity := 'medium';
+      End;
+    End;
+  If Assigned(MaxOutputEdit) Then
+    AssistantChatConfig.MaxOutputTokens := MaxOutputEdit.Value;
+  If ThinkingCombo.ItemIndex >= 0 Then
+    AssistantChatConfig.ThinkingLevel := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex])
   Else
     AssistantChatConfig.SetThinkingLevelEnum(atlHigh);
-  End;
   Case ApprovalCombo.ItemIndex Of
     0: AssistantChatConfig.SetApprovalModeEnum(aamAsk);
     1: AssistantChatConfig.SetApprovalModeEnum(aamAuto);

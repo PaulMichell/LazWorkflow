@@ -83,6 +83,13 @@ Type
     IncludeEncryptedReasoning: Boolean;
     { Project root used to read upload derivatives. Empty when the item has no images. }
     ProjectRoot: String;
+    { low | medium | high. Empty omits text.verbosity (Responses only). }
+    AnswerVerbosity: String;
+    { 0 omits the output cap. }
+    MaxOutputTokens: Integer;
+    { off | auto | on. Empty or off sends no search. }
+    SearchMode: String;
+    SearchCitations: Boolean;
   End;
 
 Function JsonEscapeText(Const SourceText: String): String;
@@ -220,6 +227,10 @@ Begin
   Result.ReasoningEffort := 'high';
   Result.IncludeEncryptedReasoning := True;
   Result.ProjectRoot := '';
+  Result.AnswerVerbosity := '';
+  Result.MaxOutputTokens := 0;
+  Result.SearchMode := '';
+  Result.SearchCitations := False;
 End;
 
 Function SamplerInputMessage(Const Role, Content: String): TSamplerInputItem;
@@ -377,12 +388,46 @@ Begin
   End;
 End;
 
+Function ActiveSearchMode(Const Mode: String): String;
+Begin
+  Result := LowerCase(Trim(Mode));
+  If (Result <> 'auto') And (Result <> 'on') Then
+    Result := '';
+End;
+
+Function ActiveVerbosity(Const Value: String): String;
+Begin
+  Result := LowerCase(Trim(Value));
+  If (Result <> 'low') And (Result <> 'medium') And (Result <> 'high') Then
+    Result := '';
+End;
+
+Function ToolsWithGrokSearch(Const ToolsJson, SearchMode: String): String;
+Const
+  SearchTools = '{"type":"web_search"},{"type":"x_search"}';
+Begin
+  Result := ToolsJson;
+  If ActiveSearchMode(SearchMode) = '' Then
+    Exit;
+  If Pos('"web_search"', LowerCase(ToolsJson)) > 0 Then
+    Exit;
+  If Trim(ToolsJson) = '' Then
+    Result := '[' + SearchTools + ']'
+  Else If ToolsJson[Length(ToolsJson)] = ']' Then
+    Begin
+      If Length(Trim(ToolsJson)) <= 2 Then
+        Result := '[' + SearchTools + ']'
+      Else
+        Result := Copy(ToolsJson, 1, Length(ToolsJson) - 1) + ',' + SearchTools + ']';
+    End;
+End;
+
 Function BuildResponsesRequestJson(Const Items: TSamplerInputItemArray;
   Const Options: TSamplerRequestOptions): String;
 Var
   Parts: Array Of String;
   I, Count: Integer;
-  Effort: String;
+  Effort, Tools: String;
 Begin
   SetLength(Parts, Length(Items));
   Count := 0;
@@ -399,8 +444,15 @@ Begin
   Effort := LowerCase(Trim(Options.ReasoningEffort));
   If Effort <> '' Then
     Result := Result + ',"reasoning":{"effort":"' + JsonEscapeText(Effort) + '"}';
-  If Trim(Options.ToolsJson) <> '' Then
-    Result := Result + ',"tools":' + Options.ToolsJson;
+  Tools := Options.ToolsJson;
+  If ActiveSearchMode(Options.SearchMode) <> '' Then
+    Tools := ToolsWithGrokSearch(Tools, Options.SearchMode);
+  If Trim(Tools) <> '' Then
+    Result := Result + ',"tools":' + Tools;
+  If Options.MaxOutputTokens > 0 Then
+    Result := Result + ',"max_output_tokens":' + IntToStr(Options.MaxOutputTokens);
+  If ActiveVerbosity(Options.AnswerVerbosity) <> '' Then
+    Result := Result + ',"text":{"verbosity":"' + JsonEscapeText(ActiveVerbosity(Options.AnswerVerbosity)) + '"}';
   Result := Result + '}';
 End;
 
@@ -409,7 +461,7 @@ Function BuildChatCompletionsRequestJson(Const Items: TSamplerInputItemArray;
 Var
   Parts: Array Of String;
   I, Count: Integer;
-  Effort: String;
+  Effort, Mode: String;
 Begin
   SetLength(Parts, Length(Items));
   Count := 0;
@@ -426,6 +478,16 @@ Begin
   Effort := LowerCase(Trim(Options.ReasoningEffort));
   If Effort <> '' Then
     Result := Result + ',"reasoning_effort":"' + JsonEscapeText(Effort) + '"';
+  Mode := ActiveSearchMode(Options.SearchMode);
+  If Mode <> '' Then
+    Begin
+      Result := Result + ',"search_parameters":{"mode":"' + JsonEscapeText(Mode) + '"';
+      If Options.SearchCitations Then
+        Result := Result + ',"return_citations":true';
+      Result := Result + '}';
+    End;
+  If Options.MaxOutputTokens > 0 Then
+    Result := Result + ',"max_completion_tokens":' + IntToStr(Options.MaxOutputTokens);
   Result := Result + '}';
 End;
 

@@ -20,6 +20,13 @@ Function CreateXaiModelProvider: IAssistantModelProvider;
 Procedure RestoreXaiCredentials(Config: TAssistantConfig);
 /// Last successful model list. xiiUnknown means no explicit input-modality list: allow attach.
 Function XaiModelImageInput(Const ModelId: String): TXaiImageInput;
+/// 0 when the last model list did not advertise a context length.
+Function XaiModelContextTokens(Const ModelId: String): Integer;
+/// Comma-separated low,medium,high,xhigh. Empty means the list did not advertise efforts.
+Function XaiModelReasoningEfforts(Const ModelId: String): String;
+Function XaiModelAllowsEffort(Const ModelId, Effort: String): Boolean;
+Function XaiModelDisplayText(Const ModelId: String): String;
+Function XaiModelIdFromDisplay(Const DisplayText: String): String;
 
 Implementation
 
@@ -101,8 +108,260 @@ Begin
   If Assigned(Node) And (Node.JSONType <> jtNull) Then Result := Node.AsString;
 End;
 
+Const
+  XaiModelDisplayMark = '  ·  ';
+
 Var
   ImageInputIds: TStringList;
+  ModelFacts: TStringList;
+
+Function ModelFactKey(Const ModelId: String): String;
+Begin
+  Result := LowerCase(Trim(ModelId));
+End;
+
+Function FormatTokenCount(Value: Integer): String;
+Var
+  Text: String;
+  I, Remaining: Integer;
+Begin
+  Text := IntToStr(Value);
+  Result := '';
+  For I := 1 To Length(Text) Do
+    Begin
+      Remaining := Length(Text) - I + 1;
+      If (I > 1) And (Remaining Mod 3 = 0) Then
+        Result := Result + ',';
+      Result := Result + Text[I];
+    End;
+End;
+
+Function FactContext(Const PackedValue: String): Integer;
+Var
+  Mark: Integer;
+Begin
+  Mark := Pos(#9, PackedValue);
+  If Mark < 1 Then
+    Result := StrToIntDef(PackedValue, 0)
+  Else
+    Result := StrToIntDef(Copy(PackedValue, 1, Mark - 1), 0);
+End;
+
+Function FactEfforts(Const PackedValue: String): String;
+Var
+  Mark: Integer;
+Begin
+  Mark := Pos(#9, PackedValue);
+  If Mark < 1 Then
+    Result := ''
+  Else
+    Result := Copy(PackedValue, Mark + 1, MaxInt);
+End;
+
+Function XaiModelContextTokens(Const ModelId: String): Integer;
+Var
+  Index: Integer;
+  Key: String;
+Begin
+  Result := 0;
+  Key := ModelFactKey(ModelId);
+  If (Key = '') Or (Not Assigned(ModelFacts)) Then
+    Exit;
+  Index := ModelFacts.IndexOfName(Key);
+  If Index < 0 Then
+    Exit;
+  Result := FactContext(ModelFacts.ValueFromIndex[Index]);
+End;
+
+Function XaiModelReasoningEfforts(Const ModelId: String): String;
+Var
+  Index: Integer;
+  Key: String;
+Begin
+  Result := '';
+  Key := ModelFactKey(ModelId);
+  If (Key = '') Or (Not Assigned(ModelFacts)) Then
+    Exit;
+  Index := ModelFacts.IndexOfName(Key);
+  If Index < 0 Then
+    Exit;
+  Result := FactEfforts(ModelFacts.ValueFromIndex[Index]);
+End;
+
+Function XaiModelAllowsEffort(Const ModelId, Effort: String): Boolean;
+Var
+  Listed, Needle: String;
+Begin
+  Listed := XaiModelReasoningEfforts(ModelId);
+  If Listed = '' Then
+    Exit(True);
+  Needle := LowerCase(Trim(Effort));
+  Result := Pos(',' + Needle + ',', ',' + Listed + ',') > 0;
+End;
+
+Function XaiModelIdFromDisplay(Const DisplayText: String): String;
+Var
+  Mark: Integer;
+Begin
+  Mark := Pos(XaiModelDisplayMark, DisplayText);
+  If Mark > 1 Then
+    Result := Trim(Copy(DisplayText, 1, Mark - 1))
+  Else
+    Result := Trim(DisplayText);
+End;
+
+Function XaiModelDisplayText(Const ModelId: String): String;
+Var
+  Tokens: Integer;
+Begin
+  Result := Trim(ModelId);
+  Tokens := XaiModelContextTokens(Result);
+  If Tokens > 0 Then
+    Result := Result + XaiModelDisplayMark + FormatTokenCount(Tokens) + ' context';
+End;
+
+Procedure RememberModelFacts(List: TStringList; Const ModelId: String; ContextTokens: Integer;
+  Const Efforts: String);
+Var
+  Key: String;
+Begin
+  If Not Assigned(List) Then
+    Exit;
+  Key := ModelFactKey(ModelId);
+  If Key = '' Then
+    Exit;
+  List.Values[Key] := IntToStr(ContextTokens) + #9 + LowerCase(Trim(Efforts));
+End;
+
+Function FirstPositiveInt(Obj: TJSONObject; Const Names: Array Of String): Integer;
+Var
+  I: Integer;
+  Node: TJSONData;
+Begin
+  Result := 0;
+  If Not Assigned(Obj) Then
+    Exit;
+  For I := 0 To High(Names) Do
+    Begin
+      Node := Obj.Find(Names[I]);
+      If Not Assigned(Node) Or (Node.JSONType = jtNull) Then
+        Continue;
+      If Node.JSONType = jtNumber Then
+        Result := Node.AsInteger
+      Else
+        Result := StrToIntDef(Trim(Node.AsString), 0);
+      If Result > 0 Then
+        Exit;
+    End;
+  Result := 0;
+End;
+
+Function EffortToken(Const Raw: String): String;
+Begin
+  Result := LowerCase(Trim(Raw));
+  Result := StringReplace(Result, '_', '', [rfReplaceAll]);
+  Result := StringReplace(Result, '-', '', [rfReplaceAll]);
+  Result := StringReplace(Result, ' ', '', [rfReplaceAll]);
+  If (Result = 'low') Or (Result = 'medium') Or (Result = 'high') Or (Result = 'xhigh') Then
+    Exit;
+  Result := '';
+End;
+
+Procedure AppendEffort(Var Efforts: String; Const Raw: String);
+Var
+  Token: String;
+Begin
+  Token := EffortToken(Raw);
+  If Token = '' Then
+    Exit;
+  If Pos(',' + Token + ',', ',' + Efforts + ',') > 0 Then
+    Exit;
+  If Efforts <> '' Then
+    Efforts := Efforts + ',';
+  Efforts := Efforts + Token;
+End;
+
+Function EffortsFromNode(Node: TJSONData): String;
+Var
+  I: Integer;
+  Item: TJSONData;
+  Text: String;
+Begin
+  Result := '';
+  If Not Assigned(Node) Or (Node.JSONType = jtNull) Then
+    Exit;
+  If Node.JSONType = jtString Then
+    Begin
+      Text := Node.AsString;
+      While Text <> '' Do
+        Begin
+          I := Pos(',', Text);
+          If I < 1 Then
+            Begin
+              AppendEffort(Result, Text);
+              Exit;
+            End;
+          AppendEffort(Result, Copy(Text, 1, I - 1));
+          Delete(Text, 1, I);
+        End;
+      Exit;
+    End;
+  If Node.JSONType <> jtArray Then
+    Exit;
+  For I := 0 To TJSONArray(Node).Count - 1 Do
+    Begin
+      Item := TJSONArray(Node).Items[I];
+      If Item.JSONType = jtString Then
+        AppendEffort(Result, Item.AsString)
+      Else If Item Is TJSONObject Then
+        Begin
+          Text := JsonStringField(TJSONObject(Item), 'reasoningEffort');
+          If Text = '' Then
+            Text := JsonStringField(TJSONObject(Item), 'reasoning_effort');
+          If Text = '' Then
+            Text := JsonStringField(TJSONObject(Item), 'id');
+          If Text = '' Then
+            Text := JsonStringField(TJSONObject(Item), 'name');
+          AppendEffort(Result, Text);
+        End;
+    End;
+End;
+
+Procedure NoteLanguageModel(List: TStringList; Obj: TJSONObject; Const ModelId: String);
+Var
+  ContextTokens: Integer;
+  Efforts: String;
+  Node, AliasNode: TJSONData;
+  Aliases: TJSONArray;
+  I: Integer;
+Begin
+  If (Not Assigned(List)) Or (Not Assigned(Obj)) Or (Trim(ModelId) = '') Then
+    Exit;
+  ContextTokens := FirstPositiveInt(Obj, ['context_length', 'contextLength', 'max_context_length',
+    'maxContextLength', 'max_prompt_length', 'maxPromptLength', 'prompt_token_limit', 'promptTokenLimit']);
+  Node := Obj.Find('supported_reasoning_efforts');
+  If Node = Nil Then
+    Node := Obj.Find('supportedReasoningEfforts');
+  If Node = Nil Then
+    Node := Obj.Find('reasoning_efforts');
+  If Node = Nil Then
+    Node := Obj.Find('reasoningEfforts');
+  Efforts := EffortsFromNode(Node);
+  RememberModelFacts(List, ModelId, ContextTokens, Efforts);
+  AliasNode := Obj.Find('aliases');
+  If (AliasNode = Nil) Or (AliasNode.JSONType <> jtArray) Then
+    Exit;
+  Aliases := TJSONArray(AliasNode);
+  For I := 0 To Aliases.Count - 1 Do
+    If Aliases.Items[I].JSONType = jtString Then
+      RememberModelFacts(List, Aliases.Items[I].AsString, ContextTokens, Efforts);
+End;
+
+Procedure PublishModelFacts(Noted: TStringList);
+Begin
+  FreeAndNil(ModelFacts);
+  ModelFacts := Noted;
+End;
 
 Function XaiModelImageInput(Const ModelId: String): TXaiImageInput;
 Var
@@ -209,7 +468,7 @@ Var
   ModelId: String;
   Paths: Array[0..1] Of String;
   PathIdx: Integer;
-  Noted: TStringList;
+  Noted, Facts: TStringList;
 Begin
   Result := False;
   ErrorText := '';
@@ -229,10 +488,13 @@ Begin
   AuthHdr := 'Authorization: Bearer ' + AccessToken;
   Noted := TStringList.Create;
   Noted.NameValueSeparator := '=';
+  Facts := TStringList.Create;
+  Facts.NameValueSeparator := '=';
   Try
     For PathIdx := 0 To High(Paths) Do
       Begin
         Noted.Clear;
+        Facts.Clear;
       Body := '';
       Data := Nil;
       Try
@@ -265,6 +527,7 @@ Begin
                   Obj := TJSONObject(Item);
                   ModelId := JsonStringField(Obj, 'id');
                   NoteExplicitImageInput(Noted, Obj, ModelId);
+                  NoteLanguageModel(Facts, Obj, ModelId);
                   { Skip pure image-generation entries when /models is used. }
                   If (Obj.Find('image_price') <> Nil) And
                     (Obj.Find('completion_text_token_price') = Nil) And
@@ -285,6 +548,8 @@ Begin
                 Format('Listed %d models via %s', [ModelIds.Count, Paths[PathIdx]]));
               PublishImageInput(Noted);
               Noted := Nil;
+              PublishModelFacts(Facts);
+              Facts := Nil;
               Exit;
             End;
         Except
@@ -297,6 +562,7 @@ Begin
     End;
   Finally
     Noted.Free;
+    Facts.Free;
   End;
   If ErrorText = '' Then
     ErrorText := 'No chat models returned by the API.';
@@ -382,5 +648,6 @@ End;
 
 Finalization
   FreeAndNil(ImageInputIds);
+  FreeAndNil(ModelFacts);
 
 End.

@@ -41,6 +41,10 @@ Type
     FAutoNewChatAtContextLimit: Boolean;
     FShowThinking: Boolean;
     FShowToolCalls: Boolean;
+    FSearchMode: String;
+    FSearchCitations: Boolean;
+    FAnswerVerbosity: String;
+    FMaxOutputTokens: Integer;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -79,6 +83,14 @@ Type
     Property ShowThinking: Boolean Read FShowThinking Write FShowThinking;
     { Show tool-call blocks in the conversation trace. }
     Property ShowToolCalls: Boolean Read FShowToolCalls Write FShowToolCalls;
+    { off | auto | on — Grok live search. Off matches the previous request. }
+    Property SearchMode: String Read FSearchMode Write FSearchMode;
+    { Ask the completions fallback to return citations. Responses search tools return sources. }
+    Property SearchCitations: Boolean Read FSearchCitations Write FSearchCitations;
+    { low | medium | high — Responses text.verbosity. }
+    Property AnswerVerbosity: String Read FAnswerVerbosity Write FAnswerVerbosity;
+    { 0 omits the cap and uses the provider default. }
+    Property MaxOutputTokens: Integer Read FMaxOutputTokens Write FMaxOutputTokens;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -100,6 +112,22 @@ Implementation
 
 Uses
   fpjson, WorkflowSettings;
+
+Function NormalizeGrokSearchMode(Const Value: String): String;
+Begin
+  Result := LowerCase(Trim(Value));
+  If (Result = 'auto') Or (Result = 'on') Then
+    Exit;
+  Result := 'off';
+End;
+
+Function NormalizeGrokVerbosity(Const Value: String): String;
+Begin
+  Result := LowerCase(Trim(Value));
+  If (Result = 'low') Or (Result = 'high') Then
+    Exit;
+  Result := 'medium';
+End;
 
 Function ThinkingLevelToStr(Level: TAssistantThinkingLevel): String;
 Begin
@@ -220,6 +248,10 @@ Begin
   FAutoNewChatAtContextLimit := False;
   FShowThinking := True;
   FShowToolCalls := True;
+  FSearchMode := 'off';
+  FSearchCitations := False;
+  FAnswerVerbosity := 'medium';
+  FMaxOutputTokens := 0;
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -265,6 +297,10 @@ Begin
   FAutoNewChatAtContextLimit := Source.AutoNewChatAtContextLimit;
   FShowThinking := Source.ShowThinking;
   FShowToolCalls := Source.ShowToolCalls;
+  FSearchMode := Source.SearchMode;
+  FSearchCitations := Source.SearchCitations;
+  FAnswerVerbosity := Source.AnswerVerbosity;
+  FMaxOutputTokens := Source.MaxOutputTokens;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -409,6 +445,10 @@ Begin
     FAutoNewChatAtContextLimit := False;
     FShowThinking := True;
     FShowToolCalls := True;
+    FSearchMode := 'off';
+    FSearchCitations := False;
+    FAnswerVerbosity := 'medium';
+    FMaxOutputTokens := 0;
     If Assigned(Connections) Then
       Connections.ClearStored;
     If Not Assigned(Section) Then
@@ -421,6 +461,14 @@ Begin
     FAutoNewChatAtContextLimit := Section.Get('auto_new_chat_at_limit', False);
     FShowThinking := Section.Get('show_thinking', True);
     FShowToolCalls := Section.Get('show_tool_calls', True);
+    FSearchMode := NormalizeGrokSearchMode(Section.Get('search_mode', 'off'));
+    FSearchCitations := Section.Get('search_citations', False);
+    FAnswerVerbosity := NormalizeGrokVerbosity(Section.Get('answer_verbosity', 'medium'));
+    FMaxOutputTokens := Section.Get('max_output_tokens', 0);
+    If FMaxOutputTokens < 0 Then
+      FMaxOutputTokens := 0;
+    If FMaxOutputTokens > 1000000 Then
+      FMaxOutputTokens := 1000000;
     SeenGrok := False;
     Node := Section.Find('connections');
     If Node Is TJSONArray Then
@@ -479,6 +527,10 @@ Begin
     Section.Add('auto_new_chat_at_limit', FAutoNewChatAtContextLimit);
     Section.Add('show_thinking', FShowThinking);
     Section.Add('show_tool_calls', FShowToolCalls);
+    Section.Add('search_mode', NormalizeGrokSearchMode(FSearchMode));
+    Section.Add('search_citations', FSearchCitations);
+    Section.Add('answer_verbosity', NormalizeGrokVerbosity(FAnswerVerbosity));
+    Section.Add('max_output_tokens', FMaxOutputTokens);
     Arr := TJSONArray.Create;
     Section.Add('connections', Arr);
     If Assigned(Connections) Then

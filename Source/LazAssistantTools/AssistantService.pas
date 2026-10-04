@@ -81,6 +81,10 @@ Type
     FMaxPromptTokens: Integer;
     FLastTrimNotice: String;
     FReasoningEffort: String;
+    FAnswerVerbosity: String;
+    FMaxOutputTokens: Integer;
+    FSearchMode: String;
+    FSearchCitations: Boolean;
     FOnTrace: TAssistantTraceNotify;
     FOrphanThreads: TFPList;
     FIsSubagent: Boolean;
@@ -198,6 +202,10 @@ Type
     Property LastTrimNotice: String Read FLastTrimNotice;
     { low | medium | high | xhigh — sent as reasoning_effort when non-empty. }
     Property ReasoningEffort: String Read FReasoningEffort Write FReasoningEffort;
+    Property AnswerVerbosity: String Read FAnswerVerbosity Write FAnswerVerbosity;
+    Property MaxOutputTokens: Integer Read FMaxOutputTokens Write FMaxOutputTokens;
+    Property SearchMode: String Read FSearchMode Write FSearchMode;
+    Property SearchCitations: Boolean Read FSearchCitations Write FSearchCitations;
   End;
 
 { Free finished abandoned actors/child services left after cancel. }
@@ -576,6 +584,13 @@ Begin
   FChild.SetEndpoint(ApiBase, Model);
   FChild.SetActiveSkill(Skill);
   FChild.ReasoningEffort := SubagentReasoningEffort(Effort);
+  If Assigned(AssistantChatConfig) Then
+    Begin
+      FChild.AnswerVerbosity := AssistantChatConfig.AnswerVerbosity;
+      FChild.MaxOutputTokens := AssistantChatConfig.MaxOutputTokens;
+      FChild.SearchMode := AssistantChatConfig.SearchMode;
+      FChild.SearchCitations := AssistantChatConfig.SearchCitations;
+    End;
   FChild.SetActiveMode(SubagentModeForKind(Request.Kind, ParentMode));
   FChild.ConfigureAsSubagent(SubagentKindName(Request.Kind));
   UserPrompt := BuildSubagentUserPrompt(Request, CompileLog);
@@ -718,6 +733,10 @@ Begin
   FMaxPromptTokens := 420000;
   FLastTrimNotice := '';
   FReasoningEffort := 'high';
+  FAnswerVerbosity := 'medium';
+  FMaxOutputTokens := 0;
+  FSearchMode := 'off';
+  FSearchCitations := False;
   SetLength(FMessages, 0);
   FStreamThread := Nil;
   FOrphanThreads := Nil;
@@ -1042,6 +1061,10 @@ Begin
   SetEndpoint(Config.ApiBase, Config.Model);
   SetActiveSkill(Config.ActiveSkill);
   FReasoningEffort := ThinkingLevelToStr(Config.GetThinkingLevel);
+  FAnswerVerbosity := Config.AnswerVerbosity;
+  FMaxOutputTokens := Config.MaxOutputTokens;
+  FSearchMode := Config.SearchMode;
+  FSearchCitations := Config.SearchCitations;
   If FProvider.BackendId = 'xai-subscription' Then
     RestoreXaiCredentials(Config);
 End;

@@ -438,6 +438,37 @@ Begin
   Check('cc reasoning_effort xhigh', Pos('"reasoning_effort":"xhigh"', Body) > 0);
 End;
 
+Procedure TestGrokModelOptions;
+Var
+  Items: TSamplerInputItemArray;
+  Options: TSamplerRequestOptions;
+  Body: String;
+Begin
+  SetLength(Items, 1);
+  Items[0] := SamplerInputMessage('user', 'Hello');
+  Options := DefaultSamplerRequestOptions;
+  Options.ToolsJson := '';
+  Options.AnswerVerbosity := 'low';
+  Options.MaxOutputTokens := 2048;
+  Options.SearchMode := 'auto';
+  Options.SearchCitations := True;
+  Body := BuildResponsesRequestJson(Items, Options);
+  Check('responses verbosity', Pos('"text":{"verbosity":"low"}', Body) > 0);
+  Check('responses max output', Pos('"max_output_tokens":2048', Body) > 0);
+  Check('responses web search tool', Pos('"type":"web_search"', Body) > 0);
+  Check('responses x search tool', Pos('"type":"x_search"', Body) > 0);
+  Body := BuildChatCompletionsRequestJson(Items, Options);
+  Check('completions search mode', Pos('"search_parameters":{"mode":"auto","return_citations":true}', Body) > 0);
+  Check('completions max output', Pos('"max_completion_tokens":2048', Body) > 0);
+  Check('completions omits verbosity', Pos('verbosity', Body) = 0);
+  Options.SearchMode := 'off';
+  Options.AnswerVerbosity := '';
+  Options.MaxOutputTokens := 0;
+  Body := BuildResponsesRequestJson(Items, Options);
+  Check('off omits search tools', Pos('web_search', Body) = 0);
+  Check('off omits verbosity', Pos('verbosity', Body) = 0);
+End;
+
 Procedure TestResponsesFailedIsError;
 Var
   Parser: TAssistantSseParser;
@@ -778,6 +809,7 @@ Begin
   TestSplitChunks;
   TestResponsesRequestJson;
   TestChatCompletionsRequestDropsReasoning;
+  TestGrokModelOptions;
   TestImageWireFixture;
   TestCompletedResponseHasNoImagePart;
   TestFunctionRoundTripItems;
