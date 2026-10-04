@@ -39,6 +39,8 @@ Type
     FThinkingLevel: String;
     FApprovalMode: String;
     FAutoNewChatAtContextLimit: Boolean;
+    FShowThinking: Boolean;
+    FShowToolCalls: Boolean;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -73,6 +75,10 @@ Type
     { When context ≥ 95%, start a new conversation automatically. }
     Property AutoNewChatAtContextLimit: Boolean Read FAutoNewChatAtContextLimit
       Write FAutoNewChatAtContextLimit;
+    { Show thinking blocks in the conversation trace. }
+    Property ShowThinking: Boolean Read FShowThinking Write FShowThinking;
+    { Show tool-call blocks in the conversation trace. }
+    Property ShowToolCalls: Boolean Read FShowToolCalls Write FShowToolCalls;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -212,6 +218,8 @@ Begin
   FThinkingLevel := AssistantConfigDefaultThinking;
   FApprovalMode := AssistantConfigDefaultApproval;
   FAutoNewChatAtContextLimit := False;
+  FShowThinking := True;
+  FShowToolCalls := True;
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -255,6 +263,8 @@ Begin
   FThinkingLevel := Source.ThinkingLevel;
   FApprovalMode := Source.ApprovalMode;
   FAutoNewChatAtContextLimit := Source.AutoNewChatAtContextLimit;
+  FShowThinking := Source.ShowThinking;
+  FShowToolCalls := Source.ShowToolCalls;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -397,6 +407,8 @@ Begin
   Try
     FIncludeIDEContext := False;
     FAutoNewChatAtContextLimit := False;
+    FShowThinking := True;
+    FShowToolCalls := True;
     If Assigned(Connections) Then
       Connections.ClearStored;
     If Not Assigned(Section) Then
@@ -407,6 +419,8 @@ Begin
       End;
     FIncludeIDEContext := Section.Get('include_ide_context', False);
     FAutoNewChatAtContextLimit := Section.Get('auto_new_chat_at_limit', False);
+    FShowThinking := Section.Get('show_thinking', True);
+    FShowToolCalls := Section.Get('show_tool_calls', True);
     SeenGrok := False;
     Node := Section.Find('connections');
     If Node Is TJSONArray Then
@@ -463,6 +477,8 @@ Begin
   Try
     Section.Add('include_ide_context', FIncludeIDEContext);
     Section.Add('auto_new_chat_at_limit', FAutoNewChatAtContextLimit);
+    Section.Add('show_thinking', FShowThinking);
+    Section.Add('show_tool_calls', FShowToolCalls);
     Arr := TJSONArray.Create;
     Section.Add('connections', Arr);
     If Assigned(Connections) Then

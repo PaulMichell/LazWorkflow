@@ -145,6 +145,8 @@ Begin
   Try
     Chat.IncludeIDEContext := True;
     Chat.AutoNewChatAtContextLimit := True;
+    Chat.ShowThinking := False;
+    Chat.ShowToolCalls := False;
     Connections.EnsureBuiltinGrok;
     Chat.SaveWithConnections(Connections);
   Finally
@@ -168,6 +170,8 @@ Begin
     Check('assistant include_ide_context written', Assigned(Section) And Section.Get('include_ide_context', False));
     Check('assistant auto_new_chat_at_limit written',
       Assigned(Section) And Section.Get('auto_new_chat_at_limit', False));
+    Check('assistant show_thinking written', Assigned(Section) And (Not Section.Get('show_thinking', True)));
+    Check('assistant show_tool_calls written', Assigned(Section) And (Not Section.Get('show_tool_calls', True)));
   Finally
     Section.Free;
   End;

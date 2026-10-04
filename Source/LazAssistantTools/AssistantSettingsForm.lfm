@@ -118,8 +118,37 @@ object AssistantSettingsForm: TAssistantSettingsForm
     Top = 348
     Width = 488
     Anchors = [akTop, akLeft, akRight]
-    Caption = 'Default: automatically start a New Chat at 95% context use'
+    Caption = 'Automatically start a new Grok chat at 95% context use'
+    Hint = 'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.'
+    ParentShowHint = False
+    ShowHint = True
     TabOrder = 6
+  end
+  object ShowThinkingCheck: TCheckBox
+    Left = 16
+    Height = 23
+    Top = 376
+    Width = 488
+    Anchors = [akTop, akLeft, akRight]
+    Caption = 'Show thinking'
+    Checked = True
+    Hint = 'Show thinking blocks in the conversation.'
+    ParentShowHint = False
+    ShowHint = True
+    TabOrder = 11
+  end
+  object ShowToolCallsCheck: TCheckBox
+    Left = 16
+    Height = 23
+    Top = 404
+    Width = 488
+    Anchors = [akTop, akLeft, akRight]
+    Caption = 'Show tool calls'
+    Checked = True
+    Hint = 'Show tool-call blocks in the conversation.'
+    ParentShowHint = False
+    ShowHint = True
+    TabOrder = 12
   end
   object ApiBaseLabel: TLabel
     Left = 16

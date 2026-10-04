@@ -130,7 +130,6 @@ Type
     NewPlanButton: TButton;
     RunPlanButton: TButton;
     SettingsButton: TButton;
-    AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
     AttachmentStrip: TPanel;
@@ -195,7 +194,6 @@ Type
     Procedure AttachmentImageDblClick(Sender: TObject);
     Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
     Procedure InputSelectAllClick(Sender: TObject);
-    Procedure AutoNewChatCheckClick(Sender: TObject);
     Procedure ContextBreakdownActionExecute(Sender: TObject);
     Procedure SessionInfoActionExecute(Sender: TObject);
     Procedure ModelPickerActionExecute(Sender: TObject);
@@ -400,7 +398,7 @@ Type
       ContinueSameItem: Boolean): String;
     Procedure MaybeWarnHighContextUsage;
     Function AutoNewChatAtLimitEnabled: Boolean;
-    Procedure SyncAutoNewChatCheckFromConfig;
+    Procedure ApplyDisplayPreferences;
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Function FormatElapsedStatus(Const Phase: String): String;
@@ -477,6 +475,7 @@ Type
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
 Procedure NotifyOpenProjectAssistantFormsProjectCleared;
+Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
 
 Implementation
 
@@ -680,8 +679,7 @@ Begin
       PlanOfferBar.Height := Scale96ToForm(28);
       PlanOfferBar.Visible := False;
     End;
-  UpdateViewActionCaptions;
-  SyncAutoNewChatCheckFromConfig;
+  ApplyDisplayPreferences;
   If Not Assigned(ElapsedTimer) Then
     Begin
       ElapsedTimer := TTimer.Create(Self);
@@ -1439,16 +1437,20 @@ Begin
   DocumentFile := '';
   If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile, @ShowToolUse, @DocumentFile) Then
     Begin
-      { No saved shell mode. A project conversation keeps the mode of its last turn. }
+      { No saved shell mode. A project conversation keeps the mode of its last turn.
+        Display flags come from Settings, not this file. }
+      ApplyDisplayPreferences;
       If ProjectAssistantConversation.TurnCount > 0 Then
         SelectMode(ModeOfLoadedConversation)
       Else
         SelectMode(amChat);
       Exit;
     End;
-  FShowThinking := ShowThinking;
-  FShowToolUse := ShowToolUse;
-  UpdateViewActionCaptions;
+  { The project file may still store older display flags. Settings owns them now. }
+  If Assigned(AssistantChatConfig) And
+    ((ShowThinking <> AssistantChatConfig.ShowThinking) Or (ShowToolUse <> AssistantChatConfig.ShowToolCalls)) Then
+    WorkflowLogger.Debug('ProjectAssistant', 'Display flags follow Settings, not the project shell file.');
+  ApplyDisplayPreferences;
   SetActivePlanRelativePath(PlanFile);
   SetDocumentRelativePath(DocumentFile);
   FSkipModePersist := True;
@@ -2863,8 +2865,15 @@ End;
 Procedure TProjectAssistantForm.ToggleToolUseActionExecute(Sender: TObject);
 Begin
   FShowToolUse := Not FShowToolUse;
+  If Assigned(AssistantChatConfig) Then
+    Begin
+      AssistantChatConfig.ShowToolCalls := FShowToolUse;
+      AssistantChatConfig.Save;
+    End;
   UpdateViewActionCaptions;
   PersistShellConfig;
+  If Assigned(FTraceView) Then
+    FTraceView.ShowToolUse := FShowToolUse;
   RefreshChatDisplay(True, False);
 End;
 
@@ -3193,43 +3202,48 @@ Begin
   Else If Assigned(AssistantClient) Then
     FModelName := AssistantClient.Model;
   If FUseCodex Then FModelName := 'ChatGPT / ' + FCodexModel;
-  SyncAutoNewChatCheckFromConfig;
+  ApplyDisplayPreferences;
   UpdateStatusFooter;
 End;
 
 Function TProjectAssistantForm.AutoNewChatAtLimitEnabled: Boolean;
 Begin
-  If Assigned(AutoNewChatCheck) Then
-    Result := AutoNewChatCheck.Checked
-  Else If Assigned(AssistantChatConfig) Then
+  If Assigned(AssistantChatConfig) Then
     Result := AssistantChatConfig.AutoNewChatAtContextLimit
   Else
     Result := False;
 End;
 
-Procedure TProjectAssistantForm.SyncAutoNewChatCheckFromConfig;
+Procedure TProjectAssistantForm.ApplyDisplayPreferences;
+Var
+  ShowThinking, ShowTools: Boolean;
 Begin
-  If Not Assigned(AutoNewChatCheck) Then
-    Exit;
-  AutoNewChatCheck.OnClick := Nil;
-  Try
-    If Assigned(AssistantChatConfig) Then
-      AutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit
-    Else
-      AutoNewChatCheck.Checked := False;
-  Finally
-    AutoNewChatCheck.OnClick := @AutoNewChatCheckClick;
-  End;
-End;
-
-Procedure TProjectAssistantForm.AutoNewChatCheckClick(Sender: TObject);
-Begin
-  If Not Assigned(AutoNewChatCheck) Or Not Assigned(AssistantChatConfig) Then
-    Exit;
-  AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatCheck.Checked;
-  AssistantChatConfig.Save;
-  WorkflowLogger.Info('ProjectAssistant',
-    'Auto New Chat at 95%: ' + BoolToStr(AutoNewChatCheck.Checked, True));
+  ShowThinking := True;
+  ShowTools := True;
+  If Assigned(AssistantChatConfig) Then
+    Begin
+      ShowThinking := AssistantChatConfig.ShowThinking;
+      ShowTools := AssistantChatConfig.ShowToolCalls;
+    End;
+  If (FShowThinking = ShowThinking) And (FShowToolUse = ShowTools) Then
+    Begin
+      UpdateViewActionCaptions;
+      If Assigned(FTraceView) Then
+        Begin
+          FTraceView.ShowThinking := FShowThinking;
+          FTraceView.ShowToolUse := FShowToolUse;
+        End;
+      Exit;
+    End;
+  FShowThinking := ShowThinking;
+  FShowToolUse := ShowTools;
+  UpdateViewActionCaptions;
+  If Assigned(FTraceView) Then
+    Begin
+      FTraceView.ShowThinking := FShowThinking;
+      FTraceView.ShowToolUse := FShowToolUse;
+      RefreshChatDisplay(True, False);
+    End;
 End;
 
 Procedure TProjectAssistantForm.UpdateStatusFooter;
@@ -6541,6 +6555,19 @@ Begin
       Form := Screen.CustomForms[I];
       If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
         TProjectAssistantForm(Form).UnbindFromProject;
+    End;
+End;
+
+Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        TProjectAssistantForm(Form).ApplyDisplayPreferences;
     End;
 End;
 

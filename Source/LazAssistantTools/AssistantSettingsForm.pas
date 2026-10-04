@@ -25,6 +25,8 @@ Type
     SkillCombo: TComboBox;
     IncludeContextCheck: TCheckBox;
     AutoNewChatDefaultCheck: TCheckBox;
+    ShowThinkingCheck: TCheckBox;
+    ShowToolCallsCheck: TCheckBox;
     ThinkingLabel: TLabel;
     ThinkingCombo: TComboBox;
     ApprovalLabel: TLabel;
@@ -82,7 +84,7 @@ Implementation
 
 Uses AssistantWorkTarget,
   AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
-  AssistantConversation,
+  AssistantConversation, ProjectAssistantForm,
   LCLIntf, SpellCheckerSettingsForm, LazIDEIntf;
 
 Procedure AddFallbackModels(List: TStrings);
@@ -127,6 +129,7 @@ Begin
           Format('Saved – model=%s skill=%s thinking=%s approval=%s',
             [AssistantChatConfig.Model, AssistantChatConfig.ActiveSkill,
              AssistantChatConfig.ThinkingLevel, AssistantChatConfig.ApprovalMode]));
+        NotifyOpenProjectAssistantFormsPreferencesChanged;
       End;
   Finally
     Form.Free;
@@ -204,7 +207,7 @@ Begin
   AutoNewChatDefaultCheck.Top := 404;
   AutoNewChatDefaultCheck.ShowHint := True;
   AutoNewChatDefaultCheck.Hint :=
-    'Default for the assistant form checkbox. Long Build/Plan runs can rollover into a fresh chat.';
+    'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.';
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
@@ -270,11 +273,13 @@ Begin
   IncludeContextCheck.Parent := GeneralPage; IncludeContextCheck.SetBounds(20, 20, 700, 24);
   AutoNewChatDefaultCheck.Parent := GeneralPage; AutoNewChatDefaultCheck.SetBounds(20, 52, 800, 24);
   AutoNewChatDefaultCheck.Caption := 'Automatically start a new Grok chat at 95% context use';
+  ShowThinkingCheck.Parent := GeneralPage; ShowThinkingCheck.SetBounds(20, 84, 800, 24);
+  ShowToolCallsCheck.Parent := GeneralPage; ShowToolCallsCheck.SetBounds(20, 116, 800, 24);
   SpellFrame := TSpellCheckerSettingsFrame.Create(Self); SpellFrame.Name := 'GlobalSpellSettings'; SpellFrame.Parent := GeneralPage;
-  SpellFrame.SetBounds(20, 104, 820, 260); SpellFrame.Anchors := [akLeft, akTop]; SpellFrame.LoadFromConfig;
+  SpellFrame.SetBounds(20, 156, 820, 260); SpellFrame.Anchors := [akLeft, akTop]; SpellFrame.LoadFromConfig;
   GeneralPage.OnResize := @GeneralPageResize;
   LabelControl := TLabel.Create(Self); LabelControl.Parent := GeneralPage;
-  LabelControl.SetBounds(20, 388, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
+  LabelControl.SetBounds(20, 432, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
   LabelControl.Caption := 'These preferences apply across connections. Sign-in and sign-out actions take effect immediately; Cancel discards preference edits. Selecting a connection does not sign out other accounts.';
   ApiBaseLabel.Top := 448; ApiBaseEdit.Top := 470;
   ManualLabel.Top := 514; ManualEdit.Top := 538; PasteCodeButton.Top := 538;
@@ -511,6 +516,10 @@ Begin
   EnsureExtraControls;
   If Assigned(AutoNewChatDefaultCheck) Then
     AutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
+  If Assigned(ShowThinkingCheck) Then
+    ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
+  If Assigned(ShowToolCallsCheck) Then
+    ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
   Case AssistantChatConfig.GetThinkingLevel Of
     atlLow: ThinkingCombo.ItemIndex := 0;
     atlMedium: ThinkingCombo.ItemIndex := 1;
@@ -576,6 +585,10 @@ Begin
   EnsureExtraControls;
   If Assigned(AutoNewChatDefaultCheck) Then
     AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatDefaultCheck.Checked;
+  If Assigned(ShowThinkingCheck) Then
+    AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
+  If Assigned(ShowToolCallsCheck) Then
+    AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
   Case ThinkingCombo.ItemIndex Of
     0: AssistantChatConfig.SetThinkingLevelEnum(atlLow);
     1: AssistantChatConfig.SetThinkingLevelEnum(atlMedium);

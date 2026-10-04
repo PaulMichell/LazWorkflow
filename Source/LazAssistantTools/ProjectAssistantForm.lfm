@@ -76,7 +76,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Top = 4
         Width = 84
         Action = NewPlanAction
-        TabOrder = 9
+        TabOrder = 3
       end
       object RunPlanButton: TButton
         Left = 356
@@ -84,25 +84,15 @@ object ProjectAssistantForm: TProjectAssistantForm
         Top = 4
         Width = 84
         Action = RunPlanAction
-        TabOrder = 12
+        TabOrder = 4
       end
       object SettingsButton: TButton
-        Left = 1046
+        Left = 444
         Height = 28
         Top = 4
         Width = 84
         Action = SettingsAction
-        TabOrder = 10
-      end
-      object AutoNewChatCheck: TCheckBox
-        Left = 1134
-        Height = 28
-        Top = 4
-        Width = 160
-        Caption = 'Auto New Chat at 95%'
-        TabOrder = 11
-        Visible = False
-        OnClick = AutoNewChatCheckClick
+        TabOrder = 5
       end
     end
   end
