@@ -66,6 +66,7 @@ Type
     RevisePlanAction: TAction;
     ChatModeAction: TAction;
     InspectModeAction: TAction;
+    DocumentModeAction: TAction;
     PlanModeAction: TAction;
     BuildModeAction: TAction;
     ReviewButton: TButton;
@@ -233,6 +234,7 @@ Type
     Procedure RevisePlanActionExecute(Sender: TObject);
     Procedure ChatModeActionExecute(Sender: TObject);
     Procedure InspectModeActionExecute(Sender: TObject);
+    Procedure DocumentModeActionExecute(Sender: TObject);
     Procedure PlanModeActionExecute(Sender: TObject);
     Procedure BuildModeActionExecute(Sender: TObject);
     Procedure ComposerStackResize(Sender: TObject);
@@ -1108,11 +1110,12 @@ End;
 
 Function ModeComboIndex(Mode: TAssistantMode): Integer;
 Begin
-  { Visual order: Chat, Inspect, Plan, Build. }
+  { Visual order: Chat, Inspect, Document, Plan, Build. }
   Case Mode Of
     amInspect: Result := 1;
-    amPlan: Result := 2;
-    amBuild: Result := 3;
+    amDocument: Result := 2;
+    amPlan: Result := 3;
+    amBuild: Result := 4;
   Else
     Result := 0;
   End;
@@ -1125,8 +1128,9 @@ Begin
     Exit;
   Case ModeCombo.ItemIndex Of
     1: Result := amInspect;
-    2: Result := amPlan;
-    3: Result := amBuild;
+    2: Result := amDocument;
+    3: Result := amPlan;
+    4: Result := amBuild;
   Else
     Result := amChat;
   End;
@@ -1136,13 +1140,14 @@ Procedure TProjectAssistantForm.EnsureModeComboItems;
 Begin
   If Not Assigned(ModeCombo) Then
     Exit;
-  If ModeCombo.Items.Count = 4 Then
+  If (ModeCombo.Items.Count = 5) And (ModeCombo.Items[2] = 'Document') Then
     Exit;
   ModeCombo.Items.BeginUpdate;
   Try
     ModeCombo.Items.Clear;
     ModeCombo.Items.Add('Chat');
     ModeCombo.Items.Add('Inspect');
+    ModeCombo.Items.Add('Document');
     ModeCombo.Items.Add('Plan');
     ModeCombo.Items.Add('Build');
   Finally
@@ -1201,6 +1206,7 @@ Begin
   Case Mode Of
     amChat: Result := 'Chat';
     amInspect: Result := 'Inspect';
+    amDocument: Result := 'Document';
     amPlan: Result := 'Plan';
     amBuild: Result := 'Build';
   Else
@@ -1214,6 +1220,7 @@ Var
 Begin
   Case ActiveMode Of
     amChat: ToolsHint := 'general chat · no project tools or skill';
+    amDocument: ToolsHint := 'writes free-form Markdown · will not edit sources or the plan';
     amPlan: ToolsHint := 'creates and edits Markdown · will not edit sources';
     amBuild: ToolsHint := 'edits target files and compiles';
   Else
@@ -1268,6 +1275,8 @@ Begin
     ChatModeAction.Enabled := Not FSending;
   If Assigned(InspectModeAction) Then
     InspectModeAction.Enabled := Not FSending;
+  If Assigned(DocumentModeAction) Then
+    DocumentModeAction.Enabled := Not FSending;
   If Assigned(PlanModeAction) Then
     PlanModeAction.Enabled := Not FSending;
   If Assigned(BuildModeAction) Then
@@ -1343,7 +1352,7 @@ Begin
   { Capture mode from the mode control, then freeze it for the turn. }
   ActiveMode := CurrentModeFromUi;
   FModeLocked := True;
-  FModeSticky := ActiveMode In [amPlan, amBuild];
+  FModeSticky := ActiveMode In [amDocument, amPlan, amBuild];
   If Assigned(AssistantClient) Then
     Begin
       AssistantClient.SetActiveMode(ActiveMode);
@@ -1359,7 +1368,7 @@ Begin
   { Enter a specific mode for this turn (e.g. Fix Error / Work-on-this → Build). }
   ActiveMode := Mode;
   FModeLocked := True;
-  FModeSticky := Mode In [amPlan, amBuild];
+  FModeSticky := Mode In [amDocument, amPlan, amBuild];
   If Assigned(AssistantClient) Then
     Begin
       AssistantClient.SetActiveMode(Mode);
@@ -1475,13 +1484,16 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.PersistShellConfig;
+Var
+  DocumentPath: String;
 Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   If ProjectAssistantConversation.ProjectRoot = '' Then
     Exit;
+  DocumentPath := GetDocumentRelativePath;
   If Not ProjectAssistantConversation.SaveShellConfig(FShowThinking, ActiveMode,
-    GetActivePlanRelativePath, @FShowToolUse) Then
+    GetActivePlanRelativePath, @FShowToolUse, @DocumentPath) Then
     WorkflowLogger.Warning('ProjectAssistant',
       'config.json save failed: ' + ProjectAssistantConversation.LastError);
 End;
@@ -1490,11 +1502,12 @@ Procedure TProjectAssistantForm.ApplyShellConfigFromStore;
 Var
   ShowThinking, ShowToolUse: Boolean;
   Mode: TAssistantMode;
-  PlanFile: String;
+  PlanFile, DocumentFile: String;
 Begin
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
-  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile, @ShowToolUse) Then
+  DocumentFile := '';
+  If Not ProjectAssistantConversation.LoadShellConfig(ShowThinking, Mode, PlanFile, @ShowToolUse, @DocumentFile) Then
     Begin
       { No saved shell mode. A project conversation keeps the mode of its last turn. }
       If ProjectAssistantConversation.TurnCount > 0 Then
@@ -1507,6 +1520,7 @@ Begin
   FShowToolUse := ShowToolUse;
   UpdateViewActionCaptions;
   SetActivePlanRelativePath(PlanFile);
+  SetDocumentRelativePath(DocumentFile);
   FSkipModePersist := True;
   Try
     SelectMode(Mode);
@@ -3094,6 +3108,7 @@ Begin
   Case ActiveMode Of
     amChat: FCodexBroker.BeginRun(awsNone);
     amBuild: FCodexBroker.BeginRun(awsProject);
+    amDocument: FCodexBroker.BeginRun(awsMarkdown);
     amPlan: FCodexBroker.BeginRun(awsMarkdown);
   Else FCodexBroker.BeginRun(awsReadOnly); End;
   RefreshFromConfig;
@@ -3136,7 +3151,9 @@ Begin
     ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
     Recap + LineEnding + 'Current user request:' + LineEnding + ModelText;
   If ActiveMode = amPlan Then
-    Prompt := Prompt + LineEnding + AssistantPlanAuthoringRules + LineEnding;
+    Prompt := Prompt + LineEnding + AssistantPlanAuthoringRules + LineEnding
+  Else If ActiveMode = amDocument Then
+    Prompt := Prompt + LineEnding + AssistantDocumentDirective(DocumentPathForTurn, True) + LineEnding;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
   SetCurrentUserDisplay(DisplayText, WithContext);
@@ -5413,7 +5430,9 @@ Begin
             'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
             '`, numbered ## sections without Status, and ### items with Status.' +
             LineEnding + LineEnding + ModelText;
-        End;
+        End
+      Else If ActiveMode = amDocument Then
+        FinalApi := AssistantDocumentDirective(DocumentPathForTurn) + LineEnding + LineEnding + ModelText;
       WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And
         AssistantChatConfig.IncludeIDEContext;
       SetCurrentUserDisplay(DisplayText, WithContext);
@@ -5530,6 +5549,7 @@ Begin
   AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
   AddAct(ChatModeAction, 'Work', 'chat', '', 'Chat mode — general chat, no project tools or skill');
   AddAct(InspectModeAction, 'Work', 'inspect', '', 'Inspect mode — read-only, no writes');
+  AddAct(DocumentModeAction, 'Work', 'document', 'report', 'Document mode — write a free-form Markdown report or note');
   AddAct(PlanModeAction, 'Work', 'plan', '', 'Plan mode — write the plan file');
   AddAct(BuildModeAction, 'Work', 'build', 'code', 'Build mode — edit sources and compile');
   AddAct(ReviewChangesAction, 'Review', 'review', '', 'Pascal naming, structure, and review lenses');
@@ -6395,6 +6415,13 @@ Begin
   HideSlashPopup;
   If Not FSending Then
     SelectMode(amInspect);
+End;
+
+Procedure TProjectAssistantForm.DocumentModeActionExecute(Sender: TObject);
+Begin
+  HideSlashPopup;
+  If Not FSending Then
+    SelectMode(amDocument);
 End;
 
 Procedure TProjectAssistantForm.PlanModeActionExecute(Sender: TObject);

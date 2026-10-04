@@ -50,6 +50,15 @@ Type
 Function ProjectDocumentsDir: String;
 Function EnsureProjectDocumentsDir(Out ErrorText: String): Boolean;
 Function DefaultPlanRelativePath: String;
+{ Documents/Report-YYYYMMDD-HHMMSS.md. Not a plan path. }
+Function NewDocumentRelativePath: String;
+Function GetDocumentRelativePath: String;
+Procedure SetDocumentRelativePath(Const RelativePath: String);
+{ Remembers the path and writes document_file. Does not change the active plan. }
+Procedure RememberDocumentRelativePath(Const RelativePath: String);
+{ Current document, or a new report path when none is remembered. }
+Function DocumentPathForTurn: String;
+Function AssistantDocumentDirective(Const DocumentPath: String; CodexTools: Boolean = False): String;
 Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 Function IsMarkdownPath(Const Path: String): Boolean;
@@ -120,6 +129,7 @@ Var
   CompletionPrevious: String;
   CompletionExisted: Boolean;
   PlanViewerQuiet: Boolean;
+  DocumentRelativePath: String;
 
 Function PlanCompletionBlocked(Const PreviousBody, NextBody: String; Out ErrorText: String): Boolean; Forward;
 Procedure NotePlanCompletionWrite(Const Path, PreviousBody: String; Existed: Boolean); Forward;
@@ -256,6 +266,59 @@ End;
 Function DefaultPlanRelativePath: String;
 Begin
   Result := AssistantDocumentsDirName + PathDelim + AssistantDefaultPlanFileName;
+End;
+
+Function NewDocumentRelativePath: String;
+Begin
+  Result := AssistantDocumentsDirName + '/Report-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.md';
+End;
+
+Function GetDocumentRelativePath: String;
+Begin
+  Result := DocumentRelativePath;
+End;
+
+Procedure SetDocumentRelativePath(Const RelativePath: String);
+Begin
+  DocumentRelativePath := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
+End;
+
+Procedure RememberDocumentRelativePath(Const RelativePath: String);
+Begin
+  SetDocumentRelativePath(RelativePath);
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    ProjectAssistantConversation.SaveDocumentFile(DocumentRelativePath);
+End;
+
+Function DocumentPathForTurn: String;
+Begin
+  Result := GetDocumentRelativePath;
+  If Result = '' Then
+    Begin
+      Result := NewDocumentRelativePath;
+      RememberDocumentRelativePath(Result);
+    End;
+End;
+
+Function AssistantDocumentDirective(Const DocumentPath: String; CodexTools: Boolean): String;
+Begin
+  If CodexTools Then
+    Result :=
+      '[SYSTEM DIRECTIVE — Document mode] When this request produces a new document, save it with ' +
+      'lazarus_create_file (path: "' + DocumentPath + '"). Revise an existing document with ' +
+      'lazarus_replace_buffer and lazarus_save_buffer. '
+  Else
+    Result :=
+      '[SYSTEM DIRECTIVE — Document mode] When this request produces or revises a document, write it with ' +
+      'write_markdown or update_markdown (path: "' + DocumentPath + '"). ';
+  Result := Result +
+    'Chat reply must be a short summary only, not the full document body. ' +
+    'Use free Markdown. The user''s prompt decides the layout. ' +
+    'Do not use the assistant plan format. Do not add the line "' + AssistantPlanGeneratedLine + '". ' +
+    'Do not add Status lines. Do not call set_active_plan. Do not edit source files. ' +
+    'Do not write the active plan. ' +
+    'If the user asks for a new document, use a new Documents/Report-YYYYMMDD-HHMMSS.md path and do not overwrite this file. ' +
+    'A question that does not ask for a document or a change does not need a write.';
 End;
 
 Function IsMarkdownPath(Const Path: String): Boolean;

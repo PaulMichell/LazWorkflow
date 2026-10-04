@@ -77,6 +77,7 @@ Uses
 
 Var
   GActivePlanRelative: String;
+  GAssistantToolMode: TAssistantMode;
   GLastCompileSeq: Integer;
   GLastCompileClean: Boolean;
   GLastCompileLog: String;
@@ -282,26 +283,31 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  { Shared read tools for all modes. }
+  { Shared read tools for all project modes. }
   If (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Then
     Begin
-      Result := Mode In [amInspect, amPlan, amBuild];
+      Result := Mode In [amInspect, amDocument, amPlan, amBuild];
+      Exit;
+    End;
+  { Document, Plan, and Build may write Markdown. Plan registry tools stay off Document. }
+  If (Name = 'write_markdown') Or (Name = 'update_markdown') Then
+    Begin
+      Result := Mode In [amDocument, amPlan, amBuild];
       Exit;
     End;
   { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
-  If (Name = 'write_markdown') Or (Name = 'update_markdown') Or
-    (Name = 'list_plans') Or (Name = 'set_active_plan') Or
+  If (Name = 'list_plans') Or (Name = 'set_active_plan') Or
     (Name = 'get_active_plan') Or (Name = 'todo_write') Then
     Begin
       Result := Mode In [amPlan, amBuild];
       Exit;
     End;
-  { Open and search are read-only. Inspect may use them; it cannot write or compile. }
+  { Open and search are read-only. Document may use them before writing a report. }
   If (Name = 'search_in_project') Or (Name = 'open_file') Then
     Begin
-      Result := Mode In [amInspect, amBuild];
+      Result := Mode In [amInspect, amDocument, amBuild];
       Exit;
     End;
   { Build-mode source tools — never Inspect or Plan. }
@@ -592,6 +598,35 @@ Begin
     '}}';
 End;
 
+Function BuildDocumentToolsJson: String;
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"write_markdown",' +
+      '"description":"Create or overwrite a free-form Markdown document under the project (prefer Documents/). ' +
+        'Opens a live Markdown window. The user prompt decides the layout. Do not use the assistant plan format, ' +
+        'the plan identity line, or Status lines. Do not write the active plan. Omit path to use the current document, ' +
+        'or a new Documents/Report file when none exists.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative .md path. Omit for the current document."},' +
+        '"content":{"type":"string","description":"Full Markdown body to write"},' +
+        '"open":{"type":"boolean","description":"Open live viewer after write (default true)."}' +
+      '},"required":["content"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"update_markdown",' +
+      '"description":"Exact text replacement in the current Markdown document, or in path when given. ' +
+        'Prefer this for a section change. Do not use it on the active plan. Free format; no Status lines required.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative .md path. Omit for the current document."},' +
+        '"old_text":{"type":"string","description":"Exact text to find"},' +
+        '"new_text":{"type":"string","description":"Replacement text"},' +
+        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
+        '"open":{"type":"boolean","description":"Open live viewer after update (default true)."}' +
+      '},"required":["old_text","new_text"]}' +
+    '}}';
+End;
+
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
 Var
   Body: String;
@@ -602,6 +637,8 @@ Begin
         Result := '';
         Exit;
       End;
+    amDocument:
+      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildDocumentToolsJson;
     amPlan:
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
     amBuild:
@@ -1251,9 +1288,22 @@ Begin
   End;
 End;
 
+Function NormalSlashPath(Const Path: String): String;
+Begin
+  Result := StringReplace(Trim(Path), '\', '/', [rfReplaceAll]);
+End;
+
+Function IsActivePlanPath(Const Path: String): Boolean;
+Var
+  Active: String;
+Begin
+  Active := NormalSlashPath(GetActivePlanRelativePath);
+  Result := (Active <> '') And SameText(NormalSlashPath(Path), Active);
+End;
+
 Function ToolWriteMarkdown(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Content, Resolved, OldPlan: String;
+  Path, Content, Resolved, OldPlan, WrittenRel: String;
   OpenAfter, ShowThinking: Boolean;
   Mode: TAssistantMode;
 Begin
@@ -1261,10 +1311,25 @@ Begin
   ResultText := '';
   ErrorText := '';
   Path := JsonArgString(ArgumentsJson, 'path');
-  If Path = '' Then
-    Path := GetActivePlanRelativePath;
-  If Path = '' Then
-    Path := DefaultPlanRelativePath;
+  If GAssistantToolMode = amDocument Then
+    Begin
+      If Path = '' Then
+        Path := GetDocumentRelativePath;
+      If Path = '' Then
+        Path := NewDocumentRelativePath;
+      If IsActivePlanPath(Path) Then
+        Begin
+          ErrorText := 'Document mode will not write the active plan. Switch to Plan mode, or choose another path.';
+          Exit;
+        End;
+    End
+  Else
+    Begin
+      If Path = '' Then
+        Path := GetActivePlanRelativePath;
+      If Path = '' Then
+        Path := DefaultPlanRelativePath;
+    End;
   Content := JsonArgString(ArgumentsJson, 'content');
   If Content = '' Then
     Begin
@@ -1277,9 +1342,11 @@ Begin
     ErrorText := '';
   If Not WriteMarkdownFile(Path, Content, OpenAfter, Resolved, ErrorText) Then
     Exit;
-  If GetActivePlanRelativePath = '' Then
+  WrittenRel := ProjectRelativePath(Resolved);
+  If (GAssistantToolMode <> amDocument) And TextIsAssistantPlan(Content) And
+    ((GetActivePlanRelativePath = '') Or SameText(WrittenRel, GetActivePlanRelativePath)) Then
     Begin
-      SetActivePlanRelativePath(ProjectRelativePath(Resolved));
+      SetActivePlanRelativePath(WrittenRel);
       If Assigned(ProjectAssistantConversation) And
         (ProjectAssistantConversation.ProjectRoot <> '') Then
         Begin
@@ -1294,16 +1361,17 @@ Begin
           ProjectAssistantConversation.SaveShellConfig(ShowThinking, Mode, GetActivePlanRelativePath);
         End;
     End;
-  ResultText := 'Wrote Markdown: ' + ProjectRelativePath(Resolved) +
-    ' (' + Resolved + ')';
-  If TextIsAssistantPlan(Content) And
-    SameText(ProjectRelativePath(Resolved), GetActivePlanRelativePath) Then
+  If GAssistantToolMode = amDocument Then
+    RememberDocumentRelativePath(WrittenRel);
+  ResultText := 'Wrote Markdown: ' + WrittenRel + ' (' + Resolved + ')';
+  If (GAssistantToolMode <> amDocument) And TextIsAssistantPlan(Content) And
+    SameText(WrittenRel, GetActivePlanRelativePath) Then
     Begin
       If Not AddAvailableAssistantPlan(Resolved, ErrorText) Then
         ResultText := ResultText + LineEnding + 'Warning: could not register the plan: ' + ErrorText;
       ErrorText := '';
     End
-  Else If Not TextIsAssistantPlan(Content) Then
+  Else If (GAssistantToolMode = amPlan) And (Not TextIsAssistantPlan(Content)) Then
     ResultText := ResultText + LineEnding +
       'Warning: this file is not registered in the plan list until it starts with an H1 and the line "' +
       AssistantPlanGeneratedLine + '", and is set as the active plan or added from the Plan sheet.';
@@ -1320,10 +1388,28 @@ Begin
   ResultText := '';
   ErrorText := '';
   Path := JsonArgString(ArgumentsJson, 'path');
-  If Path = '' Then
-    Path := GetActivePlanRelativePath;
-  If Path = '' Then
-    Path := DefaultPlanRelativePath;
+  If GAssistantToolMode = amDocument Then
+    Begin
+      If Path = '' Then
+        Path := GetDocumentRelativePath;
+      If Path = '' Then
+        Begin
+          ErrorText := 'No document file yet. Call write_markdown first.';
+          Exit;
+        End;
+      If IsActivePlanPath(Path) Then
+        Begin
+          ErrorText := 'Document mode will not edit the active plan. Switch to Plan mode, or choose another path.';
+          Exit;
+        End;
+    End
+  Else
+    Begin
+      If Path = '' Then
+        Path := GetActivePlanRelativePath;
+      If Path = '' Then
+        Path := DefaultPlanRelativePath;
+    End;
   OldText := JsonArgString(ArgumentsJson, 'old_text');
   NewText := JsonArgString(ArgumentsJson, 'new_text');
   ReplaceAll := JsonArgBool(ArgumentsJson, 'replace_all', False);
@@ -1331,6 +1417,8 @@ Begin
   If Not ReplaceInMarkdownFile(Path, OldText, NewText, ReplaceAll, OpenAfter, Resolved,
     ErrorText, Count) Then
     Exit;
+  If GAssistantToolMode = amDocument Then
+    RememberDocumentRelativePath(ProjectRelativePath(Resolved));
   ResultText := Format('Updated %s (%d replacement(s)).',
     [ProjectRelativePath(Resolved), Count]);
   Result := True;
@@ -3387,6 +3475,7 @@ Begin
   ErrorText := '';
   ImageRefs := Nil;
   Name := LowerCase(Trim(ToolName));
+  GAssistantToolMode := Mode;
   If Not ToolAllowedInMode(Name, Mode) Then
     Begin
       ErrorText := Format('Tool "%s" is not available in %s mode.',

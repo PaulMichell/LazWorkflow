@@ -288,6 +288,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             Items.Strings = (
               'Chat'
               'Inspect'
+              'Document'
               'Plan'
               'Build'
             )
@@ -860,6 +861,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Inspect Mode'
       Hint = 'Read-only Q&A'
       OnExecute = InspectModeActionExecute
+    end
+    object DocumentModeAction: TAction
+      Caption = 'Document Mode'
+      Hint = 'Write a free-form Markdown report or note'
+      OnExecute = DocumentModeActionExecute
     end
     object PlanModeAction: TAction
       Caption = 'Plan Mode'

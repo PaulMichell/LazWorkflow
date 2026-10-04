@@ -1159,7 +1159,7 @@ Begin
       Exit;
     End;
   WriteNote := '';
-  If FWriteScope = awsMarkdown Then WriteNote := ' Plan mode: only .md, .markdown and .mdown files are writable.';
+  If FWriteScope = awsMarkdown Then WriteNote := ' Only .md, .markdown and .mdown files are writable.';
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project or package and relevant open buffer.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text including unsaved changes and get a revision token.","inputSchema":' + ReadSchema + '}';
   If FAdapter.CanInspectFiles Then Result := Result +

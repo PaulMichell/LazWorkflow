@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Contnrs;
 
 Type
-  TAssistantMode = (amInspect, amPlan, amBuild, amChat);
+  TAssistantMode = (amInspect, amDocument, amPlan, amBuild, amChat);
 
   { Lightweight row for the conversation turn list (also lives in FIndex). }
   TConversationIndexEntry = Class
@@ -106,9 +106,11 @@ Type
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
     { Project shell prefs in .assistant/config.json (mode, thinking, active plan, …). }
     Function LoadShellConfig(Out ShowThinking: Boolean; Out ActiveMode: TAssistantMode;
-      Out PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
+      Out PlanFile: String; ShowToolUse: PBoolean = Nil; DocumentFile: PString = Nil): Boolean;
     Function SaveShellConfig(ShowThinking: Boolean; ActiveMode: TAssistantMode;
-      Const PlanFile: String; ShowToolUse: PBoolean = Nil): Boolean;
+      Const PlanFile: String; ShowToolUse: PBoolean = Nil; DocumentFile: PString = Nil): Boolean;
+    { Writes only document_file. Other shell keys are left as they are. }
+    Function SaveDocumentFile(Const RelativePath: String): Boolean;
     { Registered plan paths in available_plans. A missing key is an empty list. }
     Function LoadAvailablePlanPaths(Paths: TStrings): Boolean;
     Function SaveAvailablePlanPaths(Paths: TStrings): Boolean;
@@ -166,6 +168,7 @@ Begin
   Case Mode Of
     amChat: Result := 'chat';
     amInspect: Result := 'inspect';
+    amDocument: Result := 'document';
     amPlan: Result := 'plan';
     amBuild: Result := 'build';
   Else
@@ -182,6 +185,8 @@ Begin
     Result := amChat
   Else If T = 'inspect' Then
     Result := amInspect
+  Else If (T = 'document') Or (T = 'doc') Or (T = 'report') Then
+    Result := amDocument
   Else If T = 'plan' Then
     Result := amPlan
   Else If T = 'build' Then
@@ -715,7 +720,8 @@ Begin
 End;
 
 Function TAssistantConversationStore.LoadShellConfig(Out ShowThinking: Boolean;
-  Out ActiveMode: TAssistantMode; Out PlanFile: String; ShowToolUse: PBoolean): Boolean;
+  Out ActiveMode: TAssistantMode; Out PlanFile: String; ShowToolUse: PBoolean;
+  DocumentFile: PString): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -744,6 +750,11 @@ Begin
       ActiveMode := StrToAssistantMode(ModeText);
       PlanFile := Obj.Get('plan_file', '');
       PlanFile := StringReplace(Trim(PlanFile), '\', '/', [rfReplaceAll]);
+      If Assigned(DocumentFile) Then
+        Begin
+          DocumentFile^ := Obj.Get('document_file', '');
+          DocumentFile^ := StringReplace(Trim(DocumentFile^), '\', '/', [rfReplaceAll]);
+        End;
       Result := True;
     Except
       On E: Exception Do
@@ -759,7 +770,8 @@ Begin
 End;
 
 Function TAssistantConversationStore.SaveShellConfig(ShowThinking: Boolean;
-  ActiveMode: TAssistantMode; Const PlanFile: String; ShowToolUse: PBoolean): Boolean;
+  ActiveMode: TAssistantMode; Const PlanFile: String; ShowToolUse: PBoolean;
+  DocumentFile: PString): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -799,6 +811,62 @@ Begin
     If Assigned(ShowToolUse) Then Obj.Booleans['show_tool_use'] := ShowToolUse^;
     Obj.Strings['active_mode'] := AssistantModeToStr(ActiveMode);
     Obj.Strings['plan_file'] := PlanNorm;
+    If Assigned(DocumentFile) Then
+      Obj.Strings['document_file'] := StringReplace(Trim(DocumentFile^), '\', '/', [rfReplaceAll]);
+    Try
+      SL.Text := Obj.FormatJSON;
+      SL.SaveToFile(ConfigPath);
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := E.Message;
+    End;
+  Finally
+    If OwnsObj Then
+      Obj.Free
+    Else
+      Data.Free;
+    SL.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.SaveDocumentFile(Const RelativePath: String): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  SL: TStringList;
+  OwnsObj: Boolean;
+  DocumentPath: String;
+Begin
+  Result := False;
+  If Not EnsureDir Then
+    Exit;
+  DocumentPath := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
+  Data := Nil;
+  Obj := Nil;
+  OwnsObj := False;
+  SL := TStringList.Create;
+  Try
+    If FileExistsUTF8(ConfigPath) Then
+      Begin
+        Try
+          SL.LoadFromFile(ConfigPath);
+          Data := GetJSON(SL.Text);
+          If Data Is TJSONObject Then
+            Obj := TJSONObject(Data)
+          Else
+            FreeAndNil(Data);
+        Except
+          FreeAndNil(Data);
+          Obj := Nil;
+        End;
+      End;
+    If Obj = Nil Then
+      Begin
+        Obj := TJSONObject.Create;
+        OwnsObj := True;
+      End;
+    Obj.Strings['document_file'] := DocumentPath;
     Try
       SL.Text := Obj.FormatJSON;
       SL.SaveToFile(ConfigPath);

@@ -76,6 +76,7 @@ Function TAssistantHarness.ModeCaption(Mode: TAssistantMode): String;
 Begin
   Case Mode Of
     amChat: Result := 'Chat';
+    amDocument: Result := 'Document';
     amPlan: Result := 'Plan';
     amBuild: Result := 'Build';
   Else
@@ -89,7 +90,7 @@ Begin
     '<work_policy>' + LineEnding +
     'Finish the user''s request. Do not stop at a plan or a description when the mode allows the work.' + LineEnding +
     'Do not claim a compile, edit, or file write succeeded unless a tool result in this turn shows it.' + LineEnding +
-    'Stay in the current mode''s tool gates. If the work needs a write you cannot do, say so and name Inspect / Plan / Build.' + LineEnding +
+    'Stay in the current mode''s tool gates. If the work needs a write you cannot do, say so and name Inspect / Document / Plan / Build.' + LineEnding +
     'Keep changes scoped to what was asked. Do not leave placeholders for unrelated work.' + LineEnding +
     '</work_policy>';
 End;
@@ -125,7 +126,7 @@ Begin
   Result :=
     '<communication>' + LineEnding +
     'Lead with the answer. The user did not see tool traces as a separate transcript; do not recap every call.' + LineEnding +
-    'Keep chat short in Plan mode: the Markdown file is the source of truth. Summarise what changed and where.' + LineEnding +
+    'Keep chat short in Plan and Document mode: the Markdown file is the source of truth. Summarise what changed and where.' + LineEnding +
     '</communication>';
 End;
 
@@ -133,7 +134,7 @@ Function TAssistantHarness.BuildFormatting: String;
 Begin
   Result :=
     '<formatting>' + LineEnding +
-    'Use Markdown only on the answer channel. Do not put the full plan body only in chat.' + LineEnding +
+    'Use Markdown only on the answer channel. Do not put the full plan or document body only in chat.' + LineEnding +
     '</formatting>';
 End;
 
@@ -150,6 +151,15 @@ Begin
       Result := Result +
         'You are in **Chat**. This is a general conversation with no project tools and no skill.' + LineEnding +
         'Do not claim you can read, search, or edit files.';
+    amDocument:
+      Result := Result +
+        'You are the Project Assistant in **Document mode** for Free Pascal / Lazarus.' + LineEnding +
+        'Write free-form Markdown with `write_markdown` / `update_markdown`. The user prompt decides the layout.' + LineEnding +
+        'Do not use the assistant plan format, the plan identity line, or Status lines.' + LineEnding +
+        'Do not call `set_active_plan`. Do not edit source (.pas/.lfm). Do not write the active plan.' + LineEnding +
+        'Current document: **' + GetDocumentRelativePath + '**. ' +
+        'If that is empty, the turn directive names a new Documents/Report file.' + LineEnding +
+        'Chat is a short summary. The Markdown file is the source of truth when you produce or revise a document.';
     amPlan:
       Result := Result +
         'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus.' + LineEnding +
@@ -176,7 +186,8 @@ Begin
     Result := Result +
       'You are the Project Assistant in **Inspect mode** for Free Pascal / Lazarus.' + LineEnding +
       'Read-only project tools. You may open a source file with `open_file` and search with `search_in_project` or `grep`.' + LineEnding +
-      'You cannot call `write_file`, `replace_in_file`, `run_compile`, or `run_git` — ask the user to switch to Plan or Build for writes.' + LineEnding +
+      'You cannot call `write_file`, `replace_in_file`, `write_markdown`, `run_compile`, or `run_git`. ' +
+      'Ask the user to switch to Document for a report or other Markdown, Plan for a build plan, or Build for source edits.' + LineEnding +
       'The house skill is attached only when the user pins it.' + LineEnding +
       'Prefer the active editor context already in the user message when it includes the code under discussion.';
   End;

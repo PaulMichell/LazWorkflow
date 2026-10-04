@@ -604,7 +604,7 @@ Begin
         'You are a helpful assistant in a general chat. ' +
         'You have no project tools, no IDE access, and no attached skill. ' +
         'Answer directly. Do not claim you can read, search, or edit files. ' +
-        'If the question needs the Lazarus project, say the user can switch to Inspect, Plan, or Build.';
+        'If the question needs the Lazarus project, say the user can switch to Inspect, Document, Plan, or Build.';
     amPlan:
       Begin
         PlanPath := GetActivePlanRelativePath;
@@ -628,6 +628,16 @@ Begin
           'Tools: read_file, read_image, list_directory, open_markdown, get_project_info, write_markdown, ' +
           'update_markdown, list_plans, get_active_plan, set_active_plan.';
       End;
+    amDocument:
+      Result :=
+        'You are the Project Assistant in **Document mode** for Free Pascal / Lazarus. ' +
+        'Write free-form Markdown reports and notes with write_markdown or update_markdown. ' +
+        'The user prompt decides the layout. Do not use the assistant plan format, the plan identity line, or Status lines. ' +
+        'Do not call set_active_plan. Do not write the active plan. Do not edit source files. ' +
+        'Chat is a short summary. The Markdown file is the source of truth when you produce or revise a document. ' +
+        'You may read and search the project first. ' +
+        'Tools: read_file, read_image, list_directory, grep, search_in_project, open_file, open_markdown, ' +
+        'get_project_info, write_markdown, update_markdown.';
     amBuild:
       Result :=
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus. ' +
@@ -683,7 +693,8 @@ Begin
       'open_file opens a source tab and does not modify it. search_in_project searches project text. ' +
       'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
       'Prefer the active editor context already in the user message when it includes the code under discussion. ' +
-      'You cannot call write_file, replace_in_file, run_compile, or run_git in Inspect mode — ask the user to switch to Plan or Build for that. ' +
+      'You cannot call write_file, replace_in_file, write_markdown, run_compile, or run_git in Inspect mode — ' +
+      'ask the user to switch to Document for a report, Plan for a build plan, or Build for source edits. ' +
       'The house skill is attached only when the user pins it.';
   End;
 End;

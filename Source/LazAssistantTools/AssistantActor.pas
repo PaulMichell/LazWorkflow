@@ -112,6 +112,7 @@ Begin
   Else If Assigned(Svc) Then
     Case Svc.ActiveMode Of
       amChat: Result := 1;
+      amDocument: Result := MaxPlanToolRounds;
       amPlan: Result := MaxPlanToolRounds;
       amBuild: Result := MaxBuildToolRounds;
     Else
