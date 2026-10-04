@@ -1,11 +1,11 @@
 object ProjectAssistantForm: TProjectAssistantForm
-  Left = 585
+  Left = 567
   Height = 700
-  Top = 138
-  Width = 960
+  Top = 177
+  Width = 1286
   Caption = 'Project Assistant'
   ClientHeight = 700
-  ClientWidth = 960
+  ClientWidth = 1286
   Position = poDefaultPosOnly
   LCLVersion = '5.99.0.0'
   OnCreate = FormCreate
@@ -15,17 +15,17 @@ object ProjectAssistantForm: TProjectAssistantForm
     Left = 0
     Height = 58
     Top = 642
-    Width = 960
+    Width = 1286
     Align = alBottom
     BevelOuter = bvNone
     ClientHeight = 58
-    ClientWidth = 960
+    ClientWidth = 1286
     TabOrder = 1
     inline StatusFooter: TStatusFooterFrame
       Left = 0
       Height = 22
       Top = 36
-      Width = 960
+      Width = 1286
       Align = alBottom
       TabOrder = 0
     end
@@ -33,7 +33,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Left = 0
       Height = 36
       Top = 0
-      Width = 960
+      Width = 1295
       BevelOuter = bvNone
       ChildSizing.LeftRightSpacing = 4
       ChildSizing.TopBottomSpacing = 4
@@ -44,7 +44,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 16
       ClientHeight = 36
-      ClientWidth = 960
+      ClientWidth = 1295
       TabOrder = 1
       object SendButton: TButton
         Left = 4
@@ -76,7 +76,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Top = 4
         Width = 84
         Action = NewPlanAction
-        TabOrder = 13
+        TabOrder = 9
       end
       object RunPlanButton: TButton
         Left = 356
@@ -86,63 +86,8 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = RunPlanAction
         TabOrder = 12
       end
-      object ToggleThinkingButton: TButton
-        Left = 444
-        Height = 28
-        Top = 4
-        Width = 106
-        Action = ToggleThinkingAction
-        TabOrder = 3
-        Visible = False
-      end
-      object ReviewButton: TButton
-        Left = 554
-        Height = 28
-        Top = 4
-        Width = 84
-        Caption = 'Review'
-        TabOrder = 4
-        Visible = False
-        OnClick = ReviewButtonClick
-      end
-      object ReviewCompileButton: TButton
-        Left = 642
-        Height = 28
-        Top = 4
-        Width = 112
-        Action = ReviewCompileAction
-        TabOrder = 5
-        Visible = False
-      end
-      object ReviewBuildButton: TButton
-        Left = 758
-        Height = 28
-        Top = 4
-        Width = 94
-        Action = ReviewBuildAction
-        TabOrder = 6
-        Visible = False
-      end
-      object FixErrorButton: TButton
-        Left = 856
-        Height = 28
-        Top = 4
-        Width = 84
-        Action = FixErrorAction
-        TabOrder = 7
-        Visible = False
-      end
-      object CommandsButton: TButton
-        Left = 944
-        Height = 28
-        Top = 4
-        Width = 98
-        Action = CommandsAction
-        TabOrder = 8
-        Visible = False
-      end
       object SettingsButton: TButton
-        Left = 1148
+        Left = 1046
         Height = 28
         Top = 4
         Width = 84
@@ -150,7 +95,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         TabOrder = 10
       end
       object AutoNewChatCheck: TCheckBox
-        Left = 1236
+        Left = 1134
         Height = 28
         Top = 4
         Width = 160
@@ -165,14 +110,14 @@ object ProjectAssistantForm: TProjectAssistantForm
     Left = 0
     Height = 642
     Top = 0
-    Width = 960
+    Width = 1286
     Align = alClient
     BevelOuter = bvNone
     ClientHeight = 642
-    ClientWidth = 960
+    ClientWidth = 1286
     TabOrder = 0
     object ModeSidePanel: TPanel
-      Left = 660
+      Left = 986
       Height = 642
       Top = 0
       Width = 300
@@ -566,7 +511,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object ModeSplitter: TSplitter
-      Left = 655
+      Left = 981
       Height = 642
       Top = 0
       Width = 5
@@ -577,37 +522,37 @@ object ProjectAssistantForm: TProjectAssistantForm
       Left = 0
       Height = 642
       Top = 0
-      Width = 655
+      Width = 981
       Align = alClient
       BevelOuter = bvNone
       ClientHeight = 642
-      ClientWidth = 655
+      ClientWidth = 981
       TabOrder = 1
       object PromptHost: TPanel
         Left = 0
         Height = 75
         Top = 567
-        Width = 655
+        Width = 981
         Align = alBottom
         BevelOuter = bvNone
         ClientHeight = 75
-        ClientWidth = 655
+        ClientWidth = 981
         TabOrder = 0
         object InputPanel: TPanel
           Left = 0
           Height = 0
           Top = 0
-          Width = 655
+          Width = 981
           Align = alClient
           BevelOuter = bvNone
           ClientHeight = 0
-          ClientWidth = 655
+          ClientWidth = 981
           TabOrder = 0
           object PlanOfferBar: TPanel
             Left = 0
             Height = 28
             Top = 0
-            Width = 655
+            Width = 981
             Align = alTop
             BevelOuter = bvNone
             ChildSizing.LeftRightSpacing = 4
@@ -616,7 +561,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             ChildSizing.Layout = cclLeftToRightThenTopToBottom
             ChildSizing.ControlsPerLine = 6
             ClientHeight = 28
-            ClientWidth = 655
+            ClientWidth = 981
             TabOrder = 1
             Visible = False
             object PlanOfferLabel: TLabel
@@ -651,7 +596,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             Left = 6
             Height = 0
             Top = 0
-            Width = 643
+            Width = 969
             Align = alClient
             BorderSpacing.Around = 6
             TabOrder = 0
@@ -661,7 +606,7 @@ object ProjectAssistantForm: TProjectAssistantForm
           Left = 0
           Height = 80
           Top = -5
-          Width = 655
+          Width = 981
           Align = alBottom
           BevelOuter = bvNone
           ChildSizing.LeftRightSpacing = 4
@@ -678,7 +623,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Left = 0
         Height = 5
         Top = 562
-        Width = 655
+        Width = 981
         Align = alBottom
         ResizeAnchor = akBottom
       end
@@ -686,7 +631,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Left = 4
         Height = 554
         Top = 4
-        Width = 647
+        Width = 973
         Align = alClient
         BorderSpacing.Around = 4
         BevelOuter = bvNone
@@ -749,23 +694,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       Enabled = False
       OnExecute = StopActionExecute
     end
-    object ReviewCompileAction: TAction
-      Caption = 'Review Compile'
-      OnExecute = ReviewCompileActionExecute
-    end
-    object ReviewBuildAction: TAction
-      Caption = 'Review Build'
-      OnExecute = ReviewBuildActionExecute
-    end
     object ReviewChangesAction: TAction
       Caption = 'Review Changes'
       Hint = 'Fan out Pascal naming, structure, and review lenses over changed files'
       OnExecute = ReviewChangesActionExecute
-    end
-    object FixErrorAction: TAction
-      Caption = 'Fix Error'
-      Hint = 'Fix the selected Messages line in Build mode (tools apply the edit)'
-      OnExecute = FixErrorActionExecute
     end
     object SettingsAction: TAction
       Caption = 'Settings…'
@@ -775,10 +707,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Hide Tool Use'
       OnExecute = ToggleToolUseActionExecute
     end
-    object ToggleThinkingAction: TAction
-      Caption = 'Show Thinking'
-      OnExecute = ToggleThinkingActionExecute
-    end
     object ExportHistoryAction: TAction
       Caption = 'Export…'
       OnExecute = ExportHistoryActionExecute
@@ -786,11 +714,6 @@ object ProjectAssistantForm: TProjectAssistantForm
     object DeleteHistoryAction: TAction
       Caption = 'Delete…'
       OnExecute = DeleteHistoryActionExecute
-    end
-    object CommandsAction: TAction
-      Caption = 'Commands…'
-      Hint = 'Open the command menu.'
-      OnExecute = CommandsActionExecute
     end
     object ContextBreakdownAction: TAction
       Caption = 'Context Breakdown'
@@ -878,19 +801,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = BuildModeActionExecute
     end
   end
-  object ReviewMenu: TPopupMenu
-    Left = 72
-    Top = 40
-    object ReviewChangesItem: TMenuItem
-      Action = ReviewChangesAction
-    end
-    object ReviewCompileItem: TMenuItem
-      Action = ReviewCompileAction
-    end
-    object ReviewBuildItem: TMenuItem
-      Action = ReviewBuildAction
-    end
-  end
   object AttachmentPopup: TPopupMenu
     OnPopup = AttachmentPopupPopup
     Left = 168
@@ -970,23 +880,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       object ReviewChangesMenuItem: TMenuItem
         Action = ReviewChangesAction
       end
-      object ReviewCompileMenuItem: TMenuItem
-        Action = ReviewCompileAction
-      end
-      object ReviewBuildMenuItem: TMenuItem
-        Action = ReviewBuildAction
-      end
-      object FixErrorMenuItem: TMenuItem
-        Action = FixErrorAction
-      end
     end
     object ViewMenuItem: TMenuItem
       Caption = '&View'
       object ToggleToolUseMenuItem: TMenuItem
         Action = ToggleToolUseAction
-      end
-      object ToggleThinkingMenuItem: TMenuItem
-        Action = ToggleThinkingAction
       end
       object SkillsMenuItem: TMenuItem
         Action = SkillsPickerAction

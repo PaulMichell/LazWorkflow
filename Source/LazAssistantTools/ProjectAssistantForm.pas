@@ -41,17 +41,12 @@ Type
     SendAction: TAction;
     SendButton: TButton;
     StopAction: TAction;
-    ReviewCompileAction: TAction;
-    ReviewBuildAction: TAction;
     ReviewChangesAction: TAction;
-    FixErrorAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
-    ToggleThinkingAction: TAction;
     ToggleToolUseAction: TAction;
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
-    CommandsAction: TAction;
     ContextBreakdownAction: TAction;
     SessionInfoAction: TAction;
     ModelPickerAction: TAction;
@@ -69,12 +64,6 @@ Type
     DocumentModeAction: TAction;
     PlanModeAction: TAction;
     BuildModeAction: TAction;
-    ReviewButton: TButton;
-    CommandsButton: TButton;
-    ReviewMenu: TPopupMenu;
-    ReviewCompileItem: TMenuItem;
-    ReviewBuildItem: TMenuItem;
-    ReviewChangesItem: TMenuItem;
     AssistantMenu: TMainMenu;
     SessionMenuItem: TMenuItem;
     NewChatMenuItem: TMenuItem;
@@ -95,12 +84,8 @@ Type
     BuildThisMenuItem: TMenuItem;
     RevisePlanMenuItem: TMenuItem;
     ReviewMenuItem: TMenuItem;
-    ReviewCompileMenuItem: TMenuItem;
-    ReviewBuildMenuItem: TMenuItem;
     ReviewChangesMenuItem: TMenuItem;
-    FixErrorMenuItem: TMenuItem;
     ViewMenuItem: TMenuItem;
-    ToggleThinkingMenuItem: TMenuItem;
     ToggleToolUseMenuItem: TMenuItem;
     SkillsMenuItem: TMenuItem;
     ModelMenuItem: TMenuItem;
@@ -144,10 +129,6 @@ Type
     NewChatButton: TButton;
     NewPlanButton: TButton;
     RunPlanButton: TButton;
-    ToggleThinkingButton: TButton;
-    ReviewCompileButton: TButton;
-    ReviewBuildButton: TButton;
-    FixErrorButton: TButton;
     SettingsButton: TButton;
     AutoNewChatCheck: TCheckBox;
     StatusFooter: TStatusFooterFrame;
@@ -196,12 +177,8 @@ Type
     Procedure NewChatActionExecute(Sender: TObject);
     Procedure NewPlanActionExecute(Sender: TObject);
     Procedure RunPlanActionExecute(Sender: TObject);
-    Procedure ReviewCompileActionExecute(Sender: TObject);
-    Procedure ReviewBuildActionExecute(Sender: TObject);
     Procedure ReviewChangesActionExecute(Sender: TObject);
-    Procedure FixErrorActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
-    Procedure ToggleThinkingActionExecute(Sender: TObject);
     Procedure ToggleToolUseActionExecute(Sender: TObject);
     Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
@@ -219,8 +196,6 @@ Type
     Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
     Procedure InputSelectAllClick(Sender: TObject);
     Procedure AutoNewChatCheckClick(Sender: TObject);
-    Procedure ReviewButtonClick(Sender: TObject);
-    Procedure CommandsActionExecute(Sender: TObject);
     Procedure ContextBreakdownActionExecute(Sender: TObject);
     Procedure SessionInfoActionExecute(Sender: TObject);
     Procedure ModelPickerActionExecute(Sender: TObject);
@@ -334,7 +309,6 @@ Type
     FPlanAgentMaxPackages: Integer;
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FLastTurnHadError: Boolean;
-    FCommandsPopup: TPopupMenu;
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
     FShowPlanOffer: Boolean;
@@ -467,7 +441,6 @@ Type
     Procedure SteerQueuedText(Const UserText: String);
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Procedure UpdateWorkActions;
-    Procedure EnsureCommandsMenu;
     Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
     Procedure ApplyConfigAndRefresh;
     Procedure PinActiveSkill(Const SkillName: String);
@@ -668,7 +641,7 @@ Begin
   FTargetPaths := TStringList.Create;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
-  { AssistantMenu still feeds the commands popup. It is not the window menu bar. }
+  { AssistantMenu is not the window menu bar. }
   Menu := Nil;
   { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
     drop to the widget under the pointer, so the input controls are armed after
@@ -695,7 +668,6 @@ Begin
     FTraceView.Sync(FTrace, False);
   EnsureInputPopup;
   PinSidebarHeader;
-  EnsureCommandsMenu;
   If Assigned(StatusFooter) Then
     Begin
       StatusFooter.OnLeftClick := @StatusFooterLeftClick;
@@ -982,8 +954,6 @@ Begin
         End;
     If Assigned(ElapsedTimer) Then
       ElapsedTimer.Enabled := False;
-    If Assigned(FCommandsPopup) Then
-      FreeAndNil(FCommandsPopup);
     If Assigned(FFooterMenu) Then
       FFooterMenu.Items.Clear;
     FOpenBusy := False;
@@ -1005,12 +975,8 @@ End;
 
 Procedure TProjectAssistantForm.UpdateViewActionCaptions;
 Begin
-  If Not Assigned(ToggleThinkingAction) Then
+  If Not Assigned(ToggleToolUseAction) Then
     Exit;
-  If FShowThinking Then
-    ToggleThinkingAction.Caption := 'Hide Thinking'
-  Else
-    ToggleThinkingAction.Caption := 'Show Thinking';
   If FShowToolUse Then
     ToggleToolUseAction.Caption := 'Hide Tool Use'
   Else
@@ -1439,10 +1405,6 @@ Begin
       AssistantClient.SetActiveMode(ActiveMode);
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
     End;
-  { Fix Error always switches into Build tools, so keep it available in every mode. }
-  FixErrorAction.Enabled := Not FSending;
-  ReviewCompileAction.Enabled := (Not FSending) And (Not FReviewInProgress);
-  ReviewBuildAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   If ActiveMode = amPlan Then
     RefreshActivePlanChoices(Nil);
@@ -2898,14 +2860,6 @@ Begin
   FTrace.ApplyWorkedFooter(DurationMs);
 End;
 
-Procedure TProjectAssistantForm.ToggleThinkingActionExecute(Sender: TObject);
-Begin
-  FShowThinking := Not FShowThinking;
-  UpdateViewActionCaptions;
-  PersistShellConfig;
-  RefreshChatDisplay(True, False);
-End;
-
 Procedure TProjectAssistantForm.ToggleToolUseActionExecute(Sender: TObject);
 Begin
   FShowToolUse := Not FShowToolUse;
@@ -3461,10 +3415,7 @@ Begin
     NewPlanAction.Enabled := Not IsSending;
   If Assigned(RunPlanAction) Then
     RunPlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
-  ReviewCompileAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
-  ReviewBuildAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
-  FixErrorAction.Enabled := Not IsSending;
   { Prompt stays live so the user can Steer without aborting the turn. }
   If Assigned(InputMemo) Then
     InputMemo.ReadOnly := False;
@@ -5480,66 +5431,6 @@ Begin
   InputMemo.SetFocus;
 End;
 
-Function CloneMenuItem(Source: TMenuItem; OwnerMenu: TPopupMenu): TMenuItem;
-Var
-  I: Integer;
-  Child: TMenuItem;
-  ActCaption: String;
-Begin
-  Result := Nil;
-  If Not Assigned(Source) Then
-    Exit;
-  ActCaption := Source.Caption;
-  If Assigned(Source.Action) And (Source.Action Is TAction) Then
-    ActCaption := TAction(Source.Action).Caption;
-  If SameText(Trim(ActCaption), 'Commands…') Then
-    Exit;
-  Result := TMenuItem.Create(OwnerMenu);
-  If Assigned(Source.Action) Then
-    Result.Action := Source.Action
-  Else
-    Result.Caption := Source.Caption;
-  For I := 0 To Source.Count - 1 Do
-    Begin
-      Child := CloneMenuItem(Source.Items[I], OwnerMenu);
-      If Assigned(Child) Then
-        Result.Add(Child);
-    End;
-End;
-
-Procedure TProjectAssistantForm.EnsureCommandsMenu;
-Var
-  I, J, AddedInGroup: Integer;
-  Cloned, Sep: TMenuItem;
-  Group: TMenuItem;
-Begin
-  If Assigned(FCommandsPopup) Then
-    FCommandsPopup.Items.Clear
-  Else
-    FCommandsPopup := TPopupMenu.Create(Nil);
-  If Not Assigned(AssistantMenu) Then
-    Exit;
-  For I := 0 To AssistantMenu.Items.Count - 1 Do
-    Begin
-      Group := AssistantMenu.Items[I];
-      AddedInGroup := 0;
-      For J := 0 To Group.Count - 1 Do
-        Begin
-          Cloned := CloneMenuItem(Group.Items[J], FCommandsPopup);
-          If Not Assigned(Cloned) Then
-            Continue;
-          FCommandsPopup.Items.Add(Cloned);
-          Inc(AddedInGroup);
-        End;
-      If (AddedInGroup > 0) And (I < AssistantMenu.Items.Count - 1) Then
-        Begin
-          Sep := TMenuItem.Create(FCommandsPopup);
-          Sep.Caption := '-';
-          FCommandsPopup.Items.Add(Sep);
-        End;
-    End;
-End;
-
 Procedure TProjectAssistantForm.PopupUnderControl(Host: TControl; Popup: TPopupMenu);
 Var
   P: TPoint;
@@ -5709,32 +5600,6 @@ Begin
   ApplyInputPanelHeight;
   If Assigned(PlanOfferLabel) Then
     PlanOfferLabel.Caption := 'Plan written.';
-End;
-
-Procedure TProjectAssistantForm.ReviewButtonClick(Sender: TObject);
-Var
-  ScreenPt: TPoint;
-Begin
-  If Not Assigned(ReviewMenu) Or Not Assigned(ReviewButton) Then
-    Exit;
-  ScreenPt := ReviewButton.ClientToScreen(Point(0, ReviewButton.Height));
-  ReviewMenu.PopUp(ScreenPt.X, ScreenPt.Y);
-End;
-
-Procedure TProjectAssistantForm.CommandsActionExecute(Sender: TObject);
-Var
-  ScreenPt: TPoint;
-Begin
-  EnsureCommandsMenu;
-  If Not Assigned(FCommandsPopup) Then
-    Exit;
-  If Assigned(SettingsButton) Then
-    ScreenPt := SettingsButton.ClientToScreen(Point(0, SettingsButton.Height))
-  Else If Assigned(SendButton) Then
-    ScreenPt := SendButton.ClientToScreen(Point(0, SendButton.Height))
-  Else
-    ScreenPt := ClientToScreen(Point(8, 8));
-  FCommandsPopup.PopUp(ScreenPt.X, ScreenPt.Y);
 End;
 
 Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -6406,8 +6271,6 @@ Begin
     End;
 
   FReviewInProgress := True;
-  ReviewCompileAction.Enabled := False;
-  ReviewBuildAction.Enabled := False;
   ReviewChangesAction.Enabled := False;
   StatusFooter.SetRightText(KindLabel + '…');
   StatusFooter.Update;
@@ -6464,8 +6327,6 @@ Begin
     If Not FSending Then
       Begin
         FReviewInProgress := False;
-        ReviewCompileAction.Enabled := True;
-        ReviewBuildAction.Enabled := True;
         ReviewChangesAction.Enabled := True;
         UpdateStatusFooter;
       End;
@@ -7097,16 +6958,6 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Deleted conversation id=' + ArchiveId);
 End;
 
-Procedure TProjectAssistantForm.ReviewCompileActionExecute(Sender: TObject);
-Begin
-  ReviewCompile;
-End;
-
-Procedure TProjectAssistantForm.ReviewBuildActionExecute(Sender: TObject);
-Begin
-  ReviewBuild;
-End;
-
 Procedure TProjectAssistantForm.ReviewChangesActionExecute(Sender: TObject);
 Var
   Prompt: String;
@@ -7124,11 +6975,6 @@ Begin
   SubmitUserTextEx('Review Changes (naming · structure · review)', Prompt, True);
   If Not FSending Then
     UnlockModeAfterSend;
-End;
-
-Procedure TProjectAssistantForm.FixErrorActionExecute(Sender: TObject);
-Begin
-  FixSelectedError;
 End;
 
 Procedure TProjectAssistantForm.SettingsActionExecute(Sender: TObject);
