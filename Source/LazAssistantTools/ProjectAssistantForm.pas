@@ -3,9 +3,9 @@ Unit ProjectAssistantForm;
 { Project Assistant main window — conversation and prompt on the left, sidebar on the right (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
-  history, plan/build tiles, send/steer, and catalog wiring as one form.
-  Reviewed 2026-08: slash matching lives in AssistantCommands; trace paint in
-  AssistantTraceView. Reviewed 2026-09-27: Chat is a fourth mode with no project
+  history, plan/build tiles, and send/steer as one form. Trace paint lives in
+  AssistantTraceView. Reviewed 2026-10: no command-catalog or slash matcher
+  remains in this form. Reviewed 2026-09-27: Chat is a fourth mode with no project
   tools or skill; the mode bar is a label and combobox. Composer paste and drop
   stay here. Attach Image is on the memo popup, after Paste. The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
@@ -25,7 +25,7 @@ Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls, ComCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView, AssistantCommands, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
+  AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
   AssistantIDEWorkspace, AssistantGit;
 
 Type
@@ -241,11 +241,6 @@ Type
     Procedure PromptHostResize(Sender: TObject);
     Procedure InputMemoPaste(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
-    Procedure InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
-    Procedure InputMemoChange(Sender: TObject);
-    Procedure InputMemoExit(Sender: TObject);
-    Procedure SlashListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
-    Procedure SlashListClick(Sender: TObject);
     Procedure StatusFooterLeftClick(Sender: TObject);
     Procedure StatusFooterSkillClick(Sender: TObject);
     Procedure StatusFooterCentreClick(Sender: TObject);
@@ -340,9 +335,6 @@ Type
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FLastTurnHadError: Boolean;
     FCommandsPopup: TPopupMenu;
-    FCatalog: TAssistantCatalog;
-    FSlashList: TListBox;
-    FSlashHits: TCatalogIndexArray;
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
     FShowPlanOffer: Boolean;
@@ -476,15 +468,6 @@ Type
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Procedure UpdateWorkActions;
     Procedure EnsureCommandsMenu;
-    Procedure RebuildCommandCatalog;
-    Procedure EnsureSlashPopup;
-    Procedure HideSlashPopup;
-    Procedure PositionSlashPopup;
-    Procedure UpdateSlashPopup;
-    Function SlashPopupVisible: Boolean;
-    Procedure ExecuteCatalogItem(Const Item: TAssistantCatalogItem);
-    Procedure ExecuteSlashSelection;
-    Procedure RemovePromptSlashToken;
     Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
     Procedure ApplyConfigAndRefresh;
     Procedure PinActiveSkill(Const SkillName: String);
@@ -493,7 +476,6 @@ Type
     Procedure FillApprovalFooterMenu;
     Procedure FillSkillFooterMenu;
     Procedure ShowPlanOfferBar(OfferVisible: Boolean);
-    Procedure DeferredHideSlash(Data: PtrInt);
     Procedure SeedPromptFromSelectedWork;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
@@ -530,7 +512,7 @@ Implementation
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
-  FileUtil, LazUTF8, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
+  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages,
   AssistantImageView
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
@@ -607,7 +589,6 @@ Begin
   FPlanWriteThisTurn := False;
   FShowPlanOffer := False;
   LoadConnectionSettings;
-  FCatalog := TAssistantCatalog.Create;
   WorkflowEventBus.AddListener(Self);
   SyncModeUi;
 End;
@@ -678,15 +659,7 @@ Begin
   FreeAndNil(BuildSections);
   FreeAndNil(FTrace);
   FreeAndNil(FTargetPaths);
-  If Assigned(FSlashList) Then
-    Begin
-      FSlashList.OnDrawItem := Nil;
-      FSlashList.OnClick := Nil;
-      FSlashList.Parent := Nil;
-    End;
-  FreeAndNil(FSlashList);
   FreeAndNil(FFooterMenu);
-  FreeAndNil(FCatalog);
   Inherited Destroy;
 End;
 
@@ -708,9 +681,6 @@ Begin
     Begin
       InputMemo.BorderSpacing.Around := 0;
       InputMemo.OnKeyDown := @InputMemoKeyDown;
-      InputMemo.OnUTF8KeyPress := @InputMemoUTF8KeyPress;
-      InputMemo.OnChange := @InputMemoChange;
-      InputMemo.OnExit := @InputMemoExit;
       InputMemo.OnPaste := @InputMemoPaste;
     End;
   ApplyInputPanelHeight;
@@ -725,8 +695,6 @@ Begin
     FTraceView.Sync(FTrace, False);
   EnsureInputPopup;
   PinSidebarHeader;
-  EnsureSlashPopup;
-  RebuildCommandCatalog;
   EnsureCommandsMenu;
   If Assigned(StatusFooter) Then
     Begin
@@ -5383,7 +5351,6 @@ Begin
     Exit;
   If FSending Then
     Exit;
-  HideSlashPopup;
   If AutoSend And FUseCodex Then
     Begin
       Result := StartCodexReply(DisplayText, ApiText);
@@ -5513,72 +5480,6 @@ Begin
   InputMemo.SetFocus;
 End;
 
-Procedure TProjectAssistantForm.RebuildCommandCatalog;
-Var
-  Skills: TAssistantSkillList;
-  I: Integer;
-  Root, SlashName: String;
-
-  Procedure AddAct(Act: TAction; Const Category, Slash, Aliases, Hint: String);
-  Begin
-    If Not Assigned(Act) Then
-      Exit;
-    FCatalog.Add(Act.Caption, Category, Slash, Aliases, Hint, Act, '');
-    If Trim(Act.Hint) = '' Then
-      Act.Hint := Hint;
-    If Trim(Act.Category) = '' Then
-      Act.Category := Category;
-  End;
-
-Begin
-  If Not Assigned(FCatalog) Then
-    Exit;
-  FCatalog.Clear;
-  AddAct(NewChatAction, 'Session', 'new', 'clear', 'Start a new conversation');
-  AddAct(CompactContextAction, 'Session', 'compact', '', 'Shrink older turns to free context');
-  AddAct(CopyLastAnswerAction, 'Session', 'copy', '', 'Copy the current answer');
-  AddAct(ExportHistoryAction, 'Session', 'export', '', 'Export this conversation');
-  AddAct(DeleteHistoryAction, 'Session', 'delete', '', 'Delete the current conversation');
-  AddAct(SettingsAction, 'Session', 'settings', 'login,logout', 'Sign in, model, and skill');
-  AddAct(StopAction, 'Session', 'stop', '', 'Stop the current reply');
-  AddAct(NewPlanAction, 'Work', 'new-plan', '', 'Create a plan and switch to Plan mode');
-  AddAct(RunPlanAction, 'Work', 'run-plan', '',
-    'Switch to Build and work through incomplete packages until done, error, or context limit');
-  AddAct(OpenPlanAction, 'Work', 'view-plan', 'plan-file', 'Open the active plan Markdown');
-  AddAct(BuildThisAction, 'Work', 'build-this', '', 'Switch to Build and seed the next package');
-  AddAct(RevisePlanAction, 'Work', 'revise', '', 'Stay in Plan and revise the file');
-  AddAct(ChatModeAction, 'Work', 'chat', '', 'Chat mode — general chat, no project tools or skill');
-  AddAct(InspectModeAction, 'Work', 'inspect', '', 'Inspect mode — read-only, no writes');
-  AddAct(DocumentModeAction, 'Work', 'document', 'report', 'Document mode — write a free-form Markdown report or note');
-  AddAct(PlanModeAction, 'Work', 'plan', '', 'Plan mode — write the plan file');
-  AddAct(BuildModeAction, 'Work', 'build', 'code', 'Build mode — edit sources and compile');
-  AddAct(ReviewChangesAction, 'Review', 'review', '', 'Pascal naming, structure, and review lenses');
-  AddAct(ReviewCompileAction, 'Review', 'review-compile', '', 'Review the last compile');
-  AddAct(ReviewBuildAction, 'Review', 'review-build', '', 'Review the last build');
-  AddAct(FixErrorAction, 'Review', 'fix', 'fix-error', 'Fix the selected Messages error');
-  AddAct(ToggleThinkingAction, 'View', 'thinking', '', 'Show or hide thinking blocks');
-  AddAct(ToggleToolUseAction, 'View', 'tools', '', 'Show or hide tool use');
-  AddAct(ModelPickerAction, 'Model', 'model', '', 'Choose model, thinking, and approval');
-  AddAct(ThinkingPickerAction, 'Model', 'effort', 'thinking-level', 'Set reasoning effort');
-  AddAct(ContextBreakdownAction, 'Help', 'context', '', 'Token estimate for the next request');
-  AddAct(SessionInfoAction, 'Help', 'session-info', 'session,docs,help', 'Mode, model, plan, and conversation');
-  AddAct(SkillsPickerAction, 'Skills', 'skills', '', 'Pin a skill for the session');
-  Root := '';
-  If Assigned(ProjectAssistantConversation) Then
-    Root := ProjectAssistantConversation.ProjectRoot;
-  Skills := ListDiscoveredSkills(Root);
-  For I := 0 To High(Skills) Do
-    Begin
-      If Not Skills[I].UserInvocable Then
-        Continue;
-      SlashName := Skills[I].Name;
-      If FCatalog.HasSlash(SlashName) Then
-        SlashName := 'skill-' + Skills[I].Name;
-      FCatalog.Add('Run skill: ' + Skills[I].Name, 'Skills', SlashName, '',
-        Skills[I].Description, Nil, 'skill:' + Skills[I].Name);
-    End;
-End;
-
 Function CloneMenuItem(Source: TMenuItem; OwnerMenu: TPopupMenu): TMenuItem;
 Var
   I: Integer;
@@ -5637,208 +5538,6 @@ Begin
           FCommandsPopup.Items.Add(Sep);
         End;
     End;
-End;
-
-Procedure TProjectAssistantForm.EnsureSlashPopup;
-Begin
-  If Assigned(FSlashList) Then
-    Exit;
-  FSlashList := TListBox.Create(Nil);
-  FSlashList.Visible := False;
-  FSlashList.Style := lbOwnerDrawFixed;
-  FSlashList.ItemHeight := Scale96ToForm(22);
-  FSlashList.Height := Scale96ToForm(88);
-  FSlashList.TabStop := True;
-  FSlashList.Color := clWindow;
-  FSlashList.OnDrawItem := @SlashListDrawItem;
-  FSlashList.OnClick := @SlashListClick;
-End;
-
-Function TProjectAssistantForm.SlashPopupVisible: Boolean;
-Begin
-  Result := Assigned(FSlashList) And FSlashList.Visible;
-End;
-
-Procedure TProjectAssistantForm.HideSlashPopup;
-Begin
-  If Assigned(FSlashList) Then
-    Begin
-      FSlashList.Visible := False;
-      FSlashList.Parent := Nil;
-    End;
-End;
-
-Procedure TProjectAssistantForm.PositionSlashPopup;
-Var
-  P: TPoint;
-  Count, H, MaxH: Integer;
-Begin
-  If Not Assigned(FSlashList) Or Not Assigned(InputMemo) Then
-    Exit;
-  Count := FSlashList.Items.Count;
-  If Count < 1 Then
-    Count := 1;
-  If Count > 8 Then
-    Count := 8;
-  H := Count * FSlashList.ItemHeight + 4;
-  MaxH := Scale96ToForm(220);
-  If H > MaxH Then
-    H := MaxH;
-  FSlashList.Height := H;
-  FSlashList.Width := InputMemo.Width;
-  If FSlashList.Width < Scale96ToForm(280) Then
-    FSlashList.Width := Scale96ToForm(280);
-  P := InputMemo.ClientToScreen(Point(0, 0));
-  P := ScreenToClient(P);
-  FSlashList.Parent := Self;
-  FSlashList.Left := P.X;
-  FSlashList.Top := P.Y - FSlashList.Height;
-  If FSlashList.Top < 0 Then
-    FSlashList.Top := P.Y + InputMemo.Height;
-  FSlashList.BringToFront;
-End;
-
-Function PromptCaretByte(Memo: TSpellMemo): Integer;
-Begin
-  Result := 0;
-  If Not Assigned(Memo) Then
-    Exit;
-  Result := Length(UTF8Copy(Memo.Text, 1, Memo.SelStart));
-End;
-
-Procedure TProjectAssistantForm.UpdateSlashPopup;
-Var
-  Token, Filter: String;
-  TokenStart, I, Hit: Integer;
-  Entry: TAssistantCatalogItem;
-Begin
-  If Not Assigned(InputMemo) Then
-    Exit;
-  EnsureSlashPopup;
-  RebuildCommandCatalog;
-  Token := ExtractSlashToken(InputMemo.Text, PromptCaretByte(InputMemo), TokenStart);
-  If (Token = '') Or (Token[1] <> '/') Then
-    Begin
-      HideSlashPopup;
-      Exit;
-    End;
-  Filter := NormalizeSlashName(Token);
-  FCatalog.Filter(Filter, FSlashHits);
-  FSlashList.Items.BeginUpdate;
-  Try
-    FSlashList.Items.Clear;
-    If Length(FSlashHits) = 0 Then
-      FSlashList.Items.Add('No matching commands')
-    Else
-      For I := 0 To High(FSlashHits) Do
-        Begin
-          Hit := FSlashHits[I];
-          Entry := FCatalog.GetItem(Hit);
-          FSlashList.Items.AddObject(Entry.Caption, TObject(PtrInt(Hit + 1)));
-        End;
-  Finally
-    FSlashList.Items.EndUpdate;
-  End;
-  If FSlashList.Items.Count > 0 Then
-    FSlashList.ItemIndex := 0;
-  PositionSlashPopup;
-  FSlashList.Visible := True;
-End;
-
-Procedure TProjectAssistantForm.RemovePromptSlashToken;
-Var
-  TextValue: String;
-  Caret: Integer;
-Begin
-  If Not Assigned(InputMemo) Then
-    Exit;
-  TextValue := InputMemo.Text;
-  Caret := RemoveSlashToken(TextValue, PromptCaretByte(InputMemo));
-  InputMemo.Text := TextValue;
-  InputMemo.SelStart := UTF8Length(Copy(TextValue, 1, Caret));
-End;
-
-Procedure TProjectAssistantForm.ExecuteCatalogItem(Const Item: TAssistantCatalogItem);
-Var
-  SkillName: String;
-Begin
-  HideSlashPopup;
-  If Assigned(Item.Action) And (Item.Action Is TAction) Then
-    Begin
-      If TAction(Item.Action).Enabled Then
-        TAction(Item.Action).Execute;
-      Exit;
-    End;
-  If Copy(Item.UserData, 1, 6) = 'skill:' Then
-    Begin
-      SkillName := Copy(Item.UserData, 7, MaxInt);
-      PinActiveSkill(SkillName);
-    End;
-End;
-
-Procedure TProjectAssistantForm.ExecuteSlashSelection;
-Var
-  Hit: Integer;
-Begin
-  If Not SlashPopupVisible Then
-    Exit;
-  If (FSlashList.ItemIndex < 0) Or (FSlashList.ItemIndex >= FSlashList.Items.Count) Then
-    Exit;
-  If Not Assigned(FSlashList.Items.Objects[FSlashList.ItemIndex]) Then
-    Exit;
-  Hit := Integer(PtrInt(FSlashList.Items.Objects[FSlashList.ItemIndex])) - 1;
-  RemovePromptSlashToken;
-  If (Hit >= 0) And (Hit < FCatalog.Count) Then
-    ExecuteCatalogItem(FCatalog.GetItem(Hit));
-End;
-
-Procedure TProjectAssistantForm.SlashListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect;
-  State: TOwnerDrawState);
-Var
-  Box: TListBox;
-  Hit: Integer;
-  Entry: TAssistantCatalogItem;
-  AliasText: String;
-  CaptionR, AliasR: TRect;
-Begin
-  If Not (Control Is TListBox) Then
-    Exit;
-  Box := TListBox(Control);
-  If odSelected In State Then
-    Begin
-      Box.Canvas.Brush.Color := clHighlight;
-      Box.Canvas.Font.Color := clHighlightText;
-    End
-  Else
-    Begin
-      Box.Canvas.Brush.Color := clWindow;
-      Box.Canvas.Font.Color := clWindowText;
-    End;
-  Box.Canvas.FillRect(ARect);
-  If (Index < 0) Or (Index >= Box.Items.Count) Then
-    Exit;
-  CaptionR := ARect;
-  CaptionR.Right := ARect.Left + ((ARect.Right - ARect.Left) * 2) Div 3;
-  AliasR := ARect;
-  AliasR.Left := CaptionR.Right;
-  Box.Canvas.TextRect(CaptionR, CaptionR.Left + 6, CaptionR.Top + 2, Box.Items[Index]);
-  If Assigned(Box.Items.Objects[Index]) Then
-    Begin
-      Hit := Integer(PtrInt(Box.Items.Objects[Index])) - 1;
-      Entry := FCatalog.GetItem(Hit);
-      AliasText := FormatSlashAlias(Entry.Slash);
-      If odSelected In State Then
-        Box.Canvas.Font.Color := clHighlightText
-      Else
-        Box.Canvas.Font.Color := clGrayText;
-      If AliasText <> '' Then
-        Box.Canvas.TextRect(AliasR, AliasR.Left, AliasR.Top + 2, AliasText);
-    End;
-End;
-
-Procedure TProjectAssistantForm.SlashListClick(Sender: TObject);
-Begin
-  ExecuteSlashSelection;
 End;
 
 Procedure TProjectAssistantForm.PopupUnderControl(Host: TControl; Popup: TPopupMenu);
@@ -6026,7 +5725,6 @@ Procedure TProjectAssistantForm.CommandsActionExecute(Sender: TObject);
 Var
   ScreenPt: TPoint;
 Begin
-  HideSlashPopup;
   EnsureCommandsMenu;
   If Not Assigned(FCommandsPopup) Then
     Exit;
@@ -6047,67 +5745,11 @@ Begin
       QueueComposerPaste;
       Exit;
     End;
-  If SlashPopupVisible Then
-    Begin
-      Case Key Of
-        VK_ESCAPE:
-          Begin
-            Key := 0;
-            HideSlashPopup;
-            Exit;
-          End;
-        VK_UP:
-          Begin
-            Key := 0;
-            If FSlashList.ItemIndex > 0 Then
-              FSlashList.ItemIndex := FSlashList.ItemIndex - 1;
-            Exit;
-          End;
-        VK_DOWN:
-          Begin
-            Key := 0;
-            If FSlashList.ItemIndex < FSlashList.Items.Count - 1 Then
-              FSlashList.ItemIndex := FSlashList.ItemIndex + 1;
-            Exit;
-          End;
-        VK_RETURN, VK_TAB:
-          Begin
-            Key := 0;
-            ExecuteSlashSelection;
-            Exit;
-          End;
-      Else
-        { }
-      End;
-    End;
   If (Key = VK_RETURN) And (ssCtrl In Shift) Then
     Begin
       Key := 0;
       SendActionExecute(Sender);
     End;
-End;
-
-Procedure TProjectAssistantForm.InputMemoUTF8KeyPress(Sender: TObject; Var UTF8Key: TUTF8Char);
-Begin
-  If SlashPopupVisible And ((UTF8Key = #13) Or (UTF8Key = #10) Or (UTF8Key = #9)) Then
-    UTF8Key := '';
-End;
-
-Procedure TProjectAssistantForm.InputMemoChange(Sender: TObject);
-Begin
-  UpdateSlashPopup;
-End;
-
-Procedure TProjectAssistantForm.DeferredHideSlash(Data: PtrInt);
-Begin
-  If Assigned(FSlashList) And FSlashList.Focused Then
-    Exit;
-  HideSlashPopup;
-End;
-
-Procedure TProjectAssistantForm.InputMemoExit(Sender: TObject);
-Begin
-  Application.QueueAsyncCall(@DeferredHideSlash, 0);
 End;
 
 Procedure TProjectAssistantForm.StatusFooterLeftClick(Sender: TObject);
@@ -6141,7 +5783,6 @@ Begin
       MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  HideSlashPopup;
   If Assigned(AssistantClient) Then
     Info := AssistantClient.GetContextBreakdown
   Else
@@ -6179,7 +5820,6 @@ Begin
       MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  HideSlashPopup;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     PlanRel := '(none)';
@@ -6238,7 +5878,6 @@ Begin
       SettingsActionExecute(Sender);
       Exit;
     End;
-  HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillThinkingFooterMenu;
   PopupUnderControl(StatusFooter, FFooterMenu);
@@ -6253,7 +5892,6 @@ Begin
       MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  HideSlashPopup;
   EnsureFooterMenu(FFooterMenu);
   FillSkillFooterMenu;
   AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
@@ -6273,7 +5911,6 @@ Begin
       MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  HideSlashPopup;
   If FSending Then
     Begin
       MessageDlg('Wait for the current reply to finish (or Stop) before compacting context.',
@@ -6297,7 +5934,6 @@ Var
   Body: String;
   Turn: TConversationTurn;
 Begin
-  HideSlashPopup;
   Body := Trim(FAssistantContent);
   If (Body = '') And Assigned(ProjectAssistantConversation) And
     (ProjectAssistantConversation.TurnCount > 0) Then
@@ -6316,7 +5952,6 @@ Procedure TProjectAssistantForm.OpenPlanActionExecute(Sender: TObject);
 Var
   PlanRel, Resolved, Err: String;
 Begin
-  HideSlashPopup;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
@@ -6361,7 +5996,6 @@ Var
   Idx: Integer;
   Title: String;
 Begin
-  HideSlashPopup;
   ShowPlanOfferBar(False);
   If GetActivePlanRelativePath = '' Then
     Begin
@@ -6392,7 +6026,6 @@ End;
 
 Procedure TProjectAssistantForm.RevisePlanActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   ShowPlanOfferBar(False);
   SelectMode(amPlan);
   If Assigned(InputMemo) Then
@@ -6405,35 +6038,30 @@ End;
 
 Procedure TProjectAssistantForm.ChatModeActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   If Not FSending Then
     SelectMode(amChat);
 End;
 
 Procedure TProjectAssistantForm.InspectModeActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   If Not FSending Then
     SelectMode(amInspect);
 End;
 
 Procedure TProjectAssistantForm.DocumentModeActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   If Not FSending Then
     SelectMode(amDocument);
 End;
 
 Procedure TProjectAssistantForm.PlanModeActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   If Not FSending Then
     SelectMode(amPlan);
 End;
 
 Procedure TProjectAssistantForm.BuildModeActionExecute(Sender: TObject);
 Begin
-  HideSlashPopup;
   If Not FSending Then
     SelectMode(amBuild);
 End;
@@ -6498,11 +6126,6 @@ Var
     MessageDlg('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
   End;
 Begin
-  If SlashPopupVisible Then
-    Begin
-      ExecuteSlashSelection;
-      Exit;
-    End;
   If Not Assigned(InputMemo) Then Exit;
   UserText := Trim(InputMemo.Text);
   HasImages := ComposerHasImages;

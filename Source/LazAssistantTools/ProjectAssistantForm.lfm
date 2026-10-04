@@ -789,7 +789,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object CommandsAction: TAction
       Caption = 'Commands…'
-      Hint = 'Command catalog (Ctrl+P). Type / in the prompt to search.'
+      Hint = 'Open the command menu.'
       OnExecute = CommandsActionExecute
     end
     object ContextBreakdownAction: TAction

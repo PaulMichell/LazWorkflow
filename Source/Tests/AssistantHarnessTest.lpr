@@ -69,13 +69,13 @@ Begin
       '---' + LineEnding + 'BODY-ASSISTANT' + LineEnding);
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'beta' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: beta' + LineEnding + 'description: second skill' + LineEnding +
-      'user-invocable: false' + LineEnding + '---' + LineEnding + 'BODY-BETA' + LineEnding);
+      '---' + LineEnding + 'BODY-BETA' + LineEnding);
     Skills := ListDiscoveredSkills(Root);
     Check('two unique names', Length(Skills) >= 2);
     Check('alpha comes from .assistant/skills', (Length(Skills) > 0) And SameText(Skills[0].Name, 'alpha') And
       (Pos('from assistant', Skills[0].Description) > 0) And (Pos('project grok', Skills[0].Description) = 0));
-    Check('beta is listed as not invocable', (Length(Skills) > 1) And SameText(Skills[1].Name, 'beta') And
-      (Not Skills[1].UserInvocable));
+    Check('beta is listed', (Length(Skills) > 1) And SameText(Skills[1].Name, 'beta') And
+      (Pos('second skill', Skills[1].Description) > 0));
   Finally
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
   End;

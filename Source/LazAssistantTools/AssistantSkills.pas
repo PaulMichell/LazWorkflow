@@ -24,7 +24,6 @@ Type
     Description: String;
     WhenToUse: String;
     SkillFile: String;
-    UserInvocable: Boolean;
   End;
 
   TAssistantSkillList = Array Of TAssistantSkillInfo;
@@ -204,19 +203,6 @@ Begin
   End;
 End;
 
-Function ParseUserInvocable(Const Raw: String): Boolean;
-Var
-  Val: String;
-Begin
-  Val := LowerCase(Trim(ExtractFrontMatterField(Raw, 'user-invocable')));
-  If Val = '' Then
-    Val := LowerCase(Trim(ExtractFrontMatterField(Raw, 'user_invocable')));
-  If (Val = 'false') Or (Val = 'no') Or (Val = '0') Then
-    Result := False
-  Else
-    Result := True;
-End;
-
 Function FillSkillInfo(Const SkillDir: String; Out Info: TAssistantSkillInfo): Boolean;
 Var
   SkillFile, Raw: String;
@@ -227,7 +213,6 @@ Begin
   Info.Description := '';
   Info.WhenToUse := '';
   Info.SkillFile := '';
-  Info.UserInvocable := True;
   SkillFile := IncludeTrailingPathDelimiter(SkillDir) + 'SKILL.md';
   If Not FileExists(SkillFile) Then
     Exit;
@@ -246,7 +231,6 @@ Begin
       Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
       If Info.WhenToUse = '' Then
         Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
-      Info.UserInvocable := ParseUserInvocable(Raw);
       Result := True;
     Except
       On E: Exception Do
