@@ -775,6 +775,8 @@ End;
 Procedure TAssistantService.RebuildSystemPrompt;
 Var
   Root, PlanRel: String;
+  Names: TStringList;
+  I: Integer;
 Begin
   Root := '';
   If Assigned(ProjectAssistantConversation) Then
@@ -782,15 +784,28 @@ Begin
   If Root = '' Then
     Root := ProjectRootPath;
   PlanRel := GetActivePlanRelativePath;
-  If Assigned(WorkflowAssistantHarness) Then
-    FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, FActiveSkill, Root, PlanRel)
-  Else If FActiveMode = amChat Then
-    FSystemPrompt := ModeSystemPromptBase(amChat)
-  Else
-    Begin
-      FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
-      FSystemPrompt := BuildSystemPromptWithSkill(FBaseSystemPrompt, FActiveSkill);
-    End;
+  Names := TStringList.Create;
+  Try
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(FActiveMode), Names);
+    If Assigned(WorkflowAssistantHarness) Then
+      FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, Names, Root, PlanRel)
+    Else If FActiveMode = amChat Then
+      Begin
+        FSystemPrompt := ModeSystemPromptBase(amChat);
+        For I := 0 To Names.Count - 1 Do
+          FSystemPrompt := BuildSystemPromptWithSkill(FSystemPrompt, Names[I]);
+      End
+    Else
+      Begin
+        FBaseSystemPrompt := ModeSystemPromptBase(FActiveMode);
+        FSystemPrompt := FBaseSystemPrompt;
+        For I := 0 To Names.Count - 1 Do
+          FSystemPrompt := BuildSystemPromptWithSkill(FSystemPrompt, Names[I]);
+      End;
+  Finally
+    Names.Free;
+  End;
   If FIsSubagent Then
     FSystemPrompt := FSystemPrompt + LineEnding + LineEnding +
       SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName))

@@ -217,6 +217,7 @@ Type
   Private
 
     FUseCodex: Boolean;
+    FUseClaude: Boolean;
     FReloadConnectionAfterSend: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -432,7 +433,8 @@ Type
     Procedure UpdateWorkActions;
     Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
     Procedure ApplyConfigAndRefresh;
-    Procedure PinActiveSkill(Const SkillName: String);
+    Procedure ToggleSkillForMode(Const SkillName: String);
+    Function ModeSkillCaption: String;
     Procedure FillModelFooterMenu;
     Procedure FillThinkingFooterMenu;
     Procedure FillApprovalFooterMenu;
@@ -1184,20 +1186,15 @@ Begin
           StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
         End;
     End
-  Else If ActiveMode = amChat Then
+  Else If FUseClaude Then
     Begin
       StatusFooter.SetSkillText('Skill: not sent');
-      StatusFooter.SetSkillHint('Chat does not send a skill');
-    End
-  Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
-    Begin
-      StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
-      StatusFooter.SetSkillHint('Click to pin a different skill');
+      StatusFooter.SetSkillHint('This assistant''s skills are not sent into Claude Code.');
     End
   Else
     Begin
-      StatusFooter.SetSkillText('Skill: none');
-      StatusFooter.SetSkillHint('Click to pin a skill');
+      StatusFooter.SetSkillText(ModeSkillCaption);
+      StatusFooter.SetSkillHint('Click to toggle skills for this mode');
     End;
 End;
 
@@ -2986,11 +2983,13 @@ Var Connections: TAssistantConnections; Item: TAssistantConnection;
 Begin
   Try
     FUseCodex := False;
+    FUseClaude := False;
     If Not Assigned(LazarusIDE) Then Exit;
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
       Connections.Load; Item := Connections.Active;
       FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
+      FUseClaude := Assigned(Item) And (Item.Backend = 'claude');
       If FUseCodex Then
         Begin
           FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
@@ -3003,6 +3002,7 @@ Begin
     On E: Exception Do
       Begin
         FUseCodex := False;
+        FUseClaude := False;
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
   End;
@@ -5480,16 +5480,53 @@ Begin
   PersistShellConfig;
 End;
 
-Procedure TProjectAssistantForm.PinActiveSkill(Const SkillName: String);
+Function TProjectAssistantForm.ModeSkillCaption: String;
+Var
+  Names: TStringList;
+  I: Integer;
 Begin
+  Result := 'Skill: not sent';
   If Not Assigned(AssistantChatConfig) Then
     Exit;
-  AssistantChatConfig.ActiveSkill := SkillName;
+  Names := TStringList.Create;
+  Try
+    AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(ActiveMode), Names);
+    If Names.Count = 0 Then
+      Exit;
+    Result := Names[0];
+    For I := 1 To Names.Count - 1 Do
+      Result := Result + ', ' + Names[I];
+  Finally
+    Names.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ToggleSkillForMode(Const SkillName: String);
+Var
+  Modes: TStringList;
+  ModeName: String;
+  Index: Integer;
+Begin
+  If (Not Assigned(AssistantChatConfig)) Or (Trim(SkillName) = '') Then
+    Exit;
+  ModeName := AssistantModeToStr(ActiveMode);
+  Modes := TStringList.Create;
+  Try
+    AssistantChatConfig.CollectModesForSkill(SkillName, Modes);
+    Index := Modes.IndexOf(ModeName);
+    If Index >= 0 Then
+      Modes.Delete(Index)
+    Else
+      Modes.Add(ModeName);
+    AssistantChatConfig.SetSkillModes(SkillName, Modes);
+  Finally
+    Modes.Free;
+  End;
   ApplyConfigAndRefresh;
-  If SkillName = '' Then
-    SetCurrentSystemNote('Pinned skill cleared. Plan and Build still attach free-pascal-engineer when it is installed.')
+  If AssistantChatConfig.SkillHasMode(SkillName, ModeName) Then
+    SetCurrentSystemNote('**' + SkillName + '** is sent in ' + ModeName + '.')
   Else
-    SetCurrentSystemNote('Pinned skill **' + SkillName + '**. It is included in the next turn.');
+    SetCurrentSystemNote('**' + SkillName + '** is not sent in ' + ModeName + '.');
 End;
 
 Procedure AddFooterItem(Menu: TPopupMenu; Const Caption: String; TagValue: Integer;
@@ -5573,19 +5610,19 @@ Procedure TProjectAssistantForm.FillSkillFooterMenu;
 Var
   Skills: TAssistantSkillList;
   I: Integer;
-  Root, PinnedSkill: String;
+  Root, ModeName: String;
+  Tagged: Boolean;
 Begin
-  PinnedSkill := '';
-  If Assigned(AssistantChatConfig) Then
-    PinnedSkill := AssistantChatConfig.ActiveSkill;
-  AddFooterItem(FFooterMenu, '(None)', FooterTagSkill, '', PinnedSkill = '', True, @FooterMenuClick);
+  ModeName := AssistantModeToStr(ActiveMode);
   Root := '';
   If Assigned(ProjectAssistantConversation) Then
     Root := ProjectAssistantConversation.ProjectRoot;
   Skills := ListDiscoveredSkills(Root);
   For I := 0 To High(Skills) Do
-    AddFooterItem(FFooterMenu, Skills[I].Name, FooterTagSkill, Skills[I].Name,
-      SameText(Skills[I].Name, PinnedSkill), True, @FooterMenuClick);
+    Begin
+      Tagged := Assigned(AssistantChatConfig) And AssistantChatConfig.SkillHasMode(Skills[I].Name, ModeName);
+      AddFooterItem(FFooterMenu, Skills[I].Name, FooterTagSkill, Skills[I].Name, Tagged, False, @FooterMenuClick);
+    End;
 End;
 
 Procedure TProjectAssistantForm.FooterMenuClick(Sender: TObject);
@@ -5615,7 +5652,7 @@ Begin
         ApplyConfigAndRefresh;
       End;
     FooterTagSkill:
-      PinActiveSkill(Item.Hint);
+      ToggleSkillForMode(Item.Hint);
     FooterTagSettings:
       SettingsActionExecute(Sender);
   Else
@@ -5717,15 +5754,12 @@ Begin
         Root := ProjectAssistantConversation.ProjectRoot;
       Turns := ProjectAssistantConversation.TurnCount;
     End;
-  SkillName := '(none)';
+  SkillName := ModeSkillCaption;
   SignedIn := 'no';
-  If Assigned(AssistantChatConfig) Then
-    Begin
-      If AssistantChatConfig.ActiveSkill <> '' Then
-        SkillName := AssistantChatConfig.ActiveSkill;
-      If AssistantChatConfig.IsSignedIn Then
-        SignedIn := 'yes';
-    End;
+  If FUseClaude Then
+    SkillName := 'Skill: not sent';
+  If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
+    SignedIn := 'yes';
   Body :=
     'Project Assistant session' + LineEnding + LineEnding +
     'Mode: ' + ModeChipCaption(ActiveMode) + LineEnding +
@@ -5735,7 +5769,7 @@ Begin
       'Thinking: ' + ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel) + LineEnding +
       'Approval: ' + ApprovalModeCaption(AssistantChatConfig.GetApprovalMode) + LineEnding;
   Body := Body +
-    'Skill: ' + SkillName + LineEnding +
+    SkillName + LineEnding +
     Format('Context: ~%d / %d tokens', [FContextUsed, FContextLimit]) + LineEnding +
     'Turns: ' + IntToStr(Turns) + LineEnding +
     'Active plan: ' + PlanRel + LineEnding +
@@ -5776,6 +5810,11 @@ Begin
   If FUseCodex Then
     Begin
       MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If FUseClaude Then
+    Begin
+      MessageDlg('This assistant''s skills are not sent into Claude Code.', mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureFooterMenu(FFooterMenu);

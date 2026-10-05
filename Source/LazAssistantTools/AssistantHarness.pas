@@ -34,7 +34,8 @@ Type
     Function BuildCommunication: String;
     Function BuildFormatting: String;
     Function BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String): String;
-    Function BuildSkillsSection(Const ProjectRoot, PinnedSkill: String; Mode: TAssistantMode): String;
+    Function AttachTaggedSkills(SkillNames: TStrings; Const ProjectRoot: String): String;
+    Function BuildSkillsSection(Const ProjectRoot: String; SkillNames: TStrings): String;
     Function BuildProjectRules(Const ProjectRoot: String): String;
     Function BuildUserInfo(Const ProjectRoot: String): String;
     Function AttachSkillBody(Const SkillName, ProjectRoot, Reason: String): String;
@@ -43,7 +44,7 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Function BuildSystemPrompt(Mode: TAssistantMode; Const PinnedSkill, ProjectRoot, ActivePlanRel: String): String;
+    Function BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
     Procedure ClearTurnTodos;
     Function TodoCount: Integer;
     Function TodoItem(Index: Integer): TAssistantTodoItem;
@@ -188,7 +189,7 @@ Begin
       'Read-only project tools. You may open a source file with `open_file` and search with `search_in_project` or `grep`.' + LineEnding +
       'You cannot call `write_file`, `replace_in_file`, `write_markdown`, `run_compile`, or `run_git`. ' +
       'Ask the user to switch to Document for a report or other Markdown, Plan for a build plan, or Build for source edits.' + LineEnding +
-      'The house skill is attached only when the user pins it.' + LineEnding +
+      'A skill body is attached only when that skill is tagged for this mode. Use `read_skill` for catalog entries that are not tagged.' + LineEnding +
       'Prefer the active editor context already in the user message when it includes the code under discussion.';
   End;
   Result := Result + LineEnding + '</mode_overlay>';
@@ -213,26 +214,52 @@ Begin
     '----- end skill: ' + SkillName + ' -----';
 End;
 
-Function TAssistantHarness.BuildSkillsSection(Const ProjectRoot, PinnedSkill: String; Mode: TAssistantMode): String;
+Function TAssistantHarness.AttachTaggedSkills(SkillNames: TStrings; Const ProjectRoot: String): String;
+Var
+  Bodies, Seen: TStringList;
+  I: Integer;
+  Name, Body: String;
+Begin
+  Result := '';
+  If Not Assigned(SkillNames) Then
+    Exit;
+  Bodies := TStringList.Create;
+  Seen := TStringList.Create;
+  Try
+    Seen.CaseSensitive := False;
+    For I := 0 To SkillNames.Count - 1 Do
+      Begin
+        Name := Trim(SkillNames[I]);
+        If (Name = '') Or (Seen.IndexOf(Name) >= 0) Then
+          Continue;
+        Seen.Add(Name);
+        Body := AttachSkillBody(Name, ProjectRoot,
+          'Tagged for this mode. Follow it when the work matches this skill.');
+        If Body <> '' Then
+          Bodies.Add(Body);
+      End;
+    Result := Trim(Bodies.Text);
+  Finally
+    Seen.Free;
+    Bodies.Free;
+  End;
+End;
+
+Function TAssistantHarness.BuildSkillsSection(Const ProjectRoot: String; SkillNames: TStrings): String;
 Var
   Skills: TAssistantSkillList;
-  Pin, AlwaysName: String;
   Bodies: TStringList;
+  Tagged: String;
 Begin
   Skills := ListDiscoveredSkills(ProjectRoot);
-  Pin := Trim(PinnedSkill);
-  AlwaysName := AssistantDefaultSkillName;
   Bodies := TStringList.Create;
   Try
     Bodies.Add('<skills>');
     Bodies.Add('Catalog (name + description + when-to-use). Load a body with `read_skill` when you need it.');
     Bodies.Add(FormatSkillCatalog(Skills));
-    If (Mode In [amPlan, amBuild]) And (ResolveSkillFile(AlwaysName, ProjectRoot) <> '') Then
-      Bodies.Add(AttachSkillBody(AlwaysName, ProjectRoot,
-        'Always attached in Plan and Build. Follow it as the house Free Pascal / Lazarus engineering standard.'));
-    If (Pin <> '') And (Not ((Mode In [amPlan, amBuild]) And SameText(Pin, AlwaysName))) Then
-      Bodies.Add(AttachSkillBody(Pin, ProjectRoot,
-        'The user pinned this skill for the session. Follow it as authoritative for relevant work.'));
+    Tagged := AttachTaggedSkills(SkillNames, ProjectRoot);
+    If Tagged <> '' Then
+      Bodies.Add(Tagged);
     Bodies.Add('</skills>');
     Result := Trim(Bodies.Text);
   Finally
@@ -303,18 +330,28 @@ Begin
     '</user_info>';
 End;
 
-Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; Const PinnedSkill, ProjectRoot, ActivePlanRel: String): String;
+Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
 Var
   Parts: TStringList;
+  Tagged: String;
 Begin
-  { Chat is a general conversation: no skill catalog, no skill body, no IDE or project rules. }
+  { Chat has no catalog, project rules, or tool policy. A tagged body is the only extra. }
   If Mode = amChat Then
     Begin
-      Result :=
-        'You are a helpful assistant in a general chat.' + LineEnding +
-        'You have no project tools, no IDE access, and no attached skill.' + LineEnding +
-        'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
-        'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.';
+      Tagged := AttachTaggedSkills(SkillNames, ProjectRoot);
+      If Tagged = '' Then
+        Result :=
+          'You are a helpful assistant in a general chat.' + LineEnding +
+          'You have no project tools, no IDE access, and no attached skill.' + LineEnding +
+          'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
+          'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.'
+      Else
+        Result :=
+          'You are a helpful assistant in a general chat.' + LineEnding +
+          'You have no project tools and no IDE access.' + LineEnding +
+          'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
+          'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.' +
+          LineEnding + LineEnding + Tagged;
       Exit;
     End;
   Parts := TStringList.Create;
@@ -326,7 +363,7 @@ Begin
     Parts.Add(BuildCommunication);
     Parts.Add(BuildFormatting);
     Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
-    Parts.Add(BuildSkillsSection(ProjectRoot, PinnedSkill, Mode));
+    Parts.Add(BuildSkillsSection(ProjectRoot, SkillNames));
     Parts.Add(BuildProjectRules(ProjectRoot));
     Parts.Add(BuildUserInfo(ProjectRoot));
     Result := Trim(Parts.Text);

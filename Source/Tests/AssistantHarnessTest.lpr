@@ -85,9 +85,11 @@ Procedure TestHarnessPrompt;
 Var
   Root, Prompt, Body, Err: String;
   Harness: TAssistantHarness;
+  Names: TStringList;
 Begin
   Root := MakeTempRoot;
   Harness := TAssistantHarness.Create;
+  Names := TStringList.Create;
   Try
     WriteTextFile(Root + 'AGENTS.md', 'Use PascalCase keywords in this repo.');
     WriteTextFile(Root + '.grok' + PathDelim + 'skills' + PathDelim + 'free-pascal-engineer' + PathDelim + 'SKILL.md',
@@ -101,32 +103,47 @@ Begin
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'imagine' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: imagine' + LineEnding + 'description: image prompts' + LineEnding +
       'when-to-use: generating images' + LineEnding + '---' + LineEnding + 'IMAGINE BODY' + LineEnding);
-    Prompt := Harness.BuildSystemPrompt(amBuild, '', Root, 'Documents/Plan.md');
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build prompt names Build mode', Pos('Build mode', Prompt) > 0);
     Check('catalog lists imagine', Pos('imagine', Prompt) > 0);
     Check('catalog has when-to-use', Pos('generating images', Prompt) > 0);
-    Check('build attaches fpe body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
+    Check('build with no tags catalogs fpe and does not attach the body',
+      (Pos('free-pascal-engineer', Prompt) > 0) And (Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0));
     Check('project .grok/skills is not loaded', Pos('DO NOT USE PROJECT GROK SKILL', Prompt) = 0);
     Check('AGENTS.md inlined', Pos('Use PascalCase keywords in this repo', Prompt) > 0);
     Check('work_policy section', Pos('<work_policy>', Prompt) > 0);
     Check('ide_fusion section', Pos('<ide_fusion>', Prompt) > 0);
-    Prompt := Harness.BuildSystemPrompt(amChat, 'free-pascal-engineer', Root, '');
+    Names.Add('free-pascal-engineer');
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
+    Check('build with free-pascal-engineer tagged attaches its body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
+    Names.Clear;
+    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
     Check('chat names general chat', Pos('general chat', Prompt) > 0);
-    Check('chat does not attach skill body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0);
-    Check('chat does not catalog skills', Pos('free-pascal-engineer', Prompt) = 0);
+    Check('chat with no tags contains neither the body nor the catalog',
+      (Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0) And (Pos('IMAGINE BODY', Prompt) = 0) And
+      (Pos('free-pascal-engineer', Prompt) = 0) And (Pos('<skills>', Prompt) = 0));
     Check('chat does not inline AGENTS.md', Pos('AGENTS.md', Prompt) = 0);
     Check('chat has no tool policy', Pos('<work_policy>', Prompt) = 0);
-    Prompt := Harness.BuildSystemPrompt(amInspect, '', Root, '');
+    Names.Add('imagine');
+    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
+    Check('chat with imagine tagged contains IMAGINE BODY', Pos('IMAGINE BODY', Prompt) > 0);
+    Check('chat with imagine has no work policy', Pos('<work_policy>', Prompt) = 0);
+    Names.Clear;
+    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
     Check('inspect does not dump fpe body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0);
     Check('inspect still catalogs fpe', Pos('free-pascal-engineer', Prompt) > 0);
     Check('inspect may open and search', (Pos('open_file', Prompt) > 0) And (Pos('search_in_project', Prompt) > 0));
     Check('inspect overlay refuses writes', Pos('write_file', Prompt) > 0);
-    Prompt := Harness.BuildSystemPrompt(amInspect, 'free-pascal-engineer', Root, '');
-    Check('inspect pin attaches house skill', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
-    Prompt := Harness.BuildSystemPrompt(amInspect, 'imagine', Root, '');
-    Check('inspect pin injects imagine body', Pos('IMAGINE BODY', Prompt) > 0);
+    Names.Add('free-pascal-engineer');
+    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
+    Check('inspect tag attaches house skill', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
+    Names.Clear;
+    Names.Add('imagine');
+    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
+    Check('inspect tag injects imagine body', Pos('IMAGINE BODY', Prompt) > 0);
     Check('read_skill loads imagine', Harness.ReadSkill('imagine', Root, Body, Err) And (Pos('IMAGINE BODY', Body) > 0));
   Finally
+    Names.Free;
     Harness.Free;
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
   End;
