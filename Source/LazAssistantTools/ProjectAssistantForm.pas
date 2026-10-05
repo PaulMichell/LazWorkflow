@@ -219,6 +219,9 @@ Type
     FUseCodex: Boolean;
     FUseClaude: Boolean;
     FCanCompactContext: Boolean;
+    FActiveConnectionId: String;
+    FActiveBackend: String;
+    FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -226,6 +229,7 @@ Type
     FCodexWorkspace: TAssistantIDEWorkspace;
     FCodexBroker: TAssistantToolBroker;
     Procedure LoadConnectionSettings;
+    Procedure RecordCompletedUsage;
     Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
@@ -482,7 +486,8 @@ Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
-  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCodexSettings, AssistantCodexClient, AssistantImages,
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
+  AssistantImages,
   AssistantImageView
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
@@ -2994,6 +2999,9 @@ Begin
     FUseCodex := False;
     FUseClaude := False;
     FCanCompactContext := False;
+    FActiveConnectionId := '';
+    FActiveBackend := '';
+    FActiveModel := '';
     If Not Assigned(LazarusIDE) Then Exit;
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
@@ -3001,6 +3009,12 @@ Begin
       FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
       FUseClaude := Assigned(Item) And (Item.Backend = 'claude');
       FCanCompactContext := Assigned(Item) And Item.CanCompactContext;
+      If Assigned(Item) Then
+        Begin
+          FActiveConnectionId := Item.Id;
+          FActiveBackend := Item.Backend;
+          FActiveModel := Item.Model;
+        End;
       If FUseCodex Then
         Begin
           FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
@@ -3015,6 +3029,9 @@ Begin
         FUseCodex := False;
         FUseClaude := False;
         FCanCompactContext := False;
+        FActiveConnectionId := '';
+        FActiveBackend := '';
+        FActiveModel := '';
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
   End;
@@ -5090,6 +5107,32 @@ Begin
   End;
 End;
 
+Procedure TProjectAssistantForm.RecordCompletedUsage;
+Var
+  Root, ErrorText: String;
+  InputTokens, OutputTokens, ReasoningTokens: Integer;
+  HasReasoning, HasUsage: Boolean;
+  Item: TAssistantUsageRecord;
+Begin
+  { Codex has no usage parser. A Claude turn is not this stream. }
+  If FUseCodex Or FUseClaude Or (FActiveConnectionId = '') Or (Not Assigned(AssistantClient)) Then
+    Exit;
+  HasUsage := AssistantClient.TakeReportedUsage(InputTokens, OutputTokens, ReasoningTokens, HasReasoning);
+  If Not HasUsage Then
+    Exit;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  If Root = '' Then
+    Root := ProjectRootPath;
+  If Root = '' Then
+    Exit;
+  Item := ReportedUsageRecord(FActiveConnectionId, FActiveBackend, FActiveModel, InputTokens, OutputTokens,
+    HasReasoning, ReasoningTokens, False, 0, '');
+  If Not AppendUsageRecord(Root, Item, ErrorText) And (ErrorText <> '') Then
+    WorkflowLogger.Warning('ProjectAssistant', 'Could not record usage: ' + ErrorText);
+End;
+
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
   ResolvedError, TraceNote, Settlement, AskedNote: String;
@@ -5171,6 +5214,8 @@ Begin
   FinishLiveTrace(TraceNote, WorkedMs);
   { Record from live buffers so a browsed-away pane still saves the real answer. }
   RecordCurrentTurn(ResolvedError);
+  If ResolvedError = '' Then
+    RecordCompletedUsage;
   If AssistantRequestRejectedImage(ResolvedError) Then
     Begin
       { The pictures stay in the composer. Do not resend the rejected refs on the next request. }

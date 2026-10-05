@@ -178,6 +178,7 @@ Type
     Procedure ShowConnectionKind(Const Backend: String);
     Procedure RefreshConnections;
     Procedure StoreConnection;
+    Procedure ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
     Procedure LoadGrokConnection(Item: TAssistantConnection);
     Procedure LoadCompatibleConnection(Item: TAssistantConnection);
     Procedure LoadClaudeConnection(Item: TAssistantConnection);
@@ -203,6 +204,7 @@ Implementation
 Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient,
+  AssistantUsage,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
 Type
@@ -626,6 +628,21 @@ Begin
     End;
 End;
 
+Procedure TAssistantSettingsForm.ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
+Var
+  Root: String;
+  Found: Boolean;
+  Recorded: TAssistantUsageRecord;
+Begin
+  If Not Assigned(UsageLabel) Then
+    Exit;
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  Found := Assigned(Item) And (Root <> '') And LatestUsageRecord(Root, Item.Id, Recorded);
+  UsageLabel.Caption := UsageDetailText(Found, Recorded);
+End;
+
 Procedure TAssistantSettingsForm.LoadGrokConnection(Item: TAssistantConnection);
 Begin
   If Item.ApiBase <> '' Then
@@ -656,6 +673,7 @@ Begin
   Else
     MaxOutputEdit.Value := Item.MaxOutputTokens;
   ApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
+  ShowConnectionUsage(Item, GrokUsageLabel);
 End;
 
 Procedure TAssistantSettingsForm.LoadCompatibleConnection(Item: TAssistantConnection);
@@ -683,6 +701,7 @@ Begin
     CompatibleMaxOutputEdit.Value := Item.MaxOutputTokens;
   CompatibleApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
   CompatibleStatusLabel.Caption := '';
+  ShowConnectionUsage(Item, CompatibleUsageLabel);
 End;
 
 Procedure TAssistantSettingsForm.LoadClaudeConnection(Item: TAssistantConnection);
@@ -691,6 +710,7 @@ Begin
   ClaudeModelEdit.Text := Item.Model;
   ClaudeApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
   ClaudeStatusLabel.Caption := ClaudeKeepsSessionText;
+  ShowConnectionUsage(Item, ClaudeUsageLabel);
 End;
 
 Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);

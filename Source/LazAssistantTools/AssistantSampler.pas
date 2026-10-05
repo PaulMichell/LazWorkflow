@@ -37,6 +37,8 @@ Type
     FInputTokens: Integer;
     FOutputTokens: Integer;
     FReasoningTokens: Integer;
+    FUsageReported: Boolean;
+    FHasReasoning: Boolean;
     FFailed: Boolean;
     FIncomplete: Boolean;
     FCompleted: Boolean;
@@ -74,6 +76,8 @@ Type
     Property InputTokens: Integer Read FInputTokens;
     Property OutputTokens: Integer Read FOutputTokens;
     Property ReasoningTokens: Integer Read FReasoningTokens;
+    Property UsageReported: Boolean Read FUsageReported;
+    Property HasReasoning: Boolean Read FHasReasoning;
     Property Completed: Boolean Read FCompleted;
     Property Failed: Boolean Read FFailed;
     Property Incomplete: Boolean Read FIncomplete;
@@ -143,6 +147,8 @@ Begin
   FInputTokens := 0;
   FOutputTokens := 0;
   FReasoningTokens := 0;
+  FUsageReported := False;
+  FHasReasoning := False;
   FFailed := False;
   FIncomplete := False;
   FCompleted := False;
@@ -708,10 +714,12 @@ Begin
   UsageObj := Root.FindPath('usage') As TJSONObject;
   If Assigned(UsageObj) Then
     Begin
+      FUsageReported := True;
       FInputTokens := JsonIntField(UsageObj, 'input_tokens');
       FOutputTokens := JsonIntField(UsageObj, 'output_tokens');
       Details := UsageObj.FindPath('output_tokens_details') As TJSONObject;
-      If Assigned(Details) Then
+      FHasReasoning := Assigned(Details);
+      If FHasReasoning Then
         FReasoningTokens := JsonIntField(Details, 'reasoning_tokens');
     End;
 End;
@@ -726,10 +734,12 @@ Begin
   UsageObj := Root.FindPath('usage') As TJSONObject;
   If Not Assigned(UsageObj) Then
     Exit;
+  FUsageReported := True;
   FInputTokens := JsonIntField(UsageObj, 'input_tokens');
   FOutputTokens := JsonIntField(UsageObj, 'output_tokens');
   Details := UsageObj.FindPath('output_tokens_details') As TJSONObject;
-  If Assigned(Details) Then
+  FHasReasoning := Assigned(Details);
+  If FHasReasoning Then
     FReasoningTokens := JsonIntField(Details, 'reasoning_tokens');
 End;
 
@@ -841,6 +851,7 @@ Begin
           UsageObj := Root.FindPath('usage') As TJSONObject;
           If Assigned(UsageObj) Then
             Begin
+              FUsageReported := True;
               FInputTokens := JsonIntField(UsageObj, 'prompt_tokens');
               If FInputTokens = 0 Then
                 FInputTokens := JsonIntField(UsageObj, 'input_tokens');

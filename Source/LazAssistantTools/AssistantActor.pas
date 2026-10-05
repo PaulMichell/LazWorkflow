@@ -497,6 +497,7 @@ Var
   Code: Integer;
   Headers, LastErr: String;
   Control: THttpsStreamControl;
+  Svc: TAssistantService;
 Begin
   Result := False;
   ErrorText := '';
@@ -563,6 +564,13 @@ Begin
               FContent := FParser.Content;
               FResponseOutputJson := FParser.OutputJson;
               FToolCalls := FParser.ToolCalls;
+              If FParser.UsageReported Then
+                Begin
+                  Svc := LockedService;
+                  If Assigned(Svc) Then
+                    Svc.NoteReportedUsage(FParser.InputTokens, FParser.OutputTokens, FParser.ReasoningTokens,
+                      FParser.HasReasoning);
+                End;
               Result := True;
               Exit;
             End;

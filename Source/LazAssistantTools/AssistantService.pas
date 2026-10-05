@@ -85,6 +85,11 @@ Type
     FMaxOutputTokens: Integer;
     FSearchMode: String;
     FSearchCitations: Boolean;
+    FHasReportedUsage: Boolean;
+    FReportedInputTokens: Integer;
+    FReportedOutputTokens: Integer;
+    FReportedReasoningTokens: Integer;
+    FReportedHasReasoning: Boolean;
     FOnTrace: TAssistantTraceNotify;
     FOrphanThreads: TFPList;
     FIsSubagent: Boolean;
@@ -159,6 +164,9 @@ Type
     Procedure DetachStreamCallbacks;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
+    Procedure NoteReportedUsage(InputTokens, OutputTokens, ReasoningTokens: Integer; HasReasoning: Boolean);
+    Function TakeReportedUsage(Out InputTokens, OutputTokens, ReasoningTokens: Integer;
+      Out HasReasoning: Boolean): Boolean;
     { One-shot non-streaming completion; does not touch chat history or tools.
       Intended for short side tasks (e.g. commit message suggestion). }
     Function CompleteOnce(Const SystemPrompt, UserPrompt: String;
@@ -2194,6 +2202,11 @@ Begin
     End;
 
   ClearStreamThread;
+  FHasReportedUsage := False;
+  FReportedInputTokens := 0;
+  FReportedOutputTokens := 0;
+  FReportedReasoningTokens := 0;
+  FReportedHasReasoning := False;
   If (Not FIsSubagent) And Assigned(WorkflowAssistantHarness) Then
     WorkflowAssistantHarness.ClearTurnTodos;
   { Refresh mode/plan-path wording and tool list before every request. }
@@ -2262,6 +2275,30 @@ End;
 Procedure TAssistantService.MarkStreamComplete;
 Begin
   FBusy := False;
+End;
+
+Procedure TAssistantService.NoteReportedUsage(InputTokens, OutputTokens, ReasoningTokens: Integer; HasReasoning: Boolean);
+Begin
+  FHasReportedUsage := True;
+  FReportedInputTokens := InputTokens;
+  FReportedOutputTokens := OutputTokens;
+  FReportedReasoningTokens := ReasoningTokens;
+  FReportedHasReasoning := HasReasoning;
+End;
+
+Function TAssistantService.TakeReportedUsage(Out InputTokens, OutputTokens, ReasoningTokens: Integer;
+  Out HasReasoning: Boolean): Boolean;
+Begin
+  Result := FHasReportedUsage;
+  InputTokens := FReportedInputTokens;
+  OutputTokens := FReportedOutputTokens;
+  ReasoningTokens := FReportedReasoningTokens;
+  HasReasoning := FReportedHasReasoning;
+  FHasReportedUsage := False;
+  FReportedInputTokens := 0;
+  FReportedOutputTokens := 0;
+  FReportedReasoningTokens := 0;
+  FReportedHasReasoning := False;
 End;
 
 Initialization
