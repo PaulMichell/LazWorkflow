@@ -65,6 +65,7 @@ Type
     FInputLayoutPending: Boolean;
     FCaretTimer: TTimer;
     FCaretOn: Boolean;
+    FOwnsCaret: Boolean;
     FRanges: TSpellUnderlineRangeArray;
     FOwnedPopup: TPopupMenu;
     FSpellItemCount: Integer;
@@ -97,6 +98,8 @@ Type
     Procedure DebounceTimer(Sender: TObject);
     Procedure CaretTimerTick(Sender: TObject);
     Procedure ResetCaretBlink;
+    Procedure AcquireCaret;
+    Function CaretIsActive: Boolean;
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
     Procedure ClearSpellMenu(Menu: TPopupMenu);
@@ -246,6 +249,18 @@ Const
   SpellUndoLimit = 200;
   SpellUndoGroupMs = 1000;
 
+Function SpellOpaqueColor(Value: TColor): TColor;
+Begin
+  { Pen and brush colours are not resolved the way TextOut resolves clDefault. }
+  If (Value = clDefault) Or (Value = clNone) Then
+    Value := clWindowText;
+  Result := ColorToRGB(Value);
+  If Result < 0 Then
+    Result := ColorToRGB(clWindowText);
+  If Result < 0 Then
+    Result := 0;
+End;
+
 Function NormaliseMemoText(Const Value: String): String;
 Begin
   Result := StringReplace(Value, #13#10, #10, [rfReplaceAll]);
@@ -318,6 +333,7 @@ Begin
   FCaretTimer.Interval := 530;
   FCaretTimer.OnTimer := @CaretTimerTick;
   FCaretOn := False;
+  FOwnsCaret := False;
   FScrollBar := Nil;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.RegisterChangedHandler(@ConfigChanged);
@@ -944,20 +960,51 @@ Begin
     End;
 End;
 
+Function TSpellMemo.CaretIsActive: Boolean;
+Var
+  ParentForm: TCustomForm;
+Begin
+  Result := False;
+  If csDesigning In ComponentState Then
+    Exit;
+  { Focused can stay false after a popup or child scrollbar while the form
+    still delivers keys here. A key also sets FOwnsCaret for that gap. }
+  ParentForm := GetParentForm(Self);
+  If Assigned(ParentForm) Then
+    Result := ParentForm.ActiveControl = Self
+  Else
+    Result := Screen.ActiveControl = Self;
+  Result := Result Or Focused Or FOwnsCaret;
+End;
+
 Procedure TSpellMemo.ResetCaretBlink;
 Begin
   FCaretOn := True;
   If Assigned(FCaretTimer) Then
     Begin
       FCaretTimer.Enabled := False;
-      FCaretTimer.Enabled := Focused And (Not (csDesigning In ComponentState));
+      FCaretTimer.Enabled := HandleAllocated And CaretIsActive;
     End;
+End;
+
+Procedure TSpellMemo.AcquireCaret;
+Begin
+  FOwnsCaret := True;
+  UpdateCaret;
 End;
 
 Procedure TSpellMemo.CaretTimerTick(Sender: TObject);
 Begin
   If (Not FReady) Or (csDestroying In ComponentState) Then
     Exit;
+  If Not CaretIsActive Then
+    Begin
+      FCaretTimer.Enabled := False;
+      FCaretOn := False;
+      If HandleAllocated Then
+        Invalidate;
+      Exit;
+    End;
   FCaretOn := Not FCaretOn;
   If HandleAllocated Then
     Invalidate;
@@ -966,7 +1013,9 @@ End;
 Procedure TSpellMemo.UpdateCaret;
 Begin
   ResetCaretBlink;
-  If HandleAllocated Then
+  { A pending input layout already invalidates. Another invalidate here would
+    flush that layout inside the key handler and stall rapid typing. }
+  If HandleAllocated And (Not FInputLayoutPending) Then
     Invalidate;
 End;
 
@@ -1141,6 +1190,8 @@ Begin
   QueueInputLayout;
   RestartDebounce;
   Change;
+  If CaretIsActive Then
+    UpdateCaret;
 End;
 
 Procedure TSpellMemo.ReplaceRange(CharStart, RemoveCount: Integer; Const Inserted: String; Kind: TSpellEditKind);
@@ -1248,6 +1299,8 @@ End;
 Procedure TSpellMemo.UTF8KeyPress(Var UTF8Key: TUTF8Char);
 Begin
   Inherited UTF8KeyPress(UTF8Key);
+  { An input method can deliver characters without a matching KeyDown. }
+  AcquireCaret;
   If (UTF8Key = '') Or FReadOnly Then
     Exit;
   If (UTF8Key = #8) Or (UTF8Key = #127) Then
@@ -1290,6 +1343,7 @@ Var
   Extend: Boolean;
   Caret, LineIndex, Target, CaretByte: Integer;
 Begin
+  AcquireCaret;
   Inherited KeyDown(Key, Shift);
   If Key In [VK_HOME, VK_END, VK_UP, VK_DOWN] Then FlushInputLayout;
   Extend := ssShift In Shift;
@@ -1447,6 +1501,7 @@ Var
   NewPos: Integer;
 Begin
   Inherited MouseDown(Button, Shift, X, Y);
+  FOwnsCaret := True;
   SetFocus;
   EnsurePopupHook;
   FDragOrigin := Point(X, Y);
@@ -1491,6 +1546,7 @@ End;
 Procedure TSpellMemo.DoEnter;
 Begin
   Inherited DoEnter;
+  FOwnsCaret := True;
   UpdateCaret;
   Invalidate;
 End;
@@ -1498,6 +1554,7 @@ End;
 Procedure TSpellMemo.DoExit;
 Begin
   Inherited DoExit;
+  FOwnsCaret := False;
   If Assigned(FCaretTimer) Then
     FCaretTimer.Enabled := False;
   FCaretOn := False;
@@ -1530,10 +1587,21 @@ Procedure TSpellMemo.Paint;
 Var
   FirstRange: Integer;
   LineIndex, Y, H, X0, SX1, SX2, SelLo, SelHi, ClipLo, ClipHi: Integer;
-  FirstChar, AfterChar, Byte0, Byte1, SavedDC: Integer;
+  FirstChar, AfterChar, Byte0, Byte1, SavedDC, CaretW, CaretTop, CaretBottom, CaretRight: Integer;
   Pixel: TPoint;
   LineText: String;
+  HasHighlight: Boolean;
   RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
+
+  Procedure DrawLineRun(TextColor: TColor);
+  Begin
+    If LineText = '' Then
+      Exit;
+    Canvas.Brush.Style := bsClear;
+    Canvas.Font.Color := TextColor;
+    Canvas.TextOut(X0, Y, LineText);
+  End;
+
 Begin
   FirstRange := 0;
   If Not FReady Then
@@ -1590,30 +1658,48 @@ Begin
                 Byte1 := Length(LineText);
               SX1 := X0 + MeasureAdvance(Copy(LineText, 1, Byte0));
               SX2 := X0 + MeasureAdvance(Copy(LineText, 1, Byte1));
-              Canvas.Brush.Style := bsSolid;
-              Canvas.Brush.Color := clHighlight;
-              Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
             End;
         End;
-      { One run, transparent brush: per-glyph backgrounds clip kerning overhangs. }
-      If LineText <> '' Then
+      HasHighlight := (FSelLength > 0) And (ClipHi > ClipLo) And (SX2 > SX1);
+      If HasHighlight Then
         Begin
-          Canvas.Brush.Style := bsClear;
-          Canvas.Font.Color := Font.Color;
-          Canvas.TextOut(X0, Y, LineText);
-          If (FSelLength > 0) And (ClipHi > ClipLo) Then
-            Begin
-              SavedDC := SaveDC(Canvas.Handle);
-              Try
-                IntersectClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
-                Canvas.Font.Color := clHighlightText;
-                Canvas.TextOut(X0, Y, LineText);
-              Finally
-                RestoreDC(Canvas.Handle, SavedDC);
-              End;
-              Canvas.Font.Color := Font.Color;
-            End;
+          Canvas.Brush.Style := bsSolid;
+          Canvas.Brush.Color := clHighlight;
+          Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
         End;
+      { One full run so kerning pairs survive. The two colours are clipped apart:
+        painting highlight text over the normal glyphs leaves dark antialiased
+        edges, which is the blur against a native memo's selection. }
+      If LineText <> '' Then
+        If HasHighlight Then
+          Begin
+            SavedDC := SaveDC(Canvas.Handle);
+            Try
+              ExcludeClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
+              DrawLineRun(Font.Color);
+            Finally
+              If SavedDC <> 0 Then
+                RestoreDC(Canvas.Handle, SavedDC)
+              Else
+                SelectClipRGN(Canvas.Handle, HRGN(0));
+            End;
+            Canvas.Brush.Style := bsSolid;
+            Canvas.Brush.Color := clHighlight;
+            Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
+            SavedDC := SaveDC(Canvas.Handle);
+            Try
+              IntersectClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
+              DrawLineRun(clHighlightText);
+            Finally
+              If SavedDC <> 0 Then
+                RestoreDC(Canvas.Handle, SavedDC)
+              Else
+                SelectClipRGN(Canvas.Handle, HRGN(0));
+            End;
+            Canvas.Font.Color := Font.Color;
+          End
+        Else
+          DrawLineRun(Font.Color);
       While (FirstRange <= High(FRanges)) And
         (FRanges[FirstRange].UTF8Start + FRanges[FirstRange].UTF8Length <= LineStart) Do Inc(FirstRange);
       If SpellActive Then
@@ -1633,17 +1719,11 @@ Begin
             DrawErrorUnderline(Canvas, U1, U2, Y + H - 3);
           End;
     End;
-  If Focused And FCaretOn And (FSelLength = 0) And (Not (csDesigning In ComponentState)) Then
-    Begin
-      Pixel := CaretPixel;
-      Canvas.Pen.Color := Font.Color;
-      Canvas.Pen.Width := 1;
-      Canvas.MoveTo(Pixel.X, Pixel.Y + 1);
-      Canvas.LineTo(Pixel.X, Pixel.Y + LineHeight - 1);
-    End;
+  { A leaked selection clip must not hide the frame or the caret. }
+  SelectClipRGN(Canvas.Handle, HRGN(0));
   { Same frame colours as the conversation surface, so the two editors match. }
   Canvas.Brush.Style := bsSolid;
-  If Focused Then
+  If CaretIsActive Then
     Canvas.Brush.Color := $00C08038
   Else
     Canvas.Brush.Color := $00C8C5BE;
@@ -1651,6 +1731,39 @@ Begin
   Canvas.FillRect(0, ClientHeight - 1, ClientWidth, ClientHeight);
   Canvas.FillRect(0, 0, 1, ClientHeight);
   Canvas.FillRect(ClientWidth - 1, 0, ClientWidth, ClientHeight);
+  If CaretIsActive And (FSelLength = 0) And Assigned(FCaretTimer) And (Not FCaretTimer.Enabled) And HandleAllocated Then
+    Begin
+      { A missed focus return, or a timer stopped from inside its own tick,
+        used to leave the insertion point invisible while typing still worked. }
+      FCaretOn := True;
+      FCaretTimer.Enabled := True;
+    End;
+  If CaretIsActive And FCaretOn And (FSelLength = 0) Then
+    Begin
+      Pixel := CaretPixel;
+      { A 1px stroke is centred on the pixel boundary and disappears on Qt and
+        scaled GTK. A filled bar is the same width other editors request. }
+      CaretW := Font.PixelsPerInch Div 48;
+      If CaretW < 2 Then
+        CaretW := 2;
+      CaretTop := Pixel.Y;
+      If CaretTop < 1 Then
+        CaretTop := 1;
+      CaretBottom := Pixel.Y + LineHeight;
+      If CaretBottom > ClientHeight - 1 Then
+        CaretBottom := ClientHeight - 1;
+      CaretRight := Pixel.X + CaretW;
+      If Pixel.X < 1 Then
+        Pixel.X := 1;
+      If CaretRight > ClientWidth - 1 Then
+        CaretRight := ClientWidth - 1;
+      If (CaretRight > Pixel.X) And (CaretBottom > CaretTop) Then
+        Begin
+          Canvas.Brush.Style := bsSolid;
+          Canvas.Brush.Color := SpellOpaqueColor(Font.Color);
+          Canvas.FillRect(Pixel.X, CaretTop, CaretRight, CaretBottom);
+        End;
+    End;
 End;
 
 Procedure TSpellMemo.Rescan;
