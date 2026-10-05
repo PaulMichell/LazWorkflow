@@ -1,6 +1,7 @@
 Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
+  {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
   AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification;
 Type
@@ -356,6 +357,69 @@ Begin
   WriteSchemaFile(Directory, 'DynamicToolCallResponse.json', ['contentItems', 'success'], Omit);
   WriteSchemaFile(Directory, 'v2/AgentMessageDeltaNotification.json', ['threadId', 'turnId', 'itemId', 'delta'], Omit);
 End;
+{$IFDEF UNIX}
+Function PaddedCodexRuntime: String;
+Const
+  PadBytes = 268435457;
+Var
+  Source, Dest: TFileStream;
+  Buffer: Array[0..65535] Of Byte;
+  Count: Integer;
+  Marker: Byte;
+Begin
+  Result := '';
+  Try
+    Result := IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(ParamStr(0)))) + 'laz-codex-large-' + IntToStr(GetProcessID);
+    Source := TFileStream.Create(ParamStr(0), fmOpenRead Or fmShareDenyNone);
+    Try
+      Dest := TFileStream.Create(Result, fmCreate);
+      Try
+        Repeat
+          Count := Source.Read(Buffer, SizeOf(Buffer));
+          If Count > 0 Then Dest.WriteBuffer(Buffer, Count);
+        Until Count < SizeOf(Buffer);
+        If Dest.Size < PadBytes Then
+          Begin
+            Dest.Seek(PadBytes - 1, soBeginning);
+            Marker := 0;
+            Dest.WriteBuffer(Marker, 1);
+          End;
+      Finally
+        Dest.Free;
+      End;
+    Finally
+      Source.Free;
+    End;
+    If fpChmod(Result, &755) <> 0 Then
+      Begin
+        DeleteFile(Result);
+        Result := '';
+      End;
+  Except
+    If Result <> '' Then DeleteFile(Result);
+    Result := '';
+  End;
+End;
+Procedure CheckLargeRuntime;
+Var
+  Runtime: String;
+  Connected: Boolean;
+Begin
+  Runtime := PaddedCodexRuntime;
+  Try
+    If Runtime = '' Then
+      Check('release larger than 256 MiB connects: could not prepare runtime', False)
+    Else
+      Begin
+        Connected := Client.Connect(Runtime, GetTempDir, VersionEnv);
+        Check('release larger than 256 MiB connects: ' + Client.LastError, Connected);
+        Client.Disconnect;
+      End;
+  Finally
+    If Runtime <> '' Then DeleteFile(Runtime);
+  End;
+End;
+{$ENDIF}
 Begin
   If ParamStr(1) = '--version' Then
     Begin
@@ -393,6 +457,10 @@ Begin
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.160.0';
       Check('current release connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
       Client.Disconnect;
+      {$IFDEF UNIX}
+      ClearCodexQualificationCache;
+      CheckLargeRuntime;
+      {$ENDIF}
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.153.4';
       Check('older release connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
       Client.Disconnect;

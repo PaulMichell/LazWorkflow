@@ -1,9 +1,9 @@
 Unit AssistantCodexQualification;
 
 { Accept a release Codex CLI when its generated app-server schema still contains
-  the fields this client uses. The result is cached by executable path and
-  content hash. ChatGPT subscription access stays inside Codex; this unit does
-  not call a metered API. (c) 2026 Michell Computing. }
+  the fields this client uses. The result is cached by executable path and a
+  bounded content identity. ChatGPT subscription access stays inside Codex; this
+  unit does not call a metered API. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -33,7 +33,9 @@ Uses
 
 Const
   SchemaGenerationTimeoutMs = 15000;
-  MaxCodexExecutableBytes = 268435456;
+  { Head and tail sample. A 256 MiB cap rejected current ChatGPT extension builds.
+    A full-file hash of those binaries stalled the account thread. }
+  CodexIdentitySampleBytes = 1048576;
 
 Type
   TSchemaField = Record
@@ -171,32 +173,78 @@ Begin
 End;
 
 Function ContentHash(Const Path: String; Out Hash, ErrorText: String): Boolean;
-{$IFDEF UNIX}
 Var
-  Info: Stat;
-{$ENDIF}
+  Stream: TFileStream;
+  Context: TSHA1Context;
+  Digest: TSHA1Digest;
+  SizeValue, Remaining: Int64;
+  SizeText: String;
+  Function UpdateSample(Count: Int64): Boolean;
+  Var
+    Buffer: Array[0..65535] Of Byte;
+    Got, Wanted: Integer;
+  Begin
+    Result := False;
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    While Count > 0 Do
+      Begin
+        Wanted := SizeOf(Buffer);
+        If Count < Wanted Then Wanted := Integer(Count);
+        Got := Stream.Read(Buffer, Wanted);
+        If Got <= 0 Then Exit;
+        SHA1Update(Context, Buffer, Got);
+        Dec(Count, Got);
+      End;
+    Result := True;
+  End;
 Begin
   Result := False;
   Hash := '';
   ErrorText := '';
-  {$IFDEF UNIX}
-  FillChar(Info, SizeOf(Info), 0);
-  {$ENDIF}
   Try
     If Not FileIsExecutable(Path) Then
       Begin
         ErrorText := 'The Codex executable is missing or is not executable.';
         Exit;
       End;
-    {$IFDEF UNIX}
-    If (FpLstat(PChar(Path), Info) = 0) And Not ((Info.st_mode And S_IFMT) = S_IFLNK) And
-      (Info.st_size > MaxCodexExecutableBytes) Then
+    Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+    Try
+      SizeValue := Stream.Size;
+      If SizeValue < 0 Then
         Begin
-          ErrorText := 'The Codex executable is too large to qualify.';
+          ErrorText := 'Cannot read the Codex executable.';
           Exit;
         End;
-    {$ENDIF}
-    Hash := SHA1Print(SHA1File(Path));
+      SHA1Init(Context);
+      SizeText := IntToStr(SizeValue) + #1;
+      SHA1Update(Context, SizeText[1], Length(SizeText));
+      Remaining := SizeValue;
+      If Remaining > CodexIdentitySampleBytes Then Remaining := CodexIdentitySampleBytes;
+      If Not UpdateSample(Remaining) Then
+        Begin
+          ErrorText := 'Cannot read the Codex executable.';
+          Exit;
+        End;
+      If SizeValue > CodexIdentitySampleBytes Then
+        Begin
+          If Stream.Seek(SizeValue - CodexIdentitySampleBytes, soBeginning) < 0 Then
+            Begin
+              ErrorText := 'Cannot read the Codex executable.';
+              Exit;
+            End;
+          SizeText := #2;
+          SHA1Update(Context, SizeText[1], Length(SizeText));
+          If Not UpdateSample(CodexIdentitySampleBytes) Then
+            Begin
+              ErrorText := 'Cannot read the Codex executable.';
+              Exit;
+            End;
+        End;
+      SHA1Final(Context, Digest);
+    Finally
+      Stream.Free;
+    End;
+    Hash := SHA1Print(Digest);
     Result := Hash <> '';
     If Not Result Then ErrorText := 'Cannot read the Codex executable.';
   Except
