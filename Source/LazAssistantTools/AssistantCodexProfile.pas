@@ -183,21 +183,27 @@ End;
 
 Function FindCodexExecutable: String;
 Var
-  Root: String;
+  Root, Candidate, BestName: String;
   Search: TSearchRec;
 Begin
   Result := FindDefaultExecutablePath('codex');
   If Result <> '' Then Exit;
   Root := IncludeTrailingPathDelimiter(GetUserDir) + '.vscode/extensions/';
+  BestName := '';
   If FindFirst(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Exit;
   Try
     Repeat
-      Result := Root + Search.Name + '/bin/linux-x86_64/codex';
-      If FileIsExecutable(Result) Then Exit;
+      Candidate := Root + Search.Name + '/bin/linux-x86_64/codex';
+      { Later extension directories sort after older builds. Prefer the newest
+        executable so a leftover alpha is not selected ahead of the current one. }
+      If FileIsExecutable(Candidate) And ((BestName = '') Or (Search.Name > BestName)) Then
+        Begin
+          BestName := Search.Name;
+          Result := Candidate;
+        End;
     Until FindNext(Search) <> 0;
   Finally
     FindClose(Search);
   End;
-  Result := '';
 End;
 End.
