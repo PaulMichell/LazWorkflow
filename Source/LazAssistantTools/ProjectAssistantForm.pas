@@ -5661,6 +5661,8 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
+Var
+  EnterIsNewline: Boolean;
 Begin
   If (Key = VK_V) And (ssCtrl In Shift) Then
     Begin
@@ -5668,7 +5670,37 @@ Begin
       QueueComposerPaste;
       Exit;
     End;
-  If (Key = VK_RETURN) And (ssCtrl In Shift) Then
+  If Key <> VK_RETURN Then
+    Exit;
+  { Shift+Enter is always a newline. Leaving the key lets the memo insert it.
+    Ctrl+Shift+Enter does not produce a character, so insert that one here. }
+  If ssShift In Shift Then
+    Begin
+      If ssCtrl In Shift Then
+        Begin
+          Key := 0;
+          InputMemo.SelText := LineEnding;
+        End;
+      Exit;
+    End;
+  EnterIsNewline := True;
+  If Assigned(AssistantChatConfig) Then
+    EnterIsNewline := AssistantChatConfig.EnterInsertsNewline;
+  If EnterIsNewline Then
+    Begin
+      { Plain Enter stays a newline. Ctrl+Enter sends. }
+      If ssCtrl In Shift Then
+        Begin
+          Key := 0;
+          SendActionExecute(Sender);
+        End;
+    End
+  Else If ssCtrl In Shift Then
+    Begin
+      Key := 0;
+      InputMemo.SelText := LineEnding;
+    End
+  Else
     Begin
       Key := 0;
       SendActionExecute(Sender);
