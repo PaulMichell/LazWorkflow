@@ -43,6 +43,7 @@ Type
     { Refs are not queued. This protocol has no image item; the composer keeps the pictures. }
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Function Snapshot: TCodexRunSnapshot;
+    Function HasPendingTool: Boolean;
     { Caller must run on the broker's owning IDE thread. Returns after at most
       one IDE operation; it never waits for process/network output. CodeTools
       may parse dependencies synchronously on this thread. }
@@ -130,6 +131,16 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Result := FSnapshot;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAssistantCodexRun.HasPendingTool: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FToolPending And Not FToolReady And Not FSnapshot.Done;
   Finally
     LeaveCriticalSection(FLock);
   End;

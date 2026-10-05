@@ -3134,7 +3134,6 @@ Begin
   FAssistantContent := ''; FAssistantThinking := '';
   AppendMessage('user', FDisplayUser);
   FContextUsed := Length(Prompt) Div 4;
-  FStatusPhase := 'Connecting to ChatGPT…';
   SetSending(True);
   BeginAssistantReply;
   Try
@@ -3154,7 +3153,23 @@ End;
 
 Procedure TProjectAssistantForm.PollCodex;
 Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
-  ToolText, EvidenceError: String; OK, Serviced: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
+  ToolText, EvidenceError, Phase: String; OK, Serviced, ToolPending: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
+
+  Function PhaseForSnapshot(Const RunSnapshot: TCodexRunSnapshot; PendingTool: Boolean): String;
+  Begin
+    { Same right-hand phases as the Grok stream, for every backend. }
+    If PendingTool Then
+      Result := 'Running tools…'
+    Else If RunSnapshot.State In [crsConnecting, crsReady, crsStartingThread, crsStartingTurn] Then
+      Result := 'Waiting for model…'
+    Else If RunSnapshot.Content <> '' Then
+      Result := 'Streaming…'
+    Else If RunSnapshot.Thinking <> '' Then
+      Result := 'Thinking…'
+    Else
+      Result := 'Waiting for first token…';
+  End;
+
 Begin
   If FPollingCodex Then Exit;
   FPollingCodex := True;
@@ -3167,6 +3182,13 @@ Begin
       End;
     Snapshot := FCodexRun.Snapshot;
     ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
+    ToolPending := FCodexRun.HasPendingTool;
+    If ToolPending And FSending Then
+      Begin
+        SetStreamPhase('Running tools…');
+        If Assigned(StatusFooter) Then
+          StatusFooter.Update;
+      End;
     Serviced := Run.ServiceOneTool(FCodexBroker, Tool, ToolText, OK);
     If FCodexRun <> Run Then Exit; { cancelled/replaced during an IDE callback }
     If Serviced Then
@@ -3198,8 +3220,13 @@ Begin
       End
     Else
       Begin
-        StatusFooter.SetRightText(FormatElapsedStatus('ChatGPT'));
-        If FViewingLive Then FTraceView.RefreshElapsed(FTrace);
+        If FSending Then
+          Begin
+            Phase := PhaseForSnapshot(Snapshot, ToolPending And Not Serviced);
+            SetStreamPhase(Phase);
+          End;
+        If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) Then
+          FTraceView.RefreshElapsed(FTrace);
       End;
   Finally FPollingCodex := False; End;
 End;
@@ -3315,9 +3342,8 @@ Begin
     StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
-  Else If FUseCodex Then
-    StatusText := 'ChatGPT preview'
-  Else If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
+  Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    ((Not FUseCodex) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
