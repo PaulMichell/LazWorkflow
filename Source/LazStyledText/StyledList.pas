@@ -120,6 +120,8 @@ Begin
   If FItemCount = Value Then Exit;
   FItemCount := Value;
   FItemIndex := Min(FItemIndex, Value - 1);
+  If (SelectionAnchor < 0) Or (SelectionAnchor >= Value) Then
+    SelectionAnchor := -1;
   SetLength(Selected, Value);
   ResetCache;
 End;
@@ -283,7 +285,11 @@ Begin
       If Not (ssCtrl In Shift) Then
         For Position := 0 To High(Selected) Do Selected[Position] := False;
       If (ssShift In Shift) And (SelectionAnchor >= 0) Then
-        For Position := Min(SelectionAnchor, Index) To Max(SelectionAnchor, Index) Do Selected[Position] := True
+        Begin
+          For Position := Min(SelectionAnchor, Index) To Max(SelectionAnchor, Index) Do
+            If (Position >= 0) And (Position <= High(Selected)) Then
+              Selected[Position] := True;
+        End
       Else Selected[Index] := Not Selected[Index];
     End;
   If Not (ssShift In Shift) Then SelectionAnchor := Index;
