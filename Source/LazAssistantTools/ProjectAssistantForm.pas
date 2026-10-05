@@ -1165,11 +1165,11 @@ Begin
     ToolsHint := 'explains and inspects · will not write files';
   End;
   If FModeLocked Or FSending Then
-    Result := Format('%s · %s · reply in progress', [ModeChipCaption(ActiveMode), ToolsHint])
+    Result := ToolsHint + ' · reply in progress'
   Else If FModeSticky Then
-    Result := Format('%s · %s · sticky', [ModeChipCaption(ActiveMode), ToolsHint])
+    Result := ToolsHint + ' · sticky'
   Else
-    Result := Format('%s · %s', [ModeChipCaption(ActiveMode), ToolsHint]);
+    Result := ToolsHint;
 End;
 
 Procedure TProjectAssistantForm.ApplyModelStatus;
