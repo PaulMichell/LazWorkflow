@@ -62,6 +62,8 @@ Type
     Procedure RefreshActionState;
     Procedure SetDirty(IsDirty: Boolean);
     Function ConfirmDiscardEdits: Boolean;
+    Function DiskCopyIsNewer: Boolean;
+    Function ConfirmNewerDiskCopy: TModalResult;
     Function LoadFromDisk: Boolean;
     Function SaveToDisk: Boolean;
     Procedure ApplyPreviewText(Const Body: String);
@@ -320,7 +322,11 @@ Begin
     CentreText := 'Preview'
   Else
     CentreText := 'Source';
-  If FDirty Then
+  If (FFileName <> '') And FPendingDiskReload And (Not FileExists(FFileName)) Then
+    RightText := 'Deleted on disk'
+  Else If FDirty And DiskCopyIsNewer Then
+    RightText := 'Modified; disk changed (local edits kept)'
+  Else If FDirty Then
     RightText := 'Modified'
   Else If FPendingDiskReload Then
     RightText := 'Disk changed (local edits kept)'
@@ -422,11 +428,73 @@ Begin
   End;
 End;
 
+Function TAssistantMarkdownForm.DiskCopyIsNewer: Boolean;
+Var
+  Age: LongInt;
+Begin
+  Result := False;
+  If (FFileName = '') Or (Not FPendingDiskReload) Or (Not FileExists(FFileName)) Then
+    Exit;
+  Age := FileAge(FFileName);
+  Result := Age <> FDiskAge;
+End;
+
+Function TAssistantMarkdownForm.ConfirmNewerDiskCopy: TModalResult;
+Var
+  Dlg: TForm;
+  I: Integer;
+  Button: TCustomButton;
+Begin
+  Dlg := CreateMessageDialog('"' + ExtractFileName(FFileName) + '" changed on disk while this window has local edits.' +
+    LineEnding + LineEnding +
+    'Overwrite replaces the newer disk copy with your edits. Reload discards your edits and loads the disk copy.',
+    mtWarning, [mbYes, mbNo, mbCancel]);
+  Try
+    Dlg.Caption := 'File changed on disk';
+    For I := 0 To Dlg.ComponentCount - 1 Do
+      If Dlg.Components[I] Is TCustomButton Then
+        Begin
+          Button := TCustomButton(Dlg.Components[I]);
+          Button.Default := False;
+          Case Button.ModalResult Of
+            mrYes: Button.Caption := 'Overwrite';
+            mrNo: Button.Caption := 'Reload';
+            mrCancel:
+              Begin
+                Button.Caption := 'Cancel';
+                Button.Default := True;
+                Dlg.ActiveControl := Button;
+              End;
+          Else
+          End;
+        End;
+    Result := Dlg.ShowModal;
+  Finally
+    Dlg.Free;
+  End;
+End;
+
 Function TAssistantMarkdownForm.SaveToDisk: Boolean;
 Begin
   Result := False;
   If FFileName = '' Then
     Exit;
+  If DiskCopyIsNewer Then
+    Begin
+      UpdateStatus;
+      Case ConfirmNewerDiskCopy Of
+        mrYes: { Explicit overwrite of the newer disk copy. };
+        mrNo:
+          Begin
+            Result := LoadFromDisk;
+            If Result And Assigned(StatusFooter) Then
+              StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
+            Exit;
+          End;
+      Else
+        Exit;
+      End;
+    End;
   Try
     SourceMemo.Lines.SaveToFile(FFileName);
     FDiskAge := FileAge(FFileName);
