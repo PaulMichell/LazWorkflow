@@ -5,7 +5,8 @@ Unit AssistantSettingsForm;
   Size note: exceeds the 1000 line preference. General, Connections, Spelling
   and Tests are one streamed form so the designer opens a single resource.
   Reviewed 2026-10: kind-specific groups stay here; no extra frame unit is in
-  scope for this settings page. }
+  scope for this settings page. General groups are alTop in reverse resource
+  order so the page reads Transcript, Prompt, Context, then Skills. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -23,11 +24,17 @@ Type
   TAssistantSettingsForm = Class(TForm)
     SettingsPages: TPageControl;
     GeneralPage: TTabSheet;
+    SkillsGroup: TGroupBox;
+    SkillsHintLabel: TLabel;
+    SkillsHost: TScrollBox;
+    ContextGroup: TGroupBox;
     IncludeContextCheck: TCheckBox;
-    AutoNewChatDefaultCheck: TCheckBox;
+    AutoCompactCheck: TCheckBox;
+    PromptGroup: TGroupBox;
+    EnterNewlineCheck: TCheckBox;
+    TranscriptGroup: TGroupBox;
     ShowThinkingCheck: TCheckBox;
     ShowToolCallsCheck: TCheckBox;
-    GeneralNoteLabel: TLabel;
     ConnectionsPage: TTabSheet;
     ConnectionSidebar: TPanel;
     ConnectionButtons: TPanel;
@@ -75,10 +82,6 @@ Type
     ApprovalCombo: TComboBox;
     GrokUsageGroup: TGroupBox;
     GrokUsageLabel: TLabel;
-    GrokSkillGroup: TGroupBox;
-    SkillLabel: TLabel;
-    SkillCombo: TComboBox;
-    HintLabel: TLabel;
     CodexPanel: TScrollBox;
     CodexFrame: TCodexConnectionFrame;
     CodexUsageGroup: TGroupBox;
@@ -163,10 +166,15 @@ Type
     Procedure ClaudeCheckClick(Sender: TObject);
   Private
     Connections: TAssistantConnections;
+    SkillRows: TFPList;
+    NoSkillsLabel: TLabel;
     SelectedConnection: Integer;
     FFillingModels: Boolean;
     FLoading: Boolean;
     Procedure EnsureStaticChoices;
+    Procedure UpdateCompactAvailability;
+    Procedure ClearSkillRows;
+    Procedure SaveSkillModes;
     Procedure ShowConnectionKind(Const Backend: String);
     Procedure RefreshConnections;
     Procedure StoreConnection;
@@ -196,6 +204,57 @@ Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
+
+Type
+  { One discovered skill and its mode ticks. Controls are ownerless so the designer does not stream them. }
+  TSkillModeRow = Class
+    SkillName: String;
+    RowPanel: TPanel;
+    NameLabel: TLabel;
+    InspectCheck, DocumentCheck, PlanCheck, BuildCheck, ChatCheck: TCheckBox;
+    Constructor Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
+    Destructor Destroy; Override;
+  End;
+
+Constructor TSkillModeRow.Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
+  Procedure Place(Var Box: TCheckBox; Const ModeCaption: String; ModeLeft: Integer);
+  Begin
+    Box := TCheckBox.Create(Nil);
+    Box.Parent := RowPanel;
+    Box.SetBounds(ModeLeft, 2, 96, 24);
+    Box.Caption := ModeCaption;
+  End;
+Begin
+  Inherited Create;
+  SkillName := Name;
+  RowPanel := TPanel.Create(Nil);
+  RowPanel.Parent := Host;
+  RowPanel.BevelOuter := bvNone;
+  RowPanel.SetBounds(0, RowTop, RowWidth, 28);
+  RowPanel.Anchors := [akLeft, akTop, akRight];
+  NameLabel := TLabel.Create(Nil);
+  NameLabel.Parent := RowPanel;
+  NameLabel.AutoSize := False;
+  NameLabel.SetBounds(8, 6, 200, 18);
+  NameLabel.Caption := Name;
+  Place(InspectCheck, 'Inspect', 216);
+  Place(DocumentCheck, 'Document', 316);
+  Place(PlanCheck, 'Plan', 420);
+  Place(BuildCheck, 'Build', 520);
+  Place(ChatCheck, 'Chat', 620);
+End;
+
+Destructor TSkillModeRow.Destroy;
+Begin
+  FreeAndNil(InspectCheck);
+  FreeAndNil(DocumentCheck);
+  FreeAndNil(PlanCheck);
+  FreeAndNil(BuildCheck);
+  FreeAndNil(ChatCheck);
+  FreeAndNil(NameLabel);
+  FreeAndNil(RowPanel);
+  Inherited Destroy;
+End;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -380,6 +439,7 @@ Begin
   KeyValueEdit.PasswordChar := '*';
   EnsureStaticChoices;
   KeySourceChange(Nil);
+  SkillRows := TFPList.Create;
   SelectedConnection := -1;
   Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
   Connections.Load;
@@ -404,8 +464,70 @@ End;
 
 Destructor TAssistantSettingsForm.Destroy;
 Begin
+  ClearSkillRows;
+  SkillRows.Free;
   Connections.Free;
   Inherited Destroy;
+End;
+
+Procedure TAssistantSettingsForm.UpdateCompactAvailability;
+Var
+  CanCompact: Boolean;
+Begin
+  CanCompact := False;
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
+    CanCompact := Connections[SelectedConnection].CanCompactContext;
+  { Greyed does not clear the saved flag. }
+  AutoCompactCheck.Enabled := CanCompact;
+  AutoCompactCheck.ShowHint := True;
+  If CanCompact Then
+    AutoCompactCheck.Hint := 'Compact older history when the context budget is nearly full.'
+  Else
+    AutoCompactCheck.Hint := 'This connection keeps its own transcript.';
+End;
+
+Procedure TAssistantSettingsForm.ClearSkillRows;
+Var
+  I: Integer;
+Begin
+  If Assigned(SkillRows) Then
+    Begin
+      For I := 0 To SkillRows.Count - 1 Do
+        TObject(SkillRows[I]).Free;
+      SkillRows.Clear;
+    End;
+  FreeAndNil(NoSkillsLabel);
+End;
+
+Procedure TAssistantSettingsForm.SaveSkillModes;
+Var
+  I: Integer;
+  Modes: TStringList;
+  Row: TSkillModeRow;
+Begin
+  If (Not Assigned(AssistantChatConfig)) Or (Not Assigned(SkillRows)) Then
+    Exit;
+  Modes := TStringList.Create;
+  Try
+    For I := 0 To SkillRows.Count - 1 Do
+      Begin
+        Row := TSkillModeRow(SkillRows[I]);
+        Modes.Clear;
+        If Row.InspectCheck.Checked Then
+          Modes.Add('inspect');
+        If Row.DocumentCheck.Checked Then
+          Modes.Add('document');
+        If Row.PlanCheck.Checked Then
+          Modes.Add('plan');
+        If Row.BuildCheck.Checked Then
+          Modes.Add('build');
+        If Row.ChatCheck.Checked Then
+          Modes.Add('chat');
+        AssistantChatConfig.SetSkillModes(Row.SkillName, Modes);
+      End;
+  Finally
+    Modes.Free;
+  End;
 End;
 
 Procedure TAssistantSettingsForm.RefreshConnections;
@@ -591,6 +713,7 @@ Begin
     Begin
       ShowConnectionKind('');
       ConnectionNameEdit.Text := '';
+      UpdateCompactAvailability;
       Exit;
     End;
   Item := Connections[SelectedConnection];
@@ -617,6 +740,7 @@ Begin
   Finally
     FLoading := False;
   End;
+  UpdateCompactAvailability;
 End;
 
 Procedure TAssistantSettingsForm.AddKind(Const Backend, DisplayName: String);
@@ -878,48 +1002,57 @@ End;
 Procedure TAssistantSettingsForm.PopulateSkills;
 Var
   Skills: TAssistantSkillList;
-  I, SelectIdx: Integer;
-  ActiveName, Root, SkillRoot: String;
+  Modes: TStringList;
+  I, RowTop, RowWidth: Integer;
+  Row: TSkillModeRow;
+  Root: String;
 Begin
-  ActiveName := '';
-  If Assigned(AssistantChatConfig) Then
-    ActiveName := AssistantChatConfig.ActiveSkill;
+  ClearSkillRows;
+  If Not Assigned(SkillRows) Then
+    Exit;
   Root := '';
   If Assigned(ProjectAssistantConversation) Then
     Root := ProjectAssistantConversation.ProjectRoot;
-  If Root = '' Then
-    Root := AssistantUserSkillsRoot;
-  SkillCombo.Style := csDropDownList;
-  SkillCombo.Items.BeginUpdate;
+  If Assigned(ProjectAssistantConversation) Then
+    Skills := ListDiscoveredSkills(ProjectAssistantConversation.ProjectRoot)
+  Else
+    Skills := ListUserSkills;
+  RowWidth := SkillsHost.ClientWidth;
+  If RowWidth < 200 Then
+    RowWidth := 800;
+  RowTop := 0;
+  Modes := TStringList.Create;
   Try
-    SkillCombo.Items.Clear;
-    SkillCombo.Items.Add(AssistantSkillNoneCaption);
-    SelectIdx := 0;
-    If Assigned(ProjectAssistantConversation) Then
-      Skills := ListDiscoveredSkills(ProjectAssistantConversation.ProjectRoot)
-    Else
-      Skills := ListUserSkills;
     For I := 0 To High(Skills) Do
       Begin
-        SkillCombo.Items.Add(Skills[I].Name);
-        If SameText(Skills[I].Name, ActiveName) Then
-          SelectIdx := SkillCombo.Items.Count - 1;
+        Row := TSkillModeRow.Create(Skills[I].Name, SkillsHost, RowTop, RowWidth);
+        SkillRows.Add(Row);
+        Modes.Clear;
+        If Assigned(AssistantChatConfig) Then
+          AssistantChatConfig.CollectModesForSkill(Skills[I].Name, Modes);
+        Row.InspectCheck.Checked := Modes.IndexOf('inspect') >= 0;
+        Row.DocumentCheck.Checked := Modes.IndexOf('document') >= 0;
+        Row.PlanCheck.Checked := Modes.IndexOf('plan') >= 0;
+        Row.BuildCheck.Checked := Modes.IndexOf('build') >= 0;
+        Row.ChatCheck.Checked := Modes.IndexOf('chat') >= 0;
+        RowTop := RowTop + 28;
       End;
   Finally
-    SkillCombo.Items.EndUpdate;
+    Modes.Free;
   End;
-  SkillCombo.ItemIndex := SelectIdx;
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
-    SkillRoot := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) + '.assistant' + PathDelim + 'skills'
-  Else
-    SkillRoot := AssistantUserSkillsRoot;
   If Length(Skills) = 0 Then
-    HintLabel.Caption := 'No skills found. Create ' + SkillRoot + PathDelim + '<name>' + PathDelim + 'SKILL.md.' + LineEnding +
-      'Skills load from .assistant/skills, then ' + AssistantUserSkillsRoot + '.'
-  Else
-    HintLabel.Caption := Format('Loaded %d skill(s) from .assistant/skills, then %s', [Length(Skills), AssistantUserSkillsRoot]) +
-      LineEnding + 'Pin is extra session context. Plan and Build always attach free-pascal-engineer when it is installed. ' +
-      'Use read_skill for other catalog entries.';
+    Begin
+      NoSkillsLabel := TLabel.Create(Nil);
+      NoSkillsLabel.Parent := SkillsHost;
+      NoSkillsLabel.SetBounds(8, 8, 640, 36);
+      NoSkillsLabel.AutoSize := False;
+      NoSkillsLabel.WordWrap := True;
+      If Root = '' Then
+        Root := AssistantUserSkillsRoot
+      Else
+        Root := IncludeTrailingPathDelimiter(Root) + '.assistant' + PathDelim + 'skills';
+      NoSkillsLabel.Caption := 'No skills found. Create ' + Root + PathDelim + '<name>' + PathDelim + 'SKILL.md.';
+    End;
 End;
 
 Procedure TAssistantSettingsForm.PopulateModels(ForceRefresh: Boolean);
@@ -1075,7 +1208,8 @@ Begin
     Exit;
   ApiBaseEdit.Text := AssistantChatConfig.ApiBase;
   IncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
-  AutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
+  EnterNewlineCheck.Checked := AssistantChatConfig.EnterInsertsNewline;
+  AutoCompactCheck.Checked := AssistantChatConfig.AutoCompactContext;
   ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
   ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
   RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel);
@@ -1096,15 +1230,6 @@ Begin
   MaxOutputEdit.Value := AssistantChatConfig.MaxOutputTokens;
   ApprovalCombo.ItemIndex := ApprovalIndex(AssistantChatConfig.ApprovalMode);
   PopulateSkills;
-  If AssistantChatConfig.ActiveSkill = '' Then
-    SkillCombo.ItemIndex := 0
-  Else If SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill) >= 0 Then
-    SkillCombo.ItemIndex := SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill)
-  Else
-    Begin
-      SkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
-      SkillCombo.ItemIndex := SkillCombo.Items.Count - 1;
-    End;
   If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
     GrokOAuthClient.SetTokens(AssistantChatConfig.ToOAuthTokens);
   If Assigned(AssistantClient) Then
@@ -1113,12 +1238,14 @@ Begin
   PopulateModels(False);
   GlobalSpellSettings.LoadFromConfig;
   If ConnectionsList.ItemIndex >= 0 Then
-    ConnectionChanged(Nil);
+    ConnectionChanged(Nil)
+  Else
+    UpdateCompactAvailability;
 End;
 
 Procedure TAssistantSettingsForm.SaveToConfig;
 Var
-  SkillName, ModelName: String;
+  ModelName: String;
 Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
@@ -1131,18 +1258,13 @@ Begin
   If ModelName = '' Then
     ModelName := AssistantConfigDefaultModel;
   AssistantChatConfig.Model := ModelName;
-  SkillName := '';
-  If (SkillCombo.ItemIndex > 0) And (SkillCombo.ItemIndex < SkillCombo.Items.Count) Then
-    Begin
-      SkillName := SkillCombo.Items[SkillCombo.ItemIndex];
-      If Pos(' (missing)', SkillName) > 0 Then
-        SkillName := Copy(SkillName, 1, Pos(' (missing)', SkillName) - 1);
-    End;
-  AssistantChatConfig.ActiveSkill := SkillName;
   AssistantChatConfig.IncludeIDEContext := IncludeContextCheck.Checked;
-  AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatDefaultCheck.Checked;
+  AssistantChatConfig.EnterInsertsNewline := EnterNewlineCheck.Checked;
+  { Disabled compact still keeps the saved flag. }
+  AssistantChatConfig.AutoCompactContext := AutoCompactCheck.Checked;
   AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
   AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
+  SaveSkillModes;
   Case SearchCombo.ItemIndex Of
     1: AssistantChatConfig.SearchMode := 'auto';
     2: AssistantChatConfig.SearchMode := 'on';
