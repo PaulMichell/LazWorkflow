@@ -62,7 +62,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = StopAction
         TabOrder = 1
       end
-      object NewConversationButton: TButton
+      object NewChatButton: TButton
         Left = 180
         Height = 28
         Top = 4
@@ -624,8 +624,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     Left = 55
     Top = 110
     object NewChatAction: TAction
-      Caption = 'New'
-      Hint = 'Start a new conversation in the current mode'
+      Caption = 'New Chat'
       OnExecute = NewChatActionExecute
     end
     object NewPlanAction: TAction

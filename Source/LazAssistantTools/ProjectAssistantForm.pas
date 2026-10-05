@@ -439,6 +439,7 @@ Type
     Function SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
     Procedure SteerQueuedText(Const UserText: String);
     Function ModeChipCaption(Mode: TAssistantMode): String;
+    Function RunPlanIsAvailable: Boolean;
     Procedure UpdateWorkActions;
     Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
     Procedure ApplyConfigAndRefresh;
@@ -1110,7 +1111,9 @@ End;
 Procedure TProjectAssistantForm.SelectMode(Mode: TAssistantMode);
 Begin
   ActiveMode := Mode;
-  FModeSticky := False;
+  { Keep Document, Plan, and Build until the user picks another mode.
+    Clearing sticky here let ApplyActiveMode snap a programmatic Build switch back to the combo. }
+  FModeSticky := Mode In [amDocument, amPlan, amBuild];
   If Mode <> amPlan Then
     ShowPlanOfferBar(False);
   SyncModeUi;
@@ -1227,6 +1230,12 @@ Begin
   UpdateWorkActions;
 End;
 
+Function TProjectAssistantForm.RunPlanIsAvailable: Boolean;
+Begin
+  { Not limited to Plan or Build. Run Plan switches to Build itself. }
+  Result := (Not FSending) And (GetActivePlanRelativePath <> '');
+End;
+
 Procedure TProjectAssistantForm.UpdateWorkActions;
 Begin
   If Assigned(BuildThisAction) Then
@@ -1254,7 +1263,7 @@ Begin
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not FSending;
   If Assigned(RunPlanAction) Then
-    RunPlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
+    RunPlanAction.Enabled := RunPlanIsAvailable;
 End;
 
 Procedure TProjectAssistantForm.SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
@@ -1558,10 +1567,8 @@ Begin
     Titles.Free;
   End;
   If ActiveMissing Then
-    Begin
-      RefreshBuildTodos;
-      UpdateWorkActions;
-    End;
+    RefreshBuildTodos;
+  UpdateWorkActions;
 End;
 
 Procedure TProjectAssistantForm.ActivePlanChoiceChanged(Sender: TObject);
@@ -2188,18 +2195,20 @@ Procedure TProjectAssistantForm.RunPlan;
 Var
   Idx: Integer;
 Begin
-  SelectMode(amBuild);
   If FSending Or FPlanAgentRunning Then
     Begin
       MessageDlg('Wait for the current reply to finish before starting Run Plan.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
-  If GetActivePlanRelativePath = '' Then
+  If Not RunPlanIsAvailable Then
     Begin
-      MessageDlg('Set an active plan on the Plan mode panel first.', mtInformation, [mbOK], 0);
+      UpdateWorkActions;
+      MessageDlg('Set an active plan first.', mtInformation, [mbOK], 0);
       Exit;
     End;
+  { Available from Chat, Inspect, Document, Plan, or Build. Switch before any package work. }
+  SelectMode(amBuild);
   RefreshBuildTodos;
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
@@ -2243,7 +2252,8 @@ Begin
     End;
   If FContextLimit > 0 Then
     Begin
-      FContextUsed := AssistantClient.EstimatedPromptTokens;
+      If (Not FUseCodex) And Assigned(AssistantClient) Then
+        FContextUsed := AssistantClient.EstimatedPromptTokens;
       Pct := (FContextUsed * 100) Div FContextLimit;
       If Pct >= 95 Then
         Begin
@@ -3048,11 +3058,6 @@ Begin
       If Not FUseCodex Then Exit;
       If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
     End;
-  If FPlanAgentRunning Then
-    Begin
-      StopRunPlan('ChatGPT preview supports individual turns; automatic plan execution is not enabled.');
-      Exit;
-    End;
   SetLength(Refs, 0);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   Refs := LimitAssistantImageRefs(Refs);
@@ -3441,7 +3446,7 @@ Begin
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not IsSending;
   If Assigned(RunPlanAction) Then
-    RunPlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
+    RunPlanAction.Enabled := RunPlanIsAvailable;
   ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   { Prompt stays live so the user can Steer without aborting the turn. }
   If Assigned(InputMemo) Then
@@ -5200,7 +5205,7 @@ Begin
         RefreshBuildTodos;
       ShowPlanOfferBar(False);
     End;
-  If (Not FUseCodex) And FPlanAgentRunning Then
+  If FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then
         Begin
@@ -5208,7 +5213,7 @@ Begin
             (Pos('network', LowerCase(ResolvedError)) > 0) Or
             (Pos('timed out', LowerCase(ResolvedError)) > 0) Then
             StopRunPlan(
-              'network error talking to api.x.ai. Check connectivity, then click ' +
+              'network error. Check connectivity, then click ' +
               '**Run Plan** again to resume remaining packages. ' + ResolvedError)
           Else
             StopRunPlan('error: ' + ResolvedError);
@@ -5310,7 +5315,7 @@ Begin
   RefreshChatDisplay(True, True);
   StatusFooter.SetRightText('Cancelled');
   PersistSession;
-  If (Not FUseCodex) And FPlanAgentRunning Then
+  If FPlanAgentRunning Then
     StopRunPlan('stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
