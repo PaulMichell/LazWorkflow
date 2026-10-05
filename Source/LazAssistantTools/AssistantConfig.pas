@@ -54,7 +54,7 @@ Type
     Constructor Create;
     Procedure Load;
     Procedure Save;
-    { Nil connections keeps the saved connection list and updates the Grok account from this config. }
+    { Nil connections keeps the saved list, including an empty list, and updates an existing Grok row from this config. }
     Procedure LoadWithConnections(Connections: TAssistantConnections);
     Function SaveWithConnections(Connections: TAssistantConnections): Boolean;
     Procedure Assign(Source: TAssistantConfig);
@@ -447,7 +447,6 @@ Var
   Node, ItemNode: TJSONData;
   Item: TAssistantConnection;
   I: Integer;
-  SeenGrok: Boolean;
 Begin
   Section := ReadWorkflowSection('assistant');
   Try
@@ -462,11 +461,7 @@ Begin
     If Assigned(Connections) Then
       Connections.ClearStored;
     If Not Assigned(Section) Then
-      Begin
-        If Assigned(Connections) Then
-          Connections.EnsureBuiltinGrok;
-        Exit;
-      End;
+      Exit;
     FIncludeIDEContext := Section.Get('include_ide_context', False);
     FAutoNewChatAtContextLimit := Section.Get('auto_new_chat_at_limit', False);
     FShowThinking := Section.Get('show_thinking', True);
@@ -479,7 +474,6 @@ Begin
       FMaxOutputTokens := 0;
     If FMaxOutputTokens > 1000000 Then
       FMaxOutputTokens := 1000000;
-    SeenGrok := False;
     Node := Section.Find('connections');
     If Node Is TJSONArray Then
       For I := 0 To TJSONArray(Node).Count - 1 Do
@@ -495,30 +489,46 @@ Begin
                 Begin
                   ReadConnection(Obj, Item);
                   If Item.Backend = 'grok' Then
-                    Begin
-                      SeenGrok := True;
-                      ApplyGrokObject(Self, Obj);
-                    End;
+                    ApplyGrokObject(Self, Obj);
                 End;
             End
           Else If Obj.Get('backend', '') = 'grok' Then
-            Begin
-              SeenGrok := True;
-              ApplyGrokObject(Self, Obj);
-            End;
+            ApplyGrokObject(Self, Obj);
         End;
     If Assigned(Connections) Then
       Begin
-        If Not SeenGrok Then
-          Connections.EnsureBuiltinGrok;
-        Connections.ActiveId := Section.Get('active_connection', 'grok');
+        Connections.ActiveId := Section.Get('active_connection', '');
         If Connections.Active = Nil Then
-          Connections.ActiveId := 'grok';
+          Begin
+            If Connections.Count > 0 Then
+              Connections.ActiveId := Connections[0].Id
+            Else
+              Connections.ActiveId := '';
+          End;
       End;
   Finally
     Section.Free;
   End;
   NormalizeAssistantConfig(Self);
+End;
+
+Function ActiveIdInArray(Arr: TJSONArray; Const ActiveId: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  If (ActiveId = '') Or (Not Assigned(Arr)) Then
+    Exit;
+  For I := 0 To Arr.Count - 1 Do
+    If (Arr.Items[I] Is TJSONObject) And (TJSONObject(Arr.Items[I]).Get('id', '') = ActiveId) Then
+      Exit(ActiveId);
+End;
+
+Function ResolvedActiveId(Connections: TAssistantConnections): String;
+Begin
+  Result := '';
+  If Assigned(Connections) And Assigned(Connections.Active) Then
+    Result := Connections.ActiveId;
 End;
 
 Function TAssistantConfig.SaveWithConnections(Connections: TAssistantConnections): Boolean;
@@ -527,9 +537,8 @@ Var
   Node, ItemNode: TJSONData;
   Arr: TJSONArray;
   I: Integer;
-  ErrorText: String;
+  ErrorText, SavedActive: String;
   Item: TAssistantConnection;
-  HasGrok: Boolean;
 Begin
   Result := False;
   Section := TJSONObject.Create;
@@ -546,20 +555,14 @@ Begin
     Section.Add('connections', Arr);
     If Assigned(Connections) Then
       Begin
-        If Connections.Count = 0 Then
-          Connections.EnsureBuiltinGrok;
-        Section.Add('active_connection', Connections.ActiveId);
         For I := 0 To Connections.Count - 1 Do
           Arr.Add(ConnectionObject(Connections[I], Self));
+        Section.Add('active_connection', ResolvedActiveId(Connections));
       End
     Else
       Begin
         Existing := ReadWorkflowSection('assistant');
         Try
-          If Assigned(Existing) Then
-            Section.Add('active_connection', Existing.Get('active_connection', 'grok'))
-          Else
-            Section.Add('active_connection', 'grok');
           Node := Nil;
           If Assigned(Existing) Then
             Node := Existing.Find('connections');
@@ -585,25 +588,13 @@ Begin
                 Else
                   Arr.Add(Obj.Clone);
               End;
+          SavedActive := '';
+          If Assigned(Existing) Then
+            SavedActive := Existing.Get('active_connection', '');
+          Section.Add('active_connection', ActiveIdInArray(Arr, SavedActive));
         Finally
           Existing.Free;
         End;
-        HasGrok := False;
-        For I := 0 To Arr.Count - 1 Do
-          If (Arr.Items[I] Is TJSONObject) And (TJSONObject(Arr.Items[I]).Get('backend', '') = 'grok') Then
-            HasGrok := True;
-        If Not HasGrok Then
-          Begin
-            Item := TAssistantConnection.Create;
-            Try
-              Item.Id := 'grok';
-              Item.Name := 'Grok';
-              Item.Backend := 'grok';
-              Arr.Add(ConnectionObject(Item, Self));
-            Finally
-              Item.Free;
-            End;
-          End;
       End;
     Existing := ReadWorkflowSection('assistant');
     Try

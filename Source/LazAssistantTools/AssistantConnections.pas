@@ -38,6 +38,7 @@ Type
     Procedure Remove(Index: Integer);
     Procedure ClearStored;
     Function AddStored(Const Id, Name, Backend: String): TAssistantConnection;
+    /// Inserts the historical Grok row when a caller asks for it. Load and save do not call this.
     Procedure EnsureBuiltinGrok;
     Property Count: Integer Read GetCount;
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
@@ -88,7 +89,7 @@ End;
 Procedure TAssistantConnections.ClearStored;
 Begin
   FItems.Clear;
-  ActiveId := 'grok';
+  ActiveId := '';
 End;
 
 Function TAssistantConnections.AddStored(Const Id, Name, Backend: String): TAssistantConnection;
@@ -112,6 +113,7 @@ End;
 
 Procedure TAssistantConnections.EnsureBuiltinGrok;
 Begin
+  { Explicit opt-in. Load and save keep whatever list was stored, including none. }
   If AddStored('grok', 'Grok', 'grok') = Nil Then
     Exit;
 End;
@@ -120,13 +122,13 @@ Procedure TAssistantConnections.Load;
 Begin
   ClearStored;
   If Assigned(AssistantChatConfig) Then
-    AssistantChatConfig.LoadWithConnections(Self)
+    AssistantChatConfig.LoadWithConnections(Self);
+  If Active <> Nil Then
+    Exit;
+  If Count > 0 Then
+    ActiveId := Items[0].Id
   Else
-    EnsureBuiltinGrok;
-  If Count = 0 Then
-    EnsureBuiltinGrok;
-  If Active = Nil Then
-    ActiveId := Items[0].Id;
+    ActiveId := '';
 End;
 
 Function TAssistantConnections.Save: Boolean;
@@ -167,10 +169,23 @@ Begin
 End;
 
 Procedure TAssistantConnections.Remove(Index: Integer);
+Var
+  RemovedId: String;
 Begin
-  { Definition only. Deleting the profile directory is a separate explicit action. }
-  If (Index < 0) Or (Index >= Count) Or (Items[Index].Backend = 'grok') Then Exit;
-  If ActiveId = Items[Index].Id Then ActiveId := 'grok';
+  { Definition only. Deleting the profile directory is a separate explicit action.
+    Any row can be removed, including a saved Grok row. }
+  If (Index < 0) Or (Index >= Count) Then
+    Exit;
+  RemovedId := Items[Index].Id;
+  If ActiveId = RemovedId Then
+    Begin
+      If Count = 1 Then
+        ActiveId := ''
+      Else If Index < Count - 1 Then
+        ActiveId := Items[Index + 1].Id
+      Else
+        ActiveId := Items[Index - 1].Id;
+    End;
   FItems.Delete(Index);
 End;
 End.

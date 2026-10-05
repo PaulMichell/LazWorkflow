@@ -21,19 +21,43 @@ Begin
   Store := TAssistantConnections.Create(Root);
   Try
     Store.Load;
-    Check('missing IDE document uses the built-in Grok connection', (Store.Count = 1) And (Store.Active.Backend = 'grok'));
-    Check('legacy backend file is not read', (Store.Active.Model <> 'migrated-model-must-not-load') And (Store.Count = 1));
-    Check('built-in connection asks with no model effort', (Store.Active.ApprovalMode = 'ask') And (Store.Active.ReasoningEffort = ''));
+    Check('missing document has no connections', (Store.Count = 0) And (Store.Active = Nil) And (Store.ActiveId = ''));
+    Check('legacy backend file is not read', Store.Count = 0);
     Check('load does not write LazWorkflow.json or create a profile',
       Not FileExists(WorkflowSettingsPath) And Not DirectoryExists(Root + '/codex') And Not DirectoryExists(Root + '/assistant-codex-preview'));
-    Raised := False;
+    Policy := TStringList.Create;
     Try
-      For I := 0 To Store.Count - 1 Do If Store[I].Backend = 'grok' Then Store.ProfileDir(Store[I]);
-    Except On E: Exception Do Raised := True; End;
+      Policy.Text := '{"assistant":{"active_connection":"desk-grok","connections":[' +
+        '{"id":"desk-grok","name":"Desk Grok","backend":"grok","model":"grok-kept","thinking":"low","approval":"ask"}]}}';
+      Policy.SaveToFile(WorkflowSettingsPath);
+    Finally Policy.Free; End;
+    Store.Load;
+    Check('a saved Grok row is loaded with its id', Assigned(Store.Active) And (Store.Count = 1) And (Store.Active.Id = 'desk-grok') And
+      (Store.Active.Name = 'Desk Grok') And (Store.Active.Backend = 'grok') And (Store.Active.Model = 'grok-kept'));
+    Raised := False;
+    Try Store.ProfileDir(Store.Active); Except On E: Exception Do Raised := True; End;
     Check('Grok has no Codex profile', Raised);
-    Item := Store.AddChatGPT; Item.Name := 'First account'; Item.Model := 'model-one'; Item.Runtime := '/installed/codex'; Id := Item.Id;
-    Item.CachedModelsJson := ModelList;
-    Profile := Store.ProfileDir(Item);
+    Store.Remove(0);
+    Check('removing the active row does not recreate Grok', (Store.Count = 0) And (Store.Active = Nil) And (Store.ActiveId = ''));
+    Store.Save; Store.Load;
+    Check('saving a removed Grok row leaves the list empty', (Store.Count = 0) And (Store.ActiveId = ''));
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('empty save does not write a Grok row', Pos('grok', LowerCase(Policy.Text)) = 0);
+    Finally Policy.Free; End;
+    Item := Store.AddChatGPT; Item.Name := 'Only Codex'; Item.Model := 'codex-only'; Item.Runtime := '/installed/codex'; Id := Item.Id;
+    Store.ActiveId := Id; Store.Save; Store.Load;
+    Check('codex-only roundtrip keeps one row', (Store.Count = 1) And (Store[0].Id = Id) And (Store[0].Backend = 'codex') And
+      (Store[0].Model = 'codex-only'));
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('codex-only file has no Grok row', Pos('grok', LowerCase(Policy.Text)) = 0);
+    Finally Policy.Free; End;
+    Check('loaded Codex row asks with no effort until set', (Store[0].ApprovalMode = 'ask') And (Store[0].ReasoningEffort = ''));
+    Store[0].Name := 'First account'; Store[0].Model := 'model-one'; Store[0].CachedModelsJson := ModelList;
+    Profile := Store.ProfileDir(Store[0]);
     Check('connection uses a derived Codex profile', Profile = Derived(Root, Id));
     Check('profile is not created until launch', Not DirectoryExists(Profile));
     Item := Store.AddChatGPT; Item.Name := 'Second account'; Item.Model := 'model-two'; Item.Runtime := '/other/codex';
@@ -51,20 +75,24 @@ Begin
       Check('IDE document contains the saved connection', Pos('Second account', Policy.Text) > 0);
     Finally Policy.Free; End;
     Check('save does not create Codex profile directories', Not DirectoryExists(IncludeTrailingPathDelimiter(Root) + 'codex'));
-    Check('roundtrip preserves all connections', Store.Count = 3);
+    Check('roundtrip preserves all connections', Store.Count = 2);
     Check('model and reasoning cache belongs to its connection',
-      (Store[1].CachedModelsJson = ModelList) And (Store[2].CachedModelsJson = '')
-      And (Store[0].CachedModelsJson = ''));
+      (Store[0].CachedModelsJson = ModelList) And (Store[1].CachedModelsJson = ''));
     AssistantChatConfig.Save;
     Store.Load;
-    Check('saving general preferences preserves the model cache', Store[1].CachedModelsJson = ModelList);
-    Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'auto') And (Store[1].ApprovalMode = 'ask'));
+    Check('saving general preferences preserves the model cache', Store[0].CachedModelsJson = ModelList);
+    Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'auto') And (Store[0].ApprovalMode = 'ask'));
     Check('roundtrip preserves current connection', (Store.Active.Name = 'Second account') And (Store.Active.Model = 'model-two') And (Store.Active.Runtime = '/other/codex'));
     Store.ActiveId := 'grok'; Store.Save; Store.Load;
-    Check('switching connection retains ChatGPT connections', (Store.Count = 3) And (Store[2].Model = 'model-two'));
-    Store.Remove(0); Check('Grok credential owner retained', Store.Count = 3);
-    Store.ActiveId := Store[2].Id; Store.Remove(2); Check('removing active connection selects Grok', Store.Active.Backend = 'grok');
-    Store.Load; Check('discarding draft removal restores definitions', Store.Count = 3);
+    Check('an unresolved Grok id does not create a row', (Store.Count = 2) And (Store.Active.Backend = 'codex') And (Store[1].Model = 'model-two'));
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('save does not write active_connection grok', Pos('grok', LowerCase(Policy.Text)) = 0);
+    Finally Policy.Free; End;
+    Store.ActiveId := Store[1].Id; Store.Remove(1);
+    Check('removing the active row selects another remaining row', (Store.Count = 1) And Assigned(Store.Active) And (Store.Active.Id = Id));
+    Store.Load; Check('discarding draft removal restores definitions', Store.Count = 2);
     Check('launch creates the derived profile', PrepareCodexProfile(Profile, ErrorText) And DirectoryExists(Profile) And FileExists(Profile + PathDelim + 'config.toml'));
     Policy := TStringList.Create;
     Try
@@ -94,11 +122,11 @@ Begin
     For I := Store.Count - 1 DownTo 0 Do If Store[I].Id = Id Then Store.Remove(I);
     Check('removing a definition keeps the profile directory', DirectoryExists(Profile));
     Store.Load;
-    Check('unsaved removal leaves the profile directory', DirectoryExists(Profile) And (Store.Count = 3));
+    Check('unsaved removal leaves the profile directory', DirectoryExists(Profile) And (Store.Count = 2));
     Check('explicit delete removes only the profile directory', DeleteCodexProfileDirectory(Profile, ErrorText) And Not DirectoryExists(Profile));
     Store.Save;
     Check('save does not recreate a deleted profile', Not DirectoryExists(Profile) And Not FileExists(Profile + PathDelim + 'auth.json'));
-    Store.Load; Check('deleted profile is not part of the connection definition', Store.Count = 3);
+    Store.Load; Check('deleted profile is not part of the connection definition', Store.Count = 2);
     Check('old preview path is not a derived profile', Not CodexProfilePathIsDerived(Root + '/assistant-codex-preview'));
     Check('refuses to delete a non-derived path', Not DeleteCodexProfileDirectory(Root + '/assistant-codex-preview', ErrorText));
     Check('refusal does not create the old preview path', Not DirectoryExists(Root + '/assistant-codex-preview'));
@@ -112,6 +140,19 @@ Begin
     Check('symlink target was not deleted', FileExists(Root + '/outside-profile/marker.txt'));
     DeleteFile(Profile);
     {$ENDIF}
+    Item := Store.AddStored('desk-grok', 'Desk Grok', 'grok');
+    Check('a Grok row can be stored beside Codex rows', Assigned(Item) And (Item.Id = 'desk-grok'));
+    Store.ActiveId := Item.Id; Store.Save; Store.Load;
+    Check('reloaded Grok row keeps its id beside Codex rows', (Store.Count = 3) And Assigned(Store.Active) And (Store.Active.Id = 'desk-grok'));
+    Store.Remove(Store.Count - 1);
+    Check('removing the active Grok row selects another row', (Store.Count = 2) And Assigned(Store.Active) And (Store.Active.Backend = 'codex'));
+    Store.Save; Store.Load;
+    Check('saved removal of Grok does not recreate it', (Store.Count = 2) And Assigned(Store.Active) And (Store.Active.Backend = 'codex'));
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('saved removal leaves no Grok row', Pos('grok', LowerCase(Policy.Text)) = 0);
+    Finally Policy.Free; End;
   Finally
     Store.Free;
     DeleteCodexProfileDirectory(Derived(Root, Id), ErrorText);
