@@ -825,8 +825,22 @@ Begin
             ErrorText := AssistantTarget.ScopeRefusal('stage', Args.Items[I].AsString);
             Exit;
           End;
-      If (AssistantTarget.Kind=atkPackage) And (Command='commit') Then
+      If (AssistantTarget.Kind=atkPackage) And (Command='commit') And (Args Is TJSONArray) Then
         Begin
+          { commit -- path records the work tree, so the cached diff cannot see it. }
+          I := 1;
+          While (I < Args.Count) And (Args.Items[I].AsString <> '--') Do
+            Inc(I);
+          Inc(I);
+          While I < Args.Count Do
+            Begin
+              If Not CanStage(Args.Items[I].AsString) Then
+                Begin
+                  ErrorText := AssistantTarget.ScopeRefusal('commit', Args.Items[I].AsString);
+                  Exit;
+                End;
+              Inc(I);
+            End;
           If Not RunAssistantGit(Root,'{"arguments":["diff","--cached","--no-renames","--name-only","-z"]}',CheckReply,ErrorText) Then Exit;
           CheckData := GetJSON(CheckReply);
           Try
