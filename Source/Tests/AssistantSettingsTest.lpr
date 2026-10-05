@@ -1,6 +1,6 @@
 Program AssistantSettingsTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls,
+Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls, Menus,
   LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, WorkflowSettings, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantTestSettings, AssistantTestSettingsFrame;
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Var ConfigRoot: String;
@@ -119,13 +119,34 @@ Begin
   Dialog := TAssistantSettingsForm.Create(Nil);
   Try
     Dialog.LoadFromConfig;
+    Pages := TPageControl(Dialog.FindComponent('SettingsPages'));
+    Check('settings pages are streamed', Assigned(Pages) And (Pages.PageCount = 4));
+    Check('General page', Pages.Pages[0].Caption = 'General');
+    Check('Connections page', Pages.Pages[1].Caption = 'Connections');
+    Check('Spelling page', Pages.Pages[2].Caption = 'Spelling');
+    Check('Tests page', Pages.Pages[3].Caption = 'Tests');
+    Pages.ActivePageIndex := 0; Application.ProcessMessages;
+    Pages.ActivePageIndex := 1; Application.ProcessMessages;
+    Pages.ActivePageIndex := 2; Application.ProcessMessages;
+    Pages.ActivePageIndex := 3; Application.ProcessMessages;
     List := TListBox(Dialog.FindComponent('ConnectionsList'));
     Names := TEdit(Dialog.FindComponent('ConnectionNameEdit'));
-    Check('built-in Grok connection shown without a migrated account', List.Items.Count = 1);
-    TButton(Dialog.FindComponent('AddConnectionButton')).Click;
-    Check('additional connection can be added', List.Items.Count = 2);
+    Check('connection list is present without requiring a Grok row', Assigned(List) And (List.Items.Count = 0));
+    Check('add menu items stay enabled when no row of that kind exists',
+      TMenuItem(Dialog.FindComponent('GrokAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('ChatGptAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('CompatibleAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('ClaudeAccountItem')).Enabled);
+    TMenuItem(Dialog.FindComponent('ChatGptAccountItem')).Click;
+    Check('ChatGPT connection can be added', List.Items.Count = 1);
+    Check('add menu items stay enabled after a row of that kind exists',
+      TMenuItem(Dialog.FindComponent('GrokAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('ChatGptAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('CompatibleAccountItem')).Enabled And
+      TMenuItem(Dialog.FindComponent('ClaudeAccountItem')).Enabled);
     Names.Text := 'Another ChatGPT account';
     Frame := CodexSettings(Dialog);
+    Frame.RuntimeEdit.Text := ParamStr(0);
     Frame.LoadModels(ModelList);
     Frame.EffortCombo.ItemIndex := Frame.EffortCombo.Items.IndexOf('xhigh');
     List.ItemIndex := 0; List.OnClick(List);
@@ -135,20 +156,18 @@ Begin
       Begin
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
         Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-settings.png'); Finally PNG.Free; Bitmap.Free; End;
-      End;
-    If GetEnvironmentVariable('LAZ_SETTINGS_CAPTURE') <> '' Then
-      Begin
-        List.ItemIndex := 1; List.OnClick(List); Application.ProcessMessages;
-        Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
-        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-connections.png'); Finally PNG.Free; Bitmap.Free; End;
-        Pages := TPageControl(Dialog.FindComponent('SettingsPages')); Pages.ActivePageIndex := 1; Application.ProcessMessages;
+        Pages.ActivePageIndex := 0; Application.ProcessMessages;
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
         Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-general.png'); Finally PNG.Free; Bitmap.Free; End;
+        Pages.ActivePageIndex := 2; Application.ProcessMessages;
+        Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
+        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-spelling.png'); Finally PNG.Free; Bitmap.Free; End;
       End;
-    Pages := TPageControl(Dialog.FindComponent('SettingsPages')); Pages.ActivePageIndex := 1; Application.ProcessMessages;
-    Check('spell settings fit inside the General page',
+    Pages.ActivePageIndex := 2; Application.ProcessMessages;
+    Check('spell settings fit inside the Spelling page',
       TControl(Dialog.FindComponent('GlobalSpellSettings')).Left +
       TControl(Dialog.FindComponent('GlobalSpellSettings')).Width <= Pages.ActivePage.ClientWidth);
+    Pages.ActivePageIndex := 3; Application.ProcessMessages;
     TestFrame := TAssistantTestSettingsFrame(Dialog.FindComponent('ProjectTestSettings'));
     Check('project test controls disabled without a saved project', Not TestFrame.Enabled);
     TestFrame.Load(StoreDir, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := True;
@@ -158,7 +177,7 @@ Begin
     Check('test settings validate without launching a process', TestFrame.Validate(Note));
     If GetEnvironmentVariable('LAZ_SETTINGS_CAPTURE') <> '' Then
       Begin
-        Pages.ActivePageIndex := 2; Application.ProcessMessages;
+        Pages.ActivePageIndex := 3; Application.ProcessMessages;
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
         Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-project-tests.png'); Finally PNG.Free; Bitmap.Free; End;
       End;
@@ -169,31 +188,54 @@ Begin
     Finally TestSettings.Free; End;
     Store := TAssistantConnections.Create(ConfigRoot);
     Try
-      Store.Load; Check('settings save preserves the added connection', (Store.Count = 2) And (Store[1].Name = 'Another ChatGPT account'));
+      Store.Load; Check('settings save preserves the added connection', (Store.Count = 1) And (Store[0].Name = 'Another ChatGPT account'));
       Check('settings save wrote the IDE document and the target document',
         FileExists(WorkflowSettingsPath) And FileExists(StoreDir + 'config.json') And
         Not FileExists(ConfigRoot + '/assistant-connections.ini') And Not FileExists(ConfigRoot + '/spell.xml'));
-      Check('saving settings persists the discovered lists', Store[1].CachedModelsJson = ModelList);
+      Check('saving settings persists the discovered lists', Store[0].CachedModelsJson = ModelList);
+      Check('saving settings does not invent a Grok row', Store[0].Backend = 'codex');
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
         CancelledDialog.LoadFromConfig;
         List := TListBox(CancelledDialog.FindComponent('ConnectionsList'));
-        List.ItemIndex := 1; List.OnClick(List);
+        List.ItemIndex := 0; List.OnClick(List);
         Frame := CodexSettings(CancelledDialog);
         Check('reopening settings restores saved model and reasoning lists',
           (Frame.ModelCombo.Items.Count = 2) And (Frame.ModelCombo.Text = 'model-one')
           And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
           And Not Frame.Busy);
-        TButton(CancelledDialog.FindComponent('AddConnectionButton')).Click;
+        TMenuItem(CancelledDialog.FindComponent('ChatGptAccountItem')).Click;
         Check('new connections do not inherit discovered lists',
           (Frame.CachedModelsJson = '') And (Frame.ModelCombo.Items.Count = 0));
         Frame.LoadModels('{"data":[{"model":"other-account-model","supportedReasoningEfforts":[]}]}');
-        List.ItemIndex := 1; List.OnClick(List);
+        List.ItemIndex := 0; List.OnClick(List);
         Check('switching connections restores their own discovery cache',
           (Frame.CachedModelsJson = ModelList) And (Frame.ModelCombo.Items.Count = 2)
           And (Frame.ReasoningEffort = 'xhigh'));
         Frame.LoadModels('{"data":[{"model":"unsaved-model","supportedReasoningEfforts":[]}]}');
+        TMenuItem(CancelledDialog.FindComponent('GrokAccountItem')).Click;
+        Check('Grok detail does not show ChatGPT account fields',
+          TControl(CancelledDialog.FindComponent('GrokPanel')).Visible And
+          Not TControl(CancelledDialog.FindComponent('CodexPanel')).Visible);
+        TButton(CancelledDialog.FindComponent('RemoveConnectionButton')).Click;
+        Check('Remove deletes a Grok row', List.Items.Count = 2);
+        TMenuItem(CancelledDialog.FindComponent('CompatibleAccountItem')).Click;
+        TComboBox(CancelledDialog.FindComponent('PresetCombo')).ItemIndex := 0;
+        TComboBox(CancelledDialog.FindComponent('PresetCombo')).OnChange(TComboBox(CancelledDialog.FindComponent('PresetCombo')));
+        Check('OpenRouter fills the base URL and default env name',
+          (TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).Text = 'https://openrouter.ai/api/v1') And
+          (TEdit(CancelledDialog.FindComponent('KeyEnvEdit')).Text = 'OPENROUTER_API_KEY') And
+          TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).ReadOnly);
+        TComboBox(CancelledDialog.FindComponent('PresetCombo')).ItemIndex := 1;
+        TComboBox(CancelledDialog.FindComponent('PresetCombo')).OnChange(TComboBox(CancelledDialog.FindComponent('PresetCombo')));
+        Check('Custom leaves the base URL editable', Not TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).ReadOnly);
+        Check('stored key edit is a password edit', TEdit(CancelledDialog.FindComponent('KeyValueEdit')).PasswordChar = '*');
+        Check('switching kind hides the other account fields',
+          TControl(CancelledDialog.FindComponent('CompatiblePanel')).Visible And
+          Not TControl(CancelledDialog.FindComponent('GrokPanel')).Visible And
+          Not TControl(CancelledDialog.FindComponent('CodexPanel')).Visible And
+          Not TControl(CancelledDialog.FindComponent('ClaudePanel')).Visible);
         CancelledDialog.IncludeContextCheck.Checked := Not OriginalContext;
         TestFrame := TAssistantTestSettingsFrame(CancelledDialog.FindComponent('ProjectTestSettings'));
         TestFrame.Load(StoreDir, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := False;
@@ -205,8 +247,8 @@ Begin
       Finally TestSettings.Free; End;
       Store.Load;
       Check('Cancel discards connection and general preference edits',
-        (Store.Count = 2) And (AssistantChatConfig.IncludeIDEContext = OriginalContext));
-      Check('Cancel retains the saved discovery cache', Store[1].CachedModelsJson = ModelList);
+        (Store.Count = 1) And (AssistantChatConfig.IncludeIDEContext = OriginalContext));
+      Check('Cancel retains the saved discovery cache', Store[0].CachedModelsJson = ModelList);
     Finally Store.Free; End;
   Finally Dialog.Free; LazarusIDE := Nil; IDE.Free; DeleteFile(WorkflowSettingsPath); DeleteFile(StoreDir + 'config.json');
     RemoveDir(ExcludeTrailingPathDelimiter(StoreDir)); SetWorkflowSettingsDirectory(''); RemoveDir(ConfigRoot); End;

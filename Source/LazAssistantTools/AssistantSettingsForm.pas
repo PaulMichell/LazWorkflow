@@ -1,6 +1,11 @@
 Unit AssistantSettingsForm;
 
-{ LazAssistantTools OAuth sign-in, model and skill settings dialog (c) 2026 Michell Computing. }
+{ Project Assistant settings dialog (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. General, Connections, Spelling
+  and Tests are one streamed form so the designer opens a single resource.
+  Reviewed 2026-10: kind-specific groups stay here; no extra frame unit is in
+  scope for this settings page. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,74 +15,168 @@ Unit AssistantSettingsForm;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel, ComCtrls, Spin, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
+  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, Menus,
+  ButtonPanel, ComCtrls, Spin, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame,
+  AssistantTestSettingsFrame;
 
 Type
   TAssistantSettingsForm = Class(TForm)
-    StatusLabel: TLabel;
-    StatusValueLabel: TLabel;
-    ModelLabel: TLabel;
-    ModelList: TListBox;
-    ModelHintLabel: TLabel;
-    RefreshModelsButton: TButton;
-    SkillLabel: TLabel;
-    SkillCombo: TComboBox;
+    SettingsPages: TPageControl;
+    GeneralPage: TTabSheet;
     IncludeContextCheck: TCheckBox;
     AutoNewChatDefaultCheck: TCheckBox;
     ShowThinkingCheck: TCheckBox;
     ShowToolCallsCheck: TCheckBox;
+    GeneralNoteLabel: TLabel;
+    ConnectionsPage: TTabSheet;
+    ConnectionSidebar: TPanel;
+    ConnectionButtons: TPanel;
+    AddConnectionButton: TButton;
+    RemoveConnectionButton: TButton;
+    ConnectionsList: TListBox;
+    ConnectionDetail: TPanel;
+    IdentityPanel: TPanel;
+    NameLabel: TLabel;
+    ConnectionNameEdit: TEdit;
+    UseConnectionButton: TButton;
+    KindCaptionLabel: TLabel;
+    KindValueLabel: TLabel;
+    ActiveConnectionLabel: TLabel;
+    DetailHost: TPanel;
+    EmptyConnectionLabel: TLabel;
+    GrokPanel: TScrollBox;
+    GrokAccountGroup: TGroupBox;
+    StatusLabel: TLabel;
+    StatusValueLabel: TLabel;
+    SignInButton: TButton;
+    SignOutButton: TButton;
+    ManualLabel: TLabel;
+    ManualEdit: TEdit;
+    PasteCodeButton: TButton;
+    GrokModelGroup: TGroupBox;
+    ModelLabel: TLabel;
+    RefreshModelsButton: TButton;
+    ModelList: TListBox;
+    ModelHintLabel: TLabel;
     ThinkingLabel: TLabel;
     ThinkingCombo: TComboBox;
-    ApprovalLabel: TLabel;
-    ApprovalCombo: TComboBox;
-    SearchLabel: TLabel;
-    SearchCombo: TComboBox;
-    CitationsCheck: TCheckBox;
     VerbosityLabel: TLabel;
     VerbosityCombo: TComboBox;
     MaxOutputLabel: TLabel;
     MaxOutputEdit: TSpinEdit;
+    SearchLabel: TLabel;
+    SearchCombo: TComboBox;
+    CitationsCheck: TCheckBox;
+    GrokEndpointGroup: TGroupBox;
     ApiBaseLabel: TLabel;
     ApiBaseEdit: TEdit;
+    GrokPermissionsGroup: TGroupBox;
+    ApprovalLabel: TLabel;
+    ApprovalCombo: TComboBox;
+    GrokUsageGroup: TGroupBox;
+    GrokUsageLabel: TLabel;
+    GrokSkillGroup: TGroupBox;
+    SkillLabel: TLabel;
+    SkillCombo: TComboBox;
     HintLabel: TLabel;
-    ManualLabel: TLabel;
-    ManualEdit: TEdit;
-    SignInButton: TButton;
-    SignOutButton: TButton;
-    PasteCodeButton: TButton;
-    SpellButton: TButton;
+    CodexPanel: TScrollBox;
+    CodexFrame: TCodexConnectionFrame;
+    CodexUsageGroup: TGroupBox;
+    CodexUsageLabel: TLabel;
+    CompatiblePanel: TScrollBox;
+    CompatibleEndpointGroup: TGroupBox;
+    PresetLabel: TLabel;
+    PresetCombo: TComboBox;
+    CompatibleBaseLabel: TLabel;
+    CompatibleBaseEdit: TEdit;
+    KeySourceLabel: TLabel;
+    KeySourceCombo: TComboBox;
+    KeyEnvLabel: TLabel;
+    KeyEnvEdit: TEdit;
+    KeyValueLabel: TLabel;
+    KeyValueEdit: TEdit;
+    WireCaptionLabel: TLabel;
+    CompatibleWireLabel: TLabel;
+    TestConnectionButton: TButton;
+    CompatibleStatusLabel: TLabel;
+    CompatibleModelGroup: TGroupBox;
+    CompatibleModelLabel: TLabel;
+    CompatibleModelCombo: TComboBox;
+    RefreshCompatibleButton: TButton;
+    CompatibleMaxLabel: TLabel;
+    CompatibleMaxOutputEdit: TSpinEdit;
+    CompatiblePermissionsGroup: TGroupBox;
+    CompatibleApprovalLabel: TLabel;
+    CompatibleApprovalCombo: TComboBox;
+    CompatibleUsageGroup: TGroupBox;
+    CompatibleUsageLabel: TLabel;
+    ClaudePanel: TScrollBox;
+    ClaudeAccountGroup: TGroupBox;
+    ClaudeExecutableLabel: TLabel;
+    ClaudeRuntimeEdit: TEdit;
+    ClaudeBrowseButton: TButton;
+    ClaudeDetectButton: TButton;
+    ClaudeSignInButton: TButton;
+    ClaudeCheckButton: TButton;
+    ClaudeStatusLabel: TLabel;
+    ClaudeModelGroup: TGroupBox;
+    ClaudeModelLabel: TLabel;
+    ClaudeModelEdit: TEdit;
+    ClaudePermissionsGroup: TGroupBox;
+    ClaudeApprovalLabel: TLabel;
+    ClaudeApprovalCombo: TComboBox;
+    ClaudeUsageGroup: TGroupBox;
+    ClaudeUsageLabel: TLabel;
+    SpellingPage: TTabSheet;
+    GlobalSpellSettings: TSpellCheckerSettingsFrame;
+    TestsPage: TTabSheet;
+    ProjectTestSettings: TAssistantTestSettingsFrame;
     ButtonPanel: TButtonPanel;
+    AddConnectionMenu: TPopupMenu;
+    GrokAccountItem: TMenuItem;
+    ChatGptAccountItem: TMenuItem;
+    CompatibleAccountItem: TMenuItem;
+    ClaudeAccountItem: TMenuItem;
     Procedure FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
     Procedure FormCreate(Sender: TObject);
+    Procedure AddConnectionClick(Sender: TObject);
+    Procedure RemoveConnectionClick(Sender: TObject);
+    Procedure ConnectionChanged(Sender: TObject);
+    Procedure UseConnectionClick(Sender: TObject);
+    Procedure AddGrokAccountClick(Sender: TObject);
+    Procedure AddChatGptAccountClick(Sender: TObject);
+    Procedure AddCompatibleAccountClick(Sender: TObject);
+    Procedure AddClaudeAccountClick(Sender: TObject);
     Procedure SignInButtonClick(Sender: TObject);
     Procedure SignOutButtonClick(Sender: TObject);
     Procedure PasteCodeButtonClick(Sender: TObject);
     Procedure RefreshModelsButtonClick(Sender: TObject);
-    Procedure SpellButtonClick(Sender: TObject);
-    Procedure EnsureExtraControls;
     Procedure GrokModelSelectionChange(Sender: TObject; User: Boolean);
     Procedure GrokSearchModeChange(Sender: TObject);
+    Procedure CompatiblePresetChange(Sender: TObject);
+    Procedure KeySourceChange(Sender: TObject);
+    Procedure TestConnectionClick(Sender: TObject);
+    Procedure RefreshCompatibleClick(Sender: TObject);
+    Procedure ClaudeBrowseClick(Sender: TObject);
+    Procedure ClaudeDetectClick(Sender: TObject);
+    Procedure ClaudeSignInClick(Sender: TObject);
+    Procedure ClaudeCheckClick(Sender: TObject);
   Private
     Connections: TAssistantConnections;
-    ConnectionList: TListBox;
-    ConnectionName: TEdit;
-    ActiveConnectionLabel: TLabel;
-    GrokPanel: TScrollBox;
-    CodexFrame: TCodexConnectionFrame;
-    SpellFrame: TSpellCheckerSettingsFrame;
-    TestFrame: TAssistantTestSettingsFrame;
     SelectedConnection: Integer;
     FFillingModels: Boolean;
-    Procedure BuildSettingsPages;
-    Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
-    Procedure GeneralPageResize(Sender: TObject);
+    FLoading: Boolean;
+    Procedure EnsureStaticChoices;
+    Procedure ShowConnectionKind(Const Backend: String);
     Procedure RefreshConnections;
     Procedure StoreConnection;
-    Procedure ConnectionChanged(Sender: TObject);
-    Procedure AddConnection(Sender: TObject);
-    Procedure RemoveConnection(Sender: TObject);
-    Procedure UseConnection(Sender: TObject);
+    Procedure LoadGrokConnection(Item: TAssistantConnection);
+    Procedure LoadCompatibleConnection(Item: TAssistantConnection);
+    Procedure LoadClaudeConnection(Item: TAssistantConnection);
+    Procedure AddKind(Const Backend, DisplayName: String);
+    Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
+    Function HasGrokRow: Boolean;
+    Procedure RefreshCompatibleModels;
   Public
     Destructor Destroy; Override;
     Procedure LoadFromConfig;
@@ -93,10 +192,10 @@ Implementation
 
 {$R *.lfm}
 
-Uses AssistantWorkTarget,
-  AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
-  AssistantConversation, ProjectAssistantForm, AssistantXaiProvider,
-  LCLIntf, SpellCheckerSettingsForm, LazIDEIntf;
+Uses
+  AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
+  AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient,
+  LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -146,6 +245,61 @@ Begin
     Result := 'high';
 End;
 
+Function KindCaption(Const Backend: String): String;
+Begin
+  If Backend = 'grok' Then
+    Result := 'Grok account'
+  Else If Backend = 'codex' Then
+    Result := 'ChatGPT (Codex app)'
+  Else If Backend = 'openai-compatible' Then
+    Result := 'OpenAI-compatible endpoint'
+  Else If Backend = 'claude' Then
+    Result := 'Claude account'
+  Else
+    Result := '';
+End;
+
+Function ApprovalIndex(Const Mode: String): Integer;
+Begin
+  If Mode = 'auto' Then
+    Result := 1
+  Else If Mode = 'always' Then
+    Result := 2
+  Else
+    Result := 0;
+End;
+
+Function ApprovalFromIndex(Index: Integer): String;
+Begin
+  Case Index Of
+    1: Result := 'auto';
+    2: Result := 'always';
+  Else
+    Result := 'ask';
+  End;
+End;
+
+Function NewConnectionId: String;
+Var
+  Id: TGuid;
+Begin
+  Result := '';
+  If CreateGUID(Id) <> 0 Then
+    Exit;
+  Result := Copy(GUIDToString(Id), 2, 36);
+End;
+
+Procedure EnsureItems(Combo: TComboBox; Const Values: Array Of String; Index: Integer);
+Var
+  I: Integer;
+Begin
+  If Combo.Items.Count = 0 Then
+    For I := Low(Values) To High(Values) Do
+      Combo.Items.Add(Values[I]);
+  If (Combo.ItemIndex < 0) And (Index >= 0) And (Index < Combo.Items.Count) Then
+    Combo.ItemIndex := Index;
+End;
+
 Procedure ShowAssistantSettingsForm;
 Var
   Form: TAssistantSettingsForm;
@@ -167,156 +321,85 @@ Begin
       End;
   Finally
     Form.Free;
-    { Restore any endpoint temporarily used for discovery when Cancel was chosen. }
     If Assigned(AssistantClient) And Assigned(AssistantChatConfig) Then
       AssistantClient.ApplyConfig(AssistantChatConfig);
   End;
 End;
 
-Procedure TAssistantSettingsForm.EnsureExtraControls;
+Procedure TAssistantSettingsForm.EnsureStaticChoices;
 Begin
-  If Assigned(ThinkingCombo) Then
+  EnsureItems(SearchCombo, ['Off', 'Auto', 'On'], 0);
+  EnsureItems(VerbosityCombo, ['Low', 'Medium', 'High'], 1);
+  EnsureItems(ApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
+    'Always — never prompt (like Build always-approve)'], 0);
+  EnsureItems(PresetCombo, ['OpenRouter', 'Custom'], 1);
+  EnsureItems(KeySourceCombo, ['Environment variable', 'Stored key'], 0);
+  EnsureItems(CompatibleApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
+    'Always — never prompt (like Build always-approve)'], 0);
+  EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
+    'Always — never prompt (like Build always-approve)'], 0);
+  CompatibleWireLabel.Caption := 'Chat completions';
+  CodexUsageLabel.Caption := 'This program did not report counts.';
+  GrokUsageLabel.Caption := 'This connection did not report usage.';
+  CompatibleUsageLabel.Caption := 'This connection did not report usage.';
+  ClaudeUsageLabel.Caption := 'This connection did not report usage.';
+  ClaudeStatusLabel.Caption := ClaudeKeepsSessionText;
+End;
+
+Procedure TAssistantSettingsForm.ShowConnectionKind(Const Backend: String);
+Begin
+  GrokPanel.Visible := Backend = 'grok';
+  CodexPanel.Visible := Backend = 'codex';
+  CompatiblePanel.Visible := Backend = 'openai-compatible';
+  ClaudePanel.Visible := Backend = 'claude';
+  EmptyConnectionLabel.Visible := Backend = '';
+  KindValueLabel.Caption := KindCaption(Backend);
+  ConnectionNameEdit.Enabled := Backend <> '';
+  UseConnectionButton.Enabled := Backend <> '';
+End;
+
+Function TAssistantSettingsForm.HasGrokRow: Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  If Not Assigned(Connections) Then
     Exit;
-  ClientHeight := ClientHeight + 120;
-  If Assigned(ButtonPanel) Then
-    ButtonPanel.Top := ButtonPanel.Top + 120;
-  If Assigned(HintLabel) Then
-    HintLabel.Top := HintLabel.Top + 120;
-  If Assigned(ManualLabel) Then
-    ManualLabel.Top := ManualLabel.Top + 120;
-  If Assigned(ManualEdit) Then
-    ManualEdit.Top := ManualEdit.Top + 120;
-  If Assigned(PasteCodeButton) Then
-    PasteCodeButton.Top := PasteCodeButton.Top + 120;
-  If Assigned(ApiBaseLabel) Then
-    ApiBaseLabel.Top := ApiBaseLabel.Top + 120;
-  If Assigned(ApiBaseEdit) Then
-    ApiBaseEdit.Top := ApiBaseEdit.Top + 120;
-
-  ThinkingLabel := TLabel.Create(Self);
-  ThinkingLabel.Parent := Self;
-  ThinkingLabel.Left := 16;
-  ThinkingLabel.Top := 350;
-  ThinkingLabel.Caption := 'Thinking level (Responses API; Completions is fallback):';
-
-  ThinkingCombo := TComboBox.Create(Self);
-  ThinkingCombo.Parent := Self;
-  ThinkingCombo.Left := 16;
-  ThinkingCombo.Top := 370;
-  ThinkingCombo.Width := 220;
-  ThinkingCombo.Style := csDropDownList;
-  ThinkingCombo.Items.Add('Low');
-  ThinkingCombo.Items.Add('Medium');
-  ThinkingCombo.Items.Add('High');
-  ThinkingCombo.Items.Add('XHigh');
-  ThinkingCombo.ItemIndex := 2;
-
-  ApprovalLabel := TLabel.Create(Self);
-  ApprovalLabel.Parent := Self;
-  ApprovalLabel.Left := 260;
-  ApprovalLabel.Top := 350;
-  ApprovalLabel.Caption := 'Approval level (tool writes):';
-
-  ApprovalCombo := TComboBox.Create(Self);
-  ApprovalCombo.Parent := Self;
-  ApprovalCombo.Left := 260;
-  ApprovalCombo.Top := 370;
-  ApprovalCombo.Width := 244;
-  ApprovalCombo.Style := csDropDownList;
-  ApprovalCombo.Items.Add('Ask — confirm each write/compile');
-  ApprovalCombo.Items.Add('Auto — allow project tools');
-  ApprovalCombo.Items.Add('Always — never prompt (like Build always-approve)');
-  ApprovalCombo.ItemIndex := 0;
-
-  { Place below thinking/approval (may already exist from the .lfm). }
-  If Not Assigned(AutoNewChatDefaultCheck) Then
-    Begin
-      AutoNewChatDefaultCheck := TCheckBox.Create(Self);
-      AutoNewChatDefaultCheck.Parent := Self;
-      AutoNewChatDefaultCheck.Left := 16;
-      AutoNewChatDefaultCheck.Width := 488;
-      AutoNewChatDefaultCheck.Caption :=
-        'Default: automatically start a New Chat at 95% context use';
-    End;
-  AutoNewChatDefaultCheck.Top := 404;
-  AutoNewChatDefaultCheck.ShowHint := True;
-  AutoNewChatDefaultCheck.Hint :=
-    'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.';
-  If Not Assigned(SearchCombo) Then
-    Begin
-      SearchLabel := TLabel.Create(Self);
-      SearchLabel.Parent := Self;
-      SearchLabel.Left := 16;
-      SearchLabel.Caption := 'Live search:';
-      SearchCombo := TComboBox.Create(Self);
-      SearchCombo.Parent := Self;
-      SearchCombo.Left := 16;
-      SearchCombo.Width := 220;
-      SearchCombo.Style := csDropDownList;
-      SearchCombo.Items.Add('Off');
-      SearchCombo.Items.Add('Auto');
-      SearchCombo.Items.Add('On');
-      SearchCombo.ItemIndex := 0;
-      SearchCombo.OnChange := @GrokSearchModeChange;
-      CitationsCheck := TCheckBox.Create(Self);
-      CitationsCheck.Parent := Self;
-      CitationsCheck.Left := 16;
-      CitationsCheck.Width := 420;
-      CitationsCheck.Caption := 'Return citations';
-      VerbosityLabel := TLabel.Create(Self);
-      VerbosityLabel.Parent := Self;
-      VerbosityLabel.Left := 16;
-      VerbosityLabel.Caption := 'Answer length:';
-      VerbosityCombo := TComboBox.Create(Self);
-      VerbosityCombo.Parent := Self;
-      VerbosityCombo.Left := 16;
-      VerbosityCombo.Width := 220;
-      VerbosityCombo.Style := csDropDownList;
-      VerbosityCombo.Items.Add('Low');
-      VerbosityCombo.Items.Add('Medium');
-      VerbosityCombo.Items.Add('High');
-      VerbosityCombo.ItemIndex := 1;
-      MaxOutputLabel := TLabel.Create(Self);
-      MaxOutputLabel.Parent := Self;
-      MaxOutputLabel.Left := 16;
-      MaxOutputLabel.Caption := 'Max output tokens (0 = provider default):';
-      MaxOutputEdit := TSpinEdit.Create(Self);
-      MaxOutputEdit.Parent := Self;
-      MaxOutputEdit.Left := 16;
-      MaxOutputEdit.Width := 120;
-      MaxOutputEdit.MinValue := 0;
-      MaxOutputEdit.MaxValue := 1000000;
-      MaxOutputEdit.Increment := 1024;
-      MaxOutputEdit.Value := 0;
-    End;
-  SearchLabel.Top := 430;
-  SearchCombo.Top := 450;
-  CitationsCheck.Top := 486;
-  VerbosityLabel.Top := 520;
-  VerbosityCombo.Top := 540;
-  MaxOutputLabel.Top := 576;
-  MaxOutputEdit.Top := 596;
-  SearchCombo.ShowHint := True;
-  SearchCombo.Hint := 'Off sends no search. Auto lets Grok decide. On asks it to search on the completions fallback.';
-  CitationsCheck.ShowHint := True;
-  CitationsCheck.Hint := 'Ask the completions fallback to return source citations. The Responses path returns search sources with the search tools.';
-  VerbosityCombo.ShowHint := True;
-  VerbosityCombo.Hint := 'Length of the visible answer. Separate from reasoning level. Sent on the Responses path.';
-  MaxOutputEdit.ShowHint := True;
-  MaxOutputEdit.Hint := '0 uses the provider default.';
+  For I := 0 To Connections.Count - 1 Do
+    If Connections[I].Backend = 'grok' Then
+      Exit(True);
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
+Var
+  I: Integer;
 Begin
   Caption := 'Project Assistant Settings';
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
-  EnsureExtraControls;
-  If Assigned(ModelList) Then
-    ModelList.OnSelectionChange := @GrokModelSelectionChange;
-  BuildSettingsPages;
+  KeyValueEdit.PasswordChar := '*';
+  EnsureStaticChoices;
+  KeySourceChange(Nil);
+  SelectedConnection := -1;
+  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
+  Connections.Load;
+  If AssistantTarget.Available Then
+    ProjectTestSettings.Load(AssistantTarget.StoreDirectory, AssistantTarget.Manifest)
+  Else
+    ProjectTestSettings.Load('', '');
+  GlobalSpellSettings.LoadFromConfig;
+  RefreshConnections;
+  If Connections.Count > 0 Then
+    Begin
+      ConnectionsList.ItemIndex := 0;
+      For I := 0 To Connections.Count - 1 Do
+        If Connections[I].Id = Connections.ActiveId Then
+          ConnectionsList.ItemIndex := I;
+    End;
+  ConnectionChanged(Nil);
   PopulateSkills;
   RefreshAuthStatus;
+  SettingsPages.ActivePage := ConnectionsPage;
 End;
 
 Destructor TAssistantSettingsForm.Destroy;
@@ -325,164 +408,320 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TAssistantSettingsForm.BuildSettingsPages;
-Var Pages: TPageControl; ConnectionPage, GeneralPage, TestPage: TTabSheet;
-  Sidebar, Details, Header: TPanel; Control: TControl; I: Integer; Button: TButton;
-  LabelControl: TLabel;
+Procedure TAssistantSettingsForm.RefreshConnections;
+Var
+  I, Selected: Integer;
+  Item: TAssistantConnection;
 Begin
-  SelectedConnection := -1;
-  ClientWidth := 960; ClientHeight := 760;
-  Constraints.MinWidth := 900; Constraints.MinHeight := 650;
-  BorderStyle := bsSizeable;
-  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
-  Connections.Load;
-  Pages := TPageControl.Create(Self); Pages.Name := 'SettingsPages'; Pages.Parent := Self; Pages.Align := alClient;
-  ConnectionPage := TTabSheet.Create(Pages); ConnectionPage.PageControl := Pages; ConnectionPage.Caption := 'Connections';
-  GeneralPage := TTabSheet.Create(Pages); GeneralPage.PageControl := Pages; GeneralPage.Caption := 'General';
-  TestPage := TTabSheet.Create(Pages); TestPage.PageControl := Pages; TestPage.Caption := 'Target tests';
-  TestFrame := TAssistantTestSettingsFrame.Create(Self); TestFrame.Name := 'ProjectTestSettings'; TestFrame.Parent := TestPage; TestFrame.Align := alClient;
-  If AssistantTarget.Available Then
-    TestFrame.Load(AssistantTarget.StoreDirectory, AssistantTarget.Manifest)
+  Selected := ConnectionsList.ItemIndex;
+  ConnectionsList.Items.BeginUpdate;
+  Try
+    ConnectionsList.Items.Clear;
+    For I := 0 To Connections.Count - 1 Do
+      Begin
+        Item := Connections[I];
+        If Item.Id = Connections.ActiveId Then
+          ConnectionsList.Items.Add(Item.Name + ' (current)')
+        Else
+          ConnectionsList.Items.Add(Item.Name);
+      End;
+  Finally
+    ConnectionsList.Items.EndUpdate;
+  End;
+  If Selected >= Connections.Count Then
+    Selected := Connections.Count - 1;
+  ConnectionsList.ItemIndex := Selected;
+  Item := Connections.Active;
+  If Assigned(Item) Then
+    ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '.'
   Else
-    TestFrame.Load('', '');
-  Sidebar := TPanel.Create(Self); Sidebar.Parent := ConnectionPage; Sidebar.Align := alLeft; Sidebar.Width := 220; Sidebar.BevelOuter := bvNone;
-  Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Name := 'AddConnectionButton'; Button.Caption := 'Add ChatGPT connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @AddConnection;
-  Button := TButton.Create(Self); Button.Parent := Sidebar; Button.Caption := 'Remove connection'; Button.Align := alBottom; Button.Height := 36; Button.OnClick := @RemoveConnection;
-  Button.ShowHint := True;
-  Button.Hint := 'Removes the saved definition only. The Codex profile directory is kept.';
-  ConnectionList := TListBox.Create(Self); ConnectionList.Name := 'ConnectionsList'; ConnectionList.Parent := Sidebar; ConnectionList.Align := alClient; ConnectionList.OnClick := @ConnectionChanged;
-  Details := TPanel.Create(Self); Details.Parent := ConnectionPage; Details.Align := alClient; Details.BevelOuter := bvNone;
-  Header := TPanel.Create(Self); Header.Parent := Details; Header.Align := alTop; Header.Height := 112; Header.BevelOuter := bvNone;
-  LabelControl := TLabel.Create(Self); LabelControl.Parent := Header; LabelControl.SetBounds(16, 8, 150, 20); LabelControl.Caption := 'Connection name';
-  ConnectionName := TEdit.Create(Self); ConnectionName.Name := 'ConnectionNameEdit'; ConnectionName.Parent := Header; ConnectionName.SetBounds(16, 30, 400, 28);
-  Button := TButton.Create(Self); Button.Parent := Header; Button.SetBounds(430, 30, 230, 28); Button.Name := 'UseConnectionButton'; Button.Caption := 'Use for current chat'; Button.OnClick := @UseConnection;
-  Button.ShowHint := True;
-  Button.Hint := 'Switches the open assistant chat to this connection immediately.';
-  ActiveConnectionLabel := TLabel.Create(Self); ActiveConnectionLabel.Parent := Header; ActiveConnectionLabel.SetBounds(16, 70, 650, 32); ActiveConnectionLabel.AutoSize := False; ActiveConnectionLabel.WordWrap := True;
-  GrokPanel := TScrollBox.Create(Self); GrokPanel.Parent := Details; GrokPanel.Align := alClient; GrokPanel.BorderStyle := bsNone;
-  { Reuse Grok's existing account and model controls inside its own connection
-    details, retaining the established credential owner. }
-  For I := ControlCount - 1 DownTo 0 Do
-    Begin
-      Control := Controls[I];
-      If (Control = Pages) Or (Control = ButtonPanel) Then Continue;
-      Control.Anchors := [akLeft, akTop];
-      Control.Parent := GrokPanel;
-    End;
-  SpellButton.Visible := False;
-  IncludeContextCheck.Parent := GeneralPage; IncludeContextCheck.SetBounds(20, 20, 700, 24);
-  AutoNewChatDefaultCheck.Parent := GeneralPage; AutoNewChatDefaultCheck.SetBounds(20, 52, 800, 24);
-  AutoNewChatDefaultCheck.Caption := 'Automatically start a new Grok chat at 95% context use';
-  ShowThinkingCheck.Parent := GeneralPage; ShowThinkingCheck.SetBounds(20, 84, 800, 24);
-  ShowToolCallsCheck.Parent := GeneralPage; ShowToolCallsCheck.SetBounds(20, 116, 800, 24);
-  SpellFrame := TSpellCheckerSettingsFrame.Create(Self); SpellFrame.Name := 'GlobalSpellSettings'; SpellFrame.Parent := GeneralPage;
-  SpellFrame.SetBounds(20, 156, 820, 260); SpellFrame.Anchors := [akLeft, akTop]; SpellFrame.LoadFromConfig;
-  GeneralPage.OnResize := @GeneralPageResize;
-  LabelControl := TLabel.Create(Self); LabelControl.Parent := GeneralPage;
-  LabelControl.SetBounds(20, 432, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
-  LabelControl.Caption := 'These preferences apply across connections. Sign-in, sign-out and Use for current chat take effect immediately. ' +
-    'Cancel discards other preference edits. Selecting a connection does not sign out other accounts.';
-  If Assigned(SearchLabel) Then
-    Begin
-      SearchLabel.Top := 430; SearchCombo.Top := 450;
-      CitationsCheck.Top := 486;
-      VerbosityLabel.Top := 520; VerbosityCombo.Top := 540;
-      MaxOutputLabel.Top := 576; MaxOutputEdit.Top := 596;
-    End;
-  ApiBaseLabel.Top := 640; ApiBaseEdit.Top := 662;
-  ManualLabel.Top := 706; ManualEdit.Top := 730; PasteCodeButton.Top := 730;
-  HintLabel.Top := 774;
-  ThinkingLabel.Caption := 'Grok reasoning level'; ApprovalLabel.Caption := 'Grok tool approvals';
-  CodexFrame := TCodexConnectionFrame.Create(Self); CodexFrame.Parent := Details; CodexFrame.Align := alClient;
-  RefreshConnections;
-  For I := 0 To Connections.Count - 1 Do
-    If Connections[I].Id = Connections.ActiveId Then ConnectionList.ItemIndex := I;
-  ConnectionChanged(Nil);
-  Pages.ActivePage := ConnectionPage;
-End;
-
-Procedure TAssistantSettingsForm.GeneralPageResize(Sender: TObject);
-Begin
-  If Assigned(SpellFrame) And Assigned(SpellFrame.Parent) Then
-    SpellFrame.Width := SpellFrame.Parent.ClientWidth - 40;
+    ActiveConnectionLabel.Caption := 'No connection is selected for the current chat.';
 End;
 
 Procedure TAssistantSettingsForm.StoreConnection;
-Var Item: TAssistantConnection;
+Var
+  Item: TAssistantConnection;
 Begin
-  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then Exit;
+  If (Not Assigned(Connections)) Or (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
+    Exit;
   Item := Connections[SelectedConnection];
-  If Trim(ConnectionName.Text) <> '' Then Item.Name := Trim(ConnectionName.Text);
-  If Item.Backend = 'codex' Then
+  If Trim(ConnectionNameEdit.Text) <> '' Then
+    Item.Name := Trim(ConnectionNameEdit.Text);
+  If Item.Backend = 'grok' Then
+    Begin
+      Item.ApiBase := Trim(ApiBaseEdit.Text);
+      If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
+        Item.Model := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
+      If ThinkingCombo.ItemIndex >= 0 Then
+        Item.ReasoningEffort := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex]);
+      Item.ApprovalMode := ApprovalFromIndex(ApprovalCombo.ItemIndex);
+      Case SearchCombo.ItemIndex Of
+        1: Item.SearchMode := 'auto';
+        2: Item.SearchMode := 'on';
+      Else
+        Item.SearchMode := 'off';
+      End;
+      Item.SearchCitations := CitationsCheck.Checked;
+      Case VerbosityCombo.ItemIndex Of
+        0: Item.AnswerVerbosity := 'low';
+        2: Item.AnswerVerbosity := 'high';
+      Else
+        Item.AnswerVerbosity := 'medium';
+      End;
+      Item.MaxOutputTokens := MaxOutputEdit.Value;
+    End
+  Else If Item.Backend = 'codex' Then
     Begin
       Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text);
       Item.Model := Trim(CodexFrame.ModelCombo.Text);
       Item.ReasoningEffort := CodexFrame.ReasoningEffort;
       Item.ApprovalMode := CodexFrame.ApprovalMode;
       Item.CachedModelsJson := CodexFrame.CachedModelsJson;
+    End
+  Else If Item.Backend = 'openai-compatible' Then
+    Begin
+      If PresetCombo.ItemIndex = 0 Then
+        Item.Preset := 'openrouter'
+      Else
+        Item.Preset := 'custom';
+      Item.ApiBase := Trim(CompatibleBaseEdit.Text);
+      If KeySourceCombo.ItemIndex = 1 Then
+        Item.KeySource := 'stored'
+      Else
+        Item.KeySource := 'env';
+      Item.KeyEnv := Trim(KeyEnvEdit.Text);
+      Item.KeyValue := KeyValueEdit.Text;
+      Item.WireApi := AssistantWireChatCompletions;
+      Item.Model := Trim(CompatibleModelCombo.Text);
+      Item.MaxOutputTokens := CompatibleMaxOutputEdit.Value;
+      Item.ApprovalMode := ApprovalFromIndex(CompatibleApprovalCombo.ItemIndex);
+    End
+  Else If Item.Backend = 'claude' Then
+    Begin
+      Item.Runtime := Trim(ClaudeRuntimeEdit.Text);
+      Item.Model := Trim(ClaudeModelEdit.Text);
+      Item.ApprovalMode := ApprovalFromIndex(ClaudeApprovalCombo.ItemIndex);
     End;
 End;
 
-Procedure TAssistantSettingsForm.RefreshConnections;
-Var I, Selected: Integer; Item: TAssistantConnection;
+Procedure TAssistantSettingsForm.LoadGrokConnection(Item: TAssistantConnection);
 Begin
-  Selected := ConnectionList.ItemIndex;
-  ConnectionList.Items.Clear;
-  For I := 0 To Connections.Count - 1 Do
-    Begin
-      Item := Connections[I];
-      If Item.Id = Connections.ActiveId Then ConnectionList.Items.Add(Item.Name + ' (current)')
-      Else ConnectionList.Items.Add(Item.Name);
-    End;
-  If Selected >= Connections.Count Then Selected := Connections.Count - 1;
-  ConnectionList.ItemIndex := Selected;
-  Item := Connections.Active;
-  If Assigned(Item) Then
-    ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '. The assistant status bar uses this connection.';
+  If Item.ApiBase <> '' Then
+    ApiBaseEdit.Text := Item.ApiBase
+  Else
+    ApiBaseEdit.Text := AssistantConfigDefaultApiBase;
+  If Item.Model <> '' Then
+    SelectModelInList(ModelList, Item.Model);
+  RefreshGrokReasoningChoices(Item.ReasoningEffort);
+  If SameText(Item.SearchMode, 'on') Then
+    SearchCombo.ItemIndex := 2
+  Else If SameText(Item.SearchMode, 'auto') Then
+    SearchCombo.ItemIndex := 1
+  Else
+    SearchCombo.ItemIndex := 0;
+  GrokSearchModeChange(Nil);
+  CitationsCheck.Checked := Item.SearchCitations;
+  If SameText(Item.AnswerVerbosity, 'low') Then
+    VerbosityCombo.ItemIndex := 0
+  Else If SameText(Item.AnswerVerbosity, 'high') Then
+    VerbosityCombo.ItemIndex := 2
+  Else
+    VerbosityCombo.ItemIndex := 1;
+  If Item.MaxOutputTokens < 0 Then
+    MaxOutputEdit.Value := 0
+  Else If Item.MaxOutputTokens > MaxOutputEdit.MaxValue Then
+    MaxOutputEdit.Value := MaxOutputEdit.MaxValue
+  Else
+    MaxOutputEdit.Value := Item.MaxOutputTokens;
+  ApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
+End;
+
+Procedure TAssistantSettingsForm.LoadCompatibleConnection(Item: TAssistantConnection);
+Begin
+  If Item.Preset = 'openrouter' Then
+    PresetCombo.ItemIndex := 0
+  Else
+    PresetCombo.ItemIndex := 1;
+  CompatibleBaseEdit.Text := Item.ApiBase;
+  CompatibleBaseEdit.ReadOnly := Item.Preset = 'openrouter';
+  If Item.KeySource = 'stored' Then
+    KeySourceCombo.ItemIndex := 1
+  Else
+    KeySourceCombo.ItemIndex := 0;
+  KeyEnvEdit.Text := Item.KeyEnv;
+  KeyValueEdit.Text := Item.KeyValue;
+  KeySourceChange(Nil);
+  CompatibleWireLabel.Caption := 'Chat completions';
+  CompatibleModelCombo.Text := Item.Model;
+  If Item.MaxOutputTokens < 0 Then
+    CompatibleMaxOutputEdit.Value := 0
+  Else If Item.MaxOutputTokens > CompatibleMaxOutputEdit.MaxValue Then
+    CompatibleMaxOutputEdit.Value := CompatibleMaxOutputEdit.MaxValue
+  Else
+    CompatibleMaxOutputEdit.Value := Item.MaxOutputTokens;
+  CompatibleApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
+  CompatibleStatusLabel.Caption := '';
+End;
+
+Procedure TAssistantSettingsForm.LoadClaudeConnection(Item: TAssistantConnection);
+Begin
+  ClaudeRuntimeEdit.Text := Item.Runtime;
+  ClaudeModelEdit.Text := Item.Model;
+  ClaudeApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
+  ClaudeStatusLabel.Caption := ClaudeKeepsSessionText;
 End;
 
 Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);
-Var Item: TAssistantConnection; NewSelection: Integer;
+Var
+  Item: TAssistantConnection;
+  NewSelection: Integer;
 Begin
   If CodexFrame.Busy Then
     Begin
-      ConnectionList.ItemIndex := SelectedConnection;
+      ConnectionsList.ItemIndex := SelectedConnection;
       Exit;
     End;
-  NewSelection := ConnectionList.ItemIndex;
-  StoreConnection; RefreshConnections;
-  SelectedConnection := NewSelection; ConnectionList.ItemIndex := NewSelection;
-  If SelectedConnection < 0 Then Exit;
-  Item := Connections[SelectedConnection]; ConnectionName.Text := Item.Name;
-  GrokPanel.Visible := Item.Backend = 'grok'; CodexFrame.Visible := Item.Backend = 'codex';
-  If Item.Backend = 'codex' Then CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort, Item.ApprovalMode, Item.CachedModelsJson);
-End;
-
-Procedure TAssistantSettingsForm.AddConnection(Sender: TObject);
-Begin
-  If CodexFrame.Busy Then Exit;
-  StoreConnection; Connections.AddChatGPT; RefreshConnections;
-  SelectedConnection := -1; ConnectionList.ItemIndex := Connections.Count - 1; ConnectionChanged(Nil);
-End;
-
-Procedure TAssistantSettingsForm.RemoveConnection(Sender: TObject);
-Begin
-  If CodexFrame.Busy Or (SelectedConnection < 0) Then Exit;
-  If Connections[SelectedConnection].Backend = 'grok' Then
+  NewSelection := ConnectionsList.ItemIndex;
+  If Not FLoading Then
+    StoreConnection;
+  RefreshConnections;
+  SelectedConnection := NewSelection;
+  ConnectionsList.ItemIndex := NewSelection;
+  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
     Begin
-      MessageDlg('The existing Grok account is managed using Sign out.', mtInformation, [mbOK], 0);
+      ShowConnectionKind('');
+      ConnectionNameEdit.Text := '';
       Exit;
     End;
-  Connections.Remove(SelectedConnection); SelectedConnection := -1;
-  RefreshConnections; ConnectionList.ItemIndex := 0; ConnectionChanged(Nil);
+  Item := Connections[SelectedConnection];
+  FLoading := True;
+  Try
+    ConnectionNameEdit.Text := Item.Name;
+    ShowConnectionKind(Item.Backend);
+    If Item.Backend = 'grok' Then
+      LoadGrokConnection(Item)
+    Else If Item.Backend = 'codex' Then
+      Begin
+        Try
+          CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort,
+            Item.ApprovalMode, Item.CachedModelsJson);
+        Except
+          On E: Exception Do
+            CodexFrame.ConnectionStatus.Caption := E.Message;
+        End;
+      End
+    Else If Item.Backend = 'openai-compatible' Then
+      LoadCompatibleConnection(Item)
+    Else If Item.Backend = 'claude' Then
+      LoadClaudeConnection(Item);
+  Finally
+    FLoading := False;
+  End;
 End;
 
-Procedure TAssistantSettingsForm.UseConnection(Sender: TObject);
+Procedure TAssistantSettingsForm.AddKind(Const Backend, DisplayName: String);
+Var
+  Item: TAssistantConnection;
+  Id: String;
+Begin
+  If CodexFrame.Busy Then
+    Exit;
+  StoreConnection;
+  If Backend = 'codex' Then
+    Item := Connections.AddChatGPT
+  Else
+    Begin
+      Id := NewConnectionId;
+      If Id = '' Then
+        Begin
+          MessageDlg('Cannot create a connection identifier.', mtError, [mbOK], 0);
+          Exit;
+        End;
+      Item := Connections.AddStored(Id, DisplayName, Backend);
+      If Not Assigned(Item) Then
+        Exit;
+      Item.ApprovalMode := 'ask';
+      If Backend = 'grok' Then
+        Begin
+          Item.ApiBase := AssistantConfigDefaultApiBase;
+          If Assigned(AssistantChatConfig) And (AssistantChatConfig.ApiBase <> '') Then
+            Item.ApiBase := AssistantChatConfig.ApiBase;
+          Item.Model := AssistantConfigDefaultModel;
+          Item.ReasoningEffort := 'high';
+          Item.SearchMode := 'off';
+          Item.AnswerVerbosity := 'medium';
+        End
+      Else If Backend = 'openai-compatible' Then
+        Begin
+          Item.Preset := 'custom';
+          Item.KeySource := 'env';
+          Item.WireApi := AssistantWireChatCompletions;
+        End
+      Else If Backend = 'claude' Then
+        Item.Runtime := DetectClaudeExecutable;
+    End;
+  SelectedConnection := -1;
+  RefreshConnections;
+  ConnectionsList.ItemIndex := Connections.Count - 1;
+  ConnectionChanged(Nil);
+End;
+
+Procedure TAssistantSettingsForm.AddConnectionClick(Sender: TObject);
+Var
+  Origin: TPoint;
+Begin
+  If CodexFrame.Busy Then
+    Exit;
+  { A saved row of the same kind does not disable these items. }
+  GrokAccountItem.Enabled := True;
+  ChatGptAccountItem.Enabled := True;
+  CompatibleAccountItem.Enabled := True;
+  ClaudeAccountItem.Enabled := True;
+  Origin := AddConnectionButton.ClientToScreen(Point(0, AddConnectionButton.Height));
+  AddConnectionMenu.PopUp(Origin.X, Origin.Y);
+End;
+
+Procedure TAssistantSettingsForm.AddGrokAccountClick(Sender: TObject);
+Begin
+  AddKind('grok', 'Grok');
+End;
+
+Procedure TAssistantSettingsForm.AddChatGptAccountClick(Sender: TObject);
+Begin
+  AddKind('codex', 'ChatGPT');
+End;
+
+Procedure TAssistantSettingsForm.AddCompatibleAccountClick(Sender: TObject);
+Begin
+  AddKind('openai-compatible', 'OpenAI-compatible');
+End;
+
+Procedure TAssistantSettingsForm.AddClaudeAccountClick(Sender: TObject);
+Begin
+  AddKind('claude', 'Claude');
+End;
+
+Procedure TAssistantSettingsForm.RemoveConnectionClick(Sender: TObject);
+Begin
+  If CodexFrame.Busy Or (SelectedConnection < 0) Then
+    Exit;
+  Connections.Remove(SelectedConnection);
+  SelectedConnection := -1;
+  RefreshConnections;
+  If Connections.Count > 0 Then
+    ConnectionsList.ItemIndex := 0
+  Else
+    ConnectionsList.ItemIndex := -1;
+  ConnectionChanged(Nil);
+End;
+
+Procedure TAssistantSettingsForm.UseConnectionClick(Sender: TObject);
 Var
   PreviousId: String;
 Begin
   StoreConnection;
-  If SelectedConnection < 0 Then Exit;
+  If SelectedConnection < 0 Then
+    Exit;
   If (Connections[SelectedConnection].Backend = 'codex') And
     ((Connections[SelectedConnection].Runtime = '') Or (Connections[SelectedConnection].Model = '')) Then
     Begin
@@ -499,6 +738,141 @@ Begin
     End;
   RefreshConnections;
   NotifyOpenProjectAssistantFormsConnectionChanged;
+End;
+
+Procedure TAssistantSettingsForm.CompatiblePresetChange(Sender: TObject);
+Begin
+  If FLoading Then
+    Exit;
+  If PresetCombo.ItemIndex = 0 Then
+    Begin
+      CompatibleBaseEdit.Text := AssistantOpenRouterApiBase;
+      CompatibleBaseEdit.ReadOnly := True;
+      KeyEnvEdit.Text := AssistantOpenRouterKeyEnv;
+    End
+  Else
+    CompatibleBaseEdit.ReadOnly := False;
+End;
+
+Procedure TAssistantSettingsForm.KeySourceChange(Sender: TObject);
+Var
+  Stored: Boolean;
+Begin
+  Stored := KeySourceCombo.ItemIndex = 1;
+  KeyEnvLabel.Visible := Not Stored;
+  KeyEnvEdit.Visible := Not Stored;
+  KeyValueLabel.Visible := Stored;
+  KeyValueEdit.Visible := Stored;
+End;
+
+Procedure TAssistantSettingsForm.RefreshCompatibleModels;
+Var
+  Item: TAssistantConnection;
+  Client: TAssistantCompatibleClient;
+  Models: TStringList;
+  ErrorText, KeptModel: String;
+Begin
+  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
+    Exit;
+  StoreConnection;
+  Item := Connections[SelectedConnection];
+  If Item.Backend <> 'openai-compatible' Then
+    Exit;
+  KeptModel := Trim(CompatibleModelCombo.Text);
+  Client := TAssistantCompatibleClient.Create;
+  Models := TStringList.Create;
+  Try
+    CompatibleStatusLabel.Caption := 'Contacting the endpoint…';
+    Application.ProcessMessages;
+    If Not Client.ListModels(Item, Models, ErrorText) Then
+      Begin
+        CompatibleStatusLabel.Caption := ErrorText;
+        Exit;
+      End;
+    CompatibleModelCombo.Items.Assign(Models);
+    If KeptModel <> '' Then
+      Begin
+        CompatibleModelCombo.ItemIndex := CompatibleModelCombo.Items.IndexOf(KeptModel);
+        If CompatibleModelCombo.ItemIndex < 0 Then
+          CompatibleModelCombo.Text := KeptModel;
+      End
+    Else If CompatibleModelCombo.Items.Count > 0 Then
+      CompatibleModelCombo.ItemIndex := 0;
+    CompatibleStatusLabel.Caption := Format('%d models available.', [Models.Count]);
+  Finally
+    Models.Free;
+    Client.Free;
+  End;
+End;
+
+Procedure TAssistantSettingsForm.TestConnectionClick(Sender: TObject);
+Begin
+  RefreshCompatibleModels;
+End;
+
+Procedure TAssistantSettingsForm.RefreshCompatibleClick(Sender: TObject);
+Begin
+  RefreshCompatibleModels;
+End;
+
+Procedure TAssistantSettingsForm.ClaudeBrowseClick(Sender: TObject);
+Var
+  Dialog: TOpenDialog;
+  Stored: String;
+Begin
+  Dialog := TOpenDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Select the Claude executable';
+    Dialog.Options := [ofFileMustExist, ofPathMustExist, ofEnableSizing];
+    If FileExists(ClaudeRuntimeEdit.Text) Then
+      Dialog.FileName := ClaudeRuntimeEdit.Text;
+    If Not Dialog.Execute Then
+      Exit;
+    Stored := ClaudeRuntimeFromBrowsedPath(Dialog.FileName);
+    If Stored = '' Then
+      ClaudeStatusLabel.Caption := 'The selected file is not an executable. ' + ClaudeKeepsSessionText
+    Else
+      Begin
+        ClaudeRuntimeEdit.Text := Stored;
+        ClaudeStatusLabel.Caption := 'Executable selected. ' + ClaudeKeepsSessionText;
+      End;
+  Finally
+    Dialog.Free;
+  End;
+End;
+
+Procedure TAssistantSettingsForm.ClaudeDetectClick(Sender: TObject);
+Var
+  Found: String;
+Begin
+  Found := DetectClaudeExecutable;
+  If Found = '' Then
+    ClaudeStatusLabel.Caption := 'Claude Code was not found on PATH. Use Browse to select the installed executable. ' +
+      ClaudeKeepsSessionText
+  Else
+    Begin
+      ClaudeRuntimeEdit.Text := Found;
+      ClaudeStatusLabel.Caption := 'Installed executable detected. ' + ClaudeKeepsSessionText;
+    End;
+End;
+
+Procedure TAssistantSettingsForm.ClaudeSignInClick(Sender: TObject);
+Var
+  ErrorText: String;
+Begin
+  If StartClaudeSignIn(Trim(ClaudeRuntimeEdit.Text), ErrorText) Then
+    ClaudeStatusLabel.Caption := 'Claude Code sign-in started. ' + ClaudeKeepsSessionText
+  Else
+    ClaudeStatusLabel.Caption := ErrorText + ' ' + ClaudeKeepsSessionText;
+End;
+
+Procedure TAssistantSettingsForm.ClaudeCheckClick(Sender: TObject);
+Begin
+  ClaudeRuntimeEdit.Text := Trim(ClaudeRuntimeEdit.Text);
+  If FileIsExecutable(ClaudeRuntimeEdit.Text) Then
+    ClaudeStatusLabel.Caption := 'Executable found. ' + ClaudeKeepsSessionText
+  Else
+    ClaudeStatusLabel.Caption := 'Claude Code was not found. Browse to the installed executable. ' + ClaudeKeepsSessionText;
 End;
 
 Procedure TAssistantSettingsForm.PopulateSkills;
@@ -535,24 +909,17 @@ Begin
     SkillCombo.Items.EndUpdate;
   End;
   SkillCombo.ItemIndex := SelectIdx;
-  { Show the real scan path — ~/.grok is per OS user profile, not cloud-synced. }
-  If Assigned(HintLabel) Then
-    Begin
-      If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
-        SkillRoot := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) + '.assistant' + PathDelim + 'skills'
-      Else
-        SkillRoot := AssistantUserSkillsRoot;
-      If Length(Skills) = 0 Then
-        HintLabel.Caption :=
-          'No skills found. Create ' + SkillRoot + PathDelim + '<name>' + PathDelim + 'SKILL.md.' + LineEnding +
-          'Skills load from .assistant/skills, then ' + AssistantUserSkillsRoot + '.'
-      Else
-        HintLabel.Caption :=
-          Format('Loaded %d skill(s) from .assistant/skills, then %s', [Length(Skills), AssistantUserSkillsRoot]) +
-          LineEnding +
-          'Pin is extra session context. Plan and Build always attach free-pascal-engineer when it is installed. ' +
-          'Use read_skill for other catalog entries.';
-    End;
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    SkillRoot := IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) + '.assistant' + PathDelim + 'skills'
+  Else
+    SkillRoot := AssistantUserSkillsRoot;
+  If Length(Skills) = 0 Then
+    HintLabel.Caption := 'No skills found. Create ' + SkillRoot + PathDelim + '<name>' + PathDelim + 'SKILL.md.' + LineEnding +
+      'Skills load from .assistant/skills, then ' + AssistantUserSkillsRoot + '.'
+  Else
+    HintLabel.Caption := Format('Loaded %d skill(s) from .assistant/skills, then %s', [Length(Skills), AssistantUserSkillsRoot]) +
+      LineEnding + 'Pin is extra session context. Plan and Build always attach free-pascal-engineer when it is installed. ' +
+      'Use read_skill for other catalog entries.';
 End;
 
 Procedure TAssistantSettingsForm.PopulateModels(ForceRefresh: Boolean);
@@ -562,16 +929,19 @@ Var
 Begin
   FFillingModels := True;
   CurrentModel := AssistantConfigDefaultModel;
-  If Assigned(AssistantChatConfig) And (Trim(AssistantChatConfig.Model) <> '') Then
+  If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
+    CurrentModel := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex])
+  Else If (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) And
+    (Connections[SelectedConnection].Backend = 'grok') And (Connections[SelectedConnection].Model <> '') Then
+    CurrentModel := Connections[SelectedConnection].Model
+  Else If Assigned(AssistantChatConfig) And (Trim(AssistantChatConfig.Model) <> '') Then
     CurrentModel := AssistantChatConfig.Model;
-
   ModelList.Items.BeginUpdate;
   Try
     ModelList.Items.Clear;
     Ok := False;
     ErrorText := '';
-    If Assigned(AssistantClient) And AssistantClient.IsSignedIn And
-      ForceRefresh Then
+    If Assigned(AssistantClient) And AssistantClient.IsSignedIn And ForceRefresh Then
       Begin
         ModelHintLabel.Caption := 'Loading models…';
         Application.ProcessMessages;
@@ -579,7 +949,6 @@ Begin
       End
     Else
       ErrorText := 'Use Refresh list to discover models from the account.';
-
     If Not Ok Then
       Begin
         AddFallbackModels(ModelList.Items);
@@ -589,12 +958,13 @@ Begin
           ModelHintLabel.Caption := 'Showing fallback list.';
       End
     Else
-      ModelHintLabel.Caption := Format('%d models available. Select one, then OK.',
-        [ModelList.Items.Count]);
-
+      ModelHintLabel.Caption := Format('%d models available. Select one, then OK.', [ModelList.Items.Count]);
     DecorateModelList(ModelList.Items);
     SelectModelInList(ModelList, CurrentModel);
-    If Assigned(AssistantChatConfig) Then
+    If (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) And
+      (Connections[SelectedConnection].Backend = 'grok') Then
+      RefreshGrokReasoningChoices(Connections[SelectedConnection].ReasoningEffort)
+    Else If Assigned(AssistantChatConfig) Then
       RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel)
     Else
       RefreshGrokReasoningChoices('high');
@@ -608,7 +978,7 @@ Procedure TAssistantSettingsForm.GrokModelSelectionChange(Sender: TObject; User:
 Var
   Effort: String;
 Begin
-  If (Not User) Or FFillingModels Or (Not Assigned(ThinkingCombo)) Then
+  If (Not User) Or FFillingModels Or FLoading Then
     Exit;
   Effort := 'high';
   If ThinkingCombo.ItemIndex >= 0 Then
@@ -618,8 +988,7 @@ End;
 
 Procedure TAssistantSettingsForm.GrokSearchModeChange(Sender: TObject);
 Begin
-  If Assigned(CitationsCheck) And Assigned(SearchCombo) Then
-    CitationsCheck.Enabled := SearchCombo.ItemIndex > 0;
+  CitationsCheck.Enabled := SearchCombo.ItemIndex > 0;
 End;
 
 Procedure TAssistantSettingsForm.RefreshGrokReasoningChoices(Const PreferredEffort: String);
@@ -636,10 +1005,8 @@ Var
     Result := ThinkingCombo.Items.IndexOf(Caption);
   End;
 Begin
-  If Not Assigned(ThinkingCombo) Then
-    Exit;
   ModelId := '';
-  If Assigned(ModelList) And (ModelList.ItemIndex >= 0) Then
+  If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
     ModelId := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
   Effort := LowerCase(Trim(PreferredEffort));
   If Effort = '' Then
@@ -703,64 +1070,40 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.LoadFromConfig;
-Var
-  I: Integer;
 Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
   ApiBaseEdit.Text := AssistantChatConfig.ApiBase;
   IncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
-  EnsureExtraControls;
-  If Assigned(AutoNewChatDefaultCheck) Then
-    AutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
-  If Assigned(ShowThinkingCheck) Then
-    ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
-  If Assigned(ShowToolCallsCheck) Then
-    ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
+  AutoNewChatDefaultCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
+  ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
+  ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
   RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel);
-  If Assigned(SearchCombo) Then
-    Begin
-      If SameText(AssistantChatConfig.SearchMode, 'on') Then
-        SearchCombo.ItemIndex := 2
-      Else If SameText(AssistantChatConfig.SearchMode, 'auto') Then
-        SearchCombo.ItemIndex := 1
-      Else
-        SearchCombo.ItemIndex := 0;
-      GrokSearchModeChange(Nil);
-    End;
-  If Assigned(CitationsCheck) Then
-    CitationsCheck.Checked := AssistantChatConfig.SearchCitations;
-  If Assigned(VerbosityCombo) Then
-    Begin
-      If SameText(AssistantChatConfig.AnswerVerbosity, 'low') Then
-        VerbosityCombo.ItemIndex := 0
-      Else If SameText(AssistantChatConfig.AnswerVerbosity, 'high') Then
-        VerbosityCombo.ItemIndex := 2
-      Else
-        VerbosityCombo.ItemIndex := 1;
-    End;
-  If Assigned(MaxOutputEdit) Then
-    MaxOutputEdit.Value := AssistantChatConfig.MaxOutputTokens;
-  Case AssistantChatConfig.GetApprovalMode Of
-    aamAsk: ApprovalCombo.ItemIndex := 0;
-    aamAuto: ApprovalCombo.ItemIndex := 1;
+  If SameText(AssistantChatConfig.SearchMode, 'on') Then
+    SearchCombo.ItemIndex := 2
+  Else If SameText(AssistantChatConfig.SearchMode, 'auto') Then
+    SearchCombo.ItemIndex := 1
   Else
-    ApprovalCombo.ItemIndex := 2;
-  End;
+    SearchCombo.ItemIndex := 0;
+  GrokSearchModeChange(Nil);
+  CitationsCheck.Checked := AssistantChatConfig.SearchCitations;
+  If SameText(AssistantChatConfig.AnswerVerbosity, 'low') Then
+    VerbosityCombo.ItemIndex := 0
+  Else If SameText(AssistantChatConfig.AnswerVerbosity, 'high') Then
+    VerbosityCombo.ItemIndex := 2
+  Else
+    VerbosityCombo.ItemIndex := 1;
+  MaxOutputEdit.Value := AssistantChatConfig.MaxOutputTokens;
+  ApprovalCombo.ItemIndex := ApprovalIndex(AssistantChatConfig.ApprovalMode);
   PopulateSkills;
   If AssistantChatConfig.ActiveSkill = '' Then
     SkillCombo.ItemIndex := 0
+  Else If SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill) >= 0 Then
+    SkillCombo.ItemIndex := SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill)
   Else
     Begin
-      I := SkillCombo.Items.IndexOf(AssistantChatConfig.ActiveSkill);
-      If I >= 0 Then
-        SkillCombo.ItemIndex := I
-      Else
-        Begin
-          { Skill was removed from disk; keep name visible until user clears it. }
-          SkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
-          SkillCombo.ItemIndex := SkillCombo.Items.Count - 1;
-        End;
+      SkillCombo.Items.Add(AssistantChatConfig.ActiveSkill + ' (missing)');
+      SkillCombo.ItemIndex := SkillCombo.Items.Count - 1;
     End;
   If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
     GrokOAuthClient.SetTokens(AssistantChatConfig.ToOAuthTokens);
@@ -768,6 +1111,9 @@ Begin
     AssistantClient.ApplyConfig(AssistantChatConfig);
   RefreshAuthStatus;
   PopulateModels(False);
+  GlobalSpellSettings.LoadFromConfig;
+  If ConnectionsList.ItemIndex >= 0 Then
+    ConnectionChanged(Nil);
 End;
 
 Procedure TAssistantSettingsForm.SaveToConfig;
@@ -779,14 +1125,12 @@ Begin
   AssistantChatConfig.ApiBase := Trim(ApiBaseEdit.Text);
   If AssistantChatConfig.ApiBase = '' Then
     AssistantChatConfig.ApiBase := AssistantConfigDefaultApiBase;
-
   ModelName := '';
   If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
     ModelName := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
   If ModelName = '' Then
     ModelName := AssistantConfigDefaultModel;
   AssistantChatConfig.Model := ModelName;
-
   SkillName := '';
   If (SkillCombo.ItemIndex > 0) And (SkillCombo.ItemIndex < SkillCombo.Items.Count) Then
     Begin
@@ -796,35 +1140,23 @@ Begin
     End;
   AssistantChatConfig.ActiveSkill := SkillName;
   AssistantChatConfig.IncludeIDEContext := IncludeContextCheck.Checked;
-  EnsureExtraControls;
-  If Assigned(AutoNewChatDefaultCheck) Then
-    AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatDefaultCheck.Checked;
-  If Assigned(ShowThinkingCheck) Then
-    AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
-  If Assigned(ShowToolCallsCheck) Then
-    AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
-  If Assigned(SearchCombo) Then
-    Begin
-      Case SearchCombo.ItemIndex Of
-        1: AssistantChatConfig.SearchMode := 'auto';
-        2: AssistantChatConfig.SearchMode := 'on';
-      Else
-        AssistantChatConfig.SearchMode := 'off';
-      End;
-    End;
-  If Assigned(CitationsCheck) Then
-    AssistantChatConfig.SearchCitations := CitationsCheck.Checked;
-  If Assigned(VerbosityCombo) Then
-    Begin
-      Case VerbosityCombo.ItemIndex Of
-        0: AssistantChatConfig.AnswerVerbosity := 'low';
-        2: AssistantChatConfig.AnswerVerbosity := 'high';
-      Else
-        AssistantChatConfig.AnswerVerbosity := 'medium';
-      End;
-    End;
-  If Assigned(MaxOutputEdit) Then
-    AssistantChatConfig.MaxOutputTokens := MaxOutputEdit.Value;
+  AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatDefaultCheck.Checked;
+  AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
+  AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
+  Case SearchCombo.ItemIndex Of
+    1: AssistantChatConfig.SearchMode := 'auto';
+    2: AssistantChatConfig.SearchMode := 'on';
+  Else
+    AssistantChatConfig.SearchMode := 'off';
+  End;
+  AssistantChatConfig.SearchCitations := CitationsCheck.Checked;
+  Case VerbosityCombo.ItemIndex Of
+    0: AssistantChatConfig.AnswerVerbosity := 'low';
+    2: AssistantChatConfig.AnswerVerbosity := 'high';
+  Else
+    AssistantChatConfig.AnswerVerbosity := 'medium';
+  End;
+  AssistantChatConfig.MaxOutputTokens := MaxOutputEdit.Value;
   If ThinkingCombo.ItemIndex >= 0 Then
     AssistantChatConfig.ThinkingLevel := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex])
   Else
@@ -840,8 +1172,8 @@ Begin
   AssistantChatConfig.Save;
   StoreConnection;
   Connections.Save;
-  SpellFrame.SaveToConfig;
-  TestFrame.Save;
+  GlobalSpellSettings.SaveToConfig;
+  ProjectTestSettings.Save;
 End;
 
 Procedure TAssistantSettingsForm.RefreshModelsButtonClick(Sender: TObject);
@@ -849,11 +1181,6 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.SetEndpoint(Trim(ApiBaseEdit.Text), AssistantClient.Model);
   PopulateModels(True);
-End;
-
-Procedure TAssistantSettingsForm.SpellButtonClick(Sender: TObject);
-Begin
-  ShowSpellCheckerSettingsDialog;
 End;
 
 Procedure TAssistantSettingsForm.SignInButtonClick(Sender: TObject);
@@ -883,16 +1210,12 @@ Begin
           mtInformation, [mbOK], 0);
         PopulateModels(True);
       End
+    Else If GrokOAuthClient.HasPendingLogin Then
+      MessageDlg('Browser callback did not finish: ' + GrokOAuthClient.LastError + LineEnding + LineEnding +
+        'If the browser showed a code (or a localhost URL with ?code=…), paste it below once and click "Use pasted code".',
+        mtWarning, [mbOK], 0)
     Else
-      Begin
-        If GrokOAuthClient.HasPendingLogin Then
-          MessageDlg('Browser callback did not finish: ' + GrokOAuthClient.LastError + LineEnding +
-            LineEnding +
-            'If the browser showed a code (or a localhost URL with ?code=…), paste it below once and click "Use pasted code".',
-            mtWarning, [mbOK], 0)
-        Else
-          MessageDlg('Sign-in failed: ' + GrokOAuthClient.LastError, mtWarning, [mbOK], 0);
-      End;
+      MessageDlg('Sign-in failed: ' + GrokOAuthClient.LastError, mtWarning, [mbOK], 0);
   Finally
     RefreshAuthStatus;
   End;
@@ -964,12 +1287,14 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.FormCloseQuery(Sender: TObject; Var CanClose: Boolean);
-Var Note: String;
+Var
+  Note: String;
+  ActiveConnection: TAssistantConnection;
 Begin
   CanClose := True;
   If ModalResult <> mrOk Then
     Exit;
-  If Not TestFrame.Validate(Note) Then
+  If Not ProjectTestSettings.Validate(Note) Then
     Begin
       CanClose := False;
       MessageDlg(Note, mtError, [mbOK], 0);
@@ -982,13 +1307,16 @@ Begin
       MessageDlg('Wait for the connection check, or Cancel to close settings.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Assigned(Connections.Active) And (Connections.Active.Backend = 'codex') And
-    ((Connections.Active.Runtime = '') Or (Connections.Active.Model = '')) Then
+  ActiveConnection := Connections.Active;
+  If Assigned(ActiveConnection) And (ActiveConnection.Backend = 'codex') And
+    ((ActiveConnection.Runtime = '') Or (ActiveConnection.Model = '')) Then
     Begin
       CanClose := False;
       MessageDlg('The current ChatGPT connection needs a runtime and model.', mtInformation, [mbOK], 0);
       Exit;
     End;
+  If Not HasGrokRow Then
+    Exit;
   If Trim(ApiBaseEdit.Text) = '' Then
     Begin
       MessageDlg('API base URL is required (e.g. https://api.x.ai/v1).', mtError, [mbOK], 0);
@@ -1008,5 +1336,11 @@ Begin
       CanClose := False;
     End;
 End;
+
+Initialization
+
+RegisterClass(TAssistantTestSettingsFrame);
+RegisterClass(TCodexConnectionFrame);
+RegisterClass(TSpellCheckerSettingsFrame);
 
 End.

@@ -1,226 +1,1042 @@
 object AssistantSettingsForm: TAssistantSettingsForm
-  Left = 300
-  Height = 590
-  Top = 200
-  Width = 520
-  BorderStyle = bsDialog
+  Left = 180
+  Height = 740
+  Top = 80
+  Width = 980
+  BorderStyle = bsSizeable
   Caption = 'Project Assistant Settings'
-  ClientHeight = 590
-  ClientWidth = 520
+  ClientHeight = 740
+  ClientWidth = 980
+  Constraints.MinHeight = 640
+  Constraints.MinWidth = 900
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
   Position = poScreenCenter
-  LCLVersion = '3.0'
-  object StatusLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 16
-    Width = 90
-    Caption = 'Account status:'
-    ParentColor = False
-  end
-  object StatusValueLabel: TLabel
-    Left = 120
-    Height = 17
-    Top = 16
-    Width = 380
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Not signed in'
-    ParentColor = False
-  end
-  object SignInButton: TButton
-    Left = 16
-    Height = 30
-    Top = 44
-    Width = 230
-    Caption = 'Sign in with SuperGrok / X Premium'
-    OnClick = SignInButtonClick
+  LCLVersion = '5.99.0.0'
+  object SettingsPages: TPageControl
+    Left = 0
+    Height = 700
+    Top = 0
+    Width = 980
+    Align = alClient
     TabOrder = 0
-  end
-  object SignOutButton: TButton
-    Left = 256
-    Height = 30
-    Top = 44
-    Width = 100
-    Caption = 'Sign out'
-    OnClick = SignOutButtonClick
-    TabOrder = 1
-  end
-  object ModelLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 90
-    Width = 200
-    Caption = 'Model (from account):'
-    ParentColor = False
-  end
-  object RefreshModelsButton: TButton
-    Left = 392
-    Height = 26
-    Top = 86
-    Width = 112
-    Anchors = [akTop, akRight]
-    Caption = 'Refresh list'
-    OnClick = RefreshModelsButtonClick
-    TabOrder = 2
-  end
-  object ModelList: TListBox
-    Left = 16
-    Height = 120
-    Top = 114
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    ItemHeight = 0
-    TabOrder = 3
-  end
-  object ModelHintLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 238
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Sign in and click Refresh list to load models from the API.'
-    Font.Color = clGrayText
-    ParentColor = False
-    ParentFont = False
-  end
-  object SkillLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 266
-    Width = 220
-    Caption = 'User skill (explicit session include):'
-    ParentColor = False
-  end
-  object SkillCombo: TComboBox
-    Left = 16
-    Height = 28
-    Top = 286
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    ItemHeight = 0
-    Style = csDropDownList
-    TabOrder = 4
-    Text = '(None)'
-  end
-  object IncludeContextCheck: TCheckBox
-    Left = 16
-    Height = 23
-    Top = 322
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Include IDE context (active editor + project file list) with each message'
-    TabOrder = 5
-  end
-  object AutoNewChatDefaultCheck: TCheckBox
-    Left = 16
-    Height = 23
-    Top = 348
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Automatically start a new Grok chat at 95% context use'
-    Hint = 'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.'
-    ParentShowHint = False
-    ShowHint = True
-    TabOrder = 6
-  end
-  object ShowThinkingCheck: TCheckBox
-    Left = 16
-    Height = 23
-    Top = 376
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Show thinking'
-    Checked = True
-    Hint = 'Show thinking blocks in the conversation.'
-    ParentShowHint = False
-    ShowHint = True
-    TabOrder = 11
-  end
-  object ShowToolCallsCheck: TCheckBox
-    Left = 16
-    Height = 23
-    Top = 404
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    Caption = 'Show tool calls'
-    Checked = True
-    Hint = 'Show tool-call blocks in the conversation.'
-    ParentShowHint = False
-    ShowHint = True
-    TabOrder = 12
-  end
-  object ApiBaseLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 380
-    Width = 90
-    Caption = 'API base URL:'
-    ParentColor = False
-  end
-  object ApiBaseEdit: TEdit
-    Left = 16
-    Height = 28
-    Top = 400
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    TabOrder = 7
-    Text = 'https://api.x.ai/v1'
-  end
-  object ManualLabel: TLabel
-    Left = 16
-    Height = 17
-    Top = 438
-    Width = 360
-    Caption = 'If browser cannot redirect, paste code or callback URL:'
-    ParentColor = False
-  end
-  object ManualEdit: TEdit
-    Left = 16
-    Height = 28
-    Top = 458
-    Width = 368
-    Anchors = [akTop, akLeft, akRight]
-    TabOrder = 8
-  end
-  object PasteCodeButton: TButton
-    Left = 392
-    Height = 28
-    Top = 458
-    Width = 112
-    Anchors = [akTop, akRight]
-    Caption = 'Use pasted code'
-    OnClick = PasteCodeButtonClick
-    TabOrder = 9
-  end
-  object HintLabel: TLabel
-    Left = 16
-    Height = 56
-    Top = 494
-    Width = 488
-    Anchors = [akTop, akLeft, akRight]
-    AutoSize = False
-    Caption = 'User skills load from ~/.grok/skills/<name>/SKILL.md (local per OS; not cloud-synced). IDE context attaches the active source unit (or selection) and the project file list so the model can answer about code you have open.'
-    Font.Color = clGrayText
-    ParentColor = False
-    ParentFont = False
-    WordWrap = True
-  end
-  object SpellButton: TButton
-    Left = 16
-    Height = 28
-    Top = 516
-    Width = 150
-    Anchors = [akLeft, akBottom]
-    Caption = 'Spell checking…'
-    OnClick = SpellButtonClick
-    TabOrder = 10
+    object GeneralPage: TTabSheet
+      Caption = 'General'
+      ClientHeight = 672
+      ClientWidth = 972
+      object IncludeContextCheck: TCheckBox
+        Left = 20
+        Height = 23
+        Top = 20
+        Width = 760
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Include IDE context (active editor + project file list) with each message'
+        TabOrder = 0
+      end
+      object AutoNewChatDefaultCheck: TCheckBox
+        Left = 20
+        Height = 23
+        Top = 52
+        Width = 760
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Automatically start a new Grok chat at 95% context use'
+        Hint = 'When a Grok chat reaches 95% of the context budget, start a new conversation automatically.'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 1
+      end
+      object ShowThinkingCheck: TCheckBox
+        Left = 20
+        Height = 23
+        Top = 84
+        Width = 760
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Show thinking'
+        Checked = True
+        Hint = 'Show thinking blocks in the conversation.'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 2
+      end
+      object ShowToolCallsCheck: TCheckBox
+        Left = 20
+        Height = 23
+        Top = 116
+        Width = 760
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Show tool calls'
+        Checked = True
+        Hint = 'Show tool-call blocks in the conversation.'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 3
+      end
+      object GeneralNoteLabel: TLabel
+        Left = 20
+        Height = 64
+        Top = 160
+        Width = 760
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'These preferences apply across connections. Sign-in, sign-out and Use for current chat take effect immediately. Cancel discards other preference edits. Selecting a connection does not sign out other accounts.'
+        ParentColor = False
+        WordWrap = True
+      end
+    end
+    object ConnectionsPage: TTabSheet
+      Caption = 'Connections'
+      ClientHeight = 672
+      ClientWidth = 972
+      object ConnectionSidebar: TPanel
+        Left = 0
+        Height = 672
+        Top = 0
+        Width = 236
+        Align = alLeft
+        BevelOuter = bvNone
+        ClientHeight = 672
+        ClientWidth = 236
+        TabOrder = 0
+        object ConnectionButtons: TPanel
+          Left = 0
+          Height = 76
+          Top = 596
+          Width = 236
+          Align = alBottom
+          BevelOuter = bvNone
+          ChildSizing.LeftRightSpacing = 4
+          ChildSizing.TopBottomSpacing = 4
+          ChildSizing.HorizontalSpacing = 4
+          ChildSizing.VerticalSpacing = 4
+          ChildSizing.Layout = cclTopToBottomThenLeftToRight
+          ChildSizing.ControlsPerLine = 1
+          ClientHeight = 76
+          ClientWidth = 236
+          TabOrder = 0
+          object AddConnectionButton: TButton
+            Left = 4
+            Height = 32
+            Top = 4
+            Width = 228
+            Caption = 'Add connection…'
+            OnClick = AddConnectionClick
+            TabOrder = 0
+          end
+          object RemoveConnectionButton: TButton
+            Left = 4
+            Height = 32
+            Top = 40
+            Width = 228
+            Caption = 'Remove'
+            Hint = 'Removes the selected connection definition. A Codex profile directory is kept.'
+            OnClick = RemoveConnectionClick
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 1
+          end
+        end
+        object ConnectionsList: TListBox
+          Left = 0
+          Height = 596
+          Top = 0
+          Width = 236
+          Align = alClient
+          ItemHeight = 0
+          OnClick = ConnectionChanged
+          TabOrder = 1
+        end
+      end
+      object ConnectionDetail: TPanel
+        Left = 236
+        Height = 672
+        Top = 0
+        Width = 736
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 672
+        ClientWidth = 736
+        TabOrder = 1
+        object IdentityPanel: TPanel
+          Left = 0
+          Height = 96
+          Top = 0
+          Width = 736
+          Align = alTop
+          BevelOuter = bvNone
+          ClientHeight = 96
+          ClientWidth = 736
+          TabOrder = 0
+          object NameLabel: TLabel
+            Left = 16
+            Height = 17
+            Top = 8
+            Width = 36
+            Caption = 'Name'
+            ParentColor = False
+          end
+          object ConnectionNameEdit: TEdit
+            Left = 16
+            Height = 28
+            Top = 28
+            Width = 400
+            TabOrder = 0
+          end
+          object UseConnectionButton: TButton
+            Left = 428
+            Height = 28
+            Top = 28
+            Width = 200
+            Caption = 'Use for current chat'
+            Hint = 'Switches the open assistant chat to this connection immediately.'
+            OnClick = UseConnectionClick
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 1
+          end
+          object KindCaptionLabel: TLabel
+            Left = 16
+            Height = 17
+            Top = 64
+            Width = 28
+            Caption = 'Kind'
+            ParentColor = False
+          end
+          object KindValueLabel: TLabel
+            Left = 56
+            Height = 17
+            Top = 64
+            Width = 360
+            ParentColor = False
+          end
+          object ActiveConnectionLabel: TLabel
+            Left = 430
+            Height = 32
+            Top = 60
+            Width = 290
+            Anchors = [akTop, akLeft, akRight]
+            AutoSize = False
+            Caption = 'No connection is selected for the current chat.'
+            ParentColor = False
+            WordWrap = True
+          end
+        end
+        object DetailHost: TPanel
+          Left = 0
+          Height = 576
+          Top = 96
+          Width = 736
+          Align = alClient
+          BevelOuter = bvNone
+          ClientHeight = 576
+          ClientWidth = 736
+          TabOrder = 1
+          object EmptyConnectionLabel: TLabel
+            Left = 16
+            Height = 40
+            Top = 16
+            Width = 680
+            Align = alClient
+            Alignment = taCenter
+            AutoSize = False
+            Caption = 'Add a connection.'
+            Layout = tlCenter
+            ParentColor = False
+            WordWrap = True
+          end
+          object GrokPanel: TScrollBox
+            Left = 0
+            Height = 576
+            Top = 0
+            Width = 736
+            Align = alClient
+            BorderStyle = bsNone
+            TabOrder = 0
+            Visible = False
+            object GrokAccountGroup: TGroupBox
+              Left = 8
+              Height = 148
+              Top = 8
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Account'
+              TabOrder = 0
+              object StatusLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 8
+                Width = 90
+                Caption = 'Account status:'
+                ParentColor = False
+              end
+              object StatusValueLabel: TLabel
+                Left = 120
+                Height = 17
+                Top = 8
+                Width = 540
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'Not signed in'
+                ParentColor = False
+              end
+              object SignInButton: TButton
+                Left = 12
+                Height = 30
+                Top = 32
+                Width = 250
+                Caption = 'Sign in with SuperGrok / X Premium'
+                OnClick = SignInButtonClick
+                TabOrder = 0
+              end
+              object SignOutButton: TButton
+                Left = 270
+                Height = 30
+                Top = 32
+                Width = 100
+                Caption = 'Sign out'
+                OnClick = SignOutButtonClick
+                TabOrder = 1
+              end
+              object ManualLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 70
+                Width = 420
+                Caption = 'If browser cannot redirect, paste code or callback URL:'
+                ParentColor = False
+              end
+              object ManualEdit: TEdit
+                Left = 12
+                Height = 28
+                Top = 92
+                Width = 500
+                Anchors = [akTop, akLeft, akRight]
+                TabOrder = 2
+              end
+              object PasteCodeButton: TButton
+                Left = 520
+                Height = 28
+                Top = 92
+                Width = 140
+                Anchors = [akTop, akRight]
+                Caption = 'Use pasted code'
+                OnClick = PasteCodeButtonClick
+                TabOrder = 3
+              end
+            end
+            object GrokModelGroup: TGroupBox
+              Left = 8
+              Height = 320
+              Top = 164
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Model'
+              TabOrder = 1
+              object ModelLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 40
+                Caption = 'Model'
+                ParentColor = False
+              end
+              object RefreshModelsButton: TButton
+                Left = 560
+                Height = 26
+                Top = 0
+                Width = 120
+                Anchors = [akTop, akRight]
+                Caption = 'Refresh list'
+                OnClick = RefreshModelsButtonClick
+                TabOrder = 0
+              end
+              object ModelList: TListBox
+                Left = 12
+                Height = 100
+                Top = 28
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                ItemHeight = 0
+                OnSelectionChange = GrokModelSelectionChange
+                TabOrder = 1
+              end
+              object ModelHintLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 132
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'Sign in and click Refresh list to load models from the API.'
+                Font.Color = clGrayText
+                ParentColor = False
+                ParentFont = False
+              end
+              object ThinkingLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 156
+                Width = 64
+                Caption = 'Reasoning'
+                ParentColor = False
+              end
+              object ThinkingCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 176
+                Width = 200
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 2
+              end
+              object VerbosityLabel: TLabel
+                Left = 230
+                Height = 17
+                Top = 156
+                Width = 84
+                Caption = 'Answer length'
+                ParentColor = False
+              end
+              object VerbosityCombo: TComboBox
+                Left = 230
+                Height = 28
+                Top = 176
+                Width = 180
+                Hint = 'Length of the visible answer. Separate from reasoning level. Sent on the Responses path.'
+                ItemHeight = 0
+                ParentShowHint = False
+                ShowHint = True
+                Style = csDropDownList
+                TabOrder = 3
+              end
+              object MaxOutputLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 212
+                Width = 250
+                Caption = 'Max output tokens (0 = provider default)'
+                ParentColor = False
+              end
+              object MaxOutputEdit: TSpinEdit
+                Left = 12
+                Height = 28
+                Top = 232
+                Width = 120
+                Hint = '0 uses the provider default.'
+                Increment = 1024
+                MaxValue = 1000000
+                MinValue = 0
+                ParentShowHint = False
+                ShowHint = True
+                TabOrder = 4
+                Value = 0
+              end
+              object SearchLabel: TLabel
+                Left = 230
+                Height = 17
+                Top = 212
+                Width = 68
+                Caption = 'Live search'
+                ParentColor = False
+              end
+              object SearchCombo: TComboBox
+                Left = 230
+                Height = 28
+                Top = 232
+                Width = 180
+                Hint = 'Off sends no search. Auto lets Grok decide. On asks it to search on the completions fallback.'
+                ItemHeight = 0
+                OnChange = GrokSearchModeChange
+                ParentShowHint = False
+                ShowHint = True
+                Style = csDropDownList
+                TabOrder = 5
+              end
+              object CitationsCheck: TCheckBox
+                Left = 12
+                Height = 23
+                Top = 270
+                Width = 220
+                Caption = 'Return citations'
+                Hint = 'Ask the completions fallback to return source citations. The Responses path returns search sources with the search tools.'
+                ParentShowHint = False
+                ShowHint = True
+                TabOrder = 6
+              end
+            end
+            object GrokEndpointGroup: TGroupBox
+              Left = 8
+              Height = 76
+              Top = 492
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Endpoint'
+              TabOrder = 2
+              object ApiBaseLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 80
+                Caption = 'API base URL'
+                ParentColor = False
+              end
+              object ApiBaseEdit: TEdit
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                TabOrder = 0
+                Text = 'https://api.x.ai/v1'
+              end
+            end
+            object GrokPermissionsGroup: TGroupBox
+              Left = 8
+              Height = 76
+              Top = 576
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Permissions'
+              TabOrder = 3
+              object ApprovalLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 84
+                Caption = 'Tool approvals'
+                ParentColor = False
+              end
+              object ApprovalCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 460
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 0
+              end
+            end
+            object GrokUsageGroup: TGroupBox
+              Left = 8
+              Height = 52
+              Top = 660
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Usage'
+              TabOrder = 4
+              object GrokUsageLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 8
+                Width = 660
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'This connection did not report usage.'
+                ParentColor = False
+              end
+            end
+            object GrokSkillGroup: TGroupBox
+              Left = 8
+              Height = 140
+              Top = 720
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Skill'
+              TabOrder = 5
+              object SkillLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 220
+                Caption = 'User skill (explicit session include):'
+                ParentColor = False
+              end
+              object SkillCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 0
+              end
+              object HintLabel: TLabel
+                Left = 12
+                Height = 56
+                Top = 60
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                AutoSize = False
+                Caption = 'User skills load from ~/.grok/skills/<name>/SKILL.md.'
+                Font.Color = clGrayText
+                ParentColor = False
+                ParentFont = False
+                WordWrap = True
+              end
+            end
+          end
+          object CodexPanel: TScrollBox
+            Left = 0
+            Height = 576
+            Top = 0
+            Width = 736
+            Align = alClient
+            BorderStyle = bsNone
+            TabOrder = 1
+            Visible = False
+            inline CodexFrame: TCodexConnectionFrame
+              Left = 8
+              Height = 520
+              Top = 0
+              Width = 660
+              Anchors = [akTop, akLeft, akRight]
+              ClientHeight = 520
+              ClientWidth = 660
+              TabOrder = 0
+            end
+            object CodexUsageGroup: TGroupBox
+              Left = 8
+              Height = 52
+              Top = 528
+              Width = 660
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Usage'
+              TabOrder = 1
+              object CodexUsageLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 8
+                Width = 620
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'This program did not report counts.'
+                ParentColor = False
+              end
+            end
+          end
+          object CompatiblePanel: TScrollBox
+            Left = 0
+            Height = 576
+            Top = 0
+            Width = 736
+            Align = alClient
+            BorderStyle = bsNone
+            TabOrder = 2
+            Visible = False
+            object CompatibleEndpointGroup: TGroupBox
+              Left = 8
+              Height = 248
+              Top = 8
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Endpoint'
+              TabOrder = 0
+              object PresetLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 36
+                Caption = 'Preset'
+                ParentColor = False
+              end
+              object PresetCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 280
+                ItemHeight = 0
+                OnChange = CompatiblePresetChange
+                Style = csDropDownList
+                TabOrder = 0
+              end
+              object CompatibleBaseLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 60
+                Width = 56
+                Caption = 'Base URL'
+                ParentColor = False
+              end
+              object CompatibleBaseEdit: TEdit
+                Left = 12
+                Height = 28
+                Top = 80
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                TabOrder = 1
+              end
+              object KeySourceLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 116
+                Width = 64
+                Caption = 'Key source'
+                ParentColor = False
+              end
+              object KeySourceCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 136
+                Width = 280
+                ItemHeight = 0
+                OnChange = KeySourceChange
+                Style = csDropDownList
+                TabOrder = 2
+              end
+              object KeyEnvLabel: TLabel
+                Left = 308
+                Height = 17
+                Top = 116
+                Width = 130
+                Caption = 'Environment variable'
+                ParentColor = False
+              end
+              object KeyEnvEdit: TEdit
+                Left = 308
+                Height = 28
+                Top = 136
+                Width = 280
+                TabOrder = 3
+              end
+              object KeyValueLabel: TLabel
+                Left = 308
+                Height = 17
+                Top = 116
+                Width = 68
+                Caption = 'Stored key'
+                ParentColor = False
+                Visible = False
+              end
+              object KeyValueEdit: TEdit
+                Left = 308
+                Height = 28
+                Top = 136
+                Width = 280
+                PasswordChar = '*'
+                TabOrder = 4
+                Visible = False
+              end
+              object WireCaptionLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 176
+                Width = 28
+                Caption = 'Wire'
+                ParentColor = False
+              end
+              object CompatibleWireLabel: TLabel
+                Left = 56
+                Height = 17
+                Top = 176
+                Width = 110
+                Caption = 'Chat completions'
+                ParentColor = False
+              end
+              object TestConnectionButton: TButton
+                Left = 12
+                Height = 28
+                Top = 200
+                Width = 160
+                Caption = 'Test connection'
+                OnClick = TestConnectionClick
+                TabOrder = 5
+              end
+              object CompatibleStatusLabel: TLabel
+                Left = 180
+                Height = 28
+                Top = 204
+                Width = 500
+                Anchors = [akTop, akLeft, akRight]
+                AutoSize = False
+                ParentColor = False
+                WordWrap = True
+              end
+            end
+            object CompatibleModelGroup: TGroupBox
+              Left = 8
+              Height = 112
+              Top = 264
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Model'
+              TabOrder = 1
+              object CompatibleModelLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 52
+                Caption = 'Model id'
+                ParentColor = False
+              end
+              object CompatibleModelCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 460
+                Anchors = [akTop, akLeft, akRight]
+                ItemHeight = 0
+                TabOrder = 0
+              end
+              object RefreshCompatibleButton: TButton
+                Left = 480
+                Height = 28
+                Top = 24
+                Width = 120
+                Anchors = [akTop, akRight]
+                Caption = 'Refresh list'
+                OnClick = RefreshCompatibleClick
+                TabOrder = 1
+              end
+              object CompatibleMaxLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 60
+                Width = 250
+                Caption = 'Max output tokens (0 = provider default)'
+                ParentColor = False
+              end
+              object CompatibleMaxOutputEdit: TSpinEdit
+                Left = 280
+                Height = 28
+                Top = 56
+                Width = 120
+                Increment = 1024
+                MaxValue = 1000000
+                MinValue = 0
+                TabOrder = 2
+                Value = 0
+              end
+            end
+            object CompatiblePermissionsGroup: TGroupBox
+              Left = 8
+              Height = 76
+              Top = 384
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Permissions'
+              TabOrder = 2
+              object CompatibleApprovalLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 84
+                Caption = 'Tool approvals'
+                ParentColor = False
+              end
+              object CompatibleApprovalCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 460
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 0
+              end
+            end
+            object CompatibleUsageGroup: TGroupBox
+              Left = 8
+              Height = 52
+              Top = 468
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Usage'
+              TabOrder = 3
+              object CompatibleUsageLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 8
+                Width = 660
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'This connection did not report usage.'
+                ParentColor = False
+              end
+            end
+          end
+          object ClaudePanel: TScrollBox
+            Left = 0
+            Height = 576
+            Top = 0
+            Width = 736
+            Align = alClient
+            BorderStyle = bsNone
+            TabOrder = 3
+            Visible = False
+            object ClaudeAccountGroup: TGroupBox
+              Left = 8
+              Height = 168
+              Top = 8
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Account'
+              TabOrder = 0
+              object ClaudeExecutableLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 110
+                Caption = 'Claude executable'
+                ParentColor = False
+              end
+              object ClaudeRuntimeEdit: TEdit
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 400
+                TabOrder = 0
+              end
+              object ClaudeBrowseButton: TButton
+                Left = 420
+                Height = 28
+                Top = 24
+                Width = 96
+                Caption = 'Browse…'
+                OnClick = ClaudeBrowseClick
+                TabOrder = 1
+              end
+              object ClaudeDetectButton: TButton
+                Left = 524
+                Height = 28
+                Top = 24
+                Width = 110
+                Caption = 'Auto-detect'
+                OnClick = ClaudeDetectClick
+                TabOrder = 2
+              end
+              object ClaudeSignInButton: TButton
+                Left = 12
+                Height = 30
+                Top = 60
+                Width = 180
+                Caption = 'Sign in with Claude'
+                OnClick = ClaudeSignInClick
+                TabOrder = 3
+              end
+              object ClaudeCheckButton: TButton
+                Left = 200
+                Height = 30
+                Top = 60
+                Width = 120
+                Caption = 'Check'
+                OnClick = ClaudeCheckClick
+                TabOrder = 4
+              end
+              object ClaudeStatusLabel: TLabel
+                Left = 12
+                Height = 40
+                Top = 100
+                Width = 668
+                Anchors = [akTop, akLeft, akRight]
+                AutoSize = False
+                Caption = 'Claude Code keeps the session.'
+                ParentColor = False
+                WordWrap = True
+              end
+            end
+            object ClaudeModelGroup: TGroupBox
+              Left = 8
+              Height = 76
+              Top = 184
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Model'
+              TabOrder = 1
+              object ClaudeModelLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 36
+                Caption = 'Model'
+                ParentColor = False
+              end
+              object ClaudeModelEdit: TEdit
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 400
+                TabOrder = 0
+              end
+            end
+            object ClaudePermissionsGroup: TGroupBox
+              Left = 8
+              Height = 76
+              Top = 268
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Permissions'
+              TabOrder = 2
+              object ClaudeApprovalLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 4
+                Width = 84
+                Caption = 'Tool approvals'
+                ParentColor = False
+              end
+              object ClaudeApprovalCombo: TComboBox
+                Left = 12
+                Height = 28
+                Top = 24
+                Width = 460
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 0
+              end
+            end
+            object ClaudeUsageGroup: TGroupBox
+              Left = 8
+              Height = 52
+              Top = 352
+              Width = 700
+              Anchors = [akTop, akLeft, akRight]
+              Caption = 'Usage'
+              TabOrder = 3
+              object ClaudeUsageLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 8
+                Width = 660
+                Anchors = [akTop, akLeft, akRight]
+                Caption = 'This connection did not report usage.'
+                ParentColor = False
+              end
+            end
+          end
+        end
+      end
+    end
+    object SpellingPage: TTabSheet
+      Caption = 'Spelling'
+      ClientHeight = 672
+      ClientWidth = 972
+      inline GlobalSpellSettings: TSpellCheckerSettingsFrame
+        Left = 0
+        Height = 672
+        Top = 0
+        Width = 972
+        Align = alClient
+        ClientHeight = 672
+        ClientWidth = 972
+        TabOrder = 0
+      end
+    end
+    object TestsPage: TTabSheet
+      Caption = 'Tests'
+      ClientHeight = 672
+      ClientWidth = 972
+      inline ProjectTestSettings: TAssistantTestSettingsFrame
+        Left = 0
+        Height = 672
+        Top = 0
+        Width = 972
+        Align = alClient
+        ClientHeight = 672
+        ClientWidth = 972
+        TabOrder = 0
+      end
+    end
   end
   object ButtonPanel: TButtonPanel
     Left = 6
     Height = 34
-    Top = 550
-    Width = 508
+    Top = 700
+    Width = 968
+    Align = alBottom
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
     HelpButton.Name = 'HelpButton'
@@ -229,7 +1045,27 @@ object AssistantSettingsForm: TAssistantSettingsForm
     CloseButton.DefaultCaption = True
     CancelButton.Name = 'CancelButton'
     CancelButton.DefaultCaption = True
-    TabOrder = 10
+    TabOrder = 1
     ShowButtons = [pbOK, pbCancel]
+  end
+  object AddConnectionMenu: TPopupMenu
+    Left = 8
+    Top = 8
+    object GrokAccountItem: TMenuItem
+      Caption = 'Grok account'
+      OnClick = AddGrokAccountClick
+    end
+    object ChatGptAccountItem: TMenuItem
+      Caption = 'ChatGPT (Codex app)'
+      OnClick = AddChatGptAccountClick
+    end
+    object CompatibleAccountItem: TMenuItem
+      Caption = 'OpenAI-compatible endpoint'
+      OnClick = AddCompatibleAccountClick
+    end
+    object ClaudeAccountItem: TMenuItem
+      Caption = 'Claude account'
+      OnClick = AddClaudeAccountClick
+    end
   end
 end

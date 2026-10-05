@@ -709,11 +709,10 @@ Begin
       Result.Add('key_value', Item.KeyValue);
       Result.Add('wire_api', Item.WireApi);
     End;
+  If (Item.Backend = 'codex') Or (Item.Backend = 'claude') Then
+    Result.Add('runtime', Item.Runtime);
   If Item.Backend = 'codex' Then
-    Begin
-      Result.Add('runtime', Item.Runtime);
-      Result.Add('models_json', Item.CachedModelsJson);
-    End;
+    Result.Add('models_json', Item.CachedModelsJson);
 End;
 
 Procedure ReadConnection(Obj: TJSONObject; Item: TAssistantConnection);

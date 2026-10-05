@@ -1,4 +1,208 @@
 object CodexConnectionFrame: TCodexConnectionFrame
-  Height = 310
+  Left = 0
+  Height = 520
+  Top = 0
   Width = 660
+  ClientHeight = 520
+  ClientWidth = 660
+  TabOrder = 0
+  object PermissionsGroup: TGroupBox
+    Left = 0
+    Height = 140
+    Top = 380
+    Width = 660
+    Align = alTop
+    Caption = 'Permissions'
+    ClientHeight = 120
+    ClientWidth = 656
+    TabOrder = 2
+    object ApprovalLabel: TLabel
+      Left = 12
+      Height = 17
+      Top = 4
+      Width = 140
+      Caption = 'Tool usage permissions'
+      ParentColor = False
+    end
+    object ApprovalCombo: TComboBox
+      Left = 12
+      Height = 28
+      Top = 24
+      Width = 420
+      ItemHeight = 0
+      ItemIndex = 0
+      Items.Strings = (
+        'Ask before file changes and builds'
+        'Auto: allow project tools'
+        'Always: allow registered tools'
+      )
+      Style = csDropDownList
+      TabOrder = 0
+    end
+    object PermissionNoteLabel: TLabel
+      Left = 12
+      Height = 48
+      Top = 60
+      Width = 620
+      AutoSize = False
+      Caption = 'Ask is read-only; Plan can write Markdown. Auto and Always currently allow the same bounded Lazarus tools.'
+      ParentColor = False
+      WordWrap = True
+    end
+  end
+  object ModelGroup: TGroupBox
+    Left = 0
+    Height = 170
+    Top = 210
+    Width = 660
+    Align = alTop
+    Caption = 'Model'
+    ClientHeight = 150
+    ClientWidth = 656
+    TabOrder = 1
+    object ModelLabel: TLabel
+      Left = 12
+      Height = 17
+      Top = 4
+      Width = 40
+      Caption = 'Model'
+      ParentColor = False
+    end
+    object ModelCombo: TComboBox
+      Left = 12
+      Height = 28
+      Top = 24
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      Style = csDropDownList
+      TabOrder = 0
+      OnChange = ModelChanged
+    end
+    object EffortLabel: TLabel
+      Left = 12
+      Height = 17
+      Top = 60
+      Width = 100
+      Caption = 'Reasoning level'
+      ParentColor = False
+    end
+    object EffortCombo: TComboBox
+      Left = 12
+      Height = 28
+      Top = 80
+      Width = 300
+      ItemHeight = 0
+      ItemIndex = 0
+      Items.Strings = (
+        'Model default'
+      )
+      Style = csDropDownList
+      TabOrder = 1
+    end
+    object ModelNoteLabel: TLabel
+      Left = 12
+      Height = 32
+      Top = 116
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      AutoSize = False
+      Caption = 'Model and reasoning lists are remembered when settings are saved. Refresh models to update them.'
+      ParentColor = False
+      WordWrap = True
+    end
+  end
+  object AccountGroup: TGroupBox
+    Left = 0
+    Height = 210
+    Top = 0
+    Width = 660
+    Align = alTop
+    Caption = 'Account'
+    ClientHeight = 190
+    ClientWidth = 656
+    TabOrder = 0
+    object ExecutableLabel: TLabel
+      Left = 12
+      Height = 17
+      Top = 4
+      Width = 420
+      Caption = 'Codex executable (any release build; schema checked on sign-in)'
+      ParentColor = False
+    end
+    object RuntimeEdit: TEdit
+      Left = 12
+      Height = 28
+      Top = 24
+      Width = 400
+      TabOrder = 0
+    end
+    object BrowseRuntimeButton: TButton
+      Left = 420
+      Height = 28
+      Top = 24
+      Width = 96
+      Caption = 'Browse…'
+      OnClick = BrowseRuntime
+      TabOrder = 1
+    end
+    object DetectRuntimeButton: TButton
+      Left = 524
+      Height = 28
+      Top = 24
+      Width = 110
+      Caption = 'Auto-detect'
+      OnClick = DetectRuntime
+      TabOrder = 2
+    end
+    object SignInButton: TButton
+      Left = 12
+      Height = 32
+      Top = 60
+      Width = 180
+      Caption = 'Sign in with ChatGPT'
+      OnClick = StartCheck
+      TabOrder = 3
+    end
+    object CheckButton: TButton
+      Left = 200
+      Height = 32
+      Top = 60
+      Width = 180
+      Caption = 'Check / refresh models'
+      OnClick = StartCheck
+      TabOrder = 4
+    end
+    object DeleteProfileButton: TButton
+      Left = 388
+      Height = 32
+      Top = 60
+      Width = 246
+      Caption = 'Delete profile directory'
+      Enabled = False
+      Hint = 'Deletes the runtime sign-in directory. Does not remove the connection definition.'
+      OnClick = DeleteProfile
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 5
+    end
+    object ConnectionStatus: TLabel
+      Left = 12
+      Height = 70
+      Top = 100
+      Width = 620
+      Anchors = [akTop, akLeft, akRight]
+      AutoSize = False
+      Caption = 'Uses ChatGPT subscription access. API-key billing is disabled.'
+      ParentColor = False
+      WordWrap = True
+    end
+  end
+  object AccountTimer: TTimer
+    Enabled = False
+    Interval = 100
+    OnTimer = Tick
+    Left = 16
+    Top = 488
+  end
 end
