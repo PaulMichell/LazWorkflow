@@ -19,6 +19,21 @@ Begin
 End;
 Procedure Reply(Session: TAssistantCodexHandshake; Id: Int64; Const Body: String);
 Begin Session.Feed('{"id":' + IntToStr(Id) + ',"result":' + Body + '}' + #10); End;
+Function TakeLogin(Session: TAssistantCodexHandshake; Out Id: Int64): String;
+Var
+  RequestFrame: String;
+  Data: TJSONData;
+Begin
+  Check('outgoing login', Session.TakeOutgoing(RequestFrame));
+  Data := GetJSON(RequestFrame);
+  Try
+    Check('login method', TJSONObject(Data).Get('method', '') = 'account/login/start');
+    Result := Data.FindPath('params.type').AsString;
+    Id := TJSONObject(Data).Get('id', Int64(0));
+  Finally
+    Data.Free;
+  End;
+End;
 Function Initialize(Session: TAssistantCodexHandshake): Int64;
 Var Id: Int64; Frame: String; I: Integer;
 Begin
@@ -90,5 +105,13 @@ Begin
     Initialize(Session);
     Session.Feed(StringOfChar('x', 1048577));
     Check('oversized frame fails closed', Session.State = ccsFailed);
+    Id := Initialize(Session);
+    Reply(Session, Id, '{"account":null,"requiresOpenaiAuth":true}');
+    Session.StartChatGPTLogin;
+    Check('browser login is started first', TakeLogin(Session, Id) = 'chatgpt');
+    Session.Feed('{"id":' + IntToStr(Id) + ',"error":{"code":-32602,"message":"unsupported"}}' + #10);
+    Check('device code is only the fallback', TakeLogin(Session, Id) = 'chatgptDeviceCode');
+    Reply(Session, Id, '{"type":"chatgptDeviceCode","loginId":"login3","verificationUrl":"https://auth.openai.com/codex/device","userCode":"FJA4-C6AMZ"}');
+    Check('fallback code is kept', (Session.UserCode = 'FJA4-C6AMZ') And (Session.State = ccsSigningIn));
   Finally Args.Free; Session.Free; End;
 End.

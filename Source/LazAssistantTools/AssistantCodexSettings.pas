@@ -318,6 +318,17 @@ Begin
   End;
 End;
 
+Function SignInPrompt(Const Url, Code: String; BrowserOpened: Boolean): String;
+Begin
+  If Not BrowserOpened Then
+    Result := 'Could not open the sign-in browser. Open this URL manually: ' + Url
+  Else If Code <> '' Then
+    Result := 'If the browser asks for a device code, enter ' + Code + '. ' +
+      'A page that says device-code sign-in is disabled has nowhere to put it.'
+  Else
+    Result := 'Complete ChatGPT sign-in in the browser. There is no code to enter.';
+End;
+
 Function OpenSignInUrl(Const Url: String): Boolean;
 Var
   Proc: TProcess;
@@ -349,14 +360,10 @@ Begin
   If (Value.LoginUrl <> '') And (Value.LoginUrl <> OpenedUrl) Then
     Begin
       OpenedUrl := Value.LoginUrl;
-      If Not OpenSignInUrl(OpenedUrl) Then
-        Status.Caption := 'Could not open the sign-in browser. Open this URL manually: ' + OpenedUrl
-      Else If Value.UserCode <> '' Then
-        Status.Caption := 'Enter this code in the browser: ' + Value.UserCode
-      Else Status.Caption := 'Complete ChatGPT sign-in in your browser…';
+      Status.Caption := SignInPrompt(OpenedUrl, Value.UserCode, OpenSignInUrl(OpenedUrl));
     End
   Else If (Value.UserCode <> '') And Not Value.Done Then
-    Status.Caption := 'Enter this code in the browser: ' + Value.UserCode;
+    Status.Caption := SignInPrompt(OpenedUrl, Value.UserCode, True);
   If Not Value.Done Then Exit;
   Timer.Enabled := False;
   ReapCodexWorker(Job);

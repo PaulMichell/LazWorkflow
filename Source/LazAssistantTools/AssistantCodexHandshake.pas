@@ -24,7 +24,7 @@ Type
     FBuffer, FLastError, FLoginId, FLoginUrl, FUserCode: String;
     FOutgoing: TStringList;
     FNextId, FInitializeId, FAccountId, FLoginRequestId: Int64;
-    FBrowserLoginRetried: Boolean;
+    FAlternateLoginTried: Boolean;
     Function Request(Const Method, Params: String): Int64;
     Procedure RemoveQueuedRequest(Id: Int64);
     Procedure CheckAccount;
@@ -102,7 +102,7 @@ Begin
   FLoginId := '';
   FLoginUrl := '';
   FUserCode := '';
-  FBrowserLoginRetried := False;
+  FAlternateLoginTried := False;
 End;
 
 Procedure TAssistantCodexHandshake.Fail(Const Reason: String);
@@ -169,11 +169,12 @@ Begin
   FLoginId := '';
   FLoginUrl := '';
   FUserCode := '';
-  FBrowserLoginRetried := False;
+  FAlternateLoginTried := False;
   FLastError := '';
   FState := ccsSigningIn;
-  { Device code does not depend on a localhost browser callback. Browser login is the fallback. }
-  FLoginRequestId := Request('account/login/start', '{"type":"chatgptDeviceCode"}');
+  { Browser login is the normal ChatGPT page. Device code is only a fallback:
+    a workspace can disable it, and that page then has nowhere to enter a code. }
+  FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}');
 End;
 
 Function TAssistantCodexHandshake.TakeOutgoing(Out Frame: String): Boolean;
@@ -252,10 +253,10 @@ Begin
       (Id <> FLoginRequestId)) Then Exit;
     If Assigned(Root.Find('error')) Then
       Begin
-        If (Id = FLoginRequestId) And Not FBrowserLoginRetried Then
+        If (Id = FLoginRequestId) And Not FAlternateLoginTried Then
           Begin
-            FBrowserLoginRetried := True;
-            FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}');
+            FAlternateLoginTried := True;
+            FLoginRequestId := Request('account/login/start', '{"type":"chatgptDeviceCode"}');
             Exit;
           End;
         Fail('Codex rejected the connection/account request. No metered fallback was attempted.');
