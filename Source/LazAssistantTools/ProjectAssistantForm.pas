@@ -218,6 +218,7 @@ Type
 
     FUseCodex: Boolean;
     FUseClaude: Boolean;
+    FCanCompactContext: Boolean;
     FReloadConnectionAfterSend: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -388,7 +389,8 @@ Type
     Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
       ContinueSameItem: Boolean): String;
     Procedure MaybeWarnHighContextUsage;
-    Function AutoNewChatAtLimitEnabled: Boolean;
+    Function AutoCompactAtLimitEnabled: Boolean;
+    Function CompactOpenChat: Integer;
     Procedure ApplyDisplayPreferences;
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
@@ -2230,12 +2232,19 @@ Begin
       Pct := (FContextUsed * 100) Div FContextLimit;
       If Pct >= 95 Then
         Begin
-          If AutoNewChatAtLimitEnabled Then
+          If AutoCompactAtLimitEnabled Then
             Begin
-              { Rollover into a fresh conversation and keep walking packages. }
+              { Compact this conversation and keep walking packages. Do not start a new chat. }
               FContextWarnShown := False;
               MaybeWarnHighContextUsage;
-              { Fall through to next package with cleared history. }
+              If (Not FUseCodex) And Assigned(AssistantClient) Then
+                FContextUsed := AssistantClient.EstimatedPromptTokens;
+              Pct := (FContextUsed * 100) Div FContextLimit;
+              If Pct >= 95 Then
+                Begin
+                  StopRunPlan(Format('context usage %d%% after compact — start a New Chat', [Pct]));
+                  Exit;
+                End;
             End
           Else
             Begin
@@ -2984,12 +2993,14 @@ Begin
   Try
     FUseCodex := False;
     FUseClaude := False;
+    FCanCompactContext := False;
     If Not Assigned(LazarusIDE) Then Exit;
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
       Connections.Load; Item := Connections.Active;
       FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
       FUseClaude := Assigned(Item) And (Item.Backend = 'claude');
+      FCanCompactContext := Assigned(Item) And Item.CanCompactContext;
       If FUseCodex Then
         Begin
           FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
@@ -3003,6 +3014,7 @@ Begin
       Begin
         FUseCodex := False;
         FUseClaude := False;
+        FCanCompactContext := False;
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
   End;
@@ -3251,12 +3263,23 @@ Begin
   UpdateStatusFooter;
 End;
 
-Function TProjectAssistantForm.AutoNewChatAtLimitEnabled: Boolean;
+Function TProjectAssistantForm.AutoCompactAtLimitEnabled: Boolean;
 Begin
-  If Assigned(AssistantChatConfig) Then
-    Result := AssistantChatConfig.AutoNewChatAtContextLimit
+  Result := FCanCompactContext And Assigned(AssistantChatConfig) And AssistantChatConfig.AutoCompactContext;
+End;
+
+Function TProjectAssistantForm.CompactOpenChat: Integer;
+Begin
+  Result := 0;
+  If Not Assigned(AssistantClient) Then
+    Exit;
+  Result := AssistantClient.CompactOlderHistory;
+  FContextUsed := AssistantClient.EstimatedPromptTokens;
+  If Result < 1 Then
+    SetCurrentSystemNote('Context is already compact enough for the current budget.')
   Else
-    Result := False;
+    SetCurrentSystemNote(Format('Compacted context — about %d tokens removed. Re-read files if an older turn was trimmed.',
+      [Result]));
 End;
 
 Procedure TProjectAssistantForm.ApplyDisplayPreferences;
@@ -3372,7 +3395,6 @@ End;
 Procedure TProjectAssistantForm.MaybeWarnHighContextUsage;
 Var
   Pct: Integer;
-  KeepAgent: Boolean;
 Begin
   If FContextWarnShown Or FAutoRolloverInProgress Then
     Exit;
@@ -3382,21 +3404,17 @@ Begin
   If Pct < 95 Then
     Exit;
   FContextWarnShown := True;
-  If AutoNewChatAtLimitEnabled Then
+  { The saved flag does not start a new chat. Compact only when this connection can. }
+  If Assigned(AssistantChatConfig) And AssistantChatConfig.AutoCompactContext Then
     Begin
-      KeepAgent := FPlanAgentRunning;
+      If Not FCanCompactContext Then
+        Exit;
       FAutoRolloverInProgress := True;
       Try
-        SetCurrentSystemNote(
-          Format('**Context usage at %d%%** — automatically starting a **New Chat** to free the token budget.',
-            [Pct]));
-        StartNewChat(KeepAgent, False);
-        SetCurrentSystemNote(
-          Format('**New Chat** started automatically at %d%% context use. Previous conversation is in History.',
-            [Pct]));
+        CompactOpenChat;
+        UpdateStatusFooter;
         WorkflowLogger.Info('ProjectAssistant',
-          Format('Auto New Chat at %d%% context (keep plan agent=%s)',
-            [Pct, BoolToStr(KeepAgent, True)]));
+          Format('Auto compact at %d%% context', [Pct]));
       Finally
         FAutoRolloverInProgress := False;
       End;
@@ -3404,12 +3422,11 @@ Begin
     End;
   SetCurrentSystemNote(
     Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Build/Plan work ' +
-      'so the model stays within its token limit. Or enable **Auto New Chat at 95%%** on this form.',
+      'so the model stays within its token limit.',
       [Pct]));
   MessageDlg(
     Format('Context usage is at about %d%% of the budget.%s%s' +
-      'Start a New Chat before continuing large Plan/Build sessions, or enable "Auto New Chat at 95%%" ' +
-      'on the assistant form (default is set in Settings).',
+      'Start a New Chat before continuing large Plan/Build sessions.',
       [Pct, LineEnding, LineEnding]),
     mtWarning, [mbOK], 0);
 End;
@@ -5860,10 +5877,8 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.CompactContextActionExecute(Sender: TObject);
-Var
-  Saved: Integer;
 Begin
-  If FUseCodex Then
+  If FUseCodex Or FUseClaude Then
     Begin
       MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0);
       Exit;
@@ -5876,14 +5891,8 @@ Begin
     End;
   If Not Assigned(AssistantClient) Then
     Exit;
-  Saved := AssistantClient.CompactOlderHistory;
-  FContextUsed := AssistantClient.EstimatedPromptTokens;
+  CompactOpenChat;
   UpdateStatusFooter;
-  If Saved < 1 Then
-    SetCurrentSystemNote('Context is already compact enough for the current budget.')
-  Else
-    SetCurrentSystemNote(Format('Compacted context — about %d tokens removed. Re-read files if an older turn was trimmed.',
-      [Saved]));
 End;
 
 Procedure TProjectAssistantForm.CopyLastAnswerActionExecute(Sender: TObject);
