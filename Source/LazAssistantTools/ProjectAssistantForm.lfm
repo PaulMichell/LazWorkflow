@@ -526,50 +526,6 @@ object ProjectAssistantForm: TProjectAssistantForm
           ClientHeight = 0
           ClientWidth = 981
           TabOrder = 0
-          object PlanOfferBar: TPanel
-            Left = 0
-            Height = 28
-            Top = 0
-            Width = 981
-            Align = alTop
-            BevelOuter = bvNone
-            ChildSizing.LeftRightSpacing = 4
-            ChildSizing.TopBottomSpacing = 2
-            ChildSizing.HorizontalSpacing = 8
-            ChildSizing.Layout = cclLeftToRightThenTopToBottom
-            ChildSizing.ControlsPerLine = 6
-            ClientHeight = 28
-            ClientWidth = 981
-            TabOrder = 1
-            Visible = False
-            object PlanOfferLabel: TLabel
-              Left = 4
-              Height = 28
-              Top = 2
-              Width = 77
-              Caption = 'Plan written.'
-              Layout = tlCenter
-              ParentColor = False
-            end
-            object BuildThisButton: TButton
-              Left = 89
-              Height = 28
-              Top = 2
-              Width = 73
-              Action = BuildThisAction
-              AutoSize = True
-              TabOrder = 0
-            end
-            object RevisePlanButton: TButton
-              Left = 170
-              Height = 28
-              Top = 2
-              Width = 53
-              Action = RevisePlanAction
-              AutoSize = True
-              TabOrder = 1
-            end
-          end
           object InputMemo: TSpellMemo
             Left = 6
             Height = 0
@@ -743,16 +699,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Remove this plan from the available list. The file is kept.'
       OnExecute = RemovePlanActionExecute
     end
-    object BuildThisAction: TAction
-      Caption = 'Build This'
-      Hint = 'Switch to Build and seed the next incomplete package'
-      OnExecute = BuildThisActionExecute
-    end
-    object RevisePlanAction: TAction
-      Caption = 'Revise'
-      Hint = 'Stay in Plan and edit the prompt'
-      OnExecute = RevisePlanActionExecute
-    end
     object ChatModeAction: TAction
       Caption = 'Chat Mode'
       Hint = 'General chat, no project tools'
@@ -845,12 +791,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
       object OpenPlanMenuItem: TMenuItem
         Action = OpenPlanAction
-      end
-      object BuildThisMenuItem: TMenuItem
-        Action = BuildThisAction
-      end
-      object RevisePlanMenuItem: TMenuItem
-        Action = RevisePlanAction
       end
     end
     object ReviewMenuItem: TMenuItem

@@ -63,8 +63,6 @@ Type
     OpenPlanAction: TAction;
     OpenPlanSheetAction: TAction;
     RemovePlanAction: TAction;
-    BuildThisAction: TAction;
-    RevisePlanAction: TAction;
     ChatModeAction: TAction;
     InspectModeAction: TAction;
     DocumentModeAction: TAction;
@@ -87,8 +85,6 @@ Type
     NewPlanMenuItem: TMenuItem;
     RunPlanMenuItem: TMenuItem;
     OpenPlanMenuItem: TMenuItem;
-    BuildThisMenuItem: TMenuItem;
-    RevisePlanMenuItem: TMenuItem;
     ReviewMenuItem: TMenuItem;
     ReviewChangesMenuItem: TMenuItem;
     ViewMenuItem: TMenuItem;
@@ -132,10 +128,6 @@ Type
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
     AttachmentStrip: TPanel;
-    PlanOfferBar: TPanel;
-    PlanOfferLabel: TLabel;
-    BuildThisButton: TButton;
-    RevisePlanButton: TButton;
     InputMemo: TSpellMemo;
     InputPopup: TPopupMenu;
     InputCutItem: TMenuItem;
@@ -202,8 +194,6 @@ Type
     Procedure CopyLastAnswerActionExecute(Sender: TObject);
     Procedure RemovePlanActionExecute(Sender: TObject);
     Procedure OpenPlanActionExecute(Sender: TObject);
-    Procedure BuildThisActionExecute(Sender: TObject);
-    Procedure RevisePlanActionExecute(Sender: TObject);
     Procedure ChatModeActionExecute(Sender: TObject);
     Procedure InspectModeActionExecute(Sender: TObject);
     Procedure DocumentModeActionExecute(Sender: TObject);
@@ -309,7 +299,6 @@ Type
     FLastTurnHadError: Boolean;
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
-    FShowPlanOffer: Boolean;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
@@ -448,7 +437,6 @@ Type
     Procedure FillThinkingFooterMenu;
     Procedure FillApprovalFooterMenu;
     Procedure FillSkillFooterMenu;
-    Procedure ShowPlanOfferBar(OfferVisible: Boolean);
     Procedure SeedPromptFromSelectedWork;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
@@ -564,7 +552,6 @@ Begin
   FDeferLastTurn := True;
   FOpenBusy := False;
   FPlanWriteThisTurn := False;
-  FShowPlanOffer := False;
   LoadConnectionSettings;
   WorkflowEventBus.AddListener(Self);
   SyncModeUi;
@@ -677,11 +664,6 @@ Begin
       StatusFooter.OnSkillClick := @StatusFooterSkillClick;
       StatusFooter.OnCentreClick := @StatusFooterCentreClick;
       StatusFooter.OnRightClick := @StatusFooterRightClick;
-    End;
-  If Assigned(PlanOfferBar) Then
-    Begin
-      PlanOfferBar.Height := Scale96ToForm(28);
-      PlanOfferBar.Visible := False;
     End;
   ApplyDisplayPreferences;
   If Not Assigned(ElapsedTimer) Then
@@ -1114,8 +1096,6 @@ Begin
   { Keep Document, Plan, and Build until the user picks another mode.
     Clearing sticky here let ApplyActiveMode snap a programmatic Build switch back to the combo. }
   FModeSticky := Mode In [amDocument, amPlan, amBuild];
-  If Mode <> amPlan Then
-    ShowPlanOfferBar(False);
   SyncModeUi;
   ApplyActiveMode;
   If Not FSkipModePersist Then
@@ -1238,10 +1218,6 @@ End;
 
 Procedure TProjectAssistantForm.UpdateWorkActions;
 Begin
-  If Assigned(BuildThisAction) Then
-    BuildThisAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
-  If Assigned(RevisePlanAction) Then
-    RevisePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
   If Assigned(OpenPlanAction) Then
     OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
   If Assigned(OpenPlanSheetAction) Then
@@ -3458,7 +3434,6 @@ Begin
       FPlanWriteThisTurn := False;
       ResetAssistantGitTurn;
       ResetAssistantPlanTurn;
-      ShowPlanOfferBar(False);
     End;
   If Not IsSending Then
     FReviewInProgress := False;
@@ -4013,7 +3988,6 @@ Begin
   If FComposerLayoutLock Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Then Exit;
   If Not Assigned(PromptHost) Then Exit;
   Minimum := Scale96ToForm(48);
-  If FShowPlanOffer Then Inc(Minimum, Scale96ToForm(28));
   Strip := 0;
   If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
     Strip := AttachmentStripHeight;
@@ -4032,7 +4006,6 @@ Procedure TProjectAssistantForm.ApplyInputPanelHeight;
 Begin
   If Not Assigned(InputPanel) Then Exit;
   FInputHeight := Scale96ToForm(75);
-  If FShowPlanOffer Then Inc(FInputHeight, Scale96ToForm(28));
   LayoutComposer;
 End;
 
@@ -5223,14 +5196,9 @@ Begin
       RefreshActivePlanChoices(Nil);
       RefreshBuildTodos;
       UpdateWorkActions;
-      ShowPlanOfferBar(ActiveMode = amPlan);
     End
-  Else
-    Begin
-      If ActiveMode = amBuild Then
-        RefreshBuildTodos;
-      ShowPlanOfferBar(False);
-    End;
+  Else If ActiveMode = amBuild Then
+    RefreshBuildTodos;
   If FPlanAgentRunning Then
     Begin
       If FLastTurnHadError Then
@@ -5655,16 +5623,6 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.ShowPlanOfferBar(OfferVisible: Boolean);
-Begin
-  FShowPlanOffer := OfferVisible And (GetActivePlanRelativePath <> '');
-  If Assigned(PlanOfferBar) Then
-    PlanOfferBar.Visible := FShowPlanOffer;
-  ApplyInputPanelHeight;
-  If Assigned(PlanOfferLabel) Then
-    PlanOfferLabel.Caption := 'Plan written.';
-End;
-
 Procedure TProjectAssistantForm.InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
 Begin
   If (Key = VK_V) And (ssCtrl In Shift) Then
@@ -5917,51 +5875,6 @@ Begin
   RefreshBuildTodos;
   UpdateWorkActions;
   SetBuildStatusFeedback('Removed from the available list. The file was kept.');
-End;
-
-Procedure TProjectAssistantForm.BuildThisActionExecute(Sender: TObject);
-Var
-  Idx: Integer;
-  Title: String;
-Begin
-  ShowPlanOfferBar(False);
-  If GetActivePlanRelativePath = '' Then
-    Begin
-      MessageDlg('Set an active plan on the Plan panel first.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  SelectMode(amBuild);
-  RefreshBuildTodos;
-  Idx := FindNextIncompleteBuildSection;
-  Title := '';
-  If (Idx >= 0) And Assigned(BuildSections) And (Idx < BuildSections.Count) Then
-    Begin
-      FBuildSelectedIndex := Idx;
-      If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
-        BuildTodoList.ItemIndex := Idx;
-      Title := TPlanSection(BuildSections[Idx]).Title;
-    End;
-  If Assigned(InputMemo) Then
-    Begin
-      If Title <> '' Then
-        InputMemo.Text := 'Implement the next incomplete section: ' + Title
-      Else
-        InputMemo.Text := 'Implement the next incomplete section of the active plan.';
-      InputMemo.SelStart := Length(InputMemo.Text);
-      InputMemo.SetFocus;
-    End;
-End;
-
-Procedure TProjectAssistantForm.RevisePlanActionExecute(Sender: TObject);
-Begin
-  ShowPlanOfferBar(False);
-  SelectMode(amPlan);
-  If Assigned(InputMemo) Then
-    Begin
-      InputMemo.Text := 'Revise the active plan: ';
-      InputMemo.SelStart := Length(InputMemo.Text);
-      InputMemo.SetFocus;
-    End;
 End;
 
 Procedure TProjectAssistantForm.ChatModeActionExecute(Sender: TObject);
@@ -6409,7 +6322,6 @@ End;
 Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean; UseChatDefault: Boolean);
 Begin
   FPlanAgentResumeIndex := -1;
-  ShowPlanOfferBar(False);
   If FPlanAgentRunning And (Not KeepPlanAgent) Then
     StopRunPlan('new chat');
   If FSending Then
