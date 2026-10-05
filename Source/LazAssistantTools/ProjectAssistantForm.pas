@@ -125,7 +125,7 @@ Type
     RemovePlanButton: TButton;
     ComposerStack: TPanel;
     BottomBar: TPanel;
-    NewChatButton: TButton;
+    NewConversationButton: TButton;
     NewPlanButton: TButton;
     RunPlanButton: TButton;
     SettingsButton: TButton;
@@ -6410,7 +6410,8 @@ Begin
       If UseChatDefault Then
         SetCurrentSystemNote('New conversation started in **Chat**. Previous chat moved to History.')
       Else
-        SetCurrentSystemNote('New conversation started. Previous chat moved to History.');
+        SetCurrentSystemNote(Format('New conversation started in **%s**. Previous conversation moved to History.',
+          [ModeChipCaption(ActiveMode)]));
     End;
   PersistSession;
   UpdateStatusFooter;
@@ -6886,7 +6887,7 @@ End;
 
 Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);
 Begin
-  StartNewChat;
+  StartNewChat(False, False);
   If InputMemo.CanFocus Then InputMemo.SetFocus;
 End;
 
