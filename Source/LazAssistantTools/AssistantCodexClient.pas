@@ -168,31 +168,18 @@ Function TAssistantCodexClient.Connect(Const Executable, WorkingDirectory: Strin
     Environment: TStrings): Boolean;
 Var
   Args: TStringList;
-  Frame: String;
   Observed, Reason: String;
-  Deadline: QWord;
 Begin
   Disconnect;
   FError := '';
   Args := TStringList.Create;
   Try
-    Args.Add('--version');
-    Result := FTransport.Start(Executable, WorkingDirectory, Args, Environment);
-    If Not Result Then
+    If Not ReadCodexVersion(Executable, Environment, Observed, Reason) Then
       Begin
-        Fail(FTransport.LastError);
+        Fail(Reason);
+        Result := False;
         Exit;
       End;
-    Observed := '';
-    Deadline := GetTickCount64 + FRequestTimeout;
-    Repeat
-      FTransport.Poll;
-      While FTransport.TakeFrame(Frame) Do
-        If CodexVersionReportLine(Trim(Frame)) <> '' Then Observed := CodexVersionReportLine(Trim(Frame));
-      If (Observed <> '') Or (FTransport.LastError <> '') Then Break;
-      Sleep(1);
-    Until GetTickCount64 >= Deadline;
-    FTransport.Stop;
     If Not QualifyCodexRuntime(Executable, Observed, Environment, Reason) Then
       Begin
         Fail(Reason);

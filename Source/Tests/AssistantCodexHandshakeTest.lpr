@@ -13,7 +13,8 @@ Begin
     Check('App Server omits jsonrpc header', Data.FindPath('jsonrpc') = Nil);
     Result := TJSONObject(Data).Get('id', Int64(0));
     If Method = 'account/login/start' Then
-      Check('only managed ChatGPT login', Data.FindPath('params.type').AsString = 'chatgpt');
+      Check('only managed ChatGPT login', (Data.FindPath('params.type').AsString = 'chatgptDeviceCode') Or
+        (Data.FindPath('params.type').AsString = 'chatgpt'));
   Finally Data.Free; End;
 End;
 Procedure Reply(Session: TAssistantCodexHandshake; Id: Int64; Const Body: String);

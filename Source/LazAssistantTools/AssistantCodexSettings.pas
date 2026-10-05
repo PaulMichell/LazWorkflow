@@ -48,7 +48,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Dialogs, LCLIntf, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
+  Dialogs, LCLIntf, Process, FileUtil, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
 
 Type
   TWorkerReaper = Class(TThread)
@@ -318,6 +318,28 @@ Begin
   End;
 End;
 
+Function OpenSignInUrl(Const Url: String): Boolean;
+Var
+  Proc: TProcess;
+  Launcher: String;
+Begin
+  Result := OpenURL(Url);
+  If Result Then Exit;
+  Launcher := FindDefaultExecutablePath('xdg-open');
+  If Launcher = '' Then Exit;
+  Proc := TProcess.Create(Nil);
+  Try
+    Proc.Executable := Launcher;
+    Proc.Parameters.Add(Url);
+    Proc.Options := [poNoConsole];
+    Proc.Execute;
+    Result := True;
+  Except
+    Result := False;
+  End;
+  Proc.Free;
+End;
+
 Procedure TCodexConnectionFrame.Tick(Sender: TObject);
 Var
   Value: TCodexAccountSnapshot;
@@ -327,10 +349,14 @@ Begin
   If (Value.LoginUrl <> '') And (Value.LoginUrl <> OpenedUrl) Then
     Begin
       OpenedUrl := Value.LoginUrl;
-      If Not OpenURL(OpenedUrl) Then
-        Status.Caption := 'Could not open the sign-in browser. Check your default browser configuration.'
+      If Not OpenSignInUrl(OpenedUrl) Then
+        Status.Caption := 'Could not open the sign-in browser. Open this URL manually: ' + OpenedUrl
+      Else If Value.UserCode <> '' Then
+        Status.Caption := 'Enter this code in the browser: ' + Value.UserCode
       Else Status.Caption := 'Complete ChatGPT sign-in in your browser…';
-    End;
+    End
+  Else If (Value.UserCode <> '') And Not Value.Done Then
+    Status.Caption := 'Enter this code in the browser: ' + Value.UserCode;
   If Not Value.Done Then Exit;
   Timer.Enabled := False;
   ReapCodexWorker(Job);

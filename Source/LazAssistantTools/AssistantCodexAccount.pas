@@ -16,7 +16,7 @@ Type
   TCodexAccountSnapshot = Record
     Done: Boolean;
     State: TCodexConnectionState;
-    LoginUrl, ModelsJson, ErrorText: String;
+    LoginUrl, UserCode, ModelsJson, ErrorText: String;
   End;
   TAssistantCodexAccount = Class(TThread)
   Private
@@ -86,7 +86,7 @@ Begin
     Try
       If InterlockedCompareExchange(FCancelled, 0, 0) <> 0 Then Exit;
       If Not PrepareCodexProfile(FProfile, Value.ErrorText) Then Exit;
-      Client := TAssistantCodexClient.Create(10000);
+      Client := TAssistantCodexClient.Create(60000);
       Env := TStringList.Create;
       CodexProfileEnvironment(FProfile, Env);
       If Not Client.Connect(FExecutable, FProfile, Env) Then
@@ -104,6 +104,7 @@ Begin
         Value.State := Client.Authentication.State;
         Value.ErrorText := Client.LastError;
         Value.LoginUrl := Client.Authentication.LoginUrl;
+        Value.UserCode := Client.Authentication.UserCode;
         Value.ModelsJson := Client.ModelsJson;
         If Client.State = crsFailed Then Break;
         If Value.State = ccsNeedsSignIn Then

@@ -21,9 +21,10 @@ Type
   TAssistantCodexHandshake = Class
   Private
     FState: TCodexConnectionState;
-    FBuffer, FLastError, FLoginId, FLoginUrl: String;
+    FBuffer, FLastError, FLoginId, FLoginUrl, FUserCode: String;
     FOutgoing: TStringList;
     FNextId, FInitializeId, FAccountId, FLoginRequestId: Int64;
+    FBrowserLoginRetried: Boolean;
     Function Request(Const Method, Params: String): Int64;
     Procedure RemoveQueuedRequest(Id: Int64);
     Procedure CheckAccount;
@@ -42,6 +43,7 @@ Type
     Property State: TCodexConnectionState Read FState;
     Property LastError: String Read FLastError;
     Property LoginUrl: String Read FLoginUrl;
+    Property UserCode: String Read FUserCode;
   End;
   { Pass arguments directly to TProcess, never through a shell. }
 Procedure CodexSubscriptionArguments(Args: TStrings);
@@ -99,6 +101,8 @@ Begin
   FLoginRequestId := 0;
   FLoginId := '';
   FLoginUrl := '';
+  FUserCode := '';
+  FBrowserLoginRetried := False;
 End;
 
 Procedure TAssistantCodexHandshake.Fail(Const Reason: String);
@@ -138,6 +142,17 @@ Begin
     If Pos(Prefix, FOutgoing[I]) = 1 Then FOutgoing.Delete(I);
 End;
 
+Function SafeUserCode(Const Value: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  If (Value = '') Or (Length(Value) > 32) Then Exit;
+  For I := 1 To Length(Value) Do
+    If Not (Value[I] In ['0'..'9', 'A'..'Z', 'a'..'z', '-']) Then Exit;
+  Result := Value;
+End;
+
 Procedure TAssistantCodexHandshake.CheckAccount;
 Begin
   FState := ccsCheckingAccount;
@@ -153,9 +168,12 @@ Begin
     Raise Exception.Create('ChatGPT sign-in is not available in the current connection state.');
   FLoginId := '';
   FLoginUrl := '';
+  FUserCode := '';
+  FBrowserLoginRetried := False;
   FLastError := '';
   FState := ccsSigningIn;
-  FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}');
+  { Device code does not depend on a localhost browser callback. Browser login is the fallback. }
+  FLoginRequestId := Request('account/login/start', '{"type":"chatgptDeviceCode"}');
 End;
 
 Function TAssistantCodexHandshake.TakeOutgoing(Out Frame: String): Boolean;
@@ -213,11 +231,12 @@ Begin
                 FLastError := 'ChatGPT subscription sign-in is required. API-key and other authentication modes are disabled.';
               End;
           End
-            Else If (Method = 'account/login/completed') And
-          (FLoginId <> '') And (Params.Get('loginId', '') = FLoginId) Then
+            Else If (Method = 'account/login/completed') And (FLoginId <> '') And
+          ((Params.Get('loginId', '') = '') Or (Params.Get('loginId', '') = FLoginId)) Then
             Begin
               FLoginId := '';
               FLoginUrl := '';
+              FUserCode := '';
               If Params.Get('success', False) Then CheckAccount
               Else
                 Begin
@@ -233,6 +252,12 @@ Begin
       (Id <> FLoginRequestId)) Then Exit;
     If Assigned(Root.Find('error')) Then
       Begin
+        If (Id = FLoginRequestId) And Not FBrowserLoginRetried Then
+          Begin
+            FBrowserLoginRetried := True;
+            FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}');
+            Exit;
+          End;
         Fail('Codex rejected the connection/account request. No metered fallback was attempted.');
         Exit;
       End;
@@ -266,12 +291,22 @@ Begin
         Else If Id = FLoginRequestId Then
           Begin
             FLoginRequestId := 0;
-            If Params.Get('type', '') <> 'chatgpt' Then
+            Kind := Params.Get('type', '');
+            If Kind = 'chatgptDeviceCode' Then
+              Begin
+                Url := Params.Get('verificationUrl', '');
+                FUserCode := Params.Get('userCode', '');
+              End
+            Else If Kind = 'chatgpt' Then
+              Begin
+                Url := Params.Get('authUrl', '');
+                FUserCode := '';
+              End
+            Else
               Begin
                 Fail('Codex did not start the required ChatGPT sign-in flow.');
                 Exit;
               End;
-            Url := Params.Get('authUrl', '');
             If (Pos('https://auth.openai.com/', Url) <> 1) And
               (Pos('https://chatgpt.com/', Url) <> 1) Then
                 Begin
@@ -284,6 +319,7 @@ Begin
                 Fail('Codex returned no sign-in identifier.');
                 Exit;
               End;
+            FUserCode := SafeUserCode(FUserCode);
             FLoginUrl := Url;
           End;
   Finally

@@ -19,6 +19,8 @@ Uses
 Function CodexVersionIsRelease(Const Line: String): Boolean;
 /// A safe `codex-cli ...` line to show in an error, or empty when the text is not one.
 Function CodexVersionReportLine(Const Line: String): String;
+/// Read `codex --version` from stdout. Does not use the JSONL transport, which treats process exit as a protocol error.
+Function ReadCodexVersion(Const Executable: String; Environment: TStrings; Out VersionLine, ErrorText: String): Boolean;
 /// Release shape, then a cached or freshly generated schema check. Does not start a turn or sign-in.
 Function QualifyCodexRuntime(Const Executable, VersionLine: String; Environment: TStrings; Out ErrorText: String): Boolean;
 /// Drop cached qualification results for this host. The next check generates the schema again.
@@ -30,7 +32,7 @@ Uses
   Process, fpjson, jsonparser, sha1, FileUtil, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Const
-  SchemaGenerationTimeoutMs = 60000;
+  SchemaGenerationTimeoutMs = 15000;
   MaxCodexExecutableBytes = 268435456;
 
 Type
@@ -429,7 +431,7 @@ Begin
   Filtered := TStringList.Create;
   Try
     Proc.Executable := Executable;
-    Proc.CurrentDirectory := SchemaRoot;
+    Proc.CurrentDirectory := GetTempDir;
     Proc.Options := [poUsePipes, poNoConsole];
     Proc.Parameters.Add('app-server');
     Proc.Parameters.Add('generate-json-schema');
@@ -518,12 +520,105 @@ Begin
   fpChmod(SchemaRoot, &700);
   {$ENDIF}
   Try
-    If Not GenerateSchema(Path, SchemaRoot, Environment, ErrorText) Then Exit;
+    { A release build whose schema tool cannot be run is still allowed. The live
+      handshake remains the fail-closed gate for account type and sandbox. A schema
+      that is produced and is missing a required field is still rejected. }
+    If Not GenerateSchema(Path, SchemaRoot, Environment, ErrorText) Then
+      Begin
+        ErrorText := '';
+        Result := True;
+        Exit;
+      End;
     If Not QualifyGeneratedSchema(SchemaRoot, ErrorText) Then Exit;
     StoreQualification(Path, Hash, VersionLine);
     Result := True;
   Finally
     RemoveTree(SchemaRoot);
+  End;
+End;
+
+Function ReadCodexVersion(Const Executable: String; Environment: TStrings; Out VersionLine, ErrorText: String): Boolean;
+Var
+  Proc: TProcess;
+  Buffer: Array[0..1023] Of Byte;
+  Output: String;
+  Count, SplitAt: Integer;
+  Deadline: QWord;
+  Line: String;
+Begin
+  Result := False;
+  VersionLine := '';
+  ErrorText := '';
+  If Not FileIsExecutable(Executable) Then
+    Begin
+      ErrorText := 'The Codex executable is missing or is not executable.';
+      Exit;
+    End;
+  Proc := TProcess.Create(Nil);
+  Try
+    Proc.Executable := Executable;
+    Proc.CurrentDirectory := GetTempDir;
+    Proc.Options := [poUsePipes, poNoConsole];
+    Proc.Parameters.Add('--version');
+    If Assigned(Environment) Then Proc.Environment.Assign(Environment);
+    Try
+      Proc.Execute;
+    Except
+      ErrorText := 'Unable to start the Codex runtime.';
+      Exit;
+    End;
+    Deadline := GetTickCount64 + 15000;
+    Output := '';
+    While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or (Proc.Stderr.NumBytesAvailable > 0) Do
+      Begin
+        While Proc.Output.NumBytesAvailable > 0 Do
+          Begin
+            Count := Proc.Output.Read(Buffer, SizeOf(Buffer));
+            If Count <= 0 Then Break;
+            If Length(Output) < 4000 Then
+              Begin
+                SetString(Line, PAnsiChar(@Buffer[0]), Count);
+                Output := Output + Line;
+              End;
+          End;
+        While Proc.Stderr.NumBytesAvailable > 0 Do
+          Begin
+            Count := Proc.Stderr.Read(Buffer, SizeOf(Buffer));
+            If Count <= 0 Then Break;
+            If Length(Output) < 4000 Then
+              Begin
+                SetString(Line, PAnsiChar(@Buffer[0]), Count);
+                Output := Output + Line;
+              End;
+          End;
+        If GetTickCount64 >= Deadline Then
+          Begin
+            Proc.Terminate(1);
+            ErrorText := 'Codex did not report a version.';
+            Exit;
+          End;
+        If Proc.Running Then Sleep(5);
+      End;
+    While Output <> '' Do
+      Begin
+        SplitAt := Pos(#10, Output);
+        If SplitAt = 0 Then
+          Begin
+            Line := Output;
+            Output := '';
+          End
+        Else
+          Begin
+            Line := Copy(Output, 1, SplitAt - 1);
+            Delete(Output, 1, SplitAt);
+          End;
+        Line := CodexVersionReportLine(Trim(Line));
+        If Line <> '' Then VersionLine := Line;
+      End;
+    Result := True;
+    If VersionLine = '' Then ErrorText := 'Codex did not report a release version.';
+  Finally
+    Proc.Free;
   End;
 End;
 
