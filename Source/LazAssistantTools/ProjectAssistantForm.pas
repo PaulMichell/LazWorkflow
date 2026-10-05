@@ -31,6 +31,9 @@ Uses
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
     ActionList: TActionList;
+    ModeCombo: TComboBox;
+    ModeLabel: TLabel;
+    ModelStatusLabel: TLabel;
     NewChatAction: TAction;
     NewPlanAction: TAction;
     RunPlanAction: TAction;
@@ -44,6 +47,9 @@ Type
     ReviewChangesAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
+    TargetBrowseButton: TButton;
+    TargetCombo: TComboBox;
+    TargetLabel: TLabel;
     ToggleToolUseAction: TAction;
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
@@ -94,21 +100,12 @@ Type
     SessionInfoMenuItem: TMenuItem;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
-    TargetRow: TPanel;
-    TargetLabel: TLabel;
-    TargetCombo: TComboBox;
-    TargetBrowseButton: TButton;
-    ModePicker: TPanel;
-    ModeLabel: TLabel;
-    ModeCombo: TComboBox;
     SidebarPages: TPageControl;
     HistorySheet: TTabSheet;
     PlanSheet: TTabSheet;
     ModeSplitter: TSplitter;
     ConversationColumn: TPanel;
     ConversationHeader: TPanel;
-    SessionControlRow: TPanel;
-    ModelStatusLabel: TLabel;
     PromptHost: TPanel;
     ConversationLabel: TLabel;
     ConversationList: TListBox;
