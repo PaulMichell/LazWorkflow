@@ -1019,8 +1019,15 @@ Begin
       UTF8Key := '';
       Exit;
     End;
-  If (UTF8Key = #9) And (Not FWantTabs) Then
-    Exit;
+  If UTF8Key = #9 Then
+    Begin
+      If FWantTabs Then
+        Begin
+          InsertText(#9);
+          UTF8Key := '';
+        End;
+      Exit;
+    End;
   If (UTF8Key = #13) Or (UTF8Key = #10) Then
     Begin
       If FWantReturns Then
@@ -1174,6 +1181,12 @@ Begin
       If ssCtrl In Shift Then
         Begin
           PasteFromClipboard;
+          Key := 0;
+        End;
+    VK_TAB:
+      If FWantTabs Then
+        Begin
+          InsertText(#9);
           Key := 0;
         End;
   Else
