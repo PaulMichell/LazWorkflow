@@ -2,9 +2,9 @@ Unit SpellMemo;
 
 { Portable LCL memo with optional Hunspell/ASpell markup (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. Wrap layout, caret/selection
-  and spell markup are one painted control so underlines stay widgetset-free.
-  Reviewed 2026-09: no hidden sibling material. }
+  Size note: exceeds the 1000 line preference. Wrap layout, caret/selection,
+  undo grouping and spell markup are one painted control so edits and
+  underlines stay widgetset-free. Reviewed 2026-10: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -28,6 +28,17 @@ Type
   TSpellParagraphLayout = Class
     Text: String;
     Lines: TSpellPaintLineArray;
+  End;
+  TSpellEditKind = (ekTyping, ekBackspace, ekForwardDelete, ekPaste, ekDiscrete);
+  TSpellUndoEntry = Record
+    CharStart: Integer;
+    Removed: String;
+    Inserted: String;
+    UndoSelStart: Integer;
+    UndoSelLength: Integer;
+    RedoSelStart: Integer;
+    RedoSelLength: Integer;
+    Kind: TSpellEditKind;
   End;
 
   TSpellMemo = Class(TCustomControl)
@@ -64,10 +75,17 @@ Type
     FActiveLength: Integer;
     FHostPopupHandler: TNotifyEvent;
     FHookedPopup: TPopupMenu;
+    FEditUndoItem: TMenuItem;
+    FEditRedoItem: TMenuItem;
     FEditCutItem: TMenuItem;
     FEditCopyItem: TMenuItem;
     FEditPasteItem: TMenuItem;
     FEditSelectAllItem: TMenuItem;
+    FUndoStack: Array Of TSpellUndoEntry;
+    FUndoIndex: Integer;
+    FApplyingHistory: Boolean;
+    FLastEditTick: QWord;
+    FMenuHistory: Boolean;
     FPaintLines: TSpellPaintLineArray;
     FContentHeight: Integer;
     FScrollBar: TScrollBar;
@@ -90,10 +108,17 @@ Type
     Procedure EnsurePopupHook;
     Procedure EnsureEditMenu;
     Procedure UpdateEditMenu;
+    Procedure EditUndoClick(Sender: TObject);
+    Procedure EditRedoClick(Sender: TObject);
     Procedure EditCutClick(Sender: TObject);
     Procedure EditCopyClick(Sender: TObject);
     Procedure EditPasteClick(Sender: TObject);
     Procedure EditSelectAllClick(Sender: TObject);
+    Procedure ClearUndoHistory;
+    Procedure ClearMenuHistory(Data: PtrInt);
+    Procedure RememberEdit(Const Entry: TSpellUndoEntry);
+    Procedure ApplyTextChange(CharStart, RemoveCount: Integer; Const Inserted: String; NewSelStart, NewSelLength: Integer);
+    Procedure ReplaceRange(CharStart, RemoveCount: Integer; Const Inserted: String; Kind: TSpellEditKind);
     Function SpellActive: Boolean;
     Procedure ReplaceActiveWord(Const NewText: String);
     Procedure SetWordWrap(Value: Boolean);
@@ -123,8 +148,9 @@ Type
     Function CaretPixel: TPoint;
     Procedure UpdateCaret;
     Procedure InsertText(Const AddText: String);
+    Procedure InsertText(Const AddText: String; Kind: TSpellEditKind);
     Procedure DeleteSelection;
-    Procedure DeleteRange(CharStart, CharCount: Integer);
+    Procedure DeleteRange(CharStart, CharCount: Integer; Kind: TSpellEditKind);
     Function CharCount: Integer;
     Procedure ClampSelection;
     Function CanLayout: Boolean;
@@ -164,6 +190,11 @@ Type
     Procedure CopyToClipboard;
     Procedure CutToClipboard;
     Procedure PasteFromClipboard;
+    Function CanUndo: Boolean;
+    Function CanRedo: Boolean;
+    Procedure Undo;
+    Procedure Redo;
+    Procedure NoteMenuShortcut;
 
     Property SelStart: Integer Read FSelStart Write SetSelStart;
     Property SelLength: Integer Read FSelLength Write SetSelLength;
@@ -210,6 +241,40 @@ Implementation
 
 Uses
   Dialogs, Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
+
+Const
+  SpellUndoLimit = 200;
+  SpellUndoGroupMs = 1000;
+
+Function NormaliseMemoText(Const Value: String): String;
+Begin
+  Result := StringReplace(Value, #13#10, #10, [rfReplaceAll]);
+  Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
+End;
+
+Function TypingGroupClosed(Const Value: String): Boolean;
+Begin
+  If Value = '' Then
+    Exit(True);
+  Result := Value[Length(Value)] In [#10, #9];
+End;
+
+{ Letters and punctuation stay in one burst. A space starts or continues a
+  space burst, so Ctrl+Z removes the last word rather than the whole prompt. }
+Function CanMergeTyping(Const Previous: TSpellUndoEntry; Const Added: String; InsertAt: Integer): Boolean;
+Var
+  PrevChar: String;
+Begin
+  Result := False;
+  If (UTF8Length(Added) <> 1) Or (Added = #10) Or (Added = #9) Then
+    Exit;
+  If TypingGroupClosed(Previous.Inserted) Then
+    Exit;
+  If InsertAt <> Previous.CharStart + UTF8Length(Previous.Inserted) Then
+    Exit;
+  PrevChar := UTF8Copy(Previous.Inserted, UTF8Length(Previous.Inserted), 1);
+  Result := (PrevChar = ' ') = (Added = ' ');
+End;
 
 Constructor TSpellMemo.Create(TheOwner: TComponent);
 Begin
@@ -318,10 +383,12 @@ Procedure TSpellMemo.RealSetText(Const Value: TCaption);
 Var
   Clean: String;
 Begin
-  Clean := StringReplace(Value, #13#10, #10, [rfReplaceAll]);
-  Clean := StringReplace(Clean, #13, #10, [rfReplaceAll]);
+  Clean := NormaliseMemoText(Value);
   If FText = Clean Then
     Exit;
+  { A host replacement is not a text edit. Drop history so undo cannot return
+    a previous prompt after a load, a clear, or a sent message. }
+  ClearUndoHistory;
   FText := Clean;
   FSelStart := UTF8Length(FText);
   FSelLength := 0;
@@ -402,6 +469,10 @@ End;
 
 Procedure TSpellMemo.Change;
 Begin
+  If Assigned(FEditUndoItem) Then
+    FEditUndoItem.Enabled := CanUndo;
+  If Assigned(FEditRedoItem) Then
+    FEditRedoItem.Enabled := CanRedo;
   If Assigned(FOnChange) Then
     FOnChange(Self);
 End;
@@ -431,7 +502,13 @@ End;
 
 Procedure TSpellMemo.SetReadOnly(Value: Boolean);
 Begin
+  If FReadOnly = Value Then
+    Exit;
   FReadOnly := Value;
+  If Assigned(FEditUndoItem) Then
+    FEditUndoItem.Enabled := CanUndo;
+  If Assigned(FEditRedoItem) Then
+    FEditRedoItem.Enabled := CanRedo;
 End;
 
 Procedure TSpellMemo.SetScrollBars(Value: TScrollStyle);
@@ -498,7 +575,8 @@ End;
 
 Procedure TSpellMemo.SetSelText(Const Value: String);
 Begin
-  InsertText(Value);
+  { Host paste and explicit inserts are one step, not part of the typing burst. }
+  InsertText(Value, ekPaste);
 End;
 
 Procedure TSpellMemo.SelectAll;
@@ -541,7 +619,7 @@ Begin
       FOnPaste(Self);
       Exit;
     End;
-  InsertText(Clipboard.AsText);
+  InsertText(Clipboard.AsText, ekPaste);
 End;
 
 Function TSpellMemo.TextAreaWidth: Integer;
@@ -958,55 +1036,213 @@ Begin
   RestartDebounce;
 End;
 
-Procedure TSpellMemo.DeleteRange(CharStart, CharCount: Integer);
-Var
-  ByteStart, ByteEnd: Integer;
+Procedure TSpellMemo.ClearUndoHistory;
 Begin
-  If (CharCount <= 0) Or FReadOnly Then
-    Exit;
-  ByteStart := SpellCharToByteIndex(FText, CharStart);
-  ByteEnd := SpellCharToByteIndex(FText, CharStart + CharCount);
-  System.Delete(FText, ByteStart, ByteEnd - ByteStart);
-  FSelStart := CharStart;
-  FSelLength := 0;
-  FSelAnchor := FSelStart;
-  QueueInputLayout;
-  RestartDebounce;
-  Change;
+  FUndoStack := Nil;
+  FUndoIndex := 0;
+  FLastEditTick := 0;
 End;
 
-Procedure TSpellMemo.DeleteSelection;
+Procedure TSpellMemo.ClearMenuHistory(Data: PtrInt);
 Begin
-  If FSelLength > 0 Then
-    DeleteRange(FSelStart, FSelLength);
+  If Data = 0 Then
+    FMenuHistory := False;
 End;
 
-Procedure TSpellMemo.InsertText(Const AddText: String);
-Var
-  Clean: String;
-  ByteStart, ByteEnd: Integer;
+Procedure TSpellMemo.NoteMenuShortcut;
 Begin
-  If FReadOnly Then
-    Exit;
-  Clean := StringReplace(AddText, #13#10, #10, [rfReplaceAll]);
-  Clean := StringReplace(Clean, #13, #10, [rfReplaceAll]);
-  If FSelLength > 0 Then
+  { The popup accelerator runs before KeyDown. Mark this command so the key
+    handler does not apply it a second time, then clear the mark if the key
+    never arrives. }
+  FMenuHistory := True;
+  Application.QueueAsyncCall(@ClearMenuHistory, 0);
+End;
+
+Procedure TSpellMemo.RememberEdit(Const Entry: TSpellUndoEntry);
+Var
+  NowTick: QWord;
+  Index, Last: Integer;
+Begin
+  If FUndoIndex < Length(FUndoStack) Then
+    SetLength(FUndoStack, FUndoIndex);
+  NowTick := GetTickCount64;
+  Last := FUndoIndex - 1;
+  If (Last >= 0) And (NowTick - FLastEditTick <= SpellUndoGroupMs) And (Entry.Kind = FUndoStack[Last].Kind) Then
     Begin
-      ByteStart := SpellCharToByteIndex(FText, FSelStart);
-      ByteEnd := SpellCharToByteIndex(FText, FSelStart + FSelLength);
-      System.Delete(FText, ByteStart, ByteEnd - ByteStart);
-    End
-  Else
-    ByteStart := SpellCharToByteIndex(FText, FSelStart);
-  System.Insert(Clean, FText, ByteStart);
-  FSelStart := FSelStart + UTF8Length(Clean);
-  FSelLength := 0;
+      If (Entry.Kind = ekTyping) And (Entry.Removed = '') And
+        CanMergeTyping(FUndoStack[Last], Entry.Inserted, Entry.CharStart) Then
+        Begin
+          FUndoStack[Last].Inserted := FUndoStack[Last].Inserted + Entry.Inserted;
+          FUndoStack[Last].RedoSelStart := Entry.RedoSelStart;
+          FUndoStack[Last].RedoSelLength := Entry.RedoSelLength;
+          FLastEditTick := NowTick;
+          Exit;
+        End;
+      If (Entry.Kind = ekBackspace) And (Entry.Inserted = '') And (UTF8Length(Entry.Removed) = 1) And
+        (Entry.CharStart + UTF8Length(Entry.Removed) = FUndoStack[Last].CharStart) Then
+        Begin
+          FUndoStack[Last].Removed := Entry.Removed + FUndoStack[Last].Removed;
+          FUndoStack[Last].CharStart := Entry.CharStart;
+          FUndoStack[Last].RedoSelStart := Entry.RedoSelStart;
+          FUndoStack[Last].RedoSelLength := Entry.RedoSelLength;
+          FLastEditTick := NowTick;
+          Exit;
+        End;
+      If (Entry.Kind = ekForwardDelete) And (Entry.Inserted = '') And (UTF8Length(Entry.Removed) = 1) And
+        (Entry.CharStart = FUndoStack[Last].CharStart) Then
+        Begin
+          FUndoStack[Last].Removed := FUndoStack[Last].Removed + Entry.Removed;
+          FUndoStack[Last].RedoSelStart := Entry.RedoSelStart;
+          FUndoStack[Last].RedoSelLength := Entry.RedoSelLength;
+          FLastEditTick := NowTick;
+          Exit;
+        End;
+    End;
+  If FUndoIndex >= SpellUndoLimit Then
+    Begin
+      For Index := 1 To FUndoIndex - 1 Do
+        FUndoStack[Index - 1] := FUndoStack[Index];
+      Dec(FUndoIndex);
+      SetLength(FUndoStack, FUndoIndex);
+    End;
+  SetLength(FUndoStack, FUndoIndex + 1);
+  FUndoStack[FUndoIndex] := Entry;
+  Inc(FUndoIndex);
+  FLastEditTick := NowTick;
+End;
+
+Procedure TSpellMemo.ApplyTextChange(CharStart, RemoveCount: Integer; Const Inserted: String; NewSelStart, NewSelLength: Integer);
+Var
+  ByteStart, ByteEnd, Total: Integer;
+Begin
+  Total := CharCount;
+  If CharStart < 0 Then
+    CharStart := 0;
+  If CharStart > Total Then
+    CharStart := Total;
+  If RemoveCount < 0 Then
+    RemoveCount := 0;
+  If CharStart + RemoveCount > Total Then
+    RemoveCount := Total - CharStart;
+  ByteStart := SpellCharToByteIndex(FText, CharStart);
+  ByteEnd := SpellCharToByteIndex(FText, CharStart + RemoveCount);
+  If ByteEnd > ByteStart Then
+    System.Delete(FText, ByteStart, ByteEnd - ByteStart);
+  If Inserted <> '' Then
+    System.Insert(Inserted, FText, ByteStart);
+  FSelStart := NewSelStart;
+  FSelLength := NewSelLength;
+  If FSelLength < 0 Then
+    FSelLength := 0;
   FSelAnchor := FSelStart;
+  ClampSelection;
   { Record edits and notify the host immediately. Coalesce text measurement
     so rapid keyboard events cannot queue behind per-character rewrapping. }
   QueueInputLayout;
   RestartDebounce;
   Change;
+End;
+
+Procedure TSpellMemo.ReplaceRange(CharStart, RemoveCount: Integer; Const Inserted: String; Kind: TSpellEditKind);
+Var
+  Clean, Removed: String;
+  ByteStart, ByteEnd, Total: Integer;
+  Entry: TSpellUndoEntry;
+Begin
+  If FReadOnly Or FApplyingHistory Then
+    Exit;
+  Clean := NormaliseMemoText(Inserted);
+  Total := CharCount;
+  If CharStart < 0 Then
+    CharStart := 0;
+  If CharStart > Total Then
+    CharStart := Total;
+  If RemoveCount < 0 Then
+    RemoveCount := 0;
+  If CharStart + RemoveCount > Total Then
+    RemoveCount := Total - CharStart;
+  If (RemoveCount = 0) And (Clean = '') Then
+    Exit;
+  ByteStart := SpellCharToByteIndex(FText, CharStart);
+  ByteEnd := SpellCharToByteIndex(FText, CharStart + RemoveCount);
+  Removed := Copy(FText, ByteStart, ByteEnd - ByteStart);
+  If Removed = Clean Then
+    Exit;
+  Entry.CharStart := CharStart;
+  Entry.Removed := Removed;
+  Entry.Inserted := Clean;
+  Entry.UndoSelStart := FSelStart;
+  Entry.UndoSelLength := FSelLength;
+  Entry.RedoSelStart := CharStart + UTF8Length(Clean);
+  Entry.RedoSelLength := 0;
+  Entry.Kind := Kind;
+  RememberEdit(Entry);
+  ApplyTextChange(CharStart, RemoveCount, Clean, Entry.RedoSelStart, Entry.RedoSelLength);
+End;
+
+Procedure TSpellMemo.DeleteRange(CharStart, CharCount: Integer; Kind: TSpellEditKind);
+Begin
+  ReplaceRange(CharStart, CharCount, '', Kind);
+End;
+
+Procedure TSpellMemo.DeleteSelection;
+Begin
+  If FSelLength > 0 Then
+    DeleteRange(FSelStart, FSelLength, ekDiscrete);
+End;
+
+Procedure TSpellMemo.InsertText(Const AddText: String);
+Begin
+  InsertText(AddText, ekTyping);
+End;
+
+Procedure TSpellMemo.InsertText(Const AddText: String; Kind: TSpellEditKind);
+Begin
+  If FReadOnly Then
+    Exit;
+  ReplaceRange(FSelStart, FSelLength, AddText, Kind);
+End;
+
+Function TSpellMemo.CanUndo: Boolean;
+Begin
+  Result := (Not FReadOnly) And (FUndoIndex > 0);
+End;
+
+Function TSpellMemo.CanRedo: Boolean;
+Begin
+  Result := (Not FReadOnly) And (FUndoIndex < Length(FUndoStack));
+End;
+
+Procedure TSpellMemo.Undo;
+Var
+  Entry: TSpellUndoEntry;
+Begin
+  If Not CanUndo Then
+    Exit;
+  Dec(FUndoIndex);
+  Entry := FUndoStack[FUndoIndex];
+  FApplyingHistory := True;
+  Try
+    ApplyTextChange(Entry.CharStart, UTF8Length(Entry.Inserted), Entry.Removed, Entry.UndoSelStart, Entry.UndoSelLength);
+  Finally
+    FApplyingHistory := False;
+  End;
+End;
+
+Procedure TSpellMemo.Redo;
+Var
+  Entry: TSpellUndoEntry;
+Begin
+  If Not CanRedo Then
+    Exit;
+  Entry := FUndoStack[FUndoIndex];
+  Inc(FUndoIndex);
+  FApplyingHistory := True;
+  Try
+    ApplyTextChange(Entry.CharStart, UTF8Length(Entry.Removed), Entry.Inserted, Entry.RedoSelStart, Entry.RedoSelLength);
+  Finally
+    FApplyingHistory := False;
+  End;
 End;
 
 Procedure TSpellMemo.UTF8KeyPress(Var UTF8Key: TUTF8Char);
@@ -1140,7 +1376,7 @@ Begin
         If FSelLength > 0 Then
           DeleteSelection
         Else If FSelStart > 0 Then
-          DeleteRange(FSelStart - 1, 1);
+          DeleteRange(FSelStart - 1, 1, ekBackspace);
         Key := 0;
       End;
     VK_DELETE:
@@ -1150,9 +1386,22 @@ Begin
         If FSelLength > 0 Then
           DeleteSelection
         Else If FSelStart < CharCount Then
-          DeleteRange(FSelStart, 1);
+          DeleteRange(FSelStart, 1, ekForwardDelete);
         Key := 0;
       End;
+    VK_Z:
+      If (ssCtrl In Shift) And (Not (ssAlt In Shift)) Then
+        Begin
+          If Not FMenuHistory Then
+            Begin
+              If ssShift In Shift Then
+                Redo
+              Else
+                Undo;
+            End;
+          FMenuHistory := False;
+          Key := 0;
+        End;
     VK_A:
       If ssCtrl In Shift Then
         Begin
@@ -1449,6 +1698,19 @@ Var
 Begin
   If (Not Assigned(FOwnedPopup)) Or Assigned(FEditCutItem) Then
     Exit;
+  FEditUndoItem := TMenuItem.Create(FOwnedPopup);
+  FEditUndoItem.Caption := 'Undo';
+  FEditUndoItem.ShortCut := ShortCut(Ord('Z'), [ssCtrl]);
+  FEditUndoItem.OnClick := @EditUndoClick;
+  FOwnedPopup.Items.Add(FEditUndoItem);
+  FEditRedoItem := TMenuItem.Create(FOwnedPopup);
+  FEditRedoItem.Caption := 'Redo';
+  FEditRedoItem.ShortCut := ShortCut(Ord('Z'), [ssCtrl, ssShift]);
+  FEditRedoItem.OnClick := @EditRedoClick;
+  FOwnedPopup.Items.Add(FEditRedoItem);
+  Sep := TMenuItem.Create(FOwnedPopup);
+  Sep.Caption := '-';
+  FOwnedPopup.Items.Add(Sep);
   FEditCutItem := TMenuItem.Create(FOwnedPopup);
   FEditCutItem.Caption := 'Cut';
   FEditCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
@@ -1472,6 +1734,19 @@ Begin
   FEditSelectAllItem.ShortCut := ShortCut(Ord('A'), [ssCtrl]);
   FEditSelectAllItem.OnClick := @EditSelectAllClick;
   FOwnedPopup.Items.Add(FEditSelectAllItem);
+  UpdateEditMenu;
+End;
+
+Procedure TSpellMemo.EditUndoClick(Sender: TObject);
+Begin
+  NoteMenuShortcut;
+  Undo;
+End;
+
+Procedure TSpellMemo.EditRedoClick(Sender: TObject);
+Begin
+  NoteMenuShortcut;
+  Redo;
 End;
 
 Procedure TSpellMemo.EditCutClick(Sender: TObject);
@@ -1500,6 +1775,10 @@ Var
 Begin
   HasSel := FSelLength > 0;
   CanEdit := Not FReadOnly;
+  If Assigned(FEditUndoItem) Then
+    FEditUndoItem.Enabled := CanUndo;
+  If Assigned(FEditRedoItem) Then
+    FEditRedoItem.Enabled := CanRedo;
   If Assigned(FEditCutItem) Then
     FEditCutItem.Enabled := HasSel And CanEdit;
   If Assigned(FEditCopyItem) Then
@@ -1722,7 +2001,7 @@ Begin
   CharEnd := SpellByteToCharOffset(FText, FActiveStart + FActiveLength);
   FSelStart := CharStart;
   FSelLength := CharEnd - CharStart;
-  InsertText(NewText);
+  InsertText(NewText, ekDiscrete);
 End;
 
 Procedure TSpellMemo.SuggestionClick(Sender: TObject);

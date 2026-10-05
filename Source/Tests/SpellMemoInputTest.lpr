@@ -11,6 +11,7 @@ Type
     Procedure TypeText(Const Value: String);
     Procedure Press(Key: Word; Shift: TShiftState = []);
     Procedure CheckWrap(Const Value: String; AWidth: Integer);
+    Procedure CheckUndo;
     Procedure ApplyAmpersandSuggestion;
   End;
 
@@ -41,6 +42,152 @@ Begin
   KeyDown(Key, Shift);
 End;
 
+Procedure TInputMemo.CheckUndo;
+Var
+  Handled: Boolean;
+  Index, UndoAt, RedoAt, CutAt: Integer;
+  UndoItem, RedoItem: TMenuItem;
+Begin
+  Clear;
+  TypeText('ab cd');
+  Press(VK_Z, [ssCtrl]);
+  Check('ctrl+z removes the last word', Text = 'ab ');
+  Press(VK_Z, [ssCtrl]);
+  Check('ctrl+z removes the space burst', Text = 'ab');
+  Press(VK_Z, [ssCtrl, ssShift]);
+  Check('ctrl+shift+z redoes one group', Text = 'ab ');
+  Redo;
+  Check('redo restores the word', Text = 'ab cd');
+  Undo;
+  TypeText('x');
+  Check('a new edit drops redo', (Text = 'ab x') And Not CanRedo);
+
+  Clear;
+  TypeText('hello');
+  SelStart := 1;
+  SelLength := 3;
+  TypeText('i');
+  Check('typing over a selection', Text = 'hio');
+  Undo;
+  Check('undo restores the replaced selection', (Text = 'hello') And (SelStart = 1) And (SelLength = 3));
+
+  Clear;
+  TypeText('abcd');
+  Press(VK_BACK);
+  Press(VK_BACK);
+  Undo;
+  Check('backspace burst undoes together', Text = 'abcd');
+  Press(VK_HOME);
+  Press(VK_DELETE);
+  Press(VK_DELETE);
+  Undo;
+  Check('forward-delete burst undoes together', Text = 'abcd');
+
+  Clear;
+  TypeText('ab'+#10+'c');
+  Undo;
+  Check('undo stops at the newline', Text = 'ab'+#10);
+  Undo;
+  Check('newline is its own step', Text = 'ab');
+  Undo;
+  Check('first line undoes after the newline', Text = '');
+
+  Clear;
+  TypeText('café😀');
+  Undo;
+  Check('undo removes a utf-8 typing burst', Text = '');
+  Redo;
+  Check('redo restores utf-8', Text = 'café😀');
+  Press(VK_BACK);
+  Check('backspace still removes one codepoint', Text = 'café');
+  Undo;
+  Check('undo restores the emoji', Text = 'café😀');
+
+  Clear;
+  TypeText('pre');
+  SelText := 'PASTED';
+  TypeText('post');
+  Undo;
+  Check('typing after a paste is a separate step', Text = 'prePASTED');
+  Undo;
+  Check('paste undoes as one step', Text = 'pre');
+
+  Clear;
+  TypeText('hello');
+  SelStart := 1;
+  SelLength := 4;
+  CutToClipboard;
+  Undo;
+  Check('undo cut restores the selection', (Text = 'hello') And (SelStart = 1) And (SelLength = 4));
+
+  Clear;
+  TypeText('keep');
+  Text := 'loaded';
+  Check('replacing the text drops history', Not CanUndo And Not CanRedo);
+  Undo;
+  Check('undo cannot return the replaced prompt', Text = 'loaded');
+
+  Clear;
+  TypeText('x');
+  ReadOnly := True;
+  Press(VK_Z, [ssCtrl]);
+  Check('read-only ctrl+z does not change text', (Text = 'x') And Not CanUndo);
+  ReadOnly := False;
+  Press(VK_Z, [ssCtrl]);
+  Check('ctrl+z works again when editing returns', Text = '');
+  Press(VK_Z, [ssCtrl, ssShift]);
+  Check('ctrl+shift+z restores the cleared edit', Text = 'x');
+
+  Clear;
+  TypeText('aa');
+  Sleep(1100);
+  TypeText('b');
+  Undo;
+  Check('a pause starts a new undo group', Text = 'aa');
+
+  Clear;
+  { The memo keeps 200 undo entries. One more newline drops the oldest. }
+  For Index := 1 To 201 Do
+    TypeText(#10);
+  For Index := 1 To 200 Do
+    Undo;
+  Check('undo history stays bounded', (Text = #10) And Not CanUndo);
+
+  Handled := False;
+  DoContextPopup(Point(4, 4), Handled);
+  UndoItem := Nil;
+  RedoItem := Nil;
+  UndoAt := -1;
+  RedoAt := -1;
+  CutAt := -1;
+  If Assigned(PopupMenu) Then
+    For Index := 0 To PopupMenu.Items.Count - 1 Do
+      Begin
+        If PopupMenu.Items[Index].Caption = 'Undo' Then
+          Begin
+            UndoItem := PopupMenu.Items[Index];
+            UndoAt := Index;
+          End;
+        If PopupMenu.Items[Index].Caption = 'Redo' Then
+          Begin
+            RedoItem := PopupMenu.Items[Index];
+            RedoAt := Index;
+          End;
+        If PopupMenu.Items[Index].Caption = 'Cut' Then
+          CutAt := Index;
+      End;
+  Check('popup lists undo', Assigned(UndoItem) And (UndoItem.ShortCut = ShortCut(Ord('Z'), [ssCtrl])));
+  Check('popup lists redo', Assigned(RedoItem) And (RedoItem.ShortCut = ShortCut(Ord('Z'), [ssCtrl, ssShift])));
+  Check('undo sits before cut', (UndoAt >= 0) And (RedoAt > UndoAt) And (CutAt > RedoAt));
+  Clear;
+  TypeText('menu');
+  UndoItem.Click;
+  Check('undo command removes the typing burst', Text = '');
+  RedoItem.Click;
+  Check('redo command restores it', Text = 'menu');
+  Application.ProcessMessages;
+End;
+
 Procedure TInputMemo.ApplyAmpersandSuggestion;
 Var
   Menu: TPopupMenu;
@@ -59,6 +206,11 @@ Begin
     Menu.Free;
   End;
   Check('suggestion AT&T replaces the word', Text = 'AT&T');
+  Check('suggestion is one undo step', CanUndo);
+  Undo;
+  Check('undo restores the misspelled word', Text = 'wrod');
+  Redo;
+  Check('redo applies the suggestion', Text = 'AT&T');
 End;
 
 Procedure TInputMemo.CheckWrap(Const Value: String; AWidth: Integer);
@@ -199,11 +351,12 @@ Begin
     Memo.Press(VK_HOME);
     Memo.Press(VK_END);
     Check('unwrapped End', Memo.SelStart = Length(Prompt));
+    Memo.CheckUndo;
     Memo.ApplyAmpersandSuggestion;
     Memo.TypeText(' pending at destruction');
     Memo.Free;
     Application.ProcessMessages;
-    WriteLn('ok UTF-8, selection replacement, deletion, paste/copy and read-only input');
+    WriteLn('ok UTF-8, selection replacement, deletion, paste/copy, undo/redo and read-only input');
   Finally
     Host.Free;
   End;

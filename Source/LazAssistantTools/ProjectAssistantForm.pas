@@ -130,6 +130,8 @@ Type
     AttachmentStrip: TPanel;
     InputMemo: TSpellMemo;
     InputPopup: TPopupMenu;
+    InputUndoItem: TMenuItem;
+    InputRedoItem: TMenuItem;
     InputCutItem: TMenuItem;
     InputCopyItem: TMenuItem;
     InputPasteItem: TMenuItem;
@@ -185,6 +187,9 @@ Type
     Procedure AttachmentImageDblClick(Sender: TObject);
     Procedure InputPanelDropFiles(Sender: TObject; Const FileNames: Array Of String);
     Procedure InputSelectAllClick(Sender: TObject);
+    Procedure InputUndoClick(Sender: TObject);
+    Procedure InputRedoClick(Sender: TObject);
+    Procedure InputMemoChange(Sender: TObject);
     Procedure ContextBreakdownActionExecute(Sender: TObject);
     Procedure SessionInfoActionExecute(Sender: TObject);
     Procedure ModelPickerActionExecute(Sender: TObject);
@@ -409,6 +414,7 @@ Type
     Procedure ApplyLiveAnswerSlice;
     Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
+    Procedure UpdateInputUndoItems;
     Procedure ScrollChatToEnd;
     Procedure ScrollChatToTop;
     Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
@@ -655,6 +661,7 @@ Begin
       InputMemo.BorderSpacing.Around := 0;
       InputMemo.OnKeyDown := @InputMemoKeyDown;
       InputMemo.OnPaste := @InputMemoPaste;
+      InputMemo.OnChange := @InputMemoChange;
     End;
   ApplyInputPanelHeight;
   If Assigned(ComposerStack) Then
@@ -3623,6 +3630,19 @@ Begin
     Exit;
   InputPopup := TPopupMenu.Create(Self);
   InputPopup.OnPopup := @InputPopupPopup;
+  InputUndoItem := TMenuItem.Create(InputPopup);
+  InputUndoItem.Caption := 'Undo';
+  InputUndoItem.ShortCut := ShortCut(Ord('Z'), [ssCtrl]);
+  InputUndoItem.OnClick := @InputUndoClick;
+  InputPopup.Items.Add(InputUndoItem);
+  InputRedoItem := TMenuItem.Create(InputPopup);
+  InputRedoItem.Caption := 'Redo';
+  InputRedoItem.ShortCut := ShortCut(Ord('Z'), [ssCtrl, ssShift]);
+  InputRedoItem.OnClick := @InputRedoClick;
+  InputPopup.Items.Add(InputRedoItem);
+  Sep := TMenuItem.Create(InputPopup);
+  Sep.Caption := '-';
+  InputPopup.Items.Add(Sep);
   InputCutItem := TMenuItem.Create(InputPopup);
   InputCutItem.Caption := 'Cut';
   InputCutItem.ShortCut := ShortCut(Ord('X'), [ssCtrl]);
@@ -3651,6 +3671,15 @@ Begin
   InputPopup.Items.Add(InputSelectAllItem);
   InputMemo.PopupMenu := InputPopup;
   InputMemo.WantTabs := False;
+  UpdateInputUndoItems;
+End;
+
+Procedure TProjectAssistantForm.UpdateInputUndoItems;
+Begin
+  If Assigned(InputUndoItem) Then
+    InputUndoItem.Enabled := Assigned(InputMemo) And InputMemo.CanUndo;
+  If Assigned(InputRedoItem) Then
+    InputRedoItem.Enabled := Assigned(InputMemo) And InputMemo.CanRedo;
 End;
 
 Function ClipboardHasImage: Boolean; Forward;
@@ -3673,6 +3702,7 @@ Begin
   RefreshAttachAction;
   If Assigned(InputSelectAllItem) Then
     InputSelectAllItem.Enabled := Assigned(InputMemo) And (InputMemo.GetTextLen > 0);
+  UpdateInputUndoItems;
 End;
 
 Procedure TProjectAssistantForm.InputCutClick(Sender: TObject);
@@ -4784,6 +4814,29 @@ Procedure TProjectAssistantForm.InputSelectAllClick(Sender: TObject);
 Begin
   If Assigned(InputMemo) Then
     InputMemo.SelectAll;
+End;
+
+Procedure TProjectAssistantForm.InputUndoClick(Sender: TObject);
+Begin
+  If Assigned(InputMemo) Then
+    Begin
+      InputMemo.NoteMenuShortcut;
+      InputMemo.Undo;
+    End;
+End;
+
+Procedure TProjectAssistantForm.InputRedoClick(Sender: TObject);
+Begin
+  If Assigned(InputMemo) Then
+    Begin
+      InputMemo.NoteMenuShortcut;
+      InputMemo.Redo;
+    End;
+End;
+
+Procedure TProjectAssistantForm.InputMemoChange(Sender: TObject);
+Begin
+  UpdateInputUndoItems;
 End;
 
 Procedure TProjectAssistantForm.ScrollChatToEnd;
