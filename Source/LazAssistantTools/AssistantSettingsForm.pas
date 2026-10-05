@@ -419,6 +419,7 @@ Begin
       Item.Model := Trim(CodexFrame.ModelCombo.Text);
       Item.ReasoningEffort := CodexFrame.ReasoningEffort;
       Item.ApprovalMode := CodexFrame.ApprovalMode;
+      Item.CachedModelsJson := CodexFrame.CachedModelsJson;
     End;
 End;
 
@@ -454,7 +455,7 @@ Begin
   If SelectedConnection < 0 Then Exit;
   Item := Connections[SelectedConnection]; ConnectionName.Text := Item.Name;
   GrokPanel.Visible := Item.Backend = 'grok'; CodexFrame.Visible := Item.Backend = 'codex';
-  If Item.Backend = 'codex' Then CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort, Item.ApprovalMode);
+  If Item.Backend = 'codex' Then CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort, Item.ApprovalMode, Item.CachedModelsJson);
 End;
 
 Procedure TAssistantSettingsForm.AddConnection(Sender: TObject);

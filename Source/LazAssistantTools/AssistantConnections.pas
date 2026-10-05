@@ -17,6 +17,7 @@ Uses
 Type
   TAssistantConnection = Class
     Id, Name, Backend, Runtime, Model, ReasoningEffort, ApprovalMode: String;
+    CachedModelsJson: String;
     Constructor Create;
   End;
   TAssistantConnections = Class

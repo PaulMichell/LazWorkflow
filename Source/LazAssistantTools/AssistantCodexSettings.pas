@@ -31,11 +31,12 @@ Type
     RuntimeEdit: TEdit;
     ModelCombo, EffortCombo, ApprovalCombo: TComboBox;
     Profile: String;
-    Procedure LoadConnection(Const ProfileDir, Runtime, Model: String; Const Effort: String = ''; Const Approval: String = 'ask');
+    Procedure LoadConnection(Const ProfileDir, Runtime, Model: String; Const Effort: String = ''; Const Approval: String = 'ask'; Const CachedModels: String = '');
     Procedure LoadModels(Const Value: String);
     Function ReasoningEffort: String;
     Function ApprovalMode: String;
     Function Busy: Boolean;
+    Property CachedModelsJson: String Read ModelsJson;
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
   End;
@@ -134,7 +135,7 @@ Begin
   LabelControl.AutoSize := False;
   LabelControl.SetBounds(16, 215, 625, 54);
   LabelControl.WordWrap := True;
-  LabelControl.Caption := 'Refresh models to discover supported reasoning levels. Ask is read-only; Plan can write Markdown. Auto and Always currently allow the same bounded Lazarus tools.';
+  LabelControl.Caption := 'Model and reasoning lists are remembered when settings are saved. Refresh models to update them. Ask is read-only; Plan can write Markdown. Auto and Always currently allow the same bounded Lazarus tools.';
   SignIn := TButton.Create(Self);
   SignIn.Parent := Self;
   SignIn.SetBounds(16, 285, 180, 32);
@@ -254,7 +255,7 @@ End;
 
 Procedure TCodexConnectionFrame.ModelChanged(Sender: TObject);
 Var
-  Data, Items, ModelData, Levels, Level: TJSONData;
+  Data, Items, ModelData, ModelId, Levels, Level: TJSONData;
   I, J: Integer;
   Previous, Value: String;
 Begin
@@ -271,7 +272,9 @@ Begin
       Begin
         ModelData := Items.Items[I];
         If Not (ModelData Is TJSONObject) Then Continue;
-        If TJSONObject(ModelData).Get('model', TJSONObject(ModelData).Get('id', '')) <> ModelCombo.Text Then Continue;
+        ModelId := TJSONObject(ModelData).Find('model');
+        If Not Assigned(ModelId) Then ModelId := TJSONObject(ModelData).Find('id');
+        If ModelId.AsString <> ModelCombo.Text Then Continue;
         Levels := ModelData.FindPath('supportedReasoningEfforts');
         If Not (Levels Is TJSONArray) Then Exit;
         For J := 0 To Levels.Count - 1 Do
@@ -292,28 +295,50 @@ End;
 
 Procedure TCodexConnectionFrame.LoadModels(Const Value: String);
 Var
-  Data, Items, Item: TJSONData;
-  I: Integer;
+  Data, Items, Item, ModelId, Levels, Level, Effort: TJSONData;
+  I, J: Integer;
   Previous, Id: String;
+  Models: TStringList;
 Begin
   Data := GetJSON(Value);
+  Models := TStringList.Create;
   Try
+    If Not (Data Is TJSONObject) Then Raise Exception.Create('Invalid model list');
     Items := Data.FindPath('data');
     If Not (Items Is TJSONArray) Then Raise Exception.Create('Invalid model list');
-    Previous := ModelCombo.Text;
-    ModelCombo.Items.Clear;
+    { Validate the whole response before replacing the last usable lists. }
     For I := 0 To Items.Count - 1 Do
       Begin
         Item := Items.Items[I];
-        If Not (Item Is TJSONObject) Then Continue;
-        Id := TJSONObject(Item).Get('model', TJSONObject(Item).Get('id', ''));
-        If Id <> '' Then ModelCombo.Items.Add(Id);
+        If Not (Item Is TJSONObject) Then Raise Exception.Create('Invalid model');
+        ModelId := TJSONObject(Item).Find('model');
+        If Not Assigned(ModelId) Then ModelId := TJSONObject(Item).Find('id');
+        If Not Assigned(ModelId) Then Raise Exception.Create('Missing model identifier');
+        If ModelId.JSONType <> jtString Then Raise Exception.Create('Invalid model identifier');
+        Id := ModelId.AsString;
+        If Trim(Id) = '' Then Raise Exception.Create('Empty model identifier');
+        Levels := TJSONObject(Item).Find('supportedReasoningEfforts');
+        If Not (Levels Is TJSONArray) Then Raise Exception.Create('Invalid reasoning levels');
+        For J := 0 To Levels.Count - 1 Do
+          Begin
+            Level := Levels.Items[J];
+            If Not (Level Is TJSONObject) Then Raise Exception.Create('Invalid reasoning level');
+            Effort := TJSONObject(Level).Find('reasoningEffort');
+            If Not Assigned(Effort) Then Raise Exception.Create('Missing reasoning level');
+            If Effort.JSONType <> jtString Then Raise Exception.Create('Invalid reasoning level');
+            If Trim(Effort.AsString) = '' Then Raise Exception.Create('Empty reasoning level');
+          End;
+        If Models.IndexOf(Id) < 0 Then Models.Add(Id);
       End;
+    If Models.Count = 0 Then Raise Exception.Create('Empty model list');
+    Previous := ModelCombo.Text;
+    ModelCombo.Items.Assign(Models);
     ModelCombo.ItemIndex := ModelCombo.Items.IndexOf(Previous);
-    If (ModelCombo.ItemIndex < 0) And (ModelCombo.Items.Count > 0) Then ModelCombo.ItemIndex := 0;
+    If ModelCombo.ItemIndex < 0 Then ModelCombo.ItemIndex := 0;
     ModelsJson := Value;
     ModelChanged(Nil);
   Finally
+    Models.Free;
     Data.Free;
   End;
 End;
@@ -421,8 +446,11 @@ Begin
     Status.Caption := 'Profile directory deleted. The connection definition was kept.';
 End;
 
-Procedure TCodexConnectionFrame.LoadConnection(Const ProfileDir, Runtime, Model: String; Const Effort, Approval: String);
+Procedure TCodexConnectionFrame.LoadConnection(Const ProfileDir, Runtime, Model: String; Const Effort, Approval, CachedModels: String);
+Var
+  SavedModels: String;
 Begin
+  SavedModels := CachedModels;
   If Assigned(Job) Then
     Begin
       Job.Cancel;
@@ -455,6 +483,27 @@ Begin
     Begin
       ModelCombo.Items.Add(Model);
       ModelCombo.ItemIndex := 0;
+    End;
+  If SavedModels <> '' Then
+    Begin
+      Try
+        LoadModels(SavedModels);
+      Except
+        { Ignore an invalid stored cache; the saved selection remains usable. }
+      End;
+      { Cached discovery may be older than the saved model or effort. }
+      If Model <> '' Then
+        Begin
+          If ModelCombo.Items.IndexOf(Model) < 0 Then ModelCombo.Items.Add(Model);
+          ModelCombo.ItemIndex := ModelCombo.Items.IndexOf(Model);
+          ModelChanged(Nil);
+        End;
+      If Effort = '' Then EffortCombo.ItemIndex := 0
+      Else
+        Begin
+          If EffortCombo.Items.IndexOf(Effort) < 0 Then EffortCombo.Items.Add(Effort);
+          EffortCombo.ItemIndex := EffortCombo.Items.IndexOf(Effort);
+        End;
     End;
   Status.Caption := 'Sign in or check this connection. Other connections stay signed in.';
   If Not FileIsExecutable(RuntimeEdit.Text) Then

@@ -2,6 +2,7 @@ Program AssistantSettingsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls,
   LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, WorkflowSettings, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantTestSettings, AssistantTestSettingsFrame;
+Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Var ConfigRoot: String;
 Type
   TMemoryConfig = Class(TConfigMemStorage)
@@ -22,6 +23,31 @@ Class Function TIDE.GetPrimaryConfigPath: String;
 Begin Result := ConfigRoot; End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
+Procedure RejectModels(Frame: TCodexConnectionFrame; Const Value: String);
+Var
+  Cached, Models, Efforts, Model, Effort: String;
+  Raised: Boolean;
+Begin
+  Cached := Frame.CachedModelsJson;
+  Models := Frame.ModelCombo.Items.Text;
+  Efforts := Frame.EffortCombo.Items.Text;
+  Model := Frame.ModelCombo.Text;
+  Effort := Frame.ReasoningEffort;
+  Raised := False;
+  Try Frame.LoadModels(Value); Except On E: Exception Do Raised := True; End;
+  Check('invalid discovery keeps the last valid lists and selections',
+    Raised And (Frame.CachedModelsJson = Cached) And (Frame.ModelCombo.Items.Text = Models)
+    And (Frame.EffortCombo.Items.Text = Efforts) And (Frame.ModelCombo.Text = Model)
+    And (Frame.ReasoningEffort = Effort));
+End;
+Function CodexSettings(Dialog: TAssistantSettingsForm): TCodexConnectionFrame;
+Var I: Integer;
+Begin
+  For I := 0 To Dialog.ComponentCount - 1 Do
+    If Dialog.Components[I] Is TCodexConnectionFrame Then
+      Exit(TCodexConnectionFrame(Dialog.Components[I]));
+  Raise Exception.Create('Missing Codex settings frame');
+End;
 Var Frame: TCodexConnectionFrame; IDE: TIDE; Dialog, CancelledDialog: TAssistantSettingsForm; OriginalContext: Boolean; List: TListBox; Names: TEdit;
   TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note, StoreDir: String;
   Pages: TPageControl; Store: TAssistantConnections; Guid: TGuid; Bitmap: TBitmap; PNG: TPortableNetworkGraphic;
@@ -47,13 +73,47 @@ Begin
           And (Frame.ModelCombo.Text = 'model-one') And (Frame.ReasoningEffort = 'high')
           And (Pos('no longer available', TLabel(Frame.FindComponent('ConnectionStatus')).Caption) > 0));
       End;
-    Frame.LoadModels('{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}');
+    Frame.LoadModels(ModelList);
     Check('model discovery preserves supported saved reasoning and approval',
-      (Frame.ReasoningEffort = 'high') And (Frame.ApprovalMode = 'auto') And (Frame.EffortCombo.Items.Count = 3));
+      (Frame.ReasoningEffort = 'high') And (Frame.ApprovalMode = 'auto') And (Frame.EffortCombo.Items.Count = 4));
+    RejectModels(Frame, '{');
+    RejectModels(Frame, '[]');
+    RejectModels(Frame, '{"data":[]}');
+    RejectModels(Frame, '{"data":{}}');
+    RejectModels(Frame, '{"data":[null]}');
+    RejectModels(Frame, '{"data":[{"model":42,"supportedReasoningEfforts":[]}]}');
+    RejectModels(Frame, '{"data":[{"model":"model-one","supportedReasoningEfforts":"high"}]}');
+    RejectModels(Frame, '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":false}]}]}');
+    RejectModels(Frame, '{"data":[{"model":"valid","supportedReasoningEfforts":[]},{"model":"broken"}]}');
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', 'xhigh', 'auto', Frame.CachedModelsJson);
+    Check('cached discovery restores model and reasoning choices without a query',
+      (Frame.ModelCombo.Items.Count = 2) And (Frame.ModelCombo.Text = 'model-one')
+      And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
+      And (Frame.CachedModelsJson = ModelList) And Not Frame.Busy);
     Frame.ModelCombo.ItemIndex := 1; Frame.ModelCombo.OnChange(Frame.ModelCombo);
     Check('switching model removes unsupported reasoning values',
       (Frame.ReasoningEffort = '') And (Frame.EffortCombo.Items.Count = 2) And (Frame.EffortCombo.Items[1] = 'medium'));
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'new-model', 'future-effort', 'auto', ModelList);
+    Check('older cached models retain the saved model and effort',
+      (Frame.ModelCombo.Text = 'new-model') And (Frame.ReasoningEffort = 'future-effort')
+      And (Frame.ModelCombo.Items.Count = 3) And (Frame.CachedModelsJson = ModelList));
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', 'future-effort', 'auto', ModelList);
+    Check('older cached reasoning levels retain a newer saved effort',
+      (Frame.ReasoningEffort = 'future-effort') And (Frame.EffortCombo.Items.Count = 5));
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', '', 'ask', ModelList);
+    Check('cached discovery retains Model default', Frame.ReasoningEffort = '');
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', 'high', 'auto', '{"data":[]}');
+    Check('invalid stored cache falls back to saved choices',
+      (Frame.ModelCombo.Text = 'model-one') And (Frame.ReasoningEffort = 'high')
+      And (Frame.CachedModelsJson = ''));
+    Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-two', '', 'ask',
+      '{"data":[{"id":"model-two","supportedReasoningEfforts":[]}]}');
+    Check('id-only models and default-only reasoning are supported',
+      (Frame.ModelCombo.Items.Count = 1) And (Frame.EffortCombo.Items.Count = 1));
     Frame.LoadConnection(ConfigRoot, '', 'model-one', '', 'invalid');
+    Check('loading an uncached connection clears the previous lists',
+      (Frame.CachedModelsJson = '') And (Frame.ModelCombo.Items.Count = 1)
+      And (Frame.EffortCombo.Items.Count = 1));
     Check('unknown approval falls back to Ask', Frame.ApprovalMode = 'ask');
   Finally Frame.Free; End;
   Dialog := TAssistantSettingsForm.Create(Nil);
@@ -65,6 +125,9 @@ Begin
     TButton(Dialog.FindComponent('AddConnectionButton')).Click;
     Check('additional connection can be added', List.Items.Count = 2);
     Names.Text := 'Another ChatGPT account';
+    Frame := CodexSettings(Dialog);
+    Frame.LoadModels(ModelList);
+    Frame.EffortCombo.ItemIndex := Frame.EffortCombo.Items.IndexOf('xhigh');
     List.ItemIndex := 0; List.OnClick(List);
     TButton(Dialog.FindComponent('UseConnectionButton')).Click;
     Dialog.Show; Application.ProcessMessages;
@@ -110,11 +173,27 @@ Begin
       Check('settings save wrote the IDE document and the target document',
         FileExists(WorkflowSettingsPath) And FileExists(StoreDir + 'config.json') And
         Not FileExists(ConfigRoot + '/assistant-connections.ini') And Not FileExists(ConfigRoot + '/spell.xml'));
+      Check('saving settings persists the discovered lists', Store[1].CachedModelsJson = ModelList);
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
         CancelledDialog.LoadFromConfig;
+        List := TListBox(CancelledDialog.FindComponent('ConnectionsList'));
+        List.ItemIndex := 1; List.OnClick(List);
+        Frame := CodexSettings(CancelledDialog);
+        Check('reopening settings restores saved model and reasoning lists',
+          (Frame.ModelCombo.Items.Count = 2) And (Frame.ModelCombo.Text = 'model-one')
+          And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
+          And Not Frame.Busy);
         TButton(CancelledDialog.FindComponent('AddConnectionButton')).Click;
+        Check('new connections do not inherit discovered lists',
+          (Frame.CachedModelsJson = '') And (Frame.ModelCombo.Items.Count = 0));
+        Frame.LoadModels('{"data":[{"model":"other-account-model","supportedReasoningEfforts":[]}]}');
+        List.ItemIndex := 1; List.OnClick(List);
+        Check('switching connections restores their own discovery cache',
+          (Frame.CachedModelsJson = ModelList) And (Frame.ModelCombo.Items.Count = 2)
+          And (Frame.ReasoningEffort = 'xhigh'));
+        Frame.LoadModels('{"data":[{"model":"unsaved-model","supportedReasoningEfforts":[]}]}');
         CancelledDialog.IncludeContextCheck.Checked := Not OriginalContext;
         TestFrame := TAssistantTestSettingsFrame(CancelledDialog.FindComponent('ProjectTestSettings'));
         TestFrame.Load(StoreDir, ConfigRoot + '/fixture.lpi'); TestFrame.EnabledCheck.Checked := False;
@@ -127,6 +206,7 @@ Begin
       Store.Load;
       Check('Cancel discards connection and general preference edits',
         (Store.Count = 2) And (AssistantChatConfig.IncludeIDEContext = OriginalContext));
+      Check('Cancel retains the saved discovery cache', Store[1].CachedModelsJson = ModelList);
     Finally Store.Free; End;
   Finally Dialog.Free; LazarusIDE := Nil; IDE.Free; DeleteFile(WorkflowSettingsPath); DeleteFile(StoreDir + 'config.json');
     RemoveDir(ExcludeTrailingPathDelimiter(StoreDir)); SetWorkflowSettingsDirectory(''); RemoveDir(ConfigRoot); End;

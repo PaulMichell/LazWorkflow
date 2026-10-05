@@ -1,6 +1,7 @@
 Program AssistantConnectionsTest;
 {$mode objfpc}{$H+}
-Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, WorkflowSettings{$IFDEF UNIX}, BaseUnix{$ENDIF};
+Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, AssistantConfig, WorkflowSettings{$IFDEF UNIX}, BaseUnix{$ENDIF};
+Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
 Function Derived(Const ConfigRoot, ConnectionId: String): String;
@@ -31,6 +32,7 @@ Begin
     Except On E: Exception Do Raised := True; End;
     Check('Grok has no Codex profile', Raised);
     Item := Store.AddChatGPT; Item.Name := 'First account'; Item.Model := 'model-one'; Item.Runtime := '/installed/codex'; Id := Item.Id;
+    Item.CachedModelsJson := ModelList;
     Profile := Store.ProfileDir(Item);
     Check('connection uses a derived Codex profile', Profile = Derived(Root, Id));
     Check('profile is not created until launch', Not DirectoryExists(Profile));
@@ -50,6 +52,12 @@ Begin
     Finally Policy.Free; End;
     Check('save does not create Codex profile directories', Not DirectoryExists(IncludeTrailingPathDelimiter(Root) + 'codex'));
     Check('roundtrip preserves all connections', Store.Count = 3);
+    Check('model and reasoning cache belongs to its connection',
+      (Store[1].CachedModelsJson = ModelList) And (Store[2].CachedModelsJson = '')
+      And (Store[0].CachedModelsJson = ''));
+    AssistantChatConfig.Save;
+    Store.Load;
+    Check('saving general preferences preserves the model cache', Store[1].CachedModelsJson = ModelList);
     Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'auto') And (Store[1].ApprovalMode = 'ask'));
     Check('roundtrip preserves current connection', (Store.Active.Name = 'Second account') And (Store.Active.Model = 'model-two') And (Store.Active.Runtime = '/other/codex'));
     Store.ActiveId := 'grok'; Store.Save; Store.Load;

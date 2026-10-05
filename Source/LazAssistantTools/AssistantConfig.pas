@@ -415,10 +415,15 @@ Begin
   Result.Add('thinking', Thinking);
   Result.Add('approval', Approval);
   If Item.Backend = 'codex' Then
-    Result.Add('runtime', Item.Runtime);
+    Begin
+      Result.Add('runtime', Item.Runtime);
+      Result.Add('models_json', Item.CachedModelsJson);
+    End;
 End;
 
 Procedure ReadConnection(Obj: TJSONObject; Item: TAssistantConnection);
+Var
+  Cache: TJSONData;
 Begin
   Item.Id := Obj.Get('id', Item.Id);
   Item.Name := Obj.Get('name', Item.Name);
@@ -429,6 +434,11 @@ Begin
   If Not ((Item.ApprovalMode = 'auto') Or (Item.ApprovalMode = 'always')) Then
     Item.ApprovalMode := 'ask';
   Item.Runtime := Obj.Get('runtime', '');
+  Item.CachedModelsJson := '';
+  Cache := Obj.Find('models_json');
+  If (Item.Backend = 'codex') And Assigned(Cache) Then
+    If Cache.JSONType = jtString Then
+      Item.CachedModelsJson := Cache.AsString;
 End;
 
 Procedure TAssistantConfig.LoadWithConnections(Connections: TAssistantConnections);
