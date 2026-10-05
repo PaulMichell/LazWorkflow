@@ -34,7 +34,7 @@ Type
     ModeCombo: TComboBox;
     ModeLabel: TLabel;
     ModelStatusLabel: TLabel;
-    NewChatAction: TAction;
+    NewConversationAction: TAction;
     NewPlanAction: TAction;
     RunPlanAction: TAction;
     AttachImageAction: TAction;
@@ -172,7 +172,7 @@ Type
     Procedure HistoryComboChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
     Procedure StopActionExecute(Sender: TObject);
-    Procedure NewChatActionExecute(Sender: TObject);
+    Procedure NewConversationActionExecute(Sender: TObject);
     Procedure NewPlanActionExecute(Sender: TObject);
     Procedure RunPlanActionExecute(Sender: TObject);
     Procedure ReviewChangesActionExecute(Sender: TObject);
@@ -3468,7 +3468,7 @@ Begin
   Else
     SendAction.Caption := 'Send';
   StopAction.Enabled := IsSending;
-  NewChatAction.Enabled := Not IsSending;
+  NewConversationAction.Enabled := Not IsSending;
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not IsSending;
   If Assigned(RunPlanAction) Then
@@ -6916,7 +6916,7 @@ Begin
     UnlockModeAfterSend;
 End;
 
-Procedure TProjectAssistantForm.NewChatActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.NewConversationActionExecute(Sender: TObject);
 Begin
   StartNewChat(False, False);
   If InputMemo.CanFocus Then InputMemo.SetFocus;

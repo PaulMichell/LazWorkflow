@@ -1,7 +1,7 @@
 object ProjectAssistantForm: TProjectAssistantForm
-  Left = 567
+  Left = 509
   Height = 700
-  Top = 177
+  Top = 238
   Width = 1286
   Caption = 'Project Assistant'
   ClientHeight = 700
@@ -62,12 +62,12 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = StopAction
         TabOrder = 1
       end
-      object NewChatButton: TButton
+      object NewConversationButton: TButton
         Left = 180
         Height = 28
         Top = 4
         Width = 84
-        Action = NewChatAction
+        Action = NewConversationAction
         TabOrder = 2
       end
       object NewPlanButton: TButton
@@ -477,7 +477,7 @@ object ProjectAssistantForm: TProjectAssistantForm
           Width = 145
           Align = alLeft
           BorderSpacing.Top = 2
-          BorderSpacing.Right = 4
+          BorderSpacing.Right = 8
           BorderSpacing.Bottom = 2
           ItemHeight = 24
           ItemIndex = 0
@@ -494,10 +494,10 @@ object ProjectAssistantForm: TProjectAssistantForm
           OnChange = ModeComboChange
         end
         object ModelStatusLabel: TLabel
-          Left = 464
+          Left = 468
           Height = 32
           Top = 0
-          Width = 511
+          Width = 507
           Align = alClient
           AutoSize = False
           Layout = tlCenter
@@ -623,9 +623,9 @@ object ProjectAssistantForm: TProjectAssistantForm
   object ActionList: TActionList
     Left = 55
     Top = 110
-    object NewChatAction: TAction
-      Caption = 'New Chat'
-      OnExecute = NewChatActionExecute
+    object NewConversationAction: TAction
+      Caption = 'New'
+      OnExecute = NewConversationActionExecute
     end
     object NewPlanAction: TAction
       Caption = 'New Plan'
@@ -802,7 +802,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     object SessionMenuItem: TMenuItem
       Caption = '&Session'
       object NewChatMenuItem: TMenuItem
-        Action = NewChatAction
+        Action = NewConversationAction
       end
       object AttachImageMenuItem: TMenuItem
         Action = AttachImageAction
