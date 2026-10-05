@@ -146,32 +146,163 @@ Begin
     End;
 End;
 
+Function BeforeTab(Const Value: String): String;
+Var
+  TabAt: Integer;
+Begin
+  TabAt := Pos(#9, Value);
+  If TabAt = 0 Then Result := Value Else Result := Copy(Value, 1, TabAt - 1);
+End;
+
+Function StripGitSide(Const Token: String): String;
+Begin
+  If Copy(Token, 1, 2) = 'a/' Then Result := Copy(Token, 3, MaxInt)
+  Else If Copy(Token, 1, 2) = 'b/' Then Result := Copy(Token, 3, MaxInt)
+  Else Result := Token;
+End;
+
+Function NextGitToken(Var Rest: String): String;
+Var
+  SplitAt: Integer;
+Begin
+  Result := '';
+  Rest := TrimLeft(Rest);
+  If Rest = '' Then Exit;
+  If Rest[1] = '"' Then
+    Begin
+      SplitAt := 2;
+      While (SplitAt <= Length(Rest)) And (Rest[SplitAt] <> '"') Do Inc(SplitAt);
+      Result := Copy(Rest, 2, SplitAt - 2);
+      If SplitAt < Length(Rest) Then Rest := Copy(Rest, SplitAt + 1, MaxInt) Else Rest := '';
+    End
+  Else
+    Begin
+      SplitAt := Pos(' ', Rest);
+      If SplitAt = 0 Then
+        Begin
+          Result := Rest;
+          Rest := '';
+        End
+      Else
+        Begin
+          Result := Copy(Rest, 1, SplitAt - 1);
+          Rest := Copy(Rest, SplitAt + 1, MaxInt);
+        End;
+    End;
+End;
+
+Procedure ParseDiffGitPaths(Const Line: String; Out OldPath, NewPath: String);
+Var
+  Rest: String;
+Begin
+  OldPath := '';
+  NewPath := '';
+  If Copy(Line, 1, 11) <> 'diff --git ' Then Exit;
+  Rest := Copy(Line, 12, MaxInt);
+  OldPath := StripGitSide(NextGitToken(Rest));
+  NewPath := StripGitSide(NextGitToken(Rest));
+End;
+
+{ A partial selection can leave lines on a side the original headers called
+  /dev/null. Keep create or delete headers only for a whole-file result. }
+Procedure WritePartialFileHeaders(Headers, Output: TStrings; Const OldPath, NewPath: String;
+  HasOld, HasNew, OmittedRemoval: Boolean);
+Var
+  I: Integer;
+  Line, OldSide, NewSide: String;
+  RewriteOld, RewriteNew: Boolean;
+Begin
+  If (Headers = Nil) Or (Output = Nil) Then Exit;
+  RewriteOld := False;
+  RewriteNew := False;
+  OldSide := OldPath;
+  NewSide := NewPath;
+  For I := 0 To Headers.Count - 1 Do
+    Begin
+      Line := Headers[I];
+      If Copy(Line, 1, 13) = '--- /dev/null' Then RewriteOld := HasOld
+      Else If Copy(Line, 1, 13) = '+++ /dev/null' Then RewriteNew := HasNew Or OmittedRemoval
+      Else If (OldSide = '') And (Copy(Line, 1, 6) = '--- a/') Then OldSide := BeforeTab(Copy(Line, 7, MaxInt))
+      Else If (NewSide = '') And (Copy(Line, 1, 6) = '+++ b/') Then NewSide := BeforeTab(Copy(Line, 7, MaxInt));
+    End;
+  If (OldSide = '') Or (OldSide = '/dev/null') Then OldSide := NewSide;
+  If (NewSide = '') Or (NewSide = '/dev/null') Then NewSide := OldSide;
+  If OldSide = '/dev/null' Then OldSide := '';
+  If NewSide = '/dev/null' Then NewSide := '';
+  If OldSide = '' Then RewriteOld := False;
+  If NewSide = '' Then RewriteNew := False;
+  For I := 0 To Headers.Count - 1 Do
+    Begin
+      Line := Headers[I];
+      If RewriteOld And (Copy(Line, 1, 9) = 'new file ') Then Continue;
+      If RewriteNew And (Copy(Line, 1, 13) = 'deleted file ') Then Continue;
+      If RewriteOld And (Copy(Line, 1, 13) = '--- /dev/null') Then Line := '--- a/' + OldSide
+      Else If RewriteNew And (Copy(Line, 1, 13) = '+++ /dev/null') Then Line := '+++ b/' + NewSide;
+      Output.Add(Line);
+    End;
+End;
+
 Function BuildGitPartialPatch(Lines: TStrings; FirstLine, LastLine: Integer;
   SelectedFullLines: TGitLineNumberList; Reverse: Boolean): String;
 Var
   Parsed: TGitDiffLines;
-  Headers, Body, Output: TStringList;
-  I, J, OldCount, NewCount, OldBase, NewBase, Delta: Integer;
-  Selected, Changed, Kept, FileWritten: Boolean;
-  S: String;
+  Headers, Body, Hunks, Output: TStringList;
+  I, OldCount, NewCount, OldBase, NewBase, Delta: Integer;
+  Selected, Changed, Kept, HasOld, HasNew, OmittedRemoval: Boolean;
+  FileOld, FileNew, S: String;
+
+  Procedure NoteEmitted(Const Emitted: String);
+  Begin
+    If (Emitted = '') Or ((Length(Emitted) > 0) And (Emitted[1] = ' ')) Then
+      Begin
+        HasOld := True;
+        HasNew := True;
+      End
+    Else If Emitted[1] = '+' Then HasNew := True
+    Else If Emitted[1] = '-' Then HasOld := True;
+  End;
+
+  Procedure FlushFile;
+  Begin
+    If Hunks.Count = 0 Then Exit;
+    WritePartialFileHeaders(Headers, Output, FileOld, FileNew, HasOld, HasNew, OmittedRemoval);
+    Output.AddStrings(Hunks);
+    Hunks.Clear;
+  End;
+
 Begin
   Result := '';
   If (Lines = Nil) Or (Lines.Count = 0) Then Exit;
   Parsed := ParseGitDiff(Lines);
-  Headers := TStringList.Create; Body := TStringList.Create; Output := TStringList.Create;
+  Headers := TStringList.Create;
+  Body := TStringList.Create;
+  Hunks := TStringList.Create;
+  Output := TStringList.Create;
   Try
-    I := 0; Delta := 0; FileWritten := False;
+    I := 0;
+    Delta := 0;
+    HasOld := False;
+    HasNew := False;
+    OmittedRemoval := False;
+    FileOld := '';
+    FileNew := '';
     While I < Lines.Count Do
       Begin
         If Parsed[I].Kind = dlMeta Then
           Begin
             If Copy(Lines[I], 1, 11) = 'diff --git ' Then
               Begin
+                FlushFile;
                 Headers.Clear;
                 Delta := 0;
-                FileWritten := False;
+                HasOld := False;
+                HasNew := False;
+                OmittedRemoval := False;
+                ParseDiffGitPaths(Lines[I], FileOld, FileNew);
               End;
-            Headers.Add(Lines[I]); Inc(I); Continue;
+            Headers.Add(Lines[I]);
+            Inc(I);
+            Continue;
           End;
         If Parsed[I].Kind <> dlHunk Then
           Begin
@@ -181,7 +312,11 @@ Begin
         OldBase := Parsed[I].OldStart - Ord(Parsed[I].OldCount > 0);
         NewBase := Parsed[I].NewStart - Ord(Parsed[I].NewCount > 0);
         If Reverse Then OldBase := NewBase - Delta Else NewBase := OldBase + Delta;
-        Body.Clear; Changed := False; Kept := False; OldCount := 0; NewCount := 0;
+        Body.Clear;
+        Changed := False;
+        Kept := False;
+        OldCount := 0;
+        NewCount := 0;
         Inc(I);
         While (I < Lines.Count) And (Parsed[I].Kind In [dlAdded, dlRemoved, dlContext, dlNoNewline]) Do
           Begin
@@ -189,44 +324,51 @@ Begin
             Selected := LineIsSelectedInPatch(I + 1, FirstLine, LastLine, SelectedFullLines);
             Case Parsed[I].Kind Of
               dlContext:
-              Begin
-                Body.Add(S);
-                Inc(OldCount);
-                Inc(NewCount);
-                Kept := True;
-              End;
+                Begin
+                  Body.Add(S);
+                  NoteEmitted(S);
+                  Inc(OldCount);
+                  Inc(NewCount);
+                  Kept := True;
+                End;
               dlAdded, dlRemoved:
                 Begin
                   Kept := Selected Or ((Parsed[I].Kind = dlAdded) = Reverse);
                   If Selected Then
                     Begin
-                      Body.Add(S); Changed := True;
+                      Body.Add(S);
+                      NoteEmitted(S);
+                      Changed := True;
                       If Parsed[I].Kind = dlAdded Then Inc(NewCount) Else Inc(OldCount);
                     End
                   Else If Kept Then
                     Begin
                       Body.Add(' ' + Copy(S, 2, MaxInt));
+                      NoteEmitted(' ' + Copy(S, 2, MaxInt));
                       Inc(OldCount);
                       Inc(NewCount);
-                    End;
+                    End
+                  Else If Parsed[I].Kind = dlRemoved Then OmittedRemoval := True;
                 End;
               dlNoNewline: If Kept Then Body.Add(S);
+            Else
             End;
             Inc(I);
           End;
         If Not Changed Then Continue;
-        If Not FileWritten Then
-          Begin
-            For J := 0 To Headers.Count - 1 Do Output.Add(Headers[J]);
-            FileWritten := True;
-          End;
-        Output.Add(Format('@@ -%d,%d +%d,%d @@',
+        Hunks.Add(Format('@@ -%d,%d +%d,%d @@',
           [OldBase + Ord(OldCount > 0), OldCount, NewBase + Ord(NewCount > 0), NewCount]));
-        Output.AddStrings(Body);
+        Hunks.AddStrings(Body);
         Inc(Delta, NewCount - OldCount);
       End;
+    FlushFile;
     Result := Output.Text;
-  Finally Output.Free; Body.Free; Headers.Free; End;
+  Finally
+    Output.Free;
+    Hunks.Free;
+    Body.Free;
+    Headers.Free;
+  End;
 End;
 
 End.

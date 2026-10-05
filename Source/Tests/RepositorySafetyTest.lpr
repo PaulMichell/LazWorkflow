@@ -293,6 +293,38 @@ Begin
         Else Expected := StringReplace(BeforeText, 'last', 'changed', []);
         Check('separated hunk contents', GitRun(Dir, ['show', ':patch.txt']) = Expected);
       End;
+    { Unstage one line of a staged new file. The other line must stay in the index. }
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    WriteFile(Dir + '/created.txt', 'keep' + #10 + 'drop' + #10);
+    GitRun(Dir, ['add', '--', 'created.txt']);
+    Diff := GitRun(Dir, ['diff', '--cached', '-U3', '--', 'created.txt']);
+    Lines.Text := Diff;
+    Selected.Clear;
+    For I := 0 To Lines.Count - 1 Do
+      If Lines[I] = '+drop' Then Selected.Add(I + 1);
+    Check('partial new-file unstage selected a line', Selected.Count = 1);
+    Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, True);
+    Check('partial new-file unstage is not a creation',
+      (Pos('new file ', Patch) = 0) And (Pos('--- /dev/null', Patch) = 0));
+    Check('partial new-file unstage applies', G.ApplyPatchToIndex(Patch, True));
+    Check('partial new-file unstage index', GitRun(Dir, ['show', ':created.txt']) = 'keep' + #10);
+    { Stage one line of a worktree deletion. The other line must stay in the index. }
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    WriteFile(Dir + '/removed.txt', 'keep' + #10 + 'drop' + #10);
+    GitRun(Dir, ['add', '--', 'removed.txt']);
+    GitRun(Dir, ['commit', '-qm', 'add removed']);
+    Check('delete file for partial stage', DeleteFile(Dir + '/removed.txt'));
+    Diff := GitRun(Dir, ['diff', '-U3', '--', 'removed.txt']);
+    Lines.Text := Diff;
+    Selected.Clear;
+    For I := 0 To Lines.Count - 1 Do
+      If Lines[I] = '-drop' Then Selected.Add(I + 1);
+    Check('partial deletion stage selected a line', Selected.Count = 1);
+    Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, False);
+    Check('partial deletion stage is not a deletion',
+      (Pos('deleted file ', Patch) = 0) And (Pos('+++ /dev/null', Patch) = 0));
+    Check('partial deletion stage applies', G.ApplyPatchToIndex(Patch, False));
+    Check('partial deletion stage index', GitRun(Dir, ['show', ':removed.txt']) = 'keep' + #10);
   Finally Selected.Free; Lines.Free; G.Free; End;
 End;
 
