@@ -233,6 +233,9 @@ Begin
         End;
       P.Environment.Add('GIT_TERMINAL_PROMPT=0');
       P.Parameters.Add('--no-pager');
+      { Bracketed names are globs unless pathspecs are literal. * and ? stay refused. }
+      If (Command = 'add') Or (Command = 'commit') Then
+        P.Parameters.Add('--literal-pathspecs');
       For I := 0 To Args.Count - 1 Do P.Parameters.Add(Args.Items[I].AsString);
       If (Command = 'diff') Or (Command = 'log') Or (Command = 'show') Then
         Begin
