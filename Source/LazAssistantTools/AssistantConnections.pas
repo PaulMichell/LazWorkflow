@@ -30,7 +30,7 @@ Type
     Constructor Create(Const ConfigRoot: String);
     Destructor Destroy; Override;
     Procedure Load;
-    Procedure Save;
+    Function Save: Boolean;
     Function AddChatGPT: TAssistantConnection;
     Function Active: TAssistantConnection;
     Function ProfileDir(Connection: TAssistantConnection): String;
@@ -128,12 +128,13 @@ Begin
     ActiveId := Items[0].Id;
 End;
 
-Procedure TAssistantConnections.Save;
+Function TAssistantConnections.Save: Boolean;
 Begin
   { Definitions only. Do not create or delete Codex profile directories, and do
     not copy runtime credential files into this store. }
+  Result := False;
   If Assigned(AssistantChatConfig) Then
-    AssistantChatConfig.SaveWithConnections(Self);
+    Result := AssistantChatConfig.SaveWithConnections(Self);
 End;
 
 Function TAssistantConnections.AddChatGPT: TAssistantConnection;

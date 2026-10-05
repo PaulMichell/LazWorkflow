@@ -163,6 +163,7 @@ Begin
             [AssistantChatConfig.Model, AssistantChatConfig.ActiveSkill,
              AssistantChatConfig.ThinkingLevel, AssistantChatConfig.ApprovalMode]));
         NotifyOpenProjectAssistantFormsPreferencesChanged;
+        NotifyOpenProjectAssistantFormsConnectionChanged;
       End;
   Finally
     Form.Free;
@@ -355,6 +356,8 @@ Begin
   LabelControl := TLabel.Create(Self); LabelControl.Parent := Header; LabelControl.SetBounds(16, 8, 150, 20); LabelControl.Caption := 'Connection name';
   ConnectionName := TEdit.Create(Self); ConnectionName.Name := 'ConnectionNameEdit'; ConnectionName.Parent := Header; ConnectionName.SetBounds(16, 30, 400, 28);
   Button := TButton.Create(Self); Button.Parent := Header; Button.SetBounds(430, 30, 230, 28); Button.Name := 'UseConnectionButton'; Button.Caption := 'Use for current chat'; Button.OnClick := @UseConnection;
+  Button.ShowHint := True;
+  Button.Hint := 'Switches the open assistant chat to this connection immediately.';
   ActiveConnectionLabel := TLabel.Create(Self); ActiveConnectionLabel.Parent := Header; ActiveConnectionLabel.SetBounds(16, 70, 650, 32); ActiveConnectionLabel.AutoSize := False; ActiveConnectionLabel.WordWrap := True;
   GrokPanel := TScrollBox.Create(Self); GrokPanel.Parent := Details; GrokPanel.Align := alClient; GrokPanel.BorderStyle := bsNone;
   { Reuse Grok's existing account and model controls inside its own connection
@@ -377,7 +380,8 @@ Begin
   GeneralPage.OnResize := @GeneralPageResize;
   LabelControl := TLabel.Create(Self); LabelControl.Parent := GeneralPage;
   LabelControl.SetBounds(20, 432, 800, 70); LabelControl.AutoSize := False; LabelControl.WordWrap := True;
-  LabelControl.Caption := 'These preferences apply across connections. Sign-in and sign-out actions take effect immediately; Cancel discards preference edits. Selecting a connection does not sign out other accounts.';
+  LabelControl.Caption := 'These preferences apply across connections. Sign-in, sign-out and Use for current chat take effect immediately. ' +
+    'Cancel discards other preference edits. Selecting a connection does not sign out other accounts.';
   If Assigned(SearchLabel) Then
     Begin
       SearchLabel.Top := 430; SearchCombo.Top := 450;
@@ -432,7 +436,8 @@ Begin
   If Selected >= Connections.Count Then Selected := Connections.Count - 1;
   ConnectionList.ItemIndex := Selected;
   Item := Connections.Active;
-  If Assigned(Item) Then ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '. Other saved connections remain available.';
+  If Assigned(Item) Then
+    ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '. The assistant status bar uses this connection.';
 End;
 
 Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);
@@ -472,6 +477,8 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.UseConnection(Sender: TObject);
+Var
+  PreviousId: String;
 Begin
   StoreConnection;
   If SelectedConnection < 0 Then Exit;
@@ -481,7 +488,16 @@ Begin
       MessageDlg('Choose the runtime and sign in or refresh models first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  Connections.ActiveId := Connections[SelectedConnection].Id; RefreshConnections;
+  PreviousId := Connections.ActiveId;
+  Connections.ActiveId := Connections[SelectedConnection].Id;
+  If Not Connections.Save Then
+    Begin
+      Connections.ActiveId := PreviousId;
+      MessageDlg('The current chat could not be switched. The assistant is still on the previous connection.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  RefreshConnections;
+  NotifyOpenProjectAssistantFormsConnectionChanged;
 End;
 
 Procedure TAssistantSettingsForm.PopulateSkills;

@@ -56,7 +56,7 @@ Type
     Procedure Save;
     { Nil connections keeps the saved connection list and updates the Grok account from this config. }
     Procedure LoadWithConnections(Connections: TAssistantConnections);
-    Procedure SaveWithConnections(Connections: TAssistantConnections);
+    Function SaveWithConnections(Connections: TAssistantConnections): Boolean;
     Procedure Assign(Source: TAssistantConfig);
     Procedure ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
     Procedure ClearOAuthTokens;
@@ -511,7 +511,7 @@ Begin
   NormalizeAssistantConfig(Self);
 End;
 
-Procedure TAssistantConfig.SaveWithConnections(Connections: TAssistantConnections);
+Function TAssistantConfig.SaveWithConnections(Connections: TAssistantConnections): Boolean;
 Var
   Section, Existing, Obj: TJSONObject;
   Node, ItemNode: TJSONData;
@@ -521,6 +521,7 @@ Var
   Item: TAssistantConnection;
   HasGrok: Boolean;
 Begin
+  Result := False;
   Section := TJSONObject.Create;
   Try
     Section.Add('include_ide_context', FIncludeIDEContext);
@@ -606,7 +607,7 @@ Begin
     Finally
       Existing.Free;
     End;
-    WriteWorkflowSection('assistant', Section, ErrorText);
+    Result := WriteWorkflowSection('assistant', Section, ErrorText);
   Finally
     Section.Free;
   End;
@@ -619,7 +620,8 @@ End;
 
 Procedure TAssistantConfig.Save;
 Begin
-  SaveWithConnections(Nil);
+  If Not SaveWithConnections(Nil) Then
+    Exit;
 End;
 
 Initialization

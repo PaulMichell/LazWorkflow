@@ -228,6 +228,7 @@ Type
   Private
 
     FUseCodex: Boolean;
+    FReloadConnectionAfterSend: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
     FCodexRun: TAssistantCodexRun;
     FPollingCodex: Boolean;
@@ -471,11 +472,14 @@ Type
     Procedure BindToActiveProject;
     { Drop project binding without reading ActiveProject (safe during project close). }
     Procedure UnbindFromProject;
+    { Read the saved active connection and refresh the status bar. }
+    Procedure ReloadActiveConnection;
   End;
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
 Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
+Procedure NotifyOpenProjectAssistantFormsConnectionChanged;
 
 Implementation
 
@@ -3448,6 +3452,11 @@ Begin
         ElapsedTimer.Enabled := False;
       FStatusPhase := '';
       StreamStart := 0;
+    End;
+  If (Not FSending) And FReloadConnectionAfterSend Then
+    Begin
+      FReloadConnectionAfterSend := False;
+      ReloadActiveConnection;
     End;
   ApplyActiveMode;
   UpdateHistoryActions;
@@ -6568,6 +6577,33 @@ Begin
       Form := Screen.CustomForms[I];
       If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
         TProjectAssistantForm(Form).ApplyDisplayPreferences;
+    End;
+End;
+
+Procedure TProjectAssistantForm.ReloadActiveConnection;
+Begin
+  If csDestroying In ComponentState Then Exit;
+  If FSending Then
+    Begin
+      FReloadConnectionAfterSend := True;
+      Exit;
+    End;
+  LoadConnectionSettings;
+  RefreshFromConfig;
+  ApplyActiveMode;
+  WorkflowLogger.Info('ProjectAssistant', 'Active connection applied: ' + FModelName);
+End;
+
+Procedure NotifyOpenProjectAssistantFormsConnectionChanged;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        TProjectAssistantForm(Form).ReloadActiveConnection;
     End;
 End;
 
