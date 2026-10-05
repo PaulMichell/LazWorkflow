@@ -14,11 +14,22 @@ Interface
 Uses
   Classes, SysUtils, Contnrs;
 
+Const
+  AssistantOpenRouterApiBase = 'https://openrouter.ai/api/v1';
+  AssistantWireChatCompletions = 'chat-completions';
+  AssistantOpenRouterKeyEnv = 'OPENROUTER_API_KEY';
+
 Type
   TAssistantConnection = Class
     Id, Name, Backend, Runtime, Model, ReasoningEffort, ApprovalMode: String;
+    SearchMode, AnswerVerbosity, Preset, ApiBase: String;
+    KeySource, KeyEnv, KeyValue, WireApi: String;
     CachedModelsJson: String;
+    SearchCitations: Boolean;
+    MaxOutputTokens: Integer;
     Constructor Create;
+    /// True for grok and openai-compatible. Derived from Backend, not a stored flag.
+    Function CanCompactContext: Boolean;
   End;
   TAssistantConnections = Class
   Private
@@ -53,6 +64,21 @@ Constructor TAssistantConnection.Create;
 Begin
   Inherited Create;
   ApprovalMode := 'ask';
+  SearchMode := 'off';
+  SearchCitations := False;
+  AnswerVerbosity := 'medium';
+  MaxOutputTokens := 0;
+  Preset := '';
+  ApiBase := '';
+  KeySource := 'env';
+  KeyEnv := '';
+  KeyValue := '';
+  WireApi := '';
+End;
+
+Function TAssistantConnection.CanCompactContext: Boolean;
+Begin
+  Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
 End;
 
 Constructor TAssistantConnections.Create(Const ConfigRoot: String);
