@@ -48,7 +48,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Dialogs, LCLIntf, fpjson, jsonparser, AssistantCodexClient, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
+  Dialogs, LCLIntf, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
 
 Type
   TWorkerReaper = Class(TThread)
@@ -82,7 +82,7 @@ Begin
   LabelControl := TLabel.Create(Self);
   LabelControl.Parent := Self;
   LabelControl.SetBounds(16, 16, 620, 20);
-  LabelControl.Caption := 'Codex executable (supported versions: ' + SupportedCodexVersionText + ')';
+  LabelControl.Caption := 'Codex executable (any release build; schema checked on sign-in)';
   RuntimeEdit := TEdit.Create(Self);
   RuntimeEdit.Parent := Self;
   RuntimeEdit.SetBounds(16, 42, 405, 28);

@@ -2,8 +2,9 @@ Unit AssistantCodexClient;
 
 { Worker-owned managed-runtime protocol. Dynamic tools are surfaced to a
   caller-owned IDE broker; native approvals are rejected, never auto-approved.
-  Qualified protocol: Codex CLI 0.153.0, 0.153.4 and 0.160.0, generated experimental JSON schema.
-  Pictures stay on the Grok connection. This client does not send an image input item. (c) 2026 Michell Computing. }
+  A release Codex CLI is accepted when its generated app-server schema still has the
+  fields this client uses. Pictures stay on the Grok connection. This client does
+  not send an image input item. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -16,16 +17,9 @@ Uses
   Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport;
 
 Const
-  QualifiedCodexVersion = 'codex-cli 0.160.0';
-  PreviousQualifiedCodexVersion = 'codex-cli 0.153.4';
-  EarlierQualifiedCodexVersion = 'codex-cli 0.153.0';
   { Image support is the Grok connection. Do not add a guessed local_image field here. }
   CodexImagesSupported = False;
 
-/// True when Line is an exact qualified `codex --version` line.
-Function CodexVersionIsQualified(Const Line: String): Boolean;
-/// User-facing allowlist, without the codex-cli prefix.
-Function SupportedCodexVersionText: String;
 /// turn/start params for this client. One text item. No image item and no local path.
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 /// turn/steer params for this client. One text item. No image item: 2.4 found none in this protocol.
@@ -98,40 +92,11 @@ Type
 Implementation
 
 Uses
-  fpjson, jsonparser, AssistantProtocol;
+  fpjson, jsonparser, AssistantProtocol, AssistantCodexQualification;
 
 Function Quote(Const S: String): String;
 Begin
   Result := '"' + JsonEscapeText(S) + '"';
-End;
-
-Function CodexVersionIsQualified(Const Line: String): Boolean;
-Begin
-  Result := (Line = QualifiedCodexVersion) Or (Line = PreviousQualifiedCodexVersion) Or
-    (Line = EarlierQualifiedCodexVersion);
-End;
-
-Function SupportedCodexVersionText: String;
-Begin
-  Result := '0.153.0, 0.153.4 and 0.160.0';
-End;
-
-Function ObservedCodexVersion(Const Line: String): String;
-Var
-  I: Integer;
-Begin
-  Result := Trim(Line);
-  If (Length(Result) > 80) Or (Copy(Result, 1, 10) <> 'codex-cli ') Then
-    Begin
-      Result := '';
-      Exit;
-    End;
-  For I := 1 To Length(Result) Do
-    If Result[I] < ' ' Then
-      Begin
-        Result := '';
-        Exit;
-      End;
 End;
 
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
@@ -204,7 +169,6 @@ Function TAssistantCodexClient.Connect(Const Executable, WorkingDirectory: Strin
 Var
   Args: TStringList;
   Frame: String;
-  VersionOK: Boolean;
   Observed, Reason: String;
   Deadline: QWord;
 Begin
@@ -219,28 +183,18 @@ Begin
         Fail(FTransport.LastError);
         Exit;
       End;
-    VersionOK := False;
     Observed := '';
     Deadline := GetTickCount64 + FRequestTimeout;
     Repeat
       FTransport.Poll;
       While FTransport.TakeFrame(Frame) Do
-        Begin
-          Frame := Trim(Frame);
-          If ObservedCodexVersion(Frame) <> '' Then Observed := Frame;
-          If CodexVersionIsQualified(Frame) Then VersionOK := True;
-        End;
-      If VersionOK Or (FTransport.LastError <> '') Then Break;
+        If CodexVersionReportLine(Trim(Frame)) <> '' Then Observed := CodexVersionReportLine(Trim(Frame));
+      If (Observed <> '') Or (FTransport.LastError <> '') Then Break;
       Sleep(1);
     Until GetTickCount64 >= Deadline;
     FTransport.Stop;
-    If Not VersionOK Then
+    If Not QualifyCodexRuntime(Executable, Observed, Environment, Reason) Then
       Begin
-        Reason := 'Codex version is not qualified; supported versions are ' + SupportedCodexVersionText +
-          '. Use Settings to select a supported executable.';
-        If Observed <> '' Then Reason := 'Codex version is not qualified (found ' + Observed +
-          '); supported versions are ' + SupportedCodexVersionText +
-          '. Use Settings to select a supported executable.';
         Fail(Reason);
         Result := False;
         Exit;

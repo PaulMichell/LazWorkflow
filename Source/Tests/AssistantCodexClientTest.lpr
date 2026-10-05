@@ -2,7 +2,7 @@ Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
-  AssistantCodexAccount, AssistantCodexProfile;
+  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification;
 Type
   TRunReaper = Class(TThread)
     Run: TAssistantCodexRun;
@@ -305,11 +305,67 @@ Begin
   Check('thread queued', Client.StartThread(GetTempDir, 'test-model', '[]'));
   WaitState(crsReady);
 End;
+Procedure WriteSchemaFile(Const Directory, Relative: String; Const Fields: Array Of String; Const Omit: String);
+Var
+  Lines: TStringList;
+  I: Integer;
+  Path, Body: String;
+  First: Boolean;
+Begin
+  Body := '{"properties":{';
+  First := True;
+  For I := Low(Fields) To High(Fields) Do
+    Begin
+      If Fields[I] = Omit Then Continue;
+      If Not First Then Body := Body + ',';
+      First := False;
+      Body := Body + '"' + Fields[I] + '":{"type":"string"}';
+    End;
+  Body := Body + '}}';
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Body;
+    Path := IncludeTrailingPathDelimiter(Directory) + Relative;
+    If Not ForceDirectories(ExtractFilePath(Path)) Then Halt(1);
+    Lines.SaveToFile(Path);
+  Finally
+    Lines.Free;
+  End;
+End;
+Procedure WriteSchemaFixture;
+Var
+  Directory, Omit: String;
+  I: Integer;
+Begin
+  Directory := '';
+  For I := 1 To ParamCount - 1 Do
+    If ParamStr(I) = '--out' Then Directory := ParamStr(I + 1);
+  If Directory = '' Then Halt(1);
+  If GetEnvironmentVariable('LAZ_TEST_CODEX_SCHEMA') = 'fail' Then Halt(1);
+  Omit := '';
+  If GetEnvironmentVariable('LAZ_TEST_CODEX_SCHEMA') = 'missing' Then Omit := 'authUrl';
+  WriteSchemaFile(Directory, 'v2/LoginAccountParams.json', ['type'], Omit);
+  WriteSchemaFile(Directory, 'v2/LoginAccountResponse.json', ['type', 'loginId', 'authUrl'], Omit);
+  WriteSchemaFile(Directory, 'v2/GetAccountResponse.json', ['account', 'requiresOpenaiAuth'], Omit);
+  WriteSchemaFile(Directory, 'v2/ThreadStartParams.json', ['dynamicTools', 'modelProvider', 'permissions', 'approvalPolicy'], Omit);
+  WriteSchemaFile(Directory, 'v2/ThreadStartResponse.json', ['modelProvider', 'sandbox', 'approvalPolicy', 'thread'], Omit);
+  WriteSchemaFile(Directory, 'v2/TurnStartParams.json', ['threadId', 'input', 'permissions', 'summary'], Omit);
+  WriteSchemaFile(Directory, 'v2/TurnInterruptParams.json', ['threadId', 'turnId'], Omit);
+  WriteSchemaFile(Directory, 'v2/TurnSteerParams.json', ['threadId', 'expectedTurnId', 'input'], Omit);
+  WriteSchemaFile(Directory, 'DynamicToolCallParams.json', ['threadId', 'turnId', 'callId', 'tool', 'arguments'], Omit);
+  WriteSchemaFile(Directory, 'DynamicToolCallResponse.json', ['contentItems', 'success'], Omit);
+  WriteSchemaFile(Directory, 'v2/AgentMessageDeltaNotification.json', ['threadId', 'turnId', 'itemId', 'delta'], Omit);
+End;
 Begin
   If ParamStr(1) = '--version' Then
     Begin
       If GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION') <> '' Then WriteLn(GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION'))
-      Else WriteLn(QualifiedCodexVersion);
+      Else WriteLn('codex-cli 0.160.0');
+      Halt;
+    End;
+  If (ParamCount > 0) And (ParamStr(1) = 'app-server') Then
+    Begin
+      WriteSchemaFixture;
       Halt;
     End;
   If ParamCount > 0 Then Begin FakeRuntime; Halt; End;
@@ -318,22 +374,31 @@ Begin
   Try
     VersionEnv := TStringList.Create;
     Try
+      ClearCodexQualificationCache;
+      Check('release version shape accepted', CodexVersionIsRelease('codex-cli 0.160.0') And
+        CodexVersionIsRelease('codex-cli 0.153.99'));
+      Check('alpha and short versions rejected', (Not CodexVersionIsRelease('codex-cli 0.154.0-alpha.6.1')) And
+        (Not CodexVersionIsRelease('codex-cli 0.160')) And (Not CodexVersionIsRelease('codex-cli 0.160.0 ')));
       CodexProfileEnvironment(GetTempDir, VersionEnv);
-      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := QualifiedCodexVersion;
-      Check('current qualified runtime connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
-      Client.Disconnect;
-      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := PreviousQualifiedCodexVersion;
-      Check('previous qualified runtime still connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
-      Client.Disconnect;
-      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := EarlierQualifiedCodexVersion;
-      Check('earlier qualified runtime still connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
-      Client.Disconnect;
-      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.153.99';
-      Check('unqualified runtime remains rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
-        And (Pos('not qualified', Client.LastError) > 0));
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.154.0-alpha.6.1';
       Check('alpha runtime remains rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
-        And (Pos('found codex-cli 0.154.0-alpha.6.1', Client.LastError) > 0));
+        And (Pos('not a release build', Client.LastError) > 0) And (Pos('0.154.0-alpha.6.1', Client.LastError) > 0));
+      ClearCodexQualificationCache;
+      VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := 'missing';
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.160.0';
+      Check('schema missing authUrl rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
+        And (Pos('authUrl', Client.LastError) > 0) And (Pos('LoginAccountResponse.json', Client.LastError) > 0));
+      ClearCodexQualificationCache;
+      VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := '';
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.160.0';
+      Check('current release connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.153.4';
+      Check('older release connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.153.99';
+      Check('unlisted release connects when schema matches', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
     Finally VersionEnv.Free; End;
     Check('unauthenticated turn rejected', Not Client.StartTurn('test'));
     Start;
