@@ -94,7 +94,6 @@ Type
     SessionInfoMenuItem: TMenuItem;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
-    SidebarHeader: TPanel;
     TargetRow: TPanel;
     TargetLabel: TLabel;
     TargetCombo: TComboBox;
@@ -107,6 +106,9 @@ Type
     PlanSheet: TTabSheet;
     ModeSplitter: TSplitter;
     ConversationColumn: TPanel;
+    ConversationHeader: TPanel;
+    SessionControlRow: TPanel;
+    ModelStatusLabel: TLabel;
     PromptHost: TPanel;
     ConversationLabel: TLabel;
     ConversationList: TListBox;
@@ -365,7 +367,8 @@ Type
     Procedure SyncModeUi;
     Procedure UpdateModeBadge;
     Function ModeStatusText: String;
-    Procedure PinSidebarHeader;
+    Procedure ApplyModelStatus;
+    Procedure ApplySkillStatus;
     Procedure UpdateModeSidePanels;
     Procedure ApplyActiveMode;
     Procedure ShowChatSurfaceKeepMode;
@@ -670,7 +673,6 @@ Begin
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
   EnsureInputPopup;
-  PinSidebarHeader;
   If Assigned(StatusFooter) Then
     Begin
       StatusFooter.OnLeftClick := @StatusFooterLeftClick;
@@ -1170,24 +1172,59 @@ Begin
     Result := Format('%s · %s', [ModeChipCaption(ActiveMode), ToolsHint]);
 End;
 
-Procedure TProjectAssistantForm.PinSidebarHeader;
+Procedure TProjectAssistantForm.ApplyModelStatus;
 Begin
-  { Target and Mode stay above the History and Plan pages. }
-  If Not Assigned(SidebarHeader) Then
-    Exit;
-  SidebarHeader.Align := alTop;
-  SidebarHeader.Top := 0;
-  If Assigned(SidebarPages) Then
+  If Assigned(ModelStatusLabel) Then
     Begin
-      SidebarPages.Align := alClient;
-      SidebarPages.Top := SidebarHeader.Height;
+      ModelStatusLabel.Caption := ModeStatusText;
+      ModelStatusLabel.Hint := ModeStatusText;
+      ModelStatusLabel.ShowHint := ModelStatusLabel.Caption <> '';
+    End;
+  If Assigned(StatusFooter) Then
+    Begin
+      StatusFooter.SetLeftText('');
+      StatusFooter.SetLeftHint('');
+    End;
+End;
+
+Procedure TProjectAssistantForm.ApplySkillStatus;
+Begin
+  If Not Assigned(StatusFooter) Then
+    Exit;
+  If FUseCodex Then
+    Begin
+      If ActiveMode = amChat Then
+        Begin
+          StatusFooter.SetSkillText('Skill: not sent');
+          StatusFooter.SetSkillHint('Chat does not send a skill or Lazarus tools');
+        End
+      Else
+        Begin
+          StatusFooter.SetSkillText('Lazarus tools');
+          StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
+        End;
+    End
+  Else If ActiveMode = amChat Then
+    Begin
+      StatusFooter.SetSkillText('Skill: not sent');
+      StatusFooter.SetSkillHint('Chat does not send a skill');
+    End
+  Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
+    Begin
+      StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
+      StatusFooter.SetSkillHint('Click to pin a different skill');
+    End
+  Else
+    Begin
+      StatusFooter.SetSkillText('Skill: none');
+      StatusFooter.SetSkillHint('Click to pin a skill');
     End;
 End;
 
 Procedure TProjectAssistantForm.UpdateModeBadge;
 Begin
-  If Assigned(StatusFooter) Then
-    StatusFooter.SetLeftText(ModeStatusText);
+  ApplyModelStatus;
+  ApplySkillStatus;
   If Assigned(ModeCombo) Then
     ModeCombo.Enabled := Not (FSending Or FModeLocked);
   UpdateWorkActions;
@@ -1269,7 +1306,6 @@ Begin
       Else
         PlanSheet.Enabled := True;
     End;
-  PinSidebarHeader;
 End;
 
 Procedure TProjectAssistantForm.ShowChatSurfaceKeepMode;
@@ -3300,11 +3336,11 @@ Begin
       LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, FCodexApproval]);
       CentreText := Format('Context ~%d tokens', [FContextUsed]);
     End;
-  StatusFooter.SetLeftText(ModeStatusText);
+  ApplyModelStatus;
   StatusFooter.SetModelText(LeftText);
   StatusFooter.SetCentreText(CentreText);
   StatusFooter.SetRightText(StatusText);
-  StatusFooter.SetLeftHint(ModeStatusText);
+  StatusFooter.SetLeftHint('');
   StatusFooter.SetModelHint('Click to change model, thinking level, or approval');
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
     (BlockReason <> '') Then
@@ -3318,37 +3354,13 @@ Begin
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       RefreshAttachAction;
       StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
-      If ActiveMode = amChat Then
-        Begin
-          StatusFooter.SetSkillText('Skill: not sent');
-          StatusFooter.SetSkillHint('Chat does not send a skill or Lazarus tools');
-        End
-      Else
-        Begin
-          StatusFooter.SetSkillText('Lazarus tools');
-          StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
-        End;
     End
   Else
     Begin
       If Assigned(SendAction) Then SendAction.Hint := '';
       RefreshAttachAction;
-      If ActiveMode = amChat Then
-        Begin
-          StatusFooter.SetSkillText('Skill: not sent');
-          StatusFooter.SetSkillHint('Chat does not send a skill');
-        End
-      Else If Assigned(AssistantChatConfig) And (AssistantChatConfig.ActiveSkill <> '') Then
-        Begin
-          StatusFooter.SetSkillText(AssistantChatConfig.ActiveSkill);
-          StatusFooter.SetSkillHint('Click to pin a different skill');
-        End
-      Else
-        Begin
-          StatusFooter.SetSkillText('Skill: none');
-          StatusFooter.SetSkillHint('Click to pin a skill');
-        End;
     End;
+  ApplySkillStatus;
   If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
 End;

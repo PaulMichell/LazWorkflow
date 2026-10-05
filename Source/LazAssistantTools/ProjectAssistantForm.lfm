@@ -116,133 +116,15 @@ object ProjectAssistantForm: TProjectAssistantForm
       ClientHeight = 642
       ClientWidth = 300
       TabOrder = 0
-      object SidebarHeader: TPanel
-        Left = 8
-        Height = 72
-        Top = 6
-        Width = 284
-        Align = alTop
-        BorderSpacing.Left = 8
-        BorderSpacing.Top = 6
-        BorderSpacing.Right = 8
-        BorderSpacing.Bottom = 4
-        BevelOuter = bvNone
-        ClientHeight = 72
-        ClientWidth = 284
-        TabOrder = 0
-        object TargetRow: TPanel
-          Left = 0
-          Height = 36
-          Top = 0
-          Width = 284
-          Anchors = [akTop, akLeft, akRight]
-          BevelOuter = bvNone
-          ClientHeight = 36
-          ClientWidth = 284
-          TabOrder = 0
-          object TargetLabel: TLabel
-            Left = 0
-            Height = 36
-            Top = 0
-            Width = 64
-            Align = alLeft
-            AutoSize = False
-            BorderSpacing.Right = 6
-            Caption = '&Target:'
-            FocusControl = TargetCombo
-            Layout = tlCenter
-            ParentColor = False
-          end
-          object TargetBrowseButton: TButton
-            Left = 248
-            Height = 28
-            Hint = 'Choose a target folder'
-            Top = 4
-            Width = 36
-            Align = alRight
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 4
-            BorderSpacing.Bottom = 4
-            Caption = '...'
-            ParentShowHint = False
-            ShowHint = True
-            TabOrder = 1
-            OnClick = TargetBrowseClick
-          end
-          object TargetCombo: TComboBox
-            Left = 70
-            Height = 28
-            Top = 4
-            Width = 174
-            Align = alClient
-            BorderSpacing.Top = 4
-            BorderSpacing.Bottom = 4
-            ItemHeight = 18
-            ParentShowHint = False
-            ShowHint = True
-            Style = csDropDownList
-            TabOrder = 0
-            OnChange = TargetChoiceChanged
-            OnDropDown = RefreshTargetChoices
-            OnMouseEnter = UpdateTargetComboHint
-          end
-        end
-        object ModePicker: TPanel
-          Left = 0
-          Height = 36
-          Top = 36
-          Width = 284
-          Anchors = [akTop, akLeft, akRight]
-          BevelOuter = bvNone
-          ClientHeight = 36
-          ClientWidth = 284
-          TabOrder = 1
-          object ModeLabel: TLabel
-            Left = 0
-            Height = 36
-            Top = 0
-            Width = 64
-            Align = alLeft
-            AutoSize = False
-            BorderSpacing.Right = 6
-            Caption = 'Mode:'
-            FocusControl = ModeCombo
-            Layout = tlCenter
-            ParentColor = False
-          end
-          object ModeCombo: TComboBox
-            Left = 70
-            Height = 28
-            Top = 4
-            Width = 214
-            Align = alClient
-            BorderSpacing.Top = 4
-            BorderSpacing.Bottom = 4
-            ItemHeight = 24
-            ItemIndex = 0
-            Items.Strings = (
-              'Chat'
-              'Inspect'
-              'Document'
-              'Plan'
-              'Build'
-            )
-            Style = csDropDownList
-            TabOrder = 0
-            Text = 'Chat'
-            OnChange = ModeComboChange
-          end
-        end
-      end
       object SidebarPages: TPageControl
         Left = 0
-        Height = 560
-        Top = 82
+        Height = 642
+        Top = 0
         Width = 300
         ActivePage = PlanSheet
         Align = alClient
         TabIndex = 1
-        TabOrder = 1
+        TabOrder = 0
         OnChange = SidebarPagesChange
         OnChanging = SidebarPagesChanging
         object HistorySheet: TTabSheet
@@ -518,6 +400,147 @@ object ProjectAssistantForm: TProjectAssistantForm
       ClientHeight = 642
       ClientWidth = 981
       TabOrder = 1
+      object ConversationHeader: TPanel
+        Left = 4
+        Height = 58
+        Top = 4
+        Width = 973
+        Align = alTop
+        BorderSpacing.Left = 4
+        BorderSpacing.Top = 4
+        BorderSpacing.Right = 4
+        BevelOuter = bvNone
+        ClientHeight = 58
+        ClientWidth = 973
+        TabOrder = 0
+        object SessionControlRow: TPanel
+          Left = 0
+          Height = 36
+          Top = 0
+          Width = 973
+          Align = alTop
+          BevelOuter = bvNone
+          ClientHeight = 36
+          ClientWidth = 973
+          TabOrder = 0
+          object TargetRow: TPanel
+            Left = 0
+            Height = 36
+            Top = 0
+            Width = 681
+            Align = alClient
+            BevelOuter = bvNone
+            ClientHeight = 36
+            ClientWidth = 681
+            TabOrder = 0
+            object TargetLabel: TLabel
+              Left = 0
+              Height = 36
+              Top = 0
+              Width = 64
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Right = 6
+              Caption = '&Target:'
+              FocusControl = TargetCombo
+              Layout = tlCenter
+              ParentColor = False
+            end
+            object TargetBrowseButton: TButton
+              Left = 645
+              Height = 28
+              Hint = 'Choose a target folder'
+              Top = 4
+              Width = 36
+              Align = alRight
+              BorderSpacing.Left = 4
+              BorderSpacing.Top = 4
+              BorderSpacing.Bottom = 4
+              Caption = '...'
+              ParentShowHint = False
+              ShowHint = True
+              TabOrder = 1
+              OnClick = TargetBrowseClick
+            end
+            object TargetCombo: TComboBox
+              Left = 70
+              Height = 28
+              Top = 4
+              Width = 571
+              Align = alClient
+              BorderSpacing.Top = 4
+              BorderSpacing.Bottom = 4
+              ItemHeight = 18
+              ParentShowHint = False
+              ShowHint = True
+              Style = csDropDownList
+              TabOrder = 0
+              OnChange = TargetChoiceChanged
+              OnDropDown = RefreshTargetChoices
+              OnMouseEnter = UpdateTargetComboHint
+            end
+          end
+          object ModePicker: TPanel
+            Left = 693
+            Height = 36
+            Top = 0
+            Width = 280
+            Align = alRight
+            BevelOuter = bvNone
+            BorderSpacing.Left = 12
+            ClientHeight = 36
+            ClientWidth = 280
+            TabOrder = 1
+            object ModeLabel: TLabel
+              Left = 0
+              Height = 36
+              Top = 0
+              Width = 64
+              Align = alLeft
+              AutoSize = False
+              BorderSpacing.Right = 6
+              Caption = 'Mode:'
+              FocusControl = ModeCombo
+              Layout = tlCenter
+              ParentColor = False
+            end
+            object ModeCombo: TComboBox
+              Left = 70
+              Height = 28
+              Top = 4
+              Width = 210
+              Align = alClient
+              BorderSpacing.Top = 4
+              BorderSpacing.Bottom = 4
+              ItemHeight = 24
+              ItemIndex = 0
+              Items.Strings = (
+                'Chat'
+                'Inspect'
+                'Document'
+                'Plan'
+                'Build'
+              )
+              Style = csDropDownList
+              TabOrder = 0
+              Text = 'Chat'
+              OnChange = ModeComboChange
+            end
+          end
+        end
+        object ModelStatusLabel: TLabel
+          Left = 0
+          Height = 22
+          Top = 36
+          Width = 973
+          Align = alClient
+          AutoSize = False
+          Caption = ''
+          Layout = tlCenter
+          ParentColor = False
+          ShowHint = True
+        end
+      end
       object PromptHost: TPanel
         Left = 0
         Height = 75

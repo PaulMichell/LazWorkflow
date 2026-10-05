@@ -109,7 +109,7 @@ End;
 
 Procedure TStatusFooterFrame.SetOnLeftClick(Value: TNotifyEvent);
 Begin
-  { The model line is centred with context. LeftLabel is the mode description. }
+  { The model line is centred on the footer. LeftLabel is optional side text. }
   FOnLeftClick := Value;
   ApplyClickStyle(ModelLabel, Assigned(Value));
   If Assigned(LeftLabel) Then
@@ -167,6 +167,17 @@ Begin
     Begin
       LeftLabel.AutoSize := True;
       LeftLabel.Caption := Value;
+      If Trim(Value) = '' Then
+        Begin
+          LeftLabel.Visible := False;
+          LeftLabel.Align := alNone;
+          LeftLabel.Width := 0;
+        End
+      Else
+        Begin
+          LeftLabel.Align := alLeft;
+          LeftLabel.Visible := True;
+        End;
     End;
   If Assigned(Panel) Then
     Panel.Realign;
@@ -175,17 +186,26 @@ End;
 
 Procedure TStatusFooterFrame.LayoutCentrePair;
 Var
-  Gap, PairWidth, Origin, ModelTop, CentreTop: Integer;
+  Gap, Origin, ModelTop, CentreTop, MinOrigin, MaxOrigin: Integer;
 Begin
   If Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
     Exit;
   ModelLabel.AutoSize := True;
   CentreLabel.AutoSize := True;
   Gap := Scale96ToForm(16);
-  PairWidth := ModelLabel.Width + Gap + CentreLabel.Width;
-  Origin := (CentreHost.ClientWidth - PairWidth) Div 2;
-  If Origin < 0 Then
-    Origin := 0;
+  { Centre the model line on the whole footer. Context stays to its right and must not pull that line off centre. }
+  If Assigned(Panel) And (Panel.ClientWidth > 0) Then
+    Origin := ((Panel.ClientWidth - ModelLabel.Width) Div 2) - CentreHost.Left
+  Else
+    Origin := (CentreHost.ClientWidth - ModelLabel.Width) Div 2;
+  MinOrigin := 0;
+  MaxOrigin := CentreHost.ClientWidth - ModelLabel.Width - Gap - CentreLabel.Width;
+  If MaxOrigin < MinOrigin Then
+    MaxOrigin := MinOrigin;
+  If Origin < MinOrigin Then
+    Origin := MinOrigin;
+  If Origin > MaxOrigin Then
+    Origin := MaxOrigin;
   ModelTop := (CentreHost.ClientHeight - ModelLabel.Height) Div 2;
   If ModelTop < 0 Then
     ModelTop := 0;
@@ -206,8 +226,12 @@ Procedure TStatusFooterFrame.SetSkillText(Const Value: String);
 Begin
   If Not Assigned(SkillLabel) Then
     Exit;
+  SkillLabel.AutoSize := True;
   SkillLabel.Caption := Value;
   SkillLabel.Visible := Trim(Value) <> '';
+  If Assigned(Panel) Then
+    Panel.Realign;
+  LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetModelText(Const Value: String);
@@ -233,7 +257,13 @@ End;
 Procedure TStatusFooterFrame.SetRightText(Const Value: String);
 Begin
   If Assigned(RightLabel) Then
-    RightLabel.Caption := Value;
+    Begin
+      RightLabel.AutoSize := True;
+      RightLabel.Caption := Value;
+    End;
+  If Assigned(Panel) Then
+    Panel.Realign;
+  LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
