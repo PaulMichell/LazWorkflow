@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, AssistantConnections, AssistantCompatibleClient;
+  Classes, SysUtils, fpjson, AssistantConnections, AssistantCompatibleClient, AssistantAccountUsage;
 
 Const
   FixtureKey = 'fixture-secret-key';
@@ -117,7 +117,9 @@ Var
   Models: TStringList;
   Sent: TJSONArray;
   Completion: TCompatibleCompletion;
-  ErrorText: String;
+  ErrorText, KeyBody: String;
+  StatusCode: Integer;
+  Snapshot: TAccountUsageSnapshot;
 Begin
   NextStatus := 200;
   NextBody := ModelListBody;
@@ -175,6 +177,65 @@ Begin
     Check('non-200 returns the provider error', Not Client.ListModels(Connection, Models, ErrorText) And
       (Pos('HTTP 503', ErrorText) > 0) And (Pos('overloaded', ErrorText) > 0));
     Check('provider error does not contain the key', Pos(FixtureKey, ErrorText) = 0);
+
+    PrepareConnection(Connection, 'openrouter', 0);
+    Connection.Id := 'or-key';
+    Connection.Backend := 'openai-compatible';
+    NextStatus := 200;
+    NextBody := '{"data":{"limit_remaining":18.2,"usage_daily":1.25}}';
+    LastUrl := '';
+    Check('openrouter key uses /key', Client.FetchOpenRouterKey(Connection, KeyBody, StatusCode, ErrorText) And
+      (StatusCode = 200));
+    Check('openrouter key path is /key', LastUrl = AssistantOpenRouterApiBase + '/key');
+    Check('openrouter key does not call /credits', Pos('/credits', LastUrl) = 0);
+    Check('openrouter key sends the bearer', Pos('Authorization: Bearer ' + FixtureKey, LastHeaders) = 1);
+    Check('openrouter key sends the title', Pos('X-Title: LazWorkflow', LastHeaders) > 0);
+    Check('openrouter key error does not contain the key', Pos(FixtureKey, ErrorText) = 0);
+
+    LastUrl := '';
+    Connection.ApiBase := 'https://example.invalid/v1';
+    Check('client refuses a custom key URL', (Not Client.FetchOpenRouterKey(Connection, KeyBody, StatusCode, ErrorText)) And
+      (LastUrl = ''));
+
+    SetAccountUsageCompatibleTransport(@FixtureGet, @FixturePost);
+    Connection.ApiBase := 'https://example.invalid/v1';
+    LastUrl := '';
+    Check('custom base is unknown', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      (Not Snapshot.Known) And (ErrorText = '') And (Snapshot.Caption = ''));
+    Check('custom base does not call transport', LastUrl = '');
+
+    Connection.ApiBase := AssistantOpenRouterApiBase;
+    NextStatus := 200;
+    NextBody := '{"data":{"limit_remaining":18.2,"usage_daily":1.25}}';
+    Check('openrouter query reports the balance', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      Snapshot.Known And (Snapshot.Caption = 'Left $18.20') And (Snapshot.ConnectionId = 'or-key'));
+    Check('openrouter query hint has the daily figure', Pos('Daily 1.25', Snapshot.Hint) > 0);
+    Check('registered query uses /key', LastUrl = AssistantOpenRouterApiBase + '/key');
+    Check('registered query does not call /credits', Pos('/credits', LastUrl) = 0);
+
+    NextBody := '{"data":{"limit_remaining":null,"free_model_daily_requests":{"remaining":12}}}';
+    Check('free request counter is shown', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      Snapshot.Known And (Snapshot.Caption = 'Free 12 left'));
+
+    NextBody := '{"data":{"limit_remaining":null}}';
+    Check('unlimited key is unknown', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      (Not Snapshot.Known) And (ErrorText = '') And (Snapshot.Caption = ''));
+
+    NextBody := '{"data":{}}';
+    Check('key body without a balance is a failed query', (Not QueryAccountUsage(Connection, '', '', Snapshot, ErrorText)) And
+      (Not Snapshot.Known) And (Snapshot.Caption = ''));
+
+    NextStatus := 402;
+    NextBody := '{"data":{"limit_remaining":0}}';
+    Check('non-200 key usage is a failed query', (Not QueryAccountUsage(Connection, '', '', Snapshot, ErrorText)) And
+      (Not Snapshot.Known) And (Snapshot.Caption = '') And (Pos(FixtureKey, ErrorText) = 0) And
+      (Pos('0.00', ErrorText) = 0));
+
+    LastUrl := '';
+    Connection.KeyValue := '';
+    Check('missing key fails before transport', (Not QueryAccountUsage(Connection, '', '', Snapshot, ErrorText)) And
+      (LastUrl = '') And (Pos(FixtureKey, ErrorText) = 0));
+    SetAccountUsageCompatibleTransport(Nil, Nil);
 
     LastUrl := '';
     Connection.KeySource := 'env';

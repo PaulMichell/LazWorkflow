@@ -5,8 +5,9 @@ Unit AssistantAccountUsage;
   grok stays unregistered: the desktop OAuth token is not a team billing
   credential, and xAI's balance routes need a team id this program does not store.
   claude stays unregistered: plan quota is an interactive screen, not a JSON
-  result this program owns. A custom openai-compatible base stays unregistered:
-  it has no standard balance route. A missing registration is unknown, not an
+  result this program owns. openai-compatible is registered, but only
+  AssistantOpenRouterApiBase is queried, via GET /key. A custom base returns
+  unknown and does not open a socket. A missing registration is unknown, not an
   error, and does not open a socket.
 
   OpenRouter and Codex response parsers are plain functions so a fixture can
@@ -23,7 +24,7 @@ Unit AssistantAccountUsage;
 Interface
 
 Uses
-  SysUtils, AssistantConnections;
+  SysUtils, AssistantConnections, AssistantCompatibleClient;
 
 Type
   TAccountUsageSnapshot = Record
@@ -50,6 +51,8 @@ Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snaps
   Out ErrorText: String): Boolean;
 Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
+/// Both functions are required. A nil pair uses the real HTTPS client. Do not log the headers.
+Procedure SetAccountUsageCompatibleTransport(GetFn: TCompatibleHttpGet; PostFn: TCompatibleHttpPost);
 
 Implementation
 
@@ -78,6 +81,8 @@ Var
   Registry: Array Of TAccountUsageRegistration;
   RegistryLock: TRTLCriticalSection;
   RegistryReady: Boolean;
+  AccountGet: TCompatibleHttpGet;
+  AccountPost: TCompatibleHttpPost;
 
 Procedure ClearAccountUsageSnapshot(Out Snapshot: TAccountUsageSnapshot);
 Begin
@@ -529,10 +534,67 @@ Begin
   End;
 End;
 
+Procedure SetAccountUsageCompatibleTransport(GetFn: TCompatibleHttpGet; PostFn: TCompatibleHttpPost);
+Begin
+  If Assigned(GetFn) And Assigned(PostFn) Then
+    Begin
+      AccountGet := GetFn;
+      AccountPost := PostFn;
+    End
+  Else
+    Begin
+      AccountGet := Nil;
+      AccountPost := Nil;
+    End;
+End;
+
+Function QueryCompatibleAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
+  Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
+Var
+  Client: TAssistantCompatibleClient;
+  Body: String;
+  StatusCode: Integer;
+Begin
+  ClearAccountUsageSnapshot(Snapshot);
+  ErrorText := '';
+  Result := True;
+  { RuntimePath and ProfileDir are for the Codex query. }
+  If Not Assigned(Connection) Then
+    Exit;
+  Snapshot.ConnectionId := Connection.Id;
+  If Connection.ApiBase <> AssistantOpenRouterApiBase Then
+    Exit;
+  If Assigned(AccountGet) And Assigned(AccountPost) Then
+    Client := TAssistantCompatibleClient.CreateForTransport(AccountGet, AccountPost)
+  Else
+    Client := TAssistantCompatibleClient.Create;
+  Try
+    If Not Client.FetchOpenRouterKey(Connection, Body, StatusCode, ErrorText) Then
+      Begin
+        Result := False;
+        Snapshot.Known := False;
+        If ErrorText = '' Then
+          ErrorText := 'OpenRouter key usage request failed.';
+        Exit;
+      End;
+    If StatusCode <> 200 Then
+      Begin
+        Result := False;
+        Snapshot.Known := False;
+        ErrorText := 'OpenRouter key usage was not returned.';
+        Exit;
+      End;
+    Result := ParseOpenRouterAccountUsage(Body, Connection.Id, Snapshot, ErrorText);
+  Finally
+    Client.Free;
+  End;
+End;
+
 Initialization
 
 InitCriticalSection(RegistryLock);
 RegistryReady := True;
+RegisterAccountUsageQuery('openai-compatible', @QueryCompatibleAccountUsage);
 
 Finalization
 

@@ -49,6 +49,9 @@ Type
     Function ListModels(Connection: TAssistantConnection; ModelIds: TStrings; Out ErrorText: String): Boolean;
     Function CompleteOnce(Connection: TAssistantConnection; Messages: TJSONArray;
       Out Completion: TCompatibleCompletion; Out ErrorText: String): Boolean;
+    /// GET {ApiBase}/key with the chat bearer header. Does not call /credits.
+    Function FetchOpenRouterKey(Connection: TAssistantConnection; Out Body: String; Out StatusCode: Integer;
+      Out ErrorText: String): Boolean;
   End;
 
 Function ParseCompatibleModelList(Const Body: String; ModelIds: TStrings; Out ErrorText: String): Boolean;
@@ -437,6 +440,36 @@ Begin
       Exit;
     End;
   Result := ParseCompatibleModelList(Body, ModelIds, ErrorText);
+End;
+
+Function TAssistantCompatibleClient.FetchOpenRouterKey(Connection: TAssistantConnection; Out Body: String;
+  Out StatusCode: Integer; Out ErrorText: String): Boolean;
+Var
+  Key, Headers, Url: String;
+Begin
+  Result := False;
+  Body := '';
+  StatusCode := 0;
+  ErrorText := '';
+  If Not Assigned(Connection) Or (Connection.ApiBase <> AssistantOpenRouterApiBase) Then
+    Begin
+      ErrorText := 'This connection is not OpenRouter.';
+      Exit;
+    End;
+  If Not RequestReady(Connection, ErrorText) Then
+    Exit;
+  If Not ResolveKey(Connection, Key, ErrorText) Then
+    Exit;
+  { Balance is /key. /credits needs a provisioning key this connection does not store. }
+  Headers := RequestHeaders(Connection.Preset, Key);
+  Url := JoinApiUrl(Connection.ApiBase, '/key');
+  If Not DoGet(Url, Headers, Body, StatusCode, ErrorText) Then
+    Begin
+      If ErrorText = '' Then
+        ErrorText := 'OpenRouter key usage request failed.';
+      Exit;
+    End;
+  Result := True;
 End;
 
 Function TAssistantCompatibleClient.CompleteOnce(Connection: TAssistantConnection; Messages: TJSONArray;
