@@ -87,8 +87,6 @@ Function PreserveAssistantImages(Const StoreDirectory, ArchiveId, ConversationFi
   Const FallbackDirectory: String = ''): Boolean;
 /// Copy archived files back into the live image directory when Activate finds them missing.
 Function RestoreAssistantImages(Const StoreDirectory, ArchiveId, ConversationFile: String; Out ErrorText: String): Boolean;
-/// True when every archived copy is present in the live directory, or was never archived.
-Function AssistantArchiveImagesRecovered(Const StoreDirectory, ArchiveId, ConversationFile: String): Boolean;
 /// Delete one archive image directory. Does not follow a symbolic link.
 Function DeleteAssistantImageArchive(Const StoreDirectory, ArchiveId: String; Out ErrorText: String): Boolean;
 /// Delete live image files that none of ConversationFiles still names. The list is current plus archives.
@@ -134,9 +132,6 @@ Function StoreAssistantImageStreamInStore(Const ProjectRoot, StoreDirectory, Ori
   Out Stored: TAssistantStoredImage; Out ErrorText: String): Boolean;
 /// Cap a submission. Extra refs are dropped, not stored again.
 Function LimitAssistantImageRefs(Const Refs: TAssistantImageRefArray): TAssistantImageRefArray;
-/// Same-thread handoff from a tool to the actor. Not for subagents.
-Procedure NoteThreadToolImages(Const Refs: TAssistantImageRefArray);
-Function TakeThreadToolImages(Out Refs: TAssistantImageRefArray): Boolean;
 
 Implementation
 
@@ -2658,35 +2653,6 @@ Begin
   End;
 End;
 
-Function AssistantArchiveImagesRecovered(Const StoreDirectory, ArchiveId, ConversationFile: String): Boolean;
-Var
-  Names: TStringList;
-  SourceDir, LiveDir, SourcePath, LivePath: String;
-  I: Integer;
-Begin
-  Result := False;
-  SourceDir := ArchiveImagesDirectory(StoreDirectory, ArchiveId);
-  LiveDir := StoreImagesDirectory(StoreDirectory);
-  If SourceDir = '' Then Exit;
-  If Not DirectoryExistsUTF8(ExcludeTrailingPathDelimiter(SourceDir)) Then Exit(True);
-  If FileIsSymlink(ExcludeTrailingPathDelimiter(SourceDir)) Then Exit;
-  Names := NewImageNameList;
-  Try
-    CollectConversationImageNames(ConversationFile, Names);
-    For I := 0 To Names.Count - 1 Do
-      Begin
-        SourcePath := IncludeTrailingPathDelimiter(SourceDir) + Names[I];
-        LivePath := IncludeTrailingPathDelimiter(LiveDir) + Names[I];
-        If FileIsSymlink(SourcePath) Or FileIsSymlink(LivePath) Then Exit;
-        If FileExistsUTF8(SourcePath) And Not DirectoryExistsUTF8(SourcePath) Then
-          If Not FileExistsUTF8(LivePath) Or DirectoryExistsUTF8(LivePath) Then Exit;
-      End;
-    Result := True;
-  Finally
-    Names.Free;
-  End;
-End;
-
 Function DeleteAssistantImageArchive(Const StoreDirectory, ArchiveId: String; Out ErrorText: String): Boolean;
 Var
   Directory, Path: String;
@@ -3119,27 +3085,6 @@ Begin
   If Count > AssistantImageMaxAttachments Then Count := AssistantImageMaxAttachments;
   SetLength(Result, Count);
   For I := 0 To Count - 1 Do Result[I] := Refs[I];
-End;
-
-ThreadVar
-  ToolImageRefs: TAssistantImageRefArray;
-
-Procedure NoteThreadToolImages(Const Refs: TAssistantImageRefArray);
-Var
-  I: Integer;
-Begin
-  SetLength(ToolImageRefs, Length(Refs));
-  For I := 0 To High(Refs) Do ToolImageRefs[I] := Refs[I];
-End;
-
-Function TakeThreadToolImages(Out Refs: TAssistantImageRefArray): Boolean;
-Var
-  I: Integer;
-Begin
-  SetLength(Refs, Length(ToolImageRefs));
-  For I := 0 To High(ToolImageRefs) Do Refs[I] := ToolImageRefs[I];
-  SetLength(ToolImageRefs, 0);
-  Result := Length(Refs) > 0;
 End;
 
 Initialization
