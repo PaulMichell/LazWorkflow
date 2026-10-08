@@ -628,6 +628,7 @@ Begin
     End;
 End;
 
+{ Latest completed turn only. A missing account quota does not change this caption. }
 Procedure TAssistantSettingsForm.ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
 Var
   Root: String;

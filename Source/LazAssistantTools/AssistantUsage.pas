@@ -2,6 +2,8 @@ Unit AssistantUsage;
 
 { Appends one usage line per completed turn. Counts and cost are copied only
   when the provider sent them. A line never contains a key or a prompt body.
+  Account allowance is not stored here. A quota query must not append a line,
+  and a missing quota must not change UsageUnavailableText.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}

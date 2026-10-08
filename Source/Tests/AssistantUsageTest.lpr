@@ -13,7 +13,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, FileUtil, LazFileUtils, AssistantSampler, AssistantCompatibleClient, AssistantClaudeClient,
-  AssistantUsage;
+  AssistantConnections, AssistantAccountUsage, AssistantUsage;
 
 Const
   PromptText = 'please summarise the secret prompt body ALPHA-PROMPT';
@@ -105,6 +105,7 @@ Begin
     Check('usage file has none of the prompt text', Pos(PromptText, Body) = 0);
     Check('usage file has none of the answer text', (Pos('The answer.', Body) = 0) And
       (Pos('fixture answer', Body) = 0) And (Pos('plain answer', Body) = 0));
+    Check('turn log has no account quota', (Pos('limit_remaining', Body) = 0) And (Pos('rateLimits', Body) = 0));
   Finally
     Lines.Free;
     Parser.Free;
@@ -112,9 +113,45 @@ Begin
   End;
 End;
 
+Procedure TestQuotaLeavesTurnLog;
+Var
+  Root, ErrorText: String;
+  Snapshot: TAccountUsageSnapshot;
+  Item: TAssistantUsageRecord;
+  Connection: TAssistantConnection;
+  Found: Boolean;
+Begin
+  Item := UnavailableUsageRecord('turn-1', 'grok', 'grok-4');
+  Check('missing turn still says usage was not reported', UsageDetailText(False, Item) = UsageUnavailableText);
+  Check('unavailable turn still says usage was not reported', UsageDetailText(True, Item) = UsageUnavailableText);
+  Check('usage sentence is unchanged', UsageUnavailableText = 'This connection did not report usage.');
+  Root := MakeTempRoot;
+  Connection := TAssistantConnection.Create;
+  Try
+    Connection.Id := 'acct-1';
+    Connection.Backend := 'grok';
+    Check('unregistered quota query is unknown', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      (Not Snapshot.Known) And (ErrorText = ''));
+    Check('openrouter balance parses without a usage line',
+      ParseOpenRouterAccountUsage('{"data":{"limit_remaining":18.2,"usage_daily":1.25}}', 'acct-1', Snapshot, ErrorText) And
+      Snapshot.Known);
+    Check('codex limits parse without a usage line',
+      ParseCodexAccountUsage('{"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,' +
+      '"resetsAt":1730947200}}}}', 'acct-1', Snapshot, ErrorText) And Snapshot.Known);
+    Check('quota parse does not append a usage line', Not FileExistsUTF8(UsageFilePath(Root)));
+    Found := LatestUsageRecord(Root, 'acct-1', Item);
+    Check('missing quota does not change the usage sentence', (Not Found) And
+      (UsageDetailText(Found, Item) = UsageUnavailableText));
+  Finally
+    Connection.Free;
+    DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFixtures;
+  TestQuotaLeavesTurnLog;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantUsage tests passed.');

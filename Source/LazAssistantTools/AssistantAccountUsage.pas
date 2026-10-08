@@ -40,6 +40,7 @@ Type
 
 Procedure ClearAccountUsageSnapshot(Out Snapshot: TAccountUsageSnapshot);
 Procedure RegisterAccountUsageQuery(Const BackendId: String; Query: TAccountUsageQuery);
+/// Does not append a turn-usage line and does not change the Settings usage sentence.
 Function QueryAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
   Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
 Function AccountUsageApplies(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): Boolean;
