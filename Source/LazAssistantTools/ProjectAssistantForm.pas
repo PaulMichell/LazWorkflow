@@ -4,10 +4,10 @@ Unit ProjectAssistantForm;
 
   Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
   history, plan/build tiles, and send/steer as one form. Trace paint lives in
-  AssistantTraceView. Reviewed 2026-10: no command-catalog or slash matcher
-  remains in this form. Reviewed 2026-09-27: Chat is a fourth mode with no project
-  tools or skill; the mode bar is a label and combobox. Composer paste and drop
-  stay here. Attach Image is on the memo popup, after Paste. The image list holds pictures only;
+  AssistantTraceView. The prompt is ordinary text. Reviewed 2026-09-27: Chat is a
+  fourth mode with no project tools or skill; the mode bar is a label and combobox.
+  Composer paste and drop stay here. Attach Image is on the memo popup, after Paste.
+  The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
   reorder the text, buttons, or status bar. Paste reads pictures through the
