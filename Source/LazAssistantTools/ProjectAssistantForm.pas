@@ -44,30 +44,19 @@ Type
     SendAction: TAction;
     SendButton: TButton;
     StopAction: TAction;
-    ReviewChangesAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
     TargetBrowseButton: TButton;
     TargetCombo: TComboBox;
     TargetLabel: TLabel;
-    ToggleToolUseAction: TAction;
     ExportHistoryAction: TAction;
     DeleteHistoryAction: TAction;
     ContextBreakdownAction: TAction;
     SessionInfoAction: TAction;
     ModelPickerAction: TAction;
-    ThinkingPickerAction: TAction;
     SkillsPickerAction: TAction;
-    CompactContextAction: TAction;
-    CopyLastAnswerAction: TAction;
-    OpenPlanAction: TAction;
     OpenPlanSheetAction: TAction;
     RemovePlanAction: TAction;
-    ChatModeAction: TAction;
-    InspectModeAction: TAction;
-    DocumentModeAction: TAction;
-    PlanModeAction: TAction;
-    BuildModeAction: TAction;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
     SidebarPages: TPageControl;
@@ -143,9 +132,7 @@ Type
     Procedure NewConversationActionExecute(Sender: TObject);
     Procedure NewPlanActionExecute(Sender: TObject);
     Procedure RunPlanActionExecute(Sender: TObject);
-    Procedure ReviewChangesActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
-    Procedure ToggleToolUseActionExecute(Sender: TObject);
     Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
     Procedure InputPopupPopup(Sender: TObject);
@@ -167,17 +154,9 @@ Type
     Procedure ContextBreakdownActionExecute(Sender: TObject);
     Procedure SessionInfoActionExecute(Sender: TObject);
     Procedure ModelPickerActionExecute(Sender: TObject);
-    Procedure ThinkingPickerActionExecute(Sender: TObject);
     Procedure SkillsPickerActionExecute(Sender: TObject);
-    Procedure CompactContextActionExecute(Sender: TObject);
-    Procedure CopyLastAnswerActionExecute(Sender: TObject);
     Procedure RemovePlanActionExecute(Sender: TObject);
     Procedure OpenPlanActionExecute(Sender: TObject);
-    Procedure ChatModeActionExecute(Sender: TObject);
-    Procedure InspectModeActionExecute(Sender: TObject);
-    Procedure DocumentModeActionExecute(Sender: TObject);
-    Procedure PlanModeActionExecute(Sender: TObject);
-    Procedure BuildModeActionExecute(Sender: TObject);
     Procedure ComposerStackResize(Sender: TObject);
     Procedure PromptHostResize(Sender: TObject);
     Procedure InputMemoPaste(Sender: TObject);
@@ -313,7 +292,6 @@ Type
     Procedure QueueComposerPaste;
     Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
     Procedure ClearUnsentComposerImages;
-    Procedure UpdateViewActionCaptions;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
@@ -945,16 +923,6 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.UpdateViewActionCaptions;
-Begin
-  If Not Assigned(ToggleToolUseAction) Then
-    Exit;
-  If FShowToolUse Then
-    ToggleToolUseAction.Caption := 'Hide Tool Use'
-  Else
-    ToggleToolUseAction.Caption := 'Show Tool Use';
-End;
-
 Procedure TProjectAssistantForm.ClearCurrentTurnDisplay;
 Begin
   FDisplayUser := '';
@@ -1201,24 +1169,10 @@ End;
 
 Procedure TProjectAssistantForm.UpdateWorkActions;
 Begin
-  If Assigned(OpenPlanAction) Then
-    OpenPlanAction.Enabled := GetActivePlanRelativePath <> '';
   If Assigned(OpenPlanSheetAction) Then
     OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
   If Assigned(RemovePlanAction) Then
     RemovePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
-  If Assigned(CompactContextAction) Then
-    CompactContextAction.Enabled := (Not FSending) And Assigned(AssistantClient);
-  If Assigned(ChatModeAction) Then
-    ChatModeAction.Enabled := Not FSending;
-  If Assigned(InspectModeAction) Then
-    InspectModeAction.Enabled := Not FSending;
-  If Assigned(DocumentModeAction) Then
-    DocumentModeAction.Enabled := Not FSending;
-  If Assigned(PlanModeAction) Then
-    PlanModeAction.Enabled := Not FSending;
-  If Assigned(BuildModeAction) Then
-    BuildModeAction.Enabled := Not FSending;
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not FSending;
   If Assigned(RunPlanAction) Then
@@ -1408,7 +1362,6 @@ Begin
       AssistantClient.SetActiveMode(ActiveMode);
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
     End;
-  ReviewChangesAction.Enabled := (Not FSending) And (Not FReviewInProgress);
   If ActiveMode = amPlan Then
     RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
@@ -2875,21 +2828,6 @@ Begin
   FTrace.ApplyWorkedFooter(DurationMs);
 End;
 
-Procedure TProjectAssistantForm.ToggleToolUseActionExecute(Sender: TObject);
-Begin
-  FShowToolUse := Not FShowToolUse;
-  If Assigned(AssistantChatConfig) Then
-    Begin
-      AssistantChatConfig.ShowToolCalls := FShowToolUse;
-      AssistantChatConfig.Save;
-    End;
-  UpdateViewActionCaptions;
-  PersistShellConfig;
-  If Assigned(FTraceView) Then
-    FTraceView.ShowToolUse := FShowToolUse;
-  RefreshChatDisplay(True, False);
-End;
-
 Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
@@ -3291,7 +3229,6 @@ Begin
     End;
   If (FShowThinking = ShowThinking) And (FShowToolUse = ShowTools) Then
     Begin
-      UpdateViewActionCaptions;
       If Assigned(FTraceView) Then
         Begin
           FTraceView.ShowThinking := FShowThinking;
@@ -3301,7 +3238,6 @@ Begin
     End;
   FShowThinking := ShowThinking;
   FShowToolUse := ShowTools;
-  UpdateViewActionCaptions;
   If Assigned(FTraceView) Then
     Begin
       FTraceView.ShowThinking := FShowThinking;
@@ -3461,7 +3397,6 @@ Begin
     NewPlanAction.Enabled := Not IsSending;
   If Assigned(RunPlanAction) Then
     RunPlanAction.Enabled := RunPlanIsAvailable;
-  ReviewChangesAction.Enabled := (Not IsSending) And (Not FReviewInProgress);
   { Prompt stays live so the user can Steer without aborting the turn. }
   If Assigned(InputMemo) Then
     InputMemo.ReadOnly := False;
@@ -5910,18 +5845,6 @@ Begin
   SettingsActionExecute(Sender);
 End;
 
-Procedure TProjectAssistantForm.ThinkingPickerActionExecute(Sender: TObject);
-Begin
-  If FUseCodex Then
-    Begin
-      SettingsActionExecute(Sender);
-      Exit;
-    End;
-  EnsureFooterMenu(FFooterMenu);
-  FillThinkingFooterMenu;
-  PopupUnderControl(StatusFooter, FFooterMenu);
-End;
-
 Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
 Var
   Host: TControl;
@@ -5944,44 +5867,6 @@ Begin
   If Not Assigned(Host) Then
     Host := StatusFooter;
   PopupUnderControl(Host, FFooterMenu);
-End;
-
-Procedure TProjectAssistantForm.CompactContextActionExecute(Sender: TObject);
-Begin
-  If FUseCodex Or FUseClaude Then
-    Begin
-      MessageDlg('ChatGPT preview sends a bounded recap of previous ChatGPT turns automatically.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If FSending Then
-    Begin
-      MessageDlg('Wait for the current reply to finish (or Stop) before compacting context.',
-        mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If Not Assigned(AssistantClient) Then
-    Exit;
-  CompactOpenChat;
-  UpdateStatusFooter;
-End;
-
-Procedure TProjectAssistantForm.CopyLastAnswerActionExecute(Sender: TObject);
-Var
-  Body: String;
-  Turn: TConversationTurn;
-Begin
-  Body := Trim(FAssistantContent);
-  If (Body = '') And Assigned(ProjectAssistantConversation) And
-    (ProjectAssistantConversation.TurnCount > 0) Then
-    If ProjectAssistantConversation.GetTurn(ProjectAssistantConversation.TurnCount - 1, Turn) Then
-      Body := Trim(Turn.Response);
-  If Body = '' Then
-    Begin
-      MessageDlg('No answer to copy yet.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  Clipboard.AsText := Body;
-  StatusFooter.SetRightText('Copied answer');
 End;
 
 Procedure TProjectAssistantForm.OpenPlanActionExecute(Sender: TObject);
@@ -6025,36 +5910,6 @@ Begin
   RefreshBuildTodos;
   UpdateWorkActions;
   SetBuildStatusFeedback('Removed from the available list. The file was kept.');
-End;
-
-Procedure TProjectAssistantForm.ChatModeActionExecute(Sender: TObject);
-Begin
-  If Not FSending Then
-    SelectMode(amChat);
-End;
-
-Procedure TProjectAssistantForm.InspectModeActionExecute(Sender: TObject);
-Begin
-  If Not FSending Then
-    SelectMode(amInspect);
-End;
-
-Procedure TProjectAssistantForm.DocumentModeActionExecute(Sender: TObject);
-Begin
-  If Not FSending Then
-    SelectMode(amDocument);
-End;
-
-Procedure TProjectAssistantForm.PlanModeActionExecute(Sender: TObject);
-Begin
-  If Not FSending Then
-    SelectMode(amPlan);
-End;
-
-Procedure TProjectAssistantForm.BuildModeActionExecute(Sender: TObject);
-Begin
-  If Not FSending Then
-    SelectMode(amBuild);
 End;
 
 Function TProjectAssistantForm.ComposerHasImages: Boolean;
@@ -6397,7 +6252,6 @@ Begin
     End;
 
   FReviewInProgress := True;
-  ReviewChangesAction.Enabled := False;
   StatusFooter.SetRightText(KindLabel + '…');
   StatusFooter.Update;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
@@ -6453,7 +6307,6 @@ Begin
     If Not FSending Then
       Begin
         FReviewInProgress := False;
-        ReviewChangesAction.Enabled := True;
         UpdateStatusFooter;
       End;
   End;
@@ -7122,25 +6975,6 @@ Begin
   Else
     RefreshHistoryCombo;
   WorkflowLogger.Info('ProjectAssistant', 'Deleted conversation id=' + ArchiveId);
-End;
-
-Procedure TProjectAssistantForm.ReviewChangesActionExecute(Sender: TObject);
-Var
-  Prompt: String;
-Begin
-  If FSending Or FReviewInProgress Then
-    Exit;
-  If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Then
-    Begin
-      MessageDlg('Select a project or package before reviewing changes.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  Prompt := BuildReviewLensesPrompt(FormatChangedProjectFiles);
-  ForceModeAndLock(amBuild);
-  ShowChatSurfaceKeepMode;
-  SubmitUserTextEx('Review Changes (naming · structure · review)', Prompt, True);
-  If Not FSending Then
-    UnlockModeAfterSend;
 End;
 
 Procedure TProjectAssistantForm.SettingsActionExecute(Sender: TObject);

@@ -628,18 +628,9 @@ object ProjectAssistantForm: TProjectAssistantForm
       Enabled = False
       OnExecute = StopActionExecute
     end
-    object ReviewChangesAction: TAction
-      Caption = 'Review Changes'
-      Hint = 'Fan out Pascal naming, structure, and review lenses over changed files'
-      OnExecute = ReviewChangesActionExecute
-    end
     object SettingsAction: TAction
       Caption = 'Settings…'
       OnExecute = SettingsActionExecute
-    end
-    object ToggleToolUseAction: TAction
-      Caption = 'Hide Tool Use'
-      OnExecute = ToggleToolUseActionExecute
     end
     object ExportHistoryAction: TAction
       Caption = 'Export…'
@@ -664,30 +655,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Choose model, thinking level, and approval'
       OnExecute = ModelPickerActionExecute
     end
-    object ThinkingPickerAction: TAction
-      Caption = 'Thinking Level…'
-      Hint = 'Reasoning effort for the next turn'
-      OnExecute = ThinkingPickerActionExecute
-    end
     object SkillsPickerAction: TAction
       Caption = 'Skills…'
       Hint = 'Pin a skill for the session'
       OnExecute = SkillsPickerActionExecute
-    end
-    object CompactContextAction: TAction
-      Caption = 'Compact Context'
-      Hint = 'Shrink older turns to free context'
-      OnExecute = CompactContextActionExecute
-    end
-    object CopyLastAnswerAction: TAction
-      Caption = 'Copy Last Answer'
-      Hint = 'Copy the current answer to the clipboard'
-      OnExecute = CopyLastAnswerActionExecute
-    end
-    object OpenPlanAction: TAction
-      Caption = 'Open Active Plan'
-      Hint = 'Open the active plan Markdown'
-      OnExecute = OpenPlanActionExecute
     end
     object OpenPlanSheetAction: TAction
       Caption = 'Open'
@@ -698,31 +669,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Remove'
       Hint = 'Remove this plan from the available list. The file is kept.'
       OnExecute = RemovePlanActionExecute
-    end
-    object ChatModeAction: TAction
-      Caption = 'Chat Mode'
-      Hint = 'General chat, no project tools'
-      OnExecute = ChatModeActionExecute
-    end
-    object InspectModeAction: TAction
-      Caption = 'Inspect Mode'
-      Hint = 'Read-only Q&A'
-      OnExecute = InspectModeActionExecute
-    end
-    object DocumentModeAction: TAction
-      Caption = 'Document Mode'
-      Hint = 'Write a free-form Markdown report or note'
-      OnExecute = DocumentModeActionExecute
-    end
-    object PlanModeAction: TAction
-      Caption = 'Plan Mode'
-      Hint = 'Write the plan file'
-      OnExecute = PlanModeActionExecute
-    end
-    object BuildModeAction: TAction
-      Caption = 'Build Mode'
-      Hint = 'Edit sources and compile'
-      OnExecute = BuildModeActionExecute
     end
   end
   object AttachmentPopup: TPopupMenu
