@@ -149,9 +149,29 @@ Begin
 End;
 
 Var
-  CodexReadCalls: Integer;
+  CodexReadCalls, QuietGetCalls: Integer;
   CodexReadSignedIn, CodexReadOk: Boolean;
   CodexReadBody, CodexReadError: String;
+
+Function QuietGet(Const Url, ExtraHeaders: String; Out ResponseBody: String; Out StatusCode: Integer;
+  Out ErrorText: String): Boolean;
+Begin
+  Inc(QuietGetCalls);
+  ResponseBody := '';
+  StatusCode := 500;
+  ErrorText := '';
+  Result := True;
+End;
+
+Function QuietPost(Const Url, JsonBody, ExtraHeaders: String; Out ResponseBody: String; Out StatusCode: Integer;
+  Out ErrorText: String): Boolean;
+Begin
+  Inc(QuietGetCalls);
+  ResponseBody := '';
+  StatusCode := 500;
+  ErrorText := '';
+  Result := True;
+End;
 
 Function FixtureCodexRead(Const Executable, ProfileDir: String; Out Body: String; Out SignedIn: Boolean;
   Out ErrorText: String): Boolean;
@@ -221,11 +241,53 @@ Begin
   End;
 End;
 
+Procedure TestQuietBackends;
+Var
+  Connection: TAssistantConnection;
+  Snapshot: TAccountUsageSnapshot;
+  ErrorText: String;
+
+  Procedure ExpectQuiet(Const Backend, ApiBase: String);
+  Begin
+    Connection.Backend := Backend;
+    Connection.ApiBase := ApiBase;
+    Connection.Id := Backend + '-quiet';
+    Check(Backend + ' account usage is unknown', QueryAccountUsage(Connection, '/usr/bin/claude', '/tmp/claude-profile',
+      Snapshot, ErrorText) And (Not Snapshot.Known) And (ErrorText = '') And (Snapshot.Caption = ''));
+    Check(Backend + ' query does not expose the key', Pos('should-not-be-sent', ErrorText) = 0);
+  End;
+
+Begin
+  Connection := TAssistantConnection.Create;
+  Try
+    Connection.KeySource := 'stored';
+    Connection.KeyValue := 'should-not-be-sent';
+    Connection.Preset := 'custom';
+    Connection.WireApi := AssistantWireChatCompletions;
+    QuietGetCalls := 0;
+    CodexReadCalls := 0;
+    SetAccountUsageCompatibleTransport(@QuietGet, @QuietPost);
+    SetCodexAccountUsageRead(@FixtureCodexRead);
+    SetCodexAccountUsageIdle(True);
+    ExpectQuiet('grok', AssistantOpenRouterApiBase);
+    ExpectQuiet('claude', AssistantOpenRouterApiBase);
+    ExpectQuiet('openai-compatible', 'https://example.invalid/v1');
+    Check('quiet backends do not call a usage transport', (QuietGetCalls = 0) And (CodexReadCalls = 0));
+    Check('quiet backends leave the turn usage sentence', UsageUnavailableText = 'This connection did not report usage.');
+  Finally
+    SetCodexAccountUsageIdle(False);
+    SetCodexAccountUsageRead(Nil);
+    SetAccountUsageCompatibleTransport(Nil, Nil);
+    Connection.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFixtures;
   TestQuotaLeavesTurnLog;
   TestCodexUsageIdle;
+  TestQuietBackends;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantUsage tests passed.');

@@ -596,6 +596,7 @@ Initialization
 
 InitCriticalSection(RegistryLock);
 RegistryReady := True;
+{ grok, claude, and a custom base stay quiet. A later official call is a new query here. }
 RegisterAccountUsageQuery('openai-compatible', @QueryCompatibleAccountUsage);
 RegisterAccountUsageQuery('codex', @QueryCodexAccountUsage);
 
