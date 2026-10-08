@@ -399,9 +399,6 @@ Type
     Procedure ApplyConfigAndRefresh;
     Procedure ToggleSkillForMode(Const SkillName: String);
     Function ModeSkillCaption: String;
-    Procedure FillModelFooterMenu;
-    Procedure FillThinkingFooterMenu;
-    Procedure FillApprovalFooterMenu;
     Procedure FillSkillFooterMenu;
     Procedure SeedPromptFromSelectedWork;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
@@ -453,9 +450,6 @@ Const
   ChatPaintMinIntervalMs = 80;
   { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
   LiveConversationMarker = -2;
-  FooterTagModel = 1;
-  FooterTagThinking = 2;
-  FooterTagApproval = 3;
   FooterTagSkill = 4;
   FooterTagSettings = 5;
 
@@ -5570,64 +5564,6 @@ Begin
   Menu.Items.Add(Item);
 End;
 
-Procedure TProjectAssistantForm.FillModelFooterMenu;
-Var
-  Models: TStringList;
-  I: Integer;
-  ModelName: String;
-Begin
-  Models := TStringList.Create;
-  Try
-    Models.Sorted := True;
-    Models.Duplicates := dupIgnore;
-    If FModelName <> '' Then
-      Models.Add(FModelName);
-    Models.Add(AssistantConfigDefaultModel);
-    Models.Add('grok-4');
-    Models.Add('grok-3');
-    For I := 0 To Models.Count - 1 Do
-      Begin
-        ModelName := Models[I];
-        AddFooterItem(FFooterMenu, ModelName, FooterTagModel, ModelName, SameText(ModelName, FModelName), True,
-          @FooterMenuClick);
-      End;
-  Finally
-    Models.Free;
-  End;
-End;
-
-Procedure TProjectAssistantForm.FillThinkingFooterMenu;
-Var
-  Current: TAssistantThinkingLevel;
-Begin
-  Current := atlHigh;
-  If Assigned(AssistantChatConfig) Then
-    Current := AssistantChatConfig.GetThinkingLevel;
-  AddFooterItem(FFooterMenu, 'Low thinking', FooterTagThinking, 'low', Current = atlLow, True,
-    @FooterMenuClick);
-  AddFooterItem(FFooterMenu, 'Medium thinking', FooterTagThinking, 'medium', Current = atlMedium, True,
-    @FooterMenuClick);
-  AddFooterItem(FFooterMenu, 'High thinking', FooterTagThinking, 'high', Current = atlHigh, True,
-    @FooterMenuClick);
-  AddFooterItem(FFooterMenu, 'XHigh thinking', FooterTagThinking, 'xhigh', Current = atlXHigh, True,
-    @FooterMenuClick);
-End;
-
-Procedure TProjectAssistantForm.FillApprovalFooterMenu;
-Var
-  Current: TAssistantApprovalMode;
-Begin
-  Current := aamAsk;
-  If Assigned(AssistantChatConfig) Then
-    Current := AssistantChatConfig.GetApprovalMode;
-  AddFooterItem(FFooterMenu, 'Approval: Ask', FooterTagApproval, 'ask', Current = aamAsk, True,
-    @FooterMenuClick);
-  AddFooterItem(FFooterMenu, 'Approval: Auto', FooterTagApproval, 'auto', Current = aamAuto, True,
-    @FooterMenuClick);
-  AddFooterItem(FFooterMenu, 'Approval: Always', FooterTagApproval, 'always', Current = aamAlways, True,
-    @FooterMenuClick);
-End;
-
 Procedure TProjectAssistantForm.FillSkillFooterMenu;
 Var
   Skills: TAssistantSkillList;
@@ -5657,22 +5593,6 @@ Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
   Case Item.Tag Of
-    FooterTagModel:
-      If Trim(Item.Hint) <> '' Then
-        Begin
-          AssistantChatConfig.Model := Trim(Item.Hint);
-          ApplyConfigAndRefresh;
-        End;
-    FooterTagThinking:
-      Begin
-        AssistantChatConfig.SetThinkingLevelEnum(StrToThinkingLevel(Item.Hint));
-        ApplyConfigAndRefresh;
-      End;
-    FooterTagApproval:
-      Begin
-        AssistantChatConfig.SetApprovalModeEnum(StrToApprovalMode(Item.Hint));
-        ApplyConfigAndRefresh;
-      End;
     FooterTagSkill:
       ToggleSkillForMode(Item.Hint);
     FooterTagSettings:

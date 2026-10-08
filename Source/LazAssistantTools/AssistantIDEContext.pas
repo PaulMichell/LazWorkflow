@@ -24,14 +24,11 @@ Const
 Function BuildIDEContextBlock: String;
 { Smaller attach for long conversations (cursor + selection or short head of file). }
 Function BuildIDEContextBlockLight: String;
-{ Project-relative dirty editor buffers plus git porcelain paths, one per line. }
-Function FormatChangedProjectFiles: String;
 
 Implementation
 
 Uses
-  Process, LazFileUtils, FileUtil, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog,
-  AssistantConversation, AssistantWorkTarget;
+  LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog, AssistantWorkTarget;
 
 Function CapText(Const TextValue: String; MaxChars: Integer): String;
 Begin
@@ -89,146 +86,6 @@ End;
 Function BuildProjectFilesSection: String;
 Begin
   Result := AssistantTarget.Describe;
-End;
-
-Function ProjectRootForContext: String;
-Begin
-  Result := ProjectAssistantRoot;
-End;
-
-Function AddUniqueLine(Lines: TStrings; Const Item: String): Boolean;
-Var
-  Line: String;
-Begin
-  Result := False;
-  Line := Trim(Item);
-  Line := StringReplace(Line, '\', '/', [rfReplaceAll]);
-  If Line = '' Then
-    Exit;
-  If Lines.IndexOf(Line) >= 0 Then
-    Exit;
-  Lines.Add(Line);
-  Result := True;
-End;
-
-Procedure AddEditorModifiedFiles(Const Root: String; Files: TStrings);
-Var
-  I: Integer;
-  Ed: TSourceEditorInterface;
-  FullPath, Rel: String;
-Begin
-  If Not Assigned(SourceEditorManagerIntf) Then
-    Exit;
-  For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
-    Begin
-      Ed := SourceEditorManagerIntf.SourceEditors[I];
-      If Not Assigned(Ed) Or (Not Ed.Modified) Then
-        Continue;
-      If (AssistantTarget.Kind<>atkProject) And Not AssistantTarget.ContainsFile(Ed.FileName) Then Continue;
-      FullPath := ExpandFileName(Ed.FileName);
-      If FullPath = '' Then
-        Continue;
-      If Root <> '' Then
-        Rel := CreateRelativePath(FullPath, Root, True)
-      Else
-        Rel := FullPath;
-      AddUniqueLine(Files, Rel);
-    End;
-End;
-
-Procedure AddGitPorcelainFiles(Const Root: String; Files: TStrings);
-Var
-  Proc: TProcess;
-  OutputStream: TStringStream;
-  Bytes: Array[0..2047] Of Byte;
-  N, I: Integer;
-  Lines: TStringList;
-  Line, Path: String;
-Begin
-  If (Root = '') Or (Not DirectoryExistsUTF8(ExcludeTrailingPathDelimiter(Root))) Then
-    Exit;
-  Proc := TProcess.Create(Nil);
-  OutputStream := TStringStream.Create('');
-  Lines := TStringList.Create;
-  Try
-    FillChar(Bytes, SizeOf(Bytes), 0);
-    Proc.Executable := FindDefaultExecutablePath('git');
-    If Proc.Executable = '' Then
-      Exit;
-    Proc.CurrentDirectory := ExcludeTrailingPathDelimiter(Root);
-    Proc.Options := [poUsePipes, poNoConsole];
-    Proc.ShowWindow := swoHIDE;
-    Proc.Parameters.Add('status');
-    Proc.Parameters.Add('--porcelain');
-    Try
-      Proc.Execute;
-      While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
-        Begin
-          N := Proc.Output.NumBytesAvailable;
-          If N > Length(Bytes) Then
-            N := Length(Bytes);
-          If N > 0 Then
-            Begin
-              N := Proc.Output.Read(Bytes, N);
-              If N > 0 Then
-                OutputStream.Write(Bytes[0], N);
-            End
-          Else
-            Sleep(5);
-        End;
-      Proc.WaitOnExit;
-    Except
-      Exit;
-    End;
-    Lines.Text := OutputStream.DataString;
-    For I := 0 To Lines.Count - 1 Do
-      Begin
-        Line := Lines[I];
-        If Length(Line) < 4 Then
-          Continue;
-        Path := Trim(Copy(Line, 4, MaxInt));
-        If Pos(' -> ', Path) > 0 Then
-          Path := Trim(Copy(Path, Pos(' -> ', Path) + 4, MaxInt));
-        If (Length(Path) >= 2) And (Path[1] = '"') And (Path[Length(Path)] = '"') Then
-          Path := Copy(Path, 2, Length(Path) - 2);
-        If (AssistantTarget.Kind=atkProject) Or AssistantTarget.AllowsWrite(ExpandFileName(Root+Path)) Then
-          AddUniqueLine(Files, Path);
-      End;
-  Finally
-    Lines.Free;
-    OutputStream.Free;
-    Proc.Free;
-  End;
-End;
-
-Function FormatChangedProjectFiles: String;
-Var
-  Root: String;
-  Files: TStringList;
-  I, Cap: Integer;
-Begin
-  Result := '';
-  Files := TStringList.Create;
-  Try
-    Files.Duplicates := dupIgnore;
-    Files.Sorted := False;
-    Root := ProjectRootForContext;
-    AddEditorModifiedFiles(Root, Files);
-    AddGitPorcelainFiles(Root, Files);
-    Cap := Files.Count;
-    If Cap > 40 Then
-      Cap := 40;
-    For I := 0 To Cap - 1 Do
-      Begin
-        If Result <> '' Then
-          Result := Result + LineEnding;
-        Result := Result + '- ' + Files[I];
-      End;
-    If Files.Count > Cap Then
-      Result := Result + LineEnding + Format('- … and %d more', [Files.Count - Cap]);
-  Finally
-    Files.Free;
-  End;
 End;
 
 Function BuildIDEContextBlock: String;
