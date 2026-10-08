@@ -38,7 +38,8 @@ def main():
     flags += [f'-Fl{path.resolve()}' for path in args.library_dir]
     tests = ['WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest', 'AssistantArchiveRollbackTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest', 'AssistantLfmTest',
              'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
-             'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantFileCreationTest', 'AssistantCodexHandshakeTest',
+             'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantAccountUsageTest', 'AssistantFileCreationTest',
+             'AssistantCodexHandshakeTest',
              'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest', 'AssistantGitTest',
              'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall']
     if args.gui:
