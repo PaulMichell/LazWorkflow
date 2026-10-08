@@ -7,7 +7,9 @@ Unit AssistantAccountUsage;
   claude stays unregistered: plan quota is an interactive screen, not a JSON
   result this program owns. openai-compatible is registered, but only
   AssistantOpenRouterApiBase is queried, via GET /key. A custom base returns
-  unknown and does not open a socket. A missing registration is unknown, not an
+  unknown and does not open a socket. codex is registered. That read is a
+  short-lived app-server, only while the connection is idle, and is not sent
+  on the live turn client. A missing registration is unknown, not an
   error, and does not open a socket.
 
   OpenRouter and Codex response parsers are plain functions so a fixture can
@@ -57,7 +59,7 @@ Procedure SetAccountUsageCompatibleTransport(GetFn: TCompatibleHttpGet; PostFn: 
 Implementation
 
 Uses
-  DateUtils, fpjson, jsonparser;
+  DateUtils, fpjson, jsonparser, AssistantCodexUsage;
 
 Type
   TAccountUsageRegistration = Record
@@ -595,6 +597,7 @@ Initialization
 InitCriticalSection(RegistryLock);
 RegistryReady := True;
 RegisterAccountUsageQuery('openai-compatible', @QueryCompatibleAccountUsage);
+RegisterAccountUsageQuery('codex', @QueryCodexAccountUsage);
 
 Finalization
 

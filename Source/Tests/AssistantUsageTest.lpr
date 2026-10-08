@@ -13,7 +13,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, FileUtil, LazFileUtils, AssistantSampler, AssistantCompatibleClient, AssistantClaudeClient,
-  AssistantConnections, AssistantAccountUsage, AssistantUsage;
+  AssistantConnections, AssistantAccountUsage, AssistantCodexUsage, AssistantUsage;
 
 Const
   PromptText = 'please summarise the secret prompt body ALPHA-PROMPT';
@@ -148,10 +148,84 @@ Begin
   End;
 End;
 
+Var
+  CodexReadCalls: Integer;
+  CodexReadSignedIn, CodexReadOk: Boolean;
+  CodexReadBody, CodexReadError: String;
+
+Function FixtureCodexRead(Const Executable, ProfileDir: String; Out Body: String; Out SignedIn: Boolean;
+  Out ErrorText: String): Boolean;
+Begin
+  Inc(CodexReadCalls);
+  Body := CodexReadBody;
+  SignedIn := CodexReadSignedIn;
+  ErrorText := CodexReadError;
+  Result := CodexReadOk;
+  If (Executable = '') Or (ProfileDir = '') Then
+    Result := False;
+End;
+
+Procedure TestCodexUsageIdle;
+Var
+  Connection: TAssistantConnection;
+  Snapshot: TAccountUsageSnapshot;
+  ErrorText: String;
+Begin
+  Connection := TAssistantConnection.Create;
+  Try
+    Connection.Id := 'codex-1';
+    Connection.Backend := 'codex';
+    CodexReadCalls := 0;
+    CodexReadOk := True;
+    CodexReadSignedIn := False;
+    CodexReadBody := '';
+    CodexReadError := '';
+    SetCodexAccountUsageRead(@FixtureCodexRead);
+    SetCodexAccountUsageIdle(False);
+    Check('busy codex query is unknown', QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile', Snapshot,
+      ErrorText) And (Not Snapshot.Known) And (ErrorText = ''));
+    Check('busy codex query does not start a read', CodexReadCalls = 0);
+    SetCodexAccountUsageIdle(True);
+    Check('missing codex paths do not start a read', QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And
+      (Not Snapshot.Known) And (CodexReadCalls = 0));
+    CancelCodexAccountUsage;
+    Check('cancelled codex query does not start a read', QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile',
+      Snapshot, ErrorText) And (Not Snapshot.Known) And (CodexReadCalls = 0));
+    SetCodexAccountUsageIdle(True);
+    Check('unsigned codex query is unknown', QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile', Snapshot,
+      ErrorText) And (Not Snapshot.Known) And (ErrorText = '') And (Snapshot.Caption = ''));
+    Check('unsigned codex query asked the reader', CodexReadCalls = 1);
+    CodexReadSignedIn := True;
+    CodexReadBody := '{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":1730947200},' +
+      '"secondary":{"usedPercent":7,"windowDurationMins":10080,"resetsAt":1731552000}},' +
+      '"account":{"email":"secret@example.com"}}';
+    Check('codex rate limits become a used caption', QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile',
+      Snapshot, ErrorText) And Snapshot.Known And (Snapshot.Caption = '5h 25% · 7d 7%'));
+    Check('codex hint says the numbers are used', (Pos('used', Snapshot.Hint) > 0) And (Pos('resets', Snapshot.Hint) > 0));
+    Check('codex snapshot does not show the account email', (Pos('secret@example.com', Snapshot.Caption) = 0) And
+      (Pos('secret@example.com', Snapshot.Hint) = 0));
+    CodexReadBody := '{"rateLimits":{"rateLimitReachedType":"primary","primary":{"usedPercent":100,' +
+      '"windowDurationMins":300,"resetsAt":1730947200}}}';
+    Check('reached codex limit captions Limit', QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile', Snapshot,
+      ErrorText) And Snapshot.Known And (Snapshot.Caption = 'Limit') And (Pos('primary', Snapshot.Hint) > 0));
+    CodexReadOk := False;
+    CodexReadSignedIn := True;
+    CodexReadError := 'Codex rate-limit connection failed.';
+    Check('codex read failure is not a zero figure', (Not QueryAccountUsage(Connection, '/usr/bin/codex', '/tmp/profile',
+      Snapshot, ErrorText)) And (Not Snapshot.Known) And (Snapshot.Caption = '') And
+      (Pos('secret@example.com', ErrorText) = 0));
+  Finally
+    SetCodexAccountUsageIdle(False);
+    SetCodexAccountUsageRead(Nil);
+    Connection.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFixtures;
   TestQuotaLeavesTurnLog;
+  TestCodexUsageIdle;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantUsage tests passed.');

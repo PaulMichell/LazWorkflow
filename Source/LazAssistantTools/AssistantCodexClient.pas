@@ -37,7 +37,7 @@ Type
     FTransport: TAssistantCodexTransport;
     FHandshake: TAssistantCodexHandshake;
     FState: TCodexRunState;
-    FThreadId, FTurnId, FContent, FThinking, FError, FModels: String;
+    FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
     FMessageIds: TStringList;
     FMessageId: String;
@@ -67,6 +67,8 @@ Type
     Procedure Disconnect;
     Procedure StartLogin;
     Function ListModels: Boolean;
+    { Short-lived usage reader only. The live turn client must not call this. }
+    Function ReadRateLimits: Boolean;
     Function CheckToolIsolation: Boolean;
     Function StartThread(Const WorkingDirectory, Model, ToolsJson: String): Boolean;
     Function StartTurn(Const Prompt: String; Const Effort: String = ''): Boolean;
@@ -85,6 +87,7 @@ Type
     Property Thinking: String Read FThinking;
     Property LastError: String Read FError;
     Property ModelsJson: String Read FModels;
+    Property RateLimitsJson: String Read FRateLimits;
     Property ThreadId: String Read FThreadId;
     Property TurnId: String Read FTurnId;
   End;
@@ -151,6 +154,7 @@ Begin
   FContent := '';
   FThinking := '';
   FModels := '';
+  FRateLimits := '';
   FToolIsolationChecked := False;
   FMessageIds.Clear;
   FMessageId := '';
@@ -252,6 +256,13 @@ Begin
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FState In [crsReady, crsCompleted]);
   If Result Then Result := Request('model/list', '{"includeHidden":false,"limit":100}');
+End;
+
+Function TAssistantCodexClient.ReadRateLimits: Boolean;
+Begin
+  Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
+    (FState In [crsReady, crsCompleted]);
+  If Result Then Result := Request('account/rateLimits/read', '{}');
 End;
 
 Function TAssistantCodexClient.CheckToolIsolation: Boolean;
@@ -606,6 +617,7 @@ Begin
             FState := crsRunning;
           End
             Else If FPendingMethod = 'model/list' Then FModels := Params.AsJSON
+            Else If FPendingMethod = 'account/rateLimits/read' Then FRateLimits := Params.AsJSON
             Else If FPendingMethod = 'mcpServerStatus/list' Then
               Begin
                 Value := Params.Find('data');
