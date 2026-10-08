@@ -68,32 +68,6 @@ Type
     DocumentModeAction: TAction;
     PlanModeAction: TAction;
     BuildModeAction: TAction;
-    AssistantMenu: TMainMenu;
-    SessionMenuItem: TMenuItem;
-    NewChatMenuItem: TMenuItem;
-    AttachImageMenuItem: TMenuItem;
-    SendMenuItem: TMenuItem;
-    StopMenuItem: TMenuItem;
-    CompactMenuItem: TMenuItem;
-    CopyLastMenuItem: TMenuItem;
-    SessionSepItem: TMenuItem;
-    ExportMenuItem: TMenuItem;
-    DeleteMenuItem: TMenuItem;
-    SessionSep2Item: TMenuItem;
-    SettingsMenuItem: TMenuItem;
-    WorkMenuItem: TMenuItem;
-    NewPlanMenuItem: TMenuItem;
-    RunPlanMenuItem: TMenuItem;
-    OpenPlanMenuItem: TMenuItem;
-    ReviewMenuItem: TMenuItem;
-    ReviewChangesMenuItem: TMenuItem;
-    ViewMenuItem: TMenuItem;
-    ToggleToolUseMenuItem: TMenuItem;
-    SkillsMenuItem: TMenuItem;
-    ModelMenuItem: TMenuItem;
-    ThinkingLevelMenuItem: TMenuItem;
-    ContextBreakdownMenuItem: TMenuItem;
-    SessionInfoMenuItem: TMenuItem;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
     SidebarPages: TPageControl;
@@ -647,8 +621,6 @@ Begin
   FTargetPaths := TStringList.Create;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
-  { AssistantMenu is not the window menu bar. }
-  Menu := Nil;
   { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
     drop to the widget under the pointer, so the input controls are armed after
     their handles exist. Names arrive through OnDropFiles. }
