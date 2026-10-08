@@ -178,7 +178,13 @@ Type
     FUseClaude: Boolean;
     FCanCompactContext: Boolean;
     FActiveConnectionId: String;
-    FAccountUsage: TAccountUsageSnapshot;
+    FAccountUsageSlot: TAccountUsageSlot;
+    FAccountUsageTimer: TTimer;
+    FAccountUsageWorker: TThread;
+    FAccountUsageWanted: Boolean;
+    FAccountUsageAttemptAt: TDateTime;
+    FAccountUsageAttemptId: String;
+    FAccountApiBase, FAccountKeySource, FAccountKeyEnv, FAccountKeyValue, FAccountPreset, FAccountWire: String;
     FActiveBackend: String;
     FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
@@ -356,6 +362,12 @@ Type
     Procedure ApplyDisplayPreferences;
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
+    Procedure ApplyAccountUsageLabel;
+    Procedure SyncCodexUsageIdle;
+    Procedure NoteAccountConnectionChanged;
+    Procedure StartAccountUsageWorker;
+    Procedure AccountUsageTimerTimer(Sender: TObject);
+    Procedure ReleaseAccountUsageRefresh;
     Function FormatElapsedStatus(Const Phase: String): String;
     Procedure SetStreamPhase(Const Phase: String);
     Procedure SetSending(IsSending: Boolean);
@@ -443,6 +455,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
+  AssistantCodexUsage,
   AssistantImages,
   AssistantImageView
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
@@ -459,7 +472,7 @@ Begin
   Inherited Create(TheOwner);
   FModelName := AssistantConfigDefaultModel;
   FContextUsed := 0;
-  ClearAccountUsageSnapshot(FAccountUsage);
+  FAccountUsageSlot := TAccountUsageSlot.Create;
   { Soft display budget; Grok/xAI models often allow ~500k tokens. }
   FContextLimit := 500000;
   FSending := False;
@@ -562,6 +575,7 @@ Begin
     GlobalNameSpace.BeginWrite;
   Destroying;
   If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
+  ReleaseAccountUsageRefresh;
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
   SetAssistantPlanViewerQuiet(False);
@@ -634,6 +648,14 @@ Begin
       ElapsedTimer.Enabled := False;
       ElapsedTimer.Interval := 250;
       ElapsedTimer.OnTimer := @ElapsedTimerTimer;
+    End;
+  If Not Assigned(FAccountUsageTimer) Then
+    Begin
+      { Not owned by the form, so the designer does not stream it. }
+      FAccountUsageTimer := TTimer.Create(Nil);
+      FAccountUsageTimer.Enabled := True;
+      FAccountUsageTimer.Interval := 1000;
+      FAccountUsageTimer.OnTimer := @AccountUsageTimerTimer;
     End;
   If Assigned(AssistantClient) Then
     AssistantClient.OnTrace := @HandleTraceEvent;
@@ -2125,6 +2147,7 @@ Begin
       Exit;
     End;
   FPlanAgentRunning := True;
+  SyncCodexUsageIdle;
   SetAssistantPlanViewerQuiet(True);
   FPlanAgentPackagesDone := 0;
   FPlanAgentResumeIndex := -1;
@@ -2906,8 +2929,12 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.LoadConnectionSettings;
-Var Connections: TAssistantConnections; Item: TAssistantConnection;
+Var
+  Connections: TAssistantConnections;
+  Item: TAssistantConnection;
+  PreviousId: String;
 Begin
+  PreviousId := FActiveConnectionId;
   Try
     FUseCodex := False;
     FUseClaude := False;
@@ -2915,6 +2942,14 @@ Begin
     FActiveConnectionId := '';
     FActiveBackend := '';
     FActiveModel := '';
+    FAccountApiBase := '';
+    FAccountKeySource := '';
+    FAccountKeyEnv := '';
+    FAccountKeyValue := '';
+    FAccountPreset := '';
+    FAccountWire := '';
+    FCodexRuntime := '';
+    FCodexProfile := '';
     If Not Assigned(LazarusIDE) Then Exit;
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
@@ -2927,6 +2962,12 @@ Begin
           FActiveConnectionId := Item.Id;
           FActiveBackend := Item.Backend;
           FActiveModel := Item.Model;
+          FAccountApiBase := Item.ApiBase;
+          FAccountKeySource := Item.KeySource;
+          FAccountKeyEnv := Item.KeyEnv;
+          FAccountKeyValue := Item.KeyValue;
+          FAccountPreset := Item.Preset;
+          FAccountWire := Item.WireApi;
         End;
       If FUseCodex Then
         Begin
@@ -2945,9 +2986,21 @@ Begin
         FActiveConnectionId := '';
         FActiveBackend := '';
         FActiveModel := '';
+        FAccountApiBase := '';
+        FAccountKeySource := '';
+        FAccountKeyEnv := '';
+        FAccountKeyValue := '';
+        FAccountPreset := '';
+        FAccountWire := '';
+        FCodexRuntime := '';
+        FCodexProfile := '';
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
   End;
+  If FActiveConnectionId <> PreviousId Then
+    NoteAccountConnectionChanged
+  Else
+    SyncCodexUsageIdle;
 End;
 
 Procedure TProjectAssistantForm.ReleaseCodexRun;
@@ -3242,6 +3295,172 @@ Begin
     End;
 End;
 
+Type
+  TAccountUsageWorker = Class(TThread)
+    Slot: TAccountUsageSlot;
+    Connection: TAssistantConnection;
+    RuntimePath, ProfileDir: String;
+    Procedure Execute; Override;
+  End;
+
+Procedure TAccountUsageWorker.Execute;
+Var
+  Item: TAccountUsageSnapshot;
+  ErrorText: String;
+  QueryOk: Boolean;
+Begin
+  ErrorText := '';
+  QueryOk := False;
+  ClearAccountUsageSnapshot(Item);
+  Try
+    Try
+      If Slot.IsClosed Then
+        Exit;
+      QueryOk := QueryAccountUsage(Connection, RuntimePath, ProfileDir, Item, ErrorText);
+      If CodexAccountUsageCancelled Or Slot.IsClosed Then
+        Exit;
+      If Slot.StoreResult(Item, QueryOk) Then
+        WorkflowLogger.Warning('ProjectAssistant', 'Account usage query failed.');
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('ProjectAssistant', 'Account usage query failed.');
+    End;
+  Finally
+    Connection.Free;
+    Slot.Release;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
+Var
+  Item: TAccountUsageSnapshot;
+Begin
+  If Not Assigned(StatusFooter) Then
+    Exit;
+  If Not Assigned(FAccountUsageSlot) Then
+    Begin
+      StatusFooter.SetUsageText('');
+      StatusFooter.SetUsageHint('');
+      Exit;
+    End;
+  Item := FAccountUsageSlot.ReadSnapshot;
+  StatusFooter.SetUsageText(AccountUsageCaption(Item, FActiveConnectionId));
+  StatusFooter.SetUsageHint(AccountUsageHint(Item, FActiveConnectionId));
+End;
+
+Procedure TProjectAssistantForm.SyncCodexUsageIdle;
+Begin
+  SetCodexAccountUsageIdle(FUseCodex And (Not FSending) And (Not FPlanAgentRunning) And (Not FReviewInProgress));
+End;
+
+Procedure TProjectAssistantForm.NoteAccountConnectionChanged;
+Begin
+  CancelCodexAccountUsage;
+  SyncCodexUsageIdle;
+  If Assigned(FAccountUsageSlot) Then
+    FAccountUsageSlot.SetActive(FActiveConnectionId);
+  FAccountUsageAttemptId := '';
+  FAccountUsageAttemptAt := 0;
+  FAccountUsageWanted := AccountUsageRegistered(FActiveBackend);
+  ApplyAccountUsageLabel;
+End;
+
+Procedure TProjectAssistantForm.StartAccountUsageWorker;
+Var
+  Worker: TAccountUsageWorker;
+  Copy: TAssistantConnection;
+Begin
+  If (Not Assigned(FAccountUsageSlot)) Or FAccountUsageSlot.IsClosed Then
+    Exit;
+  If Assigned(FAccountUsageWorker) And (Not FAccountUsageWorker.Finished) Then
+    Exit;
+  If Assigned(FAccountUsageWorker) Then
+    Begin
+      FAccountUsageWorker.WaitFor;
+      FreeAndNil(FAccountUsageWorker);
+    End;
+  If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
+    Exit;
+  SyncCodexUsageIdle;
+  If FUseCodex And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
+    Exit;
+  Copy := TAssistantConnection.Create;
+  Copy.Id := FActiveConnectionId;
+  Copy.Backend := FActiveBackend;
+  Copy.Model := FActiveModel;
+  Copy.ApiBase := FAccountApiBase;
+  Copy.KeySource := FAccountKeySource;
+  Copy.KeyEnv := FAccountKeyEnv;
+  Copy.KeyValue := FAccountKeyValue;
+  Copy.Preset := FAccountPreset;
+  Copy.WireApi := FAccountWire;
+  Worker := TAccountUsageWorker.Create(True);
+  Worker.FreeOnTerminate := False;
+  Worker.Slot := FAccountUsageSlot;
+  Worker.Connection := Copy;
+  Worker.RuntimePath := FCodexRuntime;
+  Worker.ProfileDir := FCodexProfile;
+  FAccountUsageSlot.Retain;
+  FAccountUsageWorker := Worker;
+  FAccountUsageWanted := False;
+  FAccountUsageAttemptId := FActiveConnectionId;
+  FAccountUsageAttemptAt := Now;
+  Worker.Start;
+End;
+
+Procedure TProjectAssistantForm.AccountUsageTimerTimer(Sender: TObject);
+Var
+  Due: Boolean;
+Begin
+  Try
+    If csDestroying In ComponentState Then
+      Exit;
+    ApplyAccountUsageLabel;
+    SyncCodexUsageIdle;
+    If Not Assigned(FAccountUsageSlot) Or FAccountUsageSlot.IsClosed Then
+      Exit;
+    If Assigned(FAccountUsageWorker) And (Not FAccountUsageWorker.Finished) Then
+      Exit;
+    If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
+      Exit;
+    If FUseCodex And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
+      Exit;
+    Due := FAccountUsageWanted;
+    If Not Due Then
+      Due := Showing And ((FAccountUsageAttemptId <> FActiveConnectionId) Or
+        ((Now - FAccountUsageAttemptAt) >= EncodeTime(0, 3, 0, 0)));
+    If Not Due Then
+      Exit;
+    StartAccountUsageWorker;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ProjectAssistant', 'Account usage refresh failed.');
+  End;
+End;
+
+Procedure TProjectAssistantForm.ReleaseAccountUsageRefresh;
+Begin
+  If Assigned(FAccountUsageTimer) Then
+    Begin
+      FAccountUsageTimer.Enabled := False;
+      FAccountUsageTimer.OnTimer := Nil;
+      FreeAndNil(FAccountUsageTimer);
+    End;
+  CancelCodexAccountUsage;
+  If Assigned(FAccountUsageSlot) Then
+    FAccountUsageSlot.Close;
+  If Assigned(FAccountUsageWorker) Then
+    Begin
+      ReapCodexWorker(FAccountUsageWorker);
+      FAccountUsageWorker := Nil;
+    End;
+  If Assigned(FAccountUsageSlot) Then
+    Begin
+      FAccountUsageSlot.Release;
+      FAccountUsageSlot := Nil;
+    End;
+End;
+
 Procedure TProjectAssistantForm.UpdateStatusFooter;
 Var
   Pct: Integer;
@@ -3294,8 +3513,7 @@ Begin
   ApplyModelStatus;
   StatusFooter.SetModelText(LeftText);
   StatusFooter.SetCentreText(CentreText);
-  StatusFooter.SetUsageText(AccountUsageCaption(FAccountUsage, FActiveConnectionId));
-  StatusFooter.SetUsageHint(AccountUsageHint(FAccountUsage, FActiveConnectionId));
+  ApplyAccountUsageLabel;
   StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
   StatusFooter.SetModelHint('Click to change model, thinking level, or approval');
@@ -3362,12 +3580,18 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.SetSending(IsSending: Boolean);
+Var
+  WasSending: Boolean;
 Begin
+  WasSending := FSending;
   If (Not FUseCodex) And IsSending And (Not FSending) Then
     AssistantBeginQuietIdeSession
   Else If (Not FUseCodex) And (Not IsSending) And FSending Then
     AssistantEndQuietIdeSession;
   FSending := IsSending;
+  If WasSending And (Not IsSending) Then
+    FAccountUsageWanted := AccountUsageRegistered(FActiveBackend);
+  SyncCodexUsageIdle;
   If Assigned(TargetCombo) Then TargetCombo.Enabled := Not IsSending;
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
   If Assigned(ActivePlanCombo) Then ActivePlanCombo.Enabled := Not IsSending;
@@ -6176,6 +6400,7 @@ Begin
     End;
 
   FReviewInProgress := True;
+  SyncCodexUsageIdle;
   StatusFooter.SetRightText(KindLabel + '…');
   StatusFooter.Update;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');

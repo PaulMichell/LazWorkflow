@@ -282,12 +282,33 @@ Begin
   End;
 End;
 
+Procedure TestAccountUsageKeep;
+Var
+  Current, Kept: TAccountUsageSnapshot;
+Begin
+  ClearAccountUsageSnapshot(Current);
+  Current.Known := True;
+  Current.ConnectionId := 'or-1';
+  Current.Caption := 'Left $18.20';
+  Current.Hint := 'Daily 1.25';
+  Current.FetchedAt := EncodeDate(2026, 10, 8) + EncodeTime(12, 0, 0, 0);
+  Kept := AccountUsageKeepOnFailure(Current, 'or-1', Current.FetchedAt + EncodeTime(0, 14, 0, 0));
+  Check('recent account figure is kept', Kept.Known And (Kept.Caption = 'Left $18.20') And
+    (Kept.Hint = 'Could not refresh account usage.'));
+  Kept := AccountUsageKeepOnFailure(Current, 'or-1', Current.FetchedAt + EncodeTime(0, 15, 0, 0));
+  Check('fifteen minute account figure is not kept', (Not Kept.Known) And (Kept.Caption = ''));
+  Kept := AccountUsageKeepOnFailure(Current, 'other', Current.FetchedAt + EncodeTime(0, 1, 0, 0));
+  Check('another connection does not keep the figure', (Not Kept.Known) And (Kept.Caption = '') And
+    (Kept.ConnectionId = 'other'));
+End;
+
 Begin
   FailCount := 0;
   TestFixtures;
   TestQuotaLeavesTurnLog;
   TestCodexUsageIdle;
   TestQuietBackends;
+  TestAccountUsageKeep;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantUsage tests passed.');

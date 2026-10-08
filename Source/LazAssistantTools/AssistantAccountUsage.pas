@@ -46,6 +46,32 @@ Procedure RegisterAccountUsageQuery(Const BackendId: String; Query: TAccountUsag
 /// Does not append a turn-usage line and does not change the Settings usage sentence.
 Function QueryAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
   Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
+Function AccountUsageRegistered(Const BackendId: String): Boolean;
+/// Keeps a known figure for the same connection when it is under 15 minutes old. The caption is never an error. 
+Function AccountUsageKeepOnFailure(Const Current: TAccountUsageSnapshot; Const ConnectionId: String;
+  NowTime: TDateTime): TAccountUsageSnapshot;
+
+Type
+  { Shared by the footer and the usage worker. The worker may outlive the form. }
+  TAccountUsageSlot = Class
+  Private
+    FLock: TRTLCriticalSection;
+    FSnapshot: TAccountUsageSnapshot;
+    FActiveId: String;
+    FClosed: LongInt;
+    FRefs: LongInt;
+  Public
+    Constructor Create;
+    Destructor Destroy; Override;
+    Procedure Retain;
+    Procedure Release;
+    Procedure Close;
+    Function IsClosed: Boolean;
+    Procedure SetActive(Const ConnectionId: String);
+    Function ReadSnapshot: TAccountUsageSnapshot;
+    { True when the caller should log one generic warning. A discarded result returns false. }
+    Function StoreResult(Const Item: TAccountUsageSnapshot; QueryOk: Boolean): Boolean;
+  End;
 Function AccountUsageApplies(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): Boolean;
 Function AccountUsageCaption(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
 Function AccountUsageHint(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
@@ -165,6 +191,111 @@ Begin
     Snapshot.ConnectionId := Connection.Id;
   If (Not Result) And (ErrorText = '') Then
     ErrorText := 'Account usage query failed.';
+End;
+
+Function AccountUsageRegistered(Const BackendId: String): Boolean;
+Begin
+  Result := Assigned(FindQuery(BackendId));
+End;
+
+Constructor TAccountUsageSlot.Create;
+Begin
+  Inherited Create;
+  InitCriticalSection(FLock);
+  FRefs := 1;
+End;
+
+Destructor TAccountUsageSlot.Destroy;
+Begin
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure TAccountUsageSlot.Retain;
+Begin
+  InterlockedIncrement(FRefs);
+End;
+
+Procedure TAccountUsageSlot.Release;
+Begin
+  If InterlockedDecrement(FRefs) = 0 Then
+    Free;
+End;
+
+Procedure TAccountUsageSlot.Close;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FClosed := 1;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAccountUsageSlot.IsClosed: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FClosed <> 0;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TAccountUsageSlot.SetActive(Const ConnectionId: String);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FActiveId := ConnectionId;
+    ClearAccountUsageSnapshot(FSnapshot);
+    FSnapshot.ConnectionId := ConnectionId;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAccountUsageSlot.ReadSnapshot: TAccountUsageSnapshot;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FSnapshot;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAccountUsageSlot.StoreResult(Const Item: TAccountUsageSnapshot; QueryOk: Boolean): Boolean;
+Begin
+  Result := False;
+  EnterCriticalSection(FLock);
+  Try
+    If (FClosed <> 0) Or (Item.ConnectionId <> FActiveId) Then
+      Exit;
+    If QueryOk Then
+      Begin
+        FSnapshot := Item;
+        Exit;
+      End;
+    Result := True;
+    FSnapshot := AccountUsageKeepOnFailure(FSnapshot, FActiveId, Now);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function AccountUsageKeepOnFailure(Const Current: TAccountUsageSnapshot; Const ConnectionId: String;
+  NowTime: TDateTime): TAccountUsageSnapshot;
+Begin
+  Result := Current;
+  If (Not Current.Known) Or (Current.Caption = '') Or (Current.ConnectionId = '') Or
+    (Current.ConnectionId <> ConnectionId) Or (Current.FetchedAt <= 0) Or
+    ((NowTime - Current.FetchedAt) >= (15 / (24 * 60))) Then
+    Begin
+      ClearAccountUsageSnapshot(Result);
+      Result.ConnectionId := ConnectionId;
+      Exit;
+    End;
+  Result.Hint := 'Could not refresh account usage.';
 End;
 
 Function AccountUsageApplies(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): Boolean;

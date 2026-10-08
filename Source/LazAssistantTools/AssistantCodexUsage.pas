@@ -22,6 +22,7 @@ Type
 
 Procedure SetCodexAccountUsageIdle(Idle: Boolean);
 Procedure CancelCodexAccountUsage;
+Function CodexAccountUsageCancelled: Boolean;
 { Both nil uses the short-lived app-server. A fixture must not start a process. }
 Procedure SetCodexAccountUsageRead(ReadFn: TCodexRateLimitRead);
 Function QueryCodexAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
@@ -65,6 +66,11 @@ End;
 Procedure CancelCodexAccountUsage;
 Begin
   InterlockedExchange(UsageCancel, 1);
+End;
+
+Function CodexAccountUsageCancelled: Boolean;
+Begin
+  Result := UsageCancelled;
 End;
 
 Procedure SetCodexAccountUsageRead(ReadFn: TCodexRateLimitRead);
