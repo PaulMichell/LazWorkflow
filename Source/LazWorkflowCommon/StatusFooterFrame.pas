@@ -20,6 +20,7 @@ Type
     CentreHost: TPanel;
     ModelLabel: TLabel;
     CentreLabel: TLabel;
+    UsageLabel: TLabel;
     RightLabel: TLabel;
     Procedure LabelClick(Sender: TObject);
     Procedure CentreHostResize(Sender: TObject);
@@ -40,12 +41,14 @@ Type
     Procedure SetSkillText(Const Value: String);
     Procedure SetModelText(Const Value: String);
     Procedure SetCentreText(Const Value: String);
+    Procedure SetUsageText(Const Value: String);
     Procedure SetRightText(Const Value: String);
     Procedure SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
     Procedure SetLeftHint(Const Value: String);
     Procedure SetSkillHint(Const Value: String);
     Procedure SetModelHint(Const Value: String);
     Procedure SetCentreHint(Const Value: String);
+    Procedure SetUsageHint(Const Value: String);
     Procedure SetRightHint(Const Value: String);
     Procedure LayoutCentrePair;
     Property LeftText: String Write SetLeftText;
@@ -96,6 +99,7 @@ Begin
   ConfigureLabel(SkillLabel);
   ConfigureLabel(ModelLabel);
   ConfigureLabel(CentreLabel);
+  ConfigureLabel(UsageLabel);
   ConfigureLabel(RightLabel);
   If Assigned(LeftLabel) Then
     Begin
@@ -105,6 +109,15 @@ Begin
     End;
   If Assigned(SkillLabel) Then
     SkillLabel.Visible := False;
+  { Hover only. An empty caption must not reserve space on forms that share this frame. }
+  If Assigned(UsageLabel) Then
+    Begin
+      UsageLabel.Cursor := crDefault;
+      UsageLabel.Font.Color := clWindowText;
+      UsageLabel.OnClick := Nil;
+      UsageLabel.Visible := False;
+      UsageLabel.Width := 0;
+    End;
 End;
 
 Procedure TStatusFooterFrame.SetOnLeftClick(Value: TNotifyEvent);
@@ -186,20 +199,26 @@ End;
 
 Procedure TStatusFooterFrame.LayoutCentrePair;
 Var
-  Gap, Origin, ModelTop, CentreTop, MinOrigin, MaxOrigin: Integer;
+  Gap, Origin, ModelTop, CentreTop, UsageTop, UsageWidth, MinOrigin, MaxOrigin: Integer;
 Begin
   If Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
     Exit;
   ModelLabel.AutoSize := True;
   CentreLabel.AutoSize := True;
   Gap := Scale96ToForm(16);
+  UsageWidth := 0;
+  If Assigned(UsageLabel) And UsageLabel.Visible And (Trim(UsageLabel.Caption) <> '') Then
+    Begin
+      UsageLabel.AutoSize := True;
+      UsageWidth := Gap + UsageLabel.Width;
+    End;
   { Centre the model line on the whole footer. Context stays to its right and must not pull that line off centre. }
   If Assigned(Panel) And (Panel.ClientWidth > 0) Then
     Origin := ((Panel.ClientWidth - ModelLabel.Width) Div 2) - CentreHost.Left
   Else
     Origin := (CentreHost.ClientWidth - ModelLabel.Width) Div 2;
   MinOrigin := 0;
-  MaxOrigin := CentreHost.ClientWidth - ModelLabel.Width - Gap - CentreLabel.Width;
+  MaxOrigin := CentreHost.ClientWidth - ModelLabel.Width - Gap - CentreLabel.Width - UsageWidth;
   If MaxOrigin < MinOrigin Then
     MaxOrigin := MinOrigin;
   If Origin < MinOrigin Then
@@ -214,6 +233,13 @@ Begin
     CentreTop := 0;
   ModelLabel.SetBounds(Origin, ModelTop, ModelLabel.Width, ModelLabel.Height);
   CentreLabel.SetBounds(Origin + ModelLabel.Width + Gap, CentreTop, CentreLabel.Width, CentreLabel.Height);
+  If UsageWidth > 0 Then
+    Begin
+      UsageTop := (CentreHost.ClientHeight - UsageLabel.Height) Div 2;
+      If UsageTop < 0 Then
+        UsageTop := 0;
+      UsageLabel.SetBounds(CentreLabel.Left + CentreLabel.Width + Gap, UsageTop, UsageLabel.Width, UsageLabel.Height);
+    End;
 End;
 
 Procedure TStatusFooterFrame.CentreHostResize(Sender: TObject);
@@ -251,6 +277,25 @@ Begin
       CentreLabel.AutoSize := True;
       CentreLabel.Caption := Value;
     End;
+  LayoutCentrePair;
+End;
+
+Procedure TStatusFooterFrame.SetUsageText(Const Value: String);
+Begin
+  If Not Assigned(UsageLabel) Then
+    Exit;
+  UsageLabel.AutoSize := True;
+  UsageLabel.Caption := Value;
+  UsageLabel.Cursor := crDefault;
+  UsageLabel.Font.Color := clWindowText;
+  UsageLabel.OnClick := Nil;
+  If Trim(Value) = '' Then
+    Begin
+      UsageLabel.Visible := False;
+      UsageLabel.Width := 0;
+    End
+  Else
+    UsageLabel.Visible := True;
   LayoutCentrePair;
 End;
 
@@ -295,6 +340,12 @@ Procedure TStatusFooterFrame.SetCentreHint(Const Value: String);
 Begin
   If Assigned(CentreLabel) Then
     CentreLabel.Hint := Value;
+End;
+
+Procedure TStatusFooterFrame.SetUsageHint(Const Value: String);
+Begin
+  If Assigned(UsageLabel) Then
+    UsageLabel.Hint := Value;
 End;
 
 Procedure TStatusFooterFrame.SetRightHint(Const Value: String);

@@ -26,7 +26,7 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
-  AssistantIDEWorkspace, AssistantGit;
+  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -178,6 +178,7 @@ Type
     FUseClaude: Boolean;
     FCanCompactContext: Boolean;
     FActiveConnectionId: String;
+    FAccountUsage: TAccountUsageSnapshot;
     FActiveBackend: String;
     FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
@@ -458,6 +459,7 @@ Begin
   Inherited Create(TheOwner);
   FModelName := AssistantConfigDefaultModel;
   FContextUsed := 0;
+  ClearAccountUsageSnapshot(FAccountUsage);
   { Soft display budget; Grok/xAI models often allow ~500k tokens. }
   FContextLimit := 500000;
   FSending := False;
@@ -3292,6 +3294,8 @@ Begin
   ApplyModelStatus;
   StatusFooter.SetModelText(LeftText);
   StatusFooter.SetCentreText(CentreText);
+  StatusFooter.SetUsageText(AccountUsageCaption(FAccountUsage, FActiveConnectionId));
+  StatusFooter.SetUsageHint(AccountUsageHint(FAccountUsage, FActiveConnectionId));
   StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
   StatusFooter.SetModelHint('Click to change model, thinking level, or approval');

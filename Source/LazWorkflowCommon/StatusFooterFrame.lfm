@@ -85,6 +85,16 @@ object StatusFooterFrame: TStatusFooterFrame
         Layout = tlCenter
         ParentColor = False
       end
+      object UsageLabel: TLabel
+        Left = 352
+        Height = 22
+        Top = 0
+        Width = 0
+        AutoSize = True
+        Layout = tlCenter
+        ParentColor = False
+        Visible = False
+      end
     end
   end
 end
