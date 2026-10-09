@@ -1155,8 +1155,9 @@ Begin
     Exit;
   If FUseClaude Then
     Begin
-      StatusFooter.SetSkillText('Skill: not sent');
-      StatusFooter.SetSkillHint('This assistant''s skills are not sent into Claude Code.');
+      { No Claude turn is wired. Do not describe a private tool set. }
+      StatusFooter.SetSkillText('Not wired');
+      StatusFooter.SetSkillHint('The Claude turn is not wired.');
     End
   Else
     Begin
@@ -5610,6 +5611,12 @@ Begin
     Exit;
   If FSending Then
     Exit;
+  If AutoSend And FUseClaude Then
+    Begin
+      { No Claude prompt and no Claude process. Do not fall through to another backend. }
+      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If AutoSend And (Not FUseCodex) Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
@@ -5970,7 +5977,7 @@ Begin
   SkillName := ModeSkillCaption;
   SignedIn := 'no';
   If FUseClaude Then
-    SkillName := 'Skill: not sent';
+    SkillName := 'Not wired';
   If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
     SignedIn := 'yes';
   Body :=
@@ -6010,7 +6017,7 @@ Var
 Begin
   If FUseClaude Then
     Begin
-      MessageDlg('This assistant''s skills are not sent into Claude Code.', mtInformation, [mbOK], 0);
+      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureFooterMenu(FFooterMenu);
@@ -6170,6 +6177,11 @@ Begin
             WorkflowLogger.Info('ProjectAssistant', 'Steer kept pictures: ' + Reason);
           PicturesStay;
         End;
+      Exit;
+    End;
+  If FUseClaude Then
+    Begin
+      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If (Not FUseCodex) And ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
@@ -6349,6 +6361,11 @@ Begin
     Exit;
   If FSending Then
     Exit;
+  If FUseClaude Then
+    Begin
+      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If FUseCodex Then
     Begin
       StartCodexReply(DisplayLabel, ApiText);

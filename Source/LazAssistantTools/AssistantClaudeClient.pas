@@ -40,6 +40,7 @@ Function PermissionFlagRefused(Const ProgramText: String): Boolean;
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
+/// Not called by the form. A later turn must use the shared user text, harness prompt, and ExecuteAssistantToolForMode.
 Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
   Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 
