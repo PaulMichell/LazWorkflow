@@ -3074,8 +3074,8 @@ Begin
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   FCodexIdentity := FCodexWorkspace.Identity;
+  { Turns use ApproveToolIfNeeded. Do not hook the lazarus_* review dialog. }
   FCodexBroker.OnApproval := Nil;
-  If FCodexApproval = 'ask' Then FCodexBroker.OnApproval := @ApproveCodexTool;
   Case ActiveMode Of
     amChat: FCodexBroker.BeginRun(awsNone);
     amBuild: FCodexBroker.BeginRun(awsProject);
@@ -3138,7 +3138,7 @@ Begin
     ToolsJson := BuildAssistantToolsJsonForMode(ActiveMode);
     Instructions := CodexDeveloperInstructions(ActiveMode);
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions);
+      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode);
     FCodexRun.Start;
     Result := True;
   Except
@@ -3189,7 +3189,7 @@ Begin
         If Assigned(StatusFooter) Then
           StatusFooter.Update;
       End;
-    Serviced := Run.ServiceOneTool(FCodexBroker, Tool, ToolText, OK);
+    Serviced := Run.ServiceOneTool(Tool, ToolText, OK);
     If FCodexRun <> Run Then Exit; { cancelled/replaced during an IDE callback }
     If Serviced Then
       Begin
@@ -3199,6 +3199,8 @@ Begin
         ApplyLiveThinkingAndAnswer;
         Block := FTrace.AddTool(Tool.CallId, Tool.Tool, Tool.Arguments);
         Block.Body := ToolText; Block.Ok := OK; Block.Running := False;
+        If OK And (SameText(Tool.Tool, 'write_markdown') Or SameText(Tool.Tool, 'update_markdown')) Then
+          FPlanWriteThisTurn := True;
         FAnswerSliceStart := Length(FLiveContent) + 1;
         FThinkingSliceStart := Length(FLiveThinking) + 1;
         FTrace.StartThinking(0);

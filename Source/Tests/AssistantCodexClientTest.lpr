@@ -182,13 +182,13 @@ Begin
     Run.Start;
     Deadline := GetTickCount64 + 5000;
     Repeat
-      Run.ServiceTool(Broker);
+      Run.ServiceTool;
       Snapshot := Run.Snapshot;
       Sleep(1);
     Until Snapshot.Done Or (GetTickCount64 >= Deadline);
     Check('worker run completes', Snapshot.Done And (Snapshot.State = crsCompleted));
     Check('first run creates its managed profile', FileExists(Profile + '/config.toml'));
-    Check('worker dispatches one IDE read through broker', Workspace.Reads = 1);
+    Check('worker does not dispatch broker tools', Workspace.Reads = 0);
     Check('worker streams answer snapshot', Snapshot.Content = '**text**');
     Check('worker publishes reasoning for the UI', Pos('Final-only summary', Snapshot.Thinking) > 0);
     Run.Free; Run := Nil;
@@ -197,10 +197,10 @@ Begin
       'normal', Broker.ToolsJson, RunId, 3000, '', 'high');
     Run.Start; Run.Cancel; Broker.Cancel;
     Deadline := GetTickCount64 + 7000;
-    Repeat Run.ServiceTool(Broker); Snapshot := Run.Snapshot; Sleep(1);
+    Repeat Run.ServiceTool; Snapshot := Run.Snapshot; Sleep(1);
     Until Snapshot.Done Or (GetTickCount64 >= Deadline);
     Check('cancelled worker finishes', Snapshot.Done);
-    Check('cancelled worker executes no IDE tools', Workspace.Reads = 1);
+    Check('cancelled worker executes no IDE tools', Workspace.Reads = 0);
   Finally
     Run.Free; Broker.Free; Workspace.Free;
     DeleteFile(Profile + '/config.toml');
@@ -209,25 +209,22 @@ Begin
 End;
 Procedure TestCancellationDuringTool;
 Var Workspace: TMemoryWorkspace; Broker: TAssistantToolBroker; Run: TAssistantCodexRun;
-  Reaper: TRunReaper; Deadline: QWord;
+  Snapshot: TCodexRunSnapshot; Deadline: QWord;
 Begin
   Workspace := TMemoryWorkspace.Create; Broker := TAssistantToolBroker.Create(Workspace);
   Broker.BeginRun(awsReadOnly);
   Run := TAssistantCodexRun.Create(ParamStr(0), GetTempDir, 'test-model',
     'normal', Broker.ToolsJson, Broker.RunId, 3000, '', 'high');
-  Reaper := TRunReaper.Create(True); Reaper.Run := Run; Workspace.Reaper := Reaper;
   Try
     Run.Start; Deadline := GetTickCount64 + 5000;
     Repeat
-      Run.ServiceTool(Broker);
-      If Workspace.Reads > 0 Then Break; { the reaper now owns Run; never dereference it again }
+      Run.ServiceTool;
+      Snapshot := Run.Snapshot;
       Sleep(1);
-    Until GetTickCount64 >= Deadline;
-    Check('tool callback cancels a completed worker', (Workspace.Reads = 1) And Workspace.WorkerStopped);
-    Run := Nil;
-    Reaper.WaitFor;
-    Check('reaper waits until IDE tool handoff returns', Workspace.ReaperWaited And (Reaper.Reaped = 1));
-  Finally Reaper.Free; Run.Free; Broker.Free; Workspace.Free; End;
+    Until Snapshot.Done Or (GetTickCount64 >= Deadline);
+    Check('rejected broker tool does not touch the workspace', Workspace.Reads = 0);
+    Check('rejected tool run still finishes', Snapshot.Done);
+  Finally Run.Free; Broker.Free; Workspace.Free; End;
 End;
 Procedure TestAccount;
 Var Job: TAssistantCodexAccount; Value: TCodexAccountSnapshot;

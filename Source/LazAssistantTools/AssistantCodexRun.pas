@@ -12,7 +12,7 @@ Unit AssistantCodexRun;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexClient, AssistantToolBroker;
+  Classes, SysUtils, AssistantCodexClient, AssistantConversation;
 
 Type
   TCodexRunSnapshot = Record
@@ -24,6 +24,7 @@ Type
   Private
     FLock: TRTLCriticalSection;
     FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile, FEffort, FDeveloperInstructions: String;
+    FMode: TAssistantMode;
     FSnapshot: TCodexRunSnapshot;
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
@@ -37,7 +38,7 @@ Type
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
       TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '';
-      Const DeveloperInstructions: String = '');
+      Const DeveloperInstructions: String = ''; Mode: TAssistantMode = amInspect);
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean; Overload;
@@ -45,22 +46,22 @@ Type
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Function Snapshot: TCodexRunSnapshot;
     Function HasPendingTool: Boolean;
-    { Caller must run on the broker's owning IDE thread. Returns after at most
-      one IDE operation; it never waits for process/network output. CodeTools
-      may parse dependencies synchronously on this thread. }
-    Procedure ServiceTool(Broker: TAssistantToolBroker);
-    Function ServiceOneTool(Broker: TAssistantToolBroker; Out Tool: TCodexToolRequest;
-      Out Text: String; Out OK: Boolean): Boolean;
+    { Caller must run on the IDE thread. Returns after at most one tool.
+      It never waits for process or network output. }
+    Procedure ServiceTool;
+    Function ServiceOneTool(Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
+    { Queues one tool for ServiceOneTool without a Codex process. Tests only. }
+    Procedure QueueToolForTest(Const ToolName, ArgumentsJson: String);
   End;
 
 Implementation
 
 Uses
-  AssistantCodexHandshake, AssistantCodexProfile;
+  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
-    Const DeveloperInstructions: String);
+    Const DeveloperInstructions: String; Mode: TAssistantMode);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
@@ -75,6 +76,7 @@ Begin
   FProfile := ProfileDir;
   FEffort := Effort;
   FDeveloperInstructions := DeveloperInstructions;
+  FMode := Mode;
   FSnapshot.State := crsConnecting;
 End;
 
@@ -162,17 +164,33 @@ Begin
   End;
 End;
 
-Procedure TAssistantCodexRun.ServiceTool(Broker: TAssistantToolBroker);
+Procedure TAssistantCodexRun.QueueToolForTest(Const ToolName, ArgumentsJson: String);
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FTool := Default(TCodexToolRequest);
+    FTool.Tool := ToolName;
+    FTool.Arguments := ArgumentsJson;
+    FTool.CallId := 'test-call';
+    FToolPending := True;
+    FToolReady := False;
+    FToolServicing := False;
+    FSnapshot.Done := False;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TAssistantCodexRun.ServiceTool;
 Var
   Tool: TCodexToolRequest;
   Text: String;
   OK: Boolean;
 Begin
-  ServiceOneTool(Broker, Tool, Text, OK);
+  ServiceOneTool(Tool, Text, OK);
 End;
 
-Function TAssistantCodexRun.ServiceOneTool(Broker: TAssistantToolBroker;
-    Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
+Function TAssistantCodexRun.ServiceOneTool(Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
 Var
   ErrorText: String;
 Begin
@@ -189,7 +207,8 @@ Begin
     LeaveCriticalSection(FLock);
   End;
   Try
-    OK := Broker.Execute(FRunId, Tool.Tool, Tool.Arguments, Text, ErrorText);
+    { Shared catalogue only. An unknown name is an error; do not fall through to the broker. }
+    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText);
     If Not OK Then Text := ErrorText;
     Result := True;
     EnterCriticalSection(FLock);
