@@ -515,7 +515,7 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path e.g. Source/Foo.pas"},' +
         '"content":{"type":"string","description":"Full non-empty contents (reject empty/probe files)"},' +
-        '"open":{"type":"boolean","description":"Open/reuse a single editor tab after write (default false)"},' +
+        '"open":{"type":"boolean","description":"After write, open a source tab (default false). A Markdown path opens in the Assistant Markdown viewer instead. Use open_markdown."},' +
         '"add_to_project":{"type":"boolean","description":"Add Pascal unit to the active project (default true only for non-empty units)"}' +
       '},"required":["path","content"]}' +
     '}},' +
@@ -528,7 +528,8 @@ Begin
         '"path":{"type":"string","description":"Project-relative file path"},' +
         '"old_text":{"type":"string","description":"Exact text to find"},' +
         '"new_text":{"type":"string","description":"Replacement text"},' +
-        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"}' +
+        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
+        '"open":{"type":"boolean","description":"After the edit, open a source tab (default false). A Markdown path opens in the Assistant Markdown viewer instead. Use open_markdown."}' +
       '},"required":["path","old_text","new_text"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -1756,6 +1757,12 @@ Begin
   Result := False;
   Note := '';
   FullPath := ExpandResolvedPath(Resolved);
+  { Markdown belongs in the Assistant viewer. Do not create or reuse a source tab. }
+  If IsMarkdownPath(FullPath) Then
+    Begin
+      Note := 'Markdown files are not opened in the source editor. Use open_markdown.';
+      Exit;
+    End;
   Ed := FindOpenEditor(FullPath);
   If Assigned(Ed) Then
     Begin
@@ -2032,10 +2039,22 @@ Begin
   End;
   If OpenAfter Then
     Begin
-      If OpenEditorReuse(FullPath, OpenNote) Then
+      If IsMarkdownPath(FullPath) Then
         Begin
-          Note := Note + ' ' + OpenNote;
+          { Same quiet rule as open_markdown: a plan run must not steal the window. }
+          If AssistantPlanViewerQuiet Then
+            Begin
+              If Assigned(FindMarkdownDocument(FullPath)) Then
+                ReloadMarkdownDocument(FullPath, False, False);
+              Note := Note + ' Plan run in progress. The Markdown viewer was not opened. Use open_markdown.';
+            End
+          Else If OpenMarkdownDocument(FullPath) = Nil Then
+            Note := Note + ' (Could not open the Markdown viewer. Use open_markdown.)'
+          Else
+            Note := Note + ' Opened in the Assistant Markdown viewer (open_markdown).';
         End
+      Else If OpenEditorReuse(FullPath, OpenNote) Then
+        Note := Note + ' ' + OpenNote
       Else
         Note := Note + ' (' + OpenNote + ')';
     End;
@@ -2627,7 +2646,7 @@ End;
 Function ToolReplaceInFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Resolved, OldText, NewText, Body, Note, FileEol, AltOld: String;
-  ReplaceAll, FromEditor: Boolean;
+  ReplaceAll, FromEditor, OpenAfter: Boolean;
   Count, P: Integer;
 Begin
   Result := False;
@@ -2654,6 +2673,7 @@ Begin
       Exit;
     End;
   ReplaceAll := JsonArgBool(ArgumentsJson, 'replace_all', False);
+  OpenAfter := JsonArgBool(ArgumentsJson, 'open', False);
   If Not LoadProjectFileText(Resolved, Body, FromEditor, ErrorText) Then
     Exit;
   FileEol := DetectFileEol(Body);
@@ -2695,7 +2715,7 @@ Begin
       Body := Copy(Body, 1, P - 1) + NewText + Copy(Body, P + Length(OldText), MaxInt);
       Count := 1;
     End;
-  If Not SaveProjectFileText(Resolved, Body, False, Note, ErrorText) Then
+  If Not SaveProjectFileText(Resolved, Body, OpenAfter, Note, ErrorText) Then
     Exit;
   ResultText := Format('Replaced %d occurrence(s) in %s. %s',
     [Count, ProjectRelativePath(Resolved), Note]);
@@ -2879,7 +2899,11 @@ Begin
     End;
   If Not OpenEditorReuse(Resolved, Note) Then
     Begin
-      ErrorText := 'Failed to open editor for ' + Resolved + ' (' + Note + ')';
+      { Markdown refusal is the tool error. Other failures keep the path. }
+      If Pos('open_markdown', Note) > 0 Then
+        ErrorText := Note
+      Else
+        ErrorText := 'Failed to open editor for ' + Resolved + ' (' + Note + ')';
       Exit;
     End;
   ResultText := Note + ' ' + ProjectRelativePath(Resolved);

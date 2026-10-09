@@ -67,7 +67,9 @@ Implementation
 
 Uses
   SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
-  SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings, AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits, AssistantIDEContext, AssistantProtocol, fpjson, jsonparser
+  SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings,
+  AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits,
+  AssistantIDEContext, AssistantProtocol, AssistantPlan, fpjson, jsonparser
     {$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Type
@@ -293,6 +295,13 @@ Var
 Begin
   Result := False;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then Exit;
+  { Extension check, not the write-scope symlink test: a .md name never becomes a source tab. }
+  If AssistantPlan.IsMarkdownPath(Resolved) Then
+    Begin
+      OpenEditorReuse(Resolved, Note);
+      ErrorText := Note;
+      Exit;
+    End;
   If Not Assigned(SourceEditorManagerIntf) Then
     Begin
       ErrorText := 'Source editor manager is unavailable.';

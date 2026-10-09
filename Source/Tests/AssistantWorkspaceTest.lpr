@@ -110,6 +110,20 @@ Begin
     Manager.Editor.Body := 'unsaved IDE text';
     Check('read prefers unsaved buffer', Broker.Execute(Run, 'lazarus_read_file', '{"path":"closed.pas"}', Reply, Err) And (Pos('unsaved IDE text', Reply) > 0));
     Check('open reuses unsaved tab', Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"closed.pas"}', Reply, Err) And (IDE.Opens = 1) And (Pos('unsaved IDE text', Reply) > 0));
+    ForceDirectories(Root + '/Documents');
+    WriteFile(Root + '/Documents/Plan.md', '# Plan' + LineEnding);
+    Check('plan markdown is not a source tab', Not Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"Documents/Plan.md"}', Reply, Err)
+      And (Pos('open_markdown', Err) > 0) And (IDE.Opens = 1));
+    WriteFile(Root + '/notes.mdown', 'note');
+    Check('mdown is not a source tab', Not Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"notes.mdown"}', Reply, Err)
+      And (Pos('open_markdown', Err) > 0) And (IDE.Opens = 1));
+    Manager.Editor.Path := Root + '/Documents/Plan.md';
+    Check('already open markdown tab is still refused', Not Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"Documents/Plan.md"}', Reply, Err)
+      And (Pos('open_markdown', Err) > 0) And (IDE.Opens = 1));
+    Manager.Editor.Path := Root + '/closed.pas';
+    DeleteFile(Root + '/Documents/Plan.md');
+    RemoveDir(Root + '/Documents');
+    DeleteFile(Root + '/notes.mdown');
     Check('Ask still refuses edits', Not Broker.Execute(Run, 'lazarus_replace_buffer', '{"path":"closed.pas","text":"changed","revision":"invalid"}', Reply, Err));
     Check('missing file not created', Not Broker.Execute(Run, 'lazarus_open_buffer', '{"path":"missing.pas"}', Reply, Err) And Not FileExists(Root + '/missing.pas'));
     Check('path traversal refused', Not Broker.Execute(Run, 'lazarus_read_file', '{"path":"../outside.txt"}', Reply, Err));
@@ -161,7 +175,7 @@ Begin
     Approval.Free; Broker.Free; Workspace.Free;
     LazarusIDE := Nil; SourceEditorManagerIntf := Nil;
     Manager.Editor.Free; Manager.Free; IDE.Free; Project.Free;
-    DeleteFile(Root + '/source-alias.md'); DeleteFile(Root + '/Documents/Plan.md');
+    DeleteFile(Root + '/source-alias.md'); DeleteFile(Root + '/Documents/Plan.md'); DeleteFile(Root + '/notes.mdown');
     DeleteFile(Root + '/Documents/Review.md'); RemoveDir(Root + '/Documents'); DeleteFile(Root + '/race.md');
     DeleteFile(Root + '/binary');
     DeleteFile(Root + '/large.pas'); DeleteFile(Root + '/pipe'); DeleteFile(Root + '/escape');
