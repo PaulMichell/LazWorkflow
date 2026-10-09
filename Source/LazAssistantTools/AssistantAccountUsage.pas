@@ -88,6 +88,8 @@ Function AccountUsageCaption(Const Snapshot: TAccountUsageSnapshot; Const Active
 Function AccountUsageHint(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
 /// Last known plan summary for this connection, or empty. Not a turn-usage line.
 Function AccountUsagePlanText(Const ConnectionId: String): String;
+/// Newer of the footer slot and the last successful query. Empty connection id yields the slot item.
+Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
 Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
 Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
@@ -362,21 +364,47 @@ Begin
   End;
 End;
 
-Function AccountUsagePlanText(Const ConnectionId: String): String;
+Function PublishedAccountUsage(Const ConnectionId: String; Out Snapshot: TAccountUsageSnapshot): Boolean;
 Var
   I: Integer;
 Begin
-  Result := '';
+  Result := False;
+  ClearAccountUsageSnapshot(Snapshot);
   If (ConnectionId = '') Or (Not RegistryReady) Then
     Exit;
   EnterCriticalSection(RegistryLock);
   Try
     For I := 0 To High(PublishedUsage) Do
-      If PublishedUsage[I].ConnectionId = ConnectionId Then
-        Exit(PublishedUsage[I].Hint);
+      If (PublishedUsage[I].ConnectionId = ConnectionId) And PublishedUsage[I].Known And
+        (PublishedUsage[I].Caption <> '') Then
+        Begin
+          Snapshot := PublishedUsage[I];
+          Exit(True);
+        End;
   Finally
     LeaveCriticalSection(RegistryLock);
   End;
+End;
+
+Function AccountUsagePlanText(Const ConnectionId: String): String;
+Var
+  Snapshot: TAccountUsageSnapshot;
+Begin
+  If PublishedAccountUsage(ConnectionId, Snapshot) Then
+    Result := Snapshot.Hint
+  Else
+    Result := '';
+End;
+
+Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
+Var
+  Published: TAccountUsageSnapshot;
+Begin
+  Result := SlotItem;
+  If Not PublishedAccountUsage(ConnectionId, Published) Then
+    Exit;
+  If (Not AccountUsageApplies(Result, ConnectionId)) Or (Published.FetchedAt >= Result.FetchedAt) Then
+    Result := Published;
 End;
 
 Function DotDecimal(Const Text: String): String;

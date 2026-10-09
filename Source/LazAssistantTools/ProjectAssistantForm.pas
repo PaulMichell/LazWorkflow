@@ -184,6 +184,10 @@ Type
     FAccountUsageWanted: Boolean;
     FAccountUsageAttemptAt: TDateTime;
     FAccountUsageAttemptId: String;
+    FContextStatusText: String;
+    FContextStatusHint: String;
+    FPlanStatusCaption: String;
+    FPlanStatusHint: String;
     FAccountApiBase, FAccountKeySource, FAccountKeyEnv, FAccountKeyValue, FAccountPreset, FAccountWire: String;
     FActiveBackend: String;
     FActiveModel: String;
@@ -363,6 +367,7 @@ Type
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Procedure ApplyAccountUsageLabel;
+    Procedure RefreshCentreStatus;
     Procedure SyncCodexUsageIdle;
     Procedure NoteAccountConnectionChanged;
     Procedure StartAccountUsageWorker;
@@ -445,6 +450,7 @@ Procedure NotifyOpenProjectAssistantFormsProjectChanged;
 Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
 Procedure NotifyOpenProjectAssistantFormsConnectionChanged;
+Procedure NotifyOpenProjectAssistantFormsAccountUsage;
 
 Implementation
 
@@ -3331,21 +3337,46 @@ Begin
   End;
 End;
 
-Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
+Procedure TProjectAssistantForm.RefreshCentreStatus;
 Var
-  Item: TAccountUsageSnapshot;
+  CentreText, HintText: String;
 Begin
   If Not Assigned(StatusFooter) Then
     Exit;
-  If Not Assigned(FAccountUsageSlot) Then
+  CentreText := FContextStatusText;
+  If FPlanStatusCaption <> '' Then
     Begin
-      StatusFooter.SetUsageText('');
-      StatusFooter.SetUsageHint('');
-      Exit;
+      If CentreText <> '' Then
+        CentreText := CentreText + ' · ';
+      CentreText := CentreText + FPlanStatusCaption;
     End;
-  Item := FAccountUsageSlot.ReadSnapshot;
-  StatusFooter.SetUsageText(AccountUsageCaption(Item, FActiveConnectionId));
-  StatusFooter.SetUsageHint(AccountUsageHint(Item, FActiveConnectionId));
+  { The context line is the status text already on screen. The separate usage chip stays hidden so the figure is not shown twice. }
+  StatusFooter.SetCentreText(CentreText);
+  StatusFooter.SetUsageText('');
+  StatusFooter.SetUsageHint('');
+  HintText := FContextStatusHint;
+  If FPlanStatusHint <> '' Then
+    Begin
+      If HintText <> '' Then
+        HintText := HintText + LineEnding;
+      HintText := HintText + FPlanStatusHint;
+    End;
+  StatusFooter.SetCentreHint(HintText);
+End;
+
+Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
+Var
+  SlotItem, Item: TAccountUsageSnapshot;
+Begin
+  If Not Assigned(StatusFooter) Then
+    Exit;
+  ClearAccountUsageSnapshot(SlotItem);
+  If Assigned(FAccountUsageSlot) Then
+    SlotItem := FAccountUsageSlot.ReadSnapshot;
+  Item := AccountUsageForFooter(FActiveConnectionId, SlotItem);
+  FPlanStatusCaption := AccountUsageCaption(Item, FActiveConnectionId);
+  FPlanStatusHint := AccountUsageHint(Item, FActiveConnectionId);
+  RefreshCentreStatus;
 End;
 
 Procedure TProjectAssistantForm.SyncCodexUsageIdle;
@@ -3520,7 +3551,7 @@ Begin
     End;
   ApplyModelStatus;
   StatusFooter.SetModelText(LeftText);
-  StatusFooter.SetCentreText(CentreText);
+  FContextStatusText := CentreText;
   ApplyAccountUsageLabel;
   StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
@@ -3528,21 +3559,21 @@ Begin
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
     (BlockReason <> '') Then
     StatusFooter.SetModelHint('Click to change model, thinking level, or approval. ' + BlockReason);
-  StatusFooter.SetCentreHint(Format('About %d of %d tokens. Click for a breakdown.',
-    [FContextUsed, FContextLimit]));
+  FContextStatusHint := Format('About %d of %d tokens. Click for a breakdown.', [FContextUsed, FContextLimit]);
   StatusFooter.SetRightHint('Click for session info');
   If FUseCodex Then
     Begin
       StatusFooter.SetModelHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       RefreshAttachAction;
-      StatusFooter.SetCentreHint('Estimated context; provider allowance is checked on each request');
+      FContextStatusHint := 'Estimated context; provider allowance is checked on each request';
     End
   Else
     Begin
       If Assigned(SendAction) Then SendAction.Hint := '';
       RefreshAttachAction;
     End;
+  RefreshCentreStatus;
   ApplySkillStatus;
   If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
@@ -6717,6 +6748,19 @@ Begin
       Form := Screen.CustomForms[I];
       If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
         TProjectAssistantForm(Form).ReloadActiveConnection;
+    End;
+End;
+
+Procedure NotifyOpenProjectAssistantFormsAccountUsage;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        TProjectAssistantForm(Form).ApplyAccountUsageLabel;
     End;
 End;
 

@@ -196,6 +196,9 @@ Begin
   If (Pos(When, Snapshot.Hint) = 0) Then
     WriteLn('  hint: [', Snapshot.Hint, ']');
   CheckText('settings can read the plan summary', AccountUsagePlanText('grok-1'), Snapshot.Hint);
+  ClearAccountUsageSnapshot(Snapshot);
+  Snapshot := AccountUsageForFooter('grok-1', Snapshot);
+  Check('footer uses the published plan when the slot is empty', Snapshot.Caption = 'Credits used: 25%');
 
   Check('omitted grok percent on a fresh week is zero used', ParseGrokAccountUsage(
     '{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00Z"}}}', 'grok-1', Snapshot,

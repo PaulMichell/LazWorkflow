@@ -716,6 +716,7 @@ Begin
     End;
   If Assigned(FPlanUsageTimer) Then
     FPlanUsageTimer.Enabled := False;
+  NotifyOpenProjectAssistantFormsAccountUsage;
   Item := Nil;
   If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
     Item := Connections[SelectedConnection];
