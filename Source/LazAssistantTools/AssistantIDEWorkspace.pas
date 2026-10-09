@@ -368,6 +368,13 @@ Begin
   { Repeat all IDE checks after approval: an unsaved editor or a disk file may
     have appeared while the review dialog was open. }
   If Not CheckNewFile(Path, Resolved, ErrorText) Then Exit;
+  { Do not open a viewer here. Plans and documents are written only by
+    WriteMarkdownFile and ReplaceInMarkdownFile. }
+  If AssistantPlan.IsMarkdownPath(Resolved) Then
+    Begin
+      ErrorText := 'A plan or document is written with write_markdown or update_markdown, not by creating a source file.';
+      Exit;
+    End;
   Root := IncludeTrailingPathDelimiter(ExpandFileName(ProjectRootPath));
   RelativePath := Copy(Resolved, Length(Root) + 1, MaxInt);
   If Not CreateNewProjectText(Root, RelativePath, Text, ErrorText) Then Exit;

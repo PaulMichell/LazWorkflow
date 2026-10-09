@@ -1,7 +1,8 @@
 Program AssistantWorkspaceTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, BaseUnix,
-  LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker;
+  LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantIDEWorkspace, AssistantToolBroker,
+  AssistantTools, AssistantPlan, AssistantConversation, AssistantMarkdownForm, AssistantConfig;
 Type
   TProject = Class(TLazProject)
   Public
@@ -83,7 +84,8 @@ Begin
   End;
 End;
 Var Approval: TFileApproval; IDE: TIDE; Project: TProject; Manager: TManager; Workspace: TAssistantIDEWorkspace;
-  Broker: TAssistantToolBroker; Root, Run, Reply, Err: String; Id: TGuid; Stream: TFileStream;
+  Broker: TAssistantToolBroker; Root, Run, Reply, Err, SavedApproval: String; Id: TGuid; Stream: TFileStream;
+  OpensBefore: Integer; Viewer: TAssistantMarkdownForm;
 Begin
   Application.Initialize;
   CreateGUID(Id); Root := GetTempDir + 'laz-workspace-' + GUIDToString(Id);
@@ -141,10 +143,14 @@ Begin
     Check('declined report has no file or directory effect', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"# Findings"}', Reply, Err)
       And Not DirectoryExists(Root + '/Documents') And (Approval.SeenText = '# Findings'));
     Approval.Action := 1;
-    Check('approved report saved through broker', Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"# Findings"}', Reply, Err)
-      And FileExists(Root + '/Documents/Review.md') And (Pos('"saved":true', Reply) > 0) And (IDE.Opens = 1));
+    Check('markdown report is not a broker write', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"# Findings"}', Reply, Err)
+      And (Pos('write_markdown', Err) > 0) And Not FileExists(Root + '/Documents/Review.md') And (IDE.Opens = 1));
     Check('review uses resolved project path', Approval.SeenPath = Root + '/Documents/Review.md');
-    Check('existing report is refused before approval', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"overwrite"}', Reply, Err) And (Approval.Calls = 2));
+    Check('approved text file saved through broker', Broker.Execute(Run, 'lazarus_create_file', '{"path":"Notes.txt","text":"plain notes for the harness"}', Reply, Err)
+      And FileExists(Root + '/Notes.txt') And (Pos('"saved":true', Reply) > 0) And (Pos('"opened":false', Reply) > 0) And (IDE.Opens = 1));
+    ForceDirectories(Root + '/Documents');
+    WriteFile(Root + '/Documents/Review.md', '# Findings');
+    Check('existing report is refused before approval', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Review.md","text":"overwrite"}', Reply, Err) And (Approval.Calls = 3));
     Approval.Action := 2;
     Check('file appearing during approval is retained', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"race.md","text":"overwrite"}', Reply, Err));
     Check('concurrent file content is unchanged', Broker.Execute(Run, 'lazarus_read_file', '{"path":"race.md"}', Reply, Err) And (Pos('file appeared during approval', Reply) > 0));
@@ -159,7 +165,8 @@ Begin
     Check('Plan advertises new file tool without builds', (Pos('lazarus_create_file', Broker.ToolsJson) > 0) And (Pos('lazarus_start_build', Broker.ToolsJson) = 0));
     Check('Plan creation can be declined', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Plan.md","text":"# Plan"}', Reply, Err) And Not FileExists(Root + '/Documents/Plan.md'));
     Approval.Action := 1;
-    Check('Plan creates Markdown report', Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Plan.md","text":"# Plan"}', Reply, Err) And FileExists(Root + '/Documents/Plan.md'));
+    Check('Plan broker create does not write a plan', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Plan.md","text":"# Plan"}', Reply, Err)
+      And (Pos('write_markdown', Err) > 0) And Not FileExists(Root + '/Documents/Plan.md') And (IDE.Opens = 1));
     Broker.OnApproval := Nil;
     Check('Plan cannot create Pascal source', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.pas","text":"unit New;"}', Reply, Err) And Not FileExists(Root + '/new.pas'));
     Check('Plan cannot create form or project files', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.lfm","text":"object"}', Reply, Err)
@@ -169,6 +176,40 @@ Begin
     Manager.Editor.Path := Root + '/source-alias.md';
     Check('Plan rejects source behind Markdown alias', Not Broker.Execute(Run, 'lazarus_save_buffer', '{"path":"source-alias.md","revision":"invalid"}', Reply, Err) And (Pos('Markdown', Err) > 0));
     Check('Plan cannot escape project with Markdown extension', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"../outside.md","text":"# Plan"}', Reply, Err));
+    SavedApproval := '';
+    If Assigned(AssistantChatConfig) Then
+      Begin
+        SavedApproval := AssistantChatConfig.ApprovalMode;
+        AssistantChatConfig.ApprovalMode := 'always';
+      End;
+    ProjectAssistantConversation.SetProjectRoot(Root);
+    OpensBefore := IDE.Opens;
+    SetAssistantPlanViewerQuiet(False);
+    Check('plan write_markdown opens the viewer and registers',
+      ExecuteAssistantToolForMode('write_markdown',
+        '{"path":"Documents/ViewerPlan.md","content":"# Shared path\n\nGenerated by Lazarus Project Assistant.\n\n' +
+        '## 1. Window\n\nContext.\n\n### 1.1 Open\nStatus: not started\n\nUse the viewer.\n"}',
+        amPlan, Reply, Err) And (Err = '') And (GetActivePlanRelativePath = 'Documents/ViewerPlan.md')
+      And FileExists(Root + '/Documents/ViewerPlan.md')
+      And Assigned(FindMarkdownDocument(Root + '/Documents/ViewerPlan.md')) And (IDE.Opens = OpensBefore));
+    Check('registered plan is listed', ExecuteAssistantToolForMode('list_plans', '{}', amPlan, Reply, Err)
+      And (Pos('ViewerPlan.md', Reply) > 0));
+    Check('document write_markdown opens the viewer',
+      ExecuteAssistantToolForMode('write_markdown',
+        '{"path":"Documents/Report.md","content":"# Findings\n\nNot a plan.\n"}', amDocument, Reply, Err)
+      And (Err = '') And Assigned(FindMarkdownDocument(Root + '/Documents/Report.md'))
+      And (GetActivePlanRelativePath = 'Documents/ViewerPlan.md') And (IDE.Opens = OpensBefore));
+    SetAssistantPlanViewerQuiet(True);
+    Check('quiet write does not open a new viewer',
+      WriteMarkdownFile('Documents/Quiet.md', '# Quiet' + LineEnding + LineEnding +
+        'Generated by Lazarus Project Assistant.' + LineEnding + LineEnding + '## 1. Stay' + LineEnding +
+        LineEnding + 'No window.' + LineEnding, True, Reply, Err) And (FindMarkdownDocument(Reply) = Nil));
+    SetAssistantPlanViewerQuiet(False);
+    Viewer := FindMarkdownDocument(Root + '/Documents/ViewerPlan.md');
+    If Assigned(Viewer) Then Viewer.Free;
+    Viewer := FindMarkdownDocument(Root + '/Documents/Report.md');
+    If Assigned(Viewer) Then Viewer.Free;
+    If Assigned(AssistantChatConfig) Then AssistantChatConfig.ApprovalMode := SavedApproval;
     Run := Broker.BeginRun(awsReadOnly); Project.ProjectFile := Root + '/other.lpi';
     Check('project switch blocks file inspection', Not Broker.Execute(Run, 'lazarus_read_file', '{"path":"closed.pas"}', Reply, Err));
   Finally
@@ -176,6 +217,8 @@ Begin
     LazarusIDE := Nil; SourceEditorManagerIntf := Nil;
     Manager.Editor.Free; Manager.Free; IDE.Free; Project.Free;
     DeleteFile(Root + '/source-alias.md'); DeleteFile(Root + '/Documents/Plan.md'); DeleteFile(Root + '/notes.mdown');
+    DeleteFile(Root + '/Notes.txt'); DeleteFile(Root + '/Documents/ViewerPlan.md');
+    DeleteFile(Root + '/Documents/Quiet.md'); DeleteFile(Root + '/Documents/Report.md');
     DeleteFile(Root + '/Documents/Review.md'); RemoveDir(Root + '/Documents'); DeleteFile(Root + '/race.md');
     DeleteFile(Root + '/binary');
     DeleteFile(Root + '/large.pas'); DeleteFile(Root + '/pipe'); DeleteFile(Root + '/escape');
