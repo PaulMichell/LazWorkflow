@@ -58,7 +58,7 @@ Procedure SetDocumentRelativePath(Const RelativePath: String);
 Procedure RememberDocumentRelativePath(Const RelativePath: String);
 { Current document, or a new report path when none is remembered. }
 Function DocumentPathForTurn: String;
-Function AssistantDocumentDirective(Const DocumentPath: String; CodexTools: Boolean = False): String;
+Function AssistantDocumentDirective(Const DocumentPath: String): String;
 Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 Function IsMarkdownPath(Const Path: String): Boolean;
@@ -300,17 +300,11 @@ Begin
     End;
 End;
 
-Function AssistantDocumentDirective(Const DocumentPath: String; CodexTools: Boolean): String;
+Function AssistantDocumentDirective(Const DocumentPath: String): String;
 Begin
-  If CodexTools Then
-    Result :=
-      '[SYSTEM DIRECTIVE — Document mode] When this request produces a new document, save it with ' +
-      'lazarus_create_file (path: "' + DocumentPath + '"). Revise an existing document with ' +
-      'lazarus_replace_buffer and lazarus_save_buffer. '
-  Else
-    Result :=
-      '[SYSTEM DIRECTIVE — Document mode] When this request produces or revises a document, write it with ' +
-      'write_markdown or update_markdown (path: "' + DocumentPath + '"). ';
+  Result :=
+    '[SYSTEM DIRECTIVE — Document mode] When this request produces or revises a document, write it with ' +
+    'write_markdown or update_markdown (path: "' + DocumentPath + '"). ';
   Result := Result +
     'Chat reply must be a short summary only, not the full document body. ' +
     'Use free Markdown. The user''s prompt decides the layout. ' +
