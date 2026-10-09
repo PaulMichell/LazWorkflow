@@ -11,6 +11,24 @@ import subprocess
 import tempfile
 
 
+def compiled_unit_dirs(lazarus_root, excluded):
+    return sorted({path.parent for path in lazarus_root.rglob('*.ppu')
+                   if not excluded.intersection(path.parts)})
+
+
+def assistant_unit_dirs(lazarus_root):
+    """Prefer gtk2. If that widgetset was not built, use the one that has Interfaces."""
+    excluded = {'qt5', 'qt6', 'gtk3', 'nogui', 'win32', 'cocoa'}
+    dirs = compiled_unit_dirs(lazarus_root, excluded)
+    if any((path / 'interfaces.ppu').is_file() for path in dirs):
+        return dirs
+    for widget in ('gtk3', 'qt5', 'qt6'):
+        widened = compiled_unit_dirs(lazarus_root, excluded - {widget})
+        if any((path / 'interfaces.ppu').is_file() for path in widened):
+            return widened
+    return dirs
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lazarus-root', type=Path, required=True)
@@ -26,9 +44,7 @@ def main():
     repo = Path(__file__).resolve().parents[2]
     output = (args.output_dir or Path(tempfile.mkdtemp(prefix='laz-assistant-tests-'))).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    excluded = {'qt5', 'qt6', 'gtk3', 'nogui', 'win32', 'cocoa'}
-    unit_dirs = sorted({p.parent for p in args.lazarus_root.rglob('*.ppu')
-                        if not excluded.intersection(p.parts)})
+    unit_dirs = assistant_unit_dirs(args.lazarus_root)
     if not unit_dirs:
         parser.error('No compiled Lazarus units found; build Lazarus/GTK2 first.')
     flags = ['fpc', '-v0', '-gl', '-Cr', '-Co', f'-FU{output}', f'-FE{output}']
@@ -40,7 +56,7 @@ def main():
              'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest', 'AssistantSearchUtilTest',
              'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantAccountUsageTest', 'AssistantFileCreationTest',
              'AssistantCodexHandshakeTest',
-             'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantBuildJobTest', 'AssistantGitTest',
+             'AssistantTestRunnerTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantWorkTargetTest', 'AssistantBuildJobTest', 'AssistantGitTest',
              'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall']
     if args.gui:
         tests += ['PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',

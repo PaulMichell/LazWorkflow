@@ -4,9 +4,9 @@ Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf,
   LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantWorkTarget,
   AssistantConversation, AssistantIDEContext, AssistantIDEWorkspace,
   AssistantTools, AssistantTestSettings, fpjson, jsonparser, ProjectAssistantForm,
-  StdCtrls, BaseIDEIntf, LazConfigStorage, FPImage, FPWritePNG, FileUtil,
+  StdCtrls, Controls, BaseIDEIntf, LazConfigStorage, FPImage, FPWritePNG, FileUtil,
   AssistantImages, AssistantService, AssistantProtocol, AssistantTrace, AssistantEvents,
-  AssistantConfig, AssistantCodexClient;
+  AssistantConfig, AssistantCodexClient, AssistantPlan;
 Type
   TMemoryConfig=Class(TConfigMemStorage)
   Public
@@ -47,8 +47,10 @@ Type
   TIDE=Class(TLazIDEInterface)
   Public
     Proj:TProject;
+    Opens:Integer;
     Function GetActiveProject:TLazProject; Override;
     Class Function GetPrimaryConfigPath:String; Override;
+    Function DoOpenEditorFile(AFileName: String; PageIndex, WindowIndex: Integer; Flags: TOpenFlags): TModalResult; Override;
   End;
   TEditor=Class(TSourceEditorInterface)
   Public
@@ -95,6 +97,11 @@ Function TProject.GetProjectInfoFile:String; Begin Result:=Path; End;
 Function TProject.GetMainFile:TLazProjectFile; Begin Result:=Nil; End;
 Function TIDE.GetActiveProject:TLazProject; Begin Result:=Proj; End;
 Class Function TIDE.GetPrimaryConfigPath:String; Begin Result:=Root+'/config/'; End;
+Function TIDE.DoOpenEditorFile(AFileName: String; PageIndex, WindowIndex: Integer; Flags: TOpenFlags): TModalResult;
+Begin
+  Inc(Opens);
+  Result := mrCancel;
+End;
 Function TEditor.GetFileName:String; Begin Result:=Path; End;
 Function TEditor.GetSourceText:String; Begin Result:=Body; End;
 Function TEditor.GetModified:Boolean; Begin Result:=Dirty; End;
@@ -179,7 +186,7 @@ Begin
   AssistantChatConfig.SetApprovalModeEnum(aamAlways);
   Try
     Check('png is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
-      '{"path":"photo.png","content":"not an image"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+      '{"path":"photo.png","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('replace_in_file still refuses a png', (Not ExecuteAssistantToolForMode('replace_in_file',
       '{"path":"photo.png","old_text":"a","new_text":"b"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
   Finally
@@ -227,7 +234,7 @@ End;
 
 Procedure TestCodexPlanTools;
 Var
-  Catalogue, Dynamic, Params, Name, SharedDesc: String;
+  Catalogue, Dynamic, Params, Name, SharedDesc, DocumentJson, DocumentDynamic, Directive: String;
   Data, Shared: TJSONData;
   Arr: TJSONArray;
   I: Integer;
@@ -235,6 +242,7 @@ Begin
   Catalogue := BuildAssistantToolsJsonForMode(amPlan);
   Dynamic := CodexDynamicToolsFromCatalogue(Catalogue);
   Check('plan dynamic tools include write_markdown', CatalogueDescription(Dynamic, 'write_markdown', False) <> '');
+  Check('plan dynamic tools include update_markdown', CatalogueDescription(Dynamic, 'update_markdown', False) <> '');
   Check('plan dynamic tools include open_markdown', CatalogueDescription(Dynamic, 'open_markdown', False) <> '');
   Check('plan dynamic tools omit open_file', CatalogueDescription(Dynamic, 'open_file', False) = '');
   Check('plan dynamic tools omit lazarus_', Pos('lazarus_', Dynamic) = 0);
@@ -261,8 +269,10 @@ Begin
     Data.Free;
   End;
   Params := CodexThreadStartParams('/proj', 'model', Dynamic, 'Use write_markdown.');
-  Check('thread/start embeds write_markdown', Pos('"name":"write_markdown"', Params) > 0);
-  Check('thread/start embeds open_markdown', Pos('"name":"open_markdown"', Params) > 0);
+  Check('thread/start embeds write_markdown', (Pos('"name":"write_markdown"', Params) > 0) Or
+    (Pos('"name" : "write_markdown"', Params) > 0));
+  Check('thread/start embeds open_markdown', (Pos('"name":"open_markdown"', Params) > 0) Or
+    (Pos('"name" : "open_markdown"', Params) > 0));
   Check('thread/start instructions are the passed prompt', Pos('Use write_markdown.', Params) > 0);
   Check('thread/start has no lazarus tool essay', Pos('use the lazarus tools', LowerCase(Params)) = 0);
   Check('chat catalogue converts to an empty array', CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amChat)) = '[]');
@@ -272,6 +282,41 @@ Begin
     CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amDocument)), 'open_file', False) <> '');
   Check('build still offers open_file', CatalogueDescription(
     CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amBuild)), 'open_file', False) <> '');
+  DocumentJson := BuildAssistantToolsJsonForMode(amDocument);
+  DocumentDynamic := CodexDynamicToolsFromCatalogue(DocumentJson);
+  Check('document names write_markdown', Pos('"name":"write_markdown"', DocumentJson) > 0);
+  Check('document omits lazarus_create_file', Pos('lazarus_create_file', DocumentJson) = 0);
+  Check('document dynamic tools name write_markdown',
+    CatalogueDescription(DocumentDynamic, 'write_markdown', False) <> '');
+  Check('document dynamic tools omit lazarus_create_file', Pos('lazarus_create_file', DocumentDynamic) = 0);
+  Directive := AssistantDocumentDirective('Documents/Notes.md');
+  Check('document directive names write_markdown', Pos('write_markdown', Directive) > 0);
+  Check('document directive omits lazarus_create_file', Pos('lazarus_create_file', Directive) = 0);
+End;
+
+Procedure TestMarkdownEditorOpen;
+Var
+  Note: String;
+  SavedIDE: TLazIDEInterface;
+  Probe: TIDE;
+Begin
+  Probe := TIDE.Create(Nil);
+  SavedIDE := LazarusIDE;
+  LazarusIDE := Probe;
+  Try
+    Probe.Opens := 0;
+    Check('md refused before an IDE open', (Not OpenEditorReuse('/tmp/Plan.md', Note)) And
+      (Pos('open_markdown', Note) > 0) And (Probe.Opens = 0));
+    Check('markdown refused before an IDE open', (Not OpenEditorReuse('/tmp/notes.markdown', Note)) And
+      (Pos('open_markdown', Note) > 0) And (Probe.Opens = 0));
+    Check('mdown refused before an IDE open', (Not OpenEditorReuse('/tmp/notes.mdown', Note)) And
+      (Pos('open_markdown', Note) > 0) And (Probe.Opens = 0));
+    Check('a pas path still reaches the IDE helper', (Not OpenEditorReuse('/tmp/Unit1.pas', Note)) And
+      (Probe.Opens = 1));
+  Finally
+    LazarusIDE := SavedIDE;
+    Probe.Free;
+  End;
 End;
 
 Procedure WriteFile(Const Path,Body:String);
@@ -290,6 +335,7 @@ Begin
   Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;
   TestReadImage;
   TestCodexPlanTools;
+  TestMarkdownEditorOpen;
   CreateGUID(Id);Root:=GetTempDir+'laz-target-'+GUIDToString(Id);
   WriteFile(Root+'/.git/HEAD','ref: refs/heads/main');
   WriteFile(Root+'/Packages/One.lpk','<package/>');WriteFile(Root+'/Packages/Two.lpk','<package/>');
@@ -336,9 +382,9 @@ Begin
     Check('save package plan setting',Store.SaveShellConfig(True,amPlan,'Documents/One.md'));
     Key:=AssistantTarget.StoreKey;Path:=AssistantTarget.StoreDirectory;
     Check('package session uses isolated store',Pos('/targets/'+Key+'/',Path)>0);
-    Settings1:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);
+    Settings1:=TAssistantTestSettings.Create(AssistantTarget.StoreDirectory,AssistantTarget.Manifest);
     Check('select another package',AssistantTarget.SelectPackage(Packages.Second.Filename,Note));
-    Settings2:=TAssistantTestSettings.Create(Root,AssistantTarget.Manifest);
+    Settings2:=TAssistantTestSettings.Create(AssistantTarget.StoreDirectory,AssistantTarget.Manifest);
     Try Check('test settings are independent',Settings1.StorageFilename<>Settings2.StorageFilename);
     Finally Settings1.Free;Settings2.Free;End;
     Check('package histories cannot collide',AssistantTarget.StoreKey<>Key);
