@@ -23,7 +23,7 @@ Type
   TAssistantCodexRun = Class(TThread)
   Private
     FLock: TRTLCriticalSection;
-    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile, FEffort: String;
+    FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile, FEffort, FDeveloperInstructions: String;
     FSnapshot: TCodexRunSnapshot;
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
@@ -36,7 +36,8 @@ Type
     Procedure Execute; Override;
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
-      TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '');
+      TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '';
+      Const DeveloperInstructions: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean; Overload;
@@ -58,7 +59,8 @@ Uses
   AssistantCodexHandshake, AssistantCodexProfile;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
-    ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String);
+    ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
+    Const DeveloperInstructions: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
@@ -72,6 +74,7 @@ Begin
   FTimeout := TimeoutMs;
   FProfile := ProfileDir;
   FEffort := Effort;
+  FDeveloperInstructions := DeveloperInstructions;
   FSnapshot.State := crsConnecting;
 End;
 
@@ -283,7 +286,7 @@ Begin
           End
             Else If (Stage = 3) And Client.ToolIsolationChecked Then
               Begin
-                If Client.StartThread(RunDirectory, FModel, FToolsJson) Then Stage := 1;
+                If Client.StartThread(RunDirectory, FModel, FToolsJson, FDeveloperInstructions) Then Stage := 1;
               End
                 Else If (Stage = 1) And (Client.State = crsReady) Then
                   Begin

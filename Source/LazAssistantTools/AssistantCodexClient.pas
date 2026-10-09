@@ -20,6 +20,10 @@ Const
   { Image support is the Grok connection. Do not add a guessed local_image field here. }
   CodexImagesSupported = False;
 
+/// Shared catalogue items use function.parameters. Codex dynamicTools use name and inputSchema.
+Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
+/// thread/start params. DynamicToolsJson is a JSON array. Instructions are the harness prompt, not a Codex essay.
+Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions: String): String;
 /// turn/start params for this client. One text item. No image item and no local path.
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 /// turn/steer params for this client. One text item. No image item: 2.4 found none in this protocol.
@@ -70,7 +74,7 @@ Type
     { Short-lived usage reader only. The live turn client must not call this. }
     Function ReadRateLimits: Boolean;
     Function CheckToolIsolation: Boolean;
-    Function StartThread(Const WorkingDirectory, Model, ToolsJson: String): Boolean;
+    Function StartThread(Const WorkingDirectory, Model, ToolsJson: String; Const DeveloperInstructions: String = ''): Boolean;
     Function StartTurn(Const Prompt: String; Const Effort: String = ''): Boolean;
     Function Steer(Const Text: String): Boolean; Overload;
     { Image refs are refused while CodexImagesSupported is false. A text note is not the picture. }
@@ -100,6 +104,83 @@ Uses
 Function Quote(Const S: String): String;
 Begin
   Result := '"' + JsonEscapeText(S) + '"';
+End;
+
+Function CopyJson(Node: TJSONData): TJSONData;
+Begin
+  Result := Nil;
+  If Not Assigned(Node) Then Exit;
+  Try
+    Result := GetJSON(Node.AsJSON);
+  Except
+    Result := Nil;
+  End;
+End;
+
+Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
+Var
+  Data, Fn, Schema: TJSONData;
+  Source, Converted: TJSONArray;
+  Item, FnObj, Tool: TJSONObject;
+  I: Integer;
+Begin
+  Result := '[]';
+  If Trim(CatalogueJson) = '' Then Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(CatalogueJson);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONArray) Then Exit;
+    Source := TJSONArray(Data);
+    Converted := TJSONArray.Create;
+    Try
+      For I := 0 To Source.Count - 1 Do
+        Begin
+          If Not (Source[I] Is TJSONObject) Then Continue;
+          Item := TJSONObject(Source[I]);
+          Fn := Item.Find('function');
+          If Assigned(Fn) And (Fn Is TJSONObject) Then
+            Begin
+              FnObj := TJSONObject(Fn);
+              Tool := TJSONObject.Create;
+              Tool.Add('type', 'function');
+              Tool.Add('name', FnObj.Get('name', ''));
+              Tool.Add('description', FnObj.Get('description', ''));
+              Schema := CopyJson(FnObj.Find('parameters'));
+              If Not Assigned(Schema) Then Schema := GetJSON('{"type":"object","properties":{}}');
+              Tool.Add('inputSchema', Schema);
+              Converted.Add(Tool);
+            End
+          Else If Item.Get('name', '') <> '' Then
+            Begin
+              Schema := CopyJson(Item);
+              If Assigned(Schema) Then Converted.Add(Schema);
+            End;
+        End;
+      Result := Converted.AsJSON;
+    Finally
+      Converted.Free;
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions: String): String;
+Var
+  Tools: String;
+Begin
+  Tools := Trim(DynamicToolsJson);
+  If Tools = '' Then Tools := '[]';
+  Result := '{"cwd":' + Quote(WorkingDirectory) +
+    ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
+    '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
+    '"environments":[],"dynamicTools":' + Tools +
+    ',"developerInstructions":' + Quote(DeveloperInstructions) +
+    ',"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}';
 End;
 
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
@@ -271,36 +352,21 @@ Begin
   If Result Then Result := Request('mcpServerStatus/list', '{"limit":100}');
 End;
 
-Function TAssistantCodexClient.StartThread(Const WorkingDirectory, Model,
-    ToolsJson: String): Boolean;
+Function TAssistantCodexClient.StartThread(Const WorkingDirectory, Model, ToolsJson, DeveloperInstructions: String): Boolean;
 Var
   Data: TJSONData;
+  Dynamic: String;
 Begin
   Result := False;
   If (FHandshake.State <> ccsSubscriptionAuthenticated) Or
     Not (FState In [crsReady, crsCompleted]) Or Not FToolIsolationChecked Then Exit;
-  Data := GetJSON(ToolsJson);
+  Dynamic := CodexDynamicToolsFromCatalogue(ToolsJson);
+  Data := GetJSON(Dynamic);
   Try
     If Not (Data Is TJSONArray) Then Exit;
     { Built-in actions have no write permission. Approvals must be serviced by
-      this client, which rejects them. A live-editor release still requires
-      runtime qualification against external MCP/configured tool bypasses. }
-    If Data.Count = 0 Then
-      Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
-        ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-        '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
-        '"environments":[],"dynamicTools":[],' +
-        '"developerInstructions":"This is a general chat. Do not use tools, the IDE, or the filesystem. ' +
-        'Answer from the conversation only.",' +
-        '"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}')
-    Else
-      Result := Request('thread/start', '{"cwd":' + Quote(WorkingDirectory) +
-        ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-        '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
-        '"environments":[],"dynamicTools":' + Data.AsJSON +
-        ',"developerInstructions":"Use the lazarus tools for project and editor operations. ' +
-        'Live buffers may differ from disk. Never bypass their revision checks.",' +
-        '"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}');
+      this client, which rejects them. Developer instructions come from the harness. }
+    Result := Request('thread/start', CodexThreadStartParams(WorkingDirectory, Model, Dynamic, DeveloperInstructions));
     If Result Then FState := crsStartingThread;
   Finally
     Data.Free;

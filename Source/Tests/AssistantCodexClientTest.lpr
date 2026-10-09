@@ -135,6 +135,37 @@ Begin
       Finally Data.Free; End;
     End;
 End;
+Procedure TestDynamicTools;
+Var
+  Catalogue, Dynamic, Params: String;
+  Data: TJSONData;
+  Tool: TJSONObject;
+Begin
+  Catalogue := '[{"type":"function","function":{"name":"write_markdown","description":"Write the plan.",' +
+    '"parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}},' +
+    '{"type":"function","function":{"name":"open_markdown","description":"Open the viewer.","parameters":{"type":"object"}}}]';
+  Dynamic := CodexDynamicToolsFromCatalogue(Catalogue);
+  Data := GetJSON(Dynamic);
+  Try
+    Check('converted two tools', TJSONArray(Data).Count = 2);
+    Tool := TJSONObject(TJSONArray(Data)[0]);
+    Check('name lifted', Tool.Get('name', '') = 'write_markdown');
+    Check('description kept', Tool.Get('description', '') = 'Write the plan.');
+    Check('parameters become inputSchema', Tool.Find('inputSchema').FindPath('properties.content.type').AsString = 'string');
+    Check('no nested function wrapper', Tool.Find('function') = Nil);
+  Finally
+    Data.Free;
+  End;
+  Check('empty catalogue is an empty array', CodexDynamicToolsFromCatalogue('') = '[]');
+  Check('empty array stays empty', CodexDynamicToolsFromCatalogue('[]') = '[]');
+  Params := CodexThreadStartParams('/tmp', 'model', Dynamic, 'Use write_markdown.');
+  Check('thread/start embeds write_markdown', Pos('"name":"write_markdown"', Params) > 0);
+  Check('thread/start embeds open_markdown', Pos('"name":"open_markdown"', Params) > 0);
+  Check('thread/start uses the passed instructions', Pos('Use write_markdown.', Params) > 0);
+  Check('thread/start has no lazarus tool essay', Pos('use the lazarus tools', LowerCase(Params)) = 0);
+  Check('chat thread/start has an empty tool array', Pos('"dynamicTools":[]', CodexThreadStartParams('/tmp', 'model', '[]', 'chat')) > 0);
+End;
+
 Procedure TestWorkerBridge;
 Var Workspace: TMemoryWorkspace; Broker: TAssistantToolBroker; Run: TAssistantCodexRun;
   RunId, Profile: String; Snapshot: TCodexRunSnapshot; Deadline: QWord;
@@ -433,6 +464,7 @@ Begin
       Halt;
     End;
   If ParamCount > 0 Then Begin FakeRuntime; Halt; End;
+  TestDynamicTools;
   TestTurnStartBody;
   Client := TAssistantCodexClient.Create(500);
   Try

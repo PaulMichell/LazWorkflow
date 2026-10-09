@@ -461,7 +461,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
-  AssistantCodexUsage,
+  AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
@@ -3020,9 +3020,30 @@ Begin
     End;
 End;
 
+Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
+Var
+  Names: TStringList;
+  Root, PlanRel: String;
+Begin
+  Result := '';
+  Names := TStringList.Create;
+  Try
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(Mode), Names);
+    Root := ProjectRootPath;
+    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+      Root := ProjectAssistantConversation.ProjectRoot;
+    PlanRel := GetActivePlanRelativePath;
+    If Assigned(WorkflowAssistantHarness) Then
+      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel);
+  Finally
+    Names.Free;
+  End;
+End;
+
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, Recap, ContextText, ModelText: String;
+  Prompt, Recap, ContextText, ModelText, ToolsJson, Instructions: String;
   I: Integer;
   Turn: TConversationTurn;
   WithContext: Boolean;
@@ -3114,8 +3135,10 @@ Begin
   SetSending(True);
   BeginAssistantReply;
   Try
+    ToolsJson := BuildAssistantToolsJsonForMode(ActiveMode);
+    Instructions := CodexDeveloperInstructions(ActiveMode);
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, FCodexBroker.ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort);
+      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions);
     FCodexRun.Start;
     Result := True;
   Except

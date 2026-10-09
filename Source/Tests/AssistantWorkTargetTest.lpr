@@ -6,7 +6,7 @@ Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf,
   AssistantTools, AssistantTestSettings, fpjson, jsonparser, ProjectAssistantForm,
   StdCtrls, BaseIDEIntf, LazConfigStorage, FPImage, FPWritePNG, FileUtil,
   AssistantImages, AssistantService, AssistantProtocol, AssistantTrace, AssistantEvents,
-  AssistantConfig;
+  AssistantConfig, AssistantCodexClient;
 Type
   TMemoryConfig=Class(TConfigMemStorage)
   Public
@@ -195,6 +195,85 @@ Begin
   DeleteFile(Outside);
   DeleteDirectory(Root, False);
 End;
+Function CatalogueDescription(Const ToolsJson, Name: String; Nested: Boolean): String;
+Var
+  Data: TJSONData;
+  Arr: TJSONArray;
+  Obj, Fn: TJSONObject;
+  I: Integer;
+Begin
+  Result := '';
+  Data := GetJSON(ToolsJson);
+  Try
+    If Not (Data Is TJSONArray) Then Exit;
+    Arr := TJSONArray(Data);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr[I] Is TJSONObject) Then Continue;
+        Obj := TJSONObject(Arr[I]);
+        If Nested Then
+          Begin
+            If Not (Obj.Find('function') Is TJSONObject) Then Continue;
+            Fn := TJSONObject(Obj.Find('function'));
+            If Fn.Get('name', '') = Name Then Exit(Fn.Get('description', ''));
+          End
+        Else If Obj.Get('name', '') = Name Then
+          Exit(Obj.Get('description', ''));
+      End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure TestCodexPlanTools;
+Var
+  Catalogue, Dynamic, Params, Name, SharedDesc: String;
+  Data, Shared: TJSONData;
+  Arr: TJSONArray;
+  I: Integer;
+Begin
+  Catalogue := BuildAssistantToolsJsonForMode(amPlan);
+  Dynamic := CodexDynamicToolsFromCatalogue(Catalogue);
+  Check('plan dynamic tools include write_markdown', CatalogueDescription(Dynamic, 'write_markdown', False) <> '');
+  Check('plan dynamic tools include open_markdown', CatalogueDescription(Dynamic, 'open_markdown', False) <> '');
+  Check('plan dynamic tools omit open_file', CatalogueDescription(Dynamic, 'open_file', False) = '');
+  Check('plan dynamic tools omit lazarus_', Pos('lazarus_', Dynamic) = 0);
+  Check('write_markdown description matches', CatalogueDescription(Dynamic, 'write_markdown', False) =
+    CatalogueDescription(Catalogue, 'write_markdown', True));
+  Check('open_markdown description matches', CatalogueDescription(Dynamic, 'open_markdown', False) =
+    CatalogueDescription(Catalogue, 'open_markdown', True));
+  Data := GetJSON(Dynamic);
+  Try
+    Arr := TJSONArray(Data);
+    Shared := GetJSON(Catalogue);
+    Try
+      Check('converted plan tool count', Arr.Count = TJSONArray(Shared).Count);
+    Finally
+      Shared.Free;
+    End;
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        Name := TJSONObject(Arr[I]).Get('name', '');
+        SharedDesc := CatalogueDescription(Catalogue, Name, True);
+        Check('description matches ' + Name, (SharedDesc <> '') And (TJSONObject(Arr[I]).Get('description', '') = SharedDesc));
+      End;
+  Finally
+    Data.Free;
+  End;
+  Params := CodexThreadStartParams('/proj', 'model', Dynamic, 'Use write_markdown.');
+  Check('thread/start embeds write_markdown', Pos('"name":"write_markdown"', Params) > 0);
+  Check('thread/start embeds open_markdown', Pos('"name":"open_markdown"', Params) > 0);
+  Check('thread/start instructions are the passed prompt', Pos('Use write_markdown.', Params) > 0);
+  Check('thread/start has no lazarus tool essay', Pos('use the lazarus tools', LowerCase(Params)) = 0);
+  Check('chat catalogue converts to an empty array', CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amChat)) = '[]');
+  Check('chat thread/start has an empty tool array', Pos('"dynamicTools":[]',
+    CodexThreadStartParams('/proj', 'model', '[]', 'chat')) > 0);
+  Check('document still offers open_file', CatalogueDescription(
+    CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amDocument)), 'open_file', False) <> '');
+  Check('build still offers open_file', CatalogueDescription(
+    CodexDynamicToolsFromCatalogue(BuildAssistantToolsJsonForMode(amBuild)), 'open_file', False) <> '');
+End;
+
 Procedure WriteFile(Const Path,Body:String);
 Var F:TFileStream;
 Begin ForceDirectories(ExtractFileDir(Path));F:=TFileStream.Create(Path,fmCreate);
@@ -210,6 +289,7 @@ Begin
     Begin If (ParamCount<>3) Or (Pos('--pcp=',ParamStr(1))<>1) Or (Pos('--widgetset=',ParamStr(2))<>1) Then Halt(2);WriteLn('package compile fixture');Halt(0);End;
   Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;
   TestReadImage;
+  TestCodexPlanTools;
   CreateGUID(Id);Root:=GetTempDir+'laz-target-'+GUIDToString(Id);
   WriteFile(Root+'/.git/HEAD','ref: refs/heads/main');
   WriteFile(Root+'/Packages/One.lpk','<package/>');WriteFile(Root+'/Packages/Two.lpk','<package/>');
