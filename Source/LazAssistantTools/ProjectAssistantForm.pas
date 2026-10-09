@@ -3392,6 +3392,14 @@ Begin
   Copy.KeySource := FAccountKeySource;
   Copy.KeyEnv := FAccountKeyEnv;
   Copy.KeyValue := FAccountKeyValue;
+  { Grok Build reads the weekly pool with this same OAuth token. Do not log it. }
+  If FActiveBackend = 'grok' Then
+    Begin
+      Copy.KeySource := 'stored';
+      Copy.KeyValue := '';
+      If Assigned(GrokOAuthClient) Then
+        Copy.KeyValue := GrokOAuthClient.GetValidAccessToken;
+    End;
   Copy.Preset := FAccountPreset;
   Copy.WireApi := FAccountWire;
   Worker := TAccountUsageWorker.Create(True);

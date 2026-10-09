@@ -17,6 +17,9 @@ Uses
 Var
   FailCount: Integer;
   TransportCalls: Integer;
+  SignedConnection: TAssistantConnection;
+  SignedSnapshot: TAccountUsageSnapshot;
+  SignedError: String;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -58,6 +61,32 @@ Begin
   StatusCode := 500;
   ErrorText := 'Account usage fixture must not call transport.';
   Result := False;
+End;
+
+Function GrokFixtureGet(Const Url, ExtraHeaders: String; Out ResponseBody: String; Out StatusCode: Integer;
+  Out ErrorText: String): Boolean;
+Begin
+  Inc(TransportCalls);
+  ErrorText := '';
+  If Pos('billing?format=credits', Url) = 0 Then
+    Begin
+      ResponseBody := '';
+      StatusCode := 404;
+      Result := False;
+      Exit;
+    End;
+  { ExtraHeaders carries the bearer token. Do not write it. }
+  If ExtraHeaders = '' Then
+    Begin
+      ResponseBody := '';
+      StatusCode := 401;
+      Result := False;
+      Exit;
+    End;
+  ResponseBody := '{"config":{"creditUsagePercent":25,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY",' +
+    '"end":"2026-10-11T20:55:00Z"}}}';
+  StatusCode := 200;
+  Result := True;
 End;
 {$POP}
 
@@ -102,13 +131,14 @@ Begin
 
     Connection.Backend := 'grok';
     Connection.Preset := 'grok';
-    Connection.ApiBase := AssistantOpenRouterApiBase;
+    Connection.ApiBase := '';
     Connection.Id := 'grok-1';
-    Check('grok query is unknown', (Not AccountUsageRegistered('grok')) And
+    Connection.KeyValue := '';
+    Check('unsigned grok is registered but unknown', AccountUsageRegistered('grok') And
       QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And (Not Snapshot.Known) And (ErrorText = '') And
       (Snapshot.Caption = ''));
-    Check('grok connection leaves the usage label hidden', AccountUsageCaption(Snapshot, Connection.Id) = '');
-    Check('grok query does not call transport', TransportCalls = 0);
+    Check('unsigned grok leaves the usage label hidden', AccountUsageCaption(Snapshot, Connection.Id) = '');
+    Check('unsigned grok does not call transport', TransportCalls = 0);
   Finally
     Connection.Free;
   End;
@@ -128,8 +158,8 @@ Begin
   Body := Format('{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":%d},' +
     '"secondary":{"usedPercent":7,"windowDurationMins":10080,"resetsAt":%d}}}', [PrimaryReset, SecondaryReset]);
   Check('codex result parses', ParseCodexAccountUsage(Body, 'codex-1', Snapshot, ErrorText) And Snapshot.Known And
-    (ErrorText = '') And (Pos('used', Snapshot.Hint) > 0));
-  CheckText('codex result is a used caption', Snapshot.Caption, '5h 25% · 7d 7%');
+    (ErrorText = '') And (Pos('left', Snapshot.Hint) > 0));
+  CheckText('codex result is remaining, matching Usage remaining', Snapshot.Caption, '5h 75% left · 7d 93% left');
   Check('codex hint contains both reset times', (Pos(PrimaryWhen, Snapshot.Hint) > 0) And
     (Pos(SecondaryWhen, Snapshot.Hint) > 0));
   If (Pos(PrimaryWhen, Snapshot.Hint) = 0) Or (Pos(SecondaryWhen, Snapshot.Hint) = 0) Then
@@ -140,6 +170,32 @@ Begin
   Check('reached rate limit parses', ParseCodexAccountUsage(Body, 'codex-1', Snapshot, ErrorText) And Snapshot.Known And
     (ErrorText = ''));
   CheckText('reached rate limit captions Limit', Snapshot.Caption, 'Limit');
+
+  Body := '{"rateLimits":{"primary":{"usedPercent":0,"windowDurationMins":300,"resetsAt":1},' +
+    '"secondary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":2}}}';
+  Check('unused codex windows parse', ParseCodexAccountUsage(Body, 'codex-1', Snapshot, ErrorText) And Snapshot.Known);
+  CheckText('unused codex windows are 100% left', Snapshot.Caption, '5h 100% left · 7d 100% left');
+End;
+
+Procedure TestGrokBilling;
+Var
+  Snapshot: TAccountUsageSnapshot;
+  ErrorText, When: String;
+Begin
+  When := FormatDateTime('yyyy-mm-dd hh:nn', UniversalTimeToLocal(ISO8601ToDate('2026-10-11T20:55:00Z', True)));
+  Check('grok weekly pool parses', ParseGrokAccountUsage(
+    '{"config":{"creditUsagePercent":25,"subscriptionTier":"SuperGrok Heavy","currentPeriod":{' +
+    '"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00.959221+00:00"}}}', 'grok-1', Snapshot, ErrorText) And
+    Snapshot.Known And (ErrorText = ''));
+  CheckText('grok weekly pool captions used percent', Snapshot.Caption, '7d 25%');
+  Check('grok hint names the plan and reset', (Pos('SuperGrok Heavy', Snapshot.Hint) > 0) And (Pos(When, Snapshot.Hint) > 0) And
+    (Pos('used', Snapshot.Hint) > 0));
+  If (Pos(When, Snapshot.Hint) = 0) Then
+    WriteLn('  hint: [', Snapshot.Hint, ']');
+
+  Check('omitted grok percent on a fresh week is zero used', ParseGrokAccountUsage(
+    '{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00Z"}}}', 'grok-1', Snapshot,
+    ErrorText) And Snapshot.Known And (Snapshot.Caption = '7d 0%'));
 End;
 
 Procedure TestFooterChoice;
@@ -163,8 +219,27 @@ Begin
     TestOpenRouterBodies;
     TestQuietConnections;
     TestCodexResult;
+    TestGrokBilling;
     TestFooterChoice;
     Check('fixture never called transport', TransportCalls = 0);
+  Finally
+    SetAccountUsageCompatibleTransport(Nil, Nil);
+  End;
+  TransportCalls := 0;
+  SetAccountUsageCompatibleTransport(@GrokFixtureGet, @CountingPost);
+  Try
+    SignedConnection := TAssistantConnection.Create;
+    Try
+      SignedConnection.Backend := 'grok';
+      SignedConnection.Id := 'grok-signed';
+      SignedConnection.KeyValue := 'fixture-token-not-a-real-key';
+      Check('signed-in grok uses the injected billing call', QueryAccountUsage(SignedConnection, '', '', SignedSnapshot,
+        SignedError) And SignedSnapshot.Known And (SignedSnapshot.Caption = '7d 25%') And (TransportCalls = 1) And
+        (SignedError = ''));
+      Check('signed-in grok shows the usage label', AccountUsageCaption(SignedSnapshot, SignedConnection.Id) = '7d 25%');
+    Finally
+      SignedConnection.Free;
+    End;
   Finally
     SetAccountUsageCompatibleTransport(Nil, Nil);
   End;

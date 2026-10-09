@@ -2,15 +2,18 @@ Unit AssistantAccountUsage;
 
 { Account allowance for the status footer. Not the per-turn usage log.
 
-  grok stays unregistered: the desktop OAuth token is not a team billing
-  credential, and xAI's balance routes need a team id this program does not store.
-  claude stays unregistered: plan quota is an interactive screen, not a JSON
-  result this program owns. openai-compatible is registered, but only
-  AssistantOpenRouterApiBase is queried, via GET /key. A custom base returns
-  unknown and does not open a socket. codex is registered. That read is a
-  short-lived app-server, only while the connection is idle, and is not sent
-  on the live turn client. A missing registration is unknown, not an
-  error, and does not open a socket.
+  grok is registered. The desktop OAuth token has grok-cli:access, which is
+  the credential Grok Build uses for GET /v1/billing?format=credits. That is
+  the weekly pool the Build usage screen shows. It is not the team management
+  API, and this unit does not read a team id. claude stays unregistered: plan
+  quota is an interactive screen, not a JSON result this program owns.
+  openai-compatible is registered, but only AssistantOpenRouterApiBase is
+  queried, via GET /key. A custom base returns unknown and does not open a
+  socket. codex is registered. That read is a short-lived app-server, only
+  while the connection is idle, and is not sent on the live turn client.
+  Codex captions are remaining percent, matching the app's Usage remaining
+  panel, not the raw usedPercent field. A missing registration is unknown,
+  not an error, and does not open a socket.
 
   OpenRouter and Codex response parsers are plain functions so a fixture can
   fill a snapshot without a socket or a process. Caption and hint never receive
@@ -79,13 +82,15 @@ Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snaps
   Out ErrorText: String): Boolean;
 Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
+Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
+  Out ErrorText: String): Boolean;
 /// Both functions are required. A nil pair uses the real HTTPS client. Do not log the headers.
 Procedure SetAccountUsageCompatibleTransport(GetFn: TCompatibleHttpGet; PostFn: TCompatibleHttpPost);
 
 Implementation
 
 Uses
-  DateUtils, fpjson, jsonparser, AssistantCodexUsage;
+  Classes, DateUtils, fpjson, jsonparser, AssistantCodexUsage, AssistantHttps;
 
 Type
   TAccountUsageRegistration = Record
@@ -542,16 +547,26 @@ Begin
   Result := True;
 End;
 
+Function RemainingPercent(Used: Double): Double;
+Begin
+  Result := 100 - Used;
+  If Result < 0 Then
+    Result := 0
+  Else If Result > 100 Then
+    Result := 100;
+End;
+
 Function WindowCaption(Const Window: TUsageWindow): String;
 Begin
-  Result := WindowTag(Window.Minutes) + ' ' + PercentText(Window.UsedPercent);
+  { Codex Usage remaining shows 100 - usedPercent. 0% used is 100% left. }
+  Result := WindowTag(Window.Minutes) + ' ' + PercentText(RemainingPercent(Window.UsedPercent)) + ' left';
 End;
 
 Function WindowHint(Const Window: TUsageWindow): String;
 Var
   When: String;
 Begin
-  Result := PercentText(Window.UsedPercent) + ' of the ' + WindowTag(Window.Minutes) + ' window used';
+  Result := PercentText(RemainingPercent(Window.UsedPercent)) + ' of the ' + WindowTag(Window.Minutes) + ' window left';
   When := ResetText(Window.ResetsAt);
   If When <> '' Then
     Result := Result + ', resets ' + When;
@@ -723,13 +738,301 @@ Begin
   End;
 End;
 
+Const
+  GrokBillingUrl = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
+  { Floor the proxy accepts when no installed Grok Build version can be read. }
+  GrokClientVersionFallback = '1.0.50';
+
+Function GrokHomeDir: String;
+Begin
+  Result := GetEnvironmentVariable('GROK_HOME');
+  If Result = '' Then
+    Result := IncludeTrailingPathDelimiter(GetUserDir) + '.grok'
+  Else
+    Result := IncludeTrailingPathDelimiter(Result);
+End;
+
+Function LooksLikeVersion(Const Text: String): Boolean;
+Var
+  I: Integer;
+  SawDigit: Boolean;
+Begin
+  Result := False;
+  SawDigit := False;
+  If (Text = '') Or (Length(Text) > 32) Then
+    Exit;
+  For I := 1 To Length(Text) Do
+    If Text[I] In ['0'..'9'] Then
+      SawDigit := True
+    Else If Not (Text[I] In ['.', '-', '+', 'a'..'z', 'A'..'Z']) Then
+      Exit;
+  Result := SawDigit;
+End;
+
+Function ReadWholeFile(Const Path: String): String;
+Var
+  Lines: TStringList;
+Begin
+  Result := '';
+  If Not FileExists(Path) Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+      Result := Trim(Lines.Text);
+    Except
+      On E: Exception Do
+        Result := '';
+    End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function GrokClientVersion: String;
+Var
+  Home, Text: String;
+  Data: TJSONData;
+  Root: TJSONObject;
+Begin
+  Home := GrokHomeDir;
+  Text := ReadWholeFile(Home + '.metadata_version');
+  If Pos(LineEnding, Text) > 0 Then
+    Text := Trim(Copy(Text, 1, Pos(LineEnding, Text) - 1));
+  If LooksLikeVersion(Text) Then
+    Exit(Text);
+  Text := '';
+  Data := Nil;
+  Try
+    Try
+      If FileExists(Home + 'version.json') Then
+        Begin
+          Data := GetJSON(ReadWholeFile(Home + 'version.json'));
+          Root := JsonObject(Data);
+          If Assigned(Root) Then
+            Text := Trim(Root.Get('version', ''));
+        End;
+    Except
+      On E: Exception Do
+        Text := '';
+    End;
+  Finally
+    Data.Free;
+  End;
+  If LooksLikeVersion(Text) Then
+    Result := Text
+  Else
+    Result := GrokClientVersionFallback;
+End;
+
+Function GrokBillingHeaders(Const Token: String): String;
+Var
+  Version: String;
+Begin
+  Version := GrokClientVersion;
+  Result := 'Authorization: Bearer ' + Token + LineEnding +
+    'Accept: application/json' + LineEnding +
+    'x-xai-token-auth: xai-grok-cli' + LineEnding +
+    'x-grok-client-version: ' + Version + LineEnding +
+    'User-Agent: xai-grok-cli/' + Version;
+End;
+
+Function JsonString(Node: TJSONData): String;
+Begin
+  Result := '';
+  If Assigned(Node) And (Node.JSONType = jtString) Then
+    Result := Trim(Node.AsString);
+End;
+
+Function PlanLabel(Const Text: String): String;
+Var
+  I: Integer;
+Begin
+  Result := Trim(Text);
+  If (Result = '') Or (Length(Result) > 40) Or (Pos('@', Result) > 0) Then
+    Exit('');
+  For I := 1 To Length(Result) Do
+    If Not (Result[I] In ['A'..'Z', 'a'..'z', '0'..'9', ' ', '-', '_', '+']) Then
+      Exit('');
+End;
+
+Function NormalizeIsoTimestamp(Const Text: String): String;
+Var
+  DotAt, I: Integer;
+Begin
+  Result := Trim(Text);
+  DotAt := Pos('.', Result);
+  If DotAt < 11 Then
+    Exit;
+  I := DotAt + 1;
+  While (I <= Length(Result)) And (Result[I] In ['0'..'9']) Do
+    Inc(I);
+  Delete(Result, DotAt, I - DotAt);
+End;
+
+Function IsoToLocal(Const Text: String; Out When: TDateTime): Boolean;
+Begin
+  Result := False;
+  When := 0;
+  If Trim(Text) = '' Then
+    Exit;
+  Try
+    When := UniversalTimeToLocal(ISO8601ToDate(NormalizeIsoTimestamp(Text), True));
+    Result := When > 0;
+  Except
+    On E: Exception Do
+      Result := False;
+  End;
+End;
+
+Function WeeklyWindow(Const PeriodType: String; StartAt, EndAt: TDateTime): Boolean;
+Begin
+  Result := Pos('WEEKLY', UpperCase(PeriodType)) > 0;
+  If Result Then
+    Exit;
+  If (StartAt > 0) And (EndAt > StartAt) And (Abs((EndAt - StartAt) - 7) < 0.5) Then
+    Result := True;
+End;
+
+Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
+  Out ErrorText: String): Boolean;
+Var
+  Data: TJSONData;
+  Root, Payload, Period: TJSONObject;
+  Percent: Double;
+  PeriodType, ResetText, Tier: String;
+  StartAt, EndAt: TDateTime;
+  HasEnd: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  ClearAccountUsageSnapshot(Snapshot);
+  Snapshot.ConnectionId := ConnectionId;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Body);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'Grok usage was not JSON.';
+          Exit;
+        End;
+    End;
+    Root := JsonObject(Data);
+    If Not Assigned(Root) Then
+      Begin
+        ErrorText := 'Grok usage was not an object.';
+        Exit;
+      End;
+    Payload := JsonObject(Root.Find('config'));
+    If Not Assigned(Payload) Then
+      Payload := Root;
+    Period := JsonObject(Payload.Find('currentPeriod'));
+    PeriodType := '';
+    StartAt := 0;
+    EndAt := 0;
+    HasEnd := False;
+    If Assigned(Period) Then
+      Begin
+        PeriodType := JsonString(Period.Find('type'));
+        IsoToLocal(JsonString(Period.Find('start')), StartAt);
+        HasEnd := IsoToLocal(JsonString(Period.Find('end')), EndAt);
+      End;
+    If Not HasEnd Then
+      HasEnd := IsoToLocal(JsonString(Payload.Find('billingPeriodEnd')), EndAt);
+    If Not NumberValue(Payload.Find('creditUsagePercent'), Percent) Then
+      Begin
+        { A fresh weekly period omits the percent. That is 0% used, not unknown. }
+        If Not WeeklyWindow(PeriodType, StartAt, EndAt) Then
+          Begin
+            ErrorText := 'Grok usage did not include a weekly percent.';
+            Exit;
+          End;
+        Percent := 0;
+      End;
+    If (Percent < 0) Or (Percent > 100) Then
+      Begin
+        ErrorText := 'Grok usage percent was out of range.';
+        Exit;
+      End;
+    Snapshot.Known := True;
+    { format=credits is the weekly pool Grok Build's usage screen shows. }
+    Snapshot.Caption := '7d ' + PercentText(Percent);
+    Tier := PlanLabel(JsonString(Payload.Find('subscriptionTier')));
+    If Tier = '' Then
+      Tier := PlanLabel(JsonString(Root.Find('subscriptionTier')));
+    If Tier = '' Then
+      Tier := PlanLabel(JsonString(Root.Find('subscription_tier_display')));
+    Snapshot.Hint := PercentText(Percent) + ' of the weekly pool used';
+    If Tier <> '' Then
+      Snapshot.Hint := Tier + '. ' + Snapshot.Hint;
+    If HasEnd Then
+      Begin
+        ResetText := FormatDateTime('yyyy-mm-dd hh:nn', EndAt);
+        Snapshot.Hint := Snapshot.Hint + '. Resets ' + ResetText;
+      End;
+    NoteFetched(Snapshot);
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function QueryGrokAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
+  Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
+Var
+  Token, Headers, Body: String;
+  StatusCode: Integer;
+Begin
+  ClearAccountUsageSnapshot(Snapshot);
+  ErrorText := '';
+  Result := True;
+  { RuntimePath and ProfileDir are for the Codex query. }
+  If Not Assigned(Connection) Then
+    Exit;
+  Snapshot.ConnectionId := Connection.Id;
+  Token := Trim(Connection.KeyValue);
+  If Token = '' Then
+    Exit;
+  Headers := GrokBillingHeaders(Token);
+  Body := '';
+  StatusCode := 0;
+  If Assigned(AccountGet) Then
+    Begin
+      If Not AccountGet(GrokBillingUrl, Headers, Body, StatusCode, ErrorText) Then
+        Begin
+          Result := False;
+          If ErrorText = '' Then
+            ErrorText := 'Grok usage request failed.';
+          Exit;
+        End;
+    End
+  Else If Not HttpsGet(GrokBillingUrl, Body, StatusCode, ErrorText, Headers) Then
+    Begin
+      Result := False;
+      If ErrorText = '' Then
+        ErrorText := 'Grok usage request failed.';
+      Exit;
+    End;
+  If StatusCode <> 200 Then
+    Begin
+      Result := False;
+      ErrorText := 'Grok usage was not returned.';
+      Exit;
+    End;
+  Result := ParseGrokAccountUsage(Body, Connection.Id, Snapshot, ErrorText);
+End;
+
 Initialization
 
 InitCriticalSection(RegistryLock);
 RegistryReady := True;
-{ grok, claude, and a custom base stay quiet. A later official call is a new query here. }
+{ claude and a custom base stay quiet. A later official call is a new query here. }
 RegisterAccountUsageQuery('openai-compatible', @QueryCompatibleAccountUsage);
 RegisterAccountUsageQuery('codex', @QueryCodexAccountUsage);
+RegisterAccountUsageQuery('grok', @QueryGrokAccountUsage);
 
 Finalization
 
