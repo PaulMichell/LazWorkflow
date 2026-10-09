@@ -59,6 +59,8 @@ Procedure RememberDocumentRelativePath(Const RelativePath: String);
 { Current document, or a new report path when none is remembered. }
 Function DocumentPathForTurn: String;
 Function AssistantDocumentDirective(Const DocumentPath: String): String;
+/// Plan-mode user prefix. Names write_markdown and the plan path.
+Function AssistantPlanDirective(Const PlanPath: String): String;
 Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 Function IsMarkdownPath(Const Path: String): Boolean;
@@ -313,6 +315,16 @@ Begin
     'Do not write the active plan. ' +
     'If the user asks for a new document, use a new Documents/Report-YYYYMMDD-HHMMSS.md path and do not overwrite this file. ' +
     'A question that does not ask for a document or a change does not need a write.';
+End;
+
+Function AssistantPlanDirective(Const PlanPath: String): String;
+Begin
+  Result :=
+    '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
+    'using the write_markdown tool (path: "' + PlanPath +
+    '"). Chat reply must be a short summary only, not the full plan body. ' +
+    'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
+    '`, numbered ## sections without Status, and ### items with Status.';
 End;
 
 Function IsMarkdownPath(Const Path: String): Boolean;

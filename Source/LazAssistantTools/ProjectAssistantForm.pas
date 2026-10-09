@@ -409,6 +409,8 @@ Type
     Function SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
     { DisplayText is shown/stored; ApiText is what the model receives (may include extra directives). }
     Function SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
+    { Plan or Document directive, then the user text, then the IDE context block. Chat is the user text only. }
+    Function BuildSubmitApiText(Const ModelText: String; Out WithContext: Boolean): String;
     Procedure SteerQueuedText(Const UserText: String);
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Function RunPlanIsAvailable: Boolean;
@@ -1151,20 +1153,7 @@ Procedure TProjectAssistantForm.ApplySkillStatus;
 Begin
   If Not Assigned(StatusFooter) Then
     Exit;
-  If FUseCodex Then
-    Begin
-      If ActiveMode = amChat Then
-        Begin
-          StatusFooter.SetSkillText('Skill: not sent');
-          StatusFooter.SetSkillHint('Chat does not send a skill or Lazarus tools');
-        End
-      Else
-        Begin
-          StatusFooter.SetSkillText('Lazarus tools');
-          StatusFooter.SetSkillHint('ChatGPT preview uses the Lazarus tool broker');
-        End;
-    End
-  Else If FUseClaude Then
+  If FUseClaude Then
     Begin
       StatusFooter.SetSkillText('Skill: not sent');
       StatusFooter.SetSkillHint('This assistant''s skills are not sent into Claude Code.');
@@ -1982,19 +1971,11 @@ Begin
   If Length(Body) > MaxBodyChars Then
     Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
       '… *(section truncated for the prompt; open the plan file for the full text.)*';
-  If FUseCodex Then
-    ToolInstructions :=
-      '2. Inspect with lazarus_project_info, lazarus_list_directory and lazarus_read_file. Open buffers before editing; use fresh revisions. ' +
-      'Apply authorized changes with the advertised Lazarus edit tools and save explicitly.' + LineEnding +
-      '3. Start a build and poll lazarus_build_status with its job_id until done. Repair introduced errors and rebuild. ' +
-      'For Validation: tests, run the configured test command with that build_job_id and poll its test job. ' +
-      'Report source coverage gaps, stale evidence and missing/failed test reports.'
-  Else
-    ToolInstructions :=
-      '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
-      'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
-      '3. Run run_compile after edits, repair introduced errors and compile again. ' +
-      'A clean compile does not mark this item complete.';
+  ToolInstructions :=
+    '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
+    'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
+    '3. Run run_compile after edits, repair introduced errors and compile again. ' +
+    'A clean compile does not mark this item complete.';
   Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
   If Trim(ParentTitle) <> '' Then
     Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
@@ -3043,11 +3024,10 @@ End;
 
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, Recap, ContextText, ModelText, ToolsJson, Instructions: String;
+  Prompt, Recap, SubmitText, ToolsJson, Instructions: String;
   I: Integer;
   Turn: TConversationTurn;
   WithContext: Boolean;
-  Refs: TAssistantImageRefArray;
 Begin
   Result := False;
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
@@ -3056,33 +3036,25 @@ Begin
       If Not FUseCodex Then Exit;
       If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
     End;
-  SetLength(Refs, 0);
-  ParseAssistantImageRefs(FComposerImagesJson, Refs);
-  Refs := LimitAssistantImageRefs(Refs);
-  ModelText := AssistantImageModelText(ApiText, Length(Refs));
-  If Length(Refs) > 0 Then
-    Begin
-      { ChatGPT does not receive the picture. Leave the composer intact. }
-      SetCurrentSystemNote(AssistantCodexImageAttachReason);
-      MessageDlg(AssistantCodexImageAttachReason, mtInformation, [mbOK], 0);
-      If Assigned(InputMemo) Then
-        InputMemo.Text := DisplayText;
-      Exit;
-    End;
-  If Assigned(AssistantClient) Then
-    AssistantClient.AddUserMessage(ModelText, Refs);
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   FCodexIdentity := FCodexWorkspace.Identity;
   { Turns use ApproveToolIfNeeded. Do not hook the lazarus_* review dialog. }
   FCodexBroker.OnApproval := Nil;
+  RefreshFromConfig;
+  If Not FModeLocked Then LockModeForSend;
   Case ActiveMode Of
     amChat: FCodexBroker.BeginRun(awsNone);
     amBuild: FCodexBroker.BeginRun(awsProject);
     amDocument: FCodexBroker.BeginRun(awsMarkdown);
     amPlan: FCodexBroker.BeginRun(awsMarkdown);
   Else FCodexBroker.BeginRun(awsReadOnly); End;
-  RefreshFromConfig;
+  ShowChatSurfaceKeepMode;
+  { Same user text as SubmitUserTextEx. The harness prompt owns the mode essay, including chat's no-tools sentence.
+    Pictures are refused by ComposerAttachAllowed before this call. Do not record image refs. }
+  SubmitText := BuildSubmitApiText(ApiText, WithContext);
+  If Assigned(AssistantClient) Then
+    AssistantClient.AddMessage(amrUser, SubmitText);
   Recap := '';
   If Assigned(ProjectAssistantConversation) Then
     For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
@@ -3092,41 +3064,10 @@ Begin
           Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
             'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
       End;
-  WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And AssistantChatConfig.IncludeIDEContext;
-  ContextText := '';
-  If WithContext Then ContextText := BuildIDEContextBlockLight;
-  If ActiveMode = amChat Then
-    Prompt := 'You are a helpful assistant in a general chat. You have no project tools, no IDE access, and no attached skill. ' +
-      'Answer directly. Do not claim you can read or edit files.' + LineEnding +
-      'Previous conversation (bounded recap):' + LineEnding +
-      Recap + LineEnding + 'Current user request:' + LineEnding + ModelText
-  Else
-    Prompt := 'You are assisting inside the Lazarus IDE. Use the lazarus_* tools for project work. ' +
-    'Discover target files with lazarus_list_directory and lazarus_read_file, which prefers unsaved buffers. ' +
-    'Before editing a closed file, use lazarus_open_buffer; read buffers before editing and use returned revisions. ' +
-    'Use lazarus_find_declaration or lazarus_symbol_context with a current buffer revision for Pascal symbol lookup; columns are UTF-8 byte offsets. ' +
-    'For build/repair work, save only authorized changes, start a build and poll its job_id until done. Use diagnostic items to locate failures, reread before repair, then rebuild. Report stale or incomplete evidence and distinguish compilation from tests. After a successful current build, use lazarus_start_tests with its build_job_id and poll lazarus_test_status with the test job_id. If no runner is configured, report missing test evidence. ' +
-    'For coordinated edits, read every buffer and use lazarus_prepare_changes then lazarus_apply_changes in Build. Inspect per-file outcomes; lazarus_change_status and lazarus_revert_changes provide retained recovery. Reread before saving. ' +
-    'For a routine-local variable or constant rename, use lazarus_preview_local_rename, review its changes, then lazarus_apply_local_rename in Build; save separately. ' +
-    'Use lazarus_find_references with an explicit list of project search_paths; check searchedFiles, failedFiles and truncation before claiming coverage. ' +
-    'Ask is read-only. Plan can create, edit and save project Markdown (.md, .markdown, .mdown), but cannot change sources or build. ' +
-    'Build allows new project text files, explicit buffer edits, saves, saved-input builds and Git via lazarus_run_git. ' +
-    'For Git, save authorized edits first, inspect status and the staged diff, stage explicit files and exclude unrelated changes. ' +
-    'Read the active plan including its overall instructions. Honor explicit conversation or plan instructions to commit automatically after completing and validating changes, without asking again; tool approval settings still apply. Preserve these instructions in plans and report the commit hash only after successful Git evidence. ' +
-    AssistantPlanCompletionRules + ' ' +
-
-    'Do not use shell, external tools or filesystem fallbacks. Explain unavailable capabilities. ' +
-    'A successful build is not proof that all dependencies were frozen or verified.' + LineEnding +
-    'Mode: ' + AssistantModeToStr(ActiveMode) + LineEnding +
-    'Active plan: ' + GetActivePlanRelativePath + LineEnding +
-    ContextText + LineEnding + 'Previous conversation (bounded recap):' + LineEnding +
-    Recap + LineEnding + 'Current user request:' + LineEnding + ModelText;
-  If ActiveMode = amPlan Then
-    Prompt := Prompt + LineEnding + AssistantPlanAuthoringRules + LineEnding
-  Else If ActiveMode = amDocument Then
-    Prompt := Prompt + LineEnding + AssistantDocumentDirective(DocumentPathForTurn) + LineEnding;
-  If Not FModeLocked Then LockModeForSend;
-  ShowChatSurfaceKeepMode;
+  { Ephemeral threads have no message array. Recap is transport history, not an instruction essay. }
+  Prompt := SubmitText;
+  If Recap <> '' Then
+    Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
   SetCurrentUserDisplay(DisplayText, WithContext);
   FLiveUser := FDisplayUser; FLiveContent := ''; FLiveThinking := '';
   FAssistantContent := ''; FAssistantThinking := '';
@@ -5439,7 +5380,7 @@ Begin
       TraceNote := FDisplaySystemNote;
     End;
   WorkedMs := CurrentStreamDurationMs;
-  If Not FUseCodex Then PersistPlanReplyIfNeeded(ResolvedError);
+  PersistPlanReplyIfNeeded(ResolvedError);
   If RevertUncommittedPlanCompletion(Settlement) And (Settlement <> '') Then
     Begin
       If TraceNote <> '' Then
@@ -5622,6 +5563,34 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
+Function TProjectAssistantForm.BuildSubmitApiText(Const ModelText: String; Out WithContext: Boolean): String;
+Var
+  PlanRel, ContextBlock: String;
+Begin
+  Result := ModelText;
+  If ActiveMode = amPlan Then
+    Begin
+      PlanRel := GetActivePlanRelativePath;
+      If PlanRel = '' Then
+        PlanRel := DefaultPlanRelativePath;
+      Result := AssistantPlanDirective(PlanRel) + LineEnding + LineEnding + ModelText;
+    End
+  Else If ActiveMode = amDocument Then
+    Result := AssistantDocumentDirective(DocumentPathForTurn) + LineEnding + LineEnding + ModelText;
+  { Chat keeps the harness no-tools sentence. Do not paraphrase it into the user text. }
+  WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And
+    AssistantChatConfig.IncludeIDEContext;
+  If WithContext Then
+    Begin
+      { After several turns, full editor dumps explode the prompt; use light context. }
+      If Assigned(AssistantClient) And (AssistantClient.MessageCount >= 8) Then
+        ContextBlock := BuildIDEContextBlockLight
+      Else
+        ContextBlock := BuildIDEContextBlock;
+      Result := Result + LineEnding + LineEnding + ContextBlock;
+    End;
+End;
+
 Function TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
 Begin
   Result := SubmitUserTextEx(UserText, UserText, AutoSend);
@@ -5629,7 +5598,7 @@ End;
 
 Function TProjectAssistantForm.SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
 Var
-  FinalApi, ContextBlock, PlanRel, ModelText, BlockReason: String;
+  FinalApi, ModelText, BlockReason: String;
   WithContext: Boolean;
   Refs: TAssistantImageRefArray;
 Begin
@@ -5641,12 +5610,7 @@ Begin
     Exit;
   If FSending Then
     Exit;
-  If AutoSend And FUseCodex Then
-    Begin
-      Result := StartCodexReply(DisplayText, ApiText);
-      Exit;
-    End;
-  If AutoSend Then
+  If AutoSend And (Not FUseCodex) Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
         Begin
@@ -5657,16 +5621,25 @@ Begin
       If Not Assigned(AssistantClient) Then
         Exit;
       RefreshFromConfig;
-      If (Length(Refs) > 0) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) Then
-        Begin
-          If BlockReason = '' Then
-            BlockReason := 'This model lists no image input. Attach is disabled.';
-          SetCurrentSystemNote(BlockReason);
-          MessageDlg(BlockReason, mtInformation, [mbOK], 0);
-          If Assigned(InputMemo) Then
-            InputMemo.Text := DisplayText;
-          Exit;
-        End;
+    End;
+  { One capability check for every backend. Codex stays unable to attach pictures. }
+  If AutoSend And (Length(Refs) > 0) And (Not ComposerAttachAllowed(BlockReason)) Then
+    Begin
+      If BlockReason = '' Then
+        BlockReason := 'This model lists no image input. Attach is disabled.';
+      SetCurrentSystemNote(BlockReason);
+      MessageDlg(BlockReason, mtInformation, [mbOK], 0);
+      If Assigned(InputMemo) Then
+        InputMemo.Text := DisplayText;
+      Exit;
+    End;
+  If AutoSend And FUseCodex Then
+    Begin
+      Result := StartCodexReply(DisplayText, ApiText);
+      Exit;
+    End;
+  If AutoSend Then
+    Begin
       MaybeWarnHighContextUsage;
       { Callers like Fix Error / Work-on-this may already ForceModeAndLock. }
       If Not FModeLocked Then
@@ -5674,39 +5647,13 @@ Begin
       ShowChatSurfaceKeepMode; { shared turn view already visible; sync mode chrome }
       { Visible words stay DisplayText. The look sentence is model text only. }
       ModelText := AssistantImageModelText(ApiText, Length(Refs));
-      FinalApi := ModelText;
-      If ActiveMode = amPlan Then
-        Begin
-          PlanRel := GetActivePlanRelativePath;
-          If PlanRel = '' Then
-            PlanRel := DefaultPlanRelativePath;
-          FinalApi :=
-            '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
-            'using the write_markdown tool (path: "' + PlanRel +
-            '"). Chat reply must be a short summary only, not the full plan body. ' +
-            'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
-            '`, numbered ## sections without Status, and ### items with Status.' +
-            LineEnding + LineEnding + ModelText;
-        End
-      Else If ActiveMode = amDocument Then
-        FinalApi := AssistantDocumentDirective(DocumentPathForTurn) + LineEnding + LineEnding + ModelText;
-      WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And
-        AssistantChatConfig.IncludeIDEContext;
+      FinalApi := BuildSubmitApiText(ModelText, WithContext);
       SetCurrentUserDisplay(DisplayText, WithContext);
       FLiveUser := FDisplayUser;
       FLiveContent := '';
       FLiveThinking := '';
       FAssistantContent := '';
       FAssistantThinking := '';
-      If WithContext Then
-        Begin
-          { After several turns, full editor dumps explode the prompt; use light context. }
-          If Assigned(AssistantClient) And (AssistantClient.MessageCount >= 8) Then
-            ContextBlock := BuildIDEContextBlockLight
-          Else
-            ContextBlock := BuildIDEContextBlock;
-          FinalApi := FinalApi + LineEnding + LineEnding + ContextBlock;
-        End;
       AppendMessage('user', FDisplayUser);
       { Prior turns already on AssistantClient are sent with this request (trimmed if huge).
         IDE context is already a text suffix on FinalApi. It is not an image part. }
@@ -6061,11 +6008,6 @@ Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
 Var
   Host: TControl;
 Begin
-  If FUseCodex Then
-    Begin
-      MessageDlg('ChatGPT preview uses Lazarus project and editor tools. Pinned Grok skills are not sent.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
   If FUseClaude Then
     Begin
       MessageDlg('This assistant''s skills are not sent into Claude Code.', mtInformation, [mbOK], 0);
