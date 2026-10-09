@@ -572,7 +572,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
             end
             object GrokUsageGroup: TGroupBox
               Left = 8
-              Height = 52
+              Height = 148
               Top = 660
               Width = 700
               Anchors = [akTop, akLeft, akRight]
@@ -580,12 +580,13 @@ object AssistantSettingsForm: TAssistantSettingsForm
               TabOrder = 4
               object GrokUsageLabel: TLabel
                 Left = 12
-                Height = 17
+                Height = 112
                 Top = 8
                 Width = 660
                 Anchors = [akTop, akLeft, akRight]
                 Caption = 'This connection did not report usage.'
                 ParentColor = False
+                WordWrap = True
               end
             end
           end

@@ -171,6 +171,10 @@ Type
     SelectedConnection: Integer;
     FFillingModels: Boolean;
     FLoading: Boolean;
+    FPlanUsageWorker: TThread;
+    FPlanUsageTimer: TTimer;
+    FPlanUsageClosed: Boolean;
+    FPlanUsageConnectionId: String;
     Procedure EnsureStaticChoices;
     Procedure UpdateCompactAvailability;
     Procedure ClearSkillRows;
@@ -179,6 +183,9 @@ Type
     Procedure RefreshConnections;
     Procedure StoreConnection;
     Procedure ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
+    Procedure StartPlanUsageRefresh(Item: TAssistantConnection);
+    Procedure PlanUsageTimerTimer(Sender: TObject);
+    Procedure ReleasePlanUsageRefresh;
     Procedure LoadGrokConnection(Item: TAssistantConnection);
     Procedure LoadCompatibleConnection(Item: TAssistantConnection);
     Procedure LoadClaudeConnection(Item: TAssistantConnection);
@@ -204,7 +211,7 @@ Implementation
 Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient,
-  AssistantUsage,
+  AssistantUsage, AssistantAccountUsage,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
 Type
@@ -216,6 +223,11 @@ Type
     InspectCheck, DocumentCheck, PlanCheck, BuildCheck, ChatCheck: TCheckBox;
     Constructor Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
     Destructor Destroy; Override;
+  End;
+
+  TPlanUsageWorker = Class(TThread)
+    Connection: TAssistantConnection;
+    Procedure Execute; Override;
   End;
 
 Constructor TSkillModeRow.Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
@@ -256,6 +268,25 @@ Begin
   FreeAndNil(NameLabel);
   FreeAndNil(RowPanel);
   Inherited Destroy;
+End;
+
+Procedure TPlanUsageWorker.Execute;
+Var
+  Snapshot: TAccountUsageSnapshot;
+  ErrorText: String;
+Begin
+  ErrorText := '';
+  ClearAccountUsageSnapshot(Snapshot);
+  Try
+    Try
+      QueryAccountUsage(Connection, '', '', Snapshot, ErrorText);
+    Except
+      On E: Exception Do
+        ErrorText := '';
+    End;
+  Finally
+    Connection.Free;
+  End;
 End;
 
 Procedure AddFallbackModels(List: TStrings);
@@ -466,6 +497,7 @@ End;
 
 Destructor TAssistantSettingsForm.Destroy;
 Begin
+  ReleasePlanUsageRefresh;
   ClearSkillRows;
   SkillRows.Free;
   Connections.Free;
@@ -628,10 +660,10 @@ Begin
     End;
 End;
 
-{ Latest completed turn only. A missing account quota does not change this caption. }
+{ Latest completed turn, then the Grok Build plan summary when that connection has one. }
 Procedure TAssistantSettingsForm.ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
 Var
-  Root: String;
+  Root, PlanText: String;
   Found: Boolean;
   Recorded: TAssistantUsageRecord;
 Begin
@@ -642,6 +674,89 @@ Begin
     Root := ProjectAssistantConversation.ProjectRoot;
   Found := Assigned(Item) And (Root <> '') And LatestUsageRecord(Root, Item.Id, Recorded);
   UsageLabel.Caption := UsageDetailText(Found, Recorded);
+  PlanText := '';
+  If Assigned(Item) And (Item.Backend = 'grok') Then
+    PlanText := AccountUsagePlanText(Item.Id);
+  If PlanText = '' Then
+    Exit;
+  If (Not Found) Or (Recorded.State <> UsageStateReported) Then
+    UsageLabel.Caption := PlanText
+  Else
+    UsageLabel.Caption := UsageLabel.Caption + LineEnding + PlanText;
+End;
+
+Procedure TAssistantSettingsForm.ReleasePlanUsageRefresh;
+Begin
+  FPlanUsageClosed := True;
+  If Assigned(FPlanUsageTimer) Then
+    Begin
+      FPlanUsageTimer.Enabled := False;
+      FPlanUsageTimer.OnTimer := Nil;
+      FreeAndNil(FPlanUsageTimer);
+    End;
+  If Assigned(FPlanUsageWorker) Then
+    Begin
+      FPlanUsageWorker.WaitFor;
+      FreeAndNil(FPlanUsageWorker);
+    End;
+End;
+
+Procedure TAssistantSettingsForm.PlanUsageTimerTimer(Sender: TObject);
+Var
+  Item: TAssistantConnection;
+Begin
+  If FPlanUsageClosed Then
+    Exit;
+  If Assigned(FPlanUsageWorker) And (Not FPlanUsageWorker.Finished) Then
+    Exit;
+  If Assigned(FPlanUsageWorker) Then
+    Begin
+      FPlanUsageWorker.WaitFor;
+      FreeAndNil(FPlanUsageWorker);
+    End;
+  If Assigned(FPlanUsageTimer) Then
+    FPlanUsageTimer.Enabled := False;
+  Item := Nil;
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
+    Item := Connections[SelectedConnection];
+  If Assigned(Item) And (Item.Id = FPlanUsageConnectionId) And (Item.Backend = 'grok') Then
+    ShowConnectionUsage(Item, GrokUsageLabel);
+End;
+
+Procedure TAssistantSettingsForm.StartPlanUsageRefresh(Item: TAssistantConnection);
+Var
+  Worker: TPlanUsageWorker;
+  Copy: TAssistantConnection;
+Begin
+  If FPlanUsageClosed Or (Not Assigned(Item)) Or (Item.Backend <> 'grok') Then
+    Exit;
+  If Assigned(FPlanUsageWorker) And (Not FPlanUsageWorker.Finished) Then
+    Exit;
+  If Assigned(FPlanUsageWorker) Then
+    Begin
+      FPlanUsageWorker.WaitFor;
+      FreeAndNil(FPlanUsageWorker);
+    End;
+  Copy := TAssistantConnection.Create;
+  Copy.Id := Item.Id;
+  Copy.Backend := Item.Backend;
+  Copy.KeySource := 'stored';
+  Copy.KeyValue := '';
+  If Assigned(GrokOAuthClient) Then
+    Copy.KeyValue := GrokOAuthClient.GetValidAccessToken;
+  FPlanUsageConnectionId := Item.Id;
+  Worker := TPlanUsageWorker.Create(True);
+  Worker.FreeOnTerminate := False;
+  Worker.Connection := Copy;
+  FPlanUsageWorker := Worker;
+  If Not Assigned(FPlanUsageTimer) Then
+    Begin
+      FPlanUsageTimer := TTimer.Create(Nil);
+      FPlanUsageTimer.Interval := 250;
+      FPlanUsageTimer.OnTimer := @PlanUsageTimerTimer;
+    End;
+  FPlanUsageTimer.Enabled := True;
+  Worker.Start;
 End;
 
 Procedure TAssistantSettingsForm.LoadGrokConnection(Item: TAssistantConnection);
@@ -675,6 +790,7 @@ Begin
     MaxOutputEdit.Value := Item.MaxOutputTokens;
   ApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
   ShowConnectionUsage(Item, GrokUsageLabel);
+  StartPlanUsageRefresh(Item);
 End;
 
 Procedure TAssistantSettingsForm.LoadCompatibleConnection(Item: TAssistantConnection);

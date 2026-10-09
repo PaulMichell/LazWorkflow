@@ -2,10 +2,18 @@ Unit AssistantAccountUsage;
 
 { Account allowance for the status footer. Not the per-turn usage log.
 
+  Size note: exceeds the 1000 line preference. OpenRouter, Codex and Grok
+  share one snapshot and one registry; the Grok fetch stays here so the
+  credential and HTTP bounds are not copied into a second unit.
+  Reviewed 2026-10: no second service hiding in this file.
+
   grok is registered. The desktop OAuth token has grok-cli:access, which is
   the credential Grok Build uses for GET /v1/billing?format=credits. That is
-  the weekly pool the Build usage screen shows. It is not the team management
-  API, and this unit does not read a team id. claude stays unregistered: plan
+  the weekly pool the Build usage screen shows. The status caption matches
+  Build's credit bar ("Credits used: N%"). The hint matches Build's /usage
+  summary ("Weekly limit" or "Monthly limit", then the reset). It is not the
+  team management API, and this unit does not read a team id. claude stays
+  unregistered: plan
   quota is an interactive screen, not a JSON result this program owns.
   openai-compatible is registered, but only AssistantOpenRouterApiBase is
   queried, via GET /key. A custom base returns unknown and does not open a
@@ -78,6 +86,8 @@ Type
 Function AccountUsageApplies(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): Boolean;
 Function AccountUsageCaption(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
 Function AccountUsageHint(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
+/// Last known plan summary for this connection, or empty. Not a turn-usage line.
+Function AccountUsagePlanText(Const ConnectionId: String): String;
 Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
 Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
@@ -117,6 +127,7 @@ Const
 
 Var
   Registry: Array Of TAccountUsageRegistration;
+  PublishedUsage: Array Of TAccountUsageSnapshot;
   RegistryLock: TRTLCriticalSection;
   RegistryReady: Boolean;
   AccountGet: TCompatibleHttpGet;
@@ -330,6 +341,44 @@ Begin
     Result := '';
 End;
 
+Procedure RememberAccountUsage(Const Snapshot: TAccountUsageSnapshot);
+Var
+  I: Integer;
+Begin
+  If (Not Snapshot.Known) Or (Snapshot.ConnectionId = '') Or (Not RegistryReady) Then
+    Exit;
+  EnterCriticalSection(RegistryLock);
+  Try
+    For I := 0 To High(PublishedUsage) Do
+      If PublishedUsage[I].ConnectionId = Snapshot.ConnectionId Then
+        Begin
+          PublishedUsage[I] := Snapshot;
+          Exit;
+        End;
+    SetLength(PublishedUsage, Length(PublishedUsage) + 1);
+    PublishedUsage[High(PublishedUsage)] := Snapshot;
+  Finally
+    LeaveCriticalSection(RegistryLock);
+  End;
+End;
+
+Function AccountUsagePlanText(Const ConnectionId: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  If (ConnectionId = '') Or (Not RegistryReady) Then
+    Exit;
+  EnterCriticalSection(RegistryLock);
+  Try
+    For I := 0 To High(PublishedUsage) Do
+      If PublishedUsage[I].ConnectionId = ConnectionId Then
+        Exit(PublishedUsage[I].Hint);
+  Finally
+    LeaveCriticalSection(RegistryLock);
+  End;
+End;
+
 Function DotDecimal(Const Text: String): String;
 Begin
   Result := StringReplace(Text, ',', '.', []);
@@ -400,12 +449,26 @@ Begin
 End;
 
 Function NumberValue(Node: TJSONData; Out Value: Double): Boolean;
+Var
+  Text: String;
 Begin
-  Result := Assigned(Node) And (Node.JSONType = jtNumber);
+  Result := False;
+  Value := 0;
+  If Not Assigned(Node) Then
+    Exit;
+  If Node.JSONType = jtNumber Then
+    Begin
+      Value := Node.AsFloat;
+      Exit(True);
+    End;
+  If Node.JSONType <> jtString Then
+    Exit;
+  Text := DotDecimal(Trim(Node.AsString));
+  Result := TryStrToFloat(Text, Value, DefaultFormatSettings);
   If Result Then
-    Value := Node.AsFloat
-  Else
-    Value := 0;
+    Exit;
+  { DefaultFormatSettings may still expect a comma. Accept a dot either way. }
+  Result := TryStrToFloat(StringReplace(Text, '.', ',', []), Value);
 End;
 
 Procedure NoteFetched(Var Snapshot: TAccountUsageSnapshot);
@@ -746,8 +809,11 @@ End;
 Const
   GrokBillingUrl = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
   GrokLegacyAuthScope = 'https://accounts.x.ai/sign-in';
-  { Floor the proxy accepts when no installed Grok Build version can be read. }
+  { Current Grok Build auth.json slot: issuer::client_id. Same public client as GrokOAuth. }
+  GrokSessionScope = 'https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828';
+  { Proxy rejects older client versions with HTTP 426. Use this when no installed Build version can be read. }
   GrokClientVersionFallback = '1.0.50';
+  GrokClientVersionFloor = '1.0.13';
 
 Var
   GrokAuthOverride: Boolean;
@@ -800,6 +866,84 @@ Begin
   End;
 End;
 
+Function VersionParts(Const Text: String; Out Major, Minor, Patch: Integer): Boolean;
+Var
+  Rest, Piece: String;
+  DotAt, Value: Integer;
+Begin
+  Result := False;
+  Major := 0;
+  Minor := 0;
+  Patch := 0;
+  Rest := Trim(Text);
+  DotAt := Pos('.', Rest);
+  If DotAt < 2 Then
+    Exit;
+  Piece := Copy(Rest, 1, DotAt - 1);
+  If Not TryStrToInt(Piece, Value) Then
+    Exit;
+  Major := Value;
+  Rest := Copy(Rest, DotAt + 1, MaxInt);
+  DotAt := Pos('.', Rest);
+  If DotAt < 2 Then
+    Exit;
+  Piece := Copy(Rest, 1, DotAt - 1);
+  If Not TryStrToInt(Piece, Value) Then
+    Exit;
+  Minor := Value;
+  Rest := Copy(Rest, DotAt + 1, MaxInt);
+  Piece := '';
+  While (Rest <> '') And (Rest[1] In ['0'..'9']) Do
+    Begin
+      Piece := Piece + Rest[1];
+      Delete(Rest, 1, 1);
+    End;
+  If Not TryStrToInt(Piece, Value) Then
+    Exit;
+  Patch := Value;
+  Result := True;
+End;
+
+Function VersionBelow(Const Left, Right: String): Boolean;
+Var
+  LeftMajor, LeftMinor, LeftPatch, RightMajor, RightMinor, RightPatch: Integer;
+Begin
+  Result := False;
+  If Not VersionParts(Left, LeftMajor, LeftMinor, LeftPatch) Then
+    Exit;
+  If Not VersionParts(Right, RightMajor, RightMinor, RightPatch) Then
+    Exit;
+  If LeftMajor <> RightMajor Then
+    Exit(LeftMajor < RightMajor);
+  If LeftMinor <> RightMinor Then
+    Exit(LeftMinor < RightMinor);
+  Result := LeftPatch < RightPatch;
+End;
+
+Function VersionNamedIn(Const Body: String): String;
+Var
+  I, StartAt, StopAt: Integer;
+  Piece: String;
+Begin
+  { The 426 body names the rejected version first and the required version last. }
+  Result := '';
+  I := 1;
+  While I <= Length(Body) Do
+    If Body[I] In ['0'..'9'] Then
+      Begin
+        StartAt := I;
+        StopAt := I;
+        While (StopAt <= Length(Body)) And (Body[StopAt] In ['0'..'9', '.']) Do
+          Inc(StopAt);
+        Piece := Copy(Body, StartAt, StopAt - StartAt);
+        If LooksLikeVersion(Piece) And (Pos('.', Piece) > 0) Then
+          Result := Piece;
+        I := StopAt;
+      End
+    Else
+      Inc(I);
+End;
+
 Function GrokClientVersion: String;
 Var
   Home, Text: String;
@@ -810,30 +954,36 @@ Begin
   Text := ReadWholeFile(Home + '.metadata_version');
   If Pos(LineEnding, Text) > 0 Then
     Text := Trim(Copy(Text, 1, Pos(LineEnding, Text) - 1));
-  If LooksLikeVersion(Text) Then
-    Exit(Text);
-  Text := '';
-  Data := Nil;
-  Try
-    Try
-      If FileExists(Home + 'version.json') Then
-        Begin
-          Data := GetJSON(ReadWholeFile(Home + 'version.json'));
-          Root := JsonObject(Data);
-          If Assigned(Root) Then
-            Text := Trim(Root.Get('version', ''));
+  If Not LooksLikeVersion(Text) Then
+    Begin
+      Text := '';
+      Data := Nil;
+      Try
+        Try
+          If FileExists(Home + 'version.json') Then
+            Begin
+              Data := GetJSON(ReadWholeFile(Home + 'version.json'));
+              Root := JsonObject(Data);
+              If Assigned(Root) Then
+                Begin
+                  Text := Trim(Root.Get('version', ''));
+                  If Not LooksLikeVersion(Text) Then
+                    Text := Trim(Root.Get('currentVersion', ''));
+                End;
+            End;
+        Except
+          On E: Exception Do
+            Text := '';
         End;
-    Except
-      On E: Exception Do
-        Text := '';
+      Finally
+        Data.Free;
+      End;
     End;
-  Finally
-    Data.Free;
-  End;
-  If LooksLikeVersion(Text) Then
-    Result := Text
+  { An old marker is rejected by the proxy. A missing marker uses the same floor. }
+  If (Not LooksLikeVersion(Text)) Or VersionBelow(Text, GrokClientVersionFloor) Then
+    Result := GrokClientVersionFallback
   Else
-    Result := GrokClientVersionFallback;
+    Result := Text;
 End;
 
 Function HeaderSafe(Const Value: String): String;
@@ -848,19 +998,21 @@ Begin
       Exit('');
 End;
 
-Function GrokBillingHeaders(Const Token, UserId: String): String;
+Function GrokBillingHeaders(Const Token, UserId, Version: String): String;
 Var
-  Version, SafeUser: String;
+  SafeUser, SafeVersion: String;
 Begin
-  Version := GrokClientVersion;
+  SafeVersion := Version;
+  If Not LooksLikeVersion(SafeVersion) Then
+    SafeVersion := GrokClientVersionFallback;
   SafeUser := HeaderSafe(UserId);
+  { Same headers as Grok Build's x.ai/billing handler. No identifier the billing call does not send. }
   Result := 'Authorization: Bearer ' + Token + LineEnding +
     'Accept: application/json' + LineEnding +
     'X-XAI-Token-Auth: xai-grok-cli' + LineEnding +
-    'x-grok-client-version: ' + Version + LineEnding +
-    'x-grok-client-identifier: grok-shell' + LineEnding +
+    'x-grok-client-version: ' + SafeVersion + LineEnding +
     'x-grok-client-mode: interactive' + LineEnding +
-    'User-Agent: xai-grok-cli/' + Version;
+    'User-Agent: xai-grok-cli/' + SafeVersion;
   If SafeUser <> '' Then
     Result := Result + LineEnding + 'x-userid: ' + SafeUser;
 End;
@@ -942,10 +1094,20 @@ Begin
   Result := True;
 End;
 
+Function JwtSubject(Const Token: String): String; Forward;
+
+Procedure FinishGrokCredential(Entry: TJSONObject; Var Token, UserId: String);
+Begin
+  If UserId = '' Then
+    UserId := JwtSubject(Token);
+  If (UserId = '') And Assigned(Entry) Then
+    UserId := HeaderSafe(Entry.Get('principal_id', ''));
+End;
+
 Function SelectGrokCliCredential(Const AuthBody: String; Out Token, UserId: String): Boolean;
 Var
   Data: TJSONData;
-  Root, Entry: TJSONObject;
+  Root, Entry, Chosen: TJSONObject;
   I: Integer;
   Scope, FallbackToken, FallbackUser, OtherToken, OtherUser: String;
 Begin
@@ -956,6 +1118,7 @@ Begin
   FallbackUser := '';
   OtherToken := '';
   OtherUser := '';
+  Chosen := Nil;
   Data := Nil;
   Try
     Try
@@ -967,9 +1130,25 @@ Begin
     Root := JsonObject(Data);
     If Not Assigned(Root) Then
       Exit;
+    { Current Build slot, then the pre-OIDC slot. user_id is optional; the billing call can derive it. }
+    If Root.Find(GrokSessionScope) Is TJSONObject Then
+      Begin
+        Chosen := TJSONObject(Root.Find(GrokSessionScope));
+        If CredentialFromEntry(Chosen, Token, UserId) Then
+          Begin
+            FinishGrokCredential(Chosen, Token, UserId);
+            Exit(True);
+          End;
+      End;
     If Root.Find(GrokLegacyAuthScope) Is TJSONObject Then
-      If CredentialFromEntry(TJSONObject(Root.Find(GrokLegacyAuthScope)), Token, UserId) Then
-        Exit(True);
+      Begin
+        Chosen := TJSONObject(Root.Find(GrokLegacyAuthScope));
+        If CredentialFromEntry(Chosen, Token, UserId) Then
+          Begin
+            FinishGrokCredential(Chosen, Token, UserId);
+            Exit(True);
+          End;
+      End;
     For I := 0 To Root.Count - 1 Do
       Begin
         If Not (Root.Items[I] Is TJSONObject) Then
@@ -977,14 +1156,15 @@ Begin
         Entry := TJSONObject(Root.Items[I]);
         If Not CredentialFromEntry(Entry, OtherToken, OtherUser) Then
           Continue;
+        FinishGrokCredential(Entry, OtherToken, OtherUser);
         Scope := LowerCase(Root.Names[I]);
-        If (Pos('auth.x.ai', Scope) > 0) And (OtherUser <> '') Then
+        If Pos('auth.x.ai', Scope) > 0 Then
           Begin
             Token := OtherToken;
             UserId := OtherUser;
             Exit(True);
           End;
-        If (FallbackToken = '') And (OtherUser <> '') Then
+        If FallbackToken = '' Then
           Begin
             FallbackToken := OtherToken;
             FallbackUser := OtherUser;
@@ -1060,13 +1240,77 @@ Begin
   End;
 End;
 
+Function UsageLimitLabel(Const PeriodType: String; StartAt, EndAt: TDateTime): String;
+Begin
+  If Pos('MONTHLY', UpperCase(PeriodType)) > 0 Then
+    Exit('Monthly limit');
+  If WeeklyWindow(PeriodType, StartAt, EndAt) Then
+    Exit('Weekly limit');
+  Result := 'Usage';
+End;
+
+Function WholePercentText(Value: Double): String;
+Begin
+  If Value < 0 Then
+    Value := 0;
+  { Same rounding as Grok Build's credit bar ("Credits used: N%"). }
+  Result := IntToStr(Round(Value)) + '%';
+End;
+
+Function ProductDisplayName(Const Raw: String): String;
+Var
+  I: Integer;
+  Text: String;
+Begin
+  Text := Trim(Raw);
+  If Copy(UpperCase(Text), 1, 8) = 'PRODUCT_' Then
+    Delete(Text, 1, 8);
+  Text := StringReplace(Text, '_', ' ', [rfReplaceAll]);
+  Result := '';
+  For I := 1 To Length(Text) Do
+    Begin
+      If (I > 1) And (Text[I] In ['A'..'Z']) And (Text[I - 1] In ['a'..'z', '0'..'9']) Then
+        Result := Result + ' ';
+      Result := Result + Text[I];
+    End;
+  Result := PlanLabel(Result);
+End;
+
+Function ProductUsageLines(Payload: TJSONObject): String;
+Var
+  Products: TJSONArray;
+  Item: TJSONObject;
+  I: Integer;
+  Name: String;
+  Share: Double;
+Begin
+  Result := '';
+  If Not Assigned(Payload) Or Not (Payload.Find('productUsage') Is TJSONArray) Then
+    Exit;
+  Products := TJSONArray(Payload.Find('productUsage'));
+  For I := 0 To Products.Count - 1 Do
+    Begin
+      If Not (Products.Items[I] Is TJSONObject) Then
+        Continue;
+      Item := TJSONObject(Products.Items[I]);
+      Name := ProductDisplayName(JsonString(Item.Find('product')));
+      If (Name = '') Or (Not NumberValue(Item.Find('usagePercent'), Share)) Then
+        Continue;
+      If (Share < 0) Or (Share > 100) Then
+        Continue;
+      If Result <> '' Then
+        Result := Result + LineEnding;
+      Result := Result + Name + ': ' + WholePercentText(Share);
+    End;
+End;
+
 Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
 Var
   Data: TJSONData;
   Root, Payload, Period: TJSONObject;
   Percent: Double;
-  PeriodType, ResetText, Tier: String;
+  PeriodType, ResetText, Tier, Products: String;
   StartAt, EndAt: TDateTime;
   HasEnd: Boolean;
 Begin
@@ -1117,59 +1361,96 @@ Begin
           End;
         Percent := 0;
       End;
-    If (Percent < 0) Or (Percent > 100) Then
+    If (Percent < 0) Or (Percent > 1000) Then
       Begin
         ErrorText := 'Grok usage percent was out of range.';
         Exit;
       End;
     Snapshot.Known := True;
-    { format=credits is the weekly pool Grok Build's usage screen shows. }
-    Snapshot.Caption := '7d ' + PercentText(Percent);
+    { credit_bar.rs: "Credits used: N%". /usage summary is the limit label plus the reset. }
+    Snapshot.Caption := 'Credits used: ' + WholePercentText(Percent);
     Tier := PlanLabel(JsonString(Payload.Find('subscriptionTier')));
     If Tier = '' Then
       Tier := PlanLabel(JsonString(Root.Find('subscriptionTier')));
     If Tier = '' Then
       Tier := PlanLabel(JsonString(Root.Find('subscription_tier_display')));
-    Snapshot.Hint := PercentText(Percent) + ' of the weekly pool used';
-    If Tier <> '' Then
-      Snapshot.Hint := Tier + '. ' + Snapshot.Hint;
+    Snapshot.Hint := UsageLimitLabel(PeriodType, StartAt, EndAt) + ': ' + WholePercentText(Percent);
     If HasEnd Then
       Begin
-        ResetText := FormatDateTime('yyyy-mm-dd hh:nn', EndAt);
-        Snapshot.Hint := Snapshot.Hint + '. Resets ' + ResetText;
+        ResetText := FormatDateTime('mmmm d, hh:nn', EndAt);
+        Snapshot.Hint := Snapshot.Hint + LineEnding + 'Next reset: ' + ResetText;
       End;
+    Products := ProductUsageLines(Payload);
+    If Products <> '' Then
+      Snapshot.Hint := Snapshot.Hint + LineEnding + Products;
+    If Tier <> '' Then
+      Snapshot.Hint := Snapshot.Hint + LineEnding + 'Plan: ' + Tier;
     NoteFetched(Snapshot);
+    RememberAccountUsage(Snapshot);
     Result := True;
   Finally
     Data.Free;
   End;
 End;
 
-Function FetchGrokBilling(Const Token, UserId: String; Out Body: String; Out StatusCode: Integer;
+Function FetchGrokBilling(Const Token, UserId, Version: String; Out Body: String; Out StatusCode: Integer;
   Out ErrorText: String): Boolean;
 Var
-  Headers: String;
+  Headers, RequiredVersion: String;
 Begin
   Body := '';
   StatusCode := 0;
   ErrorText := '';
-  Headers := GrokBillingHeaders(Token, UserId);
+  Headers := GrokBillingHeaders(Token, UserId, Version);
   If Assigned(AccountGet) Then
     Result := AccountGet(GrokBillingUrl, Headers, Body, StatusCode, ErrorText)
   Else
     Result := HttpsGet(GrokBillingUrl, Body, StatusCode, ErrorText, Headers);
+  { The proxy answers 426 when x-grok-client-version is below its floor. Retry once with the named version. }
+  If Result And (StatusCode = 426) Then
+    Begin
+      RequiredVersion := VersionNamedIn(Body);
+      If LooksLikeVersion(RequiredVersion) And (RequiredVersion <> Version) Then
+        Begin
+          Headers := GrokBillingHeaders(Token, UserId, RequiredVersion);
+          If Assigned(AccountGet) Then
+            Result := AccountGet(GrokBillingUrl, Headers, Body, StatusCode, ErrorText)
+          Else
+            Result := HttpsGet(GrokBillingUrl, Body, StatusCode, ErrorText, Headers);
+        End;
+    End;
   If Result And (ErrorText = '') And (StatusCode <> 200) Then
     ErrorText := 'Grok usage was not returned.';
   If (Not Result) And (ErrorText = '') Then
     ErrorText := 'Grok usage request failed.';
 End;
 
+Function TryGrokBilling(Const Token, UserId, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
+  Out StatusCode: Integer; Out ErrorText: String): Boolean;
+Var
+  Body, ParseError: String;
+Begin
+  Result := False;
+  StatusCode := 0;
+  ErrorText := '';
+  Body := '';
+  If Token = '' Then
+    Exit;
+  If Not FetchGrokBilling(Token, UserId, GrokClientVersion, Body, StatusCode, ErrorText) Then
+    Exit;
+  If StatusCode <> 200 Then
+    Exit;
+  ParseError := '';
+  Result := ParseGrokAccountUsage(Body, ConnectionId, Snapshot, ParseError);
+  If Not Result Then
+    ErrorText := ParseError;
+End;
+
 Function QueryGrokAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
   Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
 Var
-  AuthText, Token, UserId, FallbackToken, FallbackUser, Body: String;
+  AuthText, Token, UserId, FallbackToken, FallbackUser: String;
   StatusCode: Integer;
-  Fetched: Boolean;
 Begin
   ClearAccountUsageSnapshot(Snapshot);
   ErrorText := '';
@@ -1189,27 +1470,32 @@ Begin
   FallbackUser := JwtSubject(FallbackToken);
   If (Token = '') And (FallbackToken = '') Then
     Exit;
-  Body := '';
   StatusCode := 0;
-  Fetched := False;
+  { A 200 that is not the credits pool is not success. Try the other session before giving up. }
   If Token <> '' Then
-    Fetched := FetchGrokBilling(Token, UserId, Body, StatusCode, ErrorText) And (StatusCode = 200);
-  If (Not Fetched) And (FallbackToken <> '') And (FallbackToken <> Token) Then
+    Result := TryGrokBilling(Token, UserId, Connection.Id, Snapshot, StatusCode, ErrorText);
+  If (Not Snapshot.Known) And (FallbackToken <> '') And (FallbackToken <> Token) Then
     Begin
       ErrorText := '';
-      Fetched := FetchGrokBilling(FallbackToken, FallbackUser, Body, StatusCode, ErrorText) And (StatusCode = 200);
+      Result := TryGrokBilling(FallbackToken, FallbackUser, Connection.Id, Snapshot, StatusCode, ErrorText);
     End;
-  If Not Fetched Then
+  If Snapshot.Known Then
     Begin
-      Result := False;
-      If StatusCode <> 0 Then
-        ErrorText := 'Grok usage was not returned (HTTP ' + IntToStr(StatusCode) + ').'
-      Else If ErrorText = '' Then
-        ErrorText := 'Grok usage was not returned.';
-      WorkflowLogger.Warning('AccountUsage', ErrorText);
+      Result := True;
+      ErrorText := '';
       Exit;
     End;
-  Result := ParseGrokAccountUsage(Body, Connection.Id, Snapshot, ErrorText);
+  If (Token = '') And (FallbackToken = '') Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  Result := False;
+  If StatusCode <> 0 Then
+    ErrorText := 'Grok usage was not returned (HTTP ' + IntToStr(StatusCode) + ').'
+  Else If ErrorText = '' Then
+    ErrorText := 'Grok usage was not returned.';
+  WorkflowLogger.Warning('AccountUsage', ErrorText);
 End;
 
 Initialization

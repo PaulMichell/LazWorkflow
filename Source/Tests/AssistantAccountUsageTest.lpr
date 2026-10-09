@@ -183,24 +183,30 @@ Var
   Snapshot: TAccountUsageSnapshot;
   ErrorText, When: String;
 Begin
-  When := FormatDateTime('yyyy-mm-dd hh:nn', UniversalTimeToLocal(ISO8601ToDate('2026-10-11T20:55:00Z', True)));
+  When := FormatDateTime('mmmm d, hh:nn', UniversalTimeToLocal(ISO8601ToDate('2026-10-11T20:55:00Z', True)));
   Check('grok weekly pool parses', ParseGrokAccountUsage(
     '{"config":{"creditUsagePercent":25,"subscriptionTier":"SuperGrok Heavy","currentPeriod":{' +
-    '"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00.959221+00:00"}}}', 'grok-1', Snapshot, ErrorText) And
-    Snapshot.Known And (ErrorText = ''));
-  CheckText('grok weekly pool captions used percent', Snapshot.Caption, '7d 25%');
-  Check('grok hint names the plan and reset', (Pos('SuperGrok Heavy', Snapshot.Hint) > 0) And (Pos(When, Snapshot.Hint) > 0) And
-    (Pos('used', Snapshot.Hint) > 0));
+    '"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00.959221+00:00"},' +
+    '"productUsage":[{"product":"GrokBuild","usagePercent":20},{"product":"GrokChat","usagePercent":5}]}}',
+    'grok-1', Snapshot, ErrorText) And Snapshot.Known And (ErrorText = ''));
+  CheckText('grok weekly pool captions used percent', Snapshot.Caption, 'Credits used: 25%');
+  Check('grok hint matches the Build usage summary', (Pos('Weekly limit: 25%', Snapshot.Hint) > 0) And
+    (Pos('Next reset: ' + When, Snapshot.Hint) > 0) And (Pos('Grok Build: 20%', Snapshot.Hint) > 0) And
+    (Pos('Plan: SuperGrok Heavy', Snapshot.Hint) > 0));
   If (Pos(When, Snapshot.Hint) = 0) Then
     WriteLn('  hint: [', Snapshot.Hint, ']');
+  CheckText('settings can read the plan summary', AccountUsagePlanText('grok-1'), Snapshot.Hint);
 
   Check('omitted grok percent on a fresh week is zero used', ParseGrokAccountUsage(
     '{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00Z"}}}', 'grok-1', Snapshot,
-    ErrorText) And Snapshot.Known And (Snapshot.Caption = '7d 0%'));
+    ErrorText) And Snapshot.Known And (Snapshot.Caption = 'Credits used: 0%'));
   Check('Build session is preferred over an API key', SelectGrokCliCredential(
     '{"xai::api_key":{"key":"xai-secret","user_id":""},' +
     '"https://accounts.x.ai/sign-in":{"key":"session-token","user_id":"user-1","email":"hidden@example.com"}}',
     ErrorText, When) And (ErrorText = 'session-token') And (When = 'user-1'));
+  Check('official Build slot does not need a user id', SelectGrokCliCredential(
+    '{"https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828":{"key":"session-jwt","auth_mode":"oauth"}}',
+    ErrorText, When) And (ErrorText = 'session-jwt'));
 End;
 
 Procedure TestFooterChoice;
@@ -240,9 +246,10 @@ Begin
       SignedConnection.Id := 'grok-signed';
       SignedConnection.KeyValue := 'fixture-token-not-a-real-key';
       Check('signed-in grok uses the injected billing call', QueryAccountUsage(SignedConnection, '', '', SignedSnapshot,
-        SignedError) And SignedSnapshot.Known And (SignedSnapshot.Caption = '7d 25%') And (TransportCalls = 1) And
+        SignedError) And SignedSnapshot.Known And (SignedSnapshot.Caption = 'Credits used: 25%') And (TransportCalls = 1) And
         (SignedError = ''));
-      Check('signed-in grok shows the usage label', AccountUsageCaption(SignedSnapshot, SignedConnection.Id) = '7d 25%');
+      Check('signed-in grok shows the usage label', AccountUsageCaption(SignedSnapshot, SignedConnection.Id) =
+        'Credits used: 25%');
     Finally
       SignedConnection.Free;
     End;
