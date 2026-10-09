@@ -611,7 +611,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
             end
             object CodexUsageGroup: TGroupBox
               Left = 8
-              Height = 52
+              Height = 96
               Top = 528
               Width = 660
               Anchors = [akTop, akLeft, akRight]
@@ -619,12 +619,13 @@ object AssistantSettingsForm: TAssistantSettingsForm
               TabOrder = 1
               object CodexUsageLabel: TLabel
                 Left = 12
-                Height = 17
+                Height = 68
                 Top = 8
                 Width = 620
                 Anchors = [akTop, akLeft, akRight]
                 Caption = 'This program did not report counts.'
                 ParentColor = False
+                WordWrap = True
               end
             end
           end

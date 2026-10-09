@@ -183,6 +183,8 @@ Type
     Procedure RefreshConnections;
     Procedure StoreConnection;
     Procedure ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
+    Procedure ShowCodexPlanUsage(Item: TAssistantConnection);
+    Procedure EnsureUsageTimer;
     Procedure StartPlanUsageRefresh(Item: TAssistantConnection);
     Procedure PlanUsageTimerTimer(Sender: TObject);
     Procedure ReleasePlanUsageRefresh;
@@ -660,7 +662,7 @@ Begin
     End;
 End;
 
-{ Latest completed turn, then the Grok Build plan summary when that connection has one. }
+{ Latest completed turn, then the plan summary when that connection has one. }
 Procedure TAssistantSettingsForm.ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
 Var
   Root, PlanText: String;
@@ -676,7 +678,9 @@ Begin
   UsageLabel.Caption := UsageDetailText(Found, Recorded);
   PlanText := '';
   If Assigned(Item) And (Item.Backend = 'grok') Then
-    PlanText := AccountUsagePlanText(Item.Id);
+    PlanText := AccountUsagePlanText(Item.Id)
+  Else If Assigned(Item) And (Item.Backend = 'codex') Then
+    PlanText := AccountUsageSettingsText(Item.Id);
   If PlanText = '' Then
     Exit;
   If (Not Found) Or (Recorded.State <> UsageStateReported) Then
@@ -701,12 +705,42 @@ Begin
     End;
 End;
 
-Procedure TAssistantSettingsForm.PlanUsageTimerTimer(Sender: TObject);
-Var
-  Item: TAssistantConnection;
+Procedure TAssistantSettingsForm.ShowCodexPlanUsage(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Or (Item.Backend <> 'codex') Then
+    Exit;
+  NotifyOpenProjectAssistantFormsAccountUsage;
+  ShowConnectionUsage(Item, CodexUsageLabel);
+  If CodexUsageLabel.Caption = UsageUnavailableText Then
+    CodexUsageLabel.Caption := 'This program did not report counts.';
+End;
+
+Procedure TAssistantSettingsForm.EnsureUsageTimer;
 Begin
   If FPlanUsageClosed Then
     Exit;
+  If Not Assigned(FPlanUsageTimer) Then
+    Begin
+      FPlanUsageTimer := TTimer.Create(Nil);
+      FPlanUsageTimer.Interval := 1000;
+      FPlanUsageTimer.OnTimer := @PlanUsageTimerTimer;
+    End;
+  FPlanUsageTimer.Enabled := True;
+End;
+
+Procedure TAssistantSettingsForm.PlanUsageTimerTimer(Sender: TObject);
+Var
+  Item: TAssistantConnection;
+  CodexSelected: Boolean;
+Begin
+  If FPlanUsageClosed Then
+    Exit;
+  Item := Nil;
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
+    Item := Connections[SelectedConnection];
+  CodexSelected := Assigned(Item) And (Item.Backend = 'codex');
+  If CodexSelected Then
+    ShowCodexPlanUsage(Item);
   If Assigned(FPlanUsageWorker) And (Not FPlanUsageWorker.Finished) Then
     Exit;
   If Assigned(FPlanUsageWorker) Then
@@ -714,12 +748,9 @@ Begin
       FPlanUsageWorker.WaitFor;
       FreeAndNil(FPlanUsageWorker);
     End;
-  If Assigned(FPlanUsageTimer) Then
+  If Assigned(FPlanUsageTimer) And (Not CodexSelected) Then
     FPlanUsageTimer.Enabled := False;
   NotifyOpenProjectAssistantFormsAccountUsage;
-  Item := Nil;
-  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
-    Item := Connections[SelectedConnection];
   If Assigned(Item) And (Item.Id = FPlanUsageConnectionId) And (Item.Backend = 'grok') Then
     ShowConnectionUsage(Item, GrokUsageLabel);
 End;
@@ -750,13 +781,9 @@ Begin
   Worker.FreeOnTerminate := False;
   Worker.Connection := Copy;
   FPlanUsageWorker := Worker;
-  If Not Assigned(FPlanUsageTimer) Then
-    Begin
-      FPlanUsageTimer := TTimer.Create(Nil);
-      FPlanUsageTimer.Interval := 250;
-      FPlanUsageTimer.OnTimer := @PlanUsageTimerTimer;
-    End;
-  FPlanUsageTimer.Enabled := True;
+  EnsureUsageTimer;
+  If Assigned(FPlanUsageTimer) Then
+    FPlanUsageTimer.Interval := 250;
   Worker.Start;
 End;
 
@@ -870,6 +897,10 @@ Begin
           On E: Exception Do
             CodexFrame.ConnectionStatus.Caption := E.Message;
         End;
+        ShowCodexPlanUsage(Item);
+        EnsureUsageTimer;
+        If Assigned(FPlanUsageTimer) Then
+          FPlanUsageTimer.Interval := 1000;
       End
     Else If Item.Backend = 'openai-compatible' Then
       LoadCompatibleConnection(Item)

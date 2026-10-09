@@ -161,6 +161,7 @@ Begin
   Check('codex result parses', ParseCodexAccountUsage(Body, 'codex-1', Snapshot, ErrorText) And Snapshot.Known And
     (ErrorText = '') And (Pos('left', Snapshot.Hint) > 0));
   CheckText('codex result is remaining, matching Usage remaining', Snapshot.Caption, '5h 75% left · 7d 93% left');
+  Check('settings can read the codex plan usage', Pos('5h 75% left · 7d 93% left', AccountUsageSettingsText('codex-1')) > 0);
   Check('codex hint contains both reset times', (Pos(PrimaryWhen, Snapshot.Hint) > 0) And
     (Pos(SecondaryWhen, Snapshot.Hint) > 0));
   If (Pos(PrimaryWhen, Snapshot.Hint) = 0) Or (Pos(SecondaryWhen, Snapshot.Hint) = 0) Then

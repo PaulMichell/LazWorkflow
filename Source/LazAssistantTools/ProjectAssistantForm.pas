@@ -3341,6 +3341,8 @@ Begin
   If Assigned(FAccountUsageSlot) Then
     SlotItem := FAccountUsageSlot.ReadSnapshot;
   Item := AccountUsageForFooter(FActiveConnectionId, SlotItem);
+  If AccountUsageApplies(Item, FActiveConnectionId) Then
+    PublishAccountUsageSnapshot(Item);
   FPlanStatusCaption := AccountUsageCaption(Item, FActiveConnectionId);
   FPlanStatusHint := AccountUsageHint(Item, FActiveConnectionId);
   RefreshCentreStatus;

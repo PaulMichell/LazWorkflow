@@ -88,6 +88,10 @@ Function AccountUsageCaption(Const Snapshot: TAccountUsageSnapshot; Const Active
 Function AccountUsageHint(Const Snapshot: TAccountUsageSnapshot; Const ActiveConnectionId: String): String;
 /// Last known plan summary for this connection, or empty. Not a turn-usage line.
 Function AccountUsagePlanText(Const ConnectionId: String): String;
+/// Caption the status bar shows, then the longer hint. Empty when this connection has no plan figure.
+Function AccountUsageSettingsText(Const ConnectionId: String): String;
+/// Makes a footer snapshot readable by Settings. Unknown or blank snapshots are ignored.
+Procedure PublishAccountUsageSnapshot(Const Snapshot: TAccountUsageSnapshot);
 /// Newer of the footer slot and the last successful query. Empty connection id yields the slot item.
 Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
 Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
@@ -287,23 +291,33 @@ Begin
   End;
 End;
 
+Procedure RememberAccountUsage(Const Snapshot: TAccountUsageSnapshot); Forward;
+
 Function TAccountUsageSlot.StoreResult(Const Item: TAccountUsageSnapshot; QueryOk: Boolean): Boolean;
+Var
+  Published: TAccountUsageSnapshot;
+  ShouldPublish: Boolean;
 Begin
   Result := False;
+  ShouldPublish := False;
   EnterCriticalSection(FLock);
   Try
     If (FClosed <> 0) Or (Item.ConnectionId <> FActiveId) Then
       Exit;
     If QueryOk Then
+      FSnapshot := Item
+    Else
       Begin
-        FSnapshot := Item;
-        Exit;
+        Result := True;
+        FSnapshot := AccountUsageKeepOnFailure(FSnapshot, FActiveId, Now);
       End;
-    Result := True;
-    FSnapshot := AccountUsageKeepOnFailure(FSnapshot, FActiveId, Now);
+    Published := FSnapshot;
+    ShouldPublish := True;
   Finally
     LeaveCriticalSection(FLock);
   End;
+  If ShouldPublish Then
+    RememberAccountUsage(Published);
 End;
 
 Function AccountUsageKeepOnFailure(Const Current: TAccountUsageSnapshot; Const ConnectionId: String;
@@ -394,6 +408,27 @@ Begin
     Result := Snapshot.Hint
   Else
     Result := '';
+End;
+
+Function AccountUsageSettingsText(Const ConnectionId: String): String;
+Var
+  Snapshot: TAccountUsageSnapshot;
+Begin
+  Result := '';
+  If Not PublishedAccountUsage(ConnectionId, Snapshot) Then
+    Exit;
+  Result := Snapshot.Caption;
+  If (Snapshot.Hint <> '') And (Snapshot.Hint <> Result) Then
+    Begin
+      If Result <> '' Then
+        Result := Result + LineEnding;
+      Result := Result + Snapshot.Hint;
+    End;
+End;
+
+Procedure PublishAccountUsageSnapshot(Const Snapshot: TAccountUsageSnapshot);
+Begin
+  RememberAccountUsage(Snapshot);
 End;
 
 Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
@@ -772,6 +807,7 @@ Begin
     Snapshot.Caption := Caption;
     Snapshot.Hint := Hint;
     NoteFetched(Snapshot);
+    RememberAccountUsage(Snapshot);
     Result := True;
   Finally
     Data.Free;
