@@ -84,13 +84,18 @@ Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: 
   Out ErrorText: String): Boolean;
 Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
+/// Picks the Grok Build session from auth.json. Does not return an API key, email, or refresh token.
+Function SelectGrokCliCredential(Const AuthBody: String; Out Token, UserId: String): Boolean;
+/// Tests pass a stand-in auth.json. Empty body means no CLI session. Nil the override to read the file.
+Procedure SetGrokCliAuthBody(Const Body: String);
+Procedure ClearGrokCliAuthBody;
 /// Both functions are required. A nil pair uses the real HTTPS client. Do not log the headers.
 Procedure SetAccountUsageCompatibleTransport(GetFn: TCompatibleHttpGet; PostFn: TCompatibleHttpPost);
 
 Implementation
 
 Uses
-  Classes, DateUtils, fpjson, jsonparser, AssistantCodexUsage, AssistantHttps;
+  Classes, DateUtils, base64, fpjson, jsonparser, AssistantCodexUsage, AssistantHttps, WorkflowLog;
 
 Type
   TAccountUsageRegistration = Record
@@ -740,8 +745,13 @@ End;
 
 Const
   GrokBillingUrl = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
+  GrokLegacyAuthScope = 'https://accounts.x.ai/sign-in';
   { Floor the proxy accepts when no installed Grok Build version can be read. }
   GrokClientVersionFallback = '1.0.50';
+
+Var
+  GrokAuthOverride: Boolean;
+  GrokAuthBody: String;
 
 Function GrokHomeDir: String;
 Begin
@@ -826,16 +836,33 @@ Begin
     Result := GrokClientVersionFallback;
 End;
 
-Function GrokBillingHeaders(Const Token: String): String;
+Function HeaderSafe(Const Value: String): String;
 Var
-  Version: String;
+  I: Integer;
+Begin
+  Result := Trim(Value);
+  If (Result = '') Or (Length(Result) > 128) Or (Pos('@', Result) > 0) Then
+    Exit('');
+  For I := 1 To Length(Result) Do
+    If Result[I] In [#10, #13, ':'] Then
+      Exit('');
+End;
+
+Function GrokBillingHeaders(Const Token, UserId: String): String;
+Var
+  Version, SafeUser: String;
 Begin
   Version := GrokClientVersion;
+  SafeUser := HeaderSafe(UserId);
   Result := 'Authorization: Bearer ' + Token + LineEnding +
     'Accept: application/json' + LineEnding +
-    'x-xai-token-auth: xai-grok-cli' + LineEnding +
+    'X-XAI-Token-Auth: xai-grok-cli' + LineEnding +
     'x-grok-client-version: ' + Version + LineEnding +
+    'x-grok-client-identifier: grok-shell' + LineEnding +
+    'x-grok-client-mode: interactive' + LineEnding +
     'User-Agent: xai-grok-cli/' + Version;
+  If SafeUser <> '' Then
+    Result := Result + LineEnding + 'x-userid: ' + SafeUser;
 End;
 
 Function JsonString(Node: TJSONData): String;
@@ -893,6 +920,144 @@ Begin
     Exit;
   If (StartAt > 0) And (EndAt > StartAt) And (Abs((EndAt - StartAt) - 7) < 0.5) Then
     Result := True;
+End;
+
+Function CredentialFromEntry(Obj: TJSONObject; Out Token, UserId: String): Boolean;
+Begin
+  Result := False;
+  Token := '';
+  UserId := '';
+  If Not Assigned(Obj) Then
+    Exit;
+  Token := Trim(Obj.Get('key', ''));
+  If Token = '' Then
+    Token := Trim(Obj.Get('access_token', ''));
+  UserId := HeaderSafe(Obj.Get('user_id', ''));
+  If Token = '' Then
+    Exit;
+  { An API key is not the SuperGrok weekly session. }
+  If (Pos('api_key', LowerCase(Obj.Get('auth_mode', ''))) > 0) Or
+    ((Copy(Token, 1, 4) = 'xai-') And (UserId = '')) Then
+    Exit;
+  Result := True;
+End;
+
+Function SelectGrokCliCredential(Const AuthBody: String; Out Token, UserId: String): Boolean;
+Var
+  Data: TJSONData;
+  Root, Entry: TJSONObject;
+  I: Integer;
+  Scope, FallbackToken, FallbackUser, OtherToken, OtherUser: String;
+Begin
+  Result := False;
+  Token := '';
+  UserId := '';
+  FallbackToken := '';
+  FallbackUser := '';
+  OtherToken := '';
+  OtherUser := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(AuthBody);
+    Except
+      On E: Exception Do
+        Exit;
+    End;
+    Root := JsonObject(Data);
+    If Not Assigned(Root) Then
+      Exit;
+    If Root.Find(GrokLegacyAuthScope) Is TJSONObject Then
+      If CredentialFromEntry(TJSONObject(Root.Find(GrokLegacyAuthScope)), Token, UserId) Then
+        Exit(True);
+    For I := 0 To Root.Count - 1 Do
+      Begin
+        If Not (Root.Items[I] Is TJSONObject) Then
+          Continue;
+        Entry := TJSONObject(Root.Items[I]);
+        If Not CredentialFromEntry(Entry, OtherToken, OtherUser) Then
+          Continue;
+        Scope := LowerCase(Root.Names[I]);
+        If (Pos('auth.x.ai', Scope) > 0) And (OtherUser <> '') Then
+          Begin
+            Token := OtherToken;
+            UserId := OtherUser;
+            Exit(True);
+          End;
+        If (FallbackToken = '') And (OtherUser <> '') Then
+          Begin
+            FallbackToken := OtherToken;
+            FallbackUser := OtherUser;
+          End;
+      End;
+    If FallbackToken <> '' Then
+      Begin
+        Token := FallbackToken;
+        UserId := FallbackUser;
+        Result := True;
+      End;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure SetGrokCliAuthBody(Const Body: String);
+Begin
+  GrokAuthOverride := True;
+  GrokAuthBody := Body;
+End;
+
+Procedure ClearGrokCliAuthBody;
+Begin
+  GrokAuthOverride := False;
+  GrokAuthBody := '';
+End;
+
+Function GrokAuthPath: String;
+Begin
+  Result := GetEnvironmentVariable('GROK_AUTH_PATH');
+  If Result <> '' Then
+    Exit;
+  Result := GrokHomeDir + 'auth.json';
+End;
+
+Function JwtSubject(Const Token: String): String;
+Var
+  Dot, Second: Integer;
+  Payload, Pad: String;
+  Data: TJSONData;
+  Root: TJSONObject;
+Begin
+  Result := '';
+  Dot := Pos('.', Token);
+  If Dot < 2 Then
+    Exit;
+  Payload := Copy(Token, Dot + 1, MaxInt);
+  Second := Pos('.', Payload);
+  If Second > 1 Then
+    Payload := Copy(Payload, 1, Second - 1);
+  Payload := StringReplace(Payload, '-', '+', [rfReplaceAll]);
+  Payload := StringReplace(Payload, '_', '/', [rfReplaceAll]);
+  Case Length(Payload) Mod 4 Of
+    2: Pad := '==';
+    3: Pad := '=';
+  Else
+    Pad := '';
+  End;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(DecodeStringBase64(Payload + Pad));
+      Root := JsonObject(Data);
+      If Assigned(Root) Then
+        Result := HeaderSafe(Root.Get('sub', ''));
+    Except
+      On E: Exception Do
+        Result := '';
+    End;
+  Finally
+    Data.Free;
+  End;
 End;
 
 Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
@@ -980,11 +1145,31 @@ Begin
   End;
 End;
 
+Function FetchGrokBilling(Const Token, UserId: String; Out Body: String; Out StatusCode: Integer;
+  Out ErrorText: String): Boolean;
+Var
+  Headers: String;
+Begin
+  Body := '';
+  StatusCode := 0;
+  ErrorText := '';
+  Headers := GrokBillingHeaders(Token, UserId);
+  If Assigned(AccountGet) Then
+    Result := AccountGet(GrokBillingUrl, Headers, Body, StatusCode, ErrorText)
+  Else
+    Result := HttpsGet(GrokBillingUrl, Body, StatusCode, ErrorText, Headers);
+  If Result And (ErrorText = '') And (StatusCode <> 200) Then
+    ErrorText := 'Grok usage was not returned.';
+  If (Not Result) And (ErrorText = '') Then
+    ErrorText := 'Grok usage request failed.';
+End;
+
 Function QueryGrokAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
   Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
 Var
-  Token, Headers, Body: String;
+  AuthText, Token, UserId, FallbackToken, FallbackUser, Body: String;
   StatusCode: Integer;
+  Fetched: Boolean;
 Begin
   ClearAccountUsageSnapshot(Snapshot);
   ErrorText := '';
@@ -993,33 +1178,35 @@ Begin
   If Not Assigned(Connection) Then
     Exit;
   Snapshot.ConnectionId := Connection.Id;
-  Token := Trim(Connection.KeyValue);
-  If Token = '' Then
+  If GrokAuthOverride Then
+    AuthText := GrokAuthBody
+  Else
+    AuthText := ReadWholeFile(GrokAuthPath);
+  Token := '';
+  UserId := '';
+  SelectGrokCliCredential(AuthText, Token, UserId);
+  FallbackToken := Trim(Connection.KeyValue);
+  FallbackUser := JwtSubject(FallbackToken);
+  If (Token = '') And (FallbackToken = '') Then
     Exit;
-  Headers := GrokBillingHeaders(Token);
   Body := '';
   StatusCode := 0;
-  If Assigned(AccountGet) Then
+  Fetched := False;
+  If Token <> '' Then
+    Fetched := FetchGrokBilling(Token, UserId, Body, StatusCode, ErrorText) And (StatusCode = 200);
+  If (Not Fetched) And (FallbackToken <> '') And (FallbackToken <> Token) Then
     Begin
-      If Not AccountGet(GrokBillingUrl, Headers, Body, StatusCode, ErrorText) Then
-        Begin
-          Result := False;
-          If ErrorText = '' Then
-            ErrorText := 'Grok usage request failed.';
-          Exit;
-        End;
-    End
-  Else If Not HttpsGet(GrokBillingUrl, Body, StatusCode, ErrorText, Headers) Then
-    Begin
-      Result := False;
-      If ErrorText = '' Then
-        ErrorText := 'Grok usage request failed.';
-      Exit;
+      ErrorText := '';
+      Fetched := FetchGrokBilling(FallbackToken, FallbackUser, Body, StatusCode, ErrorText) And (StatusCode = 200);
     End;
-  If StatusCode <> 200 Then
+  If Not Fetched Then
     Begin
       Result := False;
-      ErrorText := 'Grok usage was not returned.';
+      If StatusCode <> 0 Then
+        ErrorText := 'Grok usage was not returned (HTTP ' + IntToStr(StatusCode) + ').'
+      Else If ErrorText = '' Then
+        ErrorText := 'Grok usage was not returned.';
+      WorkflowLogger.Warning('AccountUsage', ErrorText);
       Exit;
     End;
   Result := ParseGrokAccountUsage(Body, Connection.Id, Snapshot, ErrorText);

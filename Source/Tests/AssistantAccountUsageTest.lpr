@@ -134,6 +134,7 @@ Begin
     Connection.ApiBase := '';
     Connection.Id := 'grok-1';
     Connection.KeyValue := '';
+    SetGrokCliAuthBody('');
     Check('unsigned grok is registered but unknown', AccountUsageRegistered('grok') And
       QueryAccountUsage(Connection, '', '', Snapshot, ErrorText) And (Not Snapshot.Known) And (ErrorText = '') And
       (Snapshot.Caption = ''));
@@ -196,6 +197,10 @@ Begin
   Check('omitted grok percent on a fresh week is zero used', ParseGrokAccountUsage(
     '{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00Z"}}}', 'grok-1', Snapshot,
     ErrorText) And Snapshot.Known And (Snapshot.Caption = '7d 0%'));
+  Check('Build session is preferred over an API key', SelectGrokCliCredential(
+    '{"xai::api_key":{"key":"xai-secret","user_id":""},' +
+    '"https://accounts.x.ai/sign-in":{"key":"session-token","user_id":"user-1","email":"hidden@example.com"}}',
+    ErrorText, When) And (ErrorText = 'session-token') And (When = 'user-1'));
 End;
 
 Procedure TestFooterChoice;
@@ -228,6 +233,7 @@ Begin
   TransportCalls := 0;
   SetAccountUsageCompatibleTransport(@GrokFixtureGet, @CountingPost);
   Try
+    SetGrokCliAuthBody('');
     SignedConnection := TAssistantConnection.Create;
     Try
       SignedConnection.Backend := 'grok';
@@ -241,6 +247,7 @@ Begin
       SignedConnection.Free;
     End;
   Finally
+    ClearGrokCliAuthBody;
     SetAccountUsageCompatibleTransport(Nil, Nil);
   End;
   If FailCount = 0 Then
