@@ -2870,7 +2870,7 @@ Begin
   If (Phase = 'Re-establishing Connection') And (FStatusPhase <> Phase) Then
     FReconnectStartTick := GetTickCount64;
   FStatusPhase := Phase;
-  StatusFooter.SetRightText(FormatElapsedStatus(Phase));
+  StatusFooter.SetRightActivityText(FormatElapsedStatus(Phase), Phase);
 End;
 
 Function TProjectAssistantForm.ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
@@ -3186,7 +3186,7 @@ Begin
         Exit;
       End;
     If FSending And (FStatusPhase <> '') Then
-      StatusFooter.SetRightText(FormatElapsedStatus(FStatusPhase));
+      StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
     If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
       FTraceView.RefreshElapsed(FTrace);
     If FSending And Assigned(AssistantClient) Then
@@ -3523,7 +3523,10 @@ Begin
   StatusFooter.SetModelText(LeftText);
   FContextStatusText := CentreText;
   ApplyAccountUsageLabel;
-  StatusFooter.SetRightText(StatusText);
+  If FSending Then
+    StatusFooter.SetRightActivityText(StatusText, FStatusPhase)
+  Else
+    StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
   StatusFooter.SetModelHint('Click to change model, thinking level, or approval');
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And

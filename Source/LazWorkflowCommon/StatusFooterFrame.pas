@@ -13,6 +13,12 @@ Uses
   Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls;
 
 Type
+  TFooterItem = (fiLeft, fiSkill, fiModel, fiCentre, fiUsage, fiRight);
+  TFooterItemState = Record
+    FullText, HintText, SingleLineText: String;
+    NaturalWidth, EllipsisWidth, AllocatedWidth, DisplayWidth: Integer;
+  End;
+
   TStatusFooterFrame = Class(TFrame)
     Panel: TPanel;
     SkillLabel: TLabel;
@@ -29,9 +35,19 @@ Type
     FOnSkillClick: TNotifyEvent;
     FOnCentreClick: TNotifyEvent;
     FOnRightClick: TNotifyEvent;
-    ModelHintText, CentreHintText, UsageHintText: String;
+    Items: Array[TFooterItem] Of TFooterItemState;
+    ActivityPhase: String;
+    ActivityWidth: Integer;
     LayingOutCentre, UpdatingMetrics: Boolean;
-    Procedure UpdateMiddleHint(LabelControl: TLabel; Const HintText: String);
+    Function ItemLabel(Item: TFooterItem): TLabel;
+    Procedure MeasureItem(Item: TFooterItem);
+    Procedure MeasureActivity;
+    Function RightGroupWidth: Integer;
+    Procedure FitItem(Item: TFooterItem; AvailableWidth: Integer);
+    Procedure UpdateItemHint(Item: TFooterItem);
+    Procedure SetItemHint(Item: TFooterItem; Const Value: String);
+    Procedure SetItemText(Item: TFooterItem; Const Value: String);
+    Procedure UpdateRightText(Const Value, Phase: String);
     Procedure SetOnLeftClick(Value: TNotifyEvent);
     Procedure SetOnSkillClick(Value: TNotifyEvent);
     Procedure SetOnCentreClick(Value: TNotifyEvent);
@@ -50,6 +66,8 @@ Type
     Procedure SetCentreText(Const Value: String);
     Procedure SetUsageText(Const Value: String);
     Procedure SetRightText(Const Value: String);
+    /// Reserve stable timer space for a phase; SetRightText releases the reservation.
+    Procedure SetRightActivityText(Const Value, Phase: String);
     Procedure SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
     Procedure SetLeftHint(Const Value: String);
     Procedure SetSkillHint(Const Value: String);
@@ -69,6 +87,9 @@ Type
   End;
 
 Implementation
+
+Uses
+  Math, LazUTF8;
 
 {$R *.lfm}
 
@@ -95,6 +116,7 @@ Procedure TStatusFooterFrame.UpdateFontMetrics;
 Var
   Labels: Array[0..5] Of TLabel;
   Index, TextHeight, FooterHeight: Integer;
+  Item: TFooterItem;
 Begin
   If UpdatingMetrics Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Or
     Not HandleAllocated Or Not Assigned(Panel) Or Not Assigned(RightLabel) Then
@@ -126,7 +148,9 @@ Begin
       conversion here. All labels share the same padded client-height rectangle. }
     Constraints.MinHeight := FooterHeight;
     Height := FooterHeight;
-    Panel.Realign;
+    For Item := Low(TFooterItem) To High(TFooterItem) Do
+      MeasureItem(Item);
+    MeasureActivity;
   Finally
     UpdatingMetrics := False;
   End;
@@ -176,24 +200,28 @@ Begin
       LeftLabel.Cursor := crDefault;
       LeftLabel.OnClick := Nil;
     End;
+  UpdateFontMetrics;
 End;
 
 Procedure TStatusFooterFrame.SetOnSkillClick(Value: TNotifyEvent);
 Begin
   FOnSkillClick := Value;
   ApplyClickStyle(SkillLabel, Assigned(Value));
+  UpdateFontMetrics;
 End;
 
 Procedure TStatusFooterFrame.SetOnCentreClick(Value: TNotifyEvent);
 Begin
   FOnCentreClick := Value;
   ApplyClickStyle(CentreLabel, Assigned(Value));
+  UpdateFontMetrics;
 End;
 
 Procedure TStatusFooterFrame.SetOnRightClick(Value: TNotifyEvent);
 Begin
   FOnRightClick := Value;
   ApplyClickStyle(RightLabel, Assigned(Value));
+  UpdateFontMetrics;
 End;
 
 Procedure TStatusFooterFrame.LabelClick(Sender: TObject);
@@ -220,135 +248,374 @@ Begin
     End;
 End;
 
-Procedure TStatusFooterFrame.SetLeftText(Const Value: String);
+Function TStatusFooterFrame.ItemLabel(Item: TFooterItem): TLabel;
 Begin
-  If Assigned(LeftLabel) Then
+  Case Item Of
+    fiLeft: Result := LeftLabel;
+    fiSkill: Result := SkillLabel;
+    fiModel: Result := ModelLabel;
+    fiCentre: Result := CentreLabel;
+    fiUsage: Result := UsageLabel;
+  Else
+    Result := RightLabel;
+  End;
+End;
+
+Procedure TStatusFooterFrame.MeasureItem(Item: TFooterItem);
+Var
+  LabelControl: TLabel;
+Begin
+  LabelControl := ItemLabel(Item);
+  If Not Assigned(LabelControl) Then
+    Exit;
+  With Items[Item] Do
     Begin
-      LeftLabel.AutoSize := True;
-      LeftLabel.Caption := Value;
-      If Trim(Value) = '' Then
-        Begin
-          LeftLabel.Visible := False;
-          LeftLabel.Align := alNone;
-          LeftLabel.Width := 0;
-        End
+      SingleLineText := StringReplace(FullText, #13#10, ' ', [rfReplaceAll]);
+      SingleLineText := StringReplace(SingleLineText, #13, ' ', [rfReplaceAll]);
+      SingleLineText := StringReplace(SingleLineText, #10, ' ', [rfReplaceAll]);
+      SingleLineText := StringReplace(SingleLineText, #9, ' ', [rfReplaceAll]);
+      LabelControl.Canvas.Font.Assign(LabelControl.Font);
+      If Trim(SingleLineText) = '' Then
+        NaturalWidth := 0
       Else
-        Begin
-          LeftLabel.Align := alLeft;
-          LeftLabel.Visible := True;
-        End;
+        NaturalWidth := LabelControl.Canvas.TextWidth(SingleLineText);
+      EllipsisWidth := LabelControl.Canvas.TextWidth('…');
     End;
-  If Assigned(Panel) Then
-    Panel.Realign;
+End;
+
+Procedure TStatusFooterFrame.MeasureActivity;
+Var
+  Digit: Char;
+  DigitWidth: Integer;
+Begin
+  ActivityWidth := 0;
+  If (ActivityPhase = '') Or Not Assigned(RightLabel) Then
+    Exit;
+  RightLabel.Canvas.Font.Assign(RightLabel.Font);
+  DigitWidth := 0;
+  For Digit := '0' To '9' Do
+    DigitWidth := Max(DigitWidth, RightLabel.Canvas.TextWidth(Digit));
+  { Reserve three hour/minute digits and both clock separators, using the widest
+    digit in the actual font. Phase changes may move the group; normal ticks do not. }
+  ActivityWidth := RightLabel.Canvas.TextWidth(ActivityPhase + ' ') +
+    7 * DigitWidth + 2 * RightLabel.Canvas.TextWidth(':');
+End;
+
+Function TStatusFooterFrame.RightGroupWidth: Integer;
+Var
+  UsableWidth: Integer;
+Begin
+  Result := 0;
+  If Not Assigned(Panel) Or Not Assigned(RightLabel) Or Not RightLabel.Visible Or (Items[fiRight].NaturalWidth = 0) Then
+    Exit;
+  UsableWidth := Max(0, Panel.ClientWidth - 2 * Panel.ChildSizing.LeftRightSpacing);
+  Result := Min(UsableWidth Div 3, Max(ActivityWidth, Items[fiRight].NaturalWidth));
+  If Result < Items[fiRight].EllipsisWidth Then
+    Result := 0;
+End;
+
+Procedure TStatusFooterFrame.UpdateItemHint(Item: TFooterItem);
+Var
+  LabelControl: TLabel;
+  NewHint: String;
+Begin
+  LabelControl := ItemLabel(Item);
+  If Not Assigned(LabelControl) Then
+    Exit;
+  NewHint := Items[Item].HintText;
+  { Keep the full value independently of the painted caption and the caller's
+    explanatory hint, including when a later Set*Hint follows Set*Text. }
+  If (Items[Item].FullText <> '') And (Pos(Items[Item].FullText, NewHint) = 0) Then
+    Begin
+      If NewHint <> '' Then
+        NewHint := LineEnding + NewHint;
+      NewHint := Items[Item].FullText + NewHint;
+    End;
+  If LabelControl.Hint <> NewHint Then
+    LabelControl.Hint := NewHint;
+End;
+
+Procedure TStatusFooterFrame.SetItemHint(Item: TFooterItem; Const Value: String);
+Begin
+  Items[Item].HintText := Value;
+  UpdateItemHint(Item);
+End;
+
+Procedure TStatusFooterFrame.FitItem(Item: TFooterItem; AvailableWidth: Integer);
+Var
+  LabelControl: TLabel;
+  DisplayText, Candidate: String;
+  LowCount, HighCount, KeepCount, CharacterCount, PrefixCount: Integer;
+  MiddleEllipsis: Boolean;
+Begin
+  LabelControl := ItemLabel(Item);
+  If Not Assigned(LabelControl) Then
+    Exit;
+  Items[Item].AllocatedWidth := Max(0, AvailableWidth);
+  DisplayText := '';
+  LabelControl.Canvas.Font.Assign(LabelControl.Font);
+  If LabelControl.Visible And (Items[Item].NaturalWidth > 0) Then
+    If Items[Item].NaturalWidth <= AvailableWidth Then
+      DisplayText := Items[Item].SingleLineText
+    Else If Items[Item].EllipsisWidth <= AvailableWidth Then
+      Begin
+        DisplayText := '…';
+        CharacterCount := UTF8Length(Items[Item].SingleLineText);
+        { These are the shared hosts' path/branch positions. Slashes in model
+          names or work-message prose do not turn those items into paths. }
+        MiddleEllipsis := (Item In [fiLeft, fiCentre]) And
+          ((Pos('/', Items[Item].SingleLineText) > 0) Or (Pos('\', Items[Item].SingleLineText) > 0));
+        LowCount := 1;
+        HighCount := CharacterCount - 1;
+        While LowCount <= HighCount Do
+          Begin
+            KeepCount := (LowCount + HighCount) Div 2;
+            If MiddleEllipsis Then
+              Begin
+                PrefixCount := KeepCount Div 2;
+                Candidate := UTF8Copy(Items[Item].SingleLineText, 1, PrefixCount) + '…' +
+                  UTF8Copy(Items[Item].SingleLineText, CharacterCount - (KeepCount - PrefixCount) + 1, KeepCount - PrefixCount);
+              End
+            Else
+              Candidate := UTF8Copy(Items[Item].SingleLineText, 1, KeepCount) + '…';
+            If LabelControl.Canvas.TextWidth(Candidate) <= AvailableWidth Then
+              Begin
+                DisplayText := Candidate;
+                LowCount := KeepCount + 1;
+              End
+            Else
+              HighCount := KeepCount - 1;
+          End;
+      End;
+  Items[Item].DisplayWidth := LabelControl.Canvas.TextWidth(DisplayText);
+  If LabelControl.Caption <> DisplayText Then
+    LabelControl.Caption := DisplayText;
+  UpdateItemHint(Item);
+End;
+
+Procedure TStatusFooterFrame.SetItemText(Item: TFooterItem; Const Value: String);
+Var
+  LabelControl: TLabel;
+  OldWidth, OldDisplayWidth: Integer;
+  WasVisible: Boolean;
+Begin
+  LabelControl := ItemLabel(Item);
+  If Not Assigned(LabelControl) Or (Items[Item].FullText = Value) Then
+    Exit;
+  OldWidth := Items[Item].NaturalWidth;
+  OldDisplayWidth := Items[Item].DisplayWidth;
+  WasVisible := LabelControl.Visible;
+  Items[Item].FullText := Value;
+  { Defer geometry until the complete text and visibility are consistent. }
+  LayingOutCentre := True;
+  Try
+    LabelControl.Visible := Trim(Value) <> '';
+  Finally
+    LayingOutCentre := False;
+  End;
+  UpdateItemHint(Item);
+  If Not HandleAllocated Or (csLoading In ComponentState) Then
+    Exit;
+  MeasureItem(Item);
+  If (OldWidth = Items[Item].NaturalWidth) And (WasVisible = LabelControl.Visible) Then
+    Begin
+      FitItem(Item, Items[Item].AllocatedWidth);
+      If OldDisplayWidth = Items[Item].DisplayWidth Then
+        Exit;
+    End;
   LayoutCentrePair;
 End;
 
-Procedure TStatusFooterFrame.UpdateMiddleHint(LabelControl: TLabel; Const HintText: String);
+Procedure TStatusFooterFrame.UpdateRightText(Const Value, Phase: String);
+Var
+  PreviousWidth, PreviousDisplayWidth: Integer;
+  PhaseChanged: Boolean;
 Begin
-  If Not Assigned(LabelControl) Then
+  If Not Assigned(RightLabel) Then
     Exit;
-  LabelControl.Hint := HintText;
-  LabelControl.Canvas.Font.Assign(LabelControl.Font);
-  If LabelControl.Visible And (Trim(LabelControl.Caption) <> '') And
-    (LabelControl.Canvas.TextWidth(LabelControl.Caption) > LabelControl.Width) And (Pos(LabelControl.Caption, HintText) = 0) Then
+  PhaseChanged := ActivityPhase <> Phase;
+  If (Items[fiRight].FullText = Value) And Not PhaseChanged Then
+    Exit;
+  PreviousWidth := RightGroupWidth;
+  PreviousDisplayWidth := Items[fiRight].DisplayWidth;
+  ActivityPhase := Phase;
+  Items[fiRight].FullText := Value;
+  LayingOutCentre := True;
+  Try
+    RightLabel.Visible := Trim(Value) <> '';
+  Finally
+    LayingOutCentre := False;
+  End;
+  UpdateItemHint(fiRight);
+  If Not HandleAllocated Or (csLoading In ComponentState) Then
+    Exit;
+  MeasureItem(fiRight);
+  If PhaseChanged Then
+    MeasureActivity;
+  If (PreviousWidth <> RightGroupWidth) Or PhaseChanged Then
+    LayoutCentrePair
+  Else
     Begin
-      LabelControl.Hint := LabelControl.Caption;
-      If HintText <> '' Then
-        LabelControl.Hint := LabelControl.Hint + LineEnding + HintText;
+      { The reservation did not change. Only repaint and right-align this item;
+        the middle group's geometry is untouched by ordinary elapsed ticks. }
+      FitItem(fiRight, RightGroupWidth);
+      If (ActivityPhase = '') And (PreviousDisplayWidth <> Items[fiRight].DisplayWidth) Then
+        Begin
+          LayoutCentrePair;
+          Exit;
+        End;
+      RightLabel.SetBounds(Panel.ClientWidth - Panel.ChildSizing.LeftRightSpacing - Items[fiRight].DisplayWidth,
+        Panel.ChildSizing.TopBottomSpacing, Items[fiRight].DisplayWidth, CentreHost.Height);
     End;
+End;
+
+Procedure TStatusFooterFrame.SetLeftText(Const Value: String);
+Begin
+  SetItemText(fiLeft, Value);
 End;
 
 Procedure TStatusFooterFrame.LayoutCentrePair;
 Var
-  Labels: Array[0..2] Of TLabel;
-  LabelWidths, EllipsisWidths: Array[0..2] Of Integer;
-  Gap, GroupWidth, AvailableWidth, Origin, MaxOrigin, Index: Integer;
+  Widths: Array[TFooterItem] Of Integer;
+  Item: TFooterItem;
+  Gap, GroupWidth, AvailableWidth, Origin, RowTop, RowHeight: Integer;
+  OuterLeft, OuterRight, UsableWidth, LeftLimit, LeftWidth, RightWidth, Remaining: Integer;
+  CentreStart, CentreEnd: Integer;
   HasPrevious: Boolean;
 
-  Procedure MeasureGroup;
+  Function MeasureGroup(FirstItem, LastItem: TFooterItem): Integer;
   Var
-    ItemIndex: Integer;
-    HasItem: Boolean;
+    GroupItem: TFooterItem;
   Begin
-    GroupWidth := 0;
-    HasItem := False;
-    For ItemIndex := Low(Labels) To High(Labels) Do
-      If LabelWidths[ItemIndex] > 0 Then
+    Result := 0;
+    For GroupItem := FirstItem To LastItem Do
+      If Widths[GroupItem] > 0 Then
         Begin
-          If HasItem Then
-            Inc(GroupWidth, Gap);
-          Inc(GroupWidth, LabelWidths[ItemIndex]);
-          HasItem := True;
+          If Result > 0 Then
+            Inc(Result, Gap);
+          Inc(Result, Widths[GroupItem]);
         End;
   End;
 
-  Procedure ShortenLabel(ItemIndex: Integer);
+  Procedure ShortenMiddle(ShortItem: TFooterItem);
   Begin
-    If (GroupWidth <= AvailableWidth) Or (LabelWidths[ItemIndex] = 0) Then
+    If (GroupWidth <= AvailableWidth) Or (Widths[ShortItem] = 0) Then
       Exit;
-    Dec(LabelWidths[ItemIndex], GroupWidth - AvailableWidth);
-    { If even an ellipsis cannot fit, remove this item and its gap from the row. }
-    If LabelWidths[ItemIndex] < EllipsisWidths[ItemIndex] Then
-      LabelWidths[ItemIndex] := 0;
-    MeasureGroup;
+    Widths[ShortItem] := Max(Min(Widths[ShortItem], Items[ShortItem].EllipsisWidth),
+      Widths[ShortItem] - (GroupWidth - AvailableWidth));
+    GroupWidth := MeasureGroup(fiModel, fiUsage);
+  End;
+
+  Procedure OmitMiddle(OmitItem: TFooterItem);
+  Begin
+    If GroupWidth <= AvailableWidth Then
+      Exit;
+    Widths[OmitItem] := 0;
+    GroupWidth := MeasureGroup(fiModel, fiUsage);
   End;
 
 Begin
-  If LayingOutCentre Or UpdatingMetrics Or Not HandleAllocated Or
-    Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
+  If LayingOutCentre Or UpdatingMetrics Or Not HandleAllocated Or (csLoading In ComponentState) Or
+    (csDestroying In ComponentState) Or Not Assigned(Panel) Or Not Assigned(CentreHost) Or Not Assigned(RightLabel) Then
     Exit;
   LayingOutCentre := True;
   Try
-    Labels[0] := ModelLabel;
-    Labels[1] := CentreLabel;
-    Labels[2] := UsageLabel;
-    Gap := CentreHost.ChildSizing.HorizontalSpacing;
-    AvailableWidth := CentreHost.ClientWidth;
-    For Index := Low(Labels) To High(Labels) Do
+    Gap := Panel.ChildSizing.HorizontalSpacing;
+    OuterLeft := Min(Panel.ChildSizing.LeftRightSpacing, Panel.ClientWidth Div 2);
+    OuterRight := Panel.ClientWidth - OuterLeft;
+    UsableWidth := Max(0, OuterRight - OuterLeft);
+    RowTop := Panel.ChildSizing.TopBottomSpacing;
+    RowHeight := Max(0, Panel.ClientHeight - 2 * RowTop);
+    For Item := Low(TFooterItem) To High(TFooterItem) Do
+      If Assigned(ItemLabel(Item)) And ItemLabel(Item).Visible Then
+        Widths[Item] := Items[Item].NaturalWidth
+      Else
+        Widths[Item] := 0;
+
+    { A short side group uses only its content width. If both left items are
+      long, share the cap while returning any unused share to its neighbour. }
+    LeftLimit := UsableWidth Div 4;
+    If MeasureGroup(fiLeft, fiSkill) > LeftLimit Then
       Begin
-        LabelWidths[Index] := 0;
-        EllipsisWidths[Index] := 0;
-        If Not Assigned(Labels[Index]) Then
-          Continue;
-        Labels[Index].Canvas.Font.Assign(Labels[Index].Font);
-        If Labels[Index].Visible And (Trim(Labels[Index].Caption) <> '') Then
+        If (Widths[fiLeft] > 0) And (Widths[fiSkill] > 0) Then
           Begin
-            LabelWidths[Index] := Labels[Index].Canvas.TextWidth(Labels[Index].Caption);
-            EllipsisWidths[Index] := Labels[Index].Canvas.TextWidth('…');
+            Remaining := Max(0, LeftLimit - Gap);
+            Widths[fiLeft] := Min(Widths[fiLeft], Remaining Div 2);
+            Widths[fiSkill] := Min(Widths[fiSkill], Remaining - Widths[fiLeft]);
+            Widths[fiLeft] := Min(Items[fiLeft].NaturalWidth, Remaining - Widths[fiSkill]);
+          End
+        Else
+          Begin
+            Widths[fiLeft] := Min(Widths[fiLeft], LeftLimit);
+            Widths[fiSkill] := Min(Widths[fiSkill], LeftLimit);
           End;
       End;
-    MeasureGroup;
-    { Preserve context/allowance where possible: shorten model, then optional usage, then context.
-      LCL paints the end ellipsis without changing Caption, so wider layouts restore the original text. }
-    ShortenLabel(0);
-    ShortenLabel(2);
-    ShortenLabel(1);
-    If Assigned(Panel) And (Panel.ClientWidth > 0) Then
-      Origin := ((Panel.ClientWidth - GroupWidth) Div 2) - CentreHost.Left
-    Else
-      Origin := (AvailableWidth - GroupWidth) Div 2;
-    MaxOrigin := AvailableWidth - GroupWidth;
-    If Origin < 0 Then
-      Origin := 0;
-    If Origin > MaxOrigin Then
-      Origin := MaxOrigin;
-    HasPrevious := False;
-    For Index := Low(Labels) To High(Labels) Do
+    For Item := fiLeft To fiSkill Do
       Begin
-        If Not Assigned(Labels[Index]) Then
-          Continue;
-        If (LabelWidths[Index] > 0) And HasPrevious Then
+        FitItem(Item, Widths[Item]);
+        Widths[Item] := Items[Item].DisplayWidth;
+      End;
+    LeftWidth := MeasureGroup(fiLeft, fiSkill);
+    RightWidth := RightGroupWidth;
+    FitItem(fiRight, RightWidth);
+    If ActivityPhase = '' Then
+      RightWidth := Items[fiRight].DisplayWidth;
+
+    CentreStart := OuterLeft + LeftWidth;
+    CentreEnd := OuterRight - RightWidth;
+    If LeftWidth > 0 Then
+      Inc(CentreStart, Min(Gap, Max(0, CentreEnd - CentreStart)));
+    If RightWidth > 0 Then
+      Dec(CentreEnd, Min(Gap, Max(0, CentreEnd - CentreStart)));
+    AvailableWidth := Max(0, CentreEnd - CentreStart);
+    CentreHost.SetBounds(CentreStart, RowTop, AvailableWidth, RowHeight);
+
+    Origin := OuterLeft;
+    HasPrevious := False;
+    { Explicit display order avoids depending on the alLeft stacking order. }
+    For Item := fiLeft To fiSkill Do
+      Begin
+        If (Widths[Item] > 0) And HasPrevious Then
           Inc(Origin, Gap);
-        Labels[Index].SetBounds(Origin, 0, LabelWidths[Index], CentreHost.ClientHeight);
-        If LabelWidths[Index] > 0 Then
+        ItemLabel(Item).SetBounds(Origin, RowTop, Widths[Item], RowHeight);
+        If Widths[Item] > 0 Then
           Begin
-            Inc(Origin, LabelWidths[Index]);
+            Inc(Origin, Widths[Item]);
             HasPrevious := True;
           End;
       End;
-    UpdateMiddleHint(ModelLabel, ModelHintText);
-    UpdateMiddleHint(CentreLabel, CentreHintText);
-    UpdateMiddleHint(UsageLabel, UsageHintText);
+    RightLabel.SetBounds(OuterRight - Items[fiRight].DisplayWidth, RowTop, Items[fiRight].DisplayWidth, RowHeight);
+
+    GroupWidth := MeasureGroup(fiModel, fiUsage);
+    { Preserve context/allowance first. Fitting produces the actual painted
+      text before centring, so ellipsis slack never skews the midpoint. }
+    ShortenMiddle(fiModel);
+    ShortenMiddle(fiUsage);
+    ShortenMiddle(fiCentre);
+    { Only omit an item when even the ellipses and their gaps cannot fit. }
+    OmitMiddle(fiModel);
+    OmitMiddle(fiUsage);
+    OmitMiddle(fiCentre);
+    For Item := fiModel To fiUsage Do
+      Begin
+        FitItem(Item, Widths[Item]);
+        Widths[Item] := Items[Item].DisplayWidth;
+      End;
+    GroupWidth := MeasureGroup(fiModel, fiUsage);
+    Origin := ((Panel.ClientWidth - GroupWidth) Div 2) - CentreHost.Left;
+    Origin := Max(0, Min(Origin, AvailableWidth - GroupWidth));
+    HasPrevious := False;
+    For Item := fiModel To fiUsage Do
+      Begin
+        If (Widths[Item] > 0) And HasPrevious Then
+          Inc(Origin, Gap);
+        ItemLabel(Item).SetBounds(Origin, 0, Widths[Item], RowHeight);
+        If Widths[Item] > 0 Then
+          Begin
+            Inc(Origin, Widths[Item]);
+            HasPrevious := True;
+          End;
+      End;
   Finally
     LayingOutCentre := False;
   End;
@@ -356,65 +623,38 @@ End;
 
 Procedure TStatusFooterFrame.CentreHostResize(Sender: TObject);
 Begin
-  If Sender = CentreHost Then
+  If (Sender = CentreHost) Or (Sender = Panel) Then
     LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetSkillText(Const Value: String);
 Begin
-  If Not Assigned(SkillLabel) Then
-    Exit;
-  SkillLabel.AutoSize := True;
-  SkillLabel.Caption := Value;
-  SkillLabel.Visible := Trim(Value) <> '';
-  If Assigned(Panel) Then
-    Panel.Realign;
-  LayoutCentrePair;
+  SetItemText(fiSkill, Value);
 End;
 
 Procedure TStatusFooterFrame.SetModelText(Const Value: String);
 Begin
-  If Assigned(ModelLabel) Then
-    ModelLabel.Caption := Value;
-  LayoutCentrePair;
+  SetItemText(fiModel, Value);
 End;
 
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
-  If Assigned(CentreLabel) Then
-    CentreLabel.Caption := Value;
-  LayoutCentrePair;
+  SetItemText(fiCentre, Value);
 End;
 
 Procedure TStatusFooterFrame.SetUsageText(Const Value: String);
 Begin
-  If Not Assigned(UsageLabel) Then
-    Exit;
-  UsageLabel.Caption := Value;
-  UsageLabel.Cursor := crDefault;
-  UsageLabel.Font.Color := clBtnText;
-  UsageLabel.OnClick := Nil;
-  If Trim(Value) = '' Then
-    Begin
-      UsageLabel.Visible := False;
-      UsageLabel.Width := 0;
-    End
-  Else
-    UsageLabel.Visible := True;
-  LayoutCentrePair;
+  SetItemText(fiUsage, Value);
 End;
 
 Procedure TStatusFooterFrame.SetRightText(Const Value: String);
 Begin
-  If Assigned(RightLabel) Then
-    Begin
-      RightLabel.AutoSize := True;
-      RightLabel.Caption := Value;
-      RightLabel.Visible := Trim(Value) <> '';
-    End;
-  If Assigned(Panel) Then
-    Panel.Realign;
-  LayoutCentrePair;
+  UpdateRightText(Value, '');
+End;
+
+Procedure TStatusFooterFrame.SetRightActivityText(Const Value, Phase: String);
+Begin
+  UpdateRightText(Value, Phase);
 End;
 
 Procedure TStatusFooterFrame.SetAll(Const NewLeftText, NewCentreText, NewRightText: String);
@@ -426,38 +666,32 @@ End;
 
 Procedure TStatusFooterFrame.SetLeftHint(Const Value: String);
 Begin
-  If Assigned(LeftLabel) Then
-    LeftLabel.Hint := Value;
+  SetItemHint(fiLeft, Value);
 End;
 
 Procedure TStatusFooterFrame.SetSkillHint(Const Value: String);
 Begin
-  If Assigned(SkillLabel) Then
-    SkillLabel.Hint := Value;
+  SetItemHint(fiSkill, Value);
 End;
 
 Procedure TStatusFooterFrame.SetModelHint(Const Value: String);
 Begin
-  ModelHintText := Value;
-  UpdateMiddleHint(ModelLabel, ModelHintText);
+  SetItemHint(fiModel, Value);
 End;
 
 Procedure TStatusFooterFrame.SetCentreHint(Const Value: String);
 Begin
-  CentreHintText := Value;
-  UpdateMiddleHint(CentreLabel, CentreHintText);
+  SetItemHint(fiCentre, Value);
 End;
 
 Procedure TStatusFooterFrame.SetUsageHint(Const Value: String);
 Begin
-  UsageHintText := Value;
-  UpdateMiddleHint(UsageLabel, UsageHintText);
+  SetItemHint(fiUsage, Value);
 End;
 
 Procedure TStatusFooterFrame.SetRightHint(Const Value: String);
 Begin
-  If Assigned(RightLabel) Then
-    RightLabel.Hint := Value;
+  SetItemHint(fiRight, Value);
 End;
 
 Initialization

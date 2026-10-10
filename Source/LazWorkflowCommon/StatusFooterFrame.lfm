@@ -25,13 +25,15 @@ object StatusFooterFrame: TStatusFooterFrame
     Color = clForm
     ParentColor = False
     TabOrder = 0
+    ChildSizing.HorizontalSpacing = 12
+    OnResize = CentreHostResize
     object SkillLabel: TLabel
       Left = 8
       Height = 14
       Top = 4
       Width = 1
-      Align = alLeft
-      BorderSpacing.Right = 12
+      Align = alNone
+      BorderSpacing.Right = 0
       Layout = tlCenter
       ShowAccelChar = False
       ShowHint = True
@@ -39,29 +41,32 @@ object StatusFooterFrame: TStatusFooterFrame
       Visible = False
       WordWrap = False
       OnClick = LabelClick
+      AutoSize = False
+      EllipsisPosition = epNone
     end
     object LeftLabel: TLabel
       Left = 8
       Height = 14
       Top = 4
       Width = 1
-      Align = alLeft
-      AutoSize = True
-      BorderSpacing.Right = 12
+      Align = alNone
+      AutoSize = False
+      BorderSpacing.Right = 0
       Layout = tlCenter
       ShowAccelChar = False
       ShowHint = True
       Transparent = True
       Visible = False
       WordWrap = False
+      EllipsisPosition = epNone
     end
     object RightLabel: TLabel
       Left = 631
       Height = 14
       Top = 4
       Width = 1
-      Align = alRight
-      BorderSpacing.Left = 12
+      Align = alNone
+      BorderSpacing.Left = 0
       Layout = tlCenter
       ShowAccelChar = False
       ShowHint = True
@@ -69,15 +74,17 @@ object StatusFooterFrame: TStatusFooterFrame
       Visible = False
       WordWrap = False
       OnClick = LabelClick
+      AutoSize = False
+      EllipsisPosition = epNone
     end
     object CentreHost: TPanel
       Left = 8
       Height = 14
       Top = 4
       Width = 624
-      Align = alClient
+      Align = alNone
       BevelOuter = bvNone
-      ChildSizing.HorizontalSpacing = 12
+      ChildSizing.HorizontalSpacing = 0
       ClientHeight = 14
       ClientWidth = 624
       ParentColor = True
@@ -90,12 +97,13 @@ object StatusFooterFrame: TStatusFooterFrame
         Width = 160
         AutoSize = False
         Layout = tlCenter
-        EllipsisPosition = epEndEllipsis
+        EllipsisPosition = epNone
         ShowAccelChar = False
         ShowHint = True
         Transparent = True
         WordWrap = False
         OnClick = LabelClick
+        Align = alNone
       end
       object CentreLabel: TLabel
         Left = 252
@@ -104,12 +112,13 @@ object StatusFooterFrame: TStatusFooterFrame
         Width = 80
         AutoSize = False
         Layout = tlCenter
-        EllipsisPosition = epEndEllipsis
+        EllipsisPosition = epNone
         ShowAccelChar = False
         ShowHint = True
         Transparent = True
         WordWrap = False
         OnClick = LabelClick
+        Align = alNone
       end
       object UsageLabel: TLabel
         Left = 344
@@ -119,11 +128,12 @@ object StatusFooterFrame: TStatusFooterFrame
         AutoSize = False
         Layout = tlCenter
         Visible = False
-        EllipsisPosition = epEndEllipsis
+        EllipsisPosition = epNone
         ShowAccelChar = False
         ShowHint = True
         Transparent = True
         WordWrap = False
+        Align = alNone
       end
     end
   end
