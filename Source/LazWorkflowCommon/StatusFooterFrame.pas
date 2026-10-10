@@ -29,6 +29,9 @@ Type
     FOnSkillClick: TNotifyEvent;
     FOnCentreClick: TNotifyEvent;
     FOnRightClick: TNotifyEvent;
+    ModelHintText, CentreHintText, UsageHintText: String;
+    LayingOutCentre: Boolean;
+    Procedure UpdateMiddleHint(LabelControl: TLabel; Const HintText: String);
     Procedure SetOnLeftClick(Value: TNotifyEvent);
     Procedure SetOnSkillClick(Value: TNotifyEvent);
     Procedure SetOnCentreClick(Value: TNotifyEvent);
@@ -122,7 +125,7 @@ End;
 
 Procedure TStatusFooterFrame.SetOnLeftClick(Value: TNotifyEvent);
 Begin
-  { The model line is centred on the footer. LeftLabel is optional side text. }
+  { The model leads the centred group. LeftLabel is optional side text. }
   FOnLeftClick := Value;
   ApplyClickStyle(ModelLabel, Assigned(Value));
   If Assigned(LeftLabel) Then
@@ -197,49 +200,119 @@ Begin
   LayoutCentrePair;
 End;
 
+Procedure TStatusFooterFrame.UpdateMiddleHint(LabelControl: TLabel; Const HintText: String);
+Begin
+  If Not Assigned(LabelControl) Then
+    Exit;
+  LabelControl.Hint := HintText;
+  LabelControl.Canvas.Font.Assign(LabelControl.Font);
+  If LabelControl.Visible And (Trim(LabelControl.Caption) <> '') And
+    (LabelControl.Canvas.TextWidth(LabelControl.Caption) > LabelControl.Width) And (Pos(LabelControl.Caption, HintText) = 0) Then
+    Begin
+      LabelControl.Hint := LabelControl.Caption;
+      If HintText <> '' Then
+        LabelControl.Hint := LabelControl.Hint + LineEnding + HintText;
+    End;
+End;
+
 Procedure TStatusFooterFrame.LayoutCentrePair;
 Var
-  Gap, Origin, ModelTop, CentreTop, UsageTop, UsageWidth, MinOrigin, MaxOrigin: Integer;
+  Labels: Array[0..2] Of TLabel;
+  LabelWidths, LabelHeights, EllipsisWidths: Array[0..2] Of Integer;
+  Gap, GroupWidth, AvailableWidth, Origin, MaxOrigin, Index, LabelTop: Integer;
+  HasPrevious: Boolean;
+
+  Procedure MeasureGroup;
+  Var
+    ItemIndex: Integer;
+    HasItem: Boolean;
+  Begin
+    GroupWidth := 0;
+    HasItem := False;
+    For ItemIndex := Low(Labels) To High(Labels) Do
+      If LabelWidths[ItemIndex] > 0 Then
+        Begin
+          If HasItem Then
+            Inc(GroupWidth, Gap);
+          Inc(GroupWidth, LabelWidths[ItemIndex]);
+          HasItem := True;
+        End;
+  End;
+
+  Procedure ShortenLabel(ItemIndex: Integer);
+  Begin
+    If (GroupWidth <= AvailableWidth) Or (LabelWidths[ItemIndex] = 0) Then
+      Exit;
+    Dec(LabelWidths[ItemIndex], GroupWidth - AvailableWidth);
+    { If even an ellipsis cannot fit, remove this item and its gap from the row. }
+    If LabelWidths[ItemIndex] < EllipsisWidths[ItemIndex] Then
+      LabelWidths[ItemIndex] := 0;
+    MeasureGroup;
+  End;
+
 Begin
-  If Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
+  If LayingOutCentre Or Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
     Exit;
-  ModelLabel.AutoSize := True;
-  CentreLabel.AutoSize := True;
-  Gap := Scale96ToForm(16);
-  UsageWidth := 0;
-  If Assigned(UsageLabel) And UsageLabel.Visible And (Trim(UsageLabel.Caption) <> '') Then
-    Begin
-      UsageLabel.AutoSize := True;
-      UsageWidth := Gap + UsageLabel.Width;
-    End;
-  { Centre the model line on the whole footer. Context stays to its right and must not pull that line off centre. }
-  If Assigned(Panel) And (Panel.ClientWidth > 0) Then
-    Origin := ((Panel.ClientWidth - ModelLabel.Width) Div 2) - CentreHost.Left
-  Else
-    Origin := (CentreHost.ClientWidth - ModelLabel.Width) Div 2;
-  MinOrigin := 0;
-  MaxOrigin := CentreHost.ClientWidth - ModelLabel.Width - Gap - CentreLabel.Width - UsageWidth;
-  If MaxOrigin < MinOrigin Then
-    MaxOrigin := MinOrigin;
-  If Origin < MinOrigin Then
-    Origin := MinOrigin;
-  If Origin > MaxOrigin Then
-    Origin := MaxOrigin;
-  ModelTop := (CentreHost.ClientHeight - ModelLabel.Height) Div 2;
-  If ModelTop < 0 Then
-    ModelTop := 0;
-  CentreTop := (CentreHost.ClientHeight - CentreLabel.Height) Div 2;
-  If CentreTop < 0 Then
-    CentreTop := 0;
-  ModelLabel.SetBounds(Origin, ModelTop, ModelLabel.Width, ModelLabel.Height);
-  CentreLabel.SetBounds(Origin + ModelLabel.Width + Gap, CentreTop, CentreLabel.Width, CentreLabel.Height);
-  If UsageWidth > 0 Then
-    Begin
-      UsageTop := (CentreHost.ClientHeight - UsageLabel.Height) Div 2;
-      If UsageTop < 0 Then
-        UsageTop := 0;
-      UsageLabel.SetBounds(CentreLabel.Left + CentreLabel.Width + Gap, UsageTop, UsageLabel.Width, UsageLabel.Height);
-    End;
+  LayingOutCentre := True;
+  Try
+    Labels[0] := ModelLabel;
+    Labels[1] := CentreLabel;
+    Labels[2] := UsageLabel;
+    Gap := Scale96ToForm(16);
+    AvailableWidth := CentreHost.ClientWidth;
+    For Index := Low(Labels) To High(Labels) Do
+      Begin
+        LabelWidths[Index] := 0;
+        LabelHeights[Index] := 0;
+        EllipsisWidths[Index] := 0;
+        If Not Assigned(Labels[Index]) Then
+          Continue;
+        Labels[Index].Canvas.Font.Assign(Labels[Index].Font);
+        LabelHeights[Index] := Labels[Index].Canvas.TextHeight('Hg');
+        If LabelHeights[Index] > CentreHost.ClientHeight Then
+          LabelHeights[Index] := CentreHost.ClientHeight;
+        If Labels[Index].Visible And (Trim(Labels[Index].Caption) <> '') Then
+          Begin
+            LabelWidths[Index] := Labels[Index].Canvas.TextWidth(Labels[Index].Caption);
+            EllipsisWidths[Index] := Labels[Index].Canvas.TextWidth('…');
+          End;
+      End;
+    MeasureGroup;
+    { Preserve context/allowance where possible: shorten model, then optional usage, then context.
+      LCL paints the end ellipsis without changing Caption, so wider layouts restore the original text. }
+    ShortenLabel(0);
+    ShortenLabel(2);
+    ShortenLabel(1);
+    If Assigned(Panel) And (Panel.ClientWidth > 0) Then
+      Origin := ((Panel.ClientWidth - GroupWidth) Div 2) - CentreHost.Left
+    Else
+      Origin := (AvailableWidth - GroupWidth) Div 2;
+    MaxOrigin := AvailableWidth - GroupWidth;
+    If Origin < 0 Then
+      Origin := 0;
+    If Origin > MaxOrigin Then
+      Origin := MaxOrigin;
+    HasPrevious := False;
+    For Index := Low(Labels) To High(Labels) Do
+      Begin
+        If Not Assigned(Labels[Index]) Then
+          Continue;
+        If (LabelWidths[Index] > 0) And HasPrevious Then
+          Inc(Origin, Gap);
+        LabelTop := (CentreHost.ClientHeight - LabelHeights[Index]) Div 2;
+        Labels[Index].SetBounds(Origin, LabelTop, LabelWidths[Index], LabelHeights[Index]);
+        If LabelWidths[Index] > 0 Then
+          Begin
+            Inc(Origin, LabelWidths[Index]);
+            HasPrevious := True;
+          End;
+      End;
+    UpdateMiddleHint(ModelLabel, ModelHintText);
+    UpdateMiddleHint(CentreLabel, CentreHintText);
+    UpdateMiddleHint(UsageLabel, UsageHintText);
+  Finally
+    LayingOutCentre := False;
+  End;
 End;
 
 Procedure TStatusFooterFrame.CentreHostResize(Sender: TObject);
@@ -263,20 +336,14 @@ End;
 Procedure TStatusFooterFrame.SetModelText(Const Value: String);
 Begin
   If Assigned(ModelLabel) Then
-    Begin
-      ModelLabel.AutoSize := True;
-      ModelLabel.Caption := Value;
-    End;
+    ModelLabel.Caption := Value;
   LayoutCentrePair;
 End;
 
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
   If Assigned(CentreLabel) Then
-    Begin
-      CentreLabel.AutoSize := True;
-      CentreLabel.Caption := Value;
-    End;
+    CentreLabel.Caption := Value;
   LayoutCentrePair;
 End;
 
@@ -284,7 +351,6 @@ Procedure TStatusFooterFrame.SetUsageText(Const Value: String);
 Begin
   If Not Assigned(UsageLabel) Then
     Exit;
-  UsageLabel.AutoSize := True;
   UsageLabel.Caption := Value;
   UsageLabel.Cursor := crDefault;
   UsageLabel.Font.Color := clWindowText;
@@ -332,20 +398,20 @@ End;
 
 Procedure TStatusFooterFrame.SetModelHint(Const Value: String);
 Begin
-  If Assigned(ModelLabel) Then
-    ModelLabel.Hint := Value;
+  ModelHintText := Value;
+  UpdateMiddleHint(ModelLabel, ModelHintText);
 End;
 
 Procedure TStatusFooterFrame.SetCentreHint(Const Value: String);
 Begin
-  If Assigned(CentreLabel) Then
-    CentreLabel.Hint := Value;
+  CentreHintText := Value;
+  UpdateMiddleHint(CentreLabel, CentreHintText);
 End;
 
 Procedure TStatusFooterFrame.SetUsageHint(Const Value: String);
 Begin
-  If Assigned(UsageLabel) Then
-    UsageLabel.Hint := Value;
+  UsageHintText := Value;
+  UpdateMiddleHint(UsageLabel, UsageHintText);
 End;
 
 Procedure TStatusFooterFrame.SetRightHint(Const Value: String);

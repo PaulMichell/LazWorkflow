@@ -72,28 +72,37 @@ object StatusFooterFrame: TStatusFooterFrame
         Height = 22
         Top = 0
         Width = 160
-        AutoSize = True
+        AutoSize = False
         Layout = tlCenter
         ParentColor = False
+        EllipsisPosition = epEndEllipsis
+        ShowAccelChar = False
+        WordWrap = False
       end
       object CentreLabel: TLabel
         Left = 256
         Height = 22
         Top = 0
         Width = 80
-        AutoSize = True
+        AutoSize = False
         Layout = tlCenter
         ParentColor = False
+        EllipsisPosition = epEndEllipsis
+        ShowAccelChar = False
+        WordWrap = False
       end
       object UsageLabel: TLabel
         Left = 352
         Height = 22
         Top = 0
         Width = 0
-        AutoSize = True
+        AutoSize = False
         Layout = tlCenter
         ParentColor = False
         Visible = False
+        EllipsisPosition = epEndEllipsis
+        ShowAccelChar = False
+        WordWrap = False
       end
     end
   end
