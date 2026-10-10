@@ -158,6 +158,7 @@ Type
     Procedure RemovePlanActionExecute(Sender: TObject);
     Procedure OpenPlanActionExecute(Sender: TObject);
     Procedure ComposerStackResize(Sender: TObject);
+    Procedure StatusFooterResize(Sender: TObject);
     Procedure PromptHostResize(Sender: TObject);
     Procedure InputMemoPaste(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
@@ -4169,6 +4170,16 @@ Begin
     EnableAlign;
     FComposerLayoutLock := False;
   End;
+End;
+
+Procedure TProjectAssistantForm.StatusFooterResize(Sender: TObject);
+Begin
+  If (Sender <> StatusFooter) Or FComposerLayoutLock Or (csLoading In ComponentState) Or
+    (csDestroying In ComponentState) Then
+    Exit;
+  { Growing the footer must grow the stack before children are placed, preserving
+    the command row's height when the inherited font or display scale changes. }
+  LayoutComposer;
 End;
 
 Procedure TProjectAssistantForm.ComposerStackResize(Sender: TObject);

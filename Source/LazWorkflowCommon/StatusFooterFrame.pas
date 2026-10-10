@@ -30,16 +30,20 @@ Type
     FOnCentreClick: TNotifyEvent;
     FOnRightClick: TNotifyEvent;
     ModelHintText, CentreHintText, UsageHintText: String;
-    LayingOutCentre: Boolean;
+    LayingOutCentre, UpdatingMetrics: Boolean;
     Procedure UpdateMiddleHint(LabelControl: TLabel; Const HintText: String);
     Procedure SetOnLeftClick(Value: TNotifyEvent);
     Procedure SetOnSkillClick(Value: TNotifyEvent);
     Procedure SetOnCentreClick(Value: TNotifyEvent);
     Procedure SetOnRightClick(Value: TNotifyEvent);
-    Procedure ApplyClickStyle(ALabel: TLabel; Clickable: Boolean);
-    Procedure ConfigureLabel(ALabel: TLabel);
+    Procedure ApplyClickStyle(LabelControl: TLabel; Clickable: Boolean);
+    Procedure UpdateFontMetrics;
+  Protected
+    Procedure CreateWnd; Override;
+    Procedure Loaded; Override;
+    Procedure FontChanged(Sender: TObject); Override;
+    Procedure ChangeScale(Multiplier, Divider: Integer); Override;
   Public
-    Constructor Create(TheOwner: TComponent); Override;
     Procedure SetLeftText(Const Value: String);
     Procedure SetSkillText(Const Value: String);
     Procedure SetModelText(Const Value: String);
@@ -68,59 +72,98 @@ Implementation
 
 {$R *.lfm}
 
-Procedure TStatusFooterFrame.ApplyClickStyle(ALabel: TLabel; Clickable: Boolean);
+Procedure TStatusFooterFrame.ApplyClickStyle(LabelControl: TLabel; Clickable: Boolean);
 Begin
-  If Not Assigned(ALabel) Then
+  If Not Assigned(LabelControl) Then
     Exit;
+  { Styling creates a local font. Refresh it from the inherited frame font whenever
+    font metrics change, so links keep the host's family, size and scaling. }
+  LabelControl.Font.Assign(Font);
+  { Use the theme's foreground for the clForm surface. Underlining distinguishes
+    links without using a selection-background colour as text on dark themes. }
+  LabelControl.Font.Color := clBtnText;
   If Clickable Then
     Begin
-      ALabel.Cursor := crHandPoint;
-      ALabel.Font.Color := clHighlight;
+      LabelControl.Cursor := crHandPoint;
+      LabelControl.Font.Style := LabelControl.Font.Style + [fsUnderline];
     End
   Else
-    Begin
-      ALabel.Cursor := crDefault;
-      ALabel.Font.Color := clWindowText;
-    End;
+    LabelControl.Cursor := crDefault;
 End;
 
-Procedure TStatusFooterFrame.ConfigureLabel(ALabel: TLabel);
+Procedure TStatusFooterFrame.UpdateFontMetrics;
+Var
+  Labels: Array[0..5] Of TLabel;
+  Index, TextHeight, FooterHeight: Integer;
 Begin
-  If Not Assigned(ALabel) Then
+  If UpdatingMetrics Or (csLoading In ComponentState) Or (csDestroying In ComponentState) Or
+    Not HandleAllocated Or Not Assigned(Panel) Or Not Assigned(RightLabel) Then
     Exit;
-  ALabel.ParentFont := False;
-  ALabel.ShowHint := True;
-  ALabel.OnClick := @LabelClick;
+  UpdatingMetrics := True;
+  Try
+    ApplyClickStyle(LeftLabel, False);
+    ApplyClickStyle(SkillLabel, Assigned(FOnSkillClick));
+    ApplyClickStyle(ModelLabel, Assigned(FOnLeftClick));
+    ApplyClickStyle(CentreLabel, Assigned(FOnCentreClick));
+    ApplyClickStyle(UsageLabel, False);
+    ApplyClickStyle(RightLabel, Assigned(FOnRightClick));
+    Labels[0] := LeftLabel;
+    Labels[1] := SkillLabel;
+    Labels[2] := ModelLabel;
+    Labels[3] := CentreLabel;
+    Labels[4] := UsageLabel;
+    Labels[5] := RightLabel;
+    FooterHeight := Scale96ToForm(22);
+    For Index := Low(Labels) To High(Labels) Do
+      If Assigned(Labels[Index]) Then
+        Begin
+          Labels[Index].Canvas.Font.Assign(Labels[Index].Font);
+          TextHeight := Labels[Index].Canvas.TextHeight('Hg') + 2 * Panel.ChildSizing.TopBottomSpacing;
+          If TextHeight > FooterHeight Then
+            FooterHeight := TextHeight;
+        End;
+    { Resource spacing has already been scaled by LCL. Only the 22px floor needs
+      conversion here. All labels share the same padded client-height rectangle. }
+    Constraints.MinHeight := FooterHeight;
+    Height := FooterHeight;
+    Panel.Realign;
+  Finally
+    UpdatingMetrics := False;
+  End;
+  LayoutCentrePair;
 End;
 
-Constructor TStatusFooterFrame.Create(TheOwner: TComponent);
+Procedure TStatusFooterFrame.CreateWnd;
 Begin
-  Inherited Create(TheOwner);
-  Align := alBottom;
-  Height := Scale96ToForm(22);
-  ConfigureLabel(LeftLabel);
-  ConfigureLabel(SkillLabel);
-  ConfigureLabel(ModelLabel);
-  ConfigureLabel(CentreLabel);
-  ConfigureLabel(UsageLabel);
-  ConfigureLabel(RightLabel);
-  If Assigned(LeftLabel) Then
-    Begin
-      LeftLabel.Cursor := crDefault;
-      LeftLabel.Font.Color := clWindowText;
-      LeftLabel.OnClick := Nil;
-    End;
-  If Assigned(SkillLabel) Then
-    SkillLabel.Visible := False;
-  { Hover only. An empty caption must not reserve space on forms that share this frame. }
-  If Assigned(UsageLabel) Then
-    Begin
-      UsageLabel.Cursor := crDefault;
-      UsageLabel.Font.Color := clWindowText;
-      UsageLabel.OnClick := Nil;
-      UsageLabel.Visible := False;
-      UsageLabel.Width := 0;
-    End;
+  Inherited CreateWnd;
+  UpdateFontMetrics;
+End;
+
+Procedure TStatusFooterFrame.Loaded;
+Begin
+  Inherited Loaded;
+  UpdateFontMetrics;
+End;
+
+Procedure TStatusFooterFrame.FontChanged(Sender: TObject);
+Begin
+  Inherited FontChanged(Sender);
+  UpdateFontMetrics;
+End;
+
+Procedure TStatusFooterFrame.ChangeScale(Multiplier, Divider: Integer);
+Var
+  WasUpdating: Boolean;
+Begin
+  { Wait until LCL has scaled the frame font, children and resource padding once. }
+  WasUpdating := UpdatingMetrics;
+  UpdatingMetrics := True;
+  Try
+    Inherited ChangeScale(Multiplier, Divider);
+  Finally
+    UpdatingMetrics := WasUpdating;
+  End;
+  UpdateFontMetrics;
 End;
 
 Procedure TStatusFooterFrame.SetOnLeftClick(Value: TNotifyEvent);
@@ -218,8 +261,8 @@ End;
 Procedure TStatusFooterFrame.LayoutCentrePair;
 Var
   Labels: Array[0..2] Of TLabel;
-  LabelWidths, LabelHeights, EllipsisWidths: Array[0..2] Of Integer;
-  Gap, GroupWidth, AvailableWidth, Origin, MaxOrigin, Index, LabelTop: Integer;
+  LabelWidths, EllipsisWidths: Array[0..2] Of Integer;
+  Gap, GroupWidth, AvailableWidth, Origin, MaxOrigin, Index: Integer;
   HasPrevious: Boolean;
 
   Procedure MeasureGroup;
@@ -251,26 +294,23 @@ Var
   End;
 
 Begin
-  If LayingOutCentre Or Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
+  If LayingOutCentre Or UpdatingMetrics Or Not HandleAllocated Or
+    Not Assigned(CentreHost) Or Not Assigned(ModelLabel) Or Not Assigned(CentreLabel) Then
     Exit;
   LayingOutCentre := True;
   Try
     Labels[0] := ModelLabel;
     Labels[1] := CentreLabel;
     Labels[2] := UsageLabel;
-    Gap := Scale96ToForm(16);
+    Gap := CentreHost.ChildSizing.HorizontalSpacing;
     AvailableWidth := CentreHost.ClientWidth;
     For Index := Low(Labels) To High(Labels) Do
       Begin
         LabelWidths[Index] := 0;
-        LabelHeights[Index] := 0;
         EllipsisWidths[Index] := 0;
         If Not Assigned(Labels[Index]) Then
           Continue;
         Labels[Index].Canvas.Font.Assign(Labels[Index].Font);
-        LabelHeights[Index] := Labels[Index].Canvas.TextHeight('Hg');
-        If LabelHeights[Index] > CentreHost.ClientHeight Then
-          LabelHeights[Index] := CentreHost.ClientHeight;
         If Labels[Index].Visible And (Trim(Labels[Index].Caption) <> '') Then
           Begin
             LabelWidths[Index] := Labels[Index].Canvas.TextWidth(Labels[Index].Caption);
@@ -299,8 +339,7 @@ Begin
           Continue;
         If (LabelWidths[Index] > 0) And HasPrevious Then
           Inc(Origin, Gap);
-        LabelTop := (CentreHost.ClientHeight - LabelHeights[Index]) Div 2;
-        Labels[Index].SetBounds(Origin, LabelTop, LabelWidths[Index], LabelHeights[Index]);
+        Labels[Index].SetBounds(Origin, 0, LabelWidths[Index], CentreHost.ClientHeight);
         If LabelWidths[Index] > 0 Then
           Begin
             Inc(Origin, LabelWidths[Index]);
@@ -353,7 +392,7 @@ Begin
     Exit;
   UsageLabel.Caption := Value;
   UsageLabel.Cursor := crDefault;
-  UsageLabel.Font.Color := clWindowText;
+  UsageLabel.Font.Color := clBtnText;
   UsageLabel.OnClick := Nil;
   If Trim(Value) = '' Then
     Begin
@@ -371,6 +410,7 @@ Begin
     Begin
       RightLabel.AutoSize := True;
       RightLabel.Caption := Value;
+      RightLabel.Visible := Trim(Value) <> '';
     End;
   If Assigned(Panel) Then
     Panel.Realign;

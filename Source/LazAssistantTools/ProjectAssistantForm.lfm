@@ -28,6 +28,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       Width = 1286
       Align = alBottom
       TabOrder = 0
+      OnResize = StatusFooterResize
     end
     object BottomBar: TPanel
       Left = 0

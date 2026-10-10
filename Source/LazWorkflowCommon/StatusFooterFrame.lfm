@@ -3,9 +3,12 @@ object StatusFooterFrame: TStatusFooterFrame
   Height = 22
   Top = 0
   Width = 640
+  Align = alBottom
   ClientHeight = 22
   ClientWidth = 640
+  ParentFont = True
   TabOrder = 0
+  DesignTimePPI = 96
   DesignLeft = 300
   DesignTop = 200
   object Panel: TPanel
@@ -15,93 +18,111 @@ object StatusFooterFrame: TStatusFooterFrame
     Width = 640
     Align = alClient
     BevelOuter = bvNone
+    ChildSizing.LeftRightSpacing = 8
+    ChildSizing.TopBottomSpacing = 4
     ClientHeight = 22
     ClientWidth = 640
     Color = clForm
     ParentColor = False
     TabOrder = 0
     object SkillLabel: TLabel
-      Left = 120
-      Height = 22
-      Top = 0
+      Left = 8
+      Height = 14
+      Top = 4
       Width = 1
       Align = alLeft
-      BorderSpacing.Left = 6
       BorderSpacing.Right = 12
       Layout = tlCenter
-      ParentColor = False
+      ShowAccelChar = False
+      ShowHint = True
+      Transparent = True
       Visible = False
+      WordWrap = False
+      OnClick = LabelClick
     end
     object LeftLabel: TLabel
-      Left = 6
-      Height = 22
-      Top = 0
+      Left = 8
+      Height = 14
+      Top = 4
       Width = 1
       Align = alLeft
       AutoSize = True
-      BorderSpacing.Left = 6
       BorderSpacing.Right = 12
       Layout = tlCenter
-      ParentColor = False
+      ShowAccelChar = False
+      ShowHint = True
+      Transparent = True
+      Visible = False
+      WordWrap = False
     end
     object RightLabel: TLabel
-      Left = 633
-      Height = 22
-      Top = 0
+      Left = 631
+      Height = 14
+      Top = 4
       Width = 1
       Align = alRight
       BorderSpacing.Left = 12
-      BorderSpacing.Right = 6
       Layout = tlCenter
-      ParentColor = False
+      ShowAccelChar = False
+      ShowHint = True
+      Transparent = True
+      Visible = False
+      WordWrap = False
+      OnClick = LabelClick
     end
     object CentreHost: TPanel
-      Left = 140
-      Height = 22
-      Top = 0
-      Width = 480
+      Left = 8
+      Height = 14
+      Top = 4
+      Width = 624
       Align = alClient
       BevelOuter = bvNone
-      ClientHeight = 22
-      ClientWidth = 480
-      ParentColor = False
+      ChildSizing.HorizontalSpacing = 12
+      ClientHeight = 14
+      ClientWidth = 624
+      ParentColor = True
       TabOrder = 0
       OnResize = CentreHostResize
       object ModelLabel: TLabel
         Left = 80
-        Height = 22
+        Height = 14
         Top = 0
         Width = 160
         AutoSize = False
         Layout = tlCenter
-        ParentColor = False
         EllipsisPosition = epEndEllipsis
         ShowAccelChar = False
+        ShowHint = True
+        Transparent = True
         WordWrap = False
+        OnClick = LabelClick
       end
       object CentreLabel: TLabel
-        Left = 256
-        Height = 22
+        Left = 252
+        Height = 14
         Top = 0
         Width = 80
         AutoSize = False
         Layout = tlCenter
-        ParentColor = False
         EllipsisPosition = epEndEllipsis
         ShowAccelChar = False
+        ShowHint = True
+        Transparent = True
         WordWrap = False
+        OnClick = LabelClick
       end
       object UsageLabel: TLabel
-        Left = 352
-        Height = 22
+        Left = 344
+        Height = 14
         Top = 0
         Width = 0
         AutoSize = False
         Layout = tlCenter
-        ParentColor = False
         Visible = False
         EllipsisPosition = epEndEllipsis
         ShowAccelChar = False
+        ShowHint = True
+        Transparent = True
         WordWrap = False
       end
     end
