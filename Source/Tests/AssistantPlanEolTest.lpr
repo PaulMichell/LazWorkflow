@@ -142,8 +142,27 @@ Begin
   Check('new plan has no CR', (Raw = PlanBody(#10, 'not started')) And (Pos(#13, Raw) = 0));
 End;
 
+Procedure TestBlockedStatus;
+Var
+  Section: TPlanSection;
+Begin
+  Check('blocked parses', StrToPlanSectionStatus('blocked') = pssBlocked);
+  Check('blocked round-trips', PlanSectionStatusToStr(pssBlocked) = 'blocked');
+  Section := TPlanSection.Create;
+  Try
+    Section.Actionable := True;
+    Section.Title := 'Visual check';
+    Section.Status := pssBlocked;
+    Check('blocked tile names the status', Pos('Blocked', FormatPlanSectionTile(Section)) > 0);
+    Check('blocked tile is not No status', Pos('No status', FormatPlanSectionTile(Section)) = 0);
+  Finally
+    Section.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
+  TestBlockedStatus;
   Root := MakeTempRoot;
   Try
     Check('select the temporary folder', AssistantTarget.SelectFolder(Root, SelectErr));

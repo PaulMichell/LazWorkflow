@@ -1620,15 +1620,16 @@ End;
 Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
   PlanRel, Err, Summary: String;
-  I, KeepHeading, SelectIndex, NotStarted, InProgress, Complete: Integer;
+  I, KeepHeading, SelectIndex, NotStarted, InProgress, Blocked, Complete: Integer;
   Section: TPlanSection;
 
   Procedure ShowPlanCounts;
   Begin
     If Not Assigned(BuildStatusLabel) Then
       Exit;
-    Summary := Format('%d not started · %d in progress · %d complete', [NotStarted, InProgress, Complete]);
-    If (NotStarted + InProgress + Complete) = 0 Then
+    Summary := Format('%d not started · %d in progress · %d blocked · %d complete',
+      [NotStarted, InProgress, Blocked, Complete]);
+    If (NotStarted + InProgress + Blocked + Complete) = 0 Then
       Summary := Summary + '  ·  no actionable items';
     BuildStatusLabel.Caption := Summary;
   End;
@@ -1666,16 +1667,18 @@ Begin
       Begin
         BuildTodoList.Items.Add(
           '(No plan sections. Add ## context headings, and ### items whose next non-empty line is ' +
-          'Status: not started | in progress | complete.)');
+          'Status: not started | in progress | complete | blocked.)');
         FBuildSelectedIndex := -1;
         NotStarted := 0;
         InProgress := 0;
+        Blocked := 0;
         Complete := 0;
         ShowPlanCounts;
         Exit;
       End;
     NotStarted := 0;
     InProgress := 0;
+    Blocked := 0;
     Complete := 0;
     For I := 0 To BuildSections.Count - 1 Do
       Begin
@@ -1686,6 +1689,7 @@ Begin
         Case Section.Status Of
           pssNotStarted: Inc(NotStarted);
           pssInProgress: Inc(InProgress);
+          pssBlocked: Inc(Blocked);
           pssComplete: Inc(Complete);
         Else
           { }
@@ -1817,14 +1821,21 @@ Begin
       Exit;
     End;
   { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence.
-    An item with no machine criterion stays in progress and the plan agent continues it. }
+    An item with no machine criterion is marked blocked and the plan agent stops instead of repeating it. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
       If FPlanAgentRunning And AssistantAcceptanceIsHumanReview(Note) Then
         Begin
-          FPlanAgentResumeIndex := FBuildWorkSectionIndex;
-          SetBuildStatusFeedback(Format('%s stays in progress. The plan agent continues this item.',
+          { Do not rebuild the same item until a person supplies the missing evidence. }
+          FPlanAgentResumeIndex := -1;
+          If (FBuildWorkPlanPath <> '') And (FBuildWorkSectionIndex >= 0) And
+            Not SetPlanSectionStatus(FBuildWorkPlanPath, FBuildWorkSectionIndex, pssBlocked, Err) Then
+            Note := Note + ' Could not mark the item blocked: ' + Err;
+          SetBuildStatusFeedback(Format(
+            '%s is blocked for manual review. The plan agent will not repeat it.',
             [FBuildWorkSectionTitle]));
+          StopRunPlan('manual review remains for "' + FBuildWorkSectionTitle +
+            '". It is marked blocked. Add the missing evidence or set it in progress, then Run Plan again.');
         End
       Else
         Begin
@@ -2034,7 +2045,7 @@ Begin
   If Section.Status = pssUnknown Then
     StatusText := 'unknown';
   { Mark in progress when starting work from a not-started package. }
-  If Section.Status In [pssNotStarted, pssUnknown] Then
+  If Section.Status In [pssNotStarted, pssUnknown, pssBlocked] Then
     Begin
       If Not SetPlanSectionStatus(PlanRel, Idx, pssInProgress, Err) Then
         Begin

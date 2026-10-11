@@ -1727,15 +1727,90 @@ End;
 
 Function FindOpenEditor(Const Resolved: String): TSourceEditorInterface;
 Var
-  FullPath: String;
+  I: Integer;
+  Ed: TSourceEditorInterface;
+  FullPath, EditorPath: String;
 Begin
   Result := Nil;
   If Not Assigned(SourceEditorManagerIntf) Then
     Exit;
   FullPath := ExpandResolvedPath(Resolved);
   Result := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FullPath);
-  If Not Assigned(Result) And (FullPath <> Resolved) Then
+  If Assigned(Result) Then Exit;
+  If FullPath <> Resolved Then
     Result := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
+  If Assigned(Result) Then Exit;
+  For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+    Begin
+      Ed := SourceEditorManagerIntf.SourceEditors[I];
+      If Not Assigned(Ed) Or (Ed.FileName = '') Then Continue;
+      EditorPath := ExpandResolvedPath(Ed.FileName);
+      If (EditorPath = FullPath) Or (Ed.FileName = Resolved) Or (Ed.FileName = FullPath) Then
+        Exit(Ed);
+    End;
+End;
+
+{ After a write, bring every unmodified open buffer for that path up to the new text.
+  A dirty buffer is left alone so user edits are not discarded. }
+Function RefreshUnmodifiedOpenEditor(Const FullPath, Content: String; Out Note: String): Boolean;
+Var
+  I: Integer;
+  Ed: TSourceEditorInterface;
+  EditorPath, SyncError: String;
+  Refreshed, LeftDirty: Boolean;
+Begin
+  Result := False;
+  Note := '';
+  If Not Assigned(SourceEditorManagerIntf) Then Exit;
+  Refreshed := False;
+  LeftDirty := False;
+  For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+    Begin
+      Ed := SourceEditorManagerIntf.SourceEditors[I];
+      If Not Assigned(Ed) Or (Ed.FileName = '') Or (Ed.SourceText = Content) Then Continue;
+      EditorPath := ExpandResolvedPath(Ed.FileName);
+      If (EditorPath <> FullPath) And (Ed.FileName <> FullPath) Then Continue;
+      If Ed.Modified Then
+        Begin
+          LeftDirty := True;
+          Continue;
+        End;
+      If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, SyncError) Then
+        Begin
+          Note := SyncError;
+          Exit;
+        End;
+      If Assigned(LazarusIDE) Then LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]);
+      Refreshed := True;
+    End;
+  If Refreshed Then
+    Note := 'Refreshed the open editor from the written file so a later save cannot restore the old text.';
+  If LeftDirty Then
+    Begin
+      If Note <> '' Then Note := Note + ' ';
+      Note := Note + 'An open editor has unsaved edits and was not replaced. Do not save it over the newer disk copy.';
+    End;
+  Result := Refreshed Or LeftDirty;
+End;
+
+Function MarkdownEditorToolRefused(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
+Var
+  Name: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  Name := LowerCase(Trim(ToolName));
+  If (Name <> 'open_file') And (Name <> 'write_file') And (Name <> 'replace_in_file') And
+    (Name <> 'ensure_form_component') And (Name <> 'delete_path') And (Name <> 'rename_path') And
+    (Name <> 'add_unit_to_project') Then
+    Exit;
+  If IsMarkdownPath(JsonArgString(ArgumentsJson, 'path')) Or
+    IsMarkdownPath(JsonArgString(ArgumentsJson, 'new_path')) Then
+    Begin
+      ErrorText :=
+        'A plan or document is written with write_markdown or update_markdown, not by editing it in the source editor.';
+      Result := True;
+    End;
 End;
 
 Function LooksLikeScratchProbePath(Const Path: String): Boolean;
@@ -1995,7 +2070,11 @@ Begin
         If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, ErrorText) Then
           Exit;
         If Assigned(LazarusIDE) And (LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) = mrOk) Then
-          Note := 'Updated open editor buffer and saved to disk (IDE Undo available).'
+          Begin
+            Note := 'Updated open editor buffer and saved to disk (IDE Undo available).';
+            RefreshUnmodifiedOpenEditor(FullPath, Content, OpenNote);
+            If OpenNote <> '' Then Note := Note + ' ' + OpenNote;
+          End
         Else
           Begin
             ErrorText := 'Updated open editor buffer (IDE Undo available), but disk save did not complete. ' +
@@ -2026,6 +2105,8 @@ Begin
       If Length(Content) > 0 Then
         Stream.WriteBuffer(Content[1], Length(Content));
       Note := 'Wrote file on disk.';
+      RefreshUnmodifiedOpenEditor(FullPath, Content, OpenNote);
+      If OpenNote <> '' Then Note := Note + ' ' + OpenNote;
       Result := True;
     Except
       On E: Exception Do
@@ -3521,6 +3602,8 @@ Begin
       Exit;
     End;
   TargetIdentity := AssistantTarget.Identity;
+  { Refuse a Markdown editor path before scope checks or an Ask dialog. }
+  If MarkdownEditorToolRefused(Name, ArgumentsJson, ErrorText) Then Exit;
   If Not CheckTarget Then Exit;
   If Not ApproveToolIfNeeded(Name, ArgumentsJson, ErrorText) Then
     Exit;

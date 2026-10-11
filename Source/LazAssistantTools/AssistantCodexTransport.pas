@@ -27,6 +27,7 @@ Type
     FBuffer, FError: String;
     FReadBytes, FWriteBytes, FWriteOffset: Integer;
     FCancel: LongInt;
+    FCancelReason: String;
     FWriteStarted: QWord;
     FWriteTimeout: Cardinal;
     FOwner: TThreadID;
@@ -45,7 +46,8 @@ Type
     Function Queue(Const JsonLine: String): Boolean;
     Procedure Poll;
     Function TakeFrame(Out Frame: String): Boolean;
-    Procedure Cancel;
+    { Reason is used when this owner calls Cancel. An empty reason stays the user-cancel text. }
+    Procedure Cancel(Const Reason: String = '');
     Procedure Stop;
     Function Running: Boolean;
     Property LastError: String Read FError;
@@ -165,8 +167,10 @@ Begin
   Stop;
 End;
 
-Procedure TAssistantCodexTransport.Cancel;
+Procedure TAssistantCodexTransport.Cancel(Const Reason: String);
 Begin
+  { The owner thread sets the reason before the flag. Poll reads both. }
+  If Reason <> '' Then FCancelReason := Reason;
   InterlockedExchange(FCancel, 1);
 End;
 
@@ -328,7 +332,8 @@ Begin
   CheckOwner;
   If InterlockedCompareExchange(FCancel, 0, 0) <> 0 Then
     Begin
-      Fail('Codex connection cancelled.');
+      If FCancelReason <> '' Then Fail(FCancelReason)
+      Else Fail('Codex connection cancelled.');
       Exit;
     End;
   If Not Assigned(FProcess) Then Exit;

@@ -881,6 +881,12 @@ Begin
               ErrorText := 'File must contain at most 1 MiB of text without NUL bytes.';
               Exit;
             End;
+          If FAdapter.IsMarkdownPath(Path) Then
+            Begin
+              ErrorText :=
+                'A plan or document is written with write_markdown or update_markdown, not by editing it in the source editor.';
+              Exit;
+            End;
           If Not Approve(RunId, Tool, Path, '', NewText, ErrorText) Then Exit;
           Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText);
           Exit;
@@ -1114,6 +1120,13 @@ Begin
               End;
           ResultText := '{"sourceRevision":' + Quoted(Revision) + ',' + Quoted(ResultField) + ':' + ResultText + '}';
           Exit(True);
+        End;
+      If FAdapter.IsMarkdownPath(Path) And
+        ((Tool = 'lazarus_save_buffer') Or (Tool = 'lazarus_replace_buffer')) Then
+        Begin
+          ErrorText :=
+            'A plan or document is written with write_markdown or update_markdown, not by editing it in the source editor.';
+          Exit;
         End;
       If Tool = 'lazarus_save_buffer' Then
         Begin

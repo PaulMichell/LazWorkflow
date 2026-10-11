@@ -174,12 +174,24 @@ Begin
     Result := Result + LineEnding + 'X-Title: LazWorkflow';
 End;
 
-Function HttpFailure(Const StatusCode: Integer; Const Body: String): String;
+Function HttpFailure(Const StatusCode: Integer; Const Body, TransportError: String): String;
 Var
   Detail: String;
 Begin
+  If StatusCode = 0 Then
+    Begin
+      Result := 'Connection failed before an HTTP status';
+      Detail := Trim(TransportError);
+      If Detail = '' Then Detail := HttpsResponseErrorMessage(Body);
+      If Detail <> '' Then
+        Result := Result + ': ' + Detail
+      Else
+        Result := Result + '.';
+      Exit;
+    End;
   Result := 'HTTP ' + IntToStr(StatusCode);
   Detail := HttpsResponseErrorMessage(Body);
+  If Detail = '' Then Detail := Trim(TransportError);
   If Detail <> '' Then
     Result := Result + ': ' + Detail;
 End;
@@ -436,7 +448,7 @@ Begin
     End;
   If StatusCode <> 200 Then
     Begin
-      ErrorText := HttpFailure(StatusCode, Body);
+      ErrorText := HttpFailure(StatusCode, Body, ErrorText);
       Exit;
     End;
   Result := ParseCompatibleModelList(Body, ModelIds, ErrorText);
@@ -518,7 +530,7 @@ Begin
     End;
   If StatusCode <> 200 Then
     Begin
-      ErrorText := HttpFailure(StatusCode, ResponseBody);
+      ErrorText := HttpFailure(StatusCode, ResponseBody, ErrorText);
       Exit;
     End;
   Result := ParseCompatibleCompletion(ResponseBody, Completion, ErrorText);

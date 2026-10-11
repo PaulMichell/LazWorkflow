@@ -9,7 +9,7 @@ Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name, ': ', Reason); Halt(1); End; WriteLn('ok ', Name); End;
 Begin
   Check('missing criteria require human completion', Not CheckAssistantAcceptance('## Task', Build, Tests, Reason));
-  Check('missing criteria keep the plan agent running', AssistantAcceptanceIsHumanReview(Reason));
+  Check('missing criteria are manual review and must not be repeated', AssistantAcceptanceIsHumanReview(Reason));
   Check('current build satisfies explicit build criterion', CheckAssistantAcceptance('Validation: build', Build, '', Reason));
   Check('current linked report satisfies tests criterion', CheckAssistantAcceptance('Validation: tests', Build, Tests, Reason));
   Check('build alone does not satisfy tests', Not CheckAssistantAcceptance('Validation: tests', Build, '', Reason));
@@ -20,7 +20,7 @@ Begin
   Check('duplicate criteria rejected', Not CheckAssistantAcceptance('Validation: build' + LineEnding + 'Validation: tests', Build, Tests, Reason));
   Check('duplicate criteria stop the plan agent', Not AssistantAcceptanceIsHumanReview(Reason));
   Check('manual criteria require human completion', Not CheckAssistantAcceptance('Validation: manual', Build, Tests, Reason));
-  Check('manual criteria keep the plan agent running', AssistantAcceptanceIsHumanReview(Reason));
+  Check('manual criteria are manual review and must not be repeated', AssistantAcceptanceIsHumanReview(Reason));
   Check('incomplete dependency coverage blocks completion', Not CheckAssistantAcceptance('Validation: build', StringReplace(Build, 'Complete":true', 'Complete":false', []), Tests, Reason));
   Check('stale build cannot complete', Not CheckAssistantAcceptance('Validation: build', StringReplace(Build, 'stale":false', 'stale":true', []), Tests, Reason));
   Check('running build cannot complete', Not CheckAssistantAcceptance('Validation: build', StringReplace(Build, 'done":true', 'done":false', []), Tests, Reason));

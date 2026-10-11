@@ -235,11 +235,11 @@ End;
 Procedure TAssistantCodexRun.Execute;
 Var
   Client: TAssistantCodexClient;
-  Deadline: QWord;
+  Deadline, Now, PausedAt: QWord;
   Tool: TCodexToolRequest;
   SteerText, ToolResult, ToolCallId, ProfileError: String;
   Stage: Integer;
-  HaveResult, ToolSuccess: Boolean;
+  HaveResult, ToolSuccess, IdeWaiting, DeadlinePaused: Boolean;
   Env: TStringList;
   RunDirectory: String;
 Begin
@@ -283,10 +283,41 @@ Begin
           Exit;
         End;
       Deadline := GetTickCount64 + FTimeout;
+      DeadlinePaused := False;
+      PausedAt := 0;
       Stage := 0;
       Repeat
-        If Cancelled Then Client.CancelConnection;
-        If GetTickCount64 >= Deadline Then Client.CancelConnection;
+        Now := GetTickCount64;
+        IdeWaiting := False;
+        EnterCriticalSection(FLock);
+        Try
+          { Time spent in an IDE dynamic tool does not consume the turn limit. }
+          IdeWaiting := FToolPending And Not FToolReady;
+        Finally
+          LeaveCriticalSection(FLock);
+        End;
+        If Cancelled Then
+          Client.CancelConnection
+        Else If IdeWaiting Then
+          Begin
+            If Not DeadlinePaused Then
+              Begin
+                PausedAt := Now;
+                DeadlinePaused := True;
+              End;
+          End
+        Else
+          Begin
+            If DeadlinePaused Then
+              Begin
+                Deadline := Deadline + (Now - PausedAt);
+                DeadlinePaused := False;
+              End;
+            If Now >= Deadline Then
+              Client.CancelConnection(Format(
+                'Codex turn timed out after %d s while waiting for the model or an approval result.',
+                [FTimeout Div 1000]));
+          End;
         Client.Pump;
         If (Client.State = crsConnecting) And (Client.Authentication.State = ccsNeedsSignIn) Then
           Begin

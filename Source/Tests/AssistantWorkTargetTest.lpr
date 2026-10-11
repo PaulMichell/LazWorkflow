@@ -189,6 +189,11 @@ Begin
       '{"path":"photo.png","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('replace_in_file still refuses a png', (Not ExecuteAssistantToolForMode('replace_in_file',
       '{"path":"photo.png","old_text":"a","new_text":"b"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+    Check('markdown write is refused before an editor edit', (Not ExecuteAssistantToolForMode('write_file',
+      '{"path":"Documents/Plan.md","content":"This plan text is long enough and must still be refused."}',
+      amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
+    Check('markdown replace is refused before an editor edit', (Not ExecuteAssistantToolForMode('replace_in_file',
+      '{"path":"Notes.md","old_text":"old","new_text":"new"}', amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
   Finally
     AssistantChatConfig.SetApprovalModeEnum(SavedApproval);
   End;

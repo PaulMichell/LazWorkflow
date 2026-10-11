@@ -1,7 +1,8 @@
 Unit AssistantCodexClient;
 
 { Worker-owned managed-runtime protocol. Dynamic tools are surfaced to a
-  caller-owned IDE broker; native approvals are rejected, never auto-approved.
+  caller-owned IDE broker. Native approval requests are declined immediately
+  and are never auto-approved.
   A release Codex CLI is accepted when its generated app-server schema still has the
   fields this client uses. Pictures stay on the Grok connection. This client does
   not send an image input item. (c) 2026 Michell Computing. }
@@ -28,6 +29,10 @@ Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson,
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 /// turn/steer params for this client. One text item. No image item: 2.4 found none in this protocol.
 Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
+/// JSON-RPC result for a server approval request. Command and file changes are declined.
+/// A permissions escalation is granted nothing. RequestId is the raw JSON id token.
+Function CodexNativeApprovalReply(Const Method, RequestId: String): String;
+Function IsCodexApprovalRequest(Const Method: String): Boolean;
 
 Type
   TCodexRunState = (crsDisconnected, crsConnecting, crsReady, crsStartingThread,
@@ -80,8 +85,9 @@ Type
     { Image refs are refused while CodexImagesSupported is false. A text note is not the picture. }
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Procedure Interrupt;
-    { May be called from the UI to force connection shutdown on next Pump. }
-    Procedure CancelConnection;
+    { May be called from the UI to force connection shutdown on next Pump.
+      A non-empty Reason replaces the generic cancel text, for a timeout. }
+    Procedure CancelConnection(Const Reason: String = '');
     Function TakeTool(Out Tool: TCodexToolRequest): Boolean;
     Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean;
     Property ToolIsolationChecked: Boolean Read FToolIsolationChecked;
@@ -104,6 +110,20 @@ Uses
 Function Quote(Const S: String): String;
 Begin
   Result := '"' + JsonEscapeText(S) + '"';
+End;
+
+Function IsCodexApprovalRequest(Const Method: String): Boolean;
+Begin
+  Result := (Length(Method) >= 16) And (Copy(Method, Length(Method) - 15, 16) = '/requestApproval');
+End;
+
+Function CodexNativeApprovalReply(Const Method, RequestId: String): String;
+Begin
+  { Permissions escalation is not a decision object. Grant nothing so the turn continues. }
+  If Method = 'item/permissions/requestApproval' Then
+    Result := '{"id":' + RequestId + ',"result":{"permissions":{},"scope":"none"}}'
+  Else
+    Result := '{"id":' + RequestId + ',"result":{"decision":"decline"}}';
 End;
 
 Function CopyJson(Node: TJSONData): TJSONData;
@@ -429,9 +449,9 @@ Begin
     End;
 End;
 
-Procedure TAssistantCodexClient.CancelConnection;
+Procedure TAssistantCodexClient.CancelConnection(Const Reason: String);
 Begin
-  FTransport.Cancel;
+  FTransport.Cancel(Reason);
 End;
 
 Function TAssistantCodexClient.TakeTool(Out Tool: TCodexToolRequest): Boolean;
@@ -541,6 +561,19 @@ Begin
     If (Method <> '') And Assigned(Node) Then
       Begin
         If Not (Node.JSONType In [jtString, jtNumber]) Then Raise Exception.Create('Invalid ID');
+        If IsCodexApprovalRequest(Method) Then
+          Begin
+            { Answer immediately. A JSON-RPC error leaves ChatGPT waiting until the turn times out. }
+            If Not FTransport.Queue(CodexNativeApprovalReply(Method, Node.AsJSON)) Then
+              Fail(FTransport.LastError)
+            Else
+              Begin
+                If FThinking <> '' Then FThinking := FThinking + LineEnding + LineEnding;
+                FThinking := FThinking + 'Declined ' + Method +
+                  '. Native shell and editor changes are not approved. Use write_markdown for plans and documents.';
+              End;
+            Exit;
+          End;
         Value := Root.Find('params');
         If (Method <> 'item/tool/call') Or (FState <> crsRunning) Or
           Not (Value Is TJSONObject) Then

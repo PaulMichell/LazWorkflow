@@ -164,6 +164,15 @@ Begin
   Check('thread/start uses the passed instructions', Pos('Use write_markdown.', Params) > 0);
   Check('thread/start has no lazarus tool essay', Pos('use the lazarus tools', LowerCase(Params)) = 0);
   Check('chat thread/start has an empty tool array', Pos('"dynamicTools":[]', CodexThreadStartParams('/tmp', 'model', '[]', 'chat')) > 0);
+  Check('command approval is a decline', Pos('"decision":"decline"',
+    CodexNativeApprovalReply('item/commandExecution/requestApproval', '"req-1"')) > 0);
+  Check('file approval is a decline', Pos('"decision":"decline"',
+    CodexNativeApprovalReply('item/fileChange/requestApproval', '7')) > 0);
+  Check('permission approval grants nothing', (Pos('"permissions":{}',
+    CodexNativeApprovalReply('item/permissions/requestApproval', '9')) > 0) And
+    (Pos('"decision":"accept"', CodexNativeApprovalReply('item/permissions/requestApproval', '9')) = 0));
+  Check('approval method is recognised', IsCodexApprovalRequest('item/fileChange/requestApproval'));
+  Check('tool call is not an approval', Not IsCodexApprovalRequest('item/tool/call'));
 End;
 
 Procedure TestWorkerBridge;

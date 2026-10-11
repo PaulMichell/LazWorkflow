@@ -14,7 +14,7 @@ Const
     'No explicit Validation: build or Validation: tests criterion; use Done after review.';
 
 Function CheckAssistantAcceptance(Const Section, BuildJSON, TestJSON: String; Out Reason: String): Boolean;
-{ True when Reason is the missing machine-validation result. Run Plan keeps running. }
+{ True when Reason is the missing machine-validation result. Run Plan stops instead of repeating the item. }
 Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
 
 Implementation
