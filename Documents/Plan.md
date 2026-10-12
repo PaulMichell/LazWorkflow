@@ -26,7 +26,7 @@ Status: complete
 Remove `ImageDelivery` from the settings form, the tool schema, and the writer branch. Stop writing `image_delivery`. On load, ignore a stored value so old connections still open. `ImageOutput` remains the switch, default false. A capable turn is still Build only. Plan and Document do not offer the tool.
 
 ### 1.2 Store the image model beside the chat model
-Status: not started
+Status: complete
 
 Add an image-model string on the connection, separate from `Model`. It holds whatever id that endpoint accepts, not only an Imagine id. Turning image output on for a Grok connection with an empty image model sets `grok-imagine-image-2.0`. One named constant owns that Grok default. OpenAI-compatible connections, including OpenRouter, have no default: the user sets the id (`gpt-image-1`, `dall-e-3`, a Flux id, or any other id that base accepts). Claude and Codex have no image endpoint in this host, so they get no default and cannot draw. The chat picker keeps hiding media ids. The image field is not filled from the chat model, and it is not limited to ids the chat picker shows.
 
