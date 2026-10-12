@@ -13,7 +13,7 @@ Uses
   Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls;
 
 Type
-  TFooterItem = (fiLeft, fiSkill, fiModel, fiCentre, fiUsage, fiRight);
+  TFooterItem = (fiLeft, fiSkill, fiModel, fiEffort, fiPermissions, fiCentre, fiUsage, fiRight);
   TFooterItemState = Record
     FullText, HintText, SingleLineText: String;
     NaturalWidth, EllipsisWidth, AllocatedWidth, DisplayWidth: Integer;
@@ -25,6 +25,8 @@ Type
     LeftLabel: TLabel;
     CentreHost: TPanel;
     ModelLabel: TLabel;
+    EffortLabel: TLabel;
+    PermissionsLabel: TLabel;
     CentreLabel: TLabel;
     UsageLabel: TLabel;
     RightLabel: TLabel;
@@ -33,7 +35,10 @@ Type
   Private
     FOnLeftClick: TNotifyEvent;
     FOnSkillClick: TNotifyEvent;
+    FOnEffortClick: TNotifyEvent;
+    FOnPermissionsClick: TNotifyEvent;
     FOnCentreClick: TNotifyEvent;
+    FOnUsageClick: TNotifyEvent;
     FOnRightClick: TNotifyEvent;
     Items: Array[TFooterItem] Of TFooterItemState;
     ActivityPhase: String;
@@ -50,7 +55,10 @@ Type
     Procedure UpdateRightText(Const Value, Phase: String);
     Procedure SetOnLeftClick(Value: TNotifyEvent);
     Procedure SetOnSkillClick(Value: TNotifyEvent);
+    Procedure SetOnEffortClick(Value: TNotifyEvent);
+    Procedure SetOnPermissionsClick(Value: TNotifyEvent);
     Procedure SetOnCentreClick(Value: TNotifyEvent);
+    Procedure SetOnUsageClick(Value: TNotifyEvent);
     Procedure SetOnRightClick(Value: TNotifyEvent);
     Procedure ApplyClickStyle(LabelControl: TLabel; Clickable: Boolean);
     Procedure UpdateFontMetrics;
@@ -63,6 +71,8 @@ Type
     Procedure SetLeftText(Const Value: String);
     Procedure SetSkillText(Const Value: String);
     Procedure SetModelText(Const Value: String);
+    Procedure SetEffortText(Const Value: String);
+    Procedure SetPermissionsText(Const Value: String);
     Procedure SetCentreText(Const Value: String);
     Procedure SetUsageText(Const Value: String);
     Procedure SetRightText(Const Value: String);
@@ -72,6 +82,8 @@ Type
     Procedure SetLeftHint(Const Value: String);
     Procedure SetSkillHint(Const Value: String);
     Procedure SetModelHint(Const Value: String);
+    Procedure SetEffortHint(Const Value: String);
+    Procedure SetPermissionsHint(Const Value: String);
     Procedure SetCentreHint(Const Value: String);
     Procedure SetUsageHint(Const Value: String);
     Procedure SetRightHint(Const Value: String);
@@ -82,7 +94,10 @@ Type
     Property RightText: String Write SetRightText;
     Property OnLeftClick: TNotifyEvent Read FOnLeftClick Write SetOnLeftClick;
     Property OnSkillClick: TNotifyEvent Read FOnSkillClick Write SetOnSkillClick;
+    Property OnEffortClick: TNotifyEvent Read FOnEffortClick Write SetOnEffortClick;
+    Property OnPermissionsClick: TNotifyEvent Read FOnPermissionsClick Write SetOnPermissionsClick;
     Property OnCentreClick: TNotifyEvent Read FOnCentreClick Write SetOnCentreClick;
+    Property OnUsageClick: TNotifyEvent Read FOnUsageClick Write SetOnUsageClick;
     Property OnRightClick: TNotifyEvent Read FOnRightClick Write SetOnRightClick;
   End;
 
@@ -100,21 +115,24 @@ Begin
   { Styling creates a local font. Refresh it from the inherited frame font whenever
     font metrics change, so links keep the host's family, size and scaling. }
   LabelControl.Font.Assign(Font);
-  { Use the theme's foreground for the clForm surface. Underlining distinguishes
-    links without using a selection-background colour as text on dark themes. }
-  LabelControl.Font.Color := clBtnText;
+  LabelControl.Font.Style := LabelControl.Font.Style - [fsUnderline];
+  { Action items use the previous highlight blue. Plain items keep the theme
+    foreground so they stay readable on the footer surface. }
   If Clickable Then
     Begin
       LabelControl.Cursor := crHandPoint;
-      LabelControl.Font.Style := LabelControl.Font.Style + [fsUnderline];
+      LabelControl.Font.Color := clHighlight;
     End
   Else
-    LabelControl.Cursor := crDefault;
+    Begin
+      LabelControl.Cursor := crDefault;
+      LabelControl.Font.Color := clBtnText;
+    End;
 End;
 
 Procedure TStatusFooterFrame.UpdateFontMetrics;
 Var
-  Labels: Array[0..5] Of TLabel;
+  Labels: Array[0..7] Of TLabel;
   Index, TextHeight, FooterHeight: Integer;
   Item: TFooterItem;
 Begin
@@ -126,15 +144,19 @@ Begin
     ApplyClickStyle(LeftLabel, False);
     ApplyClickStyle(SkillLabel, Assigned(FOnSkillClick));
     ApplyClickStyle(ModelLabel, Assigned(FOnLeftClick));
+    ApplyClickStyle(EffortLabel, Assigned(FOnEffortClick));
+    ApplyClickStyle(PermissionsLabel, Assigned(FOnPermissionsClick));
     ApplyClickStyle(CentreLabel, Assigned(FOnCentreClick));
-    ApplyClickStyle(UsageLabel, False);
+    ApplyClickStyle(UsageLabel, Assigned(FOnUsageClick));
     ApplyClickStyle(RightLabel, Assigned(FOnRightClick));
     Labels[0] := LeftLabel;
     Labels[1] := SkillLabel;
     Labels[2] := ModelLabel;
-    Labels[3] := CentreLabel;
-    Labels[4] := UsageLabel;
-    Labels[5] := RightLabel;
+    Labels[3] := EffortLabel;
+    Labels[4] := PermissionsLabel;
+    Labels[5] := CentreLabel;
+    Labels[6] := UsageLabel;
+    Labels[7] := RightLabel;
     FooterHeight := Scale96ToForm(22);
     For Index := Low(Labels) To High(Labels) Do
       If Assigned(Labels[Index]) Then
@@ -210,10 +232,31 @@ Begin
   UpdateFontMetrics;
 End;
 
+Procedure TStatusFooterFrame.SetOnEffortClick(Value: TNotifyEvent);
+Begin
+  FOnEffortClick := Value;
+  ApplyClickStyle(EffortLabel, Assigned(Value));
+  UpdateFontMetrics;
+End;
+
+Procedure TStatusFooterFrame.SetOnPermissionsClick(Value: TNotifyEvent);
+Begin
+  FOnPermissionsClick := Value;
+  ApplyClickStyle(PermissionsLabel, Assigned(Value));
+  UpdateFontMetrics;
+End;
+
 Procedure TStatusFooterFrame.SetOnCentreClick(Value: TNotifyEvent);
 Begin
   FOnCentreClick := Value;
   ApplyClickStyle(CentreLabel, Assigned(Value));
+  UpdateFontMetrics;
+End;
+
+Procedure TStatusFooterFrame.SetOnUsageClick(Value: TNotifyEvent);
+Begin
+  FOnUsageClick := Value;
+  ApplyClickStyle(UsageLabel, Assigned(Value));
   UpdateFontMetrics;
 End;
 
@@ -226,9 +269,9 @@ End;
 
 Procedure TStatusFooterFrame.LabelClick(Sender: TObject);
 Begin
-  If (Sender = ModelLabel) Or (Sender = LeftLabel) Then
+  If Sender = ModelLabel Then
     Begin
-      If Assigned(FOnLeftClick) And (Sender = ModelLabel) Then
+      If Assigned(FOnLeftClick) Then
         FOnLeftClick(Sender);
     End
   Else If Sender = SkillLabel Then
@@ -236,10 +279,25 @@ Begin
       If Assigned(FOnSkillClick) Then
         FOnSkillClick(Sender);
     End
+  Else If Sender = EffortLabel Then
+    Begin
+      If Assigned(FOnEffortClick) Then
+        FOnEffortClick(Sender);
+    End
+  Else If Sender = PermissionsLabel Then
+    Begin
+      If Assigned(FOnPermissionsClick) Then
+        FOnPermissionsClick(Sender);
+    End
   Else If Sender = CentreLabel Then
     Begin
       If Assigned(FOnCentreClick) Then
         FOnCentreClick(Sender);
+    End
+  Else If Sender = UsageLabel Then
+    Begin
+      If Assigned(FOnUsageClick) Then
+        FOnUsageClick(Sender);
     End
   Else If Sender = RightLabel Then
     Begin
@@ -254,6 +312,8 @@ Begin
     fiLeft: Result := LeftLabel;
     fiSkill: Result := SkillLabel;
     fiModel: Result := ModelLabel;
+    fiEffort: Result := EffortLabel;
+    fiPermissions: Result := PermissionsLabel;
     fiCentre: Result := CentreLabel;
     fiUsage: Result := UsageLabel;
   Else
@@ -590,10 +650,14 @@ Begin
     { Preserve context/allowance first. Fitting produces the actual painted
       text before centring, so ellipsis slack never skews the midpoint. }
     ShortenMiddle(fiModel);
+    ShortenMiddle(fiEffort);
+    ShortenMiddle(fiPermissions);
     ShortenMiddle(fiUsage);
     ShortenMiddle(fiCentre);
     { Only omit an item when even the ellipses and their gaps cannot fit. }
     OmitMiddle(fiModel);
+    OmitMiddle(fiEffort);
+    OmitMiddle(fiPermissions);
     OmitMiddle(fiUsage);
     OmitMiddle(fiCentre);
     For Item := fiModel To fiUsage Do
@@ -637,6 +701,16 @@ Begin
   SetItemText(fiModel, Value);
 End;
 
+Procedure TStatusFooterFrame.SetEffortText(Const Value: String);
+Begin
+  SetItemText(fiEffort, Value);
+End;
+
+Procedure TStatusFooterFrame.SetPermissionsText(Const Value: String);
+Begin
+  SetItemText(fiPermissions, Value);
+End;
+
 Procedure TStatusFooterFrame.SetCentreText(Const Value: String);
 Begin
   SetItemText(fiCentre, Value);
@@ -677,6 +751,16 @@ End;
 Procedure TStatusFooterFrame.SetModelHint(Const Value: String);
 Begin
   SetItemHint(fiModel, Value);
+End;
+
+Procedure TStatusFooterFrame.SetEffortHint(Const Value: String);
+Begin
+  SetItemHint(fiEffort, Value);
+End;
+
+Procedure TStatusFooterFrame.SetPermissionsHint(Const Value: String);
+Begin
+  SetItemHint(fiPermissions, Value);
 End;
 
 Procedure TStatusFooterFrame.SetCentreHint(Const Value: String);

@@ -105,6 +105,38 @@ object StatusFooterFrame: TStatusFooterFrame
         OnClick = LabelClick
         Align = alNone
       end
+      object EffortLabel: TLabel
+        Left = 248
+        Height = 14
+        Top = 0
+        Width = 1
+        AutoSize = False
+        Layout = tlCenter
+        EllipsisPosition = epNone
+        ShowAccelChar = False
+        ShowHint = True
+        Transparent = True
+        Visible = False
+        WordWrap = False
+        OnClick = LabelClick
+        Align = alNone
+      end
+      object PermissionsLabel: TLabel
+        Left = 260
+        Height = 14
+        Top = 0
+        Width = 1
+        AutoSize = False
+        Layout = tlCenter
+        EllipsisPosition = epNone
+        ShowAccelChar = False
+        ShowHint = True
+        Transparent = True
+        Visible = False
+        WordWrap = False
+        OnClick = LabelClick
+        Align = alNone
+      end
       object CentreLabel: TLabel
         Left = 252
         Height = 14
@@ -133,6 +165,7 @@ object StatusFooterFrame: TStatusFooterFrame
         ShowHint = True
         Transparent = True
         WordWrap = False
+        OnClick = LabelClick
         Align = alNone
       end
     end

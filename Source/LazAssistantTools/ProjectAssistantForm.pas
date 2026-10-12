@@ -163,8 +163,11 @@ Type
     Procedure InputMemoPaste(Sender: TObject);
     Procedure InputMemoKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure StatusFooterLeftClick(Sender: TObject);
+    Procedure StatusFooterEffortClick(Sender: TObject);
+    Procedure StatusFooterPermissionsClick(Sender: TObject);
     Procedure StatusFooterSkillClick(Sender: TObject);
     Procedure StatusFooterCentreClick(Sender: TObject);
+    Procedure StatusFooterUsageClick(Sender: TObject);
     Procedure StatusFooterRightClick(Sender: TObject);
     Procedure FooterMenuClick(Sender: TObject);
   Private
@@ -193,7 +196,8 @@ Type
     FActiveBackend: String;
     FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
-    FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval: String;
+    FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval, FCodexModelsJson: String;
+    FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
     FPollingCodex: Boolean;
     FCodexWorkspace: TAssistantIDEWorkspace;
@@ -416,7 +420,13 @@ Type
     Function ModeChipCaption(Mode: TAssistantMode): String;
     Function RunPlanIsAvailable: Boolean;
     Procedure UpdateWorkActions;
-    Procedure PopupUnderControl(Host: TControl; Popup: TPopupMenu);
+    Procedure PopupAboveControl(Host: TControl; Popup: TPopupMenu);
+    Procedure ShowSamplingMenu(Kind: Integer);
+    Procedure FillModelFooterMenu;
+    Procedure FillEffortFooterMenu;
+    Procedure FillPermissionsFooterMenu;
+    Function ApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
+      UpdateModel, UpdateEffort, UpdateApproval: Boolean): Boolean;
     Procedure ApplyConfigAndRefresh;
     Procedure ToggleSkillForMode(Const SkillName: String);
     Function ModeSkillCaption: String;
@@ -466,7 +476,7 @@ Uses AssistantWorkTarget, PackageIntf,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
-  AssistantImageView
+  AssistantImageView, AssistantXaiProvider
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Const
@@ -475,6 +485,9 @@ Const
   LiveConversationMarker = -2;
   FooterTagSkill = 4;
   FooterTagSettings = 5;
+  FooterTagModel = 6;
+  FooterTagEffort = 7;
+  FooterTagApproval = 8;
 
 Constructor TProjectAssistantForm.Create(TheOwner: TComponent);
 Begin
@@ -646,8 +659,11 @@ Begin
   If Assigned(StatusFooter) Then
     Begin
       StatusFooter.OnLeftClick := @StatusFooterLeftClick;
+      StatusFooter.OnEffortClick := @StatusFooterEffortClick;
+      StatusFooter.OnPermissionsClick := @StatusFooterPermissionsClick;
       StatusFooter.OnSkillClick := @StatusFooterSkillClick;
       StatusFooter.OnCentreClick := @StatusFooterCentreClick;
+      StatusFooter.OnUsageClick := @StatusFooterUsageClick;
       StatusFooter.OnRightClick := @StatusFooterRightClick;
     End;
   ApplyDisplayPreferences;
@@ -2950,6 +2966,9 @@ Begin
     FAccountWire := '';
     FCodexRuntime := '';
     FCodexProfile := '';
+    FCodexModelsJson := '';
+    FActiveEffort := '';
+    FActiveApproval := '';
     If Not Assigned(LazarusIDE) Then Exit;
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
@@ -2968,6 +2987,15 @@ Begin
           FAccountKeyValue := Item.KeyValue;
           FAccountPreset := Item.Preset;
           FAccountWire := Item.WireApi;
+          FActiveEffort := Item.ReasoningEffort;
+          FActiveApproval := Item.ApprovalMode;
+          If (Item.Backend = 'grok') And Assigned(AssistantChatConfig) Then
+            Begin
+              If FActiveEffort = '' Then
+                FActiveEffort := AssistantChatConfig.ThinkingLevel;
+              If FActiveApproval = '' Then
+                FActiveApproval := AssistantChatConfig.ApprovalMode;
+            End;
         End;
       If FUseCodex Then
         Begin
@@ -2975,6 +3003,7 @@ Begin
           FCodexProfile := Connections.ProfileDir(Item);
           { Model, effort and approval stay on the connection and apply to this turn, not the profile. }
           FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
+          FCodexModelsJson := Item.CachedModelsJson;
         End;
     Finally Connections.Free; End;
   Except
@@ -2994,6 +3023,9 @@ Begin
         FAccountWire := '';
         FCodexRuntime := '';
         FCodexProfile := '';
+        FCodexModelsJson := '';
+        FActiveEffort := '';
+        FActiveApproval := '';
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
       End;
   End;
@@ -3318,29 +3350,20 @@ End;
 
 Procedure TProjectAssistantForm.RefreshCentreStatus;
 Var
-  CentreText, HintText: String;
+  UsageHint: String;
 Begin
   If Not Assigned(StatusFooter) Then
     Exit;
-  CentreText := FContextStatusText;
+  StatusFooter.SetCentreText(FContextStatusText);
+  StatusFooter.SetCentreHint(FContextStatusHint);
   If FPlanStatusCaption <> '' Then
-    Begin
-      If CentreText <> '' Then
-        CentreText := CentreText + ' · ';
-      CentreText := CentreText + FPlanStatusCaption;
-    End;
-  { The context line is the status text already on screen. The separate usage chip stays hidden so the figure is not shown twice. }
-  StatusFooter.SetCentreText(CentreText);
-  StatusFooter.SetUsageText('');
-  StatusFooter.SetUsageHint('');
-  HintText := FContextStatusHint;
+    StatusFooter.SetUsageText(FPlanStatusCaption)
+  Else
+    StatusFooter.SetUsageText('Credits');
+  UsageHint := 'Click for plan usage';
   If FPlanStatusHint <> '' Then
-    Begin
-      If HintText <> '' Then
-        HintText := HintText + LineEnding;
-      HintText := HintText + FPlanStatusHint;
-    End;
-  StatusFooter.SetCentreHint(HintText);
+    UsageHint := UsageHint + LineEnding + FPlanStatusHint;
+  StatusFooter.SetUsageHint(UsageHint);
 End;
 
 Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
@@ -3481,10 +3504,29 @@ Begin
     End;
 End;
 
+Function EffortBarCaption(Const Value: String): String;
+Var
+  Level: String;
+Begin
+  Level := LowerCase(Trim(Value));
+  If Level = '' Then
+    Result := 'Default'
+  Else If Level = 'low' Then
+    Result := 'Low'
+  Else If Level = 'medium' Then
+    Result := 'Medium'
+  Else If Level = 'high' Then
+    Result := 'High'
+  Else If (Level = 'xhigh') Or (Level = 'extrahigh') Then
+    Result := 'XHigh'
+  Else
+    Result := Value;
+End;
+
 Procedure TProjectAssistantForm.UpdateStatusFooter;
 Var
   Pct: Integer;
-  StatusText, LeftText, CentreText, ThinkCap, ApprCap, BlockReason: String;
+  StatusText, CentreText, ModelText, EffortText, PermissionText, ModelHint, EffortHint, BlockReason: String;
 Begin
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not FSending) Then
     Begin
@@ -3513,25 +3555,29 @@ Begin
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
-  ThinkCap := 'High';
-  ApprCap := 'Always';
-  If Assigned(AssistantChatConfig) Then
+  ModelText := Trim(FActiveModel);
+  If ModelText = '' Then
+    ModelText := 'Model';
+  If (FActiveBackend = 'grok') Or (FActiveBackend = 'codex') Then
     Begin
-      ThinkCap := ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel);
-      ApprCap := ApprovalModeCaption(AssistantChatConfig.GetApprovalMode);
+      EffortText := EffortBarCaption(FActiveEffort);
+      EffortHint := 'Click to choose an effort level';
+    End
+  Else
+    Begin
+      EffortText := '—';
+      EffortHint := 'This connection does not set an effort level';
     End;
-  LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, ApprCap]);
+  PermissionText := ApprovalModeCaption(StrToApprovalMode(FActiveApproval));
   CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
   If FUseCodex Then
-    Begin
-      ThinkCap := FCodexEffort; If ThinkCap = '' Then ThinkCap := 'model default';
-      LeftText := Format('%s · Think %s · %s', [FModelName, ThinkCap, FCodexApproval]);
-      CentreText := Format('Context ~%d tokens', [FContextUsed]);
-    End;
+    CentreText := Format('Context ~%d tokens', [FContextUsed]);
   ApplyModelStatus;
-  StatusFooter.SetModelText(LeftText);
+  StatusFooter.SetModelText(ModelText);
+  StatusFooter.SetEffortText(EffortText);
+  StatusFooter.SetPermissionsText(PermissionText);
   FContextStatusText := CentreText;
   ApplyAccountUsageLabel;
   If FSending Then
@@ -3539,18 +3585,22 @@ Begin
   Else
     StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
-  StatusFooter.SetModelHint('Click to change model, thinking level, or approval');
+  ModelHint := 'Click to choose a model';
   If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
     (BlockReason <> '') Then
-    StatusFooter.SetModelHint('Click to change model, thinking level, or approval. ' + BlockReason);
+    ModelHint := ModelHint + '. ' + BlockReason;
+  If FUseCodex Then
+    ModelHint := ModelHint + '. ' + AssistantCodexImageAttachReason;
+  StatusFooter.SetModelHint(ModelHint);
+  StatusFooter.SetEffortHint(EffortHint);
+  StatusFooter.SetPermissionsHint('Click to choose permissions');
   FContextStatusHint := Format('About %d of %d tokens. Click for a breakdown.', [FContextUsed, FContextLimit]);
   StatusFooter.SetRightHint('Click for session info');
   If FUseCodex Then
     Begin
-      StatusFooter.SetModelHint('Click for ChatGPT connection and model. ' + AssistantCodexImageAttachReason);
       If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
       RefreshAttachAction;
-      FContextStatusHint := 'Estimated context; provider allowance is checked on each request';
+      FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
     End
   Else
     Begin
@@ -5751,14 +5801,26 @@ Begin
   InputMemo.SetFocus;
 End;
 
-Procedure TProjectAssistantForm.PopupUnderControl(Host: TControl; Popup: TPopupMenu);
+Procedure TProjectAssistantForm.PopupAboveControl(Host: TControl; Popup: TPopupMenu);
 Var
-  P: TPoint;
+  Origin: TPoint;
+  ItemHeight, MenuHeight, Index, VisibleCount: Integer;
+  ScreenMonitor: TMonitor;
 Begin
   If Not Assigned(Host) Or Not Assigned(Popup) Then
     Exit;
-  P := Host.ClientToScreen(Point(0, Host.Height));
-  Popup.PopUp(P.X, P.Y);
+  VisibleCount := 0;
+  For Index := 0 To Popup.Items.Count - 1 Do
+    If Popup.Items[Index].Visible Then
+      Inc(VisibleCount);
+  ItemHeight := Scale96ToForm(28);
+  MenuHeight := VisibleCount * ItemHeight + Scale96ToForm(8);
+  Origin := Host.ClientToScreen(Point(0, 0));
+  Dec(Origin.Y, MenuHeight);
+  ScreenMonitor := Screen.MonitorFromPoint(Host.ClientToScreen(Point(0, Host.Height Div 2)));
+  If Assigned(ScreenMonitor) And (Origin.Y < ScreenMonitor.WorkareaRect.Top) Then
+    Origin.Y := ScreenMonitor.WorkareaRect.Top;
+  Popup.PopUp(Origin.X, Origin.Y);
 End;
 
 Procedure TProjectAssistantForm.ApplyConfigAndRefresh;
@@ -5818,13 +5880,33 @@ Begin
     SetCurrentSystemNote('**' + SkillName + '** is not sent in ' + ModeName + '.');
 End;
 
+Procedure EnsureFooterMenu(Var Menu: TPopupMenu); Forward;
+
+Function MenuText(Const Value: String): String;
+Begin
+  Result := StringReplace(Value, '&', '&&', [rfReplaceAll]);
+End;
+
+Function ListHasText(List: TStrings; Const Value: String): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  If Not Assigned(List) Then
+    Exit;
+  For Index := 0 To List.Count - 1 Do
+    If SameText(List[Index], Value) Then
+      Exit(True);
+End;
+
 Procedure AddFooterItem(Menu: TPopupMenu; Const Caption: String; TagValue: Integer;
-  Const ValueText: String; Checked, Radio: Boolean; Handler: TNotifyEvent);
+  Const ValueText: String; Checked, Radio: Boolean; Handler: TNotifyEvent; IsEnabled: Boolean = True);
 Var
   Item: TMenuItem;
 Begin
   Item := TMenuItem.Create(Menu);
   Item.Caption := Caption;
+  Item.Enabled := IsEnabled;
   If Caption <> '-' Then
     Begin
       Item.Tag := TagValue;
@@ -5832,9 +5914,292 @@ Begin
       Item.Checked := Checked;
       Item.RadioItem := Radio;
       Item.GroupIndex := TagValue;
-      Item.OnClick := Handler;
+      If IsEnabled Then
+        Item.OnClick := Handler;
     End;
   Menu.Items.Add(Item);
+End;
+
+Procedure TProjectAssistantForm.FillModelFooterMenu;
+Var
+  Models: TStringList;
+  I: Integer;
+  ModelId, DisplayText: String;
+  Procedure AddModel(Const Value: String);
+  Begin
+    If (Trim(Value) <> '') And Not ListHasText(Models, Value) Then
+      Models.Add(Trim(Value));
+  End;
+Begin
+  If FActiveConnectionId = '' Then
+    Begin
+      AddFooterItem(FFooterMenu, 'No connection is selected', 0, '', False, False, Nil, False);
+      Exit;
+    End;
+  Models := TStringList.Create;
+  Try
+    If FActiveBackend = 'grok' Then
+      Begin
+        CollectXaiKnownModelIds(Models);
+        AddModel(AssistantConfigDefaultModel);
+        AddModel('grok-4');
+        AddModel('grok-3');
+      End
+    Else If FActiveBackend = 'codex' Then
+      CollectCodexModelIds(FCodexModelsJson, Models);
+    AddModel(FActiveModel);
+    If Models.Count = 0 Then
+      Begin
+        AddFooterItem(FFooterMenu, 'No model is set', 0, '', False, False, Nil, False);
+        Exit;
+      End;
+    For I := 0 To Models.Count - 1 Do
+      Begin
+        ModelId := Models[I];
+        If FActiveBackend = 'grok' Then
+          DisplayText := XaiModelDisplayText(ModelId)
+        Else
+          DisplayText := ModelId;
+        AddFooterItem(FFooterMenu, MenuText(DisplayText), FooterTagModel, ModelId, SameText(ModelId, FActiveModel),
+          True, @FooterMenuClick);
+      End;
+  Finally
+    Models.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.FillEffortFooterMenu;
+Var
+  Efforts: TStringList;
+  I: Integer;
+  Level: String;
+  Procedure AddLevel(Const Value, LevelCaption: String);
+  Begin
+    AddFooterItem(FFooterMenu, LevelCaption, FooterTagEffort, Value, SameText(FActiveEffort, Value), True, @FooterMenuClick);
+  End;
+Begin
+  If FActiveConnectionId = '' Then
+    Begin
+      AddFooterItem(FFooterMenu, 'No connection is selected', 0, '', False, False, Nil, False);
+      Exit;
+    End;
+  If FActiveBackend = 'grok' Then
+    Begin
+      If XaiModelAllowsEffort(FActiveModel, 'low') Then
+        AddLevel('low', 'Low');
+      If XaiModelAllowsEffort(FActiveModel, 'medium') Then
+        AddLevel('medium', 'Medium');
+      If XaiModelAllowsEffort(FActiveModel, 'high') Then
+        AddLevel('high', 'High');
+      If XaiModelAllowsEffort(FActiveModel, 'xhigh') Then
+        AddLevel('xhigh', 'XHigh');
+      If FFooterMenu.Items.Count = 0 Then
+        Begin
+          AddLevel('low', 'Low');
+          AddLevel('medium', 'Medium');
+          AddLevel('high', 'High');
+          AddLevel('xhigh', 'XHigh');
+        End;
+      Exit;
+    End;
+  If FActiveBackend = 'codex' Then
+    Begin
+      AddLevel('', 'Model default');
+      Efforts := TStringList.Create;
+      Try
+        If CollectCodexEffortIds(FCodexModelsJson, FActiveModel, Efforts) Then
+          Begin
+            If (FActiveEffort <> '') And Not ListHasText(Efforts, FActiveEffort) Then
+              Efforts.Add(FActiveEffort);
+            For I := 0 To Efforts.Count - 1 Do
+              Begin
+                Level := Efforts[I];
+                AddLevel(Level, EffortBarCaption(Level));
+              End;
+          End
+        Else If FActiveEffort <> '' Then
+          AddLevel(FActiveEffort, EffortBarCaption(FActiveEffort));
+      Finally
+        Efforts.Free;
+      End;
+      Exit;
+    End;
+  AddFooterItem(FFooterMenu, 'This connection does not set an effort level', 0, '', False, False, Nil, False);
+End;
+
+Procedure TProjectAssistantForm.FillPermissionsFooterMenu;
+  Procedure AddMode(Const Value, ModeCaption: String);
+  Var
+    Current: Boolean;
+  Begin
+    Current := SameText(FActiveApproval, Value) Or ((Trim(FActiveApproval) = '') And (Value = 'ask'));
+    AddFooterItem(FFooterMenu, ModeCaption, FooterTagApproval, Value, Current, True, @FooterMenuClick);
+  End;
+Begin
+  If FActiveConnectionId = '' Then
+    Begin
+      AddFooterItem(FFooterMenu, 'No connection is selected', 0, '', False, False, Nil, False);
+      Exit;
+    End;
+  If FActiveBackend = 'codex' Then
+    Begin
+      AddMode('ask', 'Ask before file changes and builds');
+      AddMode('auto', 'Auto: allow project tools');
+      AddMode('always', 'Always: allow registered tools');
+    End
+  Else
+    Begin
+      AddMode('ask', 'Ask — confirm each write/compile');
+      AddMode('auto', 'Auto — allow project tools');
+      AddMode('always', 'Always — never prompt (like Build always-approve)');
+    End;
+End;
+
+Procedure TProjectAssistantForm.ShowSamplingMenu(Kind: Integer);
+Var
+  Host: TControl;
+Begin
+  If Not Assigned(StatusFooter) Then
+    Exit;
+  EnsureFooterMenu(FFooterMenu);
+  Case Kind Of
+    FooterTagEffort:
+      Begin
+        FillEffortFooterMenu;
+        Host := StatusFooter.EffortLabel;
+      End;
+    FooterTagApproval:
+      Begin
+        FillPermissionsFooterMenu;
+        Host := StatusFooter.PermissionsLabel;
+      End;
+  Else
+    FillModelFooterMenu;
+    Host := StatusFooter.ModelLabel;
+  End;
+  If Not Assigned(Host) Then
+    Host := StatusFooter;
+  PopupAboveControl(Host, FFooterMenu);
+End;
+
+Function TProjectAssistantForm.ApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
+  UpdateModel, UpdateEffort, UpdateApproval: Boolean): Boolean;
+Var
+  Connections: TAssistantConnections;
+  Item: TAssistantConnection;
+  Efforts: TStringList;
+  ModelId: String;
+  Failed: Boolean;
+Begin
+  Result := False;
+  Failed := False;
+  If Not Assigned(LazarusIDE) Then
+    Begin
+      MessageDlg('The IDE configuration path is not available.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
+  Try
+    Try
+      Connections.Load;
+      Item := Connections.Active;
+      If (Not Assigned(Item)) Or (Item.Id <> FActiveConnectionId) Then
+        Begin
+          MessageDlg('No connection is selected. Choose one with the Settings button.', mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      If UpdateModel Then
+        Begin
+          ModelId := Trim(NewModel);
+          If (ModelId = '') Or SameText(Item.Model, ModelId) Then
+            UpdateModel := False
+          Else
+            Item.Model := ModelId;
+        End;
+      If UpdateEffort And (Item.ReasoningEffort = NewEffort) Then
+        UpdateEffort := False
+      Else If UpdateEffort Then
+        Item.ReasoningEffort := NewEffort;
+      If UpdateApproval Then
+        Begin
+          If Not ((NewApproval = 'ask') Or (NewApproval = 'auto') Or (NewApproval = 'always')) Or
+            (Item.ApprovalMode = NewApproval) Then
+            UpdateApproval := False
+          Else
+            Item.ApprovalMode := NewApproval;
+        End;
+      If UpdateModel And (Item.Backend = 'grok') And Not XaiModelAllowsEffort(Item.Model, Item.ReasoningEffort) Then
+        Begin
+          If XaiModelAllowsEffort(Item.Model, 'high') Then
+            Item.ReasoningEffort := 'high'
+          Else If XaiModelAllowsEffort(Item.Model, 'medium') Then
+            Item.ReasoningEffort := 'medium'
+          Else If XaiModelAllowsEffort(Item.Model, 'low') Then
+            Item.ReasoningEffort := 'low'
+          Else
+            Item.ReasoningEffort := 'xhigh';
+          UpdateEffort := True;
+        End;
+      If UpdateModel And (Item.Backend = 'codex') And (Item.ReasoningEffort <> '') Then
+        Begin
+          Efforts := TStringList.Create;
+          Try
+            If CollectCodexEffortIds(Item.CachedModelsJson, Item.Model, Efforts) And
+              Not ListHasText(Efforts, Item.ReasoningEffort) Then
+              Begin
+                Item.ReasoningEffort := '';
+                UpdateEffort := True;
+              End;
+          Finally
+            Efforts.Free;
+          End;
+        End;
+      If Not (UpdateModel Or UpdateEffort Or UpdateApproval) Then
+        Begin
+          Result := True;
+          Exit;
+        End;
+      If FSending Or FPlanAgentRunning Or FReviewInProgress Then
+        Begin
+          MessageDlg('Wait until the current work finishes before changing the model, effort, or permissions.',
+            mtInformation, [mbOK], 0);
+          Exit;
+        End;
+      If Item.Backend = 'grok' Then
+        Begin
+          If Not Assigned(AssistantChatConfig) Then
+            Begin
+              Failed := True;
+              Exit;
+            End;
+          If UpdateModel Then
+            AssistantChatConfig.Model := Item.Model;
+          If UpdateEffort Then
+            AssistantChatConfig.ThinkingLevel := Item.ReasoningEffort;
+          If UpdateApproval Then
+            AssistantChatConfig.ApprovalMode := Item.ApprovalMode;
+        End;
+      If Connections.Save Then
+        Result := True
+      Else
+        Failed := True;
+    Except
+      On E: Exception Do
+        Begin
+          Failed := True;
+          WorkflowLogger.Error('ProjectAssistant', 'Could not save the footer choice: ' + E.Message);
+        End;
+    End;
+  Finally
+    Connections.Free;
+  End;
+  If Result Then
+    Begin
+      WorkflowLogger.Info('ProjectAssistant', 'Footer choice saved for ' + FActiveBackend);
+      NotifyOpenProjectAssistantFormsConnectionChanged;
+    End
+  Else If Failed Then
+    MessageDlg('Could not save that choice.', mtError, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.FillSkillFooterMenu;
@@ -5863,13 +6228,18 @@ Begin
   If Not (Sender Is TMenuItem) Then
     Exit;
   Item := TMenuItem(Sender);
-  If Not Assigned(AssistantChatConfig) Then
-    Exit;
   Case Item.Tag Of
     FooterTagSkill:
-      ToggleSkillForMode(Item.Hint);
+      If Assigned(AssistantChatConfig) Then
+        ToggleSkillForMode(Item.Hint);
     FooterTagSettings:
       SettingsActionExecute(Sender);
+    FooterTagModel:
+      ApplySamplingChange(Item.Hint, '', '', True, False, False);
+    FooterTagEffort:
+      ApplySamplingChange('', Item.Hint, '', False, True, False);
+    FooterTagApproval:
+      ApplySamplingChange('', '', Item.Hint, False, False, True);
   Else
     { }
   End;
@@ -5924,7 +6294,17 @@ End;
 
 Procedure TProjectAssistantForm.StatusFooterLeftClick(Sender: TObject);
 Begin
-  ModelPickerActionExecute(Sender);
+  ShowSamplingMenu(FooterTagModel);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterEffortClick(Sender: TObject);
+Begin
+  ShowSamplingMenu(FooterTagEffort);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterPermissionsClick(Sender: TObject);
+Begin
+  ShowSamplingMenu(FooterTagApproval);
 End;
 
 Procedure TProjectAssistantForm.StatusFooterSkillClick(Sender: TObject);
@@ -5935,6 +6315,22 @@ End;
 Procedure TProjectAssistantForm.StatusFooterCentreClick(Sender: TObject);
 Begin
   ContextBreakdownActionExecute(Sender);
+End;
+
+Procedure TProjectAssistantForm.StatusFooterUsageClick(Sender: TObject);
+Var
+  Body: String;
+Begin
+  Body := FPlanStatusCaption;
+  If FPlanStatusHint <> '' Then
+    Begin
+      If Body <> '' Then
+        Body := Body + LineEnding + LineEnding;
+      Body := Body + FPlanStatusHint;
+    End;
+  If Trim(Body) = '' Then
+    Body := 'Plan usage has not been reported for this connection yet.';
+  MessageDlg(Body, mtInformation, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.StatusFooterRightClick(Sender: TObject);
@@ -6010,11 +6406,9 @@ Begin
   Body :=
     'Project Assistant session' + LineEnding + LineEnding +
     'Mode: ' + ModeChipCaption(ActiveMode) + LineEnding +
-    'Model: ' + FModelName + LineEnding;
-  If Assigned(AssistantChatConfig) Then
-    Body := Body +
-      'Thinking: ' + ThinkingLevelCaption(AssistantChatConfig.GetThinkingLevel) + LineEnding +
-      'Approval: ' + ApprovalModeCaption(AssistantChatConfig.GetApprovalMode) + LineEnding;
+    'Model: ' + FActiveModel + LineEnding +
+    'Effort: ' + EffortBarCaption(FActiveEffort) + LineEnding +
+    'Permissions: ' + ApprovalModeCaption(StrToApprovalMode(FActiveApproval)) + LineEnding;
   Body := Body +
     SkillName + LineEnding +
     Format('Context: ~%d / %d tokens', [FContextUsed, FContextLimit]) + LineEnding +
@@ -6035,7 +6429,7 @@ End;
 
 Procedure TProjectAssistantForm.ModelPickerActionExecute(Sender: TObject);
 Begin
-  SettingsActionExecute(Sender);
+  ShowSamplingMenu(FooterTagModel);
 End;
 
 Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
@@ -6054,7 +6448,7 @@ Begin
   Host := StatusFooter.SkillLabel;
   If Not Assigned(Host) Then
     Host := StatusFooter;
-  PopupUnderControl(Host, FFooterMenu);
+  PopupAboveControl(Host, FFooterMenu);
 End;
 
 Procedure TProjectAssistantForm.OpenPlanActionExecute(Sender: TObject);

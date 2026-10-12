@@ -56,6 +56,10 @@ Type
 
   { Move a cancelled worker's join/destruction off the IDE thread. No IDE callbacks. }
 Procedure ReapCodexWorker(Worker: TThread);
+/// Fills ModelIds from a saved Codex model list. False leaves ModelIds empty.
+Function CollectCodexModelIds(Const ModelsJson: String; ModelIds: TStrings): Boolean;
+/// Fills EffortIds for one model. False when that model is not in a valid list.
+Function CollectCodexEffortIds(Const ModelsJson, ModelId: String; EffortIds: TStrings): Boolean;
 
 Implementation
 
@@ -74,6 +78,111 @@ Procedure TWorkerReaper.Execute;
 Begin
   Worker.WaitFor;
   Worker.Free;
+End;
+
+Function CollectCodexModelIds(Const ModelsJson: String; ModelIds: TStrings): Boolean;
+Var
+  Data, Items, Item, ModelId: TJSONData;
+  I: Integer;
+  Id: String;
+Begin
+  Result := False;
+  If Assigned(ModelIds) Then
+    ModelIds.Clear;
+  If (Not Assigned(ModelIds)) Or (Trim(ModelsJson) = '') Then
+    Exit;
+  Data := Nil;
+  Try
+    Data := GetJSON(ModelsJson);
+  Except
+    Data := Nil;
+  End;
+  If Not Assigned(Data) Then
+    Exit;
+  Try
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Items := Data.FindPath('data');
+    If Not (Items Is TJSONArray) Then
+      Exit;
+    For I := 0 To Items.Count - 1 Do
+      Begin
+        Item := Items.Items[I];
+        If Not (Item Is TJSONObject) Then
+          Continue;
+        ModelId := TJSONObject(Item).Find('model');
+        If Not Assigned(ModelId) Then
+          ModelId := TJSONObject(Item).Find('id');
+        If (Not Assigned(ModelId)) Or (ModelId.JSONType <> jtString) Then
+          Continue;
+        Id := Trim(ModelId.AsString);
+        If (Id <> '') And (ModelIds.IndexOf(Id) < 0) Then
+          ModelIds.Add(Id);
+      End;
+    Result := ModelIds.Count > 0;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function CollectCodexEffortIds(Const ModelsJson, ModelId: String; EffortIds: TStrings): Boolean;
+Var
+  Data, Items, Item, FoundId, Levels, Level, Effort: TJSONData;
+  I, J: Integer;
+  Wanted, Value: String;
+Begin
+  Result := False;
+  If Assigned(EffortIds) Then
+    EffortIds.Clear;
+  Wanted := Trim(ModelId);
+  If (Not Assigned(EffortIds)) Or (Wanted = '') Or (Trim(ModelsJson) = '') Then
+    Exit;
+  Data := Nil;
+  Try
+    Data := GetJSON(ModelsJson);
+  Except
+    Data := Nil;
+  End;
+  If Not Assigned(Data) Then
+    Exit;
+  Try
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Items := Data.FindPath('data');
+    If Not (Items Is TJSONArray) Then
+      Exit;
+    For I := 0 To Items.Count - 1 Do
+      Begin
+        Item := Items.Items[I];
+        If Not (Item Is TJSONObject) Then
+          Continue;
+        FoundId := TJSONObject(Item).Find('model');
+        If Not Assigned(FoundId) Then
+          FoundId := TJSONObject(Item).Find('id');
+        If (Not Assigned(FoundId)) Or (FoundId.JSONType <> jtString) Or
+          (Not SameText(Trim(FoundId.AsString), Wanted)) Then
+          Continue;
+        Levels := TJSONObject(Item).Find('supportedReasoningEfforts');
+        If Not (Levels Is TJSONArray) Then
+          Exit;
+        For J := 0 To Levels.Count - 1 Do
+          Begin
+            Level := Levels.Items[J];
+            If Not (Level Is TJSONObject) Then
+              Continue;
+            Effort := TJSONObject(Level).Find('reasoningEffort');
+            If (Not Assigned(Effort)) Or (Effort.JSONType <> jtString) Then
+              Continue;
+            Value := Trim(Effort.AsString);
+            If (Value <> '') And (EffortIds.IndexOf(Value) < 0) Then
+              EffortIds.Add(Value);
+          End;
+        Result := True;
+        Exit;
+      End;
+  Finally
+    Data.Free;
+  End;
 End;
 
 Procedure ReapCodexWorker(Worker: TThread);

@@ -11,7 +11,7 @@ Unit AssistantXaiProvider;
 Interface
 
 Uses
-  AssistantModelProvider, AssistantConfig;
+  Classes, AssistantModelProvider, AssistantConfig;
 
 Type
   TXaiImageInput = (xiiUnknown, xiiAccepted, xiiAbsent);
@@ -27,11 +27,13 @@ Function XaiModelReasoningEfforts(Const ModelId: String): String;
 Function XaiModelAllowsEffort(Const ModelId, Effort: String): Boolean;
 Function XaiModelDisplayText(Const ModelId: String): String;
 Function XaiModelIdFromDisplay(Const DisplayText: String): String;
+/// Appends ids remembered from the last successful model list. Does not clear ModelIds.
+Procedure CollectXaiKnownModelIds(ModelIds: TStrings);
 
 Implementation
 
 Uses
-  Classes, SysUtils, fpjson, jsonparser, GrokOAuth, AssistantHttps,
+  SysUtils, fpjson, jsonparser, GrokOAuth, AssistantHttps,
   AssistantProtocol, WorkflowLog;
 
 Type
@@ -197,6 +199,21 @@ Begin
     Exit(True);
   Needle := LowerCase(Trim(Effort));
   Result := Pos(',' + Needle + ',', ',' + Listed + ',') > 0;
+End;
+
+Procedure CollectXaiKnownModelIds(ModelIds: TStrings);
+Var
+  Index: Integer;
+  ModelId: String;
+Begin
+  If (Not Assigned(ModelIds)) Or (Not Assigned(ModelFacts)) Then
+    Exit;
+  For Index := 0 To ModelFacts.Count - 1 Do
+    Begin
+      ModelId := ModelFacts.Names[Index];
+      If (ModelId <> '') And (ModelIds.IndexOf(ModelId) < 0) Then
+        ModelIds.Add(ModelId);
+    End;
 End;
 
 Function XaiModelIdFromDisplay(Const DisplayText: String): String;
