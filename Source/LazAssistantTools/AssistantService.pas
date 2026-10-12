@@ -1476,13 +1476,17 @@ Begin
 End;
 
 Function TAssistantService.ImagesAttachAllowed(Out Reason: String): Boolean;
+Var
+  Input: TAssistantImageInput;
 Begin
-  Reason := '';
-  Result := True;
   { Missing list allows attach. Do not infer vision support from the model name. }
-  If XaiModelImageInput(FModel) <> xiiAbsent Then Exit;
-  Result := False;
-  Reason := 'This model lists no image input. Attach is disabled.';
+  Case XaiModelImageInput(FModel) Of
+    xiiAccepted: Input := aiiAccepted;
+    xiiAbsent: Input := aiiAbsent;
+  Else
+    Input := aiiUnknown;
+  End;
+  Result := AssistantImageAttachAllowed(Input, Reason);
 End;
 
 Function TAssistantService.ExportUnstoredMessagesJson: String;

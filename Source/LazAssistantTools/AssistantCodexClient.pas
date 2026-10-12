@@ -4,8 +4,9 @@ Unit AssistantCodexClient;
   caller-owned IDE broker. Native approval requests are declined immediately
   and are never auto-approved.
   A release Codex CLI is accepted when its generated app-server schema still has the
-  fields this client uses. Pictures stay on the Grok connection. This client does
-  not send an image input item. (c) 2026 Michell Computing. }
+  fields this client uses. User pictures are the same stored image refs as every
+  other connection. This client sends them as documented localImage items, not a
+  guessed field and not a text note. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,20 +16,21 @@ Unit AssistantCodexClient;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport;
-
-Const
-  { Image support is the Grok connection. Do not add a guessed local_image field here. }
-  CodexImagesSupported = False;
+  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages;
 
 /// Shared catalogue items use function.parameters. Codex dynamicTools use name and inputSchema.
 Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
 /// thread/start params. DynamicToolsJson is a JSON array. Instructions are the harness prompt, not a Codex essay.
 Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions: String): String;
-/// turn/start params for this client. One text item. No image item and no local path.
+/// Documented turn input. Image refs become localImage paths of the upload derivative, then one text item.
+/// An unresolved ref fails. Empty attachments is one text item. A text note is not a picture.
+Function CodexUserInputJson(Const ProjectRoot, Text, AttachmentsJson: String; Out InputJson, ErrorText: String): Boolean;
+/// turn/start params for text only. Image turns use CodexUserInputJson.
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
-/// turn/steer params for this client. One text item. No image item: 2.4 found none in this protocol.
+/// turn/steer params for text only. Image steers use CodexUserInputJson.
 Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
+/// Missing inputModalities allows images. An explicit list without image does not. An unknown model is unknown.
+Function CodexModelImageInput(Const ModelsJson, ModelId: String): TAssistantImageInput;
 /// JSON-RPC result for a server approval request. Command and file changes are declined.
 /// A permissions escalation is granted nothing. RequestId is the raw JSON id token.
 Function CodexNativeApprovalReply(Const Method, RequestId: String): String;
@@ -80,16 +82,21 @@ Type
     Function ReadRateLimits: Boolean;
     Function CheckToolIsolation: Boolean;
     Function StartThread(Const WorkingDirectory, Model, ToolsJson: String; Const DeveloperInstructions: String = ''): Boolean;
-    Function StartTurn(Const Prompt: String; Const Effort: String = ''): Boolean;
+    Function StartTurn(Const Prompt: String; Const Effort: String = ''; Const ProjectRoot: String = '';
+      Const AttachmentsJson: String = ''): Boolean;
     Function Steer(Const Text: String): Boolean; Overload;
-    { Image refs are refused while CodexImagesSupported is false. A text note is not the picture. }
+    { Builds documented localImage items. Unresolved refs fail. No project root cannot send pictures. }
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
+    Function Steer(Const Text, ProjectRoot, AttachmentsJson: String): Boolean; Overload;
+    Function SteerInput(Const InputJson: String): Boolean;
     Procedure Interrupt;
     { May be called from the UI to force connection shutdown on next Pump.
       A non-empty Reason replaces the generic cancel text, for a timeout. }
     Procedure CancelConnection(Const Reason: String = '');
     Function TakeTool(Out Tool: TCodexToolRequest): Boolean;
-    Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean;
+    Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean; Overload;
+    { Image refs from read_image are the same store refs. They ride in contentItems when the frame can hold them. }
+    Function CompleteTool(Const CallId, Text, ProjectRoot, AttachmentsJson: String; Success: Boolean): Boolean; Overload;
     Property ToolIsolationChecked: Boolean Read FToolIsolationChecked;
     Property State: TCodexRunState Read FState;
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
@@ -203,22 +210,113 @@ Begin
     ',"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}';
 End;
 
+Function CodexUserInputJson(Const ProjectRoot, Text, AttachmentsJson: String; Out InputJson, ErrorText: String): Boolean;
+Var
+  Refs: TAssistantImageRefArray;
+  I: Integer;
+  Path, Item, ModelText: String;
+Begin
+  InputJson := '';
+  ErrorText := '';
+  SetLength(Refs, 0);
+  Result := False;
+  If (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') Then
+    Begin
+      If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Then
+        Begin
+          ErrorText := AssistantImageSendFailedPrefix + ' Attachment list is invalid.';
+          Exit;
+        End;
+      Refs := LimitAssistantImageRefs(Refs);
+    End;
+  ModelText := AssistantImageModelText(Text, Length(Refs));
+  InputJson := '[';
+  For I := 0 To High(Refs) Do
+    Begin
+      If Not AssistantImageUploadFile(ProjectRoot, Refs[I], Path, ErrorText) Then
+        Begin
+          InputJson := '';
+          If ErrorText = '' Then ErrorText := 'Stored image is missing.';
+          ErrorText := AssistantImageSendFailedPrefix + ' ' + ErrorText;
+          Exit;
+        End;
+      { Documented app-server item. Remote URLs are rejected. A data URI would exceed the frame limit. }
+      Item := '{"type":"localImage","path":' + Quote(Path) + '}';
+      If Length(InputJson) > 1 Then InputJson := InputJson + ',';
+      InputJson := InputJson + Item;
+    End;
+  If Length(InputJson) > 1 Then InputJson := InputJson + ',';
+  InputJson := InputJson + '{"type":"text","text":' + Quote(ModelText) + '}]';
+  Result := True;
+End;
+
+Function CodexTurnBody(Const ThreadId, TurnId, InputJson, Effort: String; Start: Boolean): String;
+Begin
+  If Start Then
+    Begin
+      Result := '{"threadId":' + Quote(ThreadId) + ',"input":' + InputJson +
+        ',"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"';
+      If Effort <> '' Then Result := Result + ',"effort":' + Quote(Effort);
+      Result := Result + '}';
+    End
+  Else
+    Result := '{"threadId":' + Quote(ThreadId) + ',"expectedTurnId":' + Quote(TurnId) +
+      ',"input":' + InputJson + '}';
+End;
+
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 Var
-  Options: String;
+  InputJson, ErrorText: String;
 Begin
-  Options := '';
-  If Effort <> '' Then Options := ',"effort":' + Quote(Effort);
-  Result := '{"threadId":' + Quote(ThreadId) +
-    ',"input":[{"type":"text","text":' + Quote(Prompt) + '}],' +
-    '"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"' + Options + '}';
+  If Not CodexUserInputJson('', Prompt, '', InputJson, ErrorText) Then
+    InputJson := '[{"type":"text","text":' + Quote(Prompt) + '}]';
+  Result := CodexTurnBody(ThreadId, '', InputJson, Effort, True);
 End;
 
 Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
+Var
+  InputJson, ErrorText: String;
 Begin
-  { No protocol image item in this version. Do not add a guessed field or a local path. }
-  Result := '{"threadId":' + Quote(ThreadId) + ',"expectedTurnId":' + Quote(TurnId) +
-    ',"input":[{"type":"text","text":' + Quote(Text) + '}]}';
+  If Not CodexUserInputJson('', Text, '', InputJson, ErrorText) Then
+    InputJson := '[{"type":"text","text":' + Quote(Text) + '}]';
+  Result := CodexTurnBody(ThreadId, TurnId, InputJson, '', False);
+End;
+
+Function CodexModelImageInput(Const ModelsJson, ModelId: String): TAssistantImageInput;
+Var
+  Data, Items, Item, FoundId, Modalities: TJSONData;
+  I: Integer;
+  Wanted: String;
+Begin
+  Result := aiiUnknown;
+  Wanted := Trim(ModelId);
+  If (Wanted = '') Or (Trim(ModelsJson) = '') Then Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ModelsJson);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONObject) Then Exit;
+    Items := TJSONObject(Data).Find('data');
+    If Not (Items Is TJSONArray) Then Exit;
+    For I := 0 To TJSONArray(Items).Count - 1 Do
+      Begin
+        Item := TJSONArray(Items).Items[I];
+        If Not (Item Is TJSONObject) Then Continue;
+        FoundId := TJSONObject(Item).Find('model');
+        If Not Assigned(FoundId) Then FoundId := TJSONObject(Item).Find('id');
+        If (Not Assigned(FoundId)) Or (FoundId.JSONType <> jtString) Or
+          (Not SameText(Trim(FoundId.AsString), Wanted)) Then Continue;
+        Modalities := TJSONObject(Item).Find('inputModalities');
+        If Not Assigned(Modalities) Then Modalities := TJSONObject(Item).Find('input_modalities');
+        Result := AssistantImageInputFromModalities(Modalities);
+        Exit;
+      End;
+  Finally
+    Data.Free;
+  End;
 End;
 
 Constructor TAssistantCodexClient.Create(RequestTimeoutMs: Cardinal);
@@ -393,13 +491,20 @@ Begin
   End;
 End;
 
-Function TAssistantCodexClient.StartTurn(Const Prompt: String; Const Effort: String): Boolean;
+Function TAssistantCodexClient.StartTurn(Const Prompt: String; Const Effort: String;
+  Const ProjectRoot: String; Const AttachmentsJson: String): Boolean;
+Var
+  InputJson, ImageError: String;
 Begin
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FThreadId <> '') And (FState In [crsReady, crsCompleted]);
   If Not Result Then Exit;
-  { Text only. A note is not a picture, and a path would fail the minimal read sandbox. }
-  Result := Request('turn/start', CodexTurnStartParams(FThreadId, Prompt, Effort));
+  If Not CodexUserInputJson(ProjectRoot, Prompt, AttachmentsJson, InputJson, ImageError) Then
+    Begin
+      Fail(ImageError);
+      Exit;
+    End;
+  Result := Request('turn/start', CodexTurnBody(FThreadId, '', InputJson, Effort, True));
   If Result Then
     Begin
       FContent := '';
@@ -421,16 +526,33 @@ End;
 
 Function TAssistantCodexClient.Steer(Const Text: String): Boolean;
 Begin
-  Result := Steer(Text, '');
+  Result := Steer(Text, '', '');
 End;
 
 Function TAssistantCodexClient.Steer(Const Text, AttachmentsJson: String): Boolean;
 Begin
+  Result := Steer(Text, '', AttachmentsJson);
+End;
+
+Function TAssistantCodexClient.Steer(Const Text, ProjectRoot, AttachmentsJson: String): Boolean;
+Var
+  InputJson, ImageError: String;
+Begin
   Result := False;
-  { 2.4 found no image input item. Refuse the refs instead of describing the file in text. }
-  If (Not CodexImagesSupported) And (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') Then Exit;
-  Result := (FState = crsRunning) And (FTurnId <> '');
-  If Result Then Result := Request('turn/steer', CodexTurnSteerParams(FThreadId, FTurnId, Text));
+  If Not CodexUserInputJson(ProjectRoot, Text, AttachmentsJson, InputJson, ImageError) Then
+    Begin
+      If ImageError <> '' Then FError := ImageError;
+      Exit;
+    End;
+  Result := SteerInput(InputJson);
+End;
+
+Function TAssistantCodexClient.SteerInput(Const InputJson: String): Boolean;
+Begin
+  Result := (FState = crsRunning) And (FTurnId <> '') And (Length(InputJson) > 1) And (InputJson[1] = '[');
+  If Not Result Then Exit;
+  If Length(InputJson) > CodexMaxFrameBytes - 512 Then Exit;
+  Result := Request('turn/steer', CodexTurnBody(FThreadId, FTurnId, InputJson, '', False));
 End;
 
 Procedure TAssistantCodexClient.Interrupt;
@@ -466,15 +588,61 @@ Begin
 End;
 
 Function TAssistantCodexClient.CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean;
+Begin
+  Result := CompleteTool(CallId, Text, '', '', Success);
+End;
+
+Function TAssistantCodexClient.CompleteTool(Const CallId, Text, ProjectRoot, AttachmentsJson: String;
+  Success: Boolean): Boolean;
 Var
-  I: Integer;
+  I, Budget: Integer;
+  Refs: TAssistantImageRefArray;
+  Items, Uri, ImageError, Note, Line: String;
 Begin
   Result := False;
   If (FState <> crsRunning) Or Not FToolTaken Or (Length(FTools) = 0) Then Exit;
   If FTools[0].CallId <> CallId Then Exit;
-  Result := FTransport.Queue('{"id":' + FTools[0].RequestId +
-    ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
-    ',"contentItems":[{"type":"inputText","text":' + Quote(Text) + '}]}}');
+  SetLength(Refs, 0);
+  Note := Text;
+  If (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') And
+    ParseAssistantImageRefs(AttachmentsJson, Refs) And (Length(Refs) > 0) Then
+    Begin
+      Refs := LimitAssistantImageRefs(Refs);
+      Budget := CodexMaxFrameBytes - Length(Note) - 1024;
+      If Budget > 900000 Then Budget := 900000;
+      If Length(Refs) > 0 Then Budget := Budget Div Length(Refs);
+      If Budget < 64 Then
+        Note := Note + LineEnding + AssistantImageSendFailedPrefix + ' Image could not be prepared for upload.';
+    End
+  Else
+    Budget := 0;
+  Items := '[{"type":"inputText","text":' + Quote(Note) + '}';
+  If Budget >= 64 Then
+    For I := 0 To High(Refs) Do
+      Begin
+        Uri := '';
+        ImageError := '';
+        If AssistantImageDataUriWithin(ProjectRoot, Refs[I], Budget, Uri, ImageError) And
+          (Copy(LowerCase(Uri), 1, 5) = 'data:') Then
+          Items := Items + ',{"type":"inputImage","imageUrl":' + Quote(Uri) + '}'
+        Else
+          Begin
+            If ImageError = '' Then ImageError := 'Image could not be prepared for upload.';
+            Note := Note + LineEnding + AssistantImageSendFailedPrefix + ' ' + ImageError;
+            Items := '[{"type":"inputText","text":' + Quote(Note) + '}';
+            Break;
+          End;
+      End;
+  Items := Items + ']';
+  Line := '{"id":' + FTools[0].RequestId + ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
+    ',"contentItems":' + Items + '}}';
+  If Length(Line) > CodexMaxFrameBytes Then
+    Begin
+      Note := Text + LineEnding + AssistantImageSendFailedPrefix + ' Image could not be prepared for upload.';
+      Line := '{"id":' + FTools[0].RequestId + ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
+        ',"contentItems":[{"type":"inputText","text":' + Quote(Note) + '}]}}';
+    End;
+  Result := FTransport.Queue(Line);
   If Not Result Then
     Begin
       Fail(FTransport.LastError);

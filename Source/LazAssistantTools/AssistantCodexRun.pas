@@ -24,6 +24,7 @@ Type
   Private
     FLock: TRTLCriticalSection;
     FExecutable, FCwd, FModel, FPrompt, FToolsJson, FRunId, FProfile, FEffort, FDeveloperInstructions: String;
+    FProjectRoot, FAttachments, FSteerInput, FToolAttachments, FLastSteerError: String;
     FMode: TAssistantMode;
     FSnapshot: TCodexRunSnapshot;
     FTool: TCodexToolRequest;
@@ -38,12 +39,14 @@ Type
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
       TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '';
-      Const DeveloperInstructions: String = ''; Mode: TAssistantMode = amInspect);
+      Const DeveloperInstructions: String = ''; Mode: TAssistantMode = amInspect;
+      Const ProjectRoot: String = ''; Const AttachmentsJson: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean; Overload;
-    { Refs are not queued. This protocol has no image item; the composer keeps the pictures. }
+    { Same stored refs as a Grok steer. Unresolved pictures are not queued and are not described in text. }
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
+    Property LastSteerError: String Read FLastSteerError;
     Function Snapshot: TCodexRunSnapshot;
     Function HasPendingTool: Boolean;
     { Caller must run on the IDE thread. Returns after at most one tool.
@@ -57,11 +60,12 @@ Type
 Implementation
 
 Uses
-  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools;
+  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
-    Const DeveloperInstructions: String; Mode: TAssistantMode);
+    Const DeveloperInstructions: String; Mode: TAssistantMode; Const ProjectRoot: String;
+    Const AttachmentsJson: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
@@ -77,6 +81,8 @@ Begin
   FEffort := Effort;
   FDeveloperInstructions := DeveloperInstructions;
   FMode := Mode;
+  FProjectRoot := ProjectRoot;
+  FAttachments := AttachmentsJson;
   FSnapshot.State := crsConnecting;
 End;
 
@@ -117,15 +123,32 @@ Begin
 End;
 
 Function TAssistantCodexRun.Steer(Const Text, AttachmentsJson: String): Boolean;
+Var
+  InputJson, ErrorText: String;
+  HasPictures: Boolean;
 Begin
   Result := False;
-  { Do not store image refs as the steer note. The form keeps the 3.2 warning. }
-  If (Not CodexImagesSupported) And (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') Then Exit;
+  FLastSteerError := '';
+  HasPictures := (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]');
+  If (Trim(Text) = '') And (Not HasPictures) Then Exit;
+  If Not CodexUserInputJson(FProjectRoot, Text, AttachmentsJson, InputJson, ErrorText) Then
+    Begin
+      FLastSteerError := ErrorText;
+      Exit;
+    End;
   EnterCriticalSection(FLock);
   Try
-    Result := Not Cancelled And Not FSnapshot.Done And (FSteer = '') And
-      (Length(Text) <= 65536) And (Text <> '');
-    If Result Then FSteer := Text;
+    Result := Not Cancelled And Not FSnapshot.Done And (FSteerInput = '') And
+      (Length(Text) <= 65536) And (Length(InputJson) <= 65536);
+    If Result Then
+      Begin
+        FSteer := Text;
+        FSteerInput := InputJson;
+      End
+    Else If FSteerInput <> '' Then
+      FLastSteerError := 'A steer is already queued.'
+    Else
+      FLastSteerError := 'The steer could not be queued.';
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -192,12 +215,14 @@ End;
 
 Function TAssistantCodexRun.ServiceOneTool(Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
 Var
-  ErrorText: String;
+  ErrorText, Attachments: String;
+  ImageRefs: TAssistantImageRefArray;
 Begin
   Result := False;
   Tool := Default(TCodexToolRequest);
   Text := '';
   OK := False;
+  SetLength(ImageRefs, 0);
   EnterCriticalSection(FLock);
   Try
     If Cancelled Or FSnapshot.Done Or Not FToolPending Or FToolReady Or FToolServicing Then Exit;
@@ -208,14 +233,17 @@ Begin
   End;
   Try
     { Shared catalogue only. An unknown name is an error; do not fall through to the broker. }
-    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText);
+    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText, ImageRefs);
     If Not OK Then Text := ErrorText;
+    Attachments := '';
+    If OK Then Attachments := AssistantImageRefsToJson(ImageRefs);
     Result := True;
     EnterCriticalSection(FLock);
     Try
       If Not Cancelled And Not FSnapshot.Done And FToolPending Then
         Begin
           FToolResult := Text;
+          FToolAttachments := Attachments;
           FToolSuccess := OK;
           FToolReady := True;
         End;
@@ -237,7 +265,7 @@ Var
   Client: TAssistantCodexClient;
   Deadline, Now, PausedAt: QWord;
   Tool: TCodexToolRequest;
-  SteerText, ToolResult, ToolCallId, ProfileError: String;
+  SteerInput, ToolResult, ToolAttachments, ToolCallId, ProfileError: String;
   Stage: Integer;
   HaveResult, ToolSuccess, IdeWaiting, DeadlinePaused: Boolean;
   Env: TStringList;
@@ -340,7 +368,7 @@ Begin
               End
                 Else If (Stage = 1) And (Client.State = crsReady) Then
                   Begin
-                    If Client.StartTurn(FPrompt, FEffort) Then Stage := 2;
+                    If Client.StartTurn(FPrompt, FEffort, FProjectRoot, FAttachments) Then Stage := 2;
                   End;
         EnterCriticalSection(FLock);
         Try
@@ -349,18 +377,20 @@ Begin
             Begin
               ToolCallId := FTool.CallId;
               ToolResult := FToolResult;
+              ToolAttachments := FToolAttachments;
               ToolSuccess := FToolSuccess;
               FToolPending := False;
               FToolReady := False;
               FToolResult := '';
+              FToolAttachments := '';
             End;
-          SteerText := FSteer;
+          SteerInput := FSteerInput;
         Finally
           LeaveCriticalSection(FLock);
         End;
         { A failed send can stop the process. Never hold the UI snapshot lock
           across client operations, process cleanup or any other wait. }
-        If HaveResult Then Client.CompleteTool(ToolCallId, ToolResult, ToolSuccess);
+        If HaveResult Then Client.CompleteTool(ToolCallId, ToolResult, FProjectRoot, ToolAttachments, ToolSuccess);
         If Client.TakeTool(Tool) Then
           Begin
             EnterCriticalSection(FLock);
@@ -371,11 +401,12 @@ Begin
               LeaveCriticalSection(FLock);
             End;
           End;
-        If (SteerText <> '') And Client.Steer(SteerText) Then
+        If (SteerInput <> '') And Client.SteerInput(SteerInput) Then
           Begin
             EnterCriticalSection(FLock);
             Try
               FSteer := '';
+              FSteerInput := '';
             Finally
               LeaveCriticalSection(FLock);
             End;

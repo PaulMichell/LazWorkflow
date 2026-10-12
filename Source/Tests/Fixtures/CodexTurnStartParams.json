@@ -1,5 +1,5 @@
 {
-  "decision": "Image support is limited to the Grok connection. This qualified Codex client sends one text UserInput item. It does not send an image item or a local_image field. A text note is not the picture.",
+  "decision": "Text-only turns stay one text item. Image refs use documented localImage paths of the shared upload derivative, not a guessed field and not a text note.",
   "threadId": "thread-1",
   "prompt": "See the note",
   "effort": "high",

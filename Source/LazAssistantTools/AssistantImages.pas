@@ -24,7 +24,7 @@ Unit AssistantImages;
 Interface
 
 Uses
-  Classes, SysUtils, fpimage;
+  Classes, SysUtils, fpimage, fpjson;
 
 Const
   { Same ceilings as TGitDiffView.TryShowImageFromStream. }
@@ -40,9 +40,10 @@ Const
   AssistantImageOmittedPrefix = '[Image omitted from model context:';
   AssistantImageSystemSentence =
     'User messages may include images; describe only what is visible; do not invent image contents; do not fetch URLs.';
-  { ChatGPT in this client does not send pictures. Not a guessed image field, and not a text note standing in for one. }
-  AssistantCodexImageAttachReason =
-    'Images are sent on the Grok connection. This ChatGPT runtime cannot see pictures, so Attach is disabled.';
+  { One refusal for every connection. A missing modality list is not a refusal. }
+  AssistantImageAttachRefusal = 'This model lists no image input. Attach is disabled.';
+  { Local prepare failure. Not a text note standing in for the picture. }
+  AssistantImageSendFailedPrefix = 'The picture could not be sent.';
   { Extensions FileExtensionIsImage already names. Acceptance is by stream sniff, not by this list. }
   AssistantStillImageExtensions = '.png,.jpg,.jpeg,.gif,.bmp,.ico,.xpm,.tif,.tiff,.pbm,.pgm,.ppm';
 
@@ -72,6 +73,9 @@ Type
     AnimationDiscarded: Boolean;
   End;
   TAssistantImageRefArray = Array Of TAssistantImageRef;
+
+  { aiiUnknown: the catalogue did not list modalities. Allow attach. Do not infer vision from a name. }
+  TAssistantImageInput = (aiiUnknown, aiiAccepted, aiiAbsent);
 
 Function ImageRefFromStored(Const Stored: TAssistantStoredImage): TAssistantImageRef;
 /// JSON array of refs. Empty when there are none. Drops any data URI or oversized string.
@@ -113,15 +117,27 @@ Function ReadStoredAssistantImage(Const ProjectRoot, RelativePath: String; Out D
 /// Decode a stored display file. The caller frees Img. Symbolic links are refused.
 Function LoadStoredAssistantImage(Const ProjectRoot, RelativePath: String; Out Img: TFPMemoryImage;
   Out ErrorText: String): Boolean;
+/// Absent or non-array is unknown. A present list without image is a refusal. image and images both count.
+Function AssistantImageInputFromModalities(Node: TJSONData): TAssistantImageInput;
+/// False only when the catalogue explicitly omits image. Reason is AssistantImageAttachRefusal.
+Function AssistantImageAttachAllowed(Input: TAssistantImageInput; Out Reason: String): Boolean;
+/// Absolute upload derivative. Same store checks as the data URI. Refuses a symbolic link.
+Function AssistantImageUploadFile(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
+  Out FullPath, ErrorText: String): Boolean;
 /// data: URI of the upload derivative. Never logged.
 Function AssistantImageDataUri(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
   Out DataUri, ErrorText: String): Boolean;
+/// Same derivative when it fits. Otherwise a tighter still-image encoding. Never logged.
+Function AssistantImageDataUriWithin(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
+  MaxUriChars: Integer; Out DataUri, ErrorText: String): Boolean;
 /// [Image omitted from model context: name, WxH]
 Function AssistantImageOmittedNote(Const Ref: TAssistantImageRef): String;
 /// Model text part. Empty user words with images become the look sentence, which is not the user's words.
 Function AssistantImageModelText(Const UserText: String; ImageCount: Integer): String;
 /// True when an API error refused the image, not when a local store check failed.
 Function AssistantRequestRejectedImage(Const ErrorText: String): Boolean;
+/// True when this client could not prepare the picture, or the runtime could not read a local image.
+Function AssistantImageSendFailed(Const ErrorText: String): Boolean;
 /// Delete display and upload files for an unsent attachment. Does not follow a symbolic link.
 Function DeleteStoredAssistantImage(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
   Out ErrorText: String): Boolean;
@@ -136,7 +152,7 @@ Function LimitAssistantImageRefs(Const Refs: TAssistantImageRefArray): TAssistan
 Implementation
 
 Uses
-  Math, LazFileUtils, fpjson, jsonparser, fpreadpng, fpwritepng, fpreadjpeg, fpwritejpeg, fpreadbmp,
+  Math, LazFileUtils, jsonparser, fpreadpng, fpwritepng, fpreadjpeg, fpwritejpeg, fpreadbmp,
   fpreadgif, fpreadtiff, fpreadxpm, fpreadpnm, AssistantProjectPaths{$IFDEF UNIX}, BaseUnix, Unix{$ENDIF};
 
 Function PathInside(Const Root, Path: String): Boolean; Forward;
@@ -1197,7 +1213,7 @@ Begin
   End;
 End;
 
-Function PrepareUpload(Img: TFPMemoryImage; Out Data: TBytes; Out Mime, ErrorText: String): Boolean;
+Function PrepareUpload(Img: TFPMemoryImage; MaxBytes: Integer; Out Data: TBytes; Out Mime, ErrorText: String): Boolean;
 Var
   Side, Quality: Integer;
   Owned: TFPMemoryImage;
@@ -1223,7 +1239,7 @@ Begin
         If EncodePng(Working, Data) Then
           Begin
             Produced := True;
-            If Length(Data) <= AssistantImageUploadMaxBytes Then
+            If Length(Data) <= MaxBytes Then
               Begin
                 Mime := 'image/png';
                 Exit(True);
@@ -1233,7 +1249,7 @@ Begin
           If EncodeJpeg(Working, Quality, Data) Then
             Begin
               Produced := True;
-              If Length(Data) <= AssistantImageUploadMaxBytes Then
+              If Length(Data) <= MaxBytes Then
                 Begin
                   Mime := 'image/jpeg';
                   Exit(True);
@@ -1246,7 +1262,12 @@ Begin
     End;
   SetLength(Data, 0);
   If Produced Then
-    ErrorText := 'Image could not be reduced below 4 MiB for upload.'
+    Begin
+      If MaxBytes = AssistantImageUploadMaxBytes Then
+        ErrorText := 'Image could not be reduced below 4 MiB for upload.'
+      Else
+        ErrorText := 'Image could not be reduced for upload.';
+    End
   Else
     ErrorText := 'Image could not be prepared for upload.';
 End;
@@ -2130,7 +2151,7 @@ Begin
     End;
   If Not DecodeStillImage(Display, ReaderClass, Img, ErrorText) Then Exit;
   Try
-    If Not PrepareUpload(Img, Upload, UploadMime, ErrorText) Then Exit;
+    If Not PrepareUpload(Img, AssistantImageUploadMaxBytes, Upload, UploadMime, ErrorText) Then Exit;
     KindFileInfo(Kind, DisplayExt, DisplayMime);
     If UploadMime = 'image/jpeg' Then
       UploadExt := '.jpg'
@@ -2950,6 +2971,58 @@ Begin
   Result := DecodeStillImage(Data, Reader, Img, ErrorText);
 End;
 
+Function AssistantImageInputFromModalities(Node: TJSONData): TAssistantImageInput;
+Var
+  I: Integer;
+  Item: TJSONData;
+  Name: String;
+Begin
+  Result := aiiUnknown;
+  If Not (Node Is TJSONArray) Then Exit;
+  Result := aiiAbsent;
+  For I := 0 To TJSONArray(Node).Count - 1 Do
+    Begin
+      Item := TJSONArray(Node).Items[I];
+      Name := '';
+      If Item.JSONType = jtString Then
+        Name := LowerCase(Trim(Item.AsString))
+      Else If Item Is TJSONObject Then
+        Begin
+          Name := LowerCase(Trim(TJSONObject(Item).Get('type', '')));
+          If Name = '' Then Name := LowerCase(Trim(TJSONObject(Item).Get('name', '')));
+        End;
+      If (Name = 'image') Or (Name = 'images') Then Exit(aiiAccepted);
+    End;
+End;
+
+Function AssistantImageAttachAllowed(Input: TAssistantImageInput; Out Reason: String): Boolean;
+Begin
+  Reason := '';
+  Result := Input <> aiiAbsent;
+  If Not Result Then Reason := AssistantImageAttachRefusal;
+End;
+
+Function AssistantImageUploadFile(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
+  Out FullPath, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  FullPath := '';
+  ErrorText := '';
+  If Trim(Ref.UploadPath) = '' Then
+    Begin
+      ErrorText := 'Stored image is missing.';
+      Exit;
+    End;
+  If Not ResolveStoredAssistantImage(ProjectRoot, Ref.UploadPath, FullPath, ErrorText) Then Exit;
+  If (Not FileExistsUTF8(FullPath)) Or DirectoryExistsUTF8(FullPath) Then
+    Begin
+      FullPath := '';
+      ErrorText := 'Stored image is missing.';
+      Exit;
+    End;
+  Result := True;
+End;
+
 Function AssistantImageDataUri(Const ProjectRoot: String; Const Ref: TAssistantImageRef; Out DataUri, ErrorText: String): Boolean;
 Var
   Data: TBytes;
@@ -2984,6 +3057,58 @@ Begin
   Result := DataUri <> '';
 End;
 
+Function AssistantImageDataUriWithin(Const ProjectRoot: String; Const Ref: TAssistantImageRef;
+  MaxUriChars: Integer; Out DataUri, ErrorText: String): Boolean;
+Var
+  Img: TFPMemoryImage;
+  Data: TBytes;
+  Mime: String;
+  MaxRaw: Integer;
+Begin
+  Result := False;
+  DataUri := '';
+  ErrorText := '';
+  SetLength(Data, 0);
+  Img := Nil;
+  If MaxUriChars < 64 Then
+    Begin
+      ErrorText := 'Image could not be prepared for upload.';
+      Exit;
+    End;
+  If AssistantImageDataUri(ProjectRoot, Ref, DataUri, ErrorText) And (Length(DataUri) <= MaxUriChars) Then
+    Exit(True);
+  DataUri := '';
+  If Not LoadStoredAssistantImage(ProjectRoot, Ref.DisplayPath, Img, ErrorText) Then
+    Begin
+      If Trim(Ref.UploadPath) = '' Then Exit;
+      If Not LoadStoredAssistantImage(ProjectRoot, Ref.UploadPath, Img, ErrorText) Then Exit;
+    End;
+  Try
+    MaxRaw := ((MaxUriChars - 40) * 3) Div 4;
+    If MaxRaw < 32 Then
+      Begin
+        ErrorText := 'Image could not be prepared for upload.';
+        Exit;
+      End;
+    If Not PrepareUpload(Img, MaxRaw, Data, Mime, ErrorText) Then Exit;
+    If (Pos('data:', LowerCase(Mime)) > 0) Or (Pos('base64', LowerCase(Mime)) > 0) Or (Pos(#10, Mime) > 0) Then
+      Begin
+        ErrorText := 'Image could not be prepared for upload.';
+        Exit;
+      End;
+    DataUri := 'data:' + Mime + ';base64,' + EncodeBase64(Data);
+    SetLength(Data, 0);
+    Result := (DataUri <> '') And (Length(DataUri) <= MaxUriChars);
+    If Not Result Then
+      Begin
+        DataUri := '';
+        ErrorText := 'Image could not be prepared for upload.';
+      End;
+  Finally
+    FreeAndNil(Img);
+  End;
+End;
+
 Function AssistantImageOmittedNote(Const Ref: TAssistantImageRef): String;
 Begin
   Result := AssistantImageOmittedPrefix + ' ' + AssistantImageFileLabel(Ref);
@@ -3011,7 +3136,18 @@ Begin
     (Pos('unsupported image', S) > 0) Or (Pos('invalid image', S) > 0) Or (Pos('rejected the image', S) > 0) Or
     (Pos('rejected image', S) > 0) Or ((Pos('image content', S) > 0) And (Pos('not supported', S) > 0)) Or
     ((Pos('input_image', S) > 0) And ((Pos('invalid', S) > 0) Or (Pos('unsupported', S) > 0) Or (Pos('reject', S) > 0))) Or
+    ((Pos('localimage', S) > 0) And ((Pos('invalid', S) > 0) Or (Pos('unknown', S) > 0) Or (Pos('unsupported', S) > 0))) Or
     ((Pos('modalit', S) > 0) And (Pos('image', S) > 0));
+End;
+
+Function AssistantImageSendFailed(Const ErrorText: String): Boolean;
+Var
+  S: String;
+Begin
+  S := LowerCase(ErrorText);
+  Result := (Pos(LowerCase(AssistantImageSendFailedPrefix), S) > 0) Or
+    (Pos('could not read the local image', S) > 0) Or
+    (Pos('local image at', S) > 0);
 End;
 
 Function DeleteOneStoredFile(Const ProjectRoot, RelativePath: String; Out ErrorText: String): Boolean;

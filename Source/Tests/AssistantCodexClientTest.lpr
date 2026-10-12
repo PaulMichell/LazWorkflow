@@ -3,7 +3,7 @@ Program AssistantCodexClientTest;
 Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
   {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
-  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification;
+  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages;
 Type
   TRunReaper = Class(TThread)
     Run: TAssistantCodexRun;
@@ -291,10 +291,109 @@ Begin
       (TJSONObject(TJSONArray(Input).Items[0]).Get('type', '') = 'text'));
   Finally Data.Free; End;
 End;
-Procedure TestTurnStartBody;
-Var Lines: TStringList; Data: TJSONData; Obj: TJSONObject; Built: String; SteerClient: TAssistantCodexClient;
+Function WriteTinyPng(Const Directory: String): Boolean;
+Const
+  Png: Array[0..68] Of Byte = (
+    $89, $50, $4E, $47, $0D, $0A, $1A, $0A, $00, $00, $00, $0D, $49, $48, $44, $52,
+    $00, $00, $00, $01, $00, $00, $00, $01, $08, $02, $00, $00, $00, $90, $77, $53,
+    $DE, $00, $00, $00, $0C, $49, $44, $41, $54, $08, $D7, $63, $F8, $CF, $C0, $00,
+    $00, $00, $03, $00, $01, $00, $05, $FE, $D4, $00, $00, $00, $00, $49, $45, $4E,
+    $44, $AE, $42, $60, $82);
+Var
+  Stream: TFileStream;
 Begin
-  Check('codex image support stays off', Not CodexImagesSupported);
+  Result := False;
+  Try
+    Stream := TFileStream.Create(IncludeTrailingPathDelimiter(Directory) + 'tiny.png', fmCreate);
+    Try
+      Stream.WriteBuffer(Png, SizeOf(Png));
+      Result := True;
+    Finally
+      Stream.Free;
+    End;
+  Except
+    Result := False;
+  End;
+End;
+Procedure DeleteTree(Const Directory: String);
+Var
+  Info: TSearchRec;
+  Child: String;
+Begin
+  If FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) <> 0 Then
+    Begin
+      RemoveDir(Directory);
+      Exit;
+    End;
+  Try
+    Repeat
+      If (Info.Name = '.') Or (Info.Name = '..') Then Continue;
+      Child := IncludeTrailingPathDelimiter(Directory) + Info.Name;
+      If (Info.Attr And faDirectory) <> 0 Then DeleteTree(Child)
+      Else DeleteFile(Child);
+    Until FindNext(Info) <> 0;
+  Finally
+    FindClose(Info);
+  End;
+  RemoveDir(Directory);
+End;
+Procedure TestSharedImageWire;
+Var
+  Root, Built, ErrorText, FullPath: String;
+  Stored: TAssistantStoredImage;
+  Refs: TAssistantImageRefArray;
+  Data, Input: TJSONData;
+  Item: TJSONObject;
+Begin
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-codex-image-' + IntToStr(GetProcessID);
+  ForceDirectories(Root);
+  Data := Nil;
+  Try
+    Check('unresolved image is not sent as text', Not CodexUserInputJson(Root, 'look',
+      '[{"id":"missing","uploadPath":".assistant/images/missing.png"}]', Built, ErrorText));
+    Check('unresolved image names the failure', Pos(AssistantImageSendFailedPrefix, ErrorText) > 0);
+    Check('unresolved image has no body', Built = '');
+    Check('text-only model refuses images', CodexModelImageInput(
+      '{"data":[{"model":"gpt-text","inputModalities":["text"]}]}', 'gpt-text') = aiiAbsent);
+    Check('vision model accepts images', CodexModelImageInput(
+      '{"data":[{"model":"gpt-vision","inputModalities":["text","image"]}]}', 'gpt-vision') = aiiAccepted);
+    Check('missing modalities allow images', CodexModelImageInput(
+      '{"data":[{"model":"gpt-old"}]}', 'gpt-old') = aiiUnknown);
+    Check('unknown model allows images', CodexModelImageInput(
+      '{"data":[{"model":"gpt-vision","inputModalities":["text"]}]}', 'other') = aiiUnknown);
+    Check('snake_case modalities accept images', CodexModelImageInput(
+      '{"data":[{"id":"gpt-snake","input_modalities":["image"]}]}', 'gpt-snake') = aiiAccepted);
+    Check('one pixel stored', WriteTinyPng(Root) And StoreAssistantImageFromFile(Root,
+      IncludeTrailingPathDelimiter(Root) + 'tiny.png', Stored, ErrorText));
+    SetLength(Refs, 1);
+    Refs[0] := ImageRefFromStored(Stored);
+    Check('shared upload file resolves', AssistantImageUploadFile(Root, Refs[0], FullPath, ErrorText) And
+      (FullPath <> '') And (Pos('data:', FullPath) = 0));
+    Check('codex input uses localImage', CodexUserInputJson(Root, 'See the note', AssistantImageRefsToJson(Refs),
+      Built, ErrorText) And (ErrorText = ''));
+    Check('localImage is the documented name', (Pos('"type":"localImage"', Built) > 0) And
+      (Pos('local_image', Built) = 0) And (Pos('"type":"image"', Built) = 0) And (Pos('data:', Built) = 0));
+    Check('localImage path is the upload file', (FullPath <> '') And (Pos(FullPath, Built) > 0));
+    Data := GetJSON('{"input":' + Built + '}');
+    Check('input is an object wrapper', Data Is TJSONObject);
+    Input := TJSONObject(Data).Find('input');
+    Check('image then text', (Input Is TJSONArray) And (TJSONArray(Input).Count = 2));
+    If (Input Is TJSONArray) And (TJSONArray(Input).Count = 2) Then
+      Begin
+        Item := TJSONObject(TJSONArray(Input).Items[0]);
+        Check('first item is localImage', Item.Get('type', '') = 'localImage');
+        Check('path is absolute', Item.Get('path', '') = FullPath);
+        Item := TJSONObject(TJSONArray(Input).Items[1]);
+        Check('second item is the prompt', (Item.Get('type', '') = 'text') And (Item.Get('text', '') = 'See the note'));
+      End;
+  Finally
+    Data.Free;
+    DeleteTree(Root);
+  End;
+End;
+Procedure TestTurnStartBody;
+Var Lines: TStringList; Data: TJSONData; Obj: TJSONObject; Built, ErrorText: String; SteerClient: TAssistantCodexClient;
+Begin
   Lines := TStringList.Create;
   Data := Nil;
   Try
@@ -316,11 +415,15 @@ Begin
     Check('turn/steer names the turn', Pos('"expectedTurnId":"turn-9"', Built) > 0);
     SteerClient := TAssistantCodexClient.Create(500);
     Try
-      Check('steer refuses image refs', Not SteerClient.Steer('look', '[{"id":"img1"}]'));
-      Check('codex image item is unsupported', Not CodexImagesSupported And
-        (Pos('"type":"image"', CodexTurnSteerParams('thread-1', 'turn-9', 'look')) = 0) And
-        (Pos('"type":"image"', CodexTurnStartParams('thread-1', 'look', '')) = 0));
+      Check('steer does not invent an image from unresolved refs', Not SteerClient.Steer('look', '[{"id":"img1"}]'));
+      Check('unresolved steer names the failure', Pos(AssistantImageSendFailedPrefix, SteerClient.LastError) > 0);
+      Check('text steer has no image item', (Pos('"type":"image"', CodexTurnSteerParams('thread-1', 'turn-9', 'look')) = 0) And
+        (Pos('"type":"image"', CodexTurnStartParams('thread-1', 'look', '')) = 0) And
+        (Pos('localImage', CodexTurnStartParams('thread-1', 'look', '')) = 0));
     Finally SteerClient.Free; End;
+    TestSharedImageWire;
+    Check('empty attachments still build', CodexUserInputJson('', 'look', '', Built, ErrorText) And (ErrorText = '') And
+      (Pos('"type":"text"', Built) > 0) And (Pos('localImage', Built) = 0));
   Finally Data.Free; Lines.Free; End;
 End;
 Var Client: TAssistantCodexClient; Tool: TCodexToolRequest; Deadline: QWord; VersionEnv: TStringList;

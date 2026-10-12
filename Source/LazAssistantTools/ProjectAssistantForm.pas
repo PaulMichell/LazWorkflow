@@ -215,6 +215,7 @@ Type
     FComposerSelectedIndex: Integer; { Outlined thumbnail. -1 when the strip is empty. }
     FComposerImagesHeld: String; { Cleared from the strip at send, restored if the model rejects the image. }
     FComposerImagesSent: Boolean;
+    FPendingTurnAttachments: String; { Refs recorded with the turn when the service history has none. }
     FPasteComposerBusy: Boolean;
     FInputDropArmed: Boolean;
     FInputHeight: Integer;
@@ -2763,6 +2764,9 @@ Begin
       Turn.MessagesJson := AssistantClient.ExportUnstoredMessagesJson;
       Turn.AttachmentsJson := AssistantClient.OpeningUserAttachmentsJson;
     End;
+  If (Trim(Turn.AttachmentsJson) = '') And (Trim(FPendingTurnAttachments) <> '') Then
+    Turn.AttachmentsJson := FPendingTurnAttachments;
+  FPendingTurnAttachments := '';
   If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
     (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') And
     (Trim(Turn.AttachmentsJson) = '') Then
@@ -3069,10 +3073,11 @@ End;
 
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, Recap, SubmitText, ToolsJson, Instructions: String;
+  Prompt, Recap, SubmitText, ToolsJson, Instructions, ImageError, InputJson: String;
   I: Integer;
   Turn: TConversationTurn;
   WithContext: Boolean;
+  Refs: TAssistantImageRefArray;
 Begin
   Result := False;
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
@@ -3096,10 +3101,12 @@ Begin
   Else FCodexBroker.BeginRun(awsReadOnly); End;
   ShowChatSurfaceKeepMode;
   { Same user text as SubmitUserTextEx. The harness prompt owns the mode essay, including chat's no-tools sentence.
-    Pictures are refused by ComposerAttachAllowed before this call. Do not record image refs. }
-  SubmitText := BuildSubmitApiText(ApiText, WithContext);
-  If Assigned(AssistantClient) Then
-    AssistantClient.AddMessage(amrUser, SubmitText);
+    Pictures are the same stored refs. The Codex wire maps them to localImage; it does not invent a note. }
+  SetLength(Refs, 0);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Refs := LimitAssistantImageRefs(Refs);
+  SubmitText := BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext);
+  FPendingTurnAttachments := AssistantImageRefsToJson(Refs);
   Recap := '';
   If Assigned(ProjectAssistantConversation) Then
     For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
@@ -3113,6 +3120,16 @@ Begin
   Prompt := SubmitText;
   If Recap <> '' Then
     Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+  If Not CodexUserInputJson(ProjectAssistantRoot, Prompt, FPendingTurnAttachments, InputJson, ImageError) Then
+    Begin
+      FPendingTurnAttachments := '';
+      UnlockModeAfterSend;
+      SetCurrentSystemNote(ImageError);
+      MessageDlg(ImageError, mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Assigned(AssistantClient) Then
+    AssistantClient.AddUserMessage(SubmitText, Refs);
   SetCurrentUserDisplay(DisplayText, WithContext);
   FLiveUser := FDisplayUser; FLiveContent := ''; FLiveThinking := '';
   FAssistantContent := ''; FAssistantThinking := '';
@@ -3124,8 +3141,10 @@ Begin
     ToolsJson := BuildAssistantToolsJsonForMode(ActiveMode);
     Instructions := CodexDeveloperInstructions(ActiveMode);
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode);
+      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode,
+      ProjectAssistantRoot, FPendingTurnAttachments);
     FCodexRun.Start;
+    FComposerImagesSent := Length(Refs) > 0;
     Result := True;
   Except
     On E: Exception Do
@@ -3586,27 +3605,17 @@ Begin
     StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
   ModelHint := 'Click to choose a model';
-  If (Not FUseCodex) And Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(BlockReason)) And
-    (BlockReason <> '') Then
+  If Not ComposerAttachAllowed(BlockReason) And (BlockReason <> '') Then
     ModelHint := ModelHint + '. ' + BlockReason;
-  If FUseCodex Then
-    ModelHint := ModelHint + '. ' + AssistantCodexImageAttachReason;
   StatusFooter.SetModelHint(ModelHint);
   StatusFooter.SetEffortHint(EffortHint);
   StatusFooter.SetPermissionsHint('Click to choose permissions');
   FContextStatusHint := Format('About %d of %d tokens. Click for a breakdown.', [FContextUsed, FContextLimit]);
   StatusFooter.SetRightHint('Click for session info');
+  If Assigned(SendAction) Then SendAction.Hint := '';
+  RefreshAttachAction;
   If FUseCodex Then
-    Begin
-      If Assigned(SendAction) Then SendAction.Hint := AssistantCodexImageAttachReason;
-      RefreshAttachAction;
-      FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
-    End
-  Else
-    Begin
-      If Assigned(SendAction) Then SendAction.Hint := '';
-      RefreshAttachAction;
-    End;
+    FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
   RefreshCentreStatus;
   ApplySkillStatus;
   If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
@@ -4302,19 +4311,13 @@ End;
 Function TProjectAssistantForm.ComposerAttachAllowed(Out Reason: String): Boolean;
 Begin
   Reason := '';
+  { One capability check. Codex reads inputModalities; Grok reads the same kind of list. A missing list allows attach. }
   If FUseCodex Then
-    Begin
-      Reason := AssistantCodexImageAttachReason;
-      Result := False;
-      Exit;
-    End;
-  If Assigned(AssistantClient) And (Not AssistantClient.ImagesAttachAllowed(Reason)) Then
-    Begin
-      If Reason = '' Then Reason := 'This model lists no image input. Attach is disabled.';
-      Result := False;
-      Exit;
-    End;
-  Result := True;
+    Result := AssistantImageAttachAllowed(CodexModelImageInput(FCodexModelsJson, FCodexModel), Reason)
+  Else If Assigned(AssistantClient) Then
+    Result := AssistantClient.ImagesAttachAllowed(Reason)
+  Else
+    Result := True;
 End;
 
 Function TProjectAssistantForm.ComposerStoreReady(Out Root, StoreDir, ErrorText: String): Boolean;
@@ -5481,7 +5484,7 @@ Begin
   RecordCurrentTurn(ResolvedError);
   If ResolvedError = '' Then
     RecordCompletedUsage;
-  If AssistantRequestRejectedImage(ResolvedError) Then
+  If AssistantRequestRejectedImage(ResolvedError) Or AssistantImageSendFailed(ResolvedError) Then
     Begin
       { The pictures stay in the composer. Do not resend the rejected refs on the next request. }
       If Assigned(AssistantClient) Then
@@ -5681,6 +5684,7 @@ Var
   Refs: TAssistantImageRefArray;
 Begin
   Result := False;
+  FPendingTurnAttachments := '';
   SetLength(Refs, 0);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
   Refs := LimitAssistantImageRefs(Refs);
@@ -5706,11 +5710,11 @@ Begin
         Exit;
       RefreshFromConfig;
     End;
-  { One capability check for every backend. Codex stays unable to attach pictures. }
+  { One capability check for every backend. A missing modality list allows attach. }
   If AutoSend And (Length(Refs) > 0) And (Not ComposerAttachAllowed(BlockReason)) Then
     Begin
       If BlockReason = '' Then
-        BlockReason := 'This model lists no image input. Attach is disabled.';
+        BlockReason := AssistantImageAttachRefusal;
       SetCurrentSystemNote(BlockReason);
       MessageDlg(BlockReason, mtInformation, [mbOK], 0);
       If Assigned(InputMemo) Then
@@ -6562,8 +6566,7 @@ Begin
   If FSending Then
     Begin
       Reason := '';
-      { Codex has no turn/steer image item. Keep the 3.2 warning and do not clear the strip. }
-      AcceptImages := HasImages And ComposerAttachAllowed(Reason) And (Not FUseCodex) And (Not Assigned(FCodexRun));
+      AcceptImages := HasImages And ComposerAttachAllowed(Reason);
       If (UserText = '') And (Not AcceptImages) Then
         Begin
           If HasImages Then
@@ -6578,7 +6581,23 @@ Begin
         Begin
           ParseAssistantImageRefs(FComposerImagesJson, Refs);
           Refs := LimitAssistantImageRefs(Refs);
-          If (Not Assigned(AssistantClient)) Or (Not AssistantClient.EnqueueSteer(UserText, Refs)) Then Exit;
+          If FUseCodex Then
+            Begin
+              If (Not Assigned(FCodexRun)) Or
+                (Not FCodexRun.Steer(AssistantImageModelText(UserText, Length(Refs)), AssistantImageRefsToJson(Refs))) Then
+                Begin
+                  If Assigned(FCodexRun) And (FCodexRun.LastSteerError <> '') Then
+                    Begin
+                      SetCurrentSystemNote(FCodexRun.LastSteerError);
+                      MessageDlg(FCodexRun.LastSteerError, mtInformation, [mbOK], 0);
+                    End
+                  Else
+                    PicturesStay;
+                  Exit;
+                End;
+            End
+          Else If (Not Assigned(AssistantClient)) Or (Not AssistantClient.EnqueueSteer(UserText, Refs)) Then
+            Exit;
           InputMemo.Clear;
           FComposerImagesJson := '';
           RefreshComposerImages;

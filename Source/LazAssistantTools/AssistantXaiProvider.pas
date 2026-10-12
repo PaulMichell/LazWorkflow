@@ -34,7 +34,7 @@ Implementation
 
 Uses
   SysUtils, fpjson, jsonparser, GrokOAuth, AssistantHttps,
-  AssistantProtocol, WorkflowLog;
+  AssistantProtocol, AssistantImages, WorkflowLog;
 
 Type
   TXaiModelProvider = Class(TInterfacedObject, IAssistantModelProvider)
@@ -407,41 +407,20 @@ Begin
   List.Values[Key] := Flag;
 End;
 
-Function ModalityListHasImage(Arr: TJSONArray): Boolean;
-Var
-  I: Integer;
-  Item: TJSONData;
-  Name: String;
-Begin
-  Result := False;
-  If Not Assigned(Arr) Then Exit;
-  For I := 0 To Arr.Count - 1 Do
-    Begin
-      Item := Arr.Items[I];
-      Name := '';
-      If Item.JSONType = jtString Then
-        Name := LowerCase(Trim(Item.AsString))
-      Else If Item Is TJSONObject Then
-        Begin
-          Name := LowerCase(Trim(JsonStringField(TJSONObject(Item), 'type')));
-          If Name = '' Then Name := LowerCase(Trim(JsonStringField(TJSONObject(Item), 'name')));
-        End;
-      If (Name = 'image') Or (Name = 'images') Then Exit(True);
-    End;
-End;
-
 Procedure NoteExplicitImageInput(List: TStringList; Obj: TJSONObject; Const ModelId: String);
 Var
   Node, AliasNode: TJSONData;
   Aliases: TJSONArray;
   I: Integer;
   Accepts: Boolean;
+  Input: TAssistantImageInput;
 Begin
   If (Not Assigned(List)) Or (Not Assigned(Obj)) Or (Trim(ModelId) = '') Then Exit;
   Node := Obj.Find('input_modalities');
   If Node = Nil Then Node := Obj.Find('inputModalities');
-  If (Node = Nil) Or (Node.JSONType <> jtArray) Then Exit;
-  Accepts := ModalityListHasImage(TJSONArray(Node));
+  Input := AssistantImageInputFromModalities(Node);
+  If Input = aiiUnknown Then Exit;
+  Accepts := Input = aiiAccepted;
   RememberImageInput(List, ModelId, Accepts);
   AliasNode := Obj.Find('aliases');
   If (AliasNode = Nil) Or (AliasNode.JSONType <> jtArray) Then Exit;
