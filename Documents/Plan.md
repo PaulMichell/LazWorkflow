@@ -34,7 +34,7 @@ Define a provider-neutral generated-image record: bytes, MIME type, width, heigh
 One tool name for every capable model. Extra parameters follow the profile's delivery mode. A text description is never saved as a file.
 
 ### 2.1 Register write_image only for a capable model in a writing mode
-Status: not started
+Status: complete
 
 Tool name `write_image`. Required `path` is project-relative. Response-part mode also takes the turn-local image id, optional when the turn has exactly one image. Tool-prompt mode also takes a `prompt` and an optional pixel size, and the adapter calls the selected model's own image endpoint. An incapable model has no such tool, so a hallucinated call is an unknown tool and writes nothing.
 
