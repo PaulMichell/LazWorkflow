@@ -40,7 +40,7 @@ Keep one `RequestProfileImage` entry. Split the JSON by backend. Grok posts `mod
 The user must be able to see which model will draw, including a model that is not Imagine. The current hint says turning the checkbox on keeps the current model. That hint is the old contract.
 
 ### 2.1 Replace the delivery combo with an image-model field
-Status: not started
+Status: complete
 
 On the connection page, keep one checkbox, captioned so it means this connection may draw. Replace the Delivery label and combo with an editable image-model control. Grok offers `grok-imagine-image-2.0` and `grok-imagine-image`, and still accepts another id typed in. OpenAI-compatible offers an empty field the user can type. Claude and Codex leave the control disabled and say this connection cannot draw. The hint says the chat model is not the image model. Enabling the checkbox on a Grok row fills the default when the field is empty. Disabling the checkbox does not clear a stored id.
 
