@@ -226,7 +226,9 @@ Begin
         (Pos('"prompt":', ImageToolSlice(ToolsJson)) = 0) And
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0) And
         (Pos('<image_output>', Prompt) > 0) And (Pos('Create still images', Prompt) > 0) And
-        (Pos('write_image', Prompt) > 0) And ToolAllowedInMode('write_image', amBuild));
+        (Pos('write_image', Prompt) > 0) And
+        (Pos('unless the write_image result says the write succeeded', Prompt) > 0) And
+        ToolAllowedInMode('write_image', amBuild));
       Check('Plan and Document never register write_image',
         (Pos('write_image', BuildAssistantToolsJsonForMode(amPlan)) = 0) And
         (Pos('write_image', BuildAssistantToolsJsonForMode(amDocument)) = 0) And

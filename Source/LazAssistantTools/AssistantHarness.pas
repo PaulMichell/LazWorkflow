@@ -340,7 +340,8 @@ Begin
     '<image_output>' + LineEnding +
     'Create still images only with `write_image`. Do not use `write_file` or `replace_in_file` for images. ' +
     'Prefer PNG for icons and UI art unless the user names another format. ' +
-    'Pass the generated image through rather than describing a file that was not written.' + LineEnding +
+    'Pass the generated image through rather than describing a file that was not written. ' +
+    'Do not claim the image file exists unless the write_image result says the write succeeded.' + LineEnding +
     '</image_output>';
 End;
 

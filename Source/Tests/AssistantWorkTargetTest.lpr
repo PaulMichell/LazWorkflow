@@ -367,6 +367,8 @@ Var
   Store: TAssistantConnections;
   Item: TAssistantConnection;
   Images: TAssistantGeneratedImageArray;
+  Refs: TAssistantImageRefArray;
+  Stored: TBytes;
   SavedApproval: TAssistantApprovalMode;
   I: Integer;
   Function Dest(Const RelativePath: String): String;
@@ -402,13 +404,21 @@ Begin
       Images[0].Bytes[I] := OnePixelPng[I];
     SetTurnGeneratedImages(Images);
     Check('write_image saves a matching png', ExecuteAssistantToolForMode('write_image',
-      '{"path":"icons/dot.png"}', amBuild, Reply, Note) And (Pos('path=icons/dot.png', Reply) > 0) And
+      '{"path":"icons/dot.png"}', amBuild, Reply, Note) And (Pos('Wrote icons/dot.png (67 bytes).', Reply) = 1) And
+      (Pos('path=icons/dot.png', Reply) > 0) And (Pos('bytes=67', Reply) > 0) And
+      (Pos('width=1', Reply) > 0) And (Pos('height=1', Reply) > 0) And
       (Pos('mime=image/png', Reply) > 0) And FileExists(Dest('icons/dot.png')));
     Written := ReadText(Dest('icons/dot.png'));
     Check('saved bytes are the generated image', Written = StringOf(Images[0].Bytes));
+    SetLength(Refs, 0);
+    SetLength(Stored, 0);
+    Check('read_image of the written path shows the same bytes',
+      ExecuteAssistantToolForMode('read_image', '{"path":"icons/dot.png"}', amBuild, Reply, Note, Refs) And
+      (Length(Refs) = 1) And ReadStoredAssistantImage(Root, Refs[0].DisplayPath, Stored, Note) And
+      (StringOf(Stored) = Written) And (Pos('Wrote', Reply) = 0));
     Check('existing file is not replaced without overwrite',
       (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png"}', amBuild, Reply, Note)) And
-      (Pos('overwrite', Note) > 0) And (Written = StringOf(Images[0].Bytes)));
+      (Pos('overwrite', Note) > 0) And (Pos('Wrote', Reply) = 0) And (Written = StringOf(Images[0].Bytes)));
     Check('overwrite replaces the file', ExecuteAssistantToolForMode('write_image',
       '{"path":"icons/dot.png","overwrite":true}', amBuild, Reply, Note) And FileExists(Dest('icons/dot.png')));
     Check('extension must match the bytes',

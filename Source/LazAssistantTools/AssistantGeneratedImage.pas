@@ -169,7 +169,9 @@ End;
 
 Function GeneratedImageResultText(Const RelativePath: String; Const Image: TAssistantGeneratedImage): String;
 Begin
-  Result := 'path=' + RelativePath + LineEnding +
+  { The Wrote line is the success signal, same role as write_file's Wrote line. }
+  Result := 'Wrote ' + RelativePath + ' (' + IntToStr(Length(Image.Bytes)) + ' bytes).' + LineEnding +
+    'path=' + RelativePath + LineEnding +
     'bytes=' + IntToStr(Length(Image.Bytes)) + LineEnding +
     'width=' + IntToStr(Image.Width) + LineEnding +
     'height=' + IntToStr(Image.Height) + LineEnding +
