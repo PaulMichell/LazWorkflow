@@ -11,7 +11,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, base64, AssistantGeneratedImage, AssistantImageAdapters, AssistantConnections;
+  Classes, SysUtils, base64, fpjson, jsonparser, AssistantGeneratedImage, AssistantImageAdapters,
+  AssistantConnections, WorkflowSettings;
 
 Const
   OnePixelPng: Array[0..66] Of Byte = (
@@ -88,6 +89,66 @@ Begin
     (Pos('openai', LowerCase(ResultText)) = 0));
 End;
 
+Procedure TestProfileEndpoint;
+Var
+  Root, SeenUrl, SeenBody, ErrorText: String;
+  Store: TAssistantConnections;
+  Item: TAssistantConnection;
+  Image: TAssistantGeneratedImage;
+  BodyObj: TJSONObject;
+  Data: TJSONData;
+  Function FakePost(Const Url, Body, Headers: String; Out ResponseBody: String; Out StatusCode: Integer;
+    Out PostError: String): Boolean;
+  Begin
+    SeenUrl := Url;
+    SeenBody := Body;
+    PostError := '';
+    StatusCode := 200;
+    ResponseBody := '{"data":[{"b64_json":"' + PngBase64 + '"}]}';
+    Result := Pos('Bearer test-key', Headers) > 0;
+  End;
+Begin
+  Root := GetTempDir + 'laz-image-endpoint-' + IntToStr(Random(100000));
+  ForceDirectories(Root);
+  SetWorkflowSettingsDirectory(Root);
+  SetGeneratedImagePost(@FakePost);
+  Store := TAssistantConnections.Create(Root);
+  Data := Nil;
+  Try
+    Item := Store.AddStored('endpoint', 'Endpoint', 'openai-compatible');
+    Item.Model := 'kept-chat-model';
+    Item.ApiBase := 'https://example.invalid/v1';
+    Item.KeySource := 'stored';
+    Item.KeyValue := 'test-key';
+    Item.ImageOutput := True;
+    Item.ImageDelivery := aidToolPrompt;
+    Store.ActiveId := Item.Id;
+    Check('profile saves', Store.Save);
+    Check('tool-prompt calls this profile endpoint',
+      RequestProfileImage('a dot', '1024x1024', Image, ErrorText) And (ErrorText = '') And
+      (Image.Mime = 'image/png') And (Image.Width = 1));
+    Check('endpoint is this profile, not another image product',
+      (SeenUrl = 'https://example.invalid/v1/images/generations') And
+      (Pos('grok-imagine', LowerCase(SeenBody)) = 0) And (Pos('dall-e', LowerCase(SeenBody)) = 0));
+    Data := GetJSON(SeenBody);
+    Check('request body uses the selected model', Data Is TJSONObject);
+    If Data Is TJSONObject Then
+      Begin
+        BodyObj := TJSONObject(Data);
+        Check('model and size stay on this profile',
+          (BodyObj.Get('model', '') = 'kept-chat-model') And (BodyObj.Get('size', '') = '1024x1024') And
+          (BodyObj.Get('prompt', '') = 'a dot'));
+      End;
+    Check('the endpoint call writes nothing',
+      Not FileExists(IncludeTrailingPathDelimiter(Root) + 'icons' + PathDelim + 'dot.png'));
+  Finally
+    Data.Free;
+    SetGeneratedImagePost(Nil);
+    Store.Free;
+    SetWorkflowSettingsDirectory('');
+  End;
+End;
+
 Var
   Images: TAssistantGeneratedImageArray;
   ErrorText, Encoded, Body: String;
@@ -118,5 +179,6 @@ Begin
   Check('unknown profile has no adapter and no new tool',
     (Not CollectGeneratedImages('codex', '{"output":[]}', Images, ErrorText)) And (Length(Images) = 0) And
     (Pos('write_image', ErrorText) = 0));
+  TestProfileEndpoint;
   WriteLn('AssistantGeneratedImageTest passed');
 End.

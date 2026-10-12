@@ -95,7 +95,7 @@ Type
 Implementation
 
 Uses
-  AssistantTools, AssistantSubagents, WorkflowLog;
+  AssistantTools, AssistantSubagents, AssistantImageAdapters, AssistantGeneratedImage, WorkflowLog;
 
 Const
   MaxAskToolRounds = 12;
@@ -1032,6 +1032,7 @@ Var
     SetLength(FPendingImageRefs, 0);
   End;
 Begin
+  RememberResponseImages(FResponseOutputJson);
   SetLength(FPendingImageRefs, 0);
   Svc := LockedService;
   If Not Assigned(Svc) Then
@@ -1201,6 +1202,7 @@ Var
   HasTools: Boolean;
   Svc: TAssistantService;
 Begin
+  ClearTurnGeneratedImages;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
   EmitSnapshot(False, 'Waiting for first token…', True);

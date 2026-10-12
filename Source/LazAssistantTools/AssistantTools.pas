@@ -74,7 +74,7 @@ Uses
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
-  fpjson, jsonparser;
+  AssistantGeneratedImage, AssistantImageAdapters, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -613,7 +613,7 @@ Begin
     Begin
       Fields :=
         '"prompt":{"type":"string","description":"What this same model should draw."},' +
-        '"size":{"type":"string","description":"Optional pixel size. Omit for the model default."}';
+        '"size":{"type":"string","description":"Optional pixel size."}';
       Required := '["path","prompt"]';
     End
   Else
@@ -627,7 +627,7 @@ Begin
       '"name":"write_image",' +
       '"description":"Save a still image into the project. Do not use write_file or replace_in_file for images.",' +
       '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative path"},' +
+        '"path":{"type":"string","description":"Project-relative path."},' +
         Fields +
       '},"required":' + Required + '}}}';
 End;
@@ -3589,6 +3589,36 @@ Begin
   End;
 End;
 
+Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Path: String;
+  Image: TAssistantGeneratedImage;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  ClearGeneratedImage(Image);
+  Path := Trim(JsonArgString(ArgumentsJson, 'path'));
+  If Path = '' Then
+    Begin
+      ErrorText := 'write_image requires a project-relative path.';
+      Exit;
+    End;
+  If ActiveProfileImageDelivery = aidToolPrompt Then
+    Begin
+      If Not RequestProfileImage(JsonArgString(ArgumentsJson, 'prompt'), JsonArgString(ArgumentsJson, 'size'),
+        Image, ErrorText) Then
+        Exit;
+    End
+  Else If Not SelectTurnGeneratedImage(JsonArgString(ArgumentsJson, 'image_id'), Image, ErrorText) Then
+    Exit;
+  { Path checks and the file write come next. Do not claim this path was saved. }
+  If (Path = '') Or (Length(Image.Bytes) = 0) Then
+    ErrorText := 'The image was not saved.'
+  Else
+    ErrorText := 'The image was not saved.';
+End;
+
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
@@ -3632,6 +3662,12 @@ Begin
   ImageRefs := Nil;
   Name := LowerCase(Trim(ToolName));
   GAssistantToolMode := Mode;
+  { Not registered for this turn. A hallucinated name is unknown and writes nothing. }
+  If (Name = 'write_image') And (Not AssistantTurnOffersImageOutput(Mode)) Then
+    Begin
+      ErrorText := 'Unknown tool: write_image';
+      Exit;
+    End;
   If Not ToolAllowedInMode(Name, Mode) Then
     Begin
       ErrorText := Format('Tool "%s" is not available in %s mode.',
@@ -3740,6 +3776,8 @@ Begin
     Result := ToolSetActivePlan(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'search_in_project' Then
     Result := ToolSearchInProject(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'write_image' Then
+    Result := ToolWriteImage(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'write_file' Then
     Result := ToolWriteFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'replace_in_file' Then

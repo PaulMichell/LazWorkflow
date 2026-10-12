@@ -49,6 +49,11 @@ Function CollectGeneratedImages(Const AdapterId, ResponseJson: String;
 Function GeneratedImageBytesAccepted(Const Image: TAssistantGeneratedImage; Out ErrorText: String): Boolean;
 /// Tool result. Path is the writer's project-relative path. No provider field is read.
 Function GeneratedImageResultText(Const RelativePath: String; Const Image: TAssistantGeneratedImage): String;
+Procedure ClearTurnGeneratedImages;
+Procedure SetTurnGeneratedImages(Const Images: TAssistantGeneratedImageArray);
+/// Empty id selects the only image. More than one image requires the turn-local id.
+Function SelectTurnGeneratedImage(Const ImageId: String; Out Image: TAssistantGeneratedImage;
+  Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -57,6 +62,8 @@ Uses
 
 Var
   RegisteredAdapters: Array Of IAssistantGeneratedImageAdapter;
+  TurnImages: TAssistantGeneratedImageArray;
+  TurnLock: TRTLCriticalSection;
 
 Procedure ClearGeneratedImage(Out Image: TAssistantGeneratedImage);
 Begin
@@ -169,5 +176,69 @@ Begin
     'mime=' + Image.Mime + LineEnding +
     'id=' + Image.Id;
 End;
+
+Procedure ClearTurnGeneratedImages;
+Begin
+  EnterCriticalSection(TurnLock);
+  Try
+    SetLength(TurnImages, 0);
+  Finally
+    LeaveCriticalSection(TurnLock);
+  End;
+End;
+
+Procedure SetTurnGeneratedImages(Const Images: TAssistantGeneratedImageArray);
+Begin
+  EnterCriticalSection(TurnLock);
+  Try
+    TurnImages := Copy(Images);
+  Finally
+    LeaveCriticalSection(TurnLock);
+  End;
+End;
+
+Function SelectTurnGeneratedImage(Const ImageId: String; Out Image: TAssistantGeneratedImage;
+  Out ErrorText: String): Boolean;
+Var
+  Wanted: String;
+  I: Integer;
+Begin
+  ClearGeneratedImage(Image);
+  ErrorText := '';
+  Wanted := Trim(ImageId);
+  EnterCriticalSection(TurnLock);
+  Try
+    If Wanted = '' Then
+      Begin
+        If Length(TurnImages) = 1 Then
+          Begin
+            Image := TurnImages[0];
+            Exit(True);
+          End;
+        ErrorText := 'Turn-local image id is required.';
+        Exit(False);
+      End;
+    For I := 0 To High(TurnImages) Do
+      If TurnImages[I].Id = Wanted Then
+        Begin
+          Image := TurnImages[I];
+          Exit(True);
+        End;
+  Finally
+    LeaveCriticalSection(TurnLock);
+  End;
+  ErrorText := 'No generated image with that id.';
+  Result := False;
+End;
+
+Initialization
+
+  InitCriticalSection(TurnLock);
+
+Finalization
+
+  DoneCriticalSection(TurnLock);
+  SetLength(RegisteredAdapters, 0);
+  SetLength(TurnImages, 0);
 
 End.

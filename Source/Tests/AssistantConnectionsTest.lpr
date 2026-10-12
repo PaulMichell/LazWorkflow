@@ -221,6 +221,8 @@ Begin
       Check('a capable Build turn registers write_image and the image-output prompt',
         (Pos('"name":"write_image"', ToolsJson) > 0) And
         (Pos('"image_id"', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"required":["path"]', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('Project-relative path.', ImageToolSlice(ToolsJson)) > 0) And
         (Pos('"prompt":', ImageToolSlice(ToolsJson)) = 0) And
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0) And
         (Pos('<image_output>', Prompt) > 0) And (Pos('Create still images', Prompt) > 0) And
@@ -241,7 +243,15 @@ Begin
         (Store.Active.Model = 'kept-grok-model') And (Pos('"name":"write_image"', ToolsJson) > 0) And
         (Pos('"prompt":', ImageToolSlice(ToolsJson)) > 0) And
         (Pos('"image_id"', ImageToolSlice(ToolsJson)) = 0) And
+        (Pos('Project-relative path.', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"required":["path","prompt"]', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('Optional pixel size.', ImageToolSlice(ToolsJson)) > 0) And
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0));
+      Prompt := '';
+      ErrorText := '';
+      Check('a Plan call is unknown even when the flag is on',
+        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', amPlan,
+          Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = ''));
       Store.Active.ImageOutput := False;
       Store.Save;
       ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
@@ -250,6 +260,12 @@ Begin
         (Pos('write_image', ToolsJson) = 0) And (Pos('<image_output>', Prompt) = 0) And
         (Pos('Create still images', Prompt) = 0) And (Not ToolAllowedInMode('write_image', amBuild)) And
         (Store.Active.Model = 'kept-grok-model'));
+      Prompt := '';
+      ErrorText := '';
+      Check('an incapable call is an unknown tool and writes nothing',
+        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', amBuild,
+          Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = '') And
+        (Not FileExists(IncludeTrailingPathDelimiter(Root) + 'icons' + PathDelim + 'dot.png')));
     Finally
       Names.Free;
     End;

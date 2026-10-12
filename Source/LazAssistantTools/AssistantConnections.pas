@@ -75,6 +75,17 @@ Function ActiveProfileImageDelivery: TAssistantImageDelivery;
 /// Plan and Document never offer write_image; they do not write project files.
 Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
 
+Type
+  { Fields needed to call this profile's own image endpoint. Do not log KeyValue. }
+  TAssistantProfileCall = Record
+    Backend, Model, ApiBase, Preset, KeySource, KeyEnv, KeyValue: String;
+    ImageOutput: Boolean;
+    ImageDelivery: TAssistantImageDelivery;
+  End;
+
+/// Reads the saved active profile. Does not rewrite the live config.
+Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
+
 Implementation
 
 Uses
@@ -120,7 +131,20 @@ Begin
     Result := aidResponsePart;
 End;
 
-Procedure ReadActiveProfile(Out ImageOutput: Boolean; Out ImageDelivery: TAssistantImageDelivery);
+Procedure ClearProfileCall(Out Profile: TAssistantProfileCall);
+Begin
+  Profile.Backend := '';
+  Profile.Model := '';
+  Profile.ApiBase := '';
+  Profile.Preset := '';
+  Profile.KeySource := '';
+  Profile.KeyEnv := '';
+  Profile.KeyValue := '';
+  Profile.ImageOutput := False;
+  Profile.ImageDelivery := aidResponsePart;
+End;
+
+Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
 Var
   Section: TJSONObject;
   Node: TJSONData;
@@ -130,8 +154,8 @@ Var
   I: Integer;
 Begin
   { Read the saved section only. Do not call Load: that rewrites the live config. }
-  ImageOutput := False;
-  ImageDelivery := aidResponsePart;
+  ClearProfileCall(Profile);
+  Result := False;
   Section := ReadWorkflowSection('assistant');
   If Not Assigned(Section) Then
     Exit;
@@ -150,14 +174,37 @@ Begin
         Obj := TJSONObject(Arr.Items[I]);
         If Obj.Get('id', '') <> ActiveId Then
           Continue;
+        Profile.Backend := Obj.Get('backend', '');
+        Profile.Model := Obj.Get('model', '');
+        Profile.ApiBase := Obj.Get('api_base', '');
+        Profile.Preset := Obj.Get('preset', '');
+        Profile.KeySource := Obj.Get('key_source', '');
+        Profile.KeyEnv := Obj.Get('key_env', '');
+        Profile.KeyValue := Obj.Get('key_value', '');
         If Obj.Find('image_output') <> Nil Then
-          ImageOutput := Obj.Get('image_output', False);
-        ImageDelivery := StrToAssistantImageDelivery(Obj.Get('image_delivery', ''));
-        Exit;
+          Profile.ImageOutput := Obj.Get('image_output', False);
+        Profile.ImageDelivery := StrToAssistantImageDelivery(Obj.Get('image_delivery', ''));
+        Exit(True);
       End;
   Finally
     Section.Free;
   End;
+End;
+
+Procedure ReadActiveProfile(Out ImageOutput: Boolean; Out ImageDelivery: TAssistantImageDelivery);
+Var
+  Profile: TAssistantProfileCall;
+Begin
+  If ReadActiveProfileCall(Profile) Then
+    Begin
+      ImageOutput := Profile.ImageOutput;
+      ImageDelivery := Profile.ImageDelivery;
+    End
+  Else
+    Begin
+      ImageOutput := False;
+      ImageDelivery := aidResponsePart;
+    End;
 End;
 
 Function ActiveProfileImageOutput: Boolean;

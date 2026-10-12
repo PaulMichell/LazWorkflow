@@ -1,7 +1,8 @@
 Unit AssistantImageAdapters;
 
-{ Fills the generated-image record from each response shape. The writer does
-  not use this unit. A new shape is a new adapter, not a new tool.
+{ Fills the generated-image record from each response shape, and calls this
+  profile's own image endpoint for tool-prompt mode. The file writer does not
+  use this unit. A new shape is a new adapter, not a new tool.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -14,12 +15,26 @@ Interface
 Uses
   Classes, SysUtils, AssistantGeneratedImage;
 
+Type
+  TGeneratedImagePost = Function(Const Url, Body, Headers: String; Out ResponseBody: String;
+    Out StatusCode: Integer; Out ErrorText: String): Boolean;
+
+Procedure SetGeneratedImagePost(Post: TGeneratedImagePost);
+/// POST this profile's /images/generations with this profile's model. Does not write a file.
+Function RequestProfileImage(Const Prompt, PixelSize: String; Out Image: TAssistantGeneratedImage;
+  Out ErrorText: String): Boolean;
+/// Keep documented image parts from a Responses output array. An empty array is ignored.
+Procedure RememberResponseImages(Const OutputJson: String);
 Procedure RegisterBuiltinImageAdapters;
 
 Implementation
 
 Uses
-  base64, fpjson, jsonparser, AssistantImages;
+  base64, fpjson, jsonparser, AssistantImages, AssistantConnections, AssistantHttps, AssistantXaiProvider,
+  AssistantModelProvider;
+
+Var
+  ImagePost: TGeneratedImagePost;
 
 Type
   TResponsesImageAdapter = Class(TInterfacedObject, IAssistantGeneratedImageAdapter)
@@ -415,6 +430,144 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Procedure SetGeneratedImagePost(Post: TGeneratedImagePost);
+Begin
+  ImagePost := Post;
+End;
+
+Function PixelSizeAccepted(Const Size: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := Size <> '';
+  For I := 1 To Length(Size) Do
+    If Not (Size[I] In ['0'..'9', 'x', 'X']) Then
+      Exit(False);
+End;
+
+Function ImageEndpointUrl(Const ApiBase: String): String;
+Begin
+  Result := Trim(ApiBase);
+  While (Result <> '') And (Result[Length(Result)] = '/') Do
+    Delete(Result, Length(Result), 1);
+  Result := Result + '/images/generations';
+End;
+
+Function ProfileBearer(Const Profile: TAssistantProfileCall; Out Token, ErrorText: String): Boolean;
+Var
+  Provider: IAssistantModelProvider;
+Begin
+  Token := '';
+  ErrorText := '';
+  If Profile.Backend = 'grok' Then
+    Begin
+      Provider := CreateXaiModelProvider;
+      Result := Provider.GetAccessToken(False, Token, ErrorText);
+      Exit;
+    End;
+  If Profile.KeySource = 'stored' Then
+    Token := Profile.KeyValue
+  Else
+    Token := GetEnvironmentVariable(Profile.KeyEnv);
+  Result := (Token <> '') And (Pos(#10, Token) = 0) And (Pos(#13, Token) = 0);
+  If Not Result Then
+    ErrorText := 'This profile has no API key for its image endpoint.';
+End;
+
+Function RequestProfileImage(Const Prompt, PixelSize: String; Out Image: TAssistantGeneratedImage;
+  Out ErrorText: String): Boolean;
+Var
+  Profile: TAssistantProfileCall;
+  BodyObj: TJSONObject;
+  Images: TAssistantGeneratedImageArray;
+  Url, Body, Headers, Token, ResponseBody: String;
+  StatusCode: Integer;
+  Posted: Boolean;
+Begin
+  ClearGeneratedImage(Image);
+  ErrorText := '';
+  Result := False;
+  SetLength(Images, 0);
+  If Trim(Prompt) = '' Then
+    Begin
+      ErrorText := 'write_image requires a prompt.';
+      Exit;
+    End;
+  If (Trim(PixelSize) <> '') And (Not PixelSizeAccepted(Trim(PixelSize))) Then
+    Begin
+      ErrorText := 'Pixel size must look like 1024x1024.';
+      Exit;
+    End;
+  If Not ReadActiveProfileCall(Profile) Then
+    Begin
+      ErrorText := 'No profile is selected.';
+      Exit;
+    End;
+  If Trim(Profile.Model) = '' Then
+    Begin
+      ErrorText := 'This profile has no model.';
+      Exit;
+    End;
+  Url := ImageEndpointUrl(Profile.ApiBase);
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ErrorText := 'This profile has no image endpoint.';
+      Exit;
+    End;
+  If Not ProfileBearer(Profile, Token, ErrorText) Then
+    Exit;
+  BodyObj := TJSONObject.Create;
+  Try
+    BodyObj.Add('model', Profile.Model);
+    BodyObj.Add('prompt', Prompt);
+    BodyObj.Add('response_format', 'b64_json');
+    If Trim(PixelSize) <> '' Then
+      BodyObj.Add('size', Trim(PixelSize));
+    Body := BodyObj.AsJSON;
+  Finally
+    BodyObj.Free;
+  End;
+  Headers := 'Authorization: Bearer ' + Token;
+  If Profile.Preset = 'openrouter' Then
+    Headers := Headers + LineEnding + 'X-Title: LazWorkflow';
+  StatusCode := 0;
+  ResponseBody := '';
+  If Assigned(ImagePost) Then
+    Posted := ImagePost(Url, Body, Headers, ResponseBody, StatusCode, ErrorText)
+  Else
+    Posted := HttpsPostJson(Url, Body, Headers, ResponseBody, StatusCode, ErrorText);
+  If Not Posted Or (StatusCode < 200) Or (StatusCode >= 300) Then
+    Begin
+      If ErrorText = '' Then
+        ErrorText := 'Image endpoint returned HTTP ' + IntToStr(StatusCode) + '.';
+      Exit;
+    End;
+  If Not CollectGeneratedImages(AssistantImageAdapterImages, ResponseBody, Images, ErrorText) Then
+    Exit;
+  If Length(Images) <> 1 Then
+    Begin
+      ErrorText := 'The image endpoint did not return one image.';
+      Exit;
+    End;
+  Image := Images[0];
+  Result := True;
+End;
+
+Procedure RememberResponseImages(Const OutputJson: String);
+Var
+  Images: TAssistantGeneratedImageArray;
+  ErrorText, Body: String;
+Begin
+  If Trim(OutputJson) = '' Then
+    Exit;
+  If Trim(OutputJson)[1] = '[' Then
+    Body := '{"output":' + OutputJson + '}'
+  Else
+    Body := OutputJson;
+  If CollectGeneratedImages(AssistantImageAdapterResponses, Body, Images, ErrorText) And (Length(Images) > 0) Then
+    SetTurnGeneratedImages(Images);
 End;
 
 Procedure RegisterBuiltinImageAdapters;
