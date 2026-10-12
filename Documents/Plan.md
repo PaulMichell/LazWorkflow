@@ -39,7 +39,7 @@ Status: complete
 Tool name `write_image`. Required `path` is project-relative. Response-part mode also takes the turn-local image id, optional when the turn has exactly one image. Tool-prompt mode also takes a `prompt` and an optional pixel size, and the adapter calls the selected model's own image endpoint. An incapable model has no such tool, so a hallucinated call is an unknown tool and writes nothing.
 
 ### 2.2 Validate the path and the bytes before writing
-Status: not started
+Status: complete
 
 Reuse the `read_image` sandbox: the resolved path must stay inside the project root, and a symlink that leaves the project is refused. Allow only png, jpg, jpeg, webp, and gif, and require the magic bytes to match the extension. Enforce the same size ceiling as `read_image`. Refuse `.git`, `.assistant`, and build-output paths. If the file already exists, write only when `overwrite` is true. A missing image part, a failed provider call, or a failed check returns an error and creates no file.
 
