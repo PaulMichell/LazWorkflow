@@ -20,7 +20,7 @@ Status: complete
 Store a boolean on the model profile, default false, plus the delivery mode (response part or tool prompt). Settings shows a "Can generate images" control for the selected profile. Turning it on must not select an image product other than the current model. Confirm the profile record and settings form in LazWorkflow before editing them.
 
 ### 1.2 Rebuild the tool list and prompt from the flag
-Status: not started
+Status: complete
 
 On each turn, if ImageOutput is false, omit `write_image` and omit any line that says the model can create image files. If it is true, register the tool and add the short image-output prompt section. Switching model mid-conversation takes effect on the next turn. Plan mode and Document mode never register the tool, even when the flag is on, because those modes do not write files.
 
