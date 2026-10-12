@@ -25,7 +25,7 @@ Status: complete
 On each turn, if ImageOutput is false, omit `write_image` and omit any line that says the model can create image files. If it is true, register the tool and add the short image-output prompt section. Switching model mid-conversation takes effect on the next turn. Plan mode and Document mode never register the tool, even when the flag is on, because those modes do not write files.
 
 ### 1.3 Keep provider differences behind one adapter record
-Status: not started
+Status: complete
 
 Define a provider-neutral generated-image record: bytes, MIME type, width, height, and a turn-local id. Each provider adapter fills that record from its own response. The writer, the path checks, and the tool result use only that record. Adding another capable model is a new adapter plus the flag, not a new tool.
 
