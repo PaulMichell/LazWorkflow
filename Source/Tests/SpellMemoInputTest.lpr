@@ -13,6 +13,7 @@ Type
     Procedure CheckWrap(Const Value: String; AWidth: Integer);
     Procedure CheckUndo;
     Procedure ApplyAmpersandSuggestion;
+    Procedure CheckRightClickKeepsSelection;
   End;
 
 Procedure Check(Const Name: String; OK: Boolean);
@@ -213,6 +214,18 @@ Begin
   Check('redo applies the suggestion', Text = 'AT&T');
 End;
 
+Procedure TInputMemo.CheckRightClickKeepsSelection;
+Begin
+  Clear;
+  TypeText('hello world');
+  SelStart := 0;
+  SelLength := 5;
+  MouseDown(mbRight, [], 4, 4);
+  Check('right-click keeps the selection', (SelStart = 0) And (SelLength = 5));
+  MouseDown(mbLeft, [], 4, 4);
+  Check('left-click still places the caret', SelLength = 0);
+End;
+
 Procedure TInputMemo.CheckWrap(Const Value: String; AWidth: Integer);
 Var
   ParaStart, ParaEnd, RowStart, Walk, CodeLen, BreakAt, LastSpace, MaxWidth: Integer;
@@ -353,6 +366,7 @@ Begin
     Check('unwrapped End', Memo.SelStart = Length(Prompt));
     Memo.CheckUndo;
     Memo.ApplyAmpersandSuggestion;
+    Memo.CheckRightClickKeepsSelection;
     Memo.TypeText(' pending at destruction');
     Memo.Free;
     Application.ProcessMessages;

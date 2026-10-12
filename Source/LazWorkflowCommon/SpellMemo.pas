@@ -4,7 +4,7 @@ Unit SpellMemo;
 
   Size note: exceeds the 1000 line preference. Wrap layout, caret/selection,
   undo grouping and spell markup are one painted control so edits and
-  underlines stay widgetset-free. Reviewed 2026-10: no hidden sibling material. }
+  underlines stay widgetset-free. Reviewed 2026-10-10: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -1513,6 +1513,10 @@ Begin
       Exit;
     End;
   FIgnoreDragSelect := False;
+  { Right-click opens the popup. Moving the caret would drop the selection
+    before OnPopup, so Cut and Copy stay disabled. Keep the current range. }
+  If (Button = mbRight) And (FSelLength > 0) Then
+    Exit;
   NewPos := CharIndexAtPoint(X, Y);
   MoveCaret(NewPos, ssShift In Shift);
 End;
