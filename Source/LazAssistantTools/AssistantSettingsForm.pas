@@ -53,6 +53,9 @@ Type
     KindCaptionLabel: TLabel;
     KindValueLabel: TLabel;
     ActiveConnectionLabel: TLabel;
+    ImageOutputCheck: TCheckBox;
+    ImageDeliveryLabel: TLabel;
+    ImageDeliveryCombo: TComboBox;
     DetailHost: TPanel;
     EmptyConnectionLabel: TLabel;
     GrokPanel: TScrollBox;
@@ -171,6 +174,7 @@ Type
     Procedure AddSkillButtonClick(Sender: TObject);
     Procedure RemoveSkillButtonClick(Sender: TObject);
     Procedure SkillsGridSelection(Sender: TObject; ACol, ARow: Integer);
+    Procedure ImageOutputCheckClick(Sender: TObject);
   Private
     Connections: TAssistantConnections;
     SkillPaths: TStringList;
@@ -193,6 +197,7 @@ Type
     Procedure UpdateSkillSelection;
     Procedure SaveSkillModes;
     Procedure ShowConnectionKind(Const Backend: String);
+    Procedure ApplyImageCapability(Item: TAssistantConnection);
     Procedure RefreshConnections;
     Procedure StoreConnection;
     Procedure ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
@@ -395,6 +400,7 @@ Begin
     'Always — never prompt (like Build always-approve)'], 0);
   EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
     'Always — never prompt (like Build always-approve)'], 0);
+  EnsureItems(ImageDeliveryCombo, ['Response image part', 'Tool prompt'], 0);
   CompatibleWireLabel.Caption := 'Chat completions';
   CodexUsageLabel.Caption := 'This program did not report counts.';
   GrokUsageLabel.Caption := 'This connection did not report usage.';
@@ -413,6 +419,28 @@ Begin
   KindValueLabel.Caption := KindCaption(Backend);
   ConnectionNameEdit.Enabled := Backend <> '';
   UseConnectionButton.Enabled := Backend <> '';
+End;
+
+Procedure TAssistantSettingsForm.ApplyImageCapability(Item: TAssistantConnection);
+Begin
+  ImageOutputCheck.Visible := Assigned(Item);
+  ImageDeliveryLabel.Visible := Assigned(Item);
+  ImageDeliveryCombo.Visible := Assigned(Item);
+  ImageOutputCheck.Enabled := Assigned(Item);
+  ImageDeliveryLabel.Enabled := Assigned(Item);
+  If Not Assigned(Item) Then
+    Begin
+      ImageOutputCheck.Checked := False;
+      ImageDeliveryCombo.ItemIndex := 0;
+      ImageDeliveryCombo.Enabled := False;
+      Exit;
+    End;
+  ImageOutputCheck.Checked := Item.ImageOutput;
+  If Item.ImageDelivery = aidToolPrompt Then
+    ImageDeliveryCombo.ItemIndex := 1
+  Else
+    ImageDeliveryCombo.ItemIndex := 0;
+  ImageDeliveryCombo.Enabled := Item.ImageOutput;
 End;
 
 Function TAssistantSettingsForm.HasGrokRow: Boolean;
@@ -676,6 +704,12 @@ Begin
   Item := Connections[SelectedConnection];
   If Trim(ConnectionNameEdit.Text) <> '' Then
     Item.Name := Trim(ConnectionNameEdit.Text);
+  { Capability only. The selected model is stored by the kind-specific block below. }
+  Item.ImageOutput := ImageOutputCheck.Checked;
+  If ImageDeliveryCombo.ItemIndex = 1 Then
+    Item.ImageDelivery := aidToolPrompt
+  Else
+    Item.ImageDelivery := aidResponsePart;
   If Item.Backend = 'grok' Then
     Begin
       Item.ApiBase := Trim(ApiBaseEdit.Text);
@@ -949,6 +983,7 @@ Begin
     Begin
       ShowConnectionKind('');
       ConnectionNameEdit.Text := '';
+      ApplyImageCapability(Nil);
       UpdateCompactAvailability;
       Exit;
     End;
@@ -977,6 +1012,7 @@ Begin
       LoadCompatibleConnection(Item)
     Else If Item.Backend = 'claude' Then
       LoadClaudeConnection(Item);
+    ApplyImageCapability(Item);
   Finally
     FLoading := False;
   End;
@@ -1806,6 +1842,68 @@ Begin
     Begin
       MessageDlg('Select a model from the list (e.g. grok-4.5).', mtError, [mbOK], 0);
       CanClose := False;
+    End;
+End;
+
+Procedure TAssistantSettingsForm.ImageOutputCheckClick(Sender: TObject);
+Var
+  Backend, KeptText: String;
+  KeptIndex: Integer;
+Begin
+  KeptIndex := -1;
+  KeptText := '';
+  Backend := '';
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
+    Begin
+      Backend := Connections[SelectedConnection].Backend;
+      If Backend = 'grok' Then
+        Begin
+          KeptIndex := ModelList.ItemIndex;
+          If (KeptIndex >= 0) And (KeptIndex < ModelList.Items.Count) Then
+            KeptText := ModelList.Items[KeptIndex];
+        End
+      Else If Backend = 'codex' Then
+        Begin
+          KeptIndex := CodexFrame.ModelCombo.ItemIndex;
+          KeptText := CodexFrame.ModelCombo.Text;
+        End
+      Else If Backend = 'openai-compatible' Then
+        Begin
+          KeptIndex := CompatibleModelCombo.ItemIndex;
+          KeptText := CompatibleModelCombo.Text;
+        End
+      Else If Backend = 'claude' Then
+        KeptText := ClaudeModelEdit.Text;
+    End;
+  ImageDeliveryCombo.Enabled := ImageOutputCheck.Enabled And ImageOutputCheck.Checked;
+  { Turning the flag on must not select an image product other than the current model. }
+  If Backend = 'grok' Then
+    Begin
+      If ModelList.ItemIndex <> KeptIndex Then
+        ModelList.ItemIndex := KeptIndex;
+    End
+  Else If Backend = 'codex' Then
+    Begin
+      If CodexFrame.ModelCombo.Text <> KeptText Then
+        Begin
+          CodexFrame.ModelCombo.ItemIndex := KeptIndex;
+          If CodexFrame.ModelCombo.Text <> KeptText Then
+            CodexFrame.ModelCombo.Text := KeptText;
+        End;
+    End
+  Else If Backend = 'openai-compatible' Then
+    Begin
+      If CompatibleModelCombo.Text <> KeptText Then
+        Begin
+          CompatibleModelCombo.ItemIndex := KeptIndex;
+          If CompatibleModelCombo.Text <> KeptText Then
+            CompatibleModelCombo.Text := KeptText;
+        End;
+    End
+  Else If Backend = 'claude' Then
+    Begin
+      If ClaudeModelEdit.Text <> KeptText Then
+        ClaudeModelEdit.Text := KeptText;
     End;
 End;
 

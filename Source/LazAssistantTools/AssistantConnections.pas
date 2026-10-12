@@ -1,8 +1,10 @@
 Unit AssistantConnections;
 
-{ Named connection definitions. Credentials remain with each backend's account
-  owner; selecting a connection never disconnects another account.
-  Codex homes are derived paths only. This unit does not create or delete them. (c) 2026 Michell Computing. }
+{ Named connection definitions. Each row is the selected model profile.
+  Image output is a stored capability on that profile, not a model id.
+  Credentials remain with each backend's account owner; selecting a connection
+  never disconnects another account. Codex homes are derived paths only.
+  This unit does not create or delete them. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,14 +20,22 @@ Const
   AssistantOpenRouterApiBase = 'https://openrouter.ai/api/v1';
   AssistantWireChatCompletions = 'chat-completions';
   AssistantOpenRouterKeyEnv = 'OPENROUTER_API_KEY';
+  AssistantImageDeliveryResponsePart = 'response-part';
+  AssistantImageDeliveryToolPrompt = 'tool-prompt';
 
 Type
+  { How a capable profile delivers pixels. Neither value names an image product. }
+  TAssistantImageDelivery = (aidResponsePart, aidToolPrompt);
+
   TAssistantConnection = Class
     Id, Name, Backend, Runtime, Model, ReasoningEffort, ApprovalMode: String;
     SearchMode, AnswerVerbosity, Preset, ApiBase: String;
     KeySource, KeyEnv, KeyValue, WireApi: String;
     CachedModelsJson: String;
     SearchCitations: Boolean;
+    { False until the user marks this profile. Does not select a different model. }
+    ImageOutput: Boolean;
+    ImageDelivery: TAssistantImageDelivery;
     MaxOutputTokens: Integer;
     Constructor Create;
     /// True for grok and openai-compatible. Derived from Backend, not a stored flag.
@@ -55,6 +65,9 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
+Function AssistantImageDeliveryToStr(Mode: TAssistantImageDelivery): String;
+Function StrToAssistantImageDelivery(Const Value: String): TAssistantImageDelivery;
+
 Implementation
 
 Uses
@@ -66,6 +79,8 @@ Begin
   ApprovalMode := 'ask';
   SearchMode := 'off';
   SearchCitations := False;
+  ImageOutput := False;
+  ImageDelivery := aidResponsePart;
   AnswerVerbosity := 'medium';
   MaxOutputTokens := 0;
   Preset := '';
@@ -79,6 +94,23 @@ End;
 Function TAssistantConnection.CanCompactContext: Boolean;
 Begin
   Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
+End;
+
+Function AssistantImageDeliveryToStr(Mode: TAssistantImageDelivery): String;
+Begin
+  Case Mode Of
+    aidToolPrompt: Result := AssistantImageDeliveryToolPrompt;
+  Else
+    Result := AssistantImageDeliveryResponsePart;
+  End;
+End;
+
+Function StrToAssistantImageDelivery(Const Value: String): TAssistantImageDelivery;
+Begin
+  If LowerCase(Trim(Value)) = AssistantImageDeliveryToolPrompt Then
+    Result := aidToolPrompt
+  Else
+    Result := aidResponsePart;
 End;
 
 Constructor TAssistantConnections.Create(Const ConfigRoot: String);

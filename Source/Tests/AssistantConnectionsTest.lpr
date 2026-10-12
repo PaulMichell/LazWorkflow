@@ -34,6 +34,8 @@ Begin
     Store.Load;
     Check('a saved Grok row is loaded with its id', Assigned(Store.Active) And (Store.Count = 1) And (Store.Active.Id = 'desk-grok') And
       (Store.Active.Name = 'Desk Grok') And (Store.Active.Backend = 'grok') And (Store.Active.Model = 'grok-kept'));
+    Check('a profile without image output stays off and keeps its model',
+      (Not Store.Active.ImageOutput) And (Store.Active.ImageDelivery = aidResponsePart) And (Store.Active.Model = 'grok-kept'));
     Raised := False;
     Try Store.ProfileDir(Store.Active); Except On E: Exception Do Raised := True; End;
     Check('Grok has no Codex profile', Raised);
@@ -153,6 +155,45 @@ Begin
       Policy.LoadFromFile(WorkflowSettingsPath);
       Check('saved removal leaves no Grok row', Pos('grok', LowerCase(Policy.Text)) = 0);
     Finally Policy.Free; End;
+    Item := Store.AddStored('image-profile', 'Image profile', 'openai-compatible');
+    Item.Model := 'kept-chat-model';
+    Item.ImageOutput := True;
+    Item.ImageDelivery := aidToolPrompt;
+    Store.ActiveId := Item.Id;
+    Check('enabling image output does not replace the model', Item.Model = 'kept-chat-model');
+    Store.Save;
+    Store.Load;
+    Check('image output roundtrip keeps the flag, delivery mode, and model',
+      Assigned(Store.Active) And Store.Active.ImageOutput And (Store.Active.ImageDelivery = aidToolPrompt) And
+      (Store.Active.Model = 'kept-chat-model') And (Store.Active.Id = 'image-profile'));
+    Store.Active.ImageOutput := False;
+    Store.Save;
+    Store.Load;
+    Check('turning image output off keeps the model and the stored delivery mode',
+      Assigned(Store.Active) And (Not Store.Active.ImageOutput) And (Store.Active.ImageDelivery = aidToolPrompt) And
+      (Store.Active.Model = 'kept-chat-model'));
+    Policy := TStringList.Create;
+    Try
+      Policy.Text := '{"assistant":{"active_connection":"image-profile","connections":[' +
+        '{"id":"image-profile","name":"Image profile","backend":"openai-compatible","model":"kept-chat-model",' +
+        '"image_output":true,"image_delivery":"not-a-product"}]}}';
+      Policy.SaveToFile(WorkflowSettingsPath);
+    Finally Policy.Free; End;
+    Store.Load;
+    Check('an unknown delivery mode does not select another model',
+      Assigned(Store.Active) And Store.Active.ImageOutput And (Store.Active.ImageDelivery = aidResponsePart) And
+      (Store.Active.Model = 'kept-chat-model'));
+    Item := Store.AddStored('grok-images', 'Grok images', 'grok');
+    Item.Model := 'kept-grok-model';
+    Item.ImageOutput := True;
+    Item.ImageDelivery := aidResponsePart;
+    Store.ActiveId := Item.Id;
+    AssistantChatConfig.Model := 'kept-grok-model';
+    Store.Save;
+    Store.Load;
+    Check('Grok profile keeps image output and its model',
+      Assigned(Store.Active) And (Store.Active.Id = 'grok-images') And Store.Active.ImageOutput And
+      (Store.Active.ImageDelivery = aidResponsePart) And (Store.Active.Model = 'kept-grok-model'));
   Finally
     Store.Free;
     DeleteCodexProfileDirectory(Derived(Root, Id), ErrorText);

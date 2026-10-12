@@ -49,8 +49,9 @@ Begin
   Raise Exception.Create('Missing Codex settings frame');
 End;
 Var Frame: TCodexConnectionFrame; IDE: TIDE; Dialog, CancelledDialog: TAssistantSettingsForm; OriginalContext: Boolean; List: TListBox; Names: TEdit;
-  TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note, StoreDir: String;
+  TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note, StoreDir, KeptModel: String;
   Pages: TPageControl; Store: TAssistantConnections; Guid: TGuid; Bitmap: TBitmap; PNG: TPortableNetworkGraphic;
+  ImageCheck: TCheckBox; DeliveryCombo: TComboBox; KeptIndex: Integer;
 Begin
   Application.Initialize;
   CreateGUID(Guid); ConfigRoot := GetTempDir + 'laz-settings-' + GUIDToString(Guid); ForceDirectories(ConfigRoot);
@@ -149,6 +150,19 @@ Begin
     Frame.RuntimeEdit.Text := ParamStr(0);
     Frame.LoadModels(ModelList);
     Frame.EffortCombo.ItemIndex := Frame.EffortCombo.Items.IndexOf('xhigh');
+    ImageCheck := TCheckBox(Dialog.FindComponent('ImageOutputCheck'));
+    DeliveryCombo := TComboBox(Dialog.FindComponent('ImageDeliveryCombo'));
+    KeptModel := Frame.ModelCombo.Text;
+    Check('selected profile shows Can generate images',
+      Assigned(ImageCheck) And ImageCheck.Visible And (ImageCheck.Caption = 'Can generate images') And
+      ImageCheck.Enabled And (Not ImageCheck.Checked) And Assigned(DeliveryCombo) And (DeliveryCombo.Items.Count = 2) And
+      (DeliveryCombo.ItemIndex = 0) And (KeptModel = 'model-one'));
+    ImageCheck.Checked := True;
+    ImageCheck.OnClick(ImageCheck);
+    DeliveryCombo.ItemIndex := 1;
+    Check('turning on image output keeps the current model',
+      (Frame.ModelCombo.Text = KeptModel) And (Frame.ModelCombo.Text = 'model-one') And ImageCheck.Checked And
+      DeliveryCombo.Enabled And (DeliveryCombo.ItemIndex = 1));
     List.ItemIndex := 0; List.OnClick(List);
     TButton(Dialog.FindComponent('UseConnectionButton')).Click;
     Dialog.Show; Application.ProcessMessages;
@@ -194,6 +208,8 @@ Begin
         Not FileExists(ConfigRoot + '/assistant-connections.ini') And Not FileExists(ConfigRoot + '/spell.xml'));
       Check('saving settings persists the discovered lists', Store[0].CachedModelsJson = ModelList);
       Check('saving settings does not invent a Grok row', Store[0].Backend = 'codex');
+      Check('settings save stores image output on that profile',
+        Store[0].ImageOutput And (Store[0].ImageDelivery = aidToolPrompt) And (Store[0].Model = 'model-one'));
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
@@ -205,19 +221,42 @@ Begin
           (Frame.ModelCombo.Items.Count = 2) And (Frame.ModelCombo.Text = 'model-one')
           And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
           And Not Frame.Busy);
+        ImageCheck := TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck'));
+        DeliveryCombo := TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo'));
+        Check('reopened profile keeps image output and the same model',
+          ImageCheck.Checked And ImageCheck.Enabled And (DeliveryCombo.ItemIndex = 1) And DeliveryCombo.Enabled And
+          (Frame.ModelCombo.Text = 'model-one'));
         TMenuItem(CancelledDialog.FindComponent('ChatGptAccountItem')).Click;
         Check('new connections do not inherit discovered lists',
           (Frame.CachedModelsJson = '') And (Frame.ModelCombo.Items.Count = 0));
+        Check('a new profile does not inherit image output',
+          (Not TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck')).Checked) And
+          (TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo')).ItemIndex = 0) And
+          (Frame.ModelCombo.Text = ''));
         Frame.LoadModels('{"data":[{"model":"other-account-model","supportedReasoningEfforts":[]}]}');
         List.ItemIndex := 0; List.OnClick(List);
         Check('switching connections restores their own discovery cache',
           (Frame.CachedModelsJson = ModelList) And (Frame.ModelCombo.Items.Count = 2)
           And (Frame.ReasoningEffort = 'xhigh'));
+        Check('switching profiles restores image output without changing that model',
+          TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck')).Checked And
+          (TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo')).ItemIndex = 1) And
+          (Frame.ModelCombo.Text = 'model-one'));
         Frame.LoadModels('{"data":[{"model":"unsaved-model","supportedReasoningEfforts":[]}]}');
         TMenuItem(CancelledDialog.FindComponent('GrokAccountItem')).Click;
         Check('Grok detail does not show ChatGPT account fields',
           TControl(CancelledDialog.FindComponent('GrokPanel')).Visible And
           Not TControl(CancelledDialog.FindComponent('CodexPanel')).Visible);
+        KeptIndex := TListBox(CancelledDialog.FindComponent('ModelList')).ItemIndex;
+        KeptModel := '';
+        If KeptIndex >= 0 Then
+          KeptModel := TListBox(CancelledDialog.FindComponent('ModelList')).Items[KeptIndex];
+        ImageCheck := TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck'));
+        ImageCheck.Checked := True;
+        ImageCheck.OnClick(ImageCheck);
+        Check('Grok image output does not select another model',
+          (TListBox(CancelledDialog.FindComponent('ModelList')).ItemIndex = KeptIndex) And
+          ((KeptIndex < 0) Or (TListBox(CancelledDialog.FindComponent('ModelList')).Items[KeptIndex] = KeptModel)));
         TButton(CancelledDialog.FindComponent('RemoveConnectionButton')).Click;
         Check('Remove deletes a Grok row', List.Items.Count = 2);
         TMenuItem(CancelledDialog.FindComponent('CompatibleAccountItem')).Click;
@@ -227,6 +266,9 @@ Begin
           (TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).Text = 'https://openrouter.ai/api/v1') And
           (TEdit(CancelledDialog.FindComponent('KeyEnvEdit')).Text = 'OPENROUTER_API_KEY') And
           TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).ReadOnly);
+        Check('OpenRouter preset does not select an image product',
+          (TComboBox(CancelledDialog.FindComponent('CompatibleModelCombo')).Text = '') And
+          (Not TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck')).Checked));
         TComboBox(CancelledDialog.FindComponent('PresetCombo')).ItemIndex := 1;
         TComboBox(CancelledDialog.FindComponent('PresetCombo')).OnChange(TComboBox(CancelledDialog.FindComponent('PresetCombo')));
         Check('Custom leaves the base URL editable', Not TEdit(CancelledDialog.FindComponent('CompatibleBaseEdit')).ReadOnly);

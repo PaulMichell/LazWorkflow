@@ -325,12 +325,12 @@ object AssistantSettingsForm: TAssistantSettingsForm
         TabOrder = 1
         object IdentityPanel: TPanel
           Left = 0
-          Height = 96
+          Height = 148
           Top = 0
           Width = 736
           Align = alTop
           BevelOuter = bvNone
-          ClientHeight = 96
+          ClientHeight = 148
           ClientWidth = 736
           TabOrder = 0
           object NameLabel: TLabel
@@ -386,15 +386,53 @@ object AssistantSettingsForm: TAssistantSettingsForm
             ParentColor = False
             WordWrap = True
           end
+          object ImageOutputCheck: TCheckBox
+            Left = 16
+            Height = 23
+            Top = 96
+            Width = 248
+            Caption = 'Can generate images'
+            Hint = 'This profile can create still images. Turning this on keeps the current model.'
+            OnClick = ImageOutputCheckClick
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 2
+          end
+          object ImageDeliveryLabel: TLabel
+            Left = 280
+            Height = 17
+            Top = 92
+            Width = 52
+            Caption = 'Delivery'
+            ParentColor = False
+          end
+          object ImageDeliveryCombo: TComboBox
+            Left = 280
+            Height = 28
+            Top = 112
+            Width = 320
+            Hint = 'Response image part, or a tool prompt that calls this same model. Neither choice selects a different image product.'
+            ItemHeight = 0
+            ItemIndex = 0
+            Items.Strings = (
+              'Response image part'
+              'Tool prompt'
+            )
+            Enabled = False
+            ParentShowHint = False
+            ShowHint = True
+            Style = csDropDownList
+            TabOrder = 3
+          end
         end
         object DetailHost: TPanel
           Left = 0
-          Height = 576
-          Top = 96
+          Height = 524
+          Top = 148
           Width = 736
           Align = alClient
           BevelOuter = bvNone
-          ClientHeight = 576
+          ClientHeight = 524
           ClientWidth = 736
           TabOrder = 1
           object EmptyConnectionLabel: TLabel
