@@ -24,6 +24,8 @@ Const
   { Kept for the response parser map. The profile no longer stores a delivery mode. }
   AssistantImageDeliveryResponsePart = 'response-part';
   AssistantImageDeliveryToolPrompt = 'tool-prompt';
+  { Grok default when image output is turned on and no image model is stored. }
+  AssistantGrokImageModel = 'grok-imagine-image-2.0';
 
 Type
   TAssistantConnection = Class
@@ -34,6 +36,8 @@ Type
     SearchCitations: Boolean;
     { False until the user marks this profile. Does not select a different model. }
     ImageOutput: Boolean;
+    { Image endpoint id. Not copied from Model, and not limited to the chat picker. }
+    ImageModel: String;
     MaxOutputTokens: Integer;
     Constructor Create;
     /// True for grok and openai-compatible. Derived from Backend, not a stored flag.
@@ -63,6 +67,11 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
+/// True for grok and openai-compatible. Claude and Codex have no image endpoint here.
+Function AssistantBackendCanDraw(Const Backend: String): Boolean;
+/// Sets the Grok image model when drawing is turned on and none is stored.
+/// Does not copy the chat model. Other backends are left unchanged.
+Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
 /// ImageOutput on the active saved profile. False when no profile is selected.
 Function ActiveProfileImageOutput: Boolean;
 /// True only for a Build turn whose active profile can generate images.
@@ -74,6 +83,7 @@ Type
   TAssistantProfileCall = Record
     Backend, Model, ApiBase, Preset, KeySource, KeyEnv, KeyValue: String;
     ImageOutput: Boolean;
+    ImageModel: String;
   End;
 
 /// Reads the saved active profile. Does not rewrite the live config.
@@ -91,6 +101,7 @@ Begin
   SearchMode := 'off';
   SearchCitations := False;
   ImageOutput := False;
+  ImageModel := '';
   AnswerVerbosity := 'medium';
   MaxOutputTokens := 0;
   Preset := '';
@@ -106,6 +117,21 @@ Begin
   Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
 End;
 
+Function AssistantBackendCanDraw(Const Backend: String): Boolean;
+Begin
+  Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
+End;
+
+Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  { Only a Grok row with no stored image model receives the default.
+    Claude and Codex cannot draw. OpenAI-compatible keeps an empty id until the user sets one. }
+  If (Item.Backend = 'grok') And (Trim(Item.ImageModel) = '') Then
+    Item.ImageModel := AssistantGrokImageModel;
+End;
+
 Procedure ClearProfileCall(Out Profile: TAssistantProfileCall);
 Begin
   Profile.Backend := '';
@@ -116,6 +142,7 @@ Begin
   Profile.KeyEnv := '';
   Profile.KeyValue := '';
   Profile.ImageOutput := False;
+  Profile.ImageModel := '';
 End;
 
 Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
@@ -157,6 +184,7 @@ Begin
         Profile.KeyValue := Obj.Get('key_value', '');
         If Obj.Find('image_output') <> Nil Then
           Profile.ImageOutput := Obj.Get('image_output', False);
+        Profile.ImageModel := Obj.Get('image_model', '');
         { image_delivery is not applied. An old file still opens. }
         Exit(True);
       End;

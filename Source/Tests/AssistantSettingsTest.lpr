@@ -206,7 +206,7 @@ Begin
       Check('saving settings persists the discovered lists', Store[0].CachedModelsJson = ModelList);
       Check('saving settings does not invent a Grok row', Store[0].Backend = 'codex');
       Check('settings save stores image output on that profile',
-        Store[0].ImageOutput And (Store[0].Model = 'model-one'));
+        Store[0].ImageOutput And (Store[0].Model = 'model-one') And (Store[0].ImageModel = ''));
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try

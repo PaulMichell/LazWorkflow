@@ -689,7 +689,9 @@ Begin
   Item := Connections[SelectedConnection];
   If Trim(ConnectionNameEdit.Text) <> '' Then
     Item.Name := Trim(ConnectionNameEdit.Text);
-  { Capability only. The selected model is stored by the kind-specific block below. }
+  { Capability only. The selected chat model is stored by the kind-specific block below. }
+  If ImageOutputCheck.Checked And (Not Item.ImageOutput) Then
+    ApplyImageOutputTurnedOn(Item);
   Item.ImageOutput := ImageOutputCheck.Checked;
   If Item.Backend = 'grok' Then
     Begin
@@ -1856,7 +1858,10 @@ Begin
       Else If Backend = 'claude' Then
         KeptText := ClaudeModelEdit.Text;
     End;
-  { Turning the flag on must not select an image product other than the current model. }
+  If ImageOutputCheck.Checked And Assigned(Connections) And (SelectedConnection >= 0) And
+    (SelectedConnection < Connections.Count) And (Not Connections[SelectedConnection].ImageOutput) Then
+    ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
+  { Turning the flag on must not replace the chat model with the image model. }
   If Backend = 'grok' Then
     Begin
       If ModelList.ItemIndex <> KeptIndex Then

@@ -790,6 +790,7 @@ Begin
   Result.Add('thinking', Item.ReasoningEffort);
   Result.Add('approval', Item.ApprovalMode);
   Result.Add('image_output', Item.ImageOutput);
+  Result.Add('image_model', Item.ImageModel);
   If (Item.Backend = 'grok') Or (Item.Backend = 'openai-compatible') Then
     AddSamplingFields(Result, Item);
   If Item.Backend = 'grok' Then
@@ -838,6 +839,7 @@ Begin
   Item.ImageOutput := False;
   If Obj.Find('image_output') <> Nil Then
     Item.ImageOutput := Obj.Get('image_output', False);
+  Item.ImageModel := Obj.Get('image_model', '');
   { image_delivery is ignored. An old connection still opens. }
   Item.Runtime := Obj.Get('runtime', '');
   Item.CachedModelsJson := '';

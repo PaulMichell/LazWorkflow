@@ -27,6 +27,8 @@ Function XaiModelReasoningEfforts(Const ModelId: String): String;
 Function XaiModelAllowsEffort(Const ModelId, Effort: String): Boolean;
 Function XaiModelDisplayText(Const ModelId: String): String;
 Function XaiModelIdFromDisplay(Const DisplayText: String): String;
+/// False for Imagine and other media ids. The image-model field is not this list.
+Function LooksLikeChatModelId(Const ModelId: String): Boolean;
 /// Appends ids remembered from the last successful model list. Does not clear ModelIds.
 Procedure CollectXaiKnownModelIds(ModelIds: TStrings);
 

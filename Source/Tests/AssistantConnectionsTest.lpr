@@ -1,6 +1,7 @@
 Program AssistantConnectionsTest;
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, AssistantConfig,
+  AssistantXaiProvider,
   WorkflowSettings, AssistantConversation, AssistantTools, AssistantHarness{$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Procedure Check(Const Name: String; OK: Boolean);
@@ -24,6 +25,7 @@ Begin
 End;
 Var Root, Profile, Id, ErrorText, PolicyText, ToolsJson, Prompt: String; Guid: TGuid;
   Store: TAssistantConnections; Item: TAssistantConnection; Raised: Boolean; I: Integer; Policy, Names: TStringList;
+  Call: TAssistantProfileCall;
 Begin
   CreateGUID(Guid); Root := GetTempDir + 'laz-connections-' + GUIDToString(Guid); ForceDirectories(Root);
   SetWorkflowSettingsDirectory(Root);
@@ -220,7 +222,51 @@ Begin
     Store.Load;
     Check('Grok profile keeps image output and its model',
       Assigned(Store.Active) And (Store.Active.Id = 'grok-images') And Store.Active.ImageOutput And
+      (Store.Active.Model = 'kept-grok-model') And (Store.Active.ImageModel = ''));
+    Check('loading image output does not invent an image model', Store.Active.ImageModel = '');
+    ApplyImageOutputTurnedOn(Store.Active);
+    Check('turning Grok image output on sets the default image model',
+      (Store.Active.ImageModel = AssistantGrokImageModel) And (Store.Active.Model = 'kept-grok-model'));
+    Store.Active.ImageModel := 'grok-imagine-image';
+    ApplyImageOutputTurnedOn(Store.Active);
+    Check('a stored image model is not replaced by the Grok default',
+      (Store.Active.ImageModel = 'grok-imagine-image') And (Store.Active.Model = 'kept-grok-model'));
+    Store.Save;
+    Store.Load;
+    Check('image model roundtrips separately from the chat model',
+      Assigned(Store.Active) And (Store.Active.ImageModel = 'grok-imagine-image') And
       (Store.Active.Model = 'kept-grok-model'));
+    Check('active profile call keeps the image model beside the chat model',
+      ReadActiveProfileCall(Call) And (Call.ImageModel = 'grok-imagine-image') And (Call.Model = 'kept-grok-model') And
+      (Call.ImageModel <> Call.Model));
+    Item := Store.AddStored('compatible-draw', 'Compatible draw', 'openai-compatible');
+    Item.Model := 'kept-chat-model';
+    Item.ImageOutput := True;
+    ApplyImageOutputTurnedOn(Item);
+    Check('compatible image output has no default and does not copy the chat model',
+      (Item.ImageModel = '') And (Item.Model = 'kept-chat-model') And AssistantBackendCanDraw('openai-compatible'));
+    Item.ImageModel := 'vendor/flux-schnell';
+    Store.ActiveId := Item.Id;
+    Store.Save;
+    Store.Load;
+    Check('an image model outside the chat picker is stored as typed',
+      (Store.Active.ImageModel = 'vendor/flux-schnell') And (Store.Active.Model = 'kept-chat-model'));
+    Item := Store.AddStored('codex-draw', 'Codex draw', 'codex');
+    Item.Model := 'codex-model';
+    Item.ImageOutput := True;
+    ApplyImageOutputTurnedOn(Item);
+    Check('Codex gets no image model and cannot draw',
+      (Item.ImageModel = '') And (Item.Model = 'codex-model') And (Not AssistantBackendCanDraw('codex')));
+    Item := Store.AddStored('claude-draw', 'Claude draw', 'claude');
+    Item.Model := 'claude-model';
+    Item.ImageOutput := True;
+    ApplyImageOutputTurnedOn(Item);
+    Check('Claude gets no image model and cannot draw',
+      (Item.ImageModel = '') And (Item.Model = 'claude-model') And (Not AssistantBackendCanDraw('claude')) And
+      AssistantBackendCanDraw('grok'));
+    Check('chat picker still hides media ids',
+      (Not LooksLikeChatModelId(AssistantGrokImageModel)) And (Not LooksLikeChatModelId('grok-imagine-image')) And
+      (Not LooksLikeChatModelId('some-image-gen')) And LooksLikeChatModelId('grok-4'));
     Names := TStringList.Create;
     Try
       ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
