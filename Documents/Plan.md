@@ -44,7 +44,7 @@ Status: complete
 Reuse the `read_image` sandbox: the resolved path must stay inside the project root, and a symlink that leaves the project is refused. Allow only png, jpg, jpeg, webp, and gif, and require the magic bytes to match the extension. Enforce the same size ceiling as `read_image`. Refuse `.git`, `.assistant`, and build-output paths. If the file already exists, write only when `overwrite` is true. A missing image part, a failed provider call, or a failed check returns an error and creates no file.
 
 ### 2.3 Return a result the model must trust
-Status: not started
+Status: complete
 
 On success return the project-relative path, byte size, width, height, and MIME type. Same honesty rule as `write_file`: the model must not claim the file exists unless this result says the write succeeded. A later `read_image` of that path must show the same bytes.
 
