@@ -51,7 +51,7 @@ On success return the project-relative path, byte size, width, height, and MIME 
 ## 3. Prompt rules
 
 ### 3.1 Tell capable models how to save an image
-Status: not started
+Status: complete
 
 When the flag is on, the prompt says: create still images only with `write_image`; do not use `write_file` or `replace_in_file` for images; prefer PNG for icons and UI art unless the user names another format; pass the generated image through rather than describing a file that was not written.
 
