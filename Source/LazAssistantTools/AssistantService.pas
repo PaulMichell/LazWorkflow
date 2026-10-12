@@ -226,7 +226,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantXaiProvider, AssistantSkills, AssistantTools, AssistantActor,
-  AssistantHarness, AssistantSubagents, AssistantPlan;
+  AssistantHarness, AssistantSubagents, AssistantPlan, AssistantConnections;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin
@@ -720,6 +720,8 @@ Begin
       'ask the user to switch to Document for a report, Plan for a build plan, or Build for source edits. ' +
       'The house skill is attached only when the user pins it.';
   End;
+  If AssistantTurnOffersImageOutput(Mode) Then
+    Result := Result + LineEnding + LineEnding + AssistantImageOutputPromptSection;
 End;
 
 Constructor TAssistantService.Create;
@@ -2213,7 +2215,8 @@ Begin
   FReportedHasReasoning := False;
   If (Not FIsSubagent) And Assigned(WorkflowAssistantHarness) Then
     WorkflowAssistantHarness.ClearTurnTodos;
-  { Refresh mode/plan-path wording and tool list before every request. }
+  { Refresh mode, plan path, and the profile image-output flag before every request.
+    A model switch applies on the next turn, not mid-request. }
   RebuildSystemPrompt;
   FToolsJsonValid := False;
   TrimMessagesForBudget;

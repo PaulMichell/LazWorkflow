@@ -1,13 +1,29 @@
 Program AssistantConnectionsTest;
 {$mode objfpc}{$H+}
-Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, AssistantConfig, WorkflowSettings{$IFDEF UNIX}, BaseUnix{$ENDIF};
+Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, AssistantConfig,
+  WorkflowSettings, AssistantConversation, AssistantTools, AssistantHarness{$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
 Function Derived(Const ConfigRoot, ConnectionId: String): String;
 Begin Result := IncludeTrailingPathDelimiter(ConfigRoot) + 'codex' + PathDelim + ConnectionId; End;
-Var Root, Profile, Id, ErrorText, PolicyText: String; Guid: TGuid;
-  Store: TAssistantConnections; Item: TAssistantConnection; Raised: Boolean; I: Integer; Policy: TStringList;
+Function ImageToolSlice(Const ToolsJson: String): String;
+Var
+  StartAt, NextTool: Integer;
+  Tail: String;
+Begin
+  StartAt := Pos('"name":"write_image"', ToolsJson);
+  If StartAt = 0 Then
+    Exit('');
+  Tail := Copy(ToolsJson, StartAt + 1, MaxInt);
+  NextTool := Pos('{"type":"function"', Tail);
+  If NextTool = 0 Then
+    Result := Copy(ToolsJson, StartAt, MaxInt)
+  Else
+    Result := Copy(ToolsJson, StartAt, NextTool);
+End;
+Var Root, Profile, Id, ErrorText, PolicyText, ToolsJson, Prompt: String; Guid: TGuid;
+  Store: TAssistantConnections; Item: TAssistantConnection; Raised: Boolean; I: Integer; Policy, Names: TStringList;
 Begin
   CreateGUID(Guid); Root := GetTempDir + 'laz-connections-' + GUIDToString(Guid); ForceDirectories(Root);
   SetWorkflowSettingsDirectory(Root);
@@ -22,6 +38,10 @@ Begin
   Try
     Store.Load;
     Check('missing document has no connections', (Store.Count = 0) And (Store.Active = Nil) And (Store.ActiveId = ''));
+    Check('a turn with no capable profile omits write_image',
+      (Pos('write_image', BuildAssistantToolsJsonForMode(amBuild)) = 0) And
+      (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amBuild, Nil, Root, '')) = 0) And
+      (Not ToolAllowedInMode('write_image', amBuild)));
     Check('legacy backend file is not read', Store.Count = 0);
     Check('load does not write LazWorkflow.json or create a profile',
       Not FileExists(WorkflowSettingsPath) And Not DirectoryExists(Root + '/codex') And Not DirectoryExists(Root + '/assistant-codex-preview'));
@@ -194,6 +214,45 @@ Begin
     Check('Grok profile keeps image output and its model',
       Assigned(Store.Active) And (Store.Active.Id = 'grok-images') And Store.Active.ImageOutput And
       (Store.Active.ImageDelivery = aidResponsePart) And (Store.Active.Model = 'kept-grok-model'));
+    Names := TStringList.Create;
+    Try
+      ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
+      Prompt := WorkflowAssistantHarness.BuildSystemPrompt(amBuild, Names, Root, '');
+      Check('a capable Build turn registers write_image and the image-output prompt',
+        (Pos('"name":"write_image"', ToolsJson) > 0) And
+        (Pos('"image_id"', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"prompt":', ImageToolSlice(ToolsJson)) = 0) And
+        (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0) And
+        (Pos('<image_output>', Prompt) > 0) And (Pos('Create still images', Prompt) > 0) And
+        (Pos('write_image', Prompt) > 0) And ToolAllowedInMode('write_image', amBuild));
+      Check('Plan and Document never register write_image',
+        (Pos('write_image', BuildAssistantToolsJsonForMode(amPlan)) = 0) And
+        (Pos('write_image', BuildAssistantToolsJsonForMode(amDocument)) = 0) And
+        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) = 0) And
+        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amDocument, Names, Root, '')) = 0) And
+        (Not ToolAllowedInMode('write_image', amPlan)) And (Not ToolAllowedInMode('write_image', amDocument)));
+      Check('Inspect and Chat do not offer image writing',
+        (Pos('write_image', BuildAssistantToolsJsonForMode(amInspect)) = 0) And
+        (BuildAssistantToolsJsonForMode(amChat) = '') And (Not ToolAllowedInMode('write_image', amInspect)));
+      Store.Active.ImageDelivery := aidToolPrompt;
+      Store.Save;
+      ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
+      Check('the next turn follows tool-prompt delivery without naming another model',
+        (Store.Active.Model = 'kept-grok-model') And (Pos('"name":"write_image"', ToolsJson) > 0) And
+        (Pos('"prompt":', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"image_id"', ImageToolSlice(ToolsJson)) = 0) And
+        (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0));
+      Store.Active.ImageOutput := False;
+      Store.Save;
+      ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
+      Prompt := WorkflowAssistantHarness.BuildSystemPrompt(amBuild, Names, Root, '');
+      Check('the next turn omits write_image when the profile flag is off',
+        (Pos('write_image', ToolsJson) = 0) And (Pos('<image_output>', Prompt) = 0) And
+        (Pos('Create still images', Prompt) = 0) And (Not ToolAllowedInMode('write_image', amBuild)) And
+        (Store.Active.Model = 'kept-grok-model'));
+    Finally
+      Names.Free;
+    End;
   Finally
     Store.Free;
     DeleteCodexProfileDirectory(Derived(Root, Id), ErrorText);

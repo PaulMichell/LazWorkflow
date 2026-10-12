@@ -14,7 +14,7 @@ Unit AssistantConnections;
 Interface
 
 Uses
-  Classes, SysUtils, Contnrs;
+  Classes, SysUtils, Contnrs, AssistantConversation;
 
 Const
   AssistantOpenRouterApiBase = 'https://openrouter.ai/api/v1';
@@ -67,11 +67,18 @@ Type
 
 Function AssistantImageDeliveryToStr(Mode: TAssistantImageDelivery): String;
 Function StrToAssistantImageDelivery(Const Value: String): TAssistantImageDelivery;
+/// ImageOutput on the active saved profile. False when no profile is selected.
+Function ActiveProfileImageOutput: Boolean;
+/// Delivery mode of the active saved profile. Response part when none is selected.
+Function ActiveProfileImageDelivery: TAssistantImageDelivery;
+/// True only for a Build turn whose active profile can generate images.
+/// Plan and Document never offer write_image; they do not write project files.
+Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
 
 Implementation
 
 Uses
-  AssistantConfig;
+  AssistantConfig, WorkflowSettings, fpjson;
 
 Constructor TAssistantConnection.Create;
 Begin
@@ -111,6 +118,66 @@ Begin
     Result := aidToolPrompt
   Else
     Result := aidResponsePart;
+End;
+
+Procedure ReadActiveProfile(Out ImageOutput: Boolean; Out ImageDelivery: TAssistantImageDelivery);
+Var
+  Section: TJSONObject;
+  Node: TJSONData;
+  Arr: TJSONArray;
+  Obj: TJSONObject;
+  ActiveId: String;
+  I: Integer;
+Begin
+  { Read the saved section only. Do not call Load: that rewrites the live config. }
+  ImageOutput := False;
+  ImageDelivery := aidResponsePart;
+  Section := ReadWorkflowSection('assistant');
+  If Not Assigned(Section) Then
+    Exit;
+  Try
+    ActiveId := Section.Get('active_connection', '');
+    If ActiveId = '' Then
+      Exit;
+    Node := Section.Find('connections');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr.Items[I] Is TJSONObject) Then
+          Continue;
+        Obj := TJSONObject(Arr.Items[I]);
+        If Obj.Get('id', '') <> ActiveId Then
+          Continue;
+        If Obj.Find('image_output') <> Nil Then
+          ImageOutput := Obj.Get('image_output', False);
+        ImageDelivery := StrToAssistantImageDelivery(Obj.Get('image_delivery', ''));
+        Exit;
+      End;
+  Finally
+    Section.Free;
+  End;
+End;
+
+Function ActiveProfileImageOutput: Boolean;
+Var
+  Delivery: TAssistantImageDelivery;
+Begin
+  ReadActiveProfile(Result, Delivery);
+End;
+
+Function ActiveProfileImageDelivery: TAssistantImageDelivery;
+Var
+  ImageOutput: Boolean;
+Begin
+  ReadActiveProfile(ImageOutput, Result);
+End;
+
+Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
+Begin
+  { Read the saved profile on each call. A model switch applies on the next turn. }
+  Result := (Mode = amBuild) And ActiveProfileImageOutput;
 End;
 
 Constructor TAssistantConnections.Create(Const ConfigRoot: String);

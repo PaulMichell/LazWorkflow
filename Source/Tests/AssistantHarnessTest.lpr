@@ -105,6 +105,9 @@ Begin
       'when-to-use: generating images' + LineEnding + '---' + LineEnding + 'IMAGINE BODY' + LineEnding);
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build prompt names Build mode', Pos('Build mode', Prompt) > 0);
+    Check('build prompt does not offer image files without a capable profile',
+      (Pos('write_image', Prompt) = 0) And (Pos('<image_output>', Prompt) = 0) And
+      (Pos('Create still images', Prompt) = 0));
     Check('catalog lists imagine', Pos('imagine', Prompt) > 0);
     Check('catalog has when-to-use', Pos('generating images', Prompt) > 0);
     Check('build with no tags catalogs fpe and does not attach the body',

@@ -73,7 +73,8 @@ Uses
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
-  AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, fpjson, jsonparser;
+  AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
+  fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -319,6 +320,11 @@ Begin
     (Name = 'ensure_form_component') Then
     Begin
       Result := Mode = amBuild;
+      Exit;
+    End;
+  If Name = 'write_image' Then
+    Begin
+      Result := AssistantTurnOffersImageOutput(Mode);
       Exit;
     End;
   Result := False;
@@ -599,6 +605,33 @@ Begin
     '}}';
 End;
 
+Function BuildWriteImageToolJson: String;
+Var
+  Fields, Required: String;
+Begin
+  If ActiveProfileImageDelivery = aidToolPrompt Then
+    Begin
+      Fields :=
+        '"prompt":{"type":"string","description":"What this same model should draw."},' +
+        '"size":{"type":"string","description":"Optional pixel size. Omit for the model default."}';
+      Required := '["path","prompt"]';
+    End
+  Else
+    Begin
+      Fields :=
+        '"image_id":{"type":"string","description":"Turn-local image id. Optional when the turn has exactly one image."}';
+      Required := '["path"]';
+    End;
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"write_image",' +
+      '"description":"Save a still image into the project. Do not use write_file or replace_in_file for images.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative path"},' +
+        Fields +
+      '},"required":' + Required + '}}}';
+End;
+
 Function BuildDocumentToolsJson: String;
 Begin
   Result :=
@@ -643,10 +676,14 @@ Begin
     amPlan:
       Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
     amBuild:
-      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
-        BuildSourceToolsJson + ',' + BuildRunToolsJson +
-        ',{"type":"function","function":{"name":"run_git","description":' +
-        '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
+      Begin
+        Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
+          BuildSourceToolsJson + ',' + BuildRunToolsJson +
+          ',{"type":"function","function":{"name":"run_git","description":' +
+          '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
+        If AssistantTurnOffersImageOutput(amBuild) Then
+          Body := Body + ',' + BuildWriteImageToolJson;
+      End;
     amInspect:
       Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson;
   Else

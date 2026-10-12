@@ -56,10 +56,14 @@ Type
 Var
   WorkflowAssistantHarness: TAssistantHarness;
 
+/// Short image-output section. Callers add it only when the turn offers write_image.
+Function AssistantImageOutputPromptSection: String;
+
 Implementation
 
 Uses
-  LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion, AssistantPlan;
+  LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion, AssistantPlan,
+  AssistantConnections;
 
 Constructor TAssistantHarness.Create;
 Begin
@@ -330,6 +334,16 @@ Begin
     '</user_info>';
 End;
 
+Function AssistantImageOutputPromptSection: String;
+Begin
+  Result :=
+    '<image_output>' + LineEnding +
+    'Create still images only with `write_image`. Do not use `write_file` or `replace_in_file` for images. ' +
+    'Prefer PNG for icons and UI art unless the user names another format. ' +
+    'Pass the generated image through rather than describing a file that was not written.' + LineEnding +
+    '</image_output>';
+End;
+
 Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
 Var
   Parts: TStringList;
@@ -363,6 +377,8 @@ Begin
     Parts.Add(BuildCommunication);
     Parts.Add(BuildFormatting);
     Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
+    If AssistantTurnOffersImageOutput(Mode) Then
+      Parts.Add(AssistantImageOutputPromptSection);
     Parts.Add(BuildSkillsSection(ProjectRoot, SkillNames));
     Parts.Add(BuildProjectRules(ProjectRoot));
     Parts.Add(BuildUserInfo(ProjectRoot));
