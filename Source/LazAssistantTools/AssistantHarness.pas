@@ -58,6 +58,8 @@ Var
 
 /// Short image-output section. Callers add it only when the turn offers write_image.
 Function AssistantImageOutputPromptSection: String;
+/// One line for a profile that cannot generate images.
+Function AssistantCannotWriteImagesLine: String;
 
 Implementation
 
@@ -345,6 +347,11 @@ Begin
     '</image_output>';
 End;
 
+Function AssistantCannotWriteImagesLine: String;
+Begin
+  Result := 'This model cannot write image files; say so, and do not invent a path or a PNG.';
+End;
+
 Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
 Var
   Parts: TStringList;
@@ -367,6 +374,8 @@ Begin
           'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
           'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.' +
           LineEnding + LineEnding + Tagged;
+      If Not ActiveProfileImageOutput Then
+        Result := Result + LineEnding + AssistantCannotWriteImagesLine;
       Exit;
     End;
   Parts := TStringList.Create;
@@ -379,7 +388,9 @@ Begin
     Parts.Add(BuildFormatting);
     Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
     If AssistantTurnOffersImageOutput(Mode) Then
-      Parts.Add(AssistantImageOutputPromptSection);
+      Parts.Add(AssistantImageOutputPromptSection)
+    Else If Not ActiveProfileImageOutput Then
+      Parts.Add(AssistantCannotWriteImagesLine);
     Parts.Add(BuildSkillsSection(ProjectRoot, SkillNames));
     Parts.Add(BuildProjectRules(ProjectRoot));
     Parts.Add(BuildUserInfo(ProjectRoot));

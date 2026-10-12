@@ -188,6 +188,11 @@ Begin
   Try
     Check('png is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
       '{"path":"photo.png","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+    Check('webp is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
+      '{"path":"photo.webp","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0) And
+      (Not FileExists(Root+'/photo.webp')));
+    Check('inspect write_file still rejects a png', (Not ExecuteAssistantToolForMode('write_file',
+      '{"path":"photo.png","content":"not an image file payload"}', amInspect, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('replace_in_file still refuses a png', (Not ExecuteAssistantToolForMode('replace_in_file',
       '{"path":"photo.png","old_text":"a","new_text":"b"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('markdown write is refused before an editor edit', (Not ExecuteAssistantToolForMode('write_file',

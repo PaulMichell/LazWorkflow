@@ -231,11 +231,13 @@ Begin
         (Pos('Prefer PNG for icons and UI art unless the user names another format', Prompt) > 0) And
         (Pos('Pass the generated image through rather than describing a file that was not written', Prompt) > 0) And
         (Pos('unless the write_image result says the write succeeded', Prompt) > 0) And
+        (Pos('cannot write image files', Prompt) = 0) And
         ToolAllowedInMode('write_image', amBuild));
       Check('Plan and Document never register write_image',
         (Pos('write_image', BuildAssistantToolsJsonForMode(amPlan)) = 0) And
         (Pos('write_image', BuildAssistantToolsJsonForMode(amDocument)) = 0) And
         (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) = 0) And
+        (Pos('cannot write image files', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) = 0) And
         (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amDocument, Names, Root, '')) = 0) And
         (Not ToolAllowedInMode('write_image', amPlan)) And (Not ToolAllowedInMode('write_image', amDocument)));
       Check('Inspect and Chat do not offer image writing',
@@ -266,6 +268,7 @@ Begin
         (Pos('Create still images', Prompt) = 0) And
         (Pos('Prefer PNG for icons and UI art', Prompt) = 0) And
         (Pos('describing a file that was not written', Prompt) = 0) And
+        (Pos('This model cannot write image files; say so, and do not invent a path or a PNG.', Prompt) > 0) And
         (Not ToolAllowedInMode('write_image', amBuild)) And
         (Store.Active.Model = 'kept-grok-model'));
       Prompt := '';

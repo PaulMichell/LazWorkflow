@@ -1618,7 +1618,7 @@ Begin
   Result := (Ext = '.o') Or (Ext = '.ppu') Or (Ext = '.a') Or (Ext = '.so') Or
     (Ext = '.dll') Or (Ext = '.exe') Or (Ext = '.or') Or (Ext = '.rsj') Or
     (Ext = '.compiled') Or (Ext = '.zip') Or (Ext = '.png') Or (Ext = '.jpg') Or
-    (Ext = '.jpeg') Or (Ext = '.gif') Or (Ext = '.ico') Or (Ext = '.pdf') Or
+    (Ext = '.jpeg') Or (Ext = '.gif') Or (Ext = '.webp') Or (Ext = '.ico') Or (Ext = '.pdf') Or
     (Ext = '.bmp') Or (Ext = '.wasm') Or (Ext = '.dbg');
 End;
 
@@ -3878,6 +3878,13 @@ Begin
   If (Name = 'write_image') And (Not AssistantTurnOffersImageOutput(Mode)) Then
     Begin
       ErrorText := 'Unknown tool: write_image';
+      Exit;
+    End;
+  { Image extensions stay blocked in every mode, before a text writer can create a file. }
+  If ((Name = 'write_file') Or (Name = 'replace_in_file')) And
+    IsBlockedBinaryExtension(JsonArgString(ArgumentsJson, 'path')) Then
+    Begin
+      ErrorText := 'Refusing to write blocked/binary extension: ' + JsonArgString(ArgumentsJson, 'path');
       Exit;
     End;
   If Not ToolAllowedInMode(Name, Mode) Then

@@ -721,7 +721,9 @@ Begin
       'The house skill is attached only when the user pins it.';
   End;
   If AssistantTurnOffersImageOutput(Mode) Then
-    Result := Result + LineEnding + LineEnding + AssistantImageOutputPromptSection;
+    Result := Result + LineEnding + LineEnding + AssistantImageOutputPromptSection
+  Else If Not ActiveProfileImageOutput Then
+    Result := Result + LineEnding + AssistantCannotWriteImagesLine;
 End;
 
 Constructor TAssistantService.Create;

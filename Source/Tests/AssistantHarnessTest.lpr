@@ -109,7 +109,8 @@ Begin
       (Pos('write_image', Prompt) = 0) And (Pos('<image_output>', Prompt) = 0) And
       (Pos('Create still images', Prompt) = 0) And
       (Pos('Prefer PNG for icons and UI art', Prompt) = 0) And
-      (Pos('describing a file that was not written', Prompt) = 0));
+      (Pos('describing a file that was not written', Prompt) = 0) And
+      (Pos('This model cannot write image files; say so, and do not invent a path or a PNG.', Prompt) > 0));
     Check('catalog lists imagine', Pos('imagine', Prompt) > 0);
     Check('catalog has when-to-use', Pos('generating images', Prompt) > 0);
     Check('build with no tags catalogs fpe and does not attach the body',
@@ -129,6 +130,8 @@ Begin
       (Pos('free-pascal-engineer', Prompt) = 0) And (Pos('<skills>', Prompt) = 0));
     Check('chat does not inline AGENTS.md', Pos('AGENTS.md', Prompt) = 0);
     Check('chat has no tool policy', Pos('<work_policy>', Prompt) = 0);
+    Check('chat says this model cannot write image files',
+      Pos('This model cannot write image files; say so, and do not invent a path or a PNG.', Prompt) > 0);
     Names.Add('imagine');
     Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
     Check('chat with imagine tagged contains IMAGINE BODY', Pos('IMAGINE BODY', Prompt) > 0);
