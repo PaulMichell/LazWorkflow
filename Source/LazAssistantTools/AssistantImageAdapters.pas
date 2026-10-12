@@ -19,6 +19,10 @@ Type
   TGeneratedImagePost = Function(Const Url, Body, Headers: String; Out ResponseBody: String;
     Out StatusCode: Integer; Out ErrorText: String): Boolean;
 
+Const
+  { A hung image endpoint must not occupy the Build round budget. }
+  AssistantImagePostTimeoutMs = 60000;
+
 Procedure SetGeneratedImagePost(Post: TGeneratedImagePost);
 /// POST this connection's image endpoint. The backend builds the JSON. Does not write a file.
 /// Shape is optional. A value this backend cannot express is omitted, not an error.
@@ -611,7 +615,8 @@ Begin
   If Assigned(ImagePost) Then
     Posted := ImagePost(Url, Body, Headers, ResponseBody, StatusCode, ErrorText)
   Else
-    Posted := HttpsPostJson(Url, Body, Headers, ResponseBody, StatusCode, ErrorText);
+    Posted := HttpsPostJson(Url, Body, Headers, ResponseBody, StatusCode, ErrorText,
+      AssistantImagePostTimeoutMs);
   If Not Posted Or (StatusCode < 200) Or (StatusCode >= 300) Then
     Begin
       If ErrorText = '' Then

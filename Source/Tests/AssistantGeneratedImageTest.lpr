@@ -151,6 +151,14 @@ Begin
       RequestProfileImage('a dot', '16:9', Image, ErrorText) And (ErrorText = '') And (Posts = 1) And
       (Pos('aspect_ratio', SeenBody) = 0) And (Pos('"size"', SeenBody) = 0) And
       BodyField('model', 'gpt-image-1'));
+    Item.ApiBase := 'http://example.invalid/v1';
+    Store.Save;
+    Posts := 0;
+    Check('a non-HTTPS endpoint fails before the post',
+      (Not RequestProfileImage('a dot', '1:1', Image, ErrorText)) And
+      (Pos('image endpoint', ErrorText) > 0) And (Posts = 0));
+    Item.ApiBase := 'https://example.invalid/v1';
+    Store.Save;
     Item.ImageModel := '';
     Store.Save;
     Posts := 0;
@@ -211,6 +219,7 @@ Var
   Images: TAssistantGeneratedImageArray;
   ErrorText, Encoded, Body: String;
 Begin
+  Check('image post is bounded to about a minute', AssistantImagePostTimeoutMs = 60000);
   Encoded := PngBase64;
   Check('responses adapter is registered for a grok profile',
     ProfileImageAdapterId('grok', AssistantImageDeliveryResponsePart) = AssistantImageAdapterResponses);

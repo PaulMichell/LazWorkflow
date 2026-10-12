@@ -27,9 +27,11 @@ Function HttpsGet(Const Url: String; Out ResponseBody: String; Out StatusCode: I
 Function HttpsPostForm(Const Url, FormBody: String; Out ResponseBody: String;
   Out StatusCode: Integer; Out ErrorText: String): Boolean;
 
-{ HTTPS POST JSON body (optional Authorization bearer, etc.). }
+{ HTTPS POST JSON body (optional Authorization bearer, etc.).
+  IOTimeoutMs 0 keeps the chat default. A positive value bounds this call. }
 Function HttpsPostJson(Const Url, JsonBody, ExtraHeaders: String;
-  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
+  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
+  IOTimeoutMs: Integer = 0): Boolean;
 
 Type
   { Streaming POST (SSE). OnChunk receives decoded UTF-8 text chunks as they arrive. }
@@ -434,13 +436,13 @@ End;
 
 Function WinINetRequest(Const Method, Url, ContentType, Body, ExtraHeaders: String;
   Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
-  Out RequestSent: Boolean): Boolean;
+  Out RequestSent: Boolean; IOTimeoutMs: Integer = 0): Boolean;
 Var
   Session, Connect, Request: HINTERNET;
   Host, Path: String;
   Port: INTERNET_PORT;
   UseHttps: Boolean;
-  Flags, BytesRead, StatusSize, Index: DWORD;
+  Flags, BytesRead, StatusSize, Index, Timeout: DWORD;
   StatusBuf: Array[0..31] Of Char;
   Buf: Array[0..8191] Of Byte;
   Headers: String;
@@ -469,6 +471,14 @@ Begin
     Begin
       ErrorText := 'WinINet InternetOpen failed (' + IntToStr(GetLastError) + ')';
       Exit;
+    End;
+  If IOTimeoutMs > 0 Then
+    Begin
+      Timeout := DWORD(IOTimeoutMs);
+      { INTERNET_OPTION_CONNECT_TIMEOUT, SEND_TIMEOUT, and RECEIVE_TIMEOUT. }
+      InternetSetOption(Session, 2, @Timeout, SizeOf(Timeout));
+      InternetSetOption(Session, 5, @Timeout, SizeOf(Timeout));
+      InternetSetOption(Session, 6, @Timeout, SizeOf(Timeout));
     End;
   Try
     Connect := InternetConnect(Session, PChar(Host), Port, Nil, Nil,
@@ -560,7 +570,8 @@ End;
 {$ENDIF}
 
 Function HttpsViaFpHttp(Const Method, Url, ContentType, Body, ExtraHeaders: String;
-  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
+  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
+  IOTimeoutMs: Integer = 0): Boolean;
 Var
   Client: TFPHTTPClient;
   BodyStream: TStringStream;
@@ -590,7 +601,10 @@ Begin
   Try
     Try
       Client.ConnectTimeout := 15000;
-      Client.IOTimeout := 120000;
+      If IOTimeoutMs > 0 Then
+        Client.IOTimeout := IOTimeoutMs
+      Else
+        Client.IOTimeout := 120000;
       Client.AllowRedirect := False;
       Client.AddHeader('Accept', 'application/json');
       If ContentType <> '' Then
@@ -697,7 +711,8 @@ Begin
 End;
 
 Function HttpsPostJson(Const Url, JsonBody, ExtraHeaders: String;
-  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String): Boolean;
+  Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
+  IOTimeoutMs: Integer = 0): Boolean;
 {$IFDEF WINDOWS}
 Var
   RequestSent: Boolean;
@@ -713,7 +728,7 @@ Begin
     End;
   {$IFDEF WINDOWS}
   If WinINetRequest('POST', Url, 'application/json', JsonBody, ExtraHeaders,
-    ResponseBody, StatusCode, ErrorText, RequestSent) Then
+    ResponseBody, StatusCode, ErrorText, RequestSent, IOTimeoutMs) Then
     Begin
       Result := True;
       Exit;
@@ -725,7 +740,7 @@ Begin
     End;
   {$ENDIF}
   Result := HttpsViaFpHttp('POST', Url, 'application/json', JsonBody, ExtraHeaders,
-    ResponseBody, StatusCode, ErrorText);
+    ResponseBody, StatusCode, ErrorText, IOTimeoutMs);
 End;
 
 {$IFDEF WINDOWS}
