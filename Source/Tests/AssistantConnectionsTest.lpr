@@ -225,8 +225,11 @@ Begin
         (Pos('Project-relative path.', ImageToolSlice(ToolsJson)) > 0) And
         (Pos('"prompt":', ImageToolSlice(ToolsJson)) = 0) And
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0) And
-        (Pos('<image_output>', Prompt) > 0) And (Pos('Create still images', Prompt) > 0) And
-        (Pos('write_image', Prompt) > 0) And
+        (Pos('<image_output>', Prompt) > 0) And
+        (Pos('Create still images only with `write_image`', Prompt) > 0) And
+        (Pos('Do not use `write_file` or `replace_in_file` for images', Prompt) > 0) And
+        (Pos('Prefer PNG for icons and UI art unless the user names another format', Prompt) > 0) And
+        (Pos('Pass the generated image through rather than describing a file that was not written', Prompt) > 0) And
         (Pos('unless the write_image result says the write succeeded', Prompt) > 0) And
         ToolAllowedInMode('write_image', amBuild));
       Check('Plan and Document never register write_image',
@@ -260,7 +263,10 @@ Begin
       Prompt := WorkflowAssistantHarness.BuildSystemPrompt(amBuild, Names, Root, '');
       Check('the next turn omits write_image when the profile flag is off',
         (Pos('write_image', ToolsJson) = 0) And (Pos('<image_output>', Prompt) = 0) And
-        (Pos('Create still images', Prompt) = 0) And (Not ToolAllowedInMode('write_image', amBuild)) And
+        (Pos('Create still images', Prompt) = 0) And
+        (Pos('Prefer PNG for icons and UI art', Prompt) = 0) And
+        (Pos('describing a file that was not written', Prompt) = 0) And
+        (Not ToolAllowedInMode('write_image', amBuild)) And
         (Store.Active.Model = 'kept-grok-model'));
       Prompt := '';
       ErrorText := '';
