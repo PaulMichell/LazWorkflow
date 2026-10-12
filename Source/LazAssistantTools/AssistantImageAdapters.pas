@@ -1,8 +1,8 @@
 Unit AssistantImageAdapters;
 
-{ Fills the generated-image record from each response shape, and calls this
-  profile's own image endpoint for tool-prompt mode. The file writer does not
-  use this unit. A new shape is a new adapter, not a new tool.
+{ Fills the generated-image record from each response shape, and posts one
+  image request. Each backend builds its own JSON. A new provider is a new
+  builder, not a new tool. The file writer does not use this unit.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -20,8 +20,9 @@ Type
     Out StatusCode: Integer; Out ErrorText: String): Boolean;
 
 Procedure SetGeneratedImagePost(Post: TGeneratedImagePost);
-/// POST this profile's /images/generations with this profile's model. Does not write a file.
-Function RequestProfileImage(Const Prompt, PixelSize: String; Out Image: TAssistantGeneratedImage;
+/// POST this connection's image endpoint. The backend builds the JSON. Does not write a file.
+/// Shape is optional. A value this backend cannot express is omitted, not an error.
+Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
   Out ErrorText: String): Boolean;
 /// Keep documented image parts from a Responses output array. An empty array is ignored.
 Procedure RememberResponseImages(Const OutputJson: String);
@@ -30,8 +31,8 @@ Procedure RegisterBuiltinImageAdapters;
 Implementation
 
 Uses
-  base64, fpjson, jsonparser, AssistantImages, AssistantConnections, AssistantHttps, AssistantXaiProvider,
-  AssistantModelProvider;
+  base64, fpjson, jsonparser, AssistantImages, AssistantConnections, AssistantConfig, AssistantHttps,
+  AssistantXaiProvider, AssistantModelProvider;
 
 Var
   ImagePost: TGeneratedImagePost;
@@ -455,12 +456,88 @@ Begin
   Result := Result + '/images/generations';
 End;
 
+Function GrokAspectRatio(Const Shape: String): String;
+Const
+  Ratios: Array[0..15] Of String = (
+    '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2',
+    '19.5:9', '9:19.5', '20:9', '9:20', '21:9', '5:2', 'auto');
+Var
+  I: Integer;
+  Trimmed: String;
+Begin
+  Result := '';
+  Trimmed := LowerCase(Trim(Shape));
+  For I := Low(Ratios) To High(Ratios) Do
+    If Trimmed = Ratios[I] Then
+      Exit(Ratios[I]);
+End;
+
+Procedure AddCommonImageFields(Body: TJSONObject; Const ImageModel, Prompt: String);
+Begin
+  Body.Add('model', ImageModel);
+  Body.Add('prompt', Prompt);
+  Body.Add('n', 1);
+  Body.Add('response_format', 'b64_json');
+End;
+
+Function BuildGrokImageBody(Const ImageModel, Prompt, Shape: String): String;
+Var
+  Body: TJSONObject;
+  Ratio: String;
+Begin
+  Body := TJSONObject.Create;
+  Try
+    AddCommonImageFields(Body, ImageModel, Prompt);
+    Ratio := GrokAspectRatio(Shape);
+    If Ratio <> '' Then
+      Body.Add('aspect_ratio', Ratio);
+    Result := Body.AsJSON;
+  Finally
+    Body.Free;
+  End;
+End;
+
+Function BuildCompatibleImageBody(Const ImageModel, Prompt, Shape: String): String;
+Var
+  Body: TJSONObject;
+  PixelSize: String;
+Begin
+  Body := TJSONObject.Create;
+  Try
+    AddCommonImageFields(Body, ImageModel, Prompt);
+    PixelSize := Trim(Shape);
+    If PixelSizeAccepted(PixelSize) Then
+      Body.Add('size', PixelSize);
+    Result := Body.AsJSON;
+  Finally
+    Body.Free;
+  End;
+End;
+
+Function ProfileImageUrl(Const Profile: TAssistantProfileCall): String;
+Var
+  Base: String;
+Begin
+  Base := Trim(Profile.ApiBase);
+  If (Base = '') And (Profile.Backend = 'grok') Then
+    Base := AssistantConfigDefaultApiBase;
+  Result := ImageEndpointUrl(Base);
+End;
+
 Function ProfileBearer(Const Profile: TAssistantProfileCall; Out Token, ErrorText: String): Boolean;
 Var
   Provider: IAssistantModelProvider;
 Begin
   Token := '';
   ErrorText := '';
+  { A test post hook may supply the bearer so the fixture does not sign in. }
+  If Assigned(ImagePost) And (Trim(Profile.KeyValue) <> '') And (Pos(#10, Profile.KeyValue) = 0) And
+    (Pos(#13, Profile.KeyValue) = 0) Then
+    Begin
+      Token := Profile.KeyValue;
+      Result := True;
+      Exit;
+    End;
   If Profile.Backend = 'grok' Then
     Begin
       Provider := CreateXaiModelProvider;
@@ -476,11 +553,10 @@ Begin
     ErrorText := 'This profile has no API key for its image endpoint.';
 End;
 
-Function RequestProfileImage(Const Prompt, PixelSize: String; Out Image: TAssistantGeneratedImage;
+Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
   Out ErrorText: String): Boolean;
 Var
   Profile: TAssistantProfileCall;
-  BodyObj: TJSONObject;
   Images: TAssistantGeneratedImageArray;
   Url, Body, Headers, Token, ResponseBody: String;
   StatusCode: Integer;
@@ -495,22 +571,22 @@ Begin
       ErrorText := 'write_image requires a prompt.';
       Exit;
     End;
-  If (Trim(PixelSize) <> '') And (Not PixelSizeAccepted(Trim(PixelSize))) Then
-    Begin
-      ErrorText := 'Pixel size must look like 1024x1024.';
-      Exit;
-    End;
   If Not ReadActiveProfileCall(Profile) Then
     Begin
       ErrorText := 'No profile is selected.';
       Exit;
     End;
-  If Trim(Profile.Model) = '' Then
+  If Not AssistantBackendCanDraw(Profile.Backend) Then
     Begin
-      ErrorText := 'This profile has no model.';
+      ErrorText := 'This connection has no image endpoint.';
       Exit;
     End;
-  Url := ImageEndpointUrl(Profile.ApiBase);
+  If Trim(Profile.ImageModel) = '' Then
+    Begin
+      ErrorText := 'No image model is set.';
+      Exit;
+    End;
+  Url := ProfileImageUrl(Profile);
   If Not UrlIsHttps(Url) Then
     Begin
       ErrorText := 'This profile has no image endpoint.';
@@ -518,17 +594,15 @@ Begin
     End;
   If Not ProfileBearer(Profile, Token, ErrorText) Then
     Exit;
-  BodyObj := TJSONObject.Create;
-  Try
-    BodyObj.Add('model', Profile.Model);
-    BodyObj.Add('prompt', Prompt);
-    BodyObj.Add('response_format', 'b64_json');
-    If Trim(PixelSize) <> '' Then
-      BodyObj.Add('size', Trim(PixelSize));
-    Body := BodyObj.AsJSON;
-  Finally
-    BodyObj.Free;
-  End;
+  If Profile.Backend = 'grok' Then
+    Body := BuildGrokImageBody(Profile.ImageModel, Prompt, Shape)
+  Else If Profile.Backend = 'openai-compatible' Then
+    Body := BuildCompatibleImageBody(Profile.ImageModel, Prompt, Shape)
+  Else
+    Begin
+      ErrorText := 'This connection has no image endpoint.';
+      Exit;
+    End;
   Headers := 'Authorization: Bearer ' + Token;
   If Profile.Preset = 'openrouter' Then
     Headers := Headers + LineEnding + 'X-Title: LazWorkflow';

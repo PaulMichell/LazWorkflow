@@ -92,6 +92,7 @@ End;
 Procedure TestProfileEndpoint;
 Var
   Root, SeenUrl, SeenBody, ErrorText: String;
+  Posts: Integer;
   Store: TAssistantConnections;
   Item: TAssistantConnection;
   Image: TAssistantGeneratedImage;
@@ -100,12 +101,23 @@ Var
   Function FakePost(Const Url, Body, Headers: String; Out ResponseBody: String; Out StatusCode: Integer;
     Out PostError: String): Boolean;
   Begin
+    Inc(Posts);
     SeenUrl := Url;
     SeenBody := Body;
     PostError := '';
     StatusCode := 200;
     ResponseBody := '{"data":[{"b64_json":"' + PngBase64 + '"}]}';
     Result := Pos('Bearer test-key', Headers) > 0;
+  End;
+  Function BodyField(Const Name, Expected: String): Boolean;
+  Begin
+    Result := False;
+    Data.Free;
+    Data := GetJSON(SeenBody);
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    BodyObj := TJSONObject(Data);
+    Result := BodyObj.Get(Name, '') = Expected;
   End;
 Begin
   Root := GetTempDir + 'laz-image-endpoint-' + IntToStr(Random(100000));
@@ -114,30 +126,77 @@ Begin
   SetGeneratedImagePost(@FakePost);
   Store := TAssistantConnections.Create(Root);
   Data := Nil;
+  Posts := 0;
   Try
     Item := Store.AddStored('endpoint', 'Endpoint', 'openai-compatible');
     Item.Model := 'kept-chat-model';
+    Item.ImageModel := 'gpt-image-1';
     Item.ApiBase := 'https://example.invalid/v1';
     Item.KeySource := 'stored';
     Item.KeyValue := 'test-key';
     Item.ImageOutput := True;
     Store.ActiveId := Item.Id;
     Check('profile saves', Store.Save);
-    Check('tool-prompt calls this profile endpoint',
+    Check('compatible builder posts the image model and a known pixel size',
       RequestProfileImage('a dot', '1024x1024', Image, ErrorText) And (ErrorText = '') And
-      (Image.Mime = 'image/png') And (Image.Width = 1));
-    Check('endpoint is this profile, not another image product',
-      (SeenUrl = 'https://example.invalid/v1/images/generations') And
-      (Pos('grok-imagine', LowerCase(SeenBody)) = 0) And (Pos('dall-e', LowerCase(SeenBody)) = 0));
-    Data := GetJSON(SeenBody);
-    Check('request body uses the selected model', Data Is TJSONObject);
-    If Data Is TJSONObject Then
-      Begin
-        BodyObj := TJSONObject(Data);
-        Check('model and size stay on this profile',
-          (BodyObj.Get('model', '') = 'kept-chat-model') And (BodyObj.Get('size', '') = '1024x1024') And
-          (BodyObj.Get('prompt', '') = 'a dot'));
-      End;
+      (Image.Mime = 'image/png') And (Posts = 1) And
+      (SeenUrl = 'https://example.invalid/v1/images/generations'));
+    Check('compatible body has no aspect ratio and does not use the chat model',
+      BodyField('model', 'gpt-image-1') And BodyField('size', '1024x1024') And BodyField('prompt', 'a dot') And
+      BodyField('response_format', 'b64_json') And (TJSONObject(Data).Get('n', 0) = 1) And
+      (Pos('aspect_ratio', SeenBody) = 0) And (Pos('quality', SeenBody) = 0) And
+      (Pos('kept-chat-model', SeenBody) = 0));
+    Posts := 0;
+    Check('a ratio the compatible builder cannot express is omitted',
+      RequestProfileImage('a dot', '16:9', Image, ErrorText) And (ErrorText = '') And (Posts = 1) And
+      (Pos('aspect_ratio', SeenBody) = 0) And (Pos('"size"', SeenBody) = 0) And
+      BodyField('model', 'gpt-image-1'));
+    Item.ImageModel := '';
+    Store.Save;
+    Posts := 0;
+    Check('an empty image model fails before the post',
+      (Not RequestProfileImage('a dot', '1:1', Image, ErrorText)) And (Pos('image model', ErrorText) > 0) And
+      (Posts = 0));
+    Item := Store.AddStored('grok-draw', 'Grok draw', 'grok');
+    Item.Model := 'kept-chat-model';
+    Item.ImageModel := AssistantGrokImageModel;
+    Item.ApiBase := 'https://api.x.ai/v1';
+    Item.KeyValue := 'test-key';
+    Item.ImageOutput := True;
+    Store.ActiveId := Item.Id;
+    Store.Save;
+    Posts := 0;
+    Check('Grok builder posts a documented ratio and not a pixel size',
+      RequestProfileImage('a tree', '16:9', Image, ErrorText) And (ErrorText = '') And (Posts = 1) And
+      (SeenUrl = 'https://api.x.ai/v1/images/generations') And
+      BodyField('model', AssistantGrokImageModel) And BodyField('aspect_ratio', '16:9') And
+      BodyField('prompt', 'a tree') And (TJSONObject(Data).Get('n', 0) = 1) And
+      (Pos('"size"', SeenBody) = 0) And (Pos('quality', SeenBody) = 0) And
+      (Pos('kept-chat-model', SeenBody) = 0));
+    Posts := 0;
+    Check('a pixel size the Grok builder cannot express is omitted',
+      RequestProfileImage('a tree', '1024x1024', Image, ErrorText) And (ErrorText = '') And (Posts = 1) And
+      (Pos('"size"', SeenBody) = 0) And (Pos('aspect_ratio', SeenBody) = 0) And
+      BodyField('model', AssistantGrokImageModel));
+    Item := Store.AddStored('codex-draw', 'Codex draw', 'codex');
+    Item.Model := 'codex-model';
+    Item.ImageModel := 'should-not-post';
+    Item.ImageOutput := True;
+    Store.ActiveId := Item.Id;
+    Store.Save;
+    Posts := 0;
+    Check('Codex fails before any post',
+      (Not RequestProfileImage('a dot', '1:1', Image, ErrorText)) And
+      (Pos('no image endpoint', ErrorText) > 0) And (Posts = 0));
+    Item := Store.AddStored('claude-draw', 'Claude draw', 'claude');
+    Item.Model := 'claude-model';
+    Item.ImageOutput := True;
+    Store.ActiveId := Item.Id;
+    Store.Save;
+    Posts := 0;
+    Check('Claude fails before any post',
+      (Not RequestProfileImage('a dot', '', Image, ErrorText)) And
+      (Pos('no image endpoint', ErrorText) > 0) And (Posts = 0));
     Check('the endpoint call writes nothing',
       Not FileExists(IncludeTrailingPathDelimiter(Root) + 'icons' + PathDelim + 'dot.png'));
   Finally
