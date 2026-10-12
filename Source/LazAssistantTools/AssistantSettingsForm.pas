@@ -54,6 +54,8 @@ Type
     KindValueLabel: TLabel;
     ActiveConnectionLabel: TLabel;
     ImageOutputCheck: TCheckBox;
+    ImageModelLabel: TLabel;
+    ImageModelCombo: TComboBox;
     DetailHost: TPanel;
     EmptyConnectionLabel: TLabel;
     GrokPanel: TScrollBox;
@@ -419,13 +421,41 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.ApplyImageCapability(Item: TAssistantConnection);
+Var
+  CanDraw: Boolean;
 Begin
   ImageOutputCheck.Visible := Assigned(Item);
-  ImageOutputCheck.Enabled := Assigned(Item);
+  ImageModelLabel.Visible := Assigned(Item);
+  ImageModelCombo.Visible := Assigned(Item);
   If Not Assigned(Item) Then
-    ImageOutputCheck.Checked := False
+    Begin
+      ImageOutputCheck.Checked := False;
+      ImageOutputCheck.Enabled := False;
+      ImageModelCombo.Text := '';
+      ImageModelCombo.Enabled := False;
+      ImageModelLabel.Caption := 'Image model';
+      Exit;
+    End;
+  CanDraw := AssistantBackendCanDraw(Item.Backend);
+  ImageOutputCheck.Enabled := CanDraw;
+  ImageOutputCheck.Checked := Item.ImageOutput And CanDraw;
+  ImageModelCombo.Items.BeginUpdate;
+  Try
+    ImageModelCombo.Items.Clear;
+    If Item.Backend = 'grok' Then
+      Begin
+        ImageModelCombo.Items.Add(AssistantGrokImageModel);
+        ImageModelCombo.Items.Add('grok-imagine-image');
+      End;
+  Finally
+    ImageModelCombo.Items.EndUpdate;
+  End;
+  ImageModelCombo.Text := Item.ImageModel;
+  ImageModelCombo.Enabled := CanDraw;
+  If CanDraw Then
+    ImageModelLabel.Caption := 'Image model'
   Else
-    ImageOutputCheck.Checked := Item.ImageOutput;
+    ImageModelLabel.Caption := 'This connection cannot draw.';
 End;
 
 Function TAssistantSettingsForm.HasGrokRow: Boolean;
@@ -690,9 +720,18 @@ Begin
   If Trim(ConnectionNameEdit.Text) <> '' Then
     Item.Name := Trim(ConnectionNameEdit.Text);
   { Capability only. The selected chat model is stored by the kind-specific block below. }
-  If ImageOutputCheck.Checked And (Not Item.ImageOutput) Then
-    ApplyImageOutputTurnedOn(Item);
-  Item.ImageOutput := ImageOutputCheck.Checked;
+  If Not AssistantBackendCanDraw(Item.Backend) Then
+    Item.ImageOutput := False
+  Else
+    Begin
+      If ImageOutputCheck.Checked And (Not Item.ImageOutput) And (Item.Backend = 'grok') And
+        (Trim(ImageModelCombo.Text) = '') Then
+        ImageModelCombo.Text := AssistantGrokImageModel;
+      If ImageOutputCheck.Checked And (Not Item.ImageOutput) Then
+        ApplyImageOutputTurnedOn(Item);
+      Item.ImageOutput := ImageOutputCheck.Checked;
+      Item.ImageModel := Trim(ImageModelCombo.Text);
+    End;
   If Item.Backend = 'grok' Then
     Begin
       Item.ApiBase := Trim(ApiBaseEdit.Text);
@@ -1858,9 +1897,15 @@ Begin
       Else If Backend = 'claude' Then
         KeptText := ClaudeModelEdit.Text;
     End;
+  If FLoading Then
+    Exit;
   If ImageOutputCheck.Checked And Assigned(Connections) And (SelectedConnection >= 0) And
     (SelectedConnection < Connections.Count) And (Not Connections[SelectedConnection].ImageOutput) Then
-    ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
+    Begin
+      If (Connections[SelectedConnection].Backend = 'grok') And (Trim(ImageModelCombo.Text) = '') Then
+        ImageModelCombo.Text := AssistantGrokImageModel;
+      ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
+    End;
   { Turning the flag on must not replace the chat model with the image model. }
   If Backend = 'grok' Then
     Begin

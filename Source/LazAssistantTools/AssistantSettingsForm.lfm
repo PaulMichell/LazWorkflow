@@ -391,12 +391,33 @@ object AssistantSettingsForm: TAssistantSettingsForm
             Height = 23
             Top = 96
             Width = 248
-            Caption = 'Can generate images'
-            Hint = 'This profile can create still images. Turning this on keeps the current model.'
+            Caption = 'May draw images'
+            Hint = 'The chat model is not the image model.'
             OnClick = ImageOutputCheckClick
             ParentShowHint = False
             ShowHint = True
             TabOrder = 2
+          end
+          object ImageModelLabel: TLabel
+            Left = 280
+            Height = 17
+            Top = 92
+            Width = 280
+            Caption = 'Image model'
+            ParentColor = False
+          end
+          object ImageModelCombo: TComboBox
+            Left = 280
+            Height = 28
+            Top = 112
+            Width = 430
+            Anchors = [akTop, akLeft, akRight]
+            Hint = 'The chat model is not the image model.'
+            ItemHeight = 0
+            ParentShowHint = False
+            ShowHint = True
+            Style = csDropDown
+            TabOrder = 3
           end
         end
         object DetailHost: TPanel
