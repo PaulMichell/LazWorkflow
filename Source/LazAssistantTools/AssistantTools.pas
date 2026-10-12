@@ -119,6 +119,7 @@ Begin
 End;
 
 Function ExpandResolvedPath(Const Path: String): String; Forward;
+Function SymlinkLeavesProject(Const Resolved: String): Boolean; Forward;
 Function FindOpenEditor(Const Resolved: String): TSourceEditorInterface; Forward;
 
 Procedure MarkProjectStructureDirty;
@@ -628,6 +629,7 @@ Begin
       '"description":"Save a still image into the project. Do not use write_file or replace_in_file for images.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path."},' +
+        '"overwrite":{"type":"boolean","description":"Replace an existing file. Default false."},' +
         Fields +
       '},"required":' + Required + '}}}';
 End;
@@ -3589,19 +3591,210 @@ Begin
   End;
 End;
 
+Function ImageProjectRelative(Const Resolved: String): String;
+Var
+  Root, Full: String;
+Begin
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(ProjectRootPath));
+  Full := ExpandFileName(Resolved);
+  If Copy(Full, 1, Length(Root)) = Root Then
+    Result := StringReplace(Copy(Full, Length(Root) + 1, MaxInt), '\', '/', [rfReplaceAll])
+  Else
+    Result := StringReplace(Resolved, '\', '/', [rfReplaceAll]);
+End;
+
+Function ImageOutputPathRefused(Const RelativePath: String; Out ErrorText: String): Boolean;
+Var
+  Normal, Segment: String;
+  Slash: Integer;
+Begin
+  Result := True;
+  ErrorText := '';
+  Normal := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
+  While (Normal <> '') And (Normal[1] = '/') Do
+    Delete(Normal, 1, 1);
+  If Normal = '' Then
+    Begin
+      ErrorText := 'write_image requires a project-relative path.';
+      Exit;
+    End;
+  While Normal <> '' Do
+    Begin
+      Slash := Pos('/', Normal);
+      If Slash < 1 Then
+        Segment := Normal
+      Else
+        Segment := Copy(Normal, 1, Slash - 1);
+      If (Segment = '') Or (Segment = '.') Or (Segment = '..') Then
+        Begin
+          ErrorText := 'Image path is outside the project.';
+          Exit;
+        End;
+      If SameText(Segment, '.git') Or SameText(Segment, '.assistant') Then
+        Begin
+          ErrorText := 'Refusing an image path in ' + Segment + '.';
+          Exit;
+        End;
+      If SameText(Segment, 'lib') Or SameText(Segment, 'units') Then
+        Begin
+          ErrorText := 'Refusing a build-output path.';
+          Exit;
+        End;
+      If Slash < 1 Then
+        Break;
+      Delete(Normal, 1, Slash);
+    End;
+  Result := False;
+End;
+
+Function ImageExtensionMime(Const Path: String; Out Mime: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  If Ext = '.png' Then
+    Mime := 'image/png'
+  Else If (Ext = '.jpg') Or (Ext = '.jpeg') Then
+    Mime := 'image/jpeg'
+  Else If Ext = '.gif' Then
+    Mime := 'image/gif'
+  Else If Ext = '.webp' Then
+    Mime := 'image/webp'
+  Else
+    Mime := '';
+  Result := Mime <> '';
+End;
+
+Function ImageDestinationBlocked(Const Resolved: String; Overwrite: Boolean; Out ErrorText: String): Boolean;
+Begin
+  Result := True;
+  ErrorText := '';
+  If FileIsSymlink(Resolved) Then
+    Begin
+      If SymlinkLeavesProject(Resolved) Then
+        ErrorText := 'Refusing a symbolic link that leaves the project.'
+      Else If Not Overwrite Then
+        ErrorText := 'File already exists. Pass overwrite to replace it.'
+      Else
+        Result := False;
+      Exit;
+    End;
+  If DirectoryExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'Image path is a directory.';
+      Exit;
+    End;
+  If FileExistsUTF8(Resolved) And (Not Overwrite) Then
+    Begin
+      ErrorText := 'File already exists. Pass overwrite to replace it.';
+      Exit;
+    End;
+  Result := False;
+End;
+
+Function PublishImageBytes(Const Resolved: String; Const Data: TBytes; Overwrite: Boolean;
+  Out ErrorText: String): Boolean;
+Var
+  Parent, TempPath, BackupPath: String;
+  Stream: TFileStream;
+  Existed: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If ImageDestinationBlocked(Resolved, Overwrite, ErrorText) Then
+    Exit;
+  Parent := ExtractFileDir(Resolved);
+  If FileIsSymlink(Parent) And SymlinkLeavesProject(Parent) Then
+    Begin
+      ErrorText := 'Refusing a symbolic link that leaves the project.';
+      Exit;
+    End;
+  If (Parent <> '') And (Not DirectoryExistsUTF8(Parent)) Then
+    If Not ForceDirectoriesUTF8(Parent) Then
+      Begin
+        ErrorText := 'Could not create the image directory.';
+        Exit;
+      End;
+  Existed := FileExistsUTF8(Resolved) Or FileIsSymlink(Resolved);
+  TempPath := Resolved + '.writing';
+  BackupPath := Resolved + '.bak';
+  If FileExistsUTF8(TempPath) Or FileIsSymlink(TempPath) Then
+    DeleteFileUTF8(TempPath);
+  Stream := Nil;
+  Try
+    Try
+      Stream := TFileStream.Create(TempPath, fmCreate);
+      If Length(Data) > 0 Then
+        Stream.WriteBuffer(Data[0], Length(Data));
+    Except
+      On E: Exception Do
+        Begin
+          DeleteFileUTF8(TempPath);
+          ErrorText := 'Could not write the image.';
+          Exit;
+        End;
+    End;
+  Finally
+    Stream.Free;
+  End;
+  If Existed Then
+    Begin
+      If FileExistsUTF8(BackupPath) Or FileIsSymlink(BackupPath) Then
+        DeleteFileUTF8(BackupPath);
+      If Not RenameFileUTF8(Resolved, BackupPath) Then
+        Begin
+          DeleteFileUTF8(TempPath);
+          ErrorText := 'Could not replace the existing image.';
+          Exit;
+        End;
+    End;
+  If Not RenameFileUTF8(TempPath, Resolved) Then
+    Begin
+      If Existed Then
+        RenameFileUTF8(BackupPath, Resolved);
+      DeleteFileUTF8(TempPath);
+      ErrorText := 'Could not write the image.';
+      Exit;
+    End;
+  If Existed Then
+    DeleteFileUTF8(BackupPath);
+  Result := True;
+End;
+
 Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path: String;
+  Path, Resolved, Relative, ExpectedMime, SniffedMime: String;
+  Overwrite: Boolean;
   Image: TAssistantGeneratedImage;
+  Width, Height: Integer;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
   ClearGeneratedImage(Image);
   Path := Trim(JsonArgString(ArgumentsJson, 'path'));
+  Overwrite := JsonArgBool(ArgumentsJson, 'overwrite', False);
   If Path = '' Then
     Begin
       ErrorText := 'write_image requires a project-relative path.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
+    Exit;
+  Resolved := ExpandResolvedPath(Resolved);
+  Relative := ImageProjectRelative(Resolved);
+  If ImageOutputPathRefused(Relative, ErrorText) Then
+    Exit;
+  If SymlinkLeavesProject(Resolved) Then
+    Begin
+      ErrorText := 'Refusing a symbolic link that leaves the project.';
+      Exit;
+    End;
+  If ImageDestinationBlocked(Resolved, Overwrite, ErrorText) Then
+    Exit;
+  If Not ImageExtensionMime(Resolved, ExpectedMime) Then
+    Begin
+      ErrorText := 'Image path must end in png, jpg, jpeg, webp, or gif.';
       Exit;
     End;
   If ActiveProfileImageDelivery = aidToolPrompt Then
@@ -3612,11 +3805,30 @@ Begin
     End
   Else If Not SelectTurnGeneratedImage(JsonArgString(ArgumentsJson, 'image_id'), Image, ErrorText) Then
     Exit;
-  { Path checks and the file write come next. Do not claim this path was saved. }
-  If (Path = '') Or (Length(Image.Bytes) = 0) Then
-    ErrorText := 'The image was not saved.'
-  Else
-    ErrorText := 'The image was not saved.';
+  If (Length(Image.Bytes) = 0) Or (Length(Image.Bytes) > AssistantImageMaxFileBytes) Then
+    Begin
+      ErrorText := 'Generated image is over the size ceiling.';
+      If Length(Image.Bytes) = 0 Then
+        ErrorText := 'Generated image has no bytes.';
+      Exit;
+    End;
+  If Not MeasureStillImage(Image.Bytes, SniffedMime, Width, Height) Then
+    Begin
+      ErrorText := 'Generated image bytes are not a still image.';
+      Exit;
+    End;
+  If SniffedMime <> ExpectedMime Then
+    Begin
+      ErrorText := 'Image bytes do not match the file extension.';
+      Exit;
+    End;
+  Image.Mime := SniffedMime;
+  Image.Width := Width;
+  Image.Height := Height;
+  If Not PublishImageBytes(Resolved, Image.Bytes, Overwrite, ErrorText) Then
+    Exit;
+  ResultText := GeneratedImageResultText(Relative, Image);
+  Result := True;
 End;
 
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;

@@ -1,6 +1,7 @@
 Program AssistantWorkTargetTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf,
+Uses cthreads, Interfaces, Forms, Classes, SysUtils, BaseUnix, PackageIntf, WorkflowSettings,
+  AssistantConnections, AssistantGeneratedImage,
   LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTestIDEHost, AssistantWorkTarget,
   AssistantConversation, AssistantIDEContext, AssistantIDEWorkspace,
   AssistantTools, AssistantTestSettings, fpjson, jsonparser, ProjectAssistantForm,
@@ -328,6 +329,128 @@ Procedure WriteFile(Const Path,Body:String);
 Var F:TFileStream;
 Begin ForceDirectories(ExtractFileDir(Path));F:=TFileStream.Create(Path,fmCreate);
   Try If Body<>'' Then F.WriteBuffer(Body[1],Length(Body));Finally F.Free;End;End;
+
+Function ReadText(Const Path: String): String;
+Var
+  Stream: TFileStream;
+Begin
+  Result := '';
+  Stream := TFileStream.Create(Path, fmOpenRead);
+  Try
+    SetLength(Result, Stream.Size);
+    If Stream.Size > 0 Then
+      Stream.ReadBuffer(Result[1], Stream.Size);
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Function StringOf(Const Data: TBytes): String;
+Var
+  I: Integer;
+Begin
+  SetLength(Result, Length(Data));
+  For I := 0 To High(Data) Do
+    Result[I + 1] := AnsiChar(Data[I]);
+End;
+
+Procedure TestWriteImage;
+Const
+  OnePixelPng: Array[0..66] Of Byte = (
+    $89, $50, $4E, $47, $0D, $0A, $1A, $0A, $00, $00, $00, $0D, $49, $48, $44, $52,
+    $00, $00, $00, $01, $00, $00, $00, $01, $08, $06, $00, $00, $00, $1F, $15, $C4,
+    $89, $00, $00, $00, $0A, $49, $44, $41, $54, $78, $9C, $63, $00, $01, $00, $00,
+    $05, $00, $01, $0D, $0A, $2D, $B4, $00, $00, $00, $00, $49, $45, $4E, $44, $AE,
+    $42, $60, $82);
+Var
+  Root, Outside, PreviousSettings, Reply, Note, Written: String;
+  Store: TAssistantConnections;
+  Item: TAssistantConnection;
+  Images: TAssistantGeneratedImageArray;
+  SavedApproval: TAssistantApprovalMode;
+  I: Integer;
+  Function Dest(Const RelativePath: String): String;
+  Begin
+    Result := IncludeTrailingPathDelimiter(Root) + StringReplace(RelativePath, '/', PathDelim, [rfReplaceAll]);
+  End;
+Begin
+  Root := GetTempDir + 'laz-write-image-' + IntToStr(GetProcessID);
+  Outside := Root + '-out.png';
+  ForceDirectories(Root);
+  WriteFile(Outside, 'outside');
+  PreviousSettings := WorkflowSettingsDirectory;
+  SetWorkflowSettingsDirectory(Root + '-settings');
+  ForceDirectories(Root + '-settings');
+  Store := TAssistantConnections.Create(Root + '-settings');
+  SavedApproval := AssistantChatConfig.GetApprovalMode;
+  AssistantChatConfig.SetApprovalModeEnum(aamAlways);
+  Try
+    Item := Store.AddStored('writer', 'Writer', 'openai-compatible');
+    Item.Model := 'kept-chat-model';
+    Item.ImageOutput := True;
+    Item.ImageDelivery := aidResponsePart;
+    Store.ActiveId := Item.Id;
+    Check('image profile saved', Store.Save);
+    Check('folder target for write_image', AssistantTarget.SelectFolder(Root, Note));
+    SetLength(Images, 1);
+    Images[0].Id := 'img-1';
+    Images[0].Mime := 'image/png';
+    Images[0].Width := 1;
+    Images[0].Height := 1;
+    SetLength(Images[0].Bytes, Length(OnePixelPng));
+    For I := 0 To High(OnePixelPng) Do
+      Images[0].Bytes[I] := OnePixelPng[I];
+    SetTurnGeneratedImages(Images);
+    Check('write_image saves a matching png', ExecuteAssistantToolForMode('write_image',
+      '{"path":"icons/dot.png"}', amBuild, Reply, Note) And (Pos('path=icons/dot.png', Reply) > 0) And
+      (Pos('mime=image/png', Reply) > 0) And FileExists(Dest('icons/dot.png')));
+    Written := ReadText(Dest('icons/dot.png'));
+    Check('saved bytes are the generated image', Written = StringOf(Images[0].Bytes));
+    Check('existing file is not replaced without overwrite',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png"}', amBuild, Reply, Note)) And
+      (Pos('overwrite', Note) > 0) And (Written = StringOf(Images[0].Bytes)));
+    Check('overwrite replaces the file', ExecuteAssistantToolForMode('write_image',
+      '{"path":"icons/dot.png","overwrite":true}', amBuild, Reply, Note) And FileExists(Dest('icons/dot.png')));
+    Check('extension must match the bytes',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.jpg"}', amBuild, Reply, Note)) And
+      (Pos('extension', Note) > 0) And (Not FileExists(Dest('icons/dot.jpg'))));
+    Check('only png jpg jpeg webp and gif are allowed',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.bmp"}', amBuild, Reply, Note)) And
+      (Not FileExists(Dest('icons/dot.bmp'))));
+    Check('git path is refused',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":".git/dot.png"}', amBuild, Reply, Note)) And
+      (Not FileExists(Dest('.git/dot.png'))));
+    Check('assistant path is refused',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":".assistant/dot.png"}', amBuild, Reply, Note)) And
+      (Not FileExists(Dest('.assistant/dot.png'))));
+    Check('build output path is refused',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"lib/dot.png"}', amBuild, Reply, Note)) And
+      (Pos('build-output', Note) > 0) And (Not FileExists(Dest('lib/dot.png'))));
+    Check('path outside the project is refused',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"../outside.png"}', amBuild, Reply, Note)) And
+      (Not FileExists(Outside)));
+    Check('escape link created', fpSymlink(PChar(Outside), PChar(Dest('escape.png'))) = 0);
+    Check('symlink that leaves the project is refused',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"escape.png"}', amBuild, Reply, Note)) And
+      (Pos('symbolic link', Note) > 0));
+    Check('outside target was not written', ReadText(Outside) = 'outside');
+    ClearTurnGeneratedImages;
+    Check('missing image writes nothing',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/missing.png"}', amBuild, Reply, Note)) And
+      (Not FileExists(Dest('icons/missing.png'))));
+    SetLength(Images[0].Bytes, AssistantImageMaxFileBytes + 1);
+    SetTurnGeneratedImages(Images);
+    Check('oversized image writes nothing',
+      (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/big.png"}', amBuild, Reply, Note)) And
+      (Pos('ceiling', Note) > 0) And (Not FileExists(Dest('icons/big.png'))));
+  Finally
+    ClearTurnGeneratedImages;
+    AssistantChatConfig.SetApprovalModeEnum(SavedApproval);
+    Store.Free;
+    SetWorkflowSettingsDirectory(PreviousSettings);
+  End;
+End;
+
 Var IDE:TIDE; Packages:TPackages; Proj:TProject; Editors:TEditors; Workspace:TWorkspace;
   Store:TAssistantConversationStore; Settings1,Settings2:TAssistantTestSettings;
   Id:TGuid; Note,Key,ProjectStore,Reply,Identity,Path:String; Data:TJSONData;
@@ -338,6 +461,7 @@ Begin
   If (ParamCount>0) And SameText(ExtractFileExt(ParamStr(ParamCount)),'.lpk') Then
     Begin If (ParamCount<>3) Or (Pos('--pcp=',ParamStr(1))<>1) Or (Pos('--widgetset=',ParamStr(2))<>1) Then Halt(2);WriteLn('package compile fixture');Halt(0);End;
   Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;
+  TestWriteImage;
   TestReadImage;
   TestCodexPlanTools;
   TestMarkdownEditorOpen;
