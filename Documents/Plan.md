@@ -49,7 +49,7 @@ On the connection page, keep one checkbox, captioned so it means this connection
 `RequestProfileImage` is the only network path. It lives in `AssistantImageAdapters`. The writer does not build vendor JSON.
 
 ### 3.1 Post the stored image model
-Status: not started
+Status: complete
 
 The body uses the stored image model, never the chat model. An optional tool shape is translated by the builder in item 1.3. A shape that builder cannot express is omitted, not a failed draw, so a Grok ratio does not make an OpenAI call fail and an OpenAI pixel size does not make an Imagine call fail. Do not invent a size the endpoint may reject. An empty image model, a backend with no builder, or a non-HTTPS endpoint fails before the post. Bound the HTTP call to about a minute so a hung endpoint cannot occupy the Build round budget.
 
