@@ -120,6 +120,14 @@ object AssistantSettingsForm: TAssistantSettingsForm
             item
               ButtonStyle = cbsCheckboxColumn
               Title.Alignment = taCenter
+              Title.Caption = 'Chat'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
               Title.Caption = 'Inspect'
               ValueChecked = '1'
               ValueUnchecked = '0'
@@ -145,14 +153,6 @@ object AssistantSettingsForm: TAssistantSettingsForm
               ButtonStyle = cbsCheckboxColumn
               Title.Alignment = taCenter
               Title.Caption = 'Build'
-              ValueChecked = '1'
-              ValueUnchecked = '0'
-              Width = 96
-            end
-            item
-              ButtonStyle = cbsCheckboxColumn
-              Title.Alignment = taCenter
-              Title.Caption = 'Chat'
               ValueChecked = '1'
               ValueUnchecked = '0'
               Width = 96

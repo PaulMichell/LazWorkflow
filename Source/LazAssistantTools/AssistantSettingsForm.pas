@@ -534,7 +534,7 @@ End;
 
 Procedure TAssistantSettingsForm.AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
 Const
-  ModeNames: Array[0..4] Of String = ('inspect', 'document', 'plan', 'build', 'chat');
+  ModeNames: Array[0..4] Of String = ('chat', 'inspect', 'document', 'plan', 'build');
 Var
   Row, Col: Integer;
 Begin
@@ -591,7 +591,7 @@ End;
 
 Procedure TAssistantSettingsForm.SaveSkillModes;
 Const
-  ModeNames: Array[0..4] Of String = ('inspect', 'document', 'plan', 'build', 'chat');
+  ModeNames: Array[0..4] Of String = ('chat', 'inspect', 'document', 'plan', 'build');
 Var
   Seen, Modes, DiscoveredNames: TStringList;
   Discovered: TAssistantSkillList;
