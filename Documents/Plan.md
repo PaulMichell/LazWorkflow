@@ -56,7 +56,7 @@ Status: complete
 When the flag is on, the prompt says: create still images only with `write_image`; do not use `write_file` or `replace_in_file` for images; prefer PNG for icons and UI art unless the user names another format; pass the generated image through rather than describing a file that was not written.
 
 ### 3.2 Tell other models they cannot create image files
-Status: not started
+Status: complete
 
 When the flag is off, one prompt line: this model cannot write image files; say so, and do not invent a path or a PNG. `write_file` keeps rejecting image extensions in every mode, so a text model cannot smuggle a binary through the text writer.
 
