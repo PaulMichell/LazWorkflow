@@ -31,7 +31,7 @@ Status: complete
 Add an image-model string on the connection, separate from `Model`. It holds whatever id that endpoint accepts, not only an Imagine id. Turning image output on for a Grok connection with an empty image model sets `grok-imagine-image-2.0`. One named constant owns that Grok default. OpenAI-compatible connections, including OpenRouter, have no default: the user sets the id (`gpt-image-1`, `dall-e-3`, a Flux id, or any other id that base accepts). Claude and Codex have no image endpoint in this host, so they get no default and cannot draw. The chat picker keeps hiding media ids. The image field is not filled from the chat model, and it is not limited to ids the chat picker shows.
 
 ### 1.3 Let the backend build the request
-Status: not started
+Status: complete
 
 Keep one `RequestProfileImage` entry. Split the JSON by backend. Grok posts `model`, `prompt`, `n` of 1, `response_format` `b64_json`, and `aspect_ratio` only for a documented ratio. It does not send `size` or `quality`. OpenAI-compatible posts `model`, `prompt`, `n` of 1, and `response_format` `b64_json`. It sends `size` only when it can map the optional shape to a pixel size that builder knows. It does not send `aspect_ratio`. Claude and Codex fail before any post: this connection has no image endpoint. An empty image model fails the same way, naming the missing setting. Adding a provider is a new builder plus the shared writer, not a new tool.
 
