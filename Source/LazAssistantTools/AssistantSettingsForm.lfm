@@ -398,32 +398,6 @@ object AssistantSettingsForm: TAssistantSettingsForm
             ShowHint = True
             TabOrder = 2
           end
-          object ImageDeliveryLabel: TLabel
-            Left = 280
-            Height = 17
-            Top = 92
-            Width = 52
-            Caption = 'Delivery'
-            ParentColor = False
-          end
-          object ImageDeliveryCombo: TComboBox
-            Left = 280
-            Height = 28
-            Top = 112
-            Width = 320
-            Hint = 'Response image part, or a tool prompt that calls this same model. Neither choice selects a different image product.'
-            ItemHeight = 0
-            ItemIndex = 0
-            Items.Strings = (
-              'Response image part'
-              'Tool prompt'
-            )
-            Enabled = False
-            ParentShowHint = False
-            ShowHint = True
-            Style = csDropDownList
-            TabOrder = 3
-          end
         end
         object DetailHost: TPanel
           Left = 0

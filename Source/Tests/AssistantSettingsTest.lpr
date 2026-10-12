@@ -51,7 +51,7 @@ End;
 Var Frame: TCodexConnectionFrame; IDE: TIDE; Dialog, CancelledDialog: TAssistantSettingsForm; OriginalContext: Boolean; List: TListBox; Names: TEdit;
   TestFrame: TAssistantTestSettingsFrame; TestSettings: TAssistantTestSettings; Note, StoreDir, KeptModel: String;
   Pages: TPageControl; Store: TAssistantConnections; Guid: TGuid; Bitmap: TBitmap; PNG: TPortableNetworkGraphic;
-  ImageCheck: TCheckBox; DeliveryCombo: TComboBox; KeptIndex: Integer;
+  ImageCheck: TCheckBox; KeptIndex: Integer;
 Begin
   Application.Initialize;
   CreateGUID(Guid); ConfigRoot := GetTempDir + 'laz-settings-' + GUIDToString(Guid); ForceDirectories(ConfigRoot);
@@ -151,18 +151,15 @@ Begin
     Frame.LoadModels(ModelList);
     Frame.EffortCombo.ItemIndex := Frame.EffortCombo.Items.IndexOf('xhigh');
     ImageCheck := TCheckBox(Dialog.FindComponent('ImageOutputCheck'));
-    DeliveryCombo := TComboBox(Dialog.FindComponent('ImageDeliveryCombo'));
     KeptModel := Frame.ModelCombo.Text;
     Check('selected profile shows Can generate images',
       Assigned(ImageCheck) And ImageCheck.Visible And (ImageCheck.Caption = 'Can generate images') And
-      ImageCheck.Enabled And (Not ImageCheck.Checked) And Assigned(DeliveryCombo) And (DeliveryCombo.Items.Count = 2) And
-      (DeliveryCombo.ItemIndex = 0) And (KeptModel = 'model-one'));
+      ImageCheck.Enabled And (Not ImageCheck.Checked) And (Dialog.FindComponent('ImageDeliveryCombo') = Nil) And
+      (KeptModel = 'model-one'));
     ImageCheck.Checked := True;
     ImageCheck.OnClick(ImageCheck);
-    DeliveryCombo.ItemIndex := 1;
     Check('turning on image output keeps the current model',
-      (Frame.ModelCombo.Text = KeptModel) And (Frame.ModelCombo.Text = 'model-one') And ImageCheck.Checked And
-      DeliveryCombo.Enabled And (DeliveryCombo.ItemIndex = 1));
+      (Frame.ModelCombo.Text = KeptModel) And (Frame.ModelCombo.Text = 'model-one') And ImageCheck.Checked);
     List.ItemIndex := 0; List.OnClick(List);
     TButton(Dialog.FindComponent('UseConnectionButton')).Click;
     Dialog.Show; Application.ProcessMessages;
@@ -209,7 +206,7 @@ Begin
       Check('saving settings persists the discovered lists', Store[0].CachedModelsJson = ModelList);
       Check('saving settings does not invent a Grok row', Store[0].Backend = 'codex');
       Check('settings save stores image output on that profile',
-        Store[0].ImageOutput And (Store[0].ImageDelivery = aidToolPrompt) And (Store[0].Model = 'model-one'));
+        Store[0].ImageOutput And (Store[0].Model = 'model-one'));
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
@@ -222,16 +219,14 @@ Begin
           And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
           And Not Frame.Busy);
         ImageCheck := TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck'));
-        DeliveryCombo := TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo'));
         Check('reopened profile keeps image output and the same model',
-          ImageCheck.Checked And ImageCheck.Enabled And (DeliveryCombo.ItemIndex = 1) And DeliveryCombo.Enabled And
+          ImageCheck.Checked And ImageCheck.Enabled And (CancelledDialog.FindComponent('ImageDeliveryCombo') = Nil) And
           (Frame.ModelCombo.Text = 'model-one'));
         TMenuItem(CancelledDialog.FindComponent('ChatGptAccountItem')).Click;
         Check('new connections do not inherit discovered lists',
           (Frame.CachedModelsJson = '') And (Frame.ModelCombo.Items.Count = 0));
         Check('a new profile does not inherit image output',
           (Not TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck')).Checked) And
-          (TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo')).ItemIndex = 0) And
           (Frame.ModelCombo.Text = ''));
         Frame.LoadModels('{"data":[{"model":"other-account-model","supportedReasoningEfforts":[]}]}');
         List.ItemIndex := 0; List.OnClick(List);
@@ -240,7 +235,6 @@ Begin
           And (Frame.ReasoningEffort = 'xhigh'));
         Check('switching profiles restores image output without changing that model',
           TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck')).Checked And
-          (TComboBox(CancelledDialog.FindComponent('ImageDeliveryCombo')).ItemIndex = 1) And
           (Frame.ModelCombo.Text = 'model-one'));
         Frame.LoadModels('{"data":[{"model":"unsaved-model","supportedReasoningEfforts":[]}]}');
         TMenuItem(CancelledDialog.FindComponent('GrokAccountItem')).Click;

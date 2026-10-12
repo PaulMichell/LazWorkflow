@@ -2,6 +2,7 @@ Unit AssistantConnections;
 
 { Named connection definitions. Each row is the selected model profile.
   Image output is a stored capability on that profile, not a model id.
+  A stored image_delivery value is ignored so an old connection still opens.
   Credentials remain with each backend's account owner; selecting a connection
   never disconnects another account. Codex homes are derived paths only.
   This unit does not create or delete them. (c) 2026 Michell Computing. }
@@ -20,13 +21,11 @@ Const
   AssistantOpenRouterApiBase = 'https://openrouter.ai/api/v1';
   AssistantWireChatCompletions = 'chat-completions';
   AssistantOpenRouterKeyEnv = 'OPENROUTER_API_KEY';
+  { Kept for the response parser map. The profile no longer stores a delivery mode. }
   AssistantImageDeliveryResponsePart = 'response-part';
   AssistantImageDeliveryToolPrompt = 'tool-prompt';
 
 Type
-  { How a capable profile delivers pixels. Neither value names an image product. }
-  TAssistantImageDelivery = (aidResponsePart, aidToolPrompt);
-
   TAssistantConnection = Class
     Id, Name, Backend, Runtime, Model, ReasoningEffort, ApprovalMode: String;
     SearchMode, AnswerVerbosity, Preset, ApiBase: String;
@@ -35,7 +34,6 @@ Type
     SearchCitations: Boolean;
     { False until the user marks this profile. Does not select a different model. }
     ImageOutput: Boolean;
-    ImageDelivery: TAssistantImageDelivery;
     MaxOutputTokens: Integer;
     Constructor Create;
     /// True for grok and openai-compatible. Derived from Backend, not a stored flag.
@@ -65,12 +63,8 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
-Function AssistantImageDeliveryToStr(Mode: TAssistantImageDelivery): String;
-Function StrToAssistantImageDelivery(Const Value: String): TAssistantImageDelivery;
 /// ImageOutput on the active saved profile. False when no profile is selected.
 Function ActiveProfileImageOutput: Boolean;
-/// Delivery mode of the active saved profile. Response part when none is selected.
-Function ActiveProfileImageDelivery: TAssistantImageDelivery;
 /// True only for a Build turn whose active profile can generate images.
 /// Plan and Document never offer write_image; they do not write project files.
 Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
@@ -80,7 +74,6 @@ Type
   TAssistantProfileCall = Record
     Backend, Model, ApiBase, Preset, KeySource, KeyEnv, KeyValue: String;
     ImageOutput: Boolean;
-    ImageDelivery: TAssistantImageDelivery;
   End;
 
 /// Reads the saved active profile. Does not rewrite the live config.
@@ -98,7 +91,6 @@ Begin
   SearchMode := 'off';
   SearchCitations := False;
   ImageOutput := False;
-  ImageDelivery := aidResponsePart;
   AnswerVerbosity := 'medium';
   MaxOutputTokens := 0;
   Preset := '';
@@ -114,23 +106,6 @@ Begin
   Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
 End;
 
-Function AssistantImageDeliveryToStr(Mode: TAssistantImageDelivery): String;
-Begin
-  Case Mode Of
-    aidToolPrompt: Result := AssistantImageDeliveryToolPrompt;
-  Else
-    Result := AssistantImageDeliveryResponsePart;
-  End;
-End;
-
-Function StrToAssistantImageDelivery(Const Value: String): TAssistantImageDelivery;
-Begin
-  If LowerCase(Trim(Value)) = AssistantImageDeliveryToolPrompt Then
-    Result := aidToolPrompt
-  Else
-    Result := aidResponsePart;
-End;
-
 Procedure ClearProfileCall(Out Profile: TAssistantProfileCall);
 Begin
   Profile.Backend := '';
@@ -141,7 +116,6 @@ Begin
   Profile.KeyEnv := '';
   Profile.KeyValue := '';
   Profile.ImageOutput := False;
-  Profile.ImageDelivery := aidResponsePart;
 End;
 
 Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
@@ -183,7 +157,7 @@ Begin
         Profile.KeyValue := Obj.Get('key_value', '');
         If Obj.Find('image_output') <> Nil Then
           Profile.ImageOutput := Obj.Get('image_output', False);
-        Profile.ImageDelivery := StrToAssistantImageDelivery(Obj.Get('image_delivery', ''));
+        { image_delivery is not applied. An old file still opens. }
         Exit(True);
       End;
   Finally
@@ -191,34 +165,14 @@ Begin
   End;
 End;
 
-Procedure ReadActiveProfile(Out ImageOutput: Boolean; Out ImageDelivery: TAssistantImageDelivery);
+Function ActiveProfileImageOutput: Boolean;
 Var
   Profile: TAssistantProfileCall;
 Begin
   If ReadActiveProfileCall(Profile) Then
-    Begin
-      ImageOutput := Profile.ImageOutput;
-      ImageDelivery := Profile.ImageDelivery;
-    End
+    Result := Profile.ImageOutput
   Else
-    Begin
-      ImageOutput := False;
-      ImageDelivery := aidResponsePart;
-    End;
-End;
-
-Function ActiveProfileImageOutput: Boolean;
-Var
-  Delivery: TAssistantImageDelivery;
-Begin
-  ReadActiveProfile(Result, Delivery);
-End;
-
-Function ActiveProfileImageDelivery: TAssistantImageDelivery;
-Var
-  ImageOutput: Boolean;
-Begin
-  ReadActiveProfile(ImageOutput, Result);
+    Result := False;
 End;
 
 Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;

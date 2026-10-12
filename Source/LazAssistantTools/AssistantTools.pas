@@ -74,7 +74,7 @@ Uses
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
-  AssistantGeneratedImage, AssistantImageAdapters, fpjson, jsonparser;
+  AssistantGeneratedImage, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -607,22 +607,7 @@ Begin
 End;
 
 Function BuildWriteImageToolJson: String;
-Var
-  Fields, Required: String;
 Begin
-  If ActiveProfileImageDelivery = aidToolPrompt Then
-    Begin
-      Fields :=
-        '"prompt":{"type":"string","description":"What this same model should draw."},' +
-        '"size":{"type":"string","description":"Optional pixel size."}';
-      Required := '["path","prompt"]';
-    End
-  Else
-    Begin
-      Fields :=
-        '"image_id":{"type":"string","description":"Turn-local image id. Optional when the turn has exactly one image."}';
-      Required := '["path"]';
-    End;
   Result :=
     '{"type":"function","function":{' +
       '"name":"write_image",' +
@@ -630,8 +615,8 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path."},' +
         '"overwrite":{"type":"boolean","description":"Replace an existing file. Default false."},' +
-        Fields +
-      '},"required":' + Required + '}}}';
+        '"image_id":{"type":"string","description":"Turn-local image id. Optional when the turn has exactly one image."}' +
+      '},"required":["path"]}}}';
 End;
 
 Function BuildDocumentToolsJson: String;
@@ -3797,13 +3782,7 @@ Begin
       ErrorText := 'Image path must end in png, jpg, jpeg, webp, or gif.';
       Exit;
     End;
-  If ActiveProfileImageDelivery = aidToolPrompt Then
-    Begin
-      If Not RequestProfileImage(JsonArgString(ArgumentsJson, 'prompt'), JsonArgString(ArgumentsJson, 'size'),
-        Image, ErrorText) Then
-        Exit;
-    End
-  Else If Not SelectTurnGeneratedImage(JsonArgString(ArgumentsJson, 'image_id'), Image, ErrorText) Then
+  If Not SelectTurnGeneratedImage(JsonArgString(ArgumentsJson, 'image_id'), Image, ErrorText) Then
     Exit;
   If (Length(Image.Bytes) = 0) Or (Length(Image.Bytes) > AssistantImageMaxFileBytes) Then
     Begin

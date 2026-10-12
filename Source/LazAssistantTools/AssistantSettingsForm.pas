@@ -54,8 +54,6 @@ Type
     KindValueLabel: TLabel;
     ActiveConnectionLabel: TLabel;
     ImageOutputCheck: TCheckBox;
-    ImageDeliveryLabel: TLabel;
-    ImageDeliveryCombo: TComboBox;
     DetailHost: TPanel;
     EmptyConnectionLabel: TLabel;
     GrokPanel: TScrollBox;
@@ -400,7 +398,6 @@ Begin
     'Always — never prompt (like Build always-approve)'], 0);
   EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
     'Always — never prompt (like Build always-approve)'], 0);
-  EnsureItems(ImageDeliveryCombo, ['Response image part', 'Tool prompt'], 0);
   CompatibleWireLabel.Caption := 'Chat completions';
   CodexUsageLabel.Caption := 'This program did not report counts.';
   GrokUsageLabel.Caption := 'This connection did not report usage.';
@@ -424,23 +421,11 @@ End;
 Procedure TAssistantSettingsForm.ApplyImageCapability(Item: TAssistantConnection);
 Begin
   ImageOutputCheck.Visible := Assigned(Item);
-  ImageDeliveryLabel.Visible := Assigned(Item);
-  ImageDeliveryCombo.Visible := Assigned(Item);
   ImageOutputCheck.Enabled := Assigned(Item);
-  ImageDeliveryLabel.Enabled := Assigned(Item);
   If Not Assigned(Item) Then
-    Begin
-      ImageOutputCheck.Checked := False;
-      ImageDeliveryCombo.ItemIndex := 0;
-      ImageDeliveryCombo.Enabled := False;
-      Exit;
-    End;
-  ImageOutputCheck.Checked := Item.ImageOutput;
-  If Item.ImageDelivery = aidToolPrompt Then
-    ImageDeliveryCombo.ItemIndex := 1
+    ImageOutputCheck.Checked := False
   Else
-    ImageDeliveryCombo.ItemIndex := 0;
-  ImageDeliveryCombo.Enabled := Item.ImageOutput;
+    ImageOutputCheck.Checked := Item.ImageOutput;
 End;
 
 Function TAssistantSettingsForm.HasGrokRow: Boolean;
@@ -706,10 +691,6 @@ Begin
     Item.Name := Trim(ConnectionNameEdit.Text);
   { Capability only. The selected model is stored by the kind-specific block below. }
   Item.ImageOutput := ImageOutputCheck.Checked;
-  If ImageDeliveryCombo.ItemIndex = 1 Then
-    Item.ImageDelivery := aidToolPrompt
-  Else
-    Item.ImageDelivery := aidResponsePart;
   If Item.Backend = 'grok' Then
     Begin
       Item.ApiBase := Trim(ApiBaseEdit.Text);
@@ -1875,7 +1856,6 @@ Begin
       Else If Backend = 'claude' Then
         KeptText := ClaudeModelEdit.Text;
     End;
-  ImageDeliveryCombo.Enabled := ImageOutputCheck.Enabled And ImageOutputCheck.Checked;
   { Turning the flag on must not select an image product other than the current model. }
   If Backend = 'grok' Then
     Begin

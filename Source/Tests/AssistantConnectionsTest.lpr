@@ -55,7 +55,7 @@ Begin
     Check('a saved Grok row is loaded with its id', Assigned(Store.Active) And (Store.Count = 1) And (Store.Active.Id = 'desk-grok') And
       (Store.Active.Name = 'Desk Grok') And (Store.Active.Backend = 'grok') And (Store.Active.Model = 'grok-kept'));
     Check('a profile without image output stays off and keeps its model',
-      (Not Store.Active.ImageOutput) And (Store.Active.ImageDelivery = aidResponsePart) And (Store.Active.Model = 'grok-kept'));
+      (Not Store.Active.ImageOutput) And (Store.Active.Model = 'grok-kept'));
     Raised := False;
     Try Store.ProfileDir(Store.Active); Except On E: Exception Do Raised := True; End;
     Check('Grok has no Codex profile', Raised);
@@ -178,20 +178,23 @@ Begin
     Item := Store.AddStored('image-profile', 'Image profile', 'openai-compatible');
     Item.Model := 'kept-chat-model';
     Item.ImageOutput := True;
-    Item.ImageDelivery := aidToolPrompt;
     Store.ActiveId := Item.Id;
     Check('enabling image output does not replace the model', Item.Model = 'kept-chat-model');
     Store.Save;
     Store.Load;
-    Check('image output roundtrip keeps the flag, delivery mode, and model',
-      Assigned(Store.Active) And Store.Active.ImageOutput And (Store.Active.ImageDelivery = aidToolPrompt) And
+    Check('image output roundtrip keeps the flag and the model',
+      Assigned(Store.Active) And Store.Active.ImageOutput And
       (Store.Active.Model = 'kept-chat-model') And (Store.Active.Id = 'image-profile'));
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('save does not write image_delivery', Pos('image_delivery', Policy.Text) = 0);
+    Finally Policy.Free; End;
     Store.Active.ImageOutput := False;
     Store.Save;
     Store.Load;
-    Check('turning image output off keeps the model and the stored delivery mode',
-      Assigned(Store.Active) And (Not Store.Active.ImageOutput) And (Store.Active.ImageDelivery = aidToolPrompt) And
-      (Store.Active.Model = 'kept-chat-model'));
+    Check('turning image output off keeps the model',
+      Assigned(Store.Active) And (Not Store.Active.ImageOutput) And (Store.Active.Model = 'kept-chat-model'));
     Policy := TStringList.Create;
     Try
       Policy.Text := '{"assistant":{"active_connection":"image-profile","connections":[' +
@@ -200,20 +203,24 @@ Begin
       Policy.SaveToFile(WorkflowSettingsPath);
     Finally Policy.Free; End;
     Store.Load;
-    Check('an unknown delivery mode does not select another model',
-      Assigned(Store.Active) And Store.Active.ImageOutput And (Store.Active.ImageDelivery = aidResponsePart) And
-      (Store.Active.Model = 'kept-chat-model'));
+    Check('a stored delivery value does not select another model',
+      Assigned(Store.Active) And Store.Active.ImageOutput And (Store.Active.Model = 'kept-chat-model'));
+    Store.Save;
+    Policy := TStringList.Create;
+    Try
+      Policy.LoadFromFile(WorkflowSettingsPath);
+      Check('resave drops a stored image_delivery value', Pos('image_delivery', Policy.Text) = 0);
+    Finally Policy.Free; End;
     Item := Store.AddStored('grok-images', 'Grok images', 'grok');
     Item.Model := 'kept-grok-model';
     Item.ImageOutput := True;
-    Item.ImageDelivery := aidResponsePart;
     Store.ActiveId := Item.Id;
     AssistantChatConfig.Model := 'kept-grok-model';
     Store.Save;
     Store.Load;
     Check('Grok profile keeps image output and its model',
       Assigned(Store.Active) And (Store.Active.Id = 'grok-images') And Store.Active.ImageOutput And
-      (Store.Active.ImageDelivery = aidResponsePart) And (Store.Active.Model = 'kept-grok-model'));
+      (Store.Active.Model = 'kept-grok-model'));
     Names := TStringList.Create;
     Try
       ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
@@ -243,16 +250,22 @@ Begin
       Check('Inspect and Chat do not offer image writing',
         (Pos('write_image', BuildAssistantToolsJsonForMode(amInspect)) = 0) And
         (BuildAssistantToolsJsonForMode(amChat) = '') And (Not ToolAllowedInMode('write_image', amInspect)));
-      Store.Active.ImageDelivery := aidToolPrompt;
-      Store.Save;
+      Policy := TStringList.Create;
+      Try
+        Policy.Text := '{"assistant":{"active_connection":"grok-images","connections":[' +
+          '{"id":"grok-images","name":"Grok images","backend":"grok","model":"kept-grok-model",' +
+          '"image_output":true,"image_delivery":"tool-prompt"}]}}';
+        Policy.SaveToFile(WorkflowSettingsPath);
+      Finally Policy.Free; End;
+      Store.Load;
       ToolsJson := BuildAssistantToolsJsonForMode(amBuild);
-      Check('the next turn follows tool-prompt delivery without naming another model',
-        (Store.Active.Model = 'kept-grok-model') And (Pos('"name":"write_image"', ToolsJson) > 0) And
-        (Pos('"prompt":', ImageToolSlice(ToolsJson)) > 0) And
-        (Pos('"image_id"', ImageToolSlice(ToolsJson)) = 0) And
+      Check('a stored delivery value does not change the tool schema',
+        (Store.Active.Model = 'kept-grok-model') And Store.Active.ImageOutput And
+        (Pos('"name":"write_image"', ToolsJson) > 0) And
+        (Pos('"image_id"', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"prompt":', ImageToolSlice(ToolsJson)) = 0) And
         (Pos('Project-relative path.', ImageToolSlice(ToolsJson)) > 0) And
-        (Pos('"required":["path","prompt"]', ImageToolSlice(ToolsJson)) > 0) And
-        (Pos('Optional pixel size.', ImageToolSlice(ToolsJson)) > 0) And
+        (Pos('"required":["path"]', ImageToolSlice(ToolsJson)) > 0) And
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0));
       Prompt := '';
       ErrorText := '';

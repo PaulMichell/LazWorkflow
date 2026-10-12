@@ -121,7 +121,6 @@ Begin
     Item.KeySource := 'stored';
     Item.KeyValue := 'test-key';
     Item.ImageOutput := True;
-    Item.ImageDelivery := aidToolPrompt;
     Store.ActiveId := Item.Id;
     Check('profile saves', Store.Save);
     Check('tool-prompt calls this profile endpoint',

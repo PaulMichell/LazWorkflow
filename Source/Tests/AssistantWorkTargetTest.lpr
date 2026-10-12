@@ -395,7 +395,6 @@ Begin
     Item := Store.AddStored('writer', 'Writer', 'openai-compatible');
     Item.Model := 'kept-chat-model';
     Item.ImageOutput := True;
-    Item.ImageDelivery := aidResponsePart;
     Store.ActiveId := Item.Id;
     Check('image profile saved', Store.Save);
     Check('folder target for write_image', AssistantTarget.SelectFolder(Root, Note));
