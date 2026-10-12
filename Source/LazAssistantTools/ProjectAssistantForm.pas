@@ -3073,11 +3073,12 @@ End;
 
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, Recap, SubmitText, ToolsJson, Instructions, ImageError, InputJson: String;
-  I: Integer;
+  Prompt, Recap, SubmitText, ToolsJson, Instructions, ImageError, InputJson, WireJson, Path: String;
+  I, J, N, K: Integer;
+  Found: Boolean;
   Turn: TConversationTurn;
   WithContext: Boolean;
-  Refs: TAssistantImageRefArray;
+  Refs, WireRefs, Prior: TAssistantImageRefArray;
 Begin
   Result := False;
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
@@ -3107,20 +3108,40 @@ Begin
   Refs := LimitAssistantImageRefs(Refs);
   SubmitText := BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext);
   FPendingTurnAttachments := AssistantImageRefsToJson(Refs);
+  SetLength(WireRefs, Length(Refs) + AssistantImageMaxAttachments);
+  N := Length(Refs);
+  For I := 0 To High(Refs) Do WireRefs[I] := Refs[I];
   Recap := '';
   If Assigned(ProjectAssistantConversation) Then
     For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
       Begin
         If Length(Recap) >= 24000 Then Break;
         If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
-          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
-            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
+          Begin
+            Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
+              'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
+            { Ephemeral threads have no message array. Replay stored refs the same way Grok resends them. }
+            ParseAssistantImageRefs(Turn.AttachmentsJson, Prior);
+            For J := 0 To High(Prior) Do
+              Begin
+                If N >= AssistantImageMaxAttachments Then Break;
+                Found := False;
+                For K := 0 To N - 1 Do
+                  If WireRefs[K].Id = Prior[J].Id Then Found := True;
+                If Found Then Continue;
+                If Not AssistantImageUploadFile(ProjectAssistantRoot, Prior[J], Path, ImageError) Then Continue;
+                WireRefs[N] := Prior[J];
+                Inc(N);
+              End;
+          End;
       End;
-  { Ephemeral threads have no message array. Recap is transport history, not an instruction essay. }
+  SetLength(WireRefs, N);
+  WireJson := AssistantImageRefsToJson(WireRefs);
+  { Recap is transport history, not an instruction essay. A missing old file is skipped, not described. }
   Prompt := SubmitText;
   If Recap <> '' Then
     Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
-  If Not CodexUserInputJson(ProjectAssistantRoot, Prompt, FPendingTurnAttachments, InputJson, ImageError) Then
+  If Not CodexUserInputJson(ProjectAssistantRoot, Prompt, WireJson, InputJson, ImageError) Then
     Begin
       FPendingTurnAttachments := '';
       UnlockModeAfterSend;
@@ -3142,7 +3163,7 @@ Begin
     Instructions := CodexDeveloperInstructions(ActiveMode);
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
       Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode,
-      ProjectAssistantRoot, FPendingTurnAttachments);
+      ProjectAssistantRoot, WireJson);
     FCodexRun.Start;
     FComposerImagesSent := Length(Refs) > 0;
     Result := True;
