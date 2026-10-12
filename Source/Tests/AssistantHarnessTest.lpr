@@ -210,10 +210,41 @@ Begin
   End;
 End;
 
+Procedure TestGuidanceNames;
+Var
+  Root, SkillFile: String;
+  Skills: TAssistantSkillList;
+  I: Integer;
+  Found: Boolean;
+Begin
+  Check('file stem keeps letters digits and hyphen', SkillNameFromFile('/tmp/My Notes (2).md') = 'My-Notes-2');
+  Check('safe stem is unchanged', SkillNameFromFile('/tmp/free-pascal-engineer.md') = 'free-pascal-engineer');
+  Check('unsafe stem falls back to guidance', SkillNameFromFile('/tmp/???.md') = 'guidance');
+  Check('long stem is capped', Length(SkillNameFromFile('/tmp/' + StringOfChar('a', 80) + '.md')) = 64);
+  Root := MakeTempRoot;
+  Try
+    SkillFile := Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'alpha' + PathDelim + 'SKILL.md';
+    WriteTextFile(SkillFile, '---' + LineEnding + 'name: alpha' + LineEnding + '---' + LineEnding + 'BODY' + LineEnding);
+    Check('catalog name from SKILL.md', CatalogNameForSkillFile(SkillFile, Root) = 'alpha');
+    Check('plain markdown is not a catalog skill', CatalogNameForSkillFile(Root + 'notes.md', Root) = '');
+    Skills := ListGuidanceDocuments(Root);
+    Found := False;
+    For I := 0 To High(Skills) Do
+      If SameText(Skills[I].Name, 'alpha') Then
+        Found := True;
+    Check('guidance list includes the catalog skill', Found);
+    Check('guidance list matches discovery when no registry is installed',
+      Length(Skills) = Length(ListDiscoveredSkills(Root)));
+  Finally
+    DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFirstNameWins;
   TestHarnessPrompt;
+  TestGuidanceNames;
   TestTodoWrite;
   TestTurnMessages;
   If FailCount = 0 Then

@@ -4,9 +4,9 @@ Unit AssistantSettingsForm;
 
   Size note: exceeds the 1000 line preference. General, Connections, Spelling
   and Tests are one streamed form so the designer opens a single resource.
-  Reviewed 2026-10: kind-specific groups stay here; no extra frame unit is in
-  scope for this settings page. General groups are alTop in reverse resource
-  order so the page reads Transcript, Prompt, Context, then Skills. }
+  Reviewed 2026-10-10: the skills grid, path label, and add/remove bar are streamed
+  in SkillsGroup. Kind-specific groups stay here. General groups are alTop in
+  reverse resource order so the page reads Transcript, Prompt, Context, then Skills. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -17,8 +17,8 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, Menus,
-  ButtonPanel, ComCtrls, Spin, AssistantConnections, AssistantCodexSettings, SpellCheckerSettingsFrame,
-  AssistantTestSettingsFrame;
+  ButtonPanel, ComCtrls, Spin, Grids, AssistantConnections, AssistantCodexSettings,
+  SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
 
 Type
   TAssistantSettingsForm = Class(TForm)
@@ -26,7 +26,11 @@ Type
     GeneralPage: TTabSheet;
     SkillsGroup: TGroupBox;
     SkillsHintLabel: TLabel;
-    SkillsHost: TScrollBox;
+    SkillPathLabel: TLabel;
+    SkillsButtons: TPanel;
+    AddSkillButton: TButton;
+    RemoveSkillButton: TButton;
+    SkillsGrid: TStringGrid;
     ContextGroup: TGroupBox;
     IncludeContextCheck: TCheckBox;
     AutoCompactCheck: TCheckBox;
@@ -164,10 +168,13 @@ Type
     Procedure ClaudeDetectClick(Sender: TObject);
     Procedure ClaudeSignInClick(Sender: TObject);
     Procedure ClaudeCheckClick(Sender: TObject);
+    Procedure AddSkillButtonClick(Sender: TObject);
+    Procedure RemoveSkillButtonClick(Sender: TObject);
+    Procedure SkillsGridSelection(Sender: TObject; ACol, ARow: Integer);
   Private
     Connections: TAssistantConnections;
-    SkillRows: TFPList;
-    NoSkillsLabel: TLabel;
+    SkillPaths: TStringList;
+    FSkillAddDirectory: String;
     SelectedConnection: Integer;
     FFillingModels: Boolean;
     FLoading: Boolean;
@@ -177,7 +184,13 @@ Type
     FPlanUsageConnectionId: String;
     Procedure EnsureStaticChoices;
     Procedure UpdateCompactAvailability;
-    Procedure ClearSkillRows;
+    Function SettingsProjectRoot: String;
+    Function SkillRowIndex(Const SkillName: String): Integer;
+    Function SelectedSkillRow: Integer;
+    Function SkillNameInUse(Const SkillName: String): Boolean;
+    Procedure AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
+    Procedure AddGuidanceFile(Const FileName: String);
+    Procedure UpdateSkillSelection;
     Procedure SaveSkillModes;
     Procedure ShowConnectionKind(Const Backend: String);
     Procedure RefreshConnections;
@@ -217,60 +230,10 @@ Uses
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
 Type
-  { One discovered skill and its mode ticks. Controls are ownerless so the designer does not stream them. }
-  TSkillModeRow = Class
-    SkillName: String;
-    RowPanel: TPanel;
-    NameLabel: TLabel;
-    InspectCheck, DocumentCheck, PlanCheck, BuildCheck, ChatCheck: TCheckBox;
-    Constructor Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
-    Destructor Destroy; Override;
-  End;
-
   TPlanUsageWorker = Class(TThread)
     Connection: TAssistantConnection;
     Procedure Execute; Override;
   End;
-
-Constructor TSkillModeRow.Create(Const Name: String; Host: TWinControl; RowTop, RowWidth: Integer);
-  Procedure Place(Var Box: TCheckBox; Const ModeCaption: String; ModeLeft: Integer);
-  Begin
-    Box := TCheckBox.Create(Nil);
-    Box.Parent := RowPanel;
-    Box.SetBounds(ModeLeft, 2, 96, 24);
-    Box.Caption := ModeCaption;
-  End;
-Begin
-  Inherited Create;
-  SkillName := Name;
-  RowPanel := TPanel.Create(Nil);
-  RowPanel.Parent := Host;
-  RowPanel.BevelOuter := bvNone;
-  RowPanel.SetBounds(0, RowTop, RowWidth, 28);
-  RowPanel.Anchors := [akLeft, akTop, akRight];
-  NameLabel := TLabel.Create(Nil);
-  NameLabel.Parent := RowPanel;
-  NameLabel.AutoSize := False;
-  NameLabel.SetBounds(8, 6, 200, 18);
-  NameLabel.Caption := Name;
-  Place(InspectCheck, 'Inspect', 216);
-  Place(DocumentCheck, 'Document', 316);
-  Place(PlanCheck, 'Plan', 420);
-  Place(BuildCheck, 'Build', 520);
-  Place(ChatCheck, 'Chat', 620);
-End;
-
-Destructor TSkillModeRow.Destroy;
-Begin
-  FreeAndNil(InspectCheck);
-  FreeAndNil(DocumentCheck);
-  FreeAndNil(PlanCheck);
-  FreeAndNil(BuildCheck);
-  FreeAndNil(ChatCheck);
-  FreeAndNil(NameLabel);
-  FreeAndNil(RowPanel);
-  Inherited Destroy;
-End;
 
 Procedure TPlanUsageWorker.Execute;
 Var
@@ -474,7 +437,8 @@ Begin
   KeyValueEdit.PasswordChar := '*';
   EnsureStaticChoices;
   KeySourceChange(Nil);
-  SkillRows := TFPList.Create;
+  SkillPaths := TStringList.Create;
+  FSkillAddDirectory := '';
   SelectedConnection := -1;
   Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
   Connections.Load;
@@ -500,8 +464,7 @@ End;
 Destructor TAssistantSettingsForm.Destroy;
 Begin
   ReleasePlanUsageRefresh;
-  ClearSkillRows;
-  SkillRows.Free;
+  SkillPaths.Free;
   Connections.Free;
   Inherited Destroy;
 End;
@@ -522,47 +485,155 @@ Begin
     AutoCompactCheck.Hint := 'This connection keeps its own transcript.';
 End;
 
-Procedure TAssistantSettingsForm.ClearSkillRows;
+Function TAssistantSettingsForm.SettingsProjectRoot: String;
+Begin
+  Result := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Result := ProjectAssistantConversation.ProjectRoot;
+End;
+
+Function TAssistantSettingsForm.SkillRowIndex(Const SkillName: String): Integer;
 Var
+  Row: Integer;
+Begin
+  Result := -1;
+  If (Not Assigned(SkillsGrid)) Or (Trim(SkillName) = '') Then
+    Exit;
+  For Row := SkillsGrid.FixedRows To SkillsGrid.RowCount - 1 Do
+    If SameText(SkillsGrid.Cells[0, Row], SkillName) Then
+      Exit(Row);
+End;
+
+Function TAssistantSettingsForm.SelectedSkillRow: Integer;
+Begin
+  Result := -1;
+  If (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Then
+    Exit;
+  If (SkillsGrid.Row < SkillsGrid.FixedRows) Or (SkillsGrid.Row >= SkillsGrid.RowCount) Then
+    Exit;
+  If Trim(SkillsGrid.Cells[0, SkillsGrid.Row]) = '' Then
+    Exit;
+  If SkillsGrid.Row - SkillsGrid.FixedRows >= SkillPaths.Count Then
+    Exit;
+  Result := SkillsGrid.Row;
+End;
+
+Function TAssistantSettingsForm.SkillNameInUse(Const SkillName: String): Boolean;
+Var
+  Skills: TAssistantSkillList;
   I: Integer;
 Begin
-  If Assigned(SkillRows) Then
+  Result := SkillRowIndex(SkillName) >= 0;
+  If Result Then
+    Exit;
+  Skills := ListDiscoveredSkills(SettingsProjectRoot);
+  For I := 0 To High(Skills) Do
+    If SameText(Skills[I].Name, SkillName) Then
+      Exit(True);
+End;
+
+Procedure TAssistantSettingsForm.AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
+Const
+  ModeNames: Array[0..4] Of String = ('inspect', 'document', 'plan', 'build', 'chat');
+Var
+  Row, Col: Integer;
+Begin
+  If (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Or (Trim(SkillName) = '') Then
+    Exit;
+  SkillsGrid.RowCount := SkillsGrid.RowCount + 1;
+  Row := SkillsGrid.RowCount - 1;
+  SkillsGrid.Cells[0, Row] := SkillName;
+  For Col := 1 To 5 Do
+    If Assigned(Modes) And (Modes.IndexOf(ModeNames[Col - 1]) >= 0) Then
+      SkillsGrid.Cells[Col, Row] := '1'
+    Else
+      SkillsGrid.Cells[Col, Row] := '0';
+  SkillPaths.Add(FilePath);
+End;
+
+Procedure TAssistantSettingsForm.UpdateSkillSelection;
+Var
+  Row: Integer;
+  SkillName, FilePath, Resolved: String;
+Begin
+  If Not Assigned(RemoveSkillButton) Or Not Assigned(SkillPathLabel) Then
+    Exit;
+  Row := SelectedSkillRow;
+  RemoveSkillButton.Enabled := Row >= 0;
+  If Row < 0 Then
     Begin
-      For I := 0 To SkillRows.Count - 1 Do
-        TObject(SkillRows[I]).Free;
-      SkillRows.Clear;
+      SkillPathLabel.Caption := 'Tick a cell to send that document in that mode.';
+      SkillPathLabel.Hint := '';
+      Exit;
     End;
-  FreeAndNil(NoSkillsLabel);
+  SkillName := SkillsGrid.Cells[0, Row];
+  FilePath := SkillPaths[Row - SkillsGrid.FixedRows];
+  If FilePath <> '' Then
+    Begin
+      SkillPathLabel.Caption := FilePath;
+      SkillPathLabel.Hint := FilePath;
+    End
+  Else
+    Begin
+      Resolved := ResolveSkillFile(SkillName, SettingsProjectRoot);
+      If Resolved <> '' Then
+        Begin
+          SkillPathLabel.Caption := SkillName + ' - catalog skill';
+          SkillPathLabel.Hint := Resolved;
+        End
+      Else
+        Begin
+          SkillPathLabel.Caption := SkillName + ' - file not found';
+          SkillPathLabel.Hint := 'No catalog skill or added file was found for this name.';
+        End;
+    End;
 End;
 
 Procedure TAssistantSettingsForm.SaveSkillModes;
+Const
+  ModeNames: Array[0..4] Of String = ('inspect', 'document', 'plan', 'build', 'chat');
 Var
-  I: Integer;
-  Modes: TStringList;
-  Row: TSkillModeRow;
+  Seen, Modes, DiscoveredNames: TStringList;
+  Discovered: TAssistantSkillList;
+  I, Row, Col: Integer;
+  SkillName: String;
 Begin
-  If (Not Assigned(AssistantChatConfig)) Or (Not Assigned(SkillRows)) Then
+  If (Not Assigned(AssistantChatConfig)) Or (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Then
     Exit;
+  Seen := TStringList.Create;
+  Seen.CaseSensitive := False;
   Modes := TStringList.Create;
+  DiscoveredNames := TStringList.Create;
+  DiscoveredNames.CaseSensitive := False;
   Try
-    For I := 0 To SkillRows.Count - 1 Do
+    For Row := SkillsGrid.FixedRows To SkillsGrid.RowCount - 1 Do
       Begin
-        Row := TSkillModeRow(SkillRows[I]);
+        SkillName := Trim(SkillsGrid.Cells[0, Row]);
+        If (SkillName = '') Or (Row - SkillsGrid.FixedRows >= SkillPaths.Count) Then
+          Continue;
+        Seen.Add(SkillName);
         Modes.Clear;
-        If Row.InspectCheck.Checked Then
-          Modes.Add('inspect');
-        If Row.DocumentCheck.Checked Then
-          Modes.Add('document');
-        If Row.PlanCheck.Checked Then
-          Modes.Add('plan');
-        If Row.BuildCheck.Checked Then
-          Modes.Add('build');
-        If Row.ChatCheck.Checked Then
-          Modes.Add('chat');
-        AssistantChatConfig.SetSkillModes(Row.SkillName, Modes);
+        For Col := 1 To 5 Do
+          If SkillsGrid.Cells[Col, Row] = '1' Then
+            Modes.Add(ModeNames[Col - 1]);
+        AssistantChatConfig.SetSkillModes(SkillName, Modes);
+        AssistantChatConfig.SetSkillFile(SkillName, SkillPaths[Row - SkillsGrid.FixedRows]);
+        AssistantChatConfig.SetSkillHidden(SkillName, False);
       End;
+    Discovered := ListDiscoveredSkills(SettingsProjectRoot);
+    For I := 0 To High(Discovered) Do
+      Begin
+        DiscoveredNames.Add(Discovered[I].Name);
+        If Seen.IndexOf(Discovered[I].Name) < 0 Then
+          AssistantChatConfig.SetSkillHidden(Discovered[I].Name, True);
+      End;
+    AssistantChatConfig.RetainSkillModes(Seen);
+    AssistantChatConfig.RetainSkillFiles(Seen);
+    AssistantChatConfig.PruneHiddenSkills(DiscoveredNames);
   Finally
+    DiscoveredNames.Free;
     Modes.Free;
+    Seen.Free;
   End;
 End;
 
@@ -1171,57 +1242,167 @@ End;
 Procedure TAssistantSettingsForm.PopulateSkills;
 Var
   Skills: TAssistantSkillList;
-  Modes: TStringList;
-  I, RowTop, RowWidth: Integer;
-  Row: TSkillModeRow;
-  Root: String;
+  Modes, Listed, Extra: TStringList;
+  I: Integer;
+  Path: String;
 Begin
-  ClearSkillRows;
-  If Not Assigned(SkillRows) Then
+  If (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Then
     Exit;
-  Root := '';
-  If Assigned(ProjectAssistantConversation) Then
-    Root := ProjectAssistantConversation.ProjectRoot;
-  If Assigned(ProjectAssistantConversation) Then
-    Skills := ListDiscoveredSkills(ProjectAssistantConversation.ProjectRoot)
-  Else
-    Skills := ListUserSkills;
-  RowWidth := SkillsHost.ClientWidth;
-  If RowWidth < 200 Then
-    RowWidth := 800;
-  RowTop := 0;
-  Modes := TStringList.Create;
+  SkillsGrid.BeginUpdate;
   Try
-    For I := 0 To High(Skills) Do
-      Begin
-        Row := TSkillModeRow.Create(Skills[I].Name, SkillsHost, RowTop, RowWidth);
-        SkillRows.Add(Row);
-        Modes.Clear;
-        If Assigned(AssistantChatConfig) Then
-          AssistantChatConfig.CollectModesForSkill(Skills[I].Name, Modes);
-        Row.InspectCheck.Checked := Modes.IndexOf('inspect') >= 0;
-        Row.DocumentCheck.Checked := Modes.IndexOf('document') >= 0;
-        Row.PlanCheck.Checked := Modes.IndexOf('plan') >= 0;
-        Row.BuildCheck.Checked := Modes.IndexOf('build') >= 0;
-        Row.ChatCheck.Checked := Modes.IndexOf('chat') >= 0;
-        RowTop := RowTop + 28;
-      End;
-  Finally
-    Modes.Free;
-  End;
-  If Length(Skills) = 0 Then
-    Begin
-      NoSkillsLabel := TLabel.Create(Nil);
-      NoSkillsLabel.Parent := SkillsHost;
-      NoSkillsLabel.SetBounds(8, 8, 640, 36);
-      NoSkillsLabel.AutoSize := False;
-      NoSkillsLabel.WordWrap := True;
-      If Root = '' Then
-        Root := AssistantUserSkillsRoot
-      Else
-        Root := IncludeTrailingPathDelimiter(Root) + '.assistant' + PathDelim + 'skills';
-      NoSkillsLabel.Caption := 'No skills found. Create ' + Root + PathDelim + '<name>' + PathDelim + 'SKILL.md.';
+    While SkillsGrid.RowCount > SkillsGrid.FixedRows Do
+      SkillsGrid.DeleteColRow(False, SkillsGrid.RowCount - 1);
+    SkillPaths.Clear;
+    Skills := ListGuidanceDocuments(SettingsProjectRoot);
+    Modes := TStringList.Create;
+    Listed := TStringList.Create;
+    Listed.CaseSensitive := False;
+    Extra := TStringList.Create;
+    Try
+      For I := 0 To High(Skills) Do
+        Begin
+          Modes.Clear;
+          Path := '';
+          If Assigned(AssistantChatConfig) Then
+            Begin
+              AssistantChatConfig.CollectModesForSkill(Skills[I].Name, Modes);
+              Path := AssistantChatConfig.SkillFilePath(Skills[I].Name);
+            End;
+          AddSkillRow(Skills[I].Name, Path, Modes);
+          Listed.Add(Skills[I].Name);
+        End;
+      If Assigned(AssistantChatConfig) Then
+        Begin
+          AssistantChatConfig.CollectSkillModeNames(Extra);
+          For I := 0 To Extra.Count - 1 Do
+            If (Listed.IndexOf(Extra[I]) < 0) And (Not AssistantChatConfig.SkillIsHidden(Extra[I])) Then
+              Begin
+                Modes.Clear;
+                AssistantChatConfig.CollectModesForSkill(Extra[I], Modes);
+                AddSkillRow(Extra[I], AssistantChatConfig.SkillFilePath(Extra[I]), Modes);
+                Listed.Add(Extra[I]);
+              End;
+        End;
+    Finally
+      Extra.Free;
+      Listed.Free;
+      Modes.Free;
     End;
+  Finally
+    SkillsGrid.EndUpdate;
+  End;
+  If SkillsGrid.RowCount > SkillsGrid.FixedRows Then
+    SkillsGrid.Row := SkillsGrid.FixedRows
+  Else If SkillsGrid.FixedRows > 0 Then
+    SkillsGrid.Row := 0;
+  UpdateSkillSelection;
+End;
+
+Procedure TAssistantSettingsForm.AddGuidanceFile(Const FileName: String);
+Var
+  Root, Expanded, CatalogName, SkillName: String;
+  Existing, N: Integer;
+  Candidate: String;
+Begin
+  Expanded := ExpandFileName(Trim(FileName));
+  If (Expanded = '') Or (Not FileExistsUTF8(Expanded)) Then
+    Exit;
+  For Existing := 0 To SkillPaths.Count - 1 Do
+    If (SkillPaths[Existing] <> '') And SameFileName(ExpandFileName(SkillPaths[Existing]), Expanded) Then
+      Begin
+        SkillsGrid.Row := SkillsGrid.FixedRows + Existing;
+        UpdateSkillSelection;
+        Exit;
+      End;
+  Root := SettingsProjectRoot;
+  CatalogName := CatalogNameForSkillFile(Expanded, Root);
+  If CatalogName <> '' Then
+    Begin
+      Existing := SkillRowIndex(CatalogName);
+      If Existing >= 0 Then
+        SkillsGrid.Row := Existing
+      Else
+        Begin
+          AddSkillRow(CatalogName, '', Nil);
+          SkillsGrid.Row := SkillsGrid.RowCount - 1;
+        End;
+      UpdateSkillSelection;
+      Exit;
+    End;
+  SkillName := SkillNameFromFile(Expanded);
+  N := 2;
+  While SkillNameInUse(SkillName) And (N < 100) Do
+    Begin
+      Candidate := SkillNameFromFile(Expanded) + '-' + IntToStr(N);
+      If Length(Candidate) > 64 Then
+        Candidate := Copy(SkillNameFromFile(Expanded), 1, 58) + '-' + IntToStr(N);
+      SkillName := Candidate;
+      Inc(N);
+    End;
+  If SkillNameInUse(SkillName) Then
+    Begin
+      MessageDlg('Could not add ' + ExtractFileName(Expanded) + ' because its name is already in use.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  AddSkillRow(SkillName, Expanded, Nil);
+  SkillsGrid.Row := SkillsGrid.RowCount - 1;
+  UpdateSkillSelection;
+End;
+
+Procedure TAssistantSettingsForm.AddSkillButtonClick(Sender: TObject);
+Var
+  Dialog: TOpenDialog;
+  I: Integer;
+Begin
+  Dialog := TOpenDialog.Create(Nil);
+  Try
+    Dialog.Title := 'Add skill or guidance document';
+    Dialog.Filter := 'Guidance documents (*.md;*.markdown;*.txt)|*.md;*.markdown;*.txt|All files|*';
+    Dialog.Options := [ofFileMustExist, ofPathMustExist, ofEnableSizing, ofAllowMultiSelect];
+    If FSkillAddDirectory <> '' Then
+      Dialog.InitialDir := FSkillAddDirectory
+    Else If SettingsProjectRoot <> '' Then
+      Dialog.InitialDir := SettingsProjectRoot
+    Else
+      Dialog.InitialDir := GetUserDir;
+    If Not Dialog.Execute Then
+      Exit;
+    If Dialog.Files.Count > 0 Then
+      FSkillAddDirectory := ExtractFilePath(Dialog.Files[0]);
+    For I := 0 To Dialog.Files.Count - 1 Do
+      AddGuidanceFile(Dialog.Files[I]);
+  Finally
+    Dialog.Free;
+  End;
+  If Assigned(SkillsGrid) And SkillsGrid.CanFocus Then
+    SkillsGrid.SetFocus;
+End;
+
+Procedure TAssistantSettingsForm.RemoveSkillButtonClick(Sender: TObject);
+Var
+  Row, NextRow: Integer;
+Begin
+  Row := SelectedSkillRow;
+  If Row < 0 Then
+    Exit;
+  SkillPaths.Delete(Row - SkillsGrid.FixedRows);
+  SkillsGrid.DeleteColRow(False, Row);
+  If SkillsGrid.RowCount > SkillsGrid.FixedRows Then
+    Begin
+      NextRow := Row;
+      If NextRow >= SkillsGrid.RowCount Then
+        NextRow := SkillsGrid.RowCount - 1;
+      SkillsGrid.Row := NextRow;
+    End;
+  UpdateSkillSelection;
+End;
+
+Procedure TAssistantSettingsForm.SkillsGridSelection(Sender: TObject; ACol, ARow: Integer);
+Begin
+  If Not Assigned(SkillPaths) Then
+    Exit;
+  UpdateSkillSelection;
 End;
 
 Procedure TAssistantSettingsForm.PopulateModels(ForceRefresh: Boolean);

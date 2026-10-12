@@ -6238,7 +6238,12 @@ Begin
   Root := '';
   If Assigned(ProjectAssistantConversation) Then
     Root := ProjectAssistantConversation.ProjectRoot;
-  Skills := ListDiscoveredSkills(Root);
+  Skills := ListGuidanceDocuments(Root);
+  If Length(Skills) = 0 Then
+    Begin
+      AddFooterItem(FFooterMenu, 'No skills are listed', 0, '', False, False, Nil, False);
+      Exit;
+    End;
   For I := 0 To High(Skills) Do
     Begin
       Tagged := Assigned(AssistantChatConfig) And AssistantChatConfig.SkillHasMode(Skills[I].Name, ModeName);

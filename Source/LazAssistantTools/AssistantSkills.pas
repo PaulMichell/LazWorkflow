@@ -34,10 +34,29 @@ Function SkillNameIsSafe(Const SkillName: String): Boolean;
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
 Function ListUserSkills: TAssistantSkillList;
 Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
+/// Catalog skills, minus names the user removed, plus added guidance files.
+Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
+/// Directory name when FilePath is a catalog SKILL.md, otherwise empty.
+Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
+/// Safe skill name derived from a file name. Falls back to guidance.
+Function SkillNameFromFile(Const FilePath: String): String;
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Function LoadSkillBody(Const SkillName, ProjectRoot: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Function FormatSkillCatalog(Const Skills: TAssistantSkillList): String;
 Function BuildSystemPromptWithSkill(Const BasePrompt, SkillName: String): String;
+
+Type
+  { Optional. A non-empty result is the file for that skill name. }
+  TSkillFileResolver = Function(Const SkillName: String): String;
+  { Optional. True when the user removed this catalog skill from the grid. }
+  TSkillHiddenQuery = Function(Const SkillName: String): Boolean;
+  { Optional. Fills Names and Paths with added guidance files. }
+  TSkillFileEnumerator = Procedure(Names, Paths: TStrings);
+
+Var
+  SkillFileResolver: TSkillFileResolver;
+  SkillHiddenQuery: TSkillHiddenQuery;
+  SkillFileEnumerator: TSkillFileEnumerator;
 
 Implementation
 
@@ -297,6 +316,141 @@ Begin
   Result := ListDiscoveredSkills('');
 End;
 
+Function SkillInfoFromFile(Const SkillName, SkillFile: String; Out Info: TAssistantSkillInfo): Boolean;
+Var
+  Raw: String;
+  SL: TStringList;
+Begin
+  Result := False;
+  Info.Name := SkillName;
+  Info.Description := '';
+  Info.WhenToUse := '';
+  Info.SkillFile := SkillFile;
+  If (SkillName = '') Or (SkillFile = '') Or (Not FileExistsUTF8(SkillFile)) Then
+    Exit;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(SkillFile);
+      Raw := SL.Text;
+      Info.Description := ExtractFrontMatterField(Raw, 'description');
+      Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
+      If Info.WhenToUse = '' Then
+        Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
+      Result := True;
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('AssistantSkills', 'Failed to read ' + SkillFile + ': ' + E.Message);
+    End;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
+Var
+  Filtered: TAssistantSkillList;
+  Names, Paths: TStringList;
+  Info: TAssistantSkillInfo;
+  I: Integer;
+Begin
+  Result := ListDiscoveredSkills(ProjectRoot);
+  If Assigned(SkillHiddenQuery) Then
+    Begin
+      Filtered := Nil;
+      For I := 0 To High(Result) Do
+        If Not SkillHiddenQuery(Result[I].Name) Then
+          Begin
+            SetLength(Filtered, Length(Filtered) + 1);
+            Filtered[High(Filtered)] := Result[I];
+          End;
+      Result := Filtered;
+    End;
+  If Not Assigned(SkillFileEnumerator) Then
+    Exit;
+  Names := TStringList.Create;
+  Paths := TStringList.Create;
+  Try
+    SkillFileEnumerator(Names, Paths);
+    For I := 0 To Names.Count - 1 Do
+      Begin
+        If SkillNameTaken(Result, Names[I]) Then
+          Continue;
+        If Assigned(SkillHiddenQuery) And SkillHiddenQuery(Names[I]) Then
+          Continue;
+        If Not SkillInfoFromFile(Names[I], Paths[I], Info) Then
+          Begin
+            Info.Name := Names[I];
+            Info.Description := '';
+            Info.WhenToUse := '';
+            Info.SkillFile := Paths[I];
+          End;
+        If Info.Name = '' Then
+          Continue;
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := Info;
+      End;
+  Finally
+    Paths.Free;
+    Names.Free;
+  End;
+End;
+
+Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
+Var
+  Roots: TStringArray;
+  I: Integer;
+  Clean, Dir, Name: String;
+Begin
+  Result := '';
+  Clean := Trim(FilePath);
+  If Clean = '' Then
+    Exit;
+  Clean := ExpandFileName(Clean);
+  If Not SameText(ExtractFileName(Clean), 'SKILL.md') Then
+    Exit;
+  If Not FileExistsUTF8(Clean) Then
+    Exit;
+  Dir := ExcludeTrailingPathDelimiter(ExtractFilePath(Clean));
+  Name := ExtractFileName(Dir);
+  If Not SkillNameIsSafe(Name) Then
+    Exit;
+  Roots := SkillSearchRoots(ProjectRoot);
+  For I := 0 To High(Roots) Do
+    If PathIsInsideRoot(Roots[I], Clean) Then
+      Exit(Name);
+End;
+
+Function SkillNameFromFile(Const FilePath: String): String;
+Var
+  Stem, Clean: String;
+  I: Integer;
+  C: Char;
+Begin
+  Stem := ChangeFileExt(ExtractFileName(Trim(FilePath)), '');
+  Clean := '';
+  For I := 1 To Length(Stem) Do
+    Begin
+      C := Stem[I];
+      If ((C >= 'A') And (C <= 'Z')) Or ((C >= 'a') And (C <= 'z')) Or ((C >= '0') And (C <= '9')) Or
+        (C = '.') Or (C = '_') Or (C = '-') Then
+        Clean := Clean + C
+      Else If (Clean = '') Or (Clean[Length(Clean)] <> '-') Then
+        Clean := Clean + '-';
+    End;
+  While (Clean <> '') And ((Clean[1] = '-') Or (Clean[1] = '.')) Do
+    Delete(Clean, 1, 1);
+  While (Clean <> '') And ((Clean[Length(Clean)] = '-') Or (Clean[Length(Clean)] = '.')) Do
+    Delete(Clean, Length(Clean), 1);
+  If Length(Clean) > 64 Then
+    Clean := Copy(Clean, 1, 64);
+  While (Clean <> '') And ((Clean[Length(Clean)] = '-') Or (Clean[Length(Clean)] = '.')) Do
+    Delete(Clean, Length(Clean), 1);
+  If Not SkillNameIsSafe(Clean) Then
+    Clean := 'guidance';
+  Result := Clean;
+End;
+
 Function FormatSkillCatalog(Const Skills: TAssistantSkillList): String;
 Var
   I: Integer;
@@ -351,7 +505,19 @@ Begin
       ErrorText := 'Invalid skill name.';
       Exit;
     End;
-  SkillFile := ResolveSkillFile(SkillName, ProjectRoot);
+  SkillFile := '';
+  If Assigned(SkillFileResolver) Then
+    SkillFile := Trim(SkillFileResolver(SkillName));
+  If SkillFile <> '' Then
+    Begin
+      If Not FileExistsUTF8(SkillFile) Then
+        Begin
+          ErrorText := 'Skill file is missing: ' + SkillFile;
+          Exit;
+        End;
+    End
+  Else
+    SkillFile := ResolveSkillFile(SkillName, ProjectRoot);
   If SkillFile = '' Then
     Begin
       ErrorText := 'Skill not found: ' + SkillName;

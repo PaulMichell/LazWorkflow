@@ -251,7 +251,7 @@ Var
   Bodies: TStringList;
   Tagged: String;
 Begin
-  Skills := ListDiscoveredSkills(ProjectRoot);
+  Skills := ListGuidanceDocuments(ProjectRoot);
   Bodies := TStringList.Create;
   Try
     Bodies.Add('<skills>');

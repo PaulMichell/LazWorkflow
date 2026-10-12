@@ -31,7 +31,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
         Width = 972
         Align = alClient
         Caption = 'Skills'
-        Hint = 'A mode sends the body of each ticked skill, and Chat sends none until Chat is ticked.'
+        Hint = 'Rows are documents and columns are modes. A tick sends that document in that mode. Chat sends none until Chat is ticked.'
         ParentShowHint = False
         ShowHint = True
         TabOrder = 3
@@ -42,18 +42,128 @@ object AssistantSettingsForm: TAssistantSettingsForm
           Width = 948
           Align = alTop
           AutoSize = False
-          Caption = 'A mode sends the body of each ticked skill, and Chat sends none until Chat is ticked.'
+          Caption = 'Rows are documents and columns are modes. A tick sends that document in that mode. Chat sends none until Chat is ticked.'
           ParentColor = False
           WordWrap = True
         end
-        object SkillsHost: TScrollBox
+        object SkillPathLabel: TLabel
+          Left = 8
+          Height = 24
+          Top = 292
+          Width = 948
+          Align = alBottom
+          AutoSize = False
+          BorderSpacing.Left = 8
+          BorderSpacing.Right = 8
+          Caption = 'Tick a cell to send that document in that mode.'
+          Layout = tlCenter
+          ParentColor = False
+          ParentShowHint = False
+          ShowHint = True
+        end
+        object SkillsButtons: TPanel
           Left = 0
-          Height = 340
+          Height = 44
+          Top = 316
+          Width = 968
+          Align = alBottom
+          BevelOuter = bvNone
+          ChildSizing.LeftRightSpacing = 8
+          ChildSizing.TopBottomSpacing = 8
+          ChildSizing.HorizontalSpacing = 8
+          ChildSizing.Layout = cclLeftToRightThenTopToBottom
+          ChildSizing.ControlsPerLine = 2
+          ClientHeight = 44
+          ClientWidth = 968
+          TabOrder = 1
+          object AddSkillButton: TButton
+            Left = 8
+            Height = 28
+            Top = 8
+            Width = 120
+            Caption = 'Add…'
+            Hint = 'Load one or more skill or guidance files. The files stay where they are.'
+            OnClick = AddSkillButtonClick
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 0
+          end
+          object RemoveSkillButton: TButton
+            Left = 136
+            Height = 28
+            Top = 8
+            Width = 120
+            Caption = 'Remove'
+            Enabled = False
+            Hint = 'Drop the selected document from this list. The file is not deleted.'
+            OnClick = RemoveSkillButtonClick
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 1
+          end
+        end
+        object SkillsGrid: TStringGrid
+          Left = 0
+          Height = 256
           Top = 36
           Width = 968
           Align = alClient
-          BorderStyle = bsNone
+          AutoFillColumns = True
+          ColCount = 6
+          Columns = <
+            item
+              ButtonStyle = cbsNone
+              ReadOnly = True
+              Title.Caption = 'Skill'
+              Width = 280
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
+              Title.Caption = 'Inspect'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
+              Title.Caption = 'Document'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
+              Title.Caption = 'Plan'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
+              Title.Caption = 'Build'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+            item
+              ButtonStyle = cbsCheckboxColumn
+              Title.Alignment = taCenter
+              Title.Caption = 'Chat'
+              ValueChecked = '1'
+              ValueUnchecked = '0'
+              Width = 96
+            end
+          >
+          FixedCols = 0
+          FixedRows = 1
+          Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goDrawFocusSelected, goColSizing, goEditing, goRowSelect, goThumbTracking, goSmoothScroll]
+          RowCount = 1
           TabOrder = 0
+          OnSelection = SkillsGridSelection
         end
       end
       object ContextGroup: TGroupBox
