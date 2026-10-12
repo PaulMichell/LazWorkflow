@@ -226,7 +226,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantXaiProvider, AssistantSkills, AssistantTools, AssistantActor,
-  AssistantHarness, AssistantSubagents, AssistantPlan, AssistantConnections;
+  AssistantHarness, AssistantSubagents, AssistantPlan, AssistantConnections, AssistantImageAdapters;
 
 Function RoleToJson(Role: TAssistantMessageRole): String;
 Begin

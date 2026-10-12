@@ -101,6 +101,8 @@ Function ReleaseOrphanAssistantImageArchives(Const StoreDirectory: String; Conve
   Out ErrorText: String): Boolean;
 /// True when the display file is a regular file in the live image directory.
 Function AssistantImageDisplayPresent(Const StoreDirectory, ImageId, DisplayPath: String): Boolean;
+/// MIME and pixel size from the still-image header. False when the bytes are not a known still image.
+Function MeasureStillImage(Const Data: TBytes; Out Mime: String; Out Width, Height: Integer): Boolean;
 
 /// Directory that receives stored images. ProjectRoot is the directory that contains .assistant/conversation.jsonl.
 Function AssistantImagesDirectory(Const ProjectRoot: String): String;
@@ -1884,6 +1886,27 @@ Begin
   Else
     Result := False;
   End;
+End;
+
+Function MeasureStillImage(Const Data: TBytes; Out Mime: String; Out Width, Height: Integer): Boolean;
+Var
+  Kind: TAssistantImageKind;
+  Extension: String;
+Begin
+  Mime := '';
+  Width := 0;
+  Height := 0;
+  Kind := SniffImageKind(Data);
+  If Kind = ikUnknown Then
+    Exit(False);
+  KindFileInfo(Kind, Extension, Mime);
+  Result := HeaderImageSize(Data, Kind, Width, Height) And (Mime <> '') And (Width > 0) And (Height > 0);
+  If Not Result Then
+    Begin
+      Mime := '';
+      Width := 0;
+      Height := 0;
+    End;
 End;
 
 Function MeasuredImageSize(Const Data: TBytes; ReaderClass: TFPCustomImageReaderClass; Out Width, Height: Integer): Boolean;
