@@ -41,7 +41,7 @@ The counts and the fold-versus-second-skill note are in `Documents/AgenticDevelo
 ## 3. Compare the two documents
 
 ### 3.1 Build the clause map
-Status: not started
+Status: complete
 
 Walk `Documents/BEHAVE.md` section by section against `free-pascal-engineer` and the mode contracts (Inspect, Document, Plan, Build). For each clause record one of: unique, repeated, contradicted, or host-incompatible. Put the table in `Documents/AgenticDevelopmentReview.md`.
 
