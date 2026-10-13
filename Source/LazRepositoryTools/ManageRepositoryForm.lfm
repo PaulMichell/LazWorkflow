@@ -265,6 +265,29 @@ object ManageRepositoryForm: TManageRepositoryForm
           Gutter.Visible = True
           Gutter.Width = 40
         end
+        object FilePreviewPanel: TPanel
+          Align = alClient
+          BorderSpacing.Around = 4
+          BevelOuter = bvNone
+          Color = clWindow
+          ParentBackground = False
+          ParentColor = False
+          TabOrder = 1
+          Visible = False
+          object FilePreviewLabel: TLabel
+            Align = alClient
+            Alignment = taCenter
+            Caption = 'Image preview unavailable (16 megapixel limit or unsupported image).'
+            Layout = tlCenter
+            ParentColor = False
+            Visible = False
+          end
+          object FileImagePaintBox: TPaintBox
+            Align = alClient
+            OnPaint = FileImagePaintBoxPaint
+            Visible = False
+          end
+        end
       end
     end
     object ChangesTab: TTabSheet

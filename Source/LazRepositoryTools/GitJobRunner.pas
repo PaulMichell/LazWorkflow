@@ -793,7 +793,13 @@ Begin
     gjkCommitFile:
       Begin
         Job.FPreviewBinary := False;
-        Job.FOk := Git.ReadCommitFileText(Job.PreviewSha, Job.PreviewPath, Job.FPreviewText, Job.FPreviewBinary);
+        If Job.PreviewReadBytes Then
+          Begin
+            Job.FPreviewBytes := TMemoryStream.Create;
+            Job.FOk := Git.ReadBlobBytes(Job.PreviewSha, Job.PreviewPath, False, Job.FPreviewBytes);
+          End
+        Else
+          Job.FOk := Git.ReadCommitFileText(Job.PreviewSha, Job.PreviewPath, Job.FPreviewText, Job.FPreviewBinary);
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;

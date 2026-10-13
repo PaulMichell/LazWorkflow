@@ -89,6 +89,10 @@
         <UnitName Value="RepositorySyntax"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/RepositoryImagePreview.pas"/>
+        <UnitName Value="RepositoryImagePreview"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/GitDiffView.pas"/>
         <UnitName Value="GitDiffView"/>
       </Item>

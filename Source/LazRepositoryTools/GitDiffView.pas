@@ -222,10 +222,9 @@ Implementation
 {$R *.lfm}
 
 Uses
-  FPImage,
   Math, EditorOptionsIntf, SrcEditorIntf, LazEditHighlighter,
   LazEditTextAttributes, GitService, Dialogs, WorkflowLog, GitDiffHighlighter, LazFileUtils,
-  RepositorySyntax;
+  RepositorySyntax, RepositoryImagePreview;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -235,16 +234,6 @@ Begin
   Result := LowerCase(Ext);
   If (Result <> '') And (Result[1] <> '.') Then
     Result := '.' + Result;
-End;
-
-Function FileExtensionIsImage(Const Ext: String): Boolean;
-Var
-  E: String;
-Begin
-  E := NormalizeExt(Ext);
-  Result := (E = '.png') Or (E = '.jpg') Or (E = '.jpeg') Or (E = '.gif') Or
-    (E = '.bmp') Or (E = '.ico') Or (E = '.xpm') Or (E = '.tif') Or (E = '.tiff') Or
-    (E = '.pbm') Or (E = '.pgm') Or (E = '.ppm');
 End;
 
 Function FileExtensionIsLikelyBinary(Const Ext: String): Boolean;
@@ -1350,33 +1339,10 @@ Begin
 End;
 
 Function TGitDiffView.TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
-Var
-  Reader: TFPCustomImageReaderClass;
-  Dimensions: TPoint;
 Begin
   Result := False;
-  If (Stream = Nil) Or (Stream.Size = 0) Or (Not Assigned(PreviewPicture)) Then
+  If Not TryLoadRepositoryImage(Stream, PreviewPicture) Then
     Exit;
-  Stream.Position := 0;
-  Try
-    Reader := TFPCustomImage.FindReaderFromStream(Stream);
-    If Reader = Nil Then Exit;
-    Stream.Position := 0;
-    Dimensions := Reader.ImageSize(Stream);
-    If (Dimensions.X < 1) Or (Dimensions.Y < 1) Or
-      (Dimensions.X > 16384) Or (Dimensions.Y > 16384) Or
-      (Int64(Dimensions.X) * Dimensions.Y > 16000000) Then Exit;
-    Stream.Position := 0;
-    PreviewPicture.LoadFromStream(Stream);
-  Except
-    PreviewPicture.Clear;
-    Exit;
-  End;
-  If (PreviewPicture.Width < 1) Or (PreviewPicture.Height < 1) Then
-    Begin
-      PreviewPicture.Clear;
-      Exit;
-    End;
   CancelPendingScroll;
   FDiffText := '';
   FreeOwnedLanguageHighlighter;
@@ -1422,42 +1388,10 @@ Begin
 End;
 
 Procedure TGitDiffView.ImagePaintBoxPaint(Sender: TObject);
-Var
-  Dest: TRect;
-  BoxW, BoxH, ImgW, ImgH: Integer;
-  Scale, ScaleX, ScaleY: Double;
-  DrawW, DrawH: Integer;
 Begin
   If Not Assigned(ImagePaintBox) Then
     Exit;
-  With ImagePaintBox.Canvas Do
-    Begin
-      Brush.Color := clWindow;
-      FillRect(ImagePaintBox.ClientRect);
-    End;
-  If (Not Assigned(PreviewPicture)) Or (PreviewPicture.Width < 1) Or (PreviewPicture.Height < 1) Then
-    Exit;
-  BoxW := ImagePaintBox.ClientWidth;
-  BoxH := ImagePaintBox.ClientHeight;
-  ImgW := PreviewPicture.Width;
-  ImgH := PreviewPicture.Height;
-  If (BoxW < 1) Or (BoxH < 1) Then
-    Exit;
-  ScaleX := BoxW / ImgW;
-  ScaleY := BoxH / ImgH;
-  If ScaleX < ScaleY Then
-    Scale := ScaleX
-  Else
-    Scale := ScaleY;
-  If Scale > 1 Then
-    Scale := 1; { do not upscale small images past 1:1 }
-  DrawW := Max(1, Round(ImgW * Scale));
-  DrawH := Max(1, Round(ImgH * Scale));
-  Dest.Left := (BoxW - DrawW) Div 2;
-  Dest.Top := (BoxH - DrawH) Div 2;
-  Dest.Right := Dest.Left + DrawW;
-  Dest.Bottom := Dest.Top + DrawH;
-  ImagePaintBox.Canvas.StretchDraw(Dest, PreviewPicture.Graphic);
+  PaintFittedRepositoryImage(ImagePaintBox.Canvas, ImagePaintBox.ClientRect, PreviewPicture);
 End;
 
 Procedure TGitDiffView.ApplyViewMode;
@@ -2745,7 +2679,7 @@ Begin
       If Not TryShowImageFromStream(FReadTitle, Job.PreviewBytes) Then
         Begin
           ShowBinaryMessage(FReadTitle);
-          BinaryLabel.Caption := 'Image preview unavailable (16 megapixel limit or unsupported image).';
+          BinaryLabel.Caption := RepositoryImageUnavailable;
         End;
     End
   Else If DiffTextLooksBinary(Job.PreviewText) Then ShowBinaryMessage(FReadTitle)

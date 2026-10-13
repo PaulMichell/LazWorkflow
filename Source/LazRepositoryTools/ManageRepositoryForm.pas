@@ -79,6 +79,9 @@ Type
     FilesSplitter: TSplitter;
     FilesRightPanel: TPanel;
     FileRevisionEditor: TSynEdit;
+    FilePreviewPanel: TPanel;
+    FilePreviewLabel: TLabel;
+    FileImagePaintBox: TPaintBox;
     UntrackedCheck: TCheckBox;
     CleanCheck: TCheckBox;
     IgnoredCheck: TCheckBox;
@@ -160,6 +163,7 @@ Type
     Procedure RewriteHeadActionUpdate(Sender: TObject);
     Procedure FileTreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure FileImagePaintBoxPaint(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -409,7 +413,7 @@ Begin
       FChanges.Bind(ChangesList, StagedList, ChangesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
         StagedLabel);
     If Assigned(FFiles) Then
-      FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor);
+      FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor, FilePreviewPanel, FileImagePaintBox, FilePreviewLabel);
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
     If Assigned(CleanCheck) Then
@@ -850,7 +854,10 @@ Begin
       Begin
         If Job.Cancelled Or Not Assigned(FFiles) Then
           Exit;
-        FFiles.ApplyContent(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewText, Job.PreviewBinary, Job.Ok);
+        If Job.PreviewReadBytes Then
+          FFiles.ApplyImage(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewBytes, Job.Ok, Job.ErrorText)
+        Else
+          FFiles.ApplyContent(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewText, Job.PreviewBinary, Job.Ok);
         If Not Job.Ok Then
           WorkflowLogger.Warning('ManageRepository', 'File revision: ' + Job.ErrorText);
       End;
@@ -1274,6 +1281,8 @@ Begin
     Begin
       If Assigned(FileRevisionEditor) Then
         ApplySynEditIDEFont(FileRevisionEditor, True);
+      If Assigned(FileImagePaintBox) And FileImagePaintBox.Visible Then
+        FileImagePaintBox.Invalidate;
       If FFilesNeedReload Then
         RefreshFiles;
     End;
@@ -1356,20 +1365,34 @@ Var
   Job: TGitJob;
   Token: Integer;
   Path, Sha: String;
+  ReadBytes: Boolean;
 Begin
   If Not Assigned(FFiles) Or (FFiles.SelectedSha = '') Or (FFiles.ContentPath = '') Then
     Exit;
   Path := FFiles.ContentPath;
   Sha := FFiles.SelectedSha;
+  ReadBytes := FFiles.ContentIsImage;
   Token := FFiles.BeginContent;
   Job := TGitJob.Create(gjkCommitFile);
   Job.RepoPath := FRepoPath;
   Job.Quiet := True;
   Job.PreviewPath := Path;
   Job.PreviewSha := Sha;
+  Job.PreviewReadBytes := ReadBytes;
   Job.Tag := Token;
   If Not SubmitGitJob(Job) Then
-    FFiles.ApplyContent(Token, Path, Sha, '', False, False);
+    Begin
+      If ReadBytes Then
+        FFiles.ApplyImage(Token, Path, Sha, Nil, False, '')
+      Else
+        FFiles.ApplyContent(Token, Path, Sha, '', False, False);
+    End;
+End;
+
+Procedure TManageRepositoryForm.FileImagePaintBoxPaint(Sender: TObject);
+Begin
+  If Assigned(FFiles) Then
+    FFiles.PaintPreview;
 End;
 
 Procedure TManageRepositoryForm.FileTreeChange(Sender: TObject; Node: TTreeNode);
