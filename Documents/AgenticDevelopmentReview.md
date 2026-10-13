@@ -73,7 +73,76 @@ Keep, if the guide is adapted: the precedence list, the habit of stating a risky
 
 Drop, or the guide will fight this project: waiting for "let's build this" during Build, forbidding commits, and forbidding global registration.
 
-The clause-by-clause map against `free-pascal-engineer` is plan item 3.1. It is not in this file yet.
+The clause map is below. Item 3.2 still drafts the precedence list.
+
+## Clause map
+
+Plan item 3.1. Each clause of `Documents/BEHAVE.md` is unique, repeated, contradicted, or host-incompatible. Compared with `~/.grok/skills/free-pascal-engineer/SKILL.md` and the mode overlay in `AssistantHarness.pas` (Chat, Inspect, Document, Plan, Build). Skills were not edited.
+
+| Clause | Class | Where the other rule lives |
+| --- | --- | --- |
+| Human brings vision; agent brings speed, and waits until "let's build this" | host-incompatible | Build implements. Plan writes the plan and does not edit source. The engineer skill already uses "do that now" as the go-ahead, not a fixed phrase. |
+| Bias toward caution; trivial tasks use judgment | unique | Neither document defines trivial. The mode overlay already says keep the change scoped. |
+| Must / Should / May weights | unique | The engineer skill uses hard "do not" lists without these three weights. |
+| Definitions: trivial task, minor ambiguity, harmful pattern, working code | unique | Not defined in the engineer skill or the mode overlay. |
+| Section 5 hard stops override everything unless authorized | contradicted | Host safety rules and the mode contract must outrank a guide hard stop. "Never commit" cannot override an explicit commit instruction. |
+| Explicit instruction overrides defaults | repeated | Build commits when the conversation or the active plan already says to. Plan still must not edit source. |
+| Correctness and existing behavior before elegance or speed | repeated | Engineer skill: correctness, then memory and lifecycle, then style. |
+| Prefer smaller diffs and style matching | repeated | Mode overlay: keep changes scoped. Engineer skill: match the codebase. |
+| Default mode: smallest correct change | repeated | Mode overlay: stay on the work package and do not leave unrelated placeholders. |
+| Ambiguity mode: stop and ask when behavior, data, or safety is uncertain | unique | The engineer skill says ask only necessary questions. It does not require a stop for every interface or data uncertainty. |
+| Cleanup mode: broader deletion only when asked | repeated | Engineer skill: do not rewrite working code unless the task is a cleanup or redesign. |
+| Name the three modes in lowercase prose | unique | Host modes are already named. A second set of mode names is not in the engineer skill. |
+| State assumptions; do not pick silently among interpretations | unique | The engineer skill wants a short design answer, not a shown interpretation list. |
+| If a simpler approach exists, say so | repeated | Engineer skill: fix root causes rather than inventing a parallel stack. |
+| Ask when ambiguity affects behavior, interfaces, data, or safety | unique | Same gap as ambiguity mode. Document and Plan already cannot edit source while asking. |
+| Minor ambiguity: proceed and state the assumption | unique | Not stated in the engineer skill. |
+| After an interruption, restate assumptions | unique | Not stated. Build "continue" turns do not require a restatement. |
+| Before multi-step work, state meaning, assumptions, plan, and verification | repeated | Plan mode is the place for that write-up. Build reads the plan and implements. |
+| No features beyond the request | repeated | Mode overlay: keep changes scoped. |
+| No single-use abstractions or unasked configurability | repeated | Engineer skill: do not invent a parallel host stack. |
+| No error handling for impossible cases; always handle I/O and external failure | repeated | Engineer skill: explicit error handling, assigned `Result`, check `Assigned`. |
+| If the change is larger than the problem, simplify before delivery | repeated | Mode overlay: do not leave unrelated placeholders. |
+| Broader simplification of existing code needs approval | repeated | Engineer skill: do not rewrite what works unless asked. |
+| Prefer clear over clever in new code | repeated | Engineer skill: descriptive names, no letter soup. |
+| SOLID, Gang of Four, and layered patterns are optional | unique | The engineer skill already mandates Michell layers, registration, and form streaming. Those are not optional ceremony. |
+| Flag a harmful pattern; do not silently match it or silently fix it | repeated | Engineer skill: flag harmful patterns; do not copy generic Pascal over house rules. |
+| Do not use simplicity as a reason to expand scope | repeated | Mode overlay: stay on the work package. |
+| Do not improve adjacent code, comments, or formatting | repeated | Engineer skill: do not mix unrelated refactors into a commit. |
+| Do not refactor what is not broken | repeated | Same. |
+| Match existing style even if you would do it differently | contradicted | Matching stops where the pattern is harmful. New Pascal must still use the mode block, PascalCase keywords, and the unnamed form section. The guide must not license lowercase keywords, a trailing `Published` section, or a `CreateUI` shell. |
+| Mention unrelated dead code; do not delete it | repeated | Engineer skill: leave unrelated working-tree changes alone. |
+| Never rename or move files or symbols without an explicit instruction | repeated | Engineer skill: do not rename the main form, and do not rename casually. `rename_path` stays inside the project root. |
+| Fix typos, drop imports your change made unused, format lines you are already editing | unique | The engineer skill does not list these as safe without asking. They fit Build. |
+| Ask before new dependencies, schema changes, public API changes, renames, or deletes | repeated | Engineer skill: do not add a dependency or change a scaffold name unless the task asks. |
+| Share an improvement and wait for approval; prefer modification over rewrite | host-incompatible | In Plan, waiting is correct. In Build, the plan item is the approval. Waiting again would stall the plan runner. |
+| Every changed line traces to the request | repeated | Mode overlay: keep changes scoped. |
+| Turn the task into a verifiable goal | repeated | Engineer skill: verify a fix before committing. Plan items carry acceptance notes. |
+| Multi-step work states step then check | repeated | That is what a plan item is for. Build should not restate the whole plan before every edit. |
+| Bug fix: reproduce, then make it pass | repeated | Engineer skill: build and exercise the change. |
+| New feature: verify the public interface, not internals | unique | The engineer skill verifies the affected behaviour. It does not limit proof to the public interface. |
+| Refactor: same observable behaviour before and after | repeated | Engineer skill: a refactor commit must still compile and keep behaviour. |
+| Without automated tests, write the manual steps | unique | The mode overlay leaves behaviour and UI checks for manual review. It does not require the steps to be written first. |
+| Broken baseline: say so, define success against it, do not claim full verification | unique | The engineer skill says say what you could not compile. It does not require this three-part baseline report. |
+| After non-trivial work: changed, verified, unverified, left untouched | unique | Not in the engineer skill. The mode overlay only says a clean compile is not proof. |
+| If unfinished, deliver the safe part, label the gap, and state the blocker | repeated | Mode overlay: do not claim a write succeeded without a tool result. Do not leave unrelated placeholders. |
+| Strong criteria let you loop; weak criteria need questions | unique | Not stated. Build plan items are the strong criteria. |
+| Never run destructive CLI (`rm -rf`, `git clean`, wipe) | host-incompatible | Host safety already forbids this. It is not a Pascal style rule. `delete_path` may delete one project file. |
+| Never commit or push | contradicted | Engineer skill: commit finished work unless asked not to. Build: commit when the conversation or plan says so. A message and a clean staging check are allowed. A ban is not. |
+| Never modify `.env`, secrets, or credentials | host-incompatible | Host safety. Not in the engineer skill. |
+| Never silently change a signature, return type, or error contract | unique | The engineer skill allows a signature change when the task needs it. The silent case is not named. |
+| Never swallow an exception or return code | repeated | Engineer skill: specific handlers, and do not fail silently on a GPU fallback. |
+| Never introduce global or shared mutable state | contradicted | Engineer skill: global instances, `Initialization` registries, and the MessageLink method pointers. |
+| Never deliver an unlabelled stub | repeated | Engineer skill: avoid incomplete placeholders unless the user asks for a sketch. |
+| A hard stop cites the rule and waits for an exception | unique | Useful as a citation habit. It must not let a guide hard stop override host safety or an explicit instruction. |
+| Write docs when complexity needs a why | repeated | Engineer skill: comment where it improves understanding. Unit header states the purpose. |
+| Comment the why, not the what | repeated | Same. |
+| Update docs when the behaviour they describe changes | unique | Not stated as its own rule. The engineer skill updates a size-note date when an oversized unit is revisited. |
+| Public APIs and shared interfaces need usage examples | contradicted | Engineer skill: `///` on public methods, and do not restate the name. Examples on every touched method fight the 1000-line preference. Examples belong on a new public unit, not on every edit. |
+| Do not write a comment that only restates the code | repeated | Engineer skill: comments where they improve understanding, not as noise. |
+| Success test: fewer stray diffs, fewer overcomplicated rewrites, questions before mistakes | unique | A useful measure. Not a rule in the engineer skill. |
+
+Engineer material that must win on Pascal work, and that this guide does not contain: the mode block, naming, formatting, form and frame streaming, ActionList, layering, Git commit shape, and the desktop scaffold contract. Those stay in `free-pascal-engineer`.
 
 ## Cost of a second skill
 
