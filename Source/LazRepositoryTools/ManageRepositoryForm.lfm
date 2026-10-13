@@ -27,9 +27,9 @@ object ManageRepositoryForm: TManageRepositoryForm
     Height = 636
     Top = 0
     Width = 1189
-    ActivePage = FilesTabSheet
+    ActivePage = HistoryTab
     Align = alClient
-    TabIndex = 1
+    TabIndex = 0
     TabOrder = 0
     OnChange = PagesChange
     object HistoryTab: TTabSheet
@@ -317,19 +317,18 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientWidth = 798
         TabOrder = 2
         object PreviewButtonPanel: TPanel
-          Left = 0
-          Height = 38
-          Top = 563
-          Width = 798
+          Left = 4
+          Height = 36
+          Top = 561
+          Width = 790
           Align = alBottom
           AutoSize = True
-          BevelOuter = bvNone
           BorderSpacing.Left = 4
           BorderSpacing.Right = 4
           BorderSpacing.Bottom = 4
-          ClientHeight = 38
+          BevelOuter = bvNone
+          ClientHeight = 36
           ClientWidth = 790
-          ParentColor = True
           TabOrder = 0
           object SaveButton: TButton
             Left = 4
@@ -351,7 +350,6 @@ object ManageRepositoryForm: TManageRepositoryForm
             Height = 22
             Top = 7
             Width = 138
-            AutoSize = True
             BorderSpacing.Left = 8
             Caption = 'Show File Changes'
             Enabled = False
@@ -361,7 +359,7 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         inline FileRevisionEditor: TSynEdit
           Left = 4
-          Height = 555
+          Height = 553
           Top = 4
           Width = 790
           Align = alClient
@@ -389,32 +387,30 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FilePreviewPanel: TPanel
           Left = 4
-          Height = 593
+          Height = 553
           Top = 4
           Width = 790
           Align = alClient
           BorderSpacing.Around = 4
           BevelOuter = bvNone
-          ClientHeight = 593
+          ClientHeight = 553
           ClientWidth = 790
           ParentBackground = False
-          ParentColor = True
           TabOrder = 2
           object FilePreviewLabel: TLabel
             Left = 0
-            Height = 555
+            Height = 553
             Top = 0
             Width = 790
             Align = alClient
             Alignment = taCenter
             Caption = 'Image preview unavailable (16 megapixel limit or unsupported image).'
             Layout = tlCenter
-            ParentColor = True
             Visible = False
           end
           object FileImagePaintBox: TPaintBox
             Left = 0
-            Height = 555
+            Height = 553
             Top = 0
             Width = 790
             Align = alClient
@@ -424,8 +420,8 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         inline FileChangesView: TGitDiffView
           Left = 0
-          Height = 555
-          Top = 4
+          Height = 561
+          Top = 0
           Width = 798
           Align = alClient
           TabOrder = 3
