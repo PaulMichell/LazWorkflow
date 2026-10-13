@@ -27,9 +27,9 @@ object ManageRepositoryForm: TManageRepositoryForm
     Height = 578
     Top = 0
     Width = 1135
-    ActivePage = ChangesTab
+    ActivePage = HistoryTab
     Align = alClient
-    TabIndex = 1
+    TabIndex = 0
     TabOrder = 0
     OnChange = PagesChange
     object HistoryTab: TTabSheet
@@ -193,6 +193,77 @@ object ManageRepositoryForm: TManageRepositoryForm
             OnMouseWheel = PaintBoxMouseWheel
             OnPaint = PaintBoxPaint
           end
+        end
+      end
+    end
+    object FilesTabSheet: TTabSheet
+      Caption = 'Files'
+      object FilesLeftPanel: TPanel
+        Align = alLeft
+        Width = 380
+        BevelOuter = bvNone
+        TabOrder = 0
+        object FileCommitPanel: TPanel
+          Align = alBottom
+          Height = 180
+          BevelOuter = bvNone
+          TabOrder = 1
+          object FileCommitList: TListBox
+            Align = alClient
+            BorderSpacing.Around = 4
+            ItemHeight = 0
+            TabOrder = 1
+            OnSelectionChange = FileCommitListSelectionChange
+          end
+          object FileCommitLabel: TLabel
+            Align = alTop
+            BorderSpacing.Left = 4
+            BorderSpacing.Top = 4
+            BorderSpacing.Right = 4
+            Caption = 'Commits'
+          end
+        end
+        object FileCommitSplitter: TSplitter
+          Align = alBottom
+          Height = 5
+          AutoSnap = False
+          MinSize = 80
+          ResizeAnchor = akBottom
+        end
+        object FileTree: TTreeView
+          Align = alClient
+          BorderSpacing.Around = 4
+          HideSelection = False
+          ReadOnly = True
+          ShowRoot = False
+          TabOrder = 0
+          ToolTips = True
+          OnChange = FileTreeChange
+        end
+      end
+      object FilesSplitter: TSplitter
+        Align = alLeft
+        Width = 5
+        AutoSnap = False
+        MinSize = 160
+      end
+      object FilesRightPanel: TPanel
+        Align = alClient
+        BevelOuter = bvNone
+        TabOrder = 2
+        object FileRevisionEditor: TSynEdit
+          Align = alClient
+          BorderSpacing.Around = 4
+          Font.Name = 'Courier New'
+          Font.Pitch = fpFixed
+          Font.Quality = fqCleartypeNatural
+          Font.Size = 9
+          ReadOnly = True
+          RightEdge = 0
+          ScrollBars = ssAutoBoth
+          TabOrder = 0
+          Gutter.Visible = True
+          Gutter.Width = 40
         end
       end
     end

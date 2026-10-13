@@ -107,6 +107,13 @@ Type
       IncludeIgnored: Boolean = False): Boolean;
     { Tracked paths (ls-files -z). Caller frees Paths. }
     Function ListTrackedFiles(Out Paths: TStringList): Boolean;
+    { Tracked paths relative to the repository, using Git's slash separator. Caller frees Paths. }
+    Function ListRepositoryFiles(Out Paths: TStringList): Boolean;
+    { Commits that changed RelativePath, newest first. Each line is sha, date, subject, and the
+      path in that commit, separated by tabs. Follows renames. }
+    Function ListPathCommits(Const RelativePath: String; Out CommitLines: String): Boolean;
+    { Text of one path at Sha. A NUL byte sets IsBinary and leaves Content empty. }
+    Function ReadCommitFileText(Const Sha, RelativePath: String; Out Content: String; Out IsBinary: Boolean): Boolean;
     Function StagePaths(Paths: TStrings): Boolean;
     Function UnstagePaths(Paths: TStrings): Boolean;
     Function StageAll: Boolean;
@@ -922,6 +929,137 @@ Begin
   If Not Result Then
     Exit;
   ParseGitStatusPorcelainV1Z(Raw, Entries);
+End;
+
+Function TGitService.ListRepositoryFiles(Out Paths: TStringList): Boolean;
+Var
+  Raw, Rel: String;
+  ExitCode, Cursor: Integer;
+Begin
+  Paths := TStringList.Create;
+  Paths.Sorted := False;
+  Paths.Duplicates := dupIgnore;
+  Paths.CaseSensitive := FileNameCaseSensitive;
+  Result := RunGit(['-c', 'core.quotePath=false', 'ls-files', '-z'], Raw, ExitCode);
+  If Not Result Then
+    Exit;
+  Cursor := 1;
+  While Cursor <= Length(Raw) Do
+    Begin
+      Rel := NextNulField(Raw, Cursor);
+      If Rel <> '' Then
+        Paths.Add(Rel);
+    End;
+End;
+
+Function CommitHeader(Const Line: String; Out Sha, WhenText, Subject: String): Boolean;
+Var
+  TabAt, SecondTab, HexAt: Integer;
+Begin
+  Sha := '';
+  WhenText := '';
+  Subject := '';
+  Result := False;
+  TabAt := Pos(#9, Line);
+  If TabAt < 5 Then
+    Exit;
+  Sha := Copy(Line, 1, TabAt - 1);
+  For HexAt := 1 To Length(Sha) Do
+    If Not (Sha[HexAt] In ['0'..'9', 'a'..'f', 'A'..'F']) Then
+      Exit;
+  SecondTab := Pos(#9, Copy(Line, TabAt + 1, MaxInt));
+  If SecondTab = 0 Then
+    WhenText := Copy(Line, TabAt + 1, MaxInt)
+  Else
+    Begin
+      WhenText := Copy(Line, TabAt + 1, SecondTab - 1);
+      Subject := Copy(Line, TabAt + SecondTab + 1, MaxInt);
+    End;
+  Result := True;
+End;
+
+Function TGitService.ListPathCommits(Const RelativePath: String; Out CommitLines: String): Boolean;
+Var
+  Raw, Line, Sha, WhenText, Subject, HistoricalPath: String;
+  ExitCode, I: Integer;
+  Lines: TStringList;
+Begin
+  CommitLines := '';
+  Result := False;
+  If RelativePath = '' Then
+    Begin
+      FLastError := 'Path is empty.';
+      Exit;
+    End;
+  Result := RunGit(['-c', 'core.quotePath=false', 'log', '--follow', '--date=short', '--name-only',
+    '--format=%H%x09%ad%x09%s', '--', RelativePath], Raw, ExitCode);
+  If Not Result Then
+    Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Raw;
+    I := 0;
+    While I < Lines.Count Do
+      Begin
+        Line := Lines[I];
+        If CommitHeader(Line, Sha, WhenText, Subject) Then
+          Begin
+            HistoricalPath := '';
+            Inc(I);
+            While (I < Lines.Count) And (Lines[I] = '') Do
+              Inc(I);
+            If (I < Lines.Count) And (Pos(#9, Lines[I]) = 0) Then
+              Begin
+                HistoricalPath := Lines[I];
+                Inc(I);
+              End;
+            If HistoricalPath = '' Then
+              HistoricalPath := RelativePath;
+            If CommitLines <> '' Then
+              CommitLines := CommitLines + LineEnding;
+            CommitLines := CommitLines + Sha + #9 + WhenText + #9 + Subject + #9 + HistoricalPath;
+          End
+        Else
+          Inc(I);
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function TGitService.ReadCommitFileText(Const Sha, RelativePath: String; Out Content: String;
+  Out IsBinary: Boolean): Boolean;
+Var
+  Stream: TMemoryStream;
+  I: Integer;
+Begin
+  Content := '';
+  IsBinary := False;
+  Result := False;
+  If (Sha = '') Or (RelativePath = '') Then
+    Begin
+      FLastError := 'Commit or path is empty.';
+      Exit;
+    End;
+  Stream := TMemoryStream.Create;
+  Try
+    Result := ReadBlobBytes(Sha, RelativePath, False, Stream);
+    If Not Result Then
+      Exit;
+    If Stream.Size = 0 Then
+      Exit;
+    For I := 0 To Stream.Size - 1 Do
+      If PByte(Stream.Memory)[I] = 0 Then
+        Begin
+          IsBinary := True;
+          Exit;
+        End;
+    SetLength(Content, Stream.Size);
+    If Stream.Size > 0 Then
+      Move(Stream.Memory^, Content[1], Stream.Size);
+  Finally
+    Stream.Free;
+  End;
 End;
 
 Function TGitService.ListTrackedFiles(Out Paths: TStringList): Boolean;

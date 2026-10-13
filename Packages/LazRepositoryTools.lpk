@@ -37,13 +37,16 @@
         <UnitName Value="ManageRepositoryChanges"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/ManageRepositoryFiles.pas"/>
+        <UnitName Value="ManageRepositoryFiles"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/ManageRepositoryForm.pas"/>
-        <FileType Value="MainUnit"/>
         <UnitName Value="ManageRepositoryForm"/>
       </Item>
       <Item>
         <Filename Value="../Source/LazRepositoryTools/ManageRepositoryForm.lfm"/>
-        <FileType Value="FormResource"/>
+        <UnitName Value="ManageRepositoryForm"/>
       </Item>
       <Item>
         <Filename Value="../Source/LazRepositoryTools/GitService.pas"/>

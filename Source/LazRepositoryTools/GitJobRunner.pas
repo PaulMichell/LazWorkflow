@@ -39,6 +39,9 @@ Type
     gjkFetchDetails,
     gjkCommitPaths,
     gjkFilePreview,
+    gjkRepositoryFiles,
+    gjkPathCommits,
+    gjkCommitFile,
     gjkPrepareAmend,
     gjkRemoveLastCommit
   );
@@ -50,7 +53,7 @@ Type
   TGitJob = Class
   Private
     FPreviewPath, FPreviewSha, FPreviewText: String;
-    FPreviewStaged, FPreviewPlain, FPreviewReadBytes: Boolean;
+    FPreviewStaged, FPreviewPlain, FPreviewReadBytes, FPreviewBinary: Boolean;
     FPreviewBytes: TMemoryStream;
     FKind: TGitJobKind;
     FId: Integer;
@@ -103,6 +106,7 @@ Type
     Property PreviewStaged: Boolean Read FPreviewStaged Write FPreviewStaged;
     Property PreviewReadBytes: Boolean Read FPreviewReadBytes Write FPreviewReadBytes;
     Property PreviewPlain: Boolean Read FPreviewPlain;
+    Property PreviewBinary: Boolean Read FPreviewBinary;
     Property PreviewText: String Read FPreviewText;
     Property PreviewBytes: TMemoryStream Read FPreviewBytes;
     Property Kind: TGitJobKind Read FKind;
@@ -234,6 +238,9 @@ Begin
     gjkSuggestMessage: Result := 'Suggesting commit message…';
     gjkIndexHistory: Result := 'Indexing…';
     gjkFetchDetails: Result := 'Loading commit details…';
+    gjkRepositoryFiles: Result := 'Listing files…';
+    gjkPathCommits: Result := 'Listing commits…';
+    gjkCommitFile: Result := 'Loading file…';
     gjkPrepareAmend: Result := 'Preparing amend…';
     gjkRemoveLastCommit: Result := 'Removing commit…';
   Else
@@ -279,6 +286,7 @@ Begin
   FAmendCommit := False;
   FHeadPushed := True;
   FHeadPushedKnown := False;
+  FPreviewBinary := False;
 End;
 
 Destructor TGitJob.Destroy;
@@ -768,6 +776,26 @@ Begin
               End;
           End;
         If Not Job.FOk Then Job.FErrorText := Git.LastError;
+      End;
+    gjkRepositoryFiles:
+      Begin
+        FreeAndNil(Job.FTrackedFiles);
+        Job.FOk := Git.ListRepositoryFiles(Job.FTrackedFiles);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkPathCommits:
+      Begin
+        Job.FOk := Git.ListPathCommits(Job.PreviewPath, Job.FIndexText);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
+      End;
+    gjkCommitFile:
+      Begin
+        Job.FPreviewBinary := False;
+        Job.FOk := Git.ReadCommitFileText(Job.PreviewSha, Job.PreviewPath, Job.FPreviewText, Job.FPreviewBinary);
+        If Not Job.FOk Then
+          Job.FErrorText := Git.LastError;
       End;
     gjkListStatus:
       Begin

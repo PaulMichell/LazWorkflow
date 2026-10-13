@@ -3,7 +3,7 @@ Unit ManageRepositoryForm;
 { Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. The .lfm remains the shell;
-  History graph paint and Changes lists live in coordinator units.
+  History graph paint, Changes lists, and Files inspection live in coordinator units.
   Reviewed 2026-08: job/window orchestration stays on the form. }
 
 {$IFDEF FPC}
@@ -15,8 +15,9 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SpellMemo, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryChanges;
+  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, SpellMemo, WorkflowEvents, StatusFooterFrame,
+  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryChanges,
+  ManageRepositoryFiles;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -68,6 +69,16 @@ Type
     ChangesList: TListBox;
     ChangesBottomPanel: TPanel;
     FilterGroupBox: TGroupBox;
+    FilesTabSheet: TTabSheet;
+    FilesLeftPanel: TPanel;
+    FileCommitPanel: TPanel;
+    FileCommitList: TListBox;
+    FileCommitLabel: TLabel;
+    FileCommitSplitter: TSplitter;
+    FileTree: TTreeView;
+    FilesSplitter: TSplitter;
+    FilesRightPanel: TPanel;
+    FileRevisionEditor: TSynEdit;
     UntrackedCheck: TCheckBox;
     CleanCheck: TCheckBox;
     IgnoredCheck: TCheckBox;
@@ -147,6 +158,8 @@ Type
     Procedure HistoryViewActionUpdate(Sender: TObject);
     Procedure HistoryMutateActionUpdate(Sender: TObject);
     Procedure RewriteHeadActionUpdate(Sender: TObject);
+    Procedure FileTreeChange(Sender: TObject; Node: TTreeNode);
+    Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -160,6 +173,8 @@ Type
     FModel: TGitGraphModel;
     FHistory: TManageHistoryGraph;
     FChanges: TManageChangesPane;
+    FFiles: TManageFilesPane;
+    FFilesNeedReload: Boolean;
     FSelectedIndex: Integer;
     FIndexing: Boolean;
     FDetailLoading: Boolean;
@@ -187,6 +202,10 @@ Type
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
     Procedure RefreshChanges;
+    Procedure RefreshFiles;
+    Procedure SubmitFileList;
+    Procedure SubmitFileHistory(Sender: TObject);
+    Procedure SubmitFileContent(Sender: TObject);
     Procedure ConfigureCommitMessageEditor;
     Function CanMutate: Boolean;
     Function CanRewriteLastCommit: Boolean;
@@ -236,7 +255,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, SynEdit, SpellCheckerConfig;
+  DateUtils, Math, LazFileUtils, SpellCheckerConfig;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -304,6 +323,10 @@ Begin
   FModel := TGitGraphModel.Create;
   FHistory := TManageHistoryGraph.Create(Self);
   FChanges := TManageChangesPane.Create;
+  FFiles := TManageFilesPane.Create;
+  FFilesNeedReload := True;
+  FFiles.OnRequestHistory := @SubmitFileHistory;
+  FFiles.OnRequestContent := @SubmitFileContent;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
   If Assigned(GitJobs) Then
@@ -334,6 +357,7 @@ Begin
   FRemoteOpBusy := False;
   FIndexing := False;
   FDetailLoading := False;
+  FreeAndNil(FFiles);
   FreeAndNil(FChanges);
   FreeAndNil(FHistory);
   FreeAndNil(FModel);
@@ -360,6 +384,10 @@ Begin
       CommitSplitter.ResizeControl := CommitPanel;
     If Assigned(StagedSplitter) And Assigned(StagedPanel) Then
       StagedSplitter.ResizeControl := StagedPanel;
+    If Assigned(FilesSplitter) And Assigned(FilesLeftPanel) Then
+      FilesSplitter.ResizeControl := FilesLeftPanel;
+    If Assigned(FileCommitSplitter) And Assigned(FileCommitPanel) Then
+      FileCommitSplitter.ResizeControl := FileCommitPanel;
 
     If Assigned(DiffView) Then
       DiffView.SetViewMode(dvmBrowse);
@@ -380,6 +408,8 @@ Begin
     If Assigned(FChanges) Then
       FChanges.Bind(ChangesList, StagedList, ChangesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
         StagedLabel);
+    If Assigned(FFiles) Then
+      FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor);
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
     If Assigned(CleanCheck) Then
@@ -800,6 +830,30 @@ Begin
             WorkflowLogger.Warning('ManageRepository', 'ListStatus: ' + Job.ErrorText);
           End;
       End;
+    gjkRepositoryFiles:
+      Begin
+        If Job.Cancelled Or Not Assigned(FFiles) Then
+          Exit;
+        FFiles.ApplyFileList(Job.Tag, Job.TrackedFiles, Job.Ok);
+        If Not Job.Ok Then
+          WorkflowLogger.Warning('ManageRepository', 'List files: ' + Job.ErrorText);
+      End;
+    gjkPathCommits:
+      Begin
+        If Job.Cancelled Or Not Assigned(FFiles) Then
+          Exit;
+        FFiles.ApplyHistory(Job.Tag, Job.PreviewPath, Job.IndexText, Job.Ok);
+        If Not Job.Ok Then
+          WorkflowLogger.Warning('ManageRepository', 'File history: ' + Job.ErrorText);
+      End;
+    gjkCommitFile:
+      Begin
+        If Job.Cancelled Or Not Assigned(FFiles) Then
+          Exit;
+        FFiles.ApplyContent(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewText, Job.PreviewBinary, Job.Ok);
+        If Not Job.Ok Then
+          WorkflowLogger.Warning('ManageRepository', 'File revision: ' + Job.ErrorText);
+      End;
     gjkSuggestMessage:
       Begin
         If Job.Cancelled Then
@@ -1215,6 +1269,13 @@ Begin
     Begin
       If Assigned(DiffView) Then
         DiffView.RefreshOverviewGutter;
+    End
+  Else If Pages.ActivePage = FilesTabSheet Then
+    Begin
+      If Assigned(FileRevisionEditor) Then
+        ApplySynEditIDEFont(FileRevisionEditor, True);
+      If FFilesNeedReload Then
+        RefreshFiles;
     End;
 End;
 
@@ -1234,6 +1295,93 @@ Begin
   If FStatusJobPending Then
     Exit;
   SubmitChangesStatus;
+End;
+
+Procedure TManageRepositoryForm.RefreshFiles;
+Begin
+  If Assigned(FFiles) Then
+    FFiles.RepoPath := FRepoPath;
+  If Not Assigned(FileTree) Then
+    Exit;
+  If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
+    Begin
+      FFilesNeedReload := False;
+      If Assigned(FFiles) Then
+        FFiles.ClearForNoRepo;
+      If Assigned(FileTree) And (FileTree.Items.Count = 0) Then
+        FileTree.Items.Add(Nil, '(no repository)');
+      Exit;
+    End;
+  FFilesNeedReload := False;
+  SubmitFileList;
+End;
+
+Procedure TManageRepositoryForm.SubmitFileList;
+Var
+  Job: TGitJob;
+  Token: Integer;
+Begin
+  If Not Assigned(FFiles) Or (FRepoPath = '') Then
+    Exit;
+  Token := FFiles.BeginFileList;
+  Job := TGitJob.Create(gjkRepositoryFiles);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.Tag := Token;
+  If Not SubmitGitJob(Job) Then
+    FFiles.ApplyFileList(Token, Nil, False);
+End;
+
+Procedure TManageRepositoryForm.SubmitFileHistory(Sender: TObject);
+Var
+  Job: TGitJob;
+  Token: Integer;
+  Path: String;
+Begin
+  If Not Assigned(FFiles) Or (FFiles.SelectedPath = '') Or (FRepoPath = '') Then
+    Exit;
+  Path := FFiles.SelectedPath;
+  Token := FFiles.BeginHistory;
+  Job := TGitJob.Create(gjkPathCommits);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.PreviewPath := Path;
+  Job.Tag := Token;
+  If Not SubmitGitJob(Job) Then
+    FFiles.ApplyHistory(Token, Path, '', False);
+End;
+
+Procedure TManageRepositoryForm.SubmitFileContent(Sender: TObject);
+Var
+  Job: TGitJob;
+  Token: Integer;
+  Path, Sha: String;
+Begin
+  If Not Assigned(FFiles) Or (FFiles.SelectedSha = '') Or (FFiles.ContentPath = '') Then
+    Exit;
+  Path := FFiles.ContentPath;
+  Sha := FFiles.SelectedSha;
+  Token := FFiles.BeginContent;
+  Job := TGitJob.Create(gjkCommitFile);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.PreviewPath := Path;
+  Job.PreviewSha := Sha;
+  Job.Tag := Token;
+  If Not SubmitGitJob(Job) Then
+    FFiles.ApplyContent(Token, Path, Sha, '', False, False);
+End;
+
+Procedure TManageRepositoryForm.FileTreeChange(Sender: TObject; Node: TTreeNode);
+Begin
+  If Assigned(FFiles) Then
+    FFiles.TreeSelectionChanged;
+End;
+
+Procedure TManageRepositoryForm.FileCommitListSelectionChange(Sender: TObject; User: Boolean);
+Begin
+  If Assigned(FFiles) Then
+    FFiles.CommitSelectionChanged;
 End;
 
 Procedure TManageRepositoryForm.SubmitChangesStatus;
@@ -1971,6 +2119,10 @@ Begin
       UpdateStatus;
       If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
         RefreshChanges;
+      If Assigned(Pages) And (Pages.ActivePage = FilesTabSheet) Then
+        RefreshFiles
+      Else
+        FFilesNeedReload := True;
       Exit;
     End;
   If CompareFilenames(NewPath, FRepoPath) <> 0 Then
@@ -1999,6 +2151,12 @@ Begin
     End;
   If Assigned(FChanges) Then
     FChanges.RepoPath := NewPath;
+  If Assigned(FFiles) Then
+    Begin
+      FFiles.RepoPath := NewPath;
+      FFiles.ClearForNoRepo;
+    End;
+  FFilesNeedReload := True;
   FLastHeadAge := -1;
   FLastIndexAge := -1;
   FLastProbeAt := 0;
@@ -2020,6 +2178,8 @@ Begin
     ChangesList.Items.Clear;
   If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
     RefreshChanges;
+  If Assigned(Pages) And (Pages.ActivePage = FilesTabSheet) Then
+    RefreshFiles;
   ApplyConfig;
 End;
 
@@ -2033,6 +2193,10 @@ Begin
       RefreshRepositoryInfo;
       If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
         RefreshChanges;
+      If Assigned(Pages) And (Pages.ActivePage = FilesTabSheet) Then
+        RefreshFiles
+      Else
+        FFilesNeedReload := True;
     End;
 End;
 
@@ -2047,6 +2211,9 @@ Begin
       UpdateStatus;
       If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
         RefreshChanges;
+      FFilesNeedReload := True;
+      If Assigned(Pages) And (Pages.ActivePage = FilesTabSheet) Then
+        RefreshFiles;
     End;
 End;
 
