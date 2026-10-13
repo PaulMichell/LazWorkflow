@@ -1210,6 +1210,7 @@ Var
   HasTools: Boolean;
   Svc: TAssistantService;
 Begin
+  BeginWriteImageTurn;
   ClearTurnGeneratedImages;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);

@@ -37,6 +37,8 @@ Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode
   Out ResultText: String; Out ErrorText: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+/// Clears a failed write_image stop. Call at turn start on the thread that runs tools.
+Procedure BeginWriteImageTurn;
 Function FindLazbuildExecutable: String;
 Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
@@ -75,6 +77,10 @@ Uses
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, fpjson, jsonparser;
+
+ThreadVar
+  WriteImageTurnFailed: Boolean;
+  WriteImageTurnError: String;
 
 Var
   GActivePlanRelative: String;
@@ -3749,6 +3755,22 @@ Begin
   Result := True;
 End;
 
+Procedure BeginWriteImageTurn;
+Begin
+  WriteImageTurnFailed := False;
+  WriteImageTurnError := '';
+End;
+
+Procedure RememberWriteImageFailure(Const ErrorText: String);
+Begin
+  If WriteImageTurnFailed Then
+    Exit;
+  WriteImageTurnFailed := True;
+  WriteImageTurnError := ErrorText;
+  If Trim(WriteImageTurnError) = '' Then
+    WriteImageTurnError := 'write_image failed.';
+End;
+
 Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
   Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
@@ -3758,12 +3780,29 @@ Var
   Stored: TAssistantStoredImage;
   Profile: TAssistantProfileCall;
   Width, Height: Integer;
+  Procedure FailWrite;
+  Begin
+    Result := False;
+    ResultText := '';
+    ImageRefs := Nil;
+    If Trim(ErrorText) = '' Then
+      ErrorText := 'write_image failed.';
+    RememberWriteImageFailure(ErrorText);
+  End;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
   ImageRefs := Nil;
   ClearGeneratedImage(Image);
+  If WriteImageTurnFailed Then
+    Begin
+      ErrorText := WriteImageTurnError;
+      If Trim(ErrorText) = '' Then
+        ErrorText := 'write_image failed.';
+      ErrorText := ErrorText + LineEnding + 'Stop and report that error.';
+      Exit;
+    End;
   Path := Trim(JsonArgString(ArgumentsJson, 'path'));
   Prompt := Trim(JsonArgString(ArgumentsJson, 'prompt'));
   Shape := Trim(JsonArgString(ArgumentsJson, 'shape'));
@@ -3771,68 +3810,91 @@ Begin
   If Path = '' Then
     Begin
       ErrorText := 'write_image requires a project-relative path.';
+      FailWrite;
       Exit;
     End;
   If Prompt = '' Then
     Begin
       ErrorText := 'write_image requires a prompt.';
+      FailWrite;
       Exit;
     End;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
-    Exit;
+    Begin
+      FailWrite;
+      Exit;
+    End;
   Resolved := ExpandResolvedPath(Resolved);
   Relative := ImageProjectRelative(Resolved);
   If ImageOutputPathRefused(Relative, ErrorText) Then
-    Exit;
+    Begin
+      FailWrite;
+      Exit;
+    End;
   If SymlinkLeavesProject(Resolved) Then
     Begin
       ErrorText := 'Refusing a symbolic link that leaves the project.';
+      FailWrite;
       Exit;
     End;
   If ImageDestinationBlocked(Resolved, Overwrite, ErrorText) Then
-    Exit;
+    Begin
+      FailWrite;
+      Exit;
+    End;
   If Not ImageExtensionMime(Resolved, ExpectedMime) Then
     Begin
       ErrorText := 'Image path must end in png, jpg, jpeg, webp, or gif.';
+      FailWrite;
       Exit;
     End;
   { Path checks are done. The draw is the first network call. }
   If Not ReadActiveProfileCall(Profile) Then
     Begin
       ErrorText := 'No profile is selected.';
+      FailWrite;
       Exit;
     End;
   ImageModel := Trim(Profile.ImageModel);
   If Not RequestProfileImage(Prompt, Shape, Image, ErrorText) Then
-    Exit;
+    Begin
+      FailWrite;
+      Exit;
+    End;
   If (Length(Image.Bytes) = 0) Or (Length(Image.Bytes) > AssistantImageMaxFileBytes) Then
     Begin
       ErrorText := 'Generated image is over the size ceiling.';
       If Length(Image.Bytes) = 0 Then
         ErrorText := 'Generated image has no bytes.';
+      FailWrite;
       Exit;
     End;
   If Not MeasureStillImage(Image.Bytes, SniffedMime, Width, Height) Then
     Begin
       ErrorText := 'Generated image bytes are not a still image.';
+      FailWrite;
       Exit;
     End;
   If SniffedMime <> ExpectedMime Then
     Begin
       ErrorText := 'Image bytes do not match the file extension.';
+      FailWrite;
       Exit;
     End;
   Image.Mime := SniffedMime;
   Image.Width := Width;
   Image.Height := Height;
   If Not PublishImageBytes(Resolved, Image.Bytes, Overwrite, ErrorText) Then
-    Exit;
+    Begin
+      FailWrite;
+      Exit;
+    End;
   ResultText := GeneratedImageResultText(Relative, Image);
   If ImageModel <> '' Then
     ResultText := ResultText + LineEnding + 'model=' + ImageModel;
   If Not StoreAssistantImageFromFile(ProjectRootPath, Resolved, Stored, ErrorText) Then
     Begin
-      ResultText := '';
+      FailWrite;
       Exit;
     End;
   SetLength(ImageRefs, 1);

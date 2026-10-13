@@ -3164,6 +3164,7 @@ Begin
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
       Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode,
       ProjectAssistantRoot, WireJson);
+    BeginWriteImageTurn;
     FCodexRun.Start;
     FComposerImagesSent := Length(Refs) > 0;
     Result := True;
