@@ -784,6 +784,18 @@ Begin
     FActiveMode := Mode;
 End;
 
+Procedure DropImageOutputSection(Var Prompt: String);
+Var
+  StartAt, EndAt: Integer;
+Begin
+  StartAt := Pos('<image_output>', Prompt);
+  EndAt := Pos('</image_output>', Prompt);
+  If (StartAt < 1) Or (EndAt < StartAt) Then
+    Exit;
+  Delete(Prompt, StartAt, EndAt + Length('</image_output>') - StartAt);
+  Prompt := Trim(Prompt);
+End;
+
 Procedure TAssistantService.RebuildSystemPrompt;
 Var
   Root, PlanRel: String;
@@ -801,7 +813,7 @@ Begin
     If Assigned(AssistantChatConfig) Then
       AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(FActiveMode), Names);
     If Assigned(WorkflowAssistantHarness) Then
-      FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, Names, Root, PlanRel)
+      FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, Names, Root, PlanRel, Not FIsSubagent)
     Else If FActiveMode = amChat Then
       Begin
         FSystemPrompt := ModeSystemPromptBase(amChat);
@@ -819,8 +831,12 @@ Begin
     Names.Free;
   End;
   If FIsSubagent Then
-    FSystemPrompt := FSystemPrompt + LineEnding + LineEnding +
-      SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName))
+    Begin
+      { The fallback prompt may still contain the parent image section. A child does not draw. }
+      DropImageOutputSection(FSystemPrompt);
+      FSystemPrompt := FSystemPrompt + LineEnding + LineEnding +
+        SubagentPersonaPrompt(ParseSubagentKind(FSubagentKindName));
+    End
   Else
     FSystemPrompt := FSystemPrompt + LineEnding + AssistantImageSystemSentence;
   FBaseSystemPrompt := FSystemPrompt;
@@ -845,7 +861,7 @@ Function TAssistantService.ToolsJsonCached: String;
 Begin
   If (Not FToolsJsonValid) Or (FToolsJsonMode <> FActiveMode) Then
     Begin
-      FToolsJsonCache := BuildAssistantToolsJsonForSession(FActiveMode, Not FIsSubagent);
+      FToolsJsonCache := BuildAssistantToolsJsonForSession(FActiveMode, Not FIsSubagent, Not FIsSubagent);
       FToolsJsonMode := FActiveMode;
       FToolsJsonValid := True;
     End;

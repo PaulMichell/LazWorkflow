@@ -44,7 +44,8 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Function BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
+    Function BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String;
+      IncludeImageOutput: Boolean = True): String;
     Procedure ClearTurnTodos;
     Function TodoCount: Integer;
     Function TodoItem(Index: Integer): TAssistantTodoItem;
@@ -340,10 +341,12 @@ Function AssistantImageOutputPromptSection: String;
 Begin
   Result :=
     '<image_output>' + LineEnding +
-    'Create still images only with `write_image`. Do not use `write_file` or `replace_in_file` for images. ' +
-    'Prefer PNG for icons and UI art unless the user names another format. ' +
-    'Pass the generated image through rather than describing a file that was not written. ' +
-    'Do not claim the image file exists unless the write_image result says the write succeeded.' + LineEnding +
+    'Call `write_image` once with a short prompt and a project path. ' +
+    'A few reads of existing art are enough when the user asked for a match. ' +
+    'Do not search the assistant source. Do not spawn a subagent to draw. ' +
+    'Do not invent another image tool. Do not pick or name an image model in the call. ' +
+    'Do not claim a file exists unless the result starts with Wrote. ' +
+    'Exact pixels may differ across models. Do not retry for that.' + LineEnding +
     '</image_output>';
 End;
 
@@ -352,7 +355,8 @@ Begin
   Result := 'This model cannot write image files; say so, and do not invent a path or a PNG.';
 End;
 
-Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String): String;
+Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot,
+  ActivePlanRel: String; IncludeImageOutput: Boolean): String;
 Var
   Parts: TStringList;
   Tagged: String;
@@ -387,7 +391,8 @@ Begin
     Parts.Add(BuildCommunication);
     Parts.Add(BuildFormatting);
     Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
-    If AssistantTurnOffersImageOutput(Mode) Then
+    { A subagent passes IncludeImageOutput false. It does not receive write_image. }
+    If IncludeImageOutput And AssistantTurnOffersImageOutput(Mode) Then
       Parts.Add(AssistantImageOutputPromptSection)
     Else If Not ActiveProfileImageOutput Then
       Parts.Add(AssistantCannotWriteImagesLine);

@@ -29,7 +29,7 @@ Const
 
 Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
-Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
+Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
@@ -650,7 +650,7 @@ Begin
     '}}';
 End;
 
-Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents: Boolean): String;
+Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
 Var
   Body: String;
 Begin
@@ -670,7 +670,8 @@ Begin
           BuildSourceToolsJson + ',' + BuildRunToolsJson +
           ',{"type":"function","function":{"name":"run_git","description":' +
           '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
-        If AssistantTurnOffersImageOutput(amBuild) Then
+        { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
+        If OfferWriteImage And AssistantTurnOffersImageOutput(amBuild) Then
           Body := Body + ',' + BuildWriteImageToolJson;
       End;
     amInspect:
@@ -690,12 +691,12 @@ End;
 
 Function BuildAssistantToolsJson: String;
 Begin
-  Result := BuildAssistantToolsJsonForSession(amInspect, False);
+  Result := BuildAssistantToolsJsonForSession(amInspect, False, False);
 End;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Begin
-  Result := BuildAssistantToolsJsonForSession(Mode, True);
+  Result := BuildAssistantToolsJsonForSession(Mode, True, True);
 End;
 
 Function ProjectRootPath: String;

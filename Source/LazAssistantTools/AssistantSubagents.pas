@@ -191,7 +191,7 @@ Begin
         'Do not edit source (.pas/.lfm). Return a short summary of the plan file and sections you wrote.';
     sakGeneralPurpose:
       Result := Result +
-        'You are a depth-1 **general-purpose** child with the parent session''s current mode tools.' + LineEnding +
+        'You are a depth-1 **general-purpose** child with the parent session''s current mode tools, except `write_image`.' + LineEnding +
         'Do the isolated chunk in the user prompt. Return what you changed and how to verify it.' + LineEnding +
         'You cannot spawn further subagents.';
     sakPascalNaming:
@@ -220,7 +220,8 @@ Begin
       'Answer the research question with paths and line numbers. Do not edit files. Do not spawn children.';
   End;
   Result := Result + LineEnding +
-    'You cannot call spawn_subagent. Return a structured summary the parent can merge.' + LineEnding +
+    'You cannot call spawn_subagent. You do not receive `write_image`.' + LineEnding +
+    'Return a structured summary the parent can merge.' + LineEnding +
     'Write in plain English. If you rank issues, use Blocking, Major, or Minor — never "Nit" or other review slang.' + LineEnding +
     '</subagent>';
 End;

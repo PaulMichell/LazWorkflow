@@ -776,11 +776,13 @@ Var
   ToolDispatch: TIdeToolDispatch;
   ImageRefs: TAssistantImageRefArray;
   I, Base: Integer;
+  SubagentSession: Boolean;
 Begin
   Svc := LockedService;
   If Not Assigned(Svc) Or (Call.Name = '') Then
     Exit;
   Mode := Svc.ActiveMode;
+  SubagentSession := Svc.IsSubagentSession;
   { Do not keep Svc across Queue/Sleep — Detach may free the service. }
   Svc := Nil;
   LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
@@ -792,7 +794,12 @@ Begin
   BindToolAbortThread(Self);
   Try
     Try
-      If ToolNeedsIdeThread(Call.Name) Then
+      If SubagentSession And SameText(Call.Name, 'write_image') Then
+        Begin
+          Ok := False;
+          ErrorText := 'Unknown tool: write_image';
+        End
+      Else If ToolNeedsIdeThread(Call.Name) Then
         Begin
           ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode);
           { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
