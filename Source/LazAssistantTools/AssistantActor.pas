@@ -837,7 +837,8 @@ Begin
     Exit;
   Svc.AddToolResult(Call.Id, Content);
   AttachmentsJson := '';
-  If Ok And SameText(Call.Name, 'read_image') And (Length(ImageRefs) > 0) And (Not Svc.IsSubagentSession) Then
+  If Ok And (Length(ImageRefs) > 0) And (Not Svc.IsSubagentSession) And
+    (SameText(Call.Name, 'read_image') Or SameText(Call.Name, 'write_image')) Then
     Begin
       Base := Length(FPendingImageRefs);
       SetLength(FPendingImageRefs, Base + Length(ImageRefs));

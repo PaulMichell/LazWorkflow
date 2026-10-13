@@ -3,8 +3,8 @@ Unit AssistantTools;
 { Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. Tool schemas, sandbox checks, and
-  dispatch are one IDE tool surface. Reviewed 2026-09-26: read_image stays here
-  with the other project-root tools. }
+  dispatch are one IDE tool surface. Reviewed 2026-10-13: write_image stays here
+  with the other project-root tools. The draw itself is in AssistantImageAdapters. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -74,7 +74,7 @@ Uses
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
-  AssistantGeneratedImage, fpjson, jsonparser;
+  AssistantGeneratedImage, AssistantImageAdapters, fpjson, jsonparser;
 
 Var
   GActivePlanRelative: String;
@@ -611,12 +611,14 @@ Begin
   Result :=
     '{"type":"function","function":{' +
       '"name":"write_image",' +
-      '"description":"Save a still image into the project. Do not use write_file or replace_in_file for images.",' +
+      '"description":"Draw one still image with this connection''s image model and save it. ' +
+        'It is not a copy of a read_image attachment. Prefer PNG unless the user names another allowed extension.",' +
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path."},' +
+        '"prompt":{"type":"string","description":"What to draw."},' +
         '"overwrite":{"type":"boolean","description":"Replace an existing file. Default false."},' +
-        '"image_id":{"type":"string","description":"Turn-local image id. Optional when the turn has exactly one image."}' +
-      '},"required":["path"]}}}';
+        '"shape":{"type":"string","description":"Short hint such as 1:1. Omit it to let the image model choose."}' +
+      '},"required":["path","prompt"]}}}';
 End;
 
 Function BuildDocumentToolsJson: String;
@@ -3746,22 +3748,33 @@ Begin
   Result := True;
 End;
 
-Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
+  Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
-  Path, Resolved, Relative, ExpectedMime, SniffedMime: String;
+  Path, Prompt, Shape, Resolved, Relative, ExpectedMime, SniffedMime, ImageModel: String;
   Overwrite: Boolean;
   Image: TAssistantGeneratedImage;
+  Stored: TAssistantStoredImage;
+  Profile: TAssistantProfileCall;
   Width, Height: Integer;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  ImageRefs := Nil;
   ClearGeneratedImage(Image);
   Path := Trim(JsonArgString(ArgumentsJson, 'path'));
+  Prompt := Trim(JsonArgString(ArgumentsJson, 'prompt'));
+  Shape := Trim(JsonArgString(ArgumentsJson, 'shape'));
   Overwrite := JsonArgBool(ArgumentsJson, 'overwrite', False);
   If Path = '' Then
     Begin
       ErrorText := 'write_image requires a project-relative path.';
+      Exit;
+    End;
+  If Prompt = '' Then
+    Begin
+      ErrorText := 'write_image requires a prompt.';
       Exit;
     End;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
@@ -3782,7 +3795,14 @@ Begin
       ErrorText := 'Image path must end in png, jpg, jpeg, webp, or gif.';
       Exit;
     End;
-  If Not SelectTurnGeneratedImage(JsonArgString(ArgumentsJson, 'image_id'), Image, ErrorText) Then
+  { Path checks are done. The draw is the first network call. }
+  If Not ReadActiveProfileCall(Profile) Then
+    Begin
+      ErrorText := 'No profile is selected.';
+      Exit;
+    End;
+  ImageModel := Trim(Profile.ImageModel);
+  If Not RequestProfileImage(Prompt, Shape, Image, ErrorText) Then
     Exit;
   If (Length(Image.Bytes) = 0) Or (Length(Image.Bytes) > AssistantImageMaxFileBytes) Then
     Begin
@@ -3807,6 +3827,15 @@ Begin
   If Not PublishImageBytes(Resolved, Image.Bytes, Overwrite, ErrorText) Then
     Exit;
   ResultText := GeneratedImageResultText(Relative, Image);
+  If ImageModel <> '' Then
+    ResultText := ResultText + LineEnding + 'model=' + ImageModel;
+  If Not StoreAssistantImageFromFile(ProjectRootPath, Resolved, Stored, ErrorText) Then
+    Begin
+      ResultText := '';
+      Exit;
+    End;
+  SetLength(ImageRefs, 1);
+  ImageRefs[0] := ImageRefFromStored(Stored);
   Result := True;
 End;
 
@@ -3975,7 +4004,7 @@ Begin
   Else If Name = 'search_in_project' Then
     Result := ToolSearchInProject(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'write_image' Then
-    Result := ToolWriteImage(ArgumentsJson, ResultText, ErrorText)
+    Result := ToolWriteImage(ArgumentsJson, ResultText, ErrorText, ImageRefs)
   Else If Name = 'write_file' Then
     Result := ToolWriteFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'replace_in_file' Then
