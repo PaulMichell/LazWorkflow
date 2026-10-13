@@ -73,7 +73,7 @@ Status: complete
 Replace the image-output prompt section. It says: call `write_image` once with a short prompt and a project path; a few reads of existing art are enough when the user asked for a match; do not search the assistant source; do not spawn a subagent to draw; do not invent another image tool; do not pick or name an image model in the call; do not claim a file exists unless the result starts with Wrote. Exact pixels may differ across models. Do not retry for that. Subagent sessions do not receive `write_image`.
 
 ### 4.3 Stop a repeated failure in the host
-Status: not started
+Status: complete
 
 After one failed `write_image` in a turn, a later call in that turn does not post again. It returns the first error and tells the model to stop and report that error. Clearing happens at turn start. A prompt line is not enough. The Ecology turn retried the same failure until it was cancelled.
 
