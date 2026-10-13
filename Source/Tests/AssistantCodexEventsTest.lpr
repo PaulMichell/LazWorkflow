@@ -1,7 +1,7 @@
 Program AssistantCodexEventsTest;
 {$mode objfpc}{$H+}{$codepage utf8}
 { Offline, paced process events through the production worker and broker. }
-Uses cthreads, SysUtils, AssistantCodexRun, AssistantCodexClient, AssistantToolBroker;
+Uses {$IFDEF UNIX}BaseUnix,{$ENDIF} cthreads, SysUtils, AssistantCodexRun, AssistantCodexClient, AssistantToolBroker;
 Type
   TFixtureWorkspace=Class(TAssistantWorkspaceAdapter)
     Function Identity:String; Override;
@@ -71,7 +71,11 @@ Begin
 End;
 Begin
   If Not FileExists(ParamStr(1)) Then
-    Begin WriteLn('Usage: AssistantCodexEventsTest Source/Tests/codex_event_fixture.py'); Halt(2); End;
+    Begin WriteLn('Usage: AssistantCodexEventsTest Tests/CodexEventFixture.pas'); Halt(2); End;
+  {$IFDEF UNIX}
+  If fpChmod(ParamStr(1), S_IRWXU Or S_IRGRP Or S_IXGRP Or S_IROTH Or S_IXOTH) <> 0 Then
+    Begin WriteLn('Could not mark the InstantFPC fixture executable.'); Halt(2); End;
+  {$ENDIF}
   RunCase('thinking'); RunCase('failure'); RunCase('disconnect'); RunCase('cancel'); RunCase('final');
   WriteLn('All offline Codex event tests passed.');
 End.

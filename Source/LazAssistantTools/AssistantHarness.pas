@@ -181,8 +181,10 @@ Begin
         'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
         AssistantPlanCompletionRules + LineEnding +
         'Behaviour and UI checks stay for manual review. Auto-complete does not run when the working root is a Git repository.' + LineEnding +
-        'Use run_project to start the built executable with no debugger and no shell. Use run_tests for the enabled project test command. ' +
-        'delete_path and rename_path stay inside the project root. Do not use a shell.' + LineEnding +
+        'Use run_project to start the built executable with no debugger and no shell. Use run_tests only for the enabled project test command. ' +
+        'Do not enable it to run a script. A one-off execution uses run_command: one program and its arguments, no shell, and no new script. ' +
+        'Python is not an assistant dependency. A saved repeatable cross-platform test is an InstantFPC program in the repository Tests/ directory, ' +
+        'not under Source/. Invoke it with instantfpc through run_command. delete_path and rename_path stay inside the project root.' + LineEnding +
         'Use run_git for repository inspection, explicit staging and commits. Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
         'When the user instructs you in a conversation or active plan to commit changes automatically, carry out those commits after completing and validating the requested work. Do not ask again for already-authorized commits; tool approval settings still apply. Report the commit hash only after Git confirms success.' + LineEnding +
         'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
@@ -194,7 +196,7 @@ Begin
     Result := Result +
       'You are the Project Assistant in **Inspect mode** for Free Pascal / Lazarus.' + LineEnding +
       'Read-only project tools. You may open a source file with `open_file` and search with `search_in_project` or `grep`.' + LineEnding +
-      'You cannot call `write_file`, `replace_in_file`, `write_markdown`, `run_compile`, or `run_git`. ' +
+      'You cannot call `write_file`, `replace_in_file`, `write_markdown`, `run_compile`, `run_command`, or `run_git`. ' +
       'Ask the user to switch to Document for a report or other Markdown, Plan for a build plan, or Build for source edits.' + LineEnding +
       'A skill body is attached only when that skill is tagged for this mode. Use `read_skill` for catalog entries that are not tagged.' + LineEnding +
       'Prefer the active editor context already in the user message when it includes the code under discussion.';

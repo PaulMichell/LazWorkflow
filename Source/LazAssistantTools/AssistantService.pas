@@ -680,7 +680,11 @@ Begin
         '- `run_compile` — **prefer quiet** (default): non-visual lazbuild, no Messages UI. ' +
         'Use `ui=true` only for a final IDE Messages check.' + LineEnding +
         '- `run_project` — start the built executable directly. No shell and no debugger.' + LineEnding +
-        '- `run_tests` — run the enabled test command for this target. Arguments are not passed through a shell.' + LineEnding +
+        '- `run_tests` — run the enabled test command for this target. Arguments are not passed through a shell. ' +
+        'Do not enable it to run a script.' + LineEnding +
+        '- `run_command` — one-off program and arguments. No shell. Python and shells are refused. ' +
+        'A saved repeatable cross-platform test is an InstantFPC program in Tests/, not under Source/. ' +
+        'Invoke it as instantfpc plus the script path. Do not write a script for a one-off.' + LineEnding +
         '- `delete_path` / `rename_path` — one path inside the project root. Refuses the root, Git metadata, and the project file.' + LineEnding +
         LineEnding +
         '**Forms / LFM (critical — compile success is not enough):**' + LineEnding +
@@ -716,7 +720,7 @@ Begin
       'open_file opens a source tab and does not modify it. search_in_project searches project text. ' +
       'For large files use read_file start_line/end_line to page; if a result says truncated, continue from the suggested start_line instead of re-reading from line 1. ' +
       'Prefer the active editor context already in the user message when it includes the code under discussion. ' +
-      'You cannot call write_file, replace_in_file, write_markdown, run_compile, or run_git in Inspect mode — ' +
+      'You cannot call write_file, replace_in_file, write_markdown, run_compile, run_command, or run_git in Inspect mode — ' +
       'ask the user to switch to Document for a report, Plan for a build plan, or Build for source edits. ' +
       'The house skill is attached only when the user pins it.';
   End;

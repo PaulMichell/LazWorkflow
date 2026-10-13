@@ -281,7 +281,7 @@ Begin
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
-    (Name = 'run_project') Or (Name = 'run_tests') Or
+    (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'set_active_plan') Or (Name = 'read_file');
 End;
@@ -321,7 +321,7 @@ Begin
   { Build-mode source tools — never Inspect or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'run_compile') Or (Name = 'run_git') Or
-    (Name = 'run_project') Or (Name = 'run_tests') Or
+    (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'add_unit_to_project') Or
     (Name = 'ensure_form_component') Then
@@ -592,6 +592,20 @@ Begin
       '"description":"Run the enabled test command for this target. Arguments are passed directly, not through a shell. ' +
         'The executable and working directory must stay inside the project root.",' +
       '"parameters":{"type":"object","properties":{},"required":[]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"run_command",' +
+      '"description":"Run one program and its arguments for a one-off check. No shell is used. ' +
+        'Python and shells are refused. A saved repeatable test is an InstantFPC program in Tests/, ' +
+        'not under Source/. Invoke it as instantfpc plus the script path.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"program":{"type":"string","description":"Program name on PATH, or a path. Example: instantfpc."},' +
+        '"arguments":{"type":"array","items":{"type":"string"},' +
+          '"description":"Arguments passed directly, not through a shell."},' +
+        '"working_directory":{"type":"string",' +
+          '"description":"Optional. Defaults to the project directory and must stay inside it."},' +
+        '"timeout_seconds":{"type":"integer","description":"1 to 3600. Default 600."}' +
+      '},"required":["program"]}' +
     '}},' +
     '{"type":"function","function":{' +
       '"name":"delete_path",' +
@@ -4113,6 +4127,161 @@ Begin
   Result := True;
 End;
 
+Function RejectedCommandProgram(Const ProgramName: String): Boolean;
+Var
+  Name: String;
+Begin
+  Name := LowerCase(ChangeFileExt(ExtractFileName(ProgramName), ''));
+  Result := (Name = 'python') Or (Name = 'python2') Or (Name = 'python3') Or (Name = 'py') Or
+    (Name = 'sh') Or (Name = 'bash') Or (Name = 'dash') Or (Name = 'zsh') Or
+    (Name = 'cmd') Or (Name = 'powershell') Or (Name = 'pwsh');
+End;
+
+Function ToolRunCommand(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Data, Node, Item: TJSONData;
+  ProgramName, WorkDir, Resolved, OutputText: String;
+  Args: Array Of String;
+  I, ExitCode, TimeoutSec, Bytes: Integer;
+  TimeoutMs: QWord;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ArgumentsJson);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'run_command arguments are not valid JSON.';
+          Exit;
+        End;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'run_command requires a program.';
+        Exit;
+      End;
+    ProgramName := Trim(TJSONObject(Data).Get('program', ''));
+    If ProgramName = '' Then
+      ProgramName := Trim(TJSONObject(Data).Get('executable', ''));
+    ProgramName := StringReplace(ProgramName, '/', PathDelim, [rfReplaceAll]);
+    If (ProgramName = '') Or PathHasControlCharacter(ProgramName) Or (Length(ProgramName) > 4096) Then
+      Begin
+        ErrorText := 'run_command requires a program path without control characters.';
+        Exit;
+      End;
+    If RejectedCommandProgram(ProgramName) Then
+      Begin
+        ErrorText := 'Python and shells are not assistant dependencies. Run one program with arguments, or an InstantFPC script in Tests/.';
+        Exit;
+      End;
+    Node := TJSONObject(Data).Find('timeout_seconds');
+    TimeoutSec := 600;
+    If Assigned(Node) Then
+      Begin
+        If Not (Node.JSONType In [jtNumber, jtString]) Then
+          Begin
+            ErrorText := 'timeout_seconds must be 1 to 3600.';
+            Exit;
+          End;
+        TimeoutSec := Node.AsInteger;
+      End;
+    If (TimeoutSec < 1) Or (TimeoutSec > 3600) Then
+      Begin
+        ErrorText := 'timeout_seconds must be 1 to 3600.';
+        Exit;
+      End;
+    WorkDir := Trim(TJSONObject(Data).Get('working_directory', ''));
+    If WorkDir = '' Then
+      WorkDir := ProjectRootPath
+    Else If Not ResolveProjectPath(WorkDir, WorkDir, ErrorText) Then
+      Exit;
+    If Not DirectoryExistsUTF8(WorkDir) Then
+      Begin
+        ErrorText := 'Working directory was not found: ' + WorkDir;
+        Exit;
+      End;
+    Node := TJSONObject(Data).Find('arguments');
+    If Assigned(Node) And (Node.JSONType <> jtArray) Then
+      Begin
+        ErrorText := 'arguments must be an array of strings.';
+        Exit;
+      End;
+    If Assigned(Node) And (TJSONArray(Node).Count > 128) Then
+      Begin
+        ErrorText := 'At most 128 arguments are supported.';
+        Exit;
+      End;
+    If Assigned(Node) Then
+      SetLength(Args, TJSONArray(Node).Count)
+    Else
+      SetLength(Args, 0);
+    Bytes := 0;
+    If Assigned(Node) Then
+      For I := 0 To TJSONArray(Node).Count - 1 Do
+        Begin
+          Item := TJSONArray(Node).Items[I];
+          If Item.JSONType <> jtString Then
+            Begin
+              ErrorText := 'arguments must be an array of strings.';
+              Exit;
+            End;
+          If PathHasControlCharacter(Item.AsString) Then
+            Begin
+              ErrorText := 'Arguments must not contain line breaks or NUL bytes.';
+              Exit;
+            End;
+          Inc(Bytes, Length(Item.AsString));
+          If Bytes > 32768 Then
+            Begin
+              ErrorText := 'Arguments must fit 32 KiB.';
+              Exit;
+            End;
+          Args[I] := Item.AsString;
+        End;
+    If (Pos(PathDelim, ProgramName) > 0) Or FilenameIsAbsolute(ProgramName) Then
+      Begin
+        If FilenameIsAbsolute(ProgramName) Then
+          Resolved := ExpandFileName(ProgramName)
+        Else
+          Resolved := ExpandFileName(IncludeTrailingPathDelimiter(WorkDir) + ProgramName);
+      End
+    Else
+      Begin
+        Resolved := FindDefaultExecutablePath(ProgramName);
+        If Resolved = '' Then
+          Begin
+            ErrorText := 'Program not found on PATH: ' + ProgramName;
+            Exit;
+          End;
+      End;
+    If RejectedCommandProgram(Resolved) Then
+      Begin
+        ErrorText := 'Python and shells are not assistant dependencies. Run one program with arguments, or an InstantFPC script in Tests/.';
+        Exit;
+      End;
+    If Not FileExistsUTF8(Resolved) Then
+      Begin
+        ErrorText := 'Program not found: ' + ProgramName;
+        Exit;
+      End;
+    TimeoutMs := QWord(TimeoutSec) * 1000;
+    If Not RunProcessCapture(Resolved, WorkDir, Args, OutputText, ExitCode, ErrorText, TimeoutMs) Then
+      Exit;
+    If Length(OutputText) > AssistantToolMaxReadChars Then
+      OutputText := Copy(OutputText, 1, AssistantToolMaxReadChars) + LineEnding + '… (output truncated)';
+    ResultText := 'Program: ' + Resolved + LineEnding +
+      'Working directory: ' + WorkDir + LineEnding +
+      'Exit code: ' + IntToStr(ExitCode) + LineEnding + LineEnding + OutputText;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
@@ -4160,6 +4329,8 @@ Begin
     Result := ToolRunProject(ResultText, ErrorText)
   Else If Name = 'run_tests' Then
     Result := ToolRunTests(ResultText, ErrorText)
+  Else If Name = 'run_command' Then
+    Result := ToolRunCommand(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'delete_path' Then
     Result := ToolDeletePath(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'rename_path' Then
