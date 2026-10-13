@@ -342,6 +342,9 @@ Begin
   Result :=
     '<image_output>' + LineEnding +
     'Call `write_image` once with a short prompt and a project path. ' +
+    'The path may omit an extension. The image model chooses the format. ' +
+    'If the Wrote path uses a different extension, that file is the image. ' +
+    'Do not treat that as a failure and do not call again only to change the extension. ' +
     'A few reads of existing art are enough when the user asked for a match. ' +
     'Do not search the assistant source. Do not spawn a subagent to draw. ' +
     'Do not invent another image tool. Do not pick or name an image model in the call. ' +

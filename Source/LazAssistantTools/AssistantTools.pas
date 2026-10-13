@@ -618,9 +618,10 @@ Begin
     '{"type":"function","function":{' +
       '"name":"write_image",' +
       '"description":"Draw one still image with this connection''s image model and save it. ' +
-        'It is not a copy of a read_image attachment. Prefer PNG unless the user names another allowed extension.",' +
+        'It is not a copy of a read_image attachment. The path may omit an extension. ' +
+        'The image model chooses the format. A mismatched extension is saved with the matching extension instead of failing.",' +
       '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative path."},' +
+        '"path":{"type":"string","description":"Project-relative path. Omit the extension to let the image model choose the format."},' +
         '"prompt":{"type":"string","description":"What to draw."},' +
         '"overwrite":{"type":"boolean","description":"Replace an existing file. Default false."},' +
         '"shape":{"type":"string","description":"Short hint such as 1:1. Omit it to let the image model choose."}' +
@@ -3641,6 +3642,46 @@ Begin
   Result := False;
 End;
 
+Function ExtensionForStillMime(Const Mime: String): String;
+Begin
+  If Mime = 'image/png' Then
+    Result := '.png'
+  Else If Mime = 'image/jpeg' Then
+    Result := '.jpg'
+  Else If Mime = 'image/gif' Then
+    Result := '.gif'
+  Else If Mime = 'image/webp' Then
+    Result := '.webp'
+  Else If Mime = 'image/bmp' Then
+    Result := '.bmp'
+  Else If Mime = 'image/x-icon' Then
+    Result := '.ico'
+  Else If Mime = 'image/x-xpixmap' Then
+    Result := '.xpm'
+  Else If Mime = 'image/tiff' Then
+    Result := '.tif'
+  Else If Mime = 'image/x-portable-bitmap' Then
+    Result := '.pbm'
+  Else If Mime = 'image/x-portable-graymap' Then
+    Result := '.pgm'
+  Else If Mime = 'image/x-portable-pixmap' Then
+    Result := '.ppm'
+  Else
+    Result := '';
+End;
+
+Function PathWithStillExtension(Const Resolved, Extension: String): String;
+Var
+  Directory, FileName, OldExt: String;
+Begin
+  Directory := ExtractFilePath(Resolved);
+  FileName := ExtractFileName(Resolved);
+  OldExt := ExtractFileExt(FileName);
+  If OldExt <> '' Then
+    Delete(FileName, Length(FileName) - Length(OldExt) + 1, Length(OldExt));
+  Result := Directory + FileName + Extension;
+End;
+
 Function ImageExtensionMime(Const Path: String; Out Mime: String): Boolean;
 Var
   Ext: String;
@@ -3654,6 +3695,20 @@ Begin
     Mime := 'image/gif'
   Else If Ext = '.webp' Then
     Mime := 'image/webp'
+  Else If Ext = '.bmp' Then
+    Mime := 'image/bmp'
+  Else If Ext = '.ico' Then
+    Mime := 'image/x-icon'
+  Else If Ext = '.xpm' Then
+    Mime := 'image/x-xpixmap'
+  Else If (Ext = '.tif') Or (Ext = '.tiff') Then
+    Mime := 'image/tiff'
+  Else If Ext = '.pbm' Then
+    Mime := 'image/x-portable-bitmap'
+  Else If Ext = '.pgm' Then
+    Mime := 'image/x-portable-graymap'
+  Else If Ext = '.ppm' Then
+    Mime := 'image/x-portable-pixmap'
   Else
     Mime := '';
   Result := Mime <> '';
@@ -3774,7 +3829,7 @@ End;
 Function ToolWriteImage(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
   Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
-  Path, Prompt, Shape, Resolved, Relative, ExpectedMime, SniffedMime, ImageModel: String;
+  Path, Prompt, Shape, Resolved, Relative, RequestedRelative, ExpectedMime, SniffedMime, ImageModel, ChosenExt: String;
   Overwrite: Boolean;
   Image: TAssistantGeneratedImage;
   Stored: TAssistantStoredImage;
@@ -3826,6 +3881,7 @@ Begin
     End;
   Resolved := ExpandResolvedPath(Resolved);
   Relative := ImageProjectRelative(Resolved);
+  RequestedRelative := Relative;
   If ImageOutputPathRefused(Relative, ErrorText) Then
     Begin
       FailWrite;
@@ -3842,12 +3898,9 @@ Begin
       FailWrite;
       Exit;
     End;
-  If Not ImageExtensionMime(Resolved, ExpectedMime) Then
-    Begin
-      ErrorText := 'Image path must end in png, jpg, jpeg, webp, or gif.';
-      FailWrite;
-      Exit;
-    End;
+  { A missing or unknown extension means the format was not specified. }
+  ExpectedMime := '';
+  ImageExtensionMime(Resolved, ExpectedMime);
   { Path checks are done. The draw is the first network call. }
   If Not ReadActiveProfileCall(Profile) Then
     Begin
@@ -3875,11 +3928,36 @@ Begin
       FailWrite;
       Exit;
     End;
+  { The extension is a hint. The image model chooses the codec. Save that format. }
   If SniffedMime <> ExpectedMime Then
     Begin
-      ErrorText := 'Image bytes do not match the file extension.';
-      FailWrite;
-      Exit;
+      ChosenExt := ExtensionForStillMime(SniffedMime);
+      If ChosenExt = '' Then
+        Begin
+          ErrorText := 'Generated image bytes are not a still image.';
+          FailWrite;
+          Exit;
+        End;
+      Resolved := PathWithStillExtension(Resolved, ChosenExt);
+      Relative := ImageProjectRelative(Resolved);
+      If ImageOutputPathRefused(Relative, ErrorText) Then
+        Begin
+          FailWrite;
+          Exit;
+        End;
+      If SymlinkLeavesProject(Resolved) Then
+        Begin
+          ErrorText := 'Refusing a symbolic link that leaves the project.';
+          FailWrite;
+          Exit;
+        End;
+      If ImageDestinationBlocked(Resolved, Overwrite, ErrorText) Then
+        Begin
+          If Pos('overwrite', ErrorText) > 0 Then
+            ErrorText := ErrorText + ' ' + Relative;
+          FailWrite;
+          Exit;
+        End;
     End;
   Image.Mime := SniffedMime;
   Image.Width := Width;
@@ -3890,6 +3968,8 @@ Begin
       Exit;
     End;
   ResultText := GeneratedImageResultText(Relative, Image);
+  If RequestedRelative <> Relative Then
+    ResultText := ResultText + LineEnding + 'requested=' + RequestedRelative + LineEnding + 'chosen=' + SniffedMime;
   If ImageModel <> '' Then
     ResultText := ResultText + LineEnding + 'model=' + ImageModel;
   If Not StoreAssistantImageFromFile(ProjectRootPath, Resolved, Stored, ErrorText) Then
