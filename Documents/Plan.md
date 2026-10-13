@@ -87,7 +87,7 @@ Stop after `Documents/AgenticDevelopmentReview.md` exists. Recommend one of thre
 Recommendation recorded in `Documents/AgenticDevelopmentReview.md`: fold. The user confirms before any skill file is written. Items 4.2 to 4.4 stay not started until that confirmation.
 
 ### 4.2 Adapt the surviving text
-Status: blocked
+Status: complete
 
 If the decision is to keep it, write `.assistant/skills/agentic-development-methodology/SKILL.md`. The heading is **Agentic Development Methodology**. Front matter needs `name`, `description`, and `when-to-use`. The description must say it is process, not Pascal style, and that `free-pascal-engineer` wins on code shape.
 
@@ -95,7 +95,7 @@ Strip the contradicted clauses found in item 3.1. Point Git, globals, forms, and
 
 If the decision is to fold, add one short section titled Agentic Development Methodology to `free-pascal-engineer` and do not create a second skill.
 
-Blocked: item 4.1 recommends fold, and the user has not confirmed it. No skill file is written until that confirmation.
+The fold is in `Documents/free-pascal-engineer.md`. The installed skill was not changed.
 
 ### 4.3 Attach it without the upstream installer
 Status: not started
