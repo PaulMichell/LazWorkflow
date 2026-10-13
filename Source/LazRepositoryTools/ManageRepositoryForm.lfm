@@ -235,7 +235,9 @@ object ManageRepositoryForm: TManageRepositoryForm
           BorderSpacing.Around = 4
           HideSelection = False
           ReadOnly = True
-          ShowRoot = False
+          ShowButtons = True
+          ShowLines = True
+          ShowRoot = True
           TabOrder = 0
           ToolTips = True
           OnChange = FileTreeChange
