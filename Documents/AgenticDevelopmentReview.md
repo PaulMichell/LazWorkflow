@@ -157,3 +157,17 @@ On Plan and Build both bodies are attached (`AssistantConfig` seeds `free-pascal
 The unique remainder, after dropping the harmful clauses and the sections the score marked neutral, is the precedence list, the wording weights, the habit of stating a risky assumption, and the unverified-work report. That is about 2,000 to 3,000 characters. It fits in one section of `free-pascal-engineer`. It would not be hidden there: 3,000 characters is visible inside a 54,000 character skill, and it is too small to justify a second always-on body by size.
 
 A second skill is justified only if process rules must be switchable without turning Pascal style off. That is possible, because `free-pascal-engineer` is seeded onto Plan and Build and a companion skill can be untagged. The sessions scored in this file do not show a need to switch process rules off while keeping Pascal style on. Item 4.1 still makes the adopt, fold, or reject decision.
+
+## Precedence if adopted
+
+Draft for plan item 3.2. Not installed. Not written into a skill.
+
+Highest first:
+
+1. Host safety rules, then the active mode contract. Plan does not edit source. Build implements. An explicit instruction does not override either.
+2. An explicit instruction in the current request or the active plan, including a commit the plan already authorizes.
+3. `free-pascal-engineer` for Pascal, Lazarus, and Michell Computing style: mode block, naming, formatting, forms, ActionList, layering, Git commit shape, registration, and the desktop scaffold.
+4. Agentic Development Methodology for process only, after the contradicted clauses are removed: no wait for "let's build this" in Build, no commit ban, no ban on global registration, and no licence to copy a harmful Pascal pattern.
+5. Generic advice in either document.
+
+A guide hard stop does not outrank items 1–3. A citation habit may remain. It does not authorize a stop that the mode contract or an explicit instruction already settled.
