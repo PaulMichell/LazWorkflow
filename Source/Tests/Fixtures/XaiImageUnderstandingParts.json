@@ -1,7 +1,0 @@
-{
-  "guide": "xAI image understanding. Responses user content is input_image with image_url as a data URI string, then input_text. Chat Completions user content is an image_url object whose url is a data URI, detail omitted, then a text part. DATAURI is replaced by the upload derivative.",
-  "text_only_responses": "{\"model\":\"grok-4.5\",\"stream\":true,\"store\":false,\"input\":[{\"role\":\"system\",\"content\":\"You are the assistant.\"},{\"type\":\"reasoning\",\"id\":\"reasoning_item_1\",\"encrypted_content\":\"enc_hidden\"},{\"role\":\"user\",\"content\":\"Hello\"}],\"include\":[\"reasoning.encrypted_content\"],\"reasoning\":{\"effort\":\"high\"},\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read_file\"}}]}",
-  "text_only_chat": "{\"model\":\"grok-4.5\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"assistant\",\"content\":\"Hello\"}],\"reasoning_effort\":\"high\"}",
-  "responses_user": {"role":"user","content":[{"type":"input_image","image_url":"DATAURI"},{"type":"input_text","text":"Look at the attached image(s)."}]},
-  "chat_user": {"role":"user","content":[{"type":"image_url","image_url":{"url":"DATAURI"}},{"type":"text","text":"Look at the attached image(s)."}]}
-}

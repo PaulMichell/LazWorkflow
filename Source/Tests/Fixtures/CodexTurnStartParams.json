@@ -1,8 +1,0 @@
-{
-  "decision": "Text-only turns stay one text item. Image refs use documented localImage paths of the shared upload derivative, not a guessed field and not a text note.",
-  "threadId": "thread-1",
-  "prompt": "See the note",
-  "effort": "high",
-  "withEffort": "{\"threadId\":\"thread-1\",\"input\":[{\"type\":\"text\",\"text\":\"See the note\"}],\"approvalPolicy\":\"on-request\",\"permissions\":\"lazarus_ide\",\"summary\":\"auto\",\"effort\":\"high\"}",
-  "withoutEffort": "{\"threadId\":\"thread-1\",\"input\":[{\"type\":\"text\",\"text\":\"See the note\"}],\"approvalPolicy\":\"on-request\",\"permissions\":\"lazarus_ide\",\"summary\":\"auto\"}"
-}
