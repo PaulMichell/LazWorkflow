@@ -16,6 +16,20 @@ This work stays in LazWorkflow / LazAssistantTools. Do not add image-generation 
 
 Out of scope: video, image editing, more than one image per call, and deferred polling. A program icon is one synchronous draw.
 
+## Remaining work
+
+Finish 3.2, then 5.1, then 5.2. One item per turn. Do not start the next item in the same turn.
+
+Do not mark an item complete until every program named in that item has been compiled and has printed that it passed. A package compile is not that check. The IDE test command is disabled. Do not use it, and do not enable it. Run the fixture runner instead:
+
+`python3 Source/Tests/run_assistant_tests.py --lazarus-root /home/paul/Projects/FreePascal/Lazarus --only ProgramName`
+
+Pass `--only` once per program. Add `--gui` only when the item says the program is in the GUI list. The runner refuses a name that is not in its list, so register the program in that same item before running it.
+
+When those programs have passed, commit only the files that item names. Then set that item's Status to complete, then commit this plan. Do not ask again before those commits. Leave every other dirty path unstaged. That includes old plans, reports, `.assistant/`, `Packages/a.out`, and compiled test binaries.
+
+Drafts are already in the working tree. Finish them. Do not revert them and start again. Do not move a file from one item into another.
+
 ## 1. One image model, not a delivery mode
 
 The profile no longer chooses how pixels arrive. It chooses whether drawing is on, and which image model draws. The writer stays one function. The backend chooses the request body.
@@ -54,9 +68,26 @@ Status: complete
 The body uses the stored image model, never the chat model. An optional tool shape is translated by the builder in item 1.3. A shape that builder cannot express is omitted, not a failed draw, so a Grok ratio does not make an OpenAI call fail and an OpenAI pixel size does not make an Imagine call fail. Do not invent a size the endpoint may reject. An empty image model, a backend with no builder, or a non-HTTPS endpoint fails before the post. Bound the HTTP call to about a minute so a hung endpoint cannot occupy the Build round budget.
 
 ### 3.2 Accept one image and fail closed
-Status: blocked
+Status: not started
 
 Both builders share the images-endpoint parser. Require exactly one image. Prefer `b64_json`. If the body has only a temporary `url`, download that URL once with the same bearer and then stop. A missing image, a bad status, or a download failure returns the status and a short body, plus a line that says not to retry. Do not leave the model to fetch the URL. Do not fall back to the chat model or to a response-part harvest. A test hook supplies fixture bytes. No live call in tests.
+
+This item is only the parser and its fixture. It does not draw through `write_image`, and it does not change the tool schema or the harness prompt.
+
+A draft is already in the working tree. Finish it. Do not replace it. `AssistantHttps.pas` has the bounded byte GET. `AssistantImageAdapters.pas` has the shared parser, the one download, and the fetch hook. `AssistantGeneratedImageTest.lpr` has `TestAcceptOneImage`. Parser-id comments in that test belong in this item. They are not a delivery mode, and they are not item 5.1.
+
+Commit only these files, after the program prints that it passed:
+
+- `Source/LazAssistantTools/AssistantHttps.pas`
+- `Source/LazAssistantTools/AssistantImageAdapters.pas`
+- `Source/Tests/AssistantGeneratedImageTest.lpr`
+- `Source/Tests/run_assistant_tests.py`, and only to add `--only` and to register `AssistantGeneratedImageTest`
+
+Do not register `AssistantWriteImageTest` in this commit. Do not edit `AssistantWriteImageTest.lpr`, `AssistantConnectionsTest.lpr`, `AssistantWorkTargetTest.lpr`, or `AssistantHarnessTest.lpr`.
+
+Register the program, then run:
+
+`python3 Source/Tests/run_assistant_tests.py --lazarus-root /home/paul/Projects/FreePascal/Lazarus --only AssistantGeneratedImageTest`
 
 ## 4. The tool the model sees
 
@@ -79,14 +110,36 @@ After one failed `write_image` in a turn, a later call in that turn does not pos
 
 ## 5. Verification
 
-Fixture tests only, except one hand check. Update the tests that still assume response-part ids or that the chat model is the image model: `AssistantConnectionsTest`, `AssistantGeneratedImageTest`, `AssistantWorkTargetTest`, and the harness prompt check.
+Fixture tests only, except one hand check. Item 3.2 owns `AssistantGeneratedImageTest`. This section owns the tool fixtures. Do not edit the parser units here.
 
 ### 5.1 Cover Grok and another image model without a network
 Status: not started
 
+Start this only after 3.2 is complete and committed.
+
 Flag off: the tool is absent, and a call is an unknown tool. Flag on: the schema requires `prompt`, has optional `shape`, and has no `image_id`. A Grok mock post of a fixture PNG writes the file. The posted JSON contains `grok-imagine-image-2.0`, not the chat model, and has no `size`. An OpenAI-compatible mock with a different image model posts that id, has no `aspect_ratio`, and does not post the chat model. The result names the image model that was posted. Claude or Codex with the flag on does not post. Refuse a missing image model, a missing prompt, path escape, a symlink out of the project, bad magic bytes, overwrite without the flag, and any call in Plan or Document mode. An inapplicable shape is omitted and the draw still proceeds. A second call after a failed draw does not post. A subagent tool list has no `write_image`.
+
+Drafts are already in the working tree. Finish them. Do not replace them. `AssistantWriteImageTest.lpr` is the new program and holds the checks above. `AssistantConnectionsTest.lpr`, `AssistantWorkTargetTest.lpr`, and `AssistantHarnessTest.lpr` still need to match the draw-and-save tool instead of a response-part id. The harness check is the image-output prompt: call once, do not name an image model, do not claim a file unless the result starts with Wrote.
+
+Do not edit `AssistantHttps.pas`, `AssistantImageAdapters.pas`, or `AssistantGeneratedImageTest.lpr` in this item.
+
+Commit only these files, after every named program has printed that it passed:
+
+- `Source/Tests/AssistantWriteImageTest.lpr`
+- `Source/Tests/AssistantConnectionsTest.lpr`
+- `Source/Tests/AssistantWorkTargetTest.lpr`
+- `Source/Tests/AssistantHarnessTest.lpr`
+- `Source/Tests/run_assistant_tests.py`, and only to register `AssistantWriteImageTest`
+
+Register `AssistantWriteImageTest` first. Then run:
+
+`python3 Source/Tests/run_assistant_tests.py --lazarus-root /home/paul/Projects/FreePascal/Lazarus --only AssistantWriteImageTest --only AssistantConnectionsTest --only AssistantWorkTargetTest`
+
+`AssistantHarnessTest` is on the GUI list. Run it with `--gui --only AssistantHarnessTest`. It does not need a window. If that run cannot start, compile and run that one program with the same `fpc` flags the runner prints, and do not mark this item complete until that binary has passed.
 
 ### 5.2 Check one icon by hand
 Status: not started
+
+Start this only after 5.1 is complete and committed. Do not change fixtures in this item.
 
 With a Grok connection, image output on, and the default image model, ask for a PNG program icon. Confirm one image request, a real PNG at the requested path, `grok-imagine-image-2.0` in the tool result, and the picture shown in the chat. A forced bad image model must fail once and must not start a search loop. A second live provider is not required. Item 5.1 is the check that another image model is posted unchanged.
