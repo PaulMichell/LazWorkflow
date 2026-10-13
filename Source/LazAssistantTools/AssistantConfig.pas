@@ -5,7 +5,7 @@ Unit AssistantConfig;
   Size note: exceeds the 1000 line preference. Sampling migration, skill modes,
   added guidance files, and the assistant section load/save are one store.
   Splitting them would leave the private config fields behind.
-  Reviewed 2026-10-10: no separate consumer identified. }
+  Reviewed 2026-10-13: declared skill modes stay with this store. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -81,8 +81,12 @@ Type
     Function SkillHasMode(Const SkillName, ModeName: String): Boolean;
     /// Replaces one skill's mode list. An empty list removes the skill. Chat is stored only when named.
     Procedure SetSkillModes(Const SkillName: String; Modes: TStrings);
-    /// Fills Names with skills tagged for ModeName. Clears Names first.
+    /// Fills Names with skills tagged for ModeName. Clears Names first. Hidden skills are omitted.
     Procedure CollectSkillsForMode(Const ModeName: String; Names: TStrings);
+    /// Adds skills whose SKILL.md declares ModeName, unless the user already saved a mode list.
+    Procedure ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
+    /// Copies declared modes into memory for skills that have no saved list. Does not write the settings file.
+    Procedure RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
     /// Fills Modes with the tags for SkillName. Clears Modes first.
     Procedure CollectModesForSkill(Const SkillName: String; Modes: TStrings);
     /// Fills Names with every skill that has a saved mode list. Clears Names first.
@@ -1114,8 +1118,74 @@ Begin
   If Not Assigned(FSkillModes) Then
     Exit;
   For I := 0 To FSkillModes.Count - 1 Do
-    If SkillModeListed(FSkillModes, FSkillModes.Names[I], Mode) Then
+    If SkillModeListed(FSkillModes, FSkillModes.Names[I], Mode) And
+      (Not SkillIsHidden(FSkillModes.Names[I])) Then
       Names.Add(FSkillModes.Names[I]);
+End;
+
+Procedure TAssistantConfig.ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
+Var
+  Skills: TAssistantSkillList;
+  Declared, Saved: TStringList;
+  I: Integer;
+  Mode, Name: String;
+Begin
+  If Not Assigned(Names) Then
+    Exit;
+  Mode := LowerCase(Trim(ModeName));
+  If Not IsSkillMode(Mode) Then
+    Exit;
+  For I := Names.Count - 1 DownTo 0 Do
+    If SkillIsHidden(Trim(Names[I])) Then
+      Names.Delete(I);
+  Saved := TStringList.Create;
+  Declared := TStringList.Create;
+  Try
+    Saved.CaseSensitive := False;
+    Declared.CaseSensitive := False;
+    CollectSkillModeNames(Saved);
+    Skills := ListGuidanceDocuments(ProjectRoot);
+    For I := 0 To High(Skills) Do
+      Begin
+        Name := Skills[I].Name;
+        If (Name = '') Or (Names.IndexOf(Name) >= 0) Or (Saved.IndexOf(Name) >= 0) Or SkillIsHidden(Name) Then
+          Continue;
+        Declared.Clear;
+        If SkillDeclaredModes(Name, ProjectRoot, Declared) And (Declared.IndexOf(Mode) >= 0) Then
+          Names.Add(Name);
+      End;
+    OmitRetiredBehaviourGuide(Names);
+  Finally
+    Declared.Free;
+    Saved.Free;
+  End;
+End;
+
+Procedure TAssistantConfig.RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
+Var
+  Saved, Declared: TStringList;
+  I: Integer;
+Begin
+  If Not Assigned(Names) Then
+    Exit;
+  Saved := TStringList.Create;
+  Declared := TStringList.Create;
+  Try
+    Saved.CaseSensitive := False;
+    Declared.CaseSensitive := False;
+    CollectSkillModeNames(Saved);
+    For I := 0 To Names.Count - 1 Do
+      Begin
+        If (Trim(Names[I]) = '') Or (Saved.IndexOf(Names[I]) >= 0) Or SkillIsHidden(Names[I]) Then
+          Continue;
+        Declared.Clear;
+        If SkillDeclaredModes(Names[I], ProjectRoot, Declared) And (Declared.Count > 0) Then
+          SetSkillModes(Names[I], Declared);
+      End;
+  Finally
+    Declared.Free;
+    Saved.Free;
+  End;
 End;
 
 Procedure TAssistantConfig.CollectModesForSkill(Const SkillName: String; Modes: TStrings);

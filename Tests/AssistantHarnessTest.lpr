@@ -12,7 +12,7 @@ Uses
   cthreads,
   {$ENDIF}
   Interfaces, Classes, SysUtils, FileUtil, LazFileUtils, AssistantConversation, AssistantConnections,
-  AssistantSkills, AssistantHarness, WorkflowSettings;
+  AssistantSkills, AssistantHarness, AssistantConfig, WorkflowSettings;
 
 Var
   FailCount: Integer;
@@ -300,12 +300,156 @@ Begin
   End;
 End;
 
+Function HideNamedSkill(Const SkillName: String): Boolean;
+Begin
+  Result := SameText(SkillName, 'secret-skill');
+End;
+
+Function RepositoryRoot: String;
+Var
+  Dir, Parent: String;
+  Pass: Integer;
+Begin
+  Result := '';
+  For Pass := 1 To 2 Do
+    Begin
+      If Pass = 1 Then
+        Dir := ExcludeTrailingPathDelimiter(GetCurrentDir)
+      Else
+        Dir := ExcludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+      While Dir <> '' Do
+        Begin
+          If FileExistsUTF8(IncludeTrailingPathDelimiter(Dir) + 'Documents' + PathDelim + 'Plan.md') And
+            FileExistsUTF8(IncludeTrailingPathDelimiter(Dir) + '.assistant' + PathDelim + 'skills' + PathDelim +
+            AssistantMethodologySkillName + PathDelim + 'SKILL.md') Then
+            Exit(IncludeTrailingPathDelimiter(Dir));
+          Parent := ExcludeTrailingPathDelimiter(ExtractFilePath(Dir));
+          If (Parent = '') Or (Parent = Dir) Then
+            Break;
+          Dir := Parent;
+        End;
+    End;
+End;
+
+Procedure TestDeclaredSkillModes;
+Var
+  Root, Prompt: String;
+  Harness: TAssistantHarness;
+  Names, Modes: TStringList;
+  PreviousHide: TSkillHiddenQuery;
+Begin
+  Root := MakeTempRoot;
+  Harness := TAssistantHarness.Create;
+  Names := TStringList.Create;
+  Modes := TStringList.Create;
+  PreviousHide := SkillHiddenQuery;
+  Try
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'declared-skill' + PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: declared-skill' + LineEnding + 'description: declared process' + LineEnding +
+      'modes: plan, build' + LineEnding + '---' + LineEnding + 'DECLARED BODY' + LineEnding);
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'secret-skill' + PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: secret-skill' + LineEnding + 'description: hidden process' + LineEnding +
+      'modes: plan, build' + LineEnding + '---' + LineEnding + 'SECRET BODY' + LineEnding);
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + AssistantRetiredBehaviourSkillName +
+      PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: ' + AssistantRetiredBehaviourSkillName + LineEnding +
+      'modes: plan, build' + LineEnding + '---' + LineEnding + 'BEHAVE BODY' + LineEnding);
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + AssistantMethodologySkillName +
+      PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: ' + AssistantMethodologySkillName + LineEnding +
+      'modes: plan, build' + LineEnding + '---' + LineEnding + 'METHOD BODY' + LineEnding);
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('declared plan mode is attached on build', Pos('DECLARED BODY', Prompt) > 0);
+    Check('build does not attach a chat-only absence error', Pos('could not be loaded', Prompt) = 0);
+    Prompt := Harness.BuildSystemPrompt(amPlan, Names, Root, '');
+    Check('declared plan mode is attached on plan', Pos('DECLARED BODY', Prompt) > 0);
+    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
+    Check('declared skill is not attached on chat', Pos('DECLARED BODY', Prompt) = 0);
+    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
+    Check('declared skill is not attached on inspect', Pos('DECLARED BODY', Prompt) = 0);
+    Names.Add('missing-skill');
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('absent skill is not injected', (Pos('could not be loaded', Prompt) = 0) And
+      (Pos('missing-skill', Prompt) = 0));
+    Names.Clear;
+    Names.Add('secret-skill');
+    SkillHiddenQuery := @HideNamedSkill;
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('hidden skill is not injected', Pos('SECRET BODY', Prompt) = 0);
+    SkillHiddenQuery := PreviousHide;
+    Names.Clear;
+    Names.Add(AssistantRetiredBehaviourSkillName);
+    Names.Add(AssistantMethodologySkillName);
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('replacement is attached beside the engineer tag list', Pos('METHOD BODY', Prompt) > 0);
+    Check('retired BEHAVE is not attached with the replacement', Pos('BEHAVE BODY', Prompt) = 0);
+    Names.Clear;
+    Names.Add(AssistantRetiredBehaviourSkillName);
+    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
+    Check('retired BEHAVE still attaches when it is the only tag', Pos('BEHAVE BODY', Prompt) > 0);
+    Modes.Add('inspect');
+    AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+    Names.Clear;
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('saved mode list is not overridden by the declaration', Pos('DECLARED BODY', Prompt) = 0);
+    Modes.Clear;
+    AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+  Finally
+    SkillHiddenQuery := PreviousHide;
+    Modes.Clear;
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+    Modes.Free;
+    Names.Free;
+    Harness.Free;
+    DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
+  End;
+End;
+
+Procedure TestMethodologySkillResolves;
+Var
+  Root, Prompt, Body, Err: String;
+  Harness: TAssistantHarness;
+  Names: TStringList;
+Begin
+  Root := RepositoryRoot;
+  Check('methodology skill is in this repository', Root <> '');
+  If Root = '' Then
+    Exit;
+  Harness := TAssistantHarness.Create;
+  Names := TStringList.Create;
+  Try
+    Check('new skill id resolves', ResolveSkillFile(AssistantMethodologySkillName, Root) <> '');
+    Check('methodology body loads', LoadSkillBody(AssistantMethodologySkillName, Root, Body, Err) And (Body <> ''));
+    Check('methodology has no commit ban', Pos('never commit', LowerCase(Body)) = 0);
+    Check('methodology has no global-state ban', Pos('never use global state', LowerCase(Body)) = 0);
+    Check('AGENTS.md was not written', Not FileExistsUTF8(Root + 'AGENTS.md'));
+    Names.Add(AssistantDefaultSkillName);
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
+    Check('build attaches the methodology skill',
+      Pos('----- begin skill: ' + AssistantMethodologySkillName + ' -----', Prompt) > 0);
+    If ResolveSkillFile(AssistantDefaultSkillName, Root) <> '' Then
+      Check('build attaches free-pascal-engineer beside it',
+        Pos('----- begin skill: ' + AssistantDefaultSkillName + ' -----', Prompt) > 0);
+    Check('build prompt does not attach a missing-skill error', Pos('could not be loaded', Prompt) = 0);
+    Names.Clear;
+    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
+    Check('chat does not attach methodology',
+      Pos('----- begin skill: ' + AssistantMethodologySkillName + ' -----', Prompt) = 0);
+  Finally
+    Names.Free;
+    Harness.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFirstNameWins;
   TestHarnessPrompt;
   TestImageOutputPrompt;
   TestGuidanceNames;
+  TestDeclaredSkillModes;
+  TestMethodologySkillResolves;
   TestTodoWrite;
   TestTurnMessages;
   If FailCount = 0 Then

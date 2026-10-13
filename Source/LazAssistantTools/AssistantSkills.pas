@@ -15,6 +15,10 @@ Uses
 Const
   AssistantSkillNoneCaption = '(None)';
   AssistantDefaultSkillName = 'free-pascal-engineer';
+  { Process guide attached beside the engineer skill. Not a Pascal style skill. }
+  AssistantMethodologySkillName = 'agentic-development-methodology';
+  { Retired name of that guide. Leave a user-level copy in place; do not load both. }
+  AssistantRetiredBehaviourSkillName = 'BEHAVE';
   { Soft cap so a huge skill cannot blow the entire context window alone. }
   AssistantSkillMaxChars = 120000;
 
@@ -42,6 +46,10 @@ Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
 Function SkillNameFromFile(Const FilePath: String): String;
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Function LoadSkillBody(Const SkillName, ProjectRoot: String; Out BodyText: String; Out ErrorText: String): Boolean;
+/// Fills Modes from the SKILL.md `modes` field (inspect, document, plan, build, chat). Clears Modes first.
+Function SkillDeclaredModes(Const SkillName, ProjectRoot: String; Modes: TStrings): Boolean;
+/// Drops BEHAVE when the replacement methodology skill is also listed. Leaves the files in place.
+Procedure OmitRetiredBehaviourGuide(Names: TStrings);
 Function FormatSkillCatalog(Const Skills: TAssistantSkillList): String;
 Function BuildSystemPromptWithSkill(Const BasePrompt, SkillName: String): String;
 
@@ -451,6 +459,93 @@ Begin
   Result := Clean;
 End;
 
+Function IsDeclaredSkillMode(Const ModeName: String): Boolean;
+Begin
+  Result := (ModeName = 'inspect') Or (ModeName = 'document') Or (ModeName = 'plan') Or
+    (ModeName = 'build') Or (ModeName = 'chat');
+End;
+
+Procedure SplitDeclaredModes(Const Field: String; Modes: TStrings);
+Var
+  I: Integer;
+  Token: String;
+  C: Char;
+Begin
+  Token := '';
+  For I := 1 To Length(Field) + 1 Do
+    Begin
+      If I <= Length(Field) Then
+        C := Field[I]
+      Else
+        C := ',';
+      If (C = ',') Or (C = ';') Or (C <= ' ') Then
+        Begin
+          Token := LowerCase(Trim(Token));
+          If IsDeclaredSkillMode(Token) And (Modes.IndexOf(Token) < 0) Then
+            Modes.Add(Token);
+          Token := '';
+        End
+      Else
+        Token := Token + C;
+    End;
+End;
+
+Function SkillDeclaredModes(Const SkillName, ProjectRoot: String; Modes: TStrings): Boolean;
+Var
+  SkillFile, Raw, Field: String;
+  SL: TStringList;
+Begin
+  Result := False;
+  If Assigned(Modes) Then
+    Modes.Clear;
+  If (Not Assigned(Modes)) Or (Not SkillNameIsSafe(SkillName)) Then
+    Exit;
+  SkillFile := '';
+  If Assigned(SkillFileResolver) Then
+    SkillFile := Trim(SkillFileResolver(SkillName));
+  If SkillFile = '' Then
+    SkillFile := ResolveSkillFile(SkillName, ProjectRoot);
+  If (SkillFile = '') Or (Not FileExistsUTF8(SkillFile)) Then
+    Exit;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(SkillFile);
+      Raw := SL.Text;
+    Except
+      Exit;
+    End;
+  Finally
+    SL.Free;
+  End;
+  Field := ExtractFrontMatterField(Raw, 'modes');
+  If Field = '' Then
+    Exit;
+  SplitDeclaredModes(Field, Modes);
+  Result := Modes.Count > 0;
+End;
+
+Procedure OmitRetiredBehaviourGuide(Names: TStrings);
+Var
+  I: Integer;
+  HasReplacement: Boolean;
+Begin
+  If Not Assigned(Names) Then
+    Exit;
+  HasReplacement := False;
+  For I := 0 To Names.Count - 1 Do
+    If SameText(Trim(Names[I]), AssistantMethodologySkillName) Then
+      Begin
+        HasReplacement := True;
+        Break;
+      End;
+  If Not HasReplacement Then
+    Exit;
+  For I := Names.Count - 1 DownTo 0 Do
+    If SameText(Trim(Names[I]), AssistantRetiredBehaviourSkillName) Then
+      Names.Delete(I);
+End;
+
 Function FormatSkillCatalog(Const Skills: TAssistantSkillList): String;
 Var
   I: Integer;
@@ -581,11 +676,12 @@ Begin
     Result := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
   If Trim(SkillName) = '' Then
     Exit;
+  If Assigned(SkillHiddenQuery) And SkillHiddenQuery(SkillName) Then
+    Exit;
   If Not LoadUserSkillBody(SkillName, Body, Err) Then
     Begin
-      WorkflowLogger.Warning('AssistantSkills', 'Could not load skill "' + SkillName + '": ' + Err);
-      Result := Result + LineEnding + LineEnding +
-        '(Requested user skill "' + SkillName + '" could not be loaded: ' + Err + ')';
+      { Absent and unreadable skills are not injected. The caller keeps the base prompt. }
+      WorkflowLogger.Debug('AssistantSkills', 'Skill "' + SkillName + '" was not attached: ' + Err);
       Exit;
     End;
   Result :=

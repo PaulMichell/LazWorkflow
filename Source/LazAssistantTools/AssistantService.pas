@@ -815,7 +815,11 @@ Begin
   Names := TStringList.Create;
   Try
     If Assigned(AssistantChatConfig) Then
-      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(FActiveMode), Names);
+      Begin
+        AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(FActiveMode), Names);
+        AssistantChatConfig.ApplyDeclaredSkillModes(AssistantModeToStr(FActiveMode), Root, Names);
+        AssistantChatConfig.RememberDeclaredModes(Root, Names);
+      End;
     If Assigned(WorkflowAssistantHarness) Then
       FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, Names, Root, PlanRel, Not FIsSubagent)
     Else If FActiveMode = amChat Then

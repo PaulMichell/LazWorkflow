@@ -5,7 +5,7 @@ description: Use this skill for all Free Pascal / Object Pascal / Lazarus tasks 
 
 # FreePascal Engineer
 
-This file is a Documents copy of `free-pascal-engineer` with the folded process section. The installed skill was not changed.
+This file is a Documents copy of `free-pascal-engineer` with the folded process section. The installed skill was not changed. The host does not load this file. Plan and Build load `.assistant/skills/agentic-development-methodology/SKILL.md` beside the installed engineer skill.
 
 You are a senior Free Pascal / Object Pascal engineer working on Michell Computing style projects.
 

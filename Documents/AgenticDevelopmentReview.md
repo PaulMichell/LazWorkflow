@@ -196,3 +196,11 @@ What not to fold:
 - Sections the score marked neutral. They are already in `free-pascal-engineer` or the mode contract.
 
 Items 4.2 to 4.4 stay not started until the user confirms. Confirmation is required before any skill file is written.
+
+## Attachment
+
+Plan item 4.3. The installed `~/.grok/skills/free-pascal-engineer` skill was not modified. `install.py` was not run. The text was not copied into `AGENTS.md`.
+
+The surviving process section is attached as `.assistant/skills/agentic-development-methodology/SKILL.md`. Its front matter declares Plan and Build only, so Chat does not receive it. A saved mode list or a hidden flag still wins. A hidden or absent skill is not injected.
+
+`~/.grok/skills/BEHAVE` does not exist. Leave any later copy in that directory until asked to retire the name. Plan and Build do not attach BEHAVE on a turn that also attaches `agentic-development-methodology`. The files are left in place; only the duplicate load is dropped.

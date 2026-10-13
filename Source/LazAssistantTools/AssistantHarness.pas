@@ -66,7 +66,7 @@ Implementation
 
 Uses
   LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion, AssistantPlan,
-  AssistantConnections;
+  AssistantConnections, AssistantConfig;
 
 Constructor TAssistantHarness.Create;
 Begin
@@ -211,9 +211,12 @@ Begin
   Result := '';
   If Trim(SkillName) = '' Then
     Exit;
+  { Hidden and absent skills are not injected. A missing file is not an error in the prompt. }
+  If Assigned(SkillHiddenQuery) And SkillHiddenQuery(SkillName) Then
+    Exit;
   If Not LoadSkillBody(SkillName, ProjectRoot, Body, Err) Then
     Begin
-      Result := '(Skill "' + SkillName + '" could not be loaded: ' + Err + ')';
+      WorkflowLogger.Debug('AssistantHarness', 'Skill "' + SkillName + '" was not attached: ' + Err);
       Exit;
     End;
   Result :=
@@ -225,7 +228,7 @@ End;
 
 Function TAssistantHarness.AttachTaggedSkills(SkillNames: TStrings; Const ProjectRoot: String): String;
 Var
-  Bodies, Seen: TStringList;
+  Bodies, Seen, Names: TStringList;
   I: Integer;
   Name, Body: String;
 Begin
@@ -234,11 +237,16 @@ Begin
     Exit;
   Bodies := TStringList.Create;
   Seen := TStringList.Create;
+  Names := TStringList.Create;
   Try
     Seen.CaseSensitive := False;
-    For I := 0 To SkillNames.Count - 1 Do
+    Names.CaseSensitive := False;
+    Names.AddStrings(SkillNames);
+    { Leave a user-level BEHAVE copy on disk. Do not attach it beside the replacement. }
+    OmitRetiredBehaviourGuide(Names);
+    For I := 0 To Names.Count - 1 Do
       Begin
-        Name := Trim(SkillNames[I]);
+        Name := Trim(Names[I]);
         If (Name = '') Or (Seen.IndexOf(Name) >= 0) Then
           Continue;
         Seen.Add(Name);
@@ -249,6 +257,7 @@ Begin
       End;
     Result := Trim(Bodies.Text);
   Finally
+    Names.Free;
     Seen.Free;
     Bodies.Free;
   End;
@@ -363,50 +372,60 @@ End;
 Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot,
   ActivePlanRel: String; IncludeImageOutput: Boolean): String;
 Var
-  Parts: TStringList;
+  Parts, Names: TStringList;
   Tagged: String;
 Begin
-  { Chat has no catalog, project rules, or tool policy. A tagged body is the only extra. }
-  If Mode = amChat Then
-    Begin
-      Tagged := AttachTaggedSkills(SkillNames, ProjectRoot);
-      If Tagged = '' Then
-        Result :=
-          'You are a helpful assistant in a general chat.' + LineEnding +
-          'You have no project tools, no IDE access, and no attached skill.' + LineEnding +
-          'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
-          'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.'
-      Else
-        Result :=
-          'You are a helpful assistant in a general chat.' + LineEnding +
-          'You have no project tools and no IDE access.' + LineEnding +
-          'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
-          'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.' +
-          LineEnding + LineEnding + Tagged;
-      If Not ActiveProfileImageOutput Then
-        Result := Result + LineEnding + AssistantCannotWriteImagesLine;
-      Exit;
-    End;
-  Parts := TStringList.Create;
+  Names := TStringList.Create;
   Try
-    Parts.Add('You are the Lazarus Project Assistant (' + ModeCaption(Mode) + ' mode).');
-    Parts.Add(BuildWorkPolicy);
-    Parts.Add(BuildToolCalling);
-    Parts.Add(BuildIdeFusion);
-    Parts.Add(BuildCommunication);
-    Parts.Add(BuildFormatting);
-    Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
-    { A subagent passes IncludeImageOutput false. It does not receive write_image. }
-    If IncludeImageOutput And AssistantTurnOffersImageOutput(Mode) Then
-      Parts.Add(AssistantImageOutputPromptSection)
-    Else If Not ActiveProfileImageOutput Then
-      Parts.Add(AssistantCannotWriteImagesLine);
-    Parts.Add(BuildSkillsSection(ProjectRoot, SkillNames));
-    Parts.Add(BuildProjectRules(ProjectRoot));
-    Parts.Add(BuildUserInfo(ProjectRoot));
-    Result := Trim(Parts.Text);
+    Names.CaseSensitive := False;
+    If Assigned(SkillNames) Then
+      Names.AddStrings(SkillNames);
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.ApplyDeclaredSkillModes(AssistantModeToStr(Mode), ProjectRoot, Names);
+    { Chat has no catalog, project rules, or tool policy. A tagged body is the only extra. }
+    If Mode = amChat Then
+      Begin
+        Tagged := AttachTaggedSkills(Names, ProjectRoot);
+        If Tagged = '' Then
+          Result :=
+            'You are a helpful assistant in a general chat.' + LineEnding +
+            'You have no project tools, no IDE access, and no attached skill.' + LineEnding +
+            'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
+            'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.'
+        Else
+          Result :=
+            'You are a helpful assistant in a general chat.' + LineEnding +
+            'You have no project tools and no IDE access.' + LineEnding +
+            'Answer the user directly. Do not claim you can read, search, or edit files.' + LineEnding +
+            'If the question needs the Lazarus project, say they can switch to Inspect, Plan, or Build.' +
+            LineEnding + LineEnding + Tagged;
+        If Not ActiveProfileImageOutput Then
+          Result := Result + LineEnding + AssistantCannotWriteImagesLine;
+        Exit;
+      End;
+    Parts := TStringList.Create;
+    Try
+      Parts.Add('You are the Lazarus Project Assistant (' + ModeCaption(Mode) + ' mode).');
+      Parts.Add(BuildWorkPolicy);
+      Parts.Add(BuildToolCalling);
+      Parts.Add(BuildIdeFusion);
+      Parts.Add(BuildCommunication);
+      Parts.Add(BuildFormatting);
+      Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
+      { A subagent passes IncludeImageOutput false. It does not receive write_image. }
+      If IncludeImageOutput And AssistantTurnOffersImageOutput(Mode) Then
+        Parts.Add(AssistantImageOutputPromptSection)
+      Else If Not ActiveProfileImageOutput Then
+        Parts.Add(AssistantCannotWriteImagesLine);
+      Parts.Add(BuildSkillsSection(ProjectRoot, Names));
+      Parts.Add(BuildProjectRules(ProjectRoot));
+      Parts.Add(BuildUserInfo(ProjectRoot));
+      Result := Trim(Parts.Text);
+    Finally
+      Parts.Free;
+    End;
   Finally
-    Parts.Free;
+    Names.Free;
   End;
 End;
 
