@@ -162,6 +162,7 @@ Type
     Procedure HistoryMutateActionUpdate(Sender: TObject);
     Procedure RewriteHeadActionUpdate(Sender: TObject);
     Procedure FileTreeChange(Sender: TObject; Node: TTreeNode);
+    Procedure FileTreeMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
     Procedure FileImagePaintBoxPaint(Sender: TObject);
   Private
@@ -392,6 +393,16 @@ Begin
       FilesSplitter.ResizeControl := FilesLeftPanel;
     If Assigned(FileCommitSplitter) And Assigned(FileCommitPanel) Then
       FileCommitSplitter.ResizeControl := FileCommitPanel;
+    { Themed expander glyphs are often invisible on GTK, and without ShowRoot the
+      top-level folders have no hit target. Plus/minus is always drawn. KeepCollapsedNodes
+      must stay on, or collapse deletes the children and the folder cannot open again. }
+    If Assigned(FileTree) Then
+      Begin
+        FileTree.Options := [tvoShowButtons, tvoShowLines, tvoShowRoot, tvoKeepCollapsedNodes, tvoReadOnly,
+          tvoToolTips, tvoRowSelect, tvoAutoItemHeight, tvoNoDoubleClickExpand];
+        FileTree.ExpandSignType := tvestPlusMinus;
+        FileTree.HideSelection := False;
+      End;
 
     If Assigned(DiffView) Then
       DiffView.SetViewMode(dvmBrowse);
@@ -1399,6 +1410,21 @@ Procedure TManageRepositoryForm.FileTreeChange(Sender: TObject; Node: TTreeNode)
 Begin
   If Assigned(FFiles) Then
     FFiles.TreeSelectionChanged;
+End;
+
+Procedure TManageRepositoryForm.FileTreeMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Var
+  Node: TTreeNode;
+Begin
+  If (Button <> mbLeft) Or (ssDouble in Shift) Or Not Assigned(FileTree) Then
+    Exit;
+  Node := FileTree.GetNodeAt(X, Y);
+  If Not Assigned(Node) Or Not Node.HasChildren Then
+    Exit;
+  { The tree toggles the expander itself. A click on the folder name must collapse too. }
+  If (X >= Node.DisplayExpandSignLeft) And (X < Node.DisplayExpandSignRight) Then
+    Exit;
+  Node.Expanded := Not Node.Expanded;
 End;
 
 Procedure TManageRepositoryForm.FileCommitListSelectionChange(Sender: TObject; User: Boolean);

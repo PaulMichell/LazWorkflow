@@ -233,7 +233,9 @@ object ManageRepositoryForm: TManageRepositoryForm
         object FileTree: TTreeView
           Align = alClient
           BorderSpacing.Around = 4
+          ExpandSignType = tvestPlusMinus
           HideSelection = False
+          Options = [tvoReadOnly, tvoShowButtons, tvoShowLines, tvoShowRoot, tvoKeepCollapsedNodes, tvoToolTips, tvoRowSelect, tvoAutoItemHeight, tvoNoDoubleClickExpand]
           ReadOnly = True
           ShowButtons = True
           ShowLines = True
@@ -241,6 +243,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           TabOrder = 0
           ToolTips = True
           OnChange = FileTreeChange
+          OnMouseDown = FileTreeMouseDown
         end
       end
       object FilesSplitter: TSplitter

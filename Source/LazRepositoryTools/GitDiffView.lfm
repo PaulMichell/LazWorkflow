@@ -72,7 +72,8 @@ object GitDiffView: TGitDiffView
       ReadOnly = True
       ScrollBars = ssAutoBoth
       TabOrder = 0
-      Options = [tvoShowButtons, tvoShowRoot, tvoShowLines, tvoRowSelect, tvoReadOnly, tvoToolTips]
+      ExpandSignType = tvestPlusMinus
+      Options = [tvoShowButtons, tvoShowRoot, tvoShowLines, tvoRowSelect, tvoReadOnly, tvoToolTips, tvoKeepCollapsedNodes]
       OnChange = TreeChange
     end
     object FileList: TListBox
