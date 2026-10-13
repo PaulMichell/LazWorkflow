@@ -1,6 +1,6 @@
 Unit GitDiffView;
 
-{ SynEdit-based diff viewer: staging tree mode, commit browse, Files tab preview
+{ SynEdit-based diff viewer: staging tree mode, commit browse, Changes tab preview
   with mixed Diff+language highlighting, and image/binary previews
   (c) 2026 Michell Computing.
 
@@ -21,7 +21,7 @@ Uses
   SynGutterLineOverview, GitJobRunner, GitDiffPatch;
 
 Type
-  { dvmEditorOnly: full-file red/green SynEdit only (Files tab). }
+  { dvmEditorOnly: full-file red/green SynEdit only (Changes tab). }
   TGitDiffViewMode = (dvmStaging, dvmBrowse, dvmEditorOnly);
 
   TGitDiffRange = Record
@@ -99,7 +99,7 @@ Type
     FLineDragAnchor: Integer; { 1-based }
     FLineDragWasSelected: Boolean;
     LineDragSnapshot: TGitLineNumberList; { selection at mouse-down for Ctrl+drag }
-    FUseDisplayMap: Boolean; { Files tab: editor lines omit file meta / @@ headers }
+    FUseDisplayMap: Boolean; { Changes tab: editor lines omit file meta / @@ headers }
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
     HunkStartLines: TGitLineNumberList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
@@ -431,7 +431,7 @@ Begin
       DiffEditor.RightGutter.Parts[I].Free;
 
     { Fixed width — AutoSize on the right gutter often collapses to 0 for frames
-      that first layout while their notebook page is hidden (Files tab). }
+      that first layout while their notebook page is hidden (Changes tab). }
     DiffEditor.RightGutter.AutoSize := False;
     DiffEditor.RightGutter.Width := OverviewGutterWidth;
     DiffEditor.RightGutter.Visible := True;
@@ -1506,7 +1506,7 @@ Begin
   If (csLoading in ComponentState) Or (csDestroying in ComponentState) Then
     Exit;
   Try
-    { Files tab hosts Stage Selection on its own button bar below the editor. }
+    { Changes tab hosts Stage Selection on its own button bar below the editor. }
     If Assigned(ToolBar) Then
       ToolBar.Visible := FMode = dvmStaging;
     If Assigned(Tree) Then
@@ -1552,7 +1552,7 @@ Procedure TGitDiffView.SetStagingContext(Const ARepoPath: String; StagedSide: Bo
 Begin
   FRepoPath := ARepoPath;
   FStagedSide := StagedSide;
-  { Do not force dvmStaging – Files tab uses dvmEditorOnly with the same context. }
+  { Do not force dvmStaging – Changes tab uses dvmEditorOnly with the same context. }
   UpdateActionEnabled;
 End;
 
@@ -2090,7 +2090,7 @@ Begin
   If (AtLine < 1) Or (AtLine > Count) Then
     Exit;
 
-  { Files tab: visual hunks = change groups separated by 6+ context lines. }
+  { Changes tab: visual hunks = change groups separated by 6+ context lines. }
   If (FMode = dvmEditorOnly) And Assigned(HunkStartLines) And (HunkStartLines.Count > 0) Then
     Begin
       FirstLine := 0;
@@ -2643,7 +2643,7 @@ Begin
   ClearLineSelection(False);
   ApplyEditorSelectionPolicy;
   { Text under Diff first, then upgrade to mixed language highlighting.
-    Files tab omits file-level meta headers (diff --git / +++ / --- / index). }
+    Changes tab omits file-level meta headers (diff --git / +++ / --- / index). }
   ApplyDiffHighlighter;
   SetEditorDiffText(DiffText, True);
   ApplyMixedDiffHighlighter(SourceFileName);
@@ -2684,7 +2684,7 @@ Begin
   Clear;
   If Title <> '' Then
     TitleLabel.Caption := Title;
-  { Preserve editor-only mode when used from the Files tab. }
+  { Preserve editor-only mode when used from the Changes tab. }
   If FMode = dvmEditorOnly Then
     ApplyViewMode;
   ApplyIDEEditorAppearance;

@@ -1,6 +1,6 @@
-Unit ManageRepositoryFiles;
+Unit ManageRepositoryChanges;
 
-{ Files-tab lists and status apply for Manage Repository (c) 2026 Michell Computing. }
+{ Changes-tab lists and status apply for Manage Repository (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,17 +13,17 @@ Uses
   Classes, SysUtils, StdCtrls, GitService, GitDiffView;
 
 Type
-  TManageFilesPane = Class
+  TManageChangesPane = Class
   Private
     FLastFromStaged: Boolean;
-    FFilesPaths: TStringList;
+    FChangesPaths: TStringList;
     FStagedPaths: TStringList;
     Function DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
     Function FileStatusPassesFilter(Const StatusText: String): Boolean;
   Public
-    FilesList: TListBox;
+    ChangesList: TListBox;
     StagedList: TListBox;
-    FilesDiffView: TGitDiffView;
+    ChangesDiffView: TGitDiffView;
     UntrackedCheck: TCheckBox;
     CleanCheck: TCheckBox;
     IgnoredCheck: TCheckBox;
@@ -31,7 +31,7 @@ Type
     RepoPath: String;
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Bind(AFilesList, AStagedList: TListBox; ADiffView: TGitDiffView;
+    Procedure Bind(AChangesList, AStagedList: TListBox; ADiffView: TGitDiffView;
       AUntrackedCheck, ACleanCheck, AIgnoredCheck: TCheckBox; AStagedLabel: TLabel);
     Function HasStaged: Boolean;
     Function HasUnstaged: Boolean;
@@ -42,7 +42,7 @@ Type
     Procedure ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
     Procedure RefreshSelectedDiff;
     Procedure ShowSelectedDiff(FromStaged: Boolean);
-    Property FilesPaths: TStringList Read FFilesPaths;
+    Property ChangesPaths: TStringList Read FChangesPaths;
     Property StagedPaths: TStringList Read FStagedPaths;
   End;
 
@@ -51,46 +51,46 @@ Implementation
 Uses
   LazFileUtils;
 
-Constructor TManageFilesPane.Create;
+Constructor TManageChangesPane.Create;
 Begin
   Inherited Create;
-  FFilesPaths := TStringList.Create;
-  FFilesPaths.CaseSensitive := FileNameCaseSensitive;
+  FChangesPaths := TStringList.Create;
+  FChangesPaths.CaseSensitive := FileNameCaseSensitive;
   FStagedPaths := TStringList.Create;
   FStagedPaths.CaseSensitive := FileNameCaseSensitive;
   RepoPath := '';
 End;
 
-Destructor TManageFilesPane.Destroy;
+Destructor TManageChangesPane.Destroy;
 Begin
-  FreeAndNil(FFilesPaths);
+  FreeAndNil(FChangesPaths);
   FreeAndNil(FStagedPaths);
   Inherited Destroy;
 End;
 
-Procedure TManageFilesPane.Bind(AFilesList, AStagedList: TListBox; ADiffView: TGitDiffView;
+Procedure TManageChangesPane.Bind(AChangesList, AStagedList: TListBox; ADiffView: TGitDiffView;
   AUntrackedCheck, ACleanCheck, AIgnoredCheck: TCheckBox; AStagedLabel: TLabel);
 Begin
-  FilesList := AFilesList;
+  ChangesList := AChangesList;
   StagedList := AStagedList;
-  FilesDiffView := ADiffView;
+  ChangesDiffView := ADiffView;
   UntrackedCheck := AUntrackedCheck;
   CleanCheck := ACleanCheck;
   IgnoredCheck := AIgnoredCheck;
   StagedLabel := AStagedLabel;
 End;
 
-Function TManageFilesPane.HasStaged: Boolean;
+Function TManageChangesPane.HasStaged: Boolean;
 Begin
   Result := Assigned(FStagedPaths) And (FStagedPaths.Count > 0);
 End;
 
-Function TManageFilesPane.HasUnstaged: Boolean;
+Function TManageChangesPane.HasUnstaged: Boolean;
 Begin
-  Result := Assigned(FFilesPaths) And (FFilesPaths.Count > 0);
+  Result := Assigned(FChangesPaths) And (FChangesPaths.Count > 0);
 End;
 
-Function TManageFilesPane.ListHasSelection(List: TListBox): Boolean;
+Function TManageChangesPane.ListHasSelection(List: TListBox): Boolean;
 Var
   I: Integer;
 Begin
@@ -105,7 +105,7 @@ Begin
       End;
 End;
 
-Function TManageFilesPane.CollectSelected(List: TListBox; Paths: TStringList): TStringList;
+Function TManageChangesPane.CollectSelected(List: TListBox; Paths: TStringList): TStringList;
 Var
   I: Integer;
 Begin
@@ -120,9 +120,9 @@ Begin
       Result.Add(Paths[I]);
 End;
 
-Function TManageFilesPane.CollectActiveSelected: TStringList;
+Function TManageChangesPane.CollectActiveSelected: TStringList;
 Begin
-  Result := CollectSelected(FilesList, FFilesPaths);
+  Result := CollectSelected(ChangesList, FChangesPaths);
   If Result.Count = 0 Then
     Begin
       Result.Free;
@@ -130,29 +130,29 @@ Begin
     End;
 End;
 
-Procedure TManageFilesPane.ClearForNoRepo;
+Procedure TManageChangesPane.ClearForNoRepo;
 Begin
-  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
+  If Not Assigned(ChangesList) Or Not Assigned(StagedList) Then
     Exit;
-  FilesList.Items.BeginUpdate;
+  ChangesList.Items.BeginUpdate;
   StagedList.Items.BeginUpdate;
   Try
-    FilesList.Items.Clear;
+    ChangesList.Items.Clear;
     StagedList.Items.Clear;
-    FFilesPaths.Clear;
+    FChangesPaths.Clear;
     FStagedPaths.Clear;
-    FilesList.Items.Add('(no repository)');
+    ChangesList.Items.Add('(no repository)');
   Finally
     StagedList.Items.EndUpdate;
-    FilesList.Items.EndUpdate;
+    ChangesList.Items.EndUpdate;
   End;
   If Assigned(StagedLabel) Then
     StagedLabel.Caption := 'Staged for commit (0)';
-  If Assigned(FilesDiffView) Then
-    FilesDiffView.Clear;
+  If Assigned(ChangesDiffView) Then
+    ChangesDiffView.Clear;
 End;
 
-Function TManageFilesPane.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
+Function TManageChangesPane.DescribeFileStatus(IndexStatus, WorkTreeStatus: Char): String;
 Var
   X, Y: Char;
 Begin
@@ -180,7 +180,7 @@ Begin
     Result := 'clean';
 End;
 
-Function TManageFilesPane.FileStatusPassesFilter(Const StatusText: String): Boolean;
+Function TManageChangesPane.FileStatusPassesFilter(Const StatusText: String): Boolean;
 Begin
   If StatusText = 'untracked' Then
     Result := Assigned(UntrackedCheck) And UntrackedCheck.Checked
@@ -192,20 +192,20 @@ Begin
     Result := True;
 End;
 
-Procedure TManageFilesPane.ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
+Procedure TManageChangesPane.ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
 Var
   AllEntries: TGitStatusEntryArray;
-  SavedFiles, SavedStaged: TStringList;
+  SavedChanges, SavedStaged: TStringList;
   I: Integer;
   StatusText: String;
 Begin
-  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then Exit;
-  SavedFiles := CollectSelected(FilesList, FFilesPaths);
+  If Not Assigned(ChangesList) Or Not Assigned(StagedList) Then Exit;
+  SavedChanges := CollectSelected(ChangesList, FChangesPaths);
   SavedStaged := CollectSelected(StagedList, FStagedPaths);
-  FilesList.Items.BeginUpdate; StagedList.Items.BeginUpdate;
+  ChangesList.Items.BeginUpdate; StagedList.Items.BeginUpdate;
   Try
-    FilesList.Items.Clear; StagedList.Items.Clear;
-    FFilesPaths.Clear; FStagedPaths.Clear;
+    ChangesList.Items.Clear; StagedList.Items.Clear;
+    FChangesPaths.Clear; FStagedPaths.Clear;
     AllEntries := MergeGitFileEntries(RepoPath, Entries, Tracked);
     For I := 0 To High(AllEntries) Do
       Begin
@@ -217,26 +217,26 @@ Begin
         If GitStatusEntryIsStaged(AllEntries[I]) And Not GitStatusEntryIsUnstaged(AllEntries[I]) Then Continue;
         StatusText := DescribeFileStatus(AllEntries[I].IndexStatus, AllEntries[I].WorkTreeStatus);
         If Not FileStatusPassesFilter(StatusText) Then Continue;
-        FilesList.Items.Add(AllEntries[I].Path + '  ' + StatusText);
-        FFilesPaths.Add(AllEntries[I].Path);
+        ChangesList.Items.Add(AllEntries[I].Path + '  ' + StatusText);
+        FChangesPaths.Add(AllEntries[I].Path);
       End;
-    For I := 0 To FFilesPaths.Count - 1 Do FilesList.Selected[I] := SavedFiles.IndexOf(FFilesPaths[I]) >= 0;
+    For I := 0 To FChangesPaths.Count - 1 Do ChangesList.Selected[I] := SavedChanges.IndexOf(FChangesPaths[I]) >= 0;
     For I := 0 To FStagedPaths.Count - 1 Do StagedList.Selected[I] := SavedStaged.IndexOf(FStagedPaths[I]) >= 0;
-    If FilesList.Items.Count = 0 Then FilesList.Items.Add('(no files)');
+    If ChangesList.Items.Count = 0 Then ChangesList.Items.Add('(no changes)');
   Finally
-    StagedList.Items.EndUpdate; FilesList.Items.EndUpdate;
-    SavedFiles.Free; SavedStaged.Free;
+    StagedList.Items.EndUpdate; ChangesList.Items.EndUpdate;
+    SavedChanges.Free; SavedStaged.Free;
   End;
   If Assigned(StagedLabel) Then StagedLabel.Caption := Format('Staged for commit (%d)', [FStagedPaths.Count]);
   RefreshSelectedDiff;
 End;
 
-Procedure TManageFilesPane.RefreshSelectedDiff;
+Procedure TManageChangesPane.RefreshSelectedDiff;
 Begin
   ShowSelectedDiff(FLastFromStaged);
 End;
 
-Procedure TManageFilesPane.ShowSelectedDiff(FromStaged: Boolean);
+Procedure TManageChangesPane.ShowSelectedDiff(FromStaged: Boolean);
 Var
   List: TListBox;
   Paths: TStringList;
@@ -244,7 +244,7 @@ Var
   Path: String;
 Begin
   FLastFromStaged := FromStaged;
-  If Not Assigned(FilesDiffView) Then
+  If Not Assigned(ChangesDiffView) Then
     Exit;
   If FromStaged Then
     Begin
@@ -253,21 +253,21 @@ Begin
     End
   Else
     Begin
-      List := FilesList;
-      Paths := FFilesPaths;
+      List := ChangesList;
+      Paths := FChangesPaths;
     End;
-  FilesDiffView.SetViewMode(dvmEditorOnly);
-  FilesDiffView.SetStagingContext(RepoPath, FromStaged);
-  If (List = Nil) Or (Paths = Nil) Or Not Assigned(FilesDiffView) Then
+  ChangesDiffView.SetViewMode(dvmEditorOnly);
+  ChangesDiffView.SetStagingContext(RepoPath, FromStaged);
+  If (List = Nil) Or (Paths = Nil) Or Not Assigned(ChangesDiffView) Then
     Exit;
   For I := 0 To List.Count - 1 Do
     If List.Selected[I] And (I < Paths.Count) Then
       Begin
         Path := Paths[I];
-        FilesDiffView.LoadWorkingFile(RepoPath, Path, FromStaged);
+        ChangesDiffView.LoadWorkingFile(RepoPath, Path, FromStaged);
         Exit;
       End;
-  FilesDiffView.Clear;
+  ChangesDiffView.Clear;
 End;
 
 End.

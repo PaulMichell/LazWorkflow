@@ -8,7 +8,7 @@ object ManageRepositoryForm: TManageRepositoryForm
   ClientWidth = 1135
   KeyPreview = True
   Position = poDefaultPosOnly
-  LCLVersion = '4.99.0.0'
+  LCLVersion = '5.99.0.0'
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnKeyDown = FormKeyDown
@@ -27,9 +27,9 @@ object ManageRepositoryForm: TManageRepositoryForm
     Height = 578
     Top = 0
     Width = 1135
-    ActivePage = HistoryTab
+    ActivePage = ChangesTab
     Align = alClient
-    TabIndex = 0
+    TabIndex = 1
     TabOrder = 0
     OnChange = PagesChange
     object HistoryTab: TTabSheet
@@ -105,6 +105,7 @@ object ManageRepositoryForm: TManageRepositoryForm
               Top = 4
               Width = 84
               Action = AmendAction
+              ParentShowHint = False
               ShowHint = True
               TabOrder = 3
             end
@@ -114,6 +115,7 @@ object ManageRepositoryForm: TManageRepositoryForm
               Top = 4
               Width = 84
               Action = RemoveAction
+              ParentShowHint = False
               ShowHint = True
               TabOrder = 4
             end
@@ -194,11 +196,11 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
       end
     end
-    object FilesTab: TTabSheet
-      Caption = 'Files'
+    object ChangesTab: TTabSheet
+      Caption = 'Changes'
       ClientHeight = 543
       ClientWidth = 1129
-      object FilesLeftPanel: TPanel
+      object ChangesLeftPanel: TPanel
         Left = 0
         Height = 543
         Top = 0
@@ -208,7 +210,7 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientHeight = 543
         ClientWidth = 380
         TabOrder = 0
-        object FilesList: TListBox
+        object ChangesList: TListBox
           Left = 4
           Height = 482
           Top = 4
@@ -219,10 +221,10 @@ object ManageRepositoryForm: TManageRepositoryForm
           MultiSelect = True
           TabOrder = 0
           TopIndex = -1
-          OnDblClick = FilesListDblClick
-          OnSelectionChange = FilesListSelectionChange
+          OnDblClick = ChangesListDblClick
+          OnSelectionChange = ChangesListSelectionChange
         end
-        object FilesBottomPanel: TPanel
+        object ChangesBottomPanel: TPanel
           Left = 0
           Height = 53
           Top = 490
@@ -277,13 +279,13 @@ object ManageRepositoryForm: TManageRepositoryForm
           end
         end
       end
-      object FilesSplitter: TSplitter
+      object ChangesSplitter: TSplitter
         Left = 380
         Height = 543
         Top = 0
         Width = 5
       end
-      object FilesRightPanel: TPanel
+      object ChangesRightPanel: TPanel
         Left = 385
         Height = 543
         Top = 0
@@ -324,12 +326,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Left = 4
             BorderSpacing.Top = 4
             BorderSpacing.Right = 4
-            ParentFont = True
-            ScrollBars = ssAutoVertical
             TabOrder = 0
-            WantReturns = True
-            WantTabs = False
-            WordWrap = True
           end
           object CommitActionsPanel: TPanel
             Left = 0
@@ -507,7 +504,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             TabOrder = 6
           end
         end
-        inline FilesDiffView: TGitDiffView
+        inline ChangesDiffView: TGitDiffView
           Left = 4
           Height = 233
           Top = 4
@@ -542,14 +539,14 @@ object ManageRepositoryForm: TManageRepositoryForm
     object AmendAction: TAction
       Caption = 'Amend'
       Enabled = False
-      Hint = 'Edit the last commit on the Files tab. Enabled when HEAD is selected and has not been pushed.'
+      Hint = 'Edit the last commit on the Changes tab. Enabled when HEAD is selected and has not been pushed.'
       OnExecute = AmendActionExecute
       OnUpdate = RewriteHeadActionUpdate
     end
     object RemoveAction: TAction
       Caption = 'Remove'
       Enabled = False
-      Hint = 'Delete the last commit and return its changes to the Files list. Enabled when HEAD is selected and has not been pushed.'
+      Hint = 'Delete the last commit and return its changes to the Changes list. Enabled when HEAD is selected and has not been pushed.'
       OnExecute = RemoveActionExecute
       OnUpdate = RewriteHeadActionUpdate
     end

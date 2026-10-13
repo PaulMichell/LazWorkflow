@@ -33,8 +33,8 @@
         <UnitName Value="ManageRepositoryHistory"/>
       </Item>
       <Item>
-        <Filename Value="../Source/LazRepositoryTools/ManageRepositoryFiles.pas"/>
-        <UnitName Value="ManageRepositoryFiles"/>
+        <Filename Value="../Source/LazRepositoryTools/ManageRepositoryChanges.pas"/>
+        <UnitName Value="ManageRepositoryChanges"/>
       </Item>
       <Item>
         <Filename Value="../Source/LazRepositoryTools/ManageRepositoryForm.pas"/>

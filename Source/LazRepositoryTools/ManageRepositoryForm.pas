@@ -3,7 +3,7 @@ Unit ManageRepositoryForm;
 { Manage Repository window – virtual commit graph and git tools (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. The .lfm remains the shell;
-  History graph paint and Files lists live in coordinator units.
+  History graph paint and Changes lists live in coordinator units.
   Reviewed 2026-08: job/window orchestration stays on the form. }
 
 {$IFDEF FPC}
@@ -16,7 +16,7 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SpellMemo, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryFiles;
+  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryChanges;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -48,7 +48,7 @@ Type
     StatusFooter: TStatusFooterFrame;
     Pages: TPageControl;
     HistoryTab: TTabSheet;
-    FilesTab: TTabSheet;
+    ChangesTab: TTabSheet;
     MainPanel: TPanel;
     DetailPanel: TPanel;
     HistoryButtons: TPanel;
@@ -64,15 +64,15 @@ Type
     GraphHost: TPanel;
     GraphScrollBar: TScrollBar;
     GraphPaintBox: TPaintBox;
-    FilesLeftPanel: TPanel;
-    FilesList: TListBox;
-    FilesBottomPanel: TPanel;
+    ChangesLeftPanel: TPanel;
+    ChangesList: TListBox;
+    ChangesBottomPanel: TPanel;
     FilterGroupBox: TGroupBox;
     UntrackedCheck: TCheckBox;
     CleanCheck: TCheckBox;
     IgnoredCheck: TCheckBox;
-    FilesSplitter: TSplitter;
-    FilesRightPanel: TPanel;
+    ChangesSplitter: TSplitter;
+    ChangesRightPanel: TPanel;
     CommitPanel: TPanel;
     MessageLabel: TLabel;
     MessageEditor: TSpellMemo;
@@ -93,7 +93,7 @@ Type
     DeleteButton: TButton;
     IgnoreButton: TButton;
     IgnoredFilesButton: TButton;
-    FilesDiffView: TGitDiffView;
+    ChangesDiffView: TGitDiffView;
     Popup: TPopupMenu;
     ShowCommitMenuItem: TMenuItem;
     CopyShaMenuItem: TMenuItem;
@@ -130,12 +130,12 @@ Type
     Procedure CopyShaActionExecute(Sender: TObject);
     Procedure CheckoutActionExecute(Sender: TObject);
     Procedure CreateBranchActionExecute(Sender: TObject);
-    Procedure FilesListSelectionChange(Sender: TObject; User: Boolean);
-    Procedure FilesListDblClick(Sender: TObject);
+    Procedure ChangesListSelectionChange(Sender: TObject; User: Boolean);
+    Procedure ChangesListDblClick(Sender: TObject);
     Procedure StagedListSelectionChange(Sender: TObject; User: Boolean);
     Procedure StagedListDblClick(Sender: TObject);
     Procedure FileFilterChange(Sender: TObject);
-    Procedure FilesDiffStatusChanged(Sender: TObject);
+    Procedure ChangesDiffStatusChanged(Sender: TObject);
     Procedure RemoteActionUpdate(Sender: TObject);
     Procedure StageAllActionUpdate(Sender: TObject);
     Procedure StageActionUpdate(Sender: TObject);
@@ -159,7 +159,7 @@ Type
     FClean: Boolean;
     FModel: TGitGraphModel;
     FHistory: TManageHistoryGraph;
-    FFiles: TManageFilesPane;
+    FChanges: TManageChangesPane;
     FSelectedIndex: Integer;
     FIndexing: Boolean;
     FDetailLoading: Boolean;
@@ -170,7 +170,7 @@ Type
     FIndexGen: Integer;
     FDetailGen: Integer;
 
-    { Path lists live on FFiles. }
+    { Path lists live on FChanges. }
     FInListSelChange: Boolean;
     FStatusGen: Integer;
     FStatusJobPending: Boolean;
@@ -186,11 +186,11 @@ Type
     Function GitDirStampChanged: Boolean;
     Procedure UpdateStatus;
     Procedure RefreshRepositoryInfo;
-    Procedure RefreshFiles;
+    Procedure RefreshChanges;
     Procedure ConfigureCommitMessageEditor;
     Function CanMutate: Boolean;
     Function CanRewriteLastCommit: Boolean;
-    Procedure ActivateFilesTab;
+    Procedure ActivateChangesTab;
     Procedure ApplyCommitMessage(Const MessageText: String);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
@@ -201,7 +201,7 @@ Type
     Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
     Procedure GitJobFinished(Job: TGitJob);
     Function SubmitGitJob(Job: TGitJob): Boolean;
-    Procedure SubmitFilesStatus;
+    Procedure SubmitChangesStatus;
     Procedure ScheduleVisibleDetails;
     Procedure StartDetailLoadIfNeeded;
     Procedure StopIndexLoad;
@@ -303,7 +303,7 @@ Begin
   FProbeIntervalSec := 5;
   FModel := TGitGraphModel.Create;
   FHistory := TManageHistoryGraph.Create(Self);
-  FFiles := TManageFilesPane.Create;
+  FChanges := TManageChangesPane.Create;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
   If Assigned(GitJobs) Then
@@ -315,7 +315,7 @@ Begin
   Destroying;
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
-  If Assigned(FilesDiffView) Then FilesDiffView.OnStatusChanged := Nil;
+  If Assigned(ChangesDiffView) Then ChangesDiffView.OnStatusChanged := Nil;
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
   If Assigned(FAutoRefreshTimer) Then
@@ -334,7 +334,7 @@ Begin
   FRemoteOpBusy := False;
   FIndexing := False;
   FDetailLoading := False;
-  FreeAndNil(FFiles);
+  FreeAndNil(FChanges);
   FreeAndNil(FHistory);
   FreeAndNil(FModel);
   Inherited Destroy;
@@ -363,10 +363,10 @@ Begin
 
     If Assigned(DiffView) Then
       DiffView.SetViewMode(dvmBrowse);
-    If Assigned(FilesDiffView) Then
+    If Assigned(ChangesDiffView) Then
       Begin
-        FilesDiffView.SetViewMode(dvmEditorOnly);
-        FilesDiffView.OnStatusChanged := @FilesDiffStatusChanged;
+        ChangesDiffView.SetViewMode(dvmEditorOnly);
+        ChangesDiffView.OnStatusChanged := @ChangesDiffStatusChanged;
       End;
     If Assigned(GraphHost) Then
       Begin
@@ -377,8 +377,8 @@ Begin
       GraphPaintBox.ControlStyle := GraphPaintBox.ControlStyle + [csOpaque];
     If Assigned(FHistory) Then
       FHistory.Bind(GraphPaintBox, GraphScrollBar, FModel);
-    If Assigned(FFiles) Then
-      FFiles.Bind(FilesList, StagedList, FilesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
+    If Assigned(FChanges) Then
+      FChanges.Bind(ChangesList, StagedList, ChangesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
         StagedLabel);
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
@@ -386,8 +386,8 @@ Begin
       CleanCheck.Checked := False;
     If Assigned(IgnoredCheck) Then
       IgnoredCheck.Checked := False;
-    If Assigned(FilesList) Then
-      FilesList.MultiSelect := True;
+    If Assigned(ChangesList) Then
+      ChangesList.MultiSelect := True;
     If Assigned(StagedList) Then
       StagedList.MultiSelect := True;
     ConfigureCommitMessageEditor;
@@ -476,9 +476,9 @@ Var
   FocusedControl: TWinControl;
 Begin
   FocusedControl := ActiveControl;
-  { Graph keys must not steal arrows/Enter from the commit message or file lists. }
+  { Graph keys must not steal arrows/Enter from the commit message or Changes lists. }
   If (Key <> VK_F5) And Assigned(FocusedControl) Then
-    If (FocusedControl = MessageEditor) Or (FocusedControl = FilesList) Or
+    If (FocusedControl = MessageEditor) Or (FocusedControl = ChangesList) Or
        (FocusedControl = StagedList) Or (FocusedControl Is TCustomEdit) Or
        (FocusedControl Is TCustomSynEdit) Or (FocusedControl Is TCustomListBox) Then
       Exit;
@@ -698,8 +698,8 @@ Begin
               Begin
                 ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
                 RefreshRepositoryInfo;
-                If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-                  RefreshFiles;
+                If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+                  RefreshChanges;
               End
             Else
               ManualRefresh;
@@ -723,7 +723,7 @@ Begin
           Begin
             MessageDlg('Commit failed: ' + Job.ErrorText, mtError, [mbOK], 0);
             If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
-              RefreshFiles;
+              RefreshChanges;
             Exit;
           End;
         WorkflowLogger.Info('ManageRepository', 'Created commit ' + Job.ResultSha);
@@ -775,7 +775,7 @@ Begin
             { stage / unstage already logged by GitService when events publish }
           End;
         If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
-          RefreshFiles;
+          RefreshChanges;
       End;
     gjkListStatus:
       Begin
@@ -785,17 +785,17 @@ Begin
         If (Job.Tag <> FStatusGen) Or (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then
           Begin
             If (FRepoPath <> '') And DirectoryExists(FRepoPath) Then
-              SubmitFilesStatus;
+              SubmitChangesStatus;
             Exit;
           End;
         If Job.Ok Then
-          FFiles.ApplyFromStatus(Job.StatusEntries, Job.TrackedFiles)
+          FChanges.ApplyFromStatus(Job.StatusEntries, Job.TrackedFiles)
         Else
           Begin
-            If Assigned(FilesList) Then
+            If Assigned(ChangesList) Then
               Begin
-                FilesList.Items.Clear;
-                FilesList.Items.Add('(status failed)');
+                ChangesList.Items.Clear;
+                ChangesList.Items.Add('(status failed)');
               End;
             WorkflowLogger.Warning('ManageRepository', 'ListStatus: ' + Job.ErrorText);
           End;
@@ -837,10 +837,10 @@ Begin
             If Job.ProbeDigest <> FLastPorcelain Then
               Begin
                 FLastPorcelain := Job.ProbeDigest;
-                RefreshFiles;
+                RefreshChanges;
               End
-            Else If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-              FFiles.RefreshSelectedDiff;
+            Else If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+              FChanges.RefreshSelectedDiff;
             UpdateStatus;
           End;
       End;
@@ -877,7 +877,7 @@ Begin
           End;
         FAmendHead := Job.AmendCommit;
         ApplyCommitMessage(Job.CommitMessage);
-        ActivateFilesTab;
+        ActivateChangesTab;
         WorkflowLogger.Info('ManageRepository', 'Last commit opened for amend');
         ManualRefresh;
         If Assigned(StatusFooter) Then
@@ -899,13 +899,13 @@ Begin
           MessageEditor.Clear;
         If Assigned(UntrackedCheck) Then
           UntrackedCheck.Checked := True;
-        ActivateFilesTab;
+        ActivateChangesTab;
         WorkflowLogger.Info('ManageRepository', 'Removed last commit');
         ManualRefresh;
         If Assigned(StatusFooter) Then
           StatusFooter.SetRightText('Last commit removed');
-        If Assigned(FilesList) And FilesList.CanFocus Then
-          FilesList.SetFocus;
+        If Assigned(ChangesList) And ChangesList.CanFocus Then
+          ChangesList.SetFocus;
       End;
   Else
     { ignore }
@@ -1204,12 +1204,12 @@ Procedure TManageRepositoryForm.PagesChange(Sender: TObject);
 Begin
   If Not Assigned(Pages) Then
     Exit;
-  If Pages.ActivePage = FilesTab Then
+  If Pages.ActivePage = ChangesTab Then
     Begin
-      RefreshFiles;
+      RefreshChanges;
       { Overview paints on a child window that only sizes after the page is shown. }
-      If Assigned(FilesDiffView) Then
-        FilesDiffView.RefreshOverviewGutter;
+      If Assigned(ChangesDiffView) Then
+        ChangesDiffView.RefreshOverviewGutter;
     End
   Else If Pages.ActivePage = HistoryTab Then
     Begin
@@ -1218,31 +1218,31 @@ Begin
     End;
 End;
 
-Procedure TManageRepositoryForm.RefreshFiles;
+Procedure TManageRepositoryForm.RefreshChanges;
 Begin
-  If Assigned(FFiles) Then
-    FFiles.RepoPath := FRepoPath;
-  If Not Assigned(FilesList) Or Not Assigned(StagedList) Then
+  If Assigned(FChanges) Then
+    FChanges.RepoPath := FRepoPath;
+  If Not Assigned(ChangesList) Or Not Assigned(StagedList) Then
     Exit;
   If (FRepoPath = '') Or Not DirectoryExists(FRepoPath) Then
     Begin
-      If Assigned(FFiles) Then
-        FFiles.ClearForNoRepo;
+      If Assigned(FChanges) Then
+        FChanges.ClearForNoRepo;
       Exit;
     End;
   Inc(FStatusGen);
   If FStatusJobPending Then
     Exit;
-  SubmitFilesStatus;
+  SubmitChangesStatus;
 End;
 
-Procedure TManageRepositoryForm.SubmitFilesStatus;
+Procedure TManageRepositoryForm.SubmitChangesStatus;
 Var
   Job: TGitJob;
 Begin
   Job := TGitJob.Create(gjkListStatus);
   Job.RepoPath := FRepoPath;
-  Job.Caption := 'Refreshing files…';
+  Job.Caption := 'Refreshing changes…';
   Job.Tag := FStatusGen;
   Job.IncludeClean := Assigned(CleanCheck) And CleanCheck.Checked;
   Job.IncludeUntracked := Assigned(UntrackedCheck) And UntrackedCheck.Checked;
@@ -1263,11 +1263,11 @@ Begin
     SameText(SelectedSha, FHeadSha);
 End;
 
-Procedure TManageRepositoryForm.ActivateFilesTab;
+Procedure TManageRepositoryForm.ActivateChangesTab;
 Begin
-  If Assigned(Pages) And Assigned(FilesTab) Then
-    Pages.ActivePage := FilesTab;
-  RefreshFiles;
+  If Assigned(Pages) And Assigned(ChangesTab) Then
+    Pages.ActivePage := ChangesTab;
+  RefreshChanges;
 End;
 
 Procedure TManageRepositoryForm.ApplyCommitMessage(Const MessageText: String);
@@ -1286,7 +1286,7 @@ Var
   CurrentAction: TAction;
 Begin
   CurrentAction := Sender As TAction;
-  If FFiles.HasStaged And (Not FFiles.HasUnstaged) Then
+  If FChanges.HasStaged And (Not FChanges.HasUnstaged) Then
     Begin
       CurrentAction.Caption := 'Unstage All';
       CurrentAction.Enabled := CanMutate;
@@ -1294,7 +1294,7 @@ Begin
   Else
     Begin
       CurrentAction.Caption := 'Stage All';
-      CurrentAction.Enabled := CanMutate And FFiles.HasUnstaged;
+      CurrentAction.Enabled := CanMutate And FChanges.HasUnstaged;
     End;
 End;
 
@@ -1304,16 +1304,16 @@ Var
   UnstageMode: Boolean;
 Begin
   CurrentAction := Sender As TAction;
-  UnstageMode := FFiles.HasStaged And ((Not FFiles.HasUnstaged) Or FFiles.ListHasSelection(StagedList));
+  UnstageMode := FChanges.HasStaged And ((Not FChanges.HasUnstaged) Or FChanges.ListHasSelection(StagedList));
   If UnstageMode Then
     Begin
       CurrentAction.Caption := 'Unstage';
-      CurrentAction.Enabled := CanMutate And FFiles.ListHasSelection(StagedList);
+      CurrentAction.Enabled := CanMutate And FChanges.ListHasSelection(StagedList);
     End
   Else
     Begin
       CurrentAction.Caption := 'Stage';
-      CurrentAction.Enabled := CanMutate And FFiles.ListHasSelection(FilesList) And FFiles.HasUnstaged;
+      CurrentAction.Enabled := CanMutate And FChanges.ListHasSelection(ChangesList) And FChanges.HasUnstaged;
     End;
 End;
 
@@ -1322,17 +1322,17 @@ Var
   CurrentAction: TAction;
 Begin
   CurrentAction := Sender As TAction;
-  If Assigned(FilesDiffView) And FilesDiffView.StagedSide Then
+  If Assigned(ChangesDiffView) And ChangesDiffView.StagedSide Then
     CurrentAction.Caption := 'Unstage Selection'
   Else
     CurrentAction.Caption := 'Stage Selection';
-  CurrentAction.Enabled := CanMutate And Assigned(FilesDiffView) And FilesDiffView.HasActiveSelection;
+  CurrentAction.Enabled := CanMutate And Assigned(ChangesDiffView) And ChangesDiffView.HasActiveSelection;
 End;
 
 Procedure TManageRepositoryForm.PathActionUpdate(Sender: TObject);
 Begin
   (Sender As TAction).Enabled := CanMutate And
-    (FFiles.ListHasSelection(FilesList) Or FFiles.ListHasSelection(StagedList));
+    (FChanges.ListHasSelection(ChangesList) Or FChanges.ListHasSelection(StagedList));
 End;
 
 Procedure TManageRepositoryForm.IgnoredFilesActionUpdate(Sender: TObject);
@@ -1347,7 +1347,7 @@ Var
 Begin
   CurrentAction := Sender As TAction;
   AssistantAvailable := SuggestCommitMessageAvailable;
-  CurrentAction.Enabled := SuggestCommitActionEnabled(CanMutate, FFiles.HasStaged);
+  CurrentAction.Enabled := SuggestCommitActionEnabled(CanMutate, FChanges.HasStaged);
   If Not AssistantAvailable Then
     CurrentAction.Hint :=
       'Install LazAssistantTools to suggest commit messages from the Project Assistant.'
@@ -1358,7 +1358,7 @@ End;
 Procedure TManageRepositoryForm.CommitActionUpdate(Sender: TObject);
 Begin
   (Sender As TAction).Enabled := CanMutate And Assigned(MessageEditor) And
-    (Trim(MessageEditor.Text) <> '') And (FFiles.HasStaged Or FAmendHead);
+    (Trim(MessageEditor.Text) <> '') And (FChanges.HasStaged Or FAmendHead);
 End;
 
 Procedure TManageRepositoryForm.RewriteHeadActionUpdate(Sender: TObject);
@@ -1376,37 +1376,37 @@ Begin
   (Sender As TAction).Enabled := CanMutate And (SelectedSha <> '');
 End;
 
-Procedure TManageRepositoryForm.FilesListSelectionChange(Sender: TObject; User: Boolean);
+Procedure TManageRepositoryForm.ChangesListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
+  If (csDestroying In ComponentState) Or Not Assigned(FChanges) Then Exit;
   If FInListSelChange Then
     Exit;
   FInListSelChange := True;
   Try
     { Keep multi-select on this list; only clear the other list's selection. }
-    If Assigned(StagedList) And FFiles.ListHasSelection(StagedList) Then
+    If Assigned(StagedList) And FChanges.ListHasSelection(StagedList) Then
       StagedList.ClearSelection;
-    FFiles.ShowSelectedDiff(False);
+    FChanges.ShowSelectedDiff(False);
   Finally
     FInListSelChange := False;
   End;
 End;
 
-Procedure TManageRepositoryForm.FilesListDblClick(Sender: TObject);
+Procedure TManageRepositoryForm.ChangesListDblClick(Sender: TObject);
 Begin
   StageActionExecute(Sender);
 End;
 
 Procedure TManageRepositoryForm.StagedListSelectionChange(Sender: TObject; User: Boolean);
 Begin
-  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
+  If (csDestroying In ComponentState) Or Not Assigned(FChanges) Then Exit;
   If FInListSelChange Then
     Exit;
   FInListSelChange := True;
   Try
-    If Assigned(FilesList) And FFiles.ListHasSelection(FilesList) Then
-      FilesList.ClearSelection;
-    FFiles.ShowSelectedDiff(True);
+    If Assigned(ChangesList) And FChanges.ListHasSelection(ChangesList) Then
+      ChangesList.ClearSelection;
+    FChanges.ShowSelectedDiff(True);
   Finally
     FInListSelChange := False;
   End;
@@ -1419,7 +1419,7 @@ End;
 
 Procedure TManageRepositoryForm.FileFilterChange(Sender: TObject);
 Begin
-  RefreshFiles;
+  RefreshChanges;
 End;
 
 Procedure TManageRepositoryForm.IgnoredFilesActionExecute(Sender: TObject);
@@ -1430,7 +1430,7 @@ Begin
       Exit;
     End;
   If ShowGitIgnoreForm(FRepoPath) Then
-    RefreshFiles;
+    RefreshChanges;
 End;
 
 Procedure TManageRepositoryForm.RevertActionExecute(Sender: TObject);
@@ -1440,7 +1440,7 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  Paths := FFiles.CollectActiveSelected;
+  Paths := FChanges.CollectActiveSelected;
   If Paths.Count = 0 Then
     Begin
       Paths.Free;
@@ -1468,7 +1468,7 @@ Var
 Begin
   If (FRepoPath = '') Or Not Assigned(GitClient) Then
     Exit;
-  Paths := FFiles.CollectActiveSelected;
+  Paths := FChanges.CollectActiveSelected;
   Try
     If Paths.Count = 0 Then
       Begin
@@ -1502,7 +1502,7 @@ Begin
         mtWarning, [mbOK], 0)
     Else
       WorkflowLogger.Info('ManageRepository', Format('Moved %d path(s) to waste bin', [OkCount]));
-    RefreshFiles;
+    RefreshChanges;
   Finally
     Paths.Free;
   End;
@@ -1515,7 +1515,7 @@ Var
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  Paths := FFiles.CollectActiveSelected;
+  Paths := FChanges.CollectActiveSelected;
   If Paths.Count = 0 Then
     Begin
       Paths.Free;
@@ -1537,18 +1537,18 @@ End;
 Procedure TManageRepositoryForm.StageActionExecute(Sender: TObject);
 Var
   Paths: TStringList;
-  FilesEmpty, UnstageMode: Boolean;
+  ChangesEmpty, UnstageMode: Boolean;
   Job: TGitJob;
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  FilesEmpty := (Not Assigned(FFiles.FilesPaths)) Or (FFiles.FilesPaths.Count = 0);
-  UnstageMode := Assigned(FFiles.StagedPaths) And (FFiles.StagedPaths.Count > 0) And
-    (FilesEmpty Or FFiles.ListHasSelection(StagedList));
+  ChangesEmpty := (Not Assigned(FChanges.ChangesPaths)) Or (FChanges.ChangesPaths.Count = 0);
+  UnstageMode := Assigned(FChanges.StagedPaths) And (FChanges.StagedPaths.Count > 0) And
+    (ChangesEmpty Or FChanges.ListHasSelection(StagedList));
 
   If UnstageMode Then
     Begin
-      Paths := FFiles.CollectSelected(StagedList, FFiles.StagedPaths);
+      Paths := FChanges.CollectSelected(StagedList, FChanges.StagedPaths);
       If Paths.Count = 0 Then
         Begin
           Paths.Free;
@@ -1562,11 +1562,11 @@ Begin
     End
   Else
     Begin
-      Paths := FFiles.CollectSelected(FilesList, FFiles.FilesPaths);
+      Paths := FChanges.CollectSelected(ChangesList, FChanges.ChangesPaths);
       If Paths.Count = 0 Then
         Begin
           Paths.Free;
-          MessageDlg('Select one or more files in the file list to stage.', mtInformation, [mbOK], 0);
+          MessageDlg('Select one or more paths in the Changes list to stage.', mtInformation, [mbOK], 0);
           Exit;
         End;
       Job := TGitJob.Create(gjkStagePaths);
@@ -1578,44 +1578,44 @@ End;
 
 Procedure TManageRepositoryForm.StageAllActionExecute(Sender: TObject);
 Var
-  FilesEmpty, StagedEmpty: Boolean;
+  ChangesEmpty, StagedEmpty: Boolean;
   Job: TGitJob;
 Begin
   If (FRepoPath = '') Or FJobBusy Then
     Exit;
-  FilesEmpty := (Not Assigned(FFiles.FilesPaths)) Or (FFiles.FilesPaths.Count = 0);
-  StagedEmpty := (Not Assigned(FFiles.StagedPaths)) Or (FFiles.StagedPaths.Count = 0);
-  If (Not StagedEmpty) And FilesEmpty Then
+  ChangesEmpty := (Not Assigned(FChanges.ChangesPaths)) Or (FChanges.ChangesPaths.Count = 0);
+  StagedEmpty := (Not Assigned(FChanges.StagedPaths)) Or (FChanges.StagedPaths.Count = 0);
+  If (Not StagedEmpty) And ChangesEmpty Then
     Begin
       Job := TGitJob.Create(gjkUnstagePaths);
       Job.RepoPath := FRepoPath;
-      Job.CopyPathsFrom(FFiles.StagedPaths);
+      Job.CopyPathsFrom(FChanges.StagedPaths);
       SubmitGitJob(Job);
     End
   Else
     Begin
-      If FilesEmpty Then
+      If ChangesEmpty Then
         Exit;
       Job := TGitJob.Create(gjkStagePaths);
       Job.RepoPath := FRepoPath;
-      Job.CopyPathsFrom(FFiles.FilesPaths);
+      Job.CopyPathsFrom(FChanges.ChangesPaths);
       SubmitGitJob(Job);
     End;
 End;
 
 Procedure TManageRepositoryForm.StageSelectionActionExecute(Sender: TObject);
 Begin
-  If Not Assigned(FilesDiffView) Then
+  If Not Assigned(ChangesDiffView) Then
     Exit;
-  If Not FilesDiffView.HasActiveSelection Then
+  If Not ChangesDiffView.HasActiveSelection Then
     Begin
-      MessageDlg('Select lines in the file preview first.', mtInformation, [mbOK], 0);
+      MessageDlg('Select lines in the diff preview first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If FilesDiffView.StagedSide Then
-    FilesDiffView.UnstageSelection
+  If ChangesDiffView.StagedSide Then
+    ChangesDiffView.UnstageSelection
   Else
-    FilesDiffView.StageSelection;
+    ChangesDiffView.StageSelection;
 End;
 
 Procedure TManageRepositoryForm.SuggestMessageActionExecute(Sender: TObject);
@@ -1626,7 +1626,7 @@ Begin
     Exit;
   If Not SuggestCommitMessageAvailable Then
     Exit;
-  If FFiles.StagedPaths.Count = 0 Then
+  If FChanges.StagedPaths.Count = 0 Then
     Begin
       MessageDlg('Stage at least one change before suggesting a commit message.',
         mtInformation, [mbOK], 0);
@@ -1637,10 +1637,10 @@ Begin
   SubmitGitJob(Job);
 End;
 
-Procedure TManageRepositoryForm.FilesDiffStatusChanged(Sender: TObject);
+Procedure TManageRepositoryForm.ChangesDiffStatusChanged(Sender: TObject);
 Begin
-  If (csDestroying In ComponentState) Or Not Assigned(FFiles) Then Exit;
-  RefreshFiles;
+  If (csDestroying In ComponentState) Or Not Assigned(FChanges) Then Exit;
+  RefreshChanges;
 End;
 
 Procedure TManageRepositoryForm.CommitActionExecute(Sender: TObject);
@@ -1658,7 +1658,7 @@ Begin
       MessageDlg('Enter a commit message.', mtWarning, [mbOK], 0);
       Exit;
     End;
-  If (FFiles.StagedPaths.Count = 0) And Not FAmendHead Then
+  If (FChanges.StagedPaths.Count = 0) And Not FAmendHead Then
     Begin
       MessageDlg('Stage at least one change before committing.', mtWarning, [mbOK], 0);
       Exit;
@@ -1710,7 +1710,7 @@ Begin
   If Not CanRewriteLastCommit Then
     Exit;
   If MessageDlg('Remove the last commit from the history?' + LineEnding + LineEnding +
-    'The commit is deleted. Its file changes return to the Files list.',
+    'The commit is deleted. Its changes return to the Changes list.',
     mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
     Exit;
   Job := TGitJob.Create(gjkRemoveLastCommit);
@@ -1969,8 +1969,8 @@ Begin
     Begin
       RefreshRepositoryInfo;
       UpdateStatus;
-      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-        RefreshFiles;
+      If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+        RefreshChanges;
       Exit;
     End;
   If CompareFilenames(NewPath, FRepoPath) <> 0 Then
@@ -1997,8 +1997,8 @@ Begin
       FHistory.SelectedIndex := -1;
       FHistory.Indexing := False;
     End;
-  If Assigned(FFiles) Then
-    FFiles.RepoPath := NewPath;
+  If Assigned(FChanges) Then
+    FChanges.RepoPath := NewPath;
   FLastHeadAge := -1;
   FLastIndexAge := -1;
   FLastProbeAt := 0;
@@ -2016,10 +2016,10 @@ Begin
     GraphPaintBox.Invalidate;
   If FRepoPath <> '' Then
     StartIndexLoad
-  Else If Assigned(FilesList) Then
-    FilesList.Items.Clear;
-  If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-    RefreshFiles;
+  Else If Assigned(ChangesList) Then
+    ChangesList.Items.Clear;
+  If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+    RefreshChanges;
   ApplyConfig;
 End;
 
@@ -2031,8 +2031,8 @@ Begin
   If SameText(RepoPath, FRepoPath) Then
     Begin
       RefreshRepositoryInfo;
-      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-        RefreshFiles;
+      If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+        RefreshChanges;
     End;
 End;
 
@@ -2045,8 +2045,8 @@ Begin
     Begin
       RefreshRepositoryInfo;
       UpdateStatus;
-      If Assigned(Pages) And (Pages.ActivePage = FilesTab) Then
-        RefreshFiles;
+      If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+        RefreshChanges;
     End;
 End;
 

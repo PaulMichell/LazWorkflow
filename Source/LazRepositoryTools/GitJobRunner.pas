@@ -229,7 +229,7 @@ Begin
     gjkRevertPaths: Result := 'Reverting…';
     gjkAppendIgnore: Result := 'Updating ignore list…';
     gjkApplyPatch: Result := 'Applying selection…';
-    gjkListStatus: Result := 'Refreshing files…';
+    gjkListStatus: Result := 'Refreshing changes…';
     gjkRepoProbe: Result := 'Checking repository…';
     gjkSuggestMessage: Result := 'Suggesting commit message…';
     gjkIndexHistory: Result := 'Indexing…';
