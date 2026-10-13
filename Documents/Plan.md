@@ -98,11 +98,13 @@ If the decision is to fold, add one short section titled Agentic Development Met
 The fold is in `Documents/free-pascal-engineer.md`. The installed skill was not changed.
 
 ### 4.3 Attach it without the upstream installer
-Status: not started
+Status: complete
 
 Tag the surviving skill on Plan and Build next to `free-pascal-engineer`. Do not tag it on Chat. Do not copy it into `AGENTS.md`. Do not run `install.py`. If a user-level `~/.grok/skills/BEHAVE` copy exists, leave it until the user asks to retire that name, and note the duplicate so Plan and Build do not load both.
 
 Update `Tests/AssistantHarnessTest.lpr` only if skill discovery or mode tagging behaviour changes. The new skill id must resolve, and a hidden or absent skill must not be injected.
+
+Attached as `.assistant/skills/agentic-development-methodology/SKILL.md`, declared for Plan and Build only. Chat is not tagged. `AGENTS.md` was not written and `install.py` was not run. The installed engineer skill was not modified. `~/.grok/skills/BEHAVE` does not exist; a later copy is left in place and is not attached on a turn that also has this skill.
 
 ### 4.4 Check the combined prompt
 Status: not started
