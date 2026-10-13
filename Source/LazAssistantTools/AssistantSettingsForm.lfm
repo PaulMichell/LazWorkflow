@@ -160,9 +160,12 @@ object AssistantSettingsForm: TAssistantSettingsForm
           >
           FixedCols = 0
           FixedRows = 1
-          Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goDrawFocusSelected, goColSizing, goEditing, goRowSelect, goThumbTracking, goSmoothScroll]
+          Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goDrawFocusSelected, goColSizing, goEditing, goRowSelect, goThumbTracking, goSmoothScroll, goCellHints]
+          ParentShowHint = False
+          ShowHint = True
           RowCount = 1
           TabOrder = 0
+          OnGetCellHint = SkillsGridGetCellHint
           OnSelection = SkillsGridSelection
         end
       end

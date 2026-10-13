@@ -4,9 +4,10 @@ Unit AssistantSettingsForm;
 
   Size note: exceeds the 1000 line preference. General, Connections, Spelling
   and Tests are one streamed form so the designer opens a single resource.
-  Reviewed 2026-10-10: the skills grid, path label, and add/remove bar are streamed
-  in SkillsGroup. Kind-specific groups stay here. General groups are alTop in
-  reverse resource order so the page reads Transcript, Prompt, Context, then Skills. }
+  Reviewed 2026-10-13: the skills grid, path label, and add/remove bar are streamed
+  in SkillsGroup. The skill-name cell hint shows the file path. Kind-specific
+  groups stay here. General groups are alTop in reverse resource order so the
+  page reads Transcript, Prompt, Context, then Skills. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -174,6 +175,7 @@ Type
     Procedure AddSkillButtonClick(Sender: TObject);
     Procedure RemoveSkillButtonClick(Sender: TObject);
     Procedure SkillsGridSelection(Sender: TObject; ACol, ARow: Integer);
+    Procedure SkillsGridGetCellHint(Sender: TObject; ACol, ARow: Integer; Var HintText: String);
     Procedure ImageOutputCheckClick(Sender: TObject);
   Private
     Connections: TAssistantConnections;
@@ -190,6 +192,7 @@ Type
     Procedure UpdateCompactAvailability;
     Function SettingsProjectRoot: String;
     Function SkillRowIndex(Const SkillName: String): Integer;
+    Function SkillFileForRow(Row: Integer): String;
     Function SelectedSkillRow: Integer;
     Function SkillNameInUse(Const SkillName: String): Boolean;
     Procedure AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
@@ -475,6 +478,10 @@ Var
   I: Integer;
 Begin
   Caption := 'Project Assistant Settings';
+  SkillsGrid.ShowHint := True;
+  SkillsGrid.ParentShowHint := False;
+  SkillsGrid.Options := SkillsGrid.Options + [goCellHints];
+  SkillsGrid.OnGetCellHint := @SkillsGridGetCellHint;
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
   KeyValueEdit.PasswordChar := '*';
@@ -594,6 +601,26 @@ Begin
   SkillPaths.Add(FilePath);
 End;
 
+Function TAssistantSettingsForm.SkillFileForRow(Row: Integer): String;
+Var
+  SkillName, FilePath: String;
+Begin
+  Result := '';
+  If (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Then
+    Exit;
+  If (Row < SkillsGrid.FixedRows) Or (Row >= SkillsGrid.RowCount) Then
+    Exit;
+  If Row - SkillsGrid.FixedRows >= SkillPaths.Count Then
+    Exit;
+  FilePath := Trim(SkillPaths[Row - SkillsGrid.FixedRows]);
+  If FilePath <> '' Then
+    Exit(ExpandFileName(FilePath));
+  SkillName := Trim(SkillsGrid.Cells[0, Row]);
+  If SkillName = '' Then
+    Exit;
+  Result := ResolveSkillFile(SkillName, SettingsProjectRoot);
+End;
+
 Procedure TAssistantSettingsForm.UpdateSkillSelection;
 Var
   Row: Integer;
@@ -611,25 +638,25 @@ Begin
     End;
   SkillName := SkillsGrid.Cells[0, Row];
   FilePath := SkillPaths[Row - SkillsGrid.FixedRows];
+  Resolved := SkillFileForRow(Row);
   If FilePath <> '' Then
-    Begin
-      SkillPathLabel.Caption := FilePath;
-      SkillPathLabel.Hint := FilePath;
-    End
+    SkillPathLabel.Caption := FilePath
+  Else If Resolved <> '' Then
+    SkillPathLabel.Caption := SkillName + ' - catalog skill'
   Else
-    Begin
-      Resolved := ResolveSkillFile(SkillName, SettingsProjectRoot);
-      If Resolved <> '' Then
-        Begin
-          SkillPathLabel.Caption := SkillName + ' - catalog skill';
-          SkillPathLabel.Hint := Resolved;
-        End
-      Else
-        Begin
-          SkillPathLabel.Caption := SkillName + ' - file not found';
-          SkillPathLabel.Hint := 'No catalog skill or added file was found for this name.';
-        End;
-    End;
+    SkillPathLabel.Caption := SkillName + ' - file not found';
+  If Resolved <> '' Then
+    SkillPathLabel.Hint := Resolved
+  Else
+    SkillPathLabel.Hint := 'No catalog skill or added file was found for this name.';
+End;
+
+Procedure TAssistantSettingsForm.SkillsGridGetCellHint(Sender: TObject; ACol, ARow: Integer; Var HintText: String);
+Begin
+  HintText := '';
+  If (Not Assigned(SkillsGrid)) Or (ACol <> 0) Or (ARow < SkillsGrid.FixedRows) Then
+    Exit;
+  HintText := SkillFileForRow(ARow);
 End;
 
 Procedure TAssistantSettingsForm.SaveSkillModes;
