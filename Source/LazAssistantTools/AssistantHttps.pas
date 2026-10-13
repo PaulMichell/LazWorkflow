@@ -1,7 +1,12 @@
 Unit AssistantHttps;
 
 { HTTPS helpers for LazAssistantTools: OpenSSL bootstrap + WinINet fallback on Windows
-  (c) 2026 Michell Computing. }
+  (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. OpenSSL bootstrap, WinINet, and
+  the fpHTTP path are one transport with no meaningful partition.
+  Reviewed 2026-10-13: a bounded byte GET stays on this transport so an image
+  download does not grow a second client. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -22,6 +27,11 @@ Function EnsureOpenSSLReady: Boolean;
   ExtraHeaders is optional "Name: value" lines (with or without CRLF). }
 Function HttpsGet(Const Url: String; Out ResponseBody: String; Out StatusCode: Integer;
   Out ErrorText: String; Const ExtraHeaders: String = ''): Boolean;
+{ One HTTPS GET of raw bytes. Does not follow a redirect. MaxBytes 0 stores the whole body.
+  A larger body fails and leaves Data empty. }
+Function HttpsGetBytes(Const Url: String; Out Data: TBytes; Out StatusCode: Integer;
+  Out ErrorText: String; Const ExtraHeaders: String = ''; IOTimeoutMs: Integer = 0;
+  MaxBytes: Integer = 0): Boolean;
 
 { HTTPS POST application/x-www-form-urlencoded. }
 Function HttpsPostForm(Const Url, FormBody: String; Out ResponseBody: String;
@@ -79,7 +89,19 @@ Uses
   {$ENDIF}
   Forms, fphttpclient, opensslsockets, openssl, WorkflowLog, fpjson, jsonparser;
 
+{$IFDEF WINDOWS}
 Type
+  TBytesPointer = ^TBytes;
+{$ENDIF}
+
+Type
+  TBoundedMemoryStream = Class(TMemoryStream)
+  Public
+    MaxBytes: Int64;
+    Exceeded: Boolean;
+    Function Write(Const Buffer; Count: LongInt): LongInt; Override;
+  End;
+
   THttpsChunkStream = Class(TStream)
   Private
     FOnChunk: THttpsChunkEvent;
@@ -89,6 +111,16 @@ Type
     Function Write(Const Buffer; Count: LongInt): LongInt; Override;
     Function Seek(Const Offset: Int64; Origin: TSeekOrigin): Int64; Override;
   End;
+
+Function TBoundedMemoryStream.Write(Const Buffer; Count: LongInt): LongInt;
+Begin
+  If (MaxBytes > 0) And (Size + Count > MaxBytes) Then
+    Begin
+      Exceeded := True;
+      Exit(0);
+    End;
+  Result := Inherited Write(Buffer, Count);
+End;
 
 Function HttpsResponseErrorMessage(Const Body: String): String;
 Var Data, Node: TJSONData;
@@ -436,7 +468,9 @@ End;
 
 Function WinINetRequest(Const Method, Url, ContentType, Body, ExtraHeaders: String;
   Out ResponseBody: String; Out StatusCode: Integer; Out ErrorText: String;
-  Out RequestSent: Boolean; IOTimeoutMs: Integer = 0): Boolean;
+  Out RequestSent: Boolean; IOTimeoutMs: Integer = 0; NoRedirect: Boolean = False;
+  CaptureBytes: TBytesPointer = Nil; Const AcceptValue: String = 'application/json';
+  MaxBytes: Integer = 0): Boolean;
 Var
   Session, Connect, Request: HINTERNET;
   Host, Path: String;
@@ -460,6 +494,8 @@ Begin
   Session := Nil;
   Connect := Nil;
   Request := Nil;
+  If Assigned(CaptureBytes) Then
+    SetLength(CaptureBytes^, 0);
   If Not CrackUrlParts(Url, Host, Path, Port, UseHttps) Then
     Begin
       ErrorText := 'Invalid URL: ' + Url;
@@ -492,6 +528,8 @@ Begin
     Flags := INTERNET_FLAG_RELOAD Or INTERNET_FLAG_NO_CACHE_WRITE Or INTERNET_FLAG_KEEP_CONNECTION;
     If UseHttps Then
       Flags := Flags Or INTERNET_FLAG_SECURE;
+    If NoRedirect Then
+      Flags := Flags Or $40000000; { INTERNET_FLAG_NO_AUTO_REDIRECT: one request, then stop. }
 
     Request := HttpOpenRequest(Connect, PChar(Method), PChar(Path), Nil, Nil, Nil, Flags, 0);
     If Request = Nil Then
@@ -500,7 +538,10 @@ Begin
         Exit;
       End;
 
-    Headers := 'Accept: application/json'#13#10;
+    If AcceptValue = '' Then
+      Headers := 'Accept: */*'#13#10
+    Else
+      Headers := 'Accept: ' + AcceptValue + #13#10;
     If ContentType <> '' Then
       Headers := Headers + 'Content-Type: ' + ContentType + #13#10;
     If Trim(ExtraHeaders) <> '' Then
@@ -550,11 +591,23 @@ Begin
         End;
       If BytesRead = 0 Then
         Break;
+      If (MaxBytes > 0) And (Length(Raw) + Integer(BytesRead) > MaxBytes) Then
+        Begin
+          ErrorText := 'Response exceeded the size ceiling.';
+          ReadOk := False;
+          Break;
+        End;
       SetLength(Raw, Length(Raw) + Integer(BytesRead));
       Move(Buf[0], Raw[Length(Raw) - Integer(BytesRead) + 1], BytesRead);
     Until False;
     If ReadOk Then
       Begin
+        If Assigned(CaptureBytes) Then
+          Begin
+            SetLength(CaptureBytes^, Length(Raw));
+            If Length(Raw) > 0 Then
+              Move(Raw[1], CaptureBytes^[0], Length(Raw));
+          End;
         ResponseBody := string(Raw);
         Result := True;
       End;
@@ -648,6 +701,128 @@ Begin
     Client.RequestBody := Nil;
     Parts.Free;
     BodyStream.Free;
+    Client.Free;
+  End;
+End;
+
+Procedure ApplyExtraHeaders(Client: TFPHTTPClient; Const ExtraHeaders: String);
+Var
+  Parts: TStringList;
+  I, ColonPos: Integer;
+  HdrBlock, Line: String;
+Begin
+  HdrBlock := Trim(ExtraHeaders);
+  If HdrBlock = '' Then
+    Exit;
+  Parts := TStringList.Create;
+  Try
+    Parts.Text := StringReplace(HdrBlock, #13#10, #10, [rfReplaceAll]);
+    For I := 0 To Parts.Count - 1 Do
+      Begin
+        Line := Trim(Parts[I]);
+        If Line = '' Then
+          Continue;
+        ColonPos := Pos(':', Line);
+        If ColonPos > 1 Then
+          Client.AddHeader(Trim(Copy(Line, 1, ColonPos - 1)), Trim(Copy(Line, ColonPos + 1, MaxInt)));
+      End;
+  Finally
+    Parts.Free;
+  End;
+End;
+
+Function CopyBoundedBytes(Stream: TBoundedMemoryStream; MaxBytes: Integer; Out Data: TBytes;
+  Out ErrorText: String): Boolean;
+Begin
+  SetLength(Data, 0);
+  ErrorText := '';
+  If Stream.Exceeded Or ((MaxBytes > 0) And (Stream.Size > MaxBytes)) Then
+    Begin
+      ErrorText := 'Response exceeded the size ceiling.';
+      Exit(False);
+    End;
+  SetLength(Data, Stream.Size);
+  If Stream.Size > 0 Then
+    Begin
+      Stream.Position := 0;
+      Stream.ReadBuffer(Data[0], Stream.Size);
+    End;
+  Result := True;
+End;
+
+Function HttpsGetBytes(Const Url: String; Out Data: TBytes; Out StatusCode: Integer;
+  Out ErrorText: String; Const ExtraHeaders: String; IOTimeoutMs: Integer; MaxBytes: Integer): Boolean;
+Var
+  Client: TFPHTTPClient;
+  Stream: TBoundedMemoryStream;
+  SslErr: String;
+  GotResponse: Boolean;
+  {$IFDEF WINDOWS}
+  RequestSent: Boolean;
+  IgnoredBody: String;
+  {$ENDIF}
+Begin
+  SetLength(Data, 0);
+  StatusCode := 0;
+  ErrorText := '';
+  Result := False;
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ErrorText := 'HTTPS URL required.';
+      Exit;
+    End;
+  {$IFDEF WINDOWS}
+  RequestSent := False;
+  If WinINetRequest('GET', Url, '', '', ExtraHeaders, IgnoredBody, StatusCode, ErrorText, RequestSent,
+    IOTimeoutMs, True, @Data, '*/*', MaxBytes) Then
+    Exit(True);
+  { The request already left. A second client would be a second download. }
+  If RequestSent Then
+    Exit(False);
+  {$ENDIF}
+  If Not EnsureOpenSSLReady(SslErr) Then
+    Begin
+      ErrorText := SslErr;
+      Exit;
+    End;
+  Client := TFPHTTPClient.Create(Nil);
+  Stream := TBoundedMemoryStream.Create;
+  Try
+    Stream.MaxBytes := MaxBytes;
+    GotResponse := False;
+    Try
+      Client.ConnectTimeout := 15000;
+      If IOTimeoutMs > 0 Then
+        Client.IOTimeout := IOTimeoutMs
+      Else
+        Client.IOTimeout := 60000;
+      Client.AllowRedirect := False;
+      Client.AddHeader('Accept', '*/*');
+      ApplyExtraHeaders(Client, ExtraHeaders);
+      Client.Get(Url, Stream);
+      StatusCode := Client.ResponseStatusCode;
+      GotResponse := True;
+    Except
+      On E: Exception Do
+        Begin
+          StatusCode := Client.ResponseStatusCode;
+          ErrorText := E.Message;
+          If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
+            ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
+          GotResponse := StatusCode <> 0;
+        End;
+    End;
+    If Stream.Exceeded Then
+      Begin
+        SetLength(Data, 0);
+        ErrorText := 'Response exceeded the size ceiling.';
+        Exit(False);
+      End;
+    If Not GotResponse Then
+      Exit(False);
+    Result := CopyBoundedBytes(Stream, MaxBytes, Data, ErrorText);
+  Finally
+    Stream.Free;
     Client.Free;
   End;
 End;

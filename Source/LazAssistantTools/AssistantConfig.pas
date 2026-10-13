@@ -806,6 +806,9 @@ Begin
           Result.Add('skill', Config.ActiveSkill);
           Result.Add('oauth', OAuthObject(Config));
         End;
+      { A fixture key must round-trip. OAuth remains the normal Grok credential. }
+      If Item.KeyValue <> '' Then
+        Result.Add('key_value', Item.KeyValue);
     End;
   If Item.Backend = 'openai-compatible' Then
     Begin

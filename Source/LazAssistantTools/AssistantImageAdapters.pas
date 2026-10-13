@@ -1,9 +1,11 @@
 Unit AssistantImageAdapters;
 
 { Fills the generated-image record from each response shape, and posts one
-  image request. Each backend builds its own JSON. A new provider is a new
-  builder, not a new tool. The file writer does not use this unit.
-  (c) 2026 Michell Computing. }
+  image request. Each backend builds its own JSON. Both image-endpoint
+  builders share one response parser: exactly one image, b64_json first, and
+  one download when the body has only a temporary URL. A failure returns the
+  status and a short body, and tells the model not to retry. The file writer
+  does not use this unit. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,12 +20,18 @@ Uses
 Type
   TGeneratedImagePost = Function(Const Url, Body, Headers: String; Out ResponseBody: String;
     Out StatusCode: Integer; Out ErrorText: String): Boolean;
+  { Fixture bytes for one temporary image URL. Nil uses a single HTTPS GET. }
+  TGeneratedImageFetch = Function(Const Url, Headers: String; Out Data: TBytes; Out StatusCode: Integer;
+    Out ResponseBody, ErrorText: String): Boolean;
 
 Const
   { A hung image endpoint must not occupy the Build round budget. }
   AssistantImagePostTimeoutMs = 60000;
+  { Own line after a failed draw. The model must not try the call again. }
+  AssistantImageDoNotRetryLine = 'Do not retry.';
 
 Procedure SetGeneratedImagePost(Post: TGeneratedImagePost);
+Procedure SetGeneratedImageFetch(Fetch: TGeneratedImageFetch);
 /// POST this connection's image endpoint. The backend builds the JSON. Does not write a file.
 /// Shape is optional. A value this backend cannot express is omitted, not an error.
 Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
@@ -40,6 +48,7 @@ Uses
 
 Var
   ImagePost: TGeneratedImagePost;
+  ImageFetch: TGeneratedImageFetch;
 
 Type
   TResponsesImageAdapter = Class(TInterfacedObject, IAssistantGeneratedImageAdapter)
@@ -259,18 +268,34 @@ Begin
   Result := AssistantImageAdapterImages;
 End;
 
-Function TImagesEndpointAdapter.Collect(Const ResponseJson: String; Out Images: TAssistantGeneratedImageArray;
-  Out ErrorText: String): Boolean;
+Function JsonStringField(Obj: TJSONObject; Const Name: String): String;
+Var
+  Node: TJSONData;
+Begin
+  Result := '';
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(Name);
+  If Assigned(Node) And (Node.JSONType = jtString) Then
+    Result := Trim(Node.AsString);
+End;
+
+{ Shared by both image-endpoint builders. Exactly one data item. b64_json wins.
+  A lone url is returned for one download; this function does not fetch it. }
+Function ParseImagesEndpoint(Const ResponseJson: String; Out Image: TAssistantGeneratedImage;
+  Out TemporaryUrl: String; Out ErrorText: String): Boolean;
 Var
   Data: TJSONData;
   Root, Item: TJSONObject;
   Arr: TJSONArray;
-  I: Integer;
   Encoded: String;
+  Images: TAssistantGeneratedImageArray;
 Begin
-  SetLength(Images, 0);
+  ClearGeneratedImage(Image);
+  TemporaryUrl := '';
   ErrorText := '';
   Result := False;
+  SetLength(Images, 0);
   Data := Nil;
   Try
     Try
@@ -289,33 +314,61 @@ Begin
       End;
     Root := TJSONObject(Data);
     If Not (Root.Find('data') Is TJSONArray) Then
-      Exit(True);
-    Arr := TJSONArray(Root.Find('data'));
-    For I := 0 To Arr.Count - 1 Do
       Begin
-        If Not (Arr.Items[I] Is TJSONObject) Then
-          Continue;
-        Item := TJSONObject(Arr.Items[I]);
-        Encoded := Item.Get('b64_json', '');
-        If Encoded = '' Then
-          Begin
-            If Item.Get('url', '') <> '' Then
-              ErrorText := 'Generated image response has no bytes.'
-            Else
-              Continue;
-            SetLength(Images, 0);
-            Exit(False);
-          End;
-        If Not AppendDecoded(Item.Get('id', ''), Encoded, I + 1, Images, ErrorText) Then
-          Begin
-            SetLength(Images, 0);
-            Exit(False);
-          End;
+        ErrorText := 'The image endpoint did not return one image.';
+        Exit;
       End;
+    Arr := TJSONArray(Root.Find('data'));
+    If (Arr.Count <> 1) Or Not (Arr.Items[0] Is TJSONObject) Then
+      Begin
+        ErrorText := 'The image endpoint did not return one image.';
+        Exit;
+      End;
+    Item := TJSONObject(Arr.Items[0]);
+    Encoded := JsonStringField(Item, 'b64_json');
+    If Encoded <> '' Then
+      Begin
+        If Not AppendDecoded(JsonStringField(Item, 'id'), Encoded, 1, Images, ErrorText) Then
+          Exit;
+        Image := Images[0];
+        { Own a copy before the local array is released. }
+        Image.Bytes := Copy(Image.Bytes, 0, Length(Image.Bytes));
+        Result := True;
+        Exit;
+      End;
+    TemporaryUrl := JsonStringField(Item, 'url');
+    If TemporaryUrl = '' Then
+      Begin
+        ErrorText := 'The image endpoint did not return one image.';
+        Exit;
+      End;
+    Image.Id := TurnLocalId(JsonStringField(Item, 'id'), 1);
     Result := True;
   Finally
     Data.Free;
   End;
+End;
+
+Function TImagesEndpointAdapter.Collect(Const ResponseJson: String; Out Images: TAssistantGeneratedImageArray;
+  Out ErrorText: String): Boolean;
+Var
+  Image: TAssistantGeneratedImage;
+  TemporaryUrl: String;
+Begin
+  SetLength(Images, 0);
+  ErrorText := '';
+  Result := False;
+  If Not ParseImagesEndpoint(ResponseJson, Image, TemporaryUrl, ErrorText) Then
+    Exit;
+  { Collect has no bearer. Do not leave the URL for the caller to fetch. }
+  If TemporaryUrl <> '' Then
+    Begin
+      ErrorText := 'Generated image response has no bytes.';
+      Exit(False);
+    End;
+  SetLength(Images, 1);
+  Images[0] := Image;
+  Result := True;
 End;
 
 Function PartPayload(Part: TJSONObject; Out Encoded, PartId: String; Out NeedsBytes: Boolean): Boolean;
@@ -442,6 +495,11 @@ Begin
   ImagePost := Post;
 End;
 
+Procedure SetGeneratedImageFetch(Fetch: TGeneratedImageFetch);
+Begin
+  ImageFetch := Fetch;
+End;
+
 Function PixelSizeAccepted(Const Size: String): Boolean;
 Var
   I: Integer;
@@ -534,12 +592,13 @@ Var
 Begin
   Token := '';
   ErrorText := '';
-  { A test post hook may supply the bearer so the fixture does not sign in. }
-  If Assigned(ImagePost) And (Trim(Profile.KeyValue) <> '') And (Pos(#10, Profile.KeyValue) = 0) And
-    (Pos(#13, Profile.KeyValue) = 0) Then
+  { A test post hook supplies the bearer. Do not sign in, even when the saved key is empty. }
+  If Assigned(ImagePost) Then
     Begin
-      Token := Profile.KeyValue;
-      Result := True;
+      Token := Trim(Profile.KeyValue);
+      Result := (Token <> '') And (Pos(#10, Token) = 0) And (Pos(#13, Token) = 0);
+      If Not Result Then
+        ErrorText := 'This profile has no API key for its image endpoint.';
       Exit;
     End;
   If Profile.Backend = 'grok' Then
@@ -557,19 +616,165 @@ Begin
     ErrorText := 'This profile has no API key for its image endpoint.';
 End;
 
-Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
+Function RedactUrls(Const Value: String): String;
+Var
+  I, StartAt, SchemeLen: Integer;
+  Lowered: String;
+Begin
+  Result := Value;
+  I := 1;
+  While I <= Length(Result) Do
+    Begin
+      Lowered := LowerCase(Copy(Result, I, 8));
+      SchemeLen := 0;
+      If Copy(Lowered, 1, 8) = 'https://' Then
+        SchemeLen := 8
+      Else If Copy(Lowered, 1, 7) = 'http://' Then
+        SchemeLen := 7;
+      If SchemeLen = 0 Then
+        Begin
+          Inc(I);
+          Continue;
+        End;
+      StartAt := I;
+      I := I + SchemeLen;
+      While (I <= Length(Result)) And Not (Result[I] In [#0..#32, '"', '''', '<', '>', ']', '}', ',']) Do
+        Inc(I);
+      Result := Copy(Result, 1, StartAt - 1) + '[url]' + Copy(Result, I, MaxInt);
+      I := StartAt + Length('[url]');
+    End;
+End;
+
+Function ShortImageBody(Const Body: String): String;
+Const
+  MaxChars = 240;
+Var
+  I: Integer;
+  Redacted, Collapsed: String;
+  C: Char;
+Begin
+  Redacted := RedactUrls(Body);
+  Collapsed := '';
+  For I := 1 To Length(Redacted) Do
+    Begin
+      C := Redacted[I];
+      If C In [#9, #10, #13] Then
+        C := ' ';
+      If (C = ' ') And ((Collapsed = '') Or (Collapsed[Length(Collapsed)] = ' ')) Then
+        Continue;
+      Collapsed := Collapsed + C;
+      If Length(Collapsed) >= MaxChars Then
+        Break;
+    End;
+  Result := Trim(Collapsed);
+  If Result = '' Then
+    Result := '(empty)';
+End;
+
+Function ImageFailureText(Const CallName: String; StatusCode: Integer; Const Body: String): String;
+Begin
+  Result := CallName + ' returned HTTP ' + IntToStr(StatusCode) + '.' + LineEnding +
+    ShortImageBody(Body) + LineEnding + AssistantImageDoNotRetryLine;
+End;
+
+Function FailureBody(Const Body, TransportError: String): String;
+Begin
+  Result := Body;
+  If Trim(Result) = '' Then
+    Result := TransportError;
+End;
+
+Function BytesToShortText(Const Data: TBytes): String;
+Var
+  Count, I: Integer;
+Begin
+  Count := Length(Data);
+  If Count > 240 Then
+    Count := 240;
+  SetLength(Result, Count);
+  For I := 1 To Count Do
+    If Data[I - 1] In [9, 10, 13, 32..126] Then
+      Result[I] := Char(Data[I - 1])
+    Else
+      Result[I] := ' ';
+End;
+
+Function DownloadFailureBody(Const Data: TBytes; Const ResponseBody, TransportError: String): String;
+Begin
+  If Trim(ResponseBody) <> '' Then
+    Exit(ResponseBody);
+  If Length(Data) > 0 Then
+    Exit(BytesToShortText(Data));
+  Result := TransportError;
+End;
+
+Function AcceptImageBytes(Const ItemId: String; Const Data: TBytes; Out Image: TAssistantGeneratedImage;
   Out ErrorText: String): Boolean;
 Var
-  Profile: TAssistantProfileCall;
-  Images: TAssistantGeneratedImageArray;
-  Url, Body, Headers, Token, ResponseBody: String;
-  StatusCode: Integer;
-  Posted: Boolean;
+  Mime: String;
+  Width, Height: Integer;
 Begin
   ClearGeneratedImage(Image);
   ErrorText := '';
   Result := False;
-  SetLength(Images, 0);
+  If (Length(Data) = 0) Or (Length(Data) > AssistantImageMaxFileBytes) Then
+    Begin
+      If Length(Data) = 0 Then
+        ErrorText := 'Generated image response has no bytes.'
+      Else
+        ErrorText := 'Generated image is over the size ceiling.';
+      Exit;
+    End;
+  If Not MeasureStillImage(Data, Mime, Width, Height) Then
+    Begin
+      ErrorText := 'Generated image bytes are not a still image.';
+      Exit;
+    End;
+  Image.Id := TurnLocalId(ItemId, 1);
+  Image.Mime := Mime;
+  Image.Width := Width;
+  Image.Height := Height;
+  Image.Bytes := Data;
+  Result := True;
+End;
+
+{ One GET. A test hook supplies the bytes. Otherwise one HTTPS GET, then stop. }
+Function DownloadTemporaryImage(Const Url, BearerHeader: String; Out Data: TBytes; Out StatusCode: Integer;
+  Out ResponseBody, ErrorText: String): Boolean;
+Begin
+  SetLength(Data, 0);
+  StatusCode := 0;
+  ResponseBody := '';
+  ErrorText := '';
+  Result := False;
+  If Not UrlIsHttps(Url) Then
+    Begin
+      ErrorText := 'HTTPS URL required.';
+      Exit;
+    End;
+  If Assigned(ImageFetch) Then
+    Result := ImageFetch(Url, BearerHeader, Data, StatusCode, ResponseBody, ErrorText)
+  Else
+    Result := HttpsGetBytes(Url, Data, StatusCode, ErrorText, BearerHeader, AssistantImagePostTimeoutMs,
+      AssistantImageMaxFileBytes);
+End;
+
+Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
+  Out ErrorText: String): Boolean;
+Var
+  Profile: TAssistantProfileCall;
+  Url, Body, Headers, Token, ResponseBody, TemporaryUrl, BearerHeader: String;
+  DownloadBody, DownloadError, ItemId: String;
+  StatusCode, DownloadStatus: Integer;
+  Posted: Boolean;
+  DownloadData: TBytes;
+  Parsed: TAssistantGeneratedImage;
+Begin
+  ClearGeneratedImage(Image);
+  ClearGeneratedImage(Parsed);
+  ErrorText := '';
+  Result := False;
+  SetLength(DownloadData, 0);
   If Trim(Prompt) = '' Then
     Begin
       ErrorText := 'write_image requires a prompt.';
@@ -619,18 +824,45 @@ Begin
       AssistantImagePostTimeoutMs);
   If Not Posted Or (StatusCode < 200) Or (StatusCode >= 300) Then
     Begin
-      If ErrorText = '' Then
-        ErrorText := 'Image endpoint returned HTTP ' + IntToStr(StatusCode) + '.';
+      ErrorText := ImageFailureText('Image endpoint', StatusCode, FailureBody(ResponseBody, ErrorText));
       Exit;
     End;
-  If Not CollectGeneratedImages(AssistantImageAdapterImages, ResponseBody, Images, ErrorText) Then
-    Exit;
-  If Length(Images) <> 1 Then
+  { Both builders stop here. No chat-model post and no response-part harvest. }
+  TemporaryUrl := '';
+  If Not ParseImagesEndpoint(ResponseBody, Parsed, TemporaryUrl, ErrorText) Then
     Begin
-      ErrorText := 'The image endpoint did not return one image.';
+      ErrorText := ImageFailureText('Image endpoint', StatusCode, ResponseBody);
       Exit;
     End;
-  Image := Images[0];
+  ItemId := Parsed.Id;
+  If TemporaryUrl <> '' Then
+    Begin
+      BearerHeader := 'Authorization: Bearer ' + Token;
+      DownloadStatus := 0;
+      DownloadBody := '';
+      DownloadError := '';
+      If Not DownloadTemporaryImage(TemporaryUrl, BearerHeader, DownloadData, DownloadStatus, DownloadBody,
+        DownloadError) Or (DownloadStatus < 200) Or (DownloadStatus >= 300) Or
+        Not AcceptImageBytes(ItemId, DownloadData, Parsed, ErrorText) Then
+        Begin
+          ErrorText := ImageFailureText('Image download', DownloadStatus,
+            FailureBody(DownloadFailureBody(DownloadData, DownloadBody, DownloadError), ErrorText));
+          Exit;
+        End;
+    End
+  Else
+    Begin
+      SetLength(DownloadData, Length(Parsed.Bytes));
+      If Length(DownloadData) > 0 Then
+        Move(Parsed.Bytes[0], DownloadData[0], Length(DownloadData));
+      If Not AcceptImageBytes(ItemId, DownloadData, Parsed, ErrorText) Then
+        Begin
+          ErrorText := ImageFailureText('Image endpoint', StatusCode, ErrorText);
+          Exit;
+        End;
+    End;
+  { One assignment, after both paths, using the same byte owner as a download. }
+  Image := Parsed;
   Result := True;
 End;
 
