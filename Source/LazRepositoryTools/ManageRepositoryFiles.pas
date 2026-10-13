@@ -486,9 +486,10 @@ Begin
         Commit.WhenText := WhenText;
         Commit.Subject := Subject;
         Commit.HistoricalPath := HistoricalPath;
-        DisplayText := WhenText + '  ' + Copy(Sha, 1, 7);
+        DisplayText := WhenText;
         If Subject <> '' Then
           DisplayText := DisplayText + '  ' + Subject;
+        DisplayText := DisplayText + ' (' + Copy(Sha, 1, 7) + ')';
         FileCommitList.Items.AddObject(DisplayText, Commit);
       End;
     If FileCommitList.Items.Count = 0 Then
