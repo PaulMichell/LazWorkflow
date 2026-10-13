@@ -16,6 +16,8 @@ Const
   RepositoryImageUnavailable = 'Image preview unavailable (16 megapixel limit or unsupported image).';
 
 Function FileExtensionIsImage(Const Ext: String): Boolean;
+/// Images and known non-text extensions. Used to keep SynEdit off binary previews.
+Function FileExtensionIsLikelyBinary(Const Ext: String): Boolean;
 /// False when the stream is empty, undecodable, or over the History-tab size limits.
 Function TryLoadRepositoryImage(Stream: TStream; Picture: TPicture): Boolean;
 /// Window background, then the picture fitted inside Bounds without upscaling past 1:1.
@@ -41,6 +43,21 @@ Begin
   Result := (E = '.png') Or (E = '.jpg') Or (E = '.jpeg') Or (E = '.gif') Or
     (E = '.bmp') Or (E = '.ico') Or (E = '.xpm') Or (E = '.tif') Or (E = '.tiff') Or
     (E = '.pbm') Or (E = '.pgm') Or (E = '.ppm');
+End;
+
+Function FileExtensionIsLikelyBinary(Const Ext: String): Boolean;
+Var
+  E: String;
+Begin
+  E := NormalizeExt(Ext);
+  If FileExtensionIsImage(E) Then
+    Exit(True);
+  Result := (E = '.exe') Or (E = '.dll') Or (E = '.so') Or (E = '.o') Or (E = '.a') Or
+    (E = '.obj') Or (E = '.lib') Or (E = '.zip') Or (E = '.gz') Or (E = '.7z') Or
+    (E = '.rar') Or (E = '.pdf') Or (E = '.woff') Or (E = '.woff2') Or (E = '.ttf') Or
+    (E = '.otf') Or (E = '.eot') Or (E = '.class') Or (E = '.pyc') Or (E = '.pyo') Or
+    (E = '.db') Or (E = '.sqlite') Or (E = '.bin') Or (E = '.dat') Or (E = '.wasm') Or
+    (E = '.res') Or (E = '.rsm') Or (E = '.ppu') Or (E = '.compiled');
 End;
 
 Function TryLoadRepositoryImage(Stream: TStream; Picture: TPicture): Boolean;

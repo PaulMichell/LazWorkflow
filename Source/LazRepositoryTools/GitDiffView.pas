@@ -229,28 +229,6 @@ Uses
 Type
   PGitDiffRange = ^TGitDiffRange;
 
-Function NormalizeExt(Const Ext: String): String;
-Begin
-  Result := LowerCase(Ext);
-  If (Result <> '') And (Result[1] <> '.') Then
-    Result := '.' + Result;
-End;
-
-Function FileExtensionIsLikelyBinary(Const Ext: String): Boolean;
-Var
-  E: String;
-Begin
-  E := NormalizeExt(Ext);
-  If FileExtensionIsImage(E) Then
-    Exit(True);
-  Result := (E = '.exe') Or (E = '.dll') Or (E = '.so') Or (E = '.o') Or (E = '.a') Or
-    (E = '.obj') Or (E = '.lib') Or (E = '.zip') Or (E = '.gz') Or (E = '.7z') Or
-    (E = '.rar') Or (E = '.pdf') Or (E = '.woff') Or (E = '.woff2') Or (E = '.ttf') Or
-    (E = '.otf') Or (E = '.eot') Or (E = '.class') Or (E = '.pyc') Or (E = '.pyo') Or
-    (E = '.db') Or (E = '.sqlite') Or (E = '.bin') Or (E = '.dat') Or (E = '.wasm') Or
-    (E = '.res') Or (E = '.rsm') Or (E = '.ppu') Or (E = '.compiled');
-End;
-
 Function DiffTextLooksBinary(Const DiffText: String): Boolean;
 Var
   S: String;

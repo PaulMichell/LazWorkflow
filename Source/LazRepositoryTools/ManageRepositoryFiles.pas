@@ -1,6 +1,10 @@
 Unit ManageRepositoryFiles;
 
-{ Files-tab tree, commit list, revision text, and image preview (c) 2026 Michell Computing. }
+{ Files-tab tree, commit list, revision text, image preview, and save (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. Tree building, commit parsing,
+  and preview/save state share one token set, so they stay in this coordinator.
+  Reviewed 2026-08: no hidden foundation or sibling service material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -10,30 +14,58 @@ Unit ManageRepositoryFiles;
 Interface
 
 Uses
-  Classes, ComCtrls, StdCtrls, ExtCtrls, Graphics, SynEdit;
+  Classes, ComCtrls, StdCtrls, ExtCtrls, Graphics, SynEdit, GitDiffView;
 
 Type
+  TRepositorySaveKind = (skNone, skText, skBytes);
+
   TManageFilesPane = Class
   Private
     FApplying: Boolean;
     FFileListToken: Integer;
     FHistoryToken: Integer;
     FContentToken: Integer;
+    FDiffToken: Integer;
     FSelectedPath: String;
     FSelectedSha: String;
     FContentPath: String;
     FRevisionHighlighter: TObject;
     FPreviewPicture: TPicture;
+    FShowChanges: Boolean;
+    FTextReady: Boolean;
+    FContentSettled: Boolean;
+    FRemovedRevision: Boolean;
+    FDiffPending: Boolean;
+    FDiffReady: Boolean;
+    FDiffOk: Boolean;
+    FSaveKind: TRepositorySaveKind;
+    FSaveText: String;
+    FSaveBytes: TMemoryStream;
+    FSaveBlockReason: String;
+    FDiffText: String;
+    FDiffPath: String;
+    FDiffSha: String;
     Procedure ClearCommitObjects;
     Procedure ClearRevisionHighlighter;
     Procedure ApplyRevisionHighlighter(Const FileName: String);
+    Procedure ClearSavePayload;
+    Procedure KeepSaveBytes(Bytes: TStream);
+    Procedure NotifyCommands;
+    Procedure ShowBlankPane;
+    Procedure ShowMessagePane(Const MessageText: String);
+    Procedure ShowImageContent;
     Procedure ShowTextPane;
-    Procedure ShowImagePane(ShowImage: Boolean; Const MessageText: String);
+    Procedure ShowChangesEditor;
+    Procedure ShowStoredText;
+    Procedure ShowStoredDiff;
+    Procedure ShowChangesLoading;
+    Procedure HideEditors;
     Procedure ClearEditor;
     Procedure FreeTreeEntries;
     Procedure TreeCustomDrawItem(Sender: TCustomTreeView; Node: TTreeNode; State: TCustomDrawState;
       var DefaultDraw: Boolean);
     Function SelectedEntryPath(Out RelativePath: String): Boolean;
+    Function PathLooksText(Const RelativePath: String): Boolean;
   Public
     FileTree: TTreeView;
     FileCommitList: TListBox;
@@ -41,13 +73,16 @@ Type
     FilePreviewPanel: TPanel;
     FileImagePaintBox: TPaintBox;
     FilePreviewLabel: TLabel;
+    FileChangesView: TGitDiffView;
     RepoPath: String;
     OnRequestHistory: TNotifyEvent;
     OnRequestContent: TNotifyEvent;
+    OnRequestDiff: TNotifyEvent;
+    OnCommandsChanged: TNotifyEvent;
     Constructor Create;
     Destructor Destroy; Override;
     Procedure Bind(AFileTree: TTreeView; ACommitList: TListBox; AEditor: TSynEdit; APreviewPanel: TPanel;
-      AImagePaint: TPaintBox; APreviewLabel: TLabel);
+      AImagePaint: TPaintBox; APreviewLabel: TLabel; AChangesView: TGitDiffView);
     Procedure ClearForNoRepo;
     Function BeginFileList: Integer;
     Procedure ApplyFileList(Token: Integer; Paths, RemovedPaths: TStrings; Ok: Boolean);
@@ -57,8 +92,22 @@ Type
     Procedure ApplyContent(Token: Integer; Const HistoricalPath, Sha, Content: String; IsBinary, Ok: Boolean);
     Procedure ApplyImage(Token: Integer; Const HistoricalPath, Sha: String; Bytes: TStream; Ok: Boolean;
       Const ErrorText: String);
+    Procedure ApplyBinary(Token: Integer; Const HistoricalPath, Sha: String; Bytes: TStream; Ok: Boolean;
+      Const ErrorText: String);
+    Function BeginDiff: Integer;
+    Procedure ApplyDiff(Token: Integer; Const HistoricalPath, Sha, DiffText: String; Ok: Boolean);
     Procedure PaintPreview;
     Function ContentIsImage: Boolean;
+    Function ContentReadsBytes: Boolean;
+    Function FileSelected: Boolean;
+    Function TextPreviewActive: Boolean;
+    Function CanWriteDisplayedFile: Boolean;
+    Function DisplayedFileStatus: String;
+    Function SuggestedSaveName: String;
+    Function SuggestedSaveDirectory: String;
+    /// Writes the commit blob, not the red/green diff markup.
+    Function WriteDisplayedFile(Const TargetPath: String; Out ErrorText: String): Boolean;
+    Procedure SetShowChanges(Value: Boolean);
     Procedure TreeSelectionChanged;
     Procedure CommitSelectionChanged;
     Property SelectedPath: String Read FSelectedPath;
@@ -88,6 +137,15 @@ Type
 
 Const
   FileRemovedCaption = 'File Removed';
+  BinaryFileCaption = 'Non-text binary file contents.';
+  LoadingCaption = '(loading…)';
+
+Function DisplayFileName(Const RelativePath: String): String;
+Begin
+  Result := ExtractFileName(StringReplace(RelativePath, '/', PathDelim, [rfReplaceAll]));
+  If Result = '' Then
+    Result := 'file';
+End;
 
 Constructor TManageFilesPane.Create;
 Begin
@@ -95,19 +153,24 @@ Begin
   FFileListToken := 0;
   FHistoryToken := 0;
   FContentToken := 0;
+  FDiffToken := 0;
   RepoPath := '';
   FPreviewPicture := TPicture.Create;
+  FSaveBytes := TMemoryStream.Create;
+  FSaveKind := skNone;
+  FSaveBlockReason := 'Select a file to save.';
 End;
 
 Destructor TManageFilesPane.Destroy;
 Begin
   ClearForNoRepo;
+  FreeAndNil(FSaveBytes);
   FreeAndNil(FPreviewPicture);
   Inherited Destroy;
 End;
 
 Procedure TManageFilesPane.Bind(AFileTree: TTreeView; ACommitList: TListBox; AEditor: TSynEdit; APreviewPanel: TPanel;
-  AImagePaint: TPaintBox; APreviewLabel: TLabel);
+  AImagePaint: TPaintBox; APreviewLabel: TLabel; AChangesView: TGitDiffView);
 Begin
   FileTree := AFileTree;
   FileCommitList := ACommitList;
@@ -115,8 +178,13 @@ Begin
   FilePreviewPanel := APreviewPanel;
   FileImagePaintBox := AImagePaint;
   FilePreviewLabel := APreviewLabel;
+  FileChangesView := AChangesView;
   If Assigned(FileTree) Then
     FileTree.OnCustomDrawItem := @TreeCustomDrawItem;
+  If Assigned(FileChangesView) Then
+    FileChangesView.SetViewMode(dvmEditorOnly);
+  ShowBlankPane;
+  NotifyCommands;
 End;
 
 Procedure TManageFilesPane.ClearCommitObjects;
@@ -152,6 +220,104 @@ Begin
   FileRevisionEditor.Highlighter := HL;
 End;
 
+Procedure TManageFilesPane.ClearSavePayload;
+Begin
+  FSaveKind := skNone;
+  FSaveText := '';
+  If Assigned(FSaveBytes) Then
+    FSaveBytes.Clear;
+End;
+
+Procedure TManageFilesPane.KeepSaveBytes(Bytes: TStream);
+Begin
+  ClearSavePayload;
+  If Not Assigned(FSaveBytes) Then
+    FSaveBytes := TMemoryStream.Create;
+  If Assigned(Bytes) And (Bytes.Size > 0) Then
+    Begin
+      Bytes.Position := 0;
+      FSaveBytes.CopyFrom(Bytes, Bytes.Size);
+    End;
+  FSaveKind := skBytes;
+  FSaveBlockReason := '';
+End;
+
+Procedure TManageFilesPane.NotifyCommands;
+Begin
+  If Assigned(OnCommandsChanged) Then
+    OnCommandsChanged(Self);
+End;
+
+Procedure TManageFilesPane.HideEditors;
+Begin
+  ClearRevisionHighlighter;
+  If Assigned(FileRevisionEditor) Then
+    Begin
+      FileRevisionEditor.Highlighter := Nil;
+      FileRevisionEditor.Visible := False;
+    End;
+  If Assigned(FileChangesView) Then
+    FileChangesView.Visible := False;
+End;
+
+Procedure TManageFilesPane.ShowBlankPane;
+Begin
+  HideEditors;
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
+  If Assigned(FileImagePaintBox) Then
+    FileImagePaintBox.Visible := False;
+  If Assigned(FilePreviewLabel) Then
+    FilePreviewLabel.Visible := False;
+  If Assigned(FilePreviewPanel) Then
+    Begin
+      FilePreviewPanel.ParentColor := True;
+      FilePreviewPanel.ParentBackground := False;
+      FilePreviewPanel.Visible := True;
+      FilePreviewPanel.BringToFront;
+    End;
+End;
+
+Procedure TManageFilesPane.ShowMessagePane(Const MessageText: String);
+Begin
+  HideEditors;
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
+  If Assigned(FileImagePaintBox) Then
+    FileImagePaintBox.Visible := False;
+  If Assigned(FilePreviewLabel) Then
+    Begin
+      FilePreviewLabel.ParentColor := True;
+      If MessageText <> '' Then
+        FilePreviewLabel.Caption := MessageText;
+      FilePreviewLabel.Visible := True;
+    End;
+  If Assigned(FilePreviewPanel) Then
+    Begin
+      FilePreviewPanel.ParentColor := True;
+      FilePreviewPanel.ParentBackground := False;
+      FilePreviewPanel.Visible := True;
+      FilePreviewPanel.BringToFront;
+    End;
+End;
+
+Procedure TManageFilesPane.ShowImageContent;
+Begin
+  HideEditors;
+  If Assigned(FilePreviewLabel) Then
+    FilePreviewLabel.Visible := False;
+  If Assigned(FileImagePaintBox) Then
+    Begin
+      FileImagePaintBox.Visible := True;
+      FileImagePaintBox.Invalidate;
+    End;
+  If Assigned(FilePreviewPanel) Then
+    Begin
+      FilePreviewPanel.Visible := True;
+      FilePreviewPanel.BringToFront;
+    End;
+End;
+
 Procedure TManageFilesPane.ShowTextPane;
 Begin
   If Assigned(FPreviewPicture) Then
@@ -162,6 +328,8 @@ Begin
     FilePreviewLabel.Visible := False;
   If Assigned(FilePreviewPanel) Then
     FilePreviewPanel.Visible := False;
+  If Assigned(FileChangesView) Then
+    FileChangesView.Visible := False;
   If Assigned(FileRevisionEditor) Then
     Begin
       FileRevisionEditor.Visible := True;
@@ -169,40 +337,87 @@ Begin
     End;
 End;
 
-Procedure TManageFilesPane.ShowImagePane(ShowImage: Boolean; Const MessageText: String);
+Procedure TManageFilesPane.ShowChangesEditor;
 Begin
-  ClearRevisionHighlighter;
-  If Assigned(FileRevisionEditor) Then
-    Begin
-      FileRevisionEditor.Highlighter := Nil;
-      FileRevisionEditor.Lines.Clear;
-      FileRevisionEditor.Visible := False;
-    End;
-  If Assigned(FilePreviewLabel) Then
-    Begin
-      If MessageText <> '' Then
-        FilePreviewLabel.Caption := MessageText;
-      FilePreviewLabel.Visible := Not ShowImage;
-    End;
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
   If Assigned(FileImagePaintBox) Then
-    Begin
-      FileImagePaintBox.Visible := ShowImage;
-      If ShowImage Then
-        FileImagePaintBox.Invalidate;
-    End;
+    FileImagePaintBox.Visible := False;
+  If Assigned(FilePreviewLabel) Then
+    FilePreviewLabel.Visible := False;
   If Assigned(FilePreviewPanel) Then
+    FilePreviewPanel.Visible := False;
+  If Assigned(FileRevisionEditor) Then
+    FileRevisionEditor.Visible := False;
+  If Assigned(FileChangesView) Then
     Begin
-      FilePreviewPanel.Visible := True;
-      FilePreviewPanel.BringToFront;
+      FileChangesView.Visible := True;
+      FileChangesView.BringToFront;
+    End
+  Else
+    ShowTextPane;
+End;
+
+Procedure TManageFilesPane.ShowStoredText;
+Begin
+  ShowTextPane;
+  If Not Assigned(FileRevisionEditor) Then
+    Exit;
+  ApplyRevisionHighlighter(FContentPath);
+  FileRevisionEditor.Text := FSaveText;
+  FileRevisionEditor.CaretY := 1;
+  FileRevisionEditor.CaretX := 1;
+End;
+
+Procedure TManageFilesPane.ShowStoredDiff;
+Begin
+  If Not Assigned(FileChangesView) Then
+    Begin
+      ShowTextPane;
+      If Assigned(FileRevisionEditor) Then
+        FileRevisionEditor.Text := FDiffText;
+      Exit;
     End;
+  ShowChangesEditor;
+  FileChangesView.SetViewMode(dvmEditorOnly);
+  If Not FDiffOk Then
+    FileChangesView.LoadPlainText('', '(could not load changes)')
+  Else
+    FileChangesView.LoadEmbeddedDiff(DisplayFileName(FContentPath), FDiffText, FContentPath);
+  FileChangesView.RefreshOverviewGutter;
+End;
+
+Procedure TManageFilesPane.ShowChangesLoading;
+Begin
+  If Not Assigned(FileChangesView) Then
+    Begin
+      ShowTextPane;
+      If Assigned(FileRevisionEditor) Then
+        Begin
+          ClearRevisionHighlighter;
+          FileRevisionEditor.Text := LoadingCaption;
+        End;
+      Exit;
+    End;
+  ShowChangesEditor;
+  FileChangesView.SetViewMode(dvmEditorOnly);
+  FileChangesView.LoadPlainText('', LoadingCaption);
 End;
 
 Procedure TManageFilesPane.ClearEditor;
 Begin
   ClearRevisionHighlighter;
-  ShowTextPane;
-  If Assigned(FileRevisionEditor) Then
-    FileRevisionEditor.Clear;
+  ClearSavePayload;
+  FTextReady := False;
+  FContentSettled := False;
+  FRemovedRevision := False;
+  FDiffReady := False;
+  FDiffPending := False;
+  FDiffOk := False;
+  FDiffText := '';
+  FSaveBlockReason := 'Select a file to save.';
+  ShowBlankPane;
+  NotifyCommands;
 End;
 
 Procedure TManageFilesPane.PaintPreview;
@@ -215,6 +430,124 @@ End;
 Function TManageFilesPane.ContentIsImage: Boolean;
 Begin
   Result := FileExtensionIsImage(ExtractFileExt(FContentPath));
+End;
+
+Function TManageFilesPane.ContentReadsBytes: Boolean;
+Begin
+  Result := FileExtensionIsLikelyBinary(ExtractFileExt(FContentPath));
+End;
+
+Function TManageFilesPane.PathLooksText(Const RelativePath: String): Boolean;
+Begin
+  Result := Not FileExtensionIsLikelyBinary(ExtractFileExt(RelativePath));
+End;
+
+Function TManageFilesPane.FileSelected: Boolean;
+Var
+  RelativePath: String;
+Begin
+  Result := SelectedEntryPath(RelativePath);
+End;
+
+Function TManageFilesPane.TextPreviewActive: Boolean;
+Begin
+  Result := FTextReady And (Not FRemovedRevision);
+End;
+
+Function TManageFilesPane.CanWriteDisplayedFile: Boolean;
+Begin
+  Result := (FSaveKind = skText) Or ((FSaveKind = skBytes) And Assigned(FSaveBytes));
+End;
+
+Function TManageFilesPane.DisplayedFileStatus: String;
+Begin
+  If CanWriteDisplayedFile Then
+    Result := ''
+  Else If FSaveBlockReason <> '' Then
+    Result := FSaveBlockReason
+  Else
+    Result := 'This revision has no file contents to save.';
+End;
+
+Function TManageFilesPane.SuggestedSaveName: String;
+Begin
+  If FContentPath <> '' Then
+    Result := DisplayFileName(FContentPath)
+  Else
+    Result := DisplayFileName(FSelectedPath);
+End;
+
+Function TManageFilesPane.SuggestedSaveDirectory: String;
+Var
+  RelDir, FullDir: String;
+Begin
+  Result := RepoPath;
+  RelDir := ExtractFilePath(StringReplace(FContentPath, '/', PathDelim, [rfReplaceAll]));
+  If (RepoPath = '') Or (RelDir = '') Then
+    Exit;
+  FullDir := IncludeTrailingPathDelimiter(RepoPath) + ExcludeTrailingPathDelimiter(RelDir);
+  If DirectoryExists(FullDir) Then
+    Result := FullDir;
+End;
+
+Function TManageFilesPane.WriteDisplayedFile(Const TargetPath: String; Out ErrorText: String): Boolean;
+Var
+  Stream: TFileStream;
+  Count: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not CanWriteDisplayedFile Then
+    Begin
+      ErrorText := DisplayedFileStatus;
+      Exit;
+    End;
+  If TargetPath = '' Then
+    Begin
+      ErrorText := 'The file name is empty.';
+      Exit;
+    End;
+  Try
+    Stream := TFileStream.Create(TargetPath, fmCreate);
+    Try
+      If FSaveKind = skBytes Then
+        Begin
+          FSaveBytes.Position := 0;
+          If FSaveBytes.Size > 0 Then
+            Stream.CopyFrom(FSaveBytes, FSaveBytes.Size);
+        End
+      Else
+        Begin
+          Count := Length(FSaveText);
+          If Count > 0 Then
+            Stream.WriteBuffer(FSaveText[1], Count);
+        End;
+      Result := True;
+    Finally
+      Stream.Free;
+    End;
+  Except
+    On E: Exception Do
+      ErrorText := E.Message;
+  End;
+End;
+
+Procedure TManageFilesPane.SetShowChanges(Value: Boolean);
+Begin
+  FShowChanges := Value;
+  If Not TextPreviewActive Then
+    Exit;
+  If FShowChanges Then
+    Begin
+      If FDiffReady And (FDiffSha = FSelectedSha) And (FDiffPath = FContentPath) Then
+        ShowStoredDiff
+      Else If Assigned(OnRequestDiff) Then
+        OnRequestDiff(Self)
+      Else
+        ShowChangesLoading;
+    End
+  Else
+    ShowStoredText;
 End;
 
 Procedure TManageFilesPane.FreeTreeEntries;
@@ -240,6 +573,7 @@ Begin
   Inc(FFileListToken);
   Inc(FHistoryToken);
   Inc(FContentToken);
+  Inc(FDiffToken);
   FSelectedPath := '';
   FSelectedSha := '';
   FContentPath := '';
@@ -333,7 +667,13 @@ Begin
   Inc(FFileListToken);
   Inc(FHistoryToken);
   Inc(FContentToken);
+  Inc(FDiffToken);
   Result := FFileListToken;
+  FSelectedPath := '';
+  FSelectedSha := '';
+  FContentPath := '';
+  ClearCommitObjects;
+  ClearEditor;
   If Assigned(FileTree) Then
     Begin
       FApplying := True;
@@ -386,6 +726,7 @@ Begin
   SavedPath := FSelectedPath;
   Inc(FHistoryToken);
   Inc(FContentToken);
+  Inc(FDiffToken);
   FSelectedPath := '';
   FSelectedSha := '';
   FContentPath := '';
@@ -452,18 +793,25 @@ Begin
     FApplying := False;
   End;
   If Assigned(Match) Then
-    TreeSelectionChanged;
+    TreeSelectionChanged
+  Else
+    NotifyCommands;
 End;
 
 Function TManageFilesPane.BeginHistory: Integer;
 Begin
   Inc(FHistoryToken);
   Inc(FContentToken);
+  Inc(FDiffToken);
   Result := FHistoryToken;
   FSelectedSha := '';
   FContentPath := '';
   ClearCommitObjects;
   ClearEditor;
+  FSaveBlockReason := 'The file revision is still loading.';
+  If FileSelected Then
+    ShowMessagePane(LoadingCaption);
+  NotifyCommands;
   If Assigned(FileCommitList) Then
     FileCommitList.Items.Add('(loading…)');
 End;
@@ -484,7 +832,11 @@ Begin
     Exit;
   If Not Ok Then
     Begin
+      FContentSettled := True;
+      FSaveBlockReason := 'The commit list could not be loaded.';
+      ShowMessagePane('(could not list commits)');
       FileCommitList.Items.Add('(could not list commits)');
+      NotifyCommands;
       Exit;
     End;
   Lines := TStringList.Create;
@@ -537,7 +889,12 @@ Begin
         FileCommitList.Items.AddObject(DisplayText, Commit);
       End;
     If FileCommitList.Items.Count = 0 Then
-      FileCommitList.Items.Add('(no commits)')
+      Begin
+        FContentSettled := True;
+        FSaveBlockReason := 'This file has no commits.';
+        ShowBlankPane;
+        FileCommitList.Items.Add('(no commits)');
+      End
     Else
       FileCommitList.ItemIndex := 0;
   Finally
@@ -545,19 +902,39 @@ Begin
     FApplying := False;
   End;
   If (FileCommitList.ItemIndex >= 0) And Assigned(FileCommitList.Items.Objects[FileCommitList.ItemIndex]) Then
-    CommitSelectionChanged;
+    CommitSelectionChanged
+  Else
+    NotifyCommands;
 End;
 
 Function TManageFilesPane.BeginContent: Integer;
 Begin
   Inc(FContentToken);
+  Inc(FDiffToken);
   Result := FContentToken;
-  ShowTextPane;
-  If Assigned(FileRevisionEditor) Then
+  FContentSettled := False;
+  FTextReady := False;
+  FRemovedRevision := False;
+  FDiffReady := False;
+  FDiffPending := False;
+  FDiffOk := False;
+  FDiffText := '';
+  ClearSavePayload;
+  FSaveBlockReason := 'The file revision is still loading.';
+  If ContentReadsBytes Then
+    ShowMessagePane(LoadingCaption)
+  Else If FShowChanges Then
+    ShowChangesLoading
+  Else
     Begin
-      ClearRevisionHighlighter;
-      FileRevisionEditor.Text := '(loading…)';
+      ShowTextPane;
+      If Assigned(FileRevisionEditor) Then
+        Begin
+          ClearRevisionHighlighter;
+          FileRevisionEditor.Text := LoadingCaption;
+        End;
     End;
+  NotifyCommands;
 End;
 
 Procedure TManageFilesPane.ApplyContent(Token: Integer; Const HistoricalPath, Sha, Content: String;
@@ -565,26 +942,42 @@ Procedure TManageFilesPane.ApplyContent(Token: Integer; Const HistoricalPath, Sh
 Begin
   If (Token <> FContentToken) Or (HistoricalPath <> FContentPath) Or (Sha <> FSelectedSha) Then
     Exit;
-  If Not Assigned(FileRevisionEditor) Then
-    Exit;
-  ShowTextPane;
+  FContentSettled := True;
+  FTextReady := False;
+  FRemovedRevision := False;
   If Not Ok Then
     Begin
-      ClearRevisionHighlighter;
-      FileRevisionEditor.Text := '(could not load this revision)';
-    End
-  Else If IsBinary Then
+      ClearSavePayload;
+      FSaveBlockReason := 'This revision could not be loaded.';
+      ShowMessagePane('(could not load this revision)');
+      NotifyCommands;
+      Exit;
+    End;
+  If IsBinary Then
     Begin
-      ClearRevisionHighlighter;
-      FileRevisionEditor.Text := '(binary file)';
+      ClearSavePayload;
+      FSaveBlockReason := 'This revision has no file contents to save.';
+      ShowMessagePane(BinaryFileCaption);
+      NotifyCommands;
+      Exit;
+    End;
+  ClearSavePayload;
+  FSaveKind := skText;
+  FSaveText := Content;
+  FTextReady := True;
+  FSaveBlockReason := '';
+  If FShowChanges Then
+    Begin
+      If FDiffReady And (FDiffSha = Sha) And (FDiffPath = HistoricalPath) Then
+        ShowStoredDiff
+      Else If (Not FDiffPending) And Assigned(OnRequestDiff) Then
+        OnRequestDiff(Self)
+      Else
+        ShowChangesLoading;
     End
   Else
-    Begin
-      ApplyRevisionHighlighter(HistoricalPath);
-      FileRevisionEditor.Text := Content;
-    End;
-  FileRevisionEditor.CaretY := 1;
-  FileRevisionEditor.CaretX := 1;
+    ShowStoredText;
+  NotifyCommands;
 End;
 
 Procedure TManageFilesPane.ApplyImage(Token: Integer; Const HistoricalPath, Sha: String; Bytes: TStream; Ok: Boolean;
@@ -592,19 +985,85 @@ Procedure TManageFilesPane.ApplyImage(Token: Integer; Const HistoricalPath, Sha:
 Begin
   If (Token <> FContentToken) Or (HistoricalPath <> FContentPath) Or (Sha <> FSelectedSha) Then
     Exit;
+  FContentSettled := True;
+  FTextReady := False;
+  FRemovedRevision := False;
   If Assigned(FPreviewPicture) Then
     FPreviewPicture.Clear;
-  If Not Ok Or Not TryLoadRepositoryImage(Bytes, FPreviewPicture) Then
+  If Not Ok Then
     Begin
-      If Ok Then
-        ShowImagePane(False, RepositoryImageUnavailable)
-      Else If ErrorText <> '' Then
-        ShowImagePane(False, ErrorText)
+      ClearSavePayload;
+      FSaveBlockReason := 'This revision could not be loaded.';
+      If ErrorText <> '' Then
+        ShowMessagePane(ErrorText)
       Else
-        ShowImagePane(False, '(could not load this revision)');
+        ShowMessagePane('(could not load this revision)');
+      NotifyCommands;
       Exit;
     End;
-  ShowImagePane(True, '');
+  KeepSaveBytes(Bytes);
+  If Not TryLoadRepositoryImage(Bytes, FPreviewPicture) Then
+    ShowMessagePane(RepositoryImageUnavailable)
+  Else
+    ShowImageContent;
+  NotifyCommands;
+End;
+
+Procedure TManageFilesPane.ApplyBinary(Token: Integer; Const HistoricalPath, Sha: String; Bytes: TStream; Ok: Boolean;
+  Const ErrorText: String);
+Begin
+  If (Token <> FContentToken) Or (HistoricalPath <> FContentPath) Or (Sha <> FSelectedSha) Then
+    Exit;
+  FContentSettled := True;
+  FTextReady := False;
+  FRemovedRevision := False;
+  If Assigned(FPreviewPicture) Then
+    FPreviewPicture.Clear;
+  If Not Ok Then
+    Begin
+      ClearSavePayload;
+      FSaveBlockReason := 'This revision could not be loaded.';
+      If ErrorText <> '' Then
+        ShowMessagePane(ErrorText)
+      Else
+        ShowMessagePane('(could not load this revision)');
+      NotifyCommands;
+      Exit;
+    End;
+  KeepSaveBytes(Bytes);
+  ShowMessagePane(BinaryFileCaption);
+  NotifyCommands;
+End;
+
+Function TManageFilesPane.BeginDiff: Integer;
+Begin
+  Inc(FDiffToken);
+  Result := FDiffToken;
+  FDiffPending := True;
+  FDiffReady := False;
+  FDiffOk := False;
+  FDiffText := '';
+  FDiffSha := FSelectedSha;
+  FDiffPath := FContentPath;
+  If FShowChanges And PathLooksText(FContentPath) And ((Not FContentSettled) Or FTextReady) Then
+    ShowChangesLoading;
+End;
+
+Procedure TManageFilesPane.ApplyDiff(Token: Integer; Const HistoricalPath, Sha, DiffText: String; Ok: Boolean);
+Begin
+  If (Token <> FDiffToken) Or (HistoricalPath <> FDiffPath) Or (Sha <> FDiffSha) Then
+    Exit;
+  If (HistoricalPath <> FContentPath) Or (Sha <> FSelectedSha) Then
+    Exit;
+  FDiffPending := False;
+  FDiffText := DiffText;
+  FDiffReady := True;
+  FDiffOk := Ok;
+  If Not FShowChanges Then
+    Exit;
+  If FContentSettled And (Not FTextReady) Then
+    Exit;
+  ShowStoredDiff;
 End;
 
 Procedure TManageFilesPane.TreeSelectionChanged;
@@ -617,6 +1076,7 @@ Begin
     Begin
       Inc(FHistoryToken);
       Inc(FContentToken);
+      Inc(FDiffToken);
       FSelectedPath := '';
       FSelectedSha := '';
       FContentPath := '';
@@ -627,6 +1087,8 @@ Begin
   If RelativePath = FSelectedPath Then
     Exit;
   FSelectedPath := RelativePath;
+  FSaveBlockReason := 'The file revision is still loading.';
+  NotifyCommands;
   If Assigned(OnRequestHistory) Then
     OnRequestHistory(Self);
 End;
@@ -642,6 +1104,13 @@ Begin
       FSelectedSha := '';
       FContentPath := '';
       ClearEditor;
+      If FileSelected Then
+        Begin
+          FContentSettled := True;
+          FSaveBlockReason := 'Select a commit to save that version of the file.';
+          ShowBlankPane;
+          NotifyCommands;
+        End;
       Exit;
     End;
   Commit := TRepositoryFileCommit(FileCommitList.Items.Objects[FileCommitList.ItemIndex]);
@@ -650,11 +1119,21 @@ Begin
   If Commit.Removed Then
     Begin
       Inc(FContentToken);
-      ShowImagePane(False, FileRemovedCaption);
+      Inc(FDiffToken);
+      FContentSettled := True;
+      FTextReady := False;
+      FRemovedRevision := True;
+      FDiffPending := False;
+      ClearSavePayload;
+      FSaveBlockReason := 'This file was removed in the selected commit.';
+      ShowMessagePane(FileRemovedCaption);
+      NotifyCommands;
       Exit;
     End;
   If Assigned(OnRequestContent) Then
     OnRequestContent(Self);
+  If FShowChanges And PathLooksText(FContentPath) And Assigned(OnRequestDiff) Then
+    OnRequestDiff(Self);
 End;
 
 Procedure TManageFilesPane.TreeCustomDrawItem(Sender: TCustomTreeView; Node: TTreeNode; State: TCustomDrawState;

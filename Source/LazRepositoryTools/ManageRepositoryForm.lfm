@@ -257,7 +257,7 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FileTree: TTreeView
           Left = 4
-          Height = 382
+          Height = 380
           Top = 4
           Width = 372
           Align = alClient
@@ -274,13 +274,13 @@ object ManageRepositoryForm: TManageRepositoryForm
         end
         object FilesPanel: TPanel
           Left = 0
-          Height = 26
-          Top = 390
+          Height = 28
+          Top = 388
           Width = 380
           Align = alBottom
           AutoSize = True
           BevelOuter = bvNone
-          ClientHeight = 26
+          ClientHeight = 28
           ClientWidth = 380
           TabOrder = 3
           object RemovedFilesCheckBox: TCheckBox
@@ -291,7 +291,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             Align = alLeft
             BorderSpacing.Left = 4
             BorderSpacing.Top = 2
-            BorderSpacing.Bottom = 2
+            BorderSpacing.Bottom = 4
             Caption = 'Include Removed Files'
             TabOrder = 0
             OnChange = RemovedFilesCheckBoxChange
@@ -316,9 +316,52 @@ object ManageRepositoryForm: TManageRepositoryForm
         ClientHeight = 601
         ClientWidth = 798
         TabOrder = 2
+        object PreviewButtonPanel: TPanel
+          Left = 0
+          Height = 38
+          Top = 563
+          Width = 798
+          Align = alBottom
+          AutoSize = True
+          BevelOuter = bvNone
+          BorderSpacing.Left = 4
+          BorderSpacing.Right = 4
+          BorderSpacing.Bottom = 4
+          ClientHeight = 38
+          ClientWidth = 790
+          ParentColor = True
+          TabOrder = 0
+          object SaveButton: TButton
+            Left = 4
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = SaveFileAction
+            BorderSpacing.Around = 4
+            ParentShowHint = False
+            ShowHint = True
+            TabOrder = 0
+          end
+          object ShowChangesCheckBox: TCheckBox
+            AnchorSideLeft.Control = SaveButton
+            AnchorSideLeft.Side = asrBottom
+            AnchorSideTop.Control = SaveButton
+            AnchorSideTop.Side = asrCenter
+            Left = 96
+            Height = 22
+            Top = 7
+            Width = 138
+            AutoSize = True
+            BorderSpacing.Left = 8
+            Caption = 'Show File Changes'
+            Enabled = False
+            TabOrder = 1
+            OnChange = ShowChangesCheckBoxChange
+          end
+        end
         inline FileRevisionEditor: TSynEdit
           Left = 4
-          Height = 593
+          Height = 555
           Top = 4
           Width = 790
           Align = alClient
@@ -326,7 +369,8 @@ object ManageRepositoryForm: TManageRepositoryForm
           Font.Height = -12
           Font.Name = 'Courier New'
           Font.Quality = fqCleartypeNatural
-          TabOrder = 0
+          TabOrder = 1
+          Visible = False
           ReadOnly = True
           RightEdge = 0
           ScrollBars = ssAutoBoth
@@ -353,32 +397,39 @@ object ManageRepositoryForm: TManageRepositoryForm
           BevelOuter = bvNone
           ClientHeight = 593
           ClientWidth = 790
-          Color = clWindow
           ParentBackground = False
-          ParentColor = False
-          TabOrder = 1
-          Visible = False
+          ParentColor = True
+          TabOrder = 2
           object FilePreviewLabel: TLabel
             Left = 0
-            Height = 593
+            Height = 555
             Top = 0
             Width = 790
             Align = alClient
             Alignment = taCenter
             Caption = 'Image preview unavailable (16 megapixel limit or unsupported image).'
             Layout = tlCenter
-            ParentColor = False
+            ParentColor = True
             Visible = False
           end
           object FileImagePaintBox: TPaintBox
             Left = 0
-            Height = 593
+            Height = 555
             Top = 0
             Width = 790
             Align = alClient
             Visible = False
             OnPaint = FileImagePaintBoxPaint
           end
+        end
+        inline FileChangesView: TGitDiffView
+          Left = 0
+          Height = 555
+          Top = 4
+          Width = 798
+          Align = alClient
+          TabOrder = 3
+          Visible = False
         end
       end
     end
@@ -816,6 +867,13 @@ object ManageRepositoryForm: TManageRepositoryForm
       Caption = 'Create branch here…'
       OnExecute = CreateBranchActionExecute
       OnUpdate = HistoryMutateActionUpdate
+    end
+    object SaveFileAction: TAction
+      Caption = 'Save File'
+      Enabled = False
+      Hint = 'Save the displayed revision of the selected file'
+      OnExecute = SaveFileActionExecute
+      OnUpdate = SaveFileActionUpdate
     end
   end
   object Popup: TPopupMenu

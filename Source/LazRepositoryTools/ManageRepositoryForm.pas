@@ -26,6 +26,11 @@ Type
   TManageRepositoryForm = Class(TForm, IGitRepositoryChanged)
     { Designer-managed controls and event methods (before first Private, as for other forms). }
     ActionList: TActionList;
+    PreviewButtonPanel: TPanel;
+    ShowChangesCheckBox: TCheckBox;
+    SaveButton: TButton;
+    SaveFileAction: TAction;
+    FileChangesView: TGitDiffView;
     RemovedFilesCheckBox: TCheckBox;
     FilesPanel: TPanel;
     PushAction: TAction;
@@ -164,6 +169,9 @@ Type
     Procedure HistoryMutateActionUpdate(Sender: TObject);
     Procedure RewriteHeadActionUpdate(Sender: TObject);
     Procedure RemovedFilesCheckBoxChange(Sender: TObject);
+    Procedure SaveFileActionExecute(Sender: TObject);
+    Procedure SaveFileActionUpdate(Sender: TObject);
+    Procedure ShowChangesCheckBoxChange(Sender: TObject);
     Procedure FileTreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileTreeMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
@@ -214,6 +222,8 @@ Type
     Procedure SubmitFileList;
     Procedure SubmitFileHistory(Sender: TObject);
     Procedure SubmitFileContent(Sender: TObject);
+    Procedure SubmitFileDiff(Sender: TObject);
+    Procedure UpdateFilePreviewCommands(Sender: TObject);
     Procedure ConfigureCommitMessageEditor;
     Function CanMutate: Boolean;
     Function CanRewriteLastCommit: Boolean;
@@ -335,6 +345,8 @@ Begin
   FFilesNeedReload := True;
   FFiles.OnRequestHistory := @SubmitFileHistory;
   FFiles.OnRequestContent := @SubmitFileContent;
+  FFiles.OnRequestDiff := @SubmitFileDiff;
+  FFiles.OnCommandsChanged := @UpdateFilePreviewCommands;
   ApplyConfig;
   WorkflowEventBus.AddListener(Self);
   If Assigned(GitJobs) Then
@@ -426,8 +438,17 @@ Begin
     If Assigned(FChanges) Then
       FChanges.Bind(ChangesList, StagedList, ChangesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
         StagedLabel);
+    If Assigned(FileChangesView) Then
+      Begin
+        FileChangesView.SetViewMode(dvmEditorOnly);
+        { Files preview shows the same diff editor, without stage commands. }
+        If Assigned(FileChangesView.DiffEditor) Then
+          FileChangesView.DiffEditor.PopupMenu := Nil;
+      End;
     If Assigned(FFiles) Then
-      FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor, FilePreviewPanel, FileImagePaintBox, FilePreviewLabel);
+      FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor, FilePreviewPanel, FileImagePaintBox, FilePreviewLabel,
+        FileChangesView);
+    UpdateFilePreviewCommands(Nil);
     If Assigned(UntrackedCheck) Then
       UntrackedCheck.Checked := False;
     If Assigned(CleanCheck) Then
@@ -871,11 +892,24 @@ Begin
         If Job.Cancelled Or Not Assigned(FFiles) Then
           Exit;
         If Job.PreviewReadBytes Then
-          FFiles.ApplyImage(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewBytes, Job.Ok, Job.ErrorText)
+          Begin
+            If FFiles.ContentIsImage Then
+              FFiles.ApplyImage(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewBytes, Job.Ok, Job.ErrorText)
+            Else
+              FFiles.ApplyBinary(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewBytes, Job.Ok, Job.ErrorText);
+          End
         Else
           FFiles.ApplyContent(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewText, Job.PreviewBinary, Job.Ok);
         If Not Job.Ok Then
           WorkflowLogger.Warning('ManageRepository', 'File revision: ' + Job.ErrorText);
+      End;
+    gjkFilePreview:
+      Begin
+        If Job.Cancelled Or Not Assigned(FFiles) Then
+          Exit;
+        FFiles.ApplyDiff(Job.Tag, Job.PreviewPath, Job.PreviewSha, Job.PreviewText, Job.Ok);
+        If Not Job.Ok Then
+          WorkflowLogger.Warning('ManageRepository', 'File changes: ' + Job.ErrorText);
       End;
     gjkSuggestMessage:
       Begin
@@ -1297,6 +1331,8 @@ Begin
     Begin
       If Assigned(FileRevisionEditor) Then
         ApplySynEditIDEFont(FileRevisionEditor, True);
+      If Assigned(FileChangesView) And FileChangesView.Visible Then
+        FileChangesView.RefreshOverviewGutter;
       If Assigned(FileImagePaintBox) And FileImagePaintBox.Visible Then
         FileImagePaintBox.Invalidate;
       If FFilesNeedReload Then
@@ -1398,7 +1434,7 @@ Begin
     Exit;
   Path := FFiles.ContentPath;
   Sha := FFiles.SelectedSha;
-  ReadBytes := FFiles.ContentIsImage;
+  ReadBytes := FFiles.ContentReadsBytes;
   Token := FFiles.BeginContent;
   Job := TGitJob.Create(gjkCommitFile);
   Job.RepoPath := FRepoPath;
@@ -1409,11 +1445,100 @@ Begin
   Job.Tag := Token;
   If Not SubmitGitJob(Job) Then
     Begin
-      If ReadBytes Then
+      If FFiles.ContentIsImage Then
         FFiles.ApplyImage(Token, Path, Sha, Nil, False, '')
+      Else If ReadBytes Then
+        FFiles.ApplyBinary(Token, Path, Sha, Nil, False, '')
       Else
         FFiles.ApplyContent(Token, Path, Sha, '', False, False);
     End;
+End;
+
+Procedure TManageRepositoryForm.SubmitFileDiff(Sender: TObject);
+Var
+  Job: TGitJob;
+  Token: Integer;
+  Path, Sha: String;
+Begin
+  If Not Assigned(FFiles) Or (FFiles.SelectedSha = '') Or (FFiles.ContentPath = '') Then
+    Exit;
+  Path := FFiles.ContentPath;
+  Sha := FFiles.SelectedSha;
+  Token := FFiles.BeginDiff;
+  Job := TGitJob.Create(gjkFilePreview);
+  Job.RepoPath := FRepoPath;
+  Job.Quiet := True;
+  Job.PreviewPath := Path;
+  Job.PreviewSha := Sha;
+  Job.Caption := 'Loading changes…';
+  Job.Tag := Token;
+  If Not SubmitGitJob(Job) Then
+    FFiles.ApplyDiff(Token, Path, Sha, '', False);
+End;
+
+Procedure TManageRepositoryForm.UpdateFilePreviewCommands(Sender: TObject);
+Begin
+  If Assigned(SaveFileAction) Then
+    { A file node enables Save. Folders and an empty selection stay disabled. }
+    SaveFileAction.Enabled := Assigned(FFiles) And FFiles.FileSelected;
+  If Assigned(ShowChangesCheckBox) Then
+    ShowChangesCheckBox.Enabled := Assigned(FFiles) And FFiles.TextPreviewActive;
+End;
+
+Procedure TManageRepositoryForm.SaveFileActionUpdate(Sender: TObject);
+Begin
+  UpdateFilePreviewCommands(Sender);
+End;
+
+Procedure TManageRepositoryForm.SaveFileActionExecute(Sender: TObject);
+Var
+  Dlg: TSaveDialog;
+  SuggestedName, ErrorText, Ext: String;
+Begin
+  If Not Assigned(FFiles) Then
+    Exit;
+  If Not FFiles.CanWriteDisplayedFile Then
+    Begin
+      ErrorText := FFiles.DisplayedFileStatus;
+      If ErrorText = '' Then
+        ErrorText := 'This revision has no file contents to save.';
+      MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  SuggestedName := FFiles.SuggestedSaveName;
+  Dlg := TSaveDialog.Create(Nil);
+  Try
+    Dlg.Title := 'Save File';
+    Dlg.Options := [ofOverwritePrompt, ofPathMustExist, ofEnableSizing, ofNoChangeDir];
+    Dlg.FileName := SuggestedName;
+    Ext := ExtractFileExt(SuggestedName);
+    If Ext <> '' Then
+      Begin
+        Dlg.Filter := 'Files (*' + Ext + ')|*' + Ext + '|All files (*.*)|*.*';
+        Dlg.DefaultExt := Copy(Ext, 2, MaxInt);
+      End
+    Else
+      Dlg.Filter := 'All files (*.*)|*.*';
+    If FFiles.SuggestedSaveDirectory <> '' Then
+      Dlg.InitialDir := FFiles.SuggestedSaveDirectory;
+    If Not Dlg.Execute Then
+      Exit;
+    If Not FFiles.WriteDisplayedFile(Dlg.FileName, ErrorText) Then
+      Begin
+        If ErrorText = '' Then
+          ErrorText := 'The file could not be saved.';
+        MessageDlg(ErrorText, mtError, [mbOK], 0);
+      End;
+  Finally
+    Dlg.Free;
+  End;
+End;
+
+Procedure TManageRepositoryForm.ShowChangesCheckBoxChange(Sender: TObject);
+Begin
+  If Not Assigned(FFiles) Or Not Assigned(ShowChangesCheckBox) Then
+    Exit;
+  FFiles.SetShowChanges(ShowChangesCheckBox.Checked);
 End;
 
 Procedure TManageRepositoryForm.FileImagePaintBoxPaint(Sender: TObject);
