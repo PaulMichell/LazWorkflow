@@ -171,3 +171,28 @@ Highest first:
 5. Generic advice in either document.
 
 A guide hard stop does not outrank items 1–3. A citation habit may remain. It does not authorize a stop that the mode contract or an explicit instruction already settled.
+
+## Decision
+
+Plan item 4.1. Recommendation: **fold** the unique clauses into `free-pascal-engineer` and drop the second skill. Not confirmed. No skill file was written.
+
+Reject is the wrong call. The hard stops would fight this project if imported whole, but the useful remainder would not. Precedence, the wording weights, stating a risky assumption, and the unverified-work report matched real misses. Those are worth keeping.
+
+A companion skill is not justified. The remainder is about 2,000 to 3,000 characters. It would not be hidden inside the style skill, and the scored sessions do not need process rules switched off while Pascal style stays on. Paying another 8,200 characters on every Plan and Build turn, most of it repeated or harmful, is the cost this recommendation avoids.
+
+What to fold, and only after the user confirms:
+
+- The precedence list in this file, including that an explicit instruction does not override host safety or the mode contract.
+- Must / Should / May, and the four definitions.
+- State a risky assumption before acting. Do not pick a source silently.
+- After non-trivial work, report what changed, what was verified, what was not, and what was left untouched. If the baseline is already broken, say so.
+
+What not to fold:
+
+- Waiting for "let's build this" in Build.
+- A ban on commits or on global registration.
+- A second set of operating modes.
+- Licence to match a harmful Pascal pattern, or to add an example on every touched method.
+- Sections the score marked neutral. They are already in `free-pascal-engineer` or the mode contract.
+
+Items 4.2 to 4.4 stay not started until the user confirms. Confirmation is required before any skill file is written.
