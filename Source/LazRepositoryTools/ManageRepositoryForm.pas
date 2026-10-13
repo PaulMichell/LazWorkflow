@@ -26,6 +26,8 @@ Type
   TManageRepositoryForm = Class(TForm, IGitRepositoryChanged)
     { Designer-managed controls and event methods (before first Private, as for other forms). }
     ActionList: TActionList;
+    RemovedFilesCheckBox: TCheckBox;
+    FilesPanel: TPanel;
     PushAction: TAction;
     PullAction: TAction;
     FetchAction: TAction;
