@@ -32,9 +32,11 @@ Read recent assistant sessions and the open plan history. Score each section of 
 Keep the score in `Documents/AgenticDevelopmentReview.md`. Do not edit skills in this item.
 
 ### 2.2 Cost the second skill
-Status: not started
+Status: complete
 
 Count characters in `Documents/BEHAVE.md` and in `free-pascal-engineer`. Both are tagged on Plan and Build today, so both are injected on those turns. Note whether the unique remainder is small enough to live as one section of `free-pascal-engineer` instead of a second always-on skill. A second skill is justified only if its unique rules would be hidden inside the style skill, or if process rules must be switchable without turning Pascal style off.
+
+The counts and the fold-versus-second-skill note are in `Documents/AgenticDevelopmentReview.md`.
 
 ## 3. Compare the two documents
 
