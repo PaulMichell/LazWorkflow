@@ -68,7 +68,7 @@ Status: complete
 Required arguments are `path` and `prompt`. Optional arguments are `overwrite` and `shape`. Remove `image_id`. `shape` is a short hint such as `1:1`. Omit it to let the image model choose. The description says this call draws one still image with the connection's image model and saves it. It is not a copy of a `read_image` attachment. Prefer PNG unless the user names another allowed extension. The success text keeps the Wrote line, path, byte size, width, height, and MIME type, and adds the image model id so the user can see which model ran. Attach the saved image on the tool result so the chat shows it without a later `read_image`.
 
 ### 4.2 Tell the model to call once
-Status: not started
+Status: complete
 
 Replace the image-output prompt section. It says: call `write_image` once with a short prompt and a project path; a few reads of existing art are enough when the user asked for a match; do not search the assistant source; do not spawn a subagent to draw; do not invent another image tool; do not pick or name an image model in the call; do not claim a file exists unless the result starts with Wrote. Exact pixels may differ across models. Do not retry for that. Subagent sessions do not receive `write_image`.
 
