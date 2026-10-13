@@ -76,7 +76,7 @@ Draft one short precedence list in `Documents/AgenticDevelopmentReview.md`. Do n
 ## 4. Decide and, only if it passes, adapt
 
 ### 4.1 Record the decision
-Status: not started
+Status: complete
 
 Stop after `Documents/AgenticDevelopmentReview.md` exists. Recommend one of three outcomes:
 
@@ -84,7 +84,7 @@ Stop after `Documents/AgenticDevelopmentReview.md` exists. Recommend one of thre
 - Fold only the unique clauses into `free-pascal-engineer` and drop the second skill.
 - Reject. The repetitions are not worth the tokens, or the hard stops would fight normal work.
 
-The user confirms the recommendation before any skill file is written. If the recommendation is reject, mark the remaining items in this section cancelled only after that confirmation. Until then leave them not started.
+Recommendation recorded in `Documents/AgenticDevelopmentReview.md`: fold. The user confirms before any skill file is written. Items 4.2 to 4.4 stay not started until that confirmation.
 
 ### 4.2 Adapt the surviving text
 Status: not started
