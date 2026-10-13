@@ -311,7 +311,7 @@ Begin
     Raise Exception.Create(ErrorText);
 End;
 
-{ Frozen against Source/Tests/Fixtures/XaiImageUnderstandingParts.json.
+{ Frozen against Tests/Fixtures/XaiImageUnderstandingParts.json.
   Responses image_url is a data URI string. Chat image_url.url is a data URI; detail is omitted. }
 Function UserImageContentArray(Const Item: TSamplerInputItem; Const ProjectRoot: String; ResponsesWire: Boolean): String;
 Var

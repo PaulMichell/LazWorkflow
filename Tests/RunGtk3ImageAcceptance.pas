@@ -293,7 +293,7 @@ Begin
     For I := 0 To Dirs.Count - 1 Do
       Command.Add('-Fu' + Dirs[I]);
     AddLinkerFlags(Command);
-    Command.Add(IncludeTrailingPathDelimiter(Repo) + 'Source' + PathDelim + 'Tests' + PathDelim + 'AssistantImageAcceptance.lpr');
+    Command.Add(IncludeTrailingPathDelimiter(Repo) + 'Tests' + PathDelim + 'AssistantImageAcceptance.lpr');
     Code := CaptureRun(Fpc, Command, Repo, Text);
     LogPath := IncludeTrailingPathDelimiter(Output) + 'build.log';
     Stream := TFileStream.Create(LogPath, fmCreate);

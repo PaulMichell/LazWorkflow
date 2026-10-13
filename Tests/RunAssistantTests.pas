@@ -5,7 +5,7 @@ Program RunAssistantTests;
 
   Invoke with InstantFPC. Python is not used:
     instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout>
-  Compiled test programs stay under Source/Tests. This runner does not. }
+  Compiled test programs are written to a temporary directory, not beside these sources. }
 
 {$IFDEF FPC}
   {$MODE OBJFPC}
@@ -499,12 +499,12 @@ Begin
   Result := Restricted('assistant-package', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
     RepoFile('Packages/LazAssistantTools.pas'), False, 300, UnitDirs) And Result;
   Result := Restricted('RepositoryOnlyInstall', ['LazRepositoryTools', 'LazWorkflowCommon'],
-    RepoFile('Source/Tests/RepositoryOnlyInstall.lpr'), True, 240, UnitDirs) And Result;
+    RepoFile('Tests/RepositoryOnlyInstall.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('AssistantOnlyInstall', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
-    RepoFile('Source/Tests/AssistantOnlyInstall.lpr'), True, 240, UnitDirs) And Result;
+    RepoFile('Tests/AssistantOnlyInstall.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('IndependentInstallTest',
     ['LazRepositoryTools', 'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
-    RepoFile('Source/Tests/IndependentInstallTest.lpr'), True, 240, UnitDirs) And Result;
+    RepoFile('Tests/IndependentInstallTest.lpr'), True, 240, UnitDirs) And Result;
 End;
 
 Procedure RunPackageCheck;
@@ -573,7 +573,7 @@ Begin
           Command.Add('-FU' + OutputDir);
           Command.Add('-FE' + OutputDir);
           AddUnitFlags(Command, UnitDirs);
-          Command.Add(RepoFile('Source/Tests/' + Tests[I] + '.lpr'));
+          Command.Add(RepoFile('Tests/' + Tests[I] + '.lpr'));
           If RunCommand(Tests[I] + '-build', Command, BuildTimeout) And Not CompileOnly Then
             RunArgs(Tests[I], [OutputBinary(OutputDir, Tests[I])], BuildTimeout);
         End;
