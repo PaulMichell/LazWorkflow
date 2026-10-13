@@ -74,3 +74,17 @@ Keep, if the guide is adapted: the precedence list, the habit of stating a risky
 Drop, or the guide will fight this project: waiting for "let's build this" during Build, forbidding commits, and forbidding global registration.
 
 The clause-by-clause map against `free-pascal-engineer` is plan item 3.1. It is not in this file yet.
+
+## Cost of a second skill
+
+Counted 2026-10-13 for plan item 2.2. Skills were not edited.
+
+`Documents/BEHAVE.md` is 8,201 bytes and has no front matter. `StripYamlFrontMatter` trims one trailing newline, so the injected body is 8,200 characters.
+
+`~/.grok/skills/free-pascal-engineer/SKILL.md` is 54,775 bytes. The heading starts at byte 444, after the YAML front matter. The injected body, trimmed, is 54,330 characters. There is no `~/.grok/skills/BEHAVE/SKILL.md`. The tagged `BEHAVE` body is the settings attachment, the same text as `Documents/BEHAVE.md`.
+
+On Plan and Build both bodies are attached (`AssistantConfig` seeds `free-pascal-engineer` onto those modes; the settings attachment adds `BEHAVE`). The pair is about 62,530 characters before the short begin/end wrappers. The 120,000 character skill cap is not reached. `BEHAVE` adds about 15 percent on top of the style skill on every Plan and Build turn.
+
+The unique remainder, after dropping the harmful clauses and the sections the score marked neutral, is the precedence list, the wording weights, the habit of stating a risky assumption, and the unverified-work report. That is about 2,000 to 3,000 characters. It fits in one section of `free-pascal-engineer`. It would not be hidden there: 3,000 characters is visible inside a 54,000 character skill, and it is too small to justify a second always-on body by size.
+
+A second skill is justified only if process rules must be switchable without turning Pascal style off. That is possible, because `free-pascal-engineer` is seeded onto Plan and Build and a companion skill can be untagged. The sessions scored in this file do not show a need to switch process rules off while keeping Pascal style on. Item 4.1 still makes the adopt, fold, or reject decision.
