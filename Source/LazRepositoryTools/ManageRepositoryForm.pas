@@ -121,6 +121,16 @@ Type
     CopySeparator: TMenuItem;
     CheckoutMenuItem: TMenuItem;
     CreateBranchMenuItem: TMenuItem;
+    FileSelectWordAction: TAction;
+    FileSelectLineAction: TAction;
+    FileSelectAllAction: TAction;
+    FileCopyAction: TAction;
+    FilePreviewPopup: TPopupMenu;
+    FileSelectWordMenuItem: TMenuItem;
+    FileSelectLineMenuItem: TMenuItem;
+    FileSelectAllMenuItem: TMenuItem;
+    FilePreviewCopySeparator: TMenuItem;
+    FileCopyMenuItem: TMenuItem;
     Procedure FormCreate(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure FormShow(Sender: TObject);
@@ -176,6 +186,12 @@ Type
     Procedure FileTreeMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
     Procedure FileImagePaintBoxPaint(Sender: TObject);
+    Procedure FileSelectWordActionExecute(Sender: TObject);
+    Procedure FileSelectLineActionExecute(Sender: TObject);
+    Procedure FileSelectAllActionExecute(Sender: TObject);
+    Procedure FileCopyActionExecute(Sender: TObject);
+    Procedure FilePreviewActionUpdate(Sender: TObject);
+    Procedure FilePreviewPopupPopup(Sender: TObject);
   Private
     FDetailTimer: TTimer;
     FAutoRefreshTimer: TTimer;
@@ -253,6 +269,7 @@ Type
     Procedure WorkingTreeChanged(Const RepoPath: String);
     Procedure HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
     Procedure RemoteUpdated(Const RepoPath: String; Const RemoteName: String);
+    Function FilePreviewEditor: TSynEdit;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -273,7 +290,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, SpellCheckerConfig;
+  DateUtils, Math, LazFileUtils, SpellCheckerConfig, SynEditTypes;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -438,12 +455,18 @@ Begin
     If Assigned(FChanges) Then
       FChanges.Bind(ChangesList, StagedList, ChangesDiffView, UntrackedCheck, CleanCheck, IgnoredCheck,
         StagedLabel);
+    If Assigned(FileRevisionEditor) Then
+      Begin
+        FileRevisionEditor.Options := FileRevisionEditor.Options - [eoNoSelection];
+        FileRevisionEditor.PopupMenu := FilePreviewPopup;
+      End;
     If Assigned(FileChangesView) Then
       Begin
+        { Files preview shows the embedded diff without hunk rules or stage commands. }
+        FileChangesView.ShowChunkMarkers := False;
         FileChangesView.SetViewMode(dvmEditorOnly);
-        { Files preview shows the same diff editor, without stage commands. }
         If Assigned(FileChangesView.DiffEditor) Then
-          FileChangesView.DiffEditor.PopupMenu := Nil;
+          FileChangesView.DiffEditor.PopupMenu := FilePreviewPopup;
       End;
     If Assigned(FFiles) Then
       FFiles.Bind(FileTree, FileCommitList, FileRevisionEditor, FilePreviewPanel, FileImagePaintBox, FilePreviewLabel,
@@ -1532,6 +1555,124 @@ Begin
   Finally
     Dlg.Free;
   End;
+End;
+
+Function TManageRepositoryForm.FilePreviewEditor: TSynEdit;
+Begin
+  Result := Nil;
+  If Assigned(FilePreviewPopup) And (FilePreviewPopup.PopupComponent Is TSynEdit) And
+     TSynEdit(FilePreviewPopup.PopupComponent).Visible Then
+    Exit(TSynEdit(FilePreviewPopup.PopupComponent));
+  If Assigned(FileChangesView) And FileChangesView.Visible And Assigned(FileChangesView.DiffEditor) And
+     FileChangesView.DiffEditor.Visible Then
+    Exit(FileChangesView.DiffEditor);
+  If Assigned(FileRevisionEditor) And FileRevisionEditor.Visible Then
+    Result := FileRevisionEditor;
+End;
+
+Function LogicalPointInSelection(Editor: TSynEdit; Const Cell: TPoint): Boolean;
+Var
+  BlockStart, BlockFinish, Swap: TPoint;
+Begin
+  Result := False;
+  If (Not Assigned(Editor)) Or (Not Editor.SelAvail) Then
+    Exit;
+  BlockStart := Editor.BlockBegin;
+  BlockFinish := Editor.BlockEnd;
+  If (BlockFinish.Y < BlockStart.Y) Or ((BlockFinish.Y = BlockStart.Y) And (BlockFinish.X < BlockStart.X)) Then
+    Begin
+      Swap := BlockStart;
+      BlockStart := BlockFinish;
+      BlockFinish := Swap;
+    End;
+  If (Cell.Y < BlockStart.Y) Or (Cell.Y > BlockFinish.Y) Then
+    Exit;
+  If (Cell.Y > BlockStart.Y) And (Cell.Y < BlockFinish.Y) Then
+    Exit(True);
+  If BlockStart.Y = BlockFinish.Y Then
+    Result := (Cell.X >= BlockStart.X) And (Cell.X < BlockFinish.X)
+  Else If Cell.Y = BlockStart.Y Then
+    Result := Cell.X >= BlockStart.X
+  Else
+    Result := Cell.X < BlockFinish.X;
+End;
+
+Procedure TManageRepositoryForm.FilePreviewPopupPopup(Sender: TObject);
+Var
+  Editor: TSynEdit;
+  LocalPt, Cell: TPoint;
+Begin
+  Editor := FilePreviewEditor;
+  If Not Assigned(Editor) Then
+    Exit;
+  LocalPt := Editor.ScreenToClient(Mouse.CursorPos);
+  If (LocalPt.X < 0) Or (LocalPt.Y < 0) Or (LocalPt.X >= Editor.ClientWidth) Or (LocalPt.Y >= Editor.ClientHeight) Then
+    Exit;
+  Cell := Editor.PhysicalToLogicalPos(Editor.PixelsToRowColumn(LocalPt));
+  { Keep a selection when the click is inside it, so Copy still has something to copy. }
+  If LogicalPointInSelection(Editor, Cell) Then
+    Exit;
+  Editor.CaretXY := Cell;
+End;
+
+Procedure TManageRepositoryForm.FilePreviewActionUpdate(Sender: TObject);
+Var
+  Editor: TSynEdit;
+  CurrentAction: TAction;
+Begin
+  If Not (Sender Is TAction) Then
+    Exit;
+  CurrentAction := TAction(Sender);
+  Editor := FilePreviewEditor;
+  If CurrentAction = FileCopyAction Then
+    CurrentAction.Enabled := Assigned(Editor) And Editor.SelAvail
+  Else
+    CurrentAction.Enabled := Assigned(Editor) And (Editor.Lines.Count > 0);
+End;
+
+Procedure TManageRepositoryForm.FileSelectWordActionExecute(Sender: TObject);
+Var
+  Editor: TSynEdit;
+Begin
+  Editor := FilePreviewEditor;
+  If Not Assigned(Editor) Then
+    Exit;
+  If Editor.CanFocus Then
+    Editor.SetFocus;
+  Editor.SelectWord;
+End;
+
+Procedure TManageRepositoryForm.FileSelectLineActionExecute(Sender: TObject);
+Var
+  Editor: TSynEdit;
+Begin
+  Editor := FilePreviewEditor;
+  If Not Assigned(Editor) Then
+    Exit;
+  If Editor.CanFocus Then
+    Editor.SetFocus;
+  Editor.SelectLine;
+End;
+
+Procedure TManageRepositoryForm.FileSelectAllActionExecute(Sender: TObject);
+Var
+  Editor: TSynEdit;
+Begin
+  Editor := FilePreviewEditor;
+  If Not Assigned(Editor) Then
+    Exit;
+  If Editor.CanFocus Then
+    Editor.SetFocus;
+  Editor.SelectAll;
+End;
+
+Procedure TManageRepositoryForm.FileCopyActionExecute(Sender: TObject);
+Var
+  Editor: TSynEdit;
+Begin
+  Editor := FilePreviewEditor;
+  If Assigned(Editor) And Editor.SelAvail Then
+    Editor.CopyToClipboard;
 End;
 
 Procedure TManageRepositoryForm.ShowChangesCheckBoxChange(Sender: TObject);

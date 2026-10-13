@@ -21,7 +21,7 @@ Uses
   SynGutterLineOverview, GitJobRunner, GitDiffPatch;
 
 Type
-  { dvmEditorOnly: full-file red/green SynEdit only (Changes tab). }
+  { dvmEditorOnly: full-file red/green SynEdit only (Changes tab and Files preview). }
   TGitDiffViewMode = (dvmStaging, dvmBrowse, dvmEditorOnly);
 
   TGitDiffRange = Record
@@ -79,6 +79,7 @@ Type
     FReadHasText: Boolean;
     FStagedSide: Boolean;
     FMode: TGitDiffViewMode;
+    FShowChunkMarkers: Boolean; { Editor-only: hunk rules and click-to-select lines. }
     FBrowseSha: String;
     FUpdatingList: Boolean;
     FScrollGeneration: PtrInt;
@@ -113,6 +114,8 @@ Type
     Function ScaleDesign(DesignPx: Integer): Integer;
     Function OverviewGutterWidth: Integer;
     Procedure ApplyEditorSelectionPolicy;
+    Function UsesChunkMarkers: Boolean;
+    Procedure SetShowChunkMarkers(Value: Boolean);
     Procedure EnsureEditorKeystrokes;
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
@@ -210,6 +213,8 @@ Type
     Procedure RefreshOverviewGutter;
     Property Mode: TGitDiffViewMode Read FMode;
     Property StagedSide: Boolean Read FStagedSide;
+    { False hides hunk rules/tabs and allows ordinary text selection (Files preview). }
+    Property ShowChunkMarkers: Boolean Read FShowChunkMarkers Write SetShowChunkMarkers;
     Property OnStatusChanged: TNotifyEvent Read FOnStatusChanged Write FOnStatusChanged;
     Property OnSelectionChanged: TNotifyEvent Read FOnSelectionChanged Write FOnSelectionChanged;
   End;
@@ -244,6 +249,7 @@ Begin
   FBrowseSha := '';
   FStagedSide := False;
   FMode := dvmStaging;
+  FShowChunkMarkers := True;
   FUpdatingList := False;
   FScrollGeneration := 0;
   OverviewGutter := Nil;
@@ -925,7 +931,7 @@ Var
   MarkerW, RectH, TriH: Integer;
   FillCol, EdgeCol: TColor;
 Begin
-  If (FMode <> dvmEditorOnly) Or (Not Assigned(DiffEditor)) Or (Not Assigned(HunkStartLines)) Then
+  If (Not UsesChunkMarkers) Or (Not Assigned(DiffEditor)) Or (Not Assigned(HunkStartLines)) Then
     Exit;
 
   MarkerW := ScaleDesign(12);
@@ -1020,10 +1026,19 @@ Begin
       End;
     dvmEditorOnly:
       Begin
-        { Files: no free-range selection; whole change-lines only via click. }
-        DiffEditor.Options := DiffEditor.Options + [eoNoSelection];
-        DiffEditor.BlockBegin := Point(1, 1);
-        DiffEditor.BlockEnd := Point(1, 1);
+        If FShowChunkMarkers Then
+          Begin
+            { Changes tab: click selects whole change lines, not a free-range block. }
+            DiffEditor.Options := DiffEditor.Options + [eoNoSelection];
+            DiffEditor.BlockBegin := Point(1, 1);
+            DiffEditor.BlockEnd := Point(1, 1);
+          End
+        Else
+          Begin
+            { Files preview: ordinary text selection on the red/green view. }
+            DiffEditor.Options := DiffEditor.Options - [eoNoSelection];
+            ClearLineSelection(False);
+          End;
       End;
   Else
     { Staging tree mode: normal selection for hunk/line stage. }
@@ -1407,6 +1422,22 @@ Begin
   End;
 End;
 
+Function TGitDiffView.UsesChunkMarkers: Boolean;
+Begin
+  Result := FShowChunkMarkers And (FMode = dvmEditorOnly);
+End;
+
+Procedure TGitDiffView.SetShowChunkMarkers(Value: Boolean);
+Begin
+  FShowChunkMarkers := Value;
+  FLineDragActive := False;
+  If Not Value Then
+    ClearLineSelection(False);
+  ApplyEditorSelectionPolicy;
+  If Assigned(DiffEditor) Then
+    DiffEditor.Invalidate;
+End;
+
 Procedure TGitDiffView.SetViewMode(Mode: TGitDiffViewMode);
 Begin
   { Mode/layout only — appearance is deferred via Loaded → DoDeferredInitAsync. }
@@ -1520,7 +1551,7 @@ Begin
   If (Not Assigned(DiffEditor)) Or (Line < 1) Or (Line > DiffEditor.Lines.Count) Then
     Exit;
   LineText := DiffEditor.Lines[Line - 1];
-  LineSelected := (FMode = dvmEditorOnly) And IsLineSelected(Line);
+  LineSelected := UsesChunkMarkers And IsLineSelected(Line);
 
   { Selected change lines: classic selection look (blue + white) so they read clearly. }
   If LineSelected And IsDiffChangeLine(Line) Then
@@ -1561,7 +1592,7 @@ Begin
   If FMode = dvmBrowse Then
     Exit;
 
-  If FMode <> dvmEditorOnly Then
+  If Not UsesChunkMarkers Then
     Exit;
   If Button <> mbLeft Then
     Exit;
@@ -1652,7 +1683,7 @@ Procedure TGitDiffView.EditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: 
 Var
   LineNo: Integer;
 Begin
-  If (FMode <> dvmEditorOnly) Or (Not FLineDragActive) Then
+  If (Not UsesChunkMarkers) Or (Not FLineDragActive) Then
     Exit;
   If Not (ssLeft in Shift) Then
     Exit;
@@ -1677,7 +1708,7 @@ Begin
   If Assigned(DiffEditor) Then
     TControl(DiffEditor).MouseCapture := False;
 
-  If (FMode <> dvmEditorOnly) Or (Not FLineDragActive) Then
+  If (Not UsesChunkMarkers) Or (Not FLineDragActive) Then
     Begin
       FLineDragActive := False;
       Exit;
@@ -2292,7 +2323,7 @@ Procedure TGitDiffView.EditDblClick(Sender: TObject);
 Begin
   { Backup for hosts that do not set ssDouble on the second MouseDown.
     Primary path is EditMouseDown with ssDouble so MouseUp cannot unselect. }
-  If (FMode = dvmEditorOnly) Or (FMode = dvmStaging) Then
+  If (FMode = dvmStaging) Or UsesChunkMarkers Then
     Begin
       FLineDragActive := False;
       SelectHunkAtLine(DiffEditor.CaretY);

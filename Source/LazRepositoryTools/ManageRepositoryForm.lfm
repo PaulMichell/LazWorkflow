@@ -370,6 +370,7 @@ object ManageRepositoryForm: TManageRepositoryForm
           TabOrder = 1
           Visible = False
           ReadOnly = True
+          PopupMenu = FilePreviewPopup
           RightEdge = 0
           ScrollBars = ssAutoBoth
           inline SynLeftGutterPartList1: TSynGutterPartList
@@ -871,6 +872,26 @@ object ManageRepositoryForm: TManageRepositoryForm
       OnExecute = SaveFileActionExecute
       OnUpdate = SaveFileActionUpdate
     end
+    object FileSelectWordAction: TAction
+      Caption = 'Select Word'
+      OnExecute = FileSelectWordActionExecute
+      OnUpdate = FilePreviewActionUpdate
+    end
+    object FileSelectLineAction: TAction
+      Caption = 'Select Line'
+      OnExecute = FileSelectLineActionExecute
+      OnUpdate = FilePreviewActionUpdate
+    end
+    object FileSelectAllAction: TAction
+      Caption = 'Select All'
+      OnExecute = FileSelectAllActionExecute
+      OnUpdate = FilePreviewActionUpdate
+    end
+    object FileCopyAction: TAction
+      Caption = 'Copy'
+      OnExecute = FileCopyActionExecute
+      OnUpdate = FilePreviewActionUpdate
+    end
   end
   object Popup: TPopupMenu
     Left = 100
@@ -889,6 +910,26 @@ object ManageRepositoryForm: TManageRepositoryForm
     end
     object CreateBranchMenuItem: TMenuItem
       Action = CreateBranchAction
+    end
+  end
+  object FilePreviewPopup: TPopupMenu
+    OnPopup = FilePreviewPopupPopup
+    Left = 160
+    Top = 40
+    object FileSelectWordMenuItem: TMenuItem
+      Action = FileSelectWordAction
+    end
+    object FileSelectLineMenuItem: TMenuItem
+      Action = FileSelectLineAction
+    end
+    object FileSelectAllMenuItem: TMenuItem
+      Action = FileSelectAllAction
+    end
+    object FilePreviewCopySeparator: TMenuItem
+      Caption = '-'
+    end
+    object FileCopyMenuItem: TMenuItem
+      Action = FileCopyAction
     end
   end
 end

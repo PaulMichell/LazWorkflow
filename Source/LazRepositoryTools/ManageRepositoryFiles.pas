@@ -182,7 +182,11 @@ Begin
   If Assigned(FileTree) Then
     FileTree.OnCustomDrawItem := @TreeCustomDrawItem;
   If Assigned(FileChangesView) Then
-    FileChangesView.SetViewMode(dvmEditorOnly);
+    Begin
+      { Same embedded diff as Changes, without hunk rules, tabs, or line-click selection. }
+      FileChangesView.ShowChunkMarkers := False;
+      FileChangesView.SetViewMode(dvmEditorOnly);
+    End;
   ShowBlankPane;
   NotifyCommands;
 End;
