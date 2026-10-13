@@ -18,9 +18,9 @@ Status: complete
 Use `Documents/BEHAVE.md` only. Do not fetch a newer copy for content. Do not run `install.py`. That installer writes `AGENTS.md`, `CLAUDE.md`, or an agent rules file. This host loads `SKILL.md` from `<project>/.assistant/skills` and then `~/.grok/skills`.
 
 ### 1.2 Record the chosen title
-Status: not started
+Status: complete
 
-The user chose **Agentic Development Methodology**. Skill id, if a companion skill is kept: `agentic-development-methodology`. Do not rename the live `BEHAVE` skill until the adopt-or-drop decision in section 4.
+The user chose **Agentic Development Methodology**. Skill id, if a companion skill is kept: `agentic-development-methodology`. Recorded in `Documents/AgenticDevelopmentTitle.md`. Do not rename the live `BEHAVE` skill until the adopt-or-drop decision in section 4.
 
 ## 2. Judge utility against this project
 
