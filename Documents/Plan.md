@@ -61,7 +61,7 @@ Unique guide material worth keeping if the score is positive: order of precedenc
 Unique engineer material that must win on Pascal work: mode block, naming, formatting, form and frame streaming, ActionList, layering, Git commit shape, and the desktop scaffold contract.
 
 ### 3.2 Write the precedence that would apply if it is adopted
-Status: not started
+Status: complete
 
 Draft one short precedence list in `Documents/AgenticDevelopmentReview.md`. Do not install it yet. Proposed order, highest first:
 
