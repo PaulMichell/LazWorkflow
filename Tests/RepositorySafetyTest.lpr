@@ -325,6 +325,65 @@ Begin
       (Pos('deleted file ', Patch) = 0) And (Pos('+++ /dev/null', Patch) = 0));
     Check('partial deletion stage applies', G.ApplyPatchToIndex(Patch, False));
     Check('partial deletion stage index', GitRun(Dir, ['show', ':removed.txt']) = 'keep' + #10);
+    { Unstage one line of a staged deletion. The index no longer contains the
+      file, so a rewritten modification header makes git apply fail and the
+      following commit has nothing to record. }
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    WriteFile(Dir + '/staged-delete.txt', 'keep' + #10 + 'drop' + #10);
+    GitRun(Dir, ['add', '--', 'staged-delete.txt']);
+    GitRun(Dir, ['commit', '-qm', 'stage delete baseline']);
+    GitRun(Dir, ['rm', '-q', '--', 'staged-delete.txt']);
+    Diff := GitRun(Dir, ['diff', '--cached', '-U3', '--', 'staged-delete.txt']);
+    Lines.Text := Diff;
+    Selected.Clear;
+    For I := 0 To Lines.Count - 1 Do
+      If Lines[I] = '-drop' Then Selected.Add(I + 1);
+    Check('partial deletion unstage selected a line', Selected.Count = 1);
+    Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, True);
+    Check('partial deletion unstage stays a deletion',
+      (Pos('deleted file ', Patch) > 0) And (Pos('+++ /dev/null', Patch) > 0));
+    Check('partial deletion unstage applies', G.ApplyPatchToIndex(Patch, True));
+    Check('partial deletion unstage index', GitRun(Dir, ['show', ':staged-delete.txt']) = 'drop' + #10);
+    GitRun(Dir, ['commit', '-qm', 'partial deletion unstage']);
+    Check('partial deletion unstage commit', GitRun(Dir, ['show', 'HEAD:staged-delete.txt']) = 'drop' + #10);
+    { A space in the path must survive header rewrite, or apply targets the wrong file. }
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    WriteFile(Dir + '/my file.txt', 'keep' + #10 + 'drop' + #10);
+    GitRun(Dir, ['add', '--', 'my file.txt']);
+    GitRun(Dir, ['commit', '-qm', 'space baseline']);
+    Check('delete spaced file', DeleteFile(Dir + '/my file.txt'));
+    Diff := GitRun(Dir, ['diff', '-U3', '--', 'my file.txt']);
+    Lines.Text := Diff;
+    Selected.Clear;
+    For I := 0 To Lines.Count - 1 Do
+      If Lines[I] = '-drop' Then Selected.Add(I + 1);
+    Check('spaced deletion stage selected a line', Selected.Count = 1);
+    Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, False);
+    Check('spaced deletion patch keeps the whole name', Pos('my file.txt', Patch) > 0);
+    Check('spaced deletion stage applies', G.ApplyPatchToIndex(Patch, False));
+    Check('spaced deletion stage index', GitRun(Dir, ['show', ':my file.txt']) = 'keep' + #10);
+    GitRun(Dir, ['commit', '-qm', 'spaced partial deletion']);
+    Check('spaced deletion commit', GitRun(Dir, ['show', 'HEAD:my file.txt']) = 'keep' + #10);
+    { diff.noprefix would make git apply -p1 strip a real directory. DiffPath forces a/ b/. }
+    GitRun(Dir, ['reset', '-q', '--hard', 'HEAD']);
+    ForceDirectories(Dir + '/sub');
+    WriteFile(Dir + '/sub/file.txt', 'old' + #10);
+    GitRun(Dir, ['add', '.']);
+    GitRun(Dir, ['commit', '-qm', 'prefix baseline']);
+    GitRun(Dir, ['config', 'diff.noprefix', 'true']);
+    WriteFile(Dir + '/sub/file.txt', 'old' + #10 + 'new' + #10);
+    Check('DiffPath forces a prefix despite noprefix', G.DiffPath('sub/file.txt', False, Diff) And
+      (Pos('diff --git a/sub/file.txt b/sub/file.txt', Diff) > 0));
+    Lines.Text := Diff;
+    Selected.Clear;
+    For I := 0 To Lines.Count - 1 Do
+      If Lines[I] = '+new' Then Selected.Add(I + 1);
+    Check('noprefix selection found the added line', Selected.Count = 1);
+    Patch := BuildGitPartialPatch(Lines, 1, Lines.Count, Selected, False);
+    Check('forced prefix patch applies', G.ApplyPatchToIndex(Patch, False));
+    Check('forced prefix index', GitRun(Dir, ['show', ':sub/file.txt']) = 'old' + #10 + 'new' + #10);
+    GitRun(Dir, ['commit', '-qm', 'forced prefix partial']);
+    Check('forced prefix commit', GitRun(Dir, ['show', 'HEAD:sub/file.txt']) = 'old' + #10 + 'new' + #10);
   Finally Selected.Free; Lines.Free; G.Free; End;
 End;
 

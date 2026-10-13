@@ -31,6 +31,9 @@ Function LineIsDiffFileMeta(Const Line: String): Boolean;
   when it is empty or Nil, FirstLine..LastLine (inclusive) is the selection. }
 Function BuildGitPartialPatch(Lines: TStrings; FirstLine, LastLine: Integer;
   SelectedFullLines: TGitLineNumberList; Reverse: Boolean = False): String;
+{ 1 when the patch uses a synthetic a/, b/, i/ or w/ prefix; 0 when it does not.
+  git apply defaults to -p1, which deletes a real directory from an unprefixed path. }
+Function GitPatchStripCount(Const PatchText: String): Integer;
 
 Implementation
 
@@ -154,11 +157,58 @@ Begin
   If TabAt = 0 Then Result := Value Else Result := Copy(Value, 1, TabAt - 1);
 End;
 
-Function StripGitSide(Const Token: String): String;
+Function IsSyntheticGitPrefix(Const Prefix: String): Boolean;
 Begin
-  If Copy(Token, 1, 2) = 'a/' Then Result := Copy(Token, 3, MaxInt)
-  Else If Copy(Token, 1, 2) = 'b/' Then Result := Copy(Token, 3, MaxInt)
-  Else Result := Token;
+  Result := (Prefix = 'a') Or (Prefix = 'b') Or (Prefix = 'i') Or (Prefix = 'w');
+End;
+
+Function StripKnownGitPrefix(Const Token: String): String;
+Var
+  Slash: Integer;
+Begin
+  Slash := Pos('/', Token);
+  If (Slash > 1) And IsSyntheticGitPrefix(Copy(Token, 1, Slash - 1)) Then
+    Result := Copy(Token, Slash + 1, MaxInt)
+  Else
+    Result := Token;
+End;
+
+Function DecodeGitEscapes(Const Value: String): String;
+Var
+  I, Digit, Octal: Integer;
+Begin
+  Result := '';
+  I := 1;
+  While I <= Length(Value) Do
+    Begin
+      If (Value[I] = '\') And (I < Length(Value)) Then
+        Begin
+          Inc(I);
+          Case Value[I] Of
+            '\', '"': Result := Result + Value[I];
+            't': Result := Result + #9;
+            'n': Result := Result + #10;
+            '0'..'7':
+              Begin
+                Octal := Ord(Value[I]) - Ord('0');
+                Digit := 1;
+                While (Digit < 3) And (I < Length(Value)) And (Value[I + 1] In ['0'..'7']) Do
+                  Begin
+                    Inc(I);
+                    Octal := Octal * 8 + (Ord(Value[I]) - Ord('0'));
+                    Inc(Digit);
+                  End;
+                If Octal <= 255 Then
+                  Result := Result + Chr(Octal);
+              End;
+          Else
+            Result := Result + Value[I];
+          End;
+        End
+      Else
+        Result := Result + Value[I];
+      Inc(I);
+    End;
 End;
 
 Function NextGitToken(Var Rest: String): String;
@@ -171,9 +221,22 @@ Begin
   If Rest[1] = '"' Then
     Begin
       SplitAt := 2;
-      While (SplitAt <= Length(Rest)) And (Rest[SplitAt] <> '"') Do Inc(SplitAt);
-      Result := Copy(Rest, 2, SplitAt - 2);
-      If SplitAt < Length(Rest) Then Rest := Copy(Rest, SplitAt + 1, MaxInt) Else Rest := '';
+      While SplitAt <= Length(Rest) Do
+        Begin
+          If Rest[SplitAt] = '\' Then
+            Inc(SplitAt, 2)
+          Else If Rest[SplitAt] = '"' Then
+            Break
+          Else
+            Inc(SplitAt);
+        End;
+      Result := DecodeGitEscapes(Copy(Rest, 2, SplitAt - 2));
+      If (SplitAt <= Length(Rest)) And (Rest[SplitAt] = '"') Then
+        Inc(SplitAt);
+      If SplitAt <= Length(Rest) Then
+        Rest := Copy(Rest, SplitAt, MaxInt)
+      Else
+        Rest := '';
     End
   Else
     Begin
@@ -191,6 +254,21 @@ Begin
     End;
 End;
 
+Function SplitMarkedPair(Const Rest, LeftMark, RightMark: String; Out OldPath, NewPath: String): Boolean;
+Var
+  SplitAt: Integer;
+Begin
+  Result := False;
+  OldPath := '';
+  NewPath := '';
+  If Copy(Rest, 1, Length(LeftMark)) <> LeftMark Then Exit;
+  SplitAt := Pos(RightMark, Rest);
+  If SplitAt <= Length(LeftMark) Then Exit;
+  OldPath := Copy(Rest, Length(LeftMark) + 1, SplitAt - Length(LeftMark) - 1);
+  NewPath := Copy(Rest, SplitAt + Length(RightMark), MaxInt);
+  Result := (OldPath <> '') And (NewPath <> '');
+End;
+
 Procedure ParseDiffGitPaths(Const Line: String; Out OldPath, NewPath: String);
 Var
   Rest: String;
@@ -199,36 +277,117 @@ Begin
   NewPath := '';
   If Copy(Line, 1, 11) <> 'diff --git ' Then Exit;
   Rest := Copy(Line, 12, MaxInt);
-  OldPath := StripGitSide(NextGitToken(Rest));
-  NewPath := StripGitSide(NextGitToken(Rest));
+  If (Rest <> '') And (Rest[1] = '"') Then
+    Begin
+      OldPath := StripKnownGitPrefix(NextGitToken(Rest));
+      NewPath := StripKnownGitPrefix(NextGitToken(Rest));
+      Exit;
+    End;
+  { Unquoted names may contain spaces. The prefix pair is the reliable split. }
+  If SplitMarkedPair(Rest, 'a/', ' b/', OldPath, NewPath) Then Exit;
+  If SplitMarkedPair(Rest, 'i/', ' w/', OldPath, NewPath) Then Exit;
+  OldPath := StripKnownGitPrefix(NextGitToken(Rest));
+  NewPath := StripKnownGitPrefix(NextGitToken(Rest));
+End;
+
+Function IsNullDiffSide(Const Line, Marker: String): Boolean;
+Var
+  Rest: String;
+Begin
+  Result := False;
+  If Copy(Line, 1, Length(Marker)) <> Marker Then Exit;
+  Rest := BeforeTab(Copy(Line, Length(Marker) + 1, MaxInt));
+  Result := (Rest = '/dev/null') Or (Rest = 'NUL') Or (Rest = '"/dev/null"') Or (Rest = '"NUL"');
+End;
+
+Function HeaderSidePath(Const Line, Marker: String): String;
+Var
+  Rest: String;
+Begin
+  Result := '';
+  If Copy(Line, 1, Length(Marker)) <> Marker Then Exit;
+  If IsNullDiffSide(Line, Marker) Then Exit;
+  Rest := BeforeTab(Copy(Line, Length(Marker) + 1, MaxInt));
+  If (Rest <> '') And (Rest[1] = '"') Then
+    Result := StripKnownGitPrefix(NextGitToken(Rest))
+  Else
+    Result := StripKnownGitPrefix(Rest);
+End;
+
+Function PathNeedsGitQuotes(Const Path: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  For I := 1 To Length(Path) Do
+    If (Path[I] <= ' ') Or (Path[I] = '"') Or (Path[I] = '\') Or (Ord(Path[I]) >= 127) Then
+      Exit(True);
+End;
+
+Function EscapeGitPath(Const Path: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := 1 To Length(Path) Do
+    Case Path[I] Of
+      '\', '"': Result := Result + '\' + Path[I];
+      #9: Result := Result + '\t';
+      #10: Result := Result + '\n';
+    Else
+      Result := Result + Path[I];
+    End;
+End;
+
+Function FormatGitSideLine(Const Marker, Prefix, Path: String): String;
+Var
+  FullPath: String;
+Begin
+  FullPath := Prefix + Path;
+  If PathNeedsGitQuotes(FullPath) Then
+    Result := Marker + '"' + EscapeGitPath(FullPath) + '"'
+  Else
+    Result := Marker + FullPath;
 End;
 
 { A partial selection can leave lines on a side the original headers called
-  /dev/null. Keep create or delete headers only for a whole-file result. }
+  /dev/null. Keep create or delete headers only when that side is still empty.
+  A reverse unstage of a deletion has an empty new side and must stay a
+  deletion, or git apply looks for a file the index has already removed. }
 Procedure WritePartialFileHeaders(Headers, Output: TStrings; Const OldPath, NewPath: String;
-  HasOld, HasNew, OmittedRemoval: Boolean);
+  HasOld, HasNew: Boolean);
 Var
   I: Integer;
-  Line, OldSide, NewSide: String;
+  Line, Parsed, OldSide, NewSide: String;
   RewriteOld, RewriteNew: Boolean;
 Begin
   If (Headers = Nil) Or (Output = Nil) Then Exit;
   RewriteOld := False;
   RewriteNew := False;
-  OldSide := OldPath;
-  NewSide := NewPath;
+  OldSide := '';
+  NewSide := '';
   For I := 0 To Headers.Count - 1 Do
     Begin
       Line := Headers[I];
-      If Copy(Line, 1, 13) = '--- /dev/null' Then RewriteOld := HasOld
-      Else If Copy(Line, 1, 13) = '+++ /dev/null' Then RewriteNew := HasNew Or OmittedRemoval
-      Else If (OldSide = '') And (Copy(Line, 1, 6) = '--- a/') Then OldSide := BeforeTab(Copy(Line, 7, MaxInt))
-      Else If (NewSide = '') And (Copy(Line, 1, 6) = '+++ b/') Then NewSide := BeforeTab(Copy(Line, 7, MaxInt));
+      If IsNullDiffSide(Line, '--- ') Then RewriteOld := HasOld
+      Else If IsNullDiffSide(Line, '+++ ') Then RewriteNew := HasNew
+      Else If Copy(Line, 1, 4) = '--- ' Then
+        Begin
+          Parsed := HeaderSidePath(Line, '--- ');
+          If Parsed <> '' Then OldSide := Parsed;
+        End
+      Else If Copy(Line, 1, 4) = '+++ ' Then
+        Begin
+          Parsed := HeaderSidePath(Line, '+++ ');
+          If Parsed <> '' Then NewSide := Parsed;
+        End;
     End;
-  If (OldSide = '') Or (OldSide = '/dev/null') Then OldSide := NewSide;
-  If (NewSide = '') Or (NewSide = '/dev/null') Then NewSide := OldSide;
-  If OldSide = '/dev/null' Then OldSide := '';
-  If NewSide = '/dev/null' Then NewSide := '';
+  If OldSide = '' Then OldSide := OldPath;
+  If NewSide = '' Then NewSide := NewPath;
+  If (OldSide = '') Or (OldSide = '/dev/null') Or (OldSide = 'NUL') Then OldSide := NewSide;
+  If (NewSide = '') Or (NewSide = '/dev/null') Or (NewSide = 'NUL') Then NewSide := OldSide;
+  If (OldSide = '/dev/null') Or (OldSide = 'NUL') Then OldSide := '';
+  If (NewSide = '/dev/null') Or (NewSide = 'NUL') Then NewSide := '';
   If OldSide = '' Then RewriteOld := False;
   If NewSide = '' Then RewriteNew := False;
   For I := 0 To Headers.Count - 1 Do
@@ -236,10 +395,66 @@ Begin
       Line := Headers[I];
       If RewriteOld And (Copy(Line, 1, 9) = 'new file ') Then Continue;
       If RewriteNew And (Copy(Line, 1, 13) = 'deleted file ') Then Continue;
-      If RewriteOld And (Copy(Line, 1, 13) = '--- /dev/null') Then Line := '--- a/' + OldSide
-      Else If RewriteNew And (Copy(Line, 1, 13) = '+++ /dev/null') Then Line := '+++ b/' + NewSide;
+      If RewriteOld And IsNullDiffSide(Line, '--- ') Then Line := FormatGitSideLine('--- ', 'a/', OldSide)
+      Else If RewriteNew And IsNullDiffSide(Line, '+++ ') Then Line := FormatGitSideLine('+++ ', 'b/', NewSide);
       Output.Add(Line);
     End;
+End;
+
+Function GitPatchStripCount(Const PatchText: String): Integer;
+Var
+  Lines: TStringList;
+  I: Integer;
+  Line, Rest, OldToken, NewToken, OldHead, NewHead: String;
+  Slash: Integer;
+Begin
+  { git apply -p1 is the default. Use it unless the diff has no synthetic prefix. }
+  Result := 1;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := PatchText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Lines[I];
+        If Copy(Line, 1, 11) <> 'diff --git ' Then Continue;
+        Rest := Copy(Line, 12, MaxInt);
+        If (Rest <> '') And (Rest[1] = '"') Then
+          Begin
+            OldToken := NextGitToken(Rest);
+            NewToken := NextGitToken(Rest);
+          End
+        Else If SplitMarkedPair(Rest, 'a/', ' b/', OldToken, NewToken) Then
+          Begin
+            OldToken := 'a/' + OldToken;
+            NewToken := 'b/' + NewToken;
+          End
+        Else If SplitMarkedPair(Rest, 'i/', ' w/', OldToken, NewToken) Then
+          Begin
+            OldToken := 'i/' + OldToken;
+            NewToken := 'w/' + NewToken;
+          End
+        Else
+          Begin
+            OldToken := NextGitToken(Rest);
+            NewToken := NextGitToken(Rest);
+          End;
+        If OldToken = NewToken Then
+          Exit(0);
+        Slash := Pos('/', OldToken);
+        If Slash <= 1 Then Exit(0);
+        OldHead := Copy(OldToken, 1, Slash - 1);
+        Slash := Pos('/', NewToken);
+        If Slash <= 1 Then Exit(0);
+        NewHead := Copy(NewToken, 1, Slash - 1);
+        If IsSyntheticGitPrefix(OldHead) And IsSyntheticGitPrefix(NewHead) And (OldHead <> NewHead) Then
+          Result := 1
+        Else
+          Result := 0;
+        Exit;
+      End;
+  Finally
+    Lines.Free;
+  End;
 End;
 
 Function BuildGitPartialPatch(Lines: TStrings; FirstLine, LastLine: Integer;
@@ -248,7 +463,7 @@ Var
   Parsed: TGitDiffLines;
   Headers, Body, Hunks, Output: TStringList;
   I, OldCount, NewCount, OldBase, NewBase, Delta: Integer;
-  Selected, Changed, Kept, HasOld, HasNew, OmittedRemoval: Boolean;
+  Selected, Changed, Kept, HasOld, HasNew: Boolean;
   FileOld, FileNew, S: String;
 
   Procedure NoteEmitted(Const Emitted: String);
@@ -265,7 +480,7 @@ Var
   Procedure FlushFile;
   Begin
     If Hunks.Count = 0 Then Exit;
-    WritePartialFileHeaders(Headers, Output, FileOld, FileNew, HasOld, HasNew, OmittedRemoval);
+    WritePartialFileHeaders(Headers, Output, FileOld, FileNew, HasOld, HasNew);
     Output.AddStrings(Hunks);
     Hunks.Clear;
   End;
@@ -283,7 +498,6 @@ Begin
     Delta := 0;
     HasOld := False;
     HasNew := False;
-    OmittedRemoval := False;
     FileOld := '';
     FileNew := '';
     While I < Lines.Count Do
@@ -297,7 +511,6 @@ Begin
                 Delta := 0;
                 HasOld := False;
                 HasNew := False;
-                OmittedRemoval := False;
                 ParseDiffGitPaths(Lines[I], FileOld, FileNew);
               End;
             Headers.Add(Lines[I]);
@@ -347,8 +560,7 @@ Begin
                       NoteEmitted(' ' + Copy(S, 2, MaxInt));
                       Inc(OldCount);
                       Inc(NewCount);
-                    End
-                  Else If Parsed[I].Kind = dlRemoved Then OmittedRemoval := True;
+                    End;
                 End;
               dlNoNewline: If Kept Then Body.Add(S);
             Else

@@ -1963,13 +1963,16 @@ Begin
             For I := 0 To SelectedLines.Count - 1 Do
               Begin
                 Disp := SelectedLines[I];
-                If (Disp >= 1) And (Disp <= Length(FDisplayToFull)) Then
+                If (Disp >= 1) And (Disp <= Length(FDisplayToFull)) And (FDisplayToFull[Disp - 1] >= 1) Then
                   SelectedFull.Add(FDisplayToFull[Disp - 1]);
               End;
           End
         Else
           For I := 0 To SelectedLines.Count - 1 Do
             SelectedFull.Add(SelectedLines[I]);
+        { An empty list would fall back to display coordinates against the full diff. }
+        If SelectedFull.Count = 0 Then
+          Exit;
       End;
     Result := BuildGitPartialPatch(Lines, FirstLine, LastLine, SelectedFull, Reverse);
   Finally

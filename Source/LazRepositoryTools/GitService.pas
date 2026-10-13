@@ -213,7 +213,7 @@ Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEn
 Implementation
 
 Uses
-  LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
+  LazFileUtils, GitDiffPatch{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
 
 Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
   Tracked: TStrings): TGitStatusEntryArray;
@@ -1671,16 +1671,21 @@ Begin
   If Path = '' Then
     Exit;
   ContextFlag := '-U' + IntToStr(DiffContextLines(Path, '', Staged));
+  { Force a/ and b/ so diff.noprefix or diff.mnemonicPrefix cannot make a later
+    git apply -p1 strip a real directory from the selected patch. }
   If Staged Then
-    Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--cached', ContextFlag, '--', Path], DiffText, ExitCode)
+    Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+      '--cached', ContextFlag, '--', Path], DiffText, ExitCode)
   Else
     Begin
-      Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', ContextFlag, '--', Path], DiffText, ExitCode);
+      Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+        ContextFlag, '--', Path], DiffText, ExitCode);
       { Empty worktree diff: only synthesise "new file" for untracked paths.
         Clean tracked files must stay empty so the UI can show plain content. }
       If Result And (Trim(DiffText) = '') And (Not IsPathTracked(Path)) Then
         Begin
-          Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', ContextFlag, '--',
+          Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+            '--no-index', ContextFlag, '--',
             {$IFDEF WINDOWS}'NUL'{$ELSE}'/dev/null'{$ENDIF}, Path], DiffText, ExitCode);
           { Exit 1 means files differ; diagnostics and other failures are not a diff. }
           If (ExitCode = 1) And (FLastCommand.ErrorText = '') And
@@ -1753,7 +1758,29 @@ Var
   TempName, Payload, OutputText: String;
   Stream: TFileStream;
   Args: Array Of String;
-  ExitCode: Integer;
+  ExitCode, StripCount: Integer;
+
+  Procedure AddArg(Const Value: String);
+  Begin
+    SetLength(Args, Length(Args) + 1);
+    Args[High(Args)] := Value;
+  End;
+
+  Procedure BuildApplyArgs(CheckOnly: Boolean);
+  Begin
+    Args := Nil;
+    AddArg('apply');
+    AddArg('--cached');
+    If Reverse Then
+      AddArg('--reverse');
+    AddArg('--whitespace=nowarn');
+    AddArg('--recount');
+    AddArg('-p' + IntToStr(StripCount));
+    If CheckOnly Then
+      AddArg('--check');
+    AddArg(TempName);
+  End;
+
 Begin
   Result := False;
   Args := Nil;
@@ -1788,27 +1815,16 @@ Begin
       End;
   End;
 
+  StripCount := GitPatchStripCount(PatchText);
   Try
-    If Reverse Then
-      Args := ['apply', '--cached', '--reverse', '--whitespace=nowarn', '--check', TempName]
-    Else
-      Args := ['apply', '--cached', '--whitespace=nowarn', '--check', TempName];
+    BuildApplyArgs(True);
     Result := RunGit(Args, OutputText, ExitCode);
     If Not Result Then
-      Begin
-        If Trim(OutputText) <> '' Then
-          FLastError := Trim(OutputText);
-        Exit;
-      End;
-    If Reverse Then
-      Args := ['apply', '--cached', '--reverse', '--whitespace=nowarn', TempName]
-    Else
-      Args := ['apply', '--cached', '--whitespace=nowarn', TempName];
+      Exit;
+    BuildApplyArgs(False);
     Result := RunGit(Args, OutputText, ExitCode);
     If Result Then
-      EmitWorkingTreeChanged
-    Else If Trim(OutputText) <> '' Then
-      FLastError := Trim(OutputText);
+      EmitWorkingTreeChanged;
   Finally
     If FileExists(TempName) Then
       SysUtils.DeleteFile(TempName);
