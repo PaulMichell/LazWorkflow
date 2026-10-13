@@ -54,7 +54,7 @@ Status: complete
 The body uses the stored image model, never the chat model. An optional tool shape is translated by the builder in item 1.3. A shape that builder cannot express is omitted, not a failed draw, so a Grok ratio does not make an OpenAI call fail and an OpenAI pixel size does not make an Imagine call fail. Do not invent a size the endpoint may reject. An empty image model, a backend with no builder, or a non-HTTPS endpoint fails before the post. Bound the HTTP call to about a minute so a hung endpoint cannot occupy the Build round budget.
 
 ### 3.2 Accept one image and fail closed
-Status: not started
+Status: blocked
 
 Both builders share the images-endpoint parser. Require exactly one image. Prefer `b64_json`. If the body has only a temporary `url`, download that URL once with the same bearer and then stop. A missing image, a bad status, or a download failure returns the status and a short body, plus a line that says not to retry. Do not leave the model to fetch the URL. Do not fall back to the chat model or to a response-part harvest. A test hook supplies fixture bytes. No live call in tests.
 
@@ -63,7 +63,7 @@ Both builders share the images-endpoint parser. Require exactly one image. Prefe
 The schema and the prompt must describe the same action. The last failure was those two texts contradicting each other. The model must not have to know which image product is configured.
 
 ### 4.1 Make write_image draw and save
-Status: not started
+Status: complete
 
 Required arguments are `path` and `prompt`. Optional arguments are `overwrite` and `shape`. Remove `image_id`. `shape` is a short hint such as `1:1`. Omit it to let the image model choose. The description says this call draws one still image with the connection's image model and saves it. It is not a copy of a `read_image` attachment. Prefer PNG unless the user names another allowed extension. The success text keeps the Wrote line, path, byte size, width, height, and MIME type, and adds the image model id so the user can see which model ran. Attach the saved image on the tool result so the chat shows it without a later `read_image`.
 
