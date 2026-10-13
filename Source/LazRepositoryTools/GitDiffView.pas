@@ -223,9 +223,9 @@ Implementation
 
 Uses
   FPImage,
-  Math, EditorOptionsIntf, SrcEditorIntf, EditorSyntaxHighlighterDef, LazEditHighlighter,
-  LazEditTextAttributes, SynHighlighterPas, SynHighlighterXML, SynHighlighterLFM,
-  GitService, Dialogs, WorkflowLog, GitDiffHighlighter, LazFileUtils;
+  Math, EditorOptionsIntf, SrcEditorIntf, LazEditHighlighter,
+  LazEditTextAttributes, GitService, Dialogs, WorkflowLog, GitDiffHighlighter, LazFileUtils,
+  RepositorySyntax;
 
 Type
   PGitDiffRange = ^TGitDiffRange;
@@ -1236,50 +1236,9 @@ Begin
 End;
 
 Function TGitDiffView.CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
-Var
-  Ext: String;
-  Id: TIdeSyntaxHighlighterID;
-  Cls: TLazEditCustomHighlighterClass;
-  HL: TLazEditCustomHighlighter;
 Begin
-  { Private stock SynEdit highlighters — avoid TIDESyn* subclasses that expect a full
-    source-editor host (those caused access violations when used only for tokens). }
-  Result := Nil;
-  Ext := NormalizeExt(ExtractFileExt(SourceFileName));
-  If Ext = '' Then
-    Exit;
-  HL := Nil;
-  Try
-    If (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.inc') Or (Ext = '.lpr') Or
-       (Ext = '.dpk') Or (Ext = '.dpr') Or (Ext = '.lpk') Then
-      HL := TSynPasSyn.Create(Nil)
-    Else If (Ext = '.lfm') Or (Ext = '.dfm') Then
-      HL := TSynLFMSyn.Create(Nil)
-    Else If (Ext = '.xml') Or (Ext = '.lpi') Or (Ext = '.lps') Or (Ext = '.xlf') Or
-            (Ext = '.xsl') Or (Ext = '.xsd') Then
-      HL := TSynXMLSyn.Create(Nil)
-    Else If IdeSyntaxHighlighters <> Nil Then
-      Begin
-        Id := IdeSyntaxHighlighters.GetIdForFileExtension(Ext);
-        If (Id >= IdeHighlighterStartId) And (Id <> IdeHighlighterUnknownId) Then
-          Begin
-            Cls := IdeSyntaxHighlighters.SynHlClasses[Id];
-            { Skip IDE-specialised classes (name contains 'IDE'). }
-            If Assigned(Cls) And (Pos('IDE', Cls.ClassName) = 0) Then
-              HL := Cls.Create(Nil);
-          End;
-      End;
-  Except
-    HL := Nil;
-  End;
-  If Not Assigned(HL) Then
-    Exit;
-  If Assigned(IDEEditorOptions) Then
-    Try
-      IDEEditorOptions.GetHighlighterSettings(HL);
-    Except
-    End;
-  Result := HL;
+  { Shared with the Files-tab revision editor. Caller owns the instance. }
+  Result := CreateRepositoryLanguageHighlighter(SourceFileName);
 End;
 
 Procedure TGitDiffView.ApplyLanguageHighlighter(Const SourceFileName: String);

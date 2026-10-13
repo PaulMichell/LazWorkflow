@@ -22,7 +22,10 @@ Type
     FSelectedPath: String;
     FSelectedSha: String;
     FContentPath: String;
+    FRevisionHighlighter: TObject;
     Procedure ClearCommitObjects;
+    Procedure ClearRevisionHighlighter;
+    Procedure ApplyRevisionHighlighter(Const FileName: String);
     Procedure ClearEditor;
     Procedure FreeTreeEntries;
     Function SelectedEntryPath(Out RelativePath: String): Boolean;
@@ -53,7 +56,7 @@ Type
 Implementation
 
 Uses
-  SysUtils;
+  SysUtils, LazEditHighlighter, RepositorySyntax;
 
 Type
   TRepositoryTreeEntry = Class
@@ -101,8 +104,31 @@ Begin
   FileCommitList.Items.Clear;
 End;
 
+Procedure TManageFilesPane.ClearRevisionHighlighter;
+Begin
+  If Assigned(FileRevisionEditor) And Assigned(FRevisionHighlighter) And
+     (FileRevisionEditor.Highlighter = TLazEditCustomHighlighter(FRevisionHighlighter)) Then
+    FileRevisionEditor.Highlighter := Nil;
+  FreeAndNil(FRevisionHighlighter);
+End;
+
+Procedure TManageFilesPane.ApplyRevisionHighlighter(Const FileName: String);
+Var
+  HL: TLazEditCustomHighlighter;
+Begin
+  ClearRevisionHighlighter;
+  If Not Assigned(FileRevisionEditor) Or (FileName = '') Then
+    Exit;
+  HL := CreateRepositoryLanguageHighlighter(FileName);
+  If Not Assigned(HL) Then
+    Exit;
+  FRevisionHighlighter := HL;
+  FileRevisionEditor.Highlighter := HL;
+End;
+
 Procedure TManageFilesPane.ClearEditor;
 Begin
+  ClearRevisionHighlighter;
   If Assigned(FileRevisionEditor) Then
     FileRevisionEditor.Clear;
 End;
@@ -407,7 +433,10 @@ Begin
   Inc(FContentToken);
   Result := FContentToken;
   If Assigned(FileRevisionEditor) Then
-    FileRevisionEditor.Text := '(loading…)';
+    Begin
+      ClearRevisionHighlighter;
+      FileRevisionEditor.Text := '(loading…)';
+    End;
 End;
 
 Procedure TManageFilesPane.ApplyContent(Token: Integer; Const HistoricalPath, Sha, Content: String;
@@ -418,11 +447,20 @@ Begin
   If Not Assigned(FileRevisionEditor) Then
     Exit;
   If Not Ok Then
-    FileRevisionEditor.Text := '(could not load this revision)'
+    Begin
+      ClearRevisionHighlighter;
+      FileRevisionEditor.Text := '(could not load this revision)';
+    End
   Else If IsBinary Then
-    FileRevisionEditor.Text := '(binary file)'
+    Begin
+      ClearRevisionHighlighter;
+      FileRevisionEditor.Text := '(binary file)';
+    End
   Else
-    FileRevisionEditor.Text := Content;
+    Begin
+      ApplyRevisionHighlighter(HistoricalPath);
+      FileRevisionEditor.Text := Content;
+    End;
   FileRevisionEditor.CaretY := 1;
   FileRevisionEditor.CaretX := 1;
 End;
