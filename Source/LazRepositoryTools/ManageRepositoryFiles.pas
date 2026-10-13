@@ -31,6 +31,8 @@ Type
     Procedure ShowImagePane(ShowImage: Boolean; Const MessageText: String);
     Procedure ClearEditor;
     Procedure FreeTreeEntries;
+    Procedure TreeCustomDrawItem(Sender: TCustomTreeView; Node: TTreeNode; State: TCustomDrawState;
+      var DefaultDraw: Boolean);
     Function SelectedEntryPath(Out RelativePath: String): Boolean;
   Public
     FileTree: TTreeView;
@@ -48,7 +50,7 @@ Type
       AImagePaint: TPaintBox; APreviewLabel: TLabel);
     Procedure ClearForNoRepo;
     Function BeginFileList: Integer;
-    Procedure ApplyFileList(Token: Integer; Paths: TStrings; Ok: Boolean);
+    Procedure ApplyFileList(Token: Integer; Paths, RemovedPaths: TStrings; Ok: Boolean);
     Function BeginHistory: Integer;
     Procedure ApplyHistory(Token: Integer; Const Path, CommitLines: String; Ok: Boolean);
     Function BeginContent: Integer;
@@ -73,6 +75,7 @@ Type
   TRepositoryTreeEntry = Class
     RelativePath: String;
     IsFile: Boolean;
+    Removed: Boolean;
   End;
 
   TRepositoryFileCommit = Class
@@ -80,7 +83,11 @@ Type
     WhenText: String;
     Subject: String;
     HistoricalPath: String;
+    Removed: Boolean;
   End;
+
+Const
+  FileRemovedCaption = 'File Removed';
 
 Constructor TManageFilesPane.Create;
 Begin
@@ -108,6 +115,8 @@ Begin
   FilePreviewPanel := APreviewPanel;
   FileImagePaintBox := AImagePaint;
   FilePreviewLabel := APreviewLabel;
+  If Assigned(FileTree) Then
+    FileTree.OnCustomDrawItem := @TreeCustomDrawItem;
 End;
 
 Procedure TManageFilesPane.ClearCommitObjects;
@@ -275,7 +284,7 @@ Begin
   Result := Nil;
 End;
 
-Function AddSorted(Tree: TTreeView; ParentNode: TTreeNode; Const Name: String; IsFile: Boolean;
+Function AddSorted(Tree: TTreeView; ParentNode: TTreeNode; Const Name: String; IsFile, Removed: Boolean;
   Const RelativePath: String): TTreeNode;
 Var
   Entry: TRepositoryTreeEntry;
@@ -285,12 +294,17 @@ Begin
   If Assigned(Result) Then
     Begin
       If IsFile And Assigned(Result.Data) Then
-        TRepositoryTreeEntry(Result.Data).IsFile := True;
+        Begin
+          TRepositoryTreeEntry(Result.Data).IsFile := True;
+          If Not Removed Then
+            TRepositoryTreeEntry(Result.Data).Removed := False;
+        End;
       Exit;
     End;
   Entry := TRepositoryTreeEntry.Create;
   Entry.RelativePath := RelativePath;
   Entry.IsFile := IsFile;
+  Entry.Removed := Removed And IsFile;
   InsertAfter := Nil;
   If Assigned(ParentNode) Then
     Sibling := ParentNode.GetFirstChild
@@ -332,12 +346,40 @@ Begin
     End;
 End;
 
-Procedure TManageFilesPane.ApplyFileList(Token: Integer; Paths: TStrings; Ok: Boolean);
+Procedure AddTreePath(Tree: TTreeView; Const RelativePath: String; Removed: Boolean);
 Var
-  I, PartAt, StartAt: Integer;
-  SavedPath, RelativePath, Part, Built: String;
-  ParentNode, Match: TTreeNode;
+  PartAt, StartAt: Integer;
+  Part, Built: String;
+  ParentNode: TTreeNode;
+Begin
+  ParentNode := Nil;
+  Built := '';
+  StartAt := 1;
+  While StartAt <= Length(RelativePath) Do
+    Begin
+      PartAt := Pos('/', Copy(RelativePath, StartAt, MaxInt));
+      If PartAt = 0 Then
+        Begin
+          Part := Copy(RelativePath, StartAt, MaxInt);
+          AddSorted(Tree, ParentNode, Part, True, Removed, RelativePath);
+          Break;
+        End;
+      Part := Copy(RelativePath, StartAt, PartAt - 1);
+      If Built <> '' Then
+        Built := Built + '/';
+      Built := Built + Part;
+      ParentNode := AddSorted(Tree, ParentNode, Part, False, False, Built);
+      StartAt := StartAt + PartAt;
+    End;
+End;
+
+Procedure TManageFilesPane.ApplyFileList(Token: Integer; Paths, RemovedPaths: TStrings; Ok: Boolean);
+Var
+  I: Integer;
+  SavedPath, RelativePath: String;
+  Match: TTreeNode;
   Entry: TRepositoryTreeEntry;
+  HasTracked, HasRemoved: Boolean;
 Begin
   If Token <> FFileListToken Then
     Exit;
@@ -356,34 +398,27 @@ Begin
   Try
     FileTree.Items.BeginUpdate;
     Try
+      HasTracked := Assigned(Paths) And (Paths.Count > 0);
+      HasRemoved := Assigned(RemovedPaths) And (RemovedPaths.Count > 0);
       If Not Ok Then
         FileTree.Items.Add(Nil, '(could not list files)')
-      Else If Not Assigned(Paths) Or (Paths.Count = 0) Then
+      Else If Not HasTracked And Not HasRemoved Then
         FileTree.Items.Add(Nil, '(no files)')
       Else
-        For I := 0 To Paths.Count - 1 Do
-          Begin
-            RelativePath := Paths[I];
-            ParentNode := Nil;
-            Built := '';
-            StartAt := 1;
-            While StartAt <= Length(RelativePath) Do
+        Begin
+          If HasTracked Then
+            For I := 0 To Paths.Count - 1 Do
               Begin
-                PartAt := Pos('/', Copy(RelativePath, StartAt, MaxInt));
-                If PartAt = 0 Then
-                  Begin
-                    Part := Copy(RelativePath, StartAt, MaxInt);
-                    AddSorted(FileTree, ParentNode, Part, True, RelativePath);
-                    Break;
-                  End;
-                Part := Copy(RelativePath, StartAt, PartAt - 1);
-                If Built <> '' Then
-                  Built := Built + '/';
-                Built := Built + Part;
-                ParentNode := AddSorted(FileTree, ParentNode, Part, False, Built);
-                StartAt := StartAt + PartAt;
+                RelativePath := StringReplace(Paths[I], '\', '/', [rfReplaceAll]);
+                AddTreePath(FileTree, RelativePath, False);
               End;
-          End;
+          If HasRemoved Then
+            For I := 0 To RemovedPaths.Count - 1 Do
+              Begin
+                RelativePath := StringReplace(RemovedPaths[I], '\', '/', [rfReplaceAll]);
+                AddTreePath(FileTree, RelativePath, True);
+              End;
+        End;
     Finally
       FileTree.Items.EndUpdate;
     End;
@@ -437,7 +472,8 @@ Procedure TManageFilesPane.ApplyHistory(Token: Integer; Const Path, CommitLines:
 Var
   Lines: TStringList;
   I, TabAt, SecondTab, ThirdTab: Integer;
-  Line, Sha, WhenText, Subject, HistoricalPath, DisplayText: String;
+  Line, Sha, WhenText, Subject, HistoricalPath, Rest, DisplayText: String;
+  FourthTab: Integer;
   Commit: TRepositoryFileCommit;
 Begin
   If (Token <> FHistoryToken) Or (Path <> FSelectedPath) Then
@@ -469,6 +505,8 @@ Begin
           Continue;
         WhenText := Copy(Line, TabAt + 1, SecondTab - 1);
         ThirdTab := Pos(#9, Copy(Line, TabAt + SecondTab + 1, MaxInt));
+        FourthTab := 0;
+        Rest := '';
         If ThirdTab = 0 Then
           Begin
             Subject := Copy(Line, TabAt + SecondTab + 1, MaxInt);
@@ -477,7 +515,12 @@ Begin
         Else
           Begin
             Subject := Copy(Line, TabAt + SecondTab + 1, ThirdTab - 1);
-            HistoricalPath := Copy(Line, TabAt + SecondTab + ThirdTab + 1, MaxInt);
+            Rest := Copy(Line, TabAt + SecondTab + ThirdTab + 1, MaxInt);
+            FourthTab := Pos(#9, Rest);
+            If FourthTab = 0 Then
+              HistoricalPath := Rest
+            Else
+              HistoricalPath := Copy(Rest, 1, FourthTab - 1);
           End;
         If HistoricalPath = '' Then
           HistoricalPath := Path;
@@ -486,6 +529,7 @@ Begin
         Commit.WhenText := WhenText;
         Commit.Subject := Subject;
         Commit.HistoricalPath := HistoricalPath;
+        Commit.Removed := (FourthTab > 0) And (Copy(Rest, FourthTab + 1, MaxInt) = 'D');
         DisplayText := WhenText;
         If Subject <> '' Then
           DisplayText := DisplayText + '  ' + Subject;
@@ -603,8 +647,27 @@ Begin
   Commit := TRepositoryFileCommit(FileCommitList.Items.Objects[FileCommitList.ItemIndex]);
   FSelectedSha := Commit.Sha;
   FContentPath := Commit.HistoricalPath;
+  If Commit.Removed Then
+    Begin
+      Inc(FContentToken);
+      ShowImagePane(False, FileRemovedCaption);
+      Exit;
+    End;
   If Assigned(OnRequestContent) Then
     OnRequestContent(Self);
+End;
+
+Procedure TManageFilesPane.TreeCustomDrawItem(Sender: TCustomTreeView; Node: TTreeNode; State: TCustomDrawState;
+  var DefaultDraw: Boolean);
+Begin
+  DefaultDraw := True;
+  If Not Assigned(Sender) Or Not Assigned(Node) Or Not Assigned(Node.Data) Then
+    Exit;
+  If Not TRepositoryTreeEntry(Node.Data).Removed Then
+    Exit;
+  Sender.Canvas.Font.Color := clRed;
+  If cdsSelected in State Then
+    Sender.Canvas.Font.Color := clRed;
 End;
 
 End.

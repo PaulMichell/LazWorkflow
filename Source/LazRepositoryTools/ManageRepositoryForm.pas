@@ -163,6 +163,7 @@ Type
     Procedure HistoryViewActionUpdate(Sender: TObject);
     Procedure HistoryMutateActionUpdate(Sender: TObject);
     Procedure RewriteHeadActionUpdate(Sender: TObject);
+    Procedure RemovedFilesCheckBoxChange(Sender: TObject);
     Procedure FileTreeChange(Sender: TObject; Node: TTreeNode);
     Procedure FileTreeMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     Procedure FileCommitListSelectionChange(Sender: TObject; User: Boolean);
@@ -851,9 +852,11 @@ Begin
       Begin
         If Job.Cancelled Or Not Assigned(FFiles) Then
           Exit;
-        FFiles.ApplyFileList(Job.Tag, Job.TrackedFiles, Job.Ok);
+        FFiles.ApplyFileList(Job.Tag, Job.TrackedFiles, Job.RemovedFiles, Job.Ok);
         If Not Job.Ok Then
-          WorkflowLogger.Warning('ManageRepository', 'List files: ' + Job.ErrorText);
+          WorkflowLogger.Warning('ManageRepository', 'List files: ' + Job.ErrorText)
+        Else If Job.ErrorText <> '' Then
+          WorkflowLogger.Warning('ManageRepository', 'Removed files: ' + Job.ErrorText);
       End;
     gjkPathCommits:
       Begin
@@ -1349,9 +1352,20 @@ Begin
   Job := TGitJob.Create(gjkRepositoryFiles);
   Job.RepoPath := FRepoPath;
   Job.Quiet := True;
+  Job.IncludeRemoved := Assigned(RemovedFilesCheckBox) And RemovedFilesCheckBox.Checked;
   Job.Tag := Token;
   If Not SubmitGitJob(Job) Then
-    FFiles.ApplyFileList(Token, Nil, False);
+    FFiles.ApplyFileList(Token, Nil, Nil, False);
+End;
+
+Procedure TManageRepositoryForm.RemovedFilesCheckBoxChange(Sender: TObject);
+Begin
+  If (FRepoPath = '') Or Not Assigned(FFiles) Then
+    Exit;
+  If Assigned(Pages) And (Pages.ActivePage = FilesTabSheet) Then
+    RefreshFiles
+  Else
+    FFilesNeedReload := True;
 End;
 
 Procedure TManageRepositoryForm.SubmitFileHistory(Sender: TObject);

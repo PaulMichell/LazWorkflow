@@ -109,6 +109,8 @@ Type
     Function ListTrackedFiles(Out Paths: TStringList): Boolean;
     { Tracked paths relative to the repository, using Git's slash separator. Caller frees Paths. }
     Function ListRepositoryFiles(Out Paths: TStringList): Boolean;
+    { Paths deleted in history and absent from Current. Caller frees Paths. }
+    Function ListRemovedRepositoryFiles(Current: TStrings; Out Paths: TStringList): Boolean;
     { Commits that changed RelativePath, newest first. Each line is sha, date, subject, and the
       path in that commit, separated by tabs. Follows renames. }
     Function ListPathCommits(Const RelativePath: String; Out CommitLines: String): Boolean;
@@ -952,6 +954,40 @@ Begin
     End;
 End;
 
+Function TGitService.ListRemovedRepositoryFiles(Current: TStrings; Out Paths: TStringList): Boolean;
+Var
+  Raw, Rel: String;
+  ExitCode, Cursor: Integer;
+  CurrentSet: TStringList;
+Begin
+  Paths := TStringList.Create;
+  Paths.Sorted := True;
+  Paths.Duplicates := dupIgnore;
+  Paths.CaseSensitive := FileNameCaseSensitive;
+  Result := False;
+  CurrentSet := TStringList.Create;
+  Try
+    CurrentSet.Sorted := True;
+    CurrentSet.Duplicates := dupIgnore;
+    CurrentSet.CaseSensitive := FileNameCaseSensitive;
+    If Assigned(Current) Then
+      CurrentSet.AddStrings(Current);
+    Result := RunGit(['-c', 'core.quotePath=false', 'log', '--diff-filter=D', '--pretty=format:', '--name-only', '-z'],
+      Raw, ExitCode);
+    If Not Result Then
+      Exit;
+    Cursor := 1;
+    While Cursor <= Length(Raw) Do
+      Begin
+        Rel := NextNulField(Raw, Cursor);
+        If (Rel <> '') And (CurrentSet.IndexOf(Rel) < 0) Then
+          Paths.Add(Rel);
+      End;
+  Finally
+    CurrentSet.Free;
+  End;
+End;
+
 Function CommitHeader(Const Line: String; Out Sha, WhenText, Subject: String): Boolean;
 Var
   TabAt, SecondTab, HexAt: Integer;
@@ -978,9 +1014,28 @@ Begin
   Result := True;
 End;
 
+Function StatusPath(Const Line: String; Out Status, Path: String): Boolean;
+Var
+  TabAt, SecondTab: Integer;
+Begin
+  Status := '';
+  Path := '';
+  Result := False;
+  TabAt := Pos(#9, Line);
+  { Status codes are short (D, M, R100). Commit headers start with a 40-character SHA. }
+  If (TabAt < 2) Or (TabAt > 6) Then
+    Exit;
+  Status := Copy(Line, 1, TabAt - 1);
+  Path := Copy(Line, TabAt + 1, MaxInt);
+  SecondTab := Pos(#9, Path);
+  If SecondTab > 0 Then
+    Path := Copy(Path, SecondTab + 1, MaxInt);
+  Result := Path <> '';
+End;
+
 Function TGitService.ListPathCommits(Const RelativePath: String; Out CommitLines: String): Boolean;
 Var
-  Raw, Line, Sha, WhenText, Subject, HistoricalPath: String;
+  Raw, Line, Sha, WhenText, Subject, HistoricalPath, Status, RemovedFlag: String;
   ExitCode, I: Integer;
   Lines: TStringList;
 Begin
@@ -991,7 +1046,7 @@ Begin
       FLastError := 'Path is empty.';
       Exit;
     End;
-  Result := RunGit(['-c', 'core.quotePath=false', 'log', '--follow', '--date=short', '--name-only',
+  Result := RunGit(['-c', 'core.quotePath=false', 'log', '--follow', '--date=short', '--name-status',
     '--format=%H%x09%ad%x09%s', '--', RelativePath], Raw, ExitCode);
   If Not Result Then
     Exit;
@@ -1005,19 +1060,21 @@ Begin
         If CommitHeader(Line, Sha, WhenText, Subject) Then
           Begin
             HistoricalPath := '';
+            Status := '';
             Inc(I);
             While (I < Lines.Count) And (Lines[I] = '') Do
               Inc(I);
-            If (I < Lines.Count) And (Pos(#9, Lines[I]) = 0) Then
-              Begin
-                HistoricalPath := Lines[I];
-                Inc(I);
-              End;
+            If (I < Lines.Count) And StatusPath(Lines[I], Status, HistoricalPath) Then
+              Inc(I);
             If HistoricalPath = '' Then
               HistoricalPath := RelativePath;
+            If (Status <> '') And (Status[1] = 'D') Then
+              RemovedFlag := 'D'
+            Else
+              RemovedFlag := '';
             If CommitLines <> '' Then
               CommitLines := CommitLines + LineEnding;
-            CommitLines := CommitLines + Sha + #9 + WhenText + #9 + Subject + #9 + HistoricalPath;
+            CommitLines := CommitLines + Sha + #9 + WhenText + #9 + Subject + #9 + HistoricalPath + #9 + RemovedFlag;
           End
         Else
           Inc(I);

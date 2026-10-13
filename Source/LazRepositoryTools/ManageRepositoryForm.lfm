@@ -294,6 +294,7 @@ object ManageRepositoryForm: TManageRepositoryForm
             BorderSpacing.Bottom = 2
             Caption = 'Include Removed Files'
             TabOrder = 0
+            OnChange = RemovedFilesCheckBoxChange
           end
         end
       end

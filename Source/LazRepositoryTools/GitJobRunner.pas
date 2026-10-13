@@ -81,6 +81,8 @@ Type
     FGitDir, FRefsDigest: String;
     FIncludeUntracked: Boolean;
     FIncludeIgnored: Boolean;
+    FIncludeRemoved: Boolean;
+    FRemovedFiles: TStringList;
     FQuiet: Boolean;
     FProbeBranch: String;
     FProbeDigest: String;
@@ -136,6 +138,8 @@ Type
     Property GitDir: String Read FGitDir;
     Property IncludeUntracked: Boolean Read FIncludeUntracked Write FIncludeUntracked;
     Property IncludeIgnored: Boolean Read FIncludeIgnored Write FIncludeIgnored;
+    Property IncludeRemoved: Boolean Read FIncludeRemoved Write FIncludeRemoved;
+    Property RemovedFiles: TStringList Read FRemovedFiles;
     { Quiet jobs skip the busy cursor / footer so auto-refresh does not steal the UI. }
     Property Quiet: Boolean Read FQuiet Write FQuiet;
     Property ProbeBranch: String Read FProbeBranch;
@@ -274,6 +278,8 @@ Begin
   SetLength(FStatusEntries, 0);
   FIncludeUntracked := False;
   FIncludeIgnored := False;
+  FIncludeRemoved := False;
+  FRemovedFiles := Nil;
   FQuiet := False;
   FProbeBranch := '';
   FProbeDigest := '';
@@ -293,6 +299,7 @@ Destructor TGitJob.Destroy;
 Begin
   FreeAndNil(FPaths);
   FreeAndNil(FTrackedFiles);
+  FreeAndNil(FRemovedFiles);
   FreeAndNil(FPreviewBytes);
   Inherited Destroy;
 End;
@@ -780,7 +787,13 @@ Begin
     gjkRepositoryFiles:
       Begin
         FreeAndNil(Job.FTrackedFiles);
+        FreeAndNil(Job.FRemovedFiles);
         Job.FOk := Git.ListRepositoryFiles(Job.FTrackedFiles);
+        If Job.FOk And Job.IncludeRemoved Then
+          Begin
+            If Not Git.ListRemovedRepositoryFiles(Job.FTrackedFiles, Job.FRemovedFiles) Then
+              Job.FErrorText := Git.LastError;
+          End;
         If Not Job.FOk Then
           Job.FErrorText := Git.LastError;
       End;
