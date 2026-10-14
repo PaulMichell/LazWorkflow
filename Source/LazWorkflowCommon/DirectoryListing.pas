@@ -15,7 +15,7 @@ Unit DirectoryListing;
 Interface
 
 Uses
-  SysUtils;
+  Classes, SysUtils;
 
 Type
   TDirectoryScan = Record
@@ -39,6 +39,10 @@ Type
 Function StartDirectoryScan(Const Pattern: String; Attr: LongInt; Out Scan: TDirectoryScan): Integer;
 Function AdvanceDirectoryScan(Var Scan: TDirectoryScan): Integer;
 Procedure CloseDirectoryScan(Var Scan: TDirectoryScan);
+{ Immediate child directories, full paths. "." and ".." are omitted. }
+Procedure CollectChildDirectories(Const Directory: String; Names: TStrings);
+{ Files whose names match Mask (one star). Directory links are listed but not entered. }
+Procedure CollectMatchingFiles(Const Directory, Mask: String; Recursive: Boolean; Names: TStrings);
 
 Implementation
 
@@ -159,7 +163,12 @@ Begin
       If FpLStat(Full, LinkInfo) = 0 Then
         Begin
           If fpS_ISLNK(LinkInfo.st_mode) Then
-            EntryAttr := $40; { faSymLink; the symbol is not portable and this branch is Unix only. }
+            Begin
+              { faSymLink is $400. The old DOS bit $40 is not this flag. }
+              {$PUSH}{$WARN 5044 OFF}
+              EntryAttr := faSymLink;
+              {$POP}
+            End;
           If fpS_ISDIR(LinkInfo.st_mode) Then
             EntryAttr := EntryAttr Or faDirectory;
           EntrySize := LinkInfo.st_size;
@@ -242,6 +251,66 @@ Begin
     FindCloseUTF8(Scan.Search);
   {$ENDIF}
   ClearScan(Scan);
+End;
+
+Procedure CollectChildDirectories(Const Directory: String; Names: TStrings);
+Var
+  Scan: TDirectoryScan;
+  Code: Integer;
+  Child: String;
+Begin
+  If (Not Assigned(Names)) Or (Directory = '') Or (Not DirectoryExistsUTF8(Directory)) Then
+    Exit;
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faDirectory, Scan);
+  If Code <> 0 Then
+    Exit;
+  Try
+    While Code = 0 Do
+      Begin
+        If (Scan.Name <> '.') And (Scan.Name <> '..') And ((Scan.Attr And faDirectory) <> 0) Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(Directory) + Scan.Name;
+            Names.Add(Child);
+          End;
+        Code := AdvanceDirectoryScan(Scan);
+      End;
+  Finally
+    CloseDirectoryScan(Scan);
+  End;
+End;
+
+Procedure CollectMatchingFiles(Const Directory, Mask: String; Recursive: Boolean; Names: TStrings);
+Var
+  Scan: TDirectoryScan;
+  Code: Integer;
+  Child: String;
+Begin
+  If (Not Assigned(Names)) Or (Directory = '') Or (Not DirectoryExistsUTF8(Directory)) Then
+    Exit;
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Scan);
+  If Code <> 0 Then
+    Exit;
+  Try
+    While Code = 0 Do
+      Begin
+        If (Scan.Name <> '.') And (Scan.Name <> '..') Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(Directory) + Scan.Name;
+            If (Scan.Attr And faDirectory) <> 0 Then
+              Begin
+                {$PUSH}{$WARN 5044 OFF}
+                If Recursive And ((Scan.Attr And faSymLink) = 0) Then
+                  CollectMatchingFiles(Child, Mask, True, Names);
+                {$POP}
+              End
+            Else If NameMatchesMask(Scan.Name, Mask) Then
+              Names.Add(Child);
+          End;
+        Code := AdvanceDirectoryScan(Scan);
+      End;
+  Finally
+    CloseDirectoryScan(Scan);
+  End;
 End;
 
 End.

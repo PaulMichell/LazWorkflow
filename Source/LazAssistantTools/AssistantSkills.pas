@@ -69,7 +69,7 @@ Var
 Implementation
 
 Uses
-  FileUtil, LazFileUtils, WorkflowLog;
+  LazFileUtils, DirectoryListing, WorkflowLog;
 
 Function AssistantUserSkillsRoot: String;
 Begin
@@ -290,8 +290,9 @@ Begin
   Result := 0;
   If Not DirectoryExists(Root) Then
     Exit;
-  Dirs := FindAllDirectories(Root, False);
+  Dirs := TStringList.Create;
   Try
+    CollectChildDirectories(Root, Dirs);
     Dirs.Sort;
     For I := 0 To Dirs.Count - 1 Do
       Begin

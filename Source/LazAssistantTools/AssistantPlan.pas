@@ -124,7 +124,7 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, FileUtil, Process, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
+  LazFileUtils, DirectoryListing, Process, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
   AssistantConversation, AssistantGit;
 
 Var
@@ -811,8 +811,9 @@ Begin
   DocsPrefix := LowerCase(AssistantDocumentsDirName + '/');
   DocsFirst := TStringList.Create;
   Rest := TStringList.Create;
-  Files := FindAllFiles(Root, '*.md', True);
+  Files := TStringList.Create;
   Try
+    CollectMatchingFiles(Root, '*.md', True, Files);
     DocsFirst.Sorted := True;
     DocsFirst.Duplicates := dupIgnore;
     Rest.Sorted := True;

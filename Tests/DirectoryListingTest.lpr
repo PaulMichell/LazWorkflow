@@ -8,7 +8,7 @@ Program DirectoryListingTest;
 {$ENDIF}
 
 Uses
-  {$IFDEF UNIX}CThreads,{$ENDIF}
+  {$IFDEF UNIX}CThreads, BaseUnix,{$ENDIF}
   Classes, SysUtils, DirectoryListing;
 
 Type
@@ -56,6 +56,10 @@ Var
   Scan: TDirectoryScan;
   Code, Found: Integer;
   TempDir, DicPath: String;
+  {$IFDEF UNIX}
+  LinkPath, ChildDir, LinkDir: String;
+  Listed: TStringList;
+  {$ENDIF}
 Begin
   TempDir := IncludeTrailingPathDelimiter(GetTempDir) + 'directory-listing-test';
   ForceDirectories(TempDir);
@@ -84,6 +88,54 @@ Begin
     CloseDirectoryScan(Scan);
   End;
   Check('masked name found', Found = 1);
+  {$IFDEF UNIX}
+  LinkPath := IncludeTrailingPathDelimiter(TempDir) + 'link.dic';
+  Check('symlink created', FpSymlink(PAnsiChar(DicPath), PAnsiChar(LinkPath)) = 0);
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(TempDir) + '*.dic', faAnyFile, Scan);
+  Found := 0;
+  Try
+    While Code = 0 Do
+      Begin
+        If Scan.Name = 'link.dic' Then
+          Begin
+            Inc(Found);
+            {$PUSH}{$WARN 5044 OFF}
+            Check('symlink bit is faSymLink', (Scan.Attr And faSymLink) <> 0);
+            {$POP}
+          End;
+        Code := AdvanceDirectoryScan(Scan);
+      End;
+  Finally
+    CloseDirectoryScan(Scan);
+  End;
+  Check('symlink name found', Found = 1);
+  ChildDir := IncludeTrailingPathDelimiter(TempDir) + 'notes';
+  ForceDirectories(ChildDir);
+  With TStringList.Create Do
+    Try
+      Add('note');
+      SaveToFile(IncludeTrailingPathDelimiter(ChildDir) + 'note.md');
+    Finally
+      Free;
+    End;
+  LinkDir := IncludeTrailingPathDelimiter(TempDir) + 'notes-link';
+  Check('directory link created', FpSymlink(PAnsiChar(ChildDir), PAnsiChar(LinkDir)) = 0);
+  Listed := TStringList.Create;
+  Try
+    CollectChildDirectories(TempDir, Listed);
+    Check('child directory listed', Listed.IndexOf(ExcludeTrailingPathDelimiter(ChildDir)) >= 0);
+    Listed.Clear;
+    CollectMatchingFiles(TempDir, '*.md', True, Listed);
+    Check('markdown found once', Listed.Count = 1);
+    Check('markdown path is the real file', ExtractFileName(Listed[0]) = 'note.md');
+  Finally
+    Listed.Free;
+  End;
+  DeleteFile(LinkPath);
+  DeleteFile(IncludeTrailingPathDelimiter(ChildDir) + 'note.md');
+  RemoveDir(ChildDir);
+  DeleteFile(LinkDir);
+  {$ENDIF}
   Code := StartDirectoryScan('/no/such/directory/*', faDirectory, Scan);
   CloseDirectoryScan(Scan);
   Check('missing directory is not a hit', Code <> 0);
