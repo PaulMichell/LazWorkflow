@@ -104,6 +104,8 @@ Const
   SnapIntervalMs = 50;
   CancelWaitHint = 'Cancelled.';
   MaxToolEventChars = 4000;
+  { After the IDE thread has begun a tool, give its own timeout time to finish. }
+  IdeToolStopGraceMs = 5000;
 
 Function MaxRoundsForSession(Svc: TAssistantService): Integer;
 Begin
@@ -627,29 +629,36 @@ Type
     FResultText: String;
     FErrorText: String;
     FImageRefs: TAssistantImageRefArray;
+    FWorker: TThread;
+    FStarted: Boolean;
+    FStopFlag: LongInt;
     Procedure Release;
   Public
-    Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
+    Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
     Destructor Destroy; Override;
     Procedure ExecuteOnMain;
+    Function HasStarted: Boolean;
     Function WaitUntilDone(TimeoutMs: QWord): Boolean;
     Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
     Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String;
       Out ImageRefs: TAssistantImageRefArray);
   End;
 
-Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode);
+Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FName := ToolName;
   FArgs := ArgumentsJson;
   FMode := ToolMode;
+  FWorker := AbortWorker;
   FOk := False;
   FResultText := '';
   FErrorText := '';
   FAbandoned := False;
   FDone := False;
+  FStarted := False;
+  FStopFlag := 0;
   { Waiter + queued callback. Last Release Frees. }
   FRefCount := 2;
 End;
@@ -685,8 +694,10 @@ Begin
   SkipRun := False;
   EnterCriticalSection(FLock);
   Try
-    If FAbandoned Then
-      SkipRun := True;
+    If FAbandoned Or (FStopFlag <> 0) Then
+      SkipRun := True
+    Else
+      FStarted := True;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -699,31 +710,51 @@ Begin
   ToolResult := '';
   ToolError := '';
   ImageRefs := Nil;
+  { This threadvar is the IDE thread's. The worker keeps its own binding. }
+  BindToolAbortThread(FWorker);
+  BindToolStopFlag(@FStopFlag);
   Try
-    ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
-  Finally
-    EnterCriticalSection(FLock);
     Try
-      FOk := ToolOk;
-      FResultText := ToolResult;
-      FErrorText := ToolError;
-      FImageRefs := ImageRefs;
-      FDone := True;
+      ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
     Finally
-      LeaveCriticalSection(FLock);
+      EnterCriticalSection(FLock);
+      Try
+        FOk := ToolOk;
+        FResultText := ToolResult;
+        FErrorText := ToolError;
+        FImageRefs := ImageRefs;
+        FDone := True;
+      Finally
+        LeaveCriticalSection(FLock);
+      End;
     End;
+  Finally
+    UnbindToolAbortThread;
     Release;
+  End;
+End;
+
+Function TIdeToolDispatch.HasStarted: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FStarted;
+  Finally
+    LeaveCriticalSection(FLock);
   End;
 End;
 
 Function TIdeToolDispatch.WaitUntilDone(TimeoutMs: QWord): Boolean;
 Var
-  StartTick: QWord;
+  StartTick, StopTick, NowTick: QWord;
   StopNow: Boolean;
 Begin
   Result := False;
   StartTick := GetTickCount64;
+  StopTick := 0;
   Repeat
+    StopNow := ToolsShouldStop;
+    NowTick := GetTickCount64;
     EnterCriticalSection(FLock);
     Try
       If FDone Then
@@ -731,12 +762,30 @@ Begin
           Result := True;
           Exit;
         End;
-      StopNow := ToolsShouldStop Or (GetTickCount64 - StartTick >= TimeoutMs);
-      If StopNow Then
+      If Not FStarted Then
         Begin
-          FAbandoned := True;
-          Result := False;
-          Exit;
+          { 30s means the IDE thread never picked the tool up. A tool that has
+            started keeps the IDE thread until it finishes; abandoning it at 30s
+            queued the next tool behind a busy IDE and froze the window. }
+          If StopNow Or (NowTick - StartTick >= TimeoutMs) Then
+            Begin
+              FAbandoned := True;
+              InterlockedExchange(FStopFlag, 1);
+              Result := False;
+              Exit;
+            End;
+        End
+      Else If StopNow Or (NowTick - StartTick >= AssistantToolMaxCompileMs + 15000) Then
+        Begin
+          InterlockedExchange(FStopFlag, 1);
+          If StopTick = 0 Then
+            StopTick := NowTick
+          Else If NowTick - StopTick >= IdeToolStopGraceMs Then
+            Begin
+              FAbandoned := True;
+              Result := False;
+              Exit;
+            End;
         End;
     Finally
       LeaveCriticalSection(FLock);
@@ -801,7 +850,7 @@ Begin
         End
       Else If ToolNeedsIdeThread(Call.Name) Then
         Begin
-          ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode);
+          ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode, Self);
           { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
           TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
           If ToolDispatch.WaitUntilDone(30000) Then
@@ -812,13 +861,15 @@ Begin
           Else
             Begin
               { Abandoned: ExecuteOnMain will not start, or will Free after. }
-              ToolDispatch.Release;
               Ok := False;
               If Terminated Then
                 ErrorText := CancelWaitHint
+              Else If ToolDispatch.HasStarted Then
+                ErrorText := 'The tool did not finish on the IDE thread.'
               Else
                 ErrorText := 'Timed out waiting for the IDE thread.';
               ResultText := '';
+              ToolDispatch.Release;
             End;
         End
       Else

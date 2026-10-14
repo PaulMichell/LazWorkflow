@@ -65,6 +65,8 @@ Procedure AssistantEndQuietIdeSession;
 Procedure AssistantResetQuietIdeSession;
 { Bind the worker thread so grep/search abort when that actor is terminated. }
 Procedure BindToolAbortThread(Worker: TThread);
+{ IDE-thread tools read this so Stop, or a pickup timeout, can end a process already running. }
+Procedure BindToolStopFlag(Flag: PLongInt);
 Procedure UnbindToolAbortThread;
 Function ToolsShouldStop: Boolean;
 
@@ -96,6 +98,8 @@ Function QuietSaveTargetForGit(Out ErrorText: String): Boolean; Forward;
 
 ThreadVar
   GToolAbortThread: TThread;
+  GToolStopFlag: PLongInt;
+  GCaptureDepth: Integer;
 
 Type
   { Access TThread.Terminated, which is protected on FPC. }
@@ -114,14 +118,24 @@ Begin
   GToolAbortThread := Worker;
 End;
 
+Procedure BindToolStopFlag(Flag: PLongInt);
+Begin
+  GToolStopFlag := Flag;
+End;
+
 Procedure UnbindToolAbortThread;
 Begin
   GToolAbortThread := Nil;
+  GToolStopFlag := Nil;
 End;
 
 Function ToolsShouldStop: Boolean;
+Var
+  Flag: PLongInt;
 Begin
-  Result := Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested;
+  Flag := GToolStopFlag;
+  Result := (Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested) Or
+    (Assigned(Flag) And (Flag^ <> 0));
 End;
 
 Function ExpandResolvedPath(Const Path: String): String; Forward;
@@ -235,10 +249,23 @@ Begin
   Result := Not ToolIsReadOnly(ToolName);
 End;
 
+Type
+  TToolApprovalAsk = Class
+    Prompt: String;
+    Allowed: Boolean;
+    Procedure Ask;
+  End;
+
+Procedure TToolApprovalAsk.Ask;
+Begin
+  Allowed := MessageDlg(Prompt, mtConfirmation, [mbYes, mbNo], 0) = mrYes;
+End;
+
 Function ApproveToolIfNeeded(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
 Var
   Mode: TAssistantApprovalMode;
   Summary, Name: String;
+  Ask: TToolApprovalAsk;
 Begin
   Result := True;
   ErrorText := '';
@@ -253,20 +280,26 @@ Begin
   If Mode = aamAuto Then
     { Auto: allow all project tools without a prompt (sandbox still applies). }
     Exit;
-  { Ask: confirm mutating tools. }
+  { Ask: confirm mutating tools. The dialog must run on the IDE thread. }
   Summary := Copy(Trim(ArgumentsJson), 1, 240);
   If Length(Trim(ArgumentsJson)) > 240 Then
     Summary := Summary + '…';
-  If MessageDlg(
-    'Project Assistant wants to run tool:' + LineEnding + LineEnding +
-    Name + LineEnding + LineEnding +
-    Summary + LineEnding + LineEnding +
-    'Allow this action? (Approval mode: Ask)',
-    mtConfirmation, [mbYes, mbNo], 0) <> mrYes Then
-    Begin
-      Result := False;
-      ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
-    End;
+  Ask := TToolApprovalAsk.Create;
+  Try
+    Ask.Prompt := 'Project Assistant wants to run tool:' + LineEnding + LineEnding +
+      Name + LineEnding + LineEnding + Summary + LineEnding + LineEnding +
+      'Allow this action? (Approval mode: Ask)';
+    Ask.Allowed := False;
+    { On the IDE thread this runs inline. A worker waits until the dialog returns. }
+    TThread.Synchronize(Nil, @Ask.Ask);
+    If Not Ask.Allowed Then
+      Begin
+        Result := False;
+        ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
+      End;
+  Finally
+    Ask.Free;
+  End;
 End;
 
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
@@ -274,14 +307,16 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  { Editors, forms, project API, compile, Markdown windows, and Ask-mode MessageDlg.
-    read_file must see the open buffer; disk-only reads made replace_in_file miss. }
+  { Editors, forms, project API, compile, Markdown windows.
+    read_file must see the open buffer; disk-only reads made replace_in_file miss.
+    run_command stays on the caller thread. A process that reads stdin must not
+    occupy the IDE thread, or the window freezes on the last status line. }
   Result := (Name = 'open_file') Or (Name = 'open_markdown') Or
     (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
     (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
-    (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
+    (Name = 'run_project') Or (Name = 'run_tests') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'set_active_plan') Or (Name = 'read_file');
 End;
@@ -1940,7 +1975,7 @@ Var
   I, BytesRead: Integer;
   Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
-  StartTick: QWord;
+  StartTick, LastPump: QWord;
 
   Function AbortRunning(Const Reason: String): Boolean;
   Begin
@@ -1950,6 +1985,20 @@ Var
     End;
     ErrorText := Reason;
     Result := False;
+  End;
+
+  Procedure PumpIdeThread;
+  Begin
+    { Only the outermost capture on the IDE thread pumps. A nested tool must not
+      run from inside this wait, and a worker-thread command leaves the IDE loop free. }
+    If GCaptureDepth <> 1 Then
+      Exit;
+    If GetCurrentThreadID <> MainThreadID Then
+      Exit;
+    If GetTickCount64 - LastPump < 100 Then
+      Exit;
+    LastPump := GetTickCount64;
+    Application.ProcessMessages;
   End;
 
 Begin
@@ -1967,6 +2016,7 @@ Begin
     End;
   Proc := TProcess.Create(Nil);
   Mem := TMemoryStream.Create;
+  Inc(GCaptureDepth);
   Try
     Proc.Executable := Exe;
     If WorkDir <> '' Then
@@ -1977,7 +2027,14 @@ Begin
       Proc.Parameters.Add(Args[I]);
     Try
       Proc.Execute;
+      { EOF on stdin. jq, cat, and anything else that reads a filter from the
+        terminal otherwise sit forever, and on the IDE thread that freezes Lazarus. }
+      Try
+        Proc.CloseInput;
+      Except
+      End;
       StartTick := GetTickCount64;
+      LastPump := StartTick;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
           If ToolsShouldStop Then
@@ -1998,6 +2055,7 @@ Begin
             End
           Else If Proc.Running Then
             Sleep(5);
+          PumpIdeThread;
         End;
       While Proc.Output.NumBytesAvailable > 0 Do
         Begin
@@ -2020,6 +2078,12 @@ Begin
         End;
     End;
   Finally
+    Dec(GCaptureDepth);
+    If Proc.Running Then
+      Try
+        Proc.Terminate(1);
+      Except
+      End;
     Mem.Free;
     Proc.Free;
   End;
