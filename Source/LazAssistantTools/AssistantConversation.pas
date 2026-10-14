@@ -148,7 +148,7 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths,
+  LazFileUtils, DirectoryListing, LazIDEIntf, ProjectIntf, WorkflowLog, DateUtils, fpjson, jsonparser, AssistantProjectPaths,
   AssistantWorkTarget, AssistantImages, AssistantProtocol;
 
 Const
@@ -257,24 +257,24 @@ End;
 
 Procedure TAssistantConversationStore.CollectConversationFiles(Files: TStrings);
 Var
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code: Integer;
 Begin
   If Not Assigned(Files) Then Exit;
   If (ConversationPath <> '') And FileExistsUTF8(ConversationPath) And Not FileIsSymlink(ConversationPath) Then
     Files.Add(ConversationPath);
   If AssistantDir = '' Then Exit;
-  Code := FindFirstUTF8(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix, faAnyFile, Rec);
+  Code := StartDirectoryScan(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix, faAnyFile, Rec);
   Try
     While Code = 0 Do
       Begin
         If (Pos('.index.', LowerCase(Rec.Name)) = 0) And ((Rec.Attr And faDirectory) = 0) And
           (Not FileIsSymlink(AssistantDir + Rec.Name)) Then
           Files.Add(AssistantDir + Rec.Name);
-        Code := FindNextUTF8(Rec);
+        Code := AdvanceDirectoryScan(Rec);
       End;
   Finally
-    FindCloseUTF8(Rec);
+    CloseDirectoryScan(Rec);
   End;
 End;
 
@@ -1241,7 +1241,7 @@ End;
 
 Function TAssistantConversationStore.ListHistory(Items: TObjectList): Boolean;
 Var
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code: LongInt;
   Name, Stem, ArchId, ConvPath, IdxPath, Title: String;
   Item: TConversationHistoryItem;
@@ -1277,7 +1277,7 @@ Begin
   Try
     Sorted.Sorted := True;
     Sorted.Duplicates := dupIgnore;
-    Code := FindFirstUTF8(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix,
+    Code := StartDirectoryScan(AssistantDir + ConversationArchivePrefix + '*' + ConversationArchiveSuffix,
       faAnyFile, Rec);
     Try
       While Code = 0 Do
@@ -1285,12 +1285,12 @@ Begin
           Name := Rec.Name;
           If Pos('.index.', LowerCase(Name)) > 0 Then
             Begin
-              Code := FindNextUTF8(Rec);
+              Code := AdvanceDirectoryScan(Rec);
               Continue;
             End;
           If (Rec.Attr And faDirectory) <> 0 Then
             Begin
-              Code := FindNextUTF8(Rec);
+              Code := AdvanceDirectoryScan(Rec);
               Continue;
             End;
           Stem := ChangeFileExt(Name, '');
@@ -1300,10 +1300,10 @@ Begin
             ArchId := Stem;
           If ArchId <> '' Then
             Sorted.Add(ArchId);
-          Code := FindNextUTF8(Rec);
+          Code := AdvanceDirectoryScan(Rec);
         End;
     Finally
-      FindCloseUTF8(Rec);
+      CloseDirectoryScan(Rec);
     End;
 
     For I := Sorted.Count - 1 DownTo 0 Do

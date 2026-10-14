@@ -213,7 +213,7 @@ Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEn
 Implementation
 
 Uses
-  LazFileUtils, GitDiffPatch{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
+  LazFileUtils, DirectoryListing, GitDiffPatch{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
 
 Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
   Tracked: TStrings): TGitStatusEntryArray;
@@ -248,14 +248,14 @@ End;
 
 Function DirectoryIsEmpty(Const Dir: String): Boolean;
 Var
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code: Integer;
 Begin
   Result := False;
   If Not DirectoryExists(Dir) Then
     Exit;
   Result := True;
-  Code := FindFirst(IncludeTrailingPathDelimiter(Dir) + AllFilesMask, faAnyFile, Rec);
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Dir) + AllFilesMask, faAnyFile, Rec);
   Try
     While Code = 0 Do
       Begin
@@ -264,10 +264,10 @@ Begin
             Result := False;
             Exit;
           End;
-        Code := FindNext(Rec);
+        Code := AdvanceDirectoryScan(Rec);
       End;
   Finally
-    SysUtils.FindClose(Rec);
+    CloseDirectoryScan(Rec);
   End;
 End;
 

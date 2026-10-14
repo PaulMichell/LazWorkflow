@@ -29,7 +29,7 @@ Procedure ClearCodexQualificationCache;
 Implementation
 
 Uses
-  Process, fpjson, jsonparser, sha1, FileUtil, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  Process, fpjson, jsonparser, sha1, FileUtil, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Const
   SchemaGenerationTimeoutMs = 15000;
@@ -156,19 +156,19 @@ End;
 Procedure ClearCodexQualificationCache;
 Var
   Directory, Child: String;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
 Begin
   Directory := CacheDirectory;
   If (Not DirectoryExists(Directory)) Or IsSymbolicLink(Directory) Then Exit;
-  If FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) <> 0 Then Exit;
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) <> 0 Then Exit;
   Try
     Repeat
       If (Info.Name = '.') Or (Info.Name = '..') Or Not IsCacheFileName(Info.Name) Then Continue;
       Child := IncludeTrailingPathDelimiter(Directory) + Info.Name;
       If Not IsSymbolicLink(Child) Then DeleteFile(Child);
-    Until FindNext(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindClose(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
@@ -323,12 +323,12 @@ End;
 
 Function RemoveTree(Const Directory: String): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
 Begin
   Result := False;
   If (Directory = '') Or IsSymbolicLink(Directory) Or (Pos('laz-codex-schema-', Directory) = 0) Then Exit;
-  If FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) = 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) = 0 Then
     Try
       Repeat
         If (Info.Name = '.') Or (Info.Name = '..') Then Continue;
@@ -342,9 +342,9 @@ Begin
             If Not RemoveTree(Child) Then Exit;
           End
         Else If Not DeleteFile(Child) Then Exit;
-      Until FindNext(Info) <> 0;
+      Until AdvanceDirectoryScan(Info) <> 0;
     Finally
-      FindClose(Info);
+      CloseDirectoryScan(Info);
     End;
   Result := RemoveDir(Directory);
 End;
@@ -376,12 +376,12 @@ Var
   Wanted: String;
   Function Search(Const Directory: String): String;
   Var
-    Info: TSearchRec;
+    Info: TDirectoryScan;
     Child: String;
     Found: Integer;
   Begin
     Result := '';
-    Found := FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
+    Found := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
     If Found <> 0 Then Exit;
     Try
       Repeat
@@ -395,9 +395,9 @@ Var
           End
         Else If Info.Name = Wanted Then
           Exit(Child);
-      Until FindNext(Info) <> 0;
+      Until AdvanceDirectoryScan(Info) <> 0;
     Finally
-      FindClose(Info);
+      CloseDirectoryScan(Info);
     End;
   End;
 Begin

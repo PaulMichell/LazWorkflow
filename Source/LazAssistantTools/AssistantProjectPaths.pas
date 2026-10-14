@@ -30,7 +30,7 @@ Procedure CollectFolderCompileFiles(Const RootDirectory: String; Files: TStrings
 Implementation
 
 Uses
-  jsonparser, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  jsonparser, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Function TargetConfigPath(Const StoreDirectory: String): String;
 Begin
@@ -170,7 +170,7 @@ End;
 Function ScoreAssistantRoot(Const Root: String): Integer;
 Var
   Dir, Store: String;
-  Entry: TSearchRec;
+  Entry: TDirectoryScan;
   Code: Integer;
   PackageOnly: Boolean;
 Begin
@@ -190,7 +190,7 @@ Begin
           PackageOnly := DirectoryExistsUTF8(Store + PathDelim + 'targets');
           If PackageOnly Then
             Begin
-              Code := FindFirstUTF8(Store + PathDelim + '*', faAnyFile, Entry);
+              Code := StartDirectoryScan(Store + PathDelim + '*', faAnyFile, Entry);
               If Code = 0 Then
                 Try
                   Repeat
@@ -199,9 +199,9 @@ Begin
                         PackageOnly := False;
                         Break;
                       End;
-                    Code := FindNextUTF8(Entry);
+                    Code := AdvanceDirectoryScan(Entry);
                   Until Code <> 0;
-                Finally FindCloseUTF8(Entry); End;
+                Finally CloseDirectoryScan(Entry); End;
             End;
           If Not PackageOnly Then Exit(2);
         End;
@@ -254,7 +254,7 @@ Function LocateExistingProjectFile(Const ProjectFile: String): String;
 Var
   Missing, Rel, Current, ParentDir, Child, Probe, Best: String;
   BestScore, Score, Code: Integer;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
 Begin
   Result := '';
   If Trim(ProjectFile) = '' Then
@@ -278,7 +278,7 @@ Begin
         Break;
       If DirectoryExistsUTF8(ParentDir) Then
         Begin
-          Code := FindFirstUTF8(IncludeTrailingPathDelimiter(ParentDir) + '*', faAnyFile, Info);
+          Code := StartDirectoryScan(IncludeTrailingPathDelimiter(ParentDir) + '*', faAnyFile, Info);
           Try
             While Code = 0 Do
               Begin
@@ -299,10 +299,10 @@ Begin
                           End;
                       End;
                   End;
-                Code := FindNextUTF8(Info);
+                Code := AdvanceDirectoryScan(Info);
               End;
           Finally
-            FindCloseUTF8(Info);
+            CloseDirectoryScan(Info);
           End;
           If BestScore >= 3 Then
             Break;
@@ -353,13 +353,13 @@ Var
   End;
   Procedure Walk(Const Directory: String; Depth: Integer);
   Var
-    Info: TSearchRec;
+    Info: TDirectoryScan;
     Code: Integer;
     Child, Ext: String;
   Begin
     If Depth > FolderCompileMaxDepth Then
       Exit;
-    Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
+    Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
     If Code <> 0 Then
       Exit;
     Try
@@ -385,10 +385,10 @@ Var
                     End;
                 End;
             End;
-          Code := FindNextUTF8(Info);
+          Code := AdvanceDirectoryScan(Info);
         End;
     Finally
-      FindCloseUTF8(Info);
+      CloseDirectoryScan(Info);
     End;
   End;
 Begin

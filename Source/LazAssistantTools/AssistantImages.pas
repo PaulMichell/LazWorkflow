@@ -154,7 +154,7 @@ Function LimitAssistantImageRefs(Const Refs: TAssistantImageRefArray): TAssistan
 Implementation
 
 Uses
-  Math, LazFileUtils, jsonparser, fpreadpng, fpwritepng, fpreadjpeg, fpwritejpeg, fpreadbmp,
+  Math, LazFileUtils, DirectoryListing, jsonparser, fpreadpng, fpwritepng, fpreadjpeg, fpwritejpeg, fpreadbmp,
   fpreadgif, fpreadtiff, fpreadxpm, fpreadpnm, AssistantProjectPaths{$IFDEF UNIX}, BaseUnix, Unix{$ENDIF};
 
 Function PathInside(Const Root, Path: String): Boolean; Forward;
@@ -2700,7 +2700,7 @@ End;
 Function DeleteAssistantImageArchive(Const StoreDirectory, ArchiveId: String; Out ErrorText: String): Boolean;
 Var
   Directory, Path: String;
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code: Integer;
 Begin
   Result := False;
@@ -2722,7 +2722,7 @@ Begin
       ErrorText := 'Refusing to delete a symbolic link.';
       Exit;
     End;
-  Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Rec);
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Rec);
   Try
     While Code = 0 Do
       Begin
@@ -2745,10 +2745,10 @@ Begin
                 Exit;
               End;
           End;
-        Code := FindNextUTF8(Rec);
+        Code := AdvanceDirectoryScan(Rec);
       End;
   Finally
-    FindCloseUTF8(Rec);
+    CloseDirectoryScan(Rec);
   End;
   If Not RemoveDir(Directory) Then
     Begin
@@ -2763,7 +2763,7 @@ Function ReleaseUnreferencedAssistantImages(Const StoreDirectory: String; Conver
 Var
   Names: TStringList;
   Directory, Path: String;
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code, I: Integer;
 Begin
   Result := False;
@@ -2785,7 +2785,7 @@ Begin
     If Assigned(ConversationFiles) Then
       For I := 0 To ConversationFiles.Count - 1 Do
         CollectConversationImageNames(ConversationFiles[I], Names);
-    Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Rec);
+    Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Rec);
     Try
       While Code = 0 Do
         Begin
@@ -2804,10 +2804,10 @@ Begin
                   Exit;
                 End;
             End;
-          Code := FindNextUTF8(Rec);
+          Code := AdvanceDirectoryScan(Rec);
         End;
     Finally
-      FindCloseUTF8(Rec);
+      CloseDirectoryScan(Rec);
     End;
     Result := True;
   Finally
@@ -2821,7 +2821,7 @@ Var
   Kept: TStringList;
   I, Code: Integer;
   Name, Id, Directory: String;
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
 Begin
   Result := False;
   ErrorText := '';
@@ -2842,7 +2842,7 @@ Begin
     Directory := ExcludeTrailingPathDelimiter(Trim(StoreDirectory));
     If (Directory = '') Or FileIsSymlink(Directory) Or Not DirectoryExistsUTF8(Directory) Then Exit(True);
     If Not PathInside(Directory, Directory) Then Exit(True);
-    Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + 'images-*', faAnyFile, Rec);
+    Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + 'images-*', faAnyFile, Rec);
     Try
       While Code = 0 Do
         Begin
@@ -2851,10 +2851,10 @@ Begin
             Id := Copy(Rec.Name, Length('images-') + 1, MaxInt);
           If ArchiveIdAllowed(Id) And (Kept.IndexOf(Id) < 0) Then
             If Not DeleteAssistantImageArchive(StoreDirectory, Id, ErrorText) Then Exit;
-          Code := FindNextUTF8(Rec);
+          Code := AdvanceDirectoryScan(Rec);
         End;
     Finally
-      FindCloseUTF8(Rec);
+      CloseDirectoryScan(Rec);
     End;
     Result := True;
   Finally
@@ -2865,7 +2865,7 @@ End;
 Function AssistantImageDisplayPresent(Const StoreDirectory, ImageId, DisplayPath: String): Boolean;
 Var
   Directory, FileName, ErrorText, Path, Id: String;
-  Rec: TSearchRec;
+  Rec: TDirectoryScan;
   Code: Integer;
 Begin
   Result := False;
@@ -2880,16 +2880,16 @@ Begin
     End;
   Id := Trim(ImageId);
   If (Id = '') Or (Pos('/', Id) > 0) Or (Pos('\', Id) > 0) Then Exit;
-  Code := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + Id + '.*', faAnyFile, Rec);
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + Id + '.*', faAnyFile, Rec);
   Try
     While Code = 0 Do
       Begin
         Path := IncludeTrailingPathDelimiter(Directory) + Rec.Name;
         If Not FileIsSymlink(Path) And Not DirectoryExistsUTF8(Path) And FileExistsUTF8(Path) Then Exit(True);
-        Code := FindNextUTF8(Rec);
+        Code := AdvanceDirectoryScan(Rec);
       End;
   Finally
-    FindCloseUTF8(Rec);
+    CloseDirectoryScan(Rec);
   End;
 End;
 

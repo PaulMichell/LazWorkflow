@@ -24,7 +24,7 @@ Function FindCodexExecutable: String;
 Implementation
 
 Uses
-  FileUtil, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  FileUtil, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Procedure CodexProfileEnvironment(Const ProfileDir: String; Values: TStrings);
 Var
@@ -117,13 +117,13 @@ End;
 
 Function RemovePlainDirectory(Const Directory: String): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
   Found: Integer;
 Begin
   Result := False;
   If IsSymbolicLink(Directory) Then Exit;
-  Found := FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile Or faSymLink, Info);
+  Found := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile Or faSymLink, Info);
   If Found = 0 Then
     Begin
       Try
@@ -139,9 +139,9 @@ Begin
               If Not RemovePlainDirectory(Child) Then Exit;
             End
           Else If Not DeleteFile(Child) Then Exit;
-        Until FindNext(Info) <> 0;
+        Until AdvanceDirectoryScan(Info) <> 0;
       Finally
-        FindClose(Info);
+        CloseDirectoryScan(Info);
       End;
     End;
   Result := RemoveDir(Directory);
@@ -184,13 +184,13 @@ End;
 Function FindCodexExecutable: String;
 Var
   Root, Candidate, BestName: String;
-  Search: TSearchRec;
+  Search: TDirectoryScan;
 Begin
   Result := FindDefaultExecutablePath('codex');
   If Result <> '' Then Exit;
   Root := IncludeTrailingPathDelimiter(GetUserDir) + '.vscode/extensions/';
   BestName := '';
-  If FindFirst(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Exit;
+  If StartDirectoryScan(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Exit;
   Try
     Repeat
       Candidate := Root + Search.Name + '/bin/linux-x86_64/codex';
@@ -201,9 +201,9 @@ Begin
           BestName := Search.Name;
           Result := Candidate;
         End;
-    Until FindNext(Search) <> 0;
+    Until AdvanceDirectoryScan(Search) <> 0;
   Finally
-    FindClose(Search);
+    CloseDirectoryScan(Search);
   End;
 End;
 End.

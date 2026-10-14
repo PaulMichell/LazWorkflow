@@ -25,7 +25,7 @@ Implementation
 Uses
   LazFileUtils, LazUTF8, WorkflowLog
   {$IFDEF WINDOWS}
-  , Windows, Registry, Zipper
+  , Windows, Registry, Zipper, DirectoryListing
   {$ENDIF}
   ;
 
@@ -68,13 +68,13 @@ End;
 
 Function DirectoryHasAffDicPair(Const Dir: String): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   DicResult: Integer;
 Begin
   Result := False;
   If (Dir = '') Or (Not DirectoryExistsUTF8(Dir)) Then
     Exit;
-  DicResult := FindFirstUTF8(IncludeTrailingPathDelimiter(Dir) + '*.dic', faAnyFile, Info);
+  DicResult := StartDirectoryScan(IncludeTrailingPathDelimiter(Dir) + '*.dic', faAnyFile, Info);
   If DicResult <> 0 Then
     Exit;
   Try
@@ -86,10 +86,10 @@ Begin
             Result := True;
             Exit;
           End;
-        DicResult := FindNextUTF8(Info);
+        DicResult := AdvanceDirectoryScan(Info);
       End;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
@@ -445,12 +445,12 @@ End;
 
 Procedure AddShortcutsIn(Var Roots: TStringArray; Const Folder: String; Depth: Integer);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Target, LowerTarget: String;
 Begin
   If (Folder = '') Or (Depth < 0) Or (Not DirectoryExistsUTF8(Folder)) Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Folder) + '*.lnk', faAnyFile, Info) = 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Folder) + '*.lnk', faAnyFile, Info) = 0 Then
     Try
       Repeat
         If (Info.Attr And faDirectory) = 0 Then
@@ -461,26 +461,26 @@ Begin
                (Pos('soffice.bin', LowerTarget) > 0) Then
               AddLocationHint(Roots, Target);
           End;
-      Until FindNextUTF8(Info) <> 0;
+      Until AdvanceDirectoryScan(Info) <> 0;
     Finally
-      FindCloseUTF8(Info);
+      CloseDirectoryScan(Info);
     End;
   If Depth = 0 Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Folder) + '*', faDirectory, Info) = 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Folder) + '*', faDirectory, Info) = 0 Then
     Try
       Repeat
         If ((Info.Attr And faDirectory) <> 0) And (Info.Name <> '.') And (Info.Name <> '..') Then
           AddShortcutsIn(Roots, IncludeTrailingPathDelimiter(Folder) + Info.Name, Depth - 1);
-      Until FindNextUTF8(Info) <> 0;
+      Until AdvanceDirectoryScan(Info) <> 0;
     Finally
-      FindCloseUTF8(Info);
+      CloseDirectoryScan(Info);
     End;
 End;
 
 Procedure AddInstallCandidates(Var Roots: TStringArray; Const Parent: String; Depth: Integer);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child, LowerName: String;
 Begin
   If (Parent = '') Or (Depth < 0) Or (Not DirectoryExistsUTF8(Parent)) Then
@@ -488,7 +488,7 @@ Begin
   AddLibreOfficeRoot(Roots, Parent);
   If Depth = 0 Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
     Exit;
   Try
     Repeat
@@ -501,9 +501,9 @@ Begin
              (Pos('document', LowerName) > 0)) Then
             AddInstallCandidates(Roots, Child, Depth - 1);
         End;
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
@@ -537,22 +537,22 @@ End;
 
 Procedure AddLibreOfficeChildren(Var Roots: TStringArray; Const Parent: String);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Clean: String;
 Begin
   Clean := ExcludeTrailingPathDelimiter(Parent);
   If (Clean = '') Or (Not DirectoryExistsUTF8(Clean)) Then
     Exit;
   AddLibreOfficeRoot(Roots, Clean + '\LibreOffice');
-  If FindFirstUTF8(Clean + '\LibreOffice*', faDirectory, Info) <> 0 Then
+  If StartDirectoryScan(Clean + '\LibreOffice*', faDirectory, Info) <> 0 Then
     Exit;
   Try
     Repeat
       If ((Info.Attr And faDirectory) <> 0) And (Info.Name <> '.') And (Info.Name <> '..') Then
         AddLibreOfficeRoot(Roots, Clean + '\' + Info.Name);
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
@@ -789,7 +789,7 @@ Const
 Var
   ProgramDir, FileName, LowerName, Imported: String;
   Index, ImportIndex: Integer;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Imports: TStringArray;
 Begin
   ProgramDir := IncludeTrailingPathDelimiter(Root) + 'program';
@@ -801,7 +801,7 @@ Begin
   For Index := 0 To High(Preferred) Do
     If FileExistsUTF8(IncludeTrailingPathDelimiter(ProgramDir) + Preferred[Index]) Then
       RememberRelatedDll(Preferred[Index]);
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(ProgramDir) + '*.dll', faAnyFile, Info) <> 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(ProgramDir) + '*.dll', faAnyFile, Info) <> 0 Then
     Exit;
   Try
     Repeat
@@ -822,9 +822,9 @@ Begin
             If FileExistsUTF8(Imported) Then
               AppendUniqueFile(Libraries, Imported);
           End;
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
   Index := 0;
   While Index <= High(Libraries) Do
@@ -843,7 +843,7 @@ End;
 
 Procedure AddDictionariesUnder(Var Dirs: TStringArray; Const Parent: String; Levels: Integer);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
 Begin
   If (Parent = '') Or (Levels < 0) Or (Not DirectoryExistsUTF8(Parent)) Then
@@ -852,7 +852,7 @@ Begin
     AppendUniqueDirectory(Dirs, Parent);
   If Levels = 0 Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
     Exit;
   Try
     Repeat
@@ -861,21 +861,21 @@ Begin
           Child := IncludeTrailingPathDelimiter(Parent) + Info.Name;
           AddDictionariesUnder(Dirs, Child, Levels - 1);
         End;
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
 Procedure ExtractPackedDictionaries(Var Dirs: TStringArray; Const Folder: String);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   PackedFile, DestDir: String;
   UnZip: TUnZipper;
 Begin
   If (Folder = '') Or (Not DirectoryExistsUTF8(Folder)) Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Folder) + '*.oxt', faAnyFile, Info) <> 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Folder) + '*.oxt', faAnyFile, Info) <> 0 Then
     Exit;
   Try
     Repeat
@@ -901,28 +901,28 @@ Begin
             Continue;
         End;
       AddDictionariesUnder(Dirs, DestDir, 3);
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
 Procedure AddInstallDictionaries(Var Dirs: TStringArray; Const Root: String);
 Var
   Extensions: String;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
 Begin
   AddDictionariesUnder(Dirs, IncludeTrailingPathDelimiter(Root) + 'share', 4);
   Extensions := IncludeTrailingPathDelimiter(Root) + 'share\extensions';
   ExtractPackedDictionaries(Dirs, Extensions);
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Extensions) + '*', faDirectory, Info) = 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Extensions) + '*', faDirectory, Info) = 0 Then
     Try
       Repeat
         If ((Info.Attr And faDirectory) <> 0) And (Info.Name <> '.') And (Info.Name <> '..') Then
           ExtractPackedDictionaries(Dirs, IncludeTrailingPathDelimiter(Extensions) + Info.Name);
-      Until FindNextUTF8(Info) <> 0;
+      Until AdvanceDirectoryScan(Info) <> 0;
     Finally
-      FindCloseUTF8(Info);
+      CloseDirectoryScan(Info);
     End;
 End;
 
@@ -1042,12 +1042,12 @@ End;
 
 Procedure AppendWindowsChildDictionaries(Var Dirs: TStringArray; Const Parent: String);
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
 Begin
   If (Parent = '') Or (Not DirectoryExistsUTF8(Parent)) Then
     Exit;
-  If FindFirstUTF8(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
+  If StartDirectoryScan(IncludeTrailingPathDelimiter(Parent) + '*', faDirectory, Info) <> 0 Then
     Exit;
   Try
     Repeat
@@ -1057,9 +1057,9 @@ Begin
           If DirectoryHasAffDicPair(Child) Then
             AppendUniqueDirectory(Dirs, Child);
         End;
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 {$ELSE}

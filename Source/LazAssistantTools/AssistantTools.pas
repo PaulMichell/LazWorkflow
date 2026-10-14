@@ -71,7 +71,7 @@ Function ToolsShouldStop: Boolean;
 Implementation
 
 Uses
-  Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf,
+  Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, DirectoryListing, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
@@ -1218,7 +1218,7 @@ End;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Resolved: String;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Lines: TStringList;
   Counted: Integer;
   Entry: String;
@@ -1238,7 +1238,7 @@ Begin
   Try
     Lines.Add('Directory: ' + Resolved);
     Counted := 0;
-    If FindFirstUTF8(IncludeTrailingPathDelimiter(Resolved) + '*', faAnyFile, Info) = 0 Then
+    If StartDirectoryScan(IncludeTrailingPathDelimiter(Resolved) + '*', faAnyFile, Info) = 0 Then
       Try
         Repeat
           If (Info.Name = '.') Or (Info.Name = '..') Then
@@ -1254,9 +1254,9 @@ Begin
               Lines.Add(Format('[… listing capped at %d entries …]', [AssistantToolMaxListEntries]));
               Break;
             End;
-        Until FindNextUTF8(Info) <> 0;
+        Until AdvanceDirectoryScan(Info) <> 0;
       Finally
-        FindCloseUTF8(Info);
+        CloseDirectoryScan(Info);
       End;
     ResultText := Lines.Text;
     Result := True;
@@ -1655,14 +1655,14 @@ End;
 Function CollectSearchableFiles(Const DirPath, Glob: String; Files: TStringList;
   Var FileCount, WalkCount: Integer): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
   Code: Integer;
 Begin
   Result := True;
   If FileCount >= AssistantToolMaxSearchFiles Then
     Exit;
-  Code := FindFirstUTF8(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
   Try
     While Code = 0 Do
       Begin
@@ -1699,10 +1699,10 @@ Begin
           End;
         If FileCount >= AssistantToolMaxSearchFiles Then
           Exit;
-        Code := FindNextUTF8(Info);
+        Code := AdvanceDirectoryScan(Info);
       End;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 
@@ -3370,20 +3370,20 @@ End;
 
 Function DirectoryIsEmpty(Const Directory: String): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Found: Integer;
 Begin
   Result := True;
-  Found := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
+  Found := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info);
   If Found <> 0 Then
     Exit;
   Try
     Repeat
       If (Info.Name <> '.') And (Info.Name <> '..') Then
         Exit(False);
-    Until FindNextUTF8(Info) <> 0;
+    Until AdvanceDirectoryScan(Info) <> 0;
   Finally
-    FindCloseUTF8(Info);
+    CloseDirectoryScan(Info);
   End;
 End;
 

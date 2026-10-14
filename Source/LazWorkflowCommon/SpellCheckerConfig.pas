@@ -618,11 +618,21 @@ Begin
     AppendKind(Names, sekWindows);
     Names.Clear;
     {$ENDIF}
-    ListHunspellLanguages(Names, FOptions.DictionaryDirectory);
-    AppendKind(Names, sekHunspell);
+    Try
+      ListHunspellLanguages(Names, FOptions.DictionaryDirectory);
+      AppendKind(Names, sekHunspell);
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('Spell', 'Hunspell language scan failed: ' + E.Message);
+    End;
     Names.Clear;
-    ListAspellLanguages(Names);
-    AppendKind(Names, sekAspell);
+    Try
+      ListAspellLanguages(Names);
+      AppendKind(Names, sekAspell);
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('Spell', 'Aspell language scan failed: ' + E.Message);
+    End;
   Finally
     Names.Free;
   End;

@@ -29,7 +29,7 @@ Function WriteWorkflowSection(Const SectionName: String; Section: TJSONObject; O
 Implementation
 
 Uses
-  Classes, LazFileUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  Classes, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Var
   SettingsDirectory: String;
@@ -54,13 +54,13 @@ End;
 
 Function RemovePlainDirectory(Const Directory: String): Boolean;
 Var
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Child: String;
   Found: Integer;
 Begin
   Result := False;
   If (Directory = '') Or FileIsSymlink(Directory) Or (Not DirectoryExistsUTF8(Directory)) Then Exit;
-  Found := FindFirstUTF8(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile Or faSymLink, Info);
+  Found := StartDirectoryScan(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile Or faSymLink, Info);
   If Found = 0 Then
     Begin
       Try
@@ -76,9 +76,9 @@ Begin
               If Not RemovePlainDirectory(Child) Then Exit;
             End
           Else If Not DeleteFileUTF8(Child) Then Exit;
-        Until FindNextUTF8(Info) <> 0;
+        Until AdvanceDirectoryScan(Info) <> 0;
       Finally
-        FindCloseUTF8(Info);
+        CloseDirectoryScan(Info);
       End;
     End;
   Result := RemoveDir(Directory);
@@ -87,7 +87,7 @@ End;
 Procedure RemoveObsoleteSettingsFiles;
 Var
   Dir, Name, Tests, Child: String;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   Found: Integer;
 Const
   ObsoleteNames: Array[0..20] Of String = (
@@ -108,7 +108,7 @@ Begin
   Tests := Dir + 'assistant-tests';
   If DirectoryExistsUTF8(Tests) And (Not FileIsSymlink(Tests)) Then
     Begin
-      Found := FindFirstUTF8(IncludeTrailingPathDelimiter(Tests) + '*', faAnyFile, Info);
+      Found := StartDirectoryScan(IncludeTrailingPathDelimiter(Tests) + '*', faAnyFile, Info);
       If Found = 0 Then
         Begin
           Try
@@ -119,9 +119,9 @@ Begin
               Name := LowerCase(ExtractFileExt(Info.Name));
               If (Name = '.ini') Or (Name = '.tmp') Or (Name = '.bak') Then
                 DeleteFileUTF8(Child);
-            Until FindNextUTF8(Info) <> 0;
+            Until AdvanceDirectoryScan(Info) <> 0;
           Finally
-            FindCloseUTF8(Info);
+            CloseDirectoryScan(Info);
           End;
         End;
       RemoveDir(Tests);

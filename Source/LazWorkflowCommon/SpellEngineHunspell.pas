@@ -55,7 +55,8 @@ Uses
   {$IFDEF WINDOWS}
   Windows,
   {$ENDIF}
-  DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions, WorkflowLog, SpellHunspellWindows;
+  DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions, WorkflowLog, SpellHunspellWindows,
+  DirectoryListing;
 
 Type
   THunspellCreate = Function(AffPath, DicPath: PChar): Pointer; CDecl;
@@ -321,7 +322,7 @@ Procedure ListHunspellLanguages(List: TStrings; Const DictionaryDirectory: Strin
 Var
   Dirs: TStringArray;
   DirIndex, InfoResult: Integer;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
   DicName, AffName, Code: String;
 Begin
   If Not Assigned(List) Then
@@ -329,7 +330,7 @@ Begin
   Dirs := HunspellSearchDirectories(DictionaryDirectory);
   For DirIndex := 0 To High(Dirs) Do
     Begin
-      InfoResult := FindFirstUTF8(IncludeTrailingPathDelimiter(Dirs[DirIndex]) + '*.dic', faAnyFile, Info);
+      InfoResult := StartDirectoryScan(IncludeTrailingPathDelimiter(Dirs[DirIndex]) + '*.dic', faAnyFile, Info);
       Try
         While InfoResult = 0 Do
           Begin
@@ -344,10 +345,10 @@ Begin
                       List.Add(Code);
                   End;
               End;
-            InfoResult := FindNextUTF8(Info);
+            InfoResult := AdvanceDirectoryScan(Info);
           End;
       Finally
-        FindCloseUTF8(Info);
+        CloseDirectoryScan(Info);
       End;
     End;
 End;
@@ -373,7 +374,7 @@ Var
   Wanted, Dirs: TStringArray;
   Lang, Dir, Candidate: String;
   Index, DirIndex: Integer;
-  Info: TSearchRec;
+  Info: TDirectoryScan;
 Begin
   Result := False;
   AffFile := '';
@@ -419,7 +420,7 @@ Begin
     For DirIndex := 0 To High(Dirs) Do
       Begin
         Candidate := IncludeTrailingPathDelimiter(Dirs[DirIndex]);
-        If FindFirstUTF8(Candidate + Lang + '_*.dic', faAnyFile, Info) = 0 Then
+        If StartDirectoryScan(Candidate + Lang + '_*.dic', faAnyFile, Info) = 0 Then
           Try
             Repeat
               If (Info.Attr And faDirectory) = 0 Then
@@ -433,9 +434,9 @@ Begin
                       Exit;
                     End;
                 End;
-            Until FindNextUTF8(Info) <> 0;
+            Until AdvanceDirectoryScan(Info) <> 0;
           Finally
-            FindCloseUTF8(Info);
+            CloseDirectoryScan(Info);
           End;
       End;
   If Lang <> '' Then
@@ -444,7 +445,7 @@ Begin
   For DirIndex := 0 To High(Dirs) Do
     Begin
       Candidate := IncludeTrailingPathDelimiter(Dirs[DirIndex]);
-      If FindFirstUTF8(Candidate + '*.dic', faAnyFile, Info) = 0 Then
+      If StartDirectoryScan(Candidate + '*.dic', faAnyFile, Info) = 0 Then
         Try
           Repeat
             If (Info.Attr And faDirectory) = 0 Then
@@ -458,9 +459,9 @@ Begin
                     Exit;
                   End;
               End;
-          Until FindNextUTF8(Info) <> 0;
+          Until AdvanceDirectoryScan(Info) <> 0;
         Finally
-          FindCloseUTF8(Info);
+          CloseDirectoryScan(Info);
         End;
     End;
 End;
