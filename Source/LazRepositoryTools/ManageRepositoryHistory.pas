@@ -22,6 +22,7 @@ Type
     FSelectedIndex: Integer;
     FIndexing: Boolean;
     FRepoPath: String;
+    FHeadSha: String;
     FLaneColors: Array[0..9] Of TColor;
     Procedure InitLaneColors;
     Function GraphScale(DesignPx: Integer): Integer;
@@ -37,6 +38,7 @@ Type
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
+    Function CommitIsCheckedOut(Const CommitRec: TGitCommitRec): Boolean;
   Public
     Constructor Create(Host: TCustomForm);
     Procedure Bind(PaintBox: TPaintBox; ScrollBar: TScrollBar; Model: TGitGraphModel);
@@ -50,6 +52,7 @@ Type
     Property SelectedIndex: Integer Read FSelectedIndex Write FSelectedIndex;
     Property Indexing: Boolean Read FIndexing Write FIndexing;
     Property RepoPath: String Read FRepoPath Write FRepoPath;
+    Property HeadSha: String Read FHeadSha Write FHeadSha;
   End;
 
 Implementation
@@ -64,6 +67,7 @@ Begin
   FSelectedIndex := -1;
   FIndexing := False;
   FRepoPath := '';
+  FHeadSha := '';
   InitLaneColors;
 End;
 
@@ -300,9 +304,49 @@ Begin
   FScrollBar.Enabled := MaxPos > 0;
 End;
 
+Function RefsIncludeHead(Const Refs: String): Boolean;
+Var
+  Token: String;
+  Cursor, CommaAt, ArrowPos: Integer;
+Begin
+  Result := False;
+  Cursor := 1;
+  While Cursor <= Length(Refs) Do
+    Begin
+      CommaAt := Pos(',', Copy(Refs, Cursor, MaxInt));
+      If CommaAt = 0 Then
+        Begin
+          Token := Trim(Copy(Refs, Cursor, MaxInt));
+          Cursor := Length(Refs) + 1;
+        End
+      Else
+        Begin
+          Token := Trim(Copy(Refs, Cursor, CommaAt - 1));
+          Cursor := Cursor + CommaAt;
+        End;
+      If Token = '' Then
+        Continue;
+      If SameText(Token, 'HEAD') Then
+        Exit(True);
+      ArrowPos := Pos(' -> ', Token);
+      If (ArrowPos > 1) And SameText(Copy(Token, 1, ArrowPos - 1), 'HEAD') Then
+        Exit(True);
+    End;
+End;
+
+Function TManageHistoryGraph.CommitIsCheckedOut(Const CommitRec: TGitCommitRec): Boolean;
+Begin
+  If RefsIncludeHead(CommitRec.Refs) Then
+    Exit(True);
+  { Details that omit HEAD are authoritative. Until they arrive, trust the probe SHA. }
+  If CommitRec.DetailsLoaded Then
+    Exit(False);
+  Result := (FHeadSha <> '') And SameText(CommitRec.Sha, FHeadSha);
+End;
+
 Procedure TManageHistoryGraph.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
 Type
-  TRefKind = (rkLocal, rkRemote, rkTag, rkOther);
+  TRefKind = (rkLocal, rkRemote, rkTag, rkCheckedOut, rkHead, rkOther);
 Var
   Parts: TStringList;
   I, ArrowPos, CardW, CardH, CardY, PadX, Gap, MinW, RH, TextH: Integer;
@@ -359,7 +403,10 @@ Begin
         If ArrowPos > 0 Then
           Begin
             RefName := Trim(Copy(Token, ArrowPos + 4, MaxInt));
-            Kind := rkLocal;
+            If SameText(Copy(Token, 1, ArrowPos - 1), 'HEAD') Then
+              Kind := rkCheckedOut
+            Else
+              Kind := rkLocal;
           End
         Else If SameText(Copy(Token, 1, 5), 'tag: ') Then
           Begin
@@ -367,7 +414,10 @@ Begin
             Kind := rkTag;
           End
         Else If SameText(Token, 'HEAD') Then
-          Continue
+          Begin
+            RefName := 'HEAD';
+            Kind := rkHead;
+          End
         Else
           Begin
             RefName := Token;
@@ -397,6 +447,18 @@ Begin
               Fg := RGBToColor(106, 27, 154);
               Border := RGBToColor(186, 104, 200);
             End;
+          rkCheckedOut:
+            Begin
+              Bg := RGBToColor(187, 222, 251);
+              Fg := RGBToColor(13, 71, 161);
+              Border := RGBToColor(21, 101, 192);
+            End;
+          rkHead:
+            Begin
+              Bg := RGBToColor(255, 236, 179);
+              Fg := RGBToColor(93, 64, 55);
+              Border := RGBToColor(245, 124, 0);
+            End;
         Else
           Begin
             Bg := RGBToColor(245, 245, 245);
@@ -411,6 +473,10 @@ Begin
             Font.Style := [];
             Font.Quality := fqCleartypeNatural;
             Font.Color := Fg;
+            If (Kind = rkCheckedOut) Or (Kind = rkHead) Then
+              Font.Style := [fsBold]
+            Else
+              Font.Style := [];
             CardW := TextWidth(RefName) + PadX * 2;
             If CardW < MinW Then
               CardW := MinW;
@@ -432,7 +498,7 @@ End;
 
 Procedure TManageHistoryGraph.Paint;
 Var
-  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR: Integer;
+  FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
   TextH, TextY, EdgePenW, MsgPad: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
@@ -446,6 +512,7 @@ Begin
   RH := RowHeight;
   DateColW := GraphDateColumnWidth;
   NodeR := GraphNodeRadius;
+  Ring := Max(2, GraphScale(2));
   EdgePenW := Max(1, GraphScale(2));
   MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
@@ -510,6 +577,14 @@ Begin
           Y := I * RH - Off;
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
+          If CommitIsCheckedOut(C) Then
+            Begin
+              Brush.Style := bsClear;
+              Pen.Color := clWindowText;
+              Pen.Width := Max(1, GraphScale(2));
+              Ellipse(X - NodeR - Ring, RowMidY(I) - NodeR - Ring, X + NodeR + Ring, RowMidY(I) + NodeR + Ring);
+              Brush.Style := bsSolid;
+            End;
           Brush.Color := Col;
           Pen.Color := Col;
           Pen.Width := Max(1, GraphScale(1));
@@ -525,6 +600,8 @@ Begin
 
           TextX := TextX + DateColW;
           PrepareGraphTextFont(FPaintBox.Canvas, False);
+          If CommitIsCheckedOut(C) Then
+            Font.Style := [fsBold];
           If C.DetailsLoaded Then
             LabelText := C.Subject
           Else

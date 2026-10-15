@@ -79,6 +79,8 @@ Type
     Function CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
     Procedure RebuildLayout;
     Function Commit(Index: Integer): TGitCommitRec;
+    /// Row of a commit SHA, or -1. Match is case-insensitive.
+    Function IndexOf(Const Sha: String): Integer;
     Function VisibleEdges(FirstRow, LastRow: Integer): TGitEdgeIndices;
     Function Edge(Index: Integer): TGitGraphEdge;
     { RowHeight / LeftMargin / LaneWidth must already be DPI-scaled device pixels. }
@@ -489,6 +491,19 @@ Begin
   BuildShaIndex;
   LayoutLanes;
   BuildEdges;
+End;
+
+Function TGitGraphModel.IndexOf(Const Sha: String): Integer;
+Var
+  I: Integer;
+Begin
+  Result := IndexOfSha(Sha);
+  If Result >= 0 Then
+    Exit;
+  For I := 0 To FCount - 1 Do
+    If SameText(FCommits[I].Sha, Sha) Then
+      Exit(I);
+  Result := -1;
 End;
 
 Function TGitGraphModel.Commit(Index: Integer): TGitCommitRec;

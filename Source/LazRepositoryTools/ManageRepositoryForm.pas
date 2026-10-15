@@ -199,6 +199,7 @@ Type
     FRepoPath: String;
     FBranch: String;
     FHeadSha: String;
+    FRevealCheckedOut: Boolean;
     FHeadPushed: Boolean;
     FHeadPushedKnown: Boolean;
     FAmendHead: Boolean;
@@ -338,6 +339,7 @@ Constructor TManageRepositoryForm.Create(TheOwner: TComponent);
 Begin
   Inherited Create(TheOwner);
   FClean := True;
+  FRevealCheckedOut := False;
   FHeadPushed := True;
   FHeadPushedKnown := False;
   FAmendHead := False;
@@ -828,6 +830,9 @@ Begin
         MessageDlg('Committed ' + Copy(Job.ResultSha, 1, 7) + '.', mtInformation, [mbOK], 0);
         If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
           Exit;
+        If Job.ResultSha <> '' Then
+          FHeadSha := Job.ResultSha;
+        FRevealCheckedOut := True;
         If Not PushQueued Then
           ManualRefresh;
       End;
@@ -836,7 +841,12 @@ Begin
         If Job.Cancelled Then
           Exit;
         If Job.Ok Then
-          ManualRefresh
+          Begin
+            FHeadSha := Job.RefName;
+            FBranch := 'HEAD';
+            FRevealCheckedOut := True;
+            ManualRefresh;
+          End
         Else
           MessageDlg('Checkout failed: ' + Job.ErrorText, mtError, [mbOK], 0);
       End;
@@ -971,6 +981,7 @@ Begin
           End
         Else
           Begin
+            FRevealCheckedOut := False;
             If Job.ProbeDigest <> FLastPorcelain Then
               Begin
                 FLastPorcelain := Job.ProbeDigest;
@@ -1123,13 +1134,14 @@ End;
 
 Procedure TManageRepositoryForm.ApplyIndexResult(Ok: Boolean; Const Payload: String);
 Var
-  Parsed: Integer;
+  Parsed, HeadIndex: Integer;
 Begin
   FIndexing := False;
   If (csDestroying in ComponentState) Or Not Assigned(FModel) Or Not Assigned(DiffView) Then
     Exit;
   If Not Ok Then
     Begin
+      FRevealCheckedOut := False;
       If Assigned(StatusFooter) Then
         StatusFooter.SetRightText('Index failed');
       WorkflowLogger.Warning('ManageRepository', 'rev-list failed for ' + FRepoPath);
@@ -1137,15 +1149,25 @@ Begin
     End;
 
   Parsed := FModel.ParseRevListParents(Payload);
-  FSelectedIndex := -1;
-  If Parsed > 0 Then
-    FSelectedIndex := 0;
+  HeadIndex := -1;
+  If FRevealCheckedOut And (FHeadSha <> '') Then
+    HeadIndex := FModel.IndexOf(FHeadSha);
+  If Not FProbePending Then
+    FRevealCheckedOut := False;
 
   FHistory.UpdateScrollRange;
-  If FSelectedIndex >= 0 Then
-    ShowCommitDetails(FSelectedIndex)
+  If HeadIndex >= 0 Then
+    SelectRow(HeadIndex, True)
   Else
-    DiffView.Clear;
+    Begin
+      FSelectedIndex := -1;
+      If Parsed > 0 Then
+        FSelectedIndex := 0;
+      If FSelectedIndex >= 0 Then
+        ShowCommitDetails(FSelectedIndex)
+      Else
+        DiffView.Clear;
+    End;
 
   UpdateStatus;
   If Assigned(GraphPaintBox) Then
@@ -1269,6 +1291,7 @@ Begin
     Not Assigned(FModel) Then Exit;
   FHistory.Indexing := FIndexing;
   FHistory.RepoPath := FRepoPath;
+  FHistory.HeadSha := FHeadSha;
   FHistory.SelectedIndex := FSelectedIndex;
   FHistory.Paint;
 End;
@@ -2422,7 +2445,9 @@ Begin
     End;
   Caption := 'Manage Repository: ' + FRepoPath;
 
-  If FBranch <> '' Then
+  If SameText(FBranch, 'HEAD') Then
+    LeftText := 'detached'
+  Else If FBranch <> '' Then
     LeftText := FBranch
   Else
     LeftText := ExtractFileName(ExcludeTrailingPathDelimiter(FRepoPath));
