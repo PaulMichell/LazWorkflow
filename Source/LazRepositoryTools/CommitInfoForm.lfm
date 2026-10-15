@@ -1,9 +1,8 @@
 object CommitInfoForm: TCommitInfoForm
-  Left = 280
+  Left = 485
   Height = 560
-  Top = 160
+  Top = 177
   Width = 640
-  BorderStyle = bsSizeable
   Caption = 'Commit'
   ClientHeight = 560
   ClientWidth = 640
@@ -38,8 +37,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Id:'
         AutoSize = False
+        Caption = 'Id:'
         ParentColor = False
       end
       object IdEdit: TEdit
@@ -68,8 +67,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Date:'
         AutoSize = False
+        Caption = 'Date:'
         ParentColor = False
       end
       object DateEdit: TEdit
@@ -86,8 +85,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 40
-        Caption = 'Time:'
         AutoSize = False
+        Caption = 'Time:'
         ParentColor = False
       end
       object TimeEdit: TEdit
@@ -116,8 +115,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Author:'
         AutoSize = False
+        Caption = 'Author:'
         ParentColor = False
       end
       object AuthorEdit: TEdit
@@ -146,8 +145,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Committer:'
         AutoSize = False
+        Caption = 'Committer:'
         ParentColor = False
       end
       object CommitterEdit: TEdit
@@ -176,8 +175,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 140
-        Caption = 'Committer date:'
         AutoSize = False
+        Caption = 'Committer date:'
         ParentColor = False
       end
       object CommitterDateEdit: TEdit
@@ -194,8 +193,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 140
-        Caption = 'Committer time:'
         AutoSize = False
+        Caption = 'Committer time:'
         ParentColor = False
       end
       object CommitterTimeEdit: TEdit
@@ -224,8 +223,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Parents:'
         AutoSize = False
+        Caption = 'Parents:'
         ParentColor = False
       end
       object ParentsMemo: TMemo
@@ -255,8 +254,8 @@ object CommitInfoForm: TCommitInfoForm
         Height = 18
         Top = 10
         Width = 124
-        Caption = 'Refs:'
         AutoSize = False
+        Caption = 'Refs:'
         ParentColor = False
       end
       object RefsMemo: TMemo
@@ -266,20 +265,19 @@ object CommitInfoForm: TCommitInfoForm
         Width = 480
         Anchors = [akTop, akLeft, akRight]
         ReadOnly = True
-        ScrollBars = ssVertical
+        ScrollBars = ssAutoVertical
         TabOrder = 0
-        WordWrap = True
       end
     end
   end
   object MessageHost: TPanel
     Left = 0
-    Height = 184
+    Height = 183
     Top = 328
     Width = 640
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 184
+    ClientHeight = 183
     ClientWidth = 640
     TabOrder = 1
     object MessageLabel: TLabel
@@ -288,34 +286,32 @@ object CommitInfoForm: TCommitInfoForm
       Top = 8
       Width = 616
       Align = alTop
+      AutoSize = False
       BorderSpacing.Left = 12
       BorderSpacing.Top = 8
       BorderSpacing.Right = 12
       Caption = 'Message:'
-      AutoSize = False
       ParentColor = False
     end
     object MessageMemo: TMemo
       Left = 12
-      Height = 150
-      Top = 34
+      Height = 149
+      Top = 26
       Width = 616
       Align = alClient
       BorderSpacing.Left = 12
       BorderSpacing.Right = 12
       BorderSpacing.Bottom = 8
       ReadOnly = True
-      ScrollBars = ssVertical
+      ScrollBars = ssAutoVertical
       TabOrder = 0
-      WordWrap = True
     end
   end
   object ButtonPanel: TButtonPanel
     Left = 6
-    Height = 38
-    Top = 522
+    Height = 37
+    Top = 517
     Width = 628
-    Align = alBottom
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
     HelpButton.Name = 'HelpButton'
