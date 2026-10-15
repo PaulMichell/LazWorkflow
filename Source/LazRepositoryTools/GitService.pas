@@ -119,6 +119,8 @@ Type
     { True when Sha is reachable from any remote-tracking ref. Query failure leaves Pushed False. }
     Function IsCommitPushed(Const Sha: String; Out Pushed: Boolean): Boolean;
     Function GetCurrentBranch(Out Branch: String): Boolean;
+    { Clean ignores untracked files. Revert does not remove them, and checkout keeps them
+      unless a path would be overwritten, in which case Git refuses. }
     Function GetStatus(Out Clean: Boolean; Out Porcelain: String): Boolean;
     { One process: HEAD, branch, and a digest of porcelain v2 --branch output. }
     Function RefDigest(Out Digest: String): Boolean;
@@ -798,7 +800,7 @@ Var
 Begin
   Clean := True;
   Porcelain := '';
-  Result := RunGit(['status', '--porcelain'], OutputText, ExitCode);
+  Result := RunGit(['status', '--porcelain', '--untracked-files=no'], OutputText, ExitCode);
   If Result Then
     Begin
       Porcelain := OutputText;
