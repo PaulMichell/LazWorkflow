@@ -65,6 +65,7 @@ Type
     FetchButton: TButton;
     AmendButton: TButton;
     RemoveButton: TButton;
+    CheckoutButton: TButton;
     RemotesButton: TButton;
     SettingsButton: TButton;
     DiffView: TGitDiffView;

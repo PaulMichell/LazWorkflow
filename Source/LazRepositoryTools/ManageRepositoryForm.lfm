@@ -119,21 +119,31 @@ object ManageRepositoryForm: TManageRepositoryForm
               ShowHint = True
               TabOrder = 4
             end
-            object RemotesButton: TButton
+            object CheckoutButton: TButton
               Left = 444
               Height = 28
               Top = 4
               Width = 84
-              Action = RemotesAction
+              Action = CheckoutAction
+              ParentShowHint = False
+              ShowHint = True
               TabOrder = 5
             end
-            object SettingsButton: TButton
+            object RemotesButton: TButton
               Left = 532
               Height = 28
               Top = 4
               Width = 84
-              Action = SettingsAction
+              Action = RemotesAction
               TabOrder = 6
+            end
+            object SettingsButton: TButton
+              Left = 620
+              Height = 28
+              Top = 4
+              Width = 84
+              Action = SettingsAction
+              TabOrder = 7
             end
           end
           inline DiffView: TGitDiffView
@@ -857,6 +867,8 @@ object ManageRepositoryForm: TManageRepositoryForm
     end
     object CheckoutAction: TAction
       Caption = 'Checkout…'
+      Enabled = False
+      Hint = 'Check out the selected commit. Enabled when a commit is selected in the history.'
       OnExecute = CheckoutActionExecute
       OnUpdate = HistoryMutateActionUpdate
     end
