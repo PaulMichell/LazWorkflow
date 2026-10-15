@@ -137,6 +137,7 @@ Type
     Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure PaintBoxPaint(Sender: TObject);
     Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    Procedure PaintBoxDblClick(Sender: TObject);
     Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
     Procedure ScrollBarChange(Sender: TObject);
     Procedure GraphHostResize(Sender: TObject);
@@ -290,7 +291,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  DateUtils, Math, LazFileUtils, SpellCheckerConfig, SynEditTypes;
+  CommitInfoForm, DateUtils, Math, LazFileUtils, SpellCheckerConfig, SynEditTypes;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -1283,6 +1284,74 @@ Begin
   SelectRow(Row, False);
   If Button = mbRight Then
     { PopupMenu on the paintbox will show automatically when assigned. };
+End;
+
+Procedure GraphCommitFallback(Const Commit: TGitCommitRec; Const ErrorText: String; Out Info: TGitCommitAttributes);
+Var
+  I: Integer;
+Begin
+  Info.Sha := Commit.Sha;
+  Info.AuthorName := '';
+  Info.AuthorEmail := '';
+  Info.AuthorTime := 0;
+  Info.CommitterName := '';
+  Info.CommitterEmail := '';
+  Info.CommitterTime := 0;
+  Info.Parents := '';
+  Info.Refs := '';
+  Info.Message := 'Could not read the full commit record.';
+  If ErrorText <> '' Then
+    Info.Message := Info.Message + ' ' + ErrorText;
+  If Commit.DetailsLoaded Then
+    Begin
+      Info.AuthorName := Commit.Author;
+      Info.CommitterTime := Commit.CommitTime;
+      Info.Refs := Commit.Refs;
+      If Commit.Subject <> '' Then
+        Info.Message := Info.Message + LineEnding + LineEnding + Commit.Subject;
+    End;
+  For I := 0 To Commit.ParentCount - 1 Do
+    Begin
+      If Info.Parents <> '' Then
+        Info.Parents := Info.Parents + ' ';
+      Info.Parents := Info.Parents + Commit.Parents[I];
+    End;
+End;
+
+Procedure TManageRepositoryForm.PaintBoxDblClick(Sender: TObject);
+Var
+  Local: TPoint;
+  Row: Integer;
+  Commit: TGitCommitRec;
+  Info: TGitCommitAttributes;
+  ErrorText: String;
+Begin
+  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or Not Assigned(FModel) Or
+    Not Assigned(GraphPaintBox) Then
+    Exit;
+  Local := GraphPaintBox.ScreenToClient(Mouse.CursorPos);
+  Row := FHistory.RowAtY(Local.Y);
+  If Row < 0 Then
+    Exit;
+  If FSelectedIndex <> Row Then
+    SelectRow(Row, False);
+  Commit := FModel.Commit(Row);
+  If Commit.Sha = '' Then
+    Exit;
+  ErrorText := '';
+  If (FRepoPath <> '') And Assigned(GitClient) Then
+    Begin
+      GitClient.RepoPath := FRepoPath;
+      If Not GitClient.GetCommitAttributes(Commit.Sha, Info) Then
+        ErrorText := GitClient.LastError;
+    End
+  Else
+    ErrorText := 'No repository is open.';
+  If ErrorText <> '' Then
+    GraphCommitFallback(Commit, ErrorText, Info);
+  If csDestroying In ComponentState Then
+    Exit;
+  ShowCommitInfo(Self, Info);
 End;
 
 Procedure TManageRepositoryForm.ShowCommitDetails(Index: Integer);

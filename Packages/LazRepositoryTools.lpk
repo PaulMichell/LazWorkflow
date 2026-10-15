@@ -132,6 +132,14 @@
         <Filename Value="../Source/LazRepositoryTools/GitIgnoreForm.lfm"/>
         <UnitName Value="GitIgnoreForm"/>
       </Item>
+      <Item>
+        <Filename Value="../Source/LazRepositoryTools/CommitInfoForm.pas"/>
+        <UnitName Value="CommitInfoForm"/>
+      </Item>
+      <Item>
+        <Filename Value="../Source/LazRepositoryTools/CommitInfoForm.lfm"/>
+        <UnitName Value="CommitInfoForm"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>

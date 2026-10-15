@@ -367,10 +367,10 @@ object ManageRepositoryForm: TManageRepositoryForm
           Font.Height = -12
           Font.Name = 'Courier New'
           Font.Quality = fqCleartypeNatural
+          PopupMenu = FilePreviewPopup
           TabOrder = 1
           Visible = False
           ReadOnly = True
-          PopupMenu = FilePreviewPopup
           RightEdge = 0
           ScrollBars = ssAutoBoth
           inline SynLeftGutterPartList1: TSynGutterPartList

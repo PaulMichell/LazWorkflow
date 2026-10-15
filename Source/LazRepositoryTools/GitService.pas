@@ -1,6 +1,10 @@
 Unit GitService;
 
-{ Git operations service – CLI primary with future libgit2 path (c) 2026 Michell Computing. }
+{ Git operations service – CLI primary with future libgit2 path (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. This is the single Git CLI
+  service for the repository package; splitting it would scatter one command
+  surface. Reviewed 2026-10: no hidden foundation or sibling UI identified. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -42,6 +46,22 @@ Type
     ExitCode: Integer;
     Signalled: Boolean;
     OutputText, ErrorText: String;
+  End;
+
+  { One commit for the History information dialog.
+    AuthorTime and CommitterTime are Unix seconds (%at and %ct).
+    Parents is space-separated full ids. Refs is git %D. Message is %B. }
+  TGitCommitAttributes = Record
+    Sha: String;
+    AuthorName: String;
+    AuthorEmail: String;
+    AuthorTime: Int64;
+    CommitterName: String;
+    CommitterEmail: String;
+    CommitterTime: Int64;
+    Parents: String;
+    Refs: String;
+    Message: String;
   End;
 
   TGitService = Class
@@ -131,6 +151,9 @@ Type
     Function ResetLastCommit(Soft: Boolean): Boolean;
     { Full commit message (subject and body) for Sha. }
     Function GetCommitMessage(Const Sha: String; Out MessageText: String): Boolean;
+    { Author, committer, parents, refs, and the full message for one commit.
+      History rows store only the subject, author name, committer time, and refs. }
+    Function GetCommitAttributes(Const Sha: String; Out Info: TGitCommitAttributes): Boolean;
     Function DiffPath(Const Path: String; Staged: Boolean; Out DiffText: String): Boolean;
     { Unified diff of the index vs HEAD (git diff --cached). Empty when nothing staged. }
     Function DiffStaged(Out DiffText: String): Boolean;
@@ -202,6 +225,8 @@ Function GitStatusEntryIsUnstaged(Const Entry: TGitStatusEntry): Boolean;
 Function GitStatusEntryLabel(Const Entry: TGitStatusEntry; StagedSide: Boolean): String;
 { Porcelain v1 -z: XY space path NUL; rename/copy is dest NUL source NUL. }
 Procedure ParseGitStatusPorcelainV1Z(Const Raw: String; Out Entries: TGitStatusEntryArray);
+{ NUL-separated record produced by GetCommitAttributes. The message is the remainder. }
+Function ParseCommitAttributes(Const Raw: String; Out Info: TGitCommitAttributes): Boolean;
 
 Var
   GitClient: TGitService;
@@ -862,6 +887,82 @@ Begin
     End;
 End;
 
+Procedure ClearCommitAttributes(Out Info: TGitCommitAttributes);
+Begin
+  Info.Sha := '';
+  Info.AuthorName := '';
+  Info.AuthorEmail := '';
+  Info.AuthorTime := 0;
+  Info.CommitterName := '';
+  Info.CommitterEmail := '';
+  Info.CommitterTime := 0;
+  Info.Parents := '';
+  Info.Refs := '';
+  Info.Message := '';
+End;
+
+Function TakeSeparatedField(Const Raw: String; Var Cursor: Integer; Out Field: String): Boolean;
+Var
+  StartPos: Integer;
+Begin
+  StartPos := Cursor;
+  While (Cursor <= Length(Raw)) And (Raw[Cursor] <> #0) Do
+    Inc(Cursor);
+  Field := Copy(Raw, StartPos, Cursor - StartPos);
+  Result := (Cursor <= Length(Raw)) And (Raw[Cursor] = #0);
+  If Result Then
+    Inc(Cursor);
+End;
+
+Function ParseUnixField(Const Field: String; Out UnixTime: Int64): Boolean;
+Var
+  Code: Integer;
+Begin
+  Val(Trim(Field), UnixTime, Code);
+  Result := (Code = 0) And (UnixTime >= 0);
+End;
+
+Function CommitShaIsHex(Const Sha: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := Sha <> '';
+  If Not Result Then
+    Exit;
+  For I := 1 To Length(Sha) Do
+    If Not (Sha[I] In ['0'..'9', 'a'..'f', 'A'..'F']) Then
+      Begin
+        Result := False;
+        Exit;
+      End;
+End;
+
+Function ParseCommitAttributes(Const Raw: String; Out Info: TGitCommitAttributes): Boolean;
+Var
+  Cursor: Integer;
+  TimeField: String;
+Begin
+  ClearCommitAttributes(Info);
+  Result := False;
+  Cursor := 1;
+  If TakeSeparatedField(Raw, Cursor, Info.Sha) And
+    TakeSeparatedField(Raw, Cursor, Info.AuthorName) And
+    TakeSeparatedField(Raw, Cursor, Info.AuthorEmail) And
+    TakeSeparatedField(Raw, Cursor, TimeField) And ParseUnixField(TimeField, Info.AuthorTime) And
+    TakeSeparatedField(Raw, Cursor, Info.CommitterName) And
+    TakeSeparatedField(Raw, Cursor, Info.CommitterEmail) And
+    TakeSeparatedField(Raw, Cursor, TimeField) And ParseUnixField(TimeField, Info.CommitterTime) And
+    TakeSeparatedField(Raw, Cursor, Info.Parents) And
+    TakeSeparatedField(Raw, Cursor, Info.Refs) Then
+    Begin
+      If Cursor <= Length(Raw) Then
+        Info.Message := TrimRight(Copy(Raw, Cursor, MaxInt));
+      Result := Info.Sha <> '';
+    End;
+  If Not Result Then
+    ClearCommitAttributes(Info);
+End;
+
 Function NextNulField(Const S: String; Var Pos: Integer): String;
 Var
   StartPos: Integer;
@@ -1479,6 +1580,29 @@ Begin
   Result := RunGit(['log', '-1', '--format=%B', Trim(Sha)], OutputText, ExitCode);
   If Result Then
     MessageText := TrimRight(OutputText);
+End;
+
+Function TGitService.GetCommitAttributes(Const Sha: String; Out Info: TGitCommitAttributes): Boolean;
+Var
+  OutputText: String;
+  ExitCode: Integer;
+  Parsed: TGitCommitAttributes;
+Begin
+  ClearCommitAttributes(Info);
+  Result := False;
+  If Not CommitShaIsHex(Trim(Sha)) Then
+    Begin
+      FLastError := 'Commit SHA is empty or not hexadecimal';
+      Exit;
+    End;
+  If Not RunGit(['log', '-1', '--format=%H%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%P%x00%D%x00%B', Trim(Sha)],
+    OutputText, ExitCode) Then
+    Exit;
+  Result := ParseCommitAttributes(OutputText, Parsed);
+  If Result Then
+    Info := Parsed
+  Else
+    FLastError := 'Commit details were not in the expected format';
 End;
 
 Function TGitService.IsPathTracked(Const Path: String): Boolean;

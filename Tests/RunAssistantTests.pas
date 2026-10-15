@@ -16,8 +16,8 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..28] Of String = (
-    'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
+  CoreTestNames: Array[0..29] Of String = (
+    'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
     'AssistantArchiveRollbackTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
     'AssistantLfmTest', 'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest',
     'AssistantSearchUtilTest', 'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantAccountUsageTest',
