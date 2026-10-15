@@ -137,7 +137,6 @@ Type
     Procedure FormKeyDown(Sender: TObject; Var Key: Word; Shift: TShiftState);
     Procedure PaintBoxPaint(Sender: TObject);
     Procedure PaintBoxMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
-    Procedure PaintBoxDblClick(Sender: TObject);
     Procedure PaintBoxMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; Var Handled: Boolean);
     Procedure ScrollBarChange(Sender: TObject);
     Procedure GraphHostResize(Sender: TObject);
@@ -261,6 +260,8 @@ Type
     Procedure StopIndexLoad;
     Procedure StopDetailLoad;
     Procedure ShowCommitDetails(Index: Integer);
+    Procedure ShowCommitInformation(Index: Integer);
+    Procedure OpenCommitInfoAsync(Data: PtrInt);
     Procedure SelectRow(Index: Integer; ScrollIntoView: Boolean);
     Procedure MoveSelection(Delta: Integer);
     Function SelectedSha: String;
@@ -1282,8 +1283,10 @@ Begin
   If Row < 0 Then
     Exit;
   SelectRow(Row, False);
-  If Button = mbRight Then
-    { PopupMenu on the paintbox will show automatically when assigned. };
+  { The double-click message arrives here with ssDouble. Open after this mouse
+    message so the modal dialog is not created while the paint box has capture. }
+  If (Button = mbLeft) And (ssDouble In Shift) Then
+    Application.QueueAsyncCall(@OpenCommitInfoAsync, Row);
 End;
 
 Procedure GraphCommitFallback(Const Commit: TGitCommitRec; Const ErrorText: String; Out Info: TGitCommitAttributes);
@@ -1318,24 +1321,17 @@ Begin
     End;
 End;
 
-Procedure TManageRepositoryForm.PaintBoxDblClick(Sender: TObject);
+Procedure TManageRepositoryForm.ShowCommitInformation(Index: Integer);
 Var
-  Local: TPoint;
-  Row: Integer;
   Commit: TGitCommitRec;
   Info: TGitCommitAttributes;
   ErrorText: String;
 Begin
-  If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or Not Assigned(FModel) Or
-    Not Assigned(GraphPaintBox) Then
+  If (csDestroying In ComponentState) Or Not Assigned(FModel) Then
     Exit;
-  Local := GraphPaintBox.ScreenToClient(Mouse.CursorPos);
-  Row := FHistory.RowAtY(Local.Y);
-  If Row < 0 Then
+  If (Index < 0) Or (Index >= FModel.Count) Then
     Exit;
-  If FSelectedIndex <> Row Then
-    SelectRow(Row, False);
-  Commit := FModel.Commit(Row);
+  Commit := FModel.Commit(Index);
   If Commit.Sha = '' Then
     Exit;
   ErrorText := '';
@@ -1352,6 +1348,11 @@ Begin
   If csDestroying In ComponentState Then
     Exit;
   ShowCommitInfo(Self, Info);
+End;
+
+Procedure TManageRepositoryForm.OpenCommitInfoAsync(Data: PtrInt);
+Begin
+  ShowCommitInformation(Data);
 End;
 
 Procedure TManageRepositoryForm.ShowCommitDetails(Index: Integer);
@@ -2298,8 +2299,7 @@ End;
 
 Procedure TManageRepositoryForm.ShowCommitActionExecute(Sender: TObject);
 Begin
-  If FSelectedIndex >= 0 Then
-    ShowCommitDetails(FSelectedIndex);
+  ShowCommitInformation(FSelectedIndex);
 End;
 
 Procedure TManageRepositoryForm.CheckoutActionExecute(Sender: TObject);
