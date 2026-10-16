@@ -655,7 +655,8 @@ Begin
   If ResetsAt <= 0 Then
     Result := ''
   Else
-    Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(ResetsAt));
+    { UnixToDateTime without the flag returns UTC. The footer clock is local. }
+    Result := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(ResetsAt, False));
 End;
 
 Function ReadWindow(Node: TJSONData; Out Window: TUsageWindow; Out ErrorText: String): Boolean;
@@ -730,8 +731,8 @@ Begin
   Snapshot.ResetsAt := 0;
   If ResetUnix <= 0 Then
     Exit;
-  { Same conversion as the Codex hint clock. UnixToDateTime is local on this compiler. }
-  Snapshot.ResetsAt := UnixToDateTime(ResetUnix);
+  { Same local clock as the hint. Not parsed back out of the hint text. }
+  Snapshot.ResetsAt := UnixToDateTime(ResetUnix, False);
   Snapshot.HasReset := Snapshot.ResetsAt > 0;
 End;
 

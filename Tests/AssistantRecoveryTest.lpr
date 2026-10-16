@@ -8,7 +8,10 @@ Program AssistantRecoveryTest;
 {$ENDIF}
 
 Uses
-  SysUtils, AssistantRecovery;
+  {$IFDEF UNIX}
+  cthreads,
+  {$ENDIF}
+  Interfaces, SysUtils, DateUtils, AssistantRecovery;
 
 Var
   FailCount: Integer;
@@ -36,6 +39,112 @@ Begin
   Result.Attempt := Attempt;
   Result.AttemptCap := 1;
   Result.OwnsTurn := True;
+End;
+
+Procedure TestCreditDecisions;
+Var
+  Sample: TAssistantFault;
+  Decision: TAssistantRecovery;
+  NowTime, ResetAt, RetryAt: TDateTime;
+  WaitMs: QWord;
+  UnixAt: Int64;
+  Note: String;
+Begin
+  Sample := DefaultAssistantFault;
+  Sample.Origin := afoHttpRound;
+  Sample.HttpStatus := 402;
+  Sample.ErrorText := 'HTTP 402';
+  Sample.Attempt := 4;
+  Sample.AttemptCap := 1;
+  Sample.OwnsTurn := True;
+  Decision := ClassifyAssistantFault(Sample);
+  Check('402 waits for credits with no attempt cap', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwCredits) And (Not Decision.WaitForConnection));
+
+  Sample.HttpStatus := 0;
+  Sample.ErrorText := 'Unexpected response status code: 402';
+  Decision := ClassifyAssistantFault(Sample);
+  Check('status code text 402 is credits', Decision.HttpWait = ahwCredits);
+
+  Sample.HttpStatus := 500;
+  Sample.ErrorText := 'HTTP 500';
+  Sample.ResponseBody := 'quota exceeded';
+  Check('quota in the body is credits', AssistantFaultIsOutOfCredits(Sample));
+  Sample.ResponseBody := 'spending limit reached';
+  Check('spending in the body is credits', AssistantFaultIsOutOfCredits(Sample));
+  Sample.ResponseBody := 'billing hard limit';
+  Check('billing in the body is credits', AssistantFaultIsOutOfCredits(Sample));
+  Sample.ErrorText := 'insufficient credit';
+  Sample.ResponseBody := '';
+  Check('insufficient credit is credits', AssistantFaultIsOutOfCredits(Sample));
+
+  Sample.HttpStatus := 400;
+  Sample.ErrorText := 'HTTP 400: bad request';
+  Sample.ResponseBody := '{"error":"quota exceeded"}';
+  Decision := ClassifyAssistantFault(Sample);
+  Check('quota on a 400 is credits, not a bad request', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwCredits));
+
+  Sample := DefaultAssistantFault;
+  Sample.Origin := afoHttpRound;
+  Sample.HttpStatus := 429;
+  Sample.ErrorText := 'HTTP 429';
+  Sample.Attempt := 3;
+  Sample.AttemptCap := 1;
+  Sample.OwnsTurn := True;
+  Decision := ClassifyAssistantFault(Sample);
+  Check('short 429 is a rate limit, not credits', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwRateLimit));
+
+  Sample.HttpStatus := 0;
+  Sample.ErrorText := 'Unexpected response status code: 429';
+  Decision := ClassifyAssistantFault(Sample);
+  Check('status code text 429 is a rate limit', Decision.HttpWait = ahwRateLimit);
+
+  Sample.HttpStatus := 401;
+  Sample.ErrorText := 'HTTP 401: insufficient credits';
+  Decision := ClassifyAssistantFault(Sample);
+  Check('401 still stops even if it mentions credits', Decision.Action = araStop);
+
+  NowTime := EncodeDate(2026, 10, 16) + EncodeTime(12, 0, 0, 0);
+  ResetAt := NowTime + (3 / 24);
+  WaitMs := AssistantCreditWaitMs('HTTP 402', '', '', False, 0, 60 * 60 * 1000, NowTime, RetryAt);
+  Check('credit failure without a reset uses the hourly interval', WaitMs = 60 * 60 * 1000);
+  Check('credit failure does not use the 30 second interval', WaitMs <> 30000);
+  Note := AssistantCreditWaitNote('HTTP 402', RetryAt);
+  Check('credit note says the retry clock', Pos('Retry at ' + FormatDateTime('yyyy-mm-dd hh:nn', RetryAt), Note) > 0);
+  Check('credit note is progress', IsAssistantRecoveryProgress(Note));
+
+  WaitMs := AssistantCreditWaitMs('quota', '', '30', False, 0, 60 * 60 * 1000, NowTime, RetryAt);
+  Check('bare Retry-After delay is not a credit reset', WaitMs = 60 * 60 * 1000);
+  WaitMs := AssistantCreditWaitMs('', '{"retry_after":90}', '', False, 0, 60 * 60 * 1000, NowTime, RetryAt);
+  Check('JSON retry_after delay is the credit wait', WaitMs = 90000);
+  ResetAt := UniversalTimeToLocal(EncodeDate(2026, 10, 16) + EncodeTime(15, 0, 0, 0));
+  NowTime := UniversalTimeToLocal(EncodeDate(2026, 10, 16) + EncodeTime(13, 0, 0, 0));
+  WaitMs := AssistantCreditWaitMs('HTTP 402', '', 'Fri, 16 Oct 2026 15:00:00 GMT', False, 0, 60 * 60 * 1000,
+    NowTime, RetryAt);
+  Check('Retry-After HTTP-date is the credit reset', (Abs(RetryAt - ResetAt) < (2 / 86400)) And
+    (Abs(Int64(WaitMs) - Round((ResetAt - NowTime) * 86400000)) < 2000));
+
+  NowTime := EncodeDate(2026, 10, 16) + EncodeTime(12, 0, 0, 0);
+  ResetAt := NowTime + (3 / 24);
+  UnixAt := DateTimeToUnix(ResetAt, False);
+  WaitMs := AssistantCreditWaitMs('quota exceeded', '{"reset_at":' + IntToStr(UnixAt) + '}', '', False, 0,
+    60 * 60 * 1000, NowTime, RetryAt);
+  Check('JSON reset_at unix waits until the local clock', (Abs(RetryAt - ResetAt) < (2 / 86400)) And
+    (Abs(Int64(WaitMs) - 3 * 60 * 60 * 1000) < 2000));
+
+  WaitMs := AssistantCreditWaitMs('billing', '', '', True, ResetAt, 60 * 60 * 1000, NowTime, RetryAt);
+  Check('usage snapshot reset is the credit wait', (Abs(RetryAt - ResetAt) < (2 / 86400)) And
+    (Abs(Int64(WaitMs) - 3 * 60 * 60 * 1000) < 2000));
+
+  WaitMs := AssistantCreditWaitMs('billing', '', '', True, NowTime - 1, 60 * 60 * 1000, NowTime, RetryAt);
+  Check('past usage reset uses the credit interval', WaitMs = 60 * 60 * 1000);
+
+  WaitMs := AssistantRateLimitWaitMs('12', 30000, NowTime);
+  Check('short 429 uses Retry-After', WaitMs = 12000);
+  WaitMs := AssistantRateLimitWaitMs('', 30000, NowTime);
+  Check('429 without Retry-After uses the connection interval', WaitMs = 30000);
 End;
 
 Var
@@ -120,6 +229,7 @@ Begin
   Check('wait note is progress', IsAssistantRecoveryProgress(AssistantReconnectWaitNote('socket closed')));
   Check('resume note is progress', IsAssistantRecoveryProgress(AssistantReconnectResumeNote));
   Check('reconnect interval defaults to 30 seconds', AssistantReconnectIntervalMs = 30000);
+  TestCreditDecisions;
   If FailCount <> 0 Then
     Halt(1);
 End.

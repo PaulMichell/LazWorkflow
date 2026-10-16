@@ -1016,7 +1016,7 @@ Begin
       Case Decision.HttpWait Of
         ahwCredits:
           Begin
-            { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
+            { No attempt cap. The turn stays here, so the form does not finish the reply or stop the plan. }
             ApplyCreditWait(ErrorText, FResponsePrefix, RetryAfter);
             If Not WaitForReconnect Then
               Break;

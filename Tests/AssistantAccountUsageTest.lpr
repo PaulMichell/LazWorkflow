@@ -153,13 +153,15 @@ Var
   Snapshot: TAccountUsageSnapshot;
   ErrorText, Body, PrimaryWhen, SecondaryWhen: String;
 Begin
-  PrimaryWhen := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(PrimaryReset));
-  SecondaryWhen := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(SecondaryReset));
+  PrimaryWhen := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(PrimaryReset, False));
+  SecondaryWhen := FormatDateTime('yyyy-mm-dd hh:nn', UnixToDateTime(SecondaryReset, False));
   Check('reset times are distinct', (PrimaryWhen <> '') And (PrimaryWhen <> SecondaryWhen));
   Body := Format('{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":%d},' +
     '"secondary":{"usedPercent":7,"windowDurationMins":10080,"resetsAt":%d}}}', [PrimaryReset, SecondaryReset]);
   Check('codex result parses', ParseCodexAccountUsage(Body, 'codex-1', Snapshot, ErrorText) And Snapshot.Known And
     (ErrorText = '') And (Pos('left', Snapshot.Hint) > 0));
+  Check('codex parser stores the primary reset', Snapshot.HasReset And
+    (Abs(Snapshot.ResetsAt - UnixToDateTime(PrimaryReset, False)) < (2 / 86400)));
   CheckText('codex result is remaining, matching Usage remaining', Snapshot.Caption, '5h 75% left · 7d 93% left');
   Check('settings can read the codex plan usage', Pos('5h 75% left · 7d 93% left', AccountUsageSettingsText('codex-1')) > 0);
   Check('codex hint contains both reset times', (Pos(PrimaryWhen, Snapshot.Hint) > 0) And
@@ -190,6 +192,8 @@ Begin
     '"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-10-11T20:55:00.959221+00:00"},' +
     '"productUsage":[{"product":"GrokBuild","usagePercent":20},{"product":"GrokChat","usagePercent":5}]}}',
     'grok-1', Snapshot, ErrorText) And Snapshot.Known And (ErrorText = ''));
+  Check('grok parser stores the billing window', Snapshot.HasReset And
+    (Abs(Snapshot.ResetsAt - UniversalTimeToLocal(ISO8601ToDate('2026-10-11T20:55:00Z', True))) < (2 / 86400)));
   CheckText('grok weekly pool captions used percent', Snapshot.Caption, 'Credits used: 25%');
   Check('grok hint matches the Build usage summary', (Pos('Weekly limit: 25%', Snapshot.Hint) > 0) And
     (Pos('Next reset: ' + When, Snapshot.Hint) > 0) And (Pos('Grok Build: 20%', Snapshot.Hint) > 0) And

@@ -246,6 +246,12 @@ Begin
   Result := TryIsoClock(Text, When) Or TryHttpDate(Text, When);
 End;
 
+Function UnixSecondsToLocal(Seconds: Int64): TDateTime;
+Begin
+  { The one-argument UnixToDateTime returns UTC. Waits compare with local Now. }
+  Result := UnixToDateTime(Seconds, False);
+End;
+
 Function UnixNumberToLocal(Value: Double; AllowDelay: Boolean; NowTime: TDateTime; Out When: TDateTime): Boolean;
 Var
   Seconds: Int64;
@@ -267,7 +273,7 @@ Begin
     Exit;
   If Seconds <= 0 Then
     Exit;
-  When := UnixToDateTime(Seconds);
+  When := UnixSecondsToLocal(Seconds);
   Result := When > 0;
 End;
 
@@ -501,7 +507,7 @@ Begin
         Result := QWord(Seconds) * 1000
       Else If Seconds >= UnixSecondsFloor Then
         Begin
-          When := UnixToDateTime(Seconds);
+          When := UnixSecondsToLocal(Seconds);
           If When > NowTime Then
             Result := MillisecondsUntil(When, NowTime);
         End;
@@ -549,17 +555,17 @@ Begin
     Result := Requested;
 End;
 
-Function HttpStatusInText(Const ErrorText: String): Integer;
+Function StatusCodeAfter(Const Lowered, Marker: String): Integer;
 Var
-  Lowered: String;
   At, Code: Integer;
 Begin
   Result := 0;
-  Lowered := LowerCase(ErrorText);
-  At := Pos('http ', Lowered);
+  At := Pos(Marker, Lowered);
   If At < 1 Then
     Exit;
-  At := At + 5;
+  At := At + Length(Marker);
+  While (At <= Length(Lowered)) And (Lowered[At] In [' ', ':']) Do
+    Inc(At);
   Code := 0;
   While (At <= Length(Lowered)) And (Lowered[At] In ['0'..'9']) Do
     Begin
@@ -568,6 +574,17 @@ Begin
     End;
   If (Code >= 100) And (Code <= 599) Then
     Result := Code;
+End;
+
+Function HttpStatusInText(Const ErrorText: String): Integer;
+Var
+  Lowered: String;
+Begin
+  Lowered := LowerCase(ErrorText);
+  Result := StatusCodeAfter(Lowered, 'http ');
+  { fphttpclient raises "Unexpected response status code: 402" and leaves the Out code at 0. }
+  If Result = 0 Then
+    Result := StatusCodeAfter(Lowered, 'status code');
 End;
 
 Function StatusIs(Const Fault: TAssistantFault; Wanted: Integer): Boolean;

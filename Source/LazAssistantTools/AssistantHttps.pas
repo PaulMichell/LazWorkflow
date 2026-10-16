@@ -1260,6 +1260,9 @@ Begin
           If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
             ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
           RememberRetryAfter(Client, Control);
+          { A 402 or 429 can raise after the status is known. Do not leave the Out code at 0. }
+          If (StatusCode = 0) And (Client.ResponseStatusCode <> 0) Then
+            StatusCode := Client.ResponseStatusCode;
         End;
     End;
   Finally
