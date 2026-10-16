@@ -32,7 +32,7 @@ Classify each fault as one of:
 `ReportPluginException` stays the log. It is not the user report.
 
 ### 1.2 Keep the turn alive unless the fault is terminal
-Status: not started
+Status: complete
 
 `TAssistantActor.Execute` must not finish the turn on the first access violation. The site that failed applies the classification from item 1.1.
 
