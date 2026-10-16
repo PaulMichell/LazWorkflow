@@ -5,8 +5,9 @@ Unit AssistantHttps;
 
   Size note: exceeds the 1000 line preference. OpenSSL bootstrap, WinINet, and
   the fpHTTP path are one transport with no meaningful partition.
-  Reviewed 2026-10-13: a bounded byte GET stays on this transport so an image
-  download does not grow a second client. }
+  Reviewed 2026-10-16: a bounded byte GET stays on this transport so an image
+  download does not grow a second client. Linux and WinINet share one
+  incomplete-UTF-8 carry so a split character is not concatenated. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -81,6 +82,11 @@ Function UrlIsHttps(Const Url: String): Boolean;
 { Extract only a bounded provider error message, not a raw response/request dump. }
 Function HttpsResponseErrorMessage(Const Body: String): String;
 
+{ Complete UTF-8 characters from Pending. A trailing incomplete sequence is returned in Remainder
+  and must be prepended to the next socket read. Concatenating that tail as a UTF-8 string makes
+  the string manager read past the allocation. }
+Function CompleteUtf8Chunk(Const Pending: RawByteString; Out Remainder: RawByteString): String;
+
 Implementation
 
 Uses
@@ -106,6 +112,7 @@ Type
   Private
     FOnChunk: THttpsChunkEvent;
     FShouldStop: THttpsStopCheck;
+    FUtf8Carry: RawByteString;
   Public
     Constructor Create(OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck);
     Function Write(Const Buffer; Count: LongInt): LongInt; Override;
@@ -156,8 +163,52 @@ Begin
   Result := 0;
 End;
 
+Function CompleteUtf8Chunk(Const Pending: RawByteString; Out Remainder: RawByteString): String;
+Var
+  CompleteLen, Index, Need: Integer;
+  Lead: Byte;
+Begin
+  Remainder := '';
+  Result := '';
+  If Length(Pending) = 0 Then
+    Exit;
+  CompleteLen := Length(Pending);
+  Index := CompleteLen;
+  While Index >= 1 Do
+    Begin
+      Lead := Byte(Pending[Index]);
+      If Lead < $80 Then
+        Break;
+      If (Lead And $C0) <> $80 Then
+        Begin
+          If (Lead And $E0) = $C0 Then
+            Need := 2
+          Else If (Lead And $F0) = $E0 Then
+            Need := 3
+          Else If (Lead And $F8) = $F0 Then
+            Need := 4
+          Else
+            Need := 1;
+          If Index + Need - 1 > CompleteLen Then
+            Begin
+              Remainder := Copy(Pending, Index, CompleteLen - Index + 1);
+              CompleteLen := Index - 1;
+            End;
+          Break;
+        End;
+      Dec(Index);
+    End;
+  If CompleteLen < 1 Then
+    Exit;
+  SetLength(Result, CompleteLen);
+  Move(Pending[1], Result[1], CompleteLen);
+  { Tag without converting. The prefix is already complete UTF-8. }
+  SetCodePage(RawByteString(Result), CP_UTF8, False);
+End;
+
 Function THttpsChunkStream.Write(Const Buffer; Count: LongInt): LongInt;
 Var
+  Pending: RawByteString;
   Chunk: String;
 Begin
   Result := Count;
@@ -165,9 +216,13 @@ Begin
     Exit;
   If Assigned(FShouldStop) And FShouldStop() Then
     Raise EAbort.Create('Cancelled');
-  SetLength(Chunk, Count);
-  Move(Buffer, Chunk[1], Count);
-  If Assigned(FOnChunk) Then
+  SetLength(Pending, Length(FUtf8Carry) + Count);
+  If Length(FUtf8Carry) > 0 Then
+    Move(FUtf8Carry[1], Pending[1], Length(FUtf8Carry));
+  Move(Buffer, Pending[Length(FUtf8Carry) + 1], Count);
+  { Hold a character the socket split. The callback concatenates every chunk. }
+  Chunk := CompleteUtf8Chunk(Pending, FUtf8Carry);
+  If Assigned(FOnChunk) And (Chunk <> '') Then
     FOnChunk(Chunk);
 End;
 
@@ -933,12 +988,10 @@ Var
   BodyAnsi: RawByteString;
   BodyPtr: Pointer;
   BodyLen: DWORD;
-  ChunkRaw, Utf8Carry: RawByteString;
+  Pending, Utf8Carry: RawByteString;
   ChunkText: String;
   Stopped: Boolean;
   ReadOk: Boolean;
-  CompleteLen, I, Need: Integer;
-  B0: Byte;
   StolenSession, StolenConnect, StolenRequest: Pointer;
 Begin
   Result := False;
@@ -1039,48 +1092,12 @@ Begin
         End;
       If BytesRead = 0 Then
         Break;
-      { Append to any incomplete UTF-8 sequence from the previous read. }
-      SetLength(ChunkRaw, Length(Utf8Carry) + Integer(BytesRead));
+      { Same carry as the Linux chunk stream. A split character must not be concatenated. }
+      SetLength(Pending, Length(Utf8Carry) + Integer(BytesRead));
       If Length(Utf8Carry) > 0 Then
-        Move(Utf8Carry[1], ChunkRaw[1], Length(Utf8Carry));
-      Move(Buf[0], ChunkRaw[Length(Utf8Carry) + 1], BytesRead);
-      Utf8Carry := '';
-      { Keep trailing incomplete multi-byte sequence for the next chunk. }
-      CompleteLen := Length(ChunkRaw);
-      I := CompleteLen;
-      While I >= 1 Do
-        Begin
-          B0 := Byte(ChunkRaw[I]);
-          If B0 < $80 Then
-            Break; { ASCII — sequence complete through I }
-          If (B0 And $C0) <> $80 Then
-            Begin
-              { Lead byte of a multi-byte sequence at I }
-              If (B0 And $E0) = $C0 Then
-                Need := 2
-              Else If (B0 And $F0) = $E0 Then
-                Need := 3
-              Else If (B0 And $F8) = $F0 Then
-                Need := 4
-              Else
-                Need := 1;
-              If I + Need - 1 > CompleteLen Then
-                Begin
-                  Utf8Carry := Copy(ChunkRaw, I, CompleteLen - I + 1);
-                  CompleteLen := I - 1;
-                End;
-              Break;
-            End;
-          Dec(I); { continuation byte — look for lead }
-        End;
-      If CompleteLen < 1 Then
-        Continue;
-      SetLength(ChunkRaw, CompleteLen);
-      {$IF SIZEOF(CHAR) = 2}
-      ChunkText := UTF8ToString(ChunkRaw);
-      {$ELSE}
-      ChunkText := string(ChunkRaw);
-      {$ENDIF}
+        Move(Utf8Carry[1], Pending[1], Length(Utf8Carry));
+      Move(Buf[0], Pending[Length(Utf8Carry) + 1], BytesRead);
+      ChunkText := CompleteUtf8Chunk(Pending, Utf8Carry);
       If Assigned(OnChunk) And (ChunkText <> '') Then
         OnChunk(ChunkText);
     Until False;
