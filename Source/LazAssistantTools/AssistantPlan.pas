@@ -115,6 +115,8 @@ Function FormatPlanSectionTile(Section: TPlanSection): String;
 { Scan AbsolutePath (or resolved relative) into Sections (of TPlanSection; caller owns list). }
 Function ScanPlanSections(Const RelativeOrAbsolute: String; Sections: TObjectList;
   Out ErrorText: String): Boolean;
+{ Next actionable item that is in progress, else the first not-started item. Blocked items are skipped. }
+Function NextIncompletePlanSection(Sections: TObjectList): Integer;
 { Rewrite Status: line for Sections[SectionIndex]; rescans not performed. }
 Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   NewStatus: TPlanSectionStatus; Out ErrorText: String): Boolean;
@@ -1145,6 +1147,33 @@ Begin
   End;
   { Middle dot survives list boxes that trim leading spaces. }
   Result := '· ' + Section.Title + ' — ' + StatusLabel;
+End;
+
+Function NextIncompletePlanSection(Sections: TObjectList): Integer;
+Var
+  I: Integer;
+  Section: TPlanSection;
+  FirstNotStarted: Integer;
+Begin
+  Result := -1;
+  FirstNotStarted := -1;
+  If Not Assigned(Sections) Then
+    Exit;
+  For I := 0 To Sections.Count - 1 Do
+    Begin
+      If Not (Sections[I] Is TPlanSection) Then
+        Continue;
+      Section := TPlanSection(Sections[I]);
+      If Not Section.Actionable Then
+        Continue;
+      If Section.Status = pssBlocked Then
+        Continue;
+      If Section.Status = pssInProgress Then
+        Exit(I);
+      If (FirstNotStarted < 0) And (Section.Status = pssNotStarted) Then
+        FirstNotStarted := I;
+    End;
+  Result := FirstNotStarted;
 End;
 
 Function ParseStatusLine(Const Line: String; Out StatusText: String): Boolean; Forward;

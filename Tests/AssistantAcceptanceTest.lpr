@@ -39,6 +39,13 @@ Begin
   Check('a satisfied build is not an evidence gap', Not AssistantAcceptanceIsEvidenceGap(Reason));
   Check('manual validation is detected', AssistantSectionIsManualValidation('Validation: manual'));
   Check('missing validation is not manual', Not AssistantSectionIsManualValidation('## Task'));
+  Check('missing validation is not a block', AssistantRealBlock('## Task', False, True) = arbNone);
+  Check('missing validation stays unblocked after the continuation cap',
+    AssistantRealBlock('Status: in progress' + LineEnding + 'Do the work.', False, True) = arbNone);
+  Check('manual validation is a block', AssistantRealBlock('Validation: manual', False, False) = arbManual);
+  Check('unchecked item blocks only after the continuation cap',
+    (AssistantRealBlock('- [ ] Inspect', False, False) = arbNone) And
+    (AssistantRealBlock('- [ ] Inspect', False, True) = arbUnchecked));
   Check('fenced manual validation does not count',
     Not AssistantSectionIsManualValidation('```' + LineEnding + 'Validation: manual' + LineEnding + '```'));
   Check('unchecked box is detected', AssistantSectionHasUncheckedItem('- [ ] Inspect the window'));

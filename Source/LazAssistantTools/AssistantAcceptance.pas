@@ -26,6 +26,11 @@ Function AssistantSectionHasUncheckedItem(Const Section: String): Boolean;
 Function AssistantManualBlockAction(Const ItemTitle: String): String;
 Function AssistantUncheckedBlockAction(Const ItemTitle: String): String;
 Function AssistantModelBlockAction(Const ItemTitle: String): String;
+{ A missing Validation line is not a block. Manual and unchecked items are. }
+Type
+  TAssistantRealBlock = (arbNone, arbManual, arbUnchecked, arbModel);
+
+Function AssistantRealBlock(Const Section: String; AlreadyBlocked, ContinuationCapReached: Boolean): TAssistantRealBlock;
 { Conversation note that quotes the stored user action. }
 Function AssistantBlockedItemReport(Const ItemTitle, ActionText: String): String;
 
@@ -232,6 +237,18 @@ Function AssistantUncheckedBlockAction(Const ItemTitle: String): String;
 Begin
   Result := '"' + ItemTitle + '": tick the unchecked acceptance items, or remove the ones that do not apply; ' +
     'then set Status to in progress and run Run Plan again.';
+End;
+
+Function AssistantRealBlock(Const Section: String; AlreadyBlocked, ContinuationCapReached: Boolean): TAssistantRealBlock;
+Begin
+  If AlreadyBlocked Then
+    Result := arbModel
+  Else If AssistantSectionIsManualValidation(Section) Then
+    Result := arbManual
+  Else If ContinuationCapReached And AssistantSectionHasUncheckedItem(Section) Then
+    Result := arbUnchecked
+  Else
+    Result := arbNone;
 End;
 
 Function AssistantModelBlockAction(Const ItemTitle: String): String;

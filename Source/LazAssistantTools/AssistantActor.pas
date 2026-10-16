@@ -124,6 +124,8 @@ Type
     Function PostRound(Const Url, RequestJson, Headers: String;
       Control: THttpsStreamControl; Out Code: Integer; Out ErrorText: String): Boolean; Virtual;
     Function WaitForReconnect: Boolean; Virtual;
+    { The wait DoHttpRound stored before WaitForReconnect. Tests read it without sleeping. }
+    Function CurrentReconnectWaitMs: QWord;
     Procedure ExecuteTurn; Virtual;
     Procedure Execute; Override;
   Public
@@ -870,6 +872,11 @@ Function TAssistantActor.PostRound(Const Url, RequestJson, Headers: String;
 Begin
   Result := HttpsPostJsonStream(Url, RequestJson, Headers, @HttpsChunk, @HttpsShouldStop,
     Control, Code, ErrorText);
+End;
+
+Function TAssistantActor.CurrentReconnectWaitMs: QWord;
+Begin
+  Result := FReconnectWaitMs;
 End;
 
 Function TAssistantActor.WaitForReconnect: Boolean;

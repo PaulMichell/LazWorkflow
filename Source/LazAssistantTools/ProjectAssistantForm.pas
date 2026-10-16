@@ -1980,20 +1980,24 @@ Begin
       TrackedStatus := pssUnknown;
     End;
   { Block only when a person must act. A missing Validation line and a failed build stay in progress. }
-  If (TrackedStatus = pssBlocked) And (FBuildWorkPlanPath <> '') Then
-    Begin
-      ApplyRealBlock(TrackedTitle, AssistantModelBlockAction(TrackedTitle));
-      Exit;
-    End;
-  If AssistantSectionIsManualValidation(TrackedBody) And (FBuildWorkPlanPath <> '') Then
-    Begin
-      ApplyRealBlock(TrackedTitle, AssistantManualBlockAction(TrackedTitle));
-      Exit;
-    End;
-  If AssistantSectionHasUncheckedItem(TrackedBody) And ContinuationCapReached And (FBuildWorkPlanPath <> '') Then
-    Begin
-      ApplyRealBlock(TrackedTitle, AssistantUncheckedBlockAction(TrackedTitle));
-      Exit;
+  If FBuildWorkPlanPath <> '' Then
+    Case AssistantRealBlock(TrackedBody, TrackedStatus = pssBlocked, ContinuationCapReached) Of
+      arbModel:
+        Begin
+          ApplyRealBlock(TrackedTitle, AssistantModelBlockAction(TrackedTitle));
+          Exit;
+        End;
+      arbManual:
+        Begin
+          ApplyRealBlock(TrackedTitle, AssistantManualBlockAction(TrackedTitle));
+          Exit;
+        End;
+      arbUnchecked:
+        Begin
+          ApplyRealBlock(TrackedTitle, AssistantUncheckedBlockAction(TrackedTitle));
+          Exit;
+        End;
+    Else
     End;
   { A missing Validation line, a failed build, or any other acceptance note stays in progress.
     A blocked item is skipped by FindNextIncompleteBuildSection. None of these stop the run. }
@@ -2237,32 +2241,8 @@ Begin
 End;
 
 Function TProjectAssistantForm.FindNextIncompleteBuildSection: Integer;
-Var
-  I: Integer;
-  Section: TPlanSection;
-  FirstNotStarted: Integer;
 Begin
-  Result := -1;
-  FirstNotStarted := -1;
-  If Not Assigned(BuildSections) Then
-    Exit;
-  { Blocked items are skipped. That does not stop the run. }
-  For I := 0 To BuildSections.Count - 1 Do
-    Begin
-      Section := TPlanSection(BuildSections[I]);
-      If Not Section.Actionable Then
-        Continue;
-      If Section.Status = pssBlocked Then
-        Continue;
-      If Section.Status = pssInProgress Then
-        Begin
-          Result := I;
-          Exit;
-        End;
-      If (FirstNotStarted < 0) And (Section.Status = pssNotStarted) Then
-        FirstNotStarted := I;
-    End;
-  Result := FirstNotStarted;
+  Result := NextIncompletePlanSection(BuildSections);
 End;
 
 Function TProjectAssistantForm.CollectPlanRunReportFacts(Kind: TPlanRunEndKind; Const Detail: String): TPlanRunReportFacts;
