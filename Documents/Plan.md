@@ -144,7 +144,7 @@ Write a `User action:` line in the item body, immediately after the Status line,
 If the model wrote a `User action:` line, keep that line and quote it in the report.
 
 ### 4.3 Continue the rest of the plan after a block
-Status: not started
+Status: complete
 
 A blocked item is skipped, as `FindNextIncompleteBuildSection` already does. It must not stop the run. Remove the `StopRunPlan` call on the human-review path.
 
