@@ -72,10 +72,12 @@ Type
     FQueryNote: String;
     FLocalContinuationCount: Integer;
     FLocalContinuationCap: Integer;
-    { Snapshotted when the turn starts. WaitForReconnect reads the field DoHttpRound sets. }
+    { Snapshotted when the turn starts. The worker does not read the settings form. }
     FReconnectIntervalMs: QWord;
     FReconnectWaitMs: QWord;
     FCreditIntervalMs: QWord;
+    FFaultRetryCap: Integer;
+    Procedure SnapshotRecoverySettings;
     Procedure PostConnectionNote(Const Sentence: String);
     Procedure ApplyCreditWait(Const ErrorText, Body, RetryAfter: String);
     Procedure ApplyRateLimitWait(Const ErrorText, RetryAfter: String);
@@ -175,6 +177,16 @@ Begin
     SetLength(Result, Length(Result) - 1);
 End;
 
+Procedure TAssistantActor.SnapshotRecoverySettings;
+Begin
+  { Config, not the settings form. A later change does not affect this turn. }
+  FReconnectIntervalMs := AssistantReconnectIntervalMs;
+  FReconnectWaitMs := FReconnectIntervalMs;
+  FCreditIntervalMs := AssistantCreditIntervalMs;
+  FLocalContinuationCap := AssistantAutomaticContinuationCap;
+  FFaultRetryCap := AssistantFaultRetryCap(-1);
+End;
+
 Constructor TAssistantActor.Create(Service: TAssistantService; Const ApiBase, AccessToken, Model,
   ReasoningEffort, ToolsJson, EventsFile: String; OnToken: TAssistantStreamEvent);
 Begin
@@ -224,9 +236,7 @@ Begin
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
   FHadToolRound := False;
-  FReconnectIntervalMs := AssistantReconnectIntervalMs;
-  FReconnectWaitMs := FReconnectIntervalMs;
-  FCreditIntervalMs := AssistantCreditIntervalMs;
+  SnapshotRecoverySettings;
 End;
 
 Destructor TAssistantActor.Destroy;
@@ -332,6 +342,7 @@ Begin
   Fault.ErrorText := ErrorText;
   Fault.HttpStatus := HttpStatus;
   Fault.Attempt := Attempt;
+  Fault.AttemptCap := FFaultRetryCap;
   Fault.UserStopped := Terminated;
   Fault.ServiceGone := ServiceWasDetached;
   Fault.OwnsTurn := OwnsTurn;
@@ -400,8 +411,6 @@ Begin
   If Not LastAccountUsageSnapshot(Snapshot) Then
     ClearAccountUsageSnapshot(Snapshot);
   IntervalMs := FCreditIntervalMs;
-  If IntervalMs = 0 Then
-    IntervalMs := AssistantCreditIntervalMs;
   FReconnectWaitMs := AssistantCreditWaitMs(ErrorText, Body, RetryAfter, Snapshot.HasReset, Snapshot.ResetsAt,
     IntervalMs, Now, RetryAt);
   PostConnectionNote(AssistantCreditWaitNote(ErrorText, RetryAt));
@@ -414,8 +423,6 @@ Begin
   FReconnectWaitMs := AssistantRateLimitWaitMs(RetryAfter, FReconnectIntervalMs, Now);
   If FReconnectWaitMs = 0 Then
     FReconnectWaitMs := FReconnectIntervalMs;
-  If FReconnectWaitMs = 0 Then
-    FReconnectWaitMs := AssistantReconnectIntervalMs;
   PostConnectionNote(AssistantRateLimitWaitNote(ErrorText));
   WorkflowLogger.Warning('AssistantActor',
     Format('Rate limited, waiting %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
@@ -870,8 +877,6 @@ Var
   StartTick, WaitMs: QWord;
 Begin
   WaitMs := FReconnectWaitMs;
-  If WaitMs = 0 Then
-    WaitMs := AssistantReconnectIntervalMs;
   StartTick := GetTickCount64;
   While (Not Terminated) And (GetTickCount64 - StartTick < WaitMs) Do
     Sleep(50);
@@ -1021,8 +1026,6 @@ Begin
           Begin
             { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
             FReconnectWaitMs := FReconnectIntervalMs;
-            If FReconnectWaitMs = 0 Then
-              FReconnectWaitMs := AssistantReconnectIntervalMs;
             PostConnectionNote(AssistantReconnectWaitNote(ErrorText));
             WorkflowLogger.Warning('AssistantActor',
               Format('Reconnecting in %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
@@ -1919,8 +1922,7 @@ Begin
   FToolCallsCommitted := False;
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
-  FReconnectIntervalMs := AssistantReconnectIntervalMs;
-  FCreditIntervalMs := AssistantCreditIntervalMs;
+  SnapshotRecoverySettings;
   Attempt := 0;
   Repeat
     Inc(Attempt);
@@ -1977,9 +1979,6 @@ Begin
   FHadToolRound := False;
   RoundTruncated := False;
   FLocalContinuationCount := 0;
-  FLocalContinuationCap := AssistantAutomaticContinuationCap;
-  If FLocalContinuationCap < 1 Then
-    FLocalContinuationCap := DefaultAutomaticContinuationCap;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
   EmitSnapshot(False, 'Waiting for first token…', True);

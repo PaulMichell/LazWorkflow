@@ -7,7 +7,8 @@ Unit AssistantSettingsForm;
   Reviewed 2026-10-13: the skills grid, path label, and add/remove bar are streamed
   in SkillsGroup. The skill-name cell hint shows the file path. Kind-specific
   groups stay here. General groups are alTop in reverse resource order so the
-  page reads Transcript, Prompt, Context, then Skills. }
+  page reads Transcript, Prompt, Context, Recovery, then Skills.
+  Recovery is the first alTop group so it sits just above Skills. Reviewed 2026-10-16. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -35,6 +36,15 @@ Type
     ContextGroup: TGroupBox;
     IncludeContextCheck: TCheckBox;
     AutoCompactCheck: TCheckBox;
+    RecoveryGroup: TGroupBox;
+    ReconnectIntervalLabel: TLabel;
+    ReconnectIntervalEdit: TSpinEdit;
+    CreditRetryLabel: TLabel;
+    CreditRetryEdit: TSpinEdit;
+    ContinuationCapLabel: TLabel;
+    ContinuationCapEdit: TSpinEdit;
+    FaultRetryLabel: TLabel;
+    FaultRetryEdit: TSpinEdit;
     PromptGroup: TGroupBox;
     EnterNewlineCheck: TCheckBox;
     TranscriptGroup: TGroupBox;
@@ -1645,6 +1655,10 @@ Begin
   IncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
   EnterNewlineCheck.Checked := AssistantChatConfig.EnterInsertsNewline;
   AutoCompactCheck.Checked := AssistantChatConfig.AutoCompactContext;
+  ReconnectIntervalEdit.Value := AssistantChatConfig.ReconnectIntervalSeconds;
+  CreditRetryEdit.Value := AssistantChatConfig.CreditRetryMinutes;
+  ContinuationCapEdit.Value := AssistantChatConfig.AutomaticContinuations;
+  FaultRetryEdit.Value := AssistantChatConfig.FaultRetries;
   ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
   ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
   RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel);
@@ -1697,6 +1711,10 @@ Begin
   AssistantChatConfig.EnterInsertsNewline := EnterNewlineCheck.Checked;
   { Disabled compact still keeps the saved flag. }
   AssistantChatConfig.AutoCompactContext := AutoCompactCheck.Checked;
+  AssistantChatConfig.ReconnectIntervalSeconds := ReconnectIntervalEdit.Value;
+  AssistantChatConfig.CreditRetryMinutes := CreditRetryEdit.Value;
+  AssistantChatConfig.AutomaticContinuations := ContinuationCapEdit.Value;
+  AssistantChatConfig.FaultRetries := FaultRetryEdit.Value;
   AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
   AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
   SaveSkillModes;

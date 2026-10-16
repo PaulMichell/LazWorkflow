@@ -106,6 +106,9 @@ Function IsTransientNetworkError(Const ErrorText: String): Boolean;
 Function AssistantReconnectIntervalMs: QWord;
 { Milliseconds. The actor snapshots this when the turn starts. }
 Function AssistantCreditIntervalMs: QWord;
+{ Negative means the caller did not set a cap, so the stored setting or the default is used.
+  Zero is a real setting: no extra retry. }
+Function AssistantFaultRetryCap(Requested: Integer): Integer;
 { True for HTTP 402, or when the status text or body names a credit failure.
   A short 429 without those words is not this case. }
 Function AssistantFaultIsOutOfCredits(Const Fault: TAssistantFault): Boolean;
@@ -136,7 +139,7 @@ Function AssistantDroppedTransportWaitNote(Kind: TAssistantHttpWait; Const Error
 Implementation
 
 Uses
-  SysUtils, DateUtils, fpjson, jsonparser;
+  SysUtils, DateUtils, fpjson, jsonparser, AssistantConfig;
 
 Function OneLineFault(Const Text: String): String; Forward;
 
@@ -529,15 +532,21 @@ Function DefaultAssistantFault: TAssistantFault;
 Begin
   Result := Default(TAssistantFault);
   Result.Attempt := 1;
-  Result.AttemptCap := 0;
+  { Negative means the caller did not set a cap. Zero is a real setting. }
+  Result.AttemptCap := -1;
 End;
 
 Function AssistantFaultRetryCap(Requested: Integer): Integer;
 Begin
-  If Requested > 0 Then
-    Result := Requested
+  If Requested < 0 Then
+    Begin
+      If Assigned(AssistantChatConfig) Then
+        Result := AssistantChatConfig.FaultRetries
+      Else
+        Result := DefaultFaultRetryCap;
+    End
   Else
-    Result := DefaultFaultRetryCap;
+    Result := Requested;
 End;
 
 Function HttpStatusInText(Const ErrorText: String): Integer;
@@ -858,13 +867,25 @@ Begin
 End;
 
 Function AssistantReconnectIntervalMs: QWord;
+Var
+  Seconds: Integer;
 Begin
-  Result := QWord(DefaultReconnectIntervalSeconds) * 1000;
+  If Assigned(AssistantChatConfig) Then
+    Seconds := AssistantChatConfig.ReconnectIntervalSeconds
+  Else
+    Seconds := DefaultReconnectIntervalSeconds;
+  Result := QWord(Seconds) * 1000;
 End;
 
 Function AssistantCreditIntervalMs: QWord;
+Var
+  Minutes: Integer;
 Begin
-  Result := QWord(DefaultCreditIntervalMinutes) * 60 * 1000;
+  If Assigned(AssistantChatConfig) Then
+    Minutes := AssistantChatConfig.CreditRetryMinutes
+  Else
+    Minutes := DefaultCreditIntervalMinutes;
+  Result := QWord(Minutes) * 60 * 1000;
 End;
 
 Function AssistantReconnectWaitNote(Const ErrorText: String): String;

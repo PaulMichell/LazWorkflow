@@ -66,7 +66,7 @@ Function AssistantReplyIsShortDeferral(Const Text: String): Boolean;
   ActionText is the text after the colon. A fenced example does not count. }
 Function PlanBodyUserAction(Const Body: String; Out ActionText: String): Boolean;
 Function PlanBodyHasUserAction(Const Body: String): Boolean;
-{ Cap until the recovery setting is snapshotted. }
+{ Stored automatic continuations, or the default when no config is loaded. }
 Function AssistantAutomaticContinuationCap: Integer;
 { Model instruction for an injected continuation. Not the visible system note. }
 Function AssistantContinuationInstruction: String;
@@ -94,7 +94,7 @@ Function AssistantMayStoreTurn(Const ErrorText, Response: String): Boolean;
 Implementation
 
 Uses
-  Classes;
+  Classes, AssistantConfig;
 
 Const
   DeferralPhrases: Array[0..2] Of String = (
@@ -252,7 +252,10 @@ End;
 
 Function AssistantAutomaticContinuationCap: Integer;
 Begin
-  Result := DefaultAutomaticContinuationCap;
+  If Assigned(AssistantChatConfig) Then
+    Result := AssistantChatConfig.AutomaticContinuations
+  Else
+    Result := DefaultAutomaticContinuationCap;
 End;
 
 Function AssistantContinuationInstruction: String;
@@ -309,7 +312,7 @@ Begin
   { A blocked item that already names a user action is not continued, even if the reply was truncated. }
   If Facts.PlanItemBlockedWithUserAction Then
     Exit;
-  If Cap < 1 Then
+  If Cap < 0 Then
     Cap := DefaultAutomaticContinuationCap;
   If Attempt < 0 Then
     Attempt := 0;

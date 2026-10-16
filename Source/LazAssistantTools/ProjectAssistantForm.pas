@@ -4212,8 +4212,6 @@ Begin
   If IsSending And (Not WasSending) Then
     Begin
       FContinuationCap := AssistantAutomaticContinuationCap;
-      If FContinuationCap < 1 Then
-        FContinuationCap := DefaultAutomaticContinuationCap;
       FContinuationCount := 0;
       FHeldAnswer := '';
       FHoldingContinuation := False;

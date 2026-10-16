@@ -1,13 +1,13 @@
 object AssistantSettingsForm: TAssistantSettingsForm
   Left = 180
-  Height = 740
+  Height = 860
   Top = 80
   Width = 980
   BorderStyle = bsSizeable
   Caption = 'Project Assistant Settings'
-  ClientHeight = 740
+  ClientHeight = 860
   ClientWidth = 980
-  Constraints.MinHeight = 640
+  Constraints.MinHeight = 760
   Constraints.MinWidth = 900
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
@@ -15,14 +15,14 @@ object AssistantSettingsForm: TAssistantSettingsForm
   LCLVersion = '5.99.0.0'
   object SettingsPages: TPageControl
     Left = 0
-    Height = 700
+    Height = 820
     Top = 0
     Width = 980
     Align = alClient
     TabOrder = 0
     object GeneralPage: TTabSheet
       Caption = 'General'
-      ClientHeight = 672
+      ClientHeight = 792
       ClientWidth = 972
       object SkillsGroup: TGroupBox
         Left = 0
@@ -34,7 +34,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
         Hint = 'Rows are documents and columns are modes. A tick sends that document in that mode. Chat sends none until Chat is ticked.'
         ParentShowHint = False
         ShowHint = True
-        TabOrder = 3
+        TabOrder = 4
         object SkillsHintLabel: TLabel
           Left = 12
           Height = 36
@@ -167,6 +167,99 @@ object AssistantSettingsForm: TAssistantSettingsForm
           TabOrder = 0
           OnGetCellHint = SkillsGridGetCellHint
           OnSelection = SkillsGridSelection
+        end
+      end
+      object RecoveryGroup: TGroupBox
+        Left = 0
+        Height = 160
+        Top = 248
+        Width = 972
+        Align = alTop
+        Caption = 'Recovery'
+        TabOrder = 3
+        object ReconnectIntervalLabel: TLabel
+          Left = 12
+          Height = 17
+          Top = 4
+          Width = 220
+          Caption = 'Reconnect interval, seconds'
+          ParentColor = False
+        end
+        object ReconnectIntervalEdit: TSpinEdit
+          Left = 12
+          Height = 28
+          Top = 24
+          Width = 88
+          Hint = 'Wait after a lost connection. Stop still interrupts the wait.'
+          MaxValue = 3600
+          MinValue = 0
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 0
+          Value = 30
+        end
+        object CreditRetryLabel: TLabel
+          Left = 360
+          Height = 17
+          Top = 4
+          Width = 460
+          Caption = 'Credit retry when the reset time is unknown, minutes'
+          ParentColor = False
+        end
+        object CreditRetryEdit: TSpinEdit
+          Left = 360
+          Height = 28
+          Top = 24
+          Width = 88
+          Hint = 'Used only when the error does not name a reset time.'
+          MaxValue = 10080
+          MinValue = 0
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 1
+          Value = 60
+        end
+        object ContinuationCapLabel: TLabel
+          Left = 12
+          Height = 17
+          Top = 64
+          Width = 280
+          Caption = 'Automatic continuations per task'
+          ParentColor = False
+        end
+        object ContinuationCapEdit: TSpinEdit
+          Left = 12
+          Height = 28
+          Top = 84
+          Width = 88
+          Hint = 'How many times an unfinished turn resumes in the same conversation.'
+          MaxValue = 20
+          MinValue = 0
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 2
+          Value = 3
+        end
+        object FaultRetryLabel: TLabel
+          Left = 360
+          Height = 17
+          Top = 64
+          Width = 220
+          Caption = 'Fault retries per action'
+          ParentColor = False
+        end
+        object FaultRetryEdit: TSpinEdit
+          Left = 360
+          Height = 28
+          Top = 84
+          Width = 88
+          Hint = 'Retries of one HTTP round or one read-only tool. A lost connection is not capped by this.'
+          MaxValue = 10
+          MinValue = 0
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 3
+          Value = 1
         end
       end
       object ContextGroup: TGroupBox

@@ -5,7 +5,8 @@ Unit AssistantConfig;
   Size note: exceeds the 1000 line preference. Sampling migration, skill modes,
   added guidance files, and the assistant section load/save are one store.
   Splitting them would leave the private config fields behind.
-  Reviewed 2026-10-13: declared skill modes stay with this store. }
+  Reviewed 2026-10-16: recovery intervals and caps sit beside auto_compact_context.
+  A missing key keeps the default. The actor copies them when a turn starts. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -22,6 +23,15 @@ Const
   AssistantConfigDefaultModel = 'grok-4.5';
   AssistantConfigDefaultThinking = 'high';
   AssistantConfigDefaultApproval = 'ask';
+  { Recovery edits. Missing JSON keys keep these. The same numbers are the spin defaults. }
+  AssistantReconnectIntervalDefault = 30;
+  AssistantReconnectIntervalMax = 3600;
+  AssistantCreditRetryDefault = 60;
+  AssistantCreditRetryMax = 10080;
+  AssistantContinuationDefault = 3;
+  AssistantContinuationMax = 20;
+  AssistantFaultRetryDefault = 1;
+  AssistantFaultRetryMax = 10;
 
 Type
   { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level").
@@ -52,6 +62,10 @@ Type
     FMaxOutputTokens: Integer;
     FEnterInsertsNewline: Boolean;
     FAutoCompactContext: Boolean;
+    FReconnectIntervalSeconds: Integer;
+    FCreditRetryMinutes: Integer;
+    FAutomaticContinuations: Integer;
+    FFaultRetries: Integer;
     FSkillModes: TJSONObject;
     FSkillFiles: TJSONObject;
     FSkillHidden: TStringList;
@@ -133,6 +147,14 @@ Type
     Property EnterInsertsNewline: Boolean Read FEnterInsertsNewline Write FEnterInsertsNewline;
     { Compact older history near the context limit. Default false. }
     Property AutoCompactContext: Boolean Read FAutoCompactContext Write FAutoCompactContext;
+    { Seconds to wait after a lost connection. Key reconnect_interval_seconds. Default 30. }
+    Property ReconnectIntervalSeconds: Integer Read FReconnectIntervalSeconds Write FReconnectIntervalSeconds;
+    { Minutes to wait for credits when the reset time is unknown. Key credit_retry_minutes. Default 60. }
+    Property CreditRetryMinutes: Integer Read FCreditRetryMinutes Write FCreditRetryMinutes;
+    { Automatic continuations per task. Key automatic_continuations. Default 3. }
+    Property AutomaticContinuations: Integer Read FAutomaticContinuations Write FAutomaticContinuations;
+    { Fault retries per action. Key fault_retries. Default 1. A lost connection is not this cap. }
+    Property FaultRetries: Integer Read FFaultRetries Write FFaultRetries;
     Property AccessToken: String Read FAccessToken Write FAccessToken;
     Property RefreshToken: String Read FRefreshToken Write FRefreshToken;
     Property TokenType: String Read FTokenType Write FTokenType;
@@ -296,6 +318,10 @@ Begin
   FMaxOutputTokens := 0;
   FEnterInsertsNewline := True;
   FAutoCompactContext := False;
+  FReconnectIntervalSeconds := AssistantReconnectIntervalDefault;
+  FCreditRetryMinutes := AssistantCreditRetryDefault;
+  FAutomaticContinuations := AssistantContinuationDefault;
+  FFaultRetries := AssistantFaultRetryDefault;
   FSkillModes := TJSONObject.Create;
   FSkillFiles := TJSONObject.Create;
   FSkillHidden := TStringList.Create;
@@ -361,6 +387,10 @@ Begin
   FMaxOutputTokens := Source.MaxOutputTokens;
   FEnterInsertsNewline := Source.EnterInsertsNewline;
   FAutoCompactContext := Source.AutoCompactContext;
+  FReconnectIntervalSeconds := Source.ReconnectIntervalSeconds;
+  FCreditRetryMinutes := Source.CreditRetryMinutes;
+  FAutomaticContinuations := Source.AutomaticContinuations;
+  FFaultRetries := Source.FaultRetries;
   If Source = Self Then
     Exit;
   If Assigned(Source.FSkillModes) Then
@@ -417,6 +447,33 @@ Begin
   Result.ExpiresAt := FExpiresAt;
 End;
 
+Function BoundRecoveryInt(Value, MinValue, MaxValue: Integer): Integer;
+Begin
+  If Value < MinValue Then
+    Result := MinValue
+  Else If Value > MaxValue Then
+    Result := MaxValue
+  Else
+    Result := Value;
+End;
+
+Function ReadRecoveryInt(Section: TJSONObject; Const Key: String; DefaultValue, MinValue, MaxValue: Integer): Integer;
+Var
+  Node: TJSONData;
+Begin
+  Result := DefaultValue;
+  If Not Assigned(Section) Then
+    Exit;
+  Node := Section.Find(Key);
+  If Not Assigned(Node) Then
+    Exit;
+  If Node Is TJSONNumber Then
+    Result := Node.AsInteger
+  Else
+    Result := StrToIntDef(Trim(Node.AsString), DefaultValue);
+  Result := BoundRecoveryInt(Result, MinValue, MaxValue);
+End;
+
 Procedure NormalizeAssistantConfig(Config: TAssistantConfig);
 Begin
   If Not Assigned(Config) Then
@@ -429,6 +486,10 @@ Begin
     Config.FTokenType := 'Bearer';
   Config.FThinkingLevel := ThinkingLevelToStr(StrToThinkingLevel(Config.FThinkingLevel));
   Config.FApprovalMode := ApprovalModeToStr(StrToApprovalMode(Config.FApprovalMode));
+  Config.FReconnectIntervalSeconds := BoundRecoveryInt(Config.FReconnectIntervalSeconds, 0, AssistantReconnectIntervalMax);
+  Config.FCreditRetryMinutes := BoundRecoveryInt(Config.FCreditRetryMinutes, 0, AssistantCreditRetryMax);
+  Config.FAutomaticContinuations := BoundRecoveryInt(Config.FAutomaticContinuations, 0, AssistantContinuationMax);
+  Config.FFaultRetries := BoundRecoveryInt(Config.FFaultRetries, 0, AssistantFaultRetryMax);
 End;
 
 Procedure ApplyOAuthObject(Config: TAssistantConfig; Auth: TJSONObject);
@@ -890,6 +951,10 @@ Begin
     FMaxOutputTokens := 0;
     FEnterInsertsNewline := True;
     FAutoCompactContext := False;
+    FReconnectIntervalSeconds := AssistantReconnectIntervalDefault;
+    FCreditRetryMinutes := AssistantCreditRetryDefault;
+    FAutomaticContinuations := AssistantContinuationDefault;
+    FFaultRetries := AssistantFaultRetryDefault;
     FApiBase := AssistantConfigDefaultApiBase;
     FModel := AssistantConfigDefaultModel;
     FActiveSkill := '';
@@ -920,6 +985,13 @@ Begin
     Else
       FAutoCompactContext := Section.Get('auto_compact_context', False);
     FEnterInsertsNewline := Section.Get('enter_inserts_newline', True);
+    FReconnectIntervalSeconds := ReadRecoveryInt(Section, 'reconnect_interval_seconds',
+      AssistantReconnectIntervalDefault, 0, AssistantReconnectIntervalMax);
+    FCreditRetryMinutes := ReadRecoveryInt(Section, 'credit_retry_minutes',
+      AssistantCreditRetryDefault, 0, AssistantCreditRetryMax);
+    FAutomaticContinuations := ReadRecoveryInt(Section, 'automatic_continuations',
+      AssistantContinuationDefault, 0, AssistantContinuationMax);
+    FFaultRetries := ReadRecoveryInt(Section, 'fault_retries', AssistantFaultRetryDefault, 0, AssistantFaultRetryMax);
     If Section.Find('model') <> Nil Then
       FModel := Section.Get('model', FModel);
     If Section.Find('thinking') <> Nil Then
@@ -1005,6 +1077,7 @@ Var
   Item: TAssistantConnection;
 Begin
   Result := False;
+  NormalizeAssistantConfig(Self);
   Section := TJSONObject.Create;
   Try
     Section.Add('include_ide_context', FIncludeIDEContext);
@@ -1016,6 +1089,10 @@ Begin
     Section.Add('answer_verbosity', NormalizeGrokVerbosity(FAnswerVerbosity));
     Section.Add('max_output_tokens', FMaxOutputTokens);
     Section.Add('auto_compact_context', FAutoCompactContext);
+    Section.Add('reconnect_interval_seconds', FReconnectIntervalSeconds);
+    Section.Add('credit_retry_minutes', FCreditRetryMinutes);
+    Section.Add('automatic_continuations', FAutomaticContinuations);
+    Section.Add('fault_retries', FFaultRetries);
     Section.Add('enter_inserts_newline', FEnterInsertsNewline);
     WriteSkillModes(Section, FSkillModes);
     WriteSkillFiles(Section, FSkillFiles);
