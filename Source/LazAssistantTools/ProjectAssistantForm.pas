@@ -1876,15 +1876,12 @@ End;
 
 Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: String);
 Var
-  PlanRel, Err, Note, CurrentPlan: String;
+  PlanRel, Err, Note, CurrentPlan, TrackedTitle, TrackedBody: String;
+  TrackedStatus: TPlanSectionStatus;
   Idx: Integer; Editor: TSourceEditorInterface;
 
-  Procedure LeaveInProgress(Const Reason: String);
+  Procedure ShowBuildNote(Const Reason: String);
   Begin
-    { Same item on the next plan turn. Do not mark blocked and do not stop the run. }
-    If FPlanAgentRunning Then
-      FPlanAgentResumeIndex := FBuildWorkSectionIndex;
-    SetBuildStatusFeedback(Reason);
     If Reason = '' Then
       Exit;
     If FViewingLive Then
@@ -1896,6 +1893,66 @@ Var
       End
     Else
       SetCurrentSystemNote(Reason);
+  End;
+
+  Procedure LeaveInProgress(Const Reason: String);
+  Begin
+    { Same item on the next plan turn. Do not mark blocked and do not stop the run. }
+    If FPlanAgentRunning Then
+      FPlanAgentResumeIndex := FBuildWorkSectionIndex;
+    SetBuildStatusFeedback(Reason);
+    ShowBuildNote(Reason);
+  End;
+
+  Function ContinuationCapReached: Boolean;
+  Begin
+    Result := (FContinuationCap < 1) Or (FContinuationCount >= FContinuationCap);
+  End;
+
+  Function ReadTrackedSection(Out Title, Body: String; Out Status: TPlanSectionStatus): Boolean;
+  Var
+    Sections: TObjectList;
+    Section: TPlanSection;
+    ReadErr: String;
+  Begin
+    Result := False;
+    Title := FBuildWorkSectionTitle;
+    Body := FBuildWorkBody;
+    Status := pssUnknown;
+    If (FBuildWorkPlanPath = '') Or (FBuildWorkSectionIndex < 0) Then
+      Exit;
+    Sections := TObjectList.Create(True);
+    Try
+      If Not ScanPlanSections(FBuildWorkPlanPath, Sections, ReadErr) Then
+        Exit;
+      If FBuildWorkSectionIndex >= Sections.Count Then
+        Exit;
+      Section := TPlanSection(Sections[FBuildWorkSectionIndex]);
+      Status := Section.Status;
+      If Section.Title <> '' Then
+        Title := Section.Title;
+      If Not GetPlanSectionBody(FBuildWorkPlanPath, FBuildWorkSectionIndex, Body, ReadErr) Then
+        Body := FBuildWorkBody;
+      Result := True;
+    Finally
+      Sections.Free;
+    End;
+  End;
+
+  Procedure ApplyRealBlock(Const Title, FallbackAction: String);
+  Var
+    Stored, BlockErr, Report: String;
+  Begin
+    FPlanAgentResumeIndex := -1;
+    If Not SetPlanSectionBlocked(FBuildWorkPlanPath, FBuildWorkSectionIndex, FallbackAction, Stored, BlockErr) Then
+      Begin
+        SetBuildStatusFeedback('Could not mark the item blocked: ' + BlockErr);
+        Exit;
+      End;
+    Report := AssistantBlockedItemReport(Title, Stored);
+    SetBuildStatusFeedback(Report);
+    ShowBuildNote(Report);
+    RefreshBuildTodos;
   End;
 
 Begin
@@ -1915,11 +1972,36 @@ Begin
       SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
       Exit;
     End;
+  { The saved section is authoritative. A start-of-turn snapshot misses a status the model just wrote. }
+  If Not ReadTrackedSection(TrackedTitle, TrackedBody, TrackedStatus) Then
+    Begin
+      TrackedTitle := FBuildWorkSectionTitle;
+      TrackedBody := FBuildWorkBody;
+      TrackedStatus := pssUnknown;
+    End;
+  { Block only when a person must act. A missing Validation line and a failed build stay in progress. }
+  If (TrackedStatus = pssBlocked) And (FBuildWorkPlanPath <> '') Then
+    Begin
+      ApplyRealBlock(TrackedTitle, AssistantModelBlockAction(TrackedTitle));
+      Exit;
+    End;
+  If AssistantSectionIsManualValidation(TrackedBody) And (FBuildWorkPlanPath <> '') Then
+    Begin
+      ApplyRealBlock(TrackedTitle, AssistantManualBlockAction(TrackedTitle));
+      Exit;
+    End;
+  If AssistantSectionHasUncheckedItem(TrackedBody) And ContinuationCapReached And (FBuildWorkPlanPath <> '') Then
+    Begin
+      ApplyRealBlock(TrackedTitle, AssistantUncheckedBlockAction(TrackedTitle));
+      Exit;
+    End;
   { A missing Validation: build or Validation: tests line is not a block. A failed build is not either.
     Leave the item in progress and report the reason so the same item can continue. }
-  If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
+  If Not CheckAssistantAcceptance(TrackedBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
-      If AssistantAcceptanceIsHumanReview(Note) Or AssistantAcceptanceIsEvidenceGap(Note) Then
+      If AssistantSectionHasUncheckedItem(TrackedBody) And (Not ContinuationCapReached) Then
+        LeaveInProgress(Note)
+      Else If AssistantAcceptanceIsHumanReview(Note) Or AssistantAcceptanceIsEvidenceGap(Note) Then
         LeaveInProgress(Note)
       Else
         Begin

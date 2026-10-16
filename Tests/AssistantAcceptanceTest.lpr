@@ -37,4 +37,20 @@ Begin
   Check('malformed evidence is an evidence gap', AssistantAcceptanceIsEvidenceGap(Reason));
   Check('current build satisfies explicit build criterion again', CheckAssistantAcceptance('Validation: build', Build, '', Reason));
   Check('a satisfied build is not an evidence gap', Not AssistantAcceptanceIsEvidenceGap(Reason));
+  Check('manual validation is detected', AssistantSectionIsManualValidation('Validation: manual'));
+  Check('missing validation is not manual', Not AssistantSectionIsManualValidation('## Task'));
+  Check('fenced manual validation does not count',
+    Not AssistantSectionIsManualValidation('```' + LineEnding + 'Validation: manual' + LineEnding + '```'));
+  Check('unchecked box is detected', AssistantSectionHasUncheckedItem('- [ ] Inspect the window'));
+  Check('fenced checkbox does not count',
+    Not AssistantSectionHasUncheckedItem('```' + LineEnding + '- [ ] example' + LineEnding + '```'));
+  Check('manual action names the item', Pos('review "Visual check"', AssistantManualBlockAction('Visual check')) = 1);
+  Check('manual action keeps the review sentence',
+    Pos('set Status to complete', AssistantManualBlockAction('Visual check')) > 0);
+  Check('unchecked action names the item', Pos('"Visual check"', AssistantUncheckedBlockAction('Visual check')) = 1);
+  Check('unchecked action keeps the tick sentence',
+    Pos('tick the unchecked acceptance items', AssistantUncheckedBlockAction('Visual check')) > 0);
+  Check('model action names the item', Pos('"Visual check" is blocked', AssistantModelBlockAction('Visual check')) = 1);
+  Check('report quotes the stored action',
+    AssistantBlockedItemReport('Visual check', 'keep this') = 'Blocked "Visual check". User action: "keep this".');
 End.

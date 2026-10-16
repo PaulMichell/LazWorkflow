@@ -7,7 +7,8 @@ Unit AssistantPlan;
   parser. A second scanner would drift from the progress list.
   An uncommitted completion is committed at turn end; a failed commit restores
   the file and its index.
-  Reviewed 2026-09-30. }
+  A blocked item stores its User action on the line after Status in that same write.
+  Reviewed 2026-10-16. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -117,6 +118,10 @@ Function ScanPlanSections(Const RelativeOrAbsolute: String; Sections: TObjectLis
 { Rewrite Status: line for Sections[SectionIndex]; rescans not performed. }
 Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   NewStatus: TPlanSectionStatus; Out ErrorText: String): Boolean;
+{ One write: Status: blocked, and a User action line immediately after it.
+  An unfenced User action already in the item is kept. StoredAction is the text after the colon. }
+Function SetPlanSectionBlocked(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  Const ActionText: String; Out StoredAction, ErrorText: String): Boolean;
 { Body of one section (heading through line before next ##/###), for Build "Work on this". }
 Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   Out BodyText: String; Out ErrorText: String): Boolean;
@@ -1888,6 +1893,153 @@ Begin
           Format('Set section "%s" to %s in %s',
             [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
         PublishPlanFileWrite(Resolved, SL.Text, False);
+      Except
+        On E: Exception Do
+          ErrorText := E.Message;
+      End;
+    Finally
+      SL.Free;
+    End;
+  Finally
+    Sections.Free;
+  End;
+End;
+
+Function UserActionRemainder(Const Line: String): String;
+Begin
+  Result := Trim(Copy(Trim(Line), 13, MaxInt));
+End;
+
+Function FindSectionUserAction(SL: TStringList; FirstLine, LastLine: Integer; Out ActionText: String): Boolean;
+Var
+  I, N, FenceLength: Integer;
+  Line: String;
+  Fence: Char;
+Begin
+  Result := False;
+  ActionText := '';
+  If Not Assigned(SL) Then
+    Exit;
+  If FirstLine < 0 Then
+    FirstLine := 0;
+  If LastLine >= SL.Count Then
+    LastLine := SL.Count - 1;
+  Fence := #0;
+  FenceLength := 0;
+  For I := FirstLine To LastLine Do
+    Begin
+      Line := Trim(SL[I]);
+      If (Copy(Line, 1, 3) = '```') Or (Copy(Line, 1, 3) = '~~~') Then
+        Begin
+          N := 1;
+          While (N <= Length(Line)) And (Line[N] = Line[1]) Do
+            Inc(N);
+          Dec(N);
+          If Fence = #0 Then
+            Begin
+              Fence := Line[1];
+              FenceLength := N;
+            End
+          Else If (Line[1] = Fence) And (N >= FenceLength) And (Trim(Copy(Line, N + 1, MaxInt)) = '') Then
+            Fence := #0;
+          Continue;
+        End;
+      If Fence <> #0 Then
+        Continue;
+      If SameText(Copy(Line, 1, 12), 'User action:') Then
+        Begin
+          ActionText := UserActionRemainder(Line);
+          Exit(True);
+        End;
+    End;
+End;
+
+Function SetPlanSectionBlocked(Const RelativeOrAbsolute: String; SectionIndex: Integer;
+  Const ActionText: String; Out StoredAction, ErrorText: String): Boolean;
+Var
+  Resolved, StatusLine: String;
+  Sections: TObjectList;
+  Section: TPlanSection;
+  SL: TStringList;
+  StatusIndex, LastLine: Integer;
+  HadAction, Changed: Boolean;
+Begin
+  Result := False;
+  StoredAction := '';
+  ErrorText := '';
+  If Not ResolvePlanPath(RelativeOrAbsolute, Resolved, ErrorText) Then
+    Exit;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(Resolved, Sections, ErrorText) Then
+      Exit;
+    If (SectionIndex < 0) Or (SectionIndex >= Sections.Count) Then
+      Begin
+        ErrorText := 'Section index out of range.';
+        Exit;
+      End;
+    Section := TPlanSection(Sections[SectionIndex]);
+    If Not Section.Actionable Then
+      Begin
+        ErrorText := 'Status belongs on a ### item, not a section heading.';
+        Exit;
+      End;
+    StatusLine := 'Status: ' + PlanSectionStatusToStr(pssBlocked);
+    SL := TStringList.Create;
+    Try
+      Try
+        SL.LoadFromFile(Resolved);
+        LastLine := Section.BodyLastLine;
+        If LastLine < Section.HeadingLineIndex Then
+          LastLine := SL.Count - 1;
+        HadAction := FindSectionUserAction(SL, Section.HeadingLineIndex, LastLine, StoredAction);
+        Changed := False;
+        If Section.StatusLineIndex >= 0 Then
+          Begin
+            If Section.StatusLineIndex >= SL.Count Then
+              Begin
+                ErrorText := 'Status line index invalid after load.';
+                Exit;
+              End;
+            StatusIndex := Section.StatusLineIndex;
+            If SL[StatusIndex] <> StatusLine Then
+              Begin
+                SL[StatusIndex] := StatusLine;
+                Changed := True;
+              End;
+          End
+        Else
+          Begin
+            If Section.HeadingLineIndex >= SL.Count Then
+              Begin
+                ErrorText := 'Heading line index invalid after load.';
+                Exit;
+              End;
+            If (Section.HeadingLineIndex + 1 < SL.Count) And (Trim(SL[Section.HeadingLineIndex + 1]) = '') Then
+              SL.Insert(Section.HeadingLineIndex + 2, StatusLine)
+            Else
+              Begin
+                SL.Insert(Section.HeadingLineIndex + 1, '');
+                SL.Insert(Section.HeadingLineIndex + 2, StatusLine);
+              End;
+            StatusIndex := Section.HeadingLineIndex + 2;
+            Changed := True;
+          End;
+        If Not HadAction Then
+          Begin
+            SL.Insert(StatusIndex + 1, 'User action: ' + ActionText);
+            StoredAction := ActionText;
+            Changed := True;
+          End;
+        If Changed Then
+          Begin
+            SL.LineBreak := PlanFileLineBreak(Resolved);
+            SL.SaveToFile(Resolved);
+            PublishPlanFileWrite(Resolved, SL.Text, False);
+            WorkflowLogger.Info('AssistantPlan',
+              Format('Blocked section "%s" in %s', [Section.Title, Resolved]));
+          End;
+        Result := True;
       Except
         On E: Exception Do
           ErrorText := E.Message;

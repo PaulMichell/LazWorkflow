@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, FileUtil, AssistantPlan, AssistantWorkTarget;
+  Classes, SysUtils, FileUtil, Interfaces, AssistantPlan, AssistantWorkTarget;
 
 Var
   FailCount: Integer;
@@ -142,6 +142,41 @@ Begin
   Check('new plan has no CR', (Raw = PlanBody(#10, 'not started')) And (Pos(#13, Raw) = 0));
 End;
 
+Procedure TestBlockWritesUserAction(Const Root: String);
+Var
+  Path, Err, Raw, Stored: String;
+Begin
+  Path := IncludeTrailingPathDelimiter(Root) + 'Documents' + PathDelim + 'Block.md';
+  WriteRaw(Path, PlanBody(#10, 'in progress'));
+  Check('block write returns', SetPlanSectionBlocked('Documents/Block.md', 1, 'review "Status line"', Stored, Err));
+  If Err <> '' Then
+    WriteLn(Err);
+  Check('new action is returned', Stored = 'review "Status line"');
+  Raw := ReadRaw(Path);
+  Check('status and action are one edit', (Pos('Status: blocked' + #10 + 'User action: review "Status line"', Raw) > 0) And
+    (Pos('Status: in progress', Raw) = 0));
+  Check('second block keeps the written action', SetPlanSectionBlocked('Documents/Block.md', 1, 'replace me', Stored, Err));
+  Check('stored action is unchanged', Stored = 'review "Status line"');
+  Check('a second action line was not added', Pos('replace me', ReadRaw(Path)) = 0);
+End;
+
+Procedure TestKeptModelAction(Const Root: String);
+Var
+  Path, Err, Raw, Stored, Body: String;
+Begin
+  Path := IncludeTrailingPathDelimiter(Root) + 'Documents' + PathDelim + 'Kept.md';
+  Body := PlanBody(#10, 'blocked');
+  Body := StringReplace(Body, 'Status: blocked' + #10, 'Status: blocked' + #10 + 'User action: keep this exact line' + #10, []);
+  WriteRaw(Path, Body);
+  Check('kept action returns', SetPlanSectionBlocked('Documents/Kept.md', 1, 'do not use', Stored, Err));
+  If Err <> '' Then
+    WriteLn(Err);
+  Raw := ReadRaw(Path);
+  Check('model action is quoted back', Stored = 'keep this exact line');
+  Check('model action line remains', Pos('User action: keep this exact line', Raw) > 0);
+  Check('fallback action was not written', Pos('do not use', Raw) = 0);
+End;
+
 Procedure TestBlockedStatus;
 Var
   Section: TPlanSection;
@@ -171,6 +206,8 @@ Begin
     TestReplaceKeepsCrlf(Root);
     TestStatusKeepsCrlf(Root);
     TestWriteKeepsExistingEnding(Root);
+    TestBlockWritesUserAction(Root);
+    TestKeptModelAction(Root);
   Finally
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
   End;

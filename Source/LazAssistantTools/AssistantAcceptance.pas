@@ -18,6 +18,16 @@ Function CheckAssistantAcceptance(Const Section, BuildJSON, TestJSON: String; Ou
 Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
 { True when build or test evidence is missing, stale, failed, or malformed. The item stays in progress. }
 Function AssistantAcceptanceIsEvidenceGap(Const Reason: String): Boolean;
+{ True when the only unfenced Validation line is manual. A fenced example does not count. }
+Function AssistantSectionIsManualValidation(Const Section: String): Boolean;
+{ True when an unfenced line still has an empty acceptance checkbox. }
+Function AssistantSectionHasUncheckedItem(Const Section: String): Boolean;
+{ Sentences written on the User action line. The item title is filled in. }
+Function AssistantManualBlockAction(Const ItemTitle: String): String;
+Function AssistantUncheckedBlockAction(Const ItemTitle: String): String;
+Function AssistantModelBlockAction(Const ItemTitle: String): String;
+{ Conversation note that quotes the stored user action. }
+Function AssistantBlockedItemReport(Const ItemTitle, ActionText: String): String;
 
 Implementation
 
@@ -143,6 +153,96 @@ End;
 Function AssistantAcceptanceIsEvidenceGap(Const Reason: String): Boolean;
 Begin
   Result := (Reason = BuildEvidenceReason) Or (Reason = TestEvidenceReason) Or (Reason = MalformedEvidenceReason);
+End;
+
+Procedure ReadSectionMarkers(Const Section: String; Out ValidationRule: String; Out ValidationCount: Integer;
+  Out HasUnchecked: Boolean);
+Var
+  Lines: TStringList;
+  I, N, FenceLength: Integer;
+  Line: String;
+  Fence: Char;
+Begin
+  ValidationRule := '';
+  ValidationCount := 0;
+  HasUnchecked := False;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Section;
+    Fence := #0;
+    FenceLength := 0;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        If (Copy(Line, 1, 3) = '```') Or (Copy(Line, 1, 3) = '~~~') Then
+          Begin
+            N := 1;
+            While (N <= Length(Line)) And (Line[N] = Line[1]) Do
+              Inc(N);
+            Dec(N);
+            If Fence = #0 Then
+              Begin
+                Fence := Line[1];
+                FenceLength := N;
+              End
+            Else If (Line[1] = Fence) And (N >= FenceLength) And (Trim(Copy(Line, N + 1, MaxInt)) = '') Then
+              Fence := #0;
+            Continue;
+          End;
+        If Fence <> #0 Then
+          Continue;
+        If Pos('[ ]', Line) > 0 Then
+          HasUnchecked := True;
+        If SameText(Copy(Line, 1, 11), 'Validation:') Then
+          Begin
+            Inc(ValidationCount);
+            ValidationRule := LowerCase(Trim(Copy(Line, 12, MaxInt)));
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function AssistantSectionIsManualValidation(Const Section: String): Boolean;
+Var
+  Rule: String;
+  Count: Integer;
+  HasUnchecked: Boolean;
+Begin
+  ReadSectionMarkers(Section, Rule, Count, HasUnchecked);
+  Result := (Count = 1) And (Rule = 'manual');
+End;
+
+Function AssistantSectionHasUncheckedItem(Const Section: String): Boolean;
+Var
+  Rule: String;
+  Count: Integer;
+Begin
+  ReadSectionMarkers(Section, Rule, Count, Result);
+End;
+
+Function AssistantManualBlockAction(Const ItemTitle: String): String;
+Begin
+  Result := 'review "' + ItemTitle + '"; if it is acceptable set Status to complete; ' +
+    'if more work is required set Status to in progress and run Run Plan again.';
+End;
+
+Function AssistantUncheckedBlockAction(Const ItemTitle: String): String;
+Begin
+  Result := '"' + ItemTitle + '": tick the unchecked acceptance items, or remove the ones that do not apply; ' +
+    'then set Status to in progress and run Run Plan again.';
+End;
+
+Function AssistantModelBlockAction(Const ItemTitle: String): String;
+Begin
+  Result := '"' + ItemTitle + '" is blocked and no action was written; open the plan, add what you need to supply, ' +
+    'set Status to in progress, and run Run Plan again.';
+End;
+
+Function AssistantBlockedItemReport(Const ItemTitle, ActionText: String): String;
+Begin
+  Result := 'Blocked "' + ItemTitle + '". User action: "' + ActionText + '".';
 End;
 
 End.
