@@ -126,9 +126,18 @@ End;
 
 Procedure TSpellPreloadThread.CommitResult;
 Begin
-  If Assigned(FOwner) Then
-    FOwner.AcceptPreloadEngine(FEngine, FStatus, FSeq);
-  FEngine := Nil;
+  { Queued on the IDE thread. A raise here is re-raised by CheckSynchronize. }
+  Try
+    If Assigned(FOwner) Then
+      FOwner.AcceptPreloadEngine(FEngine, FStatus, FSeq);
+    FEngine := Nil;
+  Except
+    On E: Exception Do
+      Begin
+        FEngine := Nil;
+        ReportPluginException('TSpellPreloadThread.CommitResult', E);
+      End;
+  End;
 End;
 
 Procedure TSpellPreloadThread.Execute;

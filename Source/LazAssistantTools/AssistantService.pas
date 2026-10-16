@@ -371,7 +371,10 @@ Begin
         Try
           Thread.WaitFor;
         Except
+          On E: Exception Do
+            ReportPluginException('ReapAbandonedAssistantWorkers', E);
         End;
+        DiscardQueuedThreadMethods(Thread);
         Thread.Free;
       End;
     EnterCriticalSection(GAbandonedLock);
@@ -1025,7 +1028,10 @@ Begin
             Try
               Thread.WaitFor;
             Except
+              On E: Exception Do
+                ReportPluginException('TAssistantService.ReapOrphanThreads', E);
             End;
+            DiscardQueuedThreadMethods(Thread);
             Thread.Free;
             FOrphanThreads.Delete(I);
           End
@@ -1038,7 +1044,7 @@ Begin
     If (Not Remaining) Or (GetTickCount64 - StartTick >= WaitMs) Then
       Break;
     If RunningOnMainThread Then
-      CheckSynchronize(15)
+      PumpPluginSynchronize(15)
     Else
       Sleep(15);
     Sleep(5);
@@ -1081,13 +1087,14 @@ Begin
   While (Not FStreamThread.Finished) And (GetTickCount64 - StartTick < 1500) Do
     Begin
       If RunningOnMainThread Then
-        CheckSynchronize(15);
+        PumpPluginSynchronize(15);
       Sleep(5);
     End;
   Try
     If FStreamThread.Finished Then
       Begin
         FStreamThread.WaitFor;
+        DiscardQueuedThreadMethods(FStreamThread);
         FreeAndNil(FStreamThread);
       End
     Else
@@ -2011,22 +2018,33 @@ Procedure TAssistantService.FlushDeferredSubagents;
 Var
   Obj: TObject;
 Begin
-  Repeat
-    Obj := Nil;
-    EnterCriticalSection(FSubagentsLock);
-    Try
-      If Assigned(FDeferredSubagents) And (FDeferredSubagents.Count > 0) Then
-        Begin
-          Obj := TObject(FDeferredSubagents[0]);
-          FDeferredSubagents.Delete(0);
-        End;
-    Finally
-      LeaveCriticalSection(FSubagentsLock);
-    End;
-    If Not Assigned(Obj) Then Exit;
-    { Destruction can pump callbacks; never hold the list lock here. }
-    Obj.Free;
-  Until False;
+  { Queued on the IDE thread. A raise here is re-raised by CheckSynchronize and can Halt Lazarus. }
+  Try
+    Repeat
+      Obj := Nil;
+      EnterCriticalSection(FSubagentsLock);
+      Try
+        If Assigned(FDeferredSubagents) And (FDeferredSubagents.Count > 0) Then
+          Begin
+            Obj := TObject(FDeferredSubagents[0]);
+            FDeferredSubagents.Delete(0);
+          End;
+      Finally
+        LeaveCriticalSection(FSubagentsLock);
+      End;
+      If Not Assigned(Obj) Then Exit;
+      { Destruction can pump callbacks; never hold the list lock here. }
+      Try
+        Obj.Free;
+      Except
+        On E: Exception Do
+          ReportPluginException('TAssistantService.FlushDeferredSubagents', E);
+      End;
+    Until False;
+  Except
+    On E: Exception Do
+      ReportPluginException('TAssistantService.FlushDeferredSubagents', E);
+  End;
 End;
 
 Procedure TAssistantService.AbandonTimedOutSubagents;

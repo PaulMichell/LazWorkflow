@@ -1182,7 +1182,10 @@ Begin
         End;
       On E: Exception Do
         Begin
+          ReportPluginException('HttpsPostJsonStream', E);
           ErrorText := E.Message;
+          If ErrorText = '' Then
+            ErrorText := E.ClassName;
           If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
             ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
         End;

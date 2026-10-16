@@ -193,6 +193,9 @@ End;
 
 Destructor TAssistantActor.Destroy;
 Begin
+  { Pending NotifyMain / NotifyTrace must not run after this object is gone.
+    CheckSynchronize would re-raise that access violation on the IDE thread. }
+  DiscardQueuedThreadMethods(Self);
   AbortHttp;
   FreeAndNil(FParser);
   FreeAndNil(FSteer);
@@ -302,7 +305,12 @@ Begin
   Finally
     LeaveCriticalSection(FTraceLock);
   End;
-  Queue(@NotifyTrace);
+  Try
+    Queue(@NotifyTrace);
+  Except
+    On E: Exception Do
+      ReportPluginException('TAssistantActor.QueueTrace', E);
+  End;
 End;
 
 Procedure TAssistantActor.NotifyTrace;
@@ -311,23 +319,29 @@ Var
   I: Integer;
   Cb: TAssistantTraceNotify;
 Begin
-  Cb := FOnTrace;
-  EnterCriticalSection(FTraceLock);
+  { Whole method: a raise here is re-raised by CheckSynchronize into the Qt event loop. }
   Try
-    Batch := Copy(FTraceQueue, 0, Length(FTraceQueue));
-    SetLength(FTraceQueue, 0);
-  Finally
-    LeaveCriticalSection(FTraceLock);
-  End;
-  If Not Assigned(Cb) Then
-    Exit;
-  For I := 0 To High(Batch) Do
+    Cb := FOnTrace;
+    EnterCriticalSection(FTraceLock);
     Try
-      Cb(Batch[I]);
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('AssistantActor', 'Trace notify failed: ' + E.Message);
+      Batch := Copy(FTraceQueue, 0, Length(FTraceQueue));
+      SetLength(FTraceQueue, 0);
+    Finally
+      LeaveCriticalSection(FTraceLock);
     End;
+    If Not Assigned(Cb) Then
+      Exit;
+    For I := 0 To High(Batch) Do
+      Try
+        Cb(Batch[I]);
+      Except
+        On E: Exception Do
+          ReportPluginException('TAssistantActor.NotifyTrace', E);
+      End;
+  Except
+    On E: Exception Do
+      ReportPluginException('TAssistantActor.NotifyTrace', E);
+  End;
 End;
 
 Procedure TAssistantActor.LogEvent(Kind: TAssistantEventKind; Const Text: String;
@@ -357,31 +371,37 @@ Var
   Done: Boolean;
   Cb: TAssistantStreamEvent;
 Begin
-  EnterCriticalSection(FSnapLock);
+  { Whole method: a raise here is re-raised by CheckSynchronize into the Qt event loop. }
   Try
-    Content := FContent;
-    Thinking := FThinking;
-    Done := FPendingFinish;
-    FPendingFinish := False;
-    { Allow a later EmitSnapshot (including finish) to queue again while Cb runs. }
-    FNotifyQueued := False;
-    { Live snapshots carry a status string on the ErrorText slot; only a finished
-      snapshot may report a terminal error. Progress text must not leak into finish. }
-    If Done Then
-      Err := FErrorText
-    Else
-      Err := FStatusText;
-    Cb := FOnToken;
-  Finally
-    LeaveCriticalSection(FSnapLock);
-  End;
-  If Assigned(Cb) Then
+    EnterCriticalSection(FSnapLock);
     Try
-      Cb(Content, Thinking, Done, Err);
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('AssistantActor', 'UI snapshot failed: ' + E.Message);
+      Content := FContent;
+      Thinking := FThinking;
+      Done := FPendingFinish;
+      FPendingFinish := False;
+      { Allow a later EmitSnapshot (including finish) to queue again while Cb runs. }
+      FNotifyQueued := False;
+      { Live snapshots carry a status string on the ErrorText slot; only a finished
+        snapshot may report a terminal error. Progress text must not leak into finish. }
+      If Done Then
+        Err := FErrorText
+      Else
+        Err := FStatusText;
+      Cb := FOnToken;
+    Finally
+      LeaveCriticalSection(FSnapLock);
     End;
+    If Assigned(Cb) Then
+      Try
+        Cb(Content, Thinking, Done, Err);
+      Except
+        On E: Exception Do
+          ReportPluginException('TAssistantActor.NotifyMain', E);
+      End;
+  Except
+    On E: Exception Do
+      ReportPluginException('TAssistantActor.NotifyMain', E);
+  End;
 End;
 
 Procedure TAssistantActor.EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
@@ -421,7 +441,12 @@ Begin
     LeaveCriticalSection(FSnapLock);
   End;
   If NeedQueue Then
-    Queue(@NotifyMain);
+    Try
+      Queue(@NotifyMain);
+    Except
+      On E: Exception Do
+        ReportPluginException('TAssistantActor.EmitSnapshot', E);
+    End;
 End;
 
 Procedure TAssistantActor.SetPhase(Phase: TAssistantPhase);
@@ -463,13 +488,24 @@ Procedure TAssistantActor.HttpsChunk(Const Chunk: String);
 Var
   FromIndex: Integer;
 Begin
-  If Terminated Then
-    Exit;
-  If Length(FResponsePrefix) < 16384 Then
-    FResponsePrefix := FResponsePrefix + Copy(Chunk, 1, 16384 - Length(FResponsePrefix));
-  FromIndex := FParser.EventCount;
-  FParser.Feed(Chunk);
-  ApplyParserEvents(FromIndex);
+  Try
+    If Terminated Then
+      Exit;
+    If Length(FResponsePrefix) < 16384 Then
+      FResponsePrefix := FResponsePrefix + Copy(Chunk, 1, 16384 - Length(FResponsePrefix));
+    FromIndex := FParser.EventCount;
+    FParser.Feed(Chunk);
+    ApplyParserEvents(FromIndex);
+  Except
+    On E: EAbort Do
+      Raise;
+    On E: Exception Do
+      Begin
+        { Stay on the worker. A raw access violation must not be the only record of the failure. }
+        ReportPluginException('TAssistantActor.HttpsChunk', E);
+        Raise Exception.Create('Stream failed: ' + E.Message);
+      End;
+  End;
 End;
 
 Function TAssistantActor.HttpsShouldStop: Boolean;
@@ -578,10 +614,15 @@ Begin
             End;
         Except
           On E: Exception Do
-            If Terminated Then
-              ErrorText := CancelWaitHint
-            Else
-              ErrorText := E.Message;
+            Begin
+              ReportPluginException('TAssistantActor.DoHttpRound', E);
+              If Terminated Then
+                ErrorText := CancelWaitHint
+              Else If E.Message <> '' Then
+                ErrorText := E.Message
+              Else
+                ErrorText := E.ClassName;
+            End;
         End;
       Finally
         EnterCriticalSection(FHttpLock);
@@ -691,6 +732,8 @@ Var
   ToolResult, ToolError: String;
   ImageRefs: TAssistantImageRefArray;
 Begin
+  { A raise escapes into CheckSynchronize and can Halt the IDE. }
+  Try
   SkipRun := False;
   EnterCriticalSection(FLock);
   Try
@@ -731,6 +774,10 @@ Begin
   Finally
     UnbindToolAbortThread;
     Release;
+  End;
+  Except
+    On E: Exception Do
+      ReportPluginException('TIdeToolDispatch.ExecuteOnMain', E);
   End;
 End;
 

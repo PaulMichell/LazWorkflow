@@ -560,21 +560,22 @@ Var
   Caption: String;
   Handler: TGitJobBusyEvent;
 Begin
-  EnterLock;
+  { Queued on the IDE thread. Do not let a failure escape into CheckSynchronize. }
   Try
-    IsBusy := FBusy;
-    Caption := FCurrentCaption;
-    Handler := FOnBusyChanged;
-  Finally
-    LeaveLock;
-  End;
-  If Assigned(Handler) And Not FStopping Then
+    EnterLock;
     Try
-      Handler(Self, IsBusy, Caption);
-    Except
-      On E: Exception Do
-        WorkflowLogger.Error('GitJobRunner', 'OnBusyChanged: ' + E.Message);
+      IsBusy := FBusy;
+      Caption := FCurrentCaption;
+      Handler := FOnBusyChanged;
+    Finally
+      LeaveLock;
     End;
+    If Assigned(Handler) And Not FStopping Then
+      Handler(Self, IsBusy, Caption);
+  Except
+    On E: Exception Do
+      ReportPluginException('TGitJobRunner.DoBusyNotify', E);
+  End;
 End;
 
 Procedure TGitJobRunner.QueueFinished(Job: TGitJob);
@@ -614,29 +615,40 @@ Procedure TGitJobRunner.DoFinishedNotify;
 Var
   Job: TGitJob;
 Begin
-  Repeat
-    Job := Nil;
-    EnterLock;
-    Try
-      If FDeliverQueue.Count > 0 Then
-        Begin
-          Job := TGitJob(FDeliverQueue[0]);
-          FDeliverQueue.Delete(0);
-        End;
-    Finally
-      LeaveLock;
-    End;
-    If Not Assigned(Job) Then
-      Break;
-    Try
-      If Not FStopping And Assigned(Job.OnFinished) Then
-        Job.OnFinished(Job);
-    Except
-      On E: Exception Do
-        WorkflowLogger.Error('GitJobRunner', 'OnFinished: ' + E.Message);
-    End;
-    FreeAndNil(Job);
-  Until False;
+  { Queued on the IDE thread. Freeing the job must not raise into CheckSynchronize. }
+  Try
+    Repeat
+      Job := Nil;
+      EnterLock;
+      Try
+        If FDeliverQueue.Count > 0 Then
+          Begin
+            Job := TGitJob(FDeliverQueue[0]);
+            FDeliverQueue.Delete(0);
+          End;
+      Finally
+        LeaveLock;
+      End;
+      If Not Assigned(Job) Then
+        Break;
+      Try
+        If Not FStopping And Assigned(Job.OnFinished) Then
+          Job.OnFinished(Job);
+      Except
+        On E: Exception Do
+          ReportPluginException('TGitJobRunner.DoFinishedNotify', E);
+      End;
+      Try
+        FreeAndNil(Job);
+      Except
+        On E: Exception Do
+          ReportPluginException('TGitJobRunner.DoFinishedNotify', E);
+      End;
+    Until False;
+  Except
+    On E: Exception Do
+      ReportPluginException('TGitJobRunner.DoFinishedNotify', E);
+  End;
 End;
 
 Function TGitJobRunner.DequeueJob(Git: TGitService): TGitJob;
