@@ -151,7 +151,7 @@ A blocked item is skipped, as `FindNextIncompleteBuildSection` already does. It 
 The run still stops for a terminal fault, Stop, the package cap, or context at or above 95 percent after compact. It does not stop merely because one item is blocked.
 
 ### 4.4 Report plan status at the end of every Run Plan
-Status: not started
+Status: complete
 
 Every exit from Run Plan posts one conversation report. That includes a clean finish, a user stop, an error, the package cap, and the context limit.
 
