@@ -118,7 +118,7 @@ If the model already wrote a summary, keep it. Do not add a second summary.
 ## 4. Plan runner and blocked items
 
 ### 4.1 Do not block an item that lacks a Validation line
-Status: not started
+Status: complete
 
 `TryAutoCompleteBuildWork` must not mark an item blocked, and must not call `StopRunPlan`, only because `Validation: build` or `Validation: tests` is missing. The work prompt already says a missing Validation line does not block the status change.
 
