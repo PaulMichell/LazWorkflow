@@ -58,10 +58,21 @@ Type
     FFaultAttempt: Integer;
     FRecoveryStop: Boolean;
     FRecoveryStopText: String;
+    FTerminalNoted: Boolean;
+    FMutatingToolRan: Boolean;
+    FActiveToolName: String;
+    FHttpExceptionClass: String;
+    FToolCallsCommitted: Boolean;
+    FActiveToolIndex: Integer;
+    FActiveToolRecorded: Boolean;
     Function ClassifyFault(Origin: TAssistantFaultOrigin; Const Area, ToolName, ErrorClass, ErrorText: String;
       HttpStatus, Attempt: Integer; OwnsTurn: Boolean): TAssistantRecovery;
     Function NextFaultAttempt(Const Site: String): Integer;
     Function ServiceWasDetached: Boolean;
+    Procedure FaultSite(Out Origin: TAssistantFaultOrigin; Out Area, ToolName: String);
+    Procedure PostTerminalStop(Const Area, ErrorClass, ErrorText: String);
+    Function KeepRoundAfterFault(E: Exception): Boolean;
+    Procedure SealUnansweredTools(Const ErrorClass, ErrorText: String);
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
       Const ToolName: String = ''; Const ToolId: String = ''; Ok: Boolean = True;
       DurationMs: Integer = 0; Const AttachmentsJson: String = '');
@@ -74,7 +85,6 @@ Type
     Function HttpsShouldStop: Boolean;
     Procedure AbortHttp;
     Function LockedService: TAssistantService;
-    Procedure ExecuteTurn;
     Procedure RunTools;
     Procedure RunOneTool(Const Call: TSamplerToolCall);
     Procedure FinishSpawnSlot(Const Call: TSamplerToolCall; Const RunId, KindName, ResultText,
@@ -90,6 +100,7 @@ Type
     Function PostRound(Const Url, RequestJson, Headers: String;
       Control: THttpsStreamControl; Out Code: Integer; Out ErrorText: String): Boolean; Virtual;
     Function WaitForReconnect: Boolean; Virtual;
+    Procedure ExecuteTurn; Virtual;
     Procedure Execute; Override;
   Public
     Constructor Create(Service: TAssistantService; Const ApiBase, AccessToken, Model,
@@ -182,6 +193,13 @@ Begin
   FFaultAttempt := 0;
   FRecoveryStop := False;
   FRecoveryStopText := '';
+  FTerminalNoted := False;
+  FMutatingToolRan := False;
+  FActiveToolName := '';
+  FHttpExceptionClass := '';
+  FToolCallsCommitted := False;
+  FActiveToolIndex := -1;
+  FActiveToolRecorded := False;
 End;
 
 Destructor TAssistantActor.Destroy;
@@ -292,6 +310,96 @@ Begin
   Fault.OwnsTurn := OwnsTurn;
   Fault.Detached := False;
   Result := ClassifyAssistantFault(Fault);
+End;
+
+Procedure TAssistantActor.FaultSite(Out Origin: TAssistantFaultOrigin; Out Area, ToolName: String);
+Begin
+  ToolName := FActiveToolName;
+  If ToolName <> '' Then
+    Begin
+      Origin := afoTool;
+      Area := 'ExecuteAssistantToolForMode';
+    End
+  Else
+    Begin
+      Origin := afoHttpRound;
+      Area := 'TAssistantActor.DoHttpRound';
+      ToolName := '';
+    End;
+End;
+
+Procedure TAssistantActor.PostTerminalStop(Const Area, ErrorClass, ErrorText: String);
+Begin
+  { One note. A later fault must not retry and must not post a second recipe. }
+  If FTerminalNoted Or FFinishEmitted Then
+    Exit;
+  FTerminalNoted := True;
+  FRecoveryStop := True;
+  FRecoveryStopText := AssistantRecoveryStopNote(Area, ErrorClass, ErrorText);
+  EmitSnapshot(True, FRecoveryStopText, True);
+  LogEvent(aekError, FRecoveryStopText);
+End;
+
+Function TAssistantActor.KeepRoundAfterFault(E: Exception): Boolean;
+Var
+  Decision: TAssistantRecovery;
+  Origin: TAssistantFaultOrigin;
+  Area, ToolName: String;
+Begin
+  Result := False;
+  If FTerminalNoted Or FFinishEmitted Then
+    Exit;
+  If Not Assigned(E) Then
+    Exit;
+  FaultSite(Origin, Area, ToolName);
+  Decision := ClassifyFault(Origin, Area, ToolName, E.ClassName, E.Message, 0, NextFaultAttempt(Area), True);
+  Case Decision.Action Of
+    araIgnore:
+      Begin
+        If Terminated Then
+          EmitSnapshot(True, CancelWaitHint, True)
+        Else
+          EmitSnapshot(True, '', True);
+      End;
+    araStop:
+      PostTerminalStop(Area, E.ClassName, E.Message);
+    araRetryLastAction, araContinueTurn:
+      Begin
+        If FTerminalNoted Then
+          Exit;
+        If Origin = afoTool Then
+          SealUnansweredTools(E.ClassName, E.Message);
+        FActiveToolName := '';
+        Result := True;
+      End;
+  End;
+End;
+
+Procedure TAssistantActor.SealUnansweredTools(Const ErrorClass, ErrorText: String);
+Var
+  Svc: TAssistantService;
+  I, FromIndex: Integer;
+  Note: String;
+Begin
+  If Not FToolCallsCommitted Then
+    Exit;
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Exit;
+  Note := 'Error: ' + AssistantRecoveryToolError('ExecuteAssistantToolForMode', ErrorClass, ErrorText);
+  FromIndex := 0;
+  If FActiveToolIndex >= 0 Then
+    FromIndex := FActiveToolIndex;
+  If FActiveToolRecorded Then
+    Inc(FromIndex);
+  For I := FromIndex To High(FToolCalls) Do
+    If (FToolCalls[I].Id <> '') And (FToolCalls[I].Name <> '') Then
+      Try
+        Svc.AddToolResult(FToolCalls[I].Id, Note);
+      Except
+        On Inner: Exception Do
+          Exit;
+      End;
 End;
 
 Function TAssistantActor.LockedService: TAssistantService;
@@ -567,9 +675,10 @@ Begin
       Raise;
     On E: Exception Do
       Begin
-        { Stay on the worker. A raw access violation must not be the only record of the failure. }
+        { Stay on the worker. The log is the record; re-raise the same class so the site can classify it. }
         ReportPluginException('TAssistantActor.HttpsChunk', E);
-        Raise Exception.Create('Stream failed: ' + E.Message);
+        FHttpExceptionClass := E.ClassName;
+        Raise;
       End;
   End;
 End;
@@ -621,6 +730,7 @@ Begin
         End;
       Code := 0;
       ErrorText := '';
+      FHttpExceptionClass := '';
       FParser.Reset;
       { Discard only the interrupted attempt, retaining completed tool rounds. }
       FContent := '';
@@ -689,6 +799,7 @@ Begin
           On E: Exception Do
             Begin
               ReportPluginException('TAssistantActor.DoHttpRound', E);
+              FHttpExceptionClass := E.ClassName;
               If Terminated Then
                 ErrorText := CancelWaitHint
               Else If E.Message <> '' Then
@@ -760,17 +871,21 @@ Type
     FStopFlag: LongInt;
     FFaulted: Boolean;
     FFaultClass: String;
+    FFaultMessage: String;
     Procedure Release;
+    Procedure MarkFailed(Const Area, ErrorClass, ErrorText: String);
+    Procedure EnsureDone;
   Public
     Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
     Destructor Destroy; Override;
     Procedure ExecuteOnMain;
     Function HasStarted: Boolean;
+    Function HasFailed: Boolean;
     Function WaitUntilDone(TimeoutMs: QWord): Boolean;
     Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String);
     Procedure CopyOutcome(Out ToolOk: Boolean; Out ToolResult, ToolError: String;
       Out ImageRefs: TAssistantImageRefArray);
-    Function TookFault(Out FaultClass: String): Boolean;
+    Function TookFault(Out FaultClass, FaultMessage: String): Boolean;
   End;
 
 Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
@@ -790,6 +905,7 @@ Begin
   FStopFlag := 0;
   FFaulted := False;
   FFaultClass := '';
+  FFaultMessage := '';
   { Waiter + queued callback. Last Release Frees. }
   FRefCount := 2;
 End;
@@ -815,100 +931,189 @@ Begin
     Free;
 End;
 
-Procedure TIdeToolDispatch.ExecuteOnMain;
+Procedure TIdeToolDispatch.MarkFailed(Const Area, ErrorClass, ErrorText: String);
 Var
-  SkipRun, Released, LocalFaulted: Boolean;
-  ToolOk: Boolean;
-  ToolResult, ToolError, LocalFaultClass: String;
-  ImageRefs: TAssistantImageRefArray;
+  Note: String;
 Begin
-  { A raise escapes into CheckSynchronize and can Halt the IDE. }
-  Released := False;
-  LocalFaulted := False;
-  LocalFaultClass := '';
+  Note := AssistantRecoveryToolError(Area, ErrorClass, ErrorText);
+  If Note = '' Then
+    Note := 'The tool failed before it could run.';
   Try
-    SkipRun := False;
     EnterCriticalSection(FLock);
     Try
-      If FAbandoned Or (FStopFlag <> 0) Then
-        SkipRun := True
-      Else
-        FStarted := True;
+      FOk := False;
+      FFaulted := True;
+      If FFaultClass = '' Then
+        FFaultClass := ErrorClass;
+      If FFaultMessage = '' Then
+        FFaultMessage := ErrorText;
+      If FErrorText = '' Then
+        FErrorText := Note;
+      FResultText := '';
+      FDone := True;
     Finally
       LeaveCriticalSection(FLock);
     End;
-    If SkipRun Then
-      Begin
-        Released := True;
-        Release;
-        Exit;
-      End;
-    ToolOk := False;
-    ToolResult := '';
-    ToolError := '';
-    ImageRefs := Nil;
-    { This threadvar is the IDE thread's. The worker keeps its own binding. }
-    BindToolAbortThread(FWorker);
-    BindToolStopFlag(@FStopFlag);
-    Try
-      Try
-        ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
-      Except
-        On E: Exception Do
-          Begin
-            ReportPluginException('TIdeToolDispatch.ExecuteOnMain', E);
-            LocalFaulted := True;
-            LocalFaultClass := E.ClassName;
-            ToolOk := False;
-            ToolResult := '';
-            ToolError := AssistantRecoveryToolError('ExecuteAssistantToolForMode', E.ClassName, E.Message);
-          End;
-      End;
-    Finally
-      EnterCriticalSection(FLock);
-      Try
-        FOk := ToolOk;
-        FResultText := ToolResult;
-        FErrorText := ToolError;
-        FImageRefs := ImageRefs;
-        FFaulted := LocalFaulted;
-        FFaultClass := LocalFaultClass;
-        FDone := True;
-      Finally
-        LeaveCriticalSection(FLock);
-      End;
-      UnbindToolAbortThread;
-      Released := True;
-      Release;
-    End;
   Except
-    On E: Exception Do
-      Begin
-        ReportPluginException('TIdeToolDispatch.ExecuteOnMain', E);
-        EnterCriticalSection(FLock);
-        Try
-          FOk := False;
-          FFaulted := True;
-          FFaultClass := E.ClassName;
-          If FErrorText = '' Then
-            FErrorText := AssistantRecoveryToolError('TIdeToolDispatch.ExecuteOnMain', E.ClassName, E.Message);
-          FResultText := '';
-          FDone := True;
-        Finally
-          LeaveCriticalSection(FLock);
-        End;
-        If Not Released Then
-          Release;
-      End;
+    FOk := False;
+    FFaulted := True;
+    If FErrorText = '' Then
+      FErrorText := Note;
+    FDone := True;
   End;
 End;
 
-Function TIdeToolDispatch.TookFault(Out FaultClass: String): Boolean;
+Procedure TIdeToolDispatch.EnsureDone;
+Begin
+  Try
+    EnterCriticalSection(FLock);
+    Try
+      If FDone Or FFaulted Then
+        Begin
+          If FFaulted And (FErrorText = '') Then
+            FErrorText := AssistantRecoveryToolError('TIdeToolDispatch.ExecuteOnMain', FFaultClass,
+              'The tool failed before it could run.');
+          FDone := True;
+          Exit;
+        End;
+      { A fault before the inner call must not leave the waiter blocked until timeout. }
+      FOk := False;
+      FFaulted := True;
+      If FFaultClass = '' Then
+        FFaultClass := 'Exception';
+      If FErrorText = '' Then
+        FErrorText := AssistantRecoveryToolError('TIdeToolDispatch.ExecuteOnMain', FFaultClass,
+          'The tool failed before it could run.');
+      FDone := True;
+    Finally
+      LeaveCriticalSection(FLock);
+    End;
+  Except
+    FOk := False;
+    FFaulted := True;
+    If FErrorText = '' Then
+      FErrorText := 'TIdeToolDispatch.ExecuteOnMain: Exception: The tool failed before it could run.';
+    FDone := True;
+  End;
+End;
+
+Procedure TIdeToolDispatch.ExecuteOnMain;
+Var
+  SkipRun, LocalFaulted: Boolean;
+  ToolOk: Boolean;
+  ToolResult, ToolError, LocalFaultClass, LocalFaultMessage: String;
+  ImageRefs: TAssistantImageRefArray;
+Begin
+  { A raise escapes into CheckSynchronize and can Halt the IDE. }
+  LocalFaulted := False;
+  LocalFaultClass := '';
+  LocalFaultMessage := '';
+  Try
+    Try
+      SkipRun := False;
+      EnterCriticalSection(FLock);
+      Try
+        If FAbandoned Or (FStopFlag <> 0) Then
+          SkipRun := True
+        Else
+          FStarted := True;
+      Finally
+        LeaveCriticalSection(FLock);
+      End;
+      If SkipRun Then
+        Begin
+          EnterCriticalSection(FLock);
+          Try
+            If Not FDone Then
+              Begin
+                FOk := False;
+                If FErrorText = '' Then
+                  FErrorText := 'The tool did not start.';
+                FDone := True;
+              End;
+          Finally
+            LeaveCriticalSection(FLock);
+          End;
+        End
+      Else
+        Begin
+          ToolOk := False;
+          ToolResult := '';
+          ToolError := '';
+          ImageRefs := Nil;
+          { This threadvar is the IDE thread's. The worker keeps its own binding. }
+          BindToolAbortThread(FWorker);
+          BindToolStopFlag(@FStopFlag);
+          Try
+            Try
+              ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
+            Except
+              On E: Exception Do
+                Begin
+                  ReportPluginException('TIdeToolDispatch.ExecuteOnMain', E);
+                  LocalFaulted := True;
+                  LocalFaultClass := E.ClassName;
+                  LocalFaultMessage := E.Message;
+                  ToolOk := False;
+                  ToolResult := '';
+                  ToolError := AssistantRecoveryToolError('ExecuteAssistantToolForMode', E.ClassName, E.Message);
+                End;
+            End;
+          Finally
+            EnterCriticalSection(FLock);
+            Try
+              FOk := ToolOk;
+              FResultText := ToolResult;
+              FImageRefs := ImageRefs;
+              FFaulted := LocalFaulted;
+              If LocalFaultClass <> '' Then
+                FFaultClass := LocalFaultClass;
+              If LocalFaultMessage <> '' Then
+                FFaultMessage := LocalFaultMessage;
+              If ToolError <> '' Then
+                FErrorText := ToolError
+              Else If LocalFaulted And (FErrorText = '') Then
+                FErrorText := AssistantRecoveryToolError('ExecuteAssistantToolForMode', LocalFaultClass,
+                  'The tool failed.');
+              FDone := True;
+            Finally
+              LeaveCriticalSection(FLock);
+            End;
+            UnbindToolAbortThread;
+          End;
+        End;
+    Except
+      On E: Exception Do
+        Begin
+          ReportPluginException('TIdeToolDispatch.ExecuteOnMain', E);
+          MarkFailed('TIdeToolDispatch.ExecuteOnMain', E.ClassName, E.Message);
+        End;
+    Else
+      MarkFailed('TIdeToolDispatch.ExecuteOnMain', 'Exception', 'The tool failed before it could run.');
+    End;
+  Finally
+    EnsureDone;
+    Release;
+  End;
+End;
+
+Function TIdeToolDispatch.TookFault(Out FaultClass, FaultMessage: String): Boolean;
 Begin
   EnterCriticalSection(FLock);
   Try
     Result := FFaulted;
     FaultClass := FFaultClass;
+    FaultMessage := FFaultMessage;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TIdeToolDispatch.HasFailed: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FFaulted Or (FDone And (Not FOk) And (FErrorText <> ''));
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -937,8 +1142,13 @@ Begin
     NowTick := GetTickCount64;
     EnterCriticalSection(FLock);
     Try
-      If FDone Then
+      If FDone Or FFaulted Then
         Begin
+          { Already failed. Do not sit until timeout and then abandon it. }
+          If FFaulted And (FErrorText = '') Then
+            FErrorText := AssistantRecoveryToolError('TIdeToolDispatch.ExecuteOnMain', FFaultClass,
+              'The tool failed before it could run.');
+          FDone := True;
           Result := True;
           Exit;
         End;
@@ -998,7 +1208,7 @@ End;
 Procedure TAssistantActor.RunOneTool(Const Call: TSamplerToolCall);
 Var
   StartTick: QWord;
-  ResultText, ErrorText, Content, AttachmentsJson, FaultClass: String;
+  ResultText, ErrorText, Content, AttachmentsJson, FaultClass, FaultMessage: String;
   Ok, Faulted: Boolean;
   Svc: TAssistantService;
   Mode: TAssistantMode;
@@ -1022,12 +1232,19 @@ Begin
   ErrorText := '';
   ImageRefs := Nil;
   Tries := 0;
+  FActiveToolName := Call.Name;
+  FActiveToolRecorded := False;
+  If Not AssistantToolIsReadOnly(Call.Name) Then
+    FMutatingToolRan := True;
   BindToolAbortThread(Self);
   Try
     Repeat
+      If FTerminalNoted Then
+        Exit;
       Ok := False;
       Faulted := False;
       FaultClass := '';
+      FaultMessage := '';
       ResultText := '';
       ErrorText := '';
       ImageRefs := Nil;
@@ -1042,15 +1259,15 @@ Begin
             ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode, Self);
             { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
             TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
-            If ToolDispatch.WaitUntilDone(30000) Then
+            If ToolDispatch.WaitUntilDone(30000) Or ToolDispatch.HasFailed Then
               Begin
                 ToolDispatch.CopyOutcome(Ok, ResultText, ErrorText, ImageRefs);
-                Faulted := ToolDispatch.TookFault(FaultClass);
+                Faulted := ToolDispatch.TookFault(FaultClass, FaultMessage);
                 ToolDispatch.Release;
               End
             Else
               Begin
-                { Abandoned: ExecuteOnMain will not start, or will Free after. }
+                { Abandoned only when the dispatch has not already failed. }
                 Ok := False;
                 If Terminated Then
                   ErrorText := CancelWaitHint
@@ -1071,33 +1288,30 @@ Begin
             ReportPluginException('TAssistantActor.RunOneTool', E);
             Faulted := True;
             FaultClass := E.ClassName;
+            FaultMessage := E.Message;
             Ok := False;
             ErrorText := AssistantRecoveryToolError('ExecuteAssistantToolForMode', E.ClassName, E.Message);
             ResultText := '';
           End;
       End;
-      If Ok Or (Not Faulted) Then
+      If Ok Or (Not Faulted) Or FTerminalNoted Then
         Break;
       Inc(Tries);
-      Decision := ClassifyFault(afoTool, 'ExecuteAssistantToolForMode', Call.Name, FaultClass, ErrorText, 0,
+      Decision := ClassifyFault(afoTool, 'ExecuteAssistantToolForMode', Call.Name, FaultClass, FaultMessage, 0,
         NextFaultAttempt('tool:' + Call.Id), True);
       Case Decision.Action Of
         araRetryLastAction:
-          If Tries > 8 Then
+          If FTerminalNoted Or (Tries > 8) Then
             Begin
-              FRecoveryStop := True;
-              FRecoveryStopText := ErrorText;
+              PostTerminalStop('ExecuteAssistantToolForMode', FaultClass, FaultMessage);
               Exit;
             End;
         araContinueTurn:
           Break;
         araStop:
           Begin
-            FRecoveryStop := True;
-            If ErrorText = '' Then
-              FRecoveryStopText := AssistantRecoveryToolError('ExecuteAssistantToolForMode', FaultClass, '')
-            Else
-              FRecoveryStopText := ErrorText;
+            { No tool result: that would be a partial recipe for another round. }
+            PostTerminalStop('ExecuteAssistantToolForMode', FaultClass, FaultMessage);
             Exit;
           End;
       Else
@@ -1107,7 +1321,7 @@ Begin
   Finally
     UnbindToolAbortThread;
   End;
-  If FRecoveryStop Then
+  If FRecoveryStop Or FTerminalNoted Then
     Exit;
   If Ok Then
     Content := ResultText
@@ -1117,13 +1331,12 @@ Begin
   If Not Assigned(Svc) Then
     Begin
       If ServiceWasDetached Then
-        Begin
-          FRecoveryStop := True;
-          FRecoveryStopText := AssistantServiceGoneText;
-        End;
+        PostTerminalStop('TAssistantActor.RunOneTool', 'Exception', AssistantServiceGoneText);
       Exit;
     End;
   Svc.AddToolResult(Call.Id, Content);
+  FActiveToolRecorded := True;
+  FActiveToolName := '';
   AttachmentsJson := '';
   If Ok And (Length(ImageRefs) > 0) And (Not Svc.IsSubagentSession) And
     (SameText(Call.Name, 'read_image') Or SameText(Call.Name, 'write_image')) Then
@@ -1345,6 +1558,9 @@ Begin
     End;
   ToolCallsJson := ToolCallsJson + ']';
   Svc.AddAssistantToolCalls(FContent, ToolCallsJson, FResponseOutputJson);
+  FToolCallsCommitted := True;
+  FActiveToolIndex := -1;
+  FActiveToolRecorded := False;
   I := 0;
   While I <= High(FToolCalls) Do
     Begin
@@ -1373,13 +1589,19 @@ Begin
                 Break;
               Inc(J);
             End;
+          FActiveToolIndex := I;
+          FActiveToolName := Call.Name;
+          FActiveToolRecorded := False;
           RunSpawnRange(I, J - 1);
+          If Not FTerminalNoted Then
+            FActiveToolRecorded := True;
           I := J;
         End
       Else
         Begin
+          FActiveToolIndex := I;
           RunOneTool(Call);
-          If FRecoveryStop Or Terminated Then
+          If FRecoveryStop Or FTerminalNoted Or Terminated Then
             Begin
               FlushReadImages;
               Exit;
@@ -1479,27 +1701,58 @@ End;
 Procedure TAssistantActor.Execute;
 Var
   Decision: TAssistantRecovery;
+  Origin: TAssistantFaultOrigin;
+  Area, ToolName: String;
+  Attempt: Integer;
 Begin
   FRecoveryStop := False;
   FRecoveryStopText := '';
-  Try
-    ExecuteTurn;
-  Except
-    On E: Exception Do
-      Begin
-        ReportPluginException('TAssistantActor.Execute', E);
-        Decision := ClassifyFault(afoTurn, 'TAssistantActor.Execute', '', E.ClassName, E.Message, 0, 1, True);
-        If Decision.Action = araIgnore Then
-          Begin
-            If Terminated Then
-              EmitSnapshot(True, CancelWaitHint, True)
-            Else
-              EmitSnapshot(True, '', True);
-          End
-        Else
-          EmitSnapshot(True, E.Message, True);
-      End;
-  End;
+  FTerminalNoted := False;
+  FMutatingToolRan := False;
+  FActiveToolName := '';
+  FHttpExceptionClass := '';
+  FToolCallsCommitted := False;
+  FActiveToolIndex := -1;
+  FActiveToolRecorded := False;
+  Attempt := 0;
+  Repeat
+    Inc(Attempt);
+    Try
+      ExecuteTurn;
+      Exit;
+    Except
+      On E: Exception Do
+        Begin
+          ReportPluginException('TAssistantActor.Execute', E);
+          If FTerminalNoted Or FFinishEmitted Then
+            Exit;
+          { The failed site classifies. A first access violation must not finish the turn. }
+          FaultSite(Origin, Area, ToolName);
+          Decision := ClassifyFault(Origin, Area, ToolName, E.ClassName, E.Message, 0, NextFaultAttempt(Area), True);
+          Case Decision.Action Of
+            araIgnore:
+              Begin
+                If Terminated Then
+                  EmitSnapshot(True, CancelWaitHint, True)
+                Else
+                  EmitSnapshot(True, '', True);
+                Exit;
+              End;
+            araStop:
+              Begin
+                PostTerminalStop(Area, E.ClassName, E.Message);
+                Exit;
+              End;
+          Else
+            If FTerminalNoted Or FMutatingToolRan Or (Attempt >= 2) Then
+              Begin
+                PostTerminalStop(Area, E.ClassName, E.Message);
+                Exit;
+              End;
+          End;
+        End;
+    End;
+  Until False;
 End;
 
 Procedure TAssistantActor.ExecuteTurn;
@@ -1519,9 +1772,14 @@ Begin
   MaxRounds := MaxRoundsForSession(Svc);
   For RoundNo := 1 To MaxRounds Do
     Begin
-      If Terminated Or (Not Assigned(LockedService)) Then
+      If FTerminalNoted Or Terminated Or (Not Assigned(LockedService)) Then
         Break;
+      FActiveToolName := '';
+      FToolCallsCommitted := False;
+      FActiveToolIndex := -1;
+      FActiveToolRecorded := False;
       FLoopIndex := RoundNo;
+      Try
       If RoundNo > 1 Then
         LogEvent(aekLoopStarted, IntToStr(RoundNo));
       FThinkingBeforeRound := FThinking;
@@ -1537,6 +1795,11 @@ Begin
         FTriedResponses := True;
       If Not DoHttpRound(Url, RequestJson, ErrorText) Then
         Begin
+          If (FHttpExceptionClass <> '') And (Not Terminated) And (ErrorText <> CancelWaitHint) Then
+            Begin
+              PostTerminalStop('TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText);
+              Exit;
+            End;
           If FUseResponses And FTriedResponses And ShouldFallbackFromResponses(ErrorText) And
             (Not Terminated) Then
             Begin
@@ -1548,8 +1811,13 @@ Begin
                 ErrorText := ''
               Else
                 Begin
-                  EmitSnapshot(True, ErrorText, True);
-                  LogEvent(aekError, ErrorText);
+                  If (FHttpExceptionClass <> '') And (Not Terminated) And (ErrorText <> CancelWaitHint) Then
+                    PostTerminalStop('TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText)
+                  Else
+                    Begin
+                      EmitSnapshot(True, ErrorText, True);
+                      LogEvent(aekError, ErrorText);
+                    End;
                   Exit;
                 End;
             End
@@ -1578,12 +1846,10 @@ Begin
           { The first plan write must not end the turn. Status: complete still has to be committed. }
           WritesBefore := FPlanWrites;
           RunTools;
-          If FRecoveryStop Then
+          If FRecoveryStop Or FTerminalNoted Then
             Begin
-              If FRecoveryStopText = '' Then
-                FRecoveryStopText := AssistantServiceGoneText;
-              EmitSnapshot(True, FRecoveryStopText, True);
-              LogEvent(aekError, FRecoveryStopText);
+              If Not FTerminalNoted Then
+                PostTerminalStop('TAssistantActor.ExecuteTurn', 'Exception', FRecoveryStopText);
               Exit;
             End;
           If Terminated Then
@@ -1602,7 +1868,19 @@ Begin
       EmitSnapshot(True, '', True);
       LogEvent(aekTurnEnded, '');
       Exit;
+      Except
+        On E: Exception Do
+          Begin
+            ReportPluginException('TAssistantActor.ExecuteTurn', E);
+            If FTerminalNoted Or FFinishEmitted Then
+              Exit;
+            If Not KeepRoundAfterFault(E) Then
+              Exit;
+          End;
+      End;
     End;
+  If FTerminalNoted Or FFinishEmitted Then
+    Exit;
   If Terminated Then
     EmitSnapshot(True, CancelWaitHint, True)
   Else
@@ -1620,9 +1898,20 @@ Begin
       LogEvent(aekTurnEnded, 'round_cap');
     End;
   Finally
-    Svc := LockedService;
-    If Assigned(Svc) And FSteer.HasPending Then
-      InjectPendingSteer(Svc, Note);
+    Try
+      Svc := LockedService;
+      If Assigned(Svc) And FSteer.HasPending And (Not FTerminalNoted) Then
+        InjectPendingSteer(Svc, Note);
+    Except
+      On E: Exception Do
+        Begin
+          ReportPluginException('TAssistantActor.ExecuteTurn', E);
+          If (Not FFinishEmitted) And (Not FTerminalNoted) And
+            (ClassifyFault(afoTurn, 'TAssistantActor.InjectPendingSteer', '', E.ClassName, E.Message, 0, 1,
+            True).Action = araStop) Then
+            PostTerminalStop('TAssistantActor.InjectPendingSteer', E.ClassName, E.Message);
+        End;
+    End;
   End;
 End;
 

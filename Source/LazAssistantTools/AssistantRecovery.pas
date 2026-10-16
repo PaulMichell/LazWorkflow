@@ -59,6 +59,11 @@ Function DefaultAssistantFault: TAssistantFault;
 Function ClassifyAssistantFault(Const Fault: TAssistantFault): TAssistantRecovery;
 { Tool result text. Names the area and the exception class. Not the log line. }
 Function AssistantRecoveryToolError(Const Area, ErrorClass, ErrorText: String): String;
+{ One conversation note. Area, exception class, message, and that the task has stopped.
+  No tool arguments and no follow-up recipe. }
+Function AssistantRecoveryStopNote(Const Area, ErrorClass, ErrorText: String): String;
+{ Write, replace, git, and compile are not read-only, so a fault there is not replayed. }
+Function AssistantToolIsReadOnly(Const ToolName: String): Boolean;
 Function AssistantServiceGoneText: String;
 { Phrase list formerly in the actor. Connection-loss widening stays here. }
 Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
@@ -169,7 +174,6 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  { Write, replace, git, and compile are absent, so a fault there is not replayed. }
   Result := (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'grep') Or (Name = 'search_in_project') Or (Name = 'get_project_info') Or
     (Name = 'get_active_plan') Or (Name = 'list_plans') Or (Name = 'read_skill') Or
@@ -247,6 +251,24 @@ End;
 Function AssistantServiceGoneText: String;
 Begin
   Result := 'The assistant service is gone.';
+End;
+
+Function AssistantRecoveryStopNote(Const Area, ErrorClass, ErrorText: String): String;
+Var
+  AreaText, ClassText, MessageText: String;
+Begin
+  AreaText := Trim(Area);
+  If AreaText = '' Then
+    AreaText := 'assistant';
+  ClassText := Trim(ErrorClass);
+  If ClassText = '' Then
+    ClassText := 'Exception';
+  MessageText := Trim(ErrorText);
+  MessageText := StringReplace(MessageText, #13, ' ', [rfReplaceAll]);
+  MessageText := StringReplace(MessageText, #10, ' ', [rfReplaceAll]);
+  If MessageText = '' Then
+    MessageText := '(none)';
+  Result := 'The task has stopped. Area: ' + AreaText + '. Exception: ' + ClassText + '. Message: ' + MessageText + '.';
 End;
 
 End.
