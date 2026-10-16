@@ -15,13 +15,12 @@ Uses
 
 Type
   TGitRemotesForm = Class(TForm)
+    AddButton: TButton;
+    EditButton: TButton;
     RemotesGrid: TStringGrid;
     BottomBar: TPanel;
-    LeftButtonsPanel: TPanel;
-    SeparatorBevel: TBevel;
-    AddButton: TButton;
     RemoveButton: TButton;
-    EditButton: TButton;
+    SeparatorBevel: TBevel;
     OKButton: TButton;
     CancelButton: TButton;
     Procedure AddButtonClick(Sender: TObject);

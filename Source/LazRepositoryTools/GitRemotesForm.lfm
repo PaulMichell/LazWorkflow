@@ -1,28 +1,25 @@
 object GitRemotesForm: TGitRemotesForm
-  Left = 300
+  Left = 663
   Height = 360
-  Top = 200
+  Top = 278
   Width = 640
-  BorderStyle = bsSizeable
   Caption = 'Remotes'
   ClientHeight = 360
   ClientWidth = 640
+  Position = poScreenCenter
+  LCLVersion = '5.99.0.0'
   OnCloseQuery = FormCloseQuery
   OnCreate = FormCreate
-  Position = poScreenCenter
-  LCLVersion = '3.0'
   object RemotesGrid: TStringGrid
     Left = 8
-    Height = 296
+    Height = 300
     Top = 8
     Width = 624
     Align = alClient
     BorderSpacing.Around = 8
     ColCount = 2
-    Columns = <>
     FixedCols = 0
-    FixedRows = 1
-    Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRowSelect, goThumbTracking, goColSizing, goSmoothScroll, goTabs]
+    Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goColSizing, goTabs, goRowSelect, goThumbTracking, goSmoothScroll]
     RowCount = 1
     TabOrder = 0
     OnMouseDown = GridMouseDown
@@ -34,12 +31,13 @@ object GitRemotesForm: TGitRemotesForm
   end
   object BottomBar: TPanel
     Left = 0
-    Height = 48
-    Top = 312
+    Height = 44
+    Top = 316
     Width = 640
     Align = alBottom
+    AutoSize = True
     BevelOuter = bvNone
-    ClientHeight = 48
+    ClientHeight = 44
     ClientWidth = 640
     TabOrder = 1
     object SeparatorBevel: TBevel
@@ -50,75 +48,62 @@ object GitRemotesForm: TGitRemotesForm
       Align = alTop
       Shape = bsTopLine
     end
-    object LeftButtonsPanel: TPanel
-      Left = 0
-      Height = 46
-      Top = 2
-      Width = 300
-      Align = alLeft
-      BevelOuter = bvNone
-      ChildSizing.LeftRightSpacing = 8
-      ChildSizing.TopBottomSpacing = 8
-      ChildSizing.HorizontalSpacing = 8
-      ChildSizing.EnlargeHorizontal = crsAnchorAligning
-      ChildSizing.EnlargeVertical = crsAnchorAligning
-      ChildSizing.Layout = cclLeftToRightThenTopToBottom
-      ChildSizing.ControlsPerLine = 4
-      ClientHeight = 46
-      ClientWidth = 300
-      TabOrder = 0
-      object EditButton: TButton
-        Left = 8
-        Height = 28
-        Top = 8
-        Width = 90
-        Caption = 'Edit'
-        OnClick = EditButtonClick
-        TabOrder = 0
-      end
-      object AddButton: TButton
-        Left = 106
-        Height = 28
-        Top = 8
-        Width = 90
-        Caption = 'Add'
-        OnClick = AddButtonClick
-        TabOrder = 1
-      end
-      object RemoveButton: TButton
-        Left = 204
-        Height = 28
-        Top = 8
-        Width = 90
-        Caption = 'Remove'
-        OnClick = RemoveButtonClick
-        TabOrder = 2
-      end
-    end
     object CancelButton: TButton
-      Left = 542
-      Height = 30
-      Top = 10
+      Left = 546
+      Height = 34
+      Top = 6
       Width = 90
       Align = alRight
-      BorderSpacing.Around = 8
+      BorderSpacing.Around = 4
       Cancel = True
       Caption = 'Cancel'
       ModalResult = 2
-      TabOrder = 1
+      TabOrder = 0
     end
     object OKButton: TButton
-      Left = 444
-      Height = 30
-      Top = 10
+      Left = 452
+      Height = 34
+      Top = 6
       Width = 90
       Align = alRight
-      BorderSpacing.Around = 8
-      BorderSpacing.Right = 0
+      BorderSpacing.Around = 4
       Caption = 'OK'
       Default = True
       ModalResult = 1
+      TabOrder = 1
+    end
+    object EditButton: TButton
+      Left = 4
+      Height = 34
+      Top = 6
+      Width = 90
+      Align = alLeft
+      BorderSpacing.Around = 4
+      Caption = 'Edit'
       TabOrder = 2
+      OnClick = EditButtonClick
+    end
+    object AddButton: TButton
+      Left = 98
+      Height = 34
+      Top = 6
+      Width = 90
+      Align = alLeft
+      BorderSpacing.Around = 4
+      Caption = 'Add'
+      TabOrder = 3
+      OnClick = AddButtonClick
+    end
+    object RemoveButton: TButton
+      Left = 192
+      Height = 34
+      Top = 6
+      Width = 90
+      Align = alLeft
+      BorderSpacing.Around = 4
+      Caption = 'Remove'
+      TabOrder = 4
+      OnClick = RemoveButtonClick
     end
   end
 end
