@@ -107,7 +107,7 @@ Do not continue after Stop, after a terminal fault, or after a blocked item that
 When the cap is reached, return Ready and say that automatic continuation stopped, and what remains.
 
 ### 3.3 Always leave a final summary
-Status: not started
+Status: complete
 
 When a turn is legitimately finished and the assistant text is empty, build a short summary from the trace: what was asked, which tools ran, and the outcome. Show that text as the assistant message before Ready.
 
