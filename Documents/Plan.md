@@ -185,7 +185,7 @@ Recovery notes stay on. There is no checkbox to hide them.
 ## 6. Tests
 
 ### 6.1 Cover the new decisions without a live server
-Status: not started
+Status: complete
 
 Extend `Tests/AssistantReconnectTest.lpr`. A socket error still retries with no cap. HTTP 401 still fails once. HTTP 503 retries. A credit body with a future reset waits until that time. A credit body with no reset uses the hourly interval. Stop still interrupts the wait.
 
