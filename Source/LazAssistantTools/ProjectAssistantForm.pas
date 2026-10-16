@@ -475,10 +475,13 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
-  AssistantCodexUsage, AssistantHarness,
+  AssistantCodexUsage, AssistantHarness, AssistantRecovery,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
+
+Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
+  E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
 
 Const
   ChatPaintMinIntervalMs = 80;
@@ -962,7 +965,7 @@ Begin
   Except
     On E: Exception Do
       Begin
-        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.FormDestroy: ' + E.Message);
+        ClassifyFormFault(Self, afoCallbackAfterDetach, 'TProjectAssistantForm.FormDestroy', E, False);
       End;
   End;
 End;
@@ -2185,7 +2188,8 @@ Procedure TProjectAssistantForm.ContinueRunPlan(Data: PtrInt);
 Var
   Idx, Pct: Integer;
 Begin
-  If csDestroying In ComponentState Then Exit;
+  If csDestroying In ComponentState Then
+    Exit;
   If Not FPlanAgentRunning Then
     Exit;
   If FSending Then
@@ -3172,7 +3176,10 @@ Begin
     On E: Exception Do
       Begin
         ReleaseCodexRun;
-        FinishAssistantReply(E.Message);
+        If ClassifyFormFault(Self, afoTurn, 'TProjectAssistantForm.StartCodexReply', E, True) = araIgnore Then
+          FinishAssistantReply('')
+        Else
+          FinishAssistantReply(E.Message);
         Result := False;
       End;
   End;
@@ -3285,7 +3292,7 @@ Begin
     On E: Exception Do
       Begin
         If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
-        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.ElapsedTimerTimer: ' + E.Message);
+        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.ElapsedTimerTimer', E, False);
       End;
   End;
 End;
@@ -3809,7 +3816,7 @@ Begin
       Begin
         FOpenBindPending := False;
         SetOpenBusy(False);
-        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.DeferredBind: ' + E.Message);
+        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.DeferredBind', E, False);
       End;
   End;
 End;
@@ -3830,7 +3837,7 @@ Begin
   Except
     On E: Exception Do
       Begin
-        WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.DeferredShowLastTurn: ' + E.Message);
+        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.DeferredShowLastTurn', E, False);
       End;
   End;
 End;
@@ -4238,6 +4245,32 @@ Begin
     End;
 End;
 
+Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
+  E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction;
+Var
+  Fault: TAssistantFault;
+Begin
+  Result := araIgnore;
+  If Not Assigned(Form) Then
+    Exit;
+  If Assigned(E) Then
+    ReportPluginException(Area, E);
+  Fault := DefaultAssistantFault;
+  Fault.Origin := Origin;
+  Fault.Area := Area;
+  Fault.OwnsTurn := OwnsTurn;
+  Fault.UserStopped := Form.FUserCancelled;
+  Fault.Detached := csDestroying In Form.ComponentState;
+  If Fault.Detached Then
+    Fault.Origin := afoCallbackAfterDetach;
+  If Assigned(E) Then
+    Begin
+      Fault.ErrorClass := E.ClassName;
+      Fault.ErrorText := E.Message;
+    End;
+  Result := ClassifyAssistantFault(Fault).Action;
+End;
+
 Procedure TProjectAssistantForm.LayoutComposer;
 Var
   StackHeight, PromptHeight: Integer;
@@ -4247,20 +4280,26 @@ Begin
   FComposerLayoutLock := True;
   DisableAlign;
   Try
-    If FInputHeight < Scale96ToForm(48) Then FInputHeight := Scale96ToForm(75);
-    If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-      AttachmentStrip.Height := AttachmentStripHeight;
-    StackHeight := ComposerChromeHeight;
-    ComposerStack.Height := StackHeight;
-    PlaceComposerChildren;
-    If Assigned(PromptHost) Then
-      Begin
-        PromptHeight := FInputHeight;
-        If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
-          Inc(PromptHeight, AttachmentStripHeight);
-        PromptHost.Height := PromptHeight;
-        PlacePromptChildren;
-      End;
+    Try
+      If FInputHeight < Scale96ToForm(48) Then FInputHeight := Scale96ToForm(75);
+      If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+        AttachmentStrip.Height := AttachmentStripHeight;
+      StackHeight := ComposerChromeHeight;
+      ComposerStack.Height := StackHeight;
+      PlaceComposerChildren;
+      If Assigned(PromptHost) Then
+        Begin
+          PromptHeight := FInputHeight;
+          If Assigned(AttachmentStrip) And AttachmentStrip.Visible Then
+            Inc(PromptHeight, AttachmentStripHeight);
+          PromptHost.Height := PromptHeight;
+          PlacePromptChildren;
+        End;
+    Except
+      On E: Exception Do
+        If ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.LayoutComposer', E, False) <> araIgnore Then
+          Exit;
+    End;
   Finally
     EnableAlign;
     FComposerLayoutLock := False;
@@ -5273,7 +5312,7 @@ Begin
       FTraceView.Sync(FTrace, True);
   Except
     On E: Exception Do
-      WorkflowLogger.Warning('ProjectAssistant', 'HandleTraceEvent: ' + E.Message);
+      ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.HandleTraceEvent', E, False);
   End;
 End;
 
@@ -5305,7 +5344,7 @@ Begin
         End;
     Except
       On E: Exception Do
-        WorkflowLogger.Warning('ProjectAssistant', 'RefreshChatDisplay: ' + E.Message);
+        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.RefreshChatDisplay', E, False);
     End;
   Finally
     FRefreshingChat := False;
@@ -5393,7 +5432,7 @@ Begin
       End;
   Except
     On E: Exception Do
-      WorkflowLogger.Warning('ProjectAssistant', 'ApplyAssistantSnapshots: ' + E.Message);
+      ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.ApplyAssistantSnapshots', E, False);
   End;
 End;
 
@@ -5583,7 +5622,11 @@ Procedure TProjectAssistantForm.StreamToken(Const ContentSnapshot, ThinkingSnaps
 Var
   FinishErr: String;
 Begin
-  If csDestroying In ComponentState Then Exit;
+  If csDestroying In ComponentState Then
+    Begin
+      ClassifyFormFault(Self, afoCallbackAfterDetach, 'TProjectAssistantForm.StreamToken', Nil, False);
+      Exit;
+    End;
   { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
     Begin
