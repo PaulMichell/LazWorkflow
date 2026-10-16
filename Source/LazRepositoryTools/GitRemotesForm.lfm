@@ -12,7 +12,7 @@ object GitRemotesForm: TGitRemotesForm
   OnCreate = FormCreate
   object RemotesGrid: TStringGrid
     Left = 8
-    Height = 300
+    Height = 306
     Top = 8
     Width = 624
     Align = alClient
@@ -31,13 +31,12 @@ object GitRemotesForm: TGitRemotesForm
   end
   object BottomBar: TPanel
     Left = 0
-    Height = 44
-    Top = 316
+    Height = 38
+    Top = 322
     Width = 640
     Align = alBottom
-    AutoSize = True
     BevelOuter = bvNone
-    ClientHeight = 44
+    ClientHeight = 38
     ClientWidth = 640
     TabOrder = 1
     object SeparatorBevel: TBevel
@@ -50,7 +49,7 @@ object GitRemotesForm: TGitRemotesForm
     end
     object CancelButton: TButton
       Left = 546
-      Height = 34
+      Height = 28
       Top = 6
       Width = 90
       Align = alRight
@@ -62,7 +61,7 @@ object GitRemotesForm: TGitRemotesForm
     end
     object OKButton: TButton
       Left = 452
-      Height = 34
+      Height = 28
       Top = 6
       Width = 90
       Align = alRight
@@ -74,7 +73,7 @@ object GitRemotesForm: TGitRemotesForm
     end
     object EditButton: TButton
       Left = 4
-      Height = 34
+      Height = 28
       Top = 6
       Width = 90
       Align = alLeft
@@ -85,7 +84,7 @@ object GitRemotesForm: TGitRemotesForm
     end
     object AddButton: TButton
       Left = 98
-      Height = 34
+      Height = 28
       Top = 6
       Width = 90
       Align = alLeft
@@ -96,7 +95,7 @@ object GitRemotesForm: TGitRemotesForm
     end
     object RemoveButton: TButton
       Left = 192
-      Height = 34
+      Height = 28
       Top = 6
       Width = 90
       Align = alLeft
