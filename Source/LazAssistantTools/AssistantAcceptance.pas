@@ -14,13 +14,20 @@ Const
     'No explicit Validation: build or Validation: tests criterion; use Done after review.';
 
 Function CheckAssistantAcceptance(Const Section, BuildJSON, TestJSON: String; Out Reason: String): Boolean;
-{ True when Reason is the missing machine-validation result. Run Plan stops instead of repeating the item. }
+{ True when Reason is the missing Validation: build or Validation: tests result. Not a block. }
 Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
+{ True when build or test evidence is missing, stale, failed, or malformed. The item stays in progress. }
+Function AssistantAcceptanceIsEvidenceGap(Const Reason: String): Boolean;
 
 Implementation
 
 Uses
   Classes, SysUtils, fpjson, jsonparser;
+
+Const
+  BuildEvidenceReason = 'A current successful build with complete CodeTools source coverage is required.';
+  TestEvidenceReason = 'Matching current tests with a passing FPCUnit report and sufficient executed tests are required.';
+  MalformedEvidenceReason = 'Validation evidence is unavailable or malformed; use Done after review.';
 
 Function CheckAssistantAcceptance(Const Section, BuildJSON, TestJSON: String; Out Reason: String): Boolean;
 Var
@@ -91,7 +98,7 @@ Begin
     If (Rule <> 'build') And (Rule <> 'tests') Then
       Exit;
     Try
-      Reason := 'A current successful build with complete CodeTools source coverage is required.';
+      Reason := BuildEvidenceReason;
       If BuildJSON = '' Then Exit;
       Build := ObjectJSON(BuildJSON);
       If (Build.Get('kind', '') <> 'build') Or Not Build.Get('done', False) Or Build.Get('stale', True) Or
@@ -100,7 +107,7 @@ Begin
       If Not TJSONObject(Build.Find('dependencies')).Get('sourceClosureComplete', False) Then Exit;
       If Rule = 'tests' Then
         Begin
-          Reason := 'Matching current tests with a passing FPCUnit report and sufficient executed tests are required.';
+          Reason := TestEvidenceReason;
           If TestJSON = '' Then Exit;
           Tests := ObjectJSON(TestJSON);
           If (Tests.Get('kind', '') <> 'test') Or Not Tests.Get('done', False) Or Tests.Get('stale', True) Or
@@ -118,7 +125,7 @@ Begin
     Except On E: Exception Do
       Begin
         Result := False;
-        Reason := 'Validation evidence is unavailable or malformed; use Done after review.';
+        Reason := MalformedEvidenceReason;
       End;
     End;
   Finally
@@ -131,6 +138,11 @@ End;
 Function AssistantAcceptanceIsHumanReview(Const Reason: String): Boolean;
 Begin
   Result := Reason = AssistantAcceptanceHumanReviewReason;
+End;
+
+Function AssistantAcceptanceIsEvidenceGap(Const Reason: String): Boolean;
+Begin
+  Result := (Reason = BuildEvidenceReason) Or (Reason = TestEvidenceReason) Or (Reason = MalformedEvidenceReason);
 End;
 
 End.

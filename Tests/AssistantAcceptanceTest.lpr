@@ -10,9 +10,11 @@ Begin If Not OK Then Begin WriteLn('FAIL ', Name, ': ', Reason); Halt(1); End; W
 Begin
   Check('missing criteria require human completion', Not CheckAssistantAcceptance('## Task', Build, Tests, Reason));
   Check('missing criteria are manual review and must not be repeated', AssistantAcceptanceIsHumanReview(Reason));
+  Check('missing criteria are not an evidence gap', Not AssistantAcceptanceIsEvidenceGap(Reason));
   Check('current build satisfies explicit build criterion', CheckAssistantAcceptance('Validation: build', Build, '', Reason));
   Check('current linked report satisfies tests criterion', CheckAssistantAcceptance('Validation: tests', Build, Tests, Reason));
   Check('build alone does not satisfy tests', Not CheckAssistantAcceptance('Validation: tests', Build, '', Reason));
+  Check('missing tests are an evidence gap', AssistantAcceptanceIsEvidenceGap(Reason));
   Check('unchecked acceptance items block completion', Not CheckAssistantAcceptance('Validation: build' + LineEnding + '- [ ] Inspect UI', Build, Tests, Reason));
   Check('unchecked items stop the plan agent', Not AssistantAcceptanceIsHumanReview(Reason));
   Check('example inside fenced block does not enable completion', Not CheckAssistantAcceptance('```' + LineEnding + 'Validation: build' + LineEnding + '```', Build, Tests, Reason));
@@ -26,9 +28,13 @@ Begin
   Check('running build cannot complete', Not CheckAssistantAcceptance('Validation: build', StringReplace(Build, 'done":true', 'done":false', []), Tests, Reason));
   Check('failed build cannot complete', Not CheckAssistantAcceptance('Validation: build', StringReplace(Build, 'compile_passed', 'compile_failed', []), Tests, Reason));
   Check('failed validation stops the plan agent', Not AssistantAcceptanceIsHumanReview(Reason));
+  Check('failed build is an evidence gap', AssistantAcceptanceIsEvidenceGap(Reason));
   Check('unrelated tests cannot complete', Not CheckAssistantAcceptance('Validation: tests', Build, StringReplace(Tests, 'build1', 'build2', []), Reason));
   Check('stale tests cannot complete', Not CheckAssistantAcceptance('Validation: tests', Build, StringReplace(Tests, 'stale":false', 'stale":true', []), Reason));
   Check('insufficient executed tests cannot complete', Not CheckAssistantAcceptance('Validation: tests', Build, StringReplace(Tests, 'executed":2', 'executed":0', []), Reason));
   Check('exit-only tests cannot complete', Not CheckAssistantAcceptance('Validation: tests', Build, StringReplace(Tests, 'testReport', 'ignoredReport', []), Reason));
   Check('malformed evidence cannot complete', Not CheckAssistantAcceptance('Validation: build', '[]', Tests, Reason));
+  Check('malformed evidence is an evidence gap', AssistantAcceptanceIsEvidenceGap(Reason));
+  Check('current build satisfies explicit build criterion again', CheckAssistantAcceptance('Validation: build', Build, '', Reason));
+  Check('a satisfied build is not an evidence gap', Not AssistantAcceptanceIsEvidenceGap(Reason));
 End.

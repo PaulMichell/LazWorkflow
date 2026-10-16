@@ -1878,6 +1878,26 @@ Procedure TProjectAssistantForm.TryAutoCompleteBuildWork(Const StreamErrorText: 
 Var
   PlanRel, Err, Note, CurrentPlan: String;
   Idx: Integer; Editor: TSourceEditorInterface;
+
+  Procedure LeaveInProgress(Const Reason: String);
+  Begin
+    { Same item on the next plan turn. Do not mark blocked and do not stop the run. }
+    If FPlanAgentRunning Then
+      FPlanAgentResumeIndex := FBuildWorkSectionIndex;
+    SetBuildStatusFeedback(Reason);
+    If Reason = '' Then
+      Exit;
+    If FViewingLive Then
+      Begin
+        If FDisplaySystemNote <> '' Then
+          FDisplaySystemNote := FDisplaySystemNote + LineEnding + LineEnding + Reason
+        Else
+          FDisplaySystemNote := Reason;
+      End
+    Else
+      SetCurrentSystemNote(Reason);
+  End;
+
 Begin
   Idx := FBuildWorkSectionIndex;
   If Idx < 0 Then Exit;
@@ -1895,23 +1915,12 @@ Begin
       SetBuildStatusFeedback(Format('%s → complete', [FBuildWorkSectionTitle]));
       Exit;
     End;
-  { A clean compile is not enough. Only Validation: build or Validation: tests with matching evidence.
-    An item with no machine criterion is marked blocked and the plan agent stops instead of repeating it. }
+  { A missing Validation: build or Validation: tests line is not a block. A failed build is not either.
+    Leave the item in progress and report the reason so the same item can continue. }
   If Not CheckAssistantAcceptance(FBuildWorkBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
-      If FPlanAgentRunning And AssistantAcceptanceIsHumanReview(Note) Then
-        Begin
-          { Do not rebuild the same item until a person supplies the missing evidence. }
-          FPlanAgentResumeIndex := -1;
-          If (FBuildWorkPlanPath <> '') And (FBuildWorkSectionIndex >= 0) And
-            Not SetPlanSectionStatus(FBuildWorkPlanPath, FBuildWorkSectionIndex, pssBlocked, Err) Then
-            Note := Note + ' Could not mark the item blocked: ' + Err;
-          SetBuildStatusFeedback(Format(
-            '%s is blocked for manual review. The plan agent will not repeat it.',
-            [FBuildWorkSectionTitle]));
-          StopRunPlan('manual review remains for "' + FBuildWorkSectionTitle +
-            '". It is marked blocked. Add the missing evidence or set it in progress, then Run Plan again.');
-        End
+      If AssistantAcceptanceIsHumanReview(Note) Or AssistantAcceptanceIsEvidenceGap(Note) Then
+        LeaveInProgress(Note)
       Else
         Begin
           FPlanAgentResumeIndex := -1;
@@ -1924,9 +1933,7 @@ Begin
   If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
     Begin
       Note := Note + ' This working root is a Git repository, so the item stays in progress until a commit contains the completion.';
-      SetBuildStatusFeedback(Note);
-      If FPlanAgentRunning Then
-        StopRunPlan(Note);
+      LeaveInProgress(Note);
       Exit;
     End;
   If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
