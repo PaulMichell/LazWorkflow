@@ -127,7 +127,7 @@ Leave the item in progress and let item 3.2 continue it. `CheckAssistantAcceptan
 A failed build or a missing Git commit also stays in progress. Report the reason. Do not mark the item blocked.
 
 ### 4.2 Write a user action on every real block
-Status: not started
+Status: complete
 
 Block only when a person must act:
 
