@@ -46,6 +46,9 @@ Type
     Caption: String;
     Hint: String;
     FetchedAt: TDateTime;
+    { Parser reset. Not copied from the hint text. }
+    ResetsAt: TDateTime;
+    HasReset: Boolean;
   End;
 
   { HTTP backends ignore RuntimePath and ProfileDir. Codex uses them so this unit does not reach into the form. }
@@ -92,6 +95,8 @@ Function AccountUsagePlanText(Const ConnectionId: String): String;
 Function AccountUsageSettingsText(Const ConnectionId: String): String;
 /// Makes a footer snapshot readable by Settings. Unknown or blank snapshots are ignored.
 Procedure PublishAccountUsageSnapshot(Const Snapshot: TAccountUsageSnapshot);
+/// Newest published snapshot, including a reset when a parser stored one.
+Function LastAccountUsageSnapshot(Out Snapshot: TAccountUsageSnapshot): Boolean;
 /// Newer of the footer slot and the last successful query. Empty connection id yields the slot item.
 Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
 Function ParseOpenRouterAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
@@ -146,6 +151,8 @@ Begin
   Snapshot.Caption := '';
   Snapshot.Hint := '';
   Snapshot.FetchedAt := 0;
+  Snapshot.ResetsAt := 0;
+  Snapshot.HasReset := False;
 End;
 
 Function FindQuery(Const BackendId: String): TAccountUsageQuery;
@@ -431,6 +438,30 @@ Begin
   RememberAccountUsage(Snapshot);
 End;
 
+Function LastAccountUsageSnapshot(Out Snapshot: TAccountUsageSnapshot): Boolean;
+Var
+  I: Integer;
+  Best: TDateTime;
+Begin
+  Result := False;
+  ClearAccountUsageSnapshot(Snapshot);
+  If Not RegistryReady Then
+    Exit;
+  Best := 0;
+  EnterCriticalSection(RegistryLock);
+  Try
+    For I := 0 To High(PublishedUsage) Do
+      If PublishedUsage[I].Known And (PublishedUsage[I].FetchedAt >= Best) Then
+        Begin
+          Best := PublishedUsage[I].FetchedAt;
+          Snapshot := PublishedUsage[I];
+          Result := True;
+        End;
+  Finally
+    LeaveCriticalSection(RegistryLock);
+  End;
+End;
+
 Function AccountUsageForFooter(Const ConnectionId: String; Const SlotItem: TAccountUsageSnapshot): TAccountUsageSnapshot;
 Var
   Published: TAccountUsageSnapshot;
@@ -693,6 +724,34 @@ Begin
   Result := WindowTag(Window.Minutes) + ' ' + PercentText(RemainingPercent(Window.UsedPercent)) + ' left';
 End;
 
+Procedure NoteSnapshotUnixReset(Var Snapshot: TAccountUsageSnapshot; ResetUnix: Int64);
+Begin
+  Snapshot.HasReset := False;
+  Snapshot.ResetsAt := 0;
+  If ResetUnix <= 0 Then
+    Exit;
+  { Same conversion as the Codex hint clock. UnixToDateTime is local on this compiler. }
+  Snapshot.ResetsAt := UnixToDateTime(ResetUnix);
+  Snapshot.HasReset := Snapshot.ResetsAt > 0;
+End;
+
+Function ChosenCodexReset(Const Primary, Secondary: TUsageWindow; Const ReachedName: String): Int64;
+Begin
+  Result := 0;
+  If SameText(ReachedName, 'secondary') And Secondary.HasReset Then
+    Exit(Secondary.ResetsAt);
+  If SameText(ReachedName, 'primary') And Primary.HasReset Then
+    Exit(Primary.ResetsAt);
+  If Primary.HasReset And (Primary.UsedPercent >= 100) Then
+    Exit(Primary.ResetsAt);
+  If Secondary.HasReset And (Secondary.UsedPercent >= 100) Then
+    Exit(Secondary.ResetsAt);
+  If Primary.HasReset Then
+    Exit(Primary.ResetsAt);
+  If Secondary.HasReset Then
+    Result := Secondary.ResetsAt;
+End;
+
 Function WindowHint(Const Window: TUsageWindow): String;
 Var
   When: String;
@@ -806,6 +865,7 @@ Begin
     Snapshot.Known := True;
     Snapshot.Caption := Caption;
     Snapshot.Hint := Hint;
+    NoteSnapshotUnixReset(Snapshot, ChosenCodexReset(Primary, Secondary, ReachedName));
     NoteFetched(Snapshot);
     RememberAccountUsage(Snapshot);
     Result := True;
@@ -1441,6 +1501,8 @@ Begin
     Snapshot.Hint := UsageLimitLabel(PeriodType, StartAt, EndAt) + ': ' + WholePercentText(Percent);
     If HasEnd Then
       Begin
+        Snapshot.ResetsAt := EndAt;
+        Snapshot.HasReset := True;
         ResetText := FormatDateTime('mmmm d, hh:nn', EndAt);
         Snapshot.Hint := Snapshot.Hint + LineEnding + 'Next reset: ' + ResetText;
       End;

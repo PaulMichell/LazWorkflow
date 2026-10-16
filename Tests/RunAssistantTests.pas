@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..31] Of String = (
+  CoreTestNames: Array[0..32] Of String = (
     'AssistantUtf8StreamTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
     'AssistantArchiveRollbackTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
@@ -25,7 +25,8 @@ Const
     'AssistantFileCreationTest', 'AssistantCodexHandshakeTest', 'AssistantTestRunnerTest',
     'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantWorkTargetTest',
     'AssistantGeneratedImageTest', 'AssistantWriteImageTest', 'AssistantBuildJobTest', 'AssistantGitTest',
-    'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest');
+    'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
+    'AssistantTurnFinishTest');
   GuiTestNames: Array[0..17] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',

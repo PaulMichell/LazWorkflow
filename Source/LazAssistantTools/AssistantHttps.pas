@@ -58,6 +58,7 @@ Type
     FRequest: Pointer;
     FClosedByAbort: Boolean;
     FHttpClient: TObject;
+    FResponseRetryAfter: String;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -69,6 +70,8 @@ Type
     Procedure Abort;
     { True after Abort closed native handles — caller must not close them again. }
     Property ClosedByAbort: Boolean Read FClosedByAbort;
+    { Response Retry-After, when the transport saw one. Empty if absent. }
+    Property ResponseRetryAfter: String Read FResponseRetryAfter Write FResponseRetryAfter;
   End;
 
 { Streaming JSON POST. On Windows uses WinINet (no OpenSSL). Elsewhere OpenSSL/TFPHTTPClient. }
@@ -235,6 +238,7 @@ Begin
   FRequest := Nil;
   FHttpClient := Nil;
   FClosedByAbort := False;
+  FResponseRetryAfter := '';
 End;
 
 Destructor THttpsStreamControl.Destroy;
@@ -973,7 +977,54 @@ Begin
     ResponseBody, StatusCode, ErrorText, IOTimeoutMs);
 End;
 
+Function HeaderLineValue(Headers: TStrings; Const Name: String): String;
+Var
+  I, Colon: Integer;
+  Line, Key: String;
+Begin
+  Result := '';
+  If Not Assigned(Headers) Then
+    Exit;
+  For I := 0 To Headers.Count - 1 Do
+    Begin
+      Line := Headers[I];
+      Colon := Pos(':', Line);
+      If Colon < 2 Then
+        Continue;
+      Key := Trim(Copy(Line, 1, Colon - 1));
+      If SameText(Key, Name) Then
+        Exit(Trim(Copy(Line, Colon + 1, MaxInt)));
+    End;
+End;
+
+Procedure RememberRetryAfter(Client: TFPHTTPClient; Control: THttpsStreamControl);
+Begin
+  If (Not Assigned(Control)) Or (Not Assigned(Client)) Then
+    Exit;
+  Control.ResponseRetryAfter := HeaderLineValue(Client.ResponseHeaders, 'Retry-After');
+End;
+
 {$IFDEF WINDOWS}
+Function WinINetRetryAfter(Request: HINTERNET): String;
+Var
+  Buf: Array[0..255] Of Char;
+  Size, Index: DWORD;
+  Name: String;
+  I: Integer;
+Begin
+  Result := '';
+  If Request = Nil Then
+    Exit;
+  FillChar(Buf, SizeOf(Buf), 0);
+  Name := 'Retry-After';
+  For I := 1 To Length(Name) Do
+    Buf[I - 1] := Name[I];
+  Size := SizeOf(Buf);
+  Index := 0;
+  If HttpQueryInfo(Request, HTTP_QUERY_CUSTOM, @Buf[0], Size, Index) Then
+    Result := Trim(String(PChar(@Buf[0])));
+End;
+
 Function WinINetPostJsonStream(Const Url, JsonBody, ExtraHeaders: String;
   OnChunk: THttpsChunkEvent; ShouldStop: THttpsStopCheck; Control: THttpsStreamControl;
   Out StatusCode: Integer; Out ErrorText: String): Boolean;
@@ -1074,6 +1125,8 @@ Begin
     Index := 0;
     If HttpQueryInfo(Request, HTTP_QUERY_STATUS_CODE, @StatusBuf[0], StatusSize, Index) Then
       StatusCode := StrToIntDef(string(StatusBuf), 0);
+    If Assigned(Control) Then
+      Control.ResponseRetryAfter := WinINetRetryAfter(Request);
 
     Stopped := False;
     ReadOk := True;
@@ -1190,6 +1243,7 @@ Begin
       Client.RequestBody := BodyStream;
       Client.HTTPMethod('POST', Url, OutStream, []);
       StatusCode := Client.ResponseStatusCode;
+      RememberRetryAfter(Client, Control);
       Result := True;
     Except
       On E: EAbort Do
@@ -1205,6 +1259,7 @@ Begin
             ErrorText := E.ClassName;
           If (Pos('OpenSSL', ErrorText) > 0) Or (Pos('initialize', LowerCase(ErrorText)) > 0) Then
             ErrorText := OpenSSLMissingHint + LineEnding + '(' + E.Message + ')';
+          RememberRetryAfter(Client, Control);
         End;
     End;
   Finally

@@ -86,6 +86,9 @@ Type
     FSearchMode: String;
     FSearchCitations: Boolean;
     FHasReportedUsage: Boolean;
+    FTurnTruncated: Boolean;
+    FTurnToolRoundCap: Boolean;
+    FTurnHadToolRound: Boolean;
     FReportedInputTokens: Integer;
     FReportedOutputTokens: Integer;
     FReportedReasoningTokens: Integer;
@@ -104,6 +107,7 @@ Type
     Procedure ReapOrphanThreads(WaitMs: QWord);
     Procedure AbandonStreamThread;
     Procedure ClearStreamThread;
+    Procedure ClearTurnFinishFacts;
     Procedure RebuildSystemPrompt;
     Function EscapedContent(Var Msg: TAssistantMessage): String;
     Function EscapedToolCallId(Var Msg: TAssistantMessage): String;
@@ -167,6 +171,9 @@ Type
     Procedure NoteReportedUsage(InputTokens, OutputTokens, ReasoningTokens: Integer; HasReasoning: Boolean);
     Function TakeReportedUsage(Out InputTokens, OutputTokens, ReasoningTokens: Integer;
       Out HasReasoning: Boolean): Boolean;
+    { Written by the actor before the finish snapshot. The form reads them before Ready. }
+    Procedure NoteTurnFinishFacts(Truncated, ToolRoundCap, HadToolRound: Boolean);
+    Procedure TakeTurnFinishFacts(Out Truncated, ToolRoundCap, HadToolRound: Boolean);
     { One-shot non-streaming completion; does not touch chat history or tools.
       Intended for short side tasks (e.g. commit message suggestion). }
     Function CompleteOnce(Const SystemPrompt, UserPrompt: String;
@@ -1122,6 +1129,14 @@ Begin
       End;
   End;
   FBusy := False;
+  ClearTurnFinishFacts;
+End;
+
+Procedure TAssistantService.ClearTurnFinishFacts;
+Begin
+  FTurnTruncated := False;
+  FTurnToolRoundCap := False;
+  FTurnHadToolRound := False;
 End;
 
 Procedure TAssistantService.ApplyConfig(Config: TAssistantConfig);
@@ -2264,6 +2279,7 @@ Begin
     End;
 
   ClearStreamThread;
+  ClearTurnFinishFacts;
   FHasReportedUsage := False;
   FReportedInputTokens := 0;
   FReportedOutputTokens := 0;
@@ -2362,6 +2378,21 @@ Begin
   FReportedOutputTokens := 0;
   FReportedReasoningTokens := 0;
   FReportedHasReasoning := False;
+End;
+
+Procedure TAssistantService.NoteTurnFinishFacts(Truncated, ToolRoundCap, HadToolRound: Boolean);
+Begin
+  FTurnTruncated := Truncated;
+  FTurnToolRoundCap := ToolRoundCap;
+  FTurnHadToolRound := HadToolRound;
+End;
+
+Procedure TAssistantService.TakeTurnFinishFacts(Out Truncated, ToolRoundCap, HadToolRound: Boolean);
+Begin
+  Truncated := FTurnTruncated;
+  ToolRoundCap := FTurnToolRoundCap;
+  HadToolRound := FTurnHadToolRound;
+  ClearTurnFinishFacts;
 End;
 
 Initialization

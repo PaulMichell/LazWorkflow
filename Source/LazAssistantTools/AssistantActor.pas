@@ -65,12 +65,16 @@ Type
     FToolCallsCommitted: Boolean;
     FActiveToolIndex: Integer;
     FActiveToolRecorded: Boolean;
+    FHadToolRound: Boolean;
     { Snapshotted when the turn starts. WaitForReconnect reads the field DoHttpRound sets. }
     FReconnectIntervalMs: QWord;
     FReconnectWaitMs: QWord;
+    FCreditIntervalMs: QWord;
     Procedure PostConnectionNote(Const Sentence: String);
+    Procedure ApplyCreditWait(Const ErrorText, Body, RetryAfter: String);
+    Procedure ApplyRateLimitWait(Const ErrorText, RetryAfter: String);
     Function ClassifyFault(Origin: TAssistantFaultOrigin; Const Area, ToolName, ErrorClass, ErrorText: String;
-      HttpStatus, Attempt: Integer; OwnsTurn: Boolean): TAssistantRecovery;
+      HttpStatus, Attempt: Integer; OwnsTurn: Boolean; Const ResponseBody: String = ''): TAssistantRecovery;
     Function NextFaultAttempt(Const Site: String): Integer;
     Function ServiceWasDetached: Boolean;
     Procedure FaultSite(Out Origin: TAssistantFaultOrigin; Out Area, ToolName: String);
@@ -85,6 +89,7 @@ Type
     Procedure QueueTrace(Const Event: TAssistantEvent);
     Procedure NotifyTrace;
     Procedure EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
+    Procedure NoteReadyFacts(Truncated, ToolRoundCap: Boolean);
     Procedure NotifyMain;
     Procedure SetPhase(Phase: TAssistantPhase);
     Procedure ApplyParserEvents(FromIndex: Integer);
@@ -122,7 +127,8 @@ Type
 Implementation
 
 Uses
-  AssistantTools, AssistantSubagents, AssistantImageAdapters, AssistantGeneratedImage, WorkflowLog;
+  AssistantTools, AssistantSubagents, AssistantImageAdapters, AssistantGeneratedImage, AssistantAccountUsage,
+  WorkflowLog;
 
 Const
   MaxAskToolRounds = 12;
@@ -206,8 +212,10 @@ Begin
   FToolCallsCommitted := False;
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
+  FHadToolRound := False;
   FReconnectIntervalMs := AssistantReconnectIntervalMs;
   FReconnectWaitMs := FReconnectIntervalMs;
+  FCreditIntervalMs := AssistantCreditIntervalMs;
 End;
 
 Destructor TAssistantActor.Destroy;
@@ -300,8 +308,8 @@ Begin
   Result := FFaultAttempt;
 End;
 
-Function TAssistantActor.ClassifyFault(Origin: TAssistantFaultOrigin; Const Area, ToolName, ErrorClass,
-  ErrorText: String; HttpStatus, Attempt: Integer; OwnsTurn: Boolean): TAssistantRecovery;
+Function TAssistantActor.ClassifyFault(Origin: TAssistantFaultOrigin; Const Area, ToolName, ErrorClass, ErrorText: String;
+  HttpStatus, Attempt: Integer; OwnsTurn: Boolean; Const ResponseBody: String): TAssistantRecovery;
 Var
   Fault: TAssistantFault;
 Begin
@@ -317,6 +325,7 @@ Begin
   Fault.ServiceGone := ServiceWasDetached;
   Fault.OwnsTurn := OwnsTurn;
   Fault.Detached := False;
+  Fault.ResponseBody := ResponseBody;
   Result := ClassifyAssistantFault(Fault);
 End;
 
@@ -369,6 +378,36 @@ Begin
     Exit;
   EmitSnapshot(False, Sentence, True);
   LogEvent(aekRecovery, Sentence);
+End;
+
+Procedure TAssistantActor.ApplyCreditWait(Const ErrorText, Body, RetryAfter: String);
+Var
+  Snapshot: TAccountUsageSnapshot;
+  RetryAt: TDateTime;
+  IntervalMs: QWord;
+Begin
+  If Not LastAccountUsageSnapshot(Snapshot) Then
+    ClearAccountUsageSnapshot(Snapshot);
+  IntervalMs := FCreditIntervalMs;
+  If IntervalMs = 0 Then
+    IntervalMs := AssistantCreditIntervalMs;
+  FReconnectWaitMs := AssistantCreditWaitMs(ErrorText, Body, RetryAfter, Snapshot.HasReset, Snapshot.ResetsAt,
+    IntervalMs, Now, RetryAt);
+  PostConnectionNote(AssistantCreditWaitNote(ErrorText, RetryAt));
+  WorkflowLogger.Warning('AssistantActor',
+    Format('Waiting for credits until %s: %s', [FormatDateTime('yyyy-mm-dd hh:nn', RetryAt), ErrorText]));
+End;
+
+Procedure TAssistantActor.ApplyRateLimitWait(Const ErrorText, RetryAfter: String);
+Begin
+  FReconnectWaitMs := AssistantRateLimitWaitMs(RetryAfter, FReconnectIntervalMs, Now);
+  If FReconnectWaitMs = 0 Then
+    FReconnectWaitMs := FReconnectIntervalMs;
+  If FReconnectWaitMs = 0 Then
+    FReconnectWaitMs := AssistantReconnectIntervalMs;
+  PostConnectionNote(AssistantRateLimitWaitNote(ErrorText));
+  WorkflowLogger.Warning('AssistantActor',
+    Format('Rate limited, waiting %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
 End;
 
 Function TAssistantActor.KeepRoundAfterFault(E: Exception): Boolean;
@@ -605,6 +644,15 @@ Begin
   End;
 End;
 
+Procedure TAssistantActor.NoteReadyFacts(Truncated, ToolRoundCap: Boolean);
+Var
+  Svc: TAssistantService;
+Begin
+  Svc := LockedService;
+  If Assigned(Svc) Then
+    Svc.NoteTurnFinishFacts(Truncated, ToolRoundCap, FHadToolRound);
+End;
+
 Procedure TAssistantActor.EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
 Var
   NowTick: QWord;
@@ -743,7 +791,7 @@ End;
 Function TAssistantActor.DoHttpRound(Const Url, RequestJson: String; Out ErrorText: String): Boolean;
 Var
   Code: Integer;
-  Headers, LastErr: String;
+  Headers, LastErr, RetryAfter: String;
   Control: THttpsStreamControl;
   Svc: TAssistantService;
   Decision: TAssistantRecovery;
@@ -765,6 +813,7 @@ Begin
         End;
       Code := 0;
       ErrorText := '';
+      RetryAfter := '';
       FHttpExceptionClass := '';
       FParser.Reset;
       { Discard only the interrupted attempt, retaining completed tool rounds. }
@@ -798,27 +847,17 @@ Begin
               LastErr := HttpsResponseErrorMessage(FResponsePrefix);
               If LastErr <> '' Then ErrorText := Format('HTTP %d: %s', [Code, LastErr]);
             End
-          Else If FParser.Failed Then
+          Else If FParser.Incomplete Or FParser.Completed Then
             Begin
-              ErrorText := FParser.ErrorText;
-              If ErrorText = '' Then
-                ErrorText := 'response.failed';
-            End
-          Else If Not FParser.Completed Then
-            ErrorText := 'Response stream ended before completion; no tools were executed.'
-          Else If FParser.Incomplete Then
-            Begin
-              ErrorText := FParser.ErrorText;
-              If ErrorText = '' Then
-                ErrorText := 'response.incomplete';
-            End
-          Else
-            Begin
+              { response.incomplete and finish_reason length are a truncated reply, not a turn error. }
               If FParser.Thinking <> '' Then
                 FThinking := FThinkingBeforeRound + FParser.Thinking;
               FContent := FParser.Content;
               FResponseOutputJson := FParser.OutputJson;
-              FToolCalls := FParser.ToolCalls;
+              If FParser.Completed Then
+                FToolCalls := FParser.ToolCalls
+              Else
+                SetLength(FToolCalls, 0);
               If FParser.UsageReported Then
                 Begin
                   Svc := LockedService;
@@ -829,7 +868,15 @@ Begin
               FHttpFaultAttempt := 0;
               Result := True;
               Exit;
-            End;
+            End
+          Else If FParser.Failed Then
+            Begin
+              ErrorText := FParser.ErrorText;
+              If ErrorText = '' Then
+                ErrorText := 'response.failed';
+            End
+          Else
+            ErrorText := 'Response stream ended before completion; no tools were executed.';
         Except
           On E: Exception Do
             Begin
@@ -844,6 +891,7 @@ Begin
             End;
         End;
       Finally
+        RetryAfter := Control.ResponseRetryAfter;
         EnterCriticalSection(FHttpLock);
         Try
           FHttpControl := Nil;
@@ -860,27 +908,44 @@ Begin
             Exit;
         End;
       Decision := ClassifyFault(afoHttpRound, 'TAssistantActor.DoHttpRound', '', '', ErrorText, Code,
-        FHttpFaultAttempt + 1, True);
+        FHttpFaultAttempt + 1, True, FResponsePrefix);
       If Decision.Action <> araRetryLastAction Then
         Exit;
-      If Decision.WaitForConnection Then
-        Begin
-          { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
-          FReconnectWaitMs := FReconnectIntervalMs;
-          If FReconnectWaitMs = 0 Then
-            FReconnectWaitMs := AssistantReconnectIntervalMs;
-          PostConnectionNote(AssistantReconnectWaitNote(ErrorText));
-          WorkflowLogger.Warning('AssistantActor',
-            Format('Reconnecting in %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
-          If Not WaitForReconnect Then
-            Break;
-          PostConnectionNote(AssistantReconnectResumeNote);
-        End
+      Case Decision.HttpWait Of
+        ahwCredits:
+          Begin
+            { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
+            ApplyCreditWait(ErrorText, FResponsePrefix, RetryAfter);
+            If Not WaitForReconnect Then
+              Break;
+            PostConnectionNote(AssistantReconnectResumeNote);
+          End;
+        ahwRateLimit:
+          Begin
+            ApplyRateLimitWait(ErrorText, RetryAfter);
+            If Not WaitForReconnect Then
+              Break;
+            PostConnectionNote(AssistantReconnectResumeNote);
+          End;
+        ahwConnection:
+          Begin
+            { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
+            FReconnectWaitMs := FReconnectIntervalMs;
+            If FReconnectWaitMs = 0 Then
+              FReconnectWaitMs := AssistantReconnectIntervalMs;
+            PostConnectionNote(AssistantReconnectWaitNote(ErrorText));
+            WorkflowLogger.Warning('AssistantActor',
+              Format('Reconnecting in %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
+            If Not WaitForReconnect Then
+              Break;
+            PostConnectionNote(AssistantReconnectResumeNote);
+          End;
       Else
         Begin
           PostRecovery(araRetryLastAction, afoHttpRound, 'TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText);
           FHttpFaultAttempt := FHttpFaultAttempt + 1;
         End;
+      End;
     End;
   ErrorText := CancelWaitHint;
 End;
@@ -1588,6 +1653,7 @@ Begin
   Svc := LockedService;
   If Not Assigned(Svc) Then
     Exit;
+  FHadToolRound := True;
   ToolCallsJson := '[';
   For I := 0 To High(FToolCalls) Do
     Begin
@@ -1764,6 +1830,7 @@ Begin
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
   FReconnectIntervalMs := AssistantReconnectIntervalMs;
+  FCreditIntervalMs := AssistantCreditIntervalMs;
   Attempt := 0;
   Repeat
     Inc(Attempt);
@@ -1810,11 +1877,14 @@ Procedure TAssistantActor.ExecuteTurn;
 Var
   Url, RequestJson, ErrorText, CapNote, Note: String;
   RoundNo, I, MaxRounds, WritesBefore: Integer;
+  RoundTruncated: Boolean;
   HasTools: Boolean;
   Svc: TAssistantService;
 Begin
   BeginWriteImageTurn;
   ClearTurnGeneratedImages;
+  FHadToolRound := False;
+  RoundTruncated := False;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
   EmitSnapshot(False, 'Waiting for first token…', True);
@@ -1884,6 +1954,7 @@ Begin
         End;
       If Terminated Then
         Break;
+      RoundTruncated := FParser.Incomplete;
       HasTools := False;
       For I := 0 To High(FToolCalls) Do
         If Trim(FToolCalls[I].Name) <> '' Then
@@ -1907,6 +1978,7 @@ Begin
             Break;
           If (FPlanWrites > WritesBefore) And (WritesBefore > 0) Then
             Begin
+              NoteReadyFacts(RoundTruncated, False);
               EmitSnapshot(True, '', True);
               LogEvent(aekTurnEnded, 'plan_write');
               Exit;
@@ -1916,6 +1988,7 @@ Begin
         End;
       If DrainSteerIntoHistory Then
         Continue;
+      NoteReadyFacts(RoundTruncated, False);
       EmitSnapshot(True, '', True);
       LogEvent(aekTurnEnded, '');
       Exit;
@@ -1938,15 +2011,14 @@ Begin
     Begin
       CapNote :=
         '*(Tool-round limit reached after ' + IntToStr(MaxRounds) +
-        ' rounds. Edits already applied are in the project. Send a follow-up to continue ' +
-        'from the last tool results — do not re-read files you already have unless a later ' +
-        'replace_in_file failed.)*';
+        ' rounds. Edits already applied are in the project.)*';
       If Trim(FContent) = '' Then
         FContent := CapNote
       Else
         FContent := TrimRight(FContent) + LineEnding + LineEnding + CapNote;
+      NoteReadyFacts(False, True);
       EmitSnapshot(True, '', True);
-      LogEvent(aekTurnEnded, 'round_cap');
+      LogEvent(aekTurnEnded, 'tool_round_cap');
     End;
   Finally
     Try

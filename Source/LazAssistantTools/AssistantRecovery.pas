@@ -4,7 +4,10 @@ Unit AssistantRecovery;
 
   Owns the decision to ignore, retry, continue, or stop. Callers log with
   ReportPluginException and do not copy this policy. A disconnect is retried
-  without the fault-retry cap; the HTTP round still owns that wait. }
+  without the fault-retry cap; the HTTP round still owns that wait. A credit
+  failure waits until reset, or the credit interval, and is not the reconnect
+  interval. A dropped Codex or Claude process uses those same waits. It does
+  not parse Codex frames. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,6 +21,8 @@ Const
   DefaultFaultRetryCap = 1;
   { Reconnect interval until item 5.1 stores the setting. Snapshotted when the turn starts. }
   DefaultReconnectIntervalSeconds = 30;
+  { Credit retry when the reset is unknown, until item 5.1 stores the setting. }
+  DefaultCreditIntervalMinutes = 60;
   { Stable phrases. IsAssistantProgressStatus matches these so a late snapshot is not an error. }
   AssistantRecoveryRetryHttp = 'Retrying the HTTP round.';
   AssistantRecoveryRetryTool = 'Retrying the read-only tool.';
@@ -25,6 +30,8 @@ Const
   AssistantRecoveryIgnorePaint = 'Ignoring a paint fault.';
   AssistantRecoveryIgnoreCallback = 'Ignoring a callback after detach.';
   AssistantRecoveryWaitReconnect = 'Waiting to reconnect.';
+  AssistantRecoveryWaitCredits = 'Waiting for credits.';
+  AssistantRecoveryWaitRateLimit = 'Waiting for the rate limit.';
   AssistantRecoveryResumeCall = 'Resuming the call.';
 
 Type
@@ -57,12 +64,23 @@ Type
     ServiceGone: Boolean;
     OwnsTurn: Boolean;
     Detached: Boolean;
+    { Raw response body. Credit words may be here when the status line is only a code. }
+    ResponseBody: String;
   End;
+
+  { How long an HTTP retry waits. None uses the fault-retry cap and does not sleep. }
+  TAssistantHttpWait = (
+    ahwNone,
+    ahwConnection,
+    ahwRateLimit,
+    ahwCredits
+  );
 
   TAssistantRecovery = Record
     Action: TAssistantRecoveryAction;
     { True only for a disconnect retry. The fault-retry cap does not apply. }
     WaitForConnection: Boolean;
+    HttpWait: TAssistantHttpWait;
   End;
 
 Function DefaultAssistantFault: TAssistantFault;
@@ -86,14 +104,426 @@ Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
 Function IsTransientNetworkError(Const ErrorText: String): Boolean;
 { Milliseconds. The actor snapshots this when the turn starts. }
 Function AssistantReconnectIntervalMs: QWord;
+{ Milliseconds. The actor snapshots this when the turn starts. }
+Function AssistantCreditIntervalMs: QWord;
+{ True for HTTP 402, or when the status text or body names a credit failure.
+  A short 429 without those words is not this case. }
+Function AssistantFaultIsOutOfCredits(Const Fault: TAssistantFault): Boolean;
+{ Future reset from error JSON, a Retry-After clock time, then the usage snapshot. 0 if none. }
+Function AssistantCreditResetTime(Const ErrorText, Body, RetryAfter: String; UsageHasReset: Boolean;
+  UsageResetsAt, NowTime: TDateTime): TDateTime;
+{ Milliseconds until RetryAt. RetryAt is the reset, or now plus the credit interval. }
+Function AssistantCreditWaitMs(Const ErrorText, Body, RetryAfter: String; UsageHasReset: Boolean;
+  UsageResetsAt: TDateTime; CreditIntervalMs: QWord; NowTime: TDateTime; Out RetryAt: TDateTime): QWord;
+Function AssistantCreditWaitNote(Const ErrorText: String; RetryAt: TDateTime): String;
+{ Retry-After delay or clock, otherwise the connection interval. }
+Function AssistantRateLimitWaitMs(Const RetryAfter: String; ConnectionIntervalMs: QWord; NowTime: TDateTime): QWord;
+Function AssistantRateLimitWaitNote(Const ErrorText: String): String;
 Function AssistantReconnectWaitNote(Const ErrorText: String): String;
 Function AssistantReconnectResumeNote: String;
 Function AssistantPhaseIsReconnectWait(Const Phase: String): Boolean;
+{ Codex or Claude process ended before an assistant answer. Credit, rate limit,
+  and transport drops use the HTTP waits. Protocol, sign-in, and cancel stop.
+  An empty error is not a drop: a completed turn can have no error text. }
+Function ClassifyDroppedTransport(Const ErrorText, ResponseBody: String; UserStopped: Boolean): TAssistantRecovery;
+{ Milliseconds for that decision. RetryAt is set for a credit reset. }
+Function AssistantDroppedTransportWaitMs(Kind: TAssistantHttpWait; Const ErrorText, Body, RetryAfter: String;
+  UsageHasReset: Boolean; UsageResetsAt: TDateTime; ConnectionIntervalMs, CreditIntervalMs: QWord;
+  NowTime: TDateTime; Out RetryAt: TDateTime): QWord;
+Function AssistantDroppedTransportWaitNote(Kind: TAssistantHttpWait; Const ErrorText: String;
+  RetryAt: TDateTime): String;
 
 Implementation
 
 Uses
-  SysUtils;
+  SysUtils, DateUtils, fpjson, jsonparser;
+
+Function OneLineFault(Const Text: String): String; Forward;
+
+Const
+  UnixSecondsFloor = 1000000000;
+  UnixMillisecondsFloor = 100000000000;
+  RateLimitDelayCapSeconds = 7 * 24 * 60 * 60;
+
+Function NextToken(Const Text: String; Var At: Integer): String;
+Var
+  StartAt: Integer;
+Begin
+  While (At <= Length(Text)) And (Text[At] <= ' ') Do
+    Inc(At);
+  StartAt := At;
+  While (At <= Length(Text)) And (Text[At] > ' ') Do
+    Inc(At);
+  Result := Copy(Text, StartAt, At - StartAt);
+End;
+
+Function MonthIndex(Const Name: String): Integer;
+Const
+  Names: Array[1..12] Of String = (
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec');
+Var
+  I: Integer;
+  Key: String;
+Begin
+  Result := 0;
+  Key := LowerCase(Copy(Trim(Name), 1, 3));
+  For I := 1 To 12 Do
+    If Names[I] = Key Then
+      Exit(I);
+End;
+
+Function TryHttpDate(Const Text: String; Out When: TDateTime): Boolean;
+Var
+  S, Token, TimeText: String;
+  At, Day, Month, Year, Hour, Minute, Second, Colon: Integer;
+Begin
+  Result := False;
+  When := 0;
+  S := Trim(Text);
+  Colon := Pos(',', S);
+  If Colon > 0 Then
+    S := Trim(Copy(S, Colon + 1, MaxInt));
+  At := 1;
+  Token := NextToken(S, At);
+  Day := StrToIntDef(Token, 0);
+  Month := MonthIndex(NextToken(S, At));
+  Year := StrToIntDef(NextToken(S, At), 0);
+  TimeText := NextToken(S, At);
+  If (Day < 1) Or (Day > 31) Or (Month < 1) Or (Year < 1970) Or (TimeText = '') Then
+    Exit;
+  Colon := Pos(':', TimeText);
+  If Colon < 2 Then
+    Exit;
+  Hour := StrToIntDef(Copy(TimeText, 1, Colon - 1), -1);
+  Minute := StrToIntDef(Copy(TimeText, Colon + 1, 2), -1);
+  Second := 0;
+  If (Colon + 3 <= Length(TimeText)) And (TimeText[Colon + 3] = ':') Then
+    Second := StrToIntDef(Copy(TimeText, Colon + 4, 2), 0);
+  If (Hour < 0) Or (Hour > 23) Or (Minute < 0) Or (Minute > 59) Or (Second < 0) Or (Second > 59) Then
+    Exit;
+  Try
+    When := EncodeDate(Year, Month, Day) + EncodeTime(Hour, Minute, Second, 0);
+    When := UniversalTimeToLocal(When);
+    Result := When > 0;
+  Except
+    On E: Exception Do
+      Result := False;
+  End;
+End;
+
+Function TryIsoClock(Const Text: String; Out When: TDateTime): Boolean;
+Var
+  S: String;
+  DotAt, I: Integer;
+Begin
+  Result := False;
+  When := 0;
+  S := Trim(Text);
+  If S = '' Then
+    Exit;
+  DotAt := Pos('.', S);
+  If DotAt >= 11 Then
+    Begin
+      I := DotAt + 1;
+      While (I <= Length(S)) And (S[I] In ['0'..'9']) Do
+        Inc(I);
+      Delete(S, DotAt, I - DotAt);
+    End;
+  Try
+    When := UniversalTimeToLocal(ISO8601ToDate(S, True));
+    Result := When > 0;
+  Except
+    On E: Exception Do
+      Result := False;
+  End;
+End;
+
+Function TryClockTime(Const Text: String; Out When: TDateTime): Boolean;
+Begin
+  Result := TryIsoClock(Text, When) Or TryHttpDate(Text, When);
+End;
+
+Function UnixNumberToLocal(Value: Double; AllowDelay: Boolean; NowTime: TDateTime; Out When: TDateTime): Boolean;
+Var
+  Seconds: Int64;
+Begin
+  Result := False;
+  When := 0;
+  If Value <= 0 Then
+    Exit;
+  If Value >= UnixMillisecondsFloor Then
+    Seconds := Round(Value / 1000)
+  Else If Value >= UnixSecondsFloor Then
+    Seconds := Round(Value)
+  Else If AllowDelay Then
+    Begin
+      When := NowTime + (Value / 86400);
+      Exit(When > NowTime);
+    End
+  Else
+    Exit;
+  If Seconds <= 0 Then
+    Exit;
+  When := UnixToDateTime(Seconds);
+  Result := When > 0;
+End;
+
+Function ResetFromJsonValue(Node: TJSONData; AllowDelay: Boolean; NowTime: TDateTime; Out When: TDateTime): Boolean;
+Var
+  Number: Double;
+  Text: String;
+Begin
+  Result := False;
+  When := 0;
+  If Not Assigned(Node) Or (Node.JSONType = jtNull) Then
+    Exit;
+  If Node.JSONType = jtNumber Then
+    Exit(UnixNumberToLocal(Node.AsFloat, AllowDelay, NowTime, When));
+  If Node.JSONType <> jtString Then
+    Exit;
+  Text := Trim(Node.AsString);
+  If Text = '' Then
+    Exit;
+  If TryClockTime(Text, When) And (When > 0) Then
+    Exit(True);
+  If TryStrToFloat(Text, Number) Or TryStrToFloat(StringReplace(Text, ',', '.', []), Number) Then
+    Result := UnixNumberToLocal(Number, AllowDelay, NowTime, When);
+End;
+
+Function FindDeep(Node: TJSONData; Const Name: String): TJSONData;
+Var
+  Obj: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+Begin
+  Result := Nil;
+  If Not Assigned(Node) Then
+    Exit;
+  If Node Is TJSONObject Then
+    Begin
+      Obj := TJSONObject(Node);
+      For I := 0 To Obj.Count - 1 Do
+        If SameText(Obj.Names[I], Name) Then
+          Exit(Obj.Items[I]);
+      For I := 0 To Obj.Count - 1 Do
+        Begin
+          Result := FindDeep(Obj.Items[I], Name);
+          If Assigned(Result) Then
+            Exit;
+        End;
+    End
+  Else If Node Is TJSONArray Then
+    Begin
+      Arr := TJSONArray(Node);
+      For I := 0 To Arr.Count - 1 Do
+        Begin
+          Result := FindDeep(Arr.Items[I], Name);
+          If Assigned(Result) Then
+            Exit;
+        End;
+    End;
+End;
+
+Function JsonObjectSlice(Const Text: String): String;
+Var
+  StartAt, EndAt, I: Integer;
+Begin
+  Result := '';
+  StartAt := Pos('{', Text);
+  EndAt := 0;
+  For I := Length(Text) DownTo 1 Do
+    If Text[I] = '}' Then
+      Begin
+        EndAt := I;
+        Break;
+      End;
+  If (StartAt > 0) And (EndAt > StartAt) Then
+    Result := Copy(Text, StartAt, EndAt - StartAt + 1);
+End;
+
+Function ResetFromDocument(Node: TJSONData; NowTime: TDateTime; Out When: TDateTime): Boolean;
+Const
+  Names: Array[0..5] Of String = (
+    'resets_at', 'resetsAt', 'reset_at', 'resetAt', 'retry_after', 'retryAfter');
+Var
+  I: Integer;
+  Found: TJSONData;
+  AllowDelay: Boolean;
+Begin
+  Result := False;
+  When := 0;
+  For I := 0 To High(Names) Do
+    Begin
+      Found := FindDeep(Node, Names[I]);
+      If Not Assigned(Found) Then
+        Continue;
+      AllowDelay := SameText(Names[I], 'retry_after') Or SameText(Names[I], 'retryAfter');
+      If ResetFromJsonValue(Found, AllowDelay, NowTime, When) And (When > NowTime) Then
+        Exit(True);
+    End;
+End;
+
+Function JsonResetTime(Const Text: String; NowTime: TDateTime; Out When: TDateTime): Boolean;
+Var
+  Data: TJSONData;
+  Slice: String;
+Begin
+  Result := False;
+  When := 0;
+  Slice := JsonObjectSlice(Text);
+  If Slice = '' Then
+    Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Slice);
+    Except
+      On E: Exception Do
+        Data := Nil;
+    End;
+    If Assigned(Data) Then
+      Result := ResetFromDocument(Data, NowTime, When);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function RetryAfterFutureTime(Const Header: String; NowTime: TDateTime; Out When: TDateTime): Boolean;
+Var
+  Text: String;
+Begin
+  Result := False;
+  When := 0;
+  Text := Trim(Header);
+  If Text = '' Then
+    Exit;
+  { A bare delay is not a clock time. Credit waits use it only from JSON retry_after. }
+  If (Pos(':', Text) = 0) And (Pos('-', Text) = 0) And (Pos(',', Text) = 0) Then
+    Exit;
+  Result := TryClockTime(Text, When) And (When > NowTime);
+End;
+
+Function AssistantCreditResetTime(Const ErrorText, Body, RetryAfter: String; UsageHasReset: Boolean;
+  UsageResetsAt, NowTime: TDateTime): TDateTime;
+Var
+  Found: TDateTime;
+Begin
+  Result := 0;
+  If JsonResetTime(Body, NowTime, Found) And (Found > NowTime) Then
+    Exit(Found);
+  If JsonResetTime(ErrorText, NowTime, Found) And (Found > NowTime) Then
+    Exit(Found);
+  If RetryAfterFutureTime(RetryAfter, NowTime, Found) Then
+    Exit(Found);
+  If UsageHasReset And (UsageResetsAt > NowTime) Then
+    Result := UsageResetsAt;
+End;
+
+Function AssistantCreditWaitMs(Const ErrorText, Body, RetryAfter: String; UsageHasReset: Boolean;
+  UsageResetsAt: TDateTime; CreditIntervalMs: QWord; NowTime: TDateTime; Out RetryAt: TDateTime): QWord;
+Var
+  ResetAt: TDateTime;
+  Delta: Double;
+Begin
+  If CreditIntervalMs = 0 Then
+    CreditIntervalMs := AssistantCreditIntervalMs;
+  ResetAt := AssistantCreditResetTime(ErrorText, Body, RetryAfter, UsageHasReset, UsageResetsAt, NowTime);
+  If ResetAt > NowTime Then
+    Begin
+      RetryAt := ResetAt;
+      Delta := (ResetAt - NowTime) * 86400000;
+      If Delta < 1 Then
+        Delta := 1;
+      If Delta > High(Int64) Then
+        Result := High(Int64)
+      Else
+        Result := Round(Delta);
+    End
+  Else
+    Begin
+      Result := CreditIntervalMs;
+      If Result < 1 Then
+        Result := 1;
+      RetryAt := NowTime + (Result / 86400000);
+    End;
+End;
+
+Function AssistantCreditWaitNote(Const ErrorText: String; RetryAt: TDateTime): String;
+Var
+  Detail: String;
+Begin
+  Detail := OneLineFault(ErrorText);
+  If Detail = '' Then
+    Result := 'Out of credits. ' + AssistantRecoveryWaitCredits
+  Else
+    Result := 'Out of credits: ' + Detail + '. ' + AssistantRecoveryWaitCredits;
+  If RetryAt > 0 Then
+    Result := Result + ' Retry at ' + FormatDateTime('yyyy-mm-dd hh:nn', RetryAt) + '.';
+End;
+
+Function MillisecondsUntil(When, NowTime: TDateTime): QWord;
+Var
+  Delta: Double;
+Begin
+  Result := 0;
+  If When <= NowTime Then
+    Exit;
+  Delta := (When - NowTime) * 86400000;
+  If Delta < 1 Then
+    Delta := 1;
+  If Delta > High(Int64) Then
+    Result := High(Int64)
+  Else
+    Result := Round(Delta);
+End;
+
+Function AssistantRateLimitWaitMs(Const RetryAfter: String; ConnectionIntervalMs: QWord; NowTime: TDateTime): QWord;
+Var
+  Text: String;
+  Seconds: Int64;
+  Number: Double;
+  When: TDateTime;
+Begin
+  If ConnectionIntervalMs = 0 Then
+    ConnectionIntervalMs := AssistantReconnectIntervalMs;
+  Result := ConnectionIntervalMs;
+  Text := Trim(RetryAfter);
+  If Text = '' Then
+    Exit;
+  If TryStrToInt64(Text, Seconds) Or (TryStrToFloat(Text, Number) And (Number > 0) And (Round(Number) = Number)) Then
+    Begin
+      If Not TryStrToInt64(Text, Seconds) Then
+        Seconds := Round(Number);
+      If (Seconds > 0) And (Seconds <= RateLimitDelayCapSeconds) Then
+        Result := QWord(Seconds) * 1000
+      Else If Seconds >= UnixSecondsFloor Then
+        Begin
+          When := UnixToDateTime(Seconds);
+          If When > NowTime Then
+            Result := MillisecondsUntil(When, NowTime);
+        End;
+      If Result = 0 Then
+        Result := ConnectionIntervalMs;
+      Exit;
+    End;
+  If TryClockTime(Text, When) And (When > NowTime) Then
+    Begin
+      Result := MillisecondsUntil(When, NowTime);
+      If Result = 0 Then
+        Result := ConnectionIntervalMs;
+    End;
+End;
+
+Function AssistantRateLimitWaitNote(Const ErrorText: String): String;
+Var
+  Detail: String;
+Begin
+  Detail := OneLineFault(ErrorText);
+  If Detail = '' Then
+    Result := 'Rate limited. ' + AssistantRecoveryWaitRateLimit
+  Else
+    Result := 'Rate limited: ' + Detail + '. ' + AssistantRecoveryWaitRateLimit;
+End;
 
 Function DefaultAssistantFault: TAssistantFault;
 Begin
@@ -228,10 +658,41 @@ Begin
     (Name = 'open_file') Or (Name = 'open_markdown');
 End;
 
-Function Recovery(Action: TAssistantRecoveryAction; WaitForConnection: Boolean): TAssistantRecovery;
+Function Recovery(Action: TAssistantRecoveryAction; WaitForConnection: Boolean;
+  HttpWait: TAssistantHttpWait = ahwNone): TAssistantRecovery;
 Begin
   Result.Action := Action;
   Result.WaitForConnection := WaitForConnection;
+  If WaitForConnection And (HttpWait = ahwNone) Then
+    Result.HttpWait := ahwConnection
+  Else
+    Result.HttpWait := HttpWait;
+End;
+
+Function CreditScanText(Const Text: String): String;
+Begin
+  Result := LowerCase(Text);
+  Result := StringReplace(Result, '_', ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, '-', ' ', [rfReplaceAll]);
+End;
+
+Function TextSaysOutOfCredits(Const Text: String): Boolean;
+Var
+  Lowered: String;
+Begin
+  Lowered := CreditScanText(Text);
+  Result :=
+    (Pos('credits', Lowered) > 0) Or
+    (Pos('quota', Lowered) > 0) Or
+    (Pos('spending', Lowered) > 0) Or
+    (Pos('billing', Lowered) > 0) Or
+    (Pos('insufficient credit', Lowered) > 0);
+End;
+
+Function AssistantFaultIsOutOfCredits(Const Fault: TAssistantFault): Boolean;
+Begin
+  Result := StatusIs(Fault, 402) Or TextSaysOutOfCredits(Fault.ErrorText) Or
+    TextSaysOutOfCredits(Fault.ResponseBody);
 End;
 
 Function ClassifyAssistantFault(Const Fault: TAssistantFault): TAssistantRecovery;
@@ -252,6 +713,11 @@ Begin
     Exit(Recovery(araStop, False));
   If StatusIs(Fault, 401) Then
     Exit(Recovery(araStop, False));
+  { Before a malformed stop: a 400 body that names quota is out of credits, not a bad request. }
+  If (Fault.Origin = afoHttpRound) And AssistantFaultIsOutOfCredits(Fault) Then
+    Exit(Recovery(araRetryLastAction, False, ahwCredits));
+  If (Fault.Origin = afoHttpRound) And StatusIs(Fault, 429) Then
+    Exit(Recovery(araRetryLastAction, False, ahwRateLimit));
   If FaultIsMalformedRequest(Fault) Then
     Exit(Recovery(araStop, False));
 
@@ -386,12 +852,19 @@ Begin
     (Pos(AssistantRecoveryIgnorePaint, S) > 0) Or
     (Pos(AssistantRecoveryIgnoreCallback, S) > 0) Or
     (Pos(AssistantRecoveryWaitReconnect, S) > 0) Or
+    (Pos(AssistantRecoveryWaitCredits, S) > 0) Or
+    (Pos(AssistantRecoveryWaitRateLimit, S) > 0) Or
     (Pos(AssistantRecoveryResumeCall, S) > 0);
 End;
 
 Function AssistantReconnectIntervalMs: QWord;
 Begin
   Result := QWord(DefaultReconnectIntervalSeconds) * 1000;
+End;
+
+Function AssistantCreditIntervalMs: QWord;
+Begin
+  Result := QWord(DefaultCreditIntervalMinutes) * 60 * 1000;
 End;
 
 Function AssistantReconnectWaitNote(Const ErrorText: String): String;
@@ -412,7 +885,96 @@ End;
 
 Function AssistantPhaseIsReconnectWait(Const Phase: String): Boolean;
 Begin
-  Result := (Phase = 'Re-establishing Connection') Or (Pos(AssistantRecoveryWaitReconnect, Phase) > 0);
+  Result := (Phase = 'Re-establishing Connection') Or
+    (Pos(AssistantRecoveryWaitReconnect, Phase) > 0) Or
+    (Pos(AssistantRecoveryWaitCredits, Phase) > 0) Or
+    (Pos(AssistantRecoveryWaitRateLimit, Phase) > 0);
+End;
+
+Function ProcessTransportDropped(Const ErrorText: String): Boolean;
+Var
+  Lowered: String;
+Begin
+  { An empty process result is not a socket close. A completed turn can have no error. }
+  If Trim(ErrorText) = '' Then
+    Exit(False);
+  If IsTransientNetworkError(ErrorText) Then
+    Exit(True);
+  Lowered := LowerCase(ErrorText);
+  Result :=
+    (Pos('runtime exited', Lowered) > 0) Or
+    (Pos('stdin closed', Lowered) > 0) Or
+    (Pos('truncated protocol frame', Lowered) > 0) Or
+    (Pos('unable to start the codex runtime', Lowered) > 0) Or
+    (Pos('configure its pipes', Lowered) > 0) Or
+    (Pos('pipe write', Lowered) > 0) Or
+    (Pos('pipe signal', Lowered) > 0) Or
+    (Pos('could not start claude code', Lowered) > 0) Or
+    (Pos('did not complete the turn', Lowered) > 0);
+End;
+
+Function ClassifyDroppedTransport(Const ErrorText, ResponseBody: String; UserStopped: Boolean): TAssistantRecovery;
+Var
+  Fault: TAssistantFault;
+Begin
+  Fault := DefaultAssistantFault;
+  { Default origin is cancel. A process drop is not a cancel unless the text says so. }
+  Fault.Origin := afoTurn;
+  Fault.ErrorText := ErrorText;
+  Fault.ResponseBody := ResponseBody;
+  Fault.HttpStatus := HttpStatusInText(ErrorText);
+  If Fault.HttpStatus = 0 Then
+    Fault.HttpStatus := HttpStatusInText(ResponseBody);
+  Fault.OwnsTurn := True;
+  Fault.UserStopped := UserStopped;
+  Fault.Attempt := 1;
+  If UserStopped Or FaultIsCancel(Fault) Then
+    Exit(Recovery(araStop, False));
+  If StatusIs(Fault, 401) Then
+    Exit(Recovery(araStop, False));
+  { Same order as an HTTP round: credits before a short 429, then a lost transport. }
+  If AssistantFaultIsOutOfCredits(Fault) Then
+    Exit(Recovery(araRetryLastAction, False, ahwCredits));
+  If StatusIs(Fault, 429) Then
+    Exit(Recovery(araRetryLastAction, False, ahwRateLimit));
+  If ProcessTransportDropped(ErrorText) Or ProcessTransportDropped(ResponseBody) Then
+    Exit(Recovery(araRetryLastAction, True));
+  Result := Recovery(araStop, False);
+End;
+
+Function AssistantDroppedTransportWaitMs(Kind: TAssistantHttpWait; Const ErrorText, Body, RetryAfter: String;
+  UsageHasReset: Boolean; UsageResetsAt: TDateTime; ConnectionIntervalMs, CreditIntervalMs: QWord;
+  NowTime: TDateTime; Out RetryAt: TDateTime): QWord;
+Begin
+  RetryAt := 0;
+  If ConnectionIntervalMs = 0 Then
+    ConnectionIntervalMs := AssistantReconnectIntervalMs;
+  If CreditIntervalMs = 0 Then
+    CreditIntervalMs := AssistantCreditIntervalMs;
+  Case Kind Of
+    ahwCredits:
+      Result := AssistantCreditWaitMs(ErrorText, Body, RetryAfter, UsageHasReset, UsageResetsAt, CreditIntervalMs,
+        NowTime, RetryAt);
+    ahwRateLimit:
+      Result := AssistantRateLimitWaitMs(RetryAfter, ConnectionIntervalMs, NowTime);
+  Else
+    Result := ConnectionIntervalMs;
+  End;
+  If Result = 0 Then
+    Result := ConnectionIntervalMs;
+End;
+
+Function AssistantDroppedTransportWaitNote(Kind: TAssistantHttpWait; Const ErrorText: String;
+  RetryAt: TDateTime): String;
+Begin
+  Case Kind Of
+    ahwCredits:
+      Result := AssistantCreditWaitNote(ErrorText, RetryAt);
+    ahwRateLimit:
+      Result := AssistantRateLimitWaitNote(ErrorText);
+  Else
+    Result := AssistantReconnectWaitNote(ErrorText);
+  End;
 End;
 
 End.

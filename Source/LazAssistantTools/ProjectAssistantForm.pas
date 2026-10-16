@@ -26,7 +26,7 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
-  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery;
+  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -200,6 +200,10 @@ Type
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
     FPollingCodex: Boolean;
+    FTransportWait: Boolean;
+    FTransportWaitStart, FTransportWaitMs: QWord;
+    FCodexLaunchPrompt, FCodexLaunchTools, FCodexLaunchInstructions, FCodexLaunchWire: String;
+    FCodexLaunchReady: Boolean;
     FCodexWorkspace: TAssistantIDEWorkspace;
     FCodexBroker: TAssistantToolBroker;
     Procedure LoadConnectionSettings;
@@ -207,7 +211,14 @@ Type
     Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
+    Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
+    Function TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
+    Procedure ClearTransportWait;
+    Procedure PostRecoverySentence(Const Sentence: String);
+    Function LaunchStoredCodexRun: Boolean;
+    Procedure ResumeDroppedTransport;
+    Procedure PollTransportWait;
   Private
     ElapsedTimer: TTimer;
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
@@ -278,6 +289,7 @@ Type
     FPlanAgentMaxPackages: Integer;
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FLastTurnHadError: Boolean;
+    FLastTurnFinish: TAssistantTurnFinish;
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
@@ -401,6 +413,7 @@ Type
     Procedure BeginAssistantReply;
     Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
     Procedure FinishAssistantReply(Const ErrorText: String);
+    Function CurrentTurnFinishFacts(Truncated, ToolRoundCap, ServiceHadTools: Boolean): TAssistantTurnFinishFacts;
     Procedure StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
       IsFinished: Boolean; Const ErrorText: String);
     Procedure RefreshFromConfig;
@@ -3074,15 +3087,143 @@ Begin
     SyncCodexUsageIdle;
 End;
 
-Procedure TProjectAssistantForm.ReleaseCodexRun;
+Procedure TProjectAssistantForm.ReleaseCodexProcess;
 Begin
-  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
   If Assigned(FCodexRun) Then
     Begin
       FCodexRun.Cancel;
       ReapCodexWorker(FCodexRun);
       FCodexRun := Nil;
     End;
+End;
+
+Procedure TProjectAssistantForm.ReleaseCodexRun;
+Begin
+  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
+  ReleaseCodexProcess;
+End;
+
+Procedure TProjectAssistantForm.ClearTransportWait;
+Begin
+  FTransportWait := False;
+  FTransportWaitMs := 0;
+End;
+
+Procedure TProjectAssistantForm.PostRecoverySentence(Const Sentence: String);
+Begin
+  If (Sentence = '') Or (csDestroying In ComponentState) Then
+    Exit;
+  If Assigned(FTrace) Then
+    Begin
+      FTrace.AddNote(Sentence);
+      If FViewingLive And Assigned(FTraceView) Then
+        FTraceView.Sync(FTrace, True);
+    End
+  Else
+    SetCurrentSystemNote(Sentence);
+  If FSending Then
+    SetStreamPhase(Sentence);
+  WorkflowLogger.Info('ProjectAssistant', Sentence);
+End;
+
+Function TProjectAssistantForm.TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
+Var
+  Decision: TAssistantRecovery;
+  RetryAt: TDateTime;
+  Note: String;
+Begin
+  Result := False;
+  If FTransportWait Then
+    Exit(True);
+  If (Not FSending) Or FUserCancelled Or (csDestroying In ComponentState) Then
+    Exit;
+  If (Not FUseCodex) And (Not FUseClaude) Then
+    Exit;
+  { Claude is not started here. A stored Codex launch is what this wait retries. }
+  If Not FCodexLaunchReady Then
+    Exit;
+  If Trim(Answer) <> '' Then
+    Exit;
+  Decision := ClassifyDroppedTransport(ErrorText, Body, False);
+  If Decision.Action <> araRetryLastAction Then
+    Exit;
+  Note := '';
+  RetryAt := 0;
+  FTransportWaitMs := AssistantDroppedTransportWaitMs(Decision.HttpWait, ErrorText, Body, '', False, 0,
+    AssistantReconnectIntervalMs, AssistantCreditIntervalMs, Now, RetryAt);
+  Note := AssistantDroppedTransportWaitNote(Decision.HttpWait, ErrorText, RetryAt);
+  If FTransportWaitMs = 0 Then
+    FTransportWaitMs := AssistantReconnectIntervalMs;
+  FTransportWaitStart := GetTickCount64;
+  FTransportWait := True;
+  PostRecoverySentence(Note);
+  Result := True;
+End;
+
+Function TProjectAssistantForm.LaunchStoredCodexRun: Boolean;
+Begin
+  Result := False;
+  If (Not FCodexLaunchReady) Or (Not Assigned(FCodexBroker)) Or (Not Assigned(FCodexWorkspace)) Then
+    Exit;
+  If FCodexWorkspace.Identity <> FCodexIdentity Then
+    Exit;
+  Case ActiveMode Of
+    amChat: FCodexBroker.BeginRun(awsNone);
+    amBuild: FCodexBroker.BeginRun(awsProject);
+    amDocument: FCodexBroker.BeginRun(awsMarkdown);
+    amPlan: FCodexBroker.BeginRun(awsMarkdown);
+  Else
+    FCodexBroker.BeginRun(awsReadOnly);
+  End;
+  Try
+    FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
+      FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, FCodexLaunchInstructions,
+      ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
+    FCodexRun.Start;
+    SetStreamPhase('Waiting for model…');
+    Result := True;
+  Except
+    On E: Exception Do
+      Begin
+        ReleaseCodexProcess;
+        If E.Message <> '' Then
+          FinishAssistantReply(E.Message)
+        Else
+          FinishAssistantReply(E.ClassName);
+      End;
+  End;
+End;
+
+Procedure TProjectAssistantForm.ResumeDroppedTransport;
+Begin
+  If Not FTransportWait Then
+    Exit;
+  ClearTransportWait;
+  PostRecoverySentence(AssistantReconnectResumeNote);
+  If LaunchStoredCodexRun Or FTransportWait Or (Not FSending) Then
+    Exit;
+  FinishAssistantReply('The run could not be restarted.');
+End;
+
+Procedure TProjectAssistantForm.PollTransportWait;
+Begin
+  If FUserCancelled Or (Not FSending) Or (csDestroying In ComponentState) Then
+    Begin
+      ClearTransportWait;
+      Exit;
+    End;
+  If Assigned(FCodexWorkspace) And (FCodexWorkspace.Identity <> FCodexIdentity) Then
+    Begin
+      StopStream;
+      Exit;
+    End;
+  If GetTickCount64 - FTransportWaitStart < FTransportWaitMs Then
+    Begin
+      If (FStatusPhase <> '') And Assigned(StatusFooter) Then
+        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+      Exit;
+    End;
+  ResumeDroppedTransport;
 End;
 
 Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
@@ -3196,6 +3337,11 @@ Begin
   Try
     ToolsJson := BuildAssistantToolsJsonForMode(ActiveMode);
     Instructions := CodexDeveloperInstructions(ActiveMode);
+    FCodexLaunchPrompt := Prompt;
+    FCodexLaunchTools := ToolsJson;
+    FCodexLaunchInstructions := Instructions;
+    FCodexLaunchWire := WireJson;
+    FCodexLaunchReady := True;
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
       Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode,
       ProjectAssistantRoot, WireJson);
@@ -3206,12 +3352,12 @@ Begin
   Except
     On E: Exception Do
       Begin
-        ReleaseCodexRun;
+        { Finish defers a transport or credit failure. Do not cancel the broker first. }
         If ClassifyFormFault(Self, afoTurn, 'TProjectAssistantForm.StartCodexReply', E, True) = araIgnore Then
           FinishAssistantReply('')
         Else
           FinishAssistantReply(E.Message);
-        Result := False;
+        Result := FSending;
       End;
   End;
 End;
@@ -3282,7 +3428,7 @@ Begin
             FCodexWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
             If FCodexRun <> Run Then Exit;
           End;
-        ReleaseCodexRun;
+        { A transport or credit drop with no answer waits and retries. Finish releases the process. }
         FinishAssistantReply(Snapshot.ErrorText);
       End
     Else
@@ -3302,6 +3448,11 @@ Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   Try
     If csDestroying In ComponentState Then Exit;
+    If FTransportWait And (Not Assigned(FCodexRun)) Then
+      Begin
+        PollTransportWait;
+        Exit;
+      End;
     If Assigned(FCodexRun) Then
       Begin
         PollCodex;
@@ -5506,11 +5657,66 @@ Begin
     WorkflowLogger.Warning('ProjectAssistant', 'Could not record usage: ' + ErrorText);
 End;
 
+Function TProjectAssistantForm.CurrentTurnFinishFacts(Truncated, ToolRoundCap, ServiceHadTools: Boolean): TAssistantTurnFinishFacts;
+Var
+  I: Integer;
+  Sections: TObjectList;
+  Err, Body: String;
+  Section: TPlanSection;
+Begin
+  Result := DefaultAssistantTurnFinishFacts;
+  Result.Truncated := Truncated;
+  Result.ToolRoundCap := ToolRoundCap;
+  Result.AssistantText := FLiveContent;
+  Result.HadToolRound := ServiceHadTools;
+  If Assigned(FTrace) Then
+    For I := 0 To FTrace.Count - 1 Do
+      If FTrace[I].Kind = tbkTool Then
+        Begin
+          Result.HadToolRound := True;
+          Break;
+        End;
+  { The saved plan is authoritative. A missing snapshot is not treated as in progress. }
+  If (FBuildWorkSectionIndex < 0) Or (FBuildWorkPlanPath = '') Then
+    Exit;
+  Sections := TObjectList.Create(True);
+  Try
+    If Not ScanPlanSections(FBuildWorkPlanPath, Sections, Err) Then
+      Exit;
+    If FBuildWorkSectionIndex >= Sections.Count Then
+      Exit;
+    Section := TPlanSection(Sections[FBuildWorkSectionIndex]);
+    If Not Section.Actionable Then
+      Exit;
+    Result.PlanItemInProgress := Section.Status = pssInProgress;
+    If Section.Status <> pssBlocked Then
+      Exit;
+    If Not GetPlanSectionBody(FBuildWorkPlanPath, FBuildWorkSectionIndex, Body, Err) Then
+      Exit;
+    Result.PlanItemBlockedWithUserAction := PlanBodyHasUserAction(Body);
+  Finally
+    Sections.Free;
+  End;
+End;
+
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
   ResolvedError, TraceNote, Settlement, AskedNote: String;
   WorkedMs: Integer;
+  Truncated, ToolRoundCap, HadTools: Boolean;
+  FinishFacts: TAssistantTurnFinishFacts;
 Begin
+  If FSending And (Not FUserCancelled) And TryDeferDroppedTransport(FLiveContent, ErrorText, ErrorText) Then
+    Begin
+      { Keep the broker. The process is dead; the same prompt is started again after the wait. }
+      ReleaseCodexProcess;
+      Exit;
+    End;
+  { Only a live Codex process finish cancels the broker. A late HTTP finish must not. }
+  If FSending And FUseCodex And (Assigned(FCodexRun) Or FCodexLaunchReady) Then
+    ReleaseCodexRun;
+  ClearTransportWait;
+  FCodexLaunchReady := False;
   ResolvedError := ErrorText;
   If IsAssistantProgressStatus(ResolvedError) Then
     ResolvedError := '';
@@ -5537,6 +5743,13 @@ Begin
       SetSending(False);
       Exit;
     End;
+  Truncated := False;
+  ToolRoundCap := False;
+  HadTools := False;
+  If Assigned(AssistantClient) Then
+    AssistantClient.TakeTurnFinishFacts(Truncated, ToolRoundCap, HadTools);
+  FLastTurnFinish.Reason := atfFinished;
+  FLastTurnFinish.Unfinished := False;
   { FLive* are authoritative for the completed stream (pane may be browsing elsewhere). }
   If ResolvedError <> '' Then
     Begin
@@ -5547,11 +5760,16 @@ Begin
   Else
     Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
+      FinishFacts := CurrentTurnFinishFacts(Truncated, ToolRoundCap, HadTools);
+      FLastTurnFinish := ClassifyAssistantTurnFinish(FinishFacts);
+      If FLastTurnFinish.Unfinished Then
+        WorkflowLogger.Info('ProjectAssistant', 'Premature Ready: ' + AssistantTurnFinishReasonName(FLastTurnFinish.Reason));
       If Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
         FContextUsed := FContextUsed + Length(FLiveThinking) Div 4;
+      { Item 3.2 continues an unfinished decision instead of stopping here. }
       StatusFooter.SetRightText('Ready');
     End;
   FStreamingActive := False;
@@ -5708,6 +5926,8 @@ Begin
   If Not FSending Then
     Exit;
   FUserCancelled := True;
+  ClearTransportWait;
+  FCodexLaunchReady := False;
   ReleaseCodexRun;
   { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
   If (Not FUseCodex) And Assigned(AssistantClient) Then
