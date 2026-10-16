@@ -63,7 +63,7 @@ There is no attempt cap for a lost connection. Stop still interrupts the wait, a
 Post one conversation note when the wait starts, and one when the call resumes.
 
 ### 2.2 Wait out of credits until reset, or one hour
-Status: blocked
+Status: complete
 
 Do not use the 30 second interval for a credit failure.
 
