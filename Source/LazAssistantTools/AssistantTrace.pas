@@ -1058,6 +1058,9 @@ Begin
     aekError:
       If Trim(Event.Text) <> '' Then
         AddNote('**Error:** ' + Event.Text);
+    aekRecovery:
+      If Trim(Event.Text) <> '' Then
+        AddNote(Event.Text);
     aekTurnEnded:
       Begin
         FinishCurrentThinking;

@@ -470,7 +470,19 @@ Begin
 End;
 
 Procedure TChildSubagent.HandleChildTrace(Const Event: TAssistantEvent);
+Var
+  Cb: TAssistantTraceNotify;
 Begin
+  If Event.Kind = aekRecovery Then
+    Begin
+      If Assigned(FOwner) Then
+        Begin
+          Cb := FOwner.OnTrace;
+          If Assigned(Cb) Then
+            Cb(Event);
+        End;
+      Exit;
+    End;
   If Event.Kind = aekToolStarted Then
     Begin
       If Trim(Event.ToolName) <> '' Then

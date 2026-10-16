@@ -71,6 +71,8 @@ Type
     Function ServiceWasDetached: Boolean;
     Procedure FaultSite(Out Origin: TAssistantFaultOrigin; Out Area, ToolName: String);
     Procedure PostTerminalStop(Const Area, ErrorClass, ErrorText: String);
+    Procedure PostRecovery(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
+      Const Area, ErrorClass, ErrorText: String);
     Function KeepRoundAfterFault(E: Exception): Boolean;
     Procedure SealUnansweredTools(Const ErrorClass, ErrorText: String);
     Procedure LogEvent(Kind: TAssistantEventKind; Const Text: String = '';
@@ -340,6 +342,21 @@ Begin
   LogEvent(aekError, FRecoveryStopText);
 End;
 
+Procedure TAssistantActor.PostRecovery(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
+  Const Area, ErrorClass, ErrorText: String);
+Var
+  Sentence: String;
+Begin
+  { Once per decision. The 50 ms poll must not call this. }
+  If FTerminalNoted Or Terminated Or (Action = araStop) Then
+    Exit;
+  Sentence := AssistantRecoveryProgressNote(Action, Origin, Area, ErrorClass, ErrorText);
+  If Sentence = '' Then
+    Exit;
+  EmitSnapshot(False, Sentence, True);
+  LogEvent(aekRecovery, Sentence);
+End;
+
 Function TAssistantActor.KeepRoundAfterFault(E: Exception): Boolean;
 Var
   Decision: TAssistantRecovery;
@@ -370,6 +387,7 @@ Begin
         If Origin = afoTool Then
           SealUnansweredTools(E.ClassName, E.Message);
         FActiveToolName := '';
+        PostRecovery(Decision.Action, Origin, Area, E.ClassName, E.Message);
         Result := True;
       End;
   End;
@@ -432,7 +450,7 @@ Function TraceKindForUi(Kind: TAssistantEventKind): Boolean;
 Begin
   Result := Kind In [aekTurnStarted, aekLoopStarted, aekToolStarted, aekToolCompleted,
     aekSteerQueued, aekInterjected, aekSubagentStarted, aekSubagentProgress,
-    aekSubagentCompleted, aekTurnEnded];
+    aekSubagentCompleted, aekTurnEnded, aekRecovery];
 End;
 
 Procedure TAssistantActor.QueueTrace(Const Event: TAssistantEvent);
@@ -828,12 +846,13 @@ Begin
         FHttpFaultAttempt + 1, True);
       If Decision.Action <> araRetryLastAction Then
         Exit;
+      { One note before the next attempt. WaitForReconnect sleeps; it does not post. }
+      PostRecovery(araRetryLastAction, afoHttpRound, 'TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText);
       If Not Decision.WaitForConnection Then
         FHttpFaultAttempt := FHttpFaultAttempt + 1;
       If Decision.WaitForConnection Then
         Begin
           WorkflowLogger.Warning('AssistantActor', 'Reconnecting in 30 seconds: ' + ErrorText);
-          EmitSnapshot(False, 'Re-establishing Connection', True);
           If Not WaitForReconnect Then
             Break;
         End;
@@ -1305,9 +1324,14 @@ Begin
             Begin
               PostTerminalStop('ExecuteAssistantToolForMode', FaultClass, FaultMessage);
               Exit;
-            End;
+            End
+          Else
+            PostRecovery(araRetryLastAction, afoTool, 'ExecuteAssistantToolForMode', FaultClass, FaultMessage);
         araContinueTurn:
-          Break;
+          Begin
+            PostRecovery(araContinueTurn, afoTool, 'ExecuteAssistantToolForMode', FaultClass, FaultMessage);
+            Break;
+          End;
         araStop:
           Begin
             { No tool result: that would be a partial recipe for another round. }
@@ -1749,6 +1773,7 @@ Begin
                 PostTerminalStop(Area, E.ClassName, E.Message);
                 Exit;
               End;
+            PostRecovery(Decision.Action, Origin, Area, E.ClassName, E.Message);
           End;
         End;
     End;

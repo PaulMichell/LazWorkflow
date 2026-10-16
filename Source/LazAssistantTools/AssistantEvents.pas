@@ -27,7 +27,8 @@ Type
     aekSubagentProgress,
     aekSubagentCompleted,
     aekTurnEnded,
-    aekError
+    aekError,
+    aekRecovery
   );
 
   TAssistantPhase = (apWaiting, apThinking, apStreaming, apTools);
@@ -89,7 +90,7 @@ Function AssistantEventsAbsolutePath(Const RelOrAbs, ProjectRoot: String): Strin
 Implementation
 
 Uses
-  fpjson, jsonparser;
+  fpjson, jsonparser, AssistantRecovery;
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
 Begin
@@ -108,6 +109,7 @@ Begin
     aekSubagentCompleted: Result := 'subagent_completed';
     aekTurnEnded: Result := 'turn_ended';
     aekError: Result := 'error';
+    aekRecovery: Result := 'recovery';
   End;
 End;
 
@@ -132,7 +134,9 @@ Begin
     (S = 'Running tools…') Or
     (S = 'Steering at next model gap…') Or
     (S = 'Thinking…') Or
-    (S = 'Streaming…');
+    (S = 'Streaming…') Or
+    (S = 'Re-establishing Connection') Or
+    IsAssistantRecoveryProgress(S);
 End;
 
 Function FormatSteerEnvelope(Const UserText: String): String;
@@ -409,6 +413,8 @@ Begin
     Result := aekSubagentCompleted
   Else If N = 'turn_ended' Then
     Result := aekTurnEnded
+  Else If N = 'recovery' Then
+    Result := aekRecovery
   Else
     Result := aekError;
 End;

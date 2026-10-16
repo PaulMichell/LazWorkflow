@@ -26,7 +26,7 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
-  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage;
+  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -313,6 +313,7 @@ Type
     Procedure ResetTraceCards;
     Procedure SetCurrentUserDisplay(Const UserText: String; Const WithIdeContext: Boolean);
     Procedure SetCurrentSystemNote(Const NoteText: String);
+    Procedure NoteRecovery(RecoveryAction: TAssistantRecoveryAction; Const Fault: TAssistantFault);
     Procedure EnsureConversationStore;
     Procedure RefreshConversationList;
     Procedure RefreshHistoryCombo;
@@ -475,7 +476,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
-  AssistantCodexUsage, AssistantHarness, AssistantRecovery,
+  AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
@@ -1009,6 +1010,36 @@ Procedure TProjectAssistantForm.SetCurrentSystemNote(Const NoteText: String);
 Begin
   FDisplaySystemNote := NoteText;
   RefreshChatDisplay(True, False);
+End;
+
+Procedure TProjectAssistantForm.NoteRecovery(RecoveryAction: TAssistantRecoveryAction; Const Fault: TAssistantFault);
+Var
+  Sentence: String;
+  Last: TTraceBlock;
+Begin
+  If csDestroying In ComponentState Then
+    Exit;
+  Sentence := AssistantRecoveryProgressNote(RecoveryAction, Fault.Origin, Fault.Area, Fault.ErrorClass,
+    Fault.ErrorText);
+  If Sentence = '' Then
+    Exit;
+  { The elapsed timer can raise on every 50 ms poll. One note for that fault. }
+  If Assigned(FTrace) And (FTrace.Count > 0) Then
+    Begin
+      Last := FTrace[FTrace.Count - 1];
+      If Assigned(Last) And (Last.Kind = tbkNote) And (Last.Body = Sentence) Then
+        Exit;
+    End;
+  If Assigned(FTrace) Then
+    Begin
+      FTrace.AddNote(Sentence);
+      If FViewingLive And Assigned(FTraceView) Then
+        FTraceView.Sync(FTrace, True);
+    End
+  Else
+    SetCurrentSystemNote(Sentence);
+  If FSending Then
+    SetStreamPhase(Sentence);
 End;
 
 Procedure TProjectAssistantForm.SetBusyCursor(IsBusy: Boolean);
@@ -4269,6 +4300,11 @@ Begin
       Fault.ErrorText := E.Message;
     End;
   Result := ClassifyAssistantFault(Fault).Action;
+  { Paint and detach ignores continue. Do not note a destroying form, and do not note on a poll repeat. }
+  If (Result In [araIgnore, araRetryLastAction, araContinueTurn]) And Assigned(Form) And
+    (Not Fault.Detached) And (Not (csDestroying In Form.ComponentState)) And
+    (Fault.Origin In [afoPaintLayout, afoCallbackAfterDetach]) Then
+    Form.NoteRecovery(Result, Fault);
 End;
 
 Procedure TProjectAssistantForm.LayoutComposer;
@@ -5187,6 +5223,14 @@ Begin
       FPlanWriteThisTurn := True;
   If (Event.Kind = aekTurnEnded) And (Pos('plan_write', Event.Text) > 0) Then
     FPlanWriteThisTurn := True;
+  { One note per recovery event, including when the pane is not showing the live turn. }
+  If (Event.Kind = aekRecovery) And Assigned(FTrace) And (Trim(Event.Text) <> '') Then
+    Begin
+      FTrace.AddNote(Event.Text);
+      If FViewingLive And Assigned(FTraceView) Then
+        FTraceView.Sync(FTrace, True);
+      Exit;
+    End;
   If Not FViewingLive Then
     Exit;
   If Not Assigned(FTrace) Then
@@ -5413,7 +5457,7 @@ Begin
     FLiveContent := ContentSnapshot;
     FLiveThinking := ThinkingSnapshot;
     { Keep the reconnect clock until the actor reports new stream progress. }
-    If FStatusPhase <> 'Re-establishing Connection' Then
+    If (FStatusPhase <> 'Re-establishing Connection') And (Not IsAssistantRecoveryProgress(FStatusPhase)) Then
       Begin
         If FLiveContent <> '' Then
           SetStreamPhase('Streaming…')

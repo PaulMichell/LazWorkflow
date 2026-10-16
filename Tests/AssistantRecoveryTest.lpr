@@ -65,6 +65,30 @@ Begin
   Check('first HTTP fault retries', Decision.Action = araRetryLastAction);
   Decision := ClassifyAssistantFault(Fault(afoHttpRound, '', 'EAccessViolation', 'Access violation', 2));
   Check('second HTTP fault stops', Decision.Action = araStop);
+
+  Note := AssistantRecoveryProgressNote(araRetryLastAction, afoHttpRound, 'TAssistantActor.DoHttpRound',
+    'EAccessViolation', 'Access violation');
+  Check('HTTP retry names the fault', Pos('EAccessViolation: Access violation.', Note) = 1);
+  Check('HTTP retry names the resolution', Pos(AssistantRecoveryRetryHttp, Note) > 0);
+  Check('HTTP retry is a progress sentence', IsAssistantRecoveryProgress(Note));
+
+  Note := AssistantRecoveryProgressNote(araContinueTurn, afoTool, 'ExecuteAssistantToolForMode',
+    'EAccessViolation', 'Access violation');
+  Check('tool continue hands the error back', Pos(AssistantRecoveryHandBackTool, Note) > 0);
+
+  Note := AssistantRecoveryProgressNote(araRetryLastAction, afoTool, 'ExecuteAssistantToolForMode',
+    'EAccessViolation', 'Access violation');
+  Check('read-only retry names the resolution', Pos(AssistantRecoveryRetryTool, Note) > 0);
+
+  Note := AssistantRecoveryProgressNote(araIgnore, afoPaintLayout, 'TProjectAssistantForm.LayoutComposer',
+    'EAccessViolation', 'Access violation');
+  Check('paint ignore names the resolution', Pos(AssistantRecoveryIgnorePaint, Note) > 0);
+  Check('paint ignore is a progress sentence', IsAssistantRecoveryProgress(Note));
+
+  Note := AssistantRecoveryStopNote('ExecuteAssistantToolForMode', 'EAccessViolation', 'Access violation');
+  Check('terminal stop is not a progress sentence', Not IsAssistantRecoveryProgress(Note));
+  Check('stop has no progress phrase', AssistantRecoveryProgressNote(araStop, afoTool, 'tool', 'EAccessViolation',
+    'Access violation') = '');
   If FailCount <> 0 Then
     Halt(1);
 End.

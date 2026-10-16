@@ -16,6 +16,12 @@ Interface
 Const
   { Fault retries per action until the setting in the recovery plan is snapshotted. }
   DefaultFaultRetryCap = 1;
+  { Stable phrases. IsAssistantProgressStatus matches these so a late snapshot is not an error. }
+  AssistantRecoveryRetryHttp = 'Retrying the HTTP round.';
+  AssistantRecoveryRetryTool = 'Retrying the read-only tool.';
+  AssistantRecoveryHandBackTool = 'Handing the tool error back to the model.';
+  AssistantRecoveryIgnorePaint = 'Ignoring a paint fault.';
+  AssistantRecoveryIgnoreCallback = 'Ignoring a callback after detach.';
 
 Type
   TAssistantRecoveryAction = (
@@ -65,6 +71,12 @@ Function AssistantRecoveryStopNote(Const Area, ErrorClass, ErrorText: String): S
 { Write, replace, git, and compile are not read-only, so a fault there is not replayed. }
 Function AssistantToolIsReadOnly(Const ToolName: String): Boolean;
 Function AssistantServiceGoneText: String;
+{ One conversation sentence for ignore, retry, or continue. Names the fault and the resolution.
+  The status phase uses the same sentence. Empty for a terminal stop. }
+Function AssistantRecoveryProgressNote(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
+  Const Area, ErrorClass, ErrorText: String): String;
+{ True when Text is a recovery sentence. A late snapshot must not be stored as an error. }
+Function IsAssistantRecoveryProgress(Const Text: String): Boolean;
 { Phrase list formerly in the actor. Connection-loss widening stays here. }
 Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
 Function IsTransientNetworkError(Const ErrorText: String): Boolean;
@@ -269,6 +281,73 @@ Begin
   If MessageText = '' Then
     MessageText := '(none)';
   Result := 'The task has stopped. Area: ' + AreaText + '. Exception: ' + ClassText + '. Message: ' + MessageText + '.';
+End;
+
+Function OneLineFault(Const Text: String): String;
+Begin
+  Result := Trim(Text);
+  Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+End;
+
+Function RecoveryPhrase(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin): String;
+Begin
+  Case Action Of
+    araRetryLastAction:
+      If Origin = afoTool Then
+        Result := AssistantRecoveryRetryTool
+      Else
+        Result := AssistantRecoveryRetryHttp;
+    araContinueTurn:
+      Result := AssistantRecoveryHandBackTool;
+    araIgnore:
+      If Origin = afoCallbackAfterDetach Then
+        Result := AssistantRecoveryIgnoreCallback
+      Else If Origin = afoPaintLayout Then
+        Result := AssistantRecoveryIgnorePaint
+      Else
+        Result := '';
+  Else
+    Result := '';
+  End;
+End;
+
+Function AssistantRecoveryProgressNote(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
+  Const Area, ErrorClass, ErrorText: String): String;
+Var
+  Phrase, FaultText, Detail: String;
+Begin
+  Phrase := RecoveryPhrase(Action, Origin);
+  If Phrase = '' Then
+    Exit('');
+  FaultText := Trim(ErrorClass);
+  If FaultText = '' Then
+    FaultText := Trim(Area);
+  Detail := OneLineFault(ErrorText);
+  If Detail <> '' Then
+    Begin
+      If FaultText <> '' Then
+        FaultText := FaultText + ': ' + Detail
+      Else
+        FaultText := Detail;
+    End;
+  If FaultText = '' Then
+    Result := Phrase
+  Else
+    Result := FaultText + '. ' + Phrase;
+End;
+
+Function IsAssistantRecoveryProgress(Const Text: String): Boolean;
+Var
+  S: String;
+Begin
+  S := Trim(Text);
+  Result :=
+    (Pos(AssistantRecoveryRetryHttp, S) > 0) Or
+    (Pos(AssistantRecoveryRetryTool, S) > 0) Or
+    (Pos(AssistantRecoveryHandBackTool, S) > 0) Or
+    (Pos(AssistantRecoveryIgnorePaint, S) > 0) Or
+    (Pos(AssistantRecoveryIgnoreCallback, S) > 0);
 End;
 
 End.
