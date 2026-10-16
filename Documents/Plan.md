@@ -52,7 +52,7 @@ One note per wait or retry. Do not post on the 50 ms poll.
 ## 2. Connection loss and credits
 
 ### 2.1 Retry a lost connection until Stop
-Status: not started
+Status: complete
 
 Keep the loop in `DoHttpRound`. Widen `IsTransientNetworkError` to cover HTTP 502, 503, and 504, an empty socket close, and the disconnect phrases the HTTPS layer already returns. HTTP 401 stays a single attempt, as `AssistantReconnectTest` requires.
 
