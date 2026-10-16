@@ -1995,21 +1995,11 @@ Begin
       ApplyRealBlock(TrackedTitle, AssistantUncheckedBlockAction(TrackedTitle));
       Exit;
     End;
-  { A missing Validation: build or Validation: tests line is not a block. A failed build is not either.
-    Leave the item in progress and report the reason so the same item can continue. }
+  { A missing Validation line, a failed build, or any other acceptance note stays in progress.
+    A blocked item is skipped by FindNextIncompleteBuildSection. None of these stop the run. }
   If Not CheckAssistantAcceptance(TrackedBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
-      If AssistantSectionHasUncheckedItem(TrackedBody) And (Not ContinuationCapReached) Then
-        LeaveInProgress(Note)
-      Else If AssistantAcceptanceIsHumanReview(Note) Or AssistantAcceptanceIsEvidenceGap(Note) Then
-        LeaveInProgress(Note)
-      Else
-        Begin
-          FPlanAgentResumeIndex := -1;
-          SetBuildStatusFeedback(Note);
-          If FPlanAgentRunning Then
-            StopRunPlan(Note);
-        End;
+      LeaveInProgress(Note);
       Exit;
     End;
   If WorkingRootHasGitRepository(ProjectAssistantRoot) Then
@@ -2256,10 +2246,13 @@ Begin
   FirstNotStarted := -1;
   If Not Assigned(BuildSections) Then
     Exit;
+  { Blocked items are skipped. That does not stop the run. }
   For I := 0 To BuildSections.Count - 1 Do
     Begin
       Section := TPlanSection(BuildSections[I]);
       If Not Section.Actionable Then
+        Continue;
+      If Section.Status = pssBlocked Then
         Continue;
       If Section.Status = pssInProgress Then
         Begin
