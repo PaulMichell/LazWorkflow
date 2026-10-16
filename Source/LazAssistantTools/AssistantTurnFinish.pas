@@ -62,7 +62,9 @@ Function ClassifyAssistantTurnFinish(Const Facts: TAssistantTurnFinishFacts): TA
 Function AssistantTurnFinishReasonName(Reason: TAssistantTurnFinishReason): String;
 { True only for the listed short deferrals, not for a long answer that happens to contain the words. }
 Function AssistantReplyIsShortDeferral(Const Text: String): Boolean;
-{ A User action line outside a fenced example. An empty line after the colon still counts. }
+{ A User action line outside a fenced example. An empty line after the colon still counts.
+  ActionText is the text after the colon. A fenced example does not count. }
+Function PlanBodyUserAction(Const Body: String; Out ActionText: String): Boolean;
 Function PlanBodyHasUserAction(Const Body: String): Boolean;
 { Cap until the recovery setting is snapshotted. }
 Function AssistantAutomaticContinuationCap: Integer;
@@ -179,7 +181,7 @@ Begin
       Exit(True);
 End;
 
-Function PlanBodyHasUserAction(Const Body: String): Boolean;
+Function PlanBodyUserAction(Const Body: String; Out ActionText: String): Boolean;
 Var
   Lines: TStringList;
   I, N, FenceLength: Integer;
@@ -187,6 +189,7 @@ Var
   Fence: Char;
 Begin
   Result := False;
+  ActionText := '';
   Lines := TStringList.Create;
   Try
     Lines.Text := Body;
@@ -213,11 +216,21 @@ Begin
         If Fence <> #0 Then
           Continue;
         If SameText(Copy(Line, 1, 12), 'User action:') Then
-          Exit(True);
+          Begin
+            ActionText := Trim(Copy(Line, 13, MaxInt));
+            Exit(True);
+          End;
       End;
   Finally
     Lines.Free;
   End;
+End;
+
+Function PlanBodyHasUserAction(Const Body: String): Boolean;
+Var
+  ActionText: String;
+Begin
+  Result := PlanBodyUserAction(Body, ActionText);
 End;
 
 Function ClassifyAssistantTurnFinish(Const Facts: TAssistantTurnFinishFacts): TAssistantTurnFinish;

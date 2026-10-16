@@ -12,7 +12,7 @@ Unit ProjectAssistantForm;
   The composer stack is positioned explicitly so showing the image list cannot
   reorder the text, buttons, or status bar. Paste reads pictures through the
   LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
-  share one path. }
+  share one path. The Run Plan end report is built in AssistantPlanRun. Reviewed 2026-10-16. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -26,7 +26,8 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
-  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish;
+  AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
+  AssistantPlanRun;
 
 Type
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
@@ -378,7 +379,10 @@ Type
     Procedure OfferFixTopErrorAfterReview;
     Procedure BuildWorkOnSelectedPackage;
     Procedure RunPlan;
-    Procedure StopRunPlan(Const Reason: String);
+    Function CollectPlanRunReportFacts(Kind: TPlanRunEndKind; Const Detail: String): TPlanRunReportFacts;
+    Function EndRunPlan(Kind: TPlanRunEndKind; Const Detail: String): String;
+    Procedure PostPlanRunReport(Const Report: String);
+    Procedure StopRunPlan(Kind: TPlanRunEndKind; Const Detail: String);
     Procedure ContinueRunPlan(Data: PtrInt);
     Procedure ContinueCodexAfterFinish(Data: PtrInt);
     Function QueryContinuation(Truncated, ToolRoundCap, HadToolRound: Boolean; Const AssistantText: String): Boolean;
@@ -1694,7 +1698,7 @@ End;
 
 Procedure TProjectAssistantForm.RefreshBuildTodos;
 Var
-  PlanRel, Err, Summary: String;
+  PlanRel, Err: String;
   I, KeepHeading, SelectIndex, NotStarted, InProgress, Blocked, Complete: Integer;
   Section: TPlanSection;
 
@@ -1702,11 +1706,7 @@ Var
   Begin
     If Not Assigned(BuildStatusLabel) Then
       Exit;
-    Summary := Format('%d not started · %d in progress · %d blocked · %d complete',
-      [NotStarted, InProgress, Blocked, Complete]);
-    If (NotStarted + InProgress + Blocked + Complete) = 0 Then
-      Summary := Summary + '  ·  no actionable items';
-    BuildStatusLabel.Caption := Summary;
+    BuildStatusLabel.Caption := AssistantPlanRunCountsLine(NotStarted, InProgress, Blocked, Complete);
   End;
 
 Begin
@@ -2265,17 +2265,147 @@ Begin
   Result := FirstNotStarted;
 End;
 
-Procedure TProjectAssistantForm.StopRunPlan(Const Reason: String);
+Function TProjectAssistantForm.CollectPlanRunReportFacts(Kind: TPlanRunEndKind; Const Detail: String): TPlanRunReportFacts;
+Var
+  I, N: Integer;
+  Section: TPlanSection;
+  PlanRel, Body, Err, ActionText: String;
 Begin
+  Result := DefaultPlanRunReportFacts;
+  Result.Kind := Kind;
+  Result.Detail := Detail;
+  Result.PackagesWorked := FPlanAgentPackagesDone;
+  Result.TerminalFault := Kind = preContextLimit;
+  If Not Assigned(BuildSections) Then
+    Exit;
+  For I := 0 To BuildSections.Count - 1 Do
+    Begin
+      Section := TPlanSection(BuildSections[I]);
+      If Not Section.Actionable Then
+        Continue;
+      Case Section.Status Of
+        pssNotStarted: Inc(Result.NotStarted);
+        pssInProgress: Inc(Result.InProgress);
+        pssBlocked: Inc(Result.Blocked);
+        pssComplete: Inc(Result.Complete);
+      Else
+        { Unknown status is not one of the four plan-list counts. }
+      End;
+    End;
+  SetLength(Result.BlockedItems, Result.Blocked);
+  N := 0;
+  PlanRel := GetActivePlanRelativePath;
+  For I := 0 To BuildSections.Count - 1 Do
+    Begin
+      Section := TPlanSection(BuildSections[I]);
+      If (Not Section.Actionable) Or (Section.Status <> pssBlocked) Then
+        Continue;
+      If N > High(Result.BlockedItems) Then
+        Break;
+      Result.BlockedItems[N].Title := Section.Title;
+      Result.BlockedItems[N].UserAction := '';
+      Result.BlockedItems[N].HasUserAction := False;
+      If (PlanRel <> '') And GetPlanSectionBody(PlanRel, I, Body, Err) Then
+        Result.BlockedItems[N].HasUserAction := PlanBodyUserAction(Body, ActionText);
+      If Result.BlockedItems[N].HasUserAction Then
+        Result.BlockedItems[N].UserAction := ActionText;
+      Inc(N);
+    End;
+  SetLength(Result.BlockedItems, N);
+End;
+
+Function TProjectAssistantForm.EndRunPlan(Kind: TPlanRunEndKind; Const Detail: String): String;
+Var
+  Facts: TPlanRunReportFacts;
+Begin
+  Result := '';
   If Not FPlanAgentRunning Then
     Exit;
   FPlanAgentRunning := False;
   SetAssistantPlanViewerQuiet(False);
   Application.RemoveAsyncCalls(Self);
-  SetBuildStatusFeedback('Plan agent stopped: ' + Reason);
-  SetCurrentSystemNote('**Plan agent stopped:** ' + Reason);
+  RefreshBuildTodos;
+  Facts := CollectPlanRunReportFacts(Kind, Detail);
+  Result := AssistantPlanRunReport(Facts);
+  SetBuildStatusFeedback('Plan run ended: ' + AssistantPlanRunWhy(Facts));
   UpdateStatusFooter;
-  WorkflowLogger.Info('ProjectAssistant', 'Plan agent stopped: ' + Reason);
+  WorkflowLogger.Info('ProjectAssistant', 'Plan run ended: ' + AssistantPlanRunWhy(Facts));
+End;
+
+Procedure TProjectAssistantForm.PostPlanRunReport(Const Report: String);
+Var
+  Turn: TConversationTurn;
+  Entry: TConversationIndexEntry;
+  Trace: TAssistantTrace;
+  Stored: Boolean;
+Begin
+  If Trim(Report) = '' Then
+    Exit;
+  Stored := False;
+  EnsureConversationStore;
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    Begin
+      Turn.Id := NewConversationTurnId;
+      Turn.Mode := AssistantModeToStr(amBuild);
+      Turn.Prompt := 'Plan run ended';
+      Turn.Thinking := '';
+      Turn.Response := Report;
+      Turn.CreatedAt := IsoNowUtc;
+      Turn.StartedAt := Turn.CreatedAt;
+      Turn.FinishedAt := Turn.CreatedAt;
+      Turn.DurationMs := 0;
+      Turn.ThinkingMs := 0;
+      Turn.Model := '';
+      Turn.Skill := '';
+      Turn.TokenEstimate := Length(Report) Div 4;
+      Turn.ErrorText := '';
+      Turn.PlanFile := GetActivePlanRelativePath;
+      Turn.TodoId := '';
+      Turn.EventsFile := '';
+      { Empty message list: the report is for the user, not replayed into the model. }
+      Turn.MessagesJson := '[]';
+      Turn.AttachmentsJson := '';
+      Turn.TraceJson := '';
+      Trace := TAssistantTrace.Create;
+      Try
+        Trace.AddNote(Report);
+        Turn.TraceJson := Trace.SaveToJson;
+      Finally
+        Trace.Free;
+      End;
+      Stored := ProjectAssistantConversation.AppendTurn(Turn, Entry);
+      If Not Stored Then
+        WorkflowLogger.Warning('ProjectAssistant', 'Plan run report was not stored: ' +
+          ProjectAssistantConversation.LastError);
+    End;
+  FDisplaySystemNote := Report;
+  If Stored Then
+    Begin
+      If Not FSending Then
+        Begin
+          FViewingLive := False;
+          FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
+        End;
+      RefreshConversationList;
+      RefreshChatDisplay(True, True);
+    End
+  Else
+    Begin
+      If Assigned(FTrace) Then
+        FTrace.AddNote(Report);
+      RefreshChatDisplay(True, True);
+      If Not FSending Then
+        MessageDlg(Report, mtInformation, [mbOK], 0);
+    End;
+End;
+
+Procedure TProjectAssistantForm.StopRunPlan(Kind: TPlanRunEndKind; Const Detail: String);
+Var
+  Report: String;
+Begin
+  Report := EndRunPlan(Kind, Detail);
+  If Report <> '' Then
+    PostPlanRunReport(Report);
 End;
 
 Procedure TProjectAssistantForm.RunPlan;
@@ -2300,7 +2430,8 @@ Begin
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
-      MessageDlg('All plan packages are already complete (or none found).', mtInformation, [mbOK], 0);
+      MessageDlg(AssistantPlanRunStartMessage(CollectPlanRunReportFacts(preCleanFinish, '')),
+        mtInformation, [mbOK], 0);
       Exit;
     End;
   FPlanAgentRunning := True;
@@ -2318,7 +2449,7 @@ Begin
     'context ≥ 95%, or max packages.');
   BuildWorkOnSelectedPackage;
   If Not FSending Then
-    StopRunPlan('could not start first package');
+    StopRunPlan(preError, 'Could not start the first package.');
 End;
 
 Procedure TProjectAssistantForm.ContinueRunPlan(Data: PtrInt);
@@ -2336,7 +2467,7 @@ Begin
     End;
   If FLastTurnHadError Then
     Begin
-      StopRunPlan('last package ended with an error');
+      StopRunPlan(preError, 'The last package ended with an error.');
       Exit;
     End;
   If FContextLimit > 0 Then
@@ -2356,29 +2487,28 @@ Begin
               Pct := (FContextUsed * 100) Div FContextLimit;
               If Pct >= 95 Then
                 Begin
-                  StopRunPlan(Format('context usage %d%% after compact — start a New Chat', [Pct]));
+                  StopRunPlan(preContextLimit, Format('context usage %d%% after compact — start a New Chat', [Pct]));
                   Exit;
                 End;
             End
           Else
             Begin
               MaybeWarnHighContextUsage;
-              StopRunPlan(Format('context usage %d%% — start a New Chat', [Pct]));
+              StopRunPlan(preContextLimit, Format('context usage %d%% — start a New Chat', [Pct]));
               Exit;
             End;
         End;
     End;
   If FPlanAgentPackagesDone >= FPlanAgentMaxPackages Then
     Begin
-      StopRunPlan(Format('reached max packages (%d)', [FPlanAgentMaxPackages]));
+      StopRunPlan(prePackageCap, IntToStr(FPlanAgentMaxPackages));
       Exit;
     End;
   RefreshBuildTodos;
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
-      StopRunPlan(Format('all packages complete (%d worked this run)',
-        [FPlanAgentPackagesDone]));
+      StopRunPlan(preCleanFinish, '');
       Exit;
     End;
   FBuildSelectedIndex := Idx;
@@ -2387,7 +2517,7 @@ Begin
   SetBuildStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
   BuildWorkOnSelectedPackage;
   If Not FSending Then
-    StopRunPlan('failed to start next package');
+    StopRunPlan(preError, 'Failed to start the next package.');
 End;
 
 Procedure TProjectAssistantForm.RunPlanActionExecute(Sender: TObject);
@@ -2396,7 +2526,7 @@ Begin
     Begin
       If MessageDlg('Stop the plan agent after the current reply finishes?',
         mtConfirmation, [mbYes, mbNo], 0) = mrYes Then
-        StopRunPlan('stopped by user');
+        StopRunPlan(preUserStop, 'stopped by user');
       Exit;
     End;
   RunPlan;
@@ -6158,11 +6288,9 @@ Begin
           If (Pos('host name resolution', LowerCase(ResolvedError)) > 0) Or
             (Pos('network', LowerCase(ResolvedError)) > 0) Or
             (Pos('timed out', LowerCase(ResolvedError)) > 0) Then
-            StopRunPlan(
-              'network error. Check connectivity, then click ' +
-              '**Run Plan** again to resume remaining packages. ' + ResolvedError)
+            StopRunPlan(preError, 'Network error. Check connectivity. ' + ResolvedError)
           Else
-            StopRunPlan('error: ' + ResolvedError);
+            StopRunPlan(preError, ResolvedError);
         End
       Else
         Begin
@@ -6268,7 +6396,7 @@ Begin
   StatusFooter.SetRightText('Cancelled');
   PersistSession;
   If FPlanAgentRunning Then
-    StopRunPlan('stream cancelled by user');
+    StopRunPlan(preUserStop, 'stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
 End;
 
@@ -7568,10 +7696,14 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean; UseChatDefault: Boolean);
+Var
+  Report: String;
 Begin
   FPlanAgentResumeIndex := -1;
+  Report := '';
+  { End the run before the old conversation is archived, then post into the new one. }
   If FPlanAgentRunning And (Not KeepPlanAgent) Then
-    StopRunPlan('new chat');
+    Report := EndRunPlan(preNewChat, 'new chat');
   If FSending Then
     StopStream;
   SetSending(False);
@@ -7596,7 +7728,9 @@ Begin
   RefreshChatDisplay(True, False);
   If UseChatDefault Then
     SelectMode(amChat);
-  If Not FAutoRolloverInProgress Then
+  If Report <> '' Then
+    PostPlanRunReport(Report)
+  Else If Not FAutoRolloverInProgress Then
     Begin
       If UseChatDefault Then
         SetCurrentSystemNote('New conversation started in **Chat**. Previous chat moved to History.')
