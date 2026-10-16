@@ -41,7 +41,7 @@ Status: complete
 A terminal stop uses one conversation note: the area, the exception class, the message, and that the task has stopped. No partial tool recipe and no second retry after that note.
 
 ### 1.3 Report every recovery in the conversation
-Status: not started
+Status: complete
 
 Each ignore, retry, or continue posts one system note before the next attempt. The note names the fault and the resolution, for example a retry of the HTTP round, a tool error handed back to the model, or a paint fault that was ignored.
 
