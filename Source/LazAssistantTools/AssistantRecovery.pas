@@ -16,12 +16,16 @@ Interface
 Const
   { Fault retries per action until the setting in the recovery plan is snapshotted. }
   DefaultFaultRetryCap = 1;
+  { Reconnect interval until item 5.1 stores the setting. Snapshotted when the turn starts. }
+  DefaultReconnectIntervalSeconds = 30;
   { Stable phrases. IsAssistantProgressStatus matches these so a late snapshot is not an error. }
   AssistantRecoveryRetryHttp = 'Retrying the HTTP round.';
   AssistantRecoveryRetryTool = 'Retrying the read-only tool.';
   AssistantRecoveryHandBackTool = 'Handing the tool error back to the model.';
   AssistantRecoveryIgnorePaint = 'Ignoring a paint fault.';
   AssistantRecoveryIgnoreCallback = 'Ignoring a callback after detach.';
+  AssistantRecoveryWaitReconnect = 'Waiting to reconnect.';
+  AssistantRecoveryResumeCall = 'Resuming the call.';
 
 Type
   TAssistantRecoveryAction = (
@@ -80,6 +84,11 @@ Function IsAssistantRecoveryProgress(Const Text: String): Boolean;
 { Phrase list formerly in the actor. Connection-loss widening stays here. }
 Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
 Function IsTransientNetworkError(Const ErrorText: String): Boolean;
+{ Milliseconds. The actor snapshots this when the turn starts. }
+Function AssistantReconnectIntervalMs: QWord;
+Function AssistantReconnectWaitNote(Const ErrorText: String): String;
+Function AssistantReconnectResumeNote: String;
+Function AssistantPhaseIsReconnectWait(Const Phase: String): Boolean;
 
 Implementation
 
@@ -127,19 +136,38 @@ Begin
   Result := (Fault.HttpStatus = Wanted) Or (HttpStatusInText(Fault.ErrorText) = Wanted);
 End;
 
-Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
+Function IsGatewayStatus(Code: Integer): Boolean;
+Begin
+  Result := (Code = 502) Or (Code = 503) Or (Code = 504);
+End;
+
+Function IsTransientNetworkError(Const ErrorText: String): Boolean;
 Var
   Lowered: String;
 Begin
+  { An empty socket close has no message. Cancelled. is not empty. }
+  If Trim(ErrorText) = '' Then
+    Exit(True);
   Lowered := LowerCase(ErrorText);
   Result :=
+    IsGatewayStatus(HttpStatusInText(ErrorText)) Or
     (Pos('host name resolution', Lowered) > 0) Or
     (Pos('could not resolve', Lowered) > 0) Or
     (Pos('name or service not known', Lowered) > 0) Or
     (Pos('temporary failure in name resolution', Lowered) > 0) Or
     (Pos('network is unreachable', Lowered) > 0) Or
+    (Pos('no route to host', Lowered) > 0) Or
+    (Pos('host is unreachable', Lowered) > 0) Or
+    (Pos('host unreachable', Lowered) > 0) Or
+    (Pos('could not connect', Lowered) > 0) Or
     (Pos('connection refused', Lowered) > 0) Or
     (Pos('connection reset', Lowered) > 0) Or
+    (Pos('connection abort', Lowered) > 0) Or
+    (Pos('forcibly closed', Lowered) > 0) Or
+    (Pos('peer closed', Lowered) > 0) Or
+    (Pos('server closed', Lowered) > 0) Or
+    (Pos('socket closed', Lowered) > 0) Or
+    (Pos('socket close', Lowered) > 0) Or
     (Pos('timed out', Lowered) > 0) Or
     (Pos('timeout', Lowered) > 0) Or
     (Pos('socket error', Lowered) > 0) Or
@@ -147,12 +175,20 @@ Begin
     (Pos('error writing data to socket', Lowered) > 0) Or
     (Pos('broken pipe', Lowered) > 0) Or
     (Pos('connection closed', Lowered) > 0) Or
-    (Pos('response stream ended before completion', Lowered) > 0);
+    (Pos('unexpected eof', Lowered) > 0) Or
+    (Pos('end of file', Lowered) > 0) Or
+    (Pos('empty reply', Lowered) > 0) Or
+    (Pos('response stream ended before completion', Lowered) > 0) Or
+    (Pos('wininet internetopen failed', Lowered) > 0) Or
+    (Pos('wininet internetconnect failed', Lowered) > 0) Or
+    (Pos('wininet httpopenrequest failed', Lowered) > 0) Or
+    (Pos('wininet httpsendrequest failed', Lowered) > 0) Or
+    (Pos('wininet internetreadfile failed', Lowered) > 0);
 End;
 
-Function IsTransientNetworkError(Const ErrorText: String): Boolean;
+Function AssistantFaultIsDisconnect(Const ErrorText: String): Boolean;
 Begin
-  Result := AssistantFaultIsDisconnect(ErrorText);
+  Result := IsTransientNetworkError(ErrorText);
 End;
 
 Function FaultIsCancel(Const Fault: TAssistantFault): Boolean;
@@ -226,7 +262,8 @@ Begin
 
   If Fault.Origin = afoHttpRound Then
     Begin
-      If AssistantFaultIsDisconnect(Fault.ErrorText) Then
+      { Lost connection, including 502/503/504. No attempt cap. 401 already stopped above. }
+      If IsTransientNetworkError(Fault.ErrorText) Or IsGatewayStatus(Fault.HttpStatus) Then
         Exit(Recovery(araRetryLastAction, True));
       If Attempt > Cap Then
         Exit(Recovery(araStop, False));
@@ -347,7 +384,35 @@ Begin
     (Pos(AssistantRecoveryRetryTool, S) > 0) Or
     (Pos(AssistantRecoveryHandBackTool, S) > 0) Or
     (Pos(AssistantRecoveryIgnorePaint, S) > 0) Or
-    (Pos(AssistantRecoveryIgnoreCallback, S) > 0);
+    (Pos(AssistantRecoveryIgnoreCallback, S) > 0) Or
+    (Pos(AssistantRecoveryWaitReconnect, S) > 0) Or
+    (Pos(AssistantRecoveryResumeCall, S) > 0);
+End;
+
+Function AssistantReconnectIntervalMs: QWord;
+Begin
+  Result := QWord(DefaultReconnectIntervalSeconds) * 1000;
+End;
+
+Function AssistantReconnectWaitNote(Const ErrorText: String): String;
+Var
+  Detail: String;
+Begin
+  Detail := OneLineFault(ErrorText);
+  If Detail = '' Then
+    Result := 'Connection lost. ' + AssistantRecoveryWaitReconnect
+  Else
+    Result := 'Connection lost: ' + Detail + '. ' + AssistantRecoveryWaitReconnect;
+End;
+
+Function AssistantReconnectResumeNote: String;
+Begin
+  Result := AssistantRecoveryResumeCall;
+End;
+
+Function AssistantPhaseIsReconnectWait(Const Phase: String): Boolean;
+Begin
+  Result := (Phase = 'Re-establishing Connection') Or (Pos(AssistantRecoveryWaitReconnect, Phase) > 0);
 End;
 
 End.

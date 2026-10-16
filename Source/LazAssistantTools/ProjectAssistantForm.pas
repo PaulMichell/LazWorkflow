@@ -2907,7 +2907,7 @@ Var
   Secs, Mins, Rem: Integer;
   ReconnectSecs: QWord;
 Begin
-  If Phase = 'Re-establishing Connection' Then
+  If AssistantPhaseIsReconnectWait(Phase) Then
     Begin
       ReconnectSecs := (GetTickCount64 - FReconnectStartTick) Div 1000;
       If ReconnectSecs >= 3600 Then
@@ -2933,7 +2933,7 @@ End;
 
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
 Begin
-  If (Phase = 'Re-establishing Connection') And (FStatusPhase <> Phase) Then
+  If AssistantPhaseIsReconnectWait(Phase) And (Not AssistantPhaseIsReconnectWait(FStatusPhase)) Then
     FReconnectStartTick := GetTickCount64;
   FStatusPhase := Phase;
   StatusFooter.SetRightActivityText(FormatElapsedStatus(Phase), Phase);

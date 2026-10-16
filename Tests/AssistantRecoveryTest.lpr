@@ -41,6 +41,7 @@ End;
 Var
   Note: String;
   Decision: TAssistantRecovery;
+  Sample: TAssistantFault;
 Begin
   FailCount := 0;
   Note := AssistantRecoveryStopNote('ExecuteAssistantToolForMode', 'EAccessViolation', 'Access violation');
@@ -89,6 +90,36 @@ Begin
   Check('terminal stop is not a progress sentence', Not IsAssistantRecoveryProgress(Note));
   Check('stop has no progress phrase', AssistantRecoveryProgressNote(araStop, afoTool, 'tool', 'EAccessViolation',
     'Access violation') = '');
+
+  Check('HTTP 502 is a lost connection', IsTransientNetworkError('HTTP 502: Bad Gateway'));
+  Check('HTTP 503 is a lost connection', IsTransientNetworkError('HTTP 503'));
+  Check('HTTP 504 is a lost connection', IsTransientNetworkError('HTTP 504: Gateway Timeout'));
+  Check('empty socket close is a lost connection', IsTransientNetworkError(''));
+  Check('socket closed is a lost connection', IsTransientNetworkError('Socket closed'));
+  Check('WinINet read failure is a lost connection',
+    IsTransientNetworkError('WinINet InternetReadFile failed (12030)'));
+  Check('HTTP 401 is not a lost connection', Not IsTransientNetworkError('HTTP 401: Unauthorized'));
+  Sample := Fault(afoHttpRound, '', '', 'HTTP 502: Bad Gateway', 8);
+  Decision := ClassifyAssistantFault(Sample);
+  Check('502 keeps retrying with a wait', (Decision.Action = araRetryLastAction) And Decision.WaitForConnection);
+  Sample := DefaultAssistantFault;
+  Sample.Origin := afoHttpRound;
+  Sample.HttpStatus := 503;
+  Sample.ErrorText := 'unavailable';
+  Sample.Attempt := 9;
+  Sample.AttemptCap := 1;
+  Sample.OwnsTurn := True;
+  Decision := ClassifyAssistantFault(Sample);
+  Check('status 503 has no attempt cap', (Decision.Action = araRetryLastAction) And Decision.WaitForConnection);
+  Sample := Fault(afoHttpRound, '', '', 'HTTP 401: Unauthorized', 1);
+  Sample.HttpStatus := 401;
+  Decision := ClassifyAssistantFault(Sample);
+  Check('HTTP 401 still stops once', Decision.Action = araStop);
+  Check('wait note names the fault', Pos('Error reading data from socket',
+    AssistantReconnectWaitNote('Error reading data from socket')) > 0);
+  Check('wait note is progress', IsAssistantRecoveryProgress(AssistantReconnectWaitNote('socket closed')));
+  Check('resume note is progress', IsAssistantRecoveryProgress(AssistantReconnectResumeNote));
+  Check('reconnect interval defaults to 30 seconds', AssistantReconnectIntervalMs = 30000);
   If FailCount <> 0 Then
     Halt(1);
 End.

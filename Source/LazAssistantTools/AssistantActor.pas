@@ -65,6 +65,10 @@ Type
     FToolCallsCommitted: Boolean;
     FActiveToolIndex: Integer;
     FActiveToolRecorded: Boolean;
+    { Snapshotted when the turn starts. WaitForReconnect reads the field DoHttpRound sets. }
+    FReconnectIntervalMs: QWord;
+    FReconnectWaitMs: QWord;
+    Procedure PostConnectionNote(Const Sentence: String);
     Function ClassifyFault(Origin: TAssistantFaultOrigin; Const Area, ToolName, ErrorClass, ErrorText: String;
       HttpStatus, Attempt: Integer; OwnsTurn: Boolean): TAssistantRecovery;
     Function NextFaultAttempt(Const Site: String): Integer;
@@ -202,6 +206,8 @@ Begin
   FToolCallsCommitted := False;
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
+  FReconnectIntervalMs := AssistantReconnectIntervalMs;
+  FReconnectWaitMs := FReconnectIntervalMs;
 End;
 
 Destructor TAssistantActor.Destroy;
@@ -352,6 +358,14 @@ Begin
     Exit;
   Sentence := AssistantRecoveryProgressNote(Action, Origin, Area, ErrorClass, ErrorText);
   If Sentence = '' Then
+    Exit;
+  EmitSnapshot(False, Sentence, True);
+  LogEvent(aekRecovery, Sentence);
+End;
+
+Procedure TAssistantActor.PostConnectionNote(Const Sentence: String);
+Begin
+  If FTerminalNoted Or Terminated Or (Sentence = '') Then
     Exit;
   EmitSnapshot(False, Sentence, True);
   LogEvent(aekRecovery, Sentence);
@@ -715,10 +729,13 @@ End;
 
 Function TAssistantActor.WaitForReconnect: Boolean;
 Var
-  StartTick: QWord;
+  StartTick, WaitMs: QWord;
 Begin
+  WaitMs := FReconnectWaitMs;
+  If WaitMs = 0 Then
+    WaitMs := AssistantReconnectIntervalMs;
   StartTick := GetTickCount64;
-  While (Not Terminated) And (GetTickCount64 - StartTick < 30000) Do
+  While (Not Terminated) And (GetTickCount64 - StartTick < WaitMs) Do
     Sleep(50);
   Result := Not Terminated;
 End;
@@ -846,15 +863,23 @@ Begin
         FHttpFaultAttempt + 1, True);
       If Decision.Action <> araRetryLastAction Then
         Exit;
-      { One note before the next attempt. WaitForReconnect sleeps; it does not post. }
-      PostRecovery(araRetryLastAction, afoHttpRound, 'TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText);
-      If Not Decision.WaitForConnection Then
-        FHttpFaultAttempt := FHttpFaultAttempt + 1;
       If Decision.WaitForConnection Then
         Begin
-          WorkflowLogger.Warning('AssistantActor', 'Reconnecting in 30 seconds: ' + ErrorText);
+          { No attempt cap. One note at the start of the wait, not on the 50 ms sleep. }
+          FReconnectWaitMs := FReconnectIntervalMs;
+          If FReconnectWaitMs = 0 Then
+            FReconnectWaitMs := AssistantReconnectIntervalMs;
+          PostConnectionNote(AssistantReconnectWaitNote(ErrorText));
+          WorkflowLogger.Warning('AssistantActor',
+            Format('Reconnecting in %d seconds: %s', [FReconnectWaitMs Div 1000, ErrorText]));
           If Not WaitForReconnect Then
             Break;
+          PostConnectionNote(AssistantReconnectResumeNote);
+        End
+      Else
+        Begin
+          PostRecovery(araRetryLastAction, afoHttpRound, 'TAssistantActor.DoHttpRound', FHttpExceptionClass, ErrorText);
+          FHttpFaultAttempt := FHttpFaultAttempt + 1;
         End;
     End;
   ErrorText := CancelWaitHint;
@@ -1738,6 +1763,7 @@ Begin
   FToolCallsCommitted := False;
   FActiveToolIndex := -1;
   FActiveToolRecorded := False;
+  FReconnectIntervalMs := AssistantReconnectIntervalMs;
   Attempt := 0;
   Repeat
     Inc(Attempt);
