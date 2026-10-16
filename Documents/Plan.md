@@ -167,7 +167,7 @@ Do not say that all packages are complete when a blocked item remains. The start
 ## 5. Settings
 
 ### 5.1 Add the recovery controls
-Status: not started
+Status: complete
 
 On the General page, add a Recovery group between Context and Skills. Stream it in `AssistantSettingsForm.lfm`. Skills stays the client-aligned group. On screen the order is Transcript, Prompt, Context, Recovery, then Skills.
 
