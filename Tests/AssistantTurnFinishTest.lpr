@@ -10,6 +10,23 @@ Program AssistantTurnFinishTest;
 Uses
   SysUtils, AssistantTurnFinish;
 
+Function OneTool(Const Name: String; Ok: Boolean; Const Detail: String): TAssistantSummaryTool;
+Begin
+  Result.Name := Name;
+  Result.Ok := Ok;
+  Result.Detail := Detail;
+End;
+
+Function ToolList(Const Items: Array Of TAssistantSummaryTool): TAssistantSummaryToolArray;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  SetLength(Result, Length(Items));
+  For I := 0 To High(Items) Do
+    Result[I] := Items[I];
+End;
+
 Var
   FailCount: Integer;
 
@@ -45,7 +62,7 @@ Begin
 End;
 
 Var
-  LongDeferral: String;
+  LongDeferral, Summary: String;
   Answer: TAssistantContinuation;
 Begin
   FailCount := 0;
@@ -114,6 +131,45 @@ Begin
   Check('terminal fault does not continue', Not Answer.ContinueTurn);
   Answer := AssistantDecideContinuation(Facts(False, False, False, False, False, 'Fixed the leak.'), False, False, 0, 3, '');
   Check('finished reply is not continued', Not Answer.ContinueTurn);
+
+  Check('written text does not need a summary', Not AssistantNeedsFinalSummary('Done.'));
+  Check('empty text needs a summary', AssistantNeedsFinalSummary(''));
+  Check('whitespace needs a summary', AssistantNeedsFinalSummary('  ' + LineEnding));
+
+  Summary := AssistantFinalSummary('Fix the leak.', ToolList([OneTool('read_file', True, ''),
+    OneTool('run_compile', False, 'lazbuild exited 1')]));
+  Check('summary names the ask', Pos('Asked: Fix the leak.', Summary) = 1);
+  Check('summary names the tools', Pos('Tools: read_file, run_compile (failed).', Summary) > 0);
+  Check('summary states the failure', Pos('Outcome: run_compile failed: lazbuild exited 1.', Summary) > 0);
+
+  Summary := AssistantFinalSummary('Explain the leak', ToolList([]));
+  Check('no tools says none', Pos('Tools: none.', Summary) > 0);
+  Check('no tools states the empty outcome', Pos('Outcome: No assistant text was returned.', Summary) > 0);
+  Check('ask without a stop gets one period', Pos('Asked: Explain the leak.', Summary) = 1);
+
+  Summary := AssistantFinalSummary('', ToolList([OneTool('grep', True, 'unused')]));
+  Check('missing prompt is named', Pos('Asked: no prompt text.', Summary) = 1);
+  Check('successful tools are the outcome', Pos('Outcome: The tools finished.', Summary) > 0);
+  Check('a successful tool detail is not dumped', Pos('unused', Summary) = 0);
+
+  Summary := AssistantFinalSummary('Read it.', ToolList([OneTool('read_file', True, ''), OneTool('read_file', True, ''),
+    OneTool('grep', True, '')]));
+  Check('repeated tool is counted', Pos('read_file (2)', Summary) > 0);
+
+  Summary := AssistantFinalSummary('x', ToolList([OneTool('git', False, 'line one' + LineEnding + 'line two')]));
+  Check('failure detail keeps the first line', Pos('line one', Summary) > 0);
+  Check('failure detail drops later lines', Pos('line two', Summary) = 0);
+
+  Summary := AssistantFinalSummary(StringOfChar('a', 400), ToolList([]));
+  Check('long ask keeps the start', Pos('Asked: ' + StringOfChar('a', 40), Summary) = 1);
+  Check('long ask is shortened', Pos('...', Summary) > 0);
+  Check('long ask is not copied whole', Pos(StringOfChar('a', 200), Summary) = 0);
+
+  Check('successful empty turn is not stored', Not AssistantMayStoreTurn('', ''));
+  Check('successful whitespace is not stored', Not AssistantMayStoreTurn('', '   '));
+  Check('successful text is stored', AssistantMayStoreTurn('', Summary));
+  Check('cancelled empty turn may be stored', AssistantMayStoreTurn('cancelled', ''));
+  Check('error empty turn may be stored', AssistantMayStoreTurn('socket closed', ''));
 
   If FailCount = 0 Then
     WriteLn('All premature-Ready decisions passed.')

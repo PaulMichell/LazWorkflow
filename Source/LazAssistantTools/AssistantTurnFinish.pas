@@ -4,7 +4,8 @@ Unit AssistantTurnFinish;
 
   The decision is structural. A short reply is not unfinished by length alone.
   The only prose match is a short explicit deferral. Continuation uses that
-  decision and does not guess from the prose. }
+  decision and does not guess from the prose. A finished turn with no assistant
+  text gets one short trace summary. Text the model already wrote is kept. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -71,6 +72,22 @@ Function AssistantContinuationInstruction: String;
 Function AssistantDecideContinuation(Const Facts: TAssistantTurnFinishFacts; UserStopped, TerminalFault: Boolean;
   Attempt, Cap: Integer; Const ItemTitle: String): TAssistantContinuation;
 Function AssistantTurnFinishRemains(Reason: TAssistantTurnFinishReason; Const ItemTitle: String): String;
+
+Type
+  { One tool or subagent the summary may name. Detail is optional and may be long; it is shortened. }
+  TAssistantSummaryTool = Record
+    Name: String;
+    Ok: Boolean;
+    Detail: String;
+  End;
+  TAssistantSummaryToolArray = Array Of TAssistantSummaryTool;
+
+{ True when the assistant message is missing, so a trace summary may be written. Non-empty text is kept. }
+Function AssistantNeedsFinalSummary(Const AssistantText: String): Boolean;
+{ Asked, the tools that ran, and the outcome. Always non-empty. Does not repeat text the model already wrote. }
+Function AssistantFinalSummary(Const Asked: String; Const Tools: TAssistantSummaryToolArray): String;
+{ A successful turn needs a response. A cancel or other error may be stored with an empty reply. }
+Function AssistantMayStoreTurn(Const ErrorText, Response: String): Boolean;
 
 Implementation
 
@@ -291,6 +308,204 @@ Begin
   Result.ContinueTurn := True;
   Result.Note := StoppedPhrase(Decision.Reason, ItemTitle) + ' The assistant is resuming. Attempt ' +
     IntToStr(Attempt + 1) + ' of ' + IntToStr(Cap) + '.';
+End;
+
+Const
+  SummaryAskedMax = 160;
+  SummaryDetailMax = 120;
+  SummaryNameMax = 48;
+  SummaryToolNamesShown = 8;
+  SummaryFailuresShown = 4;
+
+Function AssistantNeedsFinalSummary(Const AssistantText: String): Boolean;
+Begin
+  Result := Trim(AssistantText) = '';
+End;
+
+Function AssistantMayStoreTurn(Const ErrorText, Response: String): Boolean;
+Begin
+  If Trim(ErrorText) <> '' Then
+    Exit(True);
+  Result := Trim(Response) <> '';
+End;
+
+Function CollapseSpaces(Const Text: String): String;
+Var
+  I: Integer;
+  C: Char;
+  PendingSpace: Boolean;
+Begin
+  Result := '';
+  PendingSpace := False;
+  For I := 1 To Length(Text) Do
+    Begin
+      C := Text[I];
+      If C <= ' ' Then
+        Begin
+          If Result <> '' Then
+            PendingSpace := True;
+        End
+      Else
+        Begin
+          If PendingSpace Then
+            Result := Result + ' ';
+          PendingSpace := False;
+          Result := Result + C;
+        End;
+    End;
+  Result := Trim(Result);
+End;
+
+Function CollapseLine(Const Text: String; MaxChars: Integer): String;
+Begin
+  Result := CollapseSpaces(Text);
+  If MaxChars < 1 Then
+    MaxChars := 1;
+  If Length(Result) > MaxChars Then
+    Result := Copy(Result, 1, MaxChars) + '...';
+End;
+
+Function FirstLine(Const Text: String; MaxChars: Integer): String;
+Var
+  Line: String;
+  BreakAt: Integer;
+Begin
+  Line := Text;
+  BreakAt := Pos(#10, Line);
+  If BreakAt > 0 Then
+    Line := Copy(Line, 1, BreakAt - 1);
+  BreakAt := Pos(#13, Line);
+  If BreakAt > 0 Then
+    Line := Copy(Line, 1, BreakAt - 1);
+  Result := CollapseLine(Line, MaxChars);
+End;
+
+Function SummaryToolName(Const Name: String): String;
+Begin
+  Result := CollapseLine(Name, SummaryNameMax);
+  If Result = '' Then
+    Result := 'tool';
+End;
+
+Function AssistantFinalSummary(Const Asked: String; Const Tools: TAssistantSummaryToolArray): String;
+Type
+  TNameRoll = Record
+    Name: String;
+    Count: Integer;
+    Failed: Boolean;
+    Detail: String;
+  End;
+  TNameRollArray = Array Of TNameRoll;
+Var
+  Rolls: TNameRollArray;
+  Failed: TStringList;
+  I, J, Shown, Distinct: Integer;
+  Name, Detail, ToolLine, FailLine, AskedLine: String;
+  Found: Boolean;
+Begin
+  Rolls := Nil;
+  Failed := TStringList.Create;
+  Try
+    For I := 0 To High(Tools) Do
+      Begin
+        Name := SummaryToolName(Tools[I].Name);
+        Found := False;
+        For J := 0 To High(Rolls) Do
+          If SameText(Rolls[J].Name, Name) Then
+            Begin
+              Inc(Rolls[J].Count);
+              If Not Tools[I].Ok Then
+                Rolls[J].Failed := True;
+              If (Rolls[J].Detail = '') And (Not Tools[I].Ok) Then
+                Rolls[J].Detail := FirstLine(Tools[I].Detail, SummaryDetailMax);
+              Found := True;
+              Break;
+            End;
+        If Found Then
+          Continue;
+        J := Length(Rolls);
+        SetLength(Rolls, J + 1);
+        Rolls[J].Name := Name;
+        Rolls[J].Count := 1;
+        Rolls[J].Failed := Not Tools[I].Ok;
+        If Rolls[J].Failed Then
+          Rolls[J].Detail := FirstLine(Tools[I].Detail, SummaryDetailMax)
+        Else
+          Rolls[J].Detail := '';
+      End;
+    ToolLine := '';
+    Shown := Length(Rolls);
+    If Shown > SummaryToolNamesShown Then
+      Shown := SummaryToolNamesShown;
+    For I := 0 To Shown - 1 Do
+      Begin
+        If ToolLine <> '' Then
+          ToolLine := ToolLine + ', ';
+        ToolLine := ToolLine + Rolls[I].Name;
+        If Rolls[I].Failed And (Rolls[I].Count > 1) Then
+          ToolLine := ToolLine + ' (' + IntToStr(Rolls[I].Count) + ', failed)'
+        Else If Rolls[I].Failed Then
+          ToolLine := ToolLine + ' (failed)'
+        Else If Rolls[I].Count > 1 Then
+          ToolLine := ToolLine + ' (' + IntToStr(Rolls[I].Count) + ')';
+      End;
+    Distinct := Length(Rolls) - Shown;
+    If Distinct > 0 Then
+      Begin
+        If ToolLine <> '' Then
+          ToolLine := ToolLine + ', ';
+        ToolLine := ToolLine + 'and ' + IntToStr(Distinct) + ' more';
+      End;
+    If ToolLine = '' Then
+      ToolLine := 'none';
+    Detail := '';
+    For I := 0 To High(Rolls) Do
+      If Rolls[I].Failed Then
+        Begin
+          Failed.Add(Rolls[I].Name);
+          If (Detail = '') And (Rolls[I].Detail <> '') Then
+            Detail := Rolls[I].Detail;
+        End;
+    If Failed.Count = 0 Then
+      Begin
+        If Length(Rolls) = 0 Then
+          FailLine := 'No assistant text was returned.'
+        Else
+          FailLine := 'The tools finished.';
+      End
+    Else
+      Begin
+        FailLine := '';
+        Shown := Failed.Count;
+        If Shown > SummaryFailuresShown Then
+          Shown := SummaryFailuresShown;
+        For I := 0 To Shown - 1 Do
+          Begin
+            If I = 0 Then
+              FailLine := Failed[I]
+            Else If (I = Shown - 1) And (Failed.Count <= SummaryFailuresShown) Then
+              FailLine := FailLine + ' and ' + Failed[I]
+            Else
+              FailLine := FailLine + ', ' + Failed[I];
+          End;
+        If Failed.Count > SummaryFailuresShown Then
+          FailLine := FailLine + ', and ' + IntToStr(Failed.Count - SummaryFailuresShown) + ' more';
+        FailLine := FailLine + ' failed';
+        If Detail <> '' Then
+          FailLine := FailLine + ': ' + Detail;
+        FailLine := FailLine + '.';
+      End;
+  Finally
+    Failed.Free;
+  End;
+  If Trim(Asked) = '' Then
+    AskedLine := 'no prompt text'
+  Else
+    AskedLine := CollapseLine(Asked, SummaryAskedMax);
+  If (AskedLine <> '') And (Not (AskedLine[Length(AskedLine)] In ['.', '!', '?'])) Then
+    AskedLine := AskedLine + '.';
+  Result := 'Asked: ' + AskedLine + LineEnding + LineEnding + 'Tools: ' + ToolLine + '.' + LineEnding + LineEnding +
+    'Outcome: ' + FailLine;
 End;
 
 End.

@@ -419,6 +419,7 @@ Type
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
     Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
+    Procedure EnsureFinalAssistantSummary;
     Procedure FinishAssistantReply(Const ErrorText: String);
     Function CurrentTurnFinishFacts(Truncated, ToolRoundCap, ServiceHadTools: Boolean): TAssistantTurnFinishFacts;
     Procedure StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
@@ -2803,6 +2804,92 @@ Begin
   Trace.SetUserImageRefs(TraceRefs);
 End;
 
+Procedure TProjectAssistantForm.EnsureFinalAssistantSummary;
+Var
+  Existing, Summary, Asked: String;
+  Tools: TAssistantSummaryToolArray;
+
+  Procedure ShowAnswer(Const Text: String);
+  Var
+    Block: TTraceBlock;
+  Begin
+    If Trim(Text) = '' Then
+      Exit;
+    FLiveContent := Text;
+    FAnswerSliceStart := 1;
+    If Assigned(FTrace) Then
+      Begin
+        FTrace.FinishCurrentThinking;
+        Block := FTrace.EnsureAnswer;
+        If (Trim(Block.Body) = '') Or (Not SliceLooksLikeAnswer(Block.Body)) Or (Trim(Block.Body) = Trim(Text)) Then
+          Block.Body := Text;
+        Block.Running := False;
+      End;
+    FAssistantContent := Text;
+    If FViewingLive Or FSending Or FStreamingActive Then
+      RefreshChatDisplay(True, True);
+  End;
+
+  Function CollectTools: TAssistantSummaryToolArray;
+  Var
+    I, N: Integer;
+    Block: TTraceBlock;
+  Begin
+    Result := Nil;
+    If Not Assigned(FTrace) Then
+      Exit;
+    For I := 0 To FTrace.Count - 1 Do
+      Begin
+        Block := FTrace[I];
+        If (Not Assigned(Block)) Or (Not (Block.Kind In [tbkTool, tbkSubagent])) Then
+          Continue;
+        N := Length(Result);
+        SetLength(Result, N + 1);
+        Result[N].Name := Trim(Block.ToolName);
+        If Result[N].Name = '' Then
+          Result[N].Name := Trim(Block.Title);
+        Result[N].Ok := Block.Ok And (Not Block.Running);
+        If Block.Running And (Trim(Block.Body) = '') Then
+          Result[N].Detail := 'did not finish'
+        Else If Not Result[N].Ok Then
+          Result[N].Detail := Copy(Block.Body, 1, 500)
+        Else
+          Result[N].Detail := '';
+      End;
+  End;
+
+  Function AskedText: String;
+  Begin
+    If Trim(FLiveUser) <> '' Then
+      Result := Trim(FLiveUser)
+    Else
+      Result := Trim(FDisplayUser);
+    If Result <> '' Then
+      Exit;
+    If (Trim(FPendingTurnAttachments) <> '') Or
+      (Assigned(AssistantClient) And (Trim(AssistantClient.OpeningUserAttachmentsJson) <> '')) Then
+      Result := 'an image';
+  End;
+
+Begin
+  Existing := Trim(FLiveContent);
+  If (Existing = '') And Assigned(FTrace) Then
+    Existing := Trim(FTrace.JoinedAnswers);
+  If Not AssistantNeedsFinalSummary(Existing) Then
+    Begin
+      { The model already wrote the reply. Keep it, and do not append another summary. }
+      If (Trim(FLiveContent) <> '') And ((Not Assigned(FTrace)) Or (Trim(FTrace.JoinedAnswers) = '')) Then
+        ShowAnswer(FLiveContent);
+      Exit;
+    End;
+  Asked := AskedText;
+  Tools := CollectTools;
+  If (Asked = '') And (Length(Tools) = 0) Then
+    Exit;
+  Summary := AssistantFinalSummary(Asked, Tools);
+  ShowAnswer(Summary);
+End;
+
 Procedure TProjectAssistantForm.RecordCurrentTurn(Const ErrorText: String);
 Var
   Turn: TConversationTurn;
@@ -2824,6 +2911,8 @@ Begin
     End;
   If (Trim(Turn.AttachmentsJson) = '') And (Trim(FPendingTurnAttachments) <> '') Then
     Turn.AttachmentsJson := FPendingTurnAttachments;
+  If Trim(ErrorText) = '' Then
+    EnsureFinalAssistantSummary;
   FPendingTurnAttachments := '';
   If (Trim(FLiveUser) = '') And (Trim(FDisplayUser) = '') And
     (Trim(FLiveContent) = '') And (Trim(FAssistantContent) = '') And (Trim(ErrorText) = '') And
@@ -2878,6 +2967,11 @@ Begin
     Turn.Skill := '';
   Turn.TokenEstimate := Length(Turn.Prompt + Turn.Response + Turn.Thinking) Div 4;
   Turn.ErrorText := ErrorText;
+  If Not AssistantMayStoreTurn(Turn.ErrorText, Turn.Response) Then
+    Begin
+      WorkflowLogger.Warning('ProjectAssistant', 'Skipped an empty successful turn.');
+      Exit;
+    End;
   Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
   Turn.EventsFile := '';
@@ -5885,6 +5979,8 @@ Begin
           Else If Answer.Note <> '' Then
             PostRecoverySentence(Answer.Note);
         End;
+      { Item 3.3: an empty finished reply becomes one trace summary before Ready. Existing text is kept. }
+      EnsureFinalAssistantSummary;
       If Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
