@@ -63,7 +63,7 @@ There is no attempt cap for a lost connection. Stop still interrupts the wait, a
 Post one conversation note when the wait starts, and one when the call resumes.
 
 ### 2.2 Wait out of credits until reset, or one hour
-Status: not started
+Status: blocked
 
 Do not use the 30 second interval for a credit failure.
 
@@ -76,14 +76,14 @@ If the reset is in the future, wait until that time, then retry. Say the clock t
 A credit wait must not reach `FinishAssistantReply` and must not `StopRunPlan`.
 
 ### 2.3 Use the same wait for a dropped Codex or Claude transport
-Status: not started
+Status: blocked
 
 When a Codex or Claude run ends with a transport or credit error and no assistant answer, do not call `FinishAssistantReply` immediately. Classify it with the same unit and wait as in items 2.1 and 2.2, then retry the turn. Do not change the Codex protocol.
 
 ## 3. Unfinished turns
 
 ### 3.1 Detect a premature Ready
-Status: not started
+Status: complete
 
 Before Ready, decide from structure, not from a guess about the prose:
 
