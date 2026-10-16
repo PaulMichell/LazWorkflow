@@ -96,7 +96,7 @@ Before Ready, decide from structure, not from a guess about the prose:
 A normal reply that has text, is not truncated, and does not defer, is finished. Do not continue it just because it is short.
 
 ### 3.2 Continue automatically
-Status: not started
+Status: complete
 
 On an unfinished turn, inject a continuation in the same conversation, up to the cap from item 5.1, default 3. The continuation says to resume from the last tool results and not to stop until the task is done or a real block is written.
 
