@@ -3,7 +3,8 @@ Unit AssistantTurnFinish;
 { Whether a turn that is about to return Ready is actually finished (c) 2026 Michell Computing.
 
   The decision is structural. A short reply is not unfinished by length alone.
-  The only prose match is a short explicit deferral. Continuation is a later step. }
+  The only prose match is a short explicit deferral. Continuation uses that
+  decision and does not guess from the prose. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,6 +19,8 @@ Uses
 Const
   { A longer answer is not scanned for deferral words. Short text alone is finished. }
   AssistantDeferralMaxChars = 240;
+  { Automatic continuations per task until item 5.1 stores the setting. }
+  DefaultAutomaticContinuationCap = 3;
 
 Type
   TAssistantTurnFinishReason = (
@@ -46,6 +49,11 @@ Type
     PlanItemBlockedWithUserAction: Boolean;
   End;
 
+  TAssistantContinuation = Record
+    ContinueTurn: Boolean;
+    Note: String;
+  End;
+
 Function DefaultAssistantTurnFinishFacts: TAssistantTurnFinishFacts;
 { First matching rule wins. A normal reply with text, not truncated and not a deferral, is finished
   unless a plan item is still in progress and is not blocked with a user action. }
@@ -55,6 +63,14 @@ Function AssistantTurnFinishReasonName(Reason: TAssistantTurnFinishReason): Stri
 Function AssistantReplyIsShortDeferral(Const Text: String): Boolean;
 { A User action line outside a fenced example. An empty line after the colon still counts. }
 Function PlanBodyHasUserAction(Const Body: String): Boolean;
+{ Cap until the recovery setting is snapshotted. }
+Function AssistantAutomaticContinuationCap: Integer;
+{ Model instruction for an injected continuation. Not the visible system note. }
+Function AssistantContinuationInstruction: String;
+{ Attempt is how many continuations have already been injected. }
+Function AssistantDecideContinuation(Const Facts: TAssistantTurnFinishFacts; UserStopped, TerminalFault: Boolean;
+  Attempt, Cap: Integer; Const ItemTitle: String): TAssistantContinuation;
+Function AssistantTurnFinishRemains(Reason: TAssistantTurnFinishReason; Const ItemTitle: String): String;
 
 Implementation
 
@@ -202,6 +218,79 @@ Begin
   Else
     Result.Reason := atfFinished;
   Result.Unfinished := Result.Reason <> atfFinished;
+End;
+
+Function AssistantAutomaticContinuationCap: Integer;
+Begin
+  Result := DefaultAutomaticContinuationCap;
+End;
+
+Function AssistantContinuationInstruction: String;
+Begin
+  Result := 'Resume from the last tool results. Do not stop until the task is done or a real block is written.';
+End;
+
+Function StoppedPhrase(Reason: TAssistantTurnFinishReason; Const ItemTitle: String): String;
+Begin
+  Case Reason Of
+    atfTruncated: Result := 'The reply was truncated.';
+    atfToolRoundCap: Result := 'The tool-round limit was reached.';
+    atfEmptyAfterTools: Result := 'The assistant reply was empty after tools.';
+    atfDeferral: Result := 'The assistant deferred.';
+    atfPlanInProgress:
+      If Trim(ItemTitle) <> '' Then
+        Result := '"' + ItemTitle + '" is still in progress.'
+      Else
+        Result := 'The plan item is still in progress.';
+  Else
+    Result := 'The turn is unfinished.';
+  End;
+End;
+
+Function AssistantTurnFinishRemains(Reason: TAssistantTurnFinishReason; Const ItemTitle: String): String;
+Begin
+  Case Reason Of
+    atfTruncated: Result := 'The reply is still truncated.';
+    atfToolRoundCap: Result := 'The tool-round limit was reached.';
+    atfEmptyAfterTools: Result := 'There is still no assistant answer after the tools.';
+    atfDeferral: Result := 'The assistant still deferred.';
+    atfPlanInProgress:
+      If Trim(ItemTitle) <> '' Then
+        Result := '"' + ItemTitle + '" is still in progress.'
+      Else
+        Result := 'The plan item is still in progress.';
+  Else
+    Result := 'The task is still unfinished.';
+  End;
+End;
+
+Function AssistantDecideContinuation(Const Facts: TAssistantTurnFinishFacts; UserStopped, TerminalFault: Boolean;
+  Attempt, Cap: Integer; Const ItemTitle: String): TAssistantContinuation;
+Var
+  Decision: TAssistantTurnFinish;
+Begin
+  Result.ContinueTurn := False;
+  Result.Note := '';
+  If UserStopped Or TerminalFault Then
+    Exit;
+  Decision := ClassifyAssistantTurnFinish(Facts);
+  If Not Decision.Unfinished Then
+    Exit;
+  { A blocked item that already names a user action is not continued, even if the reply was truncated. }
+  If Facts.PlanItemBlockedWithUserAction Then
+    Exit;
+  If Cap < 1 Then
+    Cap := DefaultAutomaticContinuationCap;
+  If Attempt < 0 Then
+    Attempt := 0;
+  If Attempt >= Cap Then
+    Begin
+      Result.Note := 'Automatic continuation stopped. ' + AssistantTurnFinishRemains(Decision.Reason, ItemTitle);
+      Exit;
+    End;
+  Result.ContinueTurn := True;
+  Result.Note := StoppedPhrase(Decision.Reason, ItemTitle) + ' The assistant is resuming. Attempt ' +
+    IntToStr(Attempt + 1) + ' of ' + IntToStr(Cap) + '.';
 End;
 
 End.

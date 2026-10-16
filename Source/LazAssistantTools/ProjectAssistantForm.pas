@@ -290,6 +290,10 @@ Type
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FLastTurnHadError: Boolean;
     FLastTurnFinish: TAssistantTurnFinish;
+    FContinuationCap: Integer;
+    FContinuationCount: Integer;
+    FHeldAnswer: String;
+    FHoldingContinuation: Boolean;
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
@@ -376,6 +380,9 @@ Type
     Procedure RunPlan;
     Procedure StopRunPlan(Const Reason: String);
     Procedure ContinueRunPlan(Data: PtrInt);
+    Procedure ContinueCodexAfterFinish(Data: PtrInt);
+    Function QueryContinuation(Truncated, ToolRoundCap, HadToolRound: Boolean; Const AssistantText: String): Boolean;
+    Function ContinuationToolRecap: String;
     Function FindNextIncompleteBuildSection: Integer;
     Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
       ContinueSameItem: Boolean): String;
@@ -701,7 +708,10 @@ Begin
       FAccountUsageTimer.OnTimer := @AccountUsageTimerTimer;
     End;
   If Assigned(AssistantClient) Then
-    AssistantClient.OnTrace := @HandleTraceEvent;
+    Begin
+      AssistantClient.OnTrace := @HandleTraceEvent;
+      AssistantClient.OnContinuationQuery := @QueryContinuation;
+    End;
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
 End;
 
@@ -3893,6 +3903,15 @@ Begin
     RemovePlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
   If Assigned(OpenPlanSheetAction) Then
     OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
+  If IsSending And (Not WasSending) Then
+    Begin
+      FContinuationCap := AssistantAutomaticContinuationCap;
+      If FContinuationCap < 1 Then
+        FContinuationCap := DefaultAutomaticContinuationCap;
+      FContinuationCount := 0;
+      FHeldAnswer := '';
+      FHoldingContinuation := False;
+    End;
   If IsSending Then
     Begin
       FPlanWriteThisTurn := False;
@@ -3900,7 +3919,11 @@ Begin
       ResetAssistantPlanTurn;
     End;
   If Not IsSending Then
-    FReviewInProgress := False;
+    Begin
+      FReviewInProgress := False;
+      FHoldingContinuation := False;
+      FHeldAnswer := '';
+    End;
   SendAction.Enabled := True;
   If IsSending Then
     SendAction.Caption := 'Steer'
@@ -5604,8 +5627,19 @@ Begin
   Try
     If Not FStreamingActive Then
       BeginAssistantReply;
-    { Always keep live buffers for the background stream. }
-    FLiveContent := ContentSnapshot;
+    { Always keep live buffers for the background stream. A continuation round
+      starts empty; keep the answer already shown until the new text arrives. }
+    If FHoldingContinuation And (FHeldAnswer <> '') Then
+      Begin
+        If Trim(ContentSnapshot) = '' Then
+          FLiveContent := FHeldAnswer
+        Else If Copy(ContentSnapshot, 1, Length(FHeldAnswer)) = FHeldAnswer Then
+          FLiveContent := ContentSnapshot
+        Else
+          FLiveContent := FHeldAnswer + LineEnding + LineEnding + ContentSnapshot;
+      End
+    Else
+      FLiveContent := ContentSnapshot;
     FLiveThinking := ThinkingSnapshot;
     { Keep the reconnect clock until the actor reports new stream progress. }
     If (FStatusPhase <> 'Re-establishing Connection') And (Not IsAssistantRecoveryProgress(FStatusPhase)) Then
@@ -5657,6 +5691,68 @@ Begin
     WorkflowLogger.Warning('ProjectAssistant', 'Could not record usage: ' + ErrorText);
 End;
 
+Function TProjectAssistantForm.ContinuationToolRecap: String;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+  Piece: String;
+Begin
+  Result := '';
+  If Not Assigned(FTrace) Then
+    Exit;
+  For I := 0 To FTrace.Count - 1 Do
+    Begin
+      Block := FTrace[I];
+      If (Not Assigned(Block)) Or (Block.Kind <> tbkTool) Then
+        Continue;
+      Piece := Block.ToolName;
+      If Trim(Block.Body) <> '' Then
+        Piece := Piece + ': ' + Copy(Trim(Block.Body), 1, 500);
+      If Result <> '' Then
+        Result := Result + LineEnding;
+      Result := Result + Piece;
+      If Length(Result) >= 12000 Then
+        Begin
+          Result := Copy(Result, 1, 12000);
+          Break;
+        End;
+    End;
+End;
+
+Function TProjectAssistantForm.QueryContinuation(Truncated, ToolRoundCap, HadToolRound: Boolean;
+  Const AssistantText: String): Boolean;
+Var
+  Facts: TAssistantTurnFinishFacts;
+  Answer: TAssistantContinuation;
+Begin
+  Facts := CurrentTurnFinishFacts(Truncated, ToolRoundCap, HadToolRound);
+  Facts.AssistantText := AssistantText;
+  Answer := AssistantDecideContinuation(Facts, FUserCancelled, False, FContinuationCount, FContinuationCap,
+    FBuildWorkSectionTitle);
+  Result := Answer.ContinueTurn And (Not FUserCancelled);
+  If Answer.Note <> '' Then
+    PostRecoverySentence(Answer.Note);
+  If Not Result Then
+    Exit;
+  Inc(FContinuationCount);
+  If Length(AssistantText) > Length(FLiveContent) Then
+    FHeldAnswer := AssistantText
+  Else
+    FHeldAnswer := FLiveContent;
+  FHoldingContinuation := FHeldAnswer <> '';
+End;
+
+Procedure TProjectAssistantForm.ContinueCodexAfterFinish(Data: PtrInt);
+Begin
+  If csDestroying In ComponentState Then
+    Exit;
+  If (Not FSending) Or FUserCancelled Or (Not FUseCodex) Then
+    Exit;
+  If LaunchStoredCodexRun Or (Not FSending) Then
+    Exit;
+  FinishAssistantReply('The continuation could not be started.');
+End;
+
 Function TProjectAssistantForm.CurrentTurnFinishFacts(Truncated, ToolRoundCap, ServiceHadTools: Boolean): TAssistantTurnFinishFacts;
 Var
   I: Integer;
@@ -5705,6 +5801,7 @@ Var
   WorkedMs: Integer;
   Truncated, ToolRoundCap, HadTools: Boolean;
   FinishFacts: TAssistantTurnFinishFacts;
+  Answer: TAssistantContinuation;
 Begin
   If FSending And (Not FUserCancelled) And TryDeferDroppedTransport(FLiveContent, ErrorText, ErrorText) Then
     Begin
@@ -5762,8 +5859,32 @@ Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
       FinishFacts := CurrentTurnFinishFacts(Truncated, ToolRoundCap, HadTools);
       FLastTurnFinish := ClassifyAssistantTurnFinish(FinishFacts);
-      If FLastTurnFinish.Unfinished Then
-        WorkflowLogger.Info('ProjectAssistant', 'Premature Ready: ' + AssistantTurnFinishReasonName(FLastTurnFinish.Reason));
+      If FUseCodex And FLastTurnFinish.Unfinished And (Not FinishFacts.PlanItemBlockedWithUserAction) Then
+        Begin
+          Answer := AssistantDecideContinuation(FinishFacts, False, False, FContinuationCount, FContinuationCap,
+            FBuildWorkSectionTitle);
+          If Answer.ContinueTurn Then
+            Begin
+              Inc(FContinuationCount);
+              If Answer.Note <> '' Then
+                PostRecoverySentence(Answer.Note);
+              If Length(FLiveContent) > Length(FHeldAnswer) Then
+                FHeldAnswer := FLiveContent;
+              FHoldingContinuation := FHeldAnswer <> '';
+              If ContinuationToolRecap <> '' Then
+                FCodexLaunchPrompt := FCodexLaunchPrompt + LineEnding + LineEnding +
+                  'Last tool results:' + LineEnding + ContinuationToolRecap;
+              If Trim(FLiveContent) <> '' Then
+                FCodexLaunchPrompt := FCodexLaunchPrompt + LineEnding + LineEnding +
+                  'Assistant so far:' + LineEnding + Copy(FLiveContent, 1, 8000);
+              FCodexLaunchPrompt := FCodexLaunchPrompt + LineEnding + LineEnding + AssistantContinuationInstruction;
+              FCodexLaunchReady := True;
+              Application.QueueAsyncCall(@ContinueCodexAfterFinish, 0);
+              Exit;
+            End
+          Else If Answer.Note <> '' Then
+            PostRecoverySentence(Answer.Note);
+        End;
       If Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
@@ -7399,7 +7520,10 @@ Begin
 
   RefreshFromConfig;
   If Assigned(AssistantClient) Then
-    AssistantClient.OnTrace := @HandleTraceEvent;
+    Begin
+      AssistantClient.OnTrace := @HandleTraceEvent;
+      AssistantClient.OnContinuationQuery := @QueryContinuation;
+    End;
   { Re-sync client tools/mode after shell prefs (and after default tab if no config). }
   ApplyActiveMode;
   If Root <> '' Then

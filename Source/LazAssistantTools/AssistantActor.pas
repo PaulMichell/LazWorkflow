@@ -66,6 +66,12 @@ Type
     FActiveToolIndex: Integer;
     FActiveToolRecorded: Boolean;
     FHadToolRound: Boolean;
+    FQueryTruncated: Boolean;
+    FQueryToolRoundCap: Boolean;
+    FQueryContinue: Boolean;
+    FQueryNote: String;
+    FLocalContinuationCount: Integer;
+    FLocalContinuationCap: Integer;
     { Snapshotted when the turn starts. WaitForReconnect reads the field DoHttpRound sets. }
     FReconnectIntervalMs: QWord;
     FReconnectWaitMs: QWord;
@@ -90,6 +96,11 @@ Type
     Procedure NotifyTrace;
     Procedure EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
     Procedure NoteReadyFacts(Truncated, ToolRoundCap: Boolean);
+    Procedure DoContinuationQuery;
+    Function RequestContinuation(Truncated, ToolRoundCap: Boolean): Boolean;
+    Procedure InjectContinuation;
+    { True when the turn should end. False when a continuation was injected. }
+    Function FinishOrContinue(Truncated, ToolRoundCap: Boolean): Boolean;
     Procedure NotifyMain;
     Procedure SetPhase(Phase: TAssistantPhase);
     Procedure ApplyParserEvents(FromIndex: Integer);
@@ -128,7 +139,7 @@ Implementation
 
 Uses
   AssistantTools, AssistantSubagents, AssistantImageAdapters, AssistantGeneratedImage, AssistantAccountUsage,
-  WorkflowLog;
+  AssistantTurnFinish, WorkflowLog;
 
 Const
   MaxAskToolRounds = 12;
@@ -651,6 +662,85 @@ Begin
   Svc := LockedService;
   If Assigned(Svc) Then
     Svc.NoteTurnFinishFacts(Truncated, ToolRoundCap, FHadToolRound);
+End;
+
+Procedure TAssistantActor.DoContinuationQuery;
+Var
+  Svc: TAssistantService;
+  Facts: TAssistantTurnFinishFacts;
+  Answer: TAssistantContinuation;
+Begin
+  FQueryContinue := False;
+  FQueryNote := '';
+  Svc := LockedService;
+  If Assigned(Svc) And Assigned(Svc.OnContinuationQuery) Then
+    Begin
+      FQueryContinue := Svc.OnContinuationQuery(FQueryTruncated, FQueryToolRoundCap, FHadToolRound, FContent);
+      Exit;
+    End;
+  Facts := DefaultAssistantTurnFinishFacts;
+  Facts.Truncated := FQueryTruncated;
+  Facts.ToolRoundCap := FQueryToolRoundCap;
+  Facts.HadToolRound := FHadToolRound;
+  Facts.AssistantText := FContent;
+  Answer := AssistantDecideContinuation(Facts, Terminated, FTerminalNoted, FLocalContinuationCount,
+    FLocalContinuationCap, '');
+  FQueryNote := Answer.Note;
+  FQueryContinue := Answer.ContinueTurn And (Not Terminated) And (Not FTerminalNoted);
+  If FQueryContinue Then
+    Inc(FLocalContinuationCount);
+End;
+
+Function TAssistantActor.RequestContinuation(Truncated, ToolRoundCap: Boolean): Boolean;
+Begin
+  Result := False;
+  If Terminated Or FTerminalNoted Or FFinishEmitted Then
+    Exit;
+  FQueryTruncated := Truncated;
+  FQueryToolRoundCap := ToolRoundCap;
+  FQueryContinue := False;
+  FQueryNote := '';
+  Try
+    Synchronize(@DoContinuationQuery);
+  Except
+    On E: Exception Do
+      Begin
+        ReportPluginException('TAssistantActor.RequestContinuation', E);
+        FQueryContinue := False;
+      End;
+  End;
+  If Terminated Then
+    FQueryContinue := False;
+  If FQueryNote <> '' Then
+    LogEvent(aekRecovery, FQueryNote);
+  Result := FQueryContinue;
+End;
+
+Procedure TAssistantActor.InjectContinuation;
+Var
+  Svc: TAssistantService;
+Begin
+  Svc := LockedService;
+  If Not Assigned(Svc) Then
+    Exit;
+  { A no-tool reply is not in history yet. Tool rounds already stored their text. }
+  If (Not FToolCallsCommitted) And (Trim(FContent) <> '') Then
+    Svc.AddMessage(amrAssistant, FContent);
+  Svc.AddMessage(amrUser, AssistantContinuationInstruction);
+End;
+
+Function TAssistantActor.FinishOrContinue(Truncated, ToolRoundCap: Boolean): Boolean;
+Begin
+  { True: emit Ready. False: another model round in this same turn. }
+  Result := True;
+  If Terminated Or FTerminalNoted Or FFinishEmitted Then
+    Exit;
+  If Not RequestContinuation(Truncated, ToolRoundCap) Then
+    Exit;
+  InjectContinuation;
+  LogEvent(aekLoopStarted, 'continuation');
+  EmitSnapshot(False, 'Waiting for model…', True);
+  Result := False;
 End;
 
 Procedure TAssistantActor.EmitSnapshot(IsDone: Boolean; Const ErrorText: String; Force: Boolean);
@@ -1878,6 +1968,7 @@ Var
   Url, RequestJson, ErrorText, CapNote, Note: String;
   RoundNo, I, MaxRounds, WritesBefore: Integer;
   RoundTruncated: Boolean;
+  HitToolCap: Boolean;
   HasTools: Boolean;
   Svc: TAssistantService;
 Begin
@@ -1885,12 +1976,18 @@ Begin
   ClearTurnGeneratedImages;
   FHadToolRound := False;
   RoundTruncated := False;
+  FLocalContinuationCount := 0;
+  FLocalContinuationCap := AssistantAutomaticContinuationCap;
+  If FLocalContinuationCap < 1 Then
+    FLocalContinuationCap := DefaultAutomaticContinuationCap;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
   EmitSnapshot(False, 'Waiting for first token…', True);
   Try
   Svc := LockedService;
   MaxRounds := MaxRoundsForSession(Svc);
+  Repeat
+  HitToolCap := True;
   For RoundNo := 1 To MaxRounds Do
     Begin
       If FTerminalNoted Or Terminated Or (Not Assigned(LockedService)) Then
@@ -1978,20 +2075,30 @@ Begin
             Break;
           If (FPlanWrites > WritesBefore) And (WritesBefore > 0) Then
             Begin
-              NoteReadyFacts(RoundTruncated, False);
-              EmitSnapshot(True, '', True);
-              LogEvent(aekTurnEnded, 'plan_write');
-              Exit;
+              If FinishOrContinue(RoundTruncated, False) Then
+                Begin
+                  NoteReadyFacts(RoundTruncated, False);
+                  EmitSnapshot(True, '', True);
+                  LogEvent(aekTurnEnded, 'plan_write');
+                  Exit;
+                End;
+              HitToolCap := False;
+              Break;
             End;
           DrainSteerIntoHistory;
           Continue;
         End;
       If DrainSteerIntoHistory Then
         Continue;
-      NoteReadyFacts(RoundTruncated, False);
-      EmitSnapshot(True, '', True);
-      LogEvent(aekTurnEnded, '');
-      Exit;
+      If FinishOrContinue(RoundTruncated, False) Then
+        Begin
+          NoteReadyFacts(RoundTruncated, False);
+          EmitSnapshot(True, '', True);
+          LogEvent(aekTurnEnded, '');
+          Exit;
+        End;
+      HitToolCap := False;
+      Break;
       Except
         On E: Exception Do
           Begin
@@ -2006,20 +2113,28 @@ Begin
   If FTerminalNoted Or FFinishEmitted Then
     Exit;
   If Terminated Then
-    EmitSnapshot(True, CancelWaitHint, True)
-  Else
     Begin
-      CapNote :=
-        '*(Tool-round limit reached after ' + IntToStr(MaxRounds) +
-        ' rounds. Edits already applied are in the project.)*';
-      If Trim(FContent) = '' Then
-        FContent := CapNote
-      Else
-        FContent := TrimRight(FContent) + LineEnding + LineEnding + CapNote;
-      NoteReadyFacts(False, True);
-      EmitSnapshot(True, '', True);
-      LogEvent(aekTurnEnded, 'tool_round_cap');
+      EmitSnapshot(True, CancelWaitHint, True);
+      Exit;
     End;
+  If HitToolCap Then
+    Begin
+      If FinishOrContinue(False, True) Then
+        Begin
+          CapNote :=
+            '*(Tool-round limit reached after ' + IntToStr(MaxRounds) +
+            ' rounds. Edits already applied are in the project.)*';
+          If Trim(FContent) = '' Then
+            FContent := CapNote
+          Else
+            FContent := TrimRight(FContent) + LineEnding + LineEnding + CapNote;
+          NoteReadyFacts(False, True);
+          EmitSnapshot(True, '', True);
+          LogEvent(aekTurnEnded, 'tool_round_cap');
+          Exit;
+        End;
+    End;
+  Until False;
   Finally
     Try
       Svc := LockedService;

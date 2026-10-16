@@ -59,6 +59,9 @@ Type
     when the model streams it; Content is the final answer channel only. }
   TAssistantStreamEvent = Procedure(Const ContentSnapshot, ThinkingSnapshot: String;
     IsFinished: Boolean; Const ErrorText: String) Of Object;
+  { Main thread. True means inject a continuation and keep the same turn. }
+  TAssistantContinuationQuery = Function(Truncated, ToolRoundCap, HadToolRound: Boolean;
+    Const AssistantText: String): Boolean Of Object;
 
   TAssistantService = Class
   Private
@@ -94,6 +97,7 @@ Type
     FReportedReasoningTokens: Integer;
     FReportedHasReasoning: Boolean;
     FOnTrace: TAssistantTraceNotify;
+    FOnContinuationQuery: TAssistantContinuationQuery;
     FOrphanThreads: TFPList;
     FIsSubagent: Boolean;
     FSubagentKindName: String;
@@ -202,6 +206,7 @@ Type
     { Sampler items for the session actor (Responses / Completions). }
     Function ExportSamplerItems(ForResponses: Boolean = False): TSamplerInputItemArray;
     Property OnTrace: TAssistantTraceNotify Read FOnTrace Write FOnTrace;
+    Property OnContinuationQuery: TAssistantContinuationQuery Read FOnContinuationQuery Write FOnContinuationQuery;
     Property Model: String Read FModel;
     Property ApiBase: String Read FApiBase;
     Property ActiveSkill: String Read FActiveSkill;
@@ -2314,6 +2319,7 @@ Procedure TAssistantService.DetachStreamCallbacks;
 Begin
   { Closing a view must disconnect it before CancelStream pumps queued calls. }
   FOnTrace := Nil;
+  FOnContinuationQuery := Nil;
   If FStreamThread Is TAssistantActor Then
     TAssistantActor(FStreamThread).DetachCallbacks;
 End;

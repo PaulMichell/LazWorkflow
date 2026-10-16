@@ -46,6 +46,7 @@ End;
 
 Var
   LongDeferral: String;
+  Answer: TAssistantContinuation;
 Begin
   FailCount := 0;
   Expect('truncated text is unfinished', Facts(True, False, False, False, False, 'Partial answer'), atfTruncated);
@@ -84,6 +85,35 @@ Begin
   Check('fenced user action does not count',
     Not PlanBodyHasUserAction('```' + LineEnding + 'User action: example' + LineEnding + '```'));
   Check('empty user action line still counts', PlanBodyHasUserAction('User action:'));
+
+  Answer := AssistantDecideContinuation(Facts(True, False, False, False, False, 'Partial'), False, False, 0, 3, '');
+  Check('first truncated turn continues', Answer.ContinueTurn);
+  Check('continuation note names the stop', Pos('truncated', Answer.Note) > 0);
+  Check('continuation note says resuming', Pos('resuming', Answer.Note) > 0);
+  Check('continuation note is attempt 1 of 3', Pos('Attempt 1 of 3', Answer.Note) > 0);
+  Check('instruction resumes from tool results', Pos('last tool results', AssistantContinuationInstruction) > 0);
+  Check('instruction does not stop early', Pos('real block is written', AssistantContinuationInstruction) > 0);
+
+  Answer := AssistantDecideContinuation(Facts(False, False, True, True, False, 'Still open.'), False, False, 2, 3,
+    'Detect a premature Ready');
+  Check('third continuation is allowed', Answer.ContinueTurn);
+  Check('third note names the item', Pos('Detect a premature Ready', Answer.Note) > 0);
+
+  Answer := AssistantDecideContinuation(Facts(False, True, True, False, False, ''), False, False, 3, 3, '');
+  Check('cap does not continue', Not Answer.ContinueTurn);
+  Check('cap says continuation stopped', Pos('Automatic continuation stopped', Answer.Note) > 0);
+  Check('cap says what remains', Pos('tool-round limit', Answer.Note) > 0);
+
+  Answer := AssistantDecideContinuation(Facts(True, False, False, False, True, 'Partial'), False, False, 0, 3, '');
+  Check('blocked user action does not continue', Not Answer.ContinueTurn);
+  Check('blocked user action has no resume note', Answer.Note = '');
+
+  Answer := AssistantDecideContinuation(Facts(True, False, False, False, False, 'Partial'), True, False, 0, 3, '');
+  Check('stop does not continue', Not Answer.ContinueTurn);
+  Answer := AssistantDecideContinuation(Facts(False, False, False, False, False, 'Done.'), False, True, 0, 3, '');
+  Check('terminal fault does not continue', Not Answer.ContinueTurn);
+  Answer := AssistantDecideContinuation(Facts(False, False, False, False, False, 'Fixed the leak.'), False, False, 0, 3, '');
+  Check('finished reply is not continued', Not Answer.ContinueTurn);
 
   If FailCount = 0 Then
     WriteLn('All premature-Ready decisions passed.')
