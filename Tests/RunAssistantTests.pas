@@ -58,10 +58,16 @@ Begin
   Result := IncludeTrailingPathDelimiter(Repo) + StringReplace(Relative, '/', PathDelim, [rfReplaceAll]);
 End;
 
+Function PathIsAbsolute(Const Name: String): Boolean;
+Begin
+  { SysUtils on this compiler has no FilenameIsAbsolute. }
+  Result := (Name <> '') And ((Name[1] = PathDelim) Or ((Length(Name) > 1) And (Name[2] = ':')));
+End;
+
 Function ResolveExecutable(Const Name: String): String;
 Begin
   Result := Name;
-  If (Pos(PathDelim, Name) = 0) And Not FilenameIsAbsolute(Name) Then
+  If (Pos(PathDelim, Name) = 0) And Not PathIsAbsolute(Name) Then
     Result := ExeSearch(Name, GetEnvironmentVariable('PATH'));
   If (Result = '') Or Not FileExists(Result) Then
     Result := '';
@@ -267,7 +273,7 @@ End;
 
 Procedure FillExcluded(List: TStrings; Const SkipWidget: String);
 Const
-  Names: Array[0..5] Of String = ('qt5', 'qt6', 'gtk3', 'nogui', 'win32', 'cocoa');
+  Names: Array[0..6] Of String = ('qt5', 'qt6', 'gtk2', 'gtk3', 'nogui', 'win32', 'cocoa');
 Var
   I: Integer;
 Begin
@@ -289,14 +295,15 @@ Begin
   Result.CaseSensitive := True;
   Excluded := TStringList.Create;
   Try
-    FillExcluded(Excluded, '');
+    { gtk3 is the project widgetset. gtk2 units can exist without the gtk2 libraries. }
+    FillExcluded(Excluded, 'gtk3');
     CollectPpuDirs(LazarusRoot, Excluded, Result);
     If HasInterfaces(Result) Then
       Exit;
     For I := 0 To 2 Do
       Begin
         Case I Of
-          0: Widget := 'gtk3';
+          0: Widget := 'gtk2';
           1: Widget := 'qt5';
         Else
           Widget := 'qt6';
@@ -314,8 +321,8 @@ End;
 
 Procedure AddUnitFlags(Command: TStrings; UnitDirs: TStrings);
 Const
-  SourceNames: Array[0..3] Of String = (
-    'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'LazRepositoryTools');
+  SourceNames: Array[0..4] Of String = (
+    'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'LazRepositoryTools', 'Tools');
 Var
   I: Integer;
 Begin
@@ -531,13 +538,13 @@ Begin
   Linked := True;
   For I := 0 To High(Names) Do
     Linked := RunArgs(Names[I] + '-package-link',
-      [Lazbuild, '--pcp=' + Pcp, '--lazarusdir=' + LazarusRoot, '--ws=gtk2', '--add-package-link',
+      [Lazbuild, '--pcp=' + Pcp, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--add-package-link',
       RepoFile('Packages/' + Names[I] + '.lpk')], 90) And Linked;
   If Not Linked Then
     Exit;
   For I := 0 To High(Names) Do
     If Not RunArgs(Names[I] + '-lazbuild-package',
-      [Lazbuild, '--pcp=' + Pcp, '--lazarusdir=' + LazarusRoot, '--ws=gtk2', '--skip-dependencies', '--build-all',
+      [Lazbuild, '--pcp=' + Pcp, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--skip-dependencies', '--build-all',
       RepoFile('Packages/' + Names[I] + '.lpk')], 90) Then
       Break;
 End;
@@ -551,7 +558,7 @@ Begin
   UnitDirs := AssistantUnitDirs;
   Try
     If UnitDirs.Count = 0 Then
-      FailUsage('No compiled Lazarus units found; build Lazarus/GTK2 first.');
+      FailUsage('No compiled Lazarus units found; build Lazarus/gtk3 first.');
     If Independent Then
       Begin
         Result := RunIndependent(UnitDirs);
