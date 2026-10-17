@@ -1,0 +1,298 @@
+object AssistantTasksForm: TAssistantTasksForm
+  Left = 240
+  Height = 520
+  Top = 120
+  Width = 780
+  BorderStyle = bsSizeable
+  Caption = 'Tasks'
+  ClientHeight = 520
+  ClientWidth = 780
+  Constraints.MinHeight = 420
+  Constraints.MinWidth = 720
+  KeyPreview = True
+  Position = poScreenCenter
+  LCLVersion = '5.99.0.0'
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  OnKeyDown = FormKeyDown
+  OnShow = FormShow
+  object ButtonStrip: TPanel
+    Left = 0
+    Height = 44
+    Top = 476
+    Width = 780
+    Align = alBottom
+    BevelOuter = bvNone
+    ChildSizing.LeftRightSpacing = 8
+    ChildSizing.TopBottomSpacing = 8
+    ChildSizing.HorizontalSpacing = 4
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 8
+    ClientHeight = 44
+    ClientWidth = 780
+    TabOrder = 1
+    object RunButton: TButton
+      Left = 8
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = RunAction
+      Align = alNone
+      AutoSize = True
+      Default = True
+      TabOrder = 0
+    end
+    object InsertButton: TButton
+      Left = 84
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = InsertAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 1
+    end
+    object EditButton: TButton
+      Left = 160
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = EditAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 2
+    end
+    object NewButton: TButton
+      Left = 236
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = NewAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 3
+    end
+    object DuplicateButton: TButton
+      Left = 312
+      Height = 28
+      Top = 8
+      Width = 92
+      Action = DuplicateAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 4
+    end
+    object RemoveButton: TButton
+      Left = 408
+      Height = 28
+      Top = 8
+      Width = 84
+      Action = RemoveAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 5
+    end
+    object CloseButton: TButton
+      Left = 496
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = CloseAction
+      Align = alNone
+      AutoSize = True
+      Cancel = True
+      TabOrder = 6
+    end
+  end
+  object BodyPanel: TPanel
+    Left = 0
+    Height = 476
+    Top = 0
+    Width = 780
+    Align = alClient
+    BevelOuter = bvNone
+    ClientHeight = 476
+    ClientWidth = 780
+    TabOrder = 0
+    object ListPanel: TPanel
+      Left = 8
+      Height = 460
+      Top = 8
+      Width = 240
+      Anchors = [akTop, akLeft, akBottom]
+      BevelOuter = bvNone
+      ClientHeight = 460
+      ClientWidth = 240
+      TabOrder = 0
+      object ShowHiddenCheck: TCheckBox
+        Left = 0
+        Height = 20
+        Top = 0
+        Width = 240
+        Caption = 'Show hidden'
+        OnChange = ShowHiddenCheckChange
+        TabOrder = 0
+      end
+      object TaskList: TListBox
+        Left = 0
+        Height = 432
+        Top = 28
+        Width = 240
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        ItemHeight = 0
+        OnClick = TaskListClick
+        OnDblClick = TaskListDblClick
+        OnKeyDown = TaskListKeyDown
+        TabOrder = 1
+      end
+    end
+    object MoveStrip: TPanel
+      Left = 252
+      Height = 460
+      Top = 8
+      Width = 76
+      Anchors = [akTop, akLeft, akBottom]
+      BevelOuter = bvNone
+      ChildSizing.LeftRightSpacing = 4
+      ChildSizing.TopBottomSpacing = 4
+      ChildSizing.VerticalSpacing = 4
+      ChildSizing.Layout = cclTopToBottomThenLeftToRight
+      ChildSizing.ControlsPerLine = 1
+      ClientHeight = 460
+      ClientWidth = 76
+      TabOrder = 1
+      object UpButton: TButton
+        Left = 4
+        Height = 28
+        Top = 4
+        Width = 64
+        Action = MoveUpAction
+        Align = alNone
+        AutoSize = True
+        TabOrder = 0
+      end
+      object DownButton: TButton
+        Left = 4
+        Height = 28
+        Top = 36
+        Width = 64
+        Action = MoveDownAction
+        Align = alNone
+        AutoSize = True
+        TabOrder = 1
+      end
+    end
+    object PreviewPanel: TPanel
+      Left = 336
+      Height = 460
+      Top = 8
+      Width = 436
+      Anchors = [akTop, akLeft, akRight, akBottom]
+      BevelOuter = bvNone
+      ClientHeight = 460
+      ClientWidth = 436
+      TabOrder = 2
+      object TitleValue: TLabel
+        Left = 0
+        Height = 20
+        Top = 0
+        Width = 436
+        Anchors = [akTop, akLeft, akRight]
+        ParentFont = False
+        WordWrap = True
+      end
+      object ModeValue: TLabel
+        Left = 0
+        Height = 18
+        Top = 24
+        Width = 436
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Mode:'
+      end
+      object ScopeValue: TLabel
+        Left = 0
+        Height = 18
+        Top = 46
+        Width = 436
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Scope:'
+      end
+      object SummaryValue: TLabel
+        Left = 0
+        Height = 36
+        Top = 68
+        Width = 436
+        Anchors = [akTop, akLeft, akRight]
+        WordWrap = True
+      end
+      object PromptLabel: TLabel
+        Left = 0
+        Height = 18
+        Top = 108
+        Width = 436
+        Anchors = [akTop, akLeft, akRight]
+        Caption = 'Prompt'
+      end
+      object PromptMemo: TMemo
+        Left = 0
+        Height = 344
+        Top = 130
+        Width = 436
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        ReadOnly = True
+        ScrollBars = ssAutoVertical
+        TabOrder = 0
+        WantReturns = False
+      end
+    end
+  end
+  object ActionList: TActionList
+    Left = 40
+    Top = 40
+    object RunAction: TAction
+      Caption = 'Run'
+      Hint = 'Run the selected task'
+      OnExecute = RunActionExecute
+    end
+    object InsertAction: TAction
+      Caption = 'Insert'
+      Hint = 'Put the task prompt in the composer'
+      OnExecute = InsertActionExecute
+    end
+    object EditAction: TAction
+      Caption = 'Edit…'
+      Hint = 'Edit the selected task'
+      OnExecute = EditActionExecute
+    end
+    object NewAction: TAction
+      Caption = 'New…'
+      Hint = 'Create a task'
+      OnExecute = NewActionExecute
+    end
+    object DuplicateAction: TAction
+      Caption = 'Duplicate'
+      Hint = 'Copy the selected task'
+      OnExecute = DuplicateActionExecute
+    end
+    object RemoveAction: TAction
+      Caption = 'Remove'
+      Hint = 'Hide a built-in or delete a user task'
+      OnExecute = RemoveActionExecute
+    end
+    object CloseAction: TAction
+      Caption = 'Close'
+      Hint = 'Close'
+      OnExecute = CloseActionExecute
+    end
+    object MoveUpAction: TAction
+      Caption = 'Up'
+      Hint = 'Move up'
+      OnExecute = MoveUpActionExecute
+    end
+    object MoveDownAction: TAction
+      Caption = 'Down'
+      Hint = 'Move down'
+      OnExecute = MoveDownActionExecute
+    end
+  end
+end

@@ -47,6 +47,24 @@ Type
   End;
   TAssistantTaskArray = Array Of TAssistantTask;
 
+  TAssistantTaskRequestKind = (trkNone, trkRun, trkInsert);
+
+  { Returned when Run or Insert has a prepared request. The list does not send or format. }
+  TAssistantTaskRequest = Record
+    Kind: TAssistantTaskRequestKind;
+    Task: TAssistantTask;
+    Mode: TAssistantTaskMode;
+    DisplayLabel: String;
+    ApiText: String;
+    FreshConversation: Boolean;
+    DocumentPath: String;
+  End;
+
+  { When assigned, the Tasks list calls this instead of expanding with empty evidence.
+    Return false and set ErrorText to leave the list open. }
+  TPrepareAssistantTaskRequest = Function(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
+    Out Request: TAssistantTaskRequest; Out ErrorText: String): Boolean;
+
   { Evidence the host already collected. There is no full-unit field: the model reads files itself. }
   TAssistantTaskEvidence = Record
     ProjectName: String;
@@ -88,6 +106,11 @@ Function ResetBuiltinAssistantTask(Var Tasks: TAssistantTaskArray; Const TaskId:
 /// Unknown {token} fails. A required empty value fails. An optional empty value becomes (none).
 Function ExpandAssistantTaskPrompt(Const Task: TAssistantTask; Const Evidence: TAssistantTaskEvidence;
   Out Expanded, ErrorText: String): Boolean;
+Procedure ClearAssistantTaskRequest(Out Request: TAssistantTaskRequest);
+
+Var
+  { Nil until the run unit assigns it. The list then uses that preparer. }
+  PrepareAssistantTaskRequest: TPrepareAssistantTaskRequest;
 
 Implementation
 
@@ -938,6 +961,30 @@ Begin
     Result := CapTaskText(Raw, AssistantTaskGitDiffMaxChars)
   Else
     Result := Raw;
+End;
+
+Procedure ClearAssistantTaskRequest(Out Request: TAssistantTaskRequest);
+Begin
+  Request.Kind := trkNone;
+  Request.Mode := tmInspect;
+  Request.DisplayLabel := '';
+  Request.ApiText := '';
+  Request.FreshConversation := False;
+  Request.DocumentPath := '';
+  Request.Task.Id := '';
+  Request.Task.Title := '';
+  Request.Task.Summary := '';
+  Request.Task.Mode := tmInspect;
+  Request.Task.Kind := tkPrompt;
+  Request.Task.Scope := tsNone;
+  Request.Task.MessageFilter := mfNone;
+  Request.Task.CompileFirst := False;
+  Request.Task.FreshConversation := False;
+  Request.Task.Enabled := False;
+  Request.Task.Hidden := False;
+  Request.Task.DocumentPath := '';
+  Request.Task.BuiltinId := '';
+  Request.Task.Prompt := '';
 End;
 
 Function ExpandAssistantTaskPrompt(Const Task: TAssistantTask; Const Evidence: TAssistantTaskEvidence;
