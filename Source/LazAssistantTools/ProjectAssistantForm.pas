@@ -521,7 +521,7 @@ Uses AssistantWorkTarget, PackageIntf,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
-  AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm
+  AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
@@ -8744,4 +8744,34 @@ Begin
     Exit;
   ApplyPreparedTaskRequest(Self, Request);
 End;
+
+Function AssistantHostTurnOrPlanActive(Out Reason: String): Boolean;
+Var
+  I: Integer;
+  Form: TCustomForm;
+Begin
+  Result := False;
+  Reason := '';
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Not (Form Is TProjectAssistantForm)) Or (csDestroying In Form.ComponentState) Then
+        Continue;
+      If TProjectAssistantForm(Form).FPlanAgentRunning Then
+        Begin
+          Reason := 'A plan run is already active.';
+          Exit(True);
+        End;
+      If TProjectAssistantForm(Form).FSending Then
+        Begin
+          Reason := 'Wait for the current reply to finish.';
+          Exit(True);
+        End;
+    End;
+End;
+
+Initialization
+
+QueryAssistantTaskHostBusy := @AssistantHostTurnOrPlanActive;
+
 End.

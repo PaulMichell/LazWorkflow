@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live styled Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="80">
+    <Files Count="81">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -341,6 +341,10 @@
         <Filename Value="../Source/LazAssistantTools/AssistantTaskNoteForm.lfm"/>
         <FileType Value="FormResource"/>
       </Item80>
+      <Item81>
+        <Filename Value="../Source/LazAssistantTools/AssistantTaskRun.pas"/>
+        <UnitName Value="AssistantTaskRun"/>
+      </Item81>
     </Files>
     <RequiredPkgs Count="6">
       <Item1>
