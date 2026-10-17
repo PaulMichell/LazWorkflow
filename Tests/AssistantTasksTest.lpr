@@ -16,6 +16,7 @@ Uses
 
 Var
   FailCount, TempSerial: Integer;
+  SavedSettingsDir: String;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -312,13 +313,89 @@ Begin
   End;
 End;
 
+Procedure ExpectReject(Const Title, TasksJson, Fragment: String);
+Var
+  Before: String;
+  Loaded: TAssistantTaskArray;
+  FromCatalog: Boolean;
+  ErrorText: String;
+Begin
+  UseTempSettings;
+  WriteSettings('{"assistant":{"keep":true},"assistant_tasks":{"tasks":[' + TasksJson + ']}}');
+  Before := ReadSettings;
+  Check(Title, Not LoadAssistantTasks(Loaded, FromCatalog, ErrorText));
+  Check(Title + ' catalog', (Not FromCatalog) And (Length(Loaded) = 11));
+  Check(Title + ' unchanged', ReadSettings = Before);
+  Check(Title + ' error', Pos(Fragment, ErrorText) > 0);
+End;
+
+Function TaskJson(Const Id, ModeName, KindName, ScopeName, Prompt: String): String;
+Begin
+  Result := '{"id":"' + Id + '","title":"T","mode":"' + ModeName + '","kind":"' + KindName +
+    '","scope":"' + ScopeName + '","prompt":"' + Prompt + '"}';
+End;
+
+Procedure CheckRejections;
+Var
+  Before, ErrorText: String;
+  Loaded: TAssistantTaskArray;
+  FromCatalog: Boolean;
+Begin
+  UseTempSettings;
+  WriteSettings('{not json');
+  Before := ReadSettings;
+  Check('bad file', Not LoadAssistantTasks(Loaded, FromCatalog, ErrorText));
+  Check('bad file catalog', (Not FromCatalog) And (Length(Loaded) = 11));
+  Check('bad file unchanged', ReadSettings = Before);
+  Check('bad file error', ErrorText = 'Task settings file is not valid JSON.');
+
+  UseTempSettings;
+  WriteSettings('{"assistant":{"keep":true},"assistant_tasks":[]}');
+  Before := ReadSettings;
+  Check('section type', Not LoadAssistantTasks(Loaded, FromCatalog, ErrorText));
+  Check('section type unchanged', ReadSettings = Before);
+  Check('section type error', ErrorText = 'Task settings section is not an object.');
+
+  ExpectReject('duplicate id',
+    TaskJson('code-review', 'inspect', 'prompt', 'none', 'A.') + ',' +
+    TaskJson('code-review', 'inspect', 'prompt', 'none', 'B.'),
+    'Duplicate task id');
+  ExpectReject('unsafe id', TaskJson('bad id', 'inspect', 'prompt', 'none', 'A.'),
+    'Task id is not a safe name.');
+  ExpectReject('unknown mode', TaskJson('mine', 'fly', 'prompt', 'none', 'A.'),
+    'Mode is not a known name.');
+  ExpectReject('unknown kind', TaskJson('mine', 'inspect', 'dance', 'none', 'A.'),
+    'Kind is not a known name.');
+  ExpectReject('unknown scope', TaskJson('mine', 'inspect', 'prompt', 'world', 'A.'),
+    'Scope is not a known name.');
+  ExpectReject('empty prompt', TaskJson('mine', 'inspect', 'prompt', 'none', ''),
+    'Prompt is required.');
+
+  UseTempSettings;
+  WriteSettings('{"assistant":{"keep":true}}');
+  Before := ReadSettings;
+  Loaded := CopyAssistantTaskCatalog;
+  Loaded[0].Kind := tkPrompt;
+  Loaded[0].Prompt := '';
+  Check('save rejects empty prompt', Not SaveAssistantTasks(Loaded, ErrorText));
+  Check('rejected save does not write', ReadSettings = Before);
+  Check('temp dir is not the saved dir', WorkflowSettingsDirectory <> SavedSettingsDir);
+End;
+
 Begin
   FailCount := 0;
   TempSerial := 0;
-  CheckCatalog;
-  CheckPaths;
-  CheckExpansion;
-  CheckLoadAndReset;
+  SavedSettingsDir := WorkflowSettingsDirectory;
+  Try
+    CheckCatalog;
+    CheckPaths;
+    CheckExpansion;
+    CheckLoadAndReset;
+    CheckRejections;
+  Finally
+    SetWorkflowSettingsDirectory(SavedSettingsDir);
+  End;
+  Check('settings directory restored', WorkflowSettingsDirectory = SavedSettingsDir);
   If FailCount = 0 Then
     WriteLn('All assistant task checks passed.')
   Else

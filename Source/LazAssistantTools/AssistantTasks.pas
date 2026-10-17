@@ -2,8 +2,9 @@ Unit AssistantTasks;
 
 { Named assistant tasks: catalog, settings section, and prompt expansion (c) 2026 Michell Computing.
 
-  No forms and no IDE units. A missing assistant_tasks section returns the catalog and is not written.
-  Prompt sentences are placeholders; the catalog item that owns the real prompt text replaces them. }
+  No forms and no IDE units. The section is assistant_tasks, not a field of TAssistantConfig.
+  A missing section returns the catalog and is not written. A bad file keeps the catalog in memory,
+  sets an error, and is not replaced. Prompt sentences are placeholders until the catalog prompts are written. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -76,9 +77,11 @@ Function TaskDocumentPathIsValid(Const DocumentPath, ActivePlanPath: String; Out
 Function ValidateAssistantTask(Const Task: TAssistantTask; Const ActivePlanPath: String; Out ErrorText: String): Boolean;
 /// Appends catalog ids that are not already stored as Id or BuiltinId. Does not write. Returns how many were added.
 Function MergeMissingCatalogTasks(Var Tasks: TAssistantTaskArray): Integer;
-/// Missing section: catalog, FromCatalog true, no write. Invalid section: catalog, Result false, no write.
+/// Missing section: catalog, FromCatalog true, no write.
+/// A bad file or invalid section: catalog in memory, Result false, ErrorText set, no write.
 /// A present section keeps saved order. A hidden built-in is not appended again.
 Function LoadAssistantTasks(Out Tasks: TAssistantTaskArray; Out FromCatalog: Boolean; Out ErrorText: String): Boolean;
+/// Replaces only the assistant_tasks section. Does not call TAssistantConfig.Save.
 Function SaveAssistantTasks(Const Tasks: TAssistantTaskArray; Out ErrorText: String): Boolean;
 /// Copies the catalog row onto that id and clears Hidden. Does not move the row.
 Function ResetBuiltinAssistantTask(Var Tasks: TAssistantTaskArray; Const TaskId: String; Out ErrorText: String): Boolean;
@@ -669,6 +672,54 @@ Begin
   Result := True;
 End;
 
+Function TaskSettingsFileIsBad(Out ErrorText: String): Boolean;
+Var
+  Path: String;
+  Lines: TStringList;
+  Data, Node: TJSONData;
+Begin
+  Result := False;
+  ErrorText := '';
+  Path := WorkflowSettingsPath;
+  If (Path = '') Or (Not FileExists(Path)) Then
+    Exit;
+  Lines := TStringList.Create;
+  Data := Nil;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'Task settings file could not be read.';
+          Result := True;
+          Exit;
+        End;
+    End;
+    Try
+      Data := GetJSON(Lines.Text);
+    Except
+      Data := Nil;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'Task settings file is not valid JSON.';
+        Result := True;
+        Exit;
+      End;
+    { ReadWorkflowSection only returns an object. A present value of another type must not look missing. }
+    Node := TJSONObject(Data).Find(AssistantTasksSection);
+    If (Node <> Nil) And (Not (Node Is TJSONObject)) Then
+      Begin
+        ErrorText := 'Task settings section is not an object.';
+        Result := True;
+      End;
+  Finally
+    Data.Free;
+    Lines.Free;
+  End;
+End;
+
 Function LoadAssistantTasks(Out Tasks: TAssistantTaskArray; Out FromCatalog: Boolean; Out ErrorText: String): Boolean;
 Var
   Section: TJSONObject;
@@ -680,6 +731,12 @@ Begin
   If WorkflowSettingsDirectory = '' Then
     Begin
       ErrorText := 'Workflow settings directory is not set.';
+      Exit;
+    End;
+  If TaskSettingsFileIsBad(ErrorText) Then
+    Begin
+      Tasks := CopyAssistantTaskCatalog;
+      FromCatalog := False;
       Exit;
     End;
   Section := ReadWorkflowSection(AssistantTasksSection);
