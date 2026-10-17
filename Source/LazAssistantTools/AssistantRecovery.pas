@@ -681,7 +681,8 @@ Begin
   Result := (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'grep') Or (Name = 'search_in_project') Or (Name = 'get_project_info') Or
     (Name = 'get_active_plan') Or (Name = 'list_plans') Or (Name = 'read_skill') Or
-    (Name = 'open_file') Or (Name = 'open_markdown');
+    (Name = 'open_file') Or (Name = 'open_markdown') Or
+    (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
 End;
 
 Function Recovery(Action: TAssistantRecoveryAction; WaitForConnection: Boolean;

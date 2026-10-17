@@ -3,8 +3,8 @@ Unit AssistantTools;
 { Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. Tool schemas, sandbox checks, and
-  dispatch are one IDE tool surface. Reviewed 2026-10-13: write_image stays here
-  with the other project-root tools. The draw itself is in AssistantImageAdapters. }
+  dispatch are one IDE tool surface. Reviewed 2026-10-17: symbol queries stay in
+  this catalog and call QueryAssistantSymbol. The CodeTools work is not copied here. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -78,7 +78,7 @@ Uses
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
-  AssistantGeneratedImage, AssistantImageAdapters, fpjson, jsonparser;
+  AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
 
 ThreadVar
   WriteImageTurnFailed: Boolean;
@@ -241,7 +241,8 @@ Begin
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
     (Name = 'list_plans') Or (Name = 'get_active_plan') Or
     (Name = 'search_in_project') Or (Name = 'open_file') Or
-    (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent');
+    (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Or
+    (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
 End;
 
 Function ToolRequiresApproval(Const ToolName: String): Boolean;
@@ -318,7 +319,8 @@ Begin
     (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
-    (Name = 'set_active_plan') Or (Name = 'read_file');
+    (Name = 'set_active_plan') Or (Name = 'read_file') Or
+    (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -351,6 +353,12 @@ Begin
   If (Name = 'search_in_project') Or (Name = 'open_file') Then
     Begin
       Result := Mode In [amInspect, amDocument, amBuild];
+      Exit;
+    End;
+  { CodeTools queries are read-only. Document and Plan do not get them. }
+  If (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references') Then
+    Begin
+      Result := Mode In [amInspect, amBuild];
       Exit;
     End;
   { Build-mode source tools — never Inspect or Plan. }
@@ -706,6 +714,45 @@ Begin
     '}}';
 End;
 
+Function BuildSymbolToolsJson: String;
+Const
+  Shared = 'Read-only. Positions are 1-based. Columns are UTF-8 bytes. ' +
+    'No editor movement and no edit revision.';
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"find_declaration",' +
+      '"description":"Resolve a Pascal identifier from the already open buffer. ' + Shared + '",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
+        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
+        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"}' +
+      '},"required":["path","line","column"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"symbol_context",' +
+      '"description":"Return the CodeTools hint and nearby source for a Pascal identifier. ' + Shared + '",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
+        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
+        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"}' +
+      '},"required":["path","line","column"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"find_references",' +
+      '"description":"Find Pascal references in an explicit search_paths list of 1 to 32 project files. ' +
+        'A truncated or partial search is not whole-project coverage. ' + Shared + '",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
+        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
+        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"},' +
+        '"search_paths":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"},' +
+          '"description":"1 to 32 project files. A truncated or partial search is not whole-project coverage."},' +
+        '"max_results":{"type":"integer","minimum":1,"maximum":200,"description":"Optional result cap. Default 100."}' +
+      '},"required":["path","line","column","search_paths"]}' +
+    '}}';
+End;
+
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
 Var
   Body: String;
@@ -723,7 +770,7 @@ Begin
     amBuild:
       Begin
         Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
-          BuildSourceToolsJson + ',' + BuildRunToolsJson +
+          BuildSymbolToolsJson + ',' + BuildSourceToolsJson + ',' + BuildRunToolsJson +
           ',{"type":"function","function":{"name":"run_git","description":' +
           '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
         { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
@@ -731,7 +778,7 @@ Begin
           Body := Body + ',' + BuildWriteImageToolJson;
       End;
     amInspect:
-      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson;
+      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildSymbolToolsJson;
   Else
     Body := '';
   End;
@@ -4060,6 +4107,114 @@ Begin
   Result := True;
 End;
 
+Function ToolQuerySymbol(Const ToolName, ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Name, Path, Resolved: String;
+  Line, Column, MaxResults, Index: Integer;
+  Kind: TAssistantSymbolQuery;
+  Editor: TSourceEditorInterface;
+  Data: TJSONData;
+  Node: TJSONData;
+  Paths: TStringList;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Name := LowerCase(Trim(ToolName));
+  If Name = 'find_declaration' Then
+    Kind := sqDeclaration
+  Else If Name = 'symbol_context' Then
+    Kind := sqContext
+  Else If Name = 'find_references' Then
+    Kind := sqReferences
+  Else
+    Begin
+      ErrorText := 'Unknown symbol tool: ' + ToolName;
+      Exit;
+    End;
+  Path := JsonArgString(ArgumentsJson, 'path');
+  If Path = '' Then
+    Begin
+      ErrorText := 'path is required.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
+    Exit;
+  Line := JsonArgInt(ArgumentsJson, 'line', 0);
+  Column := JsonArgInt(ArgumentsJson, 'column', 0);
+  If Line < 1 Then
+    Begin
+      ErrorText := 'line must be a 1-based integer.';
+      Exit;
+    End;
+  If Column < 1 Then
+    Begin
+      ErrorText := 'column must be a 1-based UTF-8 byte column.';
+      Exit;
+    End;
+  { Do not open a tab or move the caret. The query uses the buffer that is already open. }
+  Editor := FindOpenEditor(ExpandResolvedPath(Resolved));
+  If Not Assigned(Editor) Then
+    Begin
+      ErrorText := 'Open the source file before a symbol query. This tool does not move the editor.';
+      Exit;
+    End;
+  Paths := Nil;
+  Data := Nil;
+  MaxResults := 0;
+  If Kind = sqReferences Then
+    Begin
+      MaxResults := JsonArgInt(ArgumentsJson, 'max_results', 100);
+      If (MaxResults < 1) Or (MaxResults > 200) Then
+        Begin
+          ErrorText := 'max_results must be an integer from 1 to 200.';
+          Exit;
+        End;
+      Try
+        Data := GetJSON(ArgumentsJson);
+      Except
+        On E: Exception Do
+          Begin
+            ErrorText := 'search_paths must list 1 to 32 project files.';
+            Exit;
+          End;
+      End;
+      If Not (Data Is TJSONObject) Then
+        Begin
+          Data.Free;
+          ErrorText := 'search_paths must list 1 to 32 project files.';
+          Exit;
+        End;
+      Node := TJSONObject(Data).Find('search_paths');
+      If Not (Node Is TJSONArray) Or (Node.Count < 1) Or (Node.Count > 32) Then
+        Begin
+          Data.Free;
+          ErrorText := 'search_paths must list 1 to 32 project files.';
+          Exit;
+        End;
+      Paths := TStringList.Create;
+      For Index := 0 To Node.Count - 1 Do
+        Begin
+          If (Node.Items[Index].JSONType <> jtString) Or (Trim(Node.Items[Index].AsString) = '') Then
+            Begin
+              Data.Free;
+              Paths.Free;
+              ErrorText := 'Each search path must be a nonempty string.';
+              Exit;
+            End;
+          Paths.Add(Node.Items[Index].AsString);
+        End;
+      Data.Free;
+      Data := Nil;
+    End;
+  Try
+    Result := QueryAssistantSymbol(Editor.FileName, Editor.SourceText, Line, Column, Kind, Paths, MaxResults,
+      ResultText, ErrorText);
+  Finally
+    Paths.Free;
+  End;
+End;
+
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
@@ -4409,6 +4564,8 @@ Begin
     Result := ToolReadSkill(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'grep' Then
     Result := ToolGrep(ArgumentsJson, ResultText, ErrorText)
+  Else If (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references') Then
+    Result := ToolQuerySymbol(Name, ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'todo_write' Then
     Result := ToolTodoWrite(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'spawn_subagent' Then
