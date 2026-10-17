@@ -14,6 +14,7 @@ Unit ProjectAssistantForm;
   LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
   share one path. The Run Plan end report is built in AssistantPlanRun. A dropped Codex or Claude
   transport waits in AssistantRecovery, then the same turn is started again.
+  Tasks is one action plus the call that applies a prepared request. The list stays in AssistantTasksForm.
   Reviewed 2026-10-17. }
 
 {$IFDEF FPC}
@@ -50,6 +51,7 @@ Type
     SettingsButton: TButton;
     TasksButton: TButton;
     StopAction: TAction;
+    TasksAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
     TargetBrowseButton: TButton;
@@ -137,6 +139,7 @@ Type
     Procedure NewConversationActionExecute(Sender: TObject);
     Procedure NewPlanActionExecute(Sender: TObject);
     Procedure RunPlanActionExecute(Sender: TObject);
+    Procedure TasksActionExecute(Sender: TObject);
     Procedure SettingsActionExecute(Sender: TObject);
     Procedure ExportHistoryActionExecute(Sender: TObject);
     Procedure DeleteHistoryActionExecute(Sender: TObject);
@@ -518,7 +521,7 @@ Uses AssistantWorkTarget, PackageIntf,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
-  AssistantImageView, AssistantXaiProvider
+  AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm
   {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
@@ -7463,6 +7466,7 @@ Begin
   EnsureFooterMenu(FFooterMenu);
   FillSkillFooterMenu;
   AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
+  AddFooterItem(FFooterMenu, 'Tasks…', 0, '', False, False, @TasksActionExecute);
   AddFooterItem(FFooterMenu, 'Settings…', FooterTagSettings, '', False, False, @FooterMenuClick);
   Host := StatusFooter.SkillLabel;
   If Not Assigned(Host) Then
@@ -8688,4 +8692,56 @@ Begin
     End;
 End;
 
+Function AssistantModeForTask(Mode: TAssistantTaskMode): TAssistantMode;
+Begin
+  Case Mode Of
+    tmDocument: Result := amDocument;
+    tmPlan: Result := amPlan;
+    tmBuild: Result := amBuild;
+    tmChat: Result := amChat;
+  Else
+    Result := amInspect;
+  End;
+End;
+
+Procedure ApplyPreparedTaskRequest(Form: TProjectAssistantForm; Const Request: TAssistantTaskRequest);
+Var
+  TaskMode: TAssistantMode;
+Begin
+  { Format does not call the model. The runner applies that kind itself. }
+  If (Request.Kind = trkNone) Or (Request.Task.Kind = tkFormat) Then
+    Exit;
+  TaskMode := AssistantModeForTask(Request.Mode);
+  If Request.Kind = trkInsert Then
+    Begin
+      Form.SelectMode(TaskMode);
+      If Not Assigned(Form.InputMemo) Then
+        Exit;
+      If (Trim(Form.InputMemo.Text) <> '') And
+        (MessageDlg('Replace the composer text with this task?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
+        Exit;
+      Form.InputMemo.Text := Request.ApiText;
+      Exit;
+    End;
+  If Form.FSending Or Form.FPlanAgentRunning Then
+    Exit;
+  If Request.FreshConversation Then
+    Form.StartNewChat(False, False);
+  If Request.DocumentPath <> '' Then
+    RememberDocumentRelativePath(Request.DocumentPath);
+  Form.ForceModeAndLock(TaskMode);
+  Form.ShowChatSurfaceKeepMode;
+  Form.SubmitUserTextEx(Request.DisplayLabel, Request.ApiText, True);
+  If Not Form.FSending Then
+    Form.UnlockModeAfterSend;
+End;
+
+Procedure TProjectAssistantForm.TasksActionExecute(Sender: TObject);
+Var
+  Request: TAssistantTaskRequest;
+Begin
+  If Not ShowAssistantTasksForm(Not (FSending Or FPlanAgentRunning), Request) Then
+    Exit;
+  ApplyPreparedTaskRequest(Self, Request);
+End;
 End.

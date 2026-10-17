@@ -92,7 +92,7 @@ object ProjectAssistantForm: TProjectAssistantForm
         Height = 28
         Top = 4
         Width = 84
-        Caption = 'Tasks…'
+        Action = TasksAction
         TabOrder = 5
       end
       object SettingsButton: TButton
@@ -636,6 +636,11 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Stop'
       Enabled = False
       OnExecute = StopActionExecute
+    end
+    object TasksAction: TAction
+      Caption = 'Tasks…'
+      Hint = 'Run or edit a saved task'
+      OnExecute = TasksActionExecute
     end
     object SettingsAction: TAction
       Caption = 'Settings…'

@@ -44,6 +44,7 @@ Var
   CmdAssistantReviewCompile: TIDECommand;
   CmdAssistantReviewBuild: TIDECommand;
   CmdAssistantFixError: TIDECommand;
+  CmdAssistantTasks: TIDECommand;
   CmdAssistantSettings: TIDECommand;
   AssistantFixQuickFix: TAssistantFixMessageQuickFix;
   AssistantIDEHooks: TAssistantIDEHooks;
@@ -72,6 +73,15 @@ Begin
   Form := IDEWindowCreators.GetForm(ProjectAssistantWindowCreator.FormName, True);
   If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
     Result := TProjectAssistantForm(Form);
+End;
+
+Procedure DoAssistantTasks(Sender: TObject);
+Var
+  Form: TProjectAssistantForm;
+Begin
+  Form := GetProjectAssistantForm(True);
+  If Assigned(Form) Then
+    Form.TasksActionExecute(Sender);
 End;
 
 Procedure DoAssistantSettings(Sender: TObject);
@@ -292,6 +302,7 @@ Begin
       Key, Nil, @DoAssistantReviewBuild);
     CmdAssistantFixError := RegisterIDECommand(Cat, 'AssistantFixError', 'Fix Selected Message with Assistant',
       Key, Nil, @DoAssistantFixError);
+    CmdAssistantTasks := RegisterIDECommand(Cat, 'AssistantTasks', 'Tasks…', Key, Nil, @DoAssistantTasks);
     CmdAssistantSettings := RegisterIDECommand(Cat, 'AssistantSettings', 'Project Assistant Settings', Key, Nil, @DoAssistantSettings);
 
     { Top-level Assistant menu, placed immediately after Repository (fallback: after Run).
@@ -319,6 +330,7 @@ Begin
     RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
     RegisterIDEMenuCommand(WorkSec, 'AssistantFixError', 'Fix Error In Build Mode…', Nil, Nil, CmdAssistantFixError);
     SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
+    RegisterIDEMenuCommand(SetSec, 'AssistantTasks', 'Tasks…', Nil, Nil, CmdAssistantTasks);
     RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
 
     ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
