@@ -96,8 +96,6 @@ Function RevertUncommittedPlanCompletion(Out Note: String): Boolean;
 Function AssistantTurnSettlementNote(Const UserText: String; PlanWasWritten: Boolean): String;
 { True when an assistant plan puts Status under ##. A ### note is not a todo. Non-plans return False. }
 Function PlanMarkdownStructureError(Const Content: String; Out ErrorText: String): Boolean;
-{ Folder scan of recognised plans. The plan sheet does not use this; it uses the registered list. }
-Function ListProjectMarkdownPlans(Out Paths, Titles: TStringList; Out ErrorText: String): Boolean;
 Function DefaultNewPlanMarkdown(Const Title: String = ''): String;
 { CRLF wins when both styles are present. A bare CR is its own ending, otherwise LF. }
 Function DetectFileEol(Const S: String): String;
@@ -131,7 +129,7 @@ Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Inte
 Implementation
 
 Uses
-  LazFileUtils, DirectoryListing, Process, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
+  LazFileUtils, Process, fpjson, jsonparser, AssistantMarkdownForm, WorkflowLog, WorkflowEvents,
   AssistantConversation, AssistantGit;
 
 Var
@@ -772,82 +770,6 @@ Begin
     'Report a commit hash only from a successful run_git result. If a tool fails, say so. ' +
     'During a plan run, do not open the plan viewer. Status changes update the summary list. ' +
     'If that Markdown window is already open, it is refreshed.';
-End;
-
-Procedure AppendPlanPair(Target: TStringList; Const RelativePath, Title: String);
-Begin
-  Target.Add(RelativePath + #1 + Title);
-End;
-
-Procedure EmitPlanPairs(Source, Paths, Titles: TStringList);
-Var
-  I, SplitAt: Integer;
-  Item, Rel, Title: String;
-Begin
-  For I := 0 To Source.Count - 1 Do
-    Begin
-      Item := Source[I];
-      SplitAt := Pos(#1, Item);
-      If SplitAt < 2 Then
-        Continue;
-      Rel := Copy(Item, 1, SplitAt - 1);
-      Title := Copy(Item, SplitAt + 1, MaxInt);
-      If Title = '' Then
-        Title := ChangeFileExt(ExtractFileName(Rel), '');
-      Paths.Add(Rel);
-      Titles.Add(Title);
-    End;
-End;
-
-Function ListProjectMarkdownPlans(Out Paths, Titles: TStringList; Out ErrorText: String): Boolean;
-Var
-  Root, Rel, LowerRel, DocsPrefix, PlanTitle, IdentityErr: String;
-  Files, DocsFirst, Rest: TStringList;
-  I: Integer;
-Begin
-  Result := False;
-  ErrorText := '';
-  Paths := TStringList.Create;
-  Titles := TStringList.Create;
-  Root := PlanProjectRoot;
-  If Root = '' Then
-    Begin
-      ErrorText := 'No active Lazarus project.';
-      Exit;
-    End;
-  DocsPrefix := LowerCase(AssistantDocumentsDirName + '/');
-  DocsFirst := TStringList.Create;
-  Rest := TStringList.Create;
-  Files := TStringList.Create;
-  Try
-    CollectMatchingFiles(Root, '*.md', True, Files);
-    DocsFirst.Sorted := True;
-    DocsFirst.Duplicates := dupIgnore;
-    Rest.Sorted := True;
-    Rest.Duplicates := dupIgnore;
-    For I := 0 To Files.Count - 1 Do
-      Begin
-        If Not IsMarkdownPath(Files[I]) Then
-          Continue;
-        Rel := ProjectRelativePath(Files[I]);
-        If Rel = '' Then
-          Continue;
-        If Not TryReadAssistantPlanIdentity(Files[I], PlanTitle, IdentityErr) Then
-          Continue;
-        LowerRel := LowerCase(StringReplace(Rel, '\', '/', [rfReplaceAll]));
-        If Pos(DocsPrefix, LowerRel) = 1 Then
-          AppendPlanPair(DocsFirst, Rel, PlanTitle)
-        Else
-          AppendPlanPair(Rest, Rel, PlanTitle);
-      End;
-    EmitPlanPairs(DocsFirst, Paths, Titles);
-    EmitPlanPairs(Rest, Paths, Titles);
-    Result := True;
-  Finally
-    Files.Free;
-    DocsFirst.Free;
-    Rest.Free;
-  End;
 End;
 
 Function DefaultNewPlanMarkdown(Const Title: String): String;

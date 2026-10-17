@@ -171,7 +171,6 @@ Type
 
 Function ThinkingLevelToStr(Level: TAssistantThinkingLevel): String;
 Function StrToThinkingLevel(Const Value: String): TAssistantThinkingLevel;
-Function ThinkingLevelCaption(Level: TAssistantThinkingLevel): String;
 Function ApprovalModeToStr(Mode: TAssistantApprovalMode): String;
 Function StrToApprovalMode(Const Value: String): TAssistantApprovalMode;
 Function ApprovalModeCaption(Mode: TAssistantApprovalMode): String;
@@ -227,17 +226,6 @@ Begin
     Result := atlXHigh
   Else
     Result := atlHigh;
-End;
-
-Function ThinkingLevelCaption(Level: TAssistantThinkingLevel): String;
-Begin
-  Case Level Of
-    atlLow: Result := 'Low';
-    atlMedium: Result := 'Medium';
-    atlXHigh: Result := 'XHigh';
-  Else
-    Result := 'High';
-  End;
 End;
 
 Function ApprovalModeToStr(Mode: TAssistantApprovalMode): String;

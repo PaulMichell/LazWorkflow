@@ -40,10 +40,6 @@ Function PermissionFlagRefused(Const ProgramText: String): Boolean;
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
-/// One captured turn. The form passes the shared user text. This path does not
-/// receive this assistant's tool list, skill bodies, or transcript compactor.
-Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 
 Type
   TClaudeRunSnapshot = Record
@@ -590,13 +586,6 @@ Begin
   If Not ParseClaudeTurnResult(StdoutText, Turn, ErrorText) Then
     Exit;
   Result := True;
-End;
-
-Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
-Begin
-  Result := RunClaudeTurnStopped(Executable, Model, ApprovalMode, Prompt, WorkingDirectory, ClaudeTurnTimeoutMs, Nil,
-    Turn, ErrorText);
 End;
 
 Function TAssistantClaudeRun.Cancelled: Boolean;

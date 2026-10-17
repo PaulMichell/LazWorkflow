@@ -100,7 +100,6 @@ Type
     Function AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
     { O(1) memory access — no disk, no JSON parse. }
     Function GetTurn(TurnIndex: Integer; Out Turn: TConversationTurn): Boolean;
-    Function GetTurnDisplay(TurnIndex: Integer; Out Prompt, Response, Thinking, ErrorText: String): Boolean;
     Function TurnCount: Integer;
     Function IndexCount: Integer;
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
@@ -114,9 +113,6 @@ Type
     { Registered plan paths in available_plans. A missing key is an empty list. }
     Function LoadAvailablePlanPaths(Paths: TStrings): Boolean;
     Function SaveAvailablePlanPaths(Paths: TStrings): Boolean;
-    { Compatibility wrappers — prefer LoadShellConfig / SaveShellConfig. }
-    Function SaveShowThinking(ShowThinking: Boolean): Boolean;
-    Function LoadShowThinking(Out ShowThinking: Boolean): Boolean;
     { Multi-conversation: current files are conversation.jsonl + conversation.index.jsonl;
       archives are conversation-YYYYMMDDTHHMMSSMMM.jsonl (+ matching .index.jsonl). }
     Function HasTurns: Boolean;
@@ -681,26 +677,6 @@ Begin
   Result := True;
 End;
 
-Function TAssistantConversationStore.GetTurnDisplay(TurnIndex: Integer;
-  Out Prompt, Response, Thinking, ErrorText: String): Boolean;
-Var
-  Turn: TConversationTurn;
-Begin
-  Result := GetTurn(TurnIndex, Turn);
-  If Not Result Then
-    Begin
-      Prompt := '';
-      Response := '';
-      Thinking := '';
-      ErrorText := '';
-      Exit;
-    End;
-  Prompt := Turn.Prompt;
-  Response := Turn.Response;
-  Thinking := Turn.Thinking;
-  ErrorText := Turn.ErrorText;
-End;
-
 Function TAssistantConversationStore.TurnCount: Integer;
 Begin
   Result := Length(FTurns);
@@ -998,30 +974,6 @@ Begin
   Finally
     Obj.Free;
   End;
-End;
-
-Function TAssistantConversationStore.SaveShowThinking(ShowThinking: Boolean): Boolean;
-Var
-  Mode: TAssistantMode;
-  IgnoredThinking: Boolean;
-  PlanFile: String;
-Begin
-  Mode := amChat;
-  PlanFile := '';
-  If Not LoadShellConfig(IgnoredThinking, Mode, PlanFile) Then
-    Begin
-      Mode := amChat;
-      PlanFile := '';
-    End;
-  Result := SaveShellConfig(ShowThinking, Mode, PlanFile);
-End;
-
-Function TAssistantConversationStore.LoadShowThinking(Out ShowThinking: Boolean): Boolean;
-Var
-  Mode: TAssistantMode;
-  PlanFile: String;
-Begin
-  Result := LoadShellConfig(ShowThinking, Mode, PlanFile);
 End;
 
 Function NewArchiveId: String;

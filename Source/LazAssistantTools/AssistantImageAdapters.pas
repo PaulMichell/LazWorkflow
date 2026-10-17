@@ -36,8 +36,6 @@ Procedure SetGeneratedImageFetch(Fetch: TGeneratedImageFetch);
 /// Shape is optional. A value this backend cannot express is omitted, not an error.
 Function RequestProfileImage(Const Prompt, Shape: String; Out Image: TAssistantGeneratedImage;
   Out ErrorText: String): Boolean;
-/// Keep documented image parts from a Responses output array. An empty array is ignored.
-Procedure RememberResponseImages(Const OutputJson: String);
 Procedure RegisterBuiltinImageAdapters;
 
 Implementation
@@ -864,21 +862,6 @@ Begin
   { One assignment, after both paths, using the same byte owner as a download. }
   Image := Parsed;
   Result := True;
-End;
-
-Procedure RememberResponseImages(Const OutputJson: String);
-Var
-  Images: TAssistantGeneratedImageArray;
-  ErrorText, Body: String;
-Begin
-  If Trim(OutputJson) = '' Then
-    Exit;
-  If Trim(OutputJson)[1] = '[' Then
-    Body := '{"output":' + OutputJson + '}'
-  Else
-    Body := OutputJson;
-  If CollectGeneratedImages(AssistantImageAdapterResponses, Body, Images, ErrorText) And (Length(Images) > 0) Then
-    SetTurnGeneratedImages(Images);
 End;
 
 Procedure RegisterBuiltinImageAdapters;

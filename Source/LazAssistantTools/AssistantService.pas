@@ -5,7 +5,7 @@ Unit AssistantService;
   Size note: exceeds the 1000 line preference. The service owns history, prompt
   assembly, model listing, and actor lifetime in one place; splitting would
   separate the only callers of the private trim/export helpers.
-  Reviewed 2026-08: unused TAssistantStreamThread/TAssistantSSEStream removed. }
+  Reviewed 2026-10: unused chat-completions request builder and escape cache removed. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -29,9 +29,6 @@ Type
     ToolCallsJson: String;
     { Opaque ordered Responses output for an in-memory tool round. Never display it. }
     ResponsesOutputJson: String;
-    { Cached JSON-escaped fields so request rebuild is not O(n) re-escape every send. }
-    ContentEscaped: String;
-    ToolCallIdEscaped: String;
     { Image refs for amrUser only. Paths, never pixel bytes. }
     ImageRefs: TAssistantImageRefArray;
   End;
@@ -76,7 +73,6 @@ Type
     FStreamThread: TThread;
     FBusy: Boolean;
     FActiveMode: TAssistantMode;
-    FSystemPromptEscaped: String;
     FToolsJsonCache: String;
     FToolsJsonMode: TAssistantMode;
     FToolsJsonValid: Boolean;
@@ -113,19 +109,15 @@ Type
     Procedure ClearStreamThread;
     Procedure ClearTurnFinishFacts;
     Procedure RebuildSystemPrompt;
-    Function EscapedContent(Var Msg: TAssistantMessage): String;
-    Function EscapedToolCallId(Var Msg: TAssistantMessage): String;
     Function ToolsJsonCached: String;
     Function MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
     Function CountRequestImages: Integer;
     Function EstimatePromptTokens: Integer;
     Procedure OmitMessageImages(Var Msg: TAssistantMessage);
-    Procedure InvalidateMessageEscape(Var Msg: TAssistantMessage);
     Procedure TruncateMessageContent(Var Msg: TAssistantMessage; MaxChars: Integer; Const LabelText: String);
     Procedure DropMessageRange(FromIndex, Count: Integer);
     { Shrink/drop old messages so the next request fits the model limit. }
     Procedure TrimMessagesForBudget;
-    Function BuildRequestJson: String;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -146,19 +138,14 @@ Type
     Function ExportUnstoredMessagesJson: String;
     Procedure RestoreMessagesJson(Const JsonText: String);
     Procedure NoteMessagesStored;
-    Function LastUserAttachmentsJson: String;
     { Opening user message of the unstored turn. Later steer refs are not this field. }
     Function OpeningUserAttachmentsJson: String;
-    Procedure EnsureLastUserImageRefs(Const AttachmentsJson: String);
     { Fill the first user message at or after FromIndex when it has no refs yet. }
     Procedure EnsureUserImageRefsFrom(FromIndex: Integer; Const AttachmentsJson: String);
     Procedure AddAssistantToolCalls(Const Content, ToolCallsJson: String;
       Const ResponsesOutputJson: String = '');
     Procedure AddToolResult(Const ToolCallId, Content: String);
-    { Restore a previously persisted message without store-time truncation. }
-    Procedure RestoreMessage(Role: TAssistantMessageRole; Const Content, ToolCallId, ToolCallsJson: String);
     Function MessageCount: Integer;
-    Function GetMessage(Index: Integer; Out Role: TAssistantMessageRole; Out Content, ToolCallId, ToolCallsJson: String): Boolean;
     Function IsBusy: Boolean;
     Function IsSignedIn: Boolean;
     { Rough prompt size (messages + system + tools) for UI / guards. }
@@ -184,8 +171,6 @@ Type
       Out AnswerText, ErrorText: String): Boolean;
     { GET /v1/language-models (fallback /v1/models). Fills ModelIds sorted, chat-oriented. }
     Function ListAvailableModels(ModelIds: TStrings; Out ErrorText: String): Boolean;
-    { Rebuilds the next chat/completions body (used after a tool round). }
-    Function BuildNextRequestJson: String;
     { Mid-turn steer. Does not change mode or tool permissions. No-op if no actor is running.
       Image refs are injected at the next gap as user-message parts. A subagent session drops them. }
     Procedure EnqueueSteer(Const Text: String); Overload;
@@ -768,7 +753,6 @@ Begin
   FActiveSkill := '';
   FActiveMode := amChat;
   FSystemPrompt := FBaseSystemPrompt;
-  FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
   FToolsJsonCache := '';
   FToolsJsonMode := amChat;
   FToolsJsonValid := False;
@@ -876,21 +860,6 @@ Begin
   Else
     FSystemPrompt := FSystemPrompt + LineEnding + AssistantImageSystemSentence;
   FBaseSystemPrompt := FSystemPrompt;
-  FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
-End;
-
-Function TAssistantService.EscapedContent(Var Msg: TAssistantMessage): String;
-Begin
-  If Msg.ContentEscaped = '' Then
-    Msg.ContentEscaped := JsonEscapeText(Msg.Content);
-  Result := Msg.ContentEscaped;
-End;
-
-Function TAssistantService.EscapedToolCallId(Var Msg: TAssistantMessage): String;
-Begin
-  If Msg.ToolCallIdEscaped = '' Then
-    Msg.ToolCallIdEscaped := JsonEscapeText(Msg.ToolCallId);
-  Result := Msg.ToolCallIdEscaped;
 End;
 
 Function TAssistantService.ToolsJsonCached: String;
@@ -902,74 +871,6 @@ Begin
       FToolsJsonValid := True;
     End;
   Result := FToolsJsonCache;
-End;
-
-Function TAssistantService.BuildRequestJson: String;
-Var
-  I, PartCount, TotalLen, P, J, L: Integer;
-  Parts: Array Of String;
-  HasSystem: Boolean;
-  MsgJson, Joined: String;
-Begin
-  { Pre-size and single-copy join — avoids quadratic string growth on long chats.
-    Message bodies use cached JSON escapes filled on first use. }
-  SetLength(Parts, Length(FMessages) + 2);
-  PartCount := 0;
-  HasSystem := False;
-  If Trim(FSystemPrompt) <> '' Then
-    Begin
-      If FSystemPromptEscaped = '' Then
-        FSystemPromptEscaped := JsonEscapeText(FSystemPrompt);
-      Parts[PartCount] := '{"role":"system","content":"' + FSystemPromptEscaped + '"}';
-      Inc(PartCount);
-      HasSystem := True;
-    End;
-  For I := 0 To High(FMessages) Do
-    Begin
-      If (FMessages[I].Role = amrSystem) And HasSystem Then
-        Continue;
-      If FMessages[I].Role = amrTool Then
-        MsgJson := '{"role":"tool","tool_call_id":"' + EscapedToolCallId(FMessages[I]) +
-          '","content":"' + EscapedContent(FMessages[I]) + '"}'
-      Else If FMessages[I].ToolCallsJson <> '' Then
-        MsgJson := '{"role":"assistant","content":"' + EscapedContent(FMessages[I]) +
-          '","tool_calls":' + FMessages[I].ToolCallsJson + '}'
-      Else
-        MsgJson := '{"role":"' + RoleToJson(FMessages[I].Role) + '","content":"' +
-          EscapedContent(FMessages[I]) + '"}';
-      Parts[PartCount] := MsgJson;
-      Inc(PartCount);
-    End;
-  TotalLen := 0;
-  For J := 0 To PartCount - 1 Do
-    Begin
-      Inc(TotalLen, Length(Parts[J]));
-      If J > 0 Then
-        Inc(TotalLen);
-    End;
-  SetLength(Joined, TotalLen);
-  P := 1;
-  For J := 0 To PartCount - 1 Do
-    Begin
-      If J > 0 Then
-        Begin
-          Joined[P] := ',';
-          Inc(P);
-        End;
-      L := Length(Parts[J]);
-      If L > 0 Then
-        Move(Parts[J][1], Joined[P], L);
-      Inc(P, L);
-    End;
-  If FToolsEnabled And (Trim(ToolsJsonCached) <> '') Then
-    Result := '{"model":"' + JsonEscapeText(FModel) + '","stream":true,"messages":[' + Joined +
-      '],"tools":' + ToolsJsonCached
-  Else
-    Result := '{"model":"' + JsonEscapeText(FModel) + '","stream":true,"messages":[' + Joined + ']';
-  { Reasoning effort (thinking level): low | medium | high | xhigh. }
-  If Trim(FReasoningEffort) <> '' Then
-    Result := Result + ',"reasoning_effort":"' + JsonEscapeText(LowerCase(Trim(FReasoningEffort))) + '"';
-  Result := Result + '}';
 End;
 
 Function RunningOnMainThread: Boolean;
@@ -1195,12 +1096,6 @@ Begin
   FLastTrimNotice := '';
 End;
 
-Procedure TAssistantService.InvalidateMessageEscape(Var Msg: TAssistantMessage);
-Begin
-  Msg.ContentEscaped := '';
-  Msg.ToolCallIdEscaped := '';
-End;
-
 Procedure TAssistantService.TruncateMessageContent(Var Msg: TAssistantMessage; MaxChars: Integer;
   Const LabelText: String);
 Var
@@ -1220,7 +1115,6 @@ Begin
       [LabelText, Length(Msg.Content)]) + LineEnding +
     Copy(Msg.Content, Length(Msg.Content) - KeepTail + 1, KeepTail);
   Msg.Content := Body;
-  InvalidateMessageEscape(Msg);
 End;
 
 Function TAssistantService.MessagePayloadChars(Const Msg: TAssistantMessage): Integer;
@@ -1347,7 +1241,6 @@ Begin
     Msg.Content := Note
   Else
     Msg.Content := Msg.Content + LineEnding + Note;
-  InvalidateMessageEscape(Msg);
 End;
 
 Procedure TAssistantService.TrimMessagesForBudget;
@@ -1416,7 +1309,6 @@ Begin
           If Trim(FMessages[I].Content) = '' Then
             FMessages[I].Content :=
               '[Earlier assistant tool_calls were removed to fit the context window.]';
-          InvalidateMessageEscape(FMessages[I]);
           While (I + 1 <= High(FMessages)) And (FMessages[I + 1].Role = amrTool) Do
             DropMessageRange(I + 1, 1);
           Changed := True;
@@ -1508,13 +1400,9 @@ Begin
           FMessages[0].ToolCallsJson := '';
           FMessages[0].ResponsesOutputJson := '';
           SetLength(FMessages[0].ImageRefs, 0);
-          InvalidateMessageEscape(FMessages[0]);
         End
       Else
-        Begin
-          FMessages[0].Content := Notice;
-          InvalidateMessageEscape(FMessages[0]);
-        End;
+        FMessages[0].Content := Notice;
       WorkflowLogger.Info('AssistantService',
         Format('Trimmed chat context to ~%d tokens (budget %d, messages=%d)',
           [EstimatePromptTokens, Budget, Length(FMessages)]));
@@ -1678,19 +1566,6 @@ Begin
   FStoredMessageCount := Length(FMessages);
 End;
 
-Function TAssistantService.LastUserAttachmentsJson: String;
-Var
-  I: Integer;
-Begin
-  Result := '';
-  For I := High(FMessages) DownTo 0 Do
-    If FMessages[I].Role = amrUser Then
-      Begin
-        Result := AssistantImageRefsToJson(FMessages[I].ImageRefs);
-        Exit;
-      End;
-End;
-
 Function TAssistantService.OpeningUserAttachmentsJson: String;
 Var
   I, Start: Integer;
@@ -1724,23 +1599,6 @@ Begin
       End;
 End;
 
-Procedure TAssistantService.EnsureLastUserImageRefs(Const AttachmentsJson: String);
-Var
-  I: Integer;
-  Refs: TAssistantImageRefArray;
-Begin
-  If Not ParseAssistantImageRefs(AttachmentsJson, Refs) Or (Length(Refs) = 0) Then Exit;
-  For I := High(FMessages) DownTo 0 Do
-    If FMessages[I].Role = amrUser Then
-      Begin
-        If Pos(AssistantImageOmittedPrefix, FMessages[I].Content) > 0 Then Exit;
-        If Length(FMessages[I].ImageRefs) = 0 Then
-          FMessages[I].ImageRefs := LimitAssistantImageRefs(Refs);
-        Exit;
-      End;
-  AddUserMessage('', Refs);
-End;
-
 Procedure TAssistantService.AddMessage(Role: TAssistantMessageRole; Const Content: String);
 Var
   Idx: Integer;
@@ -1758,8 +1616,6 @@ Begin
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := '';
   FMessages[Idx].ResponsesOutputJson := '';
-  FMessages[Idx].ContentEscaped := '';
-  FMessages[Idx].ToolCallIdEscaped := '';
   SetLength(FMessages[Idx].ImageRefs, 0);
 End;
 
@@ -1777,8 +1633,6 @@ Begin
   FMessages[Idx].ToolCallId := '';
   FMessages[Idx].ToolCallsJson := ToolCallsJson;
   FMessages[Idx].ResponsesOutputJson := ResponsesOutputJson;
-  FMessages[Idx].ContentEscaped := '';
-  FMessages[Idx].ToolCallIdEscaped := '';
 End;
 
 Procedure TAssistantService.AddToolResult(Const ToolCallId, Content: String);
@@ -1800,14 +1654,6 @@ Begin
   FMessages[Idx].ToolCallId := ToolCallId;
   FMessages[Idx].ToolCallsJson := '';
   FMessages[Idx].ResponsesOutputJson := '';
-  FMessages[Idx].ContentEscaped := '';
-  FMessages[Idx].ToolCallIdEscaped := '';
-End;
-
-Function TAssistantService.BuildNextRequestJson: String;
-Begin
-  TrimMessagesForBudget;
-  Result := BuildRequestJson;
 End;
 
 Procedure AppendSamplerItem(Var Items: TSamplerInputItemArray; Var Count: Integer; Const Item: TSamplerInputItem);
@@ -2199,38 +2045,6 @@ End;
 Function TAssistantService.MessageCount: Integer;
 Begin
   Result := Length(FMessages);
-End;
-
-Procedure TAssistantService.RestoreMessage(Role: TAssistantMessageRole; Const Content, ToolCallId, ToolCallsJson: String);
-Var
-  Idx: Integer;
-Begin
-  Idx := Length(FMessages);
-  SetLength(FMessages, Idx + 1);
-  FMessages[Idx].Role := Role;
-  FMessages[Idx].Content := Content;
-  FMessages[Idx].ToolCallId := ToolCallId;
-  FMessages[Idx].ToolCallsJson := ToolCallsJson;
-  FMessages[Idx].ResponsesOutputJson := '';
-  FMessages[Idx].ContentEscaped := '';
-  FMessages[Idx].ToolCallIdEscaped := '';
-End;
-
-Function TAssistantService.GetMessage(Index: Integer; Out Role: TAssistantMessageRole;
-  Out Content, ToolCallId, ToolCallsJson: String): Boolean;
-Begin
-  Result := False;
-  Role := amrUser;
-  Content := '';
-  ToolCallId := '';
-  ToolCallsJson := '';
-  If (Index < 0) Or (Index >= Length(FMessages)) Then
-    Exit;
-  Role := FMessages[Index].Role;
-  Content := FMessages[Index].Content;
-  ToolCallId := FMessages[Index].ToolCallId;
-  ToolCallsJson := FMessages[Index].ToolCallsJson;
-  Result := True;
 End;
 
 Function TAssistantService.IsBusy: Boolean;

@@ -222,7 +222,6 @@ Type
     FCodexBroker: TAssistantToolBroker;
     Procedure LoadConnectionSettings;
     Procedure RecordCompletedUsage;
-    Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
     Function StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
@@ -445,8 +444,6 @@ Type
     Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
     Procedure UpdateInputUndoItems;
-    Procedure ScrollChatToEnd;
-    Procedure ScrollChatToTop;
     Procedure RefreshChatDisplay(Force: Boolean; ScrollToBottom: Boolean = True);
     Procedure SetBusyCursor(IsBusy: Boolean);
     Procedure SetOpenBusy(IsBusy: Boolean);
@@ -505,7 +502,6 @@ Type
     Procedure StartNewChat(KeepPlanAgent: Boolean = False; UseChatDefault: Boolean = True);
     Procedure ReviewCompile;
     Procedure ReviewBuild;
-    Procedure FixSelectedError;
     Procedure FixTopError;
     Procedure StopStream;
     { Rebind conversation store, session and UI to LazarusIDE.ActiveProject. }
@@ -3426,50 +3422,6 @@ Begin
   StatusFooter.SetRightActivityText(FormatElapsedStatus(Phase), Phase);
 End;
 
-Function TProjectAssistantForm.ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
-Var Dialog: TForm; Description: TLabel; BeforeMemo, AfterMemo: TMemo;
-  AllowButton, DeclineButton: TButton; WasEnabled: Boolean;
-Begin
-  WasEnabled := ElapsedTimer.Enabled; ElapsedTimer.Enabled := False;
-  Dialog := TForm.CreateNew(Self);
-  Try
-    Dialog.Caption := 'Review ChatGPT tool request'; Dialog.Position := poOwnerFormCenter;
-    Dialog.SetBounds(0, 0, 800, 600); Dialog.BorderStyle := bsDialog;
-    Description := TLabel.Create(Dialog); Description.Parent := Dialog;
-    Description.AutoSize := False; Description.WordWrap := True; Description.SetBounds(16, 16, 768, 64);
-    If Tool = 'lazarus_start_tests' Then
-      Description.Caption := 'Run the configured project test executable and arguments shown below. The working directory is the project directory; no files will be saved automatically.'
-    Else If Tool = 'lazarus_start_build' Then
-      Description.Caption := 'Allow a build of the active project using its saved files and configured build commands?'
-    Else If Tool = 'lazarus_save_buffer' Then
-      Description.Caption := 'Save this exact buffer to disk: ' + Path
-    Else If Tool = 'lazarus_create_file' Then
-      Description.Caption := 'Create this new file and any missing parent directories (proposed text below): ' + Path
-    Else If (Tool = 'lazarus_apply_changes') Or (Tool = 'lazarus_revert_changes') Then
-      Description.Caption := 'Review all listed editor changes (current/expected text above, proposed text below). No files will be saved. Recovery skips editors changed since application.'
-    Else If Tool = 'lazarus_apply_local_rename' Then
-      Description.Caption := 'Apply this local variable/constant rename without saving (current text above, proposed text below): ' + Path
-    Else Description.Caption := 'Replace this buffer (current text above, proposed text below): ' + Path;
-    BeforeMemo := TMemo.Create(Dialog); BeforeMemo.Parent := Dialog;
-    BeforeMemo.SetBounds(16, 88, 768, 200); BeforeMemo.ReadOnly := True;
-    BeforeMemo.ScrollBars := ssBoth; BeforeMemo.WordWrap := False; BeforeMemo.Text := OldText;
-    AfterMemo := TMemo.Create(Dialog); AfterMemo.Parent := Dialog;
-    AfterMemo.SetBounds(16, 304, 768, 230); AfterMemo.ReadOnly := True;
-    AfterMemo.ScrollBars := ssBoth; AfterMemo.WordWrap := False; AfterMemo.Text := NewText;
-    AfterMemo.Visible := (Tool = 'lazarus_replace_buffer') Or (Tool = 'lazarus_create_file') Or (Tool = 'lazarus_apply_local_rename') Or (Tool = 'lazarus_apply_changes') Or (Tool = 'lazarus_revert_changes');
-    BeforeMemo.Visible := (Tool <> 'lazarus_start_build') And (Tool <> 'lazarus_create_file');
-    If Tool = 'lazarus_create_file' Then AfterMemo.SetBounds(16, 88, 768, 446);
-    If Tool = 'lazarus_save_buffer' Then BeforeMemo.Height := 446;
-    AllowButton := TButton.Create(Dialog); AllowButton.Parent := Dialog; AllowButton.Caption := 'Allow once';
-    AllowButton.SetBounds(550, 552, 110, 32); AllowButton.ModalResult := mrYes;
-    DeclineButton := TButton.Create(Dialog); DeclineButton.Parent := Dialog; DeclineButton.Caption := 'Decline';
-    DeclineButton.SetBounds(674, 552, 110, 32); DeclineButton.ModalResult := mrCancel;
-    DeclineButton.Cancel := True; DeclineButton.Default := True;
-    Result := Dialog.ShowModal = mrYes;
-    If Result Then Result := Assigned(FCodexRun) And Not FCodexRun.Snapshot.Done;
-  Finally Dialog.Free; ElapsedTimer.Enabled := WasEnabled And Assigned(FCodexRun); End;
-End;
-
 Procedure TProjectAssistantForm.LoadConnectionSettings;
 Var
   Connections: TAssistantConnections;
@@ -6020,19 +5972,6 @@ Procedure TProjectAssistantForm.InputMemoChange(Sender: TObject);
 Begin
   UpdateInputUndoItems;
 End;
-
-Procedure TProjectAssistantForm.ScrollChatToEnd;
-Begin
-  If Assigned(FTraceView) Then
-    FTraceView.ScrollToEnd;
-End;
-
-Procedure TProjectAssistantForm.ScrollChatToTop;
-Begin
-  If Assigned(FTraceView) Then
-    FTraceView.ScrollToStart;
-End;
-
 
 Procedure TProjectAssistantForm.ApplyLiveThinkingAndAnswer;
 Var
@@ -8589,12 +8528,6 @@ Begin
     '5. Call `run_compile` after edits and fix any new errors you introduced.' + LineEnding +
     '6. Visible reply: short explanation of the cause + what you changed (no long patch dumps if tools already applied).' + LineEnding +
     '7. Do not only describe the fix — **apply it with tools** in this turn.';
-End;
-
-Procedure TProjectAssistantForm.FixSelectedError;
-Begin
-  { Prefer the top error when Messages has errors (e.g. after Review). }
-  FixTopError;
 End;
 
 Procedure TProjectAssistantForm.FixTopError;

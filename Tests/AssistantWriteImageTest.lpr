@@ -24,7 +24,7 @@ Uses
   BaseUnix,
   {$ENDIF}
   Interfaces, Classes, SysUtils, base64, fpimage, fpwritejpeg, fpjson, jsonparser,
-  AssistantConfig, AssistantConnections, AssistantConversation, AssistantGeneratedImage,
+  AssistantConfig, AssistantConnections, AssistantConversation,
   AssistantHarness, AssistantImageAdapters, AssistantImages, AssistantTools, AssistantWorkTarget,
   WorkflowSettings;
 
@@ -445,7 +445,6 @@ Var
   Store: TAssistantConnections;
   GrokItem, CompatibleItem, ClaudeItem, CodexItem, EmptyModel: TAssistantConnection;
   SavedApproval: TAssistantApprovalMode;
-  Images: TAssistantGeneratedImageArray;
   Kept: TBytes;
   PostsBefore: Integer;
 Begin
@@ -530,20 +529,12 @@ Begin
       (Pos('write_image', BuildAssistantToolsJsonForSession(amBuild, False, False)) = 0) And
       (Pos('"name":"write_image"', BuildAssistantToolsJsonForSession(amBuild, True, True)) > 0));
 
-    SetLength(Images, 1);
-    Images[0].Id := 'ig_turn';
-    Images[0].Mime := 'image/png';
-    Images[0].Width := 1;
-    Images[0].Height := 1;
-    Images[0].Bytes := PngBytes;
-    SetTurnGeneratedImages(Images);
     BeginWriteImageTurn;
     MockCalls := 0;
     CheckNoted('a response-part id is not a draw', Note,
       (Not CallWrite(amBuild, '{"path":"icons/from-id.png","image_id":"ig_turn"}', Reply, Note)) And
       (Pos('prompt', Note) > 0) And (MockCalls = 0) And (Reply = '') And
       (Not FileExists(ProjectFile(Project, 'icons/from-id.png'))));
-    ClearTurnGeneratedImages;
 
     BeginWriteImageTurn;
     MockCalls := 0;
@@ -720,7 +711,6 @@ Begin
     WriteLn('AssistantWriteImageTest passed');
   Finally
     SetGeneratedImagePost(Nil);
-    ClearTurnGeneratedImages;
     BeginWriteImageTurn;
     If Assigned(AssistantChatConfig) Then
       AssistantChatConfig.SetApprovalModeEnum(SavedApproval);

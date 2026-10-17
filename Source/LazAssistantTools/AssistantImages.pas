@@ -104,8 +104,6 @@ Function AssistantImageDisplayPresent(Const StoreDirectory, ImageId, DisplayPath
 /// MIME and pixel size from the still-image header. False when the bytes are not a known still image.
 Function MeasureStillImage(Const Data: TBytes; Out Mime: String; Out Width, Height: Integer): Boolean;
 
-/// Directory that receives stored images. ProjectRoot is the directory that contains .assistant/conversation.jsonl.
-Function AssistantImagesDirectory(Const ProjectRoot: String): String;
 /// Copy a still image into the store. The file is not opened when it is over 8 MiB.
 Function StoreAssistantImageFromFile(Const ProjectRoot, SourcePath: String; Out Stored: TAssistantStoredImage;
   Out ErrorText: String): Boolean;
@@ -203,17 +201,6 @@ Begin
   Result := Trim(ProjectRoot);
   If Result = '' Then Exit;
   Result := ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(Result));
-End;
-
-Function AssistantImagesDirectory(Const ProjectRoot: String): String;
-Var
-  Root: String;
-Begin
-  Root := ProjectRootDir(ProjectRoot);
-  If Root = '' Then
-    Result := ''
-  Else
-    Result := IncludeTrailingPathDelimiter(Root) + AssistantStoreFolderName + PathDelim + AssistantImagesFolderName + PathDelim;
 End;
 
 Function DimensionsFit(Width, Height: Integer): Boolean;

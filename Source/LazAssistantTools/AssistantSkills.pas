@@ -36,7 +36,6 @@ Function AssistantUserSkillsRoot: String;
 Function SkillSearchRoots(Const ProjectRoot: String): TStringArray;
 Function SkillNameIsSafe(Const SkillName: String): Boolean;
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
-Function ListUserSkills: TAssistantSkillList;
 Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
 /// Catalog skills, minus names the user removed, plus added guidance files.
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
@@ -318,11 +317,6 @@ Begin
   Roots := SkillSearchRoots(ProjectRoot);
   For I := 0 To High(Roots) Do
     ListSkillsInRoot(Roots[I], Result);
-End;
-
-Function ListUserSkills: TAssistantSkillList;
-Begin
-  Result := ListDiscoveredSkills('');
 End;
 
 Function SkillInfoFromFile(Const SkillName, SkillFile: String; Out Info: TAssistantSkillInfo): Boolean;

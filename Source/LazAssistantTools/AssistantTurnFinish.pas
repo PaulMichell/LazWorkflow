@@ -59,7 +59,6 @@ Function DefaultAssistantTurnFinishFacts: TAssistantTurnFinishFacts;
 { First matching rule wins. A normal reply with text, not truncated and not a deferral, is finished
   unless a plan item is still in progress and is not blocked with a user action. }
 Function ClassifyAssistantTurnFinish(Const Facts: TAssistantTurnFinishFacts): TAssistantTurnFinish;
-Function AssistantTurnFinishReasonName(Reason: TAssistantTurnFinishReason): String;
 { True only for the listed short deferrals, not for a long answer that happens to contain the words. }
 Function AssistantReplyIsShortDeferral(Const Text: String): Boolean;
 { A User action line outside a fenced example. An empty line after the colon still counts.
@@ -110,19 +109,6 @@ Begin
   Result.HadToolRound := False;
   Result.PlanItemInProgress := False;
   Result.PlanItemBlockedWithUserAction := False;
-End;
-
-Function AssistantTurnFinishReasonName(Reason: TAssistantTurnFinishReason): String;
-Begin
-  Case Reason Of
-    atfTruncated: Result := 'truncated';
-    atfToolRoundCap: Result := 'tool_round_cap';
-    atfEmptyAfterTools: Result := 'empty_after_tools';
-    atfDeferral: Result := 'deferral';
-    atfPlanInProgress: Result := 'plan_in_progress';
-  Else
-    Result := 'finished';
-  End;
 End;
 
 Function IsAsciiSpace(C: Char): Boolean;

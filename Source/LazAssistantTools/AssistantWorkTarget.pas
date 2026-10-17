@@ -113,29 +113,11 @@ Begin
   Else Result := atkPackage;
 End;
 
-Function CurrentProjectRoot: String;
-Var
-  Proj: TLazProject;
-  MainName: String;
-Begin
-  Result := '';
-  If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then Exit;
-  Proj := LazarusIDE.ActiveProject;
-  MainName := '';
-  If Assigned(Proj.MainFile) Then MainName := Proj.MainFile.Filename;
-  Result := ResolveAssistantProjectRoot(Proj.ProjectInfoFile, MainName);
-End;
-
 Function NormalizeTargetFolder(Const Directory: String): String;
 Begin
   Result := Trim(Directory);
   If Result = '' Then Exit;
   Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
-End;
-
-Function SameTargetFolder(Const Left, Right: String): Boolean;
-Begin
-  Result := CompareFilenames(NormalizeTargetFolder(Left), NormalizeTargetFolder(Right)) = 0;
 End;
 
 Procedure EnsureRecentTargets;

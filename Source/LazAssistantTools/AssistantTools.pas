@@ -27,7 +27,6 @@ Const
   AssistantToolMaxSearchLineChars = 512;
   AssistantToolMaxCompileMs = 600000;
 
-Function BuildAssistantToolsJson: String;
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -51,9 +50,6 @@ Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
 Procedure SetActivePlanRelativePath(Const RelativePath: String);
-{ Last run_compile outcome. A clean compile does not close a plan item (seq bumps each run). }
-Function AssistantLastCompileSeq: Integer;
-Function AssistantLastCompileWasClean: Boolean;
 { Last run_compile text (quiet lazbuild or IDE Messages) for pascal-review children. }
 Function AssistantLastCompileLog: String;
 { After add_unit / project-structure tools: save .lpi so disk matches IDE memory. }
@@ -87,7 +83,6 @@ ThreadVar
 Var
   GActivePlanRelative: String;
   GAssistantToolMode: TAssistantMode;
-  GLastCompileSeq: Integer;
   GLastCompileClean: Boolean;
   GLastCompileLog: String;
   GProjectStructureDirty: Boolean;
@@ -215,16 +210,6 @@ Procedure SetActivePlanRelativePath(Const RelativePath: String);
 Begin
   GActivePlanRelative := Trim(RelativePath);
   GActivePlanRelative := StringReplace(GActivePlanRelative, '\', '/', [rfReplaceAll]);
-End;
-
-Function AssistantLastCompileSeq: Integer;
-Begin
-  Result := GLastCompileSeq;
-End;
-
-Function AssistantLastCompileWasClean: Boolean;
-Begin
-  Result := GLastCompileClean;
 End;
 
 Function AssistantLastCompileLog: String;
@@ -798,11 +783,6 @@ Begin
   If AllowSubagents Then
     Body := Body + ',' + BuildSpawnToolJson;
   Result := '[' + Body + ']';
-End;
-
-Function BuildAssistantToolsJson: String;
-Begin
-  Result := BuildAssistantToolsJsonForSession(amInspect, False, False);
 End;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
@@ -3020,7 +3000,6 @@ Begin
         End
       Else
         Begin
-          Inc(GLastCompileSeq);
           GLastCompileClean := BuildOk And (ErrorCount = 0);
           ResultText := ResultText + LineEnding + CompileCleanSuffix(GLastCompileClean);
           GLastCompileLog := ResultText;
@@ -3054,7 +3033,6 @@ Begin
       End;
   End;
   MsgText := CollectIdeMessagesSummary(ErrorCount, WarningCount, HintCount);
-  Inc(GLastCompileSeq);
   GLastCompileClean := BuildOk And (ErrorCount = 0);
   ResultText :=
     Format('IDE %s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
@@ -4590,7 +4568,6 @@ End;
 Initialization
 
 GActivePlanRelative := '';
-GLastCompileSeq := 0;
 GLastCompileClean := False;
 GLastCompileLog := '';
 GProjectStructureDirty := False;

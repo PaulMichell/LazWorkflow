@@ -142,7 +142,7 @@ Type
 Implementation
 
 Uses
-  AssistantTools, AssistantSubagents, AssistantImageAdapters, AssistantGeneratedImage, AssistantAccountUsage,
+  AssistantTools, AssistantSubagents, AssistantAccountUsage,
   AssistantTurnFinish, WorkflowLog;
 
 Const
@@ -1748,7 +1748,6 @@ Var
     SetLength(FPendingImageRefs, 0);
   End;
 Begin
-  RememberResponseImages(FResponseOutputJson);
   SetLength(FPendingImageRefs, 0);
   Svc := LockedService;
   If Not Assigned(Svc) Then
@@ -1982,7 +1981,6 @@ Var
   Svc: TAssistantService;
 Begin
   BeginWriteImageTurn;
-  ClearTurnGeneratedImages;
   FHadToolRound := False;
   RoundTruncated := False;
   FLocalContinuationCount := 0;

@@ -75,8 +75,6 @@ Type
     Procedure SetUserImageRefs(Const Refs: TTraceImageRefArray);
     { A later user block for an image a tool just stored. Empty words; the picture is the content. }
     Procedure AppendUserImages(Const ImagesJson: String);
-    { Fill a user block that has no refs. Does not replace refs the trace already stored. }
-    Procedure KeepUserImageRefs(Const Refs: TTraceImageRefArray);
     Function AddNote(Const Text: String): TTraceBlock;
     Function AddSteer(Const Text: String): TTraceBlock;
     Function FindLatestSteer: TTraceBlock;
@@ -427,34 +425,6 @@ Begin
   If Length(Refs) = 0 Then Exit;
   Block := AddUser('');
   If Assigned(Block) Then Block.ImageRefs := Refs;
-End;
-
-Procedure TAssistantTrace.KeepUserImageRefs(Const Refs: TTraceImageRefArray);
-Var
-  Block: TTraceBlock;
-  I, J: Integer;
-Begin
-  If Length(Refs) < 1 Then Exit;
-  Block := EnsureUser('');
-  If Not Assigned(Block) Then
-    Begin
-      SetUserImageRefs(Refs);
-      Exit;
-    End;
-  If Length(Block.ImageRefs) = 0 Then
-    Begin
-      SetUserImageRefs(Refs);
-      Exit;
-    End;
-  For I := 0 To High(Block.ImageRefs) Do
-    For J := 0 To High(Refs) Do
-      If (Block.ImageRefs[I].Id <> '') And (Block.ImageRefs[I].Id = CleanTraceLabel(Refs[J].Id)) Then
-        Begin
-          If Block.ImageRefs[I].Name = '' Then Block.ImageRefs[I].Name := CleanTraceLabel(Refs[J].Name);
-          If Block.ImageRefs[I].DisplayPath = '' Then Block.ImageRefs[I].DisplayPath := CleanTraceLabel(Refs[J].DisplayPath);
-          If Block.ImageRefs[I].Width < 1 Then Block.ImageRefs[I].Width := Refs[J].Width;
-          If Block.ImageRefs[I].Height < 1 Then Block.ImageRefs[I].Height := Refs[J].Height;
-        End;
 End;
 
 Function TAssistantTrace.AddNote(Const Text: String): TTraceBlock;
