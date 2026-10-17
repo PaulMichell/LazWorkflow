@@ -23,6 +23,10 @@ Const
   AssistantPlanRunBlockedLeft = 'Blocked items need the listed actions. No unblocked item is left.';
   AssistantPlanRunAlreadyComplete = 'All plan packages are already complete.';
   AssistantPlanRunNoneFound = 'No plan packages were found.';
+  { Context continuation. 0 in storage means the default. The form does not hard-code 95. }
+  AssistantPlanContextPercentDefault = 95;
+  AssistantPlanContextPercentMin = 50;
+  AssistantPlanContextPercentMax = 99;
 
 Type
   TPlanRunEndKind = (
@@ -62,11 +66,61 @@ Function AssistantPlanRunWhy(Const Facts: TPlanRunReportFacts): String;
 Function AssistantPlanRunReport(Const Facts: TPlanRunReportFacts): String;
 { Start dialog when FindNextIncompleteBuildSection found nothing to run. }
 Function AssistantPlanRunStartMessage(Const Facts: TPlanRunReportFacts): String;
+{ Stored 0 keeps the default. Values outside 50..99 clamp to that range, except 0. }
+Function PlanContextContinuePercent(StoredPercent: Integer): Integer;
+{ A plan run at or over the threshold opens a new chat and continues, when the setting is on. }
+Function PlanRunContinuesInNewChat(UsagePercent, ThresholdPercent: Integer; Enabled: Boolean): Boolean;
+{ The agent is still marked running, nothing is sending, the user did not stop, and items remain. }
+Function PlanRunUnexplainedStall(AgentRunning, Sending, UserStopped: Boolean; OpenItems: Integer): Boolean;
+Function PlanRunStallWaitNote(WaitSeconds: Integer): String;
+Function PlanRunStallResumeNote: String;
+Function PlanRunNewChatNote(UsagePercent: Integer): String;
 
 Implementation
 
 Uses
   AssistantAcceptance;
+
+Function PlanContextContinuePercent(StoredPercent: Integer): Integer;
+Begin
+  If StoredPercent <= 0 Then
+    Result := AssistantPlanContextPercentDefault
+  Else
+    Result := StoredPercent;
+  If Result < AssistantPlanContextPercentMin Then
+    Result := AssistantPlanContextPercentMin;
+  If Result > AssistantPlanContextPercentMax Then
+    Result := AssistantPlanContextPercentMax;
+End;
+
+Function PlanRunContinuesInNewChat(UsagePercent, ThresholdPercent: Integer; Enabled: Boolean): Boolean;
+Begin
+  Result := Enabled And (ThresholdPercent > 0) And (UsagePercent >= ThresholdPercent);
+End;
+
+Function PlanRunUnexplainedStall(AgentRunning, Sending, UserStopped: Boolean; OpenItems: Integer): Boolean;
+Begin
+  Result := AgentRunning And (Not Sending) And (Not UserStopped) And (OpenItems > 0);
+End;
+
+Function PlanRunStallWaitNote(WaitSeconds: Integer): String;
+Begin
+  If WaitSeconds < 1 Then
+    Result := 'The plan stopped with items still open. Waiting to reconnect.'
+  Else
+    Result := Format('The plan stopped with items still open. Waiting to reconnect. Retrying in %d seconds. Stop still interrupts the wait.',
+      [WaitSeconds]);
+End;
+
+Function PlanRunStallResumeNote: String;
+Begin
+  Result := 'Resuming the call. The plan still has open items.';
+End;
+
+Function PlanRunNewChatNote(UsagePercent: Integer): String;
+Begin
+  Result := Format('Context usage %d%%. Starting a new chat and continuing the plan.', [UsagePercent]);
+End;
 
 Function DefaultPlanRunReportFacts: TPlanRunReportFacts;
 Begin

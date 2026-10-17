@@ -168,6 +168,21 @@ Begin
   Check('empty user action line still counts',
     PlanBodyUserAction('User action:', ActionText) And (ActionText = ''));
 
+  Check('stall when the agent is idle and items remain', PlanRunUnexplainedStall(True, False, False, 2));
+  Check('no stall while a package is sending', Not PlanRunUnexplainedStall(True, True, False, 2));
+  Check('no stall after the user stops', Not PlanRunUnexplainedStall(True, False, True, 2));
+  Check('no stall when the agent is not running', Not PlanRunUnexplainedStall(False, False, False, 2));
+  Check('no stall when nothing is open', Not PlanRunUnexplainedStall(True, False, False, 0));
+  Check('stall note uses the reconnect phrase', Has(PlanRunStallWaitNote(30), 'Waiting to reconnect.'));
+  Check('stall resume uses the resume phrase', Has(PlanRunStallResumeNote, 'Resuming the call.'));
+  Check('new chat continues at the threshold', PlanRunContinuesInNewChat(95, 95, True));
+  Check('new chat does not continue under the threshold', Not PlanRunContinuesInNewChat(94, 95, True));
+  Check('new chat does not continue when the setting is off', Not PlanRunContinuesInNewChat(99, 95, False));
+  Check('missing context percent keeps 95', PlanContextContinuePercent(0) = AssistantPlanContextPercentDefault);
+  Check('context percent clamps low values', PlanContextContinuePercent(10) = AssistantPlanContextPercentMin);
+  Check('context percent clamps high values', PlanContextContinuePercent(120) = AssistantPlanContextPercentMax);
+  Check('new chat note names the percent', Has(PlanRunNewChatNote(97), '97%'));
+
   If FailCount = 0 Then
     WriteLn('AssistantPlanRunTest passed')
   Else

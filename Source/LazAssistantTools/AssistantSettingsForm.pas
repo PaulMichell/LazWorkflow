@@ -36,6 +36,9 @@ Type
     ContextGroup: TGroupBox;
     IncludeContextCheck: TCheckBox;
     AutoCompactCheck: TCheckBox;
+    AutoNewChatCheck: TCheckBox;
+    NewChatPercentEdit: TSpinEdit;
+    NewChatPercentLabel: TLabel;
     RecoveryGroup: TGroupBox;
     ReconnectIntervalLabel: TLabel;
     ReconnectIntervalEdit: TSpinEdit;
@@ -1655,6 +1658,8 @@ Begin
   IncludeContextCheck.Checked := AssistantChatConfig.IncludeIDEContext;
   EnterNewlineCheck.Checked := AssistantChatConfig.EnterInsertsNewline;
   AutoCompactCheck.Checked := AssistantChatConfig.AutoCompactContext;
+  AutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
+  NewChatPercentEdit.Value := AssistantChatConfig.NewChatContextPercent;
   ReconnectIntervalEdit.Value := AssistantChatConfig.ReconnectIntervalSeconds;
   CreditRetryEdit.Value := AssistantChatConfig.CreditRetryMinutes;
   ContinuationCapEdit.Value := AssistantChatConfig.AutomaticContinuations;
@@ -1711,6 +1716,8 @@ Begin
   AssistantChatConfig.EnterInsertsNewline := EnterNewlineCheck.Checked;
   { Disabled compact still keeps the saved flag. }
   AssistantChatConfig.AutoCompactContext := AutoCompactCheck.Checked;
+  AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatCheck.Checked;
+  AssistantChatConfig.NewChatContextPercent := NewChatPercentEdit.Value;
   AssistantChatConfig.ReconnectIntervalSeconds := ReconnectIntervalEdit.Value;
   AssistantChatConfig.CreditRetryMinutes := CreditRetryEdit.Value;
   AssistantChatConfig.AutomaticContinuations := ContinuationCapEdit.Value;

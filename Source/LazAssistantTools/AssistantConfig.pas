@@ -32,6 +32,10 @@ Const
   AssistantContinuationMax = 20;
   AssistantFaultRetryDefault = 1;
   AssistantFaultRetryMax = 10;
+  { Same bounds as AssistantPlanRun. Stored here so settings load without that unit. }
+  AssistantNewChatContextDefault = 95;
+  AssistantNewChatContextMin = 50;
+  AssistantNewChatContextMax = 99;
 
 Type
   { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level").
@@ -54,6 +58,7 @@ Type
     FThinkingLevel: String;
     FApprovalMode: String;
     FAutoNewChatAtContextLimit: Boolean;
+    FNewChatContextPercent: Integer;
     FShowThinking: Boolean;
     FShowToolCalls: Boolean;
     FSearchMode: String;
@@ -128,9 +133,11 @@ Type
     Property ThinkingLevel: String Read FThinkingLevel Write FThinkingLevel;
     { ask | auto | always — tool approval policy. }
     Property ApprovalMode: String Read FApprovalMode Write FApprovalMode;
-    { When context ≥ 95%, start a new conversation automatically. }
+    { A plan run at NewChatContextPercent starts a new chat and continues. Key plan_continue_new_chat. Missing key is on. }
     Property AutoNewChatAtContextLimit: Boolean Read FAutoNewChatAtContextLimit
       Write FAutoNewChatAtContextLimit;
+    { Percent of the context budget. Key new_chat_context_percent. Default 95. }
+    Property NewChatContextPercent: Integer Read FNewChatContextPercent Write FNewChatContextPercent;
     { Show thinking blocks in the conversation trace. }
     Property ShowThinking: Boolean Read FShowThinking Write FShowThinking;
     { Show tool-call blocks in the conversation trace. }
@@ -309,7 +316,8 @@ Begin
   FIncludeIDEContext := False;
   FThinkingLevel := AssistantConfigDefaultThinking;
   FApprovalMode := AssistantConfigDefaultApproval;
-  FAutoNewChatAtContextLimit := False;
+  FAutoNewChatAtContextLimit := True;
+  FNewChatContextPercent := AssistantNewChatContextDefault;
   FShowThinking := True;
   FShowToolCalls := True;
   FSearchMode := 'off';
@@ -379,6 +387,7 @@ Begin
   FThinkingLevel := Source.ThinkingLevel;
   FApprovalMode := Source.ApprovalMode;
   FAutoNewChatAtContextLimit := Source.AutoNewChatAtContextLimit;
+  FNewChatContextPercent := Source.NewChatContextPercent;
   FShowThinking := Source.ShowThinking;
   FShowToolCalls := Source.ShowToolCalls;
   FSearchMode := Source.SearchMode;
@@ -490,6 +499,10 @@ Begin
   Config.FCreditRetryMinutes := BoundRecoveryInt(Config.FCreditRetryMinutes, 0, AssistantCreditRetryMax);
   Config.FAutomaticContinuations := BoundRecoveryInt(Config.FAutomaticContinuations, 0, AssistantContinuationMax);
   Config.FFaultRetries := BoundRecoveryInt(Config.FFaultRetries, 0, AssistantFaultRetryMax);
+  If Config.FNewChatContextPercent <= 0 Then
+    Config.FNewChatContextPercent := AssistantNewChatContextDefault;
+  Config.FNewChatContextPercent := BoundRecoveryInt(Config.FNewChatContextPercent,
+    AssistantNewChatContextMin, AssistantNewChatContextMax);
 End;
 
 Procedure ApplyOAuthObject(Config: TAssistantConfig; Auth: TJSONObject);
@@ -942,7 +955,8 @@ Begin
   Section := ReadWorkflowSection('assistant');
   Try
     FIncludeIDEContext := False;
-    FAutoNewChatAtContextLimit := False;
+    FAutoNewChatAtContextLimit := True;
+    FNewChatContextPercent := AssistantNewChatContextDefault;
     FShowThinking := True;
     FShowToolCalls := True;
     FSearchMode := 'off';
@@ -972,7 +986,13 @@ Begin
         Exit;
       End;
     FIncludeIDEContext := Section.Get('include_ide_context', False);
-    FAutoNewChatAtContextLimit := Section.Get('auto_new_chat_at_limit', False);
+    { auto_new_chat_at_limit was saved false before it had a checkbox. The shown key is plan_continue_new_chat. }
+    If Section.Find('plan_continue_new_chat') <> Nil Then
+      FAutoNewChatAtContextLimit := Section.Get('plan_continue_new_chat', True)
+    Else
+      FAutoNewChatAtContextLimit := True;
+    FNewChatContextPercent := ReadRecoveryInt(Section, 'new_chat_context_percent',
+      AssistantNewChatContextDefault, AssistantNewChatContextMin, AssistantNewChatContextMax);
     FShowThinking := Section.Get('show_thinking', True);
     FShowToolCalls := Section.Get('show_tool_calls', True);
     FSearchMode := NormalizeGrokSearchMode(Section.Get('search_mode', 'off'));
@@ -980,8 +1000,14 @@ Begin
     FAnswerVerbosity := NormalizeGrokVerbosity(Section.Get('answer_verbosity', 'medium'));
     FMaxOutputTokens := Section.Get('max_output_tokens', 0);
     ClampOutputTokens(FMaxOutputTokens);
+    { Do not copy a missing new-chat key onto compact. That key now defaults on. }
     If Section.Find('auto_compact_context') = Nil Then
-      FAutoCompactContext := FAutoNewChatAtContextLimit
+      Begin
+        If Section.Find('auto_new_chat_at_limit') <> Nil Then
+          FAutoCompactContext := Section.Get('auto_new_chat_at_limit', False)
+        Else
+          FAutoCompactContext := False;
+      End
     Else
       FAutoCompactContext := Section.Get('auto_compact_context', False);
     FEnterInsertsNewline := Section.Get('enter_inserts_newline', True);
@@ -1082,6 +1108,8 @@ Begin
   Try
     Section.Add('include_ide_context', FIncludeIDEContext);
     Section.Add('auto_new_chat_at_limit', FAutoNewChatAtContextLimit);
+    Section.Add('plan_continue_new_chat', FAutoNewChatAtContextLimit);
+    Section.Add('new_chat_context_percent', FNewChatContextPercent);
     Section.Add('show_thinking', FShowThinking);
     Section.Add('show_tool_calls', FShowToolCalls);
     Section.Add('search_mode', NormalizeGrokSearchMode(FSearchMode));

@@ -57,6 +57,12 @@ Begin
       Section.Delete(Section.IndexOfName('automatic_continuations'));
     If Section.IndexOfName('fault_retries') >= 0 Then
       Section.Delete(Section.IndexOfName('fault_retries'));
+    If Section.IndexOfName('auto_new_chat_at_limit') >= 0 Then
+      Section.Delete(Section.IndexOfName('auto_new_chat_at_limit'));
+    If Section.IndexOfName('plan_continue_new_chat') >= 0 Then
+      Section.Delete(Section.IndexOfName('plan_continue_new_chat'));
+    If Section.IndexOfName('new_chat_context_percent') >= 0 Then
+      Section.Delete(Section.IndexOfName('new_chat_context_percent'));
     Raw := Document.AsJSON;
   Finally
     Document.Free;
@@ -81,6 +87,8 @@ Begin
     Config.CreditRetryMinutes := 15;
     Config.AutomaticContinuations := 7;
     Config.FaultRetries := 4;
+    Config.AutoNewChatAtContextLimit := False;
+    Config.NewChatContextPercent := 80;
     Config.Save;
   Finally
     Config.Free;
@@ -92,6 +100,8 @@ Begin
     Check('credit retry loads', Config.CreditRetryMinutes = 15);
     Check('automatic continuations load', Config.AutomaticContinuations = 7);
     Check('fault retries load', Config.FaultRetries = 4);
+    Check('new chat continuation loads', Config.AutoNewChatAtContextLimit = False);
+    Check('new chat percent loads', Config.NewChatContextPercent = 80);
   Finally
     Config.Free;
   End;
@@ -103,6 +113,8 @@ Begin
     Check('missing credit key keeps 60 minutes', Config.CreditRetryMinutes = AssistantCreditRetryDefault);
     Check('missing continuation key keeps 3', Config.AutomaticContinuations = AssistantContinuationDefault);
     Check('missing fault-retry key keeps 1', Config.FaultRetries = AssistantFaultRetryDefault);
+    Check('missing new-chat key stays on', Config.AutoNewChatAtContextLimit);
+    Check('missing context percent keeps 95', Config.NewChatContextPercent = AssistantNewChatContextDefault);
   Finally
     Config.Free;
   End;

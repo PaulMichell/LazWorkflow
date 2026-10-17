@@ -307,6 +307,11 @@ Type
     FPlanAgentPackagesDone: Integer;
     FPlanAgentMaxPackages: Integer;
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
+    FPlanStallTimer: TTimer; { Create(Nil). Not streamed. Lost continuations retry on this. }
+    FPlanStallArmedTick: QWord;
+    FPlanStallNoted: Boolean;
+    FPlanStallRestarting: Boolean;
+    FPlanNewChatThisStep: Boolean;
     FLastTurnHadError: Boolean;
     FLastTurnFinish: TAssistantTurnFinish;
     FContinuationCap: Integer;
@@ -402,6 +407,13 @@ Type
     Procedure PostPlanRunReport(Const Report: String);
     Procedure StopRunPlan(Kind: TPlanRunEndKind; Const Detail: String);
     Procedure ContinueRunPlan(Data: PtrInt);
+    Procedure EnablePlanStallTimer;
+    Procedure MarkPlanAgentAlive;
+    Procedure ReleasePlanStallWatch;
+    Procedure PlanStallTimerTimer(Sender: TObject);
+    Procedure ContinuePlanInNewChat(UsagePercent: Integer);
+    Function PlanContextThreshold: Integer;
+    Function PlanHasOpenItems: Boolean;
     Procedure ContinueCodexAfterFinish(Data: PtrInt);
     Function QueryContinuation(Truncated, ToolRoundCap, HadToolRound: Boolean; Const AssistantText: String): Boolean;
     Function ContinuationToolRecap: String;
@@ -595,6 +607,11 @@ Begin
   FPlanAgentPackagesDone := 0;
   FPlanAgentMaxPackages := 25;
   FPlanAgentResumeIndex := -1;
+  FPlanStallTimer := Nil;
+  FPlanStallArmedTick := 0;
+  FPlanStallNoted := False;
+  FPlanStallRestarting := False;
+  FPlanNewChatThisStep := False;
   FLastTurnHadError := False;
   FOpenBindPending := True;
   FDeferLastTurn := True;
@@ -647,6 +664,12 @@ Begin
     GlobalNameSpace.BeginWrite;
   Destroying;
   If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
+  ReleasePlanStallWatch;
+  If Assigned(FPlanStallTimer) Then
+    Begin
+      FPlanStallTimer.OnTimer := Nil;
+      FreeAndNil(FPlanStallTimer);
+    End;
   ReleaseAccountUsageRefresh;
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowEventBus) Then WorkflowEventBus.RemoveListener(Self);
@@ -2323,6 +2346,7 @@ Begin
   If Not FPlanAgentRunning Then
     Exit;
   FPlanAgentRunning := False;
+  ReleasePlanStallWatch;
   SetAssistantPlanViewerQuiet(False);
   Application.RemoveAsyncCalls(Self);
   RefreshBuildTodos;
@@ -2442,6 +2466,8 @@ Begin
   FPlanAgentPackagesDone := 0;
   FPlanAgentResumeIndex := -1;
   FLastTurnHadError := False;
+  FPlanNewChatThisStep := False;
+  MarkPlanAgentAlive;
   FBuildSelectedIndex := Idx;
   If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
     BuildTodoList.ItemIndex := Idx;
@@ -2454,9 +2480,125 @@ Begin
     StopRunPlan(preError, 'Could not start the first package.');
 End;
 
+Procedure TProjectAssistantForm.EnablePlanStallTimer;
+Begin
+  If Not Assigned(FPlanStallTimer) Then
+    Begin
+      { Nil owner: a streamed form must not gain a designer timer from Create(Self). }
+      FPlanStallTimer := TTimer.Create(Nil);
+      FPlanStallTimer.Enabled := False;
+      FPlanStallTimer.Interval := 1000;
+      FPlanStallTimer.OnTimer := @PlanStallTimerTimer;
+    End;
+  FPlanStallTimer.Enabled := FPlanAgentRunning;
+End;
+
+Procedure TProjectAssistantForm.MarkPlanAgentAlive;
+Begin
+  FPlanStallArmedTick := GetTickCount64;
+  FPlanStallNoted := False;
+  EnablePlanStallTimer;
+End;
+
+Procedure TProjectAssistantForm.ReleasePlanStallWatch;
+Begin
+  { Do not free the timer here. EndRunPlan and the timer event both call this. }
+  FPlanStallNoted := False;
+  FPlanStallRestarting := False;
+  FPlanNewChatThisStep := False;
+  If Assigned(FPlanStallTimer) Then
+    FPlanStallTimer.Enabled := False;
+End;
+
+Function TProjectAssistantForm.PlanContextThreshold: Integer;
+Begin
+  If Assigned(AssistantChatConfig) Then
+    Result := PlanContextContinuePercent(AssistantChatConfig.NewChatContextPercent)
+  Else
+    Result := AssistantPlanContextPercentDefault;
+End;
+
+Function TProjectAssistantForm.PlanHasOpenItems: Boolean;
+Begin
+  Result := FindNextIncompleteBuildSection >= 0;
+End;
+
+Procedure TProjectAssistantForm.ContinuePlanInNewChat(UsagePercent: Integer);
+Begin
+  FPlanNewChatThisStep := True;
+  FAutoRolloverInProgress := True;
+  Try
+    { Keep the agent. The archived chat is not a plan-run end. }
+    StartNewChat(True, False);
+  Finally
+    FAutoRolloverInProgress := False;
+  End;
+  If Not FPlanAgentRunning Then
+    Exit;
+  SetCurrentSystemNote(PlanRunNewChatNote(UsagePercent));
+  PostRecoverySentence(PlanRunNewChatNote(UsagePercent));
+  MarkPlanAgentAlive;
+  Application.QueueAsyncCall(@ContinueRunPlan, 0);
+End;
+
+Procedure TProjectAssistantForm.PlanStallTimerTimer(Sender: TObject);
+Var
+  WaitMs: QWord;
+  WaitSeconds: Integer;
+Begin
+  Try
+    If csDestroying In ComponentState Then
+      Exit;
+    If Not FPlanAgentRunning Then
+      Begin
+        ReleasePlanStallWatch;
+        Exit;
+      End;
+    If FSending Or FPlanStallRestarting Or FTransportWait Or FAutoRolloverInProgress Then
+      Exit;
+    If Not PlanHasOpenItems Then
+      Exit;
+    If Not PlanRunUnexplainedStall(True, False, False, 1) Then
+      Exit;
+    { One second for the queued continuation to start. A lost queue is the stall. }
+    If GetTickCount64 - FPlanStallArmedTick < 1000 Then
+      Exit;
+    WaitMs := FReconnectIntervalMs;
+    If WaitMs = 0 Then
+      WaitMs := AssistantReconnectIntervalMs;
+    WaitSeconds := WaitMs Div 1000;
+    If Not FPlanStallNoted Then
+      Begin
+        FPlanStallNoted := True;
+        FPlanStallArmedTick := GetTickCount64;
+        PostRecoverySentence(PlanRunStallWaitNote(WaitSeconds));
+        SetBuildStatusFeedback(PlanRunStallWaitNote(WaitSeconds));
+        Exit;
+      End;
+    If (WaitMs > 0) And (GetTickCount64 - FPlanStallArmedTick < WaitMs) Then
+      Exit;
+    FPlanStallRestarting := True;
+    Try
+      FPlanStallNoted := False;
+      MarkPlanAgentAlive;
+      PostRecoverySentence(PlanRunStallResumeNote);
+      ContinueRunPlan(0);
+    Finally
+      FPlanStallRestarting := False;
+    End;
+  Except
+    On E: Exception Do
+      Begin
+        ReleasePlanStallWatch;
+        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.PlanStallTimerTimer', E, False);
+      End;
+  End;
+End;
+
 Procedure TProjectAssistantForm.ContinueRunPlan(Data: PtrInt);
 Var
-  Idx, Pct: Integer;
+  Idx, Pct, Threshold: Integer;
+  ContinueInNewChat: Boolean;
 Begin
   If csDestroying In ComponentState Then
     Exit;
@@ -2472,31 +2614,38 @@ Begin
       StopRunPlan(preError, 'The last package ended with an error.');
       Exit;
     End;
+  Threshold := PlanContextThreshold;
   If FContextLimit > 0 Then
     Begin
       If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
         FContextUsed := AssistantClient.EstimatedPromptTokens;
       Pct := (FContextUsed * 100) Div FContextLimit;
-      If Pct >= 95 Then
+      If Pct >= Threshold Then
         Begin
           If AutoCompactAtLimitEnabled Then
             Begin
-              { Compact this conversation and keep walking packages. Do not start a new chat. }
+              { Compact this conversation and keep walking packages. Do not start a new chat yet. }
               FContextWarnShown := False;
               MaybeWarnHighContextUsage;
               If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
                 FContextUsed := AssistantClient.EstimatedPromptTokens;
               Pct := (FContextUsed * 100) Div FContextLimit;
-              If Pct >= 95 Then
+            End;
+          ContinueInNewChat := PlanRunContinuesInNewChat(Pct, Threshold,
+            Assigned(AssistantChatConfig) And AssistantChatConfig.AutoNewChatAtContextLimit) And
+            (Not FPlanNewChatThisStep);
+          If Pct >= Threshold Then
+            Begin
+              If ContinueInNewChat Then
                 Begin
-                  StopRunPlan(preContextLimit, Format('context usage %d%% after compact — start a New Chat', [Pct]));
+                  ContinuePlanInNewChat(Pct);
                   Exit;
                 End;
-            End
-          Else
-            Begin
               MaybeWarnHighContextUsage;
-              StopRunPlan(preContextLimit, Format('context usage %d%% — start a New Chat', [Pct]));
+              If AutoCompactAtLimitEnabled Then
+                StopRunPlan(preContextLimit, Format('context usage %d%% after compact — start a New Chat', [Pct]))
+              Else
+                StopRunPlan(preContextLimit, Format('context usage %d%% — start a New Chat', [Pct]));
               Exit;
             End;
         End;
@@ -4376,7 +4525,7 @@ Begin
     FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
   RefreshCentreStatus;
   ApplySkillStatus;
-  If (Not FUseCodex) And (Not FUseClaude) And (Not FSending) And (Pct >= 95) Then
+  If (Not FUseCodex) And (Not FUseClaude) And (Not FSending) And (Pct >= PlanContextThreshold) Then
     MaybeWarnHighContextUsage;
 End;
 
@@ -4389,10 +4538,10 @@ Begin
   If FContextLimit <= 0 Then
     Exit;
   Pct := (FContextUsed * 100) Div FContextLimit;
-  If Pct < 95 Then
+  If Pct < PlanContextThreshold Then
     Exit;
   FContextWarnShown := True;
-  { The saved flag does not start a new chat. Compact only when this connection can. }
+  { Compact first. A plan that continues in a new chat must not also raise the warning dialog. }
   If Assigned(AssistantChatConfig) And AssistantChatConfig.AutoCompactContext Then
     Begin
       If Not FCanCompactContext Then
@@ -4408,6 +4557,8 @@ Begin
       End;
       Exit;
     End;
+  If FPlanAgentRunning And Assigned(AssistantChatConfig) And AssistantChatConfig.AutoNewChatAtContextLimit Then
+    Exit;
   SetCurrentSystemNote(
     Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Build/Plan work ' +
       'so the model stays within its token limit.',
@@ -4442,6 +4593,9 @@ Begin
     OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
   If IsSending And (Not WasSending) Then
     Begin
+      FPlanNewChatThisStep := False;
+      If FPlanAgentRunning Then
+        MarkPlanAgentAlive;
       FContinuationCap := AssistantAutomaticContinuationCap;
       FReconnectIntervalMs := AssistantReconnectIntervalMs;
       FCreditIntervalMs := AssistantCreditIntervalMs;
@@ -6495,6 +6649,8 @@ Begin
   { Validation evidence can auto-complete when the root is not a Git repository.
     In a repository the model sets Status, and that plan file is committed before the item counts as complete.
     An item that is already complete does not stop the plan agent. }
+  If FPlanAgentRunning And (ResolvedError <> '') And (FBuildWorkSectionIndex >= 0) Then
+    FPlanAgentResumeIndex := FBuildWorkSectionIndex;
   If ActiveMode = amBuild Then
     Begin
       Try
@@ -6511,6 +6667,9 @@ Begin
   Else If ResolvedError <> '' Then
     FPendingReviewErrorOffer := False;
   UnlockModeAfterSend;
+  { Reset the stall clock before FSending drops, so a timer tick cannot see a stale gap. }
+  If FPlanAgentRunning Then
+    MarkPlanAgentAlive;
   { End send before list refresh so the in-flight row is not kept alongside the stored turn. }
   SetSending(False);
   If FPlanWriteThisTurn And (ResolvedError = '') Then
@@ -6523,15 +6682,18 @@ Begin
     RefreshBuildTodos;
   If FPlanAgentRunning Then
     Begin
-      If FLastTurnHadError Then
+      If FLastTurnHadError And IsTransientNetworkError(ResolvedError) And PlanHasOpenItems Then
         Begin
-          If (Pos('host name resolution', LowerCase(ResolvedError)) > 0) Or
-            (Pos('network', LowerCase(ResolvedError)) > 0) Or
-            (Pos('timed out', LowerCase(ResolvedError)) > 0) Then
-            StopRunPlan(preError, 'Network error. Check connectivity. ' + ResolvedError)
-          Else
-            StopRunPlan(preError, ResolvedError);
+          { Same wait as a lost connection. Stop still clears the agent and the timer. }
+          FLastTurnHadError := False;
+          FPlanStallNoted := True;
+          FPlanStallArmedTick := GetTickCount64;
+          EnablePlanStallTimer;
+          PostRecoverySentence(AssistantReconnectWaitNote(ResolvedError));
+          SetBuildStatusFeedback(AssistantReconnectWaitNote(ResolvedError));
         End
+      Else If FLastTurnHadError Then
+        StopRunPlan(preError, ResolvedError)
       Else
         Begin
           Inc(FPlanAgentPackagesDone);

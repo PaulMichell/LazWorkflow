@@ -264,7 +264,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
       end
       object ContextGroup: TGroupBox
         Left = 0
-        Height = 96
+        Height = 136
         Top = 176
         Width = 972
         Align = alTop
@@ -289,6 +289,39 @@ object AssistantSettingsForm: TAssistantSettingsForm
           ParentShowHint = False
           ShowHint = True
           TabOrder = 1
+        end
+        object AutoNewChatCheck: TCheckBox
+          Left = 12
+          Height = 23
+          Top = 72
+          Width = 620
+          Caption = 'Continue a plan in a new chat when context reaches the threshold'
+          Hint = 'At the percent beside this box, Run Plan archives the chat and keeps walking the plan.'
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 2
+          Checked = True
+        end
+        object NewChatPercentEdit: TSpinEdit
+          Left = 640
+          Height = 28
+          Top = 68
+          Width = 72
+          Hint = 'Percent of the context budget. Default 95.'
+          MaxValue = 99
+          MinValue = 50
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 3
+          Value = 95
+        end
+        object NewChatPercentLabel: TLabel
+          Left = 720
+          Height = 17
+          Top = 74
+          Width = 16
+          Caption = '%'
+          ParentColor = False
         end
       end
       object PromptGroup: TGroupBox
