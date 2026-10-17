@@ -2344,7 +2344,8 @@ Begin
     Begin
       Turn.Id := NewConversationTurnId;
       Turn.Mode := AssistantModeToStr(amBuild);
-      Turn.Prompt := 'Plan run ended';
+      { A report is a note, not a command. Do not invent a user message. }
+      Turn.Prompt := '';
       Turn.Thinking := '';
       Turn.Response := Report;
       Turn.CreatedAt := IsoNowUtc;
@@ -2704,7 +2705,10 @@ Begin
         If Not Assigned(Entry) Then
           Continue;
         SeqNo := I + 1;
-        Line := IntToStr(SeqNo) + ' - ' + Entry.PromptPreview;
+        If Trim(Entry.PromptPreview) <> '' Then
+          Line := IntToStr(SeqNo) + ' - ' + Entry.PromptPreview
+        Else
+          Line := IntToStr(SeqNo) + ' - ' + Entry.ResponsePreview;
         If Entry.ErrorText <> '' Then
           Line := Line + ' [err]';
         ConversationList.Items.AddObject(Line, TObject(PtrUInt(Entry.TurnIndex + 1)));
@@ -2851,16 +2855,20 @@ Begin
               MetaLine := MetaLine + ' · ' + Turn.Model;
             SL.Add(MetaLine + '*');
           End;
-        SL.Add('');
-        SL.Add('### User');
-        SL.Add('');
-        If Trim(Turn.Prompt) <> '' Then
-          SL.Add(Turn.Prompt)
-        Else If Trim(Turn.AttachmentsJson) = '' Then
-          SL.Add('*(empty)*');
-        If Trim(Turn.AttachmentsJson) <> '' Then
-          AppendAssistantImageFileNames(Turn.AttachmentsJson, SL);
-        SL.Add('');
+        { No user heading unless the person sent text or a picture. }
+        If (Trim(Turn.Prompt) <> '') Or (Trim(Turn.AttachmentsJson) <> '') Then
+          Begin
+            SL.Add('');
+            SL.Add('### User');
+            SL.Add('');
+            If Trim(Turn.Prompt) <> '' Then
+              SL.Add(Turn.Prompt);
+            If Trim(Turn.AttachmentsJson) <> '' Then
+              AppendAssistantImageFileNames(Turn.AttachmentsJson, SL);
+            SL.Add('');
+          End
+        Else
+          SL.Add('');
         If Trim(Turn.TraceJson) <> '' Then
           Begin
             Trace := TAssistantTrace.Create;
