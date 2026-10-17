@@ -188,7 +188,7 @@ Begin
   Task := Tasks[CatalogIndex(Tasks, 'simplify-code')];
   Task.Prompt := 'Status {git_status} diff {git_diff}.';
   Evidence.ActiveFile := 'Source/Foo.pas';
-  Check('optional git', ExpandAssistantTaskPrompt(Task, Evidence, Expanded, ErrorText));
+  Check('optional git outside changed_files', ExpandAssistantTaskPrompt(Task, Evidence, Expanded, ErrorText));
   Check('optional git text', Expanded = 'Status (none) diff (none).');
   Task.Prompt := 'See {not_a_field}.';
   Check('unknown placeholder', Not ExpandAssistantTaskPrompt(Task, Evidence, Expanded, ErrorText));
@@ -382,6 +382,71 @@ Begin
   Check('temp dir is not the saved dir', WorkflowSettingsDirectory <> SavedSettingsDir);
 End;
 
+Procedure CheckRoundTrip;
+Var
+  Catalog, Saved, Loaded: TAssistantTaskArray;
+  FromCatalog: Boolean;
+  ErrorText: String;
+  UserIndex, ReviewIndex, ExplainIndex: Integer;
+  Document, Section: TJSONObject;
+  Arr: TJSONArray;
+Begin
+  UseTempSettings;
+  Check('round-trip uses temp dir', (WorkflowSettingsDirectory <> SavedSettingsDir) And
+    (Pos('laz-tasks-', WorkflowSettingsDirectory) > 0));
+  Catalog := CopyAssistantTaskCatalog;
+  SetLength(Saved, 2);
+  Saved[0] := Catalog[0];
+  Saved[0].Title := 'Hidden review';
+  Saved[0].Prompt := 'Hidden prompt.';
+  Saved[0].Hidden := True;
+  Saved[1].Id := 'my-task';
+  Saved[1].Title := 'Mine';
+  Saved[1].Summary := 'A user task.';
+  Saved[1].Mode := tmChat;
+  Saved[1].Kind := tkPrompt;
+  Saved[1].Scope := tsNone;
+  Saved[1].MessageFilter := mfNone;
+  Saved[1].CompileFirst := False;
+  Saved[1].FreshConversation := False;
+  Saved[1].Enabled := True;
+  Saved[1].Hidden := False;
+  Saved[1].DocumentPath := '';
+  Saved[1].BuiltinId := '';
+  Saved[1].Prompt := 'Hello from the user.';
+  Check('round-trip save', SaveAssistantTasks(Saved, ErrorText));
+  Document := TJSONObject(GetJSON(ReadSettings));
+  Try
+    Section := TJSONObject(Document.Find('assistant_tasks'));
+    Arr := TJSONArray(Section.Find('tasks'));
+    Check('round-trip file count', Arr.Count = 2);
+    Check('round-trip file hidden', TJSONObject(Arr.Items[0]).Get('hidden', False));
+    Check('round-trip file user', TJSONObject(Arr.Items[1]).Get('id', '') = 'my-task');
+  Finally
+    Document.Free;
+  End;
+  Check('round-trip load', LoadAssistantTasks(Loaded, FromCatalog, ErrorText) And (Not FromCatalog));
+  Document := TJSONObject(GetJSON(ReadSettings));
+  Try
+    Section := TJSONObject(Document.Find('assistant_tasks'));
+    Arr := TJSONArray(Section.Find('tasks'));
+    Check('round-trip load does not write merge', Arr.Count = 2);
+  Finally
+    Document.Free;
+  End;
+  ReviewIndex := FindAssistantTask(Loaded, 'code-review');
+  UserIndex := FindAssistantTask(Loaded, 'my-task');
+  ExplainIndex := FindAssistantTask(Loaded, 'explain-selection');
+  Check('round-trip order', (ReviewIndex = 0) And (UserIndex = 1) And (ExplainIndex > 1));
+  Check('round-trip hidden stays', Loaded[ReviewIndex].Hidden And (Loaded[ReviewIndex].Title = 'Hidden review'));
+  Check('round-trip hidden prompt', Loaded[ReviewIndex].Prompt = 'Hidden prompt.');
+  Check('round-trip user prompt', Loaded[UserIndex].Prompt = 'Hello from the user.');
+  Check('round-trip user is not builtin', (Loaded[UserIndex].BuiltinId = '') And (Loaded[UserIndex].Title = 'Mine') And
+    (Not Loaded[UserIndex].Hidden));
+  Check('round-trip gains catalog id', (ExplainIndex >= 0) And (Not Loaded[ExplainIndex].Hidden));
+  Check('round-trip length', Length(Loaded) = 12);
+End;
+
 Begin
   FailCount := 0;
   TempSerial := 0;
@@ -392,6 +457,7 @@ Begin
     CheckExpansion;
     CheckLoadAndReset;
     CheckRejections;
+    CheckRoundTrip;
   Finally
     SetWorkflowSettingsDirectory(SavedSettingsDir);
   End;
