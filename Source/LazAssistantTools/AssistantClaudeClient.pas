@@ -40,9 +40,35 @@ Function PermissionFlagRefused(Const ProgramText: String): Boolean;
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
-/// Not called by the form. A later turn must use the shared user text, harness prompt, and ExecuteAssistantToolForMode.
+/// One captured turn. The form passes the shared user text. This path does not
+/// receive this assistant's tool list, skill bodies, or transcript compactor.
 Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
   Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
+
+Type
+  TClaudeRunSnapshot = Record
+    Content, ErrorText: String;
+    Done: Boolean;
+  End;
+
+  { Worker for one Claude Code turn. The IDE timer reads Snapshot. Stop sets Cancel. }
+  TAssistantClaudeRun = Class(TThread)
+  Private
+    FLock: TRTLCriticalSection;
+    FExecutable, FModel, FApproval, FPrompt, FDirectory: String;
+    FTimeoutMs: Integer;
+    FSnapshot: TClaudeRunSnapshot;
+    FCancelled: LongInt;
+    Function Cancelled: Boolean;
+  Protected
+    Procedure Execute; Override;
+  Public
+    Constructor Create(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
+      TimeoutMs: Integer = 0);
+    Destructor Destroy; Override;
+    Procedure Cancel;
+    Function Snapshot: TClaudeRunSnapshot;
+  End;
 
 Implementation
 
@@ -246,6 +272,17 @@ Begin
       Turn.Text := Root.Get('result', '')
     Else If Root.Find('text') Is TJSONString Then
       Turn.Text := Root.Get('text', '');
+    { An error result is not an assistant answer. The form classifies that text. }
+    If Root.Get('is_error', False) Then
+      Begin
+        ErrorText := BoundText(Turn.Text);
+        If ErrorText = '' Then
+          ErrorText := BoundText(JsonText);
+        If ErrorText = '' Then
+          ErrorText := 'Claude Code did not complete the turn.';
+        ClearTurn(Turn);
+        Exit;
+      End;
     Turn.Cost := '';
     Usage := Nil;
     If Root.Find('usage') Is TJSONObject Then
@@ -269,8 +306,12 @@ Begin
   End;
 End;
 
+Type
+  TClaudeStopQuery = Function: Boolean Of Object;
+
 Function RunCaptured(Const Executable, WorkingDirectory: String; Args: TStrings; Const InputText: String;
-  TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String): Boolean;
+  TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String;
+  StopQuery: TClaudeStopQuery = Nil): Boolean;
 Var
   Proc: TProcess;
   Buffer: Array[0..4095] Of Byte;
@@ -309,6 +350,14 @@ Begin
     Offset := 1;
     While Offset <= Length(InputText) Do
       Begin
+        If Assigned(StopQuery) And StopQuery() Then
+          Begin
+            If Proc.Running Then
+              Proc.Terminate(1);
+            Proc.WaitOnExit(2000);
+            ErrorText := 'Cancelled.';
+            Exit;
+          End;
         Wrote := Proc.Input.Write(InputText[Offset], Length(InputText) - Offset + 1);
         If Wrote <= 0 Then
           Break;
@@ -334,6 +383,14 @@ Begin
             SetString(Piece, PAnsiChar(@Buffer[0]), Count);
             StderrText := StderrText + Piece;
           End;
+        If Assigned(StopQuery) And StopQuery() Then
+          Begin
+            If Proc.Running Then
+              Proc.Terminate(1);
+            Proc.WaitOnExit(2000);
+            ErrorText := 'Cancelled.';
+            Exit;
+          End;
         If GetTickCount64 - Started >= TimeoutMs Then
           Begin
             If Proc.Running Then
@@ -352,17 +409,20 @@ Begin
   End;
 End;
 
-Function ProbeHelp(Const Executable: String): String;
+Function ProbeHelp(Const Executable: String; StopQuery: TClaudeStopQuery = Nil): String;
 Var
   Args: TStringList;
   StdoutText, StderrText, ErrorText: String;
   ExitCode: Integer;
 Begin
   Result := '';
+  If Assigned(StopQuery) And StopQuery() Then
+    Exit;
   Args := TStringList.Create;
   Try
     Args.Add('--help');
-    If RunCaptured(Executable, '', Args, '', ClaudeHelpTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText) Then
+    If RunCaptured(Executable, '', Args, '', ClaudeHelpTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText,
+      StopQuery) Then
       Result := StdoutText + LineEnding + StderrText;
   Finally
     Args.Free;
@@ -461,8 +521,8 @@ Begin
   Result := SpawnDetached(Executable, ['auth', 'login'], ErrorText);
 End;
 
-Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
+Function RunClaudeTurnStopped(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
+  TimeoutMs: Integer; StopQuery: TClaudeStopQuery; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Var
   Args: TStringList;
   Mode, HelpText, StdoutText, StderrText, ProgramText: String;
@@ -471,6 +531,11 @@ Begin
   Result := False;
   ErrorText := '';
   ClearTurn(Turn);
+  If Assigned(StopQuery) And StopQuery() Then
+    Begin
+      ErrorText := 'Cancelled.';
+      Exit;
+    End;
   If Not FileIsExecutable(Executable) Then
     Begin
       ErrorText := 'Claude Code was not found. Browse to the installed executable.';
@@ -486,13 +551,20 @@ Begin
       ErrorText := 'This connection has no model.';
       Exit;
     End;
-  HelpText := ProbeHelp(Executable);
+  If TimeoutMs < 1 Then
+    TimeoutMs := ClaudeTurnTimeoutMs;
+  HelpText := ProbeHelp(Executable, StopQuery);
+  If Assigned(StopQuery) And StopQuery() Then
+    Begin
+      ErrorText := 'Cancelled.';
+      Exit;
+    End;
   Mode := ClaudePermissionMode(HelpText, ApprovalMode);
   Args := TStringList.Create;
   Try
     AppendClaudeTurnArguments(Model, Mode, Args);
-    If Not RunCaptured(Executable, WorkingDirectory, Args, Prompt, ClaudeTurnTimeoutMs, StdoutText, StderrText,
-      ExitCode, ErrorText) Then
+    If Not RunCaptured(Executable, WorkingDirectory, Args, Prompt, TimeoutMs, StdoutText, StderrText,
+      ExitCode, ErrorText, StopQuery) Then
       Exit;
   Finally
     Args.Free;
@@ -518,6 +590,107 @@ Begin
   If Not ParseClaudeTurnResult(StdoutText, Turn, ErrorText) Then
     Exit;
   Result := True;
+End;
+
+Function RunClaudeTurn(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
+  Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
+Begin
+  Result := RunClaudeTurnStopped(Executable, Model, ApprovalMode, Prompt, WorkingDirectory, ClaudeTurnTimeoutMs, Nil,
+    Turn, ErrorText);
+End;
+
+Function TAssistantClaudeRun.Cancelled: Boolean;
+Begin
+  Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
+End;
+
+Constructor TAssistantClaudeRun.Create(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
+  TimeoutMs: Integer);
+Begin
+  Inherited Create(True);
+  FreeOnTerminate := False;
+  InitCriticalSection(FLock);
+  FExecutable := Executable;
+  FModel := Model;
+  FApproval := ApprovalMode;
+  FPrompt := Prompt;
+  FDirectory := WorkingDirectory;
+  If TimeoutMs < 1 Then
+    FTimeoutMs := ClaudeTurnTimeoutMs
+  Else
+    FTimeoutMs := TimeoutMs;
+  FCancelled := 0;
+  FSnapshot.Content := '';
+  FSnapshot.ErrorText := '';
+  FSnapshot.Done := False;
+End;
+
+Destructor TAssistantClaudeRun.Destroy;
+Begin
+  Cancel;
+  { A suspended thread must be started before WaitFor, or Destroy hangs.
+    Execute exits immediately once Cancel has been set. }
+  If Suspended Then
+    Start;
+  WaitFor;
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure TAssistantClaudeRun.Cancel;
+Begin
+  InterlockedExchange(FCancelled, 1);
+End;
+
+Function TAssistantClaudeRun.Snapshot: TClaudeRunSnapshot;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FSnapshot;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TAssistantClaudeRun.Execute;
+Var
+  Turn: TClaudeTurnResult;
+  ErrorText: String;
+Begin
+  ErrorText := '';
+  ClearTurn(Turn);
+  Try
+    If Cancelled Or Terminated Then
+      ErrorText := 'Cancelled.'
+    Else If Not RunClaudeTurnStopped(FExecutable, FModel, FApproval, FPrompt, FDirectory, FTimeoutMs, @Cancelled,
+      Turn, ErrorText) Then
+      Begin
+        If ErrorText = '' Then
+          ErrorText := 'Claude Code did not complete the turn.';
+      End
+    Else If Cancelled Or Terminated Then
+      ErrorText := 'Cancelled.';
+  Except
+    On E: Exception Do
+      Begin
+        If Cancelled Or Terminated Then
+          ErrorText := 'Cancelled.'
+        Else If E.Message <> '' Then
+          ErrorText := E.Message
+        Else
+          ErrorText := E.ClassName;
+      End;
+  End;
+  EnterCriticalSection(FLock);
+  Try
+    If ErrorText = '' Then
+      FSnapshot.Content := Turn.Text
+    Else
+      FSnapshot.ErrorText := ErrorText;
+    FSnapshot.Done := True;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
 End;
 
 End.

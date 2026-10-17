@@ -12,7 +12,9 @@ Unit ProjectAssistantForm;
   The composer stack is positioned explicitly so showing the image list cannot
   reorder the text, buttons, or status bar. Paste reads pictures through the
   LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
-  share one path. The Run Plan end report is built in AssistantPlanRun. Reviewed 2026-10-16. }
+  share one path. The Run Plan end report is built in AssistantPlanRun. A dropped Codex or Claude
+  transport waits in AssistantRecovery, then the same turn is started again.
+  Reviewed 2026-10-17. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -25,7 +27,8 @@ Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls, ComCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantToolBroker,
+  AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient,
+  AssistantToolBroker,
   AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
   AssistantPlanRun;
 
@@ -201,8 +204,14 @@ Type
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
     FPollingCodex: Boolean;
+    FClaudeRun: TAssistantClaudeRun;
+    FPollingClaude: Boolean;
+    FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
+    FClaudeLaunchReady: Boolean;
     FTransportWait: Boolean;
     FTransportWaitStart, FTransportWaitMs: QWord;
+    FTransportBackend, FTransportConnectionId: String;
+    FReconnectIntervalMs, FCreditIntervalMs: QWord;
     FCodexLaunchPrompt, FCodexLaunchTools, FCodexLaunchInstructions, FCodexLaunchWire: String;
     FCodexLaunchReady: Boolean;
     FCodexWorkspace: TAssistantIDEWorkspace;
@@ -211,13 +220,18 @@ Type
     Procedure RecordCompletedUsage;
     Function ApproveCodexTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
+    Function StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
+    Procedure PollClaude;
     Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
+    Procedure ReleaseClaudeProcess;
     Function TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
     Procedure ClearTransportWait;
     Procedure PostRecoverySentence(Const Sentence: String);
     Function LaunchStoredCodexRun: Boolean;
+    Function LaunchStoredClaudeRun: Boolean;
+    Function LaunchStoredTransportRun: Boolean;
     Procedure ResumeDroppedTransport;
     Procedure PollTransportWait;
   Private
@@ -518,6 +532,8 @@ Const
   FooterTagModel = 6;
   FooterTagEffort = 7;
   FooterTagApproval = 8;
+  { Same turn budget as a Codex run. A short capture timeout would retry a live answer. }
+  ClaudeRunTimeoutMs = 600000;
 
 Constructor TProjectAssistantForm.Create(TheOwner: TComponent);
 Begin
@@ -633,6 +649,7 @@ Begin
   SetAssistantPlanViewerQuiet(False);
   If Assigned(AssistantClient) Then AssistantClient.DetachStreamCallbacks;
   ReleaseCodexRun;
+  ReleaseClaudeProcess;
   FreeAndNil(FCodexBroker);
   FreeAndNil(FCodexWorkspace);
   If Assigned(AssistantClient) Then
@@ -1235,9 +1252,9 @@ Begin
     Exit;
   If FUseClaude Then
     Begin
-      { No Claude turn is wired. Do not describe a private tool set. }
-      StatusFooter.SetSkillText('Not wired');
-      StatusFooter.SetSkillHint('The Claude turn is not wired.');
+      { Claude Code keeps its own tools. Do not describe this assistant's skill list. }
+      StatusFooter.SetSkillText('Claude Code');
+      StatusFooter.SetSkillHint('Claude Code keeps the session. This assistant does not send its skill list.');
     End
   Else
     Begin
@@ -2452,7 +2469,7 @@ Begin
     End;
   If FContextLimit > 0 Then
     Begin
-      If (Not FUseCodex) And Assigned(AssistantClient) Then
+      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
         FContextUsed := AssistantClient.EstimatedPromptTokens;
       Pct := (FContextUsed * 100) Div FContextLimit;
       If Pct >= 95 Then
@@ -2462,7 +2479,7 @@ Begin
               { Compact this conversation and keep walking packages. Do not start a new chat. }
               FContextWarnShown := False;
               MaybeWarnHighContextUsage;
-              If (Not FUseCodex) And Assigned(AssistantClient) Then
+              If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
                 FContextUsed := AssistantClient.EstimatedPromptTokens;
               Pct := (FContextUsed * 100) Div FContextLimit;
               If Pct >= 95 Then
@@ -3153,7 +3170,7 @@ Begin
   Else
     Turn.ThinkingMs := 0;
   Turn.Model := FModelName;
-  If (Not FUseCodex) And Assigned(AssistantClient) Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
     Turn.Skill := AssistantClient.ActiveSkill
   Else
     Turn.Skill := '';
@@ -3167,13 +3184,13 @@ Begin
   Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
   Turn.EventsFile := '';
-  If (Not FUseCodex) And Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
     Turn.EventsFile := AssistantEventsRelativePath(AssistantClient.LastEventsFile,
       ProjectAssistantConversation.ProjectRoot);
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
       FTurnRecorded := True;
-      If Assigned(AssistantClient) Then
+      If (Not FUseClaude) And Assigned(AssistantClient) Then
         AssistantClient.NoteMessagesStored;
       RefreshHistoryCombo;
     End
@@ -3315,6 +3332,9 @@ Begin
     FCodexRuntime := '';
     FCodexProfile := '';
     FCodexModelsJson := '';
+    FClaudeRuntime := '';
+    FClaudeModel := '';
+    FClaudeApproval := '';
     FActiveEffort := '';
     FActiveApproval := '';
     If Not Assigned(LazarusIDE) Then Exit;
@@ -3352,6 +3372,12 @@ Begin
           { Model, effort and approval stay on the connection and apply to this turn, not the profile. }
           FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
           FCodexModelsJson := Item.CachedModelsJson;
+        End
+      Else If FUseClaude Then
+        Begin
+          FClaudeRuntime := Item.Runtime;
+          FClaudeModel := Item.Model;
+          FClaudeApproval := Item.ApprovalMode;
         End;
     Finally Connections.Free; End;
   Except
@@ -3372,6 +3398,9 @@ Begin
         FCodexRuntime := '';
         FCodexProfile := '';
         FCodexModelsJson := '';
+        FClaudeRuntime := '';
+        FClaudeModel := '';
+        FClaudeApproval := '';
         FActiveEffort := '';
         FActiveApproval := '';
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
@@ -3397,6 +3426,29 @@ Procedure TProjectAssistantForm.ReleaseCodexRun;
 Begin
   If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
   ReleaseCodexProcess;
+End;
+
+Procedure TProjectAssistantForm.ReleaseClaudeProcess;
+Begin
+  If Assigned(FClaudeRun) Then
+    Begin
+      FClaudeRun.Cancel;
+      { A suspended thread would make the reaper WaitFor hang. Cancelled Execute exits at once. }
+      If FClaudeRun.Suspended Then
+        FClaudeRun.Start;
+      { Same off-thread join as a Codex worker. Do not WaitFor on the IDE thread. }
+      ReapCodexWorker(FClaudeRun);
+      FClaudeRun := Nil;
+    End;
+End;
+
+Function ClaudeWorkDirectory: String;
+Begin
+  Result := ExcludeTrailingPathDelimiter(ProjectRootPath);
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    Result := ExcludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot);
+  If Result = '' Then
+    Result := ExcludeTrailingPathDelimiter(ProjectAssistantRoot);
 End;
 
 Procedure TProjectAssistantForm.ClearTransportWait;
@@ -3427,29 +3479,56 @@ Var
   Decision: TAssistantRecovery;
   RetryAt: TDateTime;
   Note: String;
+  Usage, SlotItem: TAccountUsageSnapshot;
+  TransportUsageHasReset: Boolean;
+  TransportUsageResetsAt: TDateTime;
 Begin
   Result := False;
+  TransportUsageHasReset := False;
+  TransportUsageResetsAt := 0;
   If FTransportWait Then
     Exit(True);
   If (Not FSending) Or FUserCancelled Or (csDestroying In ComponentState) Then
     Exit;
   If (Not FUseCodex) And (Not FUseClaude) Then
     Exit;
-  { Claude is not started here. A stored Codex launch is what this wait retries. }
-  If Not FCodexLaunchReady Then
+  If FUseClaude Then
+    Begin
+      If Not FClaudeLaunchReady Then
+        Exit;
+    End
+  Else If Not FCodexLaunchReady Then
     Exit;
   If Trim(Answer) <> '' Then
     Exit;
-  Decision := ClassifyDroppedTransport(ErrorText, Body, False);
+  ClearAccountUsageSnapshot(SlotItem);
+  If Assigned(FAccountUsageSlot) Then
+    SlotItem := FAccountUsageSlot.ReadSnapshot;
+  Usage := AccountUsageForFooter(FActiveConnectionId, SlotItem);
+  If (Usage.ConnectionId <> FActiveConnectionId) Or (Not Usage.HasReset) Then
+    Begin
+      If Not LastAccountUsageSnapshot(Usage) Or (Usage.ConnectionId <> FActiveConnectionId) Then
+        ClearAccountUsageSnapshot(Usage);
+    End;
+  TransportUsageHasReset := Usage.HasReset And (Usage.ConnectionId = FActiveConnectionId);
+  TransportUsageResetsAt := Usage.ResetsAt;
+  Decision := ClassifyDroppedTransport(ErrorText, Body, FUserCancelled);
   If Decision.Action <> araRetryLastAction Then
     Exit;
   Note := '';
   RetryAt := 0;
-  FTransportWaitMs := AssistantDroppedTransportWaitMs(Decision.HttpWait, ErrorText, Body, '', False, 0,
-    AssistantReconnectIntervalMs, AssistantCreditIntervalMs, Now, RetryAt);
+  FTransportWaitMs := AssistantDroppedTransportWaitMs(Decision.HttpWait, ErrorText, Body, '',
+    TransportUsageHasReset, TransportUsageResetsAt, FReconnectIntervalMs, FCreditIntervalMs, Now, RetryAt);
   Note := AssistantDroppedTransportWaitNote(Decision.HttpWait, ErrorText, RetryAt);
   If FTransportWaitMs = 0 Then
+    FTransportWaitMs := FReconnectIntervalMs;
+  If FTransportWaitMs = 0 Then
     FTransportWaitMs := AssistantReconnectIntervalMs;
+  If FUseClaude Then
+    FTransportBackend := 'claude'
+  Else
+    FTransportBackend := 'codex';
+  FTransportConnectionId := FActiveConnectionId;
   FTransportWaitStart := GetTickCount64;
   FTransportWait := True;
   PostRecoverySentence(Note);
@@ -3490,13 +3569,44 @@ Begin
   End;
 End;
 
+Function TProjectAssistantForm.LaunchStoredClaudeRun: Boolean;
+Begin
+  Result := False;
+  If (Not FClaudeLaunchReady) Or (FClaudeRuntime = '') Or (FClaudeModel = '') Or (FClaudeLaunchPrompt = '') Then
+    Exit;
+  Try
+    FClaudeRun := TAssistantClaudeRun.Create(FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeLaunchPrompt,
+      FClaudeDirectory, ClaudeRunTimeoutMs);
+    FClaudeRun.Start;
+    SetStreamPhase('Waiting for model…');
+    Result := True;
+  Except
+    On E: Exception Do
+      Begin
+        ReleaseClaudeProcess;
+        If E.Message <> '' Then
+          FinishAssistantReply(E.Message)
+        Else
+          FinishAssistantReply(E.ClassName);
+      End;
+  End;
+End;
+
+Function TProjectAssistantForm.LaunchStoredTransportRun: Boolean;
+Begin
+  If FTransportBackend = 'claude' Then
+    Result := LaunchStoredClaudeRun
+  Else
+    Result := LaunchStoredCodexRun;
+End;
+
 Procedure TProjectAssistantForm.ResumeDroppedTransport;
 Begin
   If Not FTransportWait Then
     Exit;
   ClearTransportWait;
   PostRecoverySentence(AssistantReconnectResumeNote);
-  If LaunchStoredCodexRun Or FTransportWait Or (Not FSending) Then
+  If LaunchStoredTransportRun Or FTransportWait Or (Not FSending) Then
     Exit;
   FinishAssistantReply('The run could not be restarted.');
 End;
@@ -3508,7 +3618,17 @@ Begin
       ClearTransportWait;
       Exit;
     End;
-  If Assigned(FCodexWorkspace) And (FCodexWorkspace.Identity <> FCodexIdentity) Then
+  If (FTransportConnectionId <> '') And (FActiveConnectionId <> FTransportConnectionId) Then
+    Begin
+      StopStream;
+      Exit;
+    End;
+  If (FTransportBackend = 'codex') And Assigned(FCodexWorkspace) And (FCodexWorkspace.Identity <> FCodexIdentity) Then
+    Begin
+      StopStream;
+      Exit;
+    End;
+  If (FTransportBackend = 'claude') And (FClaudeDirectory <> '') And (ClaudeWorkDirectory <> FClaudeDirectory) Then
     Begin
       StopStream;
       Exit;
@@ -3715,6 +3835,13 @@ Begin
       End;
     If Snapshot.Done Then
       Begin
+        If FCodexRun <> Run Then Exit;
+        { Do not finish the reply. The same stored turn starts again after the wait. }
+        If TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
+          Begin
+            ReleaseCodexProcess;
+            Exit;
+          End;
         { Capture current evidence before releasing the broker cancels its jobs. }
         FCompletionBuildJSON := ''; FCompletionTestJSON := '';
         If (FBuildWorkSectionIndex >= 0) And (ActiveMode = amBuild) And (Snapshot.ErrorText = '') Then
@@ -3740,11 +3867,116 @@ Begin
   Finally FPollingCodex := False; End;
 End;
 
+Function TProjectAssistantForm.StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
+Var
+  Prompt, SubmitText, Recap: String;
+  WithContext: Boolean;
+  I: Integer;
+  Turn: TConversationTurn;
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  If (FClaudeRuntime = '') Or (FClaudeModel = '') Then
+    Begin
+      SettingsActionExecute(Nil);
+      If Not FUseClaude Then Exit;
+      If (FClaudeRuntime = '') Or (FClaudeModel = '') Then Exit;
+    End;
+  SetLength(Refs, 0);
+  ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  If Length(Refs) > 0 Then
+    Begin
+      SetCurrentSystemNote('Claude Code turns do not attach images.');
+      MessageDlg('Claude Code turns do not attach images.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  RefreshFromConfig;
+  If Not FModeLocked Then LockModeForSend;
+  ShowChatSurfaceKeepMode;
+  SubmitText := BuildSubmitApiText(ApiText, WithContext);
+  FPendingTurnAttachments := '';
+  Recap := '';
+  If Assigned(ProjectAssistantConversation) Then
+    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
+      Begin
+        If Length(Recap) >= 24000 Then Break;
+        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
+          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
+            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
+      End;
+  Prompt := SubmitText;
+  If Recap <> '' Then
+    Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+  { Do not copy this turn into the HTTP client. Claude Code keeps its own session. }
+  SetCurrentUserDisplay(DisplayText, WithContext);
+  FLiveUser := FDisplayUser;
+  FLiveContent := '';
+  FLiveThinking := '';
+  FAssistantContent := '';
+  FAssistantThinking := '';
+  AppendMessage('user', FDisplayUser);
+  FContextUsed := Length(Prompt) Div 4;
+  FClaudeDirectory := ClaudeWorkDirectory;
+  FClaudeConnectionId := FActiveConnectionId;
+  FClaudeLaunchPrompt := Prompt;
+  FClaudeLaunchReady := True;
+  SetSending(True);
+  BeginAssistantReply;
+  Result := LaunchStoredClaudeRun;
+  If (Not Result) And FSending And (Not FTransportWait) Then
+    FinishAssistantReply('The run could not be restarted.');
+  Result := FSending;
+End;
+
+Procedure TProjectAssistantForm.PollClaude;
+Var
+  Snapshot: TClaudeRunSnapshot;
+  Run: TAssistantClaudeRun;
+Begin
+  If FPollingClaude Then Exit;
+  FPollingClaude := True;
+  Try
+    Run := FClaudeRun;
+    If Not Assigned(Run) Then Exit;
+    If (FClaudeConnectionId <> '') And (FActiveConnectionId <> FClaudeConnectionId) Then
+      Begin
+        StopStream;
+        Exit;
+      End;
+    If (FClaudeDirectory <> '') And (ClaudeWorkDirectory <> FClaudeDirectory) Then
+      Begin
+        StopStream;
+        Exit;
+      End;
+    Snapshot := Run.Snapshot;
+    If FClaudeRun <> Run Then Exit;
+    If Snapshot.Content <> '' Then
+      ApplyAssistantSnapshots(Snapshot.Content, '');
+    If Snapshot.Done Then
+      Begin
+        If FClaudeRun <> Run Then Exit;
+        { Do not finish the reply. The same stored turn starts again after the wait. }
+        If TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
+          Begin
+            ReleaseClaudeProcess;
+            Exit;
+          End;
+        FinishAssistantReply(Snapshot.ErrorText);
+      End
+    Else If FSending And (FStatusPhase = '') Then
+      SetStreamPhase('Waiting for model…');
+    If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) And FSending Then
+      FTraceView.RefreshElapsed(FTrace);
+  Finally
+    FPollingClaude := False;
+  End;
+End;
+
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   Try
     If csDestroying In ComponentState Then Exit;
-    If FTransportWait And (Not Assigned(FCodexRun)) Then
+    If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
       Begin
         PollTransportWait;
         Exit;
@@ -3752,6 +3984,11 @@ Begin
     If Assigned(FCodexRun) Then
       Begin
         PollCodex;
+        Exit;
+      End;
+    If Assigned(FClaudeRun) Then
+      Begin
+        PollClaude;
         Exit;
       End;
     If FSending And (FStatusPhase <> '') Then
@@ -3785,6 +4022,7 @@ Begin
   Else If Assigned(AssistantClient) Then
     FModelName := AssistantClient.Model;
   If FUseCodex Then FModelName := 'ChatGPT / ' + FCodexModel;
+  If FUseClaude Then FModelName := 'Claude / ' + FClaudeModel;
   ApplyDisplayPreferences;
   UpdateStatusFooter;
 End;
@@ -4054,7 +4292,7 @@ Var
   Pct: Integer;
   StatusText, CentreText, ModelText, EffortText, PermissionText, ModelHint, EffortHint, BlockReason: String;
 Begin
-  If (Not FUseCodex) And Assigned(AssistantClient) And (Not FSending) Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) And (Not FSending) Then
     Begin
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If AssistantClient.MaxPromptTokens > 0 Then
@@ -4077,7 +4315,8 @@ Begin
   Else If FReviewInProgress Then
     StatusText := 'Reviewing…'
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
-    ((Not FUseCodex) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
+    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
     StatusText := 'Ready'
   Else
     StatusText := 'Not signed in';
@@ -4098,7 +4337,7 @@ Begin
   CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
-  If FUseCodex Then
+  If FUseCodex Or FUseClaude Then
     CentreText := Format('Context ~%d tokens', [FContextUsed]);
   ApplyModelStatus;
   StatusFooter.SetModelText(ModelText);
@@ -4121,11 +4360,11 @@ Begin
   StatusFooter.SetRightHint('Click for session info');
   If Assigned(SendAction) Then SendAction.Hint := '';
   RefreshAttachAction;
-  If FUseCodex Then
+  If FUseCodex Or FUseClaude Then
     FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
   RefreshCentreStatus;
   ApplySkillStatus;
-  If (Not FUseCodex) And (Not FSending) And (Pct >= 95) Then
+  If (Not FUseCodex) And (Not FUseClaude) And (Not FSending) And (Pct >= 95) Then
     MaybeWarnHighContextUsage;
 End;
 
@@ -4192,6 +4431,8 @@ Begin
   If IsSending And (Not WasSending) Then
     Begin
       FContinuationCap := AssistantAutomaticContinuationCap;
+      FReconnectIntervalMs := AssistantReconnectIntervalMs;
+      FCreditIntervalMs := AssistantCreditIntervalMs;
       FContinuationCount := 0;
       FHeldAnswer := '';
       FHoldingContinuation := False;
@@ -4867,7 +5108,12 @@ Function TProjectAssistantForm.ComposerAttachAllowed(Out Reason: String): Boolea
 Begin
   Reason := '';
   { One capability check. Codex reads inputModalities; Grok reads the same kind of list. A missing list allows attach. }
-  If FUseCodex Then
+  If FUseClaude Then
+    Begin
+      Result := False;
+      Reason := 'Claude Code turns do not attach images.';
+    End
+  Else If FUseCodex Then
     Result := AssistantImageAttachAllowed(CodexModelImageInput(FCodexModelsJson, FCodexModel), Reason)
   Else If Assigned(AssistantClient) Then
     Result := AssistantClient.ImagesAttachAllowed(Reason)
@@ -6091,22 +6337,26 @@ Begin
     Begin
       { Keep the broker. The process is dead; the same prompt is started again after the wait. }
       ReleaseCodexProcess;
+      ReleaseClaudeProcess;
       Exit;
     End;
-  { Only a live Codex process finish cancels the broker. A late HTTP finish must not. }
+  { Only a live process finish cancels its broker. A late HTTP finish must not. }
   If FSending And FUseCodex And (Assigned(FCodexRun) Or FCodexLaunchReady) Then
     ReleaseCodexRun;
+  If FSending And FUseClaude And (Assigned(FClaudeRun) Or FClaudeLaunchReady) Then
+    ReleaseClaudeProcess;
   ClearTransportWait;
   FCodexLaunchReady := False;
+  FClaudeLaunchReady := False;
   ResolvedError := ErrorText;
   If IsAssistantProgressStatus(ResolvedError) Then
     ResolvedError := '';
-  If (Not FUseCodex) And Assigned(AssistantClient) Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
     AssistantClient.ToolsEnabled := ActiveMode <> amChat;
   { Second IsFinished (or Stop after finish) must not append another conversation row. }
   If Not FSending Then
     Begin
-      If (Not FUseCodex) And Assigned(AssistantClient) Then
+      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       Exit;
     End;
@@ -6114,7 +6364,7 @@ Begin
     Begin
       FUserCancelled := False;
       FStreamingActive := False;
-      If (Not FUseCodex) And Assigned(AssistantClient) Then
+      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       If FBuildWorkSectionIndex >= 0 Then
         SetBuildStatusFeedback(Format('"%s" cancelled — still in progress.',
@@ -6171,7 +6421,7 @@ Begin
         End;
       { Item 3.3: an empty finished reply becomes one trace summary before Ready. Existing text is kept. }
       EnsureFinalAssistantSummary;
-      If Assigned(AssistantClient) And (FLiveContent <> '') Then
+      If (Not FUseClaude) And Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
@@ -6228,7 +6478,7 @@ Begin
       RefreshComposerImages;
     End;
   FComposerImagesSent := False;
-  If (Not FUseCodex) And Assigned(AssistantClient) Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   { Validation evidence can auto-complete when the root is not a Git repository.
     In a repository the model sets Status, and that plan file is committed before the item counts as complete.
@@ -6333,9 +6583,11 @@ Begin
   FUserCancelled := True;
   ClearTransportWait;
   FCodexLaunchReady := False;
+  FClaudeLaunchReady := False;
   ReleaseCodexRun;
+  ReleaseClaudeProcess;
   { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
-  If (Not FUseCodex) And Assigned(AssistantClient) Then
+  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
     Begin
       AssistantClient.CancelStream;
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
@@ -6344,7 +6596,7 @@ Begin
     Begin
       If (FLiveContent <> '') Or (FLiveThinking <> '') Then
         Begin
-          If Assigned(AssistantClient) And (FLiveContent <> '') Then
+          If (Not FUseClaude) And Assigned(AssistantClient) And (FLiveContent <> '') Then
             AssistantClient.AddMessage(amrAssistant, FLiveContent);
           FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
         End;
@@ -6426,13 +6678,7 @@ Begin
     Exit;
   If FSending Then
     Exit;
-  If AutoSend And FUseClaude Then
-    Begin
-      { No Claude prompt and no Claude process. Do not fall through to another backend. }
-      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If AutoSend And (Not FUseCodex) Then
+  If AutoSend And (Not FUseCodex) And (Not FUseClaude) Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
         Begin
@@ -6453,6 +6699,11 @@ Begin
       MessageDlg(BlockReason, mtInformation, [mbOK], 0);
       If Assigned(InputMemo) Then
         InputMemo.Text := DisplayText;
+      Exit;
+    End;
+  If AutoSend And FUseClaude Then
+    Begin
+      Result := StartClaudeReply(DisplayText, ApiText);
       Exit;
     End;
   If AutoSend And FUseCodex Then
@@ -6514,6 +6765,12 @@ Begin
     Begin
       If FCodexRun.Steer(UserText) Then SetStreamPhase('Steer queued…')
       Else InputMemo.Text := UserText;
+      Exit;
+    End;
+  If FUseClaude Or Assigned(FClaudeRun) Or FTransportWait Then
+    Begin
+      If Assigned(InputMemo) Then
+        InputMemo.Text := UserText;
       Exit;
     End;
   If Assigned(AssistantClient) Then
@@ -7092,6 +7349,12 @@ Begin
       MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
       Exit;
     End;
+  If FUseClaude Then
+    Begin
+      MessageDlg('Claude Code keeps the session. This assistant does not send its tool list or compact the transcript.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    End;
   If Assigned(AssistantClient) Then
     Info := AssistantClient.GetContextBreakdown
   Else
@@ -7129,6 +7392,12 @@ Begin
       MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
       Exit;
     End;
+  If FUseClaude Then
+    Begin
+      MessageDlg(ClaudeKeepsSessionText + LineEnding + LineEnding +
+        'This assistant does not send its tool list or skill list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     PlanRel := '(none)';
@@ -7142,8 +7411,6 @@ Begin
     End;
   SkillName := ModeSkillCaption;
   SignedIn := 'no';
-  If FUseClaude Then
-    SkillName := 'Not wired';
   If Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn Then
     SignedIn := 'yes';
   Body :=
@@ -7181,7 +7448,7 @@ Var
 Begin
   If FUseClaude Then
     Begin
-      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
+      MessageDlg('Claude Code keeps the session. This assistant does not send its skill list.', mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureFooterMenu(FFooterMenu);
@@ -7335,6 +7602,11 @@ Begin
                   Exit;
                 End;
             End
+          Else If FUseClaude Or FTransportWait Then
+            Begin
+              PicturesStay;
+              Exit;
+            End
           Else If (Not Assigned(AssistantClient)) Or (Not AssistantClient.EnqueueSteer(UserText, Refs)) Then
             Exit;
           InputMemo.Clear;
@@ -7358,12 +7630,8 @@ Begin
         End;
       Exit;
     End;
-  If FUseClaude Then
-    Begin
-      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If (Not FUseCodex) And ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
+  If (Not FUseCodex) And (Not FUseClaude) And
+    ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
     Begin
       MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
       SettingsActionExecute(Nil);
@@ -7542,7 +7810,7 @@ Begin
     Exit;
   If FUseClaude Then
     Begin
-      MessageDlg('The Claude turn is not wired.', mtInformation, [mbOK], 0);
+      StartClaudeReply(DisplayLabel, ApiText);
       Exit;
     End;
   If FUseCodex Then

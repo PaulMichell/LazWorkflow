@@ -147,6 +147,77 @@ Begin
   Check('429 without Retry-After uses the connection interval', WaitMs = 30000);
 End;
 
+Procedure TestDroppedTransport;
+Var
+  Decision: TAssistantRecovery;
+  NowTime, ResetAt, RetryAt: TDateTime;
+  WaitMs: QWord;
+  Note: String;
+Begin
+  Decision := ClassifyDroppedTransport('Codex runtime exited.', '', False);
+  Check('Codex runtime exit retries the turn', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwConnection));
+  Decision := ClassifyDroppedTransport('Codex stdin closed unexpectedly.', '', False);
+  Check('Codex stdin close retries the turn', Decision.Action = araRetryLastAction);
+  Decision := ClassifyDroppedTransport('Codex exited with a truncated protocol frame.', '', False);
+  Check('truncated Codex frame retries the turn', Decision.Action = araRetryLastAction);
+  Decision := ClassifyDroppedTransport('Could not start Claude Code.', '', False);
+  Check('Claude start failure retries the turn', Decision.Action = araRetryLastAction);
+  Decision := ClassifyDroppedTransport('Claude Code did not complete the turn.', '', False);
+  Check('incomplete Claude turn retries', Decision.Action = araRetryLastAction);
+  Decision := ClassifyDroppedTransport('Claude Code timed out.', '', False);
+  Check('Claude timeout retries as a lost connection', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwConnection));
+
+  Decision := ClassifyDroppedTransport('quota exceeded', '', False);
+  Check('process credit text waits for credits', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwCredits));
+  Decision := ClassifyDroppedTransport('HTTP 402', '{"error":"insufficient credit"}', False);
+  Check('process 402 is credits', Decision.HttpWait = ahwCredits);
+  Decision := ClassifyDroppedTransport('status code: 429', '', False);
+  Check('process 429 is a rate limit', (Decision.Action = araRetryLastAction) And
+    (Decision.HttpWait = ahwRateLimit));
+
+  Decision := ClassifyDroppedTransport('', '', False);
+  Check('empty process result is not a drop', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Cancelled.', '', False);
+  Check('cancelled process stops', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Codex connection cancelled.', '', True);
+  Check('user stop does not retry a Codex drop', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('HTTP 401: Unauthorized', '', False);
+  Check('process 401 stops once', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Sign in to the qualified Codex runtime with ChatGPT before starting a run.', '',
+    False);
+  Check('Codex sign-in stops', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Claude Code refused the permission mode flag.', '', False);
+  Check('refused Claude permission flag stops', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Invalid or oversized Codex protocol frame.', '', False);
+  Check('Codex protocol error stops', Decision.Action = araStop);
+
+  NowTime := EncodeDate(2026, 10, 16) + EncodeTime(12, 0, 0, 0);
+  WaitMs := AssistantDroppedTransportWaitMs(ahwConnection, 'Codex runtime exited.', '', '', False, 0, 30000,
+    60 * 60 * 1000, NowTime, RetryAt);
+  Check('dropped transport uses the connection interval', WaitMs = 30000);
+  Note := AssistantDroppedTransportWaitNote(ahwConnection, 'Codex runtime exited.', 0);
+  Check('dropped transport note is the reconnect sentence', (Pos(AssistantRecoveryWaitReconnect, Note) > 0) And
+    IsAssistantRecoveryProgress(Note));
+
+  WaitMs := AssistantDroppedTransportWaitMs(ahwCredits, 'quota exceeded', '', '', False, 0, 30000, 60 * 60 * 1000,
+    NowTime, RetryAt);
+  Check('dropped credit failure uses the hourly interval', WaitMs = 60 * 60 * 1000);
+  Check('dropped credit failure does not use 30 seconds', WaitMs <> 30000);
+  ResetAt := NowTime + (2 / 24);
+  WaitMs := AssistantDroppedTransportWaitMs(ahwCredits, 'billing', '', '', True, ResetAt, 30000, 60 * 60 * 1000,
+    NowTime, RetryAt);
+  Check('dropped credit failure waits until the usage reset', (Abs(RetryAt - ResetAt) < (2 / 86400)) And
+    (Abs(Int64(WaitMs) - 2 * 60 * 60 * 1000) < 2000));
+  Note := AssistantDroppedTransportWaitNote(ahwCredits, 'quota exceeded', RetryAt);
+  Check('dropped credit note names the clock', Pos('Retry at ' + FormatDateTime('yyyy-mm-dd hh:nn', RetryAt), Note) > 0);
+  Check('dropped credit note is progress', IsAssistantRecoveryProgress(Note));
+  Note := AssistantDroppedTransportWaitNote(ahwRateLimit, 'status code: 429', 0);
+  Check('dropped rate-limit note is progress', IsAssistantRecoveryProgress(Note));
+End;
+
 Var
   Note: String;
   Decision: TAssistantRecovery;
@@ -230,6 +301,7 @@ Begin
   Check('resume note is progress', IsAssistantRecoveryProgress(AssistantReconnectResumeNote));
   Check('reconnect interval defaults to 30 seconds', AssistantReconnectIntervalMs = 30000);
   TestCreditDecisions;
+  TestDroppedTransport;
   If FailCount <> 0 Then
     Halt(1);
 End.

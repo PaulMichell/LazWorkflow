@@ -422,6 +422,8 @@ Begin
           Try
             FSnapshot.State := crsFailed;
             FSnapshot.ErrorText := 'Codex worker failed; no metered fallback was attempted.';
+            If E.Message <> '' Then
+              FSnapshot.ErrorText := FSnapshot.ErrorText + ' ' + E.Message;
           Finally
             LeaveCriticalSection(FLock);
           End;

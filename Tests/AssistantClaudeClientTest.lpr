@@ -80,6 +80,9 @@ Begin
   Check('no-usage fixture is unavailable', Turn.UsageState = ClaudeUsageUnavailable);
   Check('no-usage fixture leaves cost empty', Turn.Cost = '');
   Check('no-usage fixture keeps the answer', Turn.Text = 'plain answer');
+  Check('error result is not an answer', (Not ParseClaudeTurnResult(
+    '{"is_error":true,"result":"quota exceeded"}', Turn, ErrorText)) And (Pos('quota', LowerCase(ErrorText)) > 0) And
+    (Turn.Text = ''));
 
   Check('ask maps to default when that is the accepted value', ClaudePermissionMode(HelpFixture, 'ask') = 'default');
   Check('auto maps to accept edits', ClaudePermissionMode(HelpFixture, 'auto') = 'acceptEdits');
