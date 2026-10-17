@@ -76,7 +76,7 @@ If the reset is in the future, wait until that time, then retry. Say the clock t
 A credit wait must not reach `FinishAssistantReply` and must not `StopRunPlan`.
 
 ### 2.3 Use the same wait for a dropped Codex or Claude transport
-Status: blocked
+Status: complete
 
 When a Codex or Claude run ends with a transport or credit error and no assistant answer, do not call `FinishAssistantReply` immediately. Classify it with the same unit and wait as in items 2.1 and 2.2, then retry the turn. Do not change the Codex protocol.
 
