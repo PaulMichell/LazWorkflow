@@ -227,7 +227,6 @@ Type
     Procedure LoadClaudeConnection(Item: TAssistantConnection);
     Procedure AddKind(Const Backend, DisplayName: String);
     Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
-    Function HasGrokRow: Boolean;
     Procedure RefreshCompatibleModels;
   Public
     Destructor Destroy; Override;
@@ -472,18 +471,6 @@ Begin
     ImageModelLabel.Caption := 'Image model'
   Else
     ImageModelLabel.Caption := 'This connection cannot draw.';
-End;
-
-Function TAssistantSettingsForm.HasGrokRow: Boolean;
-Var
-  I: Integer;
-Begin
-  Result := False;
-  If Not Assigned(Connections) Then
-    Exit;
-  For I := 0 To Connections.Count - 1 Do
-    If Connections[I].Backend = 'grok' Then
-      Exit(True);
 End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
@@ -1699,19 +1686,12 @@ End;
 
 Procedure TAssistantSettingsForm.SaveToConfig;
 Var
-  ModelName: String;
+  Item: TAssistantConnection;
 Begin
   If Not Assigned(AssistantChatConfig) Then
     Exit;
-  AssistantChatConfig.ApiBase := Trim(ApiBaseEdit.Text);
-  If AssistantChatConfig.ApiBase = '' Then
-    AssistantChatConfig.ApiBase := AssistantConfigDefaultApiBase;
-  ModelName := '';
-  If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
-    ModelName := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
-  If ModelName = '' Then
-    ModelName := AssistantConfigDefaultModel;
-  AssistantChatConfig.Model := ModelName;
+  { Store the selected row first. Grok widgets belong to that row, not to every account. }
+  StoreConnection;
   AssistantChatConfig.IncludeIDEContext := IncludeContextCheck.Checked;
   AssistantChatConfig.EnterInsertsNewline := EnterNewlineCheck.Checked;
   { Disabled compact still keeps the saved flag. }
@@ -1725,34 +1705,17 @@ Begin
   AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
   AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
   SaveSkillModes;
-  Case SearchCombo.ItemIndex Of
-    1: AssistantChatConfig.SearchMode := 'auto';
-    2: AssistantChatConfig.SearchMode := 'on';
-  Else
-    AssistantChatConfig.SearchMode := 'off';
-  End;
-  AssistantChatConfig.SearchCitations := CitationsCheck.Checked;
-  Case VerbosityCombo.ItemIndex Of
-    0: AssistantChatConfig.AnswerVerbosity := 'low';
-    2: AssistantChatConfig.AnswerVerbosity := 'high';
-  Else
-    AssistantChatConfig.AnswerVerbosity := 'medium';
-  End;
-  AssistantChatConfig.MaxOutputTokens := MaxOutputEdit.Value;
-  If ThinkingCombo.ItemIndex >= 0 Then
-    AssistantChatConfig.ThinkingLevel := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex])
-  Else
-    AssistantChatConfig.SetThinkingLevelEnum(atlHigh);
-  Case ApprovalCombo.ItemIndex Of
-    0: AssistantChatConfig.SetApprovalModeEnum(aamAsk);
-    1: AssistantChatConfig.SetApprovalModeEnum(aamAuto);
-  Else
-    AssistantChatConfig.SetApprovalModeEnum(aamAlways);
-  End;
+  Item := Nil;
+  If Assigned(Connections) Then
+    Item := Connections.Active;
+  { The chat client reads the config. Adopt the current Grok account, not the last panel visited. }
+  If Assigned(Item) And (Item.Backend = 'grok') Then
+    AssistantChatConfig.AdoptGrokSampling(Item)
+  Else If AssistantChatConfig.ApiBase = '' Then
+    AssistantChatConfig.ApiBase := AssistantConfigDefaultApiBase;
   If Assigned(GrokOAuthClient) Then
     AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   AssistantChatConfig.Save;
-  StoreConnection;
   Connections.Save;
   GlobalSpellSettings.SaveToConfig;
   ProjectTestSettings.Save;
@@ -1897,7 +1860,9 @@ Begin
       MessageDlg('The current ChatGPT connection needs a runtime and model.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Not HasGrokRow Then
+  { A Codex or compatible edit must not be blocked by the Grok panel left over from another row. }
+  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Or
+    (Connections[SelectedConnection].Backend <> 'grok') Then
     Exit;
   If Trim(ApiBaseEdit.Text) = '' Then
     Begin

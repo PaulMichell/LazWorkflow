@@ -84,9 +84,11 @@ Type
     Destructor Destroy; Override;
     Procedure Load;
     Procedure Save;
-    { Nil connections keeps the saved list, including an empty list, and updates an existing Grok row from this config. }
+    { Nil keeps the saved list. Each Grok row keeps its own model. OAuth is still written onto Grok rows. }
     Procedure LoadWithConnections(Connections: TAssistantConnections);
     Function SaveWithConnections(Connections: TAssistantConnections): Boolean;
+    { Copy one Grok row's sampling onto this config. Other rows are left alone. Does not touch OAuth. }
+    Procedure AdoptGrokSampling(Item: TAssistantConnection);
     Procedure Assign(Source: TAssistantConfig);
     Procedure ApplyOAuthTokens(Const Tokens: TGrokOAuthTokens);
     Procedure ClearOAuthTokens;
@@ -762,21 +764,25 @@ Begin
     End;
 End;
 
-Procedure CopyGlobalGrokOntoRow(Config: TAssistantConfig; Item: TAssistantConnection);
+Procedure TAssistantConfig.AdoptGrokSampling(Item: TAssistantConnection);
 Begin
-  { The settings form still edits Grok sampling on the config. Stamp it onto the row at save
-    so the stored row matches the edited values and a later load does not prefer a stale row. }
-  If (Not Assigned(Config)) Or (Not Assigned(Item)) Or (Item.Backend <> 'grok') Then
+  { The chat client still reads this config. Only the active Grok row may update it.
+    Copying the config back onto every Grok row used to erase the other accounts. }
+  If (Not Assigned(Item)) Or (Item.Backend <> 'grok') Then
     Exit;
-  Item.Model := Config.Model;
-  Item.ReasoningEffort := Config.ThinkingLevel;
-  Item.ApprovalMode := Config.ApprovalMode;
-  Item.SearchMode := Config.SearchMode;
-  Item.SearchCitations := Config.SearchCitations;
-  Item.AnswerVerbosity := Config.AnswerVerbosity;
-  Item.MaxOutputTokens := Config.MaxOutputTokens;
-  Item.ApiBase := Config.ApiBase;
-  NormalizeConnection(Item);
+  If Item.Model <> '' Then
+    FModel := Item.Model;
+  If Item.ReasoningEffort <> '' Then
+    FThinkingLevel := Item.ReasoningEffort;
+  If Item.ApprovalMode <> '' Then
+    FApprovalMode := Item.ApprovalMode;
+  If Item.ApiBase <> '' Then
+    FApiBase := Item.ApiBase;
+  FSearchMode := NormalizeGrokSearchMode(Item.SearchMode);
+  FSearchCitations := Item.SearchCitations;
+  FAnswerVerbosity := NormalizeGrokVerbosity(Item.AnswerVerbosity);
+  FMaxOutputTokens := Item.MaxOutputTokens;
+  ClampOutputTokens(FMaxOutputTokens);
 End;
 
 Procedure MigrateGrokRowFromGlobals(Config: TAssistantConfig; Obj: TJSONObject; Item: TAssistantConnection);
@@ -933,12 +939,33 @@ Begin
   NormalizeConnection(Item);
 End;
 
+Function GrokObjectById(Arr: TJSONArray; Const Id: String): TJSONObject;
+Var
+  I: Integer;
+  Obj: TJSONObject;
+Begin
+  Result := Nil;
+  If (Id = '') Or (Not Assigned(Arr)) Then
+    Exit;
+  For I := 0 To Arr.Count - 1 Do
+    Begin
+      If Not (Arr.Items[I] Is TJSONObject) Then
+        Continue;
+      Obj := TJSONObject(Arr.Items[I]);
+      If (Obj.Get('backend', '') = 'grok') And (Obj.Get('id', '') = Id) Then
+        Exit(Obj);
+    End;
+End;
+
 Procedure TAssistantConfig.LoadWithConnections(Connections: TAssistantConnections);
 Var
   Section, Obj: TJSONObject;
   Node, ItemNode: TJSONData;
   Item: TAssistantConnection;
   I: Integer;
+  WantedId: String;
+  AppliedGrok: Boolean;
+  ConnectionArray: TJSONArray;
 Begin
   Section := ReadWorkflowSection('assistant');
   Try
@@ -1018,33 +1045,43 @@ Begin
       FActiveSkill := Section.Get('active_skill', '');
     If (FActiveSkill = '') And (Section.Find('skill') <> Nil) Then
       FActiveSkill := Section.Get('skill', '');
+    WantedId := Section.Get('active_connection', '');
+    AppliedGrok := False;
+    ConnectionArray := Nil;
     Node := Section.Find('connections');
     If Node Is TJSONArray Then
-      For I := 0 To TJSONArray(Node).Count - 1 Do
-        Begin
-          ItemNode := TJSONArray(Node).Items[I];
-          If Not (ItemNode Is TJSONObject) Then
-            Continue;
-          Obj := TJSONObject(ItemNode);
-          If Assigned(Connections) Then
-            Begin
-              Item := Connections.AddStored(Obj.Get('id', ''), Obj.Get('name', ''), Obj.Get('backend', ''));
-              If Assigned(Item) Then
-                Begin
-                  ReadConnection(Obj, Item);
-                  If Item.Backend = 'grok' Then
-                    Begin
+      Begin
+        ConnectionArray := TJSONArray(Node);
+        For I := 0 To ConnectionArray.Count - 1 Do
+          Begin
+            ItemNode := ConnectionArray.Items[I];
+            If Not (ItemNode Is TJSONObject) Then
+              Continue;
+            Obj := TJSONObject(ItemNode);
+            If Assigned(Connections) Then
+              Begin
+                Item := Connections.AddStored(Obj.Get('id', ''), Obj.Get('name', ''), Obj.Get('backend', ''));
+                If Assigned(Item) Then
+                  Begin
+                    ReadConnection(Obj, Item);
+                    { Migrate from the section values. Do not let an earlier Grok row become those values. }
+                    If Item.Backend = 'grok' Then
                       MigrateGrokRowFromGlobals(Self, Obj, Item);
-                      SyncConfigFromGrokRow(Self, Obj, Item);
-                    End;
-                End;
-            End
-          Else If Obj.Get('backend', '') = 'grok' Then
-            ApplyGrokObject(Self, Obj);
-        End;
+                  End;
+              End
+            Else If (Obj.Get('backend', '') = 'grok') And (Not AppliedGrok) And
+              ((WantedId = '') Or (Obj.Get('id', '') = WantedId)) Then
+              Begin
+                { No connection list: the active Grok row, or the first row when none is active.
+                  A later Grok account must not replace the model or the OAuth tokens. }
+                ApplyGrokObject(Self, Obj);
+                AppliedGrok := True;
+              End;
+          End;
+      End;
     If Assigned(Connections) Then
       Begin
-        Connections.ActiveId := Section.Get('active_connection', '');
+        Connections.ActiveId := WantedId;
         If Connections.Active = Nil Then
           Begin
             If Connections.Count > 0 Then
@@ -1052,6 +1089,8 @@ Begin
             Else
               Connections.ActiveId := '';
           End;
+        If Assigned(Connections.Active) And (Connections.Active.Backend = 'grok') Then
+          SyncConfigFromGrokRow(Self, GrokObjectById(ConnectionArray, Connections.Active.Id), Connections.Active);
       End;
     ReadSkillModes(Self, Section);
     ReadSkillFiles(Self, Section);
@@ -1117,12 +1156,9 @@ Begin
     Section.Add('connections', Arr);
     If Assigned(Connections) Then
       Begin
+        { Each Grok row already holds its own model. Do not stamp this config onto the others. }
         For I := 0 To Connections.Count - 1 Do
-          Begin
-            If Connections[I].Backend = 'grok' Then
-              CopyGlobalGrokOntoRow(Self, Connections[I]);
-            Arr.Add(ConnectionObject(Connections[I], Self));
-          End;
+          Arr.Add(ConnectionObject(Connections[I], Self));
         Section.Add('active_connection', ResolvedActiveId(Connections));
       End
     Else
@@ -1144,7 +1180,7 @@ Begin
                     Item := TAssistantConnection.Create;
                     Try
                       ReadConnection(Obj, Item);
-                      CopyGlobalGrokOntoRow(Self, Item);
+                      { Keep this row's model. ConnectionObject writes the current OAuth tokens. }
                       Arr.Add(ConnectionObject(Item, Self));
                     Finally
                       Item.Free;

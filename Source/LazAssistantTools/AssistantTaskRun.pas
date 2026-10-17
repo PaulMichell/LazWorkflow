@@ -268,7 +268,10 @@ Begin
       End;
   End;
   If BuildResult <> mrOk Then
-    ErrorText := 'Compile did not finish.';
+    Begin
+      ErrorText := 'Compile did not finish.';
+      Exit;
+    End;
   Result := True;
 End;
 

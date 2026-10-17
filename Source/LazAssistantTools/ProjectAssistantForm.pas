@@ -3472,6 +3472,8 @@ Begin
           FActiveApproval := Item.ApprovalMode;
           If (Item.Backend = 'grok') And Assigned(AssistantChatConfig) Then
             Begin
+              { The request uses the config. Switching accounts must not keep the previous model's sampling. }
+              AssistantChatConfig.AdoptGrokSampling(Item);
               If FActiveEffort = '' Then
                 FActiveEffort := AssistantChatConfig.ThinkingLevel;
               If FActiveApproval = '' Then

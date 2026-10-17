@@ -341,6 +341,31 @@ Begin
     Finally
       Names.Free;
     End;
+    Item := Store.AddStored('grok-other', 'Other Grok', 'grok');
+    Item.Model := 'other-grok-model';
+    Item.ReasoningEffort := 'low';
+    Item.ApprovalMode := 'always';
+    Item.ApiBase := 'https://other.example/v1';
+    Store.ActiveId := 'grok-images';
+    Store.Active.ReasoningEffort := 'high';
+    Store.Active.ApprovalMode := 'ask';
+    AssistantChatConfig.Model := 'stale-global-model';
+    AssistantChatConfig.ThinkingLevel := 'xhigh';
+    Store.Save;
+    Store.Load;
+    Check('save keeps a second Grok account when the global model differs',
+      Assigned(Store.Active) And (Store.Active.Id = 'grok-images') And (Store.Active.Model = 'kept-grok-model') And
+      Assigned(Store[Store.Count - 1]) And (Store[Store.Count - 1].Id = 'grok-other') And
+      (Store[Store.Count - 1].Model = 'other-grok-model') And (Store[Store.Count - 1].ReasoningEffort = 'low') And
+      (Store[Store.Count - 1].ApprovalMode = 'always'));
+    Check('load adopts the active Grok model, not the other account or the stale global model',
+      (AssistantChatConfig.Model = 'kept-grok-model') And (AssistantChatConfig.ThinkingLevel = 'high'));
+    AssistantChatConfig.Model := 'stale-global-model';
+    AssistantChatConfig.Save;
+    Store.Load;
+    Check('a token save does not copy the global model onto every Grok account',
+      (Store.Active.Model = 'kept-grok-model') And (Store[Store.Count - 1].Model = 'other-grok-model') And
+      (AssistantChatConfig.Model = 'kept-grok-model'));
   Finally
     Store.Free;
     DeleteCodexProfileDirectory(Derived(Root, Id), ErrorText);
