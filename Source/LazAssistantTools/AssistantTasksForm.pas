@@ -91,7 +91,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Dialogs, LCLType;
+  Dialogs, LCLType, AssistantTaskEditorForm;
 
 Function ShowAssistantTasksForm(CanRun: Boolean; Out Request: TAssistantTaskRequest): Boolean;
 Var
@@ -465,13 +465,53 @@ Begin
 End;
 
 Procedure TAssistantTasksForm.EditActionExecute(Sender: TObject);
+Var
+  Index: Integer;
+  Task: TAssistantTask;
 Begin
-  { The editor dialog is the next form. The list already owns save and dirty state. }
+  Index := SelectedStoredIndex;
+  If Index < 0 Then
+    Exit;
+  Task := StoredTasks[Index];
+  If Not ShowAssistantTaskEditor(Task, False) Then
+    Exit;
+  StoredTasks[Index] := Task;
+  MarkDirty;
+  FillList;
+  SelectTaskId(Task.Id);
+  UpdatePreview;
+  RefreshTaskActions;
 End;
 
 Procedure TAssistantTasksForm.NewActionExecute(Sender: TObject);
+Var
+  Task: TAssistantTask;
 Begin
-  { The editor dialog creates the new row. The list inserts it and marks itself dirty. }
+  Task.Id := CopyId('task');
+  Task.Title := '';
+  Task.Summary := '';
+  Task.Mode := tmInspect;
+  Task.Kind := tkPrompt;
+  Task.Scope := tsNone;
+  Task.MessageFilter := mfNone;
+  Task.CompileFirst := False;
+  Task.FreshConversation := False;
+  Task.Enabled := True;
+  Task.Hidden := False;
+  Task.DocumentPath := '';
+  Task.BuiltinId := '';
+  Task.Prompt := '';
+  If Not ShowAssistantTaskEditor(Task, True) Then
+    Exit;
+  If FindAssistantTask(StoredTasks, Task.Id) >= 0 Then
+    Task.Id := CopyId(Task.Title);
+  SetLength(StoredTasks, Length(StoredTasks) + 1);
+  StoredTasks[High(StoredTasks)] := Task;
+  MarkDirty;
+  FillList;
+  SelectTaskId(Task.Id);
+  UpdatePreview;
+  RefreshTaskActions;
 End;
 
 Procedure TAssistantTasksForm.DuplicateActionExecute(Sender: TObject);

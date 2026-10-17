@@ -1,0 +1,253 @@
+object AssistantTaskEditorForm: TAssistantTaskEditorForm
+  Left = 220
+  Height = 680
+  Top = 80
+  Width = 640
+  ActiveControl = TitleEdit
+  BorderStyle = bsSizeable
+  Caption = 'Edit Task'
+  ClientHeight = 680
+  ClientWidth = 640
+  Constraints.MinHeight = 560
+  Constraints.MinWidth = 520
+  KeyPreview = True
+  Position = poScreenCenter
+  LCLVersion = '5.99.0.0'
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  OnKeyDown = FormKeyDown
+  OnShow = FormShow
+  object FieldsPanel: TPanel
+    Left = 0
+    Height = 340
+    Top = 0
+    Width = 640
+    Align = alTop
+    BevelOuter = bvNone
+    ClientHeight = 340
+    ClientWidth = 640
+    TabOrder = 0
+    object TitleLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 13
+      Width = 132
+      Caption = 'Title'
+      ParentColor = False
+    end
+    object TitleEdit: TEdit
+      Left = 148
+      Height = 28
+      Top = 8
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      TabOrder = 0
+    end
+    object SummaryLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 45
+      Width = 132
+      Caption = 'Summary'
+      ParentColor = False
+    end
+    object SummaryEdit: TEdit
+      Left = 148
+      Height = 28
+      Top = 40
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      TabOrder = 1
+    end
+    object EnabledCheck: TCheckBox
+      Left = 8
+      Height = 23
+      Top = 74
+      Width = 240
+      Caption = 'Enabled'
+      TabOrder = 2
+    end
+    object ModeLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 109
+      Width = 132
+      Caption = 'Mode'
+      ParentColor = False
+    end
+    object ModeCombo: TComboBox
+      Left = 148
+      Height = 28
+      Top = 104
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      OnChange = ModeComboChange
+      Style = csDropDownList
+      TabOrder = 3
+    end
+    object KindLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 141
+      Width = 132
+      Caption = 'Kind'
+      ParentColor = False
+    end
+    object KindCombo: TComboBox
+      Left = 148
+      Height = 28
+      Top = 136
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      OnChange = KindComboChange
+      Style = csDropDownList
+      TabOrder = 4
+    end
+    object ScopeLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 173
+      Width = 132
+      Caption = 'Scope'
+      ParentColor = False
+    end
+    object ScopeCombo: TComboBox
+      Left = 148
+      Height = 28
+      Top = 168
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      ItemHeight = 0
+      OnChange = ScopeComboChange
+      Style = csDropDownList
+      TabOrder = 5
+    end
+    object MessageFilterLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 205
+      Width = 132
+      Caption = 'Message filter'
+      ParentColor = False
+    end
+    object MessageFilterCombo: TComboBox
+      Left = 148
+      Height = 28
+      Top = 200
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      Hint = 'Which Messages lines this task keeps. Used only when scope is Messages.'
+      ItemHeight = 0
+      ParentShowHint = False
+      ShowHint = True
+      Style = csDropDownList
+      TabOrder = 6
+    end
+    object CompileFirstCheck: TCheckBox
+      Left = 8
+      Height = 23
+      Top = 234
+      Width = 240
+      Caption = 'Compile first'
+      Hint = 'Compile, then read Messages. Used only when scope is Messages.'
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 7
+    end
+    object FreshConversationCheck: TCheckBox
+      Left = 8
+      Height = 23
+      Top = 266
+      Width = 240
+      Caption = 'Fresh conversation'
+      TabOrder = 8
+    end
+    object DocumentPathLabel: TLabel
+      Left = 8
+      Height = 17
+      Top = 301
+      Width = 132
+      Caption = 'Document path'
+      ParentColor = False
+    end
+    object DocumentPathEdit: TEdit
+      Left = 148
+      Height = 28
+      Top = 296
+      Width = 484
+      Anchors = [akTop, akLeft, akRight]
+      Hint = 'Relative path under Documents/, ending in .md. Not the active plan.'
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 9
+      TextHint = 'Documents/Name.md'
+    end
+  end
+  object PromptPanel: TPanel
+    Left = 0
+    Height = 304
+    Top = 340
+    Width = 640
+    Align = alClient
+    BevelOuter = bvNone
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    BorderSpacing.Bottom = 8
+    ClientHeight = 304
+    ClientWidth = 640
+    TabOrder = 1
+    object PromptMemo: TMemo
+      Left = 8
+      Height = 262
+      Top = 34
+      Width = 624
+      Align = alClient
+      BorderSpacing.Left = 0
+      ScrollBars = ssAutoVertical
+      TabOrder = 0
+      WantReturns = True
+    end
+    object PromptLabel: TLabel
+      Left = 8
+      Height = 18
+      Top = 16
+      Width = 624
+      Align = alTop
+      BorderSpacing.Bottom = 4
+      Caption = 'Prompt'
+      ParentColor = False
+    end
+    object FormatNoteLabel: TLabel
+      Left = 8
+      Height = 40
+      Top = 8
+      Width = 624
+      Align = alTop
+      AutoSize = False
+      BorderSpacing.Bottom = 4
+      Caption = 'The active Pascal unit is formatted in the editor, Undoable, not saved, and no model is called.'
+      ParentColor = False
+      Visible = False
+      WordWrap = True
+    end
+  end
+  object ButtonPanel: TButtonPanel
+    Left = 0
+    Height = 36
+    Top = 644
+    Width = 640
+    Align = alBottom
+    OKButton.Name = 'OKButton'
+    OKButton.DefaultCaption = True
+    HelpButton.Name = 'HelpButton'
+    HelpButton.DefaultCaption = True
+    CloseButton.Name = 'CloseButton'
+    CloseButton.DefaultCaption = True
+    CancelButton.Name = 'CancelButton'
+    CancelButton.DefaultCaption = True
+    TabOrder = 2
+    ShowButtons = [pbOK, pbCancel]
+  end
+end
