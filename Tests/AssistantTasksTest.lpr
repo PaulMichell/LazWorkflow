@@ -92,8 +92,9 @@ End;
 
 Procedure CheckPrompts(Const Tasks: TAssistantTaskArray);
 Const
-  BuildIds: Array[0..4] Of String = (
-    'bug-fix', 'fix-compiler-errors', 'fix-compiler-hints', 'simplify-code', 'optimise-selection');
+  BuildIds: Array[0..5] Of String = (
+    'bug-fix', 'fix-compiler-errors', 'fix-compiler-hints', 'simplify-code', 'optimise-selection',
+    'remove-dead-code');
   InspectIds: Array[0..2] Of String = ('code-review', 'explain-selection', 'report-dead-code');
   DocumentIds: Array[0..1] Of String = ('technical-documentation', 'user-manual');
   BuildClosing = 'Make the smallest change that does the job.' + LineEnding +
@@ -175,6 +176,12 @@ Begin
   Task := Tasks[CatalogIndex(Tasks, 'user-manual')];
   CheckHas(Task, '{user_note}');
   CheckHas(Task, 'Documents/UserManual.md');
+  Task := Tasks[CatalogIndex(Tasks, 'remove-dead-code')];
+  CheckHas(Task, 'find_references');
+  CheckHas(Task, 'the tool did not truncate');
+  CheckHas(Task, 'more than 32 Pascal files');
+  CheckHas(Task, 'editor Undo path');
+  CheckLacks(Task, 'set_active_plan');
 End;
 
 Procedure CheckCatalog;
@@ -183,7 +190,11 @@ Var
   I, J: Integer;
 Begin
   Tasks := CopyAssistantTaskCatalog;
-  Check('catalog count', Length(Tasks) = 11);
+  Check('catalog count', Length(Tasks) = 12);
+  Check('remove-dead-code id', Tasks[11].Id = 'remove-dead-code');
+  Check('remove-dead-code mode', TaskModeToStr(Tasks[11].Mode) = 'build');
+  Check('remove-dead-code scope', TaskScopeToStr(Tasks[11].Scope) = 'active_editor');
+  Check('remove-dead-code disabled', (Not Tasks[11].Enabled) And (Not Tasks[11].Hidden));
   Check('code-review id', Tasks[0].Id = 'code-review');
   Check('explain-selection id', Tasks[1].Id = 'explain-selection');
   Check('bug-fix id', Tasks[2].Id = 'bug-fix');
@@ -228,7 +239,10 @@ Begin
         Check('fresh only on code-review ' + Tasks[I].Id, Not Tasks[I].FreshConversation);
       If (I <> 3) And (I <> 4) Then
         Check('compile first only on compiler tasks ' + Tasks[I].Id, Not Tasks[I].CompileFirst);
-      Check('enabled ' + Tasks[I].Id, Tasks[I].Enabled And Not Tasks[I].Hidden);
+      If Tasks[I].Id = 'remove-dead-code' Then
+        Check('enabled ' + Tasks[I].Id, (Not Tasks[I].Enabled) And (Not Tasks[I].Hidden))
+      Else
+        Check('enabled ' + Tasks[I].Id, Tasks[I].Enabled And Not Tasks[I].Hidden);
       Check('builtin id ' + Tasks[I].Id, Tasks[I].BuiltinId = Tasks[I].Id);
       Check('title ' + Tasks[I].Id, Trim(Tasks[I].Title) <> '');
       If Tasks[I].Kind = tkFormat Then
@@ -311,7 +325,7 @@ Var
 Begin
   UseTempSettings;
   Check('missing section', LoadAssistantTasks(Tasks, FromCatalog, ErrorText));
-  Check('from catalog', FromCatalog And (Length(Tasks) = 11));
+  Check('from catalog', FromCatalog And (Length(Tasks) = 12));
   Check('missing does not write', Not FileExists(SettingsFile));
 
   WriteSettings('{"assistant":{"include_ide_context":true}}');
@@ -360,7 +374,10 @@ Begin
   Check('load does not write', ReadSettings = Before);
   Check('saved order', (Tasks[0].Id = 'code-review') And (Tasks[1].Id = 'my-task'));
   Check('hidden stays', Tasks[0].Hidden And (Tasks[0].Title = 'Changed'));
-  Check('appended count', Length(Tasks) = 12);
+  Check('appended count', Length(Tasks) = 13);
+  ExplainIndex := FindAssistantTask(Tasks, 'remove-dead-code');
+  Check('dead code appended disabled', (ExplainIndex > 1) And (Not Tasks[ExplainIndex].Enabled) And
+    (Not Tasks[ExplainIndex].Hidden));
   ExplainIndex := FindAssistantTask(Tasks, 'explain-selection');
   Check('explain appended', ExplainIndex > 1);
   Check('explain not hidden', Not Tasks[ExplainIndex].Hidden);
@@ -375,7 +392,7 @@ Begin
   WriteSettings('{"assistant":{"keep":true},"assistant_tasks":{"tasks":"nope"}}');
   Before := ReadSettings;
   Check('invalid section', Not LoadAssistantTasks(Again, FromCatalog, ErrorText));
-  Check('invalid keeps catalog', (Not FromCatalog) And (Length(Again) = 11));
+  Check('invalid keeps catalog', (Not FromCatalog) And (Length(Again) = 12));
   Check('invalid does not write', ReadSettings = Before);
   Check('invalid error', ErrorText <> '');
 
@@ -388,7 +405,7 @@ Begin
     Check('assistant key absent on fresh save', Document.Find('assistant') = Nil);
     Section := TJSONObject(Document.Find('assistant_tasks'));
     Arr := TJSONArray(Section.Find('tasks'));
-    Check('saved count', Arr.Count = 11);
+    Check('saved count', Arr.Count = 12);
     Row := TJSONObject(Arr.Items[8]);
     Check('format omits prompt', Row.Find('prompt') = Nil);
     Check('format kind', Row.Get('kind', '') = 'format');
@@ -422,7 +439,7 @@ Begin
   WriteSettings('{"assistant":{"keep":true},"assistant_tasks":{"tasks":[' + TasksJson + ']}}');
   Before := ReadSettings;
   Check(Title, Not LoadAssistantTasks(Loaded, FromCatalog, ErrorText));
-  Check(Title + ' catalog', (Not FromCatalog) And (Length(Loaded) = 11));
+  Check(Title + ' catalog', (Not FromCatalog) And (Length(Loaded) = 12));
   Check(Title + ' unchanged', ReadSettings = Before);
   Check(Title + ' error', Pos(Fragment, ErrorText) > 0);
 End;
@@ -443,7 +460,7 @@ Begin
   WriteSettings('{not json');
   Before := ReadSettings;
   Check('bad file', Not LoadAssistantTasks(Loaded, FromCatalog, ErrorText));
-  Check('bad file catalog', (Not FromCatalog) And (Length(Loaded) = 11));
+  Check('bad file catalog', (Not FromCatalog) And (Length(Loaded) = 12));
   Check('bad file unchanged', ReadSettings = Before);
   Check('bad file error', ErrorText = 'Task settings file is not valid JSON.');
 
@@ -542,7 +559,7 @@ Begin
   Check('round-trip user is not builtin', (Loaded[UserIndex].BuiltinId = '') And (Loaded[UserIndex].Title = 'Mine') And
     (Not Loaded[UserIndex].Hidden));
   Check('round-trip gains catalog id', (ExplainIndex >= 0) And (Not Loaded[ExplainIndex].Hidden));
-  Check('round-trip length', Length(Loaded) = 12);
+  Check('round-trip length', Length(Loaded) = 13);
 End;
 
 Begin

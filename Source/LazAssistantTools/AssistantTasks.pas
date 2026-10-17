@@ -387,6 +387,22 @@ Begin
     'Active file: {active_file}';
 End;
 
+Function RemoveDeadCodePrompt: String;
+Begin
+  Result := 'Remove dead code from the active unit only.' + LineEnding +
+    'Delete a declaration only when find_references was called with every project Pascal file, ' +
+    'the tool did not truncate, and the result has no references.' + LineEnding +
+    'If the project has more than 32 Pascal files, or the search did not cover them, report and do not delete.' + LineEnding +
+    'Do not delete published methods, .lfm event handlers, overrides, initialization or finalization references, ' +
+    'or registered classes.' + LineEnding +
+    'A text search is not a reference search. Do not raise the 32-file cap.' + LineEnding +
+    'run_compile after any deletion. If the compile fails, revert that deletion with the editor Undo path ' +
+    'or a reversing edit in the same turn, and stop.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
 Function UserManualPrompt: String;
 Begin
   Result := 'Write or update Documents/UserManual.md for an operator.' + LineEnding +
@@ -420,7 +436,7 @@ End;
 
 Function CopyAssistantTaskCatalog: TAssistantTaskArray;
 Begin
-  SetLength(Result, 11);
+  SetLength(Result, 12);
   Result[0] := MakeTask('code-review', 'Code review', 'Review the saved diff. No edits.',
     tmInspect, tkPrompt, tsChangedFiles, mfNone, '', CodeReviewPrompt, False, True);
   Result[1] := MakeTask('explain-selection', 'Explain selection', 'Explain the selection. No edits.',
@@ -447,6 +463,10 @@ Begin
   Result[10] := MakeTask('user-manual', 'User manual', 'Update Documents/UserManual.md for operators.',
     tmDocument, tkPrompt, tsUserNote, mfNone, 'Documents/UserManual.md',
     UserManualPrompt, False, False);
+  Result[11] := MakeTask('remove-dead-code', 'Remove dead code',
+    'Delete an unreferenced declaration only after a complete reference search.',
+    tmBuild, tkPrompt, tsActiveEditor, mfNone, '', RemoveDeadCodePrompt, False, False);
+  Result[11].Enabled := False;
 End;
 
 Function FindAssistantTask(Const Tasks: TAssistantTaskArray; Const TaskId: String): Integer;
