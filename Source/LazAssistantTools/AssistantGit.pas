@@ -1,6 +1,6 @@
 Unit AssistantGit;
 
-{ Shared direct Git execution for Build-mode inspection, staging and commits. (c) 2026 Michell Computing. }
+{ Shared direct Git execution. Inspect may read; Build may also stage and commit. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -15,8 +15,10 @@ Uses
 Const
   AssistantGitSchema = '{"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":256}},"required":["arguments"],"additionalProperties":false}';
   AssistantGitDescription =
-    'Run Git in the active project directory in Build mode. Supply an argument array starting with status, diff, log, ' +
-    'show, rev-parse, ls-files, add or commit, without git or shell syntax. Stage using ["add","--","path"]. ' +
+    'Run Git in the active project directory. Supply an argument array starting with status, diff, log, ' +
+    'show, rev-parse, ls-files, add or commit, without git or shell syntax. ' +
+    'Inspect may use status, diff, log, show, rev-parse, and ls-files only. Build may also stage and commit. ' +
+    'Stage using ["add","--","path"]. ' +
     'Commit using ["commit","-m","message"]. Put the subject and body in that one message, or pass several -m arguments; ' +
     'Git joins them with a blank line. End with -- and project-relative paths to commit only those files. ' +
     'A package target can stage and commit only that package and Documents/. ' +
@@ -25,6 +27,8 @@ Const
     'Follow explicit commit instructions in the conversation or active plan, including automatic commits after completed work. ' +
     'Do not commit unrelated changes. Output includes exit_code and truncation; only exit_code zero is success.';
 Function WorkingRootHasGitRepository(Const Root: String): Boolean;
+{ True only for the six read commands Inspect may run. Add, commit, and every other command are false. }
+Function AssistantGitInspectReadCommand(Const Command: String): Boolean;
 Procedure ResetAssistantGitTurn;
 Function AssistantGitTurnCommitted: Boolean;
 Function RunAssistantGit(Const ProjectRoot, ArgumentsJSON: String; Out ResultText, ErrorText: String): Boolean;
@@ -36,6 +40,12 @@ Uses
 
 Var
   TurnCommitted: Boolean;
+
+Function AssistantGitInspectReadCommand(Const Command: String): Boolean;
+Begin
+  Result := (Command = 'status') Or (Command = 'diff') Or (Command = 'log') Or
+    (Command = 'show') Or (Command = 'rev-parse') Or (Command = 'ls-files');
+End;
 
 Function WorkingRootHasGitRepository(Const Root: String): Boolean;
 Var

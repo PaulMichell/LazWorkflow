@@ -361,9 +361,15 @@ Begin
       Result := Mode In [amInspect, amBuild];
       Exit;
     End;
+  { Inspect may read the repository. Staging and commits stay on Build. }
+  If Name = 'run_git' Then
+    Begin
+      Result := Mode In [amInspect, amBuild];
+      Exit;
+    End;
   { Build-mode source tools — never Inspect or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'run_compile') Or (Name = 'run_git') Or
+    (Name = 'run_compile') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'add_unit_to_project') Or
@@ -778,7 +784,9 @@ Begin
           Body := Body + ',' + BuildWriteImageToolJson;
       End;
     amInspect:
-      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildSymbolToolsJson;
+      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildSymbolToolsJson +
+        ',{"type":"function","function":{"name":"run_git","description":' +
+        '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
   Else
     Body := '';
   End;
@@ -949,6 +957,11 @@ Begin
         Begin
           Args := TJSONObject(Data).Find('arguments');
           If (Args Is TJSONArray) And (Args.Count > 0) Then Command := Args.Items[0].AsString;
+        End;
+      If (GAssistantToolMode = amInspect) And (Not AssistantGitInspectReadCommand(Command)) Then
+        Begin
+          ErrorText := 'Inspect git allows status, diff, log, show, rev-parse, and ls-files only.';
+          Exit;
         End;
       If (AssistantTarget.Kind=atkPackage) And (Command='add') And (Args Is TJSONArray) Then
         For I := 2 To Args.Count - 1 Do If Not CanStage(Args.Items[I].AsString) Then

@@ -41,7 +41,7 @@ Begin
 End;
 Var W: TWorkspace; B: TAssistantToolBroker; A: TApproval; G: TGuid;
   Run, Reply, Err, Note, PlanPath, Resolved, SelectErr: String;
-  Lines: TStringList; Data: TJSONData; ReplaceCount: Integer; Hook: TProcess;
+  Lines: TStringList; Data: TJSONData; ReplaceCount, CallsBefore: Integer; Hook: TProcess;
 Begin
   CreateGUID(G); W := TWorkspace.Create;
   W.Root := IncludeTrailingPathDelimiter(GetTempDir) + 'assistant-git-' + GUIDToString(G);
@@ -57,9 +57,24 @@ Begin
       Lines.Text := 'requested change'; Lines.SaveToFile(W.Root + '/file with spaces.txt');
       Lines.Text := 'unrelated change'; Lines.SaveToFile(W.Root + '/unrelated.txt');
     Finally Lines.Free; End;
+    Check('inspect read status', AssistantGitInspectReadCommand('status'));
+    Check('inspect read diff', AssistantGitInspectReadCommand('diff'));
+    Check('inspect read log', AssistantGitInspectReadCommand('log'));
+    Check('inspect read show', AssistantGitInspectReadCommand('show'));
+    Check('inspect read rev-parse', AssistantGitInspectReadCommand('rev-parse'));
+    Check('inspect read ls-files', AssistantGitInspectReadCommand('ls-files'));
+    Check('inspect refuses add', Not AssistantGitInspectReadCommand('add'));
+    Check('inspect refuses commit', Not AssistantGitInspectReadCommand('commit'));
+    Check('inspect refuses push', Not AssistantGitInspectReadCommand('push'));
+    Check('description allows inspect reads',
+      Pos('Inspect may use status, diff, log, show, rev-parse, and ls-files only.', AssistantGitDescription) > 0);
+    Check('description is not build-only', Pos('in Build mode', AssistantGitDescription) = 0);
     Run := B.BeginRun(awsReadOnly);
-    Check('Ask hides Git', Pos('lazarus_run_git', B.ToolsJson) = 0);
-    Check('Ask rejects Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err));
+    Check('Ask advertises read Git', Pos('lazarus_run_git', B.ToolsJson) > 0);
+    Check('Ask status works', B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err));
+    Check('Ask rejects commit', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","x"]}', Reply, Err) And
+      (Pos('ls-files only', Err) > 0));
+    Check('Ask rejects push', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["push"]}', Reply, Err));
     Run := B.BeginRun(awsMarkdown);
     Check('Plan hides Git', Pos('lazarus_run_git', B.ToolsJson) = 0);
     Check('Plan rejects commit', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","x"]}', Reply, Err));
@@ -67,7 +82,9 @@ Begin
     Data := GetJSON(B.ToolsJson); Data.Free;
     Check('Build advertises Git', Pos('lazarus_run_git', B.ToolsJson) > 0);
     B.OnApproval := @A.Approve;
-    Check('denied approval never invokes Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err) And (W.Calls = 0));
+    CallsBefore := W.Calls;
+    Check('denied approval never invokes Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err) And
+      (W.Calls = CallsBefore));
     B.OnApproval := Nil;
     Check('status works', B.Execute(Run, 'lazarus_run_git', '{"arguments":["status","--short"]}', Reply, Err));
     Check('status sees unrelated file', Pos('unrelated.txt', Reply) > 0);

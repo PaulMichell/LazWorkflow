@@ -111,6 +111,28 @@ Begin
   Result := '"' + JsonEscapeText(S) + '"';
 End;
 
+Function GitCommandName(Const Arguments: String): String;
+Var
+  Data, Args: TJSONData;
+Begin
+  Result := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Arguments);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Args := TJSONObject(Data).Find('arguments');
+    If (Args Is TJSONArray) And (Args.Count > 0) And (Args.Items[0].JSONType = jtString) Then
+      Result := Args.Items[0].AsString;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Function TAssistantWorkspaceAdapter.IsMarkdownPath(Const Path: String): Boolean;
 Var
   Ext: String;
@@ -952,9 +974,14 @@ Begin
         End;
       If Tool = 'lazarus_run_git' Then
         Begin
-          If (FWriteScope <> awsProject) Or Not FAdapter.CanGit Then
+          If Not FAdapter.CanGit Or (FWriteScope = awsNone) Or (FWriteScope = awsMarkdown) Then
             Begin
               ErrorText := 'Git execution requires Build mode.';
+              Exit;
+            End;
+          If (FWriteScope <> awsProject) And (Not AssistantGitInspectReadCommand(GitCommandName(Arguments))) Then
+            Begin
+              ErrorText := 'Inspect git allows status, diff, log, show, rev-parse, and ls-files only.';
               Exit;
             End;
           If Not Approve(RunId, Tool, '', '', Arguments, ErrorText) Then Exit;
@@ -1208,7 +1235,7 @@ Begin
   If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. Configure it in Settings > Target tests. Cannot supply commands or arguments. Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.","inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"}},"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
-  If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
+  If ((FWriteScope = awsProject) Or (FWriteScope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
     ',"inputSchema":' + AssistantGitSchema + '}';
   Result := Result + ']';
