@@ -3,7 +3,7 @@ Unit AssistantTaskRun;
 { Prepare a task run: collect evidence, or refuse before anything is sent (c) 2026 Michell Computing.
 
   Does not use ProjectAssistantForm and does not start build-work tracking.
-  A format task is not sent. The formatter replaces TryApplyFormat. }
+  A format task is not sent. It formats the editor buffer and does not save. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -18,6 +18,7 @@ Uses
 Type
   TAssistantTaskPreparation = (tpMissing, tpReady, tpFormatted);
   TQueryAssistantTaskHostBusy = Function(Out Reason: String): Boolean;
+  TPostAssistantTaskSystemNote = Procedure(Const NoteText: String);
 
 /// Ready fills Request. Missing sets ErrorText and does not send. Formatted means the host
 /// already applied a format task and nothing should be sent.
@@ -25,15 +26,17 @@ Function PrepareAssistantTaskRun(Const Task: TAssistantTask; Kind: TAssistantTas
   Out Request: TAssistantTaskRequest; Out ErrorText: String): TAssistantTaskPreparation;
 
 Var
-  { The assistant form assigns this. Nil means the runner cannot see a turn or plan run. }
+  { The assistant form assigns these. Nil means the runner cannot see a turn or post a note. }
   QueryAssistantTaskHostBusy: TQueryAssistantTaskHostBusy;
+  PostAssistantTaskSystemNote: TPostAssistantTaskSystemNote;
 
 Implementation
 
 Uses
   Types, Controls, Forms, Dialogs, LazIDEIntf, SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, PackageIntf,
   CompOptsIntf,
-  LazFileUtils, fpjson, jsonparser, AssistantGit, AssistantWorkTarget, AssistantTaskNoteForm;
+  LazFileUtils, fpjson, jsonparser, AssistantGit, AssistantWorkTarget, AssistantTaskNoteForm,
+  AssistantEditorEdits, PascalStyleFormat;
 
 Const
   UnsavedDiffNote = 'Unsaved editor text is not in the diff.';
@@ -469,11 +472,83 @@ Begin
     End;
 End;
 
-{ The format step replaces this. A false result leaves the list open and sends nothing. }
+Function PascalStyleName(Const FileName: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(FileName));
+  Result := (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.lpr') Or (Ext = '.dpr');
+End;
+
+Procedure PostFormatNote(Const RelativePath: String; Changed: Boolean);
+Var
+  Note: String;
+Begin
+  If Changed Then
+    Note := 'Format unit: `' + RelativePath + '` — changed, not saved.'
+  Else
+    Note := 'Format unit: `' + RelativePath + '` — unchanged, not saved.';
+  If Assigned(PostAssistantTaskSystemNote) Then
+    PostAssistantTaskSystemNote(Note);
+End;
+
 Function TryApplyFormat(Out ErrorText: String): Boolean;
+Var
+  Editor: TSourceEditorInterface;
+  Expected, Formatted, Ext: String;
 Begin
   Result := False;
-  ErrorText := 'Formatting the active unit is not available yet.';
+  ErrorText := '';
+  Editor := ActiveEditor;
+  If Not Assigned(Editor) Then
+    Begin
+      ErrorText := 'There is no active editor.';
+      Exit;
+    End;
+  If Editor.FileName = '' Then
+    Begin
+      ErrorText := 'The active editor has no file name.';
+      Exit;
+    End;
+  If Not EditorInsideTarget(Editor) Then
+    Begin
+      ErrorText := 'The active editor is outside the selected package.';
+      Exit;
+    End;
+  Ext := LowerCase(ExtractFileExt(Editor.FileName));
+  If Ext = '.lfm' Then
+    Begin
+      ErrorText := 'Format unit does not format a form file.';
+      Exit;
+    End;
+  If Ext = '.inc' Then
+    Begin
+      ErrorText := 'Format unit does not format an include file.';
+      Exit;
+    End;
+  If Not PascalStyleName(Editor.FileName) Then
+    Begin
+      ErrorText := 'Format unit accepts .pas, .pp, .lpr, and .dpr only.';
+      Exit;
+    End;
+  { The open buffer, not the file on disk. }
+  Expected := Editor.SourceText;
+  Formatted := FormatPascalSource(Expected);
+  If Not TokenFingerprintsEqual(Expected, Formatted) Then
+    Begin
+      ErrorText := 'The formatter would change tokens. The buffer was not changed.';
+      Exit;
+    End;
+  If Formatted = Expected Then
+    Begin
+      PostFormatNote(ShortPath(Editor.FileName), False);
+      Result := True;
+      Exit;
+    End;
+  If Not ApplyAssistantEditorText(Editor, Expected, Formatted, ErrorText) Then
+    Exit;
+  PostFormatNote(ShortPath(Editor.FileName), True);
+  Result := True;
 End;
 
 Function FillReady(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind; Const Expanded, Detail: String;

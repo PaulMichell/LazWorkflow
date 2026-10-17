@@ -8,7 +8,7 @@
     <CompilerOptions>
       <Version Value="11"/>
       <SearchPaths>
-        <OtherUnitFiles Value="../Source/LazAssistantTools"/>
+        <OtherUnitFiles Value="../Source/LazAssistantTools;../Source/Tools"/>
         <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazAssistantTools"/>
       </SearchPaths>
       <CodeGeneration>
@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live styled Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="81">
+    <Files Count="83">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -345,6 +345,14 @@
         <Filename Value="../Source/LazAssistantTools/AssistantTaskRun.pas"/>
         <UnitName Value="AssistantTaskRun"/>
       </Item81>
+      <Item82>
+        <Filename Value="../Source/Tools/PascalStyleTokens.pas"/>
+        <UnitName Value="PascalStyleTokens"/>
+      </Item82>
+      <Item83>
+        <Filename Value="../Source/Tools/PascalStyleFormat.pas"/>
+        <UnitName Value="PascalStyleFormat"/>
+      </Item83>
     </Files>
     <RequiredPkgs Count="6">
       <Item1>

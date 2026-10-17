@@ -8774,8 +8774,83 @@ Begin
     End;
 End;
 
+Procedure PostAssistantFormatNote(Const NoteText: String);
+Var
+  Turn: TConversationTurn;
+  Entry: TConversationIndexEntry;
+  Trace: TAssistantTrace;
+  Host: TProjectAssistantForm;
+  Form: TCustomForm;
+  I: Integer;
+  Stored: Boolean;
+Begin
+  If Trim(NoteText) = '' Then
+    Exit;
+  Host := Nil;
+  For I := Screen.CustomFormCount - 1 DownTo 0 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) Then
+        Begin
+          Host := TProjectAssistantForm(Form);
+          Break;
+        End;
+    End;
+  Stored := False;
+  If Assigned(Host) Then
+    Host.EnsureConversationStore;
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+    Begin
+      Turn.Id := NewConversationTurnId;
+      If Assigned(Host) Then
+        Turn.Mode := AssistantModeToStr(Host.ActiveMode)
+      Else
+        Turn.Mode := AssistantModeToStr(amInspect);
+      Turn.Prompt := '';
+      Turn.Thinking := '';
+      Turn.Response := NoteText;
+      Turn.CreatedAt := IsoNowUtc;
+      Turn.StartedAt := Turn.CreatedAt;
+      Turn.FinishedAt := Turn.CreatedAt;
+      Turn.DurationMs := 0;
+      Turn.ThinkingMs := 0;
+      Turn.Model := '';
+      Turn.Skill := '';
+      Turn.TokenEstimate := Length(NoteText) Div 4;
+      Turn.ErrorText := '';
+      Turn.PlanFile := '';
+      Turn.TodoId := '';
+      Turn.EventsFile := '';
+      Turn.MessagesJson := '[]';
+      Turn.AttachmentsJson := '';
+      Trace := TAssistantTrace.Create;
+      Try
+        Trace.AddNote(NoteText);
+        Turn.TraceJson := Trace.SaveToJson;
+      Finally
+        Trace.Free;
+      End;
+      Stored := ProjectAssistantConversation.AppendTurn(Turn, Entry);
+    End;
+  If Not Assigned(Host) Then
+    Exit;
+  If Stored Then
+    Begin
+      If Not Host.FSending Then
+        Begin
+          Host.FViewingLive := False;
+          Host.FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
+        End;
+      Host.RefreshConversationList;
+      Host.RefreshChatDisplay(True, True);
+    End
+  Else
+    Host.SetCurrentSystemNote(NoteText);
+End;
+
 Initialization
 
 QueryAssistantTaskHostBusy := @AssistantHostTurnOrPlanActive;
+PostAssistantTaskSystemNote := @PostAssistantFormatNote;
 
 End.
