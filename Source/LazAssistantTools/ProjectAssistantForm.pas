@@ -8707,32 +8707,36 @@ End;
 Procedure ApplyPreparedTaskRequest(Form: TProjectAssistantForm; Const Request: TAssistantTaskRequest);
 Var
   TaskMode: TAssistantMode;
+  Started: Boolean;
 Begin
-  { Format does not call the model. The runner applies that kind itself. }
+  { Format does not call the model. The runner applies that kind itself.
+    This is the existing turn path: no second send, no CompleteOnce, and no active-plan write. }
   If (Request.Kind = trkNone) Or (Request.Task.Kind = tkFormat) Then
     Exit;
   TaskMode := AssistantModeForTask(Request.Mode);
   If Request.Kind = trkInsert Then
     Begin
-      Form.SelectMode(TaskMode);
       If Not Assigned(Form.InputMemo) Then
         Exit;
       If (Trim(Form.InputMemo.Text) <> '') And
         (MessageDlg('Replace the composer text with this task?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
         Exit;
+      Form.SelectMode(TaskMode);
       Form.InputMemo.Text := Request.ApiText;
       Exit;
     End;
+  { A plan run is already refused. Do not archive that run or send into it. }
   If Form.FSending Or Form.FPlanAgentRunning Then
     Exit;
   If Request.FreshConversation Then
     Form.StartNewChat(False, False);
   If Request.DocumentPath <> '' Then
     RememberDocumentRelativePath(Request.DocumentPath);
+  Form.ClearBuildWorkTracking;
   Form.ForceModeAndLock(TaskMode);
   Form.ShowChatSurfaceKeepMode;
-  Form.SubmitUserTextEx(Request.DisplayLabel, Request.ApiText, True);
-  If Not Form.FSending Then
+  Started := Form.SubmitUserTextEx(Request.DisplayLabel, Request.ApiText, True);
+  If Not Started Then
     Form.UnlockModeAfterSend;
 End;
 
