@@ -4,7 +4,11 @@ Unit AssistantTasks;
 
   No forms and no IDE units. The section is assistant_tasks, not a field of TAssistantConfig.
   A missing section returns the catalog and is not written. A bad file keeps the catalog in memory,
-  sets an error, and is not replaced. Prompt sentences are placeholders until the catalog prompts are written. }
+  sets an error, and is not replaced. Format unit has no prompt.
+
+  Size note: exceeds the 1000 line preference. The catalog, JSON section, and expansion are one
+  settings unit. Splitting the prompt text out would hide the catalog from its loader.
+  Reviewed 2026-10: no hidden sibling service identified. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -272,9 +276,126 @@ Begin
     End;
 End;
 
-Function PlaceholderPrompt(Const TaskId: String): String;
+Function StayInTask: String;
 Begin
-  Result := 'Placeholder prompt for ' + TaskId + '.';
+  Result := 'Do not leave this mode. Do not edit the active plan. Do not change a Status line. Do not widen the scope.';
+End;
+
+Function BuildClosing: String;
+Begin
+  Result := 'Make the smallest change that does the job.' + LineEnding +
+    'Do not reformat the file.' + LineEnding +
+    'Do not delete unused code.' + LineEnding +
+    'Update the matching .lfm when a form change needs it.' + LineEnding +
+    'run_compile after edits.' + LineEnding +
+    'The visible reply is the cause and what changed.';
+End;
+
+Function CodeReviewPrompt: String;
+Begin
+  Result := 'Review only the attached saved diff. Do not edit.' + LineEnding +
+    'Do not claim a truncated region was reviewed. Name the omitted paths.' + LineEnding +
+    'Do not treat unsaved editor text as part of the diff.' + LineEnding +
+    'Group findings by severity. No per-line essays.' + LineEnding +
+    'If there is nothing to report, say so in one line.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Saved status:' + LineEnding + '{git_status}' + LineEnding + LineEnding +
+    'Saved diff:' + LineEnding + '{git_diff}';
+End;
+
+Function ExplainSelectionPrompt: String;
+Begin
+  Result := 'Explain the selection to a maintainer. Do not edit.' + LineEnding +
+    'Do not propose a rewrite unless asked.' + LineEnding +
+    'Explain only the selection. The file and cursor locate it; they are not a wider task.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}' + LineEnding +
+    'Cursor: {cursor}' + LineEnding + LineEnding +
+    '{selection}';
+End;
+
+Function BugFixPrompt: String;
+Begin
+  Result := 'The note is the bug. Do not invent a second bug.' + LineEnding +
+    'If the note does not match the active file, read before editing and say which file you changed.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}' + LineEnding + LineEnding +
+    '{user_note}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
+Function FixCompilerErrorsPrompt: String;
+Begin
+  Result := 'Fix error, fatal, and panic lines only.' + LineEnding +
+    'Do not clean warnings, hints, or style in this turn.' + LineEnding +
+    'Stop when run_compile reports no errors, or when a fix would be a guess. Name any error left.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    '{messages}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
+Function FixCompilerHintsPrompt: String;
+Begin
+  Result := 'The host has already refused this task if errors remain.' + LineEnding +
+    'Fix hint and note lines that are real code issues.' + LineEnding +
+    'Do not delete a method because a hint says it looks unused.' + LineEnding +
+    'Do not start an error fix in the same turn.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    '{messages}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
+Function SimplifyCodePrompt: String;
+Begin
+  Result := 'Keep the behaviour. Prefer the active selection when one was attached. Otherwise use the active unit.' + LineEnding +
+    'Do not optimise. Do not format.' + LineEnding +
+    'If the selection is (none), there is no attached selection.' + LineEnding +
+    'If the code is already direct, say so and do not edit.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}' + LineEnding + LineEnding +
+    'Selection:' + LineEnding + '{selection}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
+Function ReportDeadCodePrompt: String;
+Begin
+  Result := 'Report only. Do not edit.' + LineEnding +
+    'A text search is not a reference search.' + LineEnding +
+    'Do not recommend deletion of published methods, .lfm event handlers, overrides, ' +
+    'initialization or finalization references, or registered classes.' + LineEnding +
+    'List candidates separately from confident findings.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}';
+End;
+
+Function OptimiseSelectionPrompt: String;
+Begin
+  Result := 'The selection is the only edit region.' + LineEnding +
+    'Name the cost before editing: allocation in a loop, repeated string growth, or repeated work.' + LineEnding +
+    'If there is no such cost, do not edit.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    '{selection}' + LineEnding + LineEnding +
+    BuildClosing;
+End;
+
+Function TechnicalDocumentationPrompt: String;
+Begin
+  Result := 'Write or update Documents/Technical.md for a maintainer.' + LineEnding +
+    'Do not edit source. Do not use the plan format or Status lines.' + LineEnding +
+    'The visible reply is a short summary.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    'Active file: {active_file}';
+End;
+
+Function UserManualPrompt: String;
+Begin
+  Result := 'Write or update Documents/UserManual.md for an operator.' + LineEnding +
+    'The note is the topic.' + LineEnding +
+    'No implementation detail unless it changes what the user does.' + LineEnding +
+    'Do not edit source. Do not use the plan format or Status lines.' + LineEnding +
+    'The visible reply is a short summary.' + LineEnding +
+    StayInTask + LineEnding + LineEnding +
+    '{user_note}';
 End;
 
 Function MakeTask(Const TaskId, Title, Summary: String; Mode: TAssistantTaskMode; Kind: TAssistantTaskKind;
@@ -301,31 +422,31 @@ Function CopyAssistantTaskCatalog: TAssistantTaskArray;
 Begin
   SetLength(Result, 11);
   Result[0] := MakeTask('code-review', 'Code review', 'Review the saved diff. No edits.',
-    tmInspect, tkPrompt, tsChangedFiles, mfNone, '', PlaceholderPrompt('code-review'), False, True);
+    tmInspect, tkPrompt, tsChangedFiles, mfNone, '', CodeReviewPrompt, False, True);
   Result[1] := MakeTask('explain-selection', 'Explain selection', 'Explain the selection. No edits.',
-    tmInspect, tkPrompt, tsSelection, mfNone, '', PlaceholderPrompt('explain-selection'), False, False);
+    tmInspect, tkPrompt, tsSelection, mfNone, '', ExplainSelectionPrompt, False, False);
   Result[2] := MakeTask('bug-fix', 'Bug fix', 'Fix the bug described in the note.',
-    tmBuild, tkPrompt, tsUserNote, mfNone, '', PlaceholderPrompt('bug-fix'), False, False);
+    tmBuild, tkPrompt, tsUserNote, mfNone, '', BugFixPrompt, False, False);
   Result[3] := MakeTask('fix-compiler-errors', 'Fix compiler errors', 'Fix compiler errors only.',
-    tmBuild, tkPrompt, tsMessages, mfErrors, '', PlaceholderPrompt('fix-compiler-errors'), True, False);
+    tmBuild, tkPrompt, tsMessages, mfErrors, '', FixCompilerErrorsPrompt, True, False);
   Result[4] := MakeTask('fix-compiler-hints', 'Fix compiler hints', 'Fix hints when the compile has no errors.',
-    tmBuild, tkPrompt, tsMessages, mfHints, '', PlaceholderPrompt('fix-compiler-hints'), True, False);
+    tmBuild, tkPrompt, tsMessages, mfHints, '', FixCompilerHintsPrompt, True, False);
   Result[5] := MakeTask('simplify-code', 'Simplify code', 'Simplify the active unit without changing behaviour.',
-    tmBuild, tkPrompt, tsActiveEditor, mfNone, '', PlaceholderPrompt('simplify-code'), False, False);
+    tmBuild, tkPrompt, tsActiveEditor, mfNone, '', SimplifyCodePrompt, False, False);
   Result[6] := MakeTask('report-dead-code', 'Report dead code', 'Report unused-looking declarations. No edits.',
-    tmInspect, tkPrompt, tsActiveEditor, mfNone, '', PlaceholderPrompt('report-dead-code'), False, False);
+    tmInspect, tkPrompt, tsActiveEditor, mfNone, '', ReportDeadCodePrompt, False, False);
   Result[7] := MakeTask('optimise-selection', 'Optimise selection', 'Optimise the selection when a cost is clear.',
-    tmBuild, tkPrompt, tsSelection, mfNone, '', PlaceholderPrompt('optimise-selection'), False, False);
+    tmBuild, tkPrompt, tsSelection, mfNone, '', OptimiseSelectionPrompt, False, False);
   { Format does not call the model. Mode stays a skill-grid word and is not sent. }
   Result[8] := MakeTask('format-unit', 'Format unit', 'Format the active Pascal unit. No model call.',
     tmInspect, tkFormat, tsActiveEditor, mfNone, '', '', False, False);
   Result[9] := MakeTask('technical-documentation', 'Technical documentation',
     'Update Documents/Technical.md for maintainers.',
     tmDocument, tkPrompt, tsActiveEditor, mfNone, 'Documents/Technical.md',
-    PlaceholderPrompt('technical-documentation'), False, False);
+    TechnicalDocumentationPrompt, False, False);
   Result[10] := MakeTask('user-manual', 'User manual', 'Update Documents/UserManual.md for operators.',
     tmDocument, tkPrompt, tsUserNote, mfNone, 'Documents/UserManual.md',
-    PlaceholderPrompt('user-manual'), False, False);
+    UserManualPrompt, False, False);
 End;
 
 Function FindAssistantTask(Const Tasks: TAssistantTaskArray; Const TaskId: String): Integer;

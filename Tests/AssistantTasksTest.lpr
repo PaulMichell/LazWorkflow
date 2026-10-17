@@ -80,6 +80,103 @@ Begin
   Result := FindAssistantTask(Tasks, TaskId);
 End;
 
+Procedure CheckHas(Const Task: TAssistantTask; Const Needle: String);
+Begin
+  Check(Task.Id + ' has ' + Needle, Pos(Needle, Task.Prompt) > 0);
+End;
+
+Procedure CheckLacks(Const Task: TAssistantTask; Const Needle: String);
+Begin
+  Check(Task.Id + ' lacks ' + Needle, Pos(Needle, Task.Prompt) = 0);
+End;
+
+Procedure CheckPrompts(Const Tasks: TAssistantTaskArray);
+Const
+  BuildIds: Array[0..4] Of String = (
+    'bug-fix', 'fix-compiler-errors', 'fix-compiler-hints', 'simplify-code', 'optimise-selection');
+  InspectIds: Array[0..2] Of String = ('code-review', 'explain-selection', 'report-dead-code');
+  DocumentIds: Array[0..1] Of String = ('technical-documentation', 'user-manual');
+  BuildClosing = 'Make the smallest change that does the job.' + LineEnding +
+    'Do not reformat the file.' + LineEnding +
+    'Do not delete unused code.' + LineEnding +
+    'Update the matching .lfm when a form change needs it.' + LineEnding +
+    'run_compile after edits.' + LineEnding +
+    'The visible reply is the cause and what changed.';
+Var
+  I: Integer;
+  Task: TAssistantTask;
+Begin
+  Task := Tasks[CatalogIndex(Tasks, 'format-unit')];
+  Check('format prompt empty', Task.Prompt = '');
+  For I := 0 To High(BuildIds) Do
+    Begin
+      Task := Tasks[CatalogIndex(Tasks, BuildIds[I])];
+      Check(BuildIds[I] + ' closing', Pos(BuildClosing, Task.Prompt) > 0);
+      CheckLacks(Task, 'set_active_plan');
+      CheckLacks(Task, 'switch to');
+    End;
+  For I := 0 To High(InspectIds) Do
+    Begin
+      Task := Tasks[CatalogIndex(Tasks, InspectIds[I])];
+      CheckLacks(Task, 'run_compile');
+      CheckLacks(Task, 'replace_in_file');
+      CheckLacks(Task, 'write_file');
+      CheckLacks(Task, 'write_markdown');
+      CheckLacks(Task, 'set_active_plan');
+    End;
+  For I := 0 To High(DocumentIds) Do
+    Begin
+      Task := Tasks[CatalogIndex(Tasks, DocumentIds[I])];
+      CheckLacks(Task, 'run_compile');
+      CheckLacks(Task, 'replace_in_file');
+      CheckLacks(Task, 'write_file');
+      CheckLacks(Task, 'set_active_plan');
+      CheckHas(Task, 'Do not edit source.');
+      CheckHas(Task, 'The visible reply is a short summary.');
+      CheckHas(Task, 'Do not use the plan format or Status lines.');
+    End;
+  For I := 0 To High(Tasks) Do
+    Begin
+      If Tasks[I].Kind = tkFormat Then
+        Continue;
+      CheckLacks(Tasks[I], 'Placeholder prompt');
+      CheckHas(Tasks[I], 'Do not leave this mode.');
+      CheckHas(Tasks[I], 'Do not edit the active plan.');
+      CheckHas(Tasks[I], 'Do not change a Status line.');
+      CheckHas(Tasks[I], 'Do not widen the scope.');
+    End;
+  Task := Tasks[CatalogIndex(Tasks, 'code-review')];
+  CheckHas(Task, '{git_diff}');
+  CheckHas(Task, '{git_status}');
+  CheckHas(Task, 'Do not claim a truncated region was reviewed.');
+  CheckHas(Task, 'Do not treat unsaved editor text as part of the diff.');
+  Task := Tasks[CatalogIndex(Tasks, 'explain-selection')];
+  CheckHas(Task, '{selection}');
+  CheckHas(Task, 'Do not propose a rewrite unless asked.');
+  Task := Tasks[CatalogIndex(Tasks, 'bug-fix')];
+  CheckHas(Task, '{user_note}');
+  CheckHas(Task, 'Do not invent a second bug.');
+  Task := Tasks[CatalogIndex(Tasks, 'fix-compiler-errors')];
+  CheckHas(Task, '{messages}');
+  CheckHas(Task, 'Fix error, fatal, and panic lines only.');
+  Task := Tasks[CatalogIndex(Tasks, 'fix-compiler-hints')];
+  CheckHas(Task, 'Do not delete a method because a hint says it looks unused.');
+  CheckHas(Task, 'Do not start an error fix in the same turn.');
+  Task := Tasks[CatalogIndex(Tasks, 'simplify-code')];
+  CheckHas(Task, '{selection}');
+  CheckHas(Task, 'Do not optimise.');
+  Task := Tasks[CatalogIndex(Tasks, 'report-dead-code')];
+  CheckHas(Task, 'A text search is not a reference search.');
+  CheckLacks(Task, 'find_references');
+  Task := Tasks[CatalogIndex(Tasks, 'optimise-selection')];
+  CheckHas(Task, 'The selection is the only edit region.');
+  Task := Tasks[CatalogIndex(Tasks, 'technical-documentation')];
+  CheckHas(Task, 'Documents/Technical.md');
+  Task := Tasks[CatalogIndex(Tasks, 'user-manual')];
+  CheckHas(Task, '{user_note}');
+  CheckHas(Task, 'Documents/UserManual.md');
+End;
+
 Procedure CheckCatalog;
 Var
   Tasks: TAssistantTaskArray;
@@ -141,6 +238,7 @@ Begin
     End;
   Check('technical path', Tasks[9].DocumentPath = 'Documents/Technical.md');
   Check('manual path', Tasks[10].DocumentPath = 'Documents/UserManual.md');
+  CheckPrompts(Tasks);
   For I := 0 To High(Tasks) Do
     For J := I + 1 To High(Tasks) Do
       Check('unique ' + Tasks[I].Id, Not SameText(Tasks[I].Id, Tasks[J].Id));
