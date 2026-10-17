@@ -47,6 +47,8 @@ Type
     PreviewAttachmentAction: TAction;
     SendAction: TAction;
     SendButton: TButton;
+    SettingsButton: TButton;
+    TasksButton: TButton;
     StopAction: TAction;
     SettingsAction: TAction;
     StopButton: TButton;
@@ -91,7 +93,6 @@ Type
     NewConversationButton: TButton;
     NewPlanButton: TButton;
     RunPlanButton: TButton;
-    SettingsButton: TButton;
     StatusFooter: TStatusFooterFrame;
     InputPanel: TPanel;
     AttachmentStrip: TPanel;

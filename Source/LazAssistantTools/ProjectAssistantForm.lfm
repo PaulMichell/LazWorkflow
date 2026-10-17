@@ -87,13 +87,21 @@ object ProjectAssistantForm: TProjectAssistantForm
         Action = RunPlanAction
         TabOrder = 4
       end
-      object SettingsButton: TButton
+      object TasksButton: TButton
         Left = 444
         Height = 28
         Top = 4
         Width = 84
-        Action = SettingsAction
+        Caption = 'Tasks…'
         TabOrder = 5
+      end
+      object SettingsButton: TButton
+        Left = 532
+        Height = 28
+        Top = 4
+        Width = 84
+        Action = SettingsAction
+        TabOrder = 6
       end
     end
   end
