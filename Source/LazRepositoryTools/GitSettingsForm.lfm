@@ -1,11 +1,11 @@
 object GitSettingsForm: TGitSettingsForm
   Left = 280
-  Height = 541
+  Height = 581
   Top = 160
   Width = 520
   BorderStyle = bsDialog
   Caption = 'Repository Settings'
-  ClientHeight = 541
+  ClientHeight = 581
   ClientWidth = 520
   Position = poScreenCenter
   LCLVersion = '4.99.0.0'
@@ -13,14 +13,14 @@ object GitSettingsForm: TGitSettingsForm
   OnCreate = FormCreate
   object ScrollBox: TScrollBox
     Left = 0
-    Height = 492
+    Height = 532
     Top = 0
     Width = 520
     HorzScrollBar.Page = 284
-    VertScrollBar.Page = 485
+    VertScrollBar.Page = 525
     Align = alClient
     BorderStyle = bsNone
-    ClientHeight = 492
+    ClientHeight = 532
     ClientWidth = 520
     TabOrder = 0
     object IdentityGroup: TGroupBox
@@ -98,12 +98,12 @@ object GitSettingsForm: TGitSettingsForm
     end
     object AppGroup: TGroupBox
       Left = 15
-      Height = 190
+      Height = 230
       Top = 295
       Width = 496
       Anchors = [akTop, akLeft, akRight]
       Caption = 'Manage Repository window'
-      ClientHeight = 163
+      ClientHeight = 203
       ClientWidth = 492
       TabOrder = 2
       object AutoRefreshCheck: TCheckBox
@@ -195,11 +195,31 @@ object GitSettingsForm: TGitSettingsForm
         Caption = 'points'
         ParentColor = False
       end
+      object RecentCountLabel: TLabel
+        Left = 15
+        Height = 18
+        Top = 163
+        Width = 140
+        Caption = 'Open Recent count:'
+        ParentColor = False
+      end
+      object RecentCountSpin: TSpinEdit
+        Left = 160
+        Height = 32
+        Top = 158
+        Width = 80
+        Hint = 'How many repository paths Repository - Open Recent shows. The default is 5.'
+        MaxValue = 30
+        MinValue = 1
+        ShowHint = True
+        TabOrder = 5
+        Value = 5
+      end
     end
     inline SpellFrame: TSpellCheckerSettingsFrame
       Left = 12
       Height = 248
-      Top = 495
+      Top = 535
       Width = 496
       Anchors = [akTop, akLeft, akRight]
       ClientHeight = 210
@@ -210,7 +230,7 @@ object GitSettingsForm: TGitSettingsForm
   object ButtonPanel: TButtonPanel
     Left = 6
     Height = 37
-    Top = 498
+    Top = 538
     Width = 508
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True

@@ -29,7 +29,7 @@ Function WriteWorkflowSection(Const SectionName: String; Section: TJSONObject; O
 Implementation
 
 Uses
-  Classes, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  Classes, jsonparser, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 Var
   SettingsDirectory: String;

@@ -22,7 +22,7 @@ Var
 Implementation
 
 Uses
-  Dialogs, WorkflowLog, ManageRepositoryForm, GitService, GitConfig,
+  Dialogs, LazFileUtils, WorkflowLog, ManageRepositoryForm, GitService, GitConfig,
   GitSettingsForm, GitInitForm, GitCloneForm, GitJobRunner, GitPathUtils, WorkflowSettings;
 
 Type
@@ -30,6 +30,8 @@ Type
   Public
     Function ProjectOpened(Sender: TObject; AProject: TLazProject): TModalResult;
     Function ProjectClose(Sender: TObject; AProject: TLazProject): TModalResult;
+    Procedure RepositoryMenuShow(Sender: TObject);
+    Procedure OpenRecentClicked(Sender: TObject);
   End;
 
   { Hosts OnFinished for IDE-level clone/init jobs (no form required). }
@@ -46,6 +48,60 @@ Var
   CmdRepoSettings: TIDECommand;
   GitManagerIDEHooks: TGitManagerIDEHooks;
   GitIdeJobHost: TGitIdeJobHost;
+  RepoMenuSection: TIDEMenuSection;
+  RepoOpenRecentMenu: TIDEMenuSection;
+
+Function MenuCaptionFromPath(Const Path: String): String;
+Begin
+  Result := StringReplace(Path, '&', '&&', [rfReplaceAll]);
+End;
+
+Procedure RebuildOpenRecentMenu;
+Var
+  Paths: TStringList;
+  Index, Needed: Integer;
+  Item: TIDEMenuItem;
+Begin
+  If Not Assigned(RepoOpenRecentMenu) Or Not Assigned(GitManagerIDEHooks) Then Exit;
+  Paths := TStringList.Create;
+  Try
+    If Assigned(GitManagerConfig) Then
+      GitManagerConfig.CopyRecentPaths(Paths);
+    Needed := Paths.Count;
+    If Needed = 0 Then Needed := 1;
+    While RepoOpenRecentMenu.Count < Needed Do
+      RegisterIDEMenuCommand(RepoOpenRecentMenu, 'RepoRecent' + IntToStr(RepoOpenRecentMenu.Count), '');
+    While RepoOpenRecentMenu.Count > Needed Do
+      RepoOpenRecentMenu.Items[RepoOpenRecentMenu.Count - 1].Free;
+    If Paths.Count = 0 Then
+      Begin
+        Item := RepoOpenRecentMenu.Items[0];
+        Item.Caption := '(No recent repositories)';
+        Item.Hint := '';
+        Item.Enabled := False;
+        Item.OnClick := Nil;
+      End
+    Else
+      For Index := 0 To Paths.Count - 1 Do
+        Begin
+          Item := RepoOpenRecentMenu.Items[Index];
+          Item.Caption := MenuCaptionFromPath(Paths[Index]);
+          Item.Hint := Paths[Index];
+          Item.Enabled := True;
+          Item.OnClick := @GitManagerIDEHooks.OpenRecentClicked;
+        End;
+    RepoOpenRecentMenu.Enabled := True;
+  Finally
+    Paths.Free;
+  End;
+End;
+
+Procedure RememberOpenedRepository(Const RepoPath: String);
+Begin
+  If Assigned(GitManagerConfig) Then
+    GitManagerConfig.RememberRepository(RepoPath);
+  RebuildOpenRecentMenu;
+End;
 
 Function CurrentProjectHasRepository: Boolean;
 Var
@@ -92,6 +148,7 @@ Begin
           Begin
             GitClient.RepoPath := RepoPath;
             WorkflowLogger.Info('GitManager', 'Project opened – repository: ' + RepoPath);
+            RememberOpenedRepository(RepoPath);
           End
         Else
           Begin
@@ -136,6 +193,7 @@ Begin
   Try
     If RepoPath = '' Then
       Exit;
+    RememberOpenedRepository(RepoPath);
     If Assigned(GitClient) Then
       GitClient.RepoPath := RepoPath;
     If Assigned(IDEWindowCreators) And Assigned(ManageRepositoryWindowCreator) Then
@@ -160,13 +218,16 @@ Begin
     If Not CurrentProjectHasRepository Then
       Begin
         MessageDlg('No Git repository found for the current project.' + LineEnding +
-          'Use Initialise Repository, Clone Repository or Open Repository.', mtInformation, [mbOK], 0);
+          'Use Initialise Repository, Clone Repository, Open Repository or Open Recent.',
+          mtInformation, [mbOK], 0);
         UpdateRepositoryMenuState;
         Exit;
       End;
     If Not Assigned(IDEWindowCreators) Or Not Assigned(ManageRepositoryWindowCreator) Then Exit;
     IDEWindowCreators.ShowForm(ManageRepositoryWindowCreator.FormName, True);
     RefreshOpenManageRepositoryForms;
+    If Assigned(GitClient) And (GitClient.RepoPath <> '') Then
+      RememberOpenedRepository(GitClient.RepoPath);
   Except
     On E: Exception Do
       Begin
@@ -235,6 +296,7 @@ Begin
       GitClient.RepoPath := RepoPath;
       UpdateRepositoryMenuState;
       ShowManageRepository(Sender);
+      RememberOpenedRepository(RepoPath);
       Exit;
     End;
 
@@ -246,6 +308,7 @@ Begin
           UpdateRepositoryMenuState;
           ShowManageRepository(Sender);
           RefreshOpenManageRepositoryForms;
+          RememberOpenedRepository(ChosenPath);
         End
       Else
         MessageDlg('Failed to initialise repository: ' + GitClient.LastError, mtError, [mbOK], 0);
@@ -289,6 +352,7 @@ Begin
             UpdateRepositoryMenuState;
             If CurrentProjectHasRepository Then
               ShowManageRepository(Sender);
+            RememberOpenedRepository(Target);
           End
         Else
           MessageDlg('Clone failed: ' + GitClient.LastError, mtError, [mbOK], 0);
@@ -328,6 +392,7 @@ Begin
           UpdateRepositoryMenuState;
           ShowManageRepository(Nil);
           RefreshOpenManageRepositoryForms;
+          RememberOpenedRepository(Job.TargetDir);
         End
       Else
         MessageDlg('Failed to initialise repository: ' + Job.ErrorText, mtError, [mbOK], 0);
@@ -338,6 +403,7 @@ Begin
           UpdateRepositoryMenuState;
           If CurrentProjectHasRepository Then
             ShowManageRepository(Nil);
+          RememberOpenedRepository(Job.TargetDir);
         End
       Else
         MessageDlg('Clone failed: ' + Job.ErrorText, mtError, [mbOK], 0);
@@ -346,10 +412,47 @@ Begin
   End;
 End;
 
+Procedure TGitManagerIDEHooks.RepositoryMenuShow(Sender: TObject);
+Begin
+  If Not Assigned(Sender) Then Exit;
+  RebuildOpenRecentMenu;
+End;
+
+Procedure TGitManagerIDEHooks.OpenRecentClicked(Sender: TObject);
+Var
+  Path, RepoPath: String;
+Begin
+  If Not (Sender Is TIDEMenuItem) Then Exit;
+  Path := Trim(TIDEMenuItem(Sender).Hint);
+  If Path = '' Then Exit;
+  If Not DirectoryExistsUTF8(Path) Then
+    Begin
+      MessageDlg('The repository folder no longer exists:' + LineEnding + Path,
+        mtInformation, [mbOK], 0);
+      If Assigned(GitManagerConfig) Then GitManagerConfig.ForgetRepository(Path);
+      RebuildOpenRecentMenu;
+      Exit;
+    End;
+  If Not Assigned(GitClient) Then Exit;
+  RepoPath := GitClient.DetectRepository(Path);
+  If RepoPath = '' Then
+    Begin
+      MessageDlg('No Git repository found in or above:' + LineEnding + Path,
+        mtInformation, [mbOK], 0);
+      If Assigned(GitManagerConfig) Then GitManagerConfig.ForgetRepository(Path);
+      RebuildOpenRecentMenu;
+      Exit;
+    End;
+  If (CompareFilenames(Path, RepoPath) <> 0) And Assigned(GitManagerConfig) Then
+    GitManagerConfig.ForgetRepository(Path);
+  ShowManageRepositoryAt(RepoPath);
+End;
+
 Procedure DoRepositorySettings(Sender: TObject);
 Begin
   ShowGitSettingsForm;
   ApplyRepositoryConfigToOpenForms;
+  RebuildOpenRecentMenu;
 End;
 
 Procedure CreateManageRepositoryForm(Sender: TObject; AFormName: String;
@@ -416,7 +519,7 @@ Begin
     CmdRepoSettings := RegisterIDECommand(Cat, 'RepoSettings', 'Repository Settings', Key, Nil, @DoRepositorySettings);
 
     { Top-level Repository menu, placed immediately after Run.
-      Three sections: Manage; Initialise / Clone / Open; Settings. }
+      Three sections: Manage; Initialise / Clone / Open / Open Recent; Settings. }
     RepoMenu := RegisterIDESubMenu(mnuMain, 'Repository', 'Repository');
     If Assigned(mnuMain) And Assigned(mnuRun) And Assigned(RepoMenu) Then
       Begin
@@ -429,6 +532,11 @@ Begin
     RegisterIDEMenuCommand(SetupSec, 'RepoInitialise', 'Initialise Repository', Nil, Nil, CmdRepoInit);
     RegisterIDEMenuCommand(SetupSec, 'RepoClone', 'Clone Repository', Nil, Nil, CmdRepoClone);
     RegisterIDEMenuCommand(SetupSec, 'RepoOpen', 'Open Repository...', Nil, Nil, CmdRepoOpen);
+    RepoOpenRecentMenu := RegisterIDESubMenu(SetupSec, 'RepoOpenRecent', 'Open Recent');
+    RepoMenuSection := RepoMenu;
+    If Assigned(GitManagerIDEHooks) Then
+      RepoMenu.AddHandlerOnShow(@GitManagerIDEHooks.RepositoryMenuShow);
+    RebuildOpenRecentMenu;
     SetSec := RegisterIDEMenuSection(RepoMenu, 'RepoSettingsCmds');
     RegisterIDEMenuCommand(SetSec, 'RepoSettings', 'Settings...', Nil, Nil, CmdRepoSettings);
 
@@ -460,6 +568,8 @@ GitIdeJobHost := TGitIdeJobHost.Create;
 Finalization
 
 Try
+  If Assigned(RepoMenuSection) And Assigned(GitManagerIDEHooks) Then
+    RepoMenuSection.RemoveHandlerOnShow(@GitManagerIDEHooks.RepositoryMenuShow);
   If Assigned(LazarusIDE) And Assigned(GitManagerIDEHooks) Then
     Begin
       LazarusIDE.RemoveHandlerOnProjectOpened(@GitManagerIDEHooks.ProjectOpened);

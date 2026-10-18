@@ -35,6 +35,8 @@ Type
     GraphFontSizeLabel: TLabel;
     GraphFontSizeSpin: TSpinEdit;
     GraphFontPointsLabel: TLabel;
+    RecentCountLabel: TLabel;
+    RecentCountSpin: TSpinEdit;
     SpellFrame: TSpellCheckerSettingsFrame;
     ButtonPanel: TButtonPanel;
     Procedure AutoRefreshCheckChange(Sender: TObject);
@@ -88,11 +90,12 @@ Begin
       Begin
         If Form.SaveToConfig Then
           WorkflowLogger.Info('GitSettings', Format(
-            'Saved – AutoRefresh=%s Interval=%ds GraphFont=%s %dpt Repo=%s',
+            'Saved – AutoRefresh=%s Interval=%ds GraphFont=%s %dpt Recent=%d Repo=%s',
             [BoolToStr(GitManagerConfig.AutoRefresh, True),
              GitManagerConfig.AutoRefreshSeconds,
              GitManagerConfig.GraphFontName,
              GitManagerConfig.GraphFontSize,
+             GitManagerConfig.RecentCount,
              Form.FRepoPath]))
         Else
           MessageDlg('Some repository settings could not be saved.' + LineEnding +
@@ -109,6 +112,8 @@ Begin
   IntervalSpin.MaxValue := GitConfigMaxIntervalSec;
   GraphFontSizeSpin.MinValue := GitConfigMinGraphFontSize;
   GraphFontSizeSpin.MaxValue := GitConfigMaxGraphFontSize;
+  RecentCountSpin.MinValue := GitConfigMinRecentCount;
+  RecentCountSpin.MaxValue := GitConfigMaxRecentCount;
   ButtonPanel.OKButton.Caption := 'OK';
   ButtonPanel.CancelButton.Caption := 'Cancel';
   FHasRepo := False;
@@ -171,11 +176,13 @@ Begin
       IntervalSpin.Value := GitManagerConfig.AutoRefreshSeconds;
       GraphFontNameEdit.Text := GitManagerConfig.GraphFontName;
       GraphFontSizeSpin.Value := GitManagerConfig.GraphFontSize;
+      RecentCountSpin.Value := GitManagerConfig.RecentCount;
     End
   Else
     Begin
       GraphFontNameEdit.Text := '';
       GraphFontSizeSpin.Value := GitConfigDefaultGraphFontSize;
+      RecentCountSpin.Value := GitConfigDefaultRecentCount;
     End;
   SyncGraphFontNameDisplay;
   AutoRefreshCheckChange(Nil);
@@ -232,6 +239,7 @@ Begin
         FontName := '';
       GitManagerConfig.GraphFontName := FontName;
       GitManagerConfig.GraphFontSize := GraphFontSizeSpin.Value;
+      GitManagerConfig.RecentCount := RecentCountSpin.Value;
       GitManagerConfig.Save;
     End;
   If Assigned(SpellFrame) Then
@@ -270,6 +278,12 @@ Begin
     Begin
       MessageDlg(Format('Interval must be at least %d seconds.', [GitConfigMinIntervalSec]),
         mtError, [mbOK], 0);
+      CanClose := False;
+    End;
+  If (RecentCountSpin.Value < GitConfigMinRecentCount) Or (RecentCountSpin.Value > GitConfigMaxRecentCount) Then
+    Begin
+      MessageDlg(Format('Open Recent count must be between %d and %d.',
+        [GitConfigMinRecentCount, GitConfigMaxRecentCount]), mtError, [mbOK], 0);
       CanClose := False;
     End;
 End;
