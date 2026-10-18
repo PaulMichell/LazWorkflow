@@ -16,6 +16,15 @@ Uses
 
 Var
   FailCount: Integer;
+  GuidanceNames, GuidancePaths: TStringList;
+
+Procedure EnumGuidanceFiles(Names, Paths: TStrings);
+Begin
+  If Assigned(GuidanceNames) Then
+    Names.AddStrings(GuidanceNames);
+  If Assigned(GuidancePaths) Then
+    Paths.AddStrings(GuidancePaths);
+End;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -295,14 +304,76 @@ Begin
     Check('guidance list includes the catalog skill', Found);
     Check('guidance list matches discovery when no registry is installed',
       Length(Skills) = Length(ListDiscoveredSkills(Root)));
+    WriteTextFile(Root + 'renamed-skill.md',
+      '---' + LineEnding + 'name: alpha' + LineEnding + '---' + LineEnding + 'FILE BODY' + LineEnding);
+    WriteTextFile(Root + 'plain-notes.md', 'No front matter.' + LineEnding);
+    Check('document name is the front matter name', SkillDocumentName(Root + 'renamed-skill.md') = 'alpha');
+    Check('missing name uses the file stem', SkillDocumentName(Root + 'plain-notes.md') = 'plain-notes');
+    Check('missing file has no document name', SkillDocumentName(Root + 'absent.md') = '');
   Finally
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
   End;
 End;
 
-Function HideNamedSkill(Const SkillName: String): Boolean;
+Procedure TestAdoptedSkillName;
+Var
+  Root, NoteFile: String;
+  Config: TAssistantConfig;
+  Modes, Names: TStringList;
+  PreviousEnum: TSkillFileEnumerator;
+  Skills: TAssistantSkillList;
+  I: Integer;
+  FoundAlpha, FoundSuffix: Boolean;
 Begin
-  Result := SameText(SkillName, 'secret-skill');
+  Root := MakeTempRoot;
+  Config := TAssistantConfig.Create;
+  Modes := TStringList.Create;
+  Names := TStringList.Create;
+  PreviousEnum := SkillFileEnumerator;
+  Try
+    NoteFile := Root + 'renamed-skill.md';
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'alpha' + PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: alpha' + LineEnding + '---' + LineEnding + 'CATALOG' + LineEnding);
+    WriteTextFile(NoteFile, '---' + LineEnding + 'name: alpha' + LineEnding + '---' + LineEnding + 'FILE' + LineEnding);
+    Config.SetSkillFile('alpha-2', NoteFile);
+    Modes.Add('chat');
+    Config.SetSkillModes('alpha-2', Modes);
+    Config.AdoptSkillDocumentNames;
+    Names.Clear;
+    Config.CollectSkillModeNames(Names);
+    Check('suffixed skill key is forgotten', Names.IndexOf('alpha-2') < 0);
+    Check('modes follow the document name', Names.IndexOf('alpha') >= 0);
+    Check('file is stored under the document name', SameFileName(Config.SkillFilePath('alpha'), ExpandFileName(NoteFile)));
+    GuidanceNames := TStringList.Create;
+    GuidancePaths := TStringList.Create;
+    Try
+      GuidanceNames.Add('alpha-2');
+      GuidancePaths.Add(NoteFile);
+      SkillFileEnumerator := @EnumGuidanceFiles;
+      Skills := ListGuidanceDocuments(Root);
+      FoundAlpha := False;
+      FoundSuffix := False;
+      For I := 0 To High(Skills) Do
+        Begin
+          If SameText(Skills[I].Name, 'alpha') Then
+            FoundAlpha := True;
+          If SameText(Skills[I].Name, 'alpha-2') Then
+            FoundSuffix := True;
+        End;
+      Check('guidance list uses the document name once', FoundAlpha And (Not FoundSuffix));
+    Finally
+      SkillFileEnumerator := PreviousEnum;
+      GuidancePaths.Free;
+      GuidanceNames.Free;
+      GuidanceNames := Nil;
+      GuidancePaths := Nil;
+    End;
+  Finally
+    Modes.Free;
+    Names.Free;
+    Config.Free;
+    DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
+  End;
 End;
 
 Function RepositoryRoot: String;
@@ -336,13 +407,11 @@ Var
   Root, Prompt: String;
   Harness: TAssistantHarness;
   Names, Modes: TStringList;
-  PreviousHide: TSkillHiddenQuery;
 Begin
   Root := MakeTempRoot;
   Harness := TAssistantHarness.Create;
   Names := TStringList.Create;
   Modes := TStringList.Create;
-  PreviousHide := SkillHiddenQuery;
   Try
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'declared-skill' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: declared-skill' + LineEnding + 'description: declared process' + LineEnding +
@@ -373,10 +442,8 @@ Begin
       (Pos('missing-skill', Prompt) = 0));
     Names.Clear;
     Names.Add('secret-skill');
-    SkillHiddenQuery := @HideNamedSkill;
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
-    Check('hidden skill is not injected', Pos('SECRET BODY', Prompt) = 0);
-    SkillHiddenQuery := PreviousHide;
+    Check('named skill is attached', Pos('SECRET BODY', Prompt) > 0);
     Names.Clear;
     Names.Add(AssistantRetiredBehaviourSkillName);
     Names.Add(AssistantMethodologySkillName);
@@ -395,7 +462,6 @@ Begin
     Modes.Clear;
     AssistantChatConfig.SetSkillModes('declared-skill', Modes);
   Finally
-    SkillHiddenQuery := PreviousHide;
     Modes.Clear;
     If Assigned(AssistantChatConfig) Then
       AssistantChatConfig.SetSkillModes('declared-skill', Modes);
@@ -448,6 +514,7 @@ Begin
   TestHarnessPrompt;
   TestImageOutputPrompt;
   TestGuidanceNames;
+  TestAdoptedSkillName;
   TestDeclaredSkillModes;
   TestMethodologySkillResolves;
   TestTodoWrite;

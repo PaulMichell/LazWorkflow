@@ -212,9 +212,7 @@ Begin
   Result := '';
   If Trim(SkillName) = '' Then
     Exit;
-  { Hidden and absent skills are not injected. A missing file is not an error in the prompt. }
-  If Assigned(SkillHiddenQuery) And SkillHiddenQuery(SkillName) Then
-    Exit;
+  { Absent skills are not injected. A missing file is not an error in the prompt. }
   If Not LoadSkillBody(SkillName, ProjectRoot, Body, Err) Then
     Begin
       WorkflowLogger.Debug('AssistantHarness', 'Skill "' + SkillName + '" was not attached: ' + Err);

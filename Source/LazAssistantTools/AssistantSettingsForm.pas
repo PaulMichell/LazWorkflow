@@ -207,7 +207,6 @@ Type
     Function SkillRowIndex(Const SkillName: String): Integer;
     Function SkillFileForRow(Row: Integer): String;
     Function SelectedSkillRow: Integer;
-    Function SkillNameInUse(Const SkillName: String): Boolean;
     Procedure AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
     Procedure AddGuidanceFile(Const FileName: String);
     Procedure UpdateSkillSelection;
@@ -568,20 +567,6 @@ Begin
   Result := SkillsGrid.Row;
 End;
 
-Function TAssistantSettingsForm.SkillNameInUse(Const SkillName: String): Boolean;
-Var
-  Skills: TAssistantSkillList;
-  I: Integer;
-Begin
-  Result := SkillRowIndex(SkillName) >= 0;
-  If Result Then
-    Exit;
-  Skills := ListDiscoveredSkills(SettingsProjectRoot);
-  For I := 0 To High(Skills) Do
-    If SameText(Skills[I].Name, SkillName) Then
-      Exit(True);
-End;
-
 Procedure TAssistantSettingsForm.AddSkillRow(Const SkillName, FilePath: String; Modes: TStrings);
 Const
   ModeNames: Array[0..4] Of String = ('chat', 'inspect', 'document', 'plan', 'build');
@@ -663,9 +648,8 @@ Procedure TAssistantSettingsForm.SaveSkillModes;
 Const
   ModeNames: Array[0..4] Of String = ('chat', 'inspect', 'document', 'plan', 'build');
 Var
-  Seen, Modes, DiscoveredNames: TStringList;
-  Discovered: TAssistantSkillList;
-  I, Row, Col: Integer;
+  Seen, Modes: TStringList;
+  Row, Col: Integer;
   SkillName: String;
 Begin
   If (Not Assigned(AssistantChatConfig)) Or (Not Assigned(SkillsGrid)) Or (Not Assigned(SkillPaths)) Then
@@ -673,8 +657,6 @@ Begin
   Seen := TStringList.Create;
   Seen.CaseSensitive := False;
   Modes := TStringList.Create;
-  DiscoveredNames := TStringList.Create;
-  DiscoveredNames.CaseSensitive := False;
   Try
     For Row := SkillsGrid.FixedRows To SkillsGrid.RowCount - 1 Do
       Begin
@@ -688,20 +670,10 @@ Begin
             Modes.Add(ModeNames[Col - 1]);
         AssistantChatConfig.SetSkillModes(SkillName, Modes);
         AssistantChatConfig.SetSkillFile(SkillName, SkillPaths[Row - SkillsGrid.FixedRows]);
-        AssistantChatConfig.SetSkillHidden(SkillName, False);
-      End;
-    Discovered := ListDiscoveredSkills(SettingsProjectRoot);
-    For I := 0 To High(Discovered) Do
-      Begin
-        DiscoveredNames.Add(Discovered[I].Name);
-        If Seen.IndexOf(Discovered[I].Name) < 0 Then
-          AssistantChatConfig.SetSkillHidden(Discovered[I].Name, True);
       End;
     AssistantChatConfig.RetainSkillModes(Seen);
     AssistantChatConfig.RetainSkillFiles(Seen);
-    AssistantChatConfig.PruneHiddenSkills(DiscoveredNames);
   Finally
-    DiscoveredNames.Free;
     Modes.Free;
     Seen.Free;
   End;
@@ -1360,7 +1332,7 @@ Begin
         Begin
           AssistantChatConfig.CollectSkillModeNames(Extra);
           For I := 0 To Extra.Count - 1 Do
-            If (Listed.IndexOf(Extra[I]) < 0) And (Not AssistantChatConfig.SkillIsHidden(Extra[I])) Then
+            If Listed.IndexOf(Extra[I]) < 0 Then
               Begin
                 Modes.Clear;
                 AssistantChatConfig.CollectModesForSkill(Extra[I], Modes);
@@ -1385,9 +1357,8 @@ End;
 
 Procedure TAssistantSettingsForm.AddGuidanceFile(Const FileName: String);
 Var
-  Root, Expanded, CatalogName, SkillName: String;
-  Existing, N: Integer;
-  Candidate: String;
+  Expanded, SkillName: String;
+  Existing: Integer;
 Begin
   Expanded := ExpandFileName(Trim(FileName));
   If (Expanded = '') Or (Not FileExistsUTF8(Expanded)) Then
@@ -1399,35 +1370,15 @@ Begin
         UpdateSkillSelection;
         Exit;
       End;
-  Root := SettingsProjectRoot;
-  CatalogName := CatalogNameForSkillFile(Expanded, Root);
-  If CatalogName <> '' Then
+  SkillName := SkillDocumentName(Expanded);
+  If SkillName = '' Then
+    Exit;
+  Existing := SkillRowIndex(SkillName);
+  If Existing >= 0 Then
     Begin
-      Existing := SkillRowIndex(CatalogName);
-      If Existing >= 0 Then
-        SkillsGrid.Row := Existing
-      Else
-        Begin
-          AddSkillRow(CatalogName, '', Nil);
-          SkillsGrid.Row := SkillsGrid.RowCount - 1;
-        End;
+      SkillPaths[Existing - SkillsGrid.FixedRows] := Expanded;
+      SkillsGrid.Row := Existing;
       UpdateSkillSelection;
-      Exit;
-    End;
-  SkillName := SkillNameFromFile(Expanded);
-  N := 2;
-  While SkillNameInUse(SkillName) And (N < 100) Do
-    Begin
-      Candidate := SkillNameFromFile(Expanded) + '-' + IntToStr(N);
-      If Length(Candidate) > 64 Then
-        Candidate := Copy(SkillNameFromFile(Expanded), 1, 58) + '-' + IntToStr(N);
-      SkillName := Candidate;
-      Inc(N);
-    End;
-  If SkillNameInUse(SkillName) Then
-    Begin
-      MessageDlg('Could not add ' + ExtractFileName(Expanded) + ' because its name is already in use.',
-        mtInformation, [mbOK], 0);
       Exit;
     End;
   AddSkillRow(SkillName, Expanded, Nil);

@@ -37,10 +37,12 @@ Function SkillSearchRoots(Const ProjectRoot: String): TStringArray;
 Function SkillNameIsSafe(Const SkillName: String): Boolean;
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
 Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
-/// Catalog skills, minus names the user removed, plus added guidance files.
+/// Catalog skills plus added guidance files. The name is the one written in the document.
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
 /// Directory name when FilePath is a catalog SKILL.md, otherwise empty.
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
+/// Name written in the document. The file stem is used only when that name is missing or unsafe.
+Function SkillDocumentName(Const FilePath: String): String;
 /// Safe skill name derived from a file name. Falls back to guidance.
 Function SkillNameFromFile(Const FilePath: String): String;
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
@@ -55,20 +57,19 @@ Function BuildSystemPromptWithSkill(Const BasePrompt, SkillName: String): String
 Type
   { Optional. A non-empty result is the file for that skill name. }
   TSkillFileResolver = Function(Const SkillName: String): String;
-  { Optional. True when the user removed this catalog skill from the grid. }
-  TSkillHiddenQuery = Function(Const SkillName: String): Boolean;
   { Optional. Fills Names and Paths with added guidance files. }
   TSkillFileEnumerator = Procedure(Names, Paths: TStrings);
 
 Var
   SkillFileResolver: TSkillFileResolver;
-  SkillHiddenQuery: TSkillHiddenQuery;
   SkillFileEnumerator: TSkillFileEnumerator;
 
 Implementation
 
 Uses
   LazFileUtils, DirectoryListing, WorkflowLog;
+
+Function SkillFileByDeclaredName(Const SkillName, ProjectRoot: String): String; Forward;
 
 Function AssistantUserSkillsRoot: String;
 Begin
@@ -166,6 +167,7 @@ Begin
           Exit;
         End;
     End;
+  Result := SkillFileByDeclaredName(SkillName, ProjectRoot);
 End;
 
 Function StripYamlFrontMatter(Const Raw: String): String;
@@ -229,9 +231,16 @@ Begin
   End;
 End;
 
+Function DeclaredSkillName(Const Raw: String): String;
+Begin
+  Result := Trim(ExtractFrontMatterField(Raw, 'name'));
+  If Not SkillNameIsSafe(Result) Then
+    Result := '';
+End;
+
 Function FillSkillInfo(Const SkillDir: String; Out Info: TAssistantSkillInfo): Boolean;
 Var
-  SkillFile, Raw: String;
+  SkillFile, Raw, Declared: String;
   SL: TStringList;
 Begin
   Result := False;
@@ -251,9 +260,12 @@ Begin
     Try
       SL.LoadFromFile(SkillFile);
       Raw := SL.Text;
+      Declared := DeclaredSkillName(Raw);
+      If Declared <> '' Then
+        Info.Name := Declared;
       Info.Description := ExtractFrontMatterField(Raw, 'description');
       If Info.Description = '' Then
-        Info.Description := ExtractFrontMatterField(Raw, 'name');
+        Info.Description := Info.Name;
       Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
       If Info.WhenToUse = '' Then
         Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
@@ -264,6 +276,45 @@ Begin
     End;
   Finally
     SL.Free;
+  End;
+End;
+
+Function SkillFileByDeclaredName(Const SkillName, ProjectRoot: String): String;
+Var
+  Roots: TStringArray;
+  Dirs: TStringList;
+  I, J: Integer;
+  Candidate: String;
+  SL: TStringList;
+Begin
+  Result := '';
+  If Not SkillNameIsSafe(SkillName) Then
+    Exit;
+  Roots := SkillSearchRoots(ProjectRoot);
+  Dirs := TStringList.Create;
+  SL := TStringList.Create;
+  Try
+    For I := 0 To High(Roots) Do
+      Begin
+        Dirs.Clear;
+        CollectChildDirectories(Roots[I], Dirs);
+        For J := 0 To Dirs.Count - 1 Do
+          Begin
+            Candidate := IncludeTrailingPathDelimiter(Dirs[J]) + 'SKILL.md';
+            If Not FileExistsUTF8(Candidate) Or (Not PathIsInsideRoot(Roots[I], Candidate)) Then
+              Continue;
+            Try
+              SL.LoadFromFile(Candidate);
+            Except
+              Continue;
+            End;
+            If SameText(DeclaredSkillName(SL.Text), SkillName) Then
+              Exit(Candidate);
+          End;
+      End;
+  Finally
+    SL.Free;
+    Dirs.Free;
   End;
 End;
 
@@ -321,7 +372,7 @@ End;
 
 Function SkillInfoFromFile(Const SkillName, SkillFile: String; Out Info: TAssistantSkillInfo): Boolean;
 Var
-  Raw: String;
+  Raw, Declared: String;
   SL: TStringList;
 Begin
   Result := False;
@@ -336,6 +387,9 @@ Begin
     Try
       SL.LoadFromFile(SkillFile);
       Raw := SL.Text;
+      Declared := DeclaredSkillName(Raw);
+      If Declared <> '' Then
+        Info.Name := Declared;
       Info.Description := ExtractFrontMatterField(Raw, 'description');
       Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
       If Info.WhenToUse = '' Then
@@ -352,23 +406,12 @@ End;
 
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
 Var
-  Filtered: TAssistantSkillList;
   Names, Paths: TStringList;
   Info: TAssistantSkillInfo;
   I: Integer;
+  Declared: String;
 Begin
   Result := ListDiscoveredSkills(ProjectRoot);
-  If Assigned(SkillHiddenQuery) Then
-    Begin
-      Filtered := Nil;
-      For I := 0 To High(Result) Do
-        If Not SkillHiddenQuery(Result[I].Name) Then
-          Begin
-            SetLength(Filtered, Length(Filtered) + 1);
-            Filtered[High(Filtered)] := Result[I];
-          End;
-      Result := Filtered;
-    End;
   If Not Assigned(SkillFileEnumerator) Then
     Exit;
   Names := TStringList.Create;
@@ -377,13 +420,14 @@ Begin
     SkillFileEnumerator(Names, Paths);
     For I := 0 To Names.Count - 1 Do
       Begin
-        If SkillNameTaken(Result, Names[I]) Then
+        Declared := SkillDocumentName(Paths[I]);
+        If Declared = '' Then
+          Declared := Trim(Names[I]);
+        If (Declared = '') Or SkillNameTaken(Result, Declared) Then
           Continue;
-        If Assigned(SkillHiddenQuery) And SkillHiddenQuery(Names[I]) Then
-          Continue;
-        If Not SkillInfoFromFile(Names[I], Paths[I], Info) Then
+        If Not SkillInfoFromFile(Declared, Paths[I], Info) Then
           Begin
-            Info.Name := Names[I];
+            Info.Name := Declared;
             Info.Description := '';
             Info.WhenToUse := '';
             Info.SkillFile := Paths[I];
@@ -452,6 +496,32 @@ Begin
   If Not SkillNameIsSafe(Clean) Then
     Clean := 'guidance';
   Result := Clean;
+End;
+
+Function SkillDocumentName(Const FilePath: String): String;
+Var
+  SL: TStringList;
+  Declared, Clean: String;
+Begin
+  Result := '';
+  Clean := Trim(FilePath);
+  If (Clean = '') Or (Not FileExistsUTF8(Clean)) Then
+    Exit;
+  Declared := '';
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(Clean);
+      Declared := DeclaredSkillName(SL.Text);
+    Except
+      Declared := '';
+    End;
+  Finally
+    SL.Free;
+  End;
+  If Declared <> '' Then
+    Exit(Declared);
+  Result := SkillNameFromFile(Clean);
 End;
 
 Function IsDeclaredSkillMode(Const ModeName: String): Boolean;
@@ -670,8 +740,6 @@ Begin
   If Result = '' Then
     Result := 'You are a helpful Free Pascal / Lazarus expert working inside the IDE.';
   If Trim(SkillName) = '' Then
-    Exit;
-  If Assigned(SkillHiddenQuery) And SkillHiddenQuery(SkillName) Then
     Exit;
   If Not LoadUserSkillBody(SkillName, Body, Err) Then
     Begin

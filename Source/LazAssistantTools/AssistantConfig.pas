@@ -73,7 +73,6 @@ Type
     FFaultRetries: Integer;
     FSkillModes: TJSONObject;
     FSkillFiles: TJSONObject;
-    FSkillHidden: TStringList;
     FAccessToken: String;
     FRefreshToken: String;
     FTokenType: String;
@@ -102,7 +101,7 @@ Type
     Function SkillHasMode(Const SkillName, ModeName: String): Boolean;
     /// Replaces one skill's mode list. An empty list removes the skill. Chat is stored only when named.
     Procedure SetSkillModes(Const SkillName: String; Modes: TStrings);
-    /// Fills Names with skills tagged for ModeName. Clears Names first. Hidden skills are omitted.
+    /// Fills Names with skills tagged for ModeName. Clears Names first.
     Procedure CollectSkillsForMode(Const ModeName: String; Names: TStrings);
     /// Adds skills whose SKILL.md declares ModeName, unless the user already saved a mode list.
     Procedure ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
@@ -116,15 +115,12 @@ Type
     Function SkillFilePath(Const SkillName: String): String;
     /// Stores or clears the file behind a skill name. An empty path removes the entry.
     Procedure SetSkillFile(Const SkillName, FilePath: String);
-    /// True when the user removed this catalog skill from the settings grid.
-    Function SkillIsHidden(Const SkillName: String): Boolean;
-    Procedure SetSkillHidden(Const SkillName: String; Hidden: Boolean);
+    /// Moves each added file onto the name written in that document and drops the old key.
+    Procedure AdoptSkillDocumentNames;
     /// Drops mode tags whose names are not in Keep. Keep may be nil.
     Procedure RetainSkillModes(Keep: TStrings);
     /// Drops file entries whose names are not in Keep. Keep may be nil.
     Procedure RetainSkillFiles(Keep: TStrings);
-    /// Drops hidden names that are no longer discovered catalog skills.
-    Procedure PruneHiddenSkills(Discovered: TStrings);
     Property ApiBase: String Read FApiBase Write FApiBase;
     Property Model: String Read FModel Write FModel;
     { Directory name under ~/.grok/skills, or empty for no skill. }
@@ -322,10 +318,6 @@ Begin
   FFaultRetries := AssistantFaultRetryDefault;
   FSkillModes := TJSONObject.Create;
   FSkillFiles := TJSONObject.Create;
-  FSkillHidden := TStringList.Create;
-  FSkillHidden.CaseSensitive := False;
-  FSkillHidden.Sorted := True;
-  FSkillHidden.Duplicates := dupIgnore;
   FAccessToken := '';
   FRefreshToken := '';
   FTokenType := 'Bearer';
@@ -335,7 +327,6 @@ End;
 
 Destructor TAssistantConfig.Destroy;
 Begin
-  FSkillHidden.Free;
   FSkillFiles.Free;
   FSkillModes.Free;
   Inherited Destroy;
@@ -406,10 +397,6 @@ Begin
     End
   Else
     FSkillFiles.Clear;
-  If Assigned(Source.FSkillHidden) Then
-    FSkillHidden.Assign(Source.FSkillHidden)
-  Else
-    FSkillHidden.Clear;
   FAccessToken := Source.AccessToken;
   FRefreshToken := Source.RefreshToken;
   FTokenType := Source.TokenType;
@@ -702,38 +689,6 @@ Begin
     End;
 End;
 
-Procedure ReadSkillHidden(Config: TAssistantConfig; Section: TJSONObject);
-Var
-  Node: TJSONData;
-  Arr: TJSONArray;
-  I: Integer;
-Begin
-  Config.FSkillHidden.Clear;
-  If Not Assigned(Section) Then
-    Exit;
-  Node := Section.Find('skill_hidden');
-  If Not (Node Is TJSONArray) Then
-    Exit;
-  Arr := TJSONArray(Node);
-  For I := 0 To Arr.Count - 1 Do
-    If Arr.Items[I].JSONType = jtString Then
-      Config.SetSkillHidden(Arr.Items[I].AsString, True);
-End;
-
-Procedure WriteSkillHidden(Section: TJSONObject; Hidden: TStrings);
-Var
-  Arr: TJSONArray;
-  I: Integer;
-Begin
-  Arr := TJSONArray.Create;
-  Section.Add('skill_hidden', Arr);
-  If Not Assigned(Hidden) Then
-    Exit;
-  For I := 0 To Hidden.Count - 1 Do
-    If Trim(Hidden[I]) <> '' Then
-      Arr.Add(Trim(Hidden[I]));
-End;
-
 Procedure ClampOutputTokens(Var Tokens: Integer);
 Begin
   If Tokens < 0 Then
@@ -992,7 +947,6 @@ Begin
     ClearOAuthTokens;
     FSkillModes.Clear;
     FSkillFiles.Clear;
-    FSkillHidden.Clear;
     If Assigned(Connections) Then
       Connections.ClearStored;
     If Not Assigned(Section) Then
@@ -1094,7 +1048,7 @@ Begin
       End;
     ReadSkillModes(Self, Section);
     ReadSkillFiles(Self, Section);
-    ReadSkillHidden(Self, Section);
+    AdoptSkillDocumentNames;
   Finally
     Section.Free;
   End;
@@ -1151,7 +1105,6 @@ Begin
     Section.Add('enter_inserts_newline', FEnterInsertsNewline);
     WriteSkillModes(Section, FSkillModes);
     WriteSkillFiles(Section, FSkillFiles);
-    WriteSkillHidden(Section, FSkillHidden);
     Arr := TJSONArray.Create;
     Section.Add('connections', Arr);
     If Assigned(Connections) Then
@@ -1247,8 +1200,7 @@ Begin
   If Not Assigned(FSkillModes) Then
     Exit;
   For I := 0 To FSkillModes.Count - 1 Do
-    If SkillModeListed(FSkillModes, FSkillModes.Names[I], Mode) And
-      (Not SkillIsHidden(FSkillModes.Names[I])) Then
+    If SkillModeListed(FSkillModes, FSkillModes.Names[I], Mode) Then
       Names.Add(FSkillModes.Names[I]);
 End;
 
@@ -1264,9 +1216,6 @@ Begin
   Mode := LowerCase(Trim(ModeName));
   If Not IsSkillMode(Mode) Then
     Exit;
-  For I := Names.Count - 1 DownTo 0 Do
-    If SkillIsHidden(Trim(Names[I])) Then
-      Names.Delete(I);
   Saved := TStringList.Create;
   Declared := TStringList.Create;
   Try
@@ -1277,7 +1226,7 @@ Begin
     For I := 0 To High(Skills) Do
       Begin
         Name := Skills[I].Name;
-        If (Name = '') Or (Names.IndexOf(Name) >= 0) Or (Saved.IndexOf(Name) >= 0) Or SkillIsHidden(Name) Then
+        If (Name = '') Or (Names.IndexOf(Name) >= 0) Or (Saved.IndexOf(Name) >= 0) Then
           Continue;
         Declared.Clear;
         If SkillDeclaredModes(Name, ProjectRoot, Declared) And (Declared.IndexOf(Mode) >= 0) Then
@@ -1305,7 +1254,7 @@ Begin
     CollectSkillModeNames(Saved);
     For I := 0 To Names.Count - 1 Do
       Begin
-        If (Trim(Names[I]) = '') Or (Saved.IndexOf(Names[I]) >= 0) Or SkillIsHidden(Names[I]) Then
+        If (Trim(Names[I]) = '') Or (Saved.IndexOf(Names[I]) >= 0) Then
           Continue;
         Declared.Clear;
         If SkillDeclaredModes(Names[I], ProjectRoot, Declared) And (Declared.Count > 0) Then
@@ -1348,14 +1297,24 @@ End;
 Function TAssistantConfig.SkillFilePath(Const SkillName: String): String;
 Var
   Node: TJSONData;
+  I: Integer;
+  Name, Path: String;
 Begin
   Result := '';
-  If (Not Assigned(FSkillFiles)) Or (Trim(SkillName) = '') Then
+  Name := Trim(SkillName);
+  If (Not Assigned(FSkillFiles)) Or (Name = '') Then
     Exit;
-  Node := FSkillFiles.Find(Trim(SkillName));
-  If Node = Nil Then
-    Exit;
-  Result := Trim(Node.AsString);
+  Node := FSkillFiles.Find(Name);
+  If Assigned(Node) Then
+    Exit(Trim(Node.AsString));
+  For I := 0 To FSkillFiles.Count - 1 Do
+    Begin
+      If FSkillFiles.Items[I].JSONType <> jtString Then
+        Continue;
+      Path := Trim(FSkillFiles.Items[I].AsString);
+      If SameText(SkillDocumentName(Path), Name) Then
+        Exit(Path);
+    End;
 End;
 
 Procedure TAssistantConfig.SetSkillFile(Const SkillName, FilePath: String);
@@ -1375,27 +1334,58 @@ Begin
   FSkillFiles.Add(Name, ExpandFileName(Path));
 End;
 
-Function TAssistantConfig.SkillIsHidden(Const SkillName: String): Boolean;
-Begin
-  Result := Assigned(FSkillHidden) And (Trim(SkillName) <> '') And (FSkillHidden.IndexOf(Trim(SkillName)) >= 0);
-End;
-
-Procedure TAssistantConfig.SetSkillHidden(Const SkillName: String; Hidden: Boolean);
+Procedure TAssistantConfig.AdoptSkillDocumentNames;
 Var
-  Name: String;
-  Index: Integer;
+  I, Index: Integer;
+  Key, Path, Declared: String;
+  Modes: TStringList;
+
+  Function KeyIndex(Store: TJSONObject; Const Name: String): Integer;
+  Var
+    J: Integer;
+  Begin
+    Result := -1;
+    If Not Assigned(Store) Then
+      Exit;
+    For J := 0 To Store.Count - 1 Do
+      If SameText(Store.Names[J], Name) Then
+        Exit(J);
+  End;
+
 Begin
-  Name := Trim(SkillName);
-  If (Name = '') Or (Not Assigned(FSkillHidden)) Then
+  If (Not Assigned(FSkillFiles)) Or (Not Assigned(FSkillModes)) Then
     Exit;
-  Index := FSkillHidden.IndexOf(Name);
-  If Hidden Then
-    Begin
-      If Index < 0 Then
-        FSkillHidden.Add(Name);
-    End
-  Else If Index >= 0 Then
-    FSkillHidden.Delete(Index);
+  Modes := TStringList.Create;
+  Try
+    I := 0;
+    While I < FSkillFiles.Count Do
+      Begin
+        Key := FSkillFiles.Names[I];
+        Path := '';
+        If FSkillFiles.Items[I].JSONType = jtString Then
+          Path := Trim(FSkillFiles.Items[I].AsString);
+        Declared := SkillDocumentName(Path);
+        If (Declared = '') Or SameText(Declared, Key) Then
+          Begin
+            Inc(I);
+            Continue;
+          End;
+        If KeyIndex(FSkillFiles, Declared) < 0 Then
+          FSkillFiles.Add(Declared, ExpandFileName(Path));
+        If KeyIndex(FSkillModes, Key) >= 0 Then
+          Begin
+            Modes.Clear;
+            CollectModesForSkill(Key, Modes);
+            SetSkillModes(Declared, Modes);
+          End;
+        SetSkillModes(Key, Nil);
+        Index := KeyIndex(FSkillFiles, Key);
+        If Index >= 0 Then
+          FSkillFiles.Delete(Index);
+      End;
+  Finally
+    Modes.Free;
+  End;
 End;
 
 Function NameKept(Keep: TStrings; Const Name: String): Boolean;
@@ -1425,17 +1415,6 @@ Begin
       FSkillFiles.Delete(I);
 End;
 
-Procedure TAssistantConfig.PruneHiddenSkills(Discovered: TStrings);
-Var
-  I: Integer;
-Begin
-  If Not Assigned(FSkillHidden) Then
-    Exit;
-  For I := FSkillHidden.Count - 1 DownTo 0 Do
-    If Not NameKept(Discovered, FSkillHidden[I]) Then
-      FSkillHidden.Delete(I);
-End;
-
 Procedure TAssistantConfig.Load;
 Begin
   LoadWithConnections(Nil);
@@ -1452,11 +1431,6 @@ Begin
   Result := '';
   If Assigned(AssistantChatConfig) Then
     Result := AssistantChatConfig.SkillFilePath(SkillName);
-End;
-
-Function QuerySkillHidden(Const SkillName: String): Boolean;
-Begin
-  Result := Assigned(AssistantChatConfig) And AssistantChatConfig.SkillIsHidden(SkillName);
 End;
 
 Procedure EnumerateSkillFiles(Names, Paths: TStrings);
@@ -1480,7 +1454,6 @@ Initialization
 
 AssistantChatConfig := TAssistantConfig.Create;
 SkillFileResolver := @ResolveConfiguredSkillFile;
-SkillHiddenQuery := @QuerySkillHidden;
 SkillFileEnumerator := @EnumerateSkillFiles;
 AssistantChatConfig.Load;
 If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
@@ -1489,7 +1462,6 @@ If Assigned(GrokOAuthClient) And AssistantChatConfig.IsSignedIn Then
 Finalization
 
 SkillFileResolver := Nil;
-SkillHiddenQuery := Nil;
 SkillFileEnumerator := Nil;
 FreeAndNil(AssistantChatConfig);
 
