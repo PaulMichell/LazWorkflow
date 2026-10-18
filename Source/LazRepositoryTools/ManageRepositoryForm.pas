@@ -252,6 +252,8 @@ Type
     Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
     Procedure StartIndexLoad;
     Procedure ShowRepositoryNotice(Const MessageText: String; Kind: TMsgDlgType);
+    Procedure PlaceNoticeOverManager(Dialog: TForm);
+    Procedure NoticeDialogShow(Sender: TObject);
     Procedure ClearStaleOperationFlags;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
@@ -1071,6 +1073,47 @@ Begin
   End;
 End;
 
+Procedure TManageRepositoryForm.PlaceNoticeOverManager(Dialog: TForm);
+Var
+  HostRect, WorkRect: TRect;
+  DialogWidth, DialogHeight, NewLeft, NewTop: Integer;
+Begin
+  If Not Assigned(Dialog) Or (csDestroying In ComponentState) Then
+    Exit;
+  DialogWidth := Dialog.Width;
+  DialogHeight := Dialog.Height;
+  If DialogWidth < 1 Then
+    DialogWidth := 360;
+  If DialogHeight < 1 Then
+    DialogHeight := 140;
+  { Centre on this window, not the IDE main form. The message dialog's Owner is
+    nil, so poOwnerFormCenter falls back to the main form and a tall first
+    layout is clamped to the top of the screen. }
+  HostRect := BoundsRect;
+  NewLeft := HostRect.Left + (HostRect.Width - DialogWidth) Div 2;
+  NewTop := HostRect.Top + (HostRect.Height - DialogHeight) Div 2;
+  If Assigned(Monitor) Then
+    Begin
+      WorkRect := Monitor.WorkareaRect;
+      If NewLeft < WorkRect.Left Then
+        NewLeft := WorkRect.Left;
+      If NewTop < WorkRect.Top Then
+        NewTop := WorkRect.Top;
+      If NewLeft + DialogWidth > WorkRect.Right Then
+        NewLeft := WorkRect.Right - DialogWidth;
+      If NewTop + DialogHeight > WorkRect.Bottom Then
+        NewTop := WorkRect.Bottom - DialogHeight;
+    End;
+  Dialog.Position := poDesigned;
+  Dialog.SetBounds(NewLeft, NewTop, Dialog.Width, Dialog.Height);
+End;
+
+Procedure TManageRepositoryForm.NoticeDialogShow(Sender: TObject);
+Begin
+  If Sender Is TForm Then
+    PlaceNoticeOverManager(TForm(Sender));
+End;
+
 Procedure TManageRepositoryForm.ShowRepositoryNotice(Const MessageText: String; Kind: TMsgDlgType);
 Var
   Dialog: TForm;
@@ -1080,11 +1123,13 @@ Begin
   Try
     Dialog := CreateMessageDialog(MessageText, Kind, [mbOK]);
     Try
-      { Parent the dialog to this window. A main-form dialog can open behind it,
-        and the click then looks as if nothing happened. }
       Dialog.PopupMode := pmExplicit;
       Dialog.PopupParent := Self;
-      Dialog.Position := poOwnerFormCenter;
+      Dialog.Position := poDesigned;
+      Dialog.OnShow := @NoticeDialogShow;
+      { KWin can place a new dialog after OnShow. Activate runs once it is mapped. }
+      Dialog.OnActivate := @NoticeDialogShow;
+      PlaceNoticeOverManager(Dialog);
       Dialog.ShowModal;
     Finally
       Dialog.Free;
