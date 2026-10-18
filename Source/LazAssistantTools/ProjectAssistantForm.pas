@@ -10,10 +10,11 @@ Unit ProjectAssistantForm;
   The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
-  reorder the text, buttons, or status bar. Paste reads pictures through the
-  LCL clipboard, including PredefinedClipboardFormat(pcfBitmap), so Qt and GTK
-  share one path. The Run Plan end report is built in AssistantPlanRun. A dropped Codex or Claude
-  transport waits in AssistantRecovery, then the same turn is started again.
+  reorder the text, buttons, or status bar. Paste uses TClipboard. A second
+  clipboard object is required because the global one can still own the previous
+  text after a picture is copied. The Run Plan end report is built in
+  AssistantPlanRun. A dropped Codex or Claude transport waits in
+  AssistantRecovery, then the same turn is started again.
   Tasks is one action plus the call that applies a prepared request. The list stays in AssistantTasksForm.
   Reviewed 2026-10-17. }
 
@@ -346,7 +347,7 @@ Type
     Function AttachImageFile(Const SourcePath: String; Out ErrorText: String): Boolean;
     Procedure PasteComposer;
     Procedure QueueComposerPaste;
-    Function TryAttachClipboardImage(Out ErrorText: String): Boolean;
+    Function TryAttachClipboardImage(Reader: TClipboard; Out ErrorText: String): Boolean;
     Procedure ClearUnsentComposerImages;
     Procedure ClearCurrentTurnDisplay;
     Procedure ResetTraceCards;
@@ -4772,8 +4773,6 @@ Begin
     InputRedoItem.Enabled := Assigned(InputMemo) And InputMemo.CanRedo;
 End;
 
-Function ClipboardHasImage: Boolean; Forward;
-
 Procedure TProjectAssistantForm.InputPopupPopup(Sender: TObject);
 Var
   HasSel: Boolean;
@@ -4817,11 +4816,6 @@ Begin
   Result := (Ext <> '') And (Pos(Ext + ',', AssistantStillImageExtensions + ',') > 0);
 End;
 
-Function ClipboardMime(Const Mime: String): TClipboardFormat;
-Begin
-  Result := RegisterClipboardFormat(Mime);
-End;
-
 Function MimeLooksLikeStillImage(Const Mime: String): Boolean;
 Var
   Lowered: String;
@@ -4830,57 +4824,62 @@ Begin
   Result := (Copy(Lowered, 1, 6) = 'image/') And (Pos('svg', Lowered) = 0);
 End;
 
-Function ClipboardFormatMime(FormatId: TClipboardFormat): String;
+Var
+  PngClipboardReady: Boolean = False;
+
+Procedure EnsurePngClipboardFormat;
 Begin
-  Result := '';
-  Try
-    Result := ClipboardFormatToMimeType(FormatId);
-  Except
-    Result := '';
-  End;
+  If PngClipboardReady Then Exit;
+  { LCL registers image/bmp and image/xpm only. A screenshot is image/png. }
+  TPicture.RegisterClipboardFormat(RegisterClipboardFormat('image/png'), TPortableNetworkGraphic);
+  TPicture.RegisterClipboardFormat(RegisterClipboardFormat('image/x-png'), TPortableNetworkGraphic);
+  PngClipboardReady := True;
 End;
 
-Function MimeMeansClipboardImage(Const Mime: String): Boolean;
-Var
-  Lowered: String;
+Function OpenClipboardReader: TClipboard;
 Begin
-  Lowered := LowerCase(Mime);
-  { Qt offers application/x-qt-image rather than image/png. The bytes are not a
-    file; PredefinedClipboardFormat(pcfBitmap) is the LCL conversion. }
-  Result := MimeLooksLikeStillImage(Lowered) Or (Pos('qt-image', Lowered) > 0) Or (Pos('bitmap', Lowered) > 0) Or
-    (Pos('pixmap', Lowered) > 0);
+  EnsurePngClipboardFormat;
+  { TClipboard reads the widgetset unless it still owns the selection. On Qt,
+    copying a picture does not drop that ownership, so the global Clipboard
+    keeps returning the previous text. A second object does not own it, and
+    HasFormat, GetFormat, and AsText then use the LCL widgetset path. }
+  Result := TClipboard.Create(ctClipboard);
 End;
 
-Function ClipboardHasImage: Boolean;
+Function ClipboardOffersImage(Reader: TClipboard): Boolean;
 Var
+  Names: TStringList;
   I: Integer;
+  MimeName: String;
 Begin
-  Clipboard.Open;
+  Result := False;
+  If Reader = Nil Then Exit;
+  EnsurePngClipboardFormat;
+  Result := Reader.HasPictureFormat;
+  If Result Then Exit;
+  Names := TStringList.Create;
   Try
-    Result := Clipboard.HasFormat(PredefinedClipboardFormat(pcfBitmap)) Or
-      Clipboard.HasFormat(PredefinedClipboardFormat(pcfPicture)) Or
-      Clipboard.HasFormat(PredefinedClipboardFormat(pcfPixmap)) Or
-      Clipboard.HasFormat(CF_BITMAP) Or Clipboard.HasFormat(CF_PICTURE);
-    If Result Then Exit;
-    For I := 0 To Clipboard.FormatCount - 1 Do
-      If MimeMeansClipboardImage(ClipboardFormatMime(Clipboard.Formats[I])) Then Exit(True);
-    Result := Clipboard.HasFormat(ClipboardMime('image/png')) Or Clipboard.HasFormat(ClipboardMime('image/jpeg')) Or
-      Clipboard.HasFormat(ClipboardMime('image/bmp')) Or Clipboard.HasFormat(ClipboardMime('image/gif')) Or
-      Clipboard.HasFormat(ClipboardMime('application/x-qt-image'));
+    Reader.SupportedFormats(Names);
+    For I := 0 To Names.Count - 1 Do
+      Begin
+        MimeName := Names[I];
+        If MimeLooksLikeStillImage(MimeName) Or (Pos('qt-image', LowerCase(MimeName)) > 0) Then Exit(True);
+      End;
   Finally
-    Clipboard.Close;
+    Names.Free;
   End;
 End;
 
-Function ReadClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
+Function ReadClipboardFormat(Reader: TClipboard; FormatID: TClipboardFormat; Stream: TMemoryStream): Boolean;
 Begin
   Result := False;
   Stream.Clear;
-  If Not Clipboard.HasFormat(FormatId) Then Exit;
+  If (Reader = Nil) Or (FormatID = 0) Then Exit;
   Try
-    Result := Clipboard.GetFormat(FormatId, Stream) And (Stream.Size > 0);
+    Result := Reader.GetFormat(FormatID, Stream) And (Stream.Size > 8);
   Except
     Result := False;
+    Stream.Clear;
   End;
   Stream.Position := 0;
 End;
@@ -4914,54 +4913,6 @@ Begin
   Finally
     Png.Free;
   End;
-End;
-
-Function LoadClipboardPicture(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
-Var
-  Pic: TPicture;
-Begin
-  { Do not require HasFormat. On Qt, CF_BITMAP is false while pcfBitmap still
-    returns the native picture. }
-  Result := False;
-  Stream.Clear;
-  Pic := TPicture.Create;
-  Try
-    Try
-      Pic.LoadFromClipboardFormat(FormatId);
-    Except
-      Exit;
-    End;
-    Result := GraphicToPngStream(Pic.Graphic, Stream);
-  Finally
-    Pic.Free;
-  End;
-End;
-
-Function TryLclClipboardPictures(Stream: TMemoryStream): Boolean;
-Var
-  I: Integer;
-  Formats: Array[0..4] Of TClipboardFormat;
-Begin
-  Result := False;
-  Formats[0] := PredefinedClipboardFormat(pcfBitmap);
-  Formats[1] := PredefinedClipboardFormat(pcfPicture);
-  Formats[2] := PredefinedClipboardFormat(pcfPixmap);
-  Formats[3] := CF_BITMAP;
-  Formats[4] := CF_PICTURE;
-  For I := 0 To High(Formats) Do
-    If LoadClipboardPicture(Formats[I], Stream) Then Exit(True);
-End;
-
-Function ForceClipboardBytes(FormatId: TClipboardFormat; Stream: TMemoryStream): Boolean;
-Begin
-  Result := False;
-  Stream.Clear;
-  Try
-    Result := Clipboard.GetFormat(FormatId, Stream) And (Stream.Size > 8);
-  Except
-    Result := False;
-  End;
-  Stream.Position := 0;
 End;
 
 Function TurnReferencesImage(Const ImageId: String): Boolean;
@@ -5785,44 +5736,56 @@ Begin
     End;
 End;
 
-Function TProjectAssistantForm.TryAttachClipboardImage(Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.TryAttachClipboardImage(Reader: TClipboard; Out ErrorText: String): Boolean;
 Var
   Stream: TMemoryStream;
-  Reason, Mime: String;
-  Tried: Array Of String;
-  I, J: Integer;
-  Known: Boolean;
-  SawImage: Boolean;
+  Reason, MimeName: String;
+  Names: TStringList;
+  Picture: TPicture;
+  I: Integer;
+  FormatID: TClipboardFormat;
+  SawImage, TriedPng: Boolean;
 
-  Function AlreadyTried(Const Name: String): Boolean;
-  Var
-    K: Integer;
-  Begin
-    Result := False;
-    For K := 0 To High(Tried) Do
-      If SameText(Tried[K], Name) Then Exit(True);
-  End;
-
-  Procedure NoteTried(Const Name: String);
-  Begin
-    If AlreadyTried(Name) Then Exit;
-    SetLength(Tried, Length(Tried) + 1);
-    Tried[High(Tried)] := Name;
-  End;
-
-  Function TryBytes(Const Name: String): Boolean;
+  Function TryStream(Const FileName: String): Boolean;
   Begin
     Result := False;
     Stream.Position := 0;
     If Stream.Size < 8 Then Exit;
     ErrorText := '';
-    Result := AttachImageStream(Name, Stream, ErrorText);
+    Result := AttachImageStream(FileName, Stream, ErrorText);
+    If Result Then Exit;
+    { GetFormat already returned the bytes. TPicture identifies the file format. }
+    Picture := TPicture.Create;
+    Try
+      Try
+        Stream.Position := 0;
+        Picture.LoadFromStream(Stream);
+      Except
+        Exit;
+      End;
+      If Not GraphicToPngStream(Picture.Graphic, Stream) Then Exit;
+      ErrorText := '';
+      Result := AttachImageStream('Clipboard.png', Stream, ErrorText);
+    Finally
+      Picture.Free;
+    End;
+  End;
+
+  Function TryFormat(Const Mime: String): Boolean;
+  Begin
+    Result := False;
+    If Mime = '' Then Exit;
+    FormatID := Reader.FindFormatID(Mime);
+    If FormatID = 0 Then FormatID := RegisterClipboardFormat(Mime);
+    If Not ReadClipboardFormat(Reader, FormatID, Stream) Then Exit;
+    Result := TryStream(ClipboardImageName(Mime));
   End;
 
 Begin
   Result := False;
   ErrorText := '';
-  SawImage := ClipboardHasImage;
+  If Reader = Nil Then Exit;
+  SawImage := ClipboardOffersImage(Reader);
   If Not ComposerAttachAllowed(Reason) Then
     Begin
       If SawImage Then
@@ -5832,59 +5795,30 @@ Begin
         End;
       Exit;
     End;
-  Tried := Nil;
-  SetLength(Tried, 0);
+  If Not SawImage Then Exit;
   Stream := TMemoryStream.Create;
+  Names := TStringList.Create;
+  TriedPng := False;
   Try
-    { Widgetset picture formats first. Qt screenshots are application/x-qt-image;
-      LCL turns that into a picture. Do this before asking for text. }
-    If TryLclClipboardPictures(Stream) And TryBytes('Clipboard.png') Then Exit(True);
-    If ForceClipboardBytes(ClipboardMime('image/png'), Stream) And TryBytes('Clipboard.png') Then Exit(True);
-    If ForceClipboardBytes(ClipboardMime('image/jpeg'), Stream) And TryBytes('Clipboard.jpg') Then Exit(True);
-    If ForceClipboardBytes(ClipboardMime('image/bmp'), Stream) And TryBytes('Clipboard.bmp') Then Exit(True);
-    If ForceClipboardBytes(ClipboardMime('image/gif'), Stream) And TryBytes('Clipboard.gif') Then Exit(True);
-    If Not SawImage Then Exit;
-    Clipboard.Open;
-    Try
-      For I := 0 To Clipboard.FormatCount - 1 Do
-        Begin
-          Mime := ClipboardFormatMime(Clipboard.Formats[I]);
-          If Not MimeLooksLikeStillImage(Mime) Then Continue;
-          NoteTried(Mime);
-          If ReadClipboardBytes(Clipboard.Formats[I], Stream) And TryBytes(ClipboardImageName(Mime)) Then Exit(True);
-          If ReadClipboardBytes(ClipboardMime(Mime), Stream) And TryBytes(ClipboardImageName(Mime)) Then Exit(True);
-        End;
-      NoteTried('image/png');
-      NoteTried('image/x-png');
-      NoteTried('image/jpeg');
-      NoteTried('image/jpg');
-      NoteTried('image/gif');
-      NoteTried('image/bmp');
-      NoteTried('image/x-bmp');
-      NoteTried('image/x-MS-bmp');
-      NoteTried('image/x-win-bmp');
-      NoteTried('image/tiff');
-      NoteTried('image/tif');
-      NoteTried('image/webp');
-      NoteTried('image/x-icon');
-      NoteTried('image/x-xpixmap');
-      For J := 0 To High(Tried) Do
-        Begin
-          Known := MimeLooksLikeStillImage(Tried[J]);
-          If Not Known Then Continue;
-          If ReadClipboardBytes(ClipboardMime(Tried[J]), Stream) And TryBytes(ClipboardImageName(Tried[J])) Then Exit(True);
-        End;
-      If LoadClipboardPicture(CF_BITMAP, Stream) And TryBytes('Clipboard.png') Then Exit(True);
-      If LoadClipboardPicture(CF_PICTURE, Stream) And TryBytes('Clipboard.png') Then Exit(True);
-      If ForceClipboardBytes(ClipboardMime('image/png'), Stream) And TryBytes('Clipboard.png') Then Exit(True);
-      If ForceClipboardBytes(ClipboardMime('image/jpeg'), Stream) And TryBytes('Clipboard.jpg') Then Exit(True);
-      If ForceClipboardBytes(ClipboardMime('image/bmp'), Stream) And TryBytes('Clipboard.bmp') Then Exit(True);
-      If ForceClipboardBytes(ClipboardMime('image/gif'), Stream) And TryBytes('Clipboard.gif') Then Exit(True);
-    Finally
-      Clipboard.Close;
-    End;
+    FormatID := Reader.FindPictureFormatID;
+    If (FormatID <> 0) And ReadClipboardFormat(Reader, FormatID, Stream) Then
+      Begin
+        MimeName := ClipboardFormatToMimeType(FormatID);
+        If TryStream(ClipboardImageName(MimeName)) Then Exit(True);
+      End;
+    Reader.SupportedFormats(Names);
+    For I := 0 To Names.Count - 1 Do
+      Begin
+        MimeName := Names[I];
+        If Not MimeLooksLikeStillImage(MimeName) Then Continue;
+        If SameText(MimeName, 'image/png') Or SameText(MimeName, 'image/x-png') Then TriedPng := True;
+        If TryFormat(MimeName) Then Exit(True);
+      End;
+    { Qt serves application/x-qt-image and converts it when image/png is requested. }
+    If (Not TriedPng) And TryFormat('image/png') Then Exit(True);
     If ErrorText = '' Then ErrorText := 'The clipboard image could not be read.';
   Finally
+    Names.Free;
     Stream.Free;
   End;
 End;
@@ -5898,35 +5832,41 @@ End;
 
 Procedure TProjectAssistantForm.PasteComposer;
 Var
-  Attached: Boolean;
+  Reader: TClipboard;
+  Attached, SawImage: Boolean;
   PastedText, ImageError, LocalPath: String;
 Begin
   If Not Assigned(InputMemo) Or InputMemo.ReadOnly Then Exit;
   { Ctrl+V can arrive both as the memo key and as the popup shortcut. }
   If FPasteComposerBusy Then Exit;
   FPasteComposerBusy := True;
+  Reader := OpenClipboardReader;
   Try
     Attached := False;
     ImageError := '';
+    SawImage := False;
     Try
       { Picture before text. Some widgetsets only return the mime that was asked for first. }
-      Attached := TryAttachClipboardImage(ImageError);
+      SawImage := ClipboardOffersImage(Reader);
+      Attached := TryAttachClipboardImage(Reader, ImageError);
     Except
       Attached := False;
       If ImageError = '' Then ImageError := 'The clipboard image could not be read.';
     End;
     PastedText := '';
-    If Clipboard.HasFormat(CF_TEXT) Then PastedText := Clipboard.AsText;
+    { The global Clipboard.AsText is the previous item on Qt after an image copy. }
+    If Not (Attached Or SawImage) And Reader.HasFormat(CF_TEXT) Then
+      PastedText := Reader.AsText;
     If (Not Attached) And ClipboardTextIsImageFile(PastedText, LocalPath) Then
       Attached := AttachImageFile(LocalPath, ImageError);
-    { A copied image file is the attachment, not a path typed into the prompt. }
-    If Attached And ClipboardTextIsImageFile(PastedText, LocalPath) Then PastedText := '';
+    If Attached Then PastedText := '';
     { SelText, not PasteFromClipboard: OnPaste calls back into this method. }
     If PastedText <> '' Then
       InputMemo.SelText := PastedText;
     If (Not Attached) And (ImageError <> '') Then
       MessageDlg(ImageError, mtInformation, [mbOK], 0);
   Finally
+    Reader.Free;
     FPasteComposerBusy := False;
   End;
 End;
