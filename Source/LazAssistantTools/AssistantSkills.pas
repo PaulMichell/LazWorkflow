@@ -1,6 +1,6 @@
 Unit AssistantSkills;
 
-{ Discover and load skills from <working-root>/.assistant/skills, then ~/.grok/skills (c) 2026 Michell Computing. }
+{ Load skills named in the installation settings. A file on disk is not a skill until it is added (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -37,7 +37,7 @@ Function SkillSearchRoots(Const ProjectRoot: String): TStringArray;
 Function SkillNameIsSafe(Const SkillName: String): Boolean;
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
 Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
-/// Catalog skills plus added guidance files. The name is the one written in the document.
+/// Installed skills from the settings enumerator. Project directories are not scanned.
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
 /// Directory name when FilePath is a catalog SKILL.md, otherwise empty.
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
@@ -404,6 +404,26 @@ Begin
   End;
 End;
 
+Function SkillIsEnumerated(Const SkillName: String): Boolean;
+Var
+  Names, Paths: TStringList;
+  I: Integer;
+Begin
+  Result := False;
+  If (Trim(SkillName) = '') Or (Not Assigned(SkillFileEnumerator)) Then
+    Exit;
+  Names := TStringList.Create;
+  Paths := TStringList.Create;
+  Try
+    Names.CaseSensitive := False;
+    SkillFileEnumerator(Names, Paths);
+    Result := Names.IndexOf(Trim(SkillName)) >= 0;
+  Finally
+    Paths.Free;
+    Names.Free;
+  End;
+End;
+
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
 Var
   Names, Paths: TStringList;
@@ -411,7 +431,7 @@ Var
   I: Integer;
   Declared: String;
 Begin
-  Result := ListDiscoveredSkills(ProjectRoot);
+  Result := Nil;
   If Not Assigned(SkillFileEnumerator) Then
     Exit;
   Names := TStringList.Create;
@@ -676,8 +696,8 @@ Begin
           Exit;
         End;
     End
-  Else
-    SkillFile := ResolveSkillFile(SkillName, ProjectRoot);
+  Else If SkillIsEnumerated(SkillName) Then
+    SkillFile := ResolveSkillFile(SkillName, '');
   If SkillFile = '' Then
     Begin
       ErrorText := 'Skill not found: ' + SkillName;

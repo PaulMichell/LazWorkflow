@@ -112,6 +112,13 @@ Begin
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'imagine' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: imagine' + LineEnding + 'description: image prompts' + LineEnding +
       'when-to-use: generating images' + LineEnding + '---' + LineEnding + 'IMAGINE BODY' + LineEnding);
+    WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'left-behind' + PathDelim + 'SKILL.md',
+      '---' + LineEnding + 'name: left-behind' + LineEnding + 'description: not installed' + LineEnding +
+      '---' + LineEnding + 'LEFT BEHIND' + LineEnding);
+    AssistantChatConfig.SetSkillFile('free-pascal-engineer',
+      Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'free-pascal-engineer' + PathDelim + 'SKILL.md');
+    AssistantChatConfig.SetSkillFile('imagine',
+      Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'imagine' + PathDelim + 'SKILL.md');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build prompt names Build mode', Pos('Build mode', Prompt) > 0);
     Check('build prompt does not offer image files without a capable profile',
@@ -122,6 +129,8 @@ Begin
       (Pos('This model cannot write image files; say so, and do not invent a path or a PNG.', Prompt) > 0));
     Check('catalog lists imagine', Pos('imagine', Prompt) > 0);
     Check('catalog has when-to-use', Pos('generating images', Prompt) > 0);
+    Check('an uninstalled project skill is not listed', Pos('LEFT BEHIND', Prompt) = 0);
+    Check('an uninstalled project skill is not named', Pos('left-behind', Prompt) = 0);
     Check('build with no tags catalogs fpe and does not attach the body',
       (Pos('free-pascal-engineer', Prompt) > 0) And (Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) = 0));
     Check('project .grok/skills is not loaded', Pos('DO NOT USE PROJECT GROK SKILL', Prompt) = 0);
@@ -159,7 +168,14 @@ Begin
     Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
     Check('inspect tag injects imagine body', Pos('IMAGINE BODY', Prompt) > 0);
     Check('read_skill loads imagine', Harness.ReadSkill('imagine', Root, Body, Err) And (Pos('IMAGINE BODY', Body) > 0));
+    Check('read_skill ignores a file that is not installed',
+      (Not Harness.ReadSkill('left-behind', Root, Body, Err)) And (Pos('LEFT BEHIND', Body) = 0));
   Finally
+    If Assigned(AssistantChatConfig) Then
+      Begin
+        AssistantChatConfig.SetSkillFile('free-pascal-engineer', '');
+        AssistantChatConfig.SetSkillFile('imagine', '');
+      End;
     Names.Free;
     Harness.Free;
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
@@ -301,9 +317,7 @@ Begin
     For I := 0 To High(Skills) Do
       If SameText(Skills[I].Name, 'alpha') Then
         Found := True;
-    Check('guidance list includes the catalog skill', Found);
-    Check('guidance list matches discovery when no registry is installed',
-      Length(Skills) = Length(ListDiscoveredSkills(Root)));
+    Check('a project catalog file is not installed by itself', Not Found);
     WriteTextFile(Root + 'renamed-skill.md',
       '---' + LineEnding + 'name: alpha' + LineEnding + '---' + LineEnding + 'FILE BODY' + LineEnding);
     WriteTextFile(Root + 'plain-notes.md', 'No front matter.' + LineEnding);
@@ -428,14 +442,11 @@ Begin
       '---' + LineEnding + 'name: ' + AssistantMethodologySkillName + LineEnding +
       'modes: plan, build' + LineEnding + '---' + LineEnding + 'METHOD BODY' + LineEnding);
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
-    Check('declared plan mode is attached on build', Pos('DECLARED BODY', Prompt) > 0);
+    Check('a project skill file is not attached by itself', Pos('DECLARED BODY', Prompt) = 0);
+    AssistantChatConfig.RememberDeclaredModes(Root, Names);
+    AssistantChatConfig.CollectSkillModeNames(Modes);
+    Check('a project skill file is not written into settings', Modes.IndexOf('declared-skill') < 0);
     Check('build does not attach a chat-only absence error', Pos('could not be loaded', Prompt) = 0);
-    Prompt := Harness.BuildSystemPrompt(amPlan, Names, Root, '');
-    Check('declared plan mode is attached on plan', Pos('DECLARED BODY', Prompt) > 0);
-    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
-    Check('declared skill is not attached on chat', Pos('DECLARED BODY', Prompt) = 0);
-    Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
-    Check('declared skill is not attached on inspect', Pos('DECLARED BODY', Prompt) = 0);
     Names.Add('missing-skill');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
     Check('absent skill is not injected', (Pos('could not be loaded', Prompt) = 0) And
@@ -443,7 +454,25 @@ Begin
     Names.Clear;
     Names.Add('secret-skill');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
-    Check('named skill is attached', Pos('SECRET BODY', Prompt) > 0);
+    Check('naming an uninstalled file does not attach it', Pos('SECRET BODY', Prompt) = 0);
+    AssistantChatConfig.SetSkillFile('declared-skill',
+      Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'declared-skill' + PathDelim + 'SKILL.md');
+    AssistantChatConfig.SetSkillFile(AssistantRetiredBehaviourSkillName,
+      Root + '.assistant' + PathDelim + 'skills' + PathDelim + AssistantRetiredBehaviourSkillName + PathDelim + 'SKILL.md');
+    AssistantChatConfig.SetSkillFile(AssistantMethodologySkillName,
+      Root + '.assistant' + PathDelim + 'skills' + PathDelim + AssistantMethodologySkillName + PathDelim + 'SKILL.md');
+    Modes.Clear;
+    Modes.Add('plan');
+    Modes.Add('build');
+    AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+    Names.Clear;
+    AssistantChatConfig.CollectSkillsForMode('build', Names);
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
+    Check('an installed build tag attaches the file', Pos('DECLARED BODY', Prompt) > 0);
+    Names.Clear;
+    AssistantChatConfig.CollectSkillsForMode('chat', Names);
+    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
+    Check('an installed skill is not attached on an untagged mode', Pos('DECLARED BODY', Prompt) = 0);
     Names.Clear;
     Names.Add(AssistantRetiredBehaviourSkillName);
     Names.Add(AssistantMethodologySkillName);
@@ -454,17 +483,15 @@ Begin
     Names.Add(AssistantRetiredBehaviourSkillName);
     Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
     Check('retired BEHAVE still attaches when it is the only tag', Pos('BEHAVE BODY', Prompt) > 0);
-    Modes.Add('inspect');
-    AssistantChatConfig.SetSkillModes('declared-skill', Modes);
-    Names.Clear;
-    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
-    Check('saved mode list is not overridden by the declaration', Pos('DECLARED BODY', Prompt) = 0);
-    Modes.Clear;
-    AssistantChatConfig.SetSkillModes('declared-skill', Modes);
   Finally
     Modes.Clear;
     If Assigned(AssistantChatConfig) Then
-      AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+      Begin
+        AssistantChatConfig.SetSkillModes('declared-skill', Modes);
+        AssistantChatConfig.SetSkillFile('declared-skill', '');
+        AssistantChatConfig.SetSkillFile(AssistantRetiredBehaviourSkillName, '');
+        AssistantChatConfig.SetSkillFile(AssistantMethodologySkillName, '');
+      End;
     Modes.Free;
     Names.Free;
     Harness.Free;
@@ -485,23 +512,17 @@ Begin
   Harness := TAssistantHarness.Create;
   Names := TStringList.Create;
   Try
-    Check('new skill id resolves', ResolveSkillFile(AssistantMethodologySkillName, Root) <> '');
-    Check('methodology body loads', LoadSkillBody(AssistantMethodologySkillName, Root, Body, Err) And (Body <> ''));
-    Check('methodology has no commit ban', Pos('never commit', LowerCase(Body)) = 0);
-    Check('methodology has no global-state ban', Pos('never use global state', LowerCase(Body)) = 0);
+    Check('methodology file is in this repository',
+      FileExistsUTF8(Root + '.assistant' + PathDelim + 'skills' + PathDelim + AssistantMethodologySkillName +
+      PathDelim + 'SKILL.md'));
+    Check('an uninstalled project skill does not load',
+      Not LoadSkillBody(AssistantMethodologySkillName, Root, Body, Err));
     Check('AGENTS.md was not written', Not FileExistsUTF8(Root + 'AGENTS.md'));
     Names.Add(AssistantDefaultSkillName);
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
-    Check('build attaches the methodology skill',
-      Pos('----- begin skill: ' + AssistantMethodologySkillName + ' -----', Prompt) > 0);
-    If ResolveSkillFile(AssistantDefaultSkillName, Root) <> '' Then
-      Check('build attaches free-pascal-engineer beside it',
-        Pos('----- begin skill: ' + AssistantDefaultSkillName + ' -----', Prompt) > 0);
-    Check('build prompt does not attach a missing-skill error', Pos('could not be loaded', Prompt) = 0);
-    Names.Clear;
-    Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
-    Check('chat does not attach methodology',
+    Check('build does not attach an uninstalled project skill',
       Pos('----- begin skill: ' + AssistantMethodologySkillName + ' -----', Prompt) = 0);
+    Check('build prompt does not attach a missing-skill error', Pos('could not be loaded', Prompt) = 0);
   Finally
     Names.Free;
     Harness.Free;

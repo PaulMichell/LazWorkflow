@@ -199,7 +199,7 @@ Begin
       'You may call `run_git` for status, diff, log, show, rev-parse, and ls-files only. ' +
       'You cannot call `write_file`, `replace_in_file`, `write_markdown`, `run_compile`, or `run_command`. ' +
       'Ask the user to switch to Document for a report or other Markdown, Plan for a build plan, or Build for source edits.' + LineEnding +
-      'A skill body is attached only when that skill is tagged for this mode. Use `read_skill` for catalog entries that are not tagged.' + LineEnding +
+      'A skill body is attached only when that skill is tagged for this mode. Use `read_skill` for an installed skill that is not tagged.' + LineEnding +
       'Prefer the active editor context already in the user message when it includes the code under discussion.';
   End;
   Result := Result + LineEnding + '</mode_overlay>';

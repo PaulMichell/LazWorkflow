@@ -603,7 +603,7 @@ Begin
   SkillName := Trim(SkillsGrid.Cells[0, Row]);
   If SkillName = '' Then
     Exit;
-  Result := ResolveSkillFile(SkillName, SettingsProjectRoot);
+  Result := ResolveSkillFile(SkillName, '');
 End;
 
 Procedure TAssistantSettingsForm.UpdateSkillSelection;
@@ -673,6 +673,8 @@ Begin
       End;
     AssistantChatConfig.RetainSkillModes(Seen);
     AssistantChatConfig.RetainSkillFiles(Seen);
+    If Not AssistantChatConfig.SkillIsInstalled(AssistantChatConfig.ActiveSkill) Then
+      AssistantChatConfig.ActiveSkill := '';
   Finally
     Modes.Free;
     Seen.Free;

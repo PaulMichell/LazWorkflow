@@ -103,16 +103,18 @@ Type
     Procedure SetSkillModes(Const SkillName: String; Modes: TStrings);
     /// Fills Names with skills tagged for ModeName. Clears Names first.
     Procedure CollectSkillsForMode(Const ModeName: String; Names: TStrings);
-    /// Adds skills whose SKILL.md declares ModeName, unless the user already saved a mode list.
+    /// Drops a retired guide name from Names. Does not discover skills from a project.
     Procedure ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
-    /// Copies declared modes into memory for skills that have no saved list. Does not write the settings file.
+    /// Kept so callers do not write discovered files back into settings.
     Procedure RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
     /// Fills Modes with the tags for SkillName. Clears Modes first.
     Procedure CollectModesForSkill(Const SkillName: String; Modes: TStrings);
     /// Fills Names with every skill that has a saved mode list. Clears Names first.
     Procedure CollectSkillModeNames(Names: TStrings);
-    /// Absolute path for an added guidance file, or empty when the name is a catalog skill.
+    /// Absolute path for an added guidance file, or empty when the name has no stored file.
     Function SkillFilePath(Const SkillName: String): String;
+    /// True when settings still name this skill. A file on disk is not enough.
+    Function SkillIsInstalled(Const SkillName: String): Boolean;
     /// Stores or clears the file behind a skill name. An empty path removes the entry.
     Procedure SetSkillFile(Const SkillName, FilePath: String);
     /// Moves each added file onto the name written in that document and drops the old key.
@@ -556,22 +558,6 @@ Begin
   Arr.Add(Mode);
 End;
 
-Procedure SeedSkillModes(Modes: TJSONObject; Const ActiveSkill: String);
-Var
-  SkillName: String;
-Begin
-  { Historical Plan/Build attachment, plus the saved pin on the four work modes. Never chat. }
-  AddSkillMode(Modes, 'free-pascal-engineer', 'plan');
-  AddSkillMode(Modes, 'free-pascal-engineer', 'build');
-  SkillName := Trim(ActiveSkill);
-  If (SkillName = '') Or (Pos('/', SkillName) > 0) Or (Pos('\', SkillName) > 0) Then
-    Exit;
-  AddSkillMode(Modes, SkillName, 'inspect');
-  AddSkillMode(Modes, SkillName, 'document');
-  AddSkillMode(Modes, SkillName, 'plan');
-  AddSkillMode(Modes, SkillName, 'build');
-End;
-
 Function SkillModeListed(Modes: TJSONObject; Const SkillName, ModeName: String): Boolean;
 Var
   Node: TJSONData;
@@ -603,10 +589,7 @@ Begin
   If Assigned(Section) Then
     Node := Section.Find('skill_modes');
   If Not (Node Is TJSONObject) Then
-    Begin
-      SeedSkillModes(Config.FSkillModes, Config.FActiveSkill);
-      Exit;
-    End;
+    Exit;
   Obj := TJSONObject(Node);
   For I := 0 To Obj.Count - 1 Do
     Begin
@@ -950,10 +933,7 @@ Begin
     If Assigned(Connections) Then
       Connections.ClearStored;
     If Not Assigned(Section) Then
-      Begin
-        SeedSkillModes(FSkillModes, '');
-        Exit;
-      End;
+      Exit;
     FIncludeIDEContext := Section.Get('include_ide_context', False);
     { auto_new_chat_at_limit was saved false before it had a checkbox. The shown key is plan_continue_new_chat. }
     If Section.Find('plan_continue_new_chat') <> Nil Then
@@ -1049,6 +1029,8 @@ Begin
     ReadSkillModes(Self, Section);
     ReadSkillFiles(Self, Section);
     AdoptSkillDocumentNames;
+    If Not SkillIsInstalled(FActiveSkill) Then
+      FActiveSkill := '';
   Finally
     Section.Free;
   End;
@@ -1085,6 +1067,8 @@ Var
 Begin
   Result := False;
   NormalizeAssistantConfig(Self);
+  If Not SkillIsInstalled(FActiveSkill) Then
+    FActiveSkill := '';
   Section := TJSONObject.Create;
   Try
     Section.Add('include_ide_context', FIncludeIDEContext);
@@ -1204,67 +1188,20 @@ Begin
       Names.Add(FSkillModes.Names[I]);
 End;
 
+{$PUSH}{$HINTS OFF}
 Procedure TAssistantConfig.ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
-Var
-  Skills: TAssistantSkillList;
-  Declared, Saved: TStringList;
-  I: Integer;
-  Mode, Name: String;
 Begin
   If Not Assigned(Names) Then
     Exit;
-  Mode := LowerCase(Trim(ModeName));
-  If Not IsSkillMode(Mode) Then
-    Exit;
-  Saved := TStringList.Create;
-  Declared := TStringList.Create;
-  Try
-    Saved.CaseSensitive := False;
-    Declared.CaseSensitive := False;
-    CollectSkillModeNames(Saved);
-    Skills := ListGuidanceDocuments(ProjectRoot);
-    For I := 0 To High(Skills) Do
-      Begin
-        Name := Skills[I].Name;
-        If (Name = '') Or (Names.IndexOf(Name) >= 0) Or (Saved.IndexOf(Name) >= 0) Then
-          Continue;
-        Declared.Clear;
-        If SkillDeclaredModes(Name, ProjectRoot, Declared) And (Declared.IndexOf(Mode) >= 0) Then
-          Names.Add(Name);
-      End;
-    OmitRetiredBehaviourGuide(Names);
-  Finally
-    Declared.Free;
-    Saved.Free;
-  End;
+  { ModeName and ProjectRoot are not used. A directory scan must not put a skill back. }
+  OmitRetiredBehaviourGuide(Names);
 End;
 
 Procedure TAssistantConfig.RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
-Var
-  Saved, Declared: TStringList;
-  I: Integer;
 Begin
-  If Not Assigned(Names) Then
-    Exit;
-  Saved := TStringList.Create;
-  Declared := TStringList.Create;
-  Try
-    Saved.CaseSensitive := False;
-    Declared.CaseSensitive := False;
-    CollectSkillModeNames(Saved);
-    For I := 0 To Names.Count - 1 Do
-      Begin
-        If (Trim(Names[I]) = '') Or (Saved.IndexOf(Names[I]) >= 0) Then
-          Continue;
-        Declared.Clear;
-        If SkillDeclaredModes(Names[I], ProjectRoot, Declared) And (Declared.Count > 0) Then
-          SetSkillModes(Names[I], Declared);
-      End;
-  Finally
-    Declared.Free;
-    Saved.Free;
-  End;
+  { A discovered file is not written into the installation settings. }
 End;
+{$POP}
 
 Procedure TAssistantConfig.CollectModesForSkill(Const SkillName: String; Modes: TStrings);
 Const
@@ -1332,6 +1269,25 @@ Begin
   If Path = '' Then
     Exit;
   FSkillFiles.Add(Name, ExpandFileName(Path));
+End;
+
+Function TAssistantConfig.SkillIsInstalled(Const SkillName: String): Boolean;
+Var
+  Name: String;
+  I: Integer;
+Begin
+  Result := False;
+  Name := Trim(SkillName);
+  If Name = '' Then
+    Exit;
+  If Assigned(FSkillFiles) Then
+    For I := 0 To FSkillFiles.Count - 1 Do
+      If SameText(FSkillFiles.Names[I], Name) Then
+        Exit(True);
+  If Assigned(FSkillModes) Then
+    For I := 0 To FSkillModes.Count - 1 Do
+      If SameText(FSkillModes.Names[I], Name) Then
+        Exit(True);
 End;
 
 Procedure TAssistantConfig.AdoptSkillDocumentNames;
@@ -1435,19 +1391,36 @@ End;
 
 Procedure EnumerateSkillFiles(Names, Paths: TStrings);
 Var
+  Seen: TStringList;
   I: Integer;
   Name: String;
 Begin
   If (Not Assigned(Names)) Or (Not Assigned(Paths)) Or (Not Assigned(AssistantChatConfig)) Then
     Exit;
-  For I := 0 To AssistantChatConfig.FSkillFiles.Count - 1 Do
-    Begin
-      Name := AssistantChatConfig.FSkillFiles.Names[I];
-      If Name = '' Then
-        Continue;
-      Names.Add(Name);
-      Paths.Add(AssistantChatConfig.SkillFilePath(Name));
-    End;
+  Seen := TStringList.Create;
+  Try
+    Seen.CaseSensitive := False;
+    For I := 0 To AssistantChatConfig.FSkillFiles.Count - 1 Do
+      Begin
+        Name := AssistantChatConfig.FSkillFiles.Names[I];
+        If (Name = '') Or (Seen.IndexOf(Name) >= 0) Then
+          Continue;
+        Seen.Add(Name);
+        Names.Add(Name);
+        Paths.Add(AssistantChatConfig.SkillFilePath(Name));
+      End;
+    For I := 0 To AssistantChatConfig.FSkillModes.Count - 1 Do
+      Begin
+        Name := AssistantChatConfig.FSkillModes.Names[I];
+        If (Name = '') Or (Seen.IndexOf(Name) >= 0) Then
+          Continue;
+        Seen.Add(Name);
+        Names.Add(Name);
+        Paths.Add('');
+      End;
+  Finally
+    Seen.Free;
+  End;
 End;
 
 Initialization
