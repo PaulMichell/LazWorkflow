@@ -1,6 +1,10 @@
 Unit GitJobRunner;
 
-{ Shared cancellable background Git job queue (c) 2026 Michell Computing. }
+{ Shared cancellable background Git job queue (c) 2026 Michell Computing.
+
+  Size note: exceeds the 1000 line preference. The queue, worker, and one
+  ExecuteJob case for every Git operation are one cohesive runner.
+  Reviewed 2026-10: no hidden foundation or sibling material identified. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -14,6 +18,8 @@ Uses
 
 Const
   GitJobDefaultTimeoutMs = 0; { 0 = no timeout }
+  { Remote Fetch / Pull / Push. A hidden credential prompt or a silent server must not wait forever. }
+  GitRemoteTimeoutMs = 180000;
   GitJobMaxQueue = 32;
 
 Type
@@ -197,6 +203,9 @@ Type
     Function Busy: Boolean;
     Function CurrentCaption: String;
     Function QueueLength: Integer;
+    { If the worker has exited, drop the job it abandoned and start another.
+      Call on the main thread. AbandonedCaption is empty when nothing was dropped. }
+    Function RecoverStoppedWorker(Out AbandonedCaption: String): Boolean;
     Property OnBusyChanged: TGitJobBusyEvent Read FOnBusyChanged Write FOnBusyChanged;
   End;
 
@@ -321,6 +330,7 @@ Begin
   Result.RepoPath := FRepoPath;
   Result.RepoGeneration := FRepoGeneration;
   Result.OnFinished := FOnFinished;
+  Result.TimeoutMs := GitRemoteTimeoutMs;
 End;
 
 Procedure TGitJob.TakePaths(Paths: TStringList);
@@ -1062,6 +1072,56 @@ Begin
   Finally
     LeaveLock;
   End;
+End;
+
+Function TGitJobRunner.RecoverStoppedWorker(Out AbandonedCaption: String): Boolean;
+Var
+  Abandoned: TGitJob;
+  Pending: TGitJob;
+  I: Integer;
+Begin
+  AbandonedCaption := '';
+  Result := False;
+  If FStopping Or (Assigned(FWorker) And (Not FWorker.Finished)) Then
+    Exit;
+  Result := True;
+  WorkflowLogger.Error('GitJobRunner', 'Git worker stopped; starting another');
+  If Assigned(FWorker) Then
+    Begin
+      FWorker.WaitFor;
+      { Drop callbacks before freeing the jobs they would deliver. }
+      TThread.RemoveQueuedEvents(FWorker);
+      FreeAndNil(FWorker);
+    End;
+  Abandoned := Nil;
+  EnterLock;
+  Try
+    Abandoned := FCurrent;
+    FCurrent := Nil;
+    FActiveGit := Nil;
+    FBusy := False;
+    FCurrentCaption := '';
+    For I := 0 To FDeliverQueue.Count - 1 Do
+      Begin
+        Pending := TGitJob(FDeliverQueue[I]);
+        If (AbandonedCaption = '') And Assigned(Pending) Then
+          AbandonedCaption := Pending.Caption;
+        FreeAndNil(Pending);
+      End;
+    FDeliverQueue.Clear;
+  Finally
+    LeaveLock;
+  End;
+  If Assigned(Abandoned) Then
+    Begin
+      If AbandonedCaption = '' Then
+        AbandonedCaption := Abandoned.Caption;
+      WorkflowLogger.Error('GitJobRunner', 'Abandoned ' + Abandoned.Caption);
+      Abandoned.Free;
+    End;
+  FWorker := TGitJobWorker.Create(Self);
+  FWorker.Start;
+  WakeWorker;
 End;
 
 Function GitJobs: TGitJobRunner;

@@ -251,6 +251,8 @@ Type
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
     Procedure StartIndexLoad;
+    Procedure ShowRepositoryNotice(Const MessageText: String; Kind: TMsgDlgType);
+    Procedure ClearStaleOperationFlags;
     Procedure StartRemoteOp(Kind: TGitRemoteOpKind);
     Procedure SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
     Procedure GitJobBusyChanged(Sender: TObject; IsBusy: Boolean; Const StatusCaption: String);
@@ -713,7 +715,7 @@ Begin
   If Not Assigned(GitJobs) Then
     Begin
       FreeAndNil(Job);
-      MessageDlg('Git job runner is not available.', mtError, [mbOK], 0);
+      ShowRepositoryNotice('Git job runner is not available.', mtError);
       Exit;
     End;
   If (FRepoPath = '') And (Job.Kind <> gjkClone) And (Job.Kind <> gjkInit) Then
@@ -733,7 +735,7 @@ Begin
         FJobBusy := True;
     End
   Else If Not QuietJob Then
-    MessageDlg('Could not queue Git operation (queue full or runner stopped).', mtWarning, [mbOK], 0);
+    ShowRepositoryNotice('Could not queue the Git operation (queue full or runner stopped).', mtWarning);
 End;
 
 Function StatusDigestIsClean(Const Digest: String): Boolean; Forward;
@@ -773,44 +775,53 @@ Begin
         FRemoteOpBusy := False;
         FJobBusy := False;
         Screen.Cursor := crDefault;
-        If Job.Cancelled Then
+        Msg := Trim(Job.ErrorText);
+        { Timeout used to be marked cancelled, then UpdateStatus wiped the status and
+          no dialog appeared. A server or credential failure must stay on this window. }
+        If (Pos('Timed out', Msg) > 0) Or ((Not Job.Cancelled) And (Not Job.Ok)) Then
           Begin
-            If Assigned(StatusFooter) Then
-              StatusFooter.SetRightText('Cancelled');
+            If Msg = '' Then
+              Msg := 'The Git operation failed. Git did not report a reason.';
+            WorkflowLogger.Warning('ManageRepository', Msg);
+            ShowRepositoryNotice(Msg, mtError);
             UpdateStatus;
+            If Assigned(StatusFooter) Then
+              StatusFooter.SetRightText('Failed');
             Exit;
           End;
-        Msg := Job.ErrorText;
-        If Msg = '' Then
-          If Job.Ok Then
-            Msg := 'Done.'
-          Else
-            Msg := 'Operation failed.';
-        If Job.Ok Then
+        If Job.Cancelled Then
           Begin
-            MessageDlg(Msg, mtInformation, [mbOK], 0);
-            If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
-              Exit;
-            If Job.IndexOk Then
-              Begin
-                ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
-                RefreshRepositoryInfo;
-                If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
-                  RefreshChanges;
-              End
-            Else
-              ManualRefresh;
+            If (Msg = '') Or (Msg = 'Cancelled') Then
+              Msg := 'The Git operation was cancelled.';
+            WorkflowLogger.Warning('ManageRepository', Msg);
+            ShowRepositoryNotice(Msg, mtWarning);
+            UpdateStatus;
             If Assigned(StatusFooter) Then
-              If Job.Kind = gjkPush Then
-                StatusFooter.SetRightText('Push complete')
-              Else If Job.Kind = gjkPull Then
-                StatusFooter.SetRightText('Pull complete')
-              Else
-                StatusFooter.SetRightText('Fetch complete');
+              StatusFooter.SetRightText('Cancelled');
+            Exit;
+          End;
+        If Msg = '' Then
+          Msg := 'Done.';
+        ShowRepositoryNotice(Msg, mtInformation);
+        If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+          Exit;
+        If Job.IndexOk Then
+          Begin
+            ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
+            RefreshRepositoryInfo;
+            If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+              RefreshChanges;
           End
         Else
-          MessageDlg(Msg, mtError, [mbOK], 0);
+          ManualRefresh;
         UpdateStatus;
+        If Assigned(StatusFooter) Then
+          If Job.Kind = gjkPush Then
+            StatusFooter.SetRightText('Push complete')
+          Else If Job.Kind = gjkPull Then
+            StatusFooter.SetRightText('Pull complete')
+          Else
+            StatusFooter.SetRightText('Fetch complete');
       End;
     gjkCommit:
       Begin
@@ -1060,29 +1071,119 @@ Begin
   End;
 End;
 
+Procedure TManageRepositoryForm.ShowRepositoryNotice(Const MessageText: String; Kind: TMsgDlgType);
+Var
+  Dialog: TForm;
+Begin
+  If Trim(MessageText) = '' Then
+    Exit;
+  Try
+    Dialog := CreateMessageDialog(MessageText, Kind, [mbOK]);
+    Try
+      { Parent the dialog to this window. A main-form dialog can open behind it,
+        and the click then looks as if nothing happened. }
+      Dialog.PopupMode := pmExplicit;
+      Dialog.PopupParent := Self;
+      Dialog.Position := poOwnerFormCenter;
+      Dialog.ShowModal;
+    Finally
+      Dialog.Free;
+    End;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Error('ManageRepository', 'Could not show notice: ' + E.Message + LineEnding + MessageText);
+  End;
+End;
+
+Procedure TManageRepositoryForm.ClearStaleOperationFlags;
+Begin
+  If Not Assigned(GitJobs) Or GitJobs.Busy Then
+    Exit;
+  { A leftover flag disables Push, or StartRemoteOp returns before Git runs.
+    The runner is idle, so the flag is no longer telling the truth. }
+  If FRemoteOpBusy Or FJobBusy Then
+    Begin
+      WorkflowLogger.Warning('ManageRepository', 'Cleared a stale Git operation flag');
+      FRemoteOpBusy := False;
+      FJobBusy := False;
+      Screen.Cursor := crDefault;
+    End;
+End;
+
 Procedure TManageRepositoryForm.StartRemoteOp(Kind: TGitRemoteOpKind);
 Var
   Job: TGitJob;
   JobKind: TGitJobKind;
+  Title, AbandonedCaption: String;
 Begin
-  If (FRepoPath = '') Or FRemoteOpBusy Then
-    Exit;
   Case Kind Of
-    rokFetch: JobKind := gjkFetch;
-    rokPull: JobKind := gjkPull;
-    rokPush: JobKind := gjkPush;
+    rokFetch:
+      Begin
+        JobKind := gjkFetch;
+        Title := 'Fetch';
+      End;
+    rokPull:
+      Begin
+        JobKind := gjkPull;
+        Title := 'Pull';
+      End;
+    rokPush:
+      Begin
+        JobKind := gjkPush;
+        Title := 'Push';
+      End;
   Else
     Exit;
   End;
+  If FRepoPath = '' Then
+    Begin
+      WorkflowLogger.Warning('ManageRepository', Title + ' refused: no repository');
+      ShowRepositoryNotice('No repository is bound to this window.', mtInformation);
+      Exit;
+    End;
+  AbandonedCaption := '';
+  If Assigned(GitJobs) And GitJobs.RecoverStoppedWorker(AbandonedCaption) Then
+    Begin
+      ClearStaleOperationFlags;
+      If AbandonedCaption <> '' Then
+        Begin
+          ShowRepositoryNotice('The background Git worker stopped during "' + AbandonedCaption +
+            '". It has been restarted.' + LineEnding + LineEnding + 'Press ' + Title + ' again.', mtWarning);
+          Exit;
+        End;
+    End
+  Else
+    ClearStaleOperationFlags;
+  If FRemoteOpBusy Or FJobBusy Or (Assigned(GitJobs) And GitJobs.Busy) Then
+    Begin
+      WorkflowLogger.Warning('ManageRepository', Title + ' refused: an operation is already running');
+      ShowRepositoryNotice('A Git operation is already running. Wait for it to finish, then press ' + Title +
+        ' again.', mtInformation);
+      Exit;
+    End;
+  If Not Assigned(GitJobs) Then
+    Begin
+      ShowRepositoryNotice('The Git job runner is not available.', mtError);
+      Exit;
+    End;
+  WorkflowLogger.Info('ManageRepository', Title + ' requested for ' + FRepoPath);
   If Assigned(FDetailTimer) Then
     FDetailTimer.Enabled := False;
   StopDetailLoad;
   StopIndexLoad;
   FRemoteOpBusy := True;
+  If Assigned(StatusFooter) Then
+    StatusFooter.SetRightText(GitJobKindCaption(JobKind));
+  Screen.Cursor := crHourGlass;
   Job := TGitJob.Create(JobKind);
   Job.RepoPath := FRepoPath;
+  Job.TimeoutMs := GitRemoteTimeoutMs;
   If Not SubmitGitJob(Job) Then
-    FRemoteOpBusy := False;
+    Begin
+      FRemoteOpBusy := False;
+      Screen.Cursor := crDefault;
+      UpdateStatus;
+    End;
 End;
 
 Procedure TManageRepositoryForm.ApplyFetchedHistory(Const IndexText, DetailsText: String;
@@ -1851,7 +1952,9 @@ End;
 
 Procedure TManageRepositoryForm.RemoteActionUpdate(Sender: TObject);
 Begin
-  (Sender As TAction).Enabled := CanMutate;
+  ClearStaleOperationFlags;
+  { A disabled button swallows the click. Keep Push usable and explain a refusal. }
+  (Sender As TAction).Enabled := FRepoPath <> '';
 End;
 
 Procedure TManageRepositoryForm.StageAllActionUpdate(Sender: TObject);

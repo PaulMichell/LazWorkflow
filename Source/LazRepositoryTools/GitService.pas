@@ -437,6 +437,32 @@ Begin
   Inherited Destroy;
 End;
 
+Procedure ConfigureGitProcess(Proc: TProcess);
+Var
+  Index: Integer;
+  Line, Name: String;
+  PromptSet: Boolean;
+Begin
+  { A terminal password prompt reads the pipe and waits forever. Disable it.
+    A stored helper (libsecret, Credential Manager) still runs. }
+  PromptSet := False;
+  Proc.Environment.Clear;
+  For Index := 1 To GetEnvironmentVariableCount Do
+    Begin
+      Line := GetEnvironmentString(Index);
+      Name := Copy(Line, 1, Pos('=', Line) - 1);
+      If SameText(Name, 'GIT_TERMINAL_PROMPT') Then
+        Begin
+          Proc.Environment.Add('GIT_TERMINAL_PROMPT=0');
+          PromptSet := True;
+        End
+      Else
+        Proc.Environment.Add(Line);
+    End;
+  If Not PromptSet Then
+    Proc.Environment.Add('GIT_TERMINAL_PROMPT=0');
+End;
+
 Function TGitService.RunGitPump(Const WorkDir: String; Const Args: Array Of String;
   OutStream: TStream; Out ExitCode: Integer): Boolean;
 Var
@@ -477,8 +503,8 @@ Begin
       console for git.exe. Credential Manager is a separate GUI and does not
       need this window; status belongs on the Manage form. }
     Proc.Options := [poUsePipes, poNoConsole];
-
     Proc.ShowWindow := swoHIDE;
+    ConfigureGitProcess(Proc);
     Proc.Parameters.Clear;
     { Every path API takes filenames, never user-supplied Git patterns. }
     Proc.Parameters.Add('--literal-pathspecs');
@@ -490,6 +516,8 @@ Begin
         PID zero signals the whole IDE process group. Cancellation between
         Execute and publication is handled by the first drain-loop check. }
       Proc.Execute;
+      { EOF on stdin. Git must not block waiting for a password nobody can type. }
+      Proc.CloseInput;
       SetActiveProcess(Proc);
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or
             (Proc.Stderr.NumBytesAvailable > 0) Do
@@ -551,7 +579,9 @@ Begin
       FLastCommand.ExitCode := ExitCode;
       If TimedOut Then
         Begin
-          FLastError := 'Timed out';
+          FLastError := 'Timed out. Git did not finish. The server may be unreachable, or a credential ' +
+            'prompt may be hidden behind another window.';
+          WorkflowLogger.Error('GitService', FLastError);
           Result := False;
         End
       Else If IsCancelled Then
