@@ -145,7 +145,7 @@ object AssistantMonitorForm: TAssistantMonitorForm
       AutoSize = True
       Cancel = True
       Caption = 'Close'
-      ModalResult = mrClose
+      ModalResult = 2
       TabOrder = 5
     end
   end
