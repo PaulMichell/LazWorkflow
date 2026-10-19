@@ -35,13 +35,15 @@ Type
     Property DictionaryDirectory: String Read FDictionaryDirectory Write FDictionaryDirectory;
   End;
 
+/// Program Files Aspell install. Other hosts return false.
+Function FindProgramAspellLibrary(Out FullName: String): Boolean;
 Function FindAspellLibrary(Out FullName: String): Boolean;
 Procedure ListAspellLanguages(List: TStrings);
 
 Implementation
 
 Uses
-  DynLibs, Process, LazUTF8, SpellCheckerOptions;
+  DynLibs, Process, LazFileUtils, LazUTF8, SpellCheckerOptions;
 
 Type
   TAspellNewConfig = Function: Pointer; CDecl;
@@ -144,6 +146,36 @@ Begin
   Else
     AspLibPath := FullName;
   Finally LeaveCriticalSection(BindingLock); End;
+End;
+
+Function FindProgramAspellLibrary(Out FullName: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  Roots: Array[0..2] Of String;
+  Index: Integer;
+  Root, Candidate: String;
+{$ENDIF}
+Begin
+  FullName := '';
+  {$IFDEF WINDOWS}
+  Roots[0] := GetEnvironmentVariableUTF8('ProgramW6432');
+  Roots[1] := GetEnvironmentVariableUTF8('ProgramFiles');
+  Roots[2] := GetEnvironmentVariableUTF8('ProgramFiles(x86)');
+  For Index := 0 To High(Roots) Do
+    Begin
+      Root := IncludeTrailingPathDelimiter(ExcludeTrailingPathDelimiter(Roots[Index])) + 'Aspell\';
+      Candidate := Root + 'bin\aspell-15.dll';
+      If Not FileExistsUTF8(Candidate) Then
+        Candidate := Root + 'bin\libaspell-15.dll';
+      If FileExistsUTF8(Candidate) Then
+        Begin
+          FullName := Candidate;
+          Result := True;
+          Exit;
+        End;
+    End;
+  {$ENDIF}
+  Result := False;
 End;
 
 Function FindAspellLibrary(Out FullName: String): Boolean;

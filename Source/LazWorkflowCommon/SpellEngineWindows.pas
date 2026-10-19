@@ -502,4 +502,15 @@ Begin
   Result := sekWindows;
 End;
 
+Function WindowsEngineAvailable: Boolean;
+Var
+  LanguageCode: String;
+Begin
+  Result := WindowsSpellAvailable(LanguageCode);
+End;
+
+Initialization
+
+RegisterSpellEngineKind(sekWindows, @WindowsEngineAvailable);
+
 End.

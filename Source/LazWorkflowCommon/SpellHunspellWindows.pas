@@ -10,7 +10,11 @@ Unit SpellHunspellWindows;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, DynLibs;
+
+/// True when FileName is a path that must be loaded with LOAD_WITH_ALTERED_SEARCH_PATH.
+/// Other hosts return false so the caller uses DynLibs.LoadLibrary.
+Function TryLoadHunspellAlteredSearch(Const FileName: String; Out Handle: TLibHandle; Out ErrorText: String): Boolean;
 
 /// Locate Hunspell DLLs and aff/dic directories. Other platforms return empty results.
 Function WindowsHunspellLibraryFiles: TStringArray;
@@ -1095,6 +1099,34 @@ Begin
     Exit;
 End;
 {$ENDIF}
+
+Function TryLoadHunspellAlteredSearch(Const FileName: String; Out Handle: TLibHandle; Out ErrorText: String): Boolean;
+{$IFDEF WINDOWS}
+Var
+  WideName: UnicodeString;
+  ErrorCode: DWORD;
+{$ENDIF}
+Begin
+  Handle := NilHandle;
+  ErrorText := '';
+  Result := False;
+  If FileName = '' Then
+    Exit;
+  {$IFDEF WINDOWS}
+  Result := (Pos('\', FileName) > 0) Or (Pos('/', FileName) > 0);
+  If Not Result Then
+    Exit;
+  WideName := UTF8Decode(FileName);
+  Handle := TLibHandle(LoadLibraryExW(PWideChar(WideName), 0, LOAD_WITH_ALTERED_SEARCH_PATH));
+  If Handle = NilHandle Then
+    Begin
+      ErrorCode := GetLastError;
+      ErrorText := 'Could not load ' + FileName + ' (Windows error ' + IntToStr(ErrorCode) + ')';
+    End;
+  {$ELSE}
+  Result := False;
+  {$ENDIF}
+End;
 
 {$IFDEF WINDOWS}
 Initialization

@@ -143,6 +143,8 @@ End;
 Procedure TSpellPreloadThread.Execute;
 Var
   Candidate: TSpellEngine;
+  Kinds: TSpellEngineKindArray;
+  Index: Integer;
 
   Function TryKind(LoadKind: TSpellEngineKind): TSpellEngine;
   Begin
@@ -171,13 +173,13 @@ Begin
     FStatus := 'No engine loaded — memo only'
   Else If FKind = sekAuto Then
     Begin
-      {$IFDEF WINDOWS}
-      Candidate := TryKind(sekWindows);
-      {$ENDIF}
-      If Not Assigned(Candidate) Then
-        Candidate := TryKind(sekHunspell);
-      If Not Assigned(Candidate) Then
-        Candidate := TryKind(sekAspell);
+      Kinds := AvailableEngineKinds;
+      For Index := 0 To High(Kinds) Do
+        Begin
+          Candidate := TryKind(Kinds[Index]);
+          If Assigned(Candidate) Then
+            Break;
+        End;
     End
   Else
     Candidate := TryKind(FKind);
@@ -622,11 +624,9 @@ Begin
   Try
     Names.Sorted := True;
     Names.Duplicates := dupIgnore;
-    {$IFDEF WINDOWS}
     ListWindowsSpellLanguages(Names);
     AppendKind(Names, sekWindows);
     Names.Clear;
-    {$ENDIF}
     Try
       ListHunspellLanguages(Names, FOptions.DictionaryDirectory);
       AppendKind(Names, sekHunspell);

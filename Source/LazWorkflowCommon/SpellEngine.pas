@@ -48,7 +48,74 @@ Function SpellEngineKindToText(Kind: TSpellEngineKind): String;
 Function TextToSpellEngineKind(Const Value: String): TSpellEngineKind;
 Function EmptySpellSuggestions: TSpellStringArray;
 
+Type
+  TSpellEngineKindArray = Array Of TSpellEngineKind;
+  { True when this kind can be offered. Nil means always available. }
+  TSpellEngineAvailable = Function: Boolean;
+
+/// Registered kinds are listed first, then Hunspell and ASpell. A kind whose check returns false is omitted.
+Procedure RegisterSpellEngineKind(Kind: TSpellEngineKind; Available: TSpellEngineAvailable);
+Function AvailableEngineKinds: TSpellEngineKindArray;
+Function SpellEngineKindAvailable(Kind: TSpellEngineKind): Boolean;
+
 Implementation
+
+Const
+  MaxRegisteredEngines = 8;
+
+Var
+  RegisteredKinds: Array[0..MaxRegisteredEngines - 1] Of TSpellEngineKind;
+  RegisteredChecks: Array[0..MaxRegisteredEngines - 1] Of TSpellEngineAvailable;
+  RegisteredCount: Integer = 0;
+
+Procedure RegisterSpellEngineKind(Kind: TSpellEngineKind; Available: TSpellEngineAvailable);
+Var
+  Index: Integer;
+Begin
+  If Kind In [sekNone, sekAuto] Then
+    Exit;
+  For Index := 0 To RegisteredCount - 1 Do
+    If RegisteredKinds[Index] = Kind Then
+      Begin
+        RegisteredChecks[Index] := Available;
+        Exit;
+      End;
+  If RegisteredCount > High(RegisteredKinds) Then
+    Exit;
+  RegisteredKinds[RegisteredCount] := Kind;
+  RegisteredChecks[RegisteredCount] := Available;
+  Inc(RegisteredCount);
+End;
+
+Function AvailableEngineKinds: TSpellEngineKindArray;
+Var
+  Index, Count: Integer;
+Begin
+  Result := Nil;
+  Count := 0;
+  For Index := 0 To RegisteredCount - 1 Do
+    If (Not Assigned(RegisteredChecks[Index])) Or RegisteredChecks[Index]() Then
+      Begin
+        SetLength(Result, Count + 1);
+        Result[Count] := RegisteredKinds[Index];
+        Inc(Count);
+      End;
+  SetLength(Result, Count + 2);
+  Result[Count] := sekHunspell;
+  Result[Count + 1] := sekAspell;
+End;
+
+Function SpellEngineKindAvailable(Kind: TSpellEngineKind): Boolean;
+Var
+  Kinds: TSpellEngineKindArray;
+  Index: Integer;
+Begin
+  Kinds := AvailableEngineKinds;
+  Result := False;
+  For Index := 0 To High(Kinds) Do
+    If Kinds[Index] = Kind Then
+      Exit(True);
+End;
 
 Function SpellEngineKindToText(Kind: TSpellEngineKind): String;
 Begin

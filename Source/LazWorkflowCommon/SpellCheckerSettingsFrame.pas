@@ -10,7 +10,7 @@ Unit SpellCheckerSettingsFrame;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls, SpellCheckerOptions;
+  Classes, SysUtils, Forms, Controls, Graphics, StdCtrls, ExtCtrls, SpellCheckerOptions, SpellEngine;
 
 Type
   TSpellCheckerSettingsFrame = Class(TFrame)
@@ -28,9 +28,12 @@ Type
     Procedure EngineComboChange(Sender: TObject);
     Procedure LocateButtonClick(Sender: TObject);
   Private
+    EnginesFilled: Boolean;
     Procedure FillLanguageCombo(Const Selected: String);
     Procedure UpdatePreviewStatus;
     Procedure EnsureEngineItems;
+    Procedure SelectEngineKind(Kind: TSpellEngineKind);
+    Function SelectedEngineKind: TSpellEngineKind;
   Public
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
@@ -43,7 +46,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LazFileUtils, LazUTF8, SpellEngine, SpellCheckerConfig, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows;
+  LazFileUtils, LazUTF8, SpellCheckerConfig, SpellEngineHunspell, SpellEngineAspell;
 
 Procedure TSpellCheckerSettingsFrame.FillLanguageCombo(Const Selected: String);
 Var
@@ -87,14 +90,111 @@ Begin
   End;
 End;
 
-Procedure TSpellCheckerSettingsFrame.EnsureEngineItems;
+Function EngineKindCaption(Kind: TSpellEngineKind): String;
 Begin
-  {$IFDEF WINDOWS}
-  If Assigned(EngineCombo) And (EngineCombo.Items.IndexOf('Windows') < 0) Then
-    EngineCombo.Items.Add('Windows');
-  If Assigned(EngineCombo) And (EngineCombo.Items.Count > 1) Then
-    EngineCombo.Items[1] := 'Auto (Windows, Hunspell, then ASpell)';
-  {$ENDIF}
+  Case Kind Of
+    sekHunspell: Result := 'Hunspell (OpenOffice)';
+    sekAspell: Result := 'ASpell';
+    sekWindows: Result := 'Windows';
+  Else
+    Result := SpellEngineKindToText(Kind);
+  End;
+End;
+
+Function EngineKindShortName(Kind: TSpellEngineKind): String;
+Begin
+  Case Kind Of
+    sekHunspell: Result := 'Hunspell';
+    sekAspell: Result := 'ASpell';
+    sekWindows: Result := 'Windows';
+  Else
+    Result := SpellEngineKindToText(Kind);
+  End;
+End;
+
+Function AutoEngineCaption(Const Kinds: TSpellEngineKindArray): String;
+Var
+  Index, Count: Integer;
+  Names: Array Of String;
+Begin
+  Names := Nil;
+  Count := 0;
+  For Index := 0 To High(Kinds) Do
+    Begin
+      SetLength(Names, Count + 1);
+      Names[Count] := EngineKindShortName(Kinds[Index]);
+      Inc(Count);
+    End;
+  If Count = 0 Then
+    Result := 'Auto'
+  Else If Count = 1 Then
+    Result := 'Auto (' + Names[0] + ')'
+  Else
+    Begin
+      Result := 'Auto (';
+      For Index := 0 To Count - 2 Do
+        Begin
+          If Index > 0 Then
+            Result := Result + ', ';
+          Result := Result + Names[Index];
+        End;
+      Result := Result + ', then ' + Names[Count - 1] + ')';
+    End;
+End;
+
+Procedure TSpellCheckerSettingsFrame.SelectEngineKind(Kind: TSpellEngineKind);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(EngineCombo) Then
+    Exit;
+  For Index := 0 To EngineCombo.Items.Count - 1 Do
+    If TSpellEngineKind(PtrInt(EngineCombo.Items.Objects[Index])) = Kind Then
+      Begin
+        EngineCombo.ItemIndex := Index;
+        Exit;
+      End;
+  If EngineCombo.Items.Count > 1 Then
+    EngineCombo.ItemIndex := 1
+  Else
+    EngineCombo.ItemIndex := 0;
+End;
+
+Function TSpellCheckerSettingsFrame.SelectedEngineKind: TSpellEngineKind;
+Begin
+  Result := sekAuto;
+  If Not Assigned(EngineCombo) Then
+    Exit;
+  If (EngineCombo.ItemIndex < 0) Or (EngineCombo.ItemIndex >= EngineCombo.Items.Count) Then
+    Exit;
+  Result := TSpellEngineKind(PtrInt(EngineCombo.Items.Objects[EngineCombo.ItemIndex]));
+End;
+
+Procedure TSpellCheckerSettingsFrame.EnsureEngineItems;
+Var
+  Selected: TSpellEngineKind;
+  Kinds: TSpellEngineKindArray;
+  Index: Integer;
+Begin
+  If Not Assigned(EngineCombo) Then
+    Exit;
+  If EnginesFilled Then
+    Selected := SelectedEngineKind
+  Else
+    Selected := sekAuto;
+  Kinds := AvailableEngineKinds;
+  EngineCombo.Items.BeginUpdate;
+  Try
+    EngineCombo.Items.Clear;
+    EngineCombo.Items.AddObject('None', TObject(PtrInt(sekNone)));
+    EngineCombo.Items.AddObject(AutoEngineCaption(Kinds), TObject(PtrInt(sekAuto)));
+    For Index := 0 To High(Kinds) Do
+      EngineCombo.Items.AddObject(EngineKindCaption(Kinds[Index]), TObject(PtrInt(Kinds[Index])));
+  Finally
+    EngineCombo.Items.EndUpdate;
+  End;
+  EnginesFilled := True;
+  SelectEngineKind(Selected);
 End;
 
 Procedure TSpellCheckerSettingsFrame.OptionsToControls(Source: TSpellCheckerOptions);
@@ -102,15 +202,7 @@ Begin
   If Not Assigned(Source) Then
     Exit;
   EnsureEngineItems;
-  Case Source.EngineKind Of
-    sekNone: EngineCombo.ItemIndex := 0;
-    sekAuto: EngineCombo.ItemIndex := 1;
-    sekHunspell: EngineCombo.ItemIndex := 2;
-    sekAspell: EngineCombo.ItemIndex := 3;
-    sekWindows: EngineCombo.ItemIndex := 4;
-  Else
-    EngineCombo.ItemIndex := 1;
-  End;
+  SelectEngineKind(Source.EngineKind);
   LibraryEdit.Text := Source.LibraryFileName;
   DictDirEdit.Text := Source.DictionaryDirectory;
   FillLanguageCombo(Source.Language);
@@ -125,14 +217,7 @@ Begin
   If Not Assigned(Dest) Then
     Exit;
   EnsureEngineItems;
-  Case EngineCombo.ItemIndex Of
-    0: Dest.EngineKind := sekNone;
-    2: Dest.EngineKind := sekHunspell;
-    3: Dest.EngineKind := sekAspell;
-    4: Dest.EngineKind := sekWindows;
-  Else
-    Dest.EngineKind := sekAuto;
-  End;
+  Dest.EngineKind := SelectedEngineKind;
   LangItem := Trim(LanguageCombo.Text);
   If (LangItem = '') Or (LangItem = '(default)') Then
     Dest.Language := ''
@@ -164,12 +249,11 @@ Begin
         Exit;
       End;
     FoundLibrary := '';
-    {$IFDEF WINDOWS}
-    If (Preview.EngineKind In [sekWindows, sekAuto]) And WindowsSpellAvailable(FoundLibrary) Then
+    If (Preview.EngineKind In [sekWindows, sekAuto]) And SpellEngineKindAvailable(sekWindows) Then
       Begin
         StatusLabel.Caption := 'Windows spell checker found';
-        If FoundLibrary <> '' Then
-          StatusLabel.Caption := StatusLabel.Caption + ' · ' + FoundLibrary;
+        If Preview.Language <> '' Then
+          StatusLabel.Caption := StatusLabel.Caption + ' · ' + Preview.Language;
         Exit;
       End;
     If Preview.EngineKind = sekWindows Then
@@ -177,7 +261,6 @@ Begin
         StatusLabel.Caption := 'Windows spell checker is not available';
         Exit;
       End;
-    {$ENDIF}
     If (Preview.EngineKind In [sekHunspell, sekAuto]) And FindHunspellLibrary(FoundLibrary) Then
       Begin
         If Pos('libreoffice', LowerCase(FoundLibrary)) > 0 Then
@@ -275,43 +358,20 @@ Begin
 End;
 
 Function LocateAspellInstallation(Out LibraryFile, DictDir: String): Boolean;
-{$IFDEF WINDOWS}
 Var
-  Roots: Array[0..2] Of String;
-  Index: Integer;
-  Root, Candidate: String;
-{$ENDIF}
+  Candidate: String;
 Begin
   LibraryFile := '';
   DictDir := '';
   Result := FindAspellLibrary(LibraryFile);
-  {$IFDEF WINDOWS}
   If Not Result Then
-    Begin
-      Roots[0] := GetEnvironmentVariableUTF8('ProgramW6432');
-      Roots[1] := GetEnvironmentVariableUTF8('ProgramFiles');
-      Roots[2] := GetEnvironmentVariableUTF8('ProgramFiles(x86)');
-      For Index := 0 To High(Roots) Do
-        Begin
-          Root := IncludeTrailingPathDelimiter(ExcludeTrailingPathDelimiter(Roots[Index])) + 'Aspell\';
-          Candidate := Root + 'bin\aspell-15.dll';
-          If Not FileExistsUTF8(Candidate) Then
-            Candidate := Root + 'bin\libaspell-15.dll';
-          If FileExistsUTF8(Candidate) Then
-            Begin
-              LibraryFile := Candidate;
-              Result := True;
-              Break;
-            End;
-        End;
-    End;
+    Result := FindProgramAspellLibrary(LibraryFile);
   If Result And (ExtractFileDir(LibraryFile) <> '') Then
     Begin
       Candidate := IncludeTrailingPathDelimiter(ExtractFileDir(ExtractFileDir(LibraryFile))) + 'dict';
       If DirectoryExistsUTF8(Candidate) Then
         DictDir := Candidate;
     End;
-  {$ENDIF}
   Result := LibraryFile <> '';
 End;
 
@@ -336,15 +396,13 @@ Begin
     FoundKind := sekNone;
     LibraryFile := '';
     DictDir := '';
-    {$IFDEF WINDOWS}
     If Preview.EngineKind In [sekWindows, sekAuto] Then
-      If WindowsSpellAvailable(SelectedLanguage) Then
+      If SpellEngineKindAvailable(sekWindows) Then
         Begin
           FoundKind := sekWindows;
           If Preview.EngineKind = sekWindows Then
-            EngineCombo.ItemIndex := 4;
-          If Preview.EngineKind = sekWindows Then
             Begin
+              SelectEngineKind(sekWindows);
               LibraryEdit.Text := '';
               DictDirEdit.Text := '';
             End;
@@ -352,7 +410,10 @@ Begin
           If Assigned(WorkflowSpellConfig) Then
             WorkflowSpellConfig.Apply;
           FillLanguageCombo(Preview.Language);
-          StatusLabel.Caption := 'Configured windows (' + SelectedLanguage + ')';
+          If SelectedLanguage <> '' Then
+            StatusLabel.Caption := 'Configured windows (' + SelectedLanguage + ')'
+          Else
+            StatusLabel.Caption := 'Configured windows';
           If Preview.EngineKind = sekAuto Then
             StatusLabel.Caption := StatusLabel.Caption + '. Auto uses it first on Windows.';
           Exit;
@@ -362,7 +423,6 @@ Begin
           StatusLabel.Caption := 'Windows spell checker is not available. Add a language in Windows settings.';
           Exit;
         End;
-    {$ENDIF}
     If Preview.EngineKind In [sekHunspell, sekAuto] Then
       Begin
         If LocateHunspellInstallation(LibraryFile, DictDir) Then
@@ -390,7 +450,7 @@ Begin
         Exit;
       End;
     If (Preview.EngineKind = sekAuto) And (FoundKind = sekAspell) Then
-      EngineCombo.ItemIndex := 3;
+      SelectEngineKind(sekAspell);
     If LibraryFile <> '' Then
       LibraryEdit.Text := LibraryFile;
     If DictDir <> '' Then

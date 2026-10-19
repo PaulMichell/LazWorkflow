@@ -52,9 +52,6 @@ Procedure ResetHunspellDiscovery;
 Implementation
 
 Uses
-  {$IFDEF WINDOWS}
-  Windows,
-  {$ENDIF}
   DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions, WorkflowLog, SpellHunspellWindows,
   DirectoryListing;
 
@@ -156,26 +153,16 @@ Begin
 End;
 
 Function LoadSpellLibrary(Const FileName: String): TLibHandle;
-{$IFDEF WINDOWS}
 Var
-  WideName: UnicodeString;
-  ErrorCode: DWORD;
-{$ENDIF}
+  ErrorText: String;
 Begin
-  {$IFDEF WINDOWS}
-  If (Pos('\', FileName) > 0) Or (Pos('/', FileName) > 0) Then
+  { A full path on Windows must not use the default search order. DynLibs loads every other name. }
+  If TryLoadHunspellAlteredSearch(FileName, Result, ErrorText) Then
     Begin
-      WideName := UTF8Decode(FileName);
-      Result := TLibHandle(LoadLibraryExW(PWideChar(WideName), 0, LOAD_WITH_ALTERED_SEARCH_PATH));
-      If Result = NilHandle Then
-        Begin
-          ErrorCode := GetLastError;
-          If Assigned(WorkflowLogger) Then
-            WorkflowLogger.Warning('Spell', 'Could not load ' + FileName + ' (Windows error ' + IntToStr(ErrorCode) + ')');
-        End;
+      If (Result = NilHandle) And (ErrorText <> '') And Assigned(WorkflowLogger) Then
+        WorkflowLogger.Warning('Spell', ErrorText);
       Exit;
     End;
-  {$ENDIF}
   Result := LoadLibrary(FileName);
 End;
 
