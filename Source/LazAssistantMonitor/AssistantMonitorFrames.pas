@@ -1,0 +1,305 @@
+Unit AssistantMonitorFrames;
+
+{ LAM1 frame layout for the monitor catalogue (c) 2026 Michell Computing.
+
+  The payload buffer is allocated only after the length field passes the cap.
+  Length uses htonl and ntohl. JSON is fpjson. Image bytes use FCL base64. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
+Interface
+
+Uses
+  SysUtils;
+
+Const
+  MonitorFrameMagic = 'LAM1';
+  MonitorFrameVersion = 1;
+  MonitorFrameHeaderSize = 12;
+  MonitorMaxPayloadBytes = 262144;
+
+Type
+  TMonitorFrameStatus = (
+    mfsOk,
+    mfsNeedMore,
+    mfsBadMagic,
+    mfsBadVersion,
+    mfsShort,
+    mfsTooLarge,
+    mfsBadUtf8,
+    mfsBadJson
+  );
+
+  TMonitorFrame = Record
+    Version: Byte;
+    Flags: Byte;
+    Json: String;
+  End;
+
+Function TryEncodeMonitorFrame(Const Json: String; Out Bytes: RawByteString; Out Status: TMonitorFrameStatus): Boolean;
+Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+{ Header only. mfsTooLarge means close the socket and do not read PayloadLen body bytes.
+  The payload buffer is not allocated. }
+Function TryInspectMonitorFrameHeader(Const Bytes: RawByteString; Out PayloadLen: Cardinal; Out Status: TMonitorFrameStatus): Boolean;
+{ Streaming read. A length above the cap returns mfsTooLarge before the body is kept. }
+Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+Function EncodeMonitorImageBytes(Const Bytes: RawByteString): String;
+Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
+
+Implementation
+
+Uses
+  sockets, base64, fpjson, jsonparser;
+
+Function IsStrictUtf8(Const Bytes: RawByteString): Boolean;
+Var
+  Index, Len, Need, Second: Integer;
+  Lead: Byte;
+Begin
+  Result := False;
+  Index := 1;
+  Len := Length(Bytes);
+  While Index <= Len Do
+    Begin
+      Lead := Ord(Bytes[Index]);
+      If Lead < $80 Then
+        Need := 1
+      Else If (Lead >= $C2) And (Lead <= $DF) Then
+        Need := 2
+      Else If (Lead >= $E0) And (Lead <= $EF) Then
+        Need := 3
+      Else If (Lead >= $F0) And (Lead <= $F4) Then
+        Need := 4
+      Else
+        Exit;
+      If Index + Need - 1 > Len Then
+        Exit;
+      If Need > 1 Then
+        Begin
+          Second := Ord(Bytes[Index + 1]);
+          If (Second < $80) Or (Second > $BF) Then
+            Exit;
+          If (Lead = $E0) And (Second < $A0) Then
+            Exit;
+          If (Lead = $ED) And (Second > $9F) Then
+            Exit;
+          If (Lead = $F0) And (Second < $90) Then
+            Exit;
+          If (Lead = $F4) And (Second > $8F) Then
+            Exit;
+        End;
+      If Need > 2 Then
+        If (Ord(Bytes[Index + 2]) < $80) Or (Ord(Bytes[Index + 2]) > $BF) Then
+          Exit;
+      If Need > 3 Then
+        If (Ord(Bytes[Index + 3]) < $80) Or (Ord(Bytes[Index + 3]) > $BF) Then
+          Exit;
+      Inc(Index, Need);
+    End;
+  Result := True;
+End;
+
+Function ReadNetworkLength(Const Bytes: RawByteString): Cardinal;
+Var
+  Net: Cardinal;
+Begin
+  Net := 0;
+  Move(Bytes[9], Net, 4);
+  Result := ntohl(Net);
+End;
+
+Function TryInspectMonitorFrameHeader(Const Bytes: RawByteString; Out PayloadLen: Cardinal; Out Status: TMonitorFrameStatus): Boolean;
+Begin
+  Result := False;
+  PayloadLen := 0;
+  Status := mfsShort;
+  If Length(Bytes) < MonitorFrameHeaderSize Then
+    Exit;
+  If Copy(Bytes, 1, 4) <> MonitorFrameMagic Then
+    Begin
+      Status := mfsBadMagic;
+      Exit;
+    End;
+  If Ord(Bytes[5]) <> MonitorFrameVersion Then
+    Begin
+      Status := mfsBadVersion;
+      Exit;
+    End;
+  { Length is accepted before any payload buffer is allocated. }
+  PayloadLen := ReadNetworkLength(Bytes);
+  If PayloadLen > MonitorMaxPayloadBytes Then
+    Begin
+      Status := mfsTooLarge;
+      Exit;
+    End;
+  Result := True;
+  Status := mfsOk;
+End;
+
+Function FinishPayload(Const Bytes: RawByteString; PayloadLen: Cardinal; Out Frame: TMonitorFrame;
+  Out Status: TMonitorFrameStatus): Boolean;
+Var
+  Raw, Json: RawByteString;
+  Data: TJSONData;
+Begin
+  Result := False;
+  Frame.Version := MonitorFrameVersion;
+  Frame.Flags := Ord(Bytes[6]);
+  Frame.Json := '';
+  Status := mfsBadJson;
+  Raw := '';
+  SetLength(Raw, PayloadLen);
+  If PayloadLen > 0 Then
+    Move(Bytes[MonitorFrameHeaderSize + 1], Raw[1], PayloadLen);
+  If Not IsStrictUtf8(Raw) Then
+    Begin
+      Status := mfsBadUtf8;
+      Exit;
+    End;
+  { jsonparser accepts the bytes it is given. It is not a UTF-8 gate. }
+  Json := Raw;
+  SetCodePage(Json, CP_UTF8, False);
+  Data := Nil;
+  Try
+    Try
+      If Json = '' Then
+        Exit;
+      Data := GetJSON(Json);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Frame.Json := Json;
+    Status := mfsOk;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function PayloadIsJsonObject(Const Json: RawByteString): Boolean;
+Var
+  Data: TJSONData;
+  Marked: RawByteString;
+Begin
+  Result := False;
+  Data := Nil;
+  Marked := Json;
+  SetCodePage(Marked, CP_UTF8, False);
+  Try
+    Try
+      If Marked = '' Then
+        Exit;
+      Data := GetJSON(Marked);
+    Except
+      Exit;
+    End;
+    Result := Data Is TJSONObject;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function TryEncodeMonitorFrame(Const Json: String; Out Bytes: RawByteString; Out Status: TMonitorFrameStatus): Boolean;
+Var
+  NetLen: Cardinal;
+  Payload: RawByteString;
+Begin
+  Result := False;
+  Bytes := '';
+  Status := mfsTooLarge;
+  If Length(Json) > MonitorMaxPayloadBytes Then
+    Exit;
+  Payload := Json;
+  If Not IsStrictUtf8(Payload) Then
+    Begin
+      Status := mfsBadUtf8;
+      Exit;
+    End;
+  If Not PayloadIsJsonObject(Payload) Then
+    Begin
+      Status := mfsBadJson;
+      Exit;
+    End;
+  SetLength(Bytes, MonitorFrameHeaderSize + Length(Payload));
+  Bytes[1] := 'L';
+  Bytes[2] := 'A';
+  Bytes[3] := 'M';
+  Bytes[4] := '1';
+  Bytes[5] := Chr(MonitorFrameVersion);
+  Bytes[6] := Chr(0);
+  Bytes[7] := Chr(0);
+  Bytes[8] := Chr(0);
+  NetLen := htonl(Cardinal(Length(Payload)));
+  { Move is the read of NetLen. A typed store keeps the htonl result visible to the compiler. }
+  PCardinal(@Bytes[9])^ := NetLen;
+  If Length(Payload) > 0 Then
+    Move(Payload[1], Bytes[MonitorFrameHeaderSize + 1], Length(Payload));
+  Status := mfsOk;
+  Result := True;
+End;
+
+Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+Var
+  PayloadLen: Cardinal;
+Begin
+  Result := False;
+  Frame.Version := 0;
+  Frame.Flags := 0;
+  Frame.Json := '';
+  If Not TryInspectMonitorFrameHeader(Bytes, PayloadLen, Status) Then
+    Begin
+      If Length(Bytes) < MonitorFrameHeaderSize Then
+        Status := mfsShort;
+      Exit;
+    End;
+  If Length(Bytes) < MonitorFrameHeaderSize + Integer(PayloadLen) Then
+    Begin
+      Status := mfsShort;
+      Exit;
+    End;
+  Result := FinishPayload(Bytes, PayloadLen, Frame, Status);
+End;
+
+Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+Var
+  PayloadLen: Cardinal;
+  Have: Integer;
+Begin
+  Result := False;
+  Frame.Version := 0;
+  Frame.Flags := 0;
+  Frame.Json := '';
+  If Length(Pending) < MonitorFrameHeaderSize Then
+    Begin
+      Status := mfsNeedMore;
+      Exit;
+    End;
+  If Not TryInspectMonitorFrameHeader(Pending, PayloadLen, Status) Then
+    Exit;
+  Have := MonitorFrameHeaderSize + Integer(PayloadLen);
+  If Length(Pending) < Have Then
+    Begin
+      Status := mfsNeedMore;
+      Exit;
+    End;
+  Result := FinishPayload(Pending, PayloadLen, Frame, Status);
+  If Result Then
+    Delete(Pending, 1, Have);
+End;
+
+Function EncodeMonitorImageBytes(Const Bytes: RawByteString): String;
+Begin
+  Result := EncodeStringBase64(Bytes);
+End;
+
+Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
+Begin
+  Result := DecodeStringBase64(Encoded);
+End;
+
+End.

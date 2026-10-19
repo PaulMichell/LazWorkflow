@@ -1,0 +1,2508 @@
+Unit AssistantMonitorCodec;
+
+{ Monitor catalogue version 1. Wire names are snake case. (c) 2026 Michell Computing.
+
+  Limits live here, not in a later form. Unknown types become error / unknown_type
+  and do not change session state. Observer records are mapped, not copied into a
+  second view model.
+
+  JSON is fpjson and jsonparser. Message ids use TaskIdIsSafe. Mode strings are
+  AssistantModeToStr. Image bytes use the frames unit's FCL base64 helpers.
+  Frame length stays in AssistantMonitorFrames (htonl / ntohl).
+
+  Size note: exceeds the 1000 line preference. The v1 catalogue is one table of
+  message types, payload fields, and limits. Splitting it would hide a type.
+  Reviewed 2026-10-19: no socket, TLS, or form code in this unit. }
+
+{$IFDEF FPC}
+  {$MODE ObjFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
+Interface
+
+Uses
+  SysUtils, fpjson, AssistantConversation, AssistantSessionObserve;
+
+Const
+  MonitorCatalogueVersion = 1;
+  { One above GrokOAuthRedirectPort. The implementation checks that relationship. }
+  MonitorListenPort = 56122;
+  MonitorMaxMessageIdChars = 64;
+  MonitorMaxSendChars = 65536;
+  { Same cap as MaxToolEventChars in AssistantActor.pas. }
+  MonitorMaxToolBodyChars = 4000;
+  MonitorMaxBodyPartBytes = 200000;
+  MonitorMaxImagePartBytes = 190000;
+  { 4 * ceil(190000 / 3). With the envelope budget the frame stays under 262144. }
+  MonitorImagePartBase64Chars = 253336;
+  MonitorImageEnvelopeBytes = 8192;
+  MonitorMaxImageFetchBytes = 1048576;
+  { AssistantImageMaxFileBytes (8 MiB) is the store limit, not this frame budget. }
+  MonitorSnapshotStoredTurns = 30;
+  MonitorNoSessionReason = 'no_session';
+  MonitorNoSessionMessage = 'The Project Assistant window is not open.';
+  MonitorUnknownTypeReason = 'unknown_type';
+  MonitorPayloadTooLargeReason = 'payload_too_large';
+  MonitorHostBusyReason = 'host_busy';
+  MonitorPayloadTooLargeMessage = 'Text is longer than 65536 characters.';
+
+Type
+  TMonitorMessageKind = (
+    mmkUnknown,
+    mmkHello,
+    mmkPair,
+    mmkPairOk,
+    mmkHelloOk,
+    mmkAuth,
+    mmkRejected,
+    mmkBye,
+    mmkSnapshot,
+    mmkRefresh,
+    mmkTranscript,
+    mmkTurn,
+    mmkTurnData,
+    mmkMode,
+    mmkSetMode,
+    mmkSend,
+    mmkSteer,
+    mmkStop,
+    mmkStatus,
+    mmkTarget,
+    mmkPlan,
+    mmkSelectPlan,
+    mmkNewPlan,
+    mmkRemovePlan,
+    mmkWorkOnPlan,
+    mmkRunPlan,
+    mmkStopPlan,
+    mmkTasks,
+    mmkRunTask,
+    mmkInsertTask,
+    mmkInsertResult,
+    mmkApprovalRequested,
+    mmkApprovalDecision,
+    mmkApprovalClosed,
+    mmkImageGet,
+    mmkImageData,
+    mmkImageUnavailable,
+    mmkNewConversation,
+    mmkError,
+    mmkPing,
+    mmkPong
+  );
+
+  TMonitorMessage = Record
+    Version: Integer;
+    Id: String;
+    Kind: TMonitorMessageKind;
+    TypeName: String;
+    PayloadJson: String;
+    Reason: String;
+    { False for unknown_type and for a send or steer the text limit rejects. }
+    ChangesState: Boolean;
+    WireJson: String;
+  End;
+
+  TMonitorHello = Record
+    ClientName: String;
+    ClientVersion: String;
+    ClientId: String;
+    HasClientId: Boolean;
+  End;
+
+  TMonitorPair = Record
+    Code: String;
+    Fingerprint: String;
+  End;
+
+  TMonitorPairOk = Record
+    ClientId: String;
+    SessionToken: String;
+  End;
+
+  TMonitorHelloOk = Record
+    Nonce: String;
+    ServerName: String;
+  End;
+
+  TMonitorAuth = Record
+    ClientId: String;
+    Hmac: String;
+  End;
+
+  TMonitorRejected = Record
+    Reason: String;
+    HostVersion: Integer;
+    ClientVersion: Integer;
+  End;
+
+  TMonitorBye = Record
+    Reason: String;
+  End;
+
+  TMonitorModeMessage = Record
+    Mode: String;
+    Locked: Boolean;
+  End;
+
+  TMonitorTargetMessage = Record
+    Kind: String;
+    Display: String;
+    Root: String;
+  End;
+
+  TMonitorPathMessage = Record
+    Path: String;
+    Title: String;
+    HasTitle: Boolean;
+  End;
+
+  TMonitorTaskCommand = Record
+    Id: String;
+    Note: String;
+  End;
+
+  TMonitorApprovalDecision = Record
+    ToolId: String;
+    Allow: Boolean;
+  End;
+
+  TMonitorApprovalClosed = Record
+    ToolId: String;
+    Reason: String;
+  End;
+
+  TMonitorImageGet = Record
+    TurnIndex: Integer;
+    ImageId: String;
+  End;
+
+  TMonitorImageData = Record
+    ImageId: String;
+    Mime: String;
+    Width: Integer;
+    Height: Integer;
+    Part: Integer;
+    PartCount: Integer;
+    Revision: Integer;
+    BytesBase64: String;
+  End;
+
+  TMonitorImageUnavailable = Record
+    ImageId: String;
+    Reason: String;
+  End;
+
+  TMonitorErrorBody = Record
+    Reason: String;
+    MessageText: String;
+    RefId: String;
+  End;
+
+  TMonitorTicks = Record
+    Ticks: Int64;
+  End;
+
+  TMonitorBodyPart = Record
+    Part: Integer;
+    PartCount: Integer;
+    Revision: Integer;
+    Text: String;
+  End;
+  TMonitorBodyPartArray = Array Of TMonitorBodyPart;
+
+  TMonitorTranscript = Record
+    TurnIndex: Integer;
+    Revision: Integer;
+    Phase: String;
+    StatusText: String;
+    Blocks: Array Of TAssistantMonitorBlock;
+    { Parallel to Blocks. 1 and 1 when that block was not split. }
+    BlockPart: Array Of Integer;
+    BlockPartCount: Array Of Integer;
+    Part: Integer;
+    PartCount: Integer;
+  End;
+  TMonitorTranscriptArray = Array Of TMonitorTranscript;
+
+  TMonitorSnapshot = Record
+    View: TAssistantMonitorView;
+    StoredTurns: Array Of TAssistantMonitorTurn;
+    Live: TAssistantMonitorTurn;
+    HasLive: Boolean;
+    PlanPath: String;
+    PlanTitle: String;
+    PlanRunning: Boolean;
+    PlanRows: Array Of TAssistantMonitorPlanRow;
+    TaskRows: Array Of TAssistantMonitorTaskRow;
+    Approval: TAssistantApprovalNotice;
+  End;
+
+Function MonitorMessageKindName(Kind: TMonitorMessageKind): String;
+Function MonitorMessageKindFromName(Const Name: String): TMonitorMessageKind;
+Function MonitorMessageIdIsSafe(Const Id: String): Boolean;
+Function MonitorRejectedReasonIsKnown(Const Reason: String): Boolean;
+Function MonitorApprovalCloseReasonIsKnown(Const Reason: String): Boolean;
+Function MonitorImageUnavailableReasonIsKnown(Const Reason: String): Boolean;
+Function MonitorModeName(Mode: TAssistantMode): String;
+Function MonitorModeIsKnown(Const ModeText: String): Boolean;
+
+{ Empty when the id is unsafe or the object would exceed the frame cap. }
+Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
+Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
+Function MonitorUnknownTypeError(Const RefId, TypeName: String): String;
+Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): String;
+Function DecodeMonitorError(Const PayloadJson: String; Out ErrorBody: TMonitorErrorBody): Boolean;
+
+{ ClientId empty is the first hello. A non-empty id is the reconnect shape. }
+Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
+Function DecodeMonitorHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
+Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
+Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Function EncodeMonitorHelloOk(Const Id, Nonce, ServerName: String): String;
+Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
+Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
+Function DecodeMonitorRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Function EncodeMonitorBye(Const Id, Reason: String): String;
+Function DecodeMonitorBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+
+Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Function DecodeMonitorText(Const PayloadJson: String; Out Text: String): Boolean;
+Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
+Function EncodeMonitorSetMode(Const Id, Mode: String): String;
+Function DecodeMonitorSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
+Function DecodeMonitorMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
+Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
+Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
+Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
+Function DecodeMonitorNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function EncodeMonitorWorkOnPlan(Const Id: String; Index: Integer): String;
+Function DecodeMonitorWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function EncodeMonitorTaskCommand(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Function DecodeMonitorTaskCommand(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function EncodeMonitorInsertResult(Const Id, Text: String): String;
+Function EncodeMonitorTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
+Function DecodeMonitorTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+
+Function EncodeMonitorApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
+Function DecodeMonitorApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Function EncodeMonitorApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
+Function DecodeMonitorApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
+Function DecodeMonitorApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+
+Function MonitorToolBodyForWire(Const Body: String; Out Truncated: Boolean): String;
+Function SplitMonitorBody(Const Body: String; Revision: Integer): TMonitorBodyPartArray;
+Function MonitorBlockToJson(Const Block: TAssistantMonitorBlock; Part, PartCount, Revision: Integer): TJSONObject;
+Function TryMonitorBlockFromJson(Obj: TJSONObject; Out Block: TAssistantMonitorBlock; Out Truncated: Boolean): Boolean;
+Function MonitorViewToJson(Const View: TAssistantMonitorView): TJSONObject;
+Function TryMonitorViewFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
+Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
+Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
+Function MonitorTurnToJson(Const Turn: TAssistantMonitorTurn; IndexOnly: Boolean): TJSONObject;
+Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: TAssistantMonitorTurn): Boolean;
+Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
+Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow): String;
+Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+  Out Rows: TMonitorSnapshot): Boolean;
+Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
+Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
+Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
+{ Splits answer and thinking bodies that exceed 200000 bytes. Each part has part, part_count, and revision. }
+Function SplitMonitorTranscript(Const Source: TMonitorTranscript): TMonitorTranscriptArray;
+Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
+Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+
+Function MonitorTurnIndexRow(TurnIndex: Integer; Const Id, Mode, CreatedAt, PromptPreview, ErrorText: String): TJSONObject;
+Function LimitMonitorStoredTurns(Const Turns: TJSONArray): TJSONArray;
+
+{ True when the host must send image_unavailable and keep the socket open. }
+Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
+Function TryBuildMonitorImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
+  Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
+Function DecodeMonitorImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Function EncodeMonitorImageUnavailable(Const Id, ImageId, Reason: String): String;
+Function DecodeMonitorImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Function EncodeMonitorImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
+Function DecodeMonitorImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+{ Messages are image_data envelopes, or empty when UnavailableReason is set. Does not close a socket. }
+Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
+  Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
+
+Implementation
+
+Uses
+  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames;
+
+{$IF MonitorListenPort <> GrokOAuthRedirectPort + 1}
+  {$ERROR Listen port must stay one above GrokOAuthRedirectPort}
+{$ENDIF}
+{$IF MonitorImagePartBase64Chars + MonitorImageEnvelopeBytes > MonitorMaxPayloadBytes}
+  {$ERROR Image part envelope exceeds the frame cap}
+{$ENDIF}
+{$IF ((MonitorMaxImagePartBytes + 2) Div 3) * 4 <> MonitorImagePartBase64Chars}
+  {$ERROR Image part base64 size drifted}
+{$ENDIF}
+
+Function MonitorMessageKindName(Kind: TMonitorMessageKind): String;
+Begin
+  Case Kind Of
+    mmkHello: Result := 'hello';
+    mmkPair: Result := 'pair';
+    mmkPairOk: Result := 'pair_ok';
+    mmkHelloOk: Result := 'hello_ok';
+    mmkAuth: Result := 'auth';
+    mmkRejected: Result := 'rejected';
+    mmkBye: Result := 'bye';
+    mmkSnapshot: Result := 'snapshot';
+    mmkRefresh: Result := 'refresh';
+    mmkTranscript: Result := 'transcript';
+    mmkTurn: Result := 'turn';
+    mmkTurnData: Result := 'turn_data';
+    mmkMode: Result := 'mode';
+    mmkSetMode: Result := 'set_mode';
+    mmkSend: Result := 'send';
+    mmkSteer: Result := 'steer';
+    mmkStop: Result := 'stop';
+    mmkStatus: Result := 'status';
+    mmkTarget: Result := 'target';
+    mmkPlan: Result := 'plan';
+    mmkSelectPlan: Result := 'select_plan';
+    mmkNewPlan: Result := 'new_plan';
+    mmkRemovePlan: Result := 'remove_plan';
+    mmkWorkOnPlan: Result := 'work_on_plan';
+    mmkRunPlan: Result := 'run_plan';
+    mmkStopPlan: Result := 'stop_plan';
+    mmkTasks: Result := 'tasks';
+    mmkRunTask: Result := 'run_task';
+    mmkInsertTask: Result := 'insert_task';
+    mmkInsertResult: Result := 'insert_result';
+    mmkApprovalRequested: Result := 'approval_requested';
+    mmkApprovalDecision: Result := 'approval_decision';
+    mmkApprovalClosed: Result := 'approval_closed';
+    mmkImageGet: Result := 'image_get';
+    mmkImageData: Result := 'image_data';
+    mmkImageUnavailable: Result := 'image_unavailable';
+    mmkNewConversation: Result := 'new_conversation';
+    mmkError: Result := 'error';
+    mmkPing: Result := 'ping';
+    mmkPong: Result := 'pong';
+  Else
+    Result := '';
+  End;
+End;
+
+Function MonitorMessageKindFromName(Const Name: String): TMonitorMessageKind;
+Var
+  Kind: TMonitorMessageKind;
+Begin
+  Result := mmkUnknown;
+  For Kind := Low(TMonitorMessageKind) To High(TMonitorMessageKind) Do
+    If (Kind <> mmkUnknown) And (MonitorMessageKindName(Kind) = Name) Then
+      Exit(Kind);
+End;
+
+Function MonitorMessageIdIsSafe(Const Id: String): Boolean;
+Begin
+  Result := (Length(Id) <= MonitorMaxMessageIdChars) And TaskIdIsSafe(Id);
+End;
+
+Function ReasonIn(Const Reason: String; Const Names: Array Of String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  For I := 0 To High(Names) Do
+    If Reason = Names[I] Then
+      Exit(True);
+End;
+
+Function MonitorRejectedReasonIsKnown(Const Reason: String): Boolean;
+Begin
+  Result := ReasonIn(Reason, ['protocol', 'pair_code', 'fingerprint', 'expired', 'auth', 'revoked', 'busy', 'disabled']);
+End;
+
+Function MonitorApprovalCloseReasonIsKnown(Const Reason: String): Boolean;
+Begin
+  Result := ReasonIn(Reason, ['allowed', 'denied', 'finished', 'timeout', 'desktop', 'disabled', 'stopped']);
+End;
+
+Function MonitorImageUnavailableReasonIsKnown(Const Reason: String): Boolean;
+Begin
+  Result := ReasonIn(Reason, ['missing', 'too_large', 'refused']);
+End;
+
+Function MonitorModeName(Mode: TAssistantMode): String;
+Begin
+  Result := AssistantModeToStr(Mode);
+End;
+
+Function MonitorModeIsKnown(Const ModeText: String): Boolean;
+Var
+  Mode: TAssistantMode;
+Begin
+  Result := False;
+  For Mode := Low(TAssistantMode) To High(TAssistantMode) Do
+    If AssistantModeToStr(Mode) = ModeText Then
+      Exit(True);
+End;
+
+Function ParseObject(Const Json: String; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
+Begin
+  Result := False;
+  Data := Nil;
+  Obj := Nil;
+  Try
+    Data := GetJSON(Json);
+  Except
+    Exit;
+  End;
+  If Not (Data Is TJSONObject) Then
+    Begin
+      FreeAndNil(Data);
+      Exit;
+    End;
+  Obj := TJSONObject(Data);
+  Result := True;
+End;
+
+Function ReadString(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: String): Boolean;
+Var
+  Node: TJSONData;
+Begin
+  Result := False;
+  Value := '';
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(Name);
+  If Not Assigned(Node) Then
+    Begin
+      Result := Not Required;
+      Exit;
+    End;
+  If Node.JSONType <> jtString Then
+    Exit;
+  Value := Node.AsString;
+  Result := True;
+End;
+
+Function ReadInt(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Integer): Boolean;
+Var
+  Node: TJSONData;
+Begin
+  Result := False;
+  Value := 0;
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(Name);
+  If Not Assigned(Node) Then
+    Begin
+      Result := Not Required;
+      Exit;
+    End;
+  If Node.JSONType <> jtNumber Then
+    Exit;
+  Value := Node.AsInteger;
+  Result := True;
+End;
+
+Function ReadInt64(Obj: TJSONObject; Const Name: String; Out Value: Int64): Boolean;
+Var
+  Node: TJSONData;
+Begin
+  Result := False;
+  Value := 0;
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(Name);
+  If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Then
+    Exit;
+  Value := Node.AsInt64;
+  Result := True;
+End;
+
+Function ReadBool(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Boolean): Boolean;
+Var
+  Node: TJSONData;
+Begin
+  Result := False;
+  Value := False;
+  If Not Assigned(Obj) Then
+    Exit;
+  Node := Obj.Find(Name);
+  If Not Assigned(Node) Then
+    Begin
+      Result := Not Required;
+      Exit;
+    End;
+  If Node.JSONType <> jtBoolean Then
+    Exit;
+  Value := Node.AsBoolean;
+  Result := True;
+End;
+
+Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
+Var
+  Root: TJSONObject;
+Begin
+  Result := '';
+  If (Kind = mmkUnknown) Or (Not MonitorMessageIdIsSafe(Id)) Then
+    Exit;
+  Root := TJSONObject.Create;
+  Try
+    Root.Add('v', MonitorCatalogueVersion);
+    Root.Add('id', Id);
+    Root.Add('type', MonitorMessageKindName(Kind));
+    If Assigned(Payload) Then
+      Root.Add('payload', TJSONObject(Payload.Clone))
+    Else
+      Root.Add('payload', TJSONObject.Create);
+    Result := Root.AsJSON;
+    If Length(Result) > MonitorMaxPayloadBytes Then
+      Result := '';
+  Finally
+    Root.Free;
+  End;
+End;
+
+Function EncodeWith(Kind: TMonitorMessageKind; Const Id: String; Payload: TJSONObject): String;
+Begin
+  Result := '';
+  Try
+    Result := EncodeMonitorEnvelope(Kind, Id, Payload);
+  Finally
+    Payload.Free;
+  End;
+End;
+
+Function EncodeOneString(Kind: TMonitorMessageKind; Const Id, Field, Value: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add(Field, Value);
+  Result := EncodeWith(Kind, Id, Payload);
+End;
+
+Function DecodeOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Value := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, Field, True, Value);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('reason', Reason);
+  Payload.Add('message', MessageText);
+  Payload.Add('ref', RefId);
+  Result := EncodeWith(mmkError, Id, Payload);
+End;
+
+Function MonitorUnknownTypeError(Const RefId, TypeName: String): String;
+Var
+  Shown: String;
+Begin
+  Shown := TypeName;
+  If Length(Shown) > MonitorMaxMessageIdChars Then
+    Shown := Copy(Shown, 1, MonitorMaxMessageIdChars);
+  Result := EncodeMonitorError(RefId, MonitorUnknownTypeReason, 'Unknown message type ' + Shown + '.', RefId);
+End;
+
+Function DecodeMonitorError(Const PayloadJson: String; Out ErrorBody: TMonitorErrorBody): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  ErrorBody.Reason := '';
+  ErrorBody.MessageText := '';
+  ErrorBody.RefId := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'reason', True, ErrorBody.Reason) And
+      ReadString(Obj, 'message', True, ErrorBody.MessageText) And ReadString(Obj, 'ref', True, ErrorBody.RefId);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure ApplyTextLimit(Var Message: TMonitorMessage);
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Text: String;
+Begin
+  If (Message.Kind <> mmkSend) And (Message.Kind <> mmkSteer) Then
+    Exit;
+  If Not ParseObject(Message.PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not ReadString(Obj, 'text', False, Text) Then
+      Exit;
+    If Length(Text) <= MonitorMaxSendChars Then
+      Exit;
+    Message.Kind := mmkError;
+    Message.TypeName := 'error';
+    Message.Reason := MonitorPayloadTooLargeReason;
+    Message.ChangesState := False;
+    Message.WireJson := EncodeMonitorError(Message.Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Message.Id);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
+Var
+  Data: TJSONData;
+  Root, Payload: TJSONObject;
+  TypeName, Id: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  Message.Version := 0;
+  Message.Id := '';
+  Message.Kind := mmkUnknown;
+  Message.TypeName := '';
+  Message.PayloadJson := '';
+  Message.Reason := '';
+  Message.ChangesState := False;
+  Message.WireJson := '';
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Json);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := E.Message;
+          Exit;
+        End;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'A monitor message must be a JSON object.';
+        Exit;
+      End;
+    Root := TJSONObject(Data);
+    If Root.Get('v', 0) <> MonitorCatalogueVersion Then
+      Begin
+        ErrorText := 'Unsupported catalogue version.';
+        Exit;
+      End;
+    Id := Root.Get('id', '');
+    TypeName := Root.Get('type', '');
+    If Not MonitorMessageIdIsSafe(Id) Then
+      Begin
+        ErrorText := 'Message id is not valid.';
+        Exit;
+      End;
+    If Not (Root.Find('payload') Is TJSONObject) Then
+      Begin
+        ErrorText := 'Message payload must be an object.';
+        Exit;
+      End;
+    Payload := TJSONObject(Root.Find('payload'));
+    Message.Version := MonitorCatalogueVersion;
+    Message.Id := Id;
+    Message.TypeName := TypeName;
+    Message.PayloadJson := Payload.AsJSON;
+    Message.Kind := MonitorMessageKindFromName(TypeName);
+    If Message.Kind = mmkUnknown Then
+      Begin
+        Message.Kind := mmkError;
+        Message.Reason := MonitorUnknownTypeReason;
+        Message.ChangesState := False;
+        Message.WireJson := MonitorUnknownTypeError(Id, TypeName);
+      End
+    Else
+      Begin
+        Message.Reason := Payload.Get('reason', '');
+        Message.ChangesState := True;
+        Message.WireJson := Json;
+        ApplyTextLimit(Message);
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('client_name', ClientName);
+  Payload.Add('client_version', ClientVersion);
+  If ClientId <> '' Then
+    Payload.Add('client_id', ClientId);
+  Result := EncodeWith(mmkHello, Id, Payload);
+End;
+
+Function DecodeMonitorHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Var
+  Data: TJSONData;
+  Payload: TJSONObject;
+Begin
+  Result := False;
+  Hello.ClientName := '';
+  Hello.ClientVersion := '';
+  Hello.ClientId := '';
+  Hello.HasClientId := False;
+  If Not ParseObject(PayloadJson, Data, Payload) Then
+    Exit;
+  Try
+    Hello.HasClientId := Assigned(Payload.Find('client_id'));
+    Result := ReadString(Payload, 'client_name', True, Hello.ClientName) And
+      ReadString(Payload, 'client_version', True, Hello.ClientVersion);
+    If Result And Hello.HasClientId Then
+      Result := ReadString(Payload, 'client_id', True, Hello.ClientId);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('code', Code);
+  Payload.Add('fingerprint', Fingerprint);
+  Result := EncodeWith(mmkPair, Id, Payload);
+End;
+
+Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Pair.Code := '';
+  Pair.Fingerprint := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'code', True, Pair.Code) And ReadString(Obj, 'fingerprint', True, Pair.Fingerprint);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('client_id', ClientId);
+  Payload.Add('session_token', SessionToken);
+  Result := EncodeWith(mmkPairOk, Id, Payload);
+End;
+
+Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  PairOk.ClientId := '';
+  PairOk.SessionToken := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'client_id', True, PairOk.ClientId) And
+      ReadString(Obj, 'session_token', True, PairOk.SessionToken);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorHelloOk(Const Id, Nonce, ServerName: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('nonce', Nonce);
+  Payload.Add('server_name', ServerName);
+  Result := EncodeWith(mmkHelloOk, Id, Payload);
+End;
+
+Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  HelloOk.Nonce := '';
+  HelloOk.ServerName := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'nonce', True, HelloOk.Nonce) And ReadString(Obj, 'server_name', True, HelloOk.ServerName);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('client_id', ClientId);
+  Payload.Add('hmac', Hmac);
+  Result := EncodeWith(mmkAuth, Id, Payload);
+End;
+
+Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Auth.ClientId := '';
+  Auth.Hmac := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'client_id', True, Auth.ClientId) And ReadString(Obj, 'hmac', True, Auth.Hmac);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If Not MonitorRejectedReasonIsKnown(Reason) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('reason', Reason);
+  Payload.Add('host_version', HostVersion);
+  Payload.Add('client_version', ClientVersion);
+  Result := EncodeWith(mmkRejected, Id, Payload);
+End;
+
+Function DecodeMonitorRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Rejected.Reason := '';
+  Rejected.HostVersion := 0;
+  Rejected.ClientVersion := 0;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'reason', True, Rejected.Reason) And
+      ReadInt(Obj, 'host_version', True, Rejected.HostVersion) And
+      ReadInt(Obj, 'client_version', True, Rejected.ClientVersion) And
+      MonitorRejectedReasonIsKnown(Rejected.Reason);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorBye(Const Id, Reason: String): String;
+Begin
+  Result := EncodeOneString(mmkBye, Id, 'reason', Reason);
+End;
+
+Function DecodeMonitorBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+Begin
+  Bye.Reason := '';
+  Result := DecodeOneString(PayloadJson, 'reason', Bye.Reason);
+End;
+
+Function TryEncodeLimitedText(Kind: TMonitorMessageKind; Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Begin
+  Result := False;
+  Json := '';
+  ErrorJson := '';
+  If Length(Text) > MonitorMaxSendChars Then
+    Begin
+      ErrorJson := EncodeMonitorError(Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Id);
+      Exit;
+    End;
+  Json := EncodeOneString(Kind, Id, 'text', Text);
+  Result := Json <> '';
+End;
+
+Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Begin
+  Result := TryEncodeLimitedText(mmkSend, Id, Text, Json, ErrorJson);
+End;
+
+Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Begin
+  Result := TryEncodeLimitedText(mmkSteer, Id, Text, Json, ErrorJson);
+End;
+
+Function DecodeMonitorText(Const PayloadJson: String; Out Text: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, 'text', Text) And (Length(Text) <= MonitorMaxSendChars);
+End;
+
+Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
+Begin
+  Result := EncodeMonitorEnvelope(Kind, Id, Nil);
+End;
+
+Function EncodeMonitorSetMode(Const Id, Mode: String): String;
+Begin
+  Result := '';
+  If Not MonitorModeIsKnown(Mode) Then
+    Exit;
+  Result := EncodeOneString(mmkSetMode, Id, 'mode', Mode);
+End;
+
+Function DecodeMonitorSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, 'mode', Mode) And MonitorModeIsKnown(Mode);
+End;
+
+Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('mode', Mode);
+  Payload.Add('locked', Locked);
+  Result := EncodeWith(mmkMode, Id, Payload);
+End;
+
+Function DecodeMonitorMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  ModeMessage.Mode := '';
+  ModeMessage.Locked := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'mode', True, ModeMessage.Mode) And ReadBool(Obj, 'locked', True, ModeMessage.Locked);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('turn_index', TurnIndex);
+  Result := EncodeWith(mmkTurn, Id, Payload);
+End;
+
+Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  TurnIndex := 0;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadInt(Obj, 'turn_index', True, TurnIndex);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('kind', Kind);
+  Payload.Add('display', Display);
+  Payload.Add('root', Root);
+  Result := EncodeWith(mmkTarget, Id, Payload);
+End;
+
+Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Target.Kind := '';
+  Target.Display := '';
+  Target.Root := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'kind', True, Target.Kind) And ReadString(Obj, 'display', True, Target.Display) And
+      ReadString(Obj, 'root', True, Target.Root);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
+Begin
+  Result := '';
+  If (Kind <> mmkSelectPlan) And (Kind <> mmkRemovePlan) Then
+    Exit;
+  Result := EncodeOneString(Kind, Id, 'path', Path);
+End;
+
+Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, 'path', Path);
+End;
+
+Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  If HasTitle Then
+    Payload.Add('title', Title);
+  Result := EncodeWith(mmkNewPlan, Id, Payload);
+End;
+
+Function DecodeMonitorNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Plan.Path := '';
+  Plan.Title := '';
+  Plan.HasTitle := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Plan.HasTitle := Assigned(Obj.Find('title'));
+    Result := True;
+    If Plan.HasTitle Then
+      Result := ReadString(Obj, 'title', True, Plan.Title);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorWorkOnPlan(Const Id: String; Index: Integer): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('index', Index);
+  Result := EncodeWith(mmkWorkOnPlan, Id, Payload);
+End;
+
+Function DecodeMonitorWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Index := 0;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadInt(Obj, 'index', True, Index);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorTaskCommand(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If (Kind <> mmkRunTask) And (Kind <> mmkInsertTask) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('id', TaskId);
+  Payload.Add('note', Note);
+  Result := EncodeWith(Kind, Id, Payload);
+End;
+
+Function DecodeMonitorTaskCommand(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Command.Id := '';
+  Command.Note := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'id', True, Command.Id) And ReadString(Obj, 'note', True, Command.Note);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorInsertResult(Const Id, Text: String): String;
+Begin
+  Result := EncodeOneString(mmkInsertResult, Id, 'text', Text);
+End;
+
+Function EncodeMonitorTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If (Kind <> mmkPing) And (Kind <> mmkPong) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('ticks', Ticks);
+  Result := EncodeWith(Kind, Id, Payload);
+End;
+
+Function DecodeMonitorTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Ticks.Ticks := 0;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadInt64(Obj, 'ticks', Ticks.Ticks);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('tool_id', Notice.ToolId);
+  Payload.Add('tool_name', Notice.ToolName);
+  Payload.Add('summary', Notice.Summary);
+  Payload.Add('mode_caption', Notice.ModeCaption);
+  Payload.Add('decisions_accepted', Notice.DecisionsAccepted);
+  Result := EncodeWith(mmkApprovalRequested, Id, Payload);
+End;
+
+Function DecodeMonitorApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Notice.Active := True;
+  Notice.ToolId := '';
+  Notice.ToolName := '';
+  Notice.Summary := '';
+  Notice.ModeCaption := '';
+  Notice.DecisionsAccepted := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'tool_id', True, Notice.ToolId) And ReadString(Obj, 'tool_name', True, Notice.ToolName) And
+      ReadString(Obj, 'summary', True, Notice.Summary) And ReadString(Obj, 'mode_caption', True, Notice.ModeCaption) And
+      ReadBool(Obj, 'decisions_accepted', True, Notice.DecisionsAccepted);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('tool_id', ToolId);
+  Payload.Add('allow', Allow);
+  Result := EncodeWith(mmkApprovalDecision, Id, Payload);
+End;
+
+Function DecodeMonitorApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Decision.ToolId := '';
+  Decision.Allow := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'tool_id', True, Decision.ToolId) And ReadBool(Obj, 'allow', True, Decision.Allow);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If Not MonitorApprovalCloseReasonIsKnown(Reason) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('tool_id', ToolId);
+  Payload.Add('reason', Reason);
+  Result := EncodeWith(mmkApprovalClosed, Id, Payload);
+End;
+
+Function DecodeMonitorApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Closed.ToolId := '';
+  Closed.Reason := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'tool_id', True, Closed.ToolId) And ReadString(Obj, 'reason', True, Closed.Reason) And
+      MonitorApprovalCloseReasonIsKnown(Closed.Reason);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function MonitorToolBodyForWire(Const Body: String; Out Truncated: Boolean): String;
+Begin
+  Truncated := Length(Body) > MonitorMaxToolBodyChars;
+  If Truncated Then
+    Result := Copy(Body, 1, MonitorMaxToolBodyChars)
+  Else
+    Result := Body;
+End;
+
+Function Utf8Boundary(Const Body: String; Index: Integer): Integer;
+Begin
+  Result := Index;
+  While (Result > 1) And (Result <= Length(Body)) And ((Ord(Body[Result]) And $C0) = $80) Do
+    Dec(Result);
+  If Result < 1 Then
+    Result := 1;
+End;
+
+Function SplitMonitorBody(Const Body: String; Revision: Integer): TMonitorBodyPartArray;
+Var
+  StartAt, NextAt, Take, I: Integer;
+Begin
+  Result := Nil;
+  SetLength(Result, 0);
+  If Length(Body) <= MonitorMaxBodyPartBytes Then
+    Begin
+      SetLength(Result, 1);
+      Result[0].Part := 1;
+      Result[0].PartCount := 1;
+      Result[0].Revision := Revision;
+      Result[0].Text := Body;
+      Exit;
+    End;
+  StartAt := 1;
+  While StartAt <= Length(Body) Do
+    Begin
+      NextAt := StartAt + MonitorMaxBodyPartBytes;
+      If NextAt > Length(Body) + 1 Then
+        NextAt := Length(Body) + 1
+      Else
+        NextAt := Utf8Boundary(Body, NextAt);
+      If NextAt <= StartAt Then
+        NextAt := StartAt + 1;
+      Take := NextAt - StartAt;
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)].Text := Copy(Body, StartAt, Take);
+      Result[High(Result)].Revision := Revision;
+      StartAt := NextAt;
+    End;
+  For I := 0 To High(Result) Do
+    Begin
+      Result[I].Part := I + 1;
+      Result[I].PartCount := Length(Result);
+    End;
+End;
+
+Function ImageToJson(Const Image: TAssistantMonitorImage): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('id', Image.Id);
+  Result.Add('name', Image.Name);
+  Result.Add('mime', Image.Mime);
+  Result.Add('width', Image.Width);
+  Result.Add('height', Image.Height);
+  Result.Add('display_path', Image.DisplayPath);
+  Result.Add('missing', Image.Missing);
+End;
+
+Function TryImageFromJson(Obj: TJSONObject; Out Image: TAssistantMonitorImage): Boolean;
+Begin
+  Result := False;
+  Image.Id := '';
+  Image.Name := '';
+  Image.Mime := '';
+  Image.Width := 0;
+  Image.Height := 0;
+  Image.DisplayPath := '';
+  Image.Missing := False;
+  If Not Assigned(Obj) Then
+    Exit;
+  Result := ReadString(Obj, 'id', True, Image.Id) And ReadString(Obj, 'name', True, Image.Name) And
+    ReadString(Obj, 'mime', True, Image.Mime) And ReadInt(Obj, 'width', True, Image.Width) And
+    ReadInt(Obj, 'height', True, Image.Height) And ReadString(Obj, 'display_path', True, Image.DisplayPath) And
+    ReadBool(Obj, 'missing', True, Image.Missing);
+End;
+
+Function ImagesToJson(Const Images: Array Of TAssistantMonitorImage): TJSONArray;
+Var
+  I: Integer;
+Begin
+  Result := TJSONArray.Create;
+  For I := 0 To High(Images) Do
+    Result.Add(ImageToJson(Images[I]));
+End;
+
+Function MonitorBlockToJson(Const Block: TAssistantMonitorBlock; Part, PartCount, Revision: Integer): TJSONObject;
+Var
+  Truncated: Boolean;
+  Body: String;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('kind', Block.Kind);
+  Result.Add('block_id', Block.BlockId);
+  Result.Add('title', Block.Title);
+  Result.Add('tool_name', Block.ToolName);
+  Result.Add('tool_id', Block.ToolId);
+  If Block.Kind = 'tool' Then
+    Begin
+      Body := MonitorToolBodyForWire(Block.Body, Truncated);
+      Result.Add('body', Body);
+      If Truncated Then
+        Result.Add('truncated', True);
+    End
+  Else
+    Result.Add('body', Block.Body);
+  Result.Add('running', Block.Running);
+  Result.Add('ok', Block.Ok);
+  Result.Add('duration_ms', Block.DurationMs);
+  Result.Add('images', ImagesToJson(Block.Images));
+  If PartCount > 1 Then
+    Begin
+      Result.Add('part', Part);
+      Result.Add('part_count', PartCount);
+      Result.Add('revision', Revision);
+    End;
+End;
+
+Function TryMonitorBlockFromJson(Obj: TJSONObject; Out Block: TAssistantMonitorBlock; Out Truncated: Boolean): Boolean;
+Var
+  Node: TJSONData;
+  Images: TJSONArray;
+  I: Integer;
+  Image: TAssistantMonitorImage;
+Begin
+  Result := False;
+  Truncated := False;
+  Block.Kind := '';
+  Block.BlockId := '';
+  Block.Title := '';
+  Block.ToolName := '';
+  Block.ToolId := '';
+  Block.Body := '';
+  Block.Running := False;
+  Block.Ok := False;
+  Block.DurationMs := 0;
+  SetLength(Block.Images, 0);
+  If Not Assigned(Obj) Then
+    Exit;
+  If Not (ReadString(Obj, 'kind', True, Block.Kind) And ReadString(Obj, 'block_id', True, Block.BlockId) And
+    ReadString(Obj, 'title', True, Block.Title) And ReadString(Obj, 'tool_name', True, Block.ToolName) And
+    ReadString(Obj, 'tool_id', True, Block.ToolId) And ReadString(Obj, 'body', True, Block.Body) And
+    ReadBool(Obj, 'running', True, Block.Running) And ReadBool(Obj, 'ok', True, Block.Ok) And
+    ReadInt(Obj, 'duration_ms', True, Block.DurationMs)) Then
+    Exit;
+  If Block.Kind = 'tool' Then
+    Begin
+      If Not ReadBool(Obj, 'truncated', False, Truncated) Then
+        Exit;
+      If Length(Block.Body) > MonitorMaxToolBodyChars Then
+        Exit;
+    End;
+  Node := Obj.Find('images');
+  If Not Assigned(Node) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If Not (Node Is TJSONArray) Then
+    Exit;
+  Images := TJSONArray(Node);
+  SetLength(Block.Images, Images.Count);
+  For I := 0 To Images.Count - 1 Do
+    Begin
+      If Not (Images[I] Is TJSONObject) Then
+        Exit;
+      If Not TryImageFromJson(TJSONObject(Images[I]), Image) Then
+        Exit;
+      Block.Images[I] := Image;
+    End;
+  Result := True;
+End;
+
+Procedure ClearView(Out View: TAssistantMonitorView);
+Begin
+  View.Available := False;
+  View.Busy := False;
+  View.Sending := False;
+  View.ModeLocked := False;
+  View.PlanRunning := False;
+  View.Mode := '';
+  View.Phase := '';
+  View.StatusText := '';
+  View.Model := '';
+  View.Backend := '';
+  View.SignedIn := False;
+  View.ApprovalCaption := '';
+  View.Effort := '';
+  View.Skill := '';
+  View.ContextText := '';
+  View.TargetKind := '';
+  View.TargetDisplay := '';
+  View.TargetRoot := '';
+  View.PlanPath := '';
+  View.PlanTitle := '';
+  View.CanSend := False;
+  View.CanSteer := False;
+  View.CanStop := False;
+  View.CanChangeMode := False;
+  View.RemoteApproval := False;
+  View.ErrorText := '';
+End;
+
+Procedure AddStatusFields(Obj: TJSONObject; Const View: TAssistantMonitorView);
+Begin
+  Obj.Add('available', View.Available);
+  Obj.Add('busy', View.Busy);
+  Obj.Add('sending', View.Sending);
+  Obj.Add('mode_locked', View.ModeLocked);
+  Obj.Add('plan_running', View.PlanRunning);
+  Obj.Add('phase', View.Phase);
+  Obj.Add('status_text', View.StatusText);
+  Obj.Add('model', View.Model);
+  Obj.Add('backend', View.Backend);
+  Obj.Add('signed_in', View.SignedIn);
+  Obj.Add('approval_caption', View.ApprovalCaption);
+  Obj.Add('effort', View.Effort);
+  Obj.Add('skill', View.Skill);
+  Obj.Add('context_text', View.ContextText);
+  Obj.Add('can_send', View.CanSend);
+  Obj.Add('can_steer', View.CanSteer);
+  Obj.Add('can_stop', View.CanStop);
+  Obj.Add('can_change_mode', View.CanChangeMode);
+  Obj.Add('remote_approval', View.RemoteApproval);
+  Obj.Add('error_text', View.ErrorText);
+End;
+
+Function ReadStatusFields(Obj: TJSONObject; Var View: TAssistantMonitorView): Boolean;
+Begin
+  Result := ReadBool(Obj, 'available', True, View.Available) And ReadBool(Obj, 'busy', True, View.Busy) And
+    ReadBool(Obj, 'sending', True, View.Sending) And ReadBool(Obj, 'mode_locked', True, View.ModeLocked) And
+    ReadBool(Obj, 'plan_running', True, View.PlanRunning) And ReadString(Obj, 'phase', True, View.Phase) And
+    ReadString(Obj, 'status_text', True, View.StatusText) And ReadString(Obj, 'model', True, View.Model) And
+    ReadString(Obj, 'backend', True, View.Backend) And ReadBool(Obj, 'signed_in', True, View.SignedIn) And
+    ReadString(Obj, 'approval_caption', True, View.ApprovalCaption) And ReadString(Obj, 'effort', True, View.Effort) And
+    ReadString(Obj, 'skill', True, View.Skill) And ReadString(Obj, 'context_text', True, View.ContextText) And
+    ReadBool(Obj, 'can_send', True, View.CanSend) And ReadBool(Obj, 'can_steer', True, View.CanSteer) And
+    ReadBool(Obj, 'can_stop', True, View.CanStop) And ReadBool(Obj, 'can_change_mode', True, View.CanChangeMode) And
+    ReadBool(Obj, 'remote_approval', True, View.RemoteApproval) And ReadString(Obj, 'error_text', True, View.ErrorText);
+End;
+
+Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  AddStatusFields(Result, View);
+End;
+
+Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
+Begin
+  ClearView(View);
+  Result := Assigned(Obj) And ReadStatusFields(Obj, View);
+End;
+
+Function MonitorViewToJson(Const View: TAssistantMonitorView): TJSONObject;
+Begin
+  Result := MonitorStatusToJson(View);
+  Result.Add('mode', View.Mode);
+  Result.Add('target_kind', View.TargetKind);
+  Result.Add('target_display', View.TargetDisplay);
+  Result.Add('target_root', View.TargetRoot);
+  Result.Add('plan_path', View.PlanPath);
+  Result.Add('plan_title', View.PlanTitle);
+End;
+
+Function TryMonitorViewFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
+Begin
+  Result := False;
+  ClearView(View);
+  If Not Assigned(Obj) Then
+    Exit;
+  Result := ReadStatusFields(Obj, View) And ReadString(Obj, 'mode', True, View.Mode) And
+    ReadString(Obj, 'target_kind', True, View.TargetKind) And ReadString(Obj, 'target_display', True, View.TargetDisplay) And
+    ReadString(Obj, 'target_root', True, View.TargetRoot) And ReadString(Obj, 'plan_path', True, View.PlanPath) And
+    ReadString(Obj, 'plan_title', True, View.PlanTitle);
+End;
+
+Procedure ClearTurn(Out Turn: TAssistantMonitorTurn);
+Begin
+  Turn.TurnIndex := 0;
+  Turn.Id := '';
+  Turn.Mode := '';
+  Turn.Prompt := '';
+  Turn.Thinking := '';
+  Turn.Response := '';
+  Turn.ErrorText := '';
+  Turn.CreatedAt := '';
+  Turn.DurationMs := 0;
+  Turn.PromptPreview := '';
+  Turn.Live := False;
+  SetLength(Turn.Blocks, 0);
+  SetLength(Turn.Images, 0);
+End;
+
+Function MonitorTurnToJson(Const Turn: TAssistantMonitorTurn; IndexOnly: Boolean): TJSONObject;
+Var
+  I: Integer;
+  Blocks, Images: TJSONArray;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('turn_index', Turn.TurnIndex);
+  Result.Add('id', Turn.Id);
+  Result.Add('mode', Turn.Mode);
+  Result.Add('created_at', Turn.CreatedAt);
+  Result.Add('prompt_preview', Turn.PromptPreview);
+  Result.Add('error_text', Turn.ErrorText);
+  If IndexOnly Then
+    Exit;
+  Result.Add('prompt', Turn.Prompt);
+  Result.Add('thinking', Turn.Thinking);
+  Result.Add('response', Turn.Response);
+  Result.Add('duration_ms', Turn.DurationMs);
+  Result.Add('live', Turn.Live);
+  Blocks := TJSONArray.Create;
+  For I := 0 To High(Turn.Blocks) Do
+    Blocks.Add(MonitorBlockToJson(Turn.Blocks[I], 1, 1, 0));
+  Result.Add('blocks', Blocks);
+  Images := ImagesToJson(Turn.Images);
+  Result.Add('images', Images);
+End;
+
+Function TryReadImages(Node: TJSONData; Var Turn: TAssistantMonitorTurn): Boolean;
+Var
+  Images: TJSONArray;
+  I: Integer;
+  Image: TAssistantMonitorImage;
+Begin
+  Result := False;
+  SetLength(Turn.Images, 0);
+  If Not Assigned(Node) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If Not (Node Is TJSONArray) Then
+    Exit;
+  Images := TJSONArray(Node);
+  SetLength(Turn.Images, Images.Count);
+  For I := 0 To Images.Count - 1 Do
+    Begin
+      If Not (Images[I] Is TJSONObject) Then
+        Exit;
+      If Not TryImageFromJson(TJSONObject(Images[I]), Image) Then
+        Exit;
+      Turn.Images[I] := Image;
+    End;
+  Result := True;
+End;
+
+Function TryReadBlocks(Node: TJSONData; Var Turn: TAssistantMonitorTurn): Boolean;
+Var
+  Blocks: TJSONArray;
+  I: Integer;
+  Truncated: Boolean;
+Begin
+  Result := False;
+  SetLength(Turn.Blocks, 0);
+  If Not Assigned(Node) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If Not (Node Is TJSONArray) Then
+    Exit;
+  Blocks := TJSONArray(Node);
+  SetLength(Turn.Blocks, Blocks.Count);
+  For I := 0 To Blocks.Count - 1 Do
+    Begin
+      If Not (Blocks[I] Is TJSONObject) Then
+        Exit;
+      If Not TryMonitorBlockFromJson(TJSONObject(Blocks[I]), Turn.Blocks[I], Truncated) Then
+        Exit;
+    End;
+  Result := True;
+End;
+
+Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: TAssistantMonitorTurn): Boolean;
+Begin
+  Result := False;
+  ClearTurn(Turn);
+  If Not Assigned(Obj) Then
+    Exit;
+  If Not (ReadInt(Obj, 'turn_index', True, Turn.TurnIndex) And ReadString(Obj, 'id', True, Turn.Id) And
+    ReadString(Obj, 'mode', True, Turn.Mode) And ReadString(Obj, 'created_at', True, Turn.CreatedAt) And
+    ReadString(Obj, 'prompt_preview', True, Turn.PromptPreview) And ReadString(Obj, 'error_text', True, Turn.ErrorText)) Then
+    Exit;
+  If IndexOnly Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  Result := ReadString(Obj, 'prompt', True, Turn.Prompt) And ReadString(Obj, 'thinking', True, Turn.Thinking) And
+    ReadString(Obj, 'response', True, Turn.Response) And ReadInt(Obj, 'duration_ms', True, Turn.DurationMs) And
+    ReadBool(Obj, 'live', True, Turn.Live) And TryReadBlocks(Obj.Find('blocks'), Turn) And TryReadImages(Obj.Find('images'), Turn);
+End;
+
+Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
+Begin
+  Result := EncodeWith(mmkTurnData, Id, MonitorTurnToJson(Turn, False));
+End;
+
+Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  ClearTurn(Turn);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := TryMonitorTurnFromJson(Obj, False, Turn);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function PlanRowToJson(Const Row: TAssistantMonitorPlanRow): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('index', Row.Index);
+  Result.Add('level', Row.Level);
+  Result.Add('title', Row.Title);
+  Result.Add('parent_title', Row.ParentTitle);
+  Result.Add('status', Row.Status);
+  Result.Add('actionable', Row.Actionable);
+End;
+
+Function TryPlanRowFromJson(Obj: TJSONObject; Out Row: TAssistantMonitorPlanRow): Boolean;
+Begin
+  Result := False;
+  Row.Index := 0;
+  Row.Level := 0;
+  Row.Title := '';
+  Row.ParentTitle := '';
+  Row.Status := '';
+  Row.Actionable := False;
+  If Not Assigned(Obj) Then
+    Exit;
+  Result := ReadInt(Obj, 'index', True, Row.Index) And ReadInt(Obj, 'level', True, Row.Level) And
+    ReadString(Obj, 'title', True, Row.Title) And ReadString(Obj, 'parent_title', True, Row.ParentTitle) And
+    ReadString(Obj, 'status', True, Row.Status) And ReadBool(Obj, 'actionable', True, Row.Actionable);
+End;
+
+Function PlanRowsToJson(Const Rows: Array Of TAssistantMonitorPlanRow): TJSONArray;
+Var
+  I: Integer;
+Begin
+  Result := TJSONArray.Create;
+  For I := 0 To High(Rows) Do
+    Result.Add(PlanRowToJson(Rows[I]));
+End;
+
+Function TaskRowToJson(Const Row: TAssistantMonitorTaskRow): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('id', Row.Id);
+  Result.Add('title', Row.Title);
+  Result.Add('summary', Row.Summary);
+  Result.Add('mode', Row.Mode);
+  Result.Add('kind', Row.Kind);
+  Result.Add('scope', Row.Scope);
+  Result.Add('compile_first', Row.CompileFirst);
+  Result.Add('enabled', Row.Enabled);
+  Result.Add('needs_note', Row.NeedsNote);
+End;
+
+Function TryTaskRowFromJson(Obj: TJSONObject; Out Row: TAssistantMonitorTaskRow): Boolean;
+Begin
+  Result := False;
+  Row.Id := '';
+  Row.Title := '';
+  Row.Summary := '';
+  Row.Mode := '';
+  Row.Kind := '';
+  Row.Scope := '';
+  Row.CompileFirst := False;
+  Row.Enabled := False;
+  Row.NeedsNote := False;
+  If Not Assigned(Obj) Then
+    Exit;
+  Result := ReadString(Obj, 'id', True, Row.Id) And ReadString(Obj, 'title', True, Row.Title) And
+    ReadString(Obj, 'summary', True, Row.Summary) And ReadString(Obj, 'mode', True, Row.Mode) And
+    ReadString(Obj, 'kind', True, Row.Kind) And ReadString(Obj, 'scope', True, Row.Scope) And
+    ReadBool(Obj, 'compile_first', True, Row.CompileFirst) And ReadBool(Obj, 'enabled', True, Row.Enabled) And
+    ReadBool(Obj, 'needs_note', True, Row.NeedsNote);
+End;
+
+Function TaskRowsToJson(Const Rows: Array Of TAssistantMonitorTaskRow): TJSONArray;
+Var
+  I: Integer;
+Begin
+  Result := TJSONArray.Create;
+  For I := 0 To High(Rows) Do
+    Result.Add(TaskRowToJson(Rows[I]));
+End;
+
+Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('path', Path);
+  Payload.Add('title', Title);
+  Payload.Add('running', Running);
+  Payload.Add('rows', PlanRowsToJson(Rows));
+  Result := EncodeWith(mmkPlan, Id, Payload);
+End;
+
+Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+  Out Rows: TMonitorSnapshot): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Node: TJSONData;
+  Arr: TJSONArray;
+  I: Integer;
+Begin
+  Result := False;
+  Path := '';
+  Title := '';
+  Running := False;
+  Rows.PlanPath := '';
+  Rows.PlanTitle := '';
+  Rows.PlanRunning := False;
+  SetLength(Rows.PlanRows, 0);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not (ReadString(Obj, 'path', True, Path) And ReadString(Obj, 'title', True, Title) And
+      ReadBool(Obj, 'running', True, Running)) Then
+      Exit;
+    Node := Obj.Find('rows');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    SetLength(Rows.PlanRows, Arr.Count);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr[I] Is TJSONObject) Then
+          Exit;
+        If Not TryPlanRowFromJson(TJSONObject(Arr[I]), Rows.PlanRows[I]) Then
+          Exit;
+      End;
+    Rows.PlanPath := Path;
+    Rows.PlanTitle := Title;
+    Rows.PlanRunning := Running;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('rows', TaskRowsToJson(Rows));
+  Result := EncodeWith(mmkTasks, Id, Payload);
+End;
+
+Function ApprovalToJson(Const Notice: TAssistantApprovalNotice): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('active', Notice.Active);
+  Result.Add('tool_id', Notice.ToolId);
+  Result.Add('tool_name', Notice.ToolName);
+  Result.Add('summary', Notice.Summary);
+  Result.Add('mode_caption', Notice.ModeCaption);
+  Result.Add('decisions_accepted', Notice.DecisionsAccepted);
+End;
+
+Function TryApprovalFromJson(Obj: TJSONObject; Out Notice: TAssistantApprovalNotice): Boolean;
+Begin
+  Result := False;
+  Notice.Active := False;
+  Notice.ToolId := '';
+  Notice.ToolName := '';
+  Notice.Summary := '';
+  Notice.ModeCaption := '';
+  Notice.DecisionsAccepted := False;
+  If Not Assigned(Obj) Then
+    Exit;
+  Result := ReadBool(Obj, 'active', True, Notice.Active) And ReadString(Obj, 'tool_id', True, Notice.ToolId) And
+    ReadString(Obj, 'tool_name', True, Notice.ToolName) And ReadString(Obj, 'summary', True, Notice.Summary) And
+    ReadString(Obj, 'mode_caption', True, Notice.ModeCaption) And
+    ReadBool(Obj, 'decisions_accepted', True, Notice.DecisionsAccepted);
+End;
+
+Function StoredTurnIsLive(Const Turn: TAssistantMonitorTurn): Boolean;
+Begin
+  Result := Turn.Live;
+End;
+
+Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
+Var
+  Payload, PlanObj, Tasks: TJSONObject;
+  TurnRows: TJSONArray;
+  Kept: Array Of TAssistantMonitorTurn;
+  I, Count, StartAt: Integer;
+Begin
+  Result := '';
+  Kept := Nil;
+  TurnRows := Nil;
+  Count := 0;
+  For I := 0 To High(Snapshot.StoredTurns) Do
+    If Not StoredTurnIsLive(Snapshot.StoredTurns[I]) Then
+      Inc(Count);
+  SetLength(Kept, Count);
+  Count := 0;
+  For I := 0 To High(Snapshot.StoredTurns) Do
+    If Not StoredTurnIsLive(Snapshot.StoredTurns[I]) Then
+      Begin
+        Kept[Count] := Snapshot.StoredTurns[I];
+        Inc(Count);
+      End;
+  StartAt := 0;
+  If Count > MonitorSnapshotStoredTurns Then
+    StartAt := Count - MonitorSnapshotStoredTurns;
+  TurnRows := TJSONArray.Create;
+  For I := StartAt To Count - 1 Do
+    TurnRows.Add(MonitorTurnToJson(Kept[I], True));
+  Payload := TJSONObject.Create;
+  Try
+    Payload.Add('view', MonitorViewToJson(Snapshot.View));
+    Payload.Add('turns', TurnRows);
+    TurnRows := Nil;
+    If Snapshot.HasLive Then
+      Payload.Add('live', MonitorTurnToJson(Snapshot.Live, False))
+    Else
+      Payload.Add('live', TJSONNull.Create);
+    PlanObj := TJSONObject.Create;
+    PlanObj.Add('path', Snapshot.PlanPath);
+    PlanObj.Add('title', Snapshot.PlanTitle);
+    PlanObj.Add('running', Snapshot.PlanRunning);
+    PlanObj.Add('rows', PlanRowsToJson(Snapshot.PlanRows));
+    Payload.Add('plan', PlanObj);
+    Tasks := TJSONObject.Create;
+    Tasks.Add('rows', TaskRowsToJson(Snapshot.TaskRows));
+    Payload.Add('tasks', Tasks);
+    Payload.Add('approval', ApprovalToJson(Snapshot.Approval));
+    Result := EncodeMonitorEnvelope(mmkSnapshot, Id, Payload);
+  Finally
+    TurnRows.Free;
+    Payload.Free;
+  End;
+End;
+
+Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
+Var
+  Data: TJSONData;
+  Obj, Child: TJSONObject;
+  Node: TJSONData;
+  Arr: TJSONArray;
+  I: Integer;
+Begin
+  Result := False;
+  ClearView(Snapshot.View);
+  SetLength(Snapshot.StoredTurns, 0);
+  ClearTurn(Snapshot.Live);
+  Snapshot.HasLive := False;
+  Snapshot.PlanPath := '';
+  Snapshot.PlanTitle := '';
+  Snapshot.PlanRunning := False;
+  SetLength(Snapshot.PlanRows, 0);
+  SetLength(Snapshot.TaskRows, 0);
+  Snapshot.Approval.Active := False;
+  Snapshot.Approval.ToolId := '';
+  Snapshot.Approval.ToolName := '';
+  Snapshot.Approval.Summary := '';
+  Snapshot.Approval.ModeCaption := '';
+  Snapshot.Approval.DecisionsAccepted := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not (Obj.Find('view') Is TJSONObject) Then
+      Exit;
+    If Not TryMonitorViewFromJson(TJSONObject(Obj.Find('view')), Snapshot.View) Then
+      Exit;
+    Node := Obj.Find('turns');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    If Arr.Count > MonitorSnapshotStoredTurns Then
+      Exit;
+    SetLength(Snapshot.StoredTurns, Arr.Count);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr[I] Is TJSONObject) Then
+          Exit;
+        If Not TryMonitorTurnFromJson(TJSONObject(Arr[I]), True, Snapshot.StoredTurns[I]) Then
+          Exit;
+      End;
+    Node := Obj.Find('live');
+    If Not Assigned(Node) Or (Node Is TJSONNull) Then
+      Snapshot.HasLive := False
+    Else If Node Is TJSONObject Then
+      Begin
+        If Not TryMonitorTurnFromJson(TJSONObject(Node), False, Snapshot.Live) Then
+          Exit;
+        Snapshot.HasLive := True;
+      End
+    Else
+      Exit;
+    If Not (Obj.Find('plan') Is TJSONObject) Then
+      Exit;
+    Child := TJSONObject(Obj.Find('plan'));
+    If Not (ReadString(Child, 'path', True, Snapshot.PlanPath) And ReadString(Child, 'title', True, Snapshot.PlanTitle) And
+      ReadBool(Child, 'running', True, Snapshot.PlanRunning)) Then
+      Exit;
+    Node := Child.Find('rows');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    SetLength(Snapshot.PlanRows, Arr.Count);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr[I] Is TJSONObject) Then
+          Exit;
+        If Not TryPlanRowFromJson(TJSONObject(Arr[I]), Snapshot.PlanRows[I]) Then
+          Exit;
+      End;
+    If Not (Obj.Find('tasks') Is TJSONObject) Then
+      Exit;
+    Child := TJSONObject(Obj.Find('tasks'));
+    Node := Child.Find('rows');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    SetLength(Snapshot.TaskRows, Arr.Count);
+    For I := 0 To Arr.Count - 1 Do
+      Begin
+        If Not (Arr[I] Is TJSONObject) Then
+          Exit;
+        If Not TryTaskRowFromJson(TJSONObject(Arr[I]), Snapshot.TaskRows[I]) Then
+          Exit;
+      End;
+    If Not (Obj.Find('approval') Is TJSONObject) Then
+      Exit;
+    Result := TryApprovalFromJson(TJSONObject(Obj.Find('approval')), Snapshot.Approval);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function CopyBlock(Const Block: TAssistantMonitorBlock): TAssistantMonitorBlock;
+Begin
+  Result := Block;
+End;
+
+Function SplitMonitorTranscript(Const Source: TMonitorTranscript): TMonitorTranscriptArray;
+Var
+  Pieces: Array Of TAssistantMonitorBlock;
+  PiecePart, PieceCount: Array Of Integer;
+  PieceN, I, J, MaxParts, FrameCount: Integer;
+  Parts: TMonitorBodyPartArray;
+  Slice: TAssistantMonitorBlock;
+Begin
+  Result := Nil;
+  Pieces := Nil;
+  PiecePart := Nil;
+  PieceCount := Nil;
+  SetLength(Result, 0);
+  SetLength(Pieces, 0);
+  SetLength(PiecePart, 0);
+  SetLength(PieceCount, 0);
+  MaxParts := 1;
+  For I := 0 To High(Source.Blocks) Do
+    Begin
+      If (Source.Blocks[I].Kind = 'answer') Or (Source.Blocks[I].Kind = 'thinking') Then
+        Parts := SplitMonitorBody(Source.Blocks[I].Body, Source.Revision)
+      Else
+        Begin
+          SetLength(Parts, 1);
+          Parts[0].Part := 1;
+          Parts[0].PartCount := 1;
+          Parts[0].Revision := Source.Revision;
+          Parts[0].Text := Source.Blocks[I].Body;
+        End;
+      If Parts[0].PartCount > MaxParts Then
+        MaxParts := Parts[0].PartCount;
+      For J := 0 To High(Parts) Do
+        Begin
+          Slice := CopyBlock(Source.Blocks[I]);
+          Slice.Body := Parts[J].Text;
+          SetLength(Pieces, Length(Pieces) + 1);
+          SetLength(PiecePart, Length(Pieces));
+          SetLength(PieceCount, Length(Pieces));
+          Pieces[High(Pieces)] := Slice;
+          PiecePart[High(Pieces)] := Parts[J].Part;
+          PieceCount[High(Pieces)] := Parts[J].PartCount;
+        End;
+    End;
+  If Length(Source.Blocks) = 0 Then
+    MaxParts := 1;
+  FrameCount := MaxParts;
+  SetLength(Result, FrameCount);
+  For I := 0 To FrameCount - 1 Do
+    Begin
+      Result[I].TurnIndex := Source.TurnIndex;
+      Result[I].Revision := Source.Revision;
+      Result[I].Phase := Source.Phase;
+      Result[I].StatusText := Source.StatusText;
+      Result[I].Part := I + 1;
+      Result[I].PartCount := FrameCount;
+      SetLength(Result[I].Blocks, 0);
+      SetLength(Result[I].BlockPart, 0);
+      SetLength(Result[I].BlockPartCount, 0);
+    End;
+  For PieceN := 0 To High(Pieces) Do
+    Begin
+      I := PiecePart[PieceN] - 1;
+      If (I < 0) Or (I > High(Result)) Then
+        Continue;
+      If (PieceCount[PieceN] <= 1) And (I > 0) Then
+        Continue;
+      SetLength(Result[I].Blocks, Length(Result[I].Blocks) + 1);
+      SetLength(Result[I].BlockPart, Length(Result[I].Blocks));
+      SetLength(Result[I].BlockPartCount, Length(Result[I].Blocks));
+      Result[I].Blocks[High(Result[I].Blocks)] := Pieces[PieceN];
+      Result[I].BlockPart[High(Result[I].Blocks)] := PiecePart[PieceN];
+      Result[I].BlockPartCount[High(Result[I].Blocks)] := PieceCount[PieceN];
+    End;
+End;
+
+Function TranscriptPayload(Const Transcript: TMonitorTranscript): TJSONObject;
+Var
+  Blocks: TJSONArray;
+  I, Part, PartCount: Integer;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('turn_index', Transcript.TurnIndex);
+  Result.Add('revision', Transcript.Revision);
+  Result.Add('part', Transcript.Part);
+  Result.Add('part_count', Transcript.PartCount);
+  Result.Add('phase', Transcript.Phase);
+  Result.Add('status_text', Transcript.StatusText);
+  Blocks := TJSONArray.Create;
+  For I := 0 To High(Transcript.Blocks) Do
+    Begin
+      Part := 1;
+      PartCount := 1;
+      If (I <= High(Transcript.BlockPart)) And (I <= High(Transcript.BlockPartCount)) Then
+        Begin
+          Part := Transcript.BlockPart[I];
+          PartCount := Transcript.BlockPartCount[I];
+          If Part < 1 Then
+            Part := 1;
+          If PartCount < 1 Then
+            PartCount := 1;
+        End;
+      Blocks.Add(MonitorBlockToJson(Transcript.Blocks[I], Part, PartCount, Transcript.Revision));
+    End;
+  Result.Add('blocks', Blocks);
+End;
+
+Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TranscriptPayload(Transcript);
+  Try
+    Json := EncodeMonitorEnvelope(mmkTranscript, Id, Payload);
+    Result := Json <> '';
+  Finally
+    Payload.Free;
+  End;
+End;
+
+Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Node: TJSONData;
+  Blocks: TJSONArray;
+  I: Integer;
+  Truncated: Boolean;
+Begin
+  Result := False;
+  Transcript.TurnIndex := 0;
+  Transcript.Revision := 0;
+  Transcript.Phase := '';
+  Transcript.StatusText := '';
+  Transcript.Part := 1;
+  Transcript.PartCount := 1;
+  SetLength(Transcript.Blocks, 0);
+  SetLength(Transcript.BlockPart, 0);
+  SetLength(Transcript.BlockPartCount, 0);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not (ReadInt(Obj, 'turn_index', True, Transcript.TurnIndex) And ReadInt(Obj, 'revision', True, Transcript.Revision) And
+      ReadString(Obj, 'phase', True, Transcript.Phase) And ReadString(Obj, 'status_text', True, Transcript.StatusText)) Then
+      Exit;
+    If Not ReadInt(Obj, 'part', False, Transcript.Part) Then
+      Exit;
+    If Transcript.Part < 1 Then
+      Transcript.Part := 1;
+    If Not ReadInt(Obj, 'part_count', False, Transcript.PartCount) Then
+      Exit;
+    If Transcript.PartCount < 1 Then
+      Transcript.PartCount := 1;
+    Node := Obj.Find('blocks');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Blocks := TJSONArray(Node);
+    SetLength(Transcript.Blocks, Blocks.Count);
+    SetLength(Transcript.BlockPart, Blocks.Count);
+    SetLength(Transcript.BlockPartCount, Blocks.Count);
+    For I := 0 To Blocks.Count - 1 Do
+      Begin
+        If Not (Blocks[I] Is TJSONObject) Then
+          Exit;
+        If Not TryMonitorBlockFromJson(TJSONObject(Blocks[I]), Transcript.Blocks[I], Truncated) Then
+          Exit;
+        Transcript.BlockPart[I] := 1;
+        Transcript.BlockPartCount[I] := 1;
+        If Not ReadInt(TJSONObject(Blocks[I]), 'part', False, Transcript.BlockPart[I]) Then
+          Exit;
+        If Not ReadInt(TJSONObject(Blocks[I]), 'part_count', False, Transcript.BlockPartCount[I]) Then
+          Exit;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function MonitorTurnIndexRow(TurnIndex: Integer; Const Id, Mode, CreatedAt, PromptPreview, ErrorText: String): TJSONObject;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('turn_index', TurnIndex);
+  Result.Add('id', Id);
+  Result.Add('mode', Mode);
+  Result.Add('created_at', CreatedAt);
+  Result.Add('prompt_preview', PromptPreview);
+  Result.Add('error_text', ErrorText);
+End;
+
+Function LimitMonitorStoredTurns(Const Turns: TJSONArray): TJSONArray;
+Var
+  Kept: TJSONArray;
+  StartAt, Index: Integer;
+  Item: TJSONObject;
+Begin
+  Result := TJSONArray.Create;
+  If Not Assigned(Turns) Then
+    Exit;
+  Kept := TJSONArray.Create;
+  Try
+    For Index := 0 To Turns.Count - 1 Do
+      Begin
+        If Not (Turns[Index] Is TJSONObject) Then
+          Continue;
+        Item := TJSONObject(Turns[Index]);
+        If Item.Get('live', False) Then
+          Continue;
+        Kept.Add(MonitorTurnIndexRow(Item.Get('turn_index', 0), Item.Get('id', ''), Item.Get('mode', ''),
+          Item.Get('created_at', ''), Item.Get('prompt_preview', ''), Item.Get('error_text', '')));
+      End;
+    StartAt := 0;
+    If Kept.Count > MonitorSnapshotStoredTurns Then
+      StartAt := Kept.Count - MonitorSnapshotStoredTurns;
+    For Index := StartAt To Kept.Count - 1 Do
+      Result.Add(TJSONObject(TJSONObject(Kept[Index]).Clone));
+  Finally
+    Kept.Free;
+  End;
+End;
+
+Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
+Begin
+  Reason := '';
+  Result := True;
+  If Missing Then
+    Reason := 'missing'
+  Else If Refused Then
+    Reason := 'refused'
+  Else If DecodedBytes > MonitorMaxImageFetchBytes Then
+    Reason := 'too_large'
+  Else
+    Result := False;
+End;
+
+Function ExpectedBase64Chars(ByteCount: Integer): Integer;
+Begin
+  Result := ((ByteCount + 2) Div 3) * 4;
+End;
+
+Function FramedBase64(Const Raw: RawByteString): String;
+Begin
+  Result := EncodeMonitorImageBytes(Raw);
+  Result := StringReplace(Result, #13, '', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, '', [rfReplaceAll]);
+End;
+
+Function TryBuildMonitorImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
+  Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
+Var
+  Total, Offset, Take, Count, Index: Integer;
+  Raw: RawByteString;
+  Encoded: String;
+  Part: TJSONObject;
+Begin
+  Result := False;
+  Parts := Nil;
+  Reason := '';
+  Raw := '';
+  Total := Length(Bytes);
+  If MonitorImageFetchBlocked(False, False, Total, Reason) Then
+    Exit;
+  If Total = 0 Then
+    Count := 1
+  Else
+    Count := (Total + MonitorMaxImagePartBytes - 1) Div MonitorMaxImagePartBytes;
+  Parts := TJSONArray.Create;
+  Offset := 0;
+  For Index := 0 To Count - 1 Do
+    Begin
+      Take := MonitorMaxImagePartBytes;
+      If Offset + Take > Total Then
+        Take := Total - Offset;
+      SetLength(Raw, Take);
+      If Take > 0 Then
+        Move(Bytes[Offset], Raw[1], Take);
+      Encoded := FramedBase64(Raw);
+      If Length(Encoded) <> ExpectedBase64Chars(Take) Then
+        Begin
+          FreeAndNil(Parts);
+          Reason := 'too_large';
+          Exit;
+        End;
+      If Length(Encoded) > MonitorImagePartBase64Chars Then
+        Begin
+          FreeAndNil(Parts);
+          Reason := 'too_large';
+          Exit;
+        End;
+      Part := TJSONObject.Create;
+      Part.Add('image_id', ImageId);
+      Part.Add('mime', Mime);
+      Part.Add('width', Width);
+      Part.Add('height', Height);
+      Part.Add('part', Index + 1);
+      Part.Add('part_count', Count);
+      Part.Add('revision', Revision);
+      Part.Add('bytes_base64', Encoded);
+      If Length(Part.AsJSON) + MonitorImageEnvelopeBytes > MonitorMaxPayloadBytes Then
+        Begin
+          Part.Free;
+          FreeAndNil(Parts);
+          Reason := 'too_large';
+          Exit;
+        End;
+      Parts.Add(Part);
+      Inc(Offset, Take);
+    End;
+  Result := True;
+End;
+
+Function DecodeMonitorImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Raw: RawByteString;
+Begin
+  Result := False;
+  DecodedBytes := 0;
+  Image.ImageId := '';
+  Image.Mime := '';
+  Image.Width := 0;
+  Image.Height := 0;
+  Image.Part := 0;
+  Image.PartCount := 0;
+  Image.Revision := 0;
+  Image.BytesBase64 := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not (ReadString(Obj, 'image_id', True, Image.ImageId) And ReadString(Obj, 'mime', True, Image.Mime) And
+      ReadInt(Obj, 'width', True, Image.Width) And ReadInt(Obj, 'height', True, Image.Height) And
+      ReadInt(Obj, 'part', True, Image.Part) And ReadInt(Obj, 'part_count', True, Image.PartCount) And
+      ReadInt(Obj, 'revision', True, Image.Revision) And ReadString(Obj, 'bytes_base64', True, Image.BytesBase64)) Then
+      Exit;
+    Raw := DecodeMonitorImageBytes(Image.BytesBase64);
+    DecodedBytes := Length(Raw);
+    Result := (DecodedBytes <= MonitorMaxImagePartBytes) And (Image.Part >= 1) And (Image.PartCount >= Image.Part);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorImageUnavailable(Const Id, ImageId, Reason: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If Not MonitorImageUnavailableReasonIsKnown(Reason) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('image_id', ImageId);
+  Payload.Add('reason', Reason);
+  Result := EncodeWith(mmkImageUnavailable, Id, Payload);
+End;
+
+Function DecodeMonitorImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Image.ImageId := '';
+  Image.Reason := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'image_id', True, Image.ImageId) And ReadString(Obj, 'reason', True, Image.Reason) And
+      MonitorImageUnavailableReasonIsKnown(Image.Reason);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('turn_index', TurnIndex);
+  Payload.Add('image_id', ImageId);
+  Result := EncodeWith(mmkImageGet, Id, Payload);
+End;
+
+Function DecodeMonitorImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Image.TurnIndex := 0;
+  Image.ImageId := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadInt(Obj, 'turn_index', True, Image.TurnIndex) And ReadString(Obj, 'image_id', True, Image.ImageId);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
+  Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
+Var
+  Parts: TJSONArray;
+  I: Integer;
+  Payload: TJSONObject;
+  Json: String;
+Begin
+  Result := False;
+  Messages := Nil;
+  SetLength(Messages, 0);
+  UnavailableReason := '';
+  Parts := Nil;
+  If MonitorImageFetchBlocked(Missing, Refused, Length(Bytes), UnavailableReason) Then
+    Begin
+      Result := UnavailableReason <> '';
+      Exit;
+    End;
+  If Not TryBuildMonitorImageParts(ImageId, Mime, Width, Height, Revision, Bytes, Parts, UnavailableReason) Then
+    Begin
+      Result := UnavailableReason <> '';
+      Exit;
+    End;
+  Try
+    SetLength(Messages, Parts.Count);
+    For I := 0 To Parts.Count - 1 Do
+      Begin
+        If Not (Parts[I] Is TJSONObject) Then
+          Exit;
+        Payload := TJSONObject(Parts[I]);
+        Json := EncodeMonitorEnvelope(mmkImageData, Id, Payload);
+        If Json = '' Then
+          Begin
+            SetLength(Messages, 0);
+            UnavailableReason := 'too_large';
+            Exit;
+          End;
+        Messages[I] := Json;
+      End;
+    UnavailableReason := '';
+    Result := True;
+  Finally
+    Parts.Free;
+  End;
+End;
+
+End.
