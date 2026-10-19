@@ -1,0 +1,20 @@
+[versions]
+# Kotlin 2.0 line. Bytecode target is Java 17 in both modules.
+kotlin = "2.0.21"
+agp = "8.7.3"
+junit = "4.13.2"
+serialization = "1.7.3"
+java = "17"
+applicationId = "computing.michell.monitor"
+minSdk = "26"
+targetSdk = "35"
+compileSdk = "35"
+
+[libraries]
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+android-application = { id = "com.android.application", version.ref = "agp" }
