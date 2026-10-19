@@ -1,7 +1,7 @@
 [versions]
 # Kotlin 2.0 line. Bytecode target is Java 17 in both modules.
-kotlin = "2.0.21"
-agp = "8.7.3"
+kotlin = "2.2.10"
+agp = "9.1.0"
 junit = "4.13.2"
 serialization = "1.7.3"
 coroutines = "1.9.0"
