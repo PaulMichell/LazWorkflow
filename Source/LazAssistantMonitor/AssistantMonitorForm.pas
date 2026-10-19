@@ -76,8 +76,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorLan, AssistantMonitorTls,
-  AssistantMonitorBridge, AssistantMonitorApproval, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorTls,
+  AssistantMonitorBridge, AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
 
 Const
   AfInet = 2;
@@ -133,10 +133,6 @@ Type
     FirstUnicast: PWinUnicast;
   End;
 {$ENDIF}
-
-Var
-  LiveSession: TMonitorSession;
-  LiveCarrier: TMonitorLanCarrier;
 
 {$IFDEF UNIX}
 Function getifaddrs(Out List: PMonitorIfAddrs): Integer; Cdecl; External 'c';
@@ -284,20 +280,12 @@ End;
 
 Function ListenerRunning: Boolean;
 Begin
-  Result := Assigned(LiveSession) And (LiveSession.State <> mssStopped);
+  Result := AssistantMonitorListenerRunning;
 End;
 
 Procedure StopAssistantMonitorListener;
 Begin
-  If Assigned(LiveSession) Then
-    LiveSession.StopListening;
-  DetachAssistantMonitorBridge;
-  If Assigned(LiveCarrier) Then
-    LiveCarrier.Stop;
-  If Assigned(LiveSession) Then
-    LiveSession.AttachCarrier(Nil);
-  FreeAndNil(LiveCarrier);
-  FreeAndNil(LiveSession);
+  AssistantMonitorMain.StopAssistantMonitorListener;
 End;
 
 Procedure ShowAssistantMonitorForm;
@@ -362,8 +350,8 @@ Begin
   If Not SaveMonitorSettings(Settings, ErrorText) Then
     StatusMemo.Text := ErrorText;
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
-  If Assigned(LiveSession) Then
-    LiveSession.SetRemoteApproval(Settings.RemoteApproval);
+  If Assigned(MonitorLiveSession) Then
+    MonitorLiveSession.SetRemoteApproval(Settings.RemoteApproval);
 End;
 
 Procedure TAssistantMonitorForm.ShowBindFailure(Const Address: String; Port: Integer; Const ErrorText: String);
@@ -429,8 +417,8 @@ Begin
     FingerprintLabel.Caption := 'Fingerprint  ' + ErrorText
   Else
     FingerprintLabel.Caption := 'Fingerprint';
-  If Assigned(LiveSession) Then
-    Code := LiveSession.PairCode
+  If Assigned(MonitorLiveSession) Then
+    Code := MonitorLiveSession.PairCode
   Else
     Code := '';
   If PairShown And (Code <> '') Then
@@ -440,18 +428,18 @@ Begin
       PairShown := False;
       PairCodeLabel.Caption := 'Pairing code appears after Pair.';
     End;
-  If Assigned(LiveSession) Then
-    Status := 'Listener ' + StateCaption(LiveSession.State) + LineEnding +
-      'Bound ' + LiveSession.BoundAddress + ' port ' + IntToStr(LiveSession.BoundPort) + LineEnding +
-      'Client ' + LiveSession.ConnectedClientName + LineEnding +
-      'Seconds since frame ' + IntToStr(LiveSession.SecondsSinceFrame) + LineEnding +
-      'Frames sent ' + IntToStr(LiveSession.FramesSent) +
-      '  dropped ' + IntToStr(LiveSession.FramesDropped) + LineEnding +
-      'Remote approval ' + BoolToStr(LiveSession.RemoteApproval, True)
+  If Assigned(MonitorLiveSession) Then
+    Status := 'Listener ' + StateCaption(MonitorLiveSession.State) + LineEnding +
+      'Bound ' + MonitorLiveSession.BoundAddress + ' port ' + IntToStr(MonitorLiveSession.BoundPort) + LineEnding +
+      'Client ' + MonitorLiveSession.ConnectedClientName + LineEnding +
+      'Seconds since frame ' + IntToStr(MonitorLiveSession.SecondsSinceFrame) + LineEnding +
+      'Frames sent ' + IntToStr(MonitorLiveSession.FramesSent) +
+      '  dropped ' + IntToStr(MonitorLiveSession.FramesDropped) + LineEnding +
+      'Remote approval ' + BoolToStr(MonitorLiveSession.RemoteApproval, True)
   Else
     Status := 'Listener stopped';
-  If Assigned(LiveSession) And (LiveSession.LastError <> '') Then
-    Status := Status + LineEnding + LiveSession.LastError;
+  If Assigned(MonitorLiveSession) And (MonitorLiveSession.LastError <> '') Then
+    Status := Status + LineEnding + MonitorLiveSession.LastError;
   StatusMemo.Text := Status;
 End;
 
@@ -484,79 +472,17 @@ End;
 
 Procedure TAssistantMonitorForm.EnableActionExecute(Sender: TObject);
 Var
-  Settings: TMonitorSettings;
-  Address, ErrorText, Fingerprint: String;
-  Carrier: TMonitorLanCarrier;
-  Session: TMonitorSession;
+  ErrorText: String;
 Begin
   If ListenerRunning Then
     Exit;
   SaveFields(False);
-  If Not CaptureMonitorListenSnapshot(Settings, ErrorText) Then
+  If Not StartAssistantMonitorListener(ErrorText) Then
     Begin
       ShowBindFailure(Trim(AddressEdit.Text), PortEdit.Value, ErrorText);
       Exit;
     End;
-  If Not ResolveMonitorBind(Settings, Address, ErrorText) Then
-    Begin
-      ShowBindFailure(Trim(AddressEdit.Text), Settings.Port, ErrorText);
-      Exit;
-    End;
-  If Not EnsureMonitorHostCertificate(ErrorText) Then
-    Begin
-      ShowBindFailure(Address, Settings.Port, ErrorText);
-      Exit;
-    End;
-  Session := TMonitorSession.Create;
-  Carrier := TMonitorLanCarrier.Create(Address, Settings.Port, MonitorCertificateFile, MonitorKeyFile);
-  Try
-    Try
-      Carrier.AttachSession(Session);
-      Session.AttachCarrier(Carrier);
-      If Not Session.StartListening(Address, Settings.Port, ErrorText) Then
-        Begin
-          ShowBindFailure(Address, Settings.Port, ErrorText);
-          Exit;
-        End;
-      If Not Carrier.Start(ErrorText) Then
-        Begin
-          If ErrorText = '' Then
-            ErrorText := Carrier.LastError;
-          ShowBindFailure(Address, Settings.Port, ErrorText);
-          Session.StopListening;
-          Carrier.Stop;
-          Exit;
-        End;
-      LiveSession := Session;
-      LiveCarrier := Carrier;
-      Session := Nil;
-      Carrier := Nil;
-    Except
-      On E: Exception Do
-        Begin
-          ShowBindFailure(Address, Settings.Port, E.Message);
-          If Assigned(Session) Then
-            Session.StopListening;
-          If Assigned(Carrier) Then
-            Carrier.Stop;
-        End;
-    End;
-  Finally
-    If Assigned(Session) Then
-      Session.AttachCarrier(Nil);
-    FreeAndNil(Carrier);
-    FreeAndNil(Session);
-  End;
-  If Not ListenerRunning Then
-    Exit;
-  RegisterAssistantMonitor;
-  AttachAssistantMonitorBridge(LiveSession);
-  If MonitorHostFingerprint(Fingerprint, ErrorText) Then
-    LiveSession.SetHostFingerprint(Fingerprint);
-  ApplyMonitorRemoteApproval(Settings.RemoteApproval);
-  LiveSession.SetRemoteApproval(Settings.RemoteApproval);
   SaveFields(True);
-  WorkflowLogger.Info('AssistantMonitor', 'listen enabled bind=' + Address + ' port=' + IntToStr(Settings.Port));
   RefreshState;
 End;
 
@@ -573,8 +499,8 @@ Procedure TAssistantMonitorForm.PairActionExecute(Sender: TObject);
 Begin
   If Not ListenerRunning Then
     Exit;
-  LiveSession.RequestPairCode;
-  PairShown := LiveSession.PairCode <> '';
+  MonitorLiveSession.RequestPairCode;
+  PairShown := MonitorLiveSession.PairCode <> '';
   RefreshState;
 End;
 
@@ -587,8 +513,8 @@ Begin
   ClientId := SelectedClientId;
   If ClientId = '' Then
     Exit;
-  If Assigned(LiveSession) Then
-    LiveSession.RevokeClient(ClientId)
+  If Assigned(MonitorLiveSession) Then
+    MonitorLiveSession.RevokeClient(ClientId)
   Else
     Begin
       If Not LoadMonitorSettings(Settings, ErrorText) Then
@@ -612,8 +538,8 @@ Var
   Settings: TMonitorSettings;
   ErrorText: String;
 Begin
-  If Assigned(LiveSession) Then
-    LiveSession.RevokeAll
+  If Assigned(MonitorLiveSession) Then
+    MonitorLiveSession.RevokeAll
   Else
     Begin
       If Not LoadMonitorSettings(Settings, ErrorText) Then
@@ -641,11 +567,5 @@ Procedure TAssistantMonitorForm.ClientListClick(Sender: TObject);
 Begin
   RefreshState;
 End;
-
-Initialization
-
-Finalization
-
-StopAssistantMonitorListener;
 
 End.

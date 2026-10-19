@@ -18,51 +18,60 @@
     <Description Value="Remote monitor catalogue, frames, and session for the Project Assistant"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="11">
+    <Files Count="13">
       <Item1>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorFrames.pas"/>
-        <UnitName Value="AssistantMonitorFrames"/>
+        <Filename Value="../Source/LazAssistantMonitor/RegLazAssistantMonitor.pas"/>
+        <HasRegisterProc Value="True"/>
+        <UnitName Value="RegLazAssistantMonitor"/>
       </Item1>
       <Item2>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCodec.pas"/>
-        <UnitName Value="AssistantMonitorCodec"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorMain.pas"/>
+        <UnitName Value="AssistantMonitorMain"/>
       </Item2>
       <Item3>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCarrier.pas"/>
-        <UnitName Value="AssistantMonitorCarrier"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorFrames.pas"/>
+        <UnitName Value="AssistantMonitorFrames"/>
       </Item3>
       <Item4>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSession.pas"/>
-        <UnitName Value="AssistantMonitorSession"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCodec.pas"/>
+        <UnitName Value="AssistantMonitorCodec"/>
       </Item4>
       <Item5>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSettings.pas"/>
-        <UnitName Value="AssistantMonitorSettings"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCarrier.pas"/>
+        <UnitName Value="AssistantMonitorCarrier"/>
       </Item5>
       <Item6>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorTls.pas"/>
-        <UnitName Value="AssistantMonitorTls"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSession.pas"/>
+        <UnitName Value="AssistantMonitorSession"/>
       </Item6>
       <Item7>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorLan.pas"/>
-        <UnitName Value="AssistantMonitorLan"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSettings.pas"/>
+        <UnitName Value="AssistantMonitorSettings"/>
       </Item7>
       <Item8>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorApproval.pas"/>
-        <UnitName Value="AssistantMonitorApproval"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorTls.pas"/>
+        <UnitName Value="AssistantMonitorTls"/>
       </Item8>
       <Item9>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorBridge.pas"/>
-        <UnitName Value="AssistantMonitorBridge"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorLan.pas"/>
+        <UnitName Value="AssistantMonitorLan"/>
       </Item9>
       <Item10>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.pas"/>
-        <UnitName Value="AssistantMonitorForm"/>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorApproval.pas"/>
+        <UnitName Value="AssistantMonitorApproval"/>
       </Item10>
       <Item11>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorBridge.pas"/>
+        <UnitName Value="AssistantMonitorBridge"/>
+      </Item11>
+      <Item12>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.pas"/>
+        <UnitName Value="AssistantMonitorForm"/>
+      </Item12>
+      <Item13>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.lfm"/>
         <FileType Value="FormResource"/>
-      </Item11>
+      </Item13>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
