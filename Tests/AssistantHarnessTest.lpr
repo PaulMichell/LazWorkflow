@@ -357,6 +357,7 @@ Begin
     Config.SetSkillFile('alpha-2', NoteFile);
     Modes.Add('chat');
     Config.SetSkillModes('alpha-2', Modes);
+    Check('an absent name does not scan other skill files', Config.SkillFilePath('alpha') = '');
     Config.AdoptSkillDocumentNames;
     Names.Clear;
     Config.CollectSkillModeNames(Names);

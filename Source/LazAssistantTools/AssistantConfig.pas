@@ -107,7 +107,7 @@ Type
     Procedure CollectModesForSkill(Const SkillName: String; Modes: TStrings);
     /// Fills Names with every skill that has a saved mode list. Clears Names first.
     Procedure CollectSkillModeNames(Names: TStrings);
-    /// Absolute path for an added guidance file, or empty when the name has no stored file.
+    /// Stored path for an exact skill key, or empty when that key is absent. Does not open other files.
     Function SkillFilePath(Const SkillName: String): String;
     /// True when settings still name this skill. A file on disk is not enough.
     Function SkillIsInstalled(Const SkillName: String): Boolean;
@@ -1215,24 +1215,17 @@ End;
 Function TAssistantConfig.SkillFilePath(Const SkillName: String): String;
 Var
   Node: TJSONData;
-  I: Integer;
-  Name, Path: String;
+  Name: String;
 Begin
   Result := '';
   Name := Trim(SkillName);
   If (Not Assigned(FSkillFiles)) Or (Name = '') Then
     Exit;
+  { AdoptSkillDocumentNames already stores the document name as the key.
+    A miss must not open every other skill file. }
   Node := FSkillFiles.Find(Name);
   If Assigned(Node) Then
-    Exit(Trim(Node.AsString));
-  For I := 0 To FSkillFiles.Count - 1 Do
-    Begin
-      If FSkillFiles.Items[I].JSONType <> jtString Then
-        Continue;
-      Path := Trim(FSkillFiles.Items[I].AsString);
-      If SameText(SkillDocumentName(Path), Name) Then
-        Exit(Path);
-    End;
+    Result := Trim(Node.AsString);
 End;
 
 Procedure TAssistantConfig.SetSkillFile(Const SkillName, FilePath: String);
