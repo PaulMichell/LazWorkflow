@@ -36,6 +36,7 @@ Type
   Public
     Function ProjectOpened(Sender: TObject; LazProject: TLazProject): TModalResult;
     Function ProjectClose(Sender: TObject; LazProject: TLazProject): TModalResult;
+    Procedure AssistantMenuShow(Sender: TObject);
   End;
 
 Var
@@ -48,6 +49,8 @@ Var
   CmdAssistantSettings: TIDECommand;
   AssistantFixQuickFix: TAssistantFixMessageQuickFix;
   AssistantIDEHooks: TAssistantIDEHooks;
+  AssistantMenuRoot: TIDEMenuSection;
+  AssistantTasksMenuItem: TIDEMenuItem;
 
 Procedure ShowProjectAssistantWindow(Sender: TObject);
 Begin
@@ -75,10 +78,18 @@ Begin
     Result := TProjectAssistantForm(Form);
 End;
 
+Procedure SyncAssistantTasksMenu;
+Begin
+  If Assigned(AssistantTasksMenuItem) Then
+    AssistantTasksMenuItem.Visible := AssistantTasksActionVisible;
+End;
+
 Procedure DoAssistantTasks(Sender: TObject);
 Var
   Form: TProjectAssistantForm;
 Begin
+  If Not AssistantTasksActionVisible Then
+    Exit;
   Form := GetProjectAssistantForm(True);
   If Assigned(Form) Then
     Form.TasksActionExecute(Sender);
@@ -168,6 +179,11 @@ Begin
         FreeAndNil(Form);
       End;
   End;
+End;
+
+Procedure TAssistantIDEHooks.AssistantMenuShow(Sender: TObject);
+Begin
+  SyncAssistantTasksMenu;
 End;
 
 Function TAssistantIDEHooks.ProjectOpened(Sender: TObject; LazProject: TLazProject): TModalResult;
@@ -330,8 +346,13 @@ Begin
     RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
     RegisterIDEMenuCommand(WorkSec, 'AssistantFixError', 'Fix Error In Build Mode…', Nil, Nil, CmdAssistantFixError);
     SetSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantSettingsCmds');
-    RegisterIDEMenuCommand(SetSec, 'AssistantTasks', 'Tasks…', Nil, Nil, CmdAssistantTasks);
+    AssistantTasksMenuItem := RegisterIDEMenuCommand(SetSec, 'AssistantTasks', 'Tasks…', Nil, Nil, CmdAssistantTasks);
     RegisterIDEMenuCommand(SetSec, 'AssistantSettings', 'Settings…', Nil, Nil, CmdAssistantSettings);
+    AssistantMenuRoot := AssistantMenu;
+    OnAssistantTasksVisibilityChanged := @SyncAssistantTasksMenu;
+    If Assigned(AssistantMenuRoot) And Assigned(AssistantIDEHooks) Then
+      AssistantMenuRoot.AddHandlerOnShow(@AssistantIDEHooks.AssistantMenuShow);
+    SyncAssistantTasksMenu;
 
     ProjectAssistantWindowCreator := IDEWindowCreators.Add('ProjectAssistant', @CreateProjectAssistantForm, Nil,
       '10%', '8%', '90%', '90%');
@@ -363,6 +384,9 @@ AssistantIDEHooks := Nil;
 
 Finalization
 
+OnAssistantTasksVisibilityChanged := Nil;
+If Assigned(AssistantMenuRoot) And Assigned(AssistantIDEHooks) Then
+  AssistantMenuRoot.RemoveHandlerOnShow(@AssistantIDEHooks.AssistantMenuShow);
 If Assigned(LazarusIDE) And Assigned(AssistantIDEHooks) Then
   Begin
     LazarusIDE.RemoveHandlerOnProjectOpened(@AssistantIDEHooks.ProjectOpened);
