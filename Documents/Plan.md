@@ -54,6 +54,6 @@ Status: complete
 
 ### 3.2 Do not scan every skill file on a name miss
 
-Status: not started
+Status: complete
 
 `SkillFilePath` returns the stored path for an exact key, then reads every stored skill file and compares front-matter names. `read_skill` of an unknown name pays that scan. After `AdoptSkillDocumentNames`, the stored key is the document name, so the scan is only a fallback for an old key. Resolve the exact key, and do not open every file when the name is absent.
