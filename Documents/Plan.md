@@ -30,7 +30,7 @@ Status: complete
 
 ### 2.1 One installed-skill path
 
-Status: not started
+Status: complete
 
 Removal is supposed to forget a skill even if the file remains. The grid and prompt already use the installation list, but the old discovery path is still in the tree and still called.
 
