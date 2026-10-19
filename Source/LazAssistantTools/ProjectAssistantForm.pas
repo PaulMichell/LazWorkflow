@@ -6,7 +6,10 @@ Unit ProjectAssistantForm;
   history, plan/build tiles, and send/steer as one form. Trace paint lives in
   AssistantTraceView. The prompt is ordinary text. Reviewed 2026-09-27: Chat is a
   fourth mode with no project tools or skill; the mode bar is a label and combobox.
-  Composer paste and drop stay here. Attach Image is on the memo popup, after Paste.
+  Composer paste and drop stay here. AllowDropFiles is the LCL drop facility.
+  Cocoa already delivers a child drop through it. GTK3, Win32, and Qt do not,
+  so those input controls are armed after their handles exist.
+  Attach Image is on the memo popup, after Paste.
   The image list holds pictures only;
   attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
   The composer stack is positioned explicitly so showing the image list cannot
@@ -531,7 +534,10 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun
-  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF};
+  {$IFDEF LCLGTK3}, gtk3widgets, LazGtk3, LazGdk3, LazGLib2, LazGObject2{$ENDIF}
+  {$IFDEF LCLWIN32}, Windows{$ENDIF}
+  {$IFDEF LCLQT5}, qt5, qtwidgets{$ENDIF}
+  {$IFDEF LCLQT6}, qt6, qtwidgets{$ENDIF};
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
@@ -702,9 +708,13 @@ Begin
   FTargetPaths := TStringList.Create;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
-  { AllowDropFiles exists only on the form in this LCL. GTK still delivers the
-    drop to the widget under the pointer, so the input controls are armed after
-    their handles exist. Names arrive through OnDropFiles. }
+  { LCL facility: TCustomForm.AllowDropFiles and OnDropFiles.
+    TCocoaWSCustomForm.SetAllowDropFiles registers the content view, and AppKit
+    walks an unregistered child up to that view, so Cocoa needs no extra arm.
+    TWin32WSCustomForm.SetAllowDropFiles calls DragAcceptFiles on the form HWND
+    only. TQtWSCustomForm.SetAllowDropFiles sets acceptDrops on the main window
+    only. GTK3 has no SetAllowDropFiles, and FileDragTarget is unused, so a child
+    is not a drop destination. Those three arm the input controls below. }
   AllowDropFiles := True;
   OnDropFiles := @InputPanelDropFiles;
   HistoryPanelResize(HistorySheet);
@@ -994,12 +1004,111 @@ Begin
   g_signal_connect_data(Native, 'drag-data-received', TGCallback(@GtkFileDropReceived), Form, Nil, ConnectFlags);
   ArmedDropControls.Add(Control);
 End;
-{$ELSE}
+{$ENDIF}
+
+{$IFDEF LCLWIN32}
 Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
 Begin
-  If Assigned(Control) And Assigned(Form) Then Exit;
+  If Not Assigned(Control) Or Not Assigned(Form) Or Not Control.HandleAllocated Then
+    Exit;
+  { The child window proc already calls IntfGetDropFilesTarget and DragFinish. }
+  DragAcceptFiles(Control.Handle, True);
 End;
 {$ENDIF}
+
+{$IF DEFINED(LCLQT5) OR DEFINED(LCLQT6)}
+Type
+  TQtFileDropArm = Class
+    OwnerForm: TProjectAssistantForm;
+    QtObject: TQtWidget;
+    Hook: QObject_hookH;
+    Function Filter(Sender: QObjectH; Event: QEventH): Boolean; cdecl;
+  End;
+
+Var
+  QtFileDropArms: TList;
+
+Function TQtFileDropArm.Filter(Sender: QObjectH; Event: QEventH): Boolean; cdecl;
+Begin
+  Result := False;
+  If Not Assigned(QtObject) Or (QEvent_type(Event) <> QEventDrop) Then
+    Exit;
+  Result := QtObject.slotDropFiles(Sender, Event);
+End;
+
+Procedure HookQtDrop(Form: TProjectAssistantForm; QtObject: TQtWidget; Widget: QWidgetH);
+Var
+  Arm: TQtFileDropArm;
+Begin
+  If Widget = Nil Then
+    Exit;
+  QWidget_setAcceptDrops(Widget, True);
+  If Not Assigned(QtFileDropArms) Then
+    QtFileDropArms := TList.Create;
+  Arm := TQtFileDropArm.Create;
+  Arm.OwnerForm := Form;
+  Arm.QtObject := QtObject;
+  Arm.Hook := QObject_hook_create(Widget);
+  QObject_hook_hook_events(Arm.Hook, @Arm.Filter);
+  QtFileDropArms.Add(Arm);
+End;
+
+Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
+Var
+  QtObject: TQtWidget;
+  Viewport: QWidgetH;
+Begin
+  If Not Assigned(Control) Or Not Assigned(Form) Or Not Control.HandleAllocated Then
+    Exit;
+  QtObject := TQtWidget(Control.Handle);
+  HookQtDrop(Form, QtObject, QtObject.Widget);
+  If QtObject Is TQtAbstractScrollArea Then
+    Begin
+      Viewport := TQtAbstractScrollArea(QtObject).viewportWidget;
+      If Viewport <> QtObject.Widget Then
+        HookQtDrop(Form, QtObject, Viewport);
+    End;
+End;
+
+Procedure ReleaseQtFileDrop(Form: TProjectAssistantForm);
+Var
+  I: Integer;
+  Arm: TQtFileDropArm;
+Begin
+  If Not Assigned(QtFileDropArms) Then
+    Exit;
+  For I := QtFileDropArms.Count - 1 DownTo 0 Do
+    Begin
+      Arm := TQtFileDropArm(QtFileDropArms[I]);
+      If Arm.OwnerForm <> Form Then
+        Continue;
+      If Arm.Hook <> Nil Then
+        QObject_hook_destroy(Arm.Hook);
+      Arm.Free;
+      QtFileDropArms.Delete(I);
+    End;
+  If QtFileDropArms.Count = 0 Then
+    FreeAndNil(QtFileDropArms);
+End;
+{$ENDIF}
+
+{$IF NOT DEFINED(LCLGTK3) AND NOT DEFINED(LCLWIN32) AND NOT DEFINED(LCLQT5) AND NOT DEFINED(LCLQT6)}
+Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
+Begin
+  { Cocoa: TCocoaWSCustomForm.SetAllowDropFiles already delivers the drop. }
+  If Assigned(Control) And Assigned(Form) Then
+    Exit;
+End;
+{$ENDIF}
+
+Procedure ReleaseInputFileDrop(Form: TProjectAssistantForm);
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  {$IF DEFINED(LCLQT5) OR DEFINED(LCLQT6)}
+  ReleaseQtFileDrop(Form);
+  {$ENDIF}
+End;
 
 Procedure TProjectAssistantForm.FormShow(Sender: TObject);
 Begin
@@ -1026,6 +1135,7 @@ End;
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
   Try
+    ReleaseInputFileDrop(Self);
     FreeAndNil(FTargetPaths);
     If Assigned(AttachmentStrip) Then
       While AttachmentStrip.ControlCount > 0 Do
