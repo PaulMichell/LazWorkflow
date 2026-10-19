@@ -240,7 +240,7 @@ Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEn
 Implementation
 
 Uses
-  LazFileUtils, DirectoryListing, GitDiffPatch{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
+  LazFileUtils, DirectoryListing, GitDiffPatch, ProcessSession{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
 
 Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
   Tracked: TStrings): TGitStatusEntryArray;
@@ -569,13 +569,11 @@ Begin
           ErrorStream.WriteBuffer(Buf[0], BytesRead);
         End;
       FLastCommand.ErrorText := ErrorStream.DataString;
-      {$IFDEF UNIX}
-      FLastCommand.Signalled := Not WIFEXITED(Proc.ExitStatus);
-      If FLastCommand.Signalled Then ExitCode := -1
-      Else ExitCode := WEXITSTATUS(Proc.ExitStatus);
-      {$ELSE}
-      ExitCode := Proc.ExitStatus;
-      {$ENDIF}
+      FLastCommand.Signalled := ProcessWasSignalled(Proc);
+      If FLastCommand.Signalled Then
+        ExitCode := -1
+      Else
+        ExitCode := Proc.ExitCode;
       FLastCommand.ExitCode := ExitCode;
       If TimedOut Then
         Begin

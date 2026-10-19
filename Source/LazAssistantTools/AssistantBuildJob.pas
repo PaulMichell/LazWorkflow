@@ -44,7 +44,7 @@ Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
 Implementation
 
 Uses
-  Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser{$IFDEF LINUX}, BaseUnix{$ENDIF};
+  Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser, ProcessSession{$IFDEF LINUX}, BaseUnix{$ENDIF};
 
 Type
   TBuildState = Class(TInterfacedObject, IAssistantBuildJob)
@@ -66,9 +66,6 @@ Type
     FInputs: TBuildInputs;
     FTimeout: Cardinal;
     FInitial: TBuildJobSnapshot;
-    {$IFDEF LINUX}
-    Procedure ChildFork(Sender: TObject);
-    {$ENDIF}
     Function InputsMatch: Boolean;
   Public
     Destructor Destroy; Override;
@@ -131,12 +128,6 @@ Begin
     LeaveCriticalSection(Lock);
   End;
 End;
-{$IFDEF LINUX}
-Procedure TBuildWorker.ChildFork(Sender: TObject);
-Begin
-  If fpSetsid < 0 Then fpExit(126);
-End;
-{$ENDIF}
 Function ReadBuildInput(Const Path: String; Out Text, ErrorText: String): Boolean;
 Var
   Stream: TFileStream;
@@ -376,9 +367,8 @@ Begin
       P.CurrentDirectory := FDirectory;
       P.Parameters.Assign(FArguments);
       P.Options := [poUsePipes, poStderrToOutPut];
-      {$IFDEF LINUX}
-      P.OnForkEvent := @ChildFork;
-      {$ENDIF}
+      If Not StartInOwnSession(P) Then
+        Raise Exception.Create('Unable to start the build in its own session.');
       P.Execute;
       Value.ProcessStarted := True;
       Publish;
@@ -406,18 +396,8 @@ Begin
   Finally
     If Assigned(P) Then
       Begin
-        {$IFDEF LINUX}
         { Kill the owned group even if the compiler parent has already exited. }
-        If P.ProcessID > 0 Then
-          Begin
-            fpKill(-P.ProcessID, SIGKILL);
-            If P.Running Then
-              Begin
-                fpKill(P.ProcessID, SIGKILL);
-                P.WaitOnExit(500);
-              End;
-          End;
-        {$ENDIF}
+        TerminateSession(P);
         P.Free;
       End;
     Value.Cancelled := InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0;

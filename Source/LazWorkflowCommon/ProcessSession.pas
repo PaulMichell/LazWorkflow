@@ -26,6 +26,8 @@ Procedure TerminateSession(Process: TProcess);
 Function ProcessWasSignalled(Process: TProcess): Boolean;
 /// Sets O_NONBLOCK on a Unix pipe handle. Other hosts return false.
 Function SetPipeNonBlocking(Handle: THandle): Boolean;
+/// Writes without delivering SIGPIPE to this process. False means the mask could not be set.
+Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Written: Integer; Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
 Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
 
 Implementation
@@ -36,7 +38,7 @@ Uses
 {$ENDIF}
 {$IFDEF UNIX}
 Uses
-  BaseUnix;
+  BaseUnix, Unix{$IFDEF LINUX}, Syscall{$ENDIF};
 {$ENDIF}
 
 {$IFDEF UNIX}
@@ -132,6 +134,58 @@ Begin
   If Flags < 0 Then
     Exit;
   Result := fpFcntl(cint(Handle), F_SETFL, Flags Or O_NONBLOCK) >= 0;
+  {$ENDIF}
+End;
+
+Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Written: Integer; Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
+{$IFDEF UNIX}
+Var
+  Blocked, Previous, Pending: TSigSet;
+  WaitTime: TTimespec;
+  HadPending: Boolean;
+  Err: cint;
+{$ENDIF}
+Begin
+  Written := -1;
+  Closed := False;
+  Again := False;
+  ErrorText := '';
+  Result := False;
+  {$IFDEF UNIX}
+  fpSigEmptySet(Blocked);
+  fpSigAddSet(Blocked, SIGPIPE);
+  If fpSigProcMask(SIG_BLOCK, @Blocked, @Previous) <> 0 Then
+    Begin
+      ErrorText := 'Unable to protect the pipe write.';
+      Exit;
+    End;
+  fpSigEmptySet(Pending);
+  {$IFDEF LINUX}
+  { fpSigPending omits Linux's required sigset-size argument. }
+  If do_syscall(syscall_nr_rt_sigpending, TSysParam(@Pending), TSysParam(8)) <> 0 Then
+  {$ELSE}
+  If fpSigPending(Pending) <> 0 Then
+  {$ENDIF}
+    Begin
+      fpSigProcMask(SIG_SETMASK, @Previous, Nil);
+      ErrorText := 'Unable to inspect pending pipe signals.';
+      Exit;
+    End;
+  HadPending := fpSigIsMember(Pending, SIGPIPE) = 1;
+  Written := fpWrite(cint(Handle), Buf, Count);
+  Err := fpGetErrno;
+  If (Written < 0) And (Err = ESysEPIPE) And Not HadPending Then
+    Begin
+      WaitTime.tv_sec := 0;
+      WaitTime.tv_nsec := 0;
+      fpSigTimedWait(Blocked, Nil, @WaitTime);
+    End;
+  fpSigProcMask(SIG_SETMASK, @Previous, Nil);
+  Closed := (Written < 0) And Not (Err In [ESysEAGAIN, ESysEINTR]);
+  Again := (Written < 0) And (Err In [ESysEAGAIN, ESysEINTR]);
+  Result := True;
+  {$ELSE}
+  ErrorText := 'Pipe write is not available on this host.';
   {$ENDIF}
 End;
 
