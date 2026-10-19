@@ -52,6 +52,8 @@ Function MonitorFingerprintText(Const Fingerprint: String): String;
 Function MonitorTlsVersionAdequate(Const VersionText: String): Boolean;
 { New handler with the shared DER loaded. Nil when the files cannot be read. }
 Function NewMonitorAcceptHandler(Out ErrorText: String): TMonitorTlsHandler;
+{ One DER file. The listen thread passes the paths copied at start. }
+Function LoadMonitorDerFile(Const Path: String; Out Data: TBytes; Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -316,6 +318,11 @@ Begin
   Result := Fingerprint <> '';
   If Not Result Then
     ErrorText := 'Could not fingerprint the monitor certificate.';
+End;
+
+Function LoadMonitorDerFile(Const Path: String; Out Data: TBytes; Out ErrorText: String): Boolean;
+Begin
+  Result := ReadDerFile(Path, Data, ErrorText);
 End;
 
 Function NewMonitorAcceptHandler(Out ErrorText: String): TMonitorTlsHandler;
