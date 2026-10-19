@@ -14,7 +14,7 @@ Status: complete
 
 ### 1.2 File drop onto the input controls is GTK3-only
 
-Status: not started
+Status: complete
 
 `FormCreate` sets `AllowDropFiles` and `OnDropFiles` on the form. The comment says a drop still lands on the child under the pointer, so `ArmControlFileDrop` arms the input panel, strip, and memo. That arming exists only under `{$IFDEF LCLGTK3}`. The other branch does nothing. On Qt, Win32, and Cocoa, a drop on the memo does not reach the form handler.
 
