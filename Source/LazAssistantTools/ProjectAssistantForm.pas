@@ -941,24 +941,38 @@ Var
   I: Integer;
   Names: Array Of String;
   Form: TProjectAssistantForm;
+  Accepted: Boolean;
 Begin
-  If Not (TObject(UserData) Is TProjectAssistantForm) Then Exit;
-  Form := TProjectAssistantForm(UserData);
+  Accepted := False;
   Names := Nil;
-  If Not Assigned(Data) Then Exit;
-  SetLength(Names, 0);
-  Uris := PPChar(gtk_selection_data_get_uris(Data));
-  If Uris = Nil Then Exit;
-  I := 0;
-  While Uris[I] <> Nil Do
-    Begin
-      SetLength(Names, Length(Names) + 1);
-      Names[High(Names)] := Uris[I];
-      Inc(I);
-    End;
-  g_strfreev(Uris);
-  If (Length(Names) > 0) And Assigned(Form.OnDropFiles) Then Form.OnDropFiles(Form, Names);
-  gtk_drag_finish(Context, True, False, Time);
+  Uris := Nil;
+  Try
+    If Not (TObject(UserData) Is TProjectAssistantForm) Then
+      Exit;
+    Form := TProjectAssistantForm(UserData);
+    If Not Assigned(Data) Then
+      Exit;
+    Uris := PPChar(gtk_selection_data_get_uris(Data));
+    If Uris = Nil Then
+      Exit;
+    I := 0;
+    While Uris[I] <> Nil Do
+      Begin
+        SetLength(Names, Length(Names) + 1);
+        Names[High(Names)] := Uris[I];
+        Inc(I);
+      End;
+    If (Length(Names) > 0) And Assigned(Form.OnDropFiles) Then
+      Begin
+        Form.OnDropFiles(Form, Names);
+        Accepted := True;
+      End;
+  Finally
+    If Uris <> Nil Then
+      g_strfreev(Uris);
+    If Context <> Nil Then
+      gtk_drag_finish(Context, Accepted, False, Time);
+  End;
 End;
 
 Procedure ArmControlFileDrop(Control: TWinControl; Form: TProjectAssistantForm);
