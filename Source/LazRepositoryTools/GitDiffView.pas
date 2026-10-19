@@ -525,16 +525,14 @@ Begin
   If Not Assigned(DiffEditor) Then
     Exit;
   { Prefer Font.Size (points) over Font.Height (device px). Never assign Height := 0
-    (TFont.SetHeight(0) forces Size 0 and can break SynEdit line metrics). }
+    (TFont.SetHeight(0) forces Size 0 and can break SynEdit line metrics).
+    ApplySynEditIDEFont already copies the IDE face without GetSynEditorSettings
+    on this editor. This fallback leaves Name empty so Pitch selects the widgetset fixed font. }
   Try
     DiffEditor.Font.Size := 9;
+    DiffEditor.Font.Name := '';
     DiffEditor.Font.Pitch := fpFixed;
     DiffEditor.Font.Quality := fqCleartypeNatural;
-    {$IFDEF Windows}
-    DiffEditor.Font.Name := 'Consolas';
-    {$ELSE}
-    DiffEditor.Font.Name := 'Courier New';
-    {$ENDIF}
     DiffEditor.ExtraLineSpacing := 0;
   Except
     On E: Exception Do
