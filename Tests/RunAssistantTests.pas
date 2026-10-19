@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..36] Of String = (
+  CoreTestNames: Array[0..38] Of String = (
     'AssistantUtf8StreamTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
     'AssistantArchiveRollbackTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
@@ -27,7 +27,7 @@ Const
     'AssistantGeneratedImageTest', 'AssistantWriteImageTest', 'AssistantBuildJobTest', 'AssistantGitTest',
     'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
-    'AssistantTasksTest', 'AssistantMonitorAbsent');
+    'AssistantTasksTest', 'AssistantMonitorAbsent', 'AssistantMonitorCodecTest', 'AssistantMonitorSessionTest');
   GuiTestNames: Array[0..17] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',
@@ -321,8 +321,8 @@ End;
 
 Procedure AddUnitFlags(Command: TStrings; UnitDirs: TStrings);
 Const
-  SourceNames: Array[0..4] Of String = (
-    'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'LazRepositoryTools', 'Tools');
+  SourceNames: Array[0..5] Of String = (
+    'LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'LazRepositoryTools', 'Tools', 'LazAssistantMonitor');
 Var
   I: Integer;
 Begin

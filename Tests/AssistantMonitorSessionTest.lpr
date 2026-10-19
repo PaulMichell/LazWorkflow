@@ -1,0 +1,555 @@
+Program AssistantMonitorSessionTest;
+
+{ In-memory monitor session checks. No sockets and no Interfaces unit (c) 2026 Michell Computing.
+
+  The runner writes this binary with a temporary -FU and -FE, never under Source/.
+  Monitor load and save use a temp settings directory and leave other sections in place. }
+
+{$IFDEF FPC}
+  {$MODE OBJFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
+Uses
+  {$IFDEF UNIX}
+  cthreads,
+  {$ENDIF}
+  Classes, SysUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
+  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorSession,
+  AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
+
+Var
+  FailCount: Integer;
+  Carrier: TMonitorMemoryCarrier;
+  CarrierRef: IMonitorCarrier;
+  Session: TMonitorSession;
+  SettingsRoot: String;
+  SavedClientId: String;
+  SavedToken: String;
+  DiscardedCode: String;
+  ErrorText: String;
+
+Procedure Check(Const Title: String; Condition: Boolean);
+Begin
+  If Condition Then
+    WriteLn('ok   ', Title)
+  Else
+    Begin
+      WriteLn('FAIL ', Title);
+      Inc(FailCount);
+    End;
+End;
+
+Function SectionField(Const SectionName, FieldName: String): String;
+Var
+  Section: TJSONObject;
+Begin
+  Result := '';
+  Section := ReadWorkflowSection(SectionName);
+  If Not Assigned(Section) Then
+    Exit;
+  Try
+    Result := Section.Get(FieldName, '');
+  Finally
+    Section.Free;
+  End;
+End;
+
+Procedure SeedOtherSections;
+Var
+  Section: TJSONObject;
+  ErrorText: String;
+Begin
+  Section := TJSONObject.Create;
+  Try
+    Section.Add('marker', 'keep-assistant');
+    Check('seed assistant section', WriteWorkflowSection('assistant', Section, ErrorText));
+  Finally
+    Section.Free;
+  End;
+  Section := TJSONObject.Create;
+  Try
+    Section.Add('marker', 'keep-notes');
+    Check('seed notes section', WriteWorkflowSection('notes', Section, ErrorText));
+  Finally
+    Section.Free;
+  End;
+End;
+
+Procedure CheckOtherSections(Const Title: String);
+Begin
+  Check(Title + ' assistant marker', SectionField('assistant', 'marker') = 'keep-assistant');
+  Check(Title + ' notes marker', SectionField('notes', 'marker') = 'keep-notes');
+End;
+
+Procedure TestSettingsLoadSave;
+Var
+  Settings: TMonitorSettings;
+  ErrorText: String;
+Begin
+  Check('missing monitor section loads', LoadMonitorSettings(Settings, ErrorText));
+  Check('missing monitor section is default', (Not Settings.Enabled) And (Settings.Port = MonitorListenPort) And
+    (Length(Settings.Clients) = 0) And (ErrorText = ''));
+  Settings := DefaultMonitorSettings;
+  Settings.Enabled := False;
+  Settings.Port := 56123;
+  Settings.BindAddress := '10.1.2.3';
+  Settings.BindAll := False;
+  Settings.RemoteApproval := False;
+  Check('save monitor section', SaveMonitorSettings(Settings, ErrorText));
+  Check('load monitor section', LoadMonitorSettings(Settings, ErrorText));
+  Check('loaded port', Settings.Port = 56123);
+  Check('loaded bind', Settings.BindAddress = '10.1.2.3');
+  Check('loaded clients empty', Length(Settings.Clients) = 0);
+  CheckOtherSections('after monitor save');
+End;
+
+Function LastJson: String;
+Begin
+  Result := '';
+  If Not Assigned(Carrier) Or (Carrier.SentCount = 0) Then
+    Exit;
+  Result := Carrier.SentJson(Carrier.SentCount - 1);
+End;
+
+Function DecodeLast(Out Message: TMonitorMessage): Boolean;
+Var
+  ErrorText: String;
+Begin
+  Result := TryDecodeMonitorEnvelope(LastJson, Message, ErrorText);
+End;
+
+Procedure ExpectRejected(Const Title, Reason: String; ShouldClose: Boolean);
+Var
+  Message: TMonitorMessage;
+  Rejected: TMonitorRejected;
+Begin
+  Check(Title + ' frame', DecodeLast(Message));
+  Check(Title + ' type', Message.Kind = mmkRejected);
+  Check(Title + ' payload', DecodeMonitorRejected(Message.PayloadJson, Rejected));
+  If Rejected.Reason <> Reason Then
+    WriteLn('detail ', Title, ' reason=', Rejected.Reason);
+  Check(Title + ' reason ' + Reason, Rejected.Reason = Reason);
+  Check(Title + ' host version', Rejected.HostVersion = MonitorCatalogueVersion);
+  If ShouldClose Then
+    Begin
+      Check(Title + ' closes', Session.CloseRequested);
+      Check(Title + ' listening', Session.State = mssListening);
+    End
+  Else
+    Begin
+      Check(Title + ' stays open', Not Session.CloseRequested);
+      Check(Title + ' stays accepted', Session.State = mssAccepted);
+    End;
+End;
+
+Procedure NewSocket;
+Var
+  Spare: TMonitorFrame;
+Begin
+  Session.NoteSocketClosed;
+  Check('socket accepted', Session.AcceptHandshake(Spare) And (Session.State = mssAccepted));
+  Carrier.ClearSent;
+End;
+
+Procedure ExpectBusySpare(Const Title: String);
+Var
+  Spare: TMonitorFrame;
+  Message: TMonitorMessage;
+  Rejected: TMonitorRejected;
+  ErrorText: String;
+  Before: TMonitorSessionState;
+Begin
+  Before := Session.State;
+  Check(Title + ' spare rejected', Not Session.AcceptHandshake(Spare));
+  Check(Title + ' controller unchanged', Session.State = Before);
+  Check(Title + ' spare envelope', TryDecodeMonitorEnvelope(Spare.Json, Message, ErrorText) And (Message.Kind = mmkRejected));
+  Check(Title + ' spare payload', DecodeMonitorRejected(Message.PayloadJson, Rejected));
+  Check(Title + ' spare busy', Rejected.Reason = 'busy');
+End;
+
+Procedure DeliverHello(Const ClientId: String);
+Begin
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ClientId));
+End;
+
+Procedure DeliverPair(Const Code: String);
+Begin
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorPair('pair', Code, 'ab12cd34'));
+End;
+
+Function WrongCode(Const Code: String): String;
+Begin
+  Result := '0000000000';
+  If Result = Code Then
+    Result := '1111111111';
+End;
+
+Function IsPairCode(Const Code: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := Length(Code) = MonitorPairCodeLength;
+  If Not Result Then
+    Exit;
+  For I := 1 To Length(Code) Do
+    If Pos(Code[I], MonitorCrockfordAlphabet) = 0 Then
+      Exit(False);
+End;
+
+Procedure ExpectPairOk;
+Var
+  Message: TMonitorMessage;
+  PairOk: TMonitorPairOk;
+Begin
+  Check('pair reaches live', Session.State = mssLive);
+  Check('pair code spent', Session.PairCode = '');
+  Check('pair does not close', Not Session.CloseRequested);
+  Check('pair_ok frame', DecodeLast(Message) And (Message.Kind = mmkPairOk));
+  Check('pair_ok payload', DecodeMonitorPairOk(Message.PayloadJson, PairOk));
+  SavedClientId := PairOk.ClientId;
+  SavedToken := PairOk.SessionToken;
+  Check('client id present', SavedClientId <> '');
+  Check('session token present', SavedToken <> '');
+End;
+
+Function NonceFromLast: String;
+Var
+  Message: TMonitorMessage;
+  HelloOk: TMonitorHelloOk;
+Begin
+  Result := '';
+  If Not DecodeLast(Message) Then
+    Exit;
+  If Message.Kind <> mmkHelloOk Then
+    Exit;
+  If Not DecodeMonitorHelloOk(Message.PayloadJson, HelloOk) Then
+    Exit;
+  Result := HelloOk.Nonce;
+End;
+
+Procedure TestCodeAbsentUntilRequested;
+Begin
+  Check('code absent at start', Session.PairCode = '');
+  Check('listening does not mint a code', Session.State = mssListening);
+  Session.RequestPairCode;
+  Check('requested code present', IsPairCode(Session.PairCode));
+End;
+
+Procedure TestSecondControllerWhileAccepted;
+Begin
+  NewSocket;
+  ExpectBusySpare('accepted');
+End;
+
+Procedure TestCommandBeforeAuth;
+Begin
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorEmpty(mmkSend, 'send-early'));
+  ExpectRejected('command before auth', 'auth', True);
+  Check('command before auth is not live', Session.State <> mssLive);
+End;
+
+Procedure TestThreeFailuresDiscard;
+Var
+  Code: String;
+  I: Integer;
+Begin
+  NewSocket;
+  Session.RequestPairCode;
+  Code := Session.PairCode;
+  Check('failure setup has a code', IsPairCode(Code));
+  DeliverHello('');
+  Check('first hello sends nothing', Carrier.SentCount = 0);
+  Check('first hello stays accepted', Session.State = mssAccepted);
+  For I := 1 To MonitorPairFailureLimit Do
+    Begin
+      DeliverPair(WrongCode(Code));
+      ExpectRejected('bad pair ' + IntToStr(I), 'pair_code', I = MonitorPairFailureLimit);
+      If I < MonitorPairFailureLimit Then
+        Check('code kept after failure ' + IntToStr(I), Session.PairCode = Code)
+      Else
+        Check('code discarded after three failures', Session.PairCode = '');
+    End;
+  DiscardedCode := Code;
+End;
+
+Procedure TestPairAfterDiscard;
+Begin
+  NewSocket;
+  DeliverHello('');
+  DeliverPair(DiscardedCode);
+  ExpectRejected('pair after discard', 'pair_code', True);
+  Check('discarded code stays discarded', Session.PairCode = '');
+  Check('discarded pair is not live', Session.State <> mssLive);
+End;
+
+Procedure TestPairSuccess;
+Var
+  Settings: TMonitorSettings;
+  ErrorText: String;
+Begin
+  Session.RequestPairCode;
+  NewSocket;
+  DeliverHello('');
+  DeliverPair(Session.PairCode);
+  ExpectPairOk;
+  Check('pair save loads', LoadMonitorSettings(Settings, ErrorText));
+  Check('pair save keeps port', Settings.Port = 56123);
+  Check('pair save stores one client', Length(Settings.Clients) = 1);
+  Check('stored client id', (Length(Settings.Clients) = 1) And (Settings.Clients[0].Id = SavedClientId));
+  CheckOtherSections('after pair save');
+End;
+
+Procedure TestHmac;
+Var
+  Nonce: String;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Check('hello_ok nonce', Length(Nonce) = MonitorNonceBytes * 2);
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorAuth('auth-bad', SavedClientId, 'not-a-mac'));
+  ExpectRejected('hmac failure', 'auth', True);
+  Check('hmac failure is not live', Session.State <> mssLive);
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Check('second nonce', Length(Nonce) = MonitorNonceBytes * 2);
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorAuth('auth-ok', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('hmac success is live', Session.State = mssLive);
+  Check('hmac success sends no extra frame', Carrier.SentCount = 0);
+  Check('hmac success stays open', Not Session.CloseRequested);
+End;
+
+Procedure TestUnknownTypeDoesNotChangeLive;
+Var
+  Message: TMonitorMessage;
+Begin
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":1,"id":"u1","type":"not_a_type","payload":{}}');
+  Check('unknown type stays live', Session.State = mssLive);
+  Check('unknown type does not close', Not Session.CloseRequested);
+  Check('unknown type error frame', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'unknown_type'));
+End;
+
+Procedure TestSecondControllerWhileLive;
+Var
+  Message: TMonitorMessage;
+  Ticks: TMonitorTicks;
+Begin
+  ExpectBusySpare('live');
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'ping-live', 42));
+  Check('controller still live', Session.State = mssLive);
+  Check('controller still answers ping', DecodeLast(Message) And (Message.Kind = mmkPong) And
+    DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 42));
+End;
+
+Procedure TestDecisionIgnoredWhenDisabled;
+Var
+  Event: PRTLEvent;
+Begin
+  Event := RTLEventCreate;
+  Try
+    ArmAssistantApprovalWait(Event);
+    Session.SetRemoteApproval(False);
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeMonitorApprovalDecision('decide-off', 'tool-off', True));
+    Check('disabled decision stays live', Session.State = mssLive);
+    Check('disabled decision sends nothing', Carrier.SentCount = 0);
+    Check('disabled decision ignored', Not Session.ApplyApprovalDecision('tool-off', True));
+    Check('disabled decision leaves none', ReadAssistantApprovalDecision = aadNone);
+  Finally
+    RTLEventDestroy(Event);
+  End;
+End;
+
+Procedure TestRevokeLive;
+Var
+  Message: TMonitorMessage;
+  Bye: TMonitorBye;
+  Settings: TMonitorSettings;
+  ErrorText: String;
+Begin
+  Carrier.ClearSent;
+  Session.RevokeClient(SavedClientId);
+  Check('revoke frame', DecodeLast(Message) And (Message.Kind = mmkBye));
+  Check('revoke payload', DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'revoked'));
+  Check('revoke closes', Session.CloseRequested);
+  Check('revoke state', Session.State = mssRevoked);
+  Check('revoke save', LoadMonitorSettings(Settings, ErrorText));
+  Check('revoke removes the client', Length(Settings.Clients) = 0);
+  Check('revoke keeps port', Settings.Port = 56123);
+  Check('revoke does not enable remote approval', Not Settings.RemoteApproval);
+  CheckOtherSections('after revoke save');
+End;
+
+Procedure TestRevokedNewSocket;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  ExpectRejected('revoked id', 'revoked', True);
+  Check('revoked id never live', Session.State <> mssLive);
+End;
+
+Function CountSent(Const TypeName: String): Integer;
+Var
+  I: Integer;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  Result := 0;
+  For I := 0 To Carrier.SentCount - 1 Do
+    If TryDecodeMonitorEnvelope(Carrier.SentJson(I), Message, ErrorText) And (Message.TypeName = TypeName) Then
+      Inc(Result);
+End;
+
+Procedure TestDisplayApproval;
+Var
+  Message: TMonitorMessage;
+  Notice: TAssistantApprovalNotice;
+  Closed: TMonitorApprovalClosed;
+  Event: PRTLEvent;
+Begin
+  Event := RTLEventCreate;
+  Try
+    ArmAssistantApprovalWait(Event);
+    Session.SetRemoteApproval(True);
+    Carrier.ClearSent;
+    Session.PublishDisplayApproval('tool-desk', 'write_file', 'Write the test.', 'Ask');
+    Session.PublishDisplayApproval('tool-desk', 'write_file', 'Write the test.', 'Ask');
+    Check('one display approval', CountSent('approval_requested') = 1);
+    Check('display approval frame', DecodeLast(Message) And (Message.Kind = mmkApprovalRequested));
+    Check('display approval payload', DecodeMonitorApprovalRequested(Message.PayloadJson, Notice));
+    Check('display approval is not accepted', (Notice.ToolId = 'tool-desk') And (Not Notice.DecisionsAccepted));
+    Check('display decision ignored', Not Session.ApplyApprovalDecision('tool-desk', True));
+    Check('display decision leaves none', ReadAssistantApprovalDecision = aadNone);
+    Session.CloseDisplayApproval('tool-desk');
+    Check('still one display approval', CountSent('approval_requested') = 1);
+    Check('display close frame', DecodeLast(Message) And (Message.Kind = mmkApprovalClosed));
+    Check('display close desktop', DecodeMonitorApprovalClosed(Message.PayloadJson, Closed) And (Closed.Reason = 'desktop') And
+      (Closed.ToolId = 'tool-desk'));
+    Check('closed id decision ignored', Not Session.ApplyApprovalDecision('tool-desk', True));
+    Check('closed id leaves none', ReadAssistantApprovalDecision = aadNone);
+  Finally
+    RTLEventDestroy(Event);
+  End;
+End;
+
+Procedure TestBareSignalAndCancel;
+Var
+  Event: PRTLEvent;
+Begin
+  Event := RTLEventCreate;
+  Try
+    ArmAssistantApprovalWait(Event);
+    Check('bare signal is not allow', Not Session.BareApprovalSignalIsAllow);
+    Check('bare signal leaves none', ReadAssistantApprovalDecision = aadNone);
+    Check('no tool execution before cancel', Not Session.ToolExecutionRecorded);
+    Session.NoteApprovalCancel('tool-stop');
+    Check('cancel stores stopped', ReadAssistantApprovalDecision = aadStopped);
+    Check('cancel records no tool execution', Not Session.ToolExecutionRecorded);
+    Check('later allow does not replace stopped', ReadAssistantApprovalDecision = aadStopped);
+    Session.ApplyApprovalDecision('tool-stop', True);
+    Check('allow after cancel stays stopped', ReadAssistantApprovalDecision = aadStopped);
+    Check('allow after cancel records no tool execution', Not Session.ToolExecutionRecorded);
+  Finally
+    RTLEventDestroy(Event);
+  End;
+End;
+
+Procedure CleanupSettings;
+Begin
+  If SettingsRoot = '' Then
+    Exit;
+  If WorkflowSettingsPath <> '' Then
+    Begin
+      DeleteFile(WorkflowSettingsPath);
+      DeleteFile(WorkflowSettingsPath + '.tmp');
+    End;
+  SetWorkflowSettingsDirectory('');
+  RemoveDir(ExcludeTrailingPathDelimiter(SettingsRoot));
+  SettingsRoot := '';
+End;
+
+Procedure PrepareSettings;
+Var
+  Guid: TGuid;
+Begin
+  If CreateGUID(Guid) <> 0 Then
+    Raise Exception.Create('Could not create a settings directory name');
+  SettingsRoot := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-monitor-session-' + GUIDToString(Guid);
+  If Not ForceDirectories(SettingsRoot) Then
+    Raise Exception.Create('Could not create ' + SettingsRoot);
+  SetWorkflowSettingsDirectory(SettingsRoot);
+End;
+
+Begin
+  FailCount := 0;
+  Carrier := Nil;
+  CarrierRef := Nil;
+  Session := Nil;
+  SettingsRoot := '';
+  SavedClientId := '';
+  SavedToken := '';
+  DiscardedCode := '';
+  Try
+    Try
+      PrepareSettings;
+      SeedOtherSections;
+      TestSettingsLoadSave;
+      Carrier := TMonitorMemoryCarrier.Create;
+      CarrierRef := Carrier;
+      Session := TMonitorSession.Create;
+      Session.AttachCarrier(CarrierRef);
+      Session.SetHostFingerprint('ab12cd34');
+      Session.NoteTime(5000);
+      Check('listen starts', Session.StartListening('10.1.2.3', 56123, ErrorText));
+      If ErrorText <> '' Then
+        WriteLn(ErrorText);
+      Check('listen state', Session.State = mssListening);
+      TestCodeAbsentUntilRequested;
+      TestSecondControllerWhileAccepted;
+      TestCommandBeforeAuth;
+      TestThreeFailuresDiscard;
+      TestPairAfterDiscard;
+      TestPairSuccess;
+      TestHmac;
+      TestUnknownTypeDoesNotChangeLive;
+      TestSecondControllerWhileLive;
+      TestDecisionIgnoredWhenDisabled;
+      TestRevokeLive;
+      TestRevokedNewSocket;
+      TestDisplayApproval;
+      TestBareSignalAndCancel;
+      CheckOtherSections('at end');
+    Except
+      On E: Exception Do
+        Begin
+          WriteLn('FAIL exception ', E.Message);
+          Inc(FailCount);
+        End;
+    End;
+  Finally
+    If Assigned(Session) Then
+      Session.Free;
+    CarrierRef := Nil;
+    Carrier := Nil;
+    CleanupSettings;
+  End;
+  If FailCount = 0 Then
+    Begin
+      WriteLn('All AssistantMonitorSessionTest tests passed.');
+      Halt(0);
+    End
+  Else
+    Begin
+      WriteLn(FailCount, ' AssistantMonitorSessionTest test(s) failed.');
+      Halt(1);
+    End;
+End.
