@@ -17,7 +17,8 @@ Unit ProjectAssistantForm;
   text after a picture is copied. The Run Plan end report is built in
   AssistantPlanRun. A dropped Codex or Claude transport waits in
   AssistantRecovery, then the same turn is started again.
-  Tasks is one action plus the call that applies a prepared request. The list stays in AssistantTasksForm.
+  Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
+  The list stays in AssistantTasksForm.
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop. }
 
 {$IFDEF FPC}
@@ -520,6 +521,12 @@ Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
 Procedure NotifyOpenProjectAssistantFormsConnectionChanged;
 Procedure NotifyOpenProjectAssistantFormsAccountUsage;
+/// True when Tasks… should be shown. An open window wins; otherwise the streamed action.
+Function AssistantTasksActionVisible: Boolean;
+
+Var
+  { AssistantMain assigns this so the IDE Tasks item follows TasksAction.Visible. }
+  OnAssistantTasksVisibilityChanged: TProcedure;
 
 Implementation
 
@@ -533,7 +540,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
-  AssistantFileDrop;
+  AssistantFileDrop, LResources;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
@@ -549,6 +556,120 @@ Const
   FooterTagApproval = 8;
   { Same turn budget as a Codex run. A short capture timeout would retry a live answer. }
   ClaudeRunTimeoutMs = 600000;
+
+Var
+  TasksActionVisibleKnown: Boolean = False;
+  TasksActionVisibleValue: Boolean = True;
+
+Procedure PublishTasksActionVisible(Value: Boolean);
+Begin
+  TasksActionVisibleValue := Value;
+  TasksActionVisibleKnown := True;
+  If Assigned(OnAssistantTasksVisibilityChanged) Then
+    OnAssistantTasksVisibilityChanged;
+End;
+
+Function VisibleInTasksActionText(Const Body: String): Boolean;
+Var
+  Lines: TStringList;
+  Index: Integer;
+  Line: String;
+  InAction: Boolean;
+Begin
+  Result := True;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Body;
+    InAction := False;
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[Index]);
+        If Not InAction Then
+          Begin
+            If Copy(Line, 1, 19) = 'object TasksAction:' Then
+              InAction := True;
+          End
+        Else If (Line = 'end') Or (Copy(Line, 1, 7) = 'object ') Then
+          Exit
+        Else If SameText(Line, 'Visible = False') Then
+          Exit(False)
+        Else If SameText(Line, 'Visible = True') Then
+          Exit(True);
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function OpenStreamedFormResource: TStream;
+Var
+  Found: TLResource;
+Begin
+  Result := Nil;
+  If Assigned(LazarusResources) Then
+    Begin
+      Found := LazarusResources.Find('TProjectAssistantForm');
+      If Assigned(Found) Then
+        Exit(TLazarusResourceStream.CreateFromHandle(Found));
+    End;
+  Try
+    Result := TResourceStream.Create(HInstance, 'TProjectAssistantForm', RT_RCDATA);
+  Except
+    On EResNotFound Do
+      Result := Nil;
+  End;
+End;
+
+Function ReadStreamedTasksActionVisible: Boolean;
+Var
+  Source: TStream;
+  Text: TMemoryStream;
+  Body: String;
+Begin
+  { The Assistant menu exists before the window. Visible is still the streamed action. }
+  Result := True;
+  Source := Nil;
+  Text := Nil;
+  Try
+    Try
+      Source := OpenStreamedFormResource;
+      If Not Assigned(Source) Then
+        Exit;
+      Text := TMemoryStream.Create;
+      FormDataToText(Source, Text);
+      If (Text.Size > 0) And Assigned(Text.Memory) Then
+        Begin
+          SetString(Body, PAnsiChar(Text.Memory), Text.Size);
+          Result := VisibleInTasksActionText(Body);
+        End;
+    Except
+      Result := True;
+    End;
+  Finally
+    Text.Free;
+    Source.Free;
+  End;
+End;
+
+Function AssistantTasksActionVisible: Boolean;
+Var
+  Index: Integer;
+  Form: TCustomForm;
+Begin
+  For Index := 0 To Screen.CustomFormCount - 1 Do
+    Begin
+      Form := Screen.CustomForms[Index];
+      If (Form Is TProjectAssistantForm) And Not (csDestroying In Form.ComponentState) And
+        Assigned(TProjectAssistantForm(Form).TasksAction) Then
+        Exit(TProjectAssistantForm(Form).TasksAction.Visible);
+    End;
+  If Not TasksActionVisibleKnown Then
+    Begin
+      TasksActionVisibleValue := ReadStreamedTasksActionVisible;
+      TasksActionVisibleKnown := True;
+    End;
+  Result := TasksActionVisibleValue;
+End;
 
 Constructor TProjectAssistantForm.Create(TheOwner: TComponent);
 Begin
@@ -701,6 +822,8 @@ End;
 
 Procedure TProjectAssistantForm.FormCreate(Sender: TObject);
 Begin
+  If Assigned(TasksAction) Then
+    PublishTasksActionVisible(TasksAction.Visible);
   FTargetPaths := TStringList.Create;
   RefreshTargetChoices(Nil);
   Caption := 'Project Assistant';
@@ -7444,6 +7567,7 @@ End;
 Procedure TProjectAssistantForm.SkillsPickerActionExecute(Sender: TObject);
 Var
   Host: TControl;
+  Item: TMenuItem;
 Begin
   If FUseClaude Then
     Begin
@@ -7453,7 +7577,13 @@ Begin
   EnsureFooterMenu(FFooterMenu);
   FillSkillFooterMenu;
   AddFooterItem(FFooterMenu, '-', 0, '', False, False, Nil);
-  AddFooterItem(FFooterMenu, 'Tasks…', 0, '', False, False, @TasksActionExecute);
+  { Action link copies Visible, so hiding TasksAction hides this item too. }
+  If Assigned(TasksAction) Then
+    Begin
+      Item := TMenuItem.Create(FFooterMenu);
+      Item.Action := TasksAction;
+      FFooterMenu.Items.Add(Item);
+    End;
   AddFooterItem(FFooterMenu, 'Settings…', FooterTagSettings, '', False, False, @FooterMenuClick);
   Host := StatusFooter.SkillLabel;
   If Not Assigned(Host) Then
