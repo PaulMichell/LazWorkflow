@@ -836,8 +836,8 @@ Var
 Begin
   Inherited KeyDown(Key, Shift);
   If Key = 0 Then Exit;
-  CommandKey := ssCtrl In Shift;
-  {$IFDEF DARWIN}CommandKey := CommandKey Or (ssMeta In Shift);{$ENDIF}
+  { ssModifier is Command on Darwin and Ctrl elsewhere. Also accept Ctrl on Darwin. }
+  CommandKey := (ssModifier In Shift) Or (ssCtrl In Shift);
   Extend := ssShift In Shift;
   If CommandKey Then
     Case Key Of
