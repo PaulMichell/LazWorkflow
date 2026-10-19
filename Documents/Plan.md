@@ -22,7 +22,7 @@ Before adding more widgetset code, check whether the current LCL already deliver
 
 ### 1.3 GTK drop arming keeps destroyed controls
 
-Status: not started
+Status: complete
 
 `ArmedDropControls` is a unit-level list. Controls are added when armed and never removed. `FormDestroy` does not clear it, and nothing frees the list. After the assistant window is destroyed and opened again, a reused pointer can be treated as already armed, so the new input controls never receive drops. Remove the control on destroy, and free the list when the last form goes away.
 
