@@ -2,14 +2,15 @@ package computing.michell.monitor.protocol
 
 /* JVM checks for catalogue version 1 and LAM1 framing (c) 2026 Michell Computing.
 
-   Reads the host fixtures. Does not copy them and does not write fixture files. */
+   Frame bytes are read from the vendored copies under test resources.
+   Those copies must match Tests/Fixtures/monitor-frames/ byte for byte.
+   This test does not write fixture files. */
 
 import java.io.File
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,9 +33,8 @@ class ProtocolCodecTest {
     assertTrue(reconnectHello!!.hasClientId)
     assertEquals("client-1", reconnectHello.clientId)
 
-    val fixtures = fixtureDirectory()
-    assertArrayEquals(readHex(File(fixtures, "hello-first.hex")), firstFrame.bytes)
-    assertArrayEquals(readHex(File(fixtures, "hello-reconnect.hex")), tryEncodeFrame(reconnect).bytes)
+    assertArrayEquals(readVendored("hello-first.hex"), firstFrame.bytes)
+    assertArrayEquals(readVendored("hello-reconnect.hex"), tryEncodeFrame(reconnect).bytes)
   }
 
   @Test
@@ -74,7 +74,7 @@ class ProtocolCodecTest {
     val frame = tryEncodeFrame(encoded.messages[0])
     assertTrue(frame.ok)
     assertLam1(frame.bytes, encoded.messages[0].toByteArray(Charsets.UTF_8).size)
-    assertArrayEquals(readHex(File(fixtureDirectory(), "image-data.hex")), frame.bytes)
+    assertArrayEquals(readVendored("image-data.hex"), frame.bytes)
   }
 
   @Test
@@ -179,9 +179,18 @@ class ProtocolCodecTest {
   }
 
   @Test
-  fun hostFixturesDecodeAndRewrite() {
-    val directory = fixtureDirectory()
-    val files = directory.listFiles { file -> file.extension == "hex" }?.sortedBy { it.name } ?: emptyList()
+  fun vendoredFramesMatchPascalFixtures() {
+    val vendored = filesByName(vendoredDirectory())
+    val pascal = filesByName(fixtureDirectory())
+    assertEquals(pascal.keys.sorted(), vendored.keys.sorted())
+    for (name in pascal.keys) {
+      assertArrayEquals(name, pascal.getValue(name), vendored.getValue(name))
+    }
+  }
+
+  @Test
+  fun vendoredFramesDecodeAndRewrite() {
+    val files = vendoredDirectory().listFiles { file -> file.extension == "hex" }?.sortedBy { it.name } ?: emptyList()
     assertTrue(files.isNotEmpty())
     for (file in files) {
       val bytes = readHex(file)
@@ -194,14 +203,14 @@ class ProtocolCodecTest {
       assertTrue(file.name + " envelope " + envelope.errorText, envelope.ok)
       assertEquals(MonitorLimits.CatalogueVersion, envelope.message.version)
     }
-    val first = tryDecodeFrame(readHex(File(directory, "hello-first.hex")))
+    val first = tryDecodeFrame(readVendored("hello-first.hex"))
     val hello = decodeHello(tryDecodeEnvelope(first.frame.json).message.payloadJson)
     assertNotNull(hello)
     assertFalse(hello!!.hasClientId)
-    val reconnect = tryDecodeFrame(readHex(File(directory, "hello-reconnect.hex")))
+    val reconnect = tryDecodeFrame(readVendored("hello-reconnect.hex"))
     val again = decodeHello(tryDecodeEnvelope(reconnect.frame.json).message.payloadJson)
     assertEquals("client-1", again!!.clientId)
-    val image = tryDecodeFrame(readHex(File(directory, "image-data.hex")))
+    val image = tryDecodeFrame(readVendored("image-data.hex"))
     val part = decodeImageData(tryDecodeEnvelope(image.frame.json).message.payloadJson)
     assertNotNull(part)
     assertEquals(1, part!!.image.part)
@@ -228,6 +237,26 @@ class ProtocolCodecTest {
     assertEquals(payloadLength.toLong(), readBigEndianLength(bytes))
     assertEquals((payloadLength ushr 24) and 0xFF, bytes[8].toInt() and 0xFF)
     assertEquals(payloadLength and 0xFF, bytes[11].toInt() and 0xFF)
+  }
+
+  private fun vendoredDirectory(): File {
+    val resource = javaClass.classLoader.getResource("frames/hello-first.hex")
+      ?: throw AssertionError("Vendored frame frames/hello-first.hex is not on the test classpath.")
+    val dir = File(resource.toURI()).parentFile
+    if (dir == null || !dir.isDirectory) {
+      throw AssertionError("Vendored frames are not a directory.")
+    }
+    return dir
+  }
+
+  private fun readVendored(name: String): ByteArray {
+    return readHex(File(vendoredDirectory(), name))
+  }
+
+  private fun filesByName(directory: File): Map<String, ByteArray> {
+    val files = directory.listFiles { file -> file.isFile && file.extension == "hex" } ?: emptyArray()
+    assertTrue(directory.path + " has no frame fixtures", files.isNotEmpty())
+    return files.associate { it.name to it.readBytes() }
   }
 
   private fun fixtureDirectory(): File {
