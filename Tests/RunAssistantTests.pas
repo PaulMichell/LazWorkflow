@@ -501,14 +501,49 @@ Begin
     Result := RunArgs(LabelName, [OutputBinary(OutDir, ChangeFileExt(ExtractFileName(Target), ''))], TimeoutSec);
 End;
 
+Procedure RunMonitorPackage;
+Var
+  Lazbuild, ConfigDir, PackageOut, Opt: String;
+  Links: Array[0..3] Of String;
+  I: Integer;
+Begin
+  Lazbuild := IncludeTrailingPathDelimiter(LazarusRoot) + 'lazbuild';
+  {$IFDEF WINDOWS}
+  If Not FileExists(Lazbuild) And FileExists(Lazbuild + '.exe') Then
+    Lazbuild := Lazbuild + '.exe';
+  {$ENDIF}
+  { Disposable config. Never the IDE primary config. }
+  ConfigDir := IncludeTrailingPathDelimiter(OutputDir) + 'monitor-package-config';
+  PackageOut := IncludeTrailingPathDelimiter(OutputDir) + 'monitor-package';
+  If SameFileName(ExcludeTrailingPathDelimiter(ConfigDir), ExpandFileName('/home/paul/.lazarus')) Then
+    FailUsage('Monitor package build must not use /home/paul/.lazarus.');
+  ForceDirectories(ConfigDir);
+  ForceDirectories(PackageOut);
+  Links[0] := 'LazWorkflowCommon';
+  Links[1] := 'LazStyledText';
+  Links[2] := 'LazAssistantTools';
+  Links[3] := 'LazAssistantMonitor';
+  For I := 0 To High(Links) Do
+    If Not RunArgs(Links[I] + '-monitor-link',
+      [Lazbuild, '--pcp=' + ConfigDir, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--add-package-link',
+      RepoFile('Packages/' + Links[I] + '.lpk')], 120) Then
+      Exit;
+  Opt := '-FU' + ExcludeTrailingPathDelimiter(PackageOut) + ' -FE' + ExcludeTrailingPathDelimiter(PackageOut);
+  RunArgs('LazAssistantMonitor-lazbuild',
+    [Lazbuild, '--pcp=' + ConfigDir, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--build-all', '--opt=' + Opt,
+    RepoFile('Packages/LazAssistantMonitor.lpk')], 600);
+End;
+
 Function RunIndependent(UnitDirs: TStrings): Boolean;
 Begin
   Result := Restricted('common-package', ['LazWorkflowCommon'], RepoFile('Packages/LazWorkflowCommon.pas'), False, 180, UnitDirs);
   Result := Restricted('styled-package', ['LazStyledText'], RepoFile('Packages/LazStyledText.pas'), False, 180, UnitDirs) And Result;
   Result := Restricted('repository-package', ['LazRepositoryTools', 'LazWorkflowCommon'],
     RepoFile('Packages/LazRepositoryTools.pas'), False, 300, UnitDirs) And Result;
+  { Assistant package stub only. The monitor package is a later, separate lazbuild. }
   Result := Restricted('assistant-package', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
     RepoFile('Packages/LazAssistantTools.pas'), False, 300, UnitDirs) And Result;
+  RunMonitorPackage;
   Result := Restricted('AssistantMonitorAbsent', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'Tools'],
     RepoFile('Tests/AssistantMonitorAbsent.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('RepositoryOnlyInstall', ['LazRepositoryTools', 'LazWorkflowCommon'],
@@ -601,6 +636,7 @@ Begin
       AddUnitFlags(Command, UnitDirs);
       Command.Add(RepoFile('Packages/LazAssistantTools.pas'));
       RunCommand('assistant-package-build', Command, 90);
+      RunMonitorPackage;
       Command[Command.Count - 1] := RepoFile('Packages/LazRepositoryTools.pas');
       RunCommand('repository-package-build', Command, 90);
       If PackageCheck Then
