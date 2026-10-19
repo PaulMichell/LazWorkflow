@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live styled Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="84">
+    <Files Count="87">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -357,6 +357,18 @@
         <Filename Value="../Source/LazAssistantTools/AssistantFileDrop.pas"/>
         <UnitName Value="AssistantFileDrop"/>
       </Item84>
+      <Item85>
+        <Filename Value="../Source/LazAssistantTools/AssistantFileDropGtk3.pas"/>
+        <UnitName Value="AssistantFileDropGtk3"/>
+      </Item85>
+      <Item86>
+        <Filename Value="../Source/LazAssistantTools/AssistantFileDropWin32.pas"/>
+        <UnitName Value="AssistantFileDropWin32"/>
+      </Item86>
+      <Item87>
+        <Filename Value="../Source/LazAssistantTools/AssistantFileDropQt.pas"/>
+        <UnitName Value="AssistantFileDropQt"/>
+      </Item87>
     </Files>
     <RequiredPkgs Count="6">
       <Item1>
