@@ -1,9 +1,8 @@
 object AssistantMonitorForm: TAssistantMonitorForm
-  Left = 220
+  Left = 237
   Height = 560
-  Top = 100
+  Top = 193
   Width = 720
-  BorderStyle = bsSizeable
   Caption = 'Remote Monitor'
   ClientHeight = 560
   ClientWidth = 720
@@ -16,36 +15,38 @@ object AssistantMonitorForm: TAssistantMonitorForm
   OnShow = FormShow
   object BindGroup: TGroupBox
     Left = 0
-    Height = 112
+    Height = 105
     Top = 0
     Width = 720
     Align = alTop
     Caption = 'Listener'
+    ClientHeight = 78
+    ClientWidth = 716
     TabOrder = 0
     object AddressLabel: TLabel
-      Left = 12
-      Height = 17
-      Top = 8
-      Width = 88
+      Left = 15
+      Height = 18
+      Top = 10
+      Width = 78
       Caption = 'IPv4 address'
     end
     object AddressEdit: TEdit
       Left = 112
-      Height = 28
+      Height = 32
       Top = 4
       Width = 280
       TabOrder = 0
     end
     object PortLabel: TLabel
       Left = 408
-      Height = 17
+      Height = 18
       Top = 8
-      Width = 28
+      Width = 26
       Caption = 'Port'
     end
     object PortEdit: TSpinEdit
       Left = 444
-      Height = 28
+      Height = 32
       Top = 4
       Width = 88
       MaxValue = 65535
@@ -57,24 +58,24 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Left = 12
       Height = 22
       Top = 44
-      Width = 280
+      Width = 185
       Caption = 'Bind all interfaces (0.0.0.0)'
       TabOrder = 2
     end
     object RemoteApprovalCheck: TCheckBox
-      Left = 12
+      Left = 215
       Height = 22
-      Top = 72
-      Width = 320
+      Top = 45
+      Width = 128
       Caption = 'Remote approval'
-      OnClick = RemoteApprovalCheckClick
       TabOrder = 3
+      OnClick = RemoteApprovalCheckClick
     end
   end
   object ButtonStrip: TPanel
     Left = 0
     Height = 44
-    Top = 112
+    Top = 105
     Width = 720
     Align = alTop
     BevelOuter = bvNone
@@ -90,58 +91,52 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Left = 8
       Height = 28
       Top = 8
-      Width = 88
+      Width = 55
       Action = EnableAction
-      Align = alNone
       AutoSize = True
       TabOrder = 0
     end
     object DisableButton: TButton
-      Left = 100
+      Left = 67
       Height = 28
       Top = 8
-      Width = 88
+      Width = 59
       Action = DisableAction
-      Align = alNone
       AutoSize = True
       TabOrder = 1
     end
     object PairButton: TButton
-      Left = 192
+      Left = 130
       Height = 28
       Top = 8
-      Width = 72
+      Width = 38
       Action = PairAction
-      Align = alNone
       AutoSize = True
       TabOrder = 2
     end
     object RevokeButton: TButton
-      Left = 268
+      Left = 172
       Height = 28
       Top = 8
-      Width = 80
+      Width = 58
       Action = RevokeAction
-      Align = alNone
       AutoSize = True
       TabOrder = 3
     end
     object RevokeAllButton: TButton
-      Left = 352
+      Left = 234
       Height = 28
       Top = 8
-      Width = 96
+      Width = 76
       Action = RevokeAllAction
-      Align = alNone
       AutoSize = True
       TabOrder = 4
     end
     object CloseButton: TButton
-      Left = 452
+      Left = 314
       Height = 28
       Top = 8
-      Width = 72
-      Align = alNone
+      Width = 47
       AutoSize = True
       Cancel = True
       Caption = 'Close'
@@ -150,20 +145,20 @@ object AssistantMonitorForm: TAssistantMonitorForm
     end
   end
   object PairCodeLabel: TLabel
-    Left = 0
-    Height = 24
-    Top = 156
-    Width = 720
+    Left = 12
+    Height = 18
+    Top = 149
+    Width = 696
     Align = alTop
     BorderSpacing.Left = 12
     BorderSpacing.Right = 12
     Caption = 'Pairing code appears after Pair.'
   end
   object FingerprintLabel: TLabel
-    Left = 0
-    Height = 24
-    Top = 180
-    Width = 720
+    Left = 12
+    Height = 18
+    Top = 167
+    Width = 696
     Align = alTop
     BorderSpacing.Left = 12
     BorderSpacing.Right = 12
@@ -171,10 +166,10 @@ object AssistantMonitorForm: TAssistantMonitorForm
     WordWrap = True
   end
   object StatusMemo: TMemo
-    Left = 0
+    Left = 8
     Height = 110
-    Top = 204
-    Width = 720
+    Top = 185
+    Width = 704
     Align = alTop
     BorderSpacing.Left = 8
     BorderSpacing.Right = 8
@@ -183,24 +178,27 @@ object AssistantMonitorForm: TAssistantMonitorForm
     TabOrder = 2
   end
   object ClientList: TListBox
-    Left = 0
-    Height = 246
-    Top = 314
-    Width = 720
+    Left = 8
+    Height = 257
+    Top = 295
+    Width = 704
     Align = alClient
     BorderSpacing.Left = 8
     BorderSpacing.Right = 8
     BorderSpacing.Bottom = 8
-    OnClick = ClientListClick
+    ItemHeight = 0
     TabOrder = 3
+    TopIndex = -1
+    OnClick = ClientListClick
   end
   object StatusTimer: TTimer
-    Interval = 1000
     OnTimer = StatusTimerTimer
+    Left = 430
+    Top = 75
   end
   object ActionList: TActionList
-    Left = 560
-    Top = 8
+    Left = 525
+    Top = 75
     object EnableAction: TAction
       Caption = 'Enable'
       Hint = 'Start the listener. Does not mint a pairing code.'
