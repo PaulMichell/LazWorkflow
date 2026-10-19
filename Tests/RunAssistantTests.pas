@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..35] Of String = (
+  CoreTestNames: Array[0..36] Of String = (
     'AssistantUtf8StreamTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
     'AssistantArchiveRollbackTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
@@ -27,7 +27,7 @@ Const
     'AssistantGeneratedImageTest', 'AssistantWriteImageTest', 'AssistantBuildJobTest', 'AssistantGitTest',
     'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
-    'AssistantTasksTest');
+    'AssistantTasksTest', 'AssistantMonitorAbsent');
   GuiTestNames: Array[0..17] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',
@@ -508,6 +508,8 @@ Begin
     RepoFile('Packages/LazRepositoryTools.pas'), False, 300, UnitDirs) And Result;
   Result := Restricted('assistant-package', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
     RepoFile('Packages/LazAssistantTools.pas'), False, 300, UnitDirs) And Result;
+  Result := Restricted('AssistantMonitorAbsent', ['LazAssistantTools', 'LazWorkflowCommon'],
+    RepoFile('Tests/AssistantMonitorAbsent.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('RepositoryOnlyInstall', ['LazRepositoryTools', 'LazWorkflowCommon'],
     RepoFile('Tests/RepositoryOnlyInstall.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('AssistantOnlyInstall', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
