@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, GitPathUtils;
+  Classes, SysUtils, WasteBin;
 
 Var
   Failures: Integer;
