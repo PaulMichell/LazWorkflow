@@ -48,7 +48,7 @@ Status: complete
 
 ### 3.1 Do not reread every skill file on every prompt
 
-Status: not started
+Status: complete
 
 `BuildSkillsSection` calls `ListGuidanceDocuments` for every system prompt. That reads each installed file to get the document name, then reads it again for the description and when-to-use line. Tagged bodies may read the same files a third time. Cache the catalog text until the installed list or a file age changes. Keep the existing one-file body cache, but key it so two tagged skills do not evict each other.
 
