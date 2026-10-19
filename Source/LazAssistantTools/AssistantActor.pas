@@ -85,6 +85,7 @@ Type
       HttpStatus, Attempt: Integer; OwnsTurn: Boolean; Const ResponseBody: String = ''): TAssistantRecovery;
     Function NextFaultAttempt(Const Site: String): Integer;
     Function ServiceWasDetached: Boolean;
+    Function ApprovalMustDeny: Boolean;
     Procedure FaultSite(Out Origin: TAssistantFaultOrigin; Out Area, ToolName: String);
     Procedure PostTerminalStop(Const Area, ErrorClass, ErrorText: String);
     Procedure PostRecovery(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
@@ -321,6 +322,11 @@ Begin
   Finally
     LeaveCriticalSection(FSnapLock);
   End;
+End;
+
+Function TAssistantActor.ApprovalMustDeny: Boolean;
+Begin
+  Result := Terminated Or FTerminalNoted Or ServiceWasDetached;
 End;
 
 Function TAssistantActor.NextFaultAttempt(Const Site: String): Integer;
@@ -1074,6 +1080,8 @@ Type
     FRefCount: Integer;
     FName: String;
     FArgs: String;
+    FToolId: String;
+    FSkipApproval: Boolean;
     FMode: TAssistantMode;
     FOk: Boolean;
     FResultText: String;
@@ -1089,7 +1097,8 @@ Type
     Procedure MarkFailed(Const Area, ErrorClass, ErrorText: String);
     Procedure EnsureDone;
   Public
-    Constructor Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
+    Constructor Create(Const ToolName, ArgumentsJson, ToolId: String; ToolMode: TAssistantMode; AbortWorker: TThread;
+      SkipApproval: Boolean);
     Destructor Destroy; Override;
     Procedure ExecuteOnMain;
     Function HasStarted: Boolean;
@@ -1101,12 +1110,15 @@ Type
     Function TookFault(Out FaultClass, FaultMessage: String): Boolean;
   End;
 
-Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson: String; ToolMode: TAssistantMode; AbortWorker: TThread);
+Constructor TIdeToolDispatch.Create(Const ToolName, ArgumentsJson, ToolId: String; ToolMode: TAssistantMode;
+  AbortWorker: TThread; SkipApproval: Boolean);
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FName := ToolName;
   FArgs := ArgumentsJson;
+  FToolId := ToolId;
+  FSkipApproval := SkipApproval;
   FMode := ToolMode;
   FWorker := AbortWorker;
   FOk := False;
@@ -1259,7 +1271,8 @@ Begin
           BindToolStopFlag(@FStopFlag);
           Try
             Try
-              ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FMode, ToolResult, ToolError, ImageRefs);
+              ToolOk := ExecuteAssistantToolForMode(FName, FArgs, FToolId, FMode, ToolResult, ToolError, ImageRefs,
+                FSkipApproval);
             Except
               On E: Exception Do
                 Begin
@@ -1427,6 +1440,7 @@ Var
   Mode: TAssistantMode;
   ToolDispatch: TIdeToolDispatch;
   ImageRefs: TAssistantImageRefArray;
+  Handled, RemoteAllowed: Boolean;
   I, Base, Tries: Integer;
   SubagentSession: Boolean;
   Decision: TAssistantRecovery;
@@ -1450,6 +1464,7 @@ Begin
   If Not AssistantToolIsReadOnly(Call.Name) Then
     FMutatingToolRan := True;
   BindToolAbortThread(Self);
+  BindAssistantApprovalAbort(@ApprovalMustDeny);
   Try
     Repeat
       If FTerminalNoted Then
@@ -1469,9 +1484,31 @@ Begin
           End
         Else If ToolNeedsIdeThread(Call.Name) Then
           Begin
-            ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Mode, Self);
-            { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize. }
-            TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
+            Handled := False;
+            RemoteAllowed := False;
+            If AssistantRemoteApprovalAssigned Then
+              RemoteAllowed := QueryAssistantRemoteApproval(Call.Name, Call.Id, Call.Arguments, @ApprovalMustDeny,
+                ErrorText, Handled);
+            { Stop, a terminal note, or a detached service skips the tool even after an allow. }
+            If ApprovalMustDeny Then
+              Begin
+                Ok := False;
+                If ErrorText = '' Then
+                  ErrorText := CancelWaitHint;
+              End
+            Else If Handled And (Not RemoteAllowed) Then
+              Begin
+                Ok := False;
+                If ErrorText = '' Then
+                  ErrorText := 'User denied tool "' + Call.Name + '" (approval mode: Ask).';
+              End
+            Else
+              Begin
+                ToolDispatch := TIdeToolDispatch.Create(Call.Name, Call.Arguments, Call.Id, Mode, Self,
+                  Handled And RemoteAllowed);
+                { Queue, not Synchronize: Terminate cannot unblock a stuck Synchronize.
+                  Handled false leaves this dispatch in place. SkipApproval avoids a second ask. }
+                TThread.Queue(Nil, @ToolDispatch.ExecuteOnMain);
             If ToolDispatch.WaitUntilDone(30000) Or ToolDispatch.HasFailed Then
               Begin
                 ToolDispatch.CopyOutcome(Ok, ResultText, ErrorText, ImageRefs);
@@ -1491,9 +1528,16 @@ Begin
                 ResultText := '';
                 ToolDispatch.Release;
               End;
+              End;
+          End
+        Else If ApprovalMustDeny Then
+          Begin
+            Ok := False;
+            If ErrorText = '' Then
+              ErrorText := CancelWaitHint;
           End
         Else
-          Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Mode,
+          Ok := ExecuteAssistantToolForMode(Call.Name, Call.Arguments, Call.Id, Mode,
             ResultText, ErrorText, ImageRefs);
       Except
         On E: Exception Do
@@ -1537,6 +1581,7 @@ Begin
       End;
     Until False;
   Finally
+    UnbindAssistantApprovalAbort;
     UnbindToolAbortThread;
   End;
   If FRecoveryStop Or FTerminalNoted Then

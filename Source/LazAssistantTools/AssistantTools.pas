@@ -32,10 +32,11 @@ Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents,
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
-Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
-Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
-  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray;
+  SkipApproval: Boolean = False): Boolean;
 /// Clears a failed write_image stop. Call at turn start on the thread that runs tools.
 Procedure BeginWriteImageTurn;
 Function FindLazbuildExecutable: String;
@@ -65,6 +66,26 @@ Procedure BindToolAbortThread(Worker: TThread);
 Procedure BindToolStopFlag(Flag: PLongInt);
 Procedure UnbindToolAbortThread;
 Function ToolsShouldStop: Boolean;
+
+Type
+  { True when this wait must deny: Terminated, FTerminalNoted, or ServiceWasDetached. }
+  TAssistantApprovalAbort = Function: Boolean Of Object;
+
+{ Nil until the monitor package registers a waiter.
+  Handled False leaves the desktop dialog in place.
+  On the main thread the waiter must return immediately with Handled False. }
+  TAssistantRemoteApproval = Function(Const ToolName, ToolId, ArgumentsJson: String;
+    Aborting: TAssistantApprovalAbort; Out ErrorText: String; Out Handled: Boolean): Boolean;
+
+Procedure SetAssistantRemoteApproval(Waiter: TAssistantRemoteApproval);
+/// True when a waiter is stored. A nil waiter skips the call and emits no notice.
+Function AssistantRemoteApprovalAssigned: Boolean;
+/// Calls the waiter when one is stored. A nil waiter sets Handled false and returns false.
+Function QueryAssistantRemoteApproval(Const ToolName, ToolId, ArgumentsJson: String;
+  Aborting: TAssistantApprovalAbort; Out ErrorText: String; Out Handled: Boolean): Boolean;
+/// Actor-thread abort callback for ApproveToolIfNeeded. The IDE thread does not see it.
+Procedure BindAssistantApprovalAbort(Aborting: TAssistantApprovalAbort);
+Procedure UnbindAssistantApprovalAbort;
 
 Implementation
 
@@ -236,6 +257,46 @@ Begin
   Result := Not ToolIsReadOnly(ToolName);
 End;
 
+Var
+  RemoteApprovalWaiter: TAssistantRemoteApproval;
+
+ThreadVar
+  ApprovalAborting: TAssistantApprovalAbort;
+
+Procedure SetAssistantRemoteApproval(Waiter: TAssistantRemoteApproval);
+Begin
+  RemoteApprovalWaiter := Waiter;
+End;
+
+Function AssistantRemoteApprovalAssigned: Boolean;
+Begin
+  Result := Assigned(RemoteApprovalWaiter);
+End;
+
+Function QueryAssistantRemoteApproval(Const ToolName, ToolId, ArgumentsJson: String;
+  Aborting: TAssistantApprovalAbort; Out ErrorText: String; Out Handled: Boolean): Boolean;
+Var
+  Waiter: TAssistantRemoteApproval;
+Begin
+  Handled := False;
+  ErrorText := '';
+  Result := False;
+  Waiter := RemoteApprovalWaiter;
+  If Not Assigned(Waiter) Then
+    Exit;
+  Result := Waiter(ToolName, ToolId, ArgumentsJson, Aborting, ErrorText, Handled);
+End;
+
+Procedure BindAssistantApprovalAbort(Aborting: TAssistantApprovalAbort);
+Begin
+  ApprovalAborting := Aborting;
+End;
+
+Procedure UnbindAssistantApprovalAbort;
+Begin
+  ApprovalAborting := Nil;
+End;
+
 Type
   TToolApprovalAsk = Class
     Prompt: String;
@@ -254,11 +315,13 @@ Begin
   End;
 End;
 
-Function ApproveToolIfNeeded(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
+Function ApproveToolIfNeeded(Const ToolName, ToolId, ArgumentsJson: String; Out ErrorText: String): Boolean;
 Var
   Mode: TAssistantApprovalMode;
   Summary, Name: String;
   Ask: TToolApprovalAsk;
+  Handled, RemoteAllowed, WaiterCalled, NoticeQueued: Boolean;
+  Notice: TAssistantApprovalNotice;
 Begin
   Result := True;
   ErrorText := '';
@@ -273,7 +336,23 @@ Begin
   If Mode = aamAuto Then
     { Auto: allow all project tools without a prompt (sandbox still applies). }
     Exit;
-  { Ask: confirm mutating tools. The dialog must run on the IDE thread. }
+  { Ask: confirm mutating tools. The dialog must run on the IDE thread.
+    A nil waiter skips the call and emits no notice. Do not invent a tool id. }
+  Handled := False;
+  RemoteAllowed := False;
+  WaiterCalled := False;
+  If (ToolId <> '') And AssistantRemoteApprovalAssigned Then
+    Begin
+      WaiterCalled := True;
+      RemoteAllowed := QueryAssistantRemoteApproval(Name, ToolId, ArgumentsJson, ApprovalAborting, ErrorText, Handled);
+    End;
+  If Handled Then
+    Begin
+      Result := RemoteAllowed;
+      If Not Result And (ErrorText = '') Then
+        ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
+      Exit;
+    End;
   Summary := Copy(Trim(ArgumentsJson), 1, 240);
   If Length(Trim(ArgumentsJson)) > 240 Then
     Summary := Summary + '…';
@@ -283,13 +362,30 @@ Begin
       Name + LineEnding + LineEnding + Summary + LineEnding + LineEnding +
       'Allow this action? (Approval mode: Ask)';
     Ask.Allowed := False;
-    { On the IDE thread this runs inline. A worker waits until the dialog returns. }
-    TThread.Synchronize(Nil, @Ask.Ask);
-    If Not Ask.Allowed Then
+    NoticeQueued := False;
+    { One display notice, only when the waiter left the desktop dialog in place. }
+    If WaiterCalled And (ToolId <> '') Then
       Begin
-        Result := False;
-        ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
+        Notice.Active := True;
+        Notice.ToolId := ToolId;
+        Notice.ToolName := Name;
+        Notice.Summary := Summary;
+        Notice.ModeCaption := ApprovalModeCaption(Mode);
+        Notice.DecisionsAccepted := False;
+        Notice.Reason := '';
+        QueueAssistantApproval(Notice);
+        NoticeQueued := True;
       End;
+    { On the IDE thread this runs inline. A worker waits until the dialog returns. }
+    Try
+      TThread.Synchronize(Nil, @Ask.Ask);
+    Finally
+      If NoticeQueued Then
+        ClearAssistantApproval(ToolId, 'desktop');
+    End;
+    Result := Ask.Allowed;
+    If Not Ask.Allowed Then
+      ErrorText := 'User denied tool "' + Name + '" (approval mode: Ask).';
   Finally
     Ask.Free;
   End;
@@ -4214,8 +4310,9 @@ End;
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
-Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
-  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray;
+  SkipApproval: Boolean = False): Boolean;
 Var
   Name, Path, ResolvedPath, TargetIdentity: String;
   Function CheckTarget: Boolean;
@@ -4277,8 +4374,9 @@ Begin
   { Refuse a Markdown editor path before scope checks or an Ask dialog. }
   If MarkdownEditorToolRefused(Name, ArgumentsJson, ErrorText) Then Exit;
   If Not CheckTarget Then Exit;
-  If Not ApproveToolIfNeeded(Name, ArgumentsJson, ErrorText) Then
-    Exit;
+  If Not SkipApproval Then
+    If Not ApproveToolIfNeeded(Name, ToolId, ArgumentsJson, ErrorText) Then
+      Exit;
   If TargetIdentity <> AssistantTarget.Identity Then
     Begin
       ErrorText := 'Assistant target changed during approval.';
@@ -4288,12 +4386,12 @@ Begin
   Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText, ImageRefs);
 End;
 
-Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Var
   ImageRefs: TAssistantImageRefArray;
 Begin
-  Result := ExecuteAssistantToolForMode(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
+  Result := ExecuteAssistantToolForMode(ToolName, ArgumentsJson, ToolId, Mode, ResultText, ErrorText, ImageRefs);
 End;
 
 Function SymlinkLeavesProject(Const Resolved: String): Boolean;

@@ -509,7 +509,7 @@ Begin
     RepoFile('Packages/LazRepositoryTools.pas'), False, 300, UnitDirs) And Result;
   Result := Restricted('assistant-package', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText'],
     RepoFile('Packages/LazAssistantTools.pas'), False, 300, UnitDirs) And Result;
-  Result := Restricted('AssistantMonitorAbsent', ['LazAssistantTools', 'LazWorkflowCommon'],
+  Result := Restricted('AssistantMonitorAbsent', ['LazAssistantTools', 'LazWorkflowCommon', 'LazStyledText', 'Tools'],
     RepoFile('Tests/AssistantMonitorAbsent.lpr'), True, 240, UnitDirs) And Result;
   Result := Restricted('RepositoryOnlyInstall', ['LazRepositoryTools', 'LazWorkflowCommon'],
     RepoFile('Tests/RepositoryOnlyInstall.lpr'), True, 240, UnitDirs) And Result;

@@ -14,8 +14,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, SyncObjs, fpjson,
-  AssistantSessionObserve, WorkflowSettings;
+  Classes, SysUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
+  AssistantSessionObserve, AssistantTools, WorkflowSettings;
 
 Type
   TNoticeSink = Class
@@ -64,6 +64,17 @@ Begin
       Dir := Probe;
     End;
   Result := '';
+End;
+
+Function FormSourcePath: String;
+Var
+  Package: String;
+Begin
+  Package := PackagePath;
+  If Package = '' Then
+    Exit('');
+  Result := ExpandFileName(ExtractFilePath(Package) + '..' + PathDelim + 'Source' + PathDelim +
+    'LazAssistantTools' + PathDelim + 'ProjectAssistantForm.pas');
 End;
 
 Function ReadText(Const Path: String): String;
@@ -188,6 +199,45 @@ Begin
   End;
 End;
 
+Function AbsentWaiter(Const ToolName, ToolId, ArgumentsJson: String; Aborting: TAssistantApprovalAbort;
+  Out ErrorText: String; Out Handled: Boolean): Boolean;
+Begin
+  Handled := True;
+  ErrorText := ToolName + ' ' + ToolId + ' ' + ArgumentsJson;
+  If Assigned(Aborting) Then
+    ErrorText := ErrorText + ' abort';
+  Result := False;
+End;
+
+Procedure TestNilWaiter;
+Var
+  ErrorText: String;
+  Handled: Boolean;
+  Before: TAssistantApprovalNotice;
+  FormPath, FormText: String;
+Begin
+  SetAssistantSessionListener(Nil);
+  SetAssistantRemoteApproval(@AbsentWaiter);
+  Check('waiter can be assigned', AssistantRemoteApprovalAssigned);
+  SetAssistantRemoteApproval(Nil);
+  Check('nil waiter is unassigned', Not AssistantRemoteApprovalAssigned);
+  Before := CurrentAssistantApproval;
+  Handled := True;
+  ErrorText := 'untouched';
+  Check('nil waiter leaves approval unhandled',
+    (Not QueryAssistantRemoteApproval('write_file', 'tool-absent', '{}', Nil, ErrorText, Handled)) And
+    (Not Handled) And (ErrorText = ''));
+  Check('nil waiter emits no notice', (CurrentAssistantApproval.Active = Before.Active) And
+    (CurrentAssistantApproval.ToolId = Before.ToolId) And (CurrentAssistantApproval.Reason = Before.Reason));
+  FormPath := FormSourcePath;
+  Check('assistant form source exists', FileExists(FormPath));
+  If Not FileExists(FormPath) Then
+    Exit;
+  FormText := ReadText(FormPath);
+  Check('broker approval stays nil', Pos('OnApproval := Nil', FormText) > 0);
+  Check('broker approval is not assigned a handler', Pos('OnApproval := @', FormText) = 0);
+End;
+
 Begin
   FailCount := 0;
   TestNilListener;
@@ -195,9 +245,7 @@ Begin
   TestApprovalWait;
   TestPackageOmitsMonitor;
   TestMonitorSectionLeavesAssistant;
-  { SetAssistantRemoteApproval is not registered yet. Section 5 extends this
-    program to assert a nil waiter leaves approval unhandled. Do not add that
-    registration here. }
+  TestNilWaiter;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantMonitorAbsent tests passed.');

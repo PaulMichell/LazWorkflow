@@ -233,7 +233,8 @@ Begin
   End;
   Try
     { Shared catalogue only. An unknown name is an error; do not fall through to the broker. }
-    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText, ImageRefs);
+    { Codex does not call the remote waiter and does not raise approval_requested. }
+    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, '', FMode, Text, ErrorText, ImageRefs);
     If Not OK Then Text := ErrorText;
     Attachments := '';
     If OK Then Attachments := AssistantImageRefsToJson(ImageRefs);
