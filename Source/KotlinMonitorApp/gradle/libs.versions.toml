@@ -4,6 +4,8 @@ kotlin = "2.0.21"
 agp = "8.7.3"
 junit = "4.13.2"
 serialization = "1.7.3"
+coroutines = "1.9.0"
+securityCrypto = "1.1.0-alpha06"
 java = "17"
 applicationId = "computing.michell.monitor"
 minSdk = "26"
@@ -13,6 +15,8 @@ compileSdk = "35"
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

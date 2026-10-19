@@ -1,7 +1,7 @@
 /* Android application coordinates (c) 2026 Michell Computing.
 
-   Screens and the TLS session are not in this module yet. The coordinates
-   are fixed here so the protocol module can stay free of Android UI. */
+   The TLS session and encrypted host store live here. Screens are separate.
+   This module depends on the JVM protocol catalogue, not on Lazarus. */
 
 plugins {
   alias(libs.plugins.android.application)
@@ -28,4 +28,11 @@ kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
   }
+}
+
+dependencies {
+  implementation(project(":protocol"))
+  implementation(libs.kotlinx.coroutines.android)
+  implementation(libs.security.crypto)
+  testImplementation(libs.junit)
 }
