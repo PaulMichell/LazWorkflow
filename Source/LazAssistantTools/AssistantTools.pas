@@ -1992,8 +1992,7 @@ Begin
   Result := FindDefaultExecutablePath('lazbuild');
   If (Result <> '') And FileExistsUTF8(Result) Then
     Exit;
-  Cand := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) +
-    'lazbuild'{$IFDEF WINDOWS}+'.exe'{$ENDIF};
+  Cand := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'lazbuild' + GetExeExt;
   If FileExistsUTF8(Cand) Then
     Begin
       Result := Cand;
@@ -2001,8 +2000,7 @@ Begin
     End;
   If Assigned(IDEEnvironmentOptions) Then
     Begin
-      Cand := IncludeTrailingPathDelimiter(IDEEnvironmentOptions.GetParsedLazarusDirectory) +
-        'lazbuild'{$IFDEF WINDOWS}+'.exe'{$ENDIF};
+      Cand := IncludeTrailingPathDelimiter(IDEEnvironmentOptions.GetParsedLazarusDirectory) + 'lazbuild' + GetExeExt;
       If FileExistsUTF8(Cand) Then Exit(Cand);
     End;
   Result := '';

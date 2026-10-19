@@ -323,15 +323,7 @@ Function TAssistantHarness.BuildUserInfo(Const ProjectRoot: String): String;
 Var
   OSName, ActiveFile, Ver: String;
 Begin
-  {$IFDEF WINDOWS}
-  OSName := 'Windows';
-  {$ELSE}
-    {$IFDEF DARWIN}
-    OSName := 'macOS';
-    {$ELSE}
-    OSName := 'Linux';
-    {$ENDIF}
-  {$ENDIF}
+  OSName := {$I %FPCTARGETOS%};
   ActiveFile := '(none)';
   Ver := 'FPC ' + {$I %FPCVERSION%} + '; LCL ' + lcl_version;
   If Assigned(SourceEditorManagerIntf) And Assigned(SourceEditorManagerIntf.ActiveEditor) Then

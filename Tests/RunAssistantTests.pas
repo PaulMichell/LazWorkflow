@@ -75,10 +75,10 @@ End;
 
 Function OutputBinary(Const Directory, Stem: String): String;
 Begin
+  { FPC 3.3.1 SysUtils has no ExeExt, and InstantFPC cannot see LazUtils.GetExeExt. }
   Result := IncludeTrailingPathDelimiter(Directory) + Stem;
-  {$IFDEF WINDOWS}
-  Result := Result + '.exe';
-  {$ENDIF}
+  If Copy({$I %FPCTARGETOS%}, 1, 3) = 'win' Then
+    Result := Result + '.exe';
 End;
 
 Procedure WriteTextFile(Const Path, Text: String);

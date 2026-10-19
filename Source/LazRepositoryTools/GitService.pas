@@ -263,7 +263,7 @@ Begin
         Begin
           If CompareFilenames(Copy(Tracked[I], 1, Length(Root)), Root) <> 0 Then Continue;
           Rel := Copy(Tracked[I], Length(Root) + 1, MaxInt);
-          {$IFDEF WINDOWS}Rel := StringReplace(Rel, '\', '/', [rfReplaceAll]);{$ENDIF}
+          Rel := StringReplace(StringReplace(Rel, PathDelim, '/', [rfReplaceAll]), '\', '/', [rfReplaceAll]);
           If (Rel = '') Or (Paths.IndexOf(Rel) >= 0) Then Continue;
           Paths.Add(Rel);
           Result[N].Path := Rel; Result[N].IndexStatus := ' '; Result[N].WorkTreeStatus := ' ';

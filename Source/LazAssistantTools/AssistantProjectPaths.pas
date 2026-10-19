@@ -147,11 +147,8 @@ Var
 Begin
   D := ExcludeTrailingPathDelimiter(Dir);
   Home := ExcludeTrailingPathDelimiter(GetUserDir);
-  Result := (D = '') Or (D = '/') Or (CompareFilenames(D, Home) = 0);
-  {$IFDEF WINDOWS}
-  If (Length(D) = 2) And (D[2] = ':') Then
-    Result := True;
-  {$ENDIF}
+  Result := (D = '') Or (D = '/') Or (CompareFilenames(D, Home) = 0) Or
+    ((ExtractFileDrive(D) <> '') And (CompareFilenames(D, ExtractFileDrive(D)) = 0));
 End;
 
 Function IsSourceLayoutDir(Const Dir: String): Boolean;

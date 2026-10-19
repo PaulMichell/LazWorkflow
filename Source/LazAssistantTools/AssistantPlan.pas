@@ -351,17 +351,10 @@ Begin
     Exit;
   Full := ExpandFileName(AbsolutePath);
   Root := IncludeTrailingPathDelimiter(ExpandFileName(Root));
-  {$IFDEF WINDOWS}
-  If SameText(Copy(Full, 1, Length(Root)), Root) Then
+  If CompareFilenames(Copy(Full, 1, Length(Root)), Root) = 0 Then
     Result := Copy(Full, Length(Root) + 1, MaxInt)
-  Else If SameText(ExcludeTrailingPathDelimiter(Full), ExcludeTrailingPathDelimiter(Root)) Then
+  Else If CompareFilenames(ExcludeTrailingPathDelimiter(Full), ExcludeTrailingPathDelimiter(Root)) = 0 Then
     Result := '';
-  {$ELSE}
-  If Copy(Full, 1, Length(Root)) = Root Then
-    Result := Copy(Full, Length(Root) + 1, MaxInt)
-  Else If ExcludeTrailingPathDelimiter(Full) = ExcludeTrailingPathDelimiter(Root) Then
-    Result := '';
-  {$ENDIF}
   Result := StringReplace(Result, '\', '/', [rfReplaceAll]);
 End;
 
