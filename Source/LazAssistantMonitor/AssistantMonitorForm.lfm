@@ -1,0 +1,230 @@
+object AssistantMonitorForm: TAssistantMonitorForm
+  Left = 220
+  Height = 560
+  Top = 100
+  Width = 720
+  BorderStyle = bsSizeable
+  Caption = 'Remote Monitor'
+  ClientHeight = 560
+  ClientWidth = 720
+  Constraints.MinHeight = 480
+  Constraints.MinWidth = 640
+  Position = poScreenCenter
+  LCLVersion = '5.99.0.0'
+  OnClose = FormClose
+  OnCreate = FormCreate
+  OnShow = FormShow
+  object BindGroup: TGroupBox
+    Left = 0
+    Height = 112
+    Top = 0
+    Width = 720
+    Align = alTop
+    Caption = 'Listener'
+    TabOrder = 0
+    object AddressLabel: TLabel
+      Left = 12
+      Height = 17
+      Top = 8
+      Width = 88
+      Caption = 'IPv4 address'
+    end
+    object AddressEdit: TEdit
+      Left = 112
+      Height = 28
+      Top = 4
+      Width = 280
+      TabOrder = 0
+    end
+    object PortLabel: TLabel
+      Left = 408
+      Height = 17
+      Top = 8
+      Width = 28
+      Caption = 'Port'
+    end
+    object PortEdit: TSpinEdit
+      Left = 444
+      Height = 28
+      Top = 4
+      Width = 88
+      MaxValue = 65535
+      MinValue = 1
+      TabOrder = 1
+      Value = 56122
+    end
+    object BindAllCheck: TCheckBox
+      Left = 12
+      Height = 22
+      Top = 44
+      Width = 280
+      Caption = 'Bind all interfaces (0.0.0.0)'
+      TabOrder = 2
+    end
+    object RemoteApprovalCheck: TCheckBox
+      Left = 12
+      Height = 22
+      Top = 72
+      Width = 320
+      Caption = 'Remote approval'
+      OnClick = RemoteApprovalCheckClick
+      TabOrder = 3
+    end
+  end
+  object ButtonStrip: TPanel
+    Left = 0
+    Height = 44
+    Top = 112
+    Width = 720
+    Align = alTop
+    BevelOuter = bvNone
+    ChildSizing.LeftRightSpacing = 8
+    ChildSizing.TopBottomSpacing = 8
+    ChildSizing.HorizontalSpacing = 4
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 6
+    ClientHeight = 44
+    ClientWidth = 720
+    TabOrder = 1
+    object EnableButton: TButton
+      Left = 8
+      Height = 28
+      Top = 8
+      Width = 88
+      Action = EnableAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 0
+    end
+    object DisableButton: TButton
+      Left = 100
+      Height = 28
+      Top = 8
+      Width = 88
+      Action = DisableAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 1
+    end
+    object PairButton: TButton
+      Left = 192
+      Height = 28
+      Top = 8
+      Width = 72
+      Action = PairAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 2
+    end
+    object RevokeButton: TButton
+      Left = 268
+      Height = 28
+      Top = 8
+      Width = 80
+      Action = RevokeAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 3
+    end
+    object RevokeAllButton: TButton
+      Left = 352
+      Height = 28
+      Top = 8
+      Width = 96
+      Action = RevokeAllAction
+      Align = alNone
+      AutoSize = True
+      TabOrder = 4
+    end
+    object CloseButton: TButton
+      Left = 452
+      Height = 28
+      Top = 8
+      Width = 72
+      Align = alNone
+      AutoSize = True
+      Cancel = True
+      Caption = 'Close'
+      ModalResult = mrClose
+      TabOrder = 5
+    end
+  end
+  object PairCodeLabel: TLabel
+    Left = 0
+    Height = 24
+    Top = 156
+    Width = 720
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    Caption = 'Pairing code appears after Pair.'
+  end
+  object FingerprintLabel: TLabel
+    Left = 0
+    Height = 24
+    Top = 180
+    Width = 720
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    Caption = 'Fingerprint'
+    WordWrap = True
+  end
+  object StatusMemo: TMemo
+    Left = 0
+    Height = 110
+    Top = 204
+    Width = 720
+    Align = alTop
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    ReadOnly = True
+    ScrollBars = ssVertical
+    TabOrder = 2
+  end
+  object ClientList: TListBox
+    Left = 0
+    Height = 246
+    Top = 314
+    Width = 720
+    Align = alClient
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    BorderSpacing.Bottom = 8
+    OnClick = ClientListClick
+    TabOrder = 3
+  end
+  object StatusTimer: TTimer
+    Interval = 1000
+    OnTimer = StatusTimerTimer
+  end
+  object ActionList: TActionList
+    Left = 560
+    Top = 8
+    object EnableAction: TAction
+      Caption = 'Enable'
+      Hint = 'Start the listener. Does not mint a pairing code.'
+      OnExecute = EnableActionExecute
+    end
+    object DisableAction: TAction
+      Caption = 'Disable'
+      Hint = 'Stop the listener and leave paired clients in place.'
+      OnExecute = DisableActionExecute
+    end
+    object PairAction: TAction
+      Caption = 'Pair'
+      Hint = 'Show a one-time pairing code.'
+      OnExecute = PairActionExecute
+    end
+    object RevokeAction: TAction
+      Caption = 'Revoke'
+      Hint = 'Revoke the selected client.'
+      OnExecute = RevokeActionExecute
+    end
+    object RevokeAllAction: TAction
+      Caption = 'Revoke All'
+      Hint = 'Revoke every paired client.'
+      OnExecute = RevokeAllActionExecute
+    end
+  end
+end

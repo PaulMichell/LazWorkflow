@@ -18,7 +18,7 @@
     <Description Value="Remote monitor catalogue, frames, and session for the Project Assistant"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="9">
+    <Files Count="11">
       <Item1>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorFrames.pas"/>
         <UnitName Value="AssistantMonitorFrames"/>
@@ -55,6 +55,14 @@
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorBridge.pas"/>
         <UnitName Value="AssistantMonitorBridge"/>
       </Item9>
+      <Item10>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.pas"/>
+        <UnitName Value="AssistantMonitorForm"/>
+      </Item10>
+      <Item11>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.lfm"/>
+        <FileType Value="FormResource"/>
+      </Item11>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
