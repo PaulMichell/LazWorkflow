@@ -40,7 +40,7 @@ Delete the stubs and the unused scan, or make `ResolveSkillFile` refuse a projec
 
 ### 2.2 Move the GTK drop out of the main form
 
-Status: not started
+Status: complete
 
 `ProjectAssistantForm` is the chat, plan runner, footer, and the GTK drag target in one unit. The drop handler, target entry, and armed-control list are a separate platform concern. After 1.2 decides what the LCL already does, put whatever native arming remains in a small unit so the form only implements `OnDropFiles`.
 
