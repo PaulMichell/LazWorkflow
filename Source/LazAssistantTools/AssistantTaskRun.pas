@@ -20,10 +20,15 @@ Type
   TQueryAssistantTaskHostBusy = Function(Out Reason: String): Boolean;
   TPostAssistantTaskSystemNote = Procedure(Const NoteText: String);
 
+/// True when a turn or plan run is active. An empty reason becomes the wait sentence.
+Function HostIsBusy(Out ErrorText: String): Boolean;
 /// Ready fills Request. Missing sets ErrorText and does not send. Formatted means the host
 /// already applied a format task and nothing should be sent.
 Function PrepareAssistantTaskRun(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
   Out Request: TAssistantTaskRequest; Out ErrorText: String): TAssistantTaskPreparation;
+/// Dialog-free preparation. Does not call AskForNote, TryApplyFormat, or CompileLikeReview.
+Function PrepareAssistantTaskRunWithNote(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
+  Const Note: String; Out Request: TAssistantTaskRequest; Out ErrorText: String): TAssistantTaskPreparation;
 
 Var
   { The assistant form assigns these. Nil means the runner cannot see a turn or post a note. }
@@ -568,12 +573,125 @@ Begin
   Result := tpReady;
 End;
 
+Function FinishTaskRequest(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
+  Const Evidence: TAssistantTaskEvidence; MatchCount: Integer; Out Request: TAssistantTaskRequest;
+  Out ErrorText: String): TAssistantTaskPreparation;
+Var
+  Expanded, Detail: String;
+  Files: Integer;
+Begin
+  Result := tpMissing;
+  If Not ExpandAssistantTaskPrompt(Task, Evidence, Expanded, ErrorText) Then
+    Exit;
+  Detail := '';
+  Case Task.Scope Of
+    tsActiveEditor: Detail := ExtractFileName(Evidence.ActiveFile);
+    tsChangedFiles:
+      Begin
+        Files := ChangedFileCount(Evidence.GitStatus);
+        Detail := ChangedDetail(Files);
+      End;
+    tsMessages: Detail := MessageDetail(Task.MessageFilter, MatchCount);
+    tsSelection: Detail := 'selection';
+  Else
+    Detail := '';
+  End;
+  Result := FillReady(Task, Kind, Expanded, Detail, Request);
+End;
+
+Function CollectTaskEvidence(Const Task: TAssistantTask; Var Evidence: TAssistantTaskEvidence; Out MatchCount: Integer;
+  Out ErrorText: String): Boolean;
+Var
+  ErrorCount: Integer;
+Begin
+  Result := False;
+  MatchCount := 0;
+  ErrorCount := 0;
+  FillEditorEvidence(Evidence);
+  If (Task.Scope = tsActiveEditor) And EditorRefusal(ErrorText) Then
+    Exit;
+  If Task.Scope = tsSelection Then
+    Begin
+      If Not Assigned(ActiveEditor) Then
+        Begin
+          ErrorText := 'There is no active editor.';
+          Exit;
+        End;
+      If Trim(Evidence.Selection) = '' Then
+        Begin
+          ErrorText := 'The selection is empty.';
+          Exit;
+        End;
+    End;
+  If Task.Scope = tsChangedFiles Then
+    Begin
+      If Not CollectSavedDiff(Evidence.GitStatus, Evidence.GitDiff, ErrorText) Then
+        Exit;
+    End;
+  If (Task.Scope = tsMessages) Or Task.CompileFirst Then
+    ReadMessages(Task.MessageFilter, Evidence.Messages, ErrorCount, MatchCount)
+  Else
+    Begin
+      ErrorCount := 0;
+      MatchCount := 0;
+    End;
+  If Task.Scope = tsMessages Then
+    Begin
+      If MessagesRefusal(Task.MessageFilter, ErrorCount, MatchCount, ErrorText) Then
+        Exit;
+    End;
+  Result := True;
+End;
+
+Function PrepareAssistantTaskRunWithNote(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
+  Const Note: String; Out Request: TAssistantTaskRequest; Out ErrorText: String): TAssistantTaskPreparation;
+Var
+  Evidence: TAssistantTaskEvidence;
+  MatchCount: Integer;
+Begin
+  Result := tpMissing;
+  ClearAssistantTaskRequest(Request);
+  ClearEvidence(Evidence);
+  ErrorText := '';
+  If Task.Hidden Then
+    Begin
+      ErrorText := 'This task is hidden.';
+      Exit;
+    End;
+  If Not Task.Enabled Then
+    Begin
+      ErrorText := 'This task is disabled.';
+      Exit;
+    End;
+  If HostIsBusy(ErrorText) Then
+    Exit;
+  If Task.Kind = tkFormat Then
+    Begin
+      ErrorText := 'Format tasks run on the desktop editor.';
+      Exit;
+    End;
+  If Task.CompileFirst Then
+    Begin
+      ErrorText := 'Tasks that compile first run on the desktop.';
+      Exit;
+    End;
+  If Not CollectTaskEvidence(Task, Evidence, MatchCount, ErrorText) Then
+    Exit;
+  If AssistantTaskNeedsUserNote(Task) And (Trim(Note) = '') Then
+    Begin
+      ErrorText := 'A note is required.';
+      Exit;
+    End;
+  Evidence.UserNote := Trim(Note);
+  Result := FinishTaskRequest(Task, Kind, Evidence, MatchCount, Request, ErrorText);
+End;
+
 Function PrepareAssistantTaskRun(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;
   Out Request: TAssistantTaskRequest; Out ErrorText: String): TAssistantTaskPreparation;
 Var
   Evidence: TAssistantTaskEvidence;
-  Expanded, CompileNote, Detail: String;
-  ErrorCount, MatchCount, Files: Integer;
+  CompileNote: String;
+  MatchCount: Integer;
 Begin
   Result := tpMissing;
   ClearAssistantTaskRequest(Request);
@@ -616,57 +734,11 @@ Begin
           Exit;
         End;
     End;
-  FillEditorEvidence(Evidence);
-  If (Task.Scope = tsActiveEditor) And EditorRefusal(ErrorText) Then
+  If Not CollectTaskEvidence(Task, Evidence, MatchCount, ErrorText) Then
     Exit;
-  If Task.Scope = tsSelection Then
-    Begin
-      If Not Assigned(ActiveEditor) Then
-        Begin
-          ErrorText := 'There is no active editor.';
-          Exit;
-        End;
-      If Trim(Evidence.Selection) = '' Then
-        Begin
-          ErrorText := 'The selection is empty.';
-          Exit;
-        End;
-    End;
-  If Task.Scope = tsChangedFiles Then
-    Begin
-      If Not CollectSavedDiff(Evidence.GitStatus, Evidence.GitDiff, ErrorText) Then
-        Exit;
-    End;
-  If (Task.Scope = tsMessages) Or Task.CompileFirst Then
-    ReadMessages(Task.MessageFilter, Evidence.Messages, ErrorCount, MatchCount)
-  Else
-    Begin
-      ErrorCount := 0;
-      MatchCount := 0;
-    End;
-  If Task.Scope = tsMessages Then
-    Begin
-      If MessagesRefusal(Task.MessageFilter, ErrorCount, MatchCount, ErrorText) Then
-        Exit;
-    End;
   If Not AskForNote(Task, Evidence.UserNote, ErrorText) Then
     Exit;
-  If Not ExpandAssistantTaskPrompt(Task, Evidence, Expanded, ErrorText) Then
-    Exit;
-  Detail := '';
-  Case Task.Scope Of
-    tsActiveEditor: Detail := ExtractFileName(Evidence.ActiveFile);
-    tsChangedFiles:
-      Begin
-        Files := ChangedFileCount(Evidence.GitStatus);
-        Detail := ChangedDetail(Files);
-      End;
-    tsMessages: Detail := MessageDetail(Task.MessageFilter, MatchCount);
-    tsSelection: Detail := 'selection';
-  Else
-    Detail := '';
-  End;
-  Result := FillReady(Task, Kind, Expanded, Detail, Request);
+  Result := FinishTaskRequest(Task, Kind, Evidence, MatchCount, Request, ErrorText);
 End;
 
 Function PrepareRequestForList(Const Task: TAssistantTask; Kind: TAssistantTaskRequestKind;

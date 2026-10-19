@@ -18,7 +18,8 @@ Unit ProjectAssistantForm;
   AssistantPlanRun. A dropped Codex or Claude transport waits in
   AssistantRecovery, then the same turn is started again.
   Tasks is one action plus the call that applies a prepared request. The list stays in AssistantTasksForm.
-  Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop. }
+  Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
+  Dialog-free monitor fill and remote helpers stay here because they read private send and plan state. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -34,9 +35,12 @@ Uses
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient,
   AssistantToolBroker,
   AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
-  AssistantPlanRun;
+  AssistantPlanRun, AssistantSessionObserve;
 
 Type
+  TAssistantMonitorPlanRows = Array Of TAssistantMonitorPlanRow;
+  TAssistantMonitorTaskRows = Array Of TAssistantMonitorTaskRow;
+
   TProjectAssistantForm = Class(TForm, ICompilerFinished, IMarkdownDocumentChanged)
     ActionList: TActionList;
     ModeCombo: TComboBox;
@@ -513,6 +517,30 @@ Type
     Procedure UnbindFromProject;
     { Read the saved active connection and refresh the status bar. }
     Procedure ReloadActiveConnection;
+    /// Copies the current desktop state. Does not write JSON or read provider tokens.
+    Procedure FillMonitorView(Out View: TAssistantMonitorView);
+    /// Reads a stored turn, or the live turn when TurnIndex is LiveConversationMarker. Does not change the selection.
+    Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
+    /// Copies BuildSections. Does not write the plan file.
+    Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
+    /// Copies LoadAssistantTasks. NeedsNote uses AssistantTaskNeedsUserNote.
+    Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
+    Function RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
+    Function RemoteSteer(Const MessageText: String; Out ErrorText: String): Boolean;
+    Function RemoteStop(Out ErrorText: String): Boolean;
+    Function RemoteSelectMode(Const ModeText: String; Out ErrorText: String): Boolean;
+    Function RemoteNewConversation(Out ErrorText: String): Boolean;
+    Function RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
+    Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
+    Function RemoteRemovePlan(Out ErrorText: String): Boolean;
+    Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
+    Function RemoteRunPlan(Out ErrorText: String): Boolean;
+    Function RemoteStopPlan(Out ErrorText: String): Boolean;
+    Function RemoteRunTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
+    Function RemoteInsertTask(Const TaskId, Note: String; Out ApiText, ErrorText: String): Boolean;
+    Function RemoteTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
+    Function RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes; Out Mime: String;
+      Out ImageWidth, ImageHeight: Integer; Out ErrorText: String): Boolean;
   End;
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
@@ -533,13 +561,15 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
-  AssistantFileDrop, AssistantSessionObserve;
+  AssistantFileDrop, AssistantTaskNoteForm;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
 
 Const
   ChatPaintMinIntervalMs = 80;
+  { One image_get decoded budget. Larger display files are too_large. The 8 MiB store limit is separate. }
+  MonitorImageGetMaxBytes = 1048576;
   { List Objects store TurnIndex+1; this marker is the in-flight (not yet recorded) turn. }
   LiveConversationMarker = -2;
   FooterTagSkill = 4;
@@ -8866,6 +8896,914 @@ Begin
     End
   Else
     Host.SetCurrentSystemNote(NoteText);
+End;
+
+Function TraceKindName(Kind: TTraceBlockKind): String;
+Begin
+  Case Kind Of
+    tbkThinking: Result := 'thinking';
+    tbkTool: Result := 'tool';
+    tbkAnswer: Result := 'answer';
+    tbkNote: Result := 'note';
+    tbkSteer: Result := 'steer';
+    tbkSubagent: Result := 'subagent';
+    tbkWorked: Result := 'worked';
+  Else
+    Result := 'user';
+  End;
+End;
+
+Function ShortPreview(Const Text: String): String;
+Var
+  Flat: String;
+Begin
+  Flat := StringReplace(Trim(Text), LineEnding, ' ', [rfReplaceAll]);
+  Flat := StringReplace(Flat, #10, ' ', [rfReplaceAll]);
+  If Length(Flat) > 160 Then
+    Result := Copy(Flat, 1, 160)
+  Else
+    Result := Flat;
+End;
+
+Function TargetKindName: String;
+Begin
+  Case AssistantTarget.Kind Of
+    atkPackage: Result := 'package';
+    atkFolder: Result := 'folder';
+  Else
+    Result := 'project';
+  End;
+End;
+
+Function KnownMonitorMode(Const ModeText: String; Out Mode: TAssistantMode): Boolean;
+Var
+  Name: String;
+Begin
+  Name := LowerCase(Trim(ModeText));
+  Result := True;
+  If Name = 'inspect' Then
+    Mode := amInspect
+  Else If Name = 'document' Then
+    Mode := amDocument
+  Else If Name = 'plan' Then
+    Mode := amPlan
+  Else If Name = 'build' Then
+    Mode := amBuild
+  Else If Name = 'chat' Then
+    Mode := amChat
+  Else
+    Result := False;
+End;
+
+Function ThisFormBusy(Form: TProjectAssistantForm; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Result := False;
+  If Not Assigned(Form) Then
+    Exit;
+  If Form.FPlanAgentRunning Then
+    Begin
+      ErrorText := 'A plan run is already active.';
+      Exit(True);
+    End;
+  If Form.FSending Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish.';
+      Exit(True);
+    End;
+End;
+
+Function PlanIsAvailable(Const RelativePath: String): Boolean;
+Var
+  Paths, Titles: TStringList;
+  Missing: Boolean;
+  Err, Wanted, Item: String;
+  I: Integer;
+Begin
+  Result := False;
+  Paths := Nil;
+  Titles := Nil;
+  Wanted := StringReplace(RelativePath, '\', '/', [rfReplaceAll]);
+  If Wanted = '' Then
+    Exit;
+  If Not ListAvailableAssistantPlans(GetActivePlanRelativePath, Paths, Titles, Missing, Err) Then
+    Begin
+      Paths.Free;
+      Titles.Free;
+      Exit;
+    End;
+  Try
+    For I := 0 To Paths.Count - 1 Do
+      Begin
+        Item := StringReplace(Paths[I], '\', '/', [rfReplaceAll]);
+        If SameText(Item, Wanted) Then
+          Exit(True);
+      End;
+  Finally
+    Paths.Free;
+    Titles.Free;
+  End;
+End;
+
+Function FindMonitorTask(Const TaskId: String; Out Task: TAssistantTask; Out ErrorText: String): Boolean;
+Var
+  Tasks: TAssistantTaskArray;
+  FromCatalog: Boolean;
+  Index: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Trim(TaskId) = '' Then
+    Begin
+      ErrorText := 'This task is not in the list.';
+      Exit;
+    End;
+  If Not LoadAssistantTasks(Tasks, FromCatalog, ErrorText) Then
+    Exit;
+  Index := FindAssistantTask(Tasks, TaskId);
+  If Index < 0 Then
+    Begin
+      ErrorText := 'This task is not in the list.';
+      Exit;
+    End;
+  Task := Tasks[Index];
+  Result := True;
+End;
+
+Function RefuseDesktopTask(Const Task: TAssistantTask; Out ErrorText: String): Boolean;
+Begin
+  Result := True;
+  If Task.Kind = tkFormat Then
+    ErrorText := 'Format tasks run on the desktop editor.'
+  Else If Task.CompileFirst Then
+    ErrorText := 'Tasks that compile first run on the desktop.'
+  Else If Task.Hidden Then
+    ErrorText := 'This task is hidden.'
+  Else If Not Task.Enabled Then
+    ErrorText := 'This task is disabled.'
+  Else
+    Result := False;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorView(Out View: TAssistantMonitorView);
+Var
+  Pct: Integer;
+  Title, Err: String;
+Begin
+  View.Available := True;
+  View.Busy := FSending Or FPlanAgentRunning;
+  View.Sending := FSending;
+  View.ModeLocked := FModeLocked;
+  View.PlanRunning := FPlanAgentRunning;
+  View.Mode := AssistantModeToStr(ActiveMode);
+  View.Phase := FStatusPhase;
+  If FSending Then
+    Begin
+      If FStatusPhase = '' Then
+        View.StatusText := FormatElapsedStatus('Waiting for first token…')
+      Else
+        View.StatusText := FormatElapsedStatus(FStatusPhase);
+    End
+  Else If FPlanAgentRunning Then
+    View.StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
+  Else If FReviewInProgress Then
+    View.StatusText := 'Reviewing…'
+  Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
+    View.StatusText := 'Ready'
+  Else
+    View.StatusText := 'Not signed in';
+  View.Model := Trim(FActiveModel);
+  View.Backend := FActiveBackend;
+  View.SignedIn := (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn);
+  View.ApprovalCaption := ApprovalModeCaption(StrToApprovalMode(FActiveApproval));
+  If (FActiveBackend = 'grok') Or (FActiveBackend = 'codex') Then
+    View.Effort := EffortBarCaption(FActiveEffort)
+  Else
+    View.Effort := '—';
+  View.Skill := ModeSkillCaption;
+  If FContextLimit > 0 Then
+    Pct := (FContextUsed * 100) Div FContextLimit
+  Else
+    Pct := 0;
+  If Pct > 999 Then
+    Pct := 999;
+  If FUseCodex Or FUseClaude Then
+    View.ContextText := Format('Context ~%d tokens', [FContextUsed])
+  Else
+    Begin
+      View.ContextText := Format('Context %d%%', [Pct]);
+      If Pct >= 95 Then
+        View.ContextText := View.ContextText + ' ⚠';
+    End;
+  View.TargetKind := TargetKindName;
+  View.TargetDisplay := AssistantTarget.DisplayName;
+  View.TargetRoot := AssistantTarget.Root;
+  View.PlanPath := GetActivePlanRelativePath;
+  View.PlanTitle := '';
+  If (View.PlanPath <> '') And TryReadAssistantPlanIdentity(View.PlanPath, Title, Err) Then
+    View.PlanTitle := Title;
+  View.CanSend := (Not FSending) And (Not FPlanAgentRunning);
+  View.CanSteer := FSending And (Not FUseClaude) And (Not FTransportWait);
+  View.CanStop := FSending;
+  View.CanChangeMode := Not (FSending Or FModeLocked);
+  View.RemoteApproval := False;
+  View.ErrorText := '';
+End;
+
+Function TProjectAssistantForm.FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn;
+  Out ErrorText: String): Boolean;
+Var
+  Stored: TConversationTurn;
+  Trace: TAssistantTrace;
+  StoreDir: String;
+  Entry: TConversationIndexEntry;
+  Seen: TStringList;
+
+  Procedure ClearTurn;
+  Begin
+    Turn.TurnIndex := TurnIndex;
+    Turn.Id := '';
+    Turn.Mode := '';
+    Turn.Prompt := '';
+    Turn.Thinking := '';
+    Turn.Response := '';
+    Turn.ErrorText := '';
+    Turn.CreatedAt := '';
+    Turn.DurationMs := 0;
+    Turn.PromptPreview := '';
+    Turn.Live := False;
+    SetLength(Turn.Blocks, 0);
+    SetLength(Turn.Images, 0);
+  End;
+
+  Function ImageSeen(Const ImageId: String): Boolean;
+  Begin
+    Result := (ImageId <> '') And (Seen.IndexOf(ImageId) >= 0);
+  End;
+
+  Procedure AddTurnImage(Const Id, Name, Mime, DisplayPath: String; ImageWidth, ImageHeight: Integer);
+  Var
+    N: Integer;
+  Begin
+    If (Id = '') Or ImageSeen(Id) Then
+      Exit;
+    Seen.Add(Id);
+    N := Length(Turn.Images);
+    SetLength(Turn.Images, N + 1);
+    Turn.Images[N].Id := Id;
+    Turn.Images[N].Name := Name;
+    Turn.Images[N].Mime := Mime;
+    Turn.Images[N].Width := ImageWidth;
+    Turn.Images[N].Height := ImageHeight;
+    Turn.Images[N].DisplayPath := DisplayPath;
+    Turn.Images[N].Missing := Not AssistantImageDisplayPresent(StoreDir, Id, DisplayPath);
+  End;
+
+  Procedure CopyTrace(Source: TAssistantTrace);
+  Var
+    I, J, N: Integer;
+    Block: TTraceBlock;
+    Refs: TAssistantImageRefArray;
+  Begin
+    If Not Assigned(Source) Then
+      Exit;
+    SetLength(Turn.Blocks, Source.Count);
+    For I := 0 To Source.Count - 1 Do
+      Begin
+        Block := Source[I];
+        Turn.Blocks[I].Kind := TraceKindName(Block.Kind);
+        Turn.Blocks[I].BlockId := Block.ID;
+        Turn.Blocks[I].Title := Block.Title;
+        Turn.Blocks[I].ToolName := Block.ToolName;
+        Turn.Blocks[I].ToolId := Block.ToolId;
+        Turn.Blocks[I].Body := Block.Body;
+        Turn.Blocks[I].Running := Block.Running;
+        Turn.Blocks[I].Ok := Block.Ok;
+        Turn.Blocks[I].DurationMs := Block.DurationMs;
+        SetLength(Turn.Blocks[I].Images, Length(Block.ImageRefs));
+        For J := 0 To High(Block.ImageRefs) Do
+          Begin
+            Turn.Blocks[I].Images[J].Id := Block.ImageRefs[J].Id;
+            Turn.Blocks[I].Images[J].Name := Block.ImageRefs[J].Name;
+            Turn.Blocks[I].Images[J].Mime := '';
+            Turn.Blocks[I].Images[J].Width := Block.ImageRefs[J].Width;
+            Turn.Blocks[I].Images[J].Height := Block.ImageRefs[J].Height;
+            Turn.Blocks[I].Images[J].DisplayPath := Block.ImageRefs[J].DisplayPath;
+            Turn.Blocks[I].Images[J].Missing := Not AssistantImageDisplayPresent(StoreDir, Block.ImageRefs[J].Id,
+              Block.ImageRefs[J].DisplayPath);
+            AddTurnImage(Block.ImageRefs[J].Id, Block.ImageRefs[J].Name, '', Block.ImageRefs[J].DisplayPath,
+              Block.ImageRefs[J].Width, Block.ImageRefs[J].Height);
+          End;
+      End;
+    SetLength(Refs, 0);
+    If ParseAssistantImageRefs(Stored.AttachmentsJson, Refs) Then
+      For N := 0 To High(Refs) Do
+        AddTurnImage(Refs[N].Id, Refs[N].Name, Refs[N].Mime, Refs[N].DisplayPath, Refs[N].Width, Refs[N].Height);
+  End;
+
+Begin
+  Result := False;
+  ErrorText := '';
+  Stored := Default(TConversationTurn);
+  ClearTurn;
+  StoreDir := '';
+  If Assigned(ProjectAssistantConversation) Then
+    StoreDir := ProjectAssistantConversation.AssistantDirectory;
+  Seen := TStringList.Create;
+  Trace := Nil;
+  Try
+    Seen.CaseSensitive := True;
+    If TurnIndex = LiveConversationMarker Then
+      Begin
+        Turn.Live := True;
+        Turn.Id := 'live';
+        Turn.Mode := AssistantModeToStr(ActiveMode);
+        Turn.Prompt := FLiveUser;
+        If Turn.Prompt = '' Then
+          Turn.Prompt := FDisplayUser;
+        Turn.Thinking := FLiveThinking;
+        If Turn.Thinking = '' Then
+          Turn.Thinking := FAssistantThinking;
+        Turn.Response := FLiveContent;
+        If Turn.Response = '' Then
+          Turn.Response := FAssistantContent;
+        If FSending Then
+          Turn.DurationMs := CurrentStreamDurationMs;
+        Turn.PromptPreview := ShortPreview(Turn.Prompt);
+        CopyTrace(FTrace);
+        Result := True;
+        Exit;
+      End;
+    If Not Assigned(ProjectAssistantConversation) Or Not ProjectAssistantConversation.GetTurn(TurnIndex, Stored) Then
+      Begin
+        ErrorText := 'That turn is not in this conversation.';
+        Exit;
+      End;
+    Turn.Id := Stored.Id;
+    Turn.Mode := Stored.Mode;
+    Turn.Prompt := Stored.Prompt;
+    Turn.Thinking := Stored.Thinking;
+    Turn.Response := Stored.Response;
+    Turn.ErrorText := Stored.ErrorText;
+    Turn.CreatedAt := Stored.CreatedAt;
+    Turn.DurationMs := Stored.DurationMs;
+    Turn.Live := False;
+    If (TurnIndex >= 0) And (TurnIndex < ProjectAssistantConversation.IndexCount) Then
+      Begin
+        Entry := ProjectAssistantConversation.IndexEntry(TurnIndex);
+        If Assigned(Entry) Then
+          Turn.PromptPreview := Entry.PromptPreview;
+      End;
+    If Turn.PromptPreview = '' Then
+      Turn.PromptPreview := ShortPreview(Stored.Prompt);
+    Trace := TAssistantTrace.Create;
+    If Stored.TraceJson <> '' Then
+      Trace.LoadFromJson(Stored.TraceJson);
+    If (Trace.Count = 0) And (Stored.EventsFile <> '') Then
+      Trace.ReplayFromEventsFile(IncludeTrailingPathDelimiter(ProjectAssistantConversation.ProjectRoot) + Stored.EventsFile,
+        Stored.Prompt, Stored.Thinking, Stored.Response);
+    If Trace.Count = 0 Then
+      Begin
+        Trace.EnsureUser(Stored.Prompt);
+        If Trim(Stored.Thinking) <> '' Then
+          Begin
+            Trace.StartThinking(0).Body := Stored.Thinking;
+            Trace.FinishCurrentThinking;
+          End;
+        If Stored.Response <> '' Then
+          Trace.EnsureAnswer.Body := Stored.Response;
+        If Stored.ErrorText <> '' Then
+          Trace.AddNote('**Error:** ' + Stored.ErrorText);
+      End;
+    CopyTrace(Trace);
+    Result := True;
+  Finally
+    Trace.Free;
+    Seen.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
+Var
+  I: Integer;
+  Section: TPlanSection;
+Begin
+  SetLength(Rows, 0);
+  If Not Assigned(BuildSections) Then
+    Exit;
+  SetLength(Rows, BuildSections.Count);
+  For I := 0 To BuildSections.Count - 1 Do
+    Begin
+      Section := TPlanSection(BuildSections[I]);
+      Rows[I].Index := I;
+      Rows[I].Level := Section.HeadingLevel;
+      Rows[I].Title := Section.Title;
+      Rows[I].ParentTitle := Section.ParentTitle;
+      If Section.Status = pssUnknown Then
+        Rows[I].Status := 'unknown'
+      Else
+        Rows[I].Status := PlanSectionStatusToStr(Section.Status);
+      Rows[I].Actionable := Section.Actionable;
+    End;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
+Var
+  Tasks: TAssistantTaskArray;
+  FromCatalog: Boolean;
+  ErrorText: String;
+  I: Integer;
+Begin
+  SetLength(Rows, 0);
+  If Not LoadAssistantTasks(Tasks, FromCatalog, ErrorText) Then
+    Exit;
+  SetLength(Rows, Length(Tasks));
+  For I := 0 To High(Tasks) Do
+    Begin
+      Rows[I].Id := Tasks[I].Id;
+      Rows[I].Title := Tasks[I].Title;
+      Rows[I].Summary := Tasks[I].Summary;
+      Rows[I].Mode := TaskModeToStr(Tasks[I].Mode);
+      Rows[I].Kind := TaskKindToStr(Tasks[I].Kind);
+      Rows[I].Scope := TaskScopeToStr(Tasks[I].Scope);
+      Rows[I].CompileFirst := Tasks[I].CompileFirst;
+      Rows[I].Enabled := Tasks[I].Enabled;
+      Rows[I].NeedsNote := AssistantTaskNeedsUserNote(Tasks[I]);
+    End;
+End;
+
+Function TProjectAssistantForm.RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Trim(MessageText) = '' Then
+    Begin
+      ErrorText := 'The message is empty.';
+      Exit;
+    End;
+  If ThisFormBusy(Self, ErrorText) Then
+    Exit;
+  If (Not FUseCodex) And (Not FUseClaude) And
+    ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
+    Begin
+      ErrorText := 'Sign in with SuperGrok / X Premium in Settings before sending.';
+      Exit;
+    End;
+  If Not SubmitUserTextEx(Trim(MessageText), Trim(MessageText), True) Then
+    Begin
+      If Assigned(AssistantClient) And (AssistantClient.LastError <> '') Then
+        ErrorText := AssistantClient.LastError
+      Else
+        ErrorText := 'The message was not sent.';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteSteer(Const MessageText: String; Out ErrorText: String): Boolean;
+Var
+  Refs: TAssistantImageRefArray;
+Begin
+  Result := False;
+  ErrorText := '';
+  SetLength(Refs, 0);
+  If Trim(MessageText) = '' Then
+    Begin
+      ErrorText := 'The message is empty.';
+      Exit;
+    End;
+  If Not FSending Then
+    Begin
+      ErrorText := 'Nothing is running to steer.';
+      Exit;
+    End;
+  If FUseClaude Or FTransportWait Then
+    Begin
+      ErrorText := 'This connection cannot steer.';
+      Exit;
+    End;
+  If FUseCodex Then
+    Begin
+      If Not Assigned(FCodexRun) Or Not FCodexRun.Steer(Trim(MessageText)) Then
+        Begin
+          If Assigned(FCodexRun) And (FCodexRun.LastSteerError <> '') Then
+            ErrorText := FCodexRun.LastSteerError
+          Else
+            ErrorText := 'This connection cannot steer.';
+          Exit;
+        End;
+    End
+  Else If (Not Assigned(AssistantClient)) Or (Not AssistantClient.EnqueueSteer(Trim(MessageText), Refs)) Then
+    Begin
+      ErrorText := 'The steer could not be queued.';
+      Exit;
+    End;
+  SetStreamPhase('Steering at next tool gap…');
+  WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(Trim(MessageText))) + ' chars)');
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteStop(Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  If FSending Then
+    StopStream;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteSelectMode(Const ModeText: String; Out ErrorText: String): Boolean;
+Var
+  Mode: TAssistantMode;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Or FModeLocked Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  If Not KnownMonitorMode(ModeText, Mode) Then
+    Begin
+      ErrorText := 'Unknown mode.';
+      Exit;
+    End;
+  SelectMode(Mode);
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteNewConversation(Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If ThisFormBusy(Self, ErrorText) Then
+    Exit;
+  StartNewChat(False, True);
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  If Trim(RelativePath) = '' Then
+    Begin
+      ErrorText := 'Set an active plan first.';
+      Exit;
+    End;
+  If Not PlanIsAvailable(RelativePath) Then
+    Begin
+      ErrorText := 'That plan is not in the list.';
+      Exit;
+    End;
+  If Not SameText(StringReplace(RelativePath, '\', '/', [rfReplaceAll]),
+    StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll])) Then
+    Begin
+      SetActivePlanRelativePath(RelativePath);
+      PersistShellConfig;
+      RefreshBuildTodos;
+      UpdateWorkActions;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
+Var
+  PlanTitle, Rel, Resolved, Err, Content: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  PlanTitle := Trim(Title);
+  If PlanTitle = '' Then
+    PlanTitle := 'Project Plan';
+  Rel := DefaultPlanRelativePath;
+  If FileExistsUTF8(ExpandFileName(ProjectRootPath + Rel)) Or
+    FileExistsUTF8(ExpandFileName(ProjectRootPath + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]))) Then
+    Rel := AssistantDocumentsDirName + PathDelim + 'Plan-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.md';
+  Content := DefaultNewPlanMarkdown(PlanTitle);
+  If Not WriteMarkdownFile(Rel, Content, False, Resolved, Err) Then
+    Begin
+      ErrorText := Err;
+      Exit;
+    End;
+  SetActivePlanRelativePath(ProjectRelativePath(Resolved));
+  PersistShellConfig;
+  RefreshActivePlanChoices(Nil);
+  RefreshBuildTodos;
+  UpdateWorkActions;
+  If Not AddAvailableAssistantPlan(Resolved, Err) Then
+    Begin
+      ErrorText := Err;
+      Exit;
+    End;
+  SelectMode(amPlan);
+  SetCurrentSystemNote('Created plan **' + GetActivePlanRelativePath +
+    '**. Stay in **Plan** mode and send a message to refine it with the model.');
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteRemovePlan(Out ErrorText: String): Boolean;
+Var
+  Rel, Err: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  If ThisFormBusy(Self, ErrorText) Then
+    Exit;
+  Rel := GetActivePlanRelativePath;
+  If Rel = '' Then
+    Begin
+      ErrorText := 'Select a plan to remove from the list.';
+      Exit;
+    End;
+  If Not RemoveAvailableAssistantPlan(Rel, Err) Then
+    Begin
+      ErrorText := Err;
+      Exit;
+    End;
+  SetActivePlanRelativePath('');
+  PersistShellConfig;
+  RefreshActivePlanChoices(Nil);
+  RefreshBuildTodos;
+  UpdateWorkActions;
+  SetBuildStatusFeedback('Removed from the available list. The file was kept.');
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
+Var
+  PlanRel, Err, Body, Prompt, Title, StatusText, ParentTitle: String;
+  Section: TPlanSection;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish (or Stop) before starting work.';
+      Exit;
+    End;
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
+    Begin
+      ErrorText := 'Set an active plan on the Plan tab first.';
+      Exit;
+    End;
+  If Not Assigned(BuildSections) Or (SectionIndex < 0) Or (SectionIndex >= BuildSections.Count) Or
+    (Not TPlanSection(BuildSections[SectionIndex]).Actionable) Then
+    Begin
+      If Assigned(BuildSections) And (SectionIndex >= 0) And (SectionIndex < BuildSections.Count) And
+        (Not TPlanSection(BuildSections[SectionIndex]).Actionable) Then
+        ErrorText := 'Select an actionable item (### with Status), not a section heading.'
+      Else
+        ErrorText := 'Select an actionable item in the list.';
+      Exit;
+    End;
+  Section := TPlanSection(BuildSections[SectionIndex]);
+  Title := Section.Title;
+  ParentTitle := Section.ParentTitle;
+  StatusText := PlanSectionStatusToStr(Section.Status);
+  If Section.Status = pssUnknown Then
+    StatusText := 'unknown';
+  If Section.Status In [pssNotStarted, pssUnknown, pssBlocked] Then
+    Begin
+      If Not SetPlanSectionStatus(PlanRel, SectionIndex, pssInProgress, Err) Then
+        SetCurrentSystemNote('Could not set status to in progress:' + LineEnding + Err)
+      Else
+        Begin
+          StatusText := PlanSectionStatusToStr(pssInProgress);
+          FBuildSelectedIndex := SectionIndex;
+          RefreshBuildTodos;
+          If Assigned(BuildTodoList) And (SectionIndex < BuildTodoList.Items.Count) Then
+            BuildTodoList.ItemIndex := SectionIndex;
+        End;
+    End;
+  If Not GetPlanSectionBody(PlanRel, SectionIndex, Body, Err) Then
+    Begin
+      ErrorText := 'Could not load plan section:' + LineEnding + Err;
+      Exit;
+    End;
+  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle,
+    FPlanAgentRunning And (SectionIndex = FPlanAgentResumeIndex));
+  FPlanAgentResumeIndex := -1;
+  BeginBuildWorkTracking(SectionIndex, Title);
+  ForceModeAndLock(amBuild);
+  ShowChatSurfaceKeepMode;
+  SetBuildStatusFeedback('Working on: ' + Title);
+  If Not SubmitUserText(Prompt, True) Then
+    Begin
+      UnlockModeAfterSend;
+      ClearBuildWorkTracking;
+      ErrorText := 'The message was not sent.';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteRunPlan(Out ErrorText: String): Boolean;
+Var
+  Idx: Integer;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Or FPlanAgentRunning Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish before starting Run Plan.';
+      Exit;
+    End;
+  If Not RunPlanIsAvailable Then
+    Begin
+      UpdateWorkActions;
+      ErrorText := 'Set an active plan first.';
+      Exit;
+    End;
+  SelectMode(amBuild);
+  RefreshBuildTodos;
+  Idx := FindNextIncompleteBuildSection;
+  If Idx < 0 Then
+    Begin
+      ErrorText := AssistantPlanRunStartMessage(CollectPlanRunReportFacts(preCleanFinish, ''));
+      Exit;
+    End;
+  FPlanAgentRunning := True;
+  AssistantSessionObserve.AssistantSessionObserve(asnPlan);
+  SyncCodexUsageIdle;
+  SetAssistantPlanViewerQuiet(True);
+  FPlanAgentPackagesDone := 0;
+  FPlanAgentResumeIndex := -1;
+  FLastTurnHadError := False;
+  FPlanNewChatThisStep := False;
+  MarkPlanAgentAlive;
+  FBuildSelectedIndex := Idx;
+  If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
+    BuildTodoList.ItemIndex := Idx;
+  SetBuildStatusFeedback('Plan agent: starting…');
+  SetCurrentSystemNote(
+    '**Plan agent** started — will work through incomplete packages until complete, error, ' +
+    'context ≥ 95%, or max packages.');
+  If Not RemoteWorkOnPlan(Idx, ErrorText) Then
+    Begin
+      StopRunPlan(preError, 'Could not start the first package.');
+      If ErrorText = '' Then
+        ErrorText := 'Could not start the first package.';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteStopPlan(Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  If FPlanAgentRunning Then
+    StopRunPlan(preUserStop, 'stopped by user');
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteRunTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
+Var
+  Task: TAssistantTask;
+  Request: TAssistantTaskRequest;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not FindMonitorTask(TaskId, Task, ErrorText) Then
+    Exit;
+  If RefuseDesktopTask(Task, ErrorText) Then
+    Exit;
+  If HostIsBusy(ErrorText) Then
+    Begin
+      If ErrorText = '' Then
+        ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  If PrepareAssistantTaskRunWithNote(Task, trkRun, Note, Request, ErrorText) <> tpReady Then
+    Exit;
+  ApplyPreparedTaskRequest(Self, Request);
+  Result := FSending;
+  If Not Result Then
+    ErrorText := 'The task did not start.';
+End;
+
+Function TProjectAssistantForm.RemoteInsertTask(Const TaskId, Note: String; Out ApiText, ErrorText: String): Boolean;
+Var
+  Task: TAssistantTask;
+  Request: TAssistantTaskRequest;
+Begin
+  Result := False;
+  ApiText := '';
+  ErrorText := '';
+  If Not FindMonitorTask(TaskId, Task, ErrorText) Then
+    Exit;
+  If RefuseDesktopTask(Task, ErrorText) Then
+    Exit;
+  If HostIsBusy(ErrorText) Then
+    Begin
+      If ErrorText = '' Then
+        ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  If PrepareAssistantTaskRunWithNote(Task, trkInsert, Note, Request, ErrorText) <> tpReady Then
+    Exit;
+  ApiText := Request.ApiText;
+  Result := ApiText <> '';
+  If Not Result Then
+    ErrorText := 'The task did not expand.';
+End;
+
+Function TProjectAssistantForm.RemoteTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn;
+  Out ErrorText: String): Boolean;
+Begin
+  Result := FillMonitorTurn(TurnIndex, Turn, ErrorText);
+End;
+
+Function TProjectAssistantForm.RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes;
+  Out Mime: String; Out ImageWidth, ImageHeight: Integer; Out ErrorText: String): Boolean;
+Var
+  Turn: TAssistantMonitorTurn;
+  I, J: Integer;
+  Found: Boolean;
+  DisplayPath, ReadError: String;
+
+  Procedure Take(Const Image: TAssistantMonitorImage);
+  Begin
+    Found := True;
+    DisplayPath := Image.DisplayPath;
+    Mime := Image.Mime;
+    ImageWidth := Image.Width;
+    ImageHeight := Image.Height;
+    If Image.Missing Or (DisplayPath = '') Then
+      ErrorText := 'missing';
+  End;
+
+Begin
+  Result := False;
+  SetLength(Data, 0);
+  Mime := '';
+  ImageWidth := 0;
+  ImageHeight := 0;
+  ErrorText := '';
+  DisplayPath := '';
+  Found := False;
+  If Not FillMonitorTurn(TurnIndex, Turn, ErrorText) Then
+    Begin
+      ErrorText := 'missing';
+      Exit;
+    End;
+  For I := 0 To High(Turn.Images) Do
+    If Turn.Images[I].Id = ImageId Then
+      Begin
+        Take(Turn.Images[I]);
+        Break;
+      End;
+  If Not Found Then
+    For I := 0 To High(Turn.Blocks) Do
+      Begin
+        For J := 0 To High(Turn.Blocks[I].Images) Do
+          If Turn.Blocks[I].Images[J].Id = ImageId Then
+            Begin
+              Take(Turn.Blocks[I].Images[J]);
+              Break;
+            End;
+        If Found Then
+          Break;
+      End;
+  If Not Found Or (ErrorText = 'missing') Then
+    Begin
+      ErrorText := 'missing';
+      Exit;
+    End;
+  If Not ReadStoredAssistantImage(ProjectRootPath, DisplayPath, Data, ReadError) Then
+    Begin
+      SetLength(Data, 0);
+      If Pos('larger than', ReadError) > 0 Then
+        ErrorText := 'too_large'
+      Else If Pos('missing', LowerCase(ReadError)) > 0 Then
+        ErrorText := 'missing'
+      Else
+        ErrorText := 'refused';
+      Exit;
+    End;
+  If Length(Data) > MonitorImageGetMaxBytes Then
+    Begin
+      SetLength(Data, 0);
+      ErrorText := 'too_large';
+      Exit;
+    End;
+  If Mime = '' Then
+    MeasureStillImage(Data, Mime, ImageWidth, ImageHeight);
+  Result := True;
 End;
 
 Initialization
