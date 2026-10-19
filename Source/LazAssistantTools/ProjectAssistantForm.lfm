@@ -28,7 +28,6 @@ object ProjectAssistantForm: TProjectAssistantForm
       Top = 62
       Width = 2250
       Align = alBottom
-      ParentFont = False
       TabOrder = 0
       OnResize = StatusFooterResize
     end
