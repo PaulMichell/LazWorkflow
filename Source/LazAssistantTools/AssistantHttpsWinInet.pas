@@ -38,7 +38,7 @@ Implementation
 
 {$IFDEF WINDOWS}
 Uses
-  Windows, WinInet, Forms, WorkflowLog, AssistantHttps;
+  Classes, Windows, WinInet, Forms, WorkflowLog, AssistantHttps;
 
 Type
   TBytesPointer = ^TBytes;
