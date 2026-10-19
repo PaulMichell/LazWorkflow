@@ -942,6 +942,7 @@ End;
 
 {$IFDEF LCLGTK3}
 Var
+  { Armed LCL controls. Removed when their window is destroyed so a reused pointer is not treated as already armed. }
   ArmedDropControls: TList;
 
 Procedure GtkFileDropReceived(Widget: PGtkWidget; Context: PGdkDragContext; X, Y: LongInt; Data: PGtkSelectionData;
@@ -1003,6 +1004,35 @@ Begin
   gtk_drag_dest_set(Native, GTK_DEST_DEFAULT_ALL, @Target, 1, [GDK_ACTION_COPY]);
   g_signal_connect_data(Native, 'drag-data-received', TGCallback(@GtkFileDropReceived), Form, Nil, ConnectFlags);
   ArmedDropControls.Add(Control);
+End;
+
+Function GtkArmedControlBelongsToForm(Control: Pointer; Form: TProjectAssistantForm): Boolean;
+Var
+  ComponentIndex: Integer;
+Begin
+  Result := False;
+  If Not Assigned(Control) Or Not Assigned(Form) Then
+    Exit;
+  If (Control = Pointer(Form.InputPanel)) Or (Control = Pointer(Form.AttachmentStrip)) Or
+    (Control = Pointer(Form.InputMemo)) Then
+    Exit(True);
+  For ComponentIndex := 0 To Form.ComponentCount - 1 Do
+    If Form.Components[ComponentIndex] = TComponent(Control) Then
+      Exit(True);
+End;
+
+Procedure ReleaseGtkFileDrop(Form: TProjectAssistantForm);
+Var
+  I: Integer;
+Begin
+  If Not Assigned(ArmedDropControls) Or Not Assigned(Form) Then
+    Exit;
+  { FormDestroy runs while these controls are still alive. Drop them now, before the heap can reuse the pointer. }
+  For I := ArmedDropControls.Count - 1 DownTo 0 Do
+    If GtkArmedControlBelongsToForm(ArmedDropControls[I], Form) Then
+      ArmedDropControls.Delete(I);
+  If ArmedDropControls.Count = 0 Then
+    FreeAndNil(ArmedDropControls);
 End;
 {$ENDIF}
 
@@ -1105,6 +1135,9 @@ Procedure ReleaseInputFileDrop(Form: TProjectAssistantForm);
 Begin
   If Not Assigned(Form) Then
     Exit;
+  {$IFDEF LCLGTK3}
+  ReleaseGtkFileDrop(Form);
+  {$ENDIF}
   {$IF DEFINED(LCLQT5) OR DEFINED(LCLQT6)}
   ReleaseQtFileDrop(Form);
   {$ENDIF}
@@ -9013,5 +9046,11 @@ Initialization
 
 QueryAssistantTaskHostBusy := @AssistantHostTurnOrPlanActive;
 PostAssistantTaskSystemNote := @PostAssistantFormatNote;
+
+Finalization
+
+{$IFDEF LCLGTK3}
+FreeAndNil(ArmedDropControls);
+{$ENDIF}
 
 End.
