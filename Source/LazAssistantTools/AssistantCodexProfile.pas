@@ -24,7 +24,7 @@ Function FindCodexExecutable: String;
 Implementation
 
 Uses
-  FileUtil, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  FileUtil, LazFileUtils, DirectoryListing, SafeFileAccess;
 
 Procedure CodexProfileEnvironment(Const ProfileDir: String; Values: TStrings);
 Var
@@ -47,9 +47,7 @@ Begin
   ErrorText := '';
   Try
     If Not ForceDirectories(ProfileDir) Then Raise Exception.Create('Cannot create runtime profile');
-    {$IFDEF UNIX}
-    If fpChmod(ProfileDir, &700) <> 0 Then Raise Exception.Create('Cannot protect runtime profile');
-    {$ENDIF}
+    If Not ProtectOwnerOnlyDirectory(ProfileDir) Then Raise Exception.Create('Cannot protect runtime profile');
     Path := IncludeTrailingPathDelimiter(ProfileDir) + 'config.toml';
     { Dedicated profile, never the user's CLI home. Rewrite the fixed policy on
       every launch. Leave runtime auth files untouched; do not record model,
@@ -67,7 +65,7 @@ Begin
       Config.Add('unified_exec = false');
       Config.Add('skill_mcp_dependency_install = false');
       Config.SaveToFile(Path);
-      {$IFDEF UNIX}fpChmod(Path, &600); {$ENDIF}
+      ProtectOwnerOnlyFile(Path);
     Finally
       Config.Free;
     End;
@@ -88,17 +86,9 @@ Begin
 End;
 
 Function IsSymbolicLink(Const Path: String): Boolean;
-{$IFDEF UNIX}
-Var
-  Info: Stat;
-Begin
-  Result := (FpLstat(PChar(Path), Info) = 0) And ((Info.st_mode And S_IFMT) = S_IFLNK);
-End;
-{$ELSE}
 Begin
   Result := FileIsSymlink(Path);
 End;
-{$ENDIF}
 
 Function CodexProfilePathIsDerived(Const ProfileDir: String): Boolean;
 Var

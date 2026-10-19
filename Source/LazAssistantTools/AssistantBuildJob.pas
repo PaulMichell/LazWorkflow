@@ -44,7 +44,8 @@ Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
 Implementation
 
 Uses
-  Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser, ProcessSession{$IFDEF LINUX}, BaseUnix{$ENDIF};
+  Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser,
+  ProcessSession, LazFileUtils, SafeFileAccess;
 
 Type
   TBuildState = Class(TInterfacedObject, IAssistantBuildJob)
@@ -80,21 +81,17 @@ Begin
 End;
 
 Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: String): Boolean;
-{$IFDEF LINUX}Var
-  Info: Stat; {$ENDIF}
 Begin
   Result := False;
   Fingerprint := '';
   ErrorText := '';
   Try
-    {$IFDEF LINUX}
-    If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Or (Info.st_size > 67108864) Or
-      (fpAccess(Path, X_OK) <> 0) Then
-        Begin
-          ErrorText := 'Test runner must be an executable regular file of at most 64 MiB.';
-          Exit;
-        End;
-    {$ENDIF}
+    { FileIsExecutable is the LCL check. On Unix it is access(X_OK) on a regular file. }
+    If (Not IsRegularFile(Path, 67108864)) Or (Not FileIsExecutable(Path)) Then
+      Begin
+        ErrorText := 'Test runner must be an executable regular file of at most 64 MiB.';
+        Exit;
+      End;
     Fingerprint := SHA1Print(SHA1File(Path));
     Result := True;
   Except On E: Exception Do ErrorText := 'Cannot fingerprint test executable: ' + E.Message;
@@ -131,19 +128,16 @@ End;
 Function ReadBuildInput(Const Path: String; Out Text, ErrorText: String): Boolean;
 Var
   Stream: TFileStream;
-  {$IFDEF LINUX}Info: Stat; {$ENDIF}
 Begin
   Result := False;
   Text := '';
   ErrorText := '';
   Try
-    {$IFDEF LINUX}
-    If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Then
+    If Not IsRegularFile(Path, -1) Then
       Begin
         ErrorText := 'Build input is missing or not a regular file: ' + Path;
         Exit;
       End;
-    {$ENDIF}
     Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
     Try
       If Stream.Size > 1048576 Then

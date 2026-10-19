@@ -22,8 +22,8 @@ Implementation
 
 Uses
   SysUtils, LazUTF8, LazFileUtils, LazIDEIntf, SrcEditorIntf, CodeToolManager,
-  CodeCache, CTUnitGraph, fpjson, AssistantTools, AssistantRenamePreview, AssistantCodeToolsGuard
-    {$IFDEF UNIX}, BaseUnix{$ENDIF};
+  CodeCache, CTUnitGraph, fpjson, AssistantTools, AssistantRenamePreview, AssistantCodeToolsGuard,
+  SafeFileAccess;
 
 Const
   MaxFileBytes = 1048576;
@@ -48,17 +48,14 @@ End;
 Function ReadDisk(Const Path: String; Out Text, ErrorText: String): Boolean;
 Var
   Stream: TFileStream;
-  {$IFDEF UNIX}Info: Stat; {$ENDIF}
 Begin
   Result := False;
   Text := '';
-  {$IFDEF UNIX}
-  If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Or (Info.st_size > MaxFileBytes) Then
+  If Not IsRegularFile(Path, MaxFileBytes) Then
     Begin
       ErrorText := 'Search requires regular project text files of at most 1 MiB.';
       Exit;
     End;
-  {$ENDIF}
   Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
   Try
     If Stream.Size > MaxFileBytes Then

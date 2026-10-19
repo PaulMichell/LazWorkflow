@@ -240,7 +240,7 @@ Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEn
 Implementation
 
 Uses
-  LazFileUtils, DirectoryListing, GitDiffPatch, ProcessSession{$IFDEF UNIX}, BaseUnix{$ENDIF}{$IFDEF WINDOWS}, Windows{$ENDIF};
+  LazFileUtils, DirectoryListing, GitDiffPatch, ProcessSession, SafeFileAccess;
 
 Function MergeGitFileEntries(Const RepoPath: String; Const Entries: TGitStatusEntryArray;
   Tracked: TStrings): TGitStatusEntryArray;
@@ -1840,7 +1840,7 @@ Begin
         Begin
           Result := RunGit(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
             '--no-index', ContextFlag, '--',
-            {$IFDEF WINDOWS}'NUL'{$ELSE}'/dev/null'{$ENDIF}, Path], DiffText, ExitCode);
+            NullDevicePath, Path], DiffText, ExitCode);
           { Exit 1 means files differ; diagnostics and other failures are not a diff. }
           If (ExitCode = 1) And (FLastCommand.ErrorText = '') And
             (DiffText <> '') And Not IsCancelled And (FLastError <> 'Timed out') Then
@@ -2494,12 +2494,11 @@ End;
 
 Function TGitService.RestoreRemotes(Const Snapshot: TGitRemoteSnapshot): Boolean;
 Var
-  LockPath, Text, Name, Sha, Target, Errors: String;
+  LockPath, Text, Name, Sha, Target, Errors, LockError: String;
   Handle: THandle;
   Stream: THandleStream;
   Current, Original, OriginalRefNames: TStringList;
   I, P, Code: Integer;
-  {$IFDEF UNIX}Info: Stat;{$ENDIF}
   Procedure RecordFailure;
   Begin
     Errors := Errors + FLastError + LineEnding;
@@ -2512,14 +2511,9 @@ Begin
       Exit;
     End;
   LockPath := Snapshot.ConfigPath + '.lock';
-  {$IFDEF UNIX}
-  Handle := fpOpen(PChar(LockPath), O_WRONLY Or O_CREAT Or O_EXCL, &600);
-  {$ELSE}
-  Handle := Windows.CreateFile(PChar(LockPath), GENERIC_WRITE, 0, Nil, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
-  {$ENDIF}
-  If Handle = THandle(-1) Then
+  If Not TryExclusiveCreate(LockPath, Handle, LockError) Then
     Begin
-      FLastError := 'Could not lock config for remote rollback: ' + SysErrorMessage(GetLastOSError);
+      FLastError := 'Could not lock config for remote rollback: ' + LockError;
       Exit;
     End;
   Try
@@ -2528,13 +2522,8 @@ Begin
       Try
         If Snapshot.ConfigText <> '' Then Stream.WriteBuffer(Snapshot.ConfigText[1], Length(Snapshot.ConfigText));
       Finally Stream.Free; FileClose(Handle); End;
-      {$IFDEF UNIX}
-      If fpStat(PChar(Snapshot.ConfigPath), Info) = 0 Then fpChmod(PChar(LockPath), Info.st_mode And &777);
-      If Not RenameFile(LockPath, Snapshot.ConfigPath) Then Raise Exception.Create('Could not restore repository config');
-      {$ELSE}
-      If Not MoveFileEx(PChar(LockPath), PChar(Snapshot.ConfigPath), MOVEFILE_REPLACE_EXISTING Or MOVEFILE_WRITE_THROUGH) Then
-        Raise Exception.Create('Could not restore repository config');
-      {$ENDIF}
+      If Not ReplaceWithExclusiveFile(LockPath, Snapshot.ConfigPath, LockError) Then
+        Raise Exception.Create(LockError);
     Except On E: Exception Do
     Begin
       FLastError := E.Message;

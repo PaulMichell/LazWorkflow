@@ -69,8 +69,7 @@ Uses
   SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
   SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings,
   AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits,
-  AssistantIDEContext, AssistantProtocol, AssistantPlan, fpjson, jsonparser
-    {$IFDEF UNIX}, BaseUnix{$ENDIF};
+  AssistantIDEContext, AssistantProtocol, AssistantPlan, fpjson, jsonparser, SafeFileAccess;
 
 Type
   { Owned by the editor control, so reopening a file cannot reuse a receipt's
@@ -206,28 +205,19 @@ Var
   Stream: TFileStream;
   Buffer: Array[0..8191] Of Byte;
   I, Count, Remaining: Integer;
-  {$IFDEF UNIX}Info: Stat; {$ENDIF}
 Begin
   Result := False;
   ErrorText := '';
-  {$IFDEF UNIX}
-  If (fpStat(Path, Info) <> 0) Or Not FPS_ISREG(Info.st_mode) Then
+  If Not IsRegularFile(Path, -1) Then
     Begin
       ErrorText := 'An existing regular project file is required.';
       Exit;
     End;
-  If Info.st_size > 1048576 Then
+  If Not IsRegularFile(Path, 1048576) Then
     Begin
       ErrorText := 'Project file exceeds the 1 MiB inspection limit.';
       Exit;
     End;
-  {$ELSE}
-  If Not FileExistsUTF8(Path) Then
-    Begin
-      ErrorText := 'An existing project file is required.';
-      Exit;
-    End;
-  {$ENDIF}
   Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
   Try
     If Stream.Size > 1048576 Then
@@ -316,12 +306,10 @@ End;
 
 Function TAssistantIDEWorkspace.CanCreateFiles: Boolean;
 Begin
-  Result := {$IFDEF LINUX}True{$ELSE}False{$ENDIF};
+  Result := CanCreateNewText;
 End;
 
 Function TAssistantIDEWorkspace.CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean;
-{$IFDEF UNIX}Var
-  Info: Stat; {$ENDIF}
 Begin
   Result := False;
   CanonicalPath := '';
@@ -347,15 +335,11 @@ Begin
       ErrorText := 'An editor buffer already owns this path; use its revision tools.';
       Exit;
     End;
-  {$IFDEF UNIX}
-  If fpLStat(CanonicalPath, Info) = 0 Then
-  {$ELSE}
-    If FileExistsUTF8(CanonicalPath) Or DirectoryExistsUTF8(CanonicalPath) Then
-  {$ENDIF}
-      Begin
-        ErrorText := 'Destination already exists; new-file creation never overwrites.';
-        Exit;
-      End;
+  If PathEntryExists(CanonicalPath) Then
+    Begin
+      ErrorText := 'Destination already exists; new-file creation never overwrites.';
+      Exit;
+    End;
   Result := True;
 End;
 

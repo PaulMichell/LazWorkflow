@@ -153,7 +153,7 @@ Implementation
 
 Uses
   Math, LazFileUtils, DirectoryListing, jsonparser, fpreadpng, fpwritepng, fpreadjpeg, fpwritejpeg, fpreadbmp,
-  fpreadgif, fpreadtiff, fpreadxpm, fpreadpnm, AssistantProjectPaths{$IFDEF UNIX}, BaseUnix, Unix{$ENDIF};
+  fpreadgif, fpreadtiff, fpreadxpm, fpreadpnm, AssistantProjectPaths, SafeFileAccess;
 
 Function PathInside(Const Root, Path: String): Boolean; Forward;
 Function ImagePathPrefix(Const ProjectRoot, ImageDirectory: String): String; Forward;
@@ -617,86 +617,8 @@ Begin
 End;
 
 Function ReadOpenNoFollow(Const Path: String; Expected: Int64; Out Data: TBytes; Out ErrorText: String): Boolean;
-{$IFDEF UNIX}
-Var
-  Handle: Integer;
-  Offset, Chunk, Got: SizeInt;
-{$ELSE}
-Var
-  Stream: TFileStream;
-{$ENDIF}
 Begin
-  Result := False;
-  SetLength(Data, 0);
-  ErrorText := '';
-  If (Expected < 1) Or (Expected > AssistantImageMaxFileBytes) Then
-    Begin
-      ErrorText := 'Stored image could not be read.';
-      Exit;
-    End;
-  {$IFDEF UNIX}
-  Handle := fpOpen(PChar(Path), O_RDONLY Or O_NOFOLLOW);
-  If Handle < 0 Then
-    Begin
-      If FileIsSymlink(Path) Then
-        ErrorText := 'Refusing to read a symbolic link.'
-      Else
-        ErrorText := 'Stored image could not be read.';
-      Exit;
-    End;
-  Try
-    SetLength(Data, SizeInt(Expected));
-    Offset := 0;
-    While Offset < Expected Do
-      Begin
-        Chunk := SizeInt(Expected) - Offset;
-        If Chunk > 65536 Then Chunk := 65536;
-        Got := fpRead(Handle, Data[Offset], Chunk);
-        If Got < 0 Then
-          Begin
-            SetLength(Data, 0);
-            ErrorText := 'Stored image could not be read.';
-            Exit;
-          End;
-        If Got = 0 Then Break;
-        Offset := Offset + Got;
-      End;
-    If Offset <> Expected Then
-      Begin
-        SetLength(Data, 0);
-        ErrorText := 'Stored image could not be read.';
-        Exit;
-      End;
-    Result := True;
-  Finally
-    fpClose(Handle);
-  End;
-  {$ELSE}
-  Try
-    Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
-  Except
-    ErrorText := 'Stored image could not be read.';
-    Exit;
-  End;
-  Try
-    Try
-      If Stream.Size <> Expected Then
-        Begin
-          ErrorText := 'Stored image could not be read.';
-          Exit;
-        End;
-      SetLength(Data, SizeInt(Expected));
-      Stream.ReadBuffer(Data[0], LongInt(Expected));
-      Result := True;
-    Except
-      SetLength(Data, 0);
-      ErrorText := 'Stored image could not be read.';
-      Result := False;
-    End;
-  Finally
-    Stream.Free;
-  End;
-  {$ENDIF}
+  Result := ReadAllNoFollow(Path, Expected, Data, ErrorText);
 End;
 
 Function ReadStoredAssistantImage(Const ProjectRoot, RelativePath: String; Out Data: TBytes; Out ErrorText: String): Boolean;
@@ -780,74 +702,8 @@ Begin
 End;
 
 Function WriteExclusive(Const Path: String; Const Data: TBytes; Out ErrorText: String): Boolean;
-{$IFDEF UNIX}
-Var
-  Handle: Integer;
-  Offset, Chunk, Wrote: SizeInt;
-{$ELSE}
-Var
-  Stream: TFileStream;
-{$ENDIF}
 Begin
-  Result := False;
-  ErrorText := '';
-  If Length(Data) < 1 Then
-    Begin
-      ErrorText := 'Could not store the image.';
-      Exit;
-    End;
-  {$IFDEF UNIX}
-  Handle := fpOpen(PChar(Path), O_WRONLY Or O_CREAT Or O_EXCL Or O_NOFOLLOW, &644);
-  If Handle < 0 Then
-    Begin
-      If FileIsSymlink(Path) Then
-        ErrorText := 'Refusing to store an image through a symbolic link.'
-      Else
-        ErrorText := 'Could not store the image.';
-      Exit;
-    End;
-  Try
-    Offset := 0;
-    While Offset < Length(Data) Do
-      Begin
-        Chunk := Length(Data) - Offset;
-        If Chunk > 65536 Then Chunk := 65536;
-        Wrote := fpWrite(Handle, Data[Offset], Chunk);
-        If Wrote < 1 Then
-          Begin
-            ErrorText := 'Could not store the image.';
-            Exit;
-          End;
-        Offset := Offset + Wrote;
-      End;
-    Result := True;
-  Finally
-    fpClose(Handle);
-  End;
-  {$ELSE}
-  If FileIsSymlink(Path) Then
-    Begin
-      ErrorText := 'Refusing to store an image through a symbolic link.';
-      Exit;
-    End;
-  Try
-    Stream := TFileStream.Create(Path, fmCreate);
-  Except
-    ErrorText := 'Could not store the image.';
-    Exit;
-  End;
-  Try
-    Try
-      Stream.WriteBuffer(Data[0], LongInt(Length(Data)));
-      Result := True;
-    Except
-      ErrorText := 'Could not store the image.';
-      Result := False;
-    End;
-  Finally
-    Stream.Free;
-  End;
-  {$ENDIF}
+  Result := CreateExclusiveNoFollow(Path, Data, ErrorText);
 End;
 
 Function WriteNewFile(Const Path: String; Const Data: TBytes; Out ErrorText: String): Boolean;

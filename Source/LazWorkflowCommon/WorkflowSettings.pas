@@ -29,7 +29,7 @@ Function WriteWorkflowSection(Const SectionName: String; Section: TJSONObject; O
 Implementation
 
 Uses
-  Classes, jsonparser, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  Classes, jsonparser, LazFileUtils, DirectoryListing, SafeFileAccess;
 
 Var
   SettingsDirectory: String;
@@ -209,10 +209,8 @@ Begin
     Try
       Lines.Text := Document.FormatJSON;
       Lines.SaveToFile(Temp);
-      {$IFDEF UNIX}
-      If fpChmod(Temp, &600) <> 0 Then
+      If Not ProtectOwnerOnlyFile(Temp) Then
         Raise Exception.Create('Could not protect workflow settings.');
-      {$ENDIF}
       If Not RenameFile(Temp, Path) Then
         Begin
           DeleteFileUTF8(Path);

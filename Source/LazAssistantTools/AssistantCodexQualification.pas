@@ -29,7 +29,7 @@ Procedure ClearCodexQualificationCache;
 Implementation
 
 Uses
-  Process, fpjson, jsonparser, sha1, FileUtil, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  Process, fpjson, jsonparser, sha1, FileUtil, LazFileUtils, DirectoryListing, SafeFileAccess;
 
 Const
   SchemaGenerationTimeoutMs = 15000;
@@ -130,18 +130,9 @@ Begin
 End;
 
 Function IsSymbolicLink(Const Path: String): Boolean;
-{$IFDEF UNIX}
-Var
-  Info: Stat;
-Begin
-  FillChar(Info, SizeOf(Info), 0);
-  Result := (FpLstat(PChar(Path), Info) = 0) And ((Info.st_mode And S_IFMT) = S_IFLNK);
-End;
-{$ELSE}
 Begin
   Result := FileIsSymlink(Path);
 End;
-{$ENDIF}
 
 Function IsCacheFileName(Const Name: String): Boolean;
 Var
@@ -295,9 +286,7 @@ Var
 Begin
   Directory := CacheDirectory;
   If Not ForceDirectories(Directory) Then Exit;
-  {$IFDEF UNIX}
-  fpChmod(Directory, &700);
-  {$ENDIF}
+  ProtectOwnerOnlyDirectory(Directory);
   If IsSymbolicLink(Directory) Then Exit;
   FileName := CacheFileName(Path, Hash);
   Temporary := FileName + '.tmp';
@@ -310,9 +299,7 @@ Begin
     Root.Add('qualified', True);
     Lines.Text := Root.AsJSON;
     Lines.SaveToFile(Temporary);
-    {$IFDEF UNIX}
-    fpChmod(Temporary, &600);
-    {$ENDIF}
+    ProtectOwnerOnlyFile(Temporary);
     If FileExists(FileName) And Not IsSymbolicLink(FileName) Then DeleteFile(FileName);
     If IsSymbolicLink(FileName) Or Not RenameFile(Temporary, FileName) Then DeleteFile(Temporary);
   Finally
@@ -564,9 +551,7 @@ Begin
       ErrorText := 'Cannot prepare a directory for the Codex schema check.';
       Exit;
     End;
-  {$IFDEF UNIX}
-  fpChmod(SchemaRoot, &700);
-  {$ENDIF}
+  ProtectOwnerOnlyDirectory(SchemaRoot);
   Try
     { A release build whose schema tool cannot be run is still allowed. The live
       handshake remains the fail-closed gate for account type and sandbox. A schema

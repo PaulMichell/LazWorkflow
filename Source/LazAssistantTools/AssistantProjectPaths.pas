@@ -30,7 +30,7 @@ Procedure CollectFolderCompileFiles(Const RootDirectory: String; Files: TStrings
 Implementation
 
 Uses
-  jsonparser, LazFileUtils, DirectoryListing{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  jsonparser, LazFileUtils, DirectoryListing, SafeFileAccess;
 
 Function TargetConfigPath(Const StoreDirectory: String): String;
 Begin
@@ -118,10 +118,8 @@ Begin
     Try
       Lines.Text := Config.FormatJSON;
       Lines.SaveToFile(Temp);
-      {$IFDEF UNIX}
-      If fpChmod(Temp, &600) <> 0 Then
+      If Not ProtectOwnerOnlyFile(Temp) Then
         Raise Exception.Create('Could not protect the target document.');
-      {$ENDIF}
       If Not RenameFile(Temp, Path) Then
         Begin
           DeleteFileUTF8(Path);
