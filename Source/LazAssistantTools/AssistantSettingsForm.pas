@@ -53,6 +53,9 @@ Type
     TranscriptGroup: TGroupBox;
     ShowThinkingCheck: TCheckBox;
     ShowToolCallsCheck: TCheckBox;
+    ConversationSizeLabel: TLabel;
+    ConversationSizeEdit: TSpinEdit;
+    ConversationSizeNote: TLabel;
     ConnectionsPage: TTabSheet;
     ConnectionSidebar: TPanel;
     ConnectionButtons: TPanel;
@@ -1606,6 +1609,7 @@ Begin
   FaultRetryEdit.Value := AssistantChatConfig.FaultRetries;
   ShowThinkingCheck.Checked := AssistantChatConfig.ShowThinking;
   ShowToolCallsCheck.Checked := AssistantChatConfig.ShowToolCalls;
+  ConversationSizeEdit.Value := AssistantChatConfig.ConversationFontSize;
   RefreshGrokReasoningChoices(AssistantChatConfig.ThinkingLevel);
   If SameText(AssistantChatConfig.SearchMode, 'on') Then
     SearchCombo.ItemIndex := 2
@@ -1657,6 +1661,7 @@ Begin
   AssistantChatConfig.FaultRetries := FaultRetryEdit.Value;
   AssistantChatConfig.ShowThinking := ShowThinkingCheck.Checked;
   AssistantChatConfig.ShowToolCalls := ShowToolCallsCheck.Checked;
+  AssistantChatConfig.ConversationFontSize := ConversationSizeEdit.Value;
   SaveSkillModes;
   Item := Nil;
   If Assigned(Connections) Then

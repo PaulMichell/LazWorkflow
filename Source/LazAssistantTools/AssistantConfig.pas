@@ -36,6 +36,9 @@ Const
   AssistantNewChatContextDefault = 95;
   AssistantNewChatContextMin = 50;
   AssistantNewChatContextMax = 99;
+  { 0 follows the IDE editor font size. A positive value is points. }
+  AssistantConversationFontDefault = 0;
+  AssistantConversationFontMax = 72;
 
 Type
   { Reasoning effort sent as reasoning_effort (xAI / Grok Build "thinking level").
@@ -61,6 +64,7 @@ Type
     FNewChatContextPercent: Integer;
     FShowThinking: Boolean;
     FShowToolCalls: Boolean;
+    FConversationFontSize: Integer;
     FSearchMode: String;
     FSearchCitations: Boolean;
     FAnswerVerbosity: String;
@@ -138,6 +142,8 @@ Type
     Property ShowThinking: Boolean Read FShowThinking Write FShowThinking;
     { Show tool-call blocks in the conversation trace. }
     Property ShowToolCalls: Boolean Read FShowToolCalls Write FShowToolCalls;
+    { Conversation text in points. 0 uses the IDE editor font size. Key conversation_font_size. }
+    Property ConversationFontSize: Integer Read FConversationFontSize Write FConversationFontSize;
     { off | auto | on — Grok live search. Off matches the previous request. }
     Property SearchMode: String Read FSearchMode Write FSearchMode;
     { Ask the completions fallback to return citations. Responses search tools return sources. }
@@ -304,6 +310,7 @@ Begin
   FNewChatContextPercent := AssistantNewChatContextDefault;
   FShowThinking := True;
   FShowToolCalls := True;
+  FConversationFontSize := AssistantConversationFontDefault;
   FSearchMode := 'off';
   FSearchCitations := False;
   FAnswerVerbosity := 'medium';
@@ -369,6 +376,7 @@ Begin
   FNewChatContextPercent := Source.NewChatContextPercent;
   FShowThinking := Source.ShowThinking;
   FShowToolCalls := Source.ShowToolCalls;
+  FConversationFontSize := Source.ConversationFontSize;
   FSearchMode := Source.SearchMode;
   FSearchCitations := Source.SearchCitations;
   FAnswerVerbosity := Source.AnswerVerbosity;
@@ -478,6 +486,7 @@ Begin
     Config.FNewChatContextPercent := AssistantNewChatContextDefault;
   Config.FNewChatContextPercent := BoundRecoveryInt(Config.FNewChatContextPercent,
     AssistantNewChatContextMin, AssistantNewChatContextMax);
+  Config.FConversationFontSize := BoundRecoveryInt(Config.FConversationFontSize, 0, AssistantConversationFontMax);
 End;
 
 Procedure ApplyOAuthObject(Config: TAssistantConfig; Auth: TJSONObject);
@@ -908,6 +917,7 @@ Begin
     FNewChatContextPercent := AssistantNewChatContextDefault;
     FShowThinking := True;
     FShowToolCalls := True;
+    FConversationFontSize := AssistantConversationFontDefault;
     FSearchMode := 'off';
     FSearchCitations := False;
     FAnswerVerbosity := 'medium';
@@ -940,6 +950,8 @@ Begin
       AssistantNewChatContextDefault, AssistantNewChatContextMin, AssistantNewChatContextMax);
     FShowThinking := Section.Get('show_thinking', True);
     FShowToolCalls := Section.Get('show_tool_calls', True);
+    FConversationFontSize := ReadRecoveryInt(Section, 'conversation_font_size',
+      AssistantConversationFontDefault, 0, AssistantConversationFontMax);
     FSearchMode := NormalizeGrokSearchMode(Section.Get('search_mode', 'off'));
     FSearchCitations := Section.Get('search_citations', False);
     FAnswerVerbosity := NormalizeGrokVerbosity(Section.Get('answer_verbosity', 'medium'));
@@ -1073,6 +1085,7 @@ Begin
     Section.Add('new_chat_context_percent', FNewChatContextPercent);
     Section.Add('show_thinking', FShowThinking);
     Section.Add('show_tool_calls', FShowToolCalls);
+    Section.Add('conversation_font_size', FConversationFontSize);
     Section.Add('search_mode', NormalizeGrokSearchMode(FSearchMode));
     Section.Add('search_citations', FSearchCitations);
     Section.Add('answer_verbosity', NormalizeGrokVerbosity(FAnswerVerbosity));
