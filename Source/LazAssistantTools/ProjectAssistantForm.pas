@@ -541,6 +541,9 @@ Type
     Function RemoteTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     Function RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes; Out Mime: String;
       Out ImageWidth, ImageHeight: Integer; Out ErrorText: String): Boolean;
+    /// Raises the modal depth around a dialog. A nil listener does not skip the counter.
+    Function RunAssistantModal(Const Msg: String; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons; HelpCtx: Longint): Integer;
+    Function RunAssistantModal(Const QueryCaption, Prompt: String; Var Value: String): Boolean;
   End;
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
@@ -884,7 +887,7 @@ Begin
   If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
   If Not AssistantTarget.SelectFolder(Directory, Note) Then
     Begin
-      MessageDlg(Note, mtError, [mbOK], 0);
+      RunAssistantModal(Note, mtError, [mbOK], 0);
       RefreshTargetChoices(Nil);
       AssistantSessionObserve.AssistantSessionObserve(asnTarget);
       Exit;
@@ -1681,7 +1684,7 @@ Begin
         UpdateWorkActions;
       End;
     If Rejected <> '' Then
-      MessageDlg('Some files were not added:' + LineEnding + Rejected, mtError, [mbOK], 0);
+      RunAssistantModal('Some files were not added:' + LineEnding + Rejected, mtError, [mbOK], 0);
   Finally
     Dialog.Free;
   End;
@@ -1695,7 +1698,7 @@ Var
 Begin
   SelectMode(amPlan);
   Title := 'Project Plan';
-  If Not InputQuery('New plan', 'Plan title:', Title) Then
+  If Not RunAssistantModal('New plan', 'Plan title:', Title) Then
     Exit;
   If Trim(Title) = '' Then
     Title := 'Project Plan';
@@ -1707,13 +1710,13 @@ Begin
   Content := DefaultNewPlanMarkdown(Title);
   If Not WriteMarkdownFile(Rel, Content, True, Resolved, Err) Then
     Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
+      RunAssistantModal(Err, mtError, [mbOK], 0);
       Exit;
     End;
   SetActivePlanRelativePath(ProjectRelativePath(Resolved));
   PersistShellConfig;
   If Not AddAvailableAssistantPlan(Resolved, Err) Then
-    MessageDlg(Err, mtWarning, [mbOK], 0);
+    RunAssistantModal(Err, mtWarning, [mbOK], 0);
   RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
   UpdateWorkActions;
@@ -2209,20 +2212,20 @@ Var
 Begin
   If FSending Then
     Begin
-      MessageDlg('Wait for the current reply to finish (or Stop) before starting work.',
+      RunAssistantModal('Wait for the current reply to finish (or Stop) before starting work.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
-      MessageDlg('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Idx := SelectedBuildSectionIndex;
   If Idx < 0 Then
     Begin
-      MessageDlg(BuildSelectionMessage, mtInformation, [mbOK], 0);
+      RunAssistantModal(BuildSelectionMessage, mtInformation, [mbOK], 0);
       Exit;
     End;
   Section := TPlanSection(BuildSections[Idx]);
@@ -2236,7 +2239,7 @@ Begin
     Begin
       If Not SetPlanSectionStatus(PlanRel, Idx, pssInProgress, Err) Then
         Begin
-          MessageDlg('Could not set status to in progress:' + LineEnding + Err, mtWarning, [mbOK], 0);
+          RunAssistantModal('Could not set status to in progress:' + LineEnding + Err, mtWarning, [mbOK], 0);
           { Continue with the prompt anyway. }
         End
       Else
@@ -2250,7 +2253,7 @@ Begin
     End;
   If Not GetPlanSectionBody(PlanRel, Idx, Body, Err) Then
     Begin
-      MessageDlg('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
+      RunAssistantModal('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
       Exit;
     End;
   Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle,
@@ -2407,7 +2410,7 @@ Begin
         FTrace.AddNote(Report);
       RefreshChatDisplay(True, True);
       If Not FSending Then
-        MessageDlg(Report, mtInformation, [mbOK], 0);
+        RunAssistantModal(Report, mtInformation, [mbOK], 0);
     End;
 End;
 
@@ -2426,14 +2429,14 @@ Var
 Begin
   If FSending Or FPlanAgentRunning Then
     Begin
-      MessageDlg('Wait for the current reply to finish before starting Run Plan.',
+      RunAssistantModal('Wait for the current reply to finish before starting Run Plan.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
   If Not RunPlanIsAvailable Then
     Begin
       UpdateWorkActions;
-      MessageDlg('Set an active plan first.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Set an active plan first.', mtInformation, [mbOK], 0);
       Exit;
     End;
   { Available from Chat, Inspect, Document, Plan, or Build. Switch before any package work. }
@@ -2442,7 +2445,7 @@ Begin
   Idx := FindNextIncompleteBuildSection;
   If Idx < 0 Then
     Begin
-      MessageDlg(AssistantPlanRunStartMessage(CollectPlanRunReportFacts(preCleanFinish, '')),
+      RunAssistantModal(AssistantPlanRunStartMessage(CollectPlanRunReportFacts(preCleanFinish, '')),
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -2662,7 +2665,7 @@ Procedure TProjectAssistantForm.RunPlanActionExecute(Sender: TObject);
 Begin
   If FPlanAgentRunning Then
     Begin
-      If MessageDlg('Stop the plan agent after the current reply finishes?',
+      If RunAssistantModal('Stop the plan agent after the current reply finishes?',
         mtConfirmation, [mbYes, mbNo], 0) = mrYes Then
         StopRunPlan(preUserStop, 'stopped by user');
       Exit;
@@ -3844,7 +3847,7 @@ Begin
       FPendingTurnAttachments := '';
       UnlockModeAfterSend;
       SetCurrentSystemNote(ImageError);
-      MessageDlg(ImageError, mtInformation, [mbOK], 0);
+      RunAssistantModal(ImageError, mtInformation, [mbOK], 0);
       Exit;
     End;
   If Assigned(AssistantClient) Then
@@ -3993,7 +3996,7 @@ Begin
   If Length(Refs) > 0 Then
     Begin
       SetCurrentSystemNote('Claude Code turns do not attach images.');
-      MessageDlg('Claude Code turns do not attach images.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Claude Code turns do not attach images.', mtInformation, [mbOK], 0);
       Exit;
     End;
   RefreshFromConfig;
@@ -4509,7 +4512,7 @@ Begin
     Format('**Context usage is high (%d%%).** Start a **New Chat** before continuing long Build/Plan work ' +
       'so the model stays within its token limit.',
       [Pct]));
-  MessageDlg(
+  RunAssistantModal(
     Format('Context usage is at about %d%% of the budget.%s%s' +
       'Start a New Chat before continuing large Plan/Build sessions.',
       [Pct, LineEnding, LineEnding]),
@@ -5521,7 +5524,7 @@ Begin
   If Assigned(ProjectAssistantConversation) Then Root := ProjectAssistantConversation.ProjectRoot;
   If (Root = '') Or (Trim(Ref.DisplayPath) = '') Then
     Begin
-      MessageDlg('The image is unavailable.', mtInformation, [mbOK], 0);
+      RunAssistantModal('The image is unavailable.', mtInformation, [mbOK], 0);
       Exit;
     End;
   FileName := AttachmentSaveName(Ref.Name, Ref.Id);
@@ -5540,7 +5543,7 @@ Begin
     If Not WriteStoredImageFile(Root, Ref.DisplayPath, Dialog.FileName, ErrorText) Then
       Begin
         If ErrorText = '' Then ErrorText := 'The image could not be saved.';
-        MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+        RunAssistantModal(ErrorText, mtInformation, [mbOK], 0);
       End;
   Finally
     Dialog.Free;
@@ -5631,13 +5634,13 @@ Begin
   If Not ComposerAttachAllowed(Reason) Then
     Begin
       If Reason = '' Then Reason := 'Attach is disabled.';
-      MessageDlg(Reason, mtInformation, [mbOK], 0);
+      RunAssistantModal(Reason, mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureConversationStore;
   If ProjectAssistantRoot = '' Then
     Begin
-      MessageDlg('Open a project before attaching an image.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Open a project before attaching an image.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Dialog := TOpenDialog.Create(Nil);
@@ -5651,7 +5654,7 @@ Begin
       If Not AttachImageFile(Dialog.Files[I], ErrorText) Then
         Begin
           If ErrorText = '' Then ErrorText := 'That file is not an image.';
-          MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+          RunAssistantModal(ErrorText, mtInformation, [mbOK], 0);
         End;
   Finally
     Dialog.Free;
@@ -5714,7 +5717,7 @@ Begin
   If Not ComposerAttachAllowed(Reason) Then
     Begin
       If Reason = '' Then Reason := 'Attach is disabled.';
-      MessageDlg(Reason, mtInformation, [mbOK], 0);
+      RunAssistantModal(Reason, mtInformation, [mbOK], 0);
       Exit;
     End;
   For I := 0 To High(FileNames) Do
@@ -5723,7 +5726,7 @@ Begin
       If Not StillImageExtension(LocalName) Then Continue;
       If AttachImageFile(LocalName, ErrorText) Then Continue;
       If ErrorText = '' Then ErrorText := 'That file is not an image.';
-      MessageDlg(ErrorText, mtInformation, [mbOK], 0);
+      RunAssistantModal(ErrorText, mtInformation, [mbOK], 0);
     End;
 End;
 
@@ -5855,7 +5858,7 @@ Begin
     If PastedText <> '' Then
       InputMemo.SelText := PastedText;
     If (Not Attached) And (ImageError <> '') Then
-      MessageDlg(ImageError, mtInformation, [mbOK], 0);
+      RunAssistantModal(ImageError, mtInformation, [mbOK], 0);
   Finally
     Reader.Free;
     FPasteComposerBusy := False;
@@ -6764,7 +6767,7 @@ Begin
       If BlockReason = '' Then
         BlockReason := AssistantImageAttachRefusal;
       SetCurrentSystemNote(BlockReason);
-      MessageDlg(BlockReason, mtInformation, [mbOK], 0);
+      RunAssistantModal(BlockReason, mtInformation, [mbOK], 0);
       If Assigned(InputMemo) Then
         InputMemo.Text := DisplayText;
       Exit;
@@ -7158,7 +7161,7 @@ Begin
   Failed := False;
   If Not Assigned(LazarusIDE) Then
     Begin
-      MessageDlg('The IDE configuration path is not available.', mtInformation, [mbOK], 0);
+      RunAssistantModal('The IDE configuration path is not available.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
@@ -7168,7 +7171,7 @@ Begin
       Item := Connections.Active;
       If (Not Assigned(Item)) Or (Item.Id <> FActiveConnectionId) Then
         Begin
-          MessageDlg('No connection is selected. Choose one with the Settings button.', mtInformation, [mbOK], 0);
+          RunAssistantModal('No connection is selected. Choose one with the Settings button.', mtInformation, [mbOK], 0);
           Exit;
         End;
       If UpdateModel Then
@@ -7224,7 +7227,7 @@ Begin
         End;
       If FSending Or FPlanAgentRunning Or FReviewInProgress Then
         Begin
-          MessageDlg('Wait until the current work finishes before changing the model, effort, or permissions.',
+          RunAssistantModal('Wait until the current work finishes before changing the model, effort, or permissions.',
             mtInformation, [mbOK], 0);
           Exit;
         End;
@@ -7262,7 +7265,7 @@ Begin
       NotifyOpenProjectAssistantFormsConnectionChanged;
     End
   Else If Failed Then
-    MessageDlg('Could not save that choice.', mtError, [mbOK], 0);
+    RunAssistantModal('Could not save that choice.', mtError, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.FillSkillFooterMenu;
@@ -7398,7 +7401,7 @@ Begin
     End;
   If Trim(Body) = '' Then
     Body := 'Plan usage has not been reported for this connection yet.';
-  MessageDlg(Body, mtInformation, [mbOK], 0);
+  RunAssistantModal(Body, mtInformation, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.StatusFooterRightClick(Sender: TObject);
@@ -7414,12 +7417,12 @@ Var
 Begin
   If FUseCodex Then
     Begin
-      MessageDlg('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
+      RunAssistantModal('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If FUseClaude Then
     Begin
-      MessageDlg('Claude Code keeps the session. This assistant does not send its tool list or compact the transcript.',
+      RunAssistantModal('Claude Code keeps the session. This assistant does not send its tool list or compact the transcript.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -7446,7 +7449,7 @@ Begin
     Format('  Total           ~%d / %d', [Info.TotalTokens, Info.LimitTokens]);
   If Assigned(AssistantClient) And (AssistantClient.LastTrimNotice <> '') Then
     Body := Body + LineEnding + LineEnding + AssistantClient.LastTrimNotice;
-  MessageDlg(Body, mtInformation, [mbOK], 0);
+  RunAssistantModal(Body, mtInformation, [mbOK], 0);
 End;
 
 Procedure TProjectAssistantForm.SessionInfoActionExecute(Sender: TObject);
@@ -7457,12 +7460,12 @@ Var
 Begin
   If FUseCodex Then
     Begin
-      MessageDlg('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
+      RunAssistantModal('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If FUseClaude Then
     Begin
-      MessageDlg(ClaudeKeepsSessionText + LineEnding + LineEnding +
+      RunAssistantModal(ClaudeKeepsSessionText + LineEnding + LineEnding +
         'This assistant does not send its tool list or skill list.', mtInformation, [mbOK], 0);
       Exit;
     End;
@@ -7494,7 +7497,7 @@ Begin
     'Active plan: ' + PlanRel + LineEnding +
     'Project: ' + Root + LineEnding +
     'Signed in: ' + SignedIn;
-  MessageDlg(Body, mtInformation, [mbOK], 0);
+  RunAssistantModal(Body, mtInformation, [mbOK], 0);
 End;
 
 Procedure EnsureFooterMenu(Var Menu: TPopupMenu);
@@ -7516,7 +7519,7 @@ Var
 Begin
   If FUseClaude Then
     Begin
-      MessageDlg('Claude Code keeps the session. This assistant does not send its skill list.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Claude Code keeps the session. This assistant does not send its skill list.', mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureFooterMenu(FFooterMenu);
@@ -7537,12 +7540,12 @@ Begin
   PlanRel := GetActivePlanRelativePath;
   If PlanRel = '' Then
     Begin
-      MessageDlg('No active plan. Use the Plan tab to create or set one.', mtInformation, [mbOK], 0);
+      RunAssistantModal('No active plan. Use the Plan tab to create or set one.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If Not ResolvePlanPath(PlanRel, Resolved, Err) Then
     Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
+      RunAssistantModal(Err, mtError, [mbOK], 0);
       Exit;
     End;
   OpenMarkdownDocument(Resolved);
@@ -7557,12 +7560,12 @@ Begin
   Rel := GetActivePlanRelativePath;
   If Rel = '' Then
     Begin
-      MessageDlg('Select a plan to remove from the list.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Select a plan to remove from the list.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If Not RemoveAvailableAssistantPlan(Rel, Err) Then
     Begin
-      MessageDlg(Err, mtError, [mbOK], 0);
+      RunAssistantModal(Err, mtError, [mbOK], 0);
       Exit;
     End;
   SetActivePlanRelativePath('');
@@ -7630,7 +7633,7 @@ Var
   Procedure PicturesStay;
   Begin
     SetCurrentSystemNote('The pictures stay in the composer for the next message.');
-    MessageDlg('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
+    RunAssistantModal('The pictures stay in the composer for the next message.', mtInformation, [mbOK], 0);
   End;
 Begin
   If Not Assigned(InputMemo) Then Exit;
@@ -7664,7 +7667,7 @@ Begin
                   If Assigned(FCodexRun) And (FCodexRun.LastSteerError <> '') Then
                     Begin
                       SetCurrentSystemNote(FCodexRun.LastSteerError);
-                      MessageDlg(FCodexRun.LastSteerError, mtInformation, [mbOK], 0);
+                      RunAssistantModal(FCodexRun.LastSteerError, mtInformation, [mbOK], 0);
                     End
                   Else
                     PicturesStay;
@@ -7702,7 +7705,7 @@ Begin
   If (Not FUseCodex) And (Not FUseClaude) And
     ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
     Begin
-      MessageDlg('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
       SettingsActionExecute(Nil);
       Exit;
     End;
@@ -7934,7 +7937,7 @@ Begin
     End;
   If Not AssistantTarget.Available Then
     Begin
-      MessageDlg('Select a project or package before using Review ' + KindLabel + '.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Select a project or package before using Review ' + KindLabel + '.', mtInformation, [mbOK], 0);
       Exit;
     End;
 
@@ -8493,20 +8496,20 @@ Var
 Begin
   If FSending Then
     Begin
-      MessageDlg('Wait for the current reply to finish (or Stop) before Fix Error.',
+      RunAssistantModal('Wait for the current reply to finish (or Stop) before Fix Error.',
         mtInformation, [mbOK], 0);
       Exit;
     End;
   If Not Assigned(IDEMessagesWindow) Then
     Begin
-      MessageDlg('The IDE Messages window is not available.', mtInformation, [mbOK], 0);
+      RunAssistantModal('The IDE Messages window is not available.', mtInformation, [mbOK], 0);
       Exit;
     End;
   FPendingReviewErrorOffer := False;
   Line := ResolveMessageLineForFix(True);
   If Not Assigned(Line) Then
     Begin
-      MessageDlg('No compiler messages found. Run Compile/Build (or Review Compile) first, ' +
+      RunAssistantModal('No compiler messages found. Run Compile/Build (or Review Compile) first, ' +
         'or select a message in the Messages window, then choose Fix Error.',
         mtInformation, [mbOK], 0);
       Exit;
@@ -8554,7 +8557,7 @@ Begin
     Exit;
   If FSending Then
     Begin
-      MessageDlg('Stop the current reply before switching History.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Stop the current reply before switching History.', mtInformation, [mbOK], 0);
       RefreshHistoryCombo;
       Exit;
     End;
@@ -8570,7 +8573,7 @@ Begin
     Exit;
   If Not ProjectAssistantConversation.ActivateArchive(ArchiveId) Then
     Begin
-      MessageDlg('Could not open conversation:' + LineEnding + ProjectAssistantConversation.LastError,
+      RunAssistantModal('Could not open conversation:' + LineEnding + ProjectAssistantConversation.LastError,
         mtError, [mbOK], 0);
       RefreshHistoryCombo;
       Exit;
@@ -8589,13 +8592,13 @@ Var
 Begin
   If FSending Then
     Begin
-      MessageDlg('Stop the current reply before exporting.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Stop the current reply before exporting.', mtInformation, [mbOK], 0);
       Exit;
     End;
   EnsureConversationStore;
   If (Not Assigned(ProjectAssistantConversation)) Or (Not ProjectAssistantConversation.HasTurns) Then
     Begin
-      MessageDlg('There is nothing to export in the current conversation.', mtInformation, [mbOK], 0);
+      RunAssistantModal('There is nothing to export in the current conversation.', mtInformation, [mbOK], 0);
       Exit;
     End;
   Body := BuildConversationMarkdownExport;
@@ -8622,7 +8625,7 @@ Begin
       WorkflowLogger.Info('ProjectAssistant', 'Exported conversation to ' + Path);
     Except
       On E: Exception Do
-        MessageDlg('Could not write export file:' + LineEnding + E.Message, mtError, [mbOK], 0);
+        RunAssistantModal('Could not write export file:' + LineEnding + E.Message, mtError, [mbOK], 0);
     End;
   Finally
     SL.Free;
@@ -8636,7 +8639,7 @@ Var
 Begin
   If FSending Then
     Begin
-      MessageDlg('Stop the current reply before deleting a conversation.', mtInformation, [mbOK], 0);
+      RunAssistantModal('Stop the current reply before deleting a conversation.', mtInformation, [mbOK], 0);
       Exit;
     End;
   If Not Assigned(HistoryCombo) Or Not Assigned(HistoryIds) Then
@@ -8646,7 +8649,7 @@ Begin
   ArchiveId := HistoryIds[HistoryCombo.ItemIndex];
   LabelText := HistoryCombo.Items[HistoryCombo.ItemIndex];
   IsCurrent := ArchiveId = '';
-  If MessageDlg(
+  If RunAssistantModal(
     'Delete this conversation permanently?' + LineEnding + LineEnding +
     LabelText + LineEnding + LineEnding +
     'This cannot be undone.',
@@ -8657,7 +8660,7 @@ Begin
     Exit;
   If Not ProjectAssistantConversation.DeleteConversation(ArchiveId) Then
     Begin
-      MessageDlg('Could not delete conversation:' + LineEnding + ProjectAssistantConversation.LastError,
+      RunAssistantModal('Could not delete conversation:' + LineEnding + ProjectAssistantConversation.LastError,
         mtError, [mbOK], 0);
       Exit;
     End;
@@ -8769,7 +8772,7 @@ Begin
       If Not Assigned(Form.InputMemo) Then
         Exit;
       If (Trim(Form.InputMemo.Text) <> '') And
-        (MessageDlg('Replace the composer text with this task?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
+        (Form.RunAssistantModal('Replace the composer text with this task?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
         Exit;
       Form.SelectMode(TaskMode);
       Form.InputMemo.Text := Request.ApiText;
@@ -9804,6 +9807,27 @@ Begin
   If Mime = '' Then
     MeasureStillImage(Data, Mime, ImageWidth, ImageHeight);
   Result := True;
+End;
+
+Function TProjectAssistantForm.RunAssistantModal(Const Msg: String; DlgType: TMsgDlgType; Buttons: TMsgDlgButtons;
+  HelpCtx: Longint): Integer;
+Begin
+  BeginAssistantModal;
+  Try
+    Result := Dialogs.MessageDlg(Msg, DlgType, Buttons, HelpCtx);
+  Finally
+    EndAssistantModal;
+  End;
+End;
+
+Function TProjectAssistantForm.RunAssistantModal(Const QueryCaption, Prompt: String; Var Value: String): Boolean;
+Begin
+  BeginAssistantModal;
+  Try
+    Result := Dialogs.InputQuery(QueryCaption, Prompt, Value);
+  Finally
+    EndAssistantModal;
+  End;
 End;
 
 Initialization

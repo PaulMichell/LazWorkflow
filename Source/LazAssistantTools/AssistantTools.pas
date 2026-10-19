@@ -72,6 +72,7 @@ Uses
   Forms, Controls, Dialogs, Process, LazFileUtils, FileUtil, DirectoryListing, LazIDEIntf, ProjectIntf,
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
+  AssistantSessionObserve,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
@@ -244,7 +245,13 @@ Type
 
 Procedure TToolApprovalAsk.Ask;
 Begin
-  Allowed := MessageDlg(Prompt, mtConfirmation, [mbYes, mbNo], 0) = mrYes;
+  { Same counter as RunAssistantModal. A nil listener does not skip it. }
+  BeginAssistantModal;
+  Try
+    Allowed := MessageDlg(Prompt, mtConfirmation, [mbYes, mbNo], 0) = mrYes;
+  Finally
+    EndAssistantModal;
+  End;
 End;
 
 Function ApproveToolIfNeeded(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
