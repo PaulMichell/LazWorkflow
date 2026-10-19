@@ -60,6 +60,8 @@ Type
   End;
 
   TMonitorCommandHandler = Procedure(Kind: Integer; Const Id, PayloadJson: String) Of Object;
+  { The bridge writes approval_closed. Nil leaves a rejected decision silent. }
+  TMonitorApprovalCloseHandler = Procedure(Const ToolId, Reason: String) Of Object;
 
   TMonitorSession = Class
   Private
@@ -67,6 +69,7 @@ Type
     FState: TMonitorSessionState;
     FCarrier: IMonitorCarrier;
     FOnCommand: TMonitorCommandHandler;
+    FOnApprovalClosed: TMonitorApprovalCloseHandler;
     FBindAddress: String;
     FPort: Integer;
     FHostFingerprint: String;
@@ -109,6 +112,9 @@ Type
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
     FPendingCommandPayload: String;
+    FPendingApprovalClose: Boolean;
+    FPendingApprovalCloseId: String;
+    FPendingApprovalCloseReason: String;
     FClients: Array Of Record
       Id: String;
       Name: String;
@@ -145,6 +151,7 @@ Type
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure HandleApproval(Const PayloadJson: String);
+    Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
     Procedure FlushTranscriptLocked;
@@ -170,6 +177,15 @@ Type
     Procedure RevokeClient(Const ClientId: String);
     Procedure RevokeAll;
     Procedure NoteTurnEnded;
+    /// Next host frame id. Safe to call off the session lock.
+    Function AllocateHostId: String;
+    /// Queues one host frame and drains it. Does not build the JSON.
+    Procedure SendHostJson(Const Json: String);
+    Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
+    /// Records a pending or display id. Does not send a frame.
+    Procedure NoteApprovalRequested(Const ToolId: String; DecisionsAccepted: Boolean);
+    /// Records a closed id. Does not send a frame.
+    Procedure NoteApprovalClosed(Const ToolId: String);
     Procedure PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);
     Procedure CloseDisplayApproval(Const ToolId: String);
     Function ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
@@ -354,6 +370,8 @@ Begin
   FState := mssStopped;
   FCarrier := Nil;
   FOnCommand := Nil;
+  FOnApprovalClosed := Nil;
+  FPendingApprovalClose := False;
   FBindAddress := '';
   FPort := 0;
   FHostFingerprint := '';
@@ -921,6 +939,8 @@ Begin
     Exit;
   If ToolId <> FPendingApprovalId Then
     Exit;
+  If ReadAssistantApprovalDecision <> aadNone Then
+    Exit;
   If Allow Then
     StoreAssistantApprovalDecision(aadAllow)
   Else
@@ -929,13 +949,37 @@ Begin
   Result := ReadAssistantApprovalDecision <> aadNone;
 End;
 
+Function TMonitorSession.ApprovalRejectReason(Const ToolId: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  If (ToolId = '') Or (Not FRemoteApproval) Then
+    Exit;
+  If ReadAssistantApprovalDecision = aadStopped Then
+    Exit('stopped');
+  For I := 0 To High(FClosedToolIds) Do
+    If FClosedToolIds[I] = ToolId Then
+      Exit('finished');
+  If (ToolId = FDisplayApprovalId) Or (ToolId <> FPendingApprovalId) Then
+    Result := 'finished';
+End;
+
 Procedure TMonitorSession.HandleApproval(Const PayloadJson: String);
 Var
   Decision: TMonitorApprovalDecision;
+  Reason: String;
 Begin
   If Not DecodeMonitorApprovalDecision(PayloadJson, Decision) Then
     Exit;
-  ApplyApprovalDecision(Decision.ToolId, Decision.Allow);
+  If ApplyApprovalDecision(Decision.ToolId, Decision.Allow) Then
+    Exit;
+  Reason := ApprovalRejectReason(Decision.ToolId);
+  If Reason = '' Then
+    Exit;
+  FPendingApprovalClose := True;
+  FPendingApprovalCloseId := Decision.ToolId;
+  FPendingApprovalCloseReason := Reason;
 End;
 
 Procedure TMonitorSession.HandleLocked(Const Frame: TMonitorFrame);
@@ -973,7 +1017,7 @@ Begin
     mmkBye: HandleBye;
     mmkPong: ;
     mmkApprovalDecision: HandleApproval(Message.PayloadJson);
-    mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkWorkOnPlan, mmkRunTask,
+    mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
     mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
   Else
@@ -1430,14 +1474,16 @@ End;
 
 Procedure TMonitorSession.InboundFrame(Const Frame: TMonitorFrame);
 Var
-  RunCommand: Boolean;
+  RunCommand, RunClose: Boolean;
   CommandKind: Integer;
-  CommandId, CommandPayload: String;
+  CommandId, CommandPayload, CloseId, CloseReason: String;
   Handler: TMonitorCommandHandler;
+  CloseHandler: TMonitorApprovalCloseHandler;
 Begin
   LockSession;
   Try
     FPendingCommand := False;
+    FPendingApprovalClose := False;
     HandleLocked(Frame);
     RunCommand := FPendingCommand;
     CommandKind := FPendingCommandKind;
@@ -1445,12 +1491,88 @@ Begin
     CommandPayload := FPendingCommandPayload;
     Handler := FOnCommand;
     FPendingCommand := False;
+    RunClose := FPendingApprovalClose;
+    CloseId := FPendingApprovalCloseId;
+    CloseReason := FPendingApprovalCloseReason;
+    CloseHandler := FOnApprovalClosed;
+    FPendingApprovalClose := False;
   Finally
     UnlockSession;
   End;
   DrainSends;
+  If RunClose And Assigned(CloseHandler) Then
+    CloseHandler(CloseId, CloseReason);
   If RunCommand And Assigned(Handler) Then
     Handler(CommandKind, CommandId, CommandPayload);
+End;
+
+Function TMonitorSession.AllocateHostId: String;
+Begin
+  LockSession;
+  Try
+    Result := NewHostId;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.SendHostJson(Const Json: String);
+Begin
+  If Json = '' Then
+    Exit;
+  LockSession;
+  Try
+    QueueSend(Json);
+  Finally
+    UnlockSession;
+  End;
+  DrainSends;
+End;
+
+Procedure TMonitorSession.SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
+Begin
+  LockSession;
+  Try
+    FOnApprovalClosed := Handler;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.NoteApprovalRequested(Const ToolId: String; DecisionsAccepted: Boolean);
+Begin
+  LockSession;
+  Try
+    If ToolId = '' Then
+      Exit;
+    If DecisionsAccepted Then
+      Begin
+        FPendingApprovalId := ToolId;
+        If FDisplayApprovalId = ToolId Then
+          FDisplayApprovalId := '';
+      End
+    Else
+      FDisplayApprovalId := ToolId;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.NoteApprovalClosed(Const ToolId: String);
+Begin
+  LockSession;
+  Try
+    If ToolId = '' Then
+      Exit;
+    SetLength(FClosedToolIds, Length(FClosedToolIds) + 1);
+    FClosedToolIds[High(FClosedToolIds)] := ToolId;
+    If FPendingApprovalId = ToolId Then
+      FPendingApprovalId := '';
+    If FDisplayApprovalId = ToolId Then
+      FDisplayApprovalId := '';
+  Finally
+    UnlockSession;
+  End;
 End;
 
 End.

@@ -18,7 +18,7 @@
     <Description Value="Remote monitor catalogue, frames, and session for the Project Assistant"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="7">
+    <Files Count="9">
       <Item1>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorFrames.pas"/>
         <UnitName Value="AssistantMonitorFrames"/>
@@ -47,6 +47,14 @@
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorLan.pas"/>
         <UnitName Value="AssistantMonitorLan"/>
       </Item7>
+      <Item8>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorApproval.pas"/>
+        <UnitName Value="AssistantMonitorApproval"/>
+      </Item8>
+      <Item9>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorBridge.pas"/>
+        <UnitName Value="AssistantMonitorBridge"/>
+      </Item9>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>
