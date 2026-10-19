@@ -261,6 +261,7 @@ Type
     FDisplayThinkingMs: Integer; { Stored thinking time when browsing history. }
     FShowThinking: Boolean;
     FShowToolUse: Boolean;
+    FEditorFontHooked: Boolean;
     ActiveMode: TAssistantMode;
     FModelName: String;
     FContextUsed: Integer;
@@ -430,6 +431,10 @@ Type
     Function AutoCompactAtLimitEnabled: Boolean;
     Function CompactOpenChat: Integer;
     Procedure ApplyDisplayPreferences;
+    Procedure ApplyConversationFont;
+    Procedure HookEditorFont;
+    Procedure UnhookEditorFont;
+    Procedure EditorOptionsChanged(Sender: TObject);
     Function ConversationListTurnIndex(ListIndex: Integer): Integer;
     Procedure UpdateStatusFooter;
     Procedure ApplyAccountUsageLabel;
@@ -695,6 +700,7 @@ Begin
   If OwnWrite Then
     GlobalNameSpace.BeginWrite;
   Destroying;
+  UnhookEditorFont;
   If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
   ReleasePlanStallWatch;
   If Assigned(FPlanStallTimer) Then
@@ -771,6 +777,7 @@ Begin
       StatusFooter.OnRightClick := @StatusFooterRightClick;
     End;
   ApplyDisplayPreferences;
+  HookEditorFont;
   If Not Assigned(ElapsedTimer) Then
     Begin
       ElapsedTimer := TTimer.Create(Self);
@@ -968,6 +975,7 @@ End;
 
 Procedure TProjectAssistantForm.FormShow(Sender: TObject);
 Begin
+  ApplyConversationFont;
   If Not FInputDropArmed Then
     Begin
       ArmControlFileDrop(InputPanel, Self);
@@ -4155,10 +4163,66 @@ Begin
       [Result]));
 End;
 
+Function ConversationTextSize: Integer;
+Begin
+  Result := 10;
+  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ConversationFontSize > 0) Then
+    Exit(AssistantChatConfig.ConversationFontSize);
+  If IDEEditorTextSize > 0 Then
+    Result := IDEEditorTextSize;
+End;
+
+Procedure TProjectAssistantForm.ApplyConversationFont;
+Var
+  TextSize: Integer;
+Begin
+  If Not Assigned(FTraceView) Or Not Assigned(FTraceView.Surface) Then
+    Exit;
+  TextSize := ConversationTextSize;
+  If TextSize < 1 Then
+    TextSize := 10;
+  If FTraceView.Surface.Font.Size <> TextSize Then
+    FTraceView.Surface.Font.Size := TextSize;
+End;
+
+Procedure TProjectAssistantForm.HookEditorFont;
+Begin
+  If FEditorFontHooked Or Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Try
+    SourceEditorManagerIntf.RegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
+    FEditorFontHooked := True;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ProjectAssistant', 'HookEditorFont: ' + E.Message);
+  End;
+End;
+
+Procedure TProjectAssistantForm.UnhookEditorFont;
+Begin
+  If Not FEditorFontHooked Then
+    Exit;
+  FEditorFontHooked := False;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Try
+    SourceEditorManagerIntf.UnRegisterChangeEvent(semEditorOptsChanged, @EditorOptionsChanged);
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('ProjectAssistant', 'UnhookEditorFont: ' + E.Message);
+  End;
+End;
+
+Procedure TProjectAssistantForm.EditorOptionsChanged(Sender: TObject);
+Begin
+  ApplyConversationFont;
+End;
+
 Procedure TProjectAssistantForm.ApplyDisplayPreferences;
 Var
   ShowThinking, ShowTools: Boolean;
 Begin
+  ApplyConversationFont;
   ShowThinking := True;
   ShowTools := True;
   If Assigned(AssistantChatConfig) Then

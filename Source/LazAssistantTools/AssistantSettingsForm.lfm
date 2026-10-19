@@ -345,7 +345,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
       end
       object TranscriptGroup: TGroupBox
         Left = 0
-        Height = 88
+        Height = 120
         Top = 0
         Width = 972
         Align = alTop
@@ -376,6 +376,35 @@ object AssistantSettingsForm: TAssistantSettingsForm
           ParentShowHint = False
           ShowHint = True
           TabOrder = 1
+        end
+        object ConversationSizeLabel: TLabel
+          Left = 12
+          Height = 17
+          Top = 68
+          Width = 64
+          Caption = 'Text size'
+          ParentColor = False
+        end
+        object ConversationSizeEdit: TSpinEdit
+          Left = 88
+          Height = 28
+          Top = 62
+          Width = 72
+          Hint = 'Points. Zero uses the IDE editor font size.'
+          MaxValue = 72
+          MinValue = 0
+          ParentShowHint = False
+          ShowHint = True
+          TabOrder = 2
+          Value = 0
+        end
+        object ConversationSizeNote: TLabel
+          Left = 168
+          Height = 17
+          Top = 68
+          Width = 180
+          Caption = 'points, 0 = IDE editor'
+          ParentColor = False
         end
       end
     end

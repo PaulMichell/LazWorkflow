@@ -517,7 +517,7 @@ Procedure TAssistantConversationSurface.EndDocument;
 Begin
   FLayout.EndSync;
   ConfigureCanvas;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
+  FLayout.Configure(ViewRect.Width, Max(1, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
   TrimPictures;
   BackgroundIndex := 0;
   FUpdating := True;
@@ -741,7 +741,7 @@ Begin
   If Not Assigned(FLayout) Or FUpdating Then Exit;
   Anchor := CaptureAnchor;
   ConfigureCanvas;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
+  FLayout.Configure(ViewRect.Width, Max(1, Font.Size), FShowThinking, FShowTools, Font.PixelsPerInch);
   BackgroundIndex := 0;
   FUpdating := True;
   Try
@@ -821,7 +821,7 @@ Begin
   ClearSelection;
   FShowThinking := Thinking;
   FShowTools := Tools;
-  FLayout.Configure(ViewRect.Width, Max(10, Font.Size), Thinking, Tools, Font.PixelsPerInch);
+  FLayout.Configure(ViewRect.Width, Max(1, Font.Size), Thinking, Tools, Font.PixelsPerInch);
   FUpdating := True;
   Try
     SetExtent(ViewRect.Width, FLayout.TotalHeight);

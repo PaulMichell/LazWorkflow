@@ -24,11 +24,48 @@ Const
 Function BuildIDEContextBlock: String;
 { Smaller attach for long conversations (cursor + selection or short head of file). }
 Function BuildIDEContextBlockLight: String;
+/// Point size of the IDE editor text. Zero when the editor font is not available.
+Function IDEEditorTextSize: Integer;
 
 Implementation
 
 Uses
-  LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog, AssistantWorkTarget;
+  Controls, LazIDEIntf, SrcEditorIntf, ProjectIntf, WorkflowLog, AssistantWorkTarget, EditorOptionsIntf, SynEdit;
+
+Function IDEEditorTextSize: Integer;
+Var
+  Editor: TSourceEditorInterface;
+  Control: TWinControl;
+  Probe: TSynEdit;
+Begin
+  Result := 0;
+  If Assigned(SourceEditorManagerIntf) Then
+    Begin
+      Editor := SourceEditorManagerIntf.ActiveEditor;
+      If Not Assigned(Editor) And (SourceEditorManagerIntf.SourceEditorCount > 0) Then
+        Editor := SourceEditorManagerIntf.SourceEditors[0];
+      If Assigned(Editor) Then
+        Begin
+          Control := Editor.EditorControl;
+          If Assigned(Control) And (Control.Font.Size > 0) Then
+            Exit(Control.Font.Size);
+        End;
+    End;
+  If Not Assigned(IDEEditorOptions) Then
+    Exit;
+  Probe := TSynEdit.Create(Nil);
+  Try
+    Try
+      IDEEditorOptions.GetSynEditorSettings(Probe);
+      If Probe.Font.Size > 0 Then
+        Result := Probe.Font.Size;
+    Except
+      Result := 0;
+    End;
+  Finally
+    Probe.Free;
+  End;
+End;
 
 Function CapText(Const TextValue: String; MaxChars: Integer): String;
 Begin
