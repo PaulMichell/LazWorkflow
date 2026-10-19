@@ -44,8 +44,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -195,18 +198,27 @@ class LanSession(
   private val policy = ReconnectPolicy()
   private val session = computing.michell.monitor.protocol.SessionState()
   private val statusState = MutableStateFlow(LinkStatus())
+  private val inbound = MutableSharedFlow<computing.michell.monitor.protocol.MonitorMessage>(replay = 32)
   private var loop: Job? = null
   private var link: TlsLink? = null
   private var pairCode = ""
   private var stopped = false
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
+  val messages: SharedFlow<computing.michell.monitor.protocol.MonitorMessage> = inbound.asSharedFlow()
   val reconnectPaused: Boolean
     get() = policy.paused
 
   @Volatile
   var promptDraft: String = ""
     private set
+
+  fun sendCatalogue(json: String) {
+    if (json.isEmpty() || stopped) return
+    scope.launch { writeJson(json) }
+  }
+
+  fun nextCommandId(): String = newId()
 
   fun updateDraft(text: String) {
     promptDraft = text
@@ -388,6 +400,7 @@ class LanSession(
     if (!envelope.ok) return
     val message = envelope.message
     session.apply(message)
+    inbound.tryEmit(message)
     when (message.kind) {
       MessageKind.PairOk -> {
         val paired = decodePairOk(message.payloadJson)

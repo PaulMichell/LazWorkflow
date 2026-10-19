@@ -1025,6 +1025,11 @@ fun statusToJson(view: WireView): JsonValue.Obj {
 
 fun statusFromJson(obj: JsonValue.Obj): WireView? = readStatusFields(obj)
 
+fun decodeStatusPayload(payloadJson: String): WireView? {
+  val obj = parseObject(payloadJson) ?: return null
+  return statusFromJson(obj)
+}
+
 fun viewToJson(view: WireView): JsonValue.Obj {
   val obj = JsonObjectBuilder()
   addStatusFields(obj, view)
