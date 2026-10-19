@@ -533,7 +533,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
-  AssistantFileDrop;
+  AssistantFileDrop, AssistantSessionObserve;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
@@ -759,6 +759,7 @@ Begin
       AssistantClient.OnContinuationQuery := @QueryContinuation;
     End;
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
+  AssistantSessionObserve.AssistantSessionObserve(asnSession);
 End;
 
 Function TargetFolderCaption(Const Path: String): String;
@@ -855,6 +856,7 @@ Begin
     Begin
       MessageDlg(Note, mtError, [mbOK], 0);
       RefreshTargetChoices(Nil);
+      AssistantSessionObserve.AssistantSessionObserve(asnTarget);
       Exit;
     End;
   If AssistantTarget.Kind = atkFolder Then
@@ -872,6 +874,7 @@ Begin
       UpdateWorkActions;
     End;
   RefreshTargetChoices(Nil);
+  AssistantSessionObserve.AssistantSessionObserve(asnTarget);
 End;
 
 Procedure TProjectAssistantForm.TargetChoiceChanged(Sender: TObject);
@@ -954,6 +957,12 @@ End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
+  Try
+    AssistantSessionObserve.AssistantSessionObserve(asnSession);
+  Except
+    On E: Exception Do
+      ClassifyFormFault(Self, afoCallbackAfterDetach, 'TProjectAssistantForm.FormDestroy', E, False);
+  End;
   Try
     ReleaseInputFileDrop(Self);
     FreeAndNil(FTargetPaths);
@@ -1147,6 +1156,7 @@ Begin
   ApplyActiveMode;
   If Not FSkipModePersist Then
     PersistShellConfig;
+  AssistantSessionObserve.AssistantSessionObserve(asnMode);
 End;
 
 Procedure TProjectAssistantForm.SyncModeUi;
@@ -1698,7 +1708,10 @@ Begin
   If Assigned(BuildStatusLabel) Then
     BuildStatusLabel.Caption := '';
   If Not Assigned(BuildTodoList) Then
-    Exit;
+    Begin
+      AssistantSessionObserve.AssistantSessionObserve(asnPlan);
+      Exit;
+    End;
   PlanRel := GetActivePlanRelativePath;
   KeepHeading := -1;
   If Assigned(BuildSections) And (FBuildSelectedIndex >= 0) And
@@ -1789,6 +1802,7 @@ Begin
     FBuildSelectedIndex := BuildTodoList.ItemIndex;
   Finally
     BuildTodoList.Items.EndUpdate;
+    AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   End;
 End;
 
@@ -2296,6 +2310,7 @@ Begin
   SetBuildStatusFeedback('Plan run ended: ' + AssistantPlanRunWhy(Facts));
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Plan run ended: ' + AssistantPlanRunWhy(Facts));
+  AssistantSessionObserve.AssistantSessionObserve(asnPlan);
 End;
 
 Procedure TProjectAssistantForm.PostPlanRunReport(Const Report: String);
@@ -2402,6 +2417,7 @@ Begin
       Exit;
     End;
   FPlanAgentRunning := True;
+  AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   SyncCodexUsageIdle;
   SetAssistantPlanViewerQuiet(True);
   FPlanAgentPackagesDone := 0;
@@ -4426,6 +4442,7 @@ Begin
   ApplySkillStatus;
   If (Not FUseCodex) And (Not FUseClaude) And (Not FSending) And (Pct >= PlanContextThreshold) Then
     MaybeWarnHighContextUsage;
+  AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
 
 Procedure TProjectAssistantForm.MaybeWarnHighContextUsage;
@@ -5913,6 +5930,8 @@ Var
   Block: TTraceBlock;
 Begin
   If csDestroying In ComponentState Then Exit;
+  { Notice on every return. A nil listener stops at the assigned check. }
+  Try
   If (Event.Kind = aekToolCompleted) And Event.Ok Then
     If SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown') Then
       FPlanWriteThisTurn := True;
@@ -6052,6 +6071,10 @@ Begin
   Except
     On E: Exception Do
       ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.HandleTraceEvent', E, False);
+  End;
+  Finally
+    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+    AssistantSessionObserve.AssistantSessionObserve(asnPhase);
   End;
 End;
 
@@ -6324,6 +6347,8 @@ Var
   FinishFacts: TAssistantTurnFinishFacts;
   Answer: TAssistantContinuation;
 Begin
+  { Notice on every return. A nil listener stops at the assigned check. }
+  Try
   If FSending And (Not FUserCancelled) And TryDeferDroppedTransport(FLiveContent, ErrorText, ErrorText) Then
     Begin
       { Keep the broker. The process is dead; the same prompt is started again after the wait. }
@@ -6531,6 +6556,11 @@ Begin
   RefreshConversationList;
   RefreshChatDisplay(True, True);
   PersistSession;
+  Finally
+    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+    AssistantSessionObserve.AssistantSessionObserve(asnError);
+    AssistantSessionObserve.AssistantSessionObserve(asnStatus);
+  End;
 End;
 
 Procedure TProjectAssistantForm.StreamToken(Const ContentSnapshot, ThinkingSnapshot: String;
@@ -6543,6 +6573,8 @@ Begin
       ClassifyFormFault(Self, afoCallbackAfterDetach, 'TProjectAssistantForm.StreamToken', Nil, False);
       Exit;
     End;
+  { Notice on every return. A nil listener stops at the assigned check. }
+  Try
   { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
     Begin
@@ -6571,6 +6603,10 @@ Begin
   If FSending And ((ContentSnapshot <> '') Or (ThinkingSnapshot <> '')) Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(FinishErr);
+  Finally
+    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+    AssistantSessionObserve.AssistantSessionObserve(asnPhase);
+  End;
 End;
 
 Procedure TProjectAssistantForm.StopStream;
@@ -6627,6 +6663,9 @@ Begin
   If FPlanAgentRunning Then
     StopRunPlan(preUserStop, 'stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');
+  AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+  AssistantSessionObserve.AssistantSessionObserve(asnError);
+  AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
 
 Function TProjectAssistantForm.BuildSubmitApiText(Const ModelText: String; Out WithContext: Boolean): String;

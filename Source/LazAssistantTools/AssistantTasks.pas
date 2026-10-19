@@ -119,7 +119,7 @@ Var
 Implementation
 
 Uses
-  fpjson, jsonparser, WorkflowSettings;
+  fpjson, jsonparser, WorkflowSettings, AssistantSessionObserve;
 
 Function TaskIdIsSafe(Const TaskId: String): Boolean;
 Var
@@ -984,6 +984,8 @@ Begin
   Finally
     Section.Free;
   End;
+  If Result Then
+    AssistantSessionObserve.AssistantSessionObserve(asnTasks);
 End;
 
 Function ResetBuiltinAssistantTask(Var Tasks: TAssistantTaskArray; Const TaskId: String; Out ErrorText: String): Boolean;

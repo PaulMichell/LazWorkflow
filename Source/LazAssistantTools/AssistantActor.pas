@@ -143,7 +143,7 @@ Implementation
 
 Uses
   AssistantTools, AssistantSubagents, AssistantAccountUsage,
-  AssistantTurnFinish, WorkflowLog;
+  AssistantTurnFinish, WorkflowLog, AssistantSessionObserve;
 
 Const
   MaxAskToolRounds = 12;
@@ -259,6 +259,8 @@ End;
 Procedure TAssistantActor.Cancel;
 Begin
   Terminate;
+  StoreAssistantApprovalDecision(aadStopped);
+  SignalAssistantApprovalWait;
   AbortHttp;
 End;
 
@@ -306,6 +308,8 @@ Begin
   Finally
     LeaveCriticalSection(FSnapLock);
   End;
+  StoreAssistantApprovalDecision(aadStopped);
+  SignalAssistantApprovalWait;
   AbortHttp;
 End;
 
