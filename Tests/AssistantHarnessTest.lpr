@@ -141,6 +141,10 @@ Begin
     Names.Add('free-pascal-engineer');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build with free-pascal-engineer tagged attaches its body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
+    Names.Add('imagine');
+    Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
+    Check('two tagged skills both attach', (Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0) And
+      (Pos('IMAGINE BODY', Prompt) > 0));
     Names.Clear;
     Prompt := Harness.BuildSystemPrompt(amChat, Names, Root, '');
     Check('chat names general chat', Pos('general chat', Prompt) > 0);

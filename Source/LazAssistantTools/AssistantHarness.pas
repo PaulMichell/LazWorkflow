@@ -264,16 +264,14 @@ End;
 
 Function TAssistantHarness.BuildSkillsSection(Const ProjectRoot: String; SkillNames: TStrings): String;
 Var
-  Skills: TAssistantSkillList;
   Bodies: TStringList;
   Tagged: String;
 Begin
-  Skills := ListGuidanceDocuments(ProjectRoot);
   Bodies := TStringList.Create;
   Try
     Bodies.Add('<skills>');
     Bodies.Add('Catalog (name + description + when-to-use). Load a body with `read_skill` when you need it.');
-    Bodies.Add(FormatSkillCatalog(Skills));
+    Bodies.Add(SkillCatalogText);
     Tagged := AttachTaggedSkills(SkillNames, ProjectRoot);
     If Tagged <> '' Then
       Bodies.Add(Tagged);

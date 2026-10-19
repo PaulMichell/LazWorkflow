@@ -1,7 +1,8 @@
 Unit AssistantSkills;
 
 { Load skills named in the installation settings. A file on disk is not a skill until it is added.
-  Project directories are not scanned (c) 2026 Michell Computing. }
+  Project directories are not scanned. The prompt catalog is cached until the installed list
+  or a file age changes (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -39,6 +40,8 @@ Function SkillNameIsSafe(Const SkillName: String): Boolean;
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
 /// Installed skills from the settings enumerator. Project directories are not scanned.
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
+/// Catalog lines for the system prompt. Cached until the installed list or a file age changes.
+Function SkillCatalogText: String;
 /// Directory name when FilePath is one SKILL.md under a known catalog root, otherwise empty.
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
 /// Name written in the document. The file stem is used only when that name is missing or unsafe.
@@ -211,40 +214,6 @@ Begin
       End;
 End;
 
-Function SkillInfoFromFile(Const SkillName, SkillFile: String; Out Info: TAssistantSkillInfo): Boolean;
-Var
-  Raw, Declared: String;
-  SL: TStringList;
-Begin
-  Result := False;
-  Info.Name := SkillName;
-  Info.Description := '';
-  Info.WhenToUse := '';
-  Info.SkillFile := SkillFile;
-  If (SkillName = '') Or (SkillFile = '') Or (Not FileExistsUTF8(SkillFile)) Then
-    Exit;
-  SL := TStringList.Create;
-  Try
-    Try
-      SL.LoadFromFile(SkillFile);
-      Raw := SL.Text;
-      Declared := DeclaredSkillName(Raw);
-      If Declared <> '' Then
-        Info.Name := Declared;
-      Info.Description := ExtractFrontMatterField(Raw, 'description');
-      Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
-      If Info.WhenToUse = '' Then
-        Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
-      Result := True;
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('AssistantSkills', 'Failed to read ' + SkillFile + ': ' + E.Message);
-    End;
-  Finally
-    SL.Free;
-  End;
-End;
-
 Function SkillIsEnumerated(Const SkillName: String): Boolean;
 Var
   Names, Paths: TStringList;
@@ -265,43 +234,193 @@ Begin
   End;
 End;
 
-Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
+Type
+  TSkillBodyCacheEntry = Record
+    Name: String;
+    FilePath: String;
+    Age: LongInt;
+    Body: String;
+  End;
+
 Var
-  Names, Paths: TStringList;
+  { One entry per skill file. A second tagged skill must not replace the first. }
+  SkillBodyCache: Array Of TSkillBodyCacheEntry;
+  GuidanceCacheSignature: String;
+  GuidanceCacheDocuments: TAssistantSkillList;
+  GuidanceCacheCatalog: String;
+  GuidanceCacheValid: Boolean;
+
+Procedure CollectInstalledGuidance(Names, Paths: TStrings);
+Begin
+  If Assigned(SkillFileEnumerator) Then
+    SkillFileEnumerator(Names, Paths);
+End;
+
+Function InstalledGuidanceSignature(Names, Paths: TStrings): String;
+Var
+  I, Limit: Integer;
+Begin
+  Result := IntToStr(Names.Count) + #1 + IntToStr(Paths.Count) + #2;
+  Limit := Names.Count;
+  If Paths.Count < Limit Then
+    Limit := Paths.Count;
+  For I := 0 To Limit - 1 Do
+    Result := Result + Names[I] + #1 + Paths[I] + #1 + IntToStr(FileAge(Paths[I])) + #2;
+End;
+
+Function LoadSkillRaw(Const FilePath: String; Out Raw: String): Boolean;
+Var
+  SL: TStringList;
+Begin
+  Result := False;
+  Raw := '';
+  If (Trim(FilePath) = '') Or (Not FileExistsUTF8(FilePath)) Then
+    Exit;
+  SL := TStringList.Create;
+  Try
+    Try
+      SL.LoadFromFile(FilePath);
+      Raw := SL.Text;
+      Result := True;
+    Except
+      On E: Exception Do
+        WorkflowLogger.Warning('AssistantSkills', 'Failed to read ' + FilePath + ': ' + E.Message);
+    End;
+  Finally
+    SL.Free;
+  End;
+End;
+
+Function PrepareSkillBody(Const SkillName, Raw: String): String;
+Begin
+  Result := StripYamlFrontMatter(Raw);
+  If Result = '' Then
+    Result := Trim(Raw);
+  If Length(Result) > AssistantSkillMaxChars Then
+    Begin
+      Result := Copy(Result, 1, AssistantSkillMaxChars) + LineEnding + LineEnding +
+        '[Skill truncated at ' + IntToStr(AssistantSkillMaxChars) + ' characters for context size.]';
+      WorkflowLogger.Warning('AssistantSkills', 'Skill ' + SkillName + ' truncated for system prompt');
+    End;
+End;
+
+Function CachedSkillBody(Const SkillFile: String; Age: LongInt; Out BodyText: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := False;
+  BodyText := '';
+  For I := 0 To High(SkillBodyCache) Do
+    If SameFileName(SkillBodyCache[I].FilePath, SkillFile) And (SkillBodyCache[I].Age = Age) And
+      (SkillBodyCache[I].Body <> '') Then
+      Begin
+        BodyText := SkillBodyCache[I].Body;
+        Result := True;
+        Exit;
+      End;
+End;
+
+Procedure StoreSkillBody(Const SkillName, SkillFile: String; Age: LongInt; Const BodyText: String);
+Var
+  I: Integer;
+Begin
+  If (BodyText = '') Or (Trim(SkillFile) = '') Then
+    Exit;
+  For I := 0 To High(SkillBodyCache) Do
+    If SameFileName(SkillBodyCache[I].FilePath, SkillFile) Then
+      Begin
+        SkillBodyCache[I].Name := SkillName;
+        SkillBodyCache[I].Age := Age;
+        SkillBodyCache[I].Body := BodyText;
+        Exit;
+      End;
+  SetLength(SkillBodyCache, Length(SkillBodyCache) + 1);
+  SkillBodyCache[High(SkillBodyCache)].Name := SkillName;
+  SkillBodyCache[High(SkillBodyCache)].FilePath := SkillFile;
+  SkillBodyCache[High(SkillBodyCache)].Age := Age;
+  SkillBodyCache[High(SkillBodyCache)].Body := BodyText;
+End;
+
+Procedure RebuildGuidanceCache(Names, Paths: TStrings; Const Signature: String);
+Var
   Info: TAssistantSkillInfo;
   I: Integer;
-  Declared: String;
+  Declared, Raw, Body: String;
+  Age: LongInt;
 Begin
-  Result := Nil;
-  If Not Assigned(SkillFileEnumerator) Then
-    Exit;
+  GuidanceCacheDocuments := Nil;
+  For I := 0 To Names.Count - 1 Do
+    Begin
+      If I >= Paths.Count Then
+        Break;
+      Raw := '';
+      Declared := '';
+      Info.Name := '';
+      Info.Description := '';
+      Info.WhenToUse := '';
+      Info.SkillFile := Paths[I];
+      If (Trim(Paths[I]) <> '') And FileExistsUTF8(Paths[I]) And LoadSkillRaw(Paths[I], Raw) Then
+        Begin
+          Declared := DeclaredSkillName(Raw);
+          If Declared = '' Then
+            Declared := SkillNameFromFile(Paths[I]);
+          Info.Name := Declared;
+          Info.Description := ExtractFrontMatterField(Raw, 'description');
+          Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
+          If Info.WhenToUse = '' Then
+            Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
+          Age := FileAge(Paths[I]);
+          Body := PrepareSkillBody(Declared, Raw);
+          StoreSkillBody(Declared, Paths[I], Age, Body);
+        End
+      Else If (Trim(Paths[I]) <> '') And FileExistsUTF8(Paths[I]) Then
+        Declared := SkillNameFromFile(Paths[I])
+      Else
+        Declared := Trim(Names[I]);
+      If Declared = '' Then
+        Declared := Trim(Names[I]);
+      If (Declared = '') Or SkillNameTaken(GuidanceCacheDocuments, Declared) Then
+        Continue;
+      Info.Name := Declared;
+      If Info.SkillFile = '' Then
+        Info.SkillFile := Paths[I];
+      SetLength(GuidanceCacheDocuments, Length(GuidanceCacheDocuments) + 1);
+      GuidanceCacheDocuments[High(GuidanceCacheDocuments)] := Info;
+    End;
+  GuidanceCacheCatalog := FormatSkillCatalog(GuidanceCacheDocuments);
+  GuidanceCacheSignature := Signature;
+  GuidanceCacheValid := True;
+End;
+
+Procedure EnsureGuidanceCache;
+Var
+  Names, Paths: TStringList;
+  Signature: String;
+Begin
   Names := TStringList.Create;
   Paths := TStringList.Create;
   Try
-    SkillFileEnumerator(Names, Paths);
-    For I := 0 To Names.Count - 1 Do
-      Begin
-        Declared := SkillDocumentName(Paths[I]);
-        If Declared = '' Then
-          Declared := Trim(Names[I]);
-        If (Declared = '') Or SkillNameTaken(Result, Declared) Then
-          Continue;
-        If Not SkillInfoFromFile(Declared, Paths[I], Info) Then
-          Begin
-            Info.Name := Declared;
-            Info.Description := '';
-            Info.WhenToUse := '';
-            Info.SkillFile := Paths[I];
-          End;
-        If Info.Name = '' Then
-          Continue;
-        SetLength(Result, Length(Result) + 1);
-        Result[High(Result)] := Info;
-      End;
+    CollectInstalledGuidance(Names, Paths);
+    Signature := InstalledGuidanceSignature(Names, Paths);
+    If GuidanceCacheValid And (Signature = GuidanceCacheSignature) Then
+      Exit;
+    RebuildGuidanceCache(Names, Paths, Signature);
   Finally
     Paths.Free;
     Names.Free;
   End;
+End;
+
+Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
+Begin
+  EnsureGuidanceCache;
+  Result := GuidanceCacheDocuments;
+End;
+
+Function SkillCatalogText: String;
+Begin
+  EnsureGuidanceCache;
+  Result := GuidanceCacheCatalog;
 End;
 
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
@@ -435,17 +554,9 @@ Begin
   End;
 End;
 
-Var
-  { In-process skill body cache — avoids disk on every prompt. }
-  SkillCacheName: String;
-  SkillCacheFile: String;
-  SkillCacheAge: LongInt;
-  SkillCacheBody: String;
-
 Function LoadSkillBody(Const SkillName, ProjectRoot: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Var
   SkillFile, Raw: String;
-  SL: TStringList;
   Age: LongInt;
 Begin
   Result := False;
@@ -480,47 +591,22 @@ Begin
       Exit;
     End;
   Age := FileAge(SkillFile);
-  If SameText(SkillCacheName, SkillName) And SameFileName(SkillCacheFile, SkillFile) And
-    (SkillCacheAge = Age) And (SkillCacheBody <> '') Then
+  If CachedSkillBody(SkillFile, Age, BodyText) Then
     Begin
-      BodyText := SkillCacheBody;
       Result := True;
       Exit;
     End;
-  SL := TStringList.Create;
-  Try
-    Try
-      SL.LoadFromFile(SkillFile);
-      Raw := SL.Text;
-    Except
-      On E: Exception Do
-        Begin
-          ErrorText := E.Message;
-          Exit;
-        End;
-    End;
-  Finally
-    SL.Free;
-  End;
-  BodyText := StripYamlFrontMatter(Raw);
-  If BodyText = '' Then
-    BodyText := Trim(Raw);
-  If Length(BodyText) > AssistantSkillMaxChars Then
+  If Not LoadSkillRaw(SkillFile, Raw) Then
     Begin
-      BodyText := Copy(BodyText, 1, AssistantSkillMaxChars) + LineEnding + LineEnding +
-        '[Skill truncated at ' + IntToStr(AssistantSkillMaxChars) + ' characters for context size.]';
-      WorkflowLogger.Warning('AssistantSkills', 'Skill ' + SkillName + ' truncated for system prompt');
+      ErrorText := 'Skill file is missing: ' + SkillFile;
+      Exit;
     End;
+  BodyText := PrepareSkillBody(SkillName, Raw);
   Result := BodyText <> '';
   If Not Result Then
     ErrorText := 'Skill file is empty: ' + SkillName
   Else
-    Begin
-      SkillCacheName := SkillName;
-      SkillCacheFile := SkillFile;
-      SkillCacheAge := Age;
-      SkillCacheBody := BodyText;
-    End;
+    StoreSkillBody(SkillName, SkillFile, Age, BodyText);
 End;
 
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
@@ -554,9 +640,10 @@ End;
 
 Initialization
 
-SkillCacheName := '';
-SkillCacheFile := '';
-SkillCacheAge := -1;
-SkillCacheBody := '';
+GuidanceCacheSignature := '';
+GuidanceCacheDocuments := Nil;
+GuidanceCacheCatalog := '';
+GuidanceCacheValid := False;
+SkillBodyCache := Nil;
 
 End.
