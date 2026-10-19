@@ -1,11 +1,12 @@
 object ProjectAssistantForm: TProjectAssistantForm
-  Left = 509
-  Height = 700
-  Top = 238
-  Width = 1286
+  Left = 976
+  Height = 1225
+  Top = 473
+  Width = 2250
   Caption = 'Project Assistant'
-  ClientHeight = 700
-  ClientWidth = 1286
+  ClientHeight = 1225
+  ClientWidth = 2250
+  DesignTimePPI = 168
   Position = poDefaultPosOnly
   LCLVersion = '5.99.0.0'
   OnCreate = FormCreate
@@ -13,133 +14,142 @@ object ProjectAssistantForm: TProjectAssistantForm
   OnShow = FormShow
   object ComposerStack: TPanel
     Left = 0
-    Height = 58
-    Top = 642
-    Width = 1286
+    Height = 101
+    Top = 1124
+    Width = 2250
     Align = alBottom
     BevelOuter = bvNone
-    ClientHeight = 58
-    ClientWidth = 1286
+    ClientHeight = 101
+    ClientWidth = 2250
     TabOrder = 1
     inline StatusFooter: TStatusFooterFrame
       Left = 0
-      Height = 22
-      Top = 36
-      Width = 1286
+      Height = 39
+      Top = 62
+      Width = 2250
       Align = alBottom
+      ParentFont = False
       TabOrder = 0
       OnResize = StatusFooterResize
     end
     object BottomBar: TPanel
       Left = 0
-      Height = 36
-      Top = 0
-      Width = 1295
+      Height = 54
+      Top = 8
+      Width = 2250
+      Align = alBottom
       BevelOuter = bvNone
       ChildSizing.LeftRightSpacing = 4
       ChildSizing.TopBottomSpacing = 4
       ChildSizing.HorizontalSpacing = 4
       ChildSizing.VerticalSpacing = 4
       ChildSizing.EnlargeVertical = crsHomogenousChildResize
-      ChildSizing.ShrinkVertical = crsHomogenousChildResize
+      ChildSizing.ShrinkVertical = crsScaleChilds
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 16
-      ClientHeight = 36
-      ClientWidth = 1295
+      ClientHeight = 54
+      ClientWidth = 2250
       TabOrder = 1
       object SendButton: TButton
         Left = 4
-        Height = 28
+        Height = 46
         Top = 4
-        Width = 84
+        Width = 88
         Action = SendAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 0
       end
       object StopButton: TButton
-        Left = 92
-        Height = 28
+        Left = 96
+        Height = 46
         Top = 4
         Width = 84
         Action = StopAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 1
       end
       object NewConversationButton: TButton
-        Left = 180
-        Height = 28
+        Left = 184
+        Height = 46
         Top = 4
         Width = 84
         Action = NewConversationAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 2
       end
       object NewPlanButton: TButton
-        Left = 268
-        Height = 28
+        Left = 272
+        Height = 46
         Top = 4
-        Width = 84
+        Width = 130
         Action = NewPlanAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 3
       end
       object RunPlanButton: TButton
-        Left = 356
-        Height = 28
+        Left = 406
+        Height = 46
         Top = 4
-        Width = 84
+        Width = 125
         Action = RunPlanAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 4
       end
       object TasksButton: TButton
-        Left = 444
-        Height = 28
+        Left = 535
+        Height = 46
         Top = 4
-        Width = 84
+        Width = 107
         Action = TasksAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 5
       end
       object SettingsButton: TButton
-        Left = 532
-        Height = 28
+        Left = 646
+        Height = 46
         Top = 4
-        Width = 84
+        Width = 131
         Action = SettingsAction
+        BorderSpacing.InnerBorder = 8
         TabOrder = 6
       end
     end
   end
   object ClientPanel: TPanel
     Left = 0
-    Height = 642
+    Height = 1124
     Top = 0
-    Width = 1286
+    Width = 2250
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 642
-    ClientWidth = 1286
+    ClientHeight = 1124
+    ClientWidth = 2250
     TabOrder = 0
     object ModeSidePanel: TPanel
-      Left = 986
-      Height = 642
+      Left = 1726
+      Height = 1124
       Top = 0
-      Width = 300
+      Width = 524
       Align = alRight
       BevelOuter = bvNone
-      ClientHeight = 642
-      ClientWidth = 300
+      ClientHeight = 1124
+      ClientWidth = 524
       TabOrder = 0
       object SidebarPages: TPageControl
         Left = 0
-        Height = 642
+        Height = 1124
         Top = 0
-        Width = 300
-        ActivePage = PlanSheet
+        Width = 524
+        ActivePage = HistorySheet
         Align = alClient
-        TabIndex = 1
+        TabIndex = 0
         TabOrder = 0
         OnChange = SidebarPagesChange
         OnChanging = SidebarPagesChanging
         object HistorySheet: TTabSheet
           Caption = 'History'
-          ClientHeight = 607
-          ClientWidth = 294
+          ClientHeight = 1081
+          ClientWidth = 516
           OnResize = HistoryPanelResize
           object ConversationLabel: TLabel
             AnchorSideLeft.Control = HistorySheet
@@ -147,14 +157,13 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Control = HistorySheet
             AnchorSideRight.Side = asrBottom
             Left = 4
-            Height = 18
-            Top = 8
-            Width = 286
+            Height = 30
+            Top = 10
+            Width = 508
             Anchors = [akTop, akLeft, akRight]
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 8
-            BorderSpacing.Right = 4
-            BorderSpacing.Bottom = 4
+            BorderSpacing.Top = 6
+            BorderSpacing.Bottom = 8
+            BorderSpacing.Around = 4
             Caption = 'Conversation'
             Layout = tlCenter
             ParentColor = False
@@ -167,17 +176,13 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = HistoryLabel
             Left = 4
-            Height = 479
-            Top = 34
-            Width = 286
+            Height = 900
+            Top = 52
+            Width = 508
             Anchors = [akTop, akLeft, akRight, akBottom]
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 8
-            BorderSpacing.Right = 4
-            BorderSpacing.Bottom = 4
+            BorderSpacing.Around = 4
             ItemHeight = 0
             TabOrder = 0
-            TopIndex = -1
             OnClick = ConversationListClick
             OnDblClick = ConversationListClick
             OnSelectionChange = ConversationListSelectionChange
@@ -188,9 +193,9 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = HistoryCombo
             Left = 4
-            Height = 18
-            Top = 517
-            Width = 286
+            Height = 30
+            Top = 956
+            Width = 508
             Anchors = [akLeft, akRight, akBottom]
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
@@ -204,14 +209,14 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = ExportHistoryButton
             Left = 4
-            Height = 32
-            Top = 539
-            Width = 286
+            Height = 38
+            Top = 990
+            Width = 508
             Anchors = [akLeft, akRight, akBottom]
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
             BorderSpacing.Bottom = 4
-            ItemHeight = 18
+            ItemHeight = 30
             Style = csDropDownList
             TabOrder = 1
             OnChange = HistoryComboChange
@@ -221,9 +226,9 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideBottom.Control = HistorySheet
             AnchorSideBottom.Side = asrBottom
             Left = 4
-            Height = 28
-            Top = 575
-            Width = 141
+            Height = 45
+            Top = 1032
+            Width = 247
             Action = ExportHistoryAction
             Anchors = [akLeft, akBottom]
             BorderSpacing.Left = 4
@@ -235,10 +240,10 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = HistorySheet
             AnchorSideBottom.Side = asrBottom
-            Left = 152
-            Height = 28
-            Top = 575
-            Width = 138
+            Left = 262
+            Height = 45
+            Top = 1032
+            Width = 250
             Action = DeleteHistoryAction
             Anchors = [akRight, akBottom]
             BorderSpacing.Right = 4
@@ -248,8 +253,8 @@ object ProjectAssistantForm: TProjectAssistantForm
         end
         object PlanSheet: TTabSheet
           Caption = 'Plan'
-          ClientHeight = 607
-          ClientWidth = 294
+          ClientHeight = 1081
+          ClientWidth = 516
           OnResize = PlanSheetResize
           object ActivePlanRow: TPanel
             AnchorSideLeft.Control = PlanSheet
@@ -257,46 +262,44 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Control = PlanSheet
             AnchorSideRight.Side = asrBottom
             Left = 0
-            Height = 36
+            Height = 46
             Top = 0
-            Width = 294
+            Width = 516
             Anchors = [akTop, akLeft, akRight]
+            AutoSize = True
             BevelOuter = bvNone
-            ClientHeight = 36
-            ClientWidth = 294
+            ClientHeight = 46
+            ClientWidth = 516
             TabOrder = 0
             object ActivePlanLabel: TLabel
               AnchorSideLeft.Control = ActivePlanRow
-              AnchorSideTop.Control = ActivePlanRow
-              AnchorSideBottom.Control = ActivePlanRow
+              AnchorSideTop.Control = ActivePlanCombo
+              AnchorSideTop.Side = asrCenter
               Left = 4
-              Height = 28
-              Top = 4
-              Width = 64
-              Align = alLeft
-              AutoSize = False
+              Height = 30
+              Top = 8
+              Width = 62
               BorderSpacing.Left = 4
-              BorderSpacing.Top = 4
-              BorderSpacing.Bottom = 4
               Caption = 'Active:'
               FocusControl = ActivePlanCombo
               Layout = tlCenter
               ParentColor = False
             end
             object ActivePlanBrowseButton: TButton
-              AnchorSideTop.Control = ActivePlanRow
+              AnchorSideTop.Control = ActivePlanCombo
               AnchorSideRight.Control = ActivePlanRow
               AnchorSideRight.Side = asrBottom
-              Left = 254
-              Height = 28
+              AnchorSideBottom.Control = ActivePlanCombo
+              AnchorSideBottom.Side = asrBottom
+              Left = 467
+              Height = 38
               Hint = 'Add plan files to the available list'
               Top = 4
-              Width = 36
-              Align = alRight
-              BorderSpacing.Left = 4
-              BorderSpacing.Top = 4
+              Width = 45
+              Anchors = [akTop, akRight, akBottom]
+              AutoSize = True
               BorderSpacing.Right = 4
-              BorderSpacing.Bottom = 4
+              BorderSpacing.InnerBorder = 2
               Caption = '...'
               ParentShowHint = False
               ShowHint = True
@@ -304,14 +307,19 @@ object ProjectAssistantForm: TProjectAssistantForm
               OnClick = ActivePlanBrowseClick
             end
             object ActivePlanCombo: TComboBox
-              Left = 68
-              Height = 28
+              AnchorSideLeft.Control = ActivePlanLabel
+              AnchorSideLeft.Side = asrBottom
+              AnchorSideRight.Control = ActivePlanBrowseButton
+              Left = 74
+              Height = 38
               Top = 4
-              Width = 182
-              Align = alClient
+              Width = 391
+              Anchors = [akTop, akLeft, akRight]
+              BorderSpacing.Left = 8
               BorderSpacing.Top = 4
+              BorderSpacing.Right = 2
               BorderSpacing.Bottom = 4
-              ItemHeight = 18
+              ItemHeight = 30
               Style = csDropDownList
               TabOrder = 0
               OnChange = ActivePlanChoiceChanged
@@ -326,17 +334,13 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = BuildStatusLabel
             Left = 4
-            Height = 509
-            Top = 40
-            Width = 286
+            Height = 940
+            Top = 50
+            Width = 508
             Anchors = [akTop, akLeft, akRight, akBottom]
-            BorderSpacing.Left = 4
-            BorderSpacing.Top = 4
-            BorderSpacing.Right = 4
-            BorderSpacing.Bottom = 4
+            BorderSpacing.Around = 4
             ItemHeight = 0
             TabOrder = 1
-            TopIndex = -1
             OnClick = BuildTodoListClick
             OnDblClick = BuildTodoListDblClick
             OnSelectionChange = BuildTodoListSelectionChange
@@ -347,14 +351,14 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = OpenPlanSheetButton
             Left = 4
-            Height = 18
-            Top = 553
-            Width = 286
+            Height = 30
+            Top = 994
+            Width = 508
             Alignment = taCenter
             Anchors = [akLeft, akRight, akBottom]
             BorderSpacing.Left = 4
             BorderSpacing.Right = 4
-            BorderSpacing.Bottom = 4
+            BorderSpacing.Bottom = 8
             Caption = '0 not started · 0 in progress · 0 complete'
             ParentColor = False
             WordWrap = True
@@ -364,9 +368,9 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideBottom.Control = PlanSheet
             AnchorSideBottom.Side = asrBottom
             Left = 4
-            Height = 28
-            Top = 575
-            Width = 142
+            Height = 45
+            Top = 1032
+            Width = 252
             Action = OpenPlanSheetAction
             Anchors = [akLeft, akBottom]
             BorderSpacing.Left = 4
@@ -378,10 +382,10 @@ object ProjectAssistantForm: TProjectAssistantForm
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = PlanSheet
             AnchorSideBottom.Side = asrBottom
-            Left = 150
-            Height = 28
-            Top = 575
-            Width = 140
+            Left = 264
+            Height = 45
+            Top = 1032
+            Width = 248
             Action = RemovePlanAction
             Anchors = [akRight, akBottom]
             BorderSpacing.Right = 4
@@ -392,57 +396,60 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
     end
     object ModeSplitter: TSplitter
-      Left = 981
-      Height = 642
+      Left = 1717
+      Height = 1124
       Top = 0
-      Width = 5
+      Width = 9
       Align = alRight
       ResizeAnchor = akRight
     end
     object ConversationColumn: TPanel
       Left = 0
-      Height = 642
+      Height = 1124
       Top = 0
-      Width = 981
+      Width = 1717
       Align = alClient
       BevelOuter = bvNone
-      ClientHeight = 642
-      ClientWidth = 981
+      ClientHeight = 1124
+      ClientWidth = 1717
       TabOrder = 1
       object ConversationHeader: TPanel
         Left = 4
-        Height = 32
-        Top = 2
-        Width = 975
+        Height = 56
+        Top = 4
+        Width = 1709
         Align = alTop
-        BorderSpacing.Left = 4
-        BorderSpacing.Top = 2
-        BorderSpacing.Right = 2
+        BorderSpacing.Around = 4
         BevelOuter = bvNone
-        ClientHeight = 32
-        ClientWidth = 975
+        ClientHeight = 56
+        ClientWidth = 1709
         TabOrder = 1
         object TargetLabel: TLabel
-          Left = 2
-          Height = 32
-          Top = 0
-          Width = 43
-          Align = alLeft
-          BorderSpacing.Left = 2
-          BorderSpacing.Right = 6
+          AnchorSideLeft.Control = ConversationHeader
+          AnchorSideTop.Control = TargetCombo
+          AnchorSideTop.Side = asrCenter
+          Left = 4
+          Height = 30
+          Top = 8
+          Width = 62
+          BorderSpacing.Left = 4
+          BorderSpacing.Top = 1
           Caption = '&Target:'
           Layout = tlCenter
           ParentColor = False
         end
         object TargetCombo: TComboBox
-          Left = 51
-          Height = 28
-          Top = 2
-          Width = 171
-          Align = alLeft
-          BorderSpacing.Top = 2
-          BorderSpacing.Bottom = 2
-          ItemHeight = 18
+          AnchorSideLeft.Control = TargetLabel
+          AnchorSideLeft.Side = asrBottom
+          AnchorSideTop.Control = ConversationHeader
+          Left = 74
+          Height = 38
+          Top = 4
+          Width = 348
+          BorderSpacing.Left = 8
+          BorderSpacing.Top = 4
+          BorderSpacing.Bottom = 4
+          ItemHeight = 30
           ParentShowHint = False
           ShowHint = True
           Style = csDropDownList
@@ -452,15 +459,20 @@ object ProjectAssistantForm: TProjectAssistantForm
           OnMouseEnter = UpdateTargetComboHint
         end
         object TargetBrowseButton: TButton
-          Left = 226
-          Height = 28
+          AnchorSideLeft.Control = TargetCombo
+          AnchorSideLeft.Side = asrBottom
+          AnchorSideTop.Control = TargetCombo
+          AnchorSideBottom.Control = TargetCombo
+          AnchorSideBottom.Side = asrBottom
+          Left = 424
+          Height = 38
           Hint = 'Choose a target folder'
-          Top = 2
-          Width = 36
-          Align = alLeft
-          BorderSpacing.Left = 4
-          BorderSpacing.Top = 2
-          BorderSpacing.Bottom = 2
+          Top = 4
+          Width = 45
+          Anchors = [akTop, akLeft, akBottom]
+          AutoSize = True
+          BorderSpacing.Left = 2
+          BorderSpacing.InnerBorder = 2
           Caption = '...'
           ParentShowHint = False
           ShowHint = True
@@ -468,27 +480,31 @@ object ProjectAssistantForm: TProjectAssistantForm
           OnClick = TargetBrowseClick
         end
         object ModeLabel: TLabel
-          Left = 270
-          Height = 32
-          Top = 0
-          Width = 39
-          Align = alLeft
-          BorderSpacing.Left = 8
-          BorderSpacing.Right = 6
+          AnchorSideLeft.Control = TargetBrowseButton
+          AnchorSideLeft.Side = asrBottom
+          AnchorSideTop.Control = ModeCombo
+          AnchorSideTop.Side = asrCenter
+          Left = 485
+          Height = 30
+          Top = 8
+          Width = 59
+          BorderSpacing.Left = 16
+          BorderSpacing.Right = 10
           Caption = 'Mode:'
           Layout = tlCenter
           ParentColor = False
         end
         object ModeCombo: TComboBox
-          Left = 315
-          Height = 28
-          Top = 2
-          Width = 145
-          Align = alLeft
-          BorderSpacing.Top = 2
-          BorderSpacing.Right = 8
-          BorderSpacing.Bottom = 2
-          ItemHeight = 24
+          AnchorSideLeft.Control = ModeLabel
+          AnchorSideLeft.Side = asrBottom
+          AnchorSideTop.Control = ConversationHeader
+          Left = 554
+          Height = 38
+          Top = 4
+          Width = 260
+          BorderSpacing.Left = 8
+          BorderSpacing.Top = 4
+          ItemHeight = 30
           ItemIndex = 0
           Items.Strings = (
             'Chat'
@@ -503,12 +519,16 @@ object ProjectAssistantForm: TProjectAssistantForm
           OnChange = ModeComboChange
         end
         object ModelStatusLabel: TLabel
-          Left = 468
-          Height = 32
-          Top = 0
-          Width = 507
-          Align = alClient
-          AutoSize = False
+          AnchorSideLeft.Control = ModeCombo
+          AnchorSideLeft.Side = asrBottom
+          AnchorSideTop.Control = ModeCombo
+          AnchorSideTop.Side = asrCenter
+          Left = 830
+          Height = 30
+          Top = 8
+          Width = 6
+          BorderSpacing.Left = 16
+          Caption = ' '
           Layout = tlCenter
           ParentColor = False
           ParentShowHint = False
@@ -517,39 +537,40 @@ object ProjectAssistantForm: TProjectAssistantForm
       end
       object PromptHost: TPanel
         Left = 0
-        Height = 75
-        Top = 567
-        Width = 981
+        Height = 132
+        Top = 992
+        Width = 1717
         Align = alBottom
         BevelOuter = bvNone
-        ClientHeight = 75
-        ClientWidth = 981
+        ClientHeight = 132
+        ClientWidth = 1717
         TabOrder = 0
         object InputPanel: TPanel
           Left = 0
           Height = 0
           Top = 0
-          Width = 981
+          Width = 1717
           Align = alClient
           BevelOuter = bvNone
           ClientHeight = 0
-          ClientWidth = 981
+          ClientWidth = 1717
           TabOrder = 0
           object InputMemo: TSpellMemo
-            Left = 6
+            Left = 4
             Height = 0
-            Top = 0
-            Width = 969
+            Top = -2
+            Width = 1713
             Align = alClient
-            BorderSpacing.Around = 6
+            BorderSpacing.Left = 4
+            BorderSpacing.Bottom = 4
             TabOrder = 0
           end
         end
         object AttachmentStrip: TPanel
           Left = 0
-          Height = 80
-          Top = -5
-          Width = 981
+          Height = 140
+          Top = -8
+          Width = 1717
           Align = alBottom
           BevelOuter = bvNone
           ChildSizing.LeftRightSpacing = 4
@@ -564,19 +585,20 @@ object ProjectAssistantForm: TProjectAssistantForm
       object PromptSplitter: TSplitter
         Cursor = crVSplit
         Left = 0
-        Height = 5
-        Top = 562
-        Width = 981
+        Height = 8
+        Top = 984
+        Width = 1717
         Align = alBottom
         ResizeAnchor = akBottom
       end
       object ChatHost: TPanel
         Left = 4
-        Height = 520
-        Top = 38
-        Width = 973
+        Height = 916
+        Top = 64
+        Width = 1713
         Align = alClient
-        BorderSpacing.Around = 4
+        BorderSpacing.Left = 4
+        BorderSpacing.Bottom = 4
         BevelOuter = bvNone
         Color = clWhite
         ParentBackground = False
@@ -586,8 +608,8 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
   end
   object ActionList: TActionList
-    Left = 55
-    Top = 110
+    Left = 96
+    Top = 193
     object NewConversationAction: TAction
       Caption = 'New'
       OnExecute = NewConversationActionExecute
@@ -640,6 +662,7 @@ object ProjectAssistantForm: TProjectAssistantForm
     object TasksAction: TAction
       Caption = 'Tasks…'
       Hint = 'Run or edit a saved task'
+      Visible = False
       OnExecute = TasksActionExecute
     end
     object SettingsAction: TAction
@@ -687,8 +710,8 @@ object ProjectAssistantForm: TProjectAssistantForm
   end
   object AttachmentPopup: TPopupMenu
     OnPopup = AttachmentPopupPopup
-    Left = 55
-    Top = 255
+    Left = 96
+    Top = 446
     object AttachmentAttachItem: TMenuItem
       Action = AttachImageAction
     end
