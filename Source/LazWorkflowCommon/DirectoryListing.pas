@@ -1,11 +1,14 @@
 Unit DirectoryListing;
 
-{ Thread-safe directory listing (c) 2026 Michell Computing.
+{ Directory listing that reports symlink entries FindFirstUTF8 does not (c) 2026 Michell Computing.
 
-  FPC's Unix FindFirst/FindNext share one global search table. A spell preload,
-  an assistant file walk, and the IDE's own scan overlap on that table and fault.
-  Unix listings use opendir, which has no shared table. Windows keeps FindFirstFile,
-  which is already per handle. }
+  Checked 2026-10-19 against FindFirstUTF8 on LCL 5.99.0.0 / FPC 3.3.1.
+  A regular file was attr 32 size 3 versus attr 0 size 3. A directory was
+  attr 48 size 40 versus attr 16 size 40. faAnyFile followed a directory
+  symlink (attr 48 size 40) and omitted a dangling symlink; this scanner
+  reported attr 1040 size 6 and attr 1024 size 7. Even with faSymLink in the
+  mask, FindFirst still added faArchive. Callers test faSymLink without
+  passing that bit, so the Unix scanner stays. Do not add another FpOpenDir. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
