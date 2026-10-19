@@ -18,7 +18,7 @@
     <Description Value="Assistant chat UI, live styled Markdown windows and compiler integration for Lazarus IDE"/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="83">
+    <Files Count="84">
       <Item1>
         <Filename Value="../Source/LazAssistantTools/RegLazAssistantTools.pas"/>
         <HasRegisterProc Value="True"/>
@@ -353,6 +353,10 @@
         <Filename Value="../Source/Tools/PascalStyleFormat.pas"/>
         <UnitName Value="PascalStyleFormat"/>
       </Item83>
+      <Item84>
+        <Filename Value="../Source/LazAssistantTools/AssistantFileDrop.pas"/>
+        <UnitName Value="AssistantFileDrop"/>
+      </Item84>
     </Files>
     <RequiredPkgs Count="6">
       <Item1>
