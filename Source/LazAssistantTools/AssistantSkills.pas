@@ -1,6 +1,7 @@
 Unit AssistantSkills;
 
-{ Load skills named in the installation settings. A file on disk is not a skill until it is added (c) 2026 Michell Computing. }
+{ Load skills named in the installation settings. A file on disk is not a skill until it is added.
+  Project directories are not scanned (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -33,13 +34,12 @@ Type
   TAssistantSkillList = Array Of TAssistantSkillInfo;
 
 Function AssistantUserSkillsRoot: String;
-Function SkillSearchRoots(Const ProjectRoot: String): TStringArray;
 Function SkillNameIsSafe(Const SkillName: String): Boolean;
+/// User catalog file ~/.grok/skills/Name/SKILL.md. A non-empty project root is refused.
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
-Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
 /// Installed skills from the settings enumerator. Project directories are not scanned.
 Function ListGuidanceDocuments(Const ProjectRoot: String): TAssistantSkillList;
-/// Directory name when FilePath is a catalog SKILL.md, otherwise empty.
+/// Directory name when FilePath is one SKILL.md under a known catalog root, otherwise empty.
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
 /// Name written in the document. The file stem is used only when that name is missing or unsafe.
 Function SkillDocumentName(Const FilePath: String): String;
@@ -47,8 +47,6 @@ Function SkillDocumentName(Const FilePath: String): String;
 Function SkillNameFromFile(Const FilePath: String): String;
 Function LoadUserSkillBody(Const SkillName: String; Out BodyText: String; Out ErrorText: String): Boolean;
 Function LoadSkillBody(Const SkillName, ProjectRoot: String; Out BodyText: String; Out ErrorText: String): Boolean;
-/// Fills Modes from the SKILL.md `modes` field (inspect, document, plan, build, chat). Clears Modes first.
-Function SkillDeclaredModes(Const SkillName, ProjectRoot: String; Modes: TStrings): Boolean;
 /// Drops BEHAVE when the replacement methodology skill is also listed. Leaves the files in place.
 Procedure OmitRetiredBehaviourGuide(Names: TStrings);
 Function FormatSkillCatalog(Const Skills: TAssistantSkillList): String;
@@ -67,9 +65,7 @@ Var
 Implementation
 
 Uses
-  LazFileUtils, DirectoryListing, WorkflowLog;
-
-Function SkillFileByDeclaredName(Const SkillName, ProjectRoot: String): String; Forward;
+  LazFileUtils, WorkflowLog;
 
 Function AssistantUserSkillsRoot: String;
 Begin
@@ -119,55 +115,19 @@ Begin
   Result := True;
 End;
 
-Procedure AddRoot(Var Roots: TStringArray; Const Dir: String);
-Var
-  Clean: String;
-  I: Integer;
-Begin
-  Clean := ExcludeTrailingPathDelimiter(Trim(Dir));
-  If Clean = '' Then
-    Exit;
-  For I := 0 To High(Roots) Do
-    If CompareFilenames(Roots[I], Clean) = 0 Then
-      Exit;
-  SetLength(Roots, Length(Roots) + 1);
-  Roots[High(Roots)] := Clean;
-End;
-
-Function SkillSearchRoots(Const ProjectRoot: String): TStringArray;
-Var
-  Root: String;
-Begin
-  Result := Nil;
-  Root := Trim(ProjectRoot);
-  If Root <> '' Then
-    Begin
-      Root := IncludeTrailingPathDelimiter(ExpandFileName(Root));
-      AddRoot(Result, Root + '.assistant' + PathDelim + 'skills');
-    End;
-  AddRoot(Result, AssistantUserSkillsRoot);
-End;
-
 Function ResolveSkillFile(Const SkillName, ProjectRoot: String): String;
 Var
-  Roots: TStringArray;
-  I: Integer;
   Candidate: String;
 Begin
   Result := '';
   If Not SkillNameIsSafe(SkillName) Then
     Exit;
-  Roots := SkillSearchRoots(ProjectRoot);
-  For I := 0 To High(Roots) Do
-    Begin
-      Candidate := IncludeTrailingPathDelimiter(Roots[I]) + SkillName + PathDelim + 'SKILL.md';
-      If FileExistsUTF8(Candidate) And PathIsInsideRoot(Roots[I], Candidate) Then
-        Begin
-          Result := Candidate;
-          Exit;
-        End;
-    End;
-  Result := SkillFileByDeclaredName(SkillName, ProjectRoot);
+  { A project root must not select a file. Installation settings name the file. }
+  If Trim(ProjectRoot) <> '' Then
+    Exit;
+  Candidate := IncludeTrailingPathDelimiter(AssistantUserSkillsRoot) + SkillName + PathDelim + 'SKILL.md';
+  If FileExistsUTF8(Candidate) And PathIsInsideRoot(AssistantUserSkillsRoot, Candidate) Then
+    Result := Candidate;
 End;
 
 Function StripYamlFrontMatter(Const Raw: String): String;
@@ -238,86 +198,6 @@ Begin
     Result := '';
 End;
 
-Function FillSkillInfo(Const SkillDir: String; Out Info: TAssistantSkillInfo): Boolean;
-Var
-  SkillFile, Raw, Declared: String;
-  SL: TStringList;
-Begin
-  Result := False;
-  Info.Name := '';
-  Info.Description := '';
-  Info.WhenToUse := '';
-  Info.SkillFile := '';
-  SkillFile := IncludeTrailingPathDelimiter(SkillDir) + 'SKILL.md';
-  If Not FileExists(SkillFile) Then
-    Exit;
-  Info.Name := ExtractFileName(ExcludeTrailingPathDelimiter(SkillDir));
-  If Not SkillNameIsSafe(Info.Name) Then
-    Exit;
-  Info.SkillFile := SkillFile;
-  SL := TStringList.Create;
-  Try
-    Try
-      SL.LoadFromFile(SkillFile);
-      Raw := SL.Text;
-      Declared := DeclaredSkillName(Raw);
-      If Declared <> '' Then
-        Info.Name := Declared;
-      Info.Description := ExtractFrontMatterField(Raw, 'description');
-      If Info.Description = '' Then
-        Info.Description := Info.Name;
-      Info.WhenToUse := ExtractFrontMatterField(Raw, 'when-to-use');
-      If Info.WhenToUse = '' Then
-        Info.WhenToUse := ExtractFrontMatterField(Raw, 'when_to_use');
-      Result := True;
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('AssistantSkills', 'Failed to read ' + SkillFile + ': ' + E.Message);
-    End;
-  Finally
-    SL.Free;
-  End;
-End;
-
-Function SkillFileByDeclaredName(Const SkillName, ProjectRoot: String): String;
-Var
-  Roots: TStringArray;
-  Dirs: TStringList;
-  I, J: Integer;
-  Candidate: String;
-  SL: TStringList;
-Begin
-  Result := '';
-  If Not SkillNameIsSafe(SkillName) Then
-    Exit;
-  Roots := SkillSearchRoots(ProjectRoot);
-  Dirs := TStringList.Create;
-  SL := TStringList.Create;
-  Try
-    For I := 0 To High(Roots) Do
-      Begin
-        Dirs.Clear;
-        CollectChildDirectories(Roots[I], Dirs);
-        For J := 0 To Dirs.Count - 1 Do
-          Begin
-            Candidate := IncludeTrailingPathDelimiter(Dirs[J]) + 'SKILL.md';
-            If Not FileExistsUTF8(Candidate) Or (Not PathIsInsideRoot(Roots[I], Candidate)) Then
-              Continue;
-            Try
-              SL.LoadFromFile(Candidate);
-            Except
-              Continue;
-            End;
-            If SameText(DeclaredSkillName(SL.Text), SkillName) Then
-              Exit(Candidate);
-          End;
-      End;
-  Finally
-    SL.Free;
-    Dirs.Free;
-  End;
-End;
-
 Function SkillNameTaken(Const Skills: TAssistantSkillList; Const SkillName: String): Boolean;
 Var
   I: Integer;
@@ -329,45 +209,6 @@ Begin
         Result := True;
         Exit;
       End;
-End;
-
-Function ListSkillsInRoot(Const Root: String; Var Skills: TAssistantSkillList): Integer;
-Var
-  Dirs: TStringList;
-  I: Integer;
-  Info: TAssistantSkillInfo;
-Begin
-  Result := 0;
-  If Not DirectoryExists(Root) Then
-    Exit;
-  Dirs := TStringList.Create;
-  Try
-    CollectChildDirectories(Root, Dirs);
-    Dirs.Sort;
-    For I := 0 To Dirs.Count - 1 Do
-      Begin
-        If Not FillSkillInfo(Dirs[I], Info) Then
-          Continue;
-        If SkillNameTaken(Skills, Info.Name) Then
-          Continue;
-        SetLength(Skills, Length(Skills) + 1);
-        Skills[High(Skills)] := Info;
-        Inc(Result);
-      End;
-  Finally
-    Dirs.Free;
-  End;
-End;
-
-Function ListDiscoveredSkills(Const ProjectRoot: String): TAssistantSkillList;
-Var
-  Roots: TStringArray;
-  I: Integer;
-Begin
-  Result := Nil;
-  Roots := SkillSearchRoots(ProjectRoot);
-  For I := 0 To High(Roots) Do
-    ListSkillsInRoot(Roots[I], Result);
 End;
 
 Function SkillInfoFromFile(Const SkillName, SkillFile: String; Out Info: TAssistantSkillInfo): Boolean;
@@ -465,9 +306,7 @@ End;
 
 Function CatalogNameForSkillFile(Const FilePath, ProjectRoot: String): String;
 Var
-  Roots: TStringArray;
-  I: Integer;
-  Clean, Dir, Name: String;
+  Clean, Dir, Name, ProjectSkills: String;
 Begin
   Result := '';
   Clean := Trim(FilePath);
@@ -482,10 +321,13 @@ Begin
   Name := ExtractFileName(Dir);
   If Not SkillNameIsSafe(Name) Then
     Exit;
-  Roots := SkillSearchRoots(ProjectRoot);
-  For I := 0 To High(Roots) Do
-    If PathIsInsideRoot(Roots[I], Clean) Then
-      Exit(Name);
+  If PathIsInsideRoot(AssistantUserSkillsRoot, Clean) Then
+    Exit(Name);
+  If Trim(ProjectRoot) = '' Then
+    Exit;
+  ProjectSkills := IncludeTrailingPathDelimiter(ExpandFileName(Trim(ProjectRoot))) + '.assistant' + PathDelim + 'skills';
+  If PathIsInsideRoot(ProjectSkills, Clean) Then
+    Result := Name;
 End;
 
 Function SkillNameFromFile(Const FilePath: String): String;
@@ -544,72 +386,6 @@ Begin
   Result := SkillNameFromFile(Clean);
 End;
 
-Function IsDeclaredSkillMode(Const ModeName: String): Boolean;
-Begin
-  Result := (ModeName = 'inspect') Or (ModeName = 'document') Or (ModeName = 'plan') Or
-    (ModeName = 'build') Or (ModeName = 'chat');
-End;
-
-Procedure SplitDeclaredModes(Const Field: String; Modes: TStrings);
-Var
-  I: Integer;
-  Token: String;
-  C: Char;
-Begin
-  Token := '';
-  For I := 1 To Length(Field) + 1 Do
-    Begin
-      If I <= Length(Field) Then
-        C := Field[I]
-      Else
-        C := ',';
-      If (C = ',') Or (C = ';') Or (C <= ' ') Then
-        Begin
-          Token := LowerCase(Trim(Token));
-          If IsDeclaredSkillMode(Token) And (Modes.IndexOf(Token) < 0) Then
-            Modes.Add(Token);
-          Token := '';
-        End
-      Else
-        Token := Token + C;
-    End;
-End;
-
-Function SkillDeclaredModes(Const SkillName, ProjectRoot: String; Modes: TStrings): Boolean;
-Var
-  SkillFile, Raw, Field: String;
-  SL: TStringList;
-Begin
-  Result := False;
-  If Assigned(Modes) Then
-    Modes.Clear;
-  If (Not Assigned(Modes)) Or (Not SkillNameIsSafe(SkillName)) Then
-    Exit;
-  SkillFile := '';
-  If Assigned(SkillFileResolver) Then
-    SkillFile := Trim(SkillFileResolver(SkillName));
-  If SkillFile = '' Then
-    SkillFile := ResolveSkillFile(SkillName, ProjectRoot);
-  If (SkillFile = '') Or (Not FileExistsUTF8(SkillFile)) Then
-    Exit;
-  SL := TStringList.Create;
-  Try
-    Try
-      SL.LoadFromFile(SkillFile);
-      Raw := SL.Text;
-    Except
-      Exit;
-    End;
-  Finally
-    SL.Free;
-  End;
-  Field := ExtractFrontMatterField(Raw, 'modes');
-  If Field = '' Then
-    Exit;
-  SplitDeclaredModes(Field, Modes);
-  Result := Modes.Count > 0;
-End;
-
 Procedure OmitRetiredBehaviourGuide(Names: TStrings);
 Var
   I: Integer;
@@ -640,7 +416,7 @@ Begin
   Lines := TStringList.Create;
   Try
     If Length(Skills) = 0 Then
-      Lines.Add('(No skills discovered.)')
+      Lines.Add('(No skills installed.)')
     Else
       For I := 0 To High(Skills) Do
         Begin

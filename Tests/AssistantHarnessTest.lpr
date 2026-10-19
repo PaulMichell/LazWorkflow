@@ -1,6 +1,6 @@
 Program AssistantHarnessTest;
 
-{ Console checks for skill discovery, harness prompt, and todo_write (c) 2026 Michell Computing. }
+{ Console checks for installed skills, harness prompt, and todo_write (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE OBJFPC}
@@ -63,28 +63,29 @@ Begin
   ForceDirectories(Result);
 End;
 
-Procedure TestFirstNameWins;
+Procedure TestProjectSkillsAreNotDiscovered;
 Var
   Root: String;
   Skills: TAssistantSkillList;
+  I: Integer;
+  Found: Boolean;
 Begin
   Root := MakeTempRoot;
   Try
-    WriteTextFile(Root + '.grok' + PathDelim + 'skills' + PathDelim + 'alpha' + PathDelim + 'SKILL.md',
-      '---' + LineEnding + 'name: alpha' + LineEnding + 'description: from project grok' + LineEnding +
-      'when-to-use: first root' + LineEnding + '---' + LineEnding + 'BODY-GROK' + LineEnding);
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'alpha' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: alpha' + LineEnding + 'description: from assistant' + LineEnding +
       '---' + LineEnding + 'BODY-ASSISTANT' + LineEnding);
     WriteTextFile(Root + '.assistant' + PathDelim + 'skills' + PathDelim + 'beta' + PathDelim + 'SKILL.md',
       '---' + LineEnding + 'name: beta' + LineEnding + 'description: second skill' + LineEnding +
       '---' + LineEnding + 'BODY-BETA' + LineEnding);
-    Skills := ListDiscoveredSkills(Root);
-    Check('two unique names', Length(Skills) >= 2);
-    Check('alpha comes from .assistant/skills', (Length(Skills) > 0) And SameText(Skills[0].Name, 'alpha') And
-      (Pos('from assistant', Skills[0].Description) > 0) And (Pos('project grok', Skills[0].Description) = 0));
-    Check('beta is listed', (Length(Skills) > 1) And SameText(Skills[1].Name, 'beta') And
-      (Pos('second skill', Skills[1].Description) > 0));
+    Check('a project root does not resolve a skill file', ResolveSkillFile('alpha', Root) = '');
+    Check('a project root does not resolve a second skill file', ResolveSkillFile('beta', Root) = '');
+    Skills := ListGuidanceDocuments(Root);
+    Found := False;
+    For I := 0 To High(Skills) Do
+      If SameText(Skills[I].Name, 'alpha') Or SameText(Skills[I].Name, 'beta') Then
+        Found := True;
+    Check('an uninstalled project skill is not in the guidance list', Not Found);
   Finally
     DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
   End;
@@ -443,7 +444,7 @@ Begin
       'modes: plan, build' + LineEnding + '---' + LineEnding + 'METHOD BODY' + LineEnding);
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, '');
     Check('a project skill file is not attached by itself', Pos('DECLARED BODY', Prompt) = 0);
-    AssistantChatConfig.RememberDeclaredModes(Root, Names);
+    Check('a project root does not resolve a declared skill file', ResolveSkillFile('declared-skill', Root) = '');
     AssistantChatConfig.CollectSkillModeNames(Modes);
     Check('a project skill file is not written into settings', Modes.IndexOf('declared-skill') < 0);
     Check('build does not attach a chat-only absence error', Pos('could not be loaded', Prompt) = 0);
@@ -531,7 +532,7 @@ End;
 
 Begin
   FailCount := 0;
-  TestFirstNameWins;
+  TestProjectSkillsAreNotDiscovered;
   TestHarnessPrompt;
   TestImageOutputPrompt;
   TestGuidanceNames;

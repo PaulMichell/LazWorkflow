@@ -829,9 +829,9 @@ Begin
     If Assigned(AssistantChatConfig) Then
       Begin
         AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(FActiveMode), Names);
-        AssistantChatConfig.ApplyDeclaredSkillModes(AssistantModeToStr(FActiveMode), Root, Names);
-        AssistantChatConfig.RememberDeclaredModes(Root, Names);
       End;
+    { Drop a retired guide that is still tagged. Do not scan the project for more names. }
+    OmitRetiredBehaviourGuide(Names);
     If Assigned(WorkflowAssistantHarness) Then
       FSystemPrompt := WorkflowAssistantHarness.BuildSystemPrompt(FActiveMode, Names, Root, PlanRel, Not FIsSubagent)
     Else If FActiveMode = amChat Then

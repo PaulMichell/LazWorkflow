@@ -379,8 +379,7 @@ Begin
     Names.CaseSensitive := False;
     If Assigned(SkillNames) Then
       Names.AddStrings(SkillNames);
-    If Assigned(AssistantChatConfig) Then
-      AssistantChatConfig.ApplyDeclaredSkillModes(AssistantModeToStr(Mode), ProjectRoot, Names);
+    OmitRetiredBehaviourGuide(Names);
     { Chat has no catalog, project rules, or tool policy. A tagged body is the only extra. }
     If Mode = amChat Then
       Begin

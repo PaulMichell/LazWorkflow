@@ -376,8 +376,8 @@ Begin
   Result :=
     '{"type":"function","function":{' +
       '"name":"read_skill",' +
-      '"description":"Load the full body of a catalogued SKILL.md by name. ' +
-        'Search <working-root>/.assistant/skills, then ~/.grok/skills.",' +
+      '"description":"Load the full body of an installed SKILL.md by name. ' +
+        'A file that was not added is not a skill.",' +
       '"parameters":{"type":"object","properties":{' +
         '"name":{"type":"string","description":"Skill directory name, e.g. free-pascal-engineer"}' +
       '},"required":["name"]}' +

@@ -103,10 +103,6 @@ Type
     Procedure SetSkillModes(Const SkillName: String; Modes: TStrings);
     /// Fills Names with skills tagged for ModeName. Clears Names first.
     Procedure CollectSkillsForMode(Const ModeName: String; Names: TStrings);
-    /// Drops a retired guide name from Names. Does not discover skills from a project.
-    Procedure ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
-    /// Kept so callers do not write discovered files back into settings.
-    Procedure RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
     /// Fills Modes with the tags for SkillName. Clears Modes first.
     Procedure CollectModesForSkill(Const SkillName: String; Modes: TStrings);
     /// Fills Names with every skill that has a saved mode list. Clears Names first.
@@ -1187,21 +1183,6 @@ Begin
     If SkillModeListed(FSkillModes, FSkillModes.Names[I], Mode) Then
       Names.Add(FSkillModes.Names[I]);
 End;
-
-{$PUSH}{$HINTS OFF}
-Procedure TAssistantConfig.ApplyDeclaredSkillModes(Const ModeName, ProjectRoot: String; Names: TStrings);
-Begin
-  If Not Assigned(Names) Then
-    Exit;
-  { ModeName and ProjectRoot are not used. A directory scan must not put a skill back. }
-  OmitRetiredBehaviourGuide(Names);
-End;
-
-Procedure TAssistantConfig.RememberDeclaredModes(Const ProjectRoot: String; Names: TStrings);
-Begin
-  { A discovered file is not written into the installation settings. }
-End;
-{$POP}
 
 Procedure TAssistantConfig.CollectModesForSkill(Const SkillName: String; Modes: TStrings);
 Const
