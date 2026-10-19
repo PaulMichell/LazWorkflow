@@ -69,9 +69,7 @@ Type
 Implementation
 
 Uses
-  Process, FileUtil, LazFileUtils, fpjson
-  {$IFDEF UNIX}, BaseUnix, Unix{$ENDIF}
-  {$IFDEF WINDOWS}, Windows{$ENDIF};
+  Process, FileUtil, LazFileUtils, fpjson, ProcessSession;
 
 Const
   ClaudeHelpTimeoutMs = 8000;
@@ -424,85 +422,6 @@ Begin
     Args.Free;
   End;
 End;
-
-{$IFDEF UNIX}
-Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
-Var
-  Pid: TPid;
-  Status: cint;
-  Argv: PPChar;
-  Owned: Array Of AnsiString;
-  I, Count: Integer;
-Begin
-  Result := False;
-  ErrorText := '';
-  Status := 0;
-  SetLength(Owned, 0);
-  Pid := FpFork;
-  If Pid < 0 Then
-    Begin
-      ErrorText := 'Could not start Claude Code sign-in.';
-      Exit;
-    End;
-  If Pid = 0 Then
-    Begin
-      If FpFork = 0 Then
-        Begin
-          Count := Length(Args) + 2;
-          SetLength(Owned, Count - 1);
-          GetMem(Argv, Count * SizeOf(PChar));
-          Owned[0] := Executable;
-          Argv[0] := PChar(Owned[0]);
-          For I := 0 To High(Args) Do
-            Begin
-              Owned[I + 1] := Args[I];
-              Argv[I + 1] := PChar(Owned[I + 1]);
-            End;
-          Argv[Count - 1] := Nil;
-          FpExecv(PChar(Executable), Argv);
-          FpExit(127);
-        End;
-      FpExit(0);
-    End;
-  FpWaitPid(Pid, Status, 0);
-  Result := True;
-End;
-{$ENDIF}
-
-{$IFDEF WINDOWS}
-Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
-Var
-  Startup: TStartupInfo;
-  ProcessInfo: TProcessInformation;
-  Command: String;
-  I: Integer;
-Begin
-  Result := False;
-  ErrorText := '';
-  FillChar(Startup, SizeOf(Startup), 0);
-  Startup.cb := SizeOf(Startup);
-  FillChar(ProcessInfo, SizeOf(ProcessInfo), 0);
-  Command := '"' + Executable + '"';
-  For I := 0 To High(Args) Do
-    Command := Command + ' "' + Args[I] + '"';
-  If Not CreateProcess(Nil, PChar(Command), Nil, Nil, False, CREATE_NEW_CONSOLE, Nil, Nil, Startup, ProcessInfo) Then
-    Begin
-      ErrorText := 'Could not start Claude Code sign-in.';
-      Exit;
-    End;
-  CloseHandle(ProcessInfo.hProcess);
-  CloseHandle(ProcessInfo.hThread);
-  Result := True;
-End;
-{$ENDIF}
-
-{$IF NOT DEFINED(UNIX) AND NOT DEFINED(WINDOWS)}
-Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
-Begin
-  Result := False;
-  ErrorText := 'Could not start Claude Code sign-in.';
-End;
-{$ENDIF}
 
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
 Begin
