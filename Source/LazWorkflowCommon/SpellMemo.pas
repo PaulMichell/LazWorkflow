@@ -4,7 +4,7 @@ Unit SpellMemo;
 
   Size note: exceeds the 1000 line preference. Wrap layout, caret/selection,
   undo grouping and spell markup are one painted control so edits and
-  underlines stay widgetset-free. Reviewed 2026-10-10: no hidden sibling material. }
+  underlines stay widgetset-free. Reviewed 2026-10-20: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -66,6 +66,9 @@ Type
     FCaretTimer: TTimer;
     FCaretOn: Boolean;
     FOwnsCaret: Boolean;
+    FHookedForm: TCustomForm;
+    FSavedFormWindowProc: TWndMethod;
+    FFocusHooks: Boolean;
     FRanges: TSpellUnderlineRangeArray;
     FOwnedPopup: TPopupMenu;
     FSpellItemCount: Integer;
@@ -100,6 +103,16 @@ Type
     Procedure ResetCaretBlink;
     Procedure AcquireCaret;
     Function CaretIsActive: Boolean;
+    Procedure RefreshCaretForFocus;
+    Procedure EnsureCaretFocusWatch;
+    Procedure InstallFocusHooks;
+    Procedure RemoveFocusHooks;
+    Procedure HookHostForm;
+    Procedure UnhookHostForm;
+    Procedure HostFormWindowProc(Var Message: TLMessage);
+    Procedure ApplicationFocusChanged(Sender: TObject);
+    Procedure ScreenActiveFormChanged(Sender: TObject; Form: TCustomForm);
+    Procedure ScreenActiveControlChanged(Sender: TObject; LastControl: TControl);
     Procedure ConfigChanged(Sender: TObject);
     Procedure RestartDebounce;
     Procedure ClearSpellMenu(Menu: TPopupMenu);
@@ -177,6 +190,7 @@ Type
     Procedure DblClick; Override;
     Procedure MouseMove(Shift: TShiftState; X, Y: Integer); Override;
     Function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint): Boolean; Override;
+    Procedure SetParent(NewParent: TWinControl); Override;
     Procedure DoEnter; Override;
     Procedure DoExit; Override;
     Procedure DoContextPopup(MousePos: TPoint; Var Handled: Boolean); Override;
@@ -334,6 +348,8 @@ Begin
   FCaretTimer.OnTimer := @CaretTimerTick;
   FCaretOn := False;
   FOwnsCaret := False;
+  FHookedForm := Nil;
+  FFocusHooks := False;
   FScrollBar := Nil;
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.RegisterChangedHandler(@ConfigChanged);
@@ -343,6 +359,8 @@ End;
 Destructor TSpellMemo.Destroy;
 Begin
   FReady := False;
+  UnhookHostForm;
+  RemoveFocusHooks;
   Application.RemoveAsyncCalls(Self);
   If Assigned(WorkflowSpellConfig) Then
     WorkflowSpellConfig.UnregisterChangedHandler(@ConfigChanged);
@@ -431,6 +449,7 @@ Begin
   If csDesigning In ComponentState Then
     Exit;
   EnsurePopupHook;
+  EnsureCaretFocusWatch;
   If CanLayout Then
     Begin
       EnsureScrollBar;
@@ -450,7 +469,10 @@ Begin
       UpdateScrollBar;
     End;
   If Not (csDesigning In ComponentState) Then
-    RestartDebounce;
+    Begin
+      EnsureCaretFocusWatch;
+      RestartDebounce;
+    End;
 End;
 
 Function TSpellMemo.SpellActive: Boolean;
@@ -963,18 +985,156 @@ End;
 Function TSpellMemo.CaretIsActive: Boolean;
 Var
   ParentForm: TCustomForm;
+  KeyControl: TWinControl;
 Begin
   Result := False;
   If csDesigning In ComponentState Then
     Exit;
-  { Focused can stay false after a popup or child scrollbar while the form
-    still delivers keys here. A key also sets FOwnsCaret for that gap. }
+  If Assigned(Application) And (Not Application.Active) Then
+    Exit;
   ParentForm := GetParentForm(Self);
+  { Deactivation leaves ActiveControl on this memo and does not call DoExit.
+    FOwnsCaret must not keep the insertion point blinking in an inactive window.
+    Screen.ActiveCustomForm covers a docked IDE host whose Active flag lags. }
+  If Assigned(ParentForm) And (Not ParentForm.Active) Then
+    Exit;
+  If Assigned(ParentForm) And Assigned(Screen.ActiveCustomForm) And (Screen.ActiveCustomForm <> ParentForm) Then
+    Exit;
   If Assigned(ParentForm) Then
-    Result := ParentForm.ActiveControl = Self
+    KeyControl := ParentForm.ActiveControl
   Else
-    Result := Screen.ActiveControl = Self;
-  Result := Result Or Focused Or FOwnsCaret;
+    KeyControl := Screen.ActiveControl;
+  If (KeyControl = Self) Or (Assigned(KeyControl) And ContainsControl(KeyControl)) Then
+    Result := True;
+  Result := Result Or Focused;
+  { A popup or child scrollbar can clear Focused while this window still
+    delivers keys. That gap is not another control taking ActiveControl. }
+  If FOwnsCaret And ((Not Assigned(KeyControl)) Or (KeyControl = Self) Or ContainsControl(KeyControl)) Then
+    Result := True;
+End;
+
+Procedure TSpellMemo.RefreshCaretForFocus;
+Begin
+  If (Not FReady) Or (csDestroying In ComponentState) Or (csDesigning In ComponentState) Then
+    Exit;
+  If CaretIsActive Then
+    Begin
+      If Not (Assigned(FCaretTimer) And FCaretTimer.Enabled) Then
+        UpdateCaret;
+    End
+  Else
+    Begin
+      FCaretOn := False;
+      If Assigned(FCaretTimer) Then
+        FCaretTimer.Enabled := False;
+      If HandleAllocated Then
+        Invalidate;
+    End;
+End;
+
+Procedure TSpellMemo.EnsureCaretFocusWatch;
+Begin
+  If csDesigning In ComponentState Then
+    Exit;
+  InstallFocusHooks;
+  HookHostForm;
+End;
+
+Procedure TSpellMemo.InstallFocusHooks;
+Begin
+  If FFocusHooks Or (csDesigning In ComponentState) Then
+    Exit;
+  If Not Assigned(Application) Or Not Assigned(Screen) Then
+    Exit;
+  Application.AddOnActivateHandler(@ApplicationFocusChanged, False);
+  Application.AddOnDeactivateHandler(@ApplicationFocusChanged, False);
+  Screen.AddHandlerActiveFormChanged(@ScreenActiveFormChanged, False);
+  Screen.AddHandlerActiveControlChanged(@ScreenActiveControlChanged, False);
+  FFocusHooks := True;
+End;
+
+Procedure TSpellMemo.RemoveFocusHooks;
+Begin
+  If Not FFocusHooks Then
+    Exit;
+  If Assigned(Application) Then
+    Begin
+      Application.RemoveOnActivateHandler(@ApplicationFocusChanged);
+      Application.RemoveOnDeactivateHandler(@ApplicationFocusChanged);
+    End;
+  If Assigned(Screen) Then
+    Begin
+      Screen.RemoveHandlerActiveFormChanged(@ScreenActiveFormChanged);
+      Screen.RemoveHandlerActiveControlChanged(@ScreenActiveControlChanged);
+    End;
+  FFocusHooks := False;
+End;
+
+Procedure TSpellMemo.HookHostForm;
+Var
+  Host: TCustomForm;
+Begin
+  If csDesigning In ComponentState Then
+    Exit;
+  { Only the memo's own top-level form. A docked window shares the IDE host,
+    and replacing that WindowProc would fight every other editor. }
+  Host := GetParentForm(Self, False);
+  If Not Assigned(Host) Or Assigned(Host.Parent) Then
+    Begin
+      UnhookHostForm;
+      Exit;
+    End;
+  If (Host = FHookedForm) And (Host.WindowProc = @HostFormWindowProc) Then
+    Exit;
+  UnhookHostForm;
+  FHookedForm := Host;
+  FSavedFormWindowProc := Host.WindowProc;
+  Host.FreeNotification(Self);
+  Host.WindowProc := @HostFormWindowProc;
+End;
+
+Procedure TSpellMemo.UnhookHostForm;
+Begin
+  If Not Assigned(FHookedForm) Then
+    Exit;
+  FHookedForm.RemoveFreeNotification(Self);
+  If FHookedForm.WindowProc = @HostFormWindowProc Then
+    FHookedForm.WindowProc := FSavedFormWindowProc;
+  FHookedForm := Nil;
+  FSavedFormWindowProc := Nil;
+End;
+
+Procedure TSpellMemo.HostFormWindowProc(Var Message: TLMessage);
+Begin
+  If Assigned(FSavedFormWindowProc) Then
+    FSavedFormWindowProc(Message);
+  If (Message.Msg = LM_ACTIVATE) Or (Message.Msg = CM_ACTIVATE) Or (Message.Msg = CM_DEACTIVATE) Then
+    RefreshCaretForFocus;
+End;
+
+{$PUSH}{$HINTS OFF}
+Procedure TSpellMemo.ApplicationFocusChanged(Sender: TObject);
+Begin
+  RefreshCaretForFocus;
+End;
+
+Procedure TSpellMemo.ScreenActiveFormChanged(Sender: TObject; Form: TCustomForm);
+Begin
+  RefreshCaretForFocus;
+End;
+
+Procedure TSpellMemo.ScreenActiveControlChanged(Sender: TObject; LastControl: TControl);
+Begin
+  RefreshCaretForFocus;
+End;
+{$POP}
+
+Procedure TSpellMemo.SetParent(NewParent: TWinControl);
+Begin
+  Inherited SetParent(NewParent);
+  If csDestroying In ComponentState Then
+    Exit;
+  EnsureCaretFocusWatch;
 End;
 
 Procedure TSpellMemo.ResetCaretBlink;
@@ -1551,6 +1711,7 @@ Procedure TSpellMemo.DoEnter;
 Begin
   Inherited DoEnter;
   FOwnsCaret := True;
+  EnsureCaretFocusWatch;
   UpdateCaret;
   Invalidate;
 End;
@@ -1958,6 +2119,11 @@ Begin
         Begin
           FHookedPopup := Nil;
           FHostPopupHandler := Nil;
+        End;
+      If AComponent = FHookedForm Then
+        Begin
+          FHookedForm := Nil;
+          FSavedFormWindowProc := Nil;
         End;
     End;
   Inherited Notification(AComponent, Operation);
