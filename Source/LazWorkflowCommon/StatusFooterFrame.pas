@@ -61,6 +61,7 @@ Type
     Procedure SetOnUsageClick(Value: TNotifyEvent);
     Procedure SetOnRightClick(Value: TNotifyEvent);
     Procedure ApplyClickStyle(LabelControl: TLabel; Clickable: Boolean);
+    Procedure UseHostFont;
     Procedure UpdateFontMetrics;
   Protected
     Procedure CreateWnd; Override;
@@ -130,6 +131,25 @@ Begin
     End;
 End;
 
+Procedure TStatusFooterFrame.UseHostFont;
+Var
+  Host: TControl;
+Begin
+  Host := Parent;
+  While Assigned(Host) And Not (Host Is TCustomForm) Do
+    Host := Host.Parent;
+  If Not (Host Is TControl) Then
+    Exit;
+  { The frame resource is 96 PPI. A host form saved at another PPI scales this
+    frame on its own, so the labels become larger than the form text and the
+    buttons. Follow the host form font after that scale. }
+  If (Font.Height = TControl(Host).Font.Height) And (Font.Size = TControl(Host).Font.Size) And
+    SameText(Font.Name, TControl(Host).Font.Name) Then
+    Exit;
+  ParentFont := False;
+  Font.Assign(TControl(Host).Font);
+End;
+
 Procedure TStatusFooterFrame.UpdateFontMetrics;
 Var
   Labels: Array[0..7] Of TLabel;
@@ -141,6 +161,7 @@ Begin
     Exit;
   UpdatingMetrics := True;
   Try
+    UseHostFont;
     ApplyClickStyle(LeftLabel, False);
     ApplyClickStyle(SkillLabel, Assigned(FOnSkillClick));
     ApplyClickStyle(ModelLabel, Assigned(FOnLeftClick));
