@@ -50,6 +50,7 @@ Type
     FKeyPath: String;
     FBoundPort: Word;
     FLastError: String;
+    FJoined: Boolean;
     FOutboundQueue: Array Of RawByteString;
     FInboundQueue: Array Of TMonitorFrame;
     Procedure LockCarrier;
@@ -76,12 +77,12 @@ Type
     Procedure AttachSession(Session: TMonitorSession);
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
-    { Valid from a successful Start until Stop returns. AssistantMonitorMain may WaitFor. }
+    { Valid from a successful Start until Stop returns. Stop joins the thread. Do not WaitFor as well. }
     Property ListenThread: TMonitorListenThread Read FThread;
     Property LastError: String Read FLastError;
   End;
 
-  { FreeOnTerminate is false. The owner calls WaitFor on shutdown. Stop does too. }
+  { FreeOnTerminate is false. Stop joins this thread once. A second WaitFor is undefined on Unix. }
   TMonitorListenThread = Class(TThread)
   Private
     Type
@@ -117,6 +118,7 @@ Type
     FCloseWaitMs: QWord;
     Procedure Fail(Const ErrorText: String);
     Procedure FreeSockets;
+    Procedure ReleaseServer;
     Procedure CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
     Procedure HandleConnect(Sender: TObject; Data: TSocketStream);
     Procedure HandleIdle(Sender: TObject);
@@ -129,7 +131,6 @@ Type
     Procedure ServiceAccepted(Var Accepted: TMonitorAccepted);
     Procedure DropAccepted(Index: Integer; Const Reason: String);
     Procedure ServiceIdle;
-    Function CurrentServer: TInetServer;
   Protected
     Procedure Execute; Override;
   Public
@@ -286,6 +287,7 @@ Begin
   FKeyPath := KeyPath;
   FBoundPort := 0;
   FLastError := '';
+  FJoined := False;
   SetLength(FOutboundQueue, 0);
   SetLength(FInboundQueue, 0);
 End;
@@ -491,6 +493,7 @@ Begin
   LockCarrier;
   Try
     FThread := Thread;
+    FJoined := False;
     FState := mcsIdle;
   Finally
     UnlockCarrier;
@@ -515,11 +518,14 @@ End;
 Procedure TMonitorLanCarrier.Stop;
 Var
   Thread: TMonitorListenThread;
-  Server: TInetServer;
+  Join: Boolean;
 Begin
   LockCarrier;
   Try
     Thread := FThread;
+    Join := Assigned(Thread) And (Not FJoined);
+    If Join Then
+      FJoined := True;
   Finally
     UnlockCarrier;
   End;
@@ -528,18 +534,29 @@ Begin
       NoteClosed;
       Exit;
     End;
-  Thread.Terminate;
-  Server := Thread.CurrentServer;
-  If Assigned(Server) Then
-    Server.StopAccepting(True);
-  If GetCurrentThreadId = Thread.ThreadID Then
+  { Unix TThread.WaitFor joins the pthread. A second join is an access violation. }
+  If Not Join Then
     Exit;
+  { TInetServer is owned by the listen thread. StopAccepting here races that thread freeing the
+    socket: FAccepting is cleared first, the accept loop exits, and Abort then uses a freed object. }
+  Thread.Terminate;
+  If GetCurrentThreadId = Thread.ThreadID Then
+    Begin
+      LockCarrier;
+      Try
+        FJoined := False;
+      Finally
+        UnlockCarrier;
+      End;
+      Exit;
+    End;
   Thread.WaitFor;
   LogMonitor(1, 'listen stop bind=' + FBindAddress + ' port=' + IntToStr(Thread.BoundPort));
   LockCarrier;
   Try
     If FThread = Thread Then
       FreeAndNil(FThread);
+    FJoined := False;
     FState := mcsClosed;
     FBoundPort := 0;
     SetLength(FOutboundQueue, 0);
@@ -654,7 +671,7 @@ End;
 Destructor TMonitorListenThread.Destroy;
 Begin
   FreeSockets;
-  FreeAndNil(FServer);
+  ReleaseServer;
   If Assigned(FReady) Then
     RTLEventDestroy(FReady);
   FReady := Nil;
@@ -684,14 +701,40 @@ Begin
       Stream := FAccepted[Index].Stream;
       FAccepted[Index].Stream := Nil;
       If Assigned(Stream) Then
-        Stream.Free;
+        Try
+          Stream.Free;
+        Except
+          On E: Exception Do
+            LogMonitor(2, 'listen socket release ' + E.Message);
+        End;
     End;
   SetLength(FAccepted, 0);
 End;
 
-Function TMonitorListenThread.CurrentServer: TInetServer;
+Procedure TMonitorListenThread.ReleaseServer;
+Var
+  ListenServer: TInetServer;
 Begin
-  Result := FServer;
+  ListenServer := FServer;
+  FServer := Nil;
+  If Not Assigned(ListenServer) Then
+    Exit;
+  ListenServer.OnConnect := Nil;
+  ListenServer.OnIdle := Nil;
+  ListenServer.OnConnectionDropped := Nil;
+  ListenServer.OnCreateClientSocketHandler := Nil;
+  Try
+    ListenServer.StopAccepting(True);
+  Except
+    On E: Exception Do
+      LogMonitor(2, 'listen stop accepting ' + E.Message);
+  End;
+  Try
+    ListenServer.Free;
+  Except
+    On E: Exception Do
+      LogMonitor(2, 'listen server release ' + E.Message);
+  End;
 End;
 
 {$PUSH}{$HINTS OFF}
@@ -759,14 +802,26 @@ Var
   Session: TMonitorSession;
   RejectFrame: TMonitorFrame;
   Json, Bytes: RawByteString;
-  HasController: Boolean;
+  HasController, Released: Boolean;
   Index: Integer;
 Begin
   If Accepted.Noted Then
     Exit;
+  { A reconnect arrives while the previous socket is still the controller.
+    Rejecting it as busy leaves the phone looping on Reconnecting. }
+  Released := False;
+  For Index := 0 To High(FAccepted) Do
+    If FAccepted[Index].Controller And (FAccepted[Index].Stream <> Accepted.Stream) Then
+      Begin
+        FAccepted[Index].Controller := False;
+        FAccepted[Index].DropAfter := True;
+        Released := True;
+      End;
   Session := Nil;
   If Assigned(FCarrier) Then
     Session := FCarrier.CopySession;
+  If Released And Assigned(Session) Then
+    Session.NoteSocketClosed;
   If Assigned(Session) Then
     Begin
       If Session.AcceptHandshake(RejectFrame) Then
@@ -978,6 +1033,8 @@ Var
   NowMs: QWord;
   Session: TMonitorSession;
 Begin
+  If Accepted.DropAfter Then
+    Exit;
   If Not Accepted.Noted Then
     NoteHandshake(Accepted);
   ReadOnce(Accepted);
@@ -1107,7 +1164,6 @@ End;
 Procedure TMonitorListenThread.Execute;
 Var
   LoadError: String;
-  ListenServer: TInetServer;
 Begin
   Try
     Try
@@ -1165,9 +1221,7 @@ Begin
     End;
   Finally
     FreeSockets;
-    ListenServer := FServer;
-    FServer := Nil;
-    FreeAndNil(ListenServer);
+    ReleaseServer;
     If Assigned(FCarrier) And FBindOk Then
       FCarrier.NoteClosed;
     If Not FSignaled Then

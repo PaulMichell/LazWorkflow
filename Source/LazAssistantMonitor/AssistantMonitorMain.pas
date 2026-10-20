@@ -33,6 +33,7 @@ Var
   LiveSession: TMonitorSession;
   LiveCarrier: TMonitorLanCarrier;
   RemoteMonitorCommand: TIDECommand;
+  StoppingListener: Boolean;
 
 Function MonitorLiveSession: TMonitorSession;
 Begin
@@ -45,26 +46,26 @@ Begin
 End;
 
 Procedure StopAssistantMonitorListener;
-Var
-  Thread: TMonitorListenThread;
 Begin
-  If Assigned(LiveSession) Then
-    LiveSession.StopListening;
-  DetachAssistantMonitorBridge;
-  Thread := Nil;
-  If Assigned(LiveCarrier) Then
-    Thread := LiveCarrier.ListenThread;
-  If Assigned(Thread) Then
-    Begin
-      Thread.Terminate;
-      Thread.WaitFor;
-    End;
-  If Assigned(LiveCarrier) Then
-    LiveCarrier.Stop;
-  If Assigned(LiveSession) Then
-    LiveSession.AttachCarrier(Nil);
-  FreeAndNil(LiveCarrier);
-  FreeAndNil(LiveSession);
+  { WaitFor pumps the main thread. A second entry must not release the carrier while the first join is still running. }
+  If StoppingListener Then
+    Exit;
+  StoppingListener := True;
+  Try
+    If Assigned(LiveSession) Then
+      LiveSession.StopListening;
+    DetachAssistantMonitorBridge;
+    { Carrier.Stop joins the listen thread once. Unix WaitFor is pthread_join, and a second join is an access violation. }
+    If Assigned(LiveCarrier) Then
+      LiveCarrier.Stop;
+    { The session interface owns the carrier. Releasing it destroys the object. Freeing the class pointer afterwards is an access violation. }
+    If Assigned(LiveSession) Then
+      LiveSession.AttachCarrier(Nil);
+    LiveCarrier := Nil;
+    FreeAndNil(LiveSession);
+  Finally
+    StoppingListener := False;
+  End;
 End;
 
 Function StartAssistantMonitorListener(Out ErrorText: String): Boolean;
@@ -118,8 +119,12 @@ Begin
         End;
     End;
   Finally
-    If Assigned(Session) Then
-      Session.AttachCarrier(Nil);
+    { Same ownership as Stop. The session interface is the only reference, so releasing it destroys the carrier. }
+    If Assigned(Session) And Assigned(Session.Carrier) Then
+      Begin
+        Session.AttachCarrier(Nil);
+        Carrier := Nil;
+      End;
     FreeAndNil(Carrier);
     FreeAndNil(Session);
   End;
