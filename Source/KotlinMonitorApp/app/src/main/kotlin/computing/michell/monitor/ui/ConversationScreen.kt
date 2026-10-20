@@ -24,18 +24,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,17 +65,25 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import computing.michell.monitor.R
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.dictation.DictationListeningMessage
+import computing.michell.monitor.dictation.DictationPhase
+import computing.michell.monitor.dictation.DictationState
+import computing.michell.monitor.dictation.DictationUnavailableMessage
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireImage
 import computing.michell.monitor.protocol.WireTurn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.launch
 
 private val UserFill = Color(0xFFE5F8EF)
@@ -101,15 +114,18 @@ fun ConversationScreen(
   ui: MonitorUi,
   phase: LinkPhase,
   bitmaps: Map<String, Bitmap>,
-  onDraft: (String) -> Unit,
+  onPrompt: (String, Int, Int) -> Unit,
   onSend: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
   onMode: (String) -> Unit,
   onNeed: (Int) -> Unit,
   onSettings: () -> Unit,
-  sendWaiting: Boolean = false
+  dictation: DictationState,
+  onDictateOn: (Int, Int) -> Unit,
+  onDictateOff: () -> Unit
 ) {
+  val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       Text("Mode")
@@ -117,15 +133,31 @@ fun ConversationScreen(
     }
     if (ui.banner.isNotEmpty()) Text(ui.banner, color = MaterialTheme.colorScheme.error)
     ConversationPane(ui, bitmaps, onNeed, Modifier.weight(1f).fillMaxWidth())
-    ActivityStatus(ui, phase)
-    PromptField(ui.draft, onDraft)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      Button(onClick = onSend, enabled = actionEnabled(ui.view) && !ui.disconnected && !sendWaiting) { Text(actionCaption(ui.view)) }
+    PromptField(promptValue, onPrompt)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+      DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, onDictateOn, onDictateOff)
+      Button(
+        onClick = onSend,
+        enabled = actionEnabled(ui.view) && !ui.disconnected && !dictation.sendMustWait
+      ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
       Button(onClick = onNew, enabled = ui.view.canSend && !ui.disconnected) { Text("New") }
       OutlinedButton(onClick = onSettings) { Text("Settings") }
     }
+    ActivityStatus(ui, phase, dictation.listening, dictation.statusMessage)
   }
+}
+
+fun promptFieldValue(draft: String, selectionStart: Int, selectionEnd: Int): TextFieldValue {
+  val length = draft.length
+  return TextFieldValue(draft, TextRange(selectionStart.coerceIn(0, length), selectionEnd.coerceIn(0, length)))
+}
+
+fun promptActivityRight(activity: String, listening: Boolean, statusMessage: String): String {
+  if (listening) return DictationListeningMessage
+  if (statusMessage.isEmpty()) return activity
+  if (statusMessage == DictationUnavailableMessage && activity != "Ready") return activity
+  return statusMessage
 }
 
 @Composable
@@ -393,7 +425,7 @@ private fun ModeCombo(mode: String, enabled: Boolean, onMode: (String) -> Unit, 
 }
 
 @Composable
-private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase) {
+private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase, listening: Boolean, statusMessage: String) {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
   val blocks = displayBlocks(ui.live)
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
@@ -407,6 +439,7 @@ private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase) {
   }
   val runtime = runtimeCaption(ui.view)
   val activity = activityCaption(ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live)
+  val right = promptActivityRight(activity, listening, statusMessage)
   val statusStyle = MaterialTheme.typography.bodySmall
   Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(connectionLabel(ui, phase), color = QuietText, maxLines = 1, style = statusStyle)
@@ -415,18 +448,69 @@ private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase) {
     } else {
       Spacer(Modifier.weight(1f))
     }
-    Text(activity, color = QuietText, maxLines = 1, style = statusStyle)
+    Text(
+      right,
+      color = QuietText,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+      textAlign = TextAlign.End,
+      style = statusStyle,
+      modifier = Modifier.widthIn(max = 168.dp)
+    )
   }
 }
 
 @Composable
-private fun PromptField(draft: String, onDraft: (String) -> Unit) {
+private fun PromptField(value: TextFieldValue, onPrompt: (String, Int, Int) -> Unit) {
   OutlinedTextField(
-    value = draft,
-    onValueChange = onDraft,
+    value = value,
+    onValueChange = { next -> onPrompt(next.text, next.selection.start, next.selection.end) },
     modifier = Modifier.fillMaxWidth(),
     label = { Text("Prompt") }
   )
+}
+
+@Composable
+private fun DictateToggle(
+  dictation: DictationState,
+  selectionStart: Int,
+  selectionEnd: Int,
+  onStart: (Int, Int) -> Unit,
+  onStop: () -> Unit
+) {
+  val listening = dictation.listening
+  val available = dictation.statusMessage != DictationUnavailableMessage
+  val description = when {
+    listening -> "Stop dictation"
+    !available -> DictationUnavailableMessage
+    else -> "Dictate prompt"
+  }
+  val tint = when {
+    !available -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    listening -> MaterialTheme.colorScheme.onPrimary
+    else -> MaterialTheme.colorScheme.primary
+  }
+  if (listening) {
+    FilledIconButton(
+      onClick = onStop,
+      colors = IconButtonDefaults.filledIconButtonColors(
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary
+      )
+    ) {
+      Icon(painterResource(R.drawable.ic_dictate), contentDescription = description, tint = tint)
+    }
+  } else {
+    OutlinedIconButton(
+      onClick = {
+        if (dictation.phase == DictationPhase.Idle) onStart(selectionStart, selectionEnd)
+      },
+      enabled = available,
+      colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+    ) {
+      Icon(painterResource(R.drawable.ic_dictate), contentDescription = description, tint = tint)
+    }
+  }
 }
 
 @Composable

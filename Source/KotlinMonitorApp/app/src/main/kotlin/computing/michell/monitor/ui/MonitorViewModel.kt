@@ -19,6 +19,7 @@ import computing.michell.monitor.dictation.DictationStep
 import computing.michell.monitor.dictation.OnDeviceSpeechEngine
 import computing.michell.monitor.dictation.SpeechEngine
 import computing.michell.monitor.dictation.SpeechEngineListener
+import computing.michell.monitor.dictation.DictationUnavailableMessage
 import computing.michell.monitor.dictation.reduceDictation
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
@@ -606,7 +607,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       session.status.collect { status -> onLink(status) }
     }
     // Creation is on the main thread. available() does not create the recognizer.
-    if (!engine.available()) dictationState.value = DictationState(statusMessage = "Dictation unavailable")
+    if (!engine.available()) dictationState.value = DictationState(statusMessage = DictationUnavailableMessage)
     if (record.address.isNotEmpty()) {
       session.connect(record.address, record.port)
     }
@@ -625,10 +626,23 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     storeDraft(text)
   }
 
+  fun changePrompt(text: String, selectionStart: Int, selectionEnd: Int) {
+    if (dictationState.value.phase != DictationPhase.Idle) {
+      editPrompt(text, selectionStart, selectionEnd)
+      return
+    }
+    if (text != uiState.value.draft) updateDraft(text)
+    val length = text.length
+    dictationState.value = dictationState.value.copy(
+      selectionStart = selectionStart.coerceIn(0, length),
+      selectionEnd = selectionEnd.coerceIn(0, length)
+    )
+  }
+
   fun toggleDictationOn(selectionStart: Int, selectionEnd: Int) {
     if (dictationState.value.phase != DictationPhase.Idle) return
     if (!recognitionSupported || !engine.available()) {
-      dictationState.value = dictationState.value.copy(statusMessage = "Dictation unavailable")
+      dictationState.value = dictationState.value.copy(statusMessage = DictationUnavailableMessage)
       return
     }
     if (!microphoneGranted()) {
@@ -641,7 +655,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     callbackSession = step.state.sessionId
     if (engine.start()) return
     callbackSession = 0
-    applyDictation(DictationEvent.Failure(step.state.sessionId, "Dictation unavailable"))
+    applyDictation(DictationEvent.Failure(step.state.sessionId, DictationUnavailableMessage))
     engine.cancel()
   }
 

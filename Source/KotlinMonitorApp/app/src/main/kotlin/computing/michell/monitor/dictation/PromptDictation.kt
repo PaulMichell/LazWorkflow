@@ -5,6 +5,8 @@ package computing.michell.monitor.dictation
 const val DictationDraftLimit = 65536
 const val DictationTooLongMessage = "Text is longer than 65536 characters."
 const val DictationNoSpeechMessage = "No speech recognised."
+const val DictationUnavailableMessage = "Dictation unavailable"
+const val DictationListeningMessage = "Listening…"
 
 enum class DictationPhase {
   Idle,
