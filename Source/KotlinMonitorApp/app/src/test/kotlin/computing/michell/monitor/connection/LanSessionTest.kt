@@ -6,7 +6,9 @@ import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeAuth
 import computing.michell.monitor.protocol.decodeHello
+import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
+import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryDecodeFrame
@@ -14,6 +16,7 @@ import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.atomic.AtomicInteger
@@ -44,6 +47,19 @@ class LanSessionTest {
     policy.resume()
     assertFalse(policy.paused)
     assertEquals(1_000L, policy.nextDelayMs())
+  }
+
+  @Test
+  fun emptyFingerprintTrustsThePresentedCertificate() {
+    val manager = TrustAllManager()
+    manager.checkServerTrusted(arrayOf(FixedCertificate(byteArrayOf(1, 2, 3))), "RSA")
+    var rejected = false
+    try {
+      manager.checkServerTrusted(emptyArray(), "RSA")
+    } catch (error: CertificateException) {
+      rejected = true
+    }
+    assertTrue(rejected)
   }
 
   @Test
@@ -110,11 +126,48 @@ class LanSessionTest {
     waitUntil { session.reconnectPaused }
     Thread.sleep(400)
     assertEquals(1, opens.get())
-    assertEquals(HostClosedBanner, session.status.value.banner)
+    assertEquals(ConnectionRefusedBanner, session.status.value.banner)
     assertEquals("draft", session.promptDraft)
     session.resume()
     waitUntil { opens.get() >= 2 }
     assertEquals("draft", session.promptDraft)
+    session.close()
+  }
+
+  @Test
+  fun hostPingIsAnsweredWithPong() {
+    val store = pairedStore()
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link })
+    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    waitUntil { link.frames().isNotEmpty() }
+    link.push(frameOf(encodeTicks(MessageKind.Ping, "host-ping", 42)))
+    waitUntil { link.frames().size >= 2 }
+    val pong = envelope(link.frames().last())
+    assertEquals(MessageKind.Pong, pong.kind)
+    session.close()
+  }
+
+  @Test
+  fun openEndpointSendsHelloThenEmptyPair() {
+    val store = HostStore(MemoryStringMap())
+    val link = ScriptedLink()
+    var seenFingerprint = "unset"
+    val session = LanSession(store, TlsConnector { _, _, fingerprint ->
+      seenFingerprint = fingerprint
+      link
+    })
+    session.connect("10.0.0.8", 56122)
+    waitUntil { link.frames().size >= 2 }
+    assertEquals("", seenFingerprint)
+    val hello = envelope(link.frames()[0])
+    val pair = envelope(link.frames()[1])
+    assertEquals(MessageKind.Hello, hello.kind)
+    assertFalse(decodeHello(hello.payloadJson)!!.hasClientId)
+    assertEquals(MessageKind.Pair, pair.kind)
+    val decoded = decodePair(pair.payloadJson)
+    assertEquals("", decoded!!.code)
+    assertEquals("", decoded.fingerprint)
     session.close()
   }
 
@@ -139,7 +192,7 @@ class LanSessionTest {
     assertEquals("client-1", decoded!!.clientId)
     assertEquals(authMac("token-1", "00112233445566778899aabbccddeeff"), decoded.hmac)
     link.closeInput()
-    waitUntil { session.status.value.banner == HostClosedBanner }
+    waitUntil { session.status.value.banner == ReconnectingBanner }
     assertEquals("keep me", session.promptDraft)
     assertEquals("token-1", store.load().sessionToken)
     session.close()

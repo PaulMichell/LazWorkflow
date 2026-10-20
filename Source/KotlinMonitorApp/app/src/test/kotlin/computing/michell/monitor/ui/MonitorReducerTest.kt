@@ -3,18 +3,18 @@ package computing.michell.monitor.ui
 /* Catalogue reduction without a device (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.HostClosedBanner
+import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.protocol.ApprovalNotice
-import computing.michell.monitor.protocol.JsonValue
-import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.PlanRow
-import computing.michell.monitor.protocol.TaskRow
+
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.encodeApprovalClosed
 import computing.michell.monitor.protocol.encodeApprovalRequested
-import computing.michell.monitor.protocol.encodeEnvelope
+import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeImageUnavailable
 import computing.michell.monitor.protocol.tryEncodeTranscript
 import computing.michell.monitor.protocol.encodeInsertResult
@@ -30,7 +30,14 @@ import org.junit.Test
 
 class MonitorReducerTest {
   @Test
-  fun snapshotReplacesViewPlanTasksAndTurnIndex() {
+  fun loadedBlockKeepsTheFullBody() {
+    val body = "x".repeat(4000)
+    val turn = WireTurn(1, "a", "chat", "", "", "", blocks = listOf(WireBlock("answer", "b", "", "", "", body, false, true, 0, emptyList())))
+    assertEquals(body, shownBlocks(turn, true, true).single().body)
+  }
+
+  @Test
+  fun snapshotReplacesViewPlanAndTurnIndex() {
     val snapshot = WireSnapshot(
       emptyView().copy(model = "grok-test", canSend = true, targetDisplay = "LazWorkflow", phase = "idle"),
       listOf(WireTurn(2, "turn-2", "build", "", "older", "")),
@@ -39,14 +46,13 @@ class MonitorReducerTest {
       "Monitor plan",
       false,
       listOf(PlanRow(1, 1, "Codec", "", "pending", true)),
-      listOf(promptTask()),
+      emptyList(),
       ApprovalNotice(false, "", "", "", "", false)
     )
     val next = reduceMonitor(MonitorUi(draft = "keep"), message(encodeSnapshot("snapshot", snapshot)))
     assertEquals("grok-test", next.view.model)
     assertEquals("LazWorkflow", next.view.targetDisplay)
     assertEquals("Documents/Plan.md", next.planPath)
-    assertEquals(1, next.taskRows.size)
     assertEquals(1, next.turns.size)
     assertEquals(3, next.live?.turnIndex)
     assertEquals("keep", next.draft)
@@ -64,23 +70,18 @@ class MonitorReducerTest {
   }
 
   @Test
-  fun turnDataFillsTheSelectedHistoryTurn() {
+  fun turnDataFillsHistoryWithoutMovingTheView() {
     val turn = WireTurn(4, "turn-4", "build", "", "history", "", prompt = "full")
-    val next = reduceMonitor(MonitorUi(), message(encodeTurnData("turn-data", turn)))
+    val next = reduceMonitor(MonitorUi(selectedTurn = -1), message(encodeTurnData("turn-data", turn)))
     assertEquals("full", next.history[4]?.prompt)
-    assertEquals(4, next.selectedTurn)
+    assertEquals(-1, next.selectedTurn)
   }
 
   @Test
-  fun planAndTasksPatchThoseParts() {
+  fun planPatchesThoseParts() {
     val planned = reduceMonitor(MonitorUi(), message(encodePlan("plan", "Documents/Plan.md", "Monitor", true, listOf(PlanRow(1, 1, "Row", "", "pending", true)))))
     assertEquals("Monitor", planned.planTitle)
     assertTrue(planned.planRunning)
-    val tasks = reduceMonitor(planned, message(tasksJson()))
-    assertEquals("format", tasks.taskRows.single().kind)
-    assertEquals("This task runs on the desktop.", tasks.taskRows.single().desktopOnlyReason())
-    assertFalse(tasks.taskRows.single().isRunnable())
-    assertTrue(promptTask().isRunnable())
   }
 
   @Test
@@ -98,7 +99,8 @@ class MonitorReducerTest {
 
   @Test
   fun rejectedAndSocketEofKeepTheDraft() {
-    val start = MonitorUi(draft = "unsent", reachedLive = true)
+    val kept = WireTurn(1, "a", "chat", "", "hi", "", prompt = "hi")
+    val start = MonitorUi(draft = "unsent", reachedLive = true, turns = listOf(kept), history = mapOf(1 to kept))
     val rejected = reduceMonitor(start, message(encodeRejected("rejected", "protocol", 1, 1)))
     assertEquals("unsent", rejected.draft)
     assertTrue(rejected.disconnected)
@@ -107,6 +109,13 @@ class MonitorReducerTest {
     assertEquals("unsent", closed.draft)
     assertEquals(HostClosedBanner, closed.banner)
     assertTrue(closed.disconnected)
+    assertEquals(start.turns, closed.turns)
+    assertEquals(start.history, closed.history)
+    assertFalse(closed.view.canSteer)
+    assertFalse(closed.view.canSend)
+    assertEquals(1, closed.generation)
+    val again = noteSocketClosed(closed, HostClosedBanner)
+    assertEquals(closed.generation, again.generation)
   }
 
   @Test
@@ -128,6 +137,145 @@ class MonitorReducerTest {
     assertEquals("Send", actionCaption(neither))
     assertFalse(actionEnabled(neither))
   }
+
+  @Test
+  fun droppedConnectionClearsSteerAndANewerSnapshotWins() {
+    val steering = MonitorUi(view = emptyView().copy(canSteer = true, canSend = false, sending = true), generation = 2)
+    val closed = noteSocketClosed(steering, HostClosedBanner)
+    assertFalse(closed.view.canSteer)
+    assertFalse(actionEnabled(closed.view))
+    assertEquals("Send", actionCaption(closed.view))
+    val stale = closed.copy(view = steering.view, generation = closed.generation - 1)
+    val kept = mergeApplied(closed, stale, false, false)
+    assertFalse(kept.view.canSteer)
+    val snapshot = WireSnapshot(
+      emptyView().copy(canSend = true, canSteer = false, model = "grok-test"),
+      emptyList(),
+      null,
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val live = reduceMonitor(closed, message(encodeSnapshot("snapshot", snapshot)))
+    assertTrue(live.view.canSend)
+    assertFalse(live.view.canSteer)
+    assertTrue(live.generation > closed.generation)
+    val shown = mergeApplied(closed, live, false, true)
+    assertEquals("grok-test", shown.view.model)
+    assertTrue(shown.view.canSend)
+    assertFalse(shown.disconnected)
+  }
+
+  @Test
+  fun sendClearsTheDraftAndShowsThePromptBeforeTheHostReplies() {
+    val start = MonitorUi(draft = "fix the form", view = emptyView().copy(canSend = true, signedIn = true, model = "grok-4", backend = "grok"))
+    val next = beginSubmit(start, "fix the form", false, 1_000L)
+    assertEquals("", next.draft)
+    assertEquals("fix the form", next.pendingPrompt)
+    assertEquals("user", next.pendingKind)
+    assertEquals("Waiting for first token…", next.view.phase)
+    assertFalse(promptShown(next, next.pendingPrompt))
+    val echoed = next.copy(live = WireTurn(-2, "live", "build", "", "fix the form", "", prompt = "fix the form", blocks = listOf(
+      WireBlock("user", "u", "", "", "", "fix the form", false, true, 0, emptyList())
+    )))
+    val merged = mergeApplied(next, echoed, false, false)
+    assertEquals("", merged.pendingPrompt)
+    assertEquals("grok-4", runtimeCaption(next.view))
+    assertEquals("Waiting for first token… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
+    assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
+    val thought = WireBlock("thinking", "t", "", "", "", "hmm", true, true, 0, emptyList())
+    val live = WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(thought))
+    assertEquals("Thinking… 0:04", activityCaption(
+      emptyView().copy(signedIn = true, statusText = "Ready", canSend = true),
+      false, "", 1_000L, 5_000L, listOf(thought), live
+    ))
+    val now = 1_700_000_000_000L
+    assertEquals(now - 724_000L, activityStart(now - 2_000L, now, 724_000, 0))
+    assertEquals("Thinking… 12:04", activityCaption(
+      emptyView().copy(sending = true, phase = "Thinking…", statusText = "Ready"),
+      false, "", now - 724_000L, now, listOf(thought), live
+    ))
+  }
+
+  @Test
+  fun reconnectingClearsWhenTheLinkReturns() {
+    val closed = noteSocketClosed(MonitorUi(reachedLive = true, banner = ""), ReconnectingBanner)
+    assertEquals(ReconnectingBanner, closed.banner)
+    assertTrue(closed.disconnected)
+    assertEquals("disconnected", connectionLabel(closed, LinkPhase.Disconnected))
+    val back = applyLink(closed, LinkPhase.Connecting, "")
+    assertEquals(ConnectingBanner, back.banner)
+    assertTrue(back.disconnected)
+    assertEquals("connecting", connectionLabel(back, LinkPhase.Connecting))
+    val live = applyLink(back, LinkPhase.Live, "")
+    assertEquals(ConnectingBanner, live.banner)
+    assertFalse(live.disconnected)
+  }
+
+  @Test
+  fun steerWithNoConversationBecomesASend() {
+    val start = MonitorUi(draft = "finish the form", view = emptyView().copy(canSteer = true, canSend = false))
+    val next = reduceMonitor(start, message(encodeError("err", "command", NothingRunningToSteer, "steer-1")))
+    assertTrue(next.rescueSteer)
+    assertFalse(next.view.canSteer)
+    assertTrue(next.view.canSend)
+    assertEquals("", next.banner)
+    assertEquals("finish the form", next.draft)
+  }
+
+  @Test
+  fun virtualExtentKeepsTheIndexAndFetchesOnlyTheRecentTail() {
+    val older = WireTurn(1, "a", "build", "", "first prompt", "")
+    val newer = WireTurn(2, "b", "build", "", "second prompt", "")
+    val slots = virtualSlots(listOf(older, newer), WireTurn(-2, "live", "build", "", "", ""), false)
+    assertEquals(2, slots.size)
+    assertEquals("first prompt", slots[0].label)
+    assertEquals(listOf(1, 2), recentFetches(slots, emptySet()))
+    assertEquals(listOf(1), recentFetches(slots, setOf(2)))
+    val spot = spotAt(listOf(1, 1, 8), 0.9f)
+    assertEquals(2, spot.index)
+    assertTrue(spot.unitOffset > 0)
+    assertEquals(0, spotAt(listOf(1, 1, 8), 0.01f).index)
+    assertEquals(500, scrollOffset(1000, 0.5f))
+    assertEquals(1000, scrollOffset(1000, 1f))
+    assertEquals(1f, scrollFraction(40, 0))
+    assertTrue(atHead(1000, 1000))
+    assertTrue(atHead(0, 0))
+    assertFalse(atHead(900, 1000))
+    assertTrue(stickToHead(true, 400, 400, 400, 900, false))
+    assertFalse(stickToHead(true, 400, 200, 400, 900, false))
+    assertTrue(stickToHead(false, 200, 900, 900, 900, false))
+    val kept = WireTurn(2, "b", "build", "", "second prompt", "", prompt = "kept", blocks = listOf(WireBlock("answer", "b", "", "", "", "body", false, true, 0, emptyList())))
+    val start = MonitorUi(draft = "half written", turns = listOf(older, newer), history = mapOf(2 to kept), reachedLive = true)
+    val snapshot = WireSnapshot(
+      emptyView().copy(model = "grok-test", canSend = true),
+      listOf(older, newer),
+      WireTurn(-2, "live", "build", "", "", ""),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val next = reduceMonitor(start, message(encodeSnapshot("snapshot", snapshot)))
+    assertEquals("half written", next.draft)
+    assertEquals("kept", next.history[2]?.prompt)
+    assertEquals("body", next.history[2]?.blocks?.single()?.body)
+    assertTrue(next.reachedLive)
+    assertFalse(next.disconnected)
+    assertEquals("Chat", modeCaption("chat"))
+    assertEquals("Build", modeCaption("build"))
+    val hidden = shownBlocks(kept.copy(blocks = listOf(
+      WireBlock("thinking", "t", "", "", "", "secret", false, true, 0, emptyList()),
+      WireBlock("tool", "tool", "", "grep", "", "args", false, true, 0, emptyList()),
+      WireBlock("answer", "a", "", "", "", "shown", false, true, 0, emptyList())
+    )), false, false)
+    assertEquals(listOf("answer"), hidden.map { it.kind })
+  }
 }
 
 private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {
@@ -141,21 +289,3 @@ private fun transcript(revision: Int, body: String): String {
   return tryEncodeTranscript("transcript", WireTranscript(1, revision, "thinking", "working", listOf(block)))
 }
 
-private fun tasksJson(): String {
-  val row = JsonValue.Obj(listOf(
-    "id" to JsonValue.Str("format-unit"),
-    "title" to JsonValue.Str("Format"),
-    "summary" to JsonValue.Str("Desktop"),
-    "mode" to JsonValue.Str("build"),
-    "kind" to JsonValue.Str("format"),
-    "scope" to JsonValue.Str("project"),
-    "compile_first" to JsonValue.Bool(false),
-    "enabled" to JsonValue.Bool(true),
-    "needs_note" to JsonValue.Bool(false)
-  ))
-  return encodeEnvelope(MessageKind.Tasks, "tasks", JsonValue.Obj(listOf("rows" to JsonValue.Arr(listOf(row)))))
-}
-
-private fun promptTask(): TaskRow {
-  return TaskRow("review-unit", "Review", "Read", "build", "prompt", "project", false, true, false)
-}
