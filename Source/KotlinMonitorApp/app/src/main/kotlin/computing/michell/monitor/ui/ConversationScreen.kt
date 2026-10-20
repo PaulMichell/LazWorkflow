@@ -4,7 +4,11 @@ package computing.michell.monitor.ui
    Styles follow the desktop bubbles. The bar is an absolute position in that extent.
    (c) 2026 Michell Computing. */
 
+import android.Manifest
+import android.app.Activity
 import android.graphics.Bitmap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -65,6 +69,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
@@ -122,9 +127,21 @@ fun ConversationScreen(
   onNeed: (Int) -> Unit,
   onSettings: () -> Unit,
   dictation: DictationState,
-  onDictateOn: (Int, Int) -> Unit,
-  onDictateOff: () -> Unit
+  onDictateOn: (Int, Int, Boolean) -> Unit,
+  onDictateOff: () -> Unit,
+  permissionRequest: Boolean,
+  onPermissionResult: (Boolean) -> Unit,
+  onPermissionConsumed: () -> Unit
 ) {
+  val activity = LocalContext.current as? Activity
+  val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    onPermissionResult(granted)
+  }
+  LaunchedEffect(permissionRequest) {
+    if (!permissionRequest) return@LaunchedEffect
+    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    onPermissionConsumed()
+  }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -135,7 +152,10 @@ fun ConversationScreen(
     ConversationPane(ui, bitmaps, onNeed, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-      DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, onDictateOn, onDictateOff)
+      DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, { start, end ->
+        val showRationale = activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == true
+        onDictateOn(start, end, showRationale)
+      }, onDictateOff)
       Button(
         onClick = onSend,
         enabled = actionEnabled(ui.view) && !ui.disconnected && !dictation.sendMustWait
@@ -451,11 +471,11 @@ private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase, listening: Boolean, 
     Text(
       right,
       color = QuietText,
-      maxLines = 2,
+      maxLines = 3,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.End,
       style = statusStyle,
-      modifier = Modifier.widthIn(max = 168.dp)
+      modifier = Modifier.widthIn(max = 180.dp)
     )
   }
 }

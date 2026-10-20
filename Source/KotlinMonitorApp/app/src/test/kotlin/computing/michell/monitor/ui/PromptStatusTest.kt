@@ -21,4 +21,14 @@ class PromptStatusTest {
     assertEquals(4, field.selection.start)
     assertEquals("Explain indexes.".length, field.selection.end)
   }
+
+  @Test
+  fun microphoneAskDoesNotLoopADeniedDialog() {
+    assertEquals(MicrophoneAsk.Start, microphoneAsk(true, false, false))
+    assertEquals(MicrophoneAsk.RequestPermission, microphoneAsk(false, false, false))
+    assertEquals(MicrophoneAsk.RequestPermission, microphoneAsk(false, true, true))
+    assertEquals(MicrophoneAsk.ExplainSettings, microphoneAsk(false, true, false))
+    assertEquals(MicrophoneRequiredMessage, promptActivityRight("Ready", false, MicrophoneRequiredMessage))
+    assertEquals(MicrophoneSettingsMessage, promptActivityRight("Ready", false, MicrophoneSettingsMessage))
+  }
 }

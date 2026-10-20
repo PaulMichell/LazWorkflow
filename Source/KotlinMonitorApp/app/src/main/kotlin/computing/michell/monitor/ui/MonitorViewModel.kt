@@ -552,6 +552,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val dictation: StateFlow<DictationState> = dictationState.asStateFlow()
   private val permissionRequestState = MutableStateFlow(false)
   val dictationPermissionRequest: StateFlow<Boolean> = permissionRequestState.asStateFlow()
+  private var pendingSelectionStart = 0
+  private var pendingSelectionEnd = 0
   private var callbackSession = 0
   private var recognitionSupported = true
   // Callbacks splice the prompt only. They must not call sendOrSteer.
@@ -639,24 +641,32 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     )
   }
 
-  fun toggleDictationOn(selectionStart: Int, selectionEnd: Int) {
+  fun toggleDictationOn(selectionStart: Int, selectionEnd: Int, showRationale: Boolean) {
     if (dictationState.value.phase != DictationPhase.Idle) return
     if (!recognitionSupported || !engine.available()) {
       dictationState.value = dictationState.value.copy(statusMessage = DictationUnavailableMessage)
       return
     }
     if (!microphoneGranted()) {
-      permissionRequestState.value = true
+      when (microphoneAsk(false, microphoneAsked(), showRationale)) {
+        MicrophoneAsk.ExplainSettings -> {
+          permissionRequestState.value = false
+          dictationState.value = dictationState.value.copy(statusMessage = MicrophoneSettingsMessage)
+        }
+        MicrophoneAsk.RequestPermission -> {
+          pendingSelectionStart = selectionStart
+          pendingSelectionEnd = selectionEnd
+          permissionRequestState.value = true
+        }
+        MicrophoneAsk.Start -> beginDictation(selectionStart, selectionEnd)
+      }
       return
     }
+    beginDictation(selectionStart, selectionEnd)
+  }
+
+  fun consumeDictationPermissionRequest() {
     permissionRequestState.value = false
-    val step = applyDictation(DictationEvent.Start(selectionStart, selectionEnd))
-    if (!step.state.listening) return
-    callbackSession = step.state.sessionId
-    if (engine.start()) return
-    callbackSession = 0
-    applyDictation(DictationEvent.Failure(step.state.sessionId, DictationUnavailableMessage))
-    engine.cancel()
   }
 
   fun toggleDictationOff() {
@@ -666,14 +676,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (step.state.phase == DictationPhase.AwaitingFinal) engine.stopListening()
   }
 
-  fun dictationPermission(granted: Boolean, selectionStart: Int, selectionEnd: Int) {
+  fun dictationPermission(granted: Boolean) {
     permissionRequestState.value = false
+    rememberMicrophoneAsked()
     if (!granted) {
-      leaveDictation()
-      dictationState.value = dictationState.value.copy(statusMessage = "Microphone permission is required.")
+      dictationState.value = dictationState.value.copy(statusMessage = MicrophoneRequiredMessage)
       return
     }
-    toggleDictationOn(selectionStart, selectionEnd)
+    beginDictation(pendingSelectionStart, pendingSelectionEnd)
   }
 
   fun editPrompt(text: String, selectionStart: Int, selectionEnd: Int) {
@@ -967,8 +977,28 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     uiState.update { it.copy(draft = text) }
   }
 
+  private fun beginDictation(selectionStart: Int, selectionEnd: Int) {
+    permissionRequestState.value = false
+    val step = applyDictation(DictationEvent.Start(selectionStart, selectionEnd))
+    if (!step.state.listening) return
+    callbackSession = step.state.sessionId
+    if (engine.start()) return
+    callbackSession = 0
+    applyDictation(DictationEvent.Failure(step.state.sessionId, DictationUnavailableMessage))
+    engine.cancel()
+  }
+
   private fun microphoneGranted(): Boolean {
     return getApplication<Application>().checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun microphoneAsked(): Boolean {
+    return displayPrefs.getBoolean(DictationPermissionAskedKey, false)
+  }
+
+  private fun rememberMicrophoneAsked() {
+    if (microphoneAsked()) return
+    displayPrefs.edit().putBoolean(DictationPermissionAskedKey, true).commit()
   }
 
   private fun decodeBitmap(message: MonitorMessage): Pair<String, Bitmap>? {
@@ -982,7 +1012,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
 private fun speechFailureMessage(code: Int): String {
   return when (code) {
-    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission is required."
+    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> MicrophoneRequiredMessage
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected."
     SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognised."
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognition is busy. Wait and try again."
@@ -996,7 +1026,23 @@ private fun speechFailureMessage(code: Int): String {
   }
 }
 
+const val MicrophoneRequiredMessage = "Microphone permission is required."
+const val MicrophoneSettingsMessage = "Microphone permission is off. System settings can enable it."
+
+enum class MicrophoneAsk {
+  Start,
+  RequestPermission,
+  ExplainSettings
+}
+
+fun microphoneAsk(granted: Boolean, asked: Boolean, showRationale: Boolean): MicrophoneAsk {
+  if (granted) return MicrophoneAsk.Start
+  if (asked && !showRationale) return MicrophoneAsk.ExplainSettings
+  return MicrophoneAsk.RequestPermission
+}
+
 private const val ScreenRefreshMs = 250L
 private const val DisplayPreferenceFile = "monitor-display"
 private const val DisplayThinkingKey = "thinking"
 private const val DisplayToolsKey = "tools"
+private const val DictationPermissionAskedKey = "dictation-asked"

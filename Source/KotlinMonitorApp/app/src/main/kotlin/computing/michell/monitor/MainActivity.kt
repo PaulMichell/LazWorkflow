@@ -50,6 +50,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   val ui by model.ui.collectAsState()
   val tab by model.tab.collectAsState()
   val dictation by model.dictation.collectAsState()
+  val permissionRequest by model.dictationPermissionRequest.collectAsState()
   val link by model.link.collectAsState()
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
@@ -82,7 +83,8 @@ private fun MonitorShell(model: MonitorViewModel) {
       } else when (tab) {
         AppTab.Conversation -> ConversationScreen(
           ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
-          model::setMode, model::requestTurn, model::showSettings, dictation, model::toggleDictationOn, model::toggleDictationOff
+          model::setMode, model::requestTurn, model::showSettings, dictation, model::toggleDictationOn, model::toggleDictationOff,
+          permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest
         )
         AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::workOnPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)
       }
