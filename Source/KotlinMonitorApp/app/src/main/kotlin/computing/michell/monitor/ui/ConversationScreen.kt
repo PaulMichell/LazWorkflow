@@ -37,13 +37,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -162,7 +162,9 @@ fun ConversationScreen(
       ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
       Button(onClick = onNew, enabled = ui.view.canSend && !ui.disconnected) { Text("New") }
-      OutlinedButton(onClick = onSettings) { Text("Settings") }
+      IconButton(onClick = onSettings) {
+        Icon(painterResource(R.drawable.ic_menu), contentDescription = "Settings")
+      }
     }
     ActivityStatus(ui, phase, dictation.listening, dictation.statusMessage)
   }
