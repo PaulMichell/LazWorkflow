@@ -34,7 +34,7 @@ Implementation
 
 Uses
   Classes, SyncObjs, Forms, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
-  AssistantMonitorApproval, AssistantTools, ProjectAssistantForm;
+  AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, ProjectAssistantForm;
 
 Type
   TMonitorQueuedCommand = Class
@@ -65,6 +65,8 @@ Type
     FLock: TRTLCriticalSection;
     FSession: TMonitorSession;
     FGeneration: Integer;
+    FStatusQueued: Boolean;
+    FStatusDirty: Boolean;
     Procedure LockBridge;
     Procedure UnlockBridge;
     Procedure Hear(Kind: TAssistantSessionNoticeKind);
@@ -79,6 +81,7 @@ Type
     Procedure PushTranscript(Form: TProjectAssistantForm);
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure PushStatus(Form: TProjectAssistantForm);
+    Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
     Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id, PayloadJson: String;
       Out ErrorText: String): Boolean;
@@ -299,10 +302,32 @@ Begin
   Transcript := Default(TMonitorTranscript);
   Transcript.TurnIndex := Turn.TurnIndex;
   Transcript.Revision := Session.NextTranscriptRevision(Turn.TurnIndex);
+  Transcript.DurationMs := Turn.DurationMs;
   Transcript.Blocks := Turn.Blocks;
   If Not TryEncodeMonitorTranscript(HostId, Transcript, Json) Then
     Exit;
   Session.QueueTranscript(Turn.TurnIndex, Json);
+End;
+
+Procedure TAssistantMonitorBridge.FinishStatusPush;
+Var
+  Again: Boolean;
+  Job: TMonitorNoticeJob;
+Begin
+  LockBridge;
+  Try
+    Again := FStatusDirty;
+    FStatusDirty := False;
+    If Not Again Then
+      FStatusQueued := False;
+  Finally
+    UnlockBridge;
+  End;
+  If Not Again Then
+    Exit;
+  Job := TMonitorNoticeJob.Create;
+  Job.Kind := asnStatus;
+  TThread.Queue(Nil, @Job.Execute);
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -310,29 +335,21 @@ Var
   View: TAssistantMonitorView;
   Payload: TJSONObject;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Form.FillMonitorView(View);
-  View.RemoteApproval := MonitorRemoteApprovalEnabled;
-  ApplyHostFlags(View);
-  Payload := TJSONObject.Create;
   Try
-    Payload.Add('busy', View.Busy);
-    Payload.Add('sending', View.Sending);
-    Payload.Add('phase', View.Phase);
-    Payload.Add('status_text', View.StatusText);
-    Payload.Add('model', View.Model);
-    Payload.Add('backend', View.Backend);
-    Payload.Add('signed_in', View.SignedIn);
-    Payload.Add('approval_caption', View.ApprovalCaption);
-    Payload.Add('effort', View.Effort);
-    Payload.Add('skill', View.Skill);
-    Payload.Add('context_text', View.ContextText);
-    Payload.Add('error_text', View.ErrorText);
-    Payload.Add('remote_approval', View.RemoteApproval);
-    SendJson(EncodeMonitorEnvelope(mmkStatus, HostId, Payload));
+    If Not Assigned(Form) Then
+      Exit;
+    Form.FillMonitorView(View);
+    View.RemoteApproval := MonitorRemoteApprovalEnabled;
+    ApplyHostFlags(View);
+    { The phone rejects a partial status. This is the same object the snapshot view uses. }
+    Payload := MonitorStatusToJson(View);
+    Try
+      SendJson(EncodeMonitorEnvelope(mmkStatus, HostId, Payload));
+    Finally
+      Payload.Free;
+    End;
   Finally
-    Payload.Free;
+    FinishStatusPush;
   End;
 End;
 
@@ -340,7 +357,7 @@ Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Cons
 Var
   Snapshot: TMonitorSnapshot;
   Turn: TAssistantMonitorTurn;
-  ErrorText, Id: String;
+  ErrorText, Id, Json: String;
   Index, Kept: Integer;
 Begin
   If Not Assigned(Form) Then
@@ -368,7 +385,16 @@ Begin
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  SendJson(EncodeMonitorSnapshot(Id, Snapshot));
+  Json := EncodeMonitorSnapshot(Id, Snapshot);
+  { A full trace can exceed the frame. Drop the blocks and keep the index so the phone can request the turn. }
+  If Length(Json) > MonitorMaxPayloadBytes Then
+    Begin
+      SetLength(Snapshot.Live.Blocks, 0);
+      SetLength(Snapshot.Live.Images, 0);
+      Json := EncodeMonitorSnapshot(Id, Snapshot);
+    End;
+  If Json <> '' Then
+    SendJson(Json);
 End;
 
 Procedure TAssistantMonitorBridge.DeliverNotice(Job: TMonitorNoticeJob);
@@ -444,14 +470,49 @@ End;
 Procedure TAssistantMonitorBridge.Hear(Kind: TAssistantSessionNoticeKind);
 Var
   Job: TMonitorNoticeJob;
+  QueueStatus: Boolean;
 Begin
   Try
-    Job := TMonitorNoticeJob.Create;
-    Job.Kind := Kind;
-    Job.HasApproval := Kind = asnApproval;
-    If Job.HasApproval Then
-      Job.Approval := CurrentAssistantApproval;
-    TThread.Queue(Nil, @Job.Execute);
+    QueueStatus := True;
+    If Kind = asnStatus Then
+      Begin
+        LockBridge;
+        Try
+          If FStatusQueued Then
+            Begin
+              FStatusDirty := True;
+              QueueStatus := False;
+            End
+          Else
+            FStatusQueued := True;
+        Finally
+          UnlockBridge;
+        End;
+      End;
+    If Not QueueStatus Then
+      Exit;
+    Try
+      Job := TMonitorNoticeJob.Create;
+      Job.Kind := Kind;
+      Job.HasApproval := Kind = asnApproval;
+      If Job.HasApproval Then
+        Job.Approval := CurrentAssistantApproval;
+      TThread.Queue(Nil, @Job.Execute);
+    Except
+      On E: Exception Do
+        Begin
+          If Kind = asnStatus Then
+            Begin
+              LockBridge;
+              Try
+                FStatusQueued := False;
+              Finally
+                UnlockBridge;
+              End;
+            End;
+          Raise;
+        End;
+    End;
   Except
     On E: Exception Do
       ReportPluginException('AssistantMonitorBridge.Hear', E);
