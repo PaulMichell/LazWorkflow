@@ -28,13 +28,15 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Height = 18
       Top = 10
       Width = 78
-      Caption = 'IPv4 address'
+      Caption = 'Endpoint'
     end
-    object AddressEdit: TEdit
+    object AddressEdit: TComboBox
       Left = 112
       Height = 32
       Top = 4
       Width = 280
+      ItemHeight = 0
+      Style = csDropDown
       TabOrder = 0
     end
     object PortLabel: TLabel
@@ -83,7 +85,7 @@ object AssistantMonitorForm: TAssistantMonitorForm
     ChildSizing.TopBottomSpacing = 8
     ChildSizing.HorizontalSpacing = 4
     ChildSizing.Layout = cclLeftToRightThenTopToBottom
-    ChildSizing.ControlsPerLine = 6
+    ChildSizing.ControlsPerLine = 5
     ClientHeight = 44
     ClientWidth = 720
     TabOrder = 1
@@ -104,15 +106,6 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Action = DisableAction
       AutoSize = True
       TabOrder = 1
-    end
-    object PairButton: TButton
-      Left = 130
-      Height = 28
-      Top = 8
-      Width = 38
-      Action = PairAction
-      AutoSize = True
-      TabOrder = 2
     end
     object RevokeButton: TButton
       Left = 172
@@ -144,25 +137,15 @@ object AssistantMonitorForm: TAssistantMonitorForm
       TabOrder = 5
     end
   end
-  object PairCodeLabel: TLabel
+  object EndpointLabel: TLabel
     Left = 12
-    Height = 18
+    Height = 48
     Top = 149
     Width = 696
     Align = alTop
     BorderSpacing.Left = 12
     BorderSpacing.Right = 12
-    Caption = 'Pairing code appears after Pair.'
-  end
-  object FingerprintLabel: TLabel
-    Left = 12
-    Height = 18
-    Top = 167
-    Width = 696
-    Align = alTop
-    BorderSpacing.Left = 12
-    BorderSpacing.Right = 12
-    Caption = 'Fingerprint'
+    Caption = 'Choose an endpoint, then Enable.'
     WordWrap = True
   end
   object StatusMemo: TMemo
@@ -201,18 +184,13 @@ object AssistantMonitorForm: TAssistantMonitorForm
     Top = 75
     object EnableAction: TAction
       Caption = 'Enable'
-      Hint = 'Start the listener. Does not mint a pairing code.'
+      Hint = 'Start the listener. The phone connects to the endpoint. No pairing code.'
       OnExecute = EnableActionExecute
     end
     object DisableAction: TAction
       Caption = 'Disable'
-      Hint = 'Stop the listener and leave paired clients in place.'
+      Hint = 'Stop the listener and leave connected clients in place.'
       OnExecute = DisableActionExecute
-    end
-    object PairAction: TAction
-      Caption = 'Pair'
-      Hint = 'Show a one-time pairing code.'
-      OnExecute = PairActionExecute
     end
     object RevokeAction: TAction
       Caption = 'Revoke'

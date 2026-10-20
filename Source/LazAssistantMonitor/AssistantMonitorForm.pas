@@ -2,10 +2,10 @@ Unit AssistantMonitorForm;
 
 { Remote Monitor options dialog (c) 2026 Michell Computing.
 
-  Static layout. The listener outlives the dialog. Enabling does not mint a
-  pairing code, and the listener does not rotate one. LCL has no adapter list,
-  and this tree's FCL does not declare getifaddrs, so the layouts below are read
-  through explicit libc and iphlpapi externals. }
+  Static layout. The listener outlives the dialog. The phone connects to the
+  shown endpoint. There is no fingerprint and no pairing code on this form.
+  LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
+  the layouts below are read through explicit libc and iphlpapi externals. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -22,12 +22,11 @@ Type
     ActionList: TActionList;
     EnableAction: TAction;
     DisableAction: TAction;
-    PairAction: TAction;
     RevokeAction: TAction;
     RevokeAllAction: TAction;
     BindGroup: TGroupBox;
     AddressLabel: TLabel;
-    AddressEdit: TEdit;
+    AddressEdit: TComboBox;
     PortLabel: TLabel;
     PortEdit: TSpinEdit;
     BindAllCheck: TCheckBox;
@@ -35,12 +34,10 @@ Type
     ButtonStrip: TPanel;
     EnableButton: TButton;
     DisableButton: TButton;
-    PairButton: TButton;
     RevokeButton: TButton;
     RevokeAllButton: TButton;
     CloseButton: TButton;
-    PairCodeLabel: TLabel;
-    FingerprintLabel: TLabel;
+    EndpointLabel: TLabel;
     StatusMemo: TMemo;
     ClientList: TListBox;
     StatusTimer: TTimer;
@@ -49,7 +46,6 @@ Type
     Procedure FormClose(Sender: TObject; Var CloseAction: TCloseAction);
     Procedure EnableActionExecute(Sender: TObject);
     Procedure DisableActionExecute(Sender: TObject);
-    Procedure PairActionExecute(Sender: TObject);
     Procedure RevokeActionExecute(Sender: TObject);
     Procedure RevokeAllActionExecute(Sender: TObject);
     Procedure RemoteApprovalCheckClick(Sender: TObject);
@@ -57,8 +53,9 @@ Type
     Procedure ClientListClick(Sender: TObject);
   Private
     ClientIds: TStringList;
-    PairShown: Boolean;
     Procedure LoadFields;
+    Procedure FillAddressChoices;
+    Function EndpointCaption: String;
     Procedure SaveFields(Listening: Boolean);
     Procedure RefreshState;
     Procedure RefreshClients;
@@ -76,8 +73,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorTls,
-  AssistantMonitorBridge, AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorBridge,
+  AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
 
 Const
   AfInet = 2;
@@ -212,66 +209,72 @@ Begin
     Result := FirstMatch(2);
 End;
 
-Function ProposeBindAddress: String;
-Var
-  Found: TStringList;
+Function CollectIPv4: TStringList;
 {$IFDEF UNIX}
+Var
   List, Cursor: PMonitorIfAddrs;
 {$ENDIF}
 {$IFDEF WINDOWS}
+Var
   Size, Status: Cardinal;
   Buffer: PWinAdapter;
   Adapter: PWinAdapter;
   Unicast: PWinUnicast;
 {$ENDIF}
 Begin
-  Result := '';
-  Found := TStringList.Create;
-  Try
+  Result := TStringList.Create;
 {$IFDEF UNIX}
-    List := Nil;
-    If getifaddrs(List) = 0 Then
-      Try
-        Cursor := List;
-        While Assigned(Cursor) Do
-          Begin
-            If Assigned(Cursor^.Address) And (Cursor^.Address^.Family = AfInet) Then
-              Found.Add(IPv4Text(Cursor^.Address^.Address));
-            Cursor := Cursor^.Next;
-          End;
-      Finally
-        freeifaddrs(List);
-      End;
+  List := Nil;
+  If getifaddrs(List) = 0 Then
+    Try
+      Cursor := List;
+      While Assigned(Cursor) Do
+        Begin
+          If Assigned(Cursor^.Address) And (Cursor^.Address^.Family = AfInet) Then
+            Result.Add(IPv4Text(Cursor^.Address^.Address));
+          Cursor := Cursor^.Next;
+        End;
+    Finally
+      freeifaddrs(List);
+    End;
 {$ENDIF}
 {$IFDEF WINDOWS}
-    Size := 0;
-    Buffer := Nil;
-    Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Nil, Size);
-    If (Status = WinErrorBufferOverflow) And (Size > 0) Then
-      Begin
-        GetMem(Buffer, Size);
-        Try
-          Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Buffer, Size);
-          If Status = 0 Then
-            Begin
-              Adapter := Buffer;
-              While Assigned(Adapter) Do
-                Begin
-                  Unicast := Adapter^.FirstUnicast;
-                  While Assigned(Unicast) Do
-                    Begin
-                      If Assigned(Unicast^.Address.SockAddr) And (Unicast^.Address.SockAddr^.Family = AfInet) Then
-                        Found.Add(IPv4Text(Unicast^.Address.SockAddr^.Address));
-                      Unicast := Unicast^.Next;
-                    End;
-                  Adapter := Adapter^.Next;
-                End;
-            End;
-        Finally
-          FreeMem(Buffer);
-        End;
+  Size := 0;
+  Buffer := Nil;
+  Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Nil, Size);
+  If (Status = WinErrorBufferOverflow) And (Size > 0) Then
+    Begin
+      GetMem(Buffer, Size);
+      Try
+        Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Buffer, Size);
+        If Status = 0 Then
+          Begin
+            Adapter := Buffer;
+            While Assigned(Adapter) Do
+              Begin
+                Unicast := Adapter^.FirstUnicast;
+                While Assigned(Unicast) Do
+                  Begin
+                    If Assigned(Unicast^.Address.SockAddr) And (Unicast^.Address.SockAddr^.Family = AfInet) Then
+                      Result.Add(IPv4Text(Unicast^.Address.SockAddr^.Address));
+                    Unicast := Unicast^.Next;
+                  End;
+                Adapter := Adapter^.Next;
+              End;
+          End;
+      Finally
+        FreeMem(Buffer);
       End;
+    End;
 {$ENDIF}
+End;
+
+Function ProposeBindAddress: String;
+Var
+  Found: TStringList;
+Begin
+  Found := CollectIPv4;
+  Try
     Result := PreferredAddress(Found);
   Finally
     Found.Free;
@@ -314,6 +317,66 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorForm.FillAddressChoices;
+Var
+  Found: TStringList;
+  Current: String;
+  I: Integer;
+Begin
+  Current := AddressEdit.Text;
+  Found := CollectIPv4;
+  Try
+    AddressEdit.Items.BeginUpdate;
+    Try
+      AddressEdit.Items.Clear;
+      For I := 0 To Found.Count - 1 Do
+        If Not IsLoopback(Found[I]) Then
+          AddressEdit.Items.Add(Found[I]);
+      AddressEdit.Items.Add('127.0.0.1');
+    Finally
+      AddressEdit.Items.EndUpdate;
+    End;
+  Finally
+    Found.Free;
+  End;
+  AddressEdit.Text := Current;
+End;
+
+Function TAssistantMonitorForm.EndpointCaption: String;
+Var
+  Found: TStringList;
+  I: Integer;
+  Line, Address: String;
+  Port: Integer;
+Begin
+  Port := PortEdit.Value;
+  If BindAllCheck.Checked Then
+    Begin
+      Found := CollectIPv4;
+      Try
+        Line := '';
+        For I := 0 To Found.Count - 1 Do
+          Begin
+            Address := Found[I];
+            If IsLoopback(Address) Then
+              Continue;
+            If Line <> '' Then
+              Line := Line + ', ';
+            Line := Line + Address + ':' + IntToStr(Port);
+          End;
+      Finally
+        Found.Free;
+      End;
+      If Line = '' Then
+        Line := 'no LAN address found';
+      Result := 'Phone endpoints  ' + Line + '. Emulator  127.0.0.1:' + IntToStr(Port);
+    End
+  Else If Trim(AddressEdit.Text) = '' Then
+    Result := 'Choose an endpoint, then Enable.'
+  Else
+    Result := 'Phone endpoint  ' + Trim(AddressEdit.Text) + ':' + IntToStr(Port);
+End;
+
 Procedure TAssistantMonitorForm.LoadFields;
 Var
   Settings: TMonitorSettings;
@@ -333,6 +396,7 @@ Begin
     End;
   If ErrorText <> '' Then
     StatusMemo.Text := ErrorText;
+  FillAddressChoices;
 End;
 
 Procedure TAssistantMonitorForm.SaveFields(Listening: Boolean);
@@ -399,35 +463,18 @@ End;
 
 Procedure TAssistantMonitorForm.RefreshState;
 Var
-  Fingerprint, ErrorText, Code, Status: String;
+  Status: String;
   Running: Boolean;
 Begin
   Running := ListenerRunning;
   EnableAction.Enabled := Not Running;
   DisableAction.Enabled := Running;
-  PairAction.Enabled := Running;
   RevokeAction.Enabled := SelectedClientId <> '';
   RevokeAllAction.Enabled := ClientIds.Count > 0;
   AddressEdit.Enabled := Not Running;
   PortEdit.Enabled := Not Running;
   BindAllCheck.Enabled := Not Running;
-  If MonitorHostFingerprint(Fingerprint, ErrorText) Then
-    FingerprintLabel.Caption := 'Fingerprint  ' + MonitorFingerprintText(Fingerprint)
-  Else If ErrorText <> '' Then
-    FingerprintLabel.Caption := 'Fingerprint  ' + ErrorText
-  Else
-    FingerprintLabel.Caption := 'Fingerprint';
-  If Assigned(MonitorLiveSession) Then
-    Code := MonitorLiveSession.PairCode
-  Else
-    Code := '';
-  If PairShown And (Code <> '') Then
-    PairCodeLabel.Caption := 'Pairing code  ' + Code
-  Else
-    Begin
-      PairShown := False;
-      PairCodeLabel.Caption := 'Pairing code appears after Pair.';
-    End;
+  EndpointLabel.Caption := EndpointCaption;
   If Assigned(MonitorLiveSession) Then
     Status := 'Listener ' + StateCaption(MonitorLiveSession.State) + LineEnding +
       'Bound ' + MonitorLiveSession.BoundAddress + ' port ' + IntToStr(MonitorLiveSession.BoundPort) + LineEnding +
@@ -446,7 +493,6 @@ End;
 Procedure TAssistantMonitorForm.FormCreate(Sender: TObject);
 Begin
   ClientIds := TStringList.Create;
-  PairShown := False;
   LoadFields;
   RefreshClients;
   RefreshState;
@@ -488,20 +534,19 @@ End;
 
 Procedure TAssistantMonitorForm.DisableActionExecute(Sender: TObject);
 Begin
-  StopAssistantMonitorListener;
-  PairShown := False;
-  SaveFields(False);
-  WorkflowLogger.Info('AssistantMonitor', 'listen disabled');
-  RefreshState;
-End;
-
-Procedure TAssistantMonitorForm.PairActionExecute(Sender: TObject);
-Begin
-  If Not ListenerRunning Then
+  { WaitFor pumps the main loop. A second click must not turn the timer back on while the listen thread is still clearing strings. }
+  If Not DisableAction.Enabled Then
     Exit;
-  MonitorLiveSession.RequestPairCode;
-  PairShown := MonitorLiveSession.PairCode <> '';
-  RefreshState;
+  DisableAction.Enabled := False;
+  StatusTimer.Enabled := False;
+  Try
+    StopAssistantMonitorListener;
+    SaveFields(False);
+    WorkflowLogger.Info('AssistantMonitor', 'listen disabled');
+  Finally
+    RefreshState;
+    StatusTimer.Enabled := True;
+  End;
 End;
 
 Procedure TAssistantMonitorForm.RevokeActionExecute(Sender: TObject);
