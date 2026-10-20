@@ -576,7 +576,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
-  AssistantFileDrop, LResources;
+  AssistantFileDrop, AssistantTaskNoteForm, LResources;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
