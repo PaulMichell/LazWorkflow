@@ -3540,11 +3540,16 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
+Var
+  PhaseChanged: Boolean;
 Begin
+  PhaseChanged := Phase <> FStatusPhase;
   If AssistantPhaseIsReconnectWait(Phase) And (Not AssistantPhaseIsReconnectWait(FStatusPhase)) Then
     FReconnectStartTick := GetTickCount64;
   FStatusPhase := Phase;
   StatusFooter.SetRightActivityText(FormatElapsedStatus(Phase), Phase);
+  If PhaseChanged Then
+    AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
 
 Procedure TProjectAssistantForm.LoadConnectionSettings;
@@ -3876,7 +3881,10 @@ Begin
   If GetTickCount64 - FTransportWaitStart < FTransportWaitMs Then
     Begin
       If (FStatusPhase <> '') And Assigned(StatusFooter) Then
-        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+        Begin
+          StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+          AssistantSessionObserve.AssistantSessionObserve(asnStatus);
+        End;
       Exit;
     End;
   ResumeDroppedTransport;
@@ -4232,7 +4240,10 @@ Begin
         Exit;
       End;
     If FSending And (FStatusPhase <> '') Then
-      StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+      Begin
+        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+        AssistantSessionObserve.AssistantSessionObserve(asnStatus);
+      End;
     If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
       FTraceView.RefreshElapsed(FTrace);
     If FSending And Assigned(AssistantClient) Then
@@ -9319,6 +9330,7 @@ Var
   StoreDir: String;
   Entry: TConversationIndexEntry;
   Seen: TStringList;
+  StoredIndex: Integer;
 
   Procedure ClearTurn;
   Begin
@@ -9416,6 +9428,21 @@ Begin
     Seen.CaseSensitive := True;
     If TurnIndex = LiveConversationMarker Then
       Begin
+        { The window shows the stored conversation while idle. The in-flight trace is empty until the next send. }
+        If Not FSending And Not (FStreamingActive And Not FTurnRecorded) And Assigned(ProjectAssistantConversation) And
+          (ProjectAssistantConversation.TurnCount > 0) Then
+          Begin
+            StoredIndex := FSelectedTurnIndex;
+            If (StoredIndex < 0) Or (StoredIndex >= ProjectAssistantConversation.TurnCount) Then
+              StoredIndex := ProjectAssistantConversation.TurnCount - 1;
+            If FillMonitorTurn(StoredIndex, Turn, ErrorText) Then
+              Begin
+                Turn.Live := True;
+                ErrorText := '';
+                Result := True;
+                Exit;
+              End;
+          End;
         Turn.Live := True;
         Turn.Id := 'live';
         Turn.Mode := AssistantModeToStr(ActiveMode);
