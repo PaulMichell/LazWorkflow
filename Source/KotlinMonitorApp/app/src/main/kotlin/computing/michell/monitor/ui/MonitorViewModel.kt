@@ -553,6 +553,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val dictationPermissionRequest: StateFlow<Boolean> = permissionRequestState.asStateFlow()
   private var callbackSession = 0
   private var recognitionSupported = true
+  // Callbacks splice the prompt only. They must not call sendOrSteer.
   private val engineListener = object : SpeechEngineListener {
     override fun onReady() {
     }

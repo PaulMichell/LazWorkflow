@@ -104,6 +104,24 @@ class PromptDictationTest {
   }
 
   @Test
+  fun stopAndLeaveKeepTextTypedBeforeTheMicrophone() {
+    val typed = "Explain indexes."
+    val started = start(typed, typed.length)
+    assertEquals(typed, started.draft)
+    val id = started.state.sessionId
+    val toggled = apply(started, DictationEvent.ToggleOff(id))
+    assertEquals(typed, toggled.draft)
+    assertFalse(toggled.draft.isEmpty())
+    val timed = apply(started, DictationEvent.Timeout(id))
+    assertEquals(typed, timed.draft)
+    val left = apply(started, DictationEvent.LeaveScreen)
+    assertEquals(typed, left.draft)
+    assertEquals(DictationPhase.Idle, left.state.phase)
+    val late = apply(left, DictationEvent.Final(id, ""))
+    assertEquals(typed, late.draft)
+  }
+
+  @Test
   fun leaveScreenKeepsTheShownDraft() {
     val started = start("Keep this.", 10)
     val id = started.state.sessionId
