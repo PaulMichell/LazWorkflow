@@ -2,16 +2,20 @@ package computing.michell.monitor.dictation
 
 /* On-device speech engine for the monitor prompt (c) 2026 Michell Computing. */
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 interface SpeechEngine {
   fun available(): Boolean
+  fun checkSupport(): Boolean
   fun start(): Boolean
   fun stopListening()
   fun cancel()
@@ -25,6 +29,9 @@ interface SpeechEngineListener {
   fun onPartial(text: String)
   fun onFinal(text: String)
   fun onError(code: Int)
+  fun onReadyToListen()
+  fun onLanguageBlocked(language: OnDeviceLanguage)
+  fun onSupportFailed(code: Int)
 }
 
 class OnDeviceSpeechEngine(
@@ -34,6 +41,7 @@ class OnDeviceSpeechEngine(
   private val application = context.applicationContext
   private var recognizer: SpeechRecognizer? = null
   private var accepting = false
+  private var supportOpen = false
   private var unavailable = false
 
   override fun available(): Boolean {
@@ -42,6 +50,25 @@ class OnDeviceSpeechEngine(
     return try {
       SpeechRecognizer.isOnDeviceRecognitionAvailable(application)
     } catch (error: Exception) {
+      false
+    }
+  }
+
+  override fun checkSupport(): Boolean {
+    if (!available()) return false
+    val current = recognizer ?: createRecognizer() ?: return false
+    supportOpen = true
+    return try {
+      current.setRecognitionListener(callbacks)
+      if (Build.VERSION.SDK_INT < 33) {
+        supportOpen = false
+        listener.onReadyToListen()
+        return true
+      }
+      Api33Support(current, recognitionIntent(), application.mainExecutor, listener) { supportOpen }.start()
+      true
+    } catch (error: Exception) {
+      supportOpen = false
       false
     }
   }
@@ -76,6 +103,7 @@ class OnDeviceSpeechEngine(
 
   override fun cancel() {
     accepting = false
+    supportOpen = false
     val current = recognizer ?: return
     try {
       current.cancel()
@@ -86,6 +114,7 @@ class OnDeviceSpeechEngine(
 
   override fun destroy() {
     accepting = false
+    supportOpen = false
     val current = recognizer
     recognizer = null
     if (current == null) return
@@ -170,6 +199,55 @@ class OnDeviceSpeechEngine(
     override fun onEvent(eventType: Int, params: Bundle?) {
     }
   }
+}
+
+// Loaded only on API 33 and later. RecognitionSupportCallback does not exist before that.
+@SuppressLint("NewApi")
+private class Api33Support(
+  private val recognizer: SpeechRecognizer,
+  private val intent: Intent,
+  private val executor: java.util.concurrent.Executor,
+  private val listener: SpeechEngineListener,
+  private val open: () -> Boolean
+) {
+  fun start() {
+    recognizer.checkRecognitionSupport(intent, executor, callback)
+  }
+
+  private val callback = object : RecognitionSupportCallback {
+    override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+      if (!open()) return
+      when (onDeviceLanguage(
+        names(recognitionSupport.installedOnDeviceLanguages),
+        names(recognitionSupport.pendingOnDeviceLanguages),
+        names(recognitionSupport.supportedOnDeviceLanguages),
+        names(recognitionSupport.onlineLanguages)
+      )) {
+        OnDeviceLanguage.Installed -> listener.onReadyToListen()
+        OnDeviceLanguage.Downloading -> listener.onLanguageBlocked(OnDeviceLanguage.Downloading)
+        OnDeviceLanguage.NeedsDownload -> {
+          try {
+            recognizer.triggerModelDownload(intent)
+          } catch (error: Exception) {
+            // The system may already be asking the user to confirm the download.
+          }
+          listener.onLanguageBlocked(OnDeviceLanguage.NeedsDownload)
+        }
+        OnDeviceLanguage.OnlineOnly -> listener.onLanguageBlocked(OnDeviceLanguage.OnlineOnly)
+        OnDeviceLanguage.Missing -> listener.onLanguageBlocked(OnDeviceLanguage.Missing)
+      }
+    }
+
+    override fun onError(error: Int) {
+      if (!open()) return
+      if (error == SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT) listener.onReadyToListen()
+      else listener.onSupportFailed(error)
+    }
+  }
+}
+
+private fun names(languages: List<String>?): List<String> {
+  return languages?.filter { it.isNotEmpty() } ?: emptyList()
 }
 
 private fun firstHypothesis(results: Bundle?): String {

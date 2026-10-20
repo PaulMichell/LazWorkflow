@@ -181,6 +181,16 @@ class PromptDictationTest {
   }
 
   @Test
+  fun onDeviceLanguagePrefersInstalledThenDownloadThenOnline() {
+    assertEquals(OnDeviceLanguage.Installed, onDeviceLanguage(listOf("en-GB"), listOf("en-GB"), listOf("en-GB"), listOf("en-GB")))
+    assertEquals(OnDeviceLanguage.Installed, onDeviceLanguage(listOf("en-gb"), emptyList(), emptyList(), emptyList()))
+    assertEquals(OnDeviceLanguage.Downloading, onDeviceLanguage(emptyList(), listOf("en-GB"), listOf("en-GB"), emptyList()))
+    assertEquals(OnDeviceLanguage.NeedsDownload, onDeviceLanguage(emptyList(), emptyList(), listOf("en-GB"), listOf("en-GB")))
+    assertEquals(OnDeviceLanguage.OnlineOnly, onDeviceLanguage(emptyList(), emptyList(), emptyList(), listOf("en-GB")))
+    assertEquals(OnDeviceLanguage.Missing, onDeviceLanguage(listOf("en-US"), emptyList(), emptyList(), emptyList()))
+  }
+
+  @Test
   fun hypothesisDoesNotGrowADraftAtTheSendLimit() {
     val committed = "a".repeat(DictationDraftLimit)
     val started = start(committed, committed.length)

@@ -12,7 +12,19 @@ import android.speech.SpeechRecognizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import computing.michell.monitor.connection.HostClosedBanner
+import computing.michell.monitor.dictation.DictationAudioMessage
+import computing.michell.monitor.dictation.DictationBusyMessage
 import computing.michell.monitor.dictation.DictationEvent
+import computing.michell.monitor.dictation.DictationFailedMessage
+import computing.michell.monitor.dictation.DictationLanguageMissingMessage
+import computing.michell.monitor.dictation.DictationLanguageUnsupportedMessage
+import computing.michell.monitor.dictation.DictationModelDownloadMessage
+import computing.michell.monitor.dictation.DictationModelDownloadingMessage
+import computing.michell.monitor.dictation.DictationNoSpeechDetectedMessage
+import computing.michell.monitor.dictation.DictationNoSpeechMessage
+import computing.michell.monitor.dictation.DictationOnDeviceFailedMessage
+import computing.michell.monitor.dictation.DictationStoppedMessage
+import computing.michell.monitor.dictation.OnDeviceLanguage
 import computing.michell.monitor.dictation.DictationPhase
 import computing.michell.monitor.dictation.DictationState
 import computing.michell.monitor.dictation.DictationStep
@@ -556,6 +568,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var pendingSelectionEnd = 0
   private var callbackSession = 0
   private var recognitionSupported = true
+  private var supportPending = false
   // Callbacks splice the prompt only. They must not call sendOrSteer.
   private val engineListener = object : SpeechEngineListener {
     override fun onReady() {
@@ -577,6 +590,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onError(code: Int) {
       onDictationError(code)
+    }
+
+    override fun onReadyToListen() {
+      onSupportReady()
+    }
+
+    override fun onLanguageBlocked(language: OnDeviceLanguage) {
+      onSupportBlocked(language)
+    }
+
+    override fun onSupportFailed(code: Int) {
+      onSupportError(code)
     }
   }
   private val engine: SpeechEngine = OnDeviceSpeechEngine(application, engineListener)
@@ -609,7 +634,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       session.status.collect { status -> onLink(status) }
     }
     // Creation is on the main thread. available() does not create the recognizer.
-    if (!engine.available()) dictationState.value = DictationState(statusMessage = DictationUnavailableMessage)
+    if (!engine.available()) {
+      dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
+    }
     if (record.address.isNotEmpty()) {
       session.connect(record.address, record.port)
     }
@@ -642,9 +669,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun toggleDictationOn(selectionStart: Int, selectionEnd: Int, showRationale: Boolean) {
-    if (dictationState.value.phase != DictationPhase.Idle) return
+    if (dictationState.value.phase != DictationPhase.Idle || supportPending) return
     if (!recognitionSupported || !engine.available()) {
-      dictationState.value = dictationState.value.copy(statusMessage = DictationUnavailableMessage)
+      dictationState.value = dictationState.value.copy(statusMessage = DictationUnavailableMessage, available = false)
       return
     }
     if (!microphoneGranted()) {
@@ -695,6 +722,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun leaveDictation() {
+    supportPending = false
     applyDictation(DictationEvent.LeaveScreen)
     callbackSession = 0
     engine.cancel()
@@ -836,6 +864,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   override fun onCleared() {
+    supportPending = false
     engine.destroy()
     session.close()
   }
@@ -946,12 +975,51 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun onDictationError(code: Int) {
     if (!acceptDictationCallback()) return
-    if (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) recognitionSupported = false
+    if (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+      recognitionSupported = false
+      dictationState.value = dictationState.value.copy(available = false)
+    }
     val before = dictationState.value
     val step = applyDictation(DictationEvent.Failure(callbackSession, speechFailureMessage(code)))
     callbackSession = 0
     if (code == SpeechRecognizer.ERROR_CLIENT) engine.destroy()
     else releaseIfClosed(before, step)
+  }
+
+  private fun onSupportReady() {
+    if (!supportPending) return
+    supportPending = false
+    startListeningSession(pendingSelectionStart, pendingSelectionEnd)
+  }
+
+  private fun onSupportBlocked(language: OnDeviceLanguage) {
+    if (!supportPending) return
+    supportPending = false
+    when (language) {
+      OnDeviceLanguage.Downloading -> showSpeechStatus(DictationModelDownloadingMessage, false)
+      OnDeviceLanguage.NeedsDownload -> showSpeechStatus(DictationModelDownloadMessage, false)
+      OnDeviceLanguage.OnlineOnly, OnDeviceLanguage.Missing -> {
+        recognitionSupported = false
+        showSpeechStatus(DictationLanguageUnsupportedMessage, true)
+      }
+      OnDeviceLanguage.Installed -> startListeningSession(pendingSelectionStart, pendingSelectionEnd)
+    }
+  }
+
+  private fun onSupportError(code: Int) {
+    if (!supportPending) return
+    supportPending = false
+    if (code == SpeechRecognizer.ERROR_CLIENT) engine.destroy()
+    val unavailable = code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
+    if (unavailable) recognitionSupported = false
+    showSpeechStatus(speechFailureMessage(code), unavailable)
+  }
+
+  private fun showSpeechStatus(message: String, unavailable: Boolean) {
+    dictationState.value = dictationState.value.copy(
+      statusMessage = message,
+      available = if (unavailable) false else dictationState.value.available
+    )
   }
 
   private fun acceptDictationCallback(): Boolean {
@@ -978,12 +1046,23 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun beginDictation(selectionStart: Int, selectionEnd: Int) {
+    if (supportPending || dictationState.value.phase != DictationPhase.Idle) return
     permissionRequestState.value = false
+    pendingSelectionStart = selectionStart
+    pendingSelectionEnd = selectionEnd
+    supportPending = true
+    if (engine.checkSupport()) return
+    supportPending = false
+    showSpeechStatus(DictationUnavailableMessage, true)
+  }
+
+  private fun startListeningSession(selectionStart: Int, selectionEnd: Int) {
     val step = applyDictation(DictationEvent.Start(selectionStart, selectionEnd))
     if (!step.state.listening) return
     callbackSession = step.state.sessionId
     if (engine.start()) return
     callbackSession = 0
+    dictationState.value = dictationState.value.copy(available = false)
     applyDictation(DictationEvent.Failure(step.state.sessionId, DictationUnavailableMessage))
     engine.cancel()
   }
@@ -1013,16 +1092,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 private fun speechFailureMessage(code: Int): String {
   return when (code) {
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> MicrophoneRequiredMessage
-    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected."
-    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognised."
-    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognition is busy. Wait and try again."
-    SpeechRecognizer.ERROR_AUDIO -> "The microphone could not be used."
-    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Offline English (UK) speech model is not installed."
-    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "Offline English (UK) speech recognition is not supported on this device."
+    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> DictationNoSpeechDetectedMessage
+    SpeechRecognizer.ERROR_NO_MATCH -> DictationNoSpeechMessage
+    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> DictationBusyMessage
+    SpeechRecognizer.ERROR_AUDIO -> DictationAudioMessage
+    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> DictationLanguageMissingMessage
+    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> DictationLanguageUnsupportedMessage
     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_SERVER ->
-      "On-device speech recognition failed."
-    SpeechRecognizer.ERROR_CLIENT, SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "Speech recognition stopped. Try again."
-    else -> "Speech recognition failed."
+      DictationOnDeviceFailedMessage
+    SpeechRecognizer.ERROR_CLIENT, SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> DictationStoppedMessage
+    else -> DictationFailedMessage
   }
 }
 

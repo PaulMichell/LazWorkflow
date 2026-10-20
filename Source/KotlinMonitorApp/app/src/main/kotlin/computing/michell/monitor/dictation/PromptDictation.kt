@@ -7,6 +7,42 @@ const val DictationTooLongMessage = "Text is longer than 65536 characters."
 const val DictationNoSpeechMessage = "No speech recognised."
 const val DictationUnavailableMessage = "Dictation unavailable"
 const val DictationListeningMessage = "Listening…"
+const val DictationLanguage = "en-GB"
+const val DictationModelDownloadingMessage = "The offline English (UK) speech model is still downloading."
+const val DictationModelDownloadMessage = "The offline English (UK) speech model needs to be downloaded."
+const val DictationLanguageUnsupportedMessage = "Offline English (UK) speech recognition is not supported on this device."
+const val DictationLanguageMissingMessage = "Offline English (UK) speech model is not installed."
+const val DictationNoSpeechDetectedMessage = "No speech detected."
+const val DictationBusyMessage = "Speech recognition is busy. Wait and try again."
+const val DictationAudioMessage = "The microphone could not be used."
+const val DictationOnDeviceFailedMessage = "On-device speech recognition failed."
+const val DictationStoppedMessage = "Speech recognition stopped. Try again."
+const val DictationFailedMessage = "Speech recognition failed."
+
+enum class OnDeviceLanguage {
+  Installed,
+  Downloading,
+  NeedsDownload,
+  OnlineOnly,
+  Missing
+}
+
+fun onDeviceLanguage(
+  installed: List<String>,
+  pending: List<String>,
+  supported: List<String>,
+  online: List<String>
+): OnDeviceLanguage {
+  if (containsDictationLanguage(installed)) return OnDeviceLanguage.Installed
+  if (containsDictationLanguage(pending)) return OnDeviceLanguage.Downloading
+  if (containsDictationLanguage(supported)) return OnDeviceLanguage.NeedsDownload
+  if (containsDictationLanguage(online)) return OnDeviceLanguage.OnlineOnly
+  return OnDeviceLanguage.Missing
+}
+
+private fun containsDictationLanguage(languages: List<String>): Boolean {
+  return languages.any { it.equals(DictationLanguage, ignoreCase = true) }
+}
 
 enum class DictationPhase {
   Idle,
@@ -27,7 +63,8 @@ data class DictationState(
   val provisional: String = "",
   val selectionStart: Int = 0,
   val selectionEnd: Int = 0,
-  val statusMessage: String = ""
+  val statusMessage: String = "",
+  val available: Boolean = true
 ) {
   val listening: Boolean
     get() = phase == DictationPhase.Listening

@@ -499,7 +499,7 @@ private fun DictateToggle(
   onStop: () -> Unit
 ) {
   val listening = dictation.listening
-  val available = dictation.statusMessage != DictationUnavailableMessage
+  val available = dictation.available && dictation.statusMessage != DictationUnavailableMessage
   val description = when {
     listening -> "Stop dictation"
     !available -> DictationUnavailableMessage
