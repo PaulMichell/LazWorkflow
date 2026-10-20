@@ -217,6 +217,7 @@ Type
     Revision: Integer;
     Phase: String;
     StatusText: String;
+    DurationMs: Integer;
     Blocks: Array Of TAssistantMonitorBlock;
     { Parallel to Blocks. 1 and 1 when that block was not split. }
     BlockPart: Array Of Integer;
@@ -2112,6 +2113,7 @@ Begin
       Result[I].Revision := Source.Revision;
       Result[I].Phase := Source.Phase;
       Result[I].StatusText := Source.StatusText;
+      Result[I].DurationMs := Source.DurationMs;
       Result[I].Part := I + 1;
       Result[I].PartCount := FrameCount;
       SetLength(Result[I].Blocks, 0);
@@ -2146,6 +2148,7 @@ Begin
   Result.Add('part_count', Transcript.PartCount);
   Result.Add('phase', Transcript.Phase);
   Result.Add('status_text', Transcript.StatusText);
+  Result.Add('duration_ms', Transcript.DurationMs);
   Blocks := TJSONArray.Create;
   For I := 0 To High(Transcript.Blocks) Do
     Begin
@@ -2192,6 +2195,7 @@ Begin
   Transcript.Revision := 0;
   Transcript.Phase := '';
   Transcript.StatusText := '';
+  Transcript.DurationMs := 0;
   Transcript.Part := 1;
   Transcript.PartCount := 1;
   SetLength(Transcript.Blocks, 0);
@@ -2211,6 +2215,10 @@ Begin
       Exit;
     If Transcript.PartCount < 1 Then
       Transcript.PartCount := 1;
+    If Not ReadInt(Obj, 'duration_ms', False, Transcript.DurationMs) Then
+      Exit;
+    If Transcript.DurationMs < 0 Then
+      Transcript.DurationMs := 0;
     Node := Obj.Find('blocks');
     If Not (Node Is TJSONArray) Then
       Exit;

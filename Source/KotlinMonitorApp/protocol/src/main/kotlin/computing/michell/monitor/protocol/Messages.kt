@@ -249,7 +249,8 @@ data class WireTranscript(
   val statusText: String,
   val blocks: List<WireBlock>,
   val part: Int = 1,
-  val partCount: Int = 1
+  val partCount: Int = 1,
+  val durationMs: Int = 0
 )
 
 sealed class JsonValue {
@@ -1324,6 +1325,7 @@ fun tryEncodeTranscript(id: String, transcript: WireTranscript): String {
   payload.add("part_count", transcript.partCount)
   payload.add("phase", transcript.phase)
   payload.add("status_text", transcript.statusText)
+  payload.add("duration_ms", transcript.durationMs)
   payload.add("blocks", JsonValue.Arr(transcript.blocks.map { blockToJson(it) }))
   return encodeEnvelope(MessageKind.Transcript, id, payload.build())
 }
@@ -1337,7 +1339,8 @@ fun decodeTranscript(payloadJson: String): WireTranscript? {
   if (!turnIndex.ok || !revision.ok || !phase.ok || !statusText.ok) return null
   val part = obj.readInt("part", false)
   val partCount = obj.readInt("part_count", false)
-  if (!part.ok || !partCount.ok) return null
+  val durationMs = obj.readInt("duration_ms", false)
+  if (!part.ok || !partCount.ok || !durationMs.ok) return null
   val blocksNode = obj.field("blocks") as? JsonValue.Arr ?: return null
   val blocks = blocksNode.items.map { item ->
     val blockObj = item as? JsonValue.Obj ?: return null
@@ -1346,7 +1349,8 @@ fun decodeTranscript(payloadJson: String): WireTranscript? {
   return WireTranscript(
     turnIndex.value, revision.value, phase.value, statusText.value, blocks,
     if (part.value < 1) 1 else part.value,
-    if (partCount.value < 1) 1 else partCount.value
+    if (partCount.value < 1) 1 else partCount.value,
+    durationMs.value.coerceAtLeast(0)
   )
 }
 
