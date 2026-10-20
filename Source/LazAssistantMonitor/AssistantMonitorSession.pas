@@ -4,8 +4,10 @@ Unit AssistantMonitorSession;
   This unit does not use TInetServer. An in-memory carrier delivers frames
   through SetFrameHandler. No relay class is compiled. (c) 2026 Michell Computing.
 
-  Random, hex, and base64url are fphashutils. HMAC is fpsha256.TSHA256.HMAC.
-  JSON stays in the codec. The pair code, session token, and HMAC are never logged.
+  Open LAN admits pair when no code is armed. RequestPairCode still checks the
+  code and fingerprint. Random, hex, and base64url are fphashutils. HMAC is
+  fpsha256.TSHA256.HMAC. JSON stays in the codec. The pair code, session token,
+  and HMAC are never logged.
 
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
   gates, approval, and the in-memory carrier are one state machine.
@@ -79,6 +81,8 @@ Type
     FPairCodeUntil: QWord;
     FPairFailures: Integer;
     FCodeExpired: Boolean;
+    { True only after RequestPairCode, until that code succeeds. Open LAN admits a pair while this is false. }
+    FPairGate: Boolean;
     FNonce: TBytes;
     FNonceHex: String;
     FNonceUntil: QWord;
@@ -154,9 +158,13 @@ Type
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure AdoptRunningHost;
     Procedure FlushTranscriptLocked;
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
+    Function GetLastError: String;
+    Function GetBoundAddress: String;
+    Function GetConnectedClientName: String;
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
   Public
     Constructor Create;
@@ -200,10 +208,10 @@ Type
     Property CloseRequested: Boolean Read FCloseRequested;
     Property FramesSent: Integer Read FFramesSent;
     Property FramesDropped: Integer Read FFramesDropped;
-    Property LastError: String Read FLastError;
-    Property BoundAddress: String Read FBindAddress;
+    Property LastError: String Read GetLastError;
+    Property BoundAddress: String Read GetBoundAddress;
     Property BoundPort: Integer Read FPort;
-    Property ConnectedClientName: String Read FClientName;
+    Property ConnectedClientName: String Read GetConnectedClientName;
     Property RemoteApproval: Boolean Read FRemoteApproval;
     Function SecondsSinceFrame: Integer;
   End;
@@ -380,6 +388,7 @@ Begin
   FPairCodeUntil := 0;
   FPairFailures := 0;
   FCodeExpired := False;
+  FPairGate := False;
   SetLength(FNonce, 0);
   FNonceHex := '';
   FNonceUntil := 0;
@@ -475,7 +484,44 @@ Begin
   If FCarrier.Send(Frame, ErrorText) Then
     Inc(FFramesSent)
   Else
-    FLastError := ErrorText;
+    Begin
+      LockSession;
+      Try
+        FLastError := ErrorText;
+      Finally
+        UnlockSession;
+      End;
+    End;
+End;
+
+Function TMonitorSession.GetLastError: String;
+Begin
+  LockSession;
+  Try
+    Result := FLastError;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.GetBoundAddress: String;
+Begin
+  LockSession;
+  Try
+    Result := FBindAddress;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.GetConnectedClientName: String;
+Begin
+  LockSession;
+  Try
+    Result := FClientName;
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Procedure TMonitorSession.DrainSends;
@@ -738,27 +784,34 @@ Begin
         Begin
           FCodeExpired := False;
           RejectLocked('expired', True);
-        End
-      Else
-        RejectLocked('pair_code', True);
-      Exit;
-    End;
-  If (FHostFingerprint <> '') And (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
-    Begin
-      RejectLocked('fingerprint', True);
-      Exit;
-    End;
-  If UpperCase(Trim(Pair.Code)) <> FPairCode Then
-    Begin
-      Inc(FPairFailures);
-      If FPairFailures >= MonitorPairFailureLimit Then
+          Exit;
+        End;
+      { No code is armed. Admit the endpoint. Fingerprint and code are not checked. }
+      If FPairGate Then
         Begin
-          DiscardPairCode(False);
           RejectLocked('pair_code', True);
-        End
-      Else
-        RejectLocked('pair_code', False);
-      Exit;
+          Exit;
+        End;
+    End
+  Else
+    Begin
+      If (FHostFingerprint <> '') And (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
+        Begin
+          RejectLocked('fingerprint', True);
+          Exit;
+        End;
+      If UpperCase(Trim(Pair.Code)) <> FPairCode Then
+        Begin
+          Inc(FPairFailures);
+          If FPairFailures >= MonitorPairFailureLimit Then
+            Begin
+              DiscardPairCode(False);
+              RejectLocked('pair_code', True);
+            End
+          Else
+            RejectLocked('pair_code', False);
+          Exit;
+        End;
     End;
   IdBytes := RandomBytes(MonitorClientIdBytes);
   TokenBytes := RandomBytes(MonitorSessionTokenBytes);
@@ -785,7 +838,9 @@ Begin
     End;
   FConnectionClientId := FClients[Index].Id;
   DiscardPairCode(False);
+  FPairGate := False;
   FState := mssLive;
+  AdoptRunningHost;
   QueueSend(EncodeMonitorPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
   LogLine(1, 'pair success client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
@@ -837,6 +892,7 @@ Begin
     End;
   FClientName := FClients[Index].Name;
   FState := mssLive;
+  AdoptRunningHost;
   LogLine(1, 'auth success client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
@@ -891,6 +947,14 @@ Begin
   QueueCommand(Kind, Id, PayloadJson);
 End;
 
+Procedure TMonitorSession.AdoptRunningHost;
+Begin
+  If (FState = mssLive) And (FHostFlags.Sending Or FHostFlags.PlanAgentRunning) Then
+    FState := mssBusy
+  Else If (FState = mssBusy) And (Not FHostFlags.Sending) And (Not FHostFlags.PlanAgentRunning) Then
+    FState := mssLive;
+End;
+
 Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
 Var
   Blocked: Boolean;
@@ -911,6 +975,14 @@ Begin
             FState := mssLive;
           QueueCommand(Kind, Id, PayloadJson);
         End;
+      Exit;
+    End;
+  { A dropped socket clears busy. A steer that arrives before the next snapshot is a prompt, not a steer. }
+  If (Kind = Ord(mmkSteer)) And ((FState <> mssBusy) Or (Not FHostFlags.CanSteer)) And (FState = mssLive) And
+    FHostFlags.CanSend And (Not FHostFlags.Sending) And (Not FHostFlags.PlanAgentRunning) Then
+    Begin
+      LogLine(1, 'steer submitted as send bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+      EnterBusy(Ord(mmkSend), Id, PayloadJson);
       Exit;
     End;
   Blocked := CommandBlocked(Kind, MessageText);
@@ -1233,6 +1305,7 @@ Begin
     FPairCodeUntil := ClockMs + MonitorPairCodeTtlMs;
     FPairFailures := 0;
     FCodeExpired := False;
+    FPairGate := True;
   Finally
     UnlockSession;
   End;
@@ -1266,10 +1339,7 @@ Begin
   LockSession;
   Try
     FHostFlags := Flags;
-    If (FState = mssLive) And (Flags.Sending Or Flags.PlanAgentRunning) Then
-      FState := mssBusy
-    Else If (FState = mssBusy) And (Not Flags.Sending) And (Not Flags.PlanAgentRunning) Then
-      FState := mssLive;
+    AdoptRunningHost;
   Finally
     UnlockSession;
   End;

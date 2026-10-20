@@ -29,6 +29,21 @@ Var
   DiscardedCode: String;
   ErrorText: String;
 
+Type
+  TCommandSink = Class
+    Kind: Integer;
+    Calls: Integer;
+    Procedure Hear(CommandKind: Integer; Const CommandId, CommandPayload: String);
+  End;
+
+{$PUSH}{$HINTS OFF}
+Procedure TCommandSink.Hear(CommandKind: Integer; Const CommandId, CommandPayload: String);
+Begin
+  Inc(Calls);
+  Kind := CommandKind;
+End;
+{$POP}
+
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
   If Condition Then
@@ -230,6 +245,23 @@ Begin
   Result := HelloOk.Nonce;
 End;
 
+Procedure TestOpenLanAdmitsWithoutCode;
+Var
+  Settings: TMonitorSettings;
+  ErrorText: String;
+Begin
+  NewSocket;
+  DeliverHello('');
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+  ExpectPairOk;
+  Check('open pair stores client', LoadMonitorSettings(Settings, ErrorText) And (Length(Settings.Clients) = 1));
+  Session.RevokeClient(SavedClientId);
+  Session.NoteSocketClosed;
+  Check('open pair revoked', LoadMonitorSettings(Settings, ErrorText) And (Length(Settings.Clients) = 0));
+  Check('open pair returns to listening', Session.State = mssListening);
+End;
+
 Procedure TestCodeAbsentUntilRequested;
 Begin
   Check('code absent at start', Session.PairCode = '');
@@ -324,6 +356,76 @@ Begin
   Check('hmac success is live', Session.State = mssLive);
   Check('hmac success sends no extra frame', Carrier.SentCount = 0);
   Check('hmac success stays open', Not Session.CloseRequested);
+End;
+
+Procedure TestReconnectKeepsRunningTurn;
+Var
+  Flags: TMonitorHostFlags;
+  Nonce: String;
+Begin
+  Flags := Default(TMonitorHostFlags);
+  Flags.Sending := True;
+  Flags.CanSteer := True;
+  Flags.CanStop := True;
+  Session.SetHostFlags(Flags);
+  Check('flags make the live socket busy', Session.State = mssBusy);
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorAuth('auth-run', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('reconnect during a turn is busy', Session.State = mssBusy);
+  Flags := Default(TMonitorHostFlags);
+  Flags.CanSend := True;
+  Session.SetHostFlags(Flags);
+  Check('finished turn returns to live', Session.State = mssLive);
+End;
+
+Procedure TestIdleSteerSubmits;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Json, ErrorJson: String;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('idle steer starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Check('idle steer encodes', TryEncodeMonitorSteer('steer-idle', 'hello from the phone', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('idle steer is submitted', Sink.Calls = 1);
+    Check('idle steer becomes send', Sink.Kind = Ord(mmkSend));
+    Check('idle steer is busy', Session.State = mssBusy);
+    Check('idle steer sends no error', Carrier.SentCount = 0);
+    Flags.Sending := True;
+    Flags.CanSteer := True;
+    Flags.CanSend := False;
+    Session.SetHostFlags(Flags);
+    Sink.Calls := 0;
+    Check('running steer encodes', TryEncodeMonitorSteer('steer-run', 'nudge', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('running steer stays steer', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSteer)));
+    Flags := Default(TMonitorHostFlags);
+    Session.SetHostFlags(Flags);
+    Check('finished turn is live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Check('blocked steer encodes', TryEncodeMonitorSteer('steer-block', 'later', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('blocked steer is not queued', Sink.Calls = 0);
+    Check('blocked steer error', DecodeLast(Message) And (Message.Kind = mmkError));
+    Check('blocked steer text', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Nothing is running to steer.'));
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
 End;
 
 Procedure TestUnknownTypeDoesNotChangeLive;
@@ -513,6 +615,7 @@ Begin
       If ErrorText <> '' Then
         WriteLn(ErrorText);
       Check('listen state', Session.State = mssListening);
+      TestOpenLanAdmitsWithoutCode;
       TestCodeAbsentUntilRequested;
       TestSecondControllerWhileAccepted;
       TestCommandBeforeAuth;
@@ -520,6 +623,8 @@ Begin
       TestPairAfterDiscard;
       TestPairSuccess;
       TestHmac;
+      TestReconnectKeepsRunningTurn;
+      TestIdleSteerSubmits;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;
