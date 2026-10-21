@@ -5,8 +5,8 @@ package computing.michell.monitor.connection
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. Reads and writes run on Dispatchers.IO. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
-   A supplied pin is still checked. The unsent prompt draft is kept across
-   disconnect. */
+   Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
+   is refused. The unsent prompt draft is kept across disconnect. */
 
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.MessageKind
@@ -163,14 +163,18 @@ fun interface TlsConnector {
   fun open(address: String, port: Int, fingerprint: String): TlsLink
 }
 
+/** Empty selects endpoint-only trust. A 64-hex pin is pinned. Any other nonempty value is refused. */
+internal fun trustManagerForFingerprint(fingerprint: String): X509TrustManager {
+  val pinned = normalizeFingerprint(fingerprint)
+  if (fingerprint.isNotEmpty() && pinned.length != 64) throw PinMismatchException(fingerprint)
+  if (pinned.length == 64) return PinnedTrustManager(fingerprint)
+  return TrustAllManager()
+}
+
 class SslSocketConnector : TlsConnector {
   override fun open(address: String, port: Int, fingerprint: String): TlsLink {
+    val manager = trustManagerForFingerprint(fingerprint)
     val context = SSLContext.getInstance("TLS")
-    val manager: X509TrustManager = if (normalizeFingerprint(fingerprint).length == 64) {
-      PinnedTrustManager(fingerprint)
-    } else {
-      TrustAllManager()
-    }
     context.init(null, arrayOf(manager), SecureRandom())
     val socket = context.socketFactory.createSocket() as SSLSocket
     try {
@@ -251,20 +255,41 @@ class LanSession(
     promptDraft = text
   }
 
-  fun connect(address: String, port: Int, fingerprint: String = "", code: String = "") {
+  /** Opens the saved endpoint. Does not replace or clear the TLS pin. */
+  fun connect(address: String, port: Int, code: String = "") {
     val current = store.load()
     val trimmed = address.trim()
     val changed = current.address != trimmed || current.port != port
     val next = if (changed) {
-      current.copy(address = trimmed, port = port, fingerprint = fingerprint, clientId = "", sessionToken = "")
+      current.copy(address = trimmed, port = port, fingerprint = current.fingerprint, clientId = "", sessionToken = "")
     } else {
-      current.copy(address = trimmed, port = port, fingerprint = fingerprint)
+      current.copy(address = trimmed, port = port, fingerprint = current.fingerprint)
     }
     store.save(next)
     pairCode = code
     policy.resume()
     stopped = false
     startLoop()
+  }
+
+  /**
+   * Replaces the saved pin when the value normalises to 64 hex characters.
+   * Anything else is not saved, does not open a socket, and shows the pin banner.
+   */
+  fun replaceFingerprint(fingerprint: String) {
+    if (normalizeFingerprint(fingerprint).length != 64) {
+      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.")
+      return
+    }
+    store.save(store.load().copy(fingerprint = fingerprint))
+  }
+
+  /**
+   * Clears the saved pin without opening a socket.
+   * Connect does not call this. Forgetting a pairing uses HostStore.clear.
+   */
+  fun clearFingerprint() {
+    store.save(store.load().copy(fingerprint = ""))
   }
 
   /** User tapped Connect after a refused or disabled listener paused backoff. */
@@ -348,7 +373,7 @@ class LanSession(
   private suspend fun attempt(epoch: Int): AttemptResult {
     val record = store.load()
     val pinned = normalizeFingerprint(record.fingerprint)
-    if (pinned.isNotEmpty() && pinned.length != 64) {
+    if (record.fingerprint.isNotEmpty() && pinned.length != 64) {
       publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.")
       return AttemptResult.Pinned
     }

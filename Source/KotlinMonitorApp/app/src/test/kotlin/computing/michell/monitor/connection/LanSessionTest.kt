@@ -90,6 +90,7 @@ class LanSessionTest {
     val loaded = store.load()
     assertEquals("", loaded.clientId)
     assertEquals("", loaded.sessionToken)
+    assertEquals("", loaded.fingerprint)
     assertFalse(loaded.paired)
     assertFalse(memory.values.keys.any { it.contains("api") || it.contains("oauth") || it.contains("model") })
   }
@@ -103,7 +104,7 @@ class LanSessionTest {
       throw PinMismatchException("aa")
     })
     session.updateDraft("unsent prompt")
-    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    session.connect("10.0.0.8", 56122)
     waitUntil { session.status.value.banner == "TLS pin mismatch." }
     Thread.sleep(400)
     assertEquals(1, opens.get())
@@ -122,7 +123,7 @@ class LanSessionTest {
       throw ConnectException("Connection refused")
     })
     session.updateDraft("draft")
-    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    session.connect("10.0.0.8", 56122)
     waitUntil { session.reconnectPaused }
     Thread.sleep(400)
     assertEquals(1, opens.get())
@@ -139,7 +140,7 @@ class LanSessionTest {
     val store = pairedStore()
     val link = ScriptedLink()
     val session = LanSession(store, TlsConnector { _, _, _ -> link })
-    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    session.connect("10.0.0.8", 56122)
     waitUntil { link.frames().isNotEmpty() }
     link.push(frameOf(encodeTicks(MessageKind.Ping, "host-ping", 42)))
     waitUntil { link.frames().size >= 2 }
@@ -177,7 +178,7 @@ class LanSessionTest {
     val link = ScriptedLink()
     val session = LanSession(store, TlsConnector { _, _, _ -> link })
     session.updateDraft("keep me")
-    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    session.connect("10.0.0.8", 56122)
     waitUntil { link.frames().size >= 1 }
     val hello = envelope(link.frames()[0])
     assertEquals(MessageKind.Hello, hello.kind)
@@ -208,7 +209,7 @@ class LanSessionTest {
       link
     })
     session.updateDraft("keep")
-    session.connect("10.0.0.8", 56122, "ab".repeat(32), "")
+    session.connect("10.0.0.8", 56122)
     waitUntil { link.frames().isNotEmpty() }
     link.push(frameOf(encodeBye("host-bye", "disabled")))
     waitUntil { session.reconnectPaused }
@@ -219,6 +220,144 @@ class LanSessionTest {
     assertEquals("client-1", store.load().clientId)
     session.close()
   }
+
+  @Test
+  fun twoArgumentConnectKeepsTheSavedPin() {
+    val store = HostStore(MemoryStringMap())
+    val pin = "ab".repeat(32)
+    store.save(HostRecord("10.0.0.8", 56122, pin, "client-1", "token-1"))
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.connect("10.0.0.8", 56122)
+      assertEquals(pin, store.load().fingerprint)
+      assertEquals("client-1", store.load().clientId)
+      assertEquals("token-1", store.load().sessionToken)
+      waitUntil { connector.fingerprints().isNotEmpty() }
+      assertEquals(listOf(pin), connector.fingerprints())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun replaceFingerprintRejectsGarbageAndShortHex() {
+    val store = HostStore(MemoryStringMap())
+    val pin = "ab".repeat(32)
+    val saved = HostRecord("10.0.0.8", 56122, pin, "client-1", "token-1")
+    store.save(saved)
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.replaceFingerprint("zzzz")
+      assertEquals(saved, store.load())
+      assertEquals(0, connector.fingerprints().size)
+      assertEquals("TLS pin mismatch.", session.status.value.banner)
+      session.replaceFingerprint("abcd")
+      assertEquals(saved, store.load())
+      assertEquals(0, connector.fingerprints().size)
+      assertEquals("TLS pin mismatch.", session.status.value.banner)
+      val grouped = "cd".repeat(32).chunked(2).joinToString(" ")
+      session.replaceFingerprint(grouped)
+      assertEquals(grouped, store.load().fingerprint)
+      assertEquals("client-1", store.load().clientId)
+      assertEquals(0, connector.fingerprints().size)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun storedGarbagePinDoesNotOpenWithTrustAll() {
+    val store = HostStore(MemoryStringMap())
+    store.save(HostRecord("10.0.0.8", 56122, "zzzz", "client-1", "token-1"))
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { session.status.value.banner == "TLS pin mismatch." }
+      assertTrue(connector.fingerprints().isEmpty())
+      assertEquals("zzzz", store.load().fingerprint)
+      assertEquals("client-1", store.load().clientId)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun changedHostKeepsThePinAndClearsTheCredential() {
+    val store = HostStore(MemoryStringMap())
+    val pin = "cd".repeat(32)
+    store.save(HostRecord("10.0.0.8", 56122, pin, "client-1", "token-1"))
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.connect("10.0.0.9", 56123, "new-code")
+      val loaded = store.load()
+      assertEquals("10.0.0.9", loaded.address)
+      assertEquals(56123, loaded.port)
+      assertEquals(pin, loaded.fingerprint)
+      assertEquals("", loaded.clientId)
+      assertEquals("", loaded.sessionToken)
+      waitUntil { connector.fingerprints().isNotEmpty() }
+      assertEquals(listOf(pin), connector.fingerprints())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun clearFingerprintDropsThePinWithoutConnecting() {
+    val store = HostStore(MemoryStringMap())
+    val pin = "ab".repeat(32)
+    store.save(HostRecord("10.0.0.8", 56122, pin, "client-1", "token-1"))
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.clearFingerprint()
+      val loaded = store.load()
+      assertEquals("", loaded.fingerprint)
+      assertEquals("10.0.0.8", loaded.address)
+      assertEquals(56122, loaded.port)
+      assertEquals("client-1", loaded.clientId)
+      assertEquals("token-1", loaded.sessionToken)
+      assertEquals(0, connector.fingerprints().size)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun nonemptyInvalidPinDoesNotSelectTrustAll() {
+    assertTrue(trustManagerForFingerprint("") is TrustAllManager)
+    assertTrue(trustManagerForFingerprint("ab".repeat(32)) is PinnedTrustManager)
+    assertTrue(trustManagerForFingerprint("ab".repeat(32).chunked(2).joinToString(":")) is PinnedTrustManager)
+    var refused = false
+    try {
+      trustManagerForFingerprint("zzzz")
+    } catch (error: PinMismatchException) {
+      refused = true
+    }
+    assertTrue(refused)
+    refused = false
+    try {
+      trustManagerForFingerprint("abcd")
+    } catch (error: PinMismatchException) {
+      refused = true
+    }
+    assertTrue(refused)
+  }
+}
+
+private class RecordingConnector : TlsConnector {
+  private val seen = mutableListOf<String>()
+
+  override fun open(address: String, port: Int, fingerprint: String): TlsLink {
+    synchronized(seen) { seen += fingerprint }
+    throw PinMismatchException(fingerprint)
+  }
+
+  fun fingerprints(): List<String> = synchronized(seen) { seen.toList() }
 }
 
 private fun pairedStore(): HostStore {
