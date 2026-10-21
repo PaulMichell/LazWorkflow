@@ -8,7 +8,8 @@ package computing.michell.monitor.protocol
 
    Size note: exceeds the 1000 line preference. The v1 catalogue is one table of
    message types, payload fields, and limits. Splitting it would hide a type.
-   Reviewed 2026-10-19: no socket, TLS, or Android UI in this file. */
+   Reviewed 2026-10-21: inbound values are decoded from the same payload object.
+   No socket, TLS, or Android UI in this file. */
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -91,7 +92,8 @@ data class MonitorMessage(
   val payloadJson: String,
   val reason: String,
   val changesState: Boolean,
-  val wireJson: String
+  val wireJson: String,
+  val inbound: InboundPayload = InboundPayload.None
 )
 
 data class HelloMessage(val clientName: String, val clientVersion: String, val clientId: String, val hasClientId: Boolean)
@@ -333,7 +335,14 @@ private fun fromElement(element: JsonElement): JsonValue {
   }
 }
 
+internal var jsonParseCount = 0
+
+internal fun resetJsonParseCount() {
+  jsonParseCount = 0
+}
+
 internal fun parseJson(text: String): JsonValue? {
+  jsonParseCount += 1
   if (text.isEmpty()) return null
   return try {
     fromElement(JsonParser.parseToJsonElement(text))
@@ -455,6 +464,10 @@ fun unknownTypeError(refId: String, typeName: String): String {
 
 fun decodeError(payloadJson: String): ErrorBody? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeError(obj)
+}
+
+fun decodeError(obj: JsonValue.Obj): ErrorBody? {
   val reason = obj.readString("reason", true)
   val messageText = obj.readString("message", true)
   val refId = obj.readString("ref", true)
@@ -464,10 +477,16 @@ fun decodeError(payloadJson: String): ErrorBody? {
 
 private fun applyTextLimit(message: MonitorMessage): MonitorMessage {
   if (message.kind != MessageKind.Send && message.kind != MessageKind.Steer) return message
-  val obj = parseObject(message.payloadJson) ?: return message
-  val text = obj.readString("text", false)
-  if (!text.ok) return message
-  if (utf8Length(text.value) <= MonitorLimits.MaxSendChars) return message
+  val text = when (val body = message.inbound) {
+    is InboundPayload.Text -> body.text
+    else -> {
+      val obj = parseObject(message.payloadJson) ?: return message
+      val read = obj.readString("text", false)
+      if (!read.ok) return message
+      read.value
+    }
+  }
+  if (utf8Length(text) <= MonitorLimits.MaxSendChars) return message
   val wire = encodeError(message.id, PayloadTooLargeReason, PayloadTooLargeMessage, message.id)
   return message.copy(
     kind = MessageKind.Error,
@@ -478,6 +497,11 @@ private fun applyTextLimit(message: MonitorMessage): MonitorMessage {
   )
 }
 
+fun tryDecodeEnvelope(frame: MonitorFrame): EnvelopeResult {
+  val root = frame.parsed ?: return tryDecodeEnvelope(frame.json)
+  return decodeEnvelope(root, frame.json)
+}
+
 fun tryDecodeEnvelope(json: String): EnvelopeResult {
   val parsed = parseJson(json)
   if (parsed == null) {
@@ -485,6 +509,10 @@ fun tryDecodeEnvelope(json: String): EnvelopeResult {
   }
   val root = parsed as? JsonValue.Obj
     ?: return EnvelopeResult(false, blankMessage(), "A monitor message must be a JSON object.")
+  return decodeEnvelope(root, json)
+}
+
+private fun decodeEnvelope(root: JsonValue.Obj, wireJson: String): EnvelopeResult {
   val version = root.readInt("v", true)
   if (!version.ok || version.value != MonitorLimits.CatalogueVersion) {
     return EnvelopeResult(false, blankMessage(), "Unsupported catalogue version.")
@@ -523,10 +551,36 @@ fun tryDecodeEnvelope(json: String): EnvelopeResult {
       payloadJson,
       reasonText,
       true,
-      json
+      wireJson,
+      inboundPayload(kind, payload)
     ))
   }
   return EnvelopeResult(true, message, "")
+}
+
+fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
+  return when (kind) {
+    MessageKind.Snapshot -> decodeSnapshot(payload)?.let { InboundPayload.Snapshot(it) } ?: InboundPayload.None
+    MessageKind.Transcript -> decodeTranscript(payload)?.let { InboundPayload.TranscriptPart(it) } ?: InboundPayload.None
+    MessageKind.ImageData -> decodeImagePart(payload) ?: InboundPayload.None
+    MessageKind.TurnData -> turnFromJson(payload, false)?.let { InboundPayload.Turn(it) } ?: InboundPayload.None
+    MessageKind.Status -> statusFromJson(payload)?.let { InboundPayload.Status(it) } ?: InboundPayload.None
+    MessageKind.Mode -> decodeMode(payload)?.let { InboundPayload.Mode(it) } ?: InboundPayload.None
+    MessageKind.Target -> decodeTarget(payload)?.let { InboundPayload.Target(it) } ?: InboundPayload.None
+    MessageKind.Plan -> decodePlan(payload)?.let { InboundPayload.Plan(it) } ?: InboundPayload.None
+    MessageKind.ApprovalRequested -> decodeApprovalRequested(payload)?.let { InboundPayload.ApprovalRequest(it) } ?: InboundPayload.None
+    MessageKind.InsertResult -> decodeText(payload)?.let { InboundPayload.Insert(it) } ?: InboundPayload.None
+    MessageKind.Error -> decodeError(payload)?.let { InboundPayload.Error(it) } ?: InboundPayload.None
+    MessageKind.Rejected -> decodeRejected(payload)?.let { InboundPayload.Rejected(it) } ?: InboundPayload.None
+    MessageKind.ImageUnavailable -> decodeImageUnavailable(payload)?.let { InboundPayload.ImageMissing(it) } ?: InboundPayload.None
+    MessageKind.PairOk -> decodePairOk(payload)?.let { InboundPayload.PairOk(it) } ?: InboundPayload.None
+    MessageKind.HelloOk -> decodeHelloOk(payload)?.let { InboundPayload.HelloOk(it) } ?: InboundPayload.None
+    MessageKind.Send, MessageKind.Steer -> {
+      val text = payload.readString("text", true)
+      if (text.ok) InboundPayload.Text(text.value) else InboundPayload.None
+    }
+    else -> InboundPayload.None
+  }
 }
 
 fun encodeHello(id: String, clientName: String, clientVersion: String, clientId: String): String {
@@ -573,6 +627,10 @@ fun encodePairOk(id: String, clientId: String, sessionToken: String): String {
 
 fun decodePairOk(payloadJson: String): PairOkMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodePairOk(obj)
+}
+
+fun decodePairOk(obj: JsonValue.Obj): PairOkMessage? {
   val clientId = obj.readString("client_id", true)
   val token = obj.readString("session_token", true)
   if (!clientId.ok || !token.ok) return null
@@ -588,6 +646,10 @@ fun encodeHelloOk(id: String, nonce: String, serverName: String): String {
 
 fun decodeHelloOk(payloadJson: String): HelloOkMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeHelloOk(obj)
+}
+
+fun decodeHelloOk(obj: JsonValue.Obj): HelloOkMessage? {
   val nonce = obj.readString("nonce", true)
   val serverName = obj.readString("server_name", true)
   if (!nonce.ok || !serverName.ok) return null
@@ -620,6 +682,10 @@ fun encodeRejected(id: String, reason: String, hostVersion: Int, clientVersion: 
 
 fun decodeRejected(payloadJson: String): RejectedMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeRejected(obj)
+}
+
+fun decodeRejected(obj: JsonValue.Obj): RejectedMessage? {
   val reason = obj.readString("reason", true)
   val hostVersion = obj.readInt("host_version", true)
   val clientVersion = obj.readInt("client_version", true)
@@ -650,6 +716,10 @@ fun tryEncodeSteer(id: String, text: String): TextEncode = tryEncodeLimitedText(
 
 fun decodeText(payloadJson: String): String? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeText(obj)
+}
+
+fun decodeText(obj: JsonValue.Obj): String? {
   val text = obj.readString("text", true)
   if (!text.ok || utf8Length(text.value) > MonitorLimits.MaxSendChars) return null
   return text.value
@@ -678,6 +748,10 @@ fun encodeMode(id: String, mode: String, locked: Boolean): String {
 
 fun decodeMode(payloadJson: String): ModeMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeMode(obj)
+}
+
+fun decodeMode(obj: JsonValue.Obj): ModeMessage? {
   val mode = obj.readString("mode", true)
   val locked = obj.readBool("locked", true)
   if (!mode.ok || !locked.ok) return null
@@ -707,6 +781,10 @@ fun encodeTarget(id: String, kind: String, display: String, root: String): Strin
 
 fun decodeTarget(payloadJson: String): TargetMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeTarget(obj)
+}
+
+fun decodeTarget(obj: JsonValue.Obj): TargetMessage? {
   val kind = obj.readString("kind", true)
   val display = obj.readString("display", true)
   val root = obj.readString("root", true)
@@ -797,6 +875,10 @@ fun encodeApprovalRequested(id: String, notice: ApprovalNotice): String {
 
 fun decodeApprovalRequested(payloadJson: String): ApprovalNotice? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeApprovalRequested(obj)
+}
+
+fun decodeApprovalRequested(obj: JsonValue.Obj): ApprovalNotice? {
   val toolId = obj.readString("tool_id", true)
   val toolName = obj.readString("tool_name", true)
   val summary = obj.readString("summary", true)
@@ -1194,6 +1276,10 @@ fun encodePlan(id: String, path: String, title: String, running: Boolean, rows: 
 
 fun decodePlan(payloadJson: String): PlanMessage? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodePlan(obj)
+}
+
+fun decodePlan(obj: JsonValue.Obj): PlanMessage? {
   val path = obj.readString("path", true)
   val title = obj.readString("title", true)
   val running = obj.readBool("running", true)
@@ -1257,6 +1343,10 @@ fun encodeSnapshot(id: String, snapshot: WireSnapshot): String {
 
 fun decodeSnapshot(payloadJson: String): WireSnapshot? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeSnapshot(obj)
+}
+
+fun decodeSnapshot(obj: JsonValue.Obj): WireSnapshot? {
   val viewObj = obj.field("view") as? JsonValue.Obj ?: return null
   val view = viewFromJson(viewObj) ?: return null
   val turnsNode = obj.field("turns") as? JsonValue.Arr ?: return null
@@ -1332,6 +1422,10 @@ fun tryEncodeTranscript(id: String, transcript: WireTranscript): String {
 
 fun decodeTranscript(payloadJson: String): WireTranscript? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeTranscript(obj)
+}
+
+fun decodeTranscript(obj: JsonValue.Obj): WireTranscript? {
   val turnIndex = obj.readInt("turn_index", true)
   val revision = obj.readInt("revision", true)
   val phase = obj.readString("phase", true)
@@ -1409,6 +1503,11 @@ data class DecodedImage(val image: ImageData, val decodedBytes: Int)
 
 fun decodeImageData(payloadJson: String): DecodedImage? {
   val obj = parseObject(payloadJson) ?: return null
+  val part = decodeImagePart(obj) ?: return null
+  return DecodedImage(part.image, part.bytes.size)
+}
+
+fun decodeImagePart(obj: JsonValue.Obj): InboundPayload.ImagePart? {
   val imageId = obj.readString("image_id", true)
   val mime = obj.readString("mime", true)
   val width = obj.readInt("width", true)
@@ -1423,7 +1522,7 @@ fun decodeImageData(payloadJson: String): DecodedImage? {
   val raw = decodeImageBytes(encoded.value) ?: return null
   if (raw.size > MonitorLimits.MaxImagePartBytes || part.value < 1 || partCount.value < part.value) return null
   val image = ImageData(imageId.value, mime.value, width.value, height.value, part.value, partCount.value, revision.value, encoded.value)
-  return DecodedImage(image, raw.size)
+  return InboundPayload.ImagePart(image, raw)
 }
 
 fun encodeImageUnavailable(id: String, imageId: String, reason: String): String {
@@ -1436,6 +1535,10 @@ fun encodeImageUnavailable(id: String, imageId: String, reason: String): String 
 
 fun decodeImageUnavailable(payloadJson: String): ImageUnavailable? {
   val obj = parseObject(payloadJson) ?: return null
+  return decodeImageUnavailable(obj)
+}
+
+fun decodeImageUnavailable(obj: JsonValue.Obj): ImageUnavailable? {
   val imageId = obj.readString("image_id", true)
   val reason = obj.readString("reason", true)
   if (!imageId.ok || !reason.ok || !imageUnavailableReasonIsKnown(reason.value)) return null

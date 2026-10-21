@@ -49,7 +49,9 @@ import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.protocol.ApprovalNotice
+import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
+import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
@@ -61,12 +63,12 @@ import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.decodeApprovalRequested
 import computing.michell.monitor.protocol.decodeError
-import computing.michell.monitor.protocol.decodeImageData
 import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeMode
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeRejected
 import computing.michell.monitor.protocol.WireSnapshot
+import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
@@ -75,7 +77,6 @@ import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.assembleTranscriptBlocks
 import computing.michell.monitor.protocol.decodeTranscript
 import computing.michell.monitor.protocol.decodeTurnData
-import computing.michell.monitor.protocol.decodeImageBytes
 import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeNewPlan
@@ -370,6 +371,7 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
 
 fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
   if (!message.changesState && message.kind != MessageKind.Error) return state
+  if (message.inbound !is InboundPayload.None) return reduceInbound(state, message.inbound)
   return when (message.kind) {
     MessageKind.Snapshot -> applySnapshot(state, message.payloadJson)
     MessageKind.Transcript -> applyTranscript(state, message.payloadJson)
@@ -405,8 +407,44 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   )
 }
 
+private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
+  return when (inbound) {
+    is InboundPayload.Snapshot -> applySnapshot(state, inbound.value)
+    is InboundPayload.TranscriptPart -> applyTranscript(state, inbound.value)
+    is InboundPayload.Turn -> state.copy(history = state.history + (inbound.value.turnIndex to inbound.value))
+    is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
+    is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
+    is InboundPayload.Target -> state.copy(view = state.view.copy(
+      targetKind = inbound.value.kind,
+      targetDisplay = inbound.value.display,
+      targetRoot = inbound.value.root
+    ))
+    is InboundPayload.Plan -> state.copy(
+      planPath = inbound.value.path,
+      planTitle = inbound.value.title,
+      planRunning = inbound.value.running,
+      planRows = inbound.value.rows,
+      view = state.view.copy(planPath = inbound.value.path, planTitle = inbound.value.title, planRunning = inbound.value.running)
+    )
+    is InboundPayload.ApprovalRequest -> state.copy(approval = inbound.notice, approvalOpen = true)
+    is InboundPayload.Insert -> state.copy(draft = inbound.text)
+    is InboundPayload.Error -> applyErrorValue(state, inbound.body)
+    is InboundPayload.Rejected -> {
+      val reason = inbound.value.reason
+      val hold = reason == "protocol" || reason == "pair_code" || reason == "fingerprint"
+      state.copy(disconnected = true, banner = reason, pairHold = hold || state.pairHold)
+    }
+    is InboundPayload.ImageMissing -> state.copy(imageReasons = state.imageReasons + (inbound.value.imageId to inbound.value.reason))
+    else -> state
+  }
+}
+
 private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
   val snapshot = decodeSnapshot(payloadJson) ?: return state
+  return applySnapshot(state, snapshot)
+}
+
+private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val incoming = snapshot.live
   if (incoming == null) {
     val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
@@ -475,6 +513,10 @@ private fun transcriptInScope(state: MonitorUi, turnId: String): Boolean {
 
 private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
   val transcript = decodeTranscript(payloadJson) ?: return state
+  return applyTranscript(state, transcript)
+}
+
+private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): MonitorUi {
   val turnId = state.live?.id ?: ""
   val inScope = transcriptInScope(state, turnId)
   if (inScope && transcript.revision < state.liveRevision) return state
@@ -566,6 +608,10 @@ private fun applyRejected(state: MonitorUi, message: MonitorMessage): MonitorUi 
 
 private fun applyError(state: MonitorUi, payloadJson: String): MonitorUi {
   val error = decodeError(payloadJson) ?: return state.copy(banner = payloadJson)
+  return applyErrorValue(state, error)
+}
+
+private fun applyErrorValue(state: MonitorUi, error: ErrorBody): MonitorUi {
   if (error.messageText == NothingRunningToSteer && (state.draft.isNotEmpty() || state.pendingPrompt.isNotEmpty()) && !state.disconnected) {
     return state.copy(
       banner = "",
@@ -1150,9 +1196,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun decodeBitmap(message: MonitorMessage): DecodedImage? {
-    val decoded = decodeImageData(message.payloadJson) ?: return null
-    val raw = decodeImageBytes(decoded.image.bytesBase64) ?: return null
-    val joined = images.accept(decoded.image, raw) ?: return null
+    val part = message.inbound as? InboundPayload.ImagePart ?: return null
+    val joined = images.accept(part.image, part.bytes) ?: return null
     val bounds = BitmapFactory.Options()
     bounds.inJustDecodeBounds = true
     BitmapFactory.decodeByteArray(joined, 0, joined.size, bounds)
@@ -1162,8 +1207,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     pixels.inSampleSize = plan.sampleSize
     pixels.inPreferredConfig = Bitmap.Config.ARGB_8888
     val bitmap = BitmapFactory.decodeByteArray(joined, 0, joined.size, pixels) ?: return null
-    val turnIndex = coordinator.turnForImage(decoded.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
-    return DecodedImage(uiState.value.hostGeneration, decoded.image.imageId, decoded.image.revision, turnIndex, bitmap)
+    val turnIndex = coordinator.turnForImage(part.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
+    return DecodedImage(uiState.value.hostGeneration, part.image.imageId, part.image.revision, turnIndex, bitmap)
   }
 
   private fun storeDecoded(image: DecodedImage) {

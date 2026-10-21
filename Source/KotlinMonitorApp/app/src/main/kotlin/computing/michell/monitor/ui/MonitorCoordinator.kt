@@ -15,6 +15,7 @@ import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
+import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.MonitorMessage
@@ -212,7 +213,7 @@ class MonitorCoordinator(
   private fun incoming(current: MonitorUi, message: MonitorMessage): List<MonitorEffect>? {
     if (message.kind == MessageKind.ImageData) return listOf(MonitorEffect.DecodeImage(message))
     if (message.kind == MessageKind.Snapshot) {
-      val snapshot = decodeSnapshot(message.payloadJson)
+      val snapshot = (message.inbound as? InboundPayload.Snapshot)?.value ?: decodeSnapshot(message.payloadJson)
       if (snapshot != null && snapshot.live == null) return acceptNullLive(current, snapshot)
     }
     val immediate = message.kind in ImmediateKinds
@@ -443,11 +444,11 @@ class MonitorCoordinator(
   private fun noteFetchArrival(message: MonitorMessage) {
     when (message.kind) {
       MessageKind.TurnData -> {
-        val turn = decodeTurnData(message.payloadJson) ?: return
+        val turn = (message.inbound as? InboundPayload.Turn)?.value ?: decodeTurnData(message.payloadJson) ?: return
         completeTurn(turn.turnIndex)
       }
       MessageKind.ImageUnavailable -> {
-        val image = decodeImageUnavailable(message.payloadJson) ?: return
+        val image = (message.inbound as? InboundPayload.ImageMissing)?.value ?: decodeImageUnavailable(message.payloadJson) ?: return
         noteImageFetched(image.imageId)
       }
       else -> {}

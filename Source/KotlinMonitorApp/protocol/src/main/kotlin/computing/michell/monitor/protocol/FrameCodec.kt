@@ -63,7 +63,8 @@ enum class FrameStatus {
 data class MonitorFrame(
   val version: Int,
   val flags: Int,
-  val json: String
+  val json: String,
+  val parsed: JsonValue.Obj? = null
 )
 
 data class FrameEncode(
@@ -194,10 +195,11 @@ private fun finishPayload(bytes: ByteArray, payloadLength: Int): FrameDecode {
     return FrameDecode(false, EmptyFrame, FrameStatus.BadUtf8)
   }
   val json = raw.toString(Charsets.UTF_8)
-  if (!jsonTextIsObject(json)) {
+  val parsed = parseJson(json) as? JsonValue.Obj
+  if (parsed == null) {
     return FrameDecode(false, EmptyFrame, FrameStatus.BadJson)
   }
-  val frame = MonitorFrame(MonitorLimits.FrameVersion, bytes[5].toInt() and 0xFF, json)
+  val frame = MonitorFrame(MonitorLimits.FrameVersion, bytes[5].toInt() and 0xFF, json, parsed)
   return FrameDecode(true, frame, FrameStatus.Ok)
 }
 

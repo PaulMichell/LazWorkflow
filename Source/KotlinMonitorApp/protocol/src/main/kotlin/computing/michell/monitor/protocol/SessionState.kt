@@ -137,19 +137,19 @@ class SessionState {
   var phase: SessionPhase = SessionPhase.Stopped
     private set
   private var authSent = false
-  val images = ImageAssembly()
   var liveRevision: Int = -1
     private set
-  var liveTranscript: WireTranscript? = null
-    private set
+  private var retainedImageBytes = 0
+
+  /** Image part bytes are not kept here. The UI assembler is the only copy. */
+  fun retainedImageBytes(): Int = retainedImageBytes
 
   fun onHandshakeComplete() {
     if (phase == SessionPhase.Stopped || phase == SessionPhase.Closed) {
       phase = SessionPhase.Accepted
       authSent = false
       liveRevision = -1
-      liveTranscript = null
-      images.reset()
+      retainedImageBytes = 0
     }
   }
 
@@ -184,41 +184,44 @@ class SessionState {
       phase = SessionPhase.Live
     }
     updateBusy(message)
-    if (message.kind == MessageKind.Transcript) acceptTranscript(message.payloadJson)
-    if (message.kind == MessageKind.ImageData) acceptImage(message.payloadJson)
+    if (message.kind == MessageKind.Transcript) noteTranscript(message)
   }
 
-  fun acceptTranscript(payloadJson: String): Boolean {
-    val transcript = decodeTranscript(payloadJson) ?: return false
-    if (liveTranscript != null && transcript.revision <= liveRevision) return false
-    liveRevision = transcript.revision
-    liveTranscript = transcript
-    return true
-  }
-
-  fun acceptImage(payloadJson: String): ByteArray? {
-    val decoded = decodeImageData(payloadJson) ?: return null
-    val raw = decodeImageBytes(decoded.image.bytesBase64) ?: return null
-    return images.accept(decoded.image, raw)
+  private fun noteTranscript(message: MonitorMessage) {
+    val revision = when (val body = message.inbound) {
+      is InboundPayload.TranscriptPart -> body.value.revision
+      else -> decodeTranscript(message.payloadJson)?.revision ?: return
+    }
+    if (revision <= liveRevision && liveRevision >= 0) return
+    liveRevision = revision
   }
 
   private fun updateBusy(message: MonitorMessage) {
     if (phase != SessionPhase.Live && phase != SessionPhase.Busy) return
     val sending: Boolean
     val planRunning: Boolean
-    when (message.kind) {
-      MessageKind.Snapshot -> {
-        val snapshot = decodeSnapshot(message.payloadJson) ?: return
-        sending = snapshot.view.sending
-        planRunning = snapshot.view.planRunning || snapshot.planRunning
+    when (val body = message.inbound) {
+      is InboundPayload.Snapshot -> {
+        sending = body.value.view.sending
+        planRunning = body.value.view.planRunning || body.value.planRunning
       }
-      MessageKind.Status -> {
-        val obj = parseJson(message.payloadJson) as? JsonValue.Obj ?: return
-        val view = statusFromJson(obj) ?: return
-        sending = view.sending
-        planRunning = view.planRunning
+      is InboundPayload.Status -> {
+        sending = body.view.sending
+        planRunning = body.view.planRunning
       }
-      else -> return
+      else -> when (message.kind) {
+        MessageKind.Snapshot -> {
+          val snapshot = decodeSnapshot(message.payloadJson) ?: return
+          sending = snapshot.view.sending
+          planRunning = snapshot.view.planRunning || snapshot.planRunning
+        }
+        MessageKind.Status -> {
+          val view = decodeStatusPayload(message.payloadJson) ?: return
+          sending = view.sending
+          planRunning = view.planRunning
+        }
+        else -> return
+      }
     }
     phase = if (sending || planRunning) SessionPhase.Busy else SessionPhase.Live
   }

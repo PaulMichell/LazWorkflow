@@ -333,6 +333,42 @@ class ProtocolCodecTest {
     assertEquals(4, part.decodedBytes)
   }
 
+  @Test
+  fun inboundImageIsDecodedOnceAndSessionDoesNotKeepTheBytes() {
+    val bytes = readVendored("image-data.hex")
+    resetJsonParseCount()
+    val frame = tryDecodeFrame(bytes)
+    assertTrue(frame.ok)
+    assertEquals(1, jsonParseCount)
+    val envelope = tryDecodeEnvelope(frame.frame)
+    assertTrue(envelope.ok)
+    assertEquals(1, jsonParseCount)
+    val image = envelope.message.inbound as? InboundPayload.ImagePart
+    assertNotNull(image)
+    assertEquals(4, image!!.bytes.size)
+    val session = SessionState()
+    session.apply(envelope.message)
+    assertEquals(0, session.retainedImageBytes())
+    val assembly = ImageAssembly()
+    assertNotNull(assembly.accept(image.image, image.bytes))
+  }
+
+  @Test
+  fun inboundTranscriptCarriesBlocksWithoutASecondJoin() {
+    val block = WireBlock("answer", "b1", "", "", "", "Hello", false, true, 0, emptyList(), false, 1, 1, 2)
+    val encoded = tryEncodeTranscript("tr", WireTranscript(1, 2, "thinking", "working", listOf(block)))
+    val envelope = tryDecodeEnvelope(encoded)
+    val part = envelope.message.inbound as? InboundPayload.TranscriptPart
+    assertNotNull(part)
+    assertEquals(listOf(block.body), part!!.value.blocks.map { it.body })
+    val joined = assembleTranscriptBlocks(listOf(part.value.blocks))
+    assertEquals("Hello", joined.single().body)
+    val session = SessionState()
+    session.apply(envelope.message)
+    assertEquals(2, session.liveRevision)
+    assertEquals(0, session.retainedImageBytes())
+  }
+
   private fun imagePart(
     id: String,
     part: Int,

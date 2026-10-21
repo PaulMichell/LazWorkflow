@@ -13,7 +13,9 @@ package computing.michell.monitor.connection
    is written only on the socket that accepted it. */
 
 import computing.michell.monitor.protocol.FrameStatus
+import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.MonitorFrame
 import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
@@ -482,7 +484,7 @@ class LanSession(
   override val hostClientId: String get() = store.load().clientId
 
   override fun resetImages() {
-    session.images.reset()
+    // Image bytes are assembled only in the UI. There is no session copy to drop.
   }
 
   /** Opens the saved endpoint. Does not replace or clear the TLS pin. */
@@ -730,7 +732,7 @@ class LanSession(
       when (step.status) {
         FrameStatus.Ok -> {
           noteInbound()
-          onFrame(step.frame.json, epoch, owned)
+          onFrame(step.frame, epoch, owned)
           pending = step.remaining
           if (readEnd != ReadEnd.Continue) return pending
         }
@@ -740,9 +742,9 @@ class LanSession(
     }
   }
 
-  private suspend fun onFrame(json: String, epoch: Int, owned: TlsLink) {
+  private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink) {
     if (epochCounter.get() != epoch) return
-    val envelope = tryDecodeEnvelope(json)
+    val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
     val message = envelope.message
     session.apply(message)
@@ -754,7 +756,7 @@ class LanSession(
     }
     when (message.kind) {
       MessageKind.PairOk -> {
-        val paired = decodePairOk(message.payloadJson)
+        val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)
         if (paired != null) {
           store.savePairing(paired.clientId, paired.sessionToken)
           pairCode = ""
@@ -762,7 +764,7 @@ class LanSession(
         }
       }
       MessageKind.HelloOk -> {
-        val hello = decodeHelloOk(message.payloadJson)
+        val hello = (message.inbound as? InboundPayload.HelloOk)?.value ?: decodeHelloOk(message.payloadJson)
         val record = store.load()
         if (hello != null && record.paired) {
           val mac = authMac(record.sessionToken, hello.nonce)
