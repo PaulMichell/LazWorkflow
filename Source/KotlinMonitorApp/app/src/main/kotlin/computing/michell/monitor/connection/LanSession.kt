@@ -9,7 +9,8 @@ package computing.michell.monitor.connection
    is refused. Inbound messages wait on a bounded queue. A slow collector
    is a failed delivery, not a dropped frame. A silent, rejected, or
    failed-write peer leaves the read loop and the owned socket is closed.
-   The unsent prompt draft is kept across disconnect. */
+   The unsent prompt draft is kept across disconnect. A catalogue command
+   is written only on the socket that accepted it. */
 
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.MessageKind
@@ -55,6 +56,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
@@ -354,11 +356,65 @@ class InboundDelivery(
   }
 }
 
+enum class CatalogueWrite {
+  Written,
+  Failed,
+  Stale
+}
+
+data class CatalogueResult(
+  val commandId: String,
+  val linkEpoch: Int,
+  val outcome: CatalogueWrite
+)
+
+data class AcceptedCatalogue(
+  val commandId: String,
+  val linkEpoch: Int,
+  val json: String,
+  val socket: Any?
+)
+
+sealed class CatalogueStep {
+  data class Done(val result: CatalogueResult) : CatalogueStep()
+  data class Write(val accepted: AcceptedCatalogue) : CatalogueStep()
+}
+
+/** Captures the command id and the link epoch that accepted the command. */
+fun beginCatalogue(json: String, linkEpoch: Int, socket: Any?): AcceptedCatalogue {
+  return AcceptedCatalogue(catalogueCommandId(json), linkEpoch, json, socket)
+}
+
+/** A stale command or a missing socket is finished here. The caller must not write. */
+fun stepCatalogue(accepted: AcceptedCatalogue, currentEpoch: Int, currentSocket: Any?): CatalogueStep {
+  val socket = accepted.socket
+  if (socket == null) {
+    return CatalogueStep.Done(CatalogueResult(accepted.commandId, accepted.linkEpoch, CatalogueWrite.Failed))
+  }
+  if (currentEpoch != accepted.linkEpoch || currentSocket !== socket) {
+    return CatalogueStep.Done(CatalogueResult(accepted.commandId, accepted.linkEpoch, CatalogueWrite.Stale))
+  }
+  return CatalogueStep.Write(accepted)
+}
+
+fun catalogueFromWrite(accepted: AcceptedCatalogue, wrote: Boolean): CatalogueResult {
+  val outcome = if (wrote) CatalogueWrite.Written else CatalogueWrite.Failed
+  return CatalogueResult(accepted.commandId, accepted.linkEpoch, outcome)
+}
+
+fun catalogueCommandId(json: String): String {
+  val decoded = tryDecodeEnvelope(json)
+  if (!decoded.ok) return ""
+  return decoded.message.id
+}
+
 interface SessionPort {
   val promptDraft: String
   val hostAddress: String
   val hostPort: Int
   val hostClientId: String
+  val linkEpoch: Int
+  val commandResults: Flow<CatalogueResult>
   fun nextCommandId(): String
   fun updateDraft(text: String)
   fun sendCatalogue(json: String)
@@ -375,7 +431,8 @@ class LanSession(
   private val writeLock = Mutex()
   private val resumes = Channel<Unit>(Channel.CONFLATED)
   private val ids = AtomicInteger(1)
-  private val linkEpoch = AtomicInteger(0)
+  private val epochCounter = AtomicInteger(0)
+  private val commandResultsChannel = Channel<CatalogueResult>(Channel.BUFFERED)
   private val policy = ReconnectPolicy()
   private val session = computing.michell.monitor.protocol.SessionState()
   private val statusState = MutableStateFlow(LinkStatus())
@@ -387,6 +444,9 @@ class LanSession(
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
   val messages: Flow<computing.michell.monitor.protocol.MonitorMessage> = inbound.messages
+  override val commandResults: Flow<CatalogueResult> = commandResultsChannel.receiveAsFlow()
+  override val linkEpoch: Int
+    get() = epochCounter.get()
   val reconnectPaused: Boolean
     get() = policy.paused
 
@@ -395,8 +455,20 @@ class LanSession(
     private set
 
   override fun sendCatalogue(json: String) {
-    if (json.isEmpty() || stopped) return
-    scope.launch { writeJson(json) }
+    if (json.isEmpty()) return
+    val accepted = beginCatalogue(json, epochCounter.get(), if (stopped) null else link)
+    scope.launch {
+      val step = stepCatalogue(accepted, epochCounter.get(), link)
+      val result = when (step) {
+        is CatalogueStep.Done -> step.result
+        is CatalogueStep.Write -> {
+          val socket = step.accepted.socket as? TlsLink
+          val wrote = if (socket == null) false else writeJson(step.accepted.json, socket)
+          catalogueFromWrite(step.accepted, wrote)
+        }
+      }
+      commandResultsChannel.send(result)
+    }
   }
 
   override fun nextCommandId(): String = newId()
@@ -460,7 +532,7 @@ class LanSession(
   fun disconnect() {
     stopped = true
     policy.pause()
-    linkEpoch.incrementAndGet()
+    epochCounter.incrementAndGet()
     loop?.cancel()
     closeLink()
     publish(LinkPhase.Disconnected, HostClosedBanner, "")
@@ -473,7 +545,7 @@ class LanSession(
 
   private fun startLoop() {
     // The previous loop must finish closing its own socket before this one opens.
-    val epoch = linkEpoch.incrementAndGet()
+    val epoch = epochCounter.incrementAndGet()
     val previous = loop
     previous?.cancel()
     closeLink()
@@ -485,15 +557,15 @@ class LanSession(
       } catch (error: Exception) {
         // The predecessor failed. This generation still owns the next attempt.
       }
-      if (linkEpoch.get() != epoch || stopped) return@launch
+      if (epochCounter.get() != epoch || stopped) return@launch
       runLoop()
     }
   }
 
   private suspend fun runLoop() {
-    val epoch = linkEpoch.get()
+    val epoch = epochCounter.get()
     var waitBeforeConnect = false
-    while (coroutineContext[Job]?.isActive != false && !stopped && linkEpoch.get() == epoch) {
+    while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
       if (policy.paused) {
         val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
         publish(LinkPhase.Paused, shown, statusState.value.lastError)
@@ -512,10 +584,10 @@ class LanSession(
         AttemptResult.Opened -> {
           policy.resume()
           val end = readUntilClose(epoch)
-          if (linkEpoch.get() != epoch) return
+          if (epochCounter.get() != epoch) return
           closeLink()
           session.onSocketClosed()
-          if (linkEpoch.get() != epoch) return
+          if (epochCounter.get() != epoch) return
           // Rejected and Disabled pause. Every other terminal result uses the existing reconnect path.
           if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
             policy.pause()
@@ -536,14 +608,14 @@ class LanSession(
       publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.")
       return AttemptResult.Pinned
     }
-    if (linkEpoch.get() != epoch) return AttemptResult.Superseded
+    if (epochCounter.get() != epoch) return AttemptResult.Superseded
     publishCurrent(epoch, LinkPhase.Connecting, "", "")
     val opened = try {
       withContext(Dispatchers.IO) {
         connector.open(record.address, record.port, record.fingerprint)
       }
     } catch (error: Exception) {
-      if (linkEpoch.get() != epoch) return AttemptResult.Superseded
+      if (epochCounter.get() != epoch) return AttemptResult.Superseded
       if (isPinFailure(error)) {
         publish(LinkPhase.Disconnected, "TLS pin mismatch.", error.message ?: "TLS pin mismatch.")
         return AttemptResult.Pinned
@@ -556,7 +628,7 @@ class LanSession(
       publish(LinkPhase.Disconnected, detail, detail)
       return AttemptResult.Failed
     }
-    if (linkEpoch.get() != epoch || stopped) {
+    if (epochCounter.get() != epoch || stopped) {
       closeOwned(opened)
       return AttemptResult.Superseded
     }
@@ -570,14 +642,14 @@ class LanSession(
       encodeHello(helloId, ClientName, ClientVersion, record.clientId)
     }
     if (!writeJson(hello, opened)) {
-      if (linkEpoch.get() == epoch) closeLink() else closeOwned(opened)
-      return if (linkEpoch.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
+      if (epochCounter.get() == epoch) closeLink() else closeOwned(opened)
+      return if (epochCounter.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
     }
     if (openPair) {
       val pair = encodePair(newId(), pairCode, pinned)
       if (!writeJson(pair, opened)) {
-        if (linkEpoch.get() == epoch) closeLink() else closeOwned(opened)
-        return if (linkEpoch.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
+        if (epochCounter.get() == epoch) closeLink() else closeOwned(opened)
+        return if (epochCounter.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
       }
     }
     return AttemptResult.Opened
@@ -585,7 +657,7 @@ class LanSession(
 
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
     val current = link ?: return ReadEnd.PeerClosed
-    if (linkEpoch.get() != epoch) return ReadEnd.PeerClosed
+    if (epochCounter.get() != epoch) return ReadEnd.PeerClosed
     synchronized(readEndLock) { readEnd = ReadEnd.Continue }
     lastInboundNanos = clock.nanoTime()
     val listener = {
@@ -598,7 +670,7 @@ class LanSession(
         var pending = ByteArray(0)
         var partialSince = 0L
         var lastSent = System.currentTimeMillis()
-        while (coroutineContext[Job]?.isActive != false && !stopped && linkEpoch.get() == epoch) {
+        while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
           val count = try {
             current.input.read(buffer)
@@ -635,7 +707,7 @@ class LanSession(
             if (!writeJson(ping, current)) return@withContext finishRead(epoch, current, ReadEnd.WriteFailed)
             lastSent = now
           }
-          if (linkEpoch.get() != epoch) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          if (epochCounter.get() != epoch) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
         }
         finishRead(epoch, current, ReadEnd.PeerClosed)
@@ -669,7 +741,7 @@ class LanSession(
   }
 
   private suspend fun onFrame(json: String, epoch: Int, owned: TlsLink) {
-    if (linkEpoch.get() != epoch) return
+    if (epochCounter.get() != epoch) return
     val envelope = tryDecodeEnvelope(json)
     if (!envelope.ok) return
     val message = envelope.message
@@ -750,7 +822,7 @@ class LanSession(
 
   private fun noteReadEnd(epoch: Int, end: ReadEnd, owned: TlsLink?) {
     if (end == ReadEnd.Continue) return
-    if (linkEpoch.get() != epoch) return
+    if (epochCounter.get() != epoch) return
     val closeNow = synchronized(readEndLock) {
       if (readEnd != ReadEnd.Continue) {
         false
@@ -778,7 +850,7 @@ class LanSession(
   }
 
   private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String) {
-    if (linkEpoch.get() != epoch) return
+    if (epochCounter.get() != epoch) return
     publish(phase, banner, error)
   }
 

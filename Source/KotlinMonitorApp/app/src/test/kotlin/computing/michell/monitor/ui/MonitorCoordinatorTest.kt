@@ -2,10 +2,19 @@ package computing.michell.monitor.ui
 
 /* Coordinator seam without AndroidViewModel (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.connection.AcceptedCatalogue
+import computing.michell.monitor.connection.CatalogueResult
+import computing.michell.monitor.connection.CatalogueStep
+import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.SessionPort
+import computing.michell.monitor.connection.beginCatalogue
+import computing.michell.monitor.connection.catalogueFromWrite
+import computing.michell.monitor.connection.stepCatalogue
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.WireBlock
@@ -60,12 +69,19 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeInsertResult("ins", "pasted"))))
     assertEquals("pasted", coordinator.state.draft)
     val sent = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("", coordinator.state.draft)
+    assertEquals("pasted", coordinator.state.draft)
     assertEquals("pasted", coordinator.state.pendingPrompt)
     assertEquals("user", coordinator.state.pendingKind)
     assertEquals("c1", coordinator.state.pendingCommandId)
     assertEquals(1, coordinator.state.pendingEpoch)
     assertEquals(listOf("pasted"), sendTexts(sent))
+    val written = coordinator.onEvent(MonitorEvent.CommandResult(
+      coordinator.state,
+      CatalogueResult(coordinator.state.pendingCommandId, 1, CatalogueWrite.Written)
+    ))
+    assertEquals("", coordinator.state.draft)
+    assertEquals("pasted", coordinator.state.pendingPrompt)
+    assertEquals(emptyList<String>(), sendTexts(written.orEmpty()))
     val status = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
       MessageKind.Status, "st", statusToJson(emptyView().copy(canSend = true, signedIn = true))
     ))))
@@ -216,6 +232,105 @@ class MonitorCoordinatorTest {
     coordinator.flush(coordinator.state)
     assertEquals("new text", displayedBody(coordinator.state))
   }
+
+  @Test
+  fun failedSendBeforeWriteKeepsTheText() {
+    val session = FakeSession()
+    session.dropSocket()
+    val coordinator = sendingCoordinator(session)
+    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("keep me", coordinator.state.pendingPrompt)
+    assertTrue(coordinator.state.view.busy)
+    drive(session, submitted)
+    val settled = settleWrites(coordinator, session)
+    assertEquals(0, session.writeAttempts)
+    assertTrue(session.writes.isEmpty())
+    assertEquals(CatalogueWrite.Failed, session.outcomes.single())
+    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertFalse(coordinator.state.view.busy)
+    assertFalse(coordinator.state.view.sending)
+    assertTrue(coordinator.state.view.canSend)
+    assertEquals(CouldNotSendBanner, coordinator.state.banner)
+    assertEquals(emptyList<String>(), sendTexts(settled))
+  }
+
+  @Test
+  fun failedWriteJsonKeepsTheText() {
+    val session = FakeSession()
+    session.failWriteJson()
+    val coordinator = sendingCoordinator(session)
+    drive(session, coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
+    val settled = settleWrites(coordinator, session)
+    assertEquals(1, session.writeAttempts)
+    assertTrue(session.writes.isEmpty())
+    assertEquals(CatalogueWrite.Failed, session.outcomes.single())
+    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertFalse(coordinator.state.view.busy)
+    assertTrue(coordinator.state.view.canSend)
+    assertEquals(CouldNotSendBanner, coordinator.state.banner)
+    assertEquals(emptyList<String>(), sendTexts(settled))
+  }
+
+  @Test
+  fun writtenSendWithoutAckDoesNotSendAgain() {
+    val session = FakeSession()
+    val coordinator = sendingCoordinator(session)
+    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals(listOf("keep me"), sendTexts(submitted))
+    drive(session, submitted)
+    val settled = settleWrites(coordinator, session)
+    assertEquals(1, session.writes.size)
+    assertEquals(CatalogueWrite.Written, session.outcomes.single())
+    assertEquals("", coordinator.state.draft)
+    assertEquals("keep me", coordinator.state.pendingPrompt)
+    assertEquals("user", coordinator.state.pendingKind)
+    assertTrue(coordinator.state.view.busy)
+    assertEquals(emptyList<String>(), sendTexts(settled))
+    val status = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
+      MessageKind.Status, "st", statusToJson(emptyView().copy(canSend = true, signedIn = true))
+    ))))
+    assertEquals("", coordinator.state.draft)
+    assertEquals("keep me", coordinator.state.pendingPrompt)
+    assertEquals(emptyList<String>(), sendTexts(status.orEmpty()))
+    val dropped = coordinator.onEvent(MonitorEvent.LinkChanged(
+      coordinator.state,
+      LinkStatus(LinkPhase.Disconnected, HostClosedBanner)
+    ))
+    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertEquals(HostClosedBanner, coordinator.state.banner)
+    assertEquals(emptyList<String>(), sendTexts(dropped.orEmpty()))
+    drive(session, dropped)
+    session.completeWrites()
+    assertEquals(1, session.writes.size)
+    assertEquals(1, session.outcomes.size)
+  }
+
+  @Test
+  fun commandAcceptedOnGenerationOneIsNotWrittenOnGenerationTwo() {
+    val session = FakeSession()
+    val coordinator = sendingCoordinator(session)
+    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    drive(session, submitted)
+    assertEquals(1, session.linkEpoch)
+    assertEquals(listOf(1), session.acceptedEpochs)
+    val commandId = coordinator.state.pendingCommandId
+    session.moveGeneration()
+    assertEquals(2, session.linkEpoch)
+    val settled = settleWrites(coordinator, session)
+    assertTrue(session.writes.isEmpty())
+    assertEquals(0, session.writeAttempts)
+    assertEquals(CatalogueWrite.Stale, session.outcomes.single())
+    assertEquals(commandId, session.settledIds.single())
+    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertFalse(coordinator.state.view.busy)
+    assertEquals(CouldNotSendBanner, coordinator.state.banner)
+    assertEquals(emptyList<String>(), sendTexts(settled))
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {
@@ -275,17 +390,104 @@ private class FixedDisplay(
   override val showTools: Boolean
 ) : DisplayPreferences
 
+private fun sendingCoordinator(session: FakeSession): MonitorCoordinator {
+  val coordinator = MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, true))
+  openLive(coordinator, canSend = true, canSteer = false)
+  coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep me"))
+  return coordinator
+}
+
+private fun drive(session: FakeSession, effects: List<MonitorEffect>?) {
+  for (effect in effects.orEmpty()) {
+    if (effect is MonitorEffect.Send) session.sendCatalogue(effect.json)
+    if (effect is MonitorEffect.RememberDraft) session.updateDraft(effect.text)
+  }
+}
+
+private fun settleWrites(coordinator: MonitorCoordinator, session: FakeSession): List<MonitorEffect> {
+  session.completeWrites()
+  val effects = mutableListOf<MonitorEffect>()
+  for (result in session.takeResults()) {
+    effects += coordinator.onEvent(MonitorEvent.CommandResult(coordinator.state, result)).orEmpty()
+  }
+  return effects
+}
+
 private class FakeSession : SessionPort {
   private var stored = ""
+  private var generation = 1
+  private var openSocket: Any? = Any()
+  private var ids = 1
+  private val queued = mutableListOf<AcceptedCatalogue>()
   var imagesReset = 0
+  var writeJsonFails = false
+  var writeAttempts = 0
+  val writes = mutableListOf<String>()
+  val outcomes = mutableListOf<CatalogueWrite>()
+  val acceptedEpochs = mutableListOf<Int>()
+  val settledIds = mutableListOf<String>()
+  private val results = mutableListOf<CatalogueResult>()
+
   override val promptDraft: String get() = stored
   override val hostAddress: String = ""
   override val hostPort: Int = 0
   override val hostClientId: String = ""
-  override fun nextCommandId(): String = "c1"
+  override val linkEpoch: Int get() = generation
+  override val commandResults: Flow<CatalogueResult> = emptyFlow()
+  override fun nextCommandId(): String {
+    val id = "c" + ids.toString()
+    ids += 1
+    return id
+  }
   override fun updateDraft(text: String) { stored = text }
-  override fun sendCatalogue(json: String) {}
+  override fun sendCatalogue(json: String) {
+    val accepted = beginCatalogue(json, generation, openSocket)
+    acceptedEpochs += accepted.linkEpoch
+    queued += accepted
+  }
   override fun resetImages() { imagesReset += 1 }
+
+  fun dropSocket() {
+    openSocket = null
+  }
+
+  fun failWriteJson() {
+    writeJsonFails = true
+  }
+
+  fun moveGeneration() {
+    generation += 1
+    openSocket = Any()
+  }
+
+  fun completeWrites() {
+    val batch = queued.toList()
+    queued.clear()
+    for (accepted in batch) {
+      val result = when (val step = stepCatalogue(accepted, generation, openSocket)) {
+        is CatalogueStep.Done -> step.result
+        is CatalogueStep.Write -> {
+          writeAttempts += 1
+          val wrote = if (writeJsonFails) {
+            false
+          } else {
+            writes += accepted.json
+            true
+          }
+          catalogueFromWrite(accepted, wrote)
+        }
+      }
+      results += result
+      outcomes += result.outcome
+      settledIds += result.commandId
+    }
+  }
+
+  fun takeResults(): List<CatalogueResult> {
+    val copy = results.toList()
+    results.clear()
+    return copy
+  }
 }
 
 private fun envelope(json: String): computing.michell.monitor.protocol.MonitorMessage {

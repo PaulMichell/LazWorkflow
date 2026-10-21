@@ -699,6 +699,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch {
       session.status.collect { status -> onLink(status) }
     }
+    viewModelScope.launch(Dispatchers.Default) {
+      session.commandResults.collect { result ->
+        val effects = coordinator.onEvent(MonitorEvent.CommandResult(uiState.value, result)) ?: return@collect
+        withContext(Dispatchers.Main) { applyUiEffects(effects) }
+      }
+    }
     // Creation is on the main thread. available() does not create the recognizer.
     if (!engine.available()) {
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)

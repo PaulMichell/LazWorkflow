@@ -3,9 +3,12 @@ package computing.michell.monitor.ui
 /* Catalogue orchestration without Android (c) 2026 Michell Computing.
 
    Speech stays on SpeechEngine. Draft edits replace the reducer draft,
-   including with an empty string. Host change, forget pairing, and a
-   null live snapshot share one reset. */
+   including with an empty string. A send keeps that text until the
+   accepting socket reports the bytes were written. Host change, forget
+   pairing, and a null live snapshot share one reset. */
 
+import computing.michell.monitor.connection.CatalogueResult
+import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
@@ -14,6 +17,7 @@ import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.WireSnapshot
+import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.tryEncodeSend
@@ -32,11 +36,14 @@ interface DisplayPreferences {
   val showTools: Boolean
 }
 
+const val CouldNotSendBanner = "Could not send."
+
 sealed class MonitorEvent {
   data class DraftEdited(val current: MonitorUi, val text: String) : MonitorEvent()
   data class Submit(val current: MonitorUi) : MonitorEvent()
   data class Incoming(val current: MonitorUi, val message: MonitorMessage) : MonitorEvent()
   data class LinkChanged(val current: MonitorUi, val status: LinkStatus) : MonitorEvent()
+  data class CommandResult(val current: MonitorUi, val result: CatalogueResult) : MonitorEvent()
   data class HostChanged(val current: MonitorUi, val address: String, val port: Int, val clientId: String) : MonitorEvent()
   data class ForgetPairing(val current: MonitorUi) : MonitorEvent()
 }
@@ -66,6 +73,10 @@ class MonitorCoordinator(
   private var hostAddress = ""
   private var hostPort = 0
   private var hostClientId = ""
+  private var pendingText = ""
+  private var writeSettled = false
+  private var retryView: WireView? = null
+  private var retryActivityMs = 0L
   private var screen = MonitorUi(
     draft = session.promptDraft,
     showThinking = display.showThinking,
@@ -82,6 +93,7 @@ class MonitorCoordinator(
       is MonitorEvent.Submit -> submit(event.current)
       is MonitorEvent.Incoming -> incoming(event.current, event.message)
       is MonitorEvent.LinkChanged -> linkChanged(event.current, event.status)
+      is MonitorEvent.CommandResult -> commandResult(event.current, event.result)
       is MonitorEvent.HostChanged -> noteHost(event.current, event.address, event.port, event.clientId)
       is MonitorEvent.ForgetPairing -> forgetPairing(event.current)
     }
@@ -127,6 +139,7 @@ class MonitorCoordinator(
   private fun submit(current: MonitorUi): List<MonitorEffect>? {
     screen = stamp(current)
     if (screen.disconnected) return null
+    if (screen.pendingCommandId.isNotEmpty() && !writeSettled) return null
     val steer = screen.view.canSteer
     if (!screen.view.canSend && !steer) return null
     val text = screen.draft.trim()
@@ -137,16 +150,8 @@ class MonitorCoordinator(
       screen = screen.copy(banner = "Text is longer than 65536 characters.")
       return emptyList()
     }
-    val submitted = beginSubmit(screen, text, steer, clock.nowMs(), commandId)
-    screen = stamp(submitted)
-    applied = applied.copy(
-      draft = "",
-      pendingPrompt = submitted.pendingPrompt,
-      pendingKind = submitted.pendingKind,
-      pendingCommandId = submitted.pendingCommandId,
-      pendingEpoch = submitted.pendingEpoch
-    )
-    return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.Send(encoded.json))
+    armSubmission(text, steer, commandId)
+    return listOf(MonitorEffect.Send(encoded.json))
   }
 
   private fun incoming(current: MonitorUi, message: MonitorMessage): List<MonitorEffect>? {
@@ -168,9 +173,13 @@ class MonitorCoordinator(
     val effects = posted?.toMutableList() ?: mutableListOf()
     if (reduced.rescueSteer && reduced.draft.isNotEmpty()) {
       applied = applied.copy(rescueSteer = false)
-      val encoded = tryEncodeSend(session.nextCommandId(), reduced.draft)
-      if (encoded.ok) effects += MonitorEffect.Send(encoded.json)
-      else screen = screen.copy(banner = "Text is longer than 65536 characters.", rescueSteer = false)
+      val text = reduced.draft.trim()
+      val commandId = session.nextCommandId()
+      val encoded = tryEncodeSend(commandId, text)
+      if (encoded.ok) {
+        armSubmission(text, false, commandId)
+        effects += MonitorEffect.Send(encoded.json)
+      } else screen = screen.copy(banner = "Text is longer than 65536 characters.", rescueSteer = false)
     }
     if (posted == null && effects.isEmpty()) return null
     return effects
@@ -180,7 +189,13 @@ class MonitorCoordinator(
     val reset = noteHost(current, session.hostAddress, session.hostPort, session.hostClientId)
     val effects = reset?.toMutableList() ?: mutableListOf()
     if (reset == null) screen = stamp(current)
-    if (status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused) {
+    val closed = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
+    if (closed) {
+      screen = keepUnackedText(screen).copy(pendingCommandId = "")
+      applied = keepUnackedText(applied).copy(pendingCommandId = "")
+      retryView = null
+      writeSettled = false
+      pendingText = ""
       val bannerText = if (status.banner.isEmpty()) HostClosedBanner else status.banner
       applied = noteSocketClosed(applied, bannerText)
       effects += MonitorEffect.LeaveDictation
@@ -196,6 +211,79 @@ class MonitorCoordinator(
       effects += MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
     }
     return effects
+  }
+
+  private fun commandResult(current: MonitorUi, result: CatalogueResult): List<MonitorEffect> {
+    screen = stamp(current)
+    if (result.commandId.isEmpty() || result.commandId != screen.pendingCommandId || writeSettled) return emptyList()
+    return when (result.outcome) {
+      CatalogueWrite.Written -> acceptWritten(screen)
+      CatalogueWrite.Failed, CatalogueWrite.Stale -> rejectWrite(screen)
+    }
+  }
+
+  private fun armSubmission(text: String, steer: Boolean, commandId: String) {
+    val before = screen
+    retryView = before.view
+    retryActivityMs = before.activityStartedMs
+    pendingText = text
+    writeSettled = false
+    val submitted = beginSubmit(before, text, steer, clock.nowMs(), commandId)
+    screen = stamp(submitted).copy(draft = before.draft)
+    applied = applied.copy(
+      draft = before.draft,
+      pendingPrompt = submitted.pendingPrompt,
+      pendingKind = submitted.pendingKind,
+      pendingCommandId = submitted.pendingCommandId,
+      pendingEpoch = submitted.pendingEpoch,
+      view = submitted.view,
+      activityStartedMs = submitted.activityStartedMs,
+      rescueSteer = false
+    )
+  }
+
+  private fun acceptWritten(state: MonitorUi): List<MonitorEffect> {
+    writeSettled = true
+    retryView = null
+    val kept = if (state.draft.trim() == pendingText) "" else state.draft
+    screen = state.copy(draft = kept)
+    applied = applied.copy(draft = kept)
+    return listOf(MonitorEffect.RememberDraft(kept))
+  }
+
+  private fun rejectWrite(state: MonitorUi): List<MonitorEffect> {
+    val text = state.draft.ifEmpty { state.pendingPrompt.ifEmpty { pendingText } }
+    val view = (retryView ?: state.view).copy(busy = false, sending = false)
+    retryView = null
+    pendingText = ""
+    writeSettled = false
+    val restored = state.copy(
+      draft = text,
+      pendingPrompt = "",
+      pendingKind = "",
+      pendingCommandId = "",
+      banner = CouldNotSendBanner,
+      view = view,
+      activityStartedMs = retryActivityMs
+    )
+    screen = stamp(restored)
+    applied = applied.copy(
+      draft = text,
+      pendingPrompt = "",
+      pendingKind = "",
+      pendingCommandId = "",
+      banner = CouldNotSendBanner,
+      view = view,
+      activityStartedMs = retryActivityMs
+    )
+    return listOf(MonitorEffect.RememberDraft(text))
+  }
+
+  private fun keepUnackedText(state: MonitorUi): MonitorUi {
+    if (state.pendingPrompt.isEmpty()) return state
+    val text = state.draft.ifEmpty { state.pendingPrompt }
+    if (text.isEmpty()) return state
+    return state.copy(draft = text, pendingPrompt = "", pendingKind = "", pendingCommandId = "")
   }
 
   private fun acceptNullLive(current: MonitorUi, snapshot: WireSnapshot): List<MonitorEffect> {
@@ -248,6 +336,9 @@ class MonitorCoordinator(
   ): List<MonitorEffect> {
     appliedDirty = false
     postedGeneration = 0
+    retryView = null
+    pendingText = ""
+    writeSettled = false
     val cleared = resetConversation(current, clearDraft, hostGeneration, conversationGeneration)
     applied = cleared
     screen = stamp(cleared)
