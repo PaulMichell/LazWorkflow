@@ -43,6 +43,11 @@ fun recentFetches(slots: List<VirtualSlot>, loaded: Set<Int>, window: Int = Rece
   return slots.takeLast(window).map { slot -> slot.turnIndex }.filter { index -> index >= 0 && index !in loaded }.distinct()
 }
 
+/** Recent turns the screen may report as visible until 5.4. Not every history index. */
+fun prefetchRecent(slots: List<VirtualSlot>, window: Int = RecentTurnWindow): Set<Int> {
+  return slots.takeLast(window).map { slot -> slot.turnIndex }.filter { index -> index >= 0 }.toSet()
+}
+
 fun displayBlocks(turn: WireTurn?): List<WireBlock> {
   if (turn == null) return emptyList()
   if (turn.blocks.isNotEmpty()) return turn.blocks

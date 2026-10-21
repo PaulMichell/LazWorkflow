@@ -380,6 +380,36 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun visibleTurnsDoNotRequestDistantHistoryImages() {
+    val coordinator = coordinator()
+    val stored = (0..4).map { index -> WireTurn(index, "turn-$index", "build", "", "preview", "") }
+    val snapshot = WireSnapshot(
+      emptyView().copy(canSend = true, signedIn = true),
+      stored,
+      WireTurn(-2, "live", "build", "", "", ""),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("many", snapshot))))
+    for (index in listOf(0, 2, 3, 4)) {
+      val image = WireImage("img-$index", "shot", "image/png", 8, 8, "", false)
+      coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
+        "td-$index",
+        WireTurn(index, "turn-$index", "build", "", "preview", "", images = listOf(image))
+      ))))
+    }
+    val flushed = coordinator.flush(coordinator.state).orEmpty()
+    assertEquals(emptyList<String>(), imageRequests(flushed))
+    val requested = imageRequests(coordinator.noteVisibleTurns(coordinator.state, setOf(3)))
+    assertEquals(setOf("img-2", "img-3", "img-4"), requested.toSet())
+    assertFalse(requested.contains("img-0"))
+  }
+
+  @Test
   fun expiredImageClearsTheInFlightKeyAndANewHostDoesNotShareIt() {
     val coordinator = coordinator()
     coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.1", 8765, "client-a"))

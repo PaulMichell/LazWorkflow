@@ -4,8 +4,9 @@ package computing.michell.monitor.ui
 
    Size note: exceeds the 1000 line preference. Catalogue events live in
    MonitorCoordinator. Prompt acknowledgement lives in PromptAcknowledgement.
-   The final-result deadline lives in DictationFinalWatch. What remains is
-   speech, preferences, bitmap decode, and effect execution.
+   The final-result deadline lives in DictationFinalWatch. Image request
+   and cache policy live in ImageCache. What remains is speech,
+   preferences, bitmap decode, and effect execution.
    Reviewed 2026-10-21. */
 
 import android.Manifest
@@ -622,6 +623,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     override val showTools: Boolean get() = displayPrefs.getBoolean(DisplayToolsKey, true)
   }
   private val coordinator = MonitorCoordinator(session, SystemMonitorClock, display)
+  private val imageCache = ImagePixelCache()
+  private var viewWidthPx = 0
   private val bitmapsState = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
   private val uiState: MutableStateFlow<MonitorUi>
   val ui: StateFlow<MonitorUi>
@@ -890,6 +893,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     uiState.value = coordinator.noteDisplay(uiState.value)
   }
 
+  fun noteVisibleTurns(indices: Set<Int>) {
+    val effects = coordinator.noteVisibleTurns(uiState.value, indices)
+    if (effects.isEmpty()) return
+    applyUiEffects(effects)
+  }
+
+  fun noteViewWidth(px: Int) {
+    if (px > 0) viewWidthPx = px
+  }
+
   fun requestTurn(index: Int) {
     if (index < 0) return
     val effects = coordinator.requestTurnFetch(uiState.value, index)
@@ -961,28 +974,31 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private suspend fun execute(effects: List<MonitorEffect>) {
-    val decoded = mutableListOf<Pair<String, Bitmap>>()
+    val decoded = mutableListOf<DecodedImage>()
     for (effect in effects) {
       if (effect is MonitorEffect.DecodeImage) {
+        val generation = uiState.value.hostGeneration
         val bitmap = decodeBitmap(effect.message)
         val expired = images.takeExpired()
         if (expired.isNotEmpty()) coordinator.noteImagesExpired(expired)
-        if (bitmap != null) {
-          coordinator.noteBitmap(bitmap.first)
-          coordinator.noteImageFetched(bitmap.first)
+        if (bitmap != null && uiState.value.hostGeneration == generation) {
+          val cacheKey = ImageCacheKey(generation, bitmap.imageId, bitmap.revision)
+          coordinator.noteBitmap(imageCacheText(cacheKey))
+          coordinator.noteImageFetched(bitmap.imageId)
           decoded += bitmap
         }
       }
     }
     val copyState = effects.any { it !is MonitorEffect.DecodeImage }
     withContext(Dispatchers.Main) {
-      if (decoded.isNotEmpty()) bitmapsState.update { current -> current + decoded.toMap() }
+      for (image in decoded) storeDecoded(image)
       if (copyState) applyUiEffects(effects)
     }
   }
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     uiState.value = coordinator.state
+    dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {
         is MonitorEffect.DecodeImage -> {}
@@ -992,6 +1008,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         MonitorEffect.Prefetch -> applyUiEffects(coordinator.collectMissing(uiState.value))
         MonitorEffect.ClearCaches -> {
           images.reset()
+          imageCache.reset()
           bitmapsState.value = emptyMap()
         }
       }
@@ -1132,21 +1149,60 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     displayPrefs.edit().putBoolean(DictationPermissionAskedKey, true).commit()
   }
 
-  private fun decodeBitmap(message: MonitorMessage): Pair<String, Bitmap>? {
+  private fun decodeBitmap(message: MonitorMessage): DecodedImage? {
     val decoded = decodeImageData(message.payloadJson) ?: return null
     val raw = decodeImageBytes(decoded.image.bytesBase64) ?: return null
     val joined = images.accept(decoded.image, raw) ?: return null
     val bounds = BitmapFactory.Options()
     bounds.inJustDecodeBounds = true
     BitmapFactory.decodeByteArray(joined, 0, joined.size, bounds)
-    val plan = bitmapBoundsPlan(bounds.outWidth, bounds.outHeight)
+    val plan = bitmapBoundsPlan(bounds.outWidth, bounds.outHeight, viewWidthPx)
     if (!plan.allocate) return null
     val pixels = BitmapFactory.Options()
     pixels.inSampleSize = plan.sampleSize
     pixels.inPreferredConfig = Bitmap.Config.ARGB_8888
     val bitmap = BitmapFactory.decodeByteArray(joined, 0, joined.size, pixels) ?: return null
-    return decoded.image.imageId to bitmap
+    val turnIndex = coordinator.turnForImage(decoded.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
+    return DecodedImage(uiState.value.hostGeneration, decoded.image.imageId, decoded.image.revision, turnIndex, bitmap)
   }
+
+  private fun storeDecoded(image: DecodedImage) {
+    val generation = uiState.value.hostGeneration
+    if (image.hostGeneration != generation) return
+    val key = ImageCacheKey(generation, image.imageId, image.revision)
+    val bytes = decodedBytes(image.bitmap.width, image.bitmap.height) ?: return
+    val removed = imageCache.insert(key, image.turnIndex, bytes, generation, snapshotImageTurns(uiState.value))
+    bitmapsState.update { current ->
+      val next = current.toMutableMap()
+      for (gone in removed) next.remove(imageCacheText(gone))
+      if (key in imageCache.keys) next[imageCacheText(key)] = image.bitmap
+      next
+    }
+  }
+
+  private fun dropCachedBitmaps(removed: Set<ImageCacheKey>) {
+    if (removed.isEmpty()) return
+    bitmapsState.update { current ->
+      val next = current.toMutableMap()
+      for (key in removed) next.remove(imageCacheText(key))
+      next
+    }
+  }
+}
+
+private data class DecodedImage(
+  val hostGeneration: Int,
+  val imageId: String,
+  val revision: Int,
+  val turnIndex: Int,
+  val bitmap: Bitmap
+)
+
+private fun snapshotImageTurns(state: MonitorUi): Set<Int> {
+  val indices = state.turns.map { turn -> turn.turnIndex }.toMutableSet()
+  val live = state.live
+  if (live != null) indices += live.turnIndex
+  return indices
 }
 
 private fun speechFailureMessage(code: Int): String {

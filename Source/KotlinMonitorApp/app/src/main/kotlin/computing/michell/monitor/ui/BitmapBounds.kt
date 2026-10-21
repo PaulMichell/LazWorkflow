@@ -15,11 +15,12 @@ data class BitmapBoundsPlan(
 
 /**
  * Decides whether a bounds pair may be decoded.
- * A non-positive edge is refused. A later viewport request may sample smaller; it must not raise these caps.
+ * A non-positive edge is refused. viewWidth, when known, may sample smaller. It must not raise these caps.
  * sampleSize is a power of two and is meaningful only when allocate is true.
  */
-fun bitmapBoundsPlan(width: Int, height: Int): BitmapBoundsPlan {
+fun bitmapBoundsPlan(width: Int, height: Int, viewWidth: Int = 0): BitmapBoundsPlan {
   if (width <= 0 || height <= 0) return BitmapBoundsPlan(false, 0)
+  val widthLimit = if (viewWidth > 0) viewWidth else Int.MAX_VALUE
   var sample = 1
   while (true) {
     val sampledWidth = width / sample
@@ -28,7 +29,9 @@ fun bitmapBoundsPlan(width: Int, height: Int): BitmapBoundsPlan {
     val bytes = decodedBytes(sampledWidth, sampledHeight)
     if (bytes != null) {
       val longEdge = if (sampledWidth >= sampledHeight) sampledWidth else sampledHeight
-      if (longEdge <= MaxDecodedLongEdge && bytes <= MaxDecodedBytes) return BitmapBoundsPlan(true, sample)
+      if (longEdge <= MaxDecodedLongEdge && bytes <= MaxDecodedBytes && sampledWidth <= widthLimit) {
+        return BitmapBoundsPlan(true, sample)
+      }
     }
     if (sample > Int.MAX_VALUE / 2) return BitmapBoundsPlan(false, 0)
     sample *= 2

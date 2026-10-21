@@ -79,6 +79,7 @@ class MonitorCoordinator(
   private val loadedImages = mutableSetOf<String>()
   private val fetchCommands = mutableMapOf<String, FetchTarget>()
   private val bitmapKeys = mutableSetOf<String>()
+  private var visibleTurns = emptySet<Int>()
   private var hostBound = false
   private var hostAddress = ""
   private var hostPort = 0
@@ -116,7 +117,9 @@ class MonitorCoordinator(
     if (!appliedDirty) return null
     appliedDirty = false
     screen = stamp(current)
-    publishReduced(applied, false, false)
+    val effects = publishReduced(applied, false, false)?.toMutableList() ?: return null
+    effects += missingImageFetches(screen)
+    effects
   }
 
   fun noteTurnRequest(index: Int): Boolean = synchronized(gate) {
@@ -155,6 +158,20 @@ class MonitorCoordinator(
   fun collectMissing(current: MonitorUi): List<MonitorEffect> = synchronized(gate) {
     screen = stamp(current)
     missingFetches(screen)
+  }
+
+  /** Visible turns reported by the screen. Does not accept every history index by itself. */
+  fun noteVisibleTurns(current: MonitorUi, indices: Set<Int>): List<MonitorEffect> = synchronized(gate) {
+    screen = stamp(current)
+    if (indices == visibleTurns) return emptyList()
+    visibleTurns = indices
+    missingImageFetches(screen)
+  }
+
+  fun turnForImage(imageId: String): Int? = synchronized(gate) {
+    val key = inFlightImages.entries.firstOrNull { it.value.imageId == imageId }?.key ?: return null
+    val rest = key.substringAfter(":")
+    rest.substringBefore(":").toIntOrNull()
   }
 
   fun requestTurnFetch(current: MonitorUi, index: Int): List<MonitorEffect> = synchronized(gate) {
@@ -398,6 +415,7 @@ class MonitorCoordinator(
     completedTurns.clear()
     loadedImages.clear()
     bitmapKeys.clear()
+    visibleTurns = emptySet()
     session.resetImages()
     val effects = mutableListOf<MonitorEffect>(MonitorEffect.ClearCaches)
     if (session.promptDraft != cleared.draft) effects += MonitorEffect.RememberDraft(cleared.draft)
@@ -452,19 +470,26 @@ class MonitorCoordinator(
   }
 
   private fun missingImageFetches(state: MonitorUi): List<MonitorEffect> {
-    val effects = mutableListOf<MonitorEffect>()
-    fun consider(turn: WireTurn?) {
-      if (turn == null) return
-      val images = turn.images + turn.blocks.flatMap { block -> block.images }
-      for (image in images) {
-        if (image.id.isEmpty() || image.missing || state.imageReasons.containsKey(image.id)) continue
-        val send = beginImageFetch(state, turn.turnIndex, image.id) ?: continue
-        effects += send
-      }
+    val images = linkedMapOf<Int, List<String>>()
+    for (turn in state.turns) {
+      val loaded = state.history[turn.turnIndex]
+      images[turn.turnIndex] = turnImageIds(loaded ?: turn)
     }
-    for (turn in state.turns) consider(turn)
-    consider(state.live)
-    for (turn in state.history.values) consider(turn)
+    val live = state.live
+    if (live != null) images[live.turnIndex] = turnImageIds(live)
+    val keys = imageRequestKeys(
+      state.hostGeneration,
+      state.turns.map { it.turnIndex },
+      images,
+      live?.turnIndex,
+      visibleTurns,
+      state.imageReasons.keys
+    )
+    val effects = mutableListOf<MonitorEffect>()
+    for (key in keys) {
+      val send = beginImageFetch(state, key.turnIndex, key.imageId) ?: continue
+      effects += send
+    }
     return effects
   }
 

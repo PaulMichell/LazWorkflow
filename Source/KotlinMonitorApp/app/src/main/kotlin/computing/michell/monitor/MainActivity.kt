@@ -83,7 +83,8 @@ private fun MonitorShell(model: MonitorViewModel) {
       } else when (tab) {
         AppTab.Conversation -> ConversationScreen(
           ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
-          model::setMode, model::requestTurn, model::showSettings, dictation, model::toggleDictationOn, model::toggleDictationOff,
+          model::setMode, model::requestTurn, model::noteVisibleTurns, model::noteViewWidth, model::showSettings,
+          dictation, model::toggleDictationOn, model::toggleDictationOff,
           permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest
         )
         AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::workOnPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)

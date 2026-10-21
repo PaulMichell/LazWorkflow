@@ -126,6 +126,8 @@ fun ConversationScreen(
   onNew: () -> Unit,
   onMode: (String) -> Unit,
   onNeed: (Int) -> Unit,
+  onVisibleTurns: (Set<Int>) -> Unit,
+  onViewWidth: (Int) -> Unit,
   onSettings: () -> Unit,
   dictation: DictationState,
   onDictateOn: (Int, Int, Boolean) -> Unit,
@@ -150,7 +152,7 @@ fun ConversationScreen(
       ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
     }
     if (ui.banner.isNotEmpty()) Text(ui.banner, color = MaterialTheme.colorScheme.error)
-    ConversationPane(ui, bitmaps, onNeed, Modifier.weight(1f).fillMaxWidth())
+    ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, { start, end ->
@@ -188,6 +190,8 @@ private fun ConversationPane(
   ui: MonitorUi,
   bitmaps: Map<String, Bitmap>,
   onNeed: (Int) -> Unit,
+  onVisibleTurns: (Set<Int>) -> Unit,
+  onViewWidth: (Int) -> Unit,
   modifier: Modifier
 ) {
   val slots = remember(ui.turns, ui.live, ui.view.sending) { virtualSlots(ui.turns, ui.live, ui.view.sending) }
@@ -240,6 +244,10 @@ private fun ConversationPane(
         previousMax = max
       }
   }
+  val reportVisible = rememberUpdatedState(onVisibleTurns)
+  LaunchedEffect(slots) {
+    reportVisible.value(prefetchRecent(slots))
+  }
   LaunchedEffect(scrollState, slots) {
     snapshotFlow { Triple(scrollState.value, scrollState.viewportSize, measured.toMap()) }
       .distinctUntilChanged()
@@ -259,7 +267,9 @@ private fun ConversationPane(
   val labelIndex = slotIndexForFraction(slots, measured, fraction)
   Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
     Column(
-      Modifier.weight(1f).fillMaxHeight().verticalScroll(scrollState),
+      Modifier.weight(1f).fillMaxHeight().verticalScroll(scrollState).onSizeChanged { size ->
+        if (size.width > 0) onViewWidth(size.width)
+      },
       verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
       slots.forEach { slot ->
@@ -278,6 +288,7 @@ private fun ConversationPane(
           SlotBody(
             slot,
             bodyFor(ui, slot),
+            ui.hostGeneration,
             ui.conversationGeneration,
             ui.showThinking,
             ui.showTools,
@@ -294,6 +305,7 @@ private fun ConversationPane(
           pending,
           bitmaps,
           ui.imageReasons,
+          ui.hostGeneration,
           foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0)
         )
       }
@@ -344,6 +356,7 @@ private fun bodyFor(ui: MonitorUi, slot: VirtualSlot): WireTurn? {
 private fun SlotBody(
   slot: VirtualSlot,
   turn: WireTurn?,
+  hostGeneration: Int,
   conversationGeneration: Int,
   showThinking: Boolean,
   showTools: Boolean,
@@ -361,7 +374,7 @@ private fun SlotBody(
     shown.forEach { (index, block) ->
       val foldKey = foldBlockKey(conversationGeneration, turnId, block.blockId, index)
       key(foldKey) {
-        RoleBlock(block, bitmaps, reasons, foldKey)
+        RoleBlock(block, bitmaps, reasons, hostGeneration, foldKey)
       }
     }
   }
@@ -563,10 +576,16 @@ private fun DictateToggle(
 }
 
 @Composable
-private fun RoleBlock(block: WireBlock, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>, foldKey: String) {
+private fun RoleBlock(
+  block: WireBlock,
+  bitmaps: Map<String, Bitmap>,
+  reasons: Map<String, String>,
+  hostGeneration: Int,
+  foldKey: String
+) {
   when (block.kind) {
-    "user" -> BubbleBlock(block, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons)
-    "answer" -> BubbleBlock(block, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons)
+    "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons)
+    "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons)
     "thinking" -> FoldBlock(foldKey, block.title.ifEmpty { "Thinking" }, block.body, false, false)
     "tool", "subagent" -> FoldBlock(foldKey, toolTitle(block), block.body, !block.ok && !block.running, true)
     "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
@@ -589,6 +608,7 @@ private fun toolTitle(block: WireBlock): String {
 @Composable
 private fun BubbleBlock(
   block: WireBlock,
+  hostGeneration: Int,
   fill: Color,
   edge: Color,
   align: Alignment.Horizontal,
@@ -608,7 +628,7 @@ private fun BubbleBlock(
     ) {
       if (block.title.isNotEmpty()) Text(block.title, fontWeight = FontWeight.Bold)
       if (block.body.isNotEmpty()) Text(block.body)
-      block.images.forEach { image -> ImageTile(image, bitmaps, reasons) }
+      block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
     }
   }
 }
@@ -634,8 +654,8 @@ private fun FoldBlock(foldKey: String, title: String, body: String, failed: Bool
 }
 
 @Composable
-private fun ImageTile(image: WireImage, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>) {
-  val bitmap = bitmaps[image.id]
+private fun ImageTile(image: WireImage, hostGeneration: Int, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>) {
+  val bitmap = findCachedBitmap(bitmaps, hostGeneration, image.id)
   val reason = reasons[image.id]
   when {
     bitmap != null -> Image(bitmap.asImageBitmap(), contentDescription = image.name)
@@ -643,4 +663,13 @@ private fun ImageTile(image: WireImage, bitmaps: Map<String, Bitmap>, reasons: M
     image.missing -> Text("Image unavailable: missing")
     else -> Text("Loading image")
   }
+}
+
+fun findCachedBitmap(bitmaps: Map<String, Bitmap>, hostGeneration: Int, imageId: String): Bitmap? {
+  val prefix = imageCachePrefix(hostGeneration, imageId)
+  var found: Bitmap? = null
+  for ((key, bitmap) in bitmaps) {
+    if (key.startsWith(prefix)) found = bitmap
+  }
+  return found
 }

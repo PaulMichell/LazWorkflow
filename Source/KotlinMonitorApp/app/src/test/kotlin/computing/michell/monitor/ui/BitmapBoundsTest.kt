@@ -39,6 +39,20 @@ class BitmapBoundsTest {
   }
 
   @Test
+  fun viewWidthSamplesDownWithoutRaisingTheCap() {
+    val native = bitmapBoundsPlan(1600, 400)
+    assertEquals(1, native.sampleSize)
+    val fitted = bitmapBoundsPlan(1600, 400, 100)
+    assertTrue(fitted.allocate)
+    assertTrue(fitted.sampleSize > native.sampleSize)
+    assertTrue(1600 / fitted.sampleSize <= 100)
+    val raised = bitmapBoundsPlan(10_000, 8_000, 10_000)
+    val capped = bitmapBoundsPlan(10_000, 8_000)
+    assertEquals(capped.sampleSize, raised.sampleSize)
+    assertTrue(maxOf(10_000 / raised.sampleSize, 8_000 / raised.sampleSize) <= MaxDecodedLongEdge)
+  }
+
+  @Test
   fun zeroDimensionIsRefused() {
     assertFalse(bitmapBoundsPlan(0, 100).allocate)
     assertFalse(bitmapBoundsPlan(100, 0).allocate)
