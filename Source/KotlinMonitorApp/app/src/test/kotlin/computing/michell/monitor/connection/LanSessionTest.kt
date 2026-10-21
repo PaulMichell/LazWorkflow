@@ -3,11 +3,14 @@ package computing.michell.monitor.connection
 /* TLS session rules without a device or a cleartext socket (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.MonitorLimits
+import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeAuth
 import computing.michell.monitor.protocol.decodeHello
 import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
+import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.tryDecodeEnvelope
@@ -16,6 +19,16 @@ import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Date
@@ -347,6 +360,145 @@ class LanSessionTest {
     }
     assertTrue(refused)
   }
+
+  @Test
+  fun heldCollectorDeliversEveryNonCoalescedEvent() = runBlocking {
+    val delivery = InboundDelivery(SteppableClock())
+    val received = mutableListOf<String>()
+    val hold = CompletableDeferred<Unit>()
+    val started = CompletableDeferred<Unit>()
+    val collector = launch {
+      delivery.messages.collect { message ->
+        received += message.id
+        if (received.size == 1) {
+          started.complete(Unit)
+          hold.await()
+        }
+      }
+    }
+    try {
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "m0")))
+      started.await()
+      val publisher = launch {
+        for (index in 1..64) {
+          assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "m$index")))
+        }
+      }
+      withTimeout(5_000) {
+        while (!delivery.isWaiting()) yield()
+      }
+      hold.complete(Unit)
+      publisher.join()
+      withTimeout(5_000) {
+        while (received.size < 65) yield()
+      }
+      assertEquals((0..64).map { "m$it" }, received.toList())
+    } finally {
+      hold.complete(Unit)
+      collector.cancel()
+    }
+  }
+
+  @Test
+  fun statusBurstKeepsTheLatestStatusAndTheApproval() = runBlocking {
+    val delivery = InboundDelivery(SteppableClock())
+    val received = mutableListOf<String>()
+    val hold = CompletableDeferred<Unit>()
+    val started = CompletableDeferred<Unit>()
+    val collector = launch {
+      delivery.messages.collect { message ->
+        received += message.id
+        if (received.size == 1) {
+          started.complete(Unit)
+          hold.await()
+        }
+      }
+    }
+    try {
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Ping, "held")))
+      started.await()
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-1")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Snapshot, "snap-1")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.ApprovalRequested, "approval")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-2")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Snapshot, "snap-2")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-3")))
+      hold.complete(Unit)
+      withTimeout(5_000) {
+        while (received.size < 4) yield()
+      }
+      assertEquals(listOf("held", "status-3", "snap-2", "approval"), received.toList())
+    } finally {
+      hold.complete(Unit)
+      collector.cancel()
+    }
+  }
+
+  @Test
+  fun stalledNonCoalescedPublishFailsWithoutSleeping() = runBlocking {
+    val clock = SteppableClock()
+    val delivery = InboundDelivery(clock)
+    val hold = CompletableDeferred<Unit>()
+    val started = CompletableDeferred<Unit>()
+    val collector = launch {
+      delivery.messages.collect {
+        if (!started.isCompleted) started.complete(Unit)
+        hold.await()
+      }
+    }
+    try {
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
+      started.await()
+      repeat(InboundDelivery.InboundCapacity) {
+        assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "q$it")))
+      }
+      val failing = async { delivery.publish(inboundMessage(MessageKind.Error, "overflow")) }
+      withTimeout(5_000) {
+        while (!delivery.isWaiting()) yield()
+      }
+      clock.advanceMs(MonitorLimits.DeadSessionMs)
+      assertEquals(DeliveryResult.Failed, failing.await())
+    } finally {
+      hold.complete(Unit)
+      collector.cancel()
+    }
+  }
+
+  @Test
+  fun stalledCollectorClosesTheLink() {
+    val clock = SteppableClock()
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    val hold = CompletableDeferred<Unit>()
+    val got = CompletableDeferred<Unit>()
+    val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    val collector = scope.launch {
+      session.messages.collect {
+        if (!got.isCompleted) got.complete(Unit)
+        hold.await()
+      }
+    }
+    try {
+      session.connect("10.0.0.8", 56122)
+      link.push(frameOf(encodeError("e0", "x", "held", "e0")))
+      waitUntil { got.isCompleted }
+      for (index in 1..33) link.push(frameOf(encodeError("e$index", "x", "queued", "e$index")))
+      waitUntil { session.inbound.isWaiting() }
+      clock.advanceMs(MonitorLimits.DeadSessionMs)
+      waitUntil { session.status.value.lastError == DeliveryFailedDetail }
+      assertTrue(link.closed)
+      assertEquals(DeliveryFailedDetail, session.status.value.lastError)
+    } finally {
+      hold.complete(Unit)
+      collector.cancel()
+      scope.cancel()
+      session.close()
+    }
+  }
+}
+
+private fun inboundMessage(kind: MessageKind, id: String): MonitorMessage {
+  return MonitorMessage(1, id, kind, kind.wireName, "{}", "", true, "{}")
 }
 
 private class RecordingConnector : TlsConnector {
@@ -414,7 +566,11 @@ private class ScriptedLink : TlsLink {
     inbound.closeStream()
   }
 
+  var closed = false
+    private set
+
   override fun close() {
+    closed = true
     closeInput()
   }
 }

@@ -6,11 +6,14 @@ package computing.michell.monitor.connection
    HTTP client. Reads and writes run on Dispatchers.IO. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
-   is refused. The unsent prompt draft is kept across disconnect. */
+   is refused. Inbound messages wait on a bounded queue. A slow collector
+   is a failed delivery, not a dropped frame. The unsent prompt draft is
+   kept across disconnect. */
 
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorLimits
+import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeBye
 import computing.michell.monitor.protocol.decodeHelloOk
@@ -47,12 +50,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -62,6 +65,7 @@ import kotlinx.coroutines.withContext
 const val HostClosedBanner = "Host closed"
 const val ConnectionRefusedBanner = "Connection refused."
 const val ReconnectingBanner = "Reconnecting"
+const val DeliveryFailedDetail = "Delivery failed."
 const val ClientName = "Phone"
 const val ClientVersion = "1"
 
@@ -216,9 +220,138 @@ private enum class ReadEnd {
   Rejected
 }
 
+/** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
+interface MonotonicClock {
+  fun nanoTime(): Long
+  fun addListener(listener: () -> Unit) {}
+  fun removeListener(listener: () -> Unit) {}
+}
+
+object SystemMonotonicClock : MonotonicClock {
+  override fun nanoTime(): Long = System.nanoTime()
+}
+
+/** Advances only when the test says so, and wakes delivery waits without sleeping. */
+class SteppableClock : MonotonicClock {
+  private var nanos = 0L
+  private val listeners = mutableListOf<() -> Unit>()
+
+  override fun nanoTime(): Long = nanos
+
+  override fun addListener(listener: () -> Unit) {
+    synchronized(listeners) { listeners += listener }
+  }
+
+  override fun removeListener(listener: () -> Unit) {
+    synchronized(listeners) { listeners -= listener }
+  }
+
+  fun advanceMs(ms: Long) {
+    nanos += ms * 1_000_000L
+    val copy = synchronized(listeners) { listeners.toList() }
+    for (listener in copy) listener()
+  }
+}
+
+enum class DeliveryResult {
+  Queued,
+  Failed
+}
+
+class InboundDelivery(
+  private val clock: MonotonicClock = SystemMonotonicClock,
+  private val deadlineMs: Long = MonitorLimits.DeadSessionMs
+) {
+  private val pending = ArrayDeque<MonitorMessage>()
+  private val gate = Any()
+  private val available = Channel<Unit>(Channel.CONFLATED)
+  private val space = Channel<Unit>(Channel.CONFLATED)
+  private val waiting = AtomicInteger(0)
+
+  val messages: Flow<MonitorMessage> = flow {
+    while (coroutineContext[Job]?.isActive != false) emit(take())
+  }
+
+  init {
+    clock.addListener { space.trySend(Unit) }
+  }
+
+  internal fun isWaiting(): Boolean = waiting.get() > 0
+
+  suspend fun publish(message: MonitorMessage): DeliveryResult {
+    val started = clock.nanoTime()
+    while (true) {
+      if (offer(message)) return DeliveryResult.Queued
+      if (elapsedMs(started) >= deadlineMs) return DeliveryResult.Failed
+      waiting.incrementAndGet()
+      try {
+        val remaining = deadlineMs - elapsedMs(started)
+        if (remaining <= 0L) return DeliveryResult.Failed
+        // The wait itself checks the clock. An unbounded receive would hide the deadline.
+        withTimeoutOrNull(remaining.coerceAtMost(DeliveryWaitSliceMs)) { space.receive() }
+      } finally {
+        waiting.decrementAndGet()
+      }
+      if (elapsedMs(started) >= deadlineMs) return DeliveryResult.Failed
+    }
+  }
+
+  private fun offer(message: MonitorMessage): Boolean {
+    val stored = synchronized(gate) {
+      if (message.kind in CoalescedKinds) {
+        val index = pending.indexOfFirst { it.kind == message.kind }
+        if (index >= 0) {
+          pending[index] = message
+          return@synchronized true
+        }
+      }
+      if (pending.size >= InboundCapacity) return@synchronized false
+      pending.addLast(message)
+      true
+    }
+    if (stored) available.trySend(Unit)
+    return stored
+  }
+
+  private suspend fun take(): MonitorMessage {
+    while (true) {
+      val next = synchronized(gate) {
+        if (pending.isEmpty()) null else pending.removeFirst()
+      }
+      if (next != null) {
+        space.trySend(Unit)
+        return next
+      }
+      available.receive()
+    }
+  }
+
+  private fun elapsedMs(started: Long): Long {
+    val delta = clock.nanoTime() - started
+    if (delta <= 0L) return 0L
+    return delta / 1_000_000L
+  }
+
+  companion object {
+    internal const val InboundCapacity = 32
+    private const val DeliveryWaitSliceMs = 50L
+    // Transcript, TurnData, ImageData, ImageUnavailable, ApprovalRequested,
+    // ApprovalClosed, InsertResult, Error, Rejected, Bye, PairOk, HelloOk, and Ping are never coalesced.
+    private val CoalescedKinds = setOf(
+      MessageKind.Snapshot,
+      MessageKind.Status,
+      MessageKind.Mode,
+      MessageKind.Target,
+      MessageKind.Plan,
+      MessageKind.Tasks
+    )
+  }
+}
+
 class LanSession(
   private val store: HostStore,
-  private val connector: TlsConnector = SslSocketConnector()
+  private val connector: TlsConnector = SslSocketConnector(),
+  private val clock: MonotonicClock = SystemMonotonicClock
 ) {
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO)
@@ -229,14 +362,14 @@ class LanSession(
   private val policy = ReconnectPolicy()
   private val session = computing.michell.monitor.protocol.SessionState()
   private val statusState = MutableStateFlow(LinkStatus())
-  private val inbound = MutableSharedFlow<computing.michell.monitor.protocol.MonitorMessage>(replay = 32)
+  internal val inbound = InboundDelivery(clock)
   private var loop: Job? = null
   private var link: TlsLink? = null
   private var pairCode = ""
   private var stopped = false
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
-  val messages: SharedFlow<computing.michell.monitor.protocol.MonitorMessage> = inbound.asSharedFlow()
+  val messages: Flow<computing.michell.monitor.protocol.MonitorMessage> = inbound.messages
   val reconnectPaused: Boolean
     get() = policy.paused
 
@@ -450,6 +583,7 @@ class LanSession(
           val consumed = consume(pending, epoch, current)
           if (consumed == null) return@withContext ReadEnd.Closed
           pending = consumed
+          if (readEnd != ReadEnd.Closed) return@withContext readEnd
         }
         val now = System.currentTimeMillis()
         if (pending.isEmpty()) partialSince = 0L
@@ -457,6 +591,7 @@ class LanSession(
           return@withContext ReadEnd.Closed
         }
         if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
+          // A ping write is not inbound activity and does not reset a delivery deadline.
           val ping = encodeTicks(MessageKind.Ping, newId(), now)
           if (!writeJson(ping, current)) return@withContext ReadEnd.Closed
           lastSent = now
@@ -492,7 +627,12 @@ class LanSession(
     if (!envelope.ok) return
     val message = envelope.message
     session.apply(message)
-    inbound.tryEmit(message)
+    if (inbound.publish(message) == DeliveryResult.Failed) {
+      closeLink()
+      publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
+      noteReadEnd(epoch, ReadEnd.Closed)
+      return
+    }
     when (message.kind) {
       MessageKind.PairOk -> {
         val paired = decodePairOk(message.payloadJson)
