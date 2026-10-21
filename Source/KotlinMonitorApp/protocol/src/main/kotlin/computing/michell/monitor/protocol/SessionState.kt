@@ -44,11 +44,20 @@ private val LiveEvidence = setOf(
 
 class ImageAssembly {
   private val open = linkedMapOf<ImageKey, OpenImage>()
+  private val expiredIds = mutableListOf<String>()
   private var retainedBytes = 0L
 
   fun reset() {
     open.clear()
+    expiredIds.clear()
     retainedBytes = 0L
+  }
+
+  /** Image ids dropped by the assembly TTL since the last call. */
+  fun takeExpired(): List<String> {
+    val copy = expiredIds.toList()
+    expiredIds.clear()
+    return copy
   }
 
   fun accept(part: ImageData, decoded: ByteArray, nowMs: Long = System.currentTimeMillis()): ByteArray? {
@@ -95,7 +104,10 @@ class ImageAssembly {
 
   private fun expire(nowMs: Long) {
     val stale = open.filter { (_, image) -> nowMs - image.startedMs >= MonitorLimits.ImageAssemblyTtlMs }.keys.toList()
-    for (key in stale) drop(key)
+    for (key in stale) {
+      expiredIds += key.imageId
+      drop(key)
+    }
   }
 
   private fun drop(key: ImageKey) {

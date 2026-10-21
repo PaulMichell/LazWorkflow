@@ -16,13 +16,19 @@ import computing.michell.monitor.connection.stepCatalogue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import computing.michell.monitor.protocol.ApprovalNotice
+import computing.michell.monitor.protocol.ImageAssembly
+import computing.michell.monitor.protocol.ImageData
 import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTranscript
+import computing.michell.monitor.protocol.WireImage
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.tryEncodeTranscript
+import computing.michell.monitor.protocol.decodeImageGet
 import computing.michell.monitor.protocol.decodeText
+import computing.michell.monitor.protocol.decodeTurnRequest
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeInsertResult
@@ -32,6 +38,7 @@ import computing.michell.monitor.protocol.statusToJson
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -331,6 +338,72 @@ class MonitorCoordinatorTest {
     assertEquals(CouldNotSendBanner, coordinator.state.banner)
     assertEquals(emptyList<String>(), sendTexts(settled))
   }
+
+  @Test
+  fun disconnectBetweenFetchAndResponseRequestsTheTurnAgain() {
+    val coordinator = coordinator()
+    val first = snapshotWithStoredTurn(coordinator, 4, "turn-4")
+    assertEquals(listOf(4), turnRequests(first))
+    assertTrue(coordinator.requestedTurnEntries.contains(4))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
+    assertFalse(coordinator.requestedTurnEntries.contains(4))
+    val again = snapshotWithStoredTurn(coordinator, 4, "turn-4")
+    assertEquals(listOf(4), turnRequests(again))
+  }
+
+  @Test
+  fun failedFetchWriteDoesNotStickTheKey() {
+    val coordinator = coordinator()
+    val first = snapshotWithStoredTurn(coordinator, 4, "turn-4")
+    val commandId = envelope(turnSend(first).json).id
+    coordinator.onEvent(MonitorEvent.CommandResult(
+      coordinator.state,
+      CatalogueResult(commandId, 1, CatalogueWrite.Failed)
+    ))
+    assertFalse(coordinator.requestedTurnEntries.contains(4))
+    val again = snapshotWithStoredTurn(coordinator, 4, "turn-4")
+    assertEquals(listOf(4), turnRequests(again))
+  }
+
+  @Test
+  fun completedTurnIsNotRequestedAgainOnTheSameGeneration() {
+    val coordinator = coordinator()
+    assertEquals(listOf(4), turnRequests(snapshotWithStoredTurn(coordinator, 4, "turn-4")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
+      "td",
+      WireTurn(4, "turn-4", "build", "", "preview", "", prompt = "loaded body")
+    ))))
+    coordinator.flush(coordinator.state)
+    assertFalse(coordinator.requestedTurnEntries.contains(4))
+    assertEquals(emptyList<Int>(), turnRequests(snapshotWithStoredTurn(coordinator, 4, "turn-4")))
+  }
+
+  @Test
+  fun expiredImageClearsTheInFlightKeyAndANewHostDoesNotShareIt() {
+    val coordinator = coordinator()
+    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.1", 8765, "client-a"))
+    val first = snapshotWithImage(coordinator, "img-1")
+    assertEquals(listOf("img-1"), imageRequests(first))
+    assertEquals(listOf("0:-2:img-1"), coordinator.inFlightImageKeys.toList())
+    assertFalse(coordinator.loadedImageKeys.contains("0:img-1"))
+    assertEquals(emptyList<String>(), imageRequests(snapshotWithImage(coordinator, "img-1")))
+    val assembly = ImageAssembly()
+    val partial = ImageData("img-1", "image/png", 1, 1, 1, 2, 1, "")
+    assertNull(assembly.accept(partial, byteArrayOf(1), 0L))
+    assembly.accept(ImageData("other", "image/png", 1, 1, 1, 2, 1, ""), byteArrayOf(2), MonitorLimits.ImageAssemblyTtlMs)
+    assertTrue(assembly.takeExpired().contains("img-1"))
+    coordinator.noteImagesExpired(listOf("img-1"))
+    assertTrue(coordinator.inFlightImageKeys.isEmpty())
+    assertFalse(coordinator.loadedImageKeys.contains("0:img-1"))
+    assertEquals(listOf("img-1"), imageRequests(snapshotWithImage(coordinator, "img-1")))
+    coordinator.noteImageFetched("img-1")
+    assertEquals(setOf("0:img-1"), coordinator.loadedImageKeys)
+    assertEquals(emptyList<String>(), imageRequests(snapshotWithImage(coordinator, "img-1")))
+    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.2", 8765, "client-b"))
+    assertTrue(coordinator.loadedImageKeys.isEmpty())
+    assertEquals(listOf("img-1"), imageRequests(snapshotWithImage(coordinator, "img-1")))
+    assertTrue(coordinator.inFlightImageKeys.any { it.startsWith("1:") })
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {
@@ -369,6 +442,58 @@ private fun displayedBody(state: MonitorUi): String {
 private fun answeredTurn(id: String, body: String): WireTurn {
   val block = WireBlock("answer", "a", "", "", "", body, false, true, 0, emptyList())
   return WireTurn(-2, id, "build", "", "prompt", "", response = body, blocks = listOf(block))
+}
+
+private fun snapshotWithStoredTurn(coordinator: MonitorCoordinator, index: Int, id: String): List<MonitorEffect> {
+  val snapshot = WireSnapshot(
+    emptyView().copy(canSend = true, signedIn = true),
+    listOf(WireTurn(index, id, "build", "", "preview", "")),
+    WireTurn(-2, "live", "build", "", "", ""),
+    "",
+    "",
+    false,
+    emptyList(),
+    emptyList(),
+    ApprovalNotice(false, "", "", "", "", false)
+  )
+  return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot)))).orEmpty()
+}
+
+private fun snapshotWithImage(coordinator: MonitorCoordinator, imageId: String): List<MonitorEffect> {
+  val image = WireImage(imageId, "shot", "image/png", 8, 8, "", false)
+  val live = WireTurn(-2, "live-image", "build", "", "preview", "", images = listOf(image))
+  val snapshot = WireSnapshot(
+    emptyView().copy(canSend = true, signedIn = true),
+    emptyList(),
+    live,
+    "",
+    "",
+    false,
+    emptyList(),
+    emptyList(),
+    ApprovalNotice(false, "", "", "", "", false)
+  )
+  return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("img", snapshot)))).orEmpty()
+}
+
+private fun turnRequests(effects: List<MonitorEffect>): List<Int> {
+  return effects.filterIsInstance<MonitorEffect.Send>().mapNotNull { effect ->
+    val message = envelope(effect.json)
+    if (message.kind != MessageKind.Turn) null else decodeTurnRequest(message.payloadJson)
+  }
+}
+
+private fun turnSend(effects: List<MonitorEffect>): MonitorEffect.Send {
+  val sends = effects.filterIsInstance<MonitorEffect.Send>().filter { envelope(it.json).kind == MessageKind.Turn }
+  assertEquals(1, sends.size)
+  return sends[0]
+}
+
+private fun imageRequests(effects: List<MonitorEffect>): List<String> {
+  return effects.filterIsInstance<MonitorEffect.Send>().mapNotNull { effect ->
+    val message = envelope(effect.json)
+    if (message.kind != MessageKind.ImageGet) null else decodeImageGet(message.payloadJson)?.imageId
+  }
 }
 
 private fun sendTexts(effects: List<MonitorEffect>): List<String> {

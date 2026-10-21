@@ -70,12 +70,9 @@ import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.decodeImageBytes
 import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
-import computing.michell.monitor.protocol.encodeImageGet
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
-
-import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.encodeWorkOnPlan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -872,11 +869,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun requestTurn(index: Int) {
     if (index < 0) return
-    val state = uiState.value
-    if (state.history[index]?.let { liveHasContent(it) } == true) return
-    if (state.live?.turnIndex == index && liveHasContent(state.live)) return
-    if (!coordinator.noteTurnRequest(index)) return
-    session.sendCatalogue(encodeTurnRequest(session.nextCommandId(), index))
+    val effects = coordinator.requestTurnFetch(uiState.value, index)
+    if (effects.isEmpty()) return
+    applyUiEffects(effects)
   }
 
   fun selectTurn(index: Int) {
@@ -946,8 +941,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     for (effect in effects) {
       if (effect is MonitorEffect.DecodeImage) {
         val bitmap = decodeBitmap(effect.message)
+        val expired = images.takeExpired()
+        if (expired.isNotEmpty()) coordinator.noteImagesExpired(expired)
         if (bitmap != null) {
           coordinator.noteBitmap(bitmap.first)
+          coordinator.noteImageFetched(bitmap.first)
           decoded += bitmap
         }
       }
@@ -967,40 +965,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         MonitorEffect.LeaveDictation -> leaveDictation()
         is MonitorEffect.RememberDraft -> session.updateDraft(effect.text)
         is MonitorEffect.Send -> session.sendCatalogue(effect.json)
-        MonitorEffect.Prefetch -> {
-          prefetchRecent()
-          requestVisibleImages()
-        }
+        MonitorEffect.Prefetch -> applyUiEffects(coordinator.collectMissing(uiState.value))
         MonitorEffect.ClearCaches -> {
           images.reset()
           bitmapsState.value = emptyMap()
         }
       }
-    }
-  }
-
-  private fun prefetchRecent() {
-    val state = uiState.value
-    val slots = virtualSlots(state.turns, state.live, state.view.sending)
-    val known = slots.map { slot -> slot.turnIndex }.toSet()
-    coordinator.retainTurnRequests(known)
-    for (index in recentFetches(slots, loadedTurnIndices(state))) requestTurn(index)
-  }
-
-  private fun requestVisibleImages() {
-    val state = uiState.value
-    requestImages(state.live)
-    for (turn in state.history.values) requestImages(turn)
-  }
-
-  private fun requestImages(turn: WireTurn?) {
-    if (turn == null) return
-    val found = turn.blocks.flatMap { it.images } + turn.images
-    for (image in found) {
-      if (image.id.isEmpty() || image.missing) continue
-      val key = turn.turnIndex.toString() + ":" + image.id
-      if (!coordinator.noteImageRequest(key)) continue
-      session.sendCatalogue(encodeImageGet(session.nextCommandId(), turn.turnIndex, image.id))
     }
   }
 

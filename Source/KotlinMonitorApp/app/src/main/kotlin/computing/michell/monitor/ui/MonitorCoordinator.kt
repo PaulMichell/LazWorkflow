@@ -4,8 +4,9 @@ package computing.michell.monitor.ui
 
    Speech stays on SpeechEngine. Draft edits replace the reducer draft,
    including with an empty string. A send keeps that text until the
-   accepting socket reports the bytes were written. Host change, forget
-   pairing, and a null live snapshot share one reset. */
+   accepting socket reports the bytes were written. Loaded fetches are
+   separate from in-flight requests. Host change, forget pairing, and a
+   null live snapshot share one reset. */
 
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.CatalogueWrite
@@ -15,11 +16,17 @@ import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.WireSnapshot
+import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
+import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
+import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.encodeEmpty
+import computing.michell.monitor.protocol.encodeImageGet
+import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.tryEncodeSteer
 
@@ -66,8 +73,11 @@ class MonitorCoordinator(
   private var applied = MonitorUi()
   private var appliedDirty = false
   private var postedGeneration = 0
-  private val requestedTurns = mutableSetOf<Int>()
-  private val requestedImages = mutableSetOf<String>()
+  private val inFlightTurns = mutableMapOf<Int, String>()
+  private val completedTurns = mutableSetOf<String>()
+  private val inFlightImages = mutableMapOf<String, ImageFlight>()
+  private val loadedImages = mutableSetOf<String>()
+  private val fetchCommands = mutableMapOf<String, FetchTarget>()
   private val bitmapKeys = mutableSetOf<String>()
   private var hostBound = false
   private var hostAddress = ""
@@ -84,7 +94,9 @@ class MonitorCoordinator(
   )
 
   val state: MonitorUi get() = screen
-  val requestedTurnEntries: Set<Int> get() = requestedTurns.toSet()
+  val requestedTurnEntries: Set<Int> get() = inFlightTurns.keys.toSet()
+  val inFlightImageKeys: Set<String> get() = inFlightImages.keys.toSet()
+  val loadedImageKeys: Set<String> get() = loadedImages.toSet()
   val bitmapKeyEntries: Set<String> get() = bitmapKeys.toSet()
 
   fun onEvent(event: MonitorEvent): List<MonitorEffect>? = synchronized(gate) {
@@ -108,21 +120,47 @@ class MonitorCoordinator(
   }
 
   fun noteTurnRequest(index: Int): Boolean = synchronized(gate) {
-    if (index < 0) return false
-    requestedTurns.add(index)
+    if (index < 0 || inFlightTurns.containsKey(index)) return false
+    inFlightTurns[index] = ""
+    true
   }
 
   fun retainTurnRequests(known: Set<Int>) = synchronized(gate) {
-    requestedTurns.retainAll(known)
+    val gone = inFlightTurns.keys.filter { it !in known }
+    for (index in gone) releaseTurn(index)
   }
 
   fun noteImageRequest(key: String): Boolean = synchronized(gate) {
-    if (key.isEmpty()) return false
-    requestedImages.add(key)
+    if (key.isEmpty() || inFlightImages.containsKey(key)) return false
+    inFlightImages[key] = ImageFlight("", clock.nowMs(), imageIdOf(key))
+    true
   }
 
   fun noteBitmap(key: String) = synchronized(gate) {
     if (key.isNotEmpty()) bitmapKeys.add(key)
+  }
+
+  /** A joined image is loaded. An incomplete transfer does not call this. */
+  fun noteImageFetched(imageId: String) = synchronized(gate) {
+    if (imageId.isEmpty()) return
+    loadedImages.add(loadedImageKey(screen.hostGeneration, imageId))
+    releaseImageId(imageId)
+  }
+
+  /** 2.3 dropped these assemblies. The in-flight key must go with them. */
+  fun noteImagesExpired(imageIds: List<String>) = synchronized(gate) {
+    for (imageId in imageIds) releaseImageId(imageId)
+  }
+
+  fun collectMissing(current: MonitorUi): List<MonitorEffect> = synchronized(gate) {
+    screen = stamp(current)
+    missingFetches(screen)
+  }
+
+  fun requestTurnFetch(current: MonitorUi, index: Int): List<MonitorEffect> = synchronized(gate) {
+    screen = stamp(current)
+    val send = beginTurnFetch(screen, index) ?: return emptyList()
+    listOf(send)
   }
 
   fun noteDisplay(current: MonitorUi): MonitorUi = synchronized(gate) {
@@ -162,6 +200,7 @@ class MonitorCoordinator(
     }
     val immediate = message.kind in ImmediateKinds
     applied = reduceMonitor(applied, message)
+    noteFetchArrival(message)
     if (!immediate) {
       appliedDirty = true
       return null
@@ -181,6 +220,7 @@ class MonitorCoordinator(
         effects += MonitorEffect.Send(encoded.json)
       } else screen = screen.copy(banner = "Text is longer than 65536 characters.", rescueSteer = false)
     }
+    if (message.kind == MessageKind.Snapshot) effects += missingFetches(screen)
     if (posted == null && effects.isEmpty()) return null
     return effects
   }
@@ -196,6 +236,7 @@ class MonitorCoordinator(
       retryView = null
       writeSettled = false
       pendingText = ""
+      dropInFlight()
       val bannerText = if (status.banner.isEmpty()) HostClosedBanner else status.banner
       applied = noteSocketClosed(applied, bannerText)
       effects += MonitorEffect.LeaveDictation
@@ -215,6 +256,7 @@ class MonitorCoordinator(
 
   private fun commandResult(current: MonitorUi, result: CatalogueResult): List<MonitorEffect> {
     screen = stamp(current)
+    if (result.outcome == CatalogueWrite.Failed || result.outcome == CatalogueWrite.Stale) releaseFailedFetch(result.commandId)
     if (result.commandId.isEmpty() || result.commandId != screen.pendingCommandId || writeSettled) return emptyList()
     return when (result.outcome) {
       CatalogueWrite.Written -> acceptWritten(screen)
@@ -292,6 +334,7 @@ class MonitorCoordinator(
     applied = shown
     screen = stamp(shown)
     postedGeneration = shown.generation
+    effects += missingFetches(screen)
     effects += MonitorEffect.Prefetch
     return effects
   }
@@ -342,8 +385,9 @@ class MonitorCoordinator(
     val cleared = resetConversation(current, clearDraft, hostGeneration, conversationGeneration)
     applied = cleared
     screen = stamp(cleared)
-    requestedTurns.clear()
-    requestedImages.clear()
+    dropInFlight()
+    completedTurns.clear()
+    loadedImages.clear()
     bitmapKeys.clear()
     session.resetImages()
     val effects = mutableListOf<MonitorEffect>(MonitorEffect.ClearCaches)
@@ -368,6 +412,139 @@ class MonitorCoordinator(
   private fun stamp(current: MonitorUi): MonitorUi {
     return current.copy(showThinking = display.showThinking, showTools = display.showTools)
   }
+
+  private fun noteFetchArrival(message: MonitorMessage) {
+    when (message.kind) {
+      MessageKind.TurnData -> {
+        val turn = decodeTurnData(message.payloadJson) ?: return
+        completeTurn(turn.turnIndex)
+      }
+      MessageKind.ImageUnavailable -> {
+        val image = decodeImageUnavailable(message.payloadJson) ?: return
+        noteImageFetched(image.imageId)
+      }
+      else -> {}
+    }
+  }
+
+  private fun missingFetches(state: MonitorUi): List<MonitorEffect> {
+    expireImageFlights(clock.nowMs())
+    val effects = mutableListOf<MonitorEffect>()
+    val slots = virtualSlots(state.turns, state.live, state.view.sending)
+    val known = slots.map { slot -> slot.turnIndex }.filter { index -> index >= 0 }.toSet()
+    for (index in inFlightTurns.keys.filter { it !in known }) releaseTurn(index)
+    val loaded = loadedTurnIndices(state) + completedIndices(state.hostGeneration)
+    for (index in recentFetches(slots, loaded)) {
+      val send = beginTurnFetch(state, index) ?: continue
+      effects += send
+    }
+    effects += missingImageFetches(state)
+    return effects
+  }
+
+  private fun missingImageFetches(state: MonitorUi): List<MonitorEffect> {
+    val effects = mutableListOf<MonitorEffect>()
+    fun consider(turn: WireTurn?) {
+      if (turn == null) return
+      val images = turn.images + turn.blocks.flatMap { block -> block.images }
+      for (image in images) {
+        if (image.id.isEmpty() || image.missing || state.imageReasons.containsKey(image.id)) continue
+        val send = beginImageFetch(state, turn.turnIndex, image.id) ?: continue
+        effects += send
+      }
+    }
+    for (turn in state.turns) consider(turn)
+    consider(state.live)
+    for (turn in state.history.values) consider(turn)
+    return effects
+  }
+
+  private fun beginTurnFetch(state: MonitorUi, index: Int): MonitorEffect? {
+    if (index < 0 || inFlightTurns.containsKey(index)) return null
+    if (index in loadedTurnIndices(state) || turnDoneKey(state.hostGeneration, index) in completedTurns) return null
+    val commandId = session.nextCommandId()
+    inFlightTurns[index] = commandId
+    fetchCommands[commandId] = FetchTarget.Turn(index)
+    return MonitorEffect.Send(encodeTurnRequest(commandId, index))
+  }
+
+  private fun beginImageFetch(state: MonitorUi, turnIndex: Int, imageId: String): MonitorEffect? {
+    if (imageLoaded(state.hostGeneration, imageId)) return null
+    val key = imageFlightKey(state.hostGeneration, turnIndex, imageId)
+    if (inFlightImages.containsKey(key)) return null
+    val commandId = session.nextCommandId()
+    inFlightImages[key] = ImageFlight(commandId, clock.nowMs(), imageId)
+    fetchCommands[commandId] = FetchTarget.Image(key)
+    return MonitorEffect.Send(encodeImageGet(commandId, turnIndex, imageId))
+  }
+
+  private fun completeTurn(index: Int) {
+    completedTurns.add(turnDoneKey(screen.hostGeneration, index))
+    releaseTurn(index)
+  }
+
+  private fun releaseFailedFetch(commandId: String) {
+    when (val target = fetchCommands.remove(commandId)) {
+      is FetchTarget.Turn -> if (inFlightTurns[target.index] == commandId) inFlightTurns.remove(target.index)
+      is FetchTarget.Image -> {
+        val flight = inFlightImages[target.key]
+        if (flight != null && flight.commandId == commandId) inFlightImages.remove(target.key)
+      }
+      null -> {}
+    }
+  }
+
+  private fun releaseTurn(index: Int) {
+    val commandId = inFlightTurns.remove(index) ?: return
+    if (commandId.isNotEmpty()) fetchCommands.remove(commandId)
+  }
+
+  private fun releaseImage(key: String) {
+    val flight = inFlightImages.remove(key) ?: return
+    if (flight.commandId.isNotEmpty()) fetchCommands.remove(flight.commandId)
+  }
+
+  private fun releaseImageId(imageId: String) {
+    val keys = inFlightImages.filter { (_, flight) -> flight.imageId == imageId }.keys.toList()
+    for (key in keys) releaseImage(key)
+  }
+
+  private fun expireImageFlights(nowMs: Long) {
+    val stale = inFlightImages.filter { (_, flight) -> nowMs - flight.startedMs >= MonitorLimits.ImageAssemblyTtlMs }.keys.toList()
+    for (key in stale) releaseImage(key)
+  }
+
+  private fun dropInFlight() {
+    inFlightTurns.clear()
+    inFlightImages.clear()
+    fetchCommands.clear()
+  }
+
+  private fun completedIndices(hostGeneration: Int): Set<Int> {
+    val prefix = hostGeneration.toString() + ":"
+    return completedTurns.filter { it.startsWith(prefix) }.map { it.removePrefix(prefix).toInt() }.toSet()
+  }
+
+  private fun imageLoaded(hostGeneration: Int, imageId: String): Boolean {
+    return loadedImageKey(hostGeneration, imageId) in loadedImages
+  }
+
+  private fun turnDoneKey(hostGeneration: Int, index: Int): String = hostGeneration.toString() + ":" + index.toString()
+
+  private fun loadedImageKey(hostGeneration: Int, imageId: String): String = hostGeneration.toString() + ":" + imageId
+
+  private fun imageFlightKey(hostGeneration: Int, turnIndex: Int, imageId: String): String {
+    return hostGeneration.toString() + ":" + turnIndex.toString() + ":" + imageId
+  }
+
+  private fun imageIdOf(key: String): String = key.substringAfterLast(":")
+
+  private sealed class FetchTarget {
+    data class Turn(val index: Int) : FetchTarget()
+    data class Image(val key: String) : FetchTarget()
+  }
+
+  private data class ImageFlight(val commandId: String, val startedMs: Long, val imageId: String)
 
   private companion object {
     val ImmediateKinds = setOf(
