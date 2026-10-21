@@ -7,8 +7,9 @@ package computing.michell.monitor.connection
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
    is refused. Inbound messages wait on a bounded queue. A slow collector
-   is a failed delivery, not a dropped frame. The unsent prompt draft is
-   kept across disconnect. */
+   is a failed delivery, not a dropped frame. A silent, rejected, or
+   failed-write peer leaves the read loop and the owned socket is closed.
+   The unsent prompt draft is kept across disconnect. */
 
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.MessageKind
@@ -214,10 +215,15 @@ private enum class AttemptResult {
   Superseded
 }
 
+/** Continue is the only non-terminal value. Retry keeps the busy/auth reconnect path. */
 private enum class ReadEnd {
-  Closed,
+  Continue,
+  PeerClosed,
+  Dead,
+  Rejected,
   Disabled,
-  Rejected
+  WriteFailed,
+  Retry
 }
 
 /** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
@@ -491,6 +497,7 @@ class LanSession(
           closeLink()
           session.onSocketClosed()
           if (linkEpoch.get() != epoch) return
+          // Rejected and Disabled pause. Every other terminal result uses the existing reconnect path.
           if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
             policy.pause()
             val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
@@ -558,52 +565,72 @@ class LanSession(
   }
 
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
-    val current = link ?: return ReadEnd.Closed
-    if (linkEpoch.get() != epoch) return ReadEnd.Closed
-    readEnd = ReadEnd.Closed
-    return withContext(Dispatchers.IO) {
-      val buffer = ByteArray(8192)
-      var pending = ByteArray(0)
-      var partialSince = 0L
-      var lastSent = System.currentTimeMillis()
-      while (coroutineContext[Job]?.isActive != false && !stopped && linkEpoch.get() == epoch) {
-        val count = try {
-          current.input.read(buffer)
-        } catch (error: SocketTimeoutException) {
-          0
-        } catch (error: Exception) {
-          val detail = error.message ?: "Read failed."
-          publishCurrent(epoch, LinkPhase.Disconnected, detail, detail)
-          return@withContext ReadEnd.Closed
+    val current = link ?: return ReadEnd.PeerClosed
+    if (linkEpoch.get() != epoch) return ReadEnd.PeerClosed
+    synchronized(readEndLock) { readEnd = ReadEnd.Continue }
+    lastInboundNanos = clock.nanoTime()
+    val listener = {
+      if (inboundIsDead()) noteReadEnd(epoch, ReadEnd.Dead, current)
+    }
+    clock.addListener(listener)
+    try {
+      return withContext(Dispatchers.IO) {
+        val buffer = ByteArray(8192)
+        var pending = ByteArray(0)
+        var partialSince = 0L
+        var lastSent = System.currentTimeMillis()
+        while (coroutineContext[Job]?.isActive != false && !stopped && linkEpoch.get() == epoch) {
+          if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
+          val count = try {
+            current.input.read(buffer)
+          } catch (error: CancellationException) {
+            throw error
+          } catch (error: SocketTimeoutException) {
+            0
+          } catch (error: Exception) {
+            if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
+            val detail = error.message ?: "Read failed."
+            publishCurrent(epoch, LinkPhase.Disconnected, detail, detail)
+            return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          }
+          // Closing the socket to enforce a terminal result unblocks this read. Keep that result.
+          if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
+          if (count < 0) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          if (count > 0) {
+            pending = pending + buffer.copyOf(count)
+            if (partialSince == 0L) partialSince = System.currentTimeMillis()
+            val consumed = consume(pending, epoch, current)
+            if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
+            if (consumed == null) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+            pending = consumed
+          }
+          // A timeout read does not update last inbound. A ping write does not either.
+          val now = System.currentTimeMillis()
+          if (pending.isEmpty()) partialSince = 0L
+          if (pending.isNotEmpty() && now - partialSince >= MonitorLimits.PartialFrameMs) {
+            return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          }
+          if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
+          if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
+            val ping = encodeTicks(MessageKind.Ping, newId(), now)
+            if (!writeJson(ping, current)) return@withContext finishRead(epoch, current, ReadEnd.WriteFailed)
+            lastSent = now
+          }
+          if (linkEpoch.get() != epoch) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
         }
-        if (count < 0) return@withContext ReadEnd.Closed
-        if (count > 0) {
-          pending = pending + buffer.copyOf(count)
-          if (partialSince == 0L) partialSince = System.currentTimeMillis()
-          val consumed = consume(pending, epoch, current)
-          if (consumed == null) return@withContext ReadEnd.Closed
-          pending = consumed
-          if (readEnd != ReadEnd.Closed) return@withContext readEnd
-        }
-        val now = System.currentTimeMillis()
-        if (pending.isEmpty()) partialSince = 0L
-        if (pending.isNotEmpty() && now - partialSince >= MonitorLimits.PartialFrameMs) {
-          return@withContext ReadEnd.Closed
-        }
-        if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
-          // A ping write is not inbound activity and does not reset a delivery deadline.
-          val ping = encodeTicks(MessageKind.Ping, newId(), now)
-          if (!writeJson(ping, current)) return@withContext ReadEnd.Closed
-          lastSent = now
-        }
-        if (linkEpoch.get() != epoch) return@withContext ReadEnd.Closed
-        if (readEnd != ReadEnd.Closed) return@withContext readEnd
+        finishRead(epoch, current, ReadEnd.PeerClosed)
       }
-      ReadEnd.Closed
+    } finally {
+      clock.removeListener(listener)
     }
   }
 
-  private var readEnd = ReadEnd.Closed
+  private val readEndLock = Any()
+  @Volatile
+  private var readEnd = ReadEnd.Continue
+  @Volatile
+  private var lastInboundNanos = 0L
 
   private suspend fun consume(start: ByteArray, epoch: Int, owned: TlsLink): ByteArray? {
     var pending = start
@@ -611,9 +638,10 @@ class LanSession(
       val step = tryConsumeFrame(pending)
       when (step.status) {
         FrameStatus.Ok -> {
+          noteInbound()
           onFrame(step.frame.json, epoch, owned)
           pending = step.remaining
-          if (readEnd != ReadEnd.Closed) return pending
+          if (readEnd != ReadEnd.Continue) return pending
         }
         FrameStatus.NeedMore -> return pending
         else -> return null
@@ -630,7 +658,7 @@ class LanSession(
     if (inbound.publish(message) == DeliveryResult.Failed) {
       closeLink()
       publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
-      noteReadEnd(epoch, ReadEnd.Closed)
+      noteReadEnd(epoch, ReadEnd.PeerClosed, owned)
       return
     }
     when (message.kind) {
@@ -654,12 +682,12 @@ class LanSession(
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L
-        if (!writeJson(encodeTicks(MessageKind.Pong, newId(), ticks), owned)) noteReadEnd(epoch, ReadEnd.Closed)
+        if (!writeJson(encodeTicks(MessageKind.Pong, newId(), ticks), owned)) noteReadEnd(epoch, ReadEnd.WriteFailed, owned)
       }
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
         if (bye?.reason == "disabled" || bye?.reason == "revoked") {
-          noteReadEnd(epoch, ReadEnd.Disabled)
+          noteReadEnd(epoch, ReadEnd.Disabled, owned)
           publishCurrent(epoch, LinkPhase.Paused, HostClosedBanner, bye.reason)
         }
       }
@@ -672,10 +700,10 @@ class LanSession(
             val current = store.load()
             store.save(current.copy(clientId = "", sessionToken = ""))
           }
-          noteReadEnd(epoch, ReadEnd.Closed)
+          noteReadEnd(epoch, ReadEnd.Retry, owned)
           publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason)
         } else {
-          noteReadEnd(epoch, ReadEnd.Rejected)
+          noteReadEnd(epoch, ReadEnd.Rejected, owned)
           publishCurrent(epoch, LinkPhase.Paused, reason.ifEmpty { HostClosedBanner }, reason)
         }
       }
@@ -701,8 +729,33 @@ class LanSession(
     }
   }
 
-  private fun noteReadEnd(epoch: Int, end: ReadEnd) {
-    if (linkEpoch.get() == epoch) readEnd = end
+  private fun noteReadEnd(epoch: Int, end: ReadEnd, owned: TlsLink?) {
+    if (end == ReadEnd.Continue) return
+    if (linkEpoch.get() != epoch) return
+    val closeNow = synchronized(readEndLock) {
+      if (readEnd != ReadEnd.Continue) {
+        false
+      } else {
+        readEnd = end
+        true
+      }
+    }
+    if (closeNow) closeOwned(owned)
+  }
+
+  private fun finishRead(epoch: Int, owned: TlsLink, end: ReadEnd): ReadEnd {
+    noteReadEnd(epoch, end, owned)
+    return readEnd
+  }
+
+  private fun noteInbound() {
+    lastInboundNanos = clock.nanoTime()
+  }
+
+  private fun inboundIsDead(): Boolean {
+    val delta = clock.nanoTime() - lastInboundNanos
+    if (delta <= 0L) return false
+    return delta / 1_000_000L >= MonitorLimits.DeadSessionMs
   }
 
   private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String) {

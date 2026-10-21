@@ -11,11 +11,13 @@ import computing.michell.monitor.protocol.decodeHello
 import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
 import computing.michell.monitor.protocol.encodeError
+import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryDecodeFrame
 import computing.michell.monitor.protocol.tryEncodeFrame
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
@@ -495,6 +497,103 @@ class LanSessionTest {
       session.close()
     }
   }
+
+  @Test
+  fun silentPeerEndsAtTheDeadline() {
+    val clock = SteppableClock()
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      clock.advanceMs(MonitorLimits.DeadSessionMs)
+      waitUntil(2_000) { link.closed && session.status.value.banner == ReconnectingBanner }
+      assertTrue(link.closed)
+      assertEquals(ReconnectingBanner, session.status.value.banner)
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun rejectedPeerEndsWithoutWaitingForEof() {
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      // busy used to set the continue sentinel, so an open input never released the loop.
+      link.push(frameOf(encodeRejected("host-busy", "busy", 1, 1)))
+      waitUntil(2_000) { link.closed }
+      assertTrue(link.closed)
+      assertEquals(ReconnectingBanner, session.status.value.banner)
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun failedPongWriteEndsTheLoopAndClosesTheSocket() {
+    val link = ScriptedLink { bytes ->
+      if (String(bytes, Charsets.ISO_8859_1).contains("\"type\" : \"pong\"")) throw IOException("pong write failed")
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeTicks(MessageKind.Ping, "host-ping", 42)))
+      waitUntil(2_000) { link.closed && session.status.value.banner == ReconnectingBanner }
+      assertTrue(link.closed)
+      assertEquals(ReconnectingBanner, session.status.value.banner)
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun timeoutReadDoesNotResetTheDeadline() {
+    val clock = SteppableClock()
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      clock.advanceMs(MonitorLimits.DeadSessionMs - 1)
+      val seen = link.readEntries.get()
+      link.releaseTimeout()
+      waitUntil { link.readEntries.get() > seen }
+      clock.advanceMs(MonitorLimits.DeadSessionMs - 1)
+      waitUntil(2_000) { link.closed && session.status.value.banner == ReconnectingBanner }
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun peerThatAnswersWithinTheDeadlineStaysUp() {
+    val clock = SteppableClock()
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      clock.advanceMs(MonitorLimits.DeadSessionMs - 1)
+      val seen = link.readEntries.get()
+      link.push(frameOf(encodeTicks(MessageKind.Pong, "host-pong", 9)))
+      waitUntil { link.readEntries.get() > seen }
+      clock.advanceMs(MonitorLimits.DeadSessionMs - 1)
+      assertFalse(link.closed)
+      assertFalse(session.reconnectPaused)
+      clock.advanceMs(1)
+      waitUntil(2_000) { link.closed && session.status.value.banner == ReconnectingBanner }
+    } finally {
+      session.close()
+    }
+  }
 }
 
 private fun inboundMessage(kind: MessageKind, id: String): MonitorMessage {
@@ -540,17 +639,29 @@ private fun waitUntil(timeoutMs: Long = 5_000, condition: () -> Boolean) {
   }
 }
 
-private class ScriptedLink : TlsLink {
+private class ScriptedLink(private val rejectWrite: (ByteArray) -> Unit = {}) : TlsLink {
   private val chunks = mutableListOf<ByteArray>()
   private val inbound = QueueStream()
-  override val input: InputStream = inbound
+  val readEntries = AtomicInteger(0)
+  override val input: InputStream = object : InputStream() {
+    override fun read(): Int = inbound.read()
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+      readEntries.incrementAndGet()
+      return inbound.read(buffer, offset, length)
+    }
+  }
   override val output: OutputStream = object : OutputStream() {
     override fun write(value: Int) {
-      synchronized(chunks) { chunks += byteArrayOf(value.toByte()) }
+      val slice = byteArrayOf(value.toByte())
+      rejectWrite(slice)
+      synchronized(chunks) { chunks += slice }
     }
 
     override fun write(buffer: ByteArray, offset: Int, length: Int) {
-      synchronized(chunks) { chunks += buffer.copyOfRange(offset, offset + length) }
+      val slice = buffer.copyOfRange(offset, offset + length)
+      rejectWrite(slice)
+      synchronized(chunks) { chunks += slice }
     }
   }
 
@@ -560,6 +671,10 @@ private class ScriptedLink : TlsLink {
 
   fun push(bytes: ByteArray) {
     inbound.push(bytes)
+  }
+
+  fun releaseTimeout() {
+    inbound.releaseTimeout()
   }
 
   fun closeInput() {
@@ -578,10 +693,18 @@ private class ScriptedLink : TlsLink {
 private class QueueStream : InputStream() {
   private val queue = ArrayDeque<Byte>()
   private var closed = false
+  private var timeouts = 0
 
   fun push(bytes: ByteArray) {
     synchronized(queue) {
       for (byte in bytes) queue.addLast(byte)
+      (queue as Object).notifyAll()
+    }
+  }
+
+  fun releaseTimeout() {
+    synchronized(queue) {
+      timeouts += 1
       (queue as Object).notifyAll()
     }
   }
@@ -594,26 +717,30 @@ private class QueueStream : InputStream() {
   }
 
   override fun read(): Int {
-    synchronized(queue) {
-      while (queue.isEmpty() && !closed) (queue as Object).wait(50)
-      if (queue.isEmpty()) return -1
-      return queue.removeFirst().toInt() and 0xFF
-    }
+    val buffer = ByteArray(1)
+    val count = read(buffer, 0, 1)
+    if (count <= 0) return -1
+    return buffer[0].toInt() and 0xFF
   }
 
   override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
     if (length == 0) return 0
-    val first = read()
-    if (first < 0) return -1
-    buffer[offset] = first.toByte()
-    var count = 1
     synchronized(queue) {
-      while (count < length && queue.isNotEmpty()) {
-        buffer[offset + count] = queue.removeFirst()
-        count += 1
+      while (queue.isEmpty() && !closed && timeouts == 0) (queue as Object).wait(50)
+      if (queue.isNotEmpty()) {
+        var count = 0
+        while (count < length && queue.isNotEmpty()) {
+          buffer[offset + count] = queue.removeFirst()
+          count += 1
+        }
+        return count
       }
+      if (timeouts > 0 && !closed) {
+        timeouts -= 1
+        return 0
+      }
+      return -1
     }
-    return count
   }
 }
 
