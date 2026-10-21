@@ -11,6 +11,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -63,6 +64,120 @@ class ProtocolCodecTest {
     }
     assertNotNull(joined)
     assertArrayEquals(bytes, joined)
+  }
+
+  @Test
+  fun hostileImagePartsAreRejectedOnTheCrossingPart() {
+    val assembly = ImageAssembly()
+    val chunk = MonitorLimits.MaxImagePartBytes
+    for (index in 1..5) {
+      assertNull(assembly.accept(imagePart("hot", index, 6), ByteArray(chunk), 0L))
+    }
+    assertNull(assembly.accept(imagePart("hot", 6, 6), ByteArray(chunk), 0L))
+    assertNull(assembly.accept(imagePart("hot", 6, 6), ByteArray(1), 0L))
+    val rejected = ImageAssembly()
+    assertNull(rejected.accept(imagePart("count", 1, 100), ByteArray(1), 0L))
+    assertNull(rejected.accept(imagePart("count", 1, Int.MAX_VALUE), ByteArray(1), 0L))
+    assertArrayEquals(ByteArray(3), rejected.accept(imagePart("ok", 1, 1), ByteArray(3), 0L))
+  }
+
+  @Test
+  fun duplicateImagePartsDoNotDoubleCount() {
+    val assembly = ImageAssembly()
+    assertNull(assembly.accept(imagePart("dup", 1, 2), ByteArray(10) { 1 }, 0L))
+    assertNull(assembly.accept(imagePart("dup", 1, 2), ByteArray(10) { 2 }, 0L))
+    val joined = assembly.accept(imagePart("dup", 2, 2), ByteArray(4) { 3 }, 0L)
+    assertNotNull(joined)
+    assertEquals(14, joined!!.size)
+    assertEquals(2.toByte(), joined[0])
+    assertEquals(3.toByte(), joined[10])
+  }
+
+  @Test
+  fun secondImageDoesNotEraseTheFirstOrRaiseTheByteCap() {
+    val assembly = ImageAssembly()
+    val chunk = MonitorLimits.MaxImagePartBytes
+    val remainder = MonitorLimits.MaxImageFetchBytes - 5 * chunk
+    for (index in 1..5) {
+      assertNull(assembly.accept(imagePart("a", index, 6), ByteArray(chunk), 0L))
+    }
+    assertNull(assembly.accept(imagePart("b", 1, 1), ByteArray(chunk), 0L))
+    val completed = assembly.accept(imagePart("a", 6, 6), ByteArray(remainder), 0L)
+    assertNotNull(completed)
+    assertEquals(MonitorLimits.MaxImageFetchBytes, completed!!.size)
+    val kept = ImageAssembly()
+    assertNull(kept.accept(imagePart("a", 1, 2), ByteArray(100), 0L))
+    assertNull(kept.accept(imagePart("b", 1, 2), ByteArray(80), 0L))
+    assertNull(kept.accept(imagePart("a", 1, 2, revision = 2), ByteArray(20), 0L))
+    val first = kept.accept(imagePart("a", 2, 2), ByteArray(50), 0L)
+    assertNotNull(first)
+    assertEquals(150, first!!.size)
+    val second = kept.accept(imagePart("b", 2, 2), ByteArray(40), 0L)
+    assertNotNull(second)
+    assertEquals(120, second!!.size)
+  }
+
+  @Test
+  fun inconsistentImageMetadataIsRejected() {
+    assertMetadataDropped(imagePart("a", 2, 2, mime = "image/jpeg"))
+    assertMetadataDropped(imagePart("a", 2, 2, width = 9))
+    assertMetadataDropped(imagePart("a", 2, 2, height = 3))
+    assertMetadataDropped(imagePart("a", 2, 3))
+  }
+
+  @Test
+  fun expiredImagePartialDoesNotComplete() {
+    val assembly = ImageAssembly()
+    assertNull(assembly.accept(imagePart("old", 1, 2), byteArrayOf(9, 9, 9, 9), 0L))
+    val late = assembly.accept(imagePart("old", 2, 2), byteArrayOf(1), MonitorLimits.ImageAssemblyTtlMs)
+    assertNull(late)
+    val fresh = ImageAssembly()
+    assertNull(fresh.accept(imagePart("old", 1, 2), byteArrayOf(2), MonitorLimits.ImageAssemblyTtlMs))
+    assertArrayEquals(byteArrayOf(2, 3), fresh.accept(imagePart("old", 2, 2), byteArrayOf(3), MonitorLimits.ImageAssemblyTtlMs))
+    val stillOpen = ImageAssembly()
+    assertNull(stillOpen.accept(imagePart("live", 1, 2), byteArrayOf(4), 0L))
+    val joined = stillOpen.accept(imagePart("live", 2, 2), byteArrayOf(5), MonitorLimits.ImageAssemblyTtlMs - 1)
+    assertArrayEquals(byteArrayOf(4, 5), joined)
+  }
+
+  @Test
+  fun ninthOpenImageDoesNotEraseTheFirst() {
+    val assembly = ImageAssembly()
+    for (index in 1..MonitorLimits.MaxOpenImageAssemblies) {
+      assertNull(assembly.accept(imagePart("img$index", 1, 2), ByteArray(2), 0L))
+    }
+    assertNull(assembly.accept(imagePart("extra", 1, 1), ByteArray(2), 0L))
+    val first = assembly.accept(imagePart("img1", 2, 2), ByteArray(1), 0L)
+    assertNotNull(first)
+    assertEquals(3, first!!.size)
+  }
+
+  @Test
+  fun desktopChunkImageStillAssembles() {
+    val assembly = ImageAssembly()
+    val chunk = MonitorLimits.MaxImagePartBytes
+    val last = MonitorLimits.MaxImageFetchBytes - 5 * chunk
+    assertTrue(last > 0)
+    assertTrue(last <= chunk)
+    var joined: ByteArray? = null
+    for (index in 1..6) {
+      val size = if (index < 6) chunk else last
+      val bytes = ByteArray(size)
+      bytes[0] = index.toByte()
+      joined = assembly.accept(imagePart("desk", index, 6), bytes, 0L)
+      if (index < 6) assertNull(joined)
+    }
+    assertNotNull(joined)
+    assertEquals(MonitorLimits.MaxImageFetchBytes, joined!!.size)
+    assertEquals(1.toByte(), joined[0])
+    assertEquals(6.toByte(), joined[5 * chunk])
+  }
+
+  private fun assertMetadataDropped(changed: ImageData) {
+    val assembly = ImageAssembly()
+    assertNull(assembly.accept(imagePart("a", 1, 2), ByteArray(4), 0L))
+    assertNull(assembly.accept(changed, ByteArray(4), 0L))
+    assertNull(assembly.accept(imagePart("a", 2, 2), ByteArray(4), 0L))
   }
 
   @Test
@@ -216,6 +331,18 @@ class ProtocolCodecTest {
     assertEquals(1, part!!.image.part)
     assertEquals(1, part.image.partCount)
     assertEquals(4, part.decodedBytes)
+  }
+
+  private fun imagePart(
+    id: String,
+    part: Int,
+    partCount: Int,
+    revision: Int = 1,
+    mime: String = "image/png",
+    width: Int = 8,
+    height: Int = 8
+  ): ImageData {
+    return ImageData(id, mime, width, height, part, partCount, revision, "")
   }
 
   private fun encodeOneLongSend(): String {

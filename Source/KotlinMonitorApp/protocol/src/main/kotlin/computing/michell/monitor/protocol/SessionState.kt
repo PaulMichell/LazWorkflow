@@ -3,9 +3,9 @@ package computing.michell.monitor.protocol
 /* Client session rules for catalogue version 1 (c) 2026 Michell Computing.
 
    No socket and no Android UI. An unknown type, and a send or steer the text
-   limit rejects, do not change phase. The auth MAC is javax.crypto HMAC-SHA256
-   of the raw nonce bytes, keyed by the session token string, written as
-   lowercase hex. */
+   limit rejects, do not change phase. Image parts are bounded as they arrive.
+   The auth MAC is javax.crypto HMAC-SHA256 of the raw nonce bytes, keyed by
+   the session token string, written as lowercase hex. */
 
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -43,46 +43,81 @@ private val LiveEvidence = setOf(
 )
 
 class ImageAssembly {
-  private val parts = linkedMapOf<Int, ByteArray>()
-  private var imageId = ""
-  private var revision = -1
-  private var partCount = 0
+  private val open = linkedMapOf<ImageKey, OpenImage>()
+  private var retainedBytes = 0L
 
   fun reset() {
-    parts.clear()
-    imageId = ""
-    revision = -1
-    partCount = 0
+    open.clear()
+    retainedBytes = 0L
   }
 
-  fun accept(part: ImageData, decoded: ByteArray): ByteArray? {
-    if (part.part < 1 || part.partCount < part.part || decoded.size > MonitorLimits.MaxImagePartBytes) return null
-    if (imageId != part.imageId || revision != part.revision || partCount != part.partCount) {
-      parts.clear()
-      imageId = part.imageId
-      revision = part.revision
-      partCount = part.partCount
-    }
-    parts[part.part] = decoded
-    if (parts.size < partCount) return null
-    for (index in 1..partCount) {
-      if (!parts.containsKey(index)) return null
-    }
-    var total = 0
-    for (index in 1..partCount) total += parts.getValue(index).size
-    if (total > MonitorLimits.MaxImageFetchBytes) {
-      reset()
+  fun accept(part: ImageData, decoded: ByteArray, nowMs: Long = System.currentTimeMillis()): ByteArray? {
+    if (decoded.size > MonitorLimits.MaxImagePartBytes) return null
+    if (part.partCount !in 1..MonitorLimits.MaxImageParts || part.part !in 1..part.partCount) return null
+    expire(nowMs)
+    val key = ImageKey(part.imageId, part.revision)
+    val existing = open[key]
+    if (existing != null && !existing.matches(part)) {
+      drop(key)
       return null
     }
-    val joined = ByteArray(total)
+    if (existing == null && open.size >= MonitorLimits.MaxOpenImageAssemblies) return null
+    val current = existing ?: OpenImage(part.mime, part.width, part.height, part.partCount, nowMs)
+    val previous = current.parts[part.part]?.size?.toLong() ?: 0L
+    val nextAssembly = current.retained - previous + decoded.size
+    val nextTotal = retainedBytes - previous + decoded.size
+    if (nextAssembly > MonitorLimits.MaxImageFetchBytes || nextTotal > MonitorLimits.MaxImageFetchBytes) {
+      if (existing != null) drop(key)
+      return null
+    }
+    if (existing == null) open[key] = current
+    current.parts[part.part] = decoded
+    current.retained = nextAssembly
+    retainedBytes = nextTotal
+    if (current.parts.size < current.partCount) return null
+    for (index in 1..current.partCount) {
+      if (!current.parts.containsKey(index)) return null
+    }
+    if (current.retained > MonitorLimits.MaxImageFetchBytes) {
+      drop(key)
+      return null
+    }
+    val joined = ByteArray(current.retained.toInt())
     var at = 0
-    for (index in 1..partCount) {
-      val chunk = parts.getValue(index)
+    for (index in 1..current.partCount) {
+      val chunk = current.parts.getValue(index)
       chunk.copyInto(joined, at)
       at += chunk.size
     }
-    reset()
+    drop(key)
     return joined
+  }
+
+  private fun expire(nowMs: Long) {
+    val stale = open.filter { (_, image) -> nowMs - image.startedMs >= MonitorLimits.ImageAssemblyTtlMs }.keys.toList()
+    for (key in stale) drop(key)
+  }
+
+  private fun drop(key: ImageKey) {
+    val removed = open.remove(key) ?: return
+    retainedBytes -= removed.retained
+    if (retainedBytes < 0L) retainedBytes = 0L
+  }
+
+  private data class ImageKey(val imageId: String, val revision: Int)
+
+  private class OpenImage(
+    val mime: String,
+    val width: Int,
+    val height: Int,
+    val partCount: Int,
+    val startedMs: Long,
+    val parts: MutableMap<Int, ByteArray> = linkedMapOf(),
+    var retained: Long = 0L
+  ) {
+    fun matches(part: ImageData): Boolean {
+      return mime == part.mime && width == part.width && height == part.height && partCount == part.partCount
+    }
   }
 }
 

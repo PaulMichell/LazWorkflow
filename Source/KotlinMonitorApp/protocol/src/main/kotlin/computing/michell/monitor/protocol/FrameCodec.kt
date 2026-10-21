@@ -25,6 +25,9 @@ object MonitorLimits {
   const val ImagePartBase64Chars = 253336
   const val ImageEnvelopeBytes = 8192
   const val MaxImageFetchBytes = 1048576
+  const val MaxImageParts = 32
+  const val MaxOpenImageAssemblies = 8
+  const val ImageAssemblyTtlMs = 60_000L
   const val SnapshotStoredTurns = 30
   const val HeartbeatSilenceMs = 15_000L
   const val DeadSessionMs = 45_000L
@@ -42,6 +45,7 @@ object MonitorLimits {
     check(ListenPort == 56122)
     check(((MaxImagePartBytes + 2) / 3) * 4 == ImagePartBase64Chars)
     check(ImagePartBase64Chars + ImageEnvelopeBytes <= MaxPayloadBytes)
+    check(MaxImageParts >= (MaxImageFetchBytes + MaxImagePartBytes - 1) / MaxImagePartBytes)
   }
 }
 
