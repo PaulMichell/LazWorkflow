@@ -206,6 +206,88 @@ class PromptDictationTest {
   }
 
   @Test
+  fun awaitingFinalExpiresWithoutACallback() {
+    assertEquals(4_000L, DictationFinalDeadlineMs)
+    val started = start("Keep", 4)
+    val id = started.state.sessionId
+    val heard = apply(started, DictationEvent.Partial(id, "Hello"))
+    val waiting = apply(heard, DictationEvent.Timeout(id))
+    assertEquals("Keep Hello", waiting.draft)
+    assertEquals(DictationPhase.AwaitingFinal, waiting.state.phase)
+    assertEquals("", waiting.state.statusMessage)
+    assertTrue(waiting.state.sendMustWait)
+    val ignored = apply(waiting, DictationEvent.Expired(0))
+    assertEquals(DictationPhase.AwaitingFinal, ignored.state.phase)
+    val expired = apply(waiting, DictationEvent.Expired(id))
+    assertEquals("Keep Hello", expired.draft)
+    assertEquals(DictationPhase.Idle, expired.state.phase)
+    assertNull(expired.state.anchor)
+    assertEquals("", expired.state.provisional)
+    assertEquals(DictationExpiredMessage, expired.state.statusMessage)
+    assertFalse(expired.state.sendMustWait)
+    val late = apply(expired, DictationEvent.Final(id, "other words"))
+    assertEquals("Keep Hello", late.draft)
+    assertEquals(DictationExpiredMessage, late.state.statusMessage)
+    val again = apply(expired, DictationEvent.Start(expired.draft.length, expired.draft.length))
+    assertEquals(DictationPhase.Listening, again.state.phase)
+    val stale = apply(again, DictationEvent.Final(id, "stale final"))
+    assertEquals(again.draft, stale.draft)
+    assertEquals(DictationPhase.Listening, stale.state.phase)
+  }
+
+  @Test
+  fun stopFailureReportsAndLeavesTheUsableDraft() {
+    assertFalse(stopListeningAccepted(false, false))
+    assertFalse(stopListeningAccepted(false, true))
+    assertFalse(stopListeningAccepted(true, true))
+    assertTrue(stopListeningAccepted(true, false))
+    assertEquals(DictationStopFollowUp.ReportFailure, dictationStopFollowUp(DictationPhase.AwaitingFinal, false, false))
+    assertEquals(DictationStopFollowUp.ReportFailure, dictationStopFollowUp(DictationPhase.AwaitingFinal, true, true))
+    assertEquals(DictationStopFollowUp.ArmDeadline, dictationStopFollowUp(DictationPhase.AwaitingFinal, true, false))
+    assertEquals(DictationStopFollowUp.Idle, dictationStopFollowUp(DictationPhase.Listening, false, true))
+    val started = start("Keep this.", 10)
+    val id = started.state.sessionId
+    val waiting = apply(started, DictationEvent.ToggleOff(id))
+    assertEquals(DictationPhase.AwaitingFinal, waiting.state.phase)
+    assertTrue(waiting.state.sendMustWait)
+    val expired = apply(waiting, DictationEvent.Expired(id))
+    assertEquals("Keep this.", expired.draft)
+    assertEquals(10, expired.state.selectionStart)
+    assertEquals(DictationPhase.Idle, expired.state.phase)
+    assertEquals(DictationExpiredMessage, expired.state.statusMessage)
+    assertFalse(expired.state.sendMustWait)
+    val late = apply(expired, DictationEvent.Final(id, "other words"))
+    assertEquals("Keep this.", late.draft)
+    assertEquals(DictationExpiredMessage, late.state.statusMessage)
+  }
+
+  @Test
+  fun finalResultRacesTheExpiryBySessionId() {
+    val started = start("Keep", 4)
+    val id = started.state.sessionId
+    val waiting = apply(apply(started, DictationEvent.Partial(id, "Hello")), DictationEvent.ToggleOff(id))
+    assertEquals(DictationPhase.AwaitingFinal, waiting.state.phase)
+    val finalFirst = apply(waiting, DictationEvent.Final(id, "Hello there"))
+    assertEquals("Keep Hello there", finalFirst.draft)
+    assertEquals(DictationPhase.Idle, finalFirst.state.phase)
+    assertEquals("", finalFirst.state.statusMessage)
+    val expiredAfter = apply(finalFirst, DictationEvent.Expired(id))
+    assertEquals("Keep Hello there", expiredAfter.draft)
+    assertEquals("", expiredAfter.state.statusMessage)
+    assertEquals(DictationPhase.Idle, expiredAfter.state.phase)
+    val wrongSession = apply(waiting, DictationEvent.Expired(id + 1))
+    assertEquals(DictationPhase.AwaitingFinal, wrongSession.state.phase)
+    assertEquals("Keep Hello", wrongSession.draft)
+    val expiredFirst = apply(waiting, DictationEvent.Expired(id))
+    assertEquals("Keep Hello", expiredFirst.draft)
+    assertEquals(DictationExpiredMessage, expiredFirst.state.statusMessage)
+    val finalAfter = apply(expiredFirst, DictationEvent.Final(id, "Hello there"))
+    assertEquals("Keep Hello", finalAfter.draft)
+    assertEquals(DictationExpiredMessage, finalAfter.state.statusMessage)
+    assertEquals(DictationPhase.Idle, finalAfter.state.phase)
+  }
+
+  @Test
   fun lateCallbacksFromThePreviousRequestDoNotChangeTheNewSession() {
     val started = reduceDictation(DictationState(sessionId = 1), "generation two", DictationEvent.Start(0, 0))
     assertEquals(2, started.state.sessionId)
@@ -295,7 +377,7 @@ private class FakeSpeechEngine(private val host: SpeechCallbackHost) : SpeechEng
 
   override fun start(generation: Int): Boolean = generation > 0
 
-  override fun stopListening() {}
+  override fun stopListening(): Boolean = true
 
   override fun cancel() {}
 

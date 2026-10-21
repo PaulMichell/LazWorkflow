@@ -18,6 +18,8 @@ const val DictationAudioMessage = "The microphone could not be used."
 const val DictationOnDeviceFailedMessage = "On-device speech recognition failed."
 const val DictationStoppedMessage = "Speech recognition stopped. Try again."
 const val DictationFailedMessage = "Speech recognition failed."
+const val DictationFinalDeadlineMs = 4_000L
+const val DictationExpiredMessage = "Dictation did not finish. Try again."
 
 enum class OnDeviceLanguage {
   Installed,
@@ -79,15 +81,35 @@ data class DictationStep(
 )
 
 // There is no discard event. LeaveScreen keeps the text already shown.
+// Timeout only enters AwaitingFinal. Expired is the separate deadline that leaves it.
 sealed class DictationEvent {
   data class Start(val selectionStart: Int, val selectionEnd: Int) : DictationEvent()
   data class Partial(val sessionId: Int, val text: String) : DictationEvent()
   data class Final(val sessionId: Int, val text: String) : DictationEvent()
   data class ToggleOff(val sessionId: Int) : DictationEvent()
   data class Timeout(val sessionId: Int) : DictationEvent()
+  data class Expired(val sessionId: Int) : DictationEvent()
   data class Failure(val sessionId: Int, val message: String) : DictationEvent()
   data class Edited(val selectionStart: Int, val selectionEnd: Int) : DictationEvent()
   data object LeaveScreen : DictationEvent()
+}
+
+enum class DictationStopFollowUp {
+  Idle,
+  ArmDeadline,
+  ReportFailure
+}
+
+/** A stop is accepted only when the engine returns true and does not throw. */
+fun stopListeningAccepted(accepted: Boolean, thrown: Boolean): Boolean {
+  return accepted && !thrown
+}
+
+/** Entering AwaitingFinal either arms the deadline or reports the failed stop at once. */
+fun dictationStopFollowUp(phase: DictationPhase, accepted: Boolean, thrown: Boolean): DictationStopFollowUp {
+  if (phase != DictationPhase.AwaitingFinal) return DictationStopFollowUp.Idle
+  if (!stopListeningAccepted(accepted, thrown)) return DictationStopFollowUp.ReportFailure
+  return DictationStopFollowUp.ArmDeadline
 }
 
 data class SpeechSupportState(
@@ -242,6 +264,7 @@ fun reduceDictation(state: DictationState, draft: String, event: DictationEvent)
     is DictationEvent.Final -> reduceFinal(state, draft, event)
     is DictationEvent.ToggleOff -> reduceStop(state, draft, event.sessionId)
     is DictationEvent.Timeout -> reduceStop(state, draft, event.sessionId)
+    is DictationEvent.Expired -> reduceExpired(state, draft, event.sessionId)
     is DictationEvent.Failure -> reduceFailure(state, draft, event)
     is DictationEvent.Edited -> applyEditorStep(state, draft, event.selectionStart, event.selectionEnd)
     is DictationEvent.LeaveScreen -> reduceLeave(state, draft)
@@ -300,6 +323,24 @@ private fun reduceStop(state: DictationState, draft: String, sessionId: Int): Di
   return DictationStep(
     state.copy(phase = DictationPhase.AwaitingFinal, selectionStart = bounds.first, selectionEnd = bounds.second),
     kept
+  )
+}
+
+private fun reduceExpired(state: DictationState, draft: String, sessionId: Int): DictationStep {
+  if (state.phase != DictationPhase.AwaitingFinal || sessionId <= 0 || sessionId != state.sessionId) {
+    return unchanged(state, draft)
+  }
+  val bounds = selectionBounds(draft.length, state.selectionStart, state.selectionEnd)
+  return DictationStep(
+    state.copy(
+      phase = DictationPhase.Idle,
+      anchor = null,
+      provisional = "",
+      selectionStart = bounds.first,
+      selectionEnd = bounds.second,
+      statusMessage = DictationExpiredMessage
+    ),
+    draft
   )
 }
 

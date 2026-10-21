@@ -17,7 +17,8 @@ interface SpeechEngine {
   fun available(): Boolean
   fun checkSupport(generation: Int): Boolean
   fun start(generation: Int): Boolean
-  fun stopListening()
+  // False, or a thrown failure, must be reported by the caller. Do not treat either as success.
+  fun stopListening(): Boolean
   fun cancel()
   fun destroy()
 }
@@ -97,12 +98,14 @@ class OnDeviceSpeechEngine(
     }
   }
 
-  override fun stopListening() {
-    val current = recognizer ?: return
-    try {
+  override fun stopListening(): Boolean {
+    val current = recognizer ?: return stopListeningAccepted(false, false)
+    return try {
       current.stopListening()
+      stopListeningAccepted(true, false)
     } catch (error: Exception) {
-      // The service may already have ended.
+      // A throw is not an accepted stop. The caller reports the false result.
+      stopListeningAccepted(true, true)
     }
   }
 

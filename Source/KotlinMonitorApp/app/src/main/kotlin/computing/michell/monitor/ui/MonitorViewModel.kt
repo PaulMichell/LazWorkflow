@@ -4,7 +4,8 @@ package computing.michell.monitor.ui
 
    Size note: exceeds the 1000 line preference. Catalogue events live in
    MonitorCoordinator. Prompt acknowledgement lives in PromptAcknowledgement.
-   What remains is speech, preferences, bitmap decode, and effect execution.
+   The final-result deadline lives in DictationFinalWatch. What remains is
+   speech, preferences, bitmap decode, and effect execution.
    Reviewed 2026-10-21. */
 
 import android.Manifest
@@ -22,6 +23,9 @@ import computing.michell.monitor.dictation.DictationAudioMessage
 import computing.michell.monitor.dictation.DictationBusyMessage
 import computing.michell.monitor.dictation.DictationEvent
 import computing.michell.monitor.dictation.DictationFailedMessage
+import computing.michell.monitor.dictation.DictationFinalWatch
+import computing.michell.monitor.dictation.DictationStopFollowUp
+import computing.michell.monitor.dictation.dictationStopFollowUp
 import computing.michell.monitor.dictation.DictationLanguageMissingMessage
 import computing.michell.monitor.dictation.DictationLanguageUnsupportedMessage
 import computing.michell.monitor.dictation.DictationModelDownloadMessage
@@ -673,6 +677,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
   private val engine: SpeechEngine = OnDeviceSpeechEngine(application, engineListener)
+  private val finalWatch = DictationFinalWatch(viewModelScope, onExpired = ::abandonAwaitingFinal)
 
   init {
     val record = store.load()
@@ -766,8 +771,21 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   fun toggleDictationOff() {
     val state = dictationState.value
     if (state.phase != DictationPhase.Listening) return
-    val step = applyDictation(DictationEvent.ToggleOff(state.sessionId))
-    if (step.state.phase == DictationPhase.AwaitingFinal) engine.stopListening()
+    val sessionId = state.sessionId
+    val step = applyDictation(DictationEvent.ToggleOff(sessionId))
+    if (step.state.phase != DictationPhase.AwaitingFinal) return
+    var thrown = false
+    val accepted = try {
+      engine.stopListening()
+    } catch (error: Exception) {
+      thrown = true
+      false
+    }
+    when (dictationStopFollowUp(step.state.phase, accepted, thrown)) {
+      DictationStopFollowUp.ArmDeadline -> finalWatch.arm(sessionId)
+      DictationStopFollowUp.ReportFailure -> abandonAwaitingFinal(sessionId)
+      DictationStopFollowUp.Idle -> {}
+    }
   }
 
   fun dictationPermission(granted: Boolean) {
@@ -788,6 +806,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (before.phase != DictationPhase.Idle && step.state.phase == DictationPhase.Idle) {
       callbackSession = 0
       supportGeneration = 0
+      finalWatch.cancel()
       engine.cancel()
     }
   }
@@ -795,6 +814,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   fun leaveDictation() {
     supportPending = false
     supportGeneration = 0
+    finalWatch.cancel()
     applyDictation(DictationEvent.LeaveScreen)
     callbackSession = 0
     supportGeneration = 0
@@ -926,6 +946,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   override fun onCleared() {
     supportPending = false
+    finalWatch.cancel()
     engine.destroy()
     session.close()
   }
@@ -986,11 +1007,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun onDictationFinal(generation: Int, text: String) {
     if (!acceptSpeechCallback(callbackSession, generation)) return
     val before = dictationState.value
-    releaseIfClosed(before, applyDictation(DictationEvent.Final(generation, text)))
+    val step = applyDictation(DictationEvent.Final(generation, text))
+    if (step.state.phase == DictationPhase.Idle) finalWatch.cancel()
+    releaseIfClosed(before, step)
   }
 
   private fun onDictationError(generation: Int, code: Int) {
     if (!acceptSpeechCallback(callbackSession, generation)) return
+    finalWatch.cancel()
     if (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
       recognitionSupported = false
       dictationState.value = dictationState.value.copy(available = false)
@@ -1052,7 +1076,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (before.phase == DictationPhase.Idle || step.state.phase != DictationPhase.Idle) return
     callbackSession = 0
     supportGeneration = 0
+    finalWatch.cancel()
     engine.cancel()
+  }
+
+  private fun abandonAwaitingFinal(sessionId: Int) {
+    val state = dictationState.value
+    if (state.phase != DictationPhase.AwaitingFinal || state.sessionId != sessionId) return
+    finalWatch.cancel()
+    callbackSession = 0
+    supportGeneration = 0
+    engine.cancel()
+    applyDictation(DictationEvent.Expired(sessionId))
   }
 
   private fun storeDraft(text: String) {
@@ -1073,6 +1108,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun startListeningSession(selectionStart: Int, selectionEnd: Int) {
+    finalWatch.cancel()
     val step = applyDictation(DictationEvent.Start(selectionStart, selectionEnd))
     if (!step.state.listening) return
     callbackSession = step.state.sessionId
