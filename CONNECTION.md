@@ -318,3 +318,52 @@ instantfpc --set-cache=/tmp/laz-connection-tests/runner \
 Session-local evidence is under `/tmp/laz-connection-2vbbs99k` and `/tmp/laz-connection-tests/results`. The sanitized live diagnostic script is `/tmp/laz-connection-live-probe.py`; it uses existing profiles and allows Codex's normal authentication maintenance, so it is not a purely offline check. These temporary paths are not durable repository dependencies; the material results are recorded in this report. No credentials or raw account responses are included here.
 
 The remaining uncertainty is end-to-end inference and tool execution after the proposed changes. The investigation establishes the present local blockers and a later protocol mismatch, and directly verifies the account/network stages that could otherwise have been hidden behind the version error. It does not claim that a catalog, successful thread creation, or a passing field-name check proves every future Codex behavior compatible.
+
+## Implementation and verification — 21 October 2026
+
+The preceding diagnosis records the original code and failures. The implementation now removes the release-channel gate; the old version-format helper is informational. The installed `codex-cli 0.162.0-alpha.17.2` passes every implemented capability check and selects `named-permissions-tagged-v1`.
+
+Implemented changes:
+
+- A shared, bounded schema evaluator follows local references and checks actual outgoing values, types, enums, required fields and union branches. It checks the incoming fields the adapter consumes without rejecting additive response requirements. Unsupported schema constraints fail closed. This is a deliberately limited contract evaluator, not a general-purpose JSON Schema implementation.
+- Account, browser login, device login, model discovery, execution, steering, summaries, images and allowance lookup have separate evidence. Account-only connections use stable initialization. A missing schema generator permits account checks but cannot authorize IDE execution. Optional summary omission and tagged/legacy dynamic-tool serializers are chosen by schema evidence, not version ranges. The real schema also revealed the newer required `type: "function"` discriminator on dynamic tools.
+- Permission refusals use `scope: "turn"` with empty grants. Unknown approval methods receive `-32601`. Execution still requires a verified OpenAI provider, on-request approval, read-only sandbox, disabled runtime network access, and no external MCP tools. Neither compatibility failures nor authentication failures switch to a metered provider.
+- Preflight has cancellation, process-group cleanup, a 15-second limit per subprocess, bounded output and unique private schema directories. Cache keys include the complete executable hash, path, reported version and evaluator revision. Cache writes use unique files and atomic replacement; corrupt/unwritable caches are nonfatal. Launcher scripts are requalified because their underlying payload can change independently. Identity is checked again before launch. Concurrent callers may generate duplicate evidence, but do not share or delete each other's temporary directories.
+- Extension discovery compares version components numerically and searches VS Code, VS Code Insiders and Cursor extension directories. Missing recognized extension-managed paths are resolved again at connection time. Existing paths and missing custom paths are preserved. This intentionally conservative migration does not silently substitute a runtime for an arbitrary custom selection.
+- Browser-to-device fallback is restricted to an unsupported browser-login parameter response. Other RPC failures retain operation and numeric code with a safe diagnostic category, rather than displaying arbitrary server text. Process exits include the exit status and a category derived from bounded private stderr; raw stderr is never displayed.
+- Model discovery follows bounded, nonrepeating cursors and publishes the complete catalog. Each new IDE run refreshes that catalog and rejects a removed model or reasoning effort before creating its thread. Settings distinguish an authenticated account from unavailable IDE execution, and show the runtime version. A known unsupported model-list contract ends account discovery with a specific note instead of waiting indefinitely.
+- Dropped Codex turns stop rather than automatically replaying possibly completed IDE actions. Reconnect does not attempt to resume or replay an uncertain turn.
+- The offline qualification command uses the production evaluator. A versioned fixture manifest records source and retained-schema SHA-256 hashes from the installed runtime. Contract tests cover enums, types, required fields, additive incoming requirements, references, recursion, unsupported constraints, version ordering and diagnostic redaction. Client tests cover prerelease/unknown versions, schema-generator failure, account-only degradation, large executables, paginated models and the existing streaming/tool/cancellation behavior.
+- A GitHub Actions workflow runs the offline contract suite for relevant pull requests and checks the latest published runtime without credentials on a weekly schedule or manual invocation. This workflow has been added but has not yet executed on GitHub. The committed real-runtime fixture represents the verified installed candidate; older release labels in the fake-runtime tests are presentation tests, not evidence that those released binaries were tested.
+
+### Actual verification
+
+The revised production client was compiled and run against both existing isolated ChatGPT profiles on the host, with normal runtime authentication maintenance allowed. For **both profiles**, all of these passed:
+
+1. Executable qualification and initialize handshake.
+2. ChatGPT subscription account authentication.
+3. Paginated model discovery.
+4. Account allowance lookup.
+5. External-tool isolation check.
+6. Thread creation with a tagged diagnostic dynamic tool, including verification of provider, approval policy, read-only sandbox and disabled runtime tool network access.
+
+No model inference turn or IDE tool execution was submitted during these live checks. Thus live generation/streaming and tool execution remain outside the verified boundary; their regression coverage is supplied by the fake-runtime tests. No credential, account identity or raw account response is stored in this report or the fixtures.
+
+The selected schema, client, handshake, transport, recovery and connection regression programs pass. The assistant package compile and all four monitor link-isolation checks pass. The runner's separate full `LazAssistantMonitor` lazbuild step still fails because this local installation cannot find the `qt5` unit used by `AssistantFileDropQt`; this is distinct from the passing assistant compilation and Codex tests. The old connection-test signature and image-fixture failures described above were repaired.
+
+The implementation prevents known version-related failures and detects incompatible future contracts; it cannot promise compatibility with arbitrary future protocol redesigns. Such a redesign may still need a new adapter. Further release engineering can add independently verified older stable fixtures, broader operating-system coverage, explicit persisted automatic/manual selection controls, live inference acceptance tests. These are not claimed as verified behavior in this change.
+
+### Shared offline diagnostic
+
+Build/run the shared qualifier with the project's compiler and Lazarus utility paths (adjust the Lazarus location for the host):
+
+```bash
+instantfpc --set-cache=/tmp/laz-codex-qualifier \
+  -Fu"$PWD/Source/LazAssistantTools" \
+  -Fu"$PWD/Source/LazWorkflowCommon" \
+  -Fu/home/paul/Projects/FreePascal/Lazarus/components/lazutils/lib/x86_64-linux \
+  Tests/QualifyCodexRuntime.pas \
+  --runtime /absolute/path/to/codex --output-dir /tmp/laz-codex-evidence
+```
+
+`qualification.json` records version, executable identity, schema identity, adapter, and individual capability reasons. It contains no authentication evidence. `Tests/AssistantCodexProbe.lpr` is the explicit host-network diagnostic for an existing isolated profile; it exercises account, catalog, allowance and thread-policy checks without sending an inference turn.

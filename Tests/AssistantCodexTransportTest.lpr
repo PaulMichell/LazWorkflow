@@ -11,6 +11,8 @@ Var Line, Mode: String; Fd: Integer;
 Begin
   Mode := ParamStr(2);
   If Mode = 'blocked' Then Begin Sleep(10000); Halt; End;
+  If Mode = 'diagnostic' Then
+    Begin WriteLn(StdErr, 'secret-token workspace routing discovery failed'); Halt(7); End;
   If Mode = 'truncated' Then Begin Write('{"id":'); Flush(Output); Halt; End;
   If Mode = 'oversized' Then Begin Write(StringOfChar('x', CodexMaxFrameBytes + 1)); Flush(Output); Sleep(10000); Halt; End;
   If Mode = 'flood' Then Begin Write(StdErr, StringOfChar('e', 200000)); Flush(StdErr); End;
@@ -58,6 +60,10 @@ Begin
     Check('cancel bounded', (Not Transport.Running) And (GetTickCount64 - Started < 1000));
     Start('flood'); Transport.Queue('{"id":2}'); PumpUntilFrame;
     Check('stderr flood does not deadlock or contaminate protocol', Frame = '{"id":2}');
+    Start('diagnostic'); PumpUntilError;
+    Check('exit status retained', Pos('Exit status 7', Transport.LastError) > 0);
+    Check('stderr categorized', Pos('workspace routing', Transport.LastError) > 0);
+    Check('stderr credentials omitted', Pos('secret-token', Transport.LastError) = 0);
     Start('truncated'); PumpUntilError;
     Check('truncated EOF detected', Pos('truncated', Transport.LastError) > 0);
     Start('oversized'); PumpUntilError;

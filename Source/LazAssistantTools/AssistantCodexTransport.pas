@@ -24,7 +24,7 @@ Type
   Private
     FProcess: TProcess;
     FIncoming, FOutgoing: TStringList;
-    FBuffer, FError: String;
+    FBuffer, FError, FStderrTail: String;
     FReadBytes, FWriteBytes, FWriteOffset: Integer;
     FCancel: LongInt;
     FCancelReason: String;
@@ -56,7 +56,7 @@ Type
 Implementation
 
 Uses
-  ProcessSession;
+  ProcessSession, AssistantCodexDiagnostics;
 
 Constructor TAssistantCodexTransport.Create(WriteTimeoutMs: Cardinal);
 Begin
@@ -88,6 +88,7 @@ Begin
   CheckOwner;
   Stop;
   FError := '';
+  FStderrTail := '';
   FExitCode := -1;
   InterlockedExchange(FCancel, 0);
   FIncoming.Clear;
@@ -226,7 +227,7 @@ Begin
       AcceptBytes(Bytes);
       Dec(Budget, N);
     End;
-  { Drain stderr separately; do not retain account details or flood the UI. }
+  { Keep a bounded private tail for classification only. Never publish raw stderr. }
   Budget := 65536;
   While Assigned(FProcess) And (FProcess.Stderr.NumBytesAvailable > 0) And (Budget > 0) Do
     Begin
@@ -234,6 +235,9 @@ Begin
       If N > SizeOf(Buf) Then N := SizeOf(Buf);
       N := FProcess.Stderr.Read(Buf, N);
       If N <= 0 Then Break;
+      SetString(Bytes, PChar(@Buf[0]), N);
+      FStderrTail := FStderrTail + Bytes;
+      If Length(FStderrTail) > 4096 Then Delete(FStderrTail, 1, Length(FStderrTail) - 4096);
       Dec(Budget, N);
     End;
 End;
@@ -279,6 +283,8 @@ Begin
 End;
 
 Procedure TAssistantCodexTransport.Poll;
+Var
+  Detail: String;
 Begin
   CheckOwner;
   If InterlockedCompareExchange(FCancel, 0, 0) <> 0 Then
@@ -294,8 +300,11 @@ Begin
     Begin
       { Drain remaining bytes over bounded polls before reporting EOF. }
       If FProcess.Output.NumBytesAvailable > 0 Then Exit;
-      If FBuffer <> '' Then Fail('Codex exited with a truncated protocol frame.')
-      Else Fail('Codex runtime exited.');
+      Detail := ' Exit status ' + IntToStr(FProcess.ExitCode) + '.';
+      If FStderrTail <> '' Then Detail := Detail + ' Diagnostic: ' + CodexDiagnosticCategory(FStderrTail) + '.';
+      FStderrTail := '';
+      If FBuffer <> '' Then Fail('Codex exited with a truncated protocol frame.' + Detail)
+      Else Fail('Codex runtime exited.' + Detail);
       Exit;
     End;
   Flush;

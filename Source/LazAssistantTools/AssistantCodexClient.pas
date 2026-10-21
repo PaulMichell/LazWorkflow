@@ -882,7 +882,7 @@ Begin
             If Status = 'failed' Then
               Begin
                 Value := Turn.FindPath('error.message');
-                If Assigned(Value) And (Value.JSONType = jtString) Then Fail(Copy(Value.AsString, 1, 2048))
+                If Assigned(Value) And (Value.JSONType = jtString) Then Fail('Codex turn failed: ' + CodexDiagnosticCategory(Value.AsString) + '.')
                 Else Fail('Codex turn failed.');
                 Exit;
               End;
