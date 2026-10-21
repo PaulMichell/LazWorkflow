@@ -2,12 +2,17 @@ package computing.michell.monitor.ui
 
 /* Coordinator seam without AndroidViewModel (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.connection.HostClosedBanner
+import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireSnapshot
+import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.tryEncodeTranscript
 import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeError
@@ -194,6 +199,23 @@ class MonitorCoordinatorTest {
     assertEquals(null, coordinator.state.live)
     assertFalse(coordinator.state.history.values.any { it.prompt == "pending body" })
   }
+
+  @Test
+  fun lowerRevisionAfterDisconnectReplacesTheDisplayedBody() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false, live = WireTurn(-2, "live-1", "build", "", "", ""))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(transcript(100, "old text", -2))))
+    coordinator.flush(coordinator.state)
+    assertEquals("old text", displayedBody(coordinator.state))
+    coordinator.onEvent(MonitorEvent.LinkChanged(
+      coordinator.state,
+      LinkStatus(LinkPhase.Disconnected, HostClosedBanner)
+    ))
+    openLive(coordinator, canSend = true, canSteer = false, live = WireTurn(-2, "live-1", "build", "", "", ""))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(transcript(1, "new text", -2))))
+    coordinator.flush(coordinator.state)
+    assertEquals("new text", displayedBody(coordinator.state))
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {
@@ -218,6 +240,15 @@ private fun openLive(
     ApprovalNotice(false, "", "", "", "", false)
   )
   coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("live", snapshot))))
+}
+
+private fun transcript(revision: Int, body: String, turnIndex: Int): String {
+  val block = WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
+  return tryEncodeTranscript("transcript", WireTranscript(turnIndex, revision, "thinking", "working", listOf(block)))
+}
+
+private fun displayedBody(state: MonitorUi): String {
+  return state.live?.blocks?.joinToString("") { it.body } ?: ""
 }
 
 private fun answeredTurn(id: String, body: String): WireTurn {

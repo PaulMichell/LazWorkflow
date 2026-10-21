@@ -6,6 +6,7 @@ package computing.michell.monitor.ui
    including with an empty string. Host change, forget pairing, and a
    null live snapshot share one reset. */
 
+import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.ReconnectingBanner
@@ -179,7 +180,11 @@ class MonitorCoordinator(
     val reset = noteHost(current, session.hostAddress, session.hostPort, session.hostClientId)
     val effects = reset?.toMutableList() ?: mutableListOf()
     if (reset == null) screen = stamp(current)
-    if (status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused) effects += MonitorEffect.LeaveDictation
+    if (status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused) {
+      val bannerText = if (status.banner.isEmpty()) HostClosedBanner else status.banner
+      applied = noteSocketClosed(applied, bannerText)
+      effects += MonitorEffect.LeaveDictation
+    }
     val pin = status.banner == "TLS pin mismatch."
     val wasDown = screen.disconnected || screen.banner == ReconnectingBanner
     if (session.promptDraft != screen.draft) effects += MonitorEffect.RememberDraft(screen.draft)

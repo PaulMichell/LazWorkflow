@@ -125,7 +125,10 @@ data class MonitorUi(
   val activityStartedMs: Long = 0,
   val activityObservedMs: Int = 0,
   val hostGeneration: Int = 0,
-  val conversationGeneration: Int = 0
+  val conversationGeneration: Int = 0,
+  val connectionGeneration: Int = 0,
+  val transcriptConnection: Int = 0,
+  val transcriptTurnId: String = ""
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -137,7 +140,8 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     showTools = state.showTools,
     settingsOpen = state.settingsOpen,
     hostGeneration = hostGeneration,
-    conversationGeneration = conversationGeneration
+    conversationGeneration = conversationGeneration,
+    connectionGeneration = state.connectionGeneration + 1
   )
 }
 
@@ -337,7 +341,9 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val history = retainLoaded(current.history + next.history, next.turns)
   // An empty draft is explicit. Do not refill it from an older insert still sitting on next.
   val draft = if (useReducedDraft) next.draft else current.draft
-  val sameGeneration = current.hostGeneration == next.hostGeneration && current.conversationGeneration == next.conversationGeneration
+  val sameGeneration = current.hostGeneration == next.hostGeneration &&
+    current.conversationGeneration == next.conversationGeneration &&
+    current.connectionGeneration == next.connectionGeneration
   val mergedLive = mergeLiveTurn(current.live, next.live, sameGeneration)
   val merged = next.copy(live = mergedLive, history = history)
   val shown = promptShown(merged, current.pendingPrompt)
@@ -387,11 +393,16 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
 
 fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   val shown = if (banner.isEmpty()) HostClosedBanner else banner
-  val generation = if (state.disconnected) state.generation else state.generation + 1
+  val already = state.disconnected
   return state.copy(
     disconnected = true,
     banner = shown,
-    generation = generation,
+    generation = if (already) state.generation else state.generation + 1,
+    connectionGeneration = if (already) state.connectionGeneration else state.connectionGeneration + 1,
+    liveRevision = -1,
+    transcriptParts = emptyMap(),
+    transcriptTurnId = "",
+    live = state.live?.copy(blocks = emptyList()),
     rescueSteer = false,
     view = clearRemoteActions(state.view)
   )
@@ -408,7 +419,8 @@ private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
   val acceptedNew = previousId.isNotEmpty() && previousId != incoming.id
   val conversationGeneration = if (acceptedNew) state.conversationGeneration + 1 else state.conversationGeneration
   val live = mergeLiveTurn(state.live, incoming, !acceptedNew)
-  val sameLive = !acceptedNew && state.live?.id == live?.id
+  val sameTurn = previousId.isNotEmpty() && previousId == incoming.id &&
+    state.transcriptConnection == state.connectionGeneration
   val approval = snapshot.approval
   return state.copy(
     view = snapshot.view,
@@ -421,8 +433,9 @@ private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
     planRows = snapshot.planRows,
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
-    liveRevision = if (sameLive) state.liveRevision else -1,
-    transcriptParts = if (sameLive) state.transcriptParts else emptyMap(),
+    liveRevision = if (sameTurn) state.liveRevision else -1,
+    transcriptParts = if (sameTurn) state.transcriptParts else emptyMap(),
+    transcriptTurnId = if (sameTurn) state.transcriptTurnId else "",
     reachedLive = true,
     pairHold = false,
     disconnected = false,
@@ -456,11 +469,20 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
   )
 }
 
+private fun transcriptInScope(state: MonitorUi, turnId: String): Boolean {
+  if (state.liveRevision < 0) return false
+  if (state.transcriptConnection != state.connectionGeneration) return false
+  if (turnId.isNotEmpty() && state.transcriptTurnId.isNotEmpty() && turnId != state.transcriptTurnId) return false
+  return true
+}
+
 private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
   val transcript = decodeTranscript(payloadJson) ?: return state
-  if (transcript.revision < state.liveRevision) return state
-  if (transcript.revision == state.liveRevision && state.transcriptParts.containsKey(transcript.part)) return state
-  val parts = if (transcript.revision > state.liveRevision) {
+  val turnId = state.live?.id ?: ""
+  val inScope = transcriptInScope(state, turnId)
+  if (inScope && transcript.revision < state.liveRevision) return state
+  if (inScope && transcript.revision == state.liveRevision && state.transcriptParts.containsKey(transcript.part)) return state
+  val parts = if (!inScope || transcript.revision > state.liveRevision) {
     mapOf(transcript.part to transcript.blocks)
   } else {
     state.transcriptParts + (transcript.part to transcript.blocks)
@@ -486,6 +508,8 @@ private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
     live = live,
     liveRevision = transcript.revision,
     transcriptParts = parts,
+    transcriptConnection = state.connectionGeneration,
+    transcriptTurnId = turnId,
     view = state.view.copy(
       phase = transcript.phase.ifEmpty { state.view.phase },
       statusText = transcript.statusText.ifEmpty { state.view.statusText }
