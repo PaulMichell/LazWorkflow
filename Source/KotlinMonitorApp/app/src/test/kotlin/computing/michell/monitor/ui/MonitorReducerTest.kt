@@ -6,8 +6,10 @@ import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.protocol.ApprovalNotice
+import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTranscript
+import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
 
 import computing.michell.monitor.protocol.WireSnapshot
@@ -276,12 +278,120 @@ class MonitorReducerTest {
     )), false, false)
     assertEquals(listOf("answer"), hidden.map { it.kind })
   }
+
+  @Test
+  fun splitTranscriptKeepsThinkingAsOneBlockBeforeTheAnswer() {
+    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
+    val answer = "short answer"
+    val frames = splitLongTurn(thinking, answer, 1)
+    assertTrue(frames.size > 1)
+    assertTrue(frames[0].blocks.any { it.kind == "thinking" })
+    assertTrue(frames[0].blocks.any { it.kind == "answer" })
+    assertTrue(frames[1].blocks.any { it.kind == "thinking" })
+    assertFalse(frames[1].blocks.any { it.kind == "answer" })
+    val shown = reduceTranscripts(frames)
+    assertEquals(listOf("thinking", "answer"), shown.live?.blocks?.map { it.kind })
+    assertEquals(thinking, shown.live?.blocks?.get(0)?.body)
+    assertEquals(answer, shown.live?.blocks?.get(1)?.body)
+  }
+
+  @Test
+  fun outOfOrderTranscriptPartsDoNotDuplicateTheThinkingBody() {
+    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
+    val answer = "short answer"
+    val frames = splitLongTurn(thinking, answer, 3)
+    val shown = reduceTranscripts(frames.reversed())
+    val blocks = shown.live?.blocks ?: emptyList()
+    assertEquals(listOf("thinking", "answer"), blocks.map { it.kind })
+    assertEquals(thinking, blocks[0].body)
+    assertEquals(answer, blocks[1].body)
+    assertEquals(1, blocks.count { it.body.contains("TAIL") })
+  }
+
+  @Test
+  fun duplicateTranscriptPartIsKeptOnce() {
+    val piece = WireBlock("thinking", "think-1", "", "", "", "once", true, true, 0, emptyList(), false, 1, 2, 4)
+    val frames = listOf(
+      WireTranscript(-2, 4, "thinking", "working", listOf(piece), 1, 2, 0),
+      WireTranscript(-2, 4, "thinking", "working", listOf(piece.copy(body = "ONCE")), 2, 2, 0)
+    )
+    val shown = reduceTranscripts(frames)
+    assertEquals(listOf("once"), shown.live?.blocks?.map { it.body })
+  }
+
+  @Test
+  fun missingTranscriptPartDoesNotJumpAhead() {
+    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
+    val frames = splitLongTurn(thinking, "short answer", 5)
+    val held = reduceTranscripts(listOf(frames[1]))
+    assertTrue(held.live?.blocks.orEmpty().none { it.body.contains("TAIL") })
+    val shown = reduceTranscripts(frames.reversed())
+    assertEquals(thinking, shown.live?.blocks?.first()?.body)
+    assertEquals("short answer", shown.live?.blocks?.get(1)?.body)
+  }
+
+  @Test
+  fun inconsistentPartCountDropsTheBlockInsteadOfJoiningIt() {
+    val head = WireBlock("thinking", "think-1", "", "", "", "one", true, true, 0, emptyList(), false, 1, 2, 6)
+    val tail = WireBlock("thinking", "think-1", "", "", "", "two", true, true, 0, emptyList(), false, 2, 3, 6)
+    val answer = WireBlock("answer", "answer-1", "", "", "", "kept", false, true, 0, emptyList())
+    val frames = listOf(
+      WireTranscript(-2, 6, "thinking", "working", listOf(head, answer), 1, 2, 0),
+      WireTranscript(-2, 6, "thinking", "working", listOf(tail), 2, 2, 0)
+    )
+    val shown = reduceTranscripts(frames)
+    assertEquals(listOf("kept"), shown.live?.blocks?.map { it.body })
+  }
+
+  @Test
+  fun revisionReplacementRemovesTheOldTranscriptBody() {
+    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
+    val first = reduceTranscripts(splitLongTurn(thinking, "short answer", 1))
+    assertEquals(thinking, first.live?.blocks?.first()?.body)
+    val replacement = WireTranscript(
+      -2,
+      2,
+      "thinking",
+      "working",
+      listOf(WireBlock("thinking", "think-1", "", "", "", "replaced", false, true, 0, emptyList())),
+      1,
+      1,
+      0
+    )
+    val shown = reduceTranscripts(listOf(replacement), first)
+    assertEquals("replaced", shown.live?.blocks?.single()?.body)
+    assertFalse(shown.live?.blocks?.any { it.body.contains("TAIL") } == true)
+  }
 }
 
 private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {
   val decoded = tryDecodeEnvelope(json)
   assertTrue(decoded.errorText, decoded.ok)
   return decoded.message
+}
+
+private fun splitLongTurn(thinking: String, answer: String, revision: Int): List<WireTranscript> {
+  val source = WireTranscript(
+    -2,
+    revision,
+    "thinking",
+    "working",
+    listOf(
+      WireBlock("thinking", "think-1", "Thinking", "", "", thinking, true, true, 0, emptyList()),
+      WireBlock("answer", "answer-1", "", "", "", answer, false, true, 0, emptyList())
+    )
+  )
+  return splitTranscript(source)
+}
+
+private fun reduceTranscripts(frames: List<WireTranscript>, start: MonitorUi = MonitorUi()): MonitorUi {
+  var state = start
+  for (frame in frames) {
+    val encoded = tryEncodeTranscript("tr-" + frame.revision.toString() + "-" + frame.part.toString(), frame)
+    assertTrue(encoded.isNotEmpty())
+    state = reduceMonitor(state, message(encoded))
+  }
+  return state
 }
 
 private fun transcript(revision: Int, body: String): String {

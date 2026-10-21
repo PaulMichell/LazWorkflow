@@ -66,6 +66,7 @@ import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
 
 import computing.michell.monitor.protocol.decodeText
+import computing.michell.monitor.protocol.assembleTranscriptBlocks
 import computing.michell.monitor.protocol.decodeTranscript
 import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.decodeImageBytes
@@ -477,7 +478,8 @@ private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
   } else {
     state.transcriptParts + (transcript.part to transcript.blocks)
   }
-  val blocks = parts.toSortedMap().values.flatten()
+  // Part order, not arrival order, so a late frame cannot move an earlier block.
+  val blocks = assembleTranscriptBlocks(parts.toSortedMap().values.toList())
   val previous = state.live
   val live = WireTurn(
     transcript.turnIndex,
