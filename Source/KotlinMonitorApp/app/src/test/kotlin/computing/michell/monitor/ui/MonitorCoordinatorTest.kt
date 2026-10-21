@@ -4,9 +4,15 @@ package computing.michell.monitor.ui
 
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.ApprovalNotice
+import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.decodeText
+import computing.michell.monitor.protocol.encodeEnvelope
+import computing.michell.monitor.protocol.encodeError
+import computing.michell.monitor.protocol.encodeInsertResult
 import computing.michell.monitor.protocol.encodeSnapshot
+import computing.michell.monitor.protocol.statusToJson
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -38,6 +44,75 @@ class MonitorCoordinatorTest {
     assertTrue(coordinator.state.showThinking)
     assertEquals(false, coordinator.state.showTools)
   }
+
+  @Test
+  fun insertThenSendThenStatusLeavesTheDraftEmpty() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeInsertResult("ins", "pasted"))))
+    assertEquals("pasted", coordinator.state.draft)
+    val sent = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals("", coordinator.state.draft)
+    assertEquals("pasted", coordinator.state.pendingPrompt)
+    assertEquals("user", coordinator.state.pendingKind)
+    assertEquals("c1", coordinator.state.pendingCommandId)
+    assertEquals(1, coordinator.state.pendingEpoch)
+    assertEquals(listOf("pasted"), sendTexts(sent))
+    val status = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
+      MessageKind.Status, "st", statusToJson(emptyView().copy(canSend = true, signedIn = true))
+    ))))
+    assertEquals("", coordinator.state.draft)
+    assertEquals(emptyList<String>(), sendTexts(status.orEmpty()))
+  }
+
+  @Test
+  fun steerErrorFallsBackToSendOfTheSameText() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = false, canSteer = true)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "finish the form"))
+    val steered = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals("finish the form", coordinator.state.pendingPrompt)
+    assertEquals("steer", coordinator.state.pendingKind)
+    assertEquals("c1", coordinator.state.pendingCommandId)
+    assertEquals(1, coordinator.state.pendingEpoch)
+    assertEquals(MessageKind.Steer, envelope(sentJson(steered)).kind)
+    val recovered = coordinator.onEvent(MonitorEvent.Incoming(
+      coordinator.state,
+      envelope(encodeError("err", "command", NothingRunningToSteer, "c1"))
+    )).orEmpty()
+    val send = envelope(sentJson(recovered))
+    assertEquals(MessageKind.Send, send.kind)
+    assertEquals("finish the form", decodeText(send.payloadJson))
+  }
+}
+
+private fun coordinator(): MonitorCoordinator {
+  return MonitorCoordinator(FakeSession(), FixedClock(1_000L), FixedDisplay(true, true))
+}
+
+private fun openLive(coordinator: MonitorCoordinator, canSend: Boolean, canSteer: Boolean) {
+  val snapshot = WireSnapshot(
+    emptyView().copy(canSend = canSend, canSteer = canSteer, signedIn = true),
+    emptyList(),
+    WireTurn(-2, "live", "build", "", "", ""),
+    "",
+    "",
+    false,
+    emptyList(),
+    emptyList(),
+    ApprovalNotice(false, "", "", "", "", false)
+  )
+  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("live", snapshot))))
+}
+
+private fun sendTexts(effects: List<MonitorEffect>): List<String> {
+  return effects.filterIsInstance<MonitorEffect.Send>().map { decodeText(envelope(it.json).payloadJson) ?: "" }
+}
+
+private fun sentJson(effects: List<MonitorEffect>): String {
+  val sends = effects.filterIsInstance<MonitorEffect.Send>()
+  assertEquals(1, sends.size)
+  return sends[0].json
 }
 
 private class FixedClock(private val millis: Long) : MonitorClock {

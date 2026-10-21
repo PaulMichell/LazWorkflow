@@ -119,6 +119,7 @@ data class MonitorUi(
   val showTools: Boolean = true,
   val pendingPrompt: String = "",
   val pendingKind: String = "",
+  val pendingCommandId: String = "",
   val pendingEpoch: Int = 0,
   val activityStartedMs: Long = 0,
   val activityObservedMs: Int = 0
@@ -293,12 +294,13 @@ fun activityCaption(
   return "$phase ${formatActivityClock(nowMs - start)}"
 }
 
-fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long): MonitorUi {
+fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, commandId: String = ""): MonitorUi {
   val phase = if (steer) "Steering…" else "Waiting for first token…"
   return state.copy(
     draft = "",
     pendingPrompt = text,
     pendingKind = if (steer) "steer" else "user",
+    pendingCommandId = commandId,
     pendingEpoch = state.pendingEpoch + 1,
     activityStartedMs = if (state.activityStartedMs > 0L) state.activityStartedMs else nowMs,
     banner = "",
@@ -317,7 +319,8 @@ fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long): Mo
 fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, clearDisconnect: Boolean, nowMs: Long = 0L): MonitorUi {
   if (next.generation < current.generation) return current
   val history = retainLoaded(current.history + next.history, next.turns)
-  val draft = if (useReducedDraft) next.draft else current.draft.ifEmpty { next.draft }
+  // An empty draft is explicit. Do not refill it from an older insert still sitting on next.
+  val draft = if (useReducedDraft) next.draft else current.draft
   val mergedLive = mergeLiveTurn(current.live, next.live)
   val merged = next.copy(live = mergedLive, history = history)
   val shown = promptShown(merged, current.pendingPrompt)

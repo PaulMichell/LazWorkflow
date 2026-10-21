@@ -2,8 +2,9 @@ package computing.michell.monitor.ui
 
 /* Catalogue orchestration without Android (c) 2026 Michell Computing.
 
-   Speech stays on SpeechEngine. This class forwards catalogue events and
-   returns effects. It does not replace today's merge rules. */
+   Speech stays on SpeechEngine. Draft edits replace the reducer draft,
+   including with an empty string. A later snapshot or status must not
+   refill that empty draft from an older insert. */
 
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
@@ -84,6 +85,7 @@ class MonitorCoordinator(
 
   private fun editDraft(current: MonitorUi, text: String): List<MonitorEffect> {
     screen = stamp(current).copy(draft = text)
+    applied = applied.copy(draft = text)
     return listOf(MonitorEffect.RememberDraft(text))
   }
 
@@ -94,12 +96,21 @@ class MonitorCoordinator(
     if (!screen.view.canSend && !steer) return null
     val text = screen.draft.trim()
     if (text.isEmpty()) return null
-    val encoded = if (steer) tryEncodeSteer(session.nextCommandId(), text) else tryEncodeSend(session.nextCommandId(), text)
+    val commandId = session.nextCommandId()
+    val encoded = if (steer) tryEncodeSteer(commandId, text) else tryEncodeSend(commandId, text)
     if (!encoded.ok) {
       screen = screen.copy(banner = "Text is longer than 65536 characters.")
       return emptyList()
     }
-    screen = stamp(beginSubmit(screen, text, steer, clock.nowMs()))
+    val submitted = beginSubmit(screen, text, steer, clock.nowMs(), commandId)
+    screen = stamp(submitted)
+    applied = applied.copy(
+      draft = "",
+      pendingPrompt = submitted.pendingPrompt,
+      pendingKind = submitted.pendingKind,
+      pendingCommandId = submitted.pendingCommandId,
+      pendingEpoch = submitted.pendingEpoch
+    )
     return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.Send(encoded.json))
   }
 
@@ -132,11 +143,9 @@ class MonitorCoordinator(
     if (status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused) effects += MonitorEffect.LeaveDictation
     val pin = status.banner == "TLS pin mismatch."
     val wasDown = screen.disconnected || screen.banner == ReconnectingBanner
-    val sessionDraft = session.promptDraft
-    if (sessionDraft.isEmpty() && screen.draft.isNotEmpty()) effects += MonitorEffect.RememberDraft(screen.draft)
-    val synced = if (sessionDraft.isEmpty()) screen.draft else sessionDraft
+    if (session.promptDraft != screen.draft) effects += MonitorEffect.RememberDraft(screen.draft)
     val linked = applyLink(screen, status.phase, status.banner)
-    val shown = linked.copy(pairHold = linked.pairHold || pin, draft = synced.ifEmpty { screen.draft })
+    val shown = linked.copy(pairHold = linked.pairHold || pin, draft = screen.draft)
     if (shown.generation > postedGeneration) postedGeneration = shown.generation
     screen = stamp(shown)
     if (status.phase == LinkPhase.Live && wasDown) {
