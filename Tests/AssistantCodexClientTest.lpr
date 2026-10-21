@@ -1,6 +1,6 @@
 Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Classes, SysUtils, fpjson, jsonparser,
+Uses cthreads, Interfaces, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
   {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
   AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages;
@@ -159,8 +159,13 @@ Begin
   Check('empty catalogue is an empty array', CodexDynamicToolsFromCatalogue('') = '[]');
   Check('empty array stays empty', CodexDynamicToolsFromCatalogue('[]') = '[]');
   Params := CodexThreadStartParams('/tmp', 'model', Dynamic, 'Use write_markdown.');
-  Check('thread/start embeds write_markdown', Pos('"name":"write_markdown"', Params) > 0);
-  Check('thread/start embeds open_markdown', Pos('"name":"open_markdown"', Params) > 0);
+  Data := GetJSON(Params);
+  Try
+    Check('thread/start embeds write_markdown', Data.FindPath('dynamicTools[0].name').AsString = 'write_markdown');
+    Check('thread/start embeds open_markdown', Data.FindPath('dynamicTools[1].name').AsString = 'open_markdown');
+  Finally
+    Data.Free;
+  End;
   Check('thread/start uses the passed instructions', Pos('Use write_markdown.', Params) > 0);
   Check('thread/start has no lazarus tool essay', Pos('use the lazarus tools', LowerCase(Params)) = 0);
   Check('chat thread/start has an empty tool array', Pos('"dynamicTools":[]', CodexThreadStartParams('/tmp', 'model', '[]', 'chat')) > 0);
@@ -171,6 +176,10 @@ Begin
   Check('permission approval grants nothing', (Pos('"permissions":{}',
     CodexNativeApprovalReply('item/permissions/requestApproval', '9')) > 0) And
     (Pos('"decision":"accept"', CodexNativeApprovalReply('item/permissions/requestApproval', '9')) = 0));
+  Check('permission refusal uses a supported scope', Pos('"scope":"turn"',
+    CodexNativeApprovalReply('item/permissions/requestApproval', '9')) > 0);
+  Check('unknown approval has no guessed decision', Pos('"code":-32601',
+    CodexNativeApprovalReply('item/future/requestApproval', '10')) > 0);
   Check('approval method is recognised', IsCodexApprovalRequest('item/fileChange/requestApproval'));
   Check('tool call is not an approval', Not IsCodexApprovalRequest('item/tool/call'));
 End;
@@ -292,27 +301,20 @@ Begin
   Finally Data.Free; End;
 End;
 Function WriteTinyPng(Const Directory: String): Boolean;
-Const
-  Png: Array[0..68] Of Byte = (
-    $89, $50, $4E, $47, $0D, $0A, $1A, $0A, $00, $00, $00, $0D, $49, $48, $44, $52,
-    $00, $00, $00, $01, $00, $00, $00, $01, $08, $02, $00, $00, $00, $90, $77, $53,
-    $DE, $00, $00, $00, $0C, $49, $44, $41, $54, $08, $D7, $63, $F8, $CF, $C0, $00,
-    $00, $00, $03, $00, $01, $00, $05, $FE, $D4, $00, $00, $00, $00, $49, $45, $4E,
-    $44, $AE, $42, $60, $82);
 Var
-  Stream: TFileStream;
+  Img: TFPMemoryImage;
+  Writer: TFPWriterPNG;
 Begin
   Result := False;
+  Img := TFPMemoryImage.Create(1, 1);
+  Writer := TFPWriterPNG.Create;
   Try
-    Stream := TFileStream.Create(IncludeTrailingPathDelimiter(Directory) + 'tiny.png', fmCreate);
-    Try
-      Stream.WriteBuffer(Png, SizeOf(Png));
-      Result := True;
-    Finally
-      Stream.Free;
-    End;
-  Except
-    Result := False;
+    Img.Colors[0, 0] := colRed;
+    Img.SaveToFile(IncludeTrailingPathDelimiter(Directory) + 'tiny.png', Writer);
+    Result := True;
+  Finally
+    Writer.Free;
+    Img.Free;
   End;
 End;
 Procedure DeleteTree(Const Directory: String);

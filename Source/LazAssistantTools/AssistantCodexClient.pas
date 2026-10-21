@@ -128,9 +128,12 @@ Function CodexNativeApprovalReply(Const Method, RequestId: String): String;
 Begin
   { Permissions escalation is not a decision object. Grant nothing so the turn continues. }
   If Method = 'item/permissions/requestApproval' Then
-    Result := '{"id":' + RequestId + ',"result":{"permissions":{},"scope":"none"}}'
+    Result := '{"id":' + RequestId + ',"result":{"permissions":{},"scope":"turn"}}'
+  Else If (Method = 'item/commandExecution/requestApproval') Or
+    (Method = 'item/fileChange/requestApproval') Then
+    Result := '{"id":' + RequestId + ',"result":{"decision":"decline"}}'
   Else
-    Result := '{"id":' + RequestId + ',"result":{"decision":"decline"}}';
+    Result := '{"id":' + RequestId + ',"error":{"code":-32601,"message":"Unsupported approval request"}}';
 End;
 
 Function CopyJson(Node: TJSONData): TJSONData;

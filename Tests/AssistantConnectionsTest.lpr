@@ -318,7 +318,7 @@ Begin
       Prompt := '';
       ErrorText := '';
       Check('a Plan call is unknown even when the flag is on',
-        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', amPlan,
+        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', Root, amPlan,
           Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = ''));
       Store.Active.ImageOutput := False;
       Store.Save;
@@ -335,7 +335,7 @@ Begin
       Prompt := '';
       ErrorText := '';
       Check('an incapable call is an unknown tool and writes nothing',
-        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', amBuild,
+        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', Root, amBuild,
           Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = '') And
         (Not FileExists(IncludeTrailingPathDelimiter(Root) + 'icons' + PathDelim + 'dot.png')));
     Finally
