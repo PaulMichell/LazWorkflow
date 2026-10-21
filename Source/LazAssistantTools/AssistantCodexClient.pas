@@ -3,8 +3,8 @@ Unit AssistantCodexClient;
 { Worker-owned managed-runtime protocol. Dynamic tools are surfaced to a
   caller-owned IDE broker. Native approval requests are declined immediately
   and are never auto-approved.
-  A release Codex CLI is accepted when its generated app-server schema still has the
-  fields this client uses. User pictures are the same stored image refs as every
+  Codex builds are accepted when their generated app-server schemas support the
+  wire contracts this client uses. User pictures are the same stored image refs as every
   other connection. This client sends them as documented localImage items, not a
   guessed field and not a text note. (c) 2026 Michell Computing. }
 
@@ -16,7 +16,7 @@ Unit AssistantCodexClient;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages;
+  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages, AssistantCodexQualification;
 
 /// Shared catalogue items use function.parameters. Codex dynamicTools use name and inputSchema.
 Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
@@ -30,6 +30,7 @@ Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
 /// turn/steer params for text only. Image steers use CodexUserInputJson.
 Function CodexTurnSteerParams(Const ThreadId, TurnId, Text: String): String;
 /// Missing inputModalities allows images. An explicit list without image does not. An unknown model is unknown.
+Function CodexModelSelectionValid(Const ModelsJson, ModelId, Effort: String): Boolean;
 Function CodexModelImageInput(Const ModelsJson, ModelId: String): TAssistantImageInput;
 /// JSON-RPC result for a server approval request. Command and file changes are declined.
 /// A permissions escalation is granted nothing. RequestId is the raw JSON id token.
@@ -50,6 +51,10 @@ Type
     FState: TCodexRunState;
     FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
+    FModelItems: String;
+    FModelCursors: TStringList;
+    FModelCount: Integer;
+    FCompatibility: TCodexCompatibility;
     FMessageIds: TStringList;
     FMessageId: String;
     FMessageStart: Integer;
@@ -73,7 +78,7 @@ Type
     Constructor Create(RequestTimeoutMs: Cardinal = 30000);
     Destructor Destroy; Override;
     Function Connect(Const Executable, WorkingDirectory: String;
-      Environment: TStrings = Nil): Boolean;
+      Environment: TStrings = Nil; AccountOnly: Boolean = False; Cancelled: TCodexCancelled = Nil): Boolean;
     Procedure Pump;
     Procedure Disconnect;
     Procedure StartLogin;
@@ -97,6 +102,7 @@ Type
     Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean; Overload;
     { Image refs from read_image are the same store refs. They ride in contentItems when the frame can hold them. }
     Function CompleteTool(Const CallId, Text, ProjectRoot, AttachmentsJson: String; Success: Boolean): Boolean; Overload;
+    Property Compatibility: TCodexCompatibility Read FCompatibility;
     Property ToolIsolationChecked: Boolean Read FToolIsolationChecked;
     Property State: TCodexRunState Read FState;
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
@@ -112,7 +118,7 @@ Type
 Implementation
 
 Uses
-  fpjson, jsonparser, AssistantProtocol, AssistantCodexQualification;
+  fpjson, jsonparser, AssistantProtocol, AssistantCodexProfile, AssistantCodexWire, AssistantCodexDiagnostics;
 
 Function Quote(Const S: String): String;
 Begin
@@ -126,14 +132,7 @@ End;
 
 Function CodexNativeApprovalReply(Const Method, RequestId: String): String;
 Begin
-  { Permissions escalation is not a decision object. Grant nothing so the turn continues. }
-  If Method = 'item/permissions/requestApproval' Then
-    Result := '{"id":' + RequestId + ',"result":{"permissions":{},"scope":"turn"}}'
-  Else If (Method = 'item/commandExecution/requestApproval') Or
-    (Method = 'item/fileChange/requestApproval') Then
-    Result := '{"id":' + RequestId + ',"result":{"decision":"decline"}}'
-  Else
-    Result := '{"id":' + RequestId + ',"error":{"code":-32601,"message":"Unsupported approval request"}}';
+  Result := AssistantCodexWire.CodexNativeApprovalReply(Method, RequestId);
 End;
 
 Function CopyJson(Node: TJSONData): TJSONData;
@@ -200,17 +199,8 @@ Begin
 End;
 
 Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions: String): String;
-Var
-  Tools: String;
 Begin
-  Tools := Trim(DynamicToolsJson);
-  If Tools = '' Then Tools := '[]';
-  Result := '{"cwd":' + Quote(WorkingDirectory) +
-    ',"model":' + Quote(Model) + ',"modelProvider":"openai",' +
-    '"approvalPolicy":"on-request","permissions":"lazarus_ide","ephemeral":true,' +
-    '"environments":[],"dynamicTools":' + Tools +
-    ',"developerInstructions":' + Quote(DeveloperInstructions) +
-    ',"config":{"forced_login_method":"chatgpt","model_provider":"openai"}}';
+  Result := AssistantCodexWire.CodexThreadStartParams(WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions);
 End;
 
 Function CodexUserInputJson(Const ProjectRoot, Text, AttachmentsJson: String; Out InputJson, ErrorText: String): Boolean;
@@ -251,20 +241,6 @@ Begin
   If Length(InputJson) > 1 Then InputJson := InputJson + ',';
   InputJson := InputJson + '{"type":"text","text":' + Quote(ModelText) + '}]';
   Result := True;
-End;
-
-Function CodexTurnBody(Const ThreadId, TurnId, InputJson, Effort: String; Start: Boolean): String;
-Begin
-  If Start Then
-    Begin
-      Result := '{"threadId":' + Quote(ThreadId) + ',"input":' + InputJson +
-        ',"approvalPolicy":"on-request","permissions":"lazarus_ide","summary":"auto"';
-      If Effort <> '' Then Result := Result + ',"effort":' + Quote(Effort);
-      Result := Result + '}';
-    End
-  Else
-    Result := '{"threadId":' + Quote(ThreadId) + ',"expectedTurnId":' + Quote(TurnId) +
-      ',"input":' + InputJson + '}';
 End;
 
 Function CodexTurnStartParams(Const ThreadId, Prompt, Effort: String): String;
@@ -322,11 +298,49 @@ Begin
   End;
 End;
 
+Function CodexModelSelectionValid(Const ModelsJson, ModelId, Effort: String): Boolean;
+Var
+  Data, Items, Item, Id, Levels, Level: TJSONData;
+  I, J: Integer;
+Begin
+  Result := False;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ModelsJson);
+      Items := Data.FindPath('data');
+      If Not (Items Is TJSONArray) Then Exit;
+      For I := 0 To Items.Count - 1 Do
+        Begin
+          Item := Items.Items[I];
+          If Not (Item Is TJSONObject) Then Continue;
+          Id := TJSONObject(Item).Find('model');
+          If Not Assigned(Id) Then Id := TJSONObject(Item).Find('id');
+          If Not Assigned(Id) Or (Id.JSONType <> jtString) Or (Id.AsString <> ModelId) Then Continue;
+          If Effort = '' Then Exit(True);
+          Levels := TJSONObject(Item).Find('supportedReasoningEfforts');
+          If Not (Levels Is TJSONArray) Then Exit;
+          For J := 0 To Levels.Count - 1 Do
+            Begin
+              Level := Levels.Items[J];
+              If (Level Is TJSONObject) And (TJSONObject(Level).Get('reasoningEffort', '') = Effort) Then Exit(True);
+            End;
+          Exit;
+        End;
+    Except
+      Result := False;
+    End;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Constructor TAssistantCodexClient.Create(RequestTimeoutMs: Cardinal);
 Begin
   Inherited Create;
   FTransport := TAssistantCodexTransport.Create;
   FHandshake := TAssistantCodexHandshake.Create;
+  FModelCursors := TStringList.Create;
   FSeenCalls := TStringList.Create;
   FMessageIds := TStringList.Create;
   FReasoningIds := TStringList.Create;
@@ -336,6 +350,7 @@ End;
 Destructor TAssistantCodexClient.Destroy;
 Begin
   Disconnect;
+  FModelCursors.Free;
   FSeenCalls.Free;
   FMessageIds.Free;
   FReasoningIds.Free;
@@ -356,6 +371,9 @@ Begin
   FContent := '';
   FThinking := '';
   FModels := '';
+  FModelItems := '';
+  FModelCount := 0;
+  FModelCursors.Clear;
   FRateLimits := '';
   FToolIsolationChecked := False;
   FMessageIds.Clear;
@@ -371,29 +389,38 @@ Begin
 End;
 
 Function TAssistantCodexClient.Connect(Const Executable, WorkingDirectory: String;
-    Environment: TStrings): Boolean;
+    Environment: TStrings; AccountOnly: Boolean; Cancelled: TCodexCancelled): Boolean;
 Var
   Args: TStringList;
-  Observed, Reason: String;
+  Reason: String;
 Begin
   Disconnect;
   FError := '';
+  Result := False;
+  If Not InspectCodexRuntime(ResolveCodexExecutable(Executable), Environment, FCompatibility, Reason, Cancelled) Then
+    Begin
+      Fail('Codex preflight: ' + Reason);
+      Exit;
+    End;
+  If FCompatibility.Support[ccAccount] = csUnsupported Then
+    Begin
+      Fail('Codex account protocol is incompatible: ' + FCompatibility.Reason[ccAccount]);
+      Exit;
+    End;
+  If Not AccountOnly And (FCompatibility.Support[ccRun] <> csSupported) Then
+    Begin
+      Fail('Codex IDE execution is unavailable: ' + FCompatibility.Reason[ccRun]);
+      Exit;
+    End;
+  If Not CodexRuntimeUnchanged(FCompatibility, Reason, Cancelled) Then
+    Begin
+      Fail(Reason);
+      Exit;
+    End;
   Args := TStringList.Create;
   Try
-    If Not ReadCodexVersion(Executable, Environment, Observed, Reason) Then
-      Begin
-        Fail(Reason);
-        Result := False;
-        Exit;
-      End;
-    If Not QualifyCodexRuntime(Executable, Observed, Environment, Reason) Then
-      Begin
-        Fail(Reason);
-        Result := False;
-        Exit;
-      End;
-    CodexSubscriptionArguments(Args);
-    Result := FTransport.Start(Executable, WorkingDirectory, Args, Environment);
+    CodexSubscriptionArguments(Args, Not AccountOnly);
+    Result := FTransport.Start(FCompatibility.Executable, WorkingDirectory, Args, Environment);
   Finally
     Args.Free;
   End;
@@ -404,7 +431,7 @@ Begin
     End;
   FState := crsConnecting;
   FDeadline := GetTickCount64 + FRequestTimeout;
-  FHandshake.Start(True);
+  FHandshake.Start(Not AccountOnly);
   FlushHandshake;
 End;
 
@@ -448,7 +475,8 @@ End;
 
 Procedure TAssistantCodexClient.StartLogin;
 Begin
-  FHandshake.StartChatGPTLogin;
+  FHandshake.StartChatGPTLogin(FCompatibility.Support[ccLogin] <> csUnsupported,
+    FCompatibility.Support[ccDeviceLogin] <> csUnsupported);
   FDeadline := GetTickCount64 + 300000;
   FlushHandshake;
 End;
@@ -457,7 +485,14 @@ Function TAssistantCodexClient.ListModels: Boolean;
 Begin
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FState In [crsReady, crsCompleted]);
-  If Result Then Result := Request('model/list', '{"includeHidden":false,"limit":100}');
+  If Result Then
+    Begin
+      FModelItems := '';
+      FModelCount := 0;
+      FModelCursors.Clear;
+      FModels := '';
+      Result := Request('model/list', '{"includeHidden":false,"limit":100}');
+    End;
 End;
 
 Function TAssistantCodexClient.ReadRateLimits: Boolean;
@@ -481,13 +516,19 @@ Begin
   Result := False;
   If (FHandshake.State <> ccsSubscriptionAuthenticated) Or
     Not (FState In [crsReady, crsCompleted]) Or Not FToolIsolationChecked Then Exit;
+  If FCompatibility.Support[ccRun] <> csSupported Then
+    Begin
+      Fail('Codex IDE execution is unavailable: ' + FCompatibility.Reason[ccRun]);
+      Exit;
+    End;
   Dynamic := CodexDynamicToolsFromCatalogue(ToolsJson);
   Data := GetJSON(Dynamic);
   Try
     If Not (Data Is TJSONArray) Then Exit;
     { Built-in actions have no write permission. Approvals must be serviced by
       this client, which rejects them. Developer instructions come from the harness. }
-    Result := Request('thread/start', CodexThreadStartParams(WorkingDirectory, Model, Dynamic, DeveloperInstructions));
+    Result := Request('thread/start', AssistantCodexWire.CodexThreadStartParams(WorkingDirectory, Model, Dynamic,
+      DeveloperInstructions, FCompatibility.Adapter = 'named-permissions-tagged-v1'));
     If Result Then FState := crsStartingThread;
   Finally
     Data.Free;
@@ -502,12 +543,18 @@ Begin
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
     (FThreadId <> '') And (FState In [crsReady, crsCompleted]);
   If Not Result Then Exit;
+  If (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') And
+    (FCompatibility.Support[ccImages] <> csSupported) Then
+    Begin
+      Fail('Codex image input is unavailable: ' + FCompatibility.Reason[ccImages]);
+      Exit(False);
+    End;
   If Not CodexUserInputJson(ProjectRoot, Prompt, AttachmentsJson, InputJson, ImageError) Then
     Begin
       Fail(ImageError);
       Exit;
     End;
-  Result := Request('turn/start', CodexTurnBody(FThreadId, '', InputJson, Effort, True));
+  Result := Request('turn/start', CodexTurnBody(FThreadId, '', InputJson, Effort, True, FCompatibility.Support[ccSummary] = csSupported));
   If Result Then
     Begin
       FContent := '';
@@ -551,10 +598,39 @@ Begin
 End;
 
 Function TAssistantCodexClient.SteerInput(Const InputJson: String): Boolean;
+Var
+  Data: TJSONData;
+  I: Integer;
 Begin
+  If FCompatibility.Support[ccSteer] <> csSupported Then
+    Begin
+      FError := 'Codex steering is unavailable: ' + FCompatibility.Reason[ccSteer];
+      Exit(False);
+    End;
   Result := (FState = crsRunning) And (FTurnId <> '') And (Length(InputJson) > 1) And (InputJson[1] = '[');
   If Not Result Then Exit;
   If Length(InputJson) > CodexMaxFrameBytes - 512 Then Exit;
+  If FCompatibility.Support[ccImages] <> csSupported Then
+    Begin
+      Data := Nil;
+      Try
+        Try
+          Data := GetJSON(InputJson);
+          If Not (Data Is TJSONArray) Then Exit(False);
+          For I := 0 To Data.Count - 1 Do
+            If Not (Data.Items[I] Is TJSONObject) Or
+              (TJSONObject(Data.Items[I]).Get('type', '') <> 'text') Then
+              Begin
+                FError := 'Codex image steering is unavailable.';
+                Exit(False);
+              End;
+        Except
+          Exit(False);
+        End;
+      Finally
+        Data.Free;
+      End;
+    End;
   Result := Request('turn/steer', CodexTurnBody(FThreadId, FTurnId, InputJson, '', False));
 End;
 
@@ -619,6 +695,12 @@ Begin
     End
   Else
     Budget := 0;
+  If (Length(Refs) > 0) And (FCompatibility.Support[ccImages] <> csSupported) Then
+    Begin
+      Budget := 0;
+      Success := False;
+      Note := Note + LineEnding + 'Codex image tool results are unavailable for this runtime.';
+    End;
   Items := '[{"type":"inputText","text":' + Quote(Note) + '}';
   If Budget >= 64 Then
     For I := 0 To High(Refs) Do
@@ -849,10 +931,13 @@ Begin
     If (FPendingId = '') Or (Id <> FPendingId) Then Exit;
     If Assigned(Root.Find('error')) Then
       Begin
+        Value := Root.FindPath('error.code');
+        N := 0;
+        If Assigned(Value) And (Value.JSONType = jtNumber) Then N := Value.AsInteger;
         Value := Root.FindPath('error.message');
-        If Assigned(Value) And (Value.JSONType = jtString) Then
-          Fail('Codex: ' + Copy(Value.AsString, 1, 2048))
-        Else Fail('Codex rejected ' + FPendingMethod + '.');
+        Status := '';
+        If Assigned(Value) And (Value.JSONType = jtString) Then Status := Value.AsString;
+        Fail(CodexRequestError(FPendingMethod, N, Status));
         Exit;
       End;
     Value := Root.Find('result');
@@ -872,6 +957,12 @@ Begin
             Fail('Codex did not apply the required read-only runtime sandbox.');
             Exit;
           End;
+        Value := Params.FindPath('sandbox.networkAccess');
+        If Not Assigned(Value) Or (Value.JSONType <> jtBoolean) Or Value.AsBoolean Then
+          Begin
+            Fail('Codex did not disable runtime tool network access.');
+            Exit;
+          End;
         Value := Params.Find('thread');
         If Not (Value Is TJSONObject) Then Raise Exception.Create('Missing thread');
         FThreadId := TJSONObject(Value).Get('id', '');
@@ -886,7 +977,34 @@ Begin
             If FTurnId = '' Then Raise Exception.Create('Missing turn ID');
             FState := crsRunning;
           End
-            Else If FPendingMethod = 'model/list' Then FModels := Params.AsJSON
+            Else If FPendingMethod = 'model/list' Then
+              Begin
+                Value := Params.Find('data');
+                If Not (Value Is TJSONArray) Then Raise Exception.Create('Missing models');
+                Inc(FModelCount, Value.Count);
+                If FModelCount > 4096 Then Raise Exception.Create('Too many models');
+                For I := 0 To Value.Count - 1 Do
+                  Begin
+                    If FModelItems <> '' Then FModelItems := FModelItems + ',';
+                    FModelItems := FModelItems + Value.Items[I].AsJSON;
+                  End;
+                If Length(FModelItems) > CodexMaxQueueBytes Then Raise Exception.Create('Model list limit');
+                Value := Params.Find('nextCursor');
+                If Assigned(Value) And (Value.JSONType <> jtNull) Then
+                  Begin
+                    If Value.JSONType <> jtString Then Raise Exception.Create('Invalid model cursor');
+                    Status := Value.AsString;
+                    If (Status = '') Or (FModelCursors.Count >= 32) Or
+                      (FModelCursors.IndexOf(Status) >= 0) Then Raise Exception.Create('Repeated model cursor');
+                    FModelCursors.Add(Status);
+                    FPendingId := '';
+                    FPendingMethod := '';
+                    If Not Request('model/list', '{"includeHidden":false,"limit":100,"cursor":' + Quote(Status) + '}') Then
+                      Fail('Cannot request the next model page.');
+                    Exit;
+                  End;
+                FModels := '{"data":[' + FModelItems + '],"nextCursor":null}';
+              End
             Else If FPendingMethod = 'account/rateLimits/read' Then FRateLimits := Params.AsJSON
             Else If FPendingMethod = 'mcpServerStatus/list' Then
               Begin

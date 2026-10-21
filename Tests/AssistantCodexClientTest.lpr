@@ -1,6 +1,6 @@
 Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
+Uses cthreads, Interfaces, FileUtil, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
   {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
   AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages;
@@ -75,7 +75,7 @@ Begin
             If (Params.Get('permissions', '') <> 'lazarus_ide') Or
               Assigned(Params.Find('sandbox')) Or
               (Params.Get('modelProvider', '') <> 'openai') Then Halt(2);
-            Send('{"id":' + Id + ',"result":{"modelProvider":"openai","approvalPolicy":"on-request","sandbox":{"type":"readOnly"},"thread":{"id":"thread-1"}}}');
+            Send('{"id":' + Id + ',"result":{"modelProvider":"openai","approvalPolicy":"on-request","sandbox":{"type":"readOnly","networkAccess":false},"thread":{"id":"thread-1"}}}');
           End
         Else If Method = 'mcpServerStatus/list' Then
           Begin
@@ -86,7 +86,12 @@ Begin
               Send('{"id":' + Id + ',"result":{"data":[{"name":"codex_apps","tools":{"connector_tool":{}}}],"nextCursor":null}}')
             Else Send('{"id":' + Id + ',"result":{"data":[],"nextCursor":null}}');
           End
-        Else If Method = 'model/list' Then Send('{"id":' + Id + ',"result":{"data":[{"id":"test-model"}],"nextCursor":null}}')
+        Else If Method = 'model/list' Then
+          Begin
+            If Assigned(Data.FindPath('params.cursor')) Then
+              Send('{"id":' + Id + ',"result":{"data":[{"id":"second-model"}],"nextCursor":null}}')
+            Else Send('{"id":' + Id + ',"result":{"data":[{"id":"test-model","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}],"nextCursor":"page-two"}}');
+          End
         Else If Method = 'turn/start' Then
           Begin
             Params := TJSONObject(Obj.Find('params'));
@@ -448,36 +453,9 @@ Begin
   Check('thread queued', Client.StartThread(GetTempDir, 'test-model', '[]'));
   WaitState(crsReady);
 End;
-Procedure WriteSchemaFile(Const Directory, Relative: String; Const Fields: Array Of String; Const Omit: String);
-Var
-  Lines: TStringList;
-  I: Integer;
-  Path, Body: String;
-  First: Boolean;
-Begin
-  Body := '{"properties":{';
-  First := True;
-  For I := Low(Fields) To High(Fields) Do
-    Begin
-      If Fields[I] = Omit Then Continue;
-      If Not First Then Body := Body + ',';
-      First := False;
-      Body := Body + '"' + Fields[I] + '":{"type":"string"}';
-    End;
-  Body := Body + '}}';
-  Lines := TStringList.Create;
-  Try
-    Lines.Text := Body;
-    Path := IncludeTrailingPathDelimiter(Directory) + Relative;
-    If Not ForceDirectories(ExtractFilePath(Path)) Then Halt(1);
-    Lines.SaveToFile(Path);
-  Finally
-    Lines.Free;
-  End;
-End;
 Procedure WriteSchemaFixture;
 Var
-  Directory, Omit: String;
+  Directory, Source: String;
   I: Integer;
 Begin
   Directory := '';
@@ -485,19 +463,10 @@ Begin
     If ParamStr(I) = '--out' Then Directory := ParamStr(I + 1);
   If Directory = '' Then Halt(1);
   If GetEnvironmentVariable('LAZ_TEST_CODEX_SCHEMA') = 'fail' Then Halt(1);
-  Omit := '';
-  If GetEnvironmentVariable('LAZ_TEST_CODEX_SCHEMA') = 'missing' Then Omit := 'authUrl';
-  WriteSchemaFile(Directory, 'v2/LoginAccountParams.json', ['type'], Omit);
-  WriteSchemaFile(Directory, 'v2/LoginAccountResponse.json', ['type', 'loginId', 'authUrl'], Omit);
-  WriteSchemaFile(Directory, 'v2/GetAccountResponse.json', ['account', 'requiresOpenaiAuth'], Omit);
-  WriteSchemaFile(Directory, 'v2/ThreadStartParams.json', ['dynamicTools', 'modelProvider', 'permissions', 'approvalPolicy'], Omit);
-  WriteSchemaFile(Directory, 'v2/ThreadStartResponse.json', ['modelProvider', 'sandbox', 'approvalPolicy', 'thread'], Omit);
-  WriteSchemaFile(Directory, 'v2/TurnStartParams.json', ['threadId', 'input', 'permissions', 'summary'], Omit);
-  WriteSchemaFile(Directory, 'v2/TurnInterruptParams.json', ['threadId', 'turnId'], Omit);
-  WriteSchemaFile(Directory, 'v2/TurnSteerParams.json', ['threadId', 'expectedTurnId', 'input'], Omit);
-  WriteSchemaFile(Directory, 'DynamicToolCallParams.json', ['threadId', 'turnId', 'callId', 'tool', 'arguments'], Omit);
-  WriteSchemaFile(Directory, 'DynamicToolCallResponse.json', ['contentItems', 'success'], Omit);
-  WriteSchemaFile(Directory, 'v2/AgentMessageDeltaNotification.json', ['threadId', 'turnId', 'itemId', 'delta'], Omit);
+  Source := ExtractFilePath(ExpandFileName(ParamStr(0))) + 'codex-schema-fixtures';
+  If Not CopyDirTree(Source, Directory, [cffCreateDestDirectory]) Then Halt(1);
+  If GetEnvironmentVariable('LAZ_TEST_CODEX_SCHEMA') = 'missing' Then
+    DeleteFile(IncludeTrailingPathDelimiter(Directory) + 'v2/LoginAccountResponse.json');
 End;
 {$IFDEF UNIX}
 Function PaddedCodexRuntime: String;
@@ -575,6 +544,8 @@ Begin
       Halt;
     End;
   If ParamCount > 0 Then Begin FakeRuntime; Halt; End;
+  Check('copy schema fixtures', CopyDirTree(ExtractFilePath(CodexFixturePath) + 'CodexSchema',
+    ExtractFilePath(ExpandFileName(ParamStr(0))) + 'codex-schema-fixtures', [cffCreateDestDirectory, cffOverwriteFile]));
   TestDynamicTools;
   TestTurnStartBody;
   Client := TAssistantCodexClient.Create(500);
@@ -588,18 +559,31 @@ Begin
         (Not CodexVersionIsRelease('codex-cli 0.160')) And (Not CodexVersionIsRelease('codex-cli 0.160.0 ')));
       CodexProfileEnvironment(GetTempDir, VersionEnv);
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.154.0-alpha.6.1';
-      Check('alpha runtime remains rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
-        And (Pos('not a release build', Client.LastError) > 0) And (Pos('0.154.0-alpha.6.1', Client.LastError) > 0));
+      Check('compatible alpha runtime connects: ' + Client.LastError, Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
       ClearCodexQualificationCache;
       VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := 'missing';
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.160.0';
-      Check('schema missing authUrl rejected', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv)
-        And (Pos('authUrl', Client.LastError) > 0) And (Pos('LoginAccountResponse.json', Client.LastError) > 0));
+      Check('missing login schema preserves execution', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Check('missing login schema disables browser login', Client.Compatibility.Support[ccLogin] = csUnsupported);
+      Client.Disconnect;
       ClearCodexQualificationCache;
       VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := '';
       VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex-cli 0.160.0';
       Check('current release connects', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
       Client.Disconnect;
+      ClearCodexQualificationCache;
+      VersionEnv.Values['LAZ_TEST_CODEX_VERSION'] := 'codex future build';
+      Check('unrecognized version remains informational', Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Client.Disconnect;
+      ClearCodexQualificationCache;
+      VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := 'fail';
+      Check('missing schema blocks execution', Not Client.Connect(ParamStr(0), GetTempDir, VersionEnv));
+      Check('missing schema permits stable account handshake', Client.Connect(ParamStr(0), GetTempDir, VersionEnv, True));
+      WaitState(crsReady);
+      Check('account-only mode cannot start thread', Not Client.StartThread(GetTempDir, 'test-model', '[]'));
+      Client.Disconnect;
+      VersionEnv.Values['LAZ_TEST_CODEX_SCHEMA'] := '';
       {$IFDEF UNIX}
       ClearCodexQualificationCache;
       CheckLargeRuntime;
@@ -617,6 +601,10 @@ Begin
     Deadline := GetTickCount64 + 3000;
     Repeat Client.Pump; Sleep(1); Until (Client.ModelsJson <> '') Or (GetTickCount64 > Deadline);
     Check('model discovery received', Pos('test-model', Client.ModelsJson) > 0);
+    Check('all model pages received', Pos('second-model', Client.ModelsJson) > 0);
+    Check('current model and effort accepted', CodexModelSelectionValid(Client.ModelsJson, 'test-model', 'high'));
+    Check('stale model rejected', Not CodexModelSelectionValid(Client.ModelsJson, 'removed-model', ''));
+    Check('stale effort rejected', Not CodexModelSelectionValid(Client.ModelsJson, 'test-model', 'removed-effort'));
     Check('turn queued', Client.StartTurn('normal', 'high'));
     WaitState(crsRunning);
     Deadline := GetTickCount64 + 3000;

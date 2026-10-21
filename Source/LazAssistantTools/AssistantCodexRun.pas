@@ -306,7 +306,7 @@ Begin
           Env := TStringList.Create;
           CodexProfileEnvironment(FProfile, Env);
         End;
-      If Not Client.Connect(FExecutable, RunDirectory, Env) Then
+      If Not Client.Connect(FExecutable, RunDirectory, Env, False, @Cancelled) Then
         Begin
           Publish(Client);
           Exit;
@@ -361,8 +361,14 @@ Begin
           End;
         If (Stage = 0) And (Client.State = crsReady) Then
           Begin
-            If Client.CheckToolIsolation Then Stage := 3;
+            If Client.ListModels Then Stage := 4;
           End
+            Else If (Stage = 4) And (Client.ModelsJson <> '') Then
+              Begin
+                If Not CodexModelSelectionValid(Client.ModelsJson, FModel, FEffort) Then
+                  Client.CancelConnection('Codex selected model or reasoning effort is no longer available. Check this connection and select an available model and effort.')
+                Else If Client.CheckToolIsolation Then Stage := 3;
+              End
             Else If (Stage = 3) And Client.ToolIsolationChecked Then
               Begin
                 If Client.StartThread(RunDirectory, FModel, FToolsJson, FDeveloperInstructions) Then Stage := 1;

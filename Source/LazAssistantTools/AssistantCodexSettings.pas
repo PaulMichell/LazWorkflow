@@ -250,6 +250,7 @@ Procedure TCodexConnectionFrame.StartCheck(Sender: TObject);
 Begin
   If Assigned(Job) Then Exit;
   RuntimeEdit.Text := Trim(RuntimeEdit.Text);
+  RuntimeEdit.Text := ResolveCodexExecutable(RuntimeEdit.Text);
   If Not FileIsExecutable(RuntimeEdit.Text) Then
     Begin
       ConnectionStatus.Caption := 'The saved Codex path is missing or is not executable. An extension update may have moved it. Use Auto-detect or Browse, then check again.';
@@ -446,6 +447,10 @@ Begin
   End;
   If ModelCombo.Items.Count > 0 Then ConnectionStatus.Caption := 'Signed in with ChatGPT. Available allowance is checked when you send a request.'
   Else ConnectionStatus.Caption := 'Signed in, but no available models were discovered.';
+  If Value.CompatibilityNote <> '' Then
+    ConnectionStatus.Caption := 'Signed in. ' + Value.CompatibilityNote;
+  If Value.RuntimeVersion <> '' Then
+    ConnectionStatus.Caption := ConnectionStatus.Caption + ' (' + Value.RuntimeVersion + ')';
 End;
 
 Procedure TCodexConnectionFrame.DeleteProfile(Sender: TObject);
@@ -537,7 +542,7 @@ Begin
   ConnectionStatus.Caption := 'Sign in or check this connection. Other connections stay signed in.';
   If Not FileIsExecutable(RuntimeEdit.Text) Then
     Begin
-      DetectRuntime(Nil);
+      RuntimeEdit.Text := ResolveCodexExecutable(RuntimeEdit.Text);
       If (Trim(Runtime) <> '') And (RuntimeEdit.Text <> Trim(Runtime)) Then
         ConnectionStatus.Caption := 'The saved executable is no longer available. Found the installed Codex; check this connection, then press OK to save its new path.';
     End;

@@ -114,7 +114,7 @@ Begin
       Client := TAssistantCodexClient.Create(60000);
       Env := TStringList.Create;
       CodexProfileEnvironment(ProfileDir, Env);
-      If Not Client.Connect(Executable, ProfileDir, Env) Then
+      If Not Client.Connect(Executable, ProfileDir, Env, True) Then
         Begin
           ErrorText := Client.LastError;
           If ErrorText = '' Then

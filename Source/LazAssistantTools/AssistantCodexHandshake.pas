@@ -24,7 +24,7 @@ Type
     FBuffer, FLastError, FLoginId, FLoginUrl, FUserCode: String;
     FOutgoing: TStringList;
     FNextId, FInitializeId, FAccountId, FLoginRequestId: Int64;
-    FAlternateLoginTried: Boolean;
+    FAlternateLoginTried, FDeviceLoginAllowed: Boolean;
     Function Request(Const Method, Params: String): Int64;
     Procedure RemoveQueuedRequest(Id: Int64);
     Procedure CheckAccount;
@@ -39,24 +39,24 @@ Type
     { Caller writes each returned JSONL frame once to the private stdio channel. }
     Function TakeOutgoing(Out Frame: String): Boolean;
     { Explicit user action only. Runtime owns browser OAuth and token refresh. }
-    Procedure StartChatGPTLogin;
+    Procedure StartChatGPTLogin(BrowserAllowed: Boolean = True; DeviceAllowed: Boolean = True);
     Property State: TCodexConnectionState Read FState;
     Property LastError: String Read FLastError;
     Property LoginUrl: String Read FLoginUrl;
     Property UserCode: String Read FUserCode;
   End;
   { Pass arguments directly to TProcess, never through a shell. }
-Procedure CodexSubscriptionArguments(Args: TStrings);
+Procedure CodexSubscriptionArguments(Args: TStrings; Execution: Boolean = True);
 
 Implementation
 
 Uses
-  fpjson, jsonparser, StrUtils, AssistantProtocol;
+  fpjson, jsonparser, StrUtils, AssistantProtocol, AssistantCodexDiagnostics;
 
 Const
   MaxCodexFrameBytes = 1048576;
 
-Procedure CodexSubscriptionArguments(Args: TStrings);
+Procedure CodexSubscriptionArguments(Args: TStrings; Execution: Boolean);
 Begin
   Args.Clear;
   Args.Add('-c');
@@ -69,10 +69,13 @@ Begin
   Args.Add('features.apps=false');
   { Define the broker-only filesystem profile on every launch so existing
     managed profiles need no migration or renewed sign-in. }
-  Args.Add('-c');
-  Args.Add('permissions.lazarus_ide.filesystem={":minimal"="read"}');
-  Args.Add('-c');
-  Args.Add('permissions.lazarus_ide.network.enabled=false');
+  If Execution Then
+    Begin
+      Args.Add('-c');
+      Args.Add('permissions.lazarus_ide.filesystem={":minimal"="read"}');
+      Args.Add('-c');
+      Args.Add('permissions.lazarus_ide.network.enabled=false');
+    End;
   Args.Add('app-server');
   Args.Add('--listen');
   Args.Add('stdio://');
@@ -126,9 +129,13 @@ Begin
     Raise Exception.Create('Close the existing Codex connection before restarting.');
   FLastError := '';
   FState := ccsInitializing;
-  FInitializeId := Request('initialize',
-    '{"clientInfo":{"name":"lazworkflow","title":"Lazarus Project Assistant","version":"0.1.0"},' +
-    '"capabilities":{"experimentalApi":' + LowerCase(BoolToStr(ExperimentalTools, True)) + '}}');
+  If ExperimentalTools Then
+    FInitializeId := Request('initialize',
+      '{"clientInfo":{"name":"lazworkflow","title":"Lazarus Project Assistant","version":"0.1.0"},' +
+      '"capabilities":{"experimentalApi":true}}')
+  Else
+    FInitializeId := Request('initialize',
+      '{"clientInfo":{"name":"lazworkflow","title":"Lazarus Project Assistant","version":"0.1.0"}}');
 End;
 
 Procedure TAssistantCodexHandshake.RemoveQueuedRequest(Id: Int64);
@@ -162,7 +169,7 @@ Begin
   FAccountId := Request('account/read', '{"refreshToken":false}');
 End;
 
-Procedure TAssistantCodexHandshake.StartChatGPTLogin;
+Procedure TAssistantCodexHandshake.StartChatGPTLogin(BrowserAllowed: Boolean; DeviceAllowed: Boolean);
 Begin
   If FState <> ccsNeedsSignIn Then
     Raise Exception.Create('ChatGPT sign-in is not available in the current connection state.');
@@ -171,10 +178,22 @@ Begin
   FUserCode := '';
   FAlternateLoginTried := False;
   FLastError := '';
+  FDeviceLoginAllowed := DeviceAllowed;
+  If Not BrowserAllowed And Not DeviceAllowed Then
+    Begin
+      Fail('Codex has no supported ChatGPT sign-in flow.');
+      Exit;
+    End;
   FState := ccsSigningIn;
   { Browser login is the normal ChatGPT page. Device code is only a fallback:
     a workspace can disable it, and that page then has nowhere to enter a code. }
-  FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}');
+  If BrowserAllowed Then
+    FLoginRequestId := Request('account/login/start', '{"type":"chatgpt"}')
+  Else
+    Begin
+      FAlternateLoginTried := True;
+      FLoginRequestId := Request('account/login/start', '{"type":"chatgptDeviceCode"}');
+    End;
 End;
 
 Function TAssistantCodexHandshake.TakeOutgoing(Out Frame: String): Boolean;
@@ -191,7 +210,8 @@ Var
   Data, Node, Account, Value: TJSONData;
   Root, Params: TJSONObject;
   Id: Int64;
-  Method, Kind, Url: String;
+  Method, Kind, Url, ErrorMessage: String;
+  ErrorCode: Int64;
 Begin
   Data := GetJSON(Line);
   Try
@@ -253,13 +273,24 @@ Begin
       (Id <> FLoginRequestId)) Then Exit;
     If Assigned(Root.Find('error')) Then
       Begin
-        If (Id = FLoginRequestId) And Not FAlternateLoginTried Then
+        Value := Root.FindPath('error.code');
+        ErrorCode := 0;
+        If Assigned(Value) And (Value.JSONType = jtNumber) Then ErrorCode := Value.AsInt64;
+        Value := Root.FindPath('error.message');
+        ErrorMessage := '';
+        If Assigned(Value) And (Value.JSONType = jtString) Then ErrorMessage := Value.AsString;
+        If (Id = FLoginRequestId) And Not FAlternateLoginTried And FDeviceLoginAllowed And
+          (ErrorCode = -32602) And ((Pos('unsupported', LowerCase(ErrorMessage)) > 0) Or
+          (Pos('unknown variant', LowerCase(ErrorMessage)) > 0)) Then
           Begin
             FAlternateLoginTried := True;
             FLoginRequestId := Request('account/login/start', '{"type":"chatgptDeviceCode"}');
             Exit;
           End;
-        Fail('Codex rejected the connection/account request. No metered fallback was attempted.');
+        If Id = FInitializeId Then Method := 'initialize'
+        Else If Id = FAccountId Then Method := 'account/read'
+        Else Method := 'account/login/start';
+        Fail(CodexRequestError(Method, ErrorCode, ErrorMessage));
         Exit;
       End;
     Value := Root.Find('result');

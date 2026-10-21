@@ -17,6 +17,7 @@ Type
     Done: Boolean;
     State: TCodexConnectionState;
     LoginUrl, UserCode, ModelsJson, ErrorText: String;
+    RuntimeVersion, CompatibilityNote: String;
   End;
   TAssistantCodexAccount = Class(TThread)
   Private
@@ -25,6 +26,7 @@ Type
     FLogin: Boolean;
     FCancelled: LongInt;
     FSnapshot: TCodexAccountSnapshot;
+    Function IsCancelled: Boolean;
   Protected
     Procedure Execute; Override;
   Public
@@ -37,7 +39,7 @@ Type
 Implementation
 
 Uses
-  AssistantCodexClient, AssistantCodexProfile;
+  AssistantCodexClient, AssistantCodexProfile, AssistantCodexQualification;
 
 Constructor TAssistantCodexAccount.Create(Const Executable, ProfileDir: String; Login: Boolean);
 Begin
@@ -54,6 +56,11 @@ Destructor TAssistantCodexAccount.Destroy;
 Begin
   Inherited Destroy;
   DoneCriticalSection(FLock);
+End;
+
+Function TAssistantCodexAccount.IsCancelled: Boolean;
+Begin
+  Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
 End;
 
 Procedure TAssistantCodexAccount.Cancel;
@@ -89,11 +96,14 @@ Begin
       Client := TAssistantCodexClient.Create(60000);
       Env := TStringList.Create;
       CodexProfileEnvironment(FProfile, Env);
-      If Not Client.Connect(FExecutable, FProfile, Env) Then
+      If Not Client.Connect(FExecutable, FProfile, Env, True, @IsCancelled) Then
         Begin
           Value.ErrorText := Client.LastError;
           Exit;
         End;
+      Value.RuntimeVersion := Client.Compatibility.Version;
+      If Client.Compatibility.Support[ccRun] <> csSupported Then
+        Value.CompatibilityNote := 'IDE execution unavailable: ' + Client.Compatibility.Reason[ccRun];
       Deadline := GetTickCount64 + 300000;
       LoginStarted := False;
       ModelsRequested := False;
@@ -114,7 +124,14 @@ Begin
             LoginStarted := True;
           End;
         If (Value.State = ccsSubscriptionAuthenticated) And Not ModelsRequested Then
-          ModelsRequested := Client.ListModels;
+          Begin
+            If Client.Compatibility.Support[ccModels] = csUnsupported Then
+              Begin
+                Value.CompatibilityNote := 'Model discovery unavailable: ' + Client.Compatibility.Reason[ccModels];
+                Break;
+              End;
+            ModelsRequested := Client.ListModels;
+          End;
         EnterCriticalSection(FLock);
         Try
           FSnapshot := Value;

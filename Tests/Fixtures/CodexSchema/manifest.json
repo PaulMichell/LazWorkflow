@@ -1,0 +1,94 @@
+{
+  "runtime": "codex-cli 0.162.0-alpha.17.2",
+  "description": "Generated local schemas; bundle-only types extracted with local reference definitions. No credentials.",
+  "files": {
+    "CommandExecutionRequestApprovalResponse.json": {
+      "source_sha256": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7",
+      "fixture_sha256": "553d1785042d31a7d4cef0ca21dff0db067992f4380652c6da793e09b58483fe"
+    },
+    "DynamicToolCallParams.json": {
+      "source_sha256": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc",
+      "fixture_sha256": "5cdd0a8ce9e50224f61ee098a722618642e7071d89250f4caaa65dd18653616c"
+    },
+    "DynamicToolCallResponse.json": {
+      "source_sha256": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02",
+      "fixture_sha256": "eec5e3cdc94b5d3177748de55f11fad4c03e6f3d3c5056b95045b8359e1f408a"
+    },
+    "FileChangeRequestApprovalResponse.json": {
+      "source_sha256": "b95b03ee6be674e25cee2e863cc135a28620e1070addd2f34685aadee27cde08",
+      "fixture_sha256": "99ffeca573e71bfaf8b7429e0db9369b82df75502fc0684a4b6ad3f67905163f"
+    },
+    "InitializeParams.json": {
+      "source_sha256": "de869a65e1b8153a3d306ac82c7e8d4b8b0d52387f51df5d409922203502324e",
+      "fixture_sha256": "81d83987f2e785169ecf66f08f028fae5b57ac2862bc8567a2ce6af651d0a8e4"
+    },
+    "PermissionsRequestApprovalResponse.json": {
+      "source_sha256": "23f3f24e9dbf35db3e0b85703f0d934da5a1cff3cbb611fba8bcd41f3b4a04b0",
+      "fixture_sha256": "0b92cf69a3fae3c4f33794ac3436a798184000fb9ae182b0b23b406ce805b8d8"
+    },
+    "v2/AgentMessageDeltaNotification.json": {
+      "source_sha256": "996e6c0ea65e57bed5a00f410b94381fe5ebf804333e5d00c2b6e6d47e5c55f6",
+      "fixture_sha256": "ddd87e04a01b837cbdb9488ebd51f7a48ac786b4f90d65765f3c3fe08944c86a"
+    },
+    "v2/GetAccountParams.json": {
+      "source_sha256": "30b545275f60975b55bd6fbaafd70f15505801d14168ee82d3931b6e93c78aab",
+      "fixture_sha256": "46ec5f6ed955eb6c03056fea6f28b902710bf3e1dce7a71ab1f9542122e2223e"
+    },
+    "v2/GetAccountRateLimitsResponse.json": {
+      "source_sha256": "cb9655e68130116f634ed9353e45b336492e6069a6628f424d1cd52e54eda0e0",
+      "fixture_sha256": "0f1694de8fa13fc703cb1c573f3314e86657c422e338588bff15e33a7de1e190"
+    },
+    "v2/GetAccountResponse.json": {
+      "source_sha256": "67ac3095b058a7d3c1627ff4dd9e52c8ee3c55f961cb1b980959ac15336d6827",
+      "fixture_sha256": "e2b23e3827ee8f55c0bdf75423d4093ac4e733794e76bddff76e4ccd6612e210"
+    },
+    "v2/ListMcpServerStatusParams.json": {
+      "source_sha256": "30b978c6502b37c9f0002aeba241f41c91d4c6adf0f92d89242b62ffde415a2d",
+      "fixture_sha256": "c19702fda3a2d5a34284f21e5a46e5bb94ccb77249812a346272273b60b3c74c"
+    },
+    "v2/ListMcpServerStatusResponse.json": {
+      "source_sha256": "00c56c0faacbd4950b7f446f20b11b8a95456c5108de2f1e7366a1b2e60db8c6",
+      "fixture_sha256": "b328308a42c685d6c0d9b6ca4024d60cd1a884cabda4b7a1bc44bc5e14539dab"
+    },
+    "v2/LoginAccountParams.json": {
+      "source_sha256": "48fb9bea54d7e0890052653ac06737efb3200ba2261515b2c4014027f36bea3d",
+      "fixture_sha256": "3e5c0fa0872bacea670c59754cc83860249413b52761fb816654c638827d0c94"
+    },
+    "v2/LoginAccountResponse.json": {
+      "source_sha256": "72e6d77f49bc5809c3af50f183e2a0862dd8f7836816d4796ff69bb13eae0e89",
+      "fixture_sha256": "30acf43ac516fedf3c58baf7ef98c923c74357c1f3f337cb2981ee7959127faa"
+    },
+    "v2/ModelListParams.json": {
+      "source_sha256": "de29a536c00a5b8f46f34dba417dabd93365305571a8ed200e33bea85db68b5a",
+      "fixture_sha256": "cc13f3c7539c64a19015576a661179ed72c7de79bb2520b23c4893e2e58dfb4a"
+    },
+    "v2/ModelListResponse.json": {
+      "source_sha256": "2fb387a2ed258fc74258828ea342d68f89ce4e8e22cd0329ca59d2b423f9108b",
+      "fixture_sha256": "088bc252b5781ad9a94848f712785ffb997a891775c147f01b36204422bf7d57"
+    },
+    "v2/ThreadStartParams.json": {
+      "source_sha256": "80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de",
+      "fixture_sha256": "9c2f9cad8486de01ee052b512315d2779ec8d72a0dda28d6cf4256c72682cec3"
+    },
+    "v2/ThreadStartResponse.json": {
+      "source_sha256": "b655cd7e620307ca7fe7943a5a0ef4d24ae07df848e7d63d1649ea6c7ff7ba88",
+      "fixture_sha256": "f0c4dcc4da6c2deeb677f74609884246a838a816530d37983ed17b9c590eb655"
+    },
+    "v2/TurnCompletedNotification.json": {
+      "source_sha256": "756017d04296be2f4fb02853fcf1385e7a63c60d9f8d84c04993b9b0638bae40",
+      "fixture_sha256": "b2ffab612c1661955687f08e654625e2a2681fa50fffccd2e127113f95c155f1"
+    },
+    "v2/TurnInterruptParams.json": {
+      "source_sha256": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b",
+      "fixture_sha256": "d0e0909fe178be5ce13bfb5df761722dc798ecd0a17b40e7f3158854da2e4547"
+    },
+    "v2/TurnStartParams.json": {
+      "source_sha256": "062373a7dfc290b506e591bc5c2a35005211df27b3c60358cee3efed12859062",
+      "fixture_sha256": "56d0ed8ea3ac97e18c3849a68664a0e7357716269fe7a52bdce6781846b4a21b"
+    },
+    "v2/TurnSteerParams.json": {
+      "source_sha256": "99f7fdff8b090065b68f36420b70870b5eafed048c024b308230aaa02f15d891",
+      "fixture_sha256": "5fe3060ff220e247767fcac0c6544717669f9c6d54c6114de6e7009f55efd86d"
+    }
+  }
+}
