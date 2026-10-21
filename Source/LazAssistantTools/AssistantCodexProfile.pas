@@ -20,6 +20,8 @@ Function CodexProfilePathIsDerived(Const ProfileDir: String): Boolean;
 /// Delete that directory only. Does not create it, and refuses every other path.
 Function DeleteCodexProfileDirectory(Const ProfileDir: String; Out ErrorText: String): Boolean;
 Function FindCodexExecutable: String;
+Function ResolveCodexExecutable(Const SavedPath: String): String;
+Function CompareCodexExtensionVersions(Const Left, Right: String): Integer;
 
 Implementation
 
@@ -171,29 +173,80 @@ Begin
     Result := True;
 End;
 
-Function FindCodexExecutable: String;
+Function CompareCodexExtensionVersions(Const Left, Right: String): Integer;
 Var
-  Root, Candidate, BestName: String;
+  L, R, A, B: String;
+  I, J: Integer;
+  Function Number(Var Text: String): String;
+  Begin
+    While (Text <> '') And Not (Text[1] In ['0'..'9']) Do Delete(Text, 1, 1);
+    Result := '';
+    While (Text <> '') And (Text[1] In ['0'..'9']) Do
+      Begin
+        Result := Result + Text[1];
+        Delete(Text, 1, 1);
+      End;
+    While (Length(Result) > 1) And (Result[1] = '0') Do Delete(Result, 1, 1);
+  End;
+Begin
+  L := Left;
+  R := Right;
+  For I := 1 To 3 Do
+    Begin
+      A := Number(L);
+      B := Number(R);
+      J := Length(A) - Length(B);
+      If J <> 0 Then Exit(J);
+      J := CompareStr(A, B);
+      If J <> 0 Then Exit(J);
+    End;
+  Result := 0;
+End;
+
+Function FindCodexExecutable: String;
+Const
+  Roots: Array[0..2] Of String = ('.vscode/extensions/', '.vscode-insiders/extensions/', '.cursor/extensions/');
+Var
+  Root, Relative, Candidate, BestName: String;
   Search: TDirectoryScan;
 Begin
   Result := FindDefaultExecutablePath('codex');
   If Result <> '' Then Exit;
-  Root := IncludeTrailingPathDelimiter(GetUserDir) + '.vscode/extensions/';
   BestName := '';
-  If StartDirectoryScan(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Exit;
-  Try
-    Repeat
-      Candidate := Root + Search.Name + '/bin/linux-x86_64/codex';
-      { Later extension directories sort after older builds. Prefer the newest
-        executable so a leftover alpha is not selected ahead of the current one. }
-      If FileIsExecutable(Candidate) And ((BestName = '') Or (Search.Name > BestName)) Then
-        Begin
-          BestName := Search.Name;
-          Result := Candidate;
-        End;
-    Until AdvanceDirectoryScan(Search) <> 0;
-  Finally
-    CloseDirectoryScan(Search);
-  End;
+  For Relative In Roots Do
+    Begin
+      Root := IncludeTrailingPathDelimiter(GetUserDir) + Relative;
+      If StartDirectoryScan(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Continue;
+      Try
+        Repeat
+          Candidate := Root + Search.Name + '/bin/linux-x86_64/codex';
+          If FileIsExecutable(Candidate) And ((BestName = '') Or
+            (CompareCodexExtensionVersions(Search.Name, BestName) > 0)) Then
+            Begin
+              BestName := Search.Name;
+              Result := Candidate;
+            End;
+        Until AdvanceDirectoryScan(Search) <> 0;
+      Finally
+        CloseDirectoryScan(Search);
+      End;
+    End;
+End;
+
+Function ResolveCodexExecutable(Const SavedPath: String): String;
+Var
+  Path, Root: String;
+Begin
+  Result := Trim(SavedPath);
+  If FileIsExecutable(Result) Then Exit;
+  If Result = '' Then Exit(FindCodexExecutable);
+  Path := ExpandFileName(Result);
+  Root := IncludeTrailingPathDelimiter(GetUserDir);
+  { Only extension-managed paths migrate automatically. A missing custom
+    executable remains an error, never a silent change of runtime. }
+  If ((Pos(Root + '.vscode/extensions/openai.chatgpt-', Path) = 1) Or
+    (Pos(Root + '.vscode-insiders/extensions/openai.chatgpt-', Path) = 1) Or
+    (Pos(Root + '.cursor/extensions/openai.chatgpt-', Path) = 1)) And
+    (ExtractFileName(Path) = 'codex') Then Result := FindCodexExecutable;
 End;
 End.
