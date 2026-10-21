@@ -32,6 +32,7 @@ import computing.michell.monitor.protocol.decodeTurnRequest
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeInsertResult
+import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.encodeTurnData
 import computing.michell.monitor.protocol.statusToJson
@@ -404,10 +405,106 @@ class MonitorCoordinatorTest {
     assertEquals(listOf("img-1"), imageRequests(snapshotWithImage(coordinator, "img-1")))
     assertTrue(coordinator.inFlightImageKeys.any { it.startsWith("1:") })
   }
+
+  @Test
+  fun historyPrefixDoesNotAcknowledgeAPendingPrompt() {
+    val coordinator = coordinator()
+    val older = promptTurn(1, "hist", "hello world", "old-user")
+    val live = WireTurn(-2, "live", "build", "", "", "")
+    rememberTurn(coordinator, older, live)
+    assertEquals("hello world", coordinator.state.history[1]?.blocks?.single()?.body)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+    postSnapshot(coordinator, catalogueSnapshot(listOf(older), live))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+    val prefix = WireTurn(
+      -2, "live", "build", "", "hello world", "",
+      prompt = "hello world",
+      blocks = listOf(userBlock("new-prefix", "hello world"))
+    )
+    postSnapshot(coordinator, catalogueSnapshot(listOf(older), prefix))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+  }
+
+  @Test
+  fun repeatedPromptWaitsForANewLiveBlock() {
+    val coordinator = coordinator()
+    val older = promptTurn(1, "hist", "hello", "old-user")
+    val live = WireTurn(
+      -2, "shown", "build", "", "hello", "",
+      prompt = "hello",
+      blocks = listOf(userBlock("old-user", "hello"))
+    )
+    rememberTurn(coordinator, older, live)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    postSnapshot(coordinator, catalogueSnapshot(listOf(older), live))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+    val echoed = WireTurn(
+      -2, "live", "build", "", "hello", "",
+      prompt = "hello",
+      blocks = listOf(userBlock("echo-user", " hello "))
+    )
+    postSnapshot(coordinator, catalogueSnapshot(listOf(older), echoed))
+    assertEquals("", coordinator.state.pendingPrompt)
+  }
+
+  @Test
+  fun errorAndRejectionDoNotCountAsThePromptShown() {
+    val coordinator = coordinator()
+    val older = promptTurn(1, "hist", "hello world", "old-user")
+    val live = WireTurn(-2, "live", "build", "", "", "")
+    rememberTurn(coordinator, older, live)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    val commandId = coordinator.state.pendingCommandId
+    coordinator.onEvent(MonitorEvent.Incoming(
+      coordinator.state,
+      envelope(encodeError("err", "command", "hello", commandId))
+    ))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+    coordinator.onEvent(MonitorEvent.Incoming(
+      coordinator.state,
+      envelope(encodeRejected("rej", "busy", 1, 1))
+    ))
+    assertEquals("hello", coordinator.state.pendingPrompt)
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {
   return MonitorCoordinator(FakeSession(), FixedClock(1_000L), FixedDisplay(true, true))
+}
+
+private fun userBlock(id: String, body: String, kind: String = "user"): WireBlock {
+  return WireBlock(kind, id, "", "", "", body, false, true, 0, emptyList())
+}
+
+private fun promptTurn(index: Int, id: String, body: String, blockId: String): WireTurn {
+  return WireTurn(index, id, "build", "", body, "", prompt = body, blocks = listOf(userBlock(blockId, body)))
+}
+
+private fun catalogueSnapshot(stored: List<WireTurn>, live: WireTurn?): WireSnapshot {
+  return WireSnapshot(
+    emptyView().copy(canSend = true, signedIn = true),
+    stored,
+    live,
+    "",
+    "",
+    false,
+    emptyList(),
+    emptyList(),
+    ApprovalNotice(false, "", "", "", "", false)
+  )
+}
+
+private fun postSnapshot(coordinator: MonitorCoordinator, snapshot: WireSnapshot) {
+  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot))))
+}
+
+private fun rememberTurn(coordinator: MonitorCoordinator, turn: WireTurn, live: WireTurn) {
+  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData("td", turn))))
+  postSnapshot(coordinator, catalogueSnapshot(listOf(turn), live))
 }
 
 private fun openLive(

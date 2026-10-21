@@ -3,8 +3,9 @@ package computing.michell.monitor.ui
 /* Android shell for the monitor catalogue (c) 2026 Michell Computing.
 
    Size note: exceeds the 1000 line preference. Catalogue events live in
-   MonitorCoordinator. What remains is speech, preferences, bitmap decode,
-   and effect execution. Reviewed 2026-10-21. */
+   MonitorCoordinator. Prompt acknowledgement lives in PromptAcknowledgement.
+   What remains is speech, preferences, bitmap decode, and effect execution.
+   Reviewed 2026-10-21. */
 
 import android.Manifest
 import android.app.Application
@@ -119,6 +120,7 @@ data class MonitorUi(
   val pendingKind: String = "",
   val pendingCommandId: String = "",
   val pendingEpoch: Int = 0,
+  val promptBaseline: Set<String> = emptySet(),
   val activityStartedMs: Long = 0,
   val activityObservedMs: Int = 0,
   val hostGeneration: Int = 0,
@@ -200,18 +202,6 @@ const val NothingRunningToSteer = "Nothing is running to steer."
 
 fun clearRemoteActions(view: WireView): WireView {
   return view.copy(busy = false, sending = false, canSend = false, canSteer = false, canStop = false, planRunning = false)
-}
-
-fun promptShown(state: MonitorUi, text: String): Boolean {
-  val wanted = text.trim()
-  if (wanted.isEmpty()) return true
-  if (state.live?.prompt?.trim()?.startsWith(wanted) == true) return true
-  val turns = listOfNotNull(state.live) + state.history.values
-  return turns.any { turn ->
-    displayBlocks(turn).any { block ->
-      (block.kind == "user" || block.kind == "steer") && block.body.trim().startsWith(wanted)
-    }
-  }
 }
 
 fun runtimeCaption(view: WireView): String {
@@ -319,6 +309,7 @@ fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, com
     pendingKind = if (steer) "steer" else "user",
     pendingCommandId = commandId,
     pendingEpoch = state.pendingEpoch + 1,
+    promptBaseline = promptBaselineOf(state.live),
     activityStartedMs = if (state.activityStartedMs > 0L) state.activityStartedMs else nowMs,
     banner = "",
     view = state.view.copy(
@@ -342,7 +333,8 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
     current.conversationGeneration == next.conversationGeneration &&
     current.connectionGeneration == next.connectionGeneration
   val mergedLive = mergeLiveTurn(current.live, next.live, sameGeneration)
-  val merged = next.copy(live = mergedLive, history = history)
+  val baseline = current.promptBaseline
+  val merged = next.copy(live = mergedLive, history = history, promptBaseline = baseline)
   val shown = promptShown(merged, current.pendingPrompt)
   val pendingLeft = !shown && current.pendingPrompt.isNotEmpty()
   val blocks = displayBlocks(mergedLive)
@@ -363,6 +355,7 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
     pendingPrompt = if (shown) "" else current.pendingPrompt,
     pendingKind = if (shown) "" else current.pendingKind,
     pendingEpoch = maxOf(current.pendingEpoch, next.pendingEpoch),
+    promptBaseline = if (shown) emptySet() else baseline,
     activityStartedMs = start,
     activityObservedMs = if (running && observed > 0) observed else if (running) current.activityObservedMs else 0
   )

@@ -278,6 +278,7 @@ class MonitorCoordinator(
       pendingKind = submitted.pendingKind,
       pendingCommandId = submitted.pendingCommandId,
       pendingEpoch = submitted.pendingEpoch,
+      promptBaseline = submitted.promptBaseline,
       view = submitted.view,
       activityStartedMs = submitted.activityStartedMs,
       rescueSteer = false
@@ -304,6 +305,7 @@ class MonitorCoordinator(
       pendingPrompt = "",
       pendingKind = "",
       pendingCommandId = "",
+      promptBaseline = emptySet(),
       banner = CouldNotSendBanner,
       view = view,
       activityStartedMs = retryActivityMs
@@ -314,6 +316,7 @@ class MonitorCoordinator(
       pendingPrompt = "",
       pendingKind = "",
       pendingCommandId = "",
+      promptBaseline = emptySet(),
       banner = CouldNotSendBanner,
       view = view,
       activityStartedMs = retryActivityMs
@@ -325,7 +328,13 @@ class MonitorCoordinator(
     if (state.pendingPrompt.isEmpty()) return state
     val text = state.draft.ifEmpty { state.pendingPrompt }
     if (text.isEmpty()) return state
-    return state.copy(draft = text, pendingPrompt = "", pendingKind = "", pendingCommandId = "")
+    return state.copy(
+      draft = text,
+      pendingPrompt = "",
+      pendingKind = "",
+      pendingCommandId = "",
+      promptBaseline = emptySet()
+    )
   }
 
   private fun acceptNullLive(current: MonitorUi, snapshot: WireSnapshot): List<MonitorEffect> {
