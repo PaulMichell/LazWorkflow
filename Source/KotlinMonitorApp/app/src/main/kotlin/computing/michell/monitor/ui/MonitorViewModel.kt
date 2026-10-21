@@ -1,6 +1,10 @@
 package computing.michell.monitor.ui
 
-/* Reduces the monitor catalogue into one screen state (c) 2026 Michell Computing. */
+/* Android shell for the monitor catalogue (c) 2026 Michell Computing.
+
+   Size note: exceeds the 1000 line preference. Catalogue events live in
+   MonitorCoordinator. What remains is speech, preferences, bitmap decode,
+   and effect execution. Reviewed 2026-10-21. */
 
 import android.Manifest
 import android.app.Application
@@ -72,8 +76,6 @@ import computing.michell.monitor.protocol.encodeSetMode
 
 import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.encodeWorkOnPlan
-import computing.michell.monitor.protocol.tryEncodeSend
-import computing.michell.monitor.protocol.tryEncodeSteer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,9 +84,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class AppTab {
@@ -547,10 +546,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val requested = mutableSetOf<String>()
   private val requestedTurns = mutableSetOf<Int>()
   private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
-  private val applyLock = Mutex()
-  private var applied = MonitorUi()
-  private var appliedDirty = false
-  private val postedGeneration = AtomicInteger(0)
+  private val display = object : DisplayPreferences {
+    override val showThinking: Boolean get() = displayPrefs.getBoolean(DisplayThinkingKey, true)
+    override val showTools: Boolean get() = displayPrefs.getBoolean(DisplayToolsKey, true)
+  }
+  private val coordinator = MonitorCoordinator(session, SystemMonitorClock, display)
   private val bitmapsState = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
   private val uiState: MutableStateFlow<MonitorUi>
   val ui: StateFlow<MonitorUi>
@@ -610,11 +610,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
-    uiState = MutableStateFlow(MonitorUi(
-      draft = session.promptDraft,
-      showThinking = displayPrefs.getBoolean(DisplayThinkingKey, true),
-      showTools = displayPrefs.getBoolean(DisplayToolsKey, true)
-    ))
+    uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
     viewModelScope.launch(Dispatchers.Default) {
       session.messages.collect { message -> applyIncoming(message) }
@@ -622,12 +618,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch(Dispatchers.Default) {
       while (isActive) {
         delay(ScreenRefreshMs)
-        val next = applyLock.withLock {
-          if (!appliedDirty) return@withLock null
-          appliedDirty = false
-          applied
-        } ?: continue
-        postApplied(next, false, false)
+        val effects = coordinator.flush(uiState.value) ?: continue
+        withContext(Dispatchers.Main) { applyUiEffects(effects) }
       }
     }
     viewModelScope.launch {
@@ -765,21 +757,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun sendOrSteer() {
     if (dictationState.value.sendMustWait) return
-    val state = uiState.value
-    if (state.disconnected) return
-    val steer = state.view.canSteer
-    if (!state.view.canSend && !steer) return
-    val text = state.draft.trim()
-    if (text.isEmpty()) return
-    val encoded = if (steer) tryEncodeSteer(session.nextCommandId(), text) else tryEncodeSend(session.nextCommandId(), text)
-    if (!encoded.ok) {
-      uiState.update { it.copy(banner = "Text is longer than 65536 characters.") }
-      return
-    }
-    val submitted = beginSubmit(state, text, steer, System.currentTimeMillis())
-    session.updateDraft("")
-    uiState.value = submitted
-    session.sendCatalogue(encoded.json)
+    val effects = coordinator.onEvent(MonitorEvent.Submit(uiState.value)) ?: return
+    applyUiEffects(effects)
   }
 
   fun stop() {
@@ -799,12 +778,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun setShowThinking(value: Boolean) {
     displayPrefs.edit().putBoolean(DisplayThinkingKey, value).apply()
-    uiState.update { it.copy(showThinking = value) }
+    uiState.value = coordinator.noteDisplay(uiState.value)
   }
 
   fun setShowTools(value: Boolean) {
     displayPrefs.edit().putBoolean(DisplayToolsKey, value).apply()
-    uiState.update { it.copy(showTools = value) }
+    uiState.value = coordinator.noteDisplay(uiState.value)
   }
 
   fun requestTurn(index: Int) {
@@ -870,69 +849,42 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private suspend fun applyIncoming(message: MonitorMessage) {
-    if (message.kind == MessageKind.ImageData) {
-      val bitmap = decodeBitmap(message) ?: return
-      withContext(Dispatchers.Main) {
-        bitmapsState.update { it + (bitmap.first to bitmap.second) }
-      }
-      return
-    }
-    val immediate = message.kind == MessageKind.Snapshot || message.kind == MessageKind.Rejected ||
-      message.kind == MessageKind.Error || message.kind == MessageKind.InsertResult ||
-      message.kind == MessageKind.Status
-    val next = applyLock.withLock {
-      applied = reduceMonitor(applied, message)
-      appliedDirty = !immediate
-      applied
-    }
-    if (immediate) {
-      postApplied(next, message.kind == MessageKind.InsertResult, message.kind == MessageKind.Snapshot)
-      if (next.rescueSteer && next.draft.isNotEmpty()) {
-        applyLock.withLock { applied = applied.copy(rescueSteer = false) }
-        val encoded = tryEncodeSend(session.nextCommandId(), next.draft)
-        if (encoded.ok) session.sendCatalogue(encoded.json)
-        else {
-          withContext(Dispatchers.Main) {
-            uiState.update { it.copy(banner = "Text is longer than 65536 characters.", rescueSteer = false) }
-          }
-        }
-      }
-    }
-  }
-
-  private suspend fun postApplied(hint: MonitorUi, useReducedDraft: Boolean, clearDisconnect: Boolean) {
-    val next = applyLock.withLock {
-      if (hint.generation < applied.generation) applied else hint
-    }
-    if (next.generation < postedGeneration.get()) return
-    postedGeneration.set(next.generation)
-    withContext(Dispatchers.Main) {
-      if (useReducedDraft) {
-        leaveDictation()
-        session.updateDraft(next.draft)
-      }
-      uiState.update { current -> mergeApplied(current, next, useReducedDraft, clearDisconnect, System.currentTimeMillis()) }
-      if (clearDisconnect) prefetchRecent()
-      requestVisibleImages()
-    }
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return
+    execute(effects)
   }
 
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
-    if (status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused) leaveDictation()
-    val pin = status.banner == "TLS pin mismatch."
-    val wasDown = uiState.value.disconnected || uiState.value.banner == ReconnectingBanner
-    if (session.promptDraft.isEmpty() && uiState.value.draft.isNotEmpty()) session.updateDraft(uiState.value.draft)
-    uiState.update { current ->
-      val next = applyLink(current, status.phase, status.banner)
-      val shown = next.copy(
-        pairHold = next.pairHold || pin,
-        draft = session.promptDraft.ifEmpty { current.draft }
-      )
-      if (shown.generation > postedGeneration.get()) postedGeneration.set(shown.generation)
-      shown
+    applyUiEffects(coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status)) ?: return)
+  }
+
+  private suspend fun execute(effects: List<MonitorEffect>) {
+    val decoded = mutableListOf<Pair<String, Bitmap>>()
+    for (effect in effects) {
+      if (effect is MonitorEffect.DecodeImage) {
+        val bitmap = decodeBitmap(effect.message)
+        if (bitmap != null) decoded += bitmap
+      }
     }
-    if (status.phase == LinkPhase.Live && wasDown) {
-      session.sendCatalogue(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
+    val copyState = effects.any { it !is MonitorEffect.DecodeImage }
+    withContext(Dispatchers.Main) {
+      if (decoded.isNotEmpty()) bitmapsState.update { current -> current + decoded.toMap() }
+      if (copyState) applyUiEffects(effects)
+    }
+  }
+
+  private fun applyUiEffects(effects: List<MonitorEffect>) {
+    uiState.value = coordinator.state
+    for (effect in effects) {
+      when (effect) {
+        is MonitorEffect.DecodeImage -> {}
+        MonitorEffect.LeaveDictation -> leaveDictation()
+        is MonitorEffect.RememberDraft -> session.updateDraft(effect.text)
+        is MonitorEffect.Send -> session.sendCatalogue(effect.json)
+        MonitorEffect.Prefetch -> {
+          prefetchRecent()
+          requestVisibleImages()
+        }
+      }
     }
   }
 
@@ -1041,8 +993,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun storeDraft(text: String) {
-    session.updateDraft(text)
-    uiState.update { it.copy(draft = text) }
+    applyUiEffects(coordinator.onEvent(MonitorEvent.DraftEdited(uiState.value, text)) ?: return)
   }
 
   private fun beginDictation(selectionStart: Int, selectionEnd: Int) {

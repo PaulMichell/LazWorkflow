@@ -354,11 +354,18 @@ class InboundDelivery(
   }
 }
 
+interface SessionPort {
+  val promptDraft: String
+  fun nextCommandId(): String
+  fun updateDraft(text: String)
+  fun sendCatalogue(json: String)
+}
+
 class LanSession(
   private val store: HostStore,
   private val connector: TlsConnector = SslSocketConnector(),
   private val clock: MonotonicClock = SystemMonotonicClock
-) {
+) : SessionPort {
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO)
   private val writeLock = Mutex()
@@ -380,17 +387,17 @@ class LanSession(
     get() = policy.paused
 
   @Volatile
-  var promptDraft: String = ""
+  override var promptDraft: String = ""
     private set
 
-  fun sendCatalogue(json: String) {
+  override fun sendCatalogue(json: String) {
     if (json.isEmpty() || stopped) return
     scope.launch { writeJson(json) }
   }
 
-  fun nextCommandId(): String = newId()
+  override fun nextCommandId(): String = newId()
 
-  fun updateDraft(text: String) {
+  override fun updateDraft(text: String) {
     promptDraft = text
   }
 
