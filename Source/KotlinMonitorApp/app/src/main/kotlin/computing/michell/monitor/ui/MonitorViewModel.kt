@@ -1084,7 +1084,15 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val decoded = decodeImageData(message.payloadJson) ?: return null
     val raw = decodeImageBytes(decoded.image.bytesBase64) ?: return null
     val joined = images.accept(decoded.image, raw) ?: return null
-    val bitmap = BitmapFactory.decodeByteArray(joined, 0, joined.size) ?: return null
+    val bounds = BitmapFactory.Options()
+    bounds.inJustDecodeBounds = true
+    BitmapFactory.decodeByteArray(joined, 0, joined.size, bounds)
+    val plan = bitmapBoundsPlan(bounds.outWidth, bounds.outHeight)
+    if (!plan.allocate) return null
+    val pixels = BitmapFactory.Options()
+    pixels.inSampleSize = plan.sampleSize
+    pixels.inPreferredConfig = Bitmap.Config.ARGB_8888
+    val bitmap = BitmapFactory.decodeByteArray(joined, 0, joined.size, pixels) ?: return null
     return decoded.image.imageId to bitmap
   }
 }
