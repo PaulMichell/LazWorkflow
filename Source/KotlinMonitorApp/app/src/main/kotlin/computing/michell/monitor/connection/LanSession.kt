@@ -12,6 +12,7 @@ package computing.michell.monitor.connection
    The unsent prompt draft is kept across disconnect. A catalogue command
    is written only on the socket that accepted it. */
 
+import computing.michell.monitor.protocol.FrameAssembler
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
@@ -28,7 +29,6 @@ import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeHello
 import computing.michell.monitor.protocol.encodePair
 import computing.michell.monitor.protocol.encodeTicks
-import computing.michell.monitor.protocol.tryConsumeFrame
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.Closeable
@@ -668,9 +668,8 @@ class LanSession(
     clock.addListener(listener)
     try {
       return withContext(Dispatchers.IO) {
-        val buffer = ByteArray(8192)
-        var pending = ByteArray(0)
-        var partialSince = 0L
+        val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
+        val reader = FrameAssembler()
         var lastSent = System.currentTimeMillis()
         while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
@@ -690,19 +689,19 @@ class LanSession(
           if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
           if (count < 0) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           if (count > 0) {
-            pending = pending + buffer.copyOf(count)
-            if (partialSince == 0L) partialSince = System.currentTimeMillis()
-            val consumed = consume(pending, epoch, current)
-            if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
-            if (consumed == null) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
-            pending = consumed
+            val arrived = System.currentTimeMillis()
+            val batch = reader.offer(buffer, 0, count, arrived)
+            for (frame in batch.frames) {
+              noteInbound()
+              onFrame(frame, epoch, current)
+              if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
+            }
+            if (batch.status != FrameStatus.Ok) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           }
           // A timeout read does not update last inbound. A ping write does not either.
+          // A leftover partial starts its own clock; it does not inherit the frame just consumed.
           val now = System.currentTimeMillis()
-          if (pending.isEmpty()) partialSince = 0L
-          if (pending.isNotEmpty() && now - partialSince >= MonitorLimits.PartialFrameMs) {
-            return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
-          }
+          if (reader.partialExpired(now)) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
           if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
             val ping = encodeTicks(MessageKind.Ping, newId(), now)
@@ -724,23 +723,6 @@ class LanSession(
   private var readEnd = ReadEnd.Continue
   @Volatile
   private var lastInboundNanos = 0L
-
-  private suspend fun consume(start: ByteArray, epoch: Int, owned: TlsLink): ByteArray? {
-    var pending = start
-    while (true) {
-      val step = tryConsumeFrame(pending)
-      when (step.status) {
-        FrameStatus.Ok -> {
-          noteInbound()
-          onFrame(step.frame, epoch, owned)
-          pending = step.remaining
-          if (readEnd != ReadEnd.Continue) return pending
-        }
-        FrameStatus.NeedMore -> return pending
-        else -> return null
-      }
-    }
-  }
 
   private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink) {
     if (epochCounter.get() != epoch) return

@@ -3,7 +3,8 @@ package computing.michell.monitor.protocol
 /* LAM1 frame layout for the monitor catalogue (c) 2026 Michell Computing.
 
    The payload buffer is allocated only after the length field passes the cap.
-   Length is big-endian. This module does not write fixture files. */
+   Length is big-endian. The session reader fills one reusable buffer by offset
+   and compacts a consumed frame in place. This module does not write fixture files. */
 
 import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
@@ -161,25 +162,25 @@ fun decodeImageBytes(encoded: String): ByteArray? {
   }
 }
 
-private fun readLength(bytes: ByteArray): Long {
-  return ((bytes[8].toLong() and 0xFF) shl 24) or
-    ((bytes[9].toLong() and 0xFF) shl 16) or
-    ((bytes[10].toLong() and 0xFF) shl 8) or
-    (bytes[11].toLong() and 0xFF)
+private fun readLength(bytes: ByteArray, offset: Int = 0): Long {
+  return ((bytes[offset + 8].toLong() and 0xFF) shl 24) or
+    ((bytes[offset + 9].toLong() and 0xFF) shl 16) or
+    ((bytes[offset + 10].toLong() and 0xFF) shl 8) or
+    (bytes[offset + 11].toLong() and 0xFF)
 }
 
-fun tryInspectFrameHeader(bytes: ByteArray): FrameHeader {
-  if (bytes.size < MonitorLimits.FrameHeaderSize) {
+fun tryInspectFrameHeader(bytes: ByteArray, offset: Int = 0, available: Int = bytes.size - offset): FrameHeader {
+  if (offset < 0 || available < MonitorLimits.FrameHeaderSize || offset > bytes.size || available > bytes.size - offset) {
     return FrameHeader(false, 0, FrameStatus.Short)
   }
-  if (bytes[0] != 'L'.code.toByte() || bytes[1] != 'A'.code.toByte() ||
-    bytes[2] != 'M'.code.toByte() || bytes[3] != '1'.code.toByte()) {
+  if (bytes[offset] != 'L'.code.toByte() || bytes[offset + 1] != 'A'.code.toByte() ||
+    bytes[offset + 2] != 'M'.code.toByte() || bytes[offset + 3] != '1'.code.toByte()) {
     return FrameHeader(false, 0, FrameStatus.BadMagic)
   }
-  if ((bytes[4].toInt() and 0xFF) != MonitorLimits.FrameVersion) {
+  if ((bytes[offset + 4].toInt() and 0xFF) != MonitorLimits.FrameVersion) {
     return FrameHeader(false, 0, FrameStatus.BadVersion)
   }
-  val payloadLength = readLength(bytes)
+  val payloadLength = readLength(bytes, offset)
   if (payloadLength > MonitorLimits.MaxPayloadBytes) {
     return FrameHeader(false, payloadLength, FrameStatus.TooLarge)
   }
@@ -268,4 +269,127 @@ fun tryConsumeFrame(pending: ByteArray): FrameConsume {
 fun readBigEndianLength(bytes: ByteArray): Long {
   if (bytes.size < MonitorLimits.FrameHeaderSize) return 0
   return readLength(bytes)
+}
+
+data class AssembledFrames(
+  val frames: List<MonitorFrame>,
+  val status: FrameStatus
+)
+
+/** One pending buffer for a read loop. Bytes are copied in at an offset, and a consumed frame is compacted in place. */
+class FrameAssembler(val readChunk: Int = ReadChunkBytes) {
+  val bound: Int = MonitorLimits.FrameHeaderSize + MonitorLimits.MaxPayloadBytes + readChunk
+
+  private var storage = ByteArray(readChunk)
+  private var filled = 0
+  private var highWaterMark = 0
+  private var partialSince = 0L
+  private var copied = 0L
+
+  val pendingSize: Int get() = filled
+  val pendingCapacity: Int get() = storage.size
+  val highWater: Int get() = highWaterMark
+  val partialSinceMs: Long get() = partialSince
+  /** Bytes copied into the pending buffer, including a compacted remainder. Not the decoded payload. */
+  val copiedBytes: Long get() = copied
+  internal val pendingStorage: ByteArray get() = storage
+
+  init {
+    require(readChunk > 0)
+  }
+
+  fun partialExpired(nowMs: Long): Boolean {
+    val since = partialSince
+    return filled > 0 && since != 0L && nowMs - since >= MonitorLimits.PartialFrameMs
+  }
+
+  fun offer(chunk: ByteArray, offset: Int = 0, count: Int = chunk.size - offset, nowMs: Long): AssembledFrames {
+    if (count == 0) return AssembledFrames(emptyList(), FrameStatus.Ok)
+    if (offset < 0 || count < 0 || offset > chunk.size || count > chunk.size - offset) {
+      return AssembledFrames(emptyList(), FrameStatus.Short)
+    }
+    if (count > bound || filled > bound - count) {
+      return AssembledFrames(emptyList(), FrameStatus.TooLarge)
+    }
+    val wasEmpty = filled == 0
+    if (!accept(chunk, offset, count)) return AssembledFrames(emptyList(), FrameStatus.TooLarge)
+    if (filled > highWaterMark) highWaterMark = filled
+    if (wasEmpty) partialSince = nowMs
+    return drain(nowMs)
+  }
+
+  private fun accept(chunk: ByteArray, offset: Int, count: Int): Boolean {
+    val need = filled + count
+    if (need > bound) return false
+    val target = reserve(peekHeader(chunk, offset, count), need)
+    if (target > storage.size && !grow(target)) return false
+    chunk.copyInto(storage, filled, offset, offset + count)
+    copied += count
+    filled = need
+    return true
+  }
+
+  private fun reserve(header: FrameHeader?, need: Int): Int {
+    if (header != null && header.ok) {
+      val frame = MonitorLimits.FrameHeaderSize + header.payloadLength.toInt()
+      return minOf(bound, maxOf(need, frame + readChunk))
+    }
+    // A missing or rejected header must not reserve a max payload.
+    return minOf(bound, maxOf(need, storage.size))
+  }
+
+  private fun grow(target: Int): Boolean {
+    if (target < filled || target > bound) return false
+    val next = ByteArray(target)
+    if (filled > 0) {
+      storage.copyInto(next, 0, 0, filled)
+      copied += filled
+    }
+    storage = next
+    return true
+  }
+
+  private fun peekHeader(chunk: ByteArray, offset: Int, count: Int): FrameHeader? {
+    if (filled + count < MonitorLimits.FrameHeaderSize) return null
+    if (filled >= MonitorLimits.FrameHeaderSize) return tryInspectFrameHeader(storage, 0, filled)
+    if (filled == 0) return tryInspectFrameHeader(chunk, offset, count)
+    val header = ByteArray(MonitorLimits.FrameHeaderSize)
+    storage.copyInto(header, 0, 0, filled)
+    val take = MonitorLimits.FrameHeaderSize - filled
+    chunk.copyInto(header, filled, offset, offset + take)
+    return tryInspectFrameHeader(header)
+  }
+
+  private fun drain(nowMs: Long): AssembledFrames {
+    val frames = ArrayList<MonitorFrame>(1)
+    var consumed = false
+    while (filled >= MonitorLimits.FrameHeaderSize) {
+      val header = tryInspectFrameHeader(storage, 0, filled)
+      if (!header.ok) return AssembledFrames(frames, header.status)
+      val payloadLength = header.payloadLength.toInt()
+      val frameLength = MonitorLimits.FrameHeaderSize + payloadLength
+      if (filled < frameLength) break
+      val decoded = finishPayload(storage, payloadLength)
+      if (!decoded.ok) return AssembledFrames(frames, decoded.status)
+      frames.add(decoded.frame)
+      compact(frameLength)
+      consumed = true
+    }
+    if (filled == 0) partialSince = 0L
+    else if (consumed) partialSince = nowMs
+    return AssembledFrames(frames, FrameStatus.Ok)
+  }
+
+  private fun compact(frameLength: Int) {
+    val remain = filled - frameLength
+    if (remain > 0) {
+      storage.copyInto(storage, 0, frameLength, filled)
+      copied += remain
+    }
+    filled = remain
+  }
+
+  companion object {
+    const val ReadChunkBytes = 8192
+  }
 }
