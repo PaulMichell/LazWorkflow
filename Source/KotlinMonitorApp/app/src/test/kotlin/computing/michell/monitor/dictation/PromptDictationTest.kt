@@ -205,6 +205,37 @@ class PromptDictationTest {
     assertEquals(DictationDraftLimit, late.draft.length)
   }
 
+  @Test
+  fun lateCallbacksFromThePreviousRequestDoNotChangeTheNewSession() {
+    val started = reduceDictation(DictationState(sessionId = 1), "generation two", DictationEvent.Start(0, 0))
+    assertEquals(2, started.state.sessionId)
+    val host = SpeechCallbackHost(SpeechTurn(
+      generation = 2,
+      dictation = started.state,
+      draft = started.draft,
+      support = SpeechSupportState(pending = true, available = true, statusMessage = "Listening…")
+    ))
+    val engine = FakeSpeechEngine(host)
+    assertTrue(engine.start(2))
+    engine.emitPartial(1, "stale partial")
+    engine.emitFinal(1, "stale final")
+    engine.emitError(1)
+    engine.emitSupportReady(1)
+    engine.emitSupportBlocked(1)
+    engine.emitSupportFailed(1)
+    assertEquals(started.draft, host.turn.draft)
+    assertEquals(2, host.turn.generation)
+    assertEquals(DictationPhase.Listening, host.turn.dictation.phase)
+    assertEquals("Listening…", host.turn.support.statusMessage)
+    assertTrue(host.turn.support.pending)
+    assertTrue(host.turn.support.available)
+    assertFalse(host.turn.startListening)
+    assertFalse(host.turn.draft.contains("stale"))
+    engine.emitPartial(2, "kept")
+    assertTrue(host.turn.draft.contains("kept"))
+    assertFalse(host.turn.draft.contains("stale"))
+  }
+
   private fun start(draft: String, selectionStart: Int, selectionEnd: Int = selectionStart): DictationStep {
     return reduceDictation(DictationState(), draft, DictationEvent.Start(selectionStart, selectionEnd))
   }
@@ -221,4 +252,64 @@ class PromptDictationTest {
   private fun apply(step: DictationStep, draft: String, event: DictationEvent): DictationStep {
     return reduceDictation(step.state, draft, event)
   }
+}
+
+private class SpeechCallbackHost(initial: SpeechTurn) : SpeechEngineListener {
+  var turn: SpeechTurn = initial
+
+  override fun onReady(generation: Int) {}
+
+  override fun onBeginningOfSpeech(generation: Int) {}
+
+  override fun onEndOfSpeech(generation: Int) {}
+
+  override fun onPartial(generation: Int, text: String) {
+    turn = applySpeechNotice(turn, SpeechNotice.Partial(generation, text))
+  }
+
+  override fun onFinal(generation: Int, text: String) {
+    turn = applySpeechNotice(turn, SpeechNotice.Final(generation, text))
+  }
+
+  override fun onError(generation: Int, code: Int) {
+    turn = applySpeechNotice(turn, SpeechNotice.Error(generation, "stale error", true))
+  }
+
+  override fun onReadyToListen(generation: Int) {
+    turn = applySpeechNotice(turn, SpeechNotice.SupportReady(generation))
+  }
+
+  override fun onLanguageBlocked(generation: Int, language: OnDeviceLanguage) {
+    turn = applySpeechNotice(turn, SpeechNotice.SupportBlocked(generation, "blocked", true))
+  }
+
+  override fun onSupportFailed(generation: Int, code: Int) {
+    turn = applySpeechNotice(turn, SpeechNotice.SupportFailed(generation, "support failed", true))
+  }
+}
+
+private class FakeSpeechEngine(private val host: SpeechCallbackHost) : SpeechEngine {
+  override fun available(): Boolean = true
+
+  override fun checkSupport(generation: Int): Boolean = generation > 0
+
+  override fun start(generation: Int): Boolean = generation > 0
+
+  override fun stopListening() {}
+
+  override fun cancel() {}
+
+  override fun destroy() {}
+
+  fun emitPartial(generation: Int, text: String) = host.onPartial(generation, text)
+
+  fun emitFinal(generation: Int, text: String) = host.onFinal(generation, text)
+
+  fun emitError(generation: Int) = host.onError(generation, 1)
+
+  fun emitSupportReady(generation: Int) = host.onReadyToListen(generation)
+
+  fun emitSupportBlocked(generation: Int) = host.onLanguageBlocked(generation, OnDeviceLanguage.Missing)
+
+  fun emitSupportFailed(generation: Int) = host.onSupportFailed(generation, 1)
 }

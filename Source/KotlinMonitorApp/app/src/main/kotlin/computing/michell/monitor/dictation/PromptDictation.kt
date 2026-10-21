@@ -90,6 +90,89 @@ sealed class DictationEvent {
   data object LeaveScreen : DictationEvent()
 }
 
+data class SpeechSupportState(
+  val pending: Boolean = false,
+  val available: Boolean = true,
+  val statusMessage: String = ""
+)
+
+data class SpeechTurn(
+  val generation: Int,
+  val dictation: DictationState,
+  val draft: String,
+  val support: SpeechSupportState = SpeechSupportState(),
+  val startListening: Boolean = false
+)
+
+sealed class SpeechNotice {
+  abstract val generation: Int
+  data class Partial(override val generation: Int, val text: String) : SpeechNotice()
+  data class Final(override val generation: Int, val text: String) : SpeechNotice()
+  data class Error(override val generation: Int, val message: String, val unavailable: Boolean) : SpeechNotice()
+  data class SupportReady(override val generation: Int) : SpeechNotice()
+  data class SupportBlocked(
+    override val generation: Int,
+    val message: String,
+    val unavailable: Boolean
+  ) : SpeechNotice()
+  data class SupportFailed(
+    override val generation: Int,
+    val message: String,
+    val unavailable: Boolean
+  ) : SpeechNotice()
+}
+
+/** True only when the callback belongs to the request that is active now. */
+fun acceptSpeechCallback(activeGeneration: Int, callbackGeneration: Int): Boolean {
+  return activeGeneration > 0 && callbackGeneration == activeGeneration
+}
+
+fun applySpeechNotice(turn: SpeechTurn, notice: SpeechNotice): SpeechTurn {
+  if (!acceptSpeechCallback(turn.generation, notice.generation)) return turn
+  return when (notice) {
+    is SpeechNotice.Partial -> applyDictationNotice(turn, DictationEvent.Partial(notice.generation, notice.text))
+    is SpeechNotice.Final -> applyDictationNotice(turn, DictationEvent.Final(notice.generation, notice.text))
+    is SpeechNotice.Error -> applySpeechError(turn, notice)
+    is SpeechNotice.SupportReady -> applySupportReady(turn)
+    is SpeechNotice.SupportBlocked -> applySupportStatus(turn, notice.message, notice.unavailable)
+    is SpeechNotice.SupportFailed -> applySupportStatus(turn, notice.message, notice.unavailable)
+  }
+}
+
+private fun applyDictationNotice(turn: SpeechTurn, event: DictationEvent): SpeechTurn {
+  val step = reduceDictation(turn.dictation, turn.draft, event)
+  return turn.copy(dictation = step.state, draft = step.draft, startListening = false)
+}
+
+private fun applySpeechError(turn: SpeechTurn, notice: SpeechNotice.Error): SpeechTurn {
+  val failed = applyDictationNotice(turn, DictationEvent.Failure(notice.generation, notice.message))
+  return failed.copy(
+    generation = if (failed.dictation.phase == DictationPhase.Idle) 0 else failed.generation,
+    support = failed.support.copy(
+      pending = false,
+      available = if (notice.unavailable) false else failed.support.available,
+      statusMessage = notice.message
+    )
+  )
+}
+
+private fun applySupportReady(turn: SpeechTurn): SpeechTurn {
+  if (!turn.support.pending) return turn
+  return turn.copy(support = turn.support.copy(pending = false), startListening = true)
+}
+
+private fun applySupportStatus(turn: SpeechTurn, message: String, unavailable: Boolean): SpeechTurn {
+  if (!turn.support.pending) return turn
+  return turn.copy(
+    support = turn.support.copy(
+      pending = false,
+      available = if (unavailable) false else turn.support.available,
+      statusMessage = message
+    ),
+    startListening = false
+  )
+}
+
 fun captureAnchor(draft: String, selectionStart: Int, selectionEnd: Int): DictationAnchor {
   val bounds = selectionBounds(draft.length, selectionStart, selectionEnd)
   return DictationAnchor(

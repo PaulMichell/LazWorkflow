@@ -15,23 +15,23 @@ import android.speech.SpeechRecognizer
 
 interface SpeechEngine {
   fun available(): Boolean
-  fun checkSupport(): Boolean
-  fun start(): Boolean
+  fun checkSupport(generation: Int): Boolean
+  fun start(generation: Int): Boolean
   fun stopListening()
   fun cancel()
   fun destroy()
 }
 
 interface SpeechEngineListener {
-  fun onReady()
-  fun onBeginningOfSpeech()
-  fun onEndOfSpeech()
-  fun onPartial(text: String)
-  fun onFinal(text: String)
-  fun onError(code: Int)
-  fun onReadyToListen()
-  fun onLanguageBlocked(language: OnDeviceLanguage)
-  fun onSupportFailed(code: Int)
+  fun onReady(generation: Int)
+  fun onBeginningOfSpeech(generation: Int)
+  fun onEndOfSpeech(generation: Int)
+  fun onPartial(generation: Int, text: String)
+  fun onFinal(generation: Int, text: String)
+  fun onError(generation: Int, code: Int)
+  fun onReadyToListen(generation: Int)
+  fun onLanguageBlocked(generation: Int, language: OnDeviceLanguage)
+  fun onSupportFailed(generation: Int, code: Int)
 }
 
 class OnDeviceSpeechEngine(
@@ -40,8 +40,7 @@ class OnDeviceSpeechEngine(
 ) : SpeechEngine {
   private val application = context.applicationContext
   private var recognizer: SpeechRecognizer? = null
-  private var accepting = false
-  private var supportOpen = false
+  private var activeGeneration = 0
   private var unavailable = false
 
   override fun available(): Boolean {
@@ -54,35 +53,41 @@ class OnDeviceSpeechEngine(
     }
   }
 
-  override fun checkSupport(): Boolean {
-    if (!available()) return false
+  override fun checkSupport(generation: Int): Boolean {
+    if (!available() || generation <= 0) return false
     val current = recognizer ?: createRecognizer() ?: return false
-    supportOpen = true
+    activeGeneration = generation
     return try {
-      current.setRecognitionListener(callbacks)
+      current.setRecognitionListener(listeningCallbacks(generation))
       if (Build.VERSION.SDK_INT < 33) {
-        supportOpen = false
-        listener.onReadyToListen()
+        if (acceptSpeechCallback(activeGeneration, generation)) listener.onReadyToListen(generation)
         return true
       }
-      Api33Support(current, recognitionIntent(), application.mainExecutor, listener) { supportOpen }.start()
+      Api33Support(
+        current,
+        recognitionIntent(),
+        application.mainExecutor,
+        listener,
+        generation
+      ) { activeGeneration }.start()
       true
     } catch (error: Exception) {
-      supportOpen = false
+      if (activeGeneration == generation) activeGeneration = 0
       false
     }
   }
 
-  override fun start(): Boolean {
-    if (!available()) return false
+  override fun start(generation: Int): Boolean {
+    if (!available() || generation <= 0) return false
     val current = recognizer ?: createRecognizer() ?: return false
-    accepting = true
+    activeGeneration = generation
     return try {
-      current.setRecognitionListener(callbacks)
+      // A new listener closes over this generation. The previous listener cannot adopt it.
+      current.setRecognitionListener(listeningCallbacks(generation))
       current.startListening(recognitionIntent())
       true
     } catch (error: Exception) {
-      accepting = false
+      if (activeGeneration == generation) activeGeneration = 0
       try {
         current.cancel()
       } catch (cancelError: Exception) {
@@ -102,8 +107,7 @@ class OnDeviceSpeechEngine(
   }
 
   override fun cancel() {
-    accepting = false
-    supportOpen = false
+    activeGeneration = 0
     val current = recognizer ?: return
     try {
       current.cancel()
@@ -113,8 +117,7 @@ class OnDeviceSpeechEngine(
   }
 
   override fun destroy() {
-    accepting = false
-    supportOpen = false
+    activeGeneration = 0
     val current = recognizer
     recognizer = null
     if (current == null) return
@@ -158,45 +161,47 @@ class OnDeviceSpeechEngine(
     return intent
   }
 
-  private fun forward(report: () -> Unit) {
-    if (!accepting) return
-    report()
-  }
+  private fun listeningCallbacks(generation: Int): RecognitionListener {
+    return object : RecognitionListener {
+      private fun forward(report: () -> Unit) {
+        if (!acceptSpeechCallback(activeGeneration, generation)) return
+        report()
+      }
 
-  private val callbacks = object : RecognitionListener {
-    override fun onReadyForSpeech(params: Bundle?) {
-      forward { listener.onReady() }
-    }
+      override fun onReadyForSpeech(params: Bundle?) {
+        forward { listener.onReady(generation) }
+      }
 
-    override fun onBeginningOfSpeech() {
-      forward { listener.onBeginningOfSpeech() }
-    }
+      override fun onBeginningOfSpeech() {
+        forward { listener.onBeginningOfSpeech(generation) }
+      }
 
-    override fun onRmsChanged(rmsdB: Float) {
-    }
+      override fun onRmsChanged(rmsdB: Float) {
+      }
 
-    override fun onBufferReceived(buffer: ByteArray?) {
-    }
+      override fun onBufferReceived(buffer: ByteArray?) {
+      }
 
-    override fun onEndOfSpeech() {
-      forward { listener.onEndOfSpeech() }
-    }
+      override fun onEndOfSpeech() {
+        forward { listener.onEndOfSpeech(generation) }
+      }
 
-    override fun onError(error: Int) {
-      forward { listener.onError(error) }
-    }
+      override fun onError(error: Int) {
+        forward { listener.onError(generation, error) }
+      }
 
-    override fun onResults(results: Bundle?) {
-      val text = firstHypothesis(results)
-      forward { listener.onFinal(text) }
-    }
+      override fun onResults(results: Bundle?) {
+        val text = firstHypothesis(results)
+        forward { listener.onFinal(generation, text) }
+      }
 
-    override fun onPartialResults(partialResults: Bundle?) {
-      val text = firstHypothesis(partialResults)
-      forward { listener.onPartial(text) }
-    }
+      override fun onPartialResults(partialResults: Bundle?) {
+        val text = firstHypothesis(partialResults)
+        forward { listener.onPartial(generation, text) }
+      }
 
-    override fun onEvent(eventType: Int, params: Bundle?) {
+      override fun onEvent(eventType: Int, params: Bundle?) {
+      }
     }
   }
 }
@@ -208,11 +213,14 @@ private class Api33Support(
   private val intent: Intent,
   private val executor: java.util.concurrent.Executor,
   private val listener: SpeechEngineListener,
-  private val open: () -> Boolean
+  private val generation: Int,
+  private val activeGeneration: () -> Int
 ) {
   fun start() {
     recognizer.checkRecognitionSupport(intent, executor, callback)
   }
+
+  private fun open(): Boolean = acceptSpeechCallback(activeGeneration(), generation)
 
   private val callback = object : RecognitionSupportCallback {
     override fun onSupportResult(recognitionSupport: RecognitionSupport) {
@@ -223,25 +231,25 @@ private class Api33Support(
         names(recognitionSupport.supportedOnDeviceLanguages),
         names(recognitionSupport.onlineLanguages)
       )) {
-        OnDeviceLanguage.Installed -> listener.onReadyToListen()
-        OnDeviceLanguage.Downloading -> listener.onLanguageBlocked(OnDeviceLanguage.Downloading)
+        OnDeviceLanguage.Installed -> listener.onReadyToListen(generation)
+        OnDeviceLanguage.Downloading -> listener.onLanguageBlocked(generation, OnDeviceLanguage.Downloading)
         OnDeviceLanguage.NeedsDownload -> {
           try {
             recognizer.triggerModelDownload(intent)
           } catch (error: Exception) {
             // The system may already be asking the user to confirm the download.
           }
-          listener.onLanguageBlocked(OnDeviceLanguage.NeedsDownload)
+          listener.onLanguageBlocked(generation, OnDeviceLanguage.NeedsDownload)
         }
-        OnDeviceLanguage.OnlineOnly -> listener.onLanguageBlocked(OnDeviceLanguage.OnlineOnly)
-        OnDeviceLanguage.Missing -> listener.onLanguageBlocked(OnDeviceLanguage.Missing)
+        OnDeviceLanguage.OnlineOnly -> listener.onLanguageBlocked(generation, OnDeviceLanguage.OnlineOnly)
+        OnDeviceLanguage.Missing -> listener.onLanguageBlocked(generation, OnDeviceLanguage.Missing)
       }
     }
 
     override fun onError(error: Int) {
       if (!open()) return
-      if (error == SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT) listener.onReadyToListen()
-      else listener.onSupportFailed(error)
+      if (error == SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT) listener.onReadyToListen(generation)
+      else listener.onSupportFailed(generation, error)
     }
   }
 }

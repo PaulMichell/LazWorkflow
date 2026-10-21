@@ -17,6 +17,7 @@ import android.speech.SpeechRecognizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import computing.michell.monitor.connection.HostClosedBanner
+import computing.michell.monitor.dictation.acceptSpeechCallback
 import computing.michell.monitor.dictation.DictationAudioMessage
 import computing.michell.monitor.dictation.DictationBusyMessage
 import computing.michell.monitor.dictation.DictationEvent
@@ -633,41 +634,42 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var pendingSelectionStart = 0
   private var pendingSelectionEnd = 0
   private var callbackSession = 0
+  private var supportGeneration = 0
   private var recognitionSupported = true
   private var supportPending = false
   // Callbacks splice the prompt only. They must not call sendOrSteer.
   private val engineListener = object : SpeechEngineListener {
-    override fun onReady() {
+    override fun onReady(generation: Int) {
     }
 
-    override fun onBeginningOfSpeech() {
+    override fun onBeginningOfSpeech(generation: Int) {
     }
 
-    override fun onEndOfSpeech() {
+    override fun onEndOfSpeech(generation: Int) {
     }
 
-    override fun onPartial(text: String) {
-      onDictationPartial(text)
+    override fun onPartial(generation: Int, text: String) {
+      onDictationPartial(generation, text)
     }
 
-    override fun onFinal(text: String) {
-      onDictationFinal(text)
+    override fun onFinal(generation: Int, text: String) {
+      onDictationFinal(generation, text)
     }
 
-    override fun onError(code: Int) {
-      onDictationError(code)
+    override fun onError(generation: Int, code: Int) {
+      onDictationError(generation, code)
     }
 
-    override fun onReadyToListen() {
-      onSupportReady()
+    override fun onReadyToListen(generation: Int) {
+      onSupportReady(generation)
     }
 
-    override fun onLanguageBlocked(language: OnDeviceLanguage) {
-      onSupportBlocked(language)
+    override fun onLanguageBlocked(generation: Int, language: OnDeviceLanguage) {
+      onSupportBlocked(generation, language)
     }
 
-    override fun onSupportFailed(code: Int) {
-      onSupportError(code)
+    override fun onSupportFailed(generation: Int, code: Int) {
+      onSupportError(generation, code)
     }
   }
   private val engine: SpeechEngine = OnDeviceSpeechEngine(application, engineListener)
@@ -783,13 +785,19 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val step = reduceDictation(before, text, DictationEvent.Edited(selectionStart, selectionEnd))
     dictationState.value = step.state
     storeDraft(step.draft)
-    if (before.phase != DictationPhase.Idle && step.state.phase == DictationPhase.Idle) engine.cancel()
+    if (before.phase != DictationPhase.Idle && step.state.phase == DictationPhase.Idle) {
+      callbackSession = 0
+      supportGeneration = 0
+      engine.cancel()
+    }
   }
 
   fun leaveDictation() {
     supportPending = false
+    supportGeneration = 0
     applyDictation(DictationEvent.LeaveScreen)
     callbackSession = 0
+    supportGeneration = 0
     engine.cancel()
   }
 
@@ -969,40 +977,42 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  private fun onDictationPartial(text: String) {
-    if (!acceptDictationCallback()) return
+  private fun onDictationPartial(generation: Int, text: String) {
+    if (!acceptSpeechCallback(callbackSession, generation)) return
     val before = dictationState.value
-    releaseIfClosed(before, applyDictation(DictationEvent.Partial(callbackSession, text)))
+    releaseIfClosed(before, applyDictation(DictationEvent.Partial(generation, text)))
   }
 
-  private fun onDictationFinal(text: String) {
-    if (!acceptDictationCallback()) return
+  private fun onDictationFinal(generation: Int, text: String) {
+    if (!acceptSpeechCallback(callbackSession, generation)) return
     val before = dictationState.value
-    releaseIfClosed(before, applyDictation(DictationEvent.Final(callbackSession, text)))
+    releaseIfClosed(before, applyDictation(DictationEvent.Final(generation, text)))
   }
 
-  private fun onDictationError(code: Int) {
-    if (!acceptDictationCallback()) return
+  private fun onDictationError(generation: Int, code: Int) {
+    if (!acceptSpeechCallback(callbackSession, generation)) return
     if (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
       recognitionSupported = false
       dictationState.value = dictationState.value.copy(available = false)
     }
     val before = dictationState.value
-    val step = applyDictation(DictationEvent.Failure(callbackSession, speechFailureMessage(code)))
+    val step = applyDictation(DictationEvent.Failure(generation, speechFailureMessage(code)))
     callbackSession = 0
     if (code == SpeechRecognizer.ERROR_CLIENT) engine.destroy()
     else releaseIfClosed(before, step)
   }
 
-  private fun onSupportReady() {
-    if (!supportPending) return
+  private fun onSupportReady(generation: Int) {
+    if (!acceptSpeechCallback(supportGeneration, generation) || !supportPending) return
     supportPending = false
+    supportGeneration = 0
     startListeningSession(pendingSelectionStart, pendingSelectionEnd)
   }
 
-  private fun onSupportBlocked(language: OnDeviceLanguage) {
-    if (!supportPending) return
+  private fun onSupportBlocked(generation: Int, language: OnDeviceLanguage) {
+    if (!acceptSpeechCallback(supportGeneration, generation) || !supportPending) return
     supportPending = false
+    supportGeneration = 0
     when (language) {
       OnDeviceLanguage.Downloading -> showSpeechStatus(DictationModelDownloadingMessage, false)
       OnDeviceLanguage.NeedsDownload -> showSpeechStatus(DictationModelDownloadMessage, false)
@@ -1014,9 +1024,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  private fun onSupportError(code: Int) {
-    if (!supportPending) return
+  private fun onSupportError(generation: Int, code: Int) {
+    if (!acceptSpeechCallback(supportGeneration, generation) || !supportPending) return
     supportPending = false
+    supportGeneration = 0
     if (code == SpeechRecognizer.ERROR_CLIENT) engine.destroy()
     val unavailable = code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
     if (unavailable) recognitionSupported = false
@@ -1030,11 +1041,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     )
   }
 
-  private fun acceptDictationCallback(): Boolean {
-    val state = dictationState.value
-    return callbackSession > 0 && state.sessionId == callbackSession && state.phase != DictationPhase.Idle
-  }
-
   private fun applyDictation(event: DictationEvent): DictationStep {
     val step = reduceDictation(dictationState.value, uiState.value.draft, event)
     dictationState.value = step.state
@@ -1045,6 +1051,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun releaseIfClosed(before: DictationState, step: DictationStep) {
     if (before.phase == DictationPhase.Idle || step.state.phase != DictationPhase.Idle) return
     callbackSession = 0
+    supportGeneration = 0
     engine.cancel()
   }
 
@@ -1057,8 +1064,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     permissionRequestState.value = false
     pendingSelectionStart = selectionStart
     pendingSelectionEnd = selectionEnd
+    supportGeneration = dictationState.value.sessionId + 1
     supportPending = true
-    if (engine.checkSupport()) return
+    if (engine.checkSupport(supportGeneration)) return
+    supportGeneration = 0
     supportPending = false
     showSpeechStatus(DictationUnavailableMessage, true)
   }
@@ -1067,7 +1076,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val step = applyDictation(DictationEvent.Start(selectionStart, selectionEnd))
     if (!step.state.listening) return
     callbackSession = step.state.sessionId
-    if (engine.start()) return
+    if (engine.start(callbackSession)) return
     callbackSession = 0
     dictationState.value = dictationState.value.copy(available = false)
     applyDictation(DictationEvent.Failure(step.state.sessionId, DictationUnavailableMessage))
