@@ -88,11 +88,6 @@ class HostStore internal constructor(private val values: StringMap) {
     values.putAll(recordFields(record))
   }
 
-  fun saveEndpoint(address: String, port: Int, fingerprint: String) {
-    val current = load()
-    save(current.copy(address = address, port = port, fingerprint = fingerprint))
-  }
-
   fun savePairing(clientId: String, sessionToken: String) {
     val current = load()
     save(current.copy(clientId = clientId, sessionToken = sessionToken))

@@ -201,11 +201,6 @@ fun loadedTurnIndices(state: MonitorUi): Set<Int> {
   return stored
 }
 
-fun idleTurnToShow(state: MonitorUi): Int {
-  val slots = virtualSlots(state.turns, state.live, state.view.sending)
-  return recentFetches(slots, loadedTurnIndices(state)).lastOrNull() ?: -1
-}
-
 const val NothingRunningToSteer = "Nothing is running to steer."
 
 fun clearRemoteActions(view: WireView): WireView {
@@ -896,10 +891,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     uiState.update { it.copy(settingsOpen = false) }
   }
 
-  fun resumeConnect() {
-    session.resume()
-  }
-
   fun forgetPairing() {
     leaveDictation()
     val effects = coordinator.onEvent(MonitorEvent.ForgetPairing(uiState.value)) ?: emptyList()
@@ -954,10 +945,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val effects = coordinator.requestTurnFetch(uiState.value, index)
     if (effects.isEmpty()) return
     applyUiEffects(effects)
-  }
-
-  fun selectTurn(index: Int) {
-    requestTurn(index)
   }
 
   fun selectPlan(index: Int) {

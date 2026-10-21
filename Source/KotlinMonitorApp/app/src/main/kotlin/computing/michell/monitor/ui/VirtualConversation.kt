@@ -71,12 +71,6 @@ fun shownBlocks(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): Lis
   return displayBlocks(turn).filter { block -> blockShown(block, showThinking, showTools) }
 }
 
-fun slotUnits(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): Int {
-  val blocks = shownBlocks(turn, showThinking, showTools)
-  if (blocks.isEmpty()) return 1
-  return blocks.sumOf { block -> (block.body.length / 64 + 1).coerceIn(1, 40) }.coerceAtLeast(1)
-}
-
 fun spotAt(units: List<Int>, fraction: Float): ScrollSpot {
   if (units.isEmpty()) return ScrollSpot(0, 0, 1)
   val sizes = units.map { size -> size.coerceAtLeast(1) }
@@ -113,21 +107,6 @@ fun stickToHead(following: Boolean, previousValue: Int, value: Int, previousMax:
   if (atHead(value, max)) return true
   if (following && max >= previousMax) return true
   return following
-}
-
-fun fractionAt(units: List<Int>, index: Int, unitOffset: Int): Float {
-  if (units.isEmpty()) return 1f
-  val sizes = units.map { size -> size.coerceAtLeast(1) }
-  val total = sizes.sum().coerceAtLeast(1)
-  var cursor = 0
-  for (slot in sizes.indices) {
-    if (slot == index) {
-      val inside = unitOffset.coerceIn(0, sizes[slot] - 1)
-      return (cursor + inside).toFloat() / total.toFloat()
-    }
-    cursor += sizes[slot]
-  }
-  return 1f
 }
 
 fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?, sameGeneration: Boolean = true): WireTurn? {
