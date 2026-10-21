@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -274,14 +275,26 @@ private fun ConversationPane(
             scope.launch { scrollState.scrollTo((scrollState.value + delta).coerceAtLeast(0)) }
           }
         }) {
-          SlotBody(slot, bodyFor(ui, slot), ui.showThinking, ui.showTools, bitmaps, ui.imageReasons)
+          SlotBody(
+            slot,
+            bodyFor(ui, slot),
+            ui.conversationGeneration,
+            ui.showThinking,
+            ui.showTools,
+            bitmaps,
+            ui.imageReasons
+          )
         }
       }
       if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)) {
+        val pending = WireBlock(
+          ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()
+        )
         RoleBlock(
-          WireBlock(ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()),
+          pending,
           bitmaps,
-          ui.imageReasons
+          ui.imageReasons,
+          foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0)
         )
       }
     }
@@ -331,19 +344,33 @@ private fun bodyFor(ui: MonitorUi, slot: VirtualSlot): WireTurn? {
 private fun SlotBody(
   slot: VirtualSlot,
   turn: WireTurn?,
+  conversationGeneration: Int,
   showThinking: Boolean,
   showTools: Boolean,
   bitmaps: Map<String, Bitmap>,
   reasons: Map<String, String>
 ) {
-  val blocks = shownBlocks(turn, showThinking, showTools)
-  if (blocks.isEmpty()) {
+  val assembled = displayBlocks(turn)
+  val shown = assembled.withIndex().filter { (_, block) -> blockShown(block, showThinking, showTools) }
+  if (shown.isEmpty()) {
     Text(slot.label, color = QuietText, maxLines = 2, overflow = TextOverflow.Ellipsis)
     return
   }
+  val turnId = turn?.id.orEmpty()
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    blocks.forEach { block -> RoleBlock(block, bitmaps, reasons) }
+    shown.forEach { (index, block) ->
+      val foldKey = foldBlockKey(conversationGeneration, turnId, block.blockId, index)
+      key(foldKey) {
+        RoleBlock(block, bitmaps, reasons, foldKey)
+      }
+    }
   }
+}
+
+/** Expansion identity. Title and body are not part of it. An empty block id uses the assembled index. */
+fun foldBlockKey(conversationGeneration: Int, turnId: String, blockId: String, blockIndex: Int): String {
+  val identity = if (blockId.isNotEmpty()) "id\u0000$blockId" else "index\u0000$blockIndex"
+  return "$conversationGeneration\u0000$turnId\u0000$identity"
 }
 
 @Composable
@@ -536,12 +563,12 @@ private fun DictateToggle(
 }
 
 @Composable
-private fun RoleBlock(block: WireBlock, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>) {
+private fun RoleBlock(block: WireBlock, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>, foldKey: String) {
   when (block.kind) {
     "user" -> BubbleBlock(block, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons)
     "answer" -> BubbleBlock(block, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons)
-    "thinking" -> FoldBlock(block.title.ifEmpty { "Thinking" }, block.body, false, false)
-    "tool", "subagent" -> FoldBlock(toolTitle(block), block.body, !block.ok && !block.running, true)
+    "thinking" -> FoldBlock(foldKey, block.title.ifEmpty { "Thinking" }, block.body, false, false)
+    "tool", "subagent" -> FoldBlock(foldKey, toolTitle(block), block.body, !block.ok && !block.running, true)
     "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
     "note", "worked" -> Text(
       block.body.ifEmpty { block.title },
@@ -587,8 +614,8 @@ private fun BubbleBlock(
 }
 
 @Composable
-private fun FoldBlock(title: String, body: String, failed: Boolean, tool: Boolean) {
-  var open by remember(title, body) { mutableStateOf(false) }
+private fun FoldBlock(foldKey: String, title: String, body: String, failed: Boolean, tool: Boolean) {
+  var open by remember(foldKey) { mutableStateOf(false) }
   Column(
     modifier = Modifier
       .fillMaxWidth()

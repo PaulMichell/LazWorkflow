@@ -54,14 +54,16 @@ fun displayBlocks(turn: WireTurn?): List<WireBlock> {
   return built
 }
 
-fun shownBlocks(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): List<WireBlock> {
-  return displayBlocks(turn).filter { block ->
-    when (block.kind) {
-      "thinking" -> showThinking && (block.body.isNotEmpty() || block.title.isNotEmpty())
-      "tool", "subagent" -> showTools
-      else -> block.body.isNotEmpty() || block.title.isNotEmpty() || block.images.isNotEmpty()
-    }
+fun blockShown(block: WireBlock, showThinking: Boolean, showTools: Boolean): Boolean {
+  return when (block.kind) {
+    "thinking" -> showThinking && (block.body.isNotEmpty() || block.title.isNotEmpty())
+    "tool", "subagent" -> showTools
+    else -> block.body.isNotEmpty() || block.title.isNotEmpty() || block.images.isNotEmpty()
   }
+}
+
+fun shownBlocks(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): List<WireBlock> {
+  return displayBlocks(turn).filter { block -> blockShown(block, showThinking, showTools) }
 }
 
 fun slotUnits(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): Int {
