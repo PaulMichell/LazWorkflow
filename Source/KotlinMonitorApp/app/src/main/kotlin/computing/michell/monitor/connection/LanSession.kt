@@ -356,9 +356,13 @@ class InboundDelivery(
 
 interface SessionPort {
   val promptDraft: String
+  val hostAddress: String
+  val hostPort: Int
+  val hostClientId: String
   fun nextCommandId(): String
   fun updateDraft(text: String)
   fun sendCatalogue(json: String)
+  fun resetImages()
 }
 
 class LanSession(
@@ -399,6 +403,14 @@ class LanSession(
 
   override fun updateDraft(text: String) {
     promptDraft = text
+  }
+
+  override val hostAddress: String get() = store.load().address
+  override val hostPort: Int get() = store.load().port
+  override val hostClientId: String get() = store.load().clientId
+
+  override fun resetImages() {
+    session.images.reset()
   }
 
   /** Opens the saved endpoint. Does not replace or clear the TLS pin. */

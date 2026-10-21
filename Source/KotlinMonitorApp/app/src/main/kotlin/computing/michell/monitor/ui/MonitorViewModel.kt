@@ -59,6 +59,7 @@ import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeMode
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeRejected
+import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
@@ -122,8 +123,23 @@ data class MonitorUi(
   val pendingCommandId: String = "",
   val pendingEpoch: Int = 0,
   val activityStartedMs: Long = 0,
-  val activityObservedMs: Int = 0
+  val activityObservedMs: Int = 0,
+  val hostGeneration: Int = 0,
+  val conversationGeneration: Int = 0
 )
+
+/** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
+fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int, conversationGeneration: Int): MonitorUi {
+  val keepDraft = !clearDraft && state.draft.isNotEmpty() && state.pendingPrompt.isEmpty()
+  return MonitorUi(
+    draft = if (keepDraft) state.draft else "",
+    showThinking = state.showThinking,
+    showTools = state.showTools,
+    settingsOpen = state.settingsOpen,
+    hostGeneration = hostGeneration,
+    conversationGeneration = conversationGeneration
+  )
+}
 
 fun emptyView(): WireView {
   return WireView(
@@ -321,7 +337,8 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val history = retainLoaded(current.history + next.history, next.turns)
   // An empty draft is explicit. Do not refill it from an older insert still sitting on next.
   val draft = if (useReducedDraft) next.draft else current.draft
-  val mergedLive = mergeLiveTurn(current.live, next.live)
+  val sameGeneration = current.hostGeneration == next.hostGeneration && current.conversationGeneration == next.conversationGeneration
+  val mergedLive = mergeLiveTurn(current.live, next.live, sameGeneration)
   val merged = next.copy(live = mergedLive, history = history)
   val shown = promptShown(merged, current.pendingPrompt)
   val pendingLeft = !shown && current.pendingPrompt.isNotEmpty()
@@ -382,9 +399,17 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
 
 private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
   val snapshot = decodeSnapshot(payloadJson) ?: return state
+  val incoming = snapshot.live
+  if (incoming == null) {
+    val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
+    return overlaySnapshot(cleared, snapshot, state.generation + 1)
+  }
+  val previousId = state.live?.id ?: ""
+  val acceptedNew = previousId.isNotEmpty() && previousId != incoming.id
+  val conversationGeneration = if (acceptedNew) state.conversationGeneration + 1 else state.conversationGeneration
+  val live = mergeLiveTurn(state.live, incoming, !acceptedNew)
+  val sameLive = !acceptedNew && state.live?.id == live?.id
   val approval = snapshot.approval
-  val live = mergeLiveTurn(state.live, snapshot.live)
-  val sameLive = state.live?.turnIndex == live?.turnIndex
   return state.copy(
     view = snapshot.view,
     turns = snapshot.storedTurns,
@@ -403,7 +428,31 @@ private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
     disconnected = false,
     banner = "",
     generation = state.generation + 1,
-    rescueSteer = false
+    rescueSteer = false,
+    conversationGeneration = conversationGeneration
+  )
+}
+
+fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int): MonitorUi {
+  val approval = snapshot.approval
+  return cleared.copy(
+    view = snapshot.view,
+    turns = snapshot.storedTurns,
+    live = null,
+    history = emptyMap(),
+    planPath = snapshot.planPath,
+    planTitle = snapshot.planTitle,
+    planRunning = snapshot.planRunning,
+    planRows = snapshot.planRows,
+    approval = if (approval.active) approval else null,
+    approvalOpen = approval.active,
+    reachedLive = true,
+    pairHold = false,
+    disconnected = false,
+    banner = "",
+    generation = generation,
+    liveRevision = -1,
+    transcriptParts = emptyMap()
   )
 }
 
@@ -546,8 +595,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val store = HostStore(application)
   private val session = LanSession(store)
   private val images = ImageAssembly()
-  private val requested = mutableSetOf<String>()
-  private val requestedTurns = mutableSetOf<Int>()
   private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
   private val display = object : DisplayPreferences {
     override val showThinking: Boolean get() = displayPrefs.getBoolean(DisplayThinkingKey, true)
@@ -633,6 +680,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
     }
     if (record.address.isNotEmpty()) {
+      coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
       session.connect(record.address, record.port)
     }
   }
@@ -731,6 +779,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       uiState.update { it.copy(banner = "Enter the desktop address and port.", pairHold = true) }
       return
     }
+    val record = store.load()
+    val endpointChanged = record.address != address || record.port != port
+    val clientId = if (endpointChanged) "" else record.clientId
+    val effects = coordinator.onEvent(MonitorEvent.HostChanged(uiState.value, address, port, clientId))
+    if (effects != null) applyUiEffects(effects)
     uiState.update { it.copy(pairHold = false, settingsOpen = false, disconnected = true, banner = ConnectingBanner) }
     session.connect(address, port)
   }
@@ -750,12 +803,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun forgetPairing() {
     leaveDictation()
+    val effects = coordinator.onEvent(MonitorEvent.ForgetPairing(uiState.value)) ?: emptyList()
+    applyUiEffects(effects)
     session.disconnect()
     store.clear()
-    uiState.value = MonitorUi(showThinking = uiState.value.showThinking, showTools = uiState.value.showTools)
-    bitmapsState.value = emptyMap()
-    requested.clear()
-    requestedTurns.clear()
   }
 
   fun sendOrSteer() {
@@ -794,7 +845,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val state = uiState.value
     if (state.history[index]?.let { liveHasContent(it) } == true) return
     if (state.live?.turnIndex == index && liveHasContent(state.live)) return
-    if (!requestedTurns.add(index)) return
+    if (!coordinator.noteTurnRequest(index)) return
     session.sendCatalogue(encodeTurnRequest(session.nextCommandId(), index))
   }
 
@@ -865,7 +916,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     for (effect in effects) {
       if (effect is MonitorEffect.DecodeImage) {
         val bitmap = decodeBitmap(effect.message)
-        if (bitmap != null) decoded += bitmap
+        if (bitmap != null) {
+          coordinator.noteBitmap(bitmap.first)
+          decoded += bitmap
+        }
       }
     }
     val copyState = effects.any { it !is MonitorEffect.DecodeImage }
@@ -887,6 +941,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           prefetchRecent()
           requestVisibleImages()
         }
+        MonitorEffect.ClearCaches -> {
+          images.reset()
+          bitmapsState.value = emptyMap()
+        }
       }
     }
   }
@@ -895,7 +953,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val state = uiState.value
     val slots = virtualSlots(state.turns, state.live, state.view.sending)
     val known = slots.map { slot -> slot.turnIndex }.toSet()
-    requestedTurns.retainAll(known)
+    coordinator.retainTurnRequests(known)
     for (index in recentFetches(slots, loadedTurnIndices(state))) requestTurn(index)
   }
 
@@ -911,7 +969,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     for (image in found) {
       if (image.id.isEmpty() || image.missing) continue
       val key = turn.turnIndex.toString() + ":" + image.id
-      if (!requested.add(key)) continue
+      if (!coordinator.noteImageRequest(key)) continue
       session.sendCatalogue(encodeImageGet(session.nextCommandId(), turn.turnIndex, image.id))
     }
   }

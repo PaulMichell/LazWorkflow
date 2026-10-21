@@ -123,10 +123,10 @@ fun fractionAt(units: List<Int>, index: Int, unitOffset: Int): Float {
   return 1f
 }
 
-fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?): WireTurn? {
-  if (incoming == null) return previous
-  if (incoming.blocks.isNotEmpty()) return incoming
-  if (previous == null || previous.turnIndex != incoming.turnIndex || !liveHasContent(previous)) return incoming
+fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?, sameGeneration: Boolean = true): WireTurn? {
+  if (incoming == null) return null
+  val sameTurn = sameGeneration && previous != null && previous.id.isNotEmpty() && previous.id == incoming.id
+  if (!sameTurn || incoming.blocks.isNotEmpty() || !liveHasContent(previous)) return incoming
   return incoming.copy(
     prompt = incoming.prompt.ifEmpty { previous.prompt },
     thinking = incoming.thinking.ifEmpty { previous.thinking },
@@ -138,6 +138,9 @@ fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?): WireTurn? {
 }
 
 fun retainLoaded(history: Map<Int, WireTurn>, turns: List<WireTurn>): Map<Int, WireTurn> {
-  val known = turns.map { turn -> turn.turnIndex }.toSet()
-  return history.filterKeys { index -> index in known }
+  val ids = turns.associate { turn -> turn.turnIndex to turn.id }
+  return history.filter { (index, cached) ->
+    val id = ids[index]
+    id != null && id.isNotEmpty() && id == cached.id
+  }
 }
