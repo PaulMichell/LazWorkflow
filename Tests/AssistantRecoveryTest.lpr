@@ -155,12 +155,11 @@ Var
   Note: String;
 Begin
   Decision := ClassifyDroppedTransport('Codex runtime exited.', '', False);
-  Check('Codex runtime exit retries the turn', (Decision.Action = araRetryLastAction) And
-    (Decision.HttpWait = ahwConnection));
+  Check('Codex runtime exit does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Codex stdin closed unexpectedly.', '', False);
-  Check('Codex stdin close retries the turn', Decision.Action = araRetryLastAction);
+  Check('Codex stdin close does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Codex exited with a truncated protocol frame.', '', False);
-  Check('truncated Codex frame retries the turn', Decision.Action = araRetryLastAction);
+  Check('truncated Codex frame does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Could not start Claude Code.', '', False);
   Check('Claude start failure retries the turn', Decision.Action = araRetryLastAction);
   Decision := ClassifyDroppedTransport('Claude Code did not complete the turn.', '', False);

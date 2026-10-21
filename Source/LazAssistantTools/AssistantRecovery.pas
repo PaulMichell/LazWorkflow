@@ -971,6 +971,10 @@ Begin
     Exit(Recovery(araStop, False));
   If StatusIs(Fault, 401) Then
     Exit(Recovery(araStop, False));
+  { App-server turns and tool results are not idempotent. A lost response must
+    not replay an entire Codex turn with potentially completed IDE actions. }
+  If Pos('codex', LowerCase(ErrorText)) > 0 Then
+    Exit(Recovery(araStop, False));
   { Same order as an HTTP round: credits before a short 429, then a lost transport. }
   If AssistantFaultIsOutOfCredits(Fault) Then
     Exit(Recovery(araRetryLastAction, False, ahwCredits));
