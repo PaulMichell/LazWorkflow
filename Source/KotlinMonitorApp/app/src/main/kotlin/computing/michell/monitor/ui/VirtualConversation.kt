@@ -31,7 +31,8 @@ fun virtualSlots(turns: List<WireTurn>, live: WireTurn?, sending: Boolean): List
     VirtualSlot(turn.turnIndex, turn.promptPreview.ifEmpty { "Turn ${turn.turnIndex}" }, false)
   }
   if (live == null) return stored
-  val showLive = sending || liveHasContent(live) || live.turnIndex >= 0
+  // An empty live row must not hide the stored turn the desktop is showing.
+  val showLive = sending || liveHasContent(live)
   if (!showLive) return stored
   val label = live.promptPreview.ifEmpty { if (live.turnIndex < 0) "Live" else "Turn ${live.turnIndex}" }
   val liveSlot = VirtualSlot(live.turnIndex, label, true)

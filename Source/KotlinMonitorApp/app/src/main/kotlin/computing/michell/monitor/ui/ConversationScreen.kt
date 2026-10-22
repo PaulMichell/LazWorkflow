@@ -350,8 +350,11 @@ private fun slotIndexForFraction(slots: List<VirtualSlot>, measured: Map<String,
 }
 
 private fun bodyFor(ui: MonitorUi, slot: VirtualSlot): WireTurn? {
-  if (slot.live) return ui.live ?: ui.history[slot.turnIndex]
-  return ui.history[slot.turnIndex]
+  val stored = ui.history[slot.turnIndex]
+  val live = if (slot.live) ui.live else null
+  if (live != null && shownBlocks(live, ui.showThinking, ui.showTools).isNotEmpty()) return live
+  if (stored != null) return stored
+  return live
 }
 
 @Composable

@@ -82,6 +82,7 @@ class MonitorCoordinator(
   private val bitmapKeys = mutableSetOf<String>()
   private var visibleTurns = emptySet<Int>()
   private var hostBound = false
+  private var snapshotRequested = false
   private var hostAddress = ""
   private var hostPort = 0
   private var hostClientId = ""
@@ -265,6 +266,7 @@ class MonitorCoordinator(
     if (reset == null) screen = stamp(current)
     val closed = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (closed) {
+      snapshotRequested = false
       screen = keepUnackedText(screen).copy(pendingCommandId = "")
       applied = keepUnackedText(applied).copy(pendingCommandId = "")
       retryView = null
@@ -282,7 +284,11 @@ class MonitorCoordinator(
     val shown = linked.copy(pairHold = linked.pairHold || pin, draft = screen.draft)
     if (shown.generation > postedGeneration) postedGeneration = shown.generation
     screen = stamp(shown)
-    if (status.phase == LinkPhase.Live && wasDown) {
+    // A fast handshake can publish Live before the screen is marked disconnected.
+    // Status still arrives. The snapshot does not, unless this asks for it.
+    val needSnapshot = status.phase == LinkPhase.Live && (wasDown || !shown.reachedLive)
+    if (needSnapshot && !snapshotRequested) {
+      snapshotRequested = true
       effects += MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
     }
     return effects

@@ -500,6 +500,15 @@ class MonitorCoordinatorTest {
     ))
     assertEquals("hello", coordinator.state.pendingPrompt)
   }
+
+  @Test
+  fun aLiveLinkAsksForTheDesktopConversation() {
+    val coordinator = coordinator()
+    val first = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
+    assertTrue(first.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
+    val again = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
+    assertFalse(again.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {

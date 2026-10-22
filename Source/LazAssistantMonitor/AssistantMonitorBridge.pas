@@ -353,6 +353,50 @@ Begin
   End;
 End;
 
+{ EncodeMonitorEnvelope returns an empty string when the frame is over the cap.
+  A length check on that result never sees the overflow, so the snapshot was dropped. }
+Function SnapshotJson(Const Id: String; Snapshot: TMonitorSnapshot): String;
+
+  Procedure KeepTextFromBlocks(Var Turn: TAssistantMonitorTurn);
+  Var
+    I: Integer;
+  Begin
+    For I := 0 To High(Turn.Blocks) Do
+      Begin
+        If (Turn.Prompt = '') And (Turn.Blocks[I].Kind = 'user') Then
+          Turn.Prompt := Turn.Blocks[I].Body;
+        If (Turn.Thinking = '') And (Turn.Blocks[I].Kind = 'thinking') Then
+          Turn.Thinking := Turn.Blocks[I].Body;
+        If (Turn.Response = '') And (Turn.Blocks[I].Kind = 'answer') Then
+          Turn.Response := Turn.Blocks[I].Body;
+      End;
+    If Turn.PromptPreview = '' Then
+      Turn.PromptPreview := Copy(Turn.Prompt, 1, 160);
+  End;
+
+  Procedure TruncateLiveText(Var Turn: TAssistantMonitorTurn);
+  Begin
+    Turn.Prompt := Copy(Turn.Prompt, 1, 4000);
+    Turn.Thinking := Copy(Turn.Thinking, 1, 4000);
+    Turn.Response := Copy(Turn.Response, 1, 8000);
+    SetLength(Turn.Blocks, 0);
+    SetLength(Turn.Images, 0);
+  End;
+
+Begin
+  Result := EncodeMonitorSnapshot(Id, Snapshot);
+  If Result <> '' Then
+    Exit;
+  KeepTextFromBlocks(Snapshot.Live);
+  SetLength(Snapshot.Live.Blocks, 0);
+  SetLength(Snapshot.Live.Images, 0);
+  Result := EncodeMonitorSnapshot(Id, Snapshot);
+  If Result <> '' Then
+    Exit;
+  TruncateLiveText(Snapshot.Live);
+  Result := EncodeMonitorSnapshot(Id, Snapshot);
+End;
+
 Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
 Var
   Snapshot: TMonitorSnapshot;
@@ -385,14 +429,7 @@ Begin
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  Json := EncodeMonitorSnapshot(Id, Snapshot);
-  { A full trace can exceed the frame. Drop the blocks and keep the index so the phone can request the turn. }
-  If Length(Json) > MonitorMaxPayloadBytes Then
-    Begin
-      SetLength(Snapshot.Live.Blocks, 0);
-      SetLength(Snapshot.Live.Images, 0);
-      Json := EncodeMonitorSnapshot(Id, Snapshot);
-    End;
+  Json := SnapshotJson(Id, Snapshot);
   If Json <> '' Then
     SendJson(Json);
 End;
