@@ -5,7 +5,7 @@ Program AssistantWriteImageTest;
   Flag off: the tool is absent and a call is unknown. Flag on: the schema
   requires prompt, has optional shape, and has no image_id. A Grok mock posts
   grok-imagine-image-2.0 and writes a fixture PNG. An OpenAI-compatible mock
-  posts a different image model. Codex uses the OpenAI image endpoint. Claude does not post. Path escape, a
+  posts a different image model. Claude and Codex do not post. Path escape, a
   symlink out of the project, bad magic, overwrite without the flag, a missing
   prompt, a missing image model, and Plan or Document calls are refused. An
   inapplicable shape is omitted. A missing extension, or one that does not
@@ -451,8 +451,6 @@ Var
   SavedApproval: TAssistantApprovalMode;
   Kept: TBytes;
   PostsBefore: Integer;
-  FixtureSection: TJSONObject;
-  FixtureProfiles: TJSONArray;
 Begin
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-write-image-fixture-' + IntToStr(GetProcessID);
   Project := IncludeTrailingPathDelimiter(Root) + 'project';
@@ -618,34 +616,17 @@ Begin
 
     CodexItem := Store.AddStored('codex-draw', 'Codex draw', 'codex');
     CodexItem.Model := ChatModel;
-    ApplyImageOutputTurnedOn(CodexItem);
+    CodexItem.ImageModel := 'should-not-post';
     CodexItem.ImageOutput := True;
     CodexItem.KeyValue := 'test-key';
     Store.ActiveId := CodexItem.Id;
     Check('Codex profile saved', Store.Save);
-    { Supply only the mock transport credential; never read a real API key in this fixture. }
-    FixtureSection := ReadWorkflowSection('assistant');
-    Try
-      FixtureProfiles := TJSONArray(FixtureSection.Find('connections'));
-      TJSONObject(FixtureProfiles.Items[FixtureProfiles.Count - 1]).Add('key_value', 'test-key');
-      Check('Codex fixture credential saved', WriteWorkflowSection('assistant', FixtureSection, Note));
-    Finally
-      FixtureSection.Free;
-    End;
     BeginWriteImageTurn;
     MockCalls := 0;
-    CheckNoted('Codex writes through the shared image tool using the OpenAI endpoint', Note,
-      CallWrite(amBuild, ArgsFor('Documents/codex.png', 'a red dot', '1024x1536'), Reply, Note) And
-      (MockCalls = 1) And (SeenUrl = 'https://api.openai.com/v1/images/generations') And
-      WroteFixture('Documents/codex.png', Reply, ProjectFile(Project, 'Documents/codex.png'), AssistantCodexImageModel) And
-      BodyField('model', AssistantCodexImageModel) And BodyField('size', '1024x1536') And
-      BodyLacks('response_format') And (CodexItem.Model = ChatModel));
-    CheckNoted('Codex omits unsupported image dimensions', Note,
-      CallWrite(amBuild, ArgsFor('Documents/codex-auto.png', 'a red dot', '16:9'), Reply, Note) And
-      (MockCalls = 2) And BodyLacks('size'));
-    CodexItem.ImageOutput := False;
-    Check('Codex opt-out saved', Store.Save);
-    Check('Codex opt-out removes the image tool', Pos('write_image', BuildAssistantToolsJsonForMode(amBuild)) = 0);
+    CheckNoted('Codex with the flag on does not post', Note,
+      (Not CallWrite(amBuild, ArgsFor('icons/codex.png', 'a red dot', ''), Reply, Note)) And
+      (MockCalls = 0) And (Pos('no image endpoint', Note) > 0) And
+      (Not FileExists(ProjectFile(Project, 'icons/codex.png'))));
 
     EmptyModel := Store.AddStored('empty-model', 'Empty model', 'openai-compatible');
     EmptyModel.Model := ChatModel;

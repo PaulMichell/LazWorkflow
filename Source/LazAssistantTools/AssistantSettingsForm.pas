@@ -463,17 +463,13 @@ Begin
       Begin
         ImageModelCombo.Items.Add(AssistantGrokImageModel);
         ImageModelCombo.Items.Add('grok-imagine-image');
-      End
-    Else If Item.Backend = 'codex' Then
-      ImageModelCombo.Items.Add(AssistantCodexImageModel);
+      End;
   Finally
     ImageModelCombo.Items.EndUpdate;
   End;
   ImageModelCombo.Text := Item.ImageModel;
   ImageModelCombo.Enabled := CanDraw;
-  If Item.Backend = 'codex' Then
-    ImageModelLabel.Caption := 'Image model (requires OPENAI_API_KEY)'
-  Else If CanDraw Then
+  If CanDraw Then
     ImageModelLabel.Caption := 'Image model'
   Else
     ImageModelLabel.Caption := 'This connection cannot draw.';
@@ -732,12 +728,11 @@ Begin
     Item.ImageOutput := False
   Else
     Begin
-      If ImageOutputCheck.Checked And (Trim(ImageModelCombo.Text) = '') Then
-        Begin
-          Item.ImageModel := '';
-          ApplyImageOutputTurnedOn(Item);
-          ImageModelCombo.Text := Item.ImageModel;
-        End;
+      If ImageOutputCheck.Checked And (Not Item.ImageOutput) And (Item.Backend = 'grok') And
+        (Trim(ImageModelCombo.Text) = '') Then
+        ImageModelCombo.Text := AssistantGrokImageModel;
+      If ImageOutputCheck.Checked And (Not Item.ImageOutput) Then
+        ApplyImageOutputTurnedOn(Item);
       Item.ImageOutput := ImageOutputCheck.Checked;
       Item.ImageModel := Trim(ImageModelCombo.Text);
     End;
@@ -1882,12 +1877,9 @@ Begin
   If ImageOutputCheck.Checked And Assigned(Connections) And (SelectedConnection >= 0) And
     (SelectedConnection < Connections.Count) And (Not Connections[SelectedConnection].ImageOutput) Then
     Begin
-      If Trim(ImageModelCombo.Text) = '' Then
-        Begin
-          Connections[SelectedConnection].ImageModel := '';
-          ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
-          ImageModelCombo.Text := Connections[SelectedConnection].ImageModel;
-        End;
+      If (Connections[SelectedConnection].Backend = 'grok') And (Trim(ImageModelCombo.Text) = '') Then
+        ImageModelCombo.Text := AssistantGrokImageModel;
+      ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
     End;
   { Turning the flag on must not replace the chat model with the image model. }
   If Backend = 'grok' Then

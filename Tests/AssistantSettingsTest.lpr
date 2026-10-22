@@ -152,16 +152,16 @@ Begin
     Frame.EffortCombo.ItemIndex := Frame.EffortCombo.Items.IndexOf('xhigh');
     ImageCheck := TCheckBox(Dialog.FindComponent('ImageOutputCheck'));
     KeptModel := Frame.ModelCombo.Text;
-    Check('Codex image output is available and opt-in',
+    Check('selected profile may draw, but Codex cannot',
       Assigned(ImageCheck) And ImageCheck.Visible And (ImageCheck.Caption = 'May draw images') And
-      ImageCheck.Enabled And (Not ImageCheck.Checked) And (Dialog.FindComponent('ImageDeliveryCombo') = Nil) And
-      (Pos('OPENAI_API_KEY', TLabel(Dialog.FindComponent('ImageModelLabel')).Caption) > 0) And
-      TComboBox(Dialog.FindComponent('ImageModelCombo')).Enabled And
+      (Not ImageCheck.Enabled) And (Not ImageCheck.Checked) And (Dialog.FindComponent('ImageDeliveryCombo') = Nil) And
+      (TLabel(Dialog.FindComponent('ImageModelLabel')).Caption = 'This connection cannot draw.') And
+      (Not TComboBox(Dialog.FindComponent('ImageModelCombo')).Enabled) And
       (TComboBox(Dialog.FindComponent('ImageModelCombo')).Style = csDropDown) And
       (KeptModel = 'model-one'));
     ImageCheck.Checked := True;
     ImageCheck.OnClick(ImageCheck);
-    Check('enabling Codex images does not replace the chat model',
+    Check('a disabled Codex checkbox does not replace the chat model',
       (Frame.ModelCombo.Text = KeptModel) And (Frame.ModelCombo.Text = 'model-one'));
     List.ItemIndex := 0; List.OnClick(List);
     TButton(Dialog.FindComponent('UseConnectionButton')).Click;
@@ -208,8 +208,8 @@ Begin
         Not FileExists(ConfigRoot + '/assistant-connections.ini') And Not FileExists(ConfigRoot + '/spell.xml'));
       Check('saving settings persists the discovered lists', Store[0].CachedModelsJson = ModelList);
       Check('saving settings does not invent a Grok row', Store[0].Backend = 'codex');
-      Check('Codex save preserves image opt-in and its separate default model',
-        Store[0].ImageOutput And (Store[0].Model = 'model-one') And (Store[0].ImageModel = AssistantCodexImageModel));
+      Check('Codex save does not turn drawing on or invent an image model',
+        (Not Store[0].ImageOutput) And (Store[0].Model = 'model-one') And (Store[0].ImageModel = ''));
       OriginalContext := AssistantChatConfig.IncludeIDEContext;
       CancelledDialog := TAssistantSettingsForm.Create(Nil);
       Try
@@ -222,9 +222,9 @@ Begin
           And (Frame.EffortCombo.Items.Count = 4) And (Frame.ReasoningEffort = 'xhigh')
           And Not Frame.Busy);
         ImageCheck := TCheckBox(CancelledDialog.FindComponent('ImageOutputCheck'));
-        Check('reopened Codex profile preserves image output and keeps the chat model',
-          ImageCheck.Checked And ImageCheck.Enabled And
-          (Pos('OPENAI_API_KEY', TLabel(CancelledDialog.FindComponent('ImageModelLabel')).Caption) > 0) And
+        Check('reopened Codex profile still cannot draw and keeps the chat model',
+          (Not ImageCheck.Checked) And (Not ImageCheck.Enabled) And
+          (TLabel(CancelledDialog.FindComponent('ImageModelLabel')).Caption = 'This connection cannot draw.') And
           (Frame.ModelCombo.Text = 'model-one'));
         TMenuItem(CancelledDialog.FindComponent('ChatGptAccountItem')).Click;
         Check('new connections do not inherit discovered lists',
