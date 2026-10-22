@@ -2842,33 +2842,39 @@ Procedure TProjectAssistantForm.BuildTodoListDrawItem(Control: TWinControl; Inde
     End;
   End;
 
-  Procedure PillColors(Status: TPlanSectionStatus; Out Fill, Ink: TColor);
+  { Same treatment as the history ref cards: pastel fill, darker border, darker text. }
+  Procedure PillColors(Status: TPlanSectionStatus; Out Fill, Ink, Border: TColor);
   Begin
     Case Status Of
       pssNotStarted:
         Begin
-          Fill := TColor($0037AFD4);
-          Ink := TColor($00082E3E);
+          Fill := RGBToColor(255, 243, 205);
+          Ink := RGBToColor(121, 85, 0);
+          Border := RGBToColor(212, 160, 23);
         End;
       pssInProgress:
         Begin
-          Fill := TColor($00408C24);
-          Ink := clWhite;
+          Fill := RGBToColor(232, 245, 233);
+          Ink := RGBToColor(27, 94, 32);
+          Border := RGBToColor(67, 160, 71);
         End;
       pssComplete:
         Begin
-          Fill := TColor($00B8661E);
-          Ink := clWhite;
+          Fill := RGBToColor(227, 242, 253);
+          Ink := RGBToColor(13, 71, 161);
+          Border := RGBToColor(66, 165, 245);
         End;
       pssBlocked:
         Begin
-          Fill := TColor($002A2ABA);
-          Ink := clWhite;
+          Fill := RGBToColor(255, 235, 238);
+          Ink := RGBToColor(183, 28, 28);
+          Border := RGBToColor(229, 57, 53);
         End;
     Else
       Begin
         Fill := clNone;
         Ink := clNone;
+        Border := clNone;
       End;
     End;
   End;
@@ -2877,9 +2883,9 @@ Var
   List: TListBox;
   Section: TPlanSection;
   CaptionText, StatusText, TitleText: String;
-  Fill, Ink: TColor;
+  Fill, Ink, Border: TColor;
   Selected: Boolean;
-  Pad, TextH, PillWidth, PillLeft, PillTop, PillBottom, TitleLeft, TitleRight: Integer;
+  Pad, TextH, PillWidth, PillLeft, PillTop, PillBottom, TitleLeft, TitleRight, Corner: Integer;
   TitleRect, PillRect: TRect;
   TitleStyle: TTextStyle;
 Begin
@@ -2914,29 +2920,35 @@ Begin
   TitleRight := ARect.Right - Pad;
   If StatusText <> '' Then
     Begin
-      PillColors(Section.Status, Fill, Ink);
-      PillWidth := List.Canvas.TextWidth(StatusText) + Scale96ToForm(16);
+      List.Canvas.Font.Size := 8;
+      List.Canvas.Font.Quality := fqCleartypeNatural;
+      PillColors(Section.Status, Fill, Ink, Border);
+      PillWidth := List.Canvas.TextWidth(StatusText) + Scale96ToForm(12);
       PillLeft := ARect.Right - Pad - PillWidth;
       If PillLeft < TitleLeft + Scale96ToForm(24) Then
         PillLeft := TitleLeft + Scale96ToForm(24);
       TitleRight := PillLeft - Scale96ToForm(6);
-      PillTop := ARect.Top + Scale96ToForm(4);
-      PillBottom := ARect.Bottom - Scale96ToForm(4);
-      If PillBottom <= PillTop Then
-        Begin
-          PillTop := ARect.Top + 1;
-          PillBottom := ARect.Bottom - 1;
-        End;
+      TextH := Scale96ToForm(18);
+      PillTop := ARect.Top + ((ARect.Bottom - ARect.Top) - TextH) Div 2;
+      PillBottom := PillTop + TextH;
+      If PillBottom > ARect.Bottom - 1 Then
+        PillBottom := ARect.Bottom - 1;
+      If PillTop < ARect.Top + 1 Then
+        PillTop := ARect.Top + 1;
       PillRect := Rect(PillLeft, PillTop, PillLeft + PillWidth, PillBottom);
+      List.Canvas.Brush.Style := bsSolid;
       List.Canvas.Brush.Color := Fill;
-      List.Canvas.Pen.Color := Fill;
       List.Canvas.Pen.Style := psSolid;
-      List.Canvas.RoundRect(PillRect.Left, PillRect.Top, PillRect.Right, PillRect.Bottom, PillRect.Bottom - PillRect.Top, PillRect.Bottom - PillRect.Top);
+      List.Canvas.Pen.Color := Border;
+      List.Canvas.Pen.Width := 1;
+      Corner := Scale96ToForm(8);
+      List.Canvas.RoundRect(PillRect.Left, PillRect.Top, PillRect.Right, PillRect.Bottom, Corner, Corner);
       List.Canvas.Font.Color := Ink;
       List.Canvas.Brush.Style := bsClear;
       TextH := List.Canvas.TextHeight(StatusText);
-      List.Canvas.TextOut(PillRect.Left + Scale96ToForm(8), PillRect.Top + ((PillRect.Bottom - PillRect.Top) - TextH) Div 2, StatusText);
+      List.Canvas.TextOut(PillRect.Left + Scale96ToForm(6), PillRect.Top + ((PillRect.Bottom - PillRect.Top) - TextH) Div 2, StatusText);
       List.Canvas.Brush.Style := bsSolid;
+      List.Canvas.Font.Assign(List.Font);
     End;
   If Selected Then
     List.Canvas.Font.Color := clHighlightText
