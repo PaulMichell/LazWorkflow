@@ -150,6 +150,9 @@ fun ConversationScreen(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       Text("Mode")
       ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
+      IconButton(onClick = onSettings) {
+        Icon(painterResource(R.drawable.ic_menu), contentDescription = "Settings")
+      }
     }
     ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
@@ -164,9 +167,6 @@ fun ConversationScreen(
       ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
       Button(onClick = onNew, enabled = ui.view.canSend && !ui.disconnected) { Text("New") }
-      IconButton(onClick = onSettings) {
-        Icon(painterResource(R.drawable.ic_menu), contentDescription = "Settings")
-      }
     }
     ActivityStatus(ui, phase, dictation.listening, dictation.statusMessage)
   }
