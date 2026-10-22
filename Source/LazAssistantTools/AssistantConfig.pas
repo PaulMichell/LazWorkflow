@@ -1031,8 +1031,14 @@ Begin
             Else
               Connections.ActiveId := '';
           End;
-        If Assigned(Connections.Active) And (Connections.Active.Backend = 'grok') Then
-          SyncConfigFromGrokRow(Self, GrokObjectById(ConnectionArray, Connections.Active.Id), Connections.Active);
+        If Assigned(Connections.Active) Then
+          Begin
+            If Connections.Active.Backend = 'grok' Then
+              SyncConfigFromGrokRow(Self, GrokObjectById(ConnectionArray, Connections.Active.Id), Connections.Active);
+            { Project tools use this policy for every backend, not just Grok.
+              Match the selected connection so its displayed permissions govern execution. }
+            FApprovalMode := ApprovalModeToStr(StrToApprovalMode(Connections.Active.ApprovalMode));
+          End;
       End;
     ReadSkillModes(Self, Section);
     ReadSkillFiles(Self, Section);

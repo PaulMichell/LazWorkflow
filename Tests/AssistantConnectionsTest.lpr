@@ -80,6 +80,15 @@ Begin
       Check('codex-only file has no Grok row', Pos('grok', LowerCase(Policy.Text)) = 0);
     Finally Policy.Free; End;
     Check('loaded Codex row asks with no effort until set', (Store[0].ApprovalMode = 'ask') And (Store[0].ReasoningEffort = ''));
+    Store[0].ApprovalMode := 'always';
+    Check('save Codex Always policy', Store.Save);
+    AssistantChatConfig.ApprovalMode := 'ask';
+    Store.Load;
+    Check('Codex Always reaches the project-tool approval gate', AssistantChatConfig.GetApprovalMode = aamAlways);
+    Store[0].ApprovalMode := 'ask';
+    Check('save Codex Ask policy', Store.Save);
+    Store.Load;
+    Check('Codex Ask restores project-tool confirmations', AssistantChatConfig.GetApprovalMode = aamAsk);
     Store[0].Name := 'First account'; Store[0].Model := 'model-one'; Store[0].CachedModelsJson := ModelList;
     Profile := Store.ProfileDir(Store[0]);
     Check('connection uses a derived Codex profile', Profile = Derived(Root, Id));
@@ -89,6 +98,7 @@ Begin
     Check('additional account gets a distinct profile', Store.ProfileDir(Item) = Derived(Root, Item.Id));
     Check('additional profile is not created until launch', Not DirectoryExists(Store.ProfileDir(Item)));
     Store.ActiveId := Item.Id; Store.Save; Store.Load;
+    Check('switching accounts applies Auto to project tools', AssistantChatConfig.GetApprovalMode = aamAuto);
     Check('save writes the IDE document and leaves legacy files in place',
       FileExists(WorkflowSettingsPath) And FileExists(Root + '/assistant-connections.ini') And FileExists(Root + '/assistant-backend.ini'));
     Policy := TStringList.Create;
