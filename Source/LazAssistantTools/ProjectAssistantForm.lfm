@@ -339,11 +339,13 @@ object ProjectAssistantForm: TProjectAssistantForm
             Width = 290
             Anchors = [akTop, akLeft, akRight, akBottom]
             BorderSpacing.Around = 2
-            ItemHeight = 0
+            ItemHeight = 28
+            Style = lbOwnerDrawFixed
             TabOrder = 1
             TopIndex = -1
             OnClick = BuildTodoListClick
             OnDblClick = BuildTodoListDblClick
+            OnDrawItem = BuildTodoListDrawItem
             OnSelectionChange = BuildTodoListSelectionChange
           end
           object BuildStatusLabel: TLabel

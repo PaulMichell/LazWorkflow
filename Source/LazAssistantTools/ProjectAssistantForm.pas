@@ -20,7 +20,8 @@ Unit ProjectAssistantForm;
   Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
   The list stays in AssistantTasksForm.
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
-  Dialog-free monitor fill and remote helpers stay here because they read private send and plan state. }
+  Dialog-free monitor fill and remote helpers stay here because they read private send and plan state.
+  Reviewed 2026-10-22: plan sidebar status is an owner-drawn pill on BuildTodoList. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -140,6 +141,7 @@ Type
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
     Procedure BuildTodoListClick(Sender: TObject);
     Procedure BuildTodoListDblClick(Sender: TObject);
+    Procedure BuildTodoListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
     Procedure BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
     Procedure HistoryComboChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
@@ -885,6 +887,12 @@ Begin
     PromptHost.OnResize := @PromptHostResize;
   If Assigned(PromptSplitter) Then
     PromptSplitter.MinSize := Scale96ToForm(48);
+  If Assigned(BuildTodoList) Then
+    Begin
+      BuildTodoList.Style := lbOwnerDrawFixed;
+      BuildTodoList.ItemHeight := Scale96ToForm(28);
+      BuildTodoList.OnDrawItem := @BuildTodoListDrawItem;
+    End;
   EnsureChatView;
   If Assigned(FTraceView) And Assigned(FTrace) Then
     FTraceView.Sync(FTrace, False);
@@ -2818,6 +2826,137 @@ Begin
     (BuildTodoList.ItemIndex >= 0) And
     (BuildTodoList.ItemIndex < BuildSections.Count) Then
     FBuildSelectedIndex := BuildTodoList.ItemIndex;
+End;
+
+Procedure TProjectAssistantForm.BuildTodoListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
+
+  Function PillCaption(Status: TPlanSectionStatus): String;
+  Begin
+    Case Status Of
+      pssNotStarted: Result := 'Not Started';
+      pssInProgress: Result := 'In Progress';
+      pssComplete: Result := 'Complete';
+      pssBlocked: Result := 'Blocked';
+    Else
+      Result := '';
+    End;
+  End;
+
+  Procedure PillColors(Status: TPlanSectionStatus; Out Fill, Ink: TColor);
+  Begin
+    Case Status Of
+      pssNotStarted:
+        Begin
+          Fill := TColor($0037AFD4);
+          Ink := TColor($00082E3E);
+        End;
+      pssInProgress:
+        Begin
+          Fill := TColor($00408C24);
+          Ink := clWhite;
+        End;
+      pssComplete:
+        Begin
+          Fill := TColor($00B8661E);
+          Ink := clWhite;
+        End;
+      pssBlocked:
+        Begin
+          Fill := TColor($002A2ABA);
+          Ink := clWhite;
+        End;
+    Else
+      Begin
+        Fill := clNone;
+        Ink := clNone;
+      End;
+    End;
+  End;
+
+Var
+  List: TListBox;
+  Section: TPlanSection;
+  CaptionText, StatusText, TitleText: String;
+  Fill, Ink: TColor;
+  Selected: Boolean;
+  Pad, TextH, PillWidth, PillLeft, PillTop, PillBottom, TitleLeft, TitleRight: Integer;
+  TitleRect, PillRect: TRect;
+  TitleStyle: TTextStyle;
+Begin
+  If Not (Control Is TListBox) Then
+    Exit;
+  List := TListBox(Control);
+  Selected := odSelected In State;
+  List.Canvas.Font.Assign(List.Font);
+  List.Canvas.Font.Style := [];
+  If Selected Then
+    List.Canvas.Brush.Color := clHighlight
+  Else
+    List.Canvas.Brush.Color := List.Color;
+  List.Canvas.FillRect(ARect);
+  CaptionText := '';
+  If (Index >= 0) And (Index < List.Items.Count) Then
+    CaptionText := List.Items[Index];
+  Section := Nil;
+  If Assigned(BuildSections) And (Index >= 0) And (Index < BuildSections.Count) Then
+    Section := TPlanSection(BuildSections[Index]);
+  StatusText := '';
+  If Assigned(Section) And Section.Actionable Then
+    StatusText := PillCaption(Section.Status);
+  If Assigned(Section) Then
+    TitleText := Section.Title
+  Else
+    TitleText := CaptionText;
+  Pad := Scale96ToForm(6);
+  TitleLeft := ARect.Left + Pad;
+  If Assigned(Section) And Section.Actionable Then
+    Inc(TitleLeft, Scale96ToForm(8));
+  TitleRight := ARect.Right - Pad;
+  If StatusText <> '' Then
+    Begin
+      PillColors(Section.Status, Fill, Ink);
+      PillWidth := List.Canvas.TextWidth(StatusText) + Scale96ToForm(16);
+      PillLeft := ARect.Right - Pad - PillWidth;
+      If PillLeft < TitleLeft + Scale96ToForm(24) Then
+        PillLeft := TitleLeft + Scale96ToForm(24);
+      TitleRight := PillLeft - Scale96ToForm(6);
+      PillTop := ARect.Top + Scale96ToForm(4);
+      PillBottom := ARect.Bottom - Scale96ToForm(4);
+      If PillBottom <= PillTop Then
+        Begin
+          PillTop := ARect.Top + 1;
+          PillBottom := ARect.Bottom - 1;
+        End;
+      PillRect := Rect(PillLeft, PillTop, PillLeft + PillWidth, PillBottom);
+      List.Canvas.Brush.Color := Fill;
+      List.Canvas.Pen.Color := Fill;
+      List.Canvas.Pen.Style := psSolid;
+      List.Canvas.RoundRect(PillRect.Left, PillRect.Top, PillRect.Right, PillRect.Bottom, PillRect.Bottom - PillRect.Top, PillRect.Bottom - PillRect.Top);
+      List.Canvas.Font.Color := Ink;
+      List.Canvas.Brush.Style := bsClear;
+      TextH := List.Canvas.TextHeight(StatusText);
+      List.Canvas.TextOut(PillRect.Left + Scale96ToForm(8), PillRect.Top + ((PillRect.Bottom - PillRect.Top) - TextH) Div 2, StatusText);
+      List.Canvas.Brush.Style := bsSolid;
+    End;
+  If Selected Then
+    List.Canvas.Font.Color := clHighlightText
+  Else
+    List.Canvas.Font.Color := List.Font.Color;
+  If Assigned(Section) And Not Section.Actionable Then
+    List.Canvas.Font.Style := [fsBold];
+  TitleRect := Rect(TitleLeft, ARect.Top, TitleRight, ARect.Bottom);
+  TitleStyle := List.Canvas.TextStyle;
+  TitleStyle.Alignment := taLeftJustify;
+  TitleStyle.Layout := tlCenter;
+  TitleStyle.SingleLine := True;
+  TitleStyle.EndEllipsis := True;
+  TitleStyle.Clipping := True;
+  TitleStyle.Opaque := False;
+  TitleStyle.SystemFont := False;
+  List.Canvas.Brush.Style := bsClear;
+  List.Canvas.TextRect(TitleRect, TitleLeft, TitleRect.Top, TitleText, TitleStyle);
+  If odFocused In State Then
+    List.Canvas.DrawFocusRect(ARect);
 End;
 
 Procedure TProjectAssistantForm.BuildTodoListDblClick(Sender: TObject);
