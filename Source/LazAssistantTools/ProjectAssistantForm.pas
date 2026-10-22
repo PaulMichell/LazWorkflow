@@ -573,7 +573,7 @@ Implementation
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
-  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng, IntfGraphics,
+  FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness,
   AssistantImages,
@@ -2829,8 +2829,10 @@ Begin
 End;
 
 { LCL RoundRect is aliased, and the widgetsets do not agree on the corner ellipse.
-  A signed-distance raster keeps all four corners the same and anti-aliases the edge. }
-Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor);
+  A signed-distance raster keeps all four corners the same and anti-aliases the edge.
+  Covered pixels are blended with the colour already on the target canvas. Uncovered
+  corners are left alone, so a fresh bitmap cannot paint them black. }
+Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border: TColor);
 
   Function Clamp01(Value: Single): Single;
   Begin
@@ -2890,6 +2892,11 @@ Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Sing
     Result.Alpha := 65535;
   End;
 
+  Function FPToColor(Const C: TFPColor): TColor;
+  Begin
+    Result := (C.Red Shr 8) Or ((C.Green Shr 8) Shl 8) Or ((C.Blue Shr 8) Shl 16);
+  End;
+
   Function MixCoverage(Const Back, Edge, Inside: TFPColor; Outer, Inner: Single): TFPColor;
   Var
     BackWeight, EdgeWeight: Single;
@@ -2906,8 +2913,6 @@ Var
   W, H, X, Y, SampleX, SampleY: Integer;
   CX, CY, HalfW, HalfH, UsedRadius, SD, Outer, Inner, OuterSum, InnerSum: Single;
   FillColor, BorderColor, BackColor, Pixel: TFPColor;
-  Bitmap: TBitmap;
-  Image: TLazIntfImage;
 Begin
   W := Bounds.Right - Bounds.Left;
   H := Bounds.Bottom - Bounds.Top;
@@ -2924,41 +2929,29 @@ Begin
   CY := (Bounds.Top + Bounds.Bottom) / 2;
   FillColor := ColorToFP(Fill);
   BorderColor := ColorToFP(Border);
-  BackColor := ColorToFP(Background);
-  Bitmap := TBitmap.Create;
-  Try
-    Bitmap.PixelFormat := pf32bit;
-    Bitmap.SetSize(W, H);
-    Image := Bitmap.CreateIntfImage;
-    Try
-      For Y := 0 To H - 1 Do
-        For X := 0 To W - 1 Do
-          Begin
-            OuterSum := 0;
-            InnerSum := 0;
-            For SampleY := 0 To 1 Do
-              For SampleX := 0 To 1 Do
-                Begin
-                  SD := RoundRectDistance(
-                    (Bounds.Left + X + 0.5 + (SampleX * 2 - 1) * 0.25) - CX,
-                    (Bounds.Top + Y + 0.5 + (SampleY * 2 - 1) * 0.25) - CY,
-                    HalfW, HalfH, UsedRadius);
-                  OuterSum := OuterSum + Clamp01(0.5 - SD);
-                  InnerSum := InnerSum + Clamp01(0.5 - (SD + 1));
-                End;
-            Outer := OuterSum / 4;
-            Inner := InnerSum / 4;
-            Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
-            Image.Colors[X, Y] := Pixel;
-          End;
-      Bitmap.LoadFromIntfImage(Image);
-    Finally
-      Image.Free;
-    End;
-    Target.Draw(Bounds.Left, Bounds.Top, Bitmap);
-  Finally
-    Bitmap.Free;
-  End;
+  For Y := 0 To H - 1 Do
+    For X := 0 To W - 1 Do
+      Begin
+        OuterSum := 0;
+        InnerSum := 0;
+        For SampleY := 0 To 1 Do
+          For SampleX := 0 To 1 Do
+            Begin
+              SD := RoundRectDistance(
+                (Bounds.Left + X + 0.5 + (SampleX * 2 - 1) * 0.25) - CX,
+                (Bounds.Top + Y + 0.5 + (SampleY * 2 - 1) * 0.25) - CY,
+                HalfW, HalfH, UsedRadius);
+              OuterSum := OuterSum + Clamp01(0.5 - SD);
+              InnerSum := InnerSum + Clamp01(0.5 - (SD + 1));
+            End;
+        Outer := OuterSum / 4;
+        Inner := InnerSum / 4;
+        If Outer <= 0.004 Then
+          Continue;
+        BackColor := ColorToFP(Target.Pixels[Bounds.Left + X, Bounds.Top + Y]);
+        Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
+        Target.Pixels[Bounds.Left + X, Bounds.Top + Y] := FPToColor(Pixel);
+      End;
 End;
 
 Procedure TProjectAssistantForm.BuildTodoListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
@@ -3069,10 +3062,7 @@ Begin
       If PillTop < ARect.Top + 1 Then
         PillTop := ARect.Top + 1;
       PillRect := Rect(PillLeft, PillTop, PillLeft + PillWidth, PillBottom);
-      If Selected Then
-        DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border, clHighlight)
-      Else
-        DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border, List.Color);
+      DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border);
       List.Canvas.Font.Color := Ink;
       List.Canvas.Brush.Style := bsClear;
       TextH := List.Canvas.TextHeight(StatusText);
