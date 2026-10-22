@@ -96,6 +96,22 @@ class MonitorCoordinator(
   )
 
   val state: MonitorUi get() = screen
+
+  /** Shows a saved session before the background connect replaces it. */
+  fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
+    val shown = cached.copy(
+      disconnected = true,
+      reachedLive = false,
+      pairHold = false,
+      settingsOpen = false,
+      approvalOpen = false,
+      approval = null,
+      planRunning = false,
+      view = clearRemoteActions(cached.view)
+    )
+    screen = stamp(shown)
+    applied = shown
+  }
   val requestedTurnEntries: Set<Int> get() = inFlightTurns.keys.toSet()
   val inFlightImageKeys: Set<String> get() = inFlightImages.keys.toSet()
   val loadedImageKeys: Set<String> get() = loadedImages.toSet()
@@ -495,6 +511,7 @@ class MonitorCoordinator(
   }
 
   private fun beginTurnFetch(state: MonitorUi, index: Int): MonitorEffect? {
+    if (state.disconnected) return null
     if (index < 0 || inFlightTurns.containsKey(index)) return null
     if (index in loadedTurnIndices(state) || turnDoneKey(state.hostGeneration, index) in completedTurns) return null
     val commandId = session.nextCommandId()
@@ -504,6 +521,7 @@ class MonitorCoordinator(
   }
 
   private fun beginImageFetch(state: MonitorUi, turnIndex: Int, imageId: String): MonitorEffect? {
+    if (state.disconnected) return null
     if (imageLoaded(state.hostGeneration, imageId)) return null
     val key = imageFlightKey(state.hostGeneration, turnIndex, imageId)
     if (inFlightImages.containsKey(key)) return null

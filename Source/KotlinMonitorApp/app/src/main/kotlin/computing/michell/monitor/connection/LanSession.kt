@@ -3,7 +3,8 @@ package computing.michell.monitor.connection
 /* TLS session for the monitor phone (c) 2026 Michell Computing.
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
-   HTTP client. Reads and writes run on Dispatchers.IO. An empty fingerprint
+   HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
+   proxy never reaches the desktop listener. Reads and writes run on Dispatchers.IO. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
    is refused. Inbound messages wait on a bounded queue. A slow collector
@@ -38,6 +39,8 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
 import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
 import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -185,9 +188,13 @@ class SslSocketConnector : TlsConnector {
     val manager = trustManagerForFingerprint(fingerprint)
     val context = SSLContext.getInstance("TLS")
     context.init(null, arrayOf(manager), SecureRandom())
-    val socket = context.socketFactory.createSocket() as SSLSocket
+    // The emulator installs a SOCKS proxy. Socket.connect then never reaches the desktop listener.
+    val plain = Socket(Proxy.NO_PROXY)
+    var wrapped: SSLSocket? = null
     try {
-      socket.connect(InetSocketAddress(address, port), ConnectTimeoutMs)
+      plain.connect(InetSocketAddress(address, port), ConnectTimeoutMs)
+      val socket = context.socketFactory.createSocket(plain, address, port, true) as SSLSocket
+      wrapped = socket
       val protocols = socket.supportedProtocols.filter { it == "TLSv1.3" || it == "TLSv1.2" }
       if (protocols.isNotEmpty()) socket.enabledProtocols = protocols.toTypedArray()
       val parameters = socket.sslParameters
@@ -197,7 +204,14 @@ class SslSocketConnector : TlsConnector {
       socket.startHandshake()
       return SocketLink(socket)
     } catch (error: Exception) {
-      socket.close()
+      try {
+        wrapped?.close()
+      } catch (ignored: Exception) {
+      }
+      try {
+        plain.close()
+      } catch (ignored: Exception) {
+      }
       throw error
     }
   }
@@ -581,7 +595,9 @@ class LanSession(
       when (attempt(epoch)) {
         AttemptResult.Pinned -> return
         AttemptResult.Superseded -> return
-        AttemptResult.Refused -> policy.pause()
+        AttemptResult.Refused -> {
+          // A refused port may be the listener starting. Keep the backoff instead of waiting for a tap.
+        }
         AttemptResult.Failed -> publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, statusState.value.lastError)
         AttemptResult.Opened -> {
           policy.resume()
@@ -623,7 +639,7 @@ class LanSession(
         return AttemptResult.Pinned
       }
       if (isRefused(error)) {
-        publish(LinkPhase.Paused, ConnectionRefusedBanner, error.message ?: ConnectionRefusedBanner)
+        publish(LinkPhase.Disconnected, ConnectionRefusedBanner, error.message ?: ConnectionRefusedBanner)
         return AttemptResult.Refused
       }
       val detail = error.message ?: "Connection failed."

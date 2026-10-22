@@ -2,6 +2,7 @@ package computing.michell.monitor.ui
 
 /* Catalogue reduction without a device (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
@@ -107,8 +108,12 @@ class MonitorReducerTest {
     assertEquals("unsent", rejected.draft)
     assertTrue(rejected.disconnected)
     assertTrue(rejected.pairHold)
-    val closed = noteSocketClosed(start, HostClosedBanner)
+    val liveTurn = WireTurn(-2, "live", "chat", "", "hi", "", prompt = "hi", blocks = listOf(
+      WireBlock("answer", "", "", "", "", "kept", false, true, 0, emptyList())
+    ))
+    val closed = noteSocketClosed(start.copy(live = liveTurn), HostClosedBanner)
     assertEquals("unsent", closed.draft)
+    assertEquals("kept", closed.live?.blocks?.first()?.body)
     assertEquals(HostClosedBanner, closed.banner)
     assertTrue(closed.disconnected)
     assertEquals(start.turns, closed.turns)
@@ -213,8 +218,16 @@ class MonitorReducerTest {
     assertTrue(back.disconnected)
     assertEquals("connecting", connectionLabel(back, LinkPhase.Connecting))
     val live = applyLink(back, LinkPhase.Live, "")
-    assertEquals(ConnectingBanner, live.banner)
+    assertEquals("", live.banner)
     assertFalse(live.disconnected)
+    val recovered = applyLink(noteSocketClosed(MonitorUi(reachedLive = true), ConnectionRefusedBanner), LinkPhase.Live, "")
+    assertEquals("", recovered.banner)
+    assertFalse(recovered.disconnected)
+    val idle = applyLink(MonitorUi(banner = OfflineBanner, disconnected = true, turns = listOf(WireTurn(1, "a", "build", "", "Row", ""))), LinkPhase.Idle, "")
+    assertTrue(idle.disconnected)
+    assertEquals(OfflineBanner, idle.banner)
+    assertEquals("Row", idle.turns[0].promptPreview)
+    assertEquals("offline", connectionLabel(idle, LinkPhase.Idle))
   }
 
   @Test

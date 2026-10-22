@@ -151,7 +151,9 @@ fun ConversationScreen(
       Text("Mode")
       ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
     }
-    if (ui.banner.isNotEmpty()) Text(ui.banner, color = MaterialTheme.colorScheme.error)
+    if (ui.banner.isNotEmpty()) {
+      Text(ui.banner, color = if (bannerIsStatus(ui.banner)) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+    }
     ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

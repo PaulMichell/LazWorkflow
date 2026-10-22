@@ -18,6 +18,7 @@ import android.graphics.BitmapFactory
 import android.speech.SpeechRecognizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.dictation.acceptSpeechCallback
 import computing.michell.monitor.dictation.DictationAudioMessage
@@ -48,6 +49,7 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
+import java.io.File
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
@@ -55,6 +57,7 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
+import computing.michell.monitor.protocol.encodeOfflineCache
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.PlanRow
 
@@ -161,6 +164,7 @@ fun emptyView(): WireView {
 
 fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
   if (phase == LinkPhase.Connecting) return "connecting"
+  if (ui.banner == OfflineBanner) return "offline"
   if (ui.disconnected || phase == LinkPhase.Disconnected || phase == LinkPhase.Paused) return "disconnected"
   if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
   if (ui.reachedLive) return "live"
@@ -169,7 +173,16 @@ fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
 
 const val ConnectingBanner = "Connecting…"
 
+fun linkBanner(banner: String): Boolean {
+  return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
+    banner == HostClosedBanner || banner == OfflineBanner || banner == NoAddressBanner
+}
+
 fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
+  if (phase == LinkPhase.Idle) {
+    if (state.reachedLive) return state
+    return state.copy(disconnected = true, pairHold = false)
+  }
   val closed = phase == LinkPhase.Disconnected || phase == LinkPhase.Paused
   if (closed && banner.isNotEmpty()) return noteSocketClosed(state, banner)
   if (phase == LinkPhase.Connecting) {
@@ -177,7 +190,7 @@ fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
     return state.copy(disconnected = true, banner = shown, pairHold = false)
   }
   if (phase == LinkPhase.Live) {
-    val shown = if (state.banner == ReconnectingBanner) "" else state.banner
+    val shown = if (linkBanner(state.banner)) "" else state.banner
     return state.copy(disconnected = false, banner = shown, pairHold = false)
   }
   if (closed || (!state.disconnected && state.banner != ReconnectingBanner)) return state
@@ -396,7 +409,6 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
     liveRevision = -1,
     transcriptParts = emptyMap(),
     transcriptTurnId = "",
-    live = state.live?.copy(blocks = emptyList()),
     rescueSteer = false,
     view = clearRemoteActions(state.view)
   )
@@ -656,7 +668,9 @@ private fun WireView.patchStatus(status: WireView): WireView {
 
 class MonitorViewModel(application: Application) : AndroidViewModel(application) {
   private val store = HostStore(application)
+  private val offlineStore = OfflineStore(File(application.filesDir, "offline-cache.json"))
   private val session = LanSession(store)
+  private var savedCache = ""
   private val images = ImageAssembly()
   private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
   private val display = object : DisplayPreferences {
@@ -727,6 +741,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
+    val cached = offlineStore.load()
+    if (cached != null || record.address.isEmpty()) {
+      val seeded = if (cached != null) applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty())
+      else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
+      coordinator.restoreOffline(seeded)
+      if (cached != null) savedCache = encodeOfflineCache(cached)
+    }
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
     viewModelScope.launch(Dispatchers.Default) {
@@ -991,10 +1012,35 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   override fun onCleared() {
+    rememberDisplayed(uiState.value)
     supportPending = false
     finalWatch.cancel()
     engine.destroy()
     session.close()
+  }
+
+  private fun rememberDisplayed(ui: MonitorUi) {
+    if (!worthCaching(ui)) {
+      if (savedCache.isEmpty()) return
+      savedCache = ""
+      viewModelScope.launch(Dispatchers.IO) {
+        try {
+          offlineStore.clear()
+        } catch (error: Exception) {
+        }
+      }
+      return
+    }
+    val text = encodeOfflineCache(offlineDocument(ui))
+    if (text == savedCache) return
+    savedCache = text
+    viewModelScope.launch(Dispatchers.IO) {
+      try {
+        offlineStore.save(text)
+      } catch (error: Exception) {
+        // A failed local copy must not drop the live session.
+      }
+    }
   }
 
   private suspend fun applyIncoming(message: MonitorMessage) {
@@ -1031,6 +1077,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     uiState.value = coordinator.state
+    rememberDisplayed(uiState.value)
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {

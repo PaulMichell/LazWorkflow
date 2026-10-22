@@ -75,6 +75,9 @@ fun PlanScreen(
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(ui.planTitle.ifEmpty { "Plan" }, style = MaterialTheme.typography.titleLarge)
     Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
+    if (ui.banner.isNotEmpty()) {
+      Text(ui.banner, color = if (bannerIsStatus(ui.banner)) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+    }
     LazyColumn(modifier = Modifier.weight(1f)) {
       items(ui.planRows) { row ->
         PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan) {
@@ -84,11 +87,12 @@ fun PlanScreen(
     }
     OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), label = { Text("New plan title") }, singleLine = true)
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      Button(onClick = onWork, enabled = ui.selectedPlan >= 0) { Text("Work on this") }
-      Button(onClick = onRun) { Text("Run") }
-      Button(onClick = onStop) { Text("Stop") }
-      Button(onClick = { onNew(title.trim()) }) { Text("New") }
-      Button(onClick = onRemove, enabled = ui.planPath.isNotEmpty()) { Text("Remove") }
+      val online = !ui.disconnected
+      Button(onClick = onWork, enabled = online && ui.selectedPlan >= 0) { Text("Work on this") }
+      Button(onClick = onRun, enabled = online) { Text("Run") }
+      Button(onClick = onStop, enabled = online) { Text("Stop") }
+      Button(onClick = { onNew(title.trim()) }, enabled = online) { Text("New") }
+      Button(onClick = onRemove, enabled = online && ui.planPath.isNotEmpty()) { Text("Remove") }
     }
   }
 }

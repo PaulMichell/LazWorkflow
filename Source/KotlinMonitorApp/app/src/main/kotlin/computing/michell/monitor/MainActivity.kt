@@ -55,9 +55,8 @@ private fun MonitorShell(model: MonitorViewModel) {
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
   val port by model.pairPort.collectAsState()
-  val forcedSettings = ui.pairHold || !ui.reachedLive || link.banner == "TLS pin mismatch."
-  val showSettings = forcedSettings || ui.settingsOpen
-  BackHandler(enabled = showSettings && !forcedSettings) { model.closeSettings() }
+  val showSettings = ui.settingsOpen
+  BackHandler(enabled = showSettings) { model.closeSettings() }
   Scaffold(
     bottomBar = {
       if (!showSettings) {
@@ -72,7 +71,7 @@ private fun MonitorShell(model: MonitorViewModel) {
     androidx.compose.foundation.layout.Box(modifier) {
       if (showSettings) {
         SettingsScreen(
-          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools, !forcedSettings,
+          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools, true,
           { model.pairAddress.value = it },
           { model.pairPort.value = it },
           model::connectFromPair,

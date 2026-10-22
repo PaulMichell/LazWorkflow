@@ -46,7 +46,7 @@ import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.protocol.MonitorLimits
 
-private const val EndpointHint = "Use the address and port shown in Assistant > Remote Monitor."
+private const val EndpointHint = "Use the address and port shown in Assistant > Remote Monitor. An emulator cannot use 10.0.0.1; use that LAN address."
 
 @Composable
 fun SettingsScreen(

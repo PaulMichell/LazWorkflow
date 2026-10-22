@@ -1204,6 +1204,51 @@ fun decodeSnapshot(obj: JsonValue.Obj): WireSnapshot? {
   )
 }
 
+data class OfflineCacheDocument(
+  val turns: List<WireTurn>,
+  val history: List<WireTurn>,
+  val live: WireTurn?,
+  val planPath: String,
+  val planTitle: String,
+  val planRows: List<PlanRow>,
+  val selectedPlan: Int,
+  val draft: String
+)
+
+/** Local browse copy. Not a catalogue frame. Stored turns are index rows; history and live keep bodies. */
+fun encodeOfflineCache(document: OfflineCacheDocument): String {
+  val obj = JsonObjectBuilder()
+  obj.add("turns", JsonValue.Arr(document.turns.map { turnToJson(it, true) }))
+  obj.add("history", JsonValue.Arr(document.history.map { turnToJson(it, false) }))
+  obj.add("live", if (document.live == null) JsonValue.Null else turnToJson(document.live, false))
+  obj.add("plan_path", document.planPath)
+  obj.add("plan_title", document.planTitle)
+  obj.add("plan_rows", JsonValue.Arr(document.planRows.map { planRowToJson(it) }))
+  obj.add("selected_plan", document.selectedPlan)
+  obj.add("draft", document.draft)
+  return obj.build().toFpJson()
+}
+
+fun decodeOfflineCache(text: String): OfflineCacheDocument? {
+  val obj = parseObject(text) ?: return null
+  val turns = rowsFrom(obj.field("turns")) { turnFromJson(it, true) } ?: return null
+  val history = rowsFrom(obj.field("history")) { turnFromJson(it, false) } ?: return null
+  val live = when (val liveNode = obj.field("live")) {
+    null, JsonValue.Null -> null
+    is JsonValue.Obj -> turnFromJson(liveNode, false) ?: return null
+    else -> return null
+  }
+  val planPath = obj.readString("plan_path", true)
+  val planTitle = obj.readString("plan_title", true)
+  val selected = obj.readInt("selected_plan", true)
+  val draft = obj.readString("draft", true)
+  if (!planPath.ok || !planTitle.ok || !selected.ok || !draft.ok) return null
+  val planRows = rowsFrom(obj.field("plan_rows")) { planRowFromJson(it) } ?: return null
+  return OfflineCacheDocument(
+    turns, history, live, planPath.value, planTitle.value, planRows, selected.value, draft.value
+  )
+}
+
 fun splitTranscript(source: WireTranscript): List<WireTranscript> {
   data class Piece(val block: WireBlock, val part: Int, val partCount: Int)
   val pieces = mutableListOf<Piece>()
