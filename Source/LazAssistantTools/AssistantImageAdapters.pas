@@ -574,10 +574,33 @@ Begin
   End;
 End;
 
+Function BuildCodexImageBody(Const ImageModel, Prompt, Shape: String): String;
+Var
+  Body: TJSONObject;
+  PixelSize: String;
+Begin
+  Body := TJSONObject.Create;
+  Try
+    { GPT image models return base64 by default and do not accept response_format. }
+    Body.Add('model', ImageModel);
+    Body.Add('prompt', Prompt);
+    Body.Add('n', 1);
+    PixelSize := LowerCase(Trim(Shape));
+    If (PixelSize = '1024x1024') Or (PixelSize = '1536x1024') Or (PixelSize = '1024x1536') Then
+      Body.Add('size', PixelSize);
+    Result := Body.AsJSON;
+  Finally
+    Body.Free;
+  End;
+End;
+
 Function ProfileImageUrl(Const Profile: TAssistantProfileCall): String;
 Var
   Base: String;
 Begin
+  { Codex account credentials and chat runtime are never used for image API calls. }
+  If Profile.Backend = 'codex' Then
+    Exit(ImageEndpointUrl('https://api.openai.com/v1'));
   Base := Trim(Profile.ApiBase);
   If (Base = '') And (Profile.Backend = 'grok') Then
     Base := AssistantConfigDefaultApiBase;
@@ -603,6 +626,14 @@ Begin
     Begin
       Provider := CreateXaiModelProvider;
       Result := Provider.GetAccessToken(False, Token, ErrorText);
+      Exit;
+    End;
+  If Profile.Backend = 'codex' Then
+    Begin
+      Token := GetEnvironmentVariable('OPENAI_API_KEY');
+      Result := (Token <> '') And (Pos(#10, Token) = 0) And (Pos(#13, Token) = 0);
+      If Not Result Then
+        ErrorText := 'Codex image output requires OPENAI_API_KEY in the IDE environment; ChatGPT sign-in is not an image API key.';
       Exit;
     End;
   If Profile.KeySource = 'stored' Then
@@ -803,6 +834,8 @@ Begin
     Exit;
   If Profile.Backend = 'grok' Then
     Body := BuildGrokImageBody(Profile.ImageModel, Prompt, Shape)
+  Else If Profile.Backend = 'codex' Then
+    Body := BuildCodexImageBody(Profile.ImageModel, Prompt, Shape)
   Else If Profile.Backend = 'openai-compatible' Then
     Body := BuildCompatibleImageBody(Profile.ImageModel, Prompt, Shape)
   Else

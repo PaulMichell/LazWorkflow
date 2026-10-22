@@ -255,8 +255,8 @@ Begin
     Item.Model := 'codex-model';
     Item.ImageOutput := True;
     ApplyImageOutputTurnedOn(Item);
-    Check('Codex gets no image model and cannot draw',
-      (Item.ImageModel = '') And (Item.Model = 'codex-model') And (Not AssistantBackendCanDraw('codex')));
+    Check('Codex defaults its image model without replacing its chat model',
+      (Item.ImageModel = AssistantCodexImageModel) And (Item.Model = 'codex-model') And AssistantBackendCanDraw('codex'));
     Item := Store.AddStored('claude-draw', 'Claude draw', 'claude');
     Item.Model := 'claude-model';
     Item.ImageOutput := True;

@@ -26,6 +26,7 @@ Const
   AssistantImageDeliveryToolPrompt = 'tool-prompt';
   { Grok default when image output is turned on and no image model is stored. }
   AssistantGrokImageModel = 'grok-imagine-image-2.0';
+  AssistantCodexImageModel = 'gpt-image-1';
 
 Type
   TAssistantConnection = Class
@@ -67,9 +68,9 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
-/// True for grok and openai-compatible. Claude and Codex have no image endpoint here.
+/// True for Grok, OpenAI-compatible and Codex. Codex images use a separate OpenAI API key.
 Function AssistantBackendCanDraw(Const Backend: String): Boolean;
-/// Sets the Grok image model when drawing is turned on and none is stored.
+/// Sets the Grok or Codex image model when drawing is turned on and none is stored.
 /// Does not copy the chat model. Other backends are left unchanged.
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
 /// ImageOutput on the active saved profile. False when no profile is selected.
@@ -119,17 +120,20 @@ End;
 
 Function AssistantBackendCanDraw(Const Backend: String): Boolean;
 Begin
-  Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
+  Result := (Backend = 'grok') Or (Backend = 'openai-compatible') Or (Backend = 'codex');
 End;
 
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
 Begin
   If Not Assigned(Item) Then
     Exit;
-  { Only a Grok row with no stored image model receives the default.
-    Claude and Codex cannot draw. OpenAI-compatible keeps an empty id until the user sets one. }
-  If (Item.Backend = 'grok') And (Trim(Item.ImageModel) = '') Then
-    Item.ImageModel := AssistantGrokImageModel;
+  { Image defaults never replace the selected chat model. }
+  If Trim(Item.ImageModel) <> '' Then
+    Exit;
+  If Item.Backend = 'grok' Then
+    Item.ImageModel := AssistantGrokImageModel
+  Else If Item.Backend = 'codex' Then
+    Item.ImageModel := AssistantCodexImageModel;
 End;
 
 Procedure ClearProfileCall(Out Profile: TAssistantProfileCall);
