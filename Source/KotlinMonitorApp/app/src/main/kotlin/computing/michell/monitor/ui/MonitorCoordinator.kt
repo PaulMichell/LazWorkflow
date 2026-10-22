@@ -231,7 +231,8 @@ class MonitorCoordinator(
     if (message.kind == MessageKind.ImageData) return listOf(MonitorEffect.DecodeImage(message))
     if (message.kind == MessageKind.Snapshot) {
       val snapshot = (message.inbound as? InboundPayload.Snapshot)?.value ?: decodeSnapshot(message.payloadJson)
-      if (snapshot != null && snapshot.live == null) return acceptNullLive(current, snapshot)
+      val empty = current.live == null && current.turns.isEmpty() && current.history.isEmpty()
+      if (snapshot != null && snapshot.live == null && empty) return acceptNullLive(current, snapshot)
     }
     val immediate = message.kind in ImmediateKinds
     applied = reduceMonitor(applied, message)

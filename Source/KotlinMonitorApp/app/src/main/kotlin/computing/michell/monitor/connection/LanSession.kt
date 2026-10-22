@@ -200,6 +200,7 @@ class SslSocketConnector : TlsConnector {
       val parameters = socket.sslParameters
       parameters.endpointIdentificationAlgorithm = null
       socket.sslParameters = parameters
+      // One second so the loop can ping and check a partial frame. A timeout is not a closed host.
       socket.soTimeout = ReadTimeoutMs
       socket.startHandshake()
       return SocketLink(socket)
@@ -696,10 +697,13 @@ class LanSession(
           } catch (error: SocketTimeoutException) {
             0
           } catch (error: Exception) {
-            if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
-            val detail = error.message ?: "Read failed."
-            publishCurrent(epoch, LinkPhase.Disconnected, detail, detail)
-            return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+            if (isReadTimeout(error)) 0
+            else {
+              if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
+              val detail = error.message ?: "Read failed."
+              publishCurrent(epoch, LinkPhase.Disconnected, detail, detail)
+              return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+            }
           }
           // Closing the socket to enforce a terminal result unblocks this read. Keep that result.
           if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
@@ -721,7 +725,8 @@ class LanSession(
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
           if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
             val ping = encodeTicks(MessageKind.Ping, newId(), now)
-            if (!writeJson(ping, current)) return@withContext finishRead(epoch, current, ReadEnd.WriteFailed)
+            // A timed-out write is not the host closing. The next read reports a real close.
+            writeJson(ping, current)
             lastSent = now
           }
           if (epochCounter.get() != epoch) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
@@ -770,6 +775,7 @@ class LanSession(
           if (mac.isNotEmpty()) writeJson(encodeAuth(newId(), record.clientId, mac), owned)
           writeJson(encodeEmpty(MessageKind.Refresh, newId()), owned)
         }
+        publishCurrent(epoch, LinkPhase.Connecting, "", "")
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L
@@ -885,6 +891,17 @@ private fun isPinFailure(error: Throwable): Boolean {
   var current: Throwable? = error
   while (current != null) {
     if (current is PinMismatchException) return true
+    current = current.cause
+  }
+  return false
+}
+
+private fun isReadTimeout(error: Throwable): Boolean {
+  var current: Throwable? = error
+  while (current != null) {
+    if (current is SocketTimeoutException) return true
+    val text = current.message?.lowercase() ?: ""
+    if (text.contains("timed out") || text.contains("timeout")) return true
     current = current.cause
   }
   return false

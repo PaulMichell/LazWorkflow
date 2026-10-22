@@ -113,15 +113,27 @@ fun stickToHead(following: Boolean, previousValue: Int, value: Int, previousMax:
 fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?, sameGeneration: Boolean = true): WireTurn? {
   if (incoming == null) return null
   val sameTurn = sameGeneration && previous != null && previous.id.isNotEmpty() && previous.id == incoming.id
-  if (!sameTurn || incoming.blocks.isNotEmpty() || !liveHasContent(previous)) return incoming
-  return incoming.copy(
-    prompt = incoming.prompt.ifEmpty { previous.prompt },
-    thinking = incoming.thinking.ifEmpty { previous.thinking },
-    response = incoming.response.ifEmpty { previous.response },
-    errorText = incoming.errorText.ifEmpty { previous.errorText },
-    blocks = previous.blocks,
-    images = if (incoming.images.isNotEmpty()) incoming.images else previous.images
-  )
+  if (!sameTurn) return incoming
+  if (incoming.blocks.isEmpty() && liveHasContent(previous)) {
+    return incoming.copy(
+      prompt = incoming.prompt.ifEmpty { previous.prompt },
+      thinking = incoming.thinking.ifEmpty { previous.thinking },
+      response = incoming.response.ifEmpty { previous.response },
+      errorText = incoming.errorText.ifEmpty { previous.errorText },
+      blocks = previous.blocks,
+      images = if (incoming.images.isNotEmpty()) incoming.images else previous.images
+    )
+  }
+  // Same text must keep the displayed object. A new instance rebuilds every bubble.
+  if (previous.blocks == incoming.blocks && previous.prompt == incoming.prompt && previous.response == incoming.response &&
+    previous.thinking == incoming.thinking) {
+    if (previous.durationMs == incoming.durationMs && previous.promptPreview == incoming.promptPreview) return previous
+    return previous.copy(
+      durationMs = if (incoming.durationMs > 0) incoming.durationMs else previous.durationMs,
+      promptPreview = incoming.promptPreview.ifEmpty { previous.promptPreview }
+    )
+  }
+  return incoming
 }
 
 fun retainLoaded(history: Map<Int, WireTurn>, turns: List<WireTurn>): Map<Int, WireTurn> {

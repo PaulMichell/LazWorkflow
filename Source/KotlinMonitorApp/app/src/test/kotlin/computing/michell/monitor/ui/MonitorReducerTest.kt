@@ -378,6 +378,64 @@ class MonitorReducerTest {
     assertEquals("replaced", shown.live?.blocks?.single()?.body)
     assertFalse(shown.live?.blocks?.any { it.body.contains("TAIL") } == true)
   }
+
+  @Test
+  fun aLiveReduceDoesNotRestoreTheOfflineBanner() {
+    val shown = MonitorUi(banner = "", disconnected = false, reachedLive = true)
+    val cached = shown.copy(banner = OfflineBanner, disconnected = true)
+    val kept = mergeApplied(shown, cached, false, false)
+    assertEquals("", kept.banner)
+    assertFalse(kept.disconnected)
+    val status = shown.copy(banner = "", disconnected = false, view = emptyView().copy(canSteer = true))
+    val cleared = mergeApplied(cached, status, false, false)
+    assertEquals("", cleared.banner)
+    assertFalse(cleared.disconnected)
+    assertTrue(cleared.view.canSteer)
+  }
+
+  @Test
+  fun anUnchangedSnapshotKeepsTheDisplayedConversation() {
+    val blocks = listOf(WireBlock("answer", "a", "", "", "", "kept", false, true, 0, emptyList()))
+    val live = WireTurn(-2, "live", "build", "", "prompt", "", blocks = blocks)
+    val start = MonitorUi(live = live, turns = listOf(WireTurn(0, "stored", "build", "", "older", "")), reachedLive = true)
+    val again = mergeLiveTurn(live, live.copy(), true)
+    assertTrue(again === live)
+    val snapshot = WireSnapshot(
+      emptyView().copy(model = "grok-4.7", canSend = true),
+      start.turns,
+      null,
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val next = reduceMonitor(start, message(encodeSnapshot("snap", snapshot)))
+    assertTrue(next.live === live)
+    assertEquals("kept", next.live?.blocks?.single()?.body)
+    assertEquals(1, next.turns.size)
+  }
+
+  @Test
+  fun incompleteReconnectStreamDoesNotWipeTheDisplayedConversation() {
+    val shown = listOf(
+      WireBlock("user", "u", "", "", "", "question", false, true, 0, emptyList()),
+      WireBlock("answer", "a", "", "", "", "answer", false, true, 0, emptyList())
+    )
+    val start = MonitorUi(
+      live = WireTurn(-2, "live", "build", "", "question", "", blocks = shown),
+      reachedLive = true,
+      disconnected = true
+    )
+    val partial = WireTranscript(
+      -2, 1, "thinking", "working",
+      listOf(WireBlock("thinking", "t", "", "", "", "more", true, true, 0, emptyList())),
+      1, 2, 0
+    )
+    val next = reduceTranscripts(listOf(partial), start)
+    assertEquals(shown, next.live?.blocks)
+  }
 }
 
 private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {

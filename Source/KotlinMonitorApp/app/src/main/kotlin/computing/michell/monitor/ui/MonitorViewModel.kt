@@ -163,6 +163,10 @@ fun emptyView(): WireView {
 }
 
 fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
+  if (phase == LinkPhase.Live && !ui.disconnected) {
+    if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
+    return "live"
+  }
   if (phase == LinkPhase.Connecting) return "connecting"
   if (ui.banner == OfflineBanner) return "offline"
   if (ui.disconnected || phase == LinkPhase.Disconnected || phase == LinkPhase.Paused) return "disconnected"
@@ -351,6 +355,9 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val mergedLive = mergeLiveTurn(current.live, next.live, sameGeneration)
   val baseline = current.promptBaseline
   val merged = next.copy(live = mergedLive, history = history, promptBaseline = baseline)
+  val dropStatus = (next.banner.isEmpty() && bannerIsStatus(current.banner)) ||
+    (current.banner.isEmpty() && bannerIsStatus(next.banner))
+  val nextBanner = if (dropStatus) "" else next.banner
   val shown = promptShown(merged, current.pendingPrompt)
   val pendingLeft = !shown && current.pendingPrompt.isNotEmpty()
   val blocks = displayBlocks(mergedLive)
@@ -362,8 +369,8 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
     draft = draft,
     pairHold = if (clearDisconnect) false else current.pairHold,
     settingsOpen = current.settingsOpen,
-    banner = if (clearDisconnect) "" else if (next.banner.isNotEmpty()) next.banner else current.banner,
-    disconnected = if (clearDisconnect) false else current.disconnected,
+    banner = if (clearDisconnect || dropStatus) "" else if (nextBanner.isNotEmpty()) nextBanner else current.banner,
+    disconnected = if (clearDisconnect || !next.disconnected) false else current.disconnected,
     history = history,
     live = mergedLive,
     showThinking = current.showThinking,
@@ -454,6 +461,7 @@ private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
 private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val incoming = snapshot.live
   if (incoming == null) {
+    if (state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()) return keepOfflineSnapshot(state, snapshot)
     val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
     return overlaySnapshot(cleared, snapshot, state.generation + 1)
   }
@@ -485,6 +493,27 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     generation = state.generation + 1,
     rescueSteer = false,
     conversationGeneration = conversationGeneration
+  )
+}
+
+private fun keepOfflineSnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
+  val turns = if (snapshot.storedTurns.isNotEmpty()) snapshot.storedTurns else state.turns
+  val approval = snapshot.approval
+  return state.copy(
+    view = snapshot.view,
+    turns = turns,
+    history = retainLoaded(state.history, turns),
+    planPath = snapshot.planPath,
+    planTitle = snapshot.planTitle,
+    planRunning = snapshot.planRunning,
+    planRows = snapshot.planRows,
+    approval = if (approval.active) approval else state.approval,
+    approvalOpen = approval.active || state.approvalOpen,
+    reachedLive = true,
+    pairHold = false,
+    disconnected = false,
+    banner = "",
+    generation = state.generation + 1
   )
 }
 
@@ -534,9 +563,17 @@ private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): Monit
     state.transcriptParts + (transcript.part to transcript.blocks)
   }
   // Part order, not arrival order, so a late frame cannot move an earlier block.
-  val blocks = assembleTranscriptBlocks(parts.toSortedMap().values.toList())
+  val assembled = assembleTranscriptBlocks(parts.toSortedMap().values.toList())
   val previous = state.live
-  val live = WireTurn(
+  val complete = transcript.partCount <= 1 || (1..transcript.partCount).all { part -> parts.containsKey(part) }
+  // An incomplete reconnect stream must not wipe the conversation already on screen.
+  val blocks = if (previous != null && previous.blocks.isNotEmpty() && !complete && assembled.size < previous.blocks.size) {
+    previous.blocks
+  } else assembled
+  val duration = if (transcript.durationMs > 0) transcript.durationMs else previous?.durationMs ?: 0
+  val live = if (previous != null && previous.blocks == blocks && previous.turnIndex == transcript.turnIndex) {
+    if (previous.durationMs == duration) previous else previous.copy(durationMs = duration)
+  } else WireTurn(
     transcript.turnIndex,
     previous?.id ?: "",
     previous?.mode ?: state.view.mode,
@@ -546,7 +583,7 @@ private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): Monit
     previous?.prompt ?: "",
     previous?.thinking ?: "",
     previous?.response ?: "",
-    if (transcript.durationMs > 0) transcript.durationMs else previous?.durationMs ?: 0,
+    duration,
     true,
     blocks,
     previous?.images ?: emptyList()
@@ -572,7 +609,12 @@ private fun applyTurnData(state: MonitorUi, payloadJson: String): MonitorUi {
 
 private fun applyStatus(state: MonitorUi, payloadJson: String): MonitorUi {
   val status = decodeStatusPayload(payloadJson) ?: return state
-  return state.copy(view = state.view.patchStatus(status))
+  return state.copy(
+    view = state.view.patchStatus(status),
+    disconnected = false,
+    banner = if (bannerIsStatus(state.banner)) "" else state.banner,
+    reachedLive = true
+  )
 }
 
 private fun applyMode(state: MonitorUi, payloadJson: String): MonitorUi {
