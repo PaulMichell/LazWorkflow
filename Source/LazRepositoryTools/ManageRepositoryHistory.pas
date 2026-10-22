@@ -37,7 +37,7 @@ Type
     Function LaneX(Lane: Integer): Integer;
     Function RowMidY(Row: Integer): Integer;
     Function FormatCommitDate(Const CommitTime: Int64): String;
-    Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
+    Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer; RowColor: TColor);
     Function CommitIsCheckedOut(Const CommitRec: TGitCommitRec): Boolean;
   Public
     Constructor Create(Host: TCustomForm);
@@ -344,7 +344,15 @@ Begin
   Result := (FHeadSha <> '') And SameText(CommitRec.Sha, FHeadSha);
 End;
 
-Procedure TManageHistoryGraph.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer);
+Function HistoryRowFill(Selected: Boolean): TColor;
+Begin
+  If Selected Then
+    Result := RGBToColor(227, 242, 253)
+  Else
+    Result := clWindow;
+End;
+
+Procedure TManageHistoryGraph.DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer; RowColor: TColor);
 Type
   TRefKind = (rkLocal, rkRemote, rkTag, rkCheckedOut, rkHead, rkOther);
 Var
@@ -480,7 +488,7 @@ Begin
             CardW := TextWidth(RefName) + PadX * 2;
             If CardW < MinW Then
               CardW := MinW;
-            DrawSmoothRoundRect(FPaintBox.Canvas, Rect(TextX, CardY, TextX + CardW, CardY + CardH), GraphScale(4), Bg, Border);
+            DrawSmoothRoundRect(FPaintBox.Canvas, Rect(TextX, CardY, TextX + CardW, CardY + CardH), GraphScale(4), Bg, Border, RowColor);
             Brush.Style := bsClear;
             TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
             Brush.Style := bsSolid;
@@ -544,7 +552,7 @@ Begin
       If (FSelectedIndex >= FirstRow) And (FSelectedIndex <= LastRow) Then
         Begin
           Y := FSelectedIndex * RH - Off;
-          Brush.Color := RGBToColor(227, 242, 253);
+          Brush.Color := HistoryRowFill(True);
           FillRect(Bounds(0, Y, FPaintBox.ClientWidth, RH));
         End;
 
@@ -609,7 +617,7 @@ Begin
           TextX := TextX + SubjectW + GraphScale(8);
           Brush.Style := bsSolid;
           If C.DetailsLoaded And (C.Refs <> '') Then
-            DrawRefCards(C.Refs, TextX, Y);
+            DrawRefCards(C.Refs, TextX, Y, HistoryRowFill(I = FSelectedIndex));
         End;
     End;
 End;

@@ -12,15 +12,16 @@ Interface
 Uses
   Graphics, Types;
 
-/// Draws a symmetric rounded rectangle. Covered pixels are blended with the colour already on the canvas.
-Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border: TColor);
+/// Draws a symmetric rounded rectangle. Blend against Background, the colour just painted under Bounds.
+/// The first paint cannot read those pixels: a canvas read comes back black and darkens the edge.
+Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor);
 
 Implementation
 
 Uses
   fpimage;
 
-Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border: TColor);
+Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor);
 
   Function Clamp01(Value: Single): Single;
   Begin
@@ -117,6 +118,7 @@ Begin
   CY := (Bounds.Top + Bounds.Bottom) / 2;
   FillColor := ColorToFP(Fill);
   BorderColor := ColorToFP(Border);
+  BackColor := ColorToFP(Background);
   For Y := 0 To H - 1 Do
     For X := 0 To W - 1 Do
       Begin
@@ -136,7 +138,6 @@ Begin
         Inner := InnerSum / 4;
         If Outer <= 0.004 Then
           Continue;
-        BackColor := ColorToFP(Target.Pixels[Bounds.Left + X, Bounds.Top + Y]);
         Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
         Target.Pixels[Bounds.Left + X, Bounds.Top + Y] := FPToColor(Pixel);
       End;

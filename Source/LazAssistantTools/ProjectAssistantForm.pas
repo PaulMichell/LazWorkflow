@@ -2936,7 +2936,7 @@ Begin
       If PillTop < ARect.Top + 1 Then
         PillTop := ARect.Top + 1;
       PillRect := Rect(PillLeft, PillTop, PillLeft + PillWidth, PillBottom);
-      DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border);
+      DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border, List.Canvas.Brush.Color);
       List.Canvas.Font.Color := Ink;
       List.Canvas.Brush.Style := bsClear;
       TextH := List.Canvas.TextHeight(StatusText);
