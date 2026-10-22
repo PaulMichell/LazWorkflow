@@ -72,7 +72,7 @@ private fun MonitorShell(model: MonitorViewModel) {
     androidx.compose.foundation.layout.Box(modifier) {
       if (showSettings) {
         SettingsScreen(
-          address, port, ui.banner, ui.showThinking, ui.showTools, !forcedSettings,
+          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools, !forcedSettings,
           { model.pairAddress.value = it },
           { model.pairPort.value = it },
           model::connectFromPair,
