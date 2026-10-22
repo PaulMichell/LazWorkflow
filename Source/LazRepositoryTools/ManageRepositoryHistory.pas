@@ -58,7 +58,7 @@ Type
 Implementation
 
 Uses
-  Types, Math, DateUtils, GitConfig;
+  Types, Math, DateUtils, GitConfig, CanvasUtils;
 
 Constructor TManageHistoryGraph.Create(Host: TCustomForm);
 Begin
@@ -480,11 +480,7 @@ Begin
             CardW := TextWidth(RefName) + PadX * 2;
             If CardW < MinW Then
               CardW := MinW;
-            Brush.Style := bsSolid;
-            Brush.Color := Bg;
-            Pen.Color := Border;
-            Pen.Width := Max(1, GraphScale(1));
-            Rectangle(TextX, CardY, TextX + CardW, CardY + CardH);
+            DrawSmoothRoundRect(FPaintBox.Canvas, Rect(TextX, CardY, TextX + CardW, CardY + CardH), GraphScale(4), Bg, Border);
             Brush.Style := bsClear;
             TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
             Brush.Style := bsSolid;
