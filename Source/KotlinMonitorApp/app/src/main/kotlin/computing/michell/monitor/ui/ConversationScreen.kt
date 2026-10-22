@@ -151,9 +151,6 @@ fun ConversationScreen(
       Text("Mode")
       ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
     }
-    if (ui.banner.isNotEmpty()) {
-      Text(ui.banner, color = if (bannerIsStatus(ui.banner)) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
-    }
     ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -509,7 +506,14 @@ private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase, listening: Boolean, 
   val right = promptActivityRight(activity, listening, statusMessage)
   val statusStyle = MaterialTheme.typography.bodySmall
   Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-    Text(connectionLabel(ui, phase), color = QuietText, maxLines = 1, style = statusStyle)
+    Text(
+      statusCaption(ui, phase),
+      color = QuietText,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      style = statusStyle,
+      modifier = Modifier.widthIn(max = 160.dp)
+    )
     if (runtime.isNotEmpty()) {
       Text("  $runtime", color = QuietText, maxLines = 1, overflow = TextOverflow.Ellipsis, style = statusStyle, modifier = Modifier.weight(1f))
     } else {

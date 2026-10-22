@@ -775,7 +775,6 @@ class LanSession(
           if (mac.isNotEmpty()) writeJson(encodeAuth(newId(), record.clientId, mac), owned)
           writeJson(encodeEmpty(MessageKind.Refresh, newId()), owned)
         }
-        publishCurrent(epoch, LinkPhase.Connecting, "", "")
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L

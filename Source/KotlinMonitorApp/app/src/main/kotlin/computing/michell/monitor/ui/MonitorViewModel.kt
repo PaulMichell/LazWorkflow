@@ -87,6 +87,7 @@ import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
 import computing.michell.monitor.protocol.encodeWorkOnPlan
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -162,6 +163,12 @@ fun emptyView(): WireView {
   )
 }
 
+fun statusCaption(ui: MonitorUi, phase: LinkPhase): String {
+  if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) return ui.banner
+  if (ui.banner.isNotEmpty() && phase != LinkPhase.Live && phase != LinkPhase.Idle) return ui.banner
+  return connectionLabel(ui, phase)
+}
+
 fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
   if (phase == LinkPhase.Live && !ui.disconnected) {
     if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
@@ -176,6 +183,7 @@ fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
 }
 
 const val ConnectingBanner = "Connecting…"
+const val LinkGraceMs = 4_000L
 
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
@@ -741,6 +749,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var supportGeneration = 0
   private var recognitionSupported = true
   private var supportPending = false
+  private var linkGrace: Job? = null
   // Callbacks splice the prompt only. They must not call sendOrSteer.
   private val engineListener = object : SpeechEngineListener {
     override fun onReady(generation: Int) {
@@ -1056,6 +1065,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   override fun onCleared() {
     rememberDisplayed(uiState.value)
     supportPending = false
+    linkGrace?.cancel()
     finalWatch.cancel()
     engine.destroy()
     session.close()
@@ -1092,6 +1102,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
     applyUiEffects(coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status)) ?: return)
+    linkGrace?.cancel()
+    if (!coordinator.holdingLink) return
+    linkGrace = viewModelScope.launch {
+      delay(LinkGraceMs)
+      if (!coordinator.holdingLink) return@launch
+      val effects = coordinator.revealHeldLink(uiState.value, session.status.value) ?: return@launch
+      applyUiEffects(effects)
+    }
   }
 
   private suspend fun execute(effects: List<MonitorEffect>) {

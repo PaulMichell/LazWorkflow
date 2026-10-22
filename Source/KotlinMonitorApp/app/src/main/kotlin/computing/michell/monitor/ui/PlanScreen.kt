@@ -75,9 +75,6 @@ fun PlanScreen(
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(ui.planTitle.ifEmpty { "Plan" }, style = MaterialTheme.typography.titleLarge)
     Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
-    if (ui.banner.isNotEmpty()) {
-      Text(ui.banner, color = if (bannerIsStatus(ui.banner)) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
-    }
     LazyColumn(modifier = Modifier.weight(1f)) {
       items(ui.planRows) { row ->
         PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan) {

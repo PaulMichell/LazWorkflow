@@ -502,6 +502,19 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aBriefDropDoesNotDisableSend() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
+    assertFalse(coordinator.state.disconnected)
+    assertTrue(coordinator.state.view.canSend)
+    assertTrue(coordinator.holdingLink)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
+    assertFalse(coordinator.state.disconnected)
+    assertFalse(coordinator.holdingLink)
+  }
+
+  @Test
   fun aLiveLinkAsksForTheDesktopConversation() {
     val coordinator = coordinator()
     val first = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()

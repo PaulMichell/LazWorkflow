@@ -83,6 +83,8 @@ class MonitorCoordinator(
   private var visibleTurns = emptySet<Int>()
   private var hostBound = false
   private var snapshotRequested = false
+  private var linkHeld = false
+  private var linkHeldAt = 0L
   private var hostAddress = ""
   private var hostPort = 0
   private var hostClientId = ""
@@ -97,6 +99,7 @@ class MonitorCoordinator(
   )
 
   val state: MonitorUi get() = screen
+  val holdingLink: Boolean get() = linkHeld
 
   /** Shows a saved session before the background connect replaces it. */
   fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
@@ -261,11 +264,36 @@ class MonitorCoordinator(
     return effects
   }
 
+  fun revealHeldLink(current: MonitorUi, status: LinkStatus): List<MonitorEffect>? = synchronized(gate) {
+    if (!linkHeld || status.phase == LinkPhase.Live) {
+      linkHeld = false
+      return null
+    }
+    linkHeldAt = clock.nowMs() - LinkGraceMs - 1L
+    linkChanged(current, status)
+  }
+
   private fun linkChanged(current: MonitorUi, status: LinkStatus): List<MonitorEffect> {
     val reset = noteHost(current, session.hostAddress, session.hostPort, session.hostClientId)
     val effects = reset?.toMutableList() ?: mutableListOf()
     if (reset == null) screen = stamp(current)
     val closed = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
+    val down = closed || status.phase == LinkPhase.Connecting
+    val recovered = status.phase == LinkPhase.Live && linkHeld
+    if (status.phase == LinkPhase.Live) {
+      linkHeld = false
+      linkHeldAt = 0L
+    } else if (down && status.phase != LinkPhase.Paused && screen.reachedLive) {
+      if (!linkHeld) {
+        linkHeld = true
+        linkHeldAt = clock.nowMs()
+      }
+      if (clock.nowMs() - linkHeldAt < LinkGraceMs) {
+        if (closed) snapshotRequested = false
+        return effects
+      }
+      linkHeld = false
+    }
     if (closed) {
       snapshotRequested = false
       screen = keepUnackedText(screen).copy(pendingCommandId = "")
@@ -279,7 +307,7 @@ class MonitorCoordinator(
       effects += MonitorEffect.LeaveDictation
     }
     val pin = status.banner == "TLS pin mismatch."
-    val wasDown = screen.disconnected || screen.banner == ReconnectingBanner
+    val wasDown = screen.disconnected || screen.banner == ReconnectingBanner || recovered
     if (session.promptDraft != screen.draft) effects += MonitorEffect.RememberDraft(screen.draft)
     val linked = applyLink(screen, status.phase, status.banner)
     val shown = linked.copy(pairHold = linked.pairHold || pin, draft = screen.draft)
