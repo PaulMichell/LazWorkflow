@@ -503,7 +503,7 @@ End;
 Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
-  TextH, TextY, EdgePenW, MsgPad: Integer;
+  TextH, TextY, EdgePenW, MsgPad, NodePenW, RingPenW: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
@@ -517,6 +517,8 @@ Begin
   DateColW := GraphDateColumnWidth;
   NodeR := GraphNodeRadius;
   Ring := Max(2, GraphScale(2));
+  RingPenW := Max(1, GraphScale(2));
+  NodePenW := Max(1, GraphScale(1));
   EdgePenW := Max(1, GraphScale(2));
   MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
@@ -582,17 +584,16 @@ Begin
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
           If CommitIsCheckedOut(C) Then
+            { Widgetset Ellipse is not antialiased, so the checkout ring stair-steps. }
+            DrawSmoothRing(FPaintBox.Canvas, X, RowMidY(I), NodeR + Ring, RingPenW, NodeR + NodePenW / 2,
+              clWindowText, Col, HistoryRowFill(I = FSelectedIndex))
+          Else
             Begin
-              Brush.Style := bsClear;
-              Pen.Color := clWindowText;
-              Pen.Width := Max(1, GraphScale(2));
-              Ellipse(X - NodeR - Ring, RowMidY(I) - NodeR - Ring, X + NodeR + Ring, RowMidY(I) + NodeR + Ring);
-              Brush.Style := bsSolid;
+              Brush.Color := Col;
+              Pen.Color := Col;
+              Pen.Width := NodePenW;
+              Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
             End;
-          Brush.Color := Col;
-          Pen.Color := Col;
-          Pen.Width := Max(1, GraphScale(1));
-          Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
 
           TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;
