@@ -33,7 +33,7 @@ Function CaptureMonitorListenSnapshot(Out Settings: TMonitorSettings; Out ErrorT
 Implementation
 
 Uses
-  Classes, SyncObjs, Forms, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
+  Classes, SyncObjs, Forms, fpjson, LazFileUtils, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
   AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, ProjectAssistantForm;
 
 Type
@@ -566,6 +566,39 @@ Begin
   End;
 End;
 
+Procedure CollectMonitorMarkdown(Const DirectoryPath, RelativeDirectory: String; Files: TStrings);
+Var
+  Search: TSearchRec;
+  FullPath, RelativePath, Extension: String;
+Begin
+  If FindFirstUTF8(IncludeTrailingPathDelimiter(DirectoryPath) + '*', faAnyFile, Search) <> 0 Then
+    Exit;
+  Try
+    Repeat
+      If (Search.Name = '.') Or (Search.Name = '..') Then
+        Continue;
+      FullPath := IncludeTrailingPathDelimiter(DirectoryPath) + Search.Name;
+      If FileIsSymlink(FullPath) Then
+        Continue;
+      RelativePath := RelativeDirectory + Search.Name;
+      If (Search.Attr And faDirectory) <> 0 Then
+        Begin
+          If (Search.Name <> '.git') And (Search.Name <> '.assistant') And (Search.Name <> '.gradle') And
+            (Search.Name <> '.idea') And (Search.Name <> 'node_modules') Then
+            CollectMonitorMarkdown(FullPath, RelativePath + '/', Files);
+        End
+      Else
+        Begin
+          Extension := LowerCase(ExtractFileExt(Search.Name));
+          If (Extension = '.md') Or (Extension = '.markdown') Or (Extension = '.mdown') Then
+            Files.Add(RelativePath);
+        End;
+    Until FindNextUTF8(Search) <> 0;
+  Finally
+    FindCloseUTF8(Search);
+  End;
+End;
+
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
   Const Id, PayloadJson: String; Out ErrorText: String): Boolean;
 Var
@@ -578,7 +611,10 @@ Var
   Mime: String;
   ImageWidth, ImageHeight, Index: Integer;
   Messages: TStringArray;
-  Unavailable: String;
+  Unavailable, PlanJson: String;
+  Files: TStringList;
+  View: TAssistantMonitorView;
+  Rows: TAssistantMonitorPlanRows;
 Begin
   Result := False;
   ErrorText := '';
@@ -651,7 +687,32 @@ Begin
       End;
     Ord(mmkRefresh):
       Begin
-        PushSnapshot(Form, Id);
+        If Not DecodeMonitorText(PayloadJson, Text) Or (Text <> 'plan_files') Then
+          Begin
+            PushSnapshot(Form, Id);
+            Exit(True);
+          End;
+        If Trim(ProjectRootPath) = '' Then
+          Begin
+            ErrorText := 'Select a project before browsing Markdown files.';
+            Exit;
+          End;
+        Files := TStringList.Create;
+        Try
+          CollectMonitorMarkdown(ProjectRootPath, '', Files);
+          Files.Sort;
+          Form.FillMonitorView(View);
+          Form.FillMonitorPlan(Rows);
+          PlanJson := EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Files);
+          If PlanJson = '' Then
+            Begin
+              ErrorText := 'The Markdown file list is too large to send.';
+              Exit;
+            End;
+          SendJson(PlanJson);
+        Finally
+          Files.Free;
+        End;
         Result := True;
       End;
     Ord(mmkTurn):

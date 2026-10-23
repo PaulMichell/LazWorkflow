@@ -9839,32 +9839,34 @@ Begin
 End;
 
 Function TProjectAssistantForm.RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
+Var
+  Resolved: String;
 Begin
   Result := False;
   ErrorText := '';
-  If FSending Then
-    Begin
-      ErrorText := 'Wait for the current reply to finish.';
-      Exit;
-    End;
+  If ThisFormBusy(Self, ErrorText) Then
+    Exit;
   If Trim(RelativePath) = '' Then
     Begin
       ErrorText := 'Set an active plan first.';
       Exit;
     End;
-  If Not PlanIsAvailable(RelativePath) Then
+  If Not ResolvePlanPath(RelativePath, Resolved, ErrorText) Then
+    Exit;
+  If Not FileExistsUTF8(Resolved) Then
     Begin
-      ErrorText := 'That plan is not in the list.';
+      ErrorText := 'That Markdown file no longer exists.';
       Exit;
     End;
   If Not SameText(StringReplace(RelativePath, '\', '/', [rfReplaceAll]),
     StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll])) Then
     Begin
-      SetActivePlanRelativePath(RelativePath);
+      SetActivePlanRelativePath(ProjectRelativePath(Resolved));
       PersistShellConfig;
-      RefreshBuildTodos;
-      UpdateWorkActions;
+      RefreshActivePlanChoices(Nil);
     End;
+  RefreshBuildTodos;
+  UpdateWorkActions;
   Result := True;
 End;
 

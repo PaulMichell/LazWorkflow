@@ -22,7 +22,7 @@ Unit AssistantMonitorCodec;
 Interface
 
 Uses
-  SysUtils, fpjson, AssistantConversation, AssistantSessionObserve;
+  Classes, SysUtils, fpjson, AssistantConversation, AssistantSessionObserve;
 
 Const
   MonitorCatalogueVersion = 1;
@@ -316,7 +316,7 @@ Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: 
 Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Files: TStrings = Nil): String;
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
@@ -1806,15 +1806,24 @@ Begin
 End;
 
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Files: TStrings): String;
 Var
   Payload: TJSONObject;
+  FileArray: TJSONArray;
+  I: Integer;
 Begin
   Payload := TJSONObject.Create;
   Payload.Add('path', Path);
   Payload.Add('title', Title);
   Payload.Add('running', Running);
   Payload.Add('rows', PlanRowsToJson(Rows));
+  If Assigned(Files) Then
+    Begin
+      FileArray := TJSONArray.Create;
+      Payload.Add('files', FileArray);
+      For I := 0 To Files.Count - 1 Do
+        FileArray.Add(Files[I]);
+    End;
   Result := EncodeWith(mmkPlan, Id, Payload);
 End;
 

@@ -768,6 +768,44 @@ Begin
   Check('zero version rejected', (Not TryInspectMonitorFrameHeader(Bytes, PayloadLen, Status)) And (Status = mfsBadVersion));
 End;
 
+Procedure TestPlanFiles;
+Var
+  Files: TStringList;
+  Data: TJSONData;
+  Payload: TJSONObject;
+  FileArray: TJSONArray;
+Begin
+  Files := TStringList.Create;
+  Try
+    Files.Add('Documents/Plan.md');
+    Files.Add('Source/Notes.markdown');
+    Data := GetJSON(EncodeMonitorPlan('browse', 'Documents/Plan.md', 'Plan', False, [], Files));
+    Try
+      Payload := TJSONObject(Data).Objects['payload'];
+      FileArray := Payload.Arrays['files'];
+      Check('Markdown catalogue includes project-relative paths', (FileArray.Count = 2) And
+        (FileArray.Strings[0] = Files[0]) And (FileArray.Strings[1] = Files[1]));
+    Finally
+      Data.Free;
+    End;
+    Files.Clear;
+    Data := GetJSON(EncodeMonitorPlan('empty', '', '', False, [], Files));
+    Try
+      Check('empty catalogue is explicit', TJSONObject(Data).Objects['payload'].Arrays['files'].Count = 0);
+    Finally
+      Data.Free;
+    End;
+    Data := GetJSON(EncodeMonitorPlan('ordinary', '', '', False, []));
+    Try
+      Check('ordinary plan notices omit catalogue', Not Assigned(TJSONObject(Data).Objects['payload'].Find('files')));
+    Finally
+      Data.Free;
+    End;
+  Finally
+    Files.Free;
+  End;
+End;
+
 Procedure TestShortFrame;
 Var
   Bytes, Pending: RawByteString;
@@ -874,6 +912,7 @@ Begin
     End;
   TestRoundTrips;
   TestOptionalTitle;
+  TestPlanFiles;
   TestUnknownType;
   TestBadVersion;
   TestShortFrame;

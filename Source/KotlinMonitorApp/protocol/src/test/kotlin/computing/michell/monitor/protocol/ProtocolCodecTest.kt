@@ -17,6 +17,19 @@ import org.junit.Test
 
 class ProtocolCodecTest {
   @Test
+  fun markdownBrowseUsesRefreshAndDecodesOptionalFilePaths() {
+    val request = tryDecodeEnvelope(encodePlanBrowse("browse-1")).message
+    assertEquals(MessageKind.Refresh, request.kind)
+    assertEquals("plan_files", decodeText(request.payloadJson))
+    val base = """{"path":"Documents/Plan.md","title":"Plan","running":false,"rows":[]}"""
+    assertNull(decodePlan(base)?.files)
+    assertEquals(emptyList<String>(), decodePlan(base.dropLast(1) + ""","files":[]}""")?.files)
+    val withFiles = base.dropLast(1) + ""","files":["Documents/Plan.md","Source/Überblick.MD"]}"""
+    assertEquals(listOf("Documents/Plan.md", "Source/Überblick.MD"), decodePlan(withFiles)?.files)
+    assertNull(decodePlan(base.dropLast(1) + ""","files":[42]}"""))
+  }
+
+  @Test
   fun helloShapesMatchTheHostFrames() {
     val first = encodeHello("hello-first", "Phone", "1", "")
     assertFalse(first.contains("client_id"))

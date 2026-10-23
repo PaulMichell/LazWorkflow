@@ -33,6 +33,26 @@ import org.junit.Test
 
 class MonitorReducerTest {
   @Test
+  fun openingAnotherMarkdownFileClearsTheOldWorkSelection() {
+    val state = MonitorUi(planPath = "Documents/Old.md", selectedPlan = 7, planFiles = listOf("Documents/New.md"))
+    val next = reduceMonitor(state, message(encodePlan("plan", "Documents/New.md", "New", false, emptyList())))
+    assertEquals("Documents/New.md", next.planPath)
+    assertEquals(-1, next.selectedPlan)
+    assertEquals(state.planFiles, next.planFiles)
+  }
+
+  @Test
+  fun browseResponseReplacesFilesAndKeepsConversation() {
+    val state = MonitorUi(planPath = "Documents/Plan.md", selectedPlan = 2, draft = "keep this")
+    val frame = encodePlan("plan", state.planPath, "Plan", false, emptyList())
+      .replace("\"rows\" : []", "\"rows\" : [], \"files\" : [\"Notes.md\"]")
+    val next = reduceMonitor(state, message(frame))
+    assertEquals(listOf("Notes.md"), next.planFiles)
+    assertEquals("keep this", next.draft)
+    assertEquals(2, next.selectedPlan)
+  }
+
+  @Test
   fun loadedBlockKeepsTheFullBody() {
     val body = "x".repeat(4000)
     val turn = WireTurn(1, "a", "chat", "", "", "", blocks = listOf(WireBlock("answer", "b", "", "", "", body, false, true, 0, emptyList())))
