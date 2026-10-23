@@ -316,7 +316,7 @@ Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: 
 Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Files: TStrings = Nil): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil): String;
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
@@ -1806,10 +1806,10 @@ Begin
 End;
 
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Files: TStrings): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings): String;
 Var
-  Payload: TJSONObject;
-  FileArray: TJSONArray;
+  Payload, Choice: TJSONObject;
+  Choices: TJSONArray;
   I: Integer;
 Begin
   Payload := TJSONObject.Create;
@@ -1817,12 +1817,19 @@ Begin
   Payload.Add('title', Title);
   Payload.Add('running', Running);
   Payload.Add('rows', PlanRowsToJson(Rows));
-  If Assigned(Files) Then
+  If Assigned(Paths) And Assigned(Captions) Then
     Begin
-      FileArray := TJSONArray.Create;
-      Payload.Add('files', FileArray);
-      For I := 0 To Files.Count - 1 Do
-        FileArray.Add(Files[I]);
+      Choices := TJSONArray.Create;
+      Payload.Add('choices', Choices);
+      For I := 0 To Paths.Count - 1 Do
+        Begin
+          If I >= Captions.Count Then
+            Break;
+          Choice := TJSONObject.Create;
+          Choice.Add('path', Paths[I]);
+          Choice.Add('caption', Captions[I]);
+          Choices.Add(Choice);
+        End;
     End;
   Result := EncodeWith(mmkPlan, Id, Payload);
 End;

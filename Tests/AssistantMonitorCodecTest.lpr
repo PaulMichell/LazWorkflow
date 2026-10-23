@@ -768,41 +768,47 @@ Begin
   Check('zero version rejected', (Not TryInspectMonitorFrameHeader(Bytes, PayloadLen, Status)) And (Status = mfsBadVersion));
 End;
 
-Procedure TestPlanFiles;
+Procedure TestPlanChoices;
 Var
-  Files: TStringList;
+  Paths, Captions: TStringList;
   Data: TJSONData;
-  Payload: TJSONObject;
-  FileArray: TJSONArray;
+  Choices: TJSONArray;
 Begin
-  Files := TStringList.Create;
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
   Try
-    Files.Add('Documents/Plan.md');
-    Files.Add('Source/Notes.markdown');
-    Data := GetJSON(EncodeMonitorPlan('browse', 'Documents/Plan.md', 'Plan', False, [], Files));
+    Paths.Add('Documents/Second.md');
+    Paths.Add('Documents/First.md');
+    Captions.Add('Second plan (Documents/Second.md)');
+    Captions.Add('First plan');
+    Data := GetJSON(EncodeMonitorPlan('choices', Paths[1], 'First plan', False, [], Paths, Captions));
     Try
-      Payload := TJSONObject(Data).Objects['payload'];
-      FileArray := Payload.Arrays['files'];
-      Check('Markdown catalogue includes project-relative paths', (FileArray.Count = 2) And
-        (FileArray.Strings[0] = Files[0]) And (FileArray.Strings[1] = Files[1]));
+      Choices := TJSONObject(Data).Objects['payload'].Arrays['choices'];
+      Check('plan choices preserve desktop order and captions', (Choices.Count = 2) And
+        (Choices.Objects[0].Strings['path'] = Paths[0]) And (Choices.Objects[0].Strings['caption'] = Captions[0]) And
+        (Choices.Objects[1].Strings['path'] = Paths[1]) And (Choices.Objects[1].Strings['caption'] = Captions[1]));
+      Check('active path is independent of choice order', TJSONObject(Data).Objects['payload'].Strings['path'] = Paths[1]);
+      Check('plan choices replace file catalogue', Not Assigned(TJSONObject(Data).Objects['payload'].Find('files')));
     Finally
       Data.Free;
     End;
-    Files.Clear;
-    Data := GetJSON(EncodeMonitorPlan('empty', '', '', False, [], Files));
+    Paths.Clear;
+    Captions.Clear;
+    Data := GetJSON(EncodeMonitorPlan('empty', '', '', False, [], Paths, Captions));
     Try
-      Check('empty catalogue is explicit', TJSONObject(Data).Objects['payload'].Arrays['files'].Count = 0);
+      Check('empty choices are explicit', TJSONObject(Data).Objects['payload'].Arrays['choices'].Count = 0);
     Finally
       Data.Free;
     End;
     Data := GetJSON(EncodeMonitorPlan('ordinary', '', '', False, []));
     Try
-      Check('ordinary plan notices omit catalogue', Not Assigned(TJSONObject(Data).Objects['payload'].Find('files')));
+      Check('older plan messages may omit choices', Not Assigned(TJSONObject(Data).Objects['payload'].Find('choices')));
     Finally
       Data.Free;
     End;
   Finally
-    Files.Free;
+    Captions.Free;
+    Paths.Free;
   End;
 End;
 
@@ -912,7 +918,7 @@ Begin
     End;
   TestRoundTrips;
   TestOptionalTitle;
-  TestPlanFiles;
+  TestPlanChoices;
   TestUnknownType;
   TestBadVersion;
   TestShortFrame;

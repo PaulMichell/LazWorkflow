@@ -17,16 +17,21 @@ import org.junit.Test
 
 class ProtocolCodecTest {
   @Test
-  fun markdownBrowseUsesRefreshAndDecodesOptionalFilePaths() {
-    val request = tryDecodeEnvelope(encodePlanBrowse("browse-1")).message
+  fun planChoicesUseRefreshAndKeepDesktopCaptionsAndOrder() {
+    val request = tryDecodeEnvelope(encodePlanChoices("choices-1")).message
     assertEquals(MessageKind.Refresh, request.kind)
-    assertEquals("plan_files", decodeText(request.payloadJson))
+    assertEquals("plan_choices", decodeText(request.payloadJson))
     val base = """{"path":"Documents/Plan.md","title":"Plan","running":false,"rows":[]}"""
-    assertNull(decodePlan(base)?.files)
-    assertEquals(emptyList<String>(), decodePlan(base.dropLast(1) + ""","files":[]}""")?.files)
-    val withFiles = base.dropLast(1) + ""","files":["Documents/Plan.md","Source/Überblick.MD"]}"""
-    assertEquals(listOf("Documents/Plan.md", "Source/Überblick.MD"), decodePlan(withFiles)?.files)
-    assertNull(decodePlan(base.dropLast(1) + ""","files":[42]}"""))
+    assertNull(decodePlan(base)?.choices)
+    assertNotNull(decodePlan(base))
+    assertEquals(emptyList<PlanChoice>(), decodePlan(base.dropLast(1) + ""","choices":[]}""")?.choices)
+    val choices = ""","choices":[{"path":"Documents/Plan.md","caption":"Plan (Documents/Plan.md)"},
+      {"path":"Documents/Überblick.md","caption":"Überblick"}]}"""
+    assertEquals(listOf(PlanChoice("Documents/Plan.md", "Plan (Documents/Plan.md)"),
+      PlanChoice("Documents/Überblick.md", "Überblick")), decodePlan(base.dropLast(1) + choices)?.choices)
+    assertNull(decodePlan(base.dropLast(1) + ""","choices":[42]}"""))
+    assertNull(decodePlan(base.dropLast(1) + ""","choices":[{"path":"Plan.md"}]}"""))
+    assertNull(decodePlan(base.dropLast(1) + ""","choices":[{"path":"","caption":"Plan"}]}"""))
   }
 
   @Test

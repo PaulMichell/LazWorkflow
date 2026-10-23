@@ -82,7 +82,8 @@ import computing.michell.monitor.protocol.decodeTranscript
 import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
-import computing.michell.monitor.protocol.encodePlanBrowse
+import computing.michell.monitor.protocol.encodePlanChoices
+import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
@@ -114,7 +115,7 @@ data class MonitorUi(
   val planRunning: Boolean = false,
   val planRows: List<PlanRow> = emptyList(),
   val selectedPlan: Int = -1,
-  val planFiles: List<String>? = null,
+  val planChoices: List<PlanChoice> = emptyList(),
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
   val banner: String = "",
@@ -438,17 +439,17 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Turn -> state.copy(history = state.history + (inbound.value.turnIndex to inbound.value))
     is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
     is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
-    is InboundPayload.Target -> state.copy(view = state.view.copy(
-      targetKind = inbound.value.kind,
-      targetDisplay = inbound.value.display,
-      targetRoot = inbound.value.root
-    ))
+    is InboundPayload.Target -> state.copy(
+      planChoices = if (state.view.targetRoot == inbound.value.root) state.planChoices else emptyList(),
+      selectedPlan = if (state.view.targetRoot == inbound.value.root) state.selectedPlan else -1,
+      view = state.view.copy(targetKind = inbound.value.kind, targetDisplay = inbound.value.display, targetRoot = inbound.value.root)
+    )
     is InboundPayload.Plan -> state.copy(
       planPath = inbound.value.path,
       planTitle = inbound.value.title,
       planRunning = inbound.value.running,
       planRows = inbound.value.rows,
-      planFiles = inbound.value.files ?: state.planFiles,
+      planChoices = inbound.value.choices.orEmpty(),
       selectedPlan = if (state.planPath == inbound.value.path) state.selectedPlan else -1,
       view = state.view.copy(planPath = inbound.value.path, planTitle = inbound.value.title, planRunning = inbound.value.running)
     )
@@ -493,6 +494,8 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     planTitle = snapshot.planTitle,
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
+    selectedPlan = -1,
+    planChoices = emptyList(),
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
     liveRevision = if (sameTurn) state.liveRevision else -1,
@@ -519,6 +522,8 @@ private fun keepOfflineSnapshot(state: MonitorUi, snapshot: WireSnapshot): Monit
     planTitle = snapshot.planTitle,
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
+    selectedPlan = -1,
+    planChoices = emptyList(),
     approval = if (approval.active) approval else state.approval,
     approvalOpen = approval.active || state.approvalOpen,
     reachedLive = true,
@@ -540,6 +545,8 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
     planTitle = snapshot.planTitle,
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
+    selectedPlan = -1,
+    planChoices = emptyList(),
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
     reachedLive = true,
@@ -636,7 +643,11 @@ private fun applyMode(state: MonitorUi, payloadJson: String): MonitorUi {
 
 private fun applyTarget(state: MonitorUi, payloadJson: String): MonitorUi {
   val target = decodeTarget(payloadJson) ?: return state
-  return state.copy(view = state.view.copy(targetKind = target.kind, targetDisplay = target.display, targetRoot = target.root))
+  return state.copy(
+    planChoices = if (state.view.targetRoot == target.root) state.planChoices else emptyList(),
+    selectedPlan = if (state.view.targetRoot == target.root) state.selectedPlan else -1,
+    view = state.view.copy(targetKind = target.kind, targetDisplay = target.display, targetRoot = target.root)
+  )
 }
 
 private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
@@ -646,7 +657,7 @@ private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
     planTitle = plan.title,
     planRunning = plan.running,
     planRows = plan.rows,
-    planFiles = plan.files ?: state.planFiles,
+    planChoices = plan.choices.orEmpty(),
     selectedPlan = if (state.planPath == plan.path) state.selectedPlan else -1,
     view = state.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
   )
@@ -839,6 +850,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   fun selectTab(tab: AppTab) {
     if (tab != AppTab.Conversation) leaveDictation()
     screenState.value = tab
+    if (tab == AppTab.Plan && !uiState.value.disconnected)
+      session.sendCatalogue(encodePlanChoices(session.nextCommandId()))
   }
 
   fun updateDraft(text: String) {
@@ -1025,27 +1038,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     applyUiEffects(effects)
   }
 
-  private var planBrowseGeneration = 0
-
-  fun browsePlans() {
-    if (uiState.value.disconnected) return
-    val generation = ++planBrowseGeneration
-    uiState.update { it.copy(planFiles = null, banner = "") }
-    session.sendCatalogue(encodePlanBrowse(session.nextCommandId()))
-    viewModelScope.launch {
-      delay(15_000)
-      if (generation != planBrowseGeneration) return@launch
-      uiState.update {
-        if (it.planFiles == null && it.banner.isEmpty() && !it.disconnected)
-          it.copy(banner = "No Markdown list received. Check the connection and update the desktop monitor package.")
-        else it
-      }
-    }
-  }
-
   fun openPlan(path: String) {
-    if (uiState.value.disconnected) return
-    uiState.update { it.copy(selectedPlan = -1) }
+    val state = uiState.value
+    if (state.disconnected || !state.view.canChangeMode || path == state.planPath ||
+      state.planChoices.none { it.path == path }) return
     session.sendCatalogue(encodePath(MessageKind.SelectPlan, session.nextCommandId(), path))
   }
 

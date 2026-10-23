@@ -12,6 +12,7 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
+import computing.michell.monitor.protocol.PlanChoice
 
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
@@ -21,6 +22,7 @@ import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeImageUnavailable
 import computing.michell.monitor.protocol.tryEncodeTranscript
 import computing.michell.monitor.protocol.encodeInsertResult
+import computing.michell.monitor.protocol.encodeTarget
 import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeSnapshot
@@ -33,23 +35,37 @@ import org.junit.Test
 
 class MonitorReducerTest {
   @Test
-  fun openingAnotherMarkdownFileClearsTheOldWorkSelection() {
-    val state = MonitorUi(planPath = "Documents/Old.md", selectedPlan = 7, planFiles = listOf("Documents/New.md"))
+  fun selectingAnotherPlanClearsTheOldWorkSelection() {
+    val state = MonitorUi(planPath = "Documents/Old.md", selectedPlan = 7,
+      planChoices = listOf(PlanChoice("Documents/Old.md", "Old")))
     val next = reduceMonitor(state, message(encodePlan("plan", "Documents/New.md", "New", false, emptyList())))
     assertEquals("Documents/New.md", next.planPath)
     assertEquals(-1, next.selectedPlan)
-    assertEquals(state.planFiles, next.planFiles)
+    assertTrue(next.planChoices.isEmpty())
   }
 
   @Test
-  fun browseResponseReplacesFilesAndKeepsConversation() {
+  fun planResponseReplacesChoicesAndKeepsConversation() {
     val state = MonitorUi(planPath = "Documents/Plan.md", selectedPlan = 2, draft = "keep this")
     val frame = encodePlan("plan", state.planPath, "Plan", false, emptyList())
-      .replace("\"rows\" : []", "\"rows\" : [], \"files\" : [\"Notes.md\"]")
+      .replace("\"rows\" : []", "\"rows\" : [], \"choices\" : [{\"path\":\"Plan.md\",\"caption\":\"Project plan\"}]")
     val next = reduceMonitor(state, message(frame))
-    assertEquals(listOf("Notes.md"), next.planFiles)
+    assertEquals(listOf(PlanChoice("Plan.md", "Project plan")), next.planChoices)
     assertEquals("keep this", next.draft)
     assertEquals(2, next.selectedPlan)
+    val emptyFrame = frame.replace("[{\"path\":\"Plan.md\",\"caption\":\"Project plan\"}]", "[]")
+    assertTrue(reduceMonitor(next, message(emptyFrame)).planChoices.isEmpty())
+  }
+
+  @Test
+  fun targetChangeDropsChoicesFromThePreviousProject() {
+    val state = MonitorUi(view = emptyView().copy(targetRoot = "/old/"),
+      selectedPlan = 3, planChoices = listOf(PlanChoice("Plan.md", "Old project")))
+    val same = reduceMonitor(state, message(encodeTarget("same", "project", "Old", "/old/")))
+    assertEquals(state.planChoices, same.planChoices)
+    val next = reduceMonitor(state, message(encodeTarget("next", "project", "New", "/new/")))
+    assertTrue(next.planChoices.isEmpty())
+    assertEquals(-1, next.selectedPlan)
   }
 
   @Test
@@ -72,7 +88,10 @@ class MonitorReducerTest {
       emptyList(),
       ApprovalNotice(false, "", "", "", "", false)
     )
-    val next = reduceMonitor(MonitorUi(draft = "keep"), message(encodeSnapshot("snapshot", snapshot)))
+    val next = reduceMonitor(MonitorUi(draft = "keep", selectedPlan = 7,
+      planChoices = listOf(PlanChoice("Old.md", "Old"))), message(encodeSnapshot("snapshot", snapshot)))
+    assertTrue(next.planChoices.isEmpty())
+    assertEquals(-1, next.selectedPlan)
     assertEquals("grok-test", next.view.model)
     assertEquals("LazWorkflow", next.view.targetDisplay)
     assertEquals("Documents/Plan.md", next.planPath)

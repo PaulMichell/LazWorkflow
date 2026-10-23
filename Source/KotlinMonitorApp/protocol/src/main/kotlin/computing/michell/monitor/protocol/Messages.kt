@@ -223,7 +223,9 @@ data class ApprovalNotice(
   val decisionsAccepted: Boolean
 )
 
-data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val files: List<String>? = null)
+data class PlanChoice(val path: String, val caption: String)
+
+data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
 
 data class WireSnapshot(
   val view: WireView,
@@ -585,10 +587,10 @@ fun decodeMode(obj: JsonValue.Obj): ModeMessage? {
   return ModeMessage(mode.value, locked.value)
 }
 
-/** Request the project Markdown catalogue without replacing conversation state. */
-fun encodePlanBrowse(id: String): String {
+/** Request the desktop plan combobox without replacing conversation state. */
+fun encodePlanChoices(id: String): String {
   val payload = JsonObjectBuilder()
-  payload.add("text", "plan_files")
+  payload.add("text", "plan_choices")
   return encodeEnvelope(MessageKind.Refresh, id, payload.build())
 }
 
@@ -1119,12 +1121,14 @@ fun decodePlan(obj: JsonValue.Obj): PlanMessage? {
   val running = obj.readBool("running", true)
   if (!path.ok || !title.ok || !running.ok) return null
   val rows = rowsFrom(obj.field("rows")) { planRowFromJson(it) } ?: return null
-  val filesNode = obj.field("files")
-  val files = if (filesNode == null) null else {
-    val array = filesNode as? JsonValue.Arr ?: return null
-    array.items.map { (it as? JsonValue.Str)?.text ?: return null }
+  val choices = if (!obj.has("choices")) null else {
+    rowsFrom(obj.field("choices")) { choice ->
+      val choicePath = choice.readString("path", true)
+      val caption = choice.readString("caption", true)
+      if (!choicePath.ok || !caption.ok || choicePath.value.isEmpty()) null else PlanChoice(choicePath.value, caption.value)
+    } ?: return null
   }
-  return PlanMessage(path.value, title.value, running.value, rows, files)
+  return PlanMessage(path.value, title.value, running.value, rows, choices)
 }
 
 fun encodeTasks(id: String, rows: List<TaskRow>): String {

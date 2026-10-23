@@ -532,6 +532,8 @@ Type
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     /// Copies BuildSections. Does not write the plan file.
     Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
+    /// Copies the visible plan combobox captions and their registered paths without scanning files.
+    Procedure FillMonitorPlanChoices(Paths, Captions: TStrings);
     /// Copies LoadAssistantTasks. NeedsNote uses AssistantTaskNeedsUserNote.
     Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
     Function RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
@@ -1744,6 +1746,7 @@ Begin
   If ActiveMissing Then
     RefreshBuildTodos;
   UpdateWorkActions;
+  AssistantSessionObserve.AssistantSessionObserve(asnPlan);
 End;
 
 Procedure TProjectAssistantForm.ActivePlanChoiceChanged(Sender: TObject);
@@ -9684,6 +9687,16 @@ Begin
   End;
 End;
 
+Procedure TProjectAssistantForm.FillMonitorPlanChoices(Paths, Captions: TStrings);
+Begin
+  Paths.Clear;
+  Captions.Clear;
+  If Not Assigned(ActivePlanCombo) Or Not Assigned(ActivePlanPaths) Then
+    Exit;
+  Paths.Assign(ActivePlanPaths);
+  Captions.Assign(ActivePlanCombo.Items);
+End;
+
 Procedure TProjectAssistantForm.FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
 Var
   I: Integer;
@@ -9844,33 +9857,29 @@ End;
 
 Function TProjectAssistantForm.RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
 Var
-  Resolved: String;
+  Index: Integer;
 Begin
   Result := False;
   ErrorText := '';
   If ThisFormBusy(Self, ErrorText) Then
     Exit;
-  If Trim(RelativePath) = '' Then
+  If FReviewInProgress Then
     Begin
-      ErrorText := 'Set an active plan first.';
+      ErrorText := 'Wait for the current review to finish.';
       Exit;
     End;
-  If Not ResolvePlanPath(RelativePath, Resolved, ErrorText) Then
+  RefreshActivePlanChoices(Nil);
+  If Not Assigned(ActivePlanCombo) Or Not Assigned(ActivePlanPaths) Then
     Exit;
-  If Not FileExistsUTF8(Resolved) Then
+  Index := ActivePlanPaths.IndexOf(RelativePath);
+  If Index < 0 Then
     Begin
-      ErrorText := 'That Markdown file no longer exists.';
+      ErrorText := 'That plan is no longer in the desktop plan selector.';
       Exit;
     End;
-  If Not SameText(StringReplace(RelativePath, '\', '/', [rfReplaceAll]),
-    StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll])) Then
-    Begin
-      SetActivePlanRelativePath(ProjectRelativePath(Resolved));
-      PersistShellConfig;
-      RefreshActivePlanChoices(Nil);
-    End;
-  RefreshBuildTodos;
-  UpdateWorkActions;
+  ActivePlanCombo.ItemIndex := Index;
+  ActivePlanChoiceChanged(ActivePlanCombo);
+  RefreshActivePlanChoices(Nil);
   Result := True;
 End;
 
