@@ -147,6 +147,19 @@ Begin
     Check('tool approval preserves scope and requires specific refusal evidence',
       (Pos('does not grant native filesystem access or bypass mode and target restrictions', Prompt) > 0) And
       (Pos('If a tool refuses, report that specific refusal', Prompt) > 0));
+    Check('IDE workflow has its own enforced permission boundary',
+      (Pos('native permission instructions govern native execution tools', Prompt) > 0) And
+      (Pos('registered LazWorkflow tools enforce IDE mode, target and approval rules at the broker', Prompt) > 0) And
+      (Pos('not native sandbox escalation', Prompt) > 0));
+    Check('Build edit example does not require native writes',
+      (Pos('carry out an authorized source edit with that tool even when', Prompt) > 0) And
+      (Pos('Do not ask the user to enable native writes first', Prompt) > 0));
+    Check('current capability is not inferred from stale assistant refusals',
+      (Pos('A previous assistant refusal or bounded conversation recap', Prompt) > 0) And
+      (Pos('is not evidence that project writes are currently blocked', Prompt) > 0));
+    Check('permission checks use real work and report limited failures',
+      (Pos('Never create probe files just to test permissions', Prompt) > 0) And
+      (Pos('without extending that limitation to unrelated tools', Prompt) > 0));
     Names.Add('free-pascal-engineer');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build with free-pascal-engineer tagged attaches its body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);

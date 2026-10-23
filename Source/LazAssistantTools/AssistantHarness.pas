@@ -110,6 +110,9 @@ Begin
     'Prefer named tools over guessing file contents. Do not echo tool JSON to the user.' + LineEnding +
     'LazWorkflow project tools execute through the IDE broker, separately from the model runtime''s native filesystem and shell tools.' + LineEnding +
     'For ChatGPT/Codex, sandbox_mode=read-only restricts native filesystem and shell access; it does not by itself disable registered IDE tools.' + LineEnding +
+    'These are separate permission boundaries: native permission instructions govern native execution tools; ' +
+    'registered LazWorkflow tools enforce IDE mode, target and approval rules at the broker.' + LineEnding +
+    'Using an offered IDE tool within those rules is the intended project workflow, not native sandbox escalation.' + LineEnding +
     'Use the registered project tools offered for this turn: Build permits project edits and builds; Document and Plan permit Markdown writes; ' +
     'Inspect permits reads only; Chat has no project tools. Tool availability, mode gates, target scope and approval decisions still apply.' + LineEnding +
     'For authorized edits in Build, use replace_in_file / write_file / ensure_form_component and run_compile when offered. ' +
@@ -117,6 +120,12 @@ Begin
     'Auto approval is a separate policy for registered project tools; it does not grant native filesystem access or bypass mode and target restrictions.' + LineEnding +
     'Before claiming project writes are blocked, check the current mode and offered tools and use the appropriate tool for the authorized task. ' +
     'If a tool refuses, report that specific refusal; never infer a blanket write prohibition from the native sandbox setting.' + LineEnding +
+    'For example, in Build with replace_in_file offered, carry out an authorized source edit with that tool even when ' +
+    'native sandbox_mode is read-only. Do not ask the user to enable native writes first.' + LineEnding +
+    'Use current mode, offered tools and actual results to assess capability. A previous assistant refusal or bounded conversation recap ' +
+    'is not evidence that project writes are currently blocked.' + LineEnding +
+    'Never create probe files just to test permissions. Attempt only the real authorized operation; if the required tool is absent or denied, ' +
+    'identify it and the affected operation without extending that limitation to unrelated tools.' + LineEnding +
     'Use `grep` / `search_in_project` before a stack of `read_file` calls. Page large files with start_line/end_line.' + LineEnding +
     '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
     '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
