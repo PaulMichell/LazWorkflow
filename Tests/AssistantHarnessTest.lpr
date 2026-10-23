@@ -138,6 +138,15 @@ Begin
     Check('AGENTS.md inlined', Pos('Use PascalCase keywords in this repo', Prompt) > 0);
     Check('work_policy section', Pos('<work_policy>', Prompt) > 0);
     Check('ide_fusion section', Pos('<ide_fusion>', Prompt) > 0);
+    Check('build distinguishes native sandbox from IDE tools',
+      (Pos('sandbox_mode=read-only restricts native filesystem and shell access', Prompt) > 0) And
+      (Pos('it does not by itself disable registered IDE tools', Prompt) > 0));
+    Check('build directs edits through offered project tools',
+      (Pos('Build permits project edits and builds', Prompt) > 0) And
+      (Pos('use replace_in_file / write_file / ensure_form_component and run_compile when offered', Prompt) > 0));
+    Check('tool approval preserves scope and requires specific refusal evidence',
+      (Pos('does not grant native filesystem access or bypass mode and target restrictions', Prompt) > 0) And
+      (Pos('If a tool refuses, report that specific refusal', Prompt) > 0));
     Names.Add('free-pascal-engineer');
     Prompt := Harness.BuildSystemPrompt(amBuild, Names, Root, 'Documents/Plan.md');
     Check('build with free-pascal-engineer tagged attaches its body', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);
@@ -165,6 +174,17 @@ Begin
     Check('inspect still catalogs fpe', Pos('free-pascal-engineer', Prompt) > 0);
     Check('inspect may open and search', (Pos('open_file', Prompt) > 0) And (Pos('search_in_project', Prompt) > 0));
     Check('inspect overlay refuses writes', Pos('write_file', Prompt) > 0);
+    Check('inspect sandbox guidance preserves read-only mode',
+      (Pos('Inspect permits reads only', Prompt) > 0) And
+      (Pos('Tool availability, mode gates, target scope and approval decisions still apply', Prompt) > 0));
+    Prompt := Harness.BuildSystemPrompt(amPlan, Names, Root, '');
+    Check('plan sandbox guidance permits Markdown only',
+      (Pos('Document and Plan permit Markdown writes', Prompt) > 0) And
+      (Pos('Never edit source (.pas/.lfm) in Plan mode', Prompt) > 0));
+    Prompt := Harness.BuildSystemPrompt(amDocument, Names, Root, '');
+    Check('document sandbox guidance permits Markdown only',
+      (Pos('Document and Plan permit Markdown writes', Prompt) > 0) And
+      (Pos('Do not edit source (.pas/.lfm)', Prompt) > 0));
     Names.Add('free-pascal-engineer');
     Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');
     Check('inspect tag attaches house skill', Pos('ALWAYS USE PASCALCASE KEYWORDS', Prompt) > 0);

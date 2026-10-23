@@ -108,6 +108,15 @@ Begin
   Result :=
     '<tool_calling>' + LineEnding +
     'Prefer named tools over guessing file contents. Do not echo tool JSON to the user.' + LineEnding +
+    'LazWorkflow project tools execute through the IDE broker, separately from the model runtime''s native filesystem and shell tools.' + LineEnding +
+    'For ChatGPT/Codex, sandbox_mode=read-only restricts native filesystem and shell access; it does not by itself disable registered IDE tools.' + LineEnding +
+    'Use the registered project tools offered for this turn: Build permits project edits and builds; Document and Plan permit Markdown writes; ' +
+    'Inspect permits reads only; Chat has no project tools. Tool availability, mode gates, target scope and approval decisions still apply.' + LineEnding +
+    'For authorized edits in Build, use replace_in_file / write_file / ensure_form_component and run_compile when offered. ' +
+    'Do not request native sandbox escalation or a mode change solely because the native sandbox is read-only.' + LineEnding +
+    'Auto approval is a separate policy for registered project tools; it does not grant native filesystem access or bypass mode and target restrictions.' + LineEnding +
+    'Before claiming project writes are blocked, check the current mode and offered tools and use the appropriate tool for the authorized task. ' +
+    'If a tool refuses, report that specific refusal; never infer a blanket write prohibition from the native sandbox setting.' + LineEnding +
     'Use `grep` / `search_in_project` before a stack of `read_file` calls. Page large files with start_line/end_line.' + LineEnding +
     '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
     '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
