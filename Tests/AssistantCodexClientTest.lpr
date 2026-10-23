@@ -3,7 +3,7 @@ Program AssistantCodexClientTest;
 Uses cthreads, Interfaces, FileUtil, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
   {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
-  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages;
+  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages, AssistantCodexContext;
 Type
   TRunReaper = Class(TThread)
     Run: TAssistantCodexRun;
@@ -136,10 +136,48 @@ Begin
             Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted"}}}');
           End
         Else If (Method = '') And Assigned(Obj.Find('result')) Then
-          Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}');
+          Begin
+            Send('{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","tokenUsage":' +
+              '{"modelContextWindow":200000,"last":{"totalTokens":50000},"total":{"totalTokens":900000}}}}');
+            Send('{"method":"thread/tokenUsage/updated","params":{"threadId":"other-thread","tokenUsage":' +
+              '{"modelContextWindow":1,"last":{"totalTokens":1}}}}');
+            Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}');
+          End;
       Finally Data.Free; End;
     End;
 End;
+Procedure TestContextUsage;
+Var
+  Data: TJSONData;
+  Usage: TCodexContextUsage;
+Begin
+  Usage := EmptyCodexContextUsage;
+  Check('unknown context has no percentage', Pos('%', CodexContextCaption(Usage, 123)) = 0);
+  Data := GetJSON('{"modelContextWindow":200000,"last":{"totalTokens":50000,"inputTokens":48000,' +
+    '"cachedInputTokens":40000,"outputTokens":2000,"reasoningOutputTokens":1000},"total":{"totalTokens":900000}}');
+  Try
+    Check('runtime context parses', ParseCodexContextUsage(Data, Usage));
+    Check('percentage uses latest request, not cumulative usage', Pos('25', CodexContextCaption(Usage, 123)) > 0);
+    Check('all runtime counters retained', (Usage.Last.InputTokens = 48000) And
+      (Usage.Last.CachedInputTokens = 40000) And (Usage.Last.OutputTokens = 2000) And
+      (Usage.Last.ReasoningOutputTokens = 1000) And (Usage.Total.TotalTokens = 900000));
+    Check('details distinguish cumulative usage', Pos('not context occupancy', CodexContextDetails(Usage, 123)) > 0);
+  Finally
+    Data.Free;
+  End;
+  Data := GetJSON('{"modelContextWindow":null,"last":{"totalTokens":0,"inputTokens":-2,"outputTokens":"bad"}}');
+  Try
+    Check('nullable capacity parses', ParseCodexContextUsage(Data, Usage));
+    Check('zero preserved and invalid counters unknown', (Usage.Last.TotalTokens = 0) And
+      (Usage.ModelContextWindow = -1) And (Usage.Last.InputTokens = -1) And (Usage.Last.OutputTokens = -1));
+    Check('unknown capacity never invents percentage', Pos('%', CodexContextCaption(Usage, 123)) = 0);
+    Check('missing counters labelled', Pos('not reported', CodexContextDetails(Usage, 123)) > 0);
+    Check('nonobject rejected', Not ParseCodexContextUsage(Nil, Usage));
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestDynamicTools;
 Var
   Catalogue, Dynamic, Params: String;
@@ -213,6 +251,8 @@ Begin
     Check('first run creates its managed profile', FileExists(Profile + '/config.toml'));
     Check('worker does not dispatch broker tools', Workspace.Reads = 0);
     Check('worker streams answer snapshot', Snapshot.Content = '**text**');
+    Check('worker publishes runtime context for the UI', Snapshot.ContextUsage.Reported And
+      (Snapshot.ContextUsage.Last.TotalTokens = 50000) And (Snapshot.ContextUsage.Total.TotalTokens = 900000));
     Check('worker publishes reasoning for the UI', Pos('Final-only summary', Snapshot.Thinking) > 0);
     Run.Free; Run := Nil;
     RunId := Broker.BeginRun(awsReadOnly);
@@ -548,6 +588,7 @@ Begin
     ExtractFilePath(ExpandFileName(ParamStr(0))) + 'codex-schema-fixtures', [cffCreateDestDirectory, cffOverwriteFile]));
   TestDynamicTools;
   TestTurnStartBody;
+  TestContextUsage;
   Client := TAssistantCodexClient.Create(500);
   Try
     VersionEnv := TStringList.Create;
@@ -620,7 +661,11 @@ Begin
     Check('tool result sent', Client.CompleteTool('call-1', 'result', True));
     Check('tool cannot complete twice', Not Client.CompleteTool('call-1', 'result', True));
     WaitState(crsCompleted);
-    Start; Client.StartTurn('finalonly'); WaitState(crsCompleted);
+    Check('thread usage notification correlated', Client.ContextUsage.Reported And
+      (Client.ContextUsage.Last.TotalTokens = 50000) And (Client.ContextUsage.ModelContextWindow = 200000));
+    Start;
+    Check('new connection clears context usage', Not Client.ContextUsage.Reported);
+    Client.StartTurn('finalonly'); WaitState(crsCompleted);
     Check('final-only messages retained once with paragraph separation',
       Client.Content = 'Final answer' + LineEnding + LineEnding + 'Second paragraph');
     Start; Client.StartTurn('duplicate'); WaitState(crsFailed);

@@ -37,7 +37,7 @@ Uses
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient,
   AssistantToolBroker,
   AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
-  AssistantPlanRun, AssistantSessionObserve;
+  AssistantPlanRun, AssistantSessionObserve, AssistantCodexContext;
 
 Type
   TAssistantMonitorPlanRows = Array Of TAssistantMonitorPlanRow;
@@ -268,6 +268,7 @@ Type
     ActiveMode: TAssistantMode;
     FModelName: String;
     FContextUsed: Integer;
+    FCodexContextUsage: TCodexContextUsage;
     FContextLimit: Integer;
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
@@ -716,6 +717,7 @@ Begin
   Inherited Create(TheOwner);
   FModelName := AssistantConfigDefaultModel;
   FContextUsed := 0;
+  FCodexContextUsage := EmptyCodexContextUsage;
   FAccountUsageSlot := TAccountUsageSlot.Create;
   { Soft display budget; Grok/xAI models often allow ~500k tokens. }
   FContextLimit := 500000;
@@ -3351,6 +3353,7 @@ Begin
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
   FContextUsed := 0;
+  FCodexContextUsage := EmptyCodexContextUsage;
   If Not Assigned(ProjectAssistantConversation) Or Not Assigned(AssistantClient) Then
     Exit;
   For I := 0 To ProjectAssistantConversation.TurnCount - 1 Do
@@ -4141,6 +4144,7 @@ Begin
   FAssistantContent := ''; FAssistantThinking := '';
   AppendMessage('user', FDisplayUser);
   FContextUsed := Length(Prompt) Div 4;
+  FCodexContextUsage := EmptyCodexContextUsage;
   SetSending(True);
   BeginAssistantReply;
   Try
@@ -4201,6 +4205,15 @@ Begin
         Exit;
       End;
     Snapshot := FCodexRun.Snapshot;
+    If Snapshot.ContextUsage.Reported And
+      ((Not FCodexContextUsage.Reported) Or
+       (Snapshot.ContextUsage.Last.TotalTokens <> FCodexContextUsage.Last.TotalTokens) Or
+       (Snapshot.ContextUsage.Total.TotalTokens <> FCodexContextUsage.Total.TotalTokens) Or
+       (Snapshot.ContextUsage.ModelContextWindow <> FCodexContextUsage.ModelContextWindow)) Then
+      Begin
+        FCodexContextUsage := Snapshot.ContextUsage;
+        UpdateStatusFooter;
+      End;
     ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
     ToolPending := FCodexRun.HasPendingTool;
     If ToolPending And FSending Then
@@ -4789,7 +4802,9 @@ Begin
   CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
-  If FUseCodex Or FUseClaude Then
+  If FUseCodex Then
+    CentreText := CodexContextCaption(FCodexContextUsage, FContextUsed)
+  Else If FUseClaude Then
     CentreText := Format('Context ~%d tokens', [FContextUsed]);
   ApplyModelStatus;
   StatusFooter.SetModelText(ModelText);
@@ -4812,7 +4827,9 @@ Begin
   StatusFooter.SetRightHint('Click for session info');
   If Assigned(SendAction) Then SendAction.Hint := '';
   RefreshAttachAction;
-  If FUseCodex Or FUseClaude Then
+  If FUseCodex Then
+    FContextStatusHint := CodexContextDetails(FCodexContextUsage, FContextUsed) + LineEnding + 'Click for details.'
+  Else If FUseClaude Then
     FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
   RefreshCentreStatus;
   ApplySkillStatus;
@@ -7760,7 +7777,7 @@ Var
 Begin
   If FUseCodex Then
     Begin
-      RunAssistantModal('ChatGPT preview sends the current prompt, light IDE context and a bounded conversation recap.', mtInformation, [mbOK], 0);
+      RunAssistantModal(CodexContextDetails(FCodexContextUsage, FContextUsed), mtInformation, [mbOK], 0);
       Exit;
     End;
   If FUseClaude Then
@@ -8334,6 +8351,7 @@ Begin
           WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError);
       End;
     FContextUsed := 0;
+    FCodexContextUsage := EmptyCodexContextUsage;
     FTurnRecorded := False;
     FSelectedTurnIndex := -1;
     If Assigned(AssistantClient) Then
@@ -8383,6 +8401,7 @@ Begin
         WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
     End;
   FContextUsed := 0;
+  FCodexContextUsage := EmptyCodexContextUsage;
   FContextWarnShown := False;
   FUserCancelled := False;
   FTurnRecorded := False;
@@ -8421,6 +8440,7 @@ Begin
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
   FContextUsed := 0;
+  FCodexContextUsage := EmptyCodexContextUsage;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
   FSelectedTurnIndex := -1;
@@ -8473,6 +8493,7 @@ Begin
   FSessionProjectKey := '';
   ClearCurrentTurnDisplay;
   FContextUsed := 0;
+  FCodexContextUsage := EmptyCodexContextUsage;
   FUserCancelled := False;
   FLastChatPaintTick := 0;
   FSelectedTurnIndex := -1;
@@ -9017,6 +9038,7 @@ Begin
   If IsCurrent Then
     Begin
       FContextUsed := 0;
+      FCodexContextUsage := EmptyCodexContextUsage;
       FTurnRecorded := False;
       FSelectedTurnIndex := -1;
       ClearCurrentTurnDisplay;
@@ -9444,7 +9466,9 @@ Begin
     Pct := 0;
   If Pct > 999 Then
     Pct := 999;
-  If FUseCodex Or FUseClaude Then
+  If FUseCodex Then
+    View.ContextText := CodexContextCaption(FCodexContextUsage, FContextUsed)
+  Else If FUseClaude Then
     View.ContextText := Format('Context ~%d tokens', [FContextUsed])
   Else
     Begin

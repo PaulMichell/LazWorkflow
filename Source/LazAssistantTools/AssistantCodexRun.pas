@@ -12,12 +12,13 @@ Unit AssistantCodexRun;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexClient, AssistantConversation;
+  Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext;
 
 Type
   TCodexRunSnapshot = Record
     State: TCodexRunState;
     Content, Thinking, ErrorText: String;
+    ContextUsage: TCodexContextUsage;
     Done: Boolean;
   End;
   TAssistantCodexRun = Class(TThread)
@@ -84,6 +85,7 @@ Begin
   FProjectRoot := ProjectRoot;
   FAttachments := AttachmentsJson;
   FSnapshot.State := crsConnecting;
+  FSnapshot.ContextUsage := EmptyCodexContextUsage;
 End;
 
 Destructor TAssistantCodexRun.Destroy;
@@ -182,6 +184,7 @@ Begin
     FSnapshot.Content := Client.Content;
     FSnapshot.Thinking := Client.Thinking;
     FSnapshot.ErrorText := Client.LastError;
+    FSnapshot.ContextUsage := Client.ContextUsage;
   Finally
     LeaveCriticalSection(FLock);
   End;

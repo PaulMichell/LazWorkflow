@@ -16,7 +16,8 @@ Unit AssistantCodexClient;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages, AssistantCodexQualification;
+  Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages, AssistantCodexQualification,
+  AssistantCodexContext;
 
 /// Shared catalogue items use function.parameters. Codex dynamicTools use name and inputSchema.
 Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
@@ -51,6 +52,7 @@ Type
     FState: TCodexRunState;
     FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
+    FContextUsage: TCodexContextUsage;
     FModelItems: String;
     FModelCursors: TStringList;
     FModelCount: Integer;
@@ -102,6 +104,7 @@ Type
     Function CompleteTool(Const CallId, Text: String; Success: Boolean): Boolean; Overload;
     { Image refs from read_image are the same store refs. They ride in contentItems when the frame can hold them. }
     Function CompleteTool(Const CallId, Text, ProjectRoot, AttachmentsJson: String; Success: Boolean): Boolean; Overload;
+    Property ContextUsage: TCodexContextUsage Read FContextUsage;
     Property Compatibility: TCodexCompatibility Read FCompatibility;
     Property ToolIsolationChecked: Boolean Read FToolIsolationChecked;
     Property State: TCodexRunState Read FState;
@@ -366,6 +369,7 @@ Begin
   FState := crsDisconnected;
   FThreadId := '';
   FTurnId := '';
+  FContextUsage := EmptyCodexContextUsage;
   FPendingId := '';
   FPendingMethod := '';
   FContent := '';
@@ -529,7 +533,12 @@ Begin
       this client, which rejects them. Developer instructions come from the harness. }
     Result := Request('thread/start', AssistantCodexWire.CodexThreadStartParams(WorkingDirectory, Model, Dynamic,
       DeveloperInstructions, FCompatibility.Adapter = 'named-permissions-tagged-v1'));
-    If Result Then FState := crsStartingThread;
+    If Result Then
+      Begin
+        FContextUsage := EmptyCodexContextUsage;
+        FThreadId := '';
+        FState := crsStartingThread;
+      End;
   Finally
     Data.Free;
   End;
@@ -864,7 +873,14 @@ Begin
         Value := Root.Find('params');
         If Not (Value Is TJSONObject) Then Exit;
         Params := TJSONObject(Value);
-        If Params.Get('threadId', '') <> FThreadId Then Exit;
+        If (FThreadId = '') Or (Params.Get('threadId', '') <> FThreadId) Then Exit;
+        If Method = 'thread/tokenUsage/updated' Then
+          Begin
+            { Thread-scoped and sometimes delivered after turn/completed. }
+            Value := Params.Find('tokenUsage');
+            If Value Is TJSONObject Then ParseCodexContextUsage(Value, FContextUsage);
+            Exit;
+          End;
         If (Method = 'turn/started') And (FState = crsStartingTurn) Then
           Begin
             Value := Params.Find('turn');
