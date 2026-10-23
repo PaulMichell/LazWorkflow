@@ -2885,7 +2885,7 @@ Var
   List: TListBox;
   Section: TPlanSection;
   CaptionText, StatusText, TitleText: String;
-  Fill, Ink, Border: TColor;
+  Fill, Ink, Border, RowColor: TColor;
   Selected: Boolean;
   Pad, TextH, PillWidth, PillLeft, PillTop, PillBottom, TitleLeft, TitleRight: Integer;
   TitleRect, PillRect: TRect;
@@ -2898,9 +2898,13 @@ Begin
   List.Canvas.Font.Assign(List.Font);
   List.Canvas.Font.Style := [];
   If Selected Then
-    List.Canvas.Brush.Color := clHighlight
+    RowColor := ColorToRGB(clHighlight)
   Else
-    List.Canvas.Brush.Color := List.Color;
+    RowColor := List.GetRGBColorResolvingParent;
+  { Resolve clDefault through the control before blending, as the history cards
+    use an explicit row colour. A raw clDefault becomes black in ColorToRGB. }
+  List.Canvas.Brush.Style := bsSolid;
+  List.Canvas.Brush.Color := RowColor;
   List.Canvas.FillRect(ARect);
   CaptionText := '';
   If (Index >= 0) And (Index < List.Items.Count) Then
@@ -2938,7 +2942,7 @@ Begin
       If PillTop < ARect.Top + 1 Then
         PillTop := ARect.Top + 1;
       PillRect := Rect(PillLeft, PillTop, PillLeft + PillWidth, PillBottom);
-      DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border, List.Canvas.Brush.Color);
+      DrawSmoothRoundRect(List.Canvas, PillRect, Scale96ToForm(4), Fill, Border, RowColor);
       List.Canvas.Font.Color := Ink;
       List.Canvas.Brush.Style := bsClear;
       TextH := List.Canvas.TextHeight(StatusText);
