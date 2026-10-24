@@ -8,7 +8,7 @@
     <CompilerOptions>
       <Version Value="11"/>
       <SearchPaths>
-        <OtherUnitFiles Value="../Source/LazStyledText;."/>
+        <OtherUnitFiles Value="../Source/LazStyledText"/>
         <UnitOutputDirectory Value="../Lib/$(TargetCPU)-$(TargetOS)/LazStyledText"/>
       </SearchPaths>
       <CodeGeneration>
@@ -20,7 +20,7 @@
     <Version Major="1" Minor="0" Release="0" Build="0"/>
     <Files Count="11">
       <Item1>
-        <Filename Value="RegLazStyledText.pas"/>
+        <Filename Value="../Source/LazStyledText/RegLazStyledText.pas"/>
         <HasRegisterProc Value="True"/>
         <UnitName Value="RegLazStyledText"/>
       </Item1>
