@@ -503,7 +503,7 @@ End;
 Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
-  TextH, TextY, EdgePenW, MsgPad, NodePenW, RingPenW: Integer;
+  TextH, TextY, EdgePenW, MsgPad, NodePenW, RingPenW, MarkerX, MarkerY, MarkerRow: Integer;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
@@ -577,22 +577,22 @@ Begin
             End;
         End;
 
+      MarkerRow := -1;
       For I := FirstRow To LastRow Do
         Begin
           C := FModel.Commit(I);
           Y := I * RH - Off;
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
+          Brush.Color := Col;
+          Pen.Color := Col;
+          Pen.Width := NodePenW;
+          Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
           If CommitIsCheckedOut(C) Then
-            { Widgetset Ellipse is not antialiased, so the checkout ring stair-steps. }
-            DrawSmoothRing(FPaintBox.Canvas, X, RowMidY(I), NodeR + Ring, RingPenW, NodeR + NodePenW / 2,
-              clWindowText, Col, HistoryRowFill(I = FSelectedIndex))
-          Else
             Begin
-              Brush.Color := Col;
-              Pen.Color := Col;
-              Pen.Width := NodePenW;
-              Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
+              MarkerRow := I;
+              MarkerX := X;
+              MarkerY := RowMidY(I);
             End;
 
           TextX := GraphContentWidth + GraphTextGap;
@@ -620,6 +620,11 @@ Begin
           If C.DetailsLoaded And (C.Refs <> '') Then
             DrawRefCards(C.Refs, TextX, Y, HistoryRowFill(I = FSelectedIndex));
         End;
+
+      { Paths and lane dots are already painted. The ring only overlays the stroke. }
+      If MarkerRow >= 0 Then
+        DrawSmoothRing(FPaintBox.Canvas, MarkerX, MarkerY, NodeR + Ring, RingPenW, clWindowText,
+          HistoryRowFill(MarkerRow = FSelectedIndex));
     End;
 End;
 
