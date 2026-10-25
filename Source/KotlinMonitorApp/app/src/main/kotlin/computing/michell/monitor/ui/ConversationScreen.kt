@@ -37,7 +37,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -128,7 +127,6 @@ fun ConversationScreen(
   onNeed: (Int) -> Unit,
   onVisibleTurns: (Set<Int>) -> Unit,
   onViewWidth: (Int) -> Unit,
-  onSettings: () -> Unit,
   dictation: DictationState,
   onDictateOn: (Int, Int, Boolean) -> Unit,
   onDictateOff: () -> Unit,
@@ -150,9 +148,6 @@ fun ConversationScreen(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       Text("Mode")
       ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
-      IconButton(onClick = onSettings) {
-        Icon(painterResource(R.drawable.ic_menu), contentDescription = "Settings")
-      }
     }
     ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     PromptField(promptValue, onPrompt)
