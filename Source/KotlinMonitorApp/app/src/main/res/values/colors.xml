@@ -1,4 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+  <color name="monitor_background">#FFFFFF</color>
+  <color name="monitor_text">#222222</color>
+  <color name="monitor_text_secondary">#666666</color>
+  <color name="monitor_selected">#006C4C</color>
+  <color name="monitor_dictate">#006C4C</color>
+  <color name="monitor_dictate_listening">#B71C1C</color>
+  <color name="monitor_error">#800000</color>
+  <color name="monitor_icon">#FF000000</color>
   <color name="monitor_launcher_background">#F2F6FC</color>
+  <color name="monitor_not_started_fill">#FFF3CD</color>
+  <color name="monitor_not_started_ink">#795500</color>
+  <color name="monitor_not_started_border">#D4A017</color>
+  <color name="monitor_progress_fill">#E8F5E9</color>
+  <color name="monitor_progress_ink">#1B5E20</color>
+  <color name="monitor_progress_border">#43A047</color>
+  <color name="monitor_complete_fill">#E3F2FD</color>
+  <color name="monitor_complete_ink">#0D47A1</color>
+  <color name="monitor_complete_border">#42A5F5</color>
+  <color name="monitor_blocked_fill">#FFEBEE</color>
+  <color name="monitor_blocked_ink">#B71C1C</color>
+  <color name="monitor_blocked_border">#E53935</color>
+  <color name="monitor_bubble_text">#222222</color>
+  <color name="monitor_bubble_text_secondary">#666666</color>
+  <color name="monitor_bubble_failed">#800000</color>
 </resources>
