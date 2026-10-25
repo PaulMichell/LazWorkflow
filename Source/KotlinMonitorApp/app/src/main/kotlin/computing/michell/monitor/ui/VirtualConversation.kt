@@ -61,8 +61,8 @@ fun displayBlocks(turn: WireTurn?): List<WireBlock> {
 }
 
 fun blockShown(block: WireBlock, showThinking: Boolean, showTools: Boolean): Boolean {
-  return when (block.kind) {
-    "thinking" -> showThinking && (block.body.isNotEmpty() || block.title.isNotEmpty())
+  return when (displayKind(block)) {
+    "thinking" -> showThinking && block.body.isNotBlank()
     "tool", "subagent" -> showTools
     else -> block.body.isNotEmpty() || block.title.isNotEmpty() || block.images.isNotEmpty()
   }
