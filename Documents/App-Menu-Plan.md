@@ -161,7 +161,7 @@ Load the index at process start. If the index is unreadable, start empty and do 
 
 ### 5.2 File a closed conversation
 
-Status: not started
+Status: complete
 
 On `conversation_closed`, write the on-screen turns under that `conversation_id` and title before applying the new epoch. On each committed patch for `current`, update the `current` file for that fingerprint and project root. Switching project root on the host is a new cache key, not an overwrite of the previous project.
 
