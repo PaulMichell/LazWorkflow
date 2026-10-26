@@ -196,7 +196,7 @@ The assistant package test that links without LazAssistantMonitor must still pas
 
 ### 6.2 Phone tests
 
-Status: not started
+Status: complete
 
 Add JUnit tests in the protocol module, not instrumented Android tests. Required cases:
 
