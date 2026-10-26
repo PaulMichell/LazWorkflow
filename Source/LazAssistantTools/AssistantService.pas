@@ -485,7 +485,7 @@ Begin
       If Trim(Event.ToolName) <> '' Then
         ForwardProgress(Event.ToolName)
       Else
-        ForwardProgress('Running tools…');
+        ForwardProgress(AssistantPhaseRunning);
     End;
 End;
 

@@ -4055,7 +4055,7 @@ Begin
       FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, FCodexLaunchInstructions,
       ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
     FCodexRun.Start;
-    SetStreamPhase('Waiting');
+    SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
   Except
     On E: Exception Do
@@ -4078,7 +4078,7 @@ Begin
     FClaudeRun := TAssistantClaudeRun.Create(FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeLaunchPrompt,
       FClaudeDirectory, ClaudeRunTimeoutMs);
     FClaudeRun.Start;
-    SetStreamPhase('Waiting');
+    SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
   Except
     On E: Exception Do
@@ -4290,15 +4290,15 @@ Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
   Begin
     { Same right-hand phases as the Grok stream, for every backend. }
     If PendingTool Then
-      Result := 'Running tools…'
+      Result := AssistantPhaseRunning
     Else If RunSnapshot.State In [crsConnecting, crsReady, crsStartingThread, crsStartingTurn] Then
-      Result := 'Waiting'
+      Result := AssistantPhaseWaiting
     Else If RunSnapshot.Content <> '' Then
-      Result := 'Streaming…'
+      Result := AssistantPhaseStreaming
     Else If RunSnapshot.Thinking <> '' Then
-      Result := 'Thinking…'
+      Result := AssistantPhaseThinking
     Else
-      Result := 'Waiting for first token…';
+      Result := AssistantPhaseWaiting;
   End;
 
 Begin
@@ -4325,7 +4325,7 @@ Begin
     ToolPending := FCodexRun.HasPendingTool;
     If ToolPending And FSending Then
       Begin
-        SetStreamPhase('Running tools…');
+        SetStreamPhase(AssistantPhaseRunning);
         If Assigned(StatusFooter) Then
           StatusFooter.Update;
       End;
@@ -4477,7 +4477,7 @@ Begin
         FinishAssistantReply(Snapshot.ErrorText);
       End
     Else If FSending And (FStatusPhase = '') Then
-      SetStreamPhase('Waiting');
+      SetStreamPhase(AssistantPhaseWaiting);
     If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) And FSending Then
       FTraceView.RefreshElapsed(FTrace);
   Finally
@@ -4881,7 +4881,7 @@ Begin
   If FSending Then
     Begin
       If FStatusPhase = '' Then
-        FStatusPhase := 'Waiting for first token…';
+        FStatusPhase := AssistantPhaseWaiting;
       StatusText := FormatElapsedStatus(FStatusPhase);
     End
   Else If FPlanAgentRunning Then
@@ -5057,7 +5057,7 @@ Begin
           StreamStart := Now;
         End;
       If FStatusPhase = '' Then
-        FStatusPhase := 'Waiting for first token…';
+        FStatusPhase := AssistantPhaseWaiting;
       If Assigned(ElapsedTimer) Then
         ElapsedTimer.Enabled := True;
     End
@@ -6699,11 +6699,11 @@ Begin
     If (FStatusPhase <> 'Re-establishing Connection') And (Not IsAssistantRecoveryProgress(FStatusPhase)) Then
       Begin
         If FLiveContent <> '' Then
-          SetStreamPhase('Streaming…')
+          SetStreamPhase(AssistantPhaseStreaming)
         Else If FLiveThinking <> '' Then
-          SetStreamPhase('Thinking…')
+          SetStreamPhase(AssistantPhaseThinking)
         Else If FStatusPhase = '' Then
-          SetStreamPhase('Waiting for first token…');
+          SetStreamPhase(AssistantPhaseWaiting);
       End;
     { Only repaint the chat pane when the user is watching the live turn. }
     If FViewingLive Then
@@ -7282,7 +7282,7 @@ Begin
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If FContextUsed < Length(FinalApi) Div 4 Then
         FContextUsed := Length(FinalApi) Div 4 + 8;
-      FStatusPhase := 'Waiting for first token…';
+      FStatusPhase := AssistantPhaseWaiting;
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
       SetSending(True);
       BeginAssistantReply;
@@ -7311,7 +7311,7 @@ Begin
     Exit;
   If Assigned(FCodexRun) Then
     Begin
-      If FCodexRun.Steer(UserText) Then SetStreamPhase('Steer queued…')
+      If FCodexRun.Steer(UserText) Then SetStreamPhase(AssistantPhaseSteering)
       Else InputMemo.Text := UserText;
       Exit;
     End;
@@ -7323,7 +7323,7 @@ Begin
     End;
   If Assigned(AssistantClient) Then
     AssistantClient.EnqueueSteer(UserText);
-  SetStreamPhase('Steering at next tool gap…');
+  SetStreamPhase(AssistantPhaseSteering);
   WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(Trim(UserText))) + ' chars)');
 End;
 
@@ -8151,7 +8151,7 @@ Begin
           InputMemo.Clear;
           FComposerImagesJson := '';
           RefreshComposerImages;
-          SetStreamPhase('Steering at next tool gap…');
+          SetStreamPhase(AssistantPhaseSteering);
           WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(UserText)) + ' chars, ' +
             IntToStr(Length(Refs)) + ' images)');
           Exit;
@@ -8377,7 +8377,7 @@ Begin
   AppendMessage('user', FDisplayUser);
   AssistantClient.AddMessage(amrUser, ApiText);
   FContextUsed := FContextUsed + Length(ApiText) Div 4 + 8;
-  FStatusPhase := 'Waiting for first token…';
+  FStatusPhase := AssistantPhaseWaiting;
   AssistantClient.ToolsEnabled := False;
   SetSending(True);
   BeginAssistantReply;
@@ -9555,7 +9555,7 @@ Begin
     Begin
       View.ElapsedMs := CurrentStreamDurationMs;
       If FStatusPhase = '' Then
-        View.StatusText := FormatElapsedStatus('Waiting for first token…')
+        View.StatusText := FormatElapsedStatus(AssistantPhaseWaiting)
       Else
         View.StatusText := FormatElapsedStatus(FStatusPhase);
     End
@@ -9925,7 +9925,7 @@ Begin
       ErrorText := 'The steer could not be queued.';
       Exit;
     End;
-  SetStreamPhase('Steering at next tool gap…');
+  SetStreamPhase(AssistantPhaseSteering);
   WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(Trim(MessageText))) + ' chars)');
   Result := True;
 End;

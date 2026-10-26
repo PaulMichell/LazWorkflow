@@ -71,6 +71,16 @@ Type
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
 Function AssistantPhaseName(Phase: TAssistantPhase): String;
+
+Const
+  { Status-bar progress words. The ellipsis is U+2026, matching Thinking… already in the UI. }
+  AssistantPhaseWaiting = 'Waiting…';
+  AssistantPhaseThinking = 'Thinking…';
+  AssistantPhaseStreaming = 'Streaming…';
+  AssistantPhaseRunning = 'Running…';
+  AssistantPhaseSteering = 'Steering…';
+  AssistantPhaseConnecting = 'Connecting…';
+
 { True for live status strings the actor puts on the stream callback (not terminal errors). }
 Function IsAssistantProgressStatus(Const Text: String): Boolean;
 Function FormatSteerEnvelope(Const UserText: String): String;
@@ -129,14 +139,20 @@ Var
 Begin
   S := Trim(Text);
   Result :=
+    (S = AssistantPhaseWaiting) Or
+    (S = AssistantPhaseThinking) Or
+    (S = AssistantPhaseStreaming) Or
+    (S = AssistantPhaseRunning) Or
+    (S = AssistantPhaseSteering) Or
+    (S = AssistantPhaseConnecting) Or
+    { Earlier builds published longer phrases. A late snapshot must not become an error. }
     (S = 'Waiting for first token…') Or
     (S = 'Waiting') Or
-    { Earlier builds published the longer phrase. A late snapshot must not become an error. }
     (S = 'Waiting for model…') Or
     (S = 'Running tools…') Or
+    (S = 'Steer queued…') Or
+    (S = 'Steering at next tool gap…') Or
     (S = 'Steering at next model gap…') Or
-    (S = 'Thinking…') Or
-    (S = 'Streaming…') Or
     (S = 'Re-establishing Connection') Or
     IsAssistantRecoveryProgress(S);
 End;

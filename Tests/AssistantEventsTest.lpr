@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, AssistantProtocol, AssistantEvents;
+  Interfaces, Classes, SysUtils, AssistantProtocol, AssistantEvents;
 
 Var
   FailCount: Integer;
@@ -125,11 +125,18 @@ End;
 
 Procedure TestProgressStatus;
 Begin
-  Check('waiting is status', IsAssistantProgressStatus('Waiting for first token…'));
+  Check('waiting is status', IsAssistantProgressStatus(AssistantPhaseWaiting));
+  Check('thinking is status', IsAssistantProgressStatus(AssistantPhaseThinking));
+  Check('streaming is status', IsAssistantProgressStatus(AssistantPhaseStreaming));
+  Check('running is status', IsAssistantProgressStatus(AssistantPhaseRunning));
+  Check('steering is status', IsAssistantProgressStatus(AssistantPhaseSteering));
+  Check('connecting is status', IsAssistantProgressStatus(AssistantPhaseConnecting));
+  Check('old first token is status', IsAssistantProgressStatus('Waiting for first token…'));
   Check('model wait is status', IsAssistantProgressStatus('Waiting'));
   Check('old model wait is status', IsAssistantProgressStatus('Waiting for model…'));
-  Check('tools is status', IsAssistantProgressStatus('Running tools…'));
-  Check('steer is status', IsAssistantProgressStatus('Steering at next model gap…'));
+  Check('old tools is status', IsAssistantProgressStatus('Running tools…'));
+  Check('old steer is status', IsAssistantProgressStatus('Steering at next model gap…'));
+  Check('ascii dots are not status', Not IsAssistantProgressStatus('Waiting...'));
   Check('http is error', Not IsAssistantProgressStatus('HTTP 400: invalid_grant'));
   Check('empty is error', Not IsAssistantProgressStatus(''));
   Check('access violation is error', Not IsAssistantProgressStatus('Access violation'));

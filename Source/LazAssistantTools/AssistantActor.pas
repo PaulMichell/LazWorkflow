@@ -758,7 +758,7 @@ Begin
     Exit;
   InjectContinuation;
   LogEvent(aekLoopStarted, 'continuation');
-  EmitSnapshot(False, 'Waiting', True);
+  EmitSnapshot(False, AssistantPhaseWaiting, True);
   Result := False;
 End;
 
@@ -833,13 +833,13 @@ Begin
           Begin
             SetPhase(apThinking);
             FThinking := FThinkingBeforeRound + FParser.Thinking;
-            EmitSnapshot(False, 'Thinking…', False);
+            EmitSnapshot(False, AssistantPhaseThinking, False);
           End;
         sekContentDelta:
           Begin
             SetPhase(apStreaming);
             FContent := FParser.Content;
-            EmitSnapshot(False, 'Streaming…', False);
+            EmitSnapshot(False, AssistantPhaseStreaming, False);
           End;
       Else
         { Started / tool deltas / completed handled from parser accumulators. }
@@ -1453,7 +1453,7 @@ Begin
   { Do not keep Svc across Queue/Sleep — Detach may free the service. }
   Svc := Nil;
   LogEvent(aekToolStarted, Call.Arguments, Call.Name, Call.Id);
-  EmitSnapshot(False, 'Running tools…', True);
+  EmitSnapshot(False, AssistantPhaseRunning, True);
   StartTick := GetTickCount64;
   ResultText := '';
   ErrorText := '';
@@ -1715,7 +1715,7 @@ Begin
           Inc(NextToStart);
           If Handled[Slot] Then
             Continue;
-          EmitSnapshot(False, 'Running tools…', True);
+          EmitSnapshot(False, AssistantPhaseRunning, True);
           StartTick := GetTickCount64;
           StartTicks[Slot] := StartTick;
           If Not ParseSpawnSubagentArguments(Call.Arguments, Request, ParseErr) Then
@@ -1914,7 +1914,7 @@ Begin
   Result := InjectPendingSteer(Svc, Note);
   If Not Result Then Exit;
   LogEvent(aekInterjected, Note);
-  EmitSnapshot(False, 'Steering at next model gap…', True);
+  EmitSnapshot(False, AssistantPhaseSteering, True);
 End;
 
 Function TAssistantActor.BuildRoundJson(Out Url: String): String;
@@ -2035,7 +2035,7 @@ Begin
   FLocalContinuationCount := 0;
   LogEvent(aekTurnStarted, FModel);
   SetPhase(apWaiting);
-  EmitSnapshot(False, 'Waiting for first token…', True);
+  EmitSnapshot(False, AssistantPhaseWaiting, True);
   Try
   Svc := LockedService;
   MaxRounds := MaxRoundsForSession(Svc);
@@ -2059,8 +2059,8 @@ Begin
       SetLength(FToolCalls, 0);
       { Fresh answer channel per model loop; thinking is kept. }
       FContent := '';
-      { After tools the previous snapshot stays 'Running tools…' unless we reset it. }
-      EmitSnapshot(False, 'Waiting', True);
+      { After tools the previous snapshot stays Running… unless we reset it. }
+      EmitSnapshot(False, AssistantPhaseWaiting, True);
       RequestJson := BuildRoundJson(Url);
       If FUseResponses Then
         FTriedResponses := True;
