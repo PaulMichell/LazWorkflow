@@ -35,7 +35,7 @@ Function CaptureMonitorListenSnapshot(Out Settings: TMonitorSettings; Out ErrorT
 Implementation
 
 Uses
-  Classes, SyncObjs, Forms, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
+  Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
   AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, ProjectAssistantForm;
 
 Type
@@ -68,6 +68,9 @@ Type
     FSession: TMonitorSession;
     FStatusQueued: Boolean;
     FStatusDirty: Boolean;
+    FMirrorTimer: TTimer;
+    FPumpedMirror: Int64;
+    FPlanStamp: String;
     Procedure LockBridge;
     Procedure UnlockBridge;
     { Caller holds FLock. True when this command was still listed. }
@@ -88,6 +91,8 @@ Type
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
+    Procedure MirrorTimerTimer(Sender: TObject);
+    Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
     Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id, PayloadJson: String;
@@ -159,11 +164,19 @@ Begin
   InitCriticalSection(FLock);
   FOutstanding := TFPList.Create;
   FSession := Nil;
+  FPumpedMirror := 0;
+  FPlanStamp := '';
+  { Not owned by a form, so the designer cannot stream it. }
+  FMirrorTimer := TTimer.Create(Nil);
+  FMirrorTimer.Enabled := False;
+  FMirrorTimer.Interval := 150;
+  FMirrorTimer.OnTimer := @MirrorTimerTimer;
 End;
 
 Destructor TAssistantMonitorBridge.Destroy;
 Begin
   Detach;
+  FreeAndNil(FMirrorTimer);
   FreeAndNil(FOutstanding);
   DoneCriticalSection(FLock);
   Inherited Destroy;
@@ -277,12 +290,16 @@ Begin
       Session.SetApprovalCloseHandler(@HandleApprovalClosed);
     End;
   PublishEpoch;
+  If Assigned(FMirrorTimer) Then
+    FMirrorTimer.Enabled := Assigned(Session);
 End;
 
 Procedure TAssistantMonitorBridge.Detach;
 Var
   Session: TMonitorSession;
 Begin
+  If Assigned(FMirrorTimer) Then
+    FMirrorTimer.Enabled := False;
   LockBridge;
   Try
     Session := FSession;
@@ -577,6 +594,105 @@ Begin
   If Json <> '' Then
     SendJson(Json);
   PushPlan(Form);
+End;
+
+Function PlanRowsStamp(Const Rows: TAssistantMonitorPlanRows; Const Path, Title: String; Running: Boolean): String;
+Var
+  I: Integer;
+Begin
+  Result := Path + #1 + Title + #1 + BoolToStr(Running, True);
+  For I := 0 To High(Rows) Do
+    Result := Result + #1 + IntToStr(Rows[I].Index) + #1 + Rows[I].Status + #1 + Rows[I].Title;
+End;
+
+Procedure TAssistantMonitorBridge.MirrorTimerTimer(Sender: TObject);
+Var
+  Seen: Int64;
+Begin
+  If Not (Sender Is TTimer) Then
+    Exit;
+  Seen := AssistantMirrorCounter;
+  If Seen = FPumpedMirror Then
+    Exit;
+  PumpMirror(Seen);
+End;
+
+Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64);
+Var
+  Form: TProjectAssistantForm;
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+  Turn: TAssistantMonitorTurn;
+  Patch: TMonitorPatch;
+  Rows: TAssistantMonitorPlanRows;
+  Frames: TStringArray;
+  ErrorText, Stamp, PlanStamp: String;
+  Cursor: Int64;
+  I: Integer;
+Begin
+  Form := OpenForm;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If (Not Assigned(Session)) Or (Not Assigned(Form)) Then
+    Begin
+      FPumpedMirror := Seen;
+      Exit;
+    End;
+  Form.FillMonitorView(View);
+  ApplyHostFlags(View);
+  Turn := Default(TAssistantMonitorTurn);
+  If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
+    Turn := Default(TAssistantMonitorTurn);
+  Patch := Default(TMonitorPatch);
+  Patch.Epoch := Session.MirrorEpoch;
+  If Patch.Epoch = '' Then
+    Begin
+      PublishEpoch;
+      Patch.Epoch := Session.MirrorEpoch;
+    End;
+  Patch.TurnIndex := Turn.TurnIndex;
+  Patch.TurnId := Turn.Id;
+  Patch.Blocks := Turn.Blocks;
+  Patch.Busy := View.Busy;
+  Patch.Sending := View.Sending;
+  Patch.PlanRunning := View.PlanRunning;
+  Patch.Phase := View.Phase;
+  Patch.CanSend := View.CanSend;
+  Patch.CanSteer := View.CanSteer;
+  Patch.CanStop := View.CanStop;
+  Patch.ElapsedMs := View.ElapsedMs;
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  { Elapsed time is not part of the commit key. A clock tick must not mint a cursor. }
+  Stamp := Patch.Epoch + #1 + Patch.TurnId + #1 + Patch.Phase + #1 + BoolToStr(Patch.Busy, True) +
+    BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True) + BoolToStr(Patch.CanSend, True) +
+    BoolToStr(Patch.CanSteer, True) + BoolToStr(Patch.CanStop, True);
+  For I := 0 To High(Patch.Blocks) Do
+    Stamp := Stamp + #1 + Patch.Blocks[I].BlockId + #1 + Patch.Blocks[I].Kind + #1 + Patch.Blocks[I].Title + #1 +
+      Patch.Blocks[I].Body + #1 + BoolToStr(Patch.Blocks[I].Running, True) + BoolToStr(Patch.Blocks[I].Ok, True);
+  If (Patch.Epoch <> '') And Session.CommitMirrorCursor(Stamp, Cursor) Then
+    Begin
+      Patch.Cursor := Cursor;
+      Frames := PackMonitorPatch(HostId, Patch);
+      If Length(Frames) > 0 Then
+        Begin
+          For I := 0 To High(Frames) Do
+            Session.SendHostJson(Frames[I]);
+          Session.NoteMirrorHanded(Cursor);
+        End;
+    End;
+  Form.FillMonitorPlan(Rows);
+  PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
+  If PlanStamp <> FPlanStamp Then
+    Begin
+      PushPlan(Form);
+      FPlanStamp := PlanStamp;
+    End;
+  FPumpedMirror := Seen;
 End;
 
 Procedure TAssistantMonitorBridge.PushPlan(Form: TProjectAssistantForm);

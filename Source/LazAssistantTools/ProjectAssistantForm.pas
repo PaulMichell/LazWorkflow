@@ -348,7 +348,6 @@ Type
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
-  FMonitorLiveStamp: String; { Last live trace published to the phone. Skips an unchanged poll. }
     Function ComposerHasImages: Boolean;
     Procedure StashComposerImages;
     Procedure RestoreHeldComposerImages;
@@ -472,7 +471,6 @@ Type
     Procedure EnsureChatView;
     Procedure ApplyLiveThinkingAndAnswer;
     Procedure ApplyLiveAnswerSlice;
-    Procedure PublishLiveMonitorTurn;
     Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
     Procedure UpdateInputUndoItems;
@@ -800,7 +798,6 @@ Begin
   FOpenBindPending := True;
   FDeferLastTurn := True;
   FOpenBusy := False;
-  FMonitorLiveStamp := '';
   FPlanWriteThisTurn := False;
   LoadConnectionSettings;
   WorkflowEventBus.AddListener(Self);
@@ -1914,6 +1911,7 @@ Begin
   If Not Assigned(BuildTodoList) Then
     Begin
       AssistantSessionObserve.AssistantSessionObserve(asnPlan);
+      AssistantSessionObserve.TouchAssistantMirror;
       Exit;
     End;
   PlanRel := GetActivePlanRelativePath;
@@ -2007,6 +2005,7 @@ Begin
   Finally
     BuildTodoList.Items.EndUpdate;
     AssistantSessionObserve.AssistantSessionObserve(asnPlan);
+    AssistantSessionObserve.TouchAssistantMirror;
   End;
 End;
 
@@ -2066,7 +2065,7 @@ Begin
           FTrace.AddNote(MessageText);
           If FViewingLive And Assigned(FTraceView) Then
             FTraceView.Sync(FTrace, True);
-          PublishLiveMonitorTurn;
+          AssistantSessionObserve.TouchAssistantMirror;
         End;
     End
   Else
@@ -4507,8 +4506,7 @@ End;
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   Try
-    Try
-      If csDestroying In ComponentState Then Exit;
+    If csDestroying In ComponentState Then Exit;
       If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
         Begin
           If FSending And (FStatusPhase <> '') Then
@@ -4518,11 +4516,8 @@ Begin
           Exit;
         End;
       If FSending And (FStatusPhase <> '') Then
-        Begin
-          StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
-            AssistantProgressPhase(FStatusPhase));
-          AssistantSessionObserve.AssistantSessionObserve(asnStatus);
-        End;
+        StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
+          AssistantProgressPhase(FStatusPhase));
       If Assigned(FCodexRun) Then
         Begin
           PollCodex;
@@ -4549,10 +4544,6 @@ Begin
           If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
           ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.ElapsedTimerTimer', E, False);
         End;
-    End;
-  Finally
-    { Codex and Claude grow the live trace on this timer. The phone must not wait for turn finish. }
-    PublishLiveMonitorTurn;
   End;
 End;
 
@@ -5099,6 +5090,7 @@ Begin
   ApplyActiveMode;
   UpdateHistoryActions;
   UpdateStatusFooter;
+  AssistantSessionObserve.TouchAssistantMirror;
 End;
 
 Procedure TProjectAssistantForm.PersistSession;
@@ -6431,6 +6423,7 @@ Begin
   If Assigned(Block) And (Slice <> '') Then
     Block.Body := Slice;
   ApplyLiveAnswerSlice;
+  AssistantSessionObserve.TouchAssistantMirror;
 End;
 
 Procedure TProjectAssistantForm.ApplyLiveAnswerSlice;
@@ -6451,48 +6444,11 @@ Begin
     FTrace.EnsureAnswer.Body := Slice;
 End;
 
-Procedure TProjectAssistantForm.PublishLiveMonitorTurn;
-Var
-  I: Integer;
-  Block: TTraceBlock;
-  Stamp: String;
-Begin
-  If csDestroying In ComponentState Then
-    Exit;
-  { Before BeginAssistantReply the trace is still the previous turn. Do not publish that as this send. }
-  If Not (FStreamingActive Or FPlanAgentRunning) Then
-    Exit;
-  Try
-    If FStreamingActive And Assigned(FTrace) Then
-      ApplyLiveThinkingAndAnswer;
-    Stamp := IntToStr(Length(FLiveUser));
-    If Assigned(FTrace) Then
-      For I := 0 To FTrace.Count - 1 Do
-        Begin
-          Block := FTrace[I];
-          Stamp := Stamp + #1 + IntToStr(Ord(Block.Kind)) + #1 + IntToStr(Block.Revision) + #1 +
-            IntToStr(Length(Block.Body)) + #1 + IntToStr(Length(Block.Title));
-          If Block.Running Then
-            Stamp := Stamp + #1 + '1'
-          Else
-            Stamp := Stamp + #1 + '0';
-        End;
-    If Stamp = FMonitorLiveStamp Then
-      Exit;
-    FMonitorLiveStamp := Stamp;
-    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
-  Except
-    On E: Exception Do
-      ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.PublishLiveMonitorTurn', E, False);
-  End;
-End;
-
 Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
 Var
   Block: TTraceBlock;
 Begin
   If csDestroying In ComponentState Then Exit;
-  { Notice on every return. A nil listener stops at the assigned check. }
   Try
   If (Event.Kind = aekToolCompleted) And Event.Ok Then
     If SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown') Then
@@ -6633,8 +6589,7 @@ Begin
       ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.HandleTraceEvent', E, False);
   End;
   Finally
-    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
-    AssistantSessionObserve.AssistantSessionObserve(asnPhase);
+    AssistantSessionObserve.TouchAssistantMirror;
   End;
 End;
 
@@ -7128,7 +7083,7 @@ Begin
   RefreshChatDisplay(True, True);
   PersistSession;
   Finally
-    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+    AssistantSessionObserve.TouchAssistantMirror;
     AssistantSessionObserve.AssistantSessionObserve(asnError);
     AssistantSessionObserve.AssistantSessionObserve(asnStatus);
   End;
@@ -7144,8 +7099,6 @@ Begin
       ClassifyFormFault(Self, afoCallbackAfterDetach, 'TProjectAssistantForm.StreamToken', Nil, False);
       Exit;
     End;
-  { Notice on every return. A nil listener stops at the assigned check. }
-  Try
   { Invoked on the main thread (Queue) from the stream worker. }
   If FUserCancelled Then
     Begin
@@ -7177,10 +7130,6 @@ Begin
   If FSending And ((ContentSnapshot <> '') Or (ThinkingSnapshot <> '')) Then
     ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
   FinishAssistantReply(FinishErr);
-  Finally
-    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
-    AssistantSessionObserve.AssistantSessionObserve(asnPhase);
-  End;
 End;
 
 Procedure TProjectAssistantForm.StopStream;

@@ -147,6 +147,10 @@ Procedure SetAssistantSessionListener(Listener: TAssistantSessionListener);
 Function AssistantSessionListenerAssigned: Boolean;
 /// Main thread only. Returns False immediately when the listener is nil. Copies the method and calls it outside the lock.
 Function AssistantSessionObserve(Kind: TAssistantSessionNoticeKind): Boolean;
+{ Increments under the observe lock and returns. A nil listener still counts.
+  Does not build JSON and does not queue a thread. }
+Procedure TouchAssistantMirror;
+Function AssistantMirrorCounter: Int64;
 
 /// Stores the notice, then notifies before return on the main thread. Any other thread queues.
 Procedure PublishAssistantApproval(Const Notice: TAssistantApprovalNotice);
@@ -192,6 +196,7 @@ Var
   ModalDepth: Integer;
   ApprovalEvent: PRTLEvent;
   ApprovalDecision: TAssistantApprovalDecision;
+  MirrorCounter: Int64;
 
 Function CopySessionListener: TAssistantSessionListener;
 Begin
@@ -275,6 +280,26 @@ Begin
     Exit(False);
   Result := True;
   Listener(Kind);
+End;
+
+Procedure TouchAssistantMirror;
+Begin
+  EnterCriticalSection(ObserveLock);
+  Try
+    Inc(MirrorCounter);
+  Finally
+    LeaveCriticalSection(ObserveLock);
+  End;
+End;
+
+Function AssistantMirrorCounter: Int64;
+Begin
+  EnterCriticalSection(ObserveLock);
+  Try
+    Result := MirrorCounter;
+  Finally
+    LeaveCriticalSection(ObserveLock);
+  End;
 End;
 
 Procedure PublishAssistantApproval(Const Notice: TAssistantApprovalNotice);
