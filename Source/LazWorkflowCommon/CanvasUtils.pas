@@ -179,6 +179,10 @@ Begin
   End;
 End;
 
+Const
+  { Full width of the coverage ramp, in pixels. }
+  SmoothCoverageWidth = 0.5;
+
 { InnerRadius < 0 fills a disk of OuterRadius. Otherwise the stroke is the band between the two radii.
   Both shapes use one 8x8 coverage grid so a lane dot cannot be softer or harder than the checkout ring.
   Strokes supply the colour already painted under the shape. A canvas read cannot: it comes back black. }
@@ -214,12 +218,19 @@ Procedure DrawCoverageCircle(Target: TCanvas; CentreX, CentreY, OuterRadius, Inn
   End;
 
   Function SampleCoverage(Dist: Single): Single;
+
+    Function EdgeCoverage(Edge: Single): Single;
+    Begin
+      { Half a pixel, not one. A full pixel of blend blurred these small markers. }
+      Result := Clamp01((Edge + SmoothCoverageWidth / 2 - Dist) / SmoothCoverageWidth);
+    End;
+
   Begin
     If InnerRadius < 0 Then
-      Result := Clamp01(OuterRadius + 0.5 - Dist)
+      Result := EdgeCoverage(OuterRadius)
     Else
       Begin
-        Result := Clamp01(OuterRadius + 0.5 - Dist) - Clamp01(InnerRadius + 0.5 - Dist);
+        Result := EdgeCoverage(OuterRadius) - EdgeCoverage(InnerRadius);
         If Result < 0 Then
           Result := 0;
       End;
@@ -269,11 +280,11 @@ Var
 Begin
   If (Not Assigned(Target)) Or (OuterRadius <= 0) Then
     Exit;
-  { Coverage falls to zero half a pixel outside the outer edge. Include those pixels. }
-  Left := Floor(CentreX - OuterRadius - 0.5);
-  Top := Floor(CentreY - OuterRadius - 0.5);
-  Right := Ceil(CentreX + OuterRadius + 0.5);
-  Bottom := Ceil(CentreY + OuterRadius + 0.5);
+  { Coverage falls to zero half a ramp outside the outer edge. Include those pixels. }
+  Left := Floor(CentreX - OuterRadius - SmoothCoverageWidth / 2);
+  Top := Floor(CentreY - OuterRadius - SmoothCoverageWidth / 2);
+  Right := Ceil(CentreX + OuterRadius + SmoothCoverageWidth / 2);
+  Bottom := Ceil(CentreY + OuterRadius + SmoothCoverageWidth / 2);
   W := Right - Left;
   H := Bottom - Top;
   If (W < 2) Or (H < 2) Or (W > 256) Or (H > 256) Then
