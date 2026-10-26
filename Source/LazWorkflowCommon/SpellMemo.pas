@@ -257,7 +257,7 @@ Type
 Implementation
 
 Uses
-  Dialogs, Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
+  Dialogs, Clipbrd, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
 
 Const
   SpellUndoLimit = 200;
@@ -1752,19 +1752,30 @@ Procedure TSpellMemo.Paint;
 Var
   FirstRange: Integer;
   LineIndex, Y, H, X0, SX1, SX2, SelLo, SelHi, ClipLo, ClipHi: Integer;
-  FirstChar, AfterChar, Byte0, Byte1, SavedDC, CaretW, CaretTop, CaretBottom, CaretRight: Integer;
+  FirstChar, AfterChar, Byte0, Byte1, CaretW, CaretTop, CaretBottom, CaretRight: Integer;
   Pixel: TPoint;
   LineText: String;
   HasHighlight: Boolean;
   RangeIndex, RangeStart, RangeEnd, LineStart, LineEnd, U1, U2: Integer;
 
-  Procedure DrawLineRun(TextColor: TColor);
+  Procedure DrawRun(Const Run: String; RunX: Integer; TextColor: TColor);
   Begin
-    If LineText = '' Then
+    If Run = '' Then
       Exit;
     Canvas.Brush.Style := bsClear;
     Canvas.Font.Color := TextColor;
-    Canvas.TextOut(X0, Y, LineText);
+    Canvas.TextOut(RunX, Y, Run);
+  End;
+
+  Procedure ReleaseHighlightBrush;
+  Begin
+    { A restored painter is opaque highlight again, while this brush object still
+      says clear. The next line would not refresh it and would paint that background.
+      Force a real style change so the widgetset drops the highlight brush. }
+    Canvas.Brush.Color := Color;
+    Canvas.Brush.Style := bsSolid;
+    Canvas.Brush.Style := bsClear;
+    Canvas.Font.Color := Font.Color;
   End;
 
 Begin
@@ -1826,45 +1837,22 @@ Begin
             End;
         End;
       HasHighlight := (FSelLength > 0) And (ClipHi > ClipLo) And (SX2 > SX1);
-      If HasHighlight Then
-        Begin
-          Canvas.Brush.Style := bsSolid;
-          Canvas.Brush.Color := clHighlight;
-          Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
-        End;
-      { One full run so kerning pairs survive. The two colours are clipped apart:
-        painting highlight text over the normal glyphs leaves dark antialiased
-        edges, which is the blur against a native memo's selection. }
+      { One full run so kerning pairs survive. Cover the selection afterwards so
+        antialiased edges are not left under the highlight text. Do not clip:
+        restoring that clip on Qt puts an opaque highlight brush back, and the
+        following lines paint it because their brush style has not changed. }
       If LineText <> '' Then
         If HasHighlight Then
           Begin
-            SavedDC := SaveDC(Canvas.Handle);
-            Try
-              ExcludeClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
-              DrawLineRun(Font.Color);
-            Finally
-              If SavedDC <> 0 Then
-                RestoreDC(Canvas.Handle, SavedDC)
-              Else
-                SelectClipRGN(Canvas.Handle, HRGN(0));
-            End;
+            DrawRun(LineText, X0, Font.Color);
             Canvas.Brush.Style := bsSolid;
             Canvas.Brush.Color := clHighlight;
             Canvas.FillRect(Rect(SX1, Y, SX2, Y + H));
-            SavedDC := SaveDC(Canvas.Handle);
-            Try
-              IntersectClipRect(Canvas.Handle, SX1, Y, SX2, Y + H);
-              DrawLineRun(clHighlightText);
-            Finally
-              If SavedDC <> 0 Then
-                RestoreDC(Canvas.Handle, SavedDC)
-              Else
-                SelectClipRGN(Canvas.Handle, HRGN(0));
-            End;
-            Canvas.Font.Color := Font.Color;
+            DrawRun(Copy(LineText, Byte0 + 1, Byte1 - Byte0), SX1, clHighlightText);
+            ReleaseHighlightBrush;
           End
         Else
-          DrawLineRun(Font.Color);
+          DrawRun(LineText, X0, Font.Color);
       While (FirstRange <= High(FRanges)) And
         (FRanges[FirstRange].UTF8Start + FRanges[FirstRange].UTF8Length <= LineStart) Do Inc(FirstRange);
       If SpellActive Then
@@ -1884,8 +1872,6 @@ Begin
             DrawErrorUnderline(Canvas, U1, U2, Y + H - 3);
           End;
     End;
-  { A leaked selection clip must not hide the frame or the caret. }
-  SelectClipRGN(Canvas.Handle, HRGN(0));
   { Same frame colours as the conversation surface, so the two editors match. }
   Canvas.Brush.Style := bsSolid;
   If CaretIsActive Then
