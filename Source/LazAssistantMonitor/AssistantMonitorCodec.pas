@@ -1,6 +1,6 @@
 Unit AssistantMonitorCodec;
 
-{ Monitor catalogue version 1. Wire names are snake case. (c) 2026 Michell Computing.
+{ Monitor catalogue version 2. Wire names are snake case. (c) 2026 Michell Computing.
 
   Limits live here, not in a later form. Unknown types become error / unknown_type
   and do not change session state. Observer records are mapped, not copied into a
@@ -10,9 +10,10 @@ Unit AssistantMonitorCodec;
   AssistantModeToStr. Image bytes use the frames unit's FCL base64 helpers.
   Frame length stays in AssistantMonitorFrames (htonl / ntohl).
 
-  Size note: exceeds the 1000 line preference. The v1 catalogue is one table of
+  Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-19: no socket, TLS, or form code in this unit. }
+  Reviewed 2026-10-19: no socket, TLS, or form code in this unit.
+  v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -25,7 +26,7 @@ Uses
   Classes, SysUtils, fpjson, AssistantConversation, AssistantSessionObserve;
 
 Const
-  MonitorCatalogueVersion = 1;
+  MonitorCatalogueVersion = 2;
   { One above GrokOAuthRedirectPort. The implementation checks that relationship. }
   MonitorListenPort = 56122;
   MonitorMaxMessageIdChars = 64;
@@ -89,7 +90,11 @@ Type
     mmkNewConversation,
     mmkError,
     mmkPing,
-    mmkPong
+    mmkPong,
+    mmkResume,
+    mmkPatch,
+    mmkCatchup,
+    mmkConversationClosed
   );
 
   TMonitorMessage = Record
@@ -240,6 +245,58 @@ Type
     Approval: TAssistantApprovalNotice;
   End;
 
+  { Client resume. Not a user command. Cursor 0 means nothing has been applied. }
+  TMonitorResume = Record
+    Epoch: String;
+    Cursor: Int64;
+  End;
+
+  { One committed live change. Part and PartCount are 1 until the body exceeds the frame cap. }
+  TMonitorPatch = Record
+    Epoch: String;
+    Cursor: Int64;
+    TurnIndex: Integer;
+    TurnId: String;
+    Blocks: Array Of TAssistantMonitorBlock;
+    Busy: Boolean;
+    Sending: Boolean;
+    PlanRunning: Boolean;
+    Phase: String;
+    CanSend: Boolean;
+    CanSteer: Boolean;
+    CanStop: Boolean;
+    ElapsedMs: Integer;
+    Part: Integer;
+    PartCount: Integer;
+  End;
+  TMonitorPatchArray = Array Of TMonitorPatch;
+
+  TMonitorCatchupMode = (
+    mcmUnknown,
+    mcmSnapshot,
+    mcmEvents
+  );
+
+  { One resume result. Snapshot nests the existing snapshot object. Events lists patch payloads. }
+  TMonitorCatchup = Record
+    Mode: TMonitorCatchupMode;
+    Epoch: String;
+    Cursor: Int64;
+    ConversationId: String;
+    ProjectRoot: String;
+    Title: String;
+    Snapshot: TMonitorSnapshot;
+    HasSnapshot: Boolean;
+    Patches: TMonitorPatchArray;
+  End;
+
+  TMonitorConversationClosed = Record
+    Epoch: String;
+    Cursor: Int64;
+    ConversationId: String;
+    Title: String;
+  End;
+
 Function MonitorMessageKindName(Kind: TMonitorMessageKind): String;
 Function MonitorMessageKindFromName(Const Name: String): TMonitorMessageKind;
 Function MonitorMessageIdIsSafe(Const Id: String): Boolean;
@@ -329,6 +386,19 @@ Function PackMonitorTranscript(Const Id: String; Const Transcript: TMonitorTrans
 Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
 Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
 
+Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
+Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
+{ Same cursor on every part. Empty when a single block cannot be cut down to the cap. }
+Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
+Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+{ False when any part of that cursor is missing, duplicated, or a different epoch. }
+Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
+Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
+Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
+Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+
 Function MonitorTurnIndexRow(TurnIndex: Integer; Const Id, Mode, CreatedAt, PromptPreview, ErrorText: String): TJSONObject;
 Function LimitMonitorStoredTurns(Const Turns: TJSONArray): TJSONArray;
 
@@ -403,6 +473,10 @@ Begin
     mmkError: Result := 'error';
     mmkPing: Result := 'ping';
     mmkPong: Result := 'pong';
+    mmkResume: Result := 'resume';
+    mmkPatch: Result := 'patch';
+    mmkCatchup: Result := 'catchup';
+    mmkConversationClosed: Result := 'conversation_closed';
   Else
     Result := '';
   End;
@@ -2677,6 +2751,497 @@ Begin
     Result := True;
   Finally
     Parts.Free;
+  End;
+End;
+
+Procedure ClearPatch(Out Patch: TMonitorPatch);
+Begin
+  Patch.Epoch := '';
+  Patch.Cursor := 0;
+  Patch.TurnIndex := 0;
+  Patch.TurnId := '';
+  SetLength(Patch.Blocks, 0);
+  Patch.Busy := False;
+  Patch.Sending := False;
+  Patch.PlanRunning := False;
+  Patch.Phase := '';
+  Patch.CanSend := False;
+  Patch.CanSteer := False;
+  Patch.CanStop := False;
+  Patch.ElapsedMs := 0;
+  Patch.Part := 0;
+  Patch.PartCount := 0;
+End;
+
+Function PatchPayload(Const Patch: TMonitorPatch): TJSONObject;
+Var
+  Blocks: TJSONArray;
+  I: Integer;
+Begin
+  Result := TJSONObject.Create;
+  Result.Add('epoch', Patch.Epoch);
+  Result.Add('cursor', Patch.Cursor);
+  Result.Add('turn_index', Patch.TurnIndex);
+  Result.Add('turn_id', Patch.TurnId);
+  Result.Add('part', Patch.Part);
+  Result.Add('part_count', Patch.PartCount);
+  Result.Add('busy', Patch.Busy);
+  Result.Add('sending', Patch.Sending);
+  Result.Add('plan_running', Patch.PlanRunning);
+  Result.Add('phase', Patch.Phase);
+  Result.Add('can_send', Patch.CanSend);
+  Result.Add('can_steer', Patch.CanSteer);
+  Result.Add('can_stop', Patch.CanStop);
+  Result.Add('elapsed_ms', Patch.ElapsedMs);
+  Blocks := TJSONArray.Create;
+  For I := 0 To High(Patch.Blocks) Do
+    Blocks.Add(MonitorBlockToJson(Patch.Blocks[I], 1, 1, 0));
+  Result.Add('blocks', Blocks);
+End;
+
+Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('epoch', Epoch);
+  Payload.Add('cursor', Cursor);
+  Result := EncodeWith(mmkResume, Id, Payload);
+End;
+
+Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  ResumeMsg.Epoch := '';
+  ResumeMsg.Cursor := 0;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'epoch', True, ResumeMsg.Epoch) And ReadInt64(Obj, 'cursor', ResumeMsg.Cursor);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
+Begin
+  Result := EncodeWith(mmkPatch, Id, PatchPayload(Patch));
+End;
+
+Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Node: TJSONData;
+  Blocks: TJSONArray;
+  I: Integer;
+  Truncated: Boolean;
+Begin
+  Result := False;
+  ClearPatch(Patch);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not (ReadString(Obj, 'epoch', True, Patch.Epoch) And ReadInt64(Obj, 'cursor', Patch.Cursor) And
+      ReadInt(Obj, 'turn_index', True, Patch.TurnIndex) And ReadString(Obj, 'turn_id', True, Patch.TurnId) And
+      ReadInt(Obj, 'part', True, Patch.Part) And ReadInt(Obj, 'part_count', True, Patch.PartCount) And
+      ReadBool(Obj, 'busy', True, Patch.Busy) And ReadBool(Obj, 'sending', True, Patch.Sending) And
+      ReadBool(Obj, 'plan_running', True, Patch.PlanRunning) And ReadString(Obj, 'phase', True, Patch.Phase) And
+      ReadBool(Obj, 'can_send', True, Patch.CanSend) And ReadBool(Obj, 'can_steer', True, Patch.CanSteer) And
+      ReadBool(Obj, 'can_stop', True, Patch.CanStop) And ReadInt(Obj, 'elapsed_ms', True, Patch.ElapsedMs)) Then
+      Exit;
+    { A v1 transcript has revision and status_text, not epoch. Missing epoch already failed above. }
+    If (Patch.Part < 1) Or (Patch.PartCount < 1) Or (Patch.Part > Patch.PartCount) Then
+      Exit;
+    Node := Obj.Find('blocks');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Blocks := TJSONArray(Node);
+    SetLength(Patch.Blocks, Blocks.Count);
+    For I := 0 To Blocks.Count - 1 Do
+      Begin
+        If Not (Blocks[I] Is TJSONObject) Then
+          Exit;
+        If Not TryMonitorBlockFromJson(TJSONObject(Blocks[I]), Patch.Blocks[I], Truncated) Then
+          Exit;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
+Type
+  TPatchBlockArray = Array Of TAssistantMonitorBlock;
+
+  Function Utf8Prefix(Const Text: String; MaxBytes: Integer): String;
+  Var
+    Count: Integer;
+  Begin
+    If (MaxBytes < 1) Or (Text = '') Then
+      Exit('');
+    If Length(Text) <= MaxBytes Then
+      Exit(Text);
+    Count := MaxBytes;
+    While (Count > 0) And ((Ord(Text[Count]) And $C0) = $80) Do
+      Dec(Count);
+    If Count < 1 Then
+      Count := 1;
+    Result := Copy(Text, 1, Count);
+  End;
+
+  Function EncodeBlocks(Const Blocks: Array Of TAssistantMonitorBlock; Part, PartCount: Integer): String;
+  Var
+    Trial: TMonitorPatch;
+    I: Integer;
+  Begin
+    Trial := Patch;
+    Trial.Part := Part;
+    Trial.PartCount := PartCount;
+    SetLength(Trial.Blocks, Length(Blocks));
+    For I := 0 To High(Blocks) Do
+      Trial.Blocks[I] := Blocks[I];
+    Result := EncodeMonitorPatch(Id, Trial);
+  End;
+
+  Function PieceFits(Const Block: TAssistantMonitorBlock): Boolean;
+  Begin
+    Result := EncodeBlocks([Block], 1, 1) <> '';
+  End;
+
+  Procedure AddPiece(Var Pieces: TPatchBlockArray; Const Block: TAssistantMonitorBlock);
+  Begin
+    SetLength(Pieces, Length(Pieces) + 1);
+    Pieces[High(Pieces)] := Block;
+  End;
+
+  Function SplitBlock(Const Block: TAssistantMonitorBlock; Var Pieces: TPatchBlockArray): Boolean;
+  Var
+    Rest, Prefix: String;
+    Trial: TAssistantMonitorBlock;
+    LowN, HighN, Mid, Best: Integer;
+  Begin
+    Result := False;
+    Rest := Block.Body;
+    Repeat
+      Trial := Block;
+      Trial.Body := Rest;
+      If PieceFits(Trial) Then
+        Begin
+          AddPiece(Pieces, Trial);
+          Exit(True);
+        End;
+      If Rest = '' Then
+        Exit;
+      LowN := 1;
+      HighN := Length(Rest) - 1;
+      Best := 0;
+      While LowN <= HighN Do
+        Begin
+          Mid := (LowN + HighN) Div 2;
+          Prefix := Utf8Prefix(Rest, Mid);
+          Trial.Body := Prefix;
+          If PieceFits(Trial) Then
+            Begin
+              Best := Length(Prefix);
+              LowN := Best + 1;
+            End
+          Else
+            HighN := Mid - 1;
+        End;
+      If Best < 1 Then
+        Exit;
+      Trial.Body := Copy(Rest, 1, Best);
+      AddPiece(Pieces, Trial);
+      Delete(Rest, 1, Best);
+    Until Rest = '';
+    Result := True;
+  End;
+
+Var
+  Whole: TMonitorPatch;
+  Pieces, Group: TPatchBlockArray;
+  Starts, Ends: Array Of Integer;
+  I, StartAt, LastFit, PartNo, PartCount: Integer;
+  Json: String;
+Begin
+  Result := Nil;
+  SetLength(Result, 0);
+  Pieces := Nil;
+  Group := Nil;
+  Whole := Patch;
+  If Whole.Part < 1 Then
+    Whole.Part := 1;
+  If Whole.PartCount < 1 Then
+    Whole.PartCount := 1;
+  Json := EncodeMonitorPatch(Id, Whole);
+  If Json <> '' Then
+    Begin
+      SetLength(Result, 1);
+      Result[0] := Json;
+      Exit;
+    End;
+  SetLength(Pieces, 0);
+  For I := 0 To High(Patch.Blocks) Do
+    If Not SplitBlock(Patch.Blocks[I], Pieces) Then
+      Exit;
+  If Length(Pieces) = 0 Then
+    Exit;
+  SetLength(Starts, 0);
+  SetLength(Ends, 0);
+  StartAt := 0;
+  While StartAt <= High(Pieces) Do
+    Begin
+      LastFit := StartAt - 1;
+      For I := StartAt To High(Pieces) Do
+        Begin
+          SetLength(Group, I - StartAt + 1);
+          Group[I - StartAt] := Pieces[I];
+          If EncodeBlocks(Group, 1, 1) = '' Then
+            Break;
+          LastFit := I;
+        End;
+      If LastFit < StartAt Then
+        Exit;
+      SetLength(Starts, Length(Starts) + 1);
+      SetLength(Ends, Length(Starts));
+      Starts[High(Starts)] := StartAt;
+      Ends[High(Ends)] := LastFit;
+      StartAt := LastFit + 1;
+    End;
+  PartCount := Length(Starts);
+  SetLength(Result, PartCount);
+  For PartNo := 0 To PartCount - 1 Do
+    Begin
+      SetLength(Group, Ends[PartNo] - Starts[PartNo] + 1);
+      For I := Starts[PartNo] To Ends[PartNo] Do
+        Group[I - Starts[PartNo]] := Pieces[I];
+      Json := EncodeBlocks(Group, PartNo + 1, PartCount);
+      If Json = '' Then
+        Begin
+          SetLength(Result, 0);
+          Exit;
+        End;
+      Result[PartNo] := Json;
+    End;
+End;
+
+Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
+Var
+  I, PartCount, Index: Integer;
+  Message: TMonitorMessage;
+  ErrorText: String;
+  Decoded: TMonitorPatch;
+  Slots: TMonitorPatchArray;
+  Have: Array Of Boolean;
+  Epoch: String;
+  Cursor: Int64;
+
+  Procedure AppendBlock(Const Block: TAssistantMonitorBlock);
+  Begin
+    If (Length(Patch.Blocks) > 0) And (Patch.Blocks[High(Patch.Blocks)].BlockId = Block.BlockId) And
+      (Patch.Blocks[High(Patch.Blocks)].Kind = Block.Kind) Then
+      Patch.Blocks[High(Patch.Blocks)].Body := Patch.Blocks[High(Patch.Blocks)].Body + Block.Body
+    Else
+      Begin
+        SetLength(Patch.Blocks, Length(Patch.Blocks) + 1);
+        Patch.Blocks[High(Patch.Blocks)] := Block;
+      End;
+  End;
+
+Begin
+  Result := False;
+  ClearPatch(Patch);
+  If Length(Messages) = 0 Then
+    Exit;
+  If Not TryDecodeMonitorEnvelope(Messages[0], Message, ErrorText) Or (Message.Kind <> mmkPatch) Then
+    Exit;
+  If Not DecodeMonitorPatch(Message.PayloadJson, Decoded) Then
+    Exit;
+  PartCount := Decoded.PartCount;
+  Epoch := Decoded.Epoch;
+  Cursor := Decoded.Cursor;
+  If (PartCount < 1) Or (Length(Messages) <> PartCount) Then
+    Exit;
+  SetLength(Slots, PartCount);
+  SetLength(Have, PartCount);
+  For I := 0 To High(Messages) Do
+    Begin
+      If Not TryDecodeMonitorEnvelope(Messages[I], Message, ErrorText) Or (Message.Kind <> mmkPatch) Then
+        Exit;
+      If Not DecodeMonitorPatch(Message.PayloadJson, Decoded) Then
+        Exit;
+      If (Decoded.PartCount <> PartCount) Or (Decoded.Epoch <> Epoch) Or (Decoded.Cursor <> Cursor) Then
+        Exit;
+      If (Decoded.Part < 1) Or (Decoded.Part > PartCount) Or Have[Decoded.Part - 1] Then
+        Exit;
+      Slots[Decoded.Part - 1] := Decoded;
+      Have[Decoded.Part - 1] := True;
+    End;
+  For I := 0 To PartCount - 1 Do
+    If Not Have[I] Then
+      Exit;
+  Patch := Slots[0];
+  SetLength(Patch.Blocks, 0);
+  For I := 0 To PartCount - 1 Do
+    For Index := 0 To High(Slots[I].Blocks) Do
+      AppendBlock(Slots[I].Blocks[Index]);
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  Result := True;
+End;
+
+Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
+Var
+  Payload: TJSONObject;
+  Patches: TJSONArray;
+  SnapJson, ErrorText: String;
+  Message: TMonitorMessage;
+  Data: TJSONData;
+  SnapObj: TJSONObject;
+  I: Integer;
+  ModeText: String;
+Begin
+  Result := '';
+  If Catchup.Mode = mcmSnapshot Then
+    ModeText := 'snapshot'
+  Else If Catchup.Mode = mcmEvents Then
+    ModeText := 'events'
+  Else
+    Exit;
+  Payload := TJSONObject.Create;
+  Data := Nil;
+  Try
+    Payload.Add('mode', ModeText);
+    Payload.Add('epoch', Catchup.Epoch);
+    Payload.Add('cursor', Catchup.Cursor);
+    Payload.Add('conversation_id', Catchup.ConversationId);
+    Payload.Add('project_root', Catchup.ProjectRoot);
+    Payload.Add('title', Catchup.Title);
+    If Catchup.Mode = mcmSnapshot Then
+      Begin
+        If Not Catchup.HasSnapshot Then
+          Exit;
+        SnapJson := EncodeMonitorSnapshot('catchup-snap', Catchup.Snapshot);
+        If Not TryDecodeMonitorEnvelope(SnapJson, Message, ErrorText) Then
+          Exit;
+        If Not ParseObject(Message.PayloadJson, Data, SnapObj) Then
+          Exit;
+        Payload.Add('snapshot', SnapObj);
+        Data := Nil;
+      End
+    Else
+      Begin
+        Patches := TJSONArray.Create;
+        For I := 0 To High(Catchup.Patches) Do
+          Patches.Add(PatchPayload(Catchup.Patches[I]));
+        Payload.Add('patches', Patches);
+      End;
+    Result := EncodeMonitorEnvelope(mmkCatchup, Id, Payload);
+  Finally
+    Data.Free;
+    Payload.Free;
+  End;
+End;
+
+Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Var
+  Data, SnapData: TJSONData;
+  Obj, SnapObj: TJSONObject;
+  Node: TJSONData;
+  Arr: TJSONArray;
+  ModeText: String;
+  I: Integer;
+Begin
+  Result := False;
+  Catchup.Mode := mcmUnknown;
+  Catchup.Epoch := '';
+  Catchup.Cursor := 0;
+  Catchup.ConversationId := '';
+  Catchup.ProjectRoot := '';
+  Catchup.Title := '';
+  Catchup.HasSnapshot := False;
+  SetLength(Catchup.Patches, 0);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  SnapData := Nil;
+  Try
+    If Not (ReadString(Obj, 'mode', True, ModeText) And ReadString(Obj, 'epoch', True, Catchup.Epoch) And
+      ReadInt64(Obj, 'cursor', Catchup.Cursor) And ReadString(Obj, 'conversation_id', True, Catchup.ConversationId) And
+      ReadString(Obj, 'project_root', True, Catchup.ProjectRoot) And ReadString(Obj, 'title', True, Catchup.Title)) Then
+      Exit;
+    If ModeText = 'snapshot' Then
+      Catchup.Mode := mcmSnapshot
+    Else If ModeText = 'events' Then
+      Catchup.Mode := mcmEvents
+    Else
+      Exit;
+    If Catchup.Mode = mcmSnapshot Then
+      Begin
+        Node := Obj.Find('snapshot');
+        If Not (Node Is TJSONObject) Then
+          Exit;
+        If Not DecodeMonitorSnapshot(TJSONObject(Node).AsJSON, Catchup.Snapshot) Then
+          Exit;
+        Catchup.HasSnapshot := True;
+        Result := True;
+      End
+    Else
+      Begin
+        Node := Obj.Find('patches');
+        If Not (Node Is TJSONArray) Then
+          Exit;
+        Arr := TJSONArray(Node);
+        SetLength(Catchup.Patches, Arr.Count);
+        For I := 0 To Arr.Count - 1 Do
+          Begin
+            If Not (Arr[I] Is TJSONObject) Then
+              Exit;
+            If Not DecodeMonitorPatch(TJSONObject(Arr[I]).AsJSON, Catchup.Patches[I]) Then
+              Exit;
+          End;
+        Result := True;
+      End;
+  Finally
+    SnapData.Free;
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64;
+  Const ConversationId, Title: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('epoch', Epoch);
+  Payload.Add('cursor', Cursor);
+  Payload.Add('conversation_id', ConversationId);
+  Payload.Add('title', Title);
+  Result := EncodeWith(mmkConversationClosed, Id, Payload);
+End;
+
+Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Closed.Epoch := '';
+  Closed.Cursor := 0;
+  Closed.ConversationId := '';
+  Closed.Title := '';
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadString(Obj, 'epoch', True, Closed.Epoch) And ReadInt64(Obj, 'cursor', Closed.Cursor) And
+      ReadString(Obj, 'conversation_id', True, Closed.ConversationId) And ReadString(Obj, 'title', True, Closed.Title);
+  Finally
+    Data.Free;
   End;
 End;
 

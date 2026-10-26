@@ -428,12 +428,19 @@ Begin
   End;
 End;
 
+Procedure TestOldCatalogueRejects;
+Begin
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":1,"id":"old","type":"ping","payload":{"ticks":1}}');
+  ExpectRejected('old catalogue', 'protocol', True);
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
 Begin
   Carrier.ClearSent;
-  Carrier.DeliverJson('{"v":1,"id":"u1","type":"not_a_type","payload":{}}');
+  Carrier.DeliverJson('{"v":2,"id":"u1","type":"not_a_type","payload":{}}');
   Check('unknown type stays live', Session.State = mssLive);
   Check('unknown type does not close', Not Session.CloseRequested);
   Check('unknown type error frame', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'unknown_type'));
@@ -632,6 +639,7 @@ Begin
       TestRevokedNewSocket;
       TestDisplayApproval;
       TestBareSignalAndCancel;
+      TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except
       On E: Exception Do

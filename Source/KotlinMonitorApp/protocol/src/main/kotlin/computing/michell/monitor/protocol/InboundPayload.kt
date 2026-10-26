@@ -20,4 +20,8 @@ sealed class InboundPayload {
   data class PairOk(val value: PairOkMessage) : InboundPayload()
   data class HelloOk(val value: HelloOkMessage) : InboundPayload()
   data class Text(val text: String) : InboundPayload()
+  data class Resume(val value: WireResume) : InboundPayload()
+  data class Patch(val value: WirePatch) : InboundPayload()
+  data class Catchup(val value: WireCatchup) : InboundPayload()
+  data class ConversationClosed(val value: WireConversationClosed) : InboundPayload()
 }

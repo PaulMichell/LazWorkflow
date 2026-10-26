@@ -1,13 +1,14 @@
 package computing.michell.monitor.protocol
 
-/* Monitor catalogue version 1. Wire names are snake case. (c) 2026 Michell Computing.
+/* Monitor catalogue version 2. Wire names are snake case. (c) 2026 Michell Computing.
 
    Limits live here, not in a later screen. Unknown types become error / unknown_type
    and do not change session state. JSON text uses the same spacing as the host
    fpjson writer so encoded frames match the checked-in catalogue.
 
-   Size note: exceeds the 1000 line preference. The v1 catalogue is one table of
+   Size note: exceeds the 1000 line preference. The catalogue is one table of
    message types, payload fields, and limits. Splitting that table would hide a type.
+   v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
    Reviewed 2026-10-21: image assembly stays in SessionState. Inbound values are typed once.
    No socket, TLS, or Android UI in this file. */
@@ -65,7 +66,11 @@ enum class MessageKind(val wireName: String) {
   NewConversation("new_conversation"),
   Error("error"),
   Ping("ping"),
-  Pong("pong");
+  Pong("pong"),
+  Resume("resume"),
+  Patch("patch"),
+  Catchup("catchup"),
+  ConversationClosed("conversation_closed");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -240,6 +245,44 @@ data class WireSnapshot(
   val approval: ApprovalNotice
 )
 
+data class WireResume(val epoch: String, val cursor: Long)
+
+data class WirePatch(
+  val epoch: String,
+  val cursor: Long,
+  val turnIndex: Int,
+  val turnId: String,
+  val blocks: List<WireBlock>,
+  val busy: Boolean,
+  val sending: Boolean,
+  val planRunning: Boolean,
+  val phase: String,
+  val canSend: Boolean,
+  val canSteer: Boolean,
+  val canStop: Boolean,
+  val elapsedMs: Int,
+  val part: Int = 1,
+  val partCount: Int = 1
+)
+
+data class WireCatchup(
+  val mode: String,
+  val epoch: String,
+  val cursor: Long,
+  val conversationId: String,
+  val projectRoot: String,
+  val title: String,
+  val snapshot: WireSnapshot?,
+  val patches: List<WirePatch>
+)
+
+data class WireConversationClosed(
+  val epoch: String,
+  val cursor: Long,
+  val conversationId: String,
+  val title: String
+)
+
 data class WireTranscript(
   val turnIndex: Int,
   val revision: Int,
@@ -405,6 +448,11 @@ fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
     MessageKind.ImageUnavailable -> decodeImageUnavailable(payload)?.let { InboundPayload.ImageMissing(it) } ?: InboundPayload.None
     MessageKind.PairOk -> decodePairOk(payload)?.let { InboundPayload.PairOk(it) } ?: InboundPayload.None
     MessageKind.HelloOk -> decodeHelloOk(payload)?.let { InboundPayload.HelloOk(it) } ?: InboundPayload.None
+    MessageKind.Resume -> decodeResume(payload)?.let { InboundPayload.Resume(it) } ?: InboundPayload.None
+    MessageKind.Patch -> decodePatch(payload)?.let { InboundPayload.Patch(it) } ?: InboundPayload.None
+    MessageKind.Catchup -> decodeCatchup(payload)?.let { InboundPayload.Catchup(it) } ?: InboundPayload.None
+    MessageKind.ConversationClosed -> decodeConversationClosed(payload)?.let { InboundPayload.ConversationClosed(it) }
+      ?: InboundPayload.None
     MessageKind.Send, MessageKind.Steer -> {
       val text = payload.readString("text", true)
       if (text.ok) InboundPayload.Text(text.value) else InboundPayload.None
@@ -1475,4 +1523,263 @@ fun tryEncodeImageData(
     messages += json
   }
   return ImageEncode(true, messages, "")
+}
+
+private fun patchPayload(patch: WirePatch): JsonValue.Obj {
+  val payload = JsonObjectBuilder()
+  payload.add("epoch", patch.epoch)
+  payload.add("cursor", patch.cursor)
+  payload.add("turn_index", patch.turnIndex)
+  payload.add("turn_id", patch.turnId)
+  payload.add("part", patch.part)
+  payload.add("part_count", patch.partCount)
+  payload.add("busy", patch.busy)
+  payload.add("sending", patch.sending)
+  payload.add("plan_running", patch.planRunning)
+  payload.add("phase", patch.phase)
+  payload.add("can_send", patch.canSend)
+  payload.add("can_steer", patch.canSteer)
+  payload.add("can_stop", patch.canStop)
+  payload.add("elapsed_ms", patch.elapsedMs)
+  payload.add("blocks", JsonValue.Arr(patch.blocks.map { blockToJson(it) }))
+  return payload.build()
+}
+
+fun encodeResume(id: String, epoch: String, cursor: Long): String {
+  val payload = JsonObjectBuilder()
+  payload.add("epoch", epoch)
+  payload.add("cursor", cursor)
+  return encodeEnvelope(MessageKind.Resume, id, payload.build())
+}
+
+fun decodeResume(payloadJson: String): WireResume? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeResume(obj)
+}
+
+fun decodeResume(obj: JsonValue.Obj): WireResume? {
+  val epoch = obj.readString("epoch", true)
+  val cursor = obj.readLong("cursor", true)
+  if (!epoch.ok || !cursor.ok) return null
+  return WireResume(epoch.value, cursor.value)
+}
+
+fun encodePatch(id: String, patch: WirePatch): String {
+  return encodeEnvelope(MessageKind.Patch, id, patchPayload(patch))
+}
+
+fun decodePatch(payloadJson: String): WirePatch? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodePatch(obj)
+}
+
+fun decodePatch(obj: JsonValue.Obj): WirePatch? {
+  val epoch = obj.readString("epoch", true)
+  val cursor = obj.readLong("cursor", true)
+  val turnIndex = obj.readInt("turn_index", true)
+  val turnId = obj.readString("turn_id", true)
+  val part = obj.readInt("part", true)
+  val partCount = obj.readInt("part_count", true)
+  val busy = obj.readBool("busy", true)
+  val sending = obj.readBool("sending", true)
+  val planRunning = obj.readBool("plan_running", true)
+  val phase = obj.readString("phase", true)
+  val canSend = obj.readBool("can_send", true)
+  val canSteer = obj.readBool("can_steer", true)
+  val canStop = obj.readBool("can_stop", true)
+  val elapsed = obj.readInt("elapsed_ms", true)
+  if (!epoch.ok || !cursor.ok || !turnIndex.ok || !turnId.ok || !part.ok || !partCount.ok || !busy.ok ||
+    !sending.ok || !planRunning.ok || !phase.ok || !canSend.ok || !canSteer.ok || !canStop.ok || !elapsed.ok
+  ) {
+    return null
+  }
+  if (part.value < 1 || partCount.value < 1 || part.value > partCount.value) return null
+  val blocksNode = obj.field("blocks") as? JsonValue.Arr ?: return null
+  val blocks = blocksNode.items.map { item ->
+    val row = item as? JsonValue.Obj ?: return null
+    blockFromJson(row) ?: return null
+  }
+  return WirePatch(
+    epoch.value, cursor.value, turnIndex.value, turnId.value, blocks, busy.value, sending.value,
+    planRunning.value, phase.value, canSend.value, canSteer.value, canStop.value, elapsed.value,
+    part.value, partCount.value
+  )
+}
+
+private fun utf8Prefix(text: String, maxBytes: Int): String {
+  if (maxBytes < 1 || text.isEmpty()) return ""
+  val bytes = text.toByteArray(Charsets.UTF_8)
+  if (bytes.size <= maxBytes) return text
+  var count = maxBytes
+  while (count > 0 && (bytes[count].toInt() and 0xC0) == 0x80) count--
+  if (count < 1) count = 1
+  return bytes.copyOf(count).toString(Charsets.UTF_8)
+}
+
+fun packPatch(id: String, patch: WirePatch): List<String> {
+  fun encodeBlocks(blocks: List<WireBlock>, part: Int, partCount: Int): String {
+    return encodePatch(id, patch.copy(blocks = blocks, part = part, partCount = partCount))
+  }
+  fun pieceFits(block: WireBlock): Boolean = encodeBlocks(listOf(block), 1, 1).isNotEmpty()
+  fun splitBlock(block: WireBlock): List<WireBlock>? {
+    var rest = block.body
+    val pieces = mutableListOf<WireBlock>()
+    while (true) {
+      if (pieceFits(block.copy(body = rest))) {
+        pieces += block.copy(body = rest)
+        return pieces
+      }
+      if (rest.isEmpty()) return null
+      var low = 1
+      var high = rest.length - 1
+      var best = 0
+      while (low <= high) {
+        val mid = (low + high) / 2
+        val prefix = utf8Prefix(rest, mid)
+        if (pieceFits(block.copy(body = prefix))) {
+          best = prefix.length
+          low = best + 1
+        } else {
+          high = mid - 1
+        }
+      }
+      if (best < 1) return null
+      pieces += block.copy(body = rest.substring(0, best))
+      rest = rest.substring(best)
+    }
+  }
+  val whole = encodePatch(id, patch.copy(part = if (patch.part < 1) 1 else patch.part,
+    partCount = if (patch.partCount < 1) 1 else patch.partCount))
+  if (whole.isNotEmpty()) return listOf(whole)
+  val pieces = mutableListOf<WireBlock>()
+  for (block in patch.blocks) {
+    val split = splitBlock(block) ?: return emptyList()
+    pieces += split
+  }
+  if (pieces.isEmpty()) return emptyList()
+  val starts = mutableListOf<Int>()
+  val ends = mutableListOf<Int>()
+  var startAt = 0
+  while (startAt <= pieces.lastIndex) {
+    var lastFit = startAt - 1
+    for (index in startAt..pieces.lastIndex) {
+      if (encodeBlocks(pieces.subList(startAt, index + 1), 1, 1).isEmpty()) break
+      lastFit = index
+    }
+    if (lastFit < startAt) return emptyList()
+    starts += startAt
+    ends += lastFit
+    startAt = lastFit + 1
+  }
+  val packed = mutableListOf<String>()
+  for (partNo in starts.indices) {
+    val json = encodeBlocks(pieces.subList(starts[partNo], ends[partNo] + 1), partNo + 1, starts.size)
+    if (json.isEmpty()) return emptyList()
+    packed += json
+  }
+  return packed
+}
+
+fun assemblePatch(messages: List<String>): WirePatch? {
+  if (messages.isEmpty()) return null
+  val decoded = messages.map { json ->
+    val envelope = tryDecodeEnvelope(json)
+    if (!envelope.ok || envelope.message.kind != MessageKind.Patch) return null
+    decodePatch(envelope.message.payloadJson) ?: return null
+  }
+  val partCount = decoded[0].partCount
+  if (partCount < 1 || decoded.size != partCount) return null
+  val slots = arrayOfNulls<WirePatch>(partCount)
+  for (part in decoded) {
+    if (part.partCount != partCount || part.epoch != decoded[0].epoch || part.cursor != decoded[0].cursor) return null
+    if (part.part < 1 || part.part > partCount || slots[part.part - 1] != null) return null
+    slots[part.part - 1] = part
+  }
+  if (slots.any { it == null }) return null
+  val blocks = mutableListOf<WireBlock>()
+  for (slot in slots) {
+    for (block in slot!!.blocks) {
+      val previous = blocks.lastOrNull()
+      if (previous != null && previous.blockId == block.blockId && previous.kind == block.kind) {
+        blocks[blocks.lastIndex] = previous.copy(body = previous.body + block.body)
+      } else {
+        blocks += block
+      }
+    }
+  }
+  return slots[0]!!.copy(blocks = blocks, part = 1, partCount = 1)
+}
+
+fun encodeCatchup(id: String, catchup: WireCatchup): String {
+  if (catchup.mode != "snapshot" && catchup.mode != "events") return ""
+  val payload = JsonObjectBuilder()
+  payload.add("mode", catchup.mode)
+  payload.add("epoch", catchup.epoch)
+  payload.add("cursor", catchup.cursor)
+  payload.add("conversation_id", catchup.conversationId)
+  payload.add("project_root", catchup.projectRoot)
+  payload.add("title", catchup.title)
+  if (catchup.mode == "snapshot") {
+    val snapshot = catchup.snapshot ?: return ""
+    val encoded = encodeSnapshot("catchup-snap", snapshot)
+    val envelope = tryDecodeEnvelope(encoded)
+    if (!envelope.ok) return ""
+    val snap = parseObject(envelope.message.payloadJson) ?: return ""
+    payload.add("snapshot", snap)
+  } else {
+    payload.add("patches", JsonValue.Arr(catchup.patches.map { patchPayload(it) }))
+  }
+  return encodeEnvelope(MessageKind.Catchup, id, payload.build())
+}
+
+fun decodeCatchup(payloadJson: String): WireCatchup? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeCatchup(obj)
+}
+
+fun decodeCatchup(obj: JsonValue.Obj): WireCatchup? {
+  val mode = obj.readString("mode", true)
+  val epoch = obj.readString("epoch", true)
+  val cursor = obj.readLong("cursor", true)
+  val conversationId = obj.readString("conversation_id", true)
+  val projectRoot = obj.readString("project_root", true)
+  val title = obj.readString("title", true)
+  if (!mode.ok || !epoch.ok || !cursor.ok || !conversationId.ok || !projectRoot.ok || !title.ok) return null
+  if (mode.value == "snapshot") {
+    val snap = obj.field("snapshot") as? JsonValue.Obj ?: return null
+    val snapshot = decodeSnapshot(snap) ?: return null
+    return WireCatchup(mode.value, epoch.value, cursor.value, conversationId.value, projectRoot.value, title.value,
+      snapshot, emptyList())
+  }
+  if (mode.value != "events") return null
+  val rows = obj.field("patches") as? JsonValue.Arr ?: return null
+  val patches = rows.items.map { item ->
+    val row = item as? JsonValue.Obj ?: return null
+    decodePatch(row) ?: return null
+  }
+  return WireCatchup(mode.value, epoch.value, cursor.value, conversationId.value, projectRoot.value, title.value,
+    null, patches)
+}
+
+fun encodeConversationClosed(id: String, epoch: String, cursor: Long, conversationId: String, title: String): String {
+  val payload = JsonObjectBuilder()
+  payload.add("epoch", epoch)
+  payload.add("cursor", cursor)
+  payload.add("conversation_id", conversationId)
+  payload.add("title", title)
+  return encodeEnvelope(MessageKind.ConversationClosed, id, payload.build())
+}
+
+fun decodeConversationClosed(payloadJson: String): WireConversationClosed? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeConversationClosed(obj)
+}
+
+fun decodeConversationClosed(obj: JsonValue.Obj): WireConversationClosed? {
+  val epoch = obj.readString("epoch", true)
+  val cursor = obj.readLong("cursor", true)
+  val conversationId = obj.readString("conversation_id", true)
+  val title = obj.readString("title", true)
+  if (!epoch.ok || !cursor.ok || !conversationId.ok || !title.ok) return null
+  return WireConversationClosed(epoch.value, cursor.value, conversationId.value, title.value)
 }

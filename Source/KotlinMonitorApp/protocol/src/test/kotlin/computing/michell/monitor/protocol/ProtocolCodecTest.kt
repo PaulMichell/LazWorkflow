@@ -227,7 +227,7 @@ class ProtocolCodecTest {
     val session = SessionState()
     session.onHandshakeComplete()
     assertEquals(SessionPhase.Accepted, session.phase)
-    val wire = """{"v":1,"id":"widget-1","type":"widget","payload":{}}"""
+    val wire = """{"v":${MonitorLimits.CatalogueVersion},"id":"widget-1","type":"widget","payload":{}}"""
     val decoded = tryDecodeEnvelope(wire)
     assertTrue(decoded.ok)
     assertEquals(UnknownTypeReason, decoded.message.reason)
@@ -312,6 +312,70 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun catalogueV2RoundTrips() {
+    val resume = encodeResume("resume", "abc123", 4)
+    val resumeBody = decodeResume(tryDecodeEnvelope(resume).message.payloadJson)
+    assertNotNull(resumeBody)
+    assertEquals("abc123", resumeBody!!.epoch)
+    assertEquals(4L, resumeBody.cursor)
+
+    val block = WireBlock("answer", "block-1", "Answer", "", "", "Noted.", false, true, 12, emptyList())
+    val patch = samplePatch(listOf(block))
+    val encodedPatch = encodePatch("patch", patch)
+    val decodedPatch = decodePatch(tryDecodeEnvelope(encodedPatch).message.payloadJson)
+    assertNotNull(decodedPatch)
+    assertEquals(patch, decodedPatch)
+    assertNull(decodePatch("""{"turn_index":1,"revision":2,"part":1,"part_count":1,"phase":"streaming","status_text":"Writing","duration_ms":1,"blocks":[]}"""))
+
+    val closed = encodeConversationClosed("conversation-closed", "abc123", 4, "conversation-20261019T120000000", "Monitor plan")
+    val closedBody = decodeConversationClosed(tryDecodeEnvelope(closed).message.payloadJson)
+    assertEquals("conversation-20261019T120000000", closedBody!!.conversationId)
+    assertEquals(4L, closedBody.cursor)
+
+    val events = encodeCatchup("catchup-events", WireCatchup("events", "abc123", 4, "current", "/work/LazWorkflow",
+      "Monitor plan", null, listOf(patch)))
+    val eventsBody = decodeCatchup(tryDecodeEnvelope(events).message.payloadJson)
+    assertEquals("events", eventsBody!!.mode)
+    assertEquals(listOf(patch), eventsBody.patches)
+
+    val snapshot = WireSnapshot(sampleView(), emptyList(), null, "Documents/Plan.md", "Monitor plan", false,
+      emptyList(), emptyList(), ApprovalNotice(false, "", "", "", "", false))
+    val snap = encodeCatchup("catchup-snapshot", WireCatchup("snapshot", "abc123", 4, "current", "/work/LazWorkflow",
+      "Monitor plan", snapshot, emptyList()))
+    val snapBody = decodeCatchup(tryDecodeEnvelope(snap).message.payloadJson)
+    assertEquals("snapshot", snapBody!!.mode)
+    assertEquals("Monitor plan", snapBody.snapshot!!.planTitle)
+    assertEquals(4L, snapBody.cursor)
+
+    val old = """{"v":1,"id":"old-patch","type":"patch","payload":{"epoch":"abc123","cursor":1,"turn_index":0,"turn_id":"t","part":1,"part_count":1,"busy":false,"sending":false,"plan_running":false,"phase":"","can_send":true,"can_steer":false,"can_stop":false,"elapsed_ms":0,"blocks":[]}}"""
+    val rejected = tryDecodeEnvelope(old)
+    assertFalse(rejected.ok)
+    assertTrue(rejected.errorText.contains("version"))
+  }
+
+  @Test
+  fun patchOverCapMissingPartIsNotSuccess() {
+    val left = WireBlock("answer", "block-a", "Answer", "", "", "a".repeat(150000), false, true, 12, emptyList())
+    val right = WireBlock("answer", "block-b", "Answer", "", "", "b".repeat(150000), false, true, 12, emptyList())
+    val messages = packPatch("patch-over", samplePatch(listOf(left, right)))
+    assertTrue(messages.size >= 2)
+    messages.forEachIndexed { index, json ->
+      val envelope = tryDecodeEnvelope(json)
+      assertTrue(envelope.ok)
+      assertEquals(MessageKind.Patch, envelope.message.kind)
+      val part = decodePatch(envelope.message.payloadJson)
+      assertNotNull(part)
+      assertEquals(9L, part!!.cursor)
+      assertEquals(index + 1, part.part)
+      assertEquals(messages.size, part.partCount)
+    }
+    val assembled = assemblePatch(messages)
+    assertNotNull(assembled)
+    assertEquals(listOf(left.body, right.body), assembled!!.blocks.map { it.body })
+    assertNull(assemblePatch(messages.dropLast(1)))
+  }
+
+  @Test
   fun vendoredFramesMatchPascalFixtures() {
     val vendored = filesByName(vendoredDirectory())
     val pascal = filesByName(fixtureDirectory())
@@ -387,6 +451,15 @@ class ProtocolCodecTest {
     assertEquals(0, session.retainedImageBytes())
   }
 
+  private fun sampleView(): WireView {
+    return WireView(true, false, false, false, false, "idle", "Ready", "grok-test", "native", true, "Ask", "high", "",
+      "ctx", true, false, false, true, false, "")
+  }
+
+  private fun samplePatch(blocks: List<WireBlock>): WirePatch {
+    return WirePatch("abc123", 9, 3, "turn-3", blocks, true, true, false, "streaming", false, true, true, 50)
+  }
+
   private fun imagePart(
     id: String,
     part: Int,
@@ -402,7 +475,7 @@ class ProtocolCodecTest {
   private fun encodeOneLongSend(): String {
     val text = "y".repeat(MonitorLimits.MaxSendChars + 1)
     val payload = "{\"text\":\"$text\"}"
-    return "{\"v\":1,\"id\":\"send-big\",\"type\":\"send\",\"payload\":$payload}"
+    return "{\"v\":${MonitorLimits.CatalogueVersion},\"id\":\"send-big\",\"type\":\"send\",\"payload\":$payload}"
   }
 
   private fun assertLam1(bytes: ByteArray, payloadLength: Int) {

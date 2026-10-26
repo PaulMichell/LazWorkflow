@@ -404,6 +404,8 @@ Var
   Turn: TAssistantMonitorTurn;
   Snapshot: TMonitorSnapshot;
   Transcript: TMonitorTranscript;
+  Patch: TMonitorPatch;
+  Catchup: TMonitorCatchup;
   Notice: TAssistantApprovalNotice;
   PlanRows: Array[0..0] Of TAssistantMonitorPlanRow;
   TaskRows: Array[0..0] Of TAssistantMonitorTaskRow;
@@ -448,6 +450,41 @@ Begin
   Notice.Reason := '';
   Snapshot.Approval := Notice;
   AddSample('snapshot', mmkSnapshot, EncodeMonitorSnapshot('snapshot', Snapshot));
+  AddSample('resume', mmkResume, EncodeMonitorResume('resume', 'abc123', 4));
+  Patch.Epoch := 'abc123';
+  Patch.Cursor := 4;
+  Patch.TurnIndex := 3;
+  Patch.TurnId := 'turn-3';
+  Patch.Busy := True;
+  Patch.Sending := True;
+  Patch.PlanRunning := False;
+  Patch.Phase := 'streaming';
+  Patch.CanSend := False;
+  Patch.CanSteer := True;
+  Patch.CanStop := True;
+  Patch.ElapsedMs := 1200;
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  SetLength(Patch.Blocks, 1);
+  Patch.Blocks[0] := SampleBlock;
+  AddSample('patch', mmkPatch, EncodeMonitorPatch('patch', Patch));
+  Catchup.Mode := mcmSnapshot;
+  Catchup.Epoch := 'abc123';
+  Catchup.Cursor := 4;
+  Catchup.ConversationId := 'current';
+  Catchup.ProjectRoot := '/work/LazWorkflow';
+  Catchup.Title := 'Monitor plan';
+  Catchup.Snapshot := Snapshot;
+  Catchup.HasSnapshot := True;
+  SetLength(Catchup.Patches, 0);
+  AddSample('catchup-snapshot', mmkCatchup, EncodeMonitorCatchup('catchup-snapshot', Catchup));
+  Catchup.Mode := mcmEvents;
+  Catchup.HasSnapshot := False;
+  SetLength(Catchup.Patches, 1);
+  Catchup.Patches[0] := Patch;
+  AddSample('catchup-events', mmkCatchup, EncodeMonitorCatchup('catchup-events', Catchup));
+  AddSample('conversation-closed', mmkConversationClosed,
+    EncodeMonitorConversationClosed('conversation-closed', 'abc123', 4, 'conversation-20261019T120000000', 'Monitor plan'));
   AddSample('refresh', mmkRefresh, EncodeMonitorEmpty(mmkRefresh, 'refresh'));
   Transcript.TurnIndex := 3;
   Transcript.Revision := 2;
@@ -552,6 +589,10 @@ Var
   Image: TMonitorImageData;
   Unavailable: TMonitorImageUnavailable;
   ErrorBody: TMonitorErrorBody;
+  ResumeMsg: TMonitorResume;
+  Patch: TMonitorPatch;
+  Catchup: TMonitorCatchup;
+  ClosedTalk: TMonitorConversationClosed;
   Ticks: TMonitorTicks;
   Data: TJSONData;
   Payload: TJSONObject;
@@ -671,6 +712,27 @@ Begin
         (ErrorBody.RefId = 'widget-1'));
     mmkPing, mmkPong:
       Check(Sample.Name + ' ticks', DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 15000));
+    mmkResume:
+      Check('resume fields', DecodeMonitorResume(Message.PayloadJson, ResumeMsg) And (ResumeMsg.Epoch = 'abc123') And
+        (ResumeMsg.Cursor = 4));
+    mmkPatch:
+      Check('patch fields', DecodeMonitorPatch(Message.PayloadJson, Patch) And (Patch.Epoch = 'abc123') And (Patch.Cursor = 4) And
+        (Patch.TurnId = 'turn-3') And Patch.Busy And (Patch.Part = 1) And (Patch.PartCount = 1) And
+        (Length(Patch.Blocks) = 1) And (Patch.Blocks[0].Body = 'Noted.'));
+    mmkCatchup:
+      Begin
+        Check(Sample.Name + ' catchup', DecodeMonitorCatchup(Message.PayloadJson, Catchup) And (Catchup.Epoch = 'abc123') And
+          (Catchup.Cursor = 4) And (Catchup.ConversationId <> '') And (Catchup.ProjectRoot = '/work/LazWorkflow'));
+        If Sample.Name = 'catchup-snapshot' Then
+          Check('catchup snapshot', (Catchup.Mode = mcmSnapshot) And Catchup.HasSnapshot And (Catchup.Snapshot.PlanTitle = 'Monitor plan'))
+        Else
+          Check('catchup events', (Catchup.Mode = mcmEvents) And (Length(Catchup.Patches) = 1) And
+            (Catchup.Patches[0].TurnId = 'turn-3'));
+      End;
+    mmkConversationClosed:
+      Check('conversation_closed fields', DecodeMonitorConversationClosed(Message.PayloadJson, ClosedTalk) And
+        (ClosedTalk.Epoch = 'abc123') And (ClosedTalk.Cursor = 4) And
+        (ClosedTalk.ConversationId = 'conversation-20261019T120000000') And (ClosedTalk.Title = 'Monitor plan'));
   Else
     Check(Sample.Name + ' typed', False);
   End;
@@ -719,6 +781,70 @@ Begin
     Check(MonitorMessageKindName(Kind) + ' round-trip', Seen[Kind]);
 End;
 
+Procedure TestPatchOverCap;
+Var
+  Patch, Part, Assembled: TMonitorPatch;
+  Messages, Missing: TStringArray;
+  Message: TMonitorMessage;
+  ErrorText: String;
+  I: Integer;
+Begin
+  Patch.Epoch := 'abc123';
+  Patch.Cursor := 9;
+  Patch.TurnIndex := 3;
+  Patch.TurnId := 'turn-3';
+  Patch.Busy := True;
+  Patch.Sending := True;
+  Patch.PlanRunning := False;
+  Patch.Phase := 'streaming';
+  Patch.CanSend := False;
+  Patch.CanSteer := True;
+  Patch.CanStop := True;
+  Patch.ElapsedMs := 50;
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  SetLength(Patch.Blocks, 2);
+  Patch.Blocks[0] := SampleBlock;
+  Patch.Blocks[1] := SampleBlock;
+  Patch.Blocks[0].BlockId := 'block-a';
+  Patch.Blocks[1].BlockId := 'block-b';
+  Patch.Blocks[0].Body := StringOfChar('a', 150000);
+  Patch.Blocks[1].Body := StringOfChar('b', 150000);
+  Messages := PackMonitorPatch('patch-over', Patch);
+  Check('over-cap patch splits', Length(Messages) >= 2);
+  If Length(Messages) < 2 Then
+    Exit;
+  For I := 0 To High(Messages) Do
+    Begin
+      Check('over-cap part envelope', TryDecodeMonitorEnvelope(Messages[I], Message, ErrorText) And (Message.Kind = mmkPatch));
+      Check('over-cap part fields', DecodeMonitorPatch(Message.PayloadJson, Part) And (Part.Cursor = 9) And
+        (Part.Epoch = 'abc123') And (Part.Part = I + 1) And (Part.PartCount = Length(Messages)));
+    End;
+  Check('over-cap assembles', TryAssembleMonitorPatch(Messages, Assembled) And (Assembled.Cursor = 9) And
+    (Length(Assembled.Blocks) = 2) And (Assembled.Blocks[0].Body = Patch.Blocks[0].Body) And
+    (Assembled.Blocks[1].Body = Patch.Blocks[1].Body));
+  SetLength(Missing, Length(Messages) - 1);
+  For I := 0 To High(Missing) Do
+    Missing[I] := Messages[I];
+  Check('missing patch part is not success', Not TryAssembleMonitorPatch(Missing, Assembled));
+End;
+
+Procedure TestOldCatalogue;
+Var
+  Message: TMonitorMessage;
+  ErrorText, Json: String;
+  Patch: TMonitorPatch;
+Begin
+  Json := '{"v":1,"id":"old-patch","type":"patch","payload":{"epoch":"abc123","cursor":1,"turn_index":0,' +
+    '"turn_id":"t","part":1,"part_count":1,"busy":false,"sending":false,"plan_running":false,"phase":"",' +
+    '"can_send":true,"can_steer":false,"can_stop":false,"elapsed_ms":0,"blocks":[]}}';
+  Check('v1 envelope is not decoded', Not TryDecodeMonitorEnvelope(Json, Message, ErrorText));
+  Check('v1 mismatch names version', Pos('version', LowerCase(ErrorText)) > 0);
+  Json := '{"turn_index":1,"revision":2,"part":1,"part_count":1,"phase":"streaming","status_text":"Writing",' +
+    '"duration_ms":1,"blocks":[]}';
+  Check('v1 transcript is not a patch', Not DecodeMonitorPatch(Json, Patch));
+End;
+
 Procedure TestOptionalTitle;
 Var
   Message: TMonitorMessage;
@@ -739,7 +865,7 @@ Var
   ErrorBody: TMonitorErrorBody;
   Json: String;
 Begin
-  Json := '{"v":1,"id":"u1","type":"not_a_type","payload":{}}';
+  Json := '{"v":2,"id":"u1","type":"not_a_type","payload":{}}';
   Check('unknown type decodes as error', TryDecodeMonitorEnvelope(Json, Message, ErrorText));
   Check('unknown type kind', Message.Kind = mmkError);
   Check('unknown type reason', Message.Reason = 'unknown_type');
@@ -909,7 +1035,7 @@ Begin
   FailCount := 0;
   ParseArguments;
   Check('magic constant is LAM1', MonitorFrameMagic = 'LAM1');
-  Check('catalogue version', MonitorCatalogueVersion = 1);
+  Check('catalogue version', MonitorCatalogueVersion = 2);
   Check('payload cap', MonitorMaxPayloadBytes = 262144);
   If RepositoryRoot = '' Then
     Begin
@@ -917,6 +1043,8 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestPatchOverCap;
+  TestOldCatalogue;
   TestOptionalTitle;
   TestPlanChoices;
   TestUnknownType;
