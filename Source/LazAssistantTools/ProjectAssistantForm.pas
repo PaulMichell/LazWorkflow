@@ -2045,9 +2045,26 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.SetBuildStatusFeedback(Const MessageText: String);
+Var
+  Last: TTraceBlock;
 Begin
-  { The status label is the plan count line. Selection and agent notes stay on the footer. }
-  StatusFooter.SetRightText(MessageText);
+  { The right-hand label is the progress slot. Build notes belong on the live trace. }
+  If (MessageText = '') Or (csDestroying In ComponentState) Then
+    Exit;
+  If Assigned(FTrace) Then
+    Begin
+      Last := Nil;
+      If FTrace.Count > 0 Then
+        Last := FTrace[FTrace.Count - 1];
+      If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> MessageText) Then
+        Begin
+          FTrace.AddNote(MessageText);
+          If FViewingLive And Assigned(FTraceView) Then
+            FTraceView.Sync(FTrace, True);
+        End;
+    End
+  Else
+    SetCurrentSystemNote(MessageText);
   WorkflowLogger.Info('ProjectAssistant', 'Build work: ' + MessageText);
 End;
 
@@ -4882,10 +4899,6 @@ Begin
         FStatusPhase := AssistantPhaseWaiting;
       StatusText := FormatElapsedStatus(AssistantProgressPhase(FStatusPhase));
     End
-  Else If FPlanAgentRunning Then
-    StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
-  Else If FReviewInProgress Then
-    StatusText := 'Reviewing…'
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
@@ -6411,7 +6424,7 @@ End;
 
 Procedure TProjectAssistantForm.ApplyLiveAnswerSlice;
 Var
-  Last, Block: TTraceBlock;
+  Block: TTraceBlock;
   Slice: String;
 Begin
   If Not Assigned(FTrace) Then
@@ -6419,11 +6432,7 @@ Begin
   Slice := SliceLiveChannel(FLiveContent, FAnswerSliceStart);
   If (Slice = '') Or (Not SliceLooksLikeAnswer(Slice)) Then
     Exit;
-  Last := Nil;
-  If FTrace.Count > 0 Then
-    Last := FTrace[FTrace.Count - 1];
-  If Assigned(Last) And (Last.Kind = tbkNote) Then
-    Exit;
+  { A build-work note at the live head must not freeze the answer already on screen. }
   Block := FTrace.LatestBlockSinceLastTool(tbkAnswer);
   If Assigned(Block) Then
     Block.Body := Slice
@@ -7061,6 +7070,7 @@ Begin
       Else
         Begin
           Inc(FPlanAgentPackagesDone);
+          SetBuildStatusFeedback(Format('Plan agent… %d done', [FPlanAgentPackagesDone]));
           Application.QueueAsyncCall(@ContinueRunPlan, 0);
         End;
     End;
@@ -7175,7 +7185,6 @@ Begin
   FSelectedTurnIndex := ProjectAssistantConversation.TurnCount - 1;
   RefreshConversationList;
   RefreshChatDisplay(True, True);
-  StatusFooter.SetRightText('Cancelled');
   PersistSession;
   If FPlanAgentRunning Then
     StopRunPlan(preUserStop, 'stream cancelled by user');
@@ -8417,8 +8426,7 @@ Begin
 
   FReviewInProgress := True;
   SyncCodexUsageIdle;
-  StatusFooter.SetRightText(KindLabel + '…');
-  StatusFooter.Update;
+  UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Review ' + KindLabel + ' started');
 
   Try
@@ -8435,21 +8443,17 @@ Begin
 
     If BuildOk And (ErrorCount = 0) Then
       Begin
-        StatusFooter.SetRightText(KindLabel + ' OK');
         FPendingReviewErrorOffer := False;
         FReviewErrorCount := 0;
       End
     Else If ErrorCount > 0 Then
-      Begin
-        StatusFooter.SetRightText(KindLabel + ' failed');
-        PrepareTopErrorAfterReview(ErrorCount);
-      End
+      PrepareTopErrorAfterReview(ErrorCount)
     Else
       Begin
-        StatusFooter.SetRightText(KindLabel + ' done');
         FPendingReviewErrorOffer := False;
         FReviewErrorCount := 0;
       End;
+    UpdateStatusFooter;
 
     { Reviews start a fresh conversation (own model context); prior chat is archived. }
     If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
@@ -9196,16 +9200,6 @@ Begin
     This bus hook remains for future external publishers. }
   If FReviewInProgress Then
     Exit;
-  Case Result Of
-    crSuccess:
-      StatusFooter.SetRightText(Format('Compile OK (%d warn)', [WarningCount]));
-    crFailed:
-      StatusFooter.SetRightText(Format('Compile failed (%d err)', [ErrorCount]));
-    crCancelled:
-      StatusFooter.SetRightText('Cancelled');
-  Else
-    { }
-  End;
   If OutputText <> '' Then
     WorkflowLogger.Debug('ProjectAssistant', 'CompilerFinished for ' + ProjectFile);
   UpdateStatusFooter;
