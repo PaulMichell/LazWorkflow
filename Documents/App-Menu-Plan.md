@@ -43,7 +43,7 @@ Codec tests in `Tests/AssistantMonitorCodecTest.lpr` and the Kotlin protocol tes
 
 ### 2.2 Epoch, cursor, and conversation id
 
-Status: not started
+Status: complete
 
 An epoch is a new hex string. Mint it when the bridge attaches to a project conversation, and again when the project changes, `StartNewConversation` runs, or an archive is activated. Put `epoch` and `cursor` on `hello_ok`, `patch`, `catchup`, and `conversation_closed`.
 
