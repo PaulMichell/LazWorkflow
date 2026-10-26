@@ -10,7 +10,8 @@ Unit AssistantMonitorSession;
   and HMAC are never logged.
 
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
-  gates, approval, the in-memory carrier, and the resume ring are one state machine.
+  gates, approval, the in-memory carrier, the resume ring, and the outbound lanes
+  are one state machine.
   Reviewed 2026-10-26: no socket or form code in this unit. }
 
 {$IFDEF FPC}
@@ -35,6 +36,7 @@ Const
   MonitorDeadSessionMs = 45000;
   MonitorPartialFrameMs = 10000;
   MonitorCoalesceWindowMs = 100;
+  { Bulk lane only. Control is not capped, and live holds one unsent patch part-set. }
   MonitorOutboundQueueLimit = 32;
   { Committed patches a resume can replay. Fewer when the JSON would pass 2 MiB. }
   MonitorRingCapacity = 256;
@@ -114,7 +116,8 @@ Type
     FDisplayApprovalId: String;
     FClosedToolIds: Array Of String;
     FRevokedIds: Array Of String;
-    FPendingSends: Array Of String;
+    FControlSends: Array Of String;
+    FBulkSends: Array Of String;
     FUnsentTranscripts: Array Of String;
     FUnsentTranscriptTurn: Integer;
     FUnsentTranscriptAt: QWord;
@@ -155,9 +158,10 @@ Type
     Procedure UnlockSession;
     Function ClockMs: QWord;
     Function NewHostId: String;
-    Procedure QueueSend(Const Json: String);
+    { Caller holds the session lock. False when a bulk frame finds that lane full. }
+    Function QueueSend(Const Json: String): Boolean;
     Procedure DrainSends;
-    Procedure Transmit(Const Json: String);
+    Function Transmit(Const Json: String): Boolean;
     Procedure LogLine(Level: Integer; Const Text: String);
     Procedure ClearConnection;
     Procedure RejectLocked(Const Reason: String; DoClose: Boolean);
@@ -235,6 +239,10 @@ Type
     { Replaces the unsent live part set. Does not append a transcript. }
     Procedure ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
     Procedure FlushLivePatch;
+    /// Queues into the frame's lane and does not drain. False when bulk is already at the cap.
+    Function TryQueueHostJson(Const Json: String): Boolean;
+    /// Sends control, then the live part-set, then bulk. A full bulk lane does not block the others.
+    Procedure DrainOutbound;
     /// Next host frame id. Safe to call off the session lock.
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
@@ -483,7 +491,8 @@ Begin
   FDisplayApprovalId := '';
   SetLength(FClosedToolIds, 0);
   SetLength(FRevokedIds, 0);
-  SetLength(FPendingSends, 0);
+  SetLength(FControlSends, 0);
+  SetLength(FBulkSends, 0);
   SetLength(FUnsentTranscripts, 0);
   FUnsentTranscriptTurn := 0;
   FUnsentTranscriptAt := 0;
@@ -546,26 +555,83 @@ Begin
   Result := 'h' + IntToStr(FHostSeq);
 End;
 
-Procedure TMonitorSession.QueueSend(Const Json: String);
+Type
+  TOutboundLane = (olControl, olLive, olBulk);
+
+Function OutboundLane(Const Json: String): TOutboundLane;
+Var
+  Message: TMonitorMessage;
+  ErrorText: String;
 Begin
-  If Json = '' Then
+  { An unreadable frame stays on control so it is not dropped. }
+  Result := olControl;
+  If Not TryDecodeMonitorEnvelope(Json, Message, ErrorText) Then
     Exit;
-  SetLength(FPendingSends, Length(FPendingSends) + 1);
-  FPendingSends[High(FPendingSends)] := Json;
+  Case Message.Kind Of
+    mmkPatch:
+      Result := olLive;
+    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData:
+      Result := olBulk;
+  Else
+    Result := olControl;
+  End;
 End;
 
-Procedure TMonitorSession.Transmit(Const Json: String);
+Function TMonitorSession.QueueSend(Const Json: String): Boolean;
+Var
+  Index: Integer;
+  Lane: TOutboundLane;
+Begin
+  Result := False;
+  If Json = '' Then
+    Exit;
+  Lane := OutboundLane(Json);
+  If Lane = olLive Then
+    Begin
+      If FHasLivePatch Then
+        Inc(FFramesDropped, Length(FLiveFrames));
+      SetLength(FLiveFrames, 1);
+      FLiveFrames[0] := Json;
+      FLiveCursor := 0;
+      FHasLivePatch := True;
+      Result := True;
+      Exit;
+    End;
+  If Lane = olBulk Then
+    Begin
+      If Length(FBulkSends) >= MonitorOutboundQueueLimit Then
+        Begin
+          Inc(FFramesDropped);
+          Exit;
+        End;
+      Index := Length(FBulkSends);
+      SetLength(FBulkSends, Index + 1);
+      FBulkSends[Index] := Json;
+      Result := True;
+      Exit;
+    End;
+  Index := Length(FControlSends);
+  SetLength(FControlSends, Index + 1);
+  FControlSends[Index] := Json;
+  Result := True;
+End;
+
+Function TMonitorSession.Transmit(Const Json: String): Boolean;
 Var
   Frame: TMonitorFrame;
   ErrorText: String;
 Begin
+  Result := False;
   If (Json = '') Or (Not Assigned(FCarrier)) Then
     Exit;
   Frame.Version := MonitorFrameVersion;
   Frame.Flags := 0;
   Frame.Json := Json;
   If FCarrier.Send(Frame, ErrorText) Then
-    Inc(FFramesSent)
+    Begin
+      Inc(FFramesSent);
+      Result := True;
+    End
   Else
     Begin
       LockSession;
@@ -607,20 +673,119 @@ Begin
   End;
 End;
 
+Procedure PrependUnsent(Var Lane: TStringArray; Const Frames: TStringArray; FromIndex: Integer);
+Var
+  Extra, Count, Index: Integer;
+  Kept: TStringArray;
+Begin
+  Kept := Nil;
+  Extra := Length(Frames) - FromIndex;
+  If Extra <= 0 Then
+    Exit;
+  Count := Length(Lane);
+  SetLength(Kept, Count + Extra);
+  For Index := 0 To Extra - 1 Do
+    Kept[Index] := Frames[FromIndex + Index];
+  For Index := 0 To Count - 1 Do
+    Kept[Extra + Index] := Lane[Index];
+  Lane := Kept;
+End;
+
 Procedure TMonitorSession.DrainSends;
 Var
-  Pending: Array Of String;
-  I: Integer;
+  Control, Live, Bulk: TStringArray;
+  Cursor: Int64;
+  HadLive: Boolean;
+  Index, Sent: Integer;
 Begin
   LockSession;
   Try
-    Pending := FPendingSends;
-    SetLength(FPendingSends, 0);
+    Control := FControlSends;
+    SetLength(FControlSends, 0);
   Finally
     UnlockSession;
   End;
-  For I := 0 To High(Pending) Do
-    Transmit(Pending[I]);
+  Sent := 0;
+  While Sent < Length(Control) Do
+    Begin
+      If Not Transmit(Control[Sent]) Then
+        Break;
+      Inc(Sent);
+    End;
+  If Sent < Length(Control) Then
+    Begin
+      LockSession;
+      Try
+        PrependUnsent(FControlSends, Control, Sent);
+      Finally
+        UnlockSession;
+      End;
+      Exit;
+    End;
+  LockSession;
+  Try
+    HadLive := FHasLivePatch;
+    Live := FLiveFrames;
+    Cursor := FLiveCursor;
+    FHasLivePatch := False;
+    FLiveCursor := 0;
+    SetLength(FLiveFrames, 0);
+  Finally
+    UnlockSession;
+  End;
+  If HadLive Then
+    Begin
+      Sent := 0;
+      While Sent < Length(Live) Do
+        Begin
+          If Not Transmit(Live[Sent]) Then
+            Break;
+          Inc(Sent);
+        End;
+      If Sent < Length(Live) Then
+        Begin
+          LockSession;
+          Try
+            If FHasLivePatch Then
+              Inc(FFramesDropped, Length(Live) - Sent)
+            Else
+              Begin
+                SetLength(FLiveFrames, Length(Live) - Sent);
+                For Index := 0 To High(FLiveFrames) Do
+                  FLiveFrames[Index] := Live[Sent + Index];
+                FLiveCursor := Cursor;
+                FHasLivePatch := Length(FLiveFrames) > 0;
+              End;
+          Finally
+            UnlockSession;
+          End;
+          Exit;
+        End;
+      NoteMirrorHanded(Cursor);
+    End;
+  LockSession;
+  Try
+    Bulk := FBulkSends;
+    SetLength(FBulkSends, 0);
+  Finally
+    UnlockSession;
+  End;
+  Sent := 0;
+  While Sent < Length(Bulk) Do
+    Begin
+      If Not Transmit(Bulk[Sent]) Then
+        Break;
+      Inc(Sent);
+    End;
+  If Sent < Length(Bulk) Then
+    Begin
+      LockSession;
+      Try
+        PrependUnsent(FBulkSends, Bulk, Sent);
+      Finally
+        UnlockSession;
+      End;
+    End;
 End;
 
 Procedure TMonitorSession.LogLine(Level: Integer; Const Text: String);
@@ -1236,8 +1401,8 @@ Begin
     Exit;
   If ClockMs < FUnsentTranscriptAt + MonitorCoalesceWindowMs Then
     Exit;
-  { A full queue must keep this frame. Dropping it left the phone on the last busy status. }
-  If Length(FPendingSends) >= MonitorOutboundQueueLimit Then
+  { Bulk may wait. The live lane does not share this cap. }
+  If Length(FBulkSends) + Length(FUnsentTranscripts) > MonitorOutboundQueueLimit Then
     Exit;
   FHasUnsentTranscript := False;
   For I := 0 To High(FUnsentTranscripts) Do
@@ -1673,7 +1838,7 @@ Var
   Frames: Array Of String;
   Cursor: Int64;
   Had: Boolean;
-  I: Integer;
+  I, Sent: Integer;
 Begin
   LockSession;
   Try
@@ -1688,8 +1853,32 @@ Begin
   End;
   If Not Had Then
     Exit;
-  For I := 0 To High(Frames) Do
-    Transmit(Frames[I]);
+  Sent := 0;
+  While Sent < Length(Frames) Do
+    Begin
+      If Not Transmit(Frames[Sent]) Then
+        Break;
+      Inc(Sent);
+    End;
+  If Sent < Length(Frames) Then
+    Begin
+      LockSession;
+      Try
+        If Not FHasLivePatch Then
+          Begin
+            SetLength(FLiveFrames, Length(Frames) - Sent);
+            For I := 0 To High(FLiveFrames) Do
+              FLiveFrames[I] := Frames[Sent + I];
+            FLiveCursor := Cursor;
+            FHasLivePatch := Length(FLiveFrames) > 0;
+          End
+        Else
+          Inc(FFramesDropped, Length(Frames) - Sent);
+      Finally
+        UnlockSession;
+      End;
+      Exit;
+    End;
   NoteMirrorHanded(Cursor);
 End;
 
@@ -2063,17 +2252,30 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.SendHostJson(Const Json: String);
+Function TMonitorSession.TryQueueHostJson(Const Json: String): Boolean;
 Begin
+  Result := False;
   If Json = '' Then
     Exit;
   LockSession;
   Try
-    QueueSend(Json);
+    Result := QueueSend(Json);
   Finally
     UnlockSession;
   End;
+End;
+
+Procedure TMonitorSession.DrainOutbound;
+Begin
   DrainSends;
+End;
+
+Procedure TMonitorSession.SendHostJson(Const Json: String);
+Begin
+  If Json = '' Then
+    Exit;
+  TryQueueHostJson(Json);
+  DrainOutbound;
 End;
 
 Procedure TMonitorSession.SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);

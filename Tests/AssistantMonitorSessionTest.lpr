@@ -428,6 +428,44 @@ Begin
   End;
 End;
 
+Function BulkFrame(Index: Integer): String;
+Begin
+  Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot","payload":{}}';
+End;
+
+Procedure TestOutboundLanes;
+Var
+  Index, Before: Integer;
+  Ping, Seen: String;
+  First, Second: TStringArray;
+Begin
+  Ping := EncodeMonitorTicks(mmkPing, 'lane-ping', 1);
+  Carrier.ClearSent;
+  For Index := 1 To MonitorOutboundQueueLimit Do
+    Check('bulk lane accepts ' + IntToStr(Index), Session.TryQueueHostJson(BulkFrame(Index)));
+  Before := Session.FramesDropped;
+  Check('bulk lane waits at the cap', Not Session.TryQueueHostJson(BulkFrame(MonitorOutboundQueueLimit + 1)));
+  Check('a refused bulk frame is not stored', Session.FramesDropped = Before + 1);
+  SetLength(First, 2);
+  First[0] := 'patch-part-1';
+  First[1] := 'patch-part-2';
+  SetLength(Second, 1);
+  Second[0] := 'patch-replaced';
+  Session.ReplaceLivePatch(8, First);
+  Session.ReplaceLivePatch(9, Second);
+  Check('full bulk lane still accepts a live replacement', Session.FramesDropped = Before + 1 + 2);
+  Check('control ping is queued while both other lanes are full', Session.TryQueueHostJson(Ping));
+  Session.DrainOutbound;
+  Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 2 + MonitorOutboundQueueLimit);
+  Check('control ping is sent before the other lanes', Carrier.SentJson(0) = Ping);
+  Check('live replacement is sent and not appended', Carrier.SentJson(1) = 'patch-replaced');
+  Seen := '';
+  For Index := 0 To Carrier.SentCount - 1 Do
+    Seen := Seen + Carrier.SentJson(Index) + #10;
+  Check('dropped live parts are not sent', Pos('patch-part-1', Seen) = 0);
+  Check('bulk frames follow the live patch', Carrier.SentJson(2) = BulkFrame(1));
+End;
+
 Procedure TestLivePatchReplaces;
 Var
   First, Second: TStringArray;
@@ -832,6 +870,7 @@ Begin
       TestBareSignalAndCancel;
       TestMirrorCursor;
       TestResumeRing;
+      TestOutboundLanes;
       TestLivePatchReplaces;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');

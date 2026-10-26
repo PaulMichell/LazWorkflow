@@ -1268,10 +1268,8 @@ Begin
       End;
     Ord(mmkRefresh):
       Begin
-        If DecodeMonitorText(PayloadJson, Text) And (Text = 'plan_choices') Then
-          PushPlan(Form)
-        Else
-          PushSnapshot(Form, Id);
+        { An old stall Refresh must not build a snapshot on the IDE thread. }
+        SendError(Id, MonitorHostBusyReason, 'The Project Assistant is busy.');
         Result := True;
       End;
     Ord(mmkTurn):
