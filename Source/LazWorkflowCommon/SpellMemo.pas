@@ -4,7 +4,7 @@ Unit SpellMemo;
 
   Size note: exceeds the 1000 line preference. Wrap layout, caret/selection,
   undo grouping and spell markup are one painted control so edits and
-  underlines stay widgetset-free. Reviewed 2026-10-20: no hidden sibling material. }
+  underlines stay widgetset-free. Reviewed 2026-10-26: no hidden sibling material. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -984,7 +984,7 @@ End;
 
 Function TSpellMemo.CaretIsActive: Boolean;
 Var
-  ParentForm: TCustomForm;
+  HostForm, OwnForm, ActiveForm: TCustomForm;
   KeyControl: TWinControl;
 Begin
   Result := False;
@@ -992,24 +992,36 @@ Begin
     Exit;
   If Assigned(Application) And (Not Application.Active) Then
     Exit;
-  ParentForm := GetParentForm(Self);
+  HostForm := GetParentForm(Self);
+  OwnForm := GetParentForm(Self, False);
   { Deactivation leaves ActiveControl on this memo and does not call DoExit.
     FOwnsCaret must not keep the insertion point blinking in an inactive window.
-    Screen.ActiveCustomForm covers a docked IDE host whose Active flag lags. }
-  If Assigned(ParentForm) And (Not ParentForm.Active) Then
+    The top host covers a docked IDE window whose own Active flag lags. }
+  If Assigned(HostForm) And (Not HostForm.Active) Then
     Exit;
-  If Assigned(ParentForm) And Assigned(Screen.ActiveCustomForm) And (Screen.ActiveCustomForm <> ParentForm) Then
+  ActiveForm := Nil;
+  If Assigned(Screen) Then
+    ActiveForm := Screen.ActiveCustomForm;
+  { A docked assistant is its own form. Comparing ActiveCustomForm only with the
+    IDE main form hid the prompt caret until a popup changed the active form. }
+  If Assigned(ActiveForm) And (ActiveForm <> HostForm) And (ActiveForm <> OwnForm) And
+    (Not ActiveForm.ContainsControl(Self)) Then
     Exit;
-  If Assigned(ParentForm) Then
-    KeyControl := ParentForm.ActiveControl
+  If Assigned(ActiveForm) And Assigned(OwnForm) And (ActiveForm = OwnForm) Then
+    KeyControl := OwnForm.ActiveControl
+  Else If Assigned(HostForm) Then
+    KeyControl := HostForm.ActiveControl
+  Else If Assigned(Screen) Then
+    KeyControl := Screen.ActiveControl
   Else
-    KeyControl := Screen.ActiveControl;
+    KeyControl := Nil;
   If (KeyControl = Self) Or (Assigned(KeyControl) And ContainsControl(KeyControl)) Then
     Result := True;
   Result := Result Or Focused;
   { A popup or child scrollbar can clear Focused while this window still
     delivers keys. That gap is not another control taking ActiveControl. }
-  If FOwnsCaret And ((Not Assigned(KeyControl)) Or (KeyControl = Self) Or ContainsControl(KeyControl)) Then
+  If FOwnsCaret And ((Not Assigned(KeyControl)) Or (KeyControl = Self) Or
+    (Assigned(KeyControl) And ContainsControl(KeyControl))) Then
     Result := True;
 End;
 
