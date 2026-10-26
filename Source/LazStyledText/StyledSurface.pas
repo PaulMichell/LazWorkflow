@@ -24,12 +24,17 @@ Type
     FContentHeight: Int64;
     FContentWidth: Integer;
     FShowVertical, FShowHorizontal: Boolean;
+    FWantVertical: Boolean;
+    FAutoHideVertical, FAdjustingAutoBar: Boolean;
+    FScrollStyle: TScrollStyle;
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
     Procedure UpdateScrollbarBounds;
     Procedure DoScroll(Sender: TObject);
     Procedure SetScrollTop(Value: Int64);
     Procedure SetScrollLeft(Value: Integer);
+    Procedure SetScrollStyle(Value: TScrollStyle);
+    Function UpdateAutoVerticalBar: Boolean;
     Function GetBufferCanvas: TCanvas;
   Protected
     Procedure Paint; Override;
@@ -42,6 +47,8 @@ Type
     Procedure ConfigureCanvas;
     Procedure SetExtent(NewWidth: Integer; NewHeight: Int64);
     Procedure SetScrollbars(Vertical, Horizontal: Boolean);
+    { Descendants return False while a partial layout must not show or hide the bar. }
+    Function IsLayoutSettled: Boolean; Virtual;
     Property BufferCanvas: TCanvas Read GetBufferCanvas;
   Public
     Constructor Create(OwnerComponent: TComponent); Override;
@@ -52,6 +59,8 @@ Type
     Property Renderer: TStyledCanvas Read FRenderer;
     Property ScrollTop: Int64 Read FScrollTop Write SetScrollTop;
     Property ScrollLeft: Integer Read FScrollLeft Write SetScrollLeft;
+    { ssAutoVertical hides the bar when the content fits. Other styles keep the previous always-on bars. }
+    Property ScrollBars: TScrollStyle Read FScrollStyle Write SetScrollStyle;
     Property ContentHeight: Int64 Read FContentHeight;
     Property ContentWidth: Integer Read FContentWidth;
     Property LastPaintMilliseconds: QWord Read FLastPaintMilliseconds;
@@ -134,11 +143,76 @@ End;
 
 Procedure TStyledSurface.SetScrollbars(Vertical, Horizontal: Boolean);
 Begin
+  FAutoHideVertical := False;
+  FWantVertical := Vertical;
   FShowVertical := Vertical;
   FShowHorizontal := Horizontal;
+  If Vertical And Horizontal Then
+    FScrollStyle := ssBoth
+  Else If Vertical Then
+    FScrollStyle := ssVertical
+  Else If Horizontal Then
+    FScrollStyle := ssHorizontal
+  Else
+    FScrollStyle := ssNone;
   VerticalBar.Visible := Vertical;
   HorizontalBar.Visible := Horizontal;
   Resize;
+End;
+
+Procedure TStyledSurface.SetScrollStyle(Value: TScrollStyle);
+Begin
+  If FScrollStyle = Value Then
+    Exit;
+  If Value <> ssAutoVertical Then
+    Begin
+      Case Value Of
+        ssHorizontal, ssAutoHorizontal: SetScrollbars(False, True);
+        ssVertical: SetScrollbars(True, False);
+        ssBoth, ssAutoBoth: SetScrollbars(True, True);
+      Else
+        SetScrollbars(False, False);
+      End;
+      Exit;
+    End;
+  FScrollStyle := ssAutoVertical;
+  FAutoHideVertical := True;
+  FWantVertical := True;
+  FShowHorizontal := False;
+  FShowVertical := False;
+  HorizontalBar.Visible := False;
+  VerticalBar.Visible := False;
+  Resize;
+End;
+
+Function TStyledSurface.IsLayoutSettled: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TStyledSurface.UpdateAutoVerticalBar: Boolean;
+Var
+  NeedBar: Boolean;
+Begin
+  Result := False;
+  If (Not FAutoHideVertical) Or (Not FWantVertical) Or FAdjustingAutoBar Or (Not IsLayoutSettled) Then
+    Exit;
+  NeedBar := FContentHeight > ViewRect.Height;
+  If NeedBar = FShowVertical Then
+    Exit;
+  Result := True;
+  FAdjustingAutoBar := True;
+  Try
+    FShowVertical := NeedBar;
+    VerticalBar.Visible := NeedBar;
+    If Not NeedBar Then
+      FScrollTop := 0;
+    UpdateScrollbarBounds;
+    GeometryChanged;
+    Invalidate;
+  Finally
+    FAdjustingAutoBar := False;
+  End;
 End;
 
 Procedure TStyledSurface.UpdateScrollbarBounds;
@@ -205,6 +279,9 @@ Begin
   FScrollTop := EnsureRange(FScrollTop, Int64(0), Max(Int64(0), FContentHeight - Bounds.Height));
   FScrollLeft := EnsureRange(FScrollLeft, 0, Max(0, FContentWidth - Bounds.Width));
   If Not Assigned(VerticalBar) Then Exit;
+  { A visibility change relayouts at the new width and publishes the bar from that pass. }
+  If UpdateAutoVerticalBar Then
+    Exit;
   UpdatingBars := True;
   Try
     Maximum := Max(Int64(0), FContentHeight - Bounds.Height);

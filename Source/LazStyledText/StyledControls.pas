@@ -66,6 +66,7 @@ Type
     Procedure DestroyWnd; Override;
     Procedure PaintContent(Const Clip: TRect; OriginX: Integer; OriginY: Int64); Override;
     Procedure GeometryChanged; Override;
+    Function IsLayoutSettled: Boolean; Override;
     Procedure Scrolled; Override;
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
@@ -250,6 +251,11 @@ Begin
   If Not Assigned(FDocument) Then Exit;
   ConfigureCanvas;
   If (LastWidth <> ViewRect.Width) Or (KnownGeneration <> Renderer.Generation) Then ResetLayout;
+End;
+
+Function TCustomStyledText.IsLayoutSettled: Boolean;
+Begin
+  Result := Assigned(FDocument) And (WorkIndex >= FDocument.Count);
 End;
 
 Procedure TCustomStyledText.DoDocumentChange(Sender: TObject; First, Removed, Added: Integer);
