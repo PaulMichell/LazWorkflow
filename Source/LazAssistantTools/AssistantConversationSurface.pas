@@ -909,7 +909,7 @@ Begin
     Begin
       Fragment := FLayout[I].Fragment;
       TileH := 0;
-      If FLayout[I].Kind = tbkUser Then TileH := FLayout.ImageRowHeight(I);
+      If Length(FLayout[I].Images) > 0 Then TileH := FLayout.ImageRowHeight(I);
       If FLayout[I].Visible And (Assigned(Fragment) Or (TileH > 0)) Then
         Begin
           If FLayout[I].Kind In [tbkUser, tbkAnswer] Then
@@ -1031,7 +1031,8 @@ Begin
   Result.Position := HitPosition(X, Y);
   Result.ImageIndex := -1;
   I := FLayout.IndexOf(Result.Position.Key);
-  If (I < 0) Or (FLayout[I].Kind <> tbkUser) Or (Length(FLayout[I].Images) = 0) Then Exit;
+  If (I < 0) Or (Length(FLayout[I].Images) = 0) Then Exit;
+  If Not (FLayout[I].Kind In [tbkUser, tbkTool, tbkNote]) Then Exit;
   ContentW := FLayout.ImageContentWidth(I);
   ContentLeft := ViewRect.Left + FLayout[I].Left + FLayout[I].Padding;
   If (X < ContentLeft) Or (X >= ContentLeft + ContentW) Then Exit;

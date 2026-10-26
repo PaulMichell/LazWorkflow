@@ -73,8 +73,12 @@ Type
     { Store ids and names on the user block, creating that block when the prompt is empty. }
     Procedure SetUserImages(Const Ids, Names: Array Of String);
     Procedure SetUserImageRefs(Const Refs: TTraceImageRefArray);
-    { A later user block for an image a tool just stored. Empty words; the picture is the content. }
+    { A picture the user attached to a steer. Not a model image. }
     Procedure AppendUserImages(Const ImagesJson: String);
+    { Model pictures stay on the tool that returned them. They are not a user prompt. }
+    Procedure AttachBlockImages(Block: TTraceBlock; Const ImagesJson: String);
+    { Saved traces used to store those pictures as empty user cards. Fold them back. }
+    Procedure FoldModelImageCards;
     Function AddNote(Const Text: String): TTraceBlock;
     Function AddSteer(Const Text: String): TTraceBlock;
     Function FindLatestSteer: TTraceBlock;
@@ -404,12 +408,11 @@ Begin
     End;
 End;
 
-Procedure TAssistantTrace.AppendUserImages(Const ImagesJson: String);
+Function ImageRefsFromJsonText(Const ImagesJson: String): TTraceImageRefArray;
 Var
   Data: TJSONData;
-  Block: TTraceBlock;
-  Refs: TTraceImageRefArray;
 Begin
+  Result := Nil;
   If Trim(ImagesJson) = '' Then Exit;
   Data := Nil;
   Try
@@ -418,13 +421,75 @@ Begin
     Except
       Exit;
     End;
-    Refs := TraceImagesFromJson(Data);
+    Result := TraceImagesFromJson(Data);
   Finally
     Data.Free;
   End;
+End;
+
+Procedure AppendImageRefs(Block: TTraceBlock; Const Refs: TTraceImageRefArray);
+Var
+  Base, I: Integer;
+Begin
+  If (Not Assigned(Block)) Or (Length(Refs) = 0) Then Exit;
+  Base := Length(Block.ImageRefs);
+  SetLength(Block.ImageRefs, Base + Length(Refs));
+  For I := 0 To High(Refs) Do
+    Block.ImageRefs[Base + I] := Refs[I];
+End;
+
+Procedure TAssistantTrace.AppendUserImages(Const ImagesJson: String);
+Var
+  Block: TTraceBlock;
+  Refs: TTraceImageRefArray;
+Begin
+  Refs := ImageRefsFromJsonText(ImagesJson);
   If Length(Refs) = 0 Then Exit;
   Block := AddUser('');
   If Assigned(Block) Then Block.ImageRefs := Refs;
+End;
+
+Procedure TAssistantTrace.AttachBlockImages(Block: TTraceBlock; Const ImagesJson: String);
+Begin
+  AppendImageRefs(Block, ImageRefsFromJsonText(ImagesJson));
+End;
+
+Procedure TAssistantTrace.FoldModelImageCards;
+Var
+  I: Integer;
+  Block, Previous: TTraceBlock;
+Begin
+  I := 0;
+  While I < FBlocks.Count Do
+    Begin
+      Block := TTraceBlock(FBlocks[I]);
+      If (Block.Kind <> tbkUser) Or (Trim(Block.Body) <> '') Or (Length(Block.ImageRefs) = 0) Then
+        Begin
+          Inc(I);
+          Continue;
+        End;
+      Previous := Nil;
+      If I > 0 Then
+        Previous := TTraceBlock(FBlocks[I - 1]);
+      { A steer picture is a prompt the user sent. A tool picture is not. }
+      If Assigned(Previous) And (Previous.Kind = tbkSteer) Then
+        Begin
+          Inc(I);
+          Continue;
+        End;
+      If Assigned(Previous) And (Previous.Kind = tbkTool) Then
+        AppendImageRefs(Previous, Block.ImageRefs)
+      Else
+        Begin
+          Block.Kind := tbkNote;
+          Block.Title := 'Image';
+          If Length(Block.ImageRefs) > 0 Then
+            Block.Title := TraceImageFileName(Block.ImageRefs[0]);
+          Inc(I);
+          Continue;
+        End;
+      FBlocks.Delete(I);
+    End;
 End;
 
 Function TAssistantTrace.AddNote(Const Text: String): TTraceBlock;
@@ -908,7 +973,7 @@ Begin
         Obj.Add('loop', Block.LoopIndex);
         Obj.Add('ok', Block.Ok);
         Obj.Add('duration_ms', Block.DurationMs);
-        If (Block.Kind = tbkUser) And (Length(Block.ImageRefs) > 0) Then
+        If Length(Block.ImageRefs) > 0 Then
           Obj.Add('images', TraceImagesToJson(Block.ImageRefs));
         Arr.Add(Obj);
       End;
@@ -945,7 +1010,7 @@ Begin
         If Event.Text <> '' Then
           Block.Body := Event.Text;
         If Event.AttachmentsJson <> '' Then
-          AppendUserImages(Event.AttachmentsJson);
+          AttachBlockImages(Block, Event.AttachmentsJson);
         If Not Event.Ok Then
           Begin
             Block.Collapsed := False;
@@ -1079,6 +1144,7 @@ Begin
   If (Trim(ResponseText) <> '') And (JoinedAnswers = '') Then
     EnsureAnswer.Body := ResponseText;
   FinishReplay;
+  FoldModelImageCards;
   Result := Count > 0;
 End;
 
@@ -1130,9 +1196,9 @@ Begin
         Block.Ok := Obj.Get('ok', True);
         Block.DurationMs := Obj.Get('duration_ms', 0);
         Block.Running := False;
-        If Block.Kind = tbkUser Then
-          Block.ImageRefs := TraceImagesFromJson(Obj.Find('images'));
+        Block.ImageRefs := TraceImagesFromJson(Obj.Find('images'));
       End;
+    FoldModelImageCards;
   Finally
     Data.Free;
   End;

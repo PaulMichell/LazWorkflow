@@ -405,11 +405,54 @@ Begin
   End;
 End;
 
+Procedure TestToolImagesAreNotUserCards;
+Var
+  Trace: TAssistantTrace;
+  Event: TAssistantEvent;
+  Tool: TTraceBlock;
+  I, UserImages: Integer;
+Begin
+  Trace := TAssistantTrace.Create;
+  Try
+    Event := Default(TAssistantEvent);
+    Event.Kind := aekToolStarted;
+    Event.ToolId := 'call_img';
+    Event.ToolName := 'read_image';
+    Event.Text := '{"path":"layout.jpg"}';
+    Trace.ApplyEvent(Event);
+    Event := Default(TAssistantEvent);
+    Event.Kind := aekToolCompleted;
+    Event.ToolId := 'call_img';
+    Event.ToolName := 'read_image';
+    Event.Ok := True;
+    Event.Text := 'Read.';
+    Event.AttachmentsJson := '[{"id":"img9","name":"layout.jpg","display":"Documents/layout.jpg","width":80,"height":40}]';
+    Trace.ApplyEvent(Event);
+    Tool := Trace.FindTool('call_img');
+    Check('tool keeps the picture', Assigned(Tool) And (Length(Tool.ImageRefs) = 1) And (Tool.ImageRefs[0].Id = 'img9'));
+    UserImages := 0;
+    For I := 0 To Trace.Count - 1 Do
+      If (Trace[I].Kind = tbkUser) And (Length(Trace[I].ImageRefs) > 0) Then
+        Inc(UserImages);
+    Check('tool picture is not a user card', UserImages = 0);
+    Trace.AddUser('');
+    SetLength(Trace[Trace.Count - 1].ImageRefs, 1);
+    Trace[Trace.Count - 1].ImageRefs[0] := Tool.ImageRefs[0];
+    Trace[Trace.Count - 1].ImageRefs[0].Id := 'img9b';
+    Trace.FoldModelImageCards;
+    Check('saved user picture folds onto the tool', (Length(Tool.ImageRefs) = 2) And
+      (Tool.ImageRefs[1].Id = 'img9b') And (Trace.Count = 1));
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestBlocks;
   TestImageRowTallerThanText;
   TestSteerImages;
+  TestToolImagesAreNotUserCards;
   TestEnsureUser;
   TestEventOrder;
   TestToolCaptionsAndResults;

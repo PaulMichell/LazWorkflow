@@ -255,7 +255,8 @@ Var
   I: Integer;
 Begin
   SetLength(Section.Images, 0);
-  If (Not Assigned(Block)) Or (Block.Kind <> tbkUser) Then Exit;
+  If (Not Assigned(Block)) Or (Length(Block.ImageRefs) = 0) Then Exit;
+  If Not (Block.Kind In [tbkUser, tbkTool, tbkNote]) Then Exit;
   SetLength(Section.Images, Length(Block.ImageRefs));
   For I := 0 To High(Block.ImageRefs) Do
     Section.Images[I] := Block.ImageRefs[I];
@@ -404,7 +405,7 @@ Begin
       If Not Section.Visible Then Continue;
       If Section.Collapsed Then H := Section.ShortHeight
       Else H := Section.FullHeight;
-      If Section.Kind = tbkUser Then
+      If Length(Section.Images) > 0 Then
         H := H + UserImageRowHeight(Section.Images, Max(1, Section.OuterWidth - Section.Padding * 2), FPixelsPerInch);
       SetHeight(Heights, I, Max(Int64(1), H) + Section.Padding * 2 + Round(10 * FPixelsPerInch / 96));
       LastVisible := I;
