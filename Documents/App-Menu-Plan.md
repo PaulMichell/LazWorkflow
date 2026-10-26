@@ -169,7 +169,7 @@ The index row's title updates when the host title changes. Prompt preview of the
 
 ### 5.3 Review while disconnected
 
-Status: not started
+Status: complete
 
 While the link is not live, the conversation page shows the open cached conversation, including its live blob if the drop happened mid-turn. Add a list control that is available only while disconnected: a text button "Cached" on the conversation page header row, opening a dialog of the index rows for the last fingerprint. Choosing a row loads that file into the conversation page and does not open a socket. Back returns to the list. No drawer, no mode change, no plan run.
 
