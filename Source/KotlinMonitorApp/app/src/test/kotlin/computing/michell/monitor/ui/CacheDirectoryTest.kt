@@ -123,6 +123,31 @@ class CacheDirectoryTest {
   }
 
   @Test
+  fun switchingProjectRootDoesNotOverwriteThePreviousCurrent() {
+    val root = tempRoot()
+    try {
+      val store = OfflineStore(root)
+      store.save("host", "/old", "current", "Old title", screen("Old title"), emptyList(), 1L)
+      store.save("host", "/work", "current", "New title", screen("New title"), emptyList(), 2L)
+      val index = store.loadIndex()
+      assertEquals(2, index.size)
+      val old = index.single { it.projectRoot == "/old" }
+      val next = index.single { it.projectRoot == "/work" }
+      assertEquals("current", old.conversationId)
+      assertEquals("current", next.conversationId)
+      assertEquals("Old title", store.loadConversation(old.fileName)?.planTitle)
+      assertEquals("New title", store.loadConversation(next.fileName)?.planTitle)
+      store.save("host", "/work", "current", "Renamed", screen("Renamed"), emptyList(), 3L)
+      val updated = store.loadIndex()
+      assertEquals(2, updated.size)
+      assertEquals("Renamed", updated.single { it.projectRoot == "/work" }.title)
+      assertEquals("Old title", updated.single { it.projectRoot == "/old" }.title)
+    } finally {
+      root.deleteRecursively()
+    }
+  }
+
+  @Test
   fun aClosedScreenIsFiledBesideItsImageId() {
     val root = tempRoot()
     try {

@@ -531,8 +531,10 @@ private fun MonitorUi.withMirror(place: MirrorPlace): MonitorUi {
 
 private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): MonitorUi {
   val hasScreen = state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()
-  return state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
+  val next = state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
     hello.projectRoot, hello.title, hasScreen))
+  if (next.catchingUp || hello.epoch != next.hostEpoch || hello.title.isEmpty() || hello.title == next.conversationTitle) return next
+  return next.copy(conversationTitle = hello.title)
 }
 
 private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {
@@ -1373,10 +1375,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun writeCache(ui: MonitorUi, await: Boolean) {
-    if (suppressCache || !worthCaching(ui)) return
+    if (suppressCache) return
+    val target = cacheSaveTarget(ui) ?: return
     val fingerprint = cacheFingerprint(store.load().fingerprint)
-    val conversationId = ui.conversationId.ifEmpty { "current" }
-    val title = cacheTitle(ui.conversationTitle, ui.turns, ui.live, ui.history.values.toList())
     val document = offlineDocument(ui)
     val images = cachedImageBytes(ui)
     val serial = synchronized(cacheGate) { ++cacheWriteSerial }
@@ -1384,7 +1385,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       synchronized(cacheGate) {
         if (suppressCache || serial != cacheWriteSerial) return@Runnable
         try {
-          offlineStore.save(fingerprint, ui.projectRoot, conversationId, title, document, images)
+          offlineStore.save(fingerprint, target.projectRoot, target.conversationId, target.title, document, images)
         } catch (error: Exception) {
           // A failed local copy must not drop the live session.
         }
@@ -1394,10 +1395,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     else viewModelScope.launch(Dispatchers.IO) { write.run() }
   }
 
-  private fun fileClosed(id: String, title: String, document: String) {
+  private fun fileClosed(id: String, title: String, projectRoot: String, document: String) {
     if (id.isEmpty()) return
     val fingerprint = cacheFingerprint(store.load().fingerprint)
-    val projectRoot = uiState.value.projectRoot
     val images = cachedImageBytes(uiState.value)
     viewModelScope.launch(Dispatchers.IO) {
       synchronized(cacheGate) {
@@ -1497,7 +1497,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     val before = uiState.value
     uiState.value = coordinator.state
-    if (cursorCommitted(before, uiState.value)) scheduleCacheSave()
+    if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value)) scheduleCacheSave()
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {
@@ -1511,7 +1511,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
-        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.document)
+        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.projectRoot, effect.document)
       }
     }
   }

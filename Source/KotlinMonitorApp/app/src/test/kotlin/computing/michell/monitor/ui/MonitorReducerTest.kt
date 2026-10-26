@@ -597,6 +597,13 @@ class MonitorReducerTest {
     assertEquals("conversation-2", replaced.conversationId)
     assertEquals("/work", replaced.projectRoot)
     assertEquals(1L, replaced.hostCursor)
+    val retitled = reduceMonitor(replaced, message(computing.michell.monitor.protocol.encodeHelloOk(
+      "hello-title",
+      computing.michell.monitor.protocol.HelloOkMessage("n", "host", "bb", 1, "conversation-2", "/work", "Renamed")
+    )))
+    assertEquals("bb", retitled.hostEpoch)
+    assertEquals("Renamed", retitled.conversationTitle)
+    assertEquals("Next", retitled.turns[0].promptPreview)
   }
 }
 

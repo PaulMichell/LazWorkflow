@@ -68,7 +68,7 @@ sealed class MonitorEffect {
   data object Prefetch : MonitorEffect()
   data object ClearCaches : MonitorEffect()
   data class DecodeImage(val message: MonitorMessage) : MonitorEffect()
-  data class FileClosed(val id: String, val title: String, val document: String) : MonitorEffect()
+  data class FileClosed(val id: String, val title: String, val projectRoot: String, val document: String) : MonitorEffect()
 }
 
 class MonitorCoordinator(
@@ -333,9 +333,11 @@ class MonitorCoordinator(
       effects += MonitorEffect.Send(encodeResume(session.nextCommandId(), applied.hostEpoch, applied.hostCursor))
     }
     if (!closedBefore && applied.closedPending) {
-      val document = encodeClosedScreen(applied.closedConversationId, applied.closedTitle, offlineDocument(applied))
+      val screen = offlineDocument(applied)
+      val title = cacheTitle(applied.closedTitle, applied.turns, applied.live, applied.history.values.toList())
+      val document = encodeClosedScreen(applied.closedConversationId, title, screen)
       if (document.isNotEmpty()) {
-        effects += MonitorEffect.FileClosed(applied.closedConversationId, applied.closedTitle, document)
+        effects += MonitorEffect.FileClosed(applied.closedConversationId, title, applied.projectRoot, document)
       }
       applied = applied.copy(closedPending = false)
     }

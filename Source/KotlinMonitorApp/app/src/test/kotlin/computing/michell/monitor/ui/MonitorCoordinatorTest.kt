@@ -638,6 +638,60 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun conversationClosedFilesTheScreenBeforeTheNewEpoch() {
+    val coordinator = coordinator()
+    val hello = computing.michell.monitor.protocol.HelloOkMessage(
+      "abc", "LazAssistantMonitor", "aa", 0, "current", "/old", "Host title"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodeHelloOk("hello-ok", hello)
+    )))
+    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
+    val snapshot = WireSnapshot(
+      emptyView().copy(canSend = true, signedIn = true),
+      listOf(shown),
+      shown,
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot))))
+    val closed = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodeConversationClosed("closed", "aa", 4, "conversation-1", "")
+    ))).orEmpty()
+    val filed = closed.filterIsInstance<MonitorEffect.FileClosed>().single()
+    assertEquals("conversation-1", filed.id)
+    assertEquals("/old", filed.projectRoot)
+    assertEquals("Shown", filed.title)
+    val document = computing.michell.monitor.protocol.decodeClosedScreen(filed.document)
+    assertEquals("Shown", document?.turns?.single()?.promptPreview)
+    val nextShot = WireSnapshot(
+      emptyView().copy(canSend = true, signedIn = true),
+      listOf(WireTurn(2, "turn-2", "build", "", "Next", "")),
+      WireTurn(3, "turn-3", "build", "", "Next live", "", live = true),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val catchup = computing.michell.monitor.protocol.WireCatchup(
+      "snapshot", "bb", 0, "conversation-2", "/work", "New", nextShot, emptyList()
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodeCatchup("catch", catchup)
+    )))
+    assertEquals("conversation-2", coordinator.state.conversationId)
+    assertEquals("/work", coordinator.state.projectRoot)
+    assertEquals("Next", coordinator.state.turns.single().promptPreview)
+    assertEquals("Shown", computing.michell.monitor.protocol.decodeClosedScreen(filed.document)?.turns?.single()?.promptPreview)
+  }
+
+  @Test
   fun helloOkSendsResumeWithTheCommittedCursor() {
     val coordinator = coordinator()
     openLive(coordinator, canSend = true, canSteer = false)

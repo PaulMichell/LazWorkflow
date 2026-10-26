@@ -89,21 +89,50 @@ fun cacheTurnCount(document: OfflineCacheDocument): Int {
 
 fun cacheTitle(title: String, turns: List<WireTurn>, live: WireTurn?, history: List<WireTurn>): String {
   if (title.isNotEmpty()) return title
+  return firstUserPromptPreview(turns, live, history)
+}
+
+/** Host title wins. Otherwise the prompt preview of the first user block. */
+fun firstUserPromptPreview(turns: List<WireTurn>, live: WireTurn?, history: List<WireTurn>): String {
+  val historyByIndex = history.associateBy { turn -> turn.turnIndex }
+  val ordered = ArrayList<WireTurn>()
   for (turn in turns) {
-    if (turn.promptPreview.isNotEmpty()) return turn.promptPreview
-  }
-  if (live != null && live.promptPreview.isNotEmpty()) return live.promptPreview
-  for (turn in history) {
-    if (turn.prompt.isNotEmpty()) return turn.prompt
-    val user = turn.blocks.firstOrNull { block -> block.kind == "user" && block.body.isNotEmpty() }
-    if (user != null) return user.body
+    val body = historyByIndex[turn.turnIndex]
+    ordered += if (body != null && body.blocks.any { block -> block.kind == "user" && block.body.isNotEmpty() }) body else turn
   }
   if (live != null) {
-    if (live.prompt.isNotEmpty()) return live.prompt
-    val user = live.blocks.firstOrNull { block -> block.kind == "user" && block.body.isNotEmpty() }
-    if (user != null) return user.body
+    val at = ordered.indexOfFirst { turn -> turn.turnIndex == live.turnIndex }
+    val liveUser = live.blocks.any { block -> block.kind == "user" && block.body.isNotEmpty() }
+    if (at < 0) ordered += live
+    else if (liveUser && ordered[at].blocks.none { block -> block.kind == "user" && block.body.isNotEmpty() }) ordered[at] = live
+  }
+  for (turn in ordered) {
+    val user = turn.blocks.firstOrNull { block -> block.kind == "user" && block.body.isNotEmpty() }
+    if (user != null) {
+      if (turn.promptPreview.isNotEmpty()) return turn.promptPreview
+      return user.body
+    }
+    if (turn.promptPreview.isNotEmpty()) return turn.promptPreview
+    if (turn.prompt.isNotEmpty()) return turn.prompt
   }
   return ""
+}
+
+data class CacheSaveTarget(val conversationId: String, val projectRoot: String, val title: String)
+
+/** `current` plus project root is one file. Another project root is another file. */
+fun cacheSaveTarget(ui: MonitorUi): CacheSaveTarget? {
+  if (!worthCaching(ui)) return null
+  val id = ui.conversationId.ifEmpty { "current" }
+  val history = ui.history.values.toList()
+  return CacheSaveTarget(id, ui.projectRoot, cacheTitle(ui.conversationTitle, ui.turns, ui.live, history))
+}
+
+fun cacheRowChanged(before: MonitorUi, after: MonitorUi): Boolean {
+  val next = cacheSaveTarget(after) ?: return false
+  val previous = cacheSaveTarget(before)
+  if (previous == null) return true
+  return next.conversationId != previous.conversationId || next.projectRoot != previous.projectRoot || next.title != previous.title
 }
 
 fun newestCacheEntry(entries: List<CacheIndexEntry>, fingerprint: String): CacheIndexEntry? {

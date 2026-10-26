@@ -4,6 +4,7 @@ package computing.michell.monitor.ui
 
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
+import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +42,33 @@ class OfflineCacheUiTest {
     assertEquals(LoadingImageLabel, imageTileLabel(false, null, false, true))
     assertEquals("Image unavailable: missing", imageTileLabel(false, null, true, false))
     assertEquals("", imageTileLabel(true, null, false, false))
+  }
+
+  @Test
+  fun anEmptyTitleUsesTheFirstUserPromptPreview() {
+    val user = WireBlock("user", "u1", "", "", "", "Anchor the composer", false, true, 0, emptyList())
+    val note = WireTurn(0, "note", "build", "", "", "")
+    val live = WireTurn(-2, "live", "build", "", "Anchor preview", "", blocks = listOf(user))
+    assertEquals("Release", cacheTitle("Release", listOf(note), live, emptyList()))
+    assertEquals("Anchor preview", cacheTitle("", listOf(note), live, emptyList()))
+    assertEquals("Shown", cacheTitle("", listOf(WireTurn(1, "t", "build", "", "Shown", "")), null, emptyList()))
+    assertEquals("Anchor the composer", cacheTitle("", emptyList(), live.copy(promptPreview = ""), emptyList()))
+  }
+
+  @Test
+  fun currentOnAnotherProjectRootIsADifferentFile() {
+    val oldRoot = MonitorUi(conversationId = "current", projectRoot = "/old", draft = "keep")
+    val newRoot = oldRoot.copy(projectRoot = "/work", conversationTitle = "Renamed")
+    val oldTarget = cacheSaveTarget(oldRoot)
+    val newTarget = cacheSaveTarget(newRoot)
+    assertEquals("current", oldTarget!!.conversationId)
+    assertEquals("/old", oldTarget.projectRoot)
+    assertEquals("current", newTarget!!.conversationId)
+    assertEquals("/work", newTarget.projectRoot)
+    assertEquals("Renamed", newTarget.title)
+    assertTrue(cacheRowChanged(oldRoot, newRoot))
+    assertFalse(cacheConversationFileName("aa", oldTarget.projectRoot, oldTarget.conversationId) ==
+      cacheConversationFileName("aa", newTarget.projectRoot, newTarget.conversationId))
   }
 
   @Test
