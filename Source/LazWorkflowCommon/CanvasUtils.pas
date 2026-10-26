@@ -16,6 +16,11 @@ Uses
 /// The first paint cannot read those pixels: a canvas read comes back black and darkens the edge.
 Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor);
 
+/// Draws an antialiased disk over what is already painted. Radius is the 50% edge.
+/// Uses the same coverage grid as DrawSmoothRing. Uncovered pixels are left untouched, so paths remain.
+/// Partial pixels blend against Background. Do not read the canvas: a read comes back black and darkens the edge.
+Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill, Background: TColor);
+
 /// Draws an antialiased ring over what is already painted. Radius is the stroke centreline.
 /// StrokeWidth is the full thickness. Uncovered pixels are left untouched, so lane dots and paths remain.
 /// Partial pixels blend against Background. Do not read the canvas: a read comes back black and darkens the edge.
@@ -160,7 +165,9 @@ Begin
   End;
 End;
 
-Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke, Background: TColor);
+{ InnerRadius < 0 fills a disk of OuterRadius. Otherwise the stroke is the band between the two radii.
+  Both shapes use one 8x8 coverage grid so a lane dot cannot be softer or harder than the checkout ring. }
+Procedure DrawCoverageCircle(Target: TCanvas; CentreX, CentreY, OuterRadius, InnerRadius: Single; Edge, Background: TColor);
 
   Function Clamp01(Value: Single): Single;
   Begin
@@ -190,20 +197,28 @@ Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth:
       Result := Round(Value);
   End;
 
+  Function SampleCoverage(Dist: Single): Single;
+  Begin
+    If InnerRadius < 0 Then
+      Result := Clamp01(OuterRadius + 0.5 - Dist)
+    Else
+      Begin
+        Result := Clamp01(OuterRadius + 0.5 - Dist) - Clamp01(InnerRadius + 0.5 - Dist);
+        If Result < 0 Then
+          Result := 0;
+      End;
+  End;
+
 Var
   Left, Top, Right, Bottom, W, H, X, Y, SampleX, SampleY, SampleGrid, Samples: Integer;
-  OuterRadius, InnerRadius, SampleScale, Dx, Dy, Dist, RingCoverage, CoverageSum: Single;
+  SampleScale, Dx, Dy, Dist, Coverage, CoverageSum: Single;
   SumR, SumG, SumB: Single;
-  StrokeColor, BackColor, Pixel: TFPColor;
+  EdgeColor, BackColor, Pixel: TFPColor;
   Bitmap: TBitmap;
   Image: TLazIntfImage;
 Begin
-  If (Not Assigned(Target)) Or (StrokeWidth <= 0) Or (Radius <= 0) Then
+  If (Not Assigned(Target)) Or (OuterRadius <= 0) Then
     Exit;
-  OuterRadius := Radius + StrokeWidth / 2;
-  InnerRadius := Radius - StrokeWidth / 2;
-  If InnerRadius < 0 Then
-    InnerRadius := 0;
   { Coverage falls to zero half a pixel outside the outer edge. Include those pixels. }
   Left := Floor(CentreX - OuterRadius - 0.5);
   Top := Floor(CentreY - OuterRadius - 0.5);
@@ -213,7 +228,7 @@ Begin
   H := Bottom - Top;
   If (W < 2) Or (H < 2) Or (W > 256) Or (H > 256) Then
     Exit;
-  StrokeColor := TColorToFPColor(ColorToRGB(Stroke));
+  EdgeColor := TColorToFPColor(ColorToRGB(Edge));
   BackColor := TColorToFPColor(ColorToRGB(Background));
   { Finer than the card grid: a checkout ring is only a few pixels across. }
   SampleGrid := 8;
@@ -237,13 +252,11 @@ Begin
                 Dx := (Left + X + (SampleX + 0.5) * SampleScale) - CentreX;
                 Dy := (Top + Y + (SampleY + 0.5) * SampleScale) - CentreY;
                 Dist := Sqrt(Dx * Dx + Dy * Dy);
-                RingCoverage := Clamp01(OuterRadius + 0.5 - Dist) - Clamp01(InnerRadius + 0.5 - Dist);
-                If RingCoverage < 0 Then
-                  RingCoverage := 0;
-                CoverageSum := CoverageSum + RingCoverage;
-                SumR := SumR + MixChannel(BackColor.Red, StrokeColor.Red, RingCoverage);
-                SumG := SumG + MixChannel(BackColor.Green, StrokeColor.Green, RingCoverage);
-                SumB := SumB + MixChannel(BackColor.Blue, StrokeColor.Blue, RingCoverage);
+                Coverage := SampleCoverage(Dist);
+                CoverageSum := CoverageSum + Coverage;
+                SumR := SumR + MixChannel(BackColor.Red, EdgeColor.Red, Coverage);
+                SumG := SumG + MixChannel(BackColor.Green, EdgeColor.Green, Coverage);
+                SumB := SumB + MixChannel(BackColor.Blue, EdgeColor.Blue, Coverage);
               End;
           Pixel.Red := AverageChannel(SumR, Samples);
           Pixel.Green := AverageChannel(SumG, Samples);
@@ -271,6 +284,26 @@ Begin
   Finally
     Image.Free;
   End;
+End;
+
+Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill, Background: TColor);
+Begin
+  If Radius <= 0 Then
+    Exit;
+  DrawCoverageCircle(Target, CentreX, CentreY, Radius, -1, Fill, Background);
+End;
+
+Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke, Background: TColor);
+Var
+  OuterRadius, InnerRadius: Single;
+Begin
+  If (StrokeWidth <= 0) Or (Radius <= 0) Then
+    Exit;
+  OuterRadius := Radius + StrokeWidth / 2;
+  InnerRadius := Radius - StrokeWidth / 2;
+  If InnerRadius < 0 Then
+    InnerRadius := 0;
+  DrawCoverageCircle(Target, CentreX, CentreY, OuterRadius, InnerRadius, Stroke, Background);
 End;
 
 End.

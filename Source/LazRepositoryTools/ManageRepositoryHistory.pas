@@ -503,7 +503,8 @@ End;
 Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
-  TextH, TextY, EdgePenW, MsgPad, NodePenW, RingPenW, MarkerX, MarkerY, MarkerRow: Integer;
+  TextH, TextY, EdgePenW, MsgPad, RingPenW, MarkerX, MarkerY, MarkerRow: Integer;
+  MarkerRadius, RingInner: Single;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
@@ -518,8 +519,15 @@ Begin
   NodeR := GraphNodeRadius;
   Ring := Max(2, GraphScale(2));
   RingPenW := Max(1, GraphScale(2));
-  NodePenW := Max(1, GraphScale(1));
   EdgePenW := Max(1, GraphScale(2));
+  { 50% edge stays at least one pixel inside the ring's inner 50% edge, so the
+    half-pixel coverage ramps do not meet and the checkout ring stays clear. }
+  RingInner := NodeR + Ring - RingPenW / 2;
+  MarkerRadius := NodeR;
+  If MarkerRadius > RingInner - 1 Then
+    MarkerRadius := RingInner - 1;
+  If MarkerRadius < 1 Then
+    MarkerRadius := 1;
   MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
     Begin
@@ -584,10 +592,7 @@ Begin
           Y := I * RH - Off;
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
-          Brush.Color := Col;
-          Pen.Color := Col;
-          Pen.Width := NodePenW;
-          Ellipse(X - NodeR, RowMidY(I) - NodeR, X + NodeR, RowMidY(I) + NodeR);
+          DrawSmoothDisk(FPaintBox.Canvas, X, RowMidY(I), MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex));
           If CommitIsCheckedOut(C) Then
             Begin
               MarkerRow := I;
