@@ -130,6 +130,8 @@ Begin
   S := Trim(Text);
   Result :=
     (S = 'Waiting for first token…') Or
+    (S = 'Waiting') Or
+    { Earlier builds published the longer phrase. A late snapshot must not become an error. }
     (S = 'Waiting for model…') Or
     (S = 'Running tools…') Or
     (S = 'Steering at next model gap…') Or

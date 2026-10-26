@@ -4055,7 +4055,7 @@ Begin
       FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, FCodexLaunchInstructions,
       ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
     FCodexRun.Start;
-    SetStreamPhase('Waiting for model…');
+    SetStreamPhase('Waiting');
     Result := True;
   Except
     On E: Exception Do
@@ -4078,7 +4078,7 @@ Begin
     FClaudeRun := TAssistantClaudeRun.Create(FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeLaunchPrompt,
       FClaudeDirectory, ClaudeRunTimeoutMs);
     FClaudeRun.Start;
-    SetStreamPhase('Waiting for model…');
+    SetStreamPhase('Waiting');
     Result := True;
   Except
     On E: Exception Do
@@ -4292,7 +4292,7 @@ Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
     If PendingTool Then
       Result := 'Running tools…'
     Else If RunSnapshot.State In [crsConnecting, crsReady, crsStartingThread, crsStartingTurn] Then
-      Result := 'Waiting for model…'
+      Result := 'Waiting'
     Else If RunSnapshot.Content <> '' Then
       Result := 'Streaming…'
     Else If RunSnapshot.Thinking <> '' Then
@@ -4477,7 +4477,7 @@ Begin
         FinishAssistantReply(Snapshot.ErrorText);
       End
     Else If FSending And (FStatusPhase = '') Then
-      SetStreamPhase('Waiting for model…');
+      SetStreamPhase('Waiting');
     If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) And FSending Then
       FTraceView.RefreshElapsed(FTrace);
   Finally

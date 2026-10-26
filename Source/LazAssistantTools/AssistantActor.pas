@@ -758,7 +758,7 @@ Begin
     Exit;
   InjectContinuation;
   LogEvent(aekLoopStarted, 'continuation');
-  EmitSnapshot(False, 'Waiting for model…', True);
+  EmitSnapshot(False, 'Waiting', True);
   Result := False;
 End;
 
@@ -2060,7 +2060,7 @@ Begin
       { Fresh answer channel per model loop; thinking is kept. }
       FContent := '';
       { After tools the previous snapshot stays 'Running tools…' unless we reset it. }
-      EmitSnapshot(False, 'Waiting for model…', True);
+      EmitSnapshot(False, 'Waiting', True);
       RequestJson := BuildRoundJson(Url);
       If FUseResponses Then
         FTriedResponses := True;
