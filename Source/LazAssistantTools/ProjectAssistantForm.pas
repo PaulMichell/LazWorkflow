@@ -4902,9 +4902,9 @@ Begin
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
-    StatusText := 'Ready'
+    StatusText := AssistantStatusReady
   Else
-    StatusText := 'Not signed in';
+    StatusText := AssistantStatusOffline;
   ModelText := Trim(FActiveModel);
   If ModelText = '' Then
     ModelText := 'Model';
@@ -6966,7 +6966,7 @@ Begin
       If FLiveThinking <> '' Then
         FContextUsed := FContextUsed + Length(FLiveThinking) Div 4;
       { Item 3.2 continues an unfinished decision instead of stopping here. }
-      StatusFooter.SetRightText('Ready');
+      StatusFooter.SetRightText(AssistantStatusReady);
     End;
   FStreamingActive := False;
   FLastTurnHadError := ResolvedError <> '';
@@ -9561,9 +9561,9 @@ Begin
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
-    View.StatusText := 'Ready'
+    View.StatusText := AssistantStatusReady
   Else
-    View.StatusText := 'Not signed in';
+    View.StatusText := AssistantStatusOffline;
   View.Model := Trim(FActiveModel);
   View.Backend := FActiveBackend;
   View.SignedIn := (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or

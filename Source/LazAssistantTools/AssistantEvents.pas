@@ -80,6 +80,9 @@ Const
   AssistantPhaseRunning = 'Running…';
   AssistantPhaseSteering = 'Steering…';
   AssistantPhaseConnecting = 'Connecting…';
+  { Idle slot. No ellipsis and no clock. }
+  AssistantStatusReady = 'Ready';
+  AssistantStatusOffline = 'Offline';
 
 { True for live status strings the actor puts on the stream callback (not terminal errors). }
 Function IsAssistantProgressStatus(Const Text: String): Boolean;
