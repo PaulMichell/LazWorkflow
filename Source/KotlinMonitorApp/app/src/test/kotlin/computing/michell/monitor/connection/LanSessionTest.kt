@@ -13,6 +13,7 @@ import computing.michell.monitor.protocol.encodeBye
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeTicks
+import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryDecodeFrame
@@ -198,7 +199,9 @@ class LanSessionTest {
     val hello = envelope(link.frames()[0])
     assertEquals(MessageKind.Hello, hello.kind)
     assertEquals("client-1", decodeHello(hello.payloadJson)!!.clientId)
-    link.push(frameOf(encodeHelloOk("host-1", "00112233445566778899aabbccddeeff", "LazAssistantMonitor")))
+    link.push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
+      "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+    ))))
     waitUntil { link.frames().size >= 3 }
     val auth = envelope(link.frames()[1])
     val refresh = envelope(link.frames()[2])

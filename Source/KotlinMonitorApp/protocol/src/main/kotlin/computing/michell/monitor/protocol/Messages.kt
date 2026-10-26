@@ -1319,6 +1319,16 @@ fun encodeOfflineCache(document: OfflineCacheDocument): String {
   return obj.build().toFpJson()
 }
 
+/** Filed when a conversation closes. The screen JSON is the existing cache document. */
+fun encodeClosedScreen(id: String, title: String, document: OfflineCacheDocument): String {
+  val screen = parseObject(encodeOfflineCache(document)) ?: return ""
+  val obj = JsonObjectBuilder()
+  obj.add("id", id)
+  obj.add("title", title)
+  obj.add("screen", screen)
+  return obj.build().toFpJson()
+}
+
 fun decodeOfflineCache(text: String): OfflineCacheDocument? {
   val obj = parseObject(text) ?: return null
   val turns = rowsFrom(obj.field("turns")) { turnFromJson(it, true) } ?: return null

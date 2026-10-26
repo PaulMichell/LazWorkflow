@@ -27,6 +27,11 @@ import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.encodeTurnData
+import computing.michell.monitor.protocol.WirePatch
+import computing.michell.monitor.protocol.WireCatchup
+import computing.michell.monitor.protocol.encodePatch
+import computing.michell.monitor.protocol.encodeCatchup
+import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -495,6 +500,91 @@ class MonitorReducerTest {
     val next = reduceTranscripts(listOf(partial), start)
     assertEquals(shown, next.live?.blocks)
   }
+
+  @Test
+  fun patchCursorAssemblesPartsAndDoesNotGuessAGap() {
+    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "", blocks = listOf(answerBlock("keep")))
+    val start = MonitorUi(
+      hostEpoch = "aa",
+      turns = listOf(shown),
+      live = shown,
+      view = emptyView().copy(busy = true, sending = true, planRunning = true, statusText = "Thinking…", phase = "thinking")
+    )
+    val partial = reduceMonitor(start, message(patchFrame("aa", 1, "one", 1, 2, true)))
+    assertEquals(0L, partial.hostCursor)
+    assertEquals("one", partial.live?.blocks?.single()?.body)
+    assertEquals("Shown", partial.turns[0].promptPreview)
+    val done = reduceMonitor(partial, message(patchFrame("aa", 1, "two", 2, 2, false)))
+    assertEquals(1L, done.hostCursor)
+    assertTrue(done.live?.blocks?.single()?.body?.contains("one") == true)
+    assertTrue(done.live?.blocks?.single()?.body?.contains("two") == true)
+    assertFalse(done.view.busy)
+    assertFalse(done.view.sending)
+    assertFalse(done.view.planRunning)
+    assertEquals("Thinking…", done.view.statusText)
+    assertEquals("live", connectionLabel(done, LinkPhase.Live))
+    val lower = reduceMonitor(done, message(patchFrame("aa", 0, "old", 1, 1, true)))
+    assertEquals(1L, lower.hostCursor)
+    assertFalse(lower.view.busy)
+    assertFalse(lower.live?.blocks?.single()?.body?.contains("old") == true)
+    val gap = reduceMonitor(done, message(patchFrame("aa", 4, "missing", 1, 1, true)))
+    assertTrue(gap.resumeOnce)
+    assertEquals(1L, gap.hostCursor)
+    assertFalse(gap.live?.blocks?.single()?.body?.contains("missing") == true)
+    val again = reduceMonitor(gap, message(patchFrame("aa", 9, "later", 1, 1, true)))
+    assertTrue(again.resumeOnce)
+    val transcript = reduceMonitor(done, message(transcript(9, "stale-transcript")))
+    assertEquals(done.live?.blocks, transcript.live?.blocks)
+    val other = reduceMonitor(done, message(patchFrame("bb", 1, "new-epoch", 1, 1, false)))
+    assertTrue(other.catchingUp)
+    assertEquals("aa", other.hostEpoch)
+    assertEquals("Shown", other.turns[0].promptPreview)
+    assertFalse(other.live?.blocks?.single()?.body?.contains("new-epoch") == true)
+  }
+
+  @Test
+  fun catchupSwitchesTheOpenKeyAndClosedKeepsTheScreen() {
+    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
+    val start = MonitorUi(
+      hostEpoch = "aa",
+      hostCursor = 4,
+      conversationId = "current",
+      projectRoot = "/old",
+      turns = listOf(shown),
+      live = shown
+    )
+    val closed = reduceMonitor(start, message(encodeConversationClosed("closed", "aa", 4, "conversation-1", "Archived")))
+    assertEquals("conversation-1", closed.closedConversationId)
+    assertEquals("Archived", closed.closedTitle)
+    assertTrue(closed.closedPending)
+    assertEquals("Shown", closed.turns[0].promptPreview)
+    assertEquals(shown, closed.live)
+    val snapshot = WireSnapshot(
+      emptyView().copy(canSend = true, phase = "idle"),
+      listOf(WireTurn(2, "turn-2", "build", "", "Next", "")),
+      WireTurn(3, "turn-3", "build", "", "Next live", "", live = true),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val catchup = WireCatchup("snapshot", "bb", 0, "conversation-2", "/work", "New", snapshot, emptyList())
+    val next = reduceMonitor(closed.copy(catchingUp = true, announcedEpoch = "bb"), message(encodeCatchup("catch", catchup)))
+    assertEquals("bb", next.hostEpoch)
+    assertEquals(0L, next.hostCursor)
+    assertFalse(next.catchingUp)
+    assertEquals("conversation-2", next.conversationId)
+    assertEquals("/work", next.projectRoot)
+    assertEquals("New", next.conversationTitle)
+    assertEquals("Next", next.turns[0].promptPreview)
+    val sameKey = WireCatchup("snapshot", "bb", 1, "conversation-2", "/work", "New", snapshot, emptyList())
+    val replaced = reduceMonitor(next, message(encodeCatchup("again", sameKey)))
+    assertEquals("conversation-2", replaced.conversationId)
+    assertEquals("/work", replaced.projectRoot)
+    assertEquals(1L, replaced.hostCursor)
+  }
 }
 
 private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {
@@ -525,6 +615,18 @@ private fun reduceTranscripts(frames: List<WireTranscript>, start: MonitorUi = M
     state = reduceMonitor(state, message(encoded))
   }
   return state
+}
+
+private fun answerBlock(body: String): WireBlock {
+  return WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
+}
+
+private fun patchFrame(epoch: String, cursor: Long, body: String, part: Int, partCount: Int, busy: Boolean): String {
+  val patch = WirePatch(
+    epoch, cursor, 1, "turn-1", listOf(answerBlock(body)), busy, false, false, "idle",
+    !busy, false, busy, 0, part, partCount
+  )
+  return encodePatch("patch-" + cursor.toString() + "-" + part.toString(), patch)
 }
 
 private fun transcript(revision: Int, body: String): String {

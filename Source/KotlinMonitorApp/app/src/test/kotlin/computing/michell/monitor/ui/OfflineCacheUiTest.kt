@@ -5,6 +5,8 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.encodeClosedScreen
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -33,6 +35,27 @@ class OfflineCacheUiTest {
     assertFalse(restored.view.canSend)
     assertEquals(OfflineBanner, restored.banner)
     assertEquals("offline", connectionLabel(restored, computing.michell.monitor.connection.LinkPhase.Idle))
+  }
+
+  @Test
+  fun aClosedFileIsNotDeletedWhenAnotherConversationIsFiled() {
+    val directory = File.createTempFile("monitor-cache", "dir")
+    directory.delete()
+    directory.mkdirs()
+    try {
+      val store = OfflineStore(File(directory, "offline-cache.json"))
+      val document = OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, "")
+      store.saveClosed("conversation-1", encodeClosedScreen("conversation-1", "Archived", document))
+      store.saveClosed("conversation-2", encodeClosedScreen("conversation-2", "Next", document))
+      val kept = File(directory, closedCacheName("conversation-1"))
+      assertTrue(kept.isFile)
+      assertTrue(kept.readText().contains("Archived"))
+      store.clear()
+      assertTrue(kept.isFile)
+      assertEquals("", closedCacheName("../escape"))
+    } finally {
+      directory.deleteRecursively()
+    }
   }
 
   @Test

@@ -58,9 +58,7 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MirrorPlace
 import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WirePatch
-import computing.michell.monitor.protocol.noteCatchupIdentity
 import computing.michell.monitor.protocol.noteHelloIdentity
-import computing.michell.monitor.protocol.notePatchIdentity
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
@@ -157,7 +155,12 @@ data class MonitorUi(
   val projectRoot: String = "",
   val conversationTitle: String = "",
   val closedConversationId: String = "",
-  val closedTitle: String = ""
+  val closedTitle: String = "",
+  val patchParts: Map<Int, List<WireBlock>> = emptyMap(),
+  val patchPartCount: Int = 0,
+  val patchOpenCursor: Long = 0,
+  val resumeOnce: Boolean = false,
+  val closedPending: Boolean = false
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -188,6 +191,7 @@ fun statusCaption(ui: MonitorUi, phase: LinkPhase): String {
 }
 
 fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
+  // Patch flags are authoritative. A lost status frame must not leave the label on busy.
   if (phase == LinkPhase.Live && !ui.disconnected) {
     if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
     return "live"
@@ -500,16 +504,128 @@ private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): Monitor
     hello.projectRoot, hello.title, hasScreen))
 }
 
-private fun applyPatchIdentity(state: MonitorUi, patch: WirePatch): MonitorUi {
-  return state.withMirror(notePatchIdentity(mirrorOf(state), patch.epoch, patch.cursor))
+private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {
+  if (patch.epoch.isEmpty()) return state
+  if (state.catchingUp) return state
+  if (state.hostEpoch.isNotEmpty() && patch.epoch != state.hostEpoch) {
+    return state.copy(catchingUp = true, announcedEpoch = patch.epoch)
+  }
+  val incomplete = state.patchOpenCursor != 0L && state.patchParts.size < state.patchPartCount
+  val acceptSame = incomplete && patch.cursor == state.hostCursor && state.patchOpenCursor == patch.cursor
+  val acceptNext = patch.cursor == state.hostCursor + 1L &&
+    (state.patchOpenCursor == 0L || state.patchOpenCursor == patch.cursor)
+  if (patch.cursor < state.hostCursor + 1L && !acceptSame) return state
+  if (!acceptNext && !acceptSame) {
+    if (state.resumeOnce) return state
+    return state.copy(resumeOnce = true)
+  }
+  return storePatchPart(state, patch)
 }
 
-private fun applyCatchupIdentity(state: MonitorUi, catchup: WireCatchup): MonitorUi {
-  val next = noteCatchupIdentity(mirrorOf(state), catchup.epoch, catchup.cursor, catchup.mode) ?: return state
-  val snapshot = catchup.snapshot
-  val base = if (catchup.mode == "snapshot" && snapshot != null) applySnapshot(state, snapshot) else state
-  return base.withMirror(next).copy(conversationId = catchup.conversationId, projectRoot = catchup.projectRoot,
-    conversationTitle = catchup.title)
+private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
+  return state.copy(
+    planRunning = patch.planRunning,
+    view = state.view.copy(
+      busy = patch.busy,
+      sending = patch.sending,
+      planRunning = patch.planRunning,
+      phase = patch.phase,
+      canSend = patch.canSend,
+      canSteer = patch.canSteer,
+      canStop = patch.canStop,
+      elapsedMs = patch.elapsedMs
+    )
+  )
+}
+
+private fun liveFromPatch(state: MonitorUi, patch: WirePatch, blocks: List<WireBlock>): WireTurn {
+  val prior = state.live
+  return WireTurn(
+    turnIndex = if (patch.turnIndex != 0) patch.turnIndex else prior?.turnIndex ?: -2,
+    id = patch.turnId.ifEmpty { prior?.id ?: "" },
+    mode = prior?.mode ?: state.view.mode,
+    createdAt = prior?.createdAt ?: "",
+    promptPreview = prior?.promptPreview ?: "",
+    errorText = prior?.errorText ?: "",
+    prompt = prior?.prompt ?: "",
+    thinking = prior?.thinking ?: "",
+    response = prior?.response ?: "",
+    live = true,
+    blocks = blocks,
+    images = prior?.images ?: emptyList()
+  )
+}
+
+private fun assemblePatchParts(parts: Map<Int, List<WireBlock>>, count: Int): List<WireBlock> {
+  val blocks = mutableListOf<WireBlock>()
+  for (part in 1..count) {
+    val frame = parts[part] ?: continue
+    for (block in frame) {
+      val previous = blocks.lastOrNull()
+      if (previous != null && previous.blockId.isNotEmpty() && previous.blockId == block.blockId && previous.kind == block.kind) {
+        blocks[blocks.lastIndex] = previous.copy(body = previous.body + block.body)
+      } else {
+        blocks += block
+      }
+    }
+  }
+  return blocks
+}
+
+private fun storePatchPart(state: MonitorUi, patch: WirePatch): MonitorUi {
+  if (patch.part < 1 || patch.partCount < 1 || patch.part > patch.partCount) return state
+  val sameOpen = state.patchOpenCursor == patch.cursor
+  if (sameOpen && state.patchPartCount != 0 && patch.partCount != state.patchPartCount) return state
+  val prior = if (sameOpen) state.patchParts else emptyMap()
+  val stored = if (prior.containsKey(patch.part)) prior else prior + (patch.part to patch.blocks)
+  val flagged = applyPatchFlags(state, patch)
+  val assembled = assemblePatchParts(stored, patch.partCount)
+  val shown = if (assembled.isEmpty() && flagged.live != null) flagged.live.blocks else assembled
+  val complete = (1..patch.partCount).all { part -> stored.containsKey(part) }
+  return flagged.copy(
+    hostEpoch = patch.epoch,
+    hostCursor = if (complete) patch.cursor else flagged.hostCursor,
+    patchOpenCursor = if (complete) 0L else patch.cursor,
+    patchPartCount = if (complete) 0 else patch.partCount,
+    patchParts = if (complete) emptyMap() else stored,
+    live = liveFromPatch(flagged, patch, shown),
+    reachedLive = true,
+    resumeOnce = if (complete) false else flagged.resumeOnce
+  )
+}
+
+private fun applyCatchup(state: MonitorUi, catchup: WireCatchup): MonitorUi {
+  if (catchup.epoch.isEmpty()) return state
+  if (catchup.mode == "snapshot") {
+    val snapshot = catchup.snapshot ?: return state
+    val replaced = applySnapshot(state, snapshot)
+    return replaced.copy(
+      hostEpoch = catchup.epoch,
+      hostCursor = catchup.cursor,
+      catchingUp = false,
+      announcedEpoch = "",
+      conversationId = if (catchup.conversationId.isNotEmpty()) catchup.conversationId else replaced.conversationId,
+      projectRoot = if (catchup.projectRoot.isNotEmpty()) catchup.projectRoot else replaced.projectRoot,
+      conversationTitle = if (catchup.title.isNotEmpty()) catchup.title else replaced.conversationTitle,
+      patchParts = emptyMap(),
+      patchPartCount = 0,
+      patchOpenCursor = 0,
+      resumeOnce = false
+    )
+  }
+  if (catchup.mode != "events" || state.catchingUp) return state
+  if (state.hostEpoch.isNotEmpty() && catchup.epoch != state.hostEpoch) return state
+  var next = state
+  for (patch in catchup.patches) {
+    val before = next.resumeOnce
+    next = applyPatch(next, patch)
+    if (next.resumeOnce && !before) break
+  }
+  return next.copy(
+    conversationId = if (catchup.conversationId.isNotEmpty()) catchup.conversationId else next.conversationId,
+    projectRoot = if (catchup.projectRoot.isNotEmpty()) catchup.projectRoot else next.projectRoot,
+    conversationTitle = if (catchup.title.isNotEmpty()) catchup.title else next.conversationTitle
+  )
 }
 
 private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
@@ -543,11 +659,12 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     }
     is InboundPayload.ImageMissing -> state.copy(imageReasons = state.imageReasons + (inbound.value.imageId to inbound.value.reason))
     is InboundPayload.HelloOk -> applyHelloIdentity(state, inbound.value)
-    is InboundPayload.Patch -> applyPatchIdentity(state, inbound.value)
-    is InboundPayload.Catchup -> applyCatchupIdentity(state, inbound.value)
+    is InboundPayload.Patch -> applyPatch(state, inbound.value)
+    is InboundPayload.Catchup -> applyCatchup(state, inbound.value)
     is InboundPayload.ConversationClosed -> state.copy(
       closedConversationId = inbound.value.conversationId,
-      closedTitle = inbound.value.title
+      closedTitle = inbound.value.title,
+      closedPending = inbound.value.conversationId.isNotEmpty()
     )
     else -> state
   }
@@ -643,6 +760,8 @@ fun hostTranscriptIdle(phase: String, statusText: String): Boolean {
 }
 
 private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): MonitorUi {
+  // Epoch and cursor own continuity once a mirror generation is known.
+  if (state.hostEpoch.isNotEmpty()) return state
   val turnId = state.live?.id ?: ""
   val inScope = transcriptInScope(state, turnId)
   // TCP does not reorder. A lower revision is the host starting again, not a late frame.
@@ -1205,6 +1324,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
+  private fun fileClosed(id: String, document: String) {
+    viewModelScope.launch(Dispatchers.IO) {
+      try {
+        offlineStore.saveClosed(id, document)
+      } catch (error: Exception) {
+        // A failed local copy must not drop the live session.
+      }
+    }
+  }
+
   private suspend fun applyIncoming(message: MonitorMessage) {
     val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return
     execute(effects)
@@ -1261,6 +1390,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
+        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.document)
       }
     }
   }

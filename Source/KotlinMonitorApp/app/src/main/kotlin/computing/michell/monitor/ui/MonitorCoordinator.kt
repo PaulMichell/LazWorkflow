@@ -27,8 +27,10 @@ import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeTurnData
+import computing.michell.monitor.protocol.encodeClosedScreen
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeImageGet
+import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.tryEncodeSteer
@@ -66,6 +68,7 @@ sealed class MonitorEffect {
   data object Prefetch : MonitorEffect()
   data object ClearCaches : MonitorEffect()
   data class DecodeImage(val message: MonitorMessage) : MonitorEffect()
+  data class FileClosed(val id: String, val title: String, val document: String) : MonitorEffect()
 }
 
 class MonitorCoordinator(
@@ -271,7 +274,8 @@ class MonitorCoordinator(
       }
     }
     if (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript ||
-      message.kind == MessageKind.Status) {
+      message.kind == MessageKind.Status || message.kind == MessageKind.Patch ||
+      message.kind == MessageKind.Catchup) {
       noteHostProgress()
     }
     if (transcriptBroken && (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript)) {
@@ -279,17 +283,21 @@ class MonitorCoordinator(
       applied = applied.copy(liveRevision = -1, transcriptParts = emptyMap(), transcriptTurnId = "")
     }
     val immediate = message.kind in ImmediateKinds
+    val resumeBefore = applied.resumeOnce
+    val closedBefore = applied.closedPending
     applied = reduceMonitor(applied, message)
     noteFetchArrival(message)
+    val side = mirrorSideEffects(resumeBefore, closedBefore)
     if (!immediate) {
       appliedDirty = true
-      return null
+      return if (side.isEmpty()) null else side
     }
     appliedDirty = false
     val reduced = applied
     screen = show(current)
     val posted = publishReduced(reduced, message.kind == MessageKind.InsertResult, message.kind == MessageKind.Snapshot)
     val effects = posted?.toMutableList() ?: mutableListOf()
+    effects += side
     if (reduced.rescueSteer && reduced.draft.isNotEmpty()) {
       applied = applied.copy(rescueSteer = false)
       val text = reduced.draft.trim()
@@ -310,6 +318,21 @@ class MonitorCoordinator(
       if (body != null && body.refId == newConversationCommand) noteFailedNew(effects)
     }
     if (posted == null && effects.isEmpty()) return null
+    return effects
+  }
+
+  private fun mirrorSideEffects(resumeBefore: Boolean, closedBefore: Boolean): List<MonitorEffect> {
+    val effects = mutableListOf<MonitorEffect>()
+    if (!resumeBefore && applied.resumeOnce) {
+      effects += MonitorEffect.Send(encodeResume(session.nextCommandId(), applied.hostEpoch, applied.hostCursor))
+    }
+    if (!closedBefore && applied.closedPending) {
+      val document = encodeClosedScreen(applied.closedConversationId, applied.closedTitle, offlineDocument(applied))
+      if (document.isNotEmpty()) {
+        effects += MonitorEffect.FileClosed(applied.closedConversationId, applied.closedTitle, document)
+      }
+      applied = applied.copy(closedPending = false)
+    }
     return effects
   }
 
@@ -752,7 +775,10 @@ class MonitorCoordinator(
       MessageKind.Rejected,
       MessageKind.Error,
       MessageKind.InsertResult,
-      MessageKind.Status
+      MessageKind.Status,
+      MessageKind.Patch,
+      MessageKind.Catchup,
+      MessageKind.ConversationClosed
     )
   }
 }

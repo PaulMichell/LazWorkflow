@@ -28,6 +28,15 @@ fun offlineDocument(ui: MonitorUi): OfflineCacheDocument {
   )
 }
 
+fun closedCacheName(id: String): String {
+  if (id.isEmpty() || id.length > 80 || id == "." || id == "..") return ""
+  for (ch in id) {
+    val ok = ch.isLetterOrDigit() || ch == '-' || ch == '_' || ch == '.'
+    if (!ok) return ""
+  }
+  return "closed-$id.json"
+}
+
 fun worthCaching(ui: MonitorUi): Boolean {
   return ui.turns.isNotEmpty() || ui.history.isNotEmpty() || ui.live != null || ui.planRows.isNotEmpty() || ui.draft.isNotEmpty()
 }
@@ -75,6 +84,21 @@ class OfflineStore(private val file: File) {
     if (file.isFile) file.delete()
     val directory = file.parentFile ?: return
     File(directory, file.name + ".tmp").delete()
+  }
+
+  /** Writes one closed conversation. Does not delete that file or any other closed file. */
+  fun saveClosed(id: String, document: String) {
+    val name = closedCacheName(id)
+    if (name.isEmpty() || document.isEmpty()) return
+    val directory = file.parentFile ?: return
+    if (!directory.isDirectory) directory.mkdirs()
+    val target = File(directory, name)
+    val temporary = File(directory, "$name.tmp")
+    temporary.writeText(document)
+    if (!temporary.renameTo(target)) {
+      target.writeText(document)
+      temporary.delete()
+    }
   }
 
   fun save(text: String) {
