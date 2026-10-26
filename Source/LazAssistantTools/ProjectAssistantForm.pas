@@ -9690,6 +9690,7 @@ Var
         Turn.Blocks[I].Running := Block.Running;
         Turn.Blocks[I].Ok := Block.Ok;
         Turn.Blocks[I].DurationMs := Block.DurationMs;
+        Turn.Blocks[I].Revision := Block.Revision;
         SetLength(Turn.Blocks[I].Images, Length(Block.ImageRefs));
         For J := 0 To High(Block.ImageRefs) Do
           Begin

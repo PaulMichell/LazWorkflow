@@ -378,7 +378,8 @@ Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: 
 Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
+  Const Epoch: String = ''; Cursor: Int64 = 0): String;
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
@@ -397,6 +398,10 @@ Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): Strin
 { Same cursor on every part. Empty when a single block cannot be cut down to the cap. }
 Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
 Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+{ FirstPatch copies every current block. Later patches keep only a new block, or one whose
+  body, title, running flag, or ok flag changed. Duration and elapsed time do not count. }
+Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
+  FirstPatch: Boolean): TAssistantMonitorBlockArray;
 { False when any part of that cursor is missing, duplicated, or a different epoch. }
 Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
 Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
@@ -1910,7 +1915,8 @@ Begin
 End;
 
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings;
+  Const Epoch: String; Cursor: Int64): String;
 Var
   Payload, Choice: TJSONObject;
   Choices: TJSONArray;
@@ -1921,6 +1927,11 @@ Begin
   Payload.Add('title', Title);
   Payload.Add('running', Running);
   Payload.Add('rows', PlanRowsToJson(Rows));
+  If Epoch <> '' Then
+    Begin
+      Payload.Add('epoch', Epoch);
+      Payload.Add('cursor', Cursor);
+    End;
   If Assigned(Paths) And Assigned(Captions) Then
     Begin
       Choices := TJSONArray.Create;
@@ -2890,6 +2901,52 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
+  FirstPatch: Boolean): TAssistantMonitorBlockArray;
+
+  Function FaceSame(Const Left, Right: TAssistantMonitorBlock): Boolean;
+  Begin
+    Result := (Left.Title = Right.Title) And (Left.Body = Right.Body) And (Left.Running = Right.Running) And
+      (Left.Ok = Right.Ok);
+  End;
+
+Var
+  I, J, N: Integer;
+  Seen: Boolean;
+Begin
+  SetLength(Result, 0);
+  If FirstPatch Then
+    Begin
+      SetLength(Result, Length(Current));
+      For I := 0 To High(Current) Do
+        Result[I] := Current[I];
+      Exit;
+    End;
+  N := 0;
+  For I := 0 To High(Current) Do
+    Begin
+      Seen := False;
+      For J := 0 To High(Previous) Do
+        If Previous[J].BlockId = Current[I].BlockId Then
+          Begin
+            Seen := True;
+            If Not FaceSame(Previous[J], Current[I]) Then
+              Begin
+                SetLength(Result, N + 1);
+                Result[N] := Current[I];
+                Inc(N);
+              End;
+            Break;
+          End;
+      If Not Seen Then
+        Begin
+          SetLength(Result, N + 1);
+          Result[N] := Current[I];
+          Inc(N);
+        End;
+    End;
 End;
 
 Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;

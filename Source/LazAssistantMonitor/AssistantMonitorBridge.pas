@@ -71,6 +71,16 @@ Type
     FMirrorTimer: TTimer;
     FPumpedMirror: Int64;
     FPlanStamp: String;
+    FSentEpoch: String;
+    FSentBlocks: Array Of TAssistantMonitorBlock;
+    FSentFlagsValid: Boolean;
+    FSentBusy: Boolean;
+    FSentSending: Boolean;
+    FSentPlanRunning: Boolean;
+    FSentPhase: String;
+    FSentCanSend: Boolean;
+    FSentCanSteer: Boolean;
+    FSentCanStop: Boolean;
     Procedure LockBridge;
     Procedure UnlockBridge;
     { Caller holds FLock. True when this command was still listed. }
@@ -470,6 +480,9 @@ Begin
   End;
   If Assigned(Session) Then
     Session.BeginMirrorEpoch(Epoch, ConversationId, ProjectRoot, Title);
+  FSentEpoch := '';
+  SetLength(FSentBlocks, 0);
+  FSentFlagsValid := False;
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -617,6 +630,13 @@ Begin
   PumpMirror(Seen);
 End;
 
+Function FlagsChanged(Const View: TAssistantMonitorView; Valid, Busy, Sending, PlanRunning, CanSend, CanSteer, CanStop: Boolean;
+  Const Phase: String): Boolean;
+Begin
+  Result := (Not Valid) Or (Busy <> View.Busy) Or (Sending <> View.Sending) Or (PlanRunning <> View.PlanRunning) Or
+    (Phase <> View.Phase) Or (CanSend <> View.CanSend) Or (CanSteer <> View.CanSteer) Or (CanStop <> View.CanStop);
+End;
+
 Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64);
 Var
   Form: TProjectAssistantForm;
@@ -629,6 +649,7 @@ Var
   ErrorText, Stamp, PlanStamp: String;
   Cursor: Int64;
   I: Integer;
+  FirstPatch, NeedPatch: Boolean;
 Begin
   Form := OpenForm;
   LockBridge;
@@ -647,16 +668,19 @@ Begin
   Turn := Default(TAssistantMonitorTurn);
   If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
+  If Session.MirrorEpoch = '' Then
+    PublishEpoch;
+  FirstPatch := Session.MirrorEpoch <> FSentEpoch;
+  If FirstPatch Then
+    Begin
+      SetLength(FSentBlocks, 0);
+      FSentFlagsValid := False;
+    End;
   Patch := Default(TMonitorPatch);
   Patch.Epoch := Session.MirrorEpoch;
-  If Patch.Epoch = '' Then
-    Begin
-      PublishEpoch;
-      Patch.Epoch := Session.MirrorEpoch;
-    End;
   Patch.TurnIndex := Turn.TurnIndex;
   Patch.TurnId := Turn.Id;
-  Patch.Blocks := Turn.Blocks;
+  Patch.Blocks := SelectDirtyMonitorBlocks(FSentBlocks, Turn.Blocks, FirstPatch);
   Patch.Busy := View.Busy;
   Patch.Sending := View.Sending;
   Patch.PlanRunning := View.PlanRunning;
@@ -667,22 +691,35 @@ Begin
   Patch.ElapsedMs := View.ElapsedMs;
   Patch.Part := 1;
   Patch.PartCount := 1;
-  { Elapsed time is not part of the commit key. A clock tick must not mint a cursor. }
-  Stamp := Patch.Epoch + #1 + Patch.TurnId + #1 + Patch.Phase + #1 + BoolToStr(Patch.Busy, True) +
-    BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True) + BoolToStr(Patch.CanSend, True) +
-    BoolToStr(Patch.CanSteer, True) + BoolToStr(Patch.CanStop, True);
-  For I := 0 To High(Patch.Blocks) Do
-    Stamp := Stamp + #1 + Patch.Blocks[I].BlockId + #1 + Patch.Blocks[I].Kind + #1 + Patch.Blocks[I].Title + #1 +
-      Patch.Blocks[I].Body + #1 + BoolToStr(Patch.Blocks[I].Running, True) + BoolToStr(Patch.Blocks[I].Ok, True);
-  If (Patch.Epoch <> '') And Session.CommitMirrorCursor(Stamp, Cursor) Then
+  NeedPatch := (Patch.Epoch <> '') And (FirstPatch Or (Length(Patch.Blocks) > 0) Or
+    FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
+    FSentCanStop, FSentPhase));
+  If NeedPatch Then
     Begin
-      Patch.Cursor := Cursor;
-      Frames := PackMonitorPatch(HostId, Patch);
-      If Length(Frames) > 0 Then
+      Stamp := Patch.Epoch + #1 + Patch.TurnId + #1 + Patch.Phase + #1 + BoolToStr(Patch.Busy, True) +
+        BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True);
+      For I := 0 To High(Patch.Blocks) Do
+        Stamp := Stamp + #1 + Patch.Blocks[I].BlockId + #1 + Patch.Blocks[I].Title + #1 + Patch.Blocks[I].Body + #1 +
+          BoolToStr(Patch.Blocks[I].Running, True) + BoolToStr(Patch.Blocks[I].Ok, True);
+      If Session.CommitMirrorCursor(Stamp, Cursor) Then
         Begin
-          For I := 0 To High(Frames) Do
-            Session.SendHostJson(Frames[I]);
-          Session.NoteMirrorHanded(Cursor);
+          Patch.Cursor := Cursor;
+          Frames := PackMonitorPatch(HostId, Patch);
+          If Length(Frames) > 0 Then
+            Begin
+              Session.ReplaceLivePatch(Cursor, Frames);
+              Session.FlushLivePatch;
+              FSentEpoch := Patch.Epoch;
+              FSentBlocks := Turn.Blocks;
+              FSentFlagsValid := True;
+              FSentBusy := View.Busy;
+              FSentSending := View.Sending;
+              FSentPlanRunning := View.PlanRunning;
+              FSentPhase := View.Phase;
+              FSentCanSend := View.CanSend;
+              FSentCanSteer := View.CanSteer;
+              FSentCanStop := View.CanStop;
+            End;
         End;
     End;
   Form.FillMonitorPlan(Rows);
@@ -700,16 +737,43 @@ Var
   Paths, Captions: TStringList;
   View: TAssistantMonitorView;
   Rows: TAssistantMonitorPlanRows;
+  Session: TMonitorSession;
+  Epoch, Stamp: String;
+  Cursor: Int64;
 Begin
   If Not Assigned(Form) Then
     Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Assigned(Session) Then
+    Session.FlushLivePatch;
   Paths := TStringList.Create;
   Captions := TStringList.Create;
   Try
     Form.FillMonitorPlanChoices(Paths, Captions);
     Form.FillMonitorView(View);
     Form.FillMonitorPlan(Rows);
-    SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
+    Epoch := '';
+    Cursor := 0;
+    If Assigned(Session) Then
+      Begin
+        Epoch := Session.MirrorEpoch;
+        Stamp := 'plan' + #1 + View.PlanPath + #1 + View.PlanTitle + #1 + BoolToStr(View.PlanRunning, True);
+        If (Epoch <> '') And Session.CommitMirrorCursor(Stamp, Cursor) Then
+          Begin
+            SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions,
+              Epoch, Cursor));
+            Session.NoteMirrorHanded(Cursor);
+          End
+        Else
+          SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
+      End
+    Else
+      SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
   Finally
     Captions.Free;
     Paths.Free;

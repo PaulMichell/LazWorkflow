@@ -840,6 +840,28 @@ Begin
   Check('missing patch part is not success', Not TryAssembleMonitorPatch(Missing, Assembled));
 End;
 
+Procedure TestDirtyBlocks;
+Var
+  Previous, Current, Dirty: TAssistantMonitorBlockArray;
+Begin
+  SetLength(Previous, 1);
+  SetLength(Current, 2);
+  Previous[0] := SampleBlock;
+  Current[0] := SampleBlock;
+  Current[0].DurationMs := 99;
+  Current[1] := SampleBlock;
+  Current[1].BlockId := 'block-2';
+  Current[1].Body := 'Next.';
+  Dirty := SelectDirtyMonitorBlocks(Previous, Current, False);
+  Check('unchanged block is omitted', Length(Dirty) = 1);
+  Check('new block is kept', (Length(Dirty) = 1) And (Dirty[0].BlockId = 'block-2'));
+  Current[0].Body := 'Changed.';
+  Dirty := SelectDirtyMonitorBlocks(Previous, Current, False);
+  Check('changed body is kept', Length(Dirty) = 2);
+  Dirty := SelectDirtyMonitorBlocks(Previous, Current, True);
+  Check('first patch sends every block', Length(Dirty) = 2);
+End;
+
 Procedure TestOldCatalogue;
 Var
   Message: TMonitorMessage;
@@ -1056,6 +1078,7 @@ Begin
   TestRoundTrips;
   TestPatchOverCap;
   TestOldCatalogue;
+  TestDirtyBlocks;
   TestOptionalTitle;
   TestPlanChoices;
   TestUnknownType;

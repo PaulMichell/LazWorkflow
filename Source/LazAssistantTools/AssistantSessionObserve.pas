@@ -51,8 +51,10 @@ Type
     Running: Boolean;
     Ok: Boolean;
     DurationMs: Integer;
+    Revision: QWord;
     Images: Array Of TAssistantMonitorImage;
   End;
+  TAssistantMonitorBlockArray = Array Of TAssistantMonitorBlock;
 
   TAssistantMonitorTurn = Record
     TurnIndex: Integer; { -2 matches LiveConversationMarker on the form; stored turns are >= 0 }

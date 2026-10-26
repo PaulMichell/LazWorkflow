@@ -428,6 +428,30 @@ Begin
   End;
 End;
 
+Procedure TestLivePatchReplaces;
+Var
+  First, Second: TStringArray;
+  Before: Integer;
+Begin
+  SetLength(First, 2);
+  First[0] := 'patch-part-1';
+  First[1] := 'patch-part-2';
+  SetLength(Second, 1);
+  Second[0] := 'patch-replaced';
+  Before := Session.FramesDropped;
+  Carrier.ClearSent;
+  Session.ReplaceLivePatch(4, First);
+  Session.ReplaceLivePatch(5, Second);
+  Check('replaced unsent parts are dropped', Session.FramesDropped = Before + 2);
+  Session.FlushLivePatch;
+  Check('live lane sends the replacement only', (Carrier.SentCount = 1) And (Carrier.SentJson(0) = 'patch-replaced'));
+  Session.ReplaceLivePatch(6, First);
+  SetLength(First, 0);
+  Session.ReplaceLivePatch(6, First);
+  Session.FlushLivePatch;
+  Check('empty replace does not append', Carrier.SentCount = 1);
+End;
+
 Procedure TestMirrorCursor;
 Var
   Cursor: Int64;
@@ -660,6 +684,7 @@ Begin
       TestDisplayApproval;
       TestBareSignalAndCancel;
       TestMirrorCursor;
+      TestLivePatchReplaces;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except

@@ -126,6 +126,9 @@ Type
     FReservedCursor: Int64;
     FReservedPayload: RawByteString;
     FReservedHanded: Boolean;
+    FLiveFrames: Array Of String;
+    FLiveCursor: Int64;
+    FHasLivePatch: Boolean;
     FPendingCommand: Boolean;
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
@@ -206,6 +209,9 @@ Type
     { Same cursor while the bytes are unsent or already handed unchanged. }
     Function CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
     Procedure NoteMirrorHanded(Cursor: Int64);
+    { Replaces the unsent live part set. Does not append a transcript. }
+    Procedure ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
+    Procedure FlushLivePatch;
     /// Next host frame id. Safe to call off the session lock.
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
@@ -469,6 +475,9 @@ Begin
   FReservedCursor := 0;
   FReservedPayload := '';
   FReservedHanded := False;
+  FHasLivePatch := False;
+  FLiveCursor := 0;
+  SetLength(FLiveFrames, 0);
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -616,6 +625,9 @@ Begin
   FPingSent := False;
   FHasUnsentTranscript := False;
   SetLength(FUnsentTranscripts, 0);
+  FHasLivePatch := False;
+  FLiveCursor := 0;
+  SetLength(FLiveFrames, 0);
 End;
 
 Procedure TMonitorSession.CloseToListening;
@@ -1269,6 +1281,7 @@ Begin
   Finally
     UnlockSession;
   End;
+  FlushLivePatch;
   DrainSends;
 End;
 
@@ -1580,6 +1593,56 @@ Begin
   Finally
     UnlockSession;
   End;
+End;
+
+Procedure TMonitorSession.ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
+Var
+  I: Integer;
+Begin
+  LockSession;
+  Try
+    If FHasLivePatch Then
+      Inc(FFramesDropped, Length(FLiveFrames));
+    If Length(Frames) = 0 Then
+      Begin
+        FHasLivePatch := False;
+        FLiveCursor := 0;
+        SetLength(FLiveFrames, 0);
+        Exit;
+      End;
+    SetLength(FLiveFrames, Length(Frames));
+    For I := 0 To High(Frames) Do
+      FLiveFrames[I] := Frames[I];
+    FLiveCursor := Cursor;
+    FHasLivePatch := True;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.FlushLivePatch;
+Var
+  Frames: Array Of String;
+  Cursor: Int64;
+  Had: Boolean;
+  I: Integer;
+Begin
+  LockSession;
+  Try
+    Had := FHasLivePatch;
+    Frames := FLiveFrames;
+    Cursor := FLiveCursor;
+    FHasLivePatch := False;
+    FLiveCursor := 0;
+    SetLength(FLiveFrames, 0);
+  Finally
+    UnlockSession;
+  End;
+  If Not Had Then
+    Exit;
+  For I := 0 To High(Frames) Do
+    Transmit(Frames[I]);
+  NoteMirrorHanded(Cursor);
 End;
 
 Procedure TMonitorSession.NoteMirrorHanded(Cursor: Int64);
