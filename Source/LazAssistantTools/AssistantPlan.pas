@@ -122,9 +122,11 @@ Function SetPlanSectionStatus(Const RelativeOrAbsolute: String; SectionIndex: In
   An unfenced User action already in the item is kept. StoredAction is the text after the colon. }
 Function SetPlanSectionBlocked(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   Const ActionText: String; Out StoredAction, ErrorText: String): Boolean;
-{ Body of one section (heading through line before next ##/###), for Build "Work on this". }
+{ Body of one section, for review and Run Plan. A ### item stops before the next heading.
+  IncludeSubsections is for review of a ## section: the slice then runs through its ### items
+  and stops at the next # or ##. }
 Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
-  Out BodyText: String; Out ErrorText: String): Boolean;
+  Out BodyText: String; Out ErrorText: String; IncludeSubsections: Boolean = False): Boolean;
 
 Implementation
 
@@ -1996,8 +1998,26 @@ Begin
   End;
 End;
 
+{ Inclusive end of a ## review. Stops before the next heading of the same or higher rank, so ### items stay in. }
+Function PlanSectionReviewEndLine(SL: TStrings; HeadingLine, HeadingLevel: Integer): Integer;
+Var
+  Index, Level: Integer;
+  Ignored: String;
+Begin
+  Result := SL.Count - 1;
+  For Index := HeadingLine + 1 To SL.Count - 1 Do
+    Begin
+      Level := PlanHeadingLevel(SL[Index], Ignored);
+      If (Level >= 1) And (Level <= HeadingLevel) Then
+        Begin
+          Result := Index - 1;
+          Exit;
+        End;
+    End;
+End;
+
 Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
-  Out BodyText: String; Out ErrorText: String): Boolean;
+  Out BodyText: String; Out ErrorText: String; IncludeSubsections: Boolean): Boolean;
 Var
   Resolved: String;
   Sections: TObjectList;
@@ -2033,8 +2053,12 @@ Begin
             ErrorText := 'Heading line out of range.';
             Exit;
           End;
+        If IncludeSubsections And (Not Section.Actionable) And (Section.HeadingLevel In [1, 2]) Then
+          LastLine := PlanSectionReviewEndLine(SL, FirstLine, Section.HeadingLevel);
         If LastLine >= SL.Count Then
           LastLine := SL.Count - 1;
+        If LastLine < FirstLine Then
+          LastLine := FirstLine;
         BodyText := '';
         For I := FirstLine To LastLine Do
           Begin
