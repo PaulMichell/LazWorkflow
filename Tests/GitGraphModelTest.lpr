@@ -35,5 +35,19 @@ Begin
   WriteLn('ok 50,000 commits, long edges and 301 viewport comparisons');
   WriteLn('2,000 queries: indexed ',IndexedMs,' ms; full scan ',ScanMs,' ms');
   M.Clear; Check(Length(M.VisibleEdges(0,10))=0);
+  Lines.Clear;
+  Lines.Add('#primary main1111');
+  Lines.Add('side1111 side0000');
+  Lines.Add('side0000 base0000');
+  Lines.Add('main1111 main0000');
+  Lines.Add('main0000 base0000');
+  Lines.Add('base0000');
+  Check(M.ParseRevListParents(Lines.Text)=5);
+  Check(M.Commit(M.IndexOf('main1111')).Lane=0);
+  Check(M.Commit(M.IndexOf('main0000')).Lane=0);
+  Check(M.Commit(M.IndexOf('base0000')).Lane=0);
+  Check(M.Commit(M.IndexOf('side1111')).Lane=1);
+  Check(M.Commit(M.IndexOf('side0000')).Lane=1);
+  WriteLn('ok main stays on lane 0 when another tip is listed first');
  Finally Lines.Free; M.Free; End;
 End.

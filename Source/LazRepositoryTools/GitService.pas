@@ -655,11 +655,23 @@ End;
 Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
 Var
   ExitCode: Integer;
+  Tip, OutputText: String;
 Begin
   { Compact full-history index: one line per commit "sha [parent…]".
-    Enough for lanes/edges without loading subjects for every commit. }
+    Enough for lanes/edges without loading subjects for every commit.
+    #primary names the tip whose first-parent line stays on lane 0. }
   RevListText := '';
   Result := RunGitEx(WorkDir, ['rev-list', '--all', '--topo-order', '--parents'], RevListText, ExitCode);
+  If Not Result Then
+    Exit;
+  Tip := '';
+  If RunGitEx(WorkDir, ['rev-parse', '--verify', '--quiet', 'refs/heads/main'], OutputText, ExitCode) Then
+    Tip := Trim(OutputText);
+  If Tip = '' Then
+    If RunGitEx(WorkDir, ['rev-parse', '--verify', '--quiet', 'HEAD'], OutputText, ExitCode) Then
+      Tip := Trim(OutputText);
+  If Tip <> '' Then
+    RevListText := '#primary ' + Tip + LineEnding + RevListText;
 End;
 
 Procedure CollectLeadingShas(Const RevListText: String; MaxCount: Integer; Shas: TStrings);
@@ -685,8 +697,10 @@ Begin
           Sha := Copy(Line, 1, SpacePos - 1)
         Else
           Sha := Line;
-        If Sha <> '' Then
-          Shas.Add(Sha);
+        { #primary is a lane hint, not a commit. }
+        If (Length(Sha) < 7) Or (Sha[1] = '#') Then
+          Continue;
+        Shas.Add(Sha);
       End;
   Finally
     Lines.Free;

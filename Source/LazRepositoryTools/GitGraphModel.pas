@@ -58,6 +58,7 @@ Type
     FEdgeCount: Integer;
     FEdgeMaxParent: Array Of Integer;
     FLaneCount: Integer;
+    FPrimarySha: String;
     FShaIndex: TFPDataHashTable;
     Function BuildEdgeIntervals(Node, First, Last: Integer): Integer;
     Procedure ClearIndex;
@@ -71,8 +72,9 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Procedure Clear;
-    { Parse `git rev-list --topo-order --parents` output (full history index). }
-    Function ParseRevListParents(Const RevListText: String): Integer;
+    { Parse `git rev-list --topo-order --parents` output (full history index).
+      PrimarySha, when present, keeps that commit's first-parent line on lane 0. }
+    Function ParseRevListParents(Const RevListText: String; Const PrimarySha: String = ''): Integer;
     { Merge SOH-delimited detail lines from FetchCommitDetails into matching rows. }
     Function ApplyDetailsText(Const DetailsText: String): Integer;
     { Collect SHAs in [First..Last] that still need details (inclusive). }
@@ -125,6 +127,7 @@ Begin
   FCount := 0;
   FEdgeCount := 0;
   FLaneCount := 0;
+  FPrimarySha := '';
 End;
 
 Procedure TGitGraphModel.EnsureCapacity(MinCount: Integer);
@@ -200,13 +203,14 @@ Begin
   Result := Copy(S, StartPos, Pos - StartPos);
 End;
 
-Function TGitGraphModel.ParseRevListParents(Const RevListText: String): Integer;
+Function TGitGraphModel.ParseRevListParents(Const RevListText: String; Const PrimarySha: String): Integer;
 Var
   Pos, L, PCount, K: Integer;
   Sha, Tok: String;
   ParentBuf: Array Of String;
 Begin
   Clear;
+  FPrimarySha := Trim(PrimarySha);
   Result := 0;
   L := Length(RevListText);
   Pos := 1;
@@ -219,6 +223,16 @@ Begin
         End;
 
       Sha := NextToken(RevListText, Pos);
+      If Sha = '#primary' Then
+        Begin
+          Tok := NextToken(RevListText, Pos);
+          If (FPrimarySha = '') And (Tok <> '') Then
+            FPrimarySha := Tok;
+          While (Pos <= L) And (RevListText[Pos] <> #10) And (RevListText[Pos] <> #13) Do
+            Inc(Pos);
+          SkipLineEnd(RevListText, Pos);
+          Continue;
+        End;
       If Length(Sha) < 7 Then
         Begin
           While (Pos <= L) And (RevListText[Pos] <> #10) And (RevListText[Pos] <> #13) Do
@@ -339,43 +353,84 @@ End;
 Procedure TGitGraphModel.LayoutLanes;
 Var
   Active: Array Of String;
-  I, J, Lane, FreeLane, P, ParentLane: Integer;
+  OnSpine: Array Of Boolean;
+  I, J, Lane, P, ParentLane, SpineAt, MinLane: Integer;
   Sha: String;
+  HasSpine: Boolean;
+
+  Function CommitOnSpine(Const CommitSha: String): Boolean;
+  Var
+    Idx: Integer;
+  Begin
+    Idx := IndexOfSha(CommitSha);
+    Result := (Idx >= 0) And OnSpine[Idx];
+  End;
+
+  Function TakeFreeLane(Lowest: Integer): Integer;
+  Var
+    Slot: Integer;
+  Begin
+    For Slot := Lowest To High(Active) Do
+      If Active[Slot] = '' Then
+        Exit(Slot);
+    Result := Length(Active);
+    If Result < Lowest Then
+      Result := Lowest;
+    SetLength(Active, Result + 1);
+    Active[Result] := '';
+  End;
+
 Begin
   FLaneCount := 0;
   If FCount = 0 Then
     Exit;
 
+  { Lane 0 is the first-parent line of main (or HEAD when main is absent).
+    Diverging tips use the lanes to its right, whatever rev-list order they arrive in. }
+  HasSpine := False;
+  SetLength(OnSpine, FCount);
+  For I := 0 To FCount - 1 Do
+    OnSpine[I] := False;
+  If FPrimarySha <> '' Then
+    Begin
+      SpineAt := IndexOf(FPrimarySha);
+      While SpineAt >= 0 Do
+        Begin
+          OnSpine[SpineAt] := True;
+          HasSpine := True;
+          If FCommits[SpineAt].ParentCount < 1 Then
+            Break;
+          SpineAt := IndexOf(FCommits[SpineAt].Parents[0]);
+        End;
+    End;
+
   Active := Nil;
+  If HasSpine Then
+    Begin
+      SetLength(Active, 1);
+      Active[0] := '';
+    End;
   For I := 0 To FCount - 1 Do
     Begin
       Sha := FCommits[I].Sha;
+      If HasSpine Then
+        MinLane := 1
+      Else
+        MinLane := 0;
 
-      Lane := -1;
-      For J := 0 To High(Active) Do
-        If Active[J] = Sha Then
-          Begin
-            Lane := J;
-            Break;
-          End;
-
-      If Lane < 0 Then
+      If OnSpine[I] Then
+        Lane := 0
+      Else
         Begin
-          FreeLane := -1;
-          For J := 0 To High(Active) Do
-            If Active[J] = '' Then
+          Lane := -1;
+          For J := MinLane To High(Active) Do
+            If Active[J] = Sha Then
               Begin
-                FreeLane := J;
+                Lane := J;
                 Break;
               End;
-          If FreeLane >= 0 Then
-            Lane := FreeLane
-          Else
-            Begin
-              Lane := Length(Active);
-              SetLength(Active, Lane + 1);
-              Active[Lane] := '';
-            End;
+          If Lane < 0 Then
+            Lane := TakeFreeLane(MinLane);
         End;
 
       FCommits[I].Lane := Lane;
@@ -386,15 +441,29 @@ Begin
         If Active[J] = Sha Then
           Active[J] := '';
 
-      If FCommits[I].ParentCount > 0 Then
+      If OnSpine[I] Then
+        Begin
+          If Length(Active) < 1 Then
+            Begin
+              SetLength(Active, 1);
+              Active[0] := '';
+            End;
+          If FCommits[I].ParentCount > 0 Then
+            Active[0] := FCommits[I].Parents[0]
+          Else
+            Active[0] := '';
+        End
+      Else If (FCommits[I].ParentCount > 0) And Not CommitOnSpine(FCommits[I].Parents[0]) Then
         Active[Lane] := FCommits[I].Parents[0]
-      Else
+      Else If Lane <= High(Active) Then
         Active[Lane] := '';
 
       For P := 1 To FCommits[I].ParentCount - 1 Do
         Begin
+          If CommitOnSpine(FCommits[I].Parents[P]) Then
+            Continue;
           ParentLane := -1;
-          For J := 0 To High(Active) Do
+          For J := MinLane To High(Active) Do
             If Active[J] = FCommits[I].Parents[P] Then
               Begin
                 ParentLane := J;
@@ -402,20 +471,7 @@ Begin
               End;
           If ParentLane < 0 Then
             Begin
-              FreeLane := -1;
-              For J := 0 To High(Active) Do
-                If Active[J] = '' Then
-                  Begin
-                    FreeLane := J;
-                    Break;
-                  End;
-              If FreeLane >= 0 Then
-                ParentLane := FreeLane
-              Else
-                Begin
-                  ParentLane := Length(Active);
-                  SetLength(Active, ParentLane + 1);
-                End;
+              ParentLane := TakeFreeLane(MinLane);
               Active[ParentLane] := FCommits[I].Parents[P];
               If ParentLane + 1 > FLaneCount Then
                 FLaneCount := ParentLane + 1;
