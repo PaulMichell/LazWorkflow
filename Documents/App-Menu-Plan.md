@@ -137,7 +137,7 @@ Ping and pong stay. A dead session still uses the host's `MonitorDeadSessionMs` 
 
 ### 4.3 Local elapsed clock
 
-Status: not started
+Status: complete
 
 The right-hand activity time ticks on the phone from the last `elapsed_ms` and the local time that patch was applied. Do not wait for a host frame to advance the seconds. A new patch replaces the base. When the patch says the turn is idle, stop the tick. This removes the need for a 250 ms status frame whose only change is the clock.
 
