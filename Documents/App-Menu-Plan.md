@@ -127,7 +127,7 @@ On a new epoch, do not clear the on-screen conversation and do not clear the cac
 
 ### 4.2 Stop the stall refresh
 
-Status: not started
+Status: complete
 
 Remove `busyStallRefresh` and the `Refresh` send in `MonitorCoordinator.kt`. A gap is: link live, host flags say busy or a catchup is outstanding, and no patch, catchup, or plan message has arrived for 5 s. Send one `resume` with the committed epoch and cursor. Do not send another until a host message arrives or the socket drops. Do not send `Refresh`.
 
