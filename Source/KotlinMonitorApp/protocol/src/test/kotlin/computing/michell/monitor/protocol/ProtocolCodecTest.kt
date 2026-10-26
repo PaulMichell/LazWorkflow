@@ -457,7 +457,8 @@ class ProtocolCodecTest {
   }
 
   private fun samplePatch(blocks: List<WireBlock>): WirePatch {
-    return WirePatch("abc123", 9, 3, "turn-3", blocks, true, true, false, "streaming", false, true, true, 50)
+    return WirePatch("abc123", 9, 3, "turn-3", blocks, true, true, false, "streaming", false, true, true, 50,
+      hasView = true, model = "grok-test", signedIn = true, statusText = "Thinking…")
   }
 
   private fun imagePart(

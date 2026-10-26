@@ -172,7 +172,8 @@ private fun ConversationPane(
   onViewWidth: (Int) -> Unit,
   modifier: Modifier
 ) {
-  val slots = remember(ui.turns, ui.live, ui.view.sending) { virtualSlots(ui.turns, ui.live, ui.view.sending) }
+  val showLive = ui.view.sending || ui.view.busy || ui.view.planRunning || ui.planRunning
+  val slots = remember(ui.turns, ui.live, showLive) { virtualSlots(ui.turns, ui.live, showLive) }
   val scrollState = rememberScrollState()
   val scope = rememberCoroutineScope()
   var followHead by remember { mutableStateOf(true) }

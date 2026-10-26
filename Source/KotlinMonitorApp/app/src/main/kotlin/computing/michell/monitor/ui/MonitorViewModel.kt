@@ -590,19 +590,22 @@ private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {
 }
 
 private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
-  return state.copy(
+  val flagged = state.view.copy(
+    busy = patch.busy,
+    sending = patch.sending,
     planRunning = patch.planRunning,
-    view = state.view.copy(
-      busy = patch.busy,
-      sending = patch.sending,
-      planRunning = patch.planRunning,
-      phase = patch.phase,
-      canSend = patch.canSend,
-      canSteer = patch.canSteer,
-      canStop = patch.canStop,
-      elapsedMs = patch.elapsedMs
-    )
+    phase = patch.phase,
+    canSend = patch.canSend,
+    canSteer = patch.canSteer,
+    canStop = patch.canStop,
+    elapsedMs = patch.elapsedMs
   )
+  val view = if (patch.hasView) {
+    flagged.copy(model = patch.model, signedIn = patch.signedIn, statusText = patch.statusText)
+  } else {
+    flagged
+  }
+  return state.copy(planRunning = patch.planRunning, view = view)
 }
 
 private fun applyCatchup(state: MonitorUi, catchup: WireCatchup): MonitorUi {

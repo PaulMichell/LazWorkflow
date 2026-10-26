@@ -273,6 +273,11 @@ Type
     ElapsedMs: Integer;
     Part: Integer;
     PartCount: Integer;
+    { Absent on a ring record written before the status bar travelled with the patch. }
+    HasView: Boolean;
+    Model: String;
+    SignedIn: Boolean;
+    StatusText: String;
   End;
   TMonitorPatchArray = Array Of TMonitorPatch;
 
@@ -2805,6 +2810,10 @@ Begin
   Patch.ElapsedMs := 0;
   Patch.Part := 0;
   Patch.PartCount := 0;
+  Patch.HasView := False;
+  Patch.Model := '';
+  Patch.SignedIn := False;
+  Patch.StatusText := '';
 End;
 
 Function PatchPayload(Const Patch: TMonitorPatch): TJSONObject;
@@ -2827,6 +2836,9 @@ Begin
   Result.Add('can_steer', Patch.CanSteer);
   Result.Add('can_stop', Patch.CanStop);
   Result.Add('elapsed_ms', Patch.ElapsedMs);
+  Result.Add('model', Patch.Model);
+  Result.Add('signed_in', Patch.SignedIn);
+  Result.Add('status_text', Patch.StatusText);
   Blocks := TJSONArray.Create;
   For I := 0 To High(Patch.Blocks) Do
     Blocks.Add(MonitorBlockToJson(Patch.Blocks[I], 1, 1, 0));
@@ -2898,6 +2910,11 @@ Begin
       ReadBool(Obj, 'plan_running', True, Patch.PlanRunning) And ReadString(Obj, 'phase', True, Patch.Phase) And
       ReadBool(Obj, 'can_send', True, Patch.CanSend) And ReadBool(Obj, 'can_steer', True, Patch.CanSteer) And
       ReadBool(Obj, 'can_stop', True, Patch.CanStop) And ReadInt(Obj, 'elapsed_ms', True, Patch.ElapsedMs)) Then
+      Exit;
+    { Older ring records omit the status bar. A missing field must not wipe a model the phone already has. }
+    Patch.HasView := Assigned(Obj.Find('model')) Or Assigned(Obj.Find('signed_in'));
+    If Patch.HasView And (Not (ReadString(Obj, 'model', True, Patch.Model) And
+      ReadBool(Obj, 'signed_in', True, Patch.SignedIn) And ReadString(Obj, 'status_text', True, Patch.StatusText))) Then
       Exit;
     { A v1 transcript has revision and status_text, not epoch. Missing epoch already failed above. }
     If (Patch.Part < 1) Or (Patch.PartCount < 1) Or (Patch.Part > Patch.PartCount) Then

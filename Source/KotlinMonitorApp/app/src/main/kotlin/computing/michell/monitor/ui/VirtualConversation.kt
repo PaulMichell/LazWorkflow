@@ -62,7 +62,8 @@ fun displayBlocks(turn: WireTurn?): List<WireBlock> {
 
 fun blockShown(block: WireBlock, showThinking: Boolean, showTools: Boolean): Boolean {
   return when (displayKind(block)) {
-    "thinking" -> showThinking && block.body.isNotBlank()
+    // A running thought has a title before the first token. Hiding it left the turn looking empty.
+    "thinking" -> showThinking && (block.body.isNotBlank() || block.running || block.title.isNotBlank())
     "tool", "subagent" -> showTools
     else -> block.body.isNotEmpty() || block.title.isNotEmpty() || block.images.isNotEmpty()
   }

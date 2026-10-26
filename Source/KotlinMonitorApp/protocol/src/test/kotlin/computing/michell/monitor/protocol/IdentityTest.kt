@@ -36,6 +36,16 @@ class IdentityTest {
   }
 
   @Test
+  fun anEmptyEpochDoesNotAdoptHello() {
+    val fresh = noteHelloIdentity(MirrorPlace(), "bb", 4, "current", "/work", "Shown", false)
+    assertEquals("", fresh.epoch)
+    assertEquals(0L, fresh.cursor)
+    assertTrue(fresh.catchingUp)
+    assertEquals("bb", fresh.announcedEpoch)
+    assertEquals("Shown", fresh.title)
+  }
+
+  @Test
   fun duplicateAndGapDoNotAdvance() {
     val place = MirrorPlace(epoch = "aa", cursor = 4)
     assertEquals(place, notePatchIdentity(place, "aa", 4))

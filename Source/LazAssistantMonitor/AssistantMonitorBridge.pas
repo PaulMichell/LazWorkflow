@@ -88,6 +88,7 @@ Type
     FSentCanSend: Boolean;
     FSentCanSteer: Boolean;
     FSentCanStop: Boolean;
+    FPumping: Boolean;
     Procedure LockBridge;
     Procedure UnlockBridge;
     { Caller holds FLock. True when this command was still listed. }
@@ -779,6 +780,14 @@ Begin
     End;
   SendJson(Json);
   Session.NoteMirrorHanded(Cursor);
+  { A patch sent while the phone was still on the previous epoch is dropped.
+    The snapshot cursor is already past it, so that patch is not replayed.
+    Forget the sent blocks and pump once more so the next cursor carries the
+    trace the phone has not seen, including thinking and tool cards. }
+  FSentEpoch := '';
+  SetLength(FSentBlocks, 0);
+  FSentFlagsValid := False;
+  PumpMirror(AssistantMirrorCounter);
 End;
 
 Procedure TAssistantMonitorBridge.AnswerResume(Const Id, PayloadJson: String);
@@ -806,15 +815,20 @@ Begin
       Exit;
     End;
   Session.FlushLivePatch;
-  { A cursor still in the ring does not fill the form. An events frame that does not fit falls through. }
+  { A cursor still in the ring does not fill the form. An events frame that does not fit falls through.
+    An empty events list means the client is at the committed cursor. It does not mean the client has
+    the model, the signed-in flag, or the live blocks. That is a snapshot, the same repair New uses. }
   If Not ResumeNeedsFormSnapshot(Session, ResumeMsg.Epoch, ResumeMsg.Cursor) Then
     Begin
-      If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
+      If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) And (Length(Catchup.Patches) > 0) Then
         Begin
           Json := EncodeMonitorCatchup(Id, Catchup);
           If Json <> '' Then
             Begin
               SendJson(Json);
+              Form := OpenForm;
+              If Assigned(Form) Then
+                PushStatus(Form);
               Exit;
             End;
         End;
@@ -925,6 +939,10 @@ Var
   I: Integer;
   FirstPatch, NeedPatch: Boolean;
 Begin
+  If FPumping Then
+    Exit;
+  FPumping := True;
+  Try
   Form := OpenForm;
   LockBridge;
   Try
@@ -963,6 +981,10 @@ Begin
   Patch.CanSteer := View.CanSteer;
   Patch.CanStop := View.CanStop;
   Patch.ElapsedMs := View.ElapsedMs;
+  Patch.HasView := True;
+  Patch.Model := View.Model;
+  Patch.SignedIn := View.SignedIn;
+  Patch.StatusText := View.StatusText;
   Patch.Part := 1;
   Patch.PartCount := 1;
   NeedPatch := (Patch.Epoch <> '') And (FirstPatch Or (Length(Patch.Blocks) > 0) Or
@@ -1005,6 +1027,9 @@ Begin
       FPlanStamp := PlanStamp;
     End;
   FPumpedMirror := Seen;
+  Finally
+    FPumping := False;
+  End;
 End;
 
 Procedure TAssistantMonitorBridge.PushPlan(Form: TProjectAssistantForm);

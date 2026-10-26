@@ -38,4 +38,13 @@ class TraceCardsTest {
     assertTrue(blockShown(lost, true, true))
     assertFalse(blockShown(lost, true, false))
   }
+
+  @Test
+  fun aRunningThoughtShowsBeforeItsBody() {
+    val running = WireBlock("thinking", "think-1", "Thinking…", "", "", "", true, true, 0, emptyList())
+    assertTrue(blockShown(running, true, false))
+    assertFalse(blockShown(running, false, true))
+    val idle = WireBlock("thinking", "think-1", "", "", "", "   ", false, true, 0, emptyList())
+    assertFalse(blockShown(idle, true, true))
+  }
 }

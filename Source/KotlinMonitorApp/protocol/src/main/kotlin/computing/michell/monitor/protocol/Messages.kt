@@ -270,7 +270,11 @@ data class WirePatch(
   val canStop: Boolean,
   val elapsedMs: Int,
   val part: Int = 1,
-  val partCount: Int = 1
+  val partCount: Int = 1,
+  val hasView: Boolean = false,
+  val model: String = "",
+  val signedIn: Boolean = false,
+  val statusText: String = ""
 )
 
 data class WireCatchup(
@@ -1580,6 +1584,11 @@ private fun patchPayload(patch: WirePatch): JsonValue.Obj {
   payload.add("can_steer", patch.canSteer)
   payload.add("can_stop", patch.canStop)
   payload.add("elapsed_ms", patch.elapsedMs)
+  if (patch.hasView) {
+    payload.add("model", patch.model)
+    payload.add("signed_in", patch.signedIn)
+    payload.add("status_text", patch.statusText)
+  }
   payload.add("blocks", JsonValue.Arr(patch.blocks.map { blockToJson(it) }))
   return payload.build()
 }
@@ -1632,6 +1641,11 @@ fun decodePatch(obj: JsonValue.Obj): WirePatch? {
   ) {
     return null
   }
+  val hasView = obj.field("model") != null || obj.field("signed_in") != null
+  val model = obj.readString("model", false)
+  val signedIn = obj.readBool("signed_in", false)
+  val statusText = obj.readString("status_text", false)
+  if (hasView && (!model.ok || !signedIn.ok || !statusText.ok)) return null
   if (part.value < 1 || partCount.value < 1 || part.value > partCount.value) return null
   val blocksNode = obj.field("blocks") as? JsonValue.Arr ?: return null
   val blocks = blocksNode.items.map { item ->
@@ -1641,7 +1655,8 @@ fun decodePatch(obj: JsonValue.Obj): WirePatch? {
   return WirePatch(
     epoch.value, cursor.value, turnIndex.value, turnId.value, blocks, busy.value, sending.value,
     planRunning.value, phase.value, canSend.value, canSteer.value, canStop.value, elapsed.value,
-    part.value, partCount.value
+    part.value, partCount.value, hasView, if (model.ok) model.value else "", if (signedIn.ok) signedIn.value else false,
+    if (statusText.ok) statusText.value else ""
   )
 }
 
