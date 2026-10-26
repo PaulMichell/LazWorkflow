@@ -993,6 +993,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val ui: StateFlow<MonitorUi>
   val bitmaps: StateFlow<Map<String, Bitmap>> = bitmapsState.asStateFlow()
   val link: StateFlow<computing.michell.monitor.connection.LinkStatus> = session.status
+  private val cacheListOpenState = MutableStateFlow(false)
+  val cacheListOpen: StateFlow<Boolean> = cacheListOpenState.asStateFlow()
+  private val cacheRowsState = MutableStateFlow<List<computing.michell.monitor.protocol.CacheIndexEntry>>(emptyList())
+  val cacheRows: StateFlow<List<computing.michell.monitor.protocol.CacheIndexEntry>> = cacheRowsState.asStateFlow()
+  private val cacheBackToListState = MutableStateFlow(false)
+  val cacheBackToList: StateFlow<Boolean> = cacheBackToListState.asStateFlow()
   private val screenState = MutableStateFlow(AppTab.Conversation)
   val tab: StateFlow<AppTab> = screenState.asStateFlow()
   val pairAddress = MutableStateFlow("")
@@ -1098,7 +1104,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun selectTab(tab: AppTab) {
-    if (tab != AppTab.Conversation) leaveDictation()
+    if (tab != AppTab.Conversation) {
+      leaveDictation()
+      closeCachedList()
+    }
     screenState.value = tab
     if (tab == AppTab.Plan && !uiState.value.disconnected)
       session.sendCatalogue(encodePlanChoices(session.nextCommandId()))
@@ -1227,6 +1236,49 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (effects != null) applyUiEffects(effects)
     uiState.update { it.copy(pairHold = false, settingsOpen = false, disconnected = true, banner = ConnectingBanner) }
     session.connect(address, port)
+  }
+
+  fun showCachedList() {
+    if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
+    cacheBackToListState.value = false
+    viewModelScope.launch(Dispatchers.IO) {
+      val fingerprint = store.load().fingerprint
+      val rows = try {
+        cacheRowsForFingerprint(offlineStore.loadIndex(), fingerprint)
+      } catch (error: Exception) {
+        emptyList()
+      }
+      withContext(Dispatchers.Main) {
+        if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return@withContext
+        cacheRowsState.value = rows
+        cacheListOpenState.value = true
+      }
+    }
+  }
+
+  fun closeCachedList() {
+    cacheListOpenState.value = false
+  }
+
+  /** Loads one cached file onto the conversation page. Does not open a socket. */
+  fun openCachedRow(entry: computing.michell.monitor.protocol.CacheIndexEntry) {
+    if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val document = try {
+        offlineStore.loadConversation(entry.fileName)
+      } catch (error: Exception) {
+        null
+      } ?: return@launch
+      withContext(Dispatchers.Main) {
+        if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return@withContext
+        val seeded = reviewedCacheState(uiState.value, document, entry, store.load().address.isNotEmpty())
+        coordinator.restoreOffline(seeded)
+        uiState.value = coordinator.state
+        cacheListOpenState.value = false
+        cacheBackToListState.value = true
+        restoreCachedImages(entry.fileName, document, uiState.value.hostGeneration)
+      }
+    }
   }
 
   fun showSettings() {
@@ -1460,6 +1512,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) saveCacheNow(uiState.value, false)
+    if (ideLinkLive(uiState.value.disconnected, status.phase)) {
+      cacheListOpenState.value = false
+      cacheBackToListState.value = false
+    }
     if (effects == null) return
     linkGrace?.cancel()
     if (!coordinator.holdingLink) return

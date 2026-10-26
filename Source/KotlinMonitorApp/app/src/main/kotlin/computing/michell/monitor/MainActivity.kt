@@ -39,6 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.ui.ActivityStatus
+import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.AppTab
 import computing.michell.monitor.ui.ApprovalSheet
 import computing.michell.monitor.ui.ConversationScreen
@@ -86,6 +87,9 @@ private fun MonitorShell(model: MonitorViewModel) {
   val address by model.pairAddress.collectAsState()
   val port by model.pairPort.collectAsState()
   val showSettings = ui.settingsOpen
+  val cacheListOpen by model.cacheListOpen.collectAsState()
+  val cacheRows by model.cacheRows.collectAsState()
+  val cacheBackToList by model.cacheBackToList.collectAsState()
   val scope = rememberCoroutineScope()
   val pagerState = rememberPagerState(initialPage = pageForTab(tab)) { MainTabs.size }
   // A cancelled swipe never settles on the other page, so dictation and plan refresh stay put.
@@ -95,7 +99,13 @@ private fun MonitorShell(model: MonitorViewModel) {
       if (next != null) model.selectTab(next)
     }
   }
-  BackHandler(enabled = showSettings) { model.closeSettings() }
+  BackHandler(enabled = showSettings || cacheListOpen || cacheBackToList) {
+    when {
+      showSettings -> model.closeSettings()
+      cacheListOpen -> model.closeCachedList()
+      cacheBackToList -> model.showCachedList()
+    }
+  }
   Scaffold { padding ->
     val modifier = Modifier.padding(padding).fillMaxSize()
     if (showSettings) {
@@ -129,7 +139,8 @@ private fun MonitorShell(model: MonitorViewModel) {
               ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
               model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
               dictation, model::toggleDictationOn, model::toggleDictationOff,
-              permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest
+              permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
+              model::showCachedList
             )
             AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)
           }
@@ -147,6 +158,9 @@ private fun MonitorShell(model: MonitorViewModel) {
     }
   }
   val notice = ui.approval
+  if (!showSettings && tab == AppTab.Conversation && cacheListOpen) {
+    CachedListDialog(cacheRows, model::openCachedRow, model::closeCachedList)
+  }
   if (!showSettings && ui.approvalOpen && notice != null) {
     ApprovalSheet(notice, model::allowApproval, model::denyApproval, model::dismissApproval)
   }

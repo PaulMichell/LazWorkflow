@@ -2,6 +2,8 @@ package computing.michell.monitor.ui
 
 /* Offline restore keeps browseable rows and disables remote actions (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.protocol.CacheIndexEntry
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
@@ -81,6 +83,48 @@ class OfflineCacheUiTest {
     assertFalse(cursorCommitted(before, partial))
     assertFalse(cursorCommitted(before, catching))
     assertTrue(cursorCommitted(before, before.copy(hostEpoch = "bb", hostCursor = 0)))
+  }
+
+  @Test
+  fun aCachedReviewKeepsTheLiveBlobAndDoesNotEnableSend() {
+    val live = WireTurn(-2, "live", "build", "", "Still writing", "", prompt = "Still writing", live = true)
+    val document = OfflineCacheDocument(
+      listOf(WireTurn(1, "turn-1", "build", "", "Shown", "")),
+      emptyList(),
+      live,
+      "",
+      "",
+      emptyList(),
+      -1,
+      ""
+    )
+    val entry = CacheIndexEntry("aa", "/work/LazWorkflow", "current", "Shown", 1L, 2, "c-aa.json")
+    val reviewed = reviewedCacheState(MonitorUi(reachedLive = true, view = emptyView().copy(canSend = true)), document, entry, true)
+    assertEquals("Still writing", reviewed.live?.prompt)
+    assertEquals("Shown", reviewed.turns[0].promptPreview)
+    assertEquals("current", reviewed.conversationId)
+    assertEquals("/work/LazWorkflow", reviewed.projectRoot)
+    assertFalse(reviewed.view.canSend)
+    assertTrue(reviewed.disconnected)
+    assertEquals(OfflineBanner, reviewed.banner)
+  }
+
+  @Test
+  fun theCachedListIsTheLastFingerprintAndHidesWhileLive() {
+    val hex = "ab".repeat(32)
+    val older = CacheIndexEntry(hex, "/work/LazWorkflow", "conversation-1", "Old", 1L, 1, "c-old.json")
+    val newer = CacheIndexEntry(hex.chunked(2).joinToString(":"), "/other/Phone", "current", "", 9L, 1, "c-new.json")
+    val other = CacheIndexEntry("cd".repeat(32), "/x", "current", "Other", 8L, 1, "c-other.json")
+    val rows = cacheRowsForFingerprint(listOf(older, other, newer), hex)
+    assertEquals(listOf("current", "conversation-1"), rows.map { it.conversationId })
+    assertEquals("Phone", projectDisplay(rows[0].projectRoot))
+    assertEquals("LazWorkflow", projectDisplay("/work/LazWorkflow"))
+    assertEquals("LazWorkflow", projectDisplay("C:\\work\\LazWorkflow"))
+    assertEquals("current", cacheRowTitle(rows[0]))
+    assertEquals("26 Oct 2026, 12:00", cacheUpdatedText(java.time.Instant.parse("2026-10-26T12:00:00Z").toEpochMilli(), java.time.ZoneId.of("UTC")))
+    assertFalse(cachedButtonVisible(false, LinkPhase.Live))
+    assertTrue(cachedButtonVisible(true, LinkPhase.Disconnected))
+    assertTrue(cachedButtonVisible(false, LinkPhase.Disconnected))
   }
 
   @Test

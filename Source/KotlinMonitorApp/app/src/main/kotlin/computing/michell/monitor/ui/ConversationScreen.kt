@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -111,7 +112,8 @@ fun ConversationScreen(
   onDictateOff: () -> Unit,
   permissionRequest: Boolean,
   onPermissionResult: (Boolean) -> Unit,
-  onPermissionConsumed: () -> Unit
+  onPermissionConsumed: () -> Unit,
+  onCached: () -> Unit = {}
 ) {
   val activity = LocalContext.current as? Activity
   val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -124,6 +126,11 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (cachedButtonVisible(ui.disconnected, phase)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        TextButton(onClick = onCached) { Text("Cached") }
+      }
+    }
     ConversationPane(ui, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)

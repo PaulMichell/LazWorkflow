@@ -6,6 +6,7 @@ package computing.michell.monitor.ui
    image bytes sit in a sibling directory, named by image id. The old
    offline-cache.json is deleted once, after the first directory save. */
 
+import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.normalizeFingerprint
 import computing.michell.monitor.connection.sha256Hex
@@ -133,6 +134,46 @@ fun cacheRowChanged(before: MonitorUi, after: MonitorUi): Boolean {
   val previous = cacheSaveTarget(before)
   if (previous == null) return true
   return next.conversationId != previous.conversationId || next.projectRoot != previous.projectRoot || next.title != previous.title
+}
+
+fun projectDisplay(projectRoot: String): String {
+  val trimmed = projectRoot.trim().trimEnd('/', '\\')
+  if (trimmed.isEmpty()) return ""
+  val slash = maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (slash < 0 || slash >= trimmed.lastIndex) return trimmed
+  return trimmed.substring(slash + 1)
+}
+
+fun cacheUpdatedText(updatedMs: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String {
+  if (updatedMs <= 0L) return ""
+  val formatter = java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm").withLocale(java.util.Locale.UK)
+  return java.time.Instant.ofEpochMilli(updatedMs).atZone(zone).format(formatter)
+}
+
+fun cacheRowTitle(entry: CacheIndexEntry): String {
+  if (entry.title.isNotEmpty()) return entry.title
+  if (entry.conversationId.isNotEmpty()) return entry.conversationId
+  return "Untitled"
+}
+
+/** Newest first. Only the last paired fingerprint. */
+fun cacheRowsForFingerprint(entries: List<CacheIndexEntry>, fingerprint: String): List<CacheIndexEntry> {
+  val key = cacheFingerprint(fingerprint)
+  return entries.filter { entry -> cacheFingerprint(entry.fingerprint) == key }
+    .sortedWith(compareByDescending<CacheIndexEntry> { it.updatedMs }.thenBy { it.fileName })
+}
+
+fun cachedButtonVisible(disconnected: Boolean, phase: LinkPhase): Boolean {
+  return !ideLinkLive(disconnected, phase)
+}
+
+/** The page copy of a chosen cache file. Remote actions stay off. Does not open a socket. */
+fun reviewedCacheState(state: MonitorUi, document: OfflineCacheDocument, entry: CacheIndexEntry, hasAddress: Boolean): MonitorUi {
+  return applyOfflineCache(state, document, hasAddress).copy(
+    conversationId = entry.conversationId,
+    projectRoot = entry.projectRoot,
+    conversationTitle = entry.title
+  )
 }
 
 fun newestCacheEntry(entries: List<CacheIndexEntry>, fingerprint: String): CacheIndexEntry? {
