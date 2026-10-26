@@ -10,7 +10,7 @@ Unit ManageRepositoryHistory;
 Interface
 
 Uses
-  Classes, SysUtils, Graphics, Controls, ExtCtrls, StdCtrls, Forms, GitGraphModel;
+  Classes, SysUtils, Graphics, Controls, ExtCtrls, StdCtrls, Forms, GitGraphModel, CanvasUtils;
 
 Type
   TManageHistoryGraph = Class
@@ -39,6 +39,8 @@ Type
     Function FormatCommitDate(Const CommitTime: Int64): String;
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer; RowColor: TColor);
     Function CommitIsCheckedOut(Const CommitRec: TGitCommitRec): Boolean;
+    Function StrokesNear(NodeX, NodeY, Reach: Single; Const Visible: TGitEdgeIndices; HalfWidth: Single): TSmoothStrokeArray;
+    Procedure JoinLane(Target: TCanvas; NodeX, NodeY: Integer; Const Strokes: TSmoothStrokeArray; InnerReach, OuterReach, PenWidth: Single);
   Public
     Constructor Create(Host: TCustomForm);
     Procedure Bind(PaintBox: TPaintBox; ScrollBar: TScrollBar; Model: TGitGraphModel);
@@ -58,7 +60,7 @@ Type
 Implementation
 
 Uses
-  Types, Math, DateUtils, GitConfig, CanvasUtils;
+  Types, Math, DateUtils, GitConfig;
 
 Constructor TManageHistoryGraph.Create(Host: TCustomForm);
 Begin
@@ -344,6 +346,108 @@ Begin
   Result := (FHeadSha <> '') And SameText(CommitRec.Sha, FHeadSha);
 End;
 
+Function TManageHistoryGraph.StrokesNear(NodeX, NodeY, Reach: Single; Const Visible: TGitEdgeIndices; HalfWidth: Single): TSmoothStrokeArray;
+
+  Function NearSegment(AX1, AY1, AX2, AY2: Single): Boolean;
+  Var
+    Dx, Dy, Len2, T, Px, Py: Single;
+  Begin
+    Dx := AX2 - AX1;
+    Dy := AY2 - AY1;
+    Len2 := Dx * Dx + Dy * Dy;
+    If Len2 <= 0 Then
+      Begin
+        Px := NodeX - AX1;
+        Py := NodeY - AY1;
+        Result := Px * Px + Py * Py <= Reach * Reach;
+        Exit;
+      End;
+    T := ((NodeX - AX1) * Dx + (NodeY - AY1) * Dy) / Len2;
+    If T < 0 Then
+      T := 0
+    Else If T > 1 Then
+      T := 1;
+    Px := NodeX - (AX1 + T * Dx);
+    Py := NodeY - (AY1 + T * Dy);
+    Result := Px * Px + Py * Py <= Reach * Reach;
+  End;
+
+  Procedure AddStroke(AX1, AY1, AX2, AY2: Single; AColor: TColor);
+  Var
+    N: Integer;
+  Begin
+    If Not NearSegment(AX1, AY1, AX2, AY2) Then
+      Exit;
+    N := Length(Result);
+    SetLength(Result, N + 1);
+    Result[N].X1 := AX1;
+    Result[N].Y1 := AY1;
+    Result[N].X2 := AX2;
+    Result[N].Y2 := AY2;
+    Result[N].HalfWidth := HalfWidth;
+    Result[N].Color := AColor;
+  End;
+
+Var
+  I: Integer;
+  E: TGitGraphEdge;
+  X1, Y1, X2, Y2: Single;
+  Col: TColor;
+Begin
+  Result := Nil;
+  For I := 0 To High(Visible) Do
+    Begin
+      E := FModel.Edge(Visible[I]);
+      X1 := LaneX(E.ChildLane);
+      Y1 := RowMidY(E.ChildIndex);
+      X2 := LaneX(E.ParentLane);
+      Y2 := RowMidY(E.ParentIndex);
+      Col := FLaneColors[FModel.LaneColorIndex(E.ChildLane)];
+      If E.ChildLane = E.ParentLane Then
+        AddStroke(X1, Y1, X2, Y2, Col)
+      Else
+        Begin
+          AddStroke(X1, Y1, X1, Y2, Col);
+          AddStroke(X1, Y2, X2, Y2, Col);
+        End;
+    End;
+End;
+
+Procedure TManageHistoryGraph.JoinLane(Target: TCanvas; NodeX, NodeY: Integer; Const Strokes: TSmoothStrokeArray;
+  InnerReach, OuterReach, PenWidth: Single);
+
+  Procedure Toward(Const Stroke: TSmoothStroke; EndX, EndY: Single);
+  Var
+    DirX, DirY, Len, Reach: Single;
+  Begin
+    DirX := EndX - NodeX;
+    DirY := EndY - NodeY;
+    Len := Hypot(DirX, DirY);
+    If Len <= InnerReach + 0.25 Then
+      Exit;
+    Reach := OuterReach;
+    If Reach > Len Then
+      Reach := Len;
+    If Reach <= InnerReach Then
+      Exit;
+    Target.Pen.Color := Stroke.Color;
+    Target.Pen.Width := Max(1, Round(PenWidth));
+    Target.Line(NodeX + Round(DirX / Len * InnerReach), NodeY + Round(DirY / Len * InnerReach),
+      NodeX + Round(DirX / Len * Reach), NodeY + Round(DirY / Len * Reach));
+  End;
+
+Var
+  I: Integer;
+Begin
+  If Not Assigned(Target) Then
+    Exit;
+  For I := 0 To High(Strokes) Do
+    Begin
+      Toward(Strokes[I], Strokes[I].X1, Strokes[I].Y1);
+      Toward(Strokes[I], Strokes[I].X2, Strokes[I].Y2);
+    End;
+End;
+
 Function HistoryRowFill(Selected: Boolean): TColor;
 Begin
   If Selected Then
@@ -503,11 +607,12 @@ End;
 Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
-  TextH, TextY, EdgePenW, MsgPad, RingPenW, MarkerX, MarkerY, MarkerRow: Integer;
-  MarkerRadius, RingInner: Single;
+  TextH, TextY, EdgePenW, MsgPad, RingPenW, NodeY: Integer;
+  MarkerRadius, RingInner, HalfStroke, InnerReach, OuterReach: Single;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
+  Strokes: TSmoothStrokeArray;
   Col: TColor;
   LabelText, DateText: String;
 Begin
@@ -520,14 +625,19 @@ Begin
   Ring := Max(2, GraphScale(2));
   RingPenW := Max(1, GraphScale(2));
   EdgePenW := Max(1, GraphScale(2));
-  { 50% edge stays at least one pixel inside the ring's inner 50% edge, so the
-    half-pixel coverage ramps do not meet and the checkout ring stays clear. }
-  RingInner := NodeR + Ring - RingPenW / 2;
+  { One extra device pixel keeps the ring ramp off the marker and leaves the lane
+    line visible between them. Coverage ramps are half a pixel, not DPI-scaled. }
+  RingInner := NodeR + Ring + 1 - RingPenW / 2;
   MarkerRadius := NodeR;
   If MarkerRadius > RingInner - 1 Then
     MarkerRadius := RingInner - 1;
   If MarkerRadius < 1 Then
     MarkerRadius := 1;
+  { Include the widgetset line's own half-pixel fringe so the disk does not erase it. }
+  HalfStroke := EdgePenW / 2 + 1;
+  InnerReach := MarkerRadius - 1;
+  If InnerReach < 0.5 Then
+    InnerReach := 0.5;
   MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
     Begin
@@ -585,20 +695,24 @@ Begin
             End;
         End;
 
-      MarkerRow := -1;
       For I := FirstRow To LastRow Do
         Begin
           C := FModel.Commit(I);
           Y := I * RH - Off;
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
-          DrawSmoothDisk(FPaintBox.Canvas, X, RowMidY(I), MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex));
+          NodeY := RowMidY(I);
+          Strokes := StrokesNear(X, NodeY, MarkerRadius + HalfStroke, Visible, HalfStroke);
+          { Ring first, then the same disk as every other row, so the ring mask cannot clip this marker. }
           If CommitIsCheckedOut(C) Then
-            Begin
-              MarkerRow := I;
-              MarkerX := X;
-              MarkerY := RowMidY(I);
-            End;
+            DrawSmoothRing(FPaintBox.Canvas, X, NodeY, NodeR + Ring + 1, RingPenW, clWindowText,
+              HistoryRowFill(I = FSelectedIndex), Strokes);
+          DrawSmoothDisk(FPaintBox.Canvas, X, NodeY, MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex), Strokes);
+          OuterReach := MarkerRadius + 1;
+          If CommitIsCheckedOut(C) And (OuterReach > RingInner - 1) Then
+            OuterReach := RingInner - 1;
+          { The real pen continues into the solid disk. The fringe blend alone can still leave a hairline. }
+          JoinLane(FPaintBox.Canvas, X, NodeY, Strokes, InnerReach, OuterReach, EdgePenW);
 
           TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;
@@ -625,11 +739,6 @@ Begin
           If C.DetailsLoaded And (C.Refs <> '') Then
             DrawRefCards(C.Refs, TextX, Y, HistoryRowFill(I = FSelectedIndex));
         End;
-
-      { Paths and lane dots are already painted. The ring only overlays the stroke. }
-      If MarkerRow >= 0 Then
-        DrawSmoothRing(FPaintBox.Canvas, MarkerX, MarkerY, NodeR + Ring, RingPenW, clWindowText,
-          HistoryRowFill(MarkerRow = FSelectedIndex));
     End;
 End;
 
