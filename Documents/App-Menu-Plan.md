@@ -87,7 +87,7 @@ A plan-row change is the existing `plan` message with the same epoch and a new c
 
 ### 3.3 Resume and catchup
 
-Status: not started
+Status: complete
 
 On `hello_ok` the client sends `resume` with the epoch and cursor it last committed, or epoch empty and cursor 0 if it has none. The host handles `resume` on the session, then the bridge.
 
