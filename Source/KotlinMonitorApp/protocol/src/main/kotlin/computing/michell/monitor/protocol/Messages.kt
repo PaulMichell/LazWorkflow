@@ -97,7 +97,15 @@ data class MonitorMessage(
 data class HelloMessage(val clientName: String, val clientVersion: String, val clientId: String, val hasClientId: Boolean)
 data class PairMessage(val code: String, val fingerprint: String)
 data class PairOkMessage(val clientId: String, val sessionToken: String)
-data class HelloOkMessage(val nonce: String, val serverName: String)
+data class HelloOkMessage(
+  val nonce: String,
+  val serverName: String,
+  val epoch: String,
+  val cursor: Long,
+  val conversationId: String,
+  val projectRoot: String,
+  val title: String
+)
 data class AuthMessage(val clientId: String, val hmac: String)
 data class RejectedMessage(val reason: String, val hostVersion: Int, val clientVersion: Int)
 data class ByeMessage(val reason: String)
@@ -515,10 +523,15 @@ fun decodePairOk(obj: JsonValue.Obj): PairOkMessage? {
   return PairOkMessage(clientId.value, token.value)
 }
 
-fun encodeHelloOk(id: String, nonce: String, serverName: String): String {
+fun encodeHelloOk(id: String, hello: HelloOkMessage): String {
   val payload = JsonObjectBuilder()
-  payload.add("nonce", nonce)
-  payload.add("server_name", serverName)
+  payload.add("nonce", hello.nonce)
+  payload.add("server_name", hello.serverName)
+  payload.add("epoch", hello.epoch)
+  payload.add("cursor", hello.cursor)
+  payload.add("conversation_id", hello.conversationId)
+  payload.add("project_root", hello.projectRoot)
+  payload.add("title", hello.title)
   return encodeEnvelope(MessageKind.HelloOk, id, payload.build())
 }
 
@@ -530,8 +543,16 @@ fun decodeHelloOk(payloadJson: String): HelloOkMessage? {
 fun decodeHelloOk(obj: JsonValue.Obj): HelloOkMessage? {
   val nonce = obj.readString("nonce", true)
   val serverName = obj.readString("server_name", true)
-  if (!nonce.ok || !serverName.ok) return null
-  return HelloOkMessage(nonce.value, serverName.value)
+  val epoch = obj.readString("epoch", true)
+  val cursor = obj.readLong("cursor", true)
+  val conversationId = obj.readString("conversation_id", true)
+  val projectRoot = obj.readString("project_root", true)
+  val title = obj.readString("title", true)
+  if (!nonce.ok || !serverName.ok || !epoch.ok || !cursor.ok || !conversationId.ok || !projectRoot.ok || !title.ok) {
+    return null
+  }
+  return HelloOkMessage(nonce.value, serverName.value, epoch.value, cursor.value, conversationId.value,
+    projectRoot.value, title.value)
 }
 
 fun encodeAuth(id: String, clientId: String, hmac: String): String {

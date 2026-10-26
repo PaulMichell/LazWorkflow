@@ -40,6 +40,8 @@ Const
   MonitorServerName = 'LazAssistantMonitor';
   MonitorLogArea = 'AssistantMonitor';
 
+Function MintMonitorEpoch: String;
+
 Type
   TMonitorSessionState = (
     mssStopped,
@@ -115,6 +117,15 @@ Type
     FUnsentTranscriptAt: QWord;
     FHasUnsentTranscript: Boolean;
     FTranscriptRevision: Integer;
+    FEpoch: String;
+    FConversationId: String;
+    FProjectRoot: String;
+    FTitle: String;
+    FCommittedCursor: Int64;
+    FNextCursor: Int64;
+    FReservedCursor: Int64;
+    FReservedPayload: RawByteString;
+    FReservedHanded: Boolean;
     FPendingCommand: Boolean;
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
@@ -188,6 +199,13 @@ Type
     Procedure RevokeClient(Const ClientId: String);
     Procedure RevokeAll;
     Procedure NoteTurnEnded;
+    { New epoch. Cursor returns to zero. Safe from the IDE thread. }
+    Procedure BeginMirrorEpoch(Const Epoch, ConversationId, ProjectRoot, Title: String);
+    Function MirrorEpoch: String;
+    Function MirrorCursor: Int64;
+    { Same cursor while the bytes are unsent or already handed unchanged. }
+    Function CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
+    Procedure NoteMirrorHanded(Cursor: Int64);
     /// Next host frame id. Safe to call off the session lock.
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
@@ -304,6 +322,19 @@ Begin
   SetLength(Result, Count);
   If Not CryptoGetRandomBytes(@Result[0], Count) Then
     SetLength(Result, 0);
+End;
+
+Function MintMonitorEpoch: String;
+Var
+  Bytes: TBytes;
+  Hex: AnsiString;
+Begin
+  Result := '';
+  Bytes := RandomBytes(16);
+  If Length(Bytes) <> 16 Then
+    Exit;
+  Hex := BytesToHexStr(Bytes);
+  Result := LowerCase(String(Hex));
 End;
 
 Constructor TMonitorMemoryCarrier.Create;
@@ -429,6 +460,15 @@ Begin
   FUnsentTranscriptAt := 0;
   FHasUnsentTranscript := False;
   FTranscriptRevision := 0;
+  FEpoch := '';
+  FConversationId := 'current';
+  FProjectRoot := '';
+  FTitle := '';
+  FCommittedCursor := 0;
+  FNextCursor := 0;
+  FReservedCursor := 0;
+  FReservedPayload := '';
+  FReservedHanded := False;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -720,6 +760,7 @@ End;
 Procedure TMonitorSession.HandleHello(Const PayloadJson: String);
 Var
   Hello: TMonitorHello;
+  HelloOk: TMonitorHelloOk;
   Index: Integer;
   NonceHex: AnsiString;
 Begin
@@ -765,7 +806,20 @@ Begin
   FNonceHex := LowerCase(String(NonceHex));
   FNonceUntil := ClockMs + MonitorNonceTtlMs;
   FNonceUsed := False;
-  QueueSend(EncodeMonitorHelloOk(NewHostId, FNonceHex, MonitorServerName));
+  If FEpoch = '' Then
+    Begin
+      FEpoch := MintMonitorEpoch;
+      FConversationId := 'current';
+      FCommittedCursor := 0;
+    End;
+  HelloOk.Nonce := FNonceHex;
+  HelloOk.ServerName := MonitorServerName;
+  HelloOk.Epoch := FEpoch;
+  HelloOk.Cursor := FCommittedCursor;
+  HelloOk.ConversationId := FConversationId;
+  HelloOk.ProjectRoot := FProjectRoot;
+  HelloOk.Title := FTitle;
+  QueueSend(EncodeMonitorHelloOk(NewHostId, HelloOk));
 End;
 
 Procedure TMonitorSession.HandlePair(Const PayloadJson: String);
@@ -1448,6 +1502,96 @@ Begin
       FState := mssLive;
     FHostFlags.Sending := False;
     FHostFlags.PlanAgentRunning := False;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.BeginMirrorEpoch(Const Epoch, ConversationId, ProjectRoot, Title: String);
+Begin
+  LockSession;
+  Try
+    FEpoch := LowerCase(Epoch);
+    If ConversationId = '' Then
+      FConversationId := 'current'
+    Else
+      FConversationId := ConversationId;
+    FProjectRoot := ProjectRoot;
+    FTitle := Title;
+    FCommittedCursor := 0;
+    FNextCursor := 0;
+    FReservedCursor := 0;
+    FReservedPayload := '';
+    FReservedHanded := False;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.MirrorEpoch: String;
+Begin
+  LockSession;
+  Try
+    Result := FEpoch;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.MirrorCursor: Int64;
+Begin
+  LockSession;
+  Try
+    Result := FCommittedCursor;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
+Begin
+  Result := False;
+  Cursor := 0;
+  LockSession;
+  Try
+    If FEpoch = '' Then
+      Exit;
+    If (FReservedCursor <> 0) And (Not FReservedHanded) Then
+      Begin
+        FReservedPayload := Payload;
+        Cursor := FReservedCursor;
+        Result := True;
+        Exit;
+      End;
+    If (FReservedCursor <> 0) And FReservedHanded And (Payload = FReservedPayload) Then
+      Begin
+        Cursor := FReservedCursor;
+        Result := True;
+        Exit;
+      End;
+    If FNextCursor = High(Int64) Then
+      Exit;
+    Inc(FNextCursor);
+    FReservedCursor := FNextCursor;
+    FReservedPayload := Payload;
+    FReservedHanded := False;
+    Cursor := FReservedCursor;
+    Result := True;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.NoteMirrorHanded(Cursor: Int64);
+Begin
+  LockSession;
+  Try
+    If (Cursor <> 0) And (Cursor = FReservedCursor) Then
+      Begin
+        FReservedHanded := True;
+        If Cursor > FCommittedCursor Then
+          FCommittedCursor := Cursor;
+      End;
   Finally
     UnlockSession;
   End;

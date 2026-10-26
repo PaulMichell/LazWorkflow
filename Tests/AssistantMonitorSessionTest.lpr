@@ -428,6 +428,26 @@ Begin
   End;
 End;
 
+Procedure TestMirrorCursor;
+Var
+  Cursor: Int64;
+Begin
+  Session.BeginMirrorEpoch('ab12cd34', 'current', '/work/LazWorkflow', 'Current');
+  Check('epoch stored', Session.MirrorEpoch = 'ab12cd34');
+  Check('cursor starts at zero', Session.MirrorCursor = 0);
+  Check('first commit', Session.CommitMirrorCursor('patch-a', Cursor) And (Cursor = 1));
+  Check('unsent replace keeps cursor', Session.CommitMirrorCursor('patch-b', Cursor) And (Cursor = 1));
+  Check('unsent is not handed', Session.MirrorCursor = 0);
+  Session.NoteMirrorHanded(1);
+  Check('handed cursor', Session.MirrorCursor = 1);
+  Check('resend keeps cursor', Session.CommitMirrorCursor('patch-b', Cursor) And (Cursor = 1));
+  Check('different bytes take the next cursor', Session.CommitMirrorCursor('patch-c', Cursor) And (Cursor = 2));
+  Session.NoteMirrorHanded(2);
+  Session.BeginMirrorEpoch('eeff0011', 'conversation-20261019T120000000', '/work/LazWorkflow', 'Archived');
+  Check('new epoch resets cursor', (Session.MirrorEpoch = 'eeff0011') And (Session.MirrorCursor = 0));
+  Check('new epoch does not reuse the old cursor', Session.CommitMirrorCursor('patch-c', Cursor) And (Cursor = 1));
+End;
+
 Procedure TestOldCatalogueRejects;
 Begin
   Carrier.ClearSent;
@@ -639,6 +659,7 @@ Begin
       TestRevokedNewSocket;
       TestDisplayApproval;
       TestBareSignalAndCancel;
+      TestMirrorCursor;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except

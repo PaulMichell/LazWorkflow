@@ -86,6 +86,7 @@ Type
     Procedure PushTranscript(Form: TProjectAssistantForm);
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure PushStatus(Form: TProjectAssistantForm);
+    Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
@@ -275,6 +276,7 @@ Begin
       Session.SetIdleHandler(@SweepCommands);
       Session.SetApprovalCloseHandler(@HandleApprovalClosed);
     End;
+  PublishEpoch;
 End;
 
 Procedure TAssistantMonitorBridge.Detach;
@@ -426,6 +428,31 @@ Begin
   Job := TMonitorNoticeJob.Create;
   Job.Kind := asnStatus;
   TThread.Queue(Nil, @Job.Execute);
+End;
+
+Procedure TAssistantMonitorBridge.PublishEpoch;
+Var
+  Form: TProjectAssistantForm;
+  Session: TMonitorSession;
+  ConversationId, ProjectRoot, Title, Epoch: String;
+Begin
+  ConversationId := 'current';
+  ProjectRoot := '';
+  Title := '';
+  Form := OpenForm;
+  If Assigned(Form) Then
+    Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
+  Epoch := MintMonitorEpoch;
+  If Epoch = '' Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Assigned(Session) Then
+    Session.BeginMirrorEpoch(Epoch, ConversationId, ProjectRoot, Title);
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -611,6 +638,8 @@ Begin
       PushStatus(Form);
     asnSnapshot:
       PushSnapshot(Form, '');
+    asnIdentity:
+      PublishEpoch;
     asnApproval:
       Begin
         If Not Job.HasApproval Then

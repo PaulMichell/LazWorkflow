@@ -546,6 +546,7 @@ Type
     Procedure ReloadActiveConnection;
     /// Copies the current desktop state. Does not write JSON or read provider tokens.
     Procedure FillMonitorView(Out View: TAssistantMonitorView);
+    Procedure FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
     /// Reads a stored turn, or the live turn when TurnIndex is LiveConversationMarker. Does not change the selection.
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     /// Copies BuildSections. Does not write the plan file.
@@ -8505,7 +8506,9 @@ Begin
     If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
       Begin
         If Not ProjectAssistantConversation.StartNewConversation Then
-          WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError);
+          WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError)
+        Else
+          AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
       End;
     FContextUsed := 0;
     FCodexContextUsage := EmptyCodexContextUsage;
@@ -8567,6 +8570,7 @@ Begin
         SetCurrentSystemNote('Could not start a new conversation.');
       Exit;
     End;
+  AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
   FContextUsed := 0;
   FCodexContextUsage := EmptyCodexContextUsage;
   FContextWarnShown := False;
@@ -8738,6 +8742,7 @@ Begin
     WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title + ' root=' + Root)
   Else
     WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title);
+  AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
 End;
 
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
@@ -9125,6 +9130,7 @@ Begin
       Exit;
     End;
   SelectMode(ModeOfLoadedConversation);
+  AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
   ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
   PersistSession;
   WorkflowLogger.Info('ProjectAssistant', 'History activated: ' + ArchiveId);
@@ -9583,6 +9589,18 @@ Begin
     ErrorText := 'This task is disabled.'
   Else
     Result := False;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
+Begin
+  ConversationId := 'current';
+  ProjectRoot := '';
+  Title := '';
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  ProjectRoot := ProjectAssistantConversation.ProjectRoot;
+  ConversationId := ProjectAssistantConversation.OpenConversationId;
+  Title := ProjectAssistantConversation.MonitorTitle;
 End;
 
 Procedure TProjectAssistantForm.FillMonitorView(Out View: TAssistantMonitorView);

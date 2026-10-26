@@ -129,6 +129,11 @@ Type
   TMonitorHelloOk = Record
     Nonce: String;
     ServerName: String;
+    Epoch: String;
+    Cursor: Int64;
+    ConversationId: String;
+    ProjectRoot: String;
+    Title: String;
   End;
 
   TMonitorAuth = Record
@@ -320,7 +325,7 @@ Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
 Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
 Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
 Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
-Function EncodeMonitorHelloOk(Const Id, Nonce, ServerName: String): String;
+Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
 Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
 Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
 Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
@@ -921,13 +926,18 @@ Begin
   End;
 End;
 
-Function EncodeMonitorHelloOk(Const Id, Nonce, ServerName: String): String;
+Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
 Var
   Payload: TJSONObject;
 Begin
   Payload := TJSONObject.Create;
-  Payload.Add('nonce', Nonce);
-  Payload.Add('server_name', ServerName);
+  Payload.Add('nonce', HelloOk.Nonce);
+  Payload.Add('server_name', HelloOk.ServerName);
+  Payload.Add('epoch', HelloOk.Epoch);
+  Payload.Add('cursor', HelloOk.Cursor);
+  Payload.Add('conversation_id', HelloOk.ConversationId);
+  Payload.Add('project_root', HelloOk.ProjectRoot);
+  Payload.Add('title', HelloOk.Title);
   Result := EncodeWith(mmkHelloOk, Id, Payload);
 End;
 
@@ -939,10 +949,18 @@ Begin
   Result := False;
   HelloOk.Nonce := '';
   HelloOk.ServerName := '';
+  HelloOk.Epoch := '';
+  HelloOk.Cursor := 0;
+  HelloOk.ConversationId := '';
+  HelloOk.ProjectRoot := '';
+  HelloOk.Title := '';
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
-    Result := ReadString(Obj, 'nonce', True, HelloOk.Nonce) And ReadString(Obj, 'server_name', True, HelloOk.ServerName);
+    Result := ReadString(Obj, 'nonce', True, HelloOk.Nonce) And ReadString(Obj, 'server_name', True, HelloOk.ServerName) And
+      ReadString(Obj, 'epoch', True, HelloOk.Epoch) And ReadInt64(Obj, 'cursor', HelloOk.Cursor) And
+      ReadString(Obj, 'conversation_id', True, HelloOk.ConversationId) And
+      ReadString(Obj, 'project_root', True, HelloOk.ProjectRoot) And ReadString(Obj, 'title', True, HelloOk.Title);
   Finally
     Data.Free;
   End;

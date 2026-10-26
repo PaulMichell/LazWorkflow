@@ -70,7 +70,7 @@ Type
 
   TAssistantConversationStore = Class
   Private
-    FProjectRoot, FTargetStoreKey: String;
+    FProjectRoot, FTargetStoreKey, FOpenConversationId: String;
     FIndex: TObjectList; { of TConversationIndexEntry }
     FTurns: Array Of TConversationTurn; { full prompt/thinking/response cache }
     FLastError: String;
@@ -122,6 +122,10 @@ Type
     Function ActivateArchive(Const ArchiveId: String): Boolean;
     Function DeleteConversation(Const ArchiveId: String): Boolean; { '' deletes current }
     Function HistoryTitleForCurrent: String;
+    { `current` for the open conversation.jsonl, or the archive id when one is active. }
+    Function OpenConversationId: String;
+    { History title, or the first prompt preview when that title is empty. }
+    Function MonitorTitle: String;
     { Directory that contains conversation.jsonl, including a package target store. }
     Function AssistantDirectory: String;
     Property ProjectRoot: String Read FProjectRoot;
@@ -211,6 +215,7 @@ Constructor TAssistantConversationStore.Create;
 Begin
   Inherited Create;
   FProjectRoot := '';
+  FOpenConversationId := 'current';
   FLastError := '';
   FLoaded := False;
   FIndex := TObjectList.Create(True);
@@ -231,6 +236,7 @@ Begin
     FProjectRoot := ''
   Else
     FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
+  FOpenConversationId := 'current';
   ClearAll;
   FLoaded := False;
 End;
@@ -1103,6 +1109,30 @@ Begin
     Result := Format('Current — %d turn(s)', [TurnCount]);
 End;
 
+Function TAssistantConversationStore.OpenConversationId: String;
+Begin
+  If FOpenConversationId = '' Then
+    Result := 'current'
+  Else
+    Result := FOpenConversationId;
+End;
+
+Function TAssistantConversationStore.MonitorTitle: String;
+Var
+  Entry: TConversationIndexEntry;
+Begin
+  Result := HistoryTitleForCurrent;
+  If Trim(Result) <> '' Then
+    Exit;
+  If Not FLoaded Then
+    Load;
+  If IndexCount < 1 Then
+    Exit;
+  Entry := IndexEntry(0);
+  If Assigned(Entry) Then
+    Result := Entry.PromptPreview;
+End;
+
 Function TAssistantConversationStore.ArchiveCurrent(Out ArchiveId: String): Boolean;
 Var
   ConvPath, IdxPath, ArchConv, ArchIdx, ImageError: String;
@@ -1182,6 +1212,7 @@ Begin
     End;
   If Not ArchiveCurrent(ArchiveId) Then
     Exit;
+  FOpenConversationId := 'current';
   ClearAll;
   FLoaded := True;
   If FileExistsUTF8(ConversationPath) Then
@@ -1316,6 +1347,7 @@ Begin
     Begin
       If Not FLoaded Then
         Load;
+      FOpenConversationId := 'current';
       Result := True;
       Exit;
     End;
@@ -1400,6 +1432,7 @@ Begin
 
   ClearAll;
   FLoaded := False;
+  FOpenConversationId := ArchiveId;
   Result := Load;
   If Result And (Not RestoreAssistantImages(AssistantDir, ArchiveId, CurConv, ImageError)) Then
     WorkflowLogger.Warning('AssistantConversation', 'Could not restore images for ' + ArchiveId + ': ' + ImageError);

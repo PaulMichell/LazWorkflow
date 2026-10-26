@@ -53,7 +53,14 @@ import java.io.File
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
+import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.InboundPayload
+import computing.michell.monitor.protocol.MirrorPlace
+import computing.michell.monitor.protocol.WireCatchup
+import computing.michell.monitor.protocol.WirePatch
+import computing.michell.monitor.protocol.noteCatchupIdentity
+import computing.michell.monitor.protocol.noteHelloIdentity
+import computing.michell.monitor.protocol.notePatchIdentity
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
@@ -141,7 +148,16 @@ data class MonitorUi(
   val conversationGeneration: Int = 0,
   val connectionGeneration: Int = 0,
   val transcriptConnection: Int = 0,
-  val transcriptTurnId: String = ""
+  val transcriptTurnId: String = "",
+  val hostEpoch: String = "",
+  val hostCursor: Long = 0,
+  val catchingUp: Boolean = false,
+  val announcedEpoch: String = "",
+  val conversationId: String = "",
+  val projectRoot: String = "",
+  val conversationTitle: String = "",
+  val closedConversationId: String = "",
+  val closedTitle: String = ""
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -467,9 +483,38 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   )
 }
 
+private fun mirrorOf(state: MonitorUi): MirrorPlace {
+  return MirrorPlace(state.hostEpoch, state.hostCursor, state.catchingUp, state.announcedEpoch,
+    state.conversationId, state.projectRoot, state.conversationTitle)
+}
+
+private fun MonitorUi.withMirror(place: MirrorPlace): MonitorUi {
+  return copy(hostEpoch = place.epoch, hostCursor = place.cursor, catchingUp = place.catchingUp,
+    announcedEpoch = place.announcedEpoch, conversationId = place.conversationId, projectRoot = place.projectRoot,
+    conversationTitle = place.title)
+}
+
+private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): MonitorUi {
+  val hasScreen = state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()
+  return state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
+    hello.projectRoot, hello.title, hasScreen))
+}
+
+private fun applyPatchIdentity(state: MonitorUi, patch: WirePatch): MonitorUi {
+  return state.withMirror(notePatchIdentity(mirrorOf(state), patch.epoch, patch.cursor))
+}
+
+private fun applyCatchupIdentity(state: MonitorUi, catchup: WireCatchup): MonitorUi {
+  val next = noteCatchupIdentity(mirrorOf(state), catchup.epoch, catchup.cursor, catchup.mode) ?: return state
+  val snapshot = catchup.snapshot
+  val base = if (catchup.mode == "snapshot" && snapshot != null) applySnapshot(state, snapshot) else state
+  return base.withMirror(next).copy(conversationId = catchup.conversationId, projectRoot = catchup.projectRoot,
+    conversationTitle = catchup.title)
+}
+
 private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
   return when (inbound) {
-    is InboundPayload.Snapshot -> applySnapshot(state, inbound.value)
+    is InboundPayload.Snapshot -> if (state.catchingUp) state else applySnapshot(state, inbound.value)
     is InboundPayload.TranscriptPart -> applyTranscript(state, inbound.value)
     is InboundPayload.Turn -> state.copy(history = state.history + (inbound.value.turnIndex to inbound.value))
     is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
@@ -497,6 +542,13 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
       state.copy(disconnected = true, banner = reason, pairHold = hold || state.pairHold)
     }
     is InboundPayload.ImageMissing -> state.copy(imageReasons = state.imageReasons + (inbound.value.imageId to inbound.value.reason))
+    is InboundPayload.HelloOk -> applyHelloIdentity(state, inbound.value)
+    is InboundPayload.Patch -> applyPatchIdentity(state, inbound.value)
+    is InboundPayload.Catchup -> applyCatchupIdentity(state, inbound.value)
+    is InboundPayload.ConversationClosed -> state.copy(
+      closedConversationId = inbound.value.conversationId,
+      closedTitle = inbound.value.title
+    )
     else -> state
   }
 }
@@ -513,7 +565,7 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     return overlaySnapshot(cleared, snapshot, state.generation + 1)
   }
   val previousId = state.live?.id ?: ""
-  val acceptedNew = previousId.isNotEmpty() && previousId != incoming.id
+  val acceptedNew = state.hostEpoch.isEmpty() && previousId.isNotEmpty() && previousId != incoming.id
   val conversationGeneration = if (acceptedNew) state.conversationGeneration + 1 else state.conversationGeneration
   val live = mergeLiveTurn(state.live, incoming, !acceptedNew)
   val sameTurn = previousId.isNotEmpty() && previousId == incoming.id &&

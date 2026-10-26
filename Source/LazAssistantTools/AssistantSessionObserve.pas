@@ -25,7 +25,8 @@ Type
     asnApproval,
     asnSession,
     asnError,
-    asnSnapshot
+    asnSnapshot,
+    asnIdentity
   );
 
   TAssistantSessionListener = Procedure(Kind: TAssistantSessionNoticeKind) Of Object;

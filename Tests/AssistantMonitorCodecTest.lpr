@@ -406,6 +406,7 @@ Var
   Transcript: TMonitorTranscript;
   Patch: TMonitorPatch;
   Catchup: TMonitorCatchup;
+  HelloOk: TMonitorHelloOk;
   Notice: TAssistantApprovalNotice;
   PlanRows: Array[0..0] Of TAssistantMonitorPlanRow;
   TaskRows: Array[0..0] Of TAssistantMonitorTaskRow;
@@ -420,7 +421,14 @@ Begin
   AddSample('hello-reconnect', mmkHello, EncodeMonitorHello('hello-reconnect', 'Phone', '1', 'client-1'));
   AddSample('pair', mmkPair, EncodeMonitorPair('pair', 'ABCDEFGHJK', 'ab12cd34'));
   AddSample('pair-ok', mmkPairOk, EncodeMonitorPairOk('pair-ok', 'client-1', 'token-1'));
-  AddSample('hello-ok', mmkHelloOk, EncodeMonitorHelloOk('hello-ok', '00112233445566778899aabbccddeeff', 'LazAssistantMonitor'));
+  HelloOk.Nonce := '00112233445566778899aabbccddeeff';
+  HelloOk.ServerName := 'LazAssistantMonitor';
+  HelloOk.Epoch := 'ab12';
+  HelloOk.Cursor := 0;
+  HelloOk.ConversationId := 'current';
+  HelloOk.ProjectRoot := '/work/LazWorkflow';
+  HelloOk.Title := 'Current';
+  AddSample('hello-ok', mmkHelloOk, EncodeMonitorHelloOk('hello-ok', HelloOk));
   AddSample('auth', mmkAuth, EncodeMonitorAuth('auth', 'client-1', 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'));
   AddSample('rejected', mmkRejected, EncodeMonitorRejected('rejected', 'busy', 1, 1));
   AddSample('bye', mmkBye, EncodeMonitorBye('bye', 'revoked'));
@@ -490,6 +498,7 @@ Begin
   Transcript.Revision := 2;
   Transcript.Phase := 'streaming';
   Transcript.StatusText := 'Writing';
+  Transcript.DurationMs := 12;
   Transcript.Part := 1;
   Transcript.PartCount := 1;
   SetLength(Transcript.Blocks, 1);
@@ -623,7 +632,9 @@ Begin
         (PairOk.SessionToken = 'token-1'));
     mmkHelloOk:
       Check('hello_ok fields', DecodeMonitorHelloOk(Message.PayloadJson, HelloOk) And
-        (HelloOk.Nonce = '00112233445566778899aabbccddeeff') And (HelloOk.ServerName = 'LazAssistantMonitor'));
+        (HelloOk.Nonce = '00112233445566778899aabbccddeeff') And (HelloOk.ServerName = 'LazAssistantMonitor') And
+        (HelloOk.Epoch = 'ab12') And (HelloOk.Cursor = 0) And (HelloOk.ConversationId = 'current') And
+        (HelloOk.ProjectRoot = '/work/LazWorkflow') And (HelloOk.Title = 'Current'));
     mmkAuth:
       Check('auth fields', DecodeMonitorAuth(Message.PayloadJson, Auth) And (Auth.ClientId = 'client-1') And (Auth.Hmac <> ''));
     mmkRejected:
