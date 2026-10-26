@@ -452,6 +452,121 @@ Begin
   Check('empty replace does not append', Carrier.SentCount = 1);
 End;
 
+Function PatchPayload(Const Epoch: String; Cursor: Int64; Const Body: String): String;
+Var
+  Patch: TMonitorPatch;
+  Block: TAssistantMonitorBlock;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  Result := '';
+  Patch := Default(TMonitorPatch);
+  Patch.Epoch := Epoch;
+  Patch.Cursor := Cursor;
+  Patch.TurnIndex := 1;
+  Patch.TurnId := 'turn-1';
+  Patch.Phase := 'idle';
+  Patch.CanSend := True;
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  Block := Default(TAssistantMonitorBlock);
+  Block.Kind := 'answer';
+  Block.BlockId := 'block-1';
+  Block.Body := Body;
+  SetLength(Patch.Blocks, 1);
+  Patch.Blocks[0] := Block;
+  If Not TryDecodeMonitorEnvelope(EncodeMonitorPatch('patch', Patch), Message, ErrorText) Then
+    Exit;
+  Result := Message.PayloadJson;
+End;
+
+Procedure HandPatch(Const Epoch, Body: String; Out Cursor: Int64);
+Var
+  Json: String;
+Begin
+  Cursor := 0;
+  Check('patch commit ' + Body, Session.CommitMirrorCursor(Body, Cursor));
+  Session.NoteMirrorHanded(Cursor);
+  Json := PatchPayload(Epoch, Cursor, Body);
+  Check('patch payload ' + Body, Json <> '');
+  Session.RememberHandedPatch(Cursor, Json);
+End;
+
+Procedure TestResumeRing;
+Var
+  Catchup: TMonitorCatchup;
+  Closed: TMonitorConversationClosed;
+  Cursor: Int64;
+  Index: Integer;
+  Big: String;
+Begin
+  Session.BeginMirrorEpoch('Ab12Cd34', 'current', '/work/LazWorkflow', 'Current');
+  Check('closed copy before patches', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'ab12cd34') And
+    (Closed.Cursor = 0) And (Closed.ConversationId = 'current') And (Closed.Title = 'Current'));
+  HandPatch('ab12cd34', 'one', Cursor);
+  HandPatch('ab12cd34', 'two', Cursor);
+  HandPatch('ab12cd34', 'three', Cursor);
+  Check('ring replay from the middle', Session.TryResumeEvents('AB12CD34', 1, Catchup) And (Catchup.Mode = mcmEvents) And
+    (Catchup.Cursor = 3) And (Length(Catchup.Patches) = 2) And (Catchup.Patches[0].Cursor = 2) And
+    (Catchup.Patches[1].Cursor = 3) And (Catchup.Patches[0].Blocks[0].Body = 'two'));
+  Check('caught up resume is empty events', Session.TryResumeEvents('ab12cd34', 3, Catchup) And (Catchup.Mode = mcmEvents) And
+    (Length(Catchup.Patches) = 0) And (Catchup.Cursor = 3));
+  Check('empty epoch is not this generation', Not Session.TryResumeEvents('', 0, Catchup));
+  Check('other epoch is not events', Not Session.TryResumeEvents('eeff0011', 1, Catchup));
+  Check('unknown cursor is not events', Not Session.TryResumeEvents('ab12cd34', 9, Catchup));
+  Check('plan hole is not events', Session.CommitMirrorCursor('plan-row', Cursor) And (Cursor = 4));
+  Session.NoteMirrorHanded(4);
+  Check('cursor behind a plan hole snapshots', Not Session.TryResumeEvents('ab12cd34', 3, Catchup));
+  Check('cursor on the plan hole can replay later patches', Session.MirrorCursor = 4);
+  HandPatch('ab12cd34', 'after-plan', Cursor);
+  Check('resume after the hole is events', Session.TryResumeEvents('ab12cd34', 4, Catchup) And (Length(Catchup.Patches) = 1) And
+    (Catchup.Patches[0].Cursor = 5));
+  Session.BeginMirrorEpoch('eeff0011', 'conversation-20261019T120000000', '/work/LazWorkflow', 'Archived');
+  Check('new epoch drops the old ring', Not Session.TryResumeEvents('ab12cd34', 5, Catchup));
+  Check('new epoch cursor is zero', Session.MirrorCursor = 0);
+  Check('closed identity is the new epoch', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'eeff0011') And
+    (Closed.ConversationId = 'conversation-20261019T120000000') And (Closed.Title = 'Archived') And (Closed.Cursor = 0));
+  HandPatch('eeff0011', 'kept', Cursor);
+  Big := StringOfChar('z', MonitorRingJsonCap + 1);
+  Check('oversized commit', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
+  Session.NoteMirrorHanded(2);
+  Session.RememberHandedPatch(2, Big);
+  Check('discarded cursor is not events', Not Session.TryResumeEvents('eeff0011', 1, Catchup));
+  Check('resume at the discarded cursor has nothing after it', Session.TryResumeEvents('eeff0011', 2, Catchup) And
+    (Length(Catchup.Patches) = 0) And (Catchup.Cursor = 2));
+  Session.BeginMirrorEpoch('11223344', 'current', '/work/LazWorkflow', 'Cap');
+  For Index := 1 To MonitorRingCapacity + 1 Do
+    HandPatch('11223344', 'n' + IntToStr(Index), Cursor);
+  Check('capacity dropped the oldest', Not Session.TryResumeEvents('11223344', 0, Catchup));
+  Check('resume of the oldest discarded cursor still has the rest', Session.TryResumeEvents('11223344', 1, Catchup) And
+    (Catchup.Mode = mcmEvents) And (Catchup.Patches[0].Cursor = 2) And
+    (Catchup.Patches[High(Catchup.Patches)].Cursor = MonitorRingCapacity + 1));
+  Session.BeginMirrorEpoch('55667788', 'current', '/work/LazWorkflow', 'Bytes');
+  HandPatch('55667788', 'small', Cursor);
+  Big := '{"epoch":"55667788","cursor":2,"turn_index":1,"turn_id":"turn-1","part":1,"part_count":1,' +
+    '"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
+    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
+    '"tool_id":"","body":"' + StringOfChar('q', 1200000) + '","running":false,"ok":true,"duration_ms":0}]}';
+  Check('large patch is under the ring cap', (Length(Big) > 1000000) And (Length(Big) < MonitorRingJsonCap));
+  Check('large commit', Session.CommitMirrorCursor('large-a', Cursor) And (Cursor = 2));
+  Session.NoteMirrorHanded(2);
+  Session.RememberHandedPatch(2, Big);
+  Big := '{"epoch":"55667788","cursor":3,"turn_index":1,"turn_id":"turn-1","part":1,"part_count":1,' +
+    '"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
+    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
+    '"tool_id":"","body":"' + StringOfChar('r', 1200000) + '","running":false,"ok":true,"duration_ms":0}]}';
+  Check('second large commit', Session.CommitMirrorCursor('large-b', Cursor) And (Cursor = 3));
+  Session.NoteMirrorHanded(3);
+  Session.RememberHandedPatch(3, Big);
+  Check('byte cap drops the older record', Not Session.TryResumeEvents('55667788', 1, Catchup));
+  Check('byte cap keeps the newer record', Session.TryResumeEvents('55667788', 2, Catchup) And (Length(Catchup.Patches) = 1) And
+    (Catchup.Patches[0].Cursor = 3) And (Length(Catchup.Patches[0].Blocks[0].Body) = 1200000));
+  Check('snapshot cursor follows the committed tip', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 4));
+  Session.NoteMirrorHanded(4);
+  Check('snapshot cursor is committed', Session.MirrorCursor = 4);
+  Check('resume behind the snapshot is not events', Not Session.TryResumeEvents('55667788', 3, Catchup));
+End;
+
 Procedure TestMirrorCursor;
 Var
   Cursor: Int64;
@@ -519,6 +634,37 @@ Begin
     Check('disabled decision leaves none', ReadAssistantApprovalDecision = aadNone);
   Finally
     RTLEventDestroy(Event);
+  End;
+End;
+
+Procedure TestResumeQueued;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.Sending := True;
+    Flags.CanStop := True;
+    Session.SetHostFlags(Flags);
+    Check('resume setup is busy', Session.State = mssBusy);
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeMonitorResume('resume-busy', '', 0));
+    Check('busy resume is queued', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkResume)));
+    Check('busy resume is not host_busy', (Carrier.SentCount = 0) Or
+      (Not (DecodeLast(Message) And (Message.Kind = mmkError) And DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.Reason = MonitorHostBusyReason))));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('resume setup returns to live', Session.State = mssLive);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
   End;
 End;
 
@@ -679,11 +825,13 @@ Begin
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;
+      TestResumeQueued;
       TestRevokeLive;
       TestRevokedNewSocket;
       TestDisplayApproval;
       TestBareSignalAndCancel;
       TestMirrorCursor;
+      TestResumeRing;
       TestLivePatchReplaces;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');

@@ -395,6 +395,8 @@ Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMon
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
 Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
+{ Payload object only. The ring stores this, not the frame envelope. }
+Function MonitorPatchPayloadJson(Const Patch: TMonitorPatch): String;
 { Same cursor on every part. Empty when a single block cannot be cut down to the cap. }
 Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
 Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
@@ -2858,6 +2860,18 @@ End;
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
 Begin
   Result := EncodeWith(mmkPatch, Id, PatchPayload(Patch));
+End;
+
+Function MonitorPatchPayloadJson(Const Patch: TMonitorPatch): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := PatchPayload(Patch);
+  Try
+    Result := Payload.AsJSON;
+  Finally
+    Payload.Free;
+  End;
 End;
 
 Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;

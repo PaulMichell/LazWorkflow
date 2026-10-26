@@ -2,8 +2,14 @@ Unit AssistantMonitorBridge;
 
 { Main-thread command pump and session listener. The listener only enqueues.
   A command wait must not sit in the listen thread. The idle sweep answers
-  host_busy if the IDE has not claimed the command. It does not build provider
-  JSON and does not replace the form trace handler.
+  host_busy if the IDE has not claimed the command. Resume is not a user
+  command: it stays queued until the IDE thread can fill the catchup.
+  It does not build provider JSON and does not replace the form trace handler.
+
+  Size note: exceeds the 1000 line preference. The command pump, live patch,
+  and resume catchup share the form and the session. Splitting them would
+  duplicate the snapshot fill.
+  Reviewed 2026-10-26: no provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -48,6 +54,8 @@ Type
     Claimed: Boolean;
     BusySent: Boolean;
     Finished: Boolean;
+    Defer: Boolean;
+    ExecuteQueued: Boolean;
     QueuedAt: QWord;
     RefCount: Integer;
     Procedure Execute;
@@ -98,6 +106,10 @@ Type
     Procedure ApplyHostFlags(Const View: TAssistantMonitorView);
     Procedure PushTranscript(Form: TProjectAssistantForm);
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+    Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
+    Procedure SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+    Procedure AnswerResume(Const Id, PayloadJson: String);
+    Procedure RetryDeferredResumes;
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
@@ -127,6 +139,7 @@ Procedure TMonitorQueuedCommand.Execute;
 Var
   Listed: Boolean;
 Begin
+  Defer := False;
   Try
     Try
       If Assigned(Bridge) Then
@@ -136,20 +149,36 @@ Begin
         ReportPluginException('AssistantMonitorBridge.Command', E);
     End;
   Finally
-    Listed := False;
-    If Assigned(Bridge) Then
+    If Defer Then
       Begin
-        Bridge.LockBridge;
-        Try
-          Finished := True;
-          Listed := Bridge.ForgetCommand(Self);
-        Finally
-          Bridge.UnlockBridge;
-        End;
+        If Assigned(Bridge) Then
+          Begin
+            Bridge.LockBridge;
+            Try
+              ExecuteQueued := False;
+            Finally
+              Bridge.UnlockBridge;
+            End;
+          End;
+        Release;
+      End
+    Else
+      Begin
+        Listed := False;
+        If Assigned(Bridge) Then
+          Begin
+            Bridge.LockBridge;
+            Try
+              Finished := True;
+              Listed := Bridge.ForgetCommand(Self);
+            Finally
+              Bridge.UnlockBridge;
+            End;
+          End;
+        If Listed Then
+          Release;
+        Release;
       End;
-    If Listed Then
-      Release;
-    Release;
   End;
 End;
 
@@ -245,6 +274,12 @@ Begin
     While Index < FOutstanding.Count Do
       Begin
         Command := TMonitorQueuedCommand(FOutstanding[Index]);
+        { Resume waits for the IDE thread. A 5 s sweep must not answer host_busy. }
+        If Command.Kind = Ord(mmkResume) Then
+          Begin
+            Inc(Index);
+            Continue;
+          End;
         If Command.Finished Or Command.Claimed Or (NowMs - Command.QueuedAt < MonitorCommandWaitMs) Then
           Begin
             Inc(Index);
@@ -461,28 +496,43 @@ Procedure TAssistantMonitorBridge.PublishEpoch;
 Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
+  Closed: TMonitorConversationClosed;
   ConversationId, ProjectRoot, Title, Epoch: String;
+  HadEpoch: Boolean;
 Begin
-  ConversationId := 'current';
-  ProjectRoot := '';
-  Title := '';
-  Form := OpenForm;
-  If Assigned(Form) Then
-    Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
-  Epoch := MintMonitorEpoch;
-  If Epoch = '' Then
-    Exit;
   LockBridge;
   Try
     Session := FSession;
   Finally
     UnlockBridge;
   End;
+  Epoch := MintMonitorEpoch;
+  If Epoch = '' Then
+    Exit;
+  HadEpoch := False;
+  If Assigned(Session) Then
+    Begin
+      { Commit the live patch before the closed cursor is copied. }
+      Session.FlushLivePatch;
+      HadEpoch := Session.CopyClosedMirror(Closed);
+    End;
+  If HadEpoch Then
+    SendJson(EncodeMonitorConversationClosed(HostId, Closed.Epoch, Closed.Cursor, Closed.ConversationId, Closed.Title));
+  ConversationId := 'current';
+  ProjectRoot := '';
+  Title := '';
+  Form := OpenForm;
+  If Assigned(Form) Then
+    Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If Assigned(Session) Then
     Session.BeginMirrorEpoch(Epoch, ConversationId, ProjectRoot, Title);
   FSentEpoch := '';
+  FPlanStamp := '';
   SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
+  { The connected client learns the new epoch from this catchup. Cursor 0 was the empty start. }
+  If HadEpoch And Assigned(Form) Then
+    SendCatchupSnapshot(Form, '');
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -571,16 +621,15 @@ Begin
   Result := EncodeMonitorSnapshot(Id, Snapshot);
 End;
 
-Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+Procedure TAssistantMonitorBridge.FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
 Var
-  Snapshot: TMonitorSnapshot;
   Turn: TAssistantMonitorTurn;
-  ErrorText, Id, Json: String;
+  ErrorText: String;
   Index, Kept: Integer;
 Begin
+  Snapshot := Default(TMonitorSnapshot);
   If Not Assigned(Form) Then
     Exit;
-  Snapshot := Default(TMonitorSnapshot);
   Form.FillMonitorView(Snapshot.View);
   Snapshot.View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(Snapshot.View);
@@ -600,6 +649,81 @@ Begin
       Inc(Kept);
     End;
   Snapshot.HasLive := Form.FillMonitorTurn(MonitorLiveTurnIndex, Snapshot.Live, ErrorText);
+End;
+
+Procedure CompactCatchupSnapshot(Var Snapshot: TMonitorSnapshot; Level: Integer);
+Var
+  Index: Integer;
+Begin
+  Case Level Of
+    1:
+      Begin
+        For Index := 0 To High(Snapshot.Live.Blocks) Do
+          Begin
+            If (Snapshot.Live.Prompt = '') And (Snapshot.Live.Blocks[Index].Kind = 'user') Then
+              Snapshot.Live.Prompt := Snapshot.Live.Blocks[Index].Body;
+            If (Snapshot.Live.Thinking = '') And (Snapshot.Live.Blocks[Index].Kind = 'thinking') Then
+              Snapshot.Live.Thinking := Snapshot.Live.Blocks[Index].Body;
+            If (Snapshot.Live.Response = '') And (Snapshot.Live.Blocks[Index].Kind = 'answer') Then
+              Snapshot.Live.Response := Snapshot.Live.Blocks[Index].Body;
+            If Snapshot.Live.Blocks[Index].Kind = 'tool' Then
+              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 240)
+            Else If Snapshot.Live.Blocks[Index].Kind = 'thinking' Then
+              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 240)
+            Else If Length(Snapshot.Live.Blocks[Index].Body) > 800 Then
+              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 800);
+          End;
+        If Snapshot.Live.PromptPreview = '' Then
+          Snapshot.Live.PromptPreview := Copy(Snapshot.Live.Prompt, 1, 160);
+      End;
+    2:
+      Begin
+        SetLength(Snapshot.Live.Blocks, 0);
+        SetLength(Snapshot.Live.Images, 0);
+      End;
+    3:
+      Begin
+        Snapshot.Live.Prompt := Copy(Snapshot.Live.Prompt, 1, 4000);
+        Snapshot.Live.Thinking := Copy(Snapshot.Live.Thinking, 1, 4000);
+        Snapshot.Live.Response := Copy(Snapshot.Live.Response, 1, 8000);
+        SetLength(Snapshot.Live.Blocks, 0);
+        SetLength(Snapshot.Live.Images, 0);
+      End;
+    4: SetLength(Snapshot.StoredTurns, 0);
+    5:
+      Begin
+        SetLength(Snapshot.PlanRows, 0);
+        SetLength(Snapshot.TaskRows, 0);
+      End;
+    6:
+      Begin
+        Snapshot.Live.Prompt := Copy(Snapshot.Live.Prompt, 1, 400);
+        Snapshot.Live.Thinking := '';
+        Snapshot.Live.Response := Copy(Snapshot.Live.Response, 1, 400);
+      End;
+  Else
+    ;
+  End;
+End;
+
+Function CatchupBodyStamp(Const Snapshot: TMonitorSnapshot; Level: Integer): String;
+Begin
+  Result := EncodeMonitorSnapshot('stamp', Snapshot);
+  If Result <> '' Then
+    Exit;
+  Result := 'snapshot-level-' + IntToStr(Level) + #1 + IntToStr(Length(Snapshot.StoredTurns)) + #1 +
+    IntToStr(Length(Snapshot.Live.Prompt)) + #1 + Copy(Snapshot.Live.Prompt, 1, 120) + #1 +
+    Copy(Snapshot.Live.Response, 1, 120) + #1 + Snapshot.PlanPath;
+End;
+
+Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+Var
+  Snapshot: TMonitorSnapshot;
+  Id, Json: String;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  FillSnapshot(Form, Snapshot);
   Id := RefId;
   If Id = '' Then
     Id := HostId;
@@ -607,6 +731,154 @@ Begin
   If Json <> '' Then
     SendJson(Json);
   PushPlan(Form);
+End;
+
+Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+Var
+  Catchup: TMonitorCatchup;
+  Session: TMonitorSession;
+  Id, Json, Stamp: String;
+  Cursor: Int64;
+  Level: Integer;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If (Not Assigned(Session)) Or (Session.MirrorEpoch = '') Then
+    Exit;
+  Catchup := Default(TMonitorCatchup);
+  Catchup.Mode := mcmSnapshot;
+  Session.CopyMirrorIdentity(Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title, Cursor);
+  If Catchup.Epoch = '' Then
+    Exit;
+  FillSnapshot(Form, Catchup.Snapshot);
+  Catchup.HasSnapshot := True;
+  Id := RefId;
+  If Id = '' Then
+    Id := HostId;
+  Json := '';
+  For Level := 0 To 6 Do
+    Begin
+      If Level > 0 Then
+        CompactCatchupSnapshot(Catchup.Snapshot, Level);
+      Stamp := CatchupBodyStamp(Catchup.Snapshot, Level);
+      If Not Session.CommitSnapshotCursor(Stamp, Cursor) Then
+        Exit;
+      Catchup.Cursor := Cursor;
+      Json := EncodeMonitorCatchup(Id, Catchup);
+      If Json <> '' Then
+        Break;
+    End;
+  If Json = '' Then
+    Begin
+      WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
+      Exit;
+    End;
+  SendJson(Json);
+  Session.NoteMirrorHanded(Cursor);
+End;
+
+Procedure TAssistantMonitorBridge.AnswerResume(Const Id, PayloadJson: String);
+Var
+  ResumeMsg: TMonitorResume;
+  Catchup: TMonitorCatchup;
+  Session: TMonitorSession;
+  Form: TProjectAssistantForm;
+  Json: String;
+Begin
+  If Not DecodeMonitorResume(PayloadJson, ResumeMsg) Then
+    Begin
+      SendError(Id, 'protocol', 'Resume payload is not valid.');
+      Exit;
+    End;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Not Assigned(Session) Then
+    Begin
+      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
+      Exit;
+    End;
+  Session.FlushLivePatch;
+  { A ring hit must not read the form. An events frame that does not fit falls through to one snapshot. }
+  If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
+    Begin
+      Json := EncodeMonitorCatchup(Id, Catchup);
+      If Json <> '' Then
+        Begin
+          SendJson(Json);
+          Exit;
+        End;
+    End;
+  Form := OpenForm;
+  If Not Assigned(Form) Then
+    Begin
+      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
+      Exit;
+    End;
+  If Session.MirrorEpoch = '' Then
+    PublishEpoch;
+  If Session.MirrorEpoch = '' Then
+    Begin
+      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
+      Exit;
+    End;
+  SendCatchupSnapshot(Form, Id);
+End;
+
+Procedure TAssistantMonitorBridge.RetryDeferredResumes;
+Var
+  Index, Count: Integer;
+  Command: TMonitorQueuedCommand;
+  Pending: Array Of TMonitorQueuedCommand;
+Begin
+  If AssistantModalDepth > 0 Then
+    Exit;
+  If Not Assigned(FOutstanding) Then
+    Exit;
+  Count := 0;
+  SetLength(Pending, 0);
+  LockBridge;
+  Try
+    For Index := 0 To FOutstanding.Count - 1 Do
+      Begin
+        Command := TMonitorQueuedCommand(FOutstanding[Index]);
+        If (Command.Kind <> Ord(mmkResume)) Or Command.Finished Or Command.Claimed Or Command.Cancelled Or
+          Command.ExecuteQueued Then
+          Continue;
+        Command.ExecuteQueued := True;
+        InterlockedIncrement(Command.RefCount);
+        SetLength(Pending, Count + 1);
+        Pending[Count] := Command;
+        Inc(Count);
+      End;
+  Finally
+    UnlockBridge;
+  End;
+  For Index := 0 To Count - 1 Do
+    Try
+      TThread.Queue(Nil, @Pending[Index].Execute);
+    Except
+      On E: Exception Do
+        Begin
+          LockBridge;
+          Try
+            Pending[Index].ExecuteQueued := False;
+          Finally
+            UnlockBridge;
+          End;
+          Pending[Index].Release;
+          ReportPluginException('AssistantMonitorBridge.Resume', E);
+        End;
+    End;
 End;
 
 Function PlanRowsStamp(Const Rows: TAssistantMonitorPlanRows; Const Path, Title: String; Running: Boolean): String;
@@ -624,6 +896,7 @@ Var
 Begin
   If Not (Sender Is TTimer) Then
     Exit;
+  RetryDeferredResumes;
   Seen := AssistantMirrorCounter;
   If Seen = FPumpedMirror Then
     Exit;
@@ -709,6 +982,7 @@ Begin
             Begin
               Session.ReplaceLivePatch(Cursor, Frames);
               Session.FlushLivePatch;
+              Session.RememberHandedPatch(Cursor, MonitorPatchPayloadJson(Patch));
               FSentEpoch := Patch.Epoch;
               FSentBlocks := Turn.Blocks;
               FSentFlagsValid := True;
@@ -1059,7 +1333,19 @@ Begin
   SendBusy := False;
   LockBridge;
   Try
-    If Command.Cancelled Or (AssistantModalDepth > 0) Then
+    If Command.Kind = Ord(mmkResume) Then
+      Begin
+        If Command.Cancelled Then
+          Exit;
+        { A modal is not a reason to answer host_busy. The timer retries after it closes. }
+        If AssistantModalDepth > 0 Then
+          Begin
+            Command.Defer := True;
+            Exit;
+          End;
+        Command.Claimed := True;
+      End
+    Else If Command.Cancelled Or (AssistantModalDepth > 0) Then
       Begin
         If (Not Command.Cancelled) And (Not Command.BusySent) Then
           Begin
@@ -1072,6 +1358,8 @@ Begin
   Finally
     UnlockBridge;
   End;
+  If Command.Defer Then
+    Exit;
   If SendBusy Then
     Begin
       SendError(Command.ClientId, MonitorHostBusyReason, 'The Project Assistant is busy.');
@@ -1079,6 +1367,11 @@ Begin
     End;
   If Not Command.Claimed Then
     Exit;
+  If Command.Kind = Ord(mmkResume) Then
+    Begin
+      AnswerResume(Command.ClientId, Command.Payload);
+      Exit;
+    End;
   Form := OpenForm;
   If Not Assigned(Form) Then
     Begin
@@ -1106,6 +1399,8 @@ Begin
   Command.Claimed := False;
   Command.BusySent := False;
   Command.Finished := False;
+  Command.Defer := False;
+  Command.ExecuteQueued := True;
   Command.QueuedAt := GetTickCount64;
   Command.RefCount := 2;
   LockBridge;

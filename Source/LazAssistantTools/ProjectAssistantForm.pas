@@ -8457,7 +8457,11 @@ Begin
         If Not ProjectAssistantConversation.StartNewConversation Then
           WorkflowLogger.Warning('ProjectAssistant', 'Review archive: ' + ProjectAssistantConversation.LastError)
         Else
-          AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
+          Begin
+            { Clear before the notice so a catchup of the new epoch cannot copy the old live trace. }
+            ClearCurrentTurnDisplay;
+            AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
+          End;
       End;
     FContextUsed := 0;
     FCodexContextUsage := EmptyCodexContextUsage;
@@ -8519,6 +8523,8 @@ Begin
         SetCurrentSystemNote('Could not start a new conversation.');
       Exit;
     End;
+  { Clear before the notice so a catchup of the new epoch cannot copy the old live trace. }
+  ClearCurrentTurnDisplay;
   AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
   FContextUsed := 0;
   FCodexContextUsage := EmptyCodexContextUsage;
@@ -8526,8 +8532,6 @@ Begin
   FUserCancelled := False;
   FTurnRecorded := False;
   FLastChatPaintTick := 0;
-  FSelectedTurnIndex := -1;
-  ClearCurrentTurnDisplay;
   If Assigned(AssistantClient) Then
     AssistantClient.ClearHistory;
   RefreshHistoryCombo;

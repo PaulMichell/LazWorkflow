@@ -10,8 +10,8 @@ Unit AssistantMonitorSession;
   and HMAC are never logged.
 
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
-  gates, approval, and the in-memory carrier are one state machine.
-  Reviewed 2026-10-19: no socket or form code in this unit. }
+  gates, approval, the in-memory carrier, and the resume ring are one state machine.
+  Reviewed 2026-10-26: no socket or form code in this unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -21,7 +21,7 @@ Unit AssistantMonitorSession;
 Interface
 
 Uses
-  SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier;
+  SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec;
 
 Const
   MonitorPairCodeLength = 10;
@@ -36,6 +36,9 @@ Const
   MonitorPartialFrameMs = 10000;
   MonitorCoalesceWindowMs = 100;
   MonitorOutboundQueueLimit = 32;
+  { Committed patches a resume can replay. Fewer when the JSON would pass 2 MiB. }
+  MonitorRingCapacity = 256;
+  MonitorRingJsonCap = 2 * 1024 * 1024;
   MonitorCrockfordAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   MonitorServerName = 'LazAssistantMonitor';
   MonitorLogArea = 'AssistantMonitor';
@@ -129,6 +132,11 @@ Type
     FLiveFrames: Array Of String;
     FLiveCursor: Int64;
     FHasLivePatch: Boolean;
+    FRingCursor: Array Of Int64;
+    FRingJson: Array Of RawByteString;
+    FRingBytes: Int64;
+    { Highest cursor removed from the ring. A later resume must not treat that gap as complete. }
+    FRingDroppedCursor: Int64;
     FPendingCommand: Boolean;
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
@@ -171,7 +179,13 @@ Type
     Procedure HandlePing(Const PayloadJson: String);
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure HandleResume(Const Id, PayloadJson: String);
     Procedure HandleApproval(Const PayloadJson: String);
+    Procedure ClearRingLocked;
+    Procedure NoteRingDropLocked(Cursor: Int64);
+    Procedure DropOldestRingLocked;
+    Procedure AppendRingLocked(Cursor: Int64; Const PatchJson: RawByteString);
+    Function RingIndexLocked(Cursor: Int64): Integer;
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
@@ -209,6 +223,15 @@ Type
     { Same cursor while the bytes are unsent or already handed unchanged. }
     Function CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
     Procedure NoteMirrorHanded(Cursor: Int64);
+    /// Stores a handed patch. A record that does not fit is dropped and stated.
+    Procedure RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
+    /// True when every cursor after the client is still a patch in the ring. Does not read a form.
+    Function TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
+    /// Copies the open epoch. False when none has been minted. Does not mint the next one.
+    Function CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
+    Procedure CopyMirrorIdentity(Out Epoch, ConversationId, ProjectRoot, Title: String; Out Cursor: Int64);
+    /// Next snapshot cursor. The caller sends the catchup, then NoteMirrorHanded.
+    Function CommitSnapshotCursor(Const BodyStamp: RawByteString; Out Cursor: Int64): Boolean;
     { Replaces the unsent live part set. Does not append a transcript. }
     Procedure ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
     Procedure FlushLivePatch;
@@ -272,8 +295,8 @@ Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorCodec,
-  AssistantMonitorSettings, AssistantSessionObserve;
+  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings,
+  AssistantSessionObserve;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -478,6 +501,10 @@ Begin
   FHasLivePatch := False;
   FLiveCursor := 0;
   SetLength(FLiveFrames, 0);
+  SetLength(FRingCursor, 0);
+  SetLength(FRingJson, 0);
+  FRingBytes := 0;
+  FRingDroppedCursor := 0;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -1070,6 +1097,24 @@ Begin
     QueueCommand(Kind, Id, PayloadJson);
 End;
 
+Procedure TMonitorSession.HandleResume(Const Id, PayloadJson: String);
+Var
+  ResumeMsg: TMonitorResume;
+Begin
+  If (FState <> mssLive) And (FState <> mssBusy) Then
+    Begin
+      RejectLocked('auth', True);
+      Exit;
+    End;
+  If Not DecodeMonitorResume(PayloadJson, ResumeMsg) Then
+    Begin
+      QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
+      Exit;
+    End;
+  { Not a user command. Stay queued for the IDE thread. Do not answer host_busy. }
+  QueueCommand(Ord(mmkResume), Id, PayloadJson);
+End;
+
 Function TMonitorSession.ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
 Var
   I: Integer;
@@ -1162,6 +1207,8 @@ Begin
     mmkBye: HandleBye;
     mmkPong: ;
     mmkApprovalDecision: HandleApproval(Message.PayloadJson);
+    mmkResume:
+      HandleResume(Message.Id, Message.PayloadJson);
     mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
     mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
@@ -1536,6 +1583,7 @@ Begin
     FReservedCursor := 0;
     FReservedPayload := '';
     FReservedHanded := False;
+    ClearRingLocked;
   Finally
     UnlockSession;
   End;
@@ -1658,6 +1706,182 @@ Begin
   Finally
     UnlockSession;
   End;
+End;
+
+Procedure TMonitorSession.ClearRingLocked;
+Begin
+  SetLength(FRingCursor, 0);
+  SetLength(FRingJson, 0);
+  FRingBytes := 0;
+  FRingDroppedCursor := 0;
+End;
+
+Procedure TMonitorSession.NoteRingDropLocked(Cursor: Int64);
+Begin
+  If Cursor > FRingDroppedCursor Then
+    FRingDroppedCursor := Cursor;
+End;
+
+Procedure TMonitorSession.DropOldestRingLocked;
+Var
+  Index, Size: Integer;
+  Dropped: Int64;
+Begin
+  If Length(FRingCursor) = 0 Then
+    Exit;
+  Dropped := FRingCursor[0];
+  Size := Length(FRingJson[0]);
+  NoteRingDropLocked(Dropped);
+  FRingBytes := FRingBytes - Size;
+  If FRingBytes < 0 Then
+    FRingBytes := 0;
+  For Index := 0 To High(FRingCursor) - 1 Do
+    Begin
+      FRingCursor[Index] := FRingCursor[Index + 1];
+      FRingJson[Index] := FRingJson[Index + 1];
+    End;
+  SetLength(FRingCursor, Length(FRingCursor) - 1);
+  SetLength(FRingJson, Length(FRingJson) - 1);
+  LogLine(1, 'ring drop cursor=' + IntToStr(Dropped) + ' bytes=' + IntToStr(Size));
+End;
+
+Procedure TMonitorSession.AppendRingLocked(Cursor: Int64; Const PatchJson: RawByteString);
+Var
+  Size, Index: Integer;
+Begin
+  Size := Length(PatchJson);
+  If Size > MonitorRingJsonCap Then
+    Begin
+      NoteRingDropLocked(Cursor);
+      LogLine(1, 'ring drop cursor=' + IntToStr(Cursor) + ' bytes=' + IntToStr(Size));
+      Exit;
+    End;
+  While (Length(FRingCursor) > 0) And ((Length(FRingCursor) >= MonitorRingCapacity) Or
+    (FRingBytes + Size > MonitorRingJsonCap)) Do
+    DropOldestRingLocked;
+  Index := Length(FRingCursor);
+  SetLength(FRingCursor, Index + 1);
+  SetLength(FRingJson, Index + 1);
+  FRingCursor[Index] := Cursor;
+  FRingJson[Index] := PatchJson;
+  FRingBytes := FRingBytes + Size;
+End;
+
+Function TMonitorSession.RingIndexLocked(Cursor: Int64): Integer;
+Var
+  Index: Integer;
+Begin
+  Result := -1;
+  For Index := 0 To High(FRingCursor) Do
+    If FRingCursor[Index] = Cursor Then
+      Exit(Index);
+End;
+
+Procedure TMonitorSession.RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
+Begin
+  LockSession;
+  Try
+    If (Cursor <= 0) Or (PatchJson = '') Or (Cursor > FCommittedCursor) Or (Cursor <= FRingDroppedCursor) Then
+      Exit;
+    If RingIndexLocked(Cursor) >= 0 Then
+      Exit;
+    If (Length(FRingCursor) > 0) And (Cursor < FRingCursor[High(FRingCursor)]) Then
+      Exit;
+    AppendRingLocked(Cursor, PatchJson);
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
+Var
+  Need: Int64;
+  Index, Count: Integer;
+  Patch: TMonitorPatch;
+Begin
+  Result := False;
+  Catchup := Default(TMonitorCatchup);
+  SetLength(Catchup.Patches, 0);
+  LockSession;
+  Try
+    Catchup.Mode := mcmEvents;
+    Catchup.Epoch := FEpoch;
+    Catchup.Cursor := FCommittedCursor;
+    Catchup.ConversationId := FConversationId;
+    Catchup.ProjectRoot := FProjectRoot;
+    Catchup.Title := FTitle;
+    Catchup.HasSnapshot := False;
+    If FEpoch = '' Then
+      Exit;
+    { A client with nothing committed sends an empty epoch. That is not this generation. }
+    If LowerCase(Epoch) <> FEpoch Then
+      Exit;
+    If (Cursor < 0) Or (Cursor > FCommittedCursor) Or (Cursor < FRingDroppedCursor) Then
+      Exit;
+    If Cursor = FCommittedCursor Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+    Need := Cursor + 1;
+    Count := 0;
+    While Need <= FCommittedCursor Do
+      Begin
+        Index := RingIndexLocked(Need);
+        If Index < 0 Then
+          Exit;
+        If Not DecodeMonitorPatch(String(FRingJson[Index]), Patch) Then
+          Exit;
+        SetLength(Catchup.Patches, Count + 1);
+        Catchup.Patches[Count] := Patch;
+        Inc(Count);
+        If Need = FCommittedCursor Then
+          Break;
+        Inc(Need);
+      End;
+    Result := True;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
+Begin
+  LockSession;
+  Try
+    Closed.Epoch := '';
+    Closed.Cursor := 0;
+    Closed.ConversationId := '';
+    Closed.Title := '';
+    Result := FEpoch <> '';
+    If Not Result Then
+      Exit;
+    Closed.Epoch := FEpoch;
+    Closed.Cursor := FCommittedCursor;
+    Closed.ConversationId := FConversationId;
+    Closed.Title := FTitle;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.CopyMirrorIdentity(Out Epoch, ConversationId, ProjectRoot, Title: String; Out Cursor: Int64);
+Begin
+  LockSession;
+  Try
+    Epoch := FEpoch;
+    ConversationId := FConversationId;
+    ProjectRoot := FProjectRoot;
+    Title := FTitle;
+    Cursor := FCommittedCursor;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.CommitSnapshotCursor(Const BodyStamp: RawByteString; Out Cursor: Int64): Boolean;
+Begin
+  Result := CommitMirrorCursor('catchup-snapshot' + #1 + BodyStamp, Cursor);
 End;
 
 Procedure TMonitorSession.PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);
