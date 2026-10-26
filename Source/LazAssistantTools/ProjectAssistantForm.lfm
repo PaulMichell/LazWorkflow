@@ -346,7 +346,10 @@ object ProjectAssistantForm: TProjectAssistantForm
             OnClick = BuildTodoListClick
             OnDblClick = BuildTodoListDblClick
             OnDrawItem = BuildTodoListDrawItem
+            OnContextPopup = BuildTodoListContextPopup
+            OnMouseDown = BuildTodoListMouseDown
             OnSelectionChange = BuildTodoListSelectionChange
+            PopupMenu = PlanListPopup
           end
           object BuildStatusLabel: TLabel
             AnchorSideLeft.Control = PlanSheet
@@ -728,6 +731,26 @@ object ProjectAssistantForm: TProjectAssistantForm
     end
     object AttachmentPreviewItem: TMenuItem
       Action = PreviewAttachmentAction
+    end
+  end
+  object PlanListPopup: TPopupMenu
+    OnPopup = PlanListPopupPopup
+    Left = 88
+    Top = 255
+    object ReviewItemMenu: TMenuItem
+      Caption = 'Review Item'
+      OnClick = ReviewPlanItemClick
+    end
+    object PlanListSeparator: TMenuItem
+      Caption = '-'
+    end
+    object ReviewPlanMenu: TMenuItem
+      Caption = 'Review Plan'
+      OnClick = OpenPlanActionExecute
+    end
+    object RemovePlanMenu: TMenuItem
+      Caption = 'Remove Plan'
+      OnClick = RemovePlanActionExecute
     end
   end
 end

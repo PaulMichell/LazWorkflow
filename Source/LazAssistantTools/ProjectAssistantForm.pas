@@ -97,6 +97,11 @@ Type
     ActivePlanCombo: TComboBox;
     BuildStatusLabel: TLabel;
     BuildTodoList: TListBox;
+    PlanListPopup: TPopupMenu;
+    ReviewItemMenu: TMenuItem;
+    PlanListSeparator: TMenuItem;
+    ReviewPlanMenu: TMenuItem;
+    RemovePlanMenu: TMenuItem;
     OpenPlanSheetButton: TButton;
     RemovePlanButton: TButton;
     ComposerStack: TPanel;
@@ -141,7 +146,11 @@ Type
     Procedure ConversationListSelectionChange(Sender: TObject; User: Boolean);
     Procedure BuildTodoListClick(Sender: TObject);
     Procedure BuildTodoListDblClick(Sender: TObject);
+    Procedure BuildTodoListMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    Procedure BuildTodoListContextPopup(Sender: TObject; MousePos: TPoint; Var Handled: Boolean);
     Procedure BuildTodoListDrawItem(Control: TWinControl; Index: Integer; ARect: TRect; State: TOwnerDrawState);
+    Procedure PlanListPopupPopup(Sender: TObject);
+    Procedure ReviewPlanItemClick(Sender: TObject);
     Procedure BuildTodoListSelectionChange(Sender: TObject; User: Boolean);
     Procedure HistoryComboChange(Sender: TObject);
     Procedure SendActionExecute(Sender: TObject);
@@ -282,6 +291,7 @@ Type
     FViewingLive: Boolean; { True when chat pane follows the in-flight turn. }
     FReviewInProgress: Boolean;
     StreamStart: TDateTime;
+    FTurnStartTick: QWord;
     FTurnStartedAt: String;
     FReconnectStartTick: QWord;
     FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
@@ -501,7 +511,9 @@ Type
     Procedure ToggleSkillForMode(Const SkillName: String);
     Function ModeSkillCaption: String;
     Procedure FillSkillFooterMenu;
-    Procedure SeedPromptFromSelectedWork;
+    Procedure ReviewSelectedPlanItem;
+    Procedure SelectPlanListRowAt(Const LocalPos: TPoint);
+    Function SelectedPlanListIndex: Integer;
     { DisplayLabel is shown/stored; ApiText is sent to the model. No IDE context; tools off. }
     Procedure SubmitReviewRequest(Const DisplayLabel, ApiText: String);
     { ICompilerFinished – reserved for external bus notifications; review uses IDE API directly. }
@@ -515,7 +527,7 @@ Type
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
-    Procedure StartNewChat(KeepPlanAgent: Boolean = False; UseChatDefault: Boolean = True);
+    Function StartNewChat(KeepPlanAgent: Boolean = False; UseChatDefault: Boolean = True): Boolean;
     Procedure ReviewCompile;
     Procedure ReviewBuild;
     Procedure FixTopError;
@@ -746,6 +758,7 @@ Begin
   FModeSticky := False;
   FReviewInProgress := False;
   StreamStart := 0;
+  FTurnStartTick := 0;
   FTurnStartedAt := '';
   FStatusPhase := '';
   FLastChatPaintTick := 0;
@@ -2663,7 +2676,8 @@ Begin
   FAutoRolloverInProgress := True;
   Try
     { Keep the agent. The archived chat is not a plan-run end. }
-    StartNewChat(True, False);
+    If Not StartNewChat(True, False) Then
+      Exit;
   Finally
     FAutoRolloverInProgress := False;
   End;
@@ -2977,14 +2991,99 @@ End;
 Procedure TProjectAssistantForm.BuildTodoListDblClick(Sender: TObject);
 Begin
   BuildTodoListClick(Sender);
-  If ActiveMode <> amBuild Then
+  ReviewSelectedPlanItem;
+End;
+
+Procedure TProjectAssistantForm.SelectPlanListRowAt(Const LocalPos: TPoint);
+Var
+  Idx: Integer;
+Begin
+  If Not Assigned(BuildTodoList) Then
+    Exit;
+  If (LocalPos.X < 0) Or (LocalPos.Y < 0) Then
+    Exit;
+  Idx := BuildTodoList.ItemAtPos(LocalPos, True);
+  If Idx < 0 Then
+    Exit;
+  BuildTodoList.ItemIndex := Idx;
+  FBuildSelectedIndex := Idx;
+End;
+
+Procedure TProjectAssistantForm.BuildTodoListMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+Begin
+  If Button = mbRight Then
+    SelectPlanListRowAt(Point(X, Y));
+End;
+
+Procedure TProjectAssistantForm.BuildTodoListContextPopup(Sender: TObject; MousePos: TPoint; Var Handled: Boolean);
+Begin
+  Handled := False;
+  SelectPlanListRowAt(MousePos);
+End;
+
+Function TProjectAssistantForm.SelectedPlanListIndex: Integer;
+Begin
+  Result := -1;
+  If Not Assigned(BuildSections) Or (BuildSections.Count = 0) Then
+    Exit;
+  If Assigned(BuildTodoList) And (BuildTodoList.ItemIndex >= 0) And
+    (BuildTodoList.ItemIndex < BuildSections.Count) Then
+    Result := BuildTodoList.ItemIndex
+  Else If (FBuildSelectedIndex >= 0) And (FBuildSelectedIndex < BuildSections.Count) Then
+    Result := FBuildSelectedIndex;
+End;
+
+Procedure TProjectAssistantForm.ReviewSelectedPlanItem;
+Var
+  PlanRel, Err, Body, Title, Key: String;
+  Idx: Integer;
+  Section: TPlanSection;
+Begin
+  PlanRel := GetActivePlanRelativePath;
+  If PlanRel = '' Then
     Begin
-      SeedPromptFromSelectedWork;
-      If ActiveMode In [amChat, amInspect] Then
-        SetCurrentSystemNote('Switch to **Build** to apply source edits for this package.');
+      RunAssistantModal('Set an active plan on the Plan tab first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  BuildWorkOnSelectedPackage;
+  Idx := SelectedPlanListIndex;
+  If Idx < 0 Then
+    Begin
+      RunAssistantModal('Select an item in the plan list.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  Section := TPlanSection(BuildSections[Idx]);
+  If Not Assigned(Section) Then
+    Exit;
+  { A ## row includes its ### items (2.1, 2.2, …). An item stays that item only. }
+  If Not GetPlanSectionBody(PlanRel, Idx, Body, Err, Not Section.Actionable) Then
+    Begin
+      RunAssistantModal('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
+      Exit;
+    End;
+  Title := Section.Title;
+  If Trim(Section.ParentTitle) <> '' Then
+    Title := Section.ParentTitle + ' — ' + Title;
+  Key := PlanRel + '#' + IntToStr(Idx);
+  OpenMarkdownSnippet(Key, Title, Body);
+End;
+
+Procedure TProjectAssistantForm.PlanListPopupPopup(Sender: TObject);
+Var
+  HasPlan, HasItem: Boolean;
+Begin
+  HasPlan := GetActivePlanRelativePath <> '';
+  HasItem := HasPlan And (SelectedPlanListIndex >= 0);
+  If Assigned(ReviewItemMenu) Then
+    ReviewItemMenu.Enabled := HasItem;
+  If Assigned(ReviewPlanMenu) Then
+    ReviewPlanMenu.Enabled := HasPlan;
+  If Assigned(RemovePlanMenu) Then
+    RemovePlanMenu.Enabled := HasPlan And (Not FSending) And (Not FReviewInProgress);
+End;
+
+Procedure TProjectAssistantForm.ReviewPlanItemClick(Sender: TObject);
+Begin
+  ReviewSelectedPlanItem;
 End;
 
 Procedure TProjectAssistantForm.ModeComboChange(Sender: TObject);
@@ -3638,8 +3737,9 @@ End;
 Function TProjectAssistantForm.CurrentStreamDurationMs: Integer;
 Begin
   Result := 0;
-  If StreamStart > 0 Then
-    Result := Round((Now - StreamStart) * 24 * 60 * 60 * 1000);
+  If FTurnStartTick = 0 Then
+    Exit;
+  Result := Integer(GetTickCount64 - FTurnStartTick);
   If Result < 0 Then
     Result := 0;
 End;
@@ -3681,12 +3781,12 @@ Begin
           ReconnectSecs Mod 60]);
       Exit;
     End;
-  If StreamStart <= 0 Then
+  If FTurnStartTick = 0 Then
     Begin
       Result := Phase;
       Exit;
     End;
-  Secs := Round((Now - StreamStart) * 24 * 60 * 60);
+  Secs := Integer((GetTickCount64 - FTurnStartTick) Div 1000);
   If Secs < 0 Then
     Secs := 0;
   Mins := Secs Div 60;
@@ -4391,8 +4491,15 @@ Begin
     If csDestroying In ComponentState Then Exit;
     If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
       Begin
+        If FSending And (FStatusPhase <> '') Then
+          StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
         PollTransportWait;
         Exit;
+      End;
+    If FSending And (FStatusPhase <> '') Then
+      Begin
+        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+        AssistantSessionObserve.AssistantSessionObserve(asnStatus);
       End;
     If Assigned(FCodexRun) Then
       Begin
@@ -4403,11 +4510,6 @@ Begin
       Begin
         PollClaude;
         Exit;
-      End;
-    If FSending And (FStatusPhase <> '') Then
-      Begin
-        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
-        AssistantSessionObserve.AssistantSessionObserve(asnStatus);
       End;
     If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
       FTraceView.RefreshElapsed(FTrace);
@@ -4948,7 +5050,12 @@ Begin
   SetBusyCursor(IsSending);
   If IsSending Then
     Begin
-      StreamStart := Now;
+      { A later SetSending must not restart the clock. That was the status lag. }
+      If (Not WasSending) Or (FTurnStartTick = 0) Then
+        Begin
+          FTurnStartTick := GetTickCount64;
+          StreamStart := Now;
+        End;
       If FStatusPhase = '' Then
         FStatusPhase := 'Waiting for first token…';
       If Assigned(ElapsedTimer) Then
@@ -4960,6 +5067,7 @@ Begin
         ElapsedTimer.Enabled := False;
       FStatusPhase := '';
       StreamStart := 0;
+      FTurnStartTick := 0;
     End;
   If (Not FSending) And FReloadConnectionAfterSend Then
     Begin
@@ -6381,7 +6489,7 @@ Begin
         If Event.Text <> '' Then
           Block.Body := Event.Text;
         If Event.AttachmentsJson <> '' Then
-          FTrace.AppendUserImages(Event.AttachmentsJson);
+          FTrace.AttachBlockImages(Block, Event.AttachmentsJson);
         If Not Event.Ok Then
           Begin
             Block.Collapsed := False;
@@ -6561,6 +6669,8 @@ Begin
     End;
   RefreshConversationList;
   RefreshChatDisplay(True, True);
+  { The phone draws this user block from the snapshot. Do not wait for the first token. }
+  AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
 End;
 
 Procedure TProjectAssistantForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
@@ -7215,23 +7325,6 @@ Begin
     AssistantClient.EnqueueSteer(UserText);
   SetStreamPhase('Steering at next tool gap…');
   WorkflowLogger.Info('ProjectAssistant', 'Steer queued (' + IntToStr(Length(Trim(UserText))) + ' chars)');
-End;
-
-Procedure TProjectAssistantForm.SeedPromptFromSelectedWork;
-Var
-  Idx: Integer;
-  Section: TPlanSection;
-Begin
-  If Not Assigned(InputMemo) Or Not Assigned(BuildSections) Then
-    Exit;
-  Idx := SelectedBuildSectionIndex;
-  If (Idx < 0) Or (Idx >= BuildSections.Count) Then
-    Exit;
-  Section := TPlanSection(BuildSections[Idx]);
-  If Not Assigned(Section) Then
-    Exit;
-  InputMemo.Text := 'Work on this package: ' + Section.Title;
-  InputMemo.SetFocus;
 End;
 
 Procedure TProjectAssistantForm.PopupAboveControl(Host: TControl; Popup: TPopupMenu);
@@ -8388,10 +8481,11 @@ Begin
   ReviewProject(crBuild, 'Build');
 End;
 
-Procedure TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean; UseChatDefault: Boolean);
+Function TProjectAssistantForm.StartNewChat(KeepPlanAgent: Boolean; UseChatDefault: Boolean): Boolean;
 Var
-  Report: String;
+  Report, Note: String;
 Begin
+  Result := False;
   FPlanAgentResumeIndex := -1;
   Report := '';
   { End the run before the old conversation is archived, then post into the new one. }
@@ -8402,10 +8496,19 @@ Begin
   SetSending(False);
   ClearUnsentComposerImages;
   EnsureConversationStore;
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+  If (Not Assigned(ProjectAssistantConversation)) Or (ProjectAssistantConversation.ProjectRoot = '') Then
     Begin
-      If Not ProjectAssistantConversation.StartNewConversation Then
-        WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
+      SetCurrentSystemNote('No project is open.');
+      Exit;
+    End;
+  If Not ProjectAssistantConversation.StartNewConversation Then
+    Begin
+      WorkflowLogger.Warning('ProjectAssistant', 'StartNewConversation: ' + ProjectAssistantConversation.LastError);
+      If ProjectAssistantConversation.LastError <> '' Then
+        SetCurrentSystemNote(ProjectAssistantConversation.LastError)
+      Else
+        SetCurrentSystemNote('Could not start a new conversation.');
+      Exit;
     End;
   FContextUsed := 0;
   FCodexContextUsage := EmptyCodexContextUsage;
@@ -8422,18 +8525,26 @@ Begin
   RefreshChatDisplay(True, False);
   If UseChatDefault Then
     SelectMode(amChat);
+  Note := '';
   If Report <> '' Then
     PostPlanRunReport(Report)
   Else If Not FAutoRolloverInProgress Then
     Begin
       If UseChatDefault Then
-        SetCurrentSystemNote('New conversation started in **Chat**. Previous chat moved to History.')
+        Note := 'New conversation started in **Chat**. Previous chat moved to History.'
       Else
-        SetCurrentSystemNote(Format('New conversation started in **%s**. Previous conversation moved to History.',
-          [ModeChipCaption(ActiveMode)]));
+        Note := Format('New conversation started in **%s**. Previous conversation moved to History.',
+          [ModeChipCaption(ActiveMode)]);
     End;
+  If (Note <> '') And Assigned(FTrace) Then
+    FTrace.AddNote(Note);
+  If Note <> '' Then
+    SetCurrentSystemNote(Note);
   PersistSession;
   UpdateStatusFooter;
+  { History is already archived. Publish the empty conversation before the phone asks again. }
+  AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
+  Result := True;
 End;
 
 Procedure TProjectAssistantForm.UnbindFromProject;
@@ -9160,8 +9271,8 @@ Begin
   { A plan run is already refused. Do not archive that run or send into it. }
   If Form.FSending Or Form.FPlanAgentRunning Then
     Exit;
-  If Request.FreshConversation Then
-    Form.StartNewChat(False, False);
+  If Request.FreshConversation And (Not Form.StartNewChat(False, False)) Then
+    Exit;
   If Request.DocumentPath <> '' Then
     RememberDocumentRelativePath(Request.DocumentPath);
   Form.ClearBuildWorkTracking;
@@ -9439,8 +9550,10 @@ Begin
   View.PlanRunning := FPlanAgentRunning;
   View.Mode := AssistantModeToStr(ActiveMode);
   View.Phase := FStatusPhase;
+  View.ElapsedMs := 0;
   If FSending Then
     Begin
+      View.ElapsedMs := CurrentStreamDurationMs;
       If FStatusPhase = '' Then
         View.StatusText := FormatElapsedStatus('Waiting for first token…')
       Else
@@ -9851,8 +9964,19 @@ Begin
   ErrorText := '';
   If ThisFormBusy(Self, ErrorText) Then
     Exit;
-  StartNewChat(False, True);
-  Result := True;
+  If (Not Assigned(ProjectAssistantConversation)) Or (ProjectAssistantConversation.ProjectRoot = '') Then
+    Begin
+      ErrorText := 'No project is open.';
+      Exit;
+    End;
+  { Keep the mode already selected. Phone New must not drop Build back to Chat. }
+  Result := StartNewChat(False, False);
+  If Result Then
+    Exit;
+  If ProjectAssistantConversation.LastError <> '' Then
+    ErrorText := ProjectAssistantConversation.LastError
+  Else
+    ErrorText := 'Could not start a new conversation.';
 End;
 
 Function TProjectAssistantForm.RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
