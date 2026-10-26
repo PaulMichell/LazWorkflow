@@ -87,7 +87,6 @@ import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
-import computing.michell.monitor.protocol.encodeWorkOnPlan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -187,6 +186,7 @@ fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
 
 const val ConnectingBanner = "Connecting…"
 const val LinkGraceMs = 4_000L
+const val BusyStallMs = 15_000L
 
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
@@ -270,20 +270,30 @@ fun turnStillRunning(view: WireView, pending: Boolean, blocks: List<WireBlock>, 
 
 fun observedElapsedMs(view: WireView, live: WireTurn?, blocks: List<WireBlock>): Int {
   val fromStatus = if (hostHasElapsed(view.statusText)) elapsedMsOf(view.statusText) else 0
-  if (fromStatus > 0) return fromStatus
-  if (live != null && live.turnIndex < 0 && live.durationMs > 0) return live.durationMs
+  val fromView = view.elapsedMs.coerceAtLeast(0)
+  val fromLive = if (live != null && live.durationMs > 0) live.durationMs else 0
   val worked = blocks.lastOrNull { block -> block.kind == "worked" || block.body.startsWith("Worked for") }
-  if (worked != null) {
-    if (worked.durationMs > 0) return worked.durationMs
-    return elapsedMsOf(worked.body)
-  }
-  return 0
+  val fromWorked = if (worked == null) 0 else if (worked.durationMs > 0) worked.durationMs else elapsedMsOf(worked.body)
+  return maxOf(fromStatus, fromView, fromLive, fromWorked)
 }
 
+/** Earlier start means more time has passed. A stale host sample must not pull the clock backward. */
 fun activityStart(keptStart: Long, nowMs: Long, observedMs: Int, previousObservedMs: Int): Long {
-  if (observedMs > 0 && observedMs != previousObservedMs && nowMs > 0L) return nowMs - observedMs
+  if (observedMs > 0 && observedMs == previousObservedMs && keptStart > 0L) return keptStart
+  if (nowMs <= 0L) return keptStart.coerceAtLeast(0L)
+  val hostStart = if (observedMs > 0) nowMs - observedMs else 0L
+  if (hostStart > 0L && (keptStart <= 0L || hostStart < keptStart)) return hostStart
   if (keptStart > 0L) return keptStart
-  return nowMs.coerceAtLeast(0L)
+  return nowMs
+}
+
+const val OfflineReconnectingMessage = "Offline, Re-connecting"
+
+fun displayInterrupted(ui: MonitorUi, phase: LinkPhase): Boolean {
+  val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
+  val running = ui.view.sending || ui.view.busy || ui.view.planRunning || pending
+  if (!running) return false
+  return ui.disconnected || phase != LinkPhase.Live
 }
 
 fun formatActivityClock(elapsedMs: Long): String {
@@ -474,7 +484,6 @@ private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
 private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val incoming = snapshot.live
   if (incoming == null) {
-    if (state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()) return keepOfflineSnapshot(state, snapshot)
     val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
     return overlaySnapshot(cleared, snapshot, state.generation + 1)
   }
@@ -508,29 +517,6 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     generation = state.generation + 1,
     rescueSteer = false,
     conversationGeneration = conversationGeneration
-  )
-}
-
-private fun keepOfflineSnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
-  val turns = if (snapshot.storedTurns.isNotEmpty()) snapshot.storedTurns else state.turns
-  val approval = snapshot.approval
-  return state.copy(
-    view = snapshot.view,
-    turns = turns,
-    history = retainLoaded(state.history, turns),
-    planPath = snapshot.planPath,
-    planTitle = snapshot.planTitle,
-    planRunning = snapshot.planRunning,
-    planRows = snapshot.planRows,
-    selectedPlan = -1,
-    planChoices = emptyList(),
-    approval = if (approval.active) approval else state.approval,
-    approvalOpen = approval.active || state.approvalOpen,
-    reachedLive = true,
-    pairHold = false,
-    disconnected = false,
-    banner = "",
-    generation = state.generation + 1
   )
 }
 
@@ -571,10 +557,23 @@ private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
   return applyTranscript(state, transcript)
 }
 
+/** A finished host turn. The status frame can be missed; this must not leave the label on busy. */
+fun hostTranscriptIdle(phase: String, statusText: String): Boolean {
+  if (phase.isNotEmpty() && phase != "Ready") return false
+  val text = statusText.trim()
+  return text == "Ready" || text == "Not signed in"
+}
+
 private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): MonitorUi {
   val turnId = state.live?.id ?: ""
   val inScope = transcriptInScope(state, turnId)
-  if (inScope && transcript.revision < state.liveRevision) return state
+  // TCP does not reorder. A lower revision is the host starting again, not a late frame.
+  if (inScope && transcript.revision < state.liveRevision) {
+    return applyTranscript(
+      state.copy(liveRevision = -1, transcriptParts = emptyMap(), transcriptTurnId = ""),
+      transcript
+    )
+  }
   if (inScope && transcript.revision == state.liveRevision && state.transcriptParts.containsKey(transcript.part)) return state
   val parts = if (!inScope || transcript.revision > state.liveRevision) {
     mapOf(transcript.part to transcript.blocks)
@@ -607,16 +606,23 @@ private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): Monit
     blocks,
     previous?.images ?: emptyList()
   )
+  val idle = hostTranscriptIdle(transcript.phase, transcript.statusText) && !state.view.planRunning && !state.planRunning
+  val view = state.view.copy(
+    phase = transcript.phase.ifEmpty { if (idle) "" else state.view.phase },
+    statusText = transcript.statusText.ifEmpty { state.view.statusText },
+    busy = if (idle) false else state.view.busy,
+    sending = if (idle) false else state.view.sending,
+    canStop = if (idle) false else state.view.canStop,
+    canSteer = if (idle) false else state.view.canSteer,
+    canSend = if (idle) true else state.view.canSend
+  )
   return state.copy(
     live = live,
     liveRevision = transcript.revision,
     transcriptParts = parts,
     transcriptConnection = state.connectionGeneration,
     transcriptTurnId = turnId,
-    view = state.view.copy(
-      phase = transcript.phase.ifEmpty { state.view.phase },
-      statusText = transcript.statusText.ifEmpty { state.view.statusText }
-    ),
+    view = view,
     reachedLive = true
   )
 }
@@ -729,7 +735,8 @@ private fun WireView.patchStatus(status: WireView): WireView {
     canStop = status.canStop,
     canChangeMode = status.canChangeMode,
     remoteApproval = status.remoteApproval,
-    errorText = status.errorText
+    errorText = status.errorText,
+    elapsedMs = status.elapsedMs
   )
 }
 
@@ -867,7 +874,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       editPrompt(text, selectionStart, selectionEnd)
       return
     }
-    if (text != uiState.value.draft) updateDraft(text)
+    val shown = uiState.value
+    // The keyboard can echo the text just sent when the field is cleared under the cursor.
+    if (shown.pendingPrompt.isNotEmpty() && shown.draft.isEmpty() && text.trim() == shown.pendingPrompt) {
+      dictationState.value = dictationState.value.copy(selectionStart = 0, selectionEnd = 0)
+      return
+    }
+    if (text != shown.draft) updateDraft(text)
     val length = text.length
     dictationState.value = dictationState.value.copy(
       selectionStart = selectionStart.coerceIn(0, length),
@@ -1002,8 +1015,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun newConversation() {
     leaveDictation()
-    if (!uiState.value.view.canSend || uiState.value.disconnected) return
-    session.sendCatalogue(encodeEmpty(MessageKind.NewConversation, session.nextCommandId()))
+    val effects = coordinator.onEvent(MonitorEvent.NewConversation(uiState.value)) ?: return
+    applyUiEffects(effects)
   }
 
   fun setMode(mode: String) {
@@ -1049,12 +1062,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     uiState.update { it.copy(selectedPlan = index) }
   }
 
-  fun workOnPlan() {
-    val index = uiState.value.selectedPlan
-    if (index < 0) return
-    session.sendCatalogue(encodeWorkOnPlan(session.nextCommandId(), index))
-  }
-
   fun runPlan() {
     session.sendCatalogue(encodeEmpty(MessageKind.RunPlan, session.nextCommandId()))
   }
@@ -1063,9 +1070,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.sendCatalogue(encodeEmpty(MessageKind.StopPlan, session.nextCommandId()))
   }
 
-  fun newPlan(title: String) {
-    val hasTitle = title.isNotEmpty()
-    session.sendCatalogue(encodeNewPlan(session.nextCommandId(), title, hasTitle))
+  fun newPlan() {
+    session.sendCatalogue(encodeNewPlan(session.nextCommandId(), "", false))
   }
 
   fun removePlan() {

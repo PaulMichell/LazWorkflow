@@ -29,12 +29,4 @@ class MainPagesTest {
     assertEquals(AppTab.Conversation, tabAfterSwipe(9, AppTab.Plan))
   }
 
-  @Test
-  fun headerShowsConnectedOnlyWhileTheLinkIsLive() {
-    assertEquals("Connected", shellConnectionCaption(true, false, "Host closed"))
-    assertEquals("Connecting", shellConnectionCaption(false, true, ""))
-    assertEquals("Reconnecting", shellConnectionCaption(false, true, "Reconnecting"))
-    assertEquals("Host closed", shellConnectionCaption(false, false, "Host closed"))
-    assertEquals("Not connected", shellConnectionCaption(false, false, ""))
-  }
 }

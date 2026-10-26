@@ -33,10 +33,4 @@ fun tabAfterSwipe(settledPage: Int, current: AppTab): AppTab? {
   return next
 }
 
-/** Short status for the main header. A live link stays "Connected" even if a banner is set. */
-fun shellConnectionCaption(connected: Boolean, connecting: Boolean, banner: String): String {
-  if (connected) return "Connected"
-  if (connecting && banner.isEmpty()) return "Connecting"
-  if (banner.isNotEmpty()) return banner
-  return "Not connected"
-}
+

@@ -18,6 +18,16 @@ fun promptBlockKey(turnId: String, block: WireBlock): String {
   return identity + "\u0000" + block.kind + "\u0000" + block.body.trim()
 }
 
+/** A user or steer block that arrived after this submission, even if the desktop added a context note. */
+fun hostHasLaterUserBlock(state: MonitorUi): Boolean {
+  val live = state.live ?: return false
+  return displayBlocks(live).any { block ->
+    (block.kind == "user" || block.kind == "steer") &&
+      block.body.trim().isNotEmpty() &&
+      promptBlockKey(live.id, block) !in state.promptBaseline
+  }
+}
+
 /** Exact trimmed equality on a live user or steer block that arrived after the submission epoch. */
 fun promptShown(state: MonitorUi, text: String): Boolean {
   val wanted = text.trim()

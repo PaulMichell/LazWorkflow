@@ -77,7 +77,7 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeInsertResult("ins", "pasted"))))
     assertEquals("pasted", coordinator.state.draft)
     val sent = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("pasted", coordinator.state.draft)
+    assertEquals("", coordinator.state.draft)
     assertEquals("pasted", coordinator.state.pendingPrompt)
     assertEquals("user", coordinator.state.pendingKind)
     assertEquals("c1", coordinator.state.pendingCommandId)
@@ -247,7 +247,7 @@ class MonitorCoordinatorTest {
     session.dropSocket()
     val coordinator = sendingCoordinator(session)
     val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("keep me", coordinator.state.draft)
+    assertEquals("", coordinator.state.draft)
     assertEquals("keep me", coordinator.state.pendingPrompt)
     assertTrue(coordinator.state.view.busy)
     drive(session, submitted)
@@ -522,6 +522,90 @@ class MonitorCoordinatorTest {
     val again = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
     assertFalse(again.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
   }
+
+  @Test
+  fun sendClearsThePromptAndKeepsTheUserBlockWhenStatusIsStale() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    assertEquals("", coordinator.state.draft)
+    assertEquals("hello", coordinator.state.pendingPrompt)
+    assertEquals("user", coordinator.state.pendingKind)
+    val stale = coordinator.state.copy(draft = "hello", pendingPrompt = "", pendingCommandId = "", pendingEpoch = 0)
+    coordinator.onEvent(MonitorEvent.Incoming(stale, envelope(encodeEnvelope(
+      MessageKind.Status, "st", statusToJson(emptyView().copy(sending = true, busy = true, signedIn = true))
+    ))))
+    assertEquals("", coordinator.state.draft)
+    assertEquals("hello", coordinator.state.pendingPrompt)
+  }
+
+  @Test
+  fun newConversationClearsTheTranscriptAndAsksTheDesktop() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "unsent"))
+    val effects = coordinator.onEvent(MonitorEvent.NewConversation(coordinator.state)).orEmpty()
+    assertEquals(null, coordinator.state.live)
+    assertTrue(coordinator.state.turns.isEmpty())
+    assertEquals("unsent", coordinator.state.draft)
+    assertEquals(1, coordinator.state.conversationGeneration)
+    assertTrue(effects.any { effect ->
+      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.NewConversation
+    })
+  }
+
+  @Test
+  fun aReadyTranscriptClearsAStuckBusyLabel() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
+      MessageKind.Status, "st", statusToJson(emptyView().copy(busy = true, sending = true, signedIn = true, canSend = false))
+    ))))
+    assertTrue(coordinator.state.view.busy)
+    val block = WireBlock("answer", "b1", "", "", "", "done", false, true, 0, emptyList())
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      tryEncodeTranscript("tr", WireTranscript(-2, 1, "", "Ready", listOf(block)))
+    )))
+    coordinator.flush(coordinator.state)
+    assertEquals("done", displayedBody(coordinator.state))
+    assertFalse(coordinator.state.view.busy)
+    assertFalse(coordinator.state.view.sending)
+    assertTrue(coordinator.state.view.canSend)
+  }
+
+  @Test
+  fun aQuietBusyTurnAsksTheDesktopAgain() {
+    val clock = MutableClock(1_000L)
+    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    openLive(coordinator, canSend = true, canSteer = false)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
+      MessageKind.Status, "st", statusToJson(emptyView().copy(busy = true, sending = true, signedIn = true))
+    ))))
+    clock.millis = 1_000L + BusyStallMs
+    val effects = coordinator.flush(coordinator.state).orEmpty()
+    assertTrue(effects.any { effect ->
+      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh
+    })
+    val again = coordinator.flush(coordinator.state).orEmpty()
+    assertFalse(again.any { effect ->
+      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh
+    })
+  }
+
+  @Test
+  fun newConversationKeepsTheSelectedMode() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
+    val build = coordinator.state.copy(
+      view = coordinator.state.view.copy(mode = "build", modeLocked = false, canChangeMode = true)
+    )
+    coordinator.onEvent(MonitorEvent.NewConversation(build))
+    assertEquals("build", coordinator.state.view.mode)
+    assertTrue(coordinator.state.view.canChangeMode)
+    assertFalse(coordinator.state.view.modeLocked)
+    assertEquals(null, coordinator.state.live)
+  }
 }
 
 private fun coordinator(): MonitorCoordinator {
@@ -656,6 +740,10 @@ private fun sentJson(effects: List<MonitorEffect>): String {
 }
 
 private class FixedClock(private val millis: Long) : MonitorClock {
+  override fun nowMs(): Long = millis
+}
+
+private class MutableClock(var millis: Long) : MonitorClock {
   override fun nowMs(): Long = millis
 }
 

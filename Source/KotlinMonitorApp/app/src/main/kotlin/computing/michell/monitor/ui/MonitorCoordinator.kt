@@ -3,10 +3,11 @@ package computing.michell.monitor.ui
 /* Catalogue orchestration without Android (c) 2026 Michell Computing.
 
    Speech stays on SpeechEngine. Draft edits replace the reducer draft,
-   including with an empty string. A send keeps that text until the
-   accepting socket reports the bytes were written. Loaded fetches are
-   separate from in-flight requests. Host change, forget pairing, and a
-   null live snapshot share one reset. */
+   including with an empty string. A send clears the prompt immediately
+   and keeps a pending user block until the desktop shows that text.
+   A failed write puts the text back. Loaded fetches are separate from
+   in-flight requests. Host change, forget pairing, New, and a null live
+   snapshot share one reset. New keeps the mode already selected. */
 
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.CatalogueWrite
@@ -22,6 +23,7 @@ import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
+import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeTurnData
@@ -49,6 +51,7 @@ const val CouldNotSendBanner = "Could not send."
 sealed class MonitorEvent {
   data class DraftEdited(val current: MonitorUi, val text: String) : MonitorEvent()
   data class Submit(val current: MonitorUi) : MonitorEvent()
+  data class NewConversation(val current: MonitorUi) : MonitorEvent()
   data class Incoming(val current: MonitorUi, val message: MonitorMessage) : MonitorEvent()
   data class LinkChanged(val current: MonitorUi, val status: LinkStatus) : MonitorEvent()
   data class CommandResult(val current: MonitorUi, val result: CatalogueResult) : MonitorEvent()
@@ -90,6 +93,10 @@ class MonitorCoordinator(
   private var hostClientId = ""
   private var pendingText = ""
   private var writeSettled = false
+  private var newConversationCommand = ""
+  private var transcriptBroken = false
+  private var lastHostProgressMs = 0L
+  private var lastStallRefreshMs = 0L
   private var retryView: WireView? = null
   private var retryActivityMs = 0L
   private var screen = MonitorUi(
@@ -125,6 +132,7 @@ class MonitorCoordinator(
     when (event) {
       is MonitorEvent.DraftEdited -> editDraft(event.current, event.text)
       is MonitorEvent.Submit -> submit(event.current)
+      is MonitorEvent.NewConversation -> newConversation(event.current)
       is MonitorEvent.Incoming -> incoming(event.current, event.message)
       is MonitorEvent.LinkChanged -> linkChanged(event.current, event.status)
       is MonitorEvent.CommandResult -> commandResult(event.current, event.result)
@@ -135,11 +143,19 @@ class MonitorCoordinator(
 
   /** Posts a dirty reduce. Null means the throttle has nothing to show. */
   fun flush(current: MonitorUi): List<MonitorEffect>? = synchronized(gate) {
-    if (!appliedDirty) return null
-    appliedDirty = false
-    screen = stamp(current)
-    val effects = publishReduced(applied, false, false)?.toMutableList() ?: return null
-    effects += missingImageFetches(screen)
+    val effects = mutableListOf<MonitorEffect>()
+    if (appliedDirty) {
+      appliedDirty = false
+      screen = show(current)
+      val posted = publishReduced(applied, false, false)
+      if (posted != null) {
+        effects += posted
+        effects += missingImageFetches(screen)
+      }
+    }
+    val stall = busyStallRefresh()
+    if (stall != null) effects += stall
+    if (effects.isEmpty()) return null
     effects
   }
 
@@ -177,13 +193,13 @@ class MonitorCoordinator(
   }
 
   fun collectMissing(current: MonitorUi): List<MonitorEffect> = synchronized(gate) {
-    screen = stamp(current)
+    screen = show(current)
     missingFetches(screen)
   }
 
   /** Visible turns reported by the screen. Does not accept every history index by itself. */
   fun noteVisibleTurns(current: MonitorUi, indices: Set<Int>): List<MonitorEffect> = synchronized(gate) {
-    screen = stamp(current)
+    screen = show(current)
     if (indices == visibleTurns) return emptyList()
     visibleTurns = indices
     missingImageFetches(screen)
@@ -196,24 +212,24 @@ class MonitorCoordinator(
   }
 
   fun requestTurnFetch(current: MonitorUi, index: Int): List<MonitorEffect> = synchronized(gate) {
-    screen = stamp(current)
+    screen = show(current)
     val send = beginTurnFetch(screen, index) ?: return emptyList()
     listOf(send)
   }
 
   fun noteDisplay(current: MonitorUi): MonitorUi = synchronized(gate) {
-    screen = current.copy(showThinking = display.showThinking, showTools = display.showTools)
+    screen = show(current)
     screen
   }
 
   private fun editDraft(current: MonitorUi, text: String): List<MonitorEffect> {
-    screen = stamp(current).copy(draft = text)
+    screen = show(current).copy(draft = text)
     applied = applied.copy(draft = text)
     return listOf(MonitorEffect.RememberDraft(text))
   }
 
   private fun submit(current: MonitorUi): List<MonitorEffect>? {
-    screen = stamp(current)
+    screen = show(current)
     if (screen.disconnected) return null
     if (screen.pendingCommandId.isNotEmpty() && !writeSettled) return null
     val steer = screen.view.canSteer
@@ -227,15 +243,40 @@ class MonitorCoordinator(
       return emptyList()
     }
     armSubmission(text, steer, commandId)
-    return listOf(MonitorEffect.Send(encoded.json))
+    return listOf(MonitorEffect.RememberDraft(screen.draft), MonitorEffect.Send(encoded.json))
+  }
+
+  private fun newConversation(current: MonitorUi): List<MonitorEffect>? {
+    val shown = show(current)
+    if (shown.disconnected || !shown.view.canSend) return null
+    val commandId = session.nextCommandId()
+    newConversationCommand = commandId
+    val kept = shown.view
+    val effects = resetIdentity(shown, false, applied.hostGeneration, applied.conversationGeneration + 1).toMutableList()
+    // The desktop keeps this mode. Do not blank it while the snapshot is still on the way.
+    val view = screen.view.copy(mode = kept.mode, modeLocked = kept.modeLocked, canChangeMode = kept.canChangeMode)
+    screen = screen.copy(view = view)
+    applied = applied.copy(view = view)
+    effects += MonitorEffect.Send(encodeEmpty(MessageKind.NewConversation, commandId))
+    return effects
   }
 
   private fun incoming(current: MonitorUi, message: MonitorMessage): List<MonitorEffect>? {
     if (message.kind == MessageKind.ImageData) return listOf(MonitorEffect.DecodeImage(message))
     if (message.kind == MessageKind.Snapshot) {
       val snapshot = (message.inbound as? InboundPayload.Snapshot)?.value ?: decodeSnapshot(message.payloadJson)
-      val empty = current.live == null && current.turns.isEmpty() && current.history.isEmpty()
-      if (snapshot != null && snapshot.live == null && empty) return acceptNullLive(current, snapshot)
+      if (snapshot != null && snapshot.live == null) {
+        newConversationCommand = ""
+        return acceptNullLive(show(current), snapshot)
+      }
+    }
+    if (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript ||
+      message.kind == MessageKind.Status) {
+      noteHostProgress()
+    }
+    if (transcriptBroken && (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript)) {
+      transcriptBroken = false
+      applied = applied.copy(liveRevision = -1, transcriptParts = emptyMap(), transcriptTurnId = "")
     }
     val immediate = message.kind in ImmediateKinds
     applied = reduceMonitor(applied, message)
@@ -246,7 +287,7 @@ class MonitorCoordinator(
     }
     appliedDirty = false
     val reduced = applied
-    screen = stamp(current)
+    screen = show(current)
     val posted = publishReduced(reduced, message.kind == MessageKind.InsertResult, message.kind == MessageKind.Snapshot)
     val effects = posted?.toMutableList() ?: mutableListOf()
     if (reduced.rescueSteer && reduced.draft.isNotEmpty()) {
@@ -256,10 +297,18 @@ class MonitorCoordinator(
       val encoded = tryEncodeSend(commandId, text)
       if (encoded.ok) {
         armSubmission(text, false, commandId)
+        effects += MonitorEffect.RememberDraft(screen.draft)
         effects += MonitorEffect.Send(encoded.json)
       } else screen = screen.copy(banner = "Text is longer than 65536 characters.", rescueSteer = false)
     }
-    if (message.kind == MessageKind.Snapshot) effects += missingFetches(screen)
+    if (message.kind == MessageKind.Snapshot) {
+      newConversationCommand = ""
+      effects += missingFetches(screen)
+    }
+    if (newConversationCommand.isNotEmpty() && message.kind == MessageKind.Error) {
+      val body = (message.inbound as? InboundPayload.Error)?.body ?: decodeError(message.payloadJson)
+      if (body != null && body.refId == newConversationCommand) noteFailedNew(effects)
+    }
     if (posted == null && effects.isEmpty()) return null
     return effects
   }
@@ -276,10 +325,11 @@ class MonitorCoordinator(
   private fun linkChanged(current: MonitorUi, status: LinkStatus): List<MonitorEffect> {
     val reset = noteHost(current, session.hostAddress, session.hostPort, session.hostClientId)
     val effects = reset?.toMutableList() ?: mutableListOf()
-    if (reset == null) screen = stamp(current)
+    if (reset == null) screen = show(current)
     val closed = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     val down = closed || status.phase == LinkPhase.Connecting
     val recovered = status.phase == LinkPhase.Live && linkHeld
+    if (down && screen.reachedLive) transcriptBroken = true
     if (status.phase == LinkPhase.Live) {
       linkHeld = false
       linkHeldAt = 0L
@@ -324,13 +374,25 @@ class MonitorCoordinator(
   }
 
   private fun commandResult(current: MonitorUi, result: CatalogueResult): List<MonitorEffect> {
-    screen = stamp(current)
     if (result.outcome == CatalogueWrite.Failed || result.outcome == CatalogueWrite.Stale) releaseFailedFetch(result.commandId)
+    if (result.commandId.isNotEmpty() && result.commandId == newConversationCommand &&
+      result.outcome != CatalogueWrite.Written) {
+      screen = show(current)
+      val effects = mutableListOf<MonitorEffect>()
+      noteFailedNew(effects)
+      return effects
+    }
+    screen = show(current)
     if (result.commandId.isEmpty() || result.commandId != screen.pendingCommandId || writeSettled) return emptyList()
     return when (result.outcome) {
       CatalogueWrite.Written -> acceptWritten(screen)
       CatalogueWrite.Failed, CatalogueWrite.Stale -> rejectWrite(screen)
     }
+  }
+
+  private fun noteFailedNew(effects: MutableList<MonitorEffect>) {
+    newConversationCommand = ""
+    effects += MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
   }
 
   private fun armSubmission(text: String, steer: Boolean, commandId: String) {
@@ -340,9 +402,9 @@ class MonitorCoordinator(
     pendingText = text
     writeSettled = false
     val submitted = beginSubmit(before, text, steer, clock.nowMs(), commandId)
-    screen = stamp(submitted).copy(draft = before.draft)
+    screen = stamp(submitted)
     applied = applied.copy(
-      draft = before.draft,
+      draft = "",
       pendingPrompt = submitted.pendingPrompt,
       pendingKind = submitted.pendingKind,
       pendingCommandId = submitted.pendingCommandId,
@@ -487,6 +549,56 @@ class MonitorCoordinator(
     if (clearDisconnect) effects += MonitorEffect.Prefetch
     return effects
   }
+
+  /** A caller copy can lag the submission already on screen. Do not put that text back. */
+  private fun adopt(current: MonitorUi): MonitorUi {
+    if (screen.pendingEpoch > current.pendingEpoch) {
+      return current.copy(
+        draft = screen.draft,
+        pendingPrompt = screen.pendingPrompt,
+        pendingKind = screen.pendingKind,
+        pendingCommandId = screen.pendingCommandId,
+        pendingEpoch = screen.pendingEpoch,
+        promptBaseline = screen.promptBaseline,
+        activityStartedMs = if (screen.activityStartedMs > 0L) screen.activityStartedMs else current.activityStartedMs,
+        view = if (screen.view.sending || screen.view.busy) screen.view else current.view
+      )
+    }
+    if (screen.pendingPrompt.isNotEmpty() && screen.draft.isEmpty() && current.draft.trim() == screen.pendingPrompt) {
+      return current.copy(
+        draft = "",
+        pendingPrompt = current.pendingPrompt.ifEmpty { screen.pendingPrompt },
+        pendingKind = current.pendingKind.ifEmpty { screen.pendingKind },
+        pendingCommandId = current.pendingCommandId.ifEmpty { screen.pendingCommandId },
+        pendingEpoch = maxOf(current.pendingEpoch, screen.pendingEpoch),
+        promptBaseline = if (current.promptBaseline.isEmpty()) screen.promptBaseline else current.promptBaseline
+      )
+    }
+    return current
+  }
+
+  private fun noteHostProgress() {
+    lastHostProgressMs = clock.nowMs()
+  }
+
+  /** A busy label with no host frame for a while is a stalled stream, not a live tool. */
+  private fun busyStallRefresh(): MonitorEffect? {
+    val busy = screen.view.busy || screen.view.sending || screen.view.planRunning || screen.planRunning
+    if (!busy || screen.disconnected) return null
+    val now = clock.nowMs()
+    if (lastHostProgressMs <= 0L) {
+      lastHostProgressMs = now
+      return null
+    }
+    if (now - lastHostProgressMs < BusyStallMs) return null
+    if (lastStallRefreshMs > 0L && now - lastStallRefreshMs < BusyStallMs) return null
+    lastStallRefreshMs = now
+    lastHostProgressMs = now
+    transcriptBroken = true
+    return MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
+  }
+
+  private fun show(current: MonitorUi): MonitorUi = stamp(adopt(current))
 
   private fun stamp(current: MonitorUi): MonitorUi {
     return current.copy(showThinking = display.showThinking, showTools = display.showTools)

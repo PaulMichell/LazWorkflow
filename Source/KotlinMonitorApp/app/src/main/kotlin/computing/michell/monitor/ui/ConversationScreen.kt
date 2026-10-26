@@ -1,7 +1,7 @@
 package computing.michell.monitor.ui
 
 /* Conversation transcript. The extent is virtual; recent bodies fill first.
-   Styles follow the desktop bubbles. The bar is an absolute position in that extent.
+   Styles follow the desktop bubbles. Finger scrolling has no thumb.
    (c) 2026 Michell Computing. */
 
 import android.Manifest
@@ -9,40 +9,26 @@ import android.app.Activity
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -50,8 +36,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,12 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
@@ -123,7 +103,6 @@ fun ConversationScreen(
   onSend: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
-  onMode: (String) -> Unit,
   onNeed: (Int) -> Unit,
   onVisibleTurns: (Set<Int>) -> Unit,
   onViewWidth: (Int) -> Unit,
@@ -145,12 +124,10 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-      Text("Mode")
-      ModeCombo(ui.view.mode, ui.view.canChangeMode && !ui.disconnected, onMode, Modifier.weight(1f))
+    ConversationPane(ui, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
+    key(ui.pendingEpoch) {
+      PromptField(promptValue, onPrompt)
     }
-    ConversationPane(ui, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
-    PromptField(promptValue, onPrompt)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, { start, end ->
         val showRationale = activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == true
@@ -163,7 +140,6 @@ fun ConversationScreen(
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
       Button(onClick = onNew, enabled = ui.view.canSend && !ui.disconnected) { Text("New") }
     }
-    ActivityStatus(ui, phase, dictation.listening, dictation.statusMessage)
   }
 }
 
@@ -182,6 +158,7 @@ fun promptActivityRight(activity: String, listening: Boolean, statusMessage: Str
 @Composable
 private fun ConversationPane(
   ui: MonitorUi,
+  phase: LinkPhase,
   bitmaps: Map<String, Bitmap>,
   onNeed: (Int) -> Unit,
   onVisibleTurns: (Set<Int>) -> Unit,
@@ -192,30 +169,18 @@ private fun ConversationPane(
   val scrollState = rememberScrollState()
   val scope = rememberCoroutineScope()
   var followHead by remember { mutableStateOf(true) }
-  var dragging by remember { mutableStateOf(false) }
   var settling by remember { mutableStateOf(false) }
-  var dragFraction by remember { mutableFloatStateOf(1f) }
-  var seekPx by remember { mutableIntStateOf(-1) }
   val measured = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
   val need = rememberUpdatedState(onNeed)
-  LaunchedEffect(Unit) {
-    snapshotFlow { seekPx }
-      .collect { y ->
-        if (y < 0) return@collect
-        settling = true
-        scrollState.scrollTo(y.coerceIn(0, scrollState.maxValue))
-        settling = false
-      }
-  }
   LaunchedEffect(ui.pendingEpoch) {
     if (ui.pendingEpoch > 0) followHead = true
   }
   LaunchedEffect(Unit) {
-    snapshotFlow { Triple(scrollState.maxValue, followHead, dragging) }
-      .collect { (max, stick, drag) ->
-        if (!stick || drag) return@collect
+    snapshotFlow { scrollState.maxValue to followHead }
+      .collect { (max, stick) ->
+        if (!stick) return@collect
         var guard = 0
-        while (followHead && !dragging && scrollState.value < scrollState.maxValue && guard < 8) {
+        while (followHead && scrollState.value < scrollState.maxValue && guard < 8) {
           settling = true
           scrollState.scrollTo(scrollState.maxValue)
           settling = false
@@ -233,7 +198,7 @@ private fun ConversationPane(
     var previousMax = scrollState.maxValue
     snapshotFlow { Triple(scrollState.isScrollInProgress, scrollState.value, scrollState.maxValue) }
       .collect { (_, value, max) ->
-        if (!settling) followHead = stickToHead(followHead, previousValue, value, previousMax, max, dragging)
+        if (!settling) followHead = stickToHead(followHead, previousValue, value, previousMax, max, false)
         previousValue = value
         previousMax = max
       }
@@ -255,23 +220,18 @@ private fun ConversationPane(
         }
       }
   }
-  val fraction = if (dragging) dragFraction else scrollFraction(scrollState.value, scrollState.maxValue)
-  val content = scrollState.maxValue + scrollState.viewportSize
-  val thumbFraction = if (content <= 0) 1f else scrollState.viewportSize.toFloat() / content.toFloat()
-  val labelIndex = slotIndexForFraction(slots, measured, fraction)
-  Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-    Column(
-      Modifier.weight(1f).fillMaxHeight().verticalScroll(scrollState).onSizeChanged { size ->
-        if (size.width > 0) onViewWidth(size.width)
-      },
-      verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+  Column(
+    modifier.fillMaxHeight().verticalScroll(scrollState).onSizeChanged { size ->
+      if (size.width > 0) onViewWidth(size.width)
+    },
+    verticalArrangement = Arrangement.spacedBy(8.dp)
+  ) {
       slots.forEach { slot ->
         Box(Modifier.onSizeChanged { size ->
           val key = slotKey(slot)
           val previous = measured[key]
           measured[key] = size.height
-          if (previous == null || followHead || dragging) return@onSizeChanged
+          if (previous == null || followHead) return@onSizeChanged
           val delta = size.height - previous
           if (delta == 0) return@onSizeChanged
           val top = prefixHeight(slots, measured, key)
@@ -291,7 +251,7 @@ private fun ConversationPane(
           )
         }
       }
-      if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)) {
+      if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt) && !hostHasLaterUserBlock(ui)) {
         val pending = WireBlock(
           ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()
         )
@@ -303,23 +263,9 @@ private fun ConversationPane(
           foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0)
         )
       }
-    }
-    ExtentBar(
-      fraction,
-      thumbFraction,
-      dragging,
-      slots.getOrNull(labelIndex)?.label ?: "",
-      { next, active ->
-        val fractionNow = next.coerceIn(0f, 1f)
-        val max = scrollState.maxValue
-        val y = if (!active && fractionNow >= 0.995f) max else scrollOffset(max, fractionNow)
-        dragging = active
-        dragFraction = fractionNow
-        followHead = atHead(y, max)
-        seekPx = y
-      },
-      Modifier.fillMaxHeight()
-    )
+      if (displayInterrupted(ui, phase)) {
+        OfflineReconnectNotice(ui.activityStartedMs)
+      }
   }
 }
 
@@ -333,12 +279,6 @@ private fun prefixHeight(slots: List<VirtualSlot>, measured: Map<String, Int>, k
     top += measured[id] ?: 0
   }
   return top
-}
-
-private fun slotIndexForFraction(slots: List<VirtualSlot>, measured: Map<String, Int>, fraction: Float): Int {
-  if (slots.isEmpty()) return 0
-  val heights = slots.map { slot -> (measured[slotKey(slot)] ?: 1).coerceAtLeast(1) }
-  return spotAt(heights, fraction).index
 }
 
 private fun bodyFor(ui: MonitorUi, slot: VirtualSlot): WireTurn? {
@@ -384,107 +324,13 @@ fun foldBlockKey(conversationGeneration: Int, turnId: String, blockId: String, b
 }
 
 @Composable
-private fun ExtentBar(
-  fraction: Float,
-  thumbFraction: Float,
-  dragging: Boolean,
-  label: String,
-  onJump: (Float, Boolean) -> Unit,
-  modifier: Modifier
+fun ActivityStatus(
+  ui: MonitorUi,
+  phase: LinkPhase,
+  listening: Boolean,
+  statusMessage: String,
+  modifier: Modifier = Modifier
 ) {
-  val trackColor = MaterialTheme.colorScheme.surfaceVariant
-  val thumbColor = MaterialTheme.colorScheme.primary
-  val jump = rememberUpdatedState(onJump)
-  val shownThumb = thumbFraction.coerceIn(0.08f, 1f)
-  BoxWithConstraints(modifier.width(28.dp)) {
-    val travel = 1f - shownThumb
-    val thumbTop = maxHeight * (fraction.coerceIn(0f, 1f) * travel)
-    Canvas(
-      Modifier
-        .fillMaxSize()
-        .pointerInput(Unit) {
-          detectTapGestures { offset ->
-            val next = if (size.height <= 0) 0f else (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
-            jump.value(next, false)
-          }
-        }
-        .pointerInput(Unit) {
-          var held = 0f
-          detectDragGestures(
-            onDragStart = { offset ->
-              held = if (size.height <= 0) 0f else (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
-              jump.value(held, true)
-            },
-            onDragEnd = { jump.value(held, false) },
-            onDragCancel = { jump.value(held, false) },
-            onDrag = { change, _ ->
-              held = if (size.height <= 0) 0f else (change.position.y / size.height.toFloat()).coerceIn(0f, 1f)
-              jump.value(held, true)
-            }
-          )
-        }
-    ) {
-      drawRoundRect(
-        color = trackColor,
-        cornerRadius = CornerRadius(8f, 8f),
-        size = Size(size.width, size.height)
-      )
-      val thumbHeight = size.height * shownThumb
-      drawRoundRect(
-        color = thumbColor,
-        topLeft = Offset(2f, thumbTop.toPx()),
-        size = Size(size.width - 4f, thumbHeight),
-        cornerRadius = CornerRadius(8f, 8f)
-      )
-    }
-    if (dragging) {
-      Text(
-        label,
-        modifier = Modifier
-          .align(Alignment.TopEnd)
-          .wrapContentWidth(unbounded = true, align = Alignment.End)
-          .offset(x = (-36).dp, y = thumbTop)
-          .background(MaterialTheme.colorScheme.surface, MaterialTheme.shapes.small)
-          .padding(horizontal = 8.dp, vertical = 4.dp)
-          .width(160.dp),
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        style = MaterialTheme.typography.bodySmall
-      )
-    }
-  }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModeCombo(mode: String, enabled: Boolean, onMode: (String) -> Unit, modifier: Modifier = Modifier) {
-  var open by remember { mutableStateOf(false) }
-  ExposedDropdownMenuBox(expanded = open && enabled, onExpandedChange = { if (enabled) open = it }, modifier = modifier) {
-    OutlinedTextField(
-      value = modeCaption(mode),
-      onValueChange = {},
-      readOnly = true,
-      enabled = enabled,
-      singleLine = true,
-      trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = open && enabled) },
-      modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled).fillMaxWidth()
-    )
-    ExposedDropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
-      ModeChoices.forEach { choice ->
-        DropdownMenuItem(
-          text = { Text(choice.second) },
-          onClick = {
-            open = false
-            if (choice.first != mode) onMode(choice.first)
-          }
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase, listening: Boolean, statusMessage: String) {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
   val blocks = displayBlocks(ui.live)
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
@@ -498,30 +344,39 @@ private fun ActivityStatus(ui: MonitorUi, phase: LinkPhase, listening: Boolean, 
   }
   val runtime = runtimeCaption(ui.view)
   val activity = activityCaption(ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live)
-  val right = promptActivityRight(activity, listening, statusMessage)
+  val interrupted = displayInterrupted(ui, phase)
+  val right = if (interrupted) {
+    val elapsed = if (ui.activityStartedMs > 0L && now >= ui.activityStartedMs) now - ui.activityStartedMs else 0L
+    OfflineReconnectingMessage + "\n" + formatActivityClock(elapsed)
+  } else promptActivityRight(activity, listening, statusMessage)
   val statusStyle = MaterialTheme.typography.bodySmall
-  Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+  // Equal side columns keep the model on the screen centre. Connection stays left; progress stays right.
+  Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
       statusCaption(ui, phase),
       color = QuietText,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       style = statusStyle,
-      modifier = Modifier.widthIn(max = 160.dp)
+      modifier = Modifier.weight(1f)
     )
-    if (runtime.isNotEmpty()) {
-      Text("  $runtime", color = QuietText, maxLines = 1, overflow = TextOverflow.Ellipsis, style = statusStyle, modifier = Modifier.weight(1f))
-    } else {
-      Spacer(Modifier.weight(1f))
-    }
+    Text(
+      runtime,
+      color = QuietText,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      textAlign = TextAlign.Center,
+      style = statusStyle,
+      modifier = Modifier.weight(1f)
+    )
     Text(
       right,
       color = QuietText,
-      maxLines = 3,
+      maxLines = 2,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.End,
       style = statusStyle,
-      modifier = Modifier.widthIn(max = 180.dp)
+      modifier = Modifier.weight(1f)
     )
   }
 }
@@ -587,26 +442,35 @@ private fun RoleBlock(
   hostGeneration: Int,
   foldKey: String
 ) {
-  when (block.kind) {
+  when (displayKind(block)) {
     "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons)
     "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons)
-    "thinking" -> FoldBlock(foldKey, block.title.ifEmpty { "Thinking" }, block.body, false, false)
-    "tool", "subagent" -> FoldBlock(foldKey, toolTitle(block), block.body, !block.ok && !block.running, true)
+    "thinking" -> ThinkingCard(foldKey, block)
+    "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration)
     "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
-    "note", "worked" -> Text(
-      block.body.ifEmpty { block.title },
-      color = QuietText,
-      fontStyle = FontStyle.Italic,
-      modifier = Modifier.padding(horizontal = 4.dp)
-    )
-    else -> Text(block.body.ifEmpty { block.title })
+    "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false)
+    "worked" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, QuietText, true)
+    else -> {
+      val caption = block.body.ifEmpty { block.title }
+      if (rendersMarkdown(displayKind(block))) MarkdownText(caption) else Text(caption)
+    }
   }
 }
 
-private fun toolTitle(block: WireBlock): String {
-  val name = block.toolName.ifEmpty { block.title.ifEmpty { block.kind } }
-  val state = if (block.running) "running" else if (block.ok) "ok" else "failed"
-  return "$name $state"
+@Composable
+private fun CaptionBlock(
+  block: WireBlock,
+  hostGeneration: Int,
+  bitmaps: Map<String, Bitmap>,
+  reasons: Map<String, String>,
+  color: Color,
+  italic: Boolean
+) {
+  Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    val caption = block.body.ifEmpty { block.title }
+    if (caption.isNotEmpty()) MarkdownText(caption, color = color, italic = italic)
+    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
+  }
 }
 
 @Composable
@@ -631,29 +495,84 @@ private fun BubbleBlock(
       verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
       if (block.title.isNotEmpty()) Text(block.title, fontWeight = FontWeight.Bold)
-      if (block.body.isNotEmpty()) Text(block.body)
+      if (block.body.isNotEmpty()) MarkdownText(block.body)
       block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
     }
   }
 }
 
+fun offlineReconnectCaption(startedMs: Long, nowMs: Long): String {
+  val elapsed = if (startedMs > 0L && nowMs >= startedMs) nowMs - startedMs else 0L
+  return "$OfflineReconnectingMessage  ${formatActivityClock(elapsed)}"
+}
+
 @Composable
-private fun FoldBlock(foldKey: String, title: String, body: String, failed: Boolean, tool: Boolean) {
-  var open by remember(foldKey) { mutableStateOf(false) }
-  Column(
-    modifier = Modifier
-      .fillMaxWidth()
-      .clip(RoundedCornerShape(6.dp))
-      .background(if (tool) ToolFill else Color.Transparent)
-      .clickable { open = !open }
-      .padding(8.dp)
-  ) {
+private fun OfflineReconnectNotice(startedMs: Long) {
+  var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  LaunchedEffect(startedMs) {
+    while (true) {
+      now = System.currentTimeMillis()
+      delay(1000)
+    }
+  }
+  Text(
+    offlineReconnectCaption(startedMs, now),
+    color = QuietText,
+    fontStyle = FontStyle.Italic,
+    modifier = Modifier.padding(horizontal = 4.dp)
+  )
+}
+
+@Composable
+private fun ThinkingCard(foldKey: String, block: WireBlock) {
+  var open by remember(foldKey) { mutableStateOf(true) }
+  val body = thinkingDisplayBody(block.body)
+  Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 4.dp)) {
     Text(
-      (if (open) "▾ " else "▸ ") + title,
-      color = if (failed) FailedTitle else QuietText,
-      fontWeight = FontWeight.Bold
+      (if (open) "▾ " else "▸ ") + thinkingCardTitle(block.title, block.running, block.durationMs),
+      style = thinkingHeaderStyle()
     )
-    if (open && body.isNotEmpty()) Text(body, color = QuietText, modifier = Modifier.padding(top = 4.dp))
+    if (open && body.isNotEmpty()) MarkdownText(body)
+    val footer = thoughtFooter(block.running, block.durationMs)
+    if (open && footer.isNotEmpty()) {
+      Text(
+        footer,
+        color = QuietText,
+        fontStyle = FontStyle.Italic,
+        style = tightTranscriptStyle(),
+        modifier = Modifier.padding(top = 2.dp)
+      )
+    }
+  }
+}
+
+@Composable
+private fun ToolCard(
+  foldKey: String,
+  block: WireBlock,
+  bitmaps: Map<String, Bitmap>,
+  reasons: Map<String, String>,
+  hostGeneration: Int
+) {
+  var open by remember(foldKey) { mutableStateOf(false) }
+  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(
+      (if (open) "▾ " else "▸ ") + toolCardCaption(block),
+      color = if (block.ok) Color.Unspecified else FailedTitle,
+      fontWeight = FontWeight.Bold,
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(4.dp))
+        .background(ToolFill)
+        .clickable { open = !open }
+        .padding(horizontal = 8.dp, vertical = 6.dp)
+    )
+    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
+    if (open && block.body.isNotEmpty()) {
+      val bodyModifier = Modifier.padding(horizontal = 8.dp)
+      if (displayKind(block) == "subagent") MarkdownText(block.body, modifier = bodyModifier)
+      else Text(block.body, modifier = bodyModifier)
+    }
   }
 }
 

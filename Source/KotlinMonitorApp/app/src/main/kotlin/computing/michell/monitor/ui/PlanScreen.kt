@@ -19,13 +19,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -65,13 +60,11 @@ fun planMarker(status: String, actionable: Boolean): PlanMarker? {
 fun PlanScreen(
   ui: MonitorUi,
   onSelect: (Int) -> Unit,
-  onWork: () -> Unit,
   onRun: () -> Unit,
   onStop: () -> Unit,
-  onNew: (String) -> Unit,
+  onNew: () -> Unit,
   onRemove: () -> Unit
 ) {
-  var title by remember { mutableStateOf("") }
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(ui.planTitle.ifEmpty { "Plan" }, style = MaterialTheme.typography.titleLarge)
     Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
@@ -82,13 +75,11 @@ fun PlanScreen(
         }
       }
     }
-    OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), label = { Text("New plan title") }, singleLine = true)
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       val online = !ui.disconnected
-      Button(onClick = onWork, enabled = online && ui.selectedPlan >= 0) { Text("Work on this") }
       Button(onClick = onRun, enabled = online) { Text("Run") }
       Button(onClick = onStop, enabled = online) { Text("Stop") }
-      Button(onClick = { onNew(title.trim()) }, enabled = online) { Text("New") }
+      Button(onClick = onNew, enabled = online) { Text("New") }
       Button(onClick = onRemove, enabled = online && ui.planPath.isNotEmpty()) { Text("Remove") }
     }
   }
