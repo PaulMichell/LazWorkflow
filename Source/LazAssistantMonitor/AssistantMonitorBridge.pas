@@ -1,7 +1,9 @@
 Unit AssistantMonitorBridge;
 
 { Main-thread command pump and session listener. The listener only enqueues.
-  It does not build provider JSON and does not replace the form trace handler.
+  A command wait must not sit in the listen thread. The idle sweep answers
+  host_busy if the IDE has not claimed the command. It does not build provider
+  JSON and does not replace the form trace handler.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -46,10 +48,9 @@ Type
     Claimed: Boolean;
     BusySent: Boolean;
     Finished: Boolean;
-    Done: PRTLEvent;
+    QueuedAt: QWord;
     RefCount: Integer;
     Procedure Execute;
-    Procedure Retain;
     Procedure Release;
   End;
 
@@ -63,12 +64,16 @@ Type
   TAssistantMonitorBridge = Class
   Private
     FLock: TRTLCriticalSection;
+    FOutstanding: TFPList;
     FSession: TMonitorSession;
-    FGeneration: Integer;
     FStatusQueued: Boolean;
     FStatusDirty: Boolean;
     Procedure LockBridge;
     Procedure UnlockBridge;
+    { Caller holds FLock. True when this command was still listed. }
+    Function ForgetCommand(Command: TMonitorQueuedCommand): Boolean;
+    Procedure SweepCommands;
+    Procedure DropOutstanding;
     Procedure Hear(Kind: TAssistantSessionNoticeKind);
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure HandleApprovalClosed(Const ToolId, Reason: String);
@@ -96,23 +101,15 @@ Type
 Var
   Bridge: TAssistantMonitorBridge;
 
-Procedure TMonitorQueuedCommand.Retain;
-Begin
-  InterlockedIncrement(RefCount);
-End;
-
 Procedure TMonitorQueuedCommand.Release;
 Begin
   If InterlockedDecrement(RefCount) = 0 Then
-    Begin
-      If Assigned(Done) Then
-        RTLEventDestroy(Done);
-      Done := Nil;
-      Free;
-    End;
+    Free;
 End;
 
 Procedure TMonitorQueuedCommand.Execute;
+Var
+  Listed: Boolean;
 Begin
   Try
     Try
@@ -123,16 +120,19 @@ Begin
         ReportPluginException('AssistantMonitorBridge.Command', E);
     End;
   Finally
+    Listed := False;
     If Assigned(Bridge) Then
-      Bridge.LockBridge;
-    Try
-      Finished := True;
-    Finally
-      If Assigned(Bridge) Then
-        Bridge.UnlockBridge;
-    End;
-    If Assigned(Done) Then
-      RTLEventSetEvent(Done);
+      Begin
+        Bridge.LockBridge;
+        Try
+          Finished := True;
+          Listed := Bridge.ForgetCommand(Self);
+        Finally
+          Bridge.UnlockBridge;
+        End;
+      End;
+    If Listed Then
+      Release;
     Release;
   End;
 End;
@@ -156,15 +156,99 @@ Constructor TAssistantMonitorBridge.Create;
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
+  FOutstanding := TFPList.Create;
   FSession := Nil;
-  FGeneration := 0;
 End;
 
 Destructor TAssistantMonitorBridge.Destroy;
 Begin
   Detach;
+  FreeAndNil(FOutstanding);
   DoneCriticalSection(FLock);
   Inherited Destroy;
+End;
+
+Function TAssistantMonitorBridge.ForgetCommand(Command: TMonitorQueuedCommand): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  If (Not Assigned(Command)) Or (Not Assigned(FOutstanding)) Then
+    Exit;
+  Index := FOutstanding.IndexOf(Command);
+  If Index < 0 Then
+    Exit;
+  FOutstanding.Delete(Index);
+  Result := True;
+End;
+
+Procedure TAssistantMonitorBridge.DropOutstanding;
+Var
+  Index: Integer;
+  Command: TMonitorQueuedCommand;
+Begin
+  If Not Assigned(FOutstanding) Then
+    Exit;
+  LockBridge;
+  Try
+    For Index := 0 To FOutstanding.Count - 1 Do
+      Begin
+        Command := TMonitorQueuedCommand(FOutstanding[Index]);
+        Command.Cancelled := True;
+        Command.Release;
+      End;
+    FOutstanding.Clear;
+  Finally
+    UnlockBridge;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.SweepCommands;
+Var
+  Index, Count: Integer;
+  NowMs: QWord;
+  Command: TMonitorQueuedCommand;
+  Expired: Array Of TMonitorQueuedCommand;
+  Notify: Array Of Boolean;
+Begin
+  If Not Assigned(FOutstanding) Then
+    Exit;
+  NowMs := GetTickCount64;
+  Count := 0;
+  LockBridge;
+  Try
+    Index := 0;
+    While Index < FOutstanding.Count Do
+      Begin
+        Command := TMonitorQueuedCommand(FOutstanding[Index]);
+        If Command.Finished Or Command.Claimed Or (NowMs - Command.QueuedAt < MonitorCommandWaitMs) Then
+          Begin
+            Inc(Index);
+            Continue;
+          End;
+        Command.Cancelled := True;
+        SetLength(Expired, Count + 1);
+        SetLength(Notify, Count + 1);
+        Expired[Count] := Command;
+        Notify[Count] := Not Command.BusySent;
+        Command.BusySent := True;
+        FOutstanding.Delete(Index);
+        Inc(Count);
+      End;
+  Finally
+    UnlockBridge;
+  End;
+  For Index := 0 To Count - 1 Do
+    Begin
+      Try
+        If Notify[Index] Then
+          SendError(Expired[Index].ClientId, MonitorHostBusyReason, 'The Project Assistant is busy.');
+      Except
+        On E: Exception Do
+          ReportPluginException('AssistantMonitorBridge.Sweep', E);
+      End;
+      Expired[Index].Release;
+    End;
 End;
 
 Procedure TAssistantMonitorBridge.LockBridge;
@@ -188,6 +272,7 @@ Begin
   If Assigned(Session) Then
     Begin
       Session.OnCommand := @HandleCommand;
+      Session.SetIdleHandler(@SweepCommands);
       Session.SetApprovalCloseHandler(@HandleApprovalClosed);
     End;
 End;
@@ -206,8 +291,10 @@ Begin
   If Assigned(Session) Then
     Begin
       Session.OnCommand := Nil;
+      Session.SetIdleHandler(Nil);
       Session.SetApprovalCloseHandler(Nil);
     End;
+  DropOutstanding;
 End;
 
 Function TAssistantMonitorBridge.HostId: String;
@@ -801,7 +888,6 @@ End;
 Procedure TAssistantMonitorBridge.HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
 Var
   Command: TMonitorQueuedCommand;
-  SendBusy: Boolean;
 Begin
   Command := TMonitorQueuedCommand.Create;
   Command.Kind := Kind;
@@ -811,35 +897,29 @@ Begin
   Command.Claimed := False;
   Command.BusySent := False;
   Command.Finished := False;
+  Command.QueuedAt := GetTickCount64;
   Command.RefCount := 2;
-  Command.Done := RTLEventCreate;
   LockBridge;
   Try
-    Inc(FGeneration);
-    Command.Generation := FGeneration;
+    FOutstanding.Add(Command);
   Finally
     UnlockBridge;
   End;
   Try
     TThread.Queue(Nil, @Command.Execute);
-    RTLEventWaitFor(Command.Done, MonitorCommandWaitMs);
-    SendBusy := False;
-    LockBridge;
-    Try
-      If Not Command.Finished Then
-        If Not Command.Claimed Then
-          Begin
-            Command.Cancelled := True;
-            SendBusy := Not Command.BusySent;
-            Command.BusySent := True;
-          End;
-    Finally
-      UnlockBridge;
-    End;
-    If SendBusy Then
-      SendError(Id, MonitorHostBusyReason, 'The Project Assistant is busy.');
-  Finally
-    Command.Release;
+  Except
+    On E: Exception Do
+      Begin
+        LockBridge;
+        Try
+          ForgetCommand(Command);
+        Finally
+          UnlockBridge;
+        End;
+        Command.Release;
+        Command.Release;
+        ReportPluginException('AssistantMonitorBridge.HandleCommand', E);
+      End;
   End;
 End;
 

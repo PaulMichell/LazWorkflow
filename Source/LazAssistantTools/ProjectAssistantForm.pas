@@ -21,6 +21,7 @@ Unit ProjectAssistantForm;
   The list stays in AssistantTasksForm.
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
   Dialog-free monitor fill and remote helpers stay here because they read private send and plan state.
+  The elapsed timer publishes the live trace so a Codex or Claude poll reaches the phone before the turn finishes.
   Reviewed 2026-10-22: plan sidebar status is an owner-drawn pill on BuildTodoList. }
 
 {$IFDEF FPC}
@@ -347,6 +348,7 @@ Type
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
+  FMonitorLiveStamp: String; { Last live trace published to the phone. Skips an unchanged poll. }
     Function ComposerHasImages: Boolean;
     Procedure StashComposerImages;
     Procedure RestoreHeldComposerImages;
@@ -470,6 +472,7 @@ Type
     Procedure EnsureChatView;
     Procedure ApplyLiveThinkingAndAnswer;
     Procedure ApplyLiveAnswerSlice;
+    Procedure PublishLiveMonitorTurn;
     Procedure HandleTraceEvent(Const Event: TAssistantEvent);
     Procedure EnsureInputPopup;
     Procedure UpdateInputUndoItems;
@@ -796,6 +799,7 @@ Begin
   FOpenBindPending := True;
   FDeferLastTurn := True;
   FOpenBusy := False;
+  FMonitorLiveStamp := '';
   FPlanWriteThisTurn := False;
   LoadConnectionSettings;
   WorkflowEventBus.AddListener(Self);
@@ -2061,6 +2065,7 @@ Begin
           FTrace.AddNote(MessageText);
           If FViewingLive And Assigned(FTraceView) Then
             FTraceView.Sync(FTrace, True);
+          PublishLiveMonitorTurn;
         End;
     End
   Else
@@ -4501,47 +4506,52 @@ End;
 Procedure TProjectAssistantForm.ElapsedTimerTimer(Sender: TObject);
 Begin
   Try
-    If csDestroying In ComponentState Then Exit;
-    If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
-      Begin
-        If FSending And (FStatusPhase <> '') Then
+    Try
+      If csDestroying In ComponentState Then Exit;
+      If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
+        Begin
+          If FSending And (FStatusPhase <> '') Then
+            StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
+              AssistantProgressPhase(FStatusPhase));
+          PollTransportWait;
+          Exit;
+        End;
+      If FSending And (FStatusPhase <> '') Then
+        Begin
           StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
             AssistantProgressPhase(FStatusPhase));
-        PollTransportWait;
-        Exit;
-      End;
-    If FSending And (FStatusPhase <> '') Then
-      Begin
-        StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
-          AssistantProgressPhase(FStatusPhase));
-        AssistantSessionObserve.AssistantSessionObserve(asnStatus);
-      End;
-    If Assigned(FCodexRun) Then
-      Begin
-        PollCodex;
-        Exit;
-      End;
-    If Assigned(FClaudeRun) Then
-      Begin
-        PollClaude;
-        Exit;
-      End;
-    If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
-      FTraceView.RefreshElapsed(FTrace);
-    If FSending And Assigned(AssistantClient) Then
-      Begin
-        AssistantClient.AbandonTimedOutSubagents;
-        ReapAbandonedAssistantWorkers;
-        If Assigned(FTrace) And FViewingLive And
-          FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
-          StopStream;
-      End;
-  Except
-    On E: Exception Do
-      Begin
-        If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
-        ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.ElapsedTimerTimer', E, False);
-      End;
+          AssistantSessionObserve.AssistantSessionObserve(asnStatus);
+        End;
+      If Assigned(FCodexRun) Then
+        Begin
+          PollCodex;
+          Exit;
+        End;
+      If Assigned(FClaudeRun) Then
+        Begin
+          PollClaude;
+          Exit;
+        End;
+      If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
+        FTraceView.RefreshElapsed(FTrace);
+      If FSending And Assigned(AssistantClient) Then
+        Begin
+          AssistantClient.AbandonTimedOutSubagents;
+          ReapAbandonedAssistantWorkers;
+          If Assigned(FTrace) And FViewingLive And
+            FTrace.HasRunningSubagentOlderThan(MaxSubagentRuntimeMs + 15000) Then
+            StopStream;
+        End;
+    Except
+      On E: Exception Do
+        Begin
+          If Assigned(ElapsedTimer) Then ElapsedTimer.Enabled := False;
+          ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.ElapsedTimerTimer', E, False);
+        End;
+    End;
+  Finally
+    { Codex and Claude grow the live trace on this timer. The phone must not wait for turn finish. }
+    PublishLiveMonitorTurn;
   End;
 End;
 
@@ -6438,6 +6448,42 @@ Begin
     Block.Body := Slice
   Else
     FTrace.EnsureAnswer.Body := Slice;
+End;
+
+Procedure TProjectAssistantForm.PublishLiveMonitorTurn;
+Var
+  I: Integer;
+  Block: TTraceBlock;
+  Stamp: String;
+Begin
+  If csDestroying In ComponentState Then
+    Exit;
+  { Before BeginAssistantReply the trace is still the previous turn. Do not publish that as this send. }
+  If Not (FStreamingActive Or FPlanAgentRunning) Then
+    Exit;
+  Try
+    If FStreamingActive And Assigned(FTrace) Then
+      ApplyLiveThinkingAndAnswer;
+    Stamp := IntToStr(Length(FLiveUser));
+    If Assigned(FTrace) Then
+      For I := 0 To FTrace.Count - 1 Do
+        Begin
+          Block := FTrace[I];
+          Stamp := Stamp + #1 + IntToStr(Ord(Block.Kind)) + #1 + IntToStr(Block.Revision) + #1 +
+            IntToStr(Length(Block.Body)) + #1 + IntToStr(Length(Block.Title));
+          If Block.Running Then
+            Stamp := Stamp + #1 + '1'
+          Else
+            Stamp := Stamp + #1 + '0';
+        End;
+    If Stamp = FMonitorLiveStamp Then
+      Exit;
+    FMonitorLiveStamp := Stamp;
+    AssistantSessionObserve.AssistantSessionObserve(asnTranscript);
+  Except
+    On E: Exception Do
+      ClassifyFormFault(Self, afoPaintLayout, 'TProjectAssistantForm.PublishLiveMonitorTurn', E, False);
+  End;
 End;
 
 Procedure TProjectAssistantForm.HandleTraceEvent(Const Event: TAssistantEvent);
@@ -9712,9 +9758,10 @@ Begin
     Seen.CaseSensitive := True;
     If TurnIndex = LiveConversationMarker Then
       Begin
-        { The window shows the stored conversation while idle. The in-flight trace is empty until the next send. }
-        If Not FSending And Not (FStreamingActive And Not FTurnRecorded) And Assigned(ProjectAssistantConversation) And
-          (ProjectAssistantConversation.TurnCount > 0) Then
+        { The window shows the stored conversation while idle. The in-flight trace is empty until the next send.
+          A plan run keeps notes on that trace between turns. The stored row does not have them yet. }
+        If (Not FSending) And (Not (FStreamingActive And (Not FTurnRecorded))) And (Not FPlanAgentRunning) And
+          Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) Then
           Begin
             StoredIndex := FSelectedTurnIndex;
             If (StoredIndex < 0) Or (StoredIndex >= ProjectAssistantConversation.TurnCount) Then

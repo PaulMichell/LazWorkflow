@@ -61,6 +61,8 @@ Type
     ModeLocked: Boolean;
   End;
 
+  { Listen-thread idle. Must return without waiting on the IDE thread. }
+  TMonitorIdleHandler = Procedure Of Object;
   TMonitorCommandHandler = Procedure(Kind: Integer; Const Id, PayloadJson: String) Of Object;
   { The bridge writes approval_closed. Nil leaves a rejected decision silent. }
   TMonitorApprovalCloseHandler = Procedure(Const ToolId, Reason: String) Of Object;
@@ -71,6 +73,7 @@ Type
     FState: TMonitorSessionState;
     FCarrier: IMonitorCarrier;
     FOnCommand: TMonitorCommandHandler;
+    FOnIdle: TMonitorIdleHandler;
     FOnApprovalClosed: TMonitorApprovalCloseHandler;
     FBindAddress: String;
     FPort: Integer;
@@ -190,6 +193,7 @@ Type
     /// Queues one host frame and drains it. Does not build the JSON.
     Procedure SendHostJson(Const Json: String);
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
+    Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
     Procedure NoteApprovalRequested(Const ToolId: String; DecisionsAccepted: Boolean);
     /// Records a closed id. Does not send a frame.
@@ -380,6 +384,7 @@ Begin
   FState := mssStopped;
   FCarrier := Nil;
   FOnCommand := Nil;
+  FOnIdle := Nil;
   FOnApprovalClosed := Nil;
   FPendingApprovalClose := False;
   FBindAddress := '';
@@ -1283,17 +1288,33 @@ Begin
   End;
 End;
 
+Procedure TMonitorSession.SetIdleHandler(Handler: TMonitorIdleHandler);
+Begin
+  LockSession;
+  Try
+    FOnIdle := Handler;
+  Finally
+    UnlockSession;
+  End;
+End;
+
 Procedure TMonitorSession.NoteTime(NowMs: QWord);
+Var
+  Idle: TMonitorIdleHandler;
 Begin
   LockSession;
   Try
     FNowMs := NowMs;
     CheckTimeoutsLocked;
     FlushTranscriptLocked;
+    Idle := FOnIdle;
   Finally
     UnlockSession;
   End;
   DrainSends;
+  { After the lock. A command sweep must not stall this carrier. }
+  If Assigned(Idle) Then
+    Idle;
 End;
 
 Procedure TMonitorSession.RequestPairCode;
