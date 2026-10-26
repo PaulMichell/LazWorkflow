@@ -18,6 +18,7 @@ import computing.michell.monitor.protocol.cacheFileNameIsSafe
 import computing.michell.monitor.protocol.cacheStemIsSafe
 import computing.michell.monitor.protocol.decodeCacheIndex
 import computing.michell.monitor.protocol.decodeClosedScreen
+import computing.michell.monitor.protocol.indexWithoutFingerprint
 import computing.michell.monitor.protocol.decodeOfflineCache
 import computing.michell.monitor.protocol.encodeCacheIndex
 import computing.michell.monitor.protocol.encodeOfflineCache
@@ -324,8 +325,8 @@ class OfflineStore(
   fun forgetFingerprint(fingerprint: String) = synchronized(gate) {
     val key = cacheFingerprint(fingerprint)
     val entries = readIndex()
+    val kept = indexWithoutFingerprint(entries, key) { cacheFingerprint(it) }
     val removed = entries.filter { entry -> cacheFingerprint(entry.fingerprint) == key }
-    val kept = entries.filter { entry -> cacheFingerprint(entry.fingerprint) != key }
     if (removed.isEmpty() && kept.size == entries.size) return
     if (directory.isDirectory || kept.isNotEmpty()) {
       if (!directory.isDirectory) directory.mkdirs()

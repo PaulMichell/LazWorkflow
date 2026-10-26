@@ -1,0 +1,121 @@
+package computing.michell.monitor.protocol
+
+/* Phone mirror cases. No Android runner and no open socket. (c) 2026 Michell Computing. */
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class PhoneMirrorTest {
+  @Test
+  fun aPatchUpdatesOneBlockAndLeavesTheOthers() {
+    val kept = block("thinking", "think-1", "kept")
+    val answer = block("answer", "answer-1", "old")
+    val shown = turn("Shown", listOf(kept, answer))
+    val start = PhoneScreen(epoch = "aa", turns = listOf(shown), live = shown)
+    val next = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "new")), 1, 1))
+    assertEquals(1L, next.cursor)
+    assertEquals(listOf("kept", "new"), next.live?.blocks?.map { it.body })
+    assertEquals("Shown", next.turns[0].promptPreview)
+  }
+
+  @Test
+  fun anIncompletePartSetDoesNotAdvanceTheCursor() {
+    val start = PhoneScreen(epoch = "aa", live = turn("Shown", listOf(block("answer", "answer-1", "old"))))
+    val partial = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "one")), 1, 2))
+    assertEquals(0L, partial.cursor)
+    assertEquals("one", partial.live?.blocks?.single()?.body)
+    val done = applyPhonePatch(partial, patch("aa", 1, listOf(block("answer", "answer-1", "two")), 2, 2))
+    assertEquals(1L, done.cursor)
+    assertEquals("onetwo", done.live?.blocks?.single()?.body)
+  }
+
+  @Test
+  fun aLowerCursorInTheSameEpochDoesNotChangeTheScreen() {
+    val shown = turn("Shown", listOf(block("answer", "answer-1", "kept"), block("thinking", "think-1", "also")))
+    val start = PhoneScreen(epoch = "aa", cursor = 4, turns = listOf(shown), live = shown)
+    val lower = applyPhonePatch(start, patch("aa", 3, listOf(block("answer", "answer-1", "old")), 1, 1))
+    assertEquals(start.cursor, lower.cursor)
+    assertEquals(start.turns, lower.turns)
+    assertEquals(start.live, lower.live)
+  }
+
+  @Test
+  fun aNewEpochKeepsTurnsUntilCatchupReplacesThem() {
+    val shown = turn("Shown", listOf(block("answer", "answer-1", "kept")))
+    val start = PhoneScreen(epoch = "aa", cursor = 4, turns = listOf(shown), live = shown)
+    val announced = applyPhonePatch(start, patch("bb", 1, listOf(block("answer", "answer-1", "hidden")), 1, 1))
+    assertTrue(announced.catchingUp)
+    assertEquals("aa", announced.epoch)
+    assertEquals(listOf(shown), announced.turns)
+    assertEquals(shown, announced.live)
+    val replaced = applyPhoneCatchup(announced, "bb", 0, "conversation-2", "/work", "New", emptyList(), null)
+    assertEquals("bb", replaced.epoch)
+    assertFalse(replaced.catchingUp)
+    assertTrue(replaced.turns.isEmpty())
+    assertNull(replaced.live)
+  }
+
+  @Test
+  fun closedThenANewEpochFilesTheIdAndShowsEmptyOnlyAfterCatchup() {
+    val shown = turn("Shown", listOf(block("answer", "answer-1", "kept")))
+    val start = PhoneScreen(epoch = "aa", cursor = 4, conversationId = "current", turns = listOf(shown), live = shown)
+    val closed = notePhoneClosed(start, "conversation-1", "Archived")
+    assertEquals("conversation-1", closed.closedId)
+    assertEquals("", closed.fileClosedId)
+    assertEquals(listOf(shown), closed.turns)
+    val epoch = notePhoneEpoch(closed, "bb")
+    assertEquals("conversation-1", epoch.fileClosedId)
+    assertEquals("Archived", epoch.closedTitle)
+    assertEquals(listOf(shown), epoch.turns)
+    assertEquals(shown, epoch.live)
+    val empty = applyPhoneCatchup(epoch, "bb", 0, "current", "/work", "", emptyList(), null)
+    assertTrue(empty.turns.isEmpty())
+    assertNull(empty.live)
+    assertEquals("", empty.fileClosedId)
+  }
+
+  @Test
+  fun twoSavedConversationsLoadWhileTheSocketStubIsDisconnected() {
+    val library = MemoryConversationLibrary()
+    val one = document("First")
+    val two = document("Second")
+    val other = document("Other host")
+    library.save(entry("aa", "/work/One", "conversation-1", "c-one.json"), one)
+    library.save(entry("aa", "/work/Two", "conversation-2", "c-two.json"), two)
+    library.save(entry("bb", "/work/One", "conversation-1", "c-other.json"), other)
+    val socket = DisconnectedSocket()
+    assertFalse(socket.opened)
+    assertEquals("First", library.load("aa", "/work/One", "conversation-1", socket)?.draft)
+    assertEquals("Second", library.load("aa", "/work/Two", "conversation-2", socket)?.draft)
+    assertFalse(socket.opened)
+    library.forgetFingerprint("aa")
+    assertNull(library.load("aa", "/work/One", "conversation-1", socket))
+    assertNull(library.load("aa", "/work/Two", "conversation-2", socket))
+    assertEquals("Other host", library.load("bb", "/work/One", "conversation-1", socket)?.draft)
+    assertEquals(setOf("bb"), library.fingerprints())
+    assertFalse(socket.opened)
+  }
+}
+
+private fun block(kind: String, id: String, body: String): WireBlock {
+  return WireBlock(kind, id, "", "", "", body, false, true, 0, emptyList())
+}
+
+private fun turn(preview: String, blocks: List<WireBlock>): WireTurn {
+  return WireTurn(1, "turn-1", "build", "", preview, "", blocks = blocks)
+}
+
+private fun patch(epoch: String, cursor: Long, blocks: List<WireBlock>, part: Int, partCount: Int): WirePatch {
+  return WirePatch(epoch, cursor, 1, "turn-1", blocks, false, false, false, "idle", true, false, false, 0, part, partCount)
+}
+
+private fun document(draft: String): OfflineCacheDocument {
+  return OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, draft)
+}
+
+private fun entry(fingerprint: String, projectRoot: String, conversationId: String, fileName: String): CacheIndexEntry {
+  return CacheIndexEntry(fingerprint, projectRoot, conversationId, conversationId, 1L, 1, fileName)
+}

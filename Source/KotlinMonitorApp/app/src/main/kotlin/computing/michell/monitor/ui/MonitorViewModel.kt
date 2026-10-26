@@ -58,7 +58,12 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MirrorPlace
 import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WirePatch
+import computing.michell.monitor.protocol.applyPhoneCatchup
+import computing.michell.monitor.protocol.applyPhonePatch
 import computing.michell.monitor.protocol.noteHelloIdentity
+import computing.michell.monitor.protocol.notePhoneClosed
+import computing.michell.monitor.protocol.notePhoneEpoch
+import computing.michell.monitor.protocol.PhoneScreen
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
@@ -162,7 +167,8 @@ data class MonitorUi(
   val patchPartCount: Int = 0,
   val patchOpenCursor: Long = 0,
   val resumeOnce: Boolean = false,
-  val closedPending: Boolean = false
+  val closedPending: Boolean = false,
+  val closedQueued: Boolean = false
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -529,30 +535,58 @@ private fun MonitorUi.withMirror(place: MirrorPlace): MonitorUi {
     conversationTitle = place.title)
 }
 
+private fun phoneOf(state: MonitorUi): PhoneScreen {
+  return PhoneScreen(
+    state.hostEpoch, state.hostCursor, state.catchingUp, state.announcedEpoch, state.turns, state.live,
+    state.patchOpenCursor, state.patchPartCount, state.patchParts, state.resumeOnce, state.closedConversationId,
+    state.closedTitle, "", state.conversationId, state.projectRoot, state.conversationTitle
+  )
+}
+
+private fun MonitorUi.withPhone(phone: PhoneScreen): MonitorUi {
+  val file = phone.fileClosedId.isNotEmpty() && !closedQueued
+  return copy(
+    hostEpoch = phone.epoch,
+    hostCursor = phone.cursor,
+    catchingUp = phone.catchingUp,
+    announcedEpoch = phone.announcedEpoch,
+    turns = phone.turns,
+    live = phone.live,
+    patchOpenCursor = phone.patchOpenCursor,
+    patchPartCount = phone.patchPartCount,
+    patchParts = phone.patchParts,
+    resumeOnce = phone.resumeOnce,
+    closedConversationId = phone.closedId,
+    closedTitle = phone.closedTitle,
+    closedPending = if (file) true else closedPending,
+    closedQueued = closedQueued || file,
+    conversationId = phone.conversationId,
+    projectRoot = phone.projectRoot,
+    conversationTitle = phone.title
+  )
+}
+
 private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): MonitorUi {
   val hasScreen = state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()
-  val next = state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
+  var next = state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
     hello.projectRoot, hello.title, hasScreen))
+  if (next.catchingUp && hello.epoch.isNotEmpty() && hello.epoch != state.hostEpoch) {
+    val filed = notePhoneEpoch(phoneOf(state), hello.epoch)
+    if (filed.fileClosedId.isNotEmpty() && !next.closedQueued) {
+      next = next.copy(closedPending = true, closedQueued = true)
+    }
+  }
   if (next.catchingUp || hello.epoch != next.hostEpoch || hello.title.isEmpty() || hello.title == next.conversationTitle) return next
   return next.copy(conversationTitle = hello.title)
 }
 
 private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {
-  if (patch.epoch.isEmpty()) return state
-  if (state.catchingUp) return state
-  if (state.hostEpoch.isNotEmpty() && patch.epoch != state.hostEpoch) {
-    return state.copy(catchingUp = true, announcedEpoch = patch.epoch)
-  }
-  val incomplete = state.patchOpenCursor != 0L && state.patchParts.size < state.patchPartCount
-  val acceptSame = incomplete && patch.cursor == state.hostCursor && state.patchOpenCursor == patch.cursor
-  val acceptNext = patch.cursor == state.hostCursor + 1L &&
-    (state.patchOpenCursor == 0L || state.patchOpenCursor == patch.cursor)
-  if (patch.cursor < state.hostCursor + 1L && !acceptSame) return state
-  if (!acceptNext && !acceptSame) {
-    if (state.resumeOnce) return state
-    return state.copy(resumeOnce = true)
-  }
-  return storePatchPart(state, patch)
+  val before = phoneOf(state)
+  val phone = applyPhonePatch(before, patch)
+  val next = state.withPhone(phone)
+  val accepted = phone.live != before.live || phone.cursor != before.cursor || phone.patchParts != before.patchParts
+  if (!accepted) return next
+  return applyPatchFlags(next, patch).copy(reachedLive = true, clockToken = state.clockToken + 1)
 }
 
 private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
@@ -571,76 +605,25 @@ private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
   )
 }
 
-private fun liveFromPatch(state: MonitorUi, patch: WirePatch, blocks: List<WireBlock>): WireTurn {
-  val prior = state.live
-  return WireTurn(
-    turnIndex = if (patch.turnIndex != 0) patch.turnIndex else prior?.turnIndex ?: -2,
-    id = patch.turnId.ifEmpty { prior?.id ?: "" },
-    mode = prior?.mode ?: state.view.mode,
-    createdAt = prior?.createdAt ?: "",
-    promptPreview = prior?.promptPreview ?: "",
-    errorText = prior?.errorText ?: "",
-    prompt = prior?.prompt ?: "",
-    thinking = prior?.thinking ?: "",
-    response = prior?.response ?: "",
-    live = true,
-    blocks = blocks,
-    images = prior?.images ?: emptyList()
-  )
-}
-
-private fun assemblePatchParts(parts: Map<Int, List<WireBlock>>, count: Int): List<WireBlock> {
-  val blocks = mutableListOf<WireBlock>()
-  for (part in 1..count) {
-    val frame = parts[part] ?: continue
-    for (block in frame) {
-      val previous = blocks.lastOrNull()
-      if (previous != null && previous.blockId.isNotEmpty() && previous.blockId == block.blockId && previous.kind == block.kind) {
-        blocks[blocks.lastIndex] = previous.copy(body = previous.body + block.body)
-      } else {
-        blocks += block
-      }
-    }
-  }
-  return blocks
-}
-
-private fun storePatchPart(state: MonitorUi, patch: WirePatch): MonitorUi {
-  if (patch.part < 1 || patch.partCount < 1 || patch.part > patch.partCount) return state
-  val sameOpen = state.patchOpenCursor == patch.cursor
-  if (sameOpen && state.patchPartCount != 0 && patch.partCount != state.patchPartCount) return state
-  val prior = if (sameOpen) state.patchParts else emptyMap()
-  val stored = if (prior.containsKey(patch.part)) prior else prior + (patch.part to patch.blocks)
-  val flagged = applyPatchFlags(state, patch)
-  val assembled = assemblePatchParts(stored, patch.partCount)
-  val shown = if (assembled.isEmpty() && flagged.live != null) flagged.live.blocks else assembled
-  val complete = (1..patch.partCount).all { part -> stored.containsKey(part) }
-  return flagged.copy(
-    hostEpoch = patch.epoch,
-    hostCursor = if (complete) patch.cursor else flagged.hostCursor,
-    patchOpenCursor = if (complete) 0L else patch.cursor,
-    patchPartCount = if (complete) 0 else patch.partCount,
-    patchParts = if (complete) emptyMap() else stored,
-    live = liveFromPatch(flagged, patch, shown),
-    reachedLive = true,
-    clockToken = state.clockToken + 1,
-    resumeOnce = if (complete) false else flagged.resumeOnce
-  )
-}
-
 private fun applyCatchup(state: MonitorUi, catchup: WireCatchup): MonitorUi {
   if (catchup.epoch.isEmpty()) return state
   if (catchup.mode == "snapshot") {
     val snapshot = catchup.snapshot ?: return state
     val replaced = applySnapshot(state, snapshot)
+    val phone = applyPhoneCatchup(
+      phoneOf(state), catchup.epoch, catchup.cursor, catchup.conversationId, catchup.projectRoot, catchup.title,
+      snapshot.storedTurns, snapshot.live
+    )
     return replaced.copy(
-      hostEpoch = catchup.epoch,
-      hostCursor = catchup.cursor,
+      hostEpoch = phone.epoch,
+      hostCursor = phone.cursor,
       catchingUp = false,
       announcedEpoch = "",
-      conversationId = if (catchup.conversationId.isNotEmpty()) catchup.conversationId else replaced.conversationId,
-      projectRoot = if (catchup.projectRoot.isNotEmpty()) catchup.projectRoot else replaced.projectRoot,
-      conversationTitle = if (catchup.title.isNotEmpty()) catchup.title else replaced.conversationTitle,
+      turns = if (state.catchingUp) phone.turns else replaced.turns,
+      live = if (state.catchingUp) phone.live else replaced.live,
+      conversationId = phone.conversationId,
+      projectRoot = phone.projectRoot,
+      conversationTitle = phone.title,
       patchParts = emptyMap(),
       patchPartCount = 0,
       patchOpenCursor = 0,
@@ -695,10 +678,8 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.HelloOk -> applyHelloIdentity(state, inbound.value)
     is InboundPayload.Patch -> applyPatch(state, inbound.value)
     is InboundPayload.Catchup -> applyCatchup(state, inbound.value)
-    is InboundPayload.ConversationClosed -> state.copy(
-      closedConversationId = inbound.value.conversationId,
-      closedTitle = inbound.value.title,
-      closedPending = inbound.value.conversationId.isNotEmpty()
+    is InboundPayload.ConversationClosed -> state.withPhone(
+      notePhoneClosed(phoneOf(state), inbound.value.conversationId, inbound.value.title)
     )
     else -> state
   }

@@ -569,7 +569,7 @@ class MonitorReducerTest {
     val closed = reduceMonitor(start, message(encodeConversationClosed("closed", "aa", 4, "conversation-1", "Archived")))
     assertEquals("conversation-1", closed.closedConversationId)
     assertEquals("Archived", closed.closedTitle)
-    assertTrue(closed.closedPending)
+    assertFalse(closed.closedPending)
     assertEquals("Shown", closed.turns[0].promptPreview)
     assertEquals(shown, closed.live)
     val snapshot = WireSnapshot(
