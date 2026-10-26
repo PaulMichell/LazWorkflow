@@ -324,6 +324,8 @@ Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapsho
 Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
 { Splits answer and thinking bodies that exceed 200000 bytes. Each part has part, part_count, and revision. }
 Function SplitMonitorTranscript(Const Source: TMonitorTranscript): TMonitorTranscriptArray;
+{ One frame when it fits. Otherwise several frames of the same blocks, in order. }
+Function PackMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript): TStringArray;
 Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
 Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
 
@@ -1492,6 +1494,7 @@ Begin
   View.Mode := '';
   View.Phase := '';
   View.StatusText := '';
+  View.ElapsedMs := 0;
   View.Model := '';
   View.Backend := '';
   View.SignedIn := False;
@@ -1521,6 +1524,7 @@ Begin
   Obj.Add('plan_running', View.PlanRunning);
   Obj.Add('phase', View.Phase);
   Obj.Add('status_text', View.StatusText);
+  Obj.Add('elapsed_ms', View.ElapsedMs);
   Obj.Add('model', View.Model);
   Obj.Add('backend', View.Backend);
   Obj.Add('signed_in', View.SignedIn);
@@ -1548,6 +1552,14 @@ Begin
     ReadBool(Obj, 'can_send', True, View.CanSend) And ReadBool(Obj, 'can_steer', True, View.CanSteer) And
     ReadBool(Obj, 'can_stop', True, View.CanStop) And ReadBool(Obj, 'can_change_mode', True, View.CanChangeMode) And
     ReadBool(Obj, 'remote_approval', True, View.RemoteApproval) And ReadString(Obj, 'error_text', True, View.ErrorText);
+  If Result Then
+    Begin
+      View.ElapsedMs := 0;
+      If Not ReadInt(Obj, 'elapsed_ms', False, View.ElapsedMs) Then
+        Result := False;
+      If View.ElapsedMs < 0 Then
+        View.ElapsedMs := 0;
+    End;
 End;
 
 Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
@@ -2195,6 +2207,145 @@ Begin
   Finally
     Payload.Free;
   End;
+End;
+
+Function PackMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript): TStringArray;
+Type
+  TTranscriptPiece = Record
+    Block: TAssistantMonitorBlock;
+    Part: Integer;
+    PartCount: Integer;
+  End;
+  TTranscriptPieceArray = Array Of TTranscriptPiece;
+
+  Function EncodePieces(Const Pieces: TTranscriptPieceArray; FromIndex, ToIndex, FramePart, FrameCount: Integer): String;
+  Var
+    Frame: TMonitorTranscript;
+    I, N: Integer;
+  Begin
+    Frame := Transcript;
+    Frame.Part := FramePart;
+    Frame.PartCount := FrameCount;
+    Result := '';
+    N := 0;
+    SetLength(Frame.Blocks, ToIndex - FromIndex + 1);
+    SetLength(Frame.BlockPart, Length(Frame.Blocks));
+    SetLength(Frame.BlockPartCount, Length(Frame.Blocks));
+    For I := FromIndex To ToIndex Do
+      Begin
+        Frame.Blocks[N] := Pieces[I].Block;
+        Frame.BlockPart[N] := Pieces[I].Part;
+        Frame.BlockPartCount[N] := Pieces[I].PartCount;
+        Inc(N);
+      End;
+    If Not TryEncodeMonitorTranscript(Id, Frame, Result) Then
+      Result := '';
+  End;
+
+  Procedure AddPiece(Var Pieces: TTranscriptPieceArray; Const Block: TAssistantMonitorBlock; Part, PartCount: Integer);
+  Begin
+    SetLength(Pieces, Length(Pieces) + 1);
+    Pieces[High(Pieces)].Block := Block;
+    Pieces[High(Pieces)].Part := Part;
+    Pieces[High(Pieces)].PartCount := PartCount;
+  End;
+
+  Function PieceFits(Const Block: TAssistantMonitorBlock; Part, PartCount: Integer): Boolean;
+  Var
+    Pieces: TTranscriptPieceArray;
+  Begin
+    SetLength(Pieces, 1);
+    Pieces[0].Block := Block;
+    Pieces[0].Part := Part;
+    Pieces[0].PartCount := PartCount;
+    Result := EncodePieces(Pieces, 0, 0, 1, 1) <> '';
+  End;
+
+  Procedure AppendFitted(Var Pieces: TTranscriptPieceArray; Block: TAssistantMonitorBlock);
+  Var
+    SliceAt, PartNo, First, Count: Integer;
+    Slice: TAssistantMonitorBlock;
+  Begin
+    If PieceFits(Block, 1, 1) Then
+      Begin
+        AddPiece(Pieces, Block, 1, 1);
+        Exit;
+      End;
+    If (Block.Kind = 'thinking') Or (Block.Kind = 'answer') Or (Block.Kind = 'user') Then
+      Begin
+        First := Length(Pieces);
+        SliceAt := 1;
+        PartNo := 0;
+        While SliceAt <= Length(Block.Body) Do
+          Begin
+            Slice := Block;
+            Slice.Body := Copy(Block.Body, SliceAt, 50000);
+            Inc(PartNo);
+            If Not PieceFits(Slice, PartNo, PartNo) Then
+              Slice.Body := Copy(Slice.Body, 1, 2000);
+            AddPiece(Pieces, Slice, PartNo, 0);
+            Inc(SliceAt, 50000);
+          End;
+        Count := Length(Pieces) - First;
+        For PartNo := First To High(Pieces) Do
+          Pieces[PartNo].PartCount := Count;
+        Exit;
+      End;
+    Block.Body := Copy(Block.Body, 1, 2000);
+    If Not PieceFits(Block, 1, 1) Then
+      Begin
+        Block.Body := Copy(Block.Body, 1, 240);
+        SetLength(Block.Images, 0);
+      End;
+    If PieceFits(Block, 1, 1) Then
+      AddPiece(Pieces, Block, 1, 1);
+  End;
+
+Var
+  Pieces: TTranscriptPieceArray;
+  Ends: Array Of Integer;
+  I, Start, Last, FrameCount: Integer;
+  Json: String;
+Begin
+  Result := Nil;
+  If TryEncodeMonitorTranscript(Id, Transcript, Json) Then
+    Begin
+      SetLength(Result, 1);
+      Result[0] := Json;
+      Exit;
+    End;
+  SetLength(Pieces, 0);
+  For I := 0 To High(Transcript.Blocks) Do
+    AppendFitted(Pieces, Transcript.Blocks[I]);
+  If Length(Pieces) = 0 Then
+    Exit;
+  SetLength(Ends, 0);
+  Start := 0;
+  While Start <= High(Pieces) Do
+    Begin
+      Last := Start;
+      While Last < High(Pieces) Do
+        Begin
+          If EncodePieces(Pieces, Start, Last + 1, 1, 1) = '' Then
+            Break;
+          Inc(Last);
+        End;
+      SetLength(Ends, Length(Ends) + 1);
+      Ends[High(Ends)] := Last;
+      Start := Last + 1;
+    End;
+  FrameCount := Length(Ends);
+  Start := 0;
+  For I := 0 To High(Ends) Do
+    Begin
+      Json := EncodePieces(Pieces, Start, Ends[I], I + 1, FrameCount);
+      If Json <> '' Then
+        Begin
+          SetLength(Result, Length(Result) + 1);
+          Result[High(Result)] := Json;
+        End;
+      Start := Ends[I] + 1;
+    End;
 End;
 
 Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;

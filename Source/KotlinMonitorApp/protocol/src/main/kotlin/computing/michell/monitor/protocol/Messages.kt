@@ -169,6 +169,7 @@ data class WireView(
   val canChangeMode: Boolean,
   val remoteApproval: Boolean,
   val errorText: String,
+  val elapsedMs: Int = 0,
   val mode: String = "",
   val targetKind: String = "",
   val targetDisplay: String = "",
@@ -888,6 +889,7 @@ private fun addStatusFields(obj: JsonObjectBuilder, view: WireView) {
   obj.add("plan_running", view.planRunning)
   obj.add("phase", view.phase)
   obj.add("status_text", view.statusText)
+  obj.add("elapsed_ms", view.elapsedMs)
   obj.add("model", view.model)
   obj.add("backend", view.backend)
   obj.add("signed_in", view.signedIn)
@@ -924,15 +926,18 @@ private fun readStatusFields(obj: JsonValue.Obj): WireView? {
   val canChangeMode = obj.readBool("can_change_mode", true)
   val remoteApproval = obj.readBool("remote_approval", true)
   val errorText = obj.readString("error_text", true)
+  val elapsedMs = obj.readInt("elapsed_ms", false)
   if (!available.ok || !busy.ok || !sending.ok || !modeLocked.ok || !planRunning.ok || !phase.ok || !statusText.ok ||
     !model.ok || !backend.ok || !signedIn.ok || !approvalCaption.ok || !effort.ok || !skill.ok || !contextText.ok ||
-    !canSend.ok || !canSteer.ok || !canStop.ok || !canChangeMode.ok || !remoteApproval.ok || !errorText.ok) {
+    !canSend.ok || !canSteer.ok || !canStop.ok || !canChangeMode.ok || !remoteApproval.ok || !errorText.ok ||
+    !elapsedMs.ok) {
     return null
   }
   return WireView(
     available.value, busy.value, sending.value, modeLocked.value, planRunning.value, phase.value, statusText.value,
     model.value, backend.value, signedIn.value, approvalCaption.value, effort.value, skill.value, contextText.value,
-    canSend.value, canSteer.value, canStop.value, canChangeMode.value, remoteApproval.value, errorText.value
+    canSend.value, canSteer.value, canStop.value, canChangeMode.value, remoteApproval.value, errorText.value,
+    elapsedMs.value.coerceAtLeast(0)
   )
 }
 

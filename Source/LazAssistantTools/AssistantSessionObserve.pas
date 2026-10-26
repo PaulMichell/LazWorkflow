@@ -24,7 +24,8 @@ Type
     asnStatus,
     asnApproval,
     asnSession,
-    asnError
+    asnError,
+    asnSnapshot
   );
 
   TAssistantSessionListener = Procedure(Kind: TAssistantSessionNoticeKind) Of Object;
@@ -98,6 +99,8 @@ Type
     Mode: String;
     Phase: String;
     StatusText: String;
+    { Milliseconds since this turn started. Zero when nothing is sending. }
+    ElapsedMs: Integer;
     Model: String;
     Backend: String;
     SignedIn: Boolean;

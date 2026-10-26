@@ -284,8 +284,10 @@ End;
 Procedure TAssistantMonitorBridge.PushTranscript(Form: TProjectAssistantForm);
 Var
   Turn: TAssistantMonitorTurn;
+  View: TAssistantMonitorView;
   Transcript: TMonitorTranscript;
-  ErrorText, Json: String;
+  Frames: TStringArray;
+  ErrorText: String;
   Session: TMonitorSession;
 Begin
   If Not Assigned(Form) Then
@@ -300,14 +302,22 @@ Begin
     Exit;
   If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
     Exit;
+  Form.FillMonitorView(View);
   Transcript := Default(TMonitorTranscript);
   Transcript.TurnIndex := Turn.TurnIndex;
   Transcript.Revision := Session.NextTranscriptRevision(Turn.TurnIndex);
-  Transcript.DurationMs := Turn.DurationMs;
+  Transcript.Phase := View.Phase;
+  Transcript.StatusText := View.StatusText;
+  Transcript.DurationMs := View.ElapsedMs;
+  If Transcript.DurationMs <= 0 Then
+    Transcript.DurationMs := Turn.DurationMs;
   Transcript.Blocks := Turn.Blocks;
-  If Not TryEncodeMonitorTranscript(HostId, Transcript, Json) Then
+  Transcript.Part := 1;
+  Transcript.PartCount := 1;
+  Frames := PackMonitorTranscript(HostId, Transcript);
+  If Length(Frames) = 0 Then
     Exit;
-  Session.QueueTranscript(Turn.TurnIndex, Json);
+  Session.QueueTranscriptParts(Turn.TurnIndex, Frames);
 End;
 
 Procedure TAssistantMonitorBridge.FinishStatusPush;
@@ -375,6 +385,21 @@ Function SnapshotJson(Const Id: String; Snapshot: TMonitorSnapshot): String;
       Turn.PromptPreview := Copy(Turn.Prompt, 1, 160);
   End;
 
+  Procedure CompactLiveBlocks(Var Turn: TAssistantMonitorTurn);
+  Var
+    I: Integer;
+  Begin
+    For I := 0 To High(Turn.Blocks) Do
+      Begin
+        If Turn.Blocks[I].Kind = 'tool' Then
+          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 240)
+        Else If Turn.Blocks[I].Kind = 'thinking' Then
+          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 240)
+        Else If Length(Turn.Blocks[I].Body) > 800 Then
+          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 800);
+      End;
+  End;
+
   Procedure TruncateLiveText(Var Turn: TAssistantMonitorTurn);
   Begin
     Turn.Prompt := Copy(Turn.Prompt, 1, 4000);
@@ -389,6 +414,10 @@ Begin
   If Result <> '' Then
     Exit;
   KeepTextFromBlocks(Snapshot.Live);
+  CompactLiveBlocks(Snapshot.Live);
+  Result := EncodeMonitorSnapshot(Id, Snapshot);
+  If Result <> '' Then
+    Exit;
   SetLength(Snapshot.Live.Blocks, 0);
   SetLength(Snapshot.Live.Images, 0);
   Result := EncodeMonitorSnapshot(Id, Snapshot);
@@ -493,6 +522,8 @@ Begin
         End;
     asnStatus, asnError, asnSession:
       PushStatus(Form);
+    asnSnapshot:
+      PushSnapshot(Form, '');
     asnApproval:
       Begin
         If Not Job.HasApproval Then
@@ -641,9 +672,8 @@ Begin
       Result := Form.RemoteRemovePlan(ErrorText);
     Ord(mmkWorkOnPlan):
       Begin
-        Index := -1;
-        DecodeMonitorWorkOnPlan(PayloadJson, Index);
-        Result := Form.RemoteWorkOnPlan(Index, ErrorText);
+        ErrorText := 'Use Run Plan. It starts at the first item that is not complete.';
+        Result := False;
       End;
     Ord(mmkRunPlan):
       Result := Form.RemoteRunPlan(ErrorText);

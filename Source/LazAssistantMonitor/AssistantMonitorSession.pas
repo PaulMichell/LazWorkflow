@@ -107,7 +107,7 @@ Type
     FClosedToolIds: Array Of String;
     FRevokedIds: Array Of String;
     FPendingSends: Array Of String;
-    FUnsentTranscript: String;
+    FUnsentTranscripts: Array Of String;
     FUnsentTranscriptTurn: Integer;
     FUnsentTranscriptAt: QWord;
     FHasUnsentTranscript: Boolean;
@@ -202,6 +202,8 @@ Type
     Function ToolExecutionRecorded: Boolean;
     Function NextTranscriptRevision(TurnIndex: Integer): Integer;
     Procedure QueueTranscript(TurnIndex: Integer; Const FrameJson: String);
+    { Replaces any unsent frames for this turn. Parts of one revision stay together. }
+    Procedure QueueTranscriptParts(TurnIndex: Integer; Const Frames: TStringArray);
     Property State: TMonitorSessionState Read FState;
     Property Carrier: IMonitorCarrier Read FCarrier;
     Property OnCommand: TMonitorCommandHandler Read FOnCommand Write FOnCommand;
@@ -417,7 +419,7 @@ Begin
   SetLength(FClosedToolIds, 0);
   SetLength(FRevokedIds, 0);
   SetLength(FPendingSends, 0);
-  FUnsentTranscript := '';
+  SetLength(FUnsentTranscripts, 0);
   FUnsentTranscriptTurn := 0;
   FUnsentTranscriptAt := 0;
   FHasUnsentTranscript := False;
@@ -568,7 +570,7 @@ Begin
   FLastFrameMs := 0;
   FPingSent := False;
   FHasUnsentTranscript := False;
-  FUnsentTranscript := '';
+  SetLength(FUnsentTranscripts, 0);
 End;
 
 Procedure TMonitorSession.CloseToListening;
@@ -1109,14 +1111,20 @@ Begin
 End;
 
 Procedure TMonitorSession.FlushTranscriptLocked;
+Var
+  I: Integer;
 Begin
   If Not FHasUnsentTranscript Then
     Exit;
   If ClockMs < FUnsentTranscriptAt + MonitorCoalesceWindowMs Then
     Exit;
+  { A full queue must keep this frame. Dropping it left the phone on the last busy status. }
+  If Length(FPendingSends) >= MonitorOutboundQueueLimit Then
+    Exit;
   FHasUnsentTranscript := False;
-  QueueSend(FUnsentTranscript);
-  FUnsentTranscript := '';
+  For I := 0 To High(FUnsentTranscripts) Do
+    QueueSend(FUnsentTranscripts[I]);
+  SetLength(FUnsentTranscripts, 0);
 End;
 
 Procedure TMonitorSession.CheckTimeoutsLocked;
@@ -1515,12 +1523,29 @@ Begin
   Try
     If FHasUnsentTranscript And (FUnsentTranscriptTurn = TurnIndex) Then
       Inc(FFramesDropped);
-    If (Not FHasUnsentTranscript) And (Length(FPendingSends) >= MonitorOutboundQueueLimit) Then
-      Begin
-        Inc(FFramesDropped);
-        Exit;
-      End;
-    FUnsentTranscript := FrameJson;
+    SetLength(FUnsentTranscripts, 1);
+    FUnsentTranscripts[0] := FrameJson;
+    FUnsentTranscriptTurn := TurnIndex;
+    FUnsentTranscriptAt := ClockMs;
+    FHasUnsentTranscript := True;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.QueueTranscriptParts(TurnIndex: Integer; Const Frames: TStringArray);
+Var
+  I: Integer;
+Begin
+  If Length(Frames) = 0 Then
+    Exit;
+  LockSession;
+  Try
+    If FHasUnsentTranscript And (FUnsentTranscriptTurn = TurnIndex) Then
+      Inc(FFramesDropped, Length(FUnsentTranscripts));
+    SetLength(FUnsentTranscripts, Length(Frames));
+    For I := 0 To High(Frames) Do
+      FUnsentTranscripts[I] := Frames[I];
     FUnsentTranscriptTurn := TurnIndex;
     FUnsentTranscriptAt := ClockMs;
     FHasUnsentTranscript := True;
