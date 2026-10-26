@@ -88,9 +88,9 @@ class MonitorCoordinator(
   private val bitmapKeys = mutableSetOf<String>()
   private var visibleTurns = emptySet<Int>()
   private var hostBound = false
-  private var snapshotRequested = false
   private var linkHeld = false
   private var linkHeldAt = 0L
+  private var linkPhase = LinkPhase.Idle
   private var hostAddress = ""
   private var hostPort = 0
   private var hostClientId = ""
@@ -98,8 +98,8 @@ class MonitorCoordinator(
   private var writeSettled = false
   private var newConversationCommand = ""
   private var transcriptBroken = false
-  private var lastHostProgressMs = 0L
-  private var lastStallRefreshMs = 0L
+  private var lastMirrorMs = 0L
+  private var stallResumeSent = false
   private var retryView: WireView? = null
   private var retryActivityMs = 0L
   private var screen = MonitorUi(
@@ -156,7 +156,7 @@ class MonitorCoordinator(
         effects += missingImageFetches(screen)
       }
     }
-    val stall = busyStallRefresh()
+    val stall = stallResume()
     if (stall != null) effects += stall
     if (effects.isEmpty()) return null
     effects
@@ -273,10 +273,8 @@ class MonitorCoordinator(
         return acceptNullLive(show(current), snapshot)
       }
     }
-    if (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript ||
-      message.kind == MessageKind.Status || message.kind == MessageKind.Patch ||
-      message.kind == MessageKind.Catchup) {
-      noteHostProgress()
+    if (message.kind == MessageKind.Patch || message.kind == MessageKind.Catchup || message.kind == MessageKind.Plan) {
+      noteMirrorProgress()
     }
     if (transcriptBroken && (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript)) {
       transcriptBroken = false
@@ -287,7 +285,7 @@ class MonitorCoordinator(
     val closedBefore = applied.closedPending
     applied = reduceMonitor(applied, message)
     noteFetchArrival(message)
-    val side = mirrorSideEffects(resumeBefore, closedBefore)
+    val side = mirrorSideEffects(resumeBefore, closedBefore) + helloResume(message)
     if (!immediate) {
       appliedDirty = true
       return if (side.isEmpty()) null else side
@@ -346,12 +344,12 @@ class MonitorCoordinator(
   }
 
   private fun linkChanged(current: MonitorUi, status: LinkStatus): List<MonitorEffect> {
+    linkPhase = status.phase
     val reset = noteHost(current, session.hostAddress, session.hostPort, session.hostClientId)
     val effects = reset?.toMutableList() ?: mutableListOf()
     if (reset == null) screen = show(current)
     val closed = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     val down = closed || status.phase == LinkPhase.Connecting
-    val recovered = status.phase == LinkPhase.Live && linkHeld
     if (down && screen.reachedLive) transcriptBroken = true
     if (status.phase == LinkPhase.Live) {
       linkHeld = false
@@ -361,14 +359,11 @@ class MonitorCoordinator(
         linkHeld = true
         linkHeldAt = clock.nowMs()
       }
-      if (clock.nowMs() - linkHeldAt < LinkGraceMs) {
-        if (closed) snapshotRequested = false
-        return effects
-      }
+      if (clock.nowMs() - linkHeldAt < LinkGraceMs) return effects
       linkHeld = false
     }
     if (closed) {
-      snapshotRequested = false
+      stallResumeSent = false
       screen = keepUnackedText(screen).copy(pendingCommandId = "")
       applied = keepUnackedText(applied).copy(pendingCommandId = "")
       retryView = null
@@ -380,19 +375,12 @@ class MonitorCoordinator(
       effects += MonitorEffect.LeaveDictation
     }
     val pin = status.banner == "TLS pin mismatch."
-    val wasDown = screen.disconnected || screen.banner == ReconnectingBanner || recovered
     if (session.promptDraft != screen.draft) effects += MonitorEffect.RememberDraft(screen.draft)
     val linked = applyLink(screen, status.phase, status.banner)
     val shown = linked.copy(pairHold = linked.pairHold || pin, draft = screen.draft)
     if (shown.generation > postedGeneration) postedGeneration = shown.generation
     screen = stamp(shown)
-    // A fast handshake can publish Live before the screen is marked disconnected.
-    // Status still arrives. The snapshot does not, unless this asks for it.
-    val needSnapshot = status.phase == LinkPhase.Live && (wasDown || !shown.reachedLive)
-    if (needSnapshot && !snapshotRequested) {
-      snapshotRequested = true
-      effects += MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
-    }
+    if (status.phase == LinkPhase.Live && lastMirrorMs <= 0L) lastMirrorMs = clock.nowMs()
     return effects
   }
 
@@ -415,7 +403,7 @@ class MonitorCoordinator(
 
   private fun noteFailedNew(effects: MutableList<MonitorEffect>) {
     newConversationCommand = ""
-    effects += MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
+    effects += MonitorEffect.Send(encodeResume(session.nextCommandId(), applied.hostEpoch, applied.hostCursor))
   }
 
   private fun armSubmission(text: String, steer: Boolean, commandId: String) {
@@ -600,25 +588,32 @@ class MonitorCoordinator(
     return current
   }
 
-  private fun noteHostProgress() {
-    lastHostProgressMs = clock.nowMs()
+  private fun noteMirrorProgress() {
+    lastMirrorMs = clock.nowMs()
+    stallResumeSent = false
   }
 
-  /** A busy label with no host frame for a while is a stalled stream, not a live tool. */
-  private fun busyStallRefresh(): MonitorEffect? {
-    val busy = screen.view.busy || screen.view.sending || screen.view.planRunning || screen.planRunning
-    if (!busy || screen.disconnected) return null
+  private fun helloResume(message: MonitorMessage): List<MonitorEffect> {
+    if (message.kind != MessageKind.HelloOk) return emptyList()
+    lastMirrorMs = clock.nowMs()
+    stallResumeSent = true
+    return listOf(MonitorEffect.Send(encodeResume(session.nextCommandId(), applied.hostEpoch, applied.hostCursor)))
+  }
+
+  /** One resume for a live gap. Not another until patch, catchup, plan, or a socket drop. */
+  private fun stallResume(): MonitorEffect? {
+    if (linkPhase != LinkPhase.Live || linkHeld || screen.disconnected || stallResumeSent) return null
+    val waiting = screen.catchingUp || screen.view.busy || screen.view.sending || screen.view.planRunning ||
+      screen.planRunning
+    if (!waiting) return null
     val now = clock.nowMs()
-    if (lastHostProgressMs <= 0L) {
-      lastHostProgressMs = now
+    if (lastMirrorMs <= 0L) {
+      lastMirrorMs = now
       return null
     }
-    if (now - lastHostProgressMs < BusyStallMs) return null
-    if (lastStallRefreshMs > 0L && now - lastStallRefreshMs < BusyStallMs) return null
-    lastStallRefreshMs = now
-    lastHostProgressMs = now
-    transcriptBroken = true
-    return MonitorEffect.Send(encodeEmpty(MessageKind.Refresh, session.nextCommandId()))
+    if (now - lastMirrorMs < StallGapMs) return null
+    stallResumeSent = true
+    return MonitorEffect.Send(encodeResume(session.nextCommandId(), applied.hostEpoch, applied.hostCursor))
   }
 
   private fun show(current: MonitorUi): MonitorUi = stamp(adopt(current))
@@ -778,7 +773,8 @@ class MonitorCoordinator(
       MessageKind.Status,
       MessageKind.Patch,
       MessageKind.Catchup,
-      MessageKind.ConversationClosed
+      MessageKind.ConversationClosed,
+      MessageKind.HelloOk
     )
   }
 }

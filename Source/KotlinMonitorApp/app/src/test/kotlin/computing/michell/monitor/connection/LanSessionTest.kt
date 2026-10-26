@@ -189,7 +189,7 @@ class LanSessionTest {
   }
 
   @Test
-  fun reconnectSendsAuthThenRefreshAndKeepsTheDraft() {
+  fun reconnectSendsAuthAndKeepsTheDraft() {
     val store = pairedStore()
     val link = ScriptedLink()
     val session = LanSession(store, TlsConnector { _, _, _ -> link })
@@ -202,11 +202,10 @@ class LanSessionTest {
     link.push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
       "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
     ))))
-    waitUntil { link.frames().size >= 3 }
+    waitUntil { link.frames().size >= 2 }
     val auth = envelope(link.frames()[1])
-    val refresh = envelope(link.frames()[2])
     assertEquals(MessageKind.Auth, auth.kind)
-    assertEquals(MessageKind.Refresh, refresh.kind)
+    assertFalse(link.frames().any { frame -> envelope(frame).kind == MessageKind.Refresh })
     val decoded = decodeAuth(auth.payloadJson)
     assertEquals("client-1", decoded!!.clientId)
     assertEquals(authMac("token-1", "00112233445566778899aabbccddeeff"), decoded.hmac)

@@ -206,7 +206,7 @@ fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
 
 const val ConnectingBanner = "Connecting…"
 const val LinkGraceMs = 4_000L
-const val BusyStallMs = 15_000L
+const val StallGapMs = 5_000L
 
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||

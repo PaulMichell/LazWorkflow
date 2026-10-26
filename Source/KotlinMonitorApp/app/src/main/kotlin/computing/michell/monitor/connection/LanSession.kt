@@ -27,6 +27,7 @@ import computing.michell.monitor.protocol.decodePairOk
 import computing.michell.monitor.protocol.decodeTicks
 import computing.michell.monitor.protocol.encodeAuth
 import computing.michell.monitor.protocol.encodeEmpty
+import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeHello
 import computing.michell.monitor.protocol.encodePair
 import computing.michell.monitor.protocol.encodeTicks
@@ -763,7 +764,7 @@ class LanSession(
         if (paired != null) {
           store.savePairing(paired.clientId, paired.sessionToken)
           pairCode = ""
-          writeJson(encodeEmpty(MessageKind.Refresh, newId()), owned)
+          writeJson(encodeResume(newId(), "", 0), owned)
         }
       }
       MessageKind.HelloOk -> {
@@ -773,7 +774,6 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) writeJson(encodeAuth(newId(), record.clientId, mac), owned)
-          writeJson(encodeEmpty(MessageKind.Refresh, newId()), owned)
         }
       }
       MessageKind.Ping -> {

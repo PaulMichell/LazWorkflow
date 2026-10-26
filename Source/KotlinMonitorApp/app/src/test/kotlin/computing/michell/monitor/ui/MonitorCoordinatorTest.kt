@@ -515,10 +515,10 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun aLiveLinkAsksForTheDesktopConversation() {
+  fun aLiveLinkDoesNotAskForASnapshot() {
     val coordinator = coordinator()
     val first = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
-    assertTrue(first.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
+    assertFalse(first.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
     val again = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
     assertFalse(again.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
   }
@@ -575,22 +575,87 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun aQuietBusyTurnAsksTheDesktopAgain() {
+  fun aQuietBusyTurnSendsOneResume() {
     val clock = MutableClock(1_000L)
     val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
     openLive(coordinator, canSend = true, canSteer = false)
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
       MessageKind.Status, "st", statusToJson(emptyView().copy(busy = true, sending = true, signedIn = true))
     ))))
-    clock.millis = 1_000L + BusyStallMs
+    clock.millis = 1_000L + StallGapMs
     val effects = coordinator.flush(coordinator.state).orEmpty()
-    assertTrue(effects.any { effect ->
-      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh
-    })
+    val resume = effects.filterIsInstance<MonitorEffect.Send>().map { envelope(it.json) }
+      .single { it.kind == MessageKind.Resume }
+    val body = computing.michell.monitor.protocol.decodeResume(resume.payloadJson)
+    assertEquals("", body!!.epoch)
+    assertEquals(0L, body.cursor)
+    assertFalse(effects.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh })
     val again = coordinator.flush(coordinator.state).orEmpty()
-    assertFalse(again.any { effect ->
-      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh
-    })
+    assertFalse(again.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Resume })
+  }
+
+  @Test
+  fun helloOkSendsResumeWithTheCommittedCursor() {
+    val coordinator = coordinator()
+    openLive(coordinator, canSend = true, canSteer = false)
+    val block = WireBlock("answer", "b1", "", "", "", "kept", false, true, 0, emptyList())
+    val patch = computing.michell.monitor.protocol.WirePatch(
+      "aa", 1, 1, "turn-1", listOf(block), false, false, false, "idle", true, false, false, 0, 1, 1
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
+    )))
+    assertEquals(1L, coordinator.state.hostCursor)
+    val hello = computing.michell.monitor.protocol.HelloOkMessage("abc", "LazAssistantMonitor", "bb", 0, "conversation-2", "/work", "New")
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodeHelloOk("hello-ok", hello)
+    ))).orEmpty()
+    val resume = effects.filterIsInstance<MonitorEffect.Send>().map { envelope(it.json) }
+      .single { it.kind == MessageKind.Resume }
+    val body = computing.michell.monitor.protocol.decodeResume(resume.payloadJson)
+    assertEquals("aa", body!!.epoch)
+    assertEquals(1L, body.cursor)
+    assertEquals("kept", coordinator.state.live?.blocks?.single()?.body)
+    assertFalse(effects.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh })
+  }
+
+  @Test
+  fun socketCloseKeepsTheScreenAndCursor() {
+    val clock = MutableClock(10_000L)
+    val held = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Live, "")))
+    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
+    val live = answeredTurn("live-1", "still here")
+    postSnapshot(held, WireSnapshot(
+      emptyView().copy(canSend = true, signedIn = true),
+      listOf(shown),
+      live,
+      "Documents/Plan.md",
+      "Plan",
+      false,
+      listOf(computing.michell.monitor.protocol.PlanRow(1, 1, "Row", "", "pending", true)),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    ))
+    val block = WireBlock("answer", "b1", "", "", "", "still here", false, true, 0, emptyList())
+    val patch = computing.michell.monitor.protocol.WirePatch(
+      "aa", 1, 1, "turn-1", listOf(block), false, false, false, "idle", true, false, false, 0, 1, 1
+    )
+    held.onEvent(MonitorEvent.Incoming(held.state, envelope(
+      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
+    )))
+    held.onEvent(MonitorEvent.DraftEdited(held.state, "unsent"))
+    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
+    clock.millis = 20_000L
+    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
+    assertEquals("still here", held.state.live?.blocks?.single()?.body)
+    assertEquals("unsent", held.state.draft)
+    assertEquals("aa", held.state.hostEpoch)
+    assertEquals(1L, held.state.hostCursor)
+    assertEquals("Row", held.state.planRows.single().title)
+    assertEquals("Shown", held.state.turns.single().promptPreview)
+    assertEquals(HostClosedBanner, held.state.banner)
   }
 
   @Test
