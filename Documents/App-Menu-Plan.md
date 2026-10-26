@@ -73,7 +73,7 @@ The pump runs on the IDE thread because it reads the form. If that thread is ins
 
 ### 3.2 Live patch, not a full transcript
 
-Status: not started
+Status: complete
 
 `patch` carries `epoch`, `cursor`, `turn_index`, `turn_id`, and only the blocks whose revision or presence changed since the previous committed patch. Each block keeps the fields the phone already draws: kind, block id, title, tool name, tool id, body, running, ok, duration. Also include the flag set the status bar needs: `busy`, `sending`, `plan_running`, `phase`, `can_send`, `can_steer`, `can_stop`, `elapsed_ms`. Do not include the stored-turn array. Do not include a block whose body, title, running flag, and ok flag are unchanged.
 
