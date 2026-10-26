@@ -115,7 +115,7 @@ The Kotlin reducer stays a pure function in the protocol or `MonitorCoordinator`
 
 ### 4.1 Reducer on epoch and cursor
 
-Status: not started
+Status: complete
 
 Replace `liveRevision` continuity in `applyTranscript` with epoch plus cursor. Apply a patch only when `epoch` equals the committed epoch and `cursor` is the next expected cursor, or the cursor equals the committed cursor and the part set was incomplete. Assemble parts by `part` number. Advance the committed cursor only when every part of that cursor is present. A lower cursor in the same epoch is ignored. A gap (cursor greater than committed + 1) does not guess the missing body. It sends `resume` once.
 
