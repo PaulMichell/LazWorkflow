@@ -209,6 +209,6 @@ Add JUnit tests in the protocol module, not instrumented Android tests. Required
 
 ### 6.3 Design note
 
-Status: not started
+Status: complete
 
 Add a short section to `Documents/Assistant Monitor Design.md` that states the v2 rule: live sync is epoch, cursor, and patch; resume replaces stall `Refresh`; the phone cache is a read-only replica keyed by fingerprint, project root, and conversation id. Mark the old lines that say the phone has no conversation store as overridden for this replica only. Do not reopen the relay, remote image upload, or the drawer in that note.
