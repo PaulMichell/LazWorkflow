@@ -38,6 +38,8 @@ Const
   MonitorCoalesceWindowMs = 100;
   { Bulk lane only. Control is not capped, and live holds one unsent patch part-set. }
   MonitorOutboundQueueLimit = 32;
+  { Idle sweep. Resume is not a user command and is never answered host_busy here. }
+  MonitorCommandWaitMs = 5000;
   { Committed patches a resume can replay. Fewer when the JSON would pass 2 MiB. }
   MonitorRingCapacity = 256;
   MonitorRingJsonCap = 2 * 1024 * 1024;
@@ -299,6 +301,10 @@ Type
 
 { HMAC-SHA256 of the raw nonce bytes, keyed by the stored token string. Lowercase hex. }
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
+{ False when the ring can answer. The caller must not fill a form snapshot on that path. }
+Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
+{ True when the idle sweep should answer host_busy. Resume stays queued until the IDE thread claims it. }
+Function MonitorCommandSweepSendsBusy(Kind: Integer; Claimed, Finished: Boolean; AgeMs: QWord): Boolean;
 
 Implementation
 
@@ -2071,6 +2077,25 @@ End;
 Function TMonitorSession.CommitSnapshotCursor(Const BodyStamp: RawByteString; Out Cursor: Int64): Boolean;
 Begin
   Result := CommitMirrorCursor('catchup-snapshot' + #1 + BodyStamp, Cursor);
+End;
+
+Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
+Var
+  Catchup: TMonitorCatchup;
+Begin
+  Result := True;
+  If Not Assigned(Session) Then
+    Exit;
+  Result := Not Session.TryResumeEvents(Epoch, Cursor, Catchup);
+End;
+
+Function MonitorCommandSweepSendsBusy(Kind: Integer; Claimed, Finished: Boolean; AgeMs: QWord): Boolean;
+Begin
+  If Kind = Ord(mmkResume) Then
+    Exit(False);
+  If Finished Or Claimed Then
+    Exit(False);
+  Result := AgeMs >= MonitorCommandWaitMs;
 End;
 
 Procedure TMonitorSession.PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);

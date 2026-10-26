@@ -23,7 +23,6 @@ Uses
   SysUtils, AssistantMonitorSession, AssistantMonitorSettings;
 
 Const
-  MonitorCommandWaitMs = 5000;
   MonitorLiveTurnIndex = -2;
   MonitorSnapshotTurnCap = 30;
 
@@ -259,7 +258,7 @@ End;
 Procedure TAssistantMonitorBridge.SweepCommands;
 Var
   Index, Count: Integer;
-  NowMs: QWord;
+  NowMs, AgeMs: QWord;
   Command: TMonitorQueuedCommand;
   Expired: Array Of TMonitorQueuedCommand;
   Notify: Array Of Boolean;
@@ -274,13 +273,11 @@ Begin
     While Index < FOutstanding.Count Do
       Begin
         Command := TMonitorQueuedCommand(FOutstanding[Index]);
-        { Resume waits for the IDE thread. A 5 s sweep must not answer host_busy. }
-        If Command.Kind = Ord(mmkResume) Then
-          Begin
-            Inc(Index);
-            Continue;
-          End;
-        If Command.Finished Or Command.Claimed Or (NowMs - Command.QueuedAt < MonitorCommandWaitMs) Then
+        AgeMs := 0;
+        If NowMs >= Command.QueuedAt Then
+          AgeMs := NowMs - Command.QueuedAt;
+        { Resume stays queued. A user command still unclaimed at 5 s answers host_busy. }
+        If Not MonitorCommandSweepSendsBusy(Command.Kind, Command.Claimed, Command.Finished, AgeMs) Then
           Begin
             Inc(Index);
             Continue;
@@ -770,7 +767,8 @@ Begin
       If Not Session.CommitSnapshotCursor(Stamp, Cursor) Then
         Exit;
       Catchup.Cursor := Cursor;
-      Json := EncodeMonitorCatchup(Id, Catchup);
+      Json := EncodeResumeSnapshot(Id, Cursor, Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title,
+        Catchup.Snapshot);
       If Json <> '' Then
         Break;
     End;
@@ -808,14 +806,17 @@ Begin
       Exit;
     End;
   Session.FlushLivePatch;
-  { A ring hit must not read the form. An events frame that does not fit falls through to one snapshot. }
-  If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
+  { A cursor still in the ring does not fill the form. An events frame that does not fit falls through. }
+  If Not ResumeNeedsFormSnapshot(Session, ResumeMsg.Epoch, ResumeMsg.Cursor) Then
     Begin
-      Json := EncodeMonitorCatchup(Id, Catchup);
-      If Json <> '' Then
+      If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
         Begin
-          SendJson(Json);
-          Exit;
+          Json := EncodeMonitorCatchup(Id, Catchup);
+          If Json <> '' Then
+            Begin
+              SendJson(Json);
+              Exit;
+            End;
         End;
     End;
   Form := OpenForm;

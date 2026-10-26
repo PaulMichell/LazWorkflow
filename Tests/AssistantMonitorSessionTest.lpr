@@ -458,7 +458,10 @@ Begin
   Session.DrainOutbound;
   Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 2 + MonitorOutboundQueueLimit);
   Check('control ping is sent before the other lanes', Carrier.SentJson(0) = Ping);
+  Check('a control ping is sent while both other lanes are at their caps', Carrier.SentJson(0) = Ping);
   Check('live replacement is sent and not appended', Carrier.SentJson(1) = 'patch-replaced');
+  Check('a full bulk lane still accepts a live patch that replaces an older unsent patch',
+    (Carrier.SentJson(1) = 'patch-replaced') And (Carrier.SentCount = 2 + MonitorOutboundQueueLimit));
   Seen := '';
   For Index := 0 To Carrier.SentCount - 1 Do
     Seen := Seen + Carrier.SentJson(Index) + #10;
@@ -603,6 +606,45 @@ Begin
   Session.NoteMirrorHanded(4);
   Check('snapshot cursor is committed', Session.MirrorCursor = 4);
   Check('resume behind the snapshot is not events', Not Session.TryResumeEvents('55667788', 3, Catchup));
+End;
+
+Procedure TestResumeHostRules;
+Var
+  Catchup: TMonitorCatchup;
+  Snapshot: TMonitorSnapshot;
+  Cursor: Int64;
+  Json: String;
+  Message: TMonitorMessage;
+  Decoded: TMonitorCatchup;
+  ErrorText: String;
+Begin
+  Session.BeginMirrorEpoch('ab12cd34', 'current', '/work/LazWorkflow', 'Current');
+  HandPatch('ab12cd34', 'kept', Cursor);
+  Check('resume of a cursor still in the ring returns events', Session.TryResumeEvents('ab12cd34', 0, Catchup) And
+    (Catchup.Mode = mcmEvents) And (Length(Catchup.Patches) = 1) And (Catchup.Cursor = 1));
+  Check('resume of a cursor still in the ring does not call the form snapshot fill',
+    Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
+  Check('oversized handed patch', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
+  Session.NoteMirrorHanded(2);
+  Session.RememberHandedPatch(2, StringOfChar('z', MonitorRingJsonCap + 1));
+  Check('resume of a discarded cursor is not events', Not Session.TryResumeEvents('ab12cd34', 0, Catchup));
+  Check('resume of a discarded cursor needs one form snapshot', ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
+  Check('resume snapshot cursor', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 3));
+  Snapshot := Default(TMonitorSnapshot);
+  Snapshot.PlanTitle := 'Monitor plan';
+  Json := EncodeResumeSnapshot('resume-snap', Cursor, 'ab12cd34', 'current', '/work/LazWorkflow', 'Current', Snapshot);
+  Check('resume of a discarded cursor returns one snapshot', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And
+    (Message.Kind = mmkCatchup) And DecodeMonitorCatchup(Message.PayloadJson, Decoded) And (Decoded.Mode = mcmSnapshot) And
+    Decoded.HasSnapshot);
+  Check('resume of a discarded cursor returns the snapshot cursor', Decoded.Cursor = Cursor);
+  Check('resume is not completed with host_busy when the IDE thread has not yet claimed it',
+    Not MonitorCommandSweepSendsBusy(Ord(mmkResume), False, False, MonitorCommandWaitMs + 1));
+  Check('a claimed resume is not host_busy', Not MonitorCommandSweepSendsBusy(Ord(mmkResume), True, False, MonitorCommandWaitMs));
+  Check('a user send that is still unclaimed at 5 s still returns host_busy',
+    MonitorCommandSweepSendsBusy(Ord(mmkSend), False, False, MonitorCommandWaitMs));
+  Check('a user send under 5 s is not host_busy',
+    Not MonitorCommandSweepSendsBusy(Ord(mmkSend), False, False, MonitorCommandWaitMs - 1));
+  Check('a claimed user send is not host_busy', Not MonitorCommandSweepSendsBusy(Ord(mmkSend), True, False, MonitorCommandWaitMs));
 End;
 
 Procedure TestMirrorCursor;
@@ -870,6 +912,7 @@ Begin
       TestBareSignalAndCancel;
       TestMirrorCursor;
       TestResumeRing;
+      TestResumeHostRules;
       TestOutboundLanes;
       TestLivePatchReplaces;
       TestOldCatalogueRejects;

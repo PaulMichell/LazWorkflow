@@ -92,10 +92,16 @@ Begin
 End;
 
 Procedure TestNilListener;
+Var
+  Before: Int64;
 Begin
   SetAssistantSessionListener(Nil);
   Check('nil listener is unassigned', Not AssistantSessionListenerAssigned);
   Check('nil listener observe returns false', Not AssistantSessionObserve.AssistantSessionObserve(asnStatus));
+  Before := AssistantMirrorCounter;
+  TouchAssistantMirror;
+  Check('touch with no listener does not raise', AssistantMirrorCounter = Before + 1);
+  Check('touch with no listener stays unassigned', Not AssistantSessionListenerAssigned);
 End;
 
 Procedure TestOneNotice;

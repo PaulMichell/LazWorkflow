@@ -840,6 +840,54 @@ Begin
   Check('missing patch part is not success', Not TryAssembleMonitorPatch(Missing, Assembled));
 End;
 
+Procedure TestVersion2PatchAndClosed;
+Var
+  Patch, Part: TMonitorPatch;
+  Closed: TMonitorConversationClosed;
+  Messages: TStringArray;
+  Message: TMonitorMessage;
+  ErrorText: String;
+  Data: TJSONData;
+  I: Integer;
+Begin
+  Patch := Default(TMonitorPatch);
+  Patch.Epoch := 'abc123';
+  Patch.Cursor := 4;
+  Patch.TurnIndex := 1;
+  Patch.TurnId := 'turn-1';
+  Patch.Part := 1;
+  Patch.PartCount := 1;
+  Patch.CanSend := True;
+  SetLength(Patch.Blocks, 2);
+  Patch.Blocks[0] := SampleBlock;
+  Patch.Blocks[1] := SampleBlock;
+  Check('version 2 patch envelope', TryDecodeMonitorEnvelope(EncodeMonitorPatch('patch-v2', Patch), Message, ErrorText) And
+    (Message.Version = 2) And (Message.Kind = mmkPatch));
+  Patch.Blocks[0].Body := StringOfChar('p', 150000);
+  Patch.Blocks[1].Body := StringOfChar('q', 150000);
+  Messages := PackMonitorPatch('patch-parts', Patch);
+  Check('patch parts are version 2', Length(Messages) >= 2);
+  For I := 0 To High(Messages) Do
+    Begin
+      Check('patch part version 2', TryDecodeMonitorEnvelope(Messages[I], Message, ErrorText) And (Message.Version = 2) And
+        (Message.Kind = mmkPatch));
+      Check('patch part index', DecodeMonitorPatch(Message.PayloadJson, Part) And (Part.Part = I + 1) And
+        (Part.PartCount = Length(Messages)) And (Part.Cursor = 4));
+    End;
+  Check('conversation_closed version 2', TryDecodeMonitorEnvelope(
+    EncodeMonitorConversationClosed('closed-v2', 'abc123', 4, 'conversation-20261019T120000000', 'Monitor plan'),
+    Message, ErrorText) And (Message.Version = 2) And (Message.Kind = mmkConversationClosed));
+  Check('conversation_closed payload', DecodeMonitorConversationClosed(Message.PayloadJson, Closed) And
+    (Closed.ConversationId = 'conversation-20261019T120000000') And (Closed.Cursor = 4) And (Closed.Title = 'Monitor plan'));
+  Data := Nil;
+  Try
+    Data := GetJSON(Message.WireJson);
+    Check('conversation_closed wire version', (Data Is TJSONObject) And (TJSONObject(Data).Get('v', 0) = 2));
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestDirtyBlocks;
 Var
   Previous, Current, Dirty: TAssistantMonitorBlockArray;
@@ -1077,6 +1125,7 @@ Begin
     End;
   TestRoundTrips;
   TestPatchOverCap;
+  TestVersion2PatchAndClosed;
   TestOldCatalogue;
   TestDirtyBlocks;
   TestOptionalTitle;

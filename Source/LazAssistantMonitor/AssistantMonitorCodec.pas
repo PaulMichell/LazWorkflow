@@ -408,6 +408,9 @@ Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMo
 Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
 Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
 Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+{ One snapshot catchup. The cursor is the snapshot cursor, not the client's discarded cursor. }
+Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
+  Const Snapshot: TMonitorSnapshot): String;
 Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
 Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
 
@@ -3235,6 +3238,24 @@ Begin
     Data.Free;
     Payload.Free;
   End;
+End;
+
+Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
+  Const Snapshot: TMonitorSnapshot): String;
+Var
+  Catchup: TMonitorCatchup;
+Begin
+  Catchup := Default(TMonitorCatchup);
+  Catchup.Mode := mcmSnapshot;
+  Catchup.Epoch := Epoch;
+  Catchup.Cursor := Cursor;
+  Catchup.ConversationId := ConversationId;
+  Catchup.ProjectRoot := ProjectRoot;
+  Catchup.Title := Title;
+  Catchup.Snapshot := Snapshot;
+  Catchup.HasSnapshot := True;
+  SetLength(Catchup.Patches, 0);
+  Result := EncodeMonitorCatchup(RefId, Catchup);
 End;
 
 Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
