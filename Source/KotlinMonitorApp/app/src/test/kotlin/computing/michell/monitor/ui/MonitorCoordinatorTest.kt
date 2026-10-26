@@ -380,6 +380,18 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aDisconnectedScreenDoesNotFetchImages() {
+    val coordinator = coordinator()
+    val image = WireImage("img-1", "shot", "image/png", 8, 8, "", false)
+    coordinator.restoreOffline(MonitorUi(
+      disconnected = true,
+      live = WireTurn(-2, "live-image", "build", "", "preview", "", images = listOf(image))
+    ))
+    val effects = coordinator.noteVisibleTurns(coordinator.state, setOf(-2))
+    assertEquals(emptyList<String>(), imageRequests(effects))
+  }
+
+  @Test
   fun visibleTurnsDoNotRequestDistantHistoryImages() {
     val coordinator = coordinator()
     val stored = (0..4).map { index -> WireTurn(index, "turn-$index", "build", "", "preview", "") }

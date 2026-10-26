@@ -1329,6 +1329,14 @@ fun encodeClosedScreen(id: String, title: String, document: OfflineCacheDocument
   return obj.build().toFpJson()
 }
 
+/** The filed screen. A raw cache document is accepted so an older writer still loads. */
+fun decodeClosedScreen(text: String): OfflineCacheDocument? {
+  val obj = parseObject(text) ?: return null
+  val screen = obj.field("screen")
+  if (screen is JsonValue.Obj) return decodeOfflineCache(screen.toFpJson())
+  return decodeOfflineCache(text)
+}
+
 fun decodeOfflineCache(text: String): OfflineCacheDocument? {
   val obj = parseObject(text) ?: return null
   val turns = rowsFrom(obj.field("turns")) { turnFromJson(it, true) } ?: return null

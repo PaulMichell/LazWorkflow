@@ -5,8 +5,6 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.encodeClosedScreen
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,24 +36,23 @@ class OfflineCacheUiTest {
   }
 
   @Test
-  fun aClosedFileIsNotDeletedWhenAnotherConversationIsFiled() {
-    val directory = File.createTempFile("monitor-cache", "dir")
-    directory.delete()
-    directory.mkdirs()
-    try {
-      val store = OfflineStore(File(directory, "offline-cache.json"))
-      val document = OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, "")
-      store.saveClosed("conversation-1", encodeClosedScreen("conversation-1", "Archived", document))
-      store.saveClosed("conversation-2", encodeClosedScreen("conversation-2", "Next", document))
-      val kept = File(directory, closedCacheName("conversation-1"))
-      assertTrue(kept.isFile)
-      assertTrue(kept.readText().contains("Archived"))
-      store.clear()
-      assertTrue(kept.isFile)
-      assertEquals("", closedCacheName("../escape"))
-    } finally {
-      directory.deleteRecursively()
-    }
+  fun aMissingImageStaysAPlaceholderWhileDisconnected() {
+    assertEquals(ImagePlaceholder, imageTileLabel(false, null, false, false))
+    assertEquals(LoadingImageLabel, imageTileLabel(false, null, false, true))
+    assertEquals("Image unavailable: missing", imageTileLabel(false, null, true, false))
+    assertEquals("", imageTileLabel(true, null, false, false))
+  }
+
+  @Test
+  fun aFinishedPatchCommitsTheCursorAndAnOpenPartDoesNot() {
+    val before = MonitorUi(hostEpoch = "aa", hostCursor = 3)
+    val committed = before.copy(hostCursor = 4)
+    val partial = before.copy(patchOpenCursor = 4, patchPartCount = 2)
+    val catching = before.copy(hostEpoch = "bb", hostCursor = 1, catchingUp = true)
+    assertTrue(cursorCommitted(before, committed))
+    assertFalse(cursorCommitted(before, partial))
+    assertFalse(cursorCommitted(before, catching))
+    assertTrue(cursorCommitted(before, before.copy(hostEpoch = "bb", hostCursor = 0)))
   }
 
   @Test

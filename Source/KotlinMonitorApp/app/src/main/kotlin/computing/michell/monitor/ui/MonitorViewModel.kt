@@ -7,7 +7,7 @@ package computing.michell.monitor.ui
    The final-result deadline lives in DictationFinalWatch. Image request
    and cache policy live in ImageCache. What remains is speech,
    preferences, bitmap decode, and effect execution.
-   Reviewed 2026-10-21. */
+   Offline copies are written by OfflineStore. Reviewed 2026-10-26. */
 
 import android.Manifest
 import android.app.Application
@@ -49,7 +49,7 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
-import java.io.File
+import java.io.ByteArrayOutputStream
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
@@ -62,8 +62,8 @@ import computing.michell.monitor.protocol.noteHelloIdentity
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
-import computing.michell.monitor.protocol.encodeOfflineCache
 import computing.michell.monitor.protocol.MonitorMessage
+import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 
 import computing.michell.monitor.protocol.WireBlock
@@ -971,9 +971,12 @@ private fun WireView.patchStatus(status: WireView): WireView {
 
 class MonitorViewModel(application: Application) : AndroidViewModel(application) {
   private val store = HostStore(application)
-  private val offlineStore = OfflineStore(File(application.filesDir, "offline-cache.json"))
+  private val offlineStore = OfflineStore(application.filesDir)
   private val session = LanSession(store)
-  private var savedCache = ""
+  private val cacheGate = Any()
+  private var cacheWriteSerial = 0
+  private var cacheSaveJob: Job? = null
+  private var suppressCache = false
   private val images = ImageAssembly()
   private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
   private val display = object : DisplayPreferences {
@@ -1045,15 +1048,24 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
-    val cached = offlineStore.load()
+    val open = try {
+      newestCacheEntry(offlineStore.loadIndex(), record.fingerprint)
+    } catch (error: Exception) {
+      null
+    }
+    val cached = if (open == null) null else try {
+      offlineStore.loadConversation(open.fileName)
+    } catch (error: Exception) {
+      null
+    }
     if (cached != null || record.address.isEmpty()) {
       val seeded = if (cached != null) applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty())
       else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
       coordinator.restoreOffline(seeded)
-      if (cached != null) savedCache = encodeOfflineCache(cached)
     }
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
+    if (open != null && cached != null) restoreCachedImages(open.fileName, cached, uiState.value.hostGeneration)
     viewModelScope.launch(Dispatchers.Default) {
       session.messages.collect { message -> applyIncoming(message) }
     }
@@ -1226,10 +1238,23 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun forgetPairing() {
     leaveDictation()
+    val fingerprint = store.load().fingerprint
+    synchronized(cacheGate) {
+      suppressCache = true
+      cacheWriteSerial += 1
+    }
+    cacheSaveJob?.cancel()
+    cacheSaveJob = null
     val effects = coordinator.onEvent(MonitorEvent.ForgetPairing(uiState.value)) ?: emptyList()
     applyUiEffects(effects)
     session.disconnect()
     store.clear()
+    try {
+      offlineStore.forgetFingerprint(fingerprint)
+    } catch (error: Exception) {
+      // Forgetting the local copy must not drop the reset session.
+    }
+    synchronized(cacheGate) { suppressCache = false }
   }
 
   fun sendOrSteer() {
@@ -1324,7 +1349,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   override fun onCleared() {
-    rememberDisplayed(uiState.value)
+    saveCacheNow(uiState.value, true)
     supportPending = false
     linkGrace?.cancel()
     finalWatch.cancel()
@@ -1332,36 +1357,96 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.close()
   }
 
-  private fun rememberDisplayed(ui: MonitorUi) {
-    if (!worthCaching(ui)) {
-      if (savedCache.isEmpty()) return
-      savedCache = ""
-      viewModelScope.launch(Dispatchers.IO) {
+  private fun scheduleCacheSave() {
+    if (suppressCache) return
+    cacheSaveJob?.cancel()
+    cacheSaveJob = viewModelScope.launch {
+      delay(CacheSaveDebounceMs)
+      writeCache(uiState.value, false)
+    }
+  }
+
+  private fun saveCacheNow(ui: MonitorUi, await: Boolean) {
+    cacheSaveJob?.cancel()
+    cacheSaveJob = null
+    writeCache(ui, await)
+  }
+
+  private fun writeCache(ui: MonitorUi, await: Boolean) {
+    if (suppressCache || !worthCaching(ui)) return
+    val fingerprint = cacheFingerprint(store.load().fingerprint)
+    val conversationId = ui.conversationId.ifEmpty { "current" }
+    val title = cacheTitle(ui.conversationTitle, ui.turns, ui.live, ui.history.values.toList())
+    val document = offlineDocument(ui)
+    val images = cachedImageBytes(ui)
+    val serial = synchronized(cacheGate) { ++cacheWriteSerial }
+    val write = Runnable {
+      synchronized(cacheGate) {
+        if (suppressCache || serial != cacheWriteSerial) return@Runnable
         try {
-          offlineStore.clear()
+          offlineStore.save(fingerprint, ui.projectRoot, conversationId, title, document, images)
         } catch (error: Exception) {
+          // A failed local copy must not drop the live session.
         }
       }
-      return
     }
-    val text = encodeOfflineCache(offlineDocument(ui))
-    if (text == savedCache) return
-    savedCache = text
+    if (await) write.run()
+    else viewModelScope.launch(Dispatchers.IO) { write.run() }
+  }
+
+  private fun fileClosed(id: String, title: String, document: String) {
+    if (id.isEmpty()) return
+    val fingerprint = cacheFingerprint(store.load().fingerprint)
+    val projectRoot = uiState.value.projectRoot
+    val images = cachedImageBytes(uiState.value)
     viewModelScope.launch(Dispatchers.IO) {
-      try {
-        offlineStore.save(text)
-      } catch (error: Exception) {
-        // A failed local copy must not drop the live session.
+      synchronized(cacheGate) {
+        if (suppressCache) return@synchronized
+        try {
+          offlineStore.saveClosed(fingerprint, projectRoot, id, title, document, images)
+        } catch (error: Exception) {
+          // A failed local copy must not drop the live session.
+        }
       }
     }
   }
 
-  private fun fileClosed(id: String, document: String) {
-    viewModelScope.launch(Dispatchers.IO) {
+  private fun cachedImageBytes(ui: MonitorUi): List<CacheImageBytes> {
+    val images = ArrayList<CacheImageBytes>()
+    val bitmaps = bitmapsState.value
+    for (id in documentImageIds(offlineDocument(ui))) {
+      val bitmap = findCachedBitmap(bitmaps, ui.hostGeneration, id) ?: continue
+      val stream = ByteArrayOutputStream()
       try {
-        offlineStore.saveClosed(id, document)
+        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) continue
       } catch (error: Exception) {
-        // A failed local copy must not drop the live session.
+        continue
+      }
+      val bytes = stream.toByteArray()
+      if (bytes.isEmpty()) continue
+      images += CacheImageBytes(id, bytes)
+    }
+    return images
+  }
+
+  private fun restoreCachedImages(fileName: String, document: OfflineCacheDocument, generation: Int) {
+    val ids = documentImageIds(document)
+    if (ids.isEmpty()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val decoded = LinkedHashMap<String, Bitmap>()
+      for (id in ids) {
+        val bytes = try {
+          offlineStore.readImage(fileName, id)
+        } catch (error: Exception) {
+          null
+        } ?: continue
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
+        decoded[imageCacheText(ImageCacheKey(generation, id, 0))] = bitmap
+      }
+      if (decoded.isEmpty()) return@launch
+      withContext(Dispatchers.Main) {
+        if (uiState.value.hostGeneration != generation) return@withContext
+        bitmapsState.update { current -> current + decoded }
       }
     }
   }
@@ -1372,7 +1457,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
-    applyUiEffects(coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status)) ?: return)
+    val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
+    if (effects != null) applyUiEffects(effects)
+    if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) saveCacheNow(uiState.value, false)
+    if (effects == null) return
     linkGrace?.cancel()
     if (!coordinator.holdingLink) return
     linkGrace = viewModelScope.launch {
@@ -1407,8 +1495,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
+    val before = uiState.value
     uiState.value = coordinator.state
-    rememberDisplayed(uiState.value)
+    if (cursorCommitted(before, uiState.value)) scheduleCacheSave()
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {
@@ -1422,7 +1511,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
-        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.document)
+        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.document)
       }
     }
   }

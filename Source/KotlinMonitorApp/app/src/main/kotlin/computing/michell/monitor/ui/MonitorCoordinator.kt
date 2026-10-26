@@ -660,6 +660,7 @@ class MonitorCoordinator(
   }
 
   private fun missingImageFetches(state: MonitorUi): List<MonitorEffect> {
+    if (state.disconnected) return emptyList()
     val images = linkedMapOf<Int, List<String>>()
     for (turn in state.turns) {
       val loaded = state.history[turn.turnIndex]

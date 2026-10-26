@@ -247,7 +247,8 @@ private fun ConversationPane(
             ui.showThinking,
             ui.showTools,
             bitmaps,
-            ui.imageReasons
+            ui.imageReasons,
+            !ui.disconnected
           )
         }
       }
@@ -260,7 +261,8 @@ private fun ConversationPane(
           bitmaps,
           ui.imageReasons,
           ui.hostGeneration,
-          foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0)
+          foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0),
+          !ui.disconnected
         )
       }
   }
@@ -295,7 +297,8 @@ private fun SlotBody(
   showThinking: Boolean,
   showTools: Boolean,
   bitmaps: Map<String, Bitmap>,
-  reasons: Map<String, String>
+  reasons: Map<String, String>,
+  fetchImages: Boolean
 ) {
   val assembled = displayBlocks(turn)
   val shown = assembled.withIndex().filter { (_, block) -> blockShown(block, showThinking, showTools) }
@@ -308,7 +311,7 @@ private fun SlotBody(
     shown.forEach { (index, block) ->
       val foldKey = foldBlockKey(conversationGeneration, turnId, block.blockId, index)
       key(foldKey) {
-        RoleBlock(block, bitmaps, reasons, hostGeneration, foldKey)
+        RoleBlock(block, bitmaps, reasons, hostGeneration, foldKey, fetchImages)
       }
     }
   }
@@ -437,16 +440,17 @@ private fun RoleBlock(
   bitmaps: Map<String, Bitmap>,
   reasons: Map<String, String>,
   hostGeneration: Int,
-  foldKey: String
+  foldKey: String,
+  fetchImages: Boolean
 ) {
   when (displayKind(block)) {
-    "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons)
-    "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons)
+    "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons, fetchImages)
+    "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons, fetchImages)
     "thinking" -> ThinkingCard(foldKey, block)
-    "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration)
+    "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration, fetchImages)
     "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
-    "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false)
-    "worked" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, QuietText, true)
+    "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false, fetchImages)
+    "worked" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, QuietText, true, fetchImages)
     else -> {
       val caption = block.body.ifEmpty { block.title }
       if (rendersMarkdown(displayKind(block))) MarkdownText(caption) else Text(caption)
@@ -461,12 +465,13 @@ private fun CaptionBlock(
   bitmaps: Map<String, Bitmap>,
   reasons: Map<String, String>,
   color: Color,
-  italic: Boolean
+  italic: Boolean,
+  fetchImages: Boolean
 ) {
   Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     val caption = block.body.ifEmpty { block.title }
     if (caption.isNotEmpty()) MarkdownText(caption, color = color, italic = italic)
-    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
+    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons, fetchImages) }
   }
 }
 
@@ -479,7 +484,8 @@ private fun BubbleBlock(
   align: Alignment.Horizontal,
   widthFraction: Float,
   bitmaps: Map<String, Bitmap>,
-  reasons: Map<String, String>
+  reasons: Map<String, String>,
+  fetchImages: Boolean
 ) {
   Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
     Column(
@@ -493,7 +499,7 @@ private fun BubbleBlock(
     ) {
       if (block.title.isNotEmpty()) Text(block.title, fontWeight = FontWeight.Bold)
       if (block.body.isNotEmpty()) MarkdownText(block.body)
-      block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
+      block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons, fetchImages) }
     }
   }
 }
@@ -527,7 +533,8 @@ private fun ToolCard(
   block: WireBlock,
   bitmaps: Map<String, Bitmap>,
   reasons: Map<String, String>,
-  hostGeneration: Int
+  hostGeneration: Int,
+  fetchImages: Boolean
 ) {
   var open by remember(foldKey) { mutableStateOf(false) }
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -542,7 +549,7 @@ private fun ToolCard(
         .clickable { open = !open }
         .padding(horizontal = 8.dp, vertical = 6.dp)
     )
-    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
+    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons, fetchImages) }
     if (open && block.body.isNotEmpty()) {
       val bodyModifier = Modifier.padding(horizontal = 8.dp)
       if (displayKind(block) == "subagent") MarkdownText(block.body, modifier = bodyModifier)
@@ -552,15 +559,17 @@ private fun ToolCard(
 }
 
 @Composable
-private fun ImageTile(image: WireImage, hostGeneration: Int, bitmaps: Map<String, Bitmap>, reasons: Map<String, String>) {
+private fun ImageTile(
+  image: WireImage,
+  hostGeneration: Int,
+  bitmaps: Map<String, Bitmap>,
+  reasons: Map<String, String>,
+  fetchImages: Boolean
+) {
   val bitmap = findCachedBitmap(bitmaps, hostGeneration, image.id)
-  val reason = reasons[image.id]
-  when {
-    bitmap != null -> Image(bitmap.asImageBitmap(), contentDescription = image.name)
-    reason != null -> Text("Image unavailable: $reason")
-    image.missing -> Text("Image unavailable: missing")
-    else -> Text("Loading image")
-  }
+  val label = imageTileLabel(bitmap != null, reasons[image.id], image.missing, fetchImages)
+  if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = image.name)
+  else if (label.isNotEmpty()) Text(label)
 }
 
 fun findCachedBitmap(bitmaps: Map<String, Bitmap>, hostGeneration: Int, imageId: String): Bitmap? {
