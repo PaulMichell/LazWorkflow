@@ -263,9 +263,6 @@ private fun ConversationPane(
           foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0)
         )
       }
-      if (displayInterrupted(ui, phase)) {
-        OfflineReconnectNotice(ui.activityStartedMs)
-      }
   }
 }
 
@@ -334,21 +331,21 @@ fun ActivityStatus(
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
   val blocks = displayBlocks(ui.live)
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
+  val linkLive = ideLinkLive(ui.disconnected, phase)
   val running = turnStillRunning(ui.view, pending, blocks, ui.live)
-  LaunchedEffect(running, ui.activityStartedMs) {
-    if (!running) return@LaunchedEffect
+  LaunchedEffect(running, ui.activityStartedMs, linkLive) {
+    if (!running || !linkLive) return@LaunchedEffect
     while (true) {
       now = System.currentTimeMillis()
       delay(1000)
     }
   }
   val runtime = runtimeCaption(ui.view)
-  val activity = activityCaption(ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live)
-  val interrupted = displayInterrupted(ui, phase)
-  val right = if (interrupted) {
-    val elapsed = if (ui.activityStartedMs > 0L && now >= ui.activityStartedMs) now - ui.activityStartedMs else 0L
-    OfflineReconnectingMessage + "\n" + formatActivityClock(elapsed)
-  } else promptActivityRight(activity, listening, statusMessage)
+  val activity = activityCaption(
+    ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
+  )
+  // displayInterrupted must not replace this slot, and must not start a reconnect clock.
+  val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else activity
   val statusStyle = MaterialTheme.typography.bodySmall
   // Equal side columns keep the model on the screen centre. Connection stays left; progress stays right.
   Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -499,28 +496,6 @@ private fun BubbleBlock(
       block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons) }
     }
   }
-}
-
-fun offlineReconnectCaption(startedMs: Long, nowMs: Long): String {
-  val elapsed = if (startedMs > 0L && nowMs >= startedMs) nowMs - startedMs else 0L
-  return "$OfflineReconnectingMessage  ${formatActivityClock(elapsed)}"
-}
-
-@Composable
-private fun OfflineReconnectNotice(startedMs: Long) {
-  var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-  LaunchedEffect(startedMs) {
-    while (true) {
-      now = System.currentTimeMillis()
-      delay(1000)
-    }
-  }
-  Text(
-    offlineReconnectCaption(startedMs, now),
-    color = QuietText,
-    fontStyle = FontStyle.Italic,
-    modifier = Modifier.padding(horizontal = 4.dp)
-  )
 }
 
 @Composable

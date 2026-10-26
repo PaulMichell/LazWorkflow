@@ -232,6 +232,7 @@ class MonitorReducerTest {
     assertEquals("grok-4", runtimeCaption(next.view))
     assertEquals("Waiting… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
     assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
+    assertEquals("Offline", activityCaption(emptyView().copy(signedIn = false, statusText = "Not signed in"), false, "", 0L, 3_000L))
     val thought = WireBlock("thinking", "t", "", "", "", "hmm", true, true, 0, emptyList())
     val live = WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(thought))
     assertEquals("Thinking… 0:04", activityCaption(
@@ -241,13 +242,24 @@ class MonitorReducerTest {
     val now = 1_700_000_000_000L
     assertEquals(now - 724_000L, activityStart(now - 2_000L, now, 724_000, 0))
     assertEquals(now - 20_000L, activityStart(now - 20_000L, now, 10_000, 9_000))
-    assertEquals("Offline, Re-connecting  0:12", offlineReconnectCaption(now - 12_000L, now))
     val running = MonitorUi(
       disconnected = true,
       view = emptyView().copy(sending = true, busy = true, phase = "Thinking…", statusText = "Thinking… 0:12", elapsedMs = 12_000)
     )
     assertTrue(displayInterrupted(running, LinkPhase.Disconnected))
     assertFalse(displayInterrupted(running.copy(disconnected = false), LinkPhase.Live))
+    assertEquals("Offline", activityCaption(
+      running.view, false, "", now - 12_000L, now, listOf(thought), live,
+      ideLinkLive(running.disconnected, LinkPhase.Disconnected)
+    ))
+    assertEquals("Offline", activityCaption(
+      emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, now, emptyList(), null,
+      ideLinkLive(true, LinkPhase.Live)
+    ))
+    assertTrue(hostTranscriptIdle("", "Ready"))
+    assertTrue(hostTranscriptIdle("", "Offline"))
+    assertTrue(hostTranscriptIdle("Offline", "Not signed in"))
+    assertFalse(hostTranscriptIdle("Thinking…", "Offline"))
     assertEquals("Thinking… 12:04", activityCaption(
       emptyView().copy(sending = true, phase = "Thinking…", statusText = "Ready"),
       false, "", now - 724_000L, now, listOf(thought), live

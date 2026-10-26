@@ -287,7 +287,10 @@ fun activityStart(keptStart: Long, nowMs: Long, observedMs: Int, previousObserve
   return nowMs
 }
 
-const val OfflineReconnectingMessage = "Offline, Re-connecting"
+/** Same live check connectionLabel uses. Anything else is no IDE connection. */
+fun ideLinkLive(disconnected: Boolean, phase: LinkPhase): Boolean {
+  return phase == LinkPhase.Live && !disconnected
+}
 
 fun displayInterrupted(ui: MonitorUi, phase: LinkPhase): Boolean {
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
@@ -321,10 +324,11 @@ fun progressPhase(name: String): String {
 fun activityPhase(view: WireView, pending: Boolean, pendingKind: String, blocks: List<WireBlock>): String {
   if (hostHasElapsed(view.statusText)) {
     val named = view.statusText.trim().substringBeforeLast(" ").trim()
-    if (named.isNotEmpty() && named != "Ready") return progressPhase(named)
+    if (named.isNotEmpty() && named != "Ready" && named != "Offline" && named != "Not signed in") return progressPhase(named)
   }
-  if (view.phase.isNotEmpty() && view.phase != "Ready") return progressPhase(view.phase)
-  if (view.planRunning && view.statusText.isNotEmpty() && view.statusText != "Ready") return view.statusText
+  if (view.phase.isNotEmpty() && view.phase != "Ready" && view.phase != "Offline" && view.phase != "Not signed in") return progressPhase(view.phase)
+  if (view.planRunning && view.statusText.isNotEmpty() && view.statusText != "Ready" &&
+    view.statusText != "Offline" && view.statusText != "Not signed in") return view.statusText
   val running = blocks.lastOrNull { block -> block.running }
   if (running != null) {
     return when (running.kind) {
@@ -346,11 +350,16 @@ fun activityCaption(
   startedMs: Long,
   nowMs: Long,
   blocks: List<WireBlock> = emptyList(),
-  live: WireTurn? = null
+  live: WireTurn? = null,
+  linkLive: Boolean = true
 ): String {
+  // An invalid IDE link is Offline. Do not keep Ready, a progress word, or a reconnect clock.
+  if (!linkLive) return "Offline"
   if (!turnStillRunning(view, pending, blocks, live)) {
-    if (view.statusText.isNotEmpty()) return view.statusText
-    return if (view.signedIn) "Ready" else "Not signed in"
+    val text = view.statusText.trim()
+    if (!view.signedIn || text == "Not signed in" || text == "Offline") return "Offline"
+    if (text.isNotEmpty()) return text
+    return "Ready"
   }
   val phase = activityPhase(view, pending, pendingKind, blocks)
   val start = if (startedMs > 0L) startedMs else nowMs
@@ -575,9 +584,10 @@ private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
 
 /** A finished host turn. The status frame can be missed; this must not leave the label on busy. */
 fun hostTranscriptIdle(phase: String, statusText: String): Boolean {
-  if (phase.isNotEmpty() && phase != "Ready") return false
+  val named = phase.trim()
+  if (named.isNotEmpty() && named != "Ready" && named != "Offline" && named != "Not signed in") return false
   val text = statusText.trim()
-  return text == "Ready" || text == "Not signed in"
+  return text == "Ready" || text == "Offline" || text == "Not signed in"
 }
 
 private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): MonitorUi {
