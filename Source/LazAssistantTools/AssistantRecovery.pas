@@ -924,10 +924,8 @@ End;
 
 Function AssistantPhaseIsReconnectWait(Const Phase: String): Boolean;
 Begin
-  Result := (Phase = 'Re-establishing Connection') Or
-    (Pos(AssistantRecoveryWaitReconnect, Phase) > 0) Or
-    (Pos(AssistantRecoveryWaitCredits, Phase) > 0) Or
-    (Pos(AssistantRecoveryWaitRateLimit, Phase) > 0);
+  { Connecting… matches AssistantPhaseConnecting. A recovery sentence is a note, not this phase. }
+  Result := (Phase = 'Connecting…') Or (Phase = 'Re-establishing Connection');
 End;
 
 Function ProcessTransportDropped(Const ErrorText: String): Boolean;

@@ -137,6 +137,10 @@ Begin
   Check('old tools is status', IsAssistantProgressStatus('Running tools…'));
   Check('old steer is status', IsAssistantProgressStatus('Steering at next model gap…'));
   Check('ascii dots are not status', Not IsAssistantProgressStatus('Waiting...'));
+  Check('running phase paints itself', AssistantProgressPhase(AssistantPhaseRunning) = AssistantPhaseRunning);
+  Check('connecting phase paints itself', AssistantProgressPhase(AssistantPhaseConnecting) = AssistantPhaseConnecting);
+  Check('sentence paints as waiting', AssistantProgressPhase('Waiting for credits.') = AssistantPhaseWaiting);
+  Check('empty phase paints as waiting', AssistantProgressPhase('') = AssistantPhaseWaiting);
   Check('http is error', Not IsAssistantProgressStatus('HTTP 400: invalid_grant'));
   Check('empty is error', Not IsAssistantProgressStatus(''));
   Check('access violation is error', Not IsAssistantProgressStatus('Access violation'));

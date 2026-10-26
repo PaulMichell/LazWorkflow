@@ -293,8 +293,10 @@ Type
     StreamStart: TDateTime;
     FTurnStartTick: QWord;
     FTurnStartedAt: String;
-    FReconnectStartTick: QWord;
-    FStatusPhase: String; { e.g. Thinking… / Streaming… while FSending. }
+    FStatusPhase: String; { One of the six progress words while FSending. }
+    { Text already on screen when Connecting… began. A repeated snapshot is not new stream text. }
+    FConnectHoldContent: String;
+    FConnectHoldThinking: String;
     FLastChatPaintTick: QWord;
     FTrace: TAssistantTrace;
     FTraceView: TAssistantTraceView;
@@ -3768,41 +3770,36 @@ End;
 Function TProjectAssistantForm.FormatElapsedStatus(Const Phase: String): String;
 Var
   Secs, Mins, Rem: Integer;
-  ReconnectSecs: QWord;
+  Shown: String;
 Begin
-  If AssistantPhaseIsReconnectWait(Phase) Then
+  { Always the turn clock. A sentence is not a phase, so it cannot reach this format. }
+  Shown := AssistantProgressPhase(Phase);
+  Secs := 0;
+  If FTurnStartTick <> 0 Then
     Begin
-      ReconnectSecs := (GetTickCount64 - FReconnectStartTick) Div 1000;
-      If ReconnectSecs >= 3600 Then
-        Result := Format('%s %d:%2.2d:%2.2d', [Phase, ReconnectSecs Div 3600,
-          (ReconnectSecs Div 60) Mod 60, ReconnectSecs Mod 60])
-      Else
-        Result := Format('%s %2.2d:%2.2d', [Phase, ReconnectSecs Div 60,
-          ReconnectSecs Mod 60]);
-      Exit;
+      Secs := Integer((GetTickCount64 - FTurnStartTick) Div 1000);
+      If Secs < 0 Then
+        Secs := 0;
     End;
-  If FTurnStartTick = 0 Then
-    Begin
-      Result := Phase;
-      Exit;
-    End;
-  Secs := Integer((GetTickCount64 - FTurnStartTick) Div 1000);
-  If Secs < 0 Then
-    Secs := 0;
   Mins := Secs Div 60;
   Rem := Secs Mod 60;
-  Result := Format('%s %d:%2.2d', [Phase, Mins, Rem]);
+  Result := Format('%s %d:%2.2d', [Shown, Mins, Rem]);
 End;
 
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
 Var
   PhaseChanged: Boolean;
+  Shown: String;
 Begin
   PhaseChanged := Phase <> FStatusPhase;
-  If AssistantPhaseIsReconnectWait(Phase) And (Not AssistantPhaseIsReconnectWait(FStatusPhase)) Then
-    FReconnectStartTick := GetTickCount64;
+  If (Phase = AssistantPhaseConnecting) And (FStatusPhase <> AssistantPhaseConnecting) Then
+    Begin
+      FConnectHoldContent := FLiveContent;
+      FConnectHoldThinking := FLiveThinking;
+    End;
   FStatusPhase := Phase;
-  StatusFooter.SetRightActivityText(FormatElapsedStatus(Phase), Phase);
+  Shown := AssistantProgressPhase(Phase);
+  StatusFooter.SetRightActivityText(FormatElapsedStatus(Shown), Shown);
   If PhaseChanged Then
     AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
@@ -4137,7 +4134,8 @@ Begin
     Begin
       If (FStatusPhase <> '') And Assigned(StatusFooter) Then
         Begin
-          StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+          StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
+            AssistantProgressPhase(FStatusPhase));
           AssistantSessionObserve.AssistantSessionObserve(asnStatus);
         End;
       Exit;
@@ -4492,13 +4490,15 @@ Begin
     If FTransportWait And (Not Assigned(FCodexRun)) And (Not Assigned(FClaudeRun)) Then
       Begin
         If FSending And (FStatusPhase <> '') Then
-          StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+          StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
+            AssistantProgressPhase(FStatusPhase));
         PollTransportWait;
         Exit;
       End;
     If FSending And (FStatusPhase <> '') Then
       Begin
-        StatusFooter.SetRightActivityText(FormatElapsedStatus(FStatusPhase), FStatusPhase);
+        StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
+          AssistantProgressPhase(FStatusPhase));
         AssistantSessionObserve.AssistantSessionObserve(asnStatus);
       End;
     If Assigned(FCodexRun) Then
@@ -4882,7 +4882,7 @@ Begin
     Begin
       If FStatusPhase = '' Then
         FStatusPhase := AssistantPhaseWaiting;
-      StatusText := FormatElapsedStatus(FStatusPhase);
+      StatusText := FormatElapsedStatus(AssistantProgressPhase(FStatusPhase));
     End
   Else If FPlanAgentRunning Then
     StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
@@ -4922,7 +4922,7 @@ Begin
   FContextStatusText := CentreText;
   ApplyAccountUsageLabel;
   If FSending Then
-    StatusFooter.SetRightActivityText(StatusText, FStatusPhase)
+    StatusFooter.SetRightActivityText(StatusText, AssistantProgressPhase(FStatusPhase))
   Else
     StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
@@ -6695,8 +6695,16 @@ Begin
     Else
       FLiveContent := ContentSnapshot;
     FLiveThinking := ThinkingSnapshot;
-    { Keep the reconnect clock until the actor reports new stream progress. }
-    If (FStatusPhase <> 'Re-establishing Connection') And (Not IsAssistantRecoveryProgress(FStatusPhase)) Then
+    { Connecting… stays until new stream text arrives. Text already on screen is not that. }
+    If FStatusPhase = AssistantPhaseConnecting Then
+      Begin
+        If (FLiveContent <> FConnectHoldContent) Or (FLiveThinking <> FConnectHoldThinking) Then
+          If FLiveContent <> '' Then
+            SetStreamPhase(AssistantPhaseStreaming)
+          Else If FLiveThinking <> '' Then
+            SetStreamPhase(AssistantPhaseThinking);
+      End
+    Else If Not IsAssistantRecoveryProgress(FStatusPhase) Then
       Begin
         If FLiveContent <> '' Then
           SetStreamPhase(AssistantPhaseStreaming)
@@ -9549,20 +9557,14 @@ Begin
   View.ModeLocked := FModeLocked;
   View.PlanRunning := FPlanAgentRunning;
   View.Mode := AssistantModeToStr(ActiveMode);
-  View.Phase := FStatusPhase;
   View.ElapsedMs := 0;
+  View.Phase := '';
   If FSending Then
     Begin
+      View.Phase := AssistantProgressPhase(FStatusPhase);
       View.ElapsedMs := CurrentStreamDurationMs;
-      If FStatusPhase = '' Then
-        View.StatusText := FormatElapsedStatus(AssistantPhaseWaiting)
-      Else
-        View.StatusText := FormatElapsedStatus(FStatusPhase);
+      View.StatusText := FormatElapsedStatus(View.Phase);
     End
-  Else If FPlanAgentRunning Then
-    View.StatusText := Format('Plan agent… %d done', [FPlanAgentPackagesDone])
-  Else If FReviewInProgress Then
-    View.StatusText := 'Reviewing…'
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then

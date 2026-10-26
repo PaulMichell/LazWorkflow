@@ -83,6 +83,8 @@ Const
 
 { True for live status strings the actor puts on the stream callback (not terminal errors). }
 Function IsAssistantProgressStatus(Const Text: String): Boolean;
+{ One of the six progress words. Anything else, including a recovery sentence, paints as Waiting…. }
+Function AssistantProgressPhase(Const Phase: String): String;
 Function FormatSteerEnvelope(Const UserText: String): String;
 Function AssistantEventToJson(Const Event: TAssistantEvent): String;
 Function AppendAssistantEventLine(Const FileName, JsonLine: String): Boolean;
@@ -155,6 +157,15 @@ Begin
     (S = 'Steering at next model gap…') Or
     (S = 'Re-establishing Connection') Or
     IsAssistantRecoveryProgress(S);
+End;
+
+Function AssistantProgressPhase(Const Phase: String): String;
+Begin
+  If (Phase = AssistantPhaseWaiting) Or (Phase = AssistantPhaseThinking) Or (Phase = AssistantPhaseStreaming) Or
+    (Phase = AssistantPhaseRunning) Or (Phase = AssistantPhaseSteering) Or (Phase = AssistantPhaseConnecting) Then
+    Result := Phase
+  Else
+    Result := AssistantPhaseWaiting;
 End;
 
 Function FormatSteerEnvelope(Const UserText: String): String;

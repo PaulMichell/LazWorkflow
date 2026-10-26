@@ -297,6 +297,10 @@ Begin
   Check('wait note names the fault', Pos('Error reading data from socket',
     AssistantReconnectWaitNote('Error reading data from socket')) > 0);
   Check('wait note is progress', IsAssistantRecoveryProgress(AssistantReconnectWaitNote('socket closed')));
+  Check('connecting is a reconnect wait', AssistantPhaseIsReconnectWait('Connecting…'));
+  Check('old reconnect phrase is a wait', AssistantPhaseIsReconnectWait('Re-establishing Connection'));
+  Check('reconnect sentence is not a phase', Not AssistantPhaseIsReconnectWait(AssistantRecoveryWaitReconnect));
+  Check('credit sentence is not a phase', Not AssistantPhaseIsReconnectWait(AssistantRecoveryWaitCredits));
   Check('resume note is progress', IsAssistantRecoveryProgress(AssistantReconnectResumeNote));
   Check('reconnect interval defaults to 30 seconds', AssistantReconnectIntervalMs = 30000);
   TestCreditDecisions;
