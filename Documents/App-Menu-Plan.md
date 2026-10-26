@@ -181,7 +181,7 @@ The list shows title, project display (the last path segment of `project_root`),
 
 ### 6.1 Host tests
 
-Status: not started
+Status: complete
 
 Extend `Tests/AssistantMonitorCodecTest.lpr` for version 2, patch parts, and `conversation_closed`. Extend `Tests/AssistantMonitorSessionTest.lpr` for the lanes and resume. Required cases:
 
