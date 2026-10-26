@@ -147,7 +147,7 @@ The host store remains the authority while connected. The phone cache is a repli
 
 ### 5.1 Cache directory
 
-Status: not started
+Status: complete
 
 Replace the single `offline-cache.json` written by `OfflineStore` with a directory under the app files dir, `monitor-cache/`. `index.json` lists entries. Each entry has host fingerprint, `project_root`, `conversation_id`, title, updated time, turn count, and the file name. One JSON file per conversation holds turns, the live blob, plan rows, and the draft. Image files already decoded stay beside that conversation, named by image id.
 
