@@ -222,7 +222,7 @@ class MonitorReducerTest {
     assertEquals("", next.draft)
     assertEquals("fix the form", next.pendingPrompt)
     assertEquals("user", next.pendingKind)
-    assertEquals("Waiting for first token…", next.view.phase)
+    assertEquals(PhaseWaiting, next.view.phase)
     assertFalse(promptShown(next, next.pendingPrompt))
     val echoed = next.copy(live = WireTurn(-2, "live", "build", "", "fix the form", "", prompt = "fix the form", blocks = listOf(
       WireBlock("user", "u", "", "", "", "fix the form", false, true, 0, emptyList())
@@ -230,7 +230,7 @@ class MonitorReducerTest {
     val merged = mergeApplied(next, echoed, false, false)
     assertEquals("", merged.pendingPrompt)
     assertEquals("grok-4", runtimeCaption(next.view))
-    assertEquals("Waiting for first token… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
+    assertEquals("Waiting… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
     assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
     val thought = WireBlock("thinking", "t", "", "", "", "hmm", true, true, 0, emptyList())
     val live = WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(thought))

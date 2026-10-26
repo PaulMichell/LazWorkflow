@@ -301,26 +301,42 @@ fun formatActivityClock(elapsedMs: Long): String {
   return "${secs / 60}:${(secs % 60).toString().padStart(2, '0')}"
 }
 
+const val PhaseWaiting = "Waiting…"
+const val PhaseThinking = "Thinking…"
+const val PhaseStreaming = "Streaming…"
+const val PhaseRunning = "Running…"
+const val PhaseSteering = "Steering…"
+const val PhaseConnecting = "Connecting…"
+
+fun progressPhase(name: String): String {
+  return when (name) {
+    "Waiting for first token…", "Waiting", "Waiting for model…" -> PhaseWaiting
+    "Running tools…", "Subagent…", "Working…" -> PhaseRunning
+    "Steer queued…", "Steering at next tool gap…", "Steering at next model gap…" -> PhaseSteering
+    "Re-establishing Connection" -> PhaseConnecting
+    else -> name
+  }
+}
+
 fun activityPhase(view: WireView, pending: Boolean, pendingKind: String, blocks: List<WireBlock>): String {
   if (hostHasElapsed(view.statusText)) {
     val named = view.statusText.trim().substringBeforeLast(" ").trim()
-    if (named.isNotEmpty() && named != "Ready") return named
+    if (named.isNotEmpty() && named != "Ready") return progressPhase(named)
   }
-  if (view.phase.isNotEmpty() && view.phase != "Ready") return view.phase
+  if (view.phase.isNotEmpty() && view.phase != "Ready") return progressPhase(view.phase)
   if (view.planRunning && view.statusText.isNotEmpty() && view.statusText != "Ready") return view.statusText
   val running = blocks.lastOrNull { block -> block.running }
   if (running != null) {
     return when (running.kind) {
-      "thinking" -> "Thinking…"
-      "answer" -> "Streaming…"
-      "tool" -> if (running.toolName.isNotEmpty()) running.toolName else "Running tools…"
-      "subagent" -> "Subagent…"
-      else -> "Working…"
+      "thinking" -> PhaseThinking
+      "answer" -> PhaseStreaming
+      "tool", "subagent" -> PhaseRunning
+      else -> PhaseRunning
     }
   }
-  if (pending && pendingKind == "steer") return "Steering…"
-  if (blocks.any { block -> block.kind in WorkKinds }) return "Working…"
-  return "Waiting for first token…"
+  if (pending && pendingKind == "steer") return PhaseSteering
+  if (blocks.any { block -> block.kind in WorkKinds }) return PhaseWaiting
+  return PhaseWaiting
 }
 
 fun activityCaption(
@@ -343,7 +359,7 @@ fun activityCaption(
 }
 
 fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, commandId: String = ""): MonitorUi {
-  val phase = if (steer) "Steering…" else "Waiting for first token…"
+  val phase = if (steer) PhaseSteering else PhaseWaiting
   return state.copy(
     draft = "",
     pendingPrompt = text,
