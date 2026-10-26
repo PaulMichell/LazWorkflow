@@ -142,6 +142,8 @@ data class MonitorUi(
   val promptBaseline: Set<String> = emptySet(),
   val activityStartedMs: Long = 0,
   val activityObservedMs: Int = 0,
+  val activityAppliedMs: Long = 0,
+  val clockToken: Int = 0,
   val hostGeneration: Int = 0,
   val conversationGeneration: Int = 0,
   val connectionGeneration: Int = 0,
@@ -277,10 +279,34 @@ fun hasWorkedFooter(blocks: List<WireBlock>): Boolean {
   return blocks.any { block -> block.kind == "worked" || block.body.startsWith("Worked for") }
 }
 
+fun patchSaysIdle(busy: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
+  return !busy && !sending && !planRunning
+}
+
+/** The displayed clock is this sample plus local time since the patch was applied. */
+fun patchClockBase(elapsedMs: Int, appliedAtMs: Long): Long {
+  if (appliedAtMs <= 0L) return 0L
+  val elapsed = elapsedMs.coerceAtLeast(0).toLong()
+  return (appliedAtMs - elapsed).coerceAtLeast(0L)
+}
+
+fun notePatchClock(state: MonitorUi, elapsedMs: Int, idle: Boolean, nowMs: Long): MonitorUi {
+  if (idle || nowMs <= 0L) {
+    return state.copy(activityStartedMs = 0L, activityObservedMs = 0, activityAppliedMs = nowMs.coerceAtLeast(0L))
+  }
+  val elapsed = elapsedMs.coerceAtLeast(0)
+  return state.copy(
+    activityStartedMs = patchClockBase(elapsed, nowMs),
+    activityObservedMs = elapsed,
+    activityAppliedMs = nowMs
+  )
+}
+
 fun turnStillRunning(view: WireView, pending: Boolean, blocks: List<WireBlock>, live: WireTurn? = null): Boolean {
   if (hasWorkedFooter(blocks)) return false
   if (pending || view.sending || view.busy || view.planRunning) return true
   if (blocks.any { block -> block.running }) return true
+  if (view.phase.isEmpty() && view.elapsedMs == 0) return false
   if (live != null && live.turnIndex < 0) {
     if (live.durationMs > 0) return true
     if (blocks.any { block -> block.kind in WorkKinds }) return true
@@ -378,8 +404,8 @@ fun activityCaption(
   if (!turnStillRunning(view, pending, blocks, live)) {
     val text = view.statusText.trim()
     if (!view.signedIn || text == "Not signed in" || text == "Offline") return "Offline"
-    if (text.isNotEmpty()) return text
-    return "Ready"
+    if (text.isEmpty() || hostHasElapsed(text)) return "Ready"
+    return text
   }
   val phase = activityPhase(view, pending, pendingKind, blocks)
   val start = if (startedMs > 0L) startedMs else nowMs
@@ -430,7 +456,12 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val running = turnStillRunning(next.view, pendingLeft, blocks, mergedLive)
   val observed = observedElapsedMs(next.view, mergedLive, blocks)
   val keptStart = if (current.activityStartedMs > 0L) current.activityStartedMs else next.activityStartedMs
-  val start = if (!running) 0L else activityStart(keptStart, nowMs, observed, current.activityObservedMs)
+  val patchReplaced = next.activityAppliedMs > current.activityAppliedMs
+  val start = when {
+    !running -> 0L
+    patchReplaced -> next.activityStartedMs
+    else -> activityStart(keptStart, nowMs, observed, current.activityObservedMs)
+  }
   return next.copy(
     draft = draft,
     pairHold = if (clearDisconnect) false else current.pairHold,
@@ -590,6 +621,7 @@ private fun storePatchPart(state: MonitorUi, patch: WirePatch): MonitorUi {
     patchParts = if (complete) emptyMap() else stored,
     live = liveFromPatch(flagged, patch, shown),
     reachedLive = true,
+    clockToken = state.clockToken + 1,
     resumeOnce = if (complete) false else flagged.resumeOnce
   )
 }

@@ -596,6 +596,36 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aPatchReplacesTheActivityClockBase() {
+    val clock = MutableClock(10_000L)
+    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
+    openLive(coordinator, canSend = true, canSteer = false)
+    val block = WireBlock("answer", "b1", "", "", "", "working", false, true, 0, emptyList())
+    val patch = computing.michell.monitor.protocol.WirePatch(
+      "aa", 1, 1, "turn-1", listOf(block), true, false, false, "Thinking…", true, false, true, 4_000, 1, 1
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
+    )))
+    assertEquals(6_000L, coordinator.state.activityStartedMs)
+    assertEquals("Thinking… 0:07", activityCaption(
+      coordinator.state.view, false, "", coordinator.state.activityStartedMs, 13_000L,
+      coordinator.state.live?.blocks.orEmpty(), coordinator.state.live
+    ))
+    clock.millis = 20_000L
+    val next = patch.copy(cursor = 2, elapsedMs = 1_000, busy = false, phase = "", canStop = false)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      computing.michell.monitor.protocol.encodePatch("patch-2", next)
+    )))
+    assertEquals(0L, coordinator.state.activityStartedMs)
+    assertEquals("Ready", activityCaption(
+      coordinator.state.view, false, "", coordinator.state.activityStartedMs, 30_000L,
+      coordinator.state.live?.blocks.orEmpty(), coordinator.state.live
+    ))
+  }
+
+  @Test
   fun helloOkSendsResumeWithTheCommittedCursor() {
     val coordinator = coordinator()
     openLive(coordinator, canSend = true, canSteer = false)

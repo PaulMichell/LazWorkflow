@@ -269,6 +269,19 @@ class MonitorReducerTest {
       emptyView().copy(sending = true, phase = "Thinking…", statusText = "Ready"),
       false, "", now - 724_000L, now, listOf(thought), live
     ))
+    val ticking = emptyView().copy(busy = true, phase = "Thinking…", signedIn = true, elapsedMs = 4_000)
+    val first = notePatchClock(MonitorUi(view = ticking), 4_000, false, 10_000L)
+    assertEquals(6_000L, first.activityStartedMs)
+    assertEquals("Thinking… 0:07", activityCaption(ticking, false, "", first.activityStartedMs, 13_000L))
+    val replaced = notePatchClock(first, 1_000, false, 20_000L)
+    assertEquals(19_000L, replaced.activityStartedMs)
+    assertEquals("Thinking… 0:02", activityCaption(ticking.copy(elapsedMs = 1_000), false, "", replaced.activityStartedMs, 21_000L))
+    val idleView = emptyView().copy(signedIn = true, statusText = "Thinking… 0:12", elapsedMs = 0)
+    val idle = notePatchClock(replaced, 0, true, 22_000L)
+    assertEquals(0L, idle.activityStartedMs)
+    val answer = WireBlock("answer", "a", "", "", "", "done", false, true, 0, emptyList())
+    assertFalse(turnStillRunning(idleView, false, listOf(answer), live))
+    assertEquals("Ready", activityCaption(idleView, false, "", idle.activityStartedMs, 30_000L, listOf(answer), live))
   }
 
   @Test

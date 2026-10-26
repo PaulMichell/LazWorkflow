@@ -283,7 +283,15 @@ class MonitorCoordinator(
     val immediate = message.kind in ImmediateKinds
     val resumeBefore = applied.resumeOnce
     val closedBefore = applied.closedPending
+    val clockBefore = applied.clockToken
     applied = reduceMonitor(applied, message)
+    if (applied.clockToken != clockBefore && message.kind == MessageKind.Patch) {
+      val patch = (message.inbound as? InboundPayload.Patch)?.value
+      if (patch != null) {
+        val idle = patchSaysIdle(patch.busy, patch.sending, patch.planRunning)
+        applied = notePatchClock(applied, patch.elapsedMs, idle, clock.nowMs())
+      }
+    }
     noteFetchArrival(message)
     val side = mirrorSideEffects(resumeBefore, closedBefore) + helloResume(message)
     if (!immediate) {
