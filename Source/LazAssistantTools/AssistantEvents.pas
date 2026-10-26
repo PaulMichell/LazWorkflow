@@ -85,6 +85,8 @@ Const
 Function IsAssistantProgressStatus(Const Text: String): Boolean;
 { One of the six progress words. Anything else, including a recovery sentence, paints as Waiting…. }
 Function AssistantProgressPhase(Const Phase: String): String;
+{ False when Sentence must not change the progress word. Phase is one of the six words when True. }
+Function AssistantRecoveryStatusPhase(Const Sentence: String; Out Phase: String): Boolean;
 Function FormatSteerEnvelope(Const UserText: String): String;
 Function AssistantEventToJson(Const Event: TAssistantEvent): String;
 Function AppendAssistantEventLine(Const FileName, JsonLine: String): Boolean;
@@ -166,6 +168,51 @@ Begin
     Result := Phase
   Else
     Result := AssistantPhaseWaiting;
+End;
+
+Function AssistantRecoveryStatusPhase(Const Sentence: String; Out Phase: String): Boolean;
+Begin
+  Phase := '';
+  Result := False;
+  If Sentence = '' Then
+    Exit;
+  { Plan-run sentences stay notes. They must not replace the progress word. }
+  If (Pos('The plan stopped with items still open.', Sentence) = 1) Or
+    (Pos('The plan still has open items.', Sentence) > 0) Or
+    ((Pos('Context usage ', Sentence) = 1) And (Pos('Starting a new chat', Sentence) > 0)) Then
+    Exit;
+  If (Pos(AssistantRecoveryIgnorePaint, Sentence) > 0) Or (Pos(AssistantRecoveryIgnoreCallback, Sentence) > 0) Then
+    Exit;
+  If Pos(AssistantRecoveryResumeCall, Sentence) > 0 Then
+    Begin
+      Phase := AssistantPhaseWaiting;
+      Exit(True);
+    End;
+  If Pos(AssistantRecoveryRetryHttp, Sentence) > 0 Then
+    Begin
+      Phase := AssistantPhaseConnecting;
+      Exit(True);
+    End;
+  If Pos(AssistantRecoveryRetryTool, Sentence) > 0 Then
+    Begin
+      Phase := AssistantPhaseRunning;
+      Exit(True);
+    End;
+  If Pos(AssistantRecoveryHandBackTool, Sentence) > 0 Then
+    Begin
+      Phase := AssistantPhaseWaiting;
+      Exit(True);
+    End;
+  If (Pos(AssistantRecoveryWaitCredits, Sentence) > 0) Or (Pos(AssistantRecoveryWaitRateLimit, Sentence) > 0) Then
+    Begin
+      Phase := AssistantPhaseWaiting;
+      Exit(True);
+    End;
+  If Pos(AssistantRecoveryWaitReconnect, Sentence) > 0 Then
+    Begin
+      Phase := AssistantPhaseConnecting;
+      Exit(True);
+    End;
 End;
 
 Function FormatSteerEnvelope(Const UserText: String): String;

@@ -250,6 +250,7 @@ Type
     Procedure ReleaseClaudeProcess;
     Function TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
     Procedure ClearTransportWait;
+    Procedure AdoptRecoverySentence(Const Sentence: String);
     Procedure PostRecoverySentence(Const Sentence: String);
     Function LaunchStoredCodexRun: Boolean;
     Function LaunchStoredClaudeRun: Boolean;
@@ -1225,34 +1226,40 @@ Begin
   RefreshChatDisplay(True, False);
 End;
 
+Procedure TProjectAssistantForm.AdoptRecoverySentence(Const Sentence: String);
+Var
+  Last: TTraceBlock;
+  Phase: String;
+Begin
+  If (Sentence = '') Or (csDestroying In ComponentState) Then
+    Exit;
+  If Assigned(FTrace) Then
+    Begin
+      Last := Nil;
+      If FTrace.Count > 0 Then
+        Last := FTrace[FTrace.Count - 1];
+      If (Not Assigned(Last)) Or (Last.Kind <> tbkNote) Or (Last.Body <> Sentence) Then
+        Begin
+          FTrace.AddNote(Sentence);
+          If FViewingLive And Assigned(FTraceView) Then
+            FTraceView.Sync(FTrace, True);
+        End;
+    End
+  Else
+    SetCurrentSystemNote(Sentence);
+  If FSending And AssistantRecoveryStatusPhase(Sentence, Phase) Then
+    SetStreamPhase(Phase);
+End;
+
 Procedure TProjectAssistantForm.NoteRecovery(RecoveryAction: TAssistantRecoveryAction; Const Fault: TAssistantFault);
 Var
   Sentence: String;
-  Last: TTraceBlock;
 Begin
   If csDestroying In ComponentState Then
     Exit;
   Sentence := AssistantRecoveryProgressNote(RecoveryAction, Fault.Origin, Fault.Area, Fault.ErrorClass,
     Fault.ErrorText);
-  If Sentence = '' Then
-    Exit;
-  { The elapsed timer can raise on every 50 ms poll. One note for that fault. }
-  If Assigned(FTrace) And (FTrace.Count > 0) Then
-    Begin
-      Last := FTrace[FTrace.Count - 1];
-      If Assigned(Last) And (Last.Kind = tbkNote) And (Last.Body = Sentence) Then
-        Exit;
-    End;
-  If Assigned(FTrace) Then
-    Begin
-      FTrace.AddNote(Sentence);
-      If FViewingLive And Assigned(FTraceView) Then
-        FTraceView.Sync(FTrace, True);
-    End
-  Else
-    SetCurrentSystemNote(Sentence);
-  If FSending Then
-    SetStreamPhase(Sentence);
+  AdoptRecoverySentence(Sentence);
 End;
 
 Procedure TProjectAssistantForm.SetBusyCursor(IsBusy: Boolean);
@@ -3958,16 +3965,7 @@ Procedure TProjectAssistantForm.PostRecoverySentence(Const Sentence: String);
 Begin
   If (Sentence = '') Or (csDestroying In ComponentState) Then
     Exit;
-  If Assigned(FTrace) Then
-    Begin
-      FTrace.AddNote(Sentence);
-      If FViewingLive And Assigned(FTraceView) Then
-        FTraceView.Sync(FTrace, True);
-    End
-  Else
-    SetCurrentSystemNote(Sentence);
-  If FSending Then
-    SetStreamPhase(Sentence);
+  AdoptRecoverySentence(Sentence);
   WorkflowLogger.Info('ProjectAssistant', Sentence);
 End;
 
@@ -6446,11 +6444,9 @@ Begin
   If (Event.Kind = aekTurnEnded) And (Pos('plan_write', Event.Text) > 0) Then
     FPlanWriteThisTurn := True;
   { One note per recovery event, including when the pane is not showing the live turn. }
-  If (Event.Kind = aekRecovery) And Assigned(FTrace) And (Trim(Event.Text) <> '') Then
+  If (Event.Kind = aekRecovery) And (Trim(Event.Text) <> '') Then
     Begin
-      FTrace.AddNote(Event.Text);
-      If FViewingLive And Assigned(FTraceView) Then
-        FTraceView.Sync(FTrace, True);
+      AdoptRecoverySentence(Event.Text);
       Exit;
     End;
   If Not FViewingLive Then
@@ -7111,7 +7107,10 @@ Begin
     Begin
       ApplyAssistantSnapshots(ContentSnapshot, ThinkingSnapshot);
       If ErrorText <> '' Then
-        SetStreamPhase(ErrorText);
+        If AssistantProgressPhase(ErrorText) = ErrorText Then
+          SetStreamPhase(ErrorText)
+        Else
+          AdoptRecoverySentence(ErrorText);
       Exit;
     End;
   FinishErr := ErrorText;

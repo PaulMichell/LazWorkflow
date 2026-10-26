@@ -124,6 +124,8 @@ Begin
 End;
 
 Procedure TestProgressStatus;
+Var
+  Phase: String;
 Begin
   Check('waiting is status', IsAssistantProgressStatus(AssistantPhaseWaiting));
   Check('thinking is status', IsAssistantProgressStatus(AssistantPhaseThinking));
@@ -141,6 +143,23 @@ Begin
   Check('connecting phase paints itself', AssistantProgressPhase(AssistantPhaseConnecting) = AssistantPhaseConnecting);
   Check('sentence paints as waiting', AssistantProgressPhase('Waiting for credits.') = AssistantPhaseWaiting);
   Check('empty phase paints as waiting', AssistantProgressPhase('') = AssistantPhaseWaiting);
+  Check('reconnect sentence is connecting', AssistantRecoveryStatusPhase('Connection lost. Waiting to reconnect.', Phase) And
+    (Phase = AssistantPhaseConnecting));
+  Check('credit sentence is waiting', AssistantRecoveryStatusPhase(
+    'Out of credits. Waiting for credits. Retry at 2026-01-01 00:00.', Phase) And (Phase = AssistantPhaseWaiting));
+  Check('resume sentence returns to waiting', AssistantRecoveryStatusPhase('Resuming the call.', Phase) And
+    (Phase = AssistantPhaseWaiting));
+  Check('http retry is connecting', AssistantRecoveryStatusPhase('Retrying the HTTP round.', Phase) And
+    (Phase = AssistantPhaseConnecting));
+  Check('tool retry is running', AssistantRecoveryStatusPhase('Retrying the read-only tool.', Phase) And
+    (Phase = AssistantPhaseRunning));
+  Check('hand back is waiting', AssistantRecoveryStatusPhase('Handing the tool error back to the model.', Phase) And
+    (Phase = AssistantPhaseWaiting));
+  Check('ignore note does not change phase', Not AssistantRecoveryStatusPhase('Ignoring a paint fault.', Phase));
+  Check('plan stall does not become the phase', Not AssistantRecoveryStatusPhase(
+    'The plan stopped with items still open. Waiting to reconnect.', Phase));
+  Check('plan resume does not become the phase', Not AssistantRecoveryStatusPhase(
+    'Resuming the call. The plan still has open items.', Phase));
   Check('http is error', Not IsAssistantProgressStatus('HTTP 400: invalid_grant'));
   Check('empty is error', Not IsAssistantProgressStatus(''));
   Check('access violation is error', Not IsAssistantProgressStatus('Access violation'));

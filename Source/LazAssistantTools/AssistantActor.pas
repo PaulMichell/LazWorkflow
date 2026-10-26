@@ -394,7 +394,7 @@ End;
 Procedure TAssistantActor.PostRecovery(Action: TAssistantRecoveryAction; Origin: TAssistantFaultOrigin;
   Const Area, ErrorClass, ErrorText: String);
 Var
-  Sentence: String;
+  Sentence, Phase: String;
 Begin
   { Once per decision. The 50 ms poll must not call this. }
   If FTerminalNoted Or Terminated Or (Action = araStop) Then
@@ -402,16 +402,21 @@ Begin
   Sentence := AssistantRecoveryProgressNote(Action, Origin, Area, ErrorClass, ErrorText);
   If Sentence = '' Then
     Exit;
-  EmitSnapshot(False, Sentence, True);
+  { The sentence is the recovery event. The snapshot status is a progress word, not the sentence. }
   LogEvent(aekRecovery, Sentence);
+  If AssistantRecoveryStatusPhase(Sentence, Phase) Then
+    EmitSnapshot(False, Phase, True);
 End;
 
 Procedure TAssistantActor.PostConnectionNote(Const Sentence: String);
+Var
+  Phase: String;
 Begin
   If FTerminalNoted Or Terminated Or (Sentence = '') Then
     Exit;
-  EmitSnapshot(False, Sentence, True);
   LogEvent(aekRecovery, Sentence);
+  If AssistantRecoveryStatusPhase(Sentence, Phase) Then
+    EmitSnapshot(False, Phase, True);
 End;
 
 Procedure TAssistantActor.ApplyCreditWait(Const ErrorText, Body, RetryAfter: String);
