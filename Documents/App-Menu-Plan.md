@@ -59,7 +59,7 @@ The mirror is in-memory on the monitor session. Do not add a second conversation
 
 ### 3.1 One dirty pump
 
-Status: not started
+Status: complete
 
 Add `TouchAssistantMirror` to `AssistantSessionObserve.pas`. It increments a counter under the existing lock and returns. A nil listener does not matter: the counter moves either way, and a missing monitor never observes it. Do not build JSON and do not call `TThread.Queue` from this procedure.
 
