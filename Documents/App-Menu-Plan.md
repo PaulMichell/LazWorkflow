@@ -99,7 +99,7 @@ If the epoch differs, or the cursor is below the oldest ring record, or the curs
 
 ### 3.4 Recovery is not host_busy
 
-Status: not started
+Status: complete
 
 Split the session outbound queue into three lanes. Control carries ping, pong, bye, error, approval, and command results. Live carries the current unsent patch part-set only. Bulk carries catchup, snapshot, plan, and image bytes.
 
