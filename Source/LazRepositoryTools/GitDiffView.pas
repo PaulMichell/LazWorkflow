@@ -138,6 +138,7 @@ Type
     Procedure ApplyMixedDiffHighlighter(Const SourceFileName: String);
     Function CreateOwnedLanguageHighlighter(Const SourceFileName: String): TObject;
     Procedure ShowEditorPane;
+    Procedure ShowBlankPane;
     Procedure ShowBinaryMessage(Const TitleText: String);
     Function TryShowImageFromStream(Const TitleText: String; Stream: TStream): Boolean;
     Function TryShowBinaryOrImage(Const TitleText, RelPath: String; Const Sha: String;
@@ -320,7 +321,11 @@ Begin
   Try
     EnsureAppearanceReady;
     ApplyViewMode;
-    ShowEditorPane;
+    { An empty editor keeps its gutter and scroll bars. Leave the plain panel instead. }
+    If (FDiffText <> '') Or (Assigned(DiffEditor) And (DiffEditor.Lines.Count > 0)) Then
+      ShowEditorPane
+    Else
+      ShowBlankPane;
     UpdateActionEnabled;
   Except
     On E: Exception Do
@@ -1302,6 +1307,26 @@ Begin
     End;
 End;
 
+Procedure TGitDiffView.ShowBlankPane;
+Begin
+  If Assigned(PreviewPicture) Then
+    PreviewPicture.Clear;
+  If Assigned(BinaryLabel) Then
+    BinaryLabel.Visible := False;
+  If Assigned(ImagePaintBox) Then
+    ImagePaintBox.Visible := False;
+  If Assigned(DiffEditor) Then
+    Begin
+      DiffEditor.Lines.Clear;
+      DiffEditor.Visible := False;
+    End;
+  If Assigned(PreviewPanel) Then
+    Begin
+      PreviewPanel.Visible := True;
+      PreviewPanel.BringToFront;
+    End;
+End;
+
 Procedure TGitDiffView.ShowBinaryMessage(Const TitleText: String);
 Begin
   CancelPendingScroll;
@@ -1782,9 +1807,7 @@ Begin
   FBrowseSha := '';
   ClearDisplayMap;
   ClearLineSelection(False);
-  ShowEditorPane;
-  If Assigned(DiffEditor) Then
-    DiffEditor.Lines.Clear;
+  ShowBlankPane;
   If Assigned(TitleLabel) Then
     TitleLabel.Caption := 'Diff';
   ClearTreeData;
