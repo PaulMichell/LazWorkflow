@@ -120,7 +120,7 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
       Font.Height = -13
       Font.Name = 'Monospace'
       ParentFont = False
-      ScrollBars = ssAutoBoth
+      ScrollBars = ssAutoVertical
       TabOrder = 0
       Visible = False
       WordWrap = False

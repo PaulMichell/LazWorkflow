@@ -53,6 +53,9 @@ Type
     FViewMode: TMarkdownViewMode;
     FDiskAge: LongInt;
     FPendingDiskReload: Boolean;
+    FSnippet: Boolean;
+    FSnippetKey: String;
+    FSnippetTitle: String;
     PreviewControl: TStyledMemo;
     PreviewLoader: TStyledMarkdown;
     Procedure EnsurePreview;
@@ -73,9 +76,12 @@ Type
     Constructor Create(TheOwner: TComponent); Override;
     Function OpenFile(Const FileName: String): Boolean;
     Function PromptOpen: Boolean;
+    { Read-only preview of one section. Not a project file, so Save and reload stay off. }
+    Procedure LoadSnippet(Const Key, Title, Body: String);
     { Re-read from disk (e.g. after LLM write_markdown). Skips if dirty unless Force. }
     Function ReloadFromDisk(Force: Boolean = False): Boolean;
     Property FileName: String Read FFileName;
+    Property SnippetKey: String Read FSnippetKey;
     Property Dirty: Boolean Read FDirty;
     Property ViewMode: TMarkdownViewMode Read FViewMode;
   End;
@@ -84,6 +90,8 @@ Type
   When the viewer is already open, reloads content from disk. }
 Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
+{ Same preview as a plan file, limited to one section. Reuses the window for Key. }
+Function OpenMarkdownSnippet(Const Key, Title, Body: String): TAssistantMarkdownForm;
 { Force-reload any open viewer for this path (no-op if none open). }
 Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True;
   BringForward: Boolean = True): Boolean;
@@ -139,6 +147,45 @@ Begin
       Form.Show;
       Form.BringToFront;
     End;
+End;
+
+Function FindMarkdownSnippet(Const Key: String): TAssistantMarkdownForm;
+Var
+  I: Integer;
+  Form: TAssistantMarkdownForm;
+Begin
+  Result := Nil;
+  If (Key = '') Or (Not Assigned(MarkdownForms)) Then
+    Exit;
+  For I := 0 To MarkdownForms.Count - 1 Do
+    Begin
+      Form := TAssistantMarkdownForm(MarkdownForms[I]);
+      If Assigned(Form) And (Key <> '') And (Form.SnippetKey = Key) Then
+        Begin
+          Result := Form;
+          Exit;
+        End;
+    End;
+End;
+
+Function OpenMarkdownSnippet(Const Key, Title, Body: String): TAssistantMarkdownForm;
+Var
+  OwnerComp: TComponent;
+Begin
+  Result := FindMarkdownSnippet(Key);
+  If Assigned(Result) Then
+    Begin
+      Result.LoadSnippet(Key, Title, Body);
+      Result.Show;
+      Result.BringToFront;
+      Exit;
+    End;
+  OwnerComp := Application;
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.OwningComponent) Then
+    OwnerComp := LazarusIDE.OwningComponent;
+  Result := TAssistantMarkdownForm.Create(OwnerComp);
+  Result.LoadSnippet(Key, Title, Body);
+  Result.Show;
 End;
 
 Function OpenMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
@@ -213,6 +260,9 @@ Begin
   FViewMode := mvmPreview;
   FDiskAge := -1;
   FPendingDiskReload := False;
+  FSnippet := False;
+  FSnippetKey := '';
+  FSnippetTitle := '';
   PreviewControl := Nil;
   PreviewLoader := Nil;
 End;
@@ -271,6 +321,8 @@ Begin
   PreviewControl.ReadOnly := True;
   PreviewControl.ShowCaret := False;
   PreviewControl.WordWrap := True;
+  { Hide the bar when the preview fits. Word wrap is already on, so this is vertical only. }
+  PreviewControl.ScrollBars := ssAutoVertical;
   PreviewControl.ParentFont := False;
   PreviewControl.Visible := True;
   PreviewLoader := TStyledMarkdown.Create(PreviewControl);
@@ -301,11 +353,13 @@ Procedure TAssistantMarkdownForm.UpdateCaption;
 Var
   Title: String;
 Begin
-  If FFileName = '' Then
+  If FSnippet And (FSnippetTitle <> '') Then
+    Title := FSnippetTitle
+  Else If FFileName = '' Then
     Title := 'Markdown'
   Else
     Title := ExtractFileName(FFileName);
-  If FDirty Then
+  If FDirty And (Not FSnippet) Then
     Title := Title + ' *';
   Caption := Title;
 End;
@@ -314,7 +368,9 @@ Procedure TAssistantMarkdownForm.UpdateStatus;
 Var
   LeftText, CentreText, RightText: String;
 Begin
-  If FFileName = '' Then
+  If FSnippet Then
+    LeftText := 'Review'
+  Else If FFileName = '' Then
     LeftText := 'No file'
   Else
     LeftText := FFileName;
@@ -322,7 +378,9 @@ Begin
     CentreText := 'Preview'
   Else
     CentreText := 'Source';
-  If (FFileName <> '') And FPendingDiskReload And (Not FileExists(FFileName)) Then
+  If FSnippet Then
+    RightText := 'Read only'
+  Else If (FFileName <> '') And FPendingDiskReload And (Not FileExists(FFileName)) Then
     RightText := 'Deleted on disk'
   Else If FDirty And DiskCopyIsNewer Then
     RightText := 'Modified; disk changed (local edits kept)'
@@ -339,6 +397,13 @@ End;
 
 Procedure TAssistantMarkdownForm.RefreshActionState;
 Begin
+  If FSnippet Then
+    Begin
+      OpenAction.Enabled := False;
+      SaveAction.Enabled := False;
+      Exit;
+    End;
+  OpenAction.Enabled := True;
   SaveAction.Enabled := (FFileName <> '') And FDirty;
 End;
 
@@ -355,7 +420,7 @@ End;
 Function TAssistantMarkdownForm.ConfirmDiscardEdits: Boolean;
 Begin
   Result := True;
-  If Not FDirty Then
+  If FSnippet Or (Not FDirty) Then
     Exit;
   Case MessageDlg('Save changes to ' + ExtractFileName(FFileName) + ' before closing?',
     mtConfirmation, [mbYes, mbNo, mbCancel], 0) Of
@@ -587,9 +652,43 @@ Begin
   UpdateStatus;
 End;
 
+Procedure TAssistantMarkdownForm.LoadSnippet(Const Key, Title, Body: String);
+Begin
+  FSnippet := True;
+  FSnippetKey := Key;
+  FSnippetTitle := Title;
+  FFileName := '';
+  FPendingDiskReload := False;
+  FDiskAge := -1;
+  WatchTimer.Enabled := False;
+  DebounceTimer.Enabled := False;
+  FLoading := True;
+  Try
+    SourceMemo.ReadOnly := True;
+    SourceMemo.Text := Body;
+    FViewMode := mvmPreview;
+    Try
+      ApplyPreviewText(Body);
+    Except
+      On E: Exception Do
+        Begin
+          WorkflowLogger.Warning('AssistantMarkdown', 'Snippet preview failed: ' + E.Message);
+          ApplyPreviewText('');
+        End;
+    End;
+    ApplyViewMode;
+    FDirty := False;
+  Finally
+    FLoading := False;
+  End;
+  UpdateCaption;
+  UpdateStatus;
+  RefreshActionState;
+End;
+
 Procedure TAssistantMarkdownForm.SourceMemoChange(Sender: TObject);
 Begin
-  If FLoading Then
+  If FLoading Or FSnippet Then
     Exit;
   SetDirty(True);
 End;
