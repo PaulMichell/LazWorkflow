@@ -160,7 +160,7 @@ Do not add a phone control for skills.
 
 ### 5.2 Phone model section
 
-Status: not started
+Status: complete
 
 Store the model rows, backend, and note on `MonitorUi`. The selected row is the id equal to `view.model`. A tap sends `set_model`. Rows are disabled while disconnected, sending, or plan-running.
 
