@@ -1202,6 +1202,15 @@ Begin
     Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
   Else If (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkNewPlan)) Then
     Result := FHostFlags.Sending
+  Else If Kind = Ord(mmkSelectTarget) Then
+    Begin
+      { A bind stops in-flight work. Review is still the form's check. }
+      Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+      If FHostFlags.Sending Then
+        MessageText := 'Wait for the current reply to finish.'
+      Else If FHostFlags.PlanAgentRunning Then
+        MessageText := 'A plan run is already active.';
+    End
   Else If Kind = Ord(mmkSteer) Then
     Begin
       Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
@@ -1381,7 +1390,7 @@ Begin
     mmkResume:
       HandleResume(Message.Id, Message.PayloadJson);
     mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
-    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
+    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
   Else
     If (FState = mssLive) Or (FState = mssBusy) Then

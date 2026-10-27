@@ -113,6 +113,7 @@ Type
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
+    Procedure PushTargets(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
     Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
@@ -1080,6 +1081,24 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorBridge.PushTargets(Form: TProjectAssistantForm);
+Var
+  Paths, Captions: TStringList;
+  Current: String;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorTargetChoices(Paths, Captions, Current);
+    SendJson(EncodeMonitorTargets(HostId, Current, Paths, Captions));
+  Finally
+    Captions.Free;
+    Paths.Free;
+  End;
+End;
+
 Procedure TAssistantMonitorBridge.DeliverNotice(Job: TMonitorNoticeJob);
 Var
   Form: TProjectAssistantForm;
@@ -1105,6 +1124,7 @@ Begin
         Begin
           Form.FillMonitorView(View);
           SendJson(EncodeMonitorTarget(HostId, View.TargetKind, View.TargetDisplay, View.TargetRoot));
+          PushTargets(Form);
         End;
     asnPlan:
       PushPlan(Form);
@@ -1254,6 +1274,13 @@ Begin
         If Not DecodeMonitorPath(PayloadJson, Path) Then
           Path := '';
         Result := Form.RemoteSelectPlan(Path, ErrorText);
+      End;
+    Ord(mmkSelectTarget):
+      Begin
+        { An empty path is Current Project. A missing path is not that value. }
+        If Not DecodeMonitorPath(PayloadJson, Path) Then
+          Exit;
+        Result := Form.RemoteSelectTarget(Path, ErrorText);
       End;
     Ord(mmkNewPlan):
       Begin

@@ -35,6 +35,20 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun targetChoiceKeepsAnEmptyProjectPath() {
+    val wire = encodeTargets("targets", "", listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")))
+    val envelope = tryDecodeEnvelope(wire)
+    assertTrue(envelope.ok)
+    assertEquals(MessageKind.Targets, envelope.message.kind)
+    val targets = decodeTargets(envelope.message.payloadJson)
+    assertEquals("", targets?.current)
+    assertEquals(listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")), targets?.choices)
+    val command = encodePath(MessageKind.SelectTarget, "select-target", "")
+    assertEquals("", decodePath(tryDecodeEnvelope(command).message.payloadJson))
+    assertEquals("/work/My Folder", decodePath(tryDecodeEnvelope(encodePath(MessageKind.SelectTarget, "select-target-space", "/work/My Folder")).message.payloadJson))
+  }
+
+  @Test
   fun helloShapesMatchTheHostFrames() {
     val first = encodeHello("hello-first", "Phone", "1", "")
     assertFalse(first.contains("client_id"))

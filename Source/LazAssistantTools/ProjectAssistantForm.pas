@@ -203,6 +203,7 @@ Type
     FRefreshingPlans: Boolean;
     FTargetPaths: TStringList;
     FTargetRestored: Boolean;
+    Function TryApplyTarget(Const Directory: String; Out Note: String): Boolean;
     Procedure ApplyTarget(Const Directory: String);
   Private
 
@@ -551,6 +552,8 @@ Type
     Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
     /// Copies the visible plan combobox captions and their registered paths without scanning files.
     Procedure FillMonitorPlanChoices(Paths, Captions: TStrings);
+    /// Same rows and limit as RefreshTargetChoices. No package row and no browse action.
+    Procedure FillMonitorTargetChoices(Paths, Captions: TStrings; Out Current: String);
     /// Copies LoadAssistantTasks. NeedsNote uses AssistantTaskNeedsUserNote.
     Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
     Function RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
@@ -559,6 +562,8 @@ Type
     Function RemoteSelectMode(Const ModeText: String; Out ErrorText: String): Boolean;
     Function RemoteNewConversation(Out ErrorText: String): Boolean;
     Function RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
+    /// Empty Directory is Current Project. Does not open a folder dialog.
+    Function RemoteSelectTarget(Const Directory: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
@@ -1037,21 +1042,18 @@ Begin
   UpdateTargetComboHint(Nil);
 End;
 
-Procedure TProjectAssistantForm.ApplyTarget(Const Directory: String);
+Function TProjectAssistantForm.TryApplyTarget(Const Directory: String; Out Note: String): Boolean;
 Var
-  Note, KeptPlan, Resolved, Err: String;
+  KeptPlan, Resolved, Err: String;
 Begin
+  Result := False;
+  Note := '';
   KeptPlan := GetActivePlanRelativePath;
   PersistSession;
   If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
   If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
   If Not AssistantTarget.SelectFolder(Directory, Note) Then
-    Begin
-      RunAssistantModal(Note, mtError, [mbOK], 0);
-      RefreshTargetChoices(Nil);
-      AssistantSessionObserve.AssistantSessionObserve(asnTarget);
-      Exit;
-    End;
+    Exit;
   If AssistantTarget.Kind = atkFolder Then
     RememberAssistantTarget(AssistantTarget.Root)
   Else
@@ -1067,7 +1069,112 @@ Begin
       UpdateWorkActions;
     End;
   RefreshTargetChoices(Nil);
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.ApplyTarget(Const Directory: String);
+Var
+  Note: String;
+Begin
+  If Not TryApplyTarget(Directory, Note) Then
+    Begin
+      RunAssistantModal(Note, mtError, [mbOK], 0);
+      RefreshTargetChoices(Nil);
+      AssistantSessionObserve.AssistantSessionObserve(asnTarget);
+      Exit;
+    End;
   AssistantSessionObserve.AssistantSessionObserve(asnTarget);
+End;
+
+Procedure TProjectAssistantForm.FillMonitorTargetChoices(Paths, Captions: TStrings; Out Current: String);
+Var
+  Index: Integer;
+Begin
+  Current := '';
+  If Assigned(Paths) Then
+    Paths.Clear;
+  If Assigned(Captions) Then
+    Captions.Clear;
+  If Not Assigned(Paths) Or Not Assigned(Captions) Then
+    Exit;
+  RefreshTargetChoices(Nil);
+  If AssistantTarget.Kind = atkProject Then
+    Current := ''
+  Else
+    Current := ExcludeTrailingPathDelimiter(AssistantTarget.Root);
+  If Not Assigned(FTargetPaths) Or Not Assigned(TargetCombo) Then
+    Exit;
+  For Index := 0 To FTargetPaths.Count - 1 Do
+    Begin
+      Paths.Add(FTargetPaths[Index]);
+      If Index < TargetCombo.Items.Count Then
+        Captions.Add(TargetCombo.Items[Index])
+      Else
+        Captions.Add('');
+    End;
+End;
+
+Function TProjectAssistantForm.RemoteSelectTarget(Const Directory: String; Out ErrorText: String): Boolean;
+Var
+  Path, Note: String;
+  Index: Integer;
+  Listed: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  { Before any call that can stop a stream. BindToActiveProject stops one. }
+  If FReviewInProgress Then
+    Begin
+      ErrorText := 'Wait for the current review to finish.';
+      Exit;
+    End;
+  If FSending Then
+    Begin
+      ErrorText := 'Wait for the current reply to finish.';
+      Exit;
+    End;
+  If FPlanAgentRunning Then
+    Begin
+      ErrorText := 'A plan run is already active.';
+      Exit;
+    End;
+  Path := Trim(Directory);
+  If Path <> '' Then
+    Path := ExcludeTrailingPathDelimiter(Path);
+  RefreshTargetChoices(Nil);
+  If (Path = '') And (AssistantTarget.Kind = atkProject) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If (Path <> '') And (AssistantTarget.Kind = atkFolder) And
+    (CompareFilenames(Path, ExcludeTrailingPathDelimiter(AssistantTarget.Root)) = 0) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  Listed := False;
+  If Assigned(FTargetPaths) Then
+    For Index := 0 To FTargetPaths.Count - 1 Do
+      If CompareFilenames(FTargetPaths[Index], Path) = 0 Then
+        Begin
+          Listed := True;
+          Break;
+        End;
+  If Not Listed Then
+    Begin
+      ErrorText := 'That target is no longer in the desktop list.';
+      Exit;
+    End;
+  If Not TryApplyTarget(Path, Note) Then
+    Begin
+      ErrorText := Note;
+      Exit;
+    End;
+  { BindToActiveProject reloads the store and does not publish a snapshot. }
+  AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
+  AssistantSessionObserve.AssistantSessionObserve(asnTarget);
+  Result := True;
 End;
 
 Procedure TProjectAssistantForm.TargetChoiceChanged(Sender: TObject);

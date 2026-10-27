@@ -674,6 +674,53 @@ Begin
   ExpectRejected('old catalogue', 'protocol', True);
 End;
 
+Procedure TestSelectTarget;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Flags.CanChangeMode := True;
+    Session.SetHostFlags(Flags);
+    Check('select_target starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target', ''));
+    Check('empty path select_target is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectTarget)));
+    Check('empty path select_target sends no error', Carrier.SentCount = 0);
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target-busy', '/work/Other'));
+    Check('sending select_target is not queued', Sink.Calls = 0);
+    Check('sending select_target error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('sending select_target sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait for the current reply to finish.'));
+    Flags.Sending := False;
+    Flags.PlanAgentRunning := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target-plan', '/work/Other'));
+    Check('plan-running select_target is not queued', Sink.Calls = 0);
+    Check('plan-running select_target is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
+      (Message.Reason = 'host_busy'));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
@@ -902,6 +949,7 @@ Begin
       TestHmac;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
+      TestSelectTarget;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;

@@ -94,7 +94,9 @@ Type
     mmkResume,
     mmkPatch,
     mmkCatchup,
-    mmkConversationClosed
+    mmkConversationClosed,
+    mmkTargets,
+    mmkSelectTarget
   );
 
   TMonitorMessage = Record
@@ -160,6 +162,16 @@ Type
     Kind: String;
     Display: String;
     Root: String;
+  End;
+
+  TMonitorTargetChoice = Record
+    Path: String;
+    Caption: String;
+  End;
+
+  TMonitorTargetsMessage = Record
+    Current: String;
+    Choices: Array Of TMonitorTargetChoice;
   End;
 
   TMonitorPathMessage = Record
@@ -351,6 +363,8 @@ Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
 Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
 Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
 Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
+Function DecodeMonitorTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
@@ -497,6 +511,8 @@ Begin
     mmkPatch: Result := 'patch';
     mmkCatchup: Result := 'catchup';
     mmkConversationClosed: Result := 'conversation_closed';
+    mmkTargets: Result := 'targets';
+    mmkSelectTarget: Result := 'select_target';
   Else
     Result := '';
   End;
@@ -1183,10 +1199,71 @@ Begin
   End;
 End;
 
+Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
+Var
+  Payload, Choice: TJSONObject;
+  Choices: TJSONArray;
+  Index: Integer;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('current', Current);
+  Choices := TJSONArray.Create;
+  Payload.Add('choices', Choices);
+  If Assigned(Paths) And Assigned(Captions) Then
+    For Index := 0 To Paths.Count - 1 Do
+      Begin
+        If Index >= Captions.Count Then
+          Break;
+        Choice := TJSONObject.Create;
+        Choice.Add('path', Paths[Index]);
+        Choice.Add('caption', Captions[Index]);
+        Choices.Add(Choice);
+      End;
+  Result := EncodeWith(mmkTargets, Id, Payload);
+End;
+
+Function DecodeMonitorTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Var
+  Data, Node, Item: TJSONData;
+  Obj, Choice: TJSONObject;
+  Arr: TJSONArray;
+  Index: Integer;
+Begin
+  Result := False;
+  Targets.Current := '';
+  SetLength(Targets.Choices, 0);
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not ReadString(Obj, 'current', True, Targets.Current) Then
+      Exit;
+    Node := Obj.Find('choices');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    SetLength(Targets.Choices, Arr.Count);
+    For Index := 0 To Arr.Count - 1 Do
+      Begin
+        Item := Arr.Items[Index];
+        If Not (Item Is TJSONObject) Then
+          Exit;
+        Choice := TJSONObject(Item);
+        Targets.Choices[Index].Path := '';
+        Targets.Choices[Index].Caption := '';
+        If Not ReadString(Choice, 'path', True, Targets.Choices[Index].Path) Or
+          Not ReadString(Choice, 'caption', True, Targets.Choices[Index].Caption) Then
+          Exit;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Begin
   Result := '';
-  If (Kind <> mmkSelectPlan) And (Kind <> mmkRemovePlan) Then
+  If (Kind <> mmkSelectPlan) And (Kind <> mmkRemovePlan) And (Kind <> mmkSelectTarget) Then
     Exit;
   Result := EncodeOneString(Kind, Id, 'path', Path);
 End;

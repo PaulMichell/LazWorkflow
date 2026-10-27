@@ -70,7 +70,9 @@ enum class MessageKind(val wireName: String) {
   Resume("resume"),
   Patch("patch"),
   Catchup("catchup"),
-  ConversationClosed("conversation_closed");
+  ConversationClosed("conversation_closed"),
+  Targets("targets"),
+  SelectTarget("select_target");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -238,6 +240,10 @@ data class ApprovalNotice(
 )
 
 data class PlanChoice(val path: String, val caption: String)
+
+data class TargetChoice(val path: String, val caption: String)
+
+data class TargetsMessage(val current: String, val choices: List<TargetChoice>)
 
 data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
 
@@ -703,8 +709,36 @@ fun decodeTarget(obj: JsonValue.Obj): TargetMessage? {
 }
 
 fun encodePath(kind: MessageKind, id: String, path: String): String {
-  if (kind != MessageKind.SelectPlan && kind != MessageKind.RemovePlan) return ""
+  if (kind != MessageKind.SelectPlan && kind != MessageKind.RemovePlan && kind != MessageKind.SelectTarget) return ""
   return encodeOneString(kind, id, "path", path)
+}
+
+fun encodeTargets(id: String, current: String, choices: List<TargetChoice>): String {
+  val payload = JsonObjectBuilder()
+  payload.add("current", current)
+  payload.add("choices", JsonValue.Arr(choices.map { choice ->
+    val row = JsonObjectBuilder()
+    row.add("path", choice.path)
+    row.add("caption", choice.caption)
+    row.build()
+  }))
+  return encodeEnvelope(MessageKind.Targets, id, payload.build())
+}
+
+fun decodeTargets(payloadJson: String): TargetsMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeTargets(obj)
+}
+
+fun decodeTargets(obj: JsonValue.Obj): TargetsMessage? {
+  val current = obj.readString("current", true)
+  if (!current.ok) return null
+  val choices = rowsFrom(obj.field("choices")) { choice ->
+    val path = choice.readString("path", true)
+    val caption = choice.readString("caption", true)
+    if (!path.ok || !caption.ok) null else TargetChoice(path.value, caption.value)
+  } ?: return null
+  return TargetsMessage(current.value, choices)
 }
 
 fun decodePath(payloadJson: String): String? {

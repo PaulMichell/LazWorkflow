@@ -398,6 +398,25 @@ Begin
     CompareMem(@Joined[0], @ImageBytes[0], Length(ImageBytes)));
 End;
 
+Procedure AddTargetSamples;
+Var
+  Paths, Captions: TStringList;
+Begin
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Paths.Add('');
+    Captions.Add('Current Project');
+    Paths.Add('/work/Other');
+    Captions.Add('Other');
+    AddSample('targets', mmkTargets, EncodeMonitorTargets('targets', '', Paths, Captions));
+  Finally
+    Captions.Free;
+    Paths.Free;
+  End;
+  AddSample('select-target', mmkSelectTarget, EncodeMonitorPath(mmkSelectTarget, 'select-target', ''));
+End;
+
 Procedure BuildSamples;
 Var
   View: TAssistantMonitorView;
@@ -528,6 +547,7 @@ Begin
     Payload.Free;
   End;
   AddSample('target', mmkTarget, EncodeMonitorTarget('target', 'project', 'LazWorkflow', '/work/LazWorkflow'));
+  AddTargetSamples;
   PlanRows[0] := SamplePlanRow;
   AddSample('plan', mmkPlan, EncodeMonitorPlan('plan', 'Documents/Plan.md', 'Monitor plan', False, PlanRows));
   AddSample('select-plan', mmkSelectPlan, EncodeMonitorPath(mmkSelectPlan, 'select-plan', 'Documents/Plan.md'));
@@ -588,6 +608,7 @@ Var
   Turn: TAssistantMonitorTurn;
   ModeMessage: TMonitorModeMessage;
   Target: TMonitorTargetMessage;
+  Targets: TMonitorTargetsMessage;
   Plan: TMonitorPathMessage;
   Index, Decoded: Integer;
   Command: TMonitorTaskCommand;
@@ -679,6 +700,12 @@ Begin
         (Length(Rows.PlanRows) = 1) And (Rows.PlanRows[0].Title = 'Codec tests'));
     mmkSelectPlan, mmkRemovePlan:
       Check(Sample.Name + ' path', DecodeMonitorPath(Message.PayloadJson, Path) And (Path = 'Documents/Plan.md'));
+    mmkTargets:
+      Check('targets fields', DecodeMonitorTargets(Message.PayloadJson, Targets) And (Targets.Current = '') And
+        (Length(Targets.Choices) = 2) And (Targets.Choices[0].Path = '') And
+        (Targets.Choices[0].Caption = 'Current Project') And (Targets.Choices[1].Path = '/work/Other'));
+    mmkSelectTarget:
+      Check('select_target empty path', DecodeMonitorPath(Message.PayloadJson, Path) And (Path = ''));
     mmkNewPlan:
       Check('new_plan title', DecodeMonitorNewPlan(Message.PayloadJson, Plan) And Plan.HasTitle And (Plan.Title = 'Monitor plan'));
     mmkWorkOnPlan:
@@ -910,6 +937,17 @@ Begin
   Check('first patch sends every block', Length(Dirty) = 2);
 End;
 
+Procedure TestSelectTargetPathIsNotAnId;
+Var
+  Message: TMonitorMessage;
+  ErrorText, Path, Json: String;
+Begin
+  Json := EncodeMonitorPath(mmkSelectTarget, 'select-target-space', '/work/My Folder');
+  Check('folder path encodes', Json <> '');
+  Check('folder path envelope', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And (Message.Kind = mmkSelectTarget));
+  Check('folder path is not an id check', DecodeMonitorPath(Message.PayloadJson, Path) And (Path = '/work/My Folder'));
+End;
+
 Procedure TestOldCatalogue;
 Var
   Message: TMonitorMessage;
@@ -1124,6 +1162,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestSelectTargetPathIsNotAnId;
   TestPatchOverCap;
   TestVersion2PatchAndClosed;
   TestOldCatalogue;
