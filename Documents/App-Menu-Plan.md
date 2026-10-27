@@ -210,7 +210,7 @@ The phone status field `approval_caption` is the short word Ask, Auto, or Always
 
 ### 7.1 Host list and set_permissions
 
-Status: not started
+Status: complete
 
 Add a host-to-client `permissions` frame and a client-to-host `set_permissions` command. Catalogue version stays 1. Do not name the command `set_mode`. That name is the operating mode.
 
