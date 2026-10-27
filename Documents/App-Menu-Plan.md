@@ -26,7 +26,7 @@ Drop the row's start padding from 16dp to 4dp so the menu icon uses the same ins
 
 ### 1.2 Left flyout
 
-Status: not started
+Status: complete
 
 Open a Material 3 `ModalNavigationDrawer` from the start edge. Use the default sheet width so a strip of the page stays visible on the right, the same proportion Gmail uses. Scrim the page. Close on scrim tap, on system back, and after a row is chosen.
 
