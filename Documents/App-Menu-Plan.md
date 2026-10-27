@@ -98,7 +98,7 @@ On success, call the same `SelectFolder` and `BindToActiveProject` path the comb
 
 ### 3.2 Phone target section
 
-Status: not started
+Status: complete
 
 Store `targetChoices` on `MonitorUi`. Reduce a `targets` frame into that list and remember `current`. A `target` frame whose `root` changed already clears `planChoices`. Clear `targetChoices` and the conversation list on that same root change. Do not clear the model, reasoning, or permissions lists. Those belong to the connection, not the folder.
 
