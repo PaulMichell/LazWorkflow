@@ -192,7 +192,7 @@ The remote helper uses the effort branch of `ApplySamplingChange` and does not s
 
 ### 6.2 Phone reasoning section
 
-Status: not started
+Status: complete
 
 The section label is "Reasoning Level". Store the rows and the note on `MonitorUi`. The selected row is the choice whose id equals `current`, and an empty id is a real row when the host sent one. A tap sends `set_reasoning`. Rows are disabled while disconnected, sending, or plan-running.
 
