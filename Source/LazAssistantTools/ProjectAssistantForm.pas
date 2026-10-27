@@ -226,7 +226,8 @@ Type
     FActiveBackend: String;
     FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
-    FPublishSamplingLists: Boolean;
+    FPublishModelList: Boolean;
+    FPublishReasoningList: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval, FCodexModelsJson: String;
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -576,10 +577,12 @@ Type
     Procedure FillMonitorModelChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
     /// Same rows as FillEffortFooterMenu. Does not refresh a provider catalogue.
     Procedure FillMonitorReasoningChoices(Ids, Captions: TStrings; Out Current, Note: String);
-    /// True once after a connection reload. The monitor pushes models and reasoning after status.
-    Function TakeSamplingListPublish: Boolean;
+    /// True once after a connection reload. The monitor pushes the requested lists after status.
+    Function TakeSamplingListPublish(Out PublishModels, PublishReasoning: Boolean): Boolean;
     /// Does not open a dialog. A matching model id is a success no-op.
     Function RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
+    /// Does not open a dialog. A matching stored effort id is a success no-op.
+    Function RemoteSelectReasoning(Const Level: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
@@ -1450,10 +1453,13 @@ Begin
   Note := 'This connection does not set an effort level.';
 End;
 
-Function TProjectAssistantForm.TakeSamplingListPublish: Boolean;
+Function TProjectAssistantForm.TakeSamplingListPublish(Out PublishModels, PublishReasoning: Boolean): Boolean;
 Begin
-  Result := FPublishSamplingLists;
-  FPublishSamplingLists := False;
+  PublishModels := FPublishModelList;
+  PublishReasoning := FPublishReasoningList;
+  Result := PublishModels Or PublishReasoning;
+  FPublishModelList := False;
+  FPublishReasoningList := False;
 End;
 
 Function TProjectAssistantForm.RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
@@ -1504,6 +1510,61 @@ Begin
     Begin
       ErrorText := Note;
       Exit;
+    End;
+  Result := True;
+End;
+
+Function TProjectAssistantForm.RemoteSelectReasoning(Const Level: String; Out ErrorText: String): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Current, Note: String;
+  Index: Integer;
+  Listed: Boolean;
+  DialogKind: TMsgDlgType;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Or FPlanAgentRunning Or FReviewInProgress Then
+    Begin
+      ErrorText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
+      Exit;
+    End;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    FillMonitorReasoningChoices(Ids, Captions, Current, Note);
+    Listed := False;
+    For Index := 0 To Ids.Count - 1 Do
+      If Ids[Index] = Level Then
+        Begin
+          Listed := True;
+          Break;
+        End;
+    If Not Listed Then
+      Begin
+        ErrorText := 'That reasoning level is not in the list.';
+        Exit;
+      End;
+    { Compare the stored id. EffortBarCaption('') is Default, not this empty id. }
+    If Level = FActiveEffort Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  If Not TryApplySamplingChange('', Level, '', False, True, False, Note, DialogKind) Then
+    Begin
+      ErrorText := Note;
+      Exit;
+    End;
+  { The reload asked for both lists. This save publishes reasoning after status. }
+  If FPublishModelList Or FPublishReasoningList Then
+    Begin
+      FPublishModelList := False;
+      FPublishReasoningList := True;
     End;
   Result := True;
 End;
@@ -9201,7 +9262,8 @@ Begin
       FReloadConnectionAfterSend := True;
       Exit;
     End;
-  FPublishSamplingLists := True;
+  FPublishModelList := True;
+  FPublishReasoningList := True;
   LoadConnectionSettings;
   RefreshFromConfig;
   ApplyActiveMode;

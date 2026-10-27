@@ -12,7 +12,7 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-27: models, set_model, and reasoning stay in this table.
+  Reviewed 2026-10-27: models, set_model, reasoning, and set_reasoning stay in this table.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -102,7 +102,8 @@ Type
     mmkSelectConversation,
     mmkModels,
     mmkSetModel,
-    mmkReasoning
+    mmkReasoning,
+    mmkSetReasoning
   );
 
   TMonitorMessage = Record
@@ -416,6 +417,8 @@ Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
 Function DecodeMonitorSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
 Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
 Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
+Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
@@ -569,6 +572,7 @@ Begin
     mmkModels: Result := 'models';
     mmkSetModel: Result := 'set_model';
     mmkReasoning: Result := 'reasoning';
+    mmkSetReasoning: Result := 'set_reasoning';
   Else
     Result := '';
   End;
@@ -1517,6 +1521,17 @@ End;
 Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
 Begin
   Result := EncodeNamedChoices(mmkReasoning, Id, Current, Note, Ids, Captions, '', '', False);
+End;
+
+Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
+Begin
+  Result := EncodeOneString(mmkSetReasoning, Id, 'level', Level);
+End;
+
+Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Begin
+  { Missing level is a decode failure. An empty level is model default, not that failure. }
+  Result := DecodeOneString(PayloadJson, 'level', Level);
 End;
 
 Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;

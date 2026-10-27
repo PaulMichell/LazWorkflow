@@ -80,6 +80,9 @@ class ProtocolCodecTest {
     assertEquals(listOf(ModelChoice("grok-4", "grok-4")), decoded?.choices)
     assertEquals("grok-4", decodeSetModel(tryDecodeEnvelope(encodeSetModel("set-model", "grok-4")).message.payloadJson))
     assertNull(decodeSetModel("{}"))
+    assertEquals("", decodeSetReasoning(tryDecodeEnvelope(encodeSetReasoning("set-reasoning", "")).message.payloadJson))
+    assertEquals("high", decodeSetReasoning(tryDecodeEnvelope(encodeSetReasoning("set-reasoning-high", "high")).message.payloadJson))
+    assertNull(decodeSetReasoning("{}"))
     val reasoning = decodeReasoning(tryDecodeEnvelope(encodeReasoning("reasoning", "", "No connection is selected.",
       listOf(ReasoningChoice("", "Model default")))).message.payloadJson)
     assertEquals("", reasoning?.current)

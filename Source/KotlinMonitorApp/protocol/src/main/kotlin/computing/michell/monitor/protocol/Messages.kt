@@ -10,7 +10,7 @@ package computing.michell.monitor.protocol
    message types, payload fields, and limits. Splitting that table would hide a type.
    v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
-   Reviewed 2026-10-27: models and reasoning stay in this table. Inbound values are typed once.
+   Reviewed 2026-10-27: models, reasoning, and set_reasoning stay in this table. Inbound values are typed once.
    No socket, TLS, or Android UI in this file. */
 
 const val NoSessionReason = "no_session"
@@ -77,7 +77,8 @@ enum class MessageKind(val wireName: String) {
   SelectConversation("select_conversation"),
   Models("models"),
   SetModel("set_model"),
-  Reasoning("reasoning");
+  Reasoning("reasoning"),
+  SetReasoning("set_reasoning");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -868,6 +869,17 @@ fun decodeSetModel(payloadJson: String): String? {
   val modelId = obj.readString("model", true)
   if (!modelId.ok) return null
   return modelId.value
+}
+
+fun encodeSetReasoning(id: String, level: String): String {
+  return encodeOneString(MessageKind.SetReasoning, id, "level", level)
+}
+
+fun decodeSetReasoning(payloadJson: String): String? {
+  val obj = parseObject(payloadJson) ?: return null
+  val level = obj.readString("level", true)
+  if (!level.ok) return null
+  return level.value
 }
 
 fun encodeReasoning(id: String, current: String, note: String, choices: List<ReasoningChoice>): String {

@@ -460,6 +460,7 @@ Begin
     Ids.Free;
   End;
   AddSample('set-model', mmkSetModel, EncodeMonitorSetModel('set-model', 'grok-4'));
+  AddSample('set-reasoning', mmkSetReasoning, EncodeMonitorSetReasoning('set-reasoning', ''));
 End;
 
 Procedure BuildSamples;
@@ -657,7 +658,7 @@ Var
   Target: TMonitorTargetMessage;
   Targets: TMonitorTargetsMessage;
   Conversations: TMonitorConversationsMessage;
-  ArchiveId, ModelId: String;
+  ArchiveId, ModelId, Level: String;
   Models: TMonitorModelsMessage;
   Reasoning: TMonitorReasoningMessage;
   Plan: TMonitorPathMessage;
@@ -770,6 +771,8 @@ Begin
         (Models.Choices[0].Caption = 'grok-4 — 256k context'));
     mmkSetModel:
       Check('set_model id', DecodeMonitorSetModel(Message.PayloadJson, ModelId) And (ModelId = 'grok-4'));
+    mmkSetReasoning:
+      Check('set_reasoning empty level', DecodeMonitorSetReasoning(Message.PayloadJson, Level) And (Level = ''));
     mmkReasoning:
       Check('reasoning empty id', DecodeMonitorReasoning(Message.PayloadJson, Reasoning) And (Reasoning.Current = '') And
         (Length(Reasoning.Choices) = 2) And (Reasoning.Choices[0].Id = '') And (Reasoning.Choices[0].Caption = 'Model default') And
@@ -1005,6 +1008,19 @@ Begin
   Check('first patch sends every block', Length(Dirty) = 2);
 End;
 
+Procedure TestSetReasoningLevel;
+Var
+  Level, Json, ErrorText: String;
+  Message: TMonitorMessage;
+Begin
+  Level := 'kept';
+  Check('missing level is not model default', Not DecodeMonitorSetReasoning('{}', Level));
+  Check('missing level stays empty', Level = '');
+  Json := EncodeMonitorSetReasoning('set-reasoning-high', 'high');
+  Check('set_reasoning high encodes', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And (Message.Kind = mmkSetReasoning));
+  Check('set_reasoning high level', DecodeMonitorSetReasoning(Message.PayloadJson, Level) And (Level = 'high'));
+End;
+
 Procedure TestSelectTargetPathIsNotAnId;
 Var
   Message: TMonitorMessage;
@@ -1230,6 +1246,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestSetReasoningLevel;
   TestSelectTargetPathIsNotAnId;
   TestPatchOverCap;
   TestVersion2PatchAndClosed;

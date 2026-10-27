@@ -542,6 +542,7 @@ Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
 Var
   View: TAssistantMonitorView;
   Payload: TJSONObject;
+  PublishModels, PublishReasoning: Boolean;
 Begin
   Try
     If Not Assigned(Form) Then
@@ -556,11 +557,13 @@ Begin
     Finally
       Payload.Free;
     End;
-    { A connection reload sets the flag. The lists follow this status frame. }
-    If Form.TakeSamplingListPublish Then
+    { A connection reload sets the flags. The requested lists follow this status frame. }
+    If Form.TakeSamplingListPublish(PublishModels, PublishReasoning) Then
       Begin
-        PushModels(Form);
-        PushReasoning(Form);
+        If PublishModels Then
+          PushModels(Form);
+        If PublishReasoning Then
+          PushReasoning(Form);
       End;
   Finally
     FinishStatusPush;
@@ -1299,7 +1302,7 @@ End;
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
   Const Id, PayloadJson: String; Out ErrorText: String): Boolean;
 Var
-  Text, ModeText, Path, ArchiveId, ApiText: String;
+  Text, ModeText, Path, ArchiveId, ApiText, Level: String;
   Plan: TMonitorPathMessage;
   Task: TMonitorTaskCommand;
   Image: TMonitorImageGet;
@@ -1361,6 +1364,13 @@ Begin
         If Not DecodeMonitorSetModel(PayloadJson, ArchiveId) Then
           Exit;
         Result := Form.RemoteSelectModel(ArchiveId, ErrorText);
+      End;
+    Ord(mmkSetReasoning):
+      Begin
+        { A missing level is not model default. An empty level is. }
+        If Not DecodeMonitorSetReasoning(PayloadJson, Level) Then
+          Exit;
+        Result := Form.RemoteSelectReasoning(Level, ErrorText);
       End;
     Ord(mmkNewPlan):
       Begin

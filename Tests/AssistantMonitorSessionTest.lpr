@@ -815,6 +815,55 @@ Begin
   End;
 End;
 
+Procedure TestSetReasoning;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Flags.CanChangeMode := True;
+    Session.SetHostFlags(Flags);
+    Check('set_reasoning starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning', ''));
+    Check('empty set_reasoning is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetReasoning)));
+    Check('empty set_reasoning sends no error', Carrier.SentCount = 0);
+    Flags.PlanAgentRunning := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning-plan', 'high'));
+    Check('plan-running set_reasoning is not queued', Sink.Calls = 0);
+    Check('plan-running set_reasoning is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
+      (Message.Reason = 'host_busy'));
+    Check('plan-running set_reasoning sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags.PlanAgentRunning := False;
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning-busy', 'high'));
+    Check('sending set_reasoning is not queued', Sink.Calls = 0);
+    Check('sending set_reasoning error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('sending set_reasoning sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
@@ -1046,6 +1095,7 @@ Begin
       TestSelectTarget;
       TestSelectConversation;
       TestSetModel;
+      TestSetReasoning;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;
