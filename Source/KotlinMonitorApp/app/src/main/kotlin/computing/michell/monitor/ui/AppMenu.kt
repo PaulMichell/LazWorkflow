@@ -76,6 +76,7 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
       MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
     ),
     MenuSectionModel(MenuSectionKind.Conversation, "Conversation", emptyList(), "", linkUp),
+    // Captions from planChoices. The check is planPath. A different row calls openPlan.
     MenuSectionModel(
       MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
     ),

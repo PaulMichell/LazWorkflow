@@ -49,6 +49,19 @@ class AppMenuTest {
   }
 
   @Test
+  fun activePlanUsesTheChoiceList() {
+    val plan = appMenuSections(sample()).first { it.kind == MenuSectionKind.Plan }
+    assertEquals(listOf("Alpha", "Beta"), plan.rows.map { it.caption })
+    assertEquals(listOf("a.md", "b.md"), plan.rows.map { it.id })
+    assertEquals("a.md", plan.currentId)
+    assertEquals(MenuTap.CloseOnly, menuTap(plan.currentId, plan.currentId, plan.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("b.md", plan.currentId, plan.enabled))
+    assertFalse(plan.rows.any { it.id == "not-in-list.md" })
+    val empty = appMenuSections(sample().copy(planChoices = emptyList())).first { it.kind == MenuSectionKind.Plan }
+    assertTrue(empty.rows.isEmpty())
+  }
+
+  @Test
   fun anUnknownHostIdChecksNoRow() {
     val ui = sample().copy(view = sample().view.copy(mode = "weird"), planPath = "")
     val sections = appMenuSections(ui)
