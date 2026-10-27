@@ -110,7 +110,7 @@ The desktop list is `HistoryCombo`, filled by `ListHistory`. Each `TConversation
 
 ### 4.1 Host history and select_conversation
 
-Status: not started
+Status: complete
 
 Add `conversations` and `select_conversation`. Catalogue version stays 1.
 
