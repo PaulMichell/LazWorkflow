@@ -142,7 +142,7 @@ The phone view already shows `model` and `backend`. It cannot change them.
 
 ### 5.1 Host list and set_model
 
-Status: not started
+Status: complete
 
 Add `models` and `set_model`. Catalogue version stays 1.
 
