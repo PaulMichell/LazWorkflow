@@ -11,7 +11,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,12 +53,12 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.dismiss
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.ui.ActivityStatus
+import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
 import computing.michell.monitor.ui.ApprovalSheet
 import computing.michell.monitor.ui.CachedListDialog
@@ -166,7 +165,7 @@ private fun MonitorShell(model: MonitorViewModel) {
               modifier = Modifier.onSizeChanged { sheetWidthPx = it.width },
               windowInsets = WindowInsets(0, 0, 0, 0)
             ) {
-              MonitorDrawerContent(onRowChosen = dismissDrawer)
+              AppMenu(ui, dismissDrawer, model::setMode, model::openPlan)
             }
           },
           drawerState = drawerState,
@@ -248,24 +247,6 @@ internal fun drawerScrimStripPx(hostWidthPx: Int, sheetWidthPx: Int, sheetOffset
 @OptIn(ExperimentalMaterial3Api::class)
 private suspend fun closeDrawer(drawerState: DrawerState) {
   if (!drawerState.isClosed || drawerState.targetValue != DrawerValue.Closed) drawerState.close()
-}
-
-@Composable
-private fun MonitorDrawerContent(onRowChosen: () -> Unit) {
-  // fillMaxWidth takes the sheet's default maximum, so the uncovered strip is the Gmail proportion.
-  // A chosen row calls onRowChosen. Sections are drawn by AppMenu.
-  Column(
-    Modifier
-      .fillMaxWidth()
-      .semantics {
-        dismiss {
-          onRowChosen()
-          true
-        }
-      }
-  ) {
-    Spacer(Modifier.fillMaxWidth())
-  }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
