@@ -33,5 +33,7 @@ Packages/*.pas
 Thumbs.db
 *~
 
+# Assistant
+.assistant
 # Command-line tools built to the repository root
 /PascalStyle
