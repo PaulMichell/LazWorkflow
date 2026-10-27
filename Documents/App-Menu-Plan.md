@@ -176,7 +176,7 @@ The phone status field `effort` is a caption (`Low`, `High`, `XHigh`, `Default`,
 
 ### 6.1 Host list and set_reasoning
 
-Status: not started
+Status: complete
 
 Add a host-to-client `reasoning` frame and a client-to-host `set_reasoning` command. Catalogue version stays 1. Do not reuse the status field `effort` as this frame.
 
