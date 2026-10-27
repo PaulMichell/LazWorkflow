@@ -54,7 +54,7 @@ Mode and the active plan are already on the wire. The drawer calls those paths. 
 
 ### 2.1 Mode leaves Settings
 
-Status: not started
+Status: complete
 
 The drawer Mode section lists `ModeChoices` from `ConversationScreen.kt`: Chat, Inspect, Document, Plan, Build. The selected row is `modeCaption(ui.view.mode)`. A row is enabled only when `view.canChangeMode` is true and the link is up, which is the same rule as `setMode`.
 
