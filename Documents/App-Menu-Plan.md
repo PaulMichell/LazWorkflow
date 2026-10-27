@@ -226,7 +226,7 @@ The remote helper uses the approval branch of `ApplySamplingChange` and does not
 
 ### 7.2 Phone permissions section
 
-Status: not started
+Status: complete
 
 The section label is "Tool Permissions". Store the rows and the note on `MonitorUi`. The selected row is the choice whose id equals `current`. A tap sends `set_permissions`. Rows are disabled while disconnected, sending, or plan-running.
 
