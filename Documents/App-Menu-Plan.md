@@ -240,7 +240,7 @@ New types are additive. Both catalogues change in the same pass. Do not bump `v`
 
 ### 8.1 Frames, busy rules, and snapshot follow-up
 
-Status: not started
+Status: complete
 
 Add the ten types to `TMonitorMessageKind` and `MessageKind`, with snake-case names `targets`, `select_target`, `conversations`, `select_conversation`, `models`, `set_model`, `reasoning`, `set_reasoning`, `permissions`, and `set_permissions`. Decode them into typed inbound values the way `target` and `plan` already decode. A host frame the phone cannot apply must not close the socket.
 
