@@ -254,7 +254,7 @@ Also accept `refresh` text `menu_choices`, beside the existing `plan_choices` te
 
 ### 8.2 Tests
 
-Status: not started
+Status: complete
 
 Extend `Tests/AssistantMonitorCodecTest.lpr` for a round trip of each new frame, including an empty target path, an empty archive id, a truncated conversation list, a model note, an empty reasoning id captioned "Model default", and both the Codex and non-Codex permission captions. Extend `Tests/AssistantMonitorSessionTest.lpr` so the five commands are accepted while live, and so `select_target`, `set_model`, `set_reasoning`, and `set_permissions` are `host_busy` while a turn is sending. `select_conversation` is `host_busy` while sending and is not refused only because a plan run is active. `set_permissions` must not be handled as `approval_decision`.
 
