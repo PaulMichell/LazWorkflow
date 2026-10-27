@@ -38,7 +38,7 @@ The drawer is a sibling of the pager, not a page inside it. Conversation and Pla
 
 ### 1.3 Seven sections
 
-Status: not started
+Status: complete
 
 Add `AppMenu.kt` next to the other screens. The drawer scrolls. Its header is one line: the current target display from the existing target frame, ellipsis if needed. Then seven sections, in this order: Target, Mode, Conversation, Plan, Model, Reasoning Level, Tool Permissions.
 
