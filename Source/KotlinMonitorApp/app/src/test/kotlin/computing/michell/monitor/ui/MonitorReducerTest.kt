@@ -22,8 +22,13 @@ import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.encodeConversations
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeModels
+import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodePermissions
 import computing.michell.monitor.protocol.encodeReasoning
+import computing.michell.monitor.protocol.encodeSelectConversation
+import computing.michell.monitor.protocol.encodeSetModel
+import computing.michell.monitor.protocol.encodeSetPermissions
+import computing.michell.monitor.protocol.encodeSetReasoning
 import computing.michell.monitor.protocol.encodeTargets
 import computing.michell.monitor.protocol.statusToJson
 
@@ -48,6 +53,8 @@ import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -161,12 +168,84 @@ class MonitorReducerTest {
     assertTrue(cleared.planChoices.isEmpty())
     assertEquals("Ask", cleared.view.approvalCaption)
     assertFalse(cleared.disconnected)
-    val restored = reduceMonitor(cleared, message(encodePermissions("permissions", "ask", "codex", "", permissions)))
+    val withTargets = reduceMonitor(cleared, message(encodeTargets("targets", "", targets)))
+    val withTalks = reduceMonitor(withTargets, message(encodeConversations("conversations", "", talks, false)))
+    val withModels = reduceMonitor(withTalks, message(encodeModels(
+      "models", "grok-4", "grok", "The rest of this list is in desktop Settings.", models
+    )))
+    val withEfforts = reduceMonitor(withModels, message(encodeReasoning("reasoning", "high", "", efforts)))
+    val restored = reduceMonitor(withEfforts, message(encodePermissions("permissions", "ask", "codex", "", permissions)))
+    assertEquals(targets, restored.targetChoices)
+    assertEquals("", restored.targetCurrent)
+    assertEquals(talks, restored.conversationChoices)
+    assertEquals(models, restored.modelChoices)
+    assertEquals("The rest of this list is in desktop Settings.", restored.modelNote)
+    assertEquals(efforts, restored.reasoningChoices)
+    assertEquals("high", restored.reasoningCurrent)
     assertEquals(permissions, restored.permissionChoices)
     assertEquals("ask", restored.permissionCurrent)
-    val ignored = reduceMonitor(restored, message(encodeEnvelope(MessageKind.Permissions, "permissions-bad", null)))
+    val moved = reduceMonitor(restored, message(encodeTarget("next", "project", "New", "/new/")))
+    assertTrue(moved.targetChoices.isEmpty())
+    assertEquals("", moved.targetCurrent)
+    assertTrue(moved.conversationChoices.isEmpty())
+    assertEquals(models, moved.modelChoices)
+    assertEquals("The rest of this list is in desktop Settings.", moved.modelNote)
+    assertEquals(efforts, moved.reasoningChoices)
+    assertEquals("high", moved.reasoningCurrent)
+    assertEquals(permissions, moved.permissionChoices)
+    assertEquals("ask", moved.permissionCurrent)
+    val ignored = reduceMonitor(moved, message(encodeEnvelope(MessageKind.Permissions, "permissions-bad", null)))
     assertEquals(permissions, ignored.permissionChoices)
     assertFalse(ignored.disconnected)
+  }
+
+  @Test
+  fun choosingTheCurrentIdEncodesNothingAndACaptionDoesNotMoveTheCheck() {
+    val state = MonitorUi(
+      view = emptyView().copy(model = "grok-4", effort = "Default", approvalCaption = "Always"),
+      targetChoices = listOf(TargetChoice("", "Current Project"), TargetChoice("/other", "Other")),
+      targetCurrent = "",
+      conversationChoices = listOf(ConversationChoice("", "Current", true), ConversationChoice("arc", "Older", false)),
+      conversationCurrent = "ignored",
+      modelChoices = listOf(ModelChoice("grok-4", "grok-4"), ModelChoice("grok-3", "grok-3")),
+      reasoningChoices = listOf(ReasoningChoice("", "Model default"), ReasoningChoice("high", "High")),
+      reasoningCurrent = "",
+      permissionChoices = listOf(
+        PermissionChoice("ask", "Ask — confirm each write/compile"),
+        PermissionChoice("auto", "Auto — allow project tools")
+      ),
+      permissionCurrent = "ask"
+    )
+    assertNull(targetSelectionCommand(state, "", "target-current"))
+    assertNull(conversationSelectionCommand(state, "", "conversation-current"))
+    assertNull(modelSelectionCommand(state, "grok-4", "model-current"))
+    assertNull(reasoningSelectionCommand(state, "", "reasoning-current"))
+    assertNull(permissionsSelectionCommand(state, "ask", "permissions-current"))
+    assertEquals(
+      encodePath(MessageKind.SelectTarget, "target-next", "/other"),
+      targetSelectionCommand(state, "/other", "target-next")
+    )
+    assertEquals(
+      encodeSelectConversation("conversation-next", "arc"),
+      conversationSelectionCommand(state, "arc", "conversation-next")
+    )
+    assertEquals(encodeSetModel("model-next", "grok-3"), modelSelectionCommand(state, "grok-3", "model-next"))
+    assertEquals(encodeSetReasoning("reasoning-next", "high"), reasoningSelectionCommand(state, "high", "reasoning-next"))
+    val permissions = permissionsSelectionCommand(state, "auto", "permissions-next")
+    assertNotNull(permissions)
+    assertEquals(encodeSetPermissions("permissions-next", "auto"), permissions)
+    assertFalse(permissions!!.contains("approval_decision"))
+    val caption = reduceMonitor(state, message(encodeEnvelope(
+      MessageKind.Status, "status-captions",
+      statusToJson(emptyView().copy(effort = "High", approvalCaption = "Auto", model = "grok-3"))
+    )))
+    assertEquals("High", caption.view.effort)
+    assertEquals("Auto", caption.view.approvalCaption)
+    assertEquals("grok-3", caption.view.model)
+    assertEquals("", caption.reasoningCurrent)
+    assertEquals("ask", caption.permissionCurrent)
+    assertEquals(state.reasoningChoices, caption.reasoningChoices)
+    assertEquals(state.permissionChoices, caption.permissionChoices)
   }
 
   @Test

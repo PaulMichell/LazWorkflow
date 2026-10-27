@@ -1105,6 +1105,40 @@ private fun WireView.patchStatus(status: WireView): WireView {
   )
 }
 
+/** The current id is a no-op. A different listed id is the only encode. */
+internal fun targetSelectionCommand(state: MonitorUi, path: String, commandId: String): String? {
+  if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return null
+  if (path == state.targetCurrent || state.targetChoices.none { it.path == path }) return null
+  return encodePath(MessageKind.SelectTarget, commandId, path)
+}
+
+internal fun conversationSelectionCommand(state: MonitorUi, id: String, commandId: String): String? {
+  if (state.disconnected || state.view.sending) return null
+  val selected = conversationSelectedId(state.conversationChoices, state.conversationCurrent)
+  if (id == selected || state.conversationChoices.none { it.id == id }) return null
+  return encodeSelectConversation(commandId, id)
+}
+
+internal fun modelSelectionCommand(state: MonitorUi, id: String, commandId: String): String? {
+  if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return null
+  if (id == state.view.model || state.modelChoices.none { it.id == id }) return null
+  return encodeSetModel(commandId, id)
+}
+
+internal fun reasoningSelectionCommand(state: MonitorUi, id: String, commandId: String): String? {
+  if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return null
+  // Empty id is model default when that row exists. Compare the stored id, not view.effort.
+  if (id == state.reasoningCurrent || state.reasoningChoices.none { it.id == id }) return null
+  return encodeSetReasoning(commandId, id)
+}
+
+internal fun permissionsSelectionCommand(state: MonitorUi, id: String, commandId: String): String? {
+  if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return null
+  // Compare the stored id, not view.approvalCaption. This is not the tool-approval sheet.
+  if (id == state.permissionCurrent || state.permissionChoices.none { it.id == id }) return null
+  return encodeSetPermissions(commandId, id)
+}
+
 class MonitorViewModel(application: Application) : AndroidViewModel(application) {
   private val store = HostStore(application)
   private val offlineStore = OfflineStore(application.filesDir)
@@ -1500,41 +1534,28 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun selectTarget(path: String) {
-    val state = uiState.value
-    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
-    if (path == state.targetCurrent || state.targetChoices.none { it.path == path }) return
-    session.sendCatalogue(encodePath(MessageKind.SelectTarget, session.nextCommandId(), path))
+    val json = targetSelectionCommand(uiState.value, path, session.nextCommandId()) ?: return
+    session.sendCatalogue(json)
   }
 
   fun selectConversation(id: String) {
-    val state = uiState.value
-    if (state.disconnected || state.view.sending) return
-    val selected = conversationSelectedId(state.conversationChoices, state.conversationCurrent)
-    if (id == selected || state.conversationChoices.none { it.id == id }) return
-    session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), id))
+    val json = conversationSelectionCommand(uiState.value, id, session.nextCommandId()) ?: return
+    session.sendCatalogue(json)
   }
 
   fun selectModel(id: String) {
-    val state = uiState.value
-    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
-    if (id == state.view.model || state.modelChoices.none { it.id == id }) return
-    session.sendCatalogue(encodeSetModel(session.nextCommandId(), id))
+    val json = modelSelectionCommand(uiState.value, id, session.nextCommandId()) ?: return
+    session.sendCatalogue(json)
   }
 
   fun selectReasoning(id: String) {
-    val state = uiState.value
-    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
-    // Empty id is model default when that row exists. Compare the stored id, not view.effort.
-    if (id == state.reasoningCurrent || state.reasoningChoices.none { it.id == id }) return
-    session.sendCatalogue(encodeSetReasoning(session.nextCommandId(), id))
+    val json = reasoningSelectionCommand(uiState.value, id, session.nextCommandId()) ?: return
+    session.sendCatalogue(json)
   }
 
   fun selectPermissions(id: String) {
-    val state = uiState.value
-    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
-    // Compare the stored id, not view.approvalCaption. This is not the tool-approval sheet.
-    if (id == state.permissionCurrent || state.permissionChoices.none { it.id == id }) return
-    session.sendCatalogue(encodeSetPermissions(session.nextCommandId(), id))
+    val json = permissionsSelectionCommand(uiState.value, id, session.nextCommandId()) ?: return
+    session.sendCatalogue(json)
   }
 
   fun openPlan(path: String) {

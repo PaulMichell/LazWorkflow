@@ -788,6 +788,7 @@ Begin
       Check('permissions fields', DecodeMonitorPermissions(Message.PayloadJson, Permissions) And (Permissions.Current = 'ask') And
         (Permissions.Backend = 'grok') And (Permissions.Note = '') And (Length(Permissions.Choices) = 3) And
         (Permissions.Choices[0].Id = 'ask') And (Permissions.Choices[0].Caption = 'Ask — confirm each write/compile') And
+        (Permissions.Choices[1].Caption = 'Auto — allow project tools') And
         (Permissions.Choices[2].Caption = 'Always — never prompt (like Build always-approve)'));
     mmkSetPermissions:
       Check('set_permissions approval', DecodeMonitorSetPermissions(Message.PayloadJson, Approval) And (Approval = 'auto') And
@@ -1025,6 +1026,29 @@ Begin
   Check('changed body is kept', Length(Dirty) = 2);
   Dirty := SelectDirtyMonitorBlocks(Previous, Current, True);
   Check('first patch sends every block', Length(Dirty) = 2);
+End;
+
+Procedure TestModelNote;
+Var
+  Ids, Captions: TStringList;
+  Models: TMonitorModelsMessage;
+  Json, ErrorText: String;
+  Message: TMonitorMessage;
+Begin
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Ids.Add('grok-4');
+    Captions.Add('grok-4');
+    Json := EncodeMonitorModels('models-note', 'grok-4', 'grok', 'The rest of this list is in desktop Settings.', Ids, Captions);
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  Check('model note encodes', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And (Message.Kind = mmkModels));
+  Check('model note round trip', DecodeMonitorModels(Message.PayloadJson, Models) And (Models.Current = 'grok-4') And
+    (Models.Backend = 'grok') And (Models.Note = 'The rest of this list is in desktop Settings.') And
+    (Length(Models.Choices) = 1) And (Models.Choices[0].Id = 'grok-4'));
 End;
 
 Procedure TestPermissionsCaptions;
@@ -1297,6 +1321,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestModelNote;
   TestPermissionsCaptions;
   TestSetReasoningLevel;
   TestSelectTargetPathIsNotAnId;
