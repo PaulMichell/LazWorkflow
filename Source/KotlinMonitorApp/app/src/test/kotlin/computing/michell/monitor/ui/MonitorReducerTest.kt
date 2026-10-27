@@ -16,10 +16,12 @@ import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModelChoice
+import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.encodeConversations
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeModels
+import computing.michell.monitor.protocol.encodeReasoning
 import computing.michell.monitor.protocol.encodeTargets
 import computing.michell.monitor.protocol.statusToJson
 
@@ -161,6 +163,44 @@ class MonitorReducerTest {
     val checked = reduceMonitor(moved, message(status))
     assertEquals("grok-3", checked.view.model)
     assertEquals(choices, checked.modelChoices)
+  }
+
+  @Test
+  fun reasoningFrameIsTheCheckAndATargetOrEffortCaptionDoesNotReplaceIt() {
+    val choices = listOf(
+      ReasoningChoice("", "Model default"),
+      ReasoningChoice("low", "Low"),
+      ReasoningChoice("high", "High"),
+      ReasoningChoice("xhigh", "XHigh")
+    )
+    val frame = encodeReasoning("reasoning", "", "", choices)
+    val start = MonitorUi(view = emptyView().copy(effort = "Default", model = "grok-4", targetRoot = "/old/"))
+    val filled = reduceMonitor(start, message(frame))
+    assertEquals(choices, filled.reasoningChoices)
+    assertEquals("", filled.reasoningCurrent)
+    assertEquals("", filled.reasoningNote)
+    assertEquals("Default", filled.view.effort)
+    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
+    assertEquals(choices, moved.reasoningChoices)
+    assertEquals("", moved.reasoningCurrent)
+    val status = encodeEnvelope(MessageKind.Status, "status-effort", statusToJson(emptyView().copy(effort = "High", model = "grok-3")))
+    val caption = reduceMonitor(moved, message(status))
+    assertEquals("High", caption.view.effort)
+    assertEquals("grok-3", caption.view.model)
+    assertEquals("", caption.reasoningCurrent)
+    assertEquals(choices, caption.reasoningChoices)
+    val shrunk = listOf(ReasoningChoice("medium", "Medium"), ReasoningChoice("high", "High"))
+    val next = reduceMonitor(caption, message(encodeReasoning("reasoning-next", "medium", "", shrunk)))
+    assertEquals(shrunk, next.reasoningChoices)
+    assertEquals("medium", next.reasoningCurrent)
+    assertEquals("High", next.view.effort)
+    val none = reduceMonitor(next, message(encodeReasoning(
+      "reasoning-none", "", "This connection does not set an effort level.", emptyList()
+    )))
+    assertTrue(none.reasoningChoices.isEmpty())
+    assertEquals("", none.reasoningCurrent)
+    assertEquals("This connection does not set an effort level.", none.reasoningNote)
+    assertEquals("High", none.view.effort)
   }
 
   @Test

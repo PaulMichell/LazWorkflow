@@ -5,6 +5,7 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.TargetChoice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -169,6 +170,61 @@ class AppMenuTest {
     val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Model }
     assertFalse(section.enabled)
     assertEquals(listOf("grok-4"), section.rows.map { it.caption })
+  }
+
+  @Test
+  fun reasoningSectionUsesTheStoredIdNotTheEffortCaption() {
+    val choices = listOf(ReasoningChoice("", "Model default"), ReasoningChoice("high", "High"))
+    val ui = sample().copy(
+      view = sample().view.copy(effort = "Default"),
+      reasoningChoices = choices,
+      reasoningCurrent = "",
+      reasoningNote = ""
+    )
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Reasoning }
+    assertEquals("Reasoning Level", section.label)
+    assertEquals(listOf("", "high"), section.rows.map { it.id })
+    assertEquals(listOf("Model default", "High"), section.rows.map { it.caption })
+    assertEquals("", section.currentId)
+    assertEquals("", menuCheckedId(section.currentId))
+    assertEquals(MenuTap.CloseOnly, menuTap("", section.currentId, section.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("high", section.currentId, section.enabled))
+    assertTrue(section.rows.any { it.id.isEmpty() })
+    val captionOnly = ui.copy(view = ui.view.copy(effort = "High"))
+    val still = appMenuSections(captionOnly).first { it.kind == MenuSectionKind.Reasoning }
+    assertEquals("", still.currentId)
+    assertEquals(choices.map { it.id }, still.rows.map { it.id })
+  }
+
+  @Test
+  fun reasoningNoteDoesNotInventRows() {
+    val ui = sample().copy(
+      view = sample().view.copy(effort = "High"),
+      reasoningNote = "This connection does not set an effort level."
+    )
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Reasoning }
+    assertTrue(section.rows.isEmpty())
+    assertEquals("This connection does not set an effort level.", section.note)
+    assertEquals("", section.currentId)
+  }
+
+  @Test
+  fun reasoningRowsDisableWhileDisconnectedSendingOrPlanning() {
+    assertFalse(reasoningRowsEnabled(true, false, false))
+    assertFalse(reasoningRowsEnabled(false, true, false))
+    assertFalse(reasoningRowsEnabled(false, false, true))
+    assertTrue(reasoningRowsEnabled(false, false, false))
+    val rows = listOf(ReasoningChoice("high", "High"))
+    val planning = sample().copy(
+      view = sample().view.copy(planRunning = true, effort = "High"),
+      planRunning = true,
+      reasoningChoices = rows,
+      reasoningCurrent = "high"
+    )
+    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Reasoning }
+    assertFalse(section.enabled)
+    assertEquals(listOf("High"), section.rows.map { it.caption })
+    assertEquals("high", section.currentId)
   }
 
   @Test

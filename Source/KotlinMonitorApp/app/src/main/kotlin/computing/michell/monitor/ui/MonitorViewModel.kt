@@ -99,8 +99,12 @@ import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.ConversationsMessage
 import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.ModelsMessage
+import computing.michell.monitor.protocol.ReasoningChoice
+import computing.michell.monitor.protocol.ReasoningMessage
 import computing.michell.monitor.protocol.decodeModels
+import computing.michell.monitor.protocol.decodeReasoning
 import computing.michell.monitor.protocol.encodeSetModel
+import computing.michell.monitor.protocol.encodeSetReasoning
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.TargetsMessage
 import computing.michell.monitor.protocol.decodeConversations
@@ -144,6 +148,9 @@ data class MonitorUi(
   val modelChoices: List<ModelChoice> = emptyList(),
   val modelBackend: String = "",
   val modelNote: String = "",
+  val reasoningChoices: List<ReasoningChoice> = emptyList(),
+  val reasoningCurrent: String = "",
+  val reasoningNote: String = "",
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
   val banner: String = "",
@@ -206,6 +213,9 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     modelChoices = state.modelChoices,
     modelBackend = state.modelBackend,
     modelNote = state.modelNote,
+    reasoningChoices = state.reasoningChoices,
+    reasoningCurrent = state.reasoningCurrent,
+    reasoningNote = state.reasoningNote,
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
     connectionGeneration = state.connectionGeneration + 1
@@ -527,6 +537,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Targets -> applyTargets(state, message.payloadJson)
     MessageKind.Conversations -> applyConversations(state, message.payloadJson)
     MessageKind.Models -> applyModels(state, message.payloadJson)
+    MessageKind.Reasoning -> applyReasoning(state, message.payloadJson)
     MessageKind.Plan -> applyPlan(state, message.payloadJson)
     MessageKind.ApprovalRequested -> applyApprovalRequested(state, message.payloadJson)
     MessageKind.ApprovalClosed -> state.copy(approvalOpen = false)
@@ -689,6 +700,7 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Targets -> applyTargetsFrame(state, inbound.value)
     is InboundPayload.Conversations -> applyConversationsFrame(state, inbound.value)
     is InboundPayload.Models -> applyModelsFrame(state, inbound.value)
+    is InboundPayload.Reasoning -> applyReasoningFrame(state, inbound.value)
     is InboundPayload.Plan -> state.copy(
       planPath = inbound.value.path,
       planTitle = inbound.value.title,
@@ -953,6 +965,20 @@ internal fun applyModelsFrame(state: MonitorUi, models: ModelsMessage): MonitorU
     modelChoices = models.choices,
     modelBackend = models.backend,
     modelNote = models.note
+  )
+}
+
+private fun applyReasoning(state: MonitorUi, payloadJson: String): MonitorUi {
+  val reasoning = decodeReasoning(payloadJson) ?: return state
+  return applyReasoningFrame(state, reasoning)
+}
+
+/** Replaces the effort list only. view.effort is a caption and must not move this check. */
+internal fun applyReasoningFrame(state: MonitorUi, reasoning: ReasoningMessage): MonitorUi {
+  return state.copy(
+    reasoningChoices = reasoning.choices,
+    reasoningCurrent = reasoning.current,
+    reasoningNote = reasoning.note
   )
 }
 
@@ -1448,6 +1474,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
     if (id == state.view.model || state.modelChoices.none { it.id == id }) return
     session.sendCatalogue(encodeSetModel(session.nextCommandId(), id))
+  }
+
+  fun selectReasoning(id: String) {
+    val state = uiState.value
+    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
+    // Empty id is model default when that row exists. Compare the stored id, not view.effort.
+    if (id == state.reasoningCurrent || state.reasoningChoices.none { it.id == id }) return
+    session.sendCatalogue(encodeSetReasoning(session.nextCommandId(), id))
   }
 
   fun openPlan(path: String) {
