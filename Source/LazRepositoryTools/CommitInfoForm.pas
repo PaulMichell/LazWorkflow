@@ -4,7 +4,8 @@ Unit CommitInfoForm;
 
   Date and time are the author timestamp. Committer rows appear only when that
   identity or that time differs. The History row date is the committer time.
-  Fields are anchored on the form. The button panel is unchanged. }
+  Fields are anchored on the form with a 4px border. The first edit on each row
+  shares one left edge. The message memo fills the space above the button panel. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -61,6 +62,7 @@ Const
   UnknownValue = '(unknown)';
   NoneValue = '(none)';
   NoMessage = '(no message)';
+  FieldBorder = 4;
 
 Function PersonText(Const PersonName, Email: String): String;
 Begin
@@ -162,6 +164,7 @@ Var
   Begin
     Control.AnchorSide[akTop].Control := Above;
     Control.AnchorSide[akTop].Side := asrBottom;
+    Control.BorderSpacing.Top := FieldBorder;
     Above := Control;
   End;
 
