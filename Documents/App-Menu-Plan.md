@@ -264,6 +264,6 @@ Do not add Robolectric or a device test. Run the codec and session programmes th
 
 ### 8.3 Design note
 
-Status: not started
+Status: complete
 
 After the commands exist, amend `Documents/Assistant Monitor Design.md` so it no longer says the phone cannot change target, model, an archived conversation, effort, or approval mode. Name the ten types, the dialog-free helpers, and the refusals that remain desktop-only: folder browse, package selection, a network model refresh, skills, and OAuth. State that Tool Permissions is the footer approval mode, not the tool-approval sheet.
