@@ -68,11 +68,13 @@ fun menuHeader(ui: MonitorUi): String = ui.view.targetDisplay
  */
 fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
   val linkUp = !ui.disconnected
-  // setMode and openPlan both refuse when the mode cannot change. A row that cannot send stays disabled.
+  // Mode sends set_mode only when canChangeMode is true and the link is up, the same gate setMode can complete.
   val canSend = linkUp && ui.view.canChangeMode
   return listOf(
     MenuSectionModel(MenuSectionKind.Target, "Target", emptyList(), "", linkUp),
-    MenuSectionModel(MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, it.second) }, ui.view.mode, canSend),
+    MenuSectionModel(
+      MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
+    ),
     MenuSectionModel(MenuSectionKind.Conversation, "Conversation", emptyList(), "", linkUp),
     MenuSectionModel(
       MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend

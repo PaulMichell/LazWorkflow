@@ -1,6 +1,6 @@
 package computing.michell.monitor.ui
 
-/* Settings form. Connection first, then the mode control, then view switches (c) 2026 Michell Computing. */
+/* Settings form. Connection first, then view switches (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,15 +22,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -62,15 +57,12 @@ fun SettingsScreen(
   disconnected: Boolean,
   showThinking: Boolean,
   showTools: Boolean,
-  mode: String,
-  canChangeMode: Boolean,
   canLeave: Boolean,
   onAddress: (String) -> Unit,
   onPort: (String) -> Unit,
   onConnect: () -> Unit,
   onThinking: (Boolean) -> Unit,
   onTools: (Boolean) -> Unit,
-  onMode: (String) -> Unit,
   onBack: () -> Unit
 ) {
   val shownError = settingsErrorText(errorText)
@@ -111,8 +103,6 @@ fun SettingsScreen(
         Text(shownError, color = MaterialTheme.colorScheme.error)
       }
       HorizontalDivider()
-      ModeCombo(mode, canChangeMode, onMode, Modifier.fillMaxWidth())
-      HorizontalDivider()
       Text("View", style = MaterialTheme.typography.titleMedium)
       SwitchRow("Show thinking", showThinking, onThinking)
       SwitchRow("Show tool calls", showTools, onTools)
@@ -120,35 +110,6 @@ fun SettingsScreen(
       HelpRow(helpOpen) { helpOpen = !helpOpen }
       if (helpOpen) {
         Text(connectionHelpText(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-      }
-    }
-  }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModeCombo(mode: String, enabled: Boolean, onMode: (String) -> Unit, modifier: Modifier = Modifier) {
-  var open by remember { mutableStateOf(false) }
-  ExposedDropdownMenuBox(expanded = open && enabled, onExpandedChange = { if (enabled) open = it }, modifier = modifier) {
-    OutlinedTextField(
-      value = modeCaption(mode),
-      onValueChange = {},
-      readOnly = true,
-      enabled = enabled,
-      singleLine = true,
-      label = { Text("Mode") },
-      trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = open && enabled) },
-      modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled).fillMaxWidth()
-    )
-    ExposedDropdownMenu(expanded = open && enabled, onDismissRequest = { open = false }) {
-      ModeChoices.forEach { choice ->
-        DropdownMenuItem(
-          text = { Text(choice.second) },
-          onClick = {
-            open = false
-            if (choice.first != mode) onMode(choice.first)
-          }
-        )
       }
     }
   }

@@ -42,6 +42,7 @@ class AppMenuTest {
     val plan = sections.first { it.kind == MenuSectionKind.Plan }
     assertEquals(listOf("Chat", "Inspect", "Document", "Plan", "Build"), mode.rows.map { it.caption })
     assertEquals("plan", menuCheckedId(mode.currentId))
+    assertEquals(modeCaption("plan"), mode.rows.first { it.id == mode.currentId }.caption)
     assertEquals(listOf("Alpha", "Beta"), plan.rows.map { it.caption })
     assertEquals("a.md", menuCheckedId(plan.currentId))
     assertFalse(plan.rows.any { it.id == "missing.md" })

@@ -145,14 +145,12 @@ private fun MonitorShell(model: MonitorViewModel) {
     if (showSettings) {
       Box(modifier) {
         SettingsScreen(
-          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools,
-          ui.view.mode, ui.view.canChangeMode && !ui.disconnected, true,
+          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools, true,
           { model.pairAddress.value = it },
           { model.pairPort.value = it },
           model::connectFromPair,
           model::setShowThinking,
           model::setShowTools,
-          model::setMode,
           model::closeSettings
         )
       }
