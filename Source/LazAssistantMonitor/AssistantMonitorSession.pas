@@ -1219,6 +1219,13 @@ Begin
       If Result Then
         MessageText := 'Stop the current reply before switching History.';
     End
+  Else If Kind = Ord(mmkSetModel) Then
+    Begin
+      { Review is still the form's check. A plan run is work in progress. }
+      Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+      If Result Then
+        MessageText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
+    End
   Else If Kind = Ord(mmkSteer) Then
     Begin
       Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
@@ -1398,7 +1405,7 @@ Begin
     mmkResume:
       HandleResume(Message.Id, Message.PayloadJson);
     mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
-    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkSelectConversation, mmkNewPlan, mmkRefresh, mmkTurn,
+    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkSelectConversation, mmkSetModel, mmkNewPlan, mmkRefresh, mmkTurn,
     mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
   Else

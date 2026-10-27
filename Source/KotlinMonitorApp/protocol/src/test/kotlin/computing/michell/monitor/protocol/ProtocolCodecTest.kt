@@ -70,6 +70,25 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun modelNoteAndEmptyReasoningIdRoundTrip() {
+    val models = encodeModels("models", "grok-4", "grok", "The rest of this list is in desktop Settings.",
+      listOf(ModelChoice("grok-4", "grok-4")))
+    val decoded = decodeModels(tryDecodeEnvelope(models).message.payloadJson)
+    assertEquals("grok-4", decoded?.current)
+    assertEquals("grok", decoded?.backend)
+    assertEquals("The rest of this list is in desktop Settings.", decoded?.note)
+    assertEquals(listOf(ModelChoice("grok-4", "grok-4")), decoded?.choices)
+    assertEquals("grok-4", decodeSetModel(tryDecodeEnvelope(encodeSetModel("set-model", "grok-4")).message.payloadJson))
+    assertNull(decodeSetModel("{}"))
+    val reasoning = decodeReasoning(tryDecodeEnvelope(encodeReasoning("reasoning", "", "No connection is selected.",
+      listOf(ReasoningChoice("", "Model default")))).message.payloadJson)
+    assertEquals("", reasoning?.current)
+    assertEquals("No connection is selected.", reasoning?.note)
+    assertEquals("", reasoning?.choices?.single()?.id)
+    assertEquals("Model default", reasoning?.choices?.single()?.caption)
+  }
+
+  @Test
   fun helloShapesMatchTheHostFrames() {
     val first = encodeHello("hello-first", "Phone", "1", "")
     assertFalse(first.contains("client_id"))

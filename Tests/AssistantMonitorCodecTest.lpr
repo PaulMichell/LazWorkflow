@@ -436,6 +436,32 @@ Begin
   AddSample('select-conversation', mmkSelectConversation, EncodeMonitorSelectConversation('select-conversation', ''));
 End;
 
+Procedure AddSamplingSamples;
+Var
+  Ids, Captions: TStringList;
+Begin
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Ids.Add('grok-4');
+    Captions.Add('grok-4 — 256k context');
+    Ids.Add('grok-3');
+    Captions.Add('grok-3');
+    AddSample('models', mmkModels, EncodeMonitorModels('models', 'grok-4', 'grok', '', Ids, Captions));
+    Ids.Clear;
+    Captions.Clear;
+    Ids.Add('');
+    Captions.Add('Model default');
+    Ids.Add('high');
+    Captions.Add('High');
+    AddSample('reasoning', mmkReasoning, EncodeMonitorReasoning('reasoning', '', 'This connection does not set an effort level.', Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  AddSample('set-model', mmkSetModel, EncodeMonitorSetModel('set-model', 'grok-4'));
+End;
+
 Procedure BuildSamples;
 Var
   View: TAssistantMonitorView;
@@ -568,6 +594,7 @@ Begin
   AddSample('target', mmkTarget, EncodeMonitorTarget('target', 'project', 'LazWorkflow', '/work/LazWorkflow'));
   AddTargetSamples;
   AddConversationSamples;
+  AddSamplingSamples;
   PlanRows[0] := SamplePlanRow;
   AddSample('plan', mmkPlan, EncodeMonitorPlan('plan', 'Documents/Plan.md', 'Monitor plan', False, PlanRows));
   AddSample('select-plan', mmkSelectPlan, EncodeMonitorPath(mmkSelectPlan, 'select-plan', 'Documents/Plan.md'));
@@ -630,7 +657,9 @@ Var
   Target: TMonitorTargetMessage;
   Targets: TMonitorTargetsMessage;
   Conversations: TMonitorConversationsMessage;
-  ArchiveId: String;
+  ArchiveId, ModelId: String;
+  Models: TMonitorModelsMessage;
+  Reasoning: TMonitorReasoningMessage;
   Plan: TMonitorPathMessage;
   Index, Decoded: Integer;
   Command: TMonitorTaskCommand;
@@ -735,6 +764,16 @@ Begin
         (Conversations.Choices[1].Id = '20261019T120000000') And (Not Conversations.Choices[1].Current));
     mmkSelectConversation:
       Check('select_conversation empty id', DecodeMonitorSelectConversation(Message.PayloadJson, ArchiveId) And (ArchiveId = ''));
+    mmkModels:
+      Check('models fields', DecodeMonitorModels(Message.PayloadJson, Models) And (Models.Current = 'grok-4') And
+        (Models.Backend = 'grok') And (Models.Note = '') And (Length(Models.Choices) = 2) And
+        (Models.Choices[0].Caption = 'grok-4 — 256k context'));
+    mmkSetModel:
+      Check('set_model id', DecodeMonitorSetModel(Message.PayloadJson, ModelId) And (ModelId = 'grok-4'));
+    mmkReasoning:
+      Check('reasoning empty id', DecodeMonitorReasoning(Message.PayloadJson, Reasoning) And (Reasoning.Current = '') And
+        (Length(Reasoning.Choices) = 2) And (Reasoning.Choices[0].Id = '') And (Reasoning.Choices[0].Caption = 'Model default') And
+        (Reasoning.Note = 'This connection does not set an effort level.'));
     mmkNewPlan:
       Check('new_plan title', DecodeMonitorNewPlan(Message.PayloadJson, Plan) And Plan.HasTitle And (Plan.Title = 'Monitor plan'));
     mmkWorkOnPlan:

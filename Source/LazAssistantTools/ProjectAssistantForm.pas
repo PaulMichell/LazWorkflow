@@ -226,6 +226,7 @@ Type
     FActiveBackend: String;
     FActiveModel: String;
     FReloadConnectionAfterSend: Boolean;
+    FPublishSamplingLists: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval, FCodexModelsJson: String;
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -509,6 +510,8 @@ Type
     Procedure PopupAboveControl(Host: TControl; Popup: TPopupMenu);
     Procedure ShowSamplingMenu(Kind: Integer);
     Procedure FillModelFooterMenu;
+    Function TryApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
+      UpdateModel, UpdateEffort, UpdateApproval: Boolean; Out Note: String; Out DialogKind: TMsgDlgType): Boolean;
     Procedure FillEffortFooterMenu;
     Procedure FillPermissionsFooterMenu;
     Function ApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
@@ -569,6 +572,14 @@ Type
     Function RemoteSelectTarget(Const Directory: String; Out ErrorText: String): Boolean;
     /// Empty ArchiveId is the open conversation and does not call ActivateArchive. Does not open a dialog.
     Function RemoteSelectConversation(Const ArchiveId: String; Out ErrorText: String): Boolean;
+    /// Same ids as FillModelFooterMenu. Does not refresh a provider catalogue.
+    Procedure FillMonitorModelChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
+    /// Same rows as FillEffortFooterMenu. Does not refresh a provider catalogue.
+    Procedure FillMonitorReasoningChoices(Ids, Captions: TStrings; Out Current, Note: String);
+    /// True once after a connection reload. The monitor pushes models and reasoning after status.
+    Function TakeSamplingListPublish: Boolean;
+    /// Does not open a dialog. A matching model id is a success no-op.
+    Function RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
@@ -612,6 +623,8 @@ Uses AssistantWorkTarget, PackageIntf,
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
+Function EffortBarCaption(Const Value: String): String; Forward;
+Function ListHasText(List: TStrings; Const Value: String): Boolean; Forward;
 
 Const
   ChatPaintMinIntervalMs = 80;
@@ -1305,6 +1318,193 @@ Begin
   WorkflowLogger.Info('ProjectAssistant', 'History activated: ' + ArchiveId);
   { ApplyLoadedConversationToUi does not publish a snapshot. The phone must replace the transcript. }
   AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorModelChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
+Var
+  Models: TStringList;
+  Index: Integer;
+  ModelId, DisplayText: String;
+  Beyond: Boolean;
+  Procedure AddModel(Const Value: String);
+  Begin
+    If (Trim(Value) <> '') And Not ListHasText(Models, Value) Then
+      Models.Add(Trim(Value));
+  End;
+Begin
+  Current := '';
+  Backend := '';
+  Note := '';
+  If Assigned(Ids) Then
+    Ids.Clear;
+  If Assigned(Captions) Then
+    Captions.Clear;
+  If Not Assigned(Ids) Or Not Assigned(Captions) Then
+    Exit;
+  If FActiveConnectionId = '' Then
+    Begin
+      Note := 'No connection is selected.';
+      Exit;
+    End;
+  Backend := FActiveBackend;
+  Current := Trim(FActiveModel);
+  Models := TStringList.Create;
+  Try
+    If FActiveBackend = 'grok' Then
+      Begin
+        CollectXaiKnownModelIds(Models);
+        AddModel(AssistantConfigDefaultModel);
+        AddModel('grok-4');
+        AddModel('grok-3');
+      End
+    Else If FActiveBackend = 'codex' Then
+      CollectCodexModelIds(FCodexModelsJson, Models);
+    AddModel(FActiveModel);
+    Beyond := False;
+    For Index := 0 To Models.Count - 1 Do
+      Begin
+        ModelId := Models[Index];
+        If Not SameText(ModelId, Current) Then
+          Beyond := True;
+        If FActiveBackend = 'grok' Then
+          DisplayText := XaiModelDisplayText(ModelId)
+        Else
+          DisplayText := ModelId;
+        Ids.Add(ModelId);
+        Captions.Add(DisplayText);
+      End;
+    If Not Beyond Then
+      Note := 'The rest of this list is in desktop Settings.';
+  Finally
+    Models.Free;
+  End;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorReasoningChoices(Ids, Captions: TStrings; Out Current, Note: String);
+Var
+  Efforts: TStringList;
+  Index: Integer;
+  Level: String;
+  Procedure AddLevel(Const Value, LevelCaption: String);
+  Begin
+    Ids.Add(Value);
+    Captions.Add(LevelCaption);
+  End;
+Begin
+  Current := '';
+  Note := '';
+  If Assigned(Ids) Then
+    Ids.Clear;
+  If Assigned(Captions) Then
+    Captions.Clear;
+  If Not Assigned(Ids) Or Not Assigned(Captions) Then
+    Exit;
+  If FActiveConnectionId = '' Then
+    Begin
+      Note := 'No connection is selected.';
+      Exit;
+    End;
+  Current := FActiveEffort;
+  If FActiveBackend = 'grok' Then
+    Begin
+      If XaiModelAllowsEffort(FActiveModel, 'low') Then
+        AddLevel('low', 'Low');
+      If XaiModelAllowsEffort(FActiveModel, 'medium') Then
+        AddLevel('medium', 'Medium');
+      If XaiModelAllowsEffort(FActiveModel, 'high') Then
+        AddLevel('high', 'High');
+      If XaiModelAllowsEffort(FActiveModel, 'xhigh') Then
+        AddLevel('xhigh', 'XHigh');
+      If Ids.Count = 0 Then
+        Begin
+          AddLevel('low', 'Low');
+          AddLevel('medium', 'Medium');
+          AddLevel('high', 'High');
+          AddLevel('xhigh', 'XHigh');
+        End;
+      Exit;
+    End;
+  If FActiveBackend = 'codex' Then
+    Begin
+      AddLevel('', 'Model default');
+      Efforts := TStringList.Create;
+      Try
+        If CollectCodexEffortIds(FCodexModelsJson, FActiveModel, Efforts) Then
+          Begin
+            If (FActiveEffort <> '') And (Not ListHasText(Efforts, FActiveEffort)) Then
+              Efforts.Add(FActiveEffort);
+            For Index := 0 To Efforts.Count - 1 Do
+              Begin
+                Level := Efforts[Index];
+                AddLevel(Level, EffortBarCaption(Level));
+              End;
+          End
+        Else If FActiveEffort <> '' Then
+          AddLevel(FActiveEffort, EffortBarCaption(FActiveEffort));
+      Finally
+        Efforts.Free;
+      End;
+      Exit;
+    End;
+  Note := 'This connection does not set an effort level.';
+End;
+
+Function TProjectAssistantForm.TakeSamplingListPublish: Boolean;
+Begin
+  Result := FPublishSamplingLists;
+  FPublishSamplingLists := False;
+End;
+
+Function TProjectAssistantForm.RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Current, Backend, Note, Wanted: String;
+  Index: Integer;
+  Listed: Boolean;
+  DialogKind: TMsgDlgType;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Or FPlanAgentRunning Or FReviewInProgress Then
+    Begin
+      ErrorText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
+      Exit;
+    End;
+  Wanted := Trim(ModelId);
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
+    If FActiveConnectionId <> '' Then
+      Begin
+        If SameText(Wanted, Trim(FActiveModel)) Then
+          Begin
+            Result := True;
+            Exit;
+          End;
+        Listed := False;
+        For Index := 0 To Ids.Count - 1 Do
+          If SameText(Ids[Index], Wanted) Then
+            Begin
+              Listed := True;
+              Break;
+            End;
+        If Not Listed Then
+          Begin
+            ErrorText := 'That model is not in the list.';
+            Exit;
+          End;
+      End;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  If Not TryApplySamplingChange(Wanted, '', '', True, False, False, Note, DialogKind) Then
+    Begin
+      ErrorText := Note;
+      Exit;
+    End;
   Result := True;
 End;
 
@@ -7861,6 +8061,17 @@ End;
 Function TProjectAssistantForm.ApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
   UpdateModel, UpdateEffort, UpdateApproval: Boolean): Boolean;
 Var
+  Note: String;
+  DialogKind: TMsgDlgType;
+Begin
+  Result := TryApplySamplingChange(NewModel, NewEffort, NewApproval, UpdateModel, UpdateEffort, UpdateApproval, Note, DialogKind);
+  If (Not Result) And (Note <> '') Then
+    RunAssistantModal(Note, DialogKind, [mbOK], 0);
+End;
+
+Function TProjectAssistantForm.TryApplySamplingChange(Const NewModel, NewEffort, NewApproval: String;
+  UpdateModel, UpdateEffort, UpdateApproval: Boolean; Out Note: String; Out DialogKind: TMsgDlgType): Boolean;
+Var
   Connections: TAssistantConnections;
   Item: TAssistantConnection;
   Efforts: TStringList;
@@ -7868,10 +8079,12 @@ Var
   Failed: Boolean;
 Begin
   Result := False;
+  Note := '';
+  DialogKind := mtInformation;
   Failed := False;
   If Not Assigned(LazarusIDE) Then
     Begin
-      RunAssistantModal('The IDE configuration path is not available.', mtInformation, [mbOK], 0);
+      Note := 'The IDE configuration path is not available.';
       Exit;
     End;
   Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
@@ -7881,7 +8094,7 @@ Begin
       Item := Connections.Active;
       If (Not Assigned(Item)) Or (Item.Id <> FActiveConnectionId) Then
         Begin
-          RunAssistantModal('No connection is selected. Choose one with the Settings button.', mtInformation, [mbOK], 0);
+          Note := 'No connection is selected. Choose one with the Settings button.';
           Exit;
         End;
       If UpdateModel Then
@@ -7937,8 +8150,7 @@ Begin
         End;
       If FSending Or FPlanAgentRunning Or FReviewInProgress Then
         Begin
-          RunAssistantModal('Wait until the current work finishes before changing the model, effort, or permissions.',
-            mtInformation, [mbOK], 0);
+          Note := 'Wait until the current work finishes before changing the model, effort, or permissions.';
           Exit;
         End;
       If Item.Backend = 'grok' Then
@@ -7975,7 +8187,10 @@ Begin
       NotifyOpenProjectAssistantFormsConnectionChanged;
     End
   Else If Failed Then
-    RunAssistantModal('Could not save that choice.', mtError, [mbOK], 0);
+    Begin
+      Note := 'Could not save that choice.';
+      DialogKind := mtError;
+    End;
 End;
 
 Procedure TProjectAssistantForm.FillSkillFooterMenu;
@@ -8986,6 +9201,7 @@ Begin
       FReloadConnectionAfterSend := True;
       Exit;
     End;
+  FPublishSamplingLists := True;
   LoadConnectionSettings;
   RefreshFromConfig;
   ApplyActiveMode;

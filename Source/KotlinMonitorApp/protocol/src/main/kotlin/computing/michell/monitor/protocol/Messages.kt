@@ -10,7 +10,7 @@ package computing.michell.monitor.protocol
    message types, payload fields, and limits. Splitting that table would hide a type.
    v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
-   Reviewed 2026-10-27: conversations stays in this table. Inbound values are typed once.
+   Reviewed 2026-10-27: models and reasoning stay in this table. Inbound values are typed once.
    No socket, TLS, or Android UI in this file. */
 
 const val NoSessionReason = "no_session"
@@ -74,7 +74,10 @@ enum class MessageKind(val wireName: String) {
   Targets("targets"),
   SelectTarget("select_target"),
   Conversations("conversations"),
-  SelectConversation("select_conversation");
+  SelectConversation("select_conversation"),
+  Models("models"),
+  SetModel("set_model"),
+  Reasoning("reasoning");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -250,6 +253,14 @@ data class TargetsMessage(val current: String, val choices: List<TargetChoice>)
 data class ConversationChoice(val id: String, val title: String, val current: Boolean)
 
 data class ConversationsMessage(val current: String, val choices: List<ConversationChoice>, val truncated: Boolean)
+
+data class ModelChoice(val id: String, val caption: String)
+
+data class ModelsMessage(val current: String, val backend: String, val choices: List<ModelChoice>, val note: String)
+
+data class ReasoningChoice(val id: String, val caption: String)
+
+data class ReasoningMessage(val current: String, val choices: List<ReasoningChoice>, val note: String)
 
 data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
 
@@ -466,6 +477,8 @@ fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
     MessageKind.Target -> decodeTarget(payload)?.let { InboundPayload.Target(it) } ?: InboundPayload.None
     MessageKind.Targets -> decodeTargets(payload)?.let { InboundPayload.Targets(it) } ?: InboundPayload.None
     MessageKind.Conversations -> decodeConversations(payload)?.let { InboundPayload.Conversations(it) } ?: InboundPayload.None
+    MessageKind.Models -> decodeModels(payload)?.let { InboundPayload.Models(it) } ?: InboundPayload.None
+    MessageKind.Reasoning -> decodeReasoning(payload)?.let { InboundPayload.Reasoning(it) } ?: InboundPayload.None
     MessageKind.Plan -> decodePlan(payload)?.let { InboundPayload.Plan(it) } ?: InboundPayload.None
     MessageKind.ApprovalRequested -> decodeApprovalRequested(payload)?.let { InboundPayload.ApprovalRequest(it) } ?: InboundPayload.None
     MessageKind.InsertResult -> decodeText(payload)?.let { InboundPayload.Insert(it) } ?: InboundPayload.None
@@ -791,6 +804,84 @@ fun decodeSelectConversation(payloadJson: String): String? {
   val archiveId = obj.readString("id", true)
   if (!archiveId.ok) return null
   return archiveId.value
+}
+
+private fun encodeNamedChoices(
+  kind: MessageKind,
+  id: String,
+  current: String,
+  note: String,
+  choices: List<Pair<String, String>>,
+  extraName: String = "",
+  extraValue: String = ""
+): String {
+  val payload = JsonObjectBuilder()
+  payload.add("current", current)
+  if (extraName.isNotEmpty()) payload.add(extraName, extraValue)
+  payload.add("choices", JsonValue.Arr(choices.map { choice ->
+    val row = JsonObjectBuilder()
+    row.add("id", choice.first)
+    row.add("caption", choice.second)
+    row.build()
+  }))
+  payload.add("note", note)
+  return encodeEnvelope(kind, id, payload.build())
+}
+
+private fun decodeNamedChoices(obj: JsonValue.Obj, extraName: String = ""): Triple<String, String, List<Pair<String, String>>>? {
+  val current = obj.readString("current", true)
+  if (!current.ok) return null
+  val extra = if (extraName.isEmpty()) null else obj.readString(extraName, true)
+  if (extra != null && !extra.ok) return null
+  val note = obj.readString("note", true)
+  if (!note.ok) return null
+  val choices = rowsFrom(obj.field("choices")) { choice ->
+    val choiceId = choice.readString("id", true)
+    val caption = choice.readString("caption", true)
+    if (!choiceId.ok || !caption.ok) null else choiceId.value to caption.value
+  } ?: return null
+  return Triple(current.value, note.value, choices)
+}
+
+fun encodeModels(id: String, current: String, backend: String, note: String, choices: List<ModelChoice>): String {
+  return encodeNamedChoices(MessageKind.Models, id, current, note, choices.map { it.id to it.caption }, "backend", backend)
+}
+
+fun decodeModels(payloadJson: String): ModelsMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeModels(obj)
+}
+
+fun decodeModels(obj: JsonValue.Obj): ModelsMessage? {
+  val parsed = decodeNamedChoices(obj, "backend") ?: return null
+  val backend = obj.readString("backend", true)
+  if (!backend.ok) return null
+  return ModelsMessage(parsed.first, backend.value, parsed.third.map { ModelChoice(it.first, it.second) }, parsed.second)
+}
+
+fun encodeSetModel(id: String, modelId: String): String {
+  return encodeOneString(MessageKind.SetModel, id, "model", modelId)
+}
+
+fun decodeSetModel(payloadJson: String): String? {
+  val obj = parseObject(payloadJson) ?: return null
+  val modelId = obj.readString("model", true)
+  if (!modelId.ok) return null
+  return modelId.value
+}
+
+fun encodeReasoning(id: String, current: String, note: String, choices: List<ReasoningChoice>): String {
+  return encodeNamedChoices(MessageKind.Reasoning, id, current, note, choices.map { it.id to it.caption })
+}
+
+fun decodeReasoning(payloadJson: String): ReasoningMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeReasoning(obj)
+}
+
+fun decodeReasoning(obj: JsonValue.Obj): ReasoningMessage? {
+  val parsed = decodeNamedChoices(obj) ?: return null
+  return ReasoningMessage(parsed.first, parsed.third.map { ReasoningChoice(it.first, it.second) }, parsed.second)
 }
 
 fun decodePath(payloadJson: String): String? {

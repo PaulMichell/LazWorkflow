@@ -767,6 +767,54 @@ Begin
   End;
 End;
 
+Procedure TestSetModel;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Flags.CanChangeMode := True;
+    Session.SetHostFlags(Flags);
+    Check('set_model starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetModel('set-model', 'grok-4'));
+    Check('set_model is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetModel)));
+    Check('set_model sends no error', Carrier.SentCount = 0);
+    Flags.PlanAgentRunning := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetModel('set-model-plan', 'grok-4'));
+    Check('plan-running set_model is not queued', Sink.Calls = 0);
+    Check('plan-running set_model is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('plan-running set_model sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags.PlanAgentRunning := False;
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetModel('set-model-busy', 'grok-4'));
+    Check('sending set_model is not queued', Sink.Calls = 0);
+    Check('sending set_model error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('sending set_model sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
@@ -997,6 +1045,7 @@ Begin
       TestIdleSteerSubmits;
       TestSelectTarget;
       TestSelectConversation;
+      TestSetModel;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;

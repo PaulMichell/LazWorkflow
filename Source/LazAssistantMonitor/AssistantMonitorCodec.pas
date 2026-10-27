@@ -12,7 +12,7 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-27: conversations and select_conversation stay in this table.
+  Reviewed 2026-10-27: models, set_model, and reasoning stay in this table.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -99,7 +99,10 @@ Type
     mmkTargets,
     mmkSelectTarget,
     mmkConversations,
-    mmkSelectConversation
+    mmkSelectConversation,
+    mmkModels,
+    mmkSetModel,
+    mmkReasoning
   );
 
   TMonitorMessage = Record
@@ -187,6 +190,29 @@ Type
     Current: String;
     Choices: Array Of TMonitorConversationChoice;
     Truncated: Boolean;
+  End;
+
+  TMonitorModelChoice = Record
+    Id: String;
+    Caption: String;
+  End;
+
+  TMonitorModelsMessage = Record
+    Current: String;
+    Backend: String;
+    Choices: Array Of TMonitorModelChoice;
+    Note: String;
+  End;
+
+  TMonitorReasoningChoice = Record
+    Id: String;
+    Caption: String;
+  End;
+
+  TMonitorReasoningMessage = Record
+    Current: String;
+    Choices: Array Of TMonitorReasoningChoice;
+    Note: String;
   End;
 
   TMonitorPathMessage = Record
@@ -384,6 +410,12 @@ Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStr
 Function DecodeMonitorConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
 Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
 Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function EncodeMonitorModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
+Function DecodeMonitorModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
+Function DecodeMonitorSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
+Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
@@ -534,6 +566,9 @@ Begin
     mmkSelectTarget: Result := 'select_target';
     mmkConversations: Result := 'conversations';
     mmkSelectConversation: Result := 'select_conversation';
+    mmkModels: Result := 'models';
+    mmkSetModel: Result := 'set_model';
+    mmkReasoning: Result := 'reasoning';
   Else
     Result := '';
   End;
@@ -1357,6 +1392,157 @@ End;
 Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
 Begin
   Result := DecodeOneString(PayloadJson, 'id', ArchiveId);
+End;
+
+Function EncodeNamedChoices(Kind: TMonitorMessageKind; Const Id, Current, Note: String; Ids, Captions: TStrings;
+  Const ExtraName, ExtraValue: String; HasExtra: Boolean): String;
+Var
+  Payload, Choice: TJSONObject;
+  Choices: TJSONArray;
+  Index: Integer;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('current', Current);
+  If HasExtra Then
+    Payload.Add(ExtraName, ExtraValue);
+  Choices := TJSONArray.Create;
+  Payload.Add('choices', Choices);
+  If Assigned(Ids) And Assigned(Captions) Then
+    For Index := 0 To Ids.Count - 1 Do
+      Begin
+        If Index >= Captions.Count Then
+          Break;
+        Choice := TJSONObject.Create;
+        Choice.Add('id', Ids[Index]);
+        Choice.Add('caption', Captions[Index]);
+        Choices.Add(Choice);
+      End;
+  Payload.Add('note', Note);
+  Result := EncodeWith(Kind, Id, Payload);
+End;
+
+Function DecodeNamedChoices(Const PayloadJson: String; Out Current, Note: String; Out Ids, Captions: TStringList;
+  Const ExtraName: String; WantExtra: Boolean; Out ExtraValue: String): Boolean;
+Var
+  Data, Node, Item: TJSONData;
+  Obj, Choice: TJSONObject;
+  Arr: TJSONArray;
+  Index: Integer;
+  ChoiceId, ChoiceCaption: String;
+Begin
+  Result := False;
+  Current := '';
+  Note := '';
+  ExtraValue := '';
+  Ids := Nil;
+  Captions := Nil;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    If Not ReadString(Obj, 'current', True, Current) Then
+      Exit;
+    If WantExtra And (Not ReadString(Obj, ExtraName, True, ExtraValue)) Then
+      Exit;
+    If Not ReadString(Obj, 'note', True, Note) Then
+      Exit;
+    Node := Obj.Find('choices');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    For Index := 0 To Arr.Count - 1 Do
+      Begin
+        Item := Arr.Items[Index];
+        If Not (Item Is TJSONObject) Then
+          Exit;
+        Choice := TJSONObject(Item);
+        If Not ReadString(Choice, 'id', True, ChoiceId) Or Not ReadString(Choice, 'caption', True, ChoiceCaption) Then
+          Exit;
+        Ids.Add(ChoiceId);
+        Captions.Add(ChoiceCaption);
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+    If Not Result Then
+      Begin
+        FreeAndNil(Ids);
+        FreeAndNil(Captions);
+      End;
+  End;
+End;
+
+Function EncodeMonitorModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
+Begin
+  Result := EncodeNamedChoices(mmkModels, Id, Current, Note, Ids, Captions, 'backend', Backend, True);
+End;
+
+Function DecodeMonitorModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Index: Integer;
+Begin
+  Result := False;
+  Models.Current := '';
+  Models.Backend := '';
+  SetLength(Models.Choices, 0);
+  Models.Note := '';
+  If Not DecodeNamedChoices(PayloadJson, Models.Current, Models.Note, Ids, Captions, 'backend', True, Models.Backend) Then
+    Exit;
+  Try
+    SetLength(Models.Choices, Ids.Count);
+    For Index := 0 To Ids.Count - 1 Do
+      Begin
+        Models.Choices[Index].Id := Ids[Index];
+        Models.Choices[Index].Caption := Captions[Index];
+      End;
+    Result := True;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
+Begin
+  Result := EncodeOneString(mmkSetModel, Id, 'model', ModelId);
+End;
+
+Function DecodeMonitorSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, 'model', ModelId);
+End;
+
+Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
+Begin
+  Result := EncodeNamedChoices(mmkReasoning, Id, Current, Note, Ids, Captions, '', '', False);
+End;
+
+Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Index: Integer;
+  Ignored: String;
+Begin
+  Result := False;
+  Reasoning.Current := '';
+  SetLength(Reasoning.Choices, 0);
+  Reasoning.Note := '';
+  If Not DecodeNamedChoices(PayloadJson, Reasoning.Current, Reasoning.Note, Ids, Captions, '', False, Ignored) Then
+    Exit;
+  Try
+    SetLength(Reasoning.Choices, Ids.Count);
+    For Index := 0 To Ids.Count - 1 Do
+      Begin
+        Reasoning.Choices[Index].Id := Ids[Index];
+        Reasoning.Choices[Index].Caption := Captions[Index];
+      End;
+    Result := True;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
 End;
 
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;

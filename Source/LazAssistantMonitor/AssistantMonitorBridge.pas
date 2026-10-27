@@ -116,6 +116,8 @@ Type
     Procedure PushPlan(Form: TProjectAssistantForm);
     Procedure PushTargets(Form: TProjectAssistantForm);
     Procedure PushConversations(Form: TProjectAssistantForm);
+    Procedure PushModels(Form: TProjectAssistantForm);
+    Procedure PushReasoning(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
     Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
@@ -554,6 +556,12 @@ Begin
     Finally
       Payload.Free;
     End;
+    { A connection reload sets the flag. The lists follow this status frame. }
+    If Form.TakeSamplingListPublish Then
+      Begin
+        PushModels(Form);
+        PushReasoning(Form);
+      End;
   Finally
     FinishStatusPush;
   End;
@@ -1102,6 +1110,42 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorBridge.PushModels(Form: TProjectAssistantForm);
+Var
+  Ids, Captions: TStringList;
+  Current, Backend, Note: String;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
+    SendJson(EncodeMonitorModels(HostId, Current, Backend, Note, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PushReasoning(Form: TProjectAssistantForm);
+Var
+  Ids, Captions: TStringList;
+  Current, Note: String;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
+    SendJson(EncodeMonitorReasoning(HostId, Current, Note, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
 Procedure TAssistantMonitorBridge.PushConversations(Form: TProjectAssistantForm);
 Var
   Ids, Titles: TStringList;
@@ -1310,6 +1354,13 @@ Begin
         If Not DecodeMonitorSelectConversation(PayloadJson, ArchiveId) Then
           Exit;
         Result := Form.RemoteSelectConversation(ArchiveId, ErrorText);
+      End;
+    Ord(mmkSetModel):
+      Begin
+        { A missing model is not an empty id. }
+        If Not DecodeMonitorSetModel(PayloadJson, ArchiveId) Then
+          Exit;
+        Result := Form.RemoteSelectModel(ArchiveId, ErrorText);
       End;
     Ord(mmkNewPlan):
       Begin

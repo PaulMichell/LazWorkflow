@@ -13,6 +13,8 @@ sealed class InboundPayload {
   data class Target(val value: TargetMessage) : InboundPayload()
   data class Targets(val value: TargetsMessage) : InboundPayload()
   data class Conversations(val value: ConversationsMessage) : InboundPayload()
+  data class Models(val value: ModelsMessage) : InboundPayload()
+  data class Reasoning(val value: ReasoningMessage) : InboundPayload()
   data class Plan(val value: PlanMessage) : InboundPayload()
   data class ApprovalRequest(val notice: ApprovalNotice) : InboundPayload()
   data class Insert(val text: String) : InboundPayload()
