@@ -50,7 +50,7 @@ Tests live under `/home/paul/Projects/LazWorkflow/Tests/`. The console pattern i
 - Reimplementing the model provider, tool runner, plan parser, or task expander on the phone.
 - A second settings file, a second conversation store, or a second image store. The conversation-store clause is overridden for the phone's read-only replica only. See Catalogue version 2. A second settings file and a second image store stay non-goals.
 - More than one simultaneous controller.
-- Changing target, model, effort, approval mode, skills, or OAuth from the phone.
+- Folder browse, package selection, a network model refresh, skills, and OAuth from the phone. The phone can change a listed target, the model, an archived conversation, the effort, and the footer approval mode. It does not get a filesystem picker or a second model list.
 - Editor integration, file drop, clipboard paste, package compile commands, Review Compile, Review Build, and Fix Selected Message from the phone.
 - Indy, Synapse, lNet, or any other third-party socket library.
 - Hand-editing a generated `Packages/Laz*.pas` install stub.
@@ -76,7 +76,7 @@ Tests live under `/home/paul/Projects/LazWorkflow/Tests/`. The console pattern i
 
 9. **A remote approval wait is cancellable, and timeout denies.** When remote approval is on, the waiter runs on the actor thread, waits at most 120 seconds, and a timeout is a denial. The waiter refuses to wait when it is already on the main thread, because `TAssistantService.ClearStreamThread` documents that `CheckSynchronize` off the main thread deadlocks a worker stuck in `Queue` or `Synchronize`. `TAssistantActor.Cancel` only calls `Terminate` and `AbortHttp` today, and `Detach` nils the service pointer while in-flight work can still finish and `ExecuteAssistantToolForMode` writes through `AssistantTarget`. The wait therefore arms a `TRTLEvent` through `AssistantSessionObserve`. Before `SignalAssistantApprovalWait`, the caller stores `aadAllow`, `aadDeny`, or `aadStopped` under the observer lock. `Cancel` stores `aadStopped` after `Terminate` and then signals. `Detach` stores `aadStopped` after `FServiceDetached` is visible and then signals. The waiter reads that stored value after `RTLEventWaitFor`. `aadNone` is not an allow; the waiter keeps waiting until a stored decision, an abort poll, or the 120 second timeout. The waiter slices the wait at about 200 ms and polls `Terminated`, `FTerminalNoted`, and `ServiceWasDetached`. Any of those is a denial with `approval_closed` reason `stopped`, including when the stored value is `aadAllow`. `RunOneTool` then does not queue `ExecuteOnMain` and does not call `ExecuteAssistantToolForMode`, so a phone or desktop Allow that arrives after Stop does not write, including while a newer turn is running. That return is what lets `ClearStreamThread` see `Finished` inside its 1.5 second pump instead of logging "Actor did not finish within 1.5s; detaching". Both the pre-dispatch waiter and the call inside `ApproveToolIfNeeded` receive the same `Call.Id`. Exactly one of them publishes. The armed wait is the only publish with `decisions_accepted` true. The display notice with `decisions_accepted` false is queued from `ApproveToolIfNeeded` alone.
 
-10. **Target changes stay on the desktop.** `TAssistantWorkTarget` is the write root (`AllowsWrite`, `ScopeRefusal`, `SelectFolder`). The phone displays kind, caption, and root. It does not call `SelectFolder`, `SelectProject`, or `SelectPackage`.
+10. **A listed target can change from the phone. Browse and packages stay on the desktop.** `TAssistantWorkTarget` remains the write root (`AllowsWrite`, `ScopeRefusal`, `SelectFolder`). `targets` carries the same rows as the desktop combo, without a package row and without browse. `select_target` calls `RemoteSelectTarget`. An empty path is Current Project. That helper uses the combo's `SelectFolder` and `BindToActiveProject` path and does not call `RunAssistantModal`. The phone does not call `TargetBrowseClick`, `SelectProject`, or `SelectPackage`.
 
 11. **Images cross as refs, with a bounded fetch.** `AssistantImages.pas` stores pixels under `.assistant/images/` and keeps bytes out of `conversation.jsonl`. The snapshot carries id, name, mime, width, height, `DisplayPath`, and `Missing`. `Missing` comes from `AssistantImageDisplayPresent`, not from `TAssistantImageRef`. `image_get` resolves `turn_index` plus `image_id` to that display path and reads it with `ReadStoredAssistantImage`. Each `image_data` part holds at most 190000 decoded bytes so the base64 text plus the JSON envelope stays under the 262144-byte frame cap. A display file larger than 1 MiB, or a file the store refuses, returns `image_unavailable` and leaves the socket up. The 8 MiB store ceiling (`AssistantImageMaxFileBytes`) is a store limit, not a frame limit.
 
@@ -414,6 +414,11 @@ The bridge finds the form the way `AssistantHostTurnOrPlanActive` does: it scans
 | `RemoteRunTask` | kind checks, then `PrepareAssistantTaskRunWithNote`, then `ApplyPreparedTaskRequest` for `trkRun` | See task rules below. |
 | `RemoteInsertTask` | kind checks, then `PrepareAssistantTaskRunWithNote` for `trkInsert` | Returns `ApiText` as `insert_result`. Does not call `ApplyPreparedTaskRequest`, which writes `InputMemo` and shows "Replace the composer text with this task?". `host_busy` while `FSending` or `FPlanAgentRunning`. |
 | `RemoteTurn` | `GetTurn` | Does not change the desktop selection. |
+| `RemoteSelectTarget` | the combo's `SelectFolder` and `BindToActiveProject` | `select_target`. Empty path is Current Project. Does not call `RunAssistantModal`. Refused while a review is in progress, while a reply is sending, or while a plan run is active. A path that is not in the current choice list is refused. Choosing the target already selected publishes nothing further. |
+| `RemoteSelectConversation` | `ActivateArchive`, then `ApplyLoadedConversationToUi` | `select_conversation`. Empty id is the open conversation and does nothing. Does not call `RunAssistantModal`. Refused while a reply is sending. A plan run does not refuse it. An id that is not in History is refused. This does change the desktop History selection. It is not `RemoteTurn`. |
+| `RemoteSelectModel` | the model branch of `ApplySamplingChange` | `set_model`. Does not call `RunAssistantModal` and does not call `ListAvailableModels` or a Codex or compatible list endpoint. Refused while a reply is sending, a plan run is active, or a review is in progress. |
+| `RemoteSelectReasoning` | the effort branch of `ApplySamplingChange` | `set_reasoning`. Empty `level` is model default. Missing `level` is a decode failure, not model default. Compared with the stored id, not with the status caption. Same refusal as a model change. Does not call `RunAssistantModal`. |
+| `RemoteSelectPermissions` | the approval branch of `ApplySamplingChange` | `set_permissions`. Footer approval mode only: `ask`, `auto`, or `always`. An empty stored value counts as `ask`. This is not the tool-approval sheet and is not `approval_decision`. Same refusal as a model change. Does not call `RunAssistantModal`. |
 | `RemoteImage` | resolve `turn_index` + `image_id` to `DisplayPath`, then `ReadStoredAssistantImage` | The ref must belong to a turn the view already exposed. The file read is the display file, not the upload derivative. |
 
 `RemoteNewPlan` takes an optional `title` from the payload. An empty or missing title becomes "Project Plan", the same default `NewPlan` assigns before `InputQuery`. There is no `InputQuery`. The helper is rejected while sending, matching `NewPlanAction.Enabled`. It calls `WriteMarkdownFile` with `OpenAfter` false, so the Markdown window stays a desktop action. A `WriteMarkdownFile` failure returns that function's `Err` as `ErrorText` and does not call `MessageDlg`.
@@ -449,7 +454,7 @@ Task rules for v1:
 
 Plan actions that rewrite an item's `Status:` line, other than the in-progress write inside `RemoteWorkOnPlan`, stay with the model (`update_markdown`) or with the desktop. `SetPlanSectionStatus` remains a host-side helper. It is not a phone button.
 
-`Busy` mirrors `FSending` or `FPlanAgentRunning`. The phone may `steer` and `stop` in `Busy` only when `can_steer` or `can_stop` is true, not merely because the view is busy. `send`, `set_mode`, `new_conversation`, `run_plan`, `work_on_plan`, and `run_task` fail with `error` / `host_busy` while the matching desktop control is disabled. `remove_plan` and `insert_task` fail with `host_busy` while `FSending` or `FPlanAgentRunning`. That is slightly stricter than `SetSending`, which disables `RemovePlanAction` only while a turn is sending. `select_plan` and `new_plan` follow `SetSending`, which disables the plan combo and New Plan while a turn is running. `CanSend` is also false while `FPlanAgentRunning`.
+`Busy` mirrors `FSending` or `FPlanAgentRunning`. The phone may `steer` and `stop` in `Busy` only when `can_steer` or `can_stop` is true, not merely because the view is busy. `send`, `set_mode`, `new_conversation`, `run_plan`, `work_on_plan`, and `run_task` fail with `error` / `host_busy` while the matching desktop control is disabled. `remove_plan` and `insert_task` fail with `host_busy` while `FSending` or `FPlanAgentRunning`. That is slightly stricter than `SetSending`, which disables `RemovePlanAction` only while a turn is sending. `select_plan` and `new_plan` follow `SetSending`, which disables the plan combo and New Plan while a turn is running. `CanSend` is also false while `FPlanAgentRunning`. `select_target`, `set_model`, `set_reasoning`, and `set_permissions` are `host_busy` while a turn is sending. `select_target` is also `host_busy` while a plan run is active, because a target bind stops in-flight work. `select_conversation` is `host_busy` while sending and is not refused only because a plan run is active. `set_permissions` is not handled as `approval_decision`.
 
 ### Message catalogue
 
@@ -476,7 +481,7 @@ Wire names are snake case. Pascal enums stay in the units above; the codec maps 
 | Type | Direction | Payload | Host effect |
 | --- | --- | --- | --- |
 | `snapshot` | host to client | `view`, `turns` (index), `live` (full turn), `plan` (path, title, rows), `tasks` (rows), `approval` | Built on the main thread after auth and whenever the client sends `refresh`. |
-| `refresh` | client to host | empty object | Queues a new snapshot. |
+| `refresh` | client to host | `text` | `plan_choices` pushes the plan list. `menu_choices` pushes that list plus `targets`, `conversations`, `models`, `reasoning`, and `permissions`. An empty payload is the old stall probe and returns `host_busy`. It does not build a snapshot. |
 | `transcript` | host to client | `turn_index`, `revision`, `blocks`, `phase`, `status_text` | Latest full live blocks. The client replaces the live turn. |
 | `turn` | client to host | `turn_index` | `RemoteTurn`. |
 | `turn_data` | host to client | one `TAssistantMonitorTurn` | |
@@ -486,7 +491,17 @@ Wire names are snake case. Pascal enums stay in the units above; the codec maps 
 | `steer` | client to host | `text` | `RemoteSteer`. |
 | `stop` | client to host | empty object | `RemoteStop`. |
 | `status` | host to client | the status fields of `TAssistantMonitorView` | |
-| `target` | host to client | `kind`, `display`, `root` | Display only. |
+| `target` | host to client | `kind`, `display`, `root` | Live caption. Selection is `select_target`, not this frame. |
+| `targets` | host to client | `current`, `choices` (`path`, `caption`) | Same rows as the desktop target combo, without a package row or browse. |
+| `select_target` | client to host | `path` | `RemoteSelectTarget`. Empty path is Current Project. |
+| `conversations` | host to client | `current`, `choices` (`id`, `title`, `current`), `truncated` | Host History, at most 40 rows. |
+| `select_conversation` | client to host | `id` | `RemoteSelectConversation`. Empty id is the open conversation. |
+| `models` | host to client | `current`, `backend`, `choices` (`id`, `caption`), `note` | Footer model list. No network refresh while building the frame. |
+| `set_model` | client to host | `model` | `RemoteSelectModel`. |
+| `reasoning` | host to client | `current`, `choices` (`id`, `caption`), `note` | Stored effort id. Not the status `effort` caption. |
+| `set_reasoning` | client to host | `level` | `RemoteSelectReasoning`. Empty `level` is model default. |
+| `permissions` | host to client | `current`, `backend`, `choices` (`id`, `caption`), `note` | Footer approval mode. Not the tool-approval sheet. |
+| `set_permissions` | client to host | `approval` | `RemoteSelectPermissions`. Not `approval_decision`. |
 | `plan` | host to client | `path`, `title`, `running`, `rows` | |
 | `select_plan` | client to host | `path` | `RemoteSelectPlan`. |
 | `new_plan` | client to host | optional `title` | `RemoteNewPlan`. Empty or missing `title` becomes "Project Plan". |
@@ -509,7 +524,9 @@ Wire names are snake case. Pascal enums stay in the units above; the codec maps 
 | `ping` | either | `ticks` | |
 | `pong` | either | `ticks` | |
 
-`snapshot.turns` carries index rows only: `turn_index`, `id`, `mode`, `created_at`, `prompt_preview`, `error_text`. The newest 30 stored turns are included, plus the live turn in `live`. Older rows are omitted from v1; the desktop history combo remains the way to reach archived conversations. Overridden for the phone replica only: a disconnected phone can open a cached conversation. The desktop history combo remains the host store. See Catalogue version 2. `prompt_preview` is the store's existing `PromptPreview`.
+`snapshot.turns` carries index rows only: `turn_index`, `id`, `mode`, `created_at`, `prompt_preview`, `error_text`. The newest 30 stored turns are included, plus the live turn in `live`. Those rows are the current conversation, not History. `conversations` and `select_conversation` switch an archived conversation on the host, which changes the desktop History selection. Rows beyond the 40-row cap stay on the desktop. A disconnected phone can still open a cached replica. The host store remains the authority while the link is live. See Catalogue version 2. `prompt_preview` is the store's existing `PromptPreview`.
+
+The ten drawer types are additive. They do not bump the catalogue version. `FillMonitorTargetChoices`, `FillMonitorConversationChoices`, `FillMonitorModelChoices`, `FillMonitorReasoningChoices`, and `FillMonitorPermissionsChoices` build the host frames. The matching `RemoteSelect*` helpers above are dialog-free: they return `ErrorText` and do not call `RunAssistantModal`. Folder browse, package selection, a network model refresh, skills, and OAuth remain desktop-only. Tool Permissions is the footer approval mode (`ask`, `auto`, `always`), not the tool-approval sheet. `approval_requested`, `approval_decision`, and `approval_closed` stay as they are.
 
 `transcript.blocks[].body` for a tool card is capped at `MaxToolEventChars` (4000, `AssistantActor.pas`). The block gains `truncated: true` when the form's trace body was longer. Answer and thinking bodies are the full snapshots `TAssistantStreamEvent` already delivers, split across frames when one body exceeds 200000 bytes. Each part has `part`, `part_count`, and `revision`.
 
@@ -578,7 +595,7 @@ stateDiagram-v2
 
 `Accepted` to `Listening` with `rejected` / `revoked` is a new socket whose `client_id` is already revoked. The host never saw `auth` for that socket. `bye` / `revoked` is only the `Revoked` edge, for a socket that was already `Live` or `Busy`.
 
-`Busy` mirrors `TProjectAssistantForm.FSending` or `FPlanAgentRunning`. The phone may `steer` and `stop` in `Busy` only when `can_steer` or `can_stop` is true. The `host_busy` rules for `send`, `set_mode`, `new_conversation`, `run_plan`, `work_on_plan`, `run_task`, `remove_plan`, and `insert_task` are in Host commands. `select_plan` and `new_plan` follow `SetSending`.
+`Busy` mirrors `TProjectAssistantForm.FSending` or `FPlanAgentRunning`. The phone may `steer` and `stop` in `Busy` only when `can_steer` or `can_stop` is true. The `host_busy` rules for `send`, `set_mode`, `new_conversation`, `run_plan`, `work_on_plan`, `run_task`, `remove_plan`, `insert_task`, `select_target`, `select_conversation`, `set_model`, `set_reasoning`, and `set_permissions` are in Host commands. `select_plan` and `new_plan` follow `SetSending`. `select_conversation` is not refused only because a plan run is active.
 
 `Revoked` is terminal for that connection. The listen socket stays up when the user has only revoked a client. Disabling the listener sends `bye` / `disabled` and keeps the client records.
 
@@ -717,8 +734,11 @@ Remote-capable in v1:
 - Mode changes while the desktop combo is enabled.
 - Send while idle. Steer while `FSending` and the active backend accepts steer.
 - Stop.
-- Status read-out: model, backend, signed-in boolean, effort caption, approval caption, skill, context text, phase, the same fields `UpdateStatusFooter` pushes into `TStatusFooterFrame`.
-- Target caption, kind, and root, read-only.
+- Status read-out: model, backend, signed-in boolean, effort caption, approval caption, skill, context text, phase, the same fields `UpdateStatusFooter` pushes into `TStatusFooterFrame`. The effort and approval captions are display. The drawer check for reasoning and Tool Permissions comes from `reasoning` and `permissions`, not from those captions.
+- Target caption, kind, and root, plus a listed target change (`targets`, `select_target`).
+- An archived conversation from the host History list (`conversations`, `select_conversation`). This changes the desktop selection. `RemoteTurn` still does not.
+- Model and reasoning level (`models`, `set_model`, `reasoning`, `set_reasoning`), from the footer lists already on the desktop. No network refresh.
+- Tool Permissions (`permissions`, `set_permissions`): the footer approval mode, not the tool-approval sheet.
 - Plan list, select plan, new plan, remove plan from the list, work on the selected Build item, run plan, stop plan.
 - Task list. Run and insert for enabled prompt tasks that are not `CompileFirst`. A required note is typed on the phone.
 - New conversation while idle.
@@ -728,8 +748,9 @@ Remote-capable in v1:
 Desktop-only in v1:
 
 - Lazarus menu registration, IDE message quick-fix, Review Compile, Review Build, Fix Selected Message (`AssistantMain.pas`).
-- Changing the target (`TargetBrowseClick`, `SelectFolder`, `SelectProject`).
-- Model, effort, approval-mode, and skill footer menus (`ShowSamplingMenu`, `ToggleSkillForMode`).
+- Folder browse (`TargetBrowseClick`) and package selection (`SelectProject`, `SelectPackage`). A listed folder or Current Project can still be chosen with `select_target`.
+- A network model refresh (`ListAvailableModels`, and a Codex or compatible list endpoint). The phone uses the cached footer list.
+- Skills (`ToggleSkillForMode`).
 - Settings, OAuth, and API keys (`AssistantSettingsForm`, `GrokOAuth`).
 - Attach, paste, drop, save, and preview of composer images (`AttachImageAction`, `InputPanelDropFiles`).
 - Open plan in a Markdown window, export history, delete history, context-breakdown dialog.
@@ -780,7 +801,7 @@ Source/KotlinMonitorApp/
 Screens:
 
 - **Endpoint.** Host address and port (default 56122). No fingerprint and no pairing code. Protocol errors stay on this screen. See Open LAN bring-up.
-- **Conversation.** The default screen after auth. A top bar shows connection (live, busy, disconnected), target caption, model, and phase. A lazy column renders blocks in order: user, thinking, tool card (name, title, running or ok, body), steer, subagent, note, answer. Image blocks request `image_get` once, reassemble `image_data` parts, and cache the bitmap in memory. An `image_unavailable` tile names the reason and leaves the session up. A prompt field and one action button: caption Steer only when `can_steer` is true, caption Send only when `can_send` is true, disabled otherwise. The caption is not taken from `view.busy`. Between plan-agent packages `can_steer` is false, so Steer is not offered. Stop is enabled when `can_stop` is true (`FSending`). Mode is a segmented control of the five `AssistantModeToStr` values, disabled when `can_change_mode` is false. A banner covers disconnected, host closed, and `error` messages. The desktop composer's Enter-versus-Ctrl+Enter preference stays on the desktop; the phone always uses the button.
+- **Conversation.** The default screen after auth. A top bar shows connection (live, busy, disconnected), target caption, model, and phase. A lazy column renders blocks in order: user, thinking, tool card (name, title, running or ok, body), steer, subagent, note, answer. Image blocks request `image_get` once, reassemble `image_data` parts, and cache the bitmap in memory. An `image_unavailable` tile names the reason and leaves the session up. A prompt field and one action button: caption Steer only when `can_steer` is true, caption Send only when `can_send` is true, disabled otherwise. The caption is not taken from `view.busy`. Between plan-agent packages `can_steer` is false, so Steer is not offered. Stop is enabled when `can_stop` is true (`FSending`). Mode, a listed target, an archived conversation, the active plan, the model, the reasoning level, and Tool Permissions are rows in the menu drawer. Tool Permissions is the footer approval mode, not this page's approval sheet. Mode is not a segmented control on this page. A banner covers disconnected, host closed, and `error` messages. The desktop composer's Enter-versus-Ctrl+Enter preference stays on the desktop; the phone always uses the button.
 - **Plan.** Active plan title and path, the row list with status, Work on this, Run, Stop, New, Remove. Open-in-editor is absent.
 - **Tasks.** Not shown. The phone has no Tasks tab and does not send `run_task` or `insert_task`. A host `tasks` frame is ignored.
 - **Approval sheet.** Shows tool name and the 240-character summary `ApproveToolIfNeeded` already builds. When `decisions_accepted` is false the buttons are absent and the sheet says the decision is on the desktop. When true, Allow and Deny send `approval_decision`. A Codex or Claude turn does not raise `approval_requested`. v1 remote approval is the native tool loop only. `TAssistantToolBroker.OnApproval` stays nil.
@@ -1012,7 +1033,7 @@ Rejected. A paired device could allow `write_file`, `replace_in_file`, `run_comm
 | Device tampers with frames | TLS. A bad record fails the handshake or the read. There is no cleartext downgrade. |
 | Stolen phone | Revoke that `client_id`. The token stops working on the next `auth`, and a live socket is closed. |
 | Stolen `LazWorkflow.json` | The file is already owner-only via `ProtectOwnerOnlyFile`. The token in the `monitor` section is a remote-control credential. Revoke rotates it. It is not a model credential. |
-| Prompt injection from the phone | The text is user text. Mode tool policy in `ToolAllowedInMode` still applies. The phone cannot set `ToolsEnabled` or the approval mode. |
+| Prompt injection from the phone | The text is user text. Mode tool policy in `ToolAllowedInMode` still applies. The phone cannot set `ToolsEnabled`. Tool Permissions (`set_permissions`) is the footer approval mode, not the tool-approval sheet. Skills stay on the desktop. |
 | Phone asks for an image outside the transcript | `RemoteImage` checks the id against the requested turn's refs, resolves `DisplayPath`, then calls `ReadStoredAssistantImage`, which refuses symbolic links and paths outside the image directory. A file over the 1 MiB fetch budget returns `image_unavailable` and leaves the socket up. |
 | Phone sends a huge frame | Length is checked before allocation. Over the cap, the socket closes. |
 | Two phones | The second gets `rejected` / `busy` and no snapshot. |
@@ -1081,7 +1102,7 @@ Manual LAN acceptance is a comment in `Tests/AssistantMonitorAcceptance.lpr`. A 
 
 1. Build and restart Lazarus. Confirm the Assistant menu gains Remote Monitor and that the assistant window still sends a local prompt with the listener disabled.
 2. Enable the listener on the private LAN address. Confirm `LazWorkflow.json` changes only the `monitor` section.
-3. Pair the phone. Confirm the snapshot shows the current mode, target caption, model, and the live transcript, and that the desktop selection does not move when the phone opens an older turn.
+3. Pair the phone. Confirm the snapshot shows the current mode, target caption, model, and the live transcript. Opening an older turn with `turn` does not move the desktop selection. `select_conversation` does change the desktop History selection.
 4. Send from the phone while idle. Confirm the desktop transcript and the phone both show the user row and the streaming answer.
 5. Steer during the turn. Stop from the phone. Confirm the desktop ends in the same cancelled state `StopStream` already writes.
 6. Change mode from the phone while idle, and confirm a mode change is rejected while busy.
