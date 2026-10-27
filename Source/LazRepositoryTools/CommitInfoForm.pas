@@ -3,7 +3,8 @@ Unit CommitInfoForm;
 { Commit information dialog for the History graph (c) 2026 Michell Computing.
 
   Date and time are the author timestamp. Committer rows appear only when that
-  identity or that time differs. The History row date is the committer time. }
+  identity or that time differs. The History row date is the committer time.
+  Fields are anchored on the form. The button panel is unchanged. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,38 +14,29 @@ Unit CommitInfoForm;
 Interface
 
 Uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ButtonPanel, GitService;
+  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ButtonPanel,
+  GitService;
 
 Type
   TCommitInfoForm = Class(TForm)
-    FieldsHost: TPanel;
-    IdRow: TPanel;
     IdLabel: TLabel;
     IdEdit: TEdit;
-    WhenRow: TPanel;
     DateLabel: TLabel;
     DateEdit: TEdit;
     TimeLabel: TLabel;
     TimeEdit: TEdit;
-    AuthorRow: TPanel;
     AuthorLabel: TLabel;
     AuthorEdit: TEdit;
-    CommitterRow: TPanel;
     CommitterLabel: TLabel;
     CommitterEdit: TEdit;
-    CommitterWhenRow: TPanel;
     CommitterDateLabel: TLabel;
     CommitterDateEdit: TEdit;
     CommitterTimeLabel: TLabel;
     CommitterTimeEdit: TEdit;
-    ParentsRow: TPanel;
     ParentsLabel: TLabel;
     ParentsMemo: TMemo;
-    RefsRow: TPanel;
     RefsLabel: TLabel;
     RefsMemo: TMemo;
-    MessageHost: TPanel;
     MessageLabel: TLabel;
     MessageMemo: TMemo;
     ButtonPanel: TButtonPanel;
@@ -164,25 +156,33 @@ End;
 
 Procedure TCommitInfoForm.FitFields;
 Var
-  Rows: Array[0..6] Of TControl;
-  Index, TopPos: Integer;
+  Above: TControl;
+
+  Procedure BindBelow(Control: TControl);
+  Begin
+    Control.AnchorSide[akTop].Control := Above;
+    Control.AnchorSide[akTop].Side := asrBottom;
+    Above := Control;
+  End;
+
 Begin
-  Rows[0] := IdRow;
-  Rows[1] := WhenRow;
-  Rows[2] := AuthorRow;
-  Rows[3] := CommitterRow;
-  Rows[4] := CommitterWhenRow;
-  Rows[5] := ParentsRow;
-  Rows[6] := RefsRow;
-  TopPos := 0;
-  For Index := 0 To High(Rows) Do
-    If Assigned(Rows[Index]) And Rows[Index].Visible Then
-      Begin
-        Rows[Index].Top := TopPos;
-        TopPos := TopPos + Rows[Index].Height;
-      End;
-  If Assigned(FieldsHost) Then
-    FieldsHost.Height := TopPos;
+  { Optional committer rows are hidden when they match the author. Point the next
+    visible field at the last visible one so the anchor chain closes the gap. }
+  DisableAlign;
+  Try
+    CommitterLabel.Visible := CommitterEdit.Visible;
+    CommitterDateLabel.Visible := CommitterDateEdit.Visible;
+    CommitterTimeLabel.Visible := CommitterDateEdit.Visible;
+    CommitterTimeEdit.Visible := CommitterDateEdit.Visible;
+    Above := AuthorEdit;
+    If CommitterEdit.Visible Then
+      BindBelow(CommitterEdit);
+    If CommitterDateEdit.Visible Then
+      BindBelow(CommitterDateEdit);
+    BindBelow(ParentsMemo);
+  Finally
+    EnableAlign;
+  End;
 End;
 
 Procedure TCommitInfoForm.ApplyInfo(Const Info: TGitCommitAttributes);
@@ -203,9 +203,9 @@ Begin
   CommitterEdit.Text := PersonText(Info.CommitterName, Info.CommitterEmail);
   CommitterDateEdit.Text := DateText(Info.CommitterTime);
   CommitterTimeEdit.Text := TimeText(Info.CommitterTime);
-  CommitterRow.Visible := (Trim(Info.AuthorName) <> Trim(Info.CommitterName)) Or
+  CommitterEdit.Visible := (Trim(Info.AuthorName) <> Trim(Info.CommitterName)) Or
     (Trim(Info.AuthorEmail) <> Trim(Info.CommitterEmail));
-  CommitterWhenRow.Visible := Info.AuthorTime <> Info.CommitterTime;
+  CommitterDateEdit.Visible := Info.AuthorTime <> Info.CommitterTime;
   ParentsMemo.Text := SplitDisplay(Info.Parents, ' ', NoneValue);
   RefsMemo.Text := SplitDisplay(Info.Refs, ',', NoneValue);
   MessageMemo.Text := DisplayMessage(Info.Message);

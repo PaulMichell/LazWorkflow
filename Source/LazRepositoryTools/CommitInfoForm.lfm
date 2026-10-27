@@ -12,300 +12,311 @@ object CommitInfoForm: TCommitInfoForm
   LCLVersion = '5.99.0.0'
   OnCreate = FormCreate
   OnShow = FormShow
-  object FieldsHost: TPanel
-    Left = 0
-    Height = 328
-    Top = 0
-    Width = 640
-    Align = alTop
-    BevelOuter = bvNone
-    ClientHeight = 328
-    ClientWidth = 640
-    TabOrder = 0
-    object IdRow: TPanel
-      Left = 0
-      Height = 40
-      Top = 0
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 40
-      ClientWidth = 640
-      TabOrder = 0
-      object IdLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Id:'
-        ParentColor = False
-      end
-      object IdEdit: TEdit
-        Left = 148
-        Height = 32
-        Top = 4
-        Width = 480
-        Anchors = [akTop, akLeft, akRight]
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 0
-      end
-    end
-    object WhenRow: TPanel
-      Left = 0
-      Height = 40
-      Top = 40
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 40
-      ClientWidth = 640
-      TabOrder = 1
-      object DateLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Date:'
-        ParentColor = False
-      end
-      object DateEdit: TEdit
-        Left = 148
-        Height = 32
-        Top = 4
-        Width = 160
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 0
-      end
-      object TimeLabel: TLabel
-        Left = 324
-        Height = 18
-        Top = 10
-        Width = 40
-        AutoSize = False
-        Caption = 'Time:'
-        ParentColor = False
-      end
-      object TimeEdit: TEdit
-        Left = 372
-        Height = 32
-        Top = 4
-        Width = 256
-        Anchors = [akTop, akLeft, akRight]
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 1
-      end
-    end
-    object AuthorRow: TPanel
-      Left = 0
-      Height = 40
-      Top = 80
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 40
-      ClientWidth = 640
-      TabOrder = 2
-      object AuthorLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Author:'
-        ParentColor = False
-      end
-      object AuthorEdit: TEdit
-        Left = 148
-        Height = 32
-        Top = 4
-        Width = 480
-        Anchors = [akTop, akLeft, akRight]
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 0
-      end
-    end
-    object CommitterRow: TPanel
-      Left = 0
-      Height = 40
-      Top = 120
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 40
-      ClientWidth = 640
-      TabOrder = 3
-      object CommitterLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Committer:'
-        ParentColor = False
-      end
-      object CommitterEdit: TEdit
-        Left = 148
-        Height = 32
-        Top = 4
-        Width = 480
-        Anchors = [akTop, akLeft, akRight]
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 0
-      end
-    end
-    object CommitterWhenRow: TPanel
-      Left = 0
-      Height = 40
-      Top = 160
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 40
-      ClientWidth = 640
-      TabOrder = 4
-      object CommitterDateLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 140
-        AutoSize = False
-        Caption = 'Committer date:'
-        ParentColor = False
-      end
-      object CommitterDateEdit: TEdit
-        Left = 160
-        Height = 32
-        Top = 4
-        Width = 148
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 0
-      end
-      object CommitterTimeLabel: TLabel
-        Left = 320
-        Height = 18
-        Top = 10
-        Width = 140
-        AutoSize = False
-        Caption = 'Committer time:'
-        ParentColor = False
-      end
-      object CommitterTimeEdit: TEdit
-        Left = 468
-        Height = 32
-        Top = 4
-        Width = 160
-        Anchors = [akTop, akLeft, akRight]
-        AutoSelect = False
-        ReadOnly = True
-        TabOrder = 1
-      end
-    end
-    object ParentsRow: TPanel
-      Left = 0
-      Height = 56
-      Top = 200
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 56
-      ClientWidth = 640
-      TabOrder = 5
-      object ParentsLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Parents:'
-        ParentColor = False
-      end
-      object ParentsMemo: TMemo
-        Left = 148
-        Height = 48
-        Top = 4
-        Width = 480
-        Anchors = [akTop, akLeft, akRight]
-        ReadOnly = True
-        ScrollBars = ssAutoBoth
-        TabOrder = 0
-        WordWrap = False
-      end
-    end
-    object RefsRow: TPanel
-      Left = 0
-      Height = 72
-      Top = 256
-      Width = 640
-      Anchors = [akTop, akLeft, akRight]
-      BevelOuter = bvNone
-      ClientHeight = 72
-      ClientWidth = 640
-      TabOrder = 6
-      object RefsLabel: TLabel
-        Left = 12
-        Height = 18
-        Top = 10
-        Width = 124
-        AutoSize = False
-        Caption = 'Refs:'
-        ParentColor = False
-      end
-      object RefsMemo: TMemo
-        Left = 148
-        Height = 64
-        Top = 4
-        Width = 480
-        Anchors = [akTop, akLeft, akRight]
-        ReadOnly = True
-        ScrollBars = ssAutoVertical
-        TabOrder = 0
-      end
-    end
+  object IdLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = IdEdit
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 10
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Id:'
+    ParentColor = False
   end
-  object MessageHost: TPanel
-    Left = 0
-    Height = 183
-    Top = 328
-    Width = 640
-    Align = alClient
-    BevelOuter = bvNone
-    ClientHeight = 183
-    ClientWidth = 640
+  object IdEdit: TEdit
+    AnchorSideTop.Control = CommitInfoForm
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 148
+    Height = 32
+    Top = 4
+    Width = 480
+    Anchors = [akTop, akLeft, akRight]
+    AutoSelect = False
+    BorderSpacing.Top = 4
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    TabOrder = 0
+  end
+  object DateLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = DateEdit
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 50
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Date:'
+    ParentColor = False
+  end
+  object DateEdit: TEdit
+    AnchorSideTop.Control = IdEdit
+    AnchorSideTop.Side = asrBottom
+    Left = 148
+    Height = 32
+    Top = 44
+    Width = 160
+    AutoSelect = False
+    BorderSpacing.Top = 8
+    ReadOnly = True
     TabOrder = 1
-    object MessageLabel: TLabel
-      Left = 12
-      Height = 18
-      Top = 8
-      Width = 616
-      Align = alTop
-      AutoSize = False
-      BorderSpacing.Left = 12
-      BorderSpacing.Top = 8
-      BorderSpacing.Right = 12
-      Caption = 'Message:'
-      ParentColor = False
-    end
-    object MessageMemo: TMemo
-      Left = 12
-      Height = 149
-      Top = 26
-      Width = 616
-      Align = alClient
-      BorderSpacing.Left = 12
-      BorderSpacing.Right = 12
-      BorderSpacing.Bottom = 8
-      ReadOnly = True
-      ScrollBars = ssAutoVertical
-      TabOrder = 0
-    end
+  end
+  object TimeLabel: TLabel
+    AnchorSideLeft.Control = DateEdit
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = DateEdit
+    AnchorSideTop.Side = asrTop
+    Left = 324
+    Height = 18
+    Top = 50
+    Width = 40
+    AutoSize = False
+    BorderSpacing.Left = 16
+    BorderSpacing.Top = 6
+    Caption = 'Time:'
+    ParentColor = False
+  end
+  object TimeEdit: TEdit
+    AnchorSideLeft.Control = TimeLabel
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = DateEdit
+    AnchorSideTop.Side = asrTop
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 372
+    Height = 32
+    Top = 44
+    Width = 256
+    Anchors = [akTop, akLeft, akRight]
+    AutoSelect = False
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    TabOrder = 2
+  end
+  object AuthorLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = AuthorEdit
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 90
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Author:'
+    ParentColor = False
+  end
+  object AuthorEdit: TEdit
+    AnchorSideTop.Control = DateEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 148
+    Height = 32
+    Top = 84
+    Width = 480
+    Anchors = [akTop, akLeft, akRight]
+    AutoSelect = False
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    TabOrder = 3
+  end
+  object CommitterLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = CommitterEdit
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 130
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Committer:'
+    ParentColor = False
+  end
+  object CommitterEdit: TEdit
+    AnchorSideTop.Control = AuthorEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 148
+    Height = 32
+    Top = 124
+    Width = 480
+    Anchors = [akTop, akLeft, akRight]
+    AutoSelect = False
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    TabOrder = 4
+  end
+  object CommitterDateLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = CommitterDateEdit
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 170
+    Width = 125
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Committer date:'
+    ParentColor = False
+  end
+  object CommitterDateEdit: TEdit
+    AnchorSideTop.Control = CommitterEdit
+    AnchorSideTop.Side = asrBottom
+    Left = 148
+    Height = 32
+    Top = 164
+    Width = 148
+    AutoSelect = False
+    BorderSpacing.Top = 8
+    ReadOnly = True
+    TabOrder = 5
+  end
+  object CommitterTimeLabel: TLabel
+    AnchorSideLeft.Control = CommitterDateEdit
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = CommitterDateEdit
+    AnchorSideTop.Side = asrTop
+    Left = 320
+    Height = 18
+    Top = 170
+    Width = 140
+    AutoSize = False
+    BorderSpacing.Left = 24
+    BorderSpacing.Top = 6
+    Caption = 'Committer time:'
+    ParentColor = False
+  end
+  object CommitterTimeEdit: TEdit
+    AnchorSideLeft.Control = CommitterTimeLabel
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = CommitterDateEdit
+    AnchorSideTop.Side = asrTop
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 468
+    Height = 32
+    Top = 164
+    Width = 160
+    Anchors = [akTop, akLeft, akRight]
+    AutoSelect = False
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    TabOrder = 6
+  end
+  object ParentsLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = ParentsMemo
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 210
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Parents:'
+    ParentColor = False
+  end
+  object ParentsMemo: TMemo
+    AnchorSideTop.Control = CommitterDateEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 148
+    Height = 48
+    Top = 204
+    Width = 480
+    Anchors = [akTop, akLeft, akRight]
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    ScrollBars = ssAutoBoth
+    TabOrder = 7
+    WordWrap = False
+  end
+  object RefsLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = RefsMemo
+    AnchorSideTop.Side = asrTop
+    Left = 12
+    Height = 18
+    Top = 266
+    Width = 124
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 6
+    Caption = 'Refs:'
+    ParentColor = False
+  end
+  object RefsMemo: TMemo
+    AnchorSideTop.Control = ParentsMemo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 148
+    Height = 64
+    Top = 260
+    Width = 480
+    Anchors = [akTop, akLeft, akRight]
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 12
+    ReadOnly = True
+    ScrollBars = ssAutoVertical
+    TabOrder = 8
+  end
+  object MessageLabel: TLabel
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = RefsMemo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    Left = 12
+    Height = 18
+    Top = 336
+    Width = 616
+    Anchors = [akTop, akLeft, akRight]
+    AutoSize = False
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 12
+    BorderSpacing.Right = 12
+    Caption = 'Message:'
+    ParentColor = False
+  end
+  object MessageMemo: TMemo
+    AnchorSideLeft.Control = CommitInfoForm
+    AnchorSideTop.Control = MessageLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Side = asrBottom
+    AnchorSideBottom.Control = ButtonPanel
+    AnchorSideBottom.Side = asrTop
+    Left = 12
+    Height = 155
+    Top = 354
+    Width = 616
+    Anchors = [akTop, akLeft, akRight, akBottom]
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    BorderSpacing.Bottom = 8
+    ReadOnly = True
+    ScrollBars = ssAutoVertical
+    TabOrder = 9
   end
   object ButtonPanel: TButtonPanel
     Left = 6
@@ -320,7 +331,7 @@ object CommitInfoForm: TCommitInfoForm
     CloseButton.DefaultCaption = True
     CancelButton.Name = 'CancelButton'
     CancelButton.DefaultCaption = True
-    TabOrder = 2
+    TabOrder = 10
     ShowButtons = [pbClose]
   end
 end
