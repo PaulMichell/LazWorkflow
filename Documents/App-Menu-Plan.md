@@ -80,7 +80,7 @@ The phone today receives only `target` (`kind`, `display`, `root`). There is no 
 
 ### 3.1 Host choices and select_target
 
-Status: not started
+Status: complete
 
 Add a host-to-client `targets` frame and a client-to-host `select_target` command. Catalogue version stays 1.
 
