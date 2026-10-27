@@ -15,6 +15,7 @@ sealed class InboundPayload {
   data class Conversations(val value: ConversationsMessage) : InboundPayload()
   data class Models(val value: ModelsMessage) : InboundPayload()
   data class Reasoning(val value: ReasoningMessage) : InboundPayload()
+  data class Permissions(val value: PermissionsMessage) : InboundPayload()
   data class Plan(val value: PlanMessage) : InboundPayload()
   data class ApprovalRequest(val notice: ApprovalNotice) : InboundPayload()
   data class Insert(val text: String) : InboundPayload()

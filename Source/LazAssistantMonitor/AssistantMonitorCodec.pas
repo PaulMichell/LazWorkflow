@@ -12,7 +12,7 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-27: models, set_model, reasoning, and set_reasoning stay in this table.
+  Reviewed 2026-10-27: models, reasoning, permissions, and their set commands stay in this table.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -103,7 +103,9 @@ Type
     mmkModels,
     mmkSetModel,
     mmkReasoning,
-    mmkSetReasoning
+    mmkSetReasoning,
+    mmkPermissions,
+    mmkSetPermissions
   );
 
   TMonitorMessage = Record
@@ -213,6 +215,18 @@ Type
   TMonitorReasoningMessage = Record
     Current: String;
     Choices: Array Of TMonitorReasoningChoice;
+    Note: String;
+  End;
+
+  TMonitorPermissionChoice = Record
+    Id: String;
+    Caption: String;
+  End;
+
+  TMonitorPermissionsMessage = Record
+    Current: String;
+    Backend: String;
+    Choices: Array Of TMonitorPermissionChoice;
     Note: String;
   End;
 
@@ -419,6 +433,10 @@ Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: 
 Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
 Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function EncodeMonitorPermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
+Function DecodeMonitorPermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Function EncodeMonitorSetPermissions(Const Id, Approval: String): String;
+Function DecodeMonitorSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
@@ -573,6 +591,8 @@ Begin
     mmkSetModel: Result := 'set_model';
     mmkReasoning: Result := 'reasoning';
     mmkSetReasoning: Result := 'set_reasoning';
+    mmkPermissions: Result := 'permissions';
+    mmkSetPermissions: Result := 'set_permissions';
   Else
     Result := '';
   End;
@@ -1532,6 +1552,49 @@ Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String)
 Begin
   { Missing level is a decode failure. An empty level is model default, not that failure. }
   Result := DecodeOneString(PayloadJson, 'level', Level);
+End;
+
+Function EncodeMonitorPermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
+Begin
+  Result := EncodeNamedChoices(mmkPermissions, Id, Current, Note, Ids, Captions, 'backend', Backend, True);
+End;
+
+Function DecodeMonitorPermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Index: Integer;
+Begin
+  Result := False;
+  Permissions.Current := '';
+  Permissions.Backend := '';
+  SetLength(Permissions.Choices, 0);
+  Permissions.Note := '';
+  If Not DecodeNamedChoices(PayloadJson, Permissions.Current, Permissions.Note, Ids, Captions, 'backend', True,
+    Permissions.Backend) Then
+    Exit;
+  Try
+    SetLength(Permissions.Choices, Ids.Count);
+    For Index := 0 To Ids.Count - 1 Do
+      Begin
+        Permissions.Choices[Index].Id := Ids[Index];
+        Permissions.Choices[Index].Caption := Captions[Index];
+      End;
+    Result := True;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Function EncodeMonitorSetPermissions(Const Id, Approval: String): String;
+Begin
+  Result := EncodeOneString(mmkSetPermissions, Id, 'approval', Approval);
+End;
+
+Function DecodeMonitorSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Begin
+  { Missing approval is a decode failure. It is not ask. }
+  Result := DecodeOneString(PayloadJson, 'approval', Approval);
 End;
 
 Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;

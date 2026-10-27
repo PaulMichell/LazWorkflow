@@ -83,6 +83,17 @@ class ProtocolCodecTest {
     assertEquals("", decodeSetReasoning(tryDecodeEnvelope(encodeSetReasoning("set-reasoning", "")).message.payloadJson))
     assertEquals("high", decodeSetReasoning(tryDecodeEnvelope(encodeSetReasoning("set-reasoning-high", "high")).message.payloadJson))
     assertNull(decodeSetReasoning("{}"))
+    val permissions = decodePermissions(tryDecodeEnvelope(encodePermissions("permissions", "ask", "codex", "",
+      listOf(
+        PermissionChoice("ask", "Ask before file changes and builds"),
+        PermissionChoice("auto", "Auto: allow project tools"),
+        PermissionChoice("always", "Always: allow registered tools")
+      ))).message.payloadJson)
+    assertEquals("ask", permissions?.current)
+    assertEquals("codex", permissions?.backend)
+    assertEquals("Ask before file changes and builds", permissions?.choices?.first()?.caption)
+    assertEquals("auto", decodeSetPermissions(tryDecodeEnvelope(encodeSetPermissions("set-permissions", "auto")).message.payloadJson))
+    assertNull(decodeSetPermissions("{}"))
     val reasoning = decodeReasoning(tryDecodeEnvelope(encodeReasoning("reasoning", "", "No connection is selected.",
       listOf(ReasoningChoice("", "Model default")))).message.payloadJson)
     assertEquals("", reasoning?.current)

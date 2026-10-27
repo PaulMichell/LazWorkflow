@@ -118,6 +118,7 @@ Type
     Procedure PushConversations(Form: TProjectAssistantForm);
     Procedure PushModels(Form: TProjectAssistantForm);
     Procedure PushReasoning(Form: TProjectAssistantForm);
+    Procedure PushPermissions(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
     Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
@@ -542,7 +543,7 @@ Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
 Var
   View: TAssistantMonitorView;
   Payload: TJSONObject;
-  PublishModels, PublishReasoning: Boolean;
+  PublishModels, PublishReasoning, PublishPermissions: Boolean;
 Begin
   Try
     If Not Assigned(Form) Then
@@ -558,12 +559,14 @@ Begin
       Payload.Free;
     End;
     { A connection reload sets the flags. The requested lists follow this status frame. }
-    If Form.TakeSamplingListPublish(PublishModels, PublishReasoning) Then
+    If Form.TakeSamplingListPublish(PublishModels, PublishReasoning, PublishPermissions) Then
       Begin
         If PublishModels Then
           PushModels(Form);
         If PublishReasoning Then
           PushReasoning(Form);
+        If PublishPermissions Then
+          PushPermissions(Form);
       End;
   Finally
     FinishStatusPush;
@@ -1149,6 +1152,24 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorBridge.PushPermissions(Form: TProjectAssistantForm);
+Var
+  Ids, Captions: TStringList;
+  Current, Backend, Note: String;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
+    SendJson(EncodeMonitorPermissions(HostId, Current, Backend, Note, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
 Procedure TAssistantMonitorBridge.PushConversations(Form: TProjectAssistantForm);
 Var
   Ids, Titles: TStringList;
@@ -1302,7 +1323,7 @@ End;
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
   Const Id, PayloadJson: String; Out ErrorText: String): Boolean;
 Var
-  Text, ModeText, Path, ArchiveId, ApiText, Level: String;
+  Text, ModeText, Path, ArchiveId, ApiText, Level, Approval: String;
   Plan: TMonitorPathMessage;
   Task: TMonitorTaskCommand;
   Image: TMonitorImageGet;
@@ -1371,6 +1392,13 @@ Begin
         If Not DecodeMonitorSetReasoning(PayloadJson, Level) Then
           Exit;
         Result := Form.RemoteSelectReasoning(Level, ErrorText);
+      End;
+    Ord(mmkSetPermissions):
+      Begin
+        { A missing approval is not ask. This is not an approval decision. }
+        If Not DecodeMonitorSetPermissions(PayloadJson, Approval) Then
+          Exit;
+        Result := Form.RemoteSelectPermissions(Approval, ErrorText);
       End;
     Ord(mmkNewPlan):
       Begin

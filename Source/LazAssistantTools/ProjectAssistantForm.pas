@@ -228,6 +228,7 @@ Type
     FReloadConnectionAfterSend: Boolean;
     FPublishModelList: Boolean;
     FPublishReasoningList: Boolean;
+    FPublishPermissionsList: Boolean;
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval, FCodexModelsJson: String;
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
@@ -577,12 +578,16 @@ Type
     Procedure FillMonitorModelChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
     /// Same rows as FillEffortFooterMenu. Does not refresh a provider catalogue.
     Procedure FillMonitorReasoningChoices(Ids, Captions: TStrings; Out Current, Note: String);
+    /// Same rows as FillPermissionsFooterMenu. An empty stored approval is ask.
+    Procedure FillMonitorPermissionsChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
     /// True once after a connection reload. The monitor pushes the requested lists after status.
-    Function TakeSamplingListPublish(Out PublishModels, PublishReasoning: Boolean): Boolean;
+    Function TakeSamplingListPublish(Out PublishModels, PublishReasoning, PublishPermissions: Boolean): Boolean;
     /// Does not open a dialog. A matching model id is a success no-op.
     Function RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
     /// Does not open a dialog. A matching stored effort id is a success no-op.
     Function RemoteSelectReasoning(Const Level: String; Out ErrorText: String): Boolean;
+    /// Does not open a dialog. An empty stored approval counts as ask.
+    Function RemoteSelectPermissions(Const Approval: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
@@ -1453,13 +1458,15 @@ Begin
   Note := 'This connection does not set an effort level.';
 End;
 
-Function TProjectAssistantForm.TakeSamplingListPublish(Out PublishModels, PublishReasoning: Boolean): Boolean;
+Function TProjectAssistantForm.TakeSamplingListPublish(Out PublishModels, PublishReasoning, PublishPermissions: Boolean): Boolean;
 Begin
   PublishModels := FPublishModelList;
   PublishReasoning := FPublishReasoningList;
-  Result := PublishModels Or PublishReasoning;
+  PublishPermissions := FPublishPermissionsList;
+  Result := PublishModels Or PublishReasoning Or PublishPermissions;
   FPublishModelList := False;
   FPublishReasoningList := False;
+  FPublishPermissionsList := False;
 End;
 
 Function TProjectAssistantForm.RemoteSelectModel(Const ModelId: String; Out ErrorText: String): Boolean;
@@ -1560,11 +1567,107 @@ Begin
       ErrorText := Note;
       Exit;
     End;
-  { The reload asked for both lists. This save publishes reasoning after status. }
-  If FPublishModelList Or FPublishReasoningList Then
+  { The reload asked for the sampling lists. This save publishes reasoning after status. }
+  If FPublishModelList Or FPublishReasoningList Or FPublishPermissionsList Then
     Begin
       FPublishModelList := False;
+      FPublishPermissionsList := False;
       FPublishReasoningList := True;
+    End;
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorPermissionsChoices(Ids, Captions: TStrings; Out Current, Backend, Note: String);
+  Procedure AddMode(Const Value, ModeCaption: String);
+  Begin
+    Ids.Add(Value);
+    Captions.Add(ModeCaption);
+  End;
+Begin
+  Current := 'ask';
+  Backend := '';
+  Note := '';
+  If Assigned(Ids) Then
+    Ids.Clear;
+  If Assigned(Captions) Then
+    Captions.Clear;
+  If Not Assigned(Ids) Or Not Assigned(Captions) Then
+    Exit;
+  If FActiveConnectionId = '' Then
+    Begin
+      Note := 'No connection is selected.';
+      Exit;
+    End;
+  Backend := FActiveBackend;
+  Current := LowerCase(Trim(FActiveApproval));
+  If (Current <> 'ask') And (Current <> 'auto') And (Current <> 'always') Then
+    Current := 'ask';
+  If FActiveBackend = 'codex' Then
+    Begin
+      AddMode('ask', 'Ask before file changes and builds');
+      AddMode('auto', 'Auto: allow project tools');
+      AddMode('always', 'Always: allow registered tools');
+    End
+  Else
+    Begin
+      AddMode('ask', 'Ask — confirm each write/compile');
+      AddMode('auto', 'Auto — allow project tools');
+      AddMode('always', 'Always — never prompt (like Build always-approve)');
+    End;
+End;
+
+Function TProjectAssistantForm.RemoteSelectPermissions(Const Approval: String; Out ErrorText: String): Boolean;
+Var
+  Ids, Captions: TStringList;
+  Current, Backend, Note: String;
+  Index: Integer;
+  Listed: Boolean;
+  DialogKind: TMsgDlgType;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Or FPlanAgentRunning Or FReviewInProgress Then
+    Begin
+      ErrorText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
+      Exit;
+    End;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
+    Listed := False;
+    For Index := 0 To Ids.Count - 1 Do
+      If Ids[Index] = Approval Then
+        Begin
+          Listed := True;
+          Break;
+        End;
+    If Not Listed Then
+      Begin
+        ErrorText := 'That permission is not in the list.';
+        Exit;
+      End;
+    { Empty stored approval is ask. Choosing that value must not write. }
+    If SameText(Trim(FActiveApproval), Approval) Or ((Trim(FActiveApproval) = '') And (Approval = 'ask')) Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  If Not TryApplySamplingChange('', '', Approval, False, False, True, Note, DialogKind) Then
+    Begin
+      ErrorText := Note;
+      Exit;
+    End;
+  { The reload asked for the sampling lists. This save publishes permissions after status. }
+  If FPublishModelList Or FPublishReasoningList Or FPublishPermissionsList Then
+    Begin
+      FPublishModelList := False;
+      FPublishReasoningList := False;
+      FPublishPermissionsList := True;
     End;
   Result := True;
 End;
@@ -9264,6 +9367,7 @@ Begin
     End;
   FPublishModelList := True;
   FPublishReasoningList := True;
+  FPublishPermissionsList := True;
   LoadConnectionSettings;
   RefreshFromConfig;
   ApplyActiveMode;

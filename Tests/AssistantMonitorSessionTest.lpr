@@ -864,6 +864,56 @@ Begin
   End;
 End;
 
+Procedure TestSetPermissions;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Flags.CanChangeMode := True;
+    Session.SetHostFlags(Flags);
+    Check('set_permissions starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions', 'ask'));
+    Check('set_permissions is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetPermissions)));
+    Check('set_permissions is not an approval decision', Sink.Kind <> Ord(mmkApprovalDecision));
+    Check('set_permissions sends no error', Carrier.SentCount = 0);
+    Flags.PlanAgentRunning := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions-plan', 'auto'));
+    Check('plan-running set_permissions is not queued', Sink.Calls = 0);
+    Check('plan-running set_permissions is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
+      (Message.Reason = 'host_busy'));
+    Check('plan-running set_permissions sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags.PlanAgentRunning := False;
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions-busy', 'always'));
+    Check('sending set_permissions is not queued', Sink.Calls = 0);
+    Check('sending set_permissions error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('sending set_permissions sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Wait until the current work finishes before changing the model, effort, or permissions.'));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
@@ -1096,6 +1146,7 @@ Begin
       TestSelectConversation;
       TestSetModel;
       TestSetReasoning;
+      TestSetPermissions;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;

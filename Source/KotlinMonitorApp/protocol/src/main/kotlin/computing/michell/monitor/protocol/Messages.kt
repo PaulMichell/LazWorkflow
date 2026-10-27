@@ -10,7 +10,7 @@ package computing.michell.monitor.protocol
    message types, payload fields, and limits. Splitting that table would hide a type.
    v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
-   Reviewed 2026-10-27: models, reasoning, and set_reasoning stay in this table. Inbound values are typed once.
+   Reviewed 2026-10-27: models, reasoning, permissions, and their set commands stay in this table. Inbound values are typed once.
    No socket, TLS, or Android UI in this file. */
 
 const val NoSessionReason = "no_session"
@@ -78,7 +78,9 @@ enum class MessageKind(val wireName: String) {
   Models("models"),
   SetModel("set_model"),
   Reasoning("reasoning"),
-  SetReasoning("set_reasoning");
+  SetReasoning("set_reasoning"),
+  Permissions("permissions"),
+  SetPermissions("set_permissions");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -262,6 +264,15 @@ data class ModelsMessage(val current: String, val backend: String, val choices: 
 data class ReasoningChoice(val id: String, val caption: String)
 
 data class ReasoningMessage(val current: String, val choices: List<ReasoningChoice>, val note: String)
+
+data class PermissionChoice(val id: String, val caption: String)
+
+data class PermissionsMessage(
+  val current: String,
+  val backend: String,
+  val choices: List<PermissionChoice>,
+  val note: String
+)
 
 data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
 
@@ -480,6 +491,7 @@ fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
     MessageKind.Conversations -> decodeConversations(payload)?.let { InboundPayload.Conversations(it) } ?: InboundPayload.None
     MessageKind.Models -> decodeModels(payload)?.let { InboundPayload.Models(it) } ?: InboundPayload.None
     MessageKind.Reasoning -> decodeReasoning(payload)?.let { InboundPayload.Reasoning(it) } ?: InboundPayload.None
+    MessageKind.Permissions -> decodePermissions(payload)?.let { InboundPayload.Permissions(it) } ?: InboundPayload.None
     MessageKind.Plan -> decodePlan(payload)?.let { InboundPayload.Plan(it) } ?: InboundPayload.None
     MessageKind.ApprovalRequested -> decodeApprovalRequested(payload)?.let { InboundPayload.ApprovalRequest(it) } ?: InboundPayload.None
     MessageKind.InsertResult -> decodeText(payload)?.let { InboundPayload.Insert(it) } ?: InboundPayload.None
@@ -894,6 +906,33 @@ fun decodeReasoning(payloadJson: String): ReasoningMessage? {
 fun decodeReasoning(obj: JsonValue.Obj): ReasoningMessage? {
   val parsed = decodeNamedChoices(obj) ?: return null
   return ReasoningMessage(parsed.first, parsed.third.map { ReasoningChoice(it.first, it.second) }, parsed.second)
+}
+
+fun encodePermissions(id: String, current: String, backend: String, note: String, choices: List<PermissionChoice>): String {
+  return encodeNamedChoices(MessageKind.Permissions, id, current, note, choices.map { it.id to it.caption }, "backend", backend)
+}
+
+fun decodePermissions(payloadJson: String): PermissionsMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodePermissions(obj)
+}
+
+fun decodePermissions(obj: JsonValue.Obj): PermissionsMessage? {
+  val parsed = decodeNamedChoices(obj, "backend") ?: return null
+  val backend = obj.readString("backend", true)
+  if (!backend.ok) return null
+  return PermissionsMessage(parsed.first, backend.value, parsed.third.map { PermissionChoice(it.first, it.second) }, parsed.second)
+}
+
+fun encodeSetPermissions(id: String, approval: String): String {
+  return encodeOneString(MessageKind.SetPermissions, id, "approval", approval)
+}
+
+fun decodeSetPermissions(payloadJson: String): String? {
+  val obj = parseObject(payloadJson) ?: return null
+  val approval = obj.readString("approval", true)
+  if (!approval.ok) return null
+  return approval.value
 }
 
 fun decodePath(payloadJson: String): String? {

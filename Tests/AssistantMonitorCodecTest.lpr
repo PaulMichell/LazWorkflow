@@ -455,12 +455,22 @@ Begin
     Ids.Add('high');
     Captions.Add('High');
     AddSample('reasoning', mmkReasoning, EncodeMonitorReasoning('reasoning', '', 'This connection does not set an effort level.', Ids, Captions));
+    Ids.Clear;
+    Captions.Clear;
+    Ids.Add('ask');
+    Captions.Add('Ask — confirm each write/compile');
+    Ids.Add('auto');
+    Captions.Add('Auto — allow project tools');
+    Ids.Add('always');
+    Captions.Add('Always — never prompt (like Build always-approve)');
+    AddSample('permissions', mmkPermissions, EncodeMonitorPermissions('permissions', 'ask', 'grok', '', Ids, Captions));
   Finally
     Captions.Free;
     Ids.Free;
   End;
   AddSample('set-model', mmkSetModel, EncodeMonitorSetModel('set-model', 'grok-4'));
   AddSample('set-reasoning', mmkSetReasoning, EncodeMonitorSetReasoning('set-reasoning', ''));
+  AddSample('set-permissions', mmkSetPermissions, EncodeMonitorSetPermissions('set-permissions', 'auto'));
 End;
 
 Procedure BuildSamples;
@@ -658,9 +668,10 @@ Var
   Target: TMonitorTargetMessage;
   Targets: TMonitorTargetsMessage;
   Conversations: TMonitorConversationsMessage;
-  ArchiveId, ModelId, Level: String;
+  ArchiveId, ModelId, Level, Approval: String;
   Models: TMonitorModelsMessage;
   Reasoning: TMonitorReasoningMessage;
+  Permissions: TMonitorPermissionsMessage;
   Plan: TMonitorPathMessage;
   Index, Decoded: Integer;
   Command: TMonitorTaskCommand;
@@ -773,6 +784,14 @@ Begin
       Check('set_model id', DecodeMonitorSetModel(Message.PayloadJson, ModelId) And (ModelId = 'grok-4'));
     mmkSetReasoning:
       Check('set_reasoning empty level', DecodeMonitorSetReasoning(Message.PayloadJson, Level) And (Level = ''));
+    mmkPermissions:
+      Check('permissions fields', DecodeMonitorPermissions(Message.PayloadJson, Permissions) And (Permissions.Current = 'ask') And
+        (Permissions.Backend = 'grok') And (Permissions.Note = '') And (Length(Permissions.Choices) = 3) And
+        (Permissions.Choices[0].Id = 'ask') And (Permissions.Choices[0].Caption = 'Ask — confirm each write/compile') And
+        (Permissions.Choices[2].Caption = 'Always — never prompt (like Build always-approve)'));
+    mmkSetPermissions:
+      Check('set_permissions approval', DecodeMonitorSetPermissions(Message.PayloadJson, Approval) And (Approval = 'auto') And
+        Not DecodeMonitorApprovalDecision(Message.PayloadJson, Decision));
     mmkReasoning:
       Check('reasoning empty id', DecodeMonitorReasoning(Message.PayloadJson, Reasoning) And (Reasoning.Current = '') And
         (Length(Reasoning.Choices) = 2) And (Reasoning.Choices[0].Id = '') And (Reasoning.Choices[0].Caption = 'Model default') And
@@ -1006,6 +1025,38 @@ Begin
   Check('changed body is kept', Length(Dirty) = 2);
   Dirty := SelectDirtyMonitorBlocks(Previous, Current, True);
   Check('first patch sends every block', Length(Dirty) = 2);
+End;
+
+Procedure TestPermissionsCaptions;
+Var
+  Ids, Captions: TStringList;
+  Permissions: TMonitorPermissionsMessage;
+  Approval, Json, ErrorText: String;
+  Message: TMonitorMessage;
+Begin
+  Approval := 'kept';
+  Check('missing approval is not ask', Not DecodeMonitorSetPermissions('{}', Approval));
+  Check('missing approval stays empty', Approval = '');
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Ids.Add('ask');
+    Captions.Add('Ask before file changes and builds');
+    Ids.Add('auto');
+    Captions.Add('Auto: allow project tools');
+    Ids.Add('always');
+    Captions.Add('Always: allow registered tools');
+    Json := EncodeMonitorPermissions('permissions-codex', 'always', 'codex', '', Ids, Captions);
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+  Check('codex permissions encode', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And (Message.Kind = mmkPermissions));
+  Check('codex permissions captions', DecodeMonitorPermissions(Message.PayloadJson, Permissions) And
+    (Permissions.Current = 'always') And (Permissions.Backend = 'codex') And (Length(Permissions.Choices) = 3) And
+    (Permissions.Choices[0].Caption = 'Ask before file changes and builds') And
+    (Permissions.Choices[1].Caption = 'Auto: allow project tools') And
+    (Permissions.Choices[2].Caption = 'Always: allow registered tools'));
 End;
 
 Procedure TestSetReasoningLevel;
@@ -1246,6 +1297,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestPermissionsCaptions;
   TestSetReasoningLevel;
   TestSelectTargetPathIsNotAnId;
   TestPatchOverCap;
