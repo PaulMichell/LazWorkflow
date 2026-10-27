@@ -53,6 +53,11 @@ fun reasoningRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: B
   return modelRowsEnabled(disconnected, sending, planRunning)
 }
 
+/** Permission rows use the same gate. This is the footer mode, not the approval sheet. */
+fun permissionRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
+  return modelRowsEnabled(disconnected, sending, planRunning)
+}
+
 /** History rows stay put while disconnected or sending. A plan run does not lock them. */
 fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
   return !disconnected && !sending
@@ -105,7 +110,7 @@ fun menuHeader(ui: MonitorUi): String = ui.view.targetDisplay
 
 /**
  * Seven sections in drawer order. Mode and Plan are already on the phone.
- * Target, Conversation, Model, and Reasoning fill from their host frames. Permissions stays empty until that frame arrives.
+ * Target, Conversation, Model, Reasoning, and Tool Permissions fill from their host frames.
  * Disconnect disables rows and does not clear lists.
  */
 fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
@@ -116,6 +121,7 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
   val historyEnabled = conversationRowsEnabled(ui.disconnected, ui.view.sending)
   val modelEnabled = modelRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val reasoningEnabled = reasoningRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
+  val permissionEnabled = permissionRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val historyNote = if (ui.conversationsTruncated) OlderConversationsSentence else ""
   return listOf(
     MenuSectionModel(
@@ -147,7 +153,12 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
       ui.reasoningChoices.map { MenuRow(it.id, it.caption) },
       ui.reasoningCurrent, reasoningEnabled, ui.reasoningNote
     ),
-    MenuSectionModel(MenuSectionKind.Permissions, "Tool Permissions", emptyList(), "", linkUp)
+    // The check is permissionCurrent. view.approvalCaption is a short word and must not select a row.
+    MenuSectionModel(
+      MenuSectionKind.Permissions, "Tool Permissions",
+      ui.permissionChoices.map { MenuRow(it.id, it.caption) },
+      ui.permissionCurrent, permissionEnabled, ui.permissionNote
+    )
   )
 }
 
@@ -160,7 +171,8 @@ fun AppMenu(
   onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
   onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit
+  onReasoning: (String) -> Unit,
+  onPermissions: (String) -> Unit
 ) {
   Column(
     Modifier
@@ -176,7 +188,7 @@ fun AppMenu(
       modifier = Modifier.fillMaxWidth()
     )
     appMenuSections(ui).forEach { section ->
-      MenuSection(section, onClose, onMode, onPlan, onTarget, onConversation, onModel, onReasoning)
+      MenuSection(section, onClose, onMode, onPlan, onTarget, onConversation, onModel, onReasoning, onPermissions)
     }
   }
 }
@@ -190,7 +202,8 @@ private fun MenuSection(
   onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
   onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit
+  onReasoning: (String) -> Unit,
+  onPermissions: (String) -> Unit
 ) {
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     Text(section.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -208,7 +221,8 @@ private fun MenuSection(
           val tap = menuTap(row.id, section.currentId, section.enabled) ?: return@MenuRowLine
           onClose()
           if (tap == MenuTap.CloseAndSend) {
-            sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget, onConversation, onModel, onReasoning)
+            sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget, onConversation, onModel, onReasoning,
+              onPermissions)
           }
         }
       }
@@ -233,7 +247,8 @@ private fun sendMenuCommand(
   onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
   onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit
+  onReasoning: (String) -> Unit,
+  onPermissions: (String) -> Unit
 ) {
   when (kind) {
     MenuSectionKind.Mode -> onMode(id)
@@ -242,7 +257,8 @@ private fun sendMenuCommand(
     MenuSectionKind.Conversation -> onConversation(id)
     MenuSectionKind.Model -> onModel(id)
     MenuSectionKind.Reasoning -> onReasoning(id)
-    else -> Unit
+    // Footer approval mode. Do not call allowApproval or denyApproval from here.
+    MenuSectionKind.Permissions -> onPermissions(id)
   }
 }
 

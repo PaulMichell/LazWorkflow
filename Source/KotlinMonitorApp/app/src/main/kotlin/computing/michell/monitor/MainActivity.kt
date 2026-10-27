@@ -164,7 +164,7 @@ private fun MonitorShell(model: MonitorViewModel) {
               windowInsets = WindowInsets(0, 0, 0, 0)
             ) {
               AppMenu(ui, dismissDrawer, model::setMode, model::openPlan, model::selectTarget, model::selectConversation,
-                model::selectModel, model::selectReasoning)
+                model::selectModel, model::selectReasoning, model::selectPermissions)
             }
           },
           drawerState = drawerState,

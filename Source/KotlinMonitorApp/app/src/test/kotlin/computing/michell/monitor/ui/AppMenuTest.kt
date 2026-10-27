@@ -4,6 +4,7 @@ package computing.michell.monitor.ui
 
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.ModelChoice
+import computing.michell.monitor.protocol.PermissionChoice
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.TargetChoice
@@ -225,6 +226,67 @@ class AppMenuTest {
     assertFalse(section.enabled)
     assertEquals(listOf("High"), section.rows.map { it.caption })
     assertEquals("high", section.currentId)
+  }
+
+  @Test
+  fun permissionsSectionUsesTheStoredIdNotTheApprovalCaption() {
+    val choices = listOf(
+      PermissionChoice("ask", "Ask — confirm each write/compile"),
+      PermissionChoice("auto", "Auto — allow project tools"),
+      PermissionChoice("always", "Always — never prompt (like Build always-approve)")
+    )
+    val ui = sample().copy(
+      view = sample().view.copy(approvalCaption = "Always"),
+      permissionChoices = choices,
+      permissionCurrent = "ask",
+      permissionNote = ""
+    )
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Permissions }
+    assertEquals("Tool Permissions", section.label)
+    assertEquals(listOf("ask", "auto", "always"), section.rows.map { it.id })
+    assertEquals(choices.map { it.caption }, section.rows.map { it.caption })
+    assertEquals("ask", section.currentId)
+    assertEquals("ask", menuCheckedId(section.currentId))
+    assertEquals(MenuTap.CloseOnly, menuTap("ask", section.currentId, section.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("always", section.currentId, section.enabled))
+    assertTrue(section.enabled)
+    val captionOnly = ui.copy(view = ui.view.copy(approvalCaption = "Auto"))
+    val still = appMenuSections(captionOnly).first { it.kind == MenuSectionKind.Permissions }
+    assertEquals("ask", still.currentId)
+    assertEquals(choices.map { it.id }, still.rows.map { it.id })
+  }
+
+  @Test
+  fun permissionsNoteDoesNotInventRows() {
+    val ui = sample().copy(
+      view = sample().view.copy(approvalCaption = "Ask"),
+      permissionNote = "No connection is selected."
+    )
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Permissions }
+    assertTrue(section.rows.isEmpty())
+    assertEquals("No connection is selected.", section.note)
+    assertEquals("", section.currentId)
+    assertFalse(section.rows.any { it.id == "ask" || it.id == "auto" || it.id == "always" })
+  }
+
+  @Test
+  fun permissionRowsDisableWhileDisconnectedSendingOrPlanning() {
+    assertFalse(permissionRowsEnabled(true, false, false))
+    assertFalse(permissionRowsEnabled(false, true, false))
+    assertFalse(permissionRowsEnabled(false, false, true))
+    assertTrue(permissionRowsEnabled(false, false, false))
+    val rows = listOf(PermissionChoice("auto", "Auto: allow project tools"))
+    val planning = sample().copy(
+      view = sample().view.copy(planRunning = true, approvalCaption = "Auto"),
+      planRunning = true,
+      permissionChoices = rows,
+      permissionCurrent = "auto"
+    )
+    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Permissions }
+    assertFalse(section.enabled)
+    assertEquals(listOf("Auto: allow project tools"), section.rows.map { it.caption })
+    assertEquals("auto", section.currentId)
+    assertNull(menuTap("always", section.currentId, section.enabled))
   }
 
   @Test

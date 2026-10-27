@@ -99,11 +99,15 @@ import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.ConversationsMessage
 import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.ModelsMessage
+import computing.michell.monitor.protocol.PermissionChoice
+import computing.michell.monitor.protocol.PermissionsMessage
 import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.ReasoningMessage
 import computing.michell.monitor.protocol.decodeModels
+import computing.michell.monitor.protocol.decodePermissions
 import computing.michell.monitor.protocol.decodeReasoning
 import computing.michell.monitor.protocol.encodeSetModel
+import computing.michell.monitor.protocol.encodeSetPermissions
 import computing.michell.monitor.protocol.encodeSetReasoning
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.TargetsMessage
@@ -151,6 +155,9 @@ data class MonitorUi(
   val reasoningChoices: List<ReasoningChoice> = emptyList(),
   val reasoningCurrent: String = "",
   val reasoningNote: String = "",
+  val permissionChoices: List<PermissionChoice> = emptyList(),
+  val permissionCurrent: String = "",
+  val permissionNote: String = "",
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
   val banner: String = "",
@@ -216,6 +223,9 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     reasoningChoices = state.reasoningChoices,
     reasoningCurrent = state.reasoningCurrent,
     reasoningNote = state.reasoningNote,
+    permissionChoices = state.permissionChoices,
+    permissionCurrent = state.permissionCurrent,
+    permissionNote = state.permissionNote,
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
     connectionGeneration = state.connectionGeneration + 1
@@ -538,6 +548,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Conversations -> applyConversations(state, message.payloadJson)
     MessageKind.Models -> applyModels(state, message.payloadJson)
     MessageKind.Reasoning -> applyReasoning(state, message.payloadJson)
+    MessageKind.Permissions -> applyPermissions(state, message.payloadJson)
     MessageKind.Plan -> applyPlan(state, message.payloadJson)
     MessageKind.ApprovalRequested -> applyApprovalRequested(state, message.payloadJson)
     MessageKind.ApprovalClosed -> state.copy(approvalOpen = false)
@@ -701,6 +712,7 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Conversations -> applyConversationsFrame(state, inbound.value)
     is InboundPayload.Models -> applyModelsFrame(state, inbound.value)
     is InboundPayload.Reasoning -> applyReasoningFrame(state, inbound.value)
+    is InboundPayload.Permissions -> applyPermissionsFrame(state, inbound.value)
     is InboundPayload.Plan -> state.copy(
       planPath = inbound.value.path,
       planTitle = inbound.value.title,
@@ -979,6 +991,20 @@ internal fun applyReasoningFrame(state: MonitorUi, reasoning: ReasoningMessage):
     reasoningChoices = reasoning.choices,
     reasoningCurrent = reasoning.current,
     reasoningNote = reasoning.note
+  )
+}
+
+private fun applyPermissions(state: MonitorUi, payloadJson: String): MonitorUi {
+  val permissions = decodePermissions(payloadJson) ?: return state
+  return applyPermissionsFrame(state, permissions)
+}
+
+/** Replaces the permission list only. view.approvalCaption is a short word and must not move this check. */
+internal fun applyPermissionsFrame(state: MonitorUi, permissions: PermissionsMessage): MonitorUi {
+  return state.copy(
+    permissionChoices = permissions.choices,
+    permissionCurrent = permissions.current,
+    permissionNote = permissions.note
   )
 }
 
@@ -1482,6 +1508,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     // Empty id is model default when that row exists. Compare the stored id, not view.effort.
     if (id == state.reasoningCurrent || state.reasoningChoices.none { it.id == id }) return
     session.sendCatalogue(encodeSetReasoning(session.nextCommandId(), id))
+  }
+
+  fun selectPermissions(id: String) {
+    val state = uiState.value
+    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
+    // Compare the stored id, not view.approvalCaption. This is not the tool-approval sheet.
+    if (id == state.permissionCurrent || state.permissionChoices.none { it.id == id }) return
+    session.sendCatalogue(encodeSetPermissions(session.nextCommandId(), id))
   }
 
   fun openPlan(path: String) {

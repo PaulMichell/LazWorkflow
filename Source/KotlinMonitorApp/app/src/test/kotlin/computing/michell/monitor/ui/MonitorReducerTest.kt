@@ -16,11 +16,13 @@ import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModelChoice
+import computing.michell.monitor.protocol.PermissionChoice
 import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.encodeConversations
 import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodeModels
+import computing.michell.monitor.protocol.encodePermissions
 import computing.michell.monitor.protocol.encodeReasoning
 import computing.michell.monitor.protocol.encodeTargets
 import computing.michell.monitor.protocol.statusToJson
@@ -201,6 +203,49 @@ class MonitorReducerTest {
     assertEquals("", none.reasoningCurrent)
     assertEquals("This connection does not set an effort level.", none.reasoningNote)
     assertEquals("High", none.view.effort)
+  }
+
+  @Test
+  fun permissionsFrameIsTheCheckAndATargetOrApprovalCaptionDoesNotReplaceIt() {
+    val choices = listOf(
+      PermissionChoice("ask", "Ask before file changes and builds"),
+      PermissionChoice("auto", "Auto: allow project tools"),
+      PermissionChoice("always", "Always: allow registered tools")
+    )
+    val frame = encodePermissions("permissions", "ask", "codex", "", choices)
+    val start = MonitorUi(view = emptyView().copy(approvalCaption = "Ask", targetRoot = "/old/"), approvalOpen = false)
+    val filled = reduceMonitor(start, message(frame))
+    assertEquals(choices, filled.permissionChoices)
+    assertEquals("ask", filled.permissionCurrent)
+    assertEquals("", filled.permissionNote)
+    assertEquals("Ask", filled.view.approvalCaption)
+    assertFalse(filled.approvalOpen)
+    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
+    assertEquals(choices, moved.permissionChoices)
+    assertEquals("ask", moved.permissionCurrent)
+    val status = encodeEnvelope(
+      MessageKind.Status, "status-approval", statusToJson(emptyView().copy(approvalCaption = "Always"))
+    )
+    val caption = reduceMonitor(moved, message(status))
+    assertEquals("Always", caption.view.approvalCaption)
+    assertEquals("ask", caption.permissionCurrent)
+    assertEquals(choices, caption.permissionChoices)
+    val notice = ApprovalNotice(true, "tool-1", "write_file", "short", "Build", true)
+    val asked = reduceMonitor(caption, message(encodeApprovalRequested("approval", notice)))
+    assertTrue(asked.approvalOpen)
+    assertEquals("ask", asked.permissionCurrent)
+    assertEquals(choices, asked.permissionChoices)
+    val next = reduceMonitor(asked, message(encodePermissions("permissions-next", "always", "codex", "", choices)))
+    assertEquals("always", next.permissionCurrent)
+    assertEquals("Always", next.view.approvalCaption)
+    assertTrue(next.approvalOpen)
+    val none = reduceMonitor(next, message(encodePermissions(
+      "permissions-none", "", "", "No connection is selected.", emptyList()
+    )))
+    assertTrue(none.permissionChoices.isEmpty())
+    assertEquals("", none.permissionCurrent)
+    assertEquals("No connection is selected.", none.permissionNote)
+    assertEquals("Always", none.view.approvalCaption)
   }
 
   @Test
