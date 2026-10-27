@@ -114,6 +114,7 @@ Type
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
+    Procedure PushMenuLists(Form: TProjectAssistantForm);
     Procedure PushTargets(Form: TProjectAssistantForm);
     Procedure PushConversations(Form: TProjectAssistantForm);
     Procedure PushModels(Form: TProjectAssistantForm);
@@ -745,8 +746,9 @@ Begin
   Json := SnapshotJson(Id, Snapshot);
   If Json <> '' Then
     SendJson(Json);
+  { The phone clears these lists on the snapshot. The following frames fill them. }
   PushPlan(Form);
-  PushConversations(Form);
+  PushMenuLists(Form);
 End;
 
 Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
@@ -1098,6 +1100,15 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorBridge.PushMenuLists(Form: TProjectAssistantForm);
+Begin
+  PushTargets(Form);
+  PushConversations(Form);
+  PushModels(Form);
+  PushReasoning(Form);
+  PushPermissions(Form);
+End;
+
 Procedure TAssistantMonitorBridge.PushTargets(Form: TProjectAssistantForm);
 Var
   Paths, Captions: TStringList;
@@ -1439,9 +1450,25 @@ Begin
       End;
     Ord(mmkRefresh):
       Begin
-        { An old stall Refresh must not build a snapshot on the IDE thread. }
-        SendError(Id, MonitorHostBusyReason, 'The Project Assistant is busy.');
-        Result := True;
+        If Not DecodeMonitorText(PayloadJson, Text) Then
+          Text := '';
+        If Text = 'plan_choices' Then
+          Begin
+            PushPlan(Form);
+            Result := True;
+          End
+        Else If Text = 'menu_choices' Then
+          Begin
+            PushPlan(Form);
+            PushMenuLists(Form);
+            Result := True;
+          End
+        Else
+          Begin
+            { An old stall Refresh must not build a snapshot on the IDE thread. }
+            SendError(Id, MonitorHostBusyReason, 'The Project Assistant is busy.');
+            Result := True;
+          End;
       End;
     Ord(mmkTurn):
       Begin

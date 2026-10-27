@@ -21,6 +21,9 @@ class ProtocolCodecTest {
     val request = tryDecodeEnvelope(encodePlanChoices("choices-1")).message
     assertEquals(MessageKind.Refresh, request.kind)
     assertEquals("plan_choices", decodeText(request.payloadJson))
+    val menu = tryDecodeEnvelope(encodeMenuChoices("menu-1")).message
+    assertEquals(MessageKind.Refresh, menu.kind)
+    assertEquals("menu_choices", decodeText(menu.payloadJson))
     val base = """{"path":"Documents/Plan.md","title":"Plan","running":false,"rows":[]}"""
     assertNull(decodePlan(base)?.choices)
     assertNotNull(decodePlan(base))

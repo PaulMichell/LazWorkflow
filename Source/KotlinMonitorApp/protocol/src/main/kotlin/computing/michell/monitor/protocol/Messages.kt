@@ -708,6 +708,13 @@ fun encodePlanChoices(id: String): String {
   return encodeEnvelope(MessageKind.Refresh, id, payload.build())
 }
 
+/** Request the drawer lists when a snapshot follow-up did not arrive. Not a stall probe. */
+fun encodeMenuChoices(id: String): String {
+  val payload = JsonObjectBuilder()
+  payload.add("text", "menu_choices")
+  return encodeEnvelope(MessageKind.Refresh, id, payload.build())
+}
+
 fun encodeTurnRequest(id: String, turnIndex: Int): String {
   val payload = JsonObjectBuilder()
   payload.add("turn_index", turnIndex)

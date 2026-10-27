@@ -118,6 +118,58 @@ class MonitorReducerTest {
   }
 
   @Test
+  fun snapshotClearsTheMenuListsAndTheFollowingFramesFillThem() {
+    val targets = listOf(TargetChoice("", "Current Project"))
+    val talks = listOf(ConversationChoice("", "Current", true))
+    val models = listOf(ModelChoice("grok-4", "grok-4"))
+    val efforts = listOf(ReasoningChoice("high", "High"))
+    val permissions = listOf(PermissionChoice("ask", "Ask before file changes and builds"))
+    val start = MonitorUi(
+      view = emptyView().copy(targetRoot = "/work", model = "grok-4", approvalCaption = "Ask"),
+      targetChoices = targets,
+      targetCurrent = "",
+      conversationChoices = talks,
+      modelChoices = models,
+      modelBackend = "grok",
+      modelNote = "The rest of this list is in desktop Settings.",
+      reasoningChoices = efforts,
+      reasoningCurrent = "high",
+      permissionChoices = permissions,
+      permissionCurrent = "ask",
+      planChoices = listOf(PlanChoice("Plan.md", "Plan"))
+    )
+    val snapshot = WireSnapshot(
+      start.view,
+      emptyList(),
+      WireTurn(-2, "live", "chat", "", "now", ""),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val cleared = reduceMonitor(start, message(encodeSnapshot("snap", snapshot)))
+    assertTrue(cleared.targetChoices.isEmpty())
+    assertTrue(cleared.conversationChoices.isEmpty())
+    assertTrue(cleared.modelChoices.isEmpty())
+    assertEquals("", cleared.modelNote)
+    assertTrue(cleared.reasoningChoices.isEmpty())
+    assertEquals("", cleared.reasoningCurrent)
+    assertTrue(cleared.permissionChoices.isEmpty())
+    assertEquals("", cleared.permissionCurrent)
+    assertTrue(cleared.planChoices.isEmpty())
+    assertEquals("Ask", cleared.view.approvalCaption)
+    assertFalse(cleared.disconnected)
+    val restored = reduceMonitor(cleared, message(encodePermissions("permissions", "ask", "codex", "", permissions)))
+    assertEquals(permissions, restored.permissionChoices)
+    assertEquals("ask", restored.permissionCurrent)
+    val ignored = reduceMonitor(restored, message(encodeEnvelope(MessageKind.Permissions, "permissions-bad", null)))
+    assertEquals(permissions, ignored.permissionChoices)
+    assertFalse(ignored.disconnected)
+  }
+
+  @Test
   fun snapshotReplacesTurnsAndKeepsAnUnsentDraft() {
     val kept = listOf(ConversationChoice("", "Current", true))
     val state = MonitorUi(
@@ -141,7 +193,8 @@ class MonitorReducerTest {
     val next = reduceMonitor(state, message(encodeSnapshot("snap", snapshot)))
     assertEquals("new", next.turns.single().id)
     assertEquals("still typing", next.draft)
-    assertEquals(kept, next.conversationChoices)
+    assertTrue(next.conversationChoices.isEmpty())
+    assertEquals("", next.conversationCurrent)
     val moved = reduceMonitor(state, message(encodeSnapshot("moved", snapshot.copy(view = snapshot.view.copy(targetRoot = "/other")))))
     assertTrue(moved.conversationChoices.isEmpty())
     assertEquals("still typing", moved.draft)

@@ -16,6 +16,33 @@ import org.junit.Test
 
 class AppMenuTest {
   @Test
+  fun menuChoicesWaitForAnEmptyListAndALiveLink() {
+    val empty = sample()
+    assertTrue(menuListStillEmpty(empty))
+    assertTrue(menuChoicesNeeded(empty, true))
+    assertFalse(menuChoicesNeeded(empty, false))
+    assertFalse(menuChoicesNeeded(empty.copy(disconnected = true), true))
+    val filled = empty.copy(
+      targetChoices = listOf(TargetChoice("", "Current Project")),
+      conversationChoices = listOf(ConversationChoice("", "Current", true)),
+      modelChoices = listOf(ModelChoice("grok-4", "grok-4")),
+      reasoningChoices = listOf(ReasoningChoice("high", "High")),
+      permissionChoices = listOf(PermissionChoice("ask", "Ask — confirm each write/compile"))
+    )
+    assertFalse(menuListStillEmpty(filled))
+    assertFalse(menuChoicesNeeded(filled, true))
+    val noted = empty.copy(
+      targetChoices = filled.targetChoices,
+      conversationChoices = filled.conversationChoices,
+      modelNote = "No connection is selected.",
+      reasoningNote = "This connection does not set an effort level.",
+      permissionNote = "No connection is selected."
+    )
+    assertFalse(menuListStillEmpty(noted))
+    assertFalse(menuChoicesNeeded(noted, true))
+  }
+
+  @Test
   fun sectionsStayInDrawerOrder() {
     val labels = appMenuSections(sample()).map { it.label }
     assertEquals(

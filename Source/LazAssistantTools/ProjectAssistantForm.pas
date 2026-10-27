@@ -1518,6 +1518,13 @@ Begin
       ErrorText := Note;
       Exit;
     End;
+  { The reload asked for every sampling list. This save publishes models and reasoning after status. }
+  If FPublishModelList Or FPublishReasoningList Or FPublishPermissionsList Then
+    Begin
+      FPublishPermissionsList := False;
+      FPublishModelList := True;
+      FPublishReasoningList := True;
+    End;
   Result := True;
 End;
 

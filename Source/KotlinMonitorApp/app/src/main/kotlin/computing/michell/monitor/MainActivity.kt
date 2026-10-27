@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.ui.ActivityStatus
 import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
@@ -127,6 +128,11 @@ private fun MonitorShell(model: MonitorViewModel) {
   }
   LaunchedEffect(showSettings) {
     if (showSettings) closeDrawer(drawerState)
+  }
+  // One request when the sheet is actually open, the link is live, and a list is still empty.
+  LaunchedEffect(drawerState.currentValue) {
+    if (drawerState.currentValue == DrawerValue.Open)
+      model.requestMenuChoices(link.phase == LinkPhase.Live)
   }
   BackHandler(enabled = showSettings || cacheListOpen || cacheBackToList) {
     when {

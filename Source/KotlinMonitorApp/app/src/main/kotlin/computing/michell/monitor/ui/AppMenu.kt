@@ -58,6 +58,23 @@ fun permissionRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: 
   return modelRowsEnabled(disconnected, sending, planRunning)
 }
 
+/**
+ * A cleared list is still waiting for its frame. A note means that frame arrived with nothing to choose.
+ * Plan is not in this check: an empty plan is a real desktop list, and the Plan tab already asks for it.
+ */
+fun menuListStillEmpty(ui: MonitorUi): Boolean {
+  if (ui.targetChoices.isEmpty() || ui.conversationChoices.isEmpty()) return true
+  if (ui.modelChoices.isEmpty() && ui.modelNote.isEmpty()) return true
+  if (ui.reasoningChoices.isEmpty() && ui.reasoningNote.isEmpty()) return true
+  if (ui.permissionChoices.isEmpty() && ui.permissionNote.isEmpty()) return true
+  return false
+}
+
+/** One request when the drawer opens, the link is live, and a list is still empty. Not on every open. */
+fun menuChoicesNeeded(ui: MonitorUi, linkLive: Boolean): Boolean {
+  return linkLive && !ui.disconnected && menuListStillEmpty(ui)
+}
+
 /** History rows stay put while disconnected or sending. A plan run does not lock them. */
 fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
   return !disconnected && !sending

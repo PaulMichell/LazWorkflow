@@ -106,6 +106,7 @@ import computing.michell.monitor.protocol.ReasoningMessage
 import computing.michell.monitor.protocol.decodeModels
 import computing.michell.monitor.protocol.decodePermissions
 import computing.michell.monitor.protocol.decodeReasoning
+import computing.michell.monitor.protocol.encodeMenuChoices
 import computing.michell.monitor.protocol.encodeSetModel
 import computing.michell.monitor.protocol.encodeSetPermissions
 import computing.michell.monitor.protocol.encodeSetReasoning
@@ -556,6 +557,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Rejected -> applyRejected(state, message)
     MessageKind.Error -> applyError(state, message.payloadJson)
     MessageKind.ImageUnavailable -> applyImageUnavailable(state, message.payloadJson)
+    // A host frame this build cannot apply stays on screen. It must not close the socket.
     else -> state
   }
 }
@@ -759,7 +761,6 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val sameTurn = previousId.isNotEmpty() && previousId == incoming.id &&
     state.transcriptConnection == state.connectionGeneration
   val approval = snapshot.approval
-  val sameFolder = state.view.targetRoot == snapshot.view.targetRoot
   return state.copy(
     view = snapshot.view,
     turns = snapshot.storedTurns,
@@ -770,10 +771,6 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
     selectedPlan = -1,
-    planChoices = emptyList(),
-    conversationChoices = if (sameFolder) state.conversationChoices else emptyList(),
-    conversationCurrent = if (sameFolder) state.conversationCurrent else "",
-    conversationsTruncated = if (sameFolder) state.conversationsTruncated else false,
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
     liveRevision = if (sameTurn) state.liveRevision else -1,
@@ -786,12 +783,32 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     generation = state.generation + 1,
     rescueSteer = false,
     conversationGeneration = conversationGeneration
+  ).clearedMenuLists()
+}
+
+/** Snapshot drops the drawer lists. The following host frames fill them again. */
+internal fun MonitorUi.clearedMenuLists(): MonitorUi {
+  return copy(
+    planChoices = emptyList(),
+    targetChoices = emptyList(),
+    targetCurrent = "",
+    conversationChoices = emptyList(),
+    conversationCurrent = "",
+    conversationsTruncated = false,
+    modelChoices = emptyList(),
+    modelBackend = "",
+    modelNote = "",
+    reasoningChoices = emptyList(),
+    reasoningCurrent = "",
+    reasoningNote = "",
+    permissionChoices = emptyList(),
+    permissionCurrent = "",
+    permissionNote = ""
   )
 }
 
 fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int): MonitorUi {
   val approval = snapshot.approval
-  val sameFolder = cleared.view.targetRoot == snapshot.view.targetRoot
   return cleared.copy(
     view = snapshot.view,
     turns = snapshot.storedTurns,
@@ -802,10 +819,6 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
     selectedPlan = -1,
-    planChoices = emptyList(),
-    conversationChoices = if (sameFolder) cleared.conversationChoices else emptyList(),
-    conversationCurrent = if (sameFolder) cleared.conversationCurrent else "",
-    conversationsTruncated = if (sameFolder) cleared.conversationsTruncated else false,
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
     reachedLive = true,
@@ -815,7 +828,7 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
     generation = generation,
     liveRevision = -1,
     transcriptParts = emptyMap()
-  )
+  ).clearedMenuLists()
 }
 
 private fun transcriptInScope(state: MonitorUi, turnId: String): Boolean {
@@ -1222,6 +1235,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
       session.connect(record.address, record.port)
     }
+  }
+
+  fun requestMenuChoices(linkLive: Boolean) {
+    val state = uiState.value
+    if (!menuChoicesNeeded(state, linkLive)) return
+    session.sendCatalogue(encodeMenuChoices(session.nextCommandId()))
   }
 
   fun selectTab(tab: AppTab) {
