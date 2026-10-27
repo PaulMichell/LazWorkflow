@@ -124,7 +124,7 @@ private fun MonitorShell(model: MonitorViewModel) {
       }
     } else {
       Column(modifier.fillMaxSize()) {
-        MonitorHeader(model::showSettings)
+        MonitorHeader(onMenu = {}, onSettings = model::showSettings)
         MonitorTabs(pagerState.currentPage) { item ->
           model.selectTab(item)
           scope.launch { pagerState.animateScrollToPage(pageForTab(item)) }
@@ -167,11 +167,14 @@ private fun MonitorShell(model: MonitorViewModel) {
 }
 
 @Composable
-private fun MonitorHeader(onSettings: () -> Unit) {
+private fun MonitorHeader(onMenu: () -> Unit, onSettings: () -> Unit) {
   Row(
-    Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp),
+    Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp),
     verticalAlignment = Alignment.CenterVertically
   ) {
+    IconButton(onClick = onMenu) {
+      Icon(painterResource(R.drawable.ic_menu), contentDescription = "Menu")
+    }
     Text(
       "Assistant Monitor",
       style = MaterialTheme.typography.headlineMedium,
