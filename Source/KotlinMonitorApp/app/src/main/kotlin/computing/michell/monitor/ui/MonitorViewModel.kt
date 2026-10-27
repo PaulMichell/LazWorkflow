@@ -85,6 +85,7 @@ import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
+import computing.michell.monitor.protocol.decodeTargets
 
 import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.assembleTranscriptBlocks
@@ -94,6 +95,8 @@ import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodePlanChoices
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.TargetChoice
+import computing.michell.monitor.protocol.TargetsMessage
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
@@ -107,6 +110,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** History row. Filled by the conversations frame. Cleared when the target folder changes. */
+data class ConversationChoice(val id: String, val title: String, val current: Boolean = false)
 
 enum class AppTab {
   Conversation,
@@ -125,6 +131,9 @@ data class MonitorUi(
   val planRows: List<PlanRow> = emptyList(),
   val selectedPlan: Int = -1,
   val planChoices: List<PlanChoice> = emptyList(),
+  val targetChoices: List<TargetChoice> = emptyList(),
+  val targetCurrent: String = "",
+  val conversationChoices: List<ConversationChoice> = emptyList(),
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
   val banner: String = "",
@@ -179,6 +188,9 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     showThinking = state.showThinking,
     showTools = state.showTools,
     settingsOpen = state.settingsOpen,
+    targetChoices = state.targetChoices,
+    targetCurrent = state.targetCurrent,
+    conversationChoices = state.conversationChoices,
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
     connectionGeneration = state.connectionGeneration + 1
@@ -497,6 +509,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Status -> applyStatus(state, message.payloadJson)
     MessageKind.Mode -> applyMode(state, message.payloadJson)
     MessageKind.Target -> applyTarget(state, message.payloadJson)
+    MessageKind.Targets -> applyTargets(state, message.payloadJson)
     MessageKind.Plan -> applyPlan(state, message.payloadJson)
     MessageKind.ApprovalRequested -> applyApprovalRequested(state, message.payloadJson)
     MessageKind.ApprovalClosed -> state.copy(approvalOpen = false)
@@ -655,11 +668,8 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Turn -> state.copy(history = state.history + (inbound.value.turnIndex to inbound.value))
     is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
     is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
-    is InboundPayload.Target -> state.copy(
-      planChoices = if (state.view.targetRoot == inbound.value.root) state.planChoices else emptyList(),
-      selectedPlan = if (state.view.targetRoot == inbound.value.root) state.selectedPlan else -1,
-      view = state.view.copy(targetKind = inbound.value.kind, targetDisplay = inbound.value.display, targetRoot = inbound.value.root)
-    )
+    is InboundPayload.Target -> applyTargetFrame(state, inbound.value.kind, inbound.value.display, inbound.value.root)
+    is InboundPayload.Targets -> applyTargetsFrame(state, inbound.value)
     is InboundPayload.Plan -> state.copy(
       planPath = inbound.value.path,
       planTitle = inbound.value.title,
@@ -864,11 +874,29 @@ private fun applyMode(state: MonitorUi, payloadJson: String): MonitorUi {
 
 private fun applyTarget(state: MonitorUi, payloadJson: String): MonitorUi {
   val target = decodeTarget(payloadJson) ?: return state
+  return applyTargetFrame(state, target.kind, target.display, target.root)
+}
+
+/** A new folder drops plan, target, and conversation lists. Connection lists stay. */
+internal fun applyTargetFrame(state: MonitorUi, kind: String, display: String, root: String): MonitorUi {
+  val sameFolder = state.view.targetRoot == root
   return state.copy(
-    planChoices = if (state.view.targetRoot == target.root) state.planChoices else emptyList(),
-    selectedPlan = if (state.view.targetRoot == target.root) state.selectedPlan else -1,
-    view = state.view.copy(targetKind = target.kind, targetDisplay = target.display, targetRoot = target.root)
+    planChoices = if (sameFolder) state.planChoices else emptyList(),
+    selectedPlan = if (sameFolder) state.selectedPlan else -1,
+    targetChoices = if (sameFolder) state.targetChoices else emptyList(),
+    targetCurrent = if (sameFolder) state.targetCurrent else "",
+    conversationChoices = if (sameFolder) state.conversationChoices else emptyList(),
+    view = state.view.copy(targetKind = kind, targetDisplay = display, targetRoot = root)
   )
+}
+
+private fun applyTargets(state: MonitorUi, payloadJson: String): MonitorUi {
+  val targets = decodeTargets(payloadJson) ?: return state
+  return applyTargetsFrame(state, targets)
+}
+
+private fun applyTargetsFrame(state: MonitorUi, targets: TargetsMessage): MonitorUi {
+  return state.copy(targetChoices = targets.choices, targetCurrent = targets.current)
 }
 
 private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
@@ -1341,6 +1369,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val effects = coordinator.requestTurnFetch(uiState.value, index)
     if (effects.isEmpty()) return
     applyUiEffects(effects)
+  }
+
+  fun selectTarget(path: String) {
+    val state = uiState.value
+    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
+    if (path == state.targetCurrent || state.targetChoices.none { it.path == path }) return
+    session.sendCatalogue(encodePath(MessageKind.SelectTarget, session.nextCommandId(), path))
   }
 
   fun openPlan(path: String) {

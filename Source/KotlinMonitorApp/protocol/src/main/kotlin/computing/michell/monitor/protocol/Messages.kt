@@ -458,6 +458,7 @@ fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
     MessageKind.Status -> statusFromJson(payload)?.let { InboundPayload.Status(it) } ?: InboundPayload.None
     MessageKind.Mode -> decodeMode(payload)?.let { InboundPayload.Mode(it) } ?: InboundPayload.None
     MessageKind.Target -> decodeTarget(payload)?.let { InboundPayload.Target(it) } ?: InboundPayload.None
+    MessageKind.Targets -> decodeTargets(payload)?.let { InboundPayload.Targets(it) } ?: InboundPayload.None
     MessageKind.Plan -> decodePlan(payload)?.let { InboundPayload.Plan(it) } ?: InboundPayload.None
     MessageKind.ApprovalRequested -> decodeApprovalRequested(payload)?.let { InboundPayload.ApprovalRequest(it) } ?: InboundPayload.None
     MessageKind.InsertResult -> decodeText(payload)?.let { InboundPayload.Insert(it) } ?: InboundPayload.None

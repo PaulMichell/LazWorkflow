@@ -13,6 +13,8 @@ import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.TargetChoice
+import computing.michell.monitor.protocol.encodeTargets
 
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
@@ -64,13 +66,31 @@ class MonitorReducerTest {
 
   @Test
   fun targetChangeDropsChoicesFromThePreviousProject() {
+    val keptTalk = listOf(ConversationChoice("archive-1", "Yesterday", false))
     val state = MonitorUi(view = emptyView().copy(targetRoot = "/old/"),
-      selectedPlan = 3, planChoices = listOf(PlanChoice("Plan.md", "Old project")))
+      selectedPlan = 3, planChoices = listOf(PlanChoice("Plan.md", "Old project")),
+      targetChoices = listOf(TargetChoice("", "Current Project")), targetCurrent = "",
+      conversationChoices = keptTalk)
     val same = reduceMonitor(state, message(encodeTarget("same", "project", "Old", "/old/")))
     assertEquals(state.planChoices, same.planChoices)
+    assertEquals(state.targetChoices, same.targetChoices)
+    assertEquals(keptTalk, same.conversationChoices)
     val next = reduceMonitor(state, message(encodeTarget("next", "project", "New", "/new/")))
     assertTrue(next.planChoices.isEmpty())
+    assertTrue(next.targetChoices.isEmpty())
+    assertEquals("", next.targetCurrent)
+    assertTrue(next.conversationChoices.isEmpty())
     assertEquals(-1, next.selectedPlan)
+    assertEquals("New", next.view.targetDisplay)
+  }
+
+  @Test
+  fun targetsFrameFillsTheChoiceList() {
+    val frame = encodeTargets("targets", "", listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")))
+    val next = reduceMonitor(MonitorUi(), message(frame))
+    assertEquals("", next.targetCurrent)
+    assertEquals(listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")), next.targetChoices)
+    assertTrue(next.planChoices.isEmpty())
   }
 
   @Test

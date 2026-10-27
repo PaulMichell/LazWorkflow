@@ -21,9 +21,23 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.TargetChoice
 
 /** One quiet sentence for a section that has no tappable row. */
 const val MenuEmptySentence = "Nothing to choose."
+
+/** Empty path is the open project, not a folder caption. */
+const val CurrentProjectCaption = "Current Project"
+
+fun targetChoiceCaption(choice: TargetChoice): String {
+  if (choice.path.isEmpty()) return CurrentProjectCaption
+  return choice.caption
+}
+
+/** Target rows stay put while disconnected, sending, or a plan run. */
+fun targetRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
+  return !disconnected && !sending && !planRunning
+}
 
 enum class MenuSectionKind {
   Target,
@@ -70,8 +84,13 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
   val linkUp = !ui.disconnected
   // Mode sends set_mode only when canChangeMode is true and the link is up, the same gate setMode can complete.
   val canSend = linkUp && ui.view.canChangeMode
+  val targetEnabled = targetRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   return listOf(
-    MenuSectionModel(MenuSectionKind.Target, "Target", emptyList(), "", linkUp),
+    MenuSectionModel(
+      MenuSectionKind.Target, "Target",
+      ui.targetChoices.map { MenuRow(it.path, targetChoiceCaption(it)) },
+      ui.targetCurrent, targetEnabled
+    ),
     MenuSectionModel(
       MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
     ),
@@ -87,7 +106,13 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
 }
 
 @Composable
-fun AppMenu(ui: MonitorUi, onClose: () -> Unit, onMode: (String) -> Unit, onPlan: (String) -> Unit) {
+fun AppMenu(
+  ui: MonitorUi,
+  onClose: () -> Unit,
+  onMode: (String) -> Unit,
+  onPlan: (String) -> Unit,
+  onTarget: (String) -> Unit
+) {
   Column(
     Modifier
       .fillMaxSize()
@@ -102,7 +127,7 @@ fun AppMenu(ui: MonitorUi, onClose: () -> Unit, onMode: (String) -> Unit, onPlan
       modifier = Modifier.fillMaxWidth()
     )
     appMenuSections(ui).forEach { section ->
-      MenuSection(section, onClose, onMode, onPlan)
+      MenuSection(section, onClose, onMode, onPlan, onTarget)
     }
   }
 }
@@ -112,7 +137,8 @@ private fun MenuSection(
   section: MenuSectionModel,
   onClose: () -> Unit,
   onMode: (String) -> Unit,
-  onPlan: (String) -> Unit
+  onPlan: (String) -> Unit,
+  onTarget: (String) -> Unit
 ) {
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     Text(section.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -129,7 +155,7 @@ private fun MenuSection(
         MenuRowLine(row.caption, current, section.enabled) {
           val tap = menuTap(row.id, section.currentId, section.enabled) ?: return@MenuRowLine
           onClose()
-          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan)
+          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget)
         }
       }
     }
@@ -137,10 +163,17 @@ private fun MenuSection(
 }
 
 /** Host refusals stay on the status banner. This does not open a dialog. */
-private fun sendMenuCommand(kind: MenuSectionKind, id: String, onMode: (String) -> Unit, onPlan: (String) -> Unit) {
+private fun sendMenuCommand(
+  kind: MenuSectionKind,
+  id: String,
+  onMode: (String) -> Unit,
+  onPlan: (String) -> Unit,
+  onTarget: (String) -> Unit
+) {
   when (kind) {
     MenuSectionKind.Mode -> onMode(id)
     MenuSectionKind.Plan -> onPlan(id)
+    MenuSectionKind.Target -> onTarget(id)
     else -> Unit
   }
 }

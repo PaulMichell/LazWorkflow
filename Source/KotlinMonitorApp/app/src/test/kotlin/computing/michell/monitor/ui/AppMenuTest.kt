@@ -3,6 +3,7 @@ package computing.michell.monitor.ui
 /* App menu sections: host check, empty lists, disconnect (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.TargetChoice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -46,6 +47,50 @@ class AppMenuTest {
     assertEquals(listOf("Alpha", "Beta"), plan.rows.map { it.caption })
     assertEquals("a.md", menuCheckedId(plan.currentId))
     assertFalse(plan.rows.any { it.id == "missing.md" })
+  }
+
+  @Test
+  fun targetSectionUsesChoiceCaptions() {
+    val choices = listOf(TargetChoice("", "ignored"), TargetChoice("/work/Other", "Other"))
+    val ui = sample().copy(
+      view = sample().view.copy(targetDisplay = "LazWorkflow", targetKind = "project", targetRoot = "/work/LazWorkflow"),
+      targetChoices = choices,
+      targetCurrent = ""
+    )
+    val target = appMenuSections(ui).first { it.kind == MenuSectionKind.Target }
+    assertEquals(listOf(CurrentProjectCaption, "Other"), target.rows.map { it.caption })
+    assertEquals(listOf("", "/work/Other"), target.rows.map { it.id })
+    assertEquals("", target.currentId)
+    assertEquals("LazWorkflow", menuHeader(ui))
+    assertEquals(MenuTap.CloseOnly, menuTap("", target.currentId, target.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("/work/Other", target.currentId, target.enabled))
+    assertTrue(target.enabled)
+  }
+
+  @Test
+  fun aPackageTargetChecksNoRow() {
+    val ui = sample().copy(
+      view = sample().view.copy(targetDisplay = "Tools", targetKind = "package", targetRoot = "/work/Tools.lpk"),
+      targetChoices = listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")),
+      targetCurrent = "/work/Tools.lpk"
+    )
+    val target = appMenuSections(ui).first { it.kind == MenuSectionKind.Target }
+    assertTrue(target.rows.none { it.id == target.currentId })
+    assertEquals("Tools", menuHeader(ui))
+  }
+
+  @Test
+  fun targetRowsDisableWhileBusy() {
+    assertFalse(targetRowsEnabled(true, false, false))
+    assertFalse(targetRowsEnabled(false, true, false))
+    assertFalse(targetRowsEnabled(false, false, true))
+    assertTrue(targetRowsEnabled(false, false, false))
+    val busy = sample().copy(
+      view = sample().view.copy(sending = true),
+      targetChoices = listOf(TargetChoice("", "Current Project")),
+      targetCurrent = ""
+    )
+    assertFalse(appMenuSections(busy).first { it.kind == MenuSectionKind.Target }.enabled)
   }
 
   @Test

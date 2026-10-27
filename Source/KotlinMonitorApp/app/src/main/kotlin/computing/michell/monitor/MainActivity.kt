@@ -163,7 +163,7 @@ private fun MonitorShell(model: MonitorViewModel) {
               modifier = Modifier.onSizeChanged { sheetWidthPx = it.width },
               windowInsets = WindowInsets(0, 0, 0, 0)
             ) {
-              AppMenu(ui, dismissDrawer, model::setMode, model::openPlan)
+              AppMenu(ui, dismissDrawer, model::setMode, model::openPlan, model::selectTarget)
             }
           },
           drawerState = drawerState,

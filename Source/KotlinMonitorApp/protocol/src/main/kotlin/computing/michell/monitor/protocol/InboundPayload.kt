@@ -11,6 +11,7 @@ sealed class InboundPayload {
   data class Status(val view: WireView) : InboundPayload()
   data class Mode(val value: ModeMessage) : InboundPayload()
   data class Target(val value: TargetMessage) : InboundPayload()
+  data class Targets(val value: TargetsMessage) : InboundPayload()
   data class Plan(val value: PlanMessage) : InboundPayload()
   data class ApprovalRequest(val notice: ApprovalNotice) : InboundPayload()
   data class Insert(val text: String) : InboundPayload()
